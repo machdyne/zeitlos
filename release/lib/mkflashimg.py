@@ -13,7 +13,7 @@
 #
 # 1. THE FILL BYTE IS 0xFF, NOT ZERO. Erased NOR flash reads as 0xFF,
 #    and two pieces of this system check for exactly that:
-#    sw/os/zar.c checks for the "ZAR1" magic before trusting the
+#    sw/os/zar.c checks for the "ZAR2" magic before trusting the
 #    archive, and the BIOS refuses to autoboot a kernel region that
 #    reads as erased. Filling the gaps with 0x00 would write real zeros
 #    over regions that are supposed to read as erased, which turns

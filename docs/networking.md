@@ -425,8 +425,9 @@ event reaching its own slot, each slot's queue its own, a closed slot
 reused, and a stale connection's events ignored.
 
 **The core-app archive.** `net` is in the flash archive with `wm`,
-`term`, `console` and `cron`, which has 589,824 bytes
-(`0x140000`-`0x1D0000`, [zboot.md](zboot.md)). With two slots and the
+`term`, `console` and `cron`, which then had 589,824 bytes
+(`0x140000`-`0x1D0000`; 770,048 since the jumploader left it,
+[zboot.md](zboot.md)). With two slots and the
 `irc` dock icon in `wm` it measured 578,356 -- 11,468 bytes free -- and
 after `net` stopped calling `sscanf` (below) and the core apps moved to
 integer-only `printf` ([build.md](build.md#integer-only-printf-zfmt)),

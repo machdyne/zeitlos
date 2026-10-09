@@ -386,15 +386,17 @@
 // rtl/csrs.vh FEATURES2 bit 15.
 #define Z_FEATURE2_COLOR      (1u << 15)
 
-// The jumploader region (docs/zboot.md sec. 5) -- ECP5 boards that set
-// JUMP only. It sits inside the Zeitlos region at Z_FLASH_ZAR_END, which
-// on those boards (base Z_FLASH_BASE_DEFAULT) is 0x1D0000; it is kept as
-// an absolute address because the gateware is packed with it as its
-// boot address, and because it may move independently of the region.
-// KEEP IN SYNC with the Makefile's JUMP_ADDR (release/lib/layout.py
-// checks both, and that it equals the default base + Z_FLASH_ZAR_END).
-#define Z_JUMP_FLASH_OFFSET   0x1D0000u
-#define Z_JUMP_REGION_SIZE    0x30000u
+// The jumploader region (docs/zboot.md sec. 5) -- an ECP5 board built
+// with JUMP=1 only, which none is by default. It is OUTSIDE the Zeitlos
+// region, just past the first 2 MB, so a board needs a larger flash to
+// have one; inside the region its 184 KB went to the core apps instead
+// (repl and the rest are worth more to most people than `jump`). An
+// absolute address, because the gateware is packed with it as its boot
+// address. 320 KB: an 85F's jumploader is about 280 KB.
+// KEEP IN SYNC with the Makefile's JUMP_ADDR and sw/apps/zfpga/boot.c
+// (release/lib/layout.py checks all three).
+#define Z_JUMP_FLASH_OFFSET   0x200000u
+#define Z_JUMP_REGION_SIZE    0x50000u
 
 // The flash key/value store (docs/kvstore.md): the last Z_KV_SIZE bytes
 // of the ZEITLOS REGION -- two 4 KB sectors at z_flash_base() +
@@ -644,7 +646,7 @@ static inline uint32_t z_soc_mem_mb(void) {
 #define Z_FLASH_BASE_DEFAULT  0x100000u
 #define Z_FLASH_KERNEL_OFF    0x000000u	// 256 KB: sw/bios/bios.c ROM_OS_SIZE
 #define Z_FLASH_ZAR_OFF       0x040000u	// core apps, up to Z_FLASH_ZAR_END
-#define Z_FLASH_ZAR_END       0x0D0000u	// where the ECP5 jumploader starts
+#define Z_FLASH_ZAR_END       0x0FC000u	// the flash test sector (752 KB of apps)
 #define Z_FLASH_TEST_OFF      0x0FC000u	// the 4 KB sector `flashtest` uses
 #define Z_FLASH_KV_OFF        0x0FE000u	// key/value store: the last Z_KV_SIZE
 

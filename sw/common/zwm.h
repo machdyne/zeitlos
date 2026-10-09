@@ -262,7 +262,9 @@
 // usage->keysym translation wm.c applies before packing this). Like
 // Z_WM_REDRAW, this can fire at high frequency (every keystroke, plus
 // a release for each), so it's a packed Z_UINT32, not a Z_MAP -- same
-// no-heap-allocation reasoning as Z_WM_REDRAW.
+// no-heap-allocation reasoning as Z_WM_REDRAW. The message's TAG is
+// the focused window's id, for a process with several windows (repl's
+// Scheme windows, docs/repl.md); 0 while a game holds the screen.
 #define Z_WM_KEY                (Z_SUBJ_WM + 6)
 
 // wm -> app: the titlebar close icon (Z_WIN_FLAG_CLOSE_ICON) was
@@ -323,7 +325,8 @@
 // Coordinates are ABSOLUTE SCREEN coordinates, matching z_win_hw_line()
 // and friends (zwin.h) rather than the window-relative convention
 // z_win_draw_text() uses. z_win_mouse_content_xy() (zwin.h) converts
-// to content-relative when that's what's wanted.
+// to content-relative when that's what's wanted. The message's TAG is
+// the window's id, as for Z_WM_KEY.
 #define Z_WM_MOUSE               (Z_SUBJ_WM + 9)
 
 // wm -> app: one of the extra titlebar icons (Z_WIN_FLAG_NEW_ICON /

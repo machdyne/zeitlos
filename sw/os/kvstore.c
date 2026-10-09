@@ -88,17 +88,12 @@ static const kv_dev_t kv_dev = { dev_read, dev_erase, dev_program, NULL };
 // -- where --
 
 void k_kv_init(void) {
-	uint32_t size = 0, n = 0;
+	uint32_t size = 0;
 	kv_stat_t st;
 
 	kv_lock = 0;
 	kv_writable = k_flash_present();
-	if (kv_writable) {
-		while ((k_flash_hw_status() & Z_SPIFLASH_BUSY) && n < 3000000u) n++;
-		uint32_t cap = REG(Z_SPIFLASH_ID) & 0xFFu;
-		// JEDEC capacity byte: 2^n bytes on Winbond and most others
-		if (cap >= 16 && cap <= 28) size = 1u << cap;
-	}
+	if (kv_writable) size = k_flash_hw_size();
 	kv_size_known = size != 0;
 	if (!size) size = Z_KV_DEFAULT_FLASH_SIZE;
 	if (size > Z_KV_FLASH_MAX) size = Z_KV_FLASH_MAX;

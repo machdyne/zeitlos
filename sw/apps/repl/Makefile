@@ -213,4 +213,12 @@ LDLIBS = -lm
 # (a malloc of 18505 bytes failed with 22076 between sbrk and sp).
 APP_STACK = 64K
 
+# zfmt.c's printf family with floating point, and its strtod, instead
+# of newlib's (docs/build.md, "Floating point too (ZFMT_FLOAT)"):
+# Scheme prints its reals with %g and reads them with strtod, and the
+# rest of newlib's float formatting is ~50KB that repl, as a core app,
+# cannot spare.
+ZFMT = 1
+ZFMT_FLOAT = 1
+
 include ../../common/app.mk

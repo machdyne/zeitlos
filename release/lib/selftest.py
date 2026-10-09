@@ -226,7 +226,7 @@ def main():
                 img = f.read()
             checks = [
                 ("ZAR magic at the core-app offset",
-                 img[L["apps"].offset:L["apps"].offset + 4] == b"ZAR1"),
+                 img[L["apps"].offset:L["apps"].offset + 4] == b"ZAR2"),
                 ("kernel at its offset",
                  img[L["kernel"].offset:L["kernel"].offset + 4]
                  != b"\xff" * 4),

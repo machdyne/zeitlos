@@ -1756,10 +1756,11 @@ static void start_shell(const char *name) {
 	}
 
 	if (!z_proc_run(prog)) {
-		// Not on the card (it is not in flash), or not enough memory --
-		// posix wants about 4MB and will not fit a 1MB or 2MB board.
-		snprintf(status, sizeof(status),
-			"could not start %s -- no sdcard, or not enough memory", prog);
+		// posix not on the card (repl is in flash), or not enough
+		// memory -- posix wants about 4MB and will not fit a 1MB or 2MB
+		// board, and repl about 380KB.
+		snprintf(status, sizeof(status), "could not start %s -- %s", prog,
+			strcmp(prog, "posix") ? "not enough memory" : "no sdcard, or not enough memory");
 		printf("term: could not start %s\n", prog);
 		panel_show(status);
 		return;

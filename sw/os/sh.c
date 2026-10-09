@@ -1632,9 +1632,9 @@ void sh(void) {
 
 			if (arg == NULL || strcmp(arg, "erase-everything") != 0) {
 				printf("this will PERMANENTLY ERASE the entire sdcard.\n");
-				printf("core apps in flash (wm, net, term) are not\n");
-				printf("affected and the system will still boot --\n");
-				printf("but repl and posix live on the card and go with it.\n");
+				printf("core apps in flash (wm, net, term, repl and the\n");
+				printf("rest) are not affected and the system will still\n");
+				printf("boot -- but posix lives on the card and goes with it.\n");
 				printf("\n");
 				printf("to proceed, type exactly:\n");
 				printf("  format erase-everything\n");
@@ -1896,16 +1896,28 @@ void init(void) {
 	// boot log.
 	init_start_optional("console");
 
-	// Look for the shells on the card without starting them. Loading
-	// them used to be what brought a freshly powered card up before
+	// Look for posix on the card without starting it. Loading the
+	// shells used to be what brought a freshly powered card up before
 	// the config retry below (issue #7): a directory read does the same
 	// for the price of a lookup. The answer itself is only reported.
+	// (repl, the other shell, is a core app in flash.)
 	{
 		z_exec_info_t xi;
-		if (core_exec_info("repl", &xi) == CORE_SRC_NONE)
-			printf("init: repl not found (it lives on the sdcard)\n");
 		if (core_exec_info("posix", &xi) == CORE_SRC_NONE)
 			printf("init: posix not found (it lives on the sdcard)\n");
+	}
+
+	// A core app in the card's /apps wins over the flash copy. That is
+	// the hot-swap during development -- and, on a card from an older
+	// release, a stale app that a newer core app never replaces (text
+	// and files were on the card until they became core apps). Said
+	// once here, since apps started on demand never print where they
+	// came from.
+	for (uint32_t zi = 0; zi < z_zar_count(); zi++) {
+		char zn[Z_ZAR_NAME_MAX + 1];
+		if (!z_zar_is_file(zi) && z_zar_name(zi, zn) && !fs_exec_is_flash(zn))
+			printf("init: %s/%s on the card overrides the flash copy\n",
+				Z_DIR_APPS, zn);
 	}
 
 	// The config, if boot found no card (issue #7). A freshly powered

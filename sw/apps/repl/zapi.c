@@ -26,6 +26,7 @@
 #include "../../common/zwm.h"
 #include "../../common/zwin.h"
 #include "../../common/zfont.h"
+#include "../../common/zkbd.h"	// Z_KEY_*, for window key events
 #include "../../common/zdns.h"
 #include "../../common/znet.h"
 #include "../../common/zstream.h"
@@ -189,24 +190,12 @@ static ms_val *zapi_delete_file(ms_val *args) {
 // cleanup-on-Z_PORT_CLOSE the way te_bridge.c's single editor session
 // needs.
 //
-// KNOWN LIMITATION, not fixed in this revision: repl's own main
-// message loop (repl.c) doesn't read or respond to Z_WM_REDRAW at
-// all. It does apply the window's visible region (zapi_win_msg()
-// below, called from that loop) -- without which a window created
-// here would draw nothing whatsoever, since a window is born
-// invisible -- so what it draws is confined to the pixels it owns and
-// never lands on a window above it. What is missing is the repaint:
-// content drawn via the hardware-accelerated calls below writes
-// straight into the real framebuffer and stays there as long as
-// nothing else overdraws that screen region, so a window that's never
-// occluded works fine forever with no redraw needed, but if another
-// window is moved on top of it and then away again, the uncovered
-// area is not repainted -- wm asks for a REDRAW and nothing answers.
-// Cosmetic, not a correctness/safety issue, and no longer costs wm
-// anything to wait for. Worth fixing (repl's own message loop would
-// need to recognize Z_WM_REDRAW and re-issue whatever this window
-// last drew, which means tracking draw history per window, not
-// attempted here) if real usage shows it matters.
+// Repainting: a window with a handler or widgets is repainted when wm
+// asks (Z_WM_REDRAW, "Apps" below): repl clears it, the handler draws
+// the app's content and repl draws the widgets over it. A plain
+// drawing window -- no (win-on ...), no widgets -- keeps the old
+// behaviour: what it drew stays on the glass until something
+// overdraws it, and a REDRAW for it is not answered.
 
 // small, fixed-size, bounded table -- same "small on purpose" spirit
 // as Z_REPL_MAX_CONNS (repl.c) itself. Maps a window's own wm-
@@ -215,11 +204,19 @@ static ms_val *zapi_delete_file(ms_val *args) {
 // z_win_t (x/y/w/h) z_win_fill_rect()/z_win_draw_text()/z_win_hw_*()
 // all need to compute the right clip/offset. Raise if real usage
 // needs more than a handful of windows open via Scheme at once.
-#define ZAPI_WIN_MAX 8
+#define ZAPI_WIN_MAX 4	// a z_win_t is ~450 bytes of repl's RAM budget each
 
 typedef struct {
 	bool	used;
 	z_win_t	win;
+	// -- an app's window (docs/repl.md): (win-on ...) has given it a
+	// handler, which repl calls with its events; `conn` is the term
+	// connection that created it, where the handler's output goes.
+	bool	handler;
+	int8_t	conn;
+	int8_t	focus;		// zapi_widgets[] index with the keyboard, or -1
+	int8_t	pressed;	// the button the pointer went down on, or -1
+	uint8_t	buttons;	// the mouse buttons as last reported
 } zapi_win_slot_t;
 
 static zapi_win_slot_t zapi_windows[ZAPI_WIN_MAX];
@@ -289,6 +286,431 @@ static void zapi_win_rect(const z_win_t *win, z_clip_t *clip) {
 	z_win_content_rect(win, clip);
 }
 
+// -- Apps: buttons, text fields and events (docs/repl.md) --
+//
+// A window becomes an app's when (win-on w handler) gives it a
+// handler. repl's message loop (repl.c) then turns what wm sends that
+// window into events and calls the handler with each, as a list:
+//
+//   (redraw)        the window needs its content drawn again
+//   (key k)         a key: a character, or up down left right enter
+//                   escape tab backspace delete home end page-up
+//                   page-down f1..f12
+//   (click x y)     a mouse button pressed, window coordinates
+//   (button n)      button n was pressed (click, or Enter/Space on it)
+//   (enter n)       Enter in text field n; (field-text w n) is its text
+//   (close)         the close icon; the window goes after the handler
+//
+// Buttons and fields are drawn and run here, in C, so an app gets the
+// system's look, Tab between them and typing in a field without a
+// line of Scheme for any of it. They live in two small pools shared by
+// every window, not per window: the RAM is repl's budget
+// (docs/flash_apps.md, "Budgets").
+
+#define ZAPI_WIDGETS	16	// buttons and fields, every window together
+#define ZAPI_FIELDS	6
+#define ZAPI_FIELD_CAP	64
+#define ZAPI_LABEL_MAX	20
+
+typedef struct {
+	bool	used;
+	uint8_t	slot;		// zapi_windows[] index
+	uint8_t	num;		// the number Scheme knows it by
+	int8_t	field;		// zapi_fields[] index, or -1 for a button
+	int16_t	x, y, w, h;
+	char	label[ZAPI_LABEL_MAX];
+} zapi_widget_t;
+
+static zapi_widget_t zapi_widgets[ZAPI_WIDGETS];
+
+// A text field: ASCII, one line, a caret and nothing else. Not zedit
+// (sw/common/zedit.c, the dialogs' field): that and the UTF-8 it
+// brings were 5 KB of repl's flash budget, for accented letters a
+// beginner's form rarely needs.
+typedef struct {
+	bool	used;
+	uint8_t	len, cur, scroll;
+	char	buf[ZAPI_FIELD_CAP];
+} zapi_field_t;
+static zapi_field_t zapi_fields[ZAPI_FIELDS];
+
+static void zapi_field_set_text(zapi_field_t *f, const char *s) {
+	f->len = 0;
+	while (s && *s && f->len < ZAPI_FIELD_CAP - 1) f->buf[f->len++] = *s++;
+	f->buf[f->len] = 0;
+	f->cur = f->len;
+	f->scroll = 0;
+}
+
+// The keys a field takes; false for one it leaves to the window.
+static bool zapi_field_key(zapi_field_t *f, uint32_t k) {
+	if (k >= ' ' && k < 0x7f) {
+		if (f->len >= ZAPI_FIELD_CAP - 1) return true;
+		memmove(f->buf + f->cur + 1, f->buf + f->cur, (size_t)(f->len - f->cur + 1));
+		f->buf[f->cur++] = (char)k;
+		f->len++;
+	} else if ((k == 0x7f || k == 8) && f->cur) {
+		memmove(f->buf + f->cur - 1, f->buf + f->cur, (size_t)(f->len - f->cur + 1));
+		f->cur--; f->len--;
+	} else if (k == Z_KEY_DELETE && f->cur < f->len) {
+		memmove(f->buf + f->cur, f->buf + f->cur + 1, (size_t)(f->len - f->cur));
+		f->len--;
+	} else if (k == Z_KEY_LEFT) { if (f->cur) f->cur--; }
+	else if (k == Z_KEY_RIGHT) { if (f->cur < f->len) f->cur++; }
+	else if (k == Z_KEY_HOME) f->cur = 0;
+	else if (k == Z_KEY_END) f->cur = f->len;
+	else return false;
+	return true;
+}
+
+int repl_cur_conn = -1;		// set by repl.c around each command
+
+static void zapi_widget_draw(int k) {
+
+	zapi_widget_t *w = &zapi_widgets[k];
+	zapi_win_slot_t *s = &zapi_windows[w->slot];
+	const z_win_t *win = &s->win;
+	bool focus = s->focus == k;
+
+	z_clip_t c;
+	z_win_select(win);
+	zapi_win_rect(win, &c);
+	int x0 = c.x0 + w->x, y0 = c.y0 + w->y, x1 = x0 + w->w - 1, y1 = y0 + w->h - 1;
+	int fg = s->pressed == k ? 0 : 1;
+	z_fb_hw_fill_rect(x0, y0, w->w, w->h, !fg);
+	z_fb_hw_fill_rect(x0, y0, w->w, 1, fg);
+	z_fb_hw_fill_rect(x0, y1, w->w, 1, fg);
+	z_fb_hw_fill_rect(x0, y0, 1, w->h, fg);
+	z_fb_hw_fill_rect(x1, y0, 1, w->h, fg);
+	z_clip_t in = { x0 + 1, y0 + 1, x1 - 1, y1 - 1 };
+
+	if (w->field >= 0) {
+		// the text from `scroll`, kept so the caret is in the box
+		zapi_field_t *f = &zapi_fields[w->field];
+		int cols = (w->w - 6) / z_font_6x12.w;
+		if (cols < 1) cols = 1;
+		if (f->cur < f->scroll) f->scroll = f->cur;
+		if (f->cur > f->scroll + cols) f->scroll = (uint8_t)(f->cur - cols);
+		z_fb_draw_text(x0 + 3, y0 + 2, f->buf + f->scroll, 1, &z_font_6x12, &in);
+		if (focus)
+			z_fb_hw_fill_rect(x0 + 3 + (f->cur - f->scroll) * z_font_6x12.w, y0 + 2,
+				1, w->h - 4, 1);
+		return;
+	}
+
+	// a button: framed, the label centred; inverted while pressed,
+	// a second frame inside while it has the keyboard
+	if (focus) {
+		z_fb_hw_fill_rect(x0 + 2, y0 + 2, w->w - 4, 1, fg);
+		z_fb_hw_fill_rect(x0 + 2, y1 - 2, w->w - 4, 1, fg);
+		z_fb_hw_fill_rect(x0 + 2, y0 + 2, 1, w->h - 4, fg);
+		z_fb_hw_fill_rect(x1 - 2, y0 + 2, 1, w->h - 4, fg);
+	}
+	int tw = (int)strlen(w->label) * z_font_6x12.w;
+	z_fb_draw_text(x0 + (w->w - tw) / 2, y0 + (w->h - z_font_6x12.h) / 2,
+		w->label, fg, &z_font_6x12, &in);
+
+}
+
+static void zapi_widgets_draw(int slot) {
+	for (int k = 0; k < ZAPI_WIDGETS; k++)
+		if (zapi_widgets[k].used && zapi_widgets[k].slot == slot)
+			zapi_widget_draw(k);
+}
+
+// Destroys window `slot`, and its buttons and fields with it.
+static void zapi_slot_free(int slot) {
+	for (int k = 0; k < ZAPI_WIDGETS; k++) {
+		if (!zapi_widgets[k].used || zapi_widgets[k].slot != slot) continue;
+		if (zapi_widgets[k].field >= 0) zapi_fields[zapi_widgets[k].field].used = false;
+		zapi_widgets[k].used = false;
+	}
+	z_win_destroy(&zapi_windows[slot].win);
+	zapi_windows[slot].used = false;
+}
+
+static int zapi_slot_of(int id) {
+	for (int i = 0; i < ZAPI_WIN_MAX; i++)
+		if (zapi_windows[i].used && zapi_windows[i].win.id == id) return i;
+	return -1;
+}
+
+// The widget numbered `num` in window slot `slot`, or -1.
+static int zapi_widget_of(int slot, int num) {
+	for (int k = 0; k < ZAPI_WIDGETS; k++)
+		if (zapi_widgets[k].used && zapi_widgets[k].slot == slot && zapi_widgets[k].num == num)
+			return k;
+	return -1;
+}
+
+// Adds a widget to window `id`'s, numbered from 1 in each window.
+static int zapi_widget_new(int id, int x, int y, int w, int h, const char *who) {
+	(void)zapi_win_or_panic(id, who);
+	int slot = zapi_slot_of(id), num = 1, k;
+	for (k = 0; k < ZAPI_WIDGETS; k++)
+		if (zapi_widgets[k].used && zapi_widgets[k].slot == slot && zapi_widgets[k].num >= num)
+			num = zapi_widgets[k].num + 1;
+	for (k = 0; k < ZAPI_WIDGETS && zapi_widgets[k].used; k++) ;
+	if (k == ZAPI_WIDGETS)
+		ms_log(MS_PANIC, "%s: no room for more (%d buttons and fields in all)", who, ZAPI_WIDGETS);
+	memset(&zapi_widgets[k], 0, sizeof(zapi_widgets[k]));
+	zapi_widgets[k].used = true;
+	zapi_widgets[k].slot = (uint8_t)slot;
+	zapi_widgets[k].num = (uint8_t)num;
+	zapi_widgets[k].field = -1;
+	zapi_widgets[k].x = (int16_t)x; zapi_widgets[k].y = (int16_t)y;
+	zapi_widgets[k].w = (int16_t)w; zapi_widgets[k].h = (int16_t)h;
+	return k;
+}
+
+// (button w x y width height "label") -- a push button in window w;
+// returns its number. Pressing it sends the window's handler
+// (button n).
+static ms_val *zapi_button(ms_val *args) {
+	int v[5];
+	for (int i = 0; i < 5; i++) { v[i] = zapi_arg_int(ms_car(args), "button"); args = ms_cdr(args); }
+	const char *label = zapi_arg_str(ms_car(args), "button");
+	int k = zapi_widget_new(v[0], v[1], v[2], v[3], v[4], "button");
+	snprintf(zapi_widgets[k].label, ZAPI_LABEL_MAX, "%s", label);
+	zapi_widget_draw(k);
+	return ms_mk_num(zapi_widgets[k].num);
+}
+
+// (field w x y width) or (field w x y width "text") -- a one-line text
+// field; returns its number. Enter in it sends (enter n).
+static ms_val *zapi_field(ms_val *args) {
+	int v[4];
+	for (int i = 0; i < 4; i++) { v[i] = zapi_arg_int(ms_car(args), "field"); args = ms_cdr(args); }
+	const char *init = ms_is_nil(args) ? NULL : zapi_arg_str(ms_car(args), "field");
+	int f;
+	for (f = 0; f < ZAPI_FIELDS && zapi_fields[f].used; f++) ;
+	if (f == ZAPI_FIELDS)
+		ms_log(MS_PANIC, "field: no room for more (%d text fields in all)", ZAPI_FIELDS);
+	int k = zapi_widget_new(v[0], v[1], v[2], v[3], z_font_6x12.h + 4, "field");
+	zapi_fields[f].used = true;
+	zapi_field_set_text(&zapi_fields[f], init);
+	zapi_widgets[k].field = (int8_t)f;
+	if (zapi_windows[zapi_widgets[k].slot].focus < 0)
+		zapi_windows[zapi_widgets[k].slot].focus = (int8_t)k;	// typing goes here
+	zapi_widget_draw(k);
+	return ms_mk_num(zapi_widgets[k].num);
+}
+
+static zapi_widget_t *zapi_field_or_panic(ms_val *args, const char *who) {
+	int id = zapi_arg_int(ms_car(args), who);
+	int num = zapi_arg_int(ms_car(ms_cdr(args)), who);
+	(void)zapi_win_or_panic(id, who);
+	int k = zapi_widget_of(zapi_slot_of(id), num);
+	if (k < 0 || zapi_widgets[k].field < 0)
+		ms_log(MS_PANIC, "%s: window %d has no text field %d", who, id, num);
+	return &zapi_widgets[k];
+}
+
+// (field-text w n) -- what text field n holds, as a string.
+static ms_val *zapi_field_text(ms_val *args) {
+	zapi_widget_t *w = zapi_field_or_panic(args, "field-text");
+	char *s = strdup(zapi_fields[w->field].buf);
+	if (!s) return ms_mk_bool(false);
+	return ms_mk_str(s);
+}
+
+// (field-set! w n "text") -- replaces it.
+static ms_val *zapi_field_set(ms_val *args) {
+	zapi_widget_t *w = zapi_field_or_panic(args, "field-set!");
+	const char *s = zapi_arg_str(ms_car(ms_cdr(ms_cdr(args))), "field-set!");
+	zapi_field_set_text(&zapi_fields[w->field], s);
+	zapi_widget_draw((int)(w - zapi_widgets));
+	return ms_mk_bool(true);
+}
+
+// (%win-mark w) -- called by win-on (the Scheme side, zapi_register()):
+// this window has a handler now.
+static ms_val *zapi_win_mark(ms_val *args) {
+	int slot = zapi_slot_of(zapi_arg_int(ms_car(args), "win-on"));
+	if (slot < 0) return ms_mk_bool(false);
+	zapi_windows[slot].handler = true;
+	return ms_mk_bool(true);
+}
+
+// -- turning wm's messages into events --
+
+static int zapi_pending_redraw = -1;	// slot to finish after the handler
+static int zapi_pending_close = -1;	// slot to destroy after the handler
+
+static const char *zapi_key_name(uint32_t k) {
+	static const struct { uint32_t k; const char *n; } names[] = {
+		{ '\r', "enter" }, { 27, "escape" }, { '\t', "tab" }, { 0x7f, "backspace" },
+		{ 8, "backspace" }, { Z_KEY_UP, "up" }, { Z_KEY_DOWN, "down" },
+		{ Z_KEY_LEFT, "left" }, { Z_KEY_RIGHT, "right" }, { Z_KEY_HOME, "home" },
+		{ Z_KEY_END, "end" }, { Z_KEY_PAGEUP, "page-up" },
+		{ Z_KEY_PAGEDOWN, "page-down" }, { Z_KEY_DELETE, "delete" },
+	};
+	for (unsigned i = 0; i < sizeof(names) / sizeof(names[0]); i++)
+		if (names[i].k == k) return names[i].n;
+	return NULL;
+}
+
+// Tab: the next widget in the window, round to the first.
+static void zapi_focus_next(int slot) {
+	zapi_win_slot_t *s = &zapi_windows[slot];
+	int old = s->focus, k = old;
+	for (int n = 0; n < ZAPI_WIDGETS; n++) {
+		k = (k + 1) % ZAPI_WIDGETS;
+		if (zapi_widgets[k].used && zapi_widgets[k].slot == slot) break;
+	}
+	s->focus = (int8_t)k;
+	if (old >= 0 && old != k) zapi_widget_draw(old);
+	zapi_widget_draw(k);
+}
+
+int zapi_win_event(z_msg_t *msg, char *expr, int cap, int *conn) {
+
+	int slot, k;
+	zapi_win_slot_t *s;
+	uint32_t v = msg->obj.val.uint32;
+
+	if (msg->obj.type != Z_UINT32) return 0;
+
+	switch (msg->subject) {
+
+	case Z_WM_REDRAW:
+		slot = zapi_slot_of((int)Z_WM_UNPACK_ID(v));
+		if (slot < 0) return 0;
+		s = &zapi_windows[slot];
+		// a plain drawing window keeps what it drew, as it always has
+		if (!s->handler) {
+			int any = 0;
+			for (k = 0; k < ZAPI_WIDGETS; k++)
+				any |= zapi_widgets[k].used && zapi_widgets[k].slot == slot;
+			if (!any) return 0;
+		}
+		z_win_apply_redraw(&s->win, v);
+		z_win_clear(&s->win);
+		zapi_pending_redraw = slot;
+		*conn = s->conn;
+		if (!s->handler) { zapi_win_event_done(); return 0; }
+		snprintf(expr, (size_t)cap, "(%%win-event %ld '(redraw))", (long)s->win.id);
+		return 1;
+
+	case Z_WM_CLOSE:
+		slot = zapi_slot_of((int)v);
+		if (slot < 0) return 0;
+		if (!zapi_windows[slot].handler) { zapi_slot_free(slot); return 0; }
+		zapi_pending_close = slot;
+		*conn = zapi_windows[slot].conn;
+		snprintf(expr, (size_t)cap, "(%%win-event %ld '(close))", (long)v);
+		return 1;
+
+	case Z_WM_KEY: {
+		// the window wm gave the keyboard is in the tag (wm.c)
+		slot = zapi_slot_of((int)msg->tag);
+		if (slot < 0 || !Z_WM_UNPACK_KEY_PRESSED(v)) return 0;
+		s = &zapi_windows[slot];
+		uint32_t key = Z_WM_UNPACK_KEY_KEYSYM(v);
+		int f = s->focus;
+		*conn = s->conn;
+		if (key == '\t' && f >= 0) { zapi_focus_next(slot); return 0; }
+		if (f >= 0 && zapi_widgets[f].field >= 0) {
+			if (key == '\r') {
+				snprintf(expr, (size_t)cap, "(%%win-event %ld '(enter %d))",
+					(long)s->win.id, zapi_widgets[f].num);
+				return 1;
+			}
+			if (zapi_field_key(&zapi_fields[zapi_widgets[f].field], key)) {
+				zapi_widget_draw(f);
+				return 0;
+			}
+		} else if (f >= 0 && (key == '\r' || key == ' ')) {
+			snprintf(expr, (size_t)cap, "(%%win-event %ld '(button %d))",
+				(long)s->win.id, zapi_widgets[f].num);
+			return 1;
+		}
+		if (!s->handler) return 0;
+		const char *name = zapi_key_name(key);
+		if (name)
+			snprintf(expr, (size_t)cap, "(%%win-event %ld '(key %s))", (long)s->win.id, name);
+		else if (key >= Z_KEY_F1 && key <= Z_KEY_F12)
+			snprintf(expr, (size_t)cap, "(%%win-event %ld '(key f%d))",
+				(long)s->win.id, (int)(key - Z_KEY_F1 + 1));
+		else if (key >= ' ' && key < Z_KEY_NAMED_BASE)
+			snprintf(expr, (size_t)cap, "(%%win-event %ld (list 'key (integer->char %lu)))",
+				(long)s->win.id, (unsigned long)key);
+		else
+			return 0;
+		return 1;
+	}
+
+	case Z_WM_MOUSE: {
+		slot = zapi_slot_of((int)msg->tag);
+		if (slot < 0) return 0;
+		s = &zapi_windows[slot];
+		uint8_t b = (uint8_t)Z_WM_UNPACK_MOUSE_BUTTONS(v), was = s->buttons;
+		int cx, cy;
+		s->buttons = b;
+		*conn = s->conn;
+		z_win_mouse_content_xy(&s->win, v, &cx, &cy);
+		if (b && !was) {
+			// pressed: on a widget, or a click for the app
+			for (k = 0; k < ZAPI_WIDGETS; k++) {
+				zapi_widget_t *w = &zapi_widgets[k];
+				if (!w->used || w->slot != slot || cx < w->x || cy < w->y ||
+				    cx >= w->x + w->w || cy >= w->y + w->h) continue;
+				int old = s->focus;
+				s->focus = (int8_t)k;
+				if (old >= 0 && old != k) zapi_widget_draw(old);
+				if (w->field >= 0) {
+					// the caret to the column clicked
+					zapi_field_t *fd = &zapi_fields[w->field];
+					int col = fd->scroll + (cx - w->x - 3 + z_font_6x12.w / 2) / z_font_6x12.w;
+					fd->cur = (uint8_t)(col < 0 ? 0 : col > fd->len ? fd->len : col);
+				} else
+					s->pressed = (int8_t)k;
+				zapi_widget_draw(k);
+				return 0;
+			}
+			if (!s->handler) return 0;
+			snprintf(expr, (size_t)cap, "(%%win-event %ld '(click %d %d))",
+				(long)s->win.id, cx, cy);
+			return 1;
+		}
+		if (!b && was && s->pressed >= 0) {
+			// released: a button press counts if it ends on the button
+			zapi_widget_t *w = &zapi_widgets[s->pressed];
+			bool on = cx >= w->x && cy >= w->y && cx < w->x + w->w && cy < w->y + w->h;
+			int num = w->num;
+			k = s->pressed;
+			s->pressed = -1;
+			zapi_widget_draw(k);
+			if (!on) return 0;
+			snprintf(expr, (size_t)cap, "(%%win-event %ld '(button %d))", (long)s->win.id, num);
+			return 1;
+		}
+		return 0;
+	}
+
+	default:
+		return 0;
+
+	}
+
+}
+
+void zapi_win_event_done(void) {
+	if (zapi_pending_redraw >= 0) {
+		int slot = zapi_pending_redraw;
+		zapi_pending_redraw = -1;
+		if (zapi_windows[slot].used) {
+			zapi_widgets_draw(slot);
+			z_win_redraw_done(&zapi_windows[slot].win);
+		}
+	}
+	if (zapi_pending_close >= 0) {
+		int slot = zapi_pending_close;
+		zapi_pending_close = -1;
+		if (zapi_windows[slot].used) zapi_slot_free(slot);
+	}
+}
+
 // (win-create) or (win-create "title") or (win-create "title" w h) or
 // (win-create "title" w h x y) -- title/w/h/x/y all optional, but
 // positional (can't skip w/h to give just x/y) -- x/y (both or
@@ -344,8 +766,12 @@ static ms_val *zapi_win_create(ms_val *args) {
 	z_rv rv = z_win_create_flags(&win, title, w, h, x, y, Z_WIN_FLAG_CLOSE_ICON);
 	if (rv != Z_OK) return ms_mk_bool(false);
 
+	memset(&zapi_windows[slot], 0, sizeof(zapi_windows[slot]));
 	zapi_windows[slot].used = true;
 	zapi_windows[slot].win = win;
+	zapi_windows[slot].conn = (int8_t)repl_cur_conn;
+	zapi_windows[slot].focus = -1;
+	zapi_windows[slot].pressed = -1;
 
 	return ms_mk_num(win.id);
 
@@ -368,13 +794,8 @@ static ms_val *zapi_win_create(ms_val *args) {
 // zapi_win_destroy()'s own "not found" case.
 void zapi_win_close(int id) {
 
-	for (int i = 0; i < ZAPI_WIN_MAX; i++) {
-		if (zapi_windows[i].used && zapi_windows[i].win.id == id) {
-			z_win_destroy(&zapi_windows[i].win);
-			zapi_windows[i].used = false;
-			return;
-		}
-	}
+	int slot = zapi_slot_of(id);
+	if (slot >= 0) zapi_slot_free(slot);
 
 }
 
@@ -440,8 +861,7 @@ static ms_val *zapi_win_destroy(ms_val *args) {
 
 	for (int i = 0; i < ZAPI_WIN_MAX; i++) {
 		if (zapi_windows[i].used && zapi_windows[i].win.id == id) {
-			z_win_destroy(&zapi_windows[i].win);
-			zapi_windows[i].used = false;
+			zapi_slot_free(i);
 			return ms_mk_bool(true);
 		}
 	}
@@ -476,6 +896,7 @@ static ms_val *zapi_line(ms_val *args) {
 
 	z_clip_t clip;
 	zapi_win_rect(win, &clip);
+	z_win_select(win);
 
 	z_fb_hw_line(clip.x0 + x0, clip.y0 + y0, clip.x0 + x1, clip.y0 + y1, color, &clip);
 	return ms_mk_bool(true);
@@ -498,6 +919,7 @@ static ms_val *zapi_box(ms_val *args) {
 
 	z_clip_t clip;
 	zapi_win_rect(win, &clip);
+	z_win_select(win);
 
 	z_fb_hw_box(clip.x0 + x0, clip.y0 + y0, clip.x0 + x1, clip.y0 + y1, color, &clip);
 	return ms_mk_bool(true);
@@ -522,6 +944,7 @@ static ms_val *zapi_text(ms_val *args) {
 
 	z_clip_t clip;
 	zapi_win_rect(win, &clip);
+	z_win_select(win);
 
 	z_fb_draw_text(clip.x0 + x, clip.y0 + y, s, color, &z_font_6x12, &clip);
 	return ms_mk_bool(true);
@@ -928,7 +1351,13 @@ static ms_val *zapi_ps(ms_val *args) {
 
 	(void)args;
 
-	static z_proc_info_t procs[ZAPI_PS_MAX];      // static: ~2 KB, off the stack
+	// From the heap for the call, not static: 4 KB of .bss is 4 KB of
+	// repl's RAM budget all the time, for a procedure run now and then
+	// (docs/flash_apps.md, "Budgets").
+	z_proc_info_t *procs = malloc(sizeof(z_proc_info_t) * ZAPI_PS_MAX);
+	char *buf = malloc(ZAPI_PS_MAX * 72 + 8);
+	const size_t bufsz = ZAPI_PS_MAX * 72 + 8;
+	if (!procs || !buf) { free(procs); free(buf); return ms_mk_bool(false); }
 	uint32_t truncated = 0;
 	uint32_t n = z_proc_list(procs, ZAPI_PS_MAX, &truncated);
 	// `truncated` is deliberately not surfaced to Scheme: it can only
@@ -939,13 +1368,12 @@ static ms_val *zapi_ps(ms_val *args) {
 
 	// worst case: Z_PROCS_MAX rows of six 10-digit numbers plus
 	// separators. Sized generously and bounds-checked below anyway.
-	static char buf[ZAPI_PS_MAX * 72 + 8];
 	uint32_t o = 0;
 
 	buf[o++] = '(';
 
-	for (uint32_t i = 0; i < n && o < sizeof(buf) - 80; i++) {
-		o += (uint32_t)snprintf(buf + o, sizeof(buf) - o,
+	for (uint32_t i = 0; i < n && o < bufsz - 80; i++) {
+		o += (uint32_t)snprintf(buf + o, bufsz - o,
 			"(%lu %lu %lu %lu %lu %lu)",
 			(unsigned long)procs[i].pid, (unsigned long)procs[i].base,
 			(unsigned long)procs[i].size, (unsigned long)procs[i].pc,
@@ -955,7 +1383,10 @@ static ms_val *zapi_ps(ms_val *args) {
 	buf[o++] = ')';
 	buf[o] = 0;
 
-	return zapi_read_form(buf);
+	ms_val *r = zapi_read_form(buf);
+	free(procs);
+	free(buf);
+	return r;
 
 }
 
@@ -3016,6 +3447,25 @@ void zapi_register(void) {
 	ms_def_builtin("win-create", zapi_win_create);
 	ms_def_builtin("win-destroy", zapi_win_destroy);
 	ms_def_builtin("win-clear", zapi_win_clear);
+	ms_def_builtin("button", zapi_button);
+	ms_def_builtin("field", zapi_field);
+	ms_def_builtin("field-text", zapi_field_text);
+	ms_def_builtin("field-set!", zapi_field_set);
+	ms_def_builtin("%win-mark", zapi_win_mark);
+	// The Scheme half of win-on: the handlers live in a list in the
+	// global environment, which is what keeps them from being
+	// collected, and %win-event is what repl.c calls with an event.
+	ms_load_string(
+		"(define %win-handlers '())"
+		"(define (%win-drop w l) (cond ((null? l) '())"
+		" ((eqv? (car (car l)) w) (cdr l)) (else (cons (car l) (%win-drop w (cdr l))))))"
+		"(define (win-on w h) (set! %win-handlers (cons (cons w h) (%win-drop w %win-handlers)))"
+		" (%win-mark w))"
+		"(define (%win-event w e) (let ((p (assv w %win-handlers)))"
+		" (if (eq? (car e) 'close) (set! %win-handlers (%win-drop w %win-handlers)))"
+		" (if p ((cdr p) e))))"
+		// R4RS's newline, which ms itself does not have
+		"(define (newline) (display \"\\n\"))", ms_global_env);
 	ms_def_builtin("line", zapi_line);
 	ms_def_builtin("box", zapi_box);
 	ms_def_builtin("text", zapi_text);

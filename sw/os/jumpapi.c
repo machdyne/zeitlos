@@ -74,6 +74,15 @@ static int jparse(zjump_t *j) {
 	return zjump_parse(jrd, 0, 4096, j);
 }
 
+/* The jumploader is past the first 2 MB (zsoc.h). On a smaller chip
+ * that address wraps to the start of flash -- the bootloader or the
+ * gateware -- so never read it there, let alone write it. 1 if the chip
+ * reaches the region, or its size cannot be read. */
+static int jfits(void) {
+	uint32_t size = k_flash_hw_size();
+	return !size || size > Z_JUMP_FLASH_OFFSET;
+}
+
 /* A bitstream at the region's start with its header stripped: the
  * preamble within the first bytes, but not the FF 00 header, so no
  * ZJUMP1 line. openFPGALoader does exactly this to a .bit it writes to
@@ -89,7 +98,11 @@ static int stripped(void) {
 }
 
 void k_jump_explain(const char *who, int rc) {
-	if (rc == -2)
+	if (rc == -3)
+		printf("%s: the jumploader belongs at 0x%06lx, past the end of this "
+			"flash -- build the gateware without JUMP (docs/zboot.md sec. 5)\n",
+			who, (unsigned long)Z_JUMP_FLASH_OFFSET);
+	else if (rc == -2)
 		printf("%s: 0x%06lx holds a jumploader whose header was stripped -- "
 			"a .bit written by openFPGALoader loses it, and with it the ZJUMP1 "
 			"line this needs. Write the raw jump.bin instead: `make flash_jump`\n",
@@ -101,6 +114,7 @@ void k_jump_explain(const char *who, int rc) {
 
 int k_jump_read(uint32_t *target) {
 	zjump_t j;
+	if (!jfits()) return -3;
 	if (jparse(&j)) return stripped() ? -2 : -1;
 	if (target) *target = zjump_target(&j, jrd, 0);
 	return 0;
@@ -113,6 +127,10 @@ int k_jump_point(uint32_t target) {
 
 	if (target & 0xFFFFu || target > 0xFF0000u) {
 		printf("jump: 0x%06lx is not a boot address (64 KB aligned, below 16 MB)\n", (unsigned long)target);
+		return -1;
+	}
+	if (!jfits()) {
+		k_jump_explain("jump", -3);
 		return -1;
 	}
 	if (jparse(&j)) {

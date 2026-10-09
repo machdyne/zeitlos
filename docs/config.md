@@ -84,7 +84,7 @@ apps.term.auto_connect: serial 9600
 Absent, empty or `none`: the start panel, as without a config file.
 
 **It waits for the provider.** A window opened at boot can be on screen
-before `repl0` has registered -- init loads the shells off the card, and
+before `repl0` has registered -- term starts the shells on demand, and
 the dock enables once init has *started* them, not once they are
 listening. So term waits up to 15 seconds for the name to appear (the
 port's own name; `serial0` for serial and usbserial;

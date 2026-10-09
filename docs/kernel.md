@@ -606,8 +606,9 @@ PROGRAMN it fails and changes nothing. `docs/zboot.md` section 6.
 
 `Z_SYS_JUMP` (`k_jump`, `z_jump()`; `jump` in the serial shell and in
 `posix`) does the same from any flash address, through the jumploader
-at `0x1D0000`, which `sw/os/jumpapi.c` re-points in place; `reboot` is
-a jump to 0. `k_boot_to()` in `kernel.c` is both, and lists why either
+at `0x200000` (opt-in, `JUMP=1`, flash past 2 MB), which
+`sw/os/jumpapi.c` re-points in place; `reboot` is a jump to 0, or, on
+gateware without a jumploader (the default), a plain reload from 0. `k_boot_to()` in `kernel.c` is both, and lists why either
 refuses. `docs/zboot.md` section 5.
 
 ## Writing the flash

@@ -273,6 +273,80 @@ class Target:
 
 
 @functools.lru_cache(maxsize=None)
+def _core_make(root, board=None):
+    """`make core-apps`, as {key: value text}."""
+    cmd = ["make", "-s", "--no-print-directory", "core-apps"]
+    if board:
+        cmd.append("BOARD=" + board)
+    r = subprocess.run(cmd, cwd=root, capture_output=True, text=True)
+    lines = dict(l.split(":", 1) for l in r.stdout.splitlines() if ":" in l)
+    if r.returncode or "all" not in lines:
+        raise SpecError("`%s` failed: %s" % (" ".join(cmd),
+                                            (r.stderr or r.stdout).strip()))
+    return lines
+
+
+def _size(text):
+    t = text.strip().upper()
+    mul = 1
+    if t.endswith("K"):
+        mul, t = 1024, t[:-1]
+    elif t.endswith("M"):
+        mul, t = 1024 * 1024, t[:-1]
+    return int(t, 0) * mul
+
+
+def core_budgets(root):
+    """The Makefile's CORE_BUDGETS and the rules' inputs:
+    {"budgets": {app: (flash, ram)}, "budgets_text": "...",
+     "reserve": bytes, "at_boot": (...), "ram_max": bytes}."""
+    lines = _core_make(root)
+    budgets = {}
+    for item in lines.get("budgets", "").split():
+        name, _, pair = item.partition("=")
+        flash, _, ram = pair.partition("/")
+        budgets[name] = (_size(flash), _size(ram))
+    return {"budgets": budgets,
+            "files": tuple(lines.get("files", "").split()),
+            "budgets_text": lines.get("budgets", "").strip(),
+            "reserve": _size(lines.get("reserve", "0") or "0"),
+            "at_boot": tuple(lines.get("at-boot", "").split()),
+            "ram_max": _size(lines.get("ram-max", "0") or "0")}
+
+
+def check_core_budgets(root, zar_limit):
+    """Problems with the budgets themselves, as a list of strings."""
+    every = core_apps(root)[0]
+    b = core_budgets(root)
+    budgets, problems = b["budgets"], []
+    for a in every:
+        if a not in budgets:
+            problems.append("core app %s has no budget (CORE_BUDGETS)" % a)
+    for a in budgets:
+        if a not in every:
+            problems.append("CORE_BUDGETS has %s, which is not a core app" % a)
+    # 16 bytes of header and 24 per entry: the archive's own overhead
+    flash = sum(budgets[a][0] for a in every if a in budgets)
+    need = flash + b["reserve"] + 16 + 24 * len(every)
+    if need > zar_limit:
+        problems.append("the flash budgets (%d) and CORE_RESERVE (%d) are %d "
+                        "bytes, over the archive's region of %d by %d"
+                        % (flash, b["reserve"], need, zar_limit, need - zar_limit))
+    for a in b["at_boot"]:
+        if a not in every:
+            problems.append("CORE_AT_BOOT has %s, which is not a core app" % a)
+    boot = sum(budgets[a][1] for a in b["at_boot"] if a in budgets)
+    rest = sorted((budgets[a][1] for a in every
+                   if a in budgets and a not in b["at_boot"]), reverse=True)[:2]
+    if b["ram_max"] and boot + sum(rest) > b["ram_max"]:
+        problems.append("the RAM budgets of %s (%d) and the two largest others "
+                        "(%d) are %d, over CORE_RAM_MAX (%d)"
+                        % (" ".join(b["at_boot"]), boot, sum(rest),
+                           boot + sum(rest), b["ram_max"]))
+    return problems
+
+
+@functools.lru_cache(maxsize=None)
 def core_apps(root, board=None):
     """(all, omit, board) from the top-level Makefile (`make core-apps`).
 
@@ -283,14 +357,7 @@ def core_apps(root, board=None):
     board spec and build ONE archive from whichever target sorted first;
     when that became klinge, every image lost wm.
     """
-    cmd = ["make", "-s", "--no-print-directory", "core-apps"]
-    if board:
-        cmd.append("BOARD=" + board)
-    r = subprocess.run(cmd, cwd=root, capture_output=True, text=True)
-    lines = dict(l.split(":", 1) for l in r.stdout.splitlines() if ":" in l)
-    if r.returncode or "all" not in lines:
-        raise SpecError("`%s` failed: %s" % (" ".join(cmd),
-                                            (r.stderr or r.stdout).strip()))
+    lines = _core_make(root, board)
     every, omit, mine = (tuple(lines.get(k, "").split())
                          for k in ("all", "omit", "board"))
     stray = [a for a in omit if a not in every]

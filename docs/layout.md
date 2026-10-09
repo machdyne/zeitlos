@@ -89,8 +89,10 @@ apps with a single directory read, and `run web` resolves with a single
 `f_open()`. A folder per app would turn both into one directory open per
 app, on a card reached over SPI.
 
-The core apps (`wm`, `net`, `term`, `console`) live in the flash archive
-and are **not** in `/apps` on a released card. A copy placed there
+The core apps (`CORE_APPS` in the top-level `Makefile`: `wm`, `net`,
+`term`, `console`, `cron`, `text`, `files`) live in the flash archive
+and are **not** in `/apps` on a released card -- the release refuses a
+card list that has one. A copy placed there
 deliberately takes precedence over the flash copy (see "Finding a
 program"). Their data folders are on the card like any other app's:
 `/data/net/net.cfg`.
@@ -145,6 +147,11 @@ and Ark"). `/docs` exists without ask, and ask's copy is in ask's own
 format.
 
 Release-owned, like `/sys/version`: replaced on upgrade.
+
+`/docs` also has files that are in flash rather than on the card
+(`CORE_FILES`: `welcome.txt`, plain-text renderings of a few of these
+for `text`), merged in read-only and there with no card at all
+([flash_apps.md](flash_apps.md), "Files in flash").
 
 ### `/media`
 

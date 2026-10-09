@@ -43,4 +43,19 @@ void zapi_win_close(int id);
 // zapi.c's own comment.
 bool zapi_win_msg(z_msg_t *msg);
 
+// The term connection running the current command (repl.c sets it),
+// or -1: a window remembers the one that created it, for its
+// handler's output.
+extern int repl_cur_conn;
+
+// A wm message for one of repl's windows, as an event for Scheme
+// (docs/repl.md): returns 1 with the expression to evaluate in `expr`
+// and the connection its output belongs to in `*conn`, or 0 when there
+// is nothing for Scheme (no handler, or a key a text field took).
+// zapi_win_event_done() finishes what the event started -- the
+// widgets drawn over a redraw, a closed window destroyed -- and is
+// called after the expression has run, whether or not it failed.
+int zapi_win_event(z_msg_t *msg, char *expr, int cap, int *conn);
+void zapi_win_event_done(void);
+
 #endif

@@ -514,6 +514,51 @@ static void eval_scheme(const char *expr, char *out, uint32_t out_cap) {
 
 }
 
+// -- window events (docs/repl.md) --
+//
+// Runs a window's handler on one event, with its output -- display,
+// and an error if it fails -- sent to the term connection that created
+// the window, as a command's would be, followed by a fresh prompt.
+// With no such connection any more, it goes to the serial console.
+static void window_event(z_msg_t *msg) {
+
+	char expr[96], out[256];
+	int ci = -1;
+
+	if (!zapi_win_event(msg, expr, sizeof(expr), &ci)) return;
+
+	repl_conn_t *c = (ci >= 0 && ci < Z_REPL_MAX_CONNS && conns[ci].port.connected &&
+		!conns[ci].in_editor && !conns[ci].in_pager) ? &conns[ci] : NULL;
+
+	cap_conn = c;
+	cap_len = 0;
+	cap_last_was_cr = false;
+	z_stdout_hook = c ? repl_stdout_hook : NULL;
+
+	eval_scheme(expr, out, sizeof(out));
+
+	fflush(stdout);
+	z_stdout_hook = NULL;
+	bool failed = !strncmp(out, "repl: ", 6);
+	if (c && (cap_len || failed)) {
+		conn_send_str(c, "\r\n");
+		cap_flush();
+		if (failed) {
+			conn_send_str(c, "window handler: ");
+			conn_send_str(c, out);
+			conn_send_str(c, "\r\n");
+		}
+		conn_send_str(c, PROMPT);
+	} else if (failed) {
+		printf("repl: window handler: %s\n", out);
+	}
+	cap_len = 0;
+	cap_conn = NULL;
+
+	zapi_win_event_done();
+
+}
+
 // -- bare-word command syntax (docs/scheme_api.md \S1) --
 //
 // translates e.g. "tget 1.2.3.4 firmware.bin" into
@@ -1180,8 +1225,10 @@ static void handle_data(const z_msg_t *msg) {
 				cap_last_was_cr = false;
 				z_stdout_hook = repl_stdout_hook;
 
+				repl_cur_conn = (int)(c - conns);
 				bool wants_quit =
 					dispatch_line(c->line.buf, out, sizeof(out), c);
+				repl_cur_conn = -1;
 
 				// newlib buffers stdout (_isatty() reports a tty, so
 				// it's line-buffered) -- anything ms printed without a
@@ -1432,19 +1479,14 @@ int main(void) {
 				handle_close(&msg);
 			} else if (msg.subject == Z_REPL_EVAL) {
 				handle_eval(&msg);
-			} else if (msg.subject == Z_WM_CLOSE) {
-				// titlebar close icon clicked on one of THIS repl's
-				// Scheme-created windows (zapi.c's zapi_win_create(),
-				// (win-create ...) in Scheme -- see Z_WM_CLOSE's own
-				// comment in zwm.h for why wm sends this instead of
-				// just destroying the window itself: repl can own
-				// several windows off this one pid, so only the
-				// specific window that was clicked should go away,
-				// never the others and never repl itself). obj is a
-				// Z_UINT32 window id -- see zapi_win_close() (zapi.h)
-				// for what actually happens with it.
-				if (msg.obj.type == Z_UINT32)
-					zapi_win_close((int)msg.obj.val.uint32);
+			} else if (msg.subject == Z_WM_CLOSE || msg.subject == Z_WM_REDRAW ||
+				msg.subject == Z_WM_KEY || msg.subject == Z_WM_MOUSE) {
+				// One of this repl's Scheme windows: its close icon
+				// (only that window goes -- repl can own several, see
+				// Z_WM_CLOSE in zwm.h), a repaint, a key or the mouse.
+				// zapi.c turns it into an event for the window's
+				// handler, if it has one (docs/repl.md).
+				window_event(&msg);
 			} else if (msg.subject == Z_WM_SET_CLIP ||
 				msg.subject == Z_WM_WINDOW_MOVED) {
 				// The visible region of one of this repl's

@@ -4271,7 +4271,10 @@ static void forward_key(uint32_t keysym, uint8_t modifiers, bool pressed) {
 		return;
 	}
 
-	z_msg_new_send(windows[focused].owner_pid, Z_WM_KEY, 0, z_obj_uint32(packed));
+	// the tag says which window: for a process with several (repl's
+	// Scheme windows, docs/repl.md)
+	z_msg_new_send(windows[focused].owner_pid, Z_WM_KEY, (uint32_t)focused,
+		z_obj_uint32(packed));
 
 }
 
@@ -6310,7 +6313,7 @@ static void dispatch_mouse(int cx, int cy, uint8_t btn) {
 	if (mouse_last_valid && target == mouse_last_target &&
 		packed == mouse_last_packed) return;
 
-	z_msg_new_send(windows[target].owner_pid, Z_WM_MOUSE, 0,
+	z_msg_new_send(windows[target].owner_pid, Z_WM_MOUSE, (uint32_t)target,
 		z_obj_uint32(packed));
 
 	mouse_last_packed = packed;

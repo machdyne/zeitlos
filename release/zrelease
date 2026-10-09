@@ -107,6 +107,22 @@ def cmd_check(args):
         problems.append(str(e))
         print("  FAILED")
 
+    print("\ncore app budgets ...")
+    try:
+        zar = next(r for r in lay["regions"] if r.key == "apps")
+        bp = spec.check_core_budgets(ROOT, zar.limit)
+        if bp:
+            problems += bp
+            print("  FAILED")
+        else:
+            b = spec.core_budgets(ROOT)
+            fl = sum(f for f, _ in b["budgets"].values())
+            print("  ok -- %d KB of flash budgets + %d KB reserve, of %d KB"
+                  % (fl // 1024, b["reserve"] // 1024, zar.limit // 1024))
+    except (spec.SpecError, NameError, StopIteration) as e:
+        problems.append("core app budgets: %s" % e)
+        print("  FAILED")
+
     print("\narch ...")
     try:
         arch = spec.derive_arch(ROOT)

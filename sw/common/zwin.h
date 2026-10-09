@@ -394,6 +394,13 @@ void z_win_draw_utf8_2(const z_win_t *win, int x, int y, const char *s,
 // chokepoint carries that rather than every app remembering to.
 void z_win_content_rect(const z_win_t *win, z_clip_t *out);
 
+// Puts `win`'s visible region in force for the z_fb_* (zgfx.h) calls
+// that follow, as every z_win_* drawing call does for itself. For a
+// process with several windows drawing through z_fb_* directly (repl's
+// Scheme windows): without it, the region in force is whichever window
+// last drew.
+void z_win_select(const z_win_t *win);
+
 // hardware-accelerated line/box draw via the GPU line rasterizer
 // (rtl/gpu/gpu_raster.v) -- absolute screen coordinates (unlike
 // z_win_fill_rect()/z_win_draw_text() above, which are

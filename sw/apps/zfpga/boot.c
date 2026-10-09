@@ -9,12 +9,17 @@
  * these it fits, each starting at a 64 KB boundary (a boot address is
  * addr[23:16]):
  *
- *   - after the core apps (the ZAR), up to the jumploader at 0x1D0000;
+ *   - after the core apps (the ZAR), up to the end of their region at
+ *     0x1FC000 -- what the archive does not use yet;
  *   - after Zeitlos's own gateware, up to the boot logo at 0x0F0000 --
  *     on a Mozart ML1 flashed over JTAG, 598 KB of gateware leaves
  *     0x0A0000-0x0F0000, 320 KB;
- *   - on a flash larger than 2 MB, after the jumploader -- as many
+ *   - on a flash larger than 2 MB, after the jumploader's region at
+ *     0x200000 (there whether or not a jumploader is) -- as many
  *     designs as there is room for.
+ *
+ * `run` needs a jumploader: a board with more than 2 MB of flash and
+ * gateware built with JUMP=1. No board is, by default.
  *
  * -a ADDR puts it anywhere inside one of them. `run` is `flash`, then a jump: the kernel points
  * the jumploader at ADDR, syncs files and pulls PROGRAMN. A power
@@ -35,11 +40,12 @@
 #include "zfpga.h"
 
 /* The flash map (docs/zboot.md sec. 5). KEEP IN SYNC with
- * Z_ZAR_FLASH_OFFSET (sw/os/zar.h) and Z_JUMP_FLASH_OFFSET,
+ * Z_ZAR_FLASH_OFFSET (sw/os/zar.h), Z_FLASH_ZAR_END, Z_JUMP_FLASH_OFFSET and
  * Z_JUMP_REGION_SIZE (sw/common/zsoc.h); release/lib/layout.py checks. */
 #define ZFPGA_ZAR_OFFSET   0x140000u
-#define ZFPGA_JUMP_OFFSET  0x1D0000u
-#define ZFPGA_JUMP_END     0x200000u
+#define ZFPGA_ZAR_END      0x1FC000u        /* the core apps' region ends */
+#define ZFPGA_JUMP_OFFSET  0x200000u        /* past 2 MB, opt-in (JUMP=1) */
+#define ZFPGA_JUMP_END     0x250000u
 /* The key/value store: the last 8 KB of the chip (or of its first 16 MB,
  * all a 3-byte address reaches). The kernel refuses writes there
  * (docs/kvstore.md). KEEP IN SYNC with Z_KV_SIZE / Z_KV_FLASH_MAX in
@@ -104,18 +110,27 @@ static uint32_t rd_le32(uint32_t off) {
         (uint32_t)zio_flash_read(off + 2) << 16 | (uint32_t)zio_flash_read(off + 3) << 24;
 }
 
-/* Where the core apps end: the ZAR's header, then the furthest entry. */
+/* Where the core apps end: the ZAR's header, then the furthest entry.
+ * ZAR2 (sw/os/zar.h): 16-byte entries, the data's offset and size in
+ * their last two words. An older ZAR1 (24-byte entries, the same two
+ * words at 16 and 20) is still read, so a board flashed before is not
+ * overwritten. */
 static uint32_t zar_end(void) {
-    uint32_t n, i, end = ZFPGA_ZAR_OFFSET;
+    uint32_t n, i, end = ZFPGA_ZAR_OFFSET, esz, eo;
+    uint8_t v;
     if (zio_flash_read(ZFPGA_ZAR_OFFSET) != 'Z' || zio_flash_read(ZFPGA_ZAR_OFFSET + 1) != 'A' ||
-            zio_flash_read(ZFPGA_ZAR_OFFSET + 2) != 'R' || zio_flash_read(ZFPGA_ZAR_OFFSET + 3) != '1')
+            zio_flash_read(ZFPGA_ZAR_OFFSET + 2) != 'R')
         return end;                                     /* no archive: nothing to avoid */
+    v = zio_flash_read(ZFPGA_ZAR_OFFSET + 3);
+    if (v == '2') { esz = 16; eo = 8; }
+    else if (v == '1') { esz = 24; eo = 16; }
+    else return end;
     n = rd_le32(ZFPGA_ZAR_OFFSET + 4);
     if (n > 256) zf_fatal("the core-app archive at 0x%06x claims %u entries", ZFPGA_ZAR_OFFSET, n);
-    end = ZFPGA_ZAR_OFFSET + 16 + 24 * n;
+    end = ZFPGA_ZAR_OFFSET + 16 + esz * n;
     for (i = 0; i < n; i++) {
-        uint32_t e = ZFPGA_ZAR_OFFSET + 16 + 24 * i;
-        uint32_t last = ZFPGA_ZAR_OFFSET + rd_le32(e + 16) + rd_le32(e + 20);
+        uint32_t e = ZFPGA_ZAR_OFFSET + 16 + esz * i;
+        uint32_t last = ZFPGA_ZAR_OFFSET + rd_le32(e + eo) + rd_le32(e + eo + 4);
         if (last > end) end = last;
     }
     return end;
@@ -158,7 +173,7 @@ typedef struct { uint32_t lo, hi; const char *what; } space_t;
 static int free_spaces(const zio_flash_info_t *fi, space_t *sp) {
     int n = 0;
     uint32_t g = gateware_end();
-    sp[n].lo = align_up(zar_end()); sp[n].hi = ZFPGA_JUMP_OFFSET;
+    sp[n].lo = align_up(zar_end()); sp[n].hi = ZFPGA_ZAR_END & ~(ALIGN - 1);
     sp[n++].what = "after the core apps";
     if (g) {
         /* never below the lock, whatever the layout looked like */
@@ -237,14 +252,18 @@ static int flash_cmd(int argc, char **argv, int run) {
     if (rc == -2) zf_fatal("%s: another program is writing the flash", what);
 
     /* the jumploader was built for this die: the image must match it */
-    if (bit_info(rd_flash, (void *)(uintptr_t)ZFPGA_JUMP_OFFSET, 4096, &jl) == 0) {
+    /* past 2 MB: on a smaller chip that address wraps to the start of
+     * flash, whose bitstream is no jumploader */
+    if (fi.size > ZFPGA_JUMP_OFFSET &&
+            bit_info(rd_flash, (void *)(uintptr_t)ZFPGA_JUMP_OFFSET, 4096, &jl) == 0) {
         if (jl.idcode != bi.idcode) {
             zio_flash_end();
             zf_fatal("%s: %s is for device ID %08x; this FPGA is %08x", what, in, bi.idcode, jl.idcode);
         }
     } else if (run) {
         zio_flash_end();
-        zf_fatal("run: there is no jumploader at 0x%06x to boot through (make flash_jump)", ZFPGA_JUMP_OFFSET);
+        zf_fatal("run: there is no jumploader at 0x%06x to boot through -- it needs flash past "
+            "2 MB and gateware built with JUMP=1 (docs/zboot.md sec. 5)", ZFPGA_JUMP_OFFSET);
     } else {
         zf_note("warning: no jumploader at 0x%06x, so the device ID is not checked", ZFPGA_JUMP_OFFSET);
     }

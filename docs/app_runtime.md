@@ -85,7 +85,7 @@ What does not cost it:
   `printf` family with `sw/common/zfmt.c`: integers, strings and
   pointers, no floating point (`%f %e %g %a` print `?`), about 1.5KB,
   and still written through the FILE layer so buffering and ordering
-  are unchanged. The core apps in flash (`wm`, `net`, `term`) and the
+  are unchanged. The core apps in flash that print (`wm`, `net`, `term`, `text`) and the
   kernel use it. [build.md](build.md#integer-only-printf-zfmt) has the
   details and the check to run before opting in.
 

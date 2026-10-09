@@ -38,13 +38,11 @@ helpfully rebuilding something nobody has looked at.
 ```
 release/dist/0.0.3/
   zeitlos-lakritz_gpio.img          gateware + kernel + core apps
-                                    + jumploader
   zeitlos-lakritz_katze.img
   zeitlos-lakritz_langkatze.img
   zeitlos-mozart_ml1.img
   zeitlos-sergei_ml1.img
   zeitlos-<target>-gateware.bit     per board
-  zeitlos-<target>-jump.bin         the jumploader, per board (boards with one)
   zeitlos-kernel.bin                identical for every target
   zeitlos-apps.zar                  every core app (Makefile CORE_APPS);
                                     identical for every target
@@ -504,8 +502,7 @@ $ release/zrelease layout
   --------  ---------  ------------------
   0x000000    1048576  gateware
   0x100000     262144  kernel
-  0x140000     589824  core apps (ZAR)
-  0x1d0000     188416  jumploader
+  0x140000     770048  core apps (ZAR)
   0x1fe000       8192  key/value store (written by the running system)
   0x200000             end of flash
 ```
@@ -542,30 +539,18 @@ Using Mozart as the example, with that board's own `flash_cmd` from
 $ openFPGALoader -v -c dirtyJtag -f -o 0x000000 zeitlos-mozart_ml1-gateware.bit
 $ openFPGALoader -v -c dirtyJtag -f -o 0x100000 zeitlos-kernel.bin
 $ openFPGALoader -v -c dirtyJtag -f -o 0x140000 zeitlos-apps.zar
-$ openFPGALoader -v -c dirtyJtag -f -o 0x1d0000 zeitlos-mozart_ml1-jump.bin
 ```
 
-**The jumploader** (`docs/zboot.md` section 5) is a small bitstream at
-`0x1D0000`, which Zeitlos jumps through to reboot or to boot other
-gateware. The ZAR's room ends there (576 KB). On boards built with the
-Makefile's `JUMP` -- Lakritz, Obst, Mozart ML0, ML1 and ML2, Sergei ML0, ML1
-and ML2,
-Konfekt, Minze, Schoko, Noir and Klinge -- the
-gateware is packed to reload from `0x1D0000`, so **the jumploader is
-part of the system**: the `.img` and the DFU image carry it, it ships
-on its own as `zeitlos-<target>-jump.bin`, and `make flash` writes it
-(`make flash_jump` alone). **It is a `.bin`, not a `.bit`, on
-purpose:** openFPGALoader writes only what follows a `.bit`'s header,
-and the header carries the `ZJUMP1` line the kernel needs to re-point
-the jumploader -- a jumploader written as a `.bit` still works, but
-`reboot` and `jump` refuse it, saying the header was stripped. The
-bytes are the same either way. Flashing the gateware by itself onto a board
-that has never had a jumploader leaves `reboot` refusing -- it says so
--- until the jumploader is flashed too. A power cycle always works.
-
-The release build refuses to assemble an image for a jumploader board
-without its jumploader, and asks the Makefile which boards those are
-(`board_jumps()` in `lib/build.py`) rather than keeping its own list.
+**No jumploader.** Releases are built without the Makefile's `JUMP`,
+which is the default on every board (`docs/zboot.md` section 5): the
+gateware reloads from 0 when it reboots, and the core apps have the
+space up to `0x1FC000` that the jumploader used to share with them. A
+jumploader now lives at `0x200000`, past the 2 MB a release image
+covers, so the release build refuses a target whose gateware would be
+built with `JUMP=1` (`board_jumps()` in `lib/build.py`). Flashing a
+0.0.6 image onto a board that had 0.0.5's jumploader at `0x1D0000`
+overwrites it with core apps, which is fine: the new gateware never
+looks there.
 
 The offsets are the flash map above, and they are not a convention the
 release tool invented — `sw/bios/bios.c` reads the kernel from the
@@ -573,8 +558,7 @@ start of the Zeitlos region and `sw/os/zar.h` reads the archive from
 its one, so a piece written to the wrong offset produces a board that
 configures and then hangs with nothing on screen.
 
-**Only the gateware and the jumploader are board-specific** -- the
-jumploader because it is built for the board's die. `zeitlos-kernel.bin`,
+**Only the gateware is board-specific.** `zeitlos-kernel.bin`,
 and `zeitlos-apps.zar` are byte-identical across
 every target in a release, which is why they have no board name. (The
 exception would be a board whose Makefile block sets `CORE_APPS_OMIT`:
@@ -710,10 +694,10 @@ for a bare name in `/apps` and then in the flash archive, so bare names
 work everywhere and the ZAR entries stay flat. See
 `docs/flash_apps.md`.
 
-**The shells are on the card, and only there.** `repl` and `posix` are
-not core apps (`docs/flash_apps.md`, "Why repl is not a core app"), so
-`release/lib/mkfatimg.py`'s `SHELLS` group -- mirrored in
-`tools/mkfatimg.sh` -- is the only copy of either that a release ships.
+**`posix` is on the card, and only there; `repl` is in flash.**
+`repl` is a core app (`docs/flash_apps.md`, "Why repl is a core app"),
+so `release/lib/mkfatimg.py`'s `SHELLS` group is `posix` alone, and the
+card build refuses a list with a core app on it.
 
 **The remote desktop's page is data on the card.** `zerdesk` reads
 its viewer page from `/data/zerdesk/index.html` and carries no copy, so
@@ -963,7 +947,6 @@ before doing anything:
 ```
   replace  zeitlos-lakritz_gpio.img
   add      zeitlos-lakritz_gpio-gateware.bit
-  add      zeitlos-lakritz_gpio-jump.bin
   keep     zeitlos.img.gz  (not built by this run)
 ```
 

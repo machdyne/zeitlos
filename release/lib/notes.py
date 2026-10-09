@@ -209,16 +209,28 @@ def notes(version, commit, targets, sdcard, layout, prev_version=None):
                    "never need to type `/apps`: `run term` looks there, "
                    "then in the flash archive.")
         out.append("")
-        out.append("The core apps (`wm`, `term`, and `net` where "
-                   "the hardware has a NIC) are not on the card -- they are "
-                   "in flash. A copy at the card ROOT takes precedence over "
-                   "the flash copy, so dropping one there is how you "
-                   "hot-swap a single app during development.")
+        core = []
+        for t in targets:
+            for a in t.get("core_apps") or []:
+                if a not in core:
+                    core.append(a)
+        out.append("The core apps (%s) are not on the card -- they are "
+                   "in flash. A copy in `/apps` on the card takes precedence "
+                   "over the flash copy, so dropping one there is how you "
+                   "hot-swap a single app during development."
+                   % (", ".join("`%s`" % a for a in core) or "see MANIFEST.json"))
         out.append("")
-        out.append("The two shells, `repl` and `posix`, ARE on the card, and "
-                   "boot starts both when a card is present. Without a card "
-                   "`term` opens with both shell buttons disabled; OPEN "
-                   "(F11) still reaches telnet, ssh and serial.")
+        out.append("**Upgrading a card from an older release:** an app that "
+                   "has since become a core app may still be in its `/apps`, "
+                   "and that old copy would keep winning over the new one in "
+                   "flash. Boot says so (`init: /apps/text on the card "
+                   "overrides the flash copy`). Write the new card image, or delete those files "
+                   "from `/apps`.")
+        out.append("")
+        out.append("`posix` IS on the card; `repl` is in flash. `term` "
+                   "starts one when its REPL or POSIX button is pressed. "
+                   "Without a card POSIX cannot start; REPL and OPEN (F11, "
+                   "telnet, ssh and serial) still work.")
         out.append("")
 
     out.append("## Flash layout")
@@ -230,8 +242,7 @@ def notes(version, commit, targets, sdcard, layout, prev_version=None):
                    % (r.offset, r.limit // 1024, r.name))
     out.append("")
     out.append("Images are trimmed to the end of their last piece -- the "
-               "jumploader, on boards that have one, otherwise the core app "
-               "archive -- rather than padded to the full %d KB, so the "
+               "core app archive -- rather than padded to the full %d KB, so the "
                "rest of flash is left erased instead of being written."
                % (layout["flash_size"] // 1024))
     out.append("")
@@ -390,21 +401,19 @@ def asset_readme(version, commit, targets, sdcard, layout):
         out += lines
         out.append("")
 
-    out.append("The gateware and the jumploader are board-specific, which")
-    out.append("is why they are the ones with a board name.")
+    out.append("The gateware is board-specific, which is why it is the")
+    out.append("one with a board name.")
     out.append("")
-    out.append("THE JUMPLOADER. On a board that has one, the gateware")
-    out.append("reloads from 0x%06x whenever the system reboots or boots"
-               % (L["jump"].offset if "jump" in L else 0))
-    out.append("other gateware. Flashing the gateware alone onto a board")
-    out.append("that has never had a jumploader leaves `reboot` refusing")
-    out.append("until it is flashed too -- the .img includes it.")
+    out.append("No jumploader. `reboot` reloads the FPGA from flash")
+    out.append("offset 0. The 0.0.5 images put a jumploader where the")
+    out.append("core apps now are; this image writes over it, and the")
+    out.append("new gateware no longer looks for it.")
     out.append("")
     out.append("  MANIFEST.json   every RTL define, achieved Fmax and")
     out.append("                  utilisation for each build")
     out.append("  SHA256SUMS      checksums for everything above")
     out.append("")
-    out.append("Only the gateware and the jumploader differ between")
+    out.append("Only the gateware differs between")
     out.append("boards. The kernel,")
     out.append("the core apps and the splash are identical everywhere --")
     out.append("the `net` app carries both NIC drivers and picks one at")
@@ -420,9 +429,8 @@ def asset_readme(version, commit, targets, sdcard, layout):
                    % (r.offset, r.limit // 1024, r.name))
     out.append("  0x%06x            end of flash" % layout["flash_size"])
     out.append("")
-    out.append("Images stop at the end of their last piece -- the")
-    out.append("jumploader where a board has one, otherwise the core app")
-    out.append("archive -- rather than padding to the full %d KB, so the"
+    out.append("Images stop at the end of their last piece -- the core")
+    out.append("app archive -- rather than padding to the full %d KB, so the"
                % (layout["flash_size"] // 1024))
     out.append("rest of flash is left erased instead of being written.")
     out.append("")
@@ -449,12 +457,15 @@ def asset_readme(version, commit, targets, sdcard, layout):
     out.append("that space, this replaces it.")
     out.append("")
     out.append("Applications live in apps/ on the card, but you never")
-    out.append("need to type that path: `run term` searches the card root,")
-    out.append("then apps/, then the flash archive.")
+    out.append("need to type that path: `run term` looks in apps/, then")
+    out.append("in the flash archive.")
     out.append("")
-    out.append("The core apps are in flash, not on the sdcard. A copy at")
-    out.append("the card ROOT takes precedence over the flash copy, which")
-    out.append("is how a single app is hot-swapped during development.")
+    out.append("The core apps are in flash, not on the sdcard. A copy in")
+    out.append("apps/ on the card takes precedence over the flash copy,")
+    out.append("which is how a single app is hot-swapped during")
+    out.append("development -- and why a card from an older release may")
+    out.append("need apps/text and apps/files deleted (or the new card")
+    out.append("image written) for the flash copies to be used.")
     out.append("")
     out.append("If your board is not listed, please open an issue.")
     out.append("")

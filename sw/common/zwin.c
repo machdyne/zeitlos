@@ -344,6 +344,12 @@ static int zwin_region_minus(const z_clip_t *a, int na,
 static int zwin_region_and(const z_clip_t *a, int na,
 	const z_clip_t *b, int nb, z_clip_t *out, int max);
 
+static void win_use_clip(const z_win_t *win);
+
+void z_win_select(const z_win_t *win) {
+	win_use_clip(win);
+}
+
 static void win_use_clip(const z_win_t *win) {
 	if (!win) {
 		z_gfx_clear_visible();

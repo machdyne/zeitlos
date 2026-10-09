@@ -12,6 +12,8 @@
 #include "kernel.h"
 #include "fsapi.h"
 #include "fs/fs.h"
+#include "zar.h"		// the flash underlay: zar.h, docs/flash_apps.md
+#include "flashapi.h"	// k_flash_session_active()
 
 // Does a launchable executable by this name exist, from ANY source?
 //
@@ -84,9 +86,17 @@ z_obj_t *k_fs_read(z_obj_t *args) {
 
 	FIL f;
 	char rp_[FS_PATH_MAX];
-	FRESULT res = f_open(&f, fs_path_resolve(a->name, rp_, sizeof(rp_)),
-		FA_READ | FA_OPEN_EXISTING);
-	if (res != FR_OK) return (&z_fail);
+	const char *real = fs_path_resolve(a->name, rp_, sizeof(rp_));
+	FRESULT res = f_open(&f, real, FA_READ | FA_OPEN_EXISTING);
+	if (res != FR_OK) {
+		// not on the card: a file in flash, read whole (zar.h)
+		uint32_t zo, zs;
+		if (real != a->name || z_zar_file(real, &zo, &zs) || zs > a->maxlen)
+			return (&z_fail);
+		z_zar_read(zo, a->buf, zs);
+		a->len = zs;
+		return (&z_ok);
+	}
 
 	FSIZE_t sz = f_size(&f);
 	if (sz > a->maxlen) {
@@ -179,9 +189,15 @@ z_obj_t *k_fs_unlink(z_obj_t *args) {
 // way.
 #define FS_CLMT		32
 
+// A handle on a file in flash (zar.h) has `zar` set and uses zoff,
+// zsize and zpos instead of `fil`, whose flag and volume are zeroed so
+// that nothing that walks the table for FatFs's sake (k_fs_write_open,
+// k_fs_sync_all) takes it for an open file.
 static struct {
 	bool		used;
+	bool		zar;
 	uint32_t	owner_pid;
+	uint32_t	zoff, zsize, zpos;
 	FIL		fil;
 	DWORD		clmt[FS_CLMT];
 } z_fs_handles[Z_FS_MAX_OPEN];
@@ -237,10 +253,11 @@ void k_fs_release_all(uint32_t pid) {
 		if (!z_fs_handles[i].used) continue;
 		if (z_fs_handles[i].owner_pid != pid) continue;
 
-		if (!(z_fs_handles[i].fil.flag & FA_WRITE))
+		if (!z_fs_handles[i].zar && !(z_fs_handles[i].fil.flag & FA_WRITE))
 			f_close(&z_fs_handles[i].fil);
 
 		z_fs_handles[i].used = 0;
+		z_fs_handles[i].zar = false;
 		z_fs_handles[i].owner_pid = 0;
 
 	}
@@ -261,7 +278,7 @@ int k_fs_sync_all(void) {
 
 	for (int i = 0; i < Z_FS_MAX_OPEN; i++) {
 
-		if (!z_fs_handles[i].used) continue;
+		if (!z_fs_handles[i].used || z_fs_handles[i].zar) continue;
 		if (!(z_fs_handles[i].fil.flag & FA_WRITE)) continue;
 
 		f_sync(&z_fs_handles[i].fil);
@@ -319,10 +336,27 @@ z_obj_t *k_fs_open_read(z_obj_t *args) {
 	if (slot < 0) return (&z_fail);
 
 	char rp_[FS_PATH_MAX];
-	FRESULT res = f_open(&z_fs_handles[slot].fil,
-		fs_path_resolve(a->name, rp_, sizeof(rp_)),
+	const char *real = fs_path_resolve(a->name, rp_, sizeof(rp_));
+	FRESULT res = f_open(&z_fs_handles[slot].fil, real,
 		FA_READ | FA_OPEN_EXISTING);
-	if (res != FR_OK) return (&z_fail);
+	if (res != FR_OK) {
+		// Not on the card -- or no card -- and not /ram or /usb: the
+		// file in flash at that path, if there is one (zar.h). The
+		// card's copy, when there is one, is what was opened above.
+		uint32_t zo, zs;
+		if (real != a->name || z_zar_file(real, &zo, &zs)) return (&z_fail);
+		z_fs_handles[slot].fil.flag = 0;
+		z_fs_handles[slot].fil.obj.fs = 0;
+		z_fs_handles[slot].zar = true;
+		z_fs_handles[slot].zoff = zo;
+		z_fs_handles[slot].zsize = zs;
+		z_fs_handles[slot].zpos = 0;
+		z_fs_handles[slot].used = true;
+		z_fs_handles[slot].owner_pid = z_pid;
+		a->handle = slot;
+		return (&z_ok);
+	}
+	z_fs_handles[slot].zar = false;
 
 	// Read handles only: FatFs does not allow a write that extends a file
 	// while a map is in use.
@@ -359,6 +393,16 @@ z_obj_t *k_fs_read_chunk(z_obj_t *args) {
 	if (!z_fs_handles[a->handle].used || z_fs_handles[a->handle].owner_pid != z_pid)
 		return (&z_fail);
 
+	if (z_fs_handles[a->handle].zar) {
+		uint32_t left = z_fs_handles[a->handle].zsize - z_fs_handles[a->handle].zpos;
+		uint32_t n = a->maxlen < left ? a->maxlen : left;
+		if (k_flash_session_active()) return (&z_fail);	// being rewritten
+		z_zar_read(z_fs_handles[a->handle].zoff + z_fs_handles[a->handle].zpos, a->buf, n);
+		z_fs_handles[a->handle].zpos += n;
+		a->len = n;
+		return (&z_ok);
+	}
+
 	UINT br = 0;
 	FRESULT res = f_read(&z_fs_handles[a->handle].fil, a->buf, (UINT)a->maxlen, &br);
 	if (res != FR_OK) return (&z_fail);
@@ -376,8 +420,9 @@ z_obj_t *k_fs_write_chunk(z_obj_t *args) {
 	if (!a || a->handle < 0 || a->handle >= Z_FS_MAX_OPEN || (!a->buf && a->len > 0))
 		return (&z_fail);
 
-	if (!z_fs_handles[a->handle].used || z_fs_handles[a->handle].owner_pid != z_pid)
-		return (&z_fail);
+	if (!z_fs_handles[a->handle].used || z_fs_handles[a->handle].owner_pid != z_pid ||
+	    z_fs_handles[a->handle].zar)
+		return (&z_fail);		// files in flash are read-only
 
 	UINT bw = 0;
 	FRESULT res = f_write(&z_fs_handles[a->handle].fil, a->buf, (UINT)a->len, &bw);
@@ -396,8 +441,10 @@ z_obj_t *k_fs_close(z_obj_t *args) {
 	if (!z_fs_handles[a->handle].used || z_fs_handles[a->handle].owner_pid != z_pid)
 		return (&z_fail);
 
-	FRESULT res = f_close(&z_fs_handles[a->handle].fil);
+	FRESULT res = FR_OK;
+	if (!z_fs_handles[a->handle].zar) res = f_close(&z_fs_handles[a->handle].fil);
 	z_fs_handles[a->handle].used = false;
+	z_fs_handles[a->handle].zar = false;
 
 	return (res == FR_OK) ? (&z_ok) : (&z_fail);
 
@@ -443,9 +490,15 @@ static z_obj_t *k_fs_list_core(z_fs_list_args_t *a, z_fs_info_t *info) {
 	// reports /RAM/... rather than leaking "1:/" back to the user.
 	const char *dir_real = fs_path_resolve(dir_path, rp_, sizeof(rp_));
 
+	// The card's directory, if there is one. Not finding it is not
+	// the end when flash has files under that path (zar.h): a board
+	// with no card still lists "/", "/apps" and "/docs".
+	bool under = dir_real == dir_path;	// not /ram or /usb
+	bool is_root = dir_path[0] == '/' && dir_path[1] == 0;
 	DIR dir;
 	FRESULT res = f_opendir(&dir, dir_real);
-	if (res != FR_OK) return (&z_fail);
+	bool on_card = res == FR_OK;
+	if (!on_card && !(under && (is_root || z_zar_is_dir(dir_path)))) return (&z_fail);
 
 	char prefix[64];
 	{
@@ -511,7 +564,7 @@ static z_obj_t *k_fs_list_core(z_fs_list_args_t *a, z_fs_info_t *info) {
 	// shares with fs_stat_info(); syscalls do not nest.
 	FILINFO *const fnop = &fs_fno;
 #define fno (*fnop)
-	while (count < max_entries) {
+	while (on_card && count < max_entries) {
 
 		res = f_readdir(&dir, &fno);
 		if (res != FR_OK || fno.fname[0] == 0) break;
@@ -542,7 +595,41 @@ static z_obj_t *k_fs_list_core(z_fs_list_args_t *a, z_fs_info_t *info) {
 
 	}
 
-	f_closedir(&dir);
+	if (on_card) f_closedir(&dir);
+
+	// -- then what is in flash and not on the card (zar.h) --
+	//
+	// Read-only files, and the directories they make ("docs" in "/").
+	// Shadowed by the card's entry of the same name, as an app on the
+	// card shadows its flash copy: f_stat() on the full name, through
+	// fs_fno again (the readdir above is finished with it).
+	if (under && !a->truncated) {
+		static char full[FS_PATH_MAX];
+		char zname[Z_ZAR_NAME_MAX + 1];
+		uint32_t it = 0, zsize;
+		bool zdir;
+		while (count < max_entries && z_zar_child(dir_path, &it, zname, &zsize, &zdir)) {
+			size_t nlen = strlen(zname);
+			if (prefix_len + nlen + 1 > sizeof(full)) continue;
+			memcpy(full, prefix, prefix_len);
+			memcpy(full + prefix_len, zname, nlen + 1);
+			if (on_card && f_stat(full, &fno) == FR_OK) continue;
+			if (written + prefix_len + nlen + 1 > a->out_cap) {
+				a->truncated = 1;
+				break;
+			}
+			if (a->types) a->types[count] = zdir ? Z_FS_TYPE_DIR : Z_FS_TYPE_FILE;
+			if (info) {
+				memset(&info[count], 0, sizeof(info[count]));
+				info[count].size = zsize;
+				info[count].attr = zdir ? (Z_FS_ATTR_DIR | Z_FS_ATTR_RDONLY) : Z_FS_ATTR_RDONLY;
+				info[count].type = zdir ? Z_FS_TYPE_DIR : Z_FS_TYPE_FILE;
+			}
+			memcpy(a->out + written, full, prefix_len + nlen + 1);
+			written += (uint32_t)(prefix_len + nlen + 1);
+			count++;
+		}
+	}
 #undef fno
 
 	a->count = count;
@@ -628,7 +715,7 @@ bool k_fs_write_open(const char *path) {
 
 	for (int i = 0; i < Z_FS_MAX_OPEN; i++) {
 		const FIL *f = &z_fs_handles[i].fil;
-		if (!z_fs_handles[i].used || !(f->flag & FA_WRITE)) continue;
+		if (!z_fs_handles[i].used || z_fs_handles[i].zar || !(f->flag & FA_WRITE)) continue;
 		if (f->obj.fs == probe->obj.fs && f->dir_sect == probe->dir_sect &&
 		    f->dir_ptr == probe->dir_ptr)
 			busy = true;
@@ -700,6 +787,14 @@ z_obj_t *k_fs_seek(z_obj_t *args) {
 	if (!z_fs_handles[a->handle].used || z_fs_handles[a->handle].owner_pid != z_pid)
 		return (&z_fail);
 
+	if (z_fs_handles[a->handle].zar) {
+		// as f_lseek() on a read handle: past the end stops at the end
+		uint32_t sz = z_fs_handles[a->handle].zsize;
+		z_fs_handles[a->handle].zpos = a->offset < sz ? a->offset : sz;
+		a->pos = z_fs_handles[a->handle].zpos;
+		return (&z_ok);
+	}
+
 	FRESULT res = f_lseek(&z_fs_handles[a->handle].fil, (FSIZE_t)a->offset);
 	if (res != FR_OK) return (&z_fail);
 
@@ -766,6 +861,7 @@ z_obj_t *k_fs_sync(z_obj_t *args) {
 
 	if (!z_fs_handles[a->handle].used || z_fs_handles[a->handle].owner_pid != z_pid)
 		return (&z_fail);
+	if (z_fs_handles[a->handle].zar) return (&z_ok);	// nothing to write
 
 	FRESULT res = f_sync(&z_fs_handles[a->handle].fil);
 

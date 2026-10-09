@@ -282,7 +282,7 @@ def timing_summary(t):
 
 def board_jumps(root, board):
     """True if the Makefile packs this board's gateware to reload through
-    the jumploader at the top of the flash: JUMP = 1 in its block.
+    the jumploader past the first 2 MB: JUMP=1 (opt-in, never a default).
 
     Asked of the Makefile rather than known here, because the Makefile is
     what decides it -- the same variable adds --bootaddr to ecppack and
@@ -330,10 +330,9 @@ def build_software(root, core_apps, dry=False, jobs=None):
     run(mk + ["os"], root, dry=dry)
     run(mk + ["apps"], root, dry=dry)
 
-    print("  [3/3] core app archive")
-    zar_cmd = [sys.executable, os.path.join(root, "tools/mkzar.py"), zar]
-    for app in core_apps:
-        zar_cmd.append("%s=sw/apps/%s/%s.bin" % (app, app, app))
+    print("  [3/3] core app archive, and the files in flash")
+    run(mk + ["OUTDIR=output/releases", "core-files"], root, dry=dry)
+    zar_cmd = zar_command(root, zar, core_apps)
     out = run(zar_cmd, root, dry=dry)
     for line in (out or "").strip().splitlines():
         print("        %s" % line)
@@ -342,6 +341,19 @@ def build_software(root, core_apps, dry=False, jobs=None):
             "kernel": os.path.join(root, "sw/os/kernel.bin"),
             "arch": arch,
             "core_apps": list(core_apps)}
+
+
+def zar_command(root, zar, apps):
+    """tools/mkzar.py for `apps` and every file in flash (CORE_FILES,
+    made by `make core-files` into output/releases/files), with the
+    budgets the Makefile sets -- the same command `make flash_apps`
+    runs."""
+    b = spec.core_budgets(root)
+    cmd = [sys.executable, os.path.join(root, "tools/mkzar.py"),
+           "--budgets", b["budgets_text"], "--files-max", str(b["reserve"]), zar]
+    cmd += ["%s=sw/apps/%s/%s.bin" % (a, a, a) for a in apps]
+    cmd += ["%s=output/releases/files/%s" % (f, f) for f in b["files"]]
+    return cmd
 
 
 def target_zar(root, target, software, dry=False):
@@ -355,9 +367,7 @@ def target_zar(root, target, software, dry=False):
     print("    core apps: %s (the board omits %s)"
           % (", ".join(apps),
              ", ".join(a for a in software["core_apps"] if a not in apps)))
-    cmd = [sys.executable, os.path.join(root, "tools/mkzar.py"), zar]
-    cmd += ["%s=sw/apps/%s/%s.bin" % (a, a, a) for a in apps]
-    run(cmd, root, dry=dry)
+    run(zar_command(root, zar, apps), root, dry=dry)
     return zar
 
 
@@ -407,6 +417,13 @@ def build_target(root, target, version, outdir, software, dry=False,
 
     # Refuse before spending twenty minutes in nextpnr to be told the
     # same thing less clearly.
+    if board_jumps(root, target.board.lower()):
+        raise BuildError(
+            "%s: %s's gateware would be built with JUMP=1, to reload through "
+            "a jumploader past the first 2 MB -- outside the image a release "
+            "makes. Build releases without JUMP (the default; docs/zboot.md "
+            "sec. 5)." % (target.name, target.board.lower()))
+
     cov = gen.check_port_coverage(root, target, spec)
     if cov:
         raise BuildError("%s: %s" % (target.name, "\n  ".join(cov)))
@@ -451,10 +468,9 @@ def build_target(root, target, version, outdir, software, dry=False,
 
         # -- 3. gateware ----------------------------------------------
         print("  [3/4] gateware (yosys + nextpnr -- this is the slow one)")
-        # `jumploader` only on boards whose Makefile block sets JUMP
-        # (docs/zboot.md sec. 5); elsewhere it prints a line and makes
-        # nothing, and the image has no jumploader.
-        run(mk + common + ["zeitlos_pico", "bios", "soc", "jumploader"], root, dry=dry)
+        # No `jumploader`: releases are built without JUMP (refused
+        # above), and a release image has none (docs/zboot.md sec. 5).
+        run(mk + common + ["zeitlos_pico", "bios", "soc"], root, dry=dry)
 
         pnr_log = os.path.join(boutput, "pnr.log")
         timing = check_timing(pnr_log, strict_io_timing=strict_io_timing)
@@ -506,27 +522,17 @@ def build_target(root, target, version, outdir, software, dry=False,
             "kernel": software["kernel"],
             "apps": target_zar(root, target, software),
         }
-        # The jumploader (docs/zboot.md sec. 5). On a board whose Makefile
-        # block sets JUMP, the gateware reloads from the jumploader when
-        # it pulls PROGRAMN -- so an image without one would boot, and
-        # then refuse to reboot, forever. Refuse the image instead.
+        # The jumploader (docs/zboot.md sec. 5) is opt-in, JUMP=1, and
+        # lives past the first 2 MB -- outside a release image, which is
+        # the first 2 MB. Gateware packed to reload from it would boot
+        # from this image and then never reboot, so a release refuses
+        # to be built that way.
         jump_bit = os.path.join(boutput, "jump.bit")
-        jumps = board_jumps(root, board_lc)
-        if jumps and not os.path.exists(jump_bit):
-            raise BuildError(
-                "%s: the Makefile packs %s's gateware to reload through the "
-                "jumploader at 0x%06x, but `make jumploader` produced no %s. "
-                "An image without it would boot and then never reboot."
-                % (target.name, board_lc,
-                   next(r.offset for r in lay["regions"] if r.key == "jump"),
-                   jump_bit))
-        if not jumps and os.path.exists(jump_bit):
+        if os.path.exists(jump_bit):
             raise BuildError(
                 "%s: %s exists, but %s's gateware does not reload through a "
-                "jumploader (JUMP is not set in its Makefile block)."
+                "jumploader (JUMP is not set): a stale build? Delete it."
                 % (target.name, jump_bit, board_lc))
-        if jumps:
-            parts["jump"] = jump_bit
         img, rows = mkflashimg.build(lay, parts, full=full_image)
 
         # -- Asset names carry the TARGET but not the VERSION -----------

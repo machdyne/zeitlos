@@ -225,7 +225,6 @@ else ifeq ($(BOARD), schoko)
 	PROG = openFPGALoader -c $(CABLE)
 	FLASH = openFPGALoader -v -c $(CABLE) -f
 	FLASH_OFFSET = -o
-	JUMP = 1
 else ifeq ($(BOARD), konfekt)
 	# Machdyne Konfekt V0 (ECP5 12F, 32MB SDRAM). docs/boards.md.
 	FAMILY = ecp5
@@ -235,7 +234,6 @@ else ifeq ($(BOARD), konfekt)
 	PROG = openFPGALoader -c $(CABLE)
 	FLASH = openFPGALoader -v -c $(CABLE) -f
 	FLASH_OFFSET = -o
-	JUMP = 1
 else ifeq ($(BOARD), minze)
 	FAMILY = ecp5
 	DEVICE = 12k
@@ -244,7 +242,6 @@ else ifeq ($(BOARD), minze)
 	PROG = openFPGALoader -c $(CABLE)
 	FLASH = openFPGALoader -v -c $(CABLE) -f
 	FLASH_OFFSET = -o
-	JUMP = 1
 else ifeq ($(BOARD), vanille)
 	FAMILY = ecp5
 	DEVICE = 12k
@@ -261,7 +258,6 @@ else ifeq ($(BOARD), obst)
 	PROG = openFPGALoader -c $(CABLE)
 	FLASH = openFPGALoader -v -c $(CABLE) -f
 	FLASH_OFFSET = -o
-	JUMP = 1
 else ifeq ($(BOARD), lakritz)
 	FAMILY = ecp5
 	DEVICE = 25k
@@ -270,7 +266,6 @@ else ifeq ($(BOARD), lakritz)
 	PROG = openFPGALoader -c $(CABLE)
 	FLASH = openFPGALoader -v -c $(CABLE) -f
 	FLASH_OFFSET = -o
-	JUMP = 1
 else ifeq ($(BOARD), mozart_ml0)
 	# Mozart with the Sechzig ML0 module: the ML1 module on an LFE5U-25F,
 	# same balls, so the ML1 pin file. docs/boards.md.
@@ -281,7 +276,6 @@ else ifeq ($(BOARD), mozart_ml0)
 	PROG = openFPGALoader -c dirtyJtag
 	FLASH = openFPGALoader -v -c dirtyJtag -f
 	FLASH_OFFSET = -o
-	JUMP = 1
 else ifeq ($(BOARD), mozart_ml1)
 	FAMILY = ecp5
 	DEVICE = 45k
@@ -290,7 +284,6 @@ else ifeq ($(BOARD), mozart_ml1)
 	PROG = openFPGALoader -c dirtyJtag
 	FLASH = openFPGALoader -v -c dirtyJtag -f
 	FLASH_OFFSET = -o
-	JUMP = 1
 else ifeq ($(BOARD), mozart_ml2)
 	FAMILY = ecp5
 	DEVICE = 45k
@@ -299,7 +292,6 @@ else ifeq ($(BOARD), mozart_ml2)
 	PROG = openFPGALoader -c dirtyJtag
 	FLASH = openFPGALoader -v -c dirtyJtag -f
 	FLASH_OFFSET = -o
-	JUMP = 1
 	# DDR3 main memory: the files are added below, for every DDR3_BOARDS.
 else ifeq ($(BOARD), noir)
 	# Machdyne Noir V0 (ECP5 45F, 256MB DDR3L). The DDR3 is wired as on
@@ -312,7 +304,6 @@ else ifeq ($(BOARD), noir)
 	PROG = openFPGALoader -c $(CABLE)
 	FLASH = openFPGALoader -v -c $(CABLE) -f
 	FLASH_OFFSET = -o
-	JUMP = 1
 else ifeq ($(BOARD), klinge)
 	# Machdyne Klinge V1 (ECP5 25F, 512MB DDR3L, 2x RMII, headless).
 	# The DDR3 is wired as on the Sechzig ML2, so it is a DDR3_BOARDS
@@ -325,7 +316,6 @@ else ifeq ($(BOARD), klinge)
 	PROG = openFPGALoader -c $(CABLE)
 	FLASH = openFPGALoader -v -c $(CABLE) -f
 	FLASH_OFFSET = -o
-	JUMP = 1
 	# Headless, but it keeps every core app: wm is there for remote
 	# desktop, and init does not start it without a display.
 else ifeq ($(BOARD), sergei_ml0)
@@ -338,7 +328,6 @@ else ifeq ($(BOARD), sergei_ml0)
 	PROG = openFPGALoader -c dirtyJtag
 	FLASH = openFPGALoader -v -c dirtyJtag -f
 	FLASH_OFFSET = -o
-	JUMP = 1
 else ifeq ($(BOARD), sergei_ml1)
 	FAMILY = ecp5
 	DEVICE = 45k
@@ -347,7 +336,6 @@ else ifeq ($(BOARD), sergei_ml1)
 	PROG = openFPGALoader -c dirtyJtag
 	FLASH = openFPGALoader -v -c dirtyJtag -f
 	FLASH_OFFSET = -o
-	JUMP = 1
 else ifeq ($(BOARD), sergei_mx1)
 	# Sechzig MX1 (Artix-7 XC7A35T-FTG256, 32 MB SDRAM, 4 MB flash) in a
 	# Sergei carrier. docs/boards.md; the pins are boards/sergei_mx1.xdc.
@@ -395,7 +383,6 @@ else ifeq ($(BOARD), sergei_ml2)
 	PROG = openFPGALoader -c dirtyJtag
 	FLASH = openFPGALoader -v -c dirtyJtag -f
 	FLASH_OFFSET = -o
-	JUMP = 1
 	# DDR3 main memory: the files are added below, for every DDR3_BOARDS.
 else ifeq ($(BOARD), ulx3s)
 	FAMILY = ecp5
@@ -841,19 +828,67 @@ endif
 # board does, headless ones included (wm is wanted there for remote
 # desktop). A name in CORE_APPS_OMIT that is not in CORE_APPS is an
 # error in the release tools, not a silent no-op.
-CORE_APPS = wm net term console cron
+CORE_APPS = wm net term console cron text files repl
 ZAR_APPS = $(filter-out $(CORE_APPS_OMIT),$(CORE_APPS))
 
-$(OUTDIR)/apps.zar: apps
-	mkdir -p $(OUTDIR)
-	python3 tools/mkzar.py $(OUTDIR)/apps.zar \
-		$(foreach a,$(ZAR_APPS),$(a)=sw/apps/$(a)/$(a).bin)
+# THE BUDGETS: the most each core app may take, as FLASH/RAM -- its
+# .bin in the archive, and its image in memory (code, data and .bss;
+# not the stack, which is fixed by APP_STACK). The archive build fails
+# when an app is over either, naming it, so growth past a budget is a
+# decision rather than something found out when the archive no longer
+# fits. `zrelease check` holds the budgets themselves to two rules
+# (docs/flash_apps.md, "Budgets"):
+#
+#   - the flash budgets, plus CORE_RESERVE for what is not an app yet,
+#     fit the archive's region;
+#   - the RAM budgets of CORE_AT_BOOT -- what init() starts -- plus the
+#     two largest of the rest fit in CORE_RAM_MAX: one or two apps on
+#     demand beside those, on the smallest board.
+#
+# A budget is raised by taking from another, from the reserve, or by
+# making something smaller. Every core app must have one.
+CORE_BUDGETS = wm=112K/140K net=136K/264K term=90K/140K console=14K/16K \
+	cron=24K/40K text=88K/164K files=66K/92K repl=192K/308K
+CORE_RESERVE = 28K
+CORE_AT_BOOT = wm net console
+CORE_RAM_MAX = 1M
 
-# For release/: the list, what this board omits, and what it gets.
+# FILES IN FLASH: read-only files under the card at /<path>, for a
+# machine with no card (docs/flash_apps.md, "Files in flash"). A
+# docs/<name>.txt is docs/<name>.md rendered as plain text by
+# tools/md2txt.py, for `text`. They come out of CORE_RESERVE, all
+# together, and mkzar.py refuses an archive where they do not.
+CORE_FILES = docs/welcome.txt docs/repl.txt examples/todo.scm
+CORE_FILES_OUT = $(OUTDIR)/files
+
+$(CORE_FILES_OUT)/docs/%.txt: docs/%.md tools/md2txt.py
+	python3 tools/md2txt.py $< $@
+
+# repl's examples, as they are (docs/repl.md)
+$(CORE_FILES_OUT)/examples/%.scm: sw/apps/repl/examples/%.scm
+	mkdir -p $(dir $@)
+	cp $< $@
+
+core-files: $(addprefix $(CORE_FILES_OUT)/,$(CORE_FILES))
+
+$(OUTDIR)/apps.zar: apps core-files
+	mkdir -p $(OUTDIR)
+	python3 tools/mkzar.py --budgets "$(CORE_BUDGETS)" --files-max $(CORE_RESERVE) \
+		$(OUTDIR)/apps.zar \
+		$(foreach a,$(ZAR_APPS),$(a)=sw/apps/$(a)/$(a).bin) \
+		$(foreach f,$(CORE_FILES),$(f)=$(CORE_FILES_OUT)/$(f))
+
+# For release/: the list, what this board omits, what it gets, and the
+# budgets.
 core-apps:
 	@echo "all: $(CORE_APPS)"
 	@echo "omit: $(CORE_APPS_OMIT)"
 	@echo "board: $(ZAR_APPS)"
+	@echo "budgets: $(CORE_BUDGETS)"
+	@echo "reserve: $(CORE_RESERVE)"
+	@echo "at-boot: $(CORE_AT_BOOT)"
+	@echo "ram-max: $(CORE_RAM_MAX)"
+	@echo "files: $(CORE_FILES)"
 
 ifeq ($(FAMILY), ice40)
 flash_apps: $(OUTDIR)/apps.zar
@@ -896,7 +931,7 @@ dev-flash: dev flash_os flash_apps
 # get a bare shell, and have no reason to suspect there was a second
 # command to run. See sw/os/zar.h.
 # Boards that reboot, and boot other gateware, through a jumploader
-# (docs/zboot.md sec. 5; JUMP = 1 in their blocks above): Zeitlos is
+# (docs/zboot.md sec. 5; built with JUMP=1): Zeitlos is
 # packed to reload from JUMP_ADDR when it pulls PROGRAMN, and the
 # jumploader there -- made by the host zfpga, `make jumploader` --
 # decides where the machine goes next. The same switch tells the
@@ -904,7 +939,15 @@ dev-flash: dev flash_os flash_apps
 # PROGRAMN into an empty jumploader region. Needs `PROGRAMN_PIN` in
 # rtl/boards.vh, which synthesis checks. KEEP JUMP_ADDR IN SYNC with
 # Z_JUMP_FLASH_OFFSET in sw/common/zsoc.h (release/lib/layout.py checks).
-JUMP_ADDR = 0x1D0000
+#
+# OFF BY DEFAULT, on every board: `make BOARD=x JUMP=1` opts in. The
+# jumploader lives at JUMP_ADDR, just past the first 2 MB, so only a
+# board with a larger flash can have one; the space it used to take
+# inside the Zeitlos region is the core apps' now. Without it, `reboot`
+# still works -- the gateware reloads from 0, the DFU bootloader or the
+# gateware itself -- and only `jump` and `zfpga run` go (they say so).
+JUMP ?= 0
+JUMP_ADDR = 0x200000
 ifeq ($(JUMP), 1)
 	JUMP_DEFINES = -DJUMPLOADER
 	BOOTADDR_FLAG = --bootaddr $(JUMP_ADDR)
@@ -914,7 +957,7 @@ endif
 # own boot address -- 0, the default, is a reboot. Built by the host
 # zfpga (sw/apps/zfpga, docs/zfpga.md) for the board's die; the kernel
 # re-points it in place (`jump`, docs/zboot.md sec. 5). Written at
-# JUMP_ADDR, in its own region at the top of the first 2 MB.
+# JUMP_ADDR, in its own region just past the first 2 MB.
 ifeq ($(JUMP), 1)
 $(OUTDIR)/jump.bit: sw/apps/zfpga/build.c sw/apps/zfpga/pack.c boards/$(LPF)
 	mkdir -p $(OUTDIR)
@@ -1341,4 +1384,4 @@ clean_bios:
 clean_apps:
 	cd sw/apps && make clean
 
-.PHONY: clean_bios bios apps core-apps tftp-dist timing path util test_blit test_uart hwmap FORCE soc
+.PHONY: clean_bios bios apps core-apps core-files tftp-dist timing path util test_blit test_uart hwmap FORCE soc

@@ -270,12 +270,15 @@ static void page_goto_line(uint32_t line) {
 
 static void page_draw(void) {
 
-	static char out[PAGE_OUT_MAX];
+	// From the heap while drawing, not static: 2.3 KB of .bss is repl's
+	// RAM budget all the time (docs/flash_apps.md, "Budgets").
+	char *out = malloc(PAGE_OUT_MAX);
 	uint32_t o = 0;
+	if (!out) return;
 
 #define PG_PUT(s) do { \
 		const char *_p = (s); \
-		while (*_p && o + 1 < sizeof(out)) out[o++] = *_p++; \
+		while (*_p && o + 1 < PAGE_OUT_MAX) out[o++] = *_p++; \
 	} while (0)
 
 	// home BEFORE erase: VT100_ERASE_SCREEN is "\e[J", which clears
@@ -359,7 +362,8 @@ static void page_draw(void) {
 
 #undef PG_PUT
 
-	page_send(out, o);
+	page_send(out, o);	// copies it (z_obj_blob())
+	free(out);
 
 }
 

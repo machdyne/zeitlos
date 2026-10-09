@@ -49,9 +49,10 @@ reported. A second press while one is starting does nothing. A shell
 nobody asks for costs nothing; `posix` alone is 4MB. Once running, a
 shell stays up for every window, and further presses just connect.
 
-So REPL and POSIX are always live. If the start fails the status line
-says why: there is no sdcard (the shells live on it, not in flash --
-`docs/flash_apps.md`), or not enough memory (`posix` needs about 4MB).
+So REPL and POSIX are always live. `repl` is a core app, in flash, so
+REPL works with no card; `posix` lives on the card (`docs/flash_apps.md`).
+If the start fails the status line says why: no sdcard (for `posix`),
+or not enough memory (`posix` needs about 4MB, `repl` about 380KB).
 Typing `port repl0` in the Open bar does **not** start anything -- it
 names a port, and fails if nothing is listening there. CONSOLE is a core
 app that init starts, and its button is live only while `console0` is

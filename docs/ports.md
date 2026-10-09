@@ -15,8 +15,9 @@ and POSIX buttons connect by pid-registry NAME (`repl0`, `posix0`,
 `sw/os/pidreg.h`) and come alive once that name is registered, so
 `run repl` before or after `run term` both work. There is no fixed-pid
 fallback any more: `Z_PID_REPL` (`sw/common/zrepl.h`) is unused. `init`
-remains the easiest way to bring everything up in one step -- it starts
-`repl` and `posix` from the sdcard when a card is present:
+remains the easiest way to bring everything up in one step (the shells
+themselves, `repl` from flash and `posix` from the card, start from
+term's buttons):
 
 ```
 > init

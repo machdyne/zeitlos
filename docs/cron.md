@@ -89,7 +89,7 @@ for a board without networking (`obst`), with care.
 
 ## Size
 
-About 22KB, in flash with `wm`, `net`, `term` and `console`
+About 22KB, in flash with the other core apps
 ([flash_apps.md](flash_apps.md)). It formats its own output rather than
 linking stdio, and its RAM is its stack plus about 12KB of job table and
 buffers. It wakes at most once a minute, at the minute, or sooner for an

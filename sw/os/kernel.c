@@ -1859,7 +1859,17 @@ uint32_t k_proc_create(uint32_t size, uint32_t stack_size) {
 			z_procs[p].regs[2] = 0x40000000 + mem_size;	// sp
 		} else {
 			z_procs[p].regs[0] = 0x80000000;	// pc
-			z_procs[p].regs[2] = 0x80000000 + mem_size - 4;	// sp
+			// sp: 16 bytes below the top, not 4. The RISC-V psABI
+			// has the stack 16-byte aligned at every call, and gcc
+			// builds frames on that assumption -- in particular the
+			// register save area of a variadic function, where
+			// va_arg() finds an 8-byte argument (a double, a long
+			// long) by rounding its pointer up to 8. With sp 4 short
+			// of aligned every app took the wrong register pair, so
+			// printf("%g") and "%lld" printed garbage: the
+			// 12884901888 (3 << 32) docs/scheme.md records, which
+			// ms.c works around by never formatting a long long.
+			z_procs[p].regs[2] = 0x80000000 + mem_size - 16;
 			// writes the initial return address onto the NEW
 			// process's own stack -- via its PHYSICAL address
 			// (base + ...), not the 0x8000_0000 virtual window
@@ -1890,7 +1900,7 @@ uint32_t k_proc_create(uint32_t size, uint32_t stack_size) {
 			// `base` is already the correct physical address for
 			// process p (computed just above), so this needs no
 			// translation at all.
-			*((uint32_t *)(base + mem_size - 4)) = z_procs[p].regs[1];	// sp = ra
+			*((uint32_t *)(base + mem_size - 16)) = z_procs[p].regs[1];	// [sp] = ra
 		}
 
 		return(p);

@@ -41,6 +41,15 @@ uint32_t k_flash_hw_status(void) {
 	return REG(Z_SPIFLASH_STATUS);
 }
 
+uint32_t k_flash_hw_size(void) {
+	uint32_t cap, n = 0;
+	if (!k_flash_present()) return 0;
+	while ((REG(Z_SPIFLASH_STATUS) & Z_SPIFLASH_BUSY) && n < 3000000u) n++;
+	cap = REG(Z_SPIFLASH_ID) & 0xFFu;
+	// JEDEC capacity byte: 2^n bytes on Winbond and most others
+	return (cap >= 16 && cap <= 28) ? 1u << cap : 0;
+}
+
 // Arm, command, and report what the controller said. The controller
 // checks the lock and the arming itself; these only report it.
 static uint32_t start(uint32_t cmd) {

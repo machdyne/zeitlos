@@ -336,9 +336,9 @@ is 1303 KB today, and the pieces sit at fixed offsets — the kernel at
 ECP5 base: [boot.md](boot.md#the-flash-layout)). Those are the same offsets whether you flash over JTAG or
 over USB, which is why upgrading the bootloader changes nothing about
 Zeitlos itself. What moving `USERPART_START` does change is how much
-room the gateware has before it runs into the kernel: (On boards with a jumploader -- `docs/zboot.md` section 5 -- there is also
-one at `0x1D0000`, inside the same user partition, so a DFU user image
-runs to the end of the jumploader.)
+room the gateware has before it runs into the kernel: (No board has a jumploader by default -- `docs/zboot.md` section 5 --
+so a DFU user image ends with the core apps. With `JUMP=1` it is at
+`0x200000`, past the 2 MB a DFU image covers.)
 
 ```
   BOOTPART 256 KB   gateware gets 768 KB   uses 481 KB   60% spare

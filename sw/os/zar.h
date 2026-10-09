@@ -60,27 +60,36 @@
  * exactly the kind of thing that produces "why is it running the old
  * one" bug reports. Boot says which source each app came from.
  *
- * -- Entry names are FLAT --
+ * -- Names: apps are flat, files are paths --
  *
- * "wm", not "/apps/wm", even though that is where the card keeps its
- * copy. This archive has no directories, so a separator in a name
- * would be decoration; and sw/os/fs/fs.c's fs_exec_resolve() is what
- * knows about /apps, so nothing here has to. It also keeps the whole
- * of Z_ZAR_NAME_MAX available for the name instead of spending 6 of
- * its 16 bytes on a constant prefix.
+ * An app is "wm", not "/apps/wm", even though that is where the card
+ * keeps its copy: sw/os/fs/fs.c's fs_exec_resolve() is what knows about
+ * /apps, so nothing here has to.
  *
- * -- Layout --
+ * A FILE (an entry with Z_ZAR_FILE set, since ZAR2) is named by its path
+ * without the leading slash, "docs/welcome.txt", and is an underlay
+ * under the card at that path: read-only, there with or without a card,
+ * and shadowed by a file of the same name on the card. fsapi.c's
+ * open-for-read, stat and directory listing fall through to it
+ * (docs/flash_apps.md, "Files in flash"). Apps are listed as files too,
+ * at /apps/<name>, so the file browser shows what is in flash.
  *
+ * Names are NUL-terminated, in a string table after the entries, up to
+ * Z_ZAR_NAME_MAX characters: short names cost no padding, and a path
+ * has room.
+ *
+ * -- Layout (ZAR2) --
  *   offset  size  field
- *   0       4     magic     "ZAR1"
+ *   0       4     magic     "ZAR2"
  *   4       4     count     number of entries
  *   8       8     reserved  must be 0
- *   16      ...   entries[count], 24 bytes each:
- *                   0   16  name (NUL-padded, not necessarily
- *                               NUL-terminated if exactly 16 chars)
- *                   16  4   offset  from start of archive
- *                   20  4   size    bytes, the whole ZEXE file
- *   ...           the ZEXE files themselves, in entry order
+ *   16      ...   entries[count], 16 bytes each:
+ *                   0   4   name      offset of its NUL-terminated name,
+ *                                     from the start of the archive
+ *                   4   4   flags     bit 0 Z_ZAR_FILE: a file, not an app
+ *                   8   4   offset    of the data, from the start
+ *                   12  4   size      bytes (an app: the whole ZEXE file)
+ *   ...           the names, then the data, each item 4-byte aligned
  *
  * Built by tools/mkzar.py. See Makefile's flash_apps target for where
  * it lands in flash.
@@ -112,11 +121,12 @@ static inline uint32_t z_zar_addr(void) {
 #define Z_ZAR_MAGIC0 'Z'
 #define Z_ZAR_MAGIC1 'A'
 #define Z_ZAR_MAGIC2 'R'
-#define Z_ZAR_MAGIC3 '1'
+#define Z_ZAR_MAGIC3 '2'
 
-#define Z_ZAR_NAME_MAX   16
+#define Z_ZAR_NAME_MAX   127
 #define Z_ZAR_HEADER_SIZE 16
-#define Z_ZAR_ENTRY_SIZE  24
+#define Z_ZAR_ENTRY_SIZE  16
+#define Z_ZAR_FILE       0x1u	// entry flags: a file, not an app
 
 // A sane upper bound on entry count, purely so a blank or garbage
 // flash region can't send the scan below off into nowhere. Erased
@@ -128,12 +138,38 @@ static inline uint32_t z_zar_addr(void) {
 // normal case on a board that has never had `make flash_apps` run.
 bool z_zar_present(void);
 
-// Number of apps in the archive, or 0 if none/invalid.
+// Number of entries in the archive, apps and files, or 0 if none/invalid.
 uint32_t z_zar_count(void);
 
 // Name of entry `i`, into `out` (at least Z_ZAR_NAME_MAX+1 bytes).
 // Returns false if `i` is out of range.
 bool z_zar_name(uint32_t i, char *out);
+
+// true if entry `i` is a file rather than an app.
+bool z_zar_is_file(uint32_t i);
+
+// -- files in flash: the underlay (docs/flash_apps.md, "Files in flash") --
+//
+// `path` is absolute ("/docs/welcome.txt", "/apps/wm") and matched
+// without regard to case, as FAT paths are. An app is the file
+// /apps/<name>.
+
+// The data of the file at `path`: its offset in the archive and size.
+// 0 if there is one, non-zero if not (or a flash write is in progress).
+int z_zar_file(const char *path, uint32_t *off, uint32_t *size);
+
+// Copies `n` bytes at archive offset `off` to `dst`.
+void z_zar_read(uint32_t off, uint8_t *dst, uint32_t n);
+
+// The entries directly inside directory `dir` ("/", "/docs"), one per
+// call: `*iter` starts at 0. A subdirectory that exists only because a
+// file is in it ("docs" in "/") is reported once, as a directory.
+// Returns false when there are no more.
+bool z_zar_child(const char *dir, uint32_t *iter, char *name,
+	uint32_t *size, bool *is_dir);
+
+// true if `dir` is a directory in flash ("/", "/apps", "/docs").
+bool z_zar_is_dir(const char *dir);
 
 // Fills `info` for the named app, the same way fs_exec_info() does for
 // a file on the card, so callers can treat the two identically.

@@ -77,7 +77,7 @@ With the MTU, there is no need for position independent code or complicated addr
 
 #### Shells
 
-On the sdcard. A `term` window starts one when you press its REPL or POSIX button, and connects to it (or to a remote system).
+`repl` is a core app, in flash; `posix` is on the sdcard. A `term` window starts one when you press its REPL or POSIX button, and connects to it (or to a remote system).
 
 | App | Description |
 |-----|-------------|
@@ -187,11 +187,13 @@ The following boards are currently partially supported or untested:
 
 ## Usage
 
-**An sdcard is optional.** The core apps (`wm`, `net`, `term`, `console`) are
+**An sdcard is optional.** The core apps (`wm`, `net`, `term`, `console`,
+`cron`, `text`, `files` and `repl`) are
 programmed into flash alongside the kernel, so a freshly flashed board
-boots straight to the graphical desktop with nothing else attached. The
-shells, `repl` and `posix`, come from the card -- without one, `term`
-still reaches telnet, ssh and serial through its Open bar (F11). See
+boots straight to the graphical desktop with nothing else attached --
+with an editor, a file browser and Scheme. `posix` comes from the card;
+without one, `term` still reaches telnet, ssh and serial through its
+Open bar (F11). See
 [Core apps in flash](#core-apps-in-flash) below.
 
 ### Quick start: prebuilt images
@@ -298,11 +300,12 @@ $ make BOARD=lakritz CABLE=dirtyJtag flash
 ```
 
 The above command builds the SOC, BIOS, OS and apps, then writes the
-gateware, kernel and core apps to flash -- and, on some boards, the
-[jumploader](docs/zboot.md).
+gateware, kernel and core apps to flash. (A board with more than 2 MB
+of flash can also have a [jumploader](docs/zboot.md), with `JUMP=1`;
+none does by default.)
 
 The BIOS will automatically boot the kernel if no keys are pressed, and
-the kernel starts `wm`, `net` and `repl` automatically -- you'll land
+the kernel starts `wm`, `net` and `console` automatically -- you'll land
 straight in the graphical desktop. See [`docs/welcome.md`](docs/welcome.md)
 for how to use it from there.
 

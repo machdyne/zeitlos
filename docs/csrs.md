@@ -131,7 +131,7 @@ Same idea as `FEATURES`, one word along. Assigned in `rtl/csrs.vh`'s
 | 0 | `GPIO` | `rtl/gpio.v` with at least one port that has pins -- see `docs/gpio.md` |
 | 1 | `UART1` | a second 16550 that is available to software -- see `docs/uart1.md` |
 | 6 | `FLASHW` | the flash is writable: `rtl/spiflash.v`'s registers at `0x1F00_0000` (with `MEM_ROM`). Without it, `0x1F00_0000` is flash offset 0, aliased -- see `docs/spiflash.md` |
-| 7 | `JUMP` | this gateware reloads from the jumploader at `0x1D0000` when it pulls PROGRAMN (the Makefile's `JUMP`, which also packs it `--bootaddr 0x1D0000`): `reboot` and `jump` go through the jumploader, and refuse if none is there -- see `docs/zboot.md` section 5 |
+| 7 | `JUMP` | this gateware reloads from the jumploader at `0x200000` when it pulls PROGRAMN (`JUMP=1`, opt-in, which also packs it `--bootaddr 0x200000`; off by default, when reboot reloads from 0): `reboot` and `jump` go through the jumploader, and refuse if none is there -- see `docs/zboot.md` section 5 |
 | 8 | `ICACHE` | an instruction cache is built: `rtl/cache.v`, or the I side of `rtl/cache_id.v` -- see `docs/icache.md`. Inventory only: use `z_icache_present()` (its INFO register) before touching its registers |
 | 10 | `MPU` | the memory protection unit `rtl/mpu.v` is built -- see `docs/mpu.md`. Inventory only: use `z_mpu_present()` before writing its registers, which alias the MTU base on a bitstream without it |
 | 11 | `VMOUSE` | the virtual mouse register at `0xf000_0400` (`rtl/sysctl.v`), universal from the release that added this bit. Check it before writing `reg_vmouse`: on a bitstream without it that address can decode as the console UART. See [automate.md](automate.md) |

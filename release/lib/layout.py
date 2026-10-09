@@ -169,7 +169,7 @@ def load(root):
     # zfpga flash / run carry their own copies, being an app built for
     # the host too (sw/apps/zfpga/boot.c)
     zboot = _scan_defines(boot_c, {
-        "ZFPGA_ZAR_OFFSET", "ZFPGA_JUMP_OFFSET", "ZFPGA_JUMP_END",
+        "ZFPGA_ZAR_OFFSET", "ZFPGA_ZAR_END", "ZFPGA_JUMP_OFFSET", "ZFPGA_JUMP_END",
         "ZFPGA_GW_DFU", "ZFPGA_LOGO_OFFSET", "ZFPGA_KV_SIZE",
     }, {}) if os.path.exists(boot_c) else None
 
@@ -209,13 +209,17 @@ def load(root):
           region, "the end of the region")
     agree("jumploader offset", jump_abs, "sw/common/zsoc.h Z_JUMP_FLASH_OFFSET",
           int(mk.get("JUMP_ADDR", "-1"), 16), "Makefile JUMP_ADDR")
-    agree("jumploader offset", jump_abs, "sw/common/zsoc.h Z_JUMP_FLASH_OFFSET",
-          base + zar_end, "default base + Z_FLASH_ZAR_END")
-    agree("jumploader region end", jump_abs + jump_size, "sw/common/zsoc.h",
-          base + region, "the end of the default region")
+    # The jumploader is outside the Zeitlos region, past the first 2 MB
+    # (opt-in, JUMP=1): never inside it, where the core apps are.
+    if jump_abs < base + region:
+        problems.append("the jumploader at 0x%x is inside the default Zeitlos "
+                        "region (0x%x-0x%x); it belongs past it"
+                        % (jump_abs, base, base + region))
     if zboot is not None:
         agree("core apps offset", base + zar_off, "default base + Z_FLASH_ZAR_OFF",
               zboot.get("ZFPGA_ZAR_OFFSET", -1), "sw/apps/zfpga/boot.c")
+        agree("core apps end", base + zar_end, "default base + Z_FLASH_ZAR_END",
+              zboot.get("ZFPGA_ZAR_END", -1), "sw/apps/zfpga/boot.c ZFPGA_ZAR_END")
         agree("jumploader offset", jump_abs, "sw/common/zsoc.h Z_JUMP_FLASH_OFFSET",
               zboot.get("ZFPGA_JUMP_OFFSET", -1), "sw/apps/zfpga/boot.c")
         agree("jumploader region end", jump_abs + jump_size, "sw/common/zsoc.h",
@@ -280,8 +284,9 @@ def load(root):
 def regions_at(lay, base):
     """The flash map for a board whose Zeitlos region starts at `base`.
 
-    The jumploader appears only at the default base, which is the only
-    place it exists today (ECP5 boards that set JUMP; docs/zboot.md).
+    No jumploader: it is past the first 2 MB, opt-in (JUMP=1), and no
+    release target builds one (docs/zboot.md sec. 5). A release image
+    is the first 2 MB.
     """
     o = lay["offsets"]
     regions = [
@@ -292,11 +297,6 @@ def regions_at(lay, base):
         Region("apps", "core apps (ZAR)", base + o["apps"], o["apps_end"] - o["apps"],
                "sw/common/zsoc.h Z_FLASH_ZAR_OFF"),
     ]
-    if base == lay["default_base"]:
-        jump_abs, _ = lay["jump"]
-        regions.append(Region("jump", "jumploader", jump_abs,
-                              base + o["kv"] - jump_abs,
-                              "sw/common/zsoc.h Z_JUMP_FLASH_OFFSET, up to the store"))
     # Never part of an image: the running system writes it. An image
     # padded over it (a full JTAG image, a DFU image) erases it, which
     # docs/kvstore.md says is allowed.

@@ -14,6 +14,15 @@
  * values at every edge a formatter gets wrong -- 0, one, minus one, the
  * limits of each width, and 64-bit numbers that need the 64-bit path.
  * C99 fixes the output of all of those, and zfmt.c claims C99's.
+ *
+ * Built with -DZFMT_FLOAT as well (the second command below), it checks
+ * %e %f %g against the build machine's printf too: fixed values at the
+ * edges, and a million random ones. See zfmt.c's ZFMT_FLOAT note for
+ * what is exact and what is not.
+ *
+ *   cc -std=gnu99 -Wall -DZFMT_HOST_TEST -DZFMT_FLOAT -I sw/common \
+ *      -o /tmp/test_zfmt_f sw/common/tests/test_zfmt.c sw/common/zfmt.c -lm \
+ *      && /tmp/test_zfmt_f
  */
 
 #include <stdio.h>
@@ -22,11 +31,16 @@
 #include <string.h>
 #include <limits.h>
 #include <stddef.h>
+#ifdef ZFMT_FLOAT
+#include <stdlib.h>
+#include <math.h>
+#endif
 
 int zf_snprintf(char *buf, size_t cap, const char *fmt, ...);
 int zf_vsnprintf(char *buf, size_t cap, const char *fmt, va_list ap);
 int zf_sprintf(char *buf, const char *fmt, ...);
 int zf_fprintf(FILE *f, const char *fmt, ...);
+double zf_strtod(const char *s, char **end);
 
 static long checks, fails;
 
@@ -149,6 +163,7 @@ int main(void) {
 		want("%-8p", a, "[0x12    ]");
 	}
 
+#ifndef ZFMT_FLOAT
 	// -- floating point is not supported, but its argument is taken --
 	{
 		zf_snprintf(a, sizeof(a), "%d %f %d %.3e %d %Lg %d", 1, 2.5, 3, 4.5, 5, (long double)6.5, 7);
@@ -156,6 +171,90 @@ int main(void) {
 		zf_snprintf(a, sizeof(a), "[%5f]", 1.0);
 		want("float with width", a, "[    ?]");
 	}
+#else
+	// -- ZFMT_FLOAT: %e %f %g, against the host's printf --
+	{
+		static const char *ff[] = {
+			"%g", "%e", "%f", "%.3g", "%.10g", "%.15g", "%.0e", "%.0f", "%#.0f",
+			"%+g", "% e", "%12.4f", "%-12.3e|", "%012g", "%G", "%E", "%.1f",
+			"%.2f", "%.0g", "%#.3g", "%.17g", "%.19g", "%-+9.2f|",
+		};
+		static const double fv[] = {
+			0, -0.0, 1, -1, 0.5, 1.5, 2.5, 0.1, 0.15, 0.125, 0.375, 3.14159,
+			2.718281828459045, 1e-5, 1e-4, 1e-3, 123456, 1234567, 9.9999996,
+			0.000099999, 100, 1000000, 1e15, 1e16, 1e17, 1e21, 1e22, 12345.678,
+			-0.0001234, 4.93245, 1.0 / 3, 2.0 / 3, 0.995, 9.5, 99.5, 1e-20,
+			1e-100, 1e-300, 5e-324, 2.2250738585072014e-308, 1e300,
+			INFINITY, -INFINITY, NAN,
+		};
+		char fa[400], fb[400];
+		for (unsigned i = 0; i < sizeof(ff) / sizeof(ff[0]); i++)
+			for (unsigned j = 0; j < sizeof(fv) / sizeof(fv[0]); j++) {
+				// %f past 19 digits is zeros (zfmt.c)
+				if (strchr(ff[i], 'f') && fabs(fv[j]) >= 1e19) continue;
+				int ra = zf_snprintf(fa, sizeof(fa), ff[i], fv[j]);
+				int rb = snprintf(fb, sizeof(fb), ff[i], fv[j]);
+				same(ff[i], fa, ra, fb, rb);
+			}
+		// Random values over the whole range, and short decimals: all
+		// must match.
+		static const char *rf[] = { "%g", "%.3g", "%e", "%.10g", "%.15g", "%.4f" };
+		srand(1);
+		for (int k = 0; k < 200000; k++) {
+			double d = ((double)rand() / RAND_MAX - 0.5) * pow(10, rand() % 601 - 300);
+			if (k & 1) d = (rand() % 2000000 - 1000000) / pow(10, rand() % 8);
+			for (unsigned i = 0; i < sizeof(rf) / sizeof(rf[0]); i++) {
+				// %f past 19 digits is zeros, not the binary value's
+				// exact expansion (zfmt.c)
+				if (rf[i][strlen(rf[i]) - 1] == 'f' && fabs(d) >= 1e15) continue;
+				int ra = zf_snprintf(fa, sizeof(fa), rf[i], d);
+				int rb = snprintf(fb, sizeof(fb), rf[i], d);
+				same(rf[i], fa, ra, fb, rb);
+			}
+		}
+		zf_snprintf(a, sizeof(a), "%d %La %d", 1, (long double)6.5, 7);
+		want("%a is still not supported", a, "1 ? 7");
+
+		// strtod: the same double, and the same end, as the host's
+		static const char *sv[] = {
+			"0", "1", "-1", "+3.14", "3.14159", "1e10", "1e-10", "1E+5", " \t42x",
+			".5", "5.", "-.5e-3", "1e308", "1e309", "1e-320", "4.9e-324",
+			"2.2250738585072014e-308", "123456789012345678901234567890",
+			"0.000000000000000000000000000001", "inf", "-Infinity", "nan",
+			// (no hex floats or nan(chars): zfmt.c reads neither)
+			"nanx", "x",
+			"", ".", "-", "+.e5", "1e", "1e+", "12abc", "1.5e3.2", "192.168.1.1",
+			"9007199254740993", "0.1", "0.3", "1.7976931348623157e308",
+			"1.7976931348623159e308", "5e-324", "1e23", "8.98846567431158e307",
+		};
+		for (unsigned i = 0; i < sizeof(sv) / sizeof(sv[0]); i++) {
+			char *e1, *e2;
+			double x1 = zf_strtod(sv[i], &e1), x2 = strtod(sv[i], &e2);
+			checks++;
+			if ((memcmp(&x1, &x2, sizeof(x1)) && !(x1 != x1 && x2 != x2)) || e1 != e2) {
+				fails++;
+				printf("FAIL strtod [%s]: got %.17g (+%d), want %.17g (+%d)\n",
+					sv[i], x1, (int)(e1 - sv[i]), x2, (int)(e2 - sv[i]));
+			}
+		}
+		// ... and every double printed with 17, 15 and 6 digits reads
+		// back as the host reads it
+		srand(2);
+		for (int k = 0; k < 300000; k++) {
+			uint64_t u = ((uint64_t)rand() << 33) ^ ((uint64_t)rand() << 11) ^ (uint64_t)rand();
+			double d, x1, x2;
+			memcpy(&d, &u, sizeof(d));
+			if (d != d || d - d != 0) continue;
+			snprintf(fa, sizeof(fa), k % 3 == 0 ? "%.17g" : k % 3 == 1 ? "%.15g" : "%.6g", d);
+			x1 = zf_strtod(fa, NULL); x2 = strtod(fa, NULL);
+			checks++;
+			if (memcmp(&x1, &x2, sizeof(x1))) {
+				if (fails++ < 20)
+					printf("FAIL strtod [%s]: got %.17g, want %.17g\n", fa, x1, x2);
+			}
+		}
+	}
+#endif
 
 	// -- truncation and the return value --
 	{

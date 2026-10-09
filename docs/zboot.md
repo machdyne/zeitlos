@@ -5,8 +5,10 @@ these boards uses that, and what it would take for Zeitlos to load
 gateware it built itself.
 
 **Status: reference, and the design largely built.** Sections 1-4
-describe the machinery. Section 5 is the design -- a *jumploader* at
-`0x1D0000` -- and ends with the jumploader as built (step 3). Step 1,
+describe the machinery. Section 5 is the design -- a *jumploader* --
+and ends with the jumploader as built (step 3). **Since 0.0.6 it is off
+by default and lives at `0x200000`, past 2 MB** (section 5, "The
+layout"); the history below says `0x1D0000`, where it was. Step 1,
 `reboot`, is section 6; step 2, the writable flash controller, is
 `docs/spiflash.md`, tested on a Lakritz. `zfpga flash` and `zfpga run`
 install user gateware and boot it. Still to come: self-upgrade.
@@ -150,8 +152,8 @@ base is `0x100000`, so these addresses are the region's offsets plus
 | `0x000000` | 256 KB | DFU bootloader (uses ~123 KB), on boards that ship one |
 | `0x040000` | 960 KB | Zeitlos gateware (1 MB from `0x000000` without DFU) |
 | `0x100000` | 256 KB | kernel |
-| `0x140000` | to `0x1D0000` | core apps (the ZAR) |
-| `0x1D0000` | to `0x1FE000` | jumploader (below), and the `flashtest` sector at `0x1FC000` |
+| `0x140000` | to `0x1FC000` | core apps (the ZAR) |
+| `0x1FC000` | 4 KB | the `flashtest` sector |
 | `0x1FE000` | 8 KB | key/value store |
 
 The kernel and ZAR are found through the region base, which the gateware
@@ -202,76 +204,79 @@ running system's own image.
 
 ### The layout
 
-Everything that exists today stays where it is. The jumploader takes the
-top of a 2 MB flash, **at `0x1D0000` on every board**:
+**Off by default, and past 2 MB.** The jumploader used to take the top
+of a 2 MB flash, `0x1D0000`, on every board. Those 184 KB are the core
+apps' now: `repl` and the rest are worth more to most people than
+`jump`. No board is built with `JUMP` by default. A board with a flash
+larger than 2 MB opts in with `make BOARD=x JUMP=1`, and its jumploader
+goes at **`0x200000`**, the first address past 2 MB, the same on every
+board.
 
-| Offset | Contents | Room | Change |
+| Offset | Contents | Room | |
 |---|---|---|---|
 | `0x000000` | DFU bootloader (optional) | 256 KB | write-protected, see section 7 |
-| `0x040000` | Zeitlos gateware | 960 KB | packed with boot address `0x1D0000` (was 704 KB, before the boot logo was dropped) |
-| `0x100000` | kernel | 256 KB | unchanged |
-| `0x140000` | core apps (ZAR) | 576 KB, to `0x1D0000` | limit only (was to `0x200000`) |
-| *(run time)* | user gateware | see below | new |
-| **`0x1D0000`** | **jumploader** | **184 KB** | **new**; 192 KB less the store |
+| `0x040000` | Zeitlos gateware | 960 KB | packed with boot address 0 by default; `0x200000` with `JUMP=1` |
+| `0x100000` | kernel | 256 KB | |
+| `0x140000` | core apps (ZAR) | 752 KB, to `0x1FC000` | was 576 KB, to `0x1D0000` |
+| *(run time)* | user gateware | see below | |
+| `0x1FC000` | the flash test sector | 4 KB | `flashtest` |
 | `0x1FE000` | key/value store | 8 KB | the last 8 KB of the Zeitlos region; written only by the running system, [kvstore.md](kvstore.md) |
+| **`0x200000`** | **jumploader** | **320 KB** | **`JUMP=1` only**, and only on a flash larger than 2 MB |
+
+**Reboot without it.** Gateware built without `JUMP` reloads from 0
+when it pulls PROGRAMN: the DFU bootloader, which starts the user
+gateware, or Zeitlos's own gateware on a board without one. `reboot`
+works exactly as before. What goes is `jump <addr>` and `zfpga run`,
+which say so. A release image is the first 2 MB, so the release tools
+refuse to build a target with `JUMP=1`.
+
+**On a 2 MB chip, `0x200000` wraps** to the start of flash -- the
+bootloader or the gateware. The kernel reads the chip's size from its
+JEDEC ID and refuses to read or re-point a jumploader past the end of
+it (`jfits()`, `sw/os/jumpapi.c`); `zfpga` does the same with the size
+it is given. Gateware built with `JUMP=1` on such a board reboots with
+"past the end of this flash -- build the gateware without JUMP".
 
 **Why one address for every board.** A jumploader is an almost-empty
 bitstream, and its size is set by the die, not the design -- every frame
 costs at least a CRC and a few bits. Compressed, as measured by this
 tree's own tests:
 
-| Die | Jumploader | In the 192 KB from `0x1D0000` |
+| Die | Jumploader | In the 320 KB from `0x200000` |
 |---|---|---|
-| 12F / 25F (Lakritz, 2 MB) | ~99 KB | fits, 93 KB spare |
-| 45F (Mozart ML1, 2 MB) | ~162 KB | fits, 30 KB spare |
-| 85F (4 MB or more) | ~280 KB | runs past `0x200000` -- no 85F board has only 2 MB |
+| 12F / 25F | ~99 KB | fits |
+| 45F | ~162 KB | fits |
+| 85F | ~280 KB | fits |
 
 One address means no per-board constant, no register to report it, and
 the code that writes jumploaders can be part of the one kernel and one
-set of apps every ECP5 board runs. A smaller jumploader (per-frame CRCs
-dropped; or a truncated bitstream, untested) would only leave the region
-with more slack. Nothing would move.
+set of apps every ECP5 board runs.
 
 **User gateware has no fixed slot.** It lives wherever there is room, and
 `zfpga flash` / `run` choose at run time (`docs/zfpga-formats.md`
 section 11), the first of:
 
-- between the ZAR's actual end (rounded up to 64 KB) and `0x1D0000`,
+- between the ZAR's actual end (rounded up to 64 KB) and `0x1F0000`,
   shrinking as the apps grow -- the apps take room from user gateware,
   never the reverse;
 - the tail of the gateware region, between the end of Zeitlos's own
   bitstream and `0x0F0000` (`ZFPGA_LOGO_OFFSET`, named for the logo that
-  used to end the gateware region; the 64 KB above it, up to the
-  Zeitlos region at `0x100000`, is not used yet);
-- on 4 MB and larger, above `0x200000`, where it never meets the apps,
-  up to 8 KB short of the end of the chip. (The key/value store has
-  moved into the Zeitlos region, so that 8 KB is now simply unused.)
+  used to end the gateware region);
+- on 4 MB and larger, above the jumploader's region (`0x250000`), up to
+  8 KB short of the end of the chip.
+
+`zfpga flash` works without a jumploader (it cannot check the device ID
+then, and says so); `zfpga run` needs one.
 
 The jumploader and user gateware are ECP5 mechanisms (PROGRAMN and a
-boot address). They do not apply to the Artix-7 boards yet, and may
-move.
-
-A blinky is ~99 KB on a 25F and ~162 KB on a 45F -- never much less,
-since every configuration frame costs bytes. The first slot is what the
-core apps leave: in September 2026 they grew to fill it (578,356 bytes,
-ending at `0x1CD334`, nothing left), and then shrank to 353,236 when
-`net` stopped calling `sscanf` and the core apps moved to integer-only
-`printf` ([build.md](build.md#integer-only-printf-zfmt)). They now end
-at `0x1963D4`, which leaves **192 KB** from `0x1A0000` -- room for a 45F
-design, which it was not before. Earlier, on a Mozart ML1 (2 MB, a
-45F), the core apps ended near `0x1B0000`, leaving 128 KB, too little;
-its 598 KB of gateware, flashed over JTAG, leaves 320 KB in the
-gateware tail, which is where designs go there. With the DFU
-bootloader the gateware starts at `0x040000` and that tail shrinks to
-64 KB -- such a board needs larger flash, or smaller core apps, for 45F
-designs.
+boot address). They do not apply to the Artix-7 boards yet.
 
 ### The cycle
 
 ```
 power on               -> 0x000000   DFU bootloader (or Zeitlos, without one)
   PROGRAMN (bootloader) -> Zeitlos
-  PROGRAMN (Zeitlos)    -> 0x1D0000   jumploader
+  PROGRAMN (Zeitlos)    -> 0x200000   jumploader (JUMP=1; else 0x000000)
   PROGRAMN (jumploader) -> its target:
                              0x000000  the default jumploader: a reboot
                              anywhere  a zfpga-made jumploader: user gateware

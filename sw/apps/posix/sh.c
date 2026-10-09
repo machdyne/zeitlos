@@ -602,7 +602,7 @@ static void bi_touch(px_shell_t *sh, int argc, char **argv) {
 static void boot_failed(px_shell_t *sh, const char *what, int rc) {
     const char *why =
         rc == -1 ? "this board's gateware cannot reconfigure the FPGA (no PROGRAMN pin)" :
-        rc == -2 ? "no jumploader at 0x1D0000 -- power-cycle instead" :
+        rc == -2 ? "no jumploader at 0x200000 -- power-cycle instead" :
         rc == -3 ? "the jumploader could not be re-pointed" :
         rc == -4 ? "this gateware does not reload through a jumploader" :
         "the FPGA did not reconfigure";

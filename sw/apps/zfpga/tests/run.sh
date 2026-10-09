@@ -493,8 +493,8 @@ fi
 #
 # The real commands against flash image files (zfpga-simflash: the
 # hardware's rules -- erase to FF, program clears bits, nothing below
-# 0x040000). A Lakritz image: core apps ending at 0x186000, the
-# jumploader at 0x1D0000.
+# 0x040000). A Lakritz image: core apps ending at 0x186000. 2 MB has no
+# jumploader (the default); 4 MB has one at 0x200000 (JUMP=1).
 
 F="$OUT/fl"; mkdir -p "$F"
 SF=./zfpga-simflash
@@ -509,7 +509,25 @@ if make -s -f Makefile.host zfpga-simflash > "$F/mk.log" 2>&1 &&
    ./zfpga build "$F/blink.v" -b mozart_ml1 -D db -o "$F/b45.bit" > /dev/null 2>&1 &&
    ./zfpga jump 0 -b lakritz -D db -o "$F/jl.bit" > /dev/null 2>&1; then
     n=$(wc -c < "$F/blink.bit")
-    python3 tests/mkflash.py "$F/img" 0x200000 0x186000 "$F/jl.bit"
+    # 2 MB, no jumploader: flash works (the device ID cannot be checked),
+    # run does not
+    python3 tests/mkflash.py "$F/two" 0x200000 0x186000
+    cp "$F/two" "$F/two0"
+    ZFPGA_SIMFLASH="$F/two" $SF flash "$F/blink.bit" > "$F/o0" 2>&1 &&
+        grep -q "at 0x190000" "$F/o0" && grep -q "no jumploader" "$F/o0" &&
+        [ "$(at "$F/two" 0x190000 $n | md5sum)" = "$(md5sum < "$F/blink.bit")" ] ||
+        fl_fail "2 MB: after the core apps, unchecked: $(cat "$F/o0")"
+    cmp -l "$F/two0" "$F/two" | awk -v lo=$((0x190000)) -v hi=$((0x190000 + n)) \
+        '$1 - 1 < lo || $1 - 1 >= hi { bad = 1 } END { exit bad }' ||
+        fl_fail "2 MB: bytes outside the image changed"
+    ZFPGA_SIMFLASH="$F/two" $SF run "$F/blink.bit" > "$F/o9" 2>&1 && fl_fail "run with no jumploader, accepted"
+    grep -q "no jumploader" "$F/o9" || fl_fail "run with no jumploader: $(cat "$F/o9")"
+    python3 tests/mkflash.py "$F/full" 0x200000 0x1F0000
+    ZFPGA_SIMFLASH="$F/full" $SF flash "$F/blink.bit" > "$F/o6" 2>&1 && fl_fail "no room anywhere, accepted"
+    grep -q "do not fit in any free space" "$F/o6" || fl_fail "no room: $(cat "$F/o6")"
+    grep -q "after the core apps" "$F/o6" || fl_fail "no room: the spaces are not listed: $(cat "$F/o6")"
+    # 4 MB with a jumploader at 0x200000
+    python3 tests/mkflash.py "$F/img" 0x400000 0x186000 "$F/jl.bit"
     cp "$F/img" "$F/img0"
     ZFPGA_SIMFLASH="$F/img" $SF flash "$F/blink.bit" > "$F/o1" 2>&1 &&
         grep -q "at 0x190000" "$F/o1" && grep -q "verified" "$F/o1" &&
@@ -533,14 +551,11 @@ if make -s -f Makefile.host zfpga-simflash > "$F/mk.log" 2>&1 &&
     done
     ZFPGA_SIMFLASH="$F/img" $SF flash tests/run.sh > "$F/o5" 2>&1 && fl_fail "a text file accepted"
     grep -q "not an ECP5 bitstream" "$F/o5" || fl_fail "a text file: $(cat "$F/o5")"
-    python3 tests/mkflash.py "$F/full" 0x200000 0x1C8000 "$F/jl.bit"
-    ZFPGA_SIMFLASH="$F/full" $SF flash "$F/blink.bit" > "$F/o6" 2>&1 && fl_fail "no room anywhere, accepted"
-    grep -q "do not fit in any free space" "$F/o6" || fl_fail "no room: $(cat "$F/o6")"
-    python3 tests/mkflash.py "$F/big" 0x400000 0x1C8000 "$F/jl.bit"
+    python3 tests/mkflash.py "$F/big" 0x400000 0x1F0000 "$F/jl.bit"
     ZFPGA_SIMFLASH="$F/big" $SF run "$F/blink.bit" > "$F/o8" 2>&1 &&
-        grep -q "at 0x200000" "$F/o8" &&
-        [ "$(at "$F/big" 0x200000 $n | md5sum)" = "$(md5sum < "$F/blink.bit")" ] &&
-        [ "$(cat "$F/big.jump")" = "0x200000" ] || fl_fail "4 MB, no room lower down: after the jumploader: $(cat "$F/o8")"
+        grep -q "at 0x250000" "$F/o8" &&
+        [ "$(at "$F/big" 0x250000 $n | md5sum)" = "$(md5sum < "$F/blink.bit")" ] &&
+        [ "$(cat "$F/big.jump")" = "0x250000" ] || fl_fail "4 MB, no room lower down: after the jumploader: $(cat "$F/o8")"
 
     # -- the gateware tail: after Zeitlos's own gateware, before the logo
     # A stand-in for Zeitlos's gateware: an uncompressed 25F bitstream,
@@ -551,7 +566,7 @@ if make -s -f Makefile.host zfpga-simflash > "$F/mk.log" 2>&1 &&
     ./zfpga pack "$F/gws.cfg" -D db -o "$F/gw.bit" > /dev/null 2>&1
     gwn=$(wc -c < "$F/gw.bit")
     # JTAG-flashed: the gateware at 0, the core apps leaving no room
-    python3 tests/mkflash.py "$F/jtag" 0x200000 0x1C8000 "$F/jl.bit" "$F/gw.bit@0"
+    python3 tests/mkflash.py "$F/jtag" 0x400000 0x1F0000 "$F/jl.bit" "$F/gw.bit@0"
     cp "$F/jtag" "$F/jtag0"
     tail=$(( (gwn + 0xFFFF) / 0x10000 * 0x10000 ))
     ZFPGA_SIMFLASH="$F/jtag" $SF flash "$F/blink.bit" > "$F/o12" 2>&1 &&
@@ -574,22 +589,17 @@ d = open(sys.argv[1], "rb").read()
 d += os.urandom(0x9FF00 - len(d))          # ends in the last sector before 0xA0000
 open(sys.argv[2], "wb").write(d)
 PY
-    python3 tests/mkflash.py "$F/adj" 0x200000 0x1C8000 "$F/jl.bit" "$F/gwpad.bin@0" "$F/blink.bit@0xA0000"
+    python3 tests/mkflash.py "$F/adj" 0x400000 0x1F0000 "$F/jl.bit" "$F/gwpad.bin@0" "$F/blink.bit@0xA0000"
     ZFPGA_SIMFLASH="$F/adj" $SF flash "$F/blink.bit" -a 0xA0000 > "$F/o15" 2>&1 &&
         grep -q "already at 0x0a0000" "$F/o15" ||
         fl_fail "a design straight after the gateware: not taken for the gateware: $(cat "$F/o15")"
     # DFU: a bootloader at 0, the gateware at 0x040000
-    python3 tests/mkflash.py "$F/dfu" 0x200000 0x1C8000 "$F/jl.bit" "$F/jl.bit@0" "$F/gw.bit@0x40000"
+    python3 tests/mkflash.py "$F/dfu" 0x400000 0x1F0000 "$F/jl.bit" "$F/jl.bit@0" "$F/gw.bit@0x40000"
     dtail=$(( (0x40000 + gwn + 0xFFFF) / 0x10000 * 0x10000 ))
     ZFPGA_SIMFLASH="$F/dfu" $SF flash "$F/blink.bit" > "$F/o16" 2>&1 &&
         grep -q "at $(printf '0x%06x' $dtail)" "$F/o16" ||
         fl_fail "DFU: the gateware found at 0x040000, its tail at $(printf '0x%06x' $dtail): $(cat "$F/o16")"
-    # nothing fits anywhere: every space listed
-    grep -q "after the core apps" "$F/o6" || fl_fail "no room: the spaces are not listed: $(cat "$F/o6")"
     # refused and warned, whatever the layout
-    python3 tests/mkflash.py "$F/nojl" 0x200000 0x186000
-    ZFPGA_SIMFLASH="$F/nojl" $SF run "$F/blink.bit" > "$F/o9" 2>&1 && fl_fail "run with no jumploader, accepted"
-    grep -q "no jumploader" "$F/o9" || fl_fail "run with no jumploader: $(cat "$F/o9")"
     ./zfpga build "$F/blink.v" -b lakritz -D db -o "$F/own.bit" -- -a 0x190000 > /dev/null 2>&1
     ZFPGA_SIMFLASH="$F/img" $SF flash "$F/own.bit" -a 0x1A0000 > "$F/o10" 2>&1
     grep -q "its own boot address" "$F/o10" || fl_fail "no warning for a bitstream with its own boot address: $(cat "$F/o10")"
@@ -597,7 +607,8 @@ PY
     grep -q "works on the machine" "$F/o11" || fl_fail "the host zfpga: $(cat "$F/o11")"
     if [ $flash_ok = 1 ]; then
         echo "ok   flash / run: after the core apps, in the gateware tail (JTAG and DFU), after the jumploader"
-        echo "     on 4 MB; verified; no rewrite; a jump; the gateware untouched, a design right after it"
+        echo "     on 4 MB; 2 MB has none, so run is refused; verified; no rewrite; a jump; the gateware"
+        echo "     untouched, a design right after it"
         echo "     told apart; refused: wrong die, not free, unaligned, no room, not a bitstream, no jumploader"
         pass=$((pass + 1))
     else fail=$((fail + 1)); fi

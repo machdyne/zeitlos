@@ -234,7 +234,7 @@ int cmd_build(int argc, char **argv, const char *dbdir_default) {
  *
  * A jumploader is the smallest useful design there is: it pulls the
  * board's PROGRAMN pin low the moment it wakes, and the FPGA reloads
- * from TARGET. Zeitlos jumps to the one at 0x1D0000 to reboot, or to
+ * from TARGET. Zeitlos jumps to the one at 0x200000 to reboot, or to
  * boot other gateware, and the kernel changes where it points in place
  * (sw/common/zjump.c) -- which is what -J makes possible. The board's
  * pin constraints must name PROGRAMN. docs/zboot.md sec. 5.

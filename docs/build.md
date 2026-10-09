@@ -40,6 +40,7 @@ Set these **above** the `include`.
 | `APP_CFLAGS` | empty | Extra `-D` / `-I` flags for this app. |
 | `GFX_HW_BLIT` | `1` | Text through the hardware glyph blitter (`-DZ_GFX_HW_BLIT`); `0` for the software path. |
 | `ZFMT` | `0` | `1`: integer-only `printf` family, about 50KB smaller. The core apps set it; see below. |
+| `ZFMT_FLOAT` | `0` | with `ZFMT = 1`: `%e %f %g` and `strtod` too, for `repl` ("Floating point too") |
 | `SRC_DIRS` | empty | More directories to search for sources, before `sw/common`. |
 | `GC_SECTIONS` | `1` | Section garbage collection. See below. |
 | `APP_LISTING` | `1` | Also write `$(APP).asm` from `$(APP).c`. |
@@ -142,7 +143,7 @@ path's table of resident fonts reached the link and failed it.
 `ZFMT = 1` in an app's Makefile replaces newlib's `printf` family with
 `sw/common/zfmt.c`. It is **off by default** and set by the three core
 apps in the flash archive whose size was the problem (`wm`, `net`,
-`term`) and by the kernel ([kernel.md](kernel.md#the-256kb-image-budget)).
+`term`, and `text` since it became one) and by the kernel ([kernel.md](kernel.md#the-256kb-image-budget)).
 
 ### Why
 
@@ -157,6 +158,9 @@ was about half of each binary:
 | `wm` | 76.7KB | 59.0KB | 17.6KB |
 | `term` | 78.1KB | 59.0KB | 19.0KB |
 | `net` | 136.8KB | 109.4KB | 19.1KB (with `net`'s own `sscanf` gone too) |
+
+`text`, when it became a core app: 145,600 bytes to 88,880 in flash,
+215,608 to 162,992 in RAM. `files` links no `printf` and does not set it.
 
 What is left is `malloc`, the string functions and newlib's FILE layer,
 none of them worth replacing. `console` and `cron` call no `printf` at
@@ -223,8 +227,41 @@ part and six decimals from the IEEE-754 bits, trailing zeros dropped
 (`1.5`, `-0.333333`), `big` from 2^31 up. It is a debug printer: close to
 `%.6g`, not identical. Every other app still prints `%.6g` as before.
 
-Apps that do print floating point, and must not set `ZFMT`: `ask`,
-`audiotest`, `blackjack`, `midi`, `play`, `roulette`, `track`, `web`.
+Apps that do print floating point, and must not set `ZFMT` alone:
+`ask`, `audiotest`, `blackjack`, `midi`, `play`, `roulette`, `track`,
+`web`. They could set `ZFMT_FLOAT` too, below.
+
+### Floating point too (ZFMT_FLOAT)
+
+`ZFMT = 1` with `ZFMT_FLOAT = 1` is for a program that does print
+doubles but links the soft-float arithmetic anyway -- `repl`, whose
+Scheme prints its reals with `%g` and reads them with `strtod`. Then
+`zfmt.c` also does `%e %f %g` (and `%E %F %G`), with every flag, width
+and precision, and provides `strtod` and `atof`, so newlib's three
+printf engines, `_dtoa_r`, the multi-precision helpers and its
+`strtod` (with the hex-float parser) all drop out. `%a` still prints
+`?`. `Z_ZFMT` is not defined, so `zobj.c` keeps its `%.6g`.
+
+| `repl` | flash | RAM (image) |
+|---|---:|---:|
+| newlib | 239,464 | 356,328 |
+| `ZFMT_FLOAT` | 190,448 | 311,420 |
+
+**How exact.** The digits come from scaling by a power of ten carried
+in two doubles (about 106 bits), not from newlib's multi-precision
+arithmetic. Up to 19 significant digits are the exact value's, ties
+rounded to even as newlib rounds them; past 19 digits (`%f` of a number
+over 10^19, `%.20g`) the rest are zeros where newlib prints the binary
+value's exact expansion. `strtod` uses the first 19 significant digits
+of its input and returns the nearest double, rounding once even into
+the subnormal range. The host test checks both against glibc: the
+fixed cases, 1.15 million random values printed six ways across the
+whole exponent range, and 300,000 strings read back, with no
+differences. `repl`'s Scheme test suite (`sw/ext/ms`, `test_*.l`)
+prints identically with either.
+
+`zfmt.c` grows from about 1.5KB to about 10KB with it (the formatter,
+`strtod`, and the two-double helpers), against about 59KB it removes.
 
 ### Testing
 
@@ -232,6 +269,9 @@ Apps that do print floating point, and must not set `ZFMT`: `ask`,
 cc -std=gnu99 -Wall -DZFMT_HOST_TEST -I sw/common \
    -o /tmp/test_zfmt sw/common/tests/test_zfmt.c sw/common/zfmt.c \
    && /tmp/test_zfmt
+cc -std=gnu99 -Wall -DZFMT_HOST_TEST -DZFMT_FLOAT -I sw/common \
+   -o /tmp/test_zfmt_f sw/common/tests/test_zfmt.c sw/common/zfmt.c -lm \
+   && /tmp/test_zfmt_f
 ```
 
 `ZFMT_HOST_TEST` builds `zfmt.c` with its names prefixed (`zf_printf`

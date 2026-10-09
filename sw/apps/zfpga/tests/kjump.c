@@ -16,12 +16,14 @@
 #include <stdbool.h>
 
 /* flashapi.h's interface, simulated */
-#define FLASH_SIZE (2u * 1024 * 1024)
+#define FLASH_SIZE (4u * 1024 * 1024)	/* the jumploader is past 2 MB */
 static uint8_t flash[FLASH_SIZE];
 static int n_erase, n_prog, violations, in_session;
+static uint32_t chip_size = FLASH_SIZE;	/* what the JEDEC ID says */
 
 bool k_flash_present(void) { return true; }
 uint32_t k_flash_hw_status(void) { return 1u << 1; }          /* done, never busy */
+uint32_t k_flash_hw_size(void) { return chip_size; }
 uint8_t k_flash_window(uint32_t off) { return flash[off % FLASH_SIZE]; }
 bool k_flash_begin(uint32_t owner) { (void)owner; in_session = 1; return true; }
 void k_flash_end(uint32_t owner) { (void)owner; in_session = 0; }
@@ -41,6 +43,7 @@ uint32_t k_flash_hw_program(uint32_t addr, const uint8_t *buf, uint32_t len) {
     return 0;
 }
 
+#include "../../../common/zsoc.h"	/* Z_JUMP_FLASH_OFFSET */
 #include "../../../common/zjump.h"
 static uint8_t rd_mem(void *ctx, uint32_t off) { return ((const uint8_t *)ctx)[off]; }
 
@@ -70,7 +73,7 @@ static void check(int ok, const char *what) {
     if (!ok) fails++;
 }
 
-/* One run: j0 at 0x1D0000, re-pointed to 0x190000 (= j1) and back. */
+/* One run: j0 at Z_JUMP_FLASH_OFFSET, re-pointed to 0x190000 (= j1) and back. */
 static void run(const uint8_t *j0, long n0, const uint8_t *j1, long n1, const char *label) {
     uint8_t *before;
     uint32_t t = 0xDEAD, i, lo = 0xFFFFFFFF, hi = 0;
@@ -84,8 +87,8 @@ static void run(const uint8_t *j0, long n0, const uint8_t *j1, long n1, const ch
     check(k_jump_point(0) == -1 && n_erase == 0, "... and nothing to re-point, nothing written");
 
     for (i = 0; i < FLASH_SIZE; i++) flash[i] = (uint8_t)(i * 7 + (i >> 11));   /* not blank */
-    memset(flash + 0x1D0000, 0xFF, 0x30000);
-    memcpy(flash + 0x1D0000, j0, (size_t)n0);
+    memset(flash + Z_JUMP_FLASH_OFFSET, 0xFF, 0x30000);
+    memcpy(flash + Z_JUMP_FLASH_OFFSET, j0, (size_t)n0);
     before = malloc(FLASH_SIZE);
     memcpy(before, flash, FLASH_SIZE);
 
@@ -95,12 +98,12 @@ static void run(const uint8_t *j0, long n0, const uint8_t *j1, long n1, const ch
 
     check(k_jump_point(0x190000) == 0, "re-point to 0x190000");
     check(k_jump_read(&t) == 0 && t == 0x190000, "... and it reads back 0x190000");
-    check(n0 == n1 && !memcmp(flash + 0x1D0000, j1, (size_t)n1),
+    check(n0 == n1 && !memcmp(flash + Z_JUMP_FLASH_OFFSET, j1, (size_t)n1),
         "... byte-identical to zfpga's own jumploader to 0x190000");
     outside = 0;
     for (i = 0; i < FLASH_SIZE; i++) {
         if (flash[i] != before[i]) { if (i < lo) lo = i; if (i > hi) hi = i; }
-        if (flash[i] != before[i] && (i < 0x1D0000 || i >= 0x1D0000 + (uint32_t)n1)) outside++;
+        if (flash[i] != before[i] && (i < Z_JUMP_FLASH_OFFSET || i >= Z_JUMP_FLASH_OFFSET + (uint32_t)n1)) outside++;
     }
     snprintf(msg, sizeof(msg), "... nothing outside it changed (changes at 0x%06x-0x%06x; %d sector%s erased, %d pages programmed)",
         lo, hi, n_erase, n_erase == 1 ? "" : "s", n_prog);
@@ -137,7 +140,7 @@ int main(int argc, char **argv) {
         uint32_t first, last;
         zjump_parse(rd_mem, (void *)j0, 4096, &j);
         zjump_span(&j, &first, &last);
-        first += 0x1D0000; last += 0x1D0000;
+        first += Z_JUMP_FLASH_OFFSET; last += Z_JUMP_FLASH_OFFSET;
         extra = (long)(((last | 0xFFF) + 1) - (last - first) / 2 - first);
     }
     {
@@ -156,12 +159,29 @@ int main(int argc, char **argv) {
         printf("-- a .bit as openFPGALoader writes it: the header stripped\n");
         n_erase = n_prog = 0;
         memset(flash, 0xFF, sizeof(flash));
-        memcpy(flash + 0x1D0000, j0 + (b3 - 4), (size_t)(n0 - (b3 - 4)));
+        memcpy(flash + Z_JUMP_FLASH_OFFSET, j0 + (b3 - 4), (size_t)(n0 - (b3 - 4)));
         check(k_jump_read(NULL) == -2, "read: a jumploader whose header was stripped (-2), not 'none'");
         check(k_jump_point(0x190000) == -1 && n_erase == 0 && n_prog == 0,
             "re-pointing it is refused, and nothing is written");
-        memset(flash + 0x1D0000, 0xFF, 0x30000);
+        memset(flash + Z_JUMP_FLASH_OFFSET, 0xFF, 0x30000);
         check(k_jump_read(NULL) == -1, "an erased region is still 'none' (-1)");
+    }
+
+    /* A 2 MB chip: the jumploader's address is past its end, and wraps
+     * to the start of flash. Even with a valid jumploader where a bigger
+     * chip would have it, the kernel must not read or write there. */
+    {
+        printf("-- a 2 MB chip\n");
+        memset(flash, 0xFF, sizeof(flash));
+        memcpy(flash + Z_JUMP_FLASH_OFFSET, j0, (size_t)n0);
+        chip_size = Z_JUMP_FLASH_OFFSET;
+        n_erase = n_prog = 0;
+        check(k_jump_read(NULL) == -3, "read: past the end of this flash (-3)");
+        check(k_jump_point(0x190000) == -1 && n_erase == 0 && n_prog == 0,
+            "re-pointing is refused, and nothing is written");
+        chip_size = 0;
+        check(k_jump_read(NULL) == 0, "a size that cannot be read does not refuse");
+        chip_size = FLASH_SIZE;
     }
 
     printf("%d checks, %d failed\n", checks, fails);

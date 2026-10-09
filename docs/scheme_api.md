@@ -833,6 +833,21 @@ noisy to read.
 | `(line id x0 y0 x1 y1 color)` | hardware-accelerated line (`z_win_hw_line()`); `#t`/`#f`, or raises an error for an id this process didn't create |
 | `(box id x0 y0 x1 y1 color)` | hardware-accelerated filled box (`z_win_hw_box()`); same |
 | `(text id x y "s" color)` | draws text (`z_win_draw_text()`, `z_font_6x12`); same |
+| `(win-on id handler)` | makes the window an app's: `handler` is called with each event as a list -- `(redraw)`, `(key k)`, `(click x y)`, `(button n)`, `(enter n)`, `(close)`. [repl.md](repl.md) is the guide |
+| `(button id x y w h "label")` | a push button; returns its number `n`, and pressing it sends `(button n)` |
+| `(field id x y w)` / `(field id x y w "text")` | a one-line ASCII text field; returns its number `n`; Enter in it sends `(enter n)` |
+| `(field-text id n)` | what field `n` holds, as a string |
+| `(field-set! id n "text")` | replaces it |
+
+A window with a handler or widgets is repainted: on `(redraw)` repl
+clears it, the handler draws the app's content, and repl draws the
+buttons and fields over it. A plain drawing window (no `win-on`, no
+widgets) keeps the old behaviour: what it drew stays until something
+overdraws it. Buttons and fields come from two pools shared by all of
+repl's windows -- 16 widgets and 6 fields -- and repl keeps at most 4
+windows; both are its RAM budget ([flash_apps.md](flash_apps.md),
+"Budgets"). wm tags `Z_WM_KEY` and `Z_WM_MOUSE` with the window's id so
+the events reach the right one.
 
 `z_win_create()`/`z_win_clear()`/`z_win_hw_line()`/`z_win_hw_box()`/
 `z_win_draw_text()` (`sw/common/zwin.h`) already existed and already

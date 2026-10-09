@@ -667,7 +667,7 @@ int machine_load_bin(machine_t *m, const char *path) {
 	 * address, sp at the top of its memory region, with the sentinel
 	 * return address (0) stored at [sp] so a naturally-returning
 	 * main() lands on address 0, which we treat as a clean exit. */
-	uint32_t sp = ZS_RAM_BASE + (uint32_t)m->ram_size - 4;
+	uint32_t sp = ZS_RAM_BASE + (uint32_t)m->ram_size - 16;	/* 16-aligned, as the kernel's */
 	bus_write32(m, sp, 0);
 	cpu_reset(&m->cpu, ZS_RAM_BASE, sp);
 

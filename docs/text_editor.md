@@ -1,6 +1,7 @@
 # text
 
-A plain, fast, word-wrapping notepad. `sw/apps/text`.
+A plain, fast, word-wrapping notepad. `sw/apps/text`. A core app: it
+is in flash and works with no card ([flash_apps.md](flash_apps.md)).
 
 ```
 > run wm

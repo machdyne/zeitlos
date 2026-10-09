@@ -5,6 +5,13 @@
 This document covers the one-time setup, the memory-layout reasoning
 behind how it's built, and what's actually reachable right now.
 
+`repl` is a core app, in flash ([flash_apps.md](flash_apps.md), "Why
+repl is a core app"), with a budget of 192K of flash and 308K of RAM
+(`CORE_BUDGETS`). It prints and reads its reals through `zfmt.c`
+(`ZFMT_FLOAT`, [build.md](build.md)), not newlib. **Adding a Scheme
+procedure costs from that budget**: check `make flash_apps`' table
+after adding one, and pay for growth past it with something smaller.
+
 ## Vendored, not a submodule checkout you need to patch
 
 `sw/ext/ms/ms.c` and `sw/ext/ms/ms_stdlib.l` in this tree are the
@@ -215,6 +222,19 @@ don't expect to see the confirmation linger.
 ## Historical notes
 
 ### A real ABI bug this integration hit and fixed
+
+**Root-caused, October 2026:** the kernel started every app with its
+stack pointer 4 bytes below the top of its memory (`k_proc_create()`,
+`sw/os/kernel.c`), so 4 bytes short of the 16-byte alignment the RISC-V
+psABI requires at every call. gcc lays out a variadic function's
+register save area assuming that alignment, and `va_arg()` finds an
+8-byte argument -- a `long long`, a `double` -- by rounding up to 8:
+with the stack misaligned it took the wrong register pair. Every
+`printf("%lld")` and every `printf("%g")` in every app was affected,
+`repl`'s `%g` for fractional numbers included (`0.1` printed as
+`-2.35344e-185`). The simulator copied the same `- 4` and showed it too.
+Both now start 16 bytes below the top. The workaround below stays: it
+is correct, and costs nothing.
 
 `scheme (+ 1 2)` (or, after the default-fallback change above, just
 `(+ 1 2)`) initially printed `12884901888` instead of `3` -- exactly

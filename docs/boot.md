@@ -13,7 +13,7 @@ you can intervene.
 ## Sequence
 
 ```
-gateware  ->  BIOS (BRAM)  ->  kernel (flash -> RAM)  ->  sh()  ->  init()  ->  wm, net, repl, posix
+gateware  ->  BIOS (BRAM)  ->  kernel (flash -> RAM)  ->  sh()  ->  init()  ->  wm, net, console
 ```
 
 1. **BIOS** (`sw/bios/bios.c`) runs from block RAM baked into the
@@ -42,7 +42,7 @@ gateware  ->  BIOS (BRAM)  ->  kernel (flash -> RAM)  ->  sh()  ->  init()  ->  
    the flash case is checked first. See
    [`flash_apps.md`](flash_apps.md).
 4. **`init()`** starts `wm`, loads `net`, starts `console`, looks for
-   `repl` and `posix` on the card without starting them, starts `cron`
+   `posix` on the card without starting it, starts `cron`
    if `/data/cron/cron.cfg` exists ([cron.md](cron.md)), starts `netserve`
    if any of its services is configured ([netserve.md](netserve.md)),
    starts `net`, and
@@ -60,10 +60,10 @@ gateware  ->  BIOS (BRAM)  ->  kernel (flash -> RAM)  ->  sh()  ->  init()  ->  
      it prints `init: no display in this bitstream, not starting wm`
      and carries on with `net` and the rest. `wm` is still in flash
      there, for remote desktop.
-   - **`repl` and `posix` are optional and card-only.** Neither is in the
-     flash archive (`docs/flash_apps.md`), so on a board with no card
-     both print `not found (non-fatal -- it lives on the sdcard)`, and
-     that is the expected outcome.
+   - **`posix` is optional and card-only.** It is not in the flash
+     archive (`docs/flash_apps.md`), so on a board with no card it
+     prints `not found (it lives on the sdcard)`, and that is the
+     expected outcome. `repl`, the other shell, is a core app in flash.
    - **`posix` needs RAM.** It asks for 4MB of stack and heap
      (`APP_STACK`, `docs/executables.md`), so on a board that cannot
      hold it, the launch is refused with a line saying how much it
@@ -121,8 +121,7 @@ Inside the region the layout is fixed:
 | Offset in the region | Size | Contents |
 |---|---|---|
 | `+0x000000` | 256 KB | kernel |
-| `+0x040000` | 576 KB | core apps, the ZAR ([flash_apps.md](flash_apps.md)) |
-| `+0x0D0000` | 184 KB | the jumploader, on ECP5 boards that use one ([zboot.md](zboot.md)) |
+| `+0x040000` | 752 KB | core apps, the ZAR ([flash_apps.md](flash_apps.md)) |
 | `+0x0FC000` | 4 KB | the `flashtest` sector ([spiflash.md](spiflash.md)) |
 | `+0x0FE000` | 8 KB | the key/value store ([kvstore.md](kvstore.md)) |
 
@@ -345,8 +344,9 @@ With today's default builds it does not, and never did:
   one term, before this change.
 - **net's defaults are the difference.** They include ssh.
 
-What a 1MB board can hold now, since `repl` is only loaded when a card
-is present:
+What a 1MB board could hold at that commit, with `repl` loaded only
+from a card (it is a core app again now, started on demand, and 45KB
+smaller: see "`repl` in flash" below):
 
 | configuration | blocks |
 |---|---|
@@ -356,6 +356,33 @@ is present:
 | card, net, repl | 1,044K -- no room for a term; build net smaller or skip it |
 
 posix does not fit below roughly 5MB, and init says so.
+
+**`text` and `files` in flash.** Both are core apps now, started on
+demand. Measured at the commit that added them (same build settings,
+blocks rounded up to 4KB as above):
+
+| | image | tier | block |
+|---|---|---|---|
+| kernel | 249,533 | 16K | 266,240 |
+| wm | 133,556 | 8K | 143,360 |
+| net | 267,592 | 32K | 303,104 |
+| console | 12,481 | 16K | 32,768 |
+| term (each) | 135,100 | 8K | 143,360 |
+| text | 162,992 | 16K | 180,224 |
+| files | 92,612 | 16K | 110,592 |
+
+A card-less 1MB board after boot with one term open (kernel, wm, net,
+console, term0) holds 888,832 bytes and has 159,744 left: `files` fits
+beside the term, `text` does not. With no term open, `text` and `files`
+fit together (290,816 of 303,104).
+
+**`repl` in flash.** A core app again, built with `ZFMT_FLOAT`
+([build.md](build.md)): image 308,608, 64K tier, a 376,832-byte block.
+Started on demand from term's REPL button, never by `init()`. On a 1MB
+board it does not fit beside the boot set at all (it needs 368K of the
+296K left with no term open, kernel included); the budgets' RAM rule ([flash_apps.md](flash_apps.md), "Budgets") counts code and
+`.bss` only, where it fits. It is the 32MB boards where repl in flash
+is the point.
 
 term's 159,744 includes 16,000 bytes of scrollback (`docs/terminal.md`,
 "Memory"); `make term SCROLLBACK=25` takes it back to one screen.

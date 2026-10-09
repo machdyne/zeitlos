@@ -120,10 +120,21 @@ endif
 # The cost: %f, %e, %g and %a print "?". An app that sets ZFMT = 1
 # must not need them -- check with the grep in docs/build.md -- and
 # zobj.c's float printing switches to an integer-only form (Z_ZFMT).
+#
+# ZFMT_FLOAT = 1 as well, for a program that does print doubles but
+# links the soft-float arithmetic anyway (repl): %e %f %g work, and
+# strtod/atof come from zfmt.c too, which drops newlib's dtoa, its
+# multi-precision helpers and its strtod -- about 2KB for about 50KB.
+# docs/build.md, "Floating point too (ZFMT_FLOAT)".
 ZFMT ?= 0
+ZFMT_FLOAT ?= 0
 ifeq ($(ZFMT),1)
 OBJS += zfmt.o
+ifeq ($(ZFMT_FLOAT),1)
+ZFMT_CFLAGS = -DZFMT_FLOAT
+else
 ZFMT_CFLAGS = -DZ_ZFMT
+endif
 endif
 
 APP_LISTING ?= 1

@@ -242,6 +242,11 @@ from the prompt:
 
 (colors are `0` for black, `1` for white)
 
+To learn Scheme and write apps with windows, buttons and text fields,
+read [repl.md](repl.md) -- in flash as `/docs/repl.txt`, so `text`
+opens it with no card -- and try the example app:
+`(load "/examples/todo.scm")`.
+
 ## Taking a screenshot
 
 `ss` (typed at a kernel shell, not `term` -- see "Using the serial
@@ -272,7 +277,7 @@ desktop starts, and it has its own separate command set (`ls`, `run`,
 `ps`, `kill`, `xf`, `ss`, and more -- type `help` there to see them
 all). A file name with a space in it is written in quotes there, as
 in the posix shell: `cat 'My Notes.txt'` ([posix.md](posix.md),
-"Quoting"). The graphical desktop (`wm`, `net`, `repl`) starts automatically
+"Quoting"). The graphical desktop (`wm`, `net`, `console`) starts automatically
 here a few seconds after boot; if you need to get a new app or file
 onto the SD card without removing it, `xf` receives a file over the
 serial connection (you'll need the `xfer` utility on the other end):

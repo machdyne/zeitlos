@@ -28,7 +28,8 @@
 #
 # WHAT GOES ON THE CARD, and what does not:
 #
-#   - The core apps (wm, net, term, console) are DELIBERATELY ABSENT.
+#   - The core apps (CORE_APPS in the top-level Makefile) are
+#     DELIBERATELY ABSENT, and build() refuses a list that has one.
 #     They live in flash, in the ZAR, and sw/os/zar.h's rule is that a
 #     copy on the card wins over the flash copy -- so shipping them
 #     here would shadow the flash build.
@@ -156,16 +157,14 @@ def sectors_per_cluster(image_bytes):
 # (docs/layout.md, "Finding a program").
 # Everything in sw/apps that is not a CORE app.
 #
-# Core apps (wm, net, term, console -- release/hw/boards/*.spec) live in flash
-# and must NOT be duplicated here: a card copy would shadow the
-# per-target `net` build with the wrong PHY driver, which is the bug
-# check_against_script() was written after.
+# Core apps (CORE_APPS in the top-level Makefile: `make core-apps`)
+# live in flash and must NOT be duplicated here: a card copy would
+# shadow the flash copy, which is then never updated by a release.
+# build() refuses a list that names one.
 #
 # Everything else ships. The lists below are grouped for reading only;
 # nothing depends on which group an app is in.
 SUPPLEMENTAL = [
-    (zcard("Z_DIR_APPS", "files"), "sw/apps/files/files.bin"),
-    (zcard("Z_DIR_APPS", "text"), "sw/apps/text/text.bin"),
     (zcard("Z_DIR_APPS", "sheet"), "sw/apps/sheet/sheet.bin"),
     (zcard("Z_DIR_APPS", "read"), "sw/apps/read/read.bin"),
     (zcard("Z_DIR_APPS", "ask"), "sw/apps/ask/ask.bin"),
@@ -238,14 +237,13 @@ MISC = [
     (zcard("Z_DIR_APPS", "audiotest"), "sw/apps/audiotest/audiotest.bin"),
 ]
 
-# The two shells a term window connects to. init() starts both from the
-# card at boot, repl first -- neither is in the flash archive any more,
-# so these copies are the ONLY copies. See docs/flash_apps.md, "Why repl
-# is not a core app". posix is here rather than in SELFHOST because
-# that is what it is to a user; the compiler and editor it hosts stay
-# below.
+# The shell a term window connects to that lives on the card: posix
+# (about 4MB of RAM, and its compiler's runtime is on the card). The
+# other, repl, is a core app in flash (docs/flash_apps.md, "Why repl is
+# a core app"), so it is not here. posix is here rather than in SELFHOST
+# because that is what it is to a user; the compiler and editor it
+# hosts stay below.
 SHELLS = [
-    (zcard("Z_DIR_APPS", "repl"), "sw/apps/repl/repl.bin"),
     (zcard("Z_DIR_APPS", "posix"), "sw/apps/posix/posix.bin"),
 ]
 
@@ -743,6 +741,18 @@ def build(root, out_path, ark_dir=None, verbose=True, packs=None):
     dupes = sorted(n for n, _ in apps if n in seen or seen.add(n))
     if dupes:
         raise FatError("listed more than once: %s" % ", ".join(dupes))
+
+    # No core app on the card: the card copy would win over the flash
+    # one (docs/flash_apps.md), and a release never updates it.
+    import spec
+    core = set(spec.core_apps(root)[0])
+    pre = zcard("Z_DIR_APPS", "x")[:-1]	# "apps/"
+    on_card = sorted(n for n, _ in apps
+                     if n.startswith(pre) and n[len(pre):] in core)
+    if on_card:
+        raise FatError("core apps must not be on the card (they are in "
+                       "flash; CORE_APPS in the Makefile): %s"
+                       % ", ".join(on_card))
 
     # Check every input up front. Finding out that gamedemo.bin was
     # never built after formatting a 64MB image and copying twelve

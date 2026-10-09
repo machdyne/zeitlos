@@ -566,6 +566,7 @@ uint32_t fs_free(void) {
 uint32_t fs_size(char *path) {
 
 	char rp_[FS_PATH_MAX];
+	char *asked = path;
 	path = (char *)fs_path_resolve(path, rp_, sizeof(rp_));
 
 	FIL f;
@@ -578,6 +579,12 @@ uint32_t fs_size(char *path) {
 	}
 	f_close(&f);
 	k_fs_leave();
+
+	// not on the card: a file in flash, if there is one (zar.h)
+	uint32_t zo, zs;
+	if (res != FR_OK && path == asked && z_zar_file(path, &zo, &zs) == 0)
+		fs = zs;
+
 	return(fs);
 }
 
@@ -811,6 +818,7 @@ FILINFO fs_fno;
 bool fs_stat_info(const char *path, z_fs_info_t *fi) {
 
 	char rp[FS_PATH_MAX];
+	const char *asked = path;
 	bool ok;
 
 	memset(fi, 0, sizeof(*fi));
@@ -826,6 +834,23 @@ bool fs_stat_info(const char *path, z_fs_info_t *fi) {
 	ok = (f_stat(path, &fs_fno) == FR_OK);
 	if (ok) fs_info_from(&fs_fno, fi);
 	k_fs_leave();
+
+	// Not on the card, and not /ram or /usb: the flash underlay
+	// (zar.h) -- a read-only file, or a directory there is only
+	// because files in flash are in it.
+	if (!ok && path == asked) {
+		uint32_t zo, zs;
+		if (z_zar_file(path, &zo, &zs) == 0) {
+			fi->size = zs;
+			fi->attr = Z_FS_ATTR_RDONLY;
+			fi->type = Z_FS_TYPE_FILE;
+			ok = true;
+		} else if (z_zar_is_dir(path)) {
+			fi->attr = Z_FS_ATTR_DIR | Z_FS_ATTR_RDONLY;
+			fi->type = Z_FS_TYPE_DIR;
+			ok = true;
+		}
+	}
 
 	return ok;
 
@@ -863,6 +888,7 @@ DWORD get_fattime(void) {
 void fs_list_dir(char *path) {
 
 	char rp_[FS_PATH_MAX];
+	const char *asked = path;
 	path = (char *)fs_path_resolve(path, rp_, sizeof(rp_));
 
 
@@ -931,46 +957,51 @@ void fs_list_dir(char *path) {
 	// than shown twice -- what `ls` prints should match what `run`
 	// would actually launch, and the card copy is the one that wins
 	// (see fs_exec_resolve()).
-	bool at_root = path[0] == 0 || (path[0] == '/' && path[1] == 0);
-	bool at_apps = fs_prefix_eq(path, Z_DIR_APPS, sizeof(Z_DIR_APPS) - 1) &&
-		(path[sizeof(Z_DIR_APPS) - 1] == 0 ||
-		 (path[sizeof(Z_DIR_APPS) - 1] == '/' && path[sizeof(Z_DIR_APPS)] == 0));
-	if (z_zar_count() && (at_root || at_apps)) {
+	// The flash underlay (sw/os/zar.h, docs/flash_apps.md): what is in
+	// flash under this directory and not on the card. Not for /ram or
+	// /usb, which path resolution has rewritten. At the top level the
+	// apps are named as well as their directory, as they always were:
+	// that is where somebody looks for what can be run.
+	if (z_zar_count() && path == asked) {
 
 		int shown = 0;
-		char name[sizeof(Z_DIR_APPS) + Z_ZAR_NAME_MAX + 1];
-		char *bare = name + sizeof(Z_DIR_APPS);
-		static FILINFO st;	// static: see the f_stat() note below
+		bool at_root = path[0] == 0 || (path[0] == '/' && path[1] == 0);
+		static char full[FS_PATH_MAX];	// static: see the f_stat() note below
+		static FILINFO st;
+		char name[Z_ZAR_NAME_MAX + 1];
+		uint32_t it = 0, size;
+		bool is_dir;
+		size_t plen = strlen(path);
+		while (plen && path[plen - 1] == '/') plen--;
 
-		memcpy(name, Z_DIR_APPS "/", sizeof(Z_DIR_APPS));
+		for (uint32_t zi = 0; at_root && zi < z_zar_count(); zi++) {
+			if (z_zar_is_file(zi) || !z_zar_name(zi, name)) continue;
+			// shadowed by /apps/<name> on the card
+			snprintf(full, sizeof(full), "%s/%s", Z_DIR_APPS, name);
+			if (f_stat(full, &st) == FR_OK) continue;
+			if (!shown) { printf("\nin flash:\n"); shown = 1; }
+			printf("%s\n", name);
+		}
 
-		for (uint32_t zi = 0; zi < z_zar_count(); zi++) {
+		while (z_zar_child(path, &it, name, &size, &is_dir)) {
 
-			if (!z_zar_name(zi, bare)) continue;
-
-			// shadowed by /apps/<name> on the card.
+			// shadowed by the card's own entry of that name.
 			//
-			// f_stat(), NOT fs_exec_info(). fs_exec_info() OPENS the
-			// file, and with FF_FS_TINY=0 (ffconf.h) every FIL carries
-			// its own FF_MAX_SS sector buffer -- so that call put an
-			// extra ~550 bytes of stack inside `ls`, on top of a live
-			// DIR and whatever printf needs, for no reason at all: the
-			// question here is only "does a directory entry with this
-			// name exist", which needs no file handle and no data read.
-			//
-			// That extra depth is a plausible cause of the intermittent
-			// garbled filenames and failed writes seen after the flash
-			// underlay landed -- `ls` was the one command that suddenly
-			// got deeper, and a stack that reaches into the FATFS work
-			// area corrupts exactly the directory buffers being read.
-			if (f_stat(name, &st) == FR_OK) continue;
+			// f_stat(), NOT fs_exec_info() or an open. An open puts a
+			// FIL, and with FF_FS_TINY=0 (ffconf.h) its FF_MAX_SS
+			// sector buffer, on the stack inside `ls`, on top of a live
+			// DIR and whatever printf needs: a plausible cause of the
+			// intermittent garbled filenames and failed writes seen
+			// after the flash underlay first landed -- a stack that
+			// reaches into the FATFS work area corrupts exactly the
+			// directory buffers being read.
+			snprintf(full, sizeof(full), "%.*s/%s", (int)plen, path, name);
+			if (f_stat(full, &st) == FR_OK) continue;
+			if (at_root && is_dir && !strcmp(name, Z_DIR_APPS + 1) && shown) continue;
 
-			if (!shown) {
-				printf("\nin flash:\n");
-				shown = 1;
-			}
-
-			printf("%s\n", bare);
+			if (!shown) { printf("\nin flash:\n"); shown = 1; }
+			if (is_dir) printf("%s/\n", name);
+			else printf("%s  %lu\n", name, (unsigned long)size);
 
 		}
 
@@ -1140,11 +1171,18 @@ static fs_exec_src_t fs_exec_resolve(const char *name, char *resolved,
 	size_t len = strlen(name);
 	if (len + sizeof(FS_APPS_DIR) > FS_RESOLVED_MAX) return FS_EXEC_NONE;
 
-	// 1. a path: exactly as given, and nowhere else
+	// 1. a path: exactly as given -- and, for /apps/<name> that is not
+	// on the card, the app <name> in flash, which is where the file
+	// browser shows it (zar.h, "files")
 	if (is_path) {
 		strcpy(resolved, name);
 		if (fs_exec_info(resolved, info) == 0 && info->total)
 			return FS_EXEC_FS;
+		if (fs_prefix_eq(name, Z_DIR_APPS "/", sizeof(Z_DIR_APPS)) &&
+		    z_zar_exec_info(name + sizeof(Z_DIR_APPS), info) == 0 && info->total) {
+			strcpy(resolved, name + sizeof(Z_DIR_APPS));
+			return FS_EXEC_ZAR;
+		}
 		return FS_EXEC_NONE;
 	}
 

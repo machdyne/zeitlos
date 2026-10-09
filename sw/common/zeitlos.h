@@ -656,7 +656,7 @@ uint32_t z_getpid(void);
 bool z_reboot(void);
 
 // Reconfigure the FPGA from `target`, a flash address (64 KB aligned),
-// through the jumploader at 0x1D0000 -- which the kernel re-points --
+// through the jumploader at 0x200000 -- which the kernel re-points --
 // after syncing open files. Does not return on success; otherwise the
 // reason, negative (k_boot_to() in sw/os/kernel.c: -1 no PROGRAMN, -2
 // no jumploader, -3 could not re-point it, -4 this gateware does not
