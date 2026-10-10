@@ -210,7 +210,17 @@ The pin-to-first-flop path is 4.5ns in the build above. Both MAC
 testbenches (`rtl/tb/tb_ethmac_rmii.v`, `tb_ethmac_rmii_tx.v`,
 including the TX-to-RX loopback) pass with it under Verilator.
 
-### Fitting after 0.0.5: no data cache
+### Fitting after 0.0.5: no data cache (until the line buffer moved)
+
+**The data cache is back.** Two RTL changes freed about 1,600 COMB on this target:
+gpu_video's 640-bit line register moved into block RAM, and the
+blitter's coordinates went from 32 to 16 bits ([color.md](color.md),
+[gpu_blitter.md](gpu_blitter.md)). Measured on the full build, still
+without the cache: **22010 / 24288 (90%)**, `CLK_48` 53.4 MHz, pixel
+clock 46.8 MHz, ETH_REFCLK 84.8 MHz. mozart_ml0 -- the same blocks, and
+it has the data cache -- measured 21686 (89%) and 54.0 MHz. With the
+cache's ~925 COMB lakritz_katze should land near 94%. The history
+below is kept for the measurements.
 
 Since 0.0.5 the Lakritz block gained `USB_HOST` and `COLOR`, and
 dropped `MONTMUL`, `MONTMUL_REGS` and `SHA256` to pay for them
