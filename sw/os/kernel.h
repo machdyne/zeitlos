@@ -55,13 +55,10 @@
 //
 // LEVEL-SENSITIVE, and non-latched in rtl/sysctl.v's LATCHED_IRQ mask
 // for that reason -- the same treatment Z_IRQ_UART and Z_IRQ_AUDIO
-// get. It stays asserted for as long as (IRQSTAT & IRQEN) is non-zero,
-// so the handler MUST clear IRQSTAT before returning or it is
-// re-entered immediately. z_usbh_poll() does that first thing.
-//
-// Unlike Z_IRQ_ETH this can safely be a level rather than a pulse,
-// because the handler CAN lower the source: clearing IRQSTAT is a
-// register write, not something that needs a userspace process to run.
+// get. It stays asserted for as long as (IRQSTAT & IRQEN) is non-zero.
+// The `usb` process holds it (z_irq_bind(), Phase 3): the kernel clears
+// IRQEN when it fires, which lowers it, and `usb` turns IRQEN back on
+// after it has polled (sw/apps/usb/usb.c).
 #define Z_IRQ_USB				9
 // Memory protection fault (rtl/mpu.v, docs/mpu.md): a level, held until
 // the kernel clears the MPU's FAULT_INFO.
@@ -79,6 +76,35 @@ bool k_user_ok(const void *ptr, uint32_t len);
 // ...and word-aligned, for buffers the kernel accesses a word at a time
 // (structures, the syscall arguments themselves).
 bool k_user_ok_words(const void *ptr, uint32_t len);
+
+// -- scheduler trace (sw/os/ktrace.c, docs/kernel.md "Scheduler trace") --
+//
+// Built only with `make KTRACE=1`: a fixed ring of timestamped
+// scheduler events, armed and stopped by Z_SYS_KTRACE (or `ktrace` in
+// the shell) and printed by `ktrace`. In a normal build k_trace() is
+// nothing and costs nothing.
+enum {
+	K_TR_SEND = 1,		// a: recipient pid
+	K_TR_UNBLOCK,		// a: pid | 0x100 if it was BLOCKED (else WAKE recorded)
+	K_TR_BLOCK,			// a: timeout ticks
+	K_TR_NOBLOCK,		// a: 1 WAKE consumed, 2 mail waiting
+	K_TR_YIELD,			// a: 1 timer(1), 0 waitirq, 2 already runnable
+	K_TR_IRQ,			// a: pending irq bits
+	K_TR_SWITCH,		// a: pid switched to
+	K_TR_KEEP,			// a: 1 k_sched_switch kept the current process
+	K_TR_RESCHED,		// owed switch requested by k_fs_leave()
+	K_TR_DEFER,			// KTIMER swap deferred by the filesystem guard
+	K_TR_TICK,			// a: 0 KTIMER branch entered, 1 after USB poll, 2 after the sweep
+	K_TR_HANDOFF,		// a: pid handed the CPU by a process that blocked after sending to it
+	K_TR_STEP,			// a: where k_sched_switch() is -- 1 GPU clip saved, 2 registers saved, 3 MMU/MPU set, 4 GPU clip restored
+};
+z_obj_t *k_ktrace(z_obj_t *args);	// Z_SYS_KTRACE, in every build
+#ifdef KTRACE
+void k_trace(uint32_t ev, uint32_t a);
+void k_ktrace_cmd(const char *arg);	// the shell's `ktrace [arm|off]`
+#else
+#define k_trace(ev, a) ((void)0)
+#endif
 
 typedef struct {
 
@@ -123,6 +149,30 @@ typedef struct {
 	uint32_t		gpu_blit_clip[4];
 	uint8_t			gpu_clip_valid;
 
+	// The MPU grant window (docs/mpu.md, sw/common/zproc.h Z_GRANT_*):
+	// the process whose memory this driver has open, as pid + 1 so
+	// that 0 means none.
+	uint32_t		gwin;
+
+	// The MPU's MASK while this process runs: which address nibbles it
+	// may use (docs/mpu.md). Z_MPU_MASK_DEFAULT for an app; all of them
+	// for a driver, which drives hardware -- the SD card's nibble is
+	// the one an app is denied. Written on every switch where it
+	// differs from what the MPU holds.
+	uint32_t		mpu_mask;
+
+	// The process this one last woke by sending it a message, as
+	// pid + 1 (0: none). When this one then blocks -- a request sent,
+	// waiting for the answer; an answer sent, waiting for the next
+	// request -- the CPU goes to that process next, ahead of the
+	// round-robin order (k_sched_switch(), "hand-off"). Set by
+	// k_msg_send(), cleared on every switch away from this process.
+	uint32_t		handoff;
+
+	// Cycles this process has run, interrupts excluded (kernel.c,
+	// "CPU accounting"; Z_SYS_CPU_STAT).
+	uint64_t		cpu_cycles;
+
 } z_proc;
 
 // Z_PROC_FLAG_ACTIVE / _DIE / _BLOCKED are defined in
@@ -142,6 +192,11 @@ void k_proc_exit_record(uint32_t pid, int32_t status);
 z_obj_t *k_proc_status(z_obj_t *args);
 void k_proc_unblock(uint32_t pid);
 z_obj_t *k_proc_wait(z_obj_t *args);
+void k_proc_wait_ticks(uint32_t ticks);	// kernel code, in its own process
+z_obj_t *k_msg_recv(z_obj_t *args);	// Z_SYS_MSG_RECV
+z_obj_t *k_mpu_grant(z_obj_t *args);	// Z_SYS_MPU_GRANT
+z_obj_t *k_irq(z_obj_t *args);		// Z_SYS_IRQ
+z_obj_t *k_cpu_stat(z_obj_t *args);	// Z_SYS_CPU_STAT
 
 // Z_SYS_WM_WAKE: unblock whoever subscribed to pointer reports
 // (Z_SYS_HID_PTR_SUBSCRIBE, sw/os/hid.c). For input that reaches the
@@ -159,43 +214,58 @@ void k_proc_yield_blocked(void);
 	(((p).flags & (Z_PROC_FLAG_ACTIVE | Z_PROC_FLAG_BLOCKED)) \
 		== Z_PROC_FLAG_ACTIVE)
 
+
 // 32, not 16 -- and NOT 64, which was tried and did not fit.
 //
 // Each slot is z_procs[] at 148 bytes plus z_mailboxes[] at 780, so
 // 928 bytes; 32 slots is 29KB against 16's 15KB.
 //
-// -- why this is a FLASH budget, not just a RAM one --
+// -- a RAM budget, and no longer a flash one --
 //
-// Kernel .bss costs image bytes, one for one. sw/os/Makefile links
-// kernel.bin with `objcopy --pad-to=_end`, so .bss is present in the
-// file as zeros, because the BIOS copies a FIXED 256KB from flash
-// (ROM_OS_SIZE, sw/bios/bios.c) and that copy is what zeroes .bss.
-// Anything past the end of the file would be filled with whatever
-// happens to be in flash after it.
-//
-// So `_end` must stay under 256KB, and every static array in the
-// kernel spends that budget. 64 slots put the image at 269,784 bytes
-// -- 7,640 over -- and the first sign of it was the BIOS truncating
-// the kernel on a real board.
+// Until Phase 3 kernel .bss cost image bytes one for one: kernel.bin
+// was padded to _end, on the belief that the BIOS copy was what zeroed
+// .bss. The toolchain's crt0 does that (sw/os/Makefile checks), so the
+// image now stops at _edata. 64 slots once put the padded image at
+// 269,784 bytes, 7,640 over the 256KB the BIOS copied then, and the
+// first sign was the BIOS truncating the kernel on a real board.
 //
 // 32 is comfortably enough for what raised it: docs/posix.md's Phase 5
 // runs one process per pipeline stage, and a four-stage pipeline
 // alongside wm/net/repl/term/posix/zcc is about a dozen.
 //
-// The padding is NOT the thing to remove if more slots are ever
-// wanted -- it is load-bearing, and dropping it would leave .bss
-// holding whatever the BIOS copied out of the flash beyond the image.
-// The options, in order of how much they disturb:
-//
-//   1. Z_MAILBOX_DEPTH (zmsg.h), which is 84% of a slot's cost at 780
-//      bytes against z_procs[]'s 148. Halving it to 16 halves that.
-//   2. A per-board Z_PROCS_MAX, which needs a board define in the
-//      kernel build -- sw/os/Makefile passes only ARCH_DEFS today.
-//   3. Moving Z_ZAR_FLASH_OFFSET (zar.h, 0x140000) and ROM_OS_SIZE
-//      (sw/bios/bios.c) to give the kernel more than 256KB. That is a
-//      flash-layout change: it moves the core-app archive, so a board
-//      flashed with the old layout and a new BIOS finds neither.
+// More slots cost RAM on every board (the smallest has 1MB). If ever
+// wanted, the cheapest place is Z_MAILBOX_DEPTH (zmsg.h), 84% of a
+// slot's cost at 780 bytes against z_procs[]'s 148.
 #define Z_PROCS_MAX 32
+
+#include "kpidset.h"	// k_pidset_t, sized from Z_PROCS_MAX above
+
+// Change a process's flags. EVERY write to z_procs[].flags goes through
+// here, because the scheduler no longer reads them slot by slot: it
+// keeps two pid sets -- k_run_set (Z_PROC_RUNNABLE) and k_die_set
+// (Z_PROC_FLAG_DIE, waiting to be reaped) -- and this keeps them in
+// step. A direct write to .flags would leave the sets stale, and the
+// scheduler would skip a process that can run or run one that cannot.
+// docs/kernel.md, "The scheduler".
+void k_proc_flags(uint32_t pid, uint32_t set, uint32_t clear);
+
+// A process has just set a wake deadline (wake_tick): the tick's sweep
+// looks only at these (k_sleep_set). Call it wherever wake_tick is set
+// non-zero.
+void k_sleep_note(uint32_t pid);
+
+// The tick's own cost and the two comparison switches -- kernel.c,
+// "the tick's own cost"; the shell's `tick`. KDIAG=1 builds only.
+#ifdef KDIAG
+extern volatile uint32_t k_tick_n, k_tick_sw, k_tick_max;
+extern volatile uint64_t k_tick_cyc;
+extern volatile bool k_tick_sleepset;
+#endif
+extern volatile int32_t k_sched_late;	// `sched`, sh.c
+extern volatile bool k_sched_drvwake;
+extern volatile k_pidset_t k_run_set;
+extern volatile k_pidset_t k_die_set;
+extern volatile k_pidset_t k_drv_set;	// Z_PROC_FLAG_DRIVER
 
 // Per-process stack+heap allowance (see mem.h's own comment on why
 // there's no separate heap region at all -- this is the ONLY room a
@@ -299,9 +369,17 @@ extern volatile uint32_t k_no_preempt;
 void k_fs_enter(void);
 void k_fs_leave(void);
 
-// The kernel work k_deferred_request() (uart.h) asked for, run by pid 0
-// while it waits for input.
-void k_deferred_run(void);
+// Restarting a driver that crashed (kernel.c, "restarting a driver"):
+// pid 0 asks before it waits for input, and runs what is due.
+// k_drv_start() is sh.c's: how a driver is started, as at boot.
+void k_drv_crashed(uint32_t pid);
+uint32_t k_drv_restart_wait(void);
+void k_drv_restart_run(void);
+void k_drv_start(const char *name);
+
+// Wake the driver holding an interrupt line, as if it had fired
+// (kernel.c). hid.c's way of telling `usb` the lock LEDs changed.
+void k_irq_poke(uint32_t irq);
 
 // --
 

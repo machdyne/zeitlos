@@ -644,9 +644,9 @@ static inline uint32_t z_soc_mem_mb(void) {
 
 #define Z_FLASH_REGION_SIZE   0x100000u
 #define Z_FLASH_BASE_DEFAULT  0x100000u
-#define Z_FLASH_KERNEL_OFF    0x000000u	// 256 KB: sw/bios/bios.c ROM_OS_SIZE
-#define Z_FLASH_ZAR_OFF       0x040000u	// core apps, up to Z_FLASH_ZAR_END
-#define Z_FLASH_ZAR_END       0x0FC000u	// the flash test sector (752 KB of apps)
+#define Z_FLASH_KERNEL_OFF    0x000000u	// 160 KB: sw/bios/bios.c ROM_OS_SIZE
+#define Z_FLASH_ZAR_OFF       0x028000u	// core apps, up to Z_FLASH_ZAR_END
+#define Z_FLASH_ZAR_END       0x0FC000u	// the flash test sector (848 KB of apps)
 #define Z_FLASH_TEST_OFF      0x0FC000u	// the 4 KB sector `flashtest` uses
 #define Z_FLASH_KV_OFF        0x0FE000u	// key/value store: the last Z_KV_SIZE
 
@@ -1334,7 +1334,7 @@ static inline uint32_t z_icache_line_words(void) {
 //
 // MUST be called after writing code into main memory and BEFORE
 // jumping to it, on bitstreams with wb_icache (rtl/cache.v). Three
-// places in this codebase do that: fs_load_exec() (sw/os/fs/fs.c),
+// places in this codebase do that: fs_load_exec() (sw/apps/fs/fs.c),
 // z_zar_load_exec() (sw/os/zar.c) and load_zeitlos() (sw/bios/bios.c).
 // With `DCACHE (rtl/cache_id.v) the instruction side snoops stores and
 // this is not needed, but stays harmless.
@@ -1388,6 +1388,10 @@ static inline void z_icache_enable(bool on) {
 #define reg_mpu_fault_info  (*(volatile uint32_t*)0x9000011c)
 #define reg_mpu_count       (*(volatile uint32_t*)0x90000120)
 #define reg_mpu_info        (*(volatile uint32_t*)0x90000124)
+// MPU version 2 (z_mpu_version() >= 2): the grant window, [GBASE,
+// GLIMIT) physical, a second region an app may store to. Kernel-only.
+#define reg_mpu_gbase       (*(volatile uint32_t*)0x90000128)
+#define reg_mpu_glimit      (*(volatile uint32_t*)0x9000012c)
 
 #define Z_MPU_CTRL_ENABLE   (1u << 0)
 #define Z_MPU_CTRL_ENFORCE  (1u << 1)   // block; otherwise report only
@@ -1413,6 +1417,11 @@ static inline void z_icache_enable(bool on) {
 
 static inline bool z_mpu_present(void) {
 	return ((reg_mpu_info >> 16) & 0xffffu) == Z_MPU_MAGIC;
+}
+
+// 1: the original MPU; 2: adds the grant window. 0 if there is no MPU.
+static inline uint32_t z_mpu_version(void) {
+	return z_mpu_present() ? (reg_mpu_info & 0xffffu) : 0;
 }
 
 // -- data cache (rtl/cache_id.v, docs/dcache.md) --

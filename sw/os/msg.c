@@ -115,6 +115,39 @@ z_rv z_mailbox_pop(uint32_t pid, z_msg_envelope_t *msg) {
 
 }
 
+// The first message in pid's mailbox with this subject and tag, taken
+// out from wherever it sits -- the rest stay queued in order. For a
+// process waiting for one particular reply (a request to a driver, say)
+// while other mail -- wm's, a port's -- keeps arriving: that mail must
+// not be lost, and must not be read early either.
+z_rv z_mailbox_pop_match(uint32_t pid, uint32_t subject, uint32_t tag,
+	z_msg_envelope_t *msg) {
+
+	uint32_t old_mask = maskirq(0xFFFFFFFF);
+	z_mailbox_t *mb = (z_mailbox_t *)&z_mailboxes[pid];
+	uint32_t n = mb->count, k = mb->head;
+
+	for (uint32_t i = 0; i < n; i++, k = (k + 1) % Z_MAILBOX_DEPTH) {
+		if (mb->msgs[k].subject != subject || mb->msgs[k].tag != tag)
+			continue;
+		*msg = mb->msgs[k];
+		// close the gap: everything after it moves up one
+		for (uint32_t j = i + 1; j < n; j++) {
+			uint32_t to = k;
+			k = (k + 1) % Z_MAILBOX_DEPTH;
+			mb->msgs[to] = mb->msgs[k];
+		}
+		mb->tail = (mb->tail + Z_MAILBOX_DEPTH - 1) % Z_MAILBOX_DEPTH;
+		mb->count--;
+		maskirq(old_mask);
+		return Z_OK;
+	}
+
+	maskirq(old_mask);
+	return Z_FAIL;
+
+}
+
 // -- pointer resolution --
 
 // convert a pointer that was created by process `pid` (i.e. it's
@@ -374,6 +407,7 @@ z_obj_t *k_msg_send(z_obj_t *args) {
 
 	if (z_mailbox_push(msg->to, &env) != Z_OK)
 		return (&z_fail);
+	k_trace(K_TR_SEND, msg->to);
 
 	// The recipient may be blocked waiting for exactly this. Waking it
 	// here rather than leaving it to the KTIMER sweep is what makes the
@@ -382,8 +416,38 @@ z_obj_t *k_msg_send(z_obj_t *args) {
 	// this whole change is meant to remove. No-op if it wasn't blocked.
 	k_proc_unblock(msg->to);
 
+	// If the sender blocks next, the recipient runs next (kernel.h,
+	// z_proc.handoff). From an interrupt handler z_pid is whoever was
+	// interrupted, which then hands off to the recipient when it next
+	// blocks -- harmless, and that recipient (wm, for input) is the
+	// one that should run.
+	if (z_pid < Z_PROCS_MAX && msg->to != z_pid)
+		z_procs[z_pid].handoff = msg->to + 1;
+
 	return (&z_ok);
 
+}
+
+// Fill msg from an envelope just taken out of the caller's mailbox,
+// resolving its payload for the caller (see z_resolve_obj()).
+static void k_msg_deliver(z_msg_t *msg, z_msg_envelope_t *env) {
+	msg->to = env->to;
+	msg->from = env->from;
+	msg->subject = env->subject;
+	msg->tag = env->tag;
+	msg->obj = env->obj;
+	uint32_t tcount = 0, icount = 0, bcount = 0;
+	z_resolve_obj(env->from, &msg->obj, msg->_tables, &tcount,
+		msg->_items, &icount, msg->_blobs, &bcount);
+}
+
+// k_msg_read() for one subject and tag (z_mailbox_pop_match()).
+z_obj_t *k_msg_read_match(z_msg_t *msg, uint32_t subject, uint32_t tag) {
+	z_msg_envelope_t env;
+	if (z_mailbox_pop_match(z_pid, subject, tag, &env) != Z_OK)
+		return (&z_fail);
+	k_msg_deliver(msg, &env);
+	return (&z_ok);
 }
 
 z_obj_t *k_msg_read(z_obj_t *args) {
@@ -443,16 +507,48 @@ z_rv z_msg_new_send(uint32_t to, uint32_t subject, uint32_t tag, z_obj_t obj) {
 	return z_msg_send(&msg);
 }
 
+// The app-facing z_msg_recv_match(), for kernel code acting as a client
+// of a driver (kfs.c, through zfsc.c): the calling process -- pid 0, or
+// an app inside a syscall -- waits, blocked, for the one reply.
+z_obj_t *k_msg_recv(z_obj_t *args);
+z_rv z_msg_recv_match(z_msg_t *msg, uint32_t subject, uint32_t tag,
+	uint32_t timeout_ticks) {
+	z_msg_recv_args_t a;
+	a.msg = msg;
+	a.timeout = timeout_ticks;
+	a.flags = Z_MSG_RECV_MATCH;
+	a.subject = subject;
+	a.tag = tag;
+	return k_msg_recv((z_obj_t *)&a)->val.uint32;
+}
+
+// Any message, blocked until one comes or the timeout (zstream.c's
+// consumer, in the kernel shell's tget).
+z_rv z_msg_recv(z_msg_t *msg, uint32_t timeout_ticks) {
+	z_msg_recv_args_t a;
+	a.msg = msg;
+	a.timeout = timeout_ticks;
+	a.flags = 0;
+	a.subject = 0;
+	a.tag = 0;
+	return k_msg_recv((z_obj_t *)&a)->val.uint32;
+}
+
+z_rv z_msg_take_match(z_msg_t *msg, uint32_t subject, uint32_t tag) {
+	z_msg_recv_args_t a;
+	a.msg = msg;
+	a.timeout = 1;
+	a.flags = Z_MSG_RECV_MATCH | Z_MSG_RECV_NOWAIT;
+	a.subject = subject;
+	a.tag = tag;
+	return k_msg_recv((z_obj_t *)&a)->val.uint32;
+}
+
 z_rv z_msg_wait_timeout(z_msg_t *msg, uint32_t subject, uint32_t tag, uint32_t timeout_ticks) {
-	uint32_t start = z_kernel_ticks;
-	while (z_kernel_ticks - start < timeout_ticks) {
-		if (z_msg_read(msg) == Z_OK) {
-			if (msg->subject == subject && msg->tag == tag)
-				return Z_OK;
-			// not the message we're waiting for -- discard and keep going
-		}
-	}
-	return Z_FAIL;
+	// Blocked, not spinning (see z_msg_recv() above): matching on
+	// (subject, tag), so other mail stays queued instead of being
+	// thrown away as the old loop did.
+	return z_msg_recv_match(msg, subject, tag, timeout_ticks ? timeout_ticks : 1);
 }
 
 uint32_t z_uptime_ticks(void) {

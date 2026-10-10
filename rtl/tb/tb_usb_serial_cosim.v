@@ -1,7 +1,7 @@
 /*
  * Zeitlos SOC -- simulation only.
  *
- * USB serial co-simulation: the REAL sw/os/usb driver, including the
+ * USB serial co-simulation: the REAL sw/apps/usb driver, including the
  * USB serial dispatch (usbh_cdc.c) and the CP210x driver
  * (usbh_cp210x.c), against the REAL rtl/usb gateware and two serial
  * device models (tb_usb_device.v, SER=1 and SER=2). See

@@ -1,7 +1,7 @@
 /*
  * Zeitlos -- simulation only.
  *
- * Co-simulation: the real sw/os/usb driver against the real rtl/usb
+ * Co-simulation: the real sw/apps/usb driver against the real rtl/usb
  * gateware. See rtl/tb/cosim/usbh_vpi.c for how the two are joined.
  *
  * This is the test that neither half could do alone. tb_usb_host.v

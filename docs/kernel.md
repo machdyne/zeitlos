@@ -72,7 +72,7 @@ where an unbounded wait is unrecoverable and a `printf` is a hang (see
 
 It costs 40 bytes per process slot, which at `Z_PROCS_MAX` of 32 is
 1,280 bytes of `.bss` -- and therefore 1,280 bytes of the 256KB flash
-image, for the reason "The 256KB image budget" below explains.
+image, for the reason "The kernel image budget" below explains.
 
 ### Memory for a process
 
@@ -103,6 +103,224 @@ per-process allocation.
 Round-robin over runnable processes, driven by the KTIMER interrupt at
 `Z_TICK_HZ` (~732Hz at 48MHz). `Z_PROC_RUNNABLE()` is "active and not
 blocked".
+
+**The scheduler works from two bitmasks, not the table.**
+`k_run_mask` has a bit for each runnable pid and `k_die_mask` one for
+each process waiting to be reaped. Counting runnable processes is a
+popcount and finding the next one is a mask and a count of trailing
+zeros. It used to walk all 32 slots for each, twice per switch, and the
+scheduler trace measured ~175 cycles for every slot passed: each slot
+is its own 188-byte `z_proc`, so every read was a trip to memory.
+
+**So every change to a process's flags goes through
+`k_proc_flags(pid, set, clear)`**, which updates the flags and the
+masks together with interrupts masked. A direct write to
+`z_procs[].flags` leaves the masks stale -- the scheduler would then
+skip a process that can run, or run one that cannot.
+
+**When there is nobody to switch to**, `k_sched_switch()` must leave
+`z_pid` on the process it came from, whose registers it returns. The
+old slot walk did that by accident -- 32 steps from any pid come back
+to it -- and the first pid-set walk did not: when reaping a dying
+process left nothing runnable, it returned with `z_pid` on the reaped
+slot, and the process actually running was later resumed from a stale
+frame. That crashed `net` (October 2026). Now the walk remembers where
+it started; and if that process was itself the one reaped, the kernel's
+own process (pid 0) takes the CPU. A dying process is also never
+"kept" as the only runnable one: that resumed a crashed app at its
+next instruction, which crashed again, once per instruction.
+
+The masks are **pid sets** (`k_pidset_t`, `sw/os/kpidset.h`): one bit
+per pid, as many 32-bit words as `Z_PROCS_MAX` needs. At 32 that is one
+word and the code is what a bare `uint32_t` would be. A new per-pid set
+anywhere in the kernel should be one of these, not `1u << pid`.
+`sw/os/tests/test_pidset.c` checks the next-pid search against the slot
+walk it replaced at 32, 64, 100, 128 and 256.
+
+**Who goes next when a process blocks.** The tick's switch is plain
+round robin. A switch caused by a process blocking picks in this
+order:
+
+1. **The hand-off.** If the process that blocked had just sent a
+   message, the CPU goes to the recipient, if that process is now
+   runnable (`z_proc.handoff`, set by `k_msg_send()` and cleared on
+   every switch away from the sender). A request to a driver is
+   "send, then wait for the answer", and the answer is "send, then
+   wait for the next request". With the hand-off, both hops go
+   straight to the other side. Before it, the answer's hop went round
+   the run queue, and every runnable process took a whole tick first:
+   with one CPU-bound process running, a request to `fs` cost ~8ms
+   instead of ~2ms. The blocking process only gives up the rest of
+   its own turn, so no other process waits longer than it would
+   without the hand-off.
+2. **A runnable driver** (`k_drv_set`). This also applies when an
+   interrupt has woken a bound driver.
+3. **Round robin.**
+
+A message sent from an interrupt handler sets the hand-off on whichever
+process was interrupted. When that process next blocks, the recipient
+(`wm`, for input) goes first, which is no harm. The trace shows each
+hand-off as `handoff <pid>` (`KTRACE=1`).
+
+### CPU accounting
+
+Every build counts where the cycles go. A process is charged from the
+cycle it is switched in to the start of the interrupt that switches it
+out, minus the interrupts in between. Each interrupt's time is counted
+by kind: the tick, the USB controller, IRQ 0 (a process blocked or a
+deferred switch; this is the switch path of every message round trip),
+and the rest. The time spent in `waitirq` with nothing to run is
+counted as idle. The cost is a few cycles per interrupt and per switch.
+
+The idle span is closed at the entry of the interrupt that ends the
+wait, because that interrupt may switch to another process. The
+first version measured `waitirq`'s own return instead. On a switch,
+that span covered everything other processes ran in the meantime,
+and counting it pushed later charges past zero: they wrapped, and
+`ps` showed `used` figures larger than the uptime. A charge that
+would be negative is now dropped.
+
+`cpu_ticks` (in `ps` and `z_proc_info_t`) cannot see this. It charges
+whoever is running when a tick lands, so a process that runs between
+ticks is invisible: a driver woken by an interrupt, or a client and a
+server bouncing messages. The kernel's own interrupt work is invisible
+too. In round 7c, `ipcbench` [7] found ~37% of the CPU gone while every
+tick was billed to `ipcbench` itself.
+
+- `ps` prints both lines: `used` per pid, and `kernel: tick usb yield
+  other idle`, all in units of 65,536 cycles so they compare with
+  `cpu`.
+- `z_cpu_stat()` (`Z_SYS_CPU_STAT`, `z_cpu_stat_args_t` in `zproc.h`)
+  returns the raw counts. `ipcbench` samples it around [7] and around
+  the filesystem tests and prints the shares, together with the count
+  and average cost of each kind of interrupt.
+
+### What a tick costs
+
+The scheduler trace of October 2026 showed each KTIMER interrupt
+spending ~7,500 cycles in the handler before anything visible
+happened, and ~7,000 more when it switched -- out of a 65,536-cycle
+tick. On a CPU that does ~8,000 instructions in a timeslice, that ratio
+is the question, more than 732 Hz itself. So it is measured, in every
+build:
+
+```
+> tick              handler cycles per tick (avg, max), switches, % of CPU
+> tick reset        start a new window
+> tick sleepset on|off
+```
+
+The figure runs from the KTIMER branch's start to the handler's exit;
+`irq_vec`'s register save and restore (~1,500 cycles each) come on top.
+`ipcbench` section [7] measures the other side: what a process that
+never blocks loses in half a second, to the tick and to whatever else
+runs.
+
+Two things the tick did on every beat. The first is behind a switch
+for comparing (on by default); the second left with the USB stack:
+
+- **`sleepset`**: the wake sweep looks only at processes that set a
+  deadline (`k_sleep_set`, noted by `k_sleep_note()` wherever
+  `wake_tick` is set), rather than every slot. A stale bit costs one
+  look and is cleared; it can never lose a wake. `off` is the old
+  walk of all 32 slots.
+- **The USB poll**, which `tick usbpoll off` used to switch off for
+  measuring. Since Phase 3 the tick does not touch USB at all: the
+  stack is the `usb` process, woken by IRQ 9 and by its own timeouts
+  ([usb_driver.md](usb_driver.md)).
+
+Measured with only the kernel shell running, before Phase 3: 11,712
+cycles a tick in the handler by default (17.9% of the CPU), 13,608 with
+the old sweep, 7,328 with the old sweep and no USB poll -- plus ~3,000 a
+tick of register save and restore. The sleeper set saves ~1,900 cycles
+a tick; the USB poll cost ~6,300.
+
+So the kernel tick first stepped USB fully only while it had to (every
+tick while enumerating, every eighth once settled), and then stopped
+stepping it at all. `usb` keeps the same pace as a process
+(`z_usbh_wait_ticks()`), and wakes for nothing once settled with no
+hub.
+
+### The tick rate
+
+**Not changed; recorded here for when it is reconsidered.**
+
+732 Hz is 48 MHz / 65,536, from a 16-bit counter in `rtl/sysctl.v`
+(`rtc_ctr`). On this CPU a 1.37 ms timeslice is only ~8,000
+instructions, so the beat's fixed cost is large in proportion: before
+the changes above, ~22% of the CPU with nothing to do.
+
+What the rate decides, under the responsiveness criterion
+([userspace_drivers.md](userspace_drivers.md)):
+
+- **Not idle latency.** A message or an interrupt wakes its process at
+  once; nothing waits for a tick when the CPU is free.
+- **Latency under load.** A woken process runs when the running one
+  blocks or the tick arrives: up to one tick (1.4 ms at 732 Hz, 2.7 ms
+  at 366 Hz -- both small against a 16.7 ms frame).
+- **Sharing between processes that never block**, a tick each per turn.
+- **Granularity of timed sleeps and timeouts.**
+
+The decision rule, when there are new `tick` and `ipcbench` [7] figures
+after the changes above:
+
+1. Quiet tick (handler plus ~3,000 cycles of save/restore) **under
+   ~6% of the CPU**: keep 732 Hz.
+2. **Over ~10%**: halve it to 366 Hz (a 17-bit `rtc_ctr`), which halves
+   the cost and doubles the latency bound to a still-small 2.7 ms.
+3. Before any change, the ~40 hard-coded `732`s in `sw/` (zstream, zdns,
+   zport, sh.c, the ms-to-ticks helper, tests) are converted to
+   `Z_TICK_HZ`, which is already defined from the clock in `zsoc.h`. A
+   rate change is then the RTL counter and that one define.
+
+**Measured after round 5c** (October 2026, sleeper set on, USB
+stepped every eighth tick when settled), with only the kernel shell:
+
+| | cycles per tick | share of the CPU |
+|---|---:|---:|
+| `tick`, handler only, while the shell waits for input | 8,340 avg | 12.7% (+4.6% save/restore) |
+| `ipcbench` [7], whole interruption, while a tiny loop runs | ~6,300 (7 in 8 ticks), ~12,300 (the USB tick) | 12.1% in all |
+
+The same handler costs more when it interrupts the shell than a tiny
+loop: the instruction cache. The handler's code is cold after whatever
+it interrupted, so it runs largely from memory -- the figure depends on
+what the machine is doing, and ~10-17% of the CPU is the honest range.
+
+**By the rule above that is the "halve it" zone**, and the
+recommendation is recorded rather than acted on: when the rate is next
+touched, convert the hard-coded `732`s to `Z_TICK_HZ`, then go to
+366 Hz -- or, if the tick is reworked anyway, tickless. Either way the
+USB driver leaving the kernel (phase 3) has taken the USB stepping out
+of the handler for good.
+
+The longer-term alternative is **tickless**: a one-shot deadline for
+the next wake-up instead of a fixed beat. The CPU's own countdown timer
+(`timer()`, IRQ 0) already serves the yield; using it for deadlines too
+would remove the idle tick entirely. A bigger change, worth it only if
+the cheap tick is not cheap enough.
+
+### Diagnostics build
+
+`make -C sw/os clean && make -C sw/os KDIAG=1` adds the shell's
+`bench`, `sdbench` and `tick` and the per-tick counters behind `tick`.
+They were in every kernel; they are measuring tools, and the image is
+tight until the drivers leave it, so they are a build option now, like
+`USBH_DEBUG` and `KTRACE`. Off: 254,012 bytes. `KDIAG=1`: 259,648.
+`KTRACE=1`: 257,564. **Both at once do not fit** (263,200): build one
+or the other.
+
+### Raising Z_PROCS_MAX past 32
+
+Not done, and not planned yet -- but the places that would have to be
+looked at are worth writing down while they are known:
+
+| | |
+|---|---|
+| per-pid sets | `k_pidset_t` (the scheduler, the UART's waiting writers): nothing to do |
+| `z_procs[]`, `z_mailboxes[]` | ~1KB of `.bss` per slot, so of the 256KB image; see "The limits, and raising them" below |
+| `Z_PIDREG_MAX` | names, 64 today; see below |
+| the scheduler trace | `ktrace.c` stores a pid in 16 bits: fine to 65535 |
+| apps | anything that stores a pid in a byte, or assumes pids below 32. None known in `sw/os`; not audited in `sw/apps` |
 
 A process blocks by calling `z_proc_wait(ticks)`, and is woken either
 by the tick deadline or by a message arriving (`k_proc_unblock()`,
@@ -216,35 +434,55 @@ The same hazard, from the other side, is why `libz` is built
 
 ### Preempt deferral
 
-FatFs is not reentrant, so a process inside a filesystem syscall is not
-preempted (`k_no_preempt`, capped at `K_NO_PREEMPT_MAX_TICKS`, 64
-ticks / ~87ms). See `docs/filesystem.md`.
+FatFs was not reentrant, so a process inside a filesystem syscall was
+not preempted (`k_no_preempt`, capped at `K_NO_PREEMPT_MAX_TICKS`, 64
+ticks / ~87ms), and the USB syscalls were held the same way because
+they shared the transaction engine with mass storage. Both reasons have
+gone with FatFs (Phase 2) and the USB stack (Phase 3): **no syscall
+holds the scheduler any more.** The mechanism stays for the kernel's
+own short critical sections (`k_fs_enter()` in `cfg.c` and
+`kvstore.c`). A swap deferred by it is owed and paid when the guard
+drops (`k_resched_owed`), not dropped.
 
-That cap is a real one, not a formality: past it the deferral gives up
-and the switch happens anyway, which is the safe direction but means
-the protection stops. A syscall that could exceed it should use the
-chunked API instead of a whole-file call.
+## The kernel image budget
 
-## The 256KB image budget
+**160KB since Phase 3** ([usb_driver.md](usb_driver.md)). Two things
+happened together:
 
-**Every byte of kernel `.bss` costs a byte of flash image.** This is
-the least obvious constraint in the system and it is easy to walk into.
+- **The USB host stack left** for the `usb` process (about 34KB of
+  code and `.bss`).
+- **The image stopped carrying `.bss`** (57KB of zeros).
 
-`sw/os/Makefile` links `kernel.bin` with `objcopy --pad-to=_end`, so
-`.bss` is present in the file as zeros rather than stopping at
-`_edata`. That is deliberate and load-bearing: the BIOS copies a
-**fixed** 256KB from flash (`ROM_OS_SIZE`, `sw/bios/bios.c`) into main
-memory, and **that copy is what zeroes `.bss`**. Stop padding and the
-kernel starts with `.bss` full of whatever sits in flash after the
-image.
+`kernel.bin` went from 223,852 bytes to 134,264, and the kernel's flash
+region from 224KB to 160KB, with the core-app archive starting there.
+It was 224KB from Phase 2b (the filesystem left) and 256KB before;
+the history below says what it was when it happened. Builds: default
+134,264 (29,576 free), `KTRACE=1 KDIAG=1` 138,564.
+
+**`.bss` is not in the image.** Until Phase 3, `sw/os/Makefile` linked
+`kernel.bin` with `objcopy --pad-to=_end`, so `.bss` was in the file as
+zeros, on the belief that the BIOS copy was what zeroed it. It was not
+the only thing. The kernel's `_start` -- the first instruction at
+`0x40000000` -- is the toolchain's crt0, and it memsets
+`__bss_start`..`_end` before anything else runs. The padding was
+redundant, and cost a byte of flash per byte of `.bss`. Without it:
+
+- **The BIOS copies `ROM_OS_SIZE`** (`sw/bios/bios.c`, 160KB; an older
+  BIOS copies more, which only adds archive bytes past the image). What
+  lands past `_edata` is garbage that crt0 then zeroes, up to `_end`.
+- **`sw/os/Makefile` checks the crt0:** it fails the build if `_start`
+  does not call `memset`, since a toolchain whose crt0 did not would
+  leave `.bss` holding flash.
+- **`.bss` is a RAM cost now, not a flash one.** RAM is still finite: the
+  smallest board has 1MB.
 
 So:
 
 | | |
 |---|---|
-| flash layout | the 1 MB Zeitlos region at the base `rtl/csrs.v` word 63 reports (`z_flash_base()`; `0x100000` on ECP5, `0x300000` on Artix-7): kernel at `+0`, 256KB, core-app archive (`Z_ZAR_FLASH_OFFSET`) immediately after at `+0x40000`, room to `+0xD0000` (the jumploader on ECP5, `docs/zboot.md` section 5), the key/value store in the last 8 KB. `docs/boot.md`, "The flash layout" |
-| the limit | `_end` must be under 256KB |
-| what spends it | text, data, **and every static array in the kernel** |
+| flash layout | the 1 MB Zeitlos region at the base `rtl/csrs.v` word 63 reports (`z_flash_base()`; `0x100000` on ECP5, `0x300000` on Artix-7): kernel at `+0`, 160KB, core-app archive (`Z_ZAR_FLASH_OFFSET`) immediately after at `+0x28000`, to `+0xFC000`, the flashtest sector, the key/value store in the last 8 KB. `docs/boot.md`, "The flash layout" |
+| the limit | `kernel.bin` (text and data) under 160KB (`KERNEL_MAX_SIZE`) |
+| what spends it | code and initialised data; `.bss` spends RAM |
 | failure mode | the BIOS truncates; the kernel boots and then misbehaves |
 
 That last row is why `sw/os/Makefile` now **fails the build** if
@@ -401,7 +639,10 @@ page-sized rounding between segments goes.
 
 ### If more room is ever needed
 
-In order of how much they disturb:
+The long-term answer is [userspace_drivers.md](userspace_drivers.md):
+the filesystem, SD and USB host stack as processes, and the core-app
+archive starting where the kernel ends. Short of that, in order of how
+much they disturb:
 
 1. **`Z_MAILBOX_DEPTH`** (`sw/common/zmsg.h`) is 84% of a process
    slot's cost -- 780 bytes against `z_procs[]`'s 148. Halving it to 16
@@ -414,7 +655,33 @@ In order of how much they disturb:
    is the only option that actually creates space rather than
    redistributing it.
 
-**Not on the list: dropping the padding.** It is what zeroes `.bss`.
+**Dropping the padding** was on no list, because it was believed to be
+what zeroed `.bss`. It was done in Phase 3, after reading `_start`.
+
+## Scheduler trace
+
+`make -C sw/os clean && make -C sw/os KTRACE=1` builds a kernel with a
+ring of 192 timestamped scheduler events (`sw/os/ktrace.c`, about 5KB
+of image, so off by default):
+
+| event | recorded in | argument |
+|---|---|---|
+| `send` | `k_msg_send()` | recipient pid |
+| `unblock` | `k_proc_unblock()` | pid, `+0x100` if it was blocked (otherwise a WAKE was recorded) |
+| `block` | `k_proc_wait()` | timeout ticks |
+| `noblock` | `k_proc_wait()` returning at once | 1 WAKE consumed, 2 mail waiting |
+| `yield` | `k_proc_yield_blocked()` | 1 `timer(1)`, 0 `waitirq`, 2 already runnable |
+| `irq` | interrupt entry | pending bits |
+| `switch` / `keep` | `k_sched_switch()` | pid switched to / 1 nobody else runnable, 2 scan exhausted |
+| `defer` / `resched` | the filesystem guard | |
+| `tick` | the KTIMER branch | 0 entered, 2 after the wake sweep (1 was after the USB poll, until Phase 3) |
+
+Each line carries `rdcycle` from the first event and from the previous
+one, and the pid that was running. It is armed by `Z_SYS_KTRACE` (op
+1, cleared and started; op 0, stopped) or `ktrace arm` / `ktrace off`,
+stops by itself when full, and `ktrace` prints it. `ipcbench` arms it
+around six round trips. A kernel without `KTRACE=1` fails the syscall,
+and the shell has no `ktrace`.
 
 ## Exit status, and the exit ring
 
@@ -575,7 +842,7 @@ pre-emptively.
 ### Order
 
 1. ~~`Z_PROCS_MAX` to 32~~ -- **done**. 14.5KB more `.bss`, which is
-   also 14.5KB more flash image; see "The 256KB image budget".
+   also 14.5KB more flash image then; see "The kernel image budget".
 2. Block size and count, with `free` output either side. **Not done**;
    this is the one that could regress `zcc`.
 
@@ -583,6 +850,8 @@ pre-emptively.
 
 Beyond the subsystem documents listed at the top:
 
+- `docs/userspace_drivers.md` -- moving the filesystem, SD and USB
+  host out of the kernel (proposal)
 - `docs/csrs.md` -- how the kernel learns the machine's real memory size
 - `docs/icache.md` -- why instruction fetch dominates CPI here
 - `docs/console.md` -- the console log ring every console byte is

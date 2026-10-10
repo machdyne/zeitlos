@@ -13,8 +13,7 @@
 #include "../common/zcfg.h"
 #include "kernel.h"
 #include "cfg.h"
-#include "fs/fs.h"
-#include "fs/fatfs/diskio.h"	// disk_status(): is the card up yet
+#include "kfs.h"			// the file is read through fs (docs/fs_driver.md)
 
 // -- the store --
 //
@@ -166,8 +165,10 @@ static void apply(bool verbose) {
 
 static bool __attribute__((section(".bss"))) cfg_pending;   // see flashapi.c's session
 
+// The card is up: fs is running and has a filesystem at "/".
 static bool card_up(void) {
-	return !(disk_status(0) & STA_NOINIT);
+	z_fs_info_t fi;
+	return kfs_up() && fs_stat_info(Z_DIR_SYS, &fi);	// fs makes /sys
 }
 
 void k_cfg_defer(void) {
@@ -184,100 +185,112 @@ void k_cfg_retry(void) {
 		return;
 	}
 	printf("cfg: the sdcard came up during init -- reading %s\n", Z_CFG_PATH);
-	fs_layout_prepare();            // missed at boot; docs/layout.md
 	k_cfg_load(true, &ignored);
 }
+
+// The file, read whole before the store is touched: reading goes to fs
+// and waits for it, which must not happen with preemption held (fs
+// could not run). Then parsed under the lock, so that an app reading
+// the store never sees it between "cleared" and "filled". A config
+// file larger than this is not one this tree writes; the arena it
+// fills is smaller still.
+#define K_CFG_FILE_MAX	4096
+static char cfg_file[K_CFG_FILE_MAX];
+static bool cfg_busy;			// one load at a time (the buffer is shared)
 
 int k_cfg_load(bool verbose, uint32_t *ignored) {
 
 	static char line[Z_CFG_LINE_MAX];
-	char chunk[256];
 	char key[Z_CFG_KEY_MAX], val[Z_CFG_VAL_MAX];
 	uint32_t bad = 0, dropped = 0, lineno = 0;
 	size_t ll = 0;
 	bool overlong = false;
-	FIL f;
+	int32_t len;
 
-	// No preemption for the whole load, not just around each FatFs
-	// call: an app reading the store between "cleared" and "filled"
-	// would see every setting at its default for a moment. Capped by
-	// K_NO_PREEMPT_MAX_TICKS (kernel.c), and a config file is far
-	// smaller than that cap is generous.
+	{
+		uint32_t old = maskirq(0xffffffffu);
+		bool mine = !cfg_busy;
+		cfg_busy = true;
+		maskirq(old);
+		if (!mine) {
+			if (ignored) *ignored = 0;
+			return (int)k_cfg_n;			// another load is under way
+		}
+	}
+
+	bool up = card_up();
+	len = up ? kfs_read_file(Z_CFG_PATH, cfg_file, sizeof(cfg_file)) : -1;
+
 	k_fs_enter();
 
 	// any load with the card up settles a deferred one -- `cfg reload`
 	// included
-	if (card_up()) cfg_pending = false;
+	if (up) cfg_pending = false;
 
 	k_cfg_used = 0;
 	k_cfg_n = 0;
 	k_cfg_gen++;
 
-	// fs_size() first, because fs_open_read() prints an error for a
-	// missing file -- and a missing config file is the normal state of
-	// a fresh card, not something to alarm anyone about at boot.
-	if (fs_size(Z_CFG_PATH) == 0 || !fs_open_read(&f, Z_CFG_PATH)) {
+	if (len <= 0) {
 		k_fs_leave();
-		if (verbose)
-			printf("cfg: no %s -- using defaults\n", Z_CFG_PATH);
+		cfg_busy = false;
+		// A missing config file is the normal state of a fresh card,
+		// not something to alarm anyone about at boot.
+		if (verbose) {
+			if (len < 0 && up && fs_size(Z_CFG_PATH) > sizeof(cfg_file))
+				printf("cfg: %s is over %d bytes -- using defaults\n",
+					Z_CFG_PATH, K_CFG_FILE_MAX);
+			else
+				printf("cfg: no %s -- using defaults\n", Z_CFG_PATH);
+		}
 		if (ignored) *ignored = 0;
 		return 0;
 	}
 
-	for (;;) {
+	for (int32_t i = 0; i <= len; i++) {
 
-		int32_t n = fs_read_chunk(&f, chunk, sizeof(chunk));
-		bool eof = (n <= 0);
+		char c;
 
-		for (int32_t i = 0; i <= (eof ? 0 : n - 1); i++) {
-
-			char c;
-
-			if (eof) {
-				if (ll == 0 && !overlong) break;
-				c = '\n';		// a last line with no newline
-			} else {
-				c = chunk[i];
-			}
-
-			if (c != '\n') {
-				if (ll < sizeof(line)) line[ll++] = c;
-				else overlong = true;
-				continue;
-			}
-
-			lineno++;
-
-			if (overlong) {
-				bad++;
-				printf("cfg: %s:%lu: line longer than %d bytes -- ignored\n",
-					Z_CFG_PATH, (unsigned long)lineno, Z_CFG_LINE_MAX);
-			} else {
-				z_cfg_line_t t = z_cfg_parse_line(line, ll, key, sizeof(key),
-					val, sizeof(val));
-				if (t == Z_CFG_LINE_ENTRY) {
-					if (!store_set(key, val)) dropped++;
-				} else if (t == Z_CFG_LINE_BAD) {
-					bad++;
-					printf("cfg: %s:%lu: not a setting -- ignored\n",
-						Z_CFG_PATH, (unsigned long)lineno);
-				}
-			}
-
-			ll = 0;
-			overlong = false;
-
+		if (i == len) {
+			if (ll == 0 && !overlong) break;
+			c = '\n';		// a last line with no newline
+		} else {
+			c = cfg_file[i];
 		}
 
-		if (eof) break;
+		if (c != '\n') {
+			if (ll < sizeof(line)) line[ll++] = c;
+			else overlong = true;
+			continue;
+		}
+
+		lineno++;
+
+		if (overlong) {
+			bad++;
+			printf("cfg: %s:%lu: line longer than %d bytes -- ignored\n",
+				Z_CFG_PATH, (unsigned long)lineno, Z_CFG_LINE_MAX);
+		} else {
+			z_cfg_line_t t = z_cfg_parse_line(line, ll, key, sizeof(key),
+				val, sizeof(val));
+			if (t == Z_CFG_LINE_ENTRY) {
+				if (!store_set(key, val)) dropped++;
+			} else if (t == Z_CFG_LINE_BAD) {
+				bad++;
+				printf("cfg: %s:%lu: not a setting -- ignored\n",
+					Z_CFG_PATH, (unsigned long)lineno);
+			}
+		}
+
+		ll = 0;
+		overlong = false;
 
 	}
-
-	fs_close_read(&f);
 
 	apply(verbose);
 
 	k_fs_leave();
+	cfg_busy = false;
 
 	if (dropped)
 		printf("cfg: store full -- %lu setting(s) not loaded (limit %d, %dB)\n",

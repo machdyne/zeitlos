@@ -42,7 +42,7 @@
 /* The flash map (docs/zboot.md sec. 5). KEEP IN SYNC with
  * Z_ZAR_FLASH_OFFSET (sw/os/zar.h), Z_FLASH_ZAR_END, Z_JUMP_FLASH_OFFSET and
  * Z_JUMP_REGION_SIZE (sw/common/zsoc.h); release/lib/layout.py checks. */
-#define ZFPGA_ZAR_OFFSET   0x140000u
+#define ZFPGA_ZAR_OFFSET   0x128000u
 #define ZFPGA_ZAR_END      0x1FC000u        /* the core apps' region ends */
 #define ZFPGA_JUMP_OFFSET  0x200000u        /* past 2 MB, opt-in (JUMP=1) */
 #define ZFPGA_JUMP_END     0x250000u

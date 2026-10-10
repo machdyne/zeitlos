@@ -52,8 +52,12 @@ static void test_decide(void) {
 		n == 0, "15 is reserved");
 	CHECK(z_exec_stack(0x0010, DEF, CAP, &n) == Z_EXEC_STACK_BAD_FLAGS &&
 		n == 0, "bit 4 is reserved");
-	CHECK(z_exec_stack(0x8003, DEF, CAP, &n) == Z_EXEC_STACK_BAD_FLAGS,
-		"bit 15 is reserved, whatever the code");
+	CHECK(z_exec_stack(0x8003, DEF, CAP, &n) == Z_EXEC_STACK_OK &&
+		n == 32 * KB, "bit 15 is DRIVER, and the code still counts");
+	CHECK(z_exec_stack(0x4003, DEF, CAP, &n) == Z_EXEC_STACK_BAD_FLAGS,
+		"bit 14 is reserved, whatever the code");
+	CHECK(z_exec_stack(0x8000, DEF, CAP, &n) == Z_EXEC_STACK_OK &&
+		n == DEF, "a driver that does not ask gets the default");
 	CHECK(z_exec_stack(14, DEF, 64 * MB, &n) == Z_EXEC_STACK_OK &&
 		n == 64 * MB, "a raised cap grants 64MB");
 }

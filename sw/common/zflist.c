@@ -323,7 +323,7 @@ static bool load_dir(z_flist_t *fl, const char *path, const char *keep) {
 		size_t bl = l - (size_t)(base - p);
 
 		// FatFs's f_readdir doesn't report "." or ".." (see
-		// sw/os/fs/fatfs), but skip them defensively -- the ".." row
+		// sw/apps/fs/fatfs), but skip them defensively -- the ".." row
 		// this widget draws is synthetic, and a second one coming
 		// from the filesystem would be confusing rather than merely
 		// redundant.

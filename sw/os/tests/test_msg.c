@@ -31,6 +31,8 @@
  * 6. read          k_msg_read() then hands out Z_NONE without
  *                  translating anything
  * 7. edges         pid 0 (the kernel) and out-of-range pids: no-op
+ * 8. pop_match     z_mailbox_pop_match() takes one message from any
+ *                  position, across the wrap, and keeps the rest in order
  *
  * Checked against broken versions of k_msg_release_pid(): scanning
  * from slot 0 instead of the ring's head fails 25 checks, not emptying
@@ -58,6 +60,9 @@ volatile uint32_t z_pid;
 volatile z_proc z_procs[Z_PROCS_MAX];
 volatile uint32_t z_kernel_ticks;
 void k_proc_unblock(uint32_t pid) { (void)pid; }
+// msg.c's z_msg_recv_match() (for kernel clients of fs, kfs.c) calls
+// kernel.c's k_msg_recv(); not exercised here.
+z_obj_t *k_msg_recv(z_obj_t *args) { (void)args; return &z_fail; }
 
 static int fails, checks;
 #define CHECK(c, ...) do { checks++; if (!(c)) { fails++; \
@@ -128,9 +133,45 @@ static void expect_released(const char *what) {
 		"%s: the dead process's own mailbox still holds %u", what, (unsigned)z_mailboxes[5].count);
 }
 
+// 8. z_mailbox_pop_match(): the one message with a subject and tag
+// comes out from wherever it is; the rest keep their order. Every
+// position, every ring start (so the gap closes across the wrap).
+static void test_pop_match(void) {
+	for (uint32_t start = 0; start < Z_MAILBOX_DEPTH; start += 3) {
+		for (uint32_t n = 1; n <= 9; n++) {
+			for (uint32_t pick = 0; pick < n; pick++) {
+				reset();
+				z_mailboxes[2].head = z_mailboxes[2].tail = start;
+				for (uint32_t i = 0; i < n; i++) put(2, 3, 500 + i, 7, Z_UINT32);
+				z_msg_envelope_t e;
+				CHECK(z_mailbox_pop_match(2, 500 + pick, 7, &e) == Z_OK &&
+					e.subject == 500 + pick, "match start %u n %u pick %u",
+					(unsigned)start, (unsigned)n, (unsigned)pick);
+				CHECK(z_mailboxes[2].count == n - 1, "count after match");
+				for (uint32_t i = 0, want = 500; i < n - 1; i++, want++) {
+					if (want == 500 + pick) want++;
+					CHECK(z_mailbox_pop(2, &e) == Z_OK && e.subject == want,
+						"order: start %u n %u pick %u: #%u is %u, want %u",
+						(unsigned)start, (unsigned)n, (unsigned)pick, (unsigned)i,
+						(unsigned)e.subject, (unsigned)want);
+				}
+				CHECK(z_mailbox_pop(2, &e) != Z_OK, "left over");
+			}
+		}
+	}
+	reset();
+	put(2, 3, 600, 1, Z_UINT32);
+	z_msg_envelope_t e;
+	CHECK(z_mailbox_pop_match(2, 600, 2, &e) != Z_OK, "tag must match too");
+	CHECK(z_mailbox_pop_match(2, 601, 1, &e) != Z_OK, "subject must match too");
+	CHECK(z_mailboxes[2].count == 1, "a miss takes nothing");
+}
+
 int main(void) {
 
 	setvbuf(stdout, NULL, _IONBF, 0);	// a crash in 6 must not eat the output
+
+	test_pop_match();
 
 	// 1-3, 5
 	reset();

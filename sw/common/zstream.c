@@ -24,14 +24,29 @@
 // comment on z_msg_send for why).
 z_rv z_msg_send(z_msg_t *msg);
 z_rv z_msg_read(z_msg_t *msg);
+z_rv z_msg_recv(z_msg_t *msg, uint32_t timeout_ticks);
 z_rv z_msg_new_send(uint32_t to, uint32_t subject, uint32_t tag, z_obj_t obj);
 uint32_t z_uptime_ticks(void);
+
+// Wait, blocked, for the next message, at most until `start` plus the
+// timeout. Not a z_msg_read() loop: the consumer used to spin on that,
+// runnable all the while, so a `tget` in the kernel shell took whole
+// timeslices from `usb` and `net` while it waited for each block --
+// the scheduler trace of round 10 showed pid 0 running entire ticks
+// with nothing to do (docs/userspace_drivers.md, "Open: TFTP").
+static bool next_msg(z_msg_t *msg, uint32_t start, uint32_t timeout);
 
 #define ZSTREAM_TIMEOUT_TICKS (20 * 732)	// ~20s (was 3s: a TFTP server that fetches http(s) on demand needs ~6s for the first block) -- generous for
 	// in-memory messaging plus a slow consumer-side operation (e.g.
 	// an SD card write); short enough that a genuinely stuck peer
 	// is noticed quickly. applies to the consumer side's blocking
 	// calls only -- the producer side never blocks at all.
+
+static bool next_msg(z_msg_t *msg, uint32_t start, uint32_t timeout) {
+	uint32_t gone = z_uptime_ticks() - start;
+	if (gone >= timeout) return false;
+	return z_msg_recv(msg, timeout - gone) == Z_OK;
+}
 
 static void set_err(char *err, uint32_t err_len, const char *msg) {
 	if (!err || !err_len) return;
@@ -166,7 +181,7 @@ bool zstream_open(zstream_consumer_t *st, uint32_t producer_pid,
 
 	while (z_uptime_ticks() - start < ZSTREAM_TIMEOUT_TICKS) {
 
-		if (z_msg_read(&reply) != Z_OK) continue;
+		if (!next_msg(&reply, start, ZSTREAM_TIMEOUT_TICKS)) continue;
 		if (reply.subject != Z_STREAM_OPEN_REPLY || reply.tag != open_tag)
 			continue;	// not our reply -- discard, keep waiting
 
@@ -208,7 +223,7 @@ zstream_result_t zstream_pull(zstream_consumer_t *st, const uint8_t **data,
 
 	while (z_uptime_ticks() - start < ZSTREAM_TIMEOUT_TICKS) {
 
-		if (z_msg_read(&msg) != Z_OK) continue;
+		if (!next_msg(&msg, start, ZSTREAM_TIMEOUT_TICKS)) continue;
 		if (msg.tag != tag) continue;	// not for this pull -- discard
 
 		if (msg.subject == Z_STREAM_CHUNK) {

@@ -35,7 +35,8 @@
  *   offset  size  field
  *   0       4     magic    "ZEXE"
  *   4       2     version  format version (currently 1)
- *   6       2     flags    bits 3:0 are the stack size code; 15:4 are 0
+ *   6       2     flags    bits 3:0 the stack size code; bit 15 DRIVER;
+ *                           14:4 are 0
  *   8       4     bss_size bytes of .bss to allocate and zero after data
  *   12      4     entry    reserved; 0 means "base address"
  *   16      ...   data     the loadable image, verbatim
@@ -103,8 +104,22 @@
 #define Z_EXEC_VERSION      1
 #define Z_EXEC_HEADER_SIZE  16
 
-// Bits 3:0 of flags: the stack size code. Bits 15:4 are reserved.
+// Bits 3:0 of flags: the stack size code. Bits 14:4 are reserved.
 #define Z_EXEC_STACK_MASK      0x000fu
+
+// Bit 15: the program is a DRIVER (docs/userspace_drivers.md, "Drivers").
+// The loader starts it like any other program and marks the process
+// Z_PROC_FLAG_DRIVER, which lets it open the grant window onto
+// processes that have opted in to being written by drivers
+// (z_grant_drivers(), sw/common/zeitlos.h). It declares; the client
+// still decides. From the top of the word down, so the stack code can
+// grow upwards into 14:4 if it ever needs to. A kernel that predates
+// it refuses the binary (unknown flags) rather than run a driver
+// without its powers. `APP_DRIVER = 1` in an app's Makefile sets it.
+#define Z_EXEC_FLAG_DRIVER     0x8000u
+
+// Every flag bit this loader understands; any other is refused.
+#define Z_EXEC_FLAGS_KNOWN     (Z_EXEC_STACK_MASK | Z_EXEC_FLAG_DRIVER)
 #define Z_EXEC_STACK_UNSPEC    0
 #define Z_EXEC_STACK_RESERVED  15
 #define Z_EXEC_STACK_MAX_CODE  14
@@ -122,7 +137,7 @@ static inline uint32_t z_exec_stack_bytes(uint32_t code) {
 // that does not ask; `cap` is the most it grants.
 typedef enum {
 	Z_EXEC_STACK_OK = 0,
-	Z_EXEC_STACK_BAD_FLAGS,	// a bit in 15:4 is set
+	Z_EXEC_STACK_BAD_FLAGS,	// a reserved bit (14:4) is set
 	Z_EXEC_STACK_IS_RESERVED,	// code 15
 	Z_EXEC_STACK_OVER_CAP,	// a real size, above `cap`
 } z_exec_stack_rv;
@@ -133,7 +148,7 @@ static inline z_exec_stack_rv z_exec_stack(uint16_t flags, uint32_t def,
 	uint32_t code = flags & Z_EXEC_STACK_MASK;
 
 	*bytes = 0;
-	if (flags & ~Z_EXEC_STACK_MASK) return Z_EXEC_STACK_BAD_FLAGS;
+	if (flags & ~Z_EXEC_FLAGS_KNOWN) return Z_EXEC_STACK_BAD_FLAGS;
 	if (code == Z_EXEC_STACK_RESERVED) return Z_EXEC_STACK_IS_RESERVED;
 	if (code == Z_EXEC_STACK_UNSPEC) {
 		*bytes = def;

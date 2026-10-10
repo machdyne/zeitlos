@@ -311,7 +311,7 @@ def main():
               % len(reloaded["targets"]))
 
         for must in ("openFPGALoader", "## Flashing", "## Flash layout",
-                     "0x140000"):
+                     "0x128000"):
             if must not in text:
                 failures.append("NOTES.md is missing %r" % must)
         print("   NOTES.md contains the flash commands and the layout")

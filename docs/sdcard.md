@@ -1,5 +1,12 @@
 # The SD card, and where its time goes
 
+> The card driver (`sdmm.c`) moved from the kernel into `fs`
+> (`sw/apps/fs/fatfs/sdmm.c`) in Phase 2b ([fs_driver.md](fs_driver.md)),
+> unchanged. The kernel shell's `sdbench` and `usbbench` went with the
+> kernel's FatFs: they measured the layers from inside it. The driver's
+> counters and bench hooks are still in `sdmm.c` (`sw/apps/fs/sdbench.h`)
+> for a benchmark inside `fs`, should one be wanted.
+
 ## Status
 
 **Measured, diagnosed, fixed, and measured again.**

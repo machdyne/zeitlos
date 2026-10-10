@@ -451,7 +451,7 @@ static bool ext_playable(const char *name) {
  * Scan a directory for playable files.
  *
  * Extension-based, as agreed. Note that FatFs is built here with
- * FF_USE_LFN 0 (sw/os/fs/fatfs/ffconf.h), so every name is an 8.3
+ * FF_USE_LFN 0 (sw/apps/fs/fatfs/ffconf.h), so every name is an 8.3
  * short name -- "MYSONG~1.WAV" is what a long name looks like from
  * this side. tools/mkaudio.py names its output accordingly.
  *

@@ -25,7 +25,7 @@ file names in the kernel.
 offset  size  field
 0       4     magic    "ZEXE"
 4       2     version  currently 1
-6       2     flags    bits 3:0 stack size code; bits 15:4 must be 0
+6       2     flags    bits 3:0 stack size code; bit 15 driver; 14:4 must be 0
 8       4     bss_size bytes to allocate and zero after data
 12      4     entry    reserved; 0 means "base address"
 16      ...   data     the loadable image, verbatim
@@ -137,6 +137,21 @@ two from 8K to the cap fails the build. Unset leaves the field 0.
 
 4MB on an 8MB board is most of the machine once the kernel, `wm`,
 `net` and a shell are also up. On 32MB it is unremarkable.
+
+## The driver flag
+
+Bit 15 of `flags` (`Z_EXEC_FLAG_DRIVER`): the program is a **driver**
+([userspace_drivers.md](userspace_drivers.md), "Drivers"). It is
+started exactly like any other program -- `run`, `z_proc_run()`, init,
+the dock -- and the loader marks the process `Z_PROC_FLAG_DRIVER`,
+which is what lets it open the MPU's grant window onto a process that
+allows drivers ([mpu.md](mpu.md), "The grant window"). The flag
+declares; the client still decides.
+
+From the top of the word down, so the stack code can grow up into 14:4
+if it ever has to. An app sets it with `APP_DRIVER = 1` in its Makefile
+(`mkexec.py --driver`). A kernel from before it refuses the binary --
+"unknown ZEXE flags" -- rather than run a driver without its powers.
 
 ## Backward compatibility
 

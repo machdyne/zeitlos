@@ -95,6 +95,18 @@
 // k_proc_wait() consume it and decline to sleep.
 #define Z_PROC_FLAG_WAKE	0x000000008
 
+// A driver (ZEXE flags bit 15, sw/common/zexec.h): set by the loader
+// from the program's header. Lets the process open the grant window
+// onto processes that allow drivers (below). docs/userspace_drivers.md.
+#define Z_PROC_FLAG_DRIVER	0x000000010
+
+// This process lets drivers store into its memory -- one at a time,
+// through the grant window, while serving it. Set by z_grant_drivers(),
+// which the file and stream client libraries call on first use, so an
+// app never has to. Off by default: a process that does no I/O keeps
+// the MPU's full protection.
+#define Z_PROC_FLAG_DRV_WRITE	0x000000020
+
 // Longest process name reported below. Matches Z_PIDREG_NAME_MAX
 // (sw/os/pidreg.h), which is where the names come from -- declared
 // separately rather than including that header, which is kernel-side
@@ -180,5 +192,154 @@ typedef struct {
 	uint32_t	blocks_used;	// OUT: block descriptors consumed
 	uint32_t	blocks_max;		// OUT: Z_MEM_MAX_BLOCKS
 } z_mem_stats_args_t;
+
+// -- the grant window (Z_SYS_MPU_GRANT, docs/mpu.md "The grant window") --
+//
+// Lets a driver store into the memory of a process it is serving,
+// which the MPU otherwise forbids -- a filesystem reading a file
+// straight into the buffer of the process that asked. Two halves, so
+// neither side can do it alone:
+//
+//   the CLIENT lets drivers write it:      Z_GRANT_DRIVERS (pid 1 on, 0 off)
+//   a DRIVER opens one client's memory:    Z_GRANT_OPEN, pid
+//
+// A driver is a process started from a binary with ZEXE flags bit 15
+// (Z_PROC_FLAG_DRIVER). OPEN succeeds only for a driver, onto a process
+// that has Z_PROC_FLAG_DRV_WRITE; the kernel re-checks on every switch,
+// so the client switching it off, or ending, closes the window. One
+// window per driver at a time -- OPEN on another pid moves it -- so a
+// bug in a driver can reach only the client it is serving. OPEN
+// returns the client's physical base and size: a pointer the client
+// sent, in its own window at 0x8000_0000, is base + (ptr - 0x8000_0000)
+// to the driver (z_grant_ptr(), zeitlos.h).
+//
+// The kernel honours the window too: a buffer inside it may be handed
+// to a syscall that writes (a file read, say), exactly as the caller's
+// own memory may.
+#define Z_GRANT_DRIVERS 1   // pid != 0: drivers may write me; 0: they may not
+#define Z_GRANT_OPEN    3   // (driver) open pid's memory, if it allows drivers
+#define Z_GRANT_CLOSE   4   // (driver) close my window
+
+typedef struct {
+	uint32_t	op;
+	uint32_t	pid;
+	uint32_t	base;		// OPEN: out, the client's physical base
+	uint32_t	size;		// OPEN: out, its size in bytes
+} z_grant_args_t;
+
+// Z_SYS_EXEC_EXISTS_MANY (z_exec_exists_many(), zeitlos.h): which of
+// `count` program names would launch. found[i] is set to 1 or 0.
+typedef struct {
+	const char *const	*names;
+	uint32_t			count;
+	uint8_t				*found;
+} z_exec_many_args_t;
+
+// Z_SYS_IRQ (z_irq_bind(), zeitlos.h): a DRIVER takes an interrupt line.
+// While bound, the line wakes that process (and, being a driver, it
+// runs next -- docs/userspace_drivers.md "Phase 1"). `silence`, if not
+// 0, is a device register the kernel writes `silence_val` to the moment
+// the line fires: how a LEVEL-sensitive source is quietened until the
+// driver has served it and turned it back on itself. 0 for an edge.
+// Only lines the kernel no longer serves itself can be bound: Z_IRQ_ETH
+// (`net`) and, since Phase 3, Z_IRQ_USB (`usb`). The binding ends with
+// the process.
+// The line numbers an app may name (the kernel's own list is in
+// sw/os/kernel.h; these must agree).
+#ifndef Z_IRQ_ETH
+#define Z_IRQ_ETH	8	// Ethernet receive: a latched edge, one per frame
+#endif
+#ifndef Z_IRQ_USB
+#define Z_IRQ_USB	9	// USB host: a level, (IRQSTAT & IRQEN) != 0
+#endif
+
+#define Z_IRQ_OP_BIND   1
+#define Z_IRQ_OP_UNBIND 2
+
+typedef struct {
+	uint32_t	op;
+	uint32_t	irq;
+	uint32_t	silence;		// device register address, or 0
+	uint32_t	silence_val;
+} z_irq_args_t;
+
+// Z_SYS_BLK: block devices the kernel still drives, for the filesystem
+// driver (sw/apps/fs; docs/fs_driver.md). Drivers only. The RAM disk
+// (/ram, /tmp) is kernel memory sized at boot. Sectors are 512 bytes;
+// `buf` is in the caller's memory.
+//
+// Z_BLK_USB was USB mass storage, while the USB host was the kernel's.
+// Since Phase 3 the drive is `usb`'s (zusbproto.h) and the kernel
+// refuses it; the number is kept so that it means nothing else.
+#define Z_BLK_RAM			1
+#define Z_BLK_USB			2
+#define Z_BLK_OP_INFO		0	// -> sectors, gen, flags
+#define Z_BLK_OP_READ		1	// lba, count, buf
+#define Z_BLK_OP_WRITE		2	// lba, count, buf
+#define Z_BLK_OP_START		3	// bring the unit to ready
+#define Z_BLK_PRESENT		0x1	// flags: a device is there
+#define Z_BLK_READY			0x2	// flags: and it answers reads
+#define Z_BLK_SECTOR		512
+typedef struct {
+	uint32_t	op;
+	uint32_t	dev;		// Z_BLK_RAM / Z_BLK_USB
+	uint32_t	lba;
+	uint32_t	count;		// sectors
+	void		*buf;
+	uint32_t	sectors;	// OUT (INFO): the device's size
+	uint32_t	gen;		// OUT (INFO): changes when a device is replugged
+	uint32_t	flags;		// OUT (INFO): Z_BLK_PRESENT / Z_BLK_READY
+} z_blk_args_t;
+
+// Z_SYS_ZAR: the core-app archive in flash, read-only, for the
+// filesystem driver's flash underlay (files under /docs, the apps under
+// /apps, on a board with or without a card; docs/flash_apps.md, "Files
+// in flash"). Paths are absolute and matched without regard to case.
+#define Z_ZAR_OP_CHILD		0	// path, iter -> name, size, is_dir; fails at the end
+#define Z_ZAR_OP_FILE		1	// path -> off, size; fails if no such file
+#define Z_ZAR_OP_READ		2	// off, buf, len
+#define Z_ZAR_OP_ISDIR		3	// path; fails if not a directory in flash
+#define Z_ZAR_ARG_NAME_MAX	128
+typedef struct {
+	uint32_t	op;
+	const char	*path;
+	uint32_t	iter;		// IN/OUT (CHILD): 0 to start
+	uint32_t	off;		// OUT (FILE) / IN (READ)
+	uint32_t	size;		// OUT (FILE, CHILD)
+	uint32_t	is_dir;		// OUT (CHILD)
+	void		*buf;		// IN (READ)
+	uint32_t	len;		// IN (READ)
+	char		name[Z_ZAR_ARG_NAME_MAX];	// OUT (CHILD)
+} z_zar_args_t;
+
+// Z_SYS_CPU_STAT: where the CPU's cycles have gone since boot, counted
+// at every switch and every interrupt (sw/os/kernel.c, "CPU
+// accounting"). A process is charged from the moment it is switched in
+// to the moment it is switched out, minus the interrupts taken in
+// between; those, and the time the CPU sat in waitirq with nothing to
+// run, are counted on their own. Unlike cpu_ticks (z_proc_info_t),
+// which charges whoever happens to be running when the tick lands, this
+// sees a process that runs briefly between ticks -- a driver woken by
+// an interrupt, say -- and the kernel's own interrupt work.
+// Sample twice and subtract: ipcbench [7] does.
+#define Z_CPU_IRQ_TICK		0	// the KTIMER interrupt (wake sweep, USB step, the switch)
+#define Z_CPU_IRQ_USB		1	// the USB host controller's interrupt
+#define Z_CPU_IRQ_YIELD		2	// IRQ 0: a process blocked, or a deferred switch
+#define Z_CPU_IRQ_OTHER		3	// UART, HID, ethernet, faults
+#define Z_CPU_STAT_PROCS	32
+// Counts as two words, low first: this header is also read by zcc
+// (sw/apps/zcc/libz), which has no 64-bit integers. In C on the
+// machine: ((uint64_t)c.hi << 32) | c.lo.
+typedef struct {
+	uint32_t	lo, hi;
+} z_cpu_count_t;
+typedef struct {
+	uint32_t		n;			// OUT: entries of proc[] filled
+	uint32_t		now;		// OUT: the cycle counter (low 32 bits)
+	z_cpu_count_t	idle;		// OUT: cycles in waitirq, nothing to run
+	z_cpu_count_t	irq[4];		// OUT: cycles in interrupt handlers, Z_CPU_IRQ_*
+	uint32_t		irq_n[4];	// OUT: how many of each
+	z_cpu_count_t	proc[Z_CPU_STAT_PROCS];	// OUT: cycles charged to each pid
+} z_cpu_stat_args_t;
 
 #endif

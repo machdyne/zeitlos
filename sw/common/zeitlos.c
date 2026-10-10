@@ -259,6 +259,100 @@ z_rv z_msg_read(z_msg_t *msg) {
 	return rv->val.uint32;
 }
 
+z_rv z_msg_recv_match(z_msg_t *msg, uint32_t subject, uint32_t tag,
+	uint32_t timeout_ticks) {
+	if (msg_have_unread && msg_unread.subject == subject && msg_unread.tag == tag)
+		return z_msg_read(msg);
+	z_msg_recv_args_t a;
+	a.msg = msg;
+	a.timeout = timeout_ticks;
+	a.flags = Z_MSG_RECV_MATCH;
+	a.subject = subject;
+	a.tag = tag;
+	z_kernel_ptr_t z_kernel_ptr = (z_kernel_ptr_t)(uintptr_t)(reg_kernel);
+	z_obj_t *rv = (z_obj_t *)z_kernel_ptr(Z_SYS_MSG_RECV, (uint32_t *)&a, 0);
+	return rv->val.uint32;
+}
+
+z_rv z_msg_take_match(z_msg_t *msg, uint32_t subject, uint32_t tag) {
+	z_msg_recv_args_t a;
+	a.msg = msg;
+	a.timeout = 1;			// what an older kernel waits instead
+	a.flags = Z_MSG_RECV_MATCH | Z_MSG_RECV_NOWAIT;
+	a.subject = subject;
+	a.tag = tag;
+	z_kernel_ptr_t z_kernel_ptr = (z_kernel_ptr_t)(uintptr_t)(reg_kernel);
+	z_obj_t *rv = (z_obj_t *)z_kernel_ptr(Z_SYS_MSG_RECV, (uint32_t *)&a, 0);
+	return rv->val.uint32;
+}
+
+z_rv z_msg_recv(z_msg_t *msg, uint32_t timeout_ticks) {
+	if (msg_have_unread) return z_msg_read(msg);
+	z_msg_recv_args_t a;
+	a.msg = msg;
+	a.timeout = timeout_ticks;
+	a.flags = 0;
+	a.subject = 0;
+	a.tag = 0;
+	z_kernel_ptr_t z_kernel_ptr = (z_kernel_ptr_t)(uintptr_t)(reg_kernel);
+	z_obj_t *rv = (z_obj_t *)z_kernel_ptr(Z_SYS_MSG_RECV, (uint32_t *)&a, 0);
+	return rv->val.uint32;
+}
+
+static z_rv z_grant_call(uint32_t op, uint32_t pid, uint32_t *base, uint32_t *size) {
+	z_grant_args_t a;
+	a.op = op;
+	a.pid = pid;
+	a.base = 0;
+	a.size = 0;
+	z_kernel_ptr_t z_kernel_ptr = (z_kernel_ptr_t)(uintptr_t)(reg_kernel);
+	z_obj_t *rv = (z_obj_t *)z_kernel_ptr(Z_SYS_MPU_GRANT, (uint32_t *)&a, 0);
+	if (base) *base = a.base;
+	if (size) *size = a.size;
+	return rv->val.uint32;
+}
+
+z_rv z_grant_drivers(bool on) { return z_grant_call(Z_GRANT_DRIVERS, on ? 1 : 0, 0, 0); }
+z_rv z_grant_open(uint32_t pid, uint32_t *base, uint32_t *size) {
+	return z_grant_call(Z_GRANT_OPEN, pid, base, size);
+}
+z_rv z_grant_close(void) { return z_grant_call(Z_GRANT_CLOSE, 0, 0, 0); }
+
+static z_rv z_irq_call(uint32_t op, uint32_t irq, uint32_t silence, uint32_t val) {
+	z_irq_args_t a;
+	a.op = op;
+	a.irq = irq;
+	a.silence = silence;
+	a.silence_val = val;
+	z_kernel_ptr_t z_kernel_ptr = (z_kernel_ptr_t)(uintptr_t)(reg_kernel);
+	z_obj_t *rv = (z_obj_t *)z_kernel_ptr(Z_SYS_IRQ, (uint32_t *)&a, 0);
+	return rv->val.uint32;
+}
+
+z_rv z_irq_bind(uint32_t irq, uint32_t silence, uint32_t silence_val) {
+	return z_irq_call(Z_IRQ_OP_BIND, irq, silence, silence_val);
+}
+
+z_rv z_irq_unbind(uint32_t irq) { return z_irq_call(Z_IRQ_OP_UNBIND, irq, 0, 0); }
+
+z_rv z_blk(z_blk_args_t *a) {
+	z_kernel_ptr_t z_kernel_ptr = (z_kernel_ptr_t)(uintptr_t)(reg_kernel);
+	z_obj_t *rv = (z_obj_t *)z_kernel_ptr(Z_SYS_BLK, (uint32_t *)a, 0);
+	return rv->val.uint32;
+}
+
+z_rv z_zar(z_zar_args_t *a) {
+	z_kernel_ptr_t z_kernel_ptr = (z_kernel_ptr_t)(uintptr_t)(reg_kernel);
+	z_obj_t *rv = (z_obj_t *)z_kernel_ptr(Z_SYS_ZAR, (uint32_t *)a, 0);
+	return rv->val.uint32;
+}
+
+z_rv z_cpu_stat(z_cpu_stat_args_t *out) {
+	z_kernel_ptr_t z_kernel_ptr = (z_kernel_ptr_t)(uintptr_t)(reg_kernel);
+	z_obj_t *rv = (z_obj_t *)z_kernel_ptr(Z_SYS_CPU_STAT, (uint32_t *)out, 0);
+	return rv->val.uint32;
+}
+
 z_rv z_msg_unread(const z_msg_t *msg) {
 	if (!msg || msg_have_unread) return Z_FAIL;
 	msg_unread = *msg;
@@ -295,6 +389,16 @@ z_rv z_msg_wait(z_msg_t *msg, uint32_t subject, uint32_t tag) {
 // Size of a launchable app by this name (data + bss), or 0 if there
 // isn't one. Checks the filesystem AND the flash core-app archive, so
 // the answer matches what z_proc_run() would actually launch.
+z_rv z_exec_exists_many(const char *const *names, uint32_t count, uint8_t *found) {
+	z_exec_many_args_t a;
+	a.names = names;
+	a.count = count;
+	a.found = found;
+	z_kernel_ptr_t z_kernel_ptr = (z_kernel_ptr_t)(uintptr_t)(reg_kernel);
+	z_obj_t *rv = (z_obj_t *)z_kernel_ptr(Z_SYS_EXEC_EXISTS_MANY, (uint32_t *)&a, 0);
+	return rv->val.uint32;
+}
+
 uint32_t z_exec_exists(const char *name) {
 	z_obj_t obj = {0};
 	obj.type = Z_STR;
@@ -644,8 +748,11 @@ void print_ptr_hex(const void *ptr) {
 //
 //
 
-__attribute__((weak))
-ssize_t _read(int fd, void *ptr, size_t len)
+// The terminal's side of read(): descriptor 0 through z_stdin_hook, or
+// the serial console. Not weak, and separate from _read() below, so
+// that a real file layer (sw/common/zposix.c) can override _read() and
+// still hand descriptors 0-2 back here rather than copy this.
+int32_t z_term_read(int fd, void *ptr, size_t len)
 {
    unsigned char *p = ptr;
 	ssize_t i;
@@ -695,6 +802,12 @@ ssize_t _read(int fd, void *ptr, size_t len)
 		}
    }
    return len;
+}
+
+__attribute__((weak))
+ssize_t _read(int fd, void *ptr, size_t len)
+{
+	return z_term_read(fd, ptr, len);
 }
 
 // non-blocking getc
@@ -784,8 +897,8 @@ void readline(char *buf, int maxlen) {
 z_stdout_hook_t z_stdout_hook = NULL;
 z_stdin_hook_t z_stdin_hook = NULL;
 
-__attribute__((weak))
-ssize_t _write(int fd, const void *ptr, size_t len)
+// The terminal's side of write(), as z_term_read() is of read().
+int32_t z_term_write(int fd, const void *ptr, size_t len)
 {
 	// fd 1 only. stderr (fd 2) deliberately stays on the UART even
 	// when a hook is installed: it's where ms.c's own "[panic] ..."
@@ -811,6 +924,12 @@ ssize_t _write(int fd, const void *ptr, size_t len)
 	return len;
 }
 
+__attribute__((weak))
+ssize_t _write(int fd, const void *ptr, size_t len)
+{
+	return z_term_write(fd, ptr, len);
+}
+
 /*
  * -- newlib's file syscalls --
  *
@@ -823,10 +942,11 @@ ssize_t _write(int fd, const void *ptr, size_t len)
  * it opened its file, got -1, and displayed an empty buffer.
  *
  * Marking them weak rather than implementing them here keeps the
- * dependency out of every other app: a real implementation needs
- * zfsapp.o, and linking that into the runtime would put it in binaries
- * that never touch a file. An app that wants POSIX file I/O defines
- * its own and the linker prefers it -- see sw/apps/vi/posix_stubs.c.
+ * dependency out of every other app: a real implementation needs the
+ * filesystem client, and linking that into the runtime would put it in
+ * binaries that never touch a file. An app that wants POSIX file I/O
+ * sets POSIX_IO = 1 in its Makefile, which links sw/common/zposix.c,
+ * whose strong definitions the linker prefers (docs/posix_io.md).
  */
 __attribute__((weak))
 int _open(const char *pathname, int flags) {

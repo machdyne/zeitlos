@@ -9,6 +9,10 @@
  *
  *   iverilog -g2005 -o tb_mpu rtl/tb/tb_mpu.v rtl/mpu.v && ./tb_mpu
  *   iverilog -g2005 -Ptb_mpu.XLATE=0 ...     (zeitlos32: no 0x8 on bus)
+ *
+ * The grant window (GBASE/GLIMIT, MPU version 2) is opened over part of
+ * the kernel's data for the random soak, so random stores land inside
+ * it, outside it and on its edges.
  */
 
 `timescale 1ns / 1ps
@@ -37,6 +41,8 @@ module tb_mpu;
     localparam BASE  = 32'h4008_0000;
     localparam SIZE  = 32'h0000_4000;
     localparam MASK  = 16'hF7FF;          // SD card nibble (0xB) off
+    localparam GB    = 32'h4001_8000;     // grant window for the soak
+    localparam GL    = 32'h4001_c000;
 
     reg clk, rst;
     reg [31:0] adr, dat;
@@ -83,6 +89,18 @@ module tb_mpu;
     reg m_fvalid;
     reg [31:0] m_faddr;
     reg [3:0] m_freason;
+    reg [31:0] m_gbase, m_glimit;           // grant window, as programmed
+
+    function in_grant;                       // model: inside the grant
+        input [31:0] a;
+    begin
+        if (XLATE && a[31:28] == 4'h8 && mtu_base != 0)
+            in_grant = 0;
+        else
+            in_grant = (a >= m_gbase) && (a < m_glimit) &&
+                       ((a[31:28] == 4'h4) || (MAIN_512 && a[31:28] == 4'h5));
+    end
+    endfunction
 
     function in_own;                         // model: inside the block
         input [31:0] a;
@@ -127,7 +145,7 @@ module tb_mpu;
             end else if (!MASK[n]) expect_why = 3;
             else if (w) begin
                 if (n == 4'h4 || (MAIN_512 && n == 4'h5)) begin
-                    if (!in_own(a)) expect_why = 1;
+                    if (!in_own(a) && !in_grant(a)) expect_why = 1;
                 end else if (n == 4'h0 || n == 4'h1 || n == 4'h9 ||
                          a[31:8] == 24'h7000_01 || a[31:2] == (32'h7000_0218 >> 2))
                     expect_why = 2;
@@ -278,11 +296,12 @@ module tb_mpu;
         adr = 0; dat = 0; we = 0; stb = 0; cyc = 0; instr = 0; sel = 0;
         d_ack = 0; d_dat = 0; mtu_base = 0;
         m_en = 0; m_enf = 0; m_priv = 1; m_count = 0; m_fvalid = 0;
+        m_gbase = 0; m_glimit = 0;
         rst = 1; repeat (4) @(posedge clk); rst = 0;
 
         // -- disabled: everything passes, even "app" code
         cfgr(9);
-        if (got !== 32'h3A50_0001) begin $display("ERROR: INFO %h", got); errors = errors + 1; end
+        if (got !== 32'h3A50_0002) begin $display("ERROR: INFO %h", got); errors = errors + 1; end
         mtu_base = BASE;
         access(32'h8000_0000, 0, 1);
         access(32'h4002_0000, 1, 0);
@@ -343,6 +362,35 @@ module tb_mpu;
         access(GATE, 0, 1);                          // kernel clears it
         clear_fault;
         check_fault;
+
+        // -- the grant window: another block, opened by the kernel
+        cfgw(10, 32'h4009_0000); cfgw(11, 32'h4009_1000);
+        m_gbase = 32'h4009_0000; m_glimit = 32'h4009_1000;
+        cfgr(10); if (got !== 32'h4009_0000) begin $display("ERROR: GBASE readback"); errors = errors + 1; end
+        cfgr(11); if (got !== 32'h4009_1000) begin $display("ERROR: GLIMIT readback"); errors = errors + 1; end
+        access(32'h8000_0010, 0, 1);                 // into the app
+        access(32'h4009_0000, 1, 0);                 // first word: ok
+        access(32'h4009_0ffc, 1, 0);                 // last word: ok
+        access(32'h4009_1000, 1, 0);                 // just past: blocked
+        access(32'h4008_fffc, 1, 0);                 // just before: blocked
+        access(32'h8009_0000, 1, 0);                 // window addr, not grant
+        check_fault;
+        // an unprivileged write cannot move it
+        bus(CFG + 40, 1, 0, 32'h4000_0000);
+        m_count = m_count + 1;
+        access(GATE, 0, 1);
+        cfgr(10); if (got !== 32'h4009_0000) begin $display("ERROR: app moved GBASE"); errors = errors + 1; end
+        // closed again (GLIMIT <= GBASE): nothing granted
+        cfgw(11, 32'h4009_0000); m_glimit = 32'h4009_0000;
+        access(32'h8000_0014, 0, 1);
+        access(32'h4009_0000, 1, 0);                 // now blocked
+        access(GATE, 0, 1);
+        check_fault;
+        clear_fault;
+
+        // the soak runs with a window over part of kernel data
+        cfgw(10, GB); cfgw(11, GL);
+        m_gbase = GB; m_glimit = GL;
 
         // -- random soak, enforcing, then report-only
         for (k = 0; k < 2; k = k + 1) begin

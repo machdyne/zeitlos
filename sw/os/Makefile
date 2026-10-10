@@ -23,8 +23,8 @@ CC = $(PREFIX)gcc
 #   -fPIC removed             83152      -1732
 #   both                      73968     -10916
 #
-# That matters because the BIOS copies a FIXED ROM_OS_SIZE of 256KB
-# (sw/bios/bios.c) into main memory, so 256KB is a hard ceiling on
+# That matters because the BIOS copies a FIXED ROM_OS_SIZE (160KB now,
+# sw/bios/bios.c) into main memory, so that is a hard ceiling on
 # kernel.bin rather than a soft one.
 #
 # Set GC_SECTIONS=0 to disable, e.g. when chasing a linker problem
@@ -48,20 +48,27 @@ endif
 
 CFLAGS = $(PIC_FLAGS) --std=gnu99 -Os -MD -Wall -march=$(ARCH) -mabi=$(ABI) -I../common $(GC_CFLAGS) $(ARCH_DEFS) $(LIBC_FLAGS) -DZ_ZFMT
 
-# USB host bring-up and debugging tools -- usbcap, usbtune, usbnak,
-# usbidle, usbbuf, usbcdc, usbbench, lsusb's detail, the storage driver's
-# verbose messages -- off by default to save kernel space:
-#   make clean && make USBH_DEBUG=1
-# See sw/os/usb/usbh.h and docs/usb_host.md, "Debug build".
-ifeq ($(USBH_DEBUG),1)
-CFLAGS += -DUSBH_DEBUG
-endif
 # `kv test`, the on-board test of the flash key/value store: about 2.8 KB
 # of image, which the kernel no longer has to spare by default since the
 # password went in (docs/security.md). `make KV_TEST=1` builds it in for
 # a hardware check. docs/kvstore.md.
 KV_TEST ?= 0
 CFLAGS += -DKV_TEST=$(KV_TEST)
+# The scheduler trace (sw/os/ktrace.c, docs/kernel.md "Scheduler
+# trace"): a ring of timestamped send/block/yield/switch events and the
+# shell's `ktrace`. About 5 KB of image, so off by default:
+#   make clean && make KTRACE=1
+ifeq ($(KTRACE),1)
+CFLAGS += -DKTRACE
+endif
+# Diagnostics (docs/kernel.md, "Diagnostics build"): the shell's `bench`,
+# `sdbench` and `tick`, and the per-tick cost counters behind `tick`.
+# Off by default -- they are for measuring, and the kernel image is
+# tight until the drivers leave it (docs/userspace_drivers.md):
+#   make clean && make KDIAG=1
+ifeq ($(KDIAG),1)
+CFLAGS += -DKDIAG
+endif
 # Page size for the linker's segment layout: 16 bytes, not 4 KB.
 #
 # riscv-os.ld's DATA_SEGMENT_ALIGN moves the data segment to a page
@@ -80,10 +87,10 @@ SEG_PAGE_LDFLAGS = -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16
 LDFLAGS = $(PIC_FLAGS) -march=$(ARCH) -mabi=$(ABI) $(GC_LDFLAGS) $(LIBC_FLAGS) $(SEG_PAGE_LDFLAGS)
 LDSCRIPT = ../common/riscv-os.ld
 
-OBJS = kernel.o kruntime.o mem.o zar.o usb/usbh.o usb/usbh_hid.o usb/usbh_msc.o usb/usbh_hub.o usb/usbh_cdc.o usb/usbh_cp210x.o usb/usbh_ecm.o usbcdcapi.o usbnetapi.o \
-	fs/fs.o fs/ramdisk.o fs/sdbench.o fs/fatfs/sdmm.o fs/fatfs/diskio_mux.o fs/fatfs/ff.o fs/fatfs/ffunicode.o \
+OBJS = kernel.o kruntime.o mem.o zar.o \
+	kblk.o kfs.o zfsc.o kusb.o zusbc.o \
 	uart.o hid.o sh.o xfer.o xmodem.o ui.o msg.o pidreg.o fsapi.o flashapi.o kvstore.o kvlog.o auth.o authcore.o zsha256.o jumpapi.o zjump.o procapi.o zobj.o zstream.o zdns.o zsoc.o zgpio.o \
-	cfg.o zcfg.o zfont_data.o zfmt.o
+	cfg.o zcfg.o zfont_data.o zfmt.o ktrace.o
 
 # kernel.o's recipe below builds every object in one go (they're not
 # independent processes, and mostly don't need to be) -- but for
@@ -95,8 +102,8 @@ OBJS = kernel.o kruntime.o mem.o zar.o usb/usbh.o usb/usbh_hid.o usb/usbh_msc.o 
 # any edit. bit us for real with fs/fs.c during this session's
 # zstream/TFTP work -- see docs/networking.md.
 KSRCS = kernel.c kruntime.c mem.c \
-	fs/fs.c fs/ramdisk.c fs/sdbench.c fs/fatfs/sdmm.c fs/fatfs/diskio_mux.c fs/fatfs/ff.c fs/fatfs/ffunicode.c \
-	usb/usbh.c usb/usbh_hid.c usb/usbh_msc.c usb/usbh_hub.c usb/usbh_cdc.c usb/usbh_cp210x.c usb/usbh_ecm.c usbcdcapi.c usbnetapi.c uart.c hid.c sh.c xfer.c xmodem.c ui.c msg.c pidreg.c fsapi.c flashapi.c kvstore.c kvlog.c auth.c authcore.c jumpapi.c procapi.c cfg.c \
+	kblk.c kfs.c ../common/zfsc.c ../common/zfsc.h ../common/zfsproto.h \
+	kusb.c ../common/zusbc.c ../common/zusbc.h ../common/zusbproto.h uart.c hid.c sh.c xfer.c xmodem.c ui.c msg.c pidreg.c fsapi.c flashapi.c kvstore.c kvlog.c auth.c authcore.c jumpapi.c procapi.c cfg.c ktrace.c \
 	../common/zobj.c ../common/zsha256.c ../common/zstream.c ../common/zdns.c ../common/zsoc.c ../common/zcfg.c ../common/zjump.c \
 	../common/zfont_data.c
 
@@ -106,39 +113,17 @@ kernel.o: $(KSRCS)
 	$(CC) $(CFLAGS) -c kernel.c -o kernel.o
 	$(CC) $(CFLAGS) -c kruntime.c -o kruntime.o
 	$(CC) $(CFLAGS) -c mem.c -o mem.o
-	$(CC) $(CFLAGS) -c fs/fs.c -o fs/fs.o
-	$(CC) $(CFLAGS) -c fs/sdbench.c -o fs/sdbench.o
-	$(CC) $(CFLAGS) -c fs/fatfs/sdmm.c -o fs/fatfs/sdmm.o
-
-fs/fatfs/diskio_mux.o: fs/fatfs/diskio_mux.c fs/ramdisk.h
-	$(CC) $(CFLAGS) -c fs/fatfs/diskio_mux.c -o fs/fatfs/diskio_mux.o
-
-usb/usbh.o: usb/usbh.c usb/usbh.h usb/usbh_hw.h usb/usbh_int.h usb/usbh_msc.h usb/usbh_cdc.h usb/usbh_ser.h
-	$(CC) $(CFLAGS) -c usb/usbh.c -o usb/usbh.o
-
-usb/usbh_hid.o: usb/usbh_hid.c usb/usbh.h usb/usbh_hw.h
-	$(CC) $(CFLAGS) -c usb/usbh_hid.c -o usb/usbh_hid.o
-
-usb/usbh_msc.o: usb/usbh_msc.c usb/usbh_msc.h usb/usbh.h usb/usbh_hw.h
-	$(CC) $(CFLAGS) -c usb/usbh_msc.c -o usb/usbh_msc.o
-
-usb/usbh_hub.o: usb/usbh_hub.c usb/usbh_int.h usb/usbh.h usb/usbh_hw.h
-	$(CC) $(CFLAGS) -c usb/usbh_hub.c -o usb/usbh_hub.o
-
-usb/usbh_cdc.o: usb/usbh_cdc.c usb/usbh_cdc.h usb/usbh_ser.h usb/usbh.h usb/usbh_hw.h
-	$(CC) $(CFLAGS) -c usb/usbh_cdc.c -o usb/usbh_cdc.o
-
-usb/usbh_cp210x.o: usb/usbh_cp210x.c usb/usbh_ser.h
-	$(CC) $(CFLAGS) -c usb/usbh_cp210x.c -o usb/usbh_cp210x.o
-
-fs/ramdisk.o: fs/ramdisk.c fs/ramdisk.h
-	$(CC) $(CFLAGS) -c fs/ramdisk.c -o fs/ramdisk.o
-	$(CC) $(CFLAGS) -c fs/fatfs/ff.c -o fs/fatfs/ff.o
-
-# Long file names (docs/sdcard.md): FatFs's Unicode tables, R0.14b as
-# shipped. Only code page 437's are linked (ffconf.h).
-fs/fatfs/ffunicode.o: fs/fatfs/ffunicode.c fs/fatfs/ffconf.h
-	$(CC) $(CFLAGS) -c fs/fatfs/ffunicode.c -o fs/fatfs/ffunicode.o
+	# Files: the kernel is a client of fs (sw/apps/fs, docs/fs_driver.md)
+	# and has no FatFs of its own. zfsc.c is the apps' client, built for
+	# the kernel (-DZFSC_KERNEL: no grant, no heap).
+	$(CC) $(CFLAGS) -c kblk.c -o kblk.o
+	$(CC) $(CFLAGS) -c kfs.c -o kfs.o
+	$(CC) $(CFLAGS) -DZFSC_KERNEL -c ../common/zfsc.c -o zfsc.o
+	# USB: the host stack is the `usb` process (sw/apps/usb,
+	# docs/usb_driver.md). The kernel keeps the shell's commands, as a
+	# client of it (zusbc.c built -DZUSBC_KERNEL: zusb_cmd() only).
+	$(CC) $(CFLAGS) -c kusb.c -o kusb.o
+	$(CC) $(CFLAGS) -DZUSBC_KERNEL -c ../common/zusbc.c -o zusbc.o
 	$(CC) $(CFLAGS) -c sh.c -o sh.o
 	$(CC) $(CFLAGS) -c xfer.c -o xfer.o
 	$(CC) $(CFLAGS) -c xmodem.c -o xmodem.o
@@ -155,6 +140,7 @@ fs/fatfs/ffunicode.o: fs/fatfs/ffunicode.c fs/fatfs/ffconf.h
 	$(CC) $(CFLAGS) -c authcore.c -o authcore.o
 	$(CC) $(CFLAGS) -c jumpapi.c -o jumpapi.o
 	$(CC) $(CFLAGS) -c procapi.c -o procapi.o
+	$(CC) $(CFLAGS) -c ktrace.c -o ktrace.o
 	$(CC) $(CFLAGS) -c ../common/zobj.c -o zobj.o
 	# only z_font_5x8 survives --gc-sections: the panic screen's font
 	# (sw/os/uart.c, k_klog_panic_screen())
@@ -202,20 +188,24 @@ kernel.elf: $(OBJS)
 # wrong answers, and the measurement that would have settled it had
 # been deleted by the build.
 #
-# The BIOS copies a FIXED 256KB from flash (ROM_OS_SIZE, sw/bios/bios.c)
-# and that copy is what zeroes .bss -- which is why the image is padded
-# to _end rather than stopping at _edata. Two consequences:
+# The BIOS copies a FIXED 160KB from flash (ROM_OS_SIZE, sw/bios/bios.c)
+# into main memory. An image past that is silently TRUNCATED, and the
+# kernel starts with its tail missing; the check below turns that into
+# a build failure. (It was added after Z_PROCS_MAX went to 64, put the
+# image 7,640 bytes over, and was found by flashing a board -- the worst
+# place to find it, because the symptom is a kernel that boots and then
+# misbehaves rather than one that fails to link.)
 #
-#   - every byte of kernel .bss costs a byte of flash image;
-#   - an image past 256KB is silently TRUNCATED by the BIOS, and the
-#     kernel starts with its tail missing.
-#
-# The check below turns that into a build failure. It was added after
-# Z_PROCS_MAX went to 64, put the image 7,640 bytes over, and was found
-# by flashing a board -- which is the worst possible place to find it,
-# because the symptom is a kernel that boots and then misbehaves rather
-# than one that fails to link.
-KERNEL_MAX_SIZE ?= 262144
+# .bss is NOT in the image (Phase 3, docs/kernel.md "The kernel image
+# budget"). It used to be: kernel.bin was padded to _end, on the belief
+# that the BIOS copy was the only thing zeroing .bss. It is not -- the
+# toolchain's crt0, whose _start is the first thing at 0x40000000,
+# memsets __bss_start.._end before anything else runs. Dropping the
+# padding took ~57KB of zeros out of the flash image. The check below
+# the size check makes sure the crt0 in use really does that, since a
+# toolchain whose crt0 did not would leave .bss holding whatever the
+# BIOS copied from flash past the image.
+KERNEL_MAX_SIZE ?= 163840
 
 # Below this much headroom the build prints what is taking the space,
 # rather than waiting until it fails. 16KB is about two Z_PROCS_MAX
@@ -223,19 +213,24 @@ KERNEL_MAX_SIZE ?= 262144
 KERNEL_WARN_FREE ?= 16384
 
 kernel.bin: kernel.elf
-	@END=$$($(PREFIX)nm kernel.elf | awk '$$3=="_end"{print "0x"$$1}'); \
-	START=$$($(PREFIX)nm kernel.elf | awk '$$3=="_start"{print "0x"$$1}'); \
-	$(PREFIX)objcopy -O binary --pad-to=$$END kernel.elf kernel.bin; \
+	@START=$$($(PREFIX)nm kernel.elf | awk '$$3=="_start"{print "0x"$$1}'); \
+	$(PREFIX)objcopy -O binary kernel.elf kernel.bin; \
 	SIZE=$$(wc -c < kernel.bin); \
 	if [ $$SIZE -gt $(KERNEL_MAX_SIZE) ]; then \
 		echo ""; \
 		echo "*** kernel.bin is $$SIZE bytes, over the $(KERNEL_MAX_SIZE) the BIOS copies."; \
 		echo "*** The BIOS would truncate it and the kernel would start incomplete."; \
-		echo "***"; \
-		echo "*** This is usually .bss, which is padded into the image so the"; \
-		echo "*** BIOS copy zeroes it. Check any static array you just added,"; \
-		echo "*** and Z_PROCS_MAX / Z_MAILBOX_DEPTH in kernel.h. See"; \
-		echo "*** docs/kernel.md, 'The 256KB image budget'."; \
+		echo "*** See docs/kernel.md, 'The kernel image budget'."; \
+		echo ""; \
+		rm -f kernel.bin; \
+		exit 1; \
+	fi; \
+	if ! $(PREFIX)objdump -d --start-address=$$START --stop-address=$$(( $$START + 64 )) \
+		kernel.elf | grep -q '<memset>'; then \
+		echo ""; \
+		echo "*** _start does not call memset: this toolchain's crt0 may not zero .bss,"; \
+		echo "*** which the kernel relies on now that the image is not padded to _end."; \
+		echo "*** See docs/kernel.md, 'The kernel image budget'."; \
 		echo ""; \
 		rm -f kernel.bin; \
 		exit 1; \
@@ -245,7 +240,7 @@ kernel.bin: kernel.elf
 	if [ $$FREE -lt $(KERNEL_WARN_FREE) ]; then \
 		echo ""; \
 		echo "kernel.bin has less than $(KERNEL_WARN_FREE) bytes of headroom."; \
-		echo "Largest symbols (mostly .bss -- see docs/kernel.md):"; \
+		echo "Largest symbols (see docs/kernel.md):"; \
 		$(MAKE) --no-print-directory kernel-size; \
 	fi
 
@@ -271,18 +266,17 @@ kernel-size: kernel.elf
 		awk '{printf "  %8s  %-4s %s\n", $$2, $$3, $$4}'
 
 clean:
-# EVERY subdirectory that holds objects must be listed here. usb/ was
-# missing, and the failure mode is nasty: `make clean` appears to work,
-# the kernel relinks, and stale usb/*.o from an older tree survive into
-# the image. Nothing warns, and the symptom is a kernel that behaves
-# like the source you are looking at in some places and like whatever
-# was there before in others.
+# EVERY subdirectory that holds objects must be listed here (there are
+# none now; usb/ is still cleaned, for a tree built before the USB stack
+# left in Phase 3). A missing one was
+# nasty: `make clean` appeared to work, the kernel relinked, and stale
+# objects from an older tree survived into the image.
 #
 # It bites hardest with an unpacked archive, because unzip preserves
 # the archive's timestamps -- so a NEWER source file can land with an
 # OLDER mtime than the object built from its predecessor, and make
 # correctly decides there is nothing to do.
-	rm -f kernel.elf kernel.bin kernel.asm kernel.dasm kernel.map sh.asm *.o *.d fs/*.o fs/*.d fs/fatfs/*.o fs/fatfs/*.d usb/*.o usb/*.d
+	rm -f kernel.elf kernel.bin kernel.asm kernel.dasm kernel.map sh.asm *.o *.d usb/*.o usb/*.d
 
 .PHONY: kernel-size kernel clean
 

@@ -95,7 +95,7 @@
 // (sw/common/zsoc.h); release/lib/layout.py checks.
 #define FLASH_BASE_DEFAULT	0x100000
 #define ROM_OS_ADDR		(MEM_ROM + flash_base())
-#define ROM_OS_SIZE		1024 * 256
+#define ROM_OS_SIZE		1024 * 160
 
 
 //#include "scancodes.h"

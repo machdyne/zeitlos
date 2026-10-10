@@ -63,7 +63,7 @@
  * -- Names: apps are flat, files are paths --
  *
  * An app is "wm", not "/apps/wm", even though that is where the card
- * keeps its copy: sw/os/fs/fs.c's fs_exec_resolve() is what knows about
+ * keeps its copy: sw/apps/fs/fs.c's fs_exec_resolve() is what knows about
  * /apps, so nothing here has to.
  *
  * A FILE (an entry with Z_ZAR_FILE set, since ZAR2) is named by its path
@@ -106,13 +106,15 @@
 // same reason. KEEP IN SYNC with both.
 #define Z_ZAR_ROM_BASE       0x10000000
 
-// Immediately after the kernel's 256KB, as an offset INSIDE the Zeitlos
+// Immediately after the kernel's 160KB (256KB until the filesystem
+// left the kernel, docs/fs_driver.md; 224KB until the USB stack did and
+// the image stopped carrying .bss, docs/usb_driver.md), as an offset INSIDE the Zeitlos
 // flash region -- whose base is read at run time (z_flash_base(),
 // sw/common/zsoc.h), so this is never an absolute flash address.
 // KEEP IN SYNC with Z_FLASH_ZAR_OFF; release/lib/layout.py checks it
 // against that, against bios.c's ROM_OS_SIZE and against the
 // Makefile's flash_apps offset.
-#define Z_ZAR_FLASH_OFFSET   0x040000
+#define Z_ZAR_FLASH_OFFSET   0x028000
 
 static inline uint32_t z_zar_addr(void) {
 	return Z_ZAR_ROM_BASE + z_flash_base() + Z_ZAR_FLASH_OFFSET;

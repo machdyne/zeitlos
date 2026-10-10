@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <stddef.h>
 #include "zobj.h"
 #include "zmsg.h"
 /*
@@ -532,9 +533,78 @@ z_rv z_msg_read(z_msg_t *msg);
 // see Z_PROC_FLAG_BLOCKED in sw/os/kernel.h.
 uint32_t z_exec_exists(const char *name);
 
+// Which of `count` names would launch, as z_exec_exists() would answer
+// each: found[i] = 1 or 0. One directory pass over /apps, where
+// asking name by name costs a lookup each -- what wm's dock does at
+// startup. One difference: a non-empty file in /apps counts as there
+// without its header being read, so a damaged one is offered and then
+// fails to start, where z_exec_exists() would have left it out.
+// Z_FAIL on a kernel without it; fall back to z_exec_exists().
+z_rv z_exec_exists_many(const char *const *names, uint32_t count, uint8_t *found);
+
 void z_proc_wait(uint32_t timeout_ticks);
 
 z_rv z_msg_wait(z_msg_t *msg, uint32_t subject, uint32_t tag);
+
+// The next message, waiting up to `timeout_ticks` for one (0: no
+// limit). Z_OK with a message; Z_FAIL if the wait ended without one --
+// the timeout, or a direct wake (an interrupt the process is woken by),
+// the same wakes z_proc_wait() returns on. One syscall where a
+// z_msg_read() / z_proc_wait() / z_msg_read() loop makes three, so
+// prefer it in any loop that sleeps between messages. Needs a kernel
+// with Z_SYS_MSG_RECV (docs/messaging.md).
+z_rv z_msg_recv(z_msg_t *msg, uint32_t timeout_ticks);
+
+// The one message with this subject and tag, waiting up to
+// `timeout_ticks` (0: no limit); every other message stays queued, in
+// order, for the caller's next read. For a request's reply in a process
+// that also receives other mail (wm's, a port's). Z_FAIL on timeout.
+z_rv z_msg_recv_match(z_msg_t *msg, uint32_t subject, uint32_t tag,
+	uint32_t timeout_ticks);
+
+// That message if it is already queued, without waiting: Z_FAIL if not.
+// For throwing away a reply that arrived after its caller gave up on it
+// (zfsc.c, zusbc.c), which would otherwise sit in the mailbox for good.
+z_rv z_msg_take_match(z_msg_t *msg, uint32_t subject, uint32_t tag);
+
+// The MPU grant window (sw/common/zproc.h for the whole story).
+//
+// z_grant_drivers(true): drivers may store into this process's memory,
+// one at a time, while serving it. The client libraries that talk to
+// drivers call it themselves; an app need not.
+//
+// For drivers: z_grant_open() opens a client's memory (only if it
+// allows drivers) and gives its physical base and size -- translate a
+// pointer the client sent with z_grant_ptr(); z_grant_close() closes it.
+//
+// All fail (Z_FAIL) on gateware without the grant window, and open
+// fails for a process that is not a driver.
+z_rv z_grant_drivers(bool on);
+z_rv z_grant_open(uint32_t pid, uint32_t *base, uint32_t *size);
+z_rv z_grant_close(void);
+
+// For drivers: take interrupt line `irq` (Z_IRQ_* numbers, docs/
+// userspace_drivers.md); it then wakes this process. For a level-
+// sensitive source, `silence` is a device register the kernel writes
+// `silence_val` to when the line fires, and the driver re-enables the
+// source itself once served; 0 for an edge. Fails for a non-driver or a
+// line the kernel still serves.
+z_rv z_irq_bind(uint32_t irq, uint32_t silence, uint32_t silence_val);
+z_rv z_irq_unbind(uint32_t irq);
+
+// Where the CPU's cycles have gone since boot (sw/common/zproc.h,
+// z_cpu_stat_args_t). Z_FAIL on a kernel without the call.
+z_rv z_cpu_stat(z_cpu_stat_args_t *out);
+
+// For the filesystem driver: the kernel's block devices and the flash
+// archive (sw/common/zproc.h, z_blk_args_t / z_zar_args_t). Z_FAIL when
+// refused or on a kernel without them.
+z_rv z_blk(z_blk_args_t *a);
+z_rv z_zar(z_zar_args_t *a);
+static inline void *z_grant_ptr(uint32_t base, const void *client_ptr) {
+	return (void *)(uintptr_t)(base +
+		((uint32_t)(uintptr_t)client_ptr - 0x80000000u));
+}
 
 // Push `msg` so the next z_msg_read() returns it. One slot: a second
 // unread without a read in between fails. Used by zwin to put back a
@@ -760,12 +830,18 @@ extern z_stdout_hook_t z_stdout_hook;
 typedef uint32_t (*z_stdin_hook_t)(char *buf, uint32_t len);
 extern z_stdin_hook_t z_stdin_hook;
 
+// The terminal behind descriptors 0-2: the hooks above, or the serial
+// console. newlib's _read()/_write() in zeitlos.c are these, and a file
+// layer that replaces them (zposix.c) passes 0-2 here.
+int32_t z_term_read(int fd, void *ptr, size_t len);
+int32_t z_term_write(int fd, const void *ptr, size_t len);
+
 // NOTE: app-facing filesystem access (fs_size()/fs_mallocfile()/
 // fs_write_file(), backed by the new Z_SYS_FS_SIZE/_READ/_WRITE
 // syscalls) is DELIBERATELY NOT declared here, even though this file
 // is otherwise the natural home for an app-facing syscall wrapper --
 // this header is also pulled into KERNEL-side code (sw/os/kernel.h
-// includes it), which separately includes sw/os/fs/fs.h, the
+// includes it), which separately includes sw/apps/fs/fsvol.h, the
 // kernel-native FatFs wrappers -- and fs.h already declares
 // fs_size()/fs_mallocfile()/fs_write_file() itself, with slightly
 // different signatures (uint32_t vs int, etc.) for the kernel's own

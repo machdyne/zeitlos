@@ -231,6 +231,16 @@ Apps that do print floating point, and must not set `ZFMT` alone:
 `ask`, `audiotest`, `blackjack`, `midi`, `play`, `roulette`, `track`,
 `web`. They could set `ZFMT_FLOAT` too, below.
 
+### Without stdio (ZFMT_NO_STDIO)
+
+ZFMT's `printf` formats here and writes through newlib's stdio, whose
+buffers bring `malloc` with them: about 12KB of flash. An app that
+prints only through the buffer forms can leave all of that out with
+`-DZFMT_NO_STDIO`, which stops `zfmt.c` calling `fwrite`. `usb` does
+this: its `printf` is its own (`vsnprintf`, then `write()`;
+`sw/apps/usb/usb.c`), and the stack's calls are renamed to it in
+`usbh.h`. `fs` goes further, with no formatted output at all.
+
 ### Floating point too (ZFMT_FLOAT)
 
 `ZFMT = 1` with `ZFMT_FLOAT = 1` is for a program that does print
@@ -328,6 +338,18 @@ Nothing in these apps is reached only from assembly or from the linker
 script, which is where GC can drop something still needed; the script
 KEEPs `.init`, `.fini` and the constructor arrays. `GC_SECTIONS=0`
 still works, for comparing.
+
+## A 16-byte page
+
+`app.mk` links every app with `-z max-page-size=16 -z common-page-size=16`
+(`SEG_PAGE_LDFLAGS`), as `sw/os/Makefile` already linked the kernel.
+The app linker script's `DATA_SEGMENT_ALIGN` otherwise starts the data
+segment on the next 4KB page, or at the same offset in it. That put
+0-4KB of zeros between `.rodata` and `.data` in every `.bin`, for a
+loader that copies the file flat with no MMU to want them. Taking it
+out saved about 20KB across the core-app archive (round 9,
+[usb_driver.md](usb_driver.md)). Every section keeps its own
+alignment.
 
 ## Checks that run before anything is compiled
 

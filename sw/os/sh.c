@@ -23,8 +23,7 @@
 #include "kvstore.h"	// `kv`, and flashtest keeping clear of the store
 #include "auth.h"		// `passwd`, `lock`, and the console lock
 extern bool k_readline_from_uart;	// kruntime.c
-#include "usb/usbh.h"
-#include "usb/usbh_cdc.h"
+#include "kusb.h"
 #include "uart.h"
 #include "mem.h"
 #include "uart.h"
@@ -32,11 +31,8 @@ extern bool k_readline_from_uart;	// kruntime.c
 #include "../common/zsoc.h"	// Z_TICK_HZ	// k_uart_getc()/k_uart_rx_empty() -- see
 					// boot_cancel_requested() below
 #include "../common/zgpio.h"	// the `gpio` command below
-#include "fs/fs.h"
-#include "fs/sdbench.h"	// sh_sdbench() -- the `sdbench` command, docs/sdcard.md
+#include "kfs.h"		// files, through fs (docs/fs_driver.md)
 #include "fsapi.h"
-#include "fs/fatfs/ff.h"
-#include "fs/fatfs/diskio.h"	// disk_status() -- instrumentation, see below
 #include "msg.h"
 #include "hid.h"		// k_hid_stats(), HID_FIFO_SIZE -- the `ic` command
 #include "pidreg.h"
@@ -96,7 +92,9 @@ static int parse_uint(const char *s, int base, uint32_t *out) {
 void sh_help(void);
 static void sh_flash_info(void);
 static void sh_flashtest(void);
+#ifdef KDIAG
 static void sh_bench(void);
+#endif
 void hex_dump(uint32_t addr);
 uint32_t xfer_recv(uint32_t addr_ptr);
 void cls(void);
@@ -199,49 +197,56 @@ static const char *core_src_name(core_src_t src) {
 	return (src == CORE_SRC_FLASH) ? "flash" : "sd";
 }
 
-static bool wait_for_apps_ready(void) {
-	uint32_t start = z_uptime_ticks();
-	uint32_t last_tick = start;
-	while (z_uptime_ticks() - start < AUTOINIT_TIMEOUT_TICKS) {
-		uint32_t now = z_uptime_ticks();
-		if (now == last_tick) continue;
-		last_tick = now;
-		if (fs_size(Z_DIR_APPS "/wm") != 0) return true;
+static void init_start_optional(const char *name);
+
+// Start `fs` from the flash archive and wait until it has registered
+// (it does once its volumes are up). True when it has, and the card
+// is mounted. Without fs in flash there is no filesystem at all: core
+// apps still start from flash, and `run fs` is worth a try.
+static bool boot_fs(void) {
+	z_exec_info_t xi;
+	z_fs_info_t fi;
+	uint32_t pid, t0;
+
+	if (kfs_up()) return fs_stat_info(Z_DIR_SYS, &fi);
+	if (z_zar_exec_info("fs", &xi) != 0 || !xi.total) {
+		printf("init: no fs in flash -- no filesystem (docs/fs_driver.md)\n");
+		return false;
 	}
-	return false;
+	pid = k_proc_create_exec("fs", &xi);
+	if (!pid) {
+		printf("init: unable to create fs process\n");
+		return false;
+	}
+	z_zar_load_exec(k_proc_base(pid), "fs", &xi);
+	k_proc_start(pid);
+	printf("init: fs started as pid %ld\n", (long)pid);
+
+	// It answers once it has tried the card; wait for that, a few
+	// seconds at most, asleep (a tick at a time) rather than spinning.
+	t0 = z_uptime_ticks();
+	while (!kfs_up()) {
+		if (z_uptime_ticks() - t0 > AUTOINIT_TIMEOUT_TICKS) {
+			printf("init: fs did not start\n");
+			return false;
+		}
+		k_proc_wait_ticks(1);
+	}
+	// "/sys" exists exactly when the card is mounted: fs makes it.
+	return fs_stat_info(Z_DIR_SYS, &fi);
 }
 
-// Bring the sdcard up, retrying while a slow one powers on.
-//
-// This has to happen at boot whether or not the core apps are coming
-// from the card, and that is the whole point of it existing
-// separately. fs_mount() is a DEFERRED mount (FatFs opt=0): it
-// registers the volume without touching the hardware, and the card is
-// only really initialised by the first file operation that needs it.
-//
-// wait_for_apps_ready() above used to do that initialisation by
-// accident -- its repeated fs_size("wm") calls were what drove the
-// card through disk_initialize(). Once boot could skip that loop (core
-// apps in flash, nothing needed from the card), the card was left
-// uninitialised and every later operation failed with FR_NOT_READY:
-// `ls` showed no files, `xf` refused to write. The card was fine;
-// nothing had ever woken it.
-//
-// So: force the mount, explicitly, always.
-static bool wait_for_card_ready(void) {
-	uint32_t start = z_uptime_ticks();
-	uint32_t last_tick = start;
-
-	if (fs_mount_now() == 0) return true;
-
-	while (z_uptime_ticks() - start < AUTOINIT_TIMEOUT_TICKS) {
-		uint32_t now = z_uptime_ticks();
-		if (now == last_tick) continue;
-		last_tick = now;
-		if (fs_mount_now() == 0) return true;
+// A driver that crashed, started again (kernel.c, "restarting a
+// driver"): the way boot starts it. `fs` from flash; `usb` and `net`
+// from the card when a copy is there, else flash -- after a crash
+// of `fs` the card may not be back yet, and flash is fine then.
+void k_drv_start(const char *name) {
+	if (!strcmp(name, "fs")) {
+		if (kfs_up()) return;		// someone was quicker (`run fs`)
+		if (boot_fs()) printf("drv: fs is back; the card is mounted\n");
+		return;
 	}
-
-	return false;
+	init_start_optional(name);
 }
 
 // resolved once, cached for the shell's lifetime (which is the whole
@@ -390,6 +395,44 @@ static void sh_cache_rate(const char *name, uint32_t hits, uint32_t misses) {
 bool k_mpu_active(void);
 void k_mpu_reset_log(void);
 
+#ifdef KDIAG
+// `tick`: what the timer interrupt costs (docs/kernel.md, "What a tick
+// costs"), and the switch that compares two ways of doing its work.
+//   tick                     the figures since boot or the last reset
+//   tick reset               start a new window
+//   tick sleepset on|off     wake sweep over sleepers only / every slot
+static void sh_tick(const char *a, const char *b) {
+	if (a && !strcmp(a, "reset")) {
+		uint32_t m = maskirq(0xffffffffu);
+		k_tick_n = 0; k_tick_sw = 0; k_tick_max = 0; k_tick_cyc = 0;
+		maskirq(m);
+		printf("tick: counters reset\n");
+		return;
+	}
+	if (a && b && !strcmp(a, "sleepset")) {
+		bool on = !strcmp(b, "on");
+		if (!on && strcmp(b, "off")) { printf("tick: on or off\n"); return; }
+		k_tick_sleepset = on;
+	} else if (a) {
+		printf("usage: tick [reset | sleepset on|off]\n");
+		return;
+	}
+	uint32_t m = maskirq(0xffffffffu);
+	uint32_t n = k_tick_n, sw = k_tick_sw, mx = k_tick_max;
+	uint64_t cyc = k_tick_cyc;
+	maskirq(m);
+	uint32_t avg = n ? (uint32_t)(cyc / n) : 0;
+	// per mille of the CPU: avg cycles of a 65,536-cycle tick
+	uint32_t pm = (uint32_t)(((uint64_t)avg * 1000u + 32768u) / 65536u);
+	printf("tick: %lu ticks, %lu switched; handler avg %lu cycles, max %lu\n",
+		(unsigned long)n, (unsigned long)sw, (unsigned long)avg, (unsigned long)mx);
+	printf("      %lu.%lu%% of the CPU, plus ~3000 cycles a tick of register save/restore\n",
+		(unsigned long)(pm / 10), (unsigned long)(pm % 10));
+	printf("      sleepset %s\n", k_tick_sleepset ? "on" : "off");
+}
+
+#endif
+
 static void sh_mpu(const char *arg) {
 	if (!z_mpu_present() || !k_mpu_active()) {
 		printf("no memory protection unit in this bitstream\n");
@@ -522,72 +565,23 @@ void sh(void) {
 
 	printf("type help for help.\n\n");
 
-   printf("mounting fs ... ");
-   fflush(stdout);
-
-   if (fs_mount() == 0)
-      printf("done.\n");
-   else
-      printf("failed.\n");
-
-	// auto-start the graphical environment by default -- see
-	// wait_for_apps_ready()'s own comment above for why this polls
-	// rather than just calling init() immediately after fs_mount().
-	//
-	// The flash case is checked FIRST and skips the poll entirely.
-	// wait_for_apps_ready() exists to tolerate a slow SD card powering
-	// up, and spends up to AUTOINIT_TIMEOUT_TICKS doing it -- which is
-	// exactly the wrong thing to do on a board with no card at all,
-	// where the answer will never change and the user would sit
-	// through a 3 second stall on every single boot before the desktop
-	// appeared. Booting with no card is a first-class path here, not a
-	// fallback: see sw/os/zar.h.
-	//
-	// Note this only decides WHEN to call init(). init() still picks
-	// per app, so a card holding just `wm` still gets its wm from the
-	// card and everything else from flash.
-	// Bring the card up FIRST, always, before deciding anything else.
-	// Where the core apps come from is a separate question -- init()
-	// resolves that per app -- but `ls`, `xf` and every other file
-	// operation afterwards need the card initialised, and with a
-	// deferred mount nothing else will do it.
-	//
-	// When the core apps are in flash we only try once: a board with no
-	// card should not stall for AUTOINIT_TIMEOUT_TICKS on every boot
-	// waiting for hardware that isn't there. When they are not, the
-	// card is the only source of apps, so it is worth waiting for.
-	bool card_ready;
-	if (z_zar_present()) {
-		// INSTRUMENTATION -- remove once the dock-at-boot question is
-		// settled.
-		//
-		// This branch makes exactly ONE attempt, while fs.c's own
-		// fs_mount_now() comment says "a slow card may need a few
-		// attempts, so callers should retry rather than treating one
-		// failure as final". The retry helper (wait_for_card_ready())
-		// is right there but is skipped whenever a flash archive is
-		// present, so that a cardless board doesn't stall.
-		//
-		// disk_status() bit 0 is STA_NOINIT (sdmm.c's `Stat`). If that
-		// bit is SET while card_ready is true, f_mount returned OK on a
-		// card that was never actually initialised -- which is the
-		// whole question.
-		int mres = fs_mount_now();
-		kprint("init: fs_mount_now = 0x");
-		kprint_hex32((uint32_t)mres);
-		kprint("  disk_status = 0x");
-		kprint_hex32((uint32_t)disk_status(0));
-		kprint("\n");
-		card_ready = (mres == 0);
-	} else
-		card_ready = wait_for_card_ready();
-
-	if (card_ready) {
+	// The filesystem is a driver now (docs/fs_driver.md): nothing reads
+	// the card until `fs` runs, so it starts first, from flash, and
+	// boot waits for it to be ready -- it mounts the card (once: a
+	// board with no card must not wait for one), formats the RAM disk
+	// and makes /sys, /home, /data before it answers anyone.
+	bool card_ready = boot_fs();
+	if (card_ready)
 		printf("init: sdcard ready\n");
-		fs_layout_prepare();        // /home, /data, /tmp (docs/layout.md)
-	}
-	else if (z_zar_present())
+	else if (kfs_up())
 		printf("init: no sdcard, using core apps in flash\n");
+
+	// The USB host is a driver too (docs/usb_driver.md), and second, so
+	// that it can come from the card: a copy in /apps wins over flash,
+	// as for any core app, and the card has room for a bigger one than
+	// the archive does. Keyboards and mice behind it work once it has
+	// set them up; until then, and if it fails, the UART is the console.
+	if (z_soc_has_feature2(Z_FEATURE2_USB_HOST)) init_start_optional("usb");
 
 	// /sys/zeitlos.cfg, before init() and before the cancel window -- so
 	// every app init starts sees the settings from its first
@@ -598,9 +592,9 @@ void sh(void) {
 		uint32_t ignored;
 		if (card_ready) k_cfg_load(true, &ignored);
 		else {
-			// Not final: a freshly powered card can fail this first
-			// access and come up moments later, when init() loads the
-			// shells from it -- and init() retries then (k_cfg_retry(),
+			// Not final: a freshly powered card can fail its first
+			// access and come up moments later -- fs retries it on
+			// demand, and init() tries the config again (k_cfg_retry(),
 			// issue #7). A board with no card never waits for one.
 			printf("cfg: no sdcard yet -- init will try again\n");
 			k_cfg_defer();
@@ -612,12 +606,9 @@ void sh(void) {
 			"environment manually\n");
 	} else if (card_ready || z_zar_present()) {
 		init();
-	} else if (wait_for_apps_ready()) {
-		init();
 	} else {
-		printf("init: apps not found on filesystem after %lus, "
-			"skipping auto-start (run `init` manually once ready)\n",
-			(unsigned long)(AUTOINIT_TIMEOUT_TICKS / 732));
+		printf("init: no core apps in flash and no sdcard -- "
+			"run `init` once one is ready\n");
 	}
 
 	// The console lock (docs/security.md): after init, so a locked
@@ -875,7 +866,7 @@ void sh(void) {
 				continue;
 			}
 
-			FIL f;
+			kfs_file_t f;
 			if (!fs_open_write(&f, local)) {
 				printf("tget: failed to open %s for writing\n", local);
 				zstream_abort(&cons);
@@ -942,7 +933,7 @@ void sh(void) {
 				continue;
 			}
 
-			FIL f;
+			kfs_file_t f;
 			if (!fs_open_read(&f, local)) {
 				printf("tput: failed to open %s for reading\n", local);
 				continue;
@@ -1140,12 +1131,21 @@ void sh(void) {
 		}
 
 		// KILL A PROCESS
+		// `kill -c <pid>`: as if it had crashed, so that a driver is
+		// started again (kernel.c, "restarting a driver").
 		else if (sh_is(buffer, cmdlen, "kill")) {
 			arg = get_arg(buffer, 1);
 			uint32_t pid;
+			bool as_crash = arg && !strcmp(arg, "-c");
+			if (as_crash) arg = get_arg(buffer, 2);
 			if ((!parse_uint(arg, 10, &pid)) || pid == 0) {
 				printf("bad pid\n");
 				continue;
+			}
+			if (as_crash) {
+				uint32_t m = maskirq(0xFFFFFFFF);
+				k_drv_crashed(pid);
+				maskirq(m);
 			}
 			printf("killing process %ld: ", pid);
 			fflush(stdout);
@@ -1217,110 +1217,18 @@ void sh(void) {
 			fs_usb_unmount();
 		}
 
-#ifdef USBH_DEBUG	// bring-up tools, docs/usb_host.md "Debug build"
-		// WIRE CAPTURE OF A FAILING USB TRANSACTION (usbh.h,
-		// tools/usbcap.py). `usbcap` arms the logic probe before
-		// every transaction on port 0 and freezes it on the first
-		// that fails; `usbcapd` prints it for the decoder.
-		else if (sh_is(buffer, cmdlen, "usbcap")) {
-			z_usbh_cap_start(0);
+		// LIST USB DEVICES, and the other USB commands (rtl/usb/,
+		// docs/usb_host.md). The USB host is the `usb` process since
+		// Phase 3 (docs/usb_driver.md): it runs them and prints, and
+		// this waits for it to finish. `lsusb` and `usbrescan` always;
+		// the bring-up tools -- usbcap, usbcapok, usbcapd, usbtune,
+		// usbnak, usbidle, usbbuf -- in a `make USBH_DEBUG=1` build of
+		// sw/apps/usb, which costs flash in the archive now, not
+		// kernel space. Named after the tool everyone already knows.
+		else if (sh_is(buffer, cmdlen, "lsusb") ||
+			 (!strncmp(buffer, "usb", 3) && buffer[3] != 0)) {
+			k_usb_cmd(buffer);
 		}
-		// Same probe, but freezes on the first SUCCESSFUL IN with data
-		// from a low-speed device behind a hub, so the window holds the
-		// device's packet and our PRE + ACK after it.
-		else if (sh_is(buffer, cmdlen, "usbcapok")) {
-			z_usbh_cap_start(1);
-		}
-		else if (sh_is(buffer, cmdlen, "usbcapd")) {
-			z_usbh_cap_dump();
-		}
-
-		// A TERMINAL ON A USB CDC-ACM DEVICE (usb/usbh_cdc.h). Keys
-		// go to the device, its output comes here; Ctrl-] leaves.
-		// For trying a device out -- apps reach it through the serial
-		// port layer once that exists (docs/usb_host.md, "CDC").
-		else if (sh_is(buffer, cmdlen, "usbcdc")) {
-			uint8_t rx[64];
-			int n, k;
-			if (!z_usbh_cdc_present()) {
-				printf("usbcdc: no CDC-ACM device\n");
-			} else {
-				printf("usbcdc: connected; Ctrl-] to leave\n");
-				for (;;) {
-					if (!k_uart_rx_empty()) {
-						int16_t c = k_uart_getc();
-						uint8_t b;
-						if (c == 0x1d) break;
-						b = (uint8_t)c;
-						if (z_usbh_cdc_write(&b, 1) < 0) {
-							printf("\nusbcdc: write failed\n");
-							break;
-						}
-					}
-					n = z_usbh_cdc_read(rx, sizeof(rx));
-					if (n < 0) {
-						printf("\nusbcdc: device gone\n");
-						break;
-					}
-					for (k = 0; k < n; k++) k_uart_putc((char)rx[k]);
-				}
-				printf("\nusbcdc: closed\n");
-			}
-		}
-
-		// Low-speed timings (usb/usbh.h). `usbtune` shows them;
-		// `usbtune T R G P` sets timeout, turnaround and gap in us and
-		// the J after a PRE in full-speed bit times.
-		else if (!strncmp(buffer, "usbtune", 7) &&
-			 (buffer[7] == ' ' || buffer[7] == 0)) {
-			int v[4] = { 0, 0, 0, 0 }, n = 0;
-			char *p = &buffer[7];
-			while (*p && n < 4) {
-				while (*p == ' ') p++;
-				if (!*p) break;
-				v[n++] = atoi(p);
-				while (*p && *p != ' ') p++;
-			}
-			if (n == 0) z_usbh_tune_show();
-			else if (n == 4) z_usbh_tune_set(v[0], v[1], v[2], v[3]);
-			else printf("usage: usbtune [timeout_us turn_us gap_us "
-				"pre_bits]\n");
-		}
-
-		// Hardware NAK retries for low-speed devices behind a hub
-		// (usbh.h). Takes effect on the next transfer.
-		else if (!strncmp(buffer, "usbnak", 6) &&
-			 (buffer[6] == ' ' || buffer[6] == 0)) {
-			z_usbh_set_ls_hub_nak(buffer[6] ? atoi(&buffer[7]) : 0);
-		}
-
-#endif
-
-		// LIST USB DEVICES (rtl/usb/, docs/usb_host.md)
-		//
-		// Named after the tool everyone already knows. Worth more
-		// than the one line z_usbh_init() prints at boot, because
-		// the interesting state is what changes AFTER boot -- a
-		// device plugged in later, a port that enumerated and then
-		// dropped, a poll slot whose last status stopped being OK.
-		else if (sh_is(buffer, cmdlen, "lsusb")) {
-			z_usbh_dump();
-		}
-
-#ifdef USBH_DEBUG	// bring-up tools, docs/usb_host.md "Debug build"
-		// RELEASE THE USB PORTS AND READ THE LINES -- isolates
-		// "the controller is driving" from "the board is holding
-		// a line high", which lsusb alone cannot tell apart.
-		else if (sh_is(buffer, cmdlen, "usbidle")) {
-			z_usbh_probe_idle();
-		}
-
-		// PACKET BUFFER ROUND-TRIP + THE SETUP BYTES WE WOULD SEND
-		else if (sh_is(buffer, cmdlen, "usbbuf")) {
-			z_usbh_buftest();
-		}
-
-#endif
 
 		// BUILT-IN LOGIC ANALYSER (rtl/probe.v, docs/probe.md)
 		//
@@ -1352,7 +1260,7 @@ void sh(void) {
 				// all, which was the probe working correctly and
 				// the experiment being wrong.
 				*pc = 1;
-				z_usbh_rescan();
+				k_usb_cmd("usbrescan");
 
 				// Enumeration cannot start until the 100 ms
 				// attach debounce has run, so wait in kernel
@@ -1410,41 +1318,47 @@ void sh(void) {
 		// CPU / MEMORY MICRO-BENCHMARKS -- see sh_bench() above for what
 		// each figure measures and why the boot-time MIPS number isn't
 		// enough on its own.
+#ifdef KDIAG	// diagnostics build, docs/kernel.md "Diagnostics build"
 		else if (sh_is(buffer, cmdlen, "bench")) {
 			sh_bench();
 		}
 
-		// SD CARD I/O BENCHMARK
-		//
-		// Separate command from `bench` above rather than another
-		// figure inside it: `bench` measures the CPU and memory and
-		// costs milliseconds, this one drives real card traffic for a
-		// couple of seconds and must not interleave with another
-		// process inside FatFs. Nobody should get that by accident
-		// from typing `bench`. See docs/sdcard.md.
-		else if (sh_is(buffer, cmdlen, "sdbench")) {
-			arg = get_arg(buffer, 1);
-			sh_sdbench(arg);
-		}
-
-#ifdef USBH_DEBUG	// bring-up tools, docs/usb_host.md "Debug build"
-		// The same for USB mass storage (fs/sdbench.c, sh_usbbench()).
-		else if (sh_is(buffer, cmdlen, "usbbench")) {
-			arg = get_arg(buffer, 1);
-			sh_usbbench(arg);
-		}
-
 #endif
+
 
 		else if (sh_is(buffer, cmdlen, "cache")) {
 			arg = get_arg(buffer, 1);
 			sh_cache(arg);
 		}
 
+		// `sched [late 0|1] [drvwake on|off]`: two scheduler variants
+		// tried in round 10, to compare (kernel.c, k_sched_late).
+		// late 1 and drvwake off is the default.
+		else if (sh_is(buffer, cmdlen, "sched")) {
+			char *k = get_arg(buffer, 1), *v = get_arg(buffer, 2);
+			if (k && v && !strcmp(k, "late")) k_sched_late = (*v == '1');
+			else if (k && v && !strcmp(k, "drvwake")) k_sched_drvwake = !strcmp(v, "on");
+			else if (k) { printf("usage: sched [late 0|1] [drvwake on|off]\n"); continue; }
+			printf("sched: late %ld, drvwake %s\n", (long)k_sched_late,
+				k_sched_drvwake ? "on" : "off");
+		}
+
 		else if (sh_is(buffer, cmdlen, "mpu")) {
 			arg = get_arg(buffer, 1);
 			sh_mpu(arg);
 		}
+
+#ifdef KDIAG
+		else if (sh_is(buffer, cmdlen, "tick")) {
+			sh_tick(get_arg(buffer, 1), get_arg(buffer, 2));
+		}
+#endif
+
+#ifdef KTRACE	// scheduler trace, docs/kernel.md "Scheduler trace"
+		else if (sh_is(buffer, cmdlen, "ktrace")) {
+			k_ktrace_cmd(get_arg(buffer, 1));
+		}
+#endif
 
 		// GPIO (rtl/gpio.v, docs/gpio.md)
 		//
@@ -1610,7 +1524,7 @@ void sh(void) {
 
 		// DISPLAY FILESYSTEM CAPACITY -- the SD card, as opposed to
 		// `free` just above, which is main memory. fs_total()/fs_free()
-		// (sw/os/fs/fs.c) have existed since long before this command
+		// (sw/apps/fs/fs.c) have existed since long before this command
 		// and were simply never called by anything; both report KB and
 		// both return 0 on any failure (no card, not mounted), which is
 		// why "not mounted" and "empty" read the same here.
@@ -1641,17 +1555,9 @@ void sh(void) {
 			}
 			else {
 				printf("erasing sdcard ...\n");
-				if (fs_format() == 0) {
-					// f_mkfs leaves the volume unmounted; remount so
-					// the very next `ls` or `xf` works instead of
-					// failing with FR_NOT_READY.
-					if (fs_mount_now() == 0) {
-						fs_layout_prepare();
-						printf("sdcard formatted and remounted.\n");
-					}
-					else
-						printf("formatted, but remount failed -- reboot.\n");
-				}
+				// fs formats, remounts and makes /sys, /home, /data
+				if (fs_format() == 0)
+					printf("sdcard formatted and remounted.\n");
 			}
 
 		}
@@ -1669,19 +1575,10 @@ void sh(void) {
 		// inserted a moment too late).
 		else if (sh_is(buffer, cmdlen, "mount")) {
 
-			// Refuse while anything has a file open. Remounting out
-			// from under an open FIL leaves that handle describing
-			// cluster chains from the previous mount, and the next
-			// write through it corrupts the card -- a far worse
-			// outcome than making the user close something first.
-			int open_now = k_fs_open_count();
-
-			if (open_now) {
-				printf("mount: %d file handle(s) still open -- "
-					"close them first\n", open_now);
-			} else if (fs_mount_now() == 0) {
+			// fs mounts it if it is not mounted (and makes /sys,
+			// /home, /data); a mounted card stays as it is.
+			if (fs_mount_now() == 0) {
 				uint32_t total = 0, freek = 0;
-				fs_layout_prepare();
 				fs_df_kb(&total, &freek);
 				if (total)
 					printf("mounted: %ld KB total, %ld KB free\n",
@@ -1708,6 +1605,10 @@ void sh(void) {
 		// machine gets power-cycled. Run this first and the card is
 		// consistent.
 		else if (sh_is(buffer, cmdlen, "sync")) {
+			int n = k_fs_sync_all();
+			// Unmounting writes the volume's own buffers too; fs
+			// refuses while any file on it is open, and then the
+			// open files' own flush above is what there is.
 			if (fs_unmount() == 0) {
 				printf("filesystem flushed; safe to reprogram or remove\n");
 				if (fs_mount_now() == 0)
@@ -1715,7 +1616,8 @@ void sh(void) {
 				else
 					printf("remount failed -- reboot or reinsert card\n");
 			} else {
-				printf("flush failed\n");
+				printf("%d open file(s) flushed; the card stays mounted while "
+					"files are open\n", n);
 			}
 		}
 
@@ -1806,10 +1708,14 @@ void init(void) {
 
 	printf("running init script ...\n");
 
-	if (z_procs[1].base != 0) {
-		printf("init: already initialized (pid 1 already reserved)\n");
+	// Once. (This used to test whether pid 1 was taken, wm's fixed pid;
+	// fs now starts first and nothing relies on a pid, docs/fs_driver.md.)
+	static bool init_done;
+	if (init_done) {
+		printf("init: already initialized\n");
 		return;
 	}
+	init_done = true;
 
 	// wm:
 	//
@@ -1915,7 +1821,10 @@ void init(void) {
 	// came from.
 	for (uint32_t zi = 0; zi < z_zar_count(); zi++) {
 		char zn[Z_ZAR_NAME_MAX + 1];
-		if (!z_zar_is_file(zi) && z_zar_name(zi, zn) && !fs_exec_is_flash(zn))
+		// fs is always the flash copy: it loads before anything can
+		// read the card (sh(), boot_fs()).
+		if (!z_zar_is_file(zi) && z_zar_name(zi, zn) && strcmp(zn, "fs") &&
+			!fs_exec_is_flash(zn))
 			printf("init: %s/%s on the card overrides the flash copy\n",
 				Z_DIR_APPS, zn);
 	}
@@ -2143,6 +2052,7 @@ void screenshot(void) {
 // cannot optimise the work away -- without that, -Os deletes most of
 // these loops entirely and reports absurdly fast results.
 
+#ifdef KDIAG
 #define BENCH_ITERS 4096
 
 /* rdcycle and rdinstret are GLOBAL, free-running counters, and the
@@ -2211,6 +2121,8 @@ static void bench_print(const char *name, uint32_t cycles, uint32_t insns,
 		(long)(i100 / 100), (long)(i100 % 100), note);
 }
 
+#endif
+#ifdef KDIAG
 static void sh_bench(void) {
 
 	volatile uint32_t sink = 0;
@@ -2324,6 +2236,7 @@ static void sh_bench(void) {
 	k_mem_free((void *)buf);
 
 }
+#endif
 
 void sh_help(void) {
 
@@ -2340,32 +2253,9 @@ void sh_help(void) {
 		"(needs -DPROBE)\n");
 	printf(" usbmount          mount usb storage at " Z_DIR_USB " (automatic on insertion)\n");
 	printf(" usbunmount        release " Z_DIR_USB " before pulling the drive\n");
-#ifdef USBH_DEBUG
-	printf(" usbcapok          capture a good low-speed IN + our ACK\n");
-#endif
-#ifdef USBH_DEBUG
-	printf(" usbcap            capture the next failing usb transaction "
-		"(needs -DPROBE)\n");
-#endif
-#ifdef USBH_DEBUG
-	printf(" usbcapd           print that capture for tools/usbcap.py\n");
-#endif
-#ifdef USBH_DEBUG
-	printf(" usbnak N          hw NAK retries, hubs and behind them (0)\n");
-#endif
-#ifdef USBH_DEBUG
-	printf(" usbtune [T R G P] low-speed timeout/turn/gap us, PRE gap bits\n");
-#endif
-#ifdef USBH_DEBUG
-	printf(" usbcdc            terminal on a usb cdc-acm device (^] exits)\n");
-#endif
 	printf(" lsusb             usb devices and port state\n");
-#ifdef USBH_DEBUG
-	printf(" usbidle           release usb ports, read raw lines\n");
-#endif
-#ifdef USBH_DEBUG
-	printf(" usbbuf            usb packet buffer round-trip test\n");
-#endif
+	printf(" usbrescan         start usb enumeration over on every port\n");
+	printf(" usbstat           usb ethernet counters and waits, then reset them\n");
 	printf(" xa <addr>         receive to addr via xfer\n");
 	printf(" xf <file>         receive to file via xfer\n");
 	printf(" xmf <file>        receive to file via xmodem\n");
@@ -2375,6 +2265,8 @@ void sh_help(void) {
 	printf(" init               start wm, net, repl and posix (runs at boot)\n");
 	printf(" cfg [reload|get k] show or re-read " Z_PATH_SYS_CONFIG " (docs/config.md)\n");
 	printf(" kill <pid>        kill a process\n");
+	printf(" kill -c <pid>     ... as a crash (a driver restarts)\n");
+	printf(" sched [late 0|1] [drvwake on|off]  scheduler switches\n");
 	printf(" ps                display a process snapshot\n");
 	printf(" df                display filesystem capacity\n");
 	printf(" sync              flush sdcard (before reprogramming)\n");
@@ -2393,11 +2285,10 @@ void sh_help(void) {
 	printf(" mpu [report|enforce|off|clear]  memory protection\n");
 	printf(" color [white|amber|green|paper]  display phosphor mode\n");
 	printf(" gpio [port] [pin] [in|out|od|0|1]  read/drive gpio pins (e.g. gpio 0 3 out)\n");
-	printf(" bench             cpu/memory micro-benchmarks\n");
 	printf(" mv <from> <to>    rename or move a file or directory\n");
-	printf(" sdbench [file]    layered sdcard throughput benchmark (docs/sdcard.md)\n");
-#ifdef USBH_DEBUG
-	printf(" usbbench [file]   the same for usb storage (docs/usb_host.md)\n");
+#ifdef KDIAG
+	printf(" bench             cpu/memory micro-benchmarks\n");
+	printf(" tick [reset]      what the timer interrupt costs (docs/kernel.md)\n");
 #endif
 
 }

@@ -5,8 +5,8 @@
  *
  * One app, one port (`serial0`), two backends, each with its own
  * connection: UART1, and a USB serial device (CDC-ACM or a CP210x
- * bridge -- docs/usb_host.md, "USB serial devices") through the kernel's
- * driver (sw/common/zusbcdc.h). A CONNECT picks the backend by its
+ * bridge -- docs/usb_host.md, "USB serial devices") through the `usb`
+ * driver's requests (sw/common/zusbcdc.h). A CONNECT picks the backend by its
  * argument: Z_CONN_USBSERIAL_ARG (sw/common/zconnect.h) means the USB
  * device -- what term's `usbserial` sends -- and anything else is
  * UART1's baud rate, or 0/none for "as it is", so `serial [baud]` and

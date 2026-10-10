@@ -1,5 +1,14 @@
 # Zeitlos USB Host Controller
 
+> **Since Phase 3 the stack is a process.** Everything below about how
+> it works still holds, but it runs in the `usb` driver process
+> (`sw/apps/usb`), not the kernel: woken by IRQ 9 and by its own
+> timeouts, serving `fs`, `net` and `serial` by message.
+> [usb_driver.md](usb_driver.md) describes the process, its protocol
+> and what changed. Paths below that say `sw/os/usb/` are now
+> `sw/apps/usb/`. In the history sections, "the kernel" and "the ISR"
+> are what they were at the time.
+
 **STATUS: phases 0-5 working on hardware; hub support, including
 low-speed devices behind a hub, reliable since round 27 (cause of the
 earlier intermittent failures not identified -- Known issues, item 5). Since round 19 a low-speed
@@ -747,11 +756,10 @@ drifted from the code.
 | `0x400` | 512 x 2 | Enumeration scratch (SETUP + configuration descriptor), taken while a device enumerates | `usbh.c`, `SCR_BIG0/1` |
 
 Two users share 0x000, which is safe for a reason worth stating: mass
-storage touches it only from inside FatFs and USB ethernet only inside
-`Z_SYS_USBNET`, and both run with the scheduler held
-(`k_syscall_touches_fs()`), so neither can be switched out with the
-other's data half-copied. Nothing in the ISR touches it. See
-[usb_ethernet.md](usb_ethernet.md).
+storage and USB ethernet both run in the `usb` process, one request at
+a time, so neither can start while the other has data half-copied.
+(Until Phase 3 they ran with the scheduler held, for the same reason.)
+See [usb_ethernet.md](usb_ethernet.md).
 
 512 bytes for the sector is the important number: `ffconf.h` has
 `FF_MIN_SS` = `FF_MAX_SS` = 512, so one FatFs sector is one buffer
@@ -887,24 +895,22 @@ pulse-shaped, one per report, exactly as today.
 ## Software stack
 
 ```
-sw/os/usb/usbh.c        core: port FSM, control transfers, enumeration,
-sw/os/usb/usbh.h              address allocation, driver binding,
-                              transaction-engine ownership
-sw/os/usb/usbh_hw.h     register definitions (mirrors this document)
-sw/os/usb/usbh_hid.c    boot keyboard, boot mouse, gamepad
-sw/os/usb/usbh_msc.c    BOT + SCSI, STALL / Reset Recovery    (Phase 5)
-sw/os/usb/usbh_hub.c    hub class driver                      (Phase 4)
-sw/os/usb/usbh_cdc.c    CDC-ACM                               (Phase 6)
-sw/os/usb/usbh_ecm.c    CDC-ECM, USB ethernet                 (Phase 7)
-sw/os/usbnetapi.c       Z_SYS_USBNET, the syscall net uses    (Phase 7)
-sw/os/usb/usbh_int.h    internal: device table, control engine,
-                              shared by usbh.c and usbh_hub.c
-sw/os/fs/fatfs/diskio_mux.c  FatFs drive dispatch, drive 2 = USB (Phase 5)
-
+sw/apps/usb/usb.c         the process: IRQ 9, timeouts, requests, rings
+                          (Phase 3, docs/usb_driver.md)
+sw/apps/usb/usbh.c        core: port FSM, control transfers, enumeration,
+sw/apps/usb/usbh.h              address allocation, driver binding,
+                                transaction-engine ownership
+sw/apps/usb/usbh_hw.h     register definitions (mirrors this document)
+sw/apps/usb/usbh_hid.c    boot keyboard, boot mouse, gamepad
+sw/apps/usb/usbh_msc.c    BOT + SCSI, STALL / Reset Recovery    (Phase 5)
+sw/apps/usb/usbh_hub.c    hub class driver                      (Phase 4)
+sw/apps/usb/usbh_cdc.c    CDC-ACM                               (Phase 6)
+sw/apps/usb/usbh_ecm.c    CDC-ECM, USB ethernet                 (Phase 7)
+sw/apps/usb/usbh_int.h    internal: device table, control engine,
+                                shared by usbh.c and usbh_hub.c
+sw/common/zusbproto.h     the protocol; zusbc.c the client
+sw/apps/fs/fs.c           FatFs drive 2 = the `usb` driver's drive
 ```
-
-The block device glue was planned as `sw/os/fs/usbdisk.c`; it became
-drive 2 in `diskio_mux.c` instead, next to the SD card and ramdisk.
 
 ### Enumeration must not block
 
@@ -914,14 +920,12 @@ which may NAK. It absolutely must not be busy-waited, and it must not
 run inside an ISR.
 
 Shape: a state machine per device slot, advanced from two places —
-the IRQ 9 handler (a transaction completed, a port changed) and the
-existing ~732 Hz ktimer (a timer expired). Each entry does at most one
-transaction and returns. No loops, no waits.
-
-This matters more than it sounds. The scheduler is pre-emptive and
-`k_fs_enter()`/`k_fs_leave()` already serialise FatFs; a USB stack that
-blocked would deadlock against a filesystem operation that was waiting
-on a USB disk.
+IRQ 9 (a transaction completed, a port changed) and a timer (a timeout
+expired). Each entry does at most one transaction and returns. No
+loops, no waits. Until Phase 3 those were the kernel's IRQ 9 handler
+and its ~732 Hz tick; now they are the `usb` process's wakes
+([usb_driver.md](usb_driver.md)), and the same thread serves storage,
+ethernet and serial between them.
 
 ### Throughput
 
@@ -1104,12 +1108,11 @@ serial0` are unchanged. From a term window, `usbserial` (or
 `apps.term.auto_connect: usbserial`). `serial` stays resident on a
 bitstream without UART1, serving the USB side. (Rounds 20-28 built this
 as a second binary, `usbserial`, registered `usbserial0`.) It
-reaches the kernel driver through three syscalls, `Z_SYS_USBCDC_PRESENT`
-/ `_READ` / `_WRITE` (`sw/common/zusbcdc.h`, `sw/os/usbcdcapi.c`). Read
-and write run with the scheduler held, as FatFs calls do: they share
-the one USB transaction engine with mass storage, and a process
-switched out while holding it would let another's transfer start on
-top of it. With no device plugged in, a USB connect is refused; a device
+reaches the driver through `z_usbcdc_present()` / `_read()` /
+`_write()` (`sw/common/zusbcdc.h`): syscalls into the kernel until
+Phase 3, run with the scheduler held; requests to the `usb` process
+since, which reads the device for `serial` while it is reading and
+answers from what it kept ([usb_driver.md](usb_driver.md)). With no device plugged in, a USB connect is refused; a device
 unplugged mid-session drops the connection with a message saying so,
 and a single failed read does not.
 
@@ -1144,10 +1147,8 @@ this side, `serial` now polls again on the next tick while data is
 flowing, instead of every ~16 ms, so any device's burst drains several
 times faster.
 
-For trying a device out without a term window, the shell's `usbcdc`
-([debug builds](#debug-build)) is a terminal on it: keys go to the device, its output comes back, Ctrl-]
-leaves. Do not use it while `serial` has a USB client: the shell does not
-hold the scheduler, and the two would share the device.
+The shell's `usbcdc`, a terminal on the device for trying it out, went
+with the stack in Phase 3; `serial` and a term window do the same.
 
 The design as first planned:
 
@@ -1188,7 +1189,7 @@ user: the Meshtastic client, [mesh_app.md](mesh_app.md).
 every kind has the same shape once it is running: bytes out on one bulk
 OUT endpoint, bytes back on one bulk IN endpoint. So there is one data
 path -- `z_usbh_cdc_read()` / `_write()` in `usbh_cdc.c`, the
-`Z_SYS_USBCDC_*` syscalls, `serial0` -- and each kind contributes only
+`usb` driver's CDC requests, `serial0` -- and each kind contributes only
 what differs:
 
 | | where | CDC-ACM | CP210x | FTDI (planned) |
@@ -1304,12 +1305,12 @@ binds; if it does, see `CP_MHS_VALUE` above.
 
 ## USB ethernet
 
-**Status: co-simulated, not yet on hardware.** `sw/os/usb/usbh_ecm.c`
-binds a CDC-ECM adapter -- one raw Ethernet frame per bulk transfer --
-and `sw/apps/net` sends and receives through `Z_SYS_USBNET`. Frames move
-in 512-byte `auto_cont` chunks through the storage sector area; the data
-path runs in process context holding the transaction engine for a whole
-frame, as a SCSI command does.
+`sw/apps/usb/usbh_ecm.c` binds a CDC-ECM adapter -- one raw Ethernet
+frame per bulk transfer -- and `sw/apps/net` sends and receives through
+two rings it shares with the `usb` process (`sw/common/zusbnet.h`;
+`Z_SYS_USBNET` until Phase 3). Frames move in 512-byte `auto_cont`
+chunks through the storage sector area, holding the transaction engine
+for a whole frame, as a SCSI command does.
 
 One change here affects every device, not just adapters: **enumeration
 now chooses the configuration** rather than always taking index 0. If
@@ -1393,16 +1394,18 @@ hub support that board loses no user-visible capability.
 
 ## Debug build
 
-The bring-up and debugging tools are compiled out of a normal kernel to
-save space -- the kernel image, `.bss` included, has to fit its 256 KB
-(`docs/kernel.md`) -- and back in with
+The bring-up and debugging tools are compiled out of a normal build of
+`usb` to save flash in the core-app archive, and back in with
 
 ```
-cd sw/os && make clean && make USBH_DEBUG=1
+cd sw/apps/usb && make clean && make USBH_DEBUG=1
 ```
 
 (`make clean` because the objects do not track the flag). One switch,
-`USBH_DEBUG` (`sw/os/Makefile`, `sw/os/usb/usbh.h`), covers:
+`USBH_DEBUG` (`sw/apps/usb/Makefile`, `usbh.h`), covers what follows.
+The commands are typed at the kernel shell, which passes them to `usb`
+(`k_usb_cmd()`). Until Phase 3 this was a kernel build, and cost kernel
+space; a debug `usb` can now simply live on the card as `/apps/usb`.
 
 | In debug builds only | What for |
 |---|---|
@@ -1410,8 +1413,6 @@ cd sw/os && make clean && make USBH_DEBUG=1
 | `usbtune` | low-speed timing sweep, the TUNE register |
 | `usbnak N` | hardware NAK budget behind a hub (fixed at 0 otherwise) |
 | `usbidle`, `usbbuf` | phase-1 tests: release the ports and read the lines; packet-buffer round trip |
-| `usbcdc` | shell terminal on a CDC-ACM device -- apps use `serial` |
-| `usbbench` | storage throughput, `sdbench`'s layers for `/usb` ([Throughput](#throughput)) |
 | `lsusb` detail | per-attempt history of a failed device, configuration descriptor dump, poll slot and mouse report diagnostics, wire counters, line states |
 | storage driver messages | `msc_verbose`: every failed command's stage and status |
 

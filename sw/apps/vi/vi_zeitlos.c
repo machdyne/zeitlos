@@ -431,6 +431,9 @@ int main(void) {
      */
     if (!z_pid_lookup("posix0", &posix_pid) || !posix_pid) {
         printf("vi: no posix0 -- using the serial console\n");
+        /* The console's read() echoes by default (zeitlos.c's
+         * z_term_read); an editor draws its own screen. */
+        noecho();
         return nextvi_main(argc, argv);
     }
 

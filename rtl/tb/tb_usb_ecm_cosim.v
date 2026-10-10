@@ -1,7 +1,7 @@
 /*
  * Zeitlos SOC -- simulation only.
  *
- * USB ethernet co-simulation: the REAL sw/os/usb driver, including
+ * USB ethernet co-simulation: the REAL sw/apps/usb driver, including
  * usbh_ecm.c, against the REAL rtl/usb gateware and a CDC-ECM adapter
  * model shaped like the RTL8152 (tb_usb_device.v with ECM=1): its first
  * configuration vendor-specific, its second CDC-ECM. See

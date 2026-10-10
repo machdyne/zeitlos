@@ -41,6 +41,8 @@
 #   APP_MAIN_RULE 1 (default) this file provides the $(APP).o rule; set
 #                 0 when the app compiles its main object itself.
 #   LDLIBS        extra link inputs after $(OBJS), e.g. -lm.
+#   APP_DRIVER    1: the program is a driver -- ZEXE flags bit 15
+#                 (sw/common/zexec.h, docs/userspace_drivers.md "Drivers").
 #   APP_STACK     stack+heap size, written into the ZEXE flags word as
 #                 a size code (sw/common/zexec.h, docs/executables.md):
 #                 a power of two from 8K to the kernel's cap, e.g. 64K
@@ -126,6 +128,20 @@ endif
 # strtod/atof come from zfmt.c too, which drops newlib's dtoa, its
 # multi-precision helpers and its strtod -- about 2KB for about 50KB.
 # docs/build.md, "Floating point too (ZFMT_FLOAT)".
+# POSIX_IO = 1: open(), read(), fopen(), stat(), opendir() and the rest
+# reach files, through `fs` (sw/common/zposix.c, docs/posix_io.md).
+# Links zposix.o and the filesystem client, and puts sw/common/posix
+# (dirent.h) on the include path ahead of the C library's. Off by
+# default: an app that never opens a file carries none of it.
+POSIX_IO ?= 0
+ifeq ($(POSIX_IO),1)
+OBJS += zposix.o
+ifeq ($(filter zfsc.o,$(OBJS)),)
+OBJS += zfsc.o
+endif
+POSIX_IO_CFLAGS = -I$(COMMON_DIR)/posix
+endif
+
 ZFMT ?= 0
 ZFMT_FLOAT ?= 0
 ifeq ($(ZFMT),1)
@@ -153,9 +169,17 @@ APP_MAIN_RULE ?= 1
 APP_NAME_CFLAGS = -DZ_APP_NAME='"$(APP)"'
 
 override CFLAGS += --std=gnu99 -Os -MD -Wall -march=$(ARCH) -mabi=$(ABI) \
-	$(GFX_CFLAGS) $(ZFMT_CFLAGS) $(APP_CFLAGS) $(APP_NAME_CFLAGS) $(GC_CFLAGS) \
+	$(GFX_CFLAGS) $(ZFMT_CFLAGS) $(APP_CFLAGS) $(POSIX_IO_CFLAGS) $(APP_NAME_CFLAGS) $(GC_CFLAGS) \
 	$(ARCH_DEFS) $(LIBC_FLAGS)
-LDFLAGS = -march=$(ARCH) -mabi=$(ABI) $(GC_LDFLAGS) $(LIBC_FLAGS)
+# Page size for the linker's segment layout: 16 bytes, not 4 KB, as for
+# the kernel (sw/os/Makefile, SEG_PAGE_LDFLAGS). riscv-app.ld's
+# DATA_SEGMENT_ALIGN otherwise starts the data at the next page, or the
+# same offset in it -- up to 4 KB of zeros between .rodata and .data in
+# the .bin, which the loader copies flat with no MMU to want them. It
+# was found when 1.5 KB more code in `fs` made fs.bin 4 KB longer; the
+# core apps in flash were each carrying 0-4 KB of it.
+SEG_PAGE_LDFLAGS = -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16
+LDFLAGS = -march=$(ARCH) -mabi=$(ABI) $(GC_LDFLAGS) $(LIBC_FLAGS) $(SEG_PAGE_LDFLAGS)
 LDSCRIPT = $(COMMON_DIR)/riscv-app.ld
 MKEXEC = python3 $(COMMON_DIR)/../../tools/mkexec.py
 
@@ -199,7 +223,7 @@ $(APP).bin: $(APP).elf
 	@EDATA=$$($(PREFIX)nm $< | awk '$$3=="_edata"{print "0x"$$1}'); \
 	END=$$($(PREFIX)nm $< | awk '$$3=="_end"{print "0x"$$1}'); \
 	$(PREFIX)objcopy -O binary $< $(APP).data; \
-	$(MKEXEC) $(APP).data $@ $$(($$END - $$EDATA)) $(APP_STACK); \
+	$(MKEXEC) $(APP).data $@ $$(($$END - $$EDATA)) $(APP_STACK) $(if $(filter 1,$(APP_DRIVER)),--driver); \
 	rc=$$?; rm -f $(APP).data; exit $$rc
 
 clean:

@@ -1228,6 +1228,17 @@ static void dock_build(void) {
 	dock_app_count = 0;
 	dock_page = 0;
 
+	// Which candidates exist, asked all at once: one pass over /apps
+	// in the kernel instead of a directory lookup per candidate, which
+	// was most of what this function cost (docs/window_manager.md,
+	// "The dock"). A kernel without the batched call fails it, and the
+	// loop below asks one by one as it always did.
+	const char *names[DOCK_CANDIDATE_COUNT];
+	uint8_t found[DOCK_CANDIDATE_COUNT];
+	for (int i = 0; i < DOCK_CANDIDATE_COUNT; i++)
+		names[i] = dock_candidates[i].name;
+	bool batched = (z_exec_exists_many(names, DOCK_CANDIDATE_COUNT, found) == Z_OK);
+
 	for (int i = 0; i < DOCK_CANDIDATE_COUNT; i++) {
 		if (dock_candidates[i].feature &&
 		    !z_soc_has_feature(dock_candidates[i].feature)) {
@@ -1241,7 +1252,7 @@ static void dock_build(void) {
 				"does not have, skipping\n", dock_candidates[i].name);
 			continue;
 		}
-		if (!z_exec_exists(dock_candidates[i].name)) {
+		if (batched ? !found[i] : !z_exec_exists(dock_candidates[i].name)) {
 			printf("wm: dock: '%s' not installed, skipping\n",
 				dock_candidates[i].name);
 			continue;

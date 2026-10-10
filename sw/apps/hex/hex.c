@@ -31,7 +31,7 @@
  *
  * Every offset in here is a uint32_t, which is not a limitation worth
  * removing: FF_FS_EXFAT is 0 and there is no 64-bit LBA
- * (sw/os/fs/fatfs/ffconf.h), so FAT32's own 4GB ceiling arrives first.
+ * (sw/apps/fs/fatfs/ffconf.h), so FAT32's own 4GB ceiling arrives first.
  *
  * -- editing is overwrite-only --
  *

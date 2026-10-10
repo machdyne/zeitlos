@@ -58,14 +58,14 @@
 
 /* Scratch, gone at the next boot: the ramdisk when there is one, a
  * card directory the kernel empties at boot when there is not
- * (sw/os/fs/fs.c, docs/layout.md). */
+ * (sw/apps/fs/fs.c, docs/layout.md). */
 #define Z_DIR_TMP                 "/tmp"
 
 /* The kernel console's `ss` (sw/os/sh.c): something the person asked
  * for, so it goes where their things go. */
 #define Z_PATH_SCREENSHOT         "/home/ss.bin"
 
-/* Mount prefixes (sw/os/fs/fs.c, docs/ramdisk.md, docs/usb_host.md).
+/* Mount prefixes (sw/apps/fs/fs.c, docs/ramdisk.md, docs/usb_host.md).
  * Not directories on the card: a directory of either name at the
  * card root cannot be reached. */
 #define Z_DIR_RAM                 "/ram"

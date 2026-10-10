@@ -17,7 +17,7 @@
  *
  * By extension, case-insensitively, and nothing else. There is no
  * content sniffing here: FAT short names (FF_USE_LFN is 0, see
- * sw/os/fs/fatfs/ffconf.h) give every file a 3-character extension to
+ * sw/apps/fs/fatfs/ffconf.h) give every file a 3-character extension to
  * work with, and reading the head of every file in a directory just to
  * draw a list would be an unreasonable amount of card traffic for the
  * benefit.

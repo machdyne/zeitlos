@@ -10,7 +10,7 @@ Save the console output of `usbcapd` to a file and run:
 
     tools/usbcap.py capture.txt
 
-Input format (rtl/probe.v, sw/os/usb/usbh.c z_usbh_cap_dump):
+Input format (rtl/probe.v, sw/apps/usb/usbh.c z_usbh_cap_dump):
   - optional header:   usbcap: addr N state S stage N status S speed low|full
   - then lines         XXXX: wwwwwwww wwwwwwww ... (eight 32-bit words)
 Each word holds sixteen samples, two bits each, OLDEST in the low bits;

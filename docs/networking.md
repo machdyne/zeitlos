@@ -258,6 +258,15 @@ separate from the `k_pid_lookup()` syscall, which takes and returns
 registers itself like any other service and a hardwired pid would break
 the moment it were restarted.
 
+**Now: a bound interrupt.** `net` is a driver (ZEXE driver flag,
+`APP_DRIVER = 1`) and takes the line at startup with
+`z_irq_bind(Z_IRQ_ETH, 0, 0)` ([userspace_drivers.md](userspace_drivers.md),
+"Phase 1"). The kernel then wakes it directly and, because it is a
+driver, switches to it next rather than leaving it to the round robin.
+The `net0` lookup above stays as the path for a kernel or a `net` from
+before binding. As a driver `net` also runs with every address nibble
+enabled in the MPU's mask, rather than the app default.
+
 ### The timeout, and the one-tick experiment
 
 `net` waits `Z_TICK_HZ / 10` — about 100ms — because `Z_IRQ_ETH` wakes

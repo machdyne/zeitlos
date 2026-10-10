@@ -51,6 +51,51 @@ static bool tftp_verbose = false;
 static uint32_t xfer_bytes;
 static uint32_t xfer_start_ticks;
 
+// GET: where a block's time goes, printed with the rate. `net`: our
+// ACK out to the next block in, which is usb, the wire and the server
+// both ways. `recv`: stored to pulled, the receiver's pace.
+static uint32_t ack_at;			// cycles when the last ACK went out
+static uint32_t st_net_n, st_net_sum, st_net_max;
+static uint32_t st_recv_n, st_recv_sum, st_recv_max;
+static uint32_t st_retry_net;		// retries while waiting on the server
+static uint32_t st_dup, st_odd;	// DATA again (an ACK lost?), DATA out of sequence
+
+#ifdef TFTP_HOST_TEST
+uint32_t tftp_test_cycles(void);
+static uint32_t tcycles(void) { return tftp_test_cycles(); }
+#else
+static uint32_t tcycles(void) {
+	uint32_t c;
+	__asm__ volatile ("rdcycle %0" : "=r"(c));
+	return c;
+}
+#endif
+
+// On a kernel built with KTRACE=1, arm the scheduler trace at this
+// block of a get, so that `ktrace` afterwards shows a few blocks in the
+// middle of a transfer -- the console is unusable during one, so it
+// cannot be armed by hand there. Fails harmlessly on any other kernel.
+#define TFTP_TRACE_BLOCK 100
+#ifndef TFTP_HOST_TEST
+static void trace_arm(void) {
+	z_obj_t obj = z_obj_uint32(1);
+	z_kernel_ptr_t k = (z_kernel_ptr_t)(uintptr_t)(reg_kernel);
+	(void)k(Z_SYS_KTRACE, (uint32_t *)&obj, 0);
+}
+#else
+static void trace_arm(void) { }
+#endif
+
+// usb_ecm.c's, when linked: the USB adapter's ring at a retry.
+void usb_ecm_note(void) __attribute__((weak));
+
+static void st_note(uint32_t c0, uint32_t *n, uint32_t *sum, uint32_t *max) {
+	uint32_t us = (tcycles() - c0) / (Z_SYSCLK_HZ / 1000000u);
+	(*n)++;
+	*sum += us;
+	if (us > *max) *max = us;
+}
+
 // Reports the rate a completed transfer actually achieved.
 //
 // Worth having in the tree rather than working it out by hand each
@@ -74,6 +119,15 @@ static void report_rate(const char *what) {
 		what, (unsigned long)xfer_bytes,
 		(unsigned long)(ms / 1000), (unsigned long)(ms % 1000),
 		(unsigned long)(kbps10 / 10), (unsigned long)(kbps10 % 10));
+	if (is_get && (st_net_n || st_recv_n))
+		printf("net: tftp per block: ack->next block avg %lu us (max %lu), "
+			"receiver took it after avg %lu us (max %lu); %lu retries, "
+			"%lu blocks again, %lu out of sequence\n",
+			(unsigned long)(st_net_n ? st_net_sum / st_net_n : 0),
+			(unsigned long)st_net_max,
+			(unsigned long)(st_recv_n ? st_recv_sum / st_recv_n : 0),
+			(unsigned long)st_recv_max, (unsigned long)st_retry_net,
+			(unsigned long)st_dup, (unsigned long)st_odd);
 
 }
 
@@ -88,14 +142,10 @@ static uint16_t last_pkt_len;
 static char err_msg[64];
 
 // GET: this process is the zstream producer -- each block received
-// from the server is held (see held_* below) until the receiver
-// pulls it, then delivered and (only then) ACKed to the server. This
-// keeps buffering bounded to exactly one block regardless of how the
-// receiver's own pace compares to the network's -- a receiver slower
-// than the network just means the server's own retransmits of the
-// still-unacked block get ignored (see handle_packet()) until we
-// catch up, rather than us needing to buffer ahead of what's been
-// delivered.
+// from the server is stored (gq_* below) until the receiver pulls it.
+// Buffering is bounded to GQ_SLOTS blocks however the receiver's pace
+// compares to the network's: a block that would overfill the queue is
+// not ACKed until there is room, so the server waits.
 static zstream_producer_t out_stream;
 static bool pull_pending;	// receiver has an outstanding pull we haven't satisfied yet
 
@@ -111,14 +161,26 @@ static char put_filename[64];
 static bool wrq_sent;
 static bool server_ack_pending;
 
-// shared one-block holding area. GET: a block received from the
-// server, not yet delivered to (pulled by) the receiver. PUT: a
-// chunk received from the sender, not yet sent to the server. GET
-// and PUT are never active at the same time (one transfer at a time,
-// see state above), so sharing this is safe.
+// PUT: a chunk received from the sender, not yet sent to the server.
 static uint8_t held_data[TFTP_BLOCK_SIZE];
 static uint16_t held_len;
 static bool held_valid;
+
+// GET: blocks received and not yet pulled by the receiver -- two, so
+// that the receiver writing one (tget: a request to `fs` per block)
+// overlaps the network bringing the next. A block is ACKed when it is
+// stored, unless that fills the queue: then its ACK waits until the
+// receiver takes one (ack_deferred), so the server never sends into a
+// full queue. With one slot, every block's round trip waited for the
+// receiver's write as well as the network's.
+#define GQ_SLOTS 2
+static uint8_t gq_data[GQ_SLOTS][TFTP_BLOCK_SIZE];
+static uint16_t gq_len[GQ_SLOTS];
+static uint32_t gq_at[GQ_SLOTS];	// cycles when stored
+static uint8_t gq_head, gq_n;
+static bool ack_deferred;	// the newest block is stored, its ACK not sent
+static bool got_last;		// the short block is stored (and ACKed or deferred)
+
 
 static void set_err(const char *msg) {
 	int i = 0;
@@ -196,6 +258,7 @@ static void send_ack(uint16_t blk) {
 	last_pkt[2] = (blk >> 8) & 0xFF; last_pkt[3] = blk & 0xFF;
 	last_pkt_len = 4;
 	send_last_packet();
+	ack_at = tcycles();
 }
 
 static void send_data(uint16_t blk, const uint8_t *data, uint16_t len) {
@@ -217,27 +280,28 @@ static void fail(const char *msg) {
 	}
 }
 
-// GET: called whenever there's both a block held (received from the
-// server) and a pull outstanding (requested by the receiver) --
-// delivers it and ACKs the server, only now that delivery is
-// confirmed successful.
+// GET: hand the oldest stored block to the receiver, if it has asked
+// for one. Its slot is free then, so a deferred ACK goes out. Done
+// once the short block has been taken.
 static void try_deliver_get(void) {
 
-	if (!held_valid || !pull_pending) return;
+	if (!gq_n || !pull_pending) return;
 
-	zstream_send_chunk(&out_stream, held_data, held_len);
-	block = block + 1;	// held_data was always block+1 by construction (see handle_packet())
-	buf_len += held_len;
-	xfer_bytes += held_len;	// wire bytes, for report_rate()
+	uint8_t i = gq_head;
+	zstream_send_chunk(&out_stream, gq_data[i], gq_len[i]);	// copied
+	st_note(gq_at[i], &st_recv_n, &st_recv_sum, &st_recv_max);
+	buf_len += gq_len[i];
 	pull_pending = false;
+	gq_head = (uint8_t)((gq_head + 1) % GQ_SLOTS);
+	gq_n--;
 
-	uint16_t delivered_len = held_len;
-	held_valid = false;
+	if (ack_deferred) {
+		ack_deferred = false;
+		send_ack(block);
+	}
 
-	send_ack(block);
-
-	if (delivered_len < TFTP_BLOCK_SIZE) {
-		// short (or empty) block signals end of file, per RFC 1350
+	if (got_last && !gq_n) {
+		// the short (or empty) block, delivered: end of file, RFC 1350
 		state = T_DONE_OK;
 		udp_close(local_port);
 		zstream_send_eof(&out_stream);
@@ -304,32 +368,39 @@ static void handle_packet(uint32_t src_ip, uint16_t src_port, const uint8_t *p, 
 		uint16_t blk = (p[2] << 8) | p[3];
 		uint16_t dlen = len - 4;
 
-		if (held_valid) {
-			// already holding a block, waiting for our own receiver
-			// to pull it before we ack -- a retransmit of that same
-			// block (the server hasn't seen our ack yet) needs no
-			// action; nothing else to do here until the pull arrives
-			return;
-		}
-
-		if (blk == block + 1) {
+		// `block` is the newest block stored (ACKed, or its ACK
+		// deferred).
+		if (blk == (uint16_t)(block + 1) && !got_last && gq_n < GQ_SLOTS) {
 
 			if (dlen > TFTP_BLOCK_SIZE) { fail("oversized block from server"); return; }
 
-			for (uint16_t i = 0; i < dlen; i++) held_data[i] = p[4 + i];
-			held_len = dlen;
-			held_valid = true;
+			if (got_first) st_note(ack_at, &st_net_n, &st_net_sum, &st_net_max);
+			uint8_t i = (uint8_t)((gq_head + gq_n) % GQ_SLOTS);
+			memcpy(gq_data[i], p + 4, dlen);
+			gq_len[i] = dlen;
+			gq_at[i] = tcycles();
+			gq_n++;
+			block = blk;
+			if (block == TFTP_TRACE_BLOCK) trace_arm();
+			xfer_bytes += dlen;	// wire bytes, for report_rate()
 			retries = 0;
 			got_first = true;
+			if (dlen < TFTP_BLOCK_SIZE) got_last = true;
 
-			try_deliver_get();	// may satisfy immediately if a pull is already pending
+			if (gq_n < GQ_SLOTS) send_ack(block);
+			else ack_deferred = true;	// sent when the receiver takes one
 
-		} else if (blk == block) {
-			// already-delivered-and-acked block, ordinary duplicate
+			try_deliver_get();
+
+		} else if (blk == block && block && !ack_deferred) {
+			// already ACKed: our ACK was lost, or crossed it
+			st_dup++;
 			send_ack(block);
+		} else if (blk != block) {
+			st_odd++;
 		}
-		// else: unexpected block number -- ignore, let the server's
-		// own timeout drive any retry
+		// else: a block we have no room for yet (it is not ACKed, so
+		// the server sends it again), or out of sequence -- ignored
 
 	} else if (!is_get && opcode == TFTP_OP_ACK) {
 
@@ -370,6 +441,12 @@ bool tftp_get_start(uint32_t server_ip, const char *filename,
 	got_first = false;
 	pull_pending = false;
 	held_valid = false;
+	gq_head = gq_n = 0;
+	ack_deferred = got_last = false;
+	st_net_n = st_net_sum = st_net_max = 0;
+	st_recv_n = st_recv_sum = st_recv_max = 0;
+	st_retry_net = 0;
+	st_dup = st_odd = 0;
 
 	zstream_accept(&out_stream, receiver_pid, open_tag);
 
@@ -548,6 +625,14 @@ tftp_result_t tftp_poll(uint32_t *out_len, char *err_out, uint32_t err_out_len) 
 		if (z_uptime_ticks() - last_tx_ticks >= (uint32_t)TFTP_TIMEOUT_TICKS * TFTP_MAX_RETRIES) {
 			fail("timed out waiting for data to send");
 		}
+	} else if (state == T_GET && (ack_deferred || got_last)) {
+		// Waiting on our own receiver, not the server: everything
+		// received is ACKed or waits for a free slot to be. Resending
+		// an ACK would only make the server send a block we have no
+		// room for. (This used to count as a retry, so a slow
+		// receiver looked like a lossy network.) A receiver that has
+		// gone is noticed by the stream, not here.
+		last_tx_ticks = z_uptime_ticks();
 	} else if (state == T_GET || state == T_PUT) {
 		uint32_t tmo = (state == T_GET && !got_first)
 			? TFTP_FIRST_TIMEOUT_TICKS : TFTP_TIMEOUT_TICKS;
@@ -557,7 +642,18 @@ tftp_result_t tftp_poll(uint32_t *out_len, char *err_out, uint32_t err_out_len) 
 				printf("net: tftp giving up after %d retries\n", TFTP_MAX_RETRIES);
 				fail("timed out");
 			} else {
-				printf("net: tftp retry %d/%d\n", retries, TFTP_MAX_RETRIES);
+				// Which block, and how far into the transfer: a retry
+				// at block 1 is the opening, at a steady point a frame
+				// lost on the way, at regular intervals something
+				// periodic (ARP, the hub's poll, ntp).
+				if (state == T_GET)
+					printf("net: tftp retry %d/%d (waiting for block %u, %lu ms in)\n",
+						retries, TFTP_MAX_RETRIES, (unsigned)(uint16_t)(block + 1),
+						(unsigned long)((z_uptime_ticks() - xfer_start_ticks) * 1000u / Z_TICK_HZ));
+				else
+					printf("net: tftp retry %d/%d\n", retries, TFTP_MAX_RETRIES);
+				if (usb_ecm_note) usb_ecm_note();
+				st_retry_net++;
 				//enc28j60_debug_dump();
 				send_last_packet();	// retransmit
 			}

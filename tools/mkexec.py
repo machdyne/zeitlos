@@ -74,17 +74,26 @@ def stack_code(text):
     return code
 
 
-def main():
-    if len(sys.argv) not in (4, 5):
-        sys.exit("usage: mkexec.py <in.bin> <out.bin> <bss-size> [stack]")
+# flags bit 15 (sw/common/zexec.h, Z_EXEC_FLAG_DRIVER)
+FLAG_DRIVER = 0x8000
 
-    src, dst, bss = sys.argv[1], sys.argv[2], int(sys.argv[3], 0)
-    stack = sys.argv[4] if len(sys.argv) == 5 else ""
+
+def main():
+    args = sys.argv[1:]
+    driver = "--driver" in args
+    args = [a for a in args if a != "--driver"]
+    if len(args) not in (3, 4):
+        sys.exit("usage: mkexec.py <in.bin> <out.bin> <bss-size> [stack] [--driver]")
+
+    src, dst, bss = args[0], args[1], int(args[2], 0)
+    stack = args[3] if len(args) == 4 else ""
 
     if bss < 0:
         sys.exit(f"mkexec: negative bss size ({bss}) -- check _end/_edata")
 
     flags = stack_code(stack) if stack else 0
+    if driver:
+        flags |= FLAG_DRIVER
 
     data = open(src, "rb").read()
 
@@ -100,7 +109,9 @@ def main():
 
     total = len(data) + bss
     saved = bss
-    asked = f", stack {stack} (code {flags})" if flags else ""
+    asked = f", stack {stack} (code {flags & 0xf})" if flags & 0xf else ""
+    if driver:
+        asked += ", driver"
     print(f"{dst}: {len(data)} data + {bss} bss = {total} image "
           f"({len(data) + HEADER_SIZE} on disk, {saved} bytes of zeros "
           f"no longer stored{asked})")

@@ -57,7 +57,6 @@
 #include "../common/zkbd.h"
 #include "kernel.h"
 #include "hid.h"
-#include "usb/usbh.h"		// z_usbh_kbd_leds()
 
 /*
  * The process to wake when a POINTER report arrives, or 0 for nobody.
@@ -115,8 +114,9 @@ void k_hid_wake_subscriber(void) {
 //
 // Num/Caps/Scroll Lock, toggled here on each press of the key, shared by
 // both keyboard blocks as on any desktop. Carried in every event
-// (above), and sent to every attached keyboard's LEDs through the USB
-// host driver (usb/usbh.c, z_usbh_kbd_leds()). All start OFF -- Num
+// (above), and shown on every attached keyboard's LEDs by the USB
+// driver, `usb` (sw/apps/usb): a change pokes it (k_irq_poke()) and it
+// asks for them (k_kbd_layout(), -2). All start OFF -- Num
 // Lock included: on a compact keyboard the keyboard's own firmware
 // turns a block of letter keys into an embedded keypad while the host
 // says Num Lock is on. See zkbd.h.
@@ -141,7 +141,7 @@ static void hid_lock_key(uint8_t usage) {
 	              usage == Z_HID_USAGE_SCROLLLOCK ? Z_KBD_LOCK_SCROLL : 0;
 	if (!bit) return;
 	hid_locks ^= bit;
-	z_usbh_kbd_leds(hid_locks);
+	k_irq_poke(Z_IRQ_USB);
 }
 
 static volatile uint32_t __attribute__((section(".bss"))) hid_fifo[HID_FIFO_SIZE];
@@ -414,6 +414,13 @@ z_obj_t *k_hid_inject(z_obj_t *obj) {
 z_obj_t *k_kbd_layout(z_obj_t *args) {
 	if (!args) return &z_fail;
 	int32_t want = args->val.int32;
+	// -2: the lock state instead (Z_KBD_LOCK_* bits), for `usb`, which
+	// shows it on the keyboards' LEDs (sw/apps/usb/usb.c).
+	if (want == -2) {
+		args->type = Z_INT32;
+		args->val.int32 = hid_locks;
+		return &z_ok;
+	}
 	if (want >= 0) {
 		if (want >= 32) return &z_fail;
 		hid_layout = (uint8_t)want;

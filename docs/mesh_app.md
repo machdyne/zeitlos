@@ -93,9 +93,9 @@ the same one `docs/usb_host.md`'s clean-room statement takes.*
       | UART 115200
   CP2102  USB-UART bridge
       | USB full speed, vendor class, bulk IN/OUT
-  kernel: sw/os/usb/usbh_cp210x.c  --\
-  kernel: sw/os/usb/usbh_cdc.c       --> one "USB serial" data path
-                                          Z_SYS_USBCDC_* (unchanged)
+  usb:    sw/apps/usb/usbh_cp210x.c --\
+  usb:    sw/apps/usb/usbh_cdc.c     --> one "USB serial" data path
+                                          zusbcdc.h (requests to `usb` since Phase 3)
   sw/apps/serial   port provider `serial0`, USB connection
       | z_port DATA (sw/common/zport.h)
   sw/apps/mesh     framer -> zpb -> session -> model -> window
@@ -111,7 +111,7 @@ The layering is the existing one, reused rather than extended:
   The syscalls, `zusbcdc.h` and `serial` do not change.
 - **`serial` stays the owner.** `mesh` connects to `serial0` with
   `Z_CONN_USBSERIAL_ARG`, the same CONNECT `term`'s `usbserial` sends.
-  It never calls `Z_SYS_USBCDC_*` itself, so the one-owner convention
+  It never calls `z_usbcdc_*()` itself, so the one-owner convention
   in `zusbcdc.h` holds and `serial`'s round-32 flow control applies for
   free.
 - **Free side effect:** with phase 1 alone, `usbserial` in a term
@@ -135,7 +135,7 @@ is a new byte source and nothing else (phase 5).
 
 ## The USB side: CP210x
 
-`sw/os/usb/usbh_cp210x.c`. **Implemented** as the first of a family:
+`sw/apps/usb/usbh_cp210x.c`. **Implemented** as the first of a family:
 FTDI and others come next, so USB serial is now one data path with a
 per-kind probe, setup request list and receive filter --
 `docs/usb_host.md`, "USB serial devices", has the design and the FTDI

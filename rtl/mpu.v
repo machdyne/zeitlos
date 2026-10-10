@@ -37,11 +37,25 @@
  *
  *   fetch   only inside its own block (or the gate / IRQ vector)
  *   load    anything whose address nibble is enabled in MASK
- *   store   own block; peripheral nibbles enabled in MASK, EXCEPT the
+ *   store   own block; the GRANT window, if the kernel has opened
+ *           one; peripheral nibbles enabled in MASK, EXCEPT the
  *           fixed kernel-only set: BRAM (nibble 0), flash and its
  *           write/erase registers (nibble 1), other main memory,
  *           cache control (0x7000_01xx), the FPGA reconfigure key
  *           (0x7000_0218), MTU/MPU (nibble 9)
+ *
+ * -- The grant window --
+ *
+ * [GBASE, GLIMIT), physical, in main memory: a second region the
+ * running app may STORE to, besides its own block. The kernel loads it
+ * on every switch from the process's own state, and opens it only
+ * where another process has said it may -- the driver case: a
+ * filesystem server reading a file straight into the buffer of the
+ * process that asked for it, as the kernel's own filesystem does,
+ * instead of into its own memory and then copying. Empty (GLIMIT <=
+ * GBASE, reset 0/0) means none. Only addresses outside the app window
+ * can fall in it: a grant is to someone else's memory, named by its
+ * physical address.
  *
  * "Own block" is [MTU base, MTU base + SIZE). To keep this off the
  * MTU's adder, it is decided from the CPU's UNTRANSLATED address: an
@@ -73,7 +87,9 @@
  *   +0x1C FAULT_INFO  { valid, 3'b0, reason[3:0], 6'b0, kind[1:0],
  *                       sel[3:0], 12'b0 }, write anything: clear
  *   +0x20 COUNT     violations since cleared (write: clear)
- *   +0x24 INFO      { 16'h3A50, 16'd1 } -- magic, version
+ *   +0x24 INFO      { 16'h3A50, 16'd2 } -- magic, version (2: grant)
+ *   +0x28 GBASE     grant window start (physical), inclusive
+ *   +0x2C GLIMIT    grant window end (physical), exclusive
  *
  *   kind:   0 fetch, 1 load, 2 store
  *   reason: 1 outside own block, 2 kernel-only, 3 nibble masked,
@@ -135,6 +151,8 @@ module wb_mpu #(
     reg [31:0] size;
     reg [15:0] mask;
     reg [31:0] limit;          // mtu_base + size, registered (off the path)
+    reg [31:0] gbase;          // grant window, [gbase, glimit)
+    reg [31:0] glimit;
 
     reg priv;                  // privilege of the current instruction
     reg [31:0] last_pc;        // address of the current instruction
@@ -180,6 +198,10 @@ module wb_mpu #(
                (nib_main && (c_adr_i >= mtu_base_i) &&
                 (c_adr_i < limit) && (size != 32'h0));
 
+    // inside the grant window (physical addresses only)
+    wire granted = !xlate && nib_main &&
+                   (c_adr_i >= gbase) && (c_adr_i < glimit);
+
     // fetching from here makes the instruction privileged
     wire priv_region = !xlate &&
         ((c_adr_i[31:13] == 19'd0) ||
@@ -190,7 +212,7 @@ module wb_mpu #(
 
     wire kernel_only_store =
         (pnib == 4'h0) || (pnib == 4'h1) || (pnib == 4'h9) ||
-        (pnib_main && !own) ||
+        (pnib_main && !own && !granted) ||
         (c_adr_i[31:8] == 24'h7000_01) ||
         (c_adr_i[31:2] == 30'h1C00_0086);          // 0x7000_0218
 
@@ -246,6 +268,8 @@ module wb_mpu #(
             size <= 32'h0;
             mask <= 16'hffff;
             limit <= 32'h0;
+            gbase <= 32'h0;
+            glimit <= 32'h0;
             priv <= 1'b1;
             last_pc <= 32'h0;
             f_valid <= 1'b0;
@@ -295,7 +319,9 @@ module wb_mpu #(
                             4'd7: local_dat <= { f_valid, 3'b0, f_reason,
                                      6'b0, f_kind, f_sel, 12'b0 };
                             4'd8: local_dat <= f_count;
-                            4'd9: local_dat <= { 16'h3A50, 16'd1 };
+                            4'd9: local_dat <= { 16'h3A50, 16'd2 };
+                            4'd10: local_dat <= gbase;
+                            4'd11: local_dat <= glimit;
                             default: local_dat <= 32'h0;
                         endcase
                     end
@@ -313,6 +339,8 @@ module wb_mpu #(
                             4'd4: mask <= c_dat_i[15:0];
                             4'd7: f_valid <= 1'b0;
                             4'd8: f_count <= 32'h0;
+                            4'd10: gbase <= c_dat_i;
+                            4'd11: glimit <= c_dat_i;
                             default: ;
                         endcase
                     end

@@ -1,7 +1,7 @@
 # Core Apps in Flash
 
-The core apps -- `wm`, `net`, `term`, `console`, `cron`, `text` and
-`files` -- are programmed into flash alongside the kernel and are
+The core apps -- the drivers `fs` and `usb`, then `wm`, `net`, `term`,
+`console`, `cron`, `text`, `files` and `repl` -- are programmed into flash alongside the kernel and are
 available with no sdcard attached. The list is `CORE_APPS` in the
 top-level `Makefile`. `console` is the kernel console as a port (`docs/console.md`):
 it is a core app because the machines that most need it, with no card
@@ -67,8 +67,9 @@ alignment of source and destination.
 ```
 0x10000000   MEM_ROM base
              the Zeitlos region (docs/boot.md), at its base:
-  +0x000000  kernel, 256KB
-  +0x040000  core apps  <-- this, up to 752 KB (746,048 bytes used, Oct 2026)
+  +0x000000  kernel, 160KB (256KB until the filesystem left it, 224KB
+             until the USB stack did and the image dropped its .bss)
+  +0x028000  core apps  <-- this, up to 848 KB
   +0x0FC000  the flashtest sector
   +0x0FE000  the key/value store
              -- add 0x100000 for an ECP5 board, 0x300000 for an Artix-7 one
@@ -100,8 +101,18 @@ them without re-encoding, so there is one executable format to keep
 working rather than two.
 
 `Z_ZAR_FLASH_OFFSET` in `sw/os/zar.h` and the offset in `Makefile`'s
-`flash_apps` target must agree. Nothing checks that they do, and a
-mismatch presents as "no core apps in flash" rather than an error.
+`flash_sw` image must agree. A mismatch presents as "no core apps in
+flash" rather than an error (`release/lib/layout.py` checks).
+
+**The kernel and the archive are written as one image** (`flash_sw`;
+`flash_os` and `flash_apps` are names for it): `kernel.bin` padded with
+0xFF to +0x028000, then `apps.zar`. +0x028000 is not on a 64KB
+boundary, and openFPGALoader erases 64KB blocks on a flash it does not
+know to have 4KB sectors. Written separately, the archive's erase took
+the end of the kernel, and the kernel's took the start of the archive
+-- whichever went second won: a kernel that would not boot, or "no fs in
+flash". With a padded kernel that was harmless, because what it lost
+there was `.bss`.
 
 ## Files in flash
 
@@ -155,7 +166,7 @@ archive are flashed together; a ZAR1 archive under a ZAR2 kernel is
 
 **Size.** The files come out of `CORE_RESERVE`, all together, and
 `mkzar.py --files-max` refuses an archive where they do not fit. The
-kernel side cost about 3.5 KB of its 256 KB (`zar.c`, and the
+kernel side cost about 3.5 KB of its 256 KB (224 KB since Phase 2b) (`zar.c`, and the
 fall-throughs in `fsapi.c` and `fs/fs.c`).
 
 **Testing.** `sw/os/tests/test_zar.c` runs `zar.c` against an archive
@@ -274,36 +285,45 @@ To make that visible rather than mysterious:
 
 Two budgets, and RAM is the one that binds.
 
-**Flash.** The archive's region is 770,048 bytes (`0x140000` to
-`0x1FC000` on ECP5) -- 589,824 until the jumploader moved out of it
-([zboot.md](zboot.md) section 5). At the commit that added `text` and
-`files`:
+**Flash.** The archive's region is 868,352 bytes (`0x128000` to
+`0x1FC000` on ECP5). It was 802,816 from `0x138000` while the kernel's
+region was 224KB ([fs_driver.md](fs_driver.md)), 770,048 from
+`0x140000` before that, and 589,824 before the jumploader moved out of
+it ([zboot.md](zboot.md) section 5). With `usb`, October 2026, built
+here (the board's toolchain gives sizes a few percent either way):
 
 | app | in flash | in RAM (image) | stack |
 |---|---:|---:|---:|
-| `wm` | 110,084 | 133,556 | 8K |
-| `net` | 136,768 | 267,592 | 32K |
-| `term` | 91,044 | 135,100 | 8K |
-| `console` | 13,688 | 12,481 | 16K |
-| `cron` | 24,032 | 32,652 | 16K |
-| `text` | 88,880 | 162,992 | 16K |
-| `files` | 66,976 | 92,612 | 16K |
-| `repl` | 194,524 | 308,608 | 64K |
+| `fs` | 42,396 | 72,444 | 64K |
+| `usb` | 41,936 | 52,604 | 16K |
+| `wm` | 106,124 | 133,696 | 8K |
+| `net` | 137,896 | 272,236 | 32K |
+| `term` | 87,292 | 135,444 | 8K |
+| `console` | 11,112 | 12,488 | 16K |
+| `cron` | 19,940 | 32,656 | 16K |
+| `text` | 84,800 | 158,912 | 16K |
+| `files` | 65,504 | 91,140 | 16K |
+| `repl` | ~190,000 | ~307,000 | 64K |
 | files in flash (welcome.txt, repl.txt, todo.scm) | 19,692 | | |
-| **archive** | **746,048** | | |
+| **archive** | **~807,000** | | |
 
-24,000 bytes are left, of 770,048 (the region grew from 589,824 when
-the jumploader moved out of it).
+`repl` is not built in this tree without `ext/`; its figures are the
+board's last, less the page gap below.
 
-**Flash is nearly full, so the flash budgets are tight.** They add up,
-with the reserve, to all but a few KB of the region, so there is no
-slack to hand out: a few KB over each app's size is all there is
-(console and files got 2 KB more after a different toolchain built
-them about 1 KB bigger). The RAM budgets, which only have to meet the
-RAM rule below, have 8-24 KB of headroom each. More flash room would
-have to come from compressing the archive or making apps smaller.
-`zrelease layout` and the release build refuse an archive that does
-not fit.
+**The page gap.** Each app's `.bin` used to carry 0-4KB of zeros
+between `.rodata` and `.data`, because the app linker script started
+the data segment on a page boundary. `sw/common/app.mk` now links with
+the 16-byte page the kernel already used (`SEG_PAGE_LDFLAGS`), which
+took about 20KB out of the archive. It came to light when 1.5KB more
+code made `fs.bin` 4KB longer.
+
+**The budgets are tight.** They add up, with the reserve, to all but
+about 1.8KB of the region. Each is the app's size on the board's
+toolchain plus a few KB. The RAM budgets are a few KB over each image
+too, so that the boot set with `usb` in it still meets the RAM rule
+below (1,024 of 1,024 KB). `mkzar.py --max` checks the archive itself
+against the region (`CORE_ZAR_MAX`, 848K), so a budget that turns out
+too tight costs a bump, never a broken flash.
 
 **Budgets.** Each core app has one: the most it may take in flash
 (its `.bin`) and in RAM (its image: code, data and `.bss`, not its
@@ -311,10 +331,11 @@ stack). They are `CORE_BUDGETS` in the top-level `Makefile`, next to
 `CORE_APPS`:
 
 ```
-CORE_BUDGETS = wm=112K/152K net=136K/288K term=90K/152K console=16K/24K \
-	cron=24K/48K text=88K/176K files=68K/104K repl=192K/320K
-CORE_RESERVE = 22K
-CORE_AT_BOOT = wm net console
+CORE_BUDGETS = fs=45K/75K usb=44K/56K wm=107K/135K net=144K/276K term=93K/152K \
+	console=16K/16K cron=26K/48K text=86K/162K files=70K/104K repl=194K/304K
+CORE_RESERVE = 21K
+CORE_ZAR_MAX = 848K
+CORE_AT_BOOT = fs usb wm net console
 CORE_RAM_MAX = 1M
 ```
 
@@ -328,18 +349,27 @@ budgets themselves to two rules:
 
 - **Flash:** all of them, plus `CORE_RESERVE` (room kept for what is
   not an app yet, such as files in flash), fit the archive's region.
-- **RAM:** the apps `init()` starts (`CORE_AT_BOOT`) plus the two
+- **RAM:** the apps that start at boot (`CORE_AT_BOOT`) plus the two
   largest of the rest fit in `CORE_RAM_MAX` -- one or two apps on
   demand beside the boot set, on the smallest board.
 
 `make flash_apps` prints each app against its budget.
 
-**RAM.** The core apps do not all run at once. `init()` starts `wm`,
+**RAM.** The core apps do not all run at once. Boot starts `fs` first
+(the filesystem, [fs_driver.md](fs_driver.md)), then `usb` (the USB
+host, [usb_driver.md](usb_driver.md)); `init()` starts `wm`,
 `net`, `console` (and `cron` when it has a job list); the rest are
 started on demand. The rule is that **one or two more core apps must
 fit beside those**, on the 1MB boards included -- so a new core app is
 judged by its RAM image as much as by its flash size. [boot.md](boot.md),
 "Memory budget", has what a 1MB board holds.
+
+**Past the archive.** The drivers are core apps, and core apps can
+come from the card: a copy in `/apps` wins over flash for everything
+but `fs`. So a driver is not bounded by this archive the way it was
+bounded by the kernel's region. The flash copy can be the small one
+that brings the machine up, and the card's the full one.
+[usb_driver.md](usb_driver.md), "Drivers past the 1MB flash region".
 
 ## Upgrading a card
 

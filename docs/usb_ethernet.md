@@ -1,9 +1,11 @@
 # USB Ethernet (CDC-ECM)
 
 A USB ethernet adapter as a `net` backend, alongside the three MACs in
-[networking.md](networking.md). The class driver is in the kernel
-(`sw/os/usb/usbh_ecm.c`), on top of the USB host controller described in
-[usb_host.md](usb_host.md); `net` reaches it through one syscall.
+[networking.md](networking.md). The class driver is in the `usb`
+process (`sw/apps/usb/usbh_ecm.c`; the kernel's until Phase 3, see
+[usb_driver.md](usb_driver.md)), on top of the USB host controller
+described in [usb_host.md](usb_host.md). `net` reaches it through two
+rings shared with `usb`.
 
 **Status:** works in co-simulation against the real gateware
 (`make test_usb_ecm`), including enumeration, every frame length that
@@ -18,7 +20,7 @@ unplug and replug. Tested on hardware.
 - [The MAC address](#the-mac-address)
 - [Framing and the packet buffer](#framing-and-the-packet-buffer)
 - [Polling, and what it costs](#polling-and-what-it-costs)
-- [The syscall](#the-syscall)
+- [The rings](#the-rings)
 - [net's side](#nets-side)
 - [Configuration](#configuration)
 - [Throughput](#throughput)
@@ -124,10 +126,10 @@ That leaves the case of an adapter swapped while `net` is running.
 tied to the first adapter's address, and changing address means
 throwing all of that away. Instead:
 
-- `net` tells the kernel which address it sends from
+- `net` tells `usb` which address it sends from
   (`Z_USBNET_OPEN`, called once at startup);
 - when an adapter binds whose own address differs from that one — or
-  which reported no address at all — the kernel adds `PROMISCUOUS` to
+  which reported no address at all — `usb` adds `PROMISCUOUS` to
   the packet filter.
 
 So the replacement adapter passes frames addressed to the *first*
@@ -157,13 +159,12 @@ area at 0x000**, copying each chunk out or in before the next.
 That sharing is safe, and the reason is worth stating plainly because
 it is the kind of thing that is only obvious until it is not:
 
-- mass storage touches that area only from inside FatFs, which runs
-  with the scheduler held;
-- this driver touches it only inside `Z_SYS_USBNET`, which
-  `k_syscall_touches_fs()` also runs with the scheduler held;
-- nothing in the ISR touches it at all.
+- mass storage and this driver both run in the `usb` process, one
+  request or one frame at a time, to its end;
+- a poll of the stack never touches it.
 
-So the two can never be switched out with the other's data half-copied.
+So neither can start while the other has data half-copied. (Until
+Phase 3 the same was true because both ran with the scheduler held.)
 The transaction engine itself is held across a whole frame with
 `z_usbh_bus_reserve()`, as a whole SCSI command is.
 
@@ -177,22 +178,44 @@ copy the storage driver uses.
 
 Frames longer than 1536 bytes are drained to their short packet and
 dropped, so that one oversize frame does not turn into two bogus ones.
-A frame too long for the caller's buffer is dropped the same way: the
-buffer is never written past its length, and `rx_drop` counts it.
+A frame too long for a ring slot is dropped the same way: the slot is
+never written past its length, and `rx_drop` counts it.
 
 ## Polling, and what it costs
 
 There is no receive interrupt. Something has to ask.
 
-`net`'s main loop sleeps on `net_phy_t`'s `idle_ticks`, so this backend
-answers **1 tick while traffic has moved in the last half second, and
-16 ticks (about 22 ms) when it has not**. An idle link therefore costs
+Since Phase 3 the asking is `usb`'s, not `net`'s: `usb` asks the
+adapter, puts frames in its ring, and wakes `net` when the ring stops
+being empty, so `net` sleeps until a frame is there. The pace below is
+the same; it is just a different process that wakes for it.
+
+`usb` asks **every tick while traffic has moved in the last half
+second, and every 16 ticks (about 22 ms) when it has not**. An idle link therefore costs
 about 45 wakeups a second, against the 10 a second a wired MAC's
 backstop costs and the 732 `docs/networking.md` records as expensive
 enough to take a scheduler share from whatever is painting the screen.
 The latency cost is bounded by the same 22 ms.
 
-An idle poll is cheap on the bus as well as in the kernel: one IN
+**"Traffic" means frames addressed to us** (and anything we send), not
+broadcasts or multicasts. Counting every received frame kept the fast
+rate on almost permanently on an ordinary LAN, where ARP for other
+hosts and similar chatter arrives every few hundred milliseconds:
+`ipcbench` [7] (docs/userspace_drivers.md) measured `net` taking most of
+a timeslice ~230 times a second on an idle desktop. The destination is
+compared with our own address rather than by the group bit, since an
+adapter in promiscuous mode also passes other hosts' unicast.
+
+**Nor does answering ARP.** Everything we send used to count, and a
+host on the LAN asking "who has us?" every few hundred milliseconds
+got an ARP reply each time, which restarted the half-second busy hold
+before it could run out. CPU accounting (round 7d) measured `net` at
+~28% of the CPU on an idle desktop, polling every tick. Tick billing
+had shown it as nearly idle, because the polls run between ticks. An
+ARP frame no longer counts as traffic. If a conversation follows, its
+first unicast frame to us starts the fast rate then.
+
+An idle poll is cheap on the bus as well as in `usb`: one IN
 transaction that the adapter NAKs, with the hardware's NAK budget set
 to 0 so it comes straight back.
 
@@ -206,26 +229,28 @@ The idle receive is also where the notification endpoint gets read,
 about four times a second, for `NETWORK_CONNECTION` (link up or down).
 Nothing acts on link state yet; `ic` and `lsusb` report it.
 
-## The syscall
+## The rings
 
-`Z_SYS_USBNET`, one syscall with an op field rather than four, as
-`Z_SYS_FLASH` does. `sw/common/zusbnet.h` has the argument shapes and
-the inline wrappers; `sw/os/usbnetapi.c` is the kernel side.
+`Z_SYS_USBNET` (an op field: info, receive, send, open) was the way in
+until Phase 3; its slot remains and fails. Now `NET_OPEN` sets up two
+rings ([sw/common/zusbnet.h](../sw/common/zusbnet.h) has the rules):
 
-| Op | Does |
-|---|---|
-| `Z_USBNET_INFO` | presence, generation, MAC, link, promiscuous flag, `wMaxSegmentSize`, counters |
-| `Z_USBNET_RECV` | one whole frame, or 0 if the adapter has none. Never waits |
-| `Z_USBNET_SEND` | one frame; returns once the adapter has accepted it |
-| `Z_USBNET_OPEN` | the address `net` sends from (see [The MAC address](#the-mac-address)) |
+| | in | written by | holds |
+|---|---|---|---|
+| `z_usbnet_srv_t` | `usb` | `usb` | received frames (2 slots), how far it has sent from `net`'s ring, and the adapter's info: presence, generation, MAC, link, promiscuous flag, `wMaxSegmentSize`, counters |
+| `z_usbnet_cli_t` | `net` | `net` | frames to send (2 slots), how far it has read `usb`'s ring |
 
-`RECV` and `SEND` hold the scheduler, like the CDC-ACM calls and for
-the same reasons. The generation counter moves on every bind and
-unbind, which is how `net` notices a replug without polling for it.
-
-An older kernel, which does not have this syscall, leaves `n` at -1 and
-`z_usbnet_info()` returns false; `net` reports that rather than
-misbehaving.
+- **Reading the other side's ring.** Each reads the other's directly:
+  `NET_OPEN` hands `usb` net's ring as a blob, and its reply is `usb`'s
+  ring.
+- **Wakes.** Messages pass only when a ring goes from empty to not:
+  `Z_USB_EVENT` to `net`, `Z_USB_KICK` to `usb`.
+- **Replugs.** The generation in the info moves on every bind and
+  unbind, which is how `net` notices a replug, by reading memory.
+- **A send no longer reports failure.** It returns as soon as the
+  frame is in the ring; a full ring drops it, as a MAC with a full
+  transmit buffer would, and TCP sends it again. The adapter's own
+  failures are in `tx_err`.
 
 ## net's side
 
@@ -239,7 +264,8 @@ interface:
 - **`init` waits.** On a board whose only NIC is a USB adapter, `net`
   starting before anything is plugged in is normal, and there is
   nothing else that would restart it when an adapter appears. So it
-  prints one line and polls twice a second until one arrives.
+  prints one line and asks twice a second until `usb` is running and
+  has one.
 
   The consequence to know about: `net` registers its name before this,
   so a process that messages `net0` while it is waiting will wait for
@@ -248,7 +274,7 @@ interface:
 
 Unplug mid-session needs no handling beyond this: sends fail, receives
 return nothing, and `net` logs the event. A replug resumes. `ic` on the
-serial console dumps the kernel's counters next to `net`'s own, which
+serial console dumps `usb`'s counters next to `net`'s own, which
 is what to look at if frames appear to be going missing between them.
 
 ## Configuration

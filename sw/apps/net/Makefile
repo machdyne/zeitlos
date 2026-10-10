@@ -276,7 +276,7 @@ endif
 # zrtc.o rides with ntp.o rather than being listed separately: it is
 # the calendar arithmetic ntp.c uses to print the time it just set, and
 # nothing else in this app has any use for a date.
-OBJS = zeitlos.o zobj.o zstream.o zport.o zrng.o zfsapp.o netcfg.o screen.o zscreen.o zinput.o $(PHY_OBJ) eth.o arp.o ip.o udp.o $(DHCP_OBJ) dns.o $(NTP_OBJ) tcp.o relay.o telnet.o $(SOCK_OBJ) $(SSH_OBJ) tftp.o $(PROF_OBJ) net.o
+OBJS = zeitlos.o zobj.o zstream.o zport.o zrng.o zfsapp.o zusbc.o netcfg.o screen.o zscreen.o zinput.o $(PHY_OBJ) eth.o arp.o ip.o udp.o $(DHCP_OBJ) dns.o $(NTP_OBJ) tcp.o relay.o telnet.o $(SOCK_OBJ) $(SSH_OBJ) tftp.o $(PROF_OBJ) net.o
 
 # each rule below lists its own .c file as a prerequisite -- without
 # this, `make` has no way to know a source file changed (it was only
@@ -331,7 +331,7 @@ zscreen.o: ../../common/zscreen.c ../../common/zscreen.h packbits.h
 netcfg.o: netcfg.c netcfg.h ../../common/zfsapp.h
 	$(CC) $(CFLAGS) -c netcfg.c -o netcfg.o
 
-usb_ecm.o: usb_ecm.c usb_ecm.h ../../common/zusbnet.h ../../common/zsoc.h
+usb_ecm.o: usb_ecm.c usb_ecm.h ../../common/zusbnet.h ../../common/zusbc.h ../../common/zsoc.h
 	$(CC) $(CFLAGS) -c usb_ecm.c -o usb_ecm.o
 
 net_phy.o: net_phy.c net_phy.h enc28j60.h rmii_eth.h esp32link.h usb_ecm.h ../../common/zsoc.h
@@ -469,6 +469,9 @@ test:
 	$(HOSTCC) --std=gnu99 -Wall -I. -I../../common -o /tmp/test_netcfg \
 		tests/test_netcfg.c netcfg.c
 	/tmp/test_netcfg
+	$(HOSTCC) --std=gnu99 -Wall -DTFTP_HOST_TEST -I. -I../../common -o /tmp/test_tftp_get \
+		tests/test_tftp_get.c
+	/tmp/test_tftp_get
 
 CLEAN_EXTRA = .net_phy_selected .net_config_selected
 
@@ -476,5 +479,9 @@ CLEAN_EXTRA = .net_phy_selected .net_config_selected
 # heap copy until acked. Stays off LARGE: net is a core app and
 # stays small. The old per-message leak is fixed.
 APP_STACK = 32K
+# A driver (ZEXE flags bit 15, docs/userspace_drivers.md "Drivers"): it
+# drives the Ethernet MACs, takes Z_IRQ_ETH with z_irq_bind(), and is
+# preferred by the scheduler when woken.
+APP_DRIVER = 1
 
 include ../../common/app.mk

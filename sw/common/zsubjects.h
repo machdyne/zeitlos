@@ -57,6 +57,12 @@
 #define Z_SUBJ_ASK_N       32
 #define Z_SUBJ_STREAM      400          //  16 zstream.h   byte streams
 #define Z_SUBJ_STREAM_N    16
+#define Z_SUBJ_BENCH       416          //  16 ipcbench.c  ipcbench's own processes
+#define Z_SUBJ_BENCH_N     16
+#define Z_SUBJ_FS          432          //  16 zfsproto.h  the filesystem driver
+#define Z_SUBJ_FS_N        16
+#define Z_SUBJ_USB         448          //  16 zusbproto.h the USB driver
+#define Z_SUBJ_USB_N       16
 #define Z_SUBJ_TTS         0x54540000u  // 64K ztts.h      speech ("TT", tts.md)
 #define Z_SUBJ_TTS_N       0x10000
 #define Z_SUBJ_WM_GAME     (-32768)     //  16 zwm.h       wm game mode
@@ -81,7 +87,10 @@ Z_SUBJ_AFTER_(Z_SUBJ_TERM, Z_SUBJ_NET);
 Z_SUBJ_AFTER_(Z_SUBJ_NET, Z_SUBJ_WEB);
 Z_SUBJ_AFTER_(Z_SUBJ_WEB, Z_SUBJ_ASK);
 Z_SUBJ_AFTER_(Z_SUBJ_ASK, Z_SUBJ_STREAM);
-Z_SUBJ_AFTER_(Z_SUBJ_STREAM, Z_SUBJ_TTS);
+Z_SUBJ_AFTER_(Z_SUBJ_STREAM, Z_SUBJ_BENCH);
+Z_SUBJ_AFTER_(Z_SUBJ_BENCH, Z_SUBJ_FS);
+Z_SUBJ_AFTER_(Z_SUBJ_FS, Z_SUBJ_USB);
+Z_SUBJ_AFTER_(Z_SUBJ_USB, Z_SUBJ_TTS);
 _Static_assert((unsigned long)(unsigned int)Z_SUBJ_WM_GAME >=
 	(unsigned long)Z_SUBJ_TTS + Z_SUBJ_TTS_N, "Z_SUBJ_WM_GAME overlaps Z_SUBJ_TTS");
 

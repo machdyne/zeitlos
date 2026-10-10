@@ -120,4 +120,24 @@ typedef struct {
 
 } z_msg_envelope_t;
 
+// Z_SYS_MSG_RECV's argument (z_msg_recv(), sw/common/zeitlos.h): the
+// message to fill, and how long to wait for one in ticks (0: until
+// something arrives or wakes the caller).
+typedef struct {
+	z_msg_t		*msg;
+	uint32_t	timeout;
+	uint32_t	flags;		// Z_MSG_RECV_MATCH: only subject+tag below
+	uint32_t	subject;
+	uint32_t	tag;
+} z_msg_recv_args_t;
+
+// Wait for the one message with this subject and tag, leaving any other
+// mail queued, in order, for later (z_msg_recv_match(), zeitlos.h).
+#define Z_MSG_RECV_MATCH	1u
+// With MATCH: do not wait -- the match if it is already queued, else
+// Z_FAIL at once. For discarding a reply that came after its caller
+// gave up (z_msg_take_match(), zeitlos.h). A kernel without it waits
+// out the timeout instead, so callers pass a short one.
+#define Z_MSG_RECV_NOWAIT	2u
+
 #endif

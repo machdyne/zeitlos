@@ -22,7 +22,7 @@
  *
  * The node is reached through `serial`'s port, serial0, as a USB serial
  * client -- the same CONNECT `term`'s `usbserial` sends -- so `serial`
- * must be running. mesh never touches the USB syscalls itself
+ * must be running. mesh never asks the USB driver itself
  * (sw/common/zusbcdc.h, "One owner").
  *
  * One rule matters more than any other: every DATA is ACKED THE MOMENT

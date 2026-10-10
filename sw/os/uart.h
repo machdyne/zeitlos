@@ -13,14 +13,8 @@ bool k_uart_tx_full(void);
 // RX IRQ unblocks). Used by the kernel shell so pid 0 is not
 // RUNNABLE while waiting at the prompt.
 void k_uart_wait_rx(void);
+void k_uart_wake_waiter(void);
 
-// Kernel work that has to run in process context but is noticed in an
-// interrupt -- today, mounting /usb when a drive is plugged in and
-// releasing it when one is pulled. k_deferred_request() is safe from an
-// ISR: it marks the work pending and wakes pid 0 if it is waiting in
-// k_uart_wait_rx(), which runs k_deferred_run() (kernel.c) before it
-// blocks again. pid 0 busy with a command does it at its next prompt.
-void k_deferred_request(void);
 
 // --
 

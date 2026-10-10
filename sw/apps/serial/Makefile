@@ -5,6 +5,6 @@ APP = serial
 # Objects, and why each is linked:
 #
 #   zsoc.o: z_soc_has_feature2(), which z_uart1_present() is built on.
-OBJS = zeitlos.o zobj.o zport.o zsoc.o zuart.o serial.o
+OBJS = zeitlos.o zobj.o zport.o zsoc.o zuart.o zusbc.o serial.o
 
 include ../../common/app.mk

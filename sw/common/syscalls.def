@@ -198,11 +198,12 @@ Z_MKSYSCALL(HID_INJECT, k_hid_inject)
 // Appended last so no earlier enum value shifts.
 Z_MKSYSCALL(WM_WAKE, k_wm_wake)
 
-// USB CDC-ACM for apps (sw/common/zusbcdc.h, sw/os/usbcdcapi.c).
-// Appended last so no earlier enum value shifts.
-Z_MKSYSCALL(USBCDC_PRESENT, k_usbcdc_present)
-Z_MKSYSCALL(USBCDC_READ, k_usbcdc_read)
-Z_MKSYSCALL(USBCDC_WRITE, k_usbcdc_write)
+// USB CDC-ACM for apps -- RETIRED in Phase 3: the device is the `usb`
+// process's, reached by message (sw/common/zusbcdc.h). The slots stay,
+// so no later number shifts, and fail (sw/os/kusb.c).
+Z_MKSYSCALL(USBCDC_PRESENT, k_usb_retired)
+Z_MKSYSCALL(USBCDC_READ, k_usb_retired)
+Z_MKSYSCALL(USBCDC_WRITE, k_usb_retired)
 
 // Reconfigure the FPGA -- reboot -- after syncing every open file:
 // rtl/socctl.v's RECONFIG register, k_reboot() in sw/os/kernel.c,
@@ -222,11 +223,10 @@ Z_MKSYSCALL(FLASH, k_flash)
 // k_jump() in sw/os/kernel.c, docs/zboot.md sec. 5. Appended last.
 Z_MKSYSCALL(JUMP, k_jump)
 
-// USB ethernet (CDC-ECM) for the net app: frames in and out, adapter
-// info, net's own address. An op field rather than four syscalls; see
-// sw/common/zusbnet.h, sw/os/usbnetapi.c, docs/usb_ethernet.md.
-// Appended last so no earlier enum value shifts.
-Z_MKSYSCALL(USBNET, k_usbnet)
+// USB ethernet (CDC-ECM) for the net app -- RETIRED in Phase 3: the
+// adapter is the `usb` process's, and frames move through rings
+// (sw/common/zusbnet.h). The slot stays, and fails (sw/os/kusb.c).
+Z_MKSYSCALL(USBNET, k_usb_retired)
 
 // The kernel console's output log and its input, for sw/apps/console
 // (the "console0" port term connects to): sw/common/zconsole.h,
@@ -259,3 +259,48 @@ Z_MKSYSCALL(AUTH, k_auth)
 Z_MKSYSCALL(FS_RENAME, k_fs_rename)
 Z_MKSYSCALL(FS_STAT, k_fs_stat)
 Z_MKSYSCALL(FS_LIST_EX, k_fs_list_ex)
+
+// The scheduler trace (sw/os/ktrace.c, docs/kernel.md "Scheduler
+// trace"): uint32 op, 1 arms (clears and starts recording), 0 stops.
+// Fails on a kernel built without KTRACE=1. Appended last so no earlier
+// enum value shifts.
+Z_MKSYSCALL(KTRACE, k_ktrace)
+
+// Blocking receive: the next message, waiting for one in the same call
+// (sw/os/kernel.c, k_msg_recv(); z_msg_recv() in sw/common/zeitlos.h).
+// Replaces a read / wait / read loop's three syscalls with one.
+// Appended last so no earlier enum value shifts.
+Z_MKSYSCALL(MSG_RECV, k_msg_recv)
+
+// The MPU grant window: one process allows another to store into its
+// memory, and that one opens it (sw/common/zproc.h, Z_GRANT_*;
+// sw/os/kernel.c, k_mpu_grant(); docs/mpu.md "The grant window").
+// Fails on gateware whose MPU has no grant window (version 1).
+// Appended last so no earlier enum value shifts.
+Z_MKSYSCALL(MPU_GRANT, k_mpu_grant)
+
+// Which of a list of program names exist: one pass over /apps instead
+// of one lookup per name (sw/os/fs/fs.c, fs_exec_exists_many();
+// z_exec_exists_many() in zeitlos.h). For wm's dock at startup.
+// Appended last so no earlier enum value shifts.
+Z_MKSYSCALL(EXEC_EXISTS_MANY, k_exec_exists_many)
+
+// Interrupt binding for drivers: a driver process takes an interrupt
+// line, which then wakes it (sw/common/zproc.h, z_irq_args_t; sw/os/
+// kernel.c, k_irq(); docs/userspace_drivers.md "Phase 1"). Appended
+// last so no earlier enum value shifts.
+Z_MKSYSCALL(IRQ, k_irq)
+
+// CPU accounting in cycles: per process, per kind of interrupt, idle
+// (sw/common/zproc.h, z_cpu_stat_args_t; sw/os/kernel.c, "CPU
+// accounting"). Appended last so no earlier enum value shifts.
+Z_MKSYSCALL(CPU_STAT, k_cpu_stat)
+
+// Block devices for the filesystem driver: the RAM disk and USB mass
+// storage (sw/common/zproc.h, z_blk_args_t; sw/os/kblk.c). Drivers
+// only. Appended last so no earlier enum value shifts.
+Z_MKSYSCALL(BLK, k_blk)
+
+// The flash archive, read-only, for the filesystem driver's underlay
+// (sw/common/zproc.h, z_zar_args_t; sw/os/kblk.c). Appended last.
+Z_MKSYSCALL(ZAR, k_zar)

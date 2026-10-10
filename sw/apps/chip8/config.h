@@ -18,7 +18,7 @@
  *
  * `chip8.cfg`, in the same directory as the ROM. Uppercase and 8.3
  * because FAT short names are all this filesystem has (FF_USE_LFN is
- * 0; see sw/os/fs/fatfs/ffconf.h).
+ * 0; see sw/apps/fs/fatfs/ffconf.h).
  *
  *     # comments run to end of line, ; also works
  *

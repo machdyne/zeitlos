@@ -5,10 +5,10 @@
  * Zeitlos
  * Copyright (c) 2026 Lone Dynamics Corporation. All rights reserved.
  *
- * A USB serial device, for apps. The driver is in the
- * kernel (sw/os/usb/usbh_cdc.c); these are the three syscalls onto it,
- * Z_SYS_USBCDC_PRESENT / _READ / _WRITE, and the argument shapes they
- * share with sw/os/usbcdcapi.c.
+ * A USB serial device, for apps. The driver is in the `usb` process
+ * (sw/apps/usb/usbh_cdc.c; until Phase 3 it was the kernel's, behind
+ * the Z_SYS_USBCDC_* syscalls). These are requests to it, through
+ * sw/common/zusbc.c: link zusbc.o. docs/usb_driver.md.
  *
  * -- One owner, by convention --
  *
@@ -20,53 +20,33 @@
  *
  * -- What it drives --
  *
- * Any USB serial device the kernel binds: CDC-ACM, and CP210x bridges
+ * Any USB serial device `usb` binds: CDC-ACM, and CP210x bridges
  * (docs/usb_host.md, "USB serial devices"). FTDI, CH340 and PL2303 are
- * not bound yet. The syscalls are the same for every kind; the name
- * is historical. There is no baud rate to set: the host sets 115200
- * 8N1 at bind, which a native-USB device ignores and a bridge uses.
+ * not bound yet. The calls are the same for every kind; the name is
+ * historical. There is no baud rate to set: the host sets 115200 8N1
+ * at bind, which a native-USB device ignores and a bridge uses.
+ *
+ * -- Reading --
+ *
+ * `usb` reads the device for its client -- whoever called these last
+ * -- and keeps what arrives, so a read is a request answered from
+ * memory, never a wait on the wire. When bytes arrive with none kept,
+ * it sends the client a Z_USB_EVENT (zusbproto.h), which a loop
+ * sleeping in z_proc_wait() wakes for and should otherwise ignore.
  */
 
 #include <stdint.h>
 #include <stdbool.h>
-#include "zeitlos.h"
 
-// Z_SYS_USBCDC_READ / _WRITE. The kernel fills in n: bytes moved, 0 if
-// the device had nothing (read) or took nothing yet, -1 on a failure or
-// with no device.
-typedef struct {
-	uint8_t *buf;
-	uint32_t len;		// read: at most this many; write: this many
-	int32_t n;
-} z_usbcdc_args_t;
+// A device is bound.
+bool z_usbcdc_present(void);
 
-#ifndef Z_KERNEL		// the kernel includes this for the struct only
+// Up to `max` of the bytes the device has sent (Z_USB_CDC_MAX at a
+// time). 0: none yet. -1: no device, or no `usb`.
+int32_t z_usbcdc_read(uint8_t *buf, uint32_t max);
 
-static inline bool z_usbcdc_present(void) {
-	z_kernel_ptr_t k = (z_kernel_ptr_t)(uintptr_t)(reg_kernel);
-	z_obj_t *rv = (z_obj_t *)k(Z_SYS_USBCDC_PRESENT, 0, 0);
-	return rv && rv->val.uint32 == Z_OK;
-}
-
-// One USB transaction: up to one packet (64 bytes) of whatever the
-// device has. Never waits for data.
-static inline int32_t z_usbcdc_read(uint8_t *buf, uint32_t max) {
-	z_usbcdc_args_t a;
-	z_kernel_ptr_t k = (z_kernel_ptr_t)(uintptr_t)(reg_kernel);
-	a.buf = buf; a.len = max; a.n = -1;
-	k(Z_SYS_USBCDC_READ, (uint32_t *)&a, 0);
-	return a.n;
-}
-
-// Blocks until the device has taken len bytes, or fails.
-static inline int32_t z_usbcdc_write(const uint8_t *buf, uint32_t len) {
-	z_usbcdc_args_t a;
-	z_kernel_ptr_t k = (z_kernel_ptr_t)(uintptr_t)(reg_kernel);
-	a.buf = (uint8_t *)buf; a.len = len; a.n = -1;
-	k(Z_SYS_USBCDC_WRITE, (uint32_t *)&a, 0);
-	return a.n;
-}
-
-#endif
+// Returns once the device has taken len bytes: len, or fewer (-1 if
+// none) on a failure.
+int32_t z_usbcdc_write(const uint8_t *buf, uint32_t len);
 
 #endif

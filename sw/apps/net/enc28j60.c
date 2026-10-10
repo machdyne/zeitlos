@@ -57,7 +57,7 @@
    about 18x faster, and -- more importantly -- the timing no longer
    changes when the toolchain, the ISA or the cache configuration
    changes. The sdcard driver learned that the hard way; see
-   sw/os/fs/fatfs/sdmm.c. */
+   sw/apps/fs/fatfs/sdmm.c. */
 
 #define ETH_CS_H()    (reg_spieth_ctrl = Z_SPISD_CTRL_DIV(Z_SPIETH_DIV))
 #define ETH_CS_L()    (reg_spieth_ctrl = Z_SPISD_CTRL_DIV(Z_SPIETH_DIV) | Z_SPISD_CTRL_CS)
@@ -81,7 +81,7 @@ static void eth_delay_ms(uint32_t n) {
    sw/common/zeitlos.h. "SPI1" stalls a DATA access while busy and can
    transfer 32 bits at a time; "SPI0" does neither.
  
-   The SD driver (sw/os/fs/fatfs/sdmm.c) makes exactly the same check
+   The SD driver (sw/apps/fs/fatfs/sdmm.c) makes exactly the same check
    against its own instance of the same module. Two instances, two
    checks: they are separate peripherals and a board could in principle
    carry different gateware for each, though none does. */

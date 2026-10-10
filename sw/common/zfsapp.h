@@ -12,7 +12,7 @@
  * App-facing filesystem access -- fs_size()/fs_mallocfile()/
  * fs_write_file(), backed by the new Z_SYS_FS_SIZE/_READ/_WRITE
  * syscalls (sw/os/fsapi.h/.c). The first way for an ORDINARY APP
- * (previously only sh.c/kernel code, via sw/os/fs/fs.h) to read or
+ * (previously only sh.c/kernel code, via sw/apps/fs/fsvol.h) to read or
  * write a file. Added to unblock sw/apps/repl's `te` command
  * (docs/editor.md), deliberately general -- any future app wanting
  * file access should link zfsapp.c and include this, rather than
@@ -22,7 +22,7 @@
  * being exactly the kind of app-facing syscall wrapper zeitlos.h
  * otherwise holds -- see zeitlos.h's own comment on why: it's also
  * included by kernel-side code, which separately includes
- * sw/os/fs/fs.h (the kernel-native FatFs wrappers), and fs.h ALREADY
+ * sw/apps/fs/fsvol.h (the kernel-native FatFs wrappers), and fs.h ALREADY
  * declares these exact three names for the kernel's own direct-FatFs
  * versions (different signatures -- uint32_t vs int, etc.).
  * Declaring them again under the same names in zeitlos.h would
@@ -72,7 +72,7 @@ int fs_write_file(char *filename, char *buf, int len);
 
 // deletes `filename` (or an empty directory). Returns 1 on success,
 // 0 on failure -- NOTE this is the OPPOSITE convention from
-// fs_unlink() inside sw/os/fs/fs.c itself (which returns 0 for
+// fs_unlink() inside sw/apps/fs/fs.c itself (which returns 0 for
 // success) -- deliberately not propagated here, to keep every
 // function in THIS header consistent with each other (non-zero =
 // success, matching fs_write_file()'s own return).
@@ -137,7 +137,7 @@ int fs_open_read(const char *filename);
 
 // reads up to `maxlen` bytes into `buf`, returning the number
 // actually read -- 0 means end-of-file (NOT an error, same
-// convention the kernel-native fs_read_chunk(), sw/os/fs/fs.c,
+// convention the kernel-native fs_read_chunk(), sw/apps/fs/fs.c,
 // already uses), a negative value means a real failure (bad handle,
 // or FatFs itself failed).
 int fs_read_chunk(int handle, void *buf, int maxlen);
@@ -154,7 +154,7 @@ int fs_close_handle(int handle);
 
 // creates a directory / an empty file. 1 on success, 0 on failure --
 // this file's own convention, which is the INVERSE of what the
-// kernel-native fs_mkdir()/fs_touch() (sw/os/fs/fs.c) return; the
+// kernel-native fs_mkdir()/fs_touch() (sw/apps/fs/fs.c) return; the
 // translation happens inside these wrappers so no caller has to think
 // about it. Added alongside the Scheme API's (mkdir ...) and
 // (touch-file ...), see docs/scheme_api.md.
@@ -217,7 +217,7 @@ int fs_truncate(int handle, uint32_t size);
 // return, since that's a successful answer of "nothing there".
 //
 // Named fs_df() rather than fs_free() to avoid colliding with the
-// kernel-native fs_free() (sw/os/fs/fs.c) -- see zeitlos.h's own note
+// kernel-native fs_free() (sw/apps/fs/fs.c) -- see zeitlos.h's own note
 // on exactly that class of collision.
 bool fs_df(uint32_t *total_kb, uint32_t *free_kb);
 

@@ -108,13 +108,12 @@ void k_klog_putc(uint8_t c) {
 //
 // And a set, not one pid: two writers asleep at once used to share one
 // slot, and the first was overwritten and never woken even with a host.
-// A bit per process (Z_PROCS_MAX is 32); a writer clears its own bit
+// A pid set (k_pidset_t, kpidset.h); a writer clears its own bit
 // when it runs again, and the interrupt wakes only bits whose process
 // is still BLOCKED, so no wake is left pending on a process that has
 // since moved on (k_proc_unblock() on a running process records one).
-static volatile uint32_t uart_tx_waiters;
-
-_Static_assert(Z_PROCS_MAX <= 32, "uart_tx_waiters holds a bit per process");
+static volatile k_pidset_t uart_tx_waiters;
+static volatile bool uart_tx_waiting;	// any bit set: the THRE test is one load
 
 // ~20ms: short enough that output resumes promptly once a stalled
 // console gives up or recovers, long enough that a writer waiting on a
@@ -122,18 +121,21 @@ _Static_assert(Z_PROCS_MAX <= 32, "uart_tx_waiters holds a bit per process");
 #define UART_TX_RETRY_TICKS  (Z_TICK_HZ / 50u)
 
 static void uart_tx_wake_waiters(void) {
-	uint32_t w = uart_tx_waiters;
-	uart_tx_waiters = 0;
-	for (uint32_t pid = 0; w; pid++, w >>= 1)
-		if ((w & 1u) && (z_procs[pid].flags & Z_PROC_FLAG_BLOCKED))
-			k_proc_unblock(pid);
+	for (uint32_t i = 0; i < K_PIDSET_WORDS; i++) {
+		uint32_t w = uart_tx_waiters.w[i];
+		uart_tx_waiters.w[i] = 0;
+		for (uint32_t pid = i * 32u; w; pid++, w >>= 1)
+			if ((w & 1u) && (z_procs[pid].flags & Z_PROC_FLAG_BLOCKED))
+				k_proc_unblock(pid);
+	}
+	uart_tx_waiting = false;
 }
 
 // A process that ends while waiting must not leave its bit for whoever
 // gets its pid next. Called from the scheduler's reap (kernel.c).
 void k_uart_release_pid(uint32_t pid) {
 	uint32_t old_mask = maskirq(0xFFFFFFFF);
-	if (pid < 32) uart_tx_waiters &= ~(1u << pid);
+	if (pid < Z_PROCS_MAX) k_pidset_put(&uart_tx_waiters, pid, false);
 	maskirq(old_mask);
 }
 
@@ -238,7 +240,7 @@ void z_uart_irq(void) {
 				tx_pump();
 				// nothing left to send: stop asking to be told about it
 				if (tx_head == tx_tail) reg_uart0_ier = 0x01;
-				if (uart_tx_waiters &&
+				if (uart_tx_waiting &&
 					((tx_head + 1) % UART_FIFO_SIZE) != tx_tail)
 					uart_tx_wake_waiters();
 				break;
@@ -374,7 +376,7 @@ void k_uart_putc(char c) {
 		uint16_t next;
 
 		// Running again: no longer waiting, however we were woken.
-		if (z_pid < 32) uart_tx_waiters &= ~(1u << z_pid);
+		if (z_pid < Z_PROCS_MAX) k_pidset_put(&uart_tx_waiters, z_pid, false);
 
 		tx_pump();
 		next = (tx_head + 1) % UART_FIFO_SIZE;
@@ -413,12 +415,14 @@ void k_uart_putc(char c) {
 		// uart_tx_waiters above for why the timeout is not optional.
 		// wake_tick 0 means "no timeout", so a deadline landing on 0
 		// is nudged to 1, as k_proc_wait() does.
-		uart_tx_waiters |= 1u << z_pid;
+		k_pidset_put(&uart_tx_waiters, z_pid, true);
+		uart_tx_waiting = true;
 		{
 			uint32_t w = z_kernel_ticks + UART_TX_RETRY_TICKS;
 			z_procs[z_pid].wake_tick = w ? w : 1;
+			k_sleep_note(z_pid);
 		}
-		z_procs[z_pid].flags |= Z_PROC_FLAG_BLOCKED;
+		k_proc_flags(z_pid, Z_PROC_FLAG_BLOCKED, 0);
 		maskirq(old_mask);
 		k_proc_yield_blocked();
 
@@ -426,19 +430,13 @@ void k_uart_putc(char c) {
 
 }
 
-// See uart.h. Set from interrupt context, cleared by the waiter under
-// the same mask it tests the RX ring with, so a request that lands
-// between "nothing to do" and BLOCKED wakes it like a byte would.
-static volatile bool k_deferred_pending;
-
-void k_deferred_request(void) {
-	uint32_t old_mask = maskirq(0xFFFFFFFF);
-	k_deferred_pending = true;
+// Wake whoever waits in k_uart_wait_rx(), as a byte would -- for a
+// driver restart (kernel.c). Interrupts masked, or in the interrupt.
+void k_uart_wake_waiter(void) {
 	if (uart_rx_wait_pid != ~0u) {
 		k_proc_unblock(uart_rx_wait_pid);
 		uart_rx_wait_pid = ~0u;
 	}
-	maskirq(old_mask);
 }
 
 void k_uart_wait_rx(void) {
@@ -446,16 +444,6 @@ void k_uart_wait_rx(void) {
 	for (;;) {
 
 		uint32_t old_mask = maskirq(0xFFFFFFFF);
-
-		// Deferred kernel work first, in this process's context, with
-		// interrupts back on. Before the scheduler is up (reg_kernel
-		// still 0) there is nothing that could have asked for any.
-		if (k_deferred_pending && reg_kernel != 0) {
-			k_deferred_pending = false;
-			maskirq(old_mask);
-			k_deferred_run();
-			continue;
-		}
 
 		if (!uart_rx_fifo_empty()) {
 			maskirq(old_mask);
@@ -468,9 +456,26 @@ void k_uart_wait_rx(void) {
 			return;
 		}
 
+		// A driver that crashed is started again from here, by pid 0,
+		// between lines of input (kernel.c, "restarting a driver").
+		// One due: run it, then wait. One later: wait no longer than
+		// that. Only pid 0 does this.
+		uint32_t drv = (z_pid == 0) ? k_drv_restart_wait() : ~0u;
+		if (drv == 0) {
+			maskirq(old_mask);
+			k_drv_restart_run();
+			continue;
+		}
+
 		uart_rx_wait_pid = z_pid;
-		z_procs[z_pid].wake_tick = 0;
-		z_procs[z_pid].flags |= Z_PROC_FLAG_BLOCKED;
+		if (drv != ~0u) {
+			uint32_t w = z_kernel_ticks + drv;
+			z_procs[z_pid].wake_tick = w ? w : 1;
+			k_sleep_note(z_pid);
+		} else {
+			z_procs[z_pid].wake_tick = 0;
+		}
+		k_proc_flags(z_pid, Z_PROC_FLAG_BLOCKED, 0);
 		maskirq(old_mask);
 		k_proc_yield_blocked();
 

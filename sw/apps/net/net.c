@@ -104,7 +104,9 @@
 #include "../../common/zport.h"
 #include "../../common/zsoc.h"
 #include "../../common/zntp.h"
+#include "../../common/zusbproto.h"	// Z_USB_EVENT
 #include "net_phy.h"
+#include "usb_ecm.h"		// usb_ecm_rx_pending()
 #include "eth.h"
 #include "arp.h"
 #include "ip.h"
@@ -1451,6 +1453,16 @@ int main(void) {
 		printf("net: name registration FAILED -- callers will not find "
 			"this process\n");
 
+	// The Ethernet interrupt, taken as a driver (docs/userspace_drivers.md,
+	// "Phase 1"): it wakes this process and, since net is a driver, it
+	// runs next. An edge -- one pulse per frame, latched -- so there is
+	// nothing for the kernel to quieten. On a kernel without binding the
+	// call fails and the kernel's older path (wake whatever registered as
+	// "net0") still applies; on the USB-ethernet backend the line never
+	// fires and nothing changes.
+	if (z_irq_bind(Z_IRQ_ETH, 0, 0) == Z_OK)
+		printf("net: ethernet interrupt bound\n");
+
 	// diagnostic: distinguishes "this process's own execution jumped
 	// back to main()" (canary stays MAGIC -- .bss was never re-zeroed,
 	// since that only happens when fs_load() rewrites this process's
@@ -1743,6 +1755,10 @@ int main(void) {
 #endif
 				handle_telnet_port_close(&msg);
 			}
+			// The USB driver saying frames are waiting in its ring
+			// (sw/common/zusbnet.h): the wake was the point, and
+			// eth_poll() has already taken them.
+			else if (msg.subject == Z_USB_EVENT) { }
 			else if (!tftp_handle_stream_msg_checked(&msg)) {
 				// Everything above is an explicit subject and tftp
 				// claims the stream ones; anything left is a message
@@ -1855,6 +1871,14 @@ int main(void) {
 		// (screen.c, only while a browser is watching). Whichever comes
 		// first, capped by the same 100 ms backstop as the wired path.
 		// The interrupt still cuts any of it short.
+		// A USB adapter's frames come with a wake (Z_USB_EVENT,
+		// sw/common/zusbnet.h), but the message loop above may have
+		// read that wake AFTER eth_poll() looked at the ring -- the
+		// frame is there and nothing is left to wake us for it. So
+		// look again before sleeping. Stop-and-wait TFTP lost a block's
+		// worth of sleep to this often enough to halve its speed.
+		if (usb_ecm_rx_pending()) continue;
+
 		if (net_phy->idle_ticks) {
 			uint32_t w = net_phy->idle_ticks();
 			uint32_t scan = screen_idle_ticks();

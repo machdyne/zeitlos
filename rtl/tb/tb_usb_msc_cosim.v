@@ -1,7 +1,7 @@
 /*
  * Zeitlos SOC -- simulation only.
  *
- * Mass storage co-simulation: the REAL sw/os/usb driver, including
+ * Mass storage co-simulation: the REAL sw/apps/usb driver, including
  * usbh_msc.c, against the REAL rtl/usb gateware and a bulk-only SCSI
  * device model (tb_usb_device.v with MSC=1).
  *

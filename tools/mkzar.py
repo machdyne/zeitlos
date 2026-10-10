@@ -68,14 +68,17 @@ def ram_image(data):
 def main(argv):
     budgets = None
     files_max = None
-    while len(argv) > 2 and argv[1] in ("--budgets", "--files-max"):
+    zar_max = None
+    while len(argv) > 2 and argv[1] in ("--budgets", "--files-max", "--max"):
         if argv[1] == "--budgets":
             budgets = parse_budgets(argv[2])
+        elif argv[1] == "--max":
+            zar_max = size(argv[2])
         else:
             files_max = size(argv[2])
         argv = argv[:1] + argv[3:]
     if len(argv) < 3:
-        print("usage: mkzar.py [--budgets \"name=FLASH/RAM ...\"] [--files-max N] "
+        print("usage: mkzar.py [--budgets \"name=FLASH/RAM ...\"] [--files-max N] [--max N] "
               "<output.zar> <name>=<file.bin> ... <dir/file>=<file> ...", file=sys.stderr)
         return 1
 
@@ -177,6 +180,14 @@ def main(argv):
 
     blob = MAGIC + struct.pack("<I", len(entries)) + b"\0" * 8
     blob += table + names + payload
+
+    # The region is the hard limit: past it is the flashtest sector.
+    if zar_max is not None and len(blob) > zar_max:
+        print("mkzar: the archive is %d bytes, over its flash region of %d by %d"
+              % (len(blob), zar_max, len(blob) - zar_max), file=sys.stderr)
+        for name, data, is_file in entries:
+            print("         %-16s %7d" % (name, len(data)), file=sys.stderr)
+        return 1
 
     out_dir = os.path.dirname(out_path)
     if out_dir:

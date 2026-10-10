@@ -14,7 +14,6 @@
 #include <string.h>
 
 #include "kernel.h"
-#include "usb/usbh.h"
 #include "zeitlos.h"
 #include "mem.h"
 #include "uart.h"
@@ -22,14 +21,15 @@
 #include "msg.h"
 #include "hid.h"
 #include "pidreg.h"
-#include "fs/fs.h"
+#include "kfs.h"		// files, through fs (docs/fs_driver.md)
+#include "kblk.h"	// k_blk, k_zar: the syscall table
+#include "../common/zpaths.h"
 #include "fsapi.h"
 #include "procapi.h"
 #include "flashapi.h"	// k_flash, referenced by the syscall table
 #include "kvstore.h"	// k_kv, the same
 #include "auth.h"		// k_auth, the same
-#include "usbnetapi.h"	// k_usbnet, referenced by the syscall table
-#include "usbcdcapi.h"	// k_usbcdc_*, referenced by the syscall table	// k_proc_list(), referenced by the syscall
+#include "kusb.h"	// k_usbnet, k_usbcdc_*: retired syscalls in the table
 						// table built from syscalls.def below
 #include "../common/zsoc.h"
 
@@ -107,6 +107,74 @@ z_syscall_t z_syscall_table[Z_SYSCALL_COUNT] = {
 #undef Z_SYSCALL
 };
 
+// -- the scheduler's view of the process table --
+//
+// One bit per pid. The scheduler used to walk all Z_PROCS_MAX slots,
+// reading each one's flags, to count runnable processes (twice per
+// switch) and to find the next one. Each slot is a separate 188-byte
+// z_proc, so every read is its own trip to memory: the scheduler trace
+// measured ~175 cycles for every slot passed and ~2,800 for a count,
+// out of ~28,000 for a whole message hop (docs/userspace_drivers.md).
+// With the masks, counting is a few instructions and finding the next
+// process is a mask and a count-trailing-zeros.
+//
+// k_proc_flags() is the only writer, and it updates flags and masks
+// together with interrupts masked, so an interrupt can never see one
+// without the other.
+volatile k_pidset_t k_run_set __attribute__((section(".bss")));
+volatile k_pidset_t k_die_set __attribute__((section(".bss")));
+volatile k_pidset_t k_drv_set __attribute__((section(".bss")));
+
+void k_proc_flags(uint32_t pid, uint32_t set, uint32_t clear) {
+	if (pid >= Z_PROCS_MAX) return;
+	uint32_t old = maskirq(0xffffffffu);
+	uint32_t f = (z_procs[pid].flags | set) & ~clear;
+	z_procs[pid].flags = f;
+	k_pidset_put(&k_run_set, pid,
+		(f & (Z_PROC_FLAG_ACTIVE | Z_PROC_FLAG_BLOCKED)) == Z_PROC_FLAG_ACTIVE);
+	k_pidset_put(&k_die_set, pid, (f & Z_PROC_FLAG_DIE) != 0);
+	k_pidset_put(&k_drv_set, pid, (f & Z_PROC_FLAG_DRIVER) != 0);
+	maskirq(old);
+}
+
+
+// -- the tick's own cost (docs/kernel.md, "What a tick costs") --
+//
+// With KDIAG=1 (sw/os/Makefile): two rdcycle reads and a few adds per
+// tick, from the KTIMER branch's start to the handler's exit (irq_vec's
+// register save and restore, ~1,500 cycles each, are not included), and
+// a switch for comparing: `tick sleepset off` walks every slot instead
+// of the sleepers. `tick` in the shell prints it all.
+#ifdef KDIAG
+volatile uint32_t k_tick_n, k_tick_sw, k_tick_max;
+volatile uint64_t k_tick_cyc;
+volatile bool k_tick_sleepset = true;
+#define K_TICK_SLEEPSET k_tick_sleepset
+#else
+#define K_TICK_SLEEPSET 1
+#endif
+
+// Two scheduler variants tried in round 10, switchable at run time
+// (`sched` in the kernel shell), both OFF by default: a timeout ending
+// at its deadline tick (late 0) instead of one tick after (late 1),
+// and a driver woken by its timeout going first (drvwake). Measured on
+// TFTP over USB ethernet, both made it slower and lost more frames --
+// `usb` polling the adapter more often costs more than it gains -- and
+// with drvwake the keyboard and mouse were re-enumerated mid-transfer.
+// Kept as switches for the next measurement. See the sleep sweep.
+volatile int32_t k_sched_late = 1;
+volatile bool k_sched_drvwake = false;
+
+// Processes sleeping with a deadline (wake_tick != 0). A bit is set
+// whenever a deadline is set, and cleared by the sweep once the process
+// is woken or found no longer to be waiting on one -- so a stale bit
+// costs one look, never a missed wake.
+volatile k_pidset_t k_sleep_set __attribute__((section(".bss")));
+
+void k_sleep_note(uint32_t pid) {
+	if (pid < Z_PROCS_MAX) k_pidset_put(&k_sleep_set, pid, true);
+}
+
 // -- filesystem serialisation (see k_no_preempt in kernel.h) --
 //
 // Non-zero means "the process currently running is inside a syscall
@@ -158,70 +226,36 @@ void k_fs_enter(void) {
 	k_no_preempt++;
 }
 
+// A KTIMER swap deferred by the guard is OWED, not cancelled.
+//
+// It used to be dropped: the tick found k_no_preempt set, returned to
+// the process, and nothing remembered that a switch had been refused.
+// A process making filesystem calls back to back -- an 8KB chunk loop,
+// a file copy -- is inside one nearly all the time, so nearly every
+// tick landed inside one and was dropped, and nobody else ran.
+// ipcbench (docs/userspace_drivers.md, Phase 0) measured a sleeping
+// process kept waiting 1.5 s during a 512KB card write and 142 ms
+// during a chunked read. K_NO_PREEMPT_MAX_TICKS never helped, because
+// it is measured from the start of each call, and no single call ran
+// long.
+//
+// So the KTIMER path sets k_resched_owed when it defers, and the
+// moment the guard drops back to zero the switch is paid -- by the
+// same timer(1) pulse k_proc_yield_blocked() uses, which raises IRQ 0
+// at once and lets irq_vec save a real frame. The IRQ path sees
+// k_resched_owed and calls k_sched_switch(). The card is between
+// commands at that point (the guard is off), which is the state the
+// guard exists to wait for.
+static __attribute__((section(".bss"))) volatile uint32_t k_resched_owed;
+
+// a bound interrupt has woken a driver: switch to it now (k_irq_fire())
+static __attribute__((section(".bss"))) volatile bool k_drv_woken;
+
 void k_fs_leave(void) {
 	if (k_no_preempt) k_no_preempt--;
-}
-
-// Deferred kernel work (uart.h, k_deferred_request()). Run by pid 0, in
-// process context, whenever an interrupt has asked for it. Each item
-// works out for itself whether anything changed, so a request that
-// turns out to be stale, or two that arrive together, cost a check.
-void k_deferred_run(void) {
-	fs_usb_poll();		// mount /usb on insertion, release it on removal
-}
-
-// Which syscalls reach FatFs, and therefore must run to completion.
-//
-// PROC_RUN is deliberately not here. It resolves and loads a whole
-// executable, and fs_load_exec() already brackets each FatFs call
-// (one 1KB read). A program is hundreds of milliseconds, far past
-// K_NO_PREEMPT_MAX_TICKS. Holding the guard across the syscall would
-// not cover that load: the timestamp above starts only when the
-// counter leaves zero, so the inner brackets do not restart it, the
-// cap fires inside an f_read, and the swap this guard exists to
-// prevent happens with the card mid-command. The next filesystem
-// user then sees FR_DISK_ERR until a manual mount. Between chunks
-// chip-select is up, which is ordinary single-threaded FatFs use.
-//
-// Deliberately a switch rather than a flag in syscalls.def: that file
-// is shared with app-side code, and its comment warns that inserting
-// an entry shifts every later enum value.
-static int k_syscall_touches_fs(uint32_t id) {
-	switch (id) {
-		case Z_SYS_FS_SIZE:
-		case Z_SYS_FS_READ:
-		case Z_SYS_FS_WRITE:
-		case Z_SYS_FS_UNLINK:
-		case Z_SYS_FS_LIST:
-		case Z_SYS_FS_OPEN_WRITE:
-		case Z_SYS_FS_OPEN_READ:
-		case Z_SYS_FS_READ_CHUNK:
-		case Z_SYS_FS_WRITE_CHUNK:
-		case Z_SYS_FS_CLOSE:
-		case Z_SYS_FS_MKDIR:
-		case Z_SYS_FS_TOUCH:
-		case Z_SYS_FS_SEEK:
-		case Z_SYS_FS_DF:
-		case Z_SYS_FS_OPEN_RW:
-		case Z_SYS_FS_SYNC:
-		case Z_SYS_FS_TRUNCATE:
-		case Z_SYS_FS_RENAME:
-		case Z_SYS_FS_STAT:
-		case Z_SYS_FS_LIST_EX:
-		case Z_SYS_EXEC_EXISTS:
-		case Z_SYS_CFG_RELOAD:
-		// Not files: these share the one USB transaction engine with
-		// mass storage, which is used from inside FatFs. Holding the
-		// scheduler for them, as for FatFs, keeps a process switched
-		// out mid-transaction from letting another start on top of it.
-		case Z_SYS_USBCDC_READ:
-		case Z_SYS_USBCDC_WRITE:
-		// USB ethernet: RECV and SEND hold the engine for a frame and
-		// use MSC's sector area of the packet buffer (usbh_ecm.c).
-		case Z_SYS_USBNET:
-			return 1;
-		default:
-			return 0;
+	if (k_no_preempt == 0 && (k_resched_owed || k_drv_woken)) {
+		k_trace(K_TR_RESCHED, 0);
+		timer(1);
 	}
 }
 
@@ -244,6 +278,12 @@ uint32_t *z_kernel_entry(uint32_t cmd, uint32_t *args, uint32_t val);
 // memory protection (docs/mpu.md); defined with k_fault() below
 static bool k_mpu;
 static void k_mpu_init(void);
+// the MPU has a grant window (version 2): see k_mpu_grant()
+static bool k_mpu_grants;
+static void k_grant_load(uint32_t pid);
+// what the MPU's MASK holds now: written only when a switch changes it
+static __attribute__((section(".bss"))) uint32_t k_mpu_mask_now;
+
 uint32_t k_proc_active_count(void);
 
 void kprint(const char *s);
@@ -448,7 +488,7 @@ z_obj_t *k_video_set_mode(z_obj_t *args) {
 // z_proc_run() wrapper for the caller side.
 // Long enough for a full PATH, not just a bare program name. The file
 // browser launches an executable the user double-clicked, which may
-// be several directories deep, and fs_exec_info_any() (sw/os/fs/fs.c)
+// be several directories deep, and fs_exec_info_any() (sw/apps/fs/fs.c)
 // resolves a path perfectly well -- but a name longer than this is
 // silently TRUNCATED here, which turns into a confusing "no such
 // file" rather than an error about length. 64 matches
@@ -756,14 +796,11 @@ int main(void) {
 	// init usb hid keyboard event queue
 	z_hid_init();
 
-	// USB host controller (docs/usb_host.md). Checks
-	// Z_FEATURE2_USB_HOST itself and does nothing on a board built
-	// without it, so this is unconditional here.
-	//
-	// AFTER z_hid_init(), not before: enumeration writes typ into the
-	// compat blocks and z_hid_init() clears them, so the other order
-	// would wipe a device that had already been found.
-	z_usbh_init();
+	// The USB host controller is the `usb` process's (sw/apps/usb,
+	// docs/usb_driver.md), which the shell starts first at boot -- after
+	// this, as it must be: enumeration writes typ into the compat
+	// blocks, and z_hid_init() clears them. Until it runs, the
+	// controller's interrupt stays off (k_usb_irq()).
 	printf(" - hid initialized.\n");
 
 	// init memory management -- pool size comes from the SOC
@@ -788,6 +825,10 @@ int main(void) {
 		z_procs[p].base = 0x00000000;
 		z_procs[p].flags = 0x00000000;
 	}
+	// .bss is zeroed by crt0 (sw/os/Makefile checks), but not trusted (pidreg.h)
+	k_pidset_clear(&k_run_set);
+	k_pidset_clear(&k_die_set);
+	k_pidset_clear(&k_drv_set);
 
 	// zero the pid name registry -- see k_pidreg_init()'s comment in
 	// pidreg.h for why this can't just be left to .bss (short
@@ -856,7 +897,10 @@ int main(void) {
 	if (mem_total > (1024 * 1024)) {
 		uint32_t ram_bytes = mem_total / Z_RAMDISK_DIVISOR;
 		if (ram_bytes > Z_RAMDISK_MAX) ram_bytes = Z_RAMDISK_MAX;
-		fs_ramdisk_create(ram_bytes);
+		// Memory only: fs formats it (docs/fs_driver.md).
+		if (k_ramdisk_init(ram_bytes))
+			printf(" - ramdisk: %lu KB for fs (" Z_DIR_RAM ", " Z_DIR_TMP ")\n",
+				(unsigned long)(k_ramdisk_bytes() / 1024));
 	}
 
 	// The flash key/value store (docs/kvstore.md): found and summarised
@@ -906,7 +950,12 @@ static void k_gpu_clip_save(z_proc *p)
 	p->gpu_clip_valid = 1;
 }
 
-static void k_gpu_clip_restore(z_proc *p)
+// `cur` holds what the GPU's clip registers contain right now: the
+// process just switched away from, whose k_gpu_clip_save() read them
+// moments ago with nothing writing them since. Comparing against that
+// copy rather than reading the registers again saves nine GPU register
+// reads on every switch (round 7e).
+static void k_gpu_clip_restore(z_proc *p, const z_proc *cur)
 {
 	uint32_t rx0, ry0, rx1, ry1, ren;
 	uint32_t bx0, by0, bx1, by1;
@@ -927,9 +976,9 @@ static void k_gpu_clip_restore(z_proc *p)
 		bx0 = 0; by0 = 0; bx1 = 640; by1 = 480;
 	}
 
-	if (gpu_clip_x0 != rx0 || gpu_clip_y0 != ry0 ||
-	    gpu_clip_x1 != rx1 || gpu_clip_y1 != ry1 ||
-	    gpu_clip_enable != ren) {
+	if (cur->gpu_rast_clip[0] != rx0 || cur->gpu_rast_clip[1] != ry0 ||
+	    cur->gpu_rast_clip[2] != rx1 || cur->gpu_rast_clip[3] != ry1 ||
+	    cur->gpu_rast_clip[4] != ren) {
 		n = 0;
 		while ((gpu_busy & 1) && n < 50000u)
 			n++;
@@ -940,8 +989,8 @@ static void k_gpu_clip_restore(z_proc *p)
 		gpu_clip_enable = ren;
 	}
 
-	if (gpu_blit_clip_x0 != bx0 || gpu_blit_clip_y0 != by0 ||
-	    gpu_blit_clip_x1 != bx1 || gpu_blit_clip_y1 != by1) {
+	if (cur->gpu_blit_clip[0] != bx0 || cur->gpu_blit_clip[1] != by0 ||
+	    cur->gpu_blit_clip[2] != bx1 || cur->gpu_blit_clip[3] != by1) {
 		if ((gpu_blit_status & 1) &&
 		    (gpu_blit_ctrl & GPU_BLIT_CTRL_GLYPH)) {
 			n = 0;
@@ -962,7 +1011,143 @@ static void k_gpu_clip_restore(z_proc *p)
 // Does not advance z_kernel_ticks and does not sweep wake_tick: those
 // stay the KTIMER caller's job. A yield (UART THRE pulse after
 // k_proc_wait) must not look like time passing.
-static uint32_t *k_sched_switch(uint32_t *regs) {
+// -- interrupt binding (Z_SYS_IRQ, docs/userspace_drivers.md "Phase 1") --
+//
+// A driver takes an interrupt line; the line then wakes it. The kernel
+// still takes the interrupt -- there is one vector and it is the
+// kernel's -- but does nothing with it except what the driver asked:
+// optionally write one device register to quieten a level-sensitive
+// source, wake the driver, and switch to it.
+//
+// Only lines the kernel does not serve itself may be bound: Z_IRQ_ETH,
+// which the kernel only ever passed on to whatever was registered as
+// "net0", and Z_IRQ_USB since the USB host became the `usb` process
+// (Phase 3). The audio and UART lines become bindable as their drivers
+// leave the kernel. The owner is a pid + 1 (0: none).
+#define K_IRQ_BINDABLE	((1u << Z_IRQ_ETH) | (1u << Z_IRQ_USB))
+static __attribute__((section(".bss"))) uint16_t k_irq_owner[32];
+static __attribute__((section(".bss"))) uint32_t k_irq_silence[32];
+static __attribute__((section(".bss"))) uint32_t k_irq_silence_val[32];
+
+// A device register: not main memory, the BIOS, flash, the app window or
+// the MTU/MPU -- the same places an app may not store to (docs/mpu.md).
+static bool k_irq_silence_ok(uint32_t a) {
+	uint32_t n = a >> 28;
+	if (a & 3u) return false;
+	return n != 0x0 && n != 0x1 && n != 0x4 && n != 0x5 &&
+		n != 0x8 && n != 0x9;
+}
+
+z_obj_t *k_irq(z_obj_t *args) {
+	z_irq_args_t *a = (z_irq_args_t *)args;
+	if (z_pid >= Z_PROCS_MAX || a->irq >= 32 ||
+		!(K_IRQ_BINDABLE & (1u << a->irq)) ||
+		!(z_procs[z_pid].flags & Z_PROC_FLAG_DRIVER)) return (&z_fail);
+	uint32_t old = maskirq(0xffffffffu);
+	z_obj_t *rv = &z_fail;
+	if (a->op == Z_IRQ_OP_BIND) {
+		uint32_t o = k_irq_owner[a->irq];
+		if ((o == 0 || o == z_pid + 1) &&
+			(a->silence == 0 || k_irq_silence_ok(a->silence))) {
+			k_irq_silence[a->irq] = a->silence;
+			k_irq_silence_val[a->irq] = a->silence_val;
+			k_irq_owner[a->irq] = (uint16_t)(z_pid + 1);
+			rv = &z_ok;
+		}
+	} else if (a->op == Z_IRQ_OP_UNBIND) {
+		if (k_irq_owner[a->irq] == z_pid + 1) {
+			k_irq_owner[a->irq] = 0;
+			rv = &z_ok;
+		}
+	}
+	maskirq(old);
+	return rv;
+}
+
+// A process ended: its lines are free again.
+static void k_irq_release_pid(uint32_t pid) {
+	for (uint32_t i = 0; i < 32; i++)
+		if (k_irq_owner[i] == pid + 1) k_irq_owner[i] = 0;
+}
+
+// The line fired. False if nobody holds it (the caller's old path).
+static bool k_irq_fire(uint32_t irq) {
+	uint32_t o = k_irq_owner[irq];
+	if (!o) return false;
+	if (k_irq_silence[irq])
+		*(volatile uint32_t *)(uintptr_t)k_irq_silence[irq] = k_irq_silence_val[irq];
+	k_proc_unblock(o - 1);
+	if (o - 1 != z_pid) k_drv_woken = true;
+	return true;
+}
+
+// Wake the driver holding `irq` as if the line had fired, silence write
+// included: the kernel has news for it that is not an interrupt. hid.c
+// tells `usb` this way that a lock key changed the keyboard LEDs.
+void k_irq_poke(uint32_t irq) {
+	if (irq < 32) (void)k_irq_fire(irq);
+}
+
+
+// -- CPU accounting ------------------------------------------------
+//
+// Where the cycles go, counted exactly, in every build: the tick-based
+// cpu_ticks charges whoever is running when the tick lands, so a
+// process that runs between ticks -- a driver woken by an interrupt,
+// a client and server bouncing messages -- and the kernel's own
+// interrupt work are invisible to it. ipcbench [7] found ~40-60% of
+// the CPU gone with every tick billed to ipcbench itself.
+//
+// A process is charged from the cycle it is switched in (k_sw_in) to
+// the entry of the interrupt that switches it out. Each interrupt's
+// own time is measured entry to exit and counted by kind; the running
+// process is not charged for it (k_sw_in moves forward by that much).
+// Time in waitirq -- blocked, nobody to run -- is idle. A few cycles
+// per interrupt and per switch.
+static uint32_t k_sw_in;		// when the running process was switched in
+static uint32_t k_irq_t0;		// entry of the interrupt being handled
+static bool k_irq_switched;		// that interrupt switched processes
+static uint64_t k_cyc_irq[4];	// Z_CPU_IRQ_*
+static uint32_t k_cnt_irq[4];
+static uint64_t k_cyc_idle;
+// waitirq in progress since this cycle (k_idle_on): ended by the next
+// interrupt's entry, which is also where the CPU may switch away. The
+// first version measured waitirq's own return instead, which on a
+// switch spanned everything other processes ran in between -- and,
+// added to k_sw_in, made later charges wrap (a ps "used" larger than
+// the uptime).
+static uint32_t k_idle_t0;
+static bool k_idle_on;
+
+static void k_cpu_put(z_cpu_count_t *o, uint64_t v) {
+	o->lo = (uint32_t)v;
+	o->hi = (uint32_t)(v >> 32);
+}
+
+z_obj_t *k_cpu_stat(z_obj_t *args) {
+	z_cpu_stat_args_t *a = (z_cpu_stat_args_t *)args;
+	if (!k_user_ok_words(a, sizeof(*a))) return (&z_fail);
+	uint32_t old = maskirq(0xffffffffu);
+	uint32_t now = rd_cycle();
+	uint32_t n = Z_PROCS_MAX < Z_CPU_STAT_PROCS ? Z_PROCS_MAX : Z_CPU_STAT_PROCS;
+	for (uint32_t i = 0; i < n; i++) {
+		uint64_t v = z_procs[i].cpu_cycles;
+		// the caller's own current slice, up to now
+		if (i == z_pid) v += (uint32_t)(now - k_sw_in);
+		k_cpu_put(&a->proc[i], v);
+	}
+	for (int i = 0; i < 4; i++) {
+		k_cpu_put(&a->irq[i], k_cyc_irq[i]);
+		a->irq_n[i] = k_cnt_irq[i];
+	}
+	k_cpu_put(&a->idle, k_cyc_idle);
+	a->n = n;
+	a->now = now;
+	maskirq(old);
+	return (&z_ok);
+}
+
+static uint32_t *k_sched_switch(uint32_t *regs, bool prefer) {
 
 	int sched_scanned;
 
@@ -986,13 +1171,87 @@ static uint32_t *k_sched_switch(uint32_t *regs) {
 	//
 	// This test predates Z_PROC_FLAG_BLOCKED, when "runnable" meant
 	// "active" and the current process was always counted.
+	// A process that is DYING is never kept, even if it is the only one
+	// that could run: k_fault() marks a crashed process DIE and comes
+	// here, and keeping it resumed it at the next instruction, which
+	// faulted again -- one crash report per instruction, for ever, as
+	// seen when net crashed in October 2026.
 	if (Z_PROC_RUNNABLE(z_procs[z_pid]) &&
-		k_proc_runnable_count() < 2) return regs;
+		!(z_procs[z_pid].flags & Z_PROC_FLAG_DIE) &&
+		k_proc_runnable_count() < 2) {
+		k_trace(K_TR_KEEP, 1);
+		return regs;
+	}
+
+	// The process being switched away from. If the walk below ends with
+	// nobody to switch to, this is who keeps running -- so z_pid must be
+	// put back to it. The old slot walk did that by accident (32 steps
+	// from any pid come back to it); the pid-set walk does not, and
+	// returning with z_pid left on a slot it had just reaped resumed the
+	// old context under the wrong pid, and that process was later
+	// resumed from a stale frame. That is what crashed net.
+	uint32_t from = z_pid;
+
 
 	// save current process registers and GPU scissor
+	k_trace(K_TR_STEP, 0);
 	k_gpu_clip_save(&z_procs[z_pid]);
+	k_trace(K_TR_STEP, 1);
 	for (int i = 0; i < 32; i++) {
 		z_procs[z_pid].regs[i] = *(regs + i);
+	}
+	k_trace(K_TR_STEP, 2);
+
+	// (After the save above: the process being left must be saved
+	// whichever way the choice goes.)
+	//
+	// Drivers first -- on a WAKE-UP, not on the tick (docs/
+	// userspace_drivers.md, "Phase 1"). When a process has just blocked
+	// (often on a request to a driver), or an interrupt has woken a
+	// driver, a runnable driver goes next, ahead of the round-robin
+	// order: that is what makes a request to a driver cost two switches
+	// rather than a turn around every runnable process. The tick's own
+	// switch does not prefer anybody, so a driver that computes for a
+	// long time shares the CPU like anything else rather than starving
+	// the desktop.
+	//
+	// Before the drivers: the hand-off. A process that blocks right
+	// after sending a message gives the CPU to the process it sent it
+	// to, if that one is now runnable. That is a request to a driver
+	// (the client blocks, the driver runs) and also the driver's
+	// answer (the driver blocks, the client runs) -- the second hop,
+	// which the driver preference alone cannot help, since the client
+	// is not a driver: without it, every other runnable process took
+	// its turn, a whole tick each, before the client saw its answer.
+	// Measured with one CPU-bound process running: ~8ms a request to
+	// `fs` instead of ~2ms (docs/fs_driver.md). Only for a process
+	// that has blocked: one still runnable keeps its place in the
+	// round robin. The blocked process gives up only the rest of its
+	// own turn, so nobody else waits longer than without it.
+	{
+		uint32_t h = z_procs[from].handoff;
+		z_procs[from].handoff = 0;
+		if (prefer && h && !Z_PROC_RUNNABLE(z_procs[from])) {
+			h--;
+			if (h < Z_PROCS_MAX && h != from &&
+				Z_PROC_RUNNABLE(z_procs[h]) &&
+				!(z_procs[h].flags & Z_PROC_FLAG_DIE)) {
+				z_pid = h;
+				k_trace(K_TR_HANDOFF, h);
+				goto switch_to;
+			}
+		}
+	}
+
+	if (prefer) {
+		k_pidset_t t;
+		k_pidset_and(&t, &k_run_set, &k_drv_set);
+		uint32_t d = k_pidset_next2(z_pid, &t, &t);
+		if (d < Z_PROCS_MAX && d != from &&
+			!(z_procs[d].flags & Z_PROC_FLAG_DIE)) {
+			z_pid = d;
+			goto switch_to;
+		}
 	}
 
 	// Bounded scan. Before BLOCKED existed, this loop was
@@ -1006,10 +1265,16 @@ static uint32_t *k_sched_switch(uint32_t *regs) {
 	sched_scanned = 0;
 
 	// find next runnable process (round-robin scheduling)
+	// Only slots in the masks are visited: the runnable ones, and the
+	// dying ones, which are reaped as the walk passes them exactly as
+	// before. An empty slot or a blocked one costs nothing now.
 	next_process:
-	if (++sched_scanned > Z_PROCS_MAX) return regs;
-	z_pid++;
-	if (z_pid >= Z_PROCS_MAX) z_pid = 0;
+	if (++sched_scanned > Z_PROCS_MAX + 1) goto none_runnable;
+	{
+		uint32_t next = k_pidset_next2(z_pid, &k_run_set, &k_die_set);
+		if (next >= Z_PROCS_MAX) goto none_runnable;
+		z_pid = next;
+	}
 
 	if ((z_procs[z_pid].flags & Z_PROC_FLAG_DIE) == Z_PROC_FLAG_DIE) {
 		// NOTE: this whole branch runs inside the interrupt
@@ -1062,7 +1327,10 @@ static uint32_t *k_sched_switch(uint32_t *regs) {
 		// and its place among the console's waiting writers (uart.c)
 		k_uart_release_pid(z_pid);
 		z_procs[z_pid].base = 0x00000000;
-		z_procs[z_pid].flags = 0x00000000;
+		z_procs[z_pid].gwin = 0;
+		z_procs[z_pid].handoff = 0;
+		k_irq_release_pid(z_pid);
+		k_proc_flags(z_pid, 0, 0xffffffffu);
 		goto next_process;
 	}
 
@@ -1071,11 +1339,46 @@ static uint32_t *k_sched_switch(uint32_t *regs) {
 	if (!Z_PROC_RUNNABLE(z_procs[z_pid]))
 		goto next_process;
 
+	switch_to:
+	// CPU accounting: `from` ran until this interrupt began. Never a
+	// negative span: if the bookkeeping is ever off, charge nothing
+	// rather than ~4 billion cycles.
+	{
+		int32_t ran = (int32_t)(k_irq_t0 - k_sw_in);
+		if (ran > 0) z_procs[from].cpu_cycles += (uint32_t)ran;
+	}
+	k_irq_switched = true;
 	reg_mtu = z_procs[z_pid].base;
 	// the MPU's idea of "this app's own memory" follows the MTU's
-	if (k_mpu) reg_mpu_size = z_procs[z_pid].size;
-	k_gpu_clip_restore(&z_procs[z_pid]);
+	if (k_mpu) {
+		reg_mpu_size = z_procs[z_pid].size;
+		if (z_procs[z_pid].mpu_mask != k_mpu_mask_now) {
+			k_mpu_mask_now = z_procs[z_pid].mpu_mask;
+			reg_mpu_mask = k_mpu_mask_now;
+		}
+	}
+	if (k_mpu_grants) k_grant_load(z_pid);
+	k_trace(K_TR_STEP, 3);
+	k_gpu_clip_restore(&z_procs[z_pid], &z_procs[from]);
+	k_trace(K_TR_SWITCH, z_pid);
 	return (uint32_t *)z_procs[z_pid].regs;
+
+	// Nobody to switch to. If the process we came from still exists, it
+	// keeps the CPU, under its own pid (see `from` above): it is blocked
+	// and returns into its own wait, which re-checks and waits again --
+	// the same as before the switch was asked for. If it was reaped (it
+	// had crashed or been killed), there is no context to go back to,
+	// so the kernel's own process takes the CPU: pid 0 always exists,
+	// and waking it early is harmless -- every wait in it re-checks.
+	none_runnable:
+	if (z_procs[from].base != 0 && !(z_procs[from].flags & Z_PROC_FLAG_DIE)) {
+		z_pid = from;
+		k_trace(K_TR_KEEP, 2);
+		return regs;
+	}
+	z_pid = 0;
+	k_proc_unblock(0);
+	goto switch_to;
 
 }
 
@@ -1103,6 +1406,93 @@ static uint32_t k_mpu_logged;   // report-only lines printed so far
 // Exit status recorded for a process ended by a crash, so a shell
 // waiting on it (posix) sees it fail rather than succeed.
 #define K_EXIT_CRASHED (-128)
+
+// -- restarting a driver that crashed --
+//
+// `fs`, `usb` and `net` are processes, so a fault in one ends it and
+// leaves the kernel running (above) -- but the machine is not much use
+// without its filesystem or its USB keyboard setup. So when one of them
+// CRASHES, pid 0 starts it again a second later: `fs` from flash, the
+// others from the card if a copy is there, as at boot (sh.c,
+// k_drv_start()). Their clients find the new one by name (zfsc.c,
+// zusbc.c, net's usb_ecm.c). At most K_DRV_RESTARTS a minute each, so
+// a driver that crashes as it starts does not loop forever.
+//
+// Only a crash. A driver that exits -- `usb` with no controller, say --
+// or that someone kills means to be gone. docs/userspace_drivers.md,
+// "Restarting drivers".
+#define K_DRV_RESTARTS	3
+#define K_DRV_WINDOW	(Z_TICK_HZ * 60)
+#define K_DRV_DELAY		Z_TICK_HZ
+
+typedef struct {
+	const char	*name;		// the base its registered name has ("fs" -> "fs0")
+	uint32_t	due;		// z_kernel_ticks when to start it
+	uint32_t	window;		// start of the current minute
+	uint8_t		count;		// restarts in it
+	uint8_t		pending;
+	uint8_t		gave_up;	// over the limit: said once, then left alone
+} k_drv_rs_t;
+
+static k_drv_rs_t k_drv_rs[] = { { "fs" }, { "usb" }, { "net" } };
+#define K_DRV_N (sizeof(k_drv_rs) / sizeof(k_drv_rs[0]))
+
+// From k_fault(), in the interrupt: note it, and wake pid 0. Also
+// from `kill -c` (sh.c), interrupts masked, to test the restart.
+void k_drv_crashed(uint32_t pid) {
+	const char *n;
+	if (pid == 0 || !(z_procs[pid].flags & Z_PROC_FLAG_DRIVER)) return;
+	if (!(n = k_pidreg_name_for(pid))) return;
+	for (uint32_t i = 0; i < K_DRV_N; i++) {
+		k_drv_rs_t *r = &k_drv_rs[i];
+		size_t l = strlen(r->name);
+		if (strncmp(n, r->name, l) || n[l] < '0' || n[l] > '9') continue;
+		if (z_kernel_ticks - r->window > K_DRV_WINDOW) {
+			r->window = z_kernel_ticks;
+			r->count = 0;
+		}
+		if (r->count >= K_DRV_RESTARTS) { r->gave_up = 1; break; }
+		r->count++;
+		r->pending = 1;
+		r->due = z_kernel_ticks + K_DRV_DELAY;
+		break;
+	}
+	k_uart_wake_waiter();	// pid 0, if it waits for input, looks again
+}
+
+// pid 0, before it waits for input (uart.c): 0 if a restart is due,
+// else the ticks until the next one, ~0u for none.
+uint32_t k_drv_restart_wait(void) {
+	uint32_t best = ~0u;
+	for (uint32_t i = 0; i < K_DRV_N; i++) {
+		k_drv_rs_t *r = &k_drv_rs[i];
+		if (r->gave_up) return 0;
+		if (!r->pending) continue;
+		int32_t left = (int32_t)(r->due - z_kernel_ticks);
+		if (left <= 0) return 0;
+		if ((uint32_t)left < best) best = (uint32_t)left;
+	}
+	return best;
+}
+
+// pid 0: the restarts that are due.
+void k_drv_restart_run(void) {
+	for (uint32_t i = 0; i < K_DRV_N; i++) {
+		k_drv_rs_t *r = &k_drv_rs[i];
+		if (r->gave_up) {
+			r->gave_up = 0;
+			r->pending = 0;
+			printf("drv: %s crashed again -- %d times in a minute; not restarting it "
+				"(`run %s` to try)\n", r->name, K_DRV_RESTARTS, r->name);
+			continue;
+		}
+		if (!r->pending || (int32_t)(r->due - z_kernel_ticks) > 0) continue;
+		r->pending = 0;
+		printf("drv: %s crashed; starting it again (%d of %d this minute)\n",
+			r->name, r->count, K_DRV_RESTARTS);
+		k_drv_start(r->name);
+	}
+}
 
 static const char *const k_mpu_kinds[] = { "fetch", "load", "store", "?" };
 static const char *const k_mpu_reasons[] = {
@@ -1273,7 +1663,8 @@ static bool k_fault(uint32_t *regs, uint32_t irqs) {
 	printf("    ended; the rest of the system is unaffected\n");
 
 	k_proc_exit_record(z_pid, K_EXIT_CRASHED);
-	z_procs[z_pid].flags |= Z_PROC_FLAG_DIE;
+	k_drv_crashed(z_pid);
+	k_proc_flags(z_pid, Z_PROC_FLAG_DIE, 0);
 	return true;
 }
 
@@ -1284,12 +1675,95 @@ static void k_mpu_init(void) {
 	reg_mpu_ktext = (uint32_t)(uintptr_t)_etext;
 	reg_mpu_gate = (uint32_t)(uintptr_t)z_kernel_entry;
 	reg_mpu_mask = Z_MPU_MASK_DEFAULT;
+	k_mpu_mask_now = Z_MPU_MASK_DEFAULT;
 	reg_mpu_size = 0;
 	reg_mpu_fault_info = 0;
 	reg_mpu_count = 0;
+	if (z_mpu_version() >= 2) {
+		reg_mpu_glimit = 0;
+		reg_mpu_gbase = 0;
+		k_mpu_grants = true;
+	}
 	reg_mpu_ctrl = Z_MPU_CTRL_ENABLE | Z_MPU_CTRL_ENFORCE | Z_MPU_CTRL_IRQ;
 	k_mpu = true;
 	printf(" - mpu: enforcing (`mpu report` to only log)\n");
+}
+
+// -- the grant window (rtl/mpu.v, docs/mpu.md "The grant window") --
+//
+// Valid while `pid` is a driver and the process it has open (gwin)
+// still exists and still allows drivers. Checked here rather than when
+// either side changes, so that every way a grant can end -- the client
+// switching drivers off, being killed, its pid being reused (a new
+// process starts with drivers not allowed) -- ends it without having to
+// find and fix the other side's state.
+static bool k_grant_window(uint32_t pid, uint32_t *base, uint32_t *limit) {
+	uint32_t w = z_procs[pid].gwin;
+	if (!w) return false;
+	uint32_t c = w - 1;
+	if (c >= Z_PROCS_MAX || !z_procs[c].base ||
+		!(z_procs[pid].flags & Z_PROC_FLAG_DRIVER) ||
+		(z_procs[c].flags & (Z_PROC_FLAG_DRV_WRITE | Z_PROC_FLAG_DIE)) !=
+			Z_PROC_FLAG_DRV_WRITE) {
+		z_procs[pid].gwin = 0;
+		return false;
+	}
+	*base = z_procs[c].base;
+	*limit = z_procs[c].base + z_procs[c].size;
+	return true;
+}
+
+// Load `pid`'s window into the MPU, on every switch to it. Nearly
+// every process has none, and then this is a load and, only if a
+// window was open before, two register writes to close it.
+static __attribute__((section(".bss"))) bool k_grant_live;
+
+static void k_grant_load(uint32_t pid) {
+	uint32_t b, l;
+	if (k_grant_window(pid, &b, &l)) {
+		reg_mpu_glimit = 0;		// close first: never [new base, old limit)
+		reg_mpu_gbase = b;
+		reg_mpu_glimit = l;
+		k_grant_live = true;
+	} else if (k_grant_live) {
+		reg_mpu_glimit = 0;
+		reg_mpu_gbase = 0;
+		k_grant_live = false;
+	}
+}
+
+// Z_SYS_MPU_GRANT, sw/common/zproc.h.
+z_obj_t *k_mpu_grant(z_obj_t *args) {
+	z_grant_args_t *a = (z_grant_args_t *)args;
+	if (!k_mpu_grants || z_pid >= Z_PROCS_MAX) return (&z_fail);
+	switch (a->op) {
+	case Z_GRANT_DRIVERS:
+		// Never the kernel's own process: its block is the kernel.
+		if (z_procs[z_pid].base < (uint32_t)(uintptr_t)&_end) return (&z_fail);
+		if (a->pid) k_proc_flags(z_pid, Z_PROC_FLAG_DRV_WRITE, 0);
+		else k_proc_flags(z_pid, 0, Z_PROC_FLAG_DRV_WRITE);
+		return (&z_ok);
+	case Z_GRANT_OPEN: {
+		uint32_t b, l;
+		if (a->pid >= Z_PROCS_MAX || a->pid == z_pid ||
+			!(z_procs[z_pid].flags & Z_PROC_FLAG_DRIVER)) return (&z_fail);
+		z_procs[z_pid].gwin = a->pid + 1;
+		if (!k_grant_window(z_pid, &b, &l)) {
+			k_grant_load(z_pid);
+			return (&z_fail);
+		}
+		a->base = b;
+		a->size = l - b;
+		k_grant_load(z_pid);
+		return (&z_ok);
+	}
+	case Z_GRANT_CLOSE:
+		z_procs[z_pid].gwin = 0;
+		k_grant_load(z_pid);
+		return (&z_ok);
+	default:
+		return (&z_fail);
+	}
 }
 
 // -- syscall pointer checks --
@@ -1317,6 +1791,13 @@ bool k_user_ok(const void *ptr, uint32_t len) {
 	uint32_t lo = ((a & 0xf0000000u) == 0x80000000u) ? 0x80000000u
 		: z_procs[pid].base;
 	if (a >= lo && a - lo <= size && len <= size - (a - lo)) return true;
+	// ...or inside the grant window it has open: the kernel may write
+	// where the MPU lets the app write (docs/mpu.md, "The grant window")
+	{
+		uint32_t gb, gl;
+		if (k_mpu_grants && k_grant_window(pid, &gb, &gl) &&
+			a >= gb && a < gl && len <= gl - a) return true;
+	}
 	if (k_user_bad_logged < 16) {
 		const char *n = k_pidreg_name_for(pid);
 		printf("syscall: %s%spid %lu passed a bad pointer %08lx (%lu bytes); call refused\n",
@@ -1390,35 +1871,22 @@ uint32_t *z_kernel_entry(uint32_t syscall_id, uint32_t *regs, uint32_t irqs) {
 		"r"((uint32_t)(uintptr_t)&__global_pointer$) : "memory");
 
 	uint32_t *ret;
+	int irq_kind = -1;		// CPU accounting: Z_CPU_IRQ_*, -1 for a syscall
+#ifdef KDIAG
+	uint32_t tick_t0 = 0;	// the tick's cost, measured to `done` (k_tick_cyc)
+#endif
 
 	if (syscall_id != Z_SYSCALL_NONE) {
 
 		if (syscall_id >= Z_SYSCALL_COUNT || !z_syscall_table[syscall_id]) {
 			ret = (uint32_t *)&z_fail;
 		} else {
-			// Hold off the KTIMER swap for the duration of anything
-			// that touches FatFs. FF_FS_REENTRANT is 0 (ffconf.h) --
-			// FatFs is explicitly not reentrant -- and underneath it
-			// sdmm.c drives CS and clocks a command through the SPI
-			// shifter. Swapping to another process mid-transaction
-			// leaves the card mid-command and corrupts the shared
-			// FATFS window buffer; the card then returns FR_DISK_ERR
-			// to everyone until disk_initialize() is re-run by a
-			// manual `mount`.
-			//
-			// Deferring rather than taking a blocking mutex is
-			// deliberate. A mutex would let the holder be preempted,
-			// which is fine for the card (SPI mode tolerates gaps
-			// between bytes) but not for this driver: dly_us()
-			// (sdmm.c) measures with rdcycle, a free-running counter
-			// that keeps advancing while the process is descheduled.
-			// Every timeout in the driver would then depend on
-			// scheduling rather than on the card.
-			//
-			// Nested by construction -- a syscall cannot be made from
-			// inside a syscall handler -- but counted rather than set
-			// so that stays true if it ever stops being.
-			int fslock = k_syscall_touches_fs(syscall_id);
+			// Nothing holds the scheduler for a syscall any more.
+			// FatFs (Phase 2) and the USB stack (Phase 3) were the
+			// reasons -- a card or the USB engine mid-transaction --
+			// and both are processes now, preempted like any other
+			// (docs/userspace_drivers.md). k_fs_enter() remains for
+			// the kernel's own short critical sections (cfg.c).
 
 			// Syscall pointer checks (docs/mpu.md). The MPU cannot
 			// stop the kernel writing on an app's behalf, so a bad
@@ -1431,14 +1899,8 @@ uint32_t *z_kernel_entry(uint32_t syscall_id, uint32_t *regs, uint32_t irqs) {
 			if (regs && !k_user_ok_words(regs, 4)) {
 				ret = (uint32_t *)&z_fail;
 			} else {
-				if (fslock) k_fs_enter();
-
 				ret = (uint32_t *)z_syscall_table[syscall_id]((z_obj_t *)regs);
 
-				// Single exit -- this path has no early returns between
-				// the enter and here, which is what keeps the counter from
-				// leaking.
-				if (fslock) k_fs_leave();
 			}
 		}
 
@@ -1448,8 +1910,23 @@ uint32_t *z_kernel_entry(uint32_t syscall_id, uint32_t *regs, uint32_t irqs) {
 
 	// not a system call; must be an interrupt
 
+	// CPU accounting: this interrupt's time is its own, not the
+	// interrupted process's ("CPU accounting" above).
+	k_irq_t0 = rd_cycle();
+	k_irq_switched = false;
+	if (k_idle_on) {				// it was waiting: that was idle
+		uint32_t w = k_irq_t0 - k_idle_t0;
+		k_cyc_idle += w;
+		k_sw_in += w;
+		k_idle_on = false;
+	}
+	irq_kind = (irqs & (1u << Z_IRQ_KTIMER)) ? Z_CPU_IRQ_TICK :
+		(irqs & (1u << Z_IRQ_USB)) ? Z_CPU_IRQ_USB :
+		(irqs & 1u) ? Z_CPU_IRQ_YIELD : Z_CPU_IRQ_OTHER;
+
 	// Printing from here must not block (sw/os/uart.c): cleared at done.
 	k_uart_polled = true;
+	k_trace(K_TR_IRQ, irqs);
 
 	// Crashes and protection faults first: an app that faulted must not
 	// be resumed at the faulting instruction. See k_fault() above.
@@ -1471,8 +1948,11 @@ uint32_t *z_kernel_entry(uint32_t syscall_id, uint32_t *regs, uint32_t irqs) {
 	// timeout (z_msg_wait_timeout(), tftp.c's retry timer) fire much
 	// sooner than intended.
 	if ((irqs & (1 << Z_IRQ_KTIMER)) != 0) {
+#ifdef KDIAG
+		tick_t0 = rd_cycle();
+#endif
 		++z_kernel_ticks;
-		z_usbh_poll();
+		k_trace(K_TR_TICK, 0);
 		// cpu_ticks is charged after the wake sweep below, and
 		// only if that process is RUNNABLE. Billing whoever
 		// last waitirq'd made idle time look like work: the
@@ -1494,17 +1974,15 @@ uint32_t *z_kernel_entry(uint32_t syscall_id, uint32_t *regs, uint32_t irqs) {
 		z_hid_irq1();
 	}
 
-	// USB host. A LEVEL, not a pulse -- z_usbh_poll() clears IRQSTAT
-	// itself, which is what lowers it. Non-latched in rtl/sysctl.v's
-	// LATCHED_IRQ for the same reason Z_IRQ_UART is: a latched level
-	// re-fires the instant the handler returns.
-	//
-	// Also advanced from the ktimer below, because a device sitting in
-	// a timed state -- waiting out the 2 ms after SET_ADDRESS, say --
-	// has no interrupt coming to move it along.
-	if ((irqs & (1 << Z_IRQ_USB)) != 0) {
-		z_usbh_poll();
-	}
+	// USB host: the `usb` process's line (sw/apps/usb, Phase 3). A
+	// LEVEL, (IRQSTAT & IRQEN) != 0, non-latched in rtl/sysctl.v's
+	// LATCHED_IRQ for the same reason Z_IRQ_UART is. The binding's
+	// silence write clears IRQEN, which lowers it until `usb` has
+	// polled and turned it back on. With nobody bound -- before `usb`
+	// starts, after it dies, on a reboot that left it enabled -- the
+	// kernel clears IRQEN itself, or the level would hold the CPU here.
+	if ((irqs & (1 << Z_IRQ_USB)) != 0 && !k_irq_fire(Z_IRQ_USB))
+		k_usb_irq_off();
 
 	// Ethernet receive -- unblock whoever is waiting on packets.
 	//
@@ -1536,7 +2014,10 @@ uint32_t *z_kernel_entry(uint32_t syscall_id, uint32_t *regs, uint32_t irqs) {
 	// The pid is looked up rather than fixed: net registers itself
 	// like any other service, and hardwiring a pid here would break
 	// the moment it were restarted.
-	if ((irqs & (1 << Z_IRQ_ETH)) != 0) {
+	//
+	// A driver that has bound the line (Z_SYS_IRQ) gets it that way, and
+	// runs next; the "net0" lookup is for a net from before binding.
+	if ((irqs & (1 << Z_IRQ_ETH)) != 0 && !k_irq_fire(Z_IRQ_ETH)) {
 		uint32_t net_pid;
 		if (k_pid_find("net0", &net_pid)) k_proc_unblock(net_pid);
 	}
@@ -1553,18 +2034,15 @@ uint32_t *z_kernel_entry(uint32_t syscall_id, uint32_t *regs, uint32_t irqs) {
 		//
 		// The cap is the escape hatch: past it, swap anyway. See
 		// K_NO_PREEMPT_MAX_TICKS.
-		if (k_no_preempt &&
-			(z_kernel_ticks - k_no_preempt_start) < K_NO_PREEMPT_MAX_TICKS) {
-			if (z_pid < Z_PROCS_MAX && Z_PROC_RUNNABLE(z_procs[z_pid]))
-				++z_procs[z_pid].cpu_ticks;
-			ret = regs;
-			goto done;
-		}
-
 		// Wake anything whose timeout has expired, BEFORE counting
 		// runnable processes or picking the next one -- otherwise a
 		// process whose sleep just elapsed would wait another full
 		// round before being noticed.
+		//
+		// A timeout of N ticks ends one tick after tick wake_tick
+		// (k_sched_late 1): between N and N+1 ticks of time. And a
+		// driver woken by its timeout takes its turn like anyone
+		// else. The variants are switches; see k_sched_late above.
 		//
 		// wake_tick 0 means "no timeout, wait indefinitely"; such a
 		// process is woken only by k_msg_send(). The comparison is
@@ -1572,11 +2050,53 @@ uint32_t *z_kernel_entry(uint32_t syscall_id, uint32_t *regs, uint32_t irqs) {
 		// 32-bit wrap of z_kernel_ticks (~68 days at 732Hz): a plain
 		// `ticks >= wake_tick` would fail for a sleep that straddles
 		// the wrap and hang that process for another full period.
-		for (int i = 0; i < Z_PROCS_MAX; i++) {
-			if ((z_procs[i].flags & Z_PROC_FLAG_BLOCKED) == 0) continue;
-			if (z_procs[i].wake_tick == 0) continue;
-			if ((int32_t)(z_kernel_ticks - z_procs[i].wake_tick) > 0)
-				k_proc_unblock(i);
+		//
+		// BEFORE the filesystem deferral below, not after it: waking
+		// a process only touches its flags, which is safe in the
+		// middle of a FatFs call, and a sweep skipped here leaves a
+		// sleeper blocked past its deadline -- so the switch owed
+		// when the guard drops would find nobody to switch to.
+		if (K_TICK_SLEEPSET) {
+			// only the processes that set a deadline (k_sleep_set)
+			for (uint32_t wi = 0; wi < K_PIDSET_WORDS; wi++) {
+				uint32_t m = k_sleep_set.w[wi];
+				while (m) {
+					uint32_t i = (wi << 5) + (uint32_t)__builtin_ctz(m);
+					m &= m - 1u;
+					if (i >= Z_PROCS_MAX) break;
+					if ((z_procs[i].flags & Z_PROC_FLAG_BLOCKED) == 0 ||
+						z_procs[i].wake_tick == 0) {
+						k_pidset_put(&k_sleep_set, i, false);	// stale
+					} else if ((int32_t)(z_kernel_ticks - z_procs[i].wake_tick) >= k_sched_late) {
+						k_pidset_put(&k_sleep_set, i, false);
+						k_proc_unblock(i);
+						if (k_sched_drvwake && (z_procs[i].flags & Z_PROC_FLAG_DRIVER))
+							k_drv_woken = true;
+					}
+				}
+			}
+		} else {
+			for (int i = 0; i < Z_PROCS_MAX; i++) {
+				if ((z_procs[i].flags & Z_PROC_FLAG_BLOCKED) == 0) continue;
+				if (z_procs[i].wake_tick == 0) continue;
+				if ((int32_t)(z_kernel_ticks - z_procs[i].wake_tick) >= k_sched_late) {
+					k_proc_unblock(i);
+					if (k_sched_drvwake && (z_procs[i].flags & Z_PROC_FLAG_DRIVER))
+						k_drv_woken = true;
+				}
+			}
+		}
+		k_trace(K_TR_TICK, 2);
+
+		if (k_no_preempt &&
+			(z_kernel_ticks - k_no_preempt_start) < K_NO_PREEMPT_MAX_TICKS) {
+			if (z_pid < Z_PROCS_MAX && Z_PROC_RUNNABLE(z_procs[z_pid]))
+				++z_procs[z_pid].cpu_ticks;
+			// owed, paid by k_fs_leave() -- see k_resched_owed
+			k_resched_owed = 1;
+			k_trace(K_TR_DEFER, 0);
+			ret = regs;
+			goto done;
 		}
 
 		// Bill the process that is actually schedulable this
@@ -1584,7 +2104,28 @@ uint32_t *z_kernel_entry(uint32_t syscall_id, uint32_t *regs, uint32_t irqs) {
 		if (z_pid < Z_PROCS_MAX && Z_PROC_RUNNABLE(z_procs[z_pid]))
 			++z_procs[z_pid].cpu_ticks;
 
-		ret = k_sched_switch(regs);
+		k_resched_owed = 0;	// this switch is the one that was owed
+		// a driver woken by its interrupt in this same entry still goes
+		// first; otherwise the tick's switch prefers nobody
+		{
+			bool pref = k_drv_woken;
+			k_drv_woken = false;
+			ret = k_sched_switch(regs, pref);
+		}
+#ifdef KDIAG
+		if (ret != regs) k_tick_sw++;
+#endif
+		goto done;
+	}
+
+	// A switch the filesystem guard deferred, paid now that the guard
+	// is off (k_fs_leave() pulsed IRQ 0). If the guard is somehow held
+	// again, it stays owed. k_sched_switch() keeps the current process
+	// when nobody else is runnable.
+	if ((k_resched_owed || k_drv_woken) && !k_no_preempt) {
+		k_resched_owed = 0;
+		k_drv_woken = false;
+		ret = k_sched_switch(regs, true);
 		goto done;
 	}
 
@@ -1592,13 +2133,29 @@ uint32_t *z_kernel_entry(uint32_t syscall_id, uint32_t *regs, uint32_t irqs) {
 	// wait) pokes UART THRE so this path runs with a real irq_vec
 	// frame. Switch now rather than burning the rest of the slice.
 	if (k_ended || (!Z_PROC_RUNNABLE(z_procs[z_pid]) && k_proc_runnable_count() >= 1)) {
-		ret = k_sched_switch(regs);
+		ret = k_sched_switch(regs, true);
 		goto done;
 	}
 
 	ret = regs;
 
 	done:
+#ifdef KDIAG
+	if (tick_t0) {
+		uint32_t d = rd_cycle() - tick_t0;
+		k_tick_n++;
+		k_tick_cyc += d;
+		if (d > k_tick_max) k_tick_max = d;
+	}
+#endif
+	if (irq_kind >= 0) {
+		uint32_t now = rd_cycle(), d = now - k_irq_t0;
+		k_cyc_irq[irq_kind] += d;
+		k_cnt_irq[irq_kind]++;
+		// the process now running starts (or resumes) its charge here
+		if (k_irq_switched) k_sw_in = now;
+		else k_sw_in += d;
+	}
 	k_uart_polled = false;
 	__asm__ volatile ("mv gp, %0" :: "r"(saved_gp) : "memory");
 	return ret;
@@ -1616,11 +2173,12 @@ uint32_t *z_kernel_entry(uint32_t syscall_id, uint32_t *regs, uint32_t irqs) {
 // this necessary.
 void k_proc_unblock(uint32_t pid) {
 	if (pid >= Z_PROCS_MAX) return;
+	k_trace(K_TR_UNBLOCK, pid | ((z_procs[pid].flags & Z_PROC_FLAG_BLOCKED) ? 0x100u : 0u));
 	if (z_procs[pid].flags & Z_PROC_FLAG_BLOCKED) {
-		z_procs[pid].flags &= ~Z_PROC_FLAG_BLOCKED;
+		k_proc_flags(pid, 0, Z_PROC_FLAG_BLOCKED);
 		z_procs[pid].wake_tick = 0;
 	} else {
-		z_procs[pid].flags |= Z_PROC_FLAG_WAKE;
+		k_proc_flags(pid, Z_PROC_FLAG_WAKE, 0);
 	}
 }
 
@@ -1682,8 +2240,30 @@ z_obj_t *k_wm_wake(z_obj_t *args) {
 // until the next IRQ -- unm barely moved. timer(1) is independent
 // of the UART. If nobody else is RUNNABLE, waitirq sleeps the
 // core until any IRQ instead of spinning.
+static bool k_proc_block(uint32_t timeout, bool any_mail);
+
 z_obj_t *k_proc_wait(z_obj_t *args) {
 	uint32_t timeout = (args->type == Z_UINT32) ? args->val.uint32 : 0;
+	return k_proc_block(timeout, true) ? (&z_ok) : (&z_fail);
+}
+
+// Kernel code sleeping in its own process (sh.c waiting for fs at
+// boot): `ticks` at most, waking early only on a direct wake. Mail
+// waiting does not end it -- pid 0's mailbox may hold anything.
+void k_proc_wait_ticks(uint32_t ticks) {
+	(void)k_proc_block(ticks ? ticks : 1, false);
+}
+
+// The body of k_proc_wait(), shared with k_msg_recv(). True if the
+// caller blocked (and has since been switched away from and back --
+// the yield happens inside this call, see below), false if it did not
+// need to: a recorded wake was consumed, or mail is already waiting.
+// any_mail false: mail already waiting does not stop the block -- for a
+// caller waiting for one particular message (k_msg_recv() matching),
+// which has just looked and not found it. A message that arrives after
+// that look still wakes it: k_proc_unblock() records the wake, and the
+// test below consumes it.
+static bool k_proc_block(uint32_t timeout, bool any_mail) {
 
 	// THE TEST AND THE BLOCK MUST BE ATOMIC TOGETHER.
 	//
@@ -1734,15 +2314,17 @@ z_obj_t *k_proc_wait(z_obj_t *args) {
 	// reason -- checking it outside would reopen the very window this
 	// is here to close.
 	if (z_procs[z_pid].flags & Z_PROC_FLAG_WAKE) {
-		z_procs[z_pid].flags &= ~Z_PROC_FLAG_WAKE;
+		k_proc_flags(z_pid, 0, Z_PROC_FLAG_WAKE);
 		maskirq(old_mask);
-		return (&z_fail);
+		k_trace(K_TR_NOBLOCK, 1);
+		return false;
 	}
 
 	// something already waiting -- don't block, let the caller read it
-	if (!z_mailbox_empty(z_pid)) {
+	if (any_mail && !z_mailbox_empty(z_pid)) {
 		maskirq(old_mask);
-		return (&z_fail);
+		k_trace(K_TR_NOBLOCK, 2);
+		return false;
 	}
 
 	// wake_tick 0 is the sentinel for "indefinite", so a timeout that
@@ -1751,25 +2333,73 @@ z_obj_t *k_proc_wait(z_obj_t *args) {
 	if (timeout) {
 		uint32_t w = z_kernel_ticks + timeout;
 		z_procs[z_pid].wake_tick = w ? w : 1;
+		k_sleep_note(z_pid);
 	} else {
 		z_procs[z_pid].wake_tick = 0;
 	}
-	z_procs[z_pid].flags |= Z_PROC_FLAG_BLOCKED;
+	k_proc_flags(z_pid, Z_PROC_FLAG_BLOCKED, 0);
 
 	maskirq(old_mask);
 
+	k_trace(K_TR_BLOCK, timeout);
 	k_proc_yield_blocked();
 
-	return (&z_ok);
+	return true;
+}
+
+// Z_SYS_MSG_RECV: the next message, waiting for one if there is none.
+//
+// What an app's receive loop did in three syscalls -- read (empty),
+// wait, read -- in one, which matters because every syscall here costs
+// ~1,500 cycles before it does anything (docs/userspace_drivers.md,
+// the scheduler trace). It can wait INSIDE the call because the wait
+// already does: k_proc_block() yields via timer(1), the interrupt is
+// taken inside this handler, and when the process is switched back in
+// it carries on from here, with its own memory mapped, and reads.
+//
+// Z_OK with the message; Z_FAIL if it woke with none -- the timeout
+// passed (0 means none), or something woke it directly (an interrupt
+// it registered for, k_proc_unblock()). Same wake rules as
+// z_proc_wait(), so a loop that serves both messages and a device can
+// use it as it used that.
+//
+// With Z_MSG_RECV_MATCH it waits for the one message with a->subject
+// and a->tag, taking it out from wherever it is queued and leaving the
+// rest in order: a request's reply, while wm's or a port's mail keeps
+// arriving. Then only that message ends the wait (or the timeout); other
+// mail wakes the caller, which looks, does not find it, and waits again.
+z_obj_t *k_msg_recv(z_obj_t *args) {
+	z_msg_recv_args_t *a = (z_msg_recv_args_t *)args;
+	if (!a->msg || !k_user_ok_words(a->msg, sizeof(z_msg_t)))
+		return (&z_fail);
+	if (!(a->flags & Z_MSG_RECV_MATCH)) {
+		if (k_msg_read((z_obj_t *)a->msg) == &z_ok) return (&z_ok);
+		(void)k_proc_block(a->timeout, true);
+		return k_msg_read((z_obj_t *)a->msg);
+	}
+	uint32_t start = z_kernel_ticks;
+	for (;;) {
+		if (k_msg_read_match(a->msg, a->subject, a->tag) == &z_ok)
+			return (&z_ok);
+		if (a->flags & Z_MSG_RECV_NOWAIT) return (&z_fail);
+		uint32_t left = 0;
+		if (a->timeout) {
+			uint32_t gone = z_kernel_ticks - start;
+			if (gone >= a->timeout) return (&z_fail);
+			left = a->timeout - gone;
+		}
+		(void)k_proc_block(left, false);
+	}
 }
 
 void k_proc_yield_blocked(void) {
 
 	// Woken already (message, UART, timeout landed between the
 	// BLOCKED store and here) -- nothing to give up.
-	if (Z_PROC_RUNNABLE(z_procs[z_pid])) return;
+	if (Z_PROC_RUNNABLE(z_procs[z_pid])) { k_trace(K_TR_YIELD, 2); return; }
 
 	if (k_proc_runnable_count() >= 1) {
+		k_trace(K_TR_YIELD, 1);
 		// Someone else can run: pulse picorv32 IRQ 0 via
 		// timer(1). irq_vec then saves the real frame and
 		// k_sched_switch (the !RUNNABLE branch in
@@ -1781,7 +2411,22 @@ void k_proc_yield_blocked(void) {
 	} else {
 		// Nobody to switch to. Sleep the core until any IRQ
 		// (KTIMER, UART RX, ETH, HID) rather than spinning.
+		k_trace(K_TR_YIELD, 0);
+		// CPU accounting: idle until the interrupt that ends the wait
+		// (its entry closes it), or until here if none was taken.
+		uint32_t old = maskirq(0xffffffffu);
+		k_idle_t0 = rd_cycle();
+		k_idle_on = true;
+		maskirq(old);
 		waitirq();
+		old = maskirq(0xffffffffu);
+		if (k_idle_on) {
+			uint32_t w = rd_cycle() - k_idle_t0;
+			k_cyc_idle += w;
+			k_sw_in += w;
+			k_idle_on = false;
+		}
+		maskirq(old);
 	}
 
 }
@@ -1790,13 +2435,8 @@ void k_proc_yield_blocked(void) {
 // opposed to k_proc_active_count()'s "processes that exist".
 uint32_t k_proc_runnable_count(void) {
 
-	uint32_t count = 0;
-
-	for (int i = 0; i < Z_PROCS_MAX; i++)
-		if (Z_PROC_RUNNABLE(z_procs[i]))
-			count++;
-
-	return(count);
+	// a count of the set (k_proc_flags()), not a walk of the table
+	return k_pidset_count(&k_run_set);
 
 }
 
@@ -1858,6 +2498,9 @@ uint32_t k_proc_create(uint32_t size, uint32_t stack_size) {
 		z_procs[p].base = base;
 		z_procs[p].size = mem_size;
 		z_procs[p].gpu_clip_valid = 0;
+		z_procs[p].gwin = 0;
+		z_procs[p].mpu_mask = Z_MPU_MASK_DEFAULT;
+		z_procs[p].handoff = 0;
 		for (int i = 0; i < 32; i++) {
 			z_procs[p].regs[i] = 0x00000000;
 		}
@@ -1951,7 +2594,16 @@ uint32_t k_proc_create_exec(const char *name, const z_exec_info_t *xi) {
 	}
 
 	uint32_t pid = k_proc_create(xi->total, stack);
-	if (pid) return(pid);
+	if (pid) {
+		// ZEXE flags bit 15: a driver (sw/common/zexec.h). Started like
+		// anything else; the flag is what lets it open the grant window.
+		if (flags & Z_EXEC_FLAG_DRIVER) {
+			k_proc_flags(pid, Z_PROC_FLAG_DRIVER, 0);
+			z_procs[pid].mpu_mask = 0xffffu;	// every peripheral, the SD card's too
+			printf("%s: driver (pid %lu)\n", name, (unsigned long)pid);
+		}
+		return(pid);
+	}
 
 	// k_proc_create() fails for no free slot, or, with a slot free,
 	// because k_mem_alloc() had no block for it.
@@ -1977,11 +2629,13 @@ uint32_t k_proc_create_exec(const char *name, const z_exec_info_t *xi) {
 }
 
 z_rv k_proc_start(uint32_t pid) {
-	z_procs[pid].flags |= Z_PROC_FLAG_ACTIVE;
+	k_proc_flags(pid, Z_PROC_FLAG_ACTIVE, 0);
+	return Z_OK;
 }
 
 z_rv k_proc_stop(uint32_t pid) {
-	z_procs[pid].flags &= ~Z_PROC_FLAG_ACTIVE;
+	k_proc_flags(pid, 0, Z_PROC_FLAG_ACTIVE);
+	return Z_OK;
 }
 
 z_rv k_proc_kill(uint32_t pid) {
@@ -2006,7 +2660,7 @@ z_rv k_proc_kill(uint32_t pid) {
 	// which as of this commit should only be sh.c's `kill` command).
 	printf("k_proc_kill: pid %ld marked to die (base=%08lx)\n",
 		(long)pid, (long)z_procs[pid].base);
-	z_procs[pid].flags |= Z_PROC_FLAG_DIE;
+	k_proc_flags(pid, Z_PROC_FLAG_DIE, 0);
 	return Z_OK;
 }
 
@@ -2063,6 +2717,19 @@ z_rv k_proc_dump(void) {
 			(unsigned long)z_procs[i].cpu_ticks,
 			(unsigned long)z_procs[i].wake_tick, (unsigned long)z_kernel_ticks);
 	}
+	// CPU accounting in the same unit as cpu (65,536 cycles, one
+	// tick's worth), but exact: interrupts are counted apart from the
+	// processes, and a process that runs between ticks is seen.
+	printf(" used (ticks' worth of cycles):");
+	for (int i = 0; i < Z_PROCS_MAX; i++)
+		if (z_procs[i].base || i == 0)
+			printf(" %d:%lu", i, (unsigned long)(z_procs[i].cpu_cycles >> 16));
+	printf("\n kernel: tick %lu usb %lu yield %lu other %lu idle %lu\n",
+		(unsigned long)(k_cyc_irq[Z_CPU_IRQ_TICK] >> 16),
+		(unsigned long)(k_cyc_irq[Z_CPU_IRQ_USB] >> 16),
+		(unsigned long)(k_cyc_irq[Z_CPU_IRQ_YIELD] >> 16),
+		(unsigned long)(k_cyc_irq[Z_CPU_IRQ_OTHER] >> 16),
+		(unsigned long)(k_cyc_idle >> 16));
 	printf(" irq: total=%lu tmr=%lu uart=%lu hid0=%lu hid1=%lu aud=%lu eth=%lu oth=%lu\n",
 		(unsigned long)z_irq_census[0], (unsigned long)z_irq_census[3],
 		(unsigned long)z_irq_census[4], (unsigned long)z_irq_census[5],

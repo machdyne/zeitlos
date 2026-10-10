@@ -1,7 +1,7 @@
 /*
  * Zeitlos -- simulation only.
  *
- * Co-simulation bridge: runs the REAL sw/os/usb driver against the
+ * Co-simulation bridge: runs the REAL sw/apps/usb driver against the
  * REAL rtl/usb gateware.
  *
  * Up to this point the two halves of the USB work had each been tested
@@ -16,7 +16,7 @@
  * -- how it works --
  *
  * The driver runs in a pthread. Its register accessors (z_usbh_rd and
- * friends, see sw/os/usb/usbh_hw.h) post a request and block. The
+ * friends, see sw/apps/usb/usbh_hw.h) post a request and block. The
  * Verilog side calls $usbh_step once per bus-idle moment, which
  * releases the driver thread and blocks the SIMULATOR until the driver
  * either posts a request or says it has finished this step.

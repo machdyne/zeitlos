@@ -3,6 +3,14 @@
  * Copyright (c) 2026 Lone Dynamics Corporation. All rights reserved.
  *
  * net's USB ethernet (CDC-ECM) backend. See usb_ecm.h.
+ *
+ * Since Phase 3 the adapter is the `usb` driver's, and frames move
+ * through two rings shared with it (sw/common/zusbnet.h): `usb` asks the
+ * adapter for frames and leaves them in its ring, and sends net a
+ * Z_USB_EVENT when its ring stops being empty; net leaves frames to
+ * send in its own ring and kicks `usb` when that one stops being
+ * empty. So net no longer polls the adapter -- it sleeps until a frame
+ * is there -- and `usb` keeps the "busy" and "idle" pace net used to.
  */
 
 #include <stdio.h>
@@ -11,42 +19,35 @@
 #include "usb_ecm.h"
 #include "../../common/zeitlos.h"
 #include "../../common/zsoc.h"
+#include "../../common/zusbc.h"
 #include "../../common/zusbnet.h"
 
-// How long the link may be quiet before this asks less often, and the
-// gap it settles at. A poll costs one USB transaction that the adapter
-// NAKs, so the cost of asking is small; the cost of WAKING is not --
-// net is a process, and a process that wakes 732 times a second takes a
-// full scheduler share from whatever is in the foreground
-// (docs/networking.md). 16 ticks is about 22 ms, so an idle link
-// answers a ping in at most that.
-#define ECM_BUSY_HOLD   (Z_TICK_HZ / 2)     // "recently active"
-#define ECM_GAP_IDLE    16
-
-// What the adapter can hold while we are not asking. A USB device does
-// not drop a frame when the host is slow: it NAKs, and the frame waits
-// in its own buffer. The number that matters is therefore the
-// ADAPTER's, which nothing reports -- the RTL8152's is tens of KB, a
-// small gadget's may be one frame. Four segments is deliberately
-// conservative, the same order as the ENC28J60's ring, and it has room
-// to grow once this is measured on hardware (docs/usb_ethernet.md,
-// "Throughput").
-#define ECM_RX_CAPACITY (4 * 536)
+static z_usbnet_cli_t cli;			// net's ring; `usb` reads it
+static const volatile z_usbnet_srv_t *srv;	// `usb`'s ring; net reads it
 
 static uint8_t our_mac[6];
 static bool have_mac;
 static uint32_t gen;            // the adapter generation net is using
-static uint32_t last_active;
-static uint32_t rx_frames, tx_frames, tx_fail;
 static bool was_present;
+static uint32_t rx_frames, tx_frames, tx_full;
+static uint32_t last_check;     // ticks: the last look for a restarted `usb`
 
 bool usb_ecm_supported(void)
 {
-	z_usbnet_info_t in;
-	// Both questions matter: a bitstream without the controller, and a
-	// kernel too old to have this syscall at all (it leaves n at -1).
-	if (!z_soc_has_feature2(Z_FEATURE2_USB_HOST)) return false;
-	return z_usbnet_info(&in);
+	// Only the hardware: `usb` may not have registered yet when net
+	// starts, and usb_ecm_init() waits for it.
+	return z_soc_has_feature2(Z_FEATURE2_USB_HOST);
+}
+
+// Take the adapter: give `usb` our ring and our address, and keep its
+// ring. NULL if `usb` is not there.
+static bool open_rings(void)
+{
+	srv = z_usbnet_open(our_mac, &cli);
+	if (!srv) return false;
+	gen = srv->info.gen;
+	was_present = srv->info.present;
+	return true;
 }
 
 bool usb_ecm_init(const uint8_t mac[6])
@@ -54,32 +55,22 @@ bool usb_ecm_init(const uint8_t mac[6])
 	z_usbnet_info_t in;
 	int waited = 0;
 
-	if (!z_usbnet_info(&in)) {
-		printf("net: this kernel has no USB ethernet support\n");
-		return false;
-	}
-
-	// Wait, rather than fail. On a board whose only NIC is a USB
-	// adapter, net starting before the adapter is plugged in is the
-	// normal case, not an error -- and there is nothing else to
-	// restart net when one appears.
-	while (!in.present) {
+	// Wait, rather than fail -- for `usb` to start, and then for an
+	// adapter. On a board whose only NIC is a USB adapter, net starting
+	// before the adapter is plugged in is the normal case, not an error,
+	// and there is nothing else to restart net when one appears.
+	while (!z_usbnet_info(&in) || !in.present) {
 		if (!waited)
 			printf("net: waiting for a USB ethernet adapter "
 				"(CDC-ECM) -- plug one in\n");
 		waited++;
 		z_proc_wait(Z_TICK_HZ / 2);
-		z_usbnet_info(&in);
 	}
-
-	gen = in.gen;
-	was_present = true;
-	last_active = z_uptime_ticks();
 
 	if (in.mac_ok) {
 		memcpy(our_mac, in.mac, 6);
 	} else {
-		// No iMACAddress string, so the kernel has already put it in
+		// No iMACAddress string, so `usb` has already put it in
 		// promiscuous mode and net's own address is the one on the
 		// wire.
 		memcpy(our_mac, mac, 6);
@@ -87,10 +78,13 @@ bool usb_ecm_init(const uint8_t mac[6])
 	}
 	have_mac = true;
 
-	// Tell the kernel which address net sends from, so that an adapter
-	// swapped later is made promiscuous rather than filtering our
-	// traffic out.
-	z_usbnet_open(our_mac);
+	// Our address goes with the open, so that an adapter swapped later
+	// is made promiscuous rather than filtering our traffic out.
+	if (!open_rings()) {
+		printf("net: the usb driver did not open the adapter\n");
+		return false;
+	}
+	last_check = z_uptime_ticks();
 
 	printf("net: usb ethernet adapter ready%s%s\n",
 		in.promisc ? ", promiscuous" : "",
@@ -105,63 +99,101 @@ bool usb_ecm_mac(uint8_t mac[6])
 	return true;
 }
 
-// Notices an adapter arriving or leaving, for the log. Cheap: one
-// syscall with no bus traffic, and only from the paths below that
-// already found nothing to do.
+// Notices an adapter arriving or leaving, for the log, from `usb`'s
+// ring -- memory, not a request. About once a second it also checks
+// that `usb` is the one the rings were opened with: a restarted `usb`
+// has a new ring, and the old one is no longer its memory.
 static void check_gen(void)
 {
-	z_usbnet_info_t in;
+	uint32_t now = z_uptime_ticks();
 
-	if (!z_usbnet_info(&in)) return;
-	if (in.present == was_present && in.gen == gen) return;
-
-	if (!in.present) {
-		printf("net: usb ethernet adapter unplugged\n");
-	} else {
-		printf("net: usb ethernet adapter back%s\n",
-			in.promisc ? " (promiscuous: a different one, so this "
-			"keeps our address)" : "");
-		// A fresh bind may need to be told our address again -- the
-		// kernel keeps it across binds, but not across a kernel that
-		// was restarted under us.
-		z_usbnet_open(our_mac);
+	if (now - last_check >= Z_TICK_HZ) {
+		last_check = now;
+		// srv->len is set by NET_OPEN only: a new `usb` that got the
+		// old one's pid and address has it 0.
+		if (!srv || !srv->len || !z_usbnet_alive()) {
+			srv = NULL;
+			if (open_rings())
+				printf("net: usb driver restarted; adapter reopened\n");
+			return;
+		}
 	}
-	was_present = in.present;
-	gen = in.gen;
+	if (!srv) return;
+	if (srv->info.present == was_present && srv->info.gen == gen) return;
+
+	if (!srv->info.present)
+		printf("net: usb ethernet adapter unplugged\n");
+	else
+		printf("net: usb ethernet adapter back%s\n",
+			srv->info.promisc ? " (promiscuous: a different one, so "
+			"this keeps our address)" : "");
+	was_present = srv->info.present;
+	gen = srv->info.gen;
 }
 
 uint16_t usb_ecm_recv(uint8_t *buf, uint16_t maxlen)
 {
-	int32_t n = z_usbnet_recv(buf, maxlen);
+	uint32_t tail = cli.rx_tail;
 
-	if (n > 0) {
-		rx_frames++;
-		last_active = z_uptime_ticks();
-		return (uint16_t)n;
+	if (srv && srv->rx_head != tail) {
+		uint32_t i = tail % Z_USBNET_RX_SLOTS;
+		uint16_t n = srv->rx_len[i];
+		if (n > maxlen) n = 0;		// cannot happen: both are a frame
+		if (n) memcpy(buf, (const uint8_t *)srv->rx[i], n);
+		cli.rx_tail = tail + 1;		// after the copy: `usb` may reuse it
+		if (n) rx_frames++;
+		return n;
 	}
-	// 0 is an idle adapter, -1 is no adapter; either way there is no
-	// frame, and this is the moment to notice a plug event.
+	// No frame: the moment to notice a plug event.
 	check_gen();
 	return 0;
 }
 
 bool usb_ecm_send(const uint8_t *buf, uint16_t len)
 {
-	if (z_usbnet_send(buf, len) != 0) {
-		tx_fail++;
+	uint32_t head = cli.tx_head;
+
+	if (!srv || !srv->info.present || len > Z_USBNET_FRAME) {
 		check_gen();
 		return false;
 	}
+	// Full: `usb` has not taken the last ones yet. Dropped, as a MAC
+	// with a full transmit buffer would; TCP sends it again.
+	if (head - srv->tx_tail >= Z_USBNET_TX_SLOTS) {
+		tx_full++;
+		return false;
+	}
+	memcpy(cli.tx[head % Z_USBNET_TX_SLOTS], buf, len);
+	cli.tx_len[head % Z_USBNET_TX_SLOTS] = len;
+	cli.tx_head = head + 1;			// after the frame: `usb` may take it
+	if (srv->tx_tail == head) z_usbnet_kick();	// it had emptied the ring
 	tx_frames++;
-	last_active = z_uptime_ticks();
 	return true;
 }
 
+// For a TFTP retry (tftp.c): is a frame waiting in usb's ring that net
+// has not taken? If so the block arrived and net was not woken for it.
+void usb_ecm_note(void)
+{
+	if (!srv) { printf("net:   usb ring: not open\n"); return; }
+	printf("net:   usb ring: %lu put, %lu taken (%s), usb rx %lu tx %lu, net rx %lu tx %lu\n",
+		(unsigned long)srv->rx_head, (unsigned long)cli.rx_tail,
+		srv->rx_head != cli.rx_tail ? "A FRAME WAITS" : "empty",
+		(unsigned long)srv->info.rx, (unsigned long)srv->info.tx,
+		(unsigned long)rx_frames, (unsigned long)tx_frames);
+}
+
+bool usb_ecm_rx_pending(void)
+{
+	return srv && srv->rx_head != cli.rx_tail;
+}
+
+// How long net may sleep for this backend's sake. `usb` wakes net when
+// a frame arrives (Z_USB_EVENT), so only the once-a-second check above
+// needs a timer.
 uint32_t usb_ecm_idle_ticks(void)
 {
-	if (!was_present) return ECM_GAP_IDLE;
-	if ((z_uptime_ticks() - last_active) < ECM_BUSY_HOLD) return 1;
-	return ECM_GAP_IDLE;
+	return Z_TICK_HZ;
 }
 
 void usb_ecm_debug_dump(void)
@@ -169,7 +201,7 @@ void usb_ecm_debug_dump(void)
 	z_usbnet_info_t in;
 
 	if (!z_usbnet_info(&in)) {
-		printf("net: usb ethernet: no kernel support\n");
+		printf("net: usb ethernet: the usb driver is not running\n");
 		return;
 	}
 	printf("net: usb ethernet: %s, link %s%s\n",
@@ -181,15 +213,14 @@ void usb_ecm_debug_dump(void)
 		"max segment %d\n", our_mac[0], our_mac[1], our_mac[2],
 		our_mac[3], our_mac[4], our_mac[5],
 		in.mac_ok ? "" : " (ours, not the adapter's)", in.maxseg);
-	// The kernel's counters and net's own. They should agree; if they
+	// The driver's counters and net's own. They should agree; if they
 	// do not, frames are being lost between the two, which is the one
 	// thing this dump exists to show.
-	printf("net: usb ethernet: kernel rx %lu tx %lu, errors rx %lu tx "
+	printf("net: usb ethernet: usb rx %lu tx %lu, errors rx %lu tx "
 		"%lu, dropped %lu\n", (unsigned long)in.rx, (unsigned long)in.tx,
 		(unsigned long)in.rx_err, (unsigned long)in.tx_err,
 		(unsigned long)in.rx_drop);
-	printf("net: usb ethernet: net rx %lu tx %lu, failed sends %lu, "
-		"polling every %lu tick(s)\n", (unsigned long)rx_frames,
-		(unsigned long)tx_frames, (unsigned long)tx_fail,
-		(unsigned long)usb_ecm_idle_ticks());
+	printf("net: usb ethernet: net rx %lu tx %lu, send ring full %lu\n",
+		(unsigned long)rx_frames, (unsigned long)tx_frames,
+		(unsigned long)tx_full);
 }

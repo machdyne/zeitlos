@@ -484,7 +484,9 @@ At `0x9000_0100`, answered inside the MPU. Writes are privileged-only
 | 0x90000118 | FAULT_PC | first violation: its instruction's address |
 | 0x9000011C | FAULT_INFO | `{valid, reason[27:24], kind[17:16], sel[15:12]}`; write to clear |
 | 0x90000120 | COUNT | violations since cleared; write to clear |
-| 0x90000124 | INFO | `{0x3A50, version}` |
+| 0x90000124 | INFO | `{0x3A50, version}`: 1, or 2 with the grant window |
+| 0x90000128 | GBASE | grant window start, physical (version 2) |
+| 0x9000012C | GLIMIT | grant window end, exclusive; `GLIMIT <= GBASE` is none |
 
 Kind: 0 fetch, 1 load, 2 store. Reason: 1 outside own memory, 2
 kernel-only address, 3 address space masked, 4 jump into the kernel
@@ -501,10 +503,82 @@ C side: `sw/common/zsoc.h` (`reg_mpu_*`, `Z_MPU_*`, `z_mpu_present()`).
 **Kernel use:** `k_mpu_init()` at boot programs `KTEXT` (`_etext`),
 `GATE` (`z_kernel_entry`), `MASK` and enables it, enforcing, with the
 IRQ. The context switch writes `SIZE` next to the MTU base it already
-writes.
+writes, and `MASK` when the incoming process's differs from what the
+MPU holds: **the mask is per process now**. An app gets
+`Z_MPU_MASK_DEFAULT` (everything but the SD card's nibble); a driver
+(ZEXE driver flag) gets every nibble, since driving hardware is its job.
+
+With version 2, the switch also loads the incoming process's grant
+window, or closes it if the outgoing one had one open (see below).
 
 **Shell:** `mpu` (status and the first pending violation),
 `mpu report`, `mpu enforce`, `mpu off`, `mpu clear`.
+
+## The grant window
+
+MPU version 2 (`INFO` low half 2, `z_mpu_version()`). A second region,
+`[GBASE, GLIMIT)` in physical main memory, that the running app may
+store to besides its own block. The kernel loads it on every switch,
+from the process's own state; nothing else writes it.
+
+**What it is for.** A driver serving a request into the buffer of the
+process that made it: a filesystem server reading a file straight into
+the client's buffer, as the kernel's own filesystem does today, instead
+of into its own memory and then copying. On this machine a copy is not
+cheap -- 8KB of `memcpy` is 2-3 ms against ~11 ms to read those 8KB
+from the card -- so without this a userspace filesystem would read
+about 20% slower ([userspace_drivers.md](userspace_drivers.md)).
+
+**Who may open one** (`Z_SYS_MPU_GRANT`, `sw/common/zproc.h`; C side
+in `zeitlos.h`). Two halves, so neither side can do it alone:
+
+| | call | |
+|---|---|---|
+| client | `z_grant_drivers(true)` / `(false)` | drivers may / may not write my memory |
+| driver | `z_grant_open(pid, &base, &size)` | open `pid`'s block to me, if it allows drivers |
+| driver | `z_grant_close()` | close it |
+
+A **driver** is a process started from a binary with the ZEXE driver
+flag ([executables.md](executables.md), "The driver flag"); only a
+driver may open. A client allows the class, not particular pids, so a
+restarted driver needs nothing re-granted, and a file on `/usb` can be
+written by the USB driver though the app only ever talked to `fs`. The
+client libraries that talk to drivers opt in on first use; an app never
+calls `z_grant_drivers()` itself, and one that does no I/O keeps the
+MPU's full protection. The kernel's own process can never opt in.
+
+**One client at a time.** A driver has one window, onto the client it
+is serving now; opening another moves it. A bug in a driver can damage
+that client and itself, and nothing else in memory.
+
+The driver translates a pointer the client sent -- an address in the
+client's window at `0x8000_0000` -- with `z_grant_ptr(base, ptr)`.
+
+**Ending.** The kernel re-checks on every switch to the driver that the
+client still exists and still allows drivers (`k_grant_window()`), so
+every way a grant can end -- the client switching drivers off, being
+killed, its pid being reused by a process that has not opted in --
+closes the window without anyone having to find the driver's state and
+fix it.
+
+**The kernel honours it too:** a buffer inside the open window may be
+passed to a syscall that writes (`k_user_ok()`), so the server can
+hand the client's buffer straight to a file read.
+
+**Hardware cost:** two 32-bit registers and two comparators beside the
+`own` comparison, in parallel with it: about +64 flip-flops and +32
+carry cells in a standalone ECP5 synthesis of the MPU. **Timing on a
+full board has not been checked yet** -- it is the same shape as the
+existing own-block test, but `nextpnr` is the judge.
+
+**Testing:** `tb_mpu.v` checks the registers, the window's edges (first
+and last word in, one word either side out), that an address in the
+app window is never "granted", that an app cannot move the window, that
+a closed window grants nothing, and runs the random soak with a window
+open over part of kernel data. The previous `mpu.v` fails the new
+testbench (57 errors), as it should. ipcbench section [5] checks it on
+hardware: another process fills a buffer through it, and is refused
+once the buffer's owner stops allowing drivers.
 
 ## Cost
 
@@ -525,6 +599,7 @@ needs more, the fallback is one extra cycle on uncached accesses only.
 ```
 iverilog -g2005 -o tb_mpu rtl/tb/tb_mpu.v rtl/mpu.v && ./tb_mpu
 iverilog -g2005 -Ptb_mpu.XLATE=0 -o tb_mpu rtl/tb/tb_mpu.v rtl/mpu.v
+iverilog -g2005 -Ptb_mpu.MAIN_512=1 -o tb_mpu rtl/tb/tb_mpu.v rtl/mpu.v
 
 make -C rtl/tb/cache_soc PREFIX=riscv64-unknown-elf-
 iverilog -g2005 -DCACHE=2 -DBURST=1 -DMPU [-DCPU_Z32] -o tb_soc \

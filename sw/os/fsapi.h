@@ -10,6 +10,11 @@
  * Zeitlos OS
  * Copyright (c) 2025 Lone Dynamics Corporation. All rights reserved.
  *
+ * SINCE PHASE 2b (docs/fs_driver.md) the kernel has no filesystem:
+ * these calls are requests to `fs`, made from inside the caller's
+ * syscall (fsapi.c, kfs.c). The history below explains why they are
+ * syscalls at all; where it describes FatFs in the kernel, read `fs`.
+ *
  * Filesystem syscalls -- Z_SYS_FS_SIZE/_READ/_WRITE, the first way
  * for an ORDINARY APP (as opposed to sh.c, which is kernel code and
  * already links sw/os/fs/fs.c directly) to read or write a file.
@@ -105,6 +110,7 @@
 z_obj_t *k_fs_size(z_obj_t *args);
 // resolver-aware existence check (filesystem + flash) -- see fsapi.c
 z_obj_t *k_exec_exists(z_obj_t *args);
+z_obj_t *k_exec_exists_many(z_obj_t *args);
 z_obj_t *k_fs_read(z_obj_t *args);
 z_obj_t *k_fs_write(z_obj_t *args);
 

@@ -807,7 +807,7 @@ endif
 
 # The Zeitlos flash region (docs/boot.md, "The flash layout"): 1 MB at
 # FLASH_BASE on every board, holding the kernel at +0, the core apps at
-# +0x040000, the flashtest sector and the key/value store. Everything
+# +0x028000, the flashtest sector and the key/value store. Everything
 # outside it -- the gateware below, anything above -- is not Zeitlos's.
 #
 # 0x100000 is where the region has always been on the ECP5 boards. A
@@ -820,19 +820,39 @@ endif
 FLASH_BASE ?= 0x100000
 FLASH_KERNEL_DEC = $(shell printf '%d' $$(( $(FLASH_BASE) + 0x000000 )))
 FLASH_KERNEL_HEX = $(shell printf '%x' $$(( $(FLASH_BASE) + 0x000000 )))
-FLASH_APPS_DEC = $(shell printf '%d' $$(( $(FLASH_BASE) + 0x040000 )))
-FLASH_APPS_HEX = $(shell printf '%x' $$(( $(FLASH_BASE) + 0x040000 )))
+FLASH_APPS_DEC = $(shell printf '%d' $$(( $(FLASH_BASE) + 0x028000 )))
+FLASH_APPS_HEX = $(shell printf '%x' $$(( $(FLASH_BASE) + 0x028000 )))
+
+# The kernel and the core apps are written as ONE image, the kernel
+# padded with 0xFF to +0x028000 and the archive after it, by one run of
+# the flasher. They used to be written separately, and that broke when
+# the kernel region shrank to 160KB: openFPGALoader erases in 64KB
+# blocks (4KB sectors only for a flash it knows supports them), and
+# +0x028000 is not on a 64KB boundary. So writing the archive erased
+# the block 0x020000-0x02FFFF of the region first -- the end of a kernel
+# over 128KB -- and writing the kernel erased the start of the archive.
+# Whichever went second won. (Before, the kernel's end there was its
+# .bss padding, zeros nobody missed.)
+#
+# flash_os and flash_apps are kept as names for it: each writes both,
+# so neither can wipe the other. They are coupled anyway (syscalls.def,
+# below at dev-flash).
+$(OUTDIR)/zeitlos_sw.bin: os $(OUTDIR)/apps.zar
+	python3 -c 'import sys; k=open("sw/os/kernel.bin","rb").read(); z=open("$(OUTDIR)/apps.zar","rb").read(); n=0x028000; assert len(k)<=n, "kernel.bin over 160KB"; open("$@","wb").write(k+b"\xff"*(n-len(k))+z)'
+	@echo "$@: kernel + core apps, one image at $(FLASH_BASE)"
 
 ifeq ($(FAMILY), ice40)
-flash_os: check os
-	$(FLASH) $(FLASH_OFFSET) sw/os/kernel.bin $(FLASH_KERNEL_HEX)
+flash_sw: check $(OUTDIR)/zeitlos_sw.bin
+	$(FLASH) $(FLASH_OFFSET) $(OUTDIR)/zeitlos_sw.bin $(FLASH_KERNEL_HEX)
 else
-flash_os: check os
-	$(FLASH) $(FLASH_OFFSET) $(FLASH_KERNEL_DEC) sw/os/kernel.bin
+flash_sw: check $(OUTDIR)/zeitlos_sw.bin
+	$(FLASH) $(FLASH_OFFSET) $(FLASH_KERNEL_DEC) $(OUTDIR)/zeitlos_sw.bin
 endif
 
-# Core apps -- programmed immediately ABOVE the kernel's 256KB, at
-# FLASH_BASE + 0x040000 (Z_ZAR_FLASH_OFFSET in sw/os/zar.h, which
+flash_os: flash_sw
+
+# Core apps -- programmed immediately ABOVE the kernel's 160KB, at
+# FLASH_BASE + 0x028000 (Z_ZAR_FLASH_OFFSET in sw/os/zar.h, which
 # release/lib/layout.py checks against this). A mismatch looks like "no
 # core apps in flash" rather than an error.
 #
@@ -849,7 +869,7 @@ endif
 # board does, headless ones included (wm is wanted there for remote
 # desktop). A name in CORE_APPS_OMIT that is not in CORE_APPS is an
 # error in the release tools, not a silent no-op.
-CORE_APPS = wm net term console cron text files repl
+CORE_APPS = fs usb wm net term console cron text files repl
 ZAR_APPS = $(filter-out $(CORE_APPS_OMIT),$(CORE_APPS))
 
 # THE BUDGETS: the most each core app may take, as FLASH/RAM -- its
@@ -868,10 +888,14 @@ ZAR_APPS = $(filter-out $(CORE_APPS_OMIT),$(CORE_APPS))
 #
 # A budget is raised by taking from another, from the reserve, or by
 # making something smaller. Every core app must have one.
-CORE_BUDGETS = wm=112K/152K net=136K/288K term=90K/152K console=16K/24K \
-	cron=24K/48K text=88K/176K files=68K/104K repl=192K/320K
-CORE_RESERVE = 22K
-CORE_AT_BOOT = wm net console
+CORE_BUDGETS = fs=45K/75K usb=44K/56K wm=107K/135K net=144K/276K term=93K/152K \
+	console=16K/16K cron=26K/48K text=86K/162K files=70K/104K repl=194K/304K
+CORE_RESERVE = 21K
+# The archive's region (Z_FLASH_ZAR_END - Z_FLASH_ZAR_OFF): mkzar.py
+# refuses an archive bigger than this, whatever the budgets say, so it
+# can never spill into the flashtest sector after it.
+CORE_ZAR_MAX = 848K
+CORE_AT_BOOT = fs usb wm net console
 CORE_RAM_MAX = 1M
 
 # FILES IN FLASH: read-only files under the card at /<path>, for a
@@ -894,7 +918,7 @@ core-files: $(addprefix $(CORE_FILES_OUT)/,$(CORE_FILES))
 
 $(OUTDIR)/apps.zar: apps core-files
 	mkdir -p $(OUTDIR)
-	python3 tools/mkzar.py --budgets "$(CORE_BUDGETS)" --files-max $(CORE_RESERVE) \
+	python3 tools/mkzar.py --budgets "$(CORE_BUDGETS)" --files-max $(CORE_RESERVE) --max $(CORE_ZAR_MAX) \
 		$(OUTDIR)/apps.zar \
 		$(foreach a,$(ZAR_APPS),$(a)=sw/apps/$(a)/$(a).bin) \
 		$(foreach f,$(CORE_FILES),$(f)=$(CORE_FILES_OUT)/$(f))
@@ -911,13 +935,8 @@ core-apps:
 	@echo "ram-max: $(CORE_RAM_MAX)"
 	@echo "files: $(CORE_FILES)"
 
-ifeq ($(FAMILY), ice40)
-flash_apps: $(OUTDIR)/apps.zar
-	$(FLASH) $(FLASH_OFFSET) $(OUTDIR)/apps.zar $(FLASH_APPS_HEX)
-else
-flash_apps: $(OUTDIR)/apps.zar
-	$(FLASH) $(FLASH_OFFSET) $(FLASH_APPS_DEC) $(OUTDIR)/apps.zar
-endif
+# One image with the kernel: see flash_sw above.
+flash_apps: flash_sw
 
 # There is no boot logo (docs/boot.md): the hardware's busy cursor,
 # centred at reset, is the sign of life, and the BIOS clears VRAM.
@@ -943,7 +962,7 @@ dev-prog: dev soc prog
 # hardware the running bitstream doesn't have fails in confusing ways
 # (the one case that says so clearly is a CPU/ISA mismatch, which
 # k_soc_report() catches at boot; everything else is on you).
-dev-flash: dev flash_os flash_apps
+dev-flash: dev flash_sw
 
 # flash_apps is part of the default `flash` deliberately: the point of
 # putting the core apps in flash is that a freshly flashed board boots
@@ -1002,9 +1021,9 @@ jumploader flash_jump:
 endif
 
 ifeq ($(JUMP), 1)
-flash: zeitlos flash_soc flash_os flash_apps flash_jump
+flash: zeitlos flash_soc flash_sw flash_jump
 else
-flash: zeitlos flash_soc flash_os flash_apps
+flash: zeitlos flash_soc flash_sw
 endif
 
 os:
@@ -1118,7 +1137,7 @@ test_usb:
 		rtl/usb/usb_port.v rtl/usb/usb_xact.v rtl/usb/usb_hid_compat.v
 	@vvp output/tb_usb_host
 
-# CO-SIMULATION: the real sw/os/usb driver against the real rtl/usb
+# CO-SIMULATION: the real sw/apps/usb driver against the real rtl/usb
 # gateware, joined by a VPI bridge (rtl/tb/cosim/usbh_vpi.c).
 #
 # This is the only test that exercises the two halves TOGETHER. The
@@ -1136,10 +1155,10 @@ test_usb:
 test_usb_cosim:
 	@mkdir -p output
 	cd output && iverilog-vpi --name=usbh_cosim -DZ_USBH_COSIM \
-		-I../sw/os/usb ../rtl/tb/cosim/usbh_vpi.c \
-		../sw/os/usb/usbh.c ../sw/os/usb/usbh_hid.c \
-		../sw/os/usb/usbh_msc.c ../sw/os/usb/usbh_hub.c ../sw/os/usb/usbh_cdc.c ../sw/os/usb/usbh_cp210x.c \
-		../sw/os/usb/usbh_ecm.c
+		-I../sw/apps/usb ../rtl/tb/cosim/usbh_vpi.c \
+		../sw/apps/usb/usbh.c ../sw/apps/usb/usbh_hid.c \
+		../sw/apps/usb/usbh_msc.c ../sw/apps/usb/usbh_hub.c ../sw/apps/usb/usbh_cdc.c ../sw/apps/usb/usbh_cp210x.c \
+		../sw/apps/usb/usbh_ecm.c
 	iverilog -g2005 $(if $(filter-out 0,$(TRACE)),-DCOSIM_TRACE,) \
 		-o output/tb_usb_cosim rtl/tb/tb_usb_cosim.v \
 		rtl/tb/tb_usb_device.v rtl/usb/usb_host.v rtl/usb/usb_sie.v \
@@ -1155,10 +1174,10 @@ test_usb_cosim:
 test_usb_msc:
 	@mkdir -p output
 	cd output && iverilog-vpi --name=usbh_cosim -DZ_USBH_COSIM \
-		-I../sw/os/usb ../rtl/tb/cosim/usbh_vpi.c \
-		../sw/os/usb/usbh.c ../sw/os/usb/usbh_hid.c \
-		../sw/os/usb/usbh_msc.c ../sw/os/usb/usbh_hub.c ../sw/os/usb/usbh_cdc.c ../sw/os/usb/usbh_cp210x.c \
-		../sw/os/usb/usbh_ecm.c
+		-I../sw/apps/usb ../rtl/tb/cosim/usbh_vpi.c \
+		../sw/apps/usb/usbh.c ../sw/apps/usb/usbh_hid.c \
+		../sw/apps/usb/usbh_msc.c ../sw/apps/usb/usbh_hub.c ../sw/apps/usb/usbh_cdc.c ../sw/apps/usb/usbh_cp210x.c \
+		../sw/apps/usb/usbh_ecm.c
 	iverilog -g2005 -o output/tb_usb_msc_cosim rtl/tb/tb_usb_msc_cosim.v \
 		rtl/tb/tb_usb_device.v rtl/usb/usb_host.v rtl/usb/usb_sie.v \
 		rtl/usb/usb_port.v rtl/usb/usb_xact.v rtl/usb/usb_hid_compat.v
@@ -1175,10 +1194,10 @@ test_usb_msc:
 test_usb_ecm:
 	@mkdir -p output
 	cd output && iverilog-vpi --name=usbh_cosim -DZ_USBH_COSIM \
-		-I../sw/os/usb ../rtl/tb/cosim/usbh_vpi.c \
-		../sw/os/usb/usbh.c ../sw/os/usb/usbh_hid.c \
-		../sw/os/usb/usbh_msc.c ../sw/os/usb/usbh_hub.c ../sw/os/usb/usbh_cdc.c ../sw/os/usb/usbh_cp210x.c \
-		../sw/os/usb/usbh_ecm.c
+		-I../sw/apps/usb ../rtl/tb/cosim/usbh_vpi.c \
+		../sw/apps/usb/usbh.c ../sw/apps/usb/usbh_hid.c \
+		../sw/apps/usb/usbh_msc.c ../sw/apps/usb/usbh_hub.c ../sw/apps/usb/usbh_cdc.c ../sw/apps/usb/usbh_cp210x.c \
+		../sw/apps/usb/usbh_ecm.c
 	iverilog -g2005 -o output/tb_usb_ecm_cosim rtl/tb/tb_usb_ecm_cosim.v \
 		rtl/tb/tb_usb_device.v rtl/usb/usb_host.v rtl/usb/usb_sie.v \
 		rtl/usb/usb_port.v rtl/usb/usb_xact.v rtl/usb/usb_hid_compat.v
@@ -1196,10 +1215,10 @@ test_usb_ecm:
 test_usb_serial:
 	@mkdir -p output
 	cd output && iverilog-vpi --name=usbh_cosim -DZ_USBH_COSIM \
-		-I../sw/os/usb ../rtl/tb/cosim/usbh_vpi.c \
-		../sw/os/usb/usbh.c ../sw/os/usb/usbh_hid.c \
-		../sw/os/usb/usbh_msc.c ../sw/os/usb/usbh_hub.c ../sw/os/usb/usbh_cdc.c ../sw/os/usb/usbh_cp210x.c \
-		../sw/os/usb/usbh_ecm.c
+		-I../sw/apps/usb ../rtl/tb/cosim/usbh_vpi.c \
+		../sw/apps/usb/usbh.c ../sw/apps/usb/usbh_hid.c \
+		../sw/apps/usb/usbh_msc.c ../sw/apps/usb/usbh_hub.c ../sw/apps/usb/usbh_cdc.c ../sw/apps/usb/usbh_cp210x.c \
+		../sw/apps/usb/usbh_ecm.c
 	iverilog -g2005 -o output/tb_usb_serial_cosim rtl/tb/tb_usb_serial_cosim.v \
 		rtl/tb/tb_usb_device.v rtl/usb/usb_host.v rtl/usb/usb_sie.v \
 		rtl/usb/usb_port.v rtl/usb/usb_xact.v rtl/usb/usb_hid_compat.v
@@ -1215,10 +1234,10 @@ test_usb_serial:
 test_usb_hub:
 	@mkdir -p output
 	cd output && iverilog-vpi --name=usbh_cosim -DZ_USBH_COSIM \
-		-I../sw/os/usb ../rtl/tb/cosim/usbh_vpi.c \
-		../sw/os/usb/usbh.c ../sw/os/usb/usbh_hid.c \
-		../sw/os/usb/usbh_msc.c ../sw/os/usb/usbh_hub.c ../sw/os/usb/usbh_cdc.c ../sw/os/usb/usbh_cp210x.c \
-		../sw/os/usb/usbh_ecm.c
+		-I../sw/apps/usb ../rtl/tb/cosim/usbh_vpi.c \
+		../sw/apps/usb/usbh.c ../sw/apps/usb/usbh_hid.c \
+		../sw/apps/usb/usbh_msc.c ../sw/apps/usb/usbh_hub.c ../sw/apps/usb/usbh_cdc.c ../sw/apps/usb/usbh_cp210x.c \
+		../sw/apps/usb/usbh_ecm.c
 	iverilog -g2005 -o output/tb_usb_hub_cosim rtl/tb/tb_usb_hub_cosim.v \
 		rtl/tb/tb_usb_device.v rtl/usb/usb_host.v rtl/usb/usb_sie.v \
 		rtl/usb/usb_port.v rtl/usb/usb_xact.v rtl/usb/usb_hid_compat.v
@@ -1261,9 +1280,9 @@ usb_area:
 test_usb_margin:
 	@mkdir -p output
 	@cd output && iverilog-vpi --name=usbh_cosim -DZ_USBH_COSIM \
-		-I../sw/os/usb ../rtl/tb/cosim/usbh_vpi.c \
-		../sw/os/usb/usbh.c ../sw/os/usb/usbh_hid.c \
-		../sw/os/usb/usbh_msc.c ../sw/os/usb/usbh_hub.c ../sw/os/usb/usbh_cdc.c ../sw/os/usb/usbh_cp210x.c ../sw/os/usb/usbh_ecm.c >/dev/null
+		-I../sw/apps/usb ../rtl/tb/cosim/usbh_vpi.c \
+		../sw/apps/usb/usbh.c ../sw/apps/usb/usbh_hid.c \
+		../sw/apps/usb/usbh_msc.c ../sw/apps/usb/usbh_hub.c ../sw/apps/usb/usbh_cdc.c ../sw/apps/usb/usbh_cp210x.c ../sw/apps/usb/usbh_ecm.c >/dev/null
 	@for c in "10000 0" "-10000 0" "0 20000" "0 -20000"; do \
 		set -- $$c; \
 		iverilog -g2005 -DDEV_SKEW=20 -DDEV_PPM_FS=$$1 \

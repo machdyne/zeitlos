@@ -1,5 +1,18 @@
 # Zeitlos Filesystem Concurrency
 
+> **Since Phase 2b the kernel has no filesystem.** FatFs, the card
+> driver, the volumes and the rules on this page live in `fs`
+> (`sw/apps/fs`), a driver process that serves files by message:
+> [fs_driver.md](fs_driver.md). The concurrency problem described below
+> is gone with them: `fs` serves one request at a time and holds no
+> scheduler lock, and the filesystem syscalls are no longer in
+> `k_syscall_touches_fs()` -- they wait for `fs`, which cannot run
+> while preemption is held. `k_fs_enter()` remains, as the short
+> no-preemption lock it always was, for kvstore, auth, cfg's store and
+> the USB transaction engine. What follows is the design as it stood
+> when FatFs was the kernel's; the volume table, path rules, rename
+> checks and timestamps carried over to `fs` unchanged.
+
 ## Overview
 
 Zeitlos runs FatFs on a single SD card reached over SPI (`rtl/spim.v`,
@@ -24,7 +37,7 @@ The card is not the only FatFs volume any more.
 |---|---|---|
 | 0 | `/` | SD card, `sw/os/fs/fatfs/sdmm.c` |
 | 1 | `/ram` | ramdisk, `sw/os/ramdisk.c` |
-| 2 | `/usb` | USB mass storage, `sw/os/usb/usbh_msc.c` |
+| 2 | `/usb` | USB mass storage, the `usb` driver's (`sw/apps/usb/usbh_msc.c`) |
 
 `/ram` and `/usb` are prefixes `fs.c` rewrites into volume ids, not
 directories on the card. **`/usb` mounts itself when a drive is plugged
@@ -166,10 +179,15 @@ swap:
 ```c
 if (k_no_preempt &&
     (z_kernel_ticks - k_no_preempt_start) < K_NO_PREEMPT_MAX_TICKS) {
+    k_resched_owed = 1;     // paid when the guard drops: see below
     ret = regs;
     goto done;
 }
 ```
+
+The wake sweep (processes whose `z_proc_wait()` timeout has passed)
+runs *before* this test, so sleepers are woken on time even while the
+swap itself waits.
 
 Three properties matter:
 
@@ -279,6 +297,29 @@ cycles per byte (see `sdmm.c`'s header), a 512-byte sector is about
 single-syscall `k_fs_read` lands around 64ms. Nothing legitimate should
 ever hit it. A whole program load used to, while `PROC_RUN` held the
 guard for the transfer; that syscall is no longer in the list above.
+
+### A deferred swap is owed, not dropped
+
+Until October 2026 a tick that found the guard held was simply
+dropped. That was harmless for one long call and badly wrong for many
+short ones: a process reading or writing in 8KB chunks is inside a
+filesystem syscall nearly all the time, so nearly every tick landed in
+one, and nobody else ran until a tick happened to fall in the few
+microseconds between two calls. The cap did not help, because it is
+measured from the start of each call and no single call ran long.
+
+`ipcbench` (`docs/userspace_drivers.md`) measured it: a process
+sleeping in `z_proc_wait(1)` waited **1.5 s** while another wrote a
+512KB file to the card, 142 ms during a chunked card read, and 61 ms
+during a chunked `/ram` read.
+
+Now the KTIMER branch sets `k_resched_owed` when it defers, and
+`k_fs_leave()` pays it the moment the count returns to zero -- with the
+same `timer(1)` pulse `k_proc_yield_blocked()` uses, so `irq_vec`
+saves a real frame and `k_sched_switch()` runs. A process making file
+calls back to back now gives up the CPU at the first gap after its
+timeslice ends, and the delay any other process sees is bounded by
+one call, as the table below always assumed.
 
 ## Performance
 

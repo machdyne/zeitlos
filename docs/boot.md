@@ -120,8 +120,8 @@ Inside the region the layout is fixed:
 
 | Offset in the region | Size | Contents |
 |---|---|---|
-| `+0x000000` | 256 KB | kernel |
-| `+0x040000` | 752 KB | core apps, the ZAR ([flash_apps.md](flash_apps.md)) |
+| `+0x000000` | 160 KB | kernel (256 KB until Phase 2b, [fs_driver.md](fs_driver.md); 224 KB until Phase 3, [usb_driver.md](usb_driver.md)) |
+| `+0x028000` | 848 KB | core apps, the ZAR ([flash_apps.md](flash_apps.md)) |
 | `+0x0FC000` | 4 KB | the `flashtest` sector ([spiflash.md](spiflash.md)) |
 | `+0x0FE000` | 8 KB | the key/value store ([kvstore.md](kvstore.md)) |
 
@@ -156,7 +156,7 @@ The base is stated twice, because two different things need it: in
 `rtl/boards.vh` for the running system, and as `FLASH_BASE` in the
 board's Makefile block for the flashing commands (`make flash_os`
 writes the kernel at `FLASH_BASE`, `flash_apps` the ZAR at
-`FLASH_BASE + 0x040000`). The two must agree. `release/lib/layout.py`
+`FLASH_BASE + 0x028000`). The two must agree. `release/lib/layout.py`
 cross-checks every offset in the region between `zsoc.h`, the BIOS,
 `zar.h` and the Makefile (`release/zrelease layout`).
 

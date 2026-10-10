@@ -1669,6 +1669,20 @@ screen's own edges (see "Placement cascade is intentionally minimal"
 under "Known limitations"); it just happens to hold given the current
 cascade formula and app window sizes.
 
+
+### Which apps the dock offers
+
+At startup `dock_build()` asks which candidates would launch, all at
+once: `z_exec_exists_many()` (`Z_SYS_EXEC_EXISTS_MANY`) answers for the
+whole list with one pass over `/apps` and the flash archive for the
+rest, where asking name by name (`z_exec_exists()`) was a directory
+lookup and a header read per candidate. On a kernel without the call it
+falls back to asking one by one. `ipcbench` section [6] times both.
+
+The one difference: a non-empty file in `/apps` counts without its
+header being read, so a damaged executable is offered and then fails to
+start, where the one-by-one check left it out.
+
 ## Drawing content
 
 `sw/common/zgfx.c/h` provides direct-framebuffer pixel/text drawing

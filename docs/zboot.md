@@ -151,8 +151,8 @@ base is `0x100000`, so these addresses are the region's offsets plus
 |---|---|---|
 | `0x000000` | 256 KB | DFU bootloader (uses ~123 KB), on boards that ship one |
 | `0x040000` | 960 KB | Zeitlos gateware (1 MB from `0x000000` without DFU) |
-| `0x100000` | 256 KB | kernel |
-| `0x140000` | to `0x1FC000` | core apps (the ZAR) |
+| `0x100000` | 160 KB | kernel |
+| `0x128000` | to `0x1FC000` | core apps (the ZAR) |
 | `0x1FC000` | 4 KB | the `flashtest` sector |
 | `0x1FE000` | 8 KB | key/value store |
 
@@ -216,8 +216,8 @@ board.
 |---|---|---|---|
 | `0x000000` | DFU bootloader (optional) | 256 KB | write-protected, see section 7 |
 | `0x040000` | Zeitlos gateware | 960 KB | packed with boot address 0 by default; `0x200000` with `JUMP=1` |
-| `0x100000` | kernel | 256 KB | |
-| `0x140000` | core apps (ZAR) | 752 KB, to `0x1FC000` | was 576 KB, to `0x1D0000` |
+| `0x100000` | kernel | 160 KB | 256 KB until the filesystem left the kernel, 224 KB until the USB stack did |
+| `0x128000` | core apps (ZAR) | 848 KB, to `0x1FC000` | was 784 KB from `0x138000`, 752 KB from `0x140000`, and 576 KB to `0x1D0000` before that |
 | *(run time)* | user gateware | see below | |
 | `0x1FC000` | the flash test sector | 4 KB | `flashtest` |
 | `0x1FE000` | key/value store | 8 KB | the last 8 KB of the Zeitlos region; written only by the running system, [kvstore.md](kvstore.md) |

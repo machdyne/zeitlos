@@ -87,7 +87,7 @@ typedef struct {
 // FF_LFN_BUF; a longer one is reported by its 8.3 alias instead), so a
 // buffer that holds any name the filesystem can report is
 // Z_FS_NAME_MAX. Z_FS_PATH_MAX is what apps allow for a whole path --
-// the kernel's own limit (FS_PATH_MAX, sw/os/fs/fs.h) is a little
+// the kernel's own limit (FS_PATH_MAX, sw/apps/fs/fsvol.h) is a little
 // larger, so anything that fits here resolves there. Use these rather
 // than a number: every app used to pick its own (64, 80), sized for
 // 8.3 names.
@@ -278,7 +278,7 @@ typedef struct {
 // deliberately: these are uint32_t, and a 32GB card's byte count
 // overflows one. KB covers up to 4TB, which is well past anything this
 // OS will see on an SD card, and it matches what the underlying
-// fs_total()/fs_free() (sw/os/fs/fs.c) already return -- both compute
+// fs_total()/fs_free() (sw/apps/fs/fs.c) already return -- both compute
 // `clusters * csize / 2`, i.e. 512-byte sectors halved into KB.
 typedef struct {
 	uint32_t	total_kb;	// OUT: whole volume (0 if unmounted/failed)

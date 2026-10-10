@@ -202,6 +202,36 @@ into `msg`, resolving any borrowed payload along the way. Returns
 non-blocking.
 
 ```c
+z_rv z_msg_recv(z_msg_t *msg, uint32_t timeout_ticks);
+```
+The next message, **waiting for one in the same syscall** if the
+mailbox is empty (`Z_SYS_MSG_RECV`). `Z_OK` with a message; `Z_FAIL`
+if the wait ended without one -- the timeout (0 means none), or a
+direct wake such as an interrupt the process is woken by, the same
+wakes `z_proc_wait()` returns on. Prefer it in any loop that sleeps
+between messages: the usual read / wait / read is three syscalls, and
+a syscall costs ~1,500 cycles before it does anything
+([userspace_drivers.md](userspace_drivers.md), the scheduler trace).
+It can wait inside the call because the wait already does: the
+process blocks, the yield's interrupt is taken inside the handler, and
+when the process is switched back in it carries on and reads.
+
+```c
+z_rv z_msg_recv_match(z_msg_t *msg, uint32_t subject, uint32_t tag,
+	uint32_t timeout_ticks);
+```
+The one message with this `subject` **and** `tag`, waiting up to
+`timeout_ticks` (0: no limit) in the same syscall (`Z_SYS_MSG_RECV`
+with `Z_MSG_RECV_MATCH`). Every other message stays queued, in its
+order, for the caller's next read; the kernel takes the match out of
+the middle of the mailbox (`z_mailbox_pop_match()` in `msg.c`). For a
+request's reply in a process that also receives other mail -- `wm`'s
+events, a port's data -- which is what the filesystem driver's client
+does with every call ([fs_driver.md](fs_driver.md)). A message that
+arrives while the caller waits and does not match leaves it waiting.
+`Z_FAIL` on timeout.
+
+```c
 z_rv z_msg_wait(z_msg_t *msg, uint32_t subject, uint32_t tag);
 ```
 Blocks (busy-loops -- there's no yield/sleep primitive yet, so this

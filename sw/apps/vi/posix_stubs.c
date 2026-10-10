@@ -92,24 +92,13 @@ int poll(struct pollfd *fds, nfds_t nfds, int timeout) {
 }
 
 /*
- * -- directories --
+ * -- directories, stat, the working directory --
  *
- * opendir() returning NULL is not a failure to implement something; it
- * is the honest answer until it is implemented. nextvi calls it from
- * dir_calc() alone, which builds the file-completion list for `:e`, and
- * that function checks the result and returns early.
- *
- * So the cost is that `:e <tab>` suggests nothing. Everything else --
- * opening a named file, writing it, every editing command -- is
- * untouched.
- *
- * Zeitlos does have directory listing (fs_list_into(), zfsapp.h); it
- * is simply not opendir-shaped. Wiring the two together is one
- * function if the completion turns out to be missed.
+ * opendir()/readdir()/closedir(), stat() and getcwd()/chdir() used to
+ * be stubs here that failed, which cost `:e <tab>` completion and
+ * `:cd`. They are real now: vi is built with POSIX_IO = 1, and
+ * sw/common/zposix.c provides them over `fs` (docs/posix_io.md).
  */
-DIR *opendir(const char *path) { (void)path; errno = ENOSYS; return NULL; }
-struct dirent *readdir(DIR *dp) { (void)dp; return NULL; }
-int closedir(DIR *dp) { (void)dp; return 0; }
 
 /*
  * -- shelling out --
@@ -124,23 +113,6 @@ int closedir(DIR *dp) { (void)dp; return 0; }
  * and collect its output (docs/posix.md, "three cases"), so a `:!`
  * that asked posix to run something is a message, not a fork.
  */
-/*
- * -- stat --
- *
- * newlib declares stat() and provides _fstat() through
- * sw/common/zeitlos.c, but nothing implements stat() itself. nextvi
- * calls it (as lstat, renamed by the Makefile) from dir_calc() alone
- * -- the `:e` completion walk -- which never reaches it, because
- * opendir() returns NULL first.
- *
- * So this exists to satisfy the linker rather than to be called, and
- * it fails rather than inventing an answer. If directory listing is
- * ever wired to fs_list_into(), this is the second function to write.
- */
-int stat(const char *path, struct stat *st) {
-    (void)path; (void)st; errno = ENOSYS; return -1;
-}
-
 /*
  * -- the environment --
  *
@@ -162,27 +134,6 @@ int stat(const char *path, struct stat *st) {
  * is the same behaviour as an environment that does not set them.
  */
 char *getenv(const char *name) { (void)name; return NULL; }
-
-/*
- * -- the working directory --
- *
- * `posix` has a cwd (sw/apps/posix/vfs.c) and this process does not:
- * it was started by name and given a filename, not a directory.
- *
- * getcwd() returning NULL makes `:cd` report that it cannot determine
- * the current directory, which is true here and is the honest failure.
- * Relative paths still work -- they resolve against whatever `posix`
- * passed, because it passes what the user typed.
- *
- * Giving this process a real cwd means asking `posix` for one, which
- * is a message and a protocol addition. Worth doing only if `:cd`
- * turns out to be missed.
- */
-char *getcwd(char *buf, size_t size) {
-    (void)buf; (void)size; errno = ENOSYS; return NULL;
-}
-
-int chdir(const char *path) { (void)path; errno = ENOSYS; return -1; }
 
 /*
  * -- the rest of the `:!` machinery --

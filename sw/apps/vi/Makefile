@@ -26,10 +26,11 @@ APP_CFLAGS = -Ishim -I../../common -I$(NEXTVI) -DZEITLOS=1
 #
 # So these are not "stub it out if you like" headers, they are the
 # difference between the editor compiling and not. sw/apps/zcc/libz
-# does the same thing for the same reason.
+# does the same thing for the same reason. <dirent.h> is no longer in
+# shim/: POSIX_IO (below) puts sw/common/posix's real one on the path.
 #
-# The stubs behind them are in posix_stubs.c, which says what each one
-# costs. Only one costs anything: `:e` filename completion.
+# The stubs behind the rest are in posix_stubs.c, which says what each
+# one costs.
 
 # -Werror on THIS app's own sources only. sw/ext is vendored upstream
 # code and sw/common has warnings that vary by toolchain; neither is
@@ -53,7 +54,12 @@ OWN_CFLAGS = $(CFLAGS) -Werror
 #
 #   zwin.o: zwin for z_launch_arg_take() alone -- how posix hands over a filename.
 OBJS = zeitlos.o zobj.o zport.o zwin.o zgfx.o zfont_data.o zfsapp.o \
-	nextvi.o vi_zeitlos.o posix_stubs.o fileio.o
+	nextvi.o vi_zeitlos.o posix_stubs.o
+
+# open(), read(), write(), stat(), opendir() and the rest, over `fs`
+# (sw/common/zposix.c, docs/posix_io.md). Replaces the fileio.c and the
+# directory stubs this app used to carry.
+POSIX_IO = 1
 
 # The whole editor, from the one translation unit upstream intends.
 #
@@ -83,10 +89,6 @@ vi_zeitlos.o: vi_zeitlos.c
 	$(CC) $(OWN_CFLAGS) -c vi_zeitlos.c -o vi_zeitlos.o
 posix_stubs.o: posix_stubs.c
 	$(CC) $(OWN_CFLAGS) -c posix_stubs.c -o posix_stubs.o
-# The POSIX descriptor layer over zfsapp -- see fileio.c. Overrides the
-# weak _open/_read/_write/_close/_fstat in sw/common/zeitlos.c.
-fileio.o: fileio.c
-	$(CC) $(OWN_CFLAGS) -c fileio.c -o fileio.o
 
 # 1MB. nextvi allocates per line, about 3.4 times the file. A 154KB
 # source needed 273-529KB. It was 4MB, then 2MB, because _fstat

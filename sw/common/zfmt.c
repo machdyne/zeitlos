@@ -79,8 +79,14 @@ typedef struct {
 	char		tmp[64];
 } zf_out_t;
 
+// ZFMT_NO_STDIO: an app that prints only through the buffer forms
+// (sw/apps/usb formats with vsnprintf and write()s the line) leaves
+// stdio out entirely -- fwrite here is what would otherwise keep it,
+// and with it malloc, in the link.
 static void zf_flush(zf_out_t *o) {
+#ifndef ZFMT_NO_STDIO
 	if (o->f && o->tn) fwrite(o->tmp, 1, o->tn, o->f);
+#endif
 	o->tn = 0;
 }
 

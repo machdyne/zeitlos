@@ -1,7 +1,7 @@
 /*
  * Zeitlos SOC -- simulation only.
  *
- * Hub co-simulation: the REAL sw/os/usb driver, including the hub
+ * Hub co-simulation: the REAL sw/apps/usb driver, including the hub
  * class driver (usbh_hub.c) and mass storage (usbh_msc.c), against the
  * REAL rtl/usb gateware, a four-port hub model, and devices behind it.
  * See docs/usb_host.md, "Hub class driver".

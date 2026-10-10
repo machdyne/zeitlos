@@ -2,7 +2,20 @@
  * Zeitlos OS
  * Copyright (c) 2025 Lone Dynamics Corporation. All rights reserved.
  *
- * Filesystem syscalls. See fsapi.h for the full design writeup.
+ * The filesystem syscalls (Z_SYS_FS_*), since the filesystem left the
+ * kernel (docs/fs_driver.md): each one is a request to `fs`, made from
+ * inside the calling app's syscall, as that app (kfs.c). The app waits,
+ * blocked, as it would in z_msg_recv().
+ *
+ * They are kept so that programs which call them directly still work:
+ * zcc's runtime (sw/apps/zcc/libz), binaries built before zfsapp spoke
+ * to `fs` itself. zfsapp no longer comes here -- it sends its requests
+ * to `fs` directly, one hop shorter. The argument structs and their
+ * rules are sw/common/zfs.h's, unchanged.
+ *
+ * Handles are fs's descriptors plus K_FSH_BASE, the same offset zfsapp
+ * uses, so a handle never collides with the small integers the kernel's
+ * own table used to hand out.
  */
 
 #include <stdint.h>
@@ -11,924 +24,246 @@
 
 #include "kernel.h"
 #include "fsapi.h"
-#include "fs/fs.h"
-#include "zar.h"		// the flash underlay: zar.h, docs/flash_apps.md
-#include "flashapi.h"	// k_flash_session_active()
+#include "kfs.h"
+#include "../common/zfsc.h"
 
-// Does a launchable executable by this name exist, from ANY source?
-//
-// Deliberately not k_fs_size(): that only looks at the filesystem, so
-// on a board with no sdcard it would report the flash-resident core
-// apps as missing -- which is exactly backwards, since those are the
-// ones guaranteed to be there. This goes through fs_exec_info_any()
-// (sw/os/fs/fs.c), the same resolver every launch path uses, so the
-// answer always matches what `run` would actually do.
-//
-// Added for wm's dock, which builds itself from whichever of its
-// candidate apps are actually present -- an icon for a missing app is
-// a button that does nothing. See docs/window_manager.md.
-//
-// Returns the process image size (data + bss), or 0 if not found, so
-// callers get a usable size for free rather than needing a second
-// call.
+#define K_FSH_BASE	0x4000
+
+static int32_t fd_of(int32_t handle) {
+	return handle >= K_FSH_BASE ? handle - K_FSH_BASE : -1;
+}
+
+static z_obj_t *rv(bool ok) { return ok ? (&z_ok) : (&z_fail); }
+
 z_obj_t *k_exec_exists(z_obj_t *args) {
-
 	if (!args || args->type != Z_STR || !args->val.str) {
-		args->type = Z_UINT32;
-		args->val.uint32 = 0;
+		if (args) { args->type = Z_UINT32; args->val.uint32 = 0; }
 		return (&z_fail);
 	}
-
 	z_exec_info_t xi;
 	uint32_t total = fs_exec_info_any(args->val.str, &xi) ? 0 : xi.total;
-
 	args->type = Z_UINT32;
 	args->val.uint32 = total;
+	return rv(total != 0);
+}
 
-	return total ? (&z_ok) : (&z_fail);
-
+z_obj_t *k_exec_exists_many(z_obj_t *args) {
+	z_exec_many_args_t *a = (z_exec_many_args_t *)args;
+	if (!a->names || !a->found || a->count == 0 || a->count > 256)
+		return (&z_fail);
+	if (!k_user_ok(a->found, a->count)) return (&z_fail);
+	fs_exec_exists_many(a->names, a->count, a->found);
+	return (&z_ok);
 }
 
 z_obj_t *k_fs_size(z_obj_t *args) {
-
 	z_fs_size_args_t *a = (z_fs_size_args_t *)args;
-
-	if (!a || !a->name) {
-		if (a) a->size = 0;
-		return (&z_fail);
-	}
-
-	// fs_size() (sw/os/fs/fs.c) itself already returns 0 for "not
-	// found" -- treated as success here (see fsapi.h's own comment):
-	// a missing file isn't an error for any of this syscall's actual
-	// callers, it's the normal "this will be a new file" case.
-	a->size = fs_size(a->name);
-
+	if (!a || !a->name) { if (a) a->size = 0; return (&z_fail); }
+	a->size = fs_size(a->name);		// 0 for "not found", which is not an error
 	return (&z_ok);
-
 }
 
 z_obj_t *k_fs_read(z_obj_t *args) {
-
 	z_fs_read_args_t *a = (z_fs_read_args_t *)args;
-
-	if (!a || !a->name || !a->buf || a->maxlen == 0) {
-		if (a) a->len = 0;
-		return (&z_fail);
-	}
-	// k_user_ok(): the kernel must not write where the app has no memory (docs/mpu.md)
-	if (!k_user_ok(a->buf, a->maxlen)) {
-		a->len = 0;
-		return (&z_fail);
-	}
-
+	if (!a || !a->name || !a->buf || a->maxlen == 0) { if (a) a->len = 0; return (&z_fail); }
 	a->len = 0;
-
-	FIL f;
-	char rp_[FS_PATH_MAX];
-	const char *real = fs_path_resolve(a->name, rp_, sizeof(rp_));
-	FRESULT res = f_open(&f, real, FA_READ | FA_OPEN_EXISTING);
-	if (res != FR_OK) {
-		// not on the card: a file in flash, read whole (zar.h)
-		uint32_t zo, zs;
-		if (real != a->name || z_zar_file(real, &zo, &zs) || zs > a->maxlen)
-			return (&z_fail);
-		z_zar_read(zo, a->buf, zs);
-		a->len = zs;
-		return (&z_ok);
-	}
-
-	FSIZE_t sz = f_size(&f);
-	if (sz > a->maxlen) {
-		// caller's buffer is smaller than the file -- refuse rather
-		// than silently truncating; matches fs_mallocfile()'s own
-		// "load the whole thing or don't" contract (te's own
-		// README.md's own note on this: "fs_mallocfile() is expected
-		// to load the WHOLE file into one buffer" -- a short read
-		// here would otherwise look like success with corrupt/
-		// incomplete content).
-		f_close(&f);
-		return (&z_fail);
-	}
-
-	UINT br = 0;
-	res = f_read(&f, a->buf, (UINT)sz, &br);
-	f_close(&f);
-
-	if (res != FR_OK) return (&z_fail);
-
-	a->len = (uint32_t)br;
+	if (!k_user_ok(a->buf, a->maxlen)) return (&z_fail);
+	// the whole file or nothing (zfs.h)
+	int32_t n = kfs_read_file(a->name, a->buf, a->maxlen);
+	if (n < 0) return (&z_fail);
+	a->len = (uint32_t)n;
 	return (&z_ok);
-
 }
 
 z_obj_t *k_fs_write(z_obj_t *args) {
-
 	z_fs_write_args_t *a = (z_fs_write_args_t *)args;
-
-	if (!a || !a->name || (!a->buf && a->len > 0)) {
-		if (a) a->written = 0;
-		return (&z_fail);
-	}
-
+	if (!a || !a->name || (!a->buf && a->len > 0)) { if (a) a->written = 0; return (&z_fail); }
 	a->written = 0;
-
-	FIL f;
-	char rp_[FS_PATH_MAX];
-	FRESULT res = f_open(&f, fs_path_resolve(a->name, rp_, sizeof(rp_)),
-		FA_WRITE | FA_CREATE_ALWAYS);
-	if (res != FR_OK) return (&z_fail);
-
-	UINT bw = 0;
-	res = f_write(&f, a->buf, (UINT)a->len, &bw);
-	FRESULT cres = f_close(&f);
-
-	if (res != FR_OK || cres != FR_OK) return (&z_fail);
-
-	a->written = (uint32_t)bw;
+	int32_t fd = zfs_open(a->name, Z_O_WRONLY | Z_O_CREAT | Z_O_TRUNC);
+	if (fd < 0) return (&z_fail);
+	int32_t n = a->len ? zfs_write(fd, a->buf, a->len) : 0;
+	if (zfs_close(fd) < 0 || n < 0) return (&z_fail);
+	a->written = (uint32_t)n;
 	return (&z_ok);
-
 }
 
 z_obj_t *k_fs_unlink(z_obj_t *args) {
-
 	z_fs_unlink_args_t *a = (z_fs_unlink_args_t *)args;
-
 	if (!a || !a->name) return (&z_fail);
+	return rv(zfs_unlink(a->name) == 0);
+}
 
-	// fs_unlink() (sw/os/fs/fs.c) itself returns 0 on SUCCESS, 1 on
-	// failure -- inverted from fs_size()/fs_write_file()'s own "0 =
-	// failure" convention, easy to get backwards, worth calling out
-	// explicitly right here rather than trusting the reader to
-	// remember it. Reused as-is (rather than calling f_unlink()
-	// directly) purely for the one-function-does-it precedent every
-	// other kernel-side fs.c caller (sh.c) already follows; its own
-	// unconditional printf() (harmless -- this file's own header
-	// comment already accepts printf() from kernel-compiled code,
-	// unlike the snprintf()/malloc() concerns raised there) just
-	// means every app-triggered delete-file shows up on the serial
-	// console too, same visibility every other fs.c operation
-	// already has.
-	if (fs_unlink(a->name) != 0) return (&z_fail);
+// `fs` sweeps a dead client's descriptors itself (sw/apps/fs).
+void k_fs_release_all(uint32_t pid) { (void)pid; }
+int k_fs_open_count(void) { return 0; }
 
+static z_obj_t *open_as(z_fs_open_args_t *a, uint32_t flags) {
+	if (a) a->handle = -1;
+	if (!a || !a->name) return (&z_fail);
+	int32_t fd = zfs_open(a->name, flags);
+	if (fd < 0) return (&z_fail);
+	a->handle = fd + K_FSH_BASE;
 	return (&z_ok);
-
-}
-
-// see zfs.h's own comment for the full design writeup on why chunked
-// I/O needs a kernel-side handle table at all.
-// A read handle's cluster map (FatFs "fast seek"): without one, every
-// backward f_lseek() walks the file's cluster chain from its first
-// cluster, one FAT entry at a time -- and on the bit-banged SPI card
-// driver each FAT sector that walk touches is a slow read. Seeking
-// around a large file (the 7.5MB speech pack, a long book in `read`)
-// cost on the order of 100ms a seek. With the map, a seek is a table
-// lookup. A file written in one piece -- as a card image lays them
-// down -- is one fragment, two words of map; 32 words covers 15
-// fragments, and a file more broken up than that simply seeks the old
-// way.
-#define FS_CLMT		32
-
-// A handle on a file in flash (zar.h) has `zar` set and uses zoff,
-// zsize and zpos instead of `fil`, whose flag and volume are zeroed so
-// that nothing that walks the table for FatFs's sake (k_fs_write_open,
-// k_fs_sync_all) takes it for an open file.
-static struct {
-	bool		used;
-	bool		zar;
-	uint32_t	owner_pid;
-	uint32_t	zoff, zsize, zpos;
-	FIL		fil;
-	DWORD		clmt[FS_CLMT];
-} z_fs_handles[Z_FS_MAX_OPEN];
-
-static int z_fs_alloc_handle(void) {
-	for (int i = 0; i < Z_FS_MAX_OPEN; i++)
-		if (!z_fs_handles[i].used) return i;
-	return -1;
-}
-
-/*
- * Releases every handle owned by `pid`. Called from kernel.c's reap
- * path, alongside k_pidreg_release_all().
- *
- * -- why this now exists --
- *
- * sw/common/zfs.h has carried this as a KNOWN LIMITATION since the
- * handle table was written: "a handle isn't released if its owning
- * process exits (crashes, or is killed) without closing it -- there's
- * no process-exit hook wired up to sweep abandoned handles ... worth a
- * real fix if it proves to matter in practice."
- *
- * It proved to matter. sw/apps/ask holds a handle open across slices
- * of a query (aidx.c's fine.zfv), and every app with
- * Z_WIN_FLAG_CLOSE_KILLS_OWNER dies by k_proc_kill() without running
- * any cleanup at all. Eight relaunches of one app exhausted the table,
- * and the symptom was an app reporting that file SEEKING was broken --
- * because the failure surfaced at the first open after the table
- * filled, several layers from the cause.
- *
- * -- why read handles are closed and write handles are not --
- *
- * THIS RUNS IN THE INTERRUPT PATH. kernel.c's own comment right above
- * the call site is explicit that nothing here may wait on another
- * interrupt to make progress.
- *
- * f_close() on a handle with no dirty state does no I/O: FatFs's
- * f_sync() returns immediately unless FA_MODIFIED is set. So a read
- * handle is closed properly and costs nothing.
- *
- * A WRITE handle with unflushed data would need a real disk write, and
- * doing that from here is exactly the hazard that comment describes.
- * Its slot is freed without the flush -- the data is lost either way,
- * because the process that was writing it is already dead, and losing
- * it is better than hanging the scheduler. The FIL is abandoned rather
- * than closed, which leaves FatFs's volume state no worse than the
- * crash already did.
- */
-void k_fs_release_all(uint32_t pid) {
-
-	for (int i = 0; i < Z_FS_MAX_OPEN; i++) {
-
-		if (!z_fs_handles[i].used) continue;
-		if (z_fs_handles[i].owner_pid != pid) continue;
-
-		if (!z_fs_handles[i].zar && !(z_fs_handles[i].fil.flag & FA_WRITE))
-			f_close(&z_fs_handles[i].fil);
-
-		z_fs_handles[i].used = 0;
-		z_fs_handles[i].zar = false;
-		z_fs_handles[i].owner_pid = 0;
-
-	}
-
-}
-
-/*
- * Flush every open WRITE handle, of every process, to the card: the
- * first half of a reboot (k_reboot() in kernel.c). Unlike
- * k_fs_release_all() above this runs in a syscall, where disk I/O is
- * what syscalls do, so the flush is safe here. Handles stay open --
- * the machine is about to reconfigure, and if it does not (the error
- * path), their owners carry on with nothing lost.
- */
-int k_fs_sync_all(void) {
-
-	int n = 0;
-
-	for (int i = 0; i < Z_FS_MAX_OPEN; i++) {
-
-		if (!z_fs_handles[i].used || z_fs_handles[i].zar) continue;
-		if (!(z_fs_handles[i].fil.flag & FA_WRITE)) continue;
-
-		f_sync(&z_fs_handles[i].fil);
-		n++;
-
-	}
-
-	return n;
-
-}
-
-int k_fs_open_count(void) {
-
-	int n = 0;
-
-	for (int i = 0; i < Z_FS_MAX_OPEN; i++)
-		if (z_fs_handles[i].used) n++;
-
-	return n;
-
 }
 
 z_obj_t *k_fs_open_write(z_obj_t *args) {
-
-	z_fs_open_args_t *a = (z_fs_open_args_t *)args;
-	if (a) a->handle = -1;
-
-	if (!a || !a->name) return (&z_fail);
-
-	int slot = z_fs_alloc_handle();
-	if (slot < 0) return (&z_fail);
-
-	char rp_[FS_PATH_MAX];
-	FRESULT res = f_open(&z_fs_handles[slot].fil,
-		fs_path_resolve(a->name, rp_, sizeof(rp_)),
-		FA_WRITE | FA_CREATE_ALWAYS);
-	if (res != FR_OK) return (&z_fail);
-
-	z_fs_handles[slot].used = true;
-	z_fs_handles[slot].owner_pid = z_pid;
-	a->handle = slot;
-
-	return (&z_ok);
-
+	return open_as((z_fs_open_args_t *)args, Z_O_WRONLY | Z_O_CREAT | Z_O_TRUNC);
 }
-
 z_obj_t *k_fs_open_read(z_obj_t *args) {
-
-	z_fs_open_args_t *a = (z_fs_open_args_t *)args;
-	if (a) a->handle = -1;
-
-	if (!a || !a->name) return (&z_fail);
-
-	int slot = z_fs_alloc_handle();
-	if (slot < 0) return (&z_fail);
-
-	char rp_[FS_PATH_MAX];
-	const char *real = fs_path_resolve(a->name, rp_, sizeof(rp_));
-	FRESULT res = f_open(&z_fs_handles[slot].fil, real,
-		FA_READ | FA_OPEN_EXISTING);
-	if (res != FR_OK) {
-		// Not on the card -- or no card -- and not /ram or /usb: the
-		// file in flash at that path, if there is one (zar.h). The
-		// card's copy, when there is one, is what was opened above.
-		uint32_t zo, zs;
-		if (real != a->name || z_zar_file(real, &zo, &zs)) return (&z_fail);
-		z_fs_handles[slot].fil.flag = 0;
-		z_fs_handles[slot].fil.obj.fs = 0;
-		z_fs_handles[slot].zar = true;
-		z_fs_handles[slot].zoff = zo;
-		z_fs_handles[slot].zsize = zs;
-		z_fs_handles[slot].zpos = 0;
-		z_fs_handles[slot].used = true;
-		z_fs_handles[slot].owner_pid = z_pid;
-		a->handle = slot;
-		return (&z_ok);
-	}
-	z_fs_handles[slot].zar = false;
-
-	// Read handles only: FatFs does not allow a write that extends a file
-	// while a map is in use.
-	z_fs_handles[slot].fil.cltbl = z_fs_handles[slot].clmt;
-	z_fs_handles[slot].clmt[0] = FS_CLMT;
-	if (f_lseek(&z_fs_handles[slot].fil, CREATE_LINKMAP) != FR_OK)
-		z_fs_handles[slot].fil.cltbl = 0;	// too fragmented: seek the old way
-
-	z_fs_handles[slot].used = true;
-	z_fs_handles[slot].owner_pid = z_pid;
-	a->handle = slot;
-
-	return (&z_ok);
-
+	return open_as((z_fs_open_args_t *)args, Z_O_RDONLY);
+}
+// an EXISTING file, read and write, truncating nothing (zfs.h)
+z_obj_t *k_fs_open_rw(z_obj_t *args) {
+	return open_as((z_fs_open_args_t *)args, Z_O_RDWR);
 }
 
-// returns &z_ok with a->len == 0 for a clean end-of-file (NOT &z_fail
-// -- EOF is the normal, expected way a read loop ends, not an error;
-// matches fs_read_chunk()'s own existing kernel-native convention,
-// sw/os/fs/fs.c, which sh.c's own tget already relies on the same way).
-// &z_fail is reserved for a genuine problem: a bad/foreign handle, or
-// FatFs itself reporting an error.
 z_obj_t *k_fs_read_chunk(z_obj_t *args) {
-
 	z_fs_read_chunk_args_t *a = (z_fs_read_chunk_args_t *)args;
 	if (a) a->len = 0;
-
-	if (!a || a->handle < 0 || a->handle >= Z_FS_MAX_OPEN || !a->buf || a->maxlen == 0)
-		return (&z_fail);
-	// k_user_ok(): the kernel must not write where the app has no memory (docs/mpu.md)
-	if (!k_user_ok(a->buf, a->maxlen))
-		return (&z_fail);
-
-	if (!z_fs_handles[a->handle].used || z_fs_handles[a->handle].owner_pid != z_pid)
-		return (&z_fail);
-
-	if (z_fs_handles[a->handle].zar) {
-		uint32_t left = z_fs_handles[a->handle].zsize - z_fs_handles[a->handle].zpos;
-		uint32_t n = a->maxlen < left ? a->maxlen : left;
-		if (k_flash_session_active()) return (&z_fail);	// being rewritten
-		z_zar_read(z_fs_handles[a->handle].zoff + z_fs_handles[a->handle].zpos, a->buf, n);
-		z_fs_handles[a->handle].zpos += n;
-		a->len = n;
-		return (&z_ok);
-	}
-
-	UINT br = 0;
-	FRESULT res = f_read(&z_fs_handles[a->handle].fil, a->buf, (UINT)a->maxlen, &br);
-	if (res != FR_OK) return (&z_fail);
-
-	a->len = (uint32_t)br;
+	if (!a || !a->buf || a->maxlen == 0 || fd_of(a->handle) < 0) return (&z_fail);
+	if (!k_user_ok(a->buf, a->maxlen)) return (&z_fail);
+	int32_t n = zfs_read(fd_of(a->handle), a->buf, a->maxlen);
+	if (n < 0) return (&z_fail);
+	a->len = (uint32_t)n;			// 0 is the end of the file, not an error
 	return (&z_ok);
-
 }
 
 z_obj_t *k_fs_write_chunk(z_obj_t *args) {
-
 	z_fs_write_chunk_args_t *a = (z_fs_write_chunk_args_t *)args;
 	if (a) a->written = 0;
-
-	if (!a || a->handle < 0 || a->handle >= Z_FS_MAX_OPEN || (!a->buf && a->len > 0))
-		return (&z_fail);
-
-	if (!z_fs_handles[a->handle].used || z_fs_handles[a->handle].owner_pid != z_pid ||
-	    z_fs_handles[a->handle].zar)
-		return (&z_fail);		// files in flash are read-only
-
-	UINT bw = 0;
-	FRESULT res = f_write(&z_fs_handles[a->handle].fil, a->buf, (UINT)a->len, &bw);
-	if (res != FR_OK) return (&z_fail);
-
-	a->written = (uint32_t)bw;
+	if (!a || (!a->buf && a->len > 0) || fd_of(a->handle) < 0) return (&z_fail);
+	int32_t n = a->len ? zfs_write(fd_of(a->handle), a->buf, a->len) : 0;
+	if (n < 0) return (&z_fail);
+	a->written = (uint32_t)n;
 	return (&z_ok);
-
 }
 
 z_obj_t *k_fs_close(z_obj_t *args) {
-
 	z_fs_close_args_t *a = (z_fs_close_args_t *)args;
-
-	if (!a || a->handle < 0 || a->handle >= Z_FS_MAX_OPEN) return (&z_fail);
-	if (!z_fs_handles[a->handle].used || z_fs_handles[a->handle].owner_pid != z_pid)
-		return (&z_fail);
-
-	FRESULT res = FR_OK;
-	if (!z_fs_handles[a->handle].zar) res = f_close(&z_fs_handles[a->handle].fil);
-	z_fs_handles[a->handle].used = false;
-	z_fs_handles[a->handle].zar = false;
-
-	return (res == FR_OK) ? (&z_ok) : (&z_fail);
-
+	if (!a || fd_of(a->handle) < 0) return (&z_fail);
+	return rv(zfs_close(fd_of(a->handle)) == 0);
 }
-// each entry as `prefix + short-name` where `prefix` is always
-// exactly one leading AND trailing "/" for the root case, or the
-// caller's own `path` normalized to end in exactly one "/" --
-// deliberately NOT reusing fs_list_dir()'s own "%s/%s" (fs.c, this
-// same file) unmodified: that formula is only correct for a path
-// WITHOUT its own trailing slash, but every existing caller (sh.c's
-// `ls`) has only ever passed "/" itself, producing the doubled
-// "//NAME" this function fixes for good.
-//
-// No snprintf()/malloc() here -- same reasoning as k_fs_read()/
-// k_fs_write() above (fsapi.h's own header comment on why kernel-
-// compiled code stays away from that libc machinery); the prefix and
-// each combined name are built with plain strlen()/memcpy() into
-// small fixed local buffers instead.
-// FS_LIST and FS_LIST_EX (below) share this. `info` is NULL for
-// FS_LIST; for FS_LIST_EX it has been checked by the caller to hold
-// max_entries entries.
-static z_obj_t *k_fs_list_core(z_fs_list_args_t *a, z_fs_info_t *info) {
+
+z_obj_t *k_fs_sync(z_obj_t *args) {
+	z_fs_close_args_t *a = (z_fs_close_args_t *)args;
+	if (!a || fd_of(a->handle) < 0) return (&z_fail);
+	return rv(zfs_fsync(fd_of(a->handle)) == 0);
+}
+
+z_obj_t *k_fs_seek(z_obj_t *args) {
+	z_fs_seek_args_t *a = (z_fs_seek_args_t *)args;
+	if (a) a->pos = 0;
+	if (!a || fd_of(a->handle) < 0 || a->offset > 0x7fffffffu) return (&z_fail);
+	int32_t p = zfs_lseek(fd_of(a->handle), (int32_t)a->offset, Z_SEEK_SET);
+	if (p < 0) return (&z_fail);
+	a->pos = (uint32_t)p;
+	return (&z_ok);
+}
+
+z_obj_t *k_fs_truncate(z_obj_t *args) {
+	z_fs_truncate_args_t *a = (z_fs_truncate_args_t *)args;
+	z_fs_info_t fi;
+	if (a) a->result = 0;
+	if (!a || fd_of(a->handle) < 0) return (&z_fail);
+	if (zfs_ftruncate(fd_of(a->handle), a->size) != 0) return (&z_fail);
+	// left at the new end of the file, as it always was
+	zfs_lseek(fd_of(a->handle), 0, Z_SEEK_END);
+	if (zfs_fstat(fd_of(a->handle), &fi) != 0) return (&z_fail);
+	a->result = fi.size;
+	return (&z_ok);
+}
+
+z_obj_t *k_fs_mkdir(z_obj_t *args) {
+	z_fs_path_args_t *a = (z_fs_path_args_t *)args;
+	if (!a || !a->name) return (&z_fail);
+	return rv(zfs_mkdir(a->name) == 0);
+}
+
+z_obj_t *k_fs_touch(z_obj_t *args) {
+	z_fs_path_args_t *a = (z_fs_path_args_t *)args;
+	if (!a || !a->name) return (&z_fail);
+	int32_t fd = zfs_open(a->name, Z_O_WRONLY | Z_O_CREAT | Z_O_TRUNC);
+	if (fd < 0) return (&z_fail);
+	return rv(zfs_close(fd) == 0);
+}
+
+z_obj_t *k_fs_rename(z_obj_t *args) {
+	z_fs_rename_args_t *a = (z_fs_rename_args_t *)args;
+	if (!a) return (&z_fail);
+	a->err = fs_rename(a->from, a->to);
+	return rv(a->err == Z_FS_ERR_NONE);
+}
+
+z_obj_t *k_fs_stat(z_obj_t *args) {
+	z_fs_stat_args_t *a = (z_fs_stat_args_t *)args;
+	if (!a || !a->name) return (&z_fail);
+	return rv(fs_stat_info(a->name, &a->info));
+}
+
+z_obj_t *k_fs_df(z_obj_t *args) {
+	z_fs_df_args_t *a = (z_fs_df_args_t *)args;
+	if (!a) return (&z_fail);
+	fs_df_kb(&a->total_kb, &a->free_kb);
+	return (&z_ok);
+}
+
+// FS_LIST and FS_LIST_EX: "prefix/name" strings back to back in the
+// caller's buffer, with types or infos alongside (zfs.h).
+static z_obj_t *list_core(z_fs_list_args_t *a, z_fs_info_t *info) {
+	zfs_dir_t d;
+	uint32_t page[128];
+	const z_fs_dirent_t *e;
+	char prefix[64];
 
 	if (!a || !a->out || a->out_cap == 0) {
 		if (a) { a->count = 0; a->truncated = 0; }
 		return (&z_fail);
 	}
-	// k_user_ok(): the kernel must not write where the app has no memory (docs/mpu.md)
-	if (!k_user_ok(a->out, a->out_cap) ||
-		(a->types && !k_user_ok(a->types, a->max_entries))) {
-		a->count = 0; a->truncated = 0;
-		return (&z_fail);
-	}
-
 	a->count = 0;
 	a->truncated = 0;
-
-	char rp_[FS_PATH_MAX];
-	const char *dir_path = (a->path && a->path[0]) ? a->path : "/";
-
-	// The listing keeps the CALLER's path for the names it returns,
-	// and resolves only the one it hands to FatFs -- so `ls /RAM`
-	// reports /RAM/... rather than leaking "1:/" back to the user.
-	const char *dir_real = fs_path_resolve(dir_path, rp_, sizeof(rp_));
-
-	// The card's directory, if there is one. Not finding it is not
-	// the end when flash has files under that path (zar.h): a board
-	// with no card still lists "/", "/apps" and "/docs".
-	bool under = dir_real == dir_path;	// not /ram or /usb
-	bool is_root = dir_path[0] == '/' && dir_path[1] == 0;
-	DIR dir;
-	FRESULT res = f_opendir(&dir, dir_real);
-	bool on_card = res == FR_OK;
-	if (!on_card && !(under && (is_root || z_zar_is_dir(dir_path)))) return (&z_fail);
-
-	char prefix[64];
-	{
-		size_t len = strlen(dir_path);
-		if (len >= sizeof(prefix) - 2) len = sizeof(prefix) - 2;
-		memcpy(prefix, dir_path, len);
-		if (len == 0 || prefix[len - 1] != '/') prefix[len++] = '/';
-		prefix[len] = 0;
-	}
-	size_t prefix_len = strlen(prefix);
-
-	uint32_t max_entries = a->max_entries ? a->max_entries : 0xFFFFFFFFu;
-
-	// A `types` buffer is sized by the caller in units of entries,
-	// and the ONLY thing that tells us how many that is, is
-	// max_entries. Without one, the entry count is bounded solely by
-	// out_cap -- a 4KB name buffer holds several hundred short names,
-	// so writing a type byte per entry into a buffer whose length we
-	// were never told is a straightforward overrun of app memory.
-	// Refuse rather than guess: zfs.h states the requirement, and a
-	// caller that ignored it gets a clean failure instead of silent
-	// corruption somewhere else in its address space.
+	if (!k_user_ok(a->out, a->out_cap) ||
+		(a->types && !k_user_ok(a->types, a->max_entries)))
+		return (&z_fail);
 	if (a->types && !a->max_entries) return (&z_fail);
-	uint32_t written = 0;
-	uint32_t count = 0;
 
-	// -- the synthetic roots come first --
-	//
-	// /ram and /usb are path prefixes rewritten by fs_path_resolve(),
-	// not directories on the card, so f_readdir() never mentions them
-	// and the file browser showed no sign the volumes existed. Emit
-	// them here when the caller is listing "/".
-	//
-	// Only mounted ones: an unplugged /usb appearing as an empty
-	// directory you can descend into is worse than it not being there.
-	if (dir_path[0] == '/' && dir_path[1] == 0) {
-		int mi;
-		for (mi = 0; mi < fs_mount_count() && count < max_entries; mi++) {
-			const char *mn = fs_mount_name(mi);
-			size_t mlen;
-			if (!mn || !fs_mount_live(mi)) continue;
-			mlen = strlen(mn);
-			if (prefix_len + mlen + 1 > a->out_cap - written) {
-				a->truncated = 1;
-				break;
-			}
-			if (a->types) a->types[count] = Z_FS_TYPE_DIR;
-			if (info) {
-				memset(&info[count], 0, sizeof(info[count]));
-				info[count].attr = Z_FS_ATTR_DIR;
-				info[count].type = Z_FS_TYPE_DIR;
-			}
-			memcpy(a->out + written, prefix, prefix_len);
-			memcpy(a->out + written + prefix_len, mn, mlen + 1);
-			written += (uint32_t)(prefix_len + mlen + 1);
-			count++;
-		}
-	}
+	const char *path = (a->path && a->path[0]) ? a->path : "/";
+	size_t pl = strlen(path);
+	if (pl >= sizeof(prefix) - 2) pl = sizeof(prefix) - 2;
+	memcpy(prefix, path, pl);
+	if (pl == 0 || prefix[pl - 1] != '/') prefix[pl++] = '/';
+	prefix[pl] = 0;
 
-	// Not on the stack: with long names a FILINFO is ~290 bytes
-	// (FF_LFN_BUF), and kernel stack depth is what has run out before
-	// -- see the f_stat() note in fs/fs.c. fs_fno is the one fs.c
-	// shares with fs_stat_info(); syscalls do not nest.
-	FILINFO *const fnop = &fs_fno;
-#define fno (*fnop)
-	while (on_card && count < max_entries) {
-
-		res = f_readdir(&dir, &fno);
-		if (res != FR_OK || fno.fname[0] == 0) break;
-
-		// Straight into the caller's buffer, prefix then name. This used
-		// to be assembled in a 96-byte buffer first and an entry that
-		// did not fit was skipped -- harmless with 8.3 names, and it
-		// would silently drop long ones from every listing.
-		size_t nlen = strlen(fno.fname);
-		size_t flen = prefix_len + nlen;
-		if (written + flen + 1 > a->out_cap) {
-			a->truncated = 1;
-			break;
-		}
-
-		// Optional -- see Z_FS_TYPE_* in zfs.h for why this is a
-		// separate buffer rather than a decoration on the name. NULL
-		// (every caller that predates it) skips this entirely.
-		if (a->types)
-			a->types[count] = (fno.fattrib & AM_DIR)
-				? Z_FS_TYPE_DIR : Z_FS_TYPE_FILE;
-		if (info) fs_info_from(&fno, &info[count]);
-
-		memcpy(a->out + written, prefix, prefix_len);
-		memcpy(a->out + written + prefix_len, fno.fname, nlen + 1); // +1: the NUL separator
-		written += (uint32_t)(flen + 1);
+	if (zfs_opendir_at(&d, path, page, sizeof(page)) < 0) return (&z_fail);
+	uint32_t max = a->max_entries ? a->max_entries : 0xffffffffu;
+	uint32_t written = 0, count = 0;
+	while (count < max && (e = zfs_readdir(&d)) != NULL) {
+		uint32_t need = (uint32_t)pl + e->namelen + 1;
+		if (written + need > a->out_cap) { a->truncated = 1; break; }
+		memcpy(a->out + written, prefix, pl);
+		memcpy(a->out + written + pl, e->name, e->namelen + 1);
+		written += need;
+		if (a->types) a->types[count] = e->info.type;
+		if (info) info[count] = e->info;
 		count++;
-
 	}
-
-	if (on_card) f_closedir(&dir);
-
-	// -- then what is in flash and not on the card (zar.h) --
-	//
-	// Read-only files, and the directories they make ("docs" in "/").
-	// Shadowed by the card's entry of the same name, as an app on the
-	// card shadows its flash copy: f_stat() on the full name, through
-	// fs_fno again (the readdir above is finished with it).
-	if (under && !a->truncated) {
-		static char full[FS_PATH_MAX];
-		char zname[Z_ZAR_NAME_MAX + 1];
-		uint32_t it = 0, zsize;
-		bool zdir;
-		while (count < max_entries && z_zar_child(dir_path, &it, zname, &zsize, &zdir)) {
-			size_t nlen = strlen(zname);
-			if (prefix_len + nlen + 1 > sizeof(full)) continue;
-			memcpy(full, prefix, prefix_len);
-			memcpy(full + prefix_len, zname, nlen + 1);
-			if (on_card && f_stat(full, &fno) == FR_OK) continue;
-			if (written + prefix_len + nlen + 1 > a->out_cap) {
-				a->truncated = 1;
-				break;
-			}
-			if (a->types) a->types[count] = zdir ? Z_FS_TYPE_DIR : Z_FS_TYPE_FILE;
-			if (info) {
-				memset(&info[count], 0, sizeof(info[count]));
-				info[count].size = zsize;
-				info[count].attr = zdir ? (Z_FS_ATTR_DIR | Z_FS_ATTR_RDONLY) : Z_FS_ATTR_RDONLY;
-				info[count].type = zdir ? Z_FS_TYPE_DIR : Z_FS_TYPE_FILE;
-			}
-			memcpy(a->out + written, full, prefix_len + nlen + 1);
-			written += (uint32_t)(prefix_len + nlen + 1);
-			count++;
-		}
-	}
-#undef fno
-
+	if (count == max && !d.end) a->truncated = 1;
+	zfs_closedir_at(&d);
 	a->count = count;
-
 	return (&z_ok);
-
 }
 
 z_obj_t *k_fs_list(z_obj_t *args) {
-	return k_fs_list_core((z_fs_list_args_t *)args, NULL);
+	return list_core((z_fs_list_args_t *)args, NULL);
 }
-
-// -- rename, stat, extended listing -- docs/filesystem.md, "Rename,
-// stat and the extended listing". The rules are in sw/common/zfs.h;
-// the work is fs_rename()/fs_stat_info() in fs/fs.c, which the kernel
-// shell's `mv` shares.
 
 z_obj_t *k_fs_list_ex(z_obj_t *args) {
-
 	z_fs_list_ex_args_t *x = (z_fs_list_ex_args_t *)args;
-
 	if (!x) return (&z_fail);
-	if (x->info) {
-		// Same rule as `types`: max_entries is the only statement of
-		// how big the array is, so it is required -- and the whole
-		// array must be the app's own memory (docs/mpu.md).
-		if (!x->list.max_entries || x->list.max_entries > 4096 ||
-		    !k_user_ok(x->info, x->list.max_entries * sizeof(z_fs_info_t))) {
-			x->list.count = 0; x->list.truncated = 0;
-			return (&z_fail);
-		}
+	if (x->info && (!x->list.max_entries || x->list.max_entries > 4096 ||
+		!k_user_ok(x->info, x->list.max_entries * sizeof(z_fs_info_t)))) {
+		x->list.count = 0;
+		x->list.truncated = 0;
+		return (&z_fail);
 	}
-	return k_fs_list_core(&x->list, x->info);
-
-}
-
-z_obj_t *k_fs_rename(z_obj_t *args) {
-
-	z_fs_rename_args_t *a = (z_fs_rename_args_t *)args;
-
-	if (!a) return (&z_fail);
-	a->err = fs_rename(a->from, a->to);
-	return (a->err == Z_FS_ERR_NONE) ? (&z_ok) : (&z_fail);
-
-}
-
-z_obj_t *k_fs_stat(z_obj_t *args) {
-
-	z_fs_stat_args_t *a = (z_fs_stat_args_t *)args;
-
-	if (!a || !a->name) return (&z_fail);
-	return fs_stat_info(a->name, &a->info) ? (&z_ok) : (&z_fail);
-
-}
-
-// fs_rename()'s busy check. A write handle keeps the sector and the
-// in-window address of its directory entry (FIL.dir_sect/dir_ptr) so
-// that f_sync()/f_close() can record the final size and time there.
-// Opening `path` read-only fills in the same two fields, so: same
-// volume object, same sector, same place in that volume's window, the
-// same directory entry -- by position, so a long name and its 8.3
-// alias are the same file, as they should be.
-//
-// The probe borrows a FREE handle slot's FIL rather than keeping one
-// of its own: a FIL carries a 512-byte sector buffer, and static
-// storage counts against the kernel's 256KB image (docs/kernel.md).
-// That is safe because the caller holds k_fs_enter() and syscalls do
-// not nest. With every slot in use there is nothing to borrow, and the
-// answer is a conservative "busy".
-//
-// A directory cannot be opened as a file, so it is never "busy": its
-// entry moves, but the entries of the files inside it stay where they
-// are, in the directory's own clusters.
-bool k_fs_write_open(const char *path) {
-
-	int h = z_fs_alloc_handle();
-	FIL *probe;
-	bool busy = false;
-
-	if (h < 0) return true;
-	probe = &z_fs_handles[h].fil;
-	if (f_open(probe, path, FA_READ) != FR_OK) return false;
-
-	for (int i = 0; i < Z_FS_MAX_OPEN; i++) {
-		const FIL *f = &z_fs_handles[i].fil;
-		if (!z_fs_handles[i].used || z_fs_handles[i].zar || !(f->flag & FA_WRITE)) continue;
-		if (f->obj.fs == probe->obj.fs && f->dir_sect == probe->dir_sect &&
-		    f->dir_ptr == probe->dir_ptr)
-			busy = true;
-	}
-
-	f_close(probe);
-	return busy;
-
-}
-
-// -- mkdir / touch / seek --
-//
-// The first two are thin wrappers over fs_mkdir()/fs_touch()
-// (sw/os/fs/fs.c), which already do the real work and which sh.c's own
-// `mkdir`/`touch` commands have always used -- this just makes them
-// reachable from an ordinary app, the same way k_fs_unlink() did for
-// fs_unlink(). Both of those fs.c functions follow the SAME inverted
-// convention fs_unlink() does (0 on SUCCESS, non-zero on failure) --
-// see k_fs_unlink()'s own comment above, which spells out why that's
-// worth restating at every call site rather than trusting memory.
-//
-// Their unconditional printf() (inside fs.c) means an app-triggered
-// mkdir/touch also shows up on the serial console -- same visibility
-// every other fs.c operation already has, not new behavior introduced
-// here.
-
-z_obj_t *k_fs_mkdir(z_obj_t *args) {
-
-	z_fs_path_args_t *a = (z_fs_path_args_t *)args;
-
-	if (!a || !a->name) return (&z_fail);
-
-	return (fs_mkdir(a->name) == 0) ? (&z_ok) : (&z_fail);
-
-}
-
-z_obj_t *k_fs_touch(z_obj_t *args) {
-
-	z_fs_path_args_t *a = (z_fs_path_args_t *)args;
-
-	if (!a || !a->name) return (&z_fail);
-
-	return (fs_touch(a->name) == 0) ? (&z_ok) : (&z_fail);
-
-}
-
-// Repositions an open chunked-I/O handle. Same handle-table ownership
-// check every other chunked handler above performs, for the same
-// reason (see zfs.h's own "Ownership" note): a small integer handle is
-// trivially guessable, so one process must not be able to move another
-// process's file position out from under it.
-//
-// f_lseek() on a READ handle clamps to the file size rather than
-// failing when asked to go past EOF, which is exactly the behavior
-// sw/apps/repl's `page` wants for a "jump to end" -- the resulting
-// position comes back in a->pos so a caller that cares can see where
-// it actually landed. On a WRITE handle FatFs would instead EXTEND the
-// file, which is a real difference worth knowing about but not
-// something this handler needs to police: page only ever opens for
-// read, and a caller that opened for write and seeks past the end has
-// asked for exactly what FatFs does.
-z_obj_t *k_fs_seek(z_obj_t *args) {
-
-	z_fs_seek_args_t *a = (z_fs_seek_args_t *)args;
-	if (a) a->pos = 0;
-
-	if (!a || a->handle < 0 || a->handle >= Z_FS_MAX_OPEN) return (&z_fail);
-
-	if (!z_fs_handles[a->handle].used || z_fs_handles[a->handle].owner_pid != z_pid)
-		return (&z_fail);
-
-	if (z_fs_handles[a->handle].zar) {
-		// as f_lseek() on a read handle: past the end stops at the end
-		uint32_t sz = z_fs_handles[a->handle].zsize;
-		z_fs_handles[a->handle].zpos = a->offset < sz ? a->offset : sz;
-		a->pos = z_fs_handles[a->handle].zpos;
-		return (&z_ok);
-	}
-
-	FRESULT res = f_lseek(&z_fs_handles[a->handle].fil, (FSIZE_t)a->offset);
-	if (res != FR_OK) return (&z_fail);
-
-	a->pos = (uint32_t)f_tell(&z_fs_handles[a->handle].fil);
-
-	return (&z_ok);
-
-}
-
-// Opens an EXISTING file for reading AND writing, truncating nothing.
-//
-// FA_OPEN_EXISTING rather than FA_OPEN_ALWAYS, deliberately. "Open it,
-// and create it if it isn't there" sounds convenient and is the wrong
-// default for the caller this exists for: an editor asked to open a
-// path that does not exist should say so, not silently produce an empty
-// file at a mistyped name and then act as though it opened something.
-// Creating is already a separate, explicit operation (FS_TOUCH, or
-// FS_OPEN_WRITE), so a caller that wants create-then-edit can ask for
-// exactly that in two calls and know which one happened.
-//
-// Otherwise identical to k_fs_open_read()/k_fs_open_write() above --
-// same slot allocation, same owner_pid stamp, same z_fs_open_args_t.
-z_obj_t *k_fs_open_rw(z_obj_t *args) {
-
-	z_fs_open_args_t *a = (z_fs_open_args_t *)args;
-	if (a) a->handle = -1;
-
-	if (!a || !a->name) return (&z_fail);
-
-	int slot = z_fs_alloc_handle();
-	if (slot < 0) return (&z_fail);
-
-	char rp2_[FS_PATH_MAX];
-	FRESULT res = f_open(&z_fs_handles[slot].fil,
-		fs_path_resolve(a->name, rp2_, sizeof(rp2_)),
-		FA_READ | FA_WRITE | FA_OPEN_EXISTING);
-	if (res != FR_OK) return (&z_fail);
-
-	z_fs_handles[slot].used = true;
-	z_fs_handles[slot].owner_pid = z_pid;
-	a->handle = slot;
-
-	return (&z_ok);
-
-}
-
-// Flushes an open handle without closing it.
-//
-// f_write() leaves data in the FIL's own sector buffer and, more
-// importantly, does not update the directory entry -- so a file written
-// but not closed has the right clusters allocated and the wrong size
-// recorded. On a machine with no orderly shutdown and a card the user
-// can pull, that gap is the difference between "the edit is on disk"
-// and "the edit is on disk and findable".
-//
-// Harmless on a read handle: FatFs's f_sync() returns FR_OK immediately
-// for anything not opened with FA_WRITE, so a caller need not track
-// which kind of handle it holds.
-z_obj_t *k_fs_sync(z_obj_t *args) {
-
-	z_fs_close_args_t *a = (z_fs_close_args_t *)args;
-
-	if (!a || a->handle < 0 || a->handle >= Z_FS_MAX_OPEN) return (&z_fail);
-
-	if (!z_fs_handles[a->handle].used || z_fs_handles[a->handle].owner_pid != z_pid)
-		return (&z_fail);
-	if (z_fs_handles[a->handle].zar) return (&z_ok);	// nothing to write
-
-	FRESULT res = f_sync(&z_fs_handles[a->handle].fil);
-
-	return (res == FR_OK) ? (&z_ok) : (&z_fail);
-
-}
-
-// Sets an open handle's file size, growing or shrinking it.
-//
-// Implemented as seek-then-truncate because FatFs has no set-size call:
-// f_truncate() cuts the file at the CURRENT position, and f_lseek()
-// past the end of a file opened for writing extends it. So one
-// f_lseek() to the requested size handles growth on its own, and the
-// f_truncate() after it handles the shrink case and is a no-op for the
-// grow case (position already equals size).
-//
-// GROWTH LEAVES UNDEFINED BYTES -- see z_fs_truncate_args_t in
-// sw/common/zfs.h for why that is deliberate and whose job zeroing is.
-//
-// The handle is left positioned at the new end of file, which is where
-// the seek put it. Callers that care where they are should seek again;
-// saying so here is cheaper than a second syscall to find out.
-z_obj_t *k_fs_truncate(z_obj_t *args) {
-
-	z_fs_truncate_args_t *a = (z_fs_truncate_args_t *)args;
-	if (a) a->result = 0;
-
-	if (!a || a->handle < 0 || a->handle >= Z_FS_MAX_OPEN) return (&z_fail);
-
-	if (!z_fs_handles[a->handle].used || z_fs_handles[a->handle].owner_pid != z_pid)
-		return (&z_fail);
-
-	FRESULT res = f_lseek(&z_fs_handles[a->handle].fil, (FSIZE_t)a->size);
-	if (res != FR_OK) return (&z_fail);
-
-	// A short seek means the expansion ran out of card. Reporting
-	// success here would tell the caller it has a file of the size it
-	// asked for, which is the one thing it must not believe.
-	if ((uint32_t)f_tell(&z_fs_handles[a->handle].fil) != a->size)
-		return (&z_fail);
-
-	res = f_truncate(&z_fs_handles[a->handle].fil);
-	if (res != FR_OK) return (&z_fail);
-
-	a->result = (uint32_t)f_size(&z_fs_handles[a->handle].fil);
-
-	return (&z_ok);
-
-}
-
-// Filesystem capacity. Both numbers come straight from fs_total()/
-// fs_free() (sw/os/fs/fs.c), which wrap FatFs's f_getfree() and have
-// been sitting there unused since long before this syscall existed --
-// nothing had a way to call them. Each returns 0 on failure (no card,
-// not mounted, FatFs error), which this passes through unchanged: a
-// volume that genuinely reports 0 total is indistinguishable from one
-// that failed to answer, and neither is a state where a caller should
-// be told a capacity.
-z_obj_t *k_fs_df(z_obj_t *args) {
-
-	z_fs_df_args_t *a = (z_fs_df_args_t *)args;
-
-	if (!a) return (&z_fail);
-
-	// One FAT scan, not two -- see fs_df_kb() in sw/os/fs/fs.c.
-	fs_df_kb(&a->total_kb, &a->free_kb);
-
-	return (&z_ok);
-
+	return list_core(&x->list, x->info);
 }
