@@ -408,6 +408,33 @@ nextpnr out of context, no DDMI):
 
 A board without `COLOR` now spends one DP16KD on it.
 
+#### Room left in it (not used yet)
+
+The DP16KD is 512 x 36; the buffer uses 80 of its 512 words (four rows of
+20, at a stride of 32), so about 384 words, 12 Kbit, are free. Its write
+port (48 MHz) is busy only during horizontal blanking and its read port
+(pixel clock) only for a few clocks every 32 or 64 pixels. Options
+noted for later, none implemented:
+
+- **A cursor sprite.** The pointer is now drawn by `rtl/gpu/gpu_cursor.v`
+  as two hard-wired 5x5 shapes (X and Z) built from comparators, about
+  255 LUTs. A software-loaded 16x16 or 32x32 image plus mask here, one
+  row read per line in blanking (alongside the preload pass) into a
+  shift register, would give a real arrow, I-beam or busy pointer of
+  any shape for roughly the same logic. CPU writes would share the
+  write port with the refill (the refill wins; a write waits for the
+  end of the burst).
+- **The cursor without block RAM.** Short of that, the same two shapes
+  as a lookup indexed by the pixel's offset from the cursor (two
+  subtractors and a 25-bit table) measured 129 LUTs against 255, and
+  matched the current module on 3.4 million sampled positions (every
+  cursor position along all four edges, plus random ones).
+- **A few hardware sprites for games.** The cursor sprite generalised:
+  three or four more 32x32 1bpp sprites with masks would fit in the
+  free space, each costing a position compare and a shift register.
+- **Not the palette.** It is read every pixel, and the read port is
+  shared with the plane passes, so it stays in distributed RAM.
+
 ## Cost
 
 Measured by synthesising `gpu_video` on its own for ECP5 (yosys 0.33

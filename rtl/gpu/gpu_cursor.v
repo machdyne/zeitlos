@@ -4,6 +4,11 @@
  *
  * Cursor.
  *
+ * Two hard-wired shapes from comparators. A smaller version (a lookup
+ * by offset from the cursor) and a software-loaded sprite in the
+ * scanout line buffer's spare block RAM are noted in docs/color.md,
+ * "Room left in it" -- not done yet.
+ *
  */
 
 module gpu_cursor #()

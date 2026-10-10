@@ -263,8 +263,48 @@ module gpu_blit_wb #(
     localparam ROP_XOR  = 2'd2;  // dst = dst ^ src
     localparam ROP_ANDN = 2'd3;  // dst = dst & ~src
 
+    // -- datapath widths --
+    //
+    // CW: coordinates, sizes and the counters that walk them. Sixteen
+    // bits, not 32: the screen is 640x480 and software clips every
+    // rectangle to it before writing a register (sw/common/zgfx.c), so
+    // the upper half of a 32-bit coordinate was always zero -- and
+    // every add, compare and clamp on it still cost the full width.
+    // Narrowed, the module measured about 500 LUTs and 340 flip-flops
+    // smaller on ECP5 (yosys + nextpnr out of context, three seeds),
+    // and about 4 MHz faster. A coordinate register reads back 16 bits.
+    //
+    // AW: VRAM byte addresses. The VRAM port uses address bits [16:2]
+    // (rtl/sysctl.v), so 17 bits is exactly what reaches the bus; the
+    // bits above were arithmetic nothing saw. VRAM_BASE supplies the
+    // rest when the address goes out on m_adr_o.
+    //
+    // Main-memory source addresses (memory copy) stay 32 bits.
+    localparam CW = 16;
+    localparam AW = 17;
+
+    // A coordinate register SATURATES rather than truncating: a value
+    // too big for CW bits becomes the largest one, so a wild value
+    // stays "huge" -- clipped away, or a glyph mask saturated to all
+    // ones -- as it was at 32 bits, rather than wrapping to something
+    // small that would draw. rtl/tb/tb_gpu_blit.v's "absurd width"
+    // case is the check.
+    function [CW-1:0] cw_sat;
+        input [31:0] v;
+        cw_sat = (|v[31:CW]) ? {CW{1'b1}} : v[CW-1:0];
+    endfunction
+
+    // The glyph width is used twice: whole, as "32 or more" for the
+    // cell mask, and by its low six bits for whether the cell straddles
+    // two words (g_offset_plus_w). Saturating keeps the low six bits
+    // so a wild width behaves exactly as it did at 32 bits on both.
+    function [CW-1:0] glyph_w_sat;
+        input [31:0] v;
+        glyph_w_sat = (|v[31:CW]) ? {{(CW-6){1'b1}}, v[5:0]} : v[CW-1:0];
+    endfunction
+
     // Configuration registers
-    reg [31:0] dst_x_reg, dst_y_reg, width_reg, height_reg;
+    reg [CW-1:0] dst_x_reg, dst_y_reg, width_reg, height_reg;
     reg [31:0] pattern_reg;
     reg fill_reg, clip_enable_reg, glyph_reg, srcmem_reg;
 
@@ -281,7 +321,8 @@ module gpu_blit_wb #(
     reg [1:0] rop_reg;
     reg cookie_reg;
     reg dither_reg;
-    reg [31:0] glyph_addr_reg, glyph_w_reg, glyph_h_reg, fg_color_reg, bg_color_reg;
+    reg [31:0] glyph_addr_reg, fg_color_reg, bg_color_reg;
+    reg [CW-1:0] glyph_w_reg, glyph_h_reg;
 
     // -- memory copy source registers --
     //
@@ -363,10 +404,12 @@ module gpu_blit_wb #(
     localparam ST_MEM_BLEND = 5'd30;
 
     // Operation variables
-    reg [31:0] work_dst_x, work_dst_y, work_width, work_height, work_pattern;
+    reg [CW-1:0] work_dst_x, work_dst_y, work_width, work_height;
+    reg [31:0] work_pattern;
     reg work_fill, work_clip, work_glyph;
     reg [1:0] work_rop;
-    reg [31:0] work_glyph_addr, work_glyph_w, work_glyph_h, work_fg, work_bg;
+    reg [31:0] work_glyph_addr, work_fg, work_bg;
+    reg [CW-1:0] work_glyph_w, work_glyph_h;
     reg work_srcmem, work_src_prime;
     reg work_cookie;
     reg work_dither;
@@ -425,21 +468,21 @@ module gpu_blit_wb #(
     reg        mem_stream;
 
     // Clipped rectangle coordinates
-    reg [31:0] clip_x, clip_y, clip_width, clip_height;
-    reg [31:0] clip_x_end, clip_y_end;
+    reg [CW-1:0] clip_x, clip_y, clip_width, clip_height;
+    reg [CW-1:0] clip_x_end, clip_y_end;
 
     // Word-level iteration (fill/copy path)
-    reg [31:0] current_line, current_word_in_line;
-    reg [31:0] words_per_line, total_lines;
-    reg [31:0] line_start_addr, current_word_addr;
-    reg [31:0] left_word_x, right_word_x;
+    reg [CW-1:0] current_line, current_word_in_line;
+    reg [CW-1:0] words_per_line, total_lines;
+    reg [AW-1:0] line_start_addr, current_word_addr;
+    reg [CW-1:0] left_word_x, right_word_x;
     reg [31:0] left_mask, right_mask;
     reg [31:0] read_data;
 
     // Glyph iteration state
     reg [4:0]  g_bit_offset;    // work_dst_x mod 32 -- bit position of the glyph's leftmost pixel within its word
-    reg [31:0] g_line_addr;     // current row's line-start byte address (word containing dst_x)
-    reg [31:0] g_row;           // current row within the glyph, 0..work_glyph_h-1
+    reg [AW-1:0] g_line_addr;     // current row's line-start byte address (word containing dst_x)
+    reg [CW-1:0] g_row;     // current row within the glyph, 0..work_glyph_h-1
     reg [7:0]  g_glyph_byte;    // glyph row byte, as fetched from glyph memory (still MSB-first at this point)
 
     // -- scissor --
@@ -462,8 +505,8 @@ module gpu_blit_wb #(
     // cheap), and narrowing the register buys most of that back.
     reg [10:0] clip_x0_reg, clip_y0_reg, clip_x1_reg, clip_y1_reg;
 
-    wire [31:0] screen_clip_x_end = {21'h0, clip_x1_reg};
-    wire [31:0] screen_clip_y_end = {21'h0, clip_y1_reg};
+    wire [CW-1:0] screen_clip_x_end = {{(CW-11){1'b0}}, clip_x1_reg};
+    wire [CW-1:0] screen_clip_y_end = {{(CW-11){1'b0}}, clip_y1_reg};
     // Registered, to split the clip chain.
     //
     // rect_x_end -> final_x_end -> final_width -> word_span -> the
@@ -483,8 +526,8 @@ module gpu_blit_wb #(
     // ST_IDLE's own comment on work_fill/work_clip/work_glyph warns
     // about exactly this hazard one level down. Same trap, same
     // module.
-    reg [31:0] rect_x_end;
-    reg [31:0] rect_y_end;
+    reg [CW-1:0] rect_x_end;
+    reg [CW-1:0] rect_y_end;
 
     // The low-side clamp rides in THIS stage, deliberately.
     //
@@ -500,8 +543,8 @@ module gpu_blit_wb #(
     // available a cycle early, in the same idle cycle ST_CLIP_CALC
     // already exists to cover. final_x stays a register output, and
     // the chain is exactly as deep as before this change.
-    reg [31:0] clamped_x;
-    reg [31:0] clamped_y;
+    reg [CW-1:0] clamped_x;
+    reg [CW-1:0] clamped_y;
 
     always @(posedge clk) begin
         rect_x_end <= work_dst_x + work_width;
@@ -512,14 +555,14 @@ module gpu_blit_wb #(
                      ? {21'h0, clip_y0_reg} : work_dst_y;
     end
 
-    wire [31:0] final_x = clamped_x;
-    wire [31:0] final_y = clamped_y;
-    wire [31:0] final_x_end = (rect_x_end > screen_clip_x_end) ? screen_clip_x_end : rect_x_end;
-    wire [31:0] final_y_end = (rect_y_end > screen_clip_y_end) ? screen_clip_y_end : rect_y_end;
-    wire [31:0] final_width = final_x_end - final_x;
-    wire [31:0] final_height = final_y_end - final_y;
+    wire [CW-1:0] final_x = clamped_x;
+    wire [CW-1:0] final_y = clamped_y;
+    wire [CW-1:0] final_x_end = (rect_x_end > screen_clip_x_end) ? screen_clip_x_end : rect_x_end;
+    wire [CW-1:0] final_y_end = (rect_y_end > screen_clip_y_end) ? screen_clip_y_end : rect_y_end;
+    wire [CW-1:0] final_width = final_x_end - final_x;
+    wire [CW-1:0] final_height = final_y_end - final_y;
 
-    wire [31:0] left_word_boundary = (final_x >> 5) << 5;
+    wire [CW-1:0] left_word_boundary = (final_x >> 5) << 5;
 
     // y * SCREEN_STRIDE as two shifts and an add (80 = 64 + 16), not a
     // multiply. Written as `final_y * SCREEN_STRIDE`, yosys mapped it to
@@ -529,11 +572,11 @@ module gpu_blit_wb #(
     // On a 94%-full Lakritz (lakritz_katze) that path set CLK_48's
     // fmax at 47.2 MHz. Same 32-bit result; one DSP and its routing
     // fewer.
-    wire [31:0] final_y_row = (final_y << 6) + (final_y << 4);
-    wire [31:0] dst_y_row = (work_dst_y << 6) + (work_dst_y << 4);
-    wire [31:0] right_word_boundary = ((final_x_end + 31) >> 5) << 5;
-    wire [31:0] word_span_width = right_word_boundary - left_word_boundary;
-    wire [31:0] word_span_words = word_span_width >> 5;
+    wire [AW-1:0] final_y_row = (final_y << 6) + (final_y << 4);
+    wire [AW-1:0] dst_y_row = (work_dst_y << 6) + (work_dst_y << 4);
+    wire [CW-1:0] right_word_boundary = ((final_x_end + 31) >> 5) << 5;
+    wire [CW-1:0] word_span_width = right_word_boundary - left_word_boundary;
+    wire [CW-1:0] word_span_words = word_span_width >> 5;
 
     wire [31:0] left_pixel_start = final_x - left_word_boundary;
     wire [31:0] right_pixel_end = final_x_end - ((final_x_end >> 5) << 5);
@@ -580,6 +623,11 @@ module gpu_blit_wb #(
     // Folding the fill/copy choice in here instead would make it six
     // inputs and two levels before the merge, for no gain -- ST_WRITE
     // already branches on work_fill, so the selection is free there.
+    // fill_src is defined with the dither below; declared here, ahead
+    // of its first use, which the language requires (yosys does not
+    // mind, iverilog -- which the benches run on -- does).
+    wire [31:0] fill_src;
+
     wire [31:0] rop_fill =
         (work_rop == ROP_OR)   ? (read_data |  fill_src) :
         (work_rop == ROP_XOR)  ? (read_data ^  fill_src) :
@@ -664,7 +712,7 @@ module gpu_blit_wb #(
     // dither -- and everything downstream (the raster op, the edge
     // mask merge) is unchanged, so a dithered fill clips and composes
     // exactly like any other.
-    wire [31:0] fill_src = work_dither ? dither_word : work_pattern;
+    assign fill_src = work_dither ? dither_word : work_pattern;
 
     wire rop_needs_read = (work_rop != ROP_COPY) || work_cookie;
 
@@ -721,11 +769,11 @@ module gpu_blit_wb #(
     // ST_GLYPH_SETUP. work_dst_x and the scissor cannot change during
     // a blit, so the masks are constant for its whole duration and the
     // per-row write path sees registers, not this arithmetic.
-    wire [31:0] g_wx_lo = {work_dst_x[31:5], 5'b00000};
-    wire [31:0] g_wx_hi = g_wx_lo + 32'd32;
+    wire [CW-1:0] g_wx_lo = {work_dst_x[CW-1:5], 5'b00000};
+    wire [CW-1:0] g_wx_hi = g_wx_lo + 32'd32;
 
-    wire [31:0] g_cx0 = {21'h0, clip_x0_reg};
-    wire [31:0] g_cx1 = {21'h0, clip_x1_reg};
+    wire [CW-1:0] g_cx0 = {{(CW-11){1'b0}}, clip_x0_reg};
+    wire [CW-1:0] g_cx1 = {{(CW-11){1'b0}}, clip_x1_reg};
 
     // Bits to drop at the bottom / keep up to, per word, saturating at
     // 32 so a word wholly outside the scissor yields an empty mask and
@@ -867,14 +915,14 @@ module gpu_blit_wb #(
                             dither_reg <= wb_dat_i[CTRL_DITHER];
                         end
                         4'd1: ; // STATUS - read only
-                        4'd2: dst_x_reg <= wb_dat_i;
-                        4'd3: dst_y_reg <= wb_dat_i;
-                        4'd4: width_reg <= wb_dat_i;
-                        4'd5: height_reg <= wb_dat_i;
+                        4'd2: dst_x_reg <= cw_sat(wb_dat_i);
+                        4'd3: dst_y_reg <= cw_sat(wb_dat_i);
+                        4'd4: width_reg <= cw_sat(wb_dat_i);
+                        4'd5: height_reg <= cw_sat(wb_dat_i);
                         4'd6: pattern_reg <= wb_dat_i;
                         4'd7: glyph_addr_reg <= wb_dat_i;
-                        4'd8: glyph_w_reg <= wb_dat_i;
-                        4'd9: glyph_h_reg <= wb_dat_i;
+                        4'd8: glyph_w_reg <= glyph_w_sat(wb_dat_i);
+                        4'd9: glyph_h_reg <= cw_sat(wb_dat_i);
                         4'd10: fg_color_reg <= wb_dat_i;
                         4'd11: bg_color_reg <= wb_dat_i;
                         4'd12: src_addr_reg <= wb_dat_i;

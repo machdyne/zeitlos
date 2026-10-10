@@ -53,6 +53,20 @@ reassigned to the glyph path (`BLIT_GLYPH_ADDR` / `BLIT_GLYPH_W`) and the
 registers no longer exist. The source rectangle's position is folded into
 `BLIT_SRC_ADDR` and `BLIT_SRC_SHIFT` instead -- see "Copy modes".
 
+**Coordinates are 16 bits.** `DST_X`, `DST_Y`, `WIDTH`, `HEIGHT`,
+`GLYPH_W` and `GLYPH_H` hold 16 bits and read back that way. A value
+written above 65535 saturates rather than wrapping, so a wild value
+stays out of range (clipped away, or a glyph mask of all ones) instead
+of becoming a small one that draws. `GLYPH_W` keeps its low six bits
+when it saturates, which is what decides whether a cell straddles two
+words. Software clips every rectangle to the 640x480 screen before
+writing these (`sw/common/zgfx.c`), so the upper half was always zero;
+32-bit arithmetic on it cost about 500 LUTs and 340 flip-flops
+(measured out of context on ECP5, three seeds). The VRAM addresses the
+blitter computes are 17 bits, which is all the VRAM port uses.
+Main-memory source addresses (`SRC_ADDR`, `SRC_B_ADDR`, `SRC_STRIDE`)
+stay 32 bits.
+
 The register file is addressed by `wb_adr_i[4:0]`, so indices 0..31
 (0xD0000000..0xD000007C) are available. Indices 16..18 are a read-only
 source-debug block, which is why the scissor starts at 20.
