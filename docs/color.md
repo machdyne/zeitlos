@@ -317,48 +317,50 @@ All in `rtl/gpu/gpu_video.v`, behind its `COLOR_AVAIL` parameter.
 
 ### Plane 0
 
-Unchanged. It is the `hline` row buffer every mode has always used,
-refilled once per physical line and indexed by the loadable column
-counter `x`.
+The framebuffer row every mode uses, refilled once per physical line
+into row 3 of the line buffer below and read exactly like planes 1..3:
+a held word `cur0`, indexed by the loadable column counter `x`. (It
+used to be `hline`, a 640-bit register read through a 640:1 mux; see
+"The line buffer in block RAM" below.)
 
 ### The plane fetch (48 MHz, `clk`)
 
-After `hline`'s 20 words, the same refill fetches three more rows of 20
-words — planes 1, 2 and 3 for the same line — into a plane line buffer.
+After the row's 20 words, the same refill fetches three more rows of 20
+words — planes 1, 2 and 3 for the same line — into the same line buffer.
 It uses the VRAM graphics port, which is dedicated to scanout and
 otherwise idle in blanking, so it costs the CPU, blitter and rasterizer
 nothing.
 
-- **Timing.** 60 words at 48 MHz is 1.25 µs. With the `hline` refill
+- **Timing.** 60 words at 48 MHz is 1.25 µs. With the row refill
   and the clock crossing, it finishes about 45 pixel clocks into a
   160-clock horizontal blanking interval. Nothing reads the buffer until
-  16 clocks before the line starts.
+  24 clocks before the line starts.
 - **Rows.** Every plane's row is either the viewport's row or that row
   plus 240 (mod 480). The second is computed in the pixel domain,
   already multiplied by 20, and crosses with the same toggle and margin
-  the `hline` row has always used. The 48 MHz side adds a word index to
+  the plane 0 row has always used. The 48 MHz side adds a word index to
   a latched base, the same depth as the existing refill address.
 - **Whole rows, natural order.** The horizontal offset is not applied
   here. Whole rows are fetched and the read side picks the word.
 - **Every plane, always.** The port is idle anyway, and skipping words
   would cost a comparison in the clock domain with no slack.
 
-The buffer is 3 x 20 words: one DP16KD on ECP5, one RAMB18 on 7-series.
+The buffer is 4 x 20 words, rows 0..2 the planes and row 3 plane 0: one
+DP16KD on ECP5, one RAMB18 on 7-series.
 
 ### The read side (25.2 MHz, `pclk`)
 
-Each plane holds its current 32-bit word (`cur1..cur3`) and the next one
-(`nxt1..nxt3`). The pixel's bit is `cur[x[4:0]]`, the same `x` that
-indexes `hline`.
+Each plane holds its current 32-bit word (`cur0..cur3`) and the next one
+(`nxt0..nxt3`). The pixel's bit is `cur[x[4:0]]`.
 
 That one index serves every plane because a 320-column offset is
 exactly ten words. All planes cross word boundaries on the same pixel,
 and dx becomes "read word (w+10) mod 20" rather than an arithmetic
 shift.
 
-- **At a word crossing**, `cur` takes `nxt`, and a six-clock pass
-  refills `nxt` from the buffer (three registered reads). The next
-  crossing is at least 64 clocks away in game mode.
+- **At a word crossing**, `cur` takes `nxt`, and a seven-clock pass
+  refills `nxt` from the buffer (four registered reads). The next
+  crossing is at least 64 clocks away in game mode, 32 on the desktop.
 - **At the start of a line**, a preload pass loads the viewport's first
   word, moves it to `cur`, and loads the word after it. `x` already
   holds the origin through blanking, so a non-word-aligned origin is
@@ -382,9 +384,29 @@ fetch sequencer, a 3:1 mux of latched bases and one adder.
 
 ### Without `COLOR`
 
-`COLOR_AVAIL` is 0, `color_on` is a constant 0, the fetch never starts
-and the block RAM has no writer. Yosys removes all of it, and the output
-muxes fold back to the monochrome path.
+`COLOR_AVAIL` is 0, `color_on` is a constant 0 and the plane fetch never
+starts. Yosys removes the plane words and the palette, and the output
+muxes fold back to the monochrome path. The block RAM stays: plane 0
+lives in it.
+
+### The line buffer in block RAM
+
+Plane 0 used to be `hline`, a 640-bit register shifted in from the
+48 MHz side and read as `hline[x]` in the pixel domain. That was 640
+flip-flops, a 640:1 multiplexer that was the pixel clock's critical
+path, a 640-bit clock-domain crossing, and a mapping that ABC handled
+differently on every build (see the note under "Cost"). Putting the row
+in the block RAM the planes already used, read a word at a time like
+them, replaced all of that with one more 32-bit word and one more read
+per pass. Measured on `gpu_video` alone (ECP5, yosys `synth_ecp5 -abc9`,
+nextpnr out of context, no DDMI):
+
+| | Before | After |
+|---|---|---|
+| With colour: LUTs (TRELLIS_COMB) / FFs | 1291 / 1135 | 795 / 560 |
+| Without colour: LUTs / FFs / DP16KD | 989 / 804 / 0 | 519 / 254 / 1 |
+
+A board without `COLOR` now spends one DP16KD on it.
 
 ## Cost
 
@@ -413,7 +435,8 @@ These are pre-placement numbers for one module, and **noisier than they
 look**: re-synthesising textually different but logically identical
 versions of this file (comments and line numbers only) moved the LUT4
 count by several hundred, because ABC's mapping of the 640:1 `hline`
-mux is sensitive to netlist order. Treat them as rough. The board-level
+mux was sensitive to netlist order. Treat them as rough; they predate
+the line buffer moving into block RAM (above). The board-level
 figure -- Lakritz measured at 98% with colour, all clocks passing
 ([boards.md](boards.md)) -- is the one to trust.
 

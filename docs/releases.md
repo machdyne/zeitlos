@@ -439,7 +439,7 @@ Then once per release: the sdcard images, `README.txt`, `NOTES.md`,
 | Version mismatch | `sw/common/zversion.h` says 0.0.2 and you asked for 0.0.3. The version is compiled into the kernel and shown by `info`; shipping these mismatched means the release page and the running system disagree about what it is, discovered from a screenshot months later. | `--bump` (edits the header — commit it) |
 | Dirty tree | `MANIFEST.json` would record a commit the artifacts did not come from. The message lists the files; anything `.gitignore` covers is already excluded, so nothing listed is build output. | `--allow-dirty` |
 | Spec drift | A board spec no longer matches `rtl/boards.vh`, so a release would build something other than what `make BOARD=x flash` builds. | `--allow-drift` |
-| Timing failure | A named clock domain missed its target in the **final** report. IO domains are advisory; see below. | `--allow-timing-fail` |
+| Timing failure | A named clock domain missed its target in the **final** report, on every seed tried (three by default). IO domains are advisory; see below. | `--allow-timing-fail` |
 | Unconstrained port | `rtl/sysctl.v` declares a port nothing gives pins to. nextpnr rejects it; this says which define would remove it. | none — pins, or `-NAME` |
 | Two ports on one ball | Two PMODs overlapping, or a PMOD pin hitting something constrained outside any port. | none — `lpf_drop`, or relocate |
 | Region overrun | An oversized gateware silently eats the start of the kernel; an oversized kernel eats the start of the ZAR. Both present later as *that feature stopped working*. | none — shrink it or move the region |
@@ -478,6 +478,21 @@ Those are recorded in `MANIFEST.json`, printed in the summary, and
 called out by name in the build log, but they do not by themselves
 block a release. `--strict-io-timing` gates on them too. They are not
 silently dropped — a real problem hiding behind one stays visible.
+
+**A miss is retried with other seeds.** Which placement seed meets
+timing is partly luck — the same netlist spreads several MHz across
+seeds — so a target that misses on its board's seed is placed and
+routed again from the same netlist (`make pnr_again`, no resynthesis)
+with the board's seed + 1, + 2, and so on, up to three runs in all. The
+first that passes ships; its seed goes in `MANIFEST.json` (`pnr`, with
+every attempt's result) and in `soc.bit.prov`, and the failed runs' logs
+are kept as `pnr.seedN.log`. A pass on a retry is reported: the target
+is close to the edge. `--pnr-attempts N` changes the number of runs
+(1 turns retrying off) and `--pnr-seeds` names the seeds to retry with.
+
+**A nearly full part is warned about.** At 95% of the LUTs or more the
+build prints a warning: timing gets harder and less repeatable as the
+part fills, well before it runs out.
 
 ---
 

@@ -71,6 +71,10 @@ static uint32_t ticks = 1000;
 
 static bool reg_repl, reg_posix;
 
+// Which programs z_exec_exists() finds: posix is on the card, which
+// may not be there.
+static bool have_posix = true;
+
 // Programs started with z_proc_run() -- the shell buttons start repl
 // and posix themselves now (docs/terminal.md, "Starting the shells").
 static char started[4][16];
@@ -108,6 +112,16 @@ static uint32_t *k_syscall(uint32_t id, uint32_t *args, uint32_t b) {
 		if (nstarted < 4) snprintf(started[nstarted++], 16, "%s", o->val.str);
 		o->type = Z_UINT32;
 		o->val.uint32 = 77;		// a pid; it registers when the test says
+		return (uint32_t *)&k_ok;
+	}
+
+	case Z_SYS_EXEC_EXISTS: {
+		z_obj_t *o = (z_obj_t *)args;
+		bool there = !strcmp(o->val.str, "repl") ||
+			(!strcmp(o->val.str, "posix") && have_posix);
+		if (!there) { o->type = Z_NONE; return (uint32_t *)&k_fail; }
+		o->type = Z_UINT32;
+		o->val.uint32 = 100000;		// a size
 		return (uint32_t *)&k_ok;
 	}
 
@@ -505,6 +519,19 @@ int main(int argc, char **argv) {
 	expect(panel_items[PB_POSIX].enabled, "POSIX enabled throughout");
 	expect(panel_set.focused == PB_REPL, "focus follows the first ready shell");
 	write_pbm(prefix, "2-repl-ready");
+
+	// No posix program (no card): POSIX is disabled, and comes back
+	// when it appears.
+	have_posix = false;
+	ticks += Z_TICK_HZ;
+	frame_check("posix missing");
+	expect(!panel_items[PB_POSIX].enabled, "POSIX disabled when posix is not there");
+	expect(!posix_avail, "posix not available");
+	write_pbm(prefix, "2-no-posix");
+	have_posix = true;
+	ticks += Z_TICK_HZ;
+	frame_check("posix back");
+	expect(panel_items[PB_POSIX].enabled, "POSIX enabled again when posix is there");
 
 	{
 		z_widget_t *w = &panel_items[PB_REPL];

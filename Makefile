@@ -615,18 +615,39 @@ zeitlos_ice40_pico:
 		-l $(PNR_LOG) \
 		--pcf-allow-unconstrained --opt-timing --ignore-loops
 else ifeq ($(FAMILY), ecp5)
-$(OUTDIR)/soc.config: $(SOC_SYNTH_INPUTS) $(SOC_CONFIG_STAMP)
-	mkdir -p $(OUTDIR)
-	yosys $(EXTRA_DEFINES) $(JUMP_DEFINES) -DBOARD_$(BOARD_UC) -DECP5 -q -l $(SYNTH_LOG) -p \
-		"$(YOSYS_PRE)synth_ecp5 $(ABC9) -top sysctl -json $(OUTDIR)/soc.json" $(RTL_PICO)
-	nextpnr-ecp5 --$(DEVICE) --package $(PACKAGE) --lpf boards/$(LPF) \
+# Place and route, from the netlist in $(OUTDIR)/soc.json. The seed
+# that was used goes in $(OUTDIR)/pnr.seed, for soc.bit.prov.
+ECP5_PNR = nextpnr-ecp5 --$(DEVICE) --package $(PACKAGE) --lpf boards/$(LPF) \
 		--json $(OUTDIR)/soc.json \
 		--report $(OUTDIR)/report.txt \
 		--textcfg $(OUTDIR)/soc.config \
 		-l $(PNR_LOG) \
 		$(if $(PNR_SEED),--seed $(PNR_SEED),) \
 		--timing-allow-fail --ignore-loops
+
+$(OUTDIR)/soc.config: $(SOC_SYNTH_INPUTS) $(SOC_CONFIG_STAMP)
+	mkdir -p $(OUTDIR)
+	yosys $(EXTRA_DEFINES) $(JUMP_DEFINES) -DBOARD_$(BOARD_UC) -DECP5 -q -l $(SYNTH_LOG) -p \
+		"$(YOSYS_PRE)synth_ecp5 $(ABC9) -top sysctl -json $(OUTDIR)/soc.json" $(RTL_PICO)
+	$(ECP5_PNR)
+	@echo "$(or $(PNR_SEED),default)" > $(OUTDIR)/pnr.seed
 	@{ cat $(SOC_CONFIG_STAMP); cat $(SOC_SYNTH_INPUTS); } | openssl dgst -sha256 | awk '{print $$NF}' > $(SOC_INPUTS_HASH)
+	@echo
+	@tools/pnr_timing.sh $(PNR_LOG) $(BOARD_LC)
+
+# Place and route AGAIN, with another seed, from the netlist already in
+# $(OUTDIR) -- no synthesis:
+#
+#   make pnr_again BOARD=... OUTDIR=... PNR_SEED=3 && make soc BOARD=... OUTDIR=...
+#
+# This is release/zrelease's retry when a seed misses timing (docs/
+# releases.md). Give PNR_SEED to this target only: on `soc` it would
+# change the config stamp and resynthesise. soc.bit.prov reports the
+# seed from pnr.seed, so it names the one that produced the bitstream.
+pnr_again:
+	@test -f $(OUTDIR)/soc.json || { echo "pnr_again: no $(OUTDIR)/soc.json -- build first"; exit 1; }
+	$(ECP5_PNR)
+	@echo "$(or $(PNR_SEED),default)" > $(OUTDIR)/pnr.seed
 	@echo
 	@tools/pnr_timing.sh $(PNR_LOG) $(BOARD_LC)
 
@@ -763,7 +784,7 @@ soc: check $(OUTDIR)/soc.config $(OUTDIR)/.soc_inputs_ok sw/bios/bios.hex
 		"inputs: $$inhash" \
 		"bios.md5: $$biosmd5" \
 		"soc.bit.md5: $$bitmd5" \
-		"BOARD=$(BOARD) DEVICE=$(DEVICE) PNR_SEED=$(PNR_SEED)" \
+		"BOARD=$(BOARD) DEVICE=$(DEVICE) PNR_SEED=`cat $(OUTDIR)/pnr.seed 2>/dev/null || echo '$(PNR_SEED)'`" \
 		"clk: $$clk" \
 		> $(OUTDIR)/soc.bit.prov; \
 	if echo "$$desc" | grep -q dirty; then \
@@ -1384,4 +1405,4 @@ clean_bios:
 clean_apps:
 	cd sw/apps && make clean
 
-.PHONY: clean_bios bios apps core-apps core-files tftp-dist timing path util test_blit test_uart hwmap FORCE soc
+.PHONY: clean_bios bios apps core-apps core-files pnr_again tftp-dist timing path util test_blit test_uart hwmap FORCE soc

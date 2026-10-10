@@ -433,6 +433,8 @@ def cmd_build(args):
             dry=args.dry_run,
             allow_timing_fail=args.allow_timing_fail,
             strict_io_timing=args.strict_io_timing,
+            pnr_attempts=args.pnr_attempts,
+            pnr_seeds=args.pnr_seeds,
             keep_generated=args.keep_generated,
             jobs=args.jobs,
             full_image=args.full_image))
@@ -835,6 +837,14 @@ def main(argv):
                    help="also fail on IO-primitive timing domains "
                         "(TRELLIS_IO_IN and friends), which are advisory "
                         "by default")
+    b.add_argument("--pnr-attempts", type=int,
+                   default=build_mod.PNR_ATTEMPTS, metavar="N",
+                   help="place and route up to N times, with a new seed "
+                        "each time, until timing is met (default %d; 1 "
+                        "= no retry)" % build_mod.PNR_ATTEMPTS)
+    b.add_argument("--pnr-seeds", type=int, nargs="+", metavar="SEED",
+                   help="the seeds to retry with (default: the board's "
+                        "seed + 1, + 2, ...)")
     b.add_argument("--keep-generated", action="store_true",
                    help="leave rtl/zspec.vh etc. in place for inspection")
     b.add_argument("--dry-run", action="store_true")

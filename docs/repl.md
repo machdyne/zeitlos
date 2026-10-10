@@ -126,12 +126,15 @@ gone when the power is; `/usb` is a USB stick; with an SD card,
 
 ```
 (define w (win-create "Drawing" 200 120))
-(line w 0 0 199 119 1)
+(line w 0 0 195 104 1)
 (box w 20 20 60 50 1)
 (text w 70 30 "Hello" 1)
 ```
 
-Coordinates count from the top left of the window, in pixels. The last
+Coordinates count from the top left of the window's drawing area, in
+pixels. The drawing area is 4 pixels narrower and 15 shorter than the
+size you ask for (the frame and title bar take the rest): a 200x120
+window has 196x105 to draw in, from 0,0 to 195,104. The last
 number is the colour: 1 white, 0 black. `(box w x0 y0 x1 y1 c)` fills
 a rectangle; `(win-clear w)` blanks the window.
 
@@ -169,7 +172,7 @@ first and draws the buttons and fields after.
 A counter app:
 
 ```
-(define w (win-create "Counter" 120 60))
+(define w (win-create "Counter" 120 64))
 (define count 0)
 (define plus (button w 4 30 50 16 "+1"))
 

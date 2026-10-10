@@ -17,7 +17,7 @@ A new `term` window is **not connected to anything**. It shows a panel:
 |                term0 -- not connected                 |
 |  [ REPL ]  [ POSIX ]  [ CONSOLE ]  [ OPEN F11 ]       |
 |  REPL    Scheme and system commands            ready  |
-|  POSIX   Unix-style shell, zcc and vi    not running  |
+|  POSIX   Unix-style shell, zcc and vi  not installed  |
 |  CONSOLE Boot log and kernel shell             ready  |
 |  OPEN    port, serial, telnet or ssh                  |
 |  choose a shell, or open a connection                 |
@@ -43,16 +43,21 @@ cable. See `docs/console.md`.
 **`repl` and `posix` are started by term, not at boot.** Pressing REPL
 or POSIX connects to the shell if it is running, and otherwise starts it
 (`z_proc_run()`), says `starting repl...` on the status line, and
-connects once it has registered -- through the same wait auto-connect
+connects once it has registered. repl registers its name only after
+Scheme has loaded, so the name appearing means it is answering --
+through the same wait auto-connect
 uses (below), so **Esc** cancels it and a shell that never appears is
 reported. A second press while one is starting does nothing. A shell
 nobody asks for costs nothing; `posix` alone is 4MB. Once running, a
 shell stays up for every window, and further presses just connect.
 
-So REPL and POSIX are always live. `repl` is a core app, in flash, so
-REPL works with no card; `posix` lives on the card (`docs/flash_apps.md`).
-If the start fails the status line says why: no sdcard (for `posix`),
-or not enough memory (`posix` needs about 4MB, `repl` about 380KB).
+So REPL and POSIX are live while the shell is running or its program is
+there to start (`z_exec_exists()`, which looks on the card and in
+flash); otherwise the button is disabled and the panel says `not
+installed`. `repl` is a core app, in flash, so REPL works with no card;
+`posix` lives on the card (`docs/flash_apps.md`), so POSIX is disabled
+without one. If the start fails the status line says why: not enough
+memory (`posix` needs about 4MB, `repl` about 380KB).
 Typing `port repl0` in the Open bar does **not** start anything -- it
 names a port, and fails if nothing is listening there. CONSOLE is a core
 app that init starts, and its button is live only while `console0` is

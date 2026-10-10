@@ -1169,6 +1169,7 @@ static char panel_status[VT_COLS + 1];
 // only live button would make Enter do the less likely thing.
 static bool panel_focus_user;
 static bool repl_up, posix_up, console_up;
+static bool repl_avail, posix_avail;	// running, or there to start
 static uint32_t panel_probe_at;
 
 // Pixel geometry, content-relative. The block is PANEL_C0..C1 x
@@ -1227,19 +1228,26 @@ static void panel_probe(bool force) {
 	bool r = z_pid_lookup("repl0", &pid);
 	bool p = z_pid_lookup("posix0", &pid);
 	bool c = z_pid_lookup("console0", &pid);
+	// A shell that is not running can still be started, if its program
+	// is there: posix lives on the card, repl in flash.
+	bool ra = r || z_exec_exists("repl");
+	bool pa = p || z_exec_exists("posix");
 
-	if (r == repl_up && p == posix_up && c == console_up && !force) return;
+	if (r == repl_up && p == posix_up && c == console_up &&
+		ra == repl_avail && pa == posix_avail && !force) return;
 
 	repl_up = r;
 	posix_up = p;
 	console_up = c;
+	repl_avail = ra;
+	posix_avail = pa;
 
-	// REPL and POSIX are always enabled: pressing one starts the shell
-	// if it is not running (start_shell()). CONSOLE is init's, and
-	// enabled only while it is there.
-	(void)r; (void)p;
-	panel_items[PB_REPL].enabled = true;
-	panel_items[PB_POSIX].enabled = true;
+	// REPL and POSIX are enabled while the shell is running or can be
+	// started (start_shell()); a button for a program that is not
+	// there would only ever say "could not start". CONSOLE is init's,
+	// and enabled only while it is there.
+	panel_items[PB_REPL].enabled = ra;
+	panel_items[PB_POSIX].enabled = pa;
 	panel_items[PB_CONSOLE].enabled = c;
 
 	// A focused button that just became disabled would leave Enter
@@ -1247,7 +1255,7 @@ static void panel_probe(bool force) {
 	// shell is the better default than OPEN.
 	int f = panel_set.focused;
 	if (!panel_focus_user) {
-		int want = PB_REPL;
+		int want = ra ? PB_REPL : pa ? PB_POSIX : c ? PB_CONSOLE : PB_OPEN;
 		if (want != f) z_widget_focus_set(&panel_set, want);
 	} else if (f < 0 || !panel_items[f].enabled) {
 		z_widget_focus_next(&panel_set, false);
@@ -1313,15 +1321,17 @@ static void panel_draw(void) {
 
 	z_widget_draw_all(&panel_set, true);
 
-	snprintf(line, sizeof(line), "%-7s %-31s %11s", "REPL",
-		"Scheme and system commands", repl_up ? "ready" : "not running");
+	snprintf(line, sizeof(line), "%-7s %-29s %13s", "REPL",
+		"Scheme and system commands",
+		repl_up ? "ready" : repl_avail ? "not running" : "not installed");
 	z_win_draw_text2(&win, x + PANEL_TEXT_X, y + PANEL_DESC_Y, line, 1, 0, &TERM_FONT);
 
-	snprintf(line, sizeof(line), "%-7s %-31s %11s", "POSIX",
-		"Unix-style shell, zcc and vi", posix_up ? "ready" : "not running");
+	snprintf(line, sizeof(line), "%-7s %-29s %13s", "POSIX",
+		"Unix-style shell, zcc and vi",
+		posix_up ? "ready" : posix_avail ? "not running" : "not installed");
 	z_win_draw_text2(&win, x + PANEL_TEXT_X, y + PANEL_DESC_Y + 10, line, 1, 0, &TERM_FONT);
 
-	snprintf(line, sizeof(line), "%-7s %-31s %11s", "CONSOLE",
+	snprintf(line, sizeof(line), "%-7s %-29s %13s", "CONSOLE",
 		"Boot log and kernel shell", console_up ? "ready" : "not running");
 	z_win_draw_text2(&win, x + PANEL_TEXT_X, y + PANEL_DESC_Y + 20, line, 1, 0, &TERM_FONT);
 

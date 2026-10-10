@@ -46,8 +46,8 @@
  *     buffer is just a region of that surface the camera is not
  *     currently pointed at.
  *
- *   - No new BRAM, and no extra VRAM bandwidth. hline below already
- *     holds one FULL framebuffer row (640 bits, 20 words) per
+ *   - No new BRAM, and no extra VRAM bandwidth. The line buffer below
+ *     already holds one FULL framebuffer row (640 bits, 20 words) per
  *     physical scanline. The viewport's x offset is a different index
  *     into a buffer that was already being fetched; its y offset is a
  *     different row number. In game mode each framebuffer row is
@@ -86,21 +86,24 @@
  *
  * -- what changed in the pixel path, and what deliberately did not --
  *
- * The framebuffer bit for the current pixel used to be hline[x] where
- * x counted 0..639. It is still hline[x]; x is now a LOADABLE COUNTER
- * rather than a subtraction of hc, loaded with the viewport origin at
- * the start of each line and advanced every pixel (desktop) or every
- * other pixel (game).
+ * The framebuffer bit for the current pixel is bit x[4:0] of the word
+ * the line is showing (cur0, below), and x counts framebuffer columns
+ * 0..639. x is a LOADABLE COUNTER rather than a subtraction of hc,
+ * loaded with the viewport origin at the start of each line and
+ * advanced every pixel (desktop) or every other pixel (game).
  *
  * That structure is not an accident and should not be "simplified"
- * back into an expression. hline[x] is a 640:1 multiplexer and is
- * almost certainly the critical path in this clock domain; putting an
- * adder in front of it -- hline[view_x + (x >> 1)], the obvious way
- * to write this -- would add that adder's delay to the longest path
- * in the design for no functional gain. A counter puts the arithmetic
- * behind a register instead, so the mux input is a register output in
- * game mode exactly as it was in desktop mode, and the path depth is
- * unchanged.
+ * back into an expression: putting an adder in front of the pixel
+ * select -- view_x + (x >> 1), the obvious way to write this -- would
+ * add that adder's delay to the pixel path for no functional gain. A
+ * counter puts the arithmetic behind a register.
+ *
+ * The row itself used to be a 640-bit register, hline, and the pixel
+ * hline[x]: a 640:1 multiplexer, the critical path in this clock
+ * domain, and 640 flops refilled from the wishbone domain. It is now
+ * a 20-word row of the plane line buffer (a block RAM the colour
+ * planes already used), read a word at a time into cur0 the same way
+ * planes 1..3 are, so the pixel is a 32:1 mux of a register.
  *
  * The x and y OUTPUTS now carry framebuffer coordinates rather than
  * screen coordinates. In desktop mode those are the same thing, so
@@ -291,6 +294,14 @@ module gpu_video #(
 	reg [10:0] hc;
 	reg [10:0] vc;
 
+	// video timing -- here, before the first use, for the same reason
+	// as game_active below.
+	parameter [10:0] h_disp_start = h_front_porch + h_pulse_width + h_back_porch;
+	parameter [10:0] h_disp_stop = h_disp_start + h_disp;
+
+	parameter [10:0] v_disp_start = v_front_porch + v_pulse_width + v_back_porch;
+	parameter [10:0] v_disp_stop = v_disp_start + v_disp;
+
 	// -- scanout divisors --
 	//
 	// h_div: pixel clocks per source pixel. v_half: two physical lines
@@ -301,6 +312,12 @@ module gpu_video #(
 	// game_active path out of a composite build -- the viewport is
 	// unconditional there. On VGA/DDMI they follow game_active exactly
 	// as before.
+	// Declared here, before its first use, rather than with the rest
+	// of the viewport state below: yosys accepts a use before the
+	// declaration, the language (and iverilog, which the benches in
+	// rtl/gpu/bench run on) does not.
+	reg game_active, wrap_active;
+
 	wire [2:0] h_div = FIXED_VIEWPORT ? H_DIV_BASE :
 		(game_active ? 3'd2 : 3'd1);
 	wire v_half = FIXED_VIEWPORT ? 1'b0 : game_active;
@@ -356,7 +373,11 @@ module gpu_video #(
 	// Free in gates -- an XOR and an OR are the same one LUT at the
 	// same depth -- so this costs nothing in the 25.2MHz pixel domain
 	// this line sits in.
-	wire p0 = hline[x];
+	// The word each plane is showing -- see the plane read side at
+	// the bottom of this file.
+	reg [31:0] cur0, cur1, cur2, cur3;
+
+	wire p0 = cur0[x[4:0]];
 	wire pix = p0 ^ pixel;
 
 	// is_visible gates the result, and it MUST: in GPU_PAPER the
@@ -376,9 +397,9 @@ module gpu_video #(
 	// that the 640x480x1bpp framebuffer is unchanged, and in game mode
 	// up to three more 320x240 regions of it are read as extra
 	// BITPLANES of the same picture. Plane 0 is the viewport, exactly
-	// as in monochrome game mode, and still comes from hline. Planes
-	// 1..3 come from the plane line buffer below, one held 32-bit word
-	// per plane (cur1..cur3), indexed by the same x[4:0] -- which is
+	// as in monochrome game mode, and comes from cur0 like the desktop.
+	// Planes 1..3 come from the same line buffer below, one held 32-bit
+	// word per plane (cur1..cur3), indexed by the same x[4:0] -- which is
 	// valid for every plane because a plane offset of 320 columns is
 	// exactly ten words, so all planes cross word boundaries together.
 	//
@@ -395,7 +416,6 @@ module gpu_video #(
 	reg col_active;
 	reg [1:0] np_active;
 	reg [5:0] off_active;
-	reg [31:0] cur1, cur2, cur3;
 
 	// vp_on rather than game_active: on a composite board the
 	// viewport is permanent and game_active is never consulted. Moot
@@ -663,7 +683,7 @@ module gpu_video #(
 	//
 	// Mutually exclusive with GPU_VGA and GPU_DDMI at build time. Not
 	// because the pixel pipeline could not feed all three -- it could,
-	// they share hline and the refill -- but because the TIMING is
+	// they share the line buffer and the refill -- but because the TIMING is
 	// different. A 15.7kHz line rate and a 31.5kHz line rate cannot
 	// come out of one set of counters, and running two sets means two
 	// scanline buffers and an arbiter on vram's single graphics port.
@@ -970,13 +990,8 @@ module gpu_video #(
 
 `endif
 
-	// video timing
-
-	parameter [10:0] h_disp_start = h_front_porch + h_pulse_width + h_back_porch;
-	parameter [10:0] h_disp_stop = h_disp_start + h_disp;
-
-	parameter [10:0] v_disp_start = v_front_porch + v_pulse_width + v_back_porch;
-	parameter [10:0] v_disp_stop = v_disp_start + v_disp;
+	// video timing: h_disp_start and friends are at the top of the
+	// module body, ahead of their first use.
 
 	assign is_visible = (hc >= h_disp_start && vc >= v_disp_start &&
 		hc < h_disp_stop && vc < v_disp_stop);
@@ -1056,7 +1071,6 @@ module gpu_video #(
 	reg game_cap, wrap_cap;
 	reg [9:0] vx_cap, vy_cap;
 
-	reg game_active, wrap_active;
 	reg [9:0] vx_active, vy_active;
 
 	// colour rides the same capture and the same adoption -- see the
@@ -1261,7 +1275,7 @@ module gpu_video #(
 	// It goes across ALREADY MULTIPLIED by 20 (a VRAM word address).
 	// That arithmetic is done here, in the 25.2MHz domain that has the
 	// slack, rather than on the 48MHz side, which does not; the fetch
-	// below only adds a word index to it, exactly as the hline refill
+	// below only adds a word index to it, exactly as the row refill
 	// adds one to row_base. It is assigned on the same edge, under the
 	// same condition, as y_refill and refill_toggle, so it crosses with
 	// exactly the margin y_refill's crossing already relies on.
@@ -1273,9 +1287,9 @@ module gpu_video #(
 
 	// -- horizontal: the loadable pixel index --
 	//
-	// x is the framebuffer COLUMN, and hline[x] selects the bit. See
-	// this file's header for why this is a counter and not
-	// `hline[vx + (hc >> 1)]`.
+	// x is the framebuffer COLUMN: x[9:5] the word, x[4:0] the bit in
+	// cur0. See this file's header for why this is a counter and not
+	// `vx + (hc >> 1)`.
 	//
 	// The wrap is a comparator against 639 on a value that is about
 	// to be incremented anyway. It can only fire in game mode with
@@ -1362,18 +1376,20 @@ module gpu_video #(
 	// 1024/32=32 is itself a power of 2) -- computed as (y<<4)+(y<<2)
 	// to avoid inferring an actual multiplier for what's just y*20.
 	// Uses y_refill_sync1 (see above), not y directly -- the CDC fix.
-	reg [639:0] hline;
+	//
+	// The row goes into the line buffer (pbuf, below) at words 96..115,
+	// row 3 -- planes 1..3 are rows 0..2 -- not into a 640-bit
+	// register: see this file's header.
 	wire [14:0] row_base = (y_refill_sync1 << 4) + (y_refill_sync1 << 2);   // y*20
 
 	// -- colour: the plane fetch --
 	//
-	// After hline's 20 words, three more rows of 20 -- planes 1, 2
-	// and 3 for the SAME physical line -- go into the plane line
-	// buffer. Same port, same two-cycle latency, same "issue now,
-	// store two edges later" shape as the hline refill directly above
-	// it, and the same timing: fetched in the horizontal blanking
+	// After the row's 20 words, three more rows of 20 -- planes 1, 2
+	// and 3 for the SAME physical line -- go into the line buffer too.
+	// Same port, same two-cycle latency, same "issue now, store two
+	// edges later" shape as the row refill directly above it, and the same timing: fetched in the horizontal blanking
 	// interval of the line before, so nothing ever reads a word that
-	// is being written. 60 words at 48MHz is 1.25us; with the hline
+	// is being written. 60 words at 48MHz is 1.25us; with the row
 	// refill and the crossing it is done about 45 pixel clocks into a
 	// 160-clock blanking interval. The read side does not touch the
 	// buffer until 16 clocks before the line starts.
@@ -1384,7 +1400,7 @@ module gpu_video #(
 	// comparison in the one clock domain that has no slack. dx is not
 	// applied here either -- whole rows come in, in natural order, and
 	// the read side picks the word. That keeps this side to a mux and
-	// an adder per word, the same depth as the hline address above.
+	// an adder per word, the same depth as the row address above.
 	//
 	// The per-plane dy bits cross from the pixel domain on two flops.
 	// They are frame-constant (adopted at the end of the last visible
@@ -1392,9 +1408,10 @@ module gpu_video #(
 	// for the first blanking line of the next frame, which nothing
 	// displays.
 	//
-	// The buffer itself is 3 x 20 words, addressed { plane-1, word }:
-	// one DP16KD on ECP5, one RAMB18 on 7-series. Written here, in the
-	// wishbone domain; read in the pixel domain below.
+	// The buffer itself is 4 x 20 words, addressed { row, word }: rows
+	// 0..2 planes 1..3, row 3 the framebuffer row (plane 0). One DP16KD
+	// on ECP5, one RAMB18 on 7-series, colour or not. Written here, in
+	// the wishbone domain; read in the pixel domain below.
 	(* ram_style = "block" *)
 	reg [31:0] pbuf [0:127];
 
@@ -1426,12 +1443,10 @@ module gpu_video #(
 			gb_adr_o <= row_base + 19;
 			pf_run <= 1'b0;
 		end else if (refill_words > 0) begin
-			if (refill_words != 21)
-				hline <= { hline, gb_dat_i };
 			if (refill_words > 2)
 				gb_adr_o <= row_base + (refill_words - 3);
 			refill_words <= refill_words - 1;
-			// hline done: latch the three plane row bases and start.
+			// row done: latch the three plane row bases and start.
 			// Latched rather than recomputed per word so the issue
 			// path below is register -> 3:1 mux -> adder.
 			if (refill_words == 6'd1 && COLOR_AVAIL != 0) begin
@@ -1456,7 +1471,7 @@ module gpu_video #(
 		end
 
 		// store pipeline: the word addressed on this edge arrives on
-		// gb_dat_i two edges later, as for hline
+		// gb_dat_i two edges later, as for the row
 		pf_v1 <= pf_issue;
 		pf_a1 <= { pf_k, pf_w };
 		pf_v2 <= pf_v1;
@@ -1469,24 +1484,35 @@ module gpu_video #(
 		end
 	end
 
+	// The row's words arrive while refill_words counts 20..1, word
+	// 19 first: the word on gb_dat_i is word refill_words - 1 (issued
+	// two edges earlier, at refill_words + 1). The plane stores start
+	// two edges after the row's last, so the two never meet.
+	wire row_we = !refill && (refill_words != 6'd0) && (refill_words != 6'd21);
+	wire [4:0] row_w = refill_words[4:0] - 5'd1;
+
 	always @(posedge clk) begin
 		if (pf_v2)
 			pbuf[pf_a2] <= gb_dat_i;
+		else if (row_we)
+			pbuf[{ 2'd3, row_w }] <= gb_dat_i;
 	end
 
 	// -- colour: the plane read side, pixel domain --
 	//
-	// cur1..cur3 hold the word each plane is showing; nxt1..nxt3 the
+	// cur0..cur3 hold the word each plane is showing; nxt0..nxt3 the
 	// word after it. At a word crossing (the edge on which x moves
 	// from bit 31 of a word to bit 0 of the next) cur takes nxt, and a
-	// short pass refills nxt from the buffer. A pass is three reads,
-	// one per plane, through a registered read port, so it takes six
+	// short pass refills nxt from the buffer. A pass is four reads,
+	// one per plane, through a registered read port, so it takes seven
 	// clocks; the next crossing is at least 64 clocks away in game
-	// mode (32 source pixels, each doubled) and 32 in desktop mode,
-	// where none of this is displayed anyway.
+	// mode (32 source pixels, each doubled) and 32 in desktop mode.
+	// Plane 0 is the framebuffer row, so this runs on every board and
+	// in every mode; without colour, planes 1..3 are read and dropped
+	// (nothing uses nxt1..nxt3, and synthesis removes them).
 	//
-	// The line start is a preload: at 16 clocks before the first
-	// visible pixel -- long after the fetch above has finished --
+	// The line start is a preload: at 24 clocks before the first
+	// visible pixel (two passes take 15) -- long after the fetch above has finished --
 	// one pass loads the viewport's first word into nxt, nxt moves to
 	// cur, and a second pass loads the word after it. x already holds
 	// the viewport origin at that point (it is loaded throughout
@@ -1498,7 +1524,7 @@ module gpu_video #(
 	// (w + 10) mod 20 where plane 0 reads w, which is the 320-column
 	// offset. In clamp mode the "next" word after the last visible one
 	// is never shown, so the wrap there is harmless rather than wrong.
-	reg [31:0] nxt1, nxt2, nxt3;
+	reg [31:0] nxt0, nxt1, nxt2, nxt3;
 	reg [31:0] pq;
 	reg [6:0] pra;
 	reg [2:0] ps;
@@ -1516,7 +1542,7 @@ module gpu_video #(
 	wire [4:0] pw_k2 = off_active[4] ? pw_dx : pw;
 
 	wire x_cross = (hc >= h_disp_start) && x_step && (x[4:0] == 5'd31);
-	wire pre_go = (hc == h_disp_start - 11'd16);
+	wire pre_go = (hc == h_disp_start - 11'd24);
 
 	always @(posedge pclk) begin
 		pq <= pbuf[pra];
@@ -1526,26 +1552,31 @@ module gpu_video #(
 			pre <= 1'b0;
 			pw <= 5'd0;
 			pra <= 7'd0;
-		end else if (COLOR_AVAIL != 0) begin
+		end else begin
 			if (pre_go) begin
 				ps <= 3'd1;
 				pw <= xw;
 				pre <= 1'b1;
 			end else if (x_cross) begin
+				cur0 <= nxt0;
 				cur1 <= nxt1;
 				cur2 <= nxt2;
 				cur3 <= nxt3;
 				ps <= 3'd1;
 				pw <= xw2;
 			end else begin
+				// pra is registered and so is pq: the word for the
+				// address set on one edge is in pq two edges later.
 				case (ps)
-					3'd1: begin pra <= { 2'd0, pw_k0 }; ps <= 3'd2; end
-					3'd2: begin pra <= { 2'd1, pw_k1 }; ps <= 3'd3; end
-					3'd3: begin pra <= { 2'd2, pw_k2 }; nxt1 <= pq; ps <= 3'd4; end
-					3'd4: begin nxt2 <= pq; ps <= 3'd5; end
-					3'd5: begin nxt3 <= pq; ps <= 3'd6; end
-					3'd6: begin
+					3'd1: begin pra <= { 2'd3, pw }; ps <= 3'd2; end
+					3'd2: begin pra <= { 2'd0, pw_k0 }; ps <= 3'd3; end
+					3'd3: begin pra <= { 2'd1, pw_k1 }; nxt0 <= pq; ps <= 3'd4; end
+					3'd4: begin pra <= { 2'd2, pw_k2 }; nxt1 <= pq; ps <= 3'd5; end
+					3'd5: begin nxt2 <= pq; ps <= 3'd6; end
+					3'd6: begin nxt3 <= pq; ps <= 3'd7; end
+					3'd7: begin
 						if (pre) begin
+							cur0 <= nxt0;
 							cur1 <= nxt1;
 							cur2 <= nxt2;
 							cur3 <= nxt3;

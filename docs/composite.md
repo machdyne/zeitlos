@@ -158,7 +158,7 @@ static reading of the code reveals its absence.
 Enforced in `rtl/sysctl.v`, not left to a board author to remember.
 
 Not because the pixel pipeline could not feed all three — it could, they
-share `hline` and the refill — but because the **timing** is different. A
+share the line buffer and the refill — but because the **timing** is different. A
 15.7 kHz line rate and a 31.5 kHz line rate cannot come out of one set of
 counters, and running two sets means two scanline buffers and an arbiter
 on `vram.v`'s single graphics port. That is a real feature; it is not

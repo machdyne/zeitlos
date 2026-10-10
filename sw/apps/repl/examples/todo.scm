@@ -6,18 +6,20 @@
 ; Type a task and press Enter (or Add). Click a task to tick it off;
 ; Clear removes the ticked ones.
 
+; The window is 200x160; what can be drawn in is 196x145 (4 narrower
+; and 15 shorter: the frame and title bar take the rest).
 (define w (win-create "To do" 200 160))
 (define entry (field w 4 4 140))
-(define add (button w 148 4 46 16 "Add"))
-(define clear (button w 148 140 46 16 "Clear"))
+(define add (button w 148 4 44 16 "Add"))
+(define clear (button w 148 125 44 16 "Clear"))
 
 ; the list: each task is (text . done)
 (define tasks '())
 
 (define (draw-tasks)
-  (box w 0 24 199 137 0)                     ; blank the list area
+  (box w 0 24 195 121 0)                     ; blank the list area (8 rows)
   (define (draw l y)
-    (if (pair? l)
+    (if (and (pair? l) (< y 122))            ; room for 8
         (begin
           (text w 4 y (if (cdr (car l)) "[x]" "[ ]") 1)
           (text w 28 y (car (car l)) 1)
@@ -53,7 +55,7 @@
            (begin (set! tasks (undone tasks)) (draw-tasks))))
       ((click)
        (let ((y (caddr e)))
-         (if (>= y 26)
+         (if (and (>= y 26) (< y 122))
              (begin
                (set! tasks (tick tasks (quotient (- y 26) 12)))
                (draw-tasks)))))

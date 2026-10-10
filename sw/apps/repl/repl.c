@@ -1404,14 +1404,7 @@ static void handle_eval(const z_msg_t *msg) {
 
 int main(void) {
 
-	char instance_name[24] = "repl";
-	if (z_pid_register("repl", instance_name, sizeof(instance_name)))
-		printf("repl: starting as pid %ld, registered as '%s'.\n",
-			(long)z_getpid(), instance_name);
-	else
-		printf("repl: starting as pid %ld (name registration failed, "
-			"term won't be able to find this instance by name).\n",
-			(long)z_getpid());
+	printf("repl: starting as pid %ld\n", (long)z_getpid());
 
 	// one-time Scheme init, same setjmp-in-this-frame requirement as
 	// eval_scheme() above -- covers a panic during the STDLIB load
@@ -1462,6 +1455,19 @@ int main(void) {
 
 	for (int i = 0; i < Z_REPL_MAX_CONNS; i++)
 		conns[i].port.connected = false;
+
+	// Register the name only now, once Scheme is loaded and the loop
+	// below is about to answer. term and netserve start repl on demand
+	// and connect as soon as the name appears; registered before the
+	// stdlib load, the name was there a second or more before anything
+	// read the mailbox, and the first REPL press timed out ("no answer
+	// from repl0") while the second, a moment later, worked.
+	char instance_name[24] = "repl";
+	if (z_pid_register("repl", instance_name, sizeof(instance_name)))
+		printf("repl: registered as '%s'\n", instance_name);
+	else
+		printf("repl: name registration failed -- term won't be able "
+			"to find this instance by name\n");
 
 	while (1) {
 

@@ -147,6 +147,16 @@
  *     BLOCK RAM above for why
  */
 
+// The RMII pin flops go in the I/O cells on ECP5 -- see "RMII pin
+// registers" below.
+`ifdef SYNTHESIS
+`ifndef XC7
+`ifndef ETH_PIN_IO_FF
+`define ETH_PIN_IO_FF
+`endif
+`endif
+`endif
+
 module ethmac_rmii_wb
 (
 	input wb_clk_i,
@@ -297,13 +307,40 @@ module ethmac_rmii_wb
 	// REF_CLK with ~4ns setup; registering them makes clock-to-out a
 	// flop's, and it delays TXD and TX_EN by the same one cycle, so the
 	// frame on the wire is unchanged.
-	reg [1:0] rxd_q = 2'b00;
-	reg crs_dv_q = 1'b0;
+	//
+	// On ECP5 those flops are IN THE I/O CELLS (IFS1P3DX/OFS1P3DX,
+	// which nextpnr packs into the pad's IOLOGIC), not in the fabric
+	// behind them: a fabric flop still left a pin-to-flop or
+	// flop-to-pin route that the placer chose afresh in every build
+	// and nothing timed. In the I/O cell that route is the silicon's,
+	// the same in every build and on every pin of the bus. Same flop,
+	// same clock, same power-on value (0, from GSR), so no change in
+	// latency. rtl/usb/usb_host.v does the same for D+/D-.
+	//
+	// Simulation (iverilog does not define SYNTHESIS; yosys does), and
+	// 7-series, use plain flops with the same behaviour.
+	wire [1:0] rxd_q;
+	wire crs_dv_q;
+
+`ifdef ETH_PIN_IO_FF
+	IFS1P3DX rxd0_ff (.SCLK(eth_refclk), .SP(1'b1), .CD(1'b0),
+		.D(eth_rxd[0]), .Q(rxd_q[0]));
+	IFS1P3DX rxd1_ff (.SCLK(eth_refclk), .SP(1'b1), .CD(1'b0),
+		.D(eth_rxd[1]), .Q(rxd_q[1]));
+	IFS1P3DX crs_ff (.SCLK(eth_refclk), .SP(1'b1), .CD(1'b0),
+		.D(eth_crs_dv), .Q(crs_dv_q));
+`else
+	reg [1:0] rxd_r = 2'b00;
+	reg crs_dv_r = 1'b0;
 
 	always @(posedge eth_refclk) begin
-		rxd_q <= eth_rxd;
-		crs_dv_q <= eth_crs_dv;
+		rxd_r <= eth_rxd;
+		crs_dv_r <= eth_crs_dv;
 	end
+
+	assign rxd_q = rxd_r;
+	assign crs_dv_q = crs_dv_r;
+`endif
 
 	reg crs_dv_meta = 0;
 	reg crs_dv_sync = 0;
@@ -577,16 +614,27 @@ module ethmac_rmii_wb
 
 	// Registered at the pins -- see "RMII pin registers" above.
 	wire tx_en_c = (tx_state == TX_PREAMBLE) || (tx_state == TX_DATA) || (tx_state == TX_FCS);
+	wire [1:0] txd_c = tx_en_c ? tx_shift[1:0] : 2'b00;
+
+`ifdef ETH_PIN_IO_FF
+	OFS1P3DX tx_en_ff (.SCLK(eth_refclk), .SP(1'b1), .CD(1'b0),
+		.D(tx_en_c), .Q(eth_tx_en));
+	OFS1P3DX txd0_ff (.SCLK(eth_refclk), .SP(1'b1), .CD(1'b0),
+		.D(txd_c[0]), .Q(eth_txd[0]));
+	OFS1P3DX txd1_ff (.SCLK(eth_refclk), .SP(1'b1), .CD(1'b0),
+		.D(txd_c[1]), .Q(eth_txd[1]));
+`else
 	reg tx_en_q = 1'b0;
 	reg [1:0] txd_q = 2'b00;
 
 	always @(posedge eth_refclk) begin
 		tx_en_q <= tx_en_c;
-		txd_q <= tx_en_c ? tx_shift[1:0] : 2'b00;
+		txd_q <= txd_c;
 	end
 
 	assign eth_tx_en = tx_en_q;
 	assign eth_txd = txd_q;
+`endif
 
 	// lookahead for the byte AFTER the one currently being sent --
 	// needed because we have to load tx_shift with the next byte on

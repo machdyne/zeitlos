@@ -371,9 +371,51 @@ def target_zar(root, target, software, dry=False):
     return zar
 
 
+# -- another seed, on a timing failure --
+#
+# Which placement seed meets timing is partly luck: the same netlist
+# spreads several MHz across seeds (the Makefile's usb_fmax_sweep has
+# the numbers). A target that misses on the board's seed is therefore
+# placed and routed again from the same netlist -- no resynthesis,
+# `make pnr_again` -- with other seeds, up to `attempts` runs in all,
+# and the first that passes is the one that ships. The seed is recorded
+# in the manifest and in soc.bit.prov.
+#
+# The retry seeds are the board's seed + 1, + 2, ... (nextpnr's own
+# default is 1, so a board with no seed tries 2, 3, ...), or `seeds`
+# when given. A pass on a retry is reported, not hidden: a design that
+# needs one is close to the edge, and the next RTL change may push it
+# over on every seed.
+PNR_ATTEMPTS = 3
+
+# Utilisation at or above this (percent of the LUTs) is warned about:
+# place and route gets slower and timing worse as a part fills, well
+# before it runs out.
+UTIL_WARN_PERCENT = 95
+
+
+def board_pnr_seed(root, common):
+    """The seed `make` uses for this board, or None for nextpnr's default."""
+    out = subprocess.run(["make", "-s", "-C", root] + common +
+                         ["--eval", "zrelease-seed: ; @echo $(PNR_SEED)",
+                          "zrelease-seed"],
+                         text=True, stdout=subprocess.PIPE,
+                         stderr=subprocess.DEVNULL).stdout.strip()
+    out = out.splitlines()[-1].strip() if out else ""
+    return int(out) if out.isdigit() else None
+
+
+def retry_seeds(first, attempts, seeds=None):
+    if seeds:
+        return [s for s in seeds if s != first][:max(attempts - 1, 0)]
+    base = first if first is not None else 1
+    return [base + k for k in range(1, attempts)]
+
+
 def build_target(root, target, version, outdir, software, dry=False,
                  allow_timing_fail=False, keep_generated=False,
-                 jobs=None, full_image=False, strict_io_timing=False):
+                 jobs=None, full_image=False, strict_io_timing=False,
+                 pnr_attempts=PNR_ATTEMPTS, pnr_seeds=None):
     """Gateware and BIOS for one target, then its flash image.
 
     `software` is what build_software() returned -- the kernel and the
@@ -474,8 +516,36 @@ def build_target(root, target, version, outdir, software, dry=False,
 
         pnr_log = os.path.join(boutput, "pnr.log")
         timing = check_timing(pnr_log, strict_io_timing=strict_io_timing)
-        result["timing"] = timing
         print("        %s" % timing_summary(timing))
+
+        # -- another seed if that one missed (see PNR_ATTEMPTS) --------
+        first = None if dry else board_pnr_seed(root, common)
+        tries = [{"seed": first, "summary": timing_summary(timing),
+                  "passed": not timing["failed"]}]
+        if timing["failed"] and not dry:
+            for seed in retry_seeds(first, pnr_attempts, pnr_seeds):
+                shutil.copyfile(pnr_log, os.path.join(
+                    boutput, "pnr.seed%s.log" % (tries[-1]["seed"] or "default")))
+                print("        missed timing -- placing and routing again "
+                      "with seed %d (attempt %d of %d)"
+                      % (seed, len(tries) + 1, pnr_attempts))
+                run(mk + common + ["PNR_SEED=%d" % seed, "pnr_again"], root)
+                timing = check_timing(pnr_log,
+                                      strict_io_timing=strict_io_timing)
+                tries.append({"seed": seed, "summary": timing_summary(timing),
+                              "passed": not timing["failed"]})
+                print("        %s" % timing_summary(timing))
+                if not timing["failed"]:
+                    break
+            if len(tries) > 1:
+                # pack again: soc.bit is the first seed's until now
+                run(mk + common + ["soc"], root)
+                if not timing["failed"]:
+                    print("        note: met timing on seed %d, attempt %d "
+                          "of %d -- this target is close to the edge."
+                          % (tries[-1]["seed"], len(tries), pnr_attempts))
+        result["timing"] = timing
+        result["pnr"] = {"seed": tries[-1]["seed"], "attempts": tries}
         for c in timing.get("advisory", []):
             print("        note: %s missed its target (%.1f of %.1f MHz). "
                   "That domain is an IO"
@@ -491,6 +561,12 @@ def build_target(root, target, version, outdir, software, dry=False,
             key = "TRELLIS_COMB" if "TRELLIS_COMB" in u else sorted(u)[0]
             print("        %s %d/%d (%d%%)"
                   % (key, u[key]["used"], u[key]["total"], u[key]["percent"]))
+            if u[key]["percent"] >= UTIL_WARN_PERCENT:
+                print("        warning: %s is %d%% full. Timing gets harder "
+                      "and less repeatable as the part fills;"
+                      % (key, u[key]["percent"]))
+                print("        consider what this target can leave out "
+                      "(its spec's defines).")
 
         if timing["failed"] and not allow_timing_fail:
             names = ", ".join("%s (%.1f of %.1f MHz)"
@@ -508,9 +584,12 @@ def build_target(root, target, version, outdir, software, dry=False,
                 "  (OUTDIR because release builds do not share a directory "
                 "with your development ones)\n"
                 "  and either fix it or, if you have decided the margin is "
-                "acceptable, rerun with --allow-timing-fail."
+                "acceptable, rerun with --allow-timing-fail.\n"
+                "  Seeds tried: %s (--pnr-attempts/--pnr-seeds to try "
+                "others)."
                 % (target.name, names, timing_summary(timing), board_lc,
-                   outsub))
+                   outsub, ", ".join(str(t["seed"] or "default")
+                                     for t in tries)))
 
         print("  [4/4] flash image")
 
