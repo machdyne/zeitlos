@@ -1,19 +1,231 @@
 # Userspace drivers
 
-**Status: Phases 0-3 built** (round 9, October 2026): the filesystem
-([fs_driver.md](fs_driver.md)) and the USB host stack
-([usb_driver.md](usb_driver.md)) are driver processes, and the kernel
-has neither. This document began as the design and the phase plan; the
-rounds at the end record what was actually built and measured. A final
-measurement is planned once all phases are done.
+The filesystem, the SD card, the USB host stack and the network are
+**driver processes**, not kernel code. The kernel is a scheduler,
+memory, messaging, IRQ routing and protection; `fs`, `usb` and `net`
+are programs with a flag in their header, loaded from the flash archive
+(or the card) like any core app, preempted like anything else, and
+started again if they crash.
 
-The goal: a kernel that is a scheduler, memory, messaging, IRQ routing
-and protection -- with the filesystem, the SD card and the USB host
-stack running as processes, loaded from the flash archive like any
-other core app, and chosen at boot (or later) rather than linked in.
+Why: responsiveness first -- no I/O ever holds the scheduler -- and room
+to grow: a driver that is a program is not bound by the kernel's share
+of the 1MB flash region, nor by flash at all.
 
-`sw/apps/net` already is this, for both ethernet MACs. The proposal is
-to make that the rule rather than the exception.
+## Status (October 2026)
+
+- **Phases 0-3 built, and the polish of round 10.** Run on lakritz: it
+  boots, `fs`, `usb` and `net` come up, `/ram`, the card, a USB stick
+  and USB ethernet work.
+- **The kernel image is 137,528 bytes** (it was 254,176 with FatFs and
+  USB inside it), in a 160KB region; the core app archive has 848KB.
+- **Phase 4** (splitting the kernel shell out) is not planned; the
+  shell stays in the kernel, perhaps trimmed later.
+- **Open:** TFTP over USB ethernet runs at 30-36KB/s against ~50KB/s
+  with the stack in the kernel; the keyboard and mouse were once not
+  set up at boot. Both are under "Open issues" below.
+
+## How it works now
+
+| driver | what it does | starts from | registers | docs |
+|---|---|---|---|---|
+| `fs` | FatFs, the SD card, `/ram` and `/tmp`, the flash underlay, executables from the card | flash, first | `fs0` | [fs_driver.md](fs_driver.md) |
+| `usb` | the USB host: hub, HID setup, mass storage, CDC serial, ECM ethernet | the card if there, else flash, after `fs` | `usb0` | [usb_driver.md](usb_driver.md) |
+| `net` | ethernet (RMII, ENC28J60, ESP32 link, USB through `usb`), IP, TCP, TFTP, SSH ... | `init` | `net0` | [networking.md](networking.md) |
+
+- **Clients** use small libraries that turn calls into requests:
+  `zfsc.c` for files (also inside the kernel), `zusbc.c` for USB,
+  `zposix.c` for libc's `open()`/`fopen()` ([posix_io.md](posix_io.md)).
+- **What the kernel keeps:** processes, scheduling, memory, messaging,
+  the name registry, IRQ routing, the MPU, exec from the flash archive,
+  the UART console and panic, kvstore, auth, cfg, the hardware HID
+  ports, the RAM disk's memory (`kblk.c`) and the kernel shell. See
+  "Architecture" below.
+- **The UART is the rescue console**: without `usb` there is no USB
+  keyboard for the kernel shell.
+- **Tools:** `lsusb`, `usbstat` (the USB ethernet path's counters),
+  `ps`, `pr`, `ic`; `kill -c <pid>` (a crash, to test restarts);
+  `sched` (scheduler variants, see round 10); a `KTRACE=1` kernel's
+  `ktrace`; `ipcbench` for round trips and the longest stall.
+
+## Drivers
+
+Decided in round 4 (October 2026).
+
+**What makes a program a driver: a flag in its own header.** ZEXE flags
+bit 15 ([executables.md](executables.md), "The driver flag"), set with
+`APP_DRIVER = 1` in the app's Makefile. Not a list of names in the
+kernel: a new driver needs no kernel change, and can be added to a
+running system.
+
+**Declaring is not granting.** The flag makes the process
+`Z_PROC_FLAG_DRIVER`, which lets it *open* the grant window -- but only
+onto a process that has opted in to being written by drivers
+(`z_grant_drivers()`), one client at a time ([mpu.md](mpu.md), "The
+grant window"). Clients opt in through the libraries that talk to
+drivers (the file and stream client code), on first use; an app never
+does it itself, and an app that does no I/O keeps full protection.
+
+**Clients allow the class, not pids.** So a restarted driver (a new
+pid) needs nothing re-granted, and a chain works without delegation: an
+app that talks only to `fs` can still be written directly by `usb` when
+its file is on `/usb`. Nothing is kept per pid, so this costs the same
+at any `Z_PROCS_MAX`.
+
+**Started like any other program.** `run`, `z_proc_run()`, init -- the
+same plumbing. No `drv` command and no separate start path: they would
+be machinery for something that already works.
+
+**Boot order.** The kernel shell starts `fs` from flash and waits until
+it has registered, then `usb` (from the card if a copy is there), then
+reads the config and runs `init`, which starts `wm`, `net` and the
+rest (`sh()`, `sw/os/sh.c`). Nothing depends on a fixed pid any more:
+clients find drivers by name (`fs0`, `usb0`, `net0`).
+
+**`net`** is a driver in this sense too (`APP_DRIVER = 1`): it binds the
+Ethernet interrupt and talks to `usb` for a USB adapter. Writing
+received data straight into an app's buffer helps less than it first
+looks: a borrowed message blob is already zero-copy for a receiver
+that consumes the data at once, as `tget` does, and the kernel shell's
+`tget` is pid 0, whose memory must never be opened to a driver anyway.
+The copy saved is in a receiver that *keeps* data, and only if `net`
+copies from the MAC into that buffer directly; a change inside `net`'s
+receive path, for later.
+
+## Restarting drivers
+
+A driver is a process, so a fault in one ends it and the kernel keeps
+running. But the machine is not much use without its filesystem, so
+when `fs`, `usb` or `net` **crashes**, the kernel starts it again
+(`kernel.c`, "restarting a driver"; `k_drv_start()` in `sh.c`):
+
+- **Who:** a process with the driver flag whose registered name is
+  `fs<n>`, `usb<n>` or `net<n>`. Not one that exits (`usb` without a
+  controller means to be gone) or is killed.
+- **When:** a second after the crash, by pid 0, between lines of input
+  -- the same place a byte from the UART wakes it. `k_fault()` only
+  notes it, in the interrupt, and wakes pid 0 if it is waiting for
+  input. If pid 0 is busy running a command, the restart waits for the
+  prompt.
+- **How:** as at boot. `fs` from flash; `usb` and `net` from the card
+  when a copy is there, else flash.
+- **To try it:** `kill -c <pid>` in the kernel shell kills a process
+  as if it had crashed.
+- **How often:** at most 3 times a minute each. A fourth crash in the
+  minute prints `drv: X crashed again ...; not restarting it` and
+  leaves it for `run X`.
+- **Clients** find the new one by name: `zfsc.c` and `zusbc.c` look the
+  pid up again when a send fails or a call times out; `net` checks once
+  a second that `usb` is the one its rings were opened with; `usb`
+  offers drives to `fs` from the start; `fs` polls `usb` each second.
+  What each loses is in [fs_driver.md](fs_driver.md) and
+  [usb_driver.md](usb_driver.md), "Restarting".
+
+Kernel cost: about 1KB.
+
+## Growing past the flash region
+
+One reason for drivers as processes, recorded here because it is easy
+to miss: **a driver in the kernel can never be bigger than the
+kernel's share of the 1MB flash region, and a driver in the archive
+shares the same megabyte.** A driver that is a program does not have to
+be in flash at all:
+
+- **Card copies.** A core app on the card wins over flash, so the flash
+  copy of `usb` or `net` can be the small one that brings the machine
+  up, and the card's the full one. Only `fs` must stay in flash.
+- **Separate processes.** `net`'s SSH, telnet or TFTP could move out,
+  as `web` already did for HTTP and TLS.
+- **Driver modules.** `usb` could hand a device to a class-driver
+  process; `fs` could pass a mount point to a filesystem process.
+
+None of that is done; the drivers are not split. What Phase 3 settled
+is that it is possible. The details are in
+[usb_driver.md](usb_driver.md), "Drivers past the 1MB flash region".
+
+## POSIX file I/O
+
+`fs` needs a new client protocol whatever happens, because the
+`Z_SYS_FS_*` syscalls go away. That protocol should be POSIX-shaped
+from the start -- descriptors, `O_*` flags, `lseek` with `whence`,
+`struct stat`, `opendir`/`readdir` -- rather than a message version of
+`zfsapp`'s shape that would then be redone.
+
+On top of it, in `sw/common`:
+
+- **The real libc hooks**: `_open`, `_read`, `_write`, `_lseek`,
+  `_close`, `_fstat`, plus `stat`, `unlink`, `rename`, `mkdir`,
+  `rmdir`, `opendir`/`readdir`/`closedir`, `chdir`/`getcwd`. That makes
+  `fopen`/`fprintf`/`fgets` work too, and retires the weak `ENOENT`
+  stubs in `sw/common/zeitlos.c` and the private shim in
+  `sw/apps/vi/fileio.c`. Descriptors 0-2 stay the console.
+- **`zfsapp` reimplemented on the same client**, unchanged in its
+  signatures (`fs_open_read()` is `open(O_RDONLY)`, `fs_mallocfile()`
+  is `stat` + `read`). One implementation underneath, two APIs above;
+  apps move over one at a time, or never.
+- **libz** gains the POSIX entries, appended to the table.
+
+Stdio is opt-in by use: an app that calls only `open`/`read` does not
+link `fopen`'s buffering, so the small apps stay small.
+
+## Open issues
+
+### TFTP over USB ethernet: 30-36KB/s, not 50
+
+Where it stands after round 10 (details in its log below):
+
+- **Per block, ~10ms -- the monolithic kernel's pace.** What made it
+  slower is fixed: `tget` in the kernel shell spun while it waited for
+  each block (it took whole ticks from `usb` and `net`), and `usb`
+  sometimes failed to wake `net` for a frame that had arrived.
+- **What remains is one or two blocks a transfer that never reach
+  `usb`**, each costing TFTP's fixed 0.5s retry. At the retry `usb`'s
+  ring is empty, no frame is damaged, none arrives twice. So the frame
+  is lost between the server and the adapter, or our ACK between the
+  adapter and the server.
+
+Next:
+
+- `tcpdump -n udp and host <board>` on the server during a `tget`:
+  an ACK that never arrives, or a block sent and never received.
+- The same `tget` on the monolithic kernel, for its retry count: if it
+  loses a frame now and then too, this is not a regression.
+- A TFTP retry timeout matched to the round trip (~10ms here) instead
+  of 0.5s, so a lost frame costs ~100ms.
+
+### Keyboard and mouse not set up at one boot
+
+Once, only the USB ethernet adapter was enumerated at boot; the next
+boot was fine. During the TFTP tests, with a scheduler variant
+(`sched drvwake on`), both devices were also torn down and set up again
+mid-transfer; that variant is off. Next time: `lsusb` (which device is
+behind which port or hub, and the hub's error counts), then
+`usbrescan`.
+
+### Measurement plan (the end of the work)
+
+On the same MPU-v1 board as rounds 7b-7e, with `net` and a stick:
+
+1. **TFTP.** `usbstat` (to reset), `tget` of a 1MB file, `usbstat`
+   again; `ps` afterwards (the console is busy during a `tget`). The
+   TFTP lines give the time a block takes on each side and, for each
+   retry, the block, the moment and `usb`'s ring.
+2. **`ipcbench`**, all sections, including `/usb`, against round 7e.
+3. **Responsiveness.** Drag a window while a stick is plugged in and
+   mounts, while `tget` runs, and while a big file is read: the
+   longest stall (`ipcbench` [3]) against the 5.6ms of round 7b.
+4. **Restart.** `kill -c <pid>` ends a driver as if it had crashed:
+   `fs` back with `/ram` intact; `usb` back with the stick remounted
+   and `net` reopened; a fourth `kill -c` in a minute left alone.
+5. **Idle load** (`ps`) with nothing plugged in, then with a hub,
+   against round 5c.
+6. **Sizes:** the kernel image, the archive, and the RAM left with the
+   boot set running.
+
+## The design
+
+What follows is the design as it was agreed before the work, kept
+because the reasons still hold, then the phase plan. The rounds at the
+end record what was built and measured, in order.
 
 ## The criterion: responsiveness first
 
@@ -42,34 +254,6 @@ reads cost what they cost today. That is the MPU's grant window
 The goal, stated as a test: `sw/apps/fs` and `sw/apps/usb` as driver
 apps, with copies as fast as the kernel's and no noticeable slowdown
 anywhere -- then it is a win.
-
-## Where the kernel is today
-
-Measured on commit `22acf58` (rv32im, newlib, xPack GCC 15.2,
-`make -C sw/os`): **`kernel.bin` is 254,176 bytes -- 7,968 bytes free
-of the 262,144 the BIOS copies.** The 256KB wall is not a future
-problem; the next driver of any size does not fit.
-
-Linked bytes by subsystem, from `kernel.map` (text + data + bss, since
-`.bss` is flash image here -- [kernel.md](kernel.md), "The 256KB image
-budget"):
-
-| subsystem | bytes | files |
-|---|---:|---|
-| core: procs, sched, mem, msg, pidreg, exec, ZAR, syscalls | 95,487 | `kernel.c`, `msg.c`, `mem.c`, `pidreg.c`, `zar.c`, ... (includes `z_mailboxes` 24,960 and `z_procs` 6,016 of `.bss`) |
-| FatFs + VFS (`/`, `/ram`, `/usb`, flash underlay) | 42,418 | `fs/fatfs/ff.c`, `fs/fs.c`, `fsapi.c`, `ffunicode.c`, `diskio_mux.c`, `ramdisk.c` |
-| USB host + class drivers | 29,699 | `usb/*`, `usbcdcapi.c`, `usbnetapi.c` |
-| kvstore, kvlog, auth, cfg | 25,970 | |
-| kernel shell + xmodem | 23,005 | `sh.c`, `xmodem.c`, `xfer.c` |
-| libc / libgcc | 19,824 | |
-| UART + console log | 8,646 | `uart.c` (4KB `k_klog`) |
-| SD card | 4,667 | `fs/fatfs/sdmm.c`, `fs/sdbench.c` |
-| hardware HID ports | 1,692 | `hid.c` |
-| panic font | 1,536 | |
-| **total** | **252,944** | (+ alignment = 254,176) |
-
-The core apps archive is in the same position: 746,048 bytes used of
-its region (`docs/flash_apps.md`). Both halves of the 1MB are full.
 
 ## Why this is feasible here
 
@@ -200,128 +384,6 @@ its own requests -- FatFs's non-reentrancy becomes a property of one
 process instead of a system-wide lock. `k_no_preempt` and
 `k_syscall_touches_fs()` go away.
 
-## Space: where the bytes go
-
-| | kernel | archive |
-|---|---:|---:|
-| today | 254,176 | 746,048 |
-| after phases 2-3 (estimate) | ~180,000 | + `fs` ~55KB, `usb` ~40KB |
-| after phase 4 (estimate) | ~160,000 | + shell ~30KB |
-
-Moved code costs a little more outside the kernel than inside it --
-each driver carries its own runtime (about 10-15KB with `ZFMT`). That
-is paid for by **letting the archive start where the kernel ends**:
-
-- `KERNEL_MAX_SIZE` drops to 192KB (then lower if phase 4 lands) and
-  `Z_ZAR_FLASH_OFFSET` moves to match.
-- **No BIOS or gateware change.** The BIOS still copies a fixed 256KB;
-  the bytes past `_end` are the start of the archive, land in memory
-  the kernel never reserved (process 0 reserves `_end` plus its stack),
-  and are overwritten by the first process loaded there. `.bss` is
-  still zeroed by the padding, as now.
-- Kernel and archive are flashed together already (`dev-flash`,
-  releases, DFU), which is what makes the move safe. `release/lib/layout.py`,
-  `sw/apps/zfpga/boot.c` and the top-level `Makefile` change with it.
-
-### If the kernel keeps its 256KB
-
-Reserving the full 256KB for the kernel whatever its size is simpler
-(no offset moves, room to grow back), and it is a choice about flash,
-not about the design. The arithmetic, at today's figures:
-
-| | today | drivers out, 256KB kept |
-|---|---:|---:|
-| kernel region used | 254,176 of 262,144 | ~180,000 of 262,144 (~80KB idle) |
-| archive region used | 746,048 of 770,048 | ~840,000 of 770,048 -- **~70KB over** |
-
-So keeping 256KB means something else gives: a core app leaves flash
-(`repl`, at a 192KB budget, is the largest), or the Zeitlos region
-grows past 1MB on boards whose flash has room. The middle course is a
-256KB *ceiling* rather than a reservation: the archive starts where
-the kernel ends, rounded to a sector, and moves if the kernel grows --
-which is safe only because kernel and archive are always flashed
-together.
-
-RAM: the kernel's own reservation shrinks by the same ~75KB; each
-server costs one process block (32KB minimum today) plus its stack. A
-board without a USB host does not start `usb` and pays nothing for it.
-
-## POSIX file I/O
-
-`fs` needs a new client protocol whatever happens, because the
-`Z_SYS_FS_*` syscalls go away. That protocol should be POSIX-shaped
-from the start -- descriptors, `O_*` flags, `lseek` with `whence`,
-`struct stat`, `opendir`/`readdir` -- rather than a message version of
-`zfsapp`'s shape that would then be redone.
-
-On top of it, in `sw/common`:
-
-- **The real libc hooks**: `_open`, `_read`, `_write`, `_lseek`,
-  `_close`, `_fstat`, plus `stat`, `unlink`, `rename`, `mkdir`,
-  `rmdir`, `opendir`/`readdir`/`closedir`, `chdir`/`getcwd`. That makes
-  `fopen`/`fprintf`/`fgets` work too, and retires the weak `ENOENT`
-  stubs in `sw/common/zeitlos.c` and the private shim in
-  `sw/apps/vi/fileio.c`. Descriptors 0-2 stay the console.
-- **`zfsapp` reimplemented on the same client**, unchanged in its
-  signatures (`fs_open_read()` is `open(O_RDONLY)`, `fs_mallocfile()`
-  is `stat` + `read`). One implementation underneath, two APIs above;
-  apps move over one at a time, or never.
-- **libz** gains the POSIX entries, appended to the table.
-
-Stdio is opt-in by use: an app that calls only `open`/`read` does not
-link `fopen`'s buffering, so the small apps stay small.
-
-## Drivers
-
-Decided in round 4 (October 2026).
-
-**What makes a program a driver: a flag in its own header.** ZEXE flags
-bit 15 ([executables.md](executables.md), "The driver flag"), set with
-`APP_DRIVER = 1` in the app's Makefile. Not a list of names in the
-kernel: a new driver needs no kernel change, and can be added to a
-running system.
-
-**Declaring is not granting.** The flag makes the process
-`Z_PROC_FLAG_DRIVER`, which lets it *open* the grant window -- but only
-onto a process that has opted in to being written by drivers
-(`z_grant_drivers()`), one client at a time ([mpu.md](mpu.md), "The
-grant window"). Clients opt in through the libraries that talk to
-drivers (the file and stream client code), on first use; an app never
-does it itself, and an app that does no I/O keeps full protection.
-
-**Clients allow the class, not pids.** So a restarted driver (a new
-pid) needs nothing re-granted, and a chain works without delegation: an
-app that talks only to `fs` can still be written directly by `usb` when
-its file is on `/usb`. Nothing is kept per pid, so this costs the same
-at any `Z_PROCS_MAX`.
-
-**Started like any other program.** `run`, `z_proc_run()`, init -- the
-same plumbing. No `drv` command and no separate start path: they would
-be machinery for something that already works.
-
-**Boot order, when there are drivers to start.** The archive stores
-each ZEXE verbatim, header included, so the kernel can start every
-driver in flash in archive order -- the order of `CORE_APPS` in the
-top-level `Makefile`, which is therefore where driver order lives, not
-in the kernel. Not built yet, because there is nothing to start: it
-comes with `fs`, and has one constraint to settle then -- `init()`
-requires pid 1 to be free for `wm` (`Z_PID_WM`), so drivers started
-before `init` would take it. Either drivers start inside `init` after
-`wm`, or `wm`'s fixed pid goes.
-
-**`net`.** It drives the Ethernet MACs and would become a driver in this
-sense, getting the per-process peripheral mask and interrupt binding
-instead of the hard-wired `net0` wake. Writing received data straight
-into an app's buffer helps less than it first looks, and the reason is
-worth recording: a borrowed message blob is already zero-copy for a
-receiver that consumes the data at once. `tget` writes each block from
-`net`'s buffer straight to the file, with no copy of its own -- and the
-kernel shell's `tget` is pid 0, whose memory must never be opened to a
-driver anyway. The copy saved is in a receiver that *keeps* data (a page
-assembled in memory, an image being decoded), and only if `net` copies
-from the MAC into that buffer directly rather than via its own; that is
-a change inside `net`'s receive path, for later.
-
 ## Alternatives considered
 
 - **Loadable kernel modules** (privileged code loaded from the archive
@@ -362,7 +424,7 @@ a change inside `net`'s receive path, for later.
 Each phase ends with the system working, the Phase 0 benchmarks re-run
 against the baseline, and this document updated.
 
-### Phase 0 -- measure, and make room (no behaviour change)
+### Phase 0 -- measure, and make room (no behaviour change) -- done
 
 **Measuring: built** (`sw/apps/ipcbench`). The layout change below is
 not started; it waits on the decision the numbers inform.
@@ -480,7 +542,7 @@ benchmark is re-run and this is decided again.
 - **Gate:** the numbers. If a round trip with handoff cannot be brought
   under ~50 µs in phase 1, stop and reconsider.
 
-### Phase 1 -- kernel mechanisms (~2-4KB of kernel)
+### Phase 1 -- kernel mechanisms (~2-4KB of kernel) -- done, round 6
 
 - `z_irq_bind(irq)` / `z_irq_ack(irq)`: the kernel masks a bound line,
   wakes the owner, unmasks on ack (level-sensitive lines -- USB, audio
@@ -493,7 +555,7 @@ benchmark is re-run and this is decided again.
 - **Proof:** `net` moves from the hard-wired `net0` wake to
   `z_irq_bind(Z_IRQ_ETH)`, and must measure no worse.
 
-### Phase 2 -- `fs`: FatFs, SD, `/ram`, flash underlay, card exec
+### Phase 2 -- `fs`: FatFs, SD, `/ram`, flash underlay, card exec -- done, rounds 7-8
 
 - New core app `drv.fs`; SD backend linked into it (one less hop per
   block), speaking the POSIX-shaped protocol above.
@@ -508,7 +570,7 @@ benchmark is re-run and this is decided again.
 - **Accept:** bulk read within 5% of baseline, no lost files across
   `fs` restart tests, `posix`/`zcc`/`files` unchanged at source.
 
-### Phase 3 -- `usb`: host, hub, HID, MSC, CDC, ECM
+### Phase 3 -- `usb`: host, hub, HID, MSC, CDC, ECM -- done, round 9
 
 - New core app `drv.usb`; IRQ 9 bound, timed states on `z_proc_wait`.
 - MSC as an `fs` block backend over a ring; ECM to `net` over rings
@@ -533,26 +595,98 @@ benchmark is re-run and this is decided again.
 ### Phase 4 -- shell split (not planned)
 
 The user's decision (round 10): the kernel shell stays in the kernel.
-It may be trimmed later, but not spun out.
-
+It may be trimmed later, but not spun out. The plan was:
 
 - A small monitor stays in the kernel (`ps`, `kill`, `mem`, `run`,
   `log`, `mpu`, `drv`, `reboot`); everything that is a filesystem or
   USB client moves to a core-app shell. Kernel ~-15-20KB.
 
-### Phase 5 -- polish (optional)
+### Phase 5 -- polish -- mostly done, round 10
 
-- Restart policy for crashed drivers (done, round 10); card drivers
+- Restart policy for crashed drivers (done, round 10); libc file I/O,
+  late replies, `fs`'s reply slots, a USB stick started without a
+  pause (done, round 10); card drivers
   shadowing flash ones (done for `usb` and `net`, round 9); the MPU
   second write window if Phase 0-2 numbers ask for it.
 
-## See also
+## Implementation log
 
-- [kernel.md](kernel.md) -- the image budget, the syscall boundary
-- [mpu.md](mpu.md) -- `MASK`, privilege by fetch address, kernel-only stores
-- [networking.md](networking.md) -- `net`, the existing userspace driver
-- [filesystem.md](filesystem.md), [sdcard.md](sdcard.md), [usb_host.md](usb_host.md)
-- [flash_apps.md](flash_apps.md) -- the archive and its budgets
+The rounds as they happened: what was built, what was measured, what
+was learned. Numbers in earlier rounds describe the system at the time.
+
+## Before: where the kernel was (Phase 0 baseline)
+
+Measured on commit `22acf58` (rv32im, newlib, xPack GCC 15.2,
+`make -C sw/os`): **`kernel.bin` is 254,176 bytes -- 7,968 bytes free
+of the 262,144 the BIOS copies.** The 256KB wall is not a future
+problem; the next driver of any size does not fit.
+
+Linked bytes by subsystem, from `kernel.map` (text + data + bss, since
+`.bss` is flash image here -- [kernel.md](kernel.md), "The 256KB image
+budget"):
+
+| subsystem | bytes | files |
+|---|---:|---|
+| core: procs, sched, mem, msg, pidreg, exec, ZAR, syscalls | 95,487 | `kernel.c`, `msg.c`, `mem.c`, `pidreg.c`, `zar.c`, ... (includes `z_mailboxes` 24,960 and `z_procs` 6,016 of `.bss`) |
+| FatFs + VFS (`/`, `/ram`, `/usb`, flash underlay) | 42,418 | `fs/fatfs/ff.c`, `fs/fs.c`, `fsapi.c`, `ffunicode.c`, `diskio_mux.c`, `ramdisk.c` |
+| USB host + class drivers | 29,699 | `usb/*`, `usbcdcapi.c`, `usbnetapi.c` |
+| kvstore, kvlog, auth, cfg | 25,970 | |
+| kernel shell + xmodem | 23,005 | `sh.c`, `xmodem.c`, `xfer.c` |
+| libc / libgcc | 19,824 | |
+| UART + console log | 8,646 | `uart.c` (4KB `k_klog`) |
+| SD card | 4,667 | `fs/fatfs/sdmm.c`, `fs/sdbench.c` |
+| hardware HID ports | 1,692 | `hid.c` |
+| panic font | 1,536 | |
+| **total** | **252,944** | (+ alignment = 254,176) |
+
+The core apps archive is in the same position: 746,048 bytes used of
+its region (`docs/flash_apps.md`). Both halves of the 1MB are full.
+
+## Space: where the bytes go
+
+| | kernel | archive |
+|---|---:|---:|
+| today | 254,176 | 746,048 |
+| after phases 2-3 (estimate) | ~180,000 | + `fs` ~55KB, `usb` ~40KB |
+| after phase 4 (estimate) | ~160,000 | + shell ~30KB |
+
+Moved code costs a little more outside the kernel than inside it --
+each driver carries its own runtime (about 10-15KB with `ZFMT`). That
+is paid for by **letting the archive start where the kernel ends**:
+
+- `KERNEL_MAX_SIZE` drops to 192KB (then lower if phase 4 lands) and
+  `Z_ZAR_FLASH_OFFSET` moves to match.
+- **No BIOS or gateware change.** The BIOS still copies a fixed 256KB;
+  the bytes past `_end` are the start of the archive, land in memory
+  the kernel never reserved (process 0 reserves `_end` plus its stack),
+  and are overwritten by the first process loaded there. `.bss` is
+  still zeroed by the padding, as now.
+- Kernel and archive are flashed together already (`dev-flash`,
+  releases, DFU), which is what makes the move safe. `release/lib/layout.py`,
+  `sw/apps/zfpga/boot.c` and the top-level `Makefile` change with it.
+
+### If the kernel keeps its 256KB
+
+Reserving the full 256KB for the kernel whatever its size is simpler
+(no offset moves, room to grow back), and it is a choice about flash,
+not about the design. The arithmetic, at today's figures:
+
+| | today | drivers out, 256KB kept |
+|---|---:|---:|
+| kernel region used | 254,176 of 262,144 | ~180,000 of 262,144 (~80KB idle) |
+| archive region used | 746,048 of 770,048 | ~840,000 of 770,048 -- **~70KB over** |
+
+So keeping 256KB means something else gives: a core app leaves flash
+(`repl`, at a 192KB budget, is the largest), or the Zeitlos region
+grows past 1MB on boards whose flash has room. The middle course is a
+256KB *ceiling* rather than a reservation: the archive starts where
+the kernel ends, rounded to a sector, and moves if the kernel grows --
+which is safe only because kernel and archive are always flashed
+together.
+
+RAM: the kernel's own reservation shrinks by the same ~75KB; each
+server costs one process block (32KB minimum today) plus its stack. A
+board without a USB host does not start `usb` and pays nothing for it.
 
 ## Round 3: cheaper messaging, the grant window, the dock
 
@@ -696,7 +830,6 @@ idle and `ipcbench` running, `ps` showed `console` (pid 3) gaining
 runnable rather than blocked. `console` relays the kernel log, which
 `ipcbench` writes to -- worth a look at whether it ever blocks while
 there is a reader.
-
 
 ## Round 7: Phase 2a, `fs` serving its own volume
 
@@ -935,26 +1068,6 @@ To test on the board:
    the dock, `cfg reload`, the files app, `usbmount` with a stick, and
    `format` on a spare card.
 
-## Growing past the flash region
-
-One reason for drivers as processes, recorded here because it is easy
-to miss: **a driver in the kernel can never be bigger than the
-kernel's share of the 1MB flash region, and a driver in the archive
-shares the same megabyte.** A driver that is a program does not have to
-be in flash at all:
-
-- **Card copies.** A core app on the card wins over flash, so the flash
-  copy of `usb` or `net` can be the small one that brings the machine
-  up, and the card's the full one. Only `fs` must stay in flash.
-- **Separate processes.** `net`'s SSH, telnet or TFTP could move out,
-  as `web` already did for HTTP and TLS.
-- **Driver modules.** `usb` could hand a device to a class-driver
-  process; `fs` could pass a mount point to a filesystem process.
-
-None of that is done; the drivers are not split. What Phase 3 settled
-is that it is possible. The details are in
-[usb_driver.md](usb_driver.md), "Drivers past the 1MB flash region".
-
 ## Round 9: Phase 3, the USB host stack is a process
 
 Built and host-tested, the co-simulation passing; awaiting hardware.
@@ -1019,42 +1132,12 @@ To test on the board:
    - after `kill`ing `usb`: the keyboard still types, and `run usb`
      brings the rest back.
 
-
-## Restarting drivers
-
-A driver is a process, so a fault in one ends it and the kernel keeps
-running. But the machine is not much use without its filesystem, so
-when `fs`, `usb` or `net` **crashes**, the kernel starts it again
-(`kernel.c`, "restarting a driver"; `k_drv_start()` in `sh.c`):
-
-- **Who:** a process with the driver flag whose registered name is
-  `fs<n>`, `usb<n>` or `net<n>`. Not one that exits (`usb` without a
-  controller means to be gone) or is killed.
-- **When:** a second after the crash, by pid 0, between lines of input
-  -- the same place a byte from the UART wakes it. `k_fault()` only
-  notes it, in the interrupt, and wakes pid 0 if it is waiting for
-  input. If pid 0 is busy running a command, the restart waits for the
-  prompt.
-- **How:** as at boot. `fs` from flash; `usb` and `net` from the card
-  when a copy is there, else flash.
-- **To try it:** `kill -c <pid>` in the kernel shell kills a process
-  as if it had crashed.
-- **How often:** at most 3 times a minute each. A fourth crash in the
-  minute prints `drv: X crashed again ...; not restarting it` and
-  leaves it for `run X`.
-- **Clients** find the new one by name: `zfsc.c` and `zusbc.c` look the
-  pid up again when a send fails or a call times out; `net` checks once
-  a second that `usb` is the one its rings were opened with; `usb`
-  offers drives to `fs` from the start; `fs` polls `usb` each second.
-  What each loses is in [fs_driver.md](fs_driver.md) and
-  [usb_driver.md](usb_driver.md), "Restarting".
-
-Kernel cost: about 1KB.
-
 ## Round 10: polish
 
-Built and host-tested; the USB storage co-simulation passing; awaiting
-hardware.
+Built, host-tested, the USB storage co-simulation passing, and run on
+lakritz (MPU v1, USB ethernet behind the host controller). The TFTP
+investigation below took most of the hardware time; its outcome is in
+"Open issues" at the top.
 
 | | what | where |
 |---|---|---|
@@ -1066,11 +1149,16 @@ hardware.
 | `ipcbench` | its worker found on the card or in `/ram`, `/tmp`, `/usb`; a `/usb` section when a stick is mounted | `sw/apps/ipcbench` |
 | `usbstat` | the ethernet path's counters, for the TFTP slowdown | `usb.c` |
 | `rmdir` | `-Z_ENOTEMPTY` for a directory that is not empty | `fs.c` |
+| flashing | kernel and core apps written as one image (`flash_sw`): +0x28000 shares a 64KB erase block with the kernel's end | `Makefile`, [flash_apps.md](flash_apps.md) |
+| TFTP get | two blocks queued, ACK on arrival; no retry while waiting on the receiver; per-block timing and retry diagnostics | `sw/apps/net/tftp.c`, `tests/test_tftp_get.c` |
+| no spinning waits | `zstream`'s consumer and `z_msg_wait_timeout()` block instead of polling | `sw/common/zstream.c`, `sw/os/msg.c` |
+| lost wake | `usb` wakes `net` by the ring tail read after a receive, not before | `sw/apps/usb/usb.c` |
+| `sched` | two scheduler variants as switches, both off | `kernel.c`, `sh.c` |
 
-Sizes: kernel image 136,648 bytes (27,192 free of 160KB). `usb` 43,280
-in flash; `fs` 43,060; `vi` 236,184.
+Sizes: kernel image 137,528 bytes (26,312 free of 160KB). `usb` 43,472
+in flash; `fs` 43,060; `net` 139,568; `vi` 236,184.
 
-### Open: TFTP is slower through `usb`
+### The TFTP investigation
 
 `tget` over USB ethernet ran at ~21KB/s, against ~50KB/s with the
 stack in the kernel, with `tftp retry` lines. The lost-wake fix of
@@ -1124,7 +1212,9 @@ no mailbox refused a send.
 - **The network side is**: without the 5 retries, ~13.6ms from our
   ACK to the next block, on a LAN where the server answers in well
   under a millisecond.
-- **`usb` was asking the adapter every ~5ms, not every tick.** The
+- **`usb` was asking the adapter every ~5ms, not every tick.** (The
+  two scheduler causes named here were tried and turned out not to be
+  it; the real cause was the spinning shell, found later in the trace.) The
   first run asked 1,807 times in 7.6s, about 240 times a second; the
   intent was 732. There were two reasons, both in the scheduler:
   - **A 1-tick timeout lasted two ticks.** The sleep sweep woke a
@@ -1279,22 +1369,11 @@ lost between the server and the adapter. Next:
   of a fixed 0.5s, so a lost frame costs ~100ms. Each costs 5% of a
   100KB transfer now.
 
-### Measurement plan (the end of the work)
+## See also
 
-On the same MPU-v1 board as rounds 7b-7e, with `net` and a stick:
-
-1. **TFTP.** `usbstat` (to reset), `tget` of a 1MB file, `usbstat`
-   again; `ic` and `ps` during. Retries with `full` > 0 point at the
-   rings (2 slots each way); with `empty` high and `rx` low, at the
-   adapter's pace; a frame wait in the 100ms range, at `net`'s wake.
-2. **`ipcbench`**, all sections, including `/usb`, against round 7e.
-3. **Responsiveness.** Drag a window while a stick is plugged in and
-   mounts, while `tget` runs, and while a big file is read: the
-   longest stall (`ipcbench` [3]) against the 5.6ms of round 7b.
-4. **Restart.** `kill -c <pid>` ends a driver as if it had crashed:
-   `fs` back with `/ram` intact; `usb` back with the stick remounted
-   and `net` reopened; a fourth `kill -c` in a minute left alone.
-5. **Idle load** (`ps`) with nothing plugged in, then with a hub,
-   against round 5c.
-6. **Sizes:** the kernel image, the archive, and the RAM left with the
-   boot set running.
+- [kernel.md](kernel.md) -- the image budget, the syscall boundary
+- [mpu.md](mpu.md) -- `MASK`, privilege by fetch address, kernel-only stores
+- [fs_driver.md](fs_driver.md), [usb_driver.md](usb_driver.md), [posix_io.md](posix_io.md) -- the drivers and the libc hooks
+- [networking.md](networking.md) -- `net`
+- [filesystem.md](filesystem.md), [sdcard.md](sdcard.md), [usb_host.md](usb_host.md)
+- [flash_apps.md](flash_apps.md) -- the archive and its budgets

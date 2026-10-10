@@ -157,6 +157,25 @@ order:
    interrupt has woken a bound driver.
 3. **Round robin.**
 
+**Timeouts, and drivers woken by them.** A timeout of N ticks ends one
+tick after its deadline tick, so it lasts between N and N+1 ticks; a
+process woken by its timeout -- a driver included -- takes its turn in
+the round robin. Two variants were tried in round 10 for USB ethernet
+and are switches in the kernel shell, both off by default: `sched late
+0` (end at the deadline tick) and `sched drvwake on` (a driver woken by
+its timeout goes first, as one woken by its interrupt does). Both made
+TFTP slower and lost more frames ([userspace_drivers.md](userspace_drivers.md),
+round 10).
+
+**Waiting means blocking.** A process that waits for a message must
+block in `z_msg_recv()` or `z_msg_recv_match()`, not loop on
+`z_msg_read()`: a loop is runnable all the while, and every turn the
+round robin gives it is a whole tick of nothing, taken from everyone.
+`zstream`'s consumer did that until round 10, and a `tget` in the
+kernel shell took a tick from `usb` and `net` at every block. Kernel
+code has the same calls (`msg.c`); `z_msg_wait_timeout()` is a blocked
+`z_msg_recv_match()`. `z_msg_wait()` (no timeout) still loops.
+
 A message sent from an interrupt handler sets the hand-off on whichever
 process was interrupted. When that process next blocks, the recipient
 (`wm`, for input) goes first, which is no harm. The trace shows each
@@ -675,6 +694,10 @@ of image, so off by default):
 | `switch` / `keep` | `k_sched_switch()` | pid switched to / 1 nobody else runnable, 2 scan exhausted |
 | `defer` / `resched` | the filesystem guard | |
 | `tick` | the KTIMER branch | 0 entered, 2 after the wake sweep (1 was after the USB poll, until Phase 3) |
+
+`net` arms the trace itself at block 100 of a TFTP get
+(`TFTP_TRACE_BLOCK`, `sw/apps/net/tftp.c`), since the console is busy
+during a `tget`; `ktrace` afterwards shows the middle of the transfer.
 
 Each line carries `rdcycle` from the first event and from the previous
 one, and the pid that was running. It is armed by `Z_SYS_KTRACE` (op

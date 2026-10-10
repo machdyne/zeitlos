@@ -234,11 +234,14 @@ arrives while the caller waits and does not match leaves it waiting.
 ```c
 z_rv z_msg_wait(z_msg_t *msg, uint32_t subject, uint32_t tag);
 ```
-Blocks (busy-loops -- there's no yield/sleep primitive yet, so this
-relies on preemptive scheduling to let other processes run) until a
-message matching both `subject` and `tag` arrives, discarding
-anything else that shows up in the meantime. This is a runtime-only
-loop over `z_msg_read()`, not a separate syscall.
+Busy-loops over `z_msg_read()` until a message matching both
+`subject` and `tag` arrives, discarding anything else that shows up in
+the meantime. A runtime-only loop, not a syscall -- and a poor way to
+wait: the caller stays runnable, so each turn it gets is a tick taken
+from everyone else. Use `z_msg_recv_match()` with a timeout instead,
+which blocks and leaves other mail queued. `zstream`'s consumer
+(`zstream_open()`, `zstream_pull()`) blocks in `z_msg_recv()` since
+round 10 ([kernel.md](kernel.md), "Waiting means blocking").
 
 ### Subjects and tags
 

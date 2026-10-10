@@ -701,6 +701,34 @@ net: segments: 506 in order, 0 dup, 104 gap
 `queue peak` is how far the consuming app fell behind. A peak near the
 queue size means the app, not the network, is the constraint.
 
+### TFTP
+
+`tftp.c` is stop-and-wait (RFC 1350): a block, its ACK, the next. So
+its speed is 512 bytes over the round trip, and the round trip is what
+to watch. When a get finishes, `net` prints where the time went:
+
+```
+net: tftp get 107468 bytes in 2.939s (36.5 KB/s)
+net: tftp per block: ack->next block avg 12301 us (max 533208), receiver took it after avg 1655 us (max 6176); 1 retries, 0 blocks again, 0 out of sequence
+```
+
+- `ack->next block`: our ACK out to the next block in -- the NIC (or
+  `usb`), the wire and the server, both ways.
+- `receiver took it after`: how long the block waited for `tget`'s
+  pull, which is the receiver's pace (a write to `fs`).
+- **Two blocks are queued.** A block is ACKed when it is stored, unless
+  that fills the queue; then its ACK waits until the receiver takes
+  one, so the server never sends into a full queue. The receiver's
+  write overlaps the next block's trip.
+- **A retry** (0.5s without the next block) says which block it waited
+  for and when, and with a USB adapter what `usb`'s ring held: `A FRAME
+  WAITS` would be a missed wake, `empty` a frame that never arrived.
+  There is no retry while the queue waits on the receiver.
+
+Over USB ethernet a block takes ~10ms, as it did with the stack in the
+kernel, but one or two frames a transfer are lost, at 0.5s each
+([userspace_drivers.md](userspace_drivers.md), "Open issues").
+
 ## Known limits
 
 `tcp.c` was written for a LAN and still says so in places.

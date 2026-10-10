@@ -154,9 +154,11 @@ anything in the region; only offsets into it (`Z_FLASH_*_OFF`).
 
 The base is stated twice, because two different things need it: in
 `rtl/boards.vh` for the running system, and as `FLASH_BASE` in the
-board's Makefile block for the flashing commands (`make flash_os`
-writes the kernel at `FLASH_BASE`, `flash_apps` the ZAR at
-`FLASH_BASE + 0x028000`). The two must agree. `release/lib/layout.py`
+board's Makefile block for the flashing commands (`make flash_sw`
+writes the kernel at `FLASH_BASE` and the ZAR at `FLASH_BASE +
+0x028000`, as one image -- they share a 64KB erase block, see
+[flash_apps.md](flash_apps.md); `flash_os` and `flash_apps` are names
+for it). The two must agree. `release/lib/layout.py`
 cross-checks every offset in the region between `zsoc.h`, the BIOS,
 `zar.h` and the Makefile (`release/zrelease layout`).
 

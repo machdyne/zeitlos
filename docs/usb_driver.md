@@ -8,6 +8,13 @@ process, and the kernel keeps only its interrupt quiet. How the stack
 works inside -- enumeration, the transaction engine, the class drivers
 -- is still [usb_host.md](usb_host.md).
 
+**Status (October 2026):** built and running on lakritz -- keyboard,
+mouse, hub, USB sticks at `/usb` and USB ethernet. USB ethernet moves a
+TFTP block in ~10ms, as the kernel did, but loses one or two frames a
+transfer before they reach `usb`, so `tget` runs at 30-36KB/s against
+~50KB/s before ([userspace_drivers.md](userspace_drivers.md), "Open
+issues"). The rest is under "Known limits".
+
 ## What moved, and what did not
 
 | | before | now |
@@ -137,8 +144,10 @@ and the kernel (`-DZUSBC_KERNEL`, `zusb_cmd()` only) link.
   prints the ethernet path's counters, then resets them: how often the
   adapter was asked and had nothing, frames in and out, ring-full
   stalls, wakes each way, and how long a frame waited in `usb`'s ring
-  for `net` and a kick waited for `usb`, in microseconds. `lsusb`
-  prints them too, without resetting. The bring-up tools
+  for `net` and a kick waited for `usb`, in microseconds; and IPv4
+  frames whose length disagrees with their IP header (a USB packet
+  lost or doubled inside a frame, which the class driver cannot see).
+  `lsusb` prints them too, without resetting. The bring-up tools
   (`usbcap`, `usbcapok`, `usbcapd`, `usbtune`, `usbnak`, `usbidle`,
   `usbbuf`) in a `make USBH_DEBUG=1` build of `sw/apps/usb`. That costs
   flash in the archive, or nothing at all as a card copy, instead of
@@ -164,7 +173,11 @@ checks once a second that the same `usb` is still running.
 
 - **Wakes** happen only when a ring goes from empty to not empty:
   `usb` sends `net` a `Z_USB_EVENT`, and `net` sends `usb` a
-  `Z_USB_KICK`.
+  `Z_USB_KICK`. "Empty" is judged by the other side's position read
+  AFTER the frame is in place: a receive spins on the bus for a
+  millisecond and can be preempted, and judged by the position read
+  before it, a frame could be put in a ring `net` had just emptied
+  with nobody woken (round 10).
 - **`net` no longer polls the adapter.** It sleeps until a frame is
   there.
 - **`usb` keeps the pace `net` used to keep:** it asks the adapter
@@ -269,6 +282,12 @@ path). `usb` exiting -- no controller -- or being killed is left alone.
   Known issues, item 5) are unchanged. `fs` retries the mount on each
   new enumeration, so a stick that keeps dropping is mounted once it
   stays.
+- **USB ethernet loses a frame now and then** -- one or two in a 100KB
+  TFTP transfer, before they reach `usb` -- and TFTP waits 0.5s for
+  each ([userspace_drivers.md](userspace_drivers.md), "Open issues").
+- **Once, the keyboard and mouse were not set up at boot** while the
+  adapter was; the next boot was fine. Not understood yet: `lsusb` and
+  `usbrescan` when it happens.
 - **A restart of `usb`** -- by hand, or by the kernel after a crash
   (below) -- loses the open adapter until `net` notices (within a
   second; it checks that the ring it holds was opened, so a new `usb`

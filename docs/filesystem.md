@@ -5,11 +5,11 @@
 > (`sw/apps/fs`), a driver process that serves files by message:
 > [fs_driver.md](fs_driver.md). The concurrency problem described below
 > is gone with them: `fs` serves one request at a time and holds no
-> scheduler lock, and the filesystem syscalls are no longer in
-> `k_syscall_touches_fs()` -- they wait for `fs`, which cannot run
-> while preemption is held. `k_fs_enter()` remains, as the short
-> no-preemption lock it always was, for kvstore, auth, cfg's store and
-> the USB transaction engine. What follows is the design as it stood
+> scheduler lock, and no syscall holds preemption for the filesystem
+> any more (`k_syscall_touches_fs()` is gone). `k_fs_enter()` remains,
+> as the short no-preemption lock it always was, for kvstore, auth and
+> cfg's store; the USB transaction engine left with `usb` (Phase 3,
+> [usb_driver.md](usb_driver.md)). What follows is the design as it stood
 > when FatFs was the kernel's; the volume table, path rules, rename
 > checks and timestamps carried over to `fs` unchanged.
 

@@ -590,9 +590,12 @@ same `flash_cmd` and the same `layout.py` regions, rather than from a
 copy — the offsets in a release cannot drift from the offsets the
 system reads.
 
-**Flashing one piece during development** is the other use. Rewriting
-`zeitlos-kernel.bin` alone is a 256KB transfer instead of 1.5MB, and
-`make flash_os` already does exactly this for a local build.
+**Flashing one piece during development** is the other use -- with
+one catch: the kernel and the core apps share a 64KB erase block
+(the apps start at +0x28000), and openFPGALoader erases whole blocks
+on most chips, so writing either one alone wipes the other's edge.
+They go together, as one image: `make flash_sw` for a local build
+([flash_apps.md](flash_apps.md)).
 
 ---
 

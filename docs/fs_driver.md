@@ -5,6 +5,12 @@ nowhere else. Other processes are its clients, by message, and the
 kernel is one of them. This is Phase 2 of
 [userspace_drivers.md](userspace_drivers.md).
 
+**Status (October 2026):** built and running on lakritz: the card,
+`/ram` and `/tmp`, the flash underlay, USB sticks at `/usb`, executables
+from the card. It is restarted after a crash with `/ram` kept, and
+libc's `open()`/`fopen()` reach it from apps built with `POSIX_IO = 1`
+([posix_io.md](posix_io.md)). Limits are under "Known limits".
+
 ## What `fs` serves
 
 | path | volume | how `fs` reaches it |
