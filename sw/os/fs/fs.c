@@ -155,27 +155,58 @@ bool fs_ramdisk_create(uint32_t bytes) {
 
 // -- USB mass storage, FatFs drive 2, reachable as /usb --
 //
-// Mounted on demand rather than at boot: the drive appears when
-// somebody plugs it in, and f_mount() has to run in process context
-// because disk_initialize() waits for the unit to report ready.
+// Mounted when a drive is plugged in and released when it is pulled,
+// by pid 0: the USB driver notices both in an interrupt and asks for
+// fs_usb_poll() (k_deferred_request(), uart.h), which runs while the
+// kernel shell waits for input. Not in the interrupt itself, because
+// mounting waits for the unit to report ready.
+//
+// The shell's `usbmount` and `usbunmount` still work. `usbunmount` is
+// how to pull a stick safely, and it keeps /usb released until that
+// drive is removed -- otherwise the next poll would mount it again.
+// `usbmount` undoes that.
+//
+// The slow part, z_usbh_msc_start() (TEST UNIT READY until the unit is
+// ready, then its geometry), runs outside the filesystem guard: it
+// touches only the USB drive, which nothing else can be using before
+// the mount. f_mount() itself is then a few sector reads, inside
+// k_fs_enter()/k_fs_leave() like every other kernel caller of FatFs
+// (docs/filesystem.md, "Layer 2").
 //
 // f_mount(..., 1) forces the mount immediately rather than deferring
 // it to the first access, so a failure is reported here instead of
 // surfacing later as a confusing error on an unrelated call.
 static FATFS usbvol2;
 static bool usb_mounted = false;
+static bool usb_held = false;		// `usbunmount`: leave this drive alone
+static uint32_t usb_gen;		// z_usbh_msc_generation() when mounted
 
-bool fs_usb_mount(void) {
+static FRESULT usb_try_mount(void) {
 
 	FRESULT res;
 
-	if (usb_mounted) return true;
+	if (!z_usbh_msc_present()) return FR_NOT_READY;
+	if (!z_usbh_msc_ready() && z_usbh_msc_start() != Z_USBH_MSC_OK)
+		return FR_NOT_READY;
+
+	k_fs_enter();
+	res = f_mount(&usbvol2, "2:", 1);
+	k_fs_leave();
+	return res;
+
+}
+
+static bool usb_mount(bool quiet_absent) {
+
+	FRESULT res;
+	uint32_t gen = z_usbh_msc_generation();
+
 	if (!z_usbh_msc_present()) {
-		printf("fs: no usb storage device\n");
+		if (!quiet_absent) printf("fs: no usb storage device\n");
 		return false;
 	}
 
-	res = f_mount(&usbvol2, "2:", 1);
+	res = usb_try_mount();
 	if (res != FR_OK) {
 		// Behind a hub the first mount occasionally fails because the
 		// hub dropped the stick's port and it is being re-enumerated
@@ -187,8 +218,8 @@ bool fs_usb_mount(void) {
 		while ((uint32_t)(z_kernel_ticks - t0) < 1100u &&
 		       !((uint32_t)(z_kernel_ticks - t0) > 300u &&
 		         z_usbh_msc_present())) { }
-		if (z_usbh_msc_present())
-			res = f_mount(&usbvol2, "2:", 1);
+		gen = z_usbh_msc_generation();
+		res = usb_try_mount();
 		if (res != FR_OK) {
 			printf("fs: usb: mount failed (%d)\n", (int)res);
 			return false;
@@ -196,6 +227,7 @@ bool fs_usb_mount(void) {
 	}
 
 	usb_mounted = true;
+	usb_gen = gen;
 	printf(" - usb storage: %lu KB at " Z_DIR_USB "\n",
 		(unsigned long)(z_usbh_msc_sectors() / 2));
 
@@ -203,17 +235,55 @@ bool fs_usb_mount(void) {
 
 }
 
-void fs_usb_unmount(void) {
+static void usb_release(void) {
 	if (!usb_mounted) return;
+	k_fs_enter();
 	f_mount(NULL, "2:", 0);
+	k_fs_leave();
 	usb_mounted = false;
 }
 
-// Mounted AND a drive is plugged in. After an unplug /usb disappears
-// from listings rather than showing as an empty directory; plugging a
-// drive back in brings it back, and FatFs re-reads the medium on first
-// access (see disk_status() in diskio_mux.c). usbunmount still clears
-// the mount itself.
+bool fs_usb_mount(void) {
+	usb_held = false;
+	if (usb_mounted) return true;
+	return usb_mount(false);
+}
+
+void fs_usb_unmount(void) {
+	usb_held = z_usbh_msc_present();
+	if (!usb_mounted) return;
+	usb_release();
+	printf(" - usb storage: " Z_DIR_USB " unmounted%s\n",
+		usb_held ? ", safe to remove" : "");
+}
+
+// pid 0, on k_deferred_request(): bring /usb in line with what is
+// plugged in. Cheap when nothing changed.
+void fs_usb_poll(void) {
+
+	bool present = z_usbh_msc_present();
+	uint32_t gen = z_usbh_msc_generation();
+
+	// Pulled, or pulled and another plugged in since the mount: the
+	// mount belongs to a drive that is gone. (Handles opened on it
+	// fail from here on rather than touch whatever is there now.)
+	if (usb_mounted && (!present || gen != usb_gen)) {
+		usb_release();
+		printf(" - usb storage: removed, " Z_DIR_USB " released\n");
+	}
+
+	if (!present) {
+		usb_held = false;	// the drive `usbunmount` meant has gone
+		return;
+	}
+
+	if (!usb_mounted && !usb_held) usb_mount(true);
+
+}
+
+// Mounted AND a drive is plugged in. Between a pull and the poll that
+// releases the mount, /usb already disappears from listings rather than
+// showing as an empty directory.
 bool fs_usb_mounted(void) {
 	return usb_mounted && z_usbh_msc_present();
 }

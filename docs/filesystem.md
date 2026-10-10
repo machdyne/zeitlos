@@ -27,10 +27,21 @@ The card is not the only FatFs volume any more.
 | 2 | `/usb` | USB mass storage, `sw/os/usb/usbh_msc.c` |
 
 `/ram` and `/usb` are prefixes `fs.c` rewrites into volume ids, not
-directories on the card. `/usb` is mounted explicitly with the shell's
-`usbmount` and released with `usbunmount`: mounting blocks while the
-unit reports ready, and USB enumeration runs from an interrupt, so it
-cannot mount on plug. If the mount fails, `usbmount` waits up to about
+directories on the card. **`/usb` mounts itself when a drive is plugged
+in and is released when it is pulled.** The USB driver notices both in
+an interrupt, where mounting cannot happen (it waits for the unit to
+report ready), so it asks for deferred kernel work
+(`k_deferred_request()`, `sw/os/uart.h`): pid 0 runs `fs_usb_poll()`
+while the kernel shell waits for input, waking for it the way it wakes
+for a keystroke. If pid 0 is busy with a command, it happens at the next
+prompt. The slow start-up (TEST UNIT READY, geometry) runs outside the
+filesystem guard, since nothing else can be using a drive that is not
+mounted yet; `f_mount()` itself runs inside it.
+
+The shell's `usbmount` and `usbunmount` remain. `usbunmount` is the safe
+way to pull a stick -- it releases `/usb` and keeps it released until
+that drive is removed, so the next poll does not mount it again --
+and `usbmount` mounts it again. If a mount fails, it waits up to about
 1.5 s for the drive to be present again and tries once more -- behind a
 hub the first attempt occasionally met a drive the hub had just dropped
 and was re-enumerating (docs/usb_host.md, "Known issues").

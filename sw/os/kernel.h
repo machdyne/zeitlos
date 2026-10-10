@@ -299,6 +299,10 @@ extern volatile uint32_t k_no_preempt;
 void k_fs_enter(void);
 void k_fs_leave(void);
 
+// The kernel work k_deferred_request() (uart.h) asked for, run by pid 0
+// while it waits for input.
+void k_deferred_run(void);
+
 // --
 
 /*

@@ -65,6 +65,10 @@ int z_usbh_msc_start(void);
 // Claimed: endpoints known, but the geometry may not be read yet.
 int z_usbh_msc_present(void);
 
+// Changes on every bind and every removal, so a caller that saw a
+// drive can tell whether it is still the same one.
+uint32_t z_usbh_msc_generation(void);
+
 // Started: TEST UNIT READY passed and READ CAPACITY succeeded, so
 // reads and writes are safe. disk_status() reports this.
 int z_usbh_msc_ready(void);

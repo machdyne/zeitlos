@@ -41,6 +41,10 @@
 
 #ifndef Z_USBH_COSIM
 #include "../kernel.h"
+#include "../uart.h"            // k_deferred_request()
+#else
+// The co-simulation has no kernel to hand the mount to.
+#define k_deferred_request() ((void)0)
 #endif
 
 // -- bulk-only transport, USB MSC BBB 3.1/3.2 --
@@ -604,11 +608,17 @@ void z_usbh_msc_unbind(void)
     msc.started = 0;
     msc_gen++;
     printf("usb msc: device removed\n");
+    k_deferred_request();       // release /usb (fs_usb_poll(), fs.c)
 }
 
 int z_usbh_msc_present(void)
 {
     return msc.ready;
+}
+
+uint32_t z_usbh_msc_generation(void)
+{
+    return msc_gen;
 }
 
 int z_usbh_msc_ready(void)
@@ -681,6 +691,10 @@ int z_usbh_msc_bind(uint8_t addr, uint8_t xa_flags, uint8_t port,
 
     printf("usb msc: addr %d ep in %d out %d, mps %d\n",
            msc.addr, msc.ep_in, msc.ep_out, msc.mps);
+
+    // Mount it -- not here: this is the IRQ 9 handler or the ktimer,
+    // and mounting waits for the unit. pid 0 does it (fs_usb_poll()).
+    k_deferred_request();
 
     return 1;
 }

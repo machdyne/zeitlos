@@ -2338,8 +2338,8 @@ void sh_help(void) {
 	printf(" lock              lock the screen (and the console, if set to)\n");
 	printf(" probe             dump logic analyser capture "
 		"(needs -DPROBE)\n");
-	printf(" usbmount          mount usb storage at " Z_DIR_USB "\n");
-	printf(" usbunmount        unmount " Z_DIR_USB "\n");
+	printf(" usbmount          mount usb storage at " Z_DIR_USB " (automatic on insertion)\n");
+	printf(" usbunmount        release " Z_DIR_USB " before pulling the drive\n");
 #ifdef USBH_DEBUG
 	printf(" usbcapok          capture a good low-speed IN + our ACK\n");
 #endif

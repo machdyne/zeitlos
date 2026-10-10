@@ -162,6 +162,14 @@ void k_fs_leave(void) {
 	if (k_no_preempt) k_no_preempt--;
 }
 
+// Deferred kernel work (uart.h, k_deferred_request()). Run by pid 0, in
+// process context, whenever an interrupt has asked for it. Each item
+// works out for itself whether anything changed, so a request that
+// turns out to be stale, or two that arrive together, cost a check.
+void k_deferred_run(void) {
+	fs_usb_poll();		// mount /usb on insertion, release it on removal
+}
+
 // Which syscalls reach FatFs, and therefore must run to completion.
 //
 // PROC_RUN is deliberately not here. It resolves and loads a whole

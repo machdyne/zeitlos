@@ -169,6 +169,9 @@ int fs_close_read(FIL *f);
 // context. sh.c's `usbmount` is the usual caller.
 bool fs_usb_mount(void);
 void fs_usb_unmount(void);
+// Mount /usb on insertion, release it on removal; run by pid 0 when the
+// USB driver asks (k_deferred_request(), uart.h).
+void fs_usb_poll(void);
 bool fs_usb_mounted(void);
 
 // The synthetic roots -- /ram, /usb -- for anything that lists "/".

@@ -19,7 +19,7 @@ Measured on mozart_ml1 (ECP5 45F):
 | Full-speed CDC | enumerates |
 | Full-speed mass storage -- stick and card reader | enumerates, `class=msc` |
 | USB hub (05e3:0608) | keyboard, mouse, stick and CDC device behind it at once (round 19) |
-| `usbmount` then `ls /usb` | lists a real FAT filesystem over USB |
+| plug in, then `ls /usb` (mounted automatically; `usbmount` by hand before) | lists a real FAT filesystem over USB |
 | FatFs file reads over `/usb` | a text file and an 11 KB PNG, intact |
 | FatFs WRITE then read-back over `/usb` | intact |
 | Receive errors | **zero** at both speeds |
@@ -1050,11 +1050,13 @@ A stick pulled mid-write is not a theoretical concern. What happens:
 - `diskio_mux.c` then reports `STA_NOINIT | STA_NODISK` and returns
   `RES_NOTRDY`, so FatFs reports "not ready", and `/usb` disappears
   from directory listings.
-- Plugging a drive back in rebinds it. The mount itself is kept, and
-  FatFs re-reads the medium from scratch on the first access; a dirty
-  sector buffer from the old drive is dropped, never written to the new
-  one. Handles opened on the old drive fail rather than touch the new
-  one. `usbunmount` still clears the mount explicitly.
+- The mount is released by pid 0 shortly after (`fs_usb_poll()`,
+  docs/filesystem.md), and plugging a drive back in rebinds it and
+  mounts it afresh. If a pull and a replug both happen before that poll
+  runs, the generation counter tells it the drive changed, and it
+  releases and remounts. A dirty sector buffer from the old drive is
+  dropped, never written to the new one, and handles opened on the old
+  drive fail rather than touch the new one.
 
 The generation counter is what makes a replug safe: an operation
 records it on entry, and if it has moved the drive it started on is
@@ -2764,8 +2766,8 @@ faults, all fixed:
 
 `usbh_msc.c` implements bulk-only transport and the SCSI commands a
 block device needs, `diskio_mux.c` serves FatFs drive 2, and `/usb`
-mounts from the shell with `usbmount`. On hardware, `ls /usb` lists a
-real FAT filesystem.
+mounts itself when a drive is plugged in (`usbmount` by hand before
+that). On hardware, `ls /usb` lists a real FAT filesystem.
 
 ### The truncation bug (resolved in simulation)
 

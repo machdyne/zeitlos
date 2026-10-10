@@ -426,11 +426,36 @@ void k_uart_putc(char c) {
 
 }
 
+// See uart.h. Set from interrupt context, cleared by the waiter under
+// the same mask it tests the RX ring with, so a request that lands
+// between "nothing to do" and BLOCKED wakes it like a byte would.
+static volatile bool k_deferred_pending;
+
+void k_deferred_request(void) {
+	uint32_t old_mask = maskirq(0xFFFFFFFF);
+	k_deferred_pending = true;
+	if (uart_rx_wait_pid != ~0u) {
+		k_proc_unblock(uart_rx_wait_pid);
+		uart_rx_wait_pid = ~0u;
+	}
+	maskirq(old_mask);
+}
+
 void k_uart_wait_rx(void) {
 
 	for (;;) {
 
 		uint32_t old_mask = maskirq(0xFFFFFFFF);
+
+		// Deferred kernel work first, in this process's context, with
+		// interrupts back on. Before the scheduler is up (reg_kernel
+		// still 0) there is nothing that could have asked for any.
+		if (k_deferred_pending && reg_kernel != 0) {
+			k_deferred_pending = false;
+			maskirq(old_mask);
+			k_deferred_run();
+			continue;
+		}
 
 		if (!uart_rx_fifo_empty()) {
 			maskirq(old_mask);
