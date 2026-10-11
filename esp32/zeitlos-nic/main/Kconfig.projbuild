@@ -1,0 +1,98 @@
+# zeitlos-nic board selection.
+#
+# One source tree, two boards, two chips:
+#
+#   ULX3S     ESP32 (Xtensa, dual core), soldered to the board.
+#             ZNIC on UART1, GPIO16/17. GPIO 2/4/12-15 are the ULX3S
+#             microSD, shared with the FPGA, and must stay inputs.
+#
+#   Kabellos  ESP32-C3-WROOM-02 (RISC-V, single core) on a PMOD.
+#             ZNIC on UART1, GPIO6 (RX, PMOD pin 9) / GPIO7 (TX,
+#             PMOD pin 10). GPIO12-17 are the C3's own SPI flash, so
+#             the ULX3S SD-pin code must NOT run here -- it would
+#             reconfigure the flash pins out from under the CPU.
+#
+# The board follows from the IDF target (`idf.py set-target esp32` or
+# `esp32c3`), so nothing has to be chosen by hand; esp32/nic_build.py
+# does both. See docs/esp32link.md and docs/kabellos.md.
+
+menu "Zeitlos NIC"
+
+choice ZNIC_BOARD
+	prompt "Board"
+	default ZNIC_BOARD_ULX3S if IDF_TARGET_ESP32
+	default ZNIC_BOARD_KABELLOS if IDF_TARGET_ESP32C3
+	help
+		Which hardware this firmware drives. Fixed by the IDF target.
+
+config ZNIC_BOARD_ULX3S
+	bool "ULX3S (on-board ESP32)"
+	depends on IDF_TARGET_ESP32
+
+config ZNIC_BOARD_KABELLOS
+	bool "Kabellos PMOD (ESP32-C3-WROOM-02)"
+	depends on IDF_TARGET_ESP32C3
+
+endchoice
+
+config ZNIC_BOARD_NAME
+	string
+	default "ulx3s" if ZNIC_BOARD_ULX3S
+	default "kabellos" if ZNIC_BOARD_KABELLOS
+
+config ZNIC_UART_TXD
+	int "ZNIC UART TX pin (ESP -> FPGA)"
+	default 17 if ZNIC_BOARD_ULX3S
+	default 7 if ZNIC_BOARD_KABELLOS
+	help
+		ULX3S: GPIO17 -> FPGA N3 (UART1_RX).
+		Kabellos: GPIO7 -> PMOD pin 10 -> FPGA UART1_RX.
+
+config ZNIC_UART_RXD
+	int "ZNIC UART RX pin (FPGA -> ESP)"
+	default 16 if ZNIC_BOARD_ULX3S
+	default 6 if ZNIC_BOARD_KABELLOS
+	help
+		ULX3S: GPIO16 <- FPGA L1 (UART1_TX).
+		Kabellos: GPIO6 <- PMOD pin 9 <- FPGA UART1_TX.
+
+config ZNIC_SD_PINS_HIZ
+	bool
+	default y if ZNIC_BOARD_ULX3S
+	help
+		Park GPIO 2/4/12-15 as inputs at boot: on the ULX3S they are
+		the microSD lines the FPGA also drives. Never set on the C3,
+		where GPIO12-17 are the module's SPI flash.
+
+config ZNIC_TX_POWER
+	int "Maximum WiFi TX power (units of 0.25 dBm)"
+	range 8 84
+	default 78 if ZNIC_BOARD_ULX3S
+	default 60 if ZNIC_BOARD_KABELLOS
+	help
+		Passed to esp_wifi_set_max_tx_power(). 78 = 19.5 dBm, the
+		ULX3S value since 2026-08 (docs/esp32link.md, "Power").
+
+		Kabellos defaults to 60 = 15 dBm: the module draws its peak
+		transmit current from the host board's 3V3 rail through the
+		PMOD connector, and that rail's headroom differs per board.
+		Raise it once the host has been seen to cope (docs/kabellos.md,
+		"Power"). A -DZNIC_TX_POWER=n on the compiler line still wins.
+
+config ZNIC_WS_CHUNK
+	int "Remote desktop WebSocket assembly buffer (bytes, 0 = whole update)"
+	default 0 if ZNIC_BOARD_ULX3S
+	default 8192 if ZNIC_BOARD_KABELLOS
+	help
+		screend sends every pending framebuffer stripe to a viewer as
+		ONE WebSocket message. With 0 the message is assembled in a
+		buffer big enough for all 30 stripes (~40 KiB) and sent as a
+		single frame -- the original behaviour, kept on the ULX3S.
+
+		Non-zero: the same message is sent as WebSocket fragments of
+		at most this many bytes. The browser reassembles fragments
+		before the page sees the message, so the page cannot tell.
+		Saves ~32 KiB of DRAM, which the C3 needs (docs/kabellos.md,
+		"Memory").
+
+endmenu

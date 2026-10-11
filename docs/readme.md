@@ -75,6 +75,7 @@ with [welcome](welcome.md); to program it, [kernel](kernel.md) and
 | [spi](spi.md) | SPI |
 | [sdcard](sdcard.md) | SD card performance |
 | [esp32link](esp32link.md) | ESP32 network link |
+| [kabellos](kabellos.md) | Kabellos ESP32-C3 WiFi PMOD: target, firmware, flashing |
 | [katze](katze.md) | Katze RMII ethernet PMOD |
 
 ## Kernel and OS services

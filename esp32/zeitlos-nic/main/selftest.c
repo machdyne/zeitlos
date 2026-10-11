@@ -1,11 +1,21 @@
 /*
- * UART0 self-test CLI. Speaks ZTEST lines so a host script can drive
+ * Self-test CLI on the console: UART0 on the ULX3S, the C3's USB
+ * Serial/JTAG (Kabellos's micro-USB socket) on Kabellos. Speaks ZTEST
+ * lines so a host script (esp32/nic_selftest.py) can drive
  * scan/STA/ping without Zeitlos or an SD card.
  */
 
 #include "selftest.h"
 #include "gateway.h"
 #include "znic.h"
+#include "sdkconfig.h"
+#include "esp_app_desc.h"
+#include "esp_system.h"
+#include "esp_wifi.h"
+#if CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG
+#include "driver/usb_serial_jtag.h"
+#include "driver/usb_serial_jtag_vfs.h"
+#endif
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
@@ -284,7 +294,25 @@ static void handle_line(char *line)
 		return;
 
 	if (!strcmp(cmd, "help")) {
-		zprint("cmds=scan,sta <ssid> <psk>,ping <host>,ip,test <ssid> <psk>");
+		zprint("cmds=info,scan,sta <ssid> <psk>,ping <host>,ip,test <ssid> <psk>");
+	} else if (!strcmp(cmd, "info")) {
+		/* One line a host tool can parse to prove WHICH image is
+		 * running: esp32/kabellos_flash.py compares elf= against the
+		 * app descriptor of the file it just wrote. A boot banner
+		 * would not do -- on the C3 the USB device re-enumerates on
+		 * reset and everything printed before the host reopens the
+		 * port is gone. */
+		const esp_app_desc_t *d = esp_app_get_description();
+		char elf[17];
+		int8_t txp = 0;
+		esp_app_get_elf_sha256(elf, sizeof(elf));
+		esp_wifi_get_max_tx_power(&txp);
+		zprint("info board=%s chip=%s elf=%s built=%s_%s idf=%s heap=%u min=%u txpower=%d sta_ip=%d",
+			CONFIG_ZNIC_BOARD_NAME, CONFIG_IDF_TARGET, elf,
+			d->date, d->time, d->idf_ver,
+			(unsigned)esp_get_free_heap_size(),
+			(unsigned)esp_get_minimum_free_heap_size(),
+			(int)txp, gateway_sta_got_ip());
 	} else if (!strcmp(cmd, "sta2")) {
 		char *ss = next_tok(&rest);
 		char *pk = rest ? rest : "";
@@ -371,6 +399,18 @@ static void selftest_task(void *arg)
 
 void selftest_start(void)
 {
+#if CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG
+	/* Without the driver, stdin on the USB Serial/JTAG console is a
+	 * polled, non-blocking read: fgets() returns what has arrived so
+	 * far, and a command typed faster than 50 ms per byte is split in
+	 * two. With it, reads block properly. Writes stay safe with no
+	 * host attached: the VFS waits ~50 ms once for a full buffer and
+	 * then drops output until the host drains it, so logging can
+	 * never wedge a task. */
+	usb_serial_jtag_driver_config_t ujc = USB_SERIAL_JTAG_DRIVER_CONFIG_DEFAULT();
+	if (usb_serial_jtag_driver_install(&ujc) == ESP_OK)
+		usb_serial_jtag_vfs_use_driver();
+#endif
 	if (!ping_done)
 		ping_done = xSemaphoreCreateBinary();
 	xTaskCreate(selftest_task, "ztest", 12288, NULL, 4, NULL);

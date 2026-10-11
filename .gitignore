@@ -42,6 +42,8 @@ sw/apps/info/feat_names.h
 
 # ESP-IDF (esp32/zeitlos-nic): build tree and the generated sdkconfig
 esp32/zeitlos-nic/build/
+# Kabellos (ESP32-C3) build: its own directory and sdkconfig, see esp32/nic_build.py
+esp32/zeitlos-nic/build-kabellos/
 esp32/zeitlos-nic/sdkconfig
 esp32/zeitlos-nic/sdkconfig.old
 

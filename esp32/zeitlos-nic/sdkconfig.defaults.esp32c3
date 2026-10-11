@@ -1,0 +1,22 @@
+# Kabellos (ESP32-C3-WROOM-02). ESP-IDF reads this file AFTER
+# sdkconfig.defaults whenever the target is esp32c3, so everything here
+# is either C3-only or overrides a ULX3S choice. The board itself
+# (pins, TX power, WebSocket chunking) follows from the target in
+# main/Kconfig.projbuild. See docs/kabellos.md.
+
+# Console on the C3's USB Serial/JTAG -- the micro-USB socket. UART0's
+# pins (GPIO20/21) go to PMOD pins 4/3 and from there to the FPGA, not
+# to a person. The module's D+/D- are wired to the socket whatever J1
+# says, so this works with Kabellos plugged into a PMOD port.
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+
+# The image is ~1.03 MB on the C3 (RISC-V code is larger than Xtensa
+# here) and does not fit the default 1 MB factory partition. The
+# WROOM-02 has 4 MB of flash; this layout gives the app 1.5 MB.
+CONFIG_PARTITION_TABLE_SINGLE_APP_LARGE=y
+
+# One 160 MHz core runs WiFi, NAPT and the ZNIC link together, where
+# the ULX3S's ESP32 has two at 240. -O2 rather than the IDF's -Og
+# default is the cheapest throughput there is; the larger partition
+# above has the room.
+CONFIG_COMPILER_OPTIMIZATION_PERF=y

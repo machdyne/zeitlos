@@ -51,6 +51,7 @@ import gen                     # noqa: E402
 import layout as layout_mod    # noqa: E402
 import mkfatimg                # noqa: E402
 import mkflashimg              # noqa: E402
+import nicfw                   # noqa: E402
 import notes as notes_mod      # noqa: E402
 import ship as ship_mod        # noqa: E402
 import spec                    # noqa: E402
@@ -395,6 +396,35 @@ def cmd_build(args):
             "listed above is build output."
             % (listing, commit[:12]))
 
+    # -- network module firmware: can it be built? --------------------
+    #
+    # Checked here, before any gateware, because it is the last thing
+    # built and the cheapest thing to be missing: ESP-IDF not installed
+    # should not cost an hour of place-and-route to discover. See
+    # release/lib/nicfw.py.
+    nic_needed = {}
+    nic_idf = None
+    if targets:
+        nic_needed = nicfw.needed(
+            [spec.load_target(ROOT, n) for n in targets])
+    if nic_needed and args.no_nic_firmware:
+        print("\n  WARNING: --no-nic-firmware: %s will ship without %s. "
+              "Their network\n  will not come up on a module still running "
+              "ESP-AT.\n"
+              % (", ".join(sorted(sum(nic_needed.values(), []))),
+                 ", ".join(nicfw.asset_name(b) for b in sorted(nic_needed))))
+        nic_needed = {}
+    if nic_needed and not args.dry_run:
+        nic_idf, err = nicfw.preflight(ROOT, args.idf)
+        if err:
+            die("%s need the network module firmware (%s), and it cannot be "
+                "built:\n\n  %s\n\n  Install ESP-IDF v5.4 (docs/esp32link.md, "
+                "\"Installing ESP-IDF\"), or pass --idf PATH,\n  or "
+                "--no-nic-firmware to ship without it."
+                % (", ".join(sorted(sum(nic_needed.values(), []))),
+                   ", ".join(nicfw.asset_name(b) for b in sorted(nic_needed)),
+                   err))
+
     if not args.dry_run:
         os.makedirs(out, exist_ok=True)
 
@@ -487,6 +517,13 @@ def cmd_build(args):
                      os.path.join(out, "zeitlos-kernel.bin"))
         shutil.copy2(software["zar"],
                      os.path.join(out, "zeitlos-apps.zar"))
+
+    # The network module's own firmware, for the targets that carry the
+    # module on a PMOD (release/lib/nicfw.py). After the gateware, so a
+    # timing failure does not spend a firmware build first; the
+    # preflight above has already made sure it can run.
+    if nic_needed:
+        nicfw.build_into(ROOT, nic_needed, nic_idf, out)
 
     # -- SD cards ------------------------------------------------------
     #
@@ -847,6 +884,13 @@ def main(argv):
                         "seed + 1, + 2, ...)")
     b.add_argument("--keep-generated", action="store_true",
                    help="leave rtl/zspec.vh etc. in place for inspection")
+    b.add_argument("--no-nic-firmware", action="store_true",
+                   help="do not build the network module firmware "
+                        "(zeitlos-nic-kabellos.bin) for Kabellos targets")
+    b.add_argument("--idf", default=None, metavar="PATH",
+                   help="ESP-IDF v5.4 checkout for the network module "
+                        "firmware (default: idf.py on PATH, $IDF_PATH, "
+                        "~/esp/esp-idf)")
     b.add_argument("--dry-run", action="store_true")
     b.set_defaults(func=cmd_build)
 

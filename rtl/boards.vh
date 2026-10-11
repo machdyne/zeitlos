@@ -646,6 +646,19 @@
 // with extra steps.
 //
 // Obst has two connectors; see obst_uart_uart1 there.
+//
+// The one exception is lakritz_kabellos, and it is not a serial port
+// in that sense: a Kabellos WiFi PMOD in port A, with UART1 as its
+// network link -- the ULX3S's `UART1 + `ESP32_LINK, plus
+// `ESP32_PMOD for the module's control pins. The console is the USB-C
+// socket on every Lakritz build now (`USB_CDC), so nothing above
+// applies any more; and CSR FEATURES2 never advertises a UART1 that
+// belongs to the ESP32 link (rtl/csrs.vh). The release spec does all
+// of it, -SPI_ETH included:
+//
+//     ./release/zrelease build <version> --targets lakritz_kabellos
+//
+// docs/kabellos.md.
 
 `elsif BOARD_MOZART_ML0
 

@@ -9,9 +9,14 @@
 #include <stdarg.h>
 #include <string.h>
 
+#include "sdkconfig.h"
+
+/* UART1 on both boards; the pins come from Kconfig.projbuild:
+ *   ULX3S     TX GPIO17 -> FPGA N3,  RX GPIO16 <- FPGA L1
+ *   Kabellos  TX GPIO7  -> PMOD 10,  RX GPIO6  <- PMOD 9   */
 #define ZNIC_UART   UART_NUM_1
-#define ZNIC_TXD    17	/* ESP32 TX -> FPGA UART1_RX (N3) */
-#define ZNIC_RXD    16	/* ESP32 RX <- FPGA UART1_TX (L1) */
+#define ZNIC_TXD    CONFIG_ZNIC_UART_TXD
+#define ZNIC_RXD    CONFIG_ZNIC_UART_RXD
 #define ZNIC_BAUD   3000000
 #define ZNIC_BUF    4096
 #define ZNIC_LOG_MAX 180

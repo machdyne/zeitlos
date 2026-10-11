@@ -232,10 +232,11 @@ localparam CSR_FEATURES =
 `ifdef GPU_COMPOSITE_PAL
 	(32'h1 << 29) |
 `endif
-// ULX3S ESP32 network link (rtl/esp32_rxfifo.v + UART1 + the ESP32
+// ESP32 network link -- ULX3S, or a Kabellos PMOD with `ESP32_PMOD
+// (rtl/esp32_rxfifo.v + UART1 + the ESP32
 // control register). Same rule as the blocks above: net checks this
 // before touching any of those registers, and the highest free bit is
-// used deliberately -- this is a one-board peripheral, so it stays out
+// used deliberately -- this is a board-specific peripheral, so it stays out
 // of the way of anything universal that comes later.
 `ifdef ESP32_LINK
 	(32'h1 << 30) |

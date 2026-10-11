@@ -26,7 +26,7 @@ Zeitlos is the successor to [Zucker](https://github.com/machdyne/zucker).
 | Video | VGA, DVI, DVI over HDMI, [composite](docs/composite.md) NTSC and PAL |
 | Audio | 8 channel 16-bit [hardware mixer](docs/audio.md) with stereo output |
 | Storage | MicroSD |
-| Network | Ethernet (SPI/USB), Ethernet MAC (for RMII PHY) or [ESP32](docs/esp32link.md) |
+| Network | Ethernet (SPI/USB), Ethernet MAC (for RMII PHY) or [ESP32](docs/esp32link.md) (ULX3S on-board, or the [Kabellos](docs/kabellos.md) WiFi PMOD) |
 | Entropy | Ring-oscillator [TRNG](docs/trng.md) |
 | Crypto | Optional [Montgomery multiplier](docs/montmul.md) with register file (ECDSA for TLS, X25519/Ed25519 for SSH and zfed), [SHA-256](docs/sha256_hw.md) and [Keccak](docs/keccak_hw.md) (ML-KEM) blocks |
 | USB Host | [Dual-port USB host controller](docs/usb_host.md) (HID, MSC, CDC-ACM, [CDC-ECM](docs/usb_ethernet.md), hubs) |

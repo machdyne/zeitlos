@@ -38,6 +38,7 @@ helpfully rebuilding something nobody has looked at.
 ```
 release/dist/0.0.3/
   zeitlos-lakritz_gpio.img          gateware + kernel + core apps
+  zeitlos-lakritz_kabellos.img
   zeitlos-lakritz_katze.img
   zeitlos-lakritz_langkatze.img
   zeitlos-mozart_ml1.img
@@ -48,6 +49,10 @@ release/dist/0.0.3/
                                     identical for every target
   zeitlos-<target>-apps.zar         only for a board that sets
                                     CORE_APPS_OMIT (none currently)
+  zeitlos-nic-kabellos.bin          firmware for the Kabellos PMOD's
+                                    ESP32-C3, when a Kabellos target
+                                    is built (see "Network module
+                                    firmware")
   zeitlos.img.gz                    sdcard image: apps, docs, zdocs
   zeitlos-arklite.img.gz            ...plus Ark Lite for `ask`
   zeitlos-arkmedium.img.gz          ...plus Ark Medium (~1.5GB and up)
@@ -539,6 +544,38 @@ flashing tool ever wants a literal 2MB.
 
 ---
 
+## Network module firmware
+
+A Kabellos target is half of a network link. The other half is
+zeitlos-nic running on the PMOD's ESP32-C3, and the module ships with
+Espressif's ESP-AT firmware instead, which Zeitlos does not speak. So
+when any target being built has `ESP32_PMOD`, `build` also builds that
+firmware and puts it in `dist/` as **`zeitlos-nic-kabellos.bin`**: a
+merged image for offset 0x0. Someone with the release writes it with
+
+```
+$ python3 esp32/kabellos_flash.py --image zeitlos-nic-kabellos.bin
+```
+
+which needs only `pip install esptool`, and checks afterwards that the
+chip runs that image ([kabellos.md](kabellos.md), "Flashing").
+
+**This needs ESP-IDF v5.4** -- from an exported IDF shell, `$IDF_PATH`,
+`~/esp/esp-idf`, or `--idf PATH`; installing it is in
+[esp32link.md](esp32link.md), "Installing ESP-IDF". It is checked **before** any gateware
+is built, so a missing IDF costs seconds rather than an hour of
+place-and-route. `--no-nic-firmware` builds the release without it and
+says which targets that leaves without their firmware.
+
+It is always a **clean** build, from the tree's defaults.
+`esp32/zeitlos-nic/build-kabellos/sdkconfig` is where `idf.py
+menuconfig` leaves a developer's local changes -- a raised TX power, say
+-- and a release has to be the tree, not somebody's experiment. The
+build itself is `esp32/nic_build.py`, the same script a developer runs
+(`release/lib/nicfw.py` calls it); the ULX3S's on-board ESP32 is not
+built here, because flashing it needs the board in hand
+(`esp32/flash.py`) and its release has always covered the FPGA only.
+
 ## Flashing the parts separately
 
 The `.img` is the pieces already assembled, written at offset 0.
@@ -1003,7 +1040,7 @@ Both clean up after themselves. `git status` is unchanged afterwards.
 
 ## Changes outside `release/`
 
-Five, all small and all commented in place:
+Eight, all small and all commented in place:
 
 | File | Change |
 | --- | --- |
@@ -1014,6 +1051,7 @@ Five, all small and all commented in place:
 | `sw/apps/Makefile` | rewritten around one `APPS` list — it named `ping` and `pong`, which no longer exist, so `make apps` failed at the third line |
 | `sw/common/zversion.h` | new; `Z_OS_VERSION` moved out of `zeitlos.h`, which now includes it |
 | `tools/mkfatimg.sh` | header pointing at the no-root path |
+| `esp32/nic_build.py` | new -- builds zeitlos-nic per board; `release/lib/nicfw.py` imports it for the Kabellos firmware asset |
 
 `zversion.h` is still hand-maintained and still carries no build date or
 git hash, for the reason its own header gives: both would change the
@@ -1029,7 +1067,9 @@ value in a checked-out tree is always the value that was built.
 `yosys`, `nextpnr-ecp5`, `ecppack`, `ecpbram`, a RISC-V toolchain (see
 `docs/toolchain.md`), `dosfstools` and `mtools` for the sdcard image,
 `gh` for publishing, and optionally `iverilog` for the preprocessor
-equivalence check.
+equivalence check. ESP-IDF v5.4 for a release with a Kabellos target
+(or `--no-nic-firmware`); see "Network module firmware", and
+[esp32link.md](esp32link.md), "Installing ESP-IDF".
 
 ```
 $ sudo apt install dosfstools mtools iverilog

@@ -7,7 +7,8 @@ going back the other way. There is nothing to install.
 Two ways, and only one of them at a time.
 
 **Over the ESP32 link.** On a bitstream built with the
-[ESP32 link](esp32link.md) (the ULX3S targets, including `ulx3s_85f`),
+[ESP32 link](esp32link.md) (the ULX3S targets, including `ulx3s_85f`,
+and `lakritz_kabellos` -- [kabellos.md](kabellos.md)),
 `net` scans the framebuffer and the ESP32 serves the page. Nothing
 has to be started. That path is the one through "screend", below.
 

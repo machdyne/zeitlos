@@ -183,6 +183,26 @@ that does not want colour can swap the defines back in
 it had still listed as `USB_HID`; `zrelease check` is clean for every
 Lakritz target.
 
+## Lakritz with Kabellos
+
+`lakritz_kabellos` puts the ESP32 link ([esp32link.md](esp32link.md))
+on Lakritz through a [Kabellos](kabellos.md) WiFi PMOD: `UART1`,
+`ESP32_LINK` and `ESP32_PMOD` in place of `SPI_ETH`, with the 8 KiB
+receive FIFO (`ESP32_RXFIFO_BITS=13`). Yosys 0.69 and nextpnr-ecp5
+0.11.1 (YoWASP), default seed, one run each, both through the release
+build's own generated `zspec.vh` and `.lpf`:
+
+| target | COMB | FF | DP16KD | `CLK_48` | pixel | bitstream |
+|---|---|---|---|---:|---:|---:|
+| `lakritz_langkatze` | 22,395 / 24,288 (92%) | 9,911 | 39 / 56 | 55.37 MHz | 49.84 MHz | 515,750 B |
+| `lakritz_kabellos` | 22,727 / 24,288 (**93%**) | 10,032 | 43 / 56 | 53.03 MHz | 49.06 MHz | 531,910 B |
+
+About 330 LUT4 and four DP16KD over the Langkatze build. If it has to
+shrink, UART1 is a full 16550 used only to transmit (receive is
+`rtl/esp32_rxfifo.v`); a TX-only UART in its place is the obvious
+saving, and `ESP32_RXFIFO_BITS=12` gives two block RAMs back at the
+cost of burst headroom, as `ulx3s_12f` does at 11.
+
 ## ULX3S 85k with the caches and the MPU
 
 The tables above are at 616e152. The ULX3S 85k was measured again with

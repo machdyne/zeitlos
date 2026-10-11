@@ -30,7 +30,7 @@ binary serves every board:
 |---|---|---|
 | `enc28j60.c` | SPI ethernet chip (Langkatze PMOD: Lakritz, Obst, Schoko) | 6656-byte ring, on the chip |
 | `rmii_eth.c` | `rtl/ethmac_rmii.v` (Mozart, Sergei, Klinge, [Katze](katze.md)) | 4 frame slots |
-| `esp32link.c` | `rtl/esp32_rxfifo.v` | 2048-byte FIFO |
+| `esp32link.c` | `rtl/esp32_rxfifo.v`: the ULX3S's ESP32, or an ESP32-C3 on a [Kabellos](kabellos.md) PMOD | 2048-byte FIFO |
 | `usb_ecm.c` | a USB ethernet adapter (CDC-ECM), on any board with the USB host controller | the adapter's own, which nothing reports |
 
 A MAC in the bitstream wins; the USB adapter is what a board with none
@@ -308,7 +308,9 @@ interrupt still cuts any of it short. A backend without the hook keeps
 A third backend exists for the ULX3S, which has neither an SPI
 Ethernet PMOD nor an RMII PHY: its onboard ESP32 acts as the network
 interface over UART1 (`esp32link.c`, selected by the same runtime
-probe). See [esp32link.md](esp32link.md).
+probe). See [esp32link.md](esp32link.md). The same backend serves a
+[Kabellos](kabellos.md) WiFi PMOD (`lakritz_kabellos`): an ESP32-C3
+running the same firmware, on PMOD pins instead of board pins.
 
 ## Raw TCP sockets
 

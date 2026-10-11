@@ -1,5 +1,7 @@
 /*
- * Zeitlos -- UART PHY to the onboard ESP32 (ULX3S).
+ * Zeitlos -- UART PHY to an ESP32: the ULX3S's onboard one, or the
+ * ESP32-C3 on a Kabellos PMOD (docs/kabellos.md). Same protocol, same
+ * registers; nothing here knows which.
  *
  * Third NIC backend (NET_PHY=ESP32LINK). Speaks ZNIC over UART1;
  * 802.11 stays on the ESP32. See docs/esp32link.md and znic.h.

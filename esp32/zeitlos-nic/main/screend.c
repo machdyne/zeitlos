@@ -1,4 +1,5 @@
 #include "screend.h"
+#include "sdkconfig.h"
 
 #include <string.h>
 #include "freertos/FreeRTOS.h"
@@ -316,12 +317,122 @@ static int client_send(int slot, int fd, uint32_t gen, httpd_ws_frame_t *f)
 	return err == ESP_OK;
 }
 
+/* The relay's assembly buffer. One WebSocket message carries every
+ * pending stripe as [idx:u8, len:u16le, data...] records.
+ *
+ * ZNIC_WS_CHUNK == 0 (ULX3S): the buffer holds all 30 stripes and the
+ * message goes out as a single frame -- the original behaviour.
+ *
+ * ZNIC_WS_CHUNK > 0 (Kabellos): the buffer holds that many bytes and
+ * the SAME message goes out as WebSocket fragments (RFC 6455 5.4). The
+ * browser joins fragments before onmessage fires, so web/index.html
+ * sees byte-for-byte what it would have seen unfragmented. A record is
+ * never split across fragments (not required by the protocol; it just
+ * keeps the copy loop simple), which is why a chunk must hold at least
+ * one worst-case stripe. Saves ~32 KiB of .bss on the C3. */
+#if CONFIG_ZNIC_WS_CHUNK
+#define RELAY_BUF CONFIG_ZNIC_WS_CHUNK
+_Static_assert(CONFIG_ZNIC_WS_CHUNK >= 3 + STRIPE_MAX,
+	"ZNIC_WS_CHUNK must hold one worst-case stripe record");
+#else
+#define RELAY_BUF (STRIPES * (3 + STRIPE_MAX))
+#endif
+
+#if CONFIG_ZNIC_WS_CHUNK
+/* Send one viewer every stripe in `pend`, as one fragmented message.
+ *
+ * Stripes are copied under `lock` exactly as in the unfragmented path,
+ * so each stripe is still a consistent snapshot; `lock` is dropped
+ * while a fragment is on the wire so udp_task is never held up behind
+ * a slow viewer for longer than one stripe copy. A stripe that changes
+ * after it was copied is marked dirty again by udp_task and goes out
+ * next round, which is also what happens in the single-frame path.
+ *
+ * pending is cleared only once the whole message is out. A send that
+ * fails (viewer gone, slot reused) abandons the message: client_send
+ * has already dropped the viewer, and a half-sent fragmented message
+ * on a closed socket is no message at all. */
+static void relay_fragmented(int c, int fd, uint32_t gen, uint32_t pend,
+	uint8_t *out)
+{
+	int o = 0, frags = 0;
+	uint32_t sent = 0;
+	httpd_ws_frame_t f;
+
+	xSemaphoreTake(lock, portMAX_DELAY);
+	for (int idx = 0; idx < STRIPES; idx++) {
+		int ml;
+
+		if (!(pend & (1u << idx)))
+			continue;
+		ml = shadow_len[idx];
+		if (ml == 0) {
+			sent |= 1u << idx;
+			continue;
+		}
+		if (o + 3 + ml > RELAY_BUF) {
+			/* buffer full: this fragment goes, more follow */
+			xSemaphoreGive(lock);
+			memset(&f, 0, sizeof(f));
+			f.type = frags ? HTTPD_WS_TYPE_CONTINUE : HTTPD_WS_TYPE_BINARY;
+			f.fragmented = true;
+			f.final = false;
+			f.payload = out;
+			f.len = o;
+			if (!client_send(c, fd, gen, &f))
+				return;
+			frags++;
+			o = 0;
+			xSemaphoreTake(lock, portMAX_DELAY);
+			ml = shadow_len[idx];	/* may have changed while unlocked */
+			if (ml == 0) {
+				sent |= 1u << idx;
+				continue;
+			}
+		}
+		out[o++] = (uint8_t)idx;
+		out[o++] = (uint8_t)(ml & 0xff);
+		out[o++] = (uint8_t)(ml >> 8);
+		memcpy(out + o, shadow + idx * STRIPE_MAX, ml);
+		o += ml;
+		sent |= 1u << idx;
+	}
+	xSemaphoreGive(lock);
+
+	if (!frags && !o) {
+		/* nothing but empty stripes: as in the single-frame path */
+		xSemaphoreTake(send_mu, portMAX_DELAY);
+		if (clients[c].fd == fd && clients[c].gen == gen)
+			clients[c].pending &= ~sent;
+		xSemaphoreGive(send_mu);
+		return;
+	}
+	memset(&f, 0, sizeof(f));
+	if (frags) {
+		/* last fragment; may be empty, which RFC 6455 allows */
+		f.type = HTTPD_WS_TYPE_CONTINUE;
+		f.fragmented = true;
+	} else {
+		f.type = HTTPD_WS_TYPE_BINARY;	/* it all fitted: one frame */
+	}
+	f.final = true;
+	f.payload = out;
+	f.len = o;
+	if (!client_send(c, fd, gen, &f))
+		return;
+	xSemaphoreTake(send_mu, portMAX_DELAY);
+	if (clients[c].fd == fd && clients[c].gen == gen)
+		clients[c].pending &= ~sent;
+	xSemaphoreGive(send_mu);
+}
+#endif
+
 static void relay_task(void *arg)
 {
 	(void)arg;
 	/* one WS frame carries every pending stripe: [idx:u8, len:u16le,
 	 * data...] repeated. 30 small frames become one. */
-	static uint8_t out[STRIPES * (3 + STRIPE_MAX)];
+	static uint8_t out[RELAY_BUF];
 	for (;;) {
 		/* wake the instant a stripe lands; 33ms backstop covers the
 		 * forced full pass and anything missed */
@@ -363,8 +474,8 @@ static void relay_task(void *arg)
 				clients[i].pending |= newly;
 		xSemaphoreGive(send_mu);
 		for (int c = 0; c < MAX_CLIENTS; c++) {
-			int fd, o = 0;
-			uint32_t gen, pend, sent = 0;
+			int fd;
+			uint32_t gen, pend;
 
 			xSemaphoreTake(send_mu, portMAX_DELAY);
 			fd = clients[c].fd;
@@ -373,6 +484,13 @@ static void relay_task(void *arg)
 			xSemaphoreGive(send_mu);
 			if (fd < 0 || !pend)
 				continue;
+#if CONFIG_ZNIC_WS_CHUNK
+			relay_fragmented(c, fd, gen, pend, out);
+		}
+#else
+			int o = 0;
+			uint32_t sent = 0;
+
 			xSemaphoreTake(lock, portMAX_DELAY);
 			for (int idx = 0; idx < STRIPES; idx++) {
 				int ml;
@@ -408,6 +526,7 @@ static void relay_task(void *arg)
 			};
 			client_send(c, fd, gen, &f);
 		}
+#endif
 	}
 }
 

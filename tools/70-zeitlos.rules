@@ -30,3 +30,21 @@ SUBSYSTEM=="tty", ATTRS{idVendor}=="16d0", ATTRS{idProduct}=="116d", \
 # applies both.
 SUBSYSTEM=="usb", ATTRS{idVendor}=="16d0", ATTRS{idProduct}=="116d", \
     MODE="0660", GROUP="plugdev"
+
+# Kabellos WiFi PMOD (docs/kabellos.md): the ESP32-C3's built-in USB
+# Serial/JTAG, on the module's micro-USB socket. 303a:1001 is
+# Espressif's ID for that controller, so this matches any C3/S3/C6
+# board's native USB port, not only Kabellos -- which is harmless for
+# what the rule does.
+#
+# ID_MM_DEVICE_IGNORE matters even more here than for the console
+# above. On this controller DTR and RTS are not modem lines but the
+# chip's reset and boot-mode inputs, so ModemManager's probe can reset
+# the C3 straight into its ROM bootloader, where it sits until the next
+# reset and Zeitlos's network never comes up.
+#
+# /dev/kabellos is a convenience for `kabellos_flash.py --port` and
+# serial terminals; the scripts find the device by USB ID on their own.
+SUBSYSTEM=="tty", ATTRS{idVendor}=="303a", ATTRS{idProduct}=="1001", \
+    ENV{ID_MM_DEVICE_IGNORE}="1", MODE="0660", GROUP="dialout", \
+    SYMLINK+="kabellos"

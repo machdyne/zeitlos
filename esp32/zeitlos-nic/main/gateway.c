@@ -7,6 +7,7 @@
  */
 
 #include "gateway.h"
+#include "sdkconfig.h"
 #include "esp_event.h"
 #include "esp_log.h"
 #include "esp_mac.h"
@@ -259,7 +260,7 @@ static void wifi_radio_on(void)
 	 * (they were stack overflows, not power); ZNIC_TX_POWER raises it
 	 * to see whether the rail really copes. */
 #ifndef ZNIC_TX_POWER
-#define ZNIC_TX_POWER 78
+#define ZNIC_TX_POWER CONFIG_ZNIC_TX_POWER	/* Kconfig.projbuild, per board */
 #endif
 	esp_wifi_set_max_tx_power(ZNIC_TX_POWER);
 	int8_t got = 0;

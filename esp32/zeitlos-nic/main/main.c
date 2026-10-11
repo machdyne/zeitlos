@@ -1,8 +1,14 @@
 /*
- * zeitlos-nic -- ESP32 firmware for ULX3S.
+ * zeitlos-nic -- network firmware for the ESP32 on a ULX3S and the
+ * ESP32-C3 on a Kabellos PMOD (Kconfig.projbuild picks the board from
+ * the IDF target).
  *
- * UART1 (GPIO16/17) speaks ZNIC with Zeitlos. UART0 is log / esptool.
- * Never init SDMMC or GPIO 2/4/12-15.
+ * UART1 speaks ZNIC with Zeitlos: GPIO16/17 on the ULX3S, GPIO6/7
+ * (PMOD pins 9/10) on Kabellos. The console is UART0 on the ULX3S and
+ * the C3's USB Serial/JTAG (the micro-USB socket) on Kabellos.
+ *
+ * ULX3S: never init SDMMC or GPIO 2/4/12-15 except to park them.
+ * C3: GPIO12-17 are the module's SPI flash -- never touch them.
  */
 
 #include "znic.h"
@@ -13,6 +19,8 @@
 #include "esp_log.h"
 #include "esp_mac.h"
 #include "esp_system.h"
+#include "esp_heap_caps.h"
+#include "sdkconfig.h"
 #include "driver/gpio.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -116,10 +124,15 @@ static void znic_task(void *arg)
 			last_stat = xTaskGetTickCount();
 			uint32_t fz, tz, dz;
 			gateway_stats(&fz, &tz, &dz);
-			ESP_LOGI(TAG, "stat up=%lus polls=%lu fromZ=%lu toZ=%lu drop=%lu ctlq=%u ip=%d",
+			/* heap/min: free now and the low-water mark since boot --
+			 * the C3 has ~120 KB less SRAM than the ESP32,
+			 * so this is the number to watch there (docs/kabellos.md) */
+			ESP_LOGI(TAG, "stat up=%lus polls=%lu fromZ=%lu toZ=%lu drop=%lu ctlq=%u ip=%d heap=%u min=%u",
 				(unsigned long)(xTaskGetTickCount() / configTICK_RATE_HZ),
 				(unsigned long)polls, (unsigned long)fz, (unsigned long)tz,
-				(unsigned long)dz, znic_ctl_depth(), gateway_sta_got_ip());
+				(unsigned long)dz, znic_ctl_depth(), gateway_sta_got_ip(),
+				(unsigned)esp_get_free_heap_size(),
+				(unsigned)esp_get_minimum_free_heap_size());
 		}
 		if (r <= 0)
 			continue;
@@ -129,7 +142,13 @@ static void znic_task(void *arg)
 			polls++;
 			if (!quiet) {
 				quiet = 1;
+#if !CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG
+				/* UART0 at 115200 is too slow to log to while
+				 * the link is busy; Zeitlos gets every line as
+				 * ZNIC_LOG anyway. Kabellos's console is USB,
+				 * which is not, so it keeps logging there too. */
 				znic_set_quiet_uart0(1);
+#endif
 			}
 			/* znic v3: the poll may carry a credit -- how many frames
 			 * the FPGA's receive FIFO can take right now. With >= 2,
@@ -219,8 +238,13 @@ static void znic_task(void *arg)
 	}
 }
 
+#if CONFIG_ZNIC_SD_PINS_HIZ
 /* ULX3S microSD is on ESP32 GPIO 2/4/12-15. Keep them as inputs so
- * the card stays usable after wifi_en goes high. */
+ * the card stays usable after wifi_en goes high.
+ *
+ * ULX3S ONLY. On the ESP32-C3 GPIO12-17 are the module's SPI flash:
+ * reconfiguring them would take the flash away from a CPU that is
+ * executing from it. Kconfig.projbuild only sets this for the ULX3S. */
 static void sd_pins_hiz(void)
 {
 	const int pins[] = { 2, 4, 12, 13, 14, 15 };
@@ -235,11 +259,17 @@ static void sd_pins_hiz(void)
 		gpio_config(&io);
 	}
 }
+#endif
 
 void app_main(void)
 {
+#if CONFIG_ZNIC_SD_PINS_HIZ
 	sd_pins_hiz();
-	ESP_LOGI(TAG, "zeitlos-nic starting (UART1 1Mbaud GPIO16/17)");
+#endif
+	ESP_LOGI(TAG, "zeitlos-nic starting: board=%s chip=%s UART1 3 Mbaud tx=GPIO%d rx=GPIO%d heap=%u",
+		CONFIG_ZNIC_BOARD_NAME, CONFIG_IDF_TARGET,
+		CONFIG_ZNIC_UART_TXD, CONFIG_ZNIC_UART_RXD,
+		(unsigned)esp_get_free_heap_size());
 	znic_init();
 	znic_ctl_init();
 	queue_hello();		/* first thing Zeitlos's first RX_POLL gets */

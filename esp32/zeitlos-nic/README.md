@@ -1,9 +1,16 @@
-# zeitlos-nic -- ESP32 firmware for the ULX3S network link
+# zeitlos-nic -- network firmware for the ESP32 link
 
-ESP-IDF (v5.4, plain C) firmware for the ESP32 on the ULX3S. It turns
-the module into the board's network interface for Zeitlos: UART1
-(GPIO16/17, 3 Mbaud) carries ZNIC frames to the FPGA, 802.11 and the
-IP gateway live here. See `docs/esp32link.md` in the repository root.
+ESP-IDF (v5.4, plain C) firmware for two boards from one source tree:
+
+| board | chip | ZNIC (UART1, 3 Mbaud) | console | docs |
+|---|---|---|---|---|
+| ULX3S | ESP32, on the board | GPIO16/17 | UART0, via a passthru bitstream | `docs/esp32link.md` |
+| Kabellos PMOD | ESP32-C3-WROOM-02 | GPIO6/7 (PMOD 9/10) | USB Serial/JTAG (micro-USB) | `docs/kabellos.md` |
+
+It turns the module into the board's network interface for Zeitlos:
+UART1 carries ZNIC frames to the FPGA, 802.11 and the IP gateway live
+here. The board follows from the IDF target (`main/Kconfig.projbuild`);
+see `docs/esp32link.md` in the repository root.
 
 What it does:
 
@@ -19,12 +26,26 @@ What it does:
   page, and a WebSocket relay for the framebuffer stripes `net` sends
   it and the keyboard and mouse the browser sends back. See
   `docs/remote_desktop.md`.
-- The SD card pins shared with the FPGA (GPIO 2/4/12-15) are left as
-  inputs.
-- `ZTEST` CLI on UART0 (115200) for bring-up without Zeitlos
-  (`esp32/nic_selftest.py`).
+- ULX3S only: the SD card pins shared with the FPGA (GPIO 2/4/12-15)
+  are left as inputs. (Never on the C3, where GPIO12-17 are its flash.)
+- `ZTEST` CLI on the console -- UART0 (115200) on the ULX3S, USB on
+  Kabellos -- for bring-up without Zeitlos (`esp32/nic_selftest.py`).
+  `info` reports board, chip, the running image's ELF hash and free
+  heap.
 
 ## Building
+
+Needs ESP-IDF v5.4: `docs/esp32link.md`, "Installing ESP-IDF", has the
+whole procedure (in short: clone `v5.4` to `~/esp/esp-idf`, run
+`./install.sh esp32,esp32c3`).
+
+```
+python3 esp32/nic_build.py              # both boards
+python3 esp32/nic_build.py ulx3s        # or one
+python3 esp32/nic_build.py kabellos
+```
+
+or, for the ULX3S, as it always was:
 
 ```
 cd esp32/zeitlos-nic
@@ -32,10 +53,30 @@ idf.py set-target esp32
 idf.py build
 ```
 
+The ULX3S builds into `build/` with the project's `sdkconfig`; Kabellos
+into `build-kabellos/` with `build-kabellos/sdkconfig`, so the two never
+overwrite each other (`nic_build.py`'s header says why). Each build also
+writes a merged image for offset 0: `build/zeitlos-nic-ulx3s.bin`,
+`build-kabellos/zeitlos-nic-kabellos.bin`. Kabellos-only settings live in
+`sdkconfig.defaults.esp32c3`.
+
 The viewer page (`web/index.html`) is embedded in the image, so editing
 it means rebuilding and reflashing the firmware.
 
-## Flashing
+## Flashing Kabellos
+
+Over the module's own USB, with it still in the PMOD port and the
+Zeitlos desktop up (the FPGA holds the C3 in reset until `net` starts):
+
+```
+python3 esp32/kabellos_flash.py --build
+python3 esp32/kabellos_flash.py --image zeitlos-nic-kabellos.bin   # a release image
+```
+
+`docs/kabellos.md`, "Flashing", is the reference. Everything below is
+the ULX3S.
+
+## Flashing the ULX3S
 
 **This is not an ordinary ESP32 flash**, and the order matters: get one
 step wrong and you are left with a board that looks dead. Four things
@@ -150,6 +191,9 @@ python3 esp32/nic_selftest.py --flash --ssid MyAP --psk secret
 `test <ssid> <psk>` runs scan, association, DHCP and a ping to
 8.8.8.8; `inject gw|ping|dns`, `poll` and `sta2` exercise the gateway.
 Reload the Zeitlos bitstream afterwards.
+
+`--board kabellos` runs the same test over the C3's USB console, with no
+passthru and no reset.
 
 Notes: `sdkconfig.defaults` sets the event task stack (4096), the
 tcpip task stack (8192), core locking and NAPT; keep them. The

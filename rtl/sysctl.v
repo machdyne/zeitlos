@@ -310,6 +310,28 @@ module sysctl #()
 	input UART1_RX,
 `endif
 
+	// An ESP32 on a PMOD (Kabellos: release/hw/pmods/kabellos.spec)
+	// rather than soldered to the board. The link itself is the same
+	// UART1 + rtl/esp32_rxfifo.v + control register as the ULX3S's;
+	// what differs is only where the module's control pins are
+	// declared. On the ULX3S they are board pins (the `ifdef
+	// BOARD_ULX3S block below); here a PMOD brings them, so they are
+	// declared here and named the same, and the one block that drives
+	// them (WISHBONE SLAVE: ESP32 EN / GPIO0) serves both.
+	//
+	//   wifi_en      PMOD 1  ESP EN, 0 = held in reset
+	//   wifi_gpio0   PMOD 2  boot strap (GPIO9 on the C3), 1 = run
+	//   ESP32_U0RX   PMOD 4  the module's UART0 RX, parked at mark.
+	//                        Unconstrained, the ECP5's weak pull-down
+	//                        would hold it in a permanent break.
+`ifdef ESP32_LINK
+`ifdef ESP32_PMOD
+	output wifi_en,
+	output wifi_gpio0,
+	output ESP32_U0RX,
+`endif
+`endif
+
 `ifdef LED_DEBUG
 	output [7:0] DBG,
 `endif
@@ -3001,7 +3023,8 @@ module sysctl #()
 	);
 `endif
 
-	// WISHBONE SLAVE: UART1 (ESP32 data plane on ULX3S GPIO16/17)
+	// WISHBONE SLAVE: UART1 (ESP32 data plane: ULX3S GPIO16/17, or
+	// Kabellos PMOD pins 9/10 -- the C3's GPIO6/7)
 `ifdef UART1
 	wire wbs_uart1_int;
 	wire wbm_cyc_uart1 = cs_uart1 && wbm_cyc;
@@ -3027,11 +3050,24 @@ module sysctl #()
 
 	// ESP32 EN / GPIO0 -- software-controlled reset. Default held in
 	// reset (en=0) so the module does not fight the SD bus at boot.
+	//
+	// The same block drives a PMOD ESP32 (`ESP32_PMOD, Kabellos), where
+	// "GPIO0" is the C3's GPIO9 boot strap -- same meaning, 1 = boot
+	// from flash -- and there is no SD bus to fight. It is held in
+	// reset until `net` starts anyway, so the module only ever runs
+	// when something is there to talk to it (docs/kabellos.md).
 `ifdef ESP32_LINK
 	reg wifi_en_r;
 	reg wifi_gpio0_r;
 	assign wifi_en = wifi_en_r;
 	assign wifi_gpio0 = wifi_gpio0_r;
+`ifdef ESP32_PMOD
+	// Kabellos PMOD pin 4 = the C3's UART0 RX (U0RXD). Nothing in this
+	// gateware talks to the module's UART0; this only keeps the line
+	// at idle so the ROM and the firmware see a quiet serial port
+	// rather than the break the ECP5's pull-down would produce.
+	assign ESP32_U0RX = 1'b1;
+`endif
 
 	reg [31:0] esp32ctl_dat;
 	reg esp32ctl_ack;

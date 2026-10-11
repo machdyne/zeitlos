@@ -333,6 +333,16 @@ make BOARD=lakritz CABLE=dirtyJtag flash
 You will probably need udev rules to avoid running it as root; see
 openFPGALoader's own documentation.
 
+### ESP32 network firmware (only for the ESP32 link)
+
+The ULX3S's on-board ESP32 and the [Kabellos](kabellos.md) WiFi PMOD
+run firmware of their own, `esp32/zeitlos-nic`, built with Espressif's
+ESP-IDF **v5.4**. It is a separate toolchain from everything above (its
+own Xtensa and RISC-V compilers, in `~/.espressif`), and you need it only
+to build that firmware: flashing a release's prebuilt image needs just
+`pip install esptool pyserial`. Installation:
+[esp32link.md](esp32link.md), "Installing ESP-IDF".
+
 ---
 
 ## 4. Simulation and debugging (optional)
