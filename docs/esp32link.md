@@ -18,7 +18,9 @@ SPI or RMII underneath.
 
 Tested on a ULX3S 85F v3.0.8 (2026-08): association, DNS through the
 gateway, TFTP in both directions (256 KiB into the SD card), HTTPS
-downloads via the gateway's TFTP server.
+downloads via the gateway's TFTP server. On Kabellos (Lakritz, 2026-10):
+in-place flashing, association, DNS and NTP through the gateway
+([kabellos.md](kabellos.md), "Status").
 
 ## Hardware
 
@@ -128,6 +130,12 @@ association takes seconds and `wm` has to keep running).
    gw=192.168.4.1
    dns=8.8.8.8
    ```
+   **`dhcp=0` and the static lines are required, not an example.**
+   Nothing on the inside network answers DHCP; with `dhcp=1`, `net`
+   falls back to its compiled-in LAN default (192.168.178.230), which is
+   on the wrong side of the gateway, and every ARP goes unanswered. See
+   "Addresses" below. `dns=` may be your router (it then resolves LAN
+   names too) or any public resolver.
 3. `net` releases EN, gets `HELLO`, sends `STA`, and reports
    `esp32link: LINK up rssi=...` when the ESP32 has an address. The
    ESP32's own log lines appear on the console as `esp32: ...`, and a
@@ -153,6 +161,93 @@ The last form makes the ESP32 fetch the URL (HTTP or HTTPS, redirects
 followed) and stream it as the TFTP file; the local name must be 8.3.
 The TFTP client waits ~20 s for the first block to cover the TLS
 handshake.
+
+## Addresses
+
+The ESP32 is a router, not a bridge. Its inside interface (the UART,
+`znic`) is 192.168.4.1/24, fixed in `gateway.c`; its outside interface
+is a WiFi station with whatever address the access point hands it.
+Zeitlos lives on the inside network, at 192.168.4.2 with 192.168.4.1
+as gateway, whatever network the WiFi is on. A WiFi station can only
+transmit with its own MAC, so putting Zeitlos on the WiFi directly
+(bridging) is not an option; NAPT is the standard way round it. The one
+WiFi this cannot work with is one that is itself 192.168.4.0/24.
+
+Those addresses currently have to be written into `net.cfg` by hand
+(above). Two ways to make them automatic were considered after the first
+Kabellos test; **neither is implemented**:
+
+1. **`net` knows the link's addresses.** When the PHY is the ESP32 link
+   and `net.cfg` names no `ip=`, use 192.168.4.2/24 via 192.168.4.1
+   and skip DHCP (and its seconds of retries); ignore `dhcp=1` with a
+   console note. For DNS, the ESP32 appends the DNS server it got from
+   the access point to the `LINK` message, and `net` uses it unless
+   `net.cfg` sets `dns=`. Older firmware sends the short `LINK`, read as
+   "no DNS reported". A few dozen lines in `net`, about ten in the
+   firmware; fixes both boards. The smaller of the two.
+2. **A DHCP server on the inside interface.** ESP-IDF's lwIP DHCP server
+   is already linked into this firmware (`CONFIG_LWIP_DHCPS`) and binds
+   to one netif (`udp_bind_netif`), so it would never answer the WiFi
+   side. The lease would name 192.168.4.1 as DNS, and the ESP32 would
+   relay port 53 to its upstream server -- needed because the lease is
+   handed out at boot, seconds before the ESP32 has associated and
+   learned that server. More moving parts (a relay table, timeouts),
+   and with exactly one client on a fixed network, DHCP only ever hands
+   out the same addresses.
+
+## Known issues
+
+Both are in the shared firmware, so they apply to the ULX3S and to
+Kabellos. Seen on the first Kabellos test.
+
+### WiFi housekeeping floods the Zeitlos console
+
+With some access points the ESP32's WiFi driver logs block-ack session
+churn every few seconds:
+
+```
+esp32: I (31615) wifi: <ba-add>idx:0 (ifx:0, 0c:ef:15:41:45:7e), tid:0, ...
+esp32: I (32224) wifi: [ADDBA]RX DELBA, reason:39, delete tid:0, initiator:1...
+esp32: I (32225) wifi: <ba-del>idx:0, tid:0
+```
+
+Every log line the firmware produces is forwarded to Zeitlos as
+`ZNIC_LOG` and printed on the console, so these land in the middle of
+whatever is being typed, and each takes a slot in the replies to
+`net`'s polls that a data frame could have had. They are
+harmless: an aggregation session opened by the access point and closed
+again after a timeout (reason 39).
+
+**Fix:** once associated, lower the WiFi driver's tag to warnings
+(`esp_log_level_set("wifi", ESP_LOG_WARN)` in `gateway.c`'s
+`IP_EVENT_STA_GOT_IP` handler, `on_ip()`), so the connection messages before it are kept and the
+steady-state chatter goes. Alternatively filter `<ba-add>` / `<ba-del>`
+/ `DELBA` lines in `znic_log_vprintf()`, which would keep them on the
+module's own console. A couple of lines either way.
+
+### TFTP against a server on the LAN fails
+
+`tget <LAN address> <file> ...` times out on every retry. A TFTP server
+answers from a fresh port, not port 69, and the NAPT -- which created
+its mapping for port 69 -- drops the reply. Outbound TCP and ordinary
+UDP request/reply (DNS, NTP) are unaffected.
+
+**Today:** fetch through the gateway's TFTP server, which forwards
+URLs: serve the file over HTTP on the LAN machine (`python3 -m
+http.server 8000`) and
+
+```
+tget 192.168.4.1 http://192.168.178.102:8000/wm /ram/wm
+```
+
+**Fix:** let `tftpd.c` forward `tftp://` names the way it forwards
+`http://` ones -- `tget 192.168.4.1 tftp://192.168.178.102/wm /ram/wm`.
+The ESP32 then talks TFTP to the LAN server itself, from its outside
+address with no translation in between, and streams the file to Zeitlos
+through the machinery the HTTP path already uses. The general fix
+would be a TFTP helper in the NAPT itself, but esp-lwip's NAPT
+(`ip4_napt.c`) has no protocol helpers at all, so that would mean
+patching the IDF.
 
 ## The remote desktop
 

@@ -21,6 +21,26 @@ spec, so other boards with a PMOD port are a few lines each (see
 | firmware | `esp32/zeitlos-nic`, built for the C3: `zeitlos-nic-kabellos.bin` |
 | flashing | over the module's micro-USB, **in the PMOD socket**: `esp32/kabellos_flash.py` |
 
+## Status
+
+**Tested on hardware, 2026-10-11:** a Lakritz running `lakritz_kabellos`
+with a Kabellos in port A.
+
+- **Flashing in place** with `kabellos_flash.py`: esptool reset the C3
+  into its bootloader over USB while the FPGA held the BOOT pin high,
+  wrote the image, and `info` confirmed the running image afterwards.
+  (The first run reported a false hash mismatch -- ESP-IDF truncates
+  the ELF hash to 9 digits -- fixed since.)
+- **The link:** `HELLO`, `STA`, association (RSSI -48 dBm at 15 dBm TX
+  power), `LINK up`, NAPT enabled.
+- **Traffic through the gateway:** ARP of 192.168.4.1, DNS to 8.8.8.8,
+  and an NTP sync with a 54 ms round trip -- Zeitlos to the internet
+  and back over the PMOD.
+
+Not measured yet: throughput, memory under load, the remote desktop,
+power under sustained transmit. Two known issues are listed under
+"Known issues" at the end.
+
 ## What you need
 
 - A **Kabellos V2** (ESP32-C3-WROOM-02). V1 used the ESP32-C3-MINI-1;
@@ -33,8 +53,9 @@ spec, so other boards with a PMOD port are a few lines each (see
 - The module running **zeitlos-nic**, not the ESP-AT firmware it ships
   with. ESP-AT speaks AT commands on the same pins; Zeitlos speaks ZNIC
   and will see nothing it understands ("Flashing" below).
-- WiFi credentials in `/data/net/net.cfg` on the sdcard -- the same file
-  and format as the ULX3S ([esp32link.md](esp32link.md), "Bring-up").
+- A `/data/net/net.cfg` on the sdcard with WiFi credentials **and the
+  fixed static addresses** below ("Addresses"). `dhcp=1` does not work
+  on this link.
 - A micro-USB **data** cable, for flashing and for the module's console.
 
 ## Pinout
@@ -84,6 +105,60 @@ The board is a compile-time choice that follows from the IDF target
 *is* building for Kabellos. Target-specific settings are in
 `sdkconfig.defaults.esp32c3`, which ESP-IDF reads after the common
 `sdkconfig.defaults`.
+
+## Addresses
+
+The C3 is not a bridge that puts Zeitlos on your WiFi; it is a small
+router. It has two interfaces: an **inside** one, the serial link to
+Zeitlos, on the fixed network 192.168.4.0/24 with the C3 at
+192.168.4.1; and an **outside** one, its WiFi connection, which gets an
+ordinary address from your router. Zeitlos's traffic leaves with the
+C3's WiFi address in place of its own (NAPT), the way a home router
+hides a PC behind one public address.
+
+```
+ Zeitlos (FPGA)              Kabellos (ESP32-C3)                 your WiFi
+                       inside              outside
+ 192.168.4.2  --UART--  192.168.4.1  [NAPT]  192.168.178.156  ---  router 192.168.178.1
+```
+
+(The outside address is whatever your router hands out; these are the
+ones from the first hardware test.) It is built this way because a WiFi
+station can only transmit with its own MAC address, so the C3 cannot
+make Zeitlos appear as a second device on the WiFi.
+
+So Zeitlos's addresses are always the same, whatever your WiFi uses:
+
+```
+ssid=MyAP
+psk=secret
+dhcp=0
+ip=192.168.4.2
+mask=255.255.255.0
+gw=192.168.4.1
+dns=192.168.178.1
+```
+
+- **`dhcp=0` is required.** Nothing on the inside network answers DHCP.
+  With `dhcp=1` (or no `dhcp=` and no `ip=`), `net` gives up after a
+  few seconds and falls back to its compiled-in LAN default,
+  192.168.178.230 -- an address on the wrong side of the C3, so every
+  ARP goes unanswered (`net: tftp send op=1 FAILED (arp not resolved
+  yet?)`).
+- **`dns=`**: your router, to resolve local names as well as internet
+  ones (with 8.8.8.8, a LAN name such as `loom` fails with nxdomain), or
+  any public resolver. Queries go out through the NAPT.
+- The only WiFi that would not work is one that is itself
+  192.168.4.0/24: the two sides would overlap.
+
+What follows from the NAPT, on any ESP32-link board: Zeitlos reaches
+out to anything, but nothing on the LAN can open a connection *to*
+Zeitlos -- except the remote desktop, which the C3 serves itself at its
+outside address. And TFTP against a server on the LAN fails even
+outbound (see "Known issues").
+
+Making `dhcp=1` work, or making these addresses automatic, is possible
+-- see "Known issues" -- but not done.
 
 ## Building the firmware
 
@@ -255,22 +330,34 @@ radio has started.
    `kabellos_flash.py --info` says `board=kabellos`.
 2. **J1 open**, module in Lakritz PMOD port A, component side as the
    PMOD connector dictates (pin 1 to pin 1).
-3. **Card.** `/data/net/net.cfg` with `ssid=` and `psk=` (up to four
-   networks, tried in order -- [esp32link.md](esp32link.md)).
-4. **Boot `lakritz_kabellos`.** On the console (Lakritz USB-C), in this
-   order:
+3. **Card.** `/data/net/net.cfg` with `ssid=`, `psk=` (up to four
+   networks, tried in order -- [esp32link.md](esp32link.md)) and the
+   static addresses from "Addresses" above, `dhcp=0` included.
+4. **Boot `lakritz_kabellos`.** On the console (Lakritz USB-C), from the
+   first hardware test, abridged:
    ```
    esp32link: ESP32 released, HELLO/STA in main loop
-   esp32link: HELLO fw=2 rst=1 mac 02:..
+   esp32link: HELLO fw=2 rst=1 mac 7e:df:a1:bf:2a:24
    esp32link: STA sent, 1 network(s) (try 1)
    esp32link: STA_ACK status 0
-   esp32: I (2410) gw: tx power set 60 -> 60 (x0.25 dBm)
-   esp32link: LINK up rssi=-52 ip=192.168.1.37
+   esp32: I (337) nic: trying network 1/1 'WLANGATE'
+   esp32: I (575) gw: tx power set 60 -> 60 (x0.25 dBm)
+   esp32: I (3479) gw: scan 5 APs (of 5), ssid='WLANGATE' found=1
+   esp32: I (6017) wifi: security: WPA2-PSK, phy: bgn, rssi: -48
+   esp32: I (7045) gw: STA got IP 192.168.178.156
+   esp32: I (7082) gw: NAPT on znic (inside) -> STA 192.168.178.156: ok
+   esp32link: LINK up rssi=-48 ip=192.168.178.156
+   net: dns: pool.ntp.org -> 129.70.132.37
+   net: ntp: Sun 2026-10-11 13:19:54 UTC (rtt 54 ms, ...)
    ```
-   `ip` is the module's address on your LAN, and where the remote
-   desktop is served: `http://<that address>/`.
-5. **Traffic.** `tget 192.168.4.1 big.bin big.bin` (256 KiB from the
-   gateway's own TFTP server), then a page in `web`.
+   `ip` is the module's address on your WiFi, and where the remote
+   desktop is served: `http://<that address>/`. On the very first boot
+   after flashing, `phy_init` warns that it found no RF calibration data
+   and saves new data; that is expected once.
+5. **Traffic.** The NTP sync above already proves the path. Then
+   `tget 192.168.4.1 big.bin big.bin` (256 KiB from the gateway's own
+   TFTP server, the cleanest measure of the link), and a page in `web`.
+   Not `tget <a LAN address> ...` -- see "Known issues".
 6. **Watch the module.** With the micro-USB cable in, the C3's own log
    keeps running on its console even while Zeitlos uses the link (on
    the ULX3S it goes quiet, because UART0 at 115200 cannot keep up; USB
@@ -328,6 +415,10 @@ Static DRAM left for the heap, as built:
 
 The `heap` and `min` fields of `info` and of the minute `stat` line
 are the run-time answer, which nothing measured off the board can give.
+The first hardware reading, right after boot and before the radio had
+started, was **64,576 bytes free** (`min` 64,444). Association, WiFi's
+dynamic buffers and TCP take a share of that; the figure under load has
+not been read yet.
 **If `min` drops below roughly 20 KiB under load, report it**: WiFi
 allocates its buffers dynamically, and the C3 is where that will show
 first.
@@ -371,6 +462,30 @@ logs carry the same set of warnings. It is still a 93% design on a
 25F: re-check `make timing` after anything that grows the SOC, and if
 it ever stops placing, UART1 (a full 16550 used only to transmit) is
 the first place to look.
+
+## Known issues
+
+Both are properties of the shared firmware, so they apply to the ULX3S
+as well; [esp32link.md](esp32link.md), "Known issues", has the details.
+In short:
+
+1. **WiFi housekeeping floods the Zeitlos console.** Lines such as
+   `wifi: <ba-add>...` and `[ADDBA]RX DELBA, reason:39` arrive every few
+   seconds with some access points and land in the middle of whatever is
+   being typed. Harmless. Fix: lower the WiFi driver's log level to
+   warnings once associated.
+2. **TFTP against a server on the LAN fails.** `tget 192.168.178.102 wm`
+   times out: the server answers from a new port, and the NAPT drops
+   it. Today: serve the file over HTTP and fetch it through the C3
+   (`tget 192.168.4.1 http://192.168.178.102:8000/wm /ram/wm`). Fix:
+   let the C3's TFTP server forward `tftp://` names as it already
+   forwards `http://` ones.
+
+Separately, the addressing above has to be configured by hand, and the
+symptom when it is not -- ARP failures after a silent DHCP fallback --
+does not point at the cause. Two ways to make it automatic are
+described under "Addresses" in [esp32link.md](esp32link.md); neither is
+implemented.
 
 ## Later
 
