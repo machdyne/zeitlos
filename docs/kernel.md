@@ -893,6 +893,8 @@ Beyond the subsystem documents listed at the top:
 - `docs/console.md` -- the console log ring every console byte is
   recorded in (`k_uart_putc()`, `kprint()`), and the two syscalls that
   let `sw/apps/console` show it in a term window
+- `docs/rescue_console.md` -- the kernel shell on the monitor and the
+  USB keyboard, with no wm: ESC held at boot, or wm missing or crashed
 - `docs/mpu.md` -- crash reports (`k_fault()`), the kernel panic, and
   the memory protection unit the kernel programs at boot and on every
   context switch

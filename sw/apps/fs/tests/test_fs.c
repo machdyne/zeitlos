@@ -45,6 +45,9 @@ static bool grant_allowed = true;
 static bool grant_open_now;
 static uint32_t grant_opens, grant_misuse;
 static uint32_t reqs;			// requests sent to fs
+#ifdef ZFSC_KERNEL
+volatile uint32_t z_pid;		// zfsc.c buffers writes for pid 0 only
+#endif
 static uint32_t ticks;
 
 static bool have_reply;
@@ -874,6 +877,57 @@ static void test_restart(void) {
 	CHECK(fs_unlink("/ram/keep.txt") == 1);
 }
 
+// zfsc.c's write-behind: small writes to one file go as one request.
+static void test_writeback(void) {
+	static uint8_t blk[1468], back[1468 * 20];
+	z_fs_info_t fi;
+	int32_t fd = zfs_open("/wb.bin", Z_O_WRONLY | Z_O_CREAT | Z_O_TRUNC);
+	CHECK(fd >= 0);
+	uint32_t r0 = reqs;
+	for (int i = 0; i < 20; i++) {
+		for (int k = 0; k < 1468; k++) blk[k] = (uint8_t)(i * 31 + k);
+		CHECK(zfs_write(fd, blk, sizeof blk) == (int32_t)sizeof blk);
+	}
+	uint32_t sent = reqs - r0;
+	// 29,360 bytes: the first write direct, the rest in ~8KB requests.
+	CHECK(sent >= 3 && sent <= 6);
+	CHECK(zfs_fstat(fd, &fi) == 0 && fi.size == 20 * 1468);	// flushed first
+	CHECK(zfs_write(fd, "tail", 4) == 4);
+	CHECK(zfs_close(fd) == 0);				// sends "tail"
+	CHECK(zfs_stat("/wb.bin", &fi) == 0 && fi.size == 20 * 1468 + 4);
+	fd = zfs_open("/wb.bin", Z_O_RDONLY);
+	CHECK(zfs_read(fd, back, sizeof back) == (int32_t)sizeof back);
+	bool same = true;
+	for (int i = 0; i < 20 && same; i++)
+		for (int k = 0; k < 1468; k++)
+			if (back[i * 1468 + k] != (uint8_t)(i * 31 + k)) { same = false; break; }
+	CHECK(same);
+	CHECK(zfs_close(fd) == 0);
+
+	// Read your own writes. (Through a second descriptor FatFs shows
+	// them only after an fsync or close, buffered here or not.)
+	fd = zfs_open("/wb2.txt", Z_O_RDWR | Z_O_CREAT | Z_O_TRUNC);
+	CHECK(zfs_write(fd, "ab", 2) == 2);			// direct
+	CHECK(zfs_write(fd, "cd", 2) == 2);			// buffered
+	CHECK(zfs_fstat(fd, &fi) == 0 && fi.size == 4);	// sent before the fstat
+	CHECK(zfs_write(fd, "ef", 2) == 2);
+	CHECK(zfs_lseek(fd, 0, Z_SEEK_SET) == 0);		// sent before the seek
+	char b[8] = {0};
+	CHECK(zfs_read(fd, b, sizeof b) == 6 && !memcmp(b, "abcdef", 6));
+	CHECK(zfs_write(fd, "gh", 2) == 2);
+	CHECK(zfs_fsync(fd) == 0);
+	int32_t fd2 = zfs_open("/wb2.txt", Z_O_RDONLY);
+	CHECK(zfs_read(fd2, b, sizeof b) == 8 && !memcmp(b, "abcdefgh", 8));
+	CHECK(zfs_close(fd2) == 0 && zfs_close(fd) == 0);
+
+	// The first write to a descriptor is never buffered: errors at once.
+	fd = zfs_open("/wb2.txt", Z_O_RDONLY);
+	CHECK(zfs_write(fd, "x", 1) == -Z_EACCES);
+	CHECK(zfs_write(fd, "x", 1) == -Z_EACCES);
+	CHECK(zfs_close(fd) == 0);
+	CHECK(zfs_unlink("/wb.bin") == 0 && zfs_unlink("/wb2.txt") == 0);
+}
+
 int main(void) {
 	card = calloc(CARD_SECTORS, 512);
 	ram = calloc(RAM_SECTORS, 512);
@@ -893,6 +947,7 @@ int main(void) {
 	test_stale();
 	test_slots();
 	test_restart();
+	test_writeback();
 	CHECK(grant_misuse == 0 && !grant_open_now);
 	printf("test_fs: %d checks, %d failed\n", checks, fails);
 	return fails != 0;

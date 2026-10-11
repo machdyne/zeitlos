@@ -966,6 +966,17 @@ length, and `test_usb_msc` keeps its 4-sector read and write checks,
 which now test that a 4-sector *call* is correct through single-sector
 commands.
 
+**NAK pacing (network round 4).** A stick NAKs while it fetches a
+sector from its flash. `bulk_xfer` used to let the engine retry only 3
+times, then spin ~1.2ms (`pace()`) and give up after a count of such
+spins, so a sector met a millisecond of dead time per NAK round. Now
+the engine absorbs up to 15 NAKs itself (`MSC_NAK_BUDGET`), the spin
+between rounds is short (`MSC_NAK_PACE`, ~50us), and the limit is time:
+3 seconds without a packet moving (`MSC_NAK_TICKS`), however many
+rounds that takes. Control stages keep the old pacing. Measure with
+`usbbench` before and after: the per-sector time should drop toward
+the wire's ~0.4ms on a stick that NAKs.
+
 Full speed is 12 Mbps raw. With 64-byte bulk packets and one CPU
 interrupt per packet, a 48 MHz PicoRV32 manages perhaps **150–300 KB/s**.
 

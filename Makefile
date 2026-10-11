@@ -888,8 +888,8 @@ ZAR_APPS = $(filter-out $(CORE_APPS_OMIT),$(CORE_APPS))
 #
 # A budget is raised by taking from another, from the reserve, or by
 # making something smaller. Every core app must have one.
-CORE_BUDGETS = fs=45K/75K usb=48K/56K wm=107K/135K net=144K/276K term=91K/152K \
-	console=14K/16K cron=26K/48K text=86K/162K files=70K/104K repl=194K/304K
+CORE_BUDGETS = fs=45K/75K usb=48K/56K wm=107K/135K net=144K/278K term=91K/152K \
+	console=14K/14K cron=26K/48K text=86K/162K files=70K/104K repl=194K/304K
 CORE_RESERVE = 21K
 # The archive's region (Z_FLASH_ZAR_END - Z_FLASH_ZAR_OFF): mkzar.py
 # refuses an archive bigger than this, whatever the budgets say, so it

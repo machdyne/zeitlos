@@ -204,7 +204,13 @@ static bool held_valid;
 // receiver takes one (ack_deferred), so the server never sends into a
 // full queue. With one slot, every block's round trip waited for the
 // receiver's write as well as the network's.
-#define GQ_SLOTS 2
+//
+// A block handed to the receiver is lent, not copied: the stream chunk
+// points at its slot (zstream_send_chunk_ref()), and the slot stays the
+// receiver's until its next pull says it is done with it (gq_lent). So
+// three slots: one lent, two to fill. A copy and a malloc per block
+// fewer (docs/net_throughput.md, round 4).
+#define GQ_SLOTS 3
 // Word-aligned, as the block in the received frame is (eth.c): the
 // copy in and out then runs a word at a time. TFTP_MAX_BLOCK is a
 // multiple of 4, so every slot is.
@@ -212,7 +218,9 @@ static uint8_t gq_data[GQ_SLOTS][TFTP_MAX_BLOCK] __attribute__((aligned(4)));
 _Static_assert(TFTP_MAX_BLOCK % 4 == 0, "each queue slot word-aligned");
 static uint16_t gq_len[GQ_SLOTS];
 static uint32_t gq_at[GQ_SLOTS];	// cycles when stored
-static uint8_t gq_head, gq_n;
+static uint8_t gq_head, gq_n;	// gq_n counts the lent one too
+static bool gq_lent;		// the head slot is the receiver's, until its next pull
+static z_blob_t gq_blob[GQ_SLOTS];	// what a lent chunk points at
 static bool ack_deferred;	// the newest block is stored, its ACK not sent
 static bool got_last;		// the short block is stored (and ACKed or deferred)
 
@@ -338,26 +346,27 @@ static void fail(const char *msg) {
 // once the short block has been taken.
 static void try_deliver_get(void) {
 
-	if (!gq_n || !pull_pending) return;
+	if (gq_lent || !gq_n || !pull_pending) return;
 
 	uint8_t i = gq_head;
-	zstream_send_chunk(&out_stream, gq_data[i], gq_len[i]);	// copied
+	gq_blob[i].len = gq_len[i];
+	gq_blob[i].data = gq_data[i];
+	zstream_send_chunk_ref(&out_stream, &gq_blob[i]);	// lent, not copied
 	st_note(gq_at[i], &st_recv_n, &st_recv_sum, &st_recv_max);
 	buf_len += gq_len[i];
 	pull_pending = false;
-	gq_head = (uint8_t)((gq_head + 1) % GQ_SLOTS);
-	gq_n--;
+	gq_lent = true;
 
 	// The ACK after the chunk, not before: the last message sent is
 	// who runs when this process sleeps (the kernel's hand-off), and
 	// the ACK has to get to `usb` and out; the receiver's write can
 	// wait its turn and overlaps the next block's trip.
-	if (ack_deferred) {
+	if (ack_deferred && gq_n < GQ_SLOTS) {
 		ack_deferred = false;
 		send_ack(block);
 	}
 
-	if (got_last && !gq_n) {
+	if (got_last && gq_n == 1) {
 		// the short (or empty) block, delivered: end of file, RFC 1350
 		state = T_DONE_OK;
 		udp_close(local_port);
@@ -565,6 +574,7 @@ bool tftp_get_start(uint32_t server_ip, const char *filename,
 	pull_pending = false;
 	held_valid = false;
 	gq_head = gq_n = 0;
+	gq_lent = false;
 	ack_deferred = got_last = false;
 	blksize = TFTP_BLOCK_SIZE;
 	asked_options = true;
@@ -697,8 +707,19 @@ bool tftp_handle_stream_msg(z_msg_t *msg) {
 			if (state != T_GET) return false;
 			zstream_event_t ev = zstream_producer_handle(&out_stream, msg);
 			if (ev == ZSTREAM_EVENT_PULL) {
+				// The receiver is done with the block lent to it.
+				if (gq_lent) {
+					gq_lent = false;
+					gq_head = (uint8_t)((gq_head + 1) % GQ_SLOTS);
+					gq_n--;
+				}
 				pull_pending = true;
 				try_deliver_get();
+				// A slot freed with nothing to deliver: a deferred ACK.
+				if (ack_deferred && gq_n < GQ_SLOTS) {
+					ack_deferred = false;
+					send_ack(block);
+				}
 			} else if (ev == ZSTREAM_EVENT_ABORT) {
 				fail("receiver aborted");
 			}

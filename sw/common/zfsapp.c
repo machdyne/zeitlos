@@ -16,6 +16,57 @@
 #include "zfsapp.h"
 #include "zfsc.h"
 
+// -- write-behind: small writes collected in this process --
+//
+// A write through the kernel (Z_SYS_FS_WRITE_CHUNK) is a request to
+// `fs`, ~1-2ms whatever it carries. Small writes to one handle are
+// collected here, up to ZFSAPP_WBUF bytes, in this app's own memory, and
+// sent as one when the buffer fills, before any other call in this file
+// (so the app sees its own writes), at close or sync, and at exit.
+// Only a handle whose last write went through directly and succeeded,
+// so a write to a read-only or bad handle still fails at once; a later
+// failure is returned by the next write, close or sync of that handle.
+// The buffer is malloc'd on first use (none: no buffering). The same
+// as zfsc.c's for apps that talk to fs directly (docs/net_throughput.md,
+// round 4).
+#ifndef ZFSAPP_WBUF
+#define ZFSAPP_WBUF	8192
+#endif
+static int sys_write_chunk(int handle, const void *buf, int len);
+
+#if ZFSAPP_WBUF > 0
+static uint8_t *awb;
+static bool awb_tried, awb_flushing;
+static int awb_len;
+static int awb_handle = -1;		// whose bytes are in it
+static int awb_ok = -1;			// last written directly, successfully
+static int awb_err = -1;		// a flush for this handle failed
+
+static void awb_flush(void) {
+	if (!awb_len || awb_flushing) return;
+	awb_flushing = true;
+	if (sys_write_chunk(awb_handle, awb, awb_len) != awb_len) {
+		awb_err = awb_handle;
+		awb_ok = -1;
+	}
+	awb_len = 0;
+	awb_flushing = false;
+}
+
+static void awb_atexit(void) { awb_flush(); }
+
+static bool awb_take_err(int handle) {
+	if (awb_err != handle) return false;
+	awb_err = -1;
+	return true;
+}
+
+#else
+// -DZFSAPP_WBUF=0 (cron): no buffering, and no malloc pulled in for it.
+#define awb_flush()		((void)0)
+#define awb_take_err(h)	(false)
+#endif
+
 // -- the filesystem driver (docs/fs_driver.md) --
 //
 // Every file is `fs`'s (sw/apps/fs). The calls below reach it one of
@@ -143,6 +194,7 @@ static int drv_list(const char *path, char *buf, uint32_t cap,
 #endif
 
 int fs_size(char *filename) {
+	awb_flush();
 	if (drv_path(filename)) {
 		z_fs_info_t fi;
 		return (zfs_stat(filename, &fi) == 0) ? (int)fi.size : 0;
@@ -163,6 +215,7 @@ int fs_size(char *filename) {
 }
 
 char *fs_mallocfile(char *filename) {
+	awb_flush();
 	if (drv_path(filename)) {
 		char *out = NULL;
 		int sz;
@@ -224,6 +277,7 @@ char *fs_mallocfile(char *filename) {
 }
 
 int fs_read_file(char *filename, char *buf, int maxlen) {
+	awb_flush();
 	if (drv_path(filename)) {
 		int sz;
 		if (!buf || maxlen < 0) return -1;
@@ -253,6 +307,7 @@ int fs_read_file(char *filename, char *buf, int maxlen) {
 }
 
 int fs_write_file(char *filename, char *buf, int len) {
+	awb_flush();
 	if (drv_path(filename)) {
 		if (len < 0) return 0;
 		int32_t fd = zfs_open(filename, Z_O_WRONLY | Z_O_CREAT | Z_O_TRUNC);
@@ -279,6 +334,7 @@ int fs_write_file(char *filename, char *buf, int len) {
 }
 
 int fs_unlink(char *filename) {
+	awb_flush();
 	if (drv_path(filename)) return zfs_unlink(filename) == 0;
 
 	if (!filename) return 0;
@@ -305,6 +361,7 @@ int fs_unlink(char *filename) {
 #define FS_LIST_BUF_SIZE 4096
 
 char **fs_list(const char *path, uint32_t max_entries, uint32_t *count) {
+	awb_flush();
 	if (drv_path(path)) {
 		uint32_t n = 0;
 		char *buf = malloc(FS_LIST_BUF_SIZE_DRV);
@@ -398,6 +455,7 @@ char **fs_list(const char *path, uint32_t max_entries, uint32_t *count) {
 int fs_list_into(const char *path, char *buf, uint32_t buf_cap,
 	uint8_t *types, uint32_t max_entries, uint32_t *count,
 	uint32_t *truncated) {
+	awb_flush();
 	if (drv_path(path)) {
 		if (count) *count = 0;
 		if (truncated) *truncated = 0;
@@ -434,6 +492,7 @@ int fs_list_into(const char *path, char *buf, uint32_t buf_cap,
 }
 
 int fs_open_write(const char *filename) {
+	awb_flush();
 	if (drv_path(filename))
 		return drv_open(filename, Z_O_WRONLY | Z_O_CREAT | Z_O_TRUNC);
 
@@ -452,6 +511,7 @@ int fs_open_write(const char *filename) {
 }
 
 int fs_open_read(const char *filename) {
+	awb_flush();
 	if (drv_path(filename)) return drv_open(filename, Z_O_RDONLY);
 
 	if (!filename) return -1;
@@ -469,6 +529,7 @@ int fs_open_read(const char *filename) {
 }
 
 int fs_read_chunk(int handle, void *buf, int maxlen) {
+	awb_flush();
 	if (drv_handle(handle)) {
 		if (!buf || maxlen <= 0) return -1;
 		int32_t n = zfs_read(handle - FS_DRV_HANDLE, buf, (uint32_t)maxlen);
@@ -499,7 +560,37 @@ int fs_write_chunk(int handle, const void *buf, int len) {
 	}
 
 	if (handle < 0 || (!buf && len > 0) || len < 0) return -1;
+#if ZFSAPP_WBUF > 0
+	if (awb_handle != handle) awb_flush();
+	if (awb_take_err(handle)) return -1;
+	if (len > 0 && len < ZFSAPP_WBUF && handle == awb_ok) {
+		if (!awb_tried) {
+			awb_tried = true;
+			awb = malloc(ZFSAPP_WBUF);
+			if (awb) atexit(awb_atexit);
+		}
+		if (awb) {
+			if (awb_len + len > ZFSAPP_WBUF) {
+				awb_flush();
+				if (awb_take_err(handle)) return -1;
+			}
+			awb_handle = handle;
+			memcpy(awb + awb_len, buf, (size_t)len);
+			awb_len += len;
+			if (awb_len == ZFSAPP_WBUF) awb_flush();
+			return len;
+		}
+	}
+	awb_flush();
+	int n = sys_write_chunk(handle, buf, len);
+	if (n == len) awb_ok = handle;
+	return n;
+#else
+	return sys_write_chunk(handle, buf, len);
+#endif
+}
 
+static int sys_write_chunk(int handle, const void *buf, int len) {
 	z_fs_write_chunk_args_t args;
 	args.handle = handle;
 	args.buf = (void *)buf;
@@ -518,6 +609,18 @@ int fs_close_handle(int handle) {
 	if (drv_handle(handle)) return zfs_close(handle - FS_DRV_HANDLE) == 0;
 
 	if (handle < 0) return 0;
+	awb_flush();
+	bool failed = awb_take_err(handle);
+#if ZFSAPP_WBUF > 0
+	if (awb_ok == handle) awb_ok = -1;
+#endif
+	if (failed) {
+		z_fs_close_args_t ca;
+		ca.handle = handle;
+		z_kernel_ptr_t zk = (z_kernel_ptr_t)(uintptr_t)(reg_kernel);
+		zk(Z_SYS_FS_CLOSE, (uint32_t *)&ca, 0);
+		return 0;
+	}
 
 	z_fs_close_args_t args;
 	args.handle = handle;
@@ -539,6 +642,7 @@ int fs_close_handle(int handle) {
 // translation happens here rather than being left to every caller.
 
 int fs_mkdir(const char *path) {
+	awb_flush();
 	if (drv_path(path)) return zfs_mkdir(path) == 0;
 
 	if (!path) return 0;
@@ -554,6 +658,7 @@ int fs_mkdir(const char *path) {
 }
 
 int fs_touch(const char *path) {
+	awb_flush();
 	if (drv_path(path)) {
 		int32_t fd = zfs_open(path, Z_O_WRONLY | Z_O_CREAT);
 		if (fd < 0) return 0;
@@ -573,6 +678,7 @@ int fs_touch(const char *path) {
 }
 
 int fs_seek(int handle, uint32_t offset) {
+	awb_flush();
 	if (drv_handle(handle)) {
 		if (offset > 0x7fffffffu) return 0;
 		return zfs_lseek(handle - FS_DRV_HANDLE, (int32_t)offset, Z_SEEK_SET) >= 0;
@@ -607,6 +713,7 @@ int fs_seek(int handle, uint32_t offset) {
 // sw/apps/hex's open path, which does exactly that).
 
 int fs_open_rw(const char *filename) {
+	awb_flush();
 	if (drv_path(filename)) return drv_open(filename, Z_O_RDWR);
 
 	if (!filename) return -1;
@@ -627,6 +734,8 @@ int fs_sync(int handle) {
 	if (drv_handle(handle)) return zfs_fsync(handle - FS_DRV_HANDLE) == 0;
 
 	if (handle < 0) return 0;
+	awb_flush();
+	if (awb_take_err(handle)) return 0;
 
 	z_fs_close_args_t args;
 	args.handle = (int32_t)handle;
@@ -639,6 +748,7 @@ int fs_sync(int handle) {
 }
 
 int fs_truncate(int handle, uint32_t size) {
+	awb_flush();
 	if (drv_handle(handle)) return zfs_ftruncate(handle - FS_DRV_HANDLE, size) == 0;
 
 	if (handle < 0) return 0;
@@ -662,6 +772,7 @@ int fs_truncate(int handle, uint32_t size) {
 // since kernel code includes both headers. Same reason this whole file
 // exists separately from zeitlos.h.
 bool fs_df(uint32_t *total_kb, uint32_t *free_kb) {
+	awb_flush();
 
 	z_fs_df_args_t args;
 	args.total_kb = 0;
@@ -680,6 +791,7 @@ bool fs_df(uint32_t *total_kb, uint32_t *free_kb) {
 // -- rename, stat, extended listing, copy -- see zfsapp.h --
 
 int fs_rename(const char *from, const char *to, int *err) {
+	awb_flush();
 	if (drv_path(from) && drv_path(to)) {
 		int32_t r = zfs_rename(from, to);
 		if (err) *err = r == 0 ? Z_FS_ERR_NONE :
@@ -709,6 +821,7 @@ int fs_rename(const char *from, const char *to, int *err) {
 }
 
 int fs_stat(const char *path, z_fs_info_t *info) {
+	awb_flush();
 	if (drv_path(path)) return info && zfs_stat(path, info) == 0;
 
 	z_fs_stat_args_t args;
@@ -729,6 +842,7 @@ int fs_stat(const char *path, z_fs_info_t *info) {
 int fs_list_ex(const char *path, char *buf, uint32_t buf_cap,
 	z_fs_info_t *info, uint32_t max_entries, uint32_t *count,
 	uint32_t *truncated) {
+	awb_flush();
 	if (drv_path(path)) {
 		if (count) *count = 0;
 		if (truncated) *truncated = 0;

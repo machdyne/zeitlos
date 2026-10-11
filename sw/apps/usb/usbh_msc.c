@@ -23,8 +23,8 @@
  *
  * What does stop while a command runs is the rest of this process:
  * enumeration, ethernet and serial wait for its end. A command is
- * bounded (MSC_SOFT_NAKS, the spin guards), so they wait milliseconds
- * at worst, not forever.
+ * bounded (MSC_NAK_TICKS, the spin guards): milliseconds normally,
+ * a few seconds for a stick that stops answering, never forever.
  */
 
 #include <stdio.h>
@@ -63,14 +63,19 @@
 // long time -- and each NAK costs only the transaction that was going
 // to happen anyway. Same value and same reasoning as the control path
 // in usbh.c, kept separate so neither has to include the other.
-// A few quick hardware retries for a momentarily busy device; longer
-// waits are paced by bulk_xfer(). Was the field maximum, chosen before
-// anything real was on the other end.
-#define MSC_NAK_BUDGET       3
+// The engine's own retries, the field maximum: an IN and its NAK are a
+// few microseconds on the bus, and a stick NAKs a data phase while it
+// fetches the next page -- briefly. It was 3, and each round beyond it
+// spun ~1.2ms (a 2000-pass loop on lakritz), so a sector with one NAK
+// in it took 2.1ms of data phase against 0.4ms on the wire (round 40's
+// figures; docs/net_throughput.md, round 4, found the same in usbh_ecm.c).
+#define MSC_NAK_BUDGET       15
 
-// Paced retries on top of that. A flash write can NAK for a long time;
-// only this process waits for it (see the top of this file).
-#define MSC_SOFT_NAKS        2000
+// Between rounds, a ~50us spin, and give up only after this long with
+// no progress: a flash write can NAK for a long time, and only this
+// process waits for it (see the top of this file).
+#define MSC_NAK_PACE         100u
+#define MSC_NAK_TICKS        (3u * 732u)     // ~3s, in usbh_ticks()
 // Consecutive transmission errors (bad CRC, no response) tolerated on
 // a bulk IN before the transfer fails. USB 2.0 8.5.2 has the host
 // retry a transaction up to three times; progress resets the count.
@@ -154,7 +159,7 @@ static int bulk_xfer(int in, uint32_t off, uint16_t len)
     uint32_t s;
     uint32_t guard;
     uint16_t done = 0;
-    int naks = 0;
+    uint32_t since = usbh_ticks();      // the last progress
     int strikes = 0;
     uint8_t st;
 
@@ -220,13 +225,13 @@ static int bulk_xfer(int in, uint32_t off, uint16_t len)
             if (Z_USBH_XS_LEN(s)) {
                 done += (uint16_t)Z_USBH_XS_LEN(s);
                 msc.last_len = done;
-                naks = 0;           // progress, so not a stuck device
+                since = usbh_ticks();   // progress, so not a stuck device
             }
-            if (++naks > MSC_SOFT_NAKS) {
+            if ((uint32_t)(usbh_ticks() - since) > MSC_NAK_TICKS) {
                 msc.last_len = done;
                 return Z_USBH_MSC_ERR;
             }
-            for (guard = 0; guard < 2000u; guard++) { }
+            for (guard = 0; guard < MSC_NAK_PACE; guard++) { }
             continue;
         }
 
@@ -366,7 +371,9 @@ static int ctrl_nodata(uint8_t bm, uint8_t req, uint16_t val,
         if (!xact_run(Z_USBH_PID_IN, 0, 1, MSC_OFF_SETUP, 0, &s))
             return Z_USBH_MSC_ERR;
         st = (uint8_t)Z_USBH_XS_STATUS(s);
-        if (st != Z_USBH_ST_NAK || ++naks > MSC_SOFT_NAKS) break;
+        // Rare (two requests, on recovery): the old pacing, 2000 rounds
+        // of ~1.2ms.
+        if (st != Z_USBH_ST_NAK || ++naks > 2000) break;
         for (guard = 0; guard < 2000u; guard++) { }
     }
     if (st == Z_USBH_ST_OK || st == Z_USBH_ST_SHORT) return Z_USBH_MSC_OK;

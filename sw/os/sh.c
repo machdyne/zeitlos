@@ -34,6 +34,7 @@ extern bool k_readline_from_uart;	// kruntime.c
 #include "kfs.h"		// files, through fs (docs/fs_driver.md)
 #include "fsapi.h"
 #include "msg.h"
+#include "rescue.h"		// the rescue console: the boot window, init
 #include "hid.h"		// k_hid_stats(), HID_FIFO_SIZE -- the `ic` command
 #include "pidreg.h"
 #include "cfg.h"		// /sys/zeitlos.cfg -- k_cfg_load() at boot, `cfg`
@@ -300,8 +301,8 @@ static uint32_t next_tftp_tag(void) {
 
 // Gives the user a brief window to stop the graphical environment from
 // starting, the same way sw/bios/bios.c's own AUTOLOAD_CNT loop lets a
-// keypress stop the BIOS from autoloading the kernel. Returns true if
-// init() should be skipped.
+// keypress stop the BIOS from autoloading the kernel. Returns 0 to run
+// init(), 1 (ESC on the serial console) or BOOT_RESCUE to skip it.
 //
 // Why this exists: once wm starts it clears the screen and takes over,
 // and if something in the graphical stack is broken (a bad wm build, an
@@ -310,30 +311,45 @@ static uint32_t next_tftp_tag(void) {
 // The shell prompt is still there afterwards, so `init` can be run by
 // hand once whatever it was is sorted out.
 //
-// SERIAL CONSOLE ONLY, deliberately. k_uart_getc()/k_uart_rx_empty()
-// (sw/os/uart.h) read the UART and nothing else -- the USB keyboard
-// goes through an entirely separate path (z_hid_read_key(), sw/os/hid.c)
-// which is not polled here. That's the right split: this is a recovery
-// mechanism for when the graphical side is what's broken, so it should
-// depend on as little of the system as possible, and the console is the
-// one interface guaranteed to work when the display isn't. It also
-// means a stray keypress on the USB keyboard during boot can't silently
-// leave someone at a bare shell wondering where their desktop went.
+// A PRESS of ESC counts on the serial console only: k_uart_getc() reads
+// the UART and nothing else, so a stray keypress on the USB keyboard
+// during boot cannot silently leave someone at a bare shell on a
+// display that shows nothing. The USB keyboard's way in is the rescue
+// console (below): ESC held, and the shell then comes up ON the
+// display, so nobody is left wondering where the desktop went.
 //
 // Side benefit worth knowing: the 500ms this costs every boot is also
 // 500ms longer that the flash-backed boot splash (sw/os/logo.h) stays
 // on screen before wm's clear_screen() wipes it -- which on a monitor
 // that takes a moment to sync is the difference between seeing it and
 // not.
-static bool boot_cancel_requested(void) {
+//
+// The rescue console (rescue.c, docs/rescue_console.md): ESC HELD (not
+// pressed) on a USB keyboard brings it up and skips init as well. Held,
+// because the key registers show what is down without any event, and a
+// stray press cannot do it. rescue_boot_poll() may keep the window open
+// past 500ms while a USB keyboard is still being set up.
+#define BOOT_RESCUE 2
 
-	printf("starting init in 500ms -- press ESC to cancel ... ");
+static int boot_cancel_requested(void) {
+
+	printf("starting init in 500ms -- press ESC to cancel%s ... ",
+		z_soc_has_feature(Z_FEATURE_GPU)
+			? " (hold ESC on the keyboard for the rescue console)" : "");
 	fflush(stdout);
 
 	uint32_t start = z_uptime_ticks();
-	bool cancel = false;
+	int cancel = 0;
 
-	while (z_uptime_ticks() - start < BOOT_CANCEL_TICKS) {
+	for (;;) {
+
+		uint32_t elapsed = z_uptime_ticks() - start;
+		int r = rescue_boot_poll(elapsed);
+		if (r == RESCUE_POLL_ESC) {
+			cancel = BOOT_RESCUE;
+			break;
+		}
+		if (elapsed >= BOOT_CANCEL_TICKS && r != RESCUE_POLL_WAIT) break;
 
 		if (k_uart_rx_empty()) continue;
 
@@ -343,13 +359,20 @@ static bool boot_cancel_requested(void) {
 		// not silently skip the desktop. One specific key, so cancelling
 		// is always something you meant to do.
 		if (k_uart_getc() == BOOT_CANCEL_KEY) {
-			cancel = true;
+			cancel = 1;
 			break;
 		}
 
 	}
 
-	printf(cancel ? "cancelled.\n" : "\n");
+	printf(cancel == BOOT_RESCUE ? "rescue console.\n" : cancel ? "cancelled.\n" : "\n");
+
+	// Kept open for a USB keyboard still being set up: say how long, so
+	// the cost of the wait can be seen (docs/rescue_console.md).
+	uint32_t open_ms = (z_uptime_ticks() - start) * 1000u / Z_TICK_HZ;
+	if (open_ms > 600)
+		printf("init: boot window open %lums (a USB device was coming up)\n",
+			(unsigned long)open_ms);
 
 	return cancel;
 
@@ -601,7 +624,10 @@ void sh(void) {
 		}
 	}
 
-	if (boot_cancel_requested()) {
+	int boot_cancel = boot_cancel_requested();
+	if (boot_cancel == BOOT_RESCUE) {
+		rescue_enter("ESC held at boot; init skipped -- `init` starts the desktop");
+	} else if (boot_cancel) {
 		printf("init: cancelled -- run `init` to start the graphical "
 			"environment manually\n");
 	} else if (card_ready || z_zar_present()) {
@@ -1157,6 +1183,9 @@ void sh(void) {
 				printf("OK\n");
 			else
 				printf("FAIL\n");
+			// wm "crashed": the rescue console -- after the kill, so wm
+			// draws nothing more over it (rescue.c knows wm by its pid).
+			if (as_crash) rescue_ended(pid);
 		}
 
 		// CLEAR SCREEN
@@ -1735,20 +1764,21 @@ void init(void) {
 		z_exec_info_t xi_wm;
 		core_src_t src_wm = core_exec_info("wm", &xi_wm);
 		uint32_t size_wm = (src_wm == CORE_SRC_NONE) ? 0 : xi_wm.total;
+		uint32_t pid_wm = size_wm ? k_proc_create_exec("wm", &xi_wm) : 0;
 		if (!size_wm) {
+			// Not `return`: that skipped net and the rest as well.
 			printf("init: wm binary not found\n");
-			return;
-		}
-		uint32_t pid_wm = k_proc_create_exec("wm", &xi_wm);
-		if (!pid_wm) {
+			rescue_enter("no wm");
+		} else if (!pid_wm) {
 			printf("init: unable to create wm process\n");
-			return;
+			rescue_enter("wm could not be started");
+		} else {
+			uint32_t base_wm = k_proc_base(pid_wm);
+			printf("init: wm (%s)\n", core_src_name(src_wm));
+			core_load_exec(base_wm, "wm", &xi_wm, src_wm);
+			k_proc_start(pid_wm);
+			printf("init: wm started as pid %ld\n", pid_wm);
 		}
-		uint32_t base_wm = k_proc_base(pid_wm);
-		printf("init: wm (%s)\n", core_src_name(src_wm));
-		core_load_exec(base_wm, "wm", &xi_wm, src_wm);
-		k_proc_start(pid_wm);
-		printf("init: wm started as pid %ld\n", pid_wm);
 	}
 
 	// net: sw/apps/net -- ARP/ICMP/TFTP/TCP/telnet, see
@@ -2276,7 +2306,7 @@ void sh_help(void) {
 	printf(" init               start wm, net, repl and posix (runs at boot)\n");
 	printf(" cfg [reload|get k] show or re-read " Z_PATH_SYS_CONFIG " (docs/config.md)\n");
 	printf(" kill <pid>        kill a process\n");
-	printf(" kill -c <pid>     ... as a crash (a driver restarts)\n");
+	printf(" kill -c <pid>     ... as a crash (a driver restarts; wm: rescue console)\n");
 	printf(" sched [late 0|1] [drvwake on|off]  scheduler switches\n");
 	printf(" ps                display a process snapshot\n");
 	printf(" df                display filesystem capacity\n");

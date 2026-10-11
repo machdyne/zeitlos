@@ -16,6 +16,7 @@
 #include "../common/zconsole.h"
 #include "../common/zsoc.h"	// game mode, for the panic screen
 #include "../common/zfont.h"	// z_font_5x8, for the panic screen
+#include "rescue.h"
 
 #define UART_FIFO_SIZE 512
 
@@ -81,6 +82,12 @@ static volatile uint32_t k_klog_pos;
 static inline void k_klog_put_locked(uint8_t c) {
 	k_klog[k_klog_pos & (K_KLOG_SIZE - 1)] = c;
 	k_klog_pos++;
+	if (k_rescue_on) rescue_note();
+}
+
+// Where the log ends: the count of bytes since boot (rescue.c).
+uint32_t k_klog_end(void) {
+	return k_klog_pos;
 }
 
 // For kprint() and other direct UART0 writers.
@@ -357,7 +364,16 @@ int16_t k_uart_getc(void) {
 
 }
 
+static void uart_putc_ring(char c);
+
+// The rescue console (rescue.c) draws what was just logged, when this
+// is pid 0 writing; it does nothing otherwise.
 void k_uart_putc(char c) {
+	uart_putc_ring(c);
+	if (k_rescue_on) rescue_pump();
+}
+
+static void uart_putc_ring(char c) {
 
 	// The index update still masks ALL IRQs -- tx_head/tx_tail are
 	// shared kernel state, and masking only the UART IRQ (bit 4)
@@ -467,6 +483,14 @@ void k_uart_wait_rx(void) {
 			continue;
 		}
 
+		// Output from other processes for the rescue console, which
+		// only pid 0 draws (rescue.c): rescue_note() wakes it for that.
+		if (z_pid == 0 && rescue_pending()) {
+			maskirq(old_mask);
+			rescue_pump();
+			continue;
+		}
+
 		uart_rx_wait_pid = z_pid;
 		if (drv != ~0u) {
 			uint32_t w = z_kernel_ticks + drv;
@@ -539,6 +563,23 @@ z_obj_t *k_klog_read(z_obj_t *args) {
 	a->n = n;
 	maskirq(old_mask);
 	return &z_ok;
+}
+
+// One byte into the receive ring, as typed -- from the rescue console's
+// keyboard (rescue.c). `injected` as for k_console_input() below.
+void k_uart_rx_put(uint8_t c, bool injected) {
+	uint32_t old_mask = maskirq(0xFFFFFFFF);
+	uint16_t next = (rx_head + 1) % UART_FIFO_SIZE;
+	if (next != rx_tail) {
+		uart_rx_fifo[rx_head] = c;
+		rx_mark(rx_head, injected);
+		rx_head = next;
+		if (uart_rx_wait_pid != ~0u) {
+			k_proc_unblock(uart_rx_wait_pid);
+			uart_rx_wait_pid = ~0u;
+		}
+	}
+	maskirq(old_mask);
 }
 
 // Z_SYS_CONSOLE_INPUT: bytes into the same RX ring the UART interrupt

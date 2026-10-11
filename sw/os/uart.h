@@ -45,4 +45,7 @@ void k_uart_flush(void);
 void k_uart_release_pid(uint32_t pid);
 void k_klog_panic_screen(void);
 
+uint32_t k_klog_end(void);
+void k_uart_rx_put(uint8_t c, bool injected);
+
 #endif

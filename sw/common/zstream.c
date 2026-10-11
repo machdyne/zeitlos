@@ -109,7 +109,8 @@ zstream_event_t zstream_producer_handle(zstream_producer_t *st, z_msg_t *msg) {
 		// already has the chunk we sent last time, so it's safe to
 		// free now (see zstream.h's big comment on why this is the
 		// only place a chunk ever gets freed)
-		if (st->last_chunk.type == Z_BLOB) z_obj_free(&st->last_chunk);
+		if (st->last_chunk.type == Z_BLOB && !st->last_ref) z_obj_free(&st->last_chunk);
+		st->last_ref = false;
 		st->last_chunk = z_obj_none();
 		return ZSTREAM_EVENT_PULL;
 	}
@@ -128,17 +129,31 @@ zstream_event_t zstream_producer_handle(zstream_producer_t *st, z_msg_t *msg) {
 
 }
 
+void zstream_send_chunk_ref(zstream_producer_t *st, z_blob_t *blob) {
+	uint32_t seq = next_seq(st);
+	z_obj_t chunk;
+	chunk.type = Z_BLOB;
+	chunk.val.ptr = blob;
+	z_msg_new_send(st->consumer_pid, Z_STREAM_CHUNK,
+		ZSTREAM_TAG(st->stream_id, seq), chunk);
+	st->last_chunk = chunk;		// for a retry; not freed (last_ref)
+	st->last_ref = true;
+	st->seq = seq;
+}
+
 void zstream_send_chunk(zstream_producer_t *st, const void *data, uint32_t len) {
 	uint32_t seq = next_seq(st);
 	z_obj_t chunk = z_obj_blob(data, len);
 	z_msg_new_send(st->consumer_pid, Z_STREAM_CHUNK,
 		ZSTREAM_TAG(st->stream_id, seq), chunk);
 	st->last_chunk = chunk;	// kept alive until the next pull frees it
+	st->last_ref = false;
 	st->seq = seq;
 }
 
 void zstream_send_eof(zstream_producer_t *st) {
-	if (st->last_chunk.type == Z_BLOB) z_obj_free(&st->last_chunk);
+	if (st->last_chunk.type == Z_BLOB && !st->last_ref) z_obj_free(&st->last_chunk);
+	st->last_ref = false;
 	st->last_chunk = z_obj_none();
 	uint32_t seq = next_seq(st);
 	z_msg_new_send(st->consumer_pid, Z_STREAM_EOF,
@@ -147,7 +162,8 @@ void zstream_send_eof(zstream_producer_t *st) {
 }
 
 void zstream_send_error(zstream_producer_t *st, const char *msg) {
-	if (st->last_chunk.type == Z_BLOB) z_obj_free(&st->last_chunk);
+	if (st->last_chunk.type == Z_BLOB && !st->last_ref) z_obj_free(&st->last_chunk);
+	st->last_ref = false;
 	st->last_chunk = z_obj_none();
 	uint32_t seq = next_seq(st);
 	// terminal, one-shot message for this stream -- same small,
@@ -158,7 +174,8 @@ void zstream_send_error(zstream_producer_t *st, const char *msg) {
 }
 
 void zstream_producer_close(zstream_producer_t *st) {
-	if (st->last_chunk.type == Z_BLOB) z_obj_free(&st->last_chunk);
+	if (st->last_chunk.type == Z_BLOB && !st->last_ref) z_obj_free(&st->last_chunk);
+	st->last_ref = false;
 	st->active = false;
 }
 

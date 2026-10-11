@@ -20,6 +20,7 @@
 #include "ui.h"
 #include "msg.h"
 #include "hid.h"
+#include "rescue.h"
 #include "pidreg.h"
 #include "kfs.h"		// files, through fs (docs/fs_driver.md)
 #include "kblk.h"	// k_blk, k_zar: the syscall table
@@ -2602,6 +2603,7 @@ uint32_t k_proc_create_exec(const char *name, const z_exec_info_t *xi) {
 			z_procs[pid].mpu_mask = 0xffffu;	// every peripheral, the SD card's too
 			printf("%s: driver (pid %lu)\n", name, (unsigned long)pid);
 		}
+		rescue_exec(name, pid);	// wm: the rescue console hands over
 		return(pid);
 	}
 
@@ -2807,6 +2809,8 @@ static __attribute__((section(".bss"))) k_exit_entry_t
 static __attribute__((section(".bss"))) uint32_t k_exit_next;
 
 void k_proc_exit_record(uint32_t pid, int32_t status) {
+
+	rescue_ended(pid);		// wm crashed or exited: the rescue console
 
 	/* An earlier entry for the same pid is replaced rather than
 	 * duplicated. Pids are reused, and a stale entry for a slot that

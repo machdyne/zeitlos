@@ -57,6 +57,7 @@
 #include "../common/zkbd.h"
 #include "kernel.h"
 #include "hid.h"
+#include "rescue.h"
 
 /*
  * The process to wake when a POINTER report arrives, or 0 for nobody.
@@ -171,6 +172,7 @@ void z_hid_init(void) {
 static volatile uint32_t hid_pushed, hid_dropped;
 
 static void hid_push(uint32_t ev) {
+	if (rescue_key(ev)) return;		// the rescue console's, not the apps'
 	uint8_t next = (hid_head + 1) % HID_FIFO_SIZE;
 	if (next == hid_tail) {
 		hid_dropped++;
@@ -181,6 +183,12 @@ static void hid_push(uint32_t ev) {
 	hid_fifo[hid_head] = ev;
 	hid_head = next;
 	hid_pushed++;
+}
+
+void k_hid_flush(void) {
+	uint32_t old_mask = maskirq(0xFFFFFFFF);
+	hid_tail = hid_head;
+	maskirq(old_mask);
 }
 
 void k_hid_stats(uint32_t *pushed, uint32_t *dropped) {

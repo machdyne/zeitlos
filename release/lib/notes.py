@@ -122,6 +122,118 @@ def _clock(name):
     return name.rsplit("$", 1)[-1]
 
 
+# -- how close each target came --
+#
+# The release body is GitHub markdown, which strips colours and inline
+# styles, so a red or yellow background cannot be had there. A marker
+# at the start of the cell does the same job and survives anywhere,
+# plain text included:
+#
+#   RED     a clock that missed its target, or a resource over 100%
+#   GREEN   met, with room to spare
+#   YELLOW  a clock within WARN_MHZ of its target, or a resource over
+#           WARN_PCT (or at it) -- it met, but the next change may not
+#
+# An advisory miss (an IO pseudo-domain, build.is_pseudo_domain()) does
+# not block a release and is shown yellow, not red.
+GREEN = "\U0001F7E2"		# green circle
+RED = "\U0001F534"			# red circle
+YELLOW = "\U0001F7E1"		# yellow circle
+WARN_MHZ = 0.5
+WARN_PCT = 98
+
+_RANK = {None: 0, YELLOW: 1, RED: 2}
+
+
+def _worst(a, b):
+    return a if _RANK[a] >= _RANK[b] else b
+
+
+def _clock_mark(c, advisory):
+    target = c.get("target_mhz")
+    if c.get("result") == "FAIL":
+        return YELLOW if c in advisory else RED
+    if target is not None and c["achieved_mhz"] - target < WARN_MHZ:
+        return YELLOW
+    return None
+
+
+def _util_mark(pct):
+    if pct > 100:
+        return RED
+    if pct >= WARN_PCT:
+        return YELLOW
+    return None
+
+
+def _cell(mark, text):
+    """Bold when flagged; a passing cell gets the green dot, plain."""
+    return "%s **%s**" % (mark, text) if mark else "%s %s" % (GREEN, text)
+
+
+def build_row(t):
+    """(mark, fmax cell, utilisation cell) for one target's timing."""
+    tm = t.get("timing") or {}
+    advisory = tm.get("advisory", [])
+    worst = None
+    parts = []
+    for c in tm.get("clocks", []):
+        m = _clock_mark(c, advisory)
+        worst = _worst(worst, m)
+        text = "%s %.1f MHz" % (_clock(c["clock"]), c["achieved_mhz"])
+        if c.get("target_mhz") is not None:
+            text += " (%g)" % c["target_mhz"]
+        if m and c.get("result") == "FAIL":
+            text += " FAILED" + (", advisory" if c in advisory else "")
+        parts.append(_cell(m, text))
+    fmax = "; ".join(parts) or "-"
+
+    # The logic cells always; any other resource only when it is close.
+    u = tm.get("utilisation", {})
+    key = "TRELLIS_COMB" if "TRELLIS_COMB" in u else (
+        sorted(u)[0] if u else None)
+    cells = []
+    for name in sorted(u):
+        pct = u[name]["percent"]
+        m = _util_mark(pct)
+        if name != key and not m:
+            continue
+        worst = _worst(worst, m)
+        text = "%s %d%%" % (name, pct)
+        cells.insert(0 if name == key else len(cells), _cell(m, text))
+    util = "; ".join(cells) or "-"
+    return worst, fmax, util
+
+
+def build_table(targets):
+    """The Build section's table, and a line on what is marked, if any."""
+    rows = ["| Target | Fmax (target) | Utilisation |",
+            "| --- | --- | --- |"]
+    red = yellow = 0
+    for t in targets:
+        mark, fmax, util = build_row(t)
+        red += mark == RED
+        yellow += mark == YELLOW
+        name = "`%s`" % t["target"]
+        if not t.get("timing"):
+            pass						# no data (an old manifest): no verdict
+        elif mark:
+            name = "%s %s" % (mark, name)
+        else:
+            name = "%s %s" % (GREEN, name)
+        rows.append("| %s | %s | %s |" % (name, fmax, util))
+    summary = []
+    if red:
+        summary.append("%s **%d target%s missed timing or utilisation.**"
+                       % (RED, red, "" if red == 1 else "s"))
+    if yellow:
+        summary.append("%s %d target%s within %.1f MHz of a clock target "
+                       "or at %d%%+ of a resource."
+                       % (YELLOW, yellow, "" if yellow == 1 else "s",
+                          WARN_MHZ, WARN_PCT))
+    return rows, summary
+
+
 def _target_table(targets):
     rows = ["| Target | Hardware | Networking | Image |",
             "| --- | --- | --- | --- |"]
@@ -145,6 +257,14 @@ def notes(version, commit, targets, sdcard, layout, prev_version=None):
                "at their fixed offsets. Flash one file and the board boots "
                "to a desktop; an SD card is optional.")
     out.append("")
+    # A miss must not hide at the bottom of the page.
+    _, summary = build_table(targets)
+    if summary:
+        for line in summary:
+            out.append(line)
+            out.append("")
+        out.append("See **Build** below.")
+        out.append("")
     out.append("## Targets")
     out.append("")
     out.append(_target_table(targets))
@@ -254,18 +374,15 @@ def notes(version, commit, targets, sdcard, layout, prev_version=None):
     out.append("")
     out.append("Built from `%s`." % commit[:12])
     out.append("")
-    out.append("| Target | Fmax | Utilisation |")
-    out.append("| --- | --- | --- |")
-    for t in targets:
-        tm = t.get("timing") or {}
-        fmax = "; ".join("%s %.1f MHz" % (_clock(c["clock"]),
-                                          c["achieved_mhz"])
-                         for c in tm.get("clocks", [])) or "-"
-        u = tm.get("utilisation", {})
-        key = "TRELLIS_COMB" if "TRELLIS_COMB" in u else (
-            sorted(u)[0] if u else None)
-        util = ("%s %d%%" % (key, u[key]["percent"])) if key else "-"
-        out.append("| `%s` | %s | %s |" % (t["target"], fmax, util))
+    rows, summary = build_table(targets)
+    if not summary and any(t.get("timing") for t in targets):
+        summary = ["%s Every target met timing with at least %.1f MHz to "
+                   "spare, under %d%% of every resource."
+                   % (GREEN, WARN_MHZ, WARN_PCT)]
+    for line in summary:
+        out.append(line)
+        out.append("")
+    out.extend(rows)
     out.append("")
 
     return "\n".join(out)

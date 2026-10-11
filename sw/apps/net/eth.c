@@ -78,6 +78,30 @@ bool eth_send(const uint8_t dst_mac[6], uint16_t ethertype,
 
 }
 
+// One received frame, to ARP or IP. Read-only: it may be a driver's
+// own buffer (net_phy_t.recv_ref).
+static void eth_frame(const uint8_t *f, uint16_t len) {
+
+	if (len < ETH_HDR_LEN) return;
+
+	uint16_t ethertype = (f[12] << 8) | f[13];
+	const uint8_t *src_mac = &f[6];
+	const uint8_t *payload = &f[ETH_HDR_LEN];
+	uint16_t paylen = len - ETH_HDR_LEN;
+
+	switch (ethertype) {
+		case ETHERTYPE_ARP:
+			arp_handle(src_mac, payload, paylen);
+			break;
+		case ETHERTYPE_IPV4:
+			ip_handle(src_mac, payload, paylen);
+			break;
+		default:
+			break;
+	}
+
+}
+
 void eth_poll(void) {
 
 	uint16_t len;
@@ -92,29 +116,22 @@ void eth_poll(void) {
 	// told to make another edge, because a level is not a second IRQ.
 	while (drained < 64) {
 
+		// A driver that can show the frame where it lies (the USB
+		// adapter's ring) saves copying it here.
+		if (net_phy->recv_ref) {
+			const uint8_t *f;
+			len = net_phy->recv_ref(&f);
+			if (len == 0) break;
+			drained++;
+			eth_frame(f, len);
+			net_phy->recv_done();
+			continue;
+		}
+
 		len = phy_recv(rxbuf, sizeof(rxbuf));
 		if (len == 0) break;
 		drained++;
-
-		if (len < ETH_HDR_LEN) continue;
-
-		uint16_t ethertype = (rxbuf[12] << 8) | rxbuf[13];
-		const uint8_t *src_mac = &rxbuf[6];
-		const uint8_t *payload = &rxbuf[ETH_HDR_LEN];
-		uint16_t paylen = len - ETH_HDR_LEN;
-
-		// printf("net: rx frame ethertype=0x%04x len=%d\n", ethertype, len);
-
-		switch (ethertype) {
-			case ETHERTYPE_ARP:
-				arp_handle(src_mac, payload, paylen);
-				break;
-			case ETHERTYPE_IPV4:
-				ip_handle(src_mac, payload, paylen);
-				break;
-			default:
-				break;
-		}
+		eth_frame(rxbuf, len);
 
 	}
 

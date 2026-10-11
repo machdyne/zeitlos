@@ -89,7 +89,7 @@ LDSCRIPT = ../common/riscv-os.ld
 
 OBJS = kernel.o kruntime.o mem.o zar.o \
 	kblk.o kfs.o zfsc.o kusb.o zusbc.o \
-	uart.o hid.o sh.o xfer.o xmodem.o ui.o msg.o pidreg.o fsapi.o flashapi.o kvstore.o kvlog.o auth.o authcore.o zsha256.o jumpapi.o zjump.o procapi.o zobj.o zstream.o zdns.o zsoc.o zgpio.o \
+	uart.o hid.o rescue.o sh.o xfer.o xmodem.o ui.o msg.o pidreg.o fsapi.o flashapi.o kvstore.o kvlog.o auth.o authcore.o zsha256.o jumpapi.o zjump.o procapi.o zobj.o zstream.o zdns.o zsoc.o zgpio.o \
 	cfg.o zcfg.o zfont_data.o zfmt.o ktrace.o
 
 # kernel.o's recipe below builds every object in one go (they're not
@@ -103,7 +103,7 @@ OBJS = kernel.o kruntime.o mem.o zar.o \
 # zstream/TFTP work -- see docs/networking.md.
 KSRCS = kernel.c kruntime.c mem.c \
 	kblk.c kfs.c ../common/zfsc.c ../common/zfsc.h ../common/zfsproto.h \
-	kusb.c ../common/zusbc.c ../common/zusbc.h ../common/zusbproto.h uart.c hid.c sh.c xfer.c xmodem.c ui.c msg.c pidreg.c fsapi.c flashapi.c kvstore.c kvlog.c auth.c authcore.c jumpapi.c procapi.c cfg.c ktrace.c \
+	kusb.c ../common/zusbc.c ../common/zusbc.h ../common/zusbproto.h uart.c hid.c rescue.c rescue.h sh.c xfer.c xmodem.c ui.c msg.c pidreg.c fsapi.c flashapi.c kvstore.c kvlog.c auth.c authcore.c jumpapi.c procapi.c cfg.c ktrace.c \
 	../common/zobj.c ../common/zsha256.c ../common/zstream.c ../common/zdns.c ../common/zsoc.c ../common/zcfg.c ../common/zjump.c \
 	../common/zfont_data.c
 
@@ -130,6 +130,7 @@ kernel.o: $(KSRCS)
 	$(CC) $(CFLAGS) -c ui.c -o ui.o
 	$(CC) $(CFLAGS) -c uart.c -o uart.o
 	$(CC) $(CFLAGS) -c hid.c -o hid.o
+	$(CC) $(CFLAGS) -c rescue.c -o rescue.o
 	$(CC) $(CFLAGS) -c msg.c -o msg.o
 	$(CC) $(CFLAGS) -c pidreg.c -o pidreg.o
 	$(CC) $(CFLAGS) -c fsapi.c -o fsapi.o

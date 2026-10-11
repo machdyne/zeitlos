@@ -125,6 +125,9 @@ and the kernel (`-DZUSBC_KERNEL`, `zusb_cmd()` only) link.
   to 4 sectors. A sector is one SCSI command on the wire anyway, so a
   bigger request would only save round trips. `zusb_msc_read()` splits
   any count.
+  A stick that NAKs while fetching is retried by the USB engine 15 times
+  a round with a short spin between rounds, and given up on after 3
+  seconds without progress ([usb_host.md](usb_host.md), "NAK pacing").
 - **A new drive is brought up by `usb`, in steps.** A stick can take
   seconds to answer TEST UNIT READY. `usb` asks once every 8 ticks
   (`MSC_PACE`), between its other work, up to 400 times, then reads the

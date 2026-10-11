@@ -142,6 +142,35 @@ void usb_ecm_frame_times(uint32_t *put, uint32_t *take)
 	*take = last_take;
 }
 
+// The frame in place: net reads it in usb's ring (any process may
+// load from anywhere), and its slot is given back by recv_done(), so
+// usb cannot reuse it meanwhile. One 1.5KB copy fewer per frame.
+uint16_t usb_ecm_recv_ref(const uint8_t **frame)
+{
+	while (srv && srv->rx_head != cli.rx_tail) {
+		uint32_t i = cli.rx_tail % Z_USBNET_RX_SLOTS;
+		uint16_t n = srv->rx_len[i];
+		if (!n || n > Z_USBNET_FRAME - Z_USBNET_RX_OFF) {	// cannot happen
+			cli.rx_tail++;
+			continue;
+		}
+		uint32_t c;
+		__asm__ volatile ("rdcycle %0" : "=r"(c));
+		last_put = srv->rx_at[i];
+		last_take = c;
+		*frame = (const uint8_t *)srv->rx[i] + Z_USBNET_RX_OFF;
+		return n;
+	}
+	check_gen();
+	return 0;
+}
+
+void usb_ecm_recv_done(void)
+{
+	cli.rx_tail++;		// after net is done with it: usb may reuse it
+	rx_frames++;
+}
+
 uint16_t usb_ecm_recv(uint8_t *buf, uint16_t maxlen)
 {
 	uint32_t tail = cli.rx_tail;

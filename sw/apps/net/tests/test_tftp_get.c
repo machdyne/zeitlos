@@ -74,6 +74,17 @@ void zstream_send_chunk(zstream_producer_t *st, const void *d, uint32_t n) {
 	(void)st; memcpy(got + got_len, d, n); got_len += n; chunks++;
 	if (norder < 63) order[norder++] = 'C';
 }
+// A lent chunk: copied as the receiver would, and remembered, so that
+// pull() can check it was left untouched until then.
+static const uint8_t *lent_ptr;
+static uint8_t lent_copy[1468];
+static uint32_t lent_len;
+void zstream_send_chunk_ref(zstream_producer_t *st, z_blob_t *b) {
+	zstream_send_chunk(st, b->data, b->len);
+	lent_ptr = b->data;
+	lent_len = b->len;
+	memcpy(lent_copy, b->data, b->len);
+}
 void zstream_send_eof(zstream_producer_t *st) { (void)st; eofs++; }
 void zstream_send_error(zstream_producer_t *st, const char *m) { (void)st; (void)m; }
 void zstream_open_async(zstream_consumer_t *c, uint32_t pid, z_obj_t o) { (void)c; (void)pid; (void)o; }
@@ -98,7 +109,10 @@ static void data(uint16_t blk, uint16_t len) {
 	handler(SRV_IP, 5000, p, (uint16_t)(4 + len));
 }
 
+static int lent_bad;
 static void pull(void) {
+	if (lent_ptr && memcmp(lent_ptr, lent_copy, lent_len)) lent_bad++;
+	lent_ptr = NULL;
 	z_msg_t m;
 	memset(&m, 0, sizeof(m));
 	m.subject = Z_STREAM_PULL;
@@ -132,6 +146,7 @@ static bool got_ok(uint16_t blocks, uint16_t last_len) {
 
 static void start(void) {
 	nacks = 0; got_len = 0; chunks = eofs = 0; rrqs = 0; norder = 0;
+	lent_ptr = NULL;		// the last transfer's receiver is done
 	bsz = 512;
 	CHECK(tftp_get_start(SRV_IP, "f", 1, 1));
 	CHECK(nacks == 0);
@@ -161,40 +176,44 @@ int main(void) {
 	CHECK(n == 5 * 512 + 100);
 	CHECK(got_ok(6, 100));
 
-	// A slow receiver: block 1 is ACKed on arrival (a slot is left);
-	// block 2 fills the queue, so its ACK waits for the first pull.
+	// A slow receiver. Three slots, one of them lent to the receiver
+	// until its next pull: blocks 1 and 2 are ACKed on arrival; block 3
+	// fills the queue, so its ACK waits until a slot is free again.
 	start();
 	data(1, 512);
 	CHECK(nacks == 1 && acks[0] == 1);
 	data(2, 512);
-	CHECK(nacks == 1);			// deferred
-	data(2, 512);				// the server's resend: ignored
-	CHECK(nacks == 1);
-	data(3, 512);				// no room, not ACKed: ignored
-	CHECK(nacks == 1);
+	CHECK(nacks == 2 && acks[1] == 2);
+	data(3, 512);
+	CHECK(nacks == 2);			// deferred
+	data(3, 512);				// the server's resend: ignored
+	CHECK(nacks == 2);
+	data(4, 512);				// no room, not ACKed: ignored
+	CHECK(nacks == 2);
 	// No retry while we wait on the receiver, however long.
 	now_ticks += 10 * 732;
 	CHECK(tftp_poll(&n, err, sizeof err) == TFTP_RESULT_PENDING);
-	CHECK(nacks == 1);
-	pull();					// takes 1: 2's ACK goes out
-	CHECK(chunks == 1 && nacks == 2 && acks[1] == 2);
-	data(3, 512);				// 3 stored behind 2: the queue is full
-	CHECK(nacks == 2);			// 2 and 3 queued: deferred
-	pull();
+	CHECK(nacks == 2);
+	pull();					// 1 lent: no slot free yet
+	CHECK(chunks == 1 && nacks == 2);
+	pull();					// 1 back, 2 lent: 3's ACK goes out
 	CHECK(chunks == 2 && nacks == 3 && acks[2] == 3);
 	data(2, 512);				// an old duplicate: ignored
 	data(3, 512);				// the newest again: NOT ACKed
 	CHECK(nacks == 3);			// (no Sorcerer's Apprentice)
-	CHECK(st_dup == 2);			// and the resend of 2 earlier
-	data(4, 0);				// the empty block ends it
-	CHECK(eofs == 0);			// 3 and 4 not yet taken
-	pull();
-	CHECK(eofs == 0 && chunks == 3);
-	CHECK(nacks == 4 && acks[3] == 4);	// 4's deferred ACK
-	pull();
-	CHECK(eofs == 1 && chunks == 4);
+	CHECK(st_dup == 2);			// and the resend of 3 earlier
+	data(4, 512);				// fills the queue again
+	CHECK(nacks == 3);
+	pull();					// 2 back, 3 lent: 4's ACK
+	CHECK(chunks == 3 && nacks == 4 && acks[3] == 4);
+	data(5, 0);				// the empty block ends it
+	CHECK(nacks == 4 && eofs == 0);		// deferred
+	pull();					// 3 back, 4 lent: 5's ACK
+	CHECK(chunks == 4 && nacks == 5 && acks[4] == 5 && eofs == 0);
+	pull();					// 4 back, 5 delivered: the end
+	CHECK(eofs == 1 && chunks == 5);
 	CHECK(tftp_poll(&n, err, sizeof err) == TFTP_RESULT_OK);
-	CHECK(n == 3 * 512 && got_ok(3, 512));
+	CHECK(n == 4 * 512 && got_ok(4, 512));
 
 	// Waiting on the server does retry: the last ACK again.
 	start();
@@ -285,6 +304,7 @@ int main(void) {
 	data(6, 1);
 	CHECK(tftp_poll(&n, err, sizeof err) == TFTP_RESULT_OK);
 
+	CHECK(lent_bad == 0);		// no lent block overwritten before its pull
 	printf("test_tftp_get: %d checks, %d failed\n", checks, fails);
 	return fails != 0;
 }

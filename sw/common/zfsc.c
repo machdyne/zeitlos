@@ -93,6 +93,90 @@ void k_proc_wait_ticks(uint32_t ticks);		// sw/os/kernel.c
 #define zfsc_pause()	z_proc_wait(1)
 #endif
 
+// -- write-behind: small writes collected into one request --
+//
+// A request to `fs` costs a round trip, ~1-2ms, whatever it carries, so
+// a program writing 100-byte lines or 1468-byte TFTP blocks paid that
+// per write. Small writes to one file are collected here, up to
+// ZFSC_WBUF bytes, and go to `fs` as one request when the buffer fills,
+// or before ANY other request this process makes -- a read, a seek, a
+// stat, a close, a write elsewhere -- so the process always sees its
+// own writes. docs/net_throughput.md, round 4.
+//
+//  - Only a file whose last write went through directly and succeeded:
+//    the first write to a descriptor is never buffered, so writing to a
+//    read-only, flash or closed one fails at once, as it should. An
+//    error that comes later (a full disk) is returned by the next write,
+//    fsync or close of that descriptor.
+//  - In an app, the buffer is malloc'd on first use (none: no
+//    buffering), and flushed at exit. In the kernel, only for pid 0's
+//    own calls (the shell's tget): this file also runs inside other
+//    processes' syscalls, and a buffer written as one process and sent
+//    as another would be refused by `fs`.
+//  - Other processes see the bytes once they are flushed.
+#ifndef ZFSC_WBUF
+#define ZFSC_WBUF	8192
+#endif
+
+#ifdef ZFSC_KERNEL
+extern volatile uint32_t z_pid;
+#define WB_SELF()	(z_pid == 0)
+static uint8_t wb_store[ZFSC_WBUF] __attribute__((aligned(4)));
+#define WB_GET()	(wb_store)
+#else
+#define WB_SELF()	1
+static uint8_t *wb_mem;
+static bool wb_tried;
+static void wb_exit(void);
+static uint8_t *wb_get(void) {
+	if (!wb_tried) {
+		wb_tried = true;
+		wb_mem = malloc(ZFSC_WBUF);
+		if (wb_mem) atexit(wb_exit);
+	}
+	return wb_mem;
+}
+#define WB_GET()	wb_get()
+#endif
+
+static uint8_t *wb;			// the buffer, once there is one
+static uint32_t wb_len;			// bytes in it
+static int32_t wb_fd = -1;		// whose they are
+static int32_t wb_ok_fd = -1;		// last written directly, successfully
+static int32_t wb_err;			// a flush that failed: for wb_err_fd's next call
+static int32_t wb_err_fd = -1;
+static bool wb_flushing;
+
+static int32_t write_direct(int32_t fd, const uint8_t *p, uint32_t len);
+
+static void wb_flush(void) {
+	if (!wb_len || wb_flushing || !WB_SELF()) return;
+	wb_flushing = true;
+	int32_t r = write_direct(wb_fd, wb, wb_len);
+	if (r < 0 || (uint32_t)r < wb_len) {
+		wb_err = r < 0 ? r : -Z_ENOSPC;
+		wb_err_fd = wb_fd;
+		wb_ok_fd = -1;
+	}
+	wb_len = 0;
+	wb_flushing = false;
+}
+
+#ifndef ZFSC_KERNEL
+static void wb_exit(void) { wb_flush(); }
+#endif
+
+void zfs_flush(void) { wb_flush(); }
+
+// The error a flush met, for the descriptor it was for (once).
+static int32_t wb_take_err(int32_t fd) {
+	if (wb_err_fd != fd) return 0;
+	int32_t e = wb_err;
+	wb_err = 0;
+	wb_err_fd = -1;
+	return e;
+}
+
 // call_once(), again while fs says it has no reply slot free
 // (-Z_EAGAIN: more clients than slots have replies unread at once,
 // sw/apps/fs). A tick each time, for a few seconds at most.
@@ -100,7 +184,9 @@ static int32_t call_f(z_fsreq_t *rq, void *buf, uint32_t blen,
 	void *out, uint32_t outcap, uint32_t *outlen, uint32_t *flags) {
 	int32_t r;
 	int tries = 0;
-	uint32_t keep = next_timeout;
+	uint32_t keep;
+	wb_flush();			// before anything else: this process sees its writes
+	keep = next_timeout;
 	for (;;) {
 		next_timeout = keep;
 		r = call_once(rq, buf, blen, out, outcap, outlen, flags);
@@ -219,9 +305,14 @@ int32_t zfs_open(const char *path, uint32_t flags) {
 
 int32_t zfs_close(int32_t fd) {
 	z_fsreq_t rq;
+	int32_t e;
+	if (wb_fd == fd) wb_flush();
+	e = wb_take_err(fd);
+	if (wb_ok_fd == fd) wb_ok_fd = -1;
 	req_init(&rq, Z_FSOP_CLOSE);
 	rq.fd = fd;
-	return call(&rq, NULL, 0, NULL, 0, NULL);
+	int32_t r = call(&rq, NULL, 0, NULL, 0, NULL);
+	return e ? e : r;
 }
 
 // In Z_FS_CHUNK requests, while each comes back full. `fs` writes
@@ -254,10 +345,31 @@ int32_t zfs_read(int32_t fd, void *buf, uint32_t len) {
 }
 
 int32_t zfs_write(int32_t fd, const void *buf, uint32_t len) {
-	z_fsreq_t rq;
-	const uint8_t *p = buf;
-	uint32_t done = 0;
+	int32_t e;
 	if (!buf && len) return -Z_EINVAL;
+	if (wb_fd != fd) wb_flush();
+	if ((e = wb_take_err(fd))) return e;
+	// Small, to a descriptor known to be writable: into the buffer.
+	if (len && len < ZFSC_WBUF && fd == wb_ok_fd && WB_SELF() && (wb || (wb = WB_GET()))) {
+		if (wb_len + len > ZFSC_WBUF) {
+			wb_flush();
+			if ((e = wb_take_err(fd))) return e;
+		}
+		wb_fd = fd;
+		memcpy(wb + wb_len, buf, len);
+		wb_len += len;
+		if (wb_len == ZFSC_WBUF) wb_flush();
+		return (int32_t)len;
+	}
+	wb_flush();
+	int32_t r = write_direct(fd, buf, len);
+	if (r >= 0 && (uint32_t)r == len) wb_ok_fd = fd;
+	return r;
+}
+
+static int32_t write_direct(int32_t fd, const uint8_t *p, uint32_t len) {
+	z_fsreq_t rq;
+	uint32_t done = 0;
 	req_init(&rq, Z_FSOP_WRITE);
 	rq.fd = fd;
 	while (done < len) {
@@ -327,6 +439,9 @@ int32_t zfs_rename(const char *from, const char *to) {
 
 int32_t zfs_fsync(int32_t fd) {
 	z_fsreq_t rq;
+	int32_t e;
+	if (wb_fd == fd) wb_flush();
+	if ((e = wb_take_err(fd))) return e;
 	req_init(&rq, Z_FSOP_FSYNC);
 	rq.fd = fd;
 	return call(&rq, NULL, 0, NULL, 0, NULL);

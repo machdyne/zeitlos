@@ -12,6 +12,10 @@ int32_t k_hid_read_key(void);
 // ring totals, for sh.c's `ic` -- see hid.c's hid_push()
 void k_hid_stats(uint32_t *pushed, uint32_t *dropped);
 
+// Drop what is queued: the rescue console (rescue.c), on taking the
+// keyboard, so wm later gets no press without its release.
+void k_hid_flush(void);
+
 // --
 
 z_obj_t *z_hid_read_key(z_obj_t *obj);

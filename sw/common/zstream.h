@@ -150,6 +150,8 @@ typedef struct {
 
 	z_obj_t		last_chunk;	// kept alive until the next pull
 					// proves the consumer has it
+	bool		last_ref;	// last_chunk is the caller's memory
+					// (zstream_send_chunk_ref()): not freed
 
 } zstream_producer_t;
 
@@ -174,6 +176,12 @@ zstream_event_t zstream_producer_handle(zstream_producer_t *st, z_msg_t *msg);
 // reply to the pull that zstream_producer_handle() just reported.
 // exactly one of these should be called per ZSTREAM_EVENT_PULL.
 void zstream_send_chunk(zstream_producer_t *st, const void *data, uint32_t len);
+// The same without the copy: `blob` and the bytes it points at are the
+// caller's, and must stay untouched until the next ZSTREAM_EVENT_PULL
+// (or the stream ends) -- which is when the consumer has finished with
+// them. For a producer that already holds the chunk in a buffer of its
+// own (net's TFTP queue): no malloc, no copy.
+void zstream_send_chunk_ref(zstream_producer_t *st, z_blob_t *blob);
 void zstream_send_eof(zstream_producer_t *st);
 void zstream_send_error(zstream_producer_t *st, const char *msg);
 

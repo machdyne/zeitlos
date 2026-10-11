@@ -125,6 +125,13 @@ typedef struct {
 	// reassert the enable to be noticed again. A full drain needs no
 	// call: the pin releases on its own.
 	void (*rx_rearm)(void);
+
+	// Optional, NULL except for the USB adapter: the next received
+	// frame where it already lies (usb's ring), instead of a copy into
+	// eth.c's buffer -- one copy of every frame fewer. recv_done() says
+	// net has finished with it; it must not be written. 0: none.
+	uint16_t (*recv_ref)(const uint8_t **frame);
+	void (*recv_done)(void);
 } net_phy_t;
 
 // What net.cfg's phy= key selects. Default auto: a MAC built into the

@@ -86,6 +86,27 @@ The rules are the ones the kernel's filesystem had (and
   no copy. `ipcbench` does this.
 - **Handles are the same either way:** `fs`'s descriptor plus
   `0x4000`.
+- **Small writes are gathered.** A program that writes in pieces (TFTP
+  blocks, `stdio`, a log line at a time) used to pay a round trip to
+  `fs` -- and a card write -- per piece. Both clients now keep a write
+  buffer of 8KB per program (write-behind): zfsapp for the kernel path,
+  zfsc for the direct path and the kernel's own pid 0 (`tget`, `xf`).
+  - The **first** write to a descriptor always goes straight to `fs`,
+    so a read-only file or a full disk fails at once, as before. Later
+    writes smaller than the buffer are gathered and sent as one request
+    when the buffer fills.
+  - Any other call -- a read, `lseek`, `fstat`, `close`, `fsync`, any
+    path call -- sends the buffer first, so a program always sees its
+    own writes. Another program sees them once the writer closes or
+    `fsync`s, which was already true of FatFs.
+  - A gathered write that then fails is reported by the next write,
+    `fsync` or `close` of that descriptor. Exit flushes too (`atexit`).
+  - The buffer is `malloc`ed on first use, so a program that never
+    writes in pieces pays nothing but code. cron is built without it
+    (`-DZFSAPP_WBUF=0`): its malloc would cost ~5KB of flash. The
+    kernel's is static, in bss, and used only by pid 0 -- apps calling
+    the kernel's syscalls are gathered on their own side already.
+  - `zfs_flush()` (zfsc.h) sends the buffer by hand.
 
 ## Booting
 

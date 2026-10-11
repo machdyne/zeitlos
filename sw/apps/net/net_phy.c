@@ -93,6 +93,9 @@ static const net_phy_t phy_usb_ecm = {
 	4 * 536,
 	usb_ecm_idle_ticks,
 	usb_ecm_mac,
+	0,
+	usb_ecm_recv_ref,
+	usb_ecm_recv_done,
 };
 
 const net_phy_t *net_phy = 0;

@@ -32,6 +32,8 @@ position in the log.
 - **Output written straight to UART0's registers** by something other
   than the kernel's own `k_uart_putc()` and `kprint()`. Apps printing
   through the kernel (`z_uart_putc()`) do reach it.
+- **With no desktop at all**, the [rescue console](rescue_console.md)
+  shows this log, and the shell, on the monitor.
 - **A kernel panic** halts the machine, so no app is left to show it;
   instead the panic draws the end of this log straight onto the screen
   itself ([mpu.md](mpu.md#crash-reporting)).

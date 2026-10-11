@@ -14,10 +14,16 @@ was in the kernel -- keeping the drivers in userspace
   itself did not shrink as expected.
 - **Round 2 measured:** of a 10.8ms block, reading the frame from the
   adapter took 5.2ms (the wire needs ~1.1ms) and `net`'s handling 4.5ms.
-- **Round 3 built, awaiting hardware:** both fixed -- the reader no
-  longer spins 1.2ms on a NAK in mid-frame, and received frames are
-  word-aligned so `net`'s copies run a word at a time. Expected: ~5ms a
-  block, ~250-300KB/s.
+- **Round 3 measured: 148KB/s** received and discarded, 6.7ms a block
+  -- the reader no longer spins on a NAK in mid-frame and `net`'s copies
+  run a word at a time. To the SD card, 88KB/s: the card write, 17.8ms
+  a block, is now the limit.
+- **Round 4 built, awaiting hardware:** writes are gathered 8KB at a
+  time for every program (write-behind), `net` handles a frame where
+  `usb` left it and lends TFTP blocks to the receiver instead of copying
+  them, and a USB stick that NAKs is no longer paced by a millisecond
+  spin. Expected: to the card well past 88KB/s; received alone a little
+  past 148KB/s.
 - **Before it:** 30-36KB/s over USB ethernet -- ~10ms a 512-byte block,
   the monolithic kernel's pace, plus one or two lost frames a transfer
   at 0.5s each.
@@ -76,6 +82,15 @@ sees none after two retries asks again for 512.
 | G | frame receive in the USB host controller: ask the adapter in hardware, land a whole frame in its own BRAM, interrupt when complete | RTL, `usb` | toward the ~1MB/s bus limit with D or E | large; lakritz is ~85% full | |
 | H | the D-cache write buffer on lakritz (`DCACHE_WBUF 2`) | RTL | every copy faster | ~540 LUT4 | |
 
+Round 4's set, after the receiver turned out to bind:
+
+| | change | where | state |
+|---|---|---|---|
+| 1 | a USB stick's NAKs retried by the engine (15 a round), short spins, a 3s limit by time | `usb` | built |
+| 2 | TCP: a window of segments in flight, MSS 1460 over USB ethernet | `net` | next |
+| 3 | write-behind: 8KB of small writes per program become one request to `fs` | zfsapp, zfsc, kernel | built |
+| 4 | fewer copies in `net`: frames handled in `usb`'s ring, TFTP blocks lent to the receiver | `net`, zstream | built |
+
 The order: A+B+C, measure; then D (if the server has it) or E; then F
 when the receiver binds; G and H are hardware.
 
@@ -84,6 +99,7 @@ when the receiver binds; G and H are hardware.
 ```
 tget loom wm -            # the network alone: received and discarded
 tget loom wm /ram/test    # with the file write
+tget loom wm /test        # with the card write
 usbstat                   # before (to reset) and after
 ```
 
@@ -175,3 +191,44 @@ accounted for, piece by piece:
   agreed and none arriving after two retries -> ask again for 512.
 
 Expected together: ~10.8 -> ~5ms a block, ~250-300KB/s received.
+
+**Measured** (`tget loom wm -`): 148KB/s, 6.7ms a block -- reading the
+frame 2.05ms (about one NAK in mid-frame each, now absorbed by the
+engine), `net` 2.8ms, waiting in the ring 0.75ms. To the card
+(`/test`): 88KB/s, the receiver taking 17.8ms a block. Each 1468-byte
+block was its own write request to `fs` and its own partial-cluster
+card write.
+
+## Round 4: the receiver, the stick, the copies
+
+- **Write-behind** ([fs_driver.md](fs_driver.md), "Small writes are
+  gathered"). A program's writes after a descriptor's first are kept
+  in an 8KB buffer and sent as one request when it fills, or before any
+  other call. `tget` writes from the kernel's pid 0 through zfsc, apps
+  through zfsapp; both gather, so a TFTP transfer to the card now
+  writes ~5.6 blocks per request: one round trip to `fs` and one
+  8KB write into FatFs instead of 5-6 of each. A later failure is
+  reported by the next write, `fsync` or `close`. cron is built without
+  it (its malloc would cost 5KB of flash).
+- **Frames in place.** `net` used to copy each received frame out of
+  `usb`'s ring into its own buffer. A PHY may now offer `recv_ref()`
+  and `recv_done()` (`net_phy.h`); USB ethernet does, and `eth.c`
+  handles the frame where it lies and then frees the slot.
+- **Blocks lent, not copied.** TFTP's queue holds three blocks; the
+  head is lent to the receiver (`zstream_send_chunk_ref()`, a chunk
+  that points into the sender's memory and is not freed) and its slot
+  is free again when the receiver asks for more. A block is ACKed when
+  a slot is free for the next, as before.
+- **USB sticks** ([usb_host.md](usb_host.md), "NAK pacing"): up to 15
+  NAKs per round in the engine, ~50us between rounds instead of 1.2ms,
+  given up after 3 seconds without progress.
+- **Tests:** `test_fs` 3872 and `test_fs_kernel` 3915 checks (gathered
+  writes, sizes and reads of one's own writes, errors deferred and
+  immediate); `test_tftp_get` 94 (a lent block untouched until
+  released, a slow receiver with three slots); `test_usb` 234; the MSC
+  cosim (NAKs within and over the engine's budget) and the ECM cosim.
+
+Expected: the card write per block falls from 17.8ms toward ~6ms, so
+to the card ~150KB/s, bound by the network again; received alone,
+somewhat past 148KB/s (one copy fewer, ~0.3ms of 6.7). Measure with
+the three `tget`s above and `usbbench` on a stick.

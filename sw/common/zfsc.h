@@ -85,4 +85,9 @@ bool zfs_path_is_ours(const char *path);
 // the first free-space count on a large FAT32 card.
 #define ZFS_SLOW_TICKS		(732u * 120u)
 
+// Small writes are collected and sent as one request (zfsc.c,
+// "write-behind"); any other call sends them first. This sends them
+// now, for a process about to hand a file to another.
+void zfs_flush(void);
+
 #endif

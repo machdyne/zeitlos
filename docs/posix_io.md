@@ -60,6 +60,14 @@ millisecond. A `read()` or `write()` moves up to 32KB in one request.
 `fgetc()`s into few `read()`s. A program that reads a big file a byte
 at a time should still `setvbuf()` a bigger buffer.
 
+**Writes are gathered.** Under `stdio`, zfsc keeps an 8KB write-behind
+buffer per program: after a descriptor's first `write()`, which goes
+straight to `fs` so errors show at once, smaller writes are sent 8KB at
+a time. Every other call on any descriptor sends the buffer first, and
+a write that fails later is reported by the next `write()`, `fsync()`
+or `close()` of that descriptor ([fs_driver.md](fs_driver.md), "Small
+writes are gathered").
+
 ## Who uses it
 
 - **`vi`.** It dropped the `fileio.c` it carried and the directory,

@@ -40,6 +40,9 @@ bool usb_ecm_init(const uint8_t mac[6]);
 bool usb_ecm_mac(uint8_t mac[6]);
 
 uint16_t usb_ecm_recv(uint8_t *buf, uint16_t maxlen);
+// The next frame in usb's ring, in place, then done with it (net_phy.h).
+uint16_t usb_ecm_recv_ref(const uint8_t **frame);
+void usb_ecm_recv_done(void);
 bool usb_ecm_send(const uint8_t *buf, uint16_t len);
 void usb_ecm_debug_dump(void);
 uint32_t usb_ecm_idle_ticks(void);
