@@ -1,9 +1,10 @@
 # cron -- programs on a schedule
 
 `sw/apps/cron`. Runs programs at set times -- nightly backups, an
-hourly sync -- from a list in **`/data/cron/cron.cfg`**. A core app, in
-flash; `init` starts it at boot when that file exists, and it sleeps
-between jobs.
+hourly sync -- from a list in **`/data/cron/cron.cfg`** on the card,
+**or from the flash key/value store**, which needs no card (below). A
+core app, in flash; `init` starts it at boot when either has a job, and
+it sleeps between jobs.
 
 ```
 # /data/cron/cron.cfg
@@ -44,6 +45,38 @@ and passed on the way `run` passes them: the program gets its arguments
 as its launch argument. A line cron cannot read is reported on the
 console with its line number, and the rest of the file still works.
 
+## Jobs in the flash key/value store
+
+Optional, and alongside the file. Each key **`apps.cron.job.NAME`**
+holds one rule, the same line as in the file, and
+**`apps.cron.wait_for_ntp`** the setting
+([kvstore.md](kvstore.md)):
+
+```
+> kv set apps.cron.job.backup "daily 03:00 backup /docs"
+> kv set apps.cron.job.mail "every 30m check-mail"
+> kv set apps.cron.wait_for_ntp no
+> kv del apps.cron.job.mail
+> cfg reload
+```
+
+- **No card needed.** The store is in flash, so a board without a card
+  can have scheduled jobs, and they survive a reboot.
+- **Many jobs:** one key each; NAME is up to 17 characters (keys are 31
+  at most), a line up to 191. The store holds 4KB in all, and cron 32
+  jobs, the file's included.
+- **Both run.** Jobs from the file and from the store together; the log
+  says which is which: `started [kv:backup] backup /docs`.
+- **Changes:** `cfg reload` re-reads the store too. A new key needs cron
+  running -- `run cron`, or reboot; `init` starts it when a key exists.
+- **Without a card, the state and the log go to `/ram/cron`**, until the
+  next boot -- so a daily job missed while the machine was off is not
+  caught up then. They are not kept in the store, because a job every
+  30 minutes would wear out the flash. With a card, `/data/cron` as
+  always.
+- **Same trust as the file.** Any app may write `apps.*` keys, as any
+  app may write the file.
+
 ## Settings
 
 | setting | default | |
@@ -67,10 +100,12 @@ for a board without networking (`obst`), with care.
   running with a valid clock -- the machine was off, or not yet synced,
   at the time. Hourly and `every` jobs do not catch up: a machine off
   for a day should not run 24 syncs at once. When each job last ran is
-  kept in **`/data/cron/state`**, one line per job, keyed by a hash of its
+  kept in **`/data/cron/state`** (`/ram/cron/state` without a card),
+  one line per job, keyed by a hash of its
   rule's line -- so editing a rule starts its history over.
 - **The log.** One line per start, skip, failed start and exit in
-  **`/data/cron/log`**, and on the console:
+  **`/data/cron/log`** (`/ram/cron/log` without a card), and on the
+  console:
 
   ```
   2026-09-25 03:00  started backup /docs

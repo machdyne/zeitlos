@@ -16,9 +16,9 @@ printf, [build.md](build.md#integer-only-printf-zfmt)), which took it
 from 145,600 bytes to 88,880 in flash, and from 215,608 to 162,992 in
 RAM.
 
-`cron` ([cron.md](cron.md)) is one for the same reason as `console`:
-it is small -- about 22KB -- and a scheduled job should not depend on
-anything but the card it reads its list from.
+`cron` ([cron.md](cron.md)) is one because its jobs can live in the
+flash key/value store, so a board with no card can still run them; it
+is small, about 22KB.
 
 `repl` is a core app too: Scheme, and `te`, with no card at all. The
 other shell, `posix`, is **not**: it lives on the sdcard. `term` starts
@@ -331,8 +331,8 @@ stack). They are `CORE_BUDGETS` in the top-level `Makefile`, next to
 `CORE_APPS`:
 
 ```
-CORE_BUDGETS = fs=45K/75K usb=44K/56K wm=107K/135K net=144K/276K term=93K/152K \
-	console=16K/16K cron=26K/48K text=86K/162K files=70K/104K repl=194K/304K
+CORE_BUDGETS = fs=45K/75K usb=48K/56K wm=107K/135K net=144K/276K term=91K/152K \
+	console=14K/16K cron=26K/48K text=86K/162K files=70K/104K repl=194K/304K
 CORE_RESERVE = 21K
 CORE_ZAR_MAX = 848K
 CORE_AT_BOOT = fs usb wm net console
@@ -487,5 +487,16 @@ touching the bitstream. Both are flashed together deliberately:
 app, and a binary built against a different copy calls the wrong kernel
 handler for every syscall past the point they diverge -- which is not a
 crash, just quietly wrong behaviour. See that file's own warning.
+
+**Without the clean:** `make BOARD=obst flash_sw` (or `flash_os`, or
+`flash_apps` -- the same) rebuilds the kernel and the core apps
+incrementally, only what changed, then builds the archive and flashes
+the kernel and archive as one image. It builds only the apps that go
+into the archive (`core-bins`), not every app. Use it to reflash after
+a flash that failed, or after a small change; `dev-flash` cleans
+first, so a change to a shared header or `syscalls.def` reaches every
+app. (A changed `syscalls.def` or other header in `sw/common` is the
+case for `dev-flash`: per-app dependency files catch most of it, not
+all.)
 
 If anything under `rtl/` changed, use `make flash` instead.

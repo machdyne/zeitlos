@@ -88,6 +88,7 @@ typedef struct {
 	volatile uint32_t tx_tail;		// frames taken from net's tx[]
 	z_usbnet_info_t info;			// kept current by `usb`
 	uint16_t rx_len[Z_USBNET_RX_SLOTS];
+	uint32_t rx_at[Z_USBNET_RX_SLOTS];	// cycle counter when put: net's wait, measured
 	uint8_t rx[Z_USBNET_RX_SLOTS][Z_USBNET_FRAME];
 } z_usbnet_srv_t;
 

@@ -704,8 +704,35 @@ queue size means the app, not the network, is the constraint.
 ### TFTP
 
 `tftp.c` is stop-and-wait (RFC 1350): a block, its ACK, the next. So
-its speed is 512 bytes over the round trip, and the round trip is what
-to watch. When a get finishes, `net` prints where the time went:
+its speed is the block size over the round trip, and both are what to
+work on.
+
+- **Bigger blocks (RFC 2348).** A get asks for `blksize` 1468, the
+  most a 1500-byte Ethernet frame holds, so a round trip carries 2.9
+  times the data. The server answers with an OACK naming what it will
+  use, and `net` ACKs block 0; a block shorter than that size ends the
+  file. A server without options sends block 1 at 512, and one that
+  refuses options (error 8) is asked again without them. tftpd-hpa
+  supports it; puts stay at 512.
+- **Two blocks are queued.** A block is ACKed when it is stored, unless
+  that fills the queue; then its ACK waits until the receiver takes
+  one, so the server never sends into a full queue. The receiver's
+  write overlaps the next block's trip.
+- **The ACK is the last thing sent.** When the receiver is waiting, it
+  gets its block first and the ACK goes after: the last message is who
+  runs when `net` sleeps (the kernel's hand-off), and the ACK must reach
+  `usb` and the wire first.
+- **The retry timeout follows the round trip**: four times the smoothed
+  ACK-to-next-block time plus 20ms, at least ~41ms, doubled per retry,
+  at most 0.5s. A lost frame used to cost a fixed 0.5s. Before the
+  server first answers, it is ~4s, for a server that fetches the file
+  first (the ESP32 gateway).
+- **A duplicate block is not ACKed.** tftpd-hpa sends the next block on
+  any repeat of the last ACK, so answering echoes would make every
+  later block arrive twice (the Sorcerer's Apprentice, RFC 1123
+  4.2.3.1). A lost ACK is recovered by the retry timer.
+
+When a get finishes, `net` prints where the time went:
 
 ```
 net: tftp get 107468 bytes in 2.939s (36.5 KB/s)
@@ -716,18 +743,13 @@ net: tftp per block: ack->next block avg 12301 us (max 533208), receiver took it
   `usb`), the wire and the server, both ways.
 - `receiver took it after`: how long the block waited for `tget`'s
   pull, which is the receiver's pace (a write to `fs`).
-- **Two blocks are queued.** A block is ACKed when it is stored, unless
-  that fills the queue; then its ACK waits until the receiver takes
-  one, so the server never sends into a full queue. The receiver's
-  write overlaps the next block's trip.
-- **A retry** (0.5s without the next block) says which block it waited
-  for and when, and with a USB adapter what `usb`'s ring held: `A FRAME
-  WAITS` would be a missed wake, `empty` a frame that never arrived.
-  There is no retry while the queue waits on the receiver.
+- **A retry** says which block it waited for, when, and after how
+  long, and with a USB adapter what `usb`'s ring held: `A FRAME WAITS`
+  would be a missed wake, `empty` a frame that never arrived. There is
+  no retry while the queue waits on the receiver.
 
-Over USB ethernet a block takes ~10ms, as it did with the stack in the
-kernel, but one or two frames a transfer are lost, at 0.5s each
-([userspace_drivers.md](userspace_drivers.md), "Open issues").
+`tget <host> <file> -` receives and throws the data away, to measure
+the network without the file write.
 
 ## Known limits
 

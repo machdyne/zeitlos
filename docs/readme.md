@@ -86,6 +86,7 @@ with [welcome](welcome.md); to program it, [kernel](kernel.md) and
 | [fs\_driver](fs_driver.md) | The filesystem as a driver: `fs`, its protocol and client |
 | [usb\_driver](usb_driver.md) | USB as a driver: `usb`, its protocol, the ethernet rings, drivers past the flash |
 | [posix\_io](posix_io.md) | libc `open()`/`fopen()` over `fs`, for apps built with `POSIX_IO = 1` |
+| [net\_throughput](net_throughput.md) | Network throughput: where the time goes, and the plan past 50KB/s |
 | [app\_runtime](app_runtime.md) | The app side of the syscall boundary |
 | [executables](executables.md) | The ZEXE format and loading |
 | [flash\_apps](flash_apps.md) | Core apps in flash |

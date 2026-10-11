@@ -20,9 +20,10 @@ of the 1MB flash region, nor by flash at all.
   USB inside it), in a 160KB region; the core app archive has 848KB.
 - **Phase 4** (splitting the kernel shell out) is not planned; the
   shell stays in the kernel, perhaps trimmed later.
-- **Open:** TFTP over USB ethernet runs at 30-36KB/s against ~50KB/s
-  with the stack in the kernel; the keyboard and mouse were once not
-  set up at boot. Both are under "Open issues" below.
+- **Open:** TFTP over USB ethernet ran at 30-36KB/s against ~50KB/s
+  with the stack in the kernel; the work to go well past that is in
+  [net_throughput.md](net_throughput.md). The keyboard and mouse were
+  once not set up at boot. Both are under "Open issues" below.
 
 ## How it works now
 
@@ -171,26 +172,21 @@ link `fopen`'s buffering, so the small apps stay small.
 
 ### TFTP over USB ethernet: 30-36KB/s, not 50
 
-Where it stands after round 10 (details in its log below):
+Where it stood after round 10 (details in its log below):
 
 - **Per block, ~10ms -- the monolithic kernel's pace.** What made it
   slower is fixed: `tget` in the kernel shell spun while it waited for
   each block (it took whole ticks from `usb` and `net`), and `usb`
   sometimes failed to wake `net` for a frame that had arrived.
-- **What remains is one or two blocks a transfer that never reach
-  `usb`**, each costing TFTP's fixed 0.5s retry. At the retry `usb`'s
-  ring is empty, no frame is damaged, none arrives twice. So the frame
-  is lost between the server and the adapter, or our ACK between the
-  adapter and the server.
+- **One or two blocks a transfer never reach `usb`**, each costing
+  TFTP's 0.5s retry. At the retry `usb`'s ring is empty, no frame is
+  damaged, none arrives twice.
 
-Next:
-
-- `tcpdump -n udp and host <board>` on the server during a `tget`:
-  an ACK that never arrives, or a block sent and never received.
-- The same `tget` on the monolithic kernel, for its retry count: if it
-  loses a frame now and then too, this is not a regression.
-- A TFTP retry timeout matched to the round trip (~10ms here) instead
-  of 0.5s, so a lost frame costs ~100ms.
+The work to go past 50KB/s -- bigger blocks, shorter round trips, a
+retry timeout from the round trip -- is in
+[net_throughput.md](net_throughput.md). Still worth doing:
+`tcpdump -n udp and host <board>` on the server during a `tget`, to
+see whether a lost frame is our ACK or the server's block.
 
 ### Keyboard and mouse not set up at one boot
 

@@ -14,11 +14,38 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <stdbool.h>
+#include <string.h>
 
 static bool fake_valid;
 static uint32_t fake_utc;
 static bool clock_valid(void) { return fake_valid; }
 static uint32_t clock_now(void) { return fake_utc; }
+
+// A fake flash key/value store.
+static char kv_k[8][32], kv_v[8][300];
+static int kv_n;
+static int kv_entry(uint32_t i, char *name, uint32_t *vlen) {
+	if ((int)i >= kv_n) return -1;
+	strcpy(name, kv_k[i]);
+	if (vlen) *vlen = (uint32_t)strlen(kv_v[i]);
+	return 0;
+}
+static int kv_get(const char *k, void *buf, uint32_t cap, uint32_t *len) {
+	for (int i = 0; i < kv_n; i++)
+		if (!strcmp(kv_k[i], k)) {
+			uint32_t l = (uint32_t)strlen(kv_v[i]);
+			if (l > cap) return -5;
+			memcpy(buf, kv_v[i], l);
+			*len = l;
+			return 0;
+		}
+	return -1;
+}
+static void kv_put(const char *k, const char *v) {
+	snprintf(kv_k[kv_n], 32, "%s", k);
+	snprintf(kv_v[kv_n], 300, "%s", v);
+	kv_n++;
+}
 
 #include "../cron.c"
 
@@ -92,7 +119,12 @@ int fs_write_chunk(int h, const void *b, int len) {
 	return len;
 }
 int fs_close_handle(int h) { (void)h; return 1; }
-int fs_mkdir(const char *p) { (void)p; return 1; }
+static bool card = true;		// /data can be made: there is a card
+int fs_mkdir(const char *p) { return strncmp(p, "/data", 5) ? 1 : card; }
+int fs_stat(const char *p, z_fs_info_t *i) { (void)i; return !strcmp(p, "/data") && card; }
+
+#define LOG_PATH   Z_PATH_CRON_LOG
+#define STATE_PATH Z_PATH_CRON_STATE
 
 // -- helpers --
 
@@ -122,6 +154,7 @@ static void reset(void) {
 	fake_ticks = 0; up_last_ticks = up_frac = up_secs = 0;
 	last_minute = 0; refuse_start = false; next_pid = 10;
 	snprintf(tzsetting, sizeof(tzsetting), "UTC");
+	kv_n = 0; card = true;
 }
 
 // Runs cron's passes from the current fake time up to `until`, a minute
@@ -302,6 +335,36 @@ int main(void) {
 	refuse_start = true;
 	cron_begin();
 	expect(strstr(fopen_(LOG_PATH, false)->data, "could not start missing") != NULL, "a failed start is logged");
+
+	// -- jobs in the flash key/value store --
+	reset();
+	expect(!load_config(), "no file and no keys: nothing to do");
+	kv_put("apps.netserve.ssh", "22");				// not ours
+	expect(!load_config(), "other keys are not jobs");
+	kv_put("apps.cron.job.backup", "daily 03:00 backup /docs");
+	kv_put("apps.cron.job.boot", "at boot hello");
+	kv_put("apps.cron.job.bad", "sometimes nope");
+	kv_put("apps.cron.wait_for_ntp", "no");
+	expect(load_config(), "jobs from the store alone, no file");
+	expect(njobs == 2, "two good jobs, one bad");
+	expect(strstr(console, "apps.cron.job.bad") != NULL, "a bad job named by its key");
+	expect(!wait_for_ntp, "wait_for_ntp from the store");
+	expect(!strcmp(jobs[0].from, "kv:backup") && jobs[0].kind == J_DAILY, "kv job tagged");
+	config("daily 03:00 backup /docs\n");				// the same line in the file
+	cfg_generation_now++;
+	cron_step();
+	expect(njobs == 3, "file and store together");
+	expect(jobs[0].key != jobs[1].key, "the same line from file and store are two jobs");
+	card = false;							// no card: /ram/cron
+	fake_valid = false;
+	cron_begin();
+	expect(count_started("hello") == 1, "a store job runs without a card");
+	expect(fopen_(Z_DIR_CRON_RAM "/log", false) != NULL, "logged in /ram/cron without a card");
+	expect(strstr(fopen_(Z_DIR_CRON_RAM "/log", false)->data, "[kv:boot] hello") != NULL,
+		"the log says where the job came from");
+	card = true;
+	state_save();
+	expect(fopen_(STATE_PATH, false) != NULL, "back on the card when there is one");
 
 	printf("cron: %d checks, %d failed\n", checks, failures);
 	return failures ? 1 : 0;

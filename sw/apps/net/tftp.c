@@ -9,6 +9,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <string.h>
+#include <strings.h>
 
 #include "tftp.h"
 #include "udp.h"
@@ -22,10 +23,22 @@
 #define TFTP_OP_DATA   3
 #define TFTP_OP_ACK    4
 #define TFTP_OP_ERROR  5
+#define TFTP_OP_OACK   6	// RFC 2347: the server's answer to our options
 
 #define TFTP_SERVER_PORT   69
-#define TFTP_BLOCK_SIZE    512
+#define TFTP_BLOCK_SIZE    512	// RFC 1350's, and PUT's always
+// GET asks for bigger blocks (RFC 2348, "blksize"): 1468 is the most
+// that fits a 1500-byte Ethernet frame (1500 - 20 IP - 8 UDP - 4 TFTP),
+// so a round trip carries 2.9 times the data. A server without options
+// answers with block 1 instead of an OACK, at 512, and that works too.
+#define TFTP_MAX_BLOCK     1468
 #define TFTP_TIMEOUT_TICKS 366	// ~0.5s at the ~732Hz tick rate (see z_uptime_ticks())
+// The retry timeout once a get is under way: four times the smoothed
+// round trip (our ACK to the next block) plus a margin, between these
+// bounds, doubling with each retry. A lost frame used to cost the fixed
+// 0.5s above, a third of a 100KB transfer for one or two of them.
+#define TFTP_RTO_MIN_TICKS 30	// ~41ms
+#define TFTP_RTO_MAX_TICKS TFTP_TIMEOUT_TICKS
 // GET, before the first DATA block: the server may have to produce the
 // file first (the ESP32 gateway fetches http(s):// names on demand --
 // a TLS handshake plus a redirect is ~6 s), so the RRQ is retried
@@ -86,14 +99,23 @@ static void trace_arm(void) {
 static void trace_arm(void) { }
 #endif
 
-// usb_ecm.c's, when linked: the USB adapter's ring at a retry.
+// usb_ecm.c's, when linked: the USB adapter's ring at a retry, and
+// when the last frame was put in it and taken from it.
 void usb_ecm_note(void) __attribute__((weak));
+void usb_ecm_frame_times(uint32_t *put, uint32_t *take) __attribute__((weak));
 
-static void st_note(uint32_t c0, uint32_t *n, uint32_t *sum, uint32_t *max) {
+// GET over a USB adapter: how long a block's frame waited in usb's ring
+// for net, and how long net then took to queue its ACK.
+static uint32_t st_ring_n, st_ring_sum, st_ring_max;
+static uint32_t st_proc_n, st_proc_sum, st_proc_max;
+static uint32_t blk_take;	// when the newest block's frame was taken, 0 if unknown
+
+static uint32_t st_note(uint32_t c0, uint32_t *n, uint32_t *sum, uint32_t *max) {
 	uint32_t us = (tcycles() - c0) / (Z_SYSCLK_HZ / 1000000u);
 	(*n)++;
 	*sum += us;
 	if (us > *max) *max = us;
+	return us;
 }
 
 // Reports the rate a completed transfer actually achieved.
@@ -119,6 +141,11 @@ static void report_rate(const char *what) {
 		what, (unsigned long)xfer_bytes,
 		(unsigned long)(ms / 1000), (unsigned long)(ms % 1000),
 		(unsigned long)(kbps10 / 10), (unsigned long)(kbps10 % 10));
+	if (is_get && st_ring_n)
+		printf("net: tftp per block over usb: the frame waited in usb's ring avg %lu us (max %lu), "
+			"then net queued the ACK after avg %lu us (max %lu)\n",
+			(unsigned long)(st_ring_sum / st_ring_n), (unsigned long)st_ring_max,
+			(unsigned long)(st_proc_n ? st_proc_sum / st_proc_n : 0), (unsigned long)st_proc_max);
 	if (is_get && (st_net_n || st_recv_n))
 		printf("net: tftp per block: ack->next block avg %lu us (max %lu), "
 			"receiver took it after avg %lu us (max %lu); %lu retries, "
@@ -137,7 +164,11 @@ static uint16_t last_chunk_len;	// PUT only: length of the most recently SENT bl
 static uint32_t last_tx_ticks;
 static uint8_t retries;
 static bool got_first;	// GET: first DATA block seen (see TFTP_FIRST_TIMEOUT_TICKS)
-static uint8_t last_pkt[4 + TFTP_BLOCK_SIZE];
+static uint8_t last_pkt[4 + TFTP_MAX_BLOCK];
+static uint16_t blksize;	// GET: the block size in force (512 until an OACK says more)
+static bool asked_options;	// GET: the RRQ carried options (cleared if the server refused them)
+static char get_filename[64];	// GET: for an RRQ sent again without options
+static uint32_t srtt_us;	// GET: smoothed ACK-to-next-block time, 0 until measured
 static uint16_t last_pkt_len;
 static char err_msg[64];
 
@@ -174,7 +205,7 @@ static bool held_valid;
 // full queue. With one slot, every block's round trip waited for the
 // receiver's write as well as the network's.
 #define GQ_SLOTS 2
-static uint8_t gq_data[GQ_SLOTS][TFTP_BLOCK_SIZE];
+static uint8_t gq_data[GQ_SLOTS][TFTP_MAX_BLOCK];
 static uint16_t gq_len[GQ_SLOTS];
 static uint32_t gq_at[GQ_SLOTS];	// cycles when stored
 static uint8_t gq_head, gq_n;
@@ -247,6 +278,18 @@ static void send_rrq_wrq(uint8_t opcode, const char *filename) {
 	for (int j = 0; mode[j]; j++) p[i++] = mode[j];
 	p[i++] = 0;
 
+	if (opcode == TFTP_OP_RRQ && asked_options) {
+		// "blksize" "1468" (RFC 2348). The server answers with an OACK
+		// naming what it will use, or ignores options and sends block 1.
+		static const char opt[] = "blksize";
+		char num[8];
+		int n = snprintf(num, sizeof num, "%u", (unsigned)TFTP_MAX_BLOCK);
+		for (int j = 0; opt[j]; j++) p[i++] = opt[j];
+		p[i++] = 0;
+		for (int j = 0; j < n; j++) p[i++] = num[j];
+		p[i++] = 0;
+	}
+
 	last_pkt_len = i;
 	srv_port = 0;	// not yet learned -- send_last_packet() falls back to TFTP_SERVER_PORT
 	send_last_packet();
@@ -259,6 +302,12 @@ static void send_ack(uint16_t blk) {
 	last_pkt_len = 4;
 	send_last_packet();
 	ack_at = tcycles();
+	// net's own time: the block's frame taken from usb's ring to its
+	// ACK queued (not counted when the ACK waited for a free slot).
+	if (blk_take && blk == block) {
+		st_note(blk_take, &st_proc_n, &st_proc_sum, &st_proc_max);
+		blk_take = 0;
+	}
 }
 
 static void send_data(uint16_t blk, const uint8_t *data, uint16_t len) {
@@ -295,6 +344,10 @@ static void try_deliver_get(void) {
 	gq_head = (uint8_t)((gq_head + 1) % GQ_SLOTS);
 	gq_n--;
 
+	// The ACK after the chunk, not before: the last message sent is
+	// who runs when this process sleeps (the kernel's hand-off), and
+	// the ACK has to get to `usb` and out; the receiver's write can
+	// wait its turn and overlaps the next block's trip.
 	if (ack_deferred) {
 		ack_deferred = false;
 		send_ack(block);
@@ -354,6 +407,44 @@ static void handle_packet(uint32_t src_ip, uint16_t src_port, const uint8_t *p, 
 		printf("net: tftp server replied from port %d, locking on\n", src_port);
 	} else if (src_port != srv_port) return;	// packet from an unrelated port, ignore
 
+	if (opcode == TFTP_OP_ERROR && is_get && asked_options && !got_first &&
+		((p[2] << 8) | p[3]) == 8) {
+		// Some servers refuse an RRQ with options outright (error 8,
+		// RFC 2347) instead of ignoring them: ask again without.
+		asked_options = false;
+		blksize = TFTP_BLOCK_SIZE;
+		printf("net: tftp server refused options; asking for 512-byte blocks\n");
+		send_rrq_wrq(TFTP_OP_RRQ, get_filename);
+		return;
+	}
+
+	if (is_get && opcode == TFTP_OP_OACK) {
+		// Only before the first block; a late one is a duplicate.
+		if (got_first || block) return;
+		uint16_t want = TFTP_BLOCK_SIZE;
+		uint16_t i = 2;
+		while (i < len) {
+			const char *name = (const char *)p + i;
+			uint16_t nl = 0;
+			while (i + nl < len && p[i + nl]) nl++;
+			uint16_t v = i + nl + 1;
+			uint16_t vl = 0;
+			while (v + vl < len && p[v + vl]) vl++;
+			if (v + vl >= len) break;
+			if (nl == 7 && !strncasecmp(name, "blksize", 7)) {
+				uint32_t n = 0;
+				for (uint16_t k = 0; k < vl; k++)
+					if (p[v + k] >= '0' && p[v + k] <= '9') n = n * 10 + (p[v + k] - '0');
+				if (n >= 8 && n <= TFTP_MAX_BLOCK) want = (uint16_t)n;
+			}
+			i = v + vl + 1;
+		}
+		blksize = want;
+		printf("net: tftp server agreed to %u-byte blocks\n", (unsigned)blksize);
+		send_ack(0);		// "go ahead" (RFC 2347)
+		return;
+	}
+
 	if (opcode == TFTP_OP_ERROR) {
 		char msg[64];
 		int i = 0;
@@ -372,9 +463,27 @@ static void handle_packet(uint32_t src_ip, uint16_t src_port, const uint8_t *p, 
 		// deferred).
 		if (blk == (uint16_t)(block + 1) && !got_last && gq_n < GQ_SLOTS) {
 
-			if (dlen > TFTP_BLOCK_SIZE) { fail("oversized block from server"); return; }
+			if (dlen > blksize) { fail("oversized block from server"); return; }
 
-			if (got_first) st_note(ack_at, &st_net_n, &st_net_sum, &st_net_max);
+			blk_take = 0;
+			if (usb_ecm_frame_times) {
+				uint32_t put, take;
+				usb_ecm_frame_times(&put, &take);
+				if (put && take) {
+					uint32_t us = (take - put) / (Z_SYSCLK_HZ / 1000000u);
+					st_ring_n++;
+					st_ring_sum += us;
+					if (us > st_ring_max) st_ring_max = us;
+					blk_take = take;
+				}
+			}
+			if (got_first) {
+				uint32_t us = st_note(ack_at, &st_net_n, &st_net_sum, &st_net_max);
+				// The round trip the retry timeout is made from: an
+				// average weighted 7/8 to the past (RFC 6298's), not
+				// counting a block that came only after a retry.
+				if (!retries) srtt_us = srtt_us ? srtt_us - srtt_us / 8 + us / 8 : us;
+			}
 			uint8_t i = (uint8_t)((gq_head + gq_n) % GQ_SLOTS);
 			memcpy(gq_data[i], p + 4, dlen);
 			gq_len[i] = dlen;
@@ -385,17 +494,27 @@ static void handle_packet(uint32_t src_ip, uint16_t src_port, const uint8_t *p, 
 			xfer_bytes += dlen;	// wire bytes, for report_rate()
 			retries = 0;
 			got_first = true;
-			if (dlen < TFTP_BLOCK_SIZE) got_last = true;
+			if (dlen < blksize) got_last = true;
 
-			if (gq_n < GQ_SLOTS) send_ack(block);
-			else ack_deferred = true;	// sent when the receiver takes one
-
+			// Its ACK is owed. Hand the receiver a block first, if it
+			// is waiting for one (try_deliver_get() sends the ACK after
+			// the chunk); then, if a slot is still free, ACK. A full
+			// queue keeps it owed until the receiver takes one.
+			ack_deferred = true;
 			try_deliver_get();
+			if (ack_deferred && gq_n < GQ_SLOTS) {
+				ack_deferred = false;
+				send_ack(block);
+			}
+			if (ack_deferred) blk_take = 0;	// waits for the receiver: not net's time
 
-		} else if (blk == block && block && !ack_deferred) {
-			// already ACKed: our ACK was lost, or crossed it
+		} else if (blk == block && block) {
+			// Already stored. NOT ACKed again: tftpd-hpa sends the
+			// next block on any ACK of the last one, so an echo of a
+			// retry would make every later block arrive twice (the
+			// Sorcerer's Apprentice, RFC 1123 4.2.3.1). A lost ACK is
+			// recovered by our own retry timer instead.
 			st_dup++;
-			send_ack(block);
 		} else if (blk != block) {
 			st_odd++;
 		}
@@ -443,10 +562,18 @@ bool tftp_get_start(uint32_t server_ip, const char *filename,
 	held_valid = false;
 	gq_head = gq_n = 0;
 	ack_deferred = got_last = false;
+	blksize = TFTP_BLOCK_SIZE;
+	asked_options = true;
+	srtt_us = 0;
+	strncpy(get_filename, filename, sizeof(get_filename) - 1);
+	get_filename[sizeof(get_filename) - 1] = 0;
 	st_net_n = st_net_sum = st_net_max = 0;
 	st_recv_n = st_recv_sum = st_recv_max = 0;
 	st_retry_net = 0;
 	st_dup = st_odd = 0;
+	st_ring_n = st_ring_sum = st_ring_max = 0;
+	st_proc_n = st_proc_sum = st_proc_max = 0;
+	blk_take = 0;
 
 	zstream_accept(&out_stream, receiver_pid, open_tag);
 
@@ -634,8 +761,17 @@ tftp_result_t tftp_poll(uint32_t *out_len, char *err_out, uint32_t err_out_len) 
 		// gone is noticed by the stream, not here.
 		last_tx_ticks = z_uptime_ticks();
 	} else if (state == T_GET || state == T_PUT) {
-		uint32_t tmo = (state == T_GET && !got_first)
-			? TFTP_FIRST_TIMEOUT_TICKS : TFTP_TIMEOUT_TICKS;
+		uint32_t tmo = TFTP_TIMEOUT_TICKS;
+		if (state == T_GET && !got_first && !srv_port)
+			tmo = TFTP_FIRST_TIMEOUT_TICKS;	// the server has not answered yet
+		else if (state == T_GET && srtt_us) {
+			// 4 x the round trip + 20ms, doubled per retry, bounded.
+			uint32_t us = srtt_us * 4 + 20000u;
+			tmo = (us * Z_TICK_HZ) / 1000000u + 1;
+			if (tmo < TFTP_RTO_MIN_TICKS) tmo = TFTP_RTO_MIN_TICKS;
+			tmo <<= retries;
+			if (tmo > TFTP_RTO_MAX_TICKS) tmo = TFTP_RTO_MAX_TICKS;
+		}
 		if (z_uptime_ticks() - last_tx_ticks >= tmo) {
 			retries++;
 			if (retries > TFTP_MAX_RETRIES) {
@@ -647,9 +783,10 @@ tftp_result_t tftp_poll(uint32_t *out_len, char *err_out, uint32_t err_out_len) 
 				// lost on the way, at regular intervals something
 				// periodic (ARP, the hub's poll, ntp).
 				if (state == T_GET)
-					printf("net: tftp retry %d/%d (waiting for block %u, %lu ms in)\n",
+					printf("net: tftp retry %d/%d (waiting for block %u, %lu ms in, after %lu ms)\n",
 						retries, TFTP_MAX_RETRIES, (unsigned)(uint16_t)(block + 1),
-						(unsigned long)((z_uptime_ticks() - xfer_start_ticks) * 1000u / Z_TICK_HZ));
+						(unsigned long)((z_uptime_ticks() - xfer_start_ticks) * 1000u / Z_TICK_HZ),
+						(unsigned long)(tmo * 1000u / Z_TICK_HZ));
 				else
 					printf("net: tftp retry %d/%d\n", retries, TFTP_MAX_RETRIES);
 				if (usb_ecm_note) usb_ecm_note();

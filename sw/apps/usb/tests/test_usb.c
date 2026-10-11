@@ -135,7 +135,9 @@ void z_usbh_wb(uint32_t a, uint8_t v) { (void)a; (void)v; }
 // -- the stack, faked --
 
 uint32_t usbh_ticks(void) { return ticks; }
-uint32_t usb_test_cycles(void) { return ticks * 65536u; }
+// 100us a look, so that a back-to-back burst (NET_BURST_US) ends
+static uint32_t cyc_extra;
+uint32_t usb_test_cycles(void) { return ticks * 65536u + (cyc_extra += 4800u); }
 void z_usbh_init(void) {}
 int z_usbh_present(void) { return 1; }
 void z_usbh_poll(void) {}
@@ -195,10 +197,12 @@ void z_usbh_ecm_info(z_usbnet_info_t *in) {
 	memcpy(in->mac, "\x02\x00\x00\x00\x00\x01", 6);
 	in->gen = 7;
 }
+void z_usbh_ecm_timing(uint32_t out[8], int reset) { (void)reset; memset(out, 0, 8 * sizeof(uint32_t)); }
+static int frame_after;		// no frame until ecm_recvs reaches this
 int z_usbh_ecm_recv(uint8_t *buf, int max) {
 	ecm_recvs++;
 	if (!ecm_present) return -1;
-	if (next_frame >= n_frames) return 0;
+	if (next_frame >= n_frames || ecm_recvs < frame_after) return 0;
 	int n = frame_len[next_frame];
 	if (n > max) return 0;
 	memcpy(buf, frames[next_frame++], (size_t)n);
@@ -347,6 +351,50 @@ static void test_net(void) {
 	usb_test_service();
 	CHECK(srv->tx_tail == cli.tx_head);
 	CHECK(n_sent == Z_USBNET_TX_SLOTS && sent_len[0] == 100 && sent[1][0] == 1);
+
+	// After a send, the adapter is asked back to back (NET_BURST_US),
+	// so an answer that lands a few asks later is taken in the same
+	// pass, not at the next tick. Not after an ARP reply.
+	{
+		uint32_t h = cli.tx_head, rx0 = srv->rx_head;
+		ticks += 100;
+		usb_test_service();		// settle: nothing pending
+		frame_after = ecm_recvs + 5;
+		put_frame(64, 9, mine);
+		memcpy(cli.tx[h % Z_USBNET_TX_SLOTS], f, sizeof f);
+		cli.tx[h % Z_USBNET_TX_SLOTS][12] = 0x08;	// IPv4
+		cli.tx[h % Z_USBNET_TX_SLOTS][13] = 0x00;
+		cli.tx_len[h % Z_USBNET_TX_SLOTS] = sizeof f;
+		cli.tx_head = h + 1;
+		usb_test_service();
+		CHECK(srv->tx_tail == cli.tx_head);
+		CHECK(srv->rx_head == rx0 + 1);		// found in the burst
+		cli.rx_tail = srv->rx_head;
+		frame_after = 0;
+
+		// An ARP reply: one ask, no burst.
+		h = cli.tx_head;
+		rx0 = srv->rx_head;
+		ticks += 100;
+		usb_test_service();
+		int asks = ecm_recvs;
+		frame_after = ecm_recvs + 5;
+		put_frame(64, 10, mine);
+		memcpy(cli.tx[h % Z_USBNET_TX_SLOTS], f, sizeof f);
+		cli.tx[h % Z_USBNET_TX_SLOTS][12] = 0x08;	// ARP
+		cli.tx[h % Z_USBNET_TX_SLOTS][13] = 0x06;
+		cli.tx_len[h % Z_USBNET_TX_SLOTS] = sizeof f;
+		cli.tx_head = h + 1;
+		ticks += 100;
+		usb_test_service();
+		CHECK(srv->rx_head == rx0);		// not yet: no burst
+		CHECK(ecm_recvs - asks <= 2);
+		frame_after = 0;
+		ticks += 100;
+		usb_test_service();
+		CHECK(srv->rx_head == rx0 + 1);
+		cli.rx_tail = srv->rx_head;
+	}
 
 	// The adapter goes: usb's ring says so, and net is told.
 	ecm_present = 0;

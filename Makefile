@@ -888,8 +888,8 @@ ZAR_APPS = $(filter-out $(CORE_APPS_OMIT),$(CORE_APPS))
 #
 # A budget is raised by taking from another, from the reserve, or by
 # making something smaller. Every core app must have one.
-CORE_BUDGETS = fs=45K/75K usb=44K/56K wm=107K/135K net=144K/276K term=93K/152K \
-	console=16K/16K cron=26K/48K text=86K/162K files=70K/104K repl=194K/304K
+CORE_BUDGETS = fs=45K/75K usb=48K/56K wm=107K/135K net=144K/276K term=91K/152K \
+	console=14K/16K cron=26K/48K text=86K/162K files=70K/104K repl=194K/304K
 CORE_RESERVE = 21K
 # The archive's region (Z_FLASH_ZAR_END - Z_FLASH_ZAR_OFF): mkzar.py
 # refuses an archive bigger than this, whatever the budgets say, so it
@@ -916,7 +916,14 @@ $(CORE_FILES_OUT)/data/repl/examples/%.scm: sw/apps/repl/examples/%.scm
 
 core-files: $(addprefix $(CORE_FILES_OUT)/,$(CORE_FILES))
 
-$(OUTDIR)/apps.zar: apps core-files
+# Builds only the apps that go into the archive (incrementally), not
+# every app as `apps` does: flash_sw after a small change rebuilds what
+# changed and reflashes, without the clean of dev-flash.
+core-bins:
+	$(MAKE) -C sw/apps check-subjects
+	$(foreach a,$(ZAR_APPS),$(MAKE) -C sw/apps/$(a) PREFIX=$(PREFIX) &&) true
+
+$(OUTDIR)/apps.zar: core-bins core-files
 	mkdir -p $(OUTDIR)
 	python3 tools/mkzar.py --budgets "$(CORE_BUDGETS)" --files-max $(CORE_RESERVE) --max $(CORE_ZAR_MAX) \
 		$(OUTDIR)/apps.zar \
@@ -1424,4 +1431,4 @@ clean_bios:
 clean_apps:
 	cd sw/apps && make clean
 
-.PHONY: clean_bios bios apps core-apps core-files pnr_again tftp-dist timing path util test_blit test_uart hwmap FORCE soc
+.PHONY: clean_bios bios apps core-bins core-apps core-files pnr_again tftp-dist timing path util test_blit test_uart hwmap FORCE soc

@@ -131,6 +131,17 @@ static void check_gen(void)
 	gen = srv->info.gen;
 }
 
+// When the frame net last took was put in usb's ring, and when net
+// took it (cycle counter): the exact wait, for the TFTP timing line
+// (tftp.c, through usb_ecm_frame_times()).
+static uint32_t last_put, last_take;
+
+void usb_ecm_frame_times(uint32_t *put, uint32_t *take)
+{
+	*put = last_put;
+	*take = last_take;
+}
+
 uint16_t usb_ecm_recv(uint8_t *buf, uint16_t maxlen)
 {
 	uint32_t tail = cli.rx_tail;
@@ -139,7 +150,13 @@ uint16_t usb_ecm_recv(uint8_t *buf, uint16_t maxlen)
 		uint32_t i = tail % Z_USBNET_RX_SLOTS;
 		uint16_t n = srv->rx_len[i];
 		if (n > maxlen) n = 0;		// cannot happen: both are a frame
-		if (n) memcpy(buf, (const uint8_t *)srv->rx[i], n);
+		if (n) {
+			uint32_t c;
+			__asm__ volatile ("rdcycle %0" : "=r"(c));
+			last_put = srv->rx_at[i];
+			last_take = c;
+			memcpy(buf, (const uint8_t *)srv->rx[i], n);
+		}
 		cli.rx_tail = tail + 1;		// after the copy: `usb` may reuse it
 		if (n) rx_frames++;
 		return n;

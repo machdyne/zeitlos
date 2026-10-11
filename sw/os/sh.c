@@ -833,7 +833,7 @@ void sh(void) {
 			char *local = get_arg(buffer, 3);
 
 			if (!ip_str || !remote) {
-				printf("usage: tget <server-ip-or-hostname> <remote-file> [local-file]\n");
+				printf("usage: tget <server-ip-or-hostname> <remote-file> [local-file | -]\n");
 				continue;
 			}
 			if (!local) local = remote;
@@ -866,8 +866,11 @@ void sh(void) {
 				continue;
 			}
 
+			// `-` receives and throws the data away: the network on its
+			// own, without the file write, for measuring it.
+			bool discard = !strcmp(local, "-");
 			kfs_file_t f;
-			if (!fs_open_write(&f, local)) {
+			if (!discard && !fs_open_write(&f, local)) {
 				printf("tget: failed to open %s for writing\n", local);
 				zstream_abort(&cons);
 				continue;
@@ -890,7 +893,7 @@ void sh(void) {
 					break;
 				}
 
-				if (fs_write_chunk(&f, data, len) != (int)len) {
+				if (!discard && fs_write_chunk(&f, data, len) != (int)len) {
 					printf("tget: write failed\n");
 					zstream_abort(&cons);
 					ok = false;
@@ -901,9 +904,10 @@ void sh(void) {
 
 			}
 
-			fs_close_write(&f);
+			if (!discard) fs_close_write(&f);
 
-			if (ok) printf("tget: wrote %ld bytes to %s\n", (long)total, local);
+			if (ok && discard) printf("tget: received %ld bytes, discarded\n", (long)total);
+			else if (ok) printf("tget: wrote %ld bytes to %s\n", (long)total, local);
 
 		}
 
@@ -1861,8 +1865,15 @@ void init(void) {
 	// service that sleeps is still RAM. After the config retry above, so
 	// the card is up to be asked. It waits for NTP itself when told to
 	// (wait_for_ntp), so it does not matter that net starts after it.
-	if (fs_size(Z_PATH_CRON_CONFIG) > 0)
-		init_start_optional("cron");
+	// Or jobs in the flash key/value store (apps.cron.job.NAME), which
+	// need no card.
+	{
+		bool cron_jobs = fs_size(Z_PATH_CRON_CONFIG) > 0;
+		char kn[32];
+		for (uint32_t i = 0; !cron_jobs && k_kv_entry(i, kn, NULL) == 0; i++)
+			if (!strncmp(kn, "apps.cron.job.", 14) && kn[14]) cron_jobs = true;
+		if (cron_jobs) init_start_optional("cron");
+	}
 
 	// netserve (docs/netserve.md), the same way: only if a service is
 	// configured. It waits for net and its address itself.
@@ -2259,7 +2270,7 @@ void sh_help(void) {
 	printf(" xa <addr>         receive to addr via xfer\n");
 	printf(" xf <file>         receive to file via xfer\n");
 	printf(" xmf <file>        receive to file via xmodem\n");
-	printf(" tget <ip-or-host> <remote-file> [local-file]  fetch a file via tftp (needs `run net`)\n");
+	printf(" tget <ip-or-host> <remote-file> [local-file]  fetch a file via tftp (needs `run net`; - discards)\n");
 	printf(" tput <ip-or-host> <local-file> [remote-file]  send a file via tftp (needs `run net`)\n");
 	printf(" run <file> [arg]  create a new process; arg is its launch argument\n");
 	printf(" init               start wm, net, repl and posix (runs at boot)\n");

@@ -149,6 +149,15 @@ static uint32_t net_active;	// last frame to or from us
 
 #define NET_BUSY_HOLD	(Z_TICK_HZ / 2)	// "recently active"
 #define NET_GAP_IDLE	16		// ~22 ms: an idle link answers a ping in that
+// After sending a frame in a conversation, the answer is usually a
+// fraction of a millisecond away -- a TFTP block after our ACK, a TCP
+// segment after ours. So the adapter is asked again at once, back to
+// back, for up to this long, instead of at the next tick (1.4-2.7ms
+// later, which was most of a TFTP round trip). A NAK comes back in
+// microseconds; this process stays preemptible meanwhile.
+#define NET_BURST_US	2000
+static uint32_t net_burst_end;	// cycles; 0 when not asking back to back
+static uint32_t net_burst_from;	// cycles when the send that started it ended
 
 static void net_info(void) { z_usbh_ecm_info(&srv.info); }
 
@@ -160,6 +169,8 @@ static void net_info(void) { z_usbh_ecm_info(&srv.info); }
 // transfer, without a debug build.
 static struct {
 	uint32_t polls, empty, rx, tx, tx_fail, full, events, kicks;
+	uint32_t burst, burst_rx;	// back-to-back asks after a send, and the frames they found
+	uint32_t reply_n, reply_sum, reply_max;	// send done -> the answer in the ring, us
 	uint32_t ip_short, ip_long;	// IPv4 frames whose length disagrees with the IP header's
 	uint32_t rx_wait_n, rx_wait_sum, rx_wait_max;	// usb's ring -> net
 	uint32_t tx_wait_n, tx_wait_sum, tx_wait_max;	// net's kick -> sent
@@ -202,8 +213,25 @@ static void net_stats(bool reset) {
 		(unsigned long)ns.polls, (unsigned long)ns.empty, (unsigned long)ns.rx,
 		(unsigned long)ns.tx, (unsigned long)ns.tx_fail, (unsigned long)ns.full,
 		(unsigned long)ns.events, (unsigned long)ns.kicks);
-	printf("usb: ethernet: IPv4 frames shorter than their header says %lu, longer %lu\n",
-		(unsigned long)ns.ip_short, (unsigned long)ns.ip_long);
+	printf("usb: ethernet: IPv4 frames shorter than their header says %lu, longer %lu; "
+		"asked back to back after %lu sends, found %lu frames that way\n",
+		(unsigned long)ns.ip_short, (unsigned long)ns.ip_long,
+		(unsigned long)ns.burst, (unsigned long)ns.burst_rx);
+	{
+		uint32_t t[8];
+		uint32_t us = Z_SYSCLK_HZ / 1000000u;
+		z_usbh_ecm_timing(t, reset);
+		printf("usb: ethernet: reading a frame took avg %lu us (max %lu), %lu NAKs mid-frame; "
+			"sending avg %lu us (max %lu), %lu NAKs\n",
+			(unsigned long)(t[0] ? t[1] / t[0] / us : 0), (unsigned long)(t[2] / us),
+			(unsigned long)t[3],
+			(unsigned long)(t[4] ? t[5] / t[4] / us : 0), (unsigned long)(t[6] / us),
+			(unsigned long)t[7]);
+		printf("usb: ethernet: after a send, the answer was in the ring after avg %lu us "
+			"(max %lu), its reading included\n",
+			(unsigned long)(ns.reply_n ? ns.reply_sum / ns.reply_n : 0),
+			(unsigned long)ns.reply_max);
+	}
 	printf("usb: ethernet: a frame waited for net avg %lu us, max %lu; "
 		"a kick waited for usb avg %lu us, max %lu\n",
 		(unsigned long)(ns.rx_wait_n ? ns.rx_wait_sum / ns.rx_wait_n : 0),
@@ -230,7 +258,13 @@ static void net_tx(void) {
 			// Sending says a conversation is going on -- except
 			// ARP: answering "who has us?" every few hundred ms held
 			// the polling busy on an idle desktop (round 7e).
-			if (!(f[12] == 0x08 && f[13] == 0x06)) net_active = now();
+			if (!(f[12] == 0x08 && f[13] == 0x06)) {
+				net_active = now();
+				net_burst_from = cycles();
+				net_burst_end = (net_burst_from + NET_BURST_US * (Z_SYSCLK_HZ / 1000000u)) | 1;
+				net_next = now();
+				ns.burst++;
+			}
 		} else {
 			ns.tx_fail++;
 		}
@@ -244,13 +278,25 @@ static void net_rx(void) {
 	if (!net_open()) return;
 	net_rx_seen();
 	if ((int32_t)(now() - net_next) < 0) return;
-	for (k = 0; k < Z_USBNET_RX_SLOTS; k++) {
+	for (k = 0; k < Z_USBNET_RX_SLOTS; ) {
 		uint32_t head = srv.rx_head, tail = net_cli->rx_tail;
 		if (head - tail >= Z_USBNET_RX_SLOTS) { ns.full++; break; }	// it waits in the adapter
 		uint32_t i = head % Z_USBNET_RX_SLOTS;
 		ns.polls++;
 		int n = z_usbh_ecm_recv(srv.rx[i], Z_USBNET_FRAME);
-		if (n <= 0) { ns.empty++; break; }
+		if (n <= 0) {
+			ns.empty++;
+			// Asking back to back after a send (NET_BURST_US).
+			if (net_burst_end && (int32_t)(cycles() - net_burst_end) < 0) continue;
+			net_burst_end = 0;
+			break;
+		}
+		k++;
+		if (net_burst_end) {
+			ns.burst_rx++;
+			net_burst_end = 0;
+			wait_note(net_burst_from, &ns.reply_n, &ns.reply_sum, &ns.reply_max);
+		}
 		ns.rx++;
 		// Does the frame hold what its IP header says? A frame short
 		// of it lost a packet on the way in (net drops it: a TFTP
@@ -263,6 +309,7 @@ static void net_rx(void) {
 		}
 		srv.rx_len[i] = (uint16_t)n;
 		rx_put[i] = cycles();
+		srv.rx_at[i] = rx_put[i];
 		srv.rx_head = head + 1;
 		// Only a frame addressed to us says a conversation is going
 		// on; broadcasts arrive every few hundred ms on any LAN.

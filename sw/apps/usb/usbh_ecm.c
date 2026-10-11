@@ -275,6 +275,35 @@ static uint32_t run(int pid, uint8_t ep, uint8_t mps, uint8_t *tgl,
     return s;
 }
 
+// -- timing, for usbstat (z_usbh_ecm_timing()) --
+//
+// How long a frame takes to read and to send, in cycles, and how often
+// the adapter NAKed in the middle of a frame -- each such NAK costs a
+// pace() of spinning. What a TFTP block's round trip is made of.
+static uint32_t tm_rx_n, tm_rx_sum, tm_rx_max, tm_rx_midnak;
+static uint32_t tm_tx_n, tm_tx_sum, tm_tx_max, tm_tx_nak;
+
+static uint32_t ecm_cycles(void)
+{
+#ifdef Z_USBH_COSIM
+    return 0;
+#else
+    uint32_t c;
+    __asm__ volatile ("rdcycle %0" : "=r"(c));
+    return c;
+#endif
+}
+
+void z_usbh_ecm_timing(uint32_t out[8], int reset)
+{
+    out[0] = tm_rx_n; out[1] = tm_rx_sum; out[2] = tm_rx_max; out[3] = tm_rx_midnak;
+    out[4] = tm_tx_n; out[5] = tm_tx_sum; out[6] = tm_tx_max; out[7] = tm_tx_nak;
+    if (reset) {
+        tm_rx_n = tm_rx_sum = tm_rx_max = tm_rx_midnak = 0;
+        tm_tx_n = tm_tx_sum = tm_tx_max = tm_tx_nak = 0;
+    }
+}
+
 static void pace(void)
 {
     volatile uint32_t g;
@@ -285,9 +314,14 @@ static void pace(void)
 // is little-endian, one byte lane per address (usb_host.v).
 static void copy_out(uint8_t *dst, int n)
 {
-    int i;
+    int i = 0;
     uint32_t w;
-    for (i = 0; i < n; i += 4) {
+    // An aligned destination takes whole words: a quarter of the stores
+    // (every one waits for memory on a board without a write buffer).
+    if (!((uintptr_t)dst & 3u))
+        for (; i + 4 <= n; i += 4)
+            *(uint32_t *)(dst + i) = z_usbh_rd(Z_USBH_BUF + ECM_OFF + (uint32_t)i);
+    for (; i < n; i += 4) {
         w = z_usbh_rd(Z_USBH_BUF + ECM_OFF + (uint32_t)i);
         dst[i] = (uint8_t)w;
         if (i + 1 < n) dst[i + 1] = (uint8_t)(w >> 8);
@@ -298,9 +332,12 @@ static void copy_out(uint8_t *dst, int n)
 
 static void copy_in(const uint8_t *src, int n)
 {
-    int i;
+    int i = 0;
     uint32_t w;
-    for (i = 0; i < n; i += 4) {
+    if (!((uintptr_t)src & 3u))
+        for (; i + 4 <= n; i += 4)
+            z_usbh_wr(Z_USBH_BUF + ECM_OFF + (uint32_t)i, *(const uint32_t *)(src + i));
+    for (; i < n; i += 4) {
         w = src[i];
         if (i + 1 < n) w |= (uint32_t)src[i + 1] << 8;
         if (i + 2 < n) w |= (uint32_t)src[i + 2] << 16;
@@ -335,6 +372,7 @@ int z_usbh_ecm_recv(uint8_t *buf, int max)
     int total = 0, naks = 0, strikes = 0, n, take, r;
     uint8_t st;
 
+    uint32_t t0 = 0;
     if (!ecm.ready) return -1;
     if (!z_usbh_bus_reserve()) return 0;        // busy: next time
     g0 = ecm_gen;
@@ -356,6 +394,7 @@ int z_usbh_ecm_recv(uint8_t *buf, int max)
         // advancing past the packets it acknowledged. Take them, then
         // ask again for the rest.
         if (n) {
+            if (!total) t0 = ecm_cycles();      // the frame starts: time its reading
             take = n;
             if (total + take > max) take = max - total;
             if (take > 0) copy_out(buf + total, take);
@@ -374,6 +413,7 @@ int z_usbh_ecm_recv(uint8_t *buf, int max)
         }
         if (st == Z_USBH_ST_NAK) {
             if (!total) { r = 0; break; }       // nothing waiting
+            tm_rx_midnak++;
             if (++naks > ECM_NAKS) break;
             pace();
             continue;
@@ -397,7 +437,13 @@ int z_usbh_ecm_recv(uint8_t *buf, int max)
         ecm.rx_drop++;
         return 0;
     }
-    if (r) ecm.rx++;
+    if (r) {
+        uint32_t c = ecm_cycles() - t0;
+        ecm.rx++;
+        tm_rx_n++;
+        tm_rx_sum += c;
+        if (c > tm_rx_max) tm_rx_max = c;
+    }
     return r;
 }
 
@@ -407,6 +453,7 @@ int z_usbh_ecm_send(const uint8_t *buf, int len)
     int done = 0, chunk, sent, naks = 0, zlp;
     uint8_t st;
 
+    uint32_t t0 = ecm_cycles();
     if (!ecm.ready || len <= 0 || len > ECM_MAX) return -1;
     if (!z_usbh_bus_reserve()) { ecm.tx_err++; return -1; }
     g0 = ecm_gen;
@@ -432,6 +479,7 @@ int z_usbh_ecm_send(const uint8_t *buf, int len)
             sent += (int)Z_USBH_XS_LEN(s);
             if (st == Z_USBH_ST_OK) break;
             // Its buffer is full: it will take the frame shortly.
+            if (st == Z_USBH_ST_NAK) tm_tx_nak++;
             if (st == Z_USBH_ST_NAK && ++naks <= ECM_NAKS) {
                 pace();
                 continue;
@@ -442,6 +490,12 @@ int z_usbh_ecm_send(const uint8_t *buf, int len)
     }
     z_usbh_bus_release();
     ecm.tx++;
+    {
+        uint32_t c = ecm_cycles() - t0;
+        tm_tx_n++;
+        tm_tx_sum += c;
+        if (c > tm_tx_max) tm_tx_max = c;
+    }
     return 0;
 
 fail:

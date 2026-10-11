@@ -40,10 +40,11 @@ Build the hardware map from RTL with `make hwmap` (see [docs/hwmap.md](docs/hwma
 
 ### OS
 
+ - [Microkernel](docs/userspace_drivers.md): the kernel schedules, manages memory, passes messages, routes interrupts and enforces memory protection; the filesystem, the USB host stack and the network run as **driver processes**, loaded from flash or the sdcard like any app, and restarted if they crash
  - Pre-emptive multitasking
  - Flat memory model with virtual address space for apps
  - Text [configuration file](docs/config.md) (`/sys/zeitlos.cfg`), loaded at boot and reloadable
- - FAT filesystem, on MicroSD and on an optional [RAM disk](docs/ramdisk.md) with long filename support
+ - FAT filesystem with long filenames, on MicroSD, USB sticks and a [RAM disk](docs/ramdisk.md), served by the [`fs` driver](docs/fs_driver.md); C's `open()`/`fopen()` for apps that ask for them ([POSIX file I/O](docs/posix_io.md))
  - [Core apps in flash](docs/flash_apps.md) -- boots to a desktop with no sdcard
  - Object-based interprocess [messaging](docs/messaging.md), streaming and [ports](docs/ports.md)
  - International text: UTF-8 throughout, [22 keyboard layouts](docs/keyboard_layouts.md) (US, UK, German, French, Spanish, Italian, Portuguese, Nordic, Swiss, Belgian, Japanese and more) with dead keys and AltGr, switched with Super+Space; accented letters and the euro sign drawn by the hardware fonts ([ISO 8859-15](docs/text_encoding.md)); Japanese drawn from a public-domain 12x12 font and typed with a romaji [input method](docs/keyboard_layouts.md#japanese-input)
@@ -68,34 +69,53 @@ With the MTU, there is no need for position independent code or complicated addr
 
 | App | Description |
 |-----|-------------|
-| kernel | Kernel + kernel shell (serial console) |
+| kernel | Microkernel + kernel shell (serial console) |
 | [wm](docs/window_manager.md) | Window manager + dock, with ten workspaces (Super+1 ... Super+0) |
-| [net](docs/networking.md) | Networking service |
 | [term](docs/terminal.md) | Terminal emulator (VT100, UTF-8, [line drawing](docs/terminal.md#line-drawing); start panel, scrollback; connects to shells and services) |
 | [console](docs/console.md) | Console service |
-| [cron](docs/cron.md) | Runs programs on a schedule from `/data/cron/cron.cfg` (daily, weekly, hourly, every N, at boot) |
+| [repl](docs/scheme_api.md) | App service + [Lisp interpreter (subset of R4RS Scheme)](https://github.com/machdyne/ms) |
+| [text](docs/text_editor.md) | Text editor (UTF-8 and Latin-9 files, Japanese) |
+| [files](docs/file_browser.md) | File browser: copy, move, rename, delete, new folder |
+| [cron](docs/cron.md) | Runs programs on a schedule (daily, weekly, hourly, every N, at boot), from `/data/cron/cron.cfg` on the sdcard or from the flash key/value store with no sdcard |
+
+##### Core drivers
+
+Also core: driver processes, started at boot, preempted like any other program,
+and started again by the kernel if they crash
+([userspace drivers](docs/userspace_drivers.md)).
+
+| Driver | Description |
+|-----|-------------|
+| [fs](docs/fs_driver.md) | Filesystem: FatFs, the sdcard, USB sticks at `/usb`, the RAM disk (`/ram`, `/tmp`), the flash underlay, and programs loaded from the card |
+| [usb](docs/usb_driver.md) | USB host: hubs, keyboard and mouse setup, mass storage, USB ethernet and USB serial |
+| [net](docs/networking.md) | Networking: Ethernet (RMII, SPI, USB or the ESP32 link), IP, TCP, DNS, DHCP, NTP, TFTP, telnet and SSH |
+
+The drivers and core apps are written to flash with the kernel, so a
+board boots to a desktop with no sdcard ([core apps in flash](#core-apps-in-flash)).
 
 #### Shells
 
-`repl` is a core app, in flash; `posix` is on the sdcard. A `term` window starts one when you press its REPL or POSIX button, and connects to it (or to a remote system).
+`repl` is a core app, in flash; `posix` and `basic` are on the sdcard. A `term` window starts `repl` or `posix` when you press its REPL or POSIX button, and connects to it (or to a remote system).
 
 | App | Description |
 |-----|-------------|
-| [repl](docs/scheme_api.md) | App service + [Lisp interpreter (subset of R4RS Scheme)](https://github.com/machdyne/ms) |
+| [repl](docs/scheme_api.md) | Scheme (see Core Apps) |
 | [posix](docs/posix.md) | POSIX compatibility layer |
+| [basic](docs/basic_app.md) | A BASIC computer ([Machdyne BASIC](https://github.com/machdyne/basic)): a 320x240 screen of its own, in a window or full screen, and a port (`basic0`) a `term` can connect to |
 
 #### Windowed Apps
 
+`text` and `files` are core apps (above).
+
 | App | Description |
 |-----|-------------|
-| [text](docs/text_editor.md) | Text editor (UTF-8 and Latin-9 files, Japanese) |
 | [sheet](docs/sheet_app.md) | Spreadsheet |
 | [web](docs/web_app.md) | Web browser: HTTP/1.1 and TLS 1.3, gzip, in-place images and SVG; [Gopher and Gemini](docs/gopher_gemini.md) |
 | [read](docs/read_app.md) | Text reader for files of unlimited size (with rendered Markdown) |
+| [bench](docs/bench.md) | Virtual parts -- I/O expanders, LEDs, buttons, lamps -- on I2C buses, from a netlist, shown live; with [ls99](docs/ls99.md) virtual Zwölf modules |
 | [hex](docs/hex_editor.md) | Hex editor for files of unlimited size |
 | draw | MacPaint-inspired drawing app |
 | [view](docs/view_app.md) | Image viewer: BMP, PNM, GIF, JPEG, [PNG](docs/png.md) and [SVG](docs/svg.md) |
-| [files](docs/file_browser.md) | File browser: copy, move, rename, delete, new folder |
 | [calc](docs/calc_app.md) | Calculator |
 | [info](docs/info_app.md) | System info |
 | [clock](docs/clock_app.md) | Analog and digital clock |
@@ -106,6 +126,7 @@ With the MTU, there is no need for position independent code or complicated addr
 | [ask](docs/ask_app.md) | Local dataset search |
 | [play](docs/play_app.md) | WAV/AU/RAW audio file player |
 | [track](docs/track_app.md) | MOD audio file player |
+| [midi](docs/midi_app.md) | General MIDI file player |
 | [mmod](docs/mmod.md) | [MMOD](https://github.com/machdyne/mmod) reader/writer |
 | [irc](docs/irc_app.md) | IRC client: channels and private conversations, mentions, timestamps |
 | [cryptobench](docs/cryptobench.md) | Times the cryptography the BBS and federation use, on this machine |
@@ -144,6 +165,9 @@ With the MTU, there is no need for position independent code or complicated addr
 | [zcc](docs/zcc.md) | C compiler |
 | [zfpga](docs/zfpga.md) | FPGA toolchain (synthesis, place-and-route, bitstream packing) |
 | vi | Port of the [nextvi](https://github.com/kyx0r/nextvi) terminal text editor |
+| [zetta](docs/zetta.md) | Small full-screen terminal editor for prose, in the manner of nano |
+| [i2c](docs/i2c_app.md) | I2C from the posix shell, on a PMOD port or a bench bus |
+| [sechs](docs/sechs_app.md) | Sechs modules (Zwölf LS10, LS11) on a PMOD port, from the posix shell |
 
 ### Boards
 
@@ -187,11 +211,12 @@ The following boards are currently partially supported or untested:
 
 ## Usage
 
-**An sdcard is optional.** The core apps (`wm`, `net`, `term`, `console`,
-`cron`, `text`, `files` and `repl`) are
-programmed into flash alongside the kernel, so a freshly flashed board
-boots straight to the graphical desktop with nothing else attached --
-with an editor, a file browser and Scheme. `posix` comes from the card;
+**An sdcard is optional.** The core drivers (`fs`, `usb`, `net`) and
+core apps (`wm`, `term`, `console`, `repl`, `text`, `files` and `cron`)
+are programmed into flash alongside the kernel, so a freshly flashed
+board boots straight to the graphical desktop with nothing else
+attached -- with an editor, a file browser, Scheme, USB sticks and the
+network. `posix` comes from the card;
 without one, `term` still reaches telnet, ssh and serial through its
 Open bar (F11). See
 [Core apps in flash](#core-apps-in-flash) below.
@@ -305,8 +330,8 @@ of flash can also have a [jumploader](docs/zboot.md), with `JUMP=1`;
 none does by default.)
 
 The BIOS will automatically boot the kernel if no keys are pressed, and
-the kernel starts `wm`, `net` and `console` automatically -- you'll land
-straight in the graphical desktop. See [`docs/welcome.md`](docs/welcome.md)
+the kernel starts `fs`, `usb`, `wm`, `net` and `console` automatically
+-- you'll land straight in the graphical desktop. See [`docs/welcome.md`](docs/welcome.md)
 for how to use it from there.
 
 **The mouse pointer tells you when it's ready.** It is a **Z** while
@@ -318,8 +343,8 @@ blank window rather than a terminal. Wait for the X. See
 
 2. Optionally, add an sdcard:
 
-An sdcard is only needed for storing files and for apps beyond the core
-four. To build one from the tree you just compiled:
+An sdcard is only needed for storing files that outlive a reboot and
+for apps beyond the core ones. To build one from the tree you just compiled:
 
 ```
 $ release/zrelease sdcard
@@ -332,8 +357,10 @@ a prebuilt image instead, see
 
 ### Core apps in flash
 
-`wm`, `net`, and `term` are written to flash as part of a normal
-`make flash`, immediately after the kernel. They are an *underlay*
+The core drivers and apps are written to flash as part of a normal
+`make flash`, immediately after the kernel. `fs` always runs from
+flash, since nothing can read the card before it does; for everything
+else a copy on the card wins. They are an *underlay*
 beneath the filesystem, not a separate namespace: there is still exactly
 one name for `term`, and `run term` behaves identically whether it came
 from flash or from a card.
@@ -351,7 +378,8 @@ would actually launch. What goes where on the card is
 [docs/layout.md](docs/layout.md).
 
 For iterating on the OS itself, `make dev-flash` rebuilds and reflashes
-the kernel and core apps without touching the gateware:
+the kernel and core apps -- as one image, since they share a flash
+erase block -- without touching the gateware:
 
 ```
 $ make clean && make BOARD=obst dev-flash
@@ -388,7 +416,7 @@ The contents of this repo are released under the [Lone Dynamics Open License](LI
 - rtl/mem/sdram\_kianv uses the Apache 2.0 license.
 - rtl/ext/usb\_hid\_host uses the Apache 2.0 license.
 - rtl/ext/usb\_cdc uses the MIT license.
-- sw/os/fs/fatfs uses a BSD compatible license.
+- sw/apps/fs/fatfs uses a BSD compatible license.
 - sw/common/zkbd\_layouts.c (keyboard layout data generated from [xkeyboard-config](https://gitlab.freedesktop.org/xkeyboard-config/xkeyboard-config)) uses X11/MIT-style licenses; see sw/common/zkbd\_layouts.LICENSE.
 - sw/data/font: the BDF fonts (Markus Kuhn's misc-fixed ucs-fonts) and jp12.zfn (converted from the Shinonome fonts) are in the public domain.
 - sw/data/ark uses Creative Commons Attribution-ShareAlike 4.0 International License (CC BY-SA) and the GNU Free Documentation License (GFDL).

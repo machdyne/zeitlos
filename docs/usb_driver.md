@@ -147,6 +147,11 @@ and the kernel (`-DZUSBC_KERNEL`, `zusb_cmd()` only) link.
   for `net` and a kick waited for `usb`, in microseconds; and IPv4
   frames whose length disagrees with their IP header (a USB packet
   lost or doubled inside a frame, which the class driver cannot see).
+  Since round 2 of [net_throughput.md](net_throughput.md) also: how long
+  reading a frame and sending one take, NAKs in the middle of a frame,
+  and how soon after a send the answer was in the ring. Each ring slot
+  carries its frame's arrival time (`rx_at`), so `net` measures its
+  own wait.
   `lsusb` prints them too, without resetting. The bring-up tools
   (`usbcap`, `usbcapok`, `usbcapd`, `usbtune`, `usbnak`, `usbidle`,
   `usbbuf`) in a `make USBH_DEBUG=1` build of `sw/apps/usb`. That costs
@@ -180,7 +185,13 @@ checks once a second that the same `usb` is still running.
   with nobody woken (round 10).
 - **`net` no longer polls the adapter.** It sleeps until a frame is
   there.
-- **`usb` keeps the pace `net` used to keep:** it asks the adapter
+- **After sending a frame in a conversation, `usb` asks the adapter
+  back to back for up to 2ms** (`NET_BURST_US`): the answer -- a TFTP
+  block after our ACK -- is usually a fraction of a millisecond away,
+  and the next tick was 1.4-2.7ms. A NAK comes back in microseconds,
+  and `usb` stays preemptible meanwhile. Not after an ARP reply.
+  `usbstat` counts the bursts and the frames they found.
+- **Otherwise `usb` keeps the pace `net` used to keep:** it asks the adapter
   every tick while a conversation is going on and every 16 ticks
   (~22 ms) when idle. A conversation is a unicast frame to us, or a
   frame sent that is not ARP (round 7e).

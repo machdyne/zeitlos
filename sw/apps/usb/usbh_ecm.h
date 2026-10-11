@@ -70,4 +70,8 @@ int z_usbh_ecm_send(const uint8_t *buf, int len);
 // The address net sends from; see z_usbnet_open() in zusbnet.h.
 void z_usbh_ecm_want(const uint8_t mac[6]);
 
+// Frame read and send times in cycles, and NAKs: {rx n, sum, max,
+// NAKs mid-frame, tx n, sum, max, NAKs}. For usbstat.
+void z_usbh_ecm_timing(uint32_t out[8], int reset);
+
 #endif

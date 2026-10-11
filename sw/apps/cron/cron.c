@@ -51,6 +51,19 @@
  * One line per start, skip and exit in /data/cron/log, cut back to
  * nothing when it passes 16KB, and on the console.
  *
+ * -- jobs in the flash key/value store --
+ *
+ * Optional, and alongside the file: each key apps.cron.job.NAME holds
+ * one rule line, as in the file, and apps.cron.wait_for_ntp the
+ * setting (docs/kvstore.md). They need no card, so a board without one
+ * can have scheduled jobs. With no card, the state and the log are
+ * kept in /ram/cron instead -- until the next boot, so a daily job
+ * missed while the machine was off is not caught up then. (Not in the
+ * store: a job every 30 minutes would wear out the flash.)
+ *
+ *   > kv set apps.cron.job.backup "daily 03:00 backup /docs"
+ *   > cfg reload
+ *
  * -- size --
  *
  * No stdio: printf alone would be most of the image, the reason jfont
@@ -70,11 +83,12 @@
 #include "../../common/zrtc.h"
 #include "../../common/zwin.h"		// z_launch_arg_set()
 #include "../../common/zargs.h"
+#include "../../common/zkv.h"
 
 #define CFG_PATH    Z_PATH_CRON_CONFIG
-#define STATE_PATH  Z_PATH_CRON_STATE
-#define LOG_PATH    Z_PATH_CRON_LOG
 #define LOG_MAX     16384
+#define KV_JOB      "apps.cron.job."	// + NAME: one rule line
+#define KV_NTP      "apps.cron.wait_for_ntp"
 
 #define MAX_JOBS    32
 #define CFG_MAX     4096
@@ -93,6 +107,7 @@ typedef struct {
 	uint32_t	next_up;		// J_EVERY: uptime second it is next due
 	uint32_t	pid;			// running, or 0
 	bool		boot_done;
+	char		from[20];		// "kv:NAME" for a job from the store, else ""
 } job_t;
 
 static job_t jobs[MAX_JOBS];
@@ -108,6 +123,8 @@ static char cfg_buf[CFG_MAX + 1];
 #ifndef CRON_HOST_TEST
 static bool clock_valid(void) { return z_rtc_valid(); }
 static uint32_t clock_now(void) { return z_rtc_seconds(); }
+static int kv_entry(uint32_t i, char *name, uint32_t *vlen) { return z_kv_entry(i, name, vlen); }
+static int kv_get(const char *k, void *buf, uint32_t cap, uint32_t *len) { return z_kv_get(k, buf, cap, len); }
 #endif
 
 // -- output, without stdio --
@@ -153,6 +170,27 @@ static uint32_t uptime(void) {
 	return up_secs;
 }
 
+// -- where the state and the log go --
+
+// The card's /data/cron when there is a card, else /ram/cron. Asked at
+// each write, so a card that arrives later is used from then on.
+static const char *cron_dir(void) {
+	z_fs_info_t fi;
+	if (fs_stat(Z_DIR_DATA, &fi) || fs_mkdir(Z_DIR_DATA)) {
+		fs_mkdir(Z_DIR_CRON_DATA);
+		return Z_DIR_CRON_DATA;
+	}
+	fs_mkdir(Z_DIR_CRON_RAM);
+	return Z_DIR_CRON_RAM;
+}
+
+static void cron_path(char *out, const char *dir, const char *leaf) {
+	size_t n = strlen(dir);
+	memcpy(out, dir, n);
+	out[n] = '/';
+	strcpy(out + n + 1, leaf);
+}
+
 // -- the log --
 
 static void log_line(const char *what, const job_t *j) {
@@ -177,6 +215,7 @@ static void log_line(const char *what, const job_t *j) {
 	sb_s(&sb, what);
 	if (j) {
 		sb_s(&sb, " ");
+		if (j->from[0]) { sb_s(&sb, "["); sb_s(&sb, j->from); sb_s(&sb, "] "); }
 		sb_s(&sb, j->prog);
 		if (j->args[0]) { sb_s(&sb, " "); sb_s(&sb, j->args); }
 	}
@@ -185,13 +224,14 @@ static void log_line(const char *what, const job_t *j) {
 	say("cron: ");
 	say(line);
 
-	fs_mkdir(Z_DIR_CRON_DATA);
-	int size = fs_size((char *)LOG_PATH);
+	char log_path[40];
+	cron_path(log_path, cron_dir(), "log");
+	int size = fs_size(log_path);
 	int h;
 	if (size < 0 || size > LOG_MAX) {
-		h = fs_open_write(LOG_PATH);			// new, or cut back to nothing
+		h = fs_open_write(log_path);			// new, or cut back to nothing
 	} else {
-		h = fs_open_rw(LOG_PATH);
+		h = fs_open_rw(log_path);
 		if (h >= 0) fs_seek(h, (uint32_t)size);
 	}
 	if (h < 0) return;
@@ -209,7 +249,9 @@ static uint32_t hash_line(const char *s, int n) {
 }
 
 static void state_load(void) {
-	int n = fs_read_file((char *)STATE_PATH, cfg_buf, CFG_MAX);
+	char path[40];
+	cron_path(path, cron_dir(), "state");
+	int n = fs_read_file(path, cfg_buf, CFG_MAX);
 	if (n <= 0) return;
 	cfg_buf[n] = 0;
 	for (char *p = cfg_buf; *p; ) {
@@ -231,8 +273,9 @@ static void state_save(void) {
 		sb_u(&sb, jobs[i].key, 0); sb_s(&sb, " ");
 		sb_u(&sb, jobs[i].last_run, 0); sb_s(&sb, "\n");
 	}
-	fs_mkdir(Z_DIR_CRON_DATA);
-	fs_write_file((char *)STATE_PATH, out, sb.n);
+	char path[40];
+	cron_path(path, cron_dir(), "state");
+	fs_write_file(path, out, sb.n);
 }
 
 // -- the config --
@@ -282,11 +325,18 @@ static int parse_wday(const char *s) {
 	return -1;
 }
 
+static const char *bad_kv;	// the key being read, while reading the store
+
 static void bad_line(int lineno, const char *why) {
-	char m[80];
+	char m[120];
 	sb_t sb = { m, 0, (int)sizeof(m) };
-	sb_s(&sb, "cron: " CFG_PATH " line ");
-	sb_u(&sb, (uint32_t)lineno, 0);
+	if (bad_kv) {
+		sb_s(&sb, "cron: ");
+		sb_s(&sb, bad_kv);
+	} else {
+		sb_s(&sb, "cron: " CFG_PATH " line ");
+		sb_u(&sb, (uint32_t)lineno, 0);
+	}
 	sb_s(&sb, ": ");
 	sb_s(&sb, why);
 	sb_s(&sb, "\n");
@@ -367,6 +417,56 @@ static void parse_line(char *line, int lineno) {
 
 }
 
+// The jobs and setting in the flash key/value store, after the file's.
+// True if there was any: a job, or the setting.
+static bool load_kv(void) {
+	bool any = false;
+	char name[Z_KV_KEY_MAX + 1];
+	char val[Z_KV_VAL_MAX + 1];
+	uint32_t vlen;
+	size_t pl = strlen(KV_JOB);
+
+	if (kv_get(KV_NTP, val, Z_KV_VAL_MAX, &vlen) == Z_KV_OK) {
+		val[vlen] = 0;
+		char line[LINE_MAX];
+		size_t l = strlen("wait_for_ntp: ");
+		memcpy(line, "wait_for_ntp: ", l);
+		if (vlen >= LINE_MAX - l) vlen = (uint32_t)(LINE_MAX - l - 1);
+		memcpy(line + l, val, vlen + 1);
+		line[l + vlen] = 0;
+		bad_kv = KV_NTP;
+		parse_line(line, 0);
+		bad_kv = NULL;
+		any = true;
+	}
+
+	for (uint32_t i = 0; kv_entry(i, name, &vlen) == Z_KV_OK; i++) {
+		if (strncmp(name, KV_JOB, pl) || !name[pl]) continue;
+		any = true;
+		uint32_t got;
+		if (kv_get(name, val, Z_KV_VAL_MAX, &got) != Z_KV_OK) continue;
+		val[got] = 0;
+		if (got >= LINE_MAX) { bad_kv = name; bad_line(0, "line too long"); bad_kv = NULL; continue; }
+		char line[LINE_MAX];
+		memcpy(line, val, got + 1);
+		int before = njobs;
+		bad_kv = name;
+		parse_line(line, 0);
+		bad_kv = NULL;
+		if (njobs > before) {
+			job_t *j = &jobs[njobs - 1];
+			// Its identity in the state file: the key and the line, so
+			// that the same line in the file is a different job.
+			j->key = hash_line(name, (int)strlen(name)) ^ hash_line(val, (int)got);
+			if (!j->key) j->key = 1;
+			memcpy(j->from, "kv:", 3);
+			strncpy(j->from + 3, name + pl, sizeof(j->from) - 4);
+			j->from[sizeof(j->from) - 1] = 0;
+		}
+	}
+	return any;
+}
+
 // Reads the config. Keeps what it knows about jobs whose line has not
 // changed -- when they last ran, whether they are running.
 static bool load_config(void) {
@@ -384,8 +484,8 @@ static bool load_config(void) {
 	}
 
 	int n = fs_read_file((char *)CFG_PATH, cfg_buf, CFG_MAX);
-	if (n < 0) return false;
-	cfg_buf[n] = 0;
+	bool have_file = n >= 0;
+	cfg_buf[have_file ? n : 0] = 0;
 
 	njobs = 0;
 	wait_for_ntp = true;
@@ -416,6 +516,8 @@ static bool load_config(void) {
 		p = *e ? e + 1 : e;
 	}
 
+	bool have_kv = load_kv();
+
 	for (int i = 0; i < njobs; i++)
 		for (int k = 0; k < nold; k++)
 			if (old[k].key == jobs[i].key) {
@@ -425,7 +527,7 @@ static bool load_config(void) {
 				jobs[i].next_up = old[k].next_up;
 			}
 
-	return true;
+	return have_file || have_kv;
 
 }
 
@@ -602,7 +704,7 @@ int main(void) {
 	cfg_gen = z_cfg_generation();
 
 	if (!load_config()) {
-		say("cron: no " CFG_PATH " -- nothing to do\n");
+		say("cron: no " CFG_PATH " and no " KV_JOB "* keys -- nothing to do\n");
 		return 0;
 	}
 	state_load();

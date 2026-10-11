@@ -15,6 +15,7 @@ so its timings are still to be measured.
 | `auth.password` | `sw/os/auth.c` only | the password's hash |
 | `sys.lock.boot`, `sys.lock.idle`, `sys.lock.console` | `sw/os/auth.c` only | the screen-lock policy |
 | `apps.netserve.hostkey` | `netserve` | the SSH host key's 32-byte seed ([netserve.md](netserve.md), "SSH") |
+| `apps.cron.job.NAME`, `apps.cron.wait_for_ntp` | you (`kv set`) | scheduled jobs that need no card ([cron.md](cron.md)) |
 
 | | |
 |---|---|

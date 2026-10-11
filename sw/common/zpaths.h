@@ -118,6 +118,9 @@
 #define Z_PATH_CRON_CONFIG        "/data/cron/cron.cfg"
 #define Z_PATH_CRON_STATE         "/data/cron/state"
 #define Z_PATH_CRON_LOG           "/data/cron/log"
+// cron's state and log when there is no card (jobs from the flash
+// key/value store, docs/cron.md): kept until the next boot.
+#define Z_DIR_CRON_RAM            "/ram/cron"
 
 /* fed (docs/fed.md). The default of apps.fed.dir. */
 #define Z_DIR_FED                 "/data/fed"
