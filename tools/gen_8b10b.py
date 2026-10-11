@@ -5,7 +5,10 @@
 #                                           pasted into rtl/gpio_stream.v
 #   python3 tools/gen_8b10b.py --vectors   rtl/tests/8b10b_vectors.txt
 #   python3 tools/gen_8b10b.py --update rtl/gpio_stream.v
+#   python3 tools/gen_8b10b.py --update rtl/zfast.v
 #                                           rewrite those tables in place
+#                                           (each block has its own copy;
+#                                           rtl/tests/tb_8b10b.v checks both)
 #   python3 tools/gen_8b10b.py --check     property checks only (default)
 #
 # The code is the standard IBM 8b/10b (Widmer and Franaszek, 1983), the

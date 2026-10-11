@@ -254,6 +254,20 @@ localparam GPIO_ENG_RAW = 0
 `endif
 	;
 
+// The I2C slave (rtl/gpio_i2cs.v, docs/gpio.md): how many chips it can
+// emulate, 1, 2 or 4. Off unless a build asks (rtl/boards.vh); none on a
+// board without a GPIO port.
+localparam GPIO_I2CS = (GPIO_NPORTS > 0) ? `GPIO_I2CS_SLOTS : 0;
+
+// Fast zlink (rtl/zfast.v, docs/zlink.md "Fast"): experimental, off
+// unless a build asks, and only where rtl/boards.vh says the board has
+// the DS pins.
+localparam ZLINK_FAST_ON = 0
+`ifdef ZLINK_FAST
+	+ 1
+`endif
+	;
+
 module sysctl #()
 (
 
@@ -384,6 +398,13 @@ module sysctl #()
 `endif
 `ifdef GPIO_PORT3
 	inout [7:0] GPIO3,
+`endif
+
+`ifdef ZLINK_FAST
+	// The DS port: two LVDS pairs, each P ball only -- the LPF's
+	// IO_TYPE=LVDS makes the tools take the N ball with it.
+	inout DS1,
+	inout DS2,
 `endif
 
 `ifdef MEM_SRAM
@@ -583,6 +604,9 @@ module sysctl #()
 
 	wire clk126mhz;
 	wire clk100mhz;
+`ifdef ZLINK_FAST
+	wire clk200mhz;			// fast zlink's pads (rtl/zfast_pad.v)
+`endif
 	wire clk25_2mhz;
 	wire clk50mhz;
 	wire clk48mhz;
@@ -648,6 +672,9 @@ module sysctl #()
 	pll0 #() pll0_i (
 		.clkin(clk48mhz),
 		.clkout0(clk100mhz),
+`ifdef ZLINK_FAST
+		.clkout1(clk200mhz),
+`endif
 		.clkout2(clk50mhz),
 		.clkout3(clk12mhz),
 		.locked(pll0_locked)
@@ -2797,7 +2824,9 @@ module sysctl #()
 		.ENGINES(GPIO_ENGINES),
 		.ENG_SPI(GPIO_ENG_SPI),
 		.ENG_UART(GPIO_ENG_UART),
-		.ENG_RAW(GPIO_ENG_RAW)
+		.ENG_RAW(GPIO_ENG_RAW),
+		.I2CS_SLOTS(GPIO_I2CS),
+		.FAST(ZLINK_FAST_ON)
 	) wbs_gpio0_i
 	(
 		.wb_clk_i(wbm_clk),
@@ -2816,8 +2845,46 @@ module sysctl #()
 `endif
 		.gpio_dir_o(gpio_dir),
 		.gpio_out_o(gpio_out),
-		.gpio_in_i(gpio_in)
+		.gpio_in_i(gpio_in),
+		.fast_acc(fast_acc),
+		.fast_we(fast_we),
+		.fast_ra(fast_ra),
+		.fast_wd(fast_wd),
+		.fast_done(fast_done),
+		.fast_rdo(fast_rdo)
 	);
+
+	// -- fast zlink: the DS port (rtl/zfast.v, docs/zlink.md "Fast") --
+	//
+	// Here rather than in gpio.v because it has pads; its registers come
+	// through gpio.v's window at 0xe000_4000. Its datapath runs on pll0's
+	// 100 MHz and its pads on the 200 MHz output that pll0 only enables
+	// for this (rtl/clk/pll0.v).
+	wire fast_acc, fast_we, fast_done;
+	wire [3:0] fast_ra;
+	wire [31:0] fast_wd, fast_rdo;
+`ifdef ZLINK_FAST
+	zfast #(
+		.TX_DS2(`ZLINK_FAST_TX_DS2)
+	) zfast_i (
+		.clk(wbm_clk),
+		.rst(wbm_rst),
+		.acc(fast_acc),
+		.we(fast_we),
+		.ra(fast_ra),
+		.wd(fast_wd),
+		.done(fast_done),
+		.rdo(fast_rdo),
+		.clk100(clk100mhz),
+		.clk200(clk200mhz),
+		.fclk_ok(pll0_locked),
+		.ds1(DS1),
+		.ds2(DS2)
+	);
+`else
+	assign fast_done = 1'b0;
+	assign fast_rdo = 32'd0;
+`endif
 
 	// -- GPIO tri-state buffers --
 	//

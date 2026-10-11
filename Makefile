@@ -24,6 +24,9 @@ RTL_PICO = \
 	rtl/ethmac_rmii.v \
 	rtl/gpio.v \
 	rtl/gpio_stream.v \
+	rtl/gpio_i2cs.v \
+	rtl/zfast.v \
+	rtl/zfast_pad.v \
 	rtl/csrs.v \
 	rtl/esp32_rxfifo.v \
 	rtl/socctl.v \
@@ -1107,7 +1110,7 @@ test_uart:
 # rtl/gpio.v: the port registers, LEDs, aliasing (docs/gpio.md).
 test_gpio:
 	@mkdir -p output
-	iverilog -g2005 -o output/tb_gpio rtl/tb/tb_gpio.v rtl/gpio.v rtl/gpio_stream.v
+	iverilog -g2005 -o output/tb_gpio rtl/tb/tb_gpio.v rtl/gpio.v rtl/gpio_stream.v rtl/gpio_i2cs.v
 	@vvp -n output/tb_gpio
 
 # The GPIO stream engines (rtl/gpio_stream.v): two GPIO blocks on
@@ -1119,8 +1122,32 @@ JIT ?= 3
 test_gpio_stream:
 	@mkdir -p output
 	iverilog -g2005 -DPPM=$(PPM) -DJIT=$(JIT) -o output/tb_gpio_stream \
-		rtl/tb/tb_gpio_stream.v rtl/gpio.v rtl/gpio_stream.v
+		rtl/tb/tb_gpio_stream.v rtl/gpio.v rtl/gpio_stream.v rtl/gpio_i2cs.v
 	@vvp -n output/tb_gpio_stream
+
+# Fast zlink (rtl/zfast.v): two blocks on clocks FPPM apart, joined by
+# a modelled SATA cable with FJIT ns of jitter per edge -- straight and
+# crossed, 100/50/25 Mbit/s both ways, an inverted pair, noise, overflow
+# (docs/zlink.md, "Fast"). A few minutes.
+# `make test_zfast FPPM=-2000 FJIT=1.0` for a corner.
+FPPM ?= 300
+FJIT ?= 0.5
+test_zfast:
+	@mkdir -p output
+	iverilog -g2005 -DPPM=$(FPPM) -DJIT=$(FJIT) -o output/tb_zfast \
+		rtl/tb/tb_zfast.v rtl/zfast.v rtl/zfast_pad.v
+	@vvp -n output/tb_zfast
+
+# The GPIO I2C slave (rtl/gpio_i2cs.v): a gpio_wb with the slave on two
+# pins, against an LS10-style bit-banged master -- probe, write, write
+# then read with a repeated start, the persistent pointer, pair toggle,
+# writes to read-only registers, the log, pin ownership, glitches
+# (docs/gpio.md, "I2C slave"). Under a minute.
+test_gpio_i2cs:
+	@mkdir -p output
+	iverilog -g2005 -o output/tb_gpio_i2cs rtl/tb/tb_gpio_i2cs.v rtl/gpio.v \
+		rtl/gpio_stream.v rtl/gpio_i2cs.v
+	@vvp -n output/tb_gpio_i2cs
 
 # USB host controller: SIE, port front end, transaction engine and the
 # Wishbone top, against a behavioural device model. Covers full speed,

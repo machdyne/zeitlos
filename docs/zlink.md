@@ -19,8 +19,9 @@ phases; each section says what exists.
 |---|---|---|
 | 1 | the physical layer in the GPIO stream engine: 8b/10b, clock recovery, any pin ([gpio.md](gpio.md#stream-engines)) | **done** |
 | 2 | `sw/common/zlink` (negotiation, framing, CRC, retransmission, channels), soft zlink, `sw/apps/zlink` (files both ways, `port zlink0`, the upgrade from soft to a stream engine) ([zlink_app.md](zlink_app.md)) | **done** -- tested on the host, not yet on hardware |
-| 3 | a bench I2C slave in `gpio.v` (`GPIO_I2CS`, for [bench.md](bench.md)) | planned |
-| 4 | the fast block: the DS/SATA port on Mozart and Sergei, ULX3S pairs, the LVDS Pmod | planned |
+| 3 | a bench I2C slave in `gpio.v` (`GPIO_I2CS_SLOTS`, for [bench.md](bench.md); [gpio.md](gpio.md#i2c-slave)) | **done** -- tested in simulation, not yet on hardware |
+| 4 | fast zlink: the DS port on Mozart ML0/ML1/ML2 at 100, 50 or 25 Mbit/s, opt-in (`ZLINK_FAST`), **experimental** (see "Fast" below; `zlink start -m fast`) | **done** -- tested in simulation and on the host, not yet on hardware |
+| 4+ | fast zlink on Chopin (Artix-7), ULX3S pairs, the LVDS Pmod | planned |
 | 5 | a hardware debug responder: peer memory access, load-and-run, cloning | planned |
 | 6 | Werkzeug firmware | planned |
 | 7 | Bach (two modules, one board) | planned |
@@ -37,7 +38,7 @@ any two endpoints negotiate down to the best tier they share:
 | **soft** | none: plain GPIO, in software | 2, open drain | half duplex | ~100-300 kbit/s, 10-35 KB/s |
 | **GPIO stream** | a stream engine (`GPIO_STREAM_ENGINES`) | 1 | one way | up to 12 Mbit/s, ~1.2 MB/s |
 | | | 2 | full duplex | up to 12 Mbit/s each way, ~1.1 MB/s |
-| **fast** | the fast block (round 4) | 4: two LVDS pairs | full duplex | ~100 Mbit/s, ~10 MB/s |
+| **fast** | `rtl/zfast.v` (`ZLINK_FAST`, Mozart) | 4: two LVDS pairs | full duplex | 100 Mbit/s, 10 MB/s on the line |
 | | | 6: three pairs (Bach) | full duplex | more, with a forwarded clock |
 
 Every configuration also needs **ground**.
@@ -109,12 +110,91 @@ A stream engine in zlink mode ([gpio.md](gpio.md#stream-engines)) on
 any two pins of any port -- or one, for a one-way link. Built into every
 GPIO target by default.
 
-### Fast (round 4)
+### Fast (round 4: done, experimental)
 
-Two LVDS pairs, one each way, on the SATA-style connector that Mozart
-and Chopin have (`DS1`, `DS2` -- see "The DS port" below), or on the
-ULX3S's differential header pairs. The same 8b/10b and the same
-protocol, at a higher sample rate.
+**Off by default.** A build with `ZLINK_FAST` defined (`make
+BOARD=mozart_ml1 EXTRA_DEFINES=-DZLINK_FAST`, or ML0/ML2) adds
+`rtl/zfast.v`: the DS port's two LVDS pairs (see "The DS port" below),
+the same 8b/10b and the same K symbols as a stream engine in zlink mode,
+at **100 Mbit/s** -- 10 MB/s of payload on the line -- or 50 or 25.
+On any other board the define does nothing.
+
+How it is built:
+
+- **Sampling.** pll0 gives a 200 MHz clock next to the 100 MHz one
+  (only in a `ZLINK_FAST` build). Each pad's IDDRX1F samples on both
+  edges: 400 Msample/s, four samples a bit at 100 Mbit/s. 50 and 25
+  Mbit/s keep every 2nd or 4th sample, so the clock recovery is the
+  same at every rate. Each pad's ODDRX1F drives the bit; a pad is
+  bidirectional at run time (a `TRELLIS_IO` "BIDIR" with
+  `IO_TYPE=LVDS`), so either pair can transmit or receive.
+- **Clock recovery** is the stream engine's rule -- an edge restarts
+  the phase, the bit is the sample at phase 2 -- unrolled four times to
+  take four samples a clock at 100 MHz; then comma alignment and 8b/10b
+  as in `gpio_stream.v` (the tables are generated into both,
+  `tools/gen_8b10b.py`).
+- **The bus side.** Two 1024-entry dual-clock FIFOs (one block RAM
+  each) between the 100 MHz link and the CPU's clock, and registers like
+  a stream engine's, at `0xe000_4000` in `gpio.v`'s window
+  ([gpio.md](gpio.md#fast-zlink)). `FTX4`/`FRX4` move four bytes a bus
+  access, which is what lets the CPU keep up.
+
+**Who transmits on which pair** is found out at run time, as soft zlink
+finds out which way round its cable is (`sw/common/zlink_fast.h`):
+listen on DS1, then DS2; if the other end is heard, transmit on the
+other pair; if not, after a random wait, transmit on DS1 for up to
+80 ms and listen on DS2. Two ends that try DS1 together on a straight
+cable drive one pair for at most 80 ms -- LVDS drivers are current
+sources and take that -- then back off by different random times. A
+pair wired P to N shows up as code errors with commas still aligning;
+the receiver flips its polarity (`RXINV`). Two ML2s on a straight cable
+cannot link (neither can transmit on DS2); `zlink status` then says to
+use a crossover cable.
+
+**Frames** are K27.7, a 2-byte length, the frame, K29.7. The length
+lets the receiver take a frame four bytes a bus access; a control
+symbol inside it (damage) sets a flag and the frame is dropped. The
+link layer's CRC catches the rest.
+
+**What to expect.** 10 MB/s is the line. Through the app the link layer
+keeps two frames in flight (448 bytes each), so throughput is set by
+how quickly the CPU turns frames round -- well below the line rate --
+and for files the SD card (600-850 KB/s) is the limit. The fast tier is
+for what the round 5 debug responder and Bach will do without the CPU.
+
+Place-and-route with and without it (Yosys 0.69, nextpnr-ecp5 0.11.1
+via YoWASP, default seed, one run each):
+
+| target | without | with `ZLINK_FAST` | fast zlink |
+|---|---|---|---|
+| `mozart_ml1` (45F) | 23,710 COMB (54%), 10,943 FF, 46 DP16KD | 24,624 (56%), 11,509 FF, 48 DP16KD | **+914 COMB**, +566 FF, +2 DP16KD |
+| `mozart_ml0` (25F) | 22,249 COMB (92%), 10,373 FF, 44 DP16KD | 23,007 (95%), 10,939 FF, 46 DP16KD | **+758 COMB**, +566 FF, +2 DP16KD |
+| `mozart_ml2` (45F, DDR3) | 25,620 COMB (58%), 11,984 FF, 46 DP16KD | 26,516 (60%), 12,548 FF, 48 DP16KD | **+896 COMB**, +564 FF, +2 DP16KD |
+
+| target | 100 MHz (line) | 200 MHz (pads) | bus clock (48 MHz) without / with |
+|---|---|---|---|
+| `mozart_ml1` | 105.7 MHz | 424 MHz | 50.7 / 49.2 MHz |
+| `mozart_ml0` | 114.6 MHz | 416 MHz | 52.6 / 48.3 MHz |
+| `mozart_ml2` | 108.0 MHz | 578 MHz | 49.6 / **46.8** MHz (seed 3: 49.0) |
+
+The 100 MHz side closes with about 6% to spare on the 45F, from one
+seed: a design change that adds logic there should be checked with
+`make BOARD=mozart_ml1 EXTRA_DEFINES=-DZLINK_FAST`. It took three
+registers it did not first have -- the FIFO pointers' Gray-to-binary,
+the symbol select, the decode's verdict -- to get there from 69 MHz.
+ML0 fits, at 95%, and its bus clock keeps less than 1% in hand.
+
+**ML2 needs another seed.** With fast zlink its system clock missed
+48 MHz with the default seed (46.8 MHz) and with seed 2 (46.6), on
+different paths -- the blitter, then the MPU, mostly routing -- and made
+it with seed 3 (49.0). So build it with
+`make BOARD=mozart_ml2 EXTRA_DEFINES=-DZLINK_FAST PNR_SEED=3`, and
+check the bus clock's line in the PnR log after any change.
+
+The release flow builds the same way: the Mozart board specs
+(`release/hw/boards/mozart_ml*.spec`) carry `ZLINK_FAST_PINS` like
+`rtl/boards.vh` does, so a release target that adds `ZLINK_FAST` gets
+the block.
 
 ## The line code
 
@@ -176,7 +256,8 @@ randomness come in as arguments -- so its tests run two links against
 each other on the host. Two transports exist: soft
 (`zlink_soft.c`, above) and the stream engine (`zlink_stream.c`: a
 frame is K27.7, its bytes, K29.7; the engine fills the gaps with
-K28.5). A fast-block transport (round 4) will be a third.
+K28.5). The third is fast zlink (`zlink_fast.c`, above), which also
+works out which pair each end transmits on.
 
 | | |
 |---|---|
@@ -317,18 +398,28 @@ the module:
 | ML2 | ECP5 45F | J1/J2 (A/B) | K1/K2 (**C/D** pair) | **no** -- ECP5 drives true LVDS only from A/B pairs |
 | MX1, MX2 | Artix-7 35T | R1/R2 | T3/T4 (bank at 2.5V) | **yes** |
 
-With auto-negotiation (round 4) choosing roles:
+With the negotiation choosing roles (MX and the LVDS Pmod are planned,
+not built yet):
 
 | straight cable | ML0/ML1 | MX | ML2 | LVDS Pmod |
 |---|---|---|---|---|
 | **ML0/ML1** | yes | yes | yes | yes |
 | **MX** | yes | yes | yes | yes |
-| **ML2** | yes | yes | **crossover** (or a slower fallback) | yes |
+| **ML2** | yes | yes | **crossover** | yes |
 | **LVDS Pmod** | yes | yes | yes | **crossover** |
 
-The ML2-to-ML2 fallback drives DS2 as two complementary 2.5V outputs
-instead of true LVDS: more swing than the LVDS spec allows, so slower
-and not guaranteed.
+With a crossover cable, any pair of these links. An ML2-to-ML2
+fallback on a straight cable -- DS2 driven as two complementary 2.5V
+outputs instead of true LVDS -- was considered and left out: more swing
+than the LVDS spec allows, and nothing to test it against yet.
+
+In `boards/mozart_ml1.lpf` and `mozart_ml2.lpf` both pairs are
+`IO_TYPE=LVDS DIFFRESISTOR=100`: the on-chip 100 Ohm termination is
+there whichever way a pair points, so a transmitter sees the far end's
+termination in parallel with its own -- half the swing (~175 mV), still
+well above an LVDS receiver's 100 mV threshold over a 1 m cable. On an
+ML2, DS2 (a C/D pair) is never driven: the block refuses to transmit on
+it.
 
 The DS port **only takes LVDS-level signals**. The modules' DS banks run
 at 2.5V: 3.3V driven straight in is outside the ECP5's recommended
@@ -359,12 +450,13 @@ few wires to a Zeitlos board's GPIO port, for a cheap GPIO expander.
 | `minze_gpio`, `obst_langkatze_gpio`, `schoko_langkatze_gpio` | **yes** | **yes**, 1 engine | -- |
 | `lakritz_gpio` | **yes** | no: out of LUTs | -- |
 | a board with a 4-pin port (Sergei's 6-pin Pmod, `GPIO_PORT0_NARROW`) | **yes** | yes: two pins are enough | -- |
-| Mozart, Chopin (ML0/ML1/ML2/MX) | no GPIO port | no GPIO port | round 4 |
+| Mozart ML0/ML1/ML2 | no GPIO port | no GPIO port | **yes**, with `ZLINK_FAST` (experimental) |
+| Chopin (MX) | no GPIO port | no GPIO port | planned |
 | ULX3S 85F | -- | -- | round 4 |
 | everything else | needs a GPIO port | needs a GPIO port | -- |
 
 Mozart's extra-link pins (XA-XD) go to its RP2040, so Mozart's only
-zlink is the DS port.
+zlink is the DS port -- and only in a `ZLINK_FAST` build.
 
 ## Testing
 
@@ -373,7 +465,9 @@ make test_gpio_stream                       # physical layer, ~5 minutes
 make test_gpio_stream PPM=-2000 JIT=5       # a corner
 make -C rtl/tests 8b10b                     # the code tables, every symbol
 python3 tools/gen_8b10b.py                  # the code's properties
-make -C sw/common/tests -f Makefile.zlink   # link layer, soft, stream transports
+make test_zfast                             # fast zlink's block, two of them, ~1 minute
+make test_zfast FPPM=-1000 FJIT=1.0         # a corner (ppm, ns of jitter per edge)
+make -C sw/common/tests -f Makefile.zlink   # link layer, soft, stream, fast transports
 make -C sw/apps/zlink/tests                 # the app: two machines, ~40 s
 ```
 
@@ -386,6 +480,21 @@ make -C sw/apps/zlink/tests                 # the app: two machines, ~40 s
 - `test_zlink_stream`: the stream transport through the real
   `zgpio_stream.c` on two modelled engines, with symbols lost and
   changed, and a slow reader overflowing its RX FIFO.
+- `test_zfast` (`rtl/tb/tb_zfast.v`): two `zfast` blocks -- the second
+  one an ML2's, which cannot transmit on DS2 -- on a modelled SATA
+  cable, straight or crossed, a pair optionally inverted, with a clock
+  offset and random jitter on every edge: registers, the internal loop,
+  100/50/25 Mbit/s both ways at once, a crossed cable, an inverted pair
+  with `RXINV`, noise, overflow and flush. It passes at -2000 and +1000 ppm, and
+  with up to 2.5 ns of jitter on every edge at 100 Mbit/s, where a bit
+  is 10 ns.
+- `test_zlink_fast`: the fast transport through the real `zfast.c` on
+  two register-level models and a cable: ML1-ML1 straight and crossed,
+  ML1-ML2 and ML2-ML1, ML2-ML2 crossed, pairs inverted, 20-40 random
+  seeds each -- every one must link and carry messages both ways --
+  and two ML2s on a straight cable, which must not link and must say
+  why; contention on a pair never longer than one 80 ms try; one end
+  restarting.
 - `test_zlink_app`: two copies of the real `zlinkapp.c` in two
   processes on shared simulated wires -- see
   [zlink_app.md](zlink_app.md#testing) for its five scenarios.
@@ -395,6 +504,12 @@ checks one board's engine and wires; then two boards, X to X, Y to Y
 and ground, `zlink start` on each, and `zlink status`
 ([zlink_app.md](zlink_app.md)).
 
+Fast zlink, on a Mozart with a `ZLINK_FAST` bitstream: `zlink loop -m
+fast` first -- the block looped inside, a megabyte through FIFOs, clock
+crossings, clock recovery and 8b/10b at 100 Mbit/s, no cable -- then a
+SATA cable between two boards, `zlink start -m fast` on each, `zlink
+status` (which pair each transmits on) and `zlink speed`.
+
 ## See also
 
 - [gpio.md](gpio.md#stream-engines) -- the stream engine: registers,
@@ -402,6 +517,9 @@ and ground, `zlink start` on each, and `zlink status`
 - `rtl/gpio_stream.v` -- the engine, and why it is built the way it is
 - `tools/gen_8b10b.py` -- where the 8b/10b tables come from
 - [zlink_app.md](zlink_app.md) -- the `zlink` command and service
-- `sw/common/zlink.h`, `zlink_soft.h`, `zlink_stream.h` -- the link
-  layer and transports, for anything else that wants a link
+- `sw/common/zlink.h`, `zlink_soft.h`, `zlink_stream.h`,
+  `zlink_fast.h` -- the link layer and transports, for anything else
+  that wants a link
+- `rtl/zfast.v`, `sw/common/zfast.h` -- fast zlink's block and its
+  registers
 - [bench.md](bench.md) -- what the round 3 I2C slave is for

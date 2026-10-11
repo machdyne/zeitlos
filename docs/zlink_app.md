@@ -27,13 +27,15 @@ after its password.
 **Status.** Round 2 of [zlink.md](zlink.md). Everything here is tested
 on the host -- two copies of the program, linked by simulated wires
 (Testing, below) -- and builds for the target, but has **not yet run on
-hardware**.
+hardware**. Round 4 added `-m fast`, two Mozarts over their DS ports
+(below): experimental, and tested on the host through its transport's
+own test rather than this program's.
 
 ## Commands
 
 | Command | Does |
 |---|---|
-| `zlink start [-f \| -w] [-m auto\|soft\|stream] [-r KBIT] [PORT [X Y]]` | start the service on this machine |
+| `zlink start [-f \| -w] [-m auto\|soft\|stream\|fast] [-r KBIT] [PORT [X Y]]` | start the service on this machine |
 | `zlink stop` | stop it, and let go of the pins |
 | `zlink` or `zlink status` | the link, both machines' capabilities, counters |
 | `zlink ls [PATH]` | the other machine's directory (default `/`) |
@@ -41,6 +43,7 @@ hardware**.
 | `zlink put LOCAL [REMOTE]` | copy a file to it; REMOTE defaults to the same path |
 | `zlink speed [KB]` | send KB (default 64) of filler and time it |
 | `zlink loop [-i] [-r KBIT] PORT TX RX` | one board: send 64 KB out of TX and check it on RX -- a jumper between the pins, or `-i` for the engine's internal loopback |
+| `zlink loop -m fast [-r KBIT]` | a Mozart with fast zlink: 1 MB through its block, looped inside, at 100000 (default), 50000 or 25000 kbit/s, and how fast the CPU kept up |
 
 `start`'s options:
 
@@ -51,7 +54,8 @@ hardware**.
 | `-m auto` | soft zlink first, then the fastest stream rate both engines manage (the default) |
 | `-m soft` | soft zlink only |
 | `-m stream` | an engine from the start, `X` the TX pin and `Y` the RX pin, wired TX to RX. For the LVDS Pmod, and for wires that cannot be pulled both ways |
-| `-r KBIT` | the highest stream rate to try: 12000, 6000, 3000, 1500 or 750 (another number means the next one down) |
+| `-m fast` | fast zlink on a Mozart's DS port (a `ZLINK_FAST` bitstream; experimental): no pins, a SATA cable. The default on a bitstream that has fast zlink and no GPIO port |
+| `-r KBIT` | the highest stream rate to try: 12000, 6000, 3000, 1500 or 750 (another number means the next one down). With `-m fast`: 100000 (the default), 50000 or 25000, and both ends must use the same |
 | `PORT X Y` | GPIO port and pins; default port 0, pins 0 and 1 -- the Pmod's pins 1 and 2 |
 
 Paths are as the filesystem sees them: give them in full, from `/`; 200
@@ -104,6 +108,7 @@ the other's term to this one, can both be open.
 |---|---|---|
 | auto, soft | X, Y, ground | X to X and Y to Y, or crossed: either works, and `zlink status` says which it found |
 | stream (`-m stream`) | TX, RX, ground | each TX to the other's RX |
+| fast (`-m fast`) | a SATA cable, DS port to DS port | straight or crossover; two ML2s need a crossover. `zlink status` says which pair each end transmits on, or, if it cannot link, why |
 
 Soft zlink pulls wires low and lets pull-ups raise them: external
 4.7k pull-ups to 3.3V on X and Y make it faster than the pins' own.
@@ -118,6 +123,7 @@ top stream rate; the rate ladder steps down by itself on longer ones.
 |---|---|
 | soft | estimated 10-35 KB/s; set by how fast both machines notice the wires |
 | stream | at best the rate it settled on, less 8b/10b's 20% and framing: about 1.1 MB/s at 12 Mbit/s. Two frames in flight, and the CPU's work on each (CRC, reading the FIFO a byte at a time), may hold it lower |
+| fast | 100 Mbit/s on the line, 10 MB/s; through this program much less: two frames in flight, each turned round by the CPU between other work. Not measured yet |
 | a file | also limited by the SD card: 600-850 KB/s reading ([sdcard.md](sdcard.md)) |
 
 None of these has been measured on hardware yet; `zlink speed` is how.
@@ -225,4 +231,12 @@ acks from a term that reconnected).
 
 On hardware, to start: `zlink loop` with a jumper checks a board's
 engine and pins; then two boards, `zlink start` on both, `zlink
-status`, `zlink speed`.
+status`, `zlink speed`. For fast zlink: `zlink loop -m fast` on each
+Mozart, then the cable, `zlink start -m fast` on both, `zlink status`,
+`zlink speed 1024`.
+
+`-m fast` is not in `test_zlink_app`: its machines have no fast zlink
+(CONFIG bit 15 clear), which checks that the program still builds and
+behaves with the code in. The transport, its negotiation and the
+register interface are `test_zlink_fast`'s
+([zlink.md](zlink.md#testing)).

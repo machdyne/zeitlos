@@ -187,3 +187,17 @@ LOCATE COMP "PROGRAMN" SITE "M8";
 # a reset button pulling it low. (Zeitlos's own driver, a BB with its T
 # input, and a jumploader, which only drives 0, work as before.)
 IOBUF PORT "PROGRAMN" IO_TYPE=LVCMOS33 OPENDRAIN=ON;
+
+# The DS port: fast zlink (rtl/zfast.v, docs/zlink.md "Fast"), only in a
+# build with ZLINK_FAST -- otherwise these ports do not exist and the
+# lines are ignored. DS1 = C1/C2, DS2 = J1/J2 (both A/B pairs). Also the ML0's (same balls).
+# The P ball only: IO_TYPE=LVDS takes the N ball with it. The bank is
+# 2.5V on the module. On-chip 100 Ohm termination on both pairs: the far
+# end's driver then sees it in parallel with this end's, which halves
+# the swing (about 175 mV, still well above an LVDS receiver's 100 mV)
+# -- the price of pairs that change direction at run time. Drop
+# DIFFRESISTOR on the pair a board only transmits on to have it back.
+LOCATE COMP "DS1" SITE "C1";
+IOBUF  PORT "DS1" IO_TYPE=LVDS DIFFRESISTOR=100;
+LOCATE COMP "DS2" SITE "J1";
+IOBUF  PORT "DS2" IO_TYPE=LVDS DIFFRESISTOR=100;

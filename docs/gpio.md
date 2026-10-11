@@ -19,6 +19,11 @@ of any port: zlink, an SPI master, a UART, or raw bits in and out at a
 fixed rate, chosen at runtime. See [Stream engines](#stream-engines)
 below, and [zlink.md](zlink.md) for the link the engines were built for.
 
+For one job -- a real I2C master answered by chips that exist only in
+software, for [bench](bench.md) -- an optional **I2C slave** can take
+two pins and answer from a register image in block RAM. See
+[I2C slave](#i2c-slave).
+
 ## The block at a glance
 
 | | |
@@ -30,6 +35,8 @@ below, and [zlink.md](zlink.md) for the link the engines were built for.
 | Pull-ups | weak internal pull-up, always on, not changeable at runtime |
 | Reset state | every pin an input, so every pin pulled high |
 | Stream engines | `0xe000_2000 + E * 0x40`; `GPIO_STREAM_ENGINES` per board, 1 by default where a port is built |
+| I2C slave | `0xe000_2100`; `GPIO_I2CS_SLOTS`, 0 (off) unless a build asks |
+| Fast zlink | `0xe000_4000`; Mozart only, with `ZLINK_FAST`, off by default ([below](#fast-zlink)) |
 
 `rtl/gpio.v` is ALWAYS instantiated, on every board, whether or not any
 port has pins. It also owns the board LEDs, which is why: it grew out
@@ -111,7 +118,7 @@ Word addresses; `rtl/gpio.v`'s `wb_adr_i` is `sysctl.v`'s
 | `+0x00` | LED | r/w | bit 0: `LED_B`. Resets to 1. |
 | `+0x04` | LEDS | r/w | bits 7:0: `DBG[7:0]`, the `` `LED_DEBUG `` bar |
 | `+0x08` | MAGIC | r | `0x5A47_5049` ("ZGPI") |
-| `+0x0c` | CONFIG | r | `{16'h4750, 4'b0, modes[3:0], engines[3:0], nports[3:0]}` |
+| `+0x0c` | CONFIG | r | `{16'h4750, fast, i2cs_slots[2:0], modes[3:0], engines[3:0], nports[3:0]}` |
 | `+0x10`..`+0x1c` | | | reserved, read 0 |
 
 LED and LEDS are at the addresses `rtl/debug.v` had them at, and behave
@@ -128,7 +135,10 @@ CONFIG's `engines` field is how many stream engines this bitstream has,
 and `modes` which optional modes they have: bit 0 zlink (always set
 when there is an engine), bit 1 SPI, bit 2 UART, bit 3 raw. Both are 0
 on a bitstream without engines and on every bitstream that predates
-them, so software that reads them needs no other check.
+them, so software that reads them needs no other check. `i2cs_slots`
+is how many chips the I2C slave can emulate (below): 0 when it is not
+built, which is the default. `fast` (bit 15) is 1 when fast zlink's
+block is built (below); 0 everywhere else, as it always read before.
 
 ### Port registers, `0xe000_1000 + N * 0x20`
 
@@ -175,6 +185,18 @@ register in 3:0). The map then repeats every 16KB instead: port 0 DIR
 is also at `0xe000_5000`, and `0xe000_3000` is engine 0 again. A build
 without engines decodes exactly as before, and `tb_gpio.v` (no engines)
 still asserts the 8KB aliasing.
+
+**With the I2C slave built, bit 6 of that window is decoded as well**:
+`0xe000_2100` and every address in the window with word-address bit 6
+set is the slave (register in bits 3:0, so it repeats every 64 bytes
+there); the engines keep the half with bit 6 clear. Without the slave,
+bit 6 is ignored and engine E is also at `0xe000_2100 + E * 0x40`.
+
+**With fast zlink built, bit 12 is decoded too** (byte address bit 14)
+and selects its window, `0xe000_4000`-`0xe000_7fff`, register in bits
+3:0 of the word address (so it repeats every 64 bytes there). The map
+then repeats every 32KB: port 0 DIR is also at `0xe000_9000`. Only a
+`ZLINK_FAST` build decodes the bit; every other build is as above.
 
 That is a deliberate trade. Timing on this design is tight, and the
 alternative is a comparator against the top fifteen bits of the word
@@ -535,6 +557,211 @@ little; the cost is the core (FIFO pointers, the bus side, the
 divider, zlink's receiver). It is about twice what was estimated
 before it was built, and the place to look first if a board needs it
 smaller.
+
+## I2C slave
+
+`rtl/gpio_i2cs.v`. A real I2C master -- a Zwölf module's LS10,
+bit-banging its C/D bus -- talks to chips that exist only in software,
+`bench`'s virtual parts ([bench.md](bench.md)), with **no software in
+the transaction**. Each of up to four **slots** is one emulated chip:
+an I2C address, a 256-register image (the **mirror**), a register
+pointer and an auto-increment rule. The hardware answers the master
+from the mirror; software keeps the mirror current and applies the
+side effects of what the master wrote, from a log. This is "mirror
+mode". There is no mode where software answers byte by byte: that
+needs clock stretching, which the LS10 does not tolerate (below).
+
+**Off by default, everywhere.** It is for one job, so a build asks for
+it: `` `define GPIO_I2CS_SLOTS 4 `` in a board block, or
+
+```
+make BOARD=obst_langkatze_gpio EXTRA_DEFINES=-DGPIO_I2CS_SLOTS=4
+```
+
+1, 2 or 4 slots -- one block RAM whatever the number. Not on Lakritz,
+which has no logic cells to spare ([boards.md](boards.md)).
+
+### What the master sees
+
+| the master does | the slave |
+|---|---|
+| a slot's address (write or read) | ACKs |
+| any other address | does not ACK |
+| a bare probe: the address, then stop | ACKs if it is a slot's |
+| write: the first byte after the address | sets the slot's pointer |
+| write: each byte after that | stores it at the pointer -- if that register is writable -- logs it, advances the pointer, ACKs |
+| a byte for a register that is not writable | ACKs it, leaves the mirror alone, logs it (a TCA9535's input port does the same) |
+| read | sends from the pointer, advancing after each byte, until the master NACKs |
+| write the pointer, repeated start, read | reads from the pointer just set |
+| a read with no pointer written first | starts where the last transaction left the pointer: it **persists**, per slot |
+
+Auto-increment, per slot: **none** (the pointer stays), **linear** (+1,
+wrapping at 255), or **pair toggle** (XOR 1 -- a TCA9535/9555 inside
+its register pairs).
+
+**It never stretches the clock.** SCL is an input only; SDA is pulled
+low or released, never driven high. The LS10 waits about 1 ms for a
+stretched clock and then carries on as though it were high, so
+stretching would corrupt a transaction rather than slow it. No 10-bit
+addresses, no general call.
+
+**Timing.** Both lines pass gpio.v's synchroniser and a glitch filter
+(12 clocks, 250 ns), so the LS10's ~40 kHz and 400 kHz fast mode are
+both easy. A master may move SDA the instant after SCL falls -- I2C
+allows a hold time of 0 ns -- and the slave bridges that, as the I2C
+specification requires: a start or stop counts only while SCL is still
+high at the pin. SDA changes only after the slave has seen SCL fall,
+which gives the master a filter time of hold.
+
+### What software has to allow for
+
+- **Derived registers are a loop behind.** A register that depends on
+  others -- a TCA's input port showing what its outputs drive -- is only
+  as current as the last time software rewrote it. A master that writes
+  the outputs and immediately reads the input port gets the old value
+  until bench has recomputed it (one bench loop, 10-20 ms). Rare in
+  practice: `PANEL.BAS` only reads port 1's inputs.
+- **Multi-byte reads are consistent byte by byte only.** If software
+  updates two registers while the master is reading them, the master can
+  get one old byte and one new. Enough for buttons and LEDs.
+- **The log holds 512 writes.** Past that, writes still reach the
+  mirror but are not logged, and ISTAT's overflow flag says so.
+- **Parts with more than 256 registers do not fit a slot** (a 24C64
+  EEPROM's 16-bit address). A two-byte pointer would be the way to add
+  them, if one is ever wanted.
+
+### Pins
+
+SCL and SDA are any two pins of any port (ICTL). While the slave is
+enabled both are **owned**, as an engine owns its pins: DIR and OUT
+stop reaching them, so `zgpio`'s read-modify-write on the other pins of
+the port -- zi2c bit-banging pins 1 and 2, say -- cannot disturb the
+bus. IN still reads them. `zi2cs.c` and `zgpio_stream.c` each refuse a
+pin the other has.
+
+The pins need pull-ups, as any I2C bus does; on a Zwölf module's bus
+the module's own provide them.
+
+### Registers, `0xe000_2100`
+
+| offset | name | access | |
+|---|---|---|---|
+| `+0x00` | ICTL | r/w | `[0]` enable, `[13:8]` SCL pin, `[21:16]` SDA pin (port * 8 + pin) |
+| `+0x04` | ISTAT | r, w1c | `[9:0]` log level, `[12]` log overflow, `[13]` busy (a transaction to one of our slots), `[19:16]` read flags per slot, `[20]` live (enabled on valid pins). Write 1 to bit 12 or 16-19 to clear it |
+| `+0x08` | IMADDR | r/w | `[9:0]` `{slot, reg}`: the mirror register IMDATA reaches |
+| `+0x0c` | IMDATA | r/w | `[7:0]` the register, `[8]` writable by the master. IMADDR advances after each access |
+| `+0x10`..`+0x1c` | ISLOT0-3 | r/w | `[6:0]` address, `[7]` valid, `[9:8]` auto-increment (0 none, 1 linear, 2 pair toggle), `[15]` on a write: set the pointer to `[31:24]`. Reads: `[23:16]` the register the latest read started at, `[31:24]` the pointer |
+| `+0x20` | ILOG | r | pop the oldest write: `[31]` valid, `[25:24]` slot, `[15:8]` register, `[7:0]` data. 0 when empty |
+| `+0x24` | IFLUSH | w | `[0]` empty the log and clear the overflow flag |
+
+A slot past the number built reads 0 and ignores writes. Two valid
+slots with one address: the lower slot answers.
+
+**Reads are not logged** -- only flagged. A slot's read flag goes up
+when a read on it begins, and ISLOT keeps the register it began at:
+enough to release a TCA's INT after its input port is read, without
+spending the log on every byte read.
+
+### The block RAM
+
+One DP16KD in 2048x9 mode: the mirror in the lower half (`{slot, reg}`,
+each a byte and its writable bit), the log in the upper half (512
+entries of two words). One write port and one read port, shared by the
+I2C side and the CPU, I2C first; a job takes at most four clocks and
+I2C moves in microseconds, so neither side waits long enough to notice.
+
+### From C
+
+```c
+#include "../../common/zi2cs.h"
+
+if (z_i2cs_open(Z_I2CS_PIN(0, 2), Z_I2CS_PIN(0, 3)) != Z_I2CS_OK) return;
+z_i2cs_map(0, 0x20, Z_I2CS_INC_PAIR);              // a TCA9535
+for (int r = 0; r < 8; r++)
+    z_i2cs_mirror_write(0, r, regs[r], r >= 2);    // 0-1: input port, read only
+
+for (;;) {                                         // every bench loop
+    z_i2cs_event_t ev;
+    while (z_i2cs_log_pop(&ev))
+        part_i2c_write(ev.slot, ev.reg, ev.data);  // the part's own code
+    if (z_i2cs_reads(true) & 1)                    // slot 0 was read from
+        release_int_if(z_i2cs_read_start(0) <= 1);
+    ...rewrite the mirror registers whose values changed...
+}
+```
+
+`z_i2cs_slots()` is 0 on a bitstream without the slave. The slave is
+one block for the machine: `z_i2cs_open()` refuses with
+`Z_I2CS_EBUSY` when it is already enabled, and like an engine it stays
+on if its process exits without `z_i2cs_close()`.
+
+### Interrupt
+
+None, deliberately: bench loops every 10-20 ms anyway and polls ISTAT
+and the log, which needs no kernel work to route an interrupt to a
+user process. One could be added behind a parameter if something ever
+needs to react faster than a loop.
+
+### Cost
+
+Place-and-route with and without it on the same target (Yosys 0.69,
+nextpnr-ecp5 0.11.1 via YoWASP, default seed, one run each, today's
+tree with one stream engine):
+
+| target | without | with four slots | the slave |
+|---|---|---|---|
+| `obst_langkatze_gpio` (12F, 25F die) | 21,114 COMB (87%), 9,539 FF, 34 DP16KD | 22,114 (91%), 9,883 FF, 35 DP16KD | **+1,000 COMB**, +344 FF, +1 DP16KD |
+
+48 MHz still closes (58.3 MHz). Synthesised on its own with eight pins
+it is 774 LUT4, 24 CCU2C, 340 FF and one DP16KD; one slot instead of
+four saves only about 300 of those, since most of the cost is the
+protocol and the CPU's side, not the slots.
+
+That is **five to eight times the 120-180 estimated** before it was
+built. Taking pieces out one at a time showed no single culprit: the
+protocol, the CPU's register reads and the per-slot state each cost a
+few hundred cells. A pass to trim it -- the slots' addresses and
+pointers into the block RAM, a narrower read path -- is possible if a
+board that wants it is short of room; on a 25F board with an engine it
+fits (91% on Obst; Minze, at 92% with its engine, was not measured).
+
+
+## Fast zlink
+
+On a Mozart (ML0/ML1/ML2) built with `ZLINK_FAST` -- off by default,
+experimental -- the DS port's two LVDS pairs carry zlink at 100, 50 or
+25 Mbit/s ([zlink.md](zlink.md#fast-round-4-done-experimental)). Mozart
+has no GPIO port, but its registers live in this block's address
+window: adding another slave to the system bus's read mux costs about
+800 LUT4 on these boards, decoding one more address bit here costs
+almost nothing. `gpio.v` decodes `0xe000_4000` and hands the access to
+`rtl/zfast.v`, which sits in `sysctl.v` next to the pads and the
+200 MHz clock. CONFIG bit 15 says it is there.
+
+### Registers, `0xe000_4000`
+
+Laid out like a stream engine's, so the C is the same shape
+(`sw/common/zfast.h`):
+
+| off | name | | |
+|---|---|---|---|
+| `+0x00` | FCTL | r/w | `[0]` EN, `[2:1]` TXSEL (0 none, 1 DS1, 2 DS2), `[3]` RXSEL (0 DS1, 1 DS2), `[4]` RXEN, `[5]` LOOP (TX to RX inside the block), `[7:6]` RATE (0 100, 1 50, 2 25 Mbit/s), `[8]` TXINV, `[9]` RXINV. Reads `[16]`: DS2 can transmit (0 on an ML2, where TXSEL 2 is refused) |
+| `+0x0c` | FSTAT | r | `[10:0]` TX level, `[11]` busy, `[12]` RX overrun, `[13]` TX overflow, `[14]` aligned, `[15]` a K symbol was popped by FRX4, `[26:16]` RX level |
+| `+0x10` | FTX | w | push one entry: `[8]` K, `[7:0]` byte |
+| `+0x14` | FTX4 | w | push four data bytes, byte 0 in `[7:0]` first |
+| `+0x18` | FRX | r | pop one: `[9]` valid, `[8]` K, `[7:0]` byte; 0 when empty |
+| `+0x1c` | FRX4 | r | pop four data bytes, only when four are waiting, else 0 |
+| `+0x20` | FERR | r | `[15:0]` code errors and misplaced commas, saturating |
+| `+0x24` | FFLUSH | w | `[0]` TX FIFO, `[1]` RX FIFO, `[2]` sticky flags and FERR |
+| `+0x28` | FLOCK | r/w | test-and-set: reading takes it, 0 back means it was free; write 0 to give it back |
+
+FIFOs of 1024 entries each way, one block RAM each. A change to FCTL
+other than RXEN restarts the line side (not the FIFOs). While pll0 is
+not locked the line side is held in reset.
+
+### Cost
+
+PnR with and without it is in [zlink.md](zlink.md#fast-round-4-done-experimental).
 
 ## Building it
 
@@ -912,9 +1139,9 @@ value, where hardware would give contention and an indeterminate level
 the bug quiet, which is the one thing in there worth being suspicious
 of.
 
-The simulator has **no stream engines**: its CONFIG reports 0, so
-`z_gs_count()` is 0 and code falls back exactly as it would on a board
-without them. The engines are tested in RTL simulation instead (below),
+The simulator has **no stream engines and no I2C slave**: its CONFIG
+reports 0 for both, so `z_gs_count()` and `z_i2cs_slots()` are 0 and
+code falls back exactly as it would on a board without them. The engines are tested in RTL simulation instead (below),
 and `zgpio_stream.c` against a model of its registers.
 
 ## Testing it
@@ -922,8 +1149,10 @@ and `zgpio_stream.c` against a model of its registers.
 ```
 make test_gpio                    # the block: ports, LEDs, aliasing
 make test_gpio_stream             # the stream engines, a few minutes
+make test_gpio_i2cs               # the I2C slave, under a minute
 make -C rtl/tests 8b10b           # zlink's 8b/10b, every symbol
 make -C sw/common/tests -f Makefile.zgpio_stream   # the C library
+make -C sw/common/tests -f Makefile.zi2cs          # the I2C slave's
 ```
 
 `rtl/tb/tb_gpio.v` builds two ports (so the per-port address arithmetic
@@ -971,10 +1200,33 @@ Two things it found that are worth knowing about:
   next stream. It now clears to all ones, which cannot form a comma
   with anything but a real one.
 
+`rtl/tb/tb_gpio_i2cs.v` puts the I2C slave in a whole `gpio_wb` (one
+port, one engine, four slots) against a master modelled on the LS10's:
+open drain, 4 us per line change (about 40 kHz), no patience for clock
+stretching -- and **zero hold time**, SDA moving the instant SCL falls,
+which I2C allows and which is the case the slave must bridge. It
+covers CONFIG and the engine next door; loading and reading the mirror;
+probes of mapped and unmapped addresses; writes with pair toggle; a
+write to a read-only register (ACKed, unchanged, logged); write then
+read with a repeated start, the read flag and where the read started;
+the persistent pointer; linear auto-increment across the wrap at 255,
+and none; the log in order and empty; a 50 ns glitch on SCL in the
+middle of a byte; pin ownership with DIR set on the whole port; 513
+writes at 400 kHz, overflowing the log while every byte still reaches
+the mirror; IFLUSH; and disabling. At every clock it checks that the
+slave never drives SCL and never drives SDA high.
+
+The first run found the zero-hold-time case: the test's master moves
+SDA in the same instant it pulls SCL low, the two filters flipped a
+clock apart, and the slave saw a stop. A start or stop now counts only
+while SCL is still high at the pin.
+
 ## See also
 
 - `rtl/gpio.v` -- the block, and the reasoning for each decision above
 - `rtl/gpio_stream.v` -- the stream engines
+- `rtl/gpio_i2cs.v`, `sw/common/zi2cs.h` -- the I2C slave
+- `docs/bench.md` -- what the I2C slave is for
 - `docs/zlink.md` -- zlink, which the stream engines carry
 - `release/hw/pmods/gpio.spec` -- pin map, pull-up choice
 - `docs/logic_app.md` -- the `logic` app: analyser, pin driver, I2C decoder

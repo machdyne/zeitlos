@@ -209,4 +209,4 @@ conflicts), bus semantics, each part against its datasheet, the drawing
 | 2 | LS99: virtual Zwölf modules running BASIC (LS10, LS11 profiles), on bench buses, with virtual time; `sechs` on zi2cx ([ls99.md](ls99.md)) |
 | 3 | the BASIC computer's `I2C` on a bench bus (`basic BUS`); the REPL's `(i2c-*)` on zi2cx |
 | 4 (this) | real hardware: `gpio` ports, `segment=` buses, ports owned through zi2cx |
-| 5 | a real module's own bus reaching virtual parts (gateware) |
+| 5 | a real module's own bus reaching virtual parts. **The gateware is done**: the GPIO I2C slave answers a real LS10 from a mirror of each virtual part's registers, with no clock stretching ([gpio.md](gpio.md#i2c-slave), `sw/common/zi2cs.h`; opt-in, `GPIO_I2CS_SLOTS`). Still to come is bench's side: a `master=` form for a real master's pins (g0's 3/4 carrying a module's C/D), each part on that bus mapped to a slot, its registers written into the mirror as its state changes, and logged writes applied through the part's own `i2c_write` |

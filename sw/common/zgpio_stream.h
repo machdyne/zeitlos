@@ -145,7 +145,7 @@ typedef struct {
 #define Z_GS_EMODE       (-2)	// mode not built into this bitstream
 #define Z_GS_EPIN        (-3)	// pin out of range for this board
 #define Z_GS_EPINDUP     (-4)	// two roles on one pin
-#define Z_GS_EPINBUSY    (-5)	// another engine is using that pin
+#define Z_GS_EPINBUSY    (-5)	// another engine, or the I2C slave, has that pin
 #define Z_GS_ENOPIN      (-6)	// the mode needs a role that is not set
 
 // -- presence ----------------------------------------------------

@@ -231,6 +231,13 @@ uint32_t z_gs_test_rd(uint32_t a) {
 	return v;
 }
 
+// No fast zlink on these machines (gpio CONFIG bit 15 clear): its
+// transport has its own test, sw/common/tests/test_zlink_fast.c.
+int z_zf_test_side;
+int16_t z_zf_test_pending[2] = { -1, -1 };
+uint32_t z_zf_test_rd(uint32_t a) { return a < 0xe0000010u ? z_gs_test_rd(a) : 0; }
+void z_zf_test_wr(uint32_t a, uint32_t v) { (void)a; (void)v; }
+
 void z_gs_test_wr(uint32_t a, uint32_t v) {
 	if ((a - Z_GS_BASE) / Z_GS_SIZE != 0) return;
 	eng_t *g = &sh->eng[me];

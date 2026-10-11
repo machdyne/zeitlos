@@ -1,0 +1,10 @@
+# The GPIO I2C slave's driver on the host (sw/common/zi2cs.c), with
+# zgpio_stream.c beside it -- each keeps off the other's pins:
+#   make -C sw/common/tests -f Makefile.zi2cs
+# The protocol itself is tested in RTL: make test_gpio_i2cs.
+CFLAGS = -std=gnu99 -O1 -g -Wall -Wextra -fsanitize=address,undefined -I ..
+
+all:
+	cc $(CFLAGS) -DZ_I2CS_HOST_TEST -DZ_GS_HOST_TEST -o /tmp/test_i2cs test_i2cs.c \
+		../zi2cs.c ../zgpio_stream.c
+	/tmp/test_i2cs

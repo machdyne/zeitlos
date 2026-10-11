@@ -7,7 +7,9 @@ module pll0
 (
     input clkin, // 48 MHz, 0 deg
     output clkout0, // 100 MHz, 0 deg
-    output clkout1, // unused -- video (pclk) moved to pll1, which now
+    output clkout1, // 200 MHz with `ZLINK_FAST (fast zlink's pads,
+                     // rtl/zfast_pad.v), else disabled. Before that:
+                     // unused -- video (pclk) moved to pll1, which now
                      // provides both pclk and bclk together from a
                      // single shared VCO for an exact ratio between
                      // them (see pll1.v's own comment). Left disabled
@@ -20,6 +22,9 @@ module pll0
 );
 (* FREQUENCY_PIN_CLKI="48" *)
 (* FREQUENCY_PIN_CLKOP="100" *)
+`ifdef ZLINK_FAST
+(* FREQUENCY_PIN_CLKOS="200" *)
+`endif
 (* FREQUENCY_PIN_CLKOS2="50" *)
 (* FREQUENCY_PIN_CLKOS3="12" *)
 (* ICP_CURRENT="12" *) (* LPF_RESISTOR="8" *) (* MFG_ENABLE_FILTEROPAMP="1" *) (* MFG_GMCREF_SEL="2" *)
@@ -37,8 +42,13 @@ EHXPLLL #(
         .CLKOP_DIV(6),
         .CLKOP_CPHASE(2),
         .CLKOP_FPHASE(0),
+`ifdef ZLINK_FAST
+        .CLKOS_ENABLE("ENABLED"),
+        .CLKOS_DIV(3),
+`else
         .CLKOS_ENABLE("DISABLED"),
         .CLKOS_DIV(19),
+`endif
         .CLKOS_CPHASE(2),
         .CLKOS_FPHASE(0),
         .CLKOS2_ENABLE("ENABLED"),

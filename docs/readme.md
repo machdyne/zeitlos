@@ -64,8 +64,8 @@ with [welcome](welcome.md); to program it, [kernel](kernel.md) and
 | [usb\_host](usb_host.md) | USB host controller |
 | [usb\_ethernet](usb_ethernet.md) | USB CDC-ECM ethernet |
 | [gamepad](gamepad.md) | Gamepads |
-| [gpio](gpio.md) | GPIO on PMOD ports, and stream engines (zlink, SPI, UART, raw on any pin) |
-| [zlink](zlink.md) | Linking two machines over a couple of wires: tiers, wiring, speeds |
+| [gpio](gpio.md) | GPIO on PMOD ports, stream engines (zlink, SPI, UART, raw on any pin), and the optional I2C slave |
+| [zlink](zlink.md) | Linking two machines over a couple of wires: tiers, wiring, speeds, and experimental fast zlink over Mozart's DS port |
 | [zlink\_app](zlink_app.md) | `zlink`: files and a shell between two machines over that link |
 | [i2c](i2c.md) | Bit-banged I2C |
 | [sechs\_app](sechs_app.md) | `sechs`: Sechs modules on a PMOD |

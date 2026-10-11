@@ -49,9 +49,10 @@
  *                     because debug.v returned {31'b0, led} for every
  *                     address it did not recognise -- neither of which
  *                     is the magic, which is the point.
- *     word 3  CONFIG  { 16'h4750, 12'b0, nports[3:0] } -- how many
- *                     GPIO ports this bitstream actually has pins
- *                     for. The signature is not decoration: a pre-GPIO
+ *     word 3  CONFIG  { 16'h4750, fast, i2cs_slots[2:0], modes[3:0],
+ *                     engines[3:0], nports[3:0] } -- how many GPIO
+ *                     ports this bitstream actually has pins for, and
+ *                     which of the blocks below it has (0: none). The signature is not decoration: a pre-GPIO
  *                     bitstream answers this address with {31'b0, led}
  *                     too, and "0 ports" and "1 port, LED off" would
  *                     otherwise be the same word. Same trick, and the
@@ -72,6 +73,19 @@
  *     +0x1c           reserved
  *
  * Only bits 7:0 of any port register mean anything; the rest read 0.
+ *
+ *   0xe000_2000 region -- the blocks that can take pins over:
+ *
+ *     0xe000_2000 + E * 0x40   stream engine E (rtl/gpio_stream.v),
+ *                              when `GPIO_STREAM_ENGINES > E
+ *     0xe000_2100              the I2C slave (rtl/gpio_i2cs.v), when
+ *                              `GPIO_I2CS_SLOTS > 0
+ *
+ *   0xe000_4000 -- fast zlink (rtl/zfast.v, in rtl/sysctl.v by the
+ *   pads), when `ZLINK_FAST: decoded here, served there.
+ *
+ *   docs/gpio.md has both register maps. A pin either block owns stops
+ *   answering to DIR and OUT; IN still reads it.
  *
  * -- Why the ports start at 0x1000 and not right after CONFIG --
  *
@@ -168,7 +182,20 @@ module gpio_wb #(
 	parameter ENGINES = 0,
 	parameter ENG_SPI = 1,
 	parameter ENG_UART = 1,
-	parameter ENG_RAW = 1
+	parameter ENG_RAW = 1,
+
+	// The I2C slave (rtl/gpio_i2cs.v): how many chips it can emulate,
+	// 1, 2 or 4; 0 builds none. rtl/sysctl.v passes `GPIO_I2CS_SLOTS
+	// (rtl/boards.vh: 0 unless a build asks) when the board has a port.
+	parameter I2CS_SLOTS = 0,
+
+	// Fast zlink (rtl/zfast.v): decode its window, 0xe000_4000, and pass
+	// the access out. The block itself is in rtl/sysctl.v, beside the
+	// pads -- this file has no `z in it and keeps it that way -- but its
+	// registers come through here, so its read data joins this slave's
+	// one mux rather than adding a term to the bus's (rtl/sysctl.v on
+	// what that costs). `ZLINK_FAST, rtl/boards.vh.
+	parameter FAST = 0
 )
 (
 	input wb_clk_i,
@@ -195,7 +222,15 @@ module gpio_wb #(
 	// buffers from dir/out and drives in from the pads.
 	output [63:0] gpio_dir_o,
 	output [63:0] gpio_out_o,
-	input [63:0] gpio_in_i
+	input [63:0] gpio_in_i,
+
+	// fast zlink's register access (FAST only; otherwise unused)
+	output fast_acc,
+	output fast_we,
+	output [3:0] fast_ra,
+	output [31:0] fast_wd,
+	input fast_done,
+	input [31:0] fast_rdo
 );
 
 	localparam MAGIC = 32'h5A47_5049;	// "ZGPI"
@@ -231,19 +266,32 @@ module gpio_wb #(
 	wire [63:0] reg_out = { out[7], out[6], out[5], out[4],
 	                        out[3], out[2], out[1], out[0] };
 
-	// A pin an engine owns takes its direction and value from the
-	// engine; every other pin is the port registers, as always.
+	// A pin an engine or the I2C slave owns takes its direction and
+	// value from there; every other pin is the port registers, as
+	// always.
 	wire [63:0] eng_own, eng_dir, eng_out;
-	assign gpio_dir_o = (reg_dir & ~eng_own) | (eng_dir & eng_own);
-	assign gpio_out_o = (reg_out & ~eng_own) | (eng_out & eng_own);
+	wire [63:0] i2cs_own, i2cs_dir, i2cs_out;
+	wire [63:0] blk_own = eng_own | i2cs_own;
+	assign gpio_dir_o = (reg_dir & ~blk_own) | ((eng_dir | i2cs_dir) & blk_own);
+	assign gpio_out_o = (reg_out & ~blk_own) | ((eng_out | i2cs_out) & blk_own);
+
+	// Fast zlink's window, 0xe000_4000: word address bit 12, decoded only
+	// when it is built (then the rest of the map repeats every 32KB
+	// rather than 16KB).
+	wire is_fast = (FAST > 0) && wb_adr_i[12];
 
 	// See the header on what is and is not decoded here.
-	wire is_port = wb_adr_i[10];
+	wire is_port = wb_adr_i[10] && !is_fast;
 
 	// The engine window, 0xe000_2000: word address bit 11, engine in
 	// bits 5:4, register in 3:0. Only decoded when engines are built,
 	// so a build without them aliases exactly as it always did.
-	wire is_eng = (ENGINES > 0) && wb_adr_i[11];
+	//
+	// The I2C slave sits just past four engines, at 0xe000_2100: word
+	// address bit 6 within that window, decoded only when it is built.
+	wire is_i2cs = (I2CS_SLOTS > 0) && wb_adr_i[11] && wb_adr_i[6] && !is_fast;
+	wire is_eng = (ENGINES > 0) && wb_adr_i[11] && !is_i2cs && !is_fast;
+	wire is_blk = is_eng || is_i2cs || is_fast;
 	wire [1:0] eidx = wb_adr_i[5:4];
 	wire eng_ok = (eidx < ENGINES);
 	wire [2:0] pidx = wb_adr_i[5:3];
@@ -262,7 +310,7 @@ module gpio_wb #(
 	// lane 0, so lane 0 is the only one with anything to write. A
 	// byte store to lane 3 of DIR does nothing, which is the honest
 	// behaviour -- there is nothing there.
-	wire wr = sel && wb_we_i && wb_sel_i[0] && !is_eng;
+	wire wr = sel && wb_we_i && wb_sel_i[0] && !is_blk;
 
 	// -- the engines --
 	//
@@ -314,6 +362,43 @@ module gpio_wb #(
 	                 eng_dir_v[191:128] | eng_dir_v[255:192];
 	assign eng_out = eng_out_v[63:0] | eng_out_v[127:64] |
 	                 eng_out_v[191:128] | eng_out_v[255:192];
+
+	// -- fast zlink: out to rtl/sysctl.v and back --
+	assign fast_acc = sel && is_fast;
+	assign fast_we = wb_we_i;
+	assign fast_ra = wb_adr_i[3:0];
+	assign fast_wd = wb_dat_i;
+
+	// -- the I2C slave --
+	wire i2cs_done;
+	wire [31:0] i2cs_rdo;
+	generate
+		if (I2CS_SLOTS > 0) begin : i2cs
+			gpio_i2cs #(
+				.NPINS(NPORTS * 8),
+				.SLOTS(I2CS_SLOTS)
+			) slave (
+				.clk(wb_clk_i),
+				.rst(wb_rst_i),
+				.acc(sel && is_i2cs),
+				.we(wb_we_i),
+				.ra(wb_adr_i[3:0]),
+				.wd(wb_dat_i),
+				.done(i2cs_done),
+				.rdo(i2cs_rdo),
+				.pin_in(in_sync),
+				.own(i2cs_own),
+				.own_dir(i2cs_dir),
+				.own_out(i2cs_out)
+			);
+		end else begin : no_i2cs
+			assign i2cs_done = 1'b0;
+			assign i2cs_rdo = 32'd0;
+			assign i2cs_own = 64'd0;
+			assign i2cs_dir = 64'd0;
+			assign i2cs_out = 64'd0;
+		end
+	endgenerate
 
 	// what CONFIG reports: { raw, uart, spi, zlink } when engines exist
 	wire [3:0] eng_modes = (ENGINES > 0) ?
@@ -367,10 +452,16 @@ module gpio_wb #(
 
 		end else begin
 
-			ack_r <= is_eng ? (sel && (!eng_ok || eng_done[eidx])) : sel;
+			ack_r <= is_fast ? (sel && fast_done) :
+			         is_i2cs ? (sel && i2cs_done) :
+			         is_eng ? (sel && (!eng_ok || eng_done[eidx])) : sel;
 
 			if (is_eng && sel)
 				dat_r <= eng_ok ? eng_rdo[eidx*32 +: 32] : 32'd0;
+			if (is_i2cs && sel)
+				dat_r <= i2cs_rdo;
+			if (is_fast && sel)
+				dat_r <= fast_rdo;
 
 			if (wr) begin
 
@@ -399,15 +490,15 @@ module gpio_wb #(
 
 			end
 
-			if (sel && !wb_we_i && !is_eng) begin
+			if (sel && !wb_we_i && !is_blk) begin
 
 				if (!is_port) begin
 					case (preg)
 						3'd0: dat_r <= { 31'b0, led };
 						3'd1: dat_r <= { 24'b0, leds };
 						3'd2: dat_r <= MAGIC;
-						3'd3: dat_r <= { CONFIG_SIG, 4'b0, eng_modes,
-						                 ENGINES[3:0], NPORTS[3:0] };
+						3'd3: dat_r <= { CONFIG_SIG, (FAST > 0), I2CS_SLOTS[2:0],
+						                 eng_modes, ENGINES[3:0], NPORTS[3:0] };
 						default: dat_r <= 32'h0000_0000;
 					endcase
 				end

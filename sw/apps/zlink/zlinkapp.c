@@ -2,7 +2,7 @@
  * zlink -- files and a shell between two machines over a couple of
  * wires (docs/zlink_app.md; the link itself is docs/zlink.md).
  *
- *   zlink start [-f | -w] [-m auto|soft|stream] [-r KBIT] [PORT [X Y]]
+ *   zlink start [-f | -w] [-m auto|soft|stream|fast] [-r KBIT] [PORT [X Y]]
  *   zlink stop
  *   zlink status
  *   zlink ls [PATH]
@@ -10,6 +10,7 @@
  *   zlink put LOCAL [REMOTE]
  *   zlink speed [KB]
  *   zlink loop [-i] [-r KBIT] PORT TX RX
+ *   zlink loop -m fast [-r KBIT]
  *
  * and, from term, `port zlink0`: a shell on the other machine, after
  * its password.
@@ -34,6 +35,13 @@
  * to soft and try again at half the rate: 12, 6, 3, 1.5, 0.75 Mbit/s.
  * The timing that keeps two outputs from ever driving one wire is in
  * upgrade_run().
+ *
+ * -m fast (EXPERIMENTAL, a ZLINK_FAST build on a Mozart) uses the DS
+ * port instead of GPIO pins: two LVDS pairs on a SATA cable at 100, 50
+ * or 25 Mbit/s (-r 100000, 50000, 25000). The two ends agree which pair
+ * each transmits on (zlink_fast.h); there is no soft link and no
+ * upgrade. A bitstream with fast zlink and no GPIO port picks it
+ * without -m.
  *
  * -- Channels --
  *
@@ -77,6 +85,8 @@
 #include "../../common/zlink.h"
 #include "../../common/zlink_soft.h"
 #include "../../common/zlink_stream.h"
+#include "../../common/zfast.h"
+#include "../../common/zlink_fast.h"
 #include "../../common/zfsapp.h"
 #include "../../common/zfs.h"
 
@@ -158,6 +168,16 @@ static bool has_password(void) {
 	return z_auth_status(&st) == Z_AUTH_OK && (st.flags & Z_AUTH_HAS_PASSWORD);
 }
 
+// fast zlink, in kbit/s: 100000, 50000, 25000 -> Z_ZF_100M ...
+static int fast_rate(long kbit) {
+	return kbit == 100000 ? Z_ZF_100M : kbit == 50000 ? Z_ZF_50M : kbit == 25000 ? Z_ZF_25M : -1;
+}
+
+// Without -m: fast only when there is nothing else to use.
+static bool fast_by_default(void) {
+	return (!z_gpio_present() || z_gpio_port_count() == 0) && z_zf_present();
+}
+
 static bool stream_built(void) {
 	return z_gs_count() > 0 && (z_gs_modes() & (1u << Z_GS_ZLINK));
 }
@@ -176,8 +196,8 @@ static const char *pins_bad(int port, int a, int b) {
 // The service
 // =========================================================================
 
-enum { M_AUTO, M_SOFT, M_STREAM };
-enum { T_SOFT, T_STREAM };
+enum { M_AUTO, M_SOFT, M_STREAM, M_FAST };
+enum { T_SOFT, T_STREAM, T_FAST };
 
 static int g_port, g_x = 0, g_y = 1;	// soft: X and Y. -m stream: TX and RX
 static int g_mode = M_AUTO;
@@ -190,6 +210,9 @@ static bool g_stop;
 static zlink_t L;
 static zl_soft_t S;
 static zl_stream_t ST;
+static zl_fast_t FT;
+static int g_fast = Z_ZF_100M;			// -m fast: the rate
+static bool g_fast_claimed;
 static zl_pins_t pins;
 static uint16_t g_rate;					// kbit/s, while on a stream
 
@@ -211,7 +234,7 @@ static uint32_t seed(void) {
 
 static uint8_t my_caps(void) {
 	uint8_t c = ZL_CAP_SOFT;
-	if (g_mode != M_SOFT && stream_built() && g_cap < RATES_N) c |= ZL_CAP_STREAM;
+	if (g_mode != M_SOFT && g_mode != M_FAST && stream_built() && g_cap < RATES_N) c |= ZL_CAP_STREAM;
 	if (g_files) c |= ZL_CAP_FILES;
 	if (g_files > 1) c |= ZL_CAP_WRITE;
 	if (has_password()) c |= ZL_CAP_SHELL;
@@ -248,6 +271,19 @@ static bool stream_start(int tx, int rx, uint16_t kbit) {
 static void engine_free(void) {
 	if (g_engine >= 0) z_gs_release(g_engine);
 	g_engine = -1;
+	if (g_fast_claimed) z_zf_release();		// turns the DS port off
+	g_fast_claimed = false;
+}
+
+// -m fast: the DS port, which finds out with the other end which pair
+// each transmits on; zl_poll() drives that.
+static bool fast_start(void) {
+	if (!z_zf_present() || !z_zf_claim()) return false;
+	g_fast_claimed = true;
+	zl_fast_init(&FT, g_fast, seed());
+	g_tr = T_FAST;
+	zl_init(&L, &FT.t, seed(), my_caps());
+	return true;
 }
 
 // -- output queue: everything for the link goes through here ----------------
@@ -614,10 +650,10 @@ static void cmd(int c, char *line) {
 		fc.moved = 0;
 		fc.t0 = now_ms();
 	} else {
-		say(c, "usage: zlink start [-f | -w] [-m auto|soft|stream] [-r KBIT] [PORT [X Y]]\n"
+		say(c, "usage: zlink start [-f | -w] [-m auto|soft|stream|fast] [-r KBIT] [PORT [X Y]]\n"
 		       "       zlink stop | status | ls [PATH] | speed [KB]\n"
 		       "       zlink get REMOTE [LOCAL] | put LOCAL [REMOTE]\n"
-		       "       zlink loop [-i] [-r KBIT] PORT TX RX\n"
+		       "       zlink loop [-i] [-r KBIT] PORT TX RX | loop -m fast [-r KBIT]\n"
 		       "       term: port zlink0 -- a shell on the other machine\n");
 		done(c, 2);
 	}
@@ -1378,29 +1414,50 @@ static void cmd_status(int c) {
 	say(c, "zlink: ");
 	say(c, zl_up(&L) ? "up" : "down");
 	say(c, ", ");
-	if (g_tr == T_STREAM) {
-		say(c, "stream at ");
-		sayn(c, g_rate);
-		say(c, " kbit/s");
+	if (g_tr == T_FAST) {
+		const char *h = zl_fast_hint(&FT);
+		say(c, "fast (experimental) at ");
+		sayn(c, z_zf_bps(g_fast) / 1000000u);
+		say(c, " Mbit/s, DS port: ");
+		say(c, zl_fast_role(&FT));
+		say(c, "\n");
+		if (h) {
+			say(c, "  ");
+			say(c, h);
+			say(c, "\n");
+		}
 	} else {
-		say(c, "soft");
+		if (g_tr == T_STREAM) {
+			say(c, "stream at ");
+			sayn(c, g_rate);
+			say(c, " kbit/s");
+		} else {
+			say(c, "soft");
+		}
+		say(c, ", GPIO port ");
+		sayn(c, (uint32_t)g_port);
+		say(c, g_mode == M_STREAM ? " TX pin " : " pins ");
+		sayn(c, (uint32_t)g_x);
+		say(c, g_mode == M_STREAM ? " RX pin " : " and ");
+		sayn(c, (uint32_t)g_y);
+		say(c, "\n");
 	}
-	say(c, ", GPIO port ");
-	sayn(c, (uint32_t)g_port);
-	say(c, g_mode == M_STREAM ? " TX pin " : " pins ");
-	sayn(c, (uint32_t)g_x);
-	say(c, g_mode == M_STREAM ? " RX pin " : " and ");
-	sayn(c, (uint32_t)g_y);
-	say(c, "\n");
 	if (zl_up(&L)) {
 		say(c, "  this machine is the ");
 		say(c, L.primary ? "primary" : "secondary");
 		if (g_tr == T_SOFT) say(c, zl_soft_crossed(&S) ? "; the cable is crossed" : "; the cable is straight");
+		if (g_tr == T_FAST) {
+			say(c, "; frames dropped by the DS port ");
+			sayn(c, FT.dropped);
+		}
 		say(c, "\n  the other machine: ");
 		say(c, pc & ZL_CAP_WRITE ? "files to read and write" :
 		       pc & ZL_CAP_FILES ? "files to read" : "no files");
 		say(c, pc & ZL_CAP_SHELL ? ", a shell" : ", no shell (no password set)");
 		say(c, pc & ZL_CAP_STREAM ? ", a stream engine\n" : ", no stream engine\n");
+	} else if (g_mode == M_FAST) {
+		say(c, "  waiting for the other machine: its zlink started with -m fast at the same "
+		       "rate, a SATA cable between the DS ports\n");
 	} else if (g_mode != M_STREAM) {
 		say(c, "  waiting for the other machine: its zlink started, wires X-X and Y-Y "
 		       "(or crossed) and ground\n");
@@ -1653,10 +1710,12 @@ static int serve(int argc, char **argv) {
 		else if (!strcmp(argv[a], "-w")) g_files = 2;
 		else if (!strcmp(argv[a], "-m") && a + 1 < argc) {
 			a++;
-			g_mode = !strcmp(argv[a], "soft") ? M_SOFT : !strcmp(argv[a], "stream") ? M_STREAM : M_AUTO;
+			g_mode = !strcmp(argv[a], "soft") ? M_SOFT : !strcmp(argv[a], "stream") ? M_STREAM :
+			         !strcmp(argv[a], "fast") ? M_FAST : M_AUTO;
 		} else if (!strcmp(argv[a], "-r") && a + 1 < argc) {
 			long r = num(argv[++a]);
-			while (g_cap < RATES_N - 1 && rates[g_cap] > r) g_cap++;
+			if (fast_rate(r) >= 0) g_fast = fast_rate(r);
+			else while (g_cap < RATES_N - 1 && rates[g_cap] > r) g_cap++;
 		} else if (a + 2 < argc) {
 			g_port = (int)num(argv[a]);
 			g_x = (int)num(argv[a + 1]);
@@ -1666,7 +1725,8 @@ static int serve(int argc, char **argv) {
 			g_port = (int)num(argv[a]);
 		}
 	}
-	if (pins_bad(g_port, g_x, g_y)) {
+	if (g_mode == M_AUTO && fast_by_default()) g_mode = M_FAST;
+	if (g_mode != M_FAST && pins_bad(g_port, g_x, g_y)) {
 		logs("bad pins: ", pins_bad(g_port, g_x, g_y));
 		return 2;
 	}
@@ -1674,7 +1734,14 @@ static int serve(int argc, char **argv) {
 		logs("another zlink is running", NULL);
 		return 1;
 	}
-	if (g_mode == M_STREAM) {
+	if (g_mode == M_FAST) {
+		if (!fast_start()) {
+			logs("no fast zlink here, or its DS port is in use", NULL);
+			engine_free();
+			return 1;
+		}
+		up.state = UP_DONE;
+	} else if (g_mode == M_STREAM) {
 		if (!stream_built() || (g_engine = z_gs_claim(Z_GS_ANY)) < 0 ||
 		    !stream_start(g_x, g_y, rates[g_cap])) {
 			logs("no stream engine free for -m stream", NULL);
@@ -1699,7 +1766,8 @@ static int serve(int argc, char **argv) {
 		if (zl_up(&L) != was_up) {
 			was_up = !was_up;
 			if (!was_up) link_lost();
-			logs(was_up ? "link up, " : "link down", was_up ? (g_tr == T_STREAM ? "stream" : "soft") : NULL);
+			logs(was_up ? "link up, " : "link down",
+			     was_up ? (g_tr == T_FAST ? zl_fast_role(&FT) : g_tr == T_STREAM ? "stream" : "soft") : NULL);
 		}
 		if (g_mode == M_AUTO) upgrade_run(now);
 		active = pump(now);
@@ -1864,6 +1932,7 @@ static int start(int argc, char **argv) {
 	char line[160];
 	char *o = line;
 	int port = 0, x = 0, y = 1, mode = M_AUTO;
+	long r = -1;
 	uint32_t pid;
 	const char *bad;
 
@@ -1873,13 +1942,10 @@ static int start(int argc, char **argv) {
 			a++;
 			if (!strcmp(argv[a], "soft")) mode = M_SOFT;
 			else if (!strcmp(argv[a], "stream")) mode = M_STREAM;
-			else if (strcmp(argv[a], "auto")) { print("zlink: -m is auto, soft or stream\n"); return 2; }
+			else if (!strcmp(argv[a], "fast")) mode = M_FAST;
+			else if (strcmp(argv[a], "auto")) { print("zlink: -m is auto, soft, stream or fast\n"); return 2; }
 		} else if (!strcmp(argv[a], "-r") && a + 1 < argc) {
-			long r = num(argv[++a]);
-			if (r < rates[RATES_N - 1] || r > rates[0]) {
-				print("zlink: -r is a rate in kbit/s, 750-12000\n");
-				return 2;
-			}
+			r = num(argv[++a]);
 		} else if (argv[a][0] != '-' && (argc - a == 1 || argc - a == 3)) {
 			port = (int)num(argv[a]);
 			if (argc - a == 3) {
@@ -1888,11 +1954,25 @@ static int start(int argc, char **argv) {
 			}
 			break;
 		} else {
-			print("usage: zlink start [-f | -w] [-m auto|soft|stream] [-r KBIT] [PORT [X Y]]\n");
+			print("usage: zlink start [-f | -w] [-m auto|soft|stream|fast] [-r KBIT] [PORT [X Y]]\n");
 			return 2;
 		}
 	}
-	if ((bad = pins_bad(port, x, y))) {
+	if (mode == M_AUTO && fast_by_default()) mode = M_FAST;
+	if (mode == M_FAST) {
+		if (!z_zf_present()) {
+			print("zlink: -m fast needs a ZLINK_FAST bitstream on a Mozart, and this is not one\n");
+			return 2;
+		}
+		if (r >= 0 && fast_rate(r) < 0) {
+			print("zlink: -r for -m fast is 100000, 50000 or 25000 kbit/s\n");
+			return 2;
+		}
+	} else if (r >= 0 && (r < rates[RATES_N - 1] || r > rates[0])) {
+		print("zlink: -r is a rate in kbit/s, 750-12000\n");
+		return 2;
+	}
+	if (mode != M_FAST && (bad = pins_bad(port, x, y))) {
 		print("zlink: ");
 		print(bad);
 		print("\n");
@@ -1933,20 +2013,107 @@ static int start(int argc, char **argv) {
 	return 1;
 }
 
+// `zlink loop -m fast`: the DS port's block looped inside (Z_ZF_LOOP),
+// past the pads: its FIFOs, clock crossings, clock recovery and 8b/10b
+// at the line rate, with 4-byte reads -- the bring-up test for a
+// ZLINK_FAST bitstream before there is a cable.
+static int fast_loop(long kbit) {
+	char b[12];
+	int rate = fast_rate(kbit);
+	if (rate < 0) {
+		print("usage: zlink loop -m fast [-r 100000|50000|25000]\n");
+		return 2;
+	}
+	if (!z_zf_present()) {
+		print("zlink: this bitstream has no fast zlink (ZLINK_FAST, Mozart)\n");
+		return 1;
+	}
+	if (!z_zf_claim()) {
+		print("zlink: the DS port is in use (zlink stop first)\n");
+		return 1;
+	}
+	z_zf_config(Z_ZF_NONE, Z_ZF_DS1, rate, Z_ZF_RXEN | Z_ZF_LOOP);
+	for (uint32_t t = z_uptime_ticks(); z_uptime_ticks() - t < 3;) z_proc_wait(1);
+	z_zf_flush(true, true);
+
+	const uint32_t total = 1u << 20;
+	uint32_t txs = 1, rxs = 1, sent = 0, got = 0, bad_bytes = 0;
+	uint32_t t0 = z_uptime_ticks(), idle = t0;
+	while (got < total && z_uptime_ticks() - idle < Z_TICK_HZ) {
+		uint8_t buf[256];
+		uint32_t w[64], n = z_zf_tx_free();
+		if (n > sizeof buf) n = sizeof buf;
+		if (n > total - sent) n = total - sent;
+		for (uint32_t i = 0; i < n; i++) {
+			txs ^= txs << 13; txs ^= txs >> 17; txs ^= txs << 5;
+			buf[i] = (uint8_t)txs;
+		}
+		sent += z_zf_write(buf, n);
+		n = z_zf_read_words(w, 64);
+		for (uint32_t i = 0; i < n * 4u; i++) {
+			rxs ^= rxs << 13; rxs ^= rxs >> 17; rxs ^= rxs << 5;
+			if ((uint8_t)(w[i / 4u] >> (8u * (i % 4u))) != (uint8_t)rxs) bad_bytes++;
+		}
+		got += n * 4u;
+		if (!n && total - got < 4u) {			// the last few, a byte at a time
+			int k = z_zf_read_sym();
+			if (k >= 0) {
+				rxs ^= rxs << 13; rxs ^= rxs >> 17; rxs ^= rxs << 5;
+				if (k != (int)(uint8_t)rxs) bad_bytes++;
+				got++;
+				n = 1;
+			}
+		}
+		if (n) idle = z_uptime_ticks();
+	}
+	uint32_t ticks = z_uptime_ticks() - t0;
+	uint32_t ms = ticks * 1000u / Z_TICK_HZ;
+	uint32_t serr = z_zf_errors();
+	bool kw = z_zf_kword(), ovr = (z_zf_status() & Z_ZF_ST_RXOVR) != 0;
+	z_zf_release();
+
+	print("zlink: ");
+	print(u2s(got, b));
+	print(" of ");
+	print(u2s(total, b));
+	print(" bytes back, ");
+	print(u2s(bad_bytes, b));
+	print(" wrong, ");
+	print(u2s(serr, b));
+	print(" code errors, at ");
+	print(u2s((uint32_t)kbit, b));
+	print(" kbit/s in ");
+	print(u2s(ms, b));
+	print(" ms");
+	if (ms) {
+		print(" (");
+		print(u2s(got / ms, b));
+		print(" KB/s through the CPU)");
+	}
+	print("\n");
+	if (kw) print("zlink: a control symbol came back as data\n");
+	if (ovr) print("zlink: the receive FIFO overflowed (the CPU fell behind -- not an error in the link)\n");
+	if (got < total) print("zlink: bytes went missing\n");
+	return (got == total && !bad_bytes && !serr && !kw) ? 0 : 1;
+}
+
 // `zlink loop`: one board, a jumper from TX to RX (or -i, inside the
 // engine), and a stream of bytes checked on the way back. The bit-error
 // test docs/zlink.md promises for bringing up wires.
 static int loop(int argc, char **argv) {
-	long kbit = 12000;
-	bool inside = false;
+	long kbit = -1;
+	bool inside = false, fast = false;
 	int a = 0, e;
 	char b[12];
 	while (a < argc && argv[a][0] == '-') {
 		if (!strcmp(argv[a], "-i")) inside = true;
 		else if (!strcmp(argv[a], "-r") && a + 1 < argc) kbit = num(argv[++a]);
+		else if (!strcmp(argv[a], "-m") && a + 1 < argc && !strcmp(argv[a + 1], "fast")) { fast = true; a++; }
 		else break;
 		a++;
 	}
+	if (fast) return a == argc ? fast_loop(kbit < 0 ? 100000 : kbit) : fast_loop(-1);
+	if (kbit < 0) kbit = 12000;
 	if (argc - a != 3 || kbit < 100 || kbit > 12000) {
 		print("usage: zlink loop [-i] [-r KBIT] PORT TX RX   (100-12000 kbit/s)\n");
 		return 2;

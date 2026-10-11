@@ -12,7 +12,7 @@ APP = zlink
 APP_MAIN_RULE = 0
 
 OBJS = zeitlos.o zobj.o zport.o zwin.o zfsapp.o zrng.o zgpio.o zgpio_stream.o \
-	zlink.o zlink_soft.o zlink_stream.o zlinkapp.o
+	zlink.o zlink_soft.o zlink_stream.o zfast.o zlink_fast.o zlinkapp.o
 
 # 32KB: the port layer's sends in flight sit on the heap -- up to eight
 # for each of a shell, a term and three commands.

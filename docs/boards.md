@@ -551,6 +551,19 @@ without (`E0`):
 room, and it keeps every feature it has. zlink still reaches it in
 software ([zlink.md](zlink.md), "Soft zlink").
 
+The **I2C slave** for bench ([gpio.md](gpio.md#i2c-slave)) is off on
+every target and is added by a build that wants it
+(`EXTRA_DEFINES=-DGPIO_I2CS_SLOTS=4`). On `obst_langkatze_gpio`, with
+today's tree and its engine, it took 21,114 logic cells (87%) to 22,114
+(91%) and one more DP16KD (34 to 35), and 48 MHz still closed. Not on
+`lakritz_gpio`.
+
+**Fast zlink** on the Mozart targets (ML0, ML1, ML2) is also off and
+added by a build that wants it (`EXTRA_DEFINES=-DZLINK_FAST`): about
++760 to +910 logic cells, +566 FFs and two DP16KD, and pll0's 200 MHz
+output. ML0 still fits, at 95%. The measurements are in
+[zlink.md](zlink.md#fast-round-4-done-experimental).
+
 ### Where LUTs could come back from
 
 LUT RAM was the right choice when block RAM was the scarce resource;

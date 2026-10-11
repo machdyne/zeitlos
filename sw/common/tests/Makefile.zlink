@@ -5,6 +5,9 @@
 #                      wires, straight and crossed, ends stalled at random
 #   test_zlink_stream  the stream transport over two modelled engines,
 #                      through the real zgpio_stream.c
+#   test_zlink_fast    the fast transport over two modelled DS blocks and
+#                      a SATA cable: who transmits on which pair, polarity,
+#                      ML2s, a restart -- through the real zfast.c
 #   make -C sw/common/tests -f Makefile.zlink
 CFLAGS = -std=gnu99 -O1 -g -Wall -Wextra -fsanitize=address,undefined -I ..
 
@@ -16,3 +19,6 @@ all:
 	cc $(CFLAGS) -DZ_GS_HOST_TEST -o /tmp/test_zlink_stream test_zlink_stream.c \
 		../zlink.c ../zlink_stream.c ../zgpio_stream.c
 	/tmp/test_zlink_stream
+	cc $(CFLAGS) -DZ_ZF_HOST_TEST -o /tmp/test_zlink_fast test_zlink_fast.c \
+		../zlink.c ../zlink_fast.c ../zfast.c
+	/tmp/test_zlink_fast

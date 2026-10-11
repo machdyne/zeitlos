@@ -7,7 +7,7 @@
 #   make cycles   report engine cycles per multiply
 #   make vram_dirty  socctl.v's DIRTY: the stripe of every VRAM word, and the
 #                    clear racing a write
-#   make 8b10b    gpio_stream.v's 8b/10b against every symbol (zlink)
+#   make 8b10b    the 8b/10b of gpio_stream.v and zfast.v, every symbol (zlink)
 #   make spiflash_netlist  tb_spiflash against spiflash.v as yosys builds
 #                 it for ECP5 -- the page buffer is a block RAM (needs yosys)
 #
@@ -74,7 +74,7 @@ spiflash_netlist:
 # rtl/gpio_stream.v's 8b/10b tables against 8b10b_vectors.txt, which
 # tools/gen_8b10b.py writes after checking the code's properties.
 8b10b:
-	$(IVERILOG) -g2012 -o /tmp/tb_8b10b tb_8b10b.v ../gpio_stream.v
+	$(IVERILOG) -g2012 -o /tmp/tb_8b10b tb_8b10b.v ../gpio_stream.v ../zfast.v ../zfast_pad.v
 	$(VVP) -n /tmp/tb_8b10b
 
 clean:

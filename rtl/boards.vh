@@ -662,6 +662,12 @@
 
 `elsif BOARD_MOZART_ML0
 
+// The DS port (SATA-style connector): DS1 = C1/C2, DS2 = J1/J2, both
+// A/B pairs, so either can transmit. Fast zlink is off unless a build
+// asks for it (`ZLINK_FAST, below).
+`define ZLINK_FAST_PINS
+`define ZLINK_FAST_TX_DS2 1
+
 // Mozart with the Sechzig ML0 module (ECP5 LFE5U-25F, 32MB SDRAM, 4MB
 // flash).
 // The ML0 is the ML1 module on a 25F: same balls, same SDRAM, same
@@ -712,6 +718,11 @@
 `elsif BOARD_MOZART_ML1
 
 `define FPGA_ECP5
+// The DS port (SATA-style connector): DS1 = C1/C2, DS2 = J1/J2, both
+// A/B pairs, so either can transmit. Fast zlink is off unless a build
+// asks for it (`ZLINK_FAST, below).
+`define ZLINK_FAST_PINS
+`define ZLINK_FAST_TX_DS2 1
 // PROGRAMN is wired to user pin M8 (boards/*.lpf): rtl/socctl.v's
 // RECONFIG, `reboot`, docs/zboot.md. Confirmed for Lakritz, Obst and
 // Mozart ML1 and ML2; boards whose site is not confirmed do not define it.
@@ -773,6 +784,11 @@
 `elsif BOARD_MOZART_ML2
 
 `define FPGA_ECP5
+// The DS port: DS1 = J1/J2 (an A/B pair), DS2 = K1/K2 -- a C/D pair,
+// which cannot drive true LVDS, so DS2 only ever receives here
+// (rtl/zfast.v). Two ML2s therefore need a crossover cable.
+`define ZLINK_FAST_PINS
+`define ZLINK_FAST_TX_DS2 0
 // PROGRAMN on M8, as on ML1 (boards/mozart_ml2.lpf).
 `define PROGRAMN_PIN
 `define OSC48
@@ -1631,6 +1647,36 @@
 `endif
 `ifndef GPIO_STREAM_NO_RAW
 `define GPIO_STREAM_RAW
+`endif
+
+// -- Fast zlink (rtl/zfast.v, docs/zlink.md "Fast") --
+//
+// EXPERIMENTAL, and off on every board: the DS port's LVDS pairs at up
+// to 100 Mbit/s. A build asks for it --
+//   make BOARD=mozart_ml1 EXTRA_DEFINES=-DZLINK_FAST
+// -- and gets it only on a board whose block says where the pins are
+// (ZLINK_FAST_PINS: the Mozarts). It needs pll0's 200 MHz output and the
+// LPF's DS1/DS2 lines.
+`ifdef ZLINK_FAST
+`ifndef ZLINK_FAST_PINS
+`undef ZLINK_FAST
+`endif
+`endif
+`ifndef ZLINK_FAST_TX_DS2
+`define ZLINK_FAST_TX_DS2 0
+`endif
+
+// -- The GPIO I2C slave (rtl/gpio_i2cs.v, docs/gpio.md "I2C slave") --
+//
+// Off on every board: it is for one job, a real Zwölf module talking to
+// sw/apps/bench's virtual parts (docs/bench.md), so a build that wants
+// it asks -- `define GPIO_I2CS_SLOTS 4 in a board block, or
+//   make BOARD=... EXTRA_DEFINES=-DGPIO_I2CS_SLOTS=4
+// 1, 2 or 4 emulated chips; one DP16KD whatever the number, and about
+// 1,000 logic cells (measured on obst_langkatze_gpio: docs/gpio.md,
+// "I2C slave"). Not on Lakritz, which has no logic cells to spare.
+`ifndef GPIO_I2CS_SLOTS
+`define GPIO_I2CS_SLOTS 0
 `endif
 `ifdef NO_CPU_MUL_FAST
 `undef CPU_MUL_FAST

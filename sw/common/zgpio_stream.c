@@ -142,6 +142,17 @@ static bool spins_has(uint32_t s, int pin) {
 	return false;
 }
 
+// Does the I2C slave (rtl/gpio_i2cs.v, zi2cs.h) have this pin? Its
+// registers are read only when CONFIG says it is built.
+#define I2CS_ICTL 0xe0002100u
+static bool i2cs_has(int pin) {
+	uint32_t ictl;
+	if (((config_word() >> 12) & 7u) == 0) return false;
+	ictl = RD(I2CS_ICTL);
+	if (!(ictl & 1u)) return false;
+	return (int)((ictl >> 8) & 0x3fu) == pin || (int)((ictl >> 16) & 0x3fu) == pin;
+}
+
 int z_gs_config(int e, const z_gs_cfg_t *c) {
 	int8_t pins[4];
 	uint32_t npins, sctl;
@@ -170,6 +181,8 @@ int z_gs_config(int e, const z_gs_cfg_t *c) {
 		if ((uint32_t)pins[i] >= npins) return Z_GS_EPIN;
 		for (int j = 0; j < i; j++)
 			if (pins[j] == pins[i]) return Z_GS_EPINDUP;
+		// so does the I2C slave
+		if (i2cs_has(pins[i])) return Z_GS_EPINBUSY;
 		// an engine that is on owns its pins; two on one pin would
 		// fight (the hardware ORs them -- docs/gpio.md)
 		for (int k = 0; k < (int)z_gs_count(); k++) {

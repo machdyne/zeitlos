@@ -11,9 +11,10 @@
 # link drops, which on hardware (a CPU per machine) does not happen.
 COMMON = ../../../common
 CFLAGS = -std=gnu99 -O1 -g -Wall -Wextra -Wno-unused-parameter -Wno-sign-compare -Wno-missing-field-initializers \
-	-DZLINK_HOST_TEST -DZ_GS_HOST_TEST -I$(COMMON)
+	-DZLINK_HOST_TEST -DZ_GS_HOST_TEST -DZ_ZF_HOST_TEST -I$(COMMON)
 
 all:
 	cc $(CFLAGS) -o /tmp/test_zlink_app test_zlink_app.c \
-		$(COMMON)/zlink.c $(COMMON)/zlink_soft.c $(COMMON)/zlink_stream.c $(COMMON)/zgpio_stream.c
+		$(COMMON)/zlink.c $(COMMON)/zlink_soft.c $(COMMON)/zlink_stream.c $(COMMON)/zgpio_stream.c \
+		$(COMMON)/zfast.c $(COMMON)/zlink_fast.c
 	/tmp/test_zlink_app
