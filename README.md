@@ -69,7 +69,7 @@ With the MTU, there is no need for position independent code or complicated addr
 
 | App | Description |
 |-----|-------------|
-| kernel | Microkernel + kernel shell (serial console; on the monitor as the [rescue console](docs/rescue_console.md): hold ESC at boot) |
+| kernel | Microkernel + kernel shell (serial console) |
 | [wm](docs/window_manager.md) | Window manager + dock, with ten workspaces (Super+1 ... Super+0) |
 | [term](docs/terminal.md) | Terminal emulator (VT100, UTF-8, [line drawing](docs/terminal.md#line-drawing); start panel, scrollback; connects to shells and services) |
 | [console](docs/console.md) | Console service |

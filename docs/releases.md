@@ -463,21 +463,6 @@ intermittently-misbehaving image is the worst thing to put behind a
 download link. So this fails the build. The achieved Fmax and the
 utilisation go into `MANIFEST.json` and the release notes either way.
 
-**The notes mark what is close.** GitHub's markdown strips colours, so
-instead of a red or yellow background each cell (and the target's name)
-starts with a marker, and a line at the top of the notes counts the red and
-yellow ones:
-
-| marker | when |
-|---|---|
-| 🟢 | met, with room to spare (the Build section says so when every target does) |
-| 🔴 | a clock missed its target (`--allow-timing-fail`), or a resource is over 100% |
-| 🟡 | a clock met its target by less than 0.5 MHz, or a resource is at 98% or more; or an advisory IO-domain miss (below) |
-
-The Fmax column gives each clock's target in brackets; the utilisation
-column shows the logic cells, and any other resource only when it is
-marked. Thresholds: `WARN_MHZ` and `WARN_PCT` in `release/lib/notes.py`.
-
 **Only the final report counts.** nextpnr prints Fmax twice — once from
 a placement estimate and again after routing with real delays. Reading
 the whole log and keeping every match concatenates the two rounds,

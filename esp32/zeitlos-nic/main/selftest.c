@@ -305,7 +305,12 @@ static void handle_line(char *line)
 		const esp_app_desc_t *d = esp_app_get_description();
 		char elf[17];
 		int8_t txp = 0;
-		esp_app_get_elf_sha256(elf, sizeof(elf));
+		/* From the descriptor's 32 bytes, NOT esp_app_get_elf_sha256():
+		 * that returns a cached string only APP_RETRIEVE_LEN_ELF_SHA
+		 * long (9 characters by default -- the panic-dump length),
+		 * whatever buffer it is given. 16 characters here. */
+		for (int i = 0; i < 8; i++)
+			snprintf(elf + 2 * i, 3, "%02x", d->app_elf_sha256[i]);
 		esp_wifi_get_max_tx_power(&txp);
 		zprint("info board=%s chip=%s elf=%s built=%s_%s idf=%s heap=%u min=%u txpower=%d sta_ip=%d",
 			CONFIG_ZNIC_BOARD_NAME, CONFIG_IDF_TARGET, elf,

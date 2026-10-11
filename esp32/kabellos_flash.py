@@ -217,6 +217,18 @@ def query_info(port: str, timeout: float = 15.0) -> dict | None:
     return None
 
 
+def same_elf(reported: str | None, image: str) -> bool:
+    """Does the hash the firmware reports match the image's?
+
+    A prefix match, of at least 8 hex digits. The first firmware with
+    `info` took its hash from esp_app_get_elf_sha256(), which ESP-IDF
+    truncates to CONFIG_APP_RETRIEVE_LEN_ELF_SHA characters (9 by
+    default) whatever buffer it is given; later firmware reports 16.
+    Either is plenty to tell two builds apart."""
+    r = (reported or "").lower()
+    return len(r) >= 8 and (image.startswith(r) or r.startswith(image))
+
+
 # ---- main --------------------------------------------------------------
 
 def main() -> int:
@@ -321,7 +333,7 @@ def main() -> int:
               file=sys.stderr)
         return 1
     print("running %s" % info["_line"])
-    if info.get("board") != "kabellos" or info.get("elf") != elf:
+    if info.get("board") != "kabellos" or not same_elf(info.get("elf"), elf):
         print("FAIL: the chip reports board=%s elf=%s; the image is elf %s"
               % (info.get("board"), info.get("elf"), elf), file=sys.stderr)
         return 1
