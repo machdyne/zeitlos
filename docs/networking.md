@@ -712,8 +712,12 @@ work on.
   times the data. The server answers with an OACK naming what it will
   use, and `net` ACKs block 0; a block shorter than that size ends the
   file. A server without options sends block 1 at 512, and one that
-  refuses options (error 8) is asked again without them. tftpd-hpa
-  supports it; puts stay at 512.
+  refuses options (error 8) is asked again without them, and so is one
+  that agreed but whose big blocks never arrive (a path with a smaller
+  MTU). tftpd-hpa supports it; puts stay at 512. Every interface takes
+  the 1514-byte frames ([net_throughput.md](net_throughput.md)).
+- **Received frames are word-aligned behind their Ethernet header**
+  (`eth.c`), so copying a block is a word at a time.
 - **Two blocks are queued.** A block is ACKed when it is stored, unless
   that fills the queue; then its ACK waits until the receiver takes
   one, so the server never sends into a full queue. The receiver's

@@ -12,8 +12,12 @@ was in the kernel -- keeping the drivers in userspace
   50KB/s, no retries. 1468-byte blocks and a retry timeout that follows
   the round trip; but a block still takes ~10-12ms, so the round trip
   itself did not shrink as expected.
-- **Round 2 built, awaiting hardware:** timing along the path, to find
-  where those 10-12ms go.
+- **Round 2 measured:** of a 10.8ms block, reading the frame from the
+  adapter took 5.2ms (the wire needs ~1.1ms) and `net`'s handling 4.5ms.
+- **Round 3 built, awaiting hardware:** both fixed -- the reader no
+  longer spins 1.2ms on a NAK in mid-frame, and received frames are
+  word-aligned so `net`'s copies run a word at a time. Expected: ~5ms a
+  block, ~250-300KB/s.
 - **Before it:** 30-36KB/s over USB ethernet -- ~10ms a 512-byte block,
   the monolithic kernel's pace, plus one or two lost frames a transfer
   at 0.5s each.
@@ -36,6 +40,28 @@ over the round trip, and the round trip was ~10ms.
 | the ACK waits for `usb` | 0.5-1.5 | `net`'s hand-off went to the shell first |
 | processing, copies, switches | the rest | ~6 copies of each byte at ~7 MIPS; no D-cache write buffer on lakritz |
 | a lost frame | 500 | one or two a transfer: a third of the time |
+
+## Which interfaces take the big blocks
+
+All of them: a 1468-byte TFTP block is a 1514-byte frame, an ordinary
+full-size one.
+
+| interface | largest frame received |
+|---|---|
+| RMII MAC (`rtl/ethmac_rmii.v`) | 2048-byte slots |
+| ENC28J60 | 1518 (`MAMXFLL`), in its 6.6KB ring |
+| USB ethernet | 1536-byte ring slots (`Z_USBNET_FRAME`) |
+| ESP32 link | 1518 (`ZNIC_MAX_PAYLOAD`), credits sized for it in an 8KB FIFO |
+
+The ~500-byte sizes elsewhere are not about frames: TCP's MSS of 536 is
+sized so a window of segments fits the ENC28J60's ring
+([networking.md](networking.md), "Throughput"), and 512 is TFTP's
+default block. A TFTP transfer has one frame in flight, so the ring
+never holds more than one. The ESP32's own TFTP server ignores options
+and sends 512-byte blocks, which the client takes as they come. A path
+with a smaller MTU than Ethernet's would drop the big blocks (they go
+with DF and nothing reassembles), so a get that has agreed to them and
+sees none after two retries asks again for 512.
 
 ## The proposals
 
@@ -116,3 +142,36 @@ accounted for, piece by piece:
 | ...of which reading the frame | `usbstat`: reading a frame |
 | in the ring -> `net` takes it | tftp line: waited in usb's ring |
 | `net` takes it -> ACK queued | tftp line: net queued the ACK after |
+
+**Measured** (`tget loom wm -`, 93.3KB/s; the round trip, averages):
+
+| piece | ms |
+|---|---|
+| ACK queued -> `usb` sends it | 0.06 |
+| sending the ACK | 0.13 |
+| ACK sent -> next block at the adapter | ~2.7 |
+| **reading the 1514-byte frame** | **5.2** (103 NAKs mid-frame over 95 frames) |
+| in the ring -> `net` takes it | 0.7 |
+| **`net`: frame taken -> ACK queued** | **4.5** |
+
+## Round 3: the two big pieces
+
+- **Reading a frame.** A NAK in the middle of a frame means the adapter
+  has not got the rest off the wire yet, microseconds away at 100Mbps.
+  The reader answered each with `pace()`, a spin of ~1.2ms on lakritz,
+  and met about one per frame. Now the USB engine retries by itself, its
+  most (15 per round, a few microseconds each), and between rounds the
+  spin is ~50us (`usbh_ecm.c`, `ECM_HW_NAKS_MID`, `pace_short()`).
+  Expected: 5.2 -> ~1.5ms.
+- **`net`'s copies.** newlib's `memcpy` copies words only between
+  buffers aligned alike. Behind a 14-byte Ethernet header the IP header,
+  and the TFTP block in it, sit 2 off from any aligned buffer, so each
+  1.5KB copy went a byte at a time, ~1ms. Received frames now start 2
+  into their buffer, in `net` (`eth.c`, as the transmit buffer already
+  did) and in `usb`'s ring (`Z_USBNET_RX_OFF`; `usb` writes them with
+  shifted word stores), and TFTP's queue is word-aligned. Expected: 4.5
+  -> ~1.5ms.
+- **A fallback** for a path that drops full-size frames: big blocks
+  agreed and none arriving after two retries -> ask again for 512.
+
+Expected together: ~10.8 -> ~5ms a block, ~250-300KB/s received.

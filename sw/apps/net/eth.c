@@ -32,7 +32,21 @@ static struct {
 _Static_assert(__alignof__(tx) >= 4 &&
 	__builtin_offsetof(__typeof__(tx), buf) == 2,
 	"payload at tx.buf+14 must be word-aligned");
-static uint8_t rxbuf[ETH_MTU];
+// Received frames the same way: 2 mod 4, so the IP header behind the
+// 14-byte Ethernet header is word-aligned, and so is a TFTP block in a
+// UDP packet. Every copy of the payload after this -- into TFTP's queue,
+// into a stream chunk -- then runs a word at a time; at 2 off, newlib's
+// memcpy went byte by byte, ~1ms per 1.5KB frame on lakritz
+// (docs/net_throughput.md, round 3). The MAC drivers write here byte by
+// byte or align themselves (enc28j60.c), so the offset costs them
+// nothing; usb's ring keeps frames at the same offset (Z_USBNET_RX_OFF).
+static struct {
+	uint8_t pad[2];
+	uint8_t buf[ETH_MTU];
+} rx __attribute__((aligned(4)));
+_Static_assert(__builtin_offsetof(__typeof__(rx), buf) == 2,
+	"received IP header at rx.buf+14 must be word-aligned");
+#define rxbuf rx.buf
 
 void eth_init(const uint8_t mac[6]) {
 	for (int i = 0; i < 6; i++) eth_our_mac[i] = mac[i];

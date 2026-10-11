@@ -2,6 +2,17 @@
 
 `sw/os`. Processes, the scheduler, memory, and the syscall boundary.
 
+Zeitlos has a **microkernel**: the kernel schedules, manages memory,
+passes messages, routes interrupts and enforces memory protection, and
+keeps a few machine-level services (the UART console and panic, the
+flash key/value store, auth, the configuration, the hardware HID ports,
+the RAM disk's memory) and the kernel shell. The filesystem, the USB
+host stack and the network are **driver processes** -- `fs`, `usb` and
+`net`, programs loaded from flash or the card, preempted like any other
+and started again if they crash -- reached by message
+([userspace_drivers.md](userspace_drivers.md)). The kernel image is
+about 138KB.
+
 This file is the entry point for the kernel's own design; the
 subsystems it owns have their own documents and are linked from here
 rather than duplicated:
@@ -9,7 +20,9 @@ rather than duplicated:
 | | |
 |---|---|
 | `docs/messaging.md` | mailboxes, `z_msg_t`, payload lifetime |
-| `docs/filesystem.md` | FatFs, the syscall API, preempt deferral |
+| `docs/userspace_drivers.md` | drivers as processes: how they start, restart and are reached |
+| `docs/fs_driver.md`, `docs/usb_driver.md` | the filesystem and USB drivers |
+| `docs/filesystem.md` | the volumes and path rules (FatFs is `fs`'s now) |
 | `docs/app_runtime.md` | the app side of the boundary, and its traps |
 | `docs/executables.md` | ZEXE, and how a process image is loaded |
 | `docs/boot.md` | the memory budget everything sits in |

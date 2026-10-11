@@ -159,6 +159,7 @@ int fs_open_write(kfs_file_t *f, char *path) {
 
 int fs_write_chunk(kfs_file_t *f, const void *buf, uint32_t len) {
 	int32_t n = zfs_write(f->fd, buf, len);
+	if (n < 0) printf("fs_write_chunk: failed (%ld)\n", (long)n);
 	return n < 0 ? -1 : (int)n;
 }
 

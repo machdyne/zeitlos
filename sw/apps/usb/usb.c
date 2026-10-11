@@ -283,7 +283,8 @@ static void net_rx(void) {
 		if (head - tail >= Z_USBNET_RX_SLOTS) { ns.full++; break; }	// it waits in the adapter
 		uint32_t i = head % Z_USBNET_RX_SLOTS;
 		ns.polls++;
-		int n = z_usbh_ecm_recv(srv.rx[i], Z_USBNET_FRAME);
+		uint8_t *f = srv.rx[i] + Z_USBNET_RX_OFF;
+		int n = z_usbh_ecm_recv(f, Z_USBNET_FRAME - Z_USBNET_RX_OFF);
 		if (n <= 0) {
 			ns.empty++;
 			// Asking back to back after a send (NET_BURST_US).
@@ -302,8 +303,8 @@ static void net_rx(void) {
 		// of it lost a packet on the way in (net drops it: a TFTP
 		// retry); one longer than it plus padding took a packet too
 		// many. Neither is counted by the class driver as an error.
-		if (n >= 34 && srv.rx[i][12] == 0x08 && srv.rx[i][13] == 0x00) {
-			int want = 14 + ((srv.rx[i][16] << 8) | srv.rx[i][17]);
+		if (n >= 34 && f[12] == 0x08 && f[13] == 0x00) {
+			int want = 14 + ((f[16] << 8) | f[17]);
 			if (want > n) ns.ip_short++;
 			else if (n > 60 && n > want) ns.ip_long++;
 		}
@@ -313,7 +314,7 @@ static void net_rx(void) {
 		srv.rx_head = head + 1;
 		// Only a frame addressed to us says a conversation is going
 		// on; broadcasts arrive every few hundred ms on any LAN.
-		if (n >= 6 && memcmp(srv.rx[i], net_mac, 6) == 0) net_active = now();
+		if (n >= 6 && memcmp(f, net_mac, 6) == 0) net_active = now();
 		// Wake net if this is the only frame it has not taken -- by its
 		// tail NOW, not the one read before the receive. The receive
 		// spins on the bus for a millisecond or so and can be

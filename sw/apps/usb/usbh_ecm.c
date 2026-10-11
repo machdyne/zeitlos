@@ -43,6 +43,15 @@
 // takes one (OUT), paced by a short spin. An adapter that stops half
 // way through a frame for this long is not going to finish it.
 #define ECM_NAKS        2000
+// In the middle of a received frame a NAK means the adapter has not got
+// the rest off the wire yet -- at 100Mbps, microseconds away. So the
+// engine retries by itself (its most, 15: an IN and a NAK are a few
+// microseconds each on the bus), and between rounds the spin is short.
+// The old pace() between rounds was ~1.2ms on lakritz, and a 1514-byte
+// frame met about one such NAK: it took 5ms to read instead of ~1.5
+// (docs/net_throughput.md, round 3).
+#define ECM_HW_NAKS_MID 15
+#define ECM_NAKS_MID    20000       // rounds, ~2s in all with pace_short()
 #define ECM_STRIKES     3           // bad CRC / no answer, per USB 2.0 8.5.2
 // How often an idle receive also reads the notification endpoint, in
 // kernel ticks: about four times a second.
@@ -304,6 +313,12 @@ void z_usbh_ecm_timing(uint32_t out[8], int reset)
     }
 }
 
+static void pace_short(void)
+{
+    volatile uint32_t g;
+    for (g = 0; g < 100u; g++) { }
+}
+
 static void pace(void)
 {
     volatile uint32_t g;
@@ -318,9 +333,24 @@ static void copy_out(uint8_t *dst, int n)
     uint32_t w;
     // An aligned destination takes whole words: a quarter of the stores
     // (every one waits for memory on a board without a write buffer).
-    if (!((uintptr_t)dst & 3u))
+    if (!((uintptr_t)dst & 3u)) {
         for (; i + 4 <= n; i += 4)
             *(uint32_t *)(dst + i) = z_usbh_rd(Z_USBH_BUF + ECM_OFF + (uint32_t)i);
+    } else if (((uintptr_t)dst & 3u) == 2u && n >= 8) {
+        // Two bytes off, as frames are in usb's ring (Z_USBNET_RX_OFF,
+        // so that net's IP header is word-aligned): a halfword first,
+        // then each word read stored as a word straddling two.
+        uint32_t carry;
+        w = z_usbh_rd(Z_USBH_BUF + ECM_OFF);
+        *(uint16_t *)dst = (uint16_t)w;
+        carry = w >> 16;
+        for (i = 4; i + 4 <= n; i += 4) {
+            w = z_usbh_rd(Z_USBH_BUF + ECM_OFF + (uint32_t)i);
+            *(uint32_t *)(dst + i - 2) = carry | (w << 16);
+            carry = w >> 16;
+        }
+        *(uint16_t *)(dst + i - 2) = (uint16_t)carry;
+    }
     for (; i < n; i += 4) {
         w = z_usbh_rd(Z_USBH_BUF + ECM_OFF + (uint32_t)i);
         dst[i] = (uint8_t)w;
@@ -384,7 +414,7 @@ int z_usbh_ecm_recv(uint8_t *buf, int max)
         // is polled. Mid-frame, the adapter has committed to the rest,
         // so a few quick hardware retries.
         s = run(Z_USBH_PID_IN, ecm.d.ep_in, ecm.d.mps_in, &ecm.tgl_in,
-                ECM_OFF, ECM_CHUNK, 1, total ? 3 : 0);
+                ECM_OFF, ECM_CHUNK, 1, total ? ECM_HW_NAKS_MID : 0);
         if (s == ~0u) break;
         st = (uint8_t)Z_USBH_XS_STATUS(s);
         n = (int)Z_USBH_XS_LEN(s);
@@ -414,8 +444,8 @@ int z_usbh_ecm_recv(uint8_t *buf, int max)
         if (st == Z_USBH_ST_NAK) {
             if (!total) { r = 0; break; }       // nothing waiting
             tm_rx_midnak++;
-            if (++naks > ECM_NAKS) break;
-            pace();
+            if (++naks > ECM_NAKS_MID) break;
+            pace_short();
             continue;
         }
         if ((st == Z_USBH_ST_CRCERR || st == Z_USBH_ST_TIMEOUT) &&

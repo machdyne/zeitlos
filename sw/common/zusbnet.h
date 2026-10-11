@@ -58,6 +58,12 @@
 #include <stdbool.h>
 
 #define Z_USBNET_FRAME		1536
+// A received frame starts this far into its slot (rx[i] + 2): then the
+// IP header behind the 14-byte Ethernet header is word-aligned, and so
+// is a TFTP block in it, and net's copies run a word at a time instead
+// of a byte (newlib's memcpy only does words between buffers aligned
+// alike). docs/net_throughput.md, round 3.
+#define Z_USBNET_RX_OFF		2
 #define Z_USBNET_RX_SLOTS	2
 #define Z_USBNET_TX_SLOTS	2
 

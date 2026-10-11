@@ -193,7 +193,7 @@ static bool wrq_sent;
 static bool server_ack_pending;
 
 // PUT: a chunk received from the sender, not yet sent to the server.
-static uint8_t held_data[TFTP_BLOCK_SIZE];
+static uint8_t held_data[TFTP_BLOCK_SIZE] __attribute__((aligned(4)));
 static uint16_t held_len;
 static bool held_valid;
 
@@ -205,7 +205,11 @@ static bool held_valid;
 // full queue. With one slot, every block's round trip waited for the
 // receiver's write as well as the network's.
 #define GQ_SLOTS 2
-static uint8_t gq_data[GQ_SLOTS][TFTP_MAX_BLOCK];
+// Word-aligned, as the block in the received frame is (eth.c): the
+// copy in and out then runs a word at a time. TFTP_MAX_BLOCK is a
+// multiple of 4, so every slot is.
+static uint8_t gq_data[GQ_SLOTS][TFTP_MAX_BLOCK] __attribute__((aligned(4)));
+_Static_assert(TFTP_MAX_BLOCK % 4 == 0, "each queue slot word-aligned");
 static uint16_t gq_len[GQ_SLOTS];
 static uint32_t gq_at[GQ_SLOTS];	// cycles when stored
 static uint8_t gq_head, gq_n;
@@ -774,6 +778,19 @@ tftp_result_t tftp_poll(uint32_t *out_len, char *err_out, uint32_t err_out_len) 
 		}
 		if (z_uptime_ticks() - last_tx_ticks >= tmo) {
 			retries++;
+			if (state == T_GET && !got_first && blksize > TFTP_BLOCK_SIZE && retries > 2) {
+				// The server agreed to big blocks, and none has come:
+				// a path with a smaller MTU than Ethernet's drops them
+				// (we send with DF and do not reassemble). Ask again
+				// for 512-byte blocks, as a fresh transfer.
+				printf("net: tftp: no %u-byte block arrived; asking for 512\n",
+					(unsigned)blksize);
+				asked_options = false;
+				blksize = TFTP_BLOCK_SIZE;
+				retries = 0;
+				send_rrq_wrq(TFTP_OP_RRQ, get_filename);
+				return TFTP_RESULT_PENDING;
+			}
 			if (retries > TFTP_MAX_RETRIES) {
 				printf("net: tftp giving up after %d retries\n", TFTP_MAX_RETRIES);
 				fail("timed out");

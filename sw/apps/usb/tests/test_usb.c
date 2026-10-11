@@ -329,7 +329,7 @@ static void test_net(void) {
 		while (srv->rx_head != cli.rx_tail) {
 			uint32_t i = cli.rx_tail % Z_USBNET_RX_SLOTS;
 			CHECK(srv->rx_len[i] == 60 + got);
-			CHECK(srv->rx[i][10] == (uint8_t)got);
+			CHECK(srv->rx[i][Z_USBNET_RX_OFF + 10] == (uint8_t)got);
 			cli.rx_tail++;
 			got++;
 		}

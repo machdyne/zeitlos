@@ -251,6 +251,17 @@ int main(void) {
 	CHECK(rrqs == 1);
 	CHECK(tftp_poll(&n, err, sizeof err) == TFTP_RESULT_ERROR);
 
+	// Big blocks agreed but none arrives (a smaller MTU on the way):
+	// after two retries, a fresh RRQ without options.
+	start();
+	pull();
+	oack("blksize\0" "1468\0", 13);
+	CHECK(blksize == 1468 && rrqs == 1);
+	for (int k = 0; k < 3; k++) { now_ticks += 400; tftp_poll(&n, err, sizeof err); }
+	CHECK(rrqs == 2 && !rrq_blksize && blksize == 512);
+	data(1, 100);
+	CHECK(tftp_poll(&n, err, sizeof err) == TFTP_RESULT_OK);
+
 	// The retry timeout follows the round trip: a few quick blocks,
 	// then a lost one is retried after ~41ms (30 ticks), not 0.5s,
 	// and the next retry after twice that.

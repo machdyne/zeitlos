@@ -155,7 +155,7 @@ uint16_t usb_ecm_recv(uint8_t *buf, uint16_t maxlen)
 			__asm__ volatile ("rdcycle %0" : "=r"(c));
 			last_put = srv->rx_at[i];
 			last_take = c;
-			memcpy(buf, (const uint8_t *)srv->rx[i], n);
+			memcpy(buf, (const uint8_t *)srv->rx[i] + Z_USBNET_RX_OFF, n);
 		}
 		cli.rx_tail = tail + 1;		// after the copy: `usb` may reuse it
 		if (n) rx_frames++;

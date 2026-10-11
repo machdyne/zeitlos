@@ -42,6 +42,7 @@
 #include "fatfs/ff.h"
 #include "fatfs/diskio.h"
 #include "fsvol.h"
+#include "sdbench.h"		// sd_stat: why a card write failed
 
 // [dst, dst + n) inside the client's memory [base, base + size).
 #ifndef FS_IN_WINDOW
@@ -700,6 +701,26 @@ static int32_t op_write(const z_fsreq_t *rq, uint32_t pid, const uint8_t *src,
 	if (n > srclen) n = srclen;
 	if (n > Z_FS_CHUNK) n = Z_FS_CHUNK;
 	FRESULT r = f_write(&f->f, src, n, &bw);	// read straight from the client
+	if (r != FR_OK || bw < n) {
+		// Said once per failure, with what the card answered: a write
+		// that fails is otherwise just "write failed" at the caller.
+		say("fs: write of ");
+		say_num(n);
+		say(" bytes failed: FatFs ");
+		say_num((uint32_t)r);
+		say(r == FR_OK ? " (short: disk full?)" : "");
+#ifndef FS_HOST_TEST
+		if (sd_stat.write_fail) {
+			say(", card: step ");
+			say_num(sd_stat.write_fail);
+			say(" response ");
+			say_num(sd_stat.write_resp);
+			say(" sectors ");
+			say_num(sd_stat.write_count);
+		}
+#endif
+		say("\n");
+	}
 	return r == FR_OK ? (int32_t)bw : fs_err(r);
 }
 

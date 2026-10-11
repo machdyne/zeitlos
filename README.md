@@ -40,7 +40,7 @@ Build the hardware map from RTL with `make hwmap` (see [docs/hwmap.md](docs/hwma
 
 ### OS
 
- - [Microkernel](docs/userspace_drivers.md): the kernel schedules, manages memory, passes messages, routes interrupts and enforces memory protection; the filesystem, the USB host stack and the network run as **driver processes**, loaded from flash or the sdcard like any app, and restarted if they crash
+ - [Microkernel](docs/kernel.md): the kernel schedules, manages memory, passes messages, routes interrupts and enforces memory protection; the filesystem, the USB host stack and the network run as **[driver processes](docs/userspace_drivers.md)**, loaded from flash or the sdcard like any app, and restarted if they crash
  - Pre-emptive multitasking
  - Flat memory model with virtual address space for apps
  - Text [configuration file](docs/config.md) (`/sys/zeitlos.cfg`), loaded at boot and reloadable

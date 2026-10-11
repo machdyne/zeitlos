@@ -59,6 +59,11 @@ typedef struct {
 	uint32_t	token_polls;		/* bytes clocked waiting for 0xFE */
 	uint32_t	ready_timeouts;		/* wait_ready() gave up */
 	uint32_t	token_timeouts;		/* no data token arrived */
+	uint8_t		write_fail;			/* why the last write failed: 0 none,
+									   1 CMD24/CMD25 refused, 2 a block not
+									   accepted, 3 the stop token, 4 busy */
+	uint8_t		write_resp;			/* the command's or block's response */
+	uint8_t		write_count;		/* sectors in that write */
 } sd_stat_t;
 
 extern sd_stat_t sd_stat;

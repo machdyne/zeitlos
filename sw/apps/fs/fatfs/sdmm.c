@@ -512,7 +512,7 @@ int xmit_datablock (	/* 1:OK, 0:Failed */
 	BYTE d[2];
 
 
-	if (!wait_ready()) return 0;
+	if (!wait_ready()) { sd_stat.write_fail = 4; return 0; }
 
 	d[0] = token;
 	xmit_mmc(d, 1);				/* Xmit a token */
@@ -520,8 +520,11 @@ int xmit_datablock (	/* 1:OK, 0:Failed */
 		xmit_mmc(buff, 512);	/* Xmit the 512 byte data block to MMC */
 		rcvr_mmc(d, 2);			/* Xmit dummy CRC (0xFF,0xFF) */
 		rcvr_mmc(d, 1);			/* Receive data response */
-		if ((d[0] & 0x1F) != 0x05)	/* If not accepted, return with error */
+		if ((d[0] & 0x1F) != 0x05) {	/* If not accepted, return with error */
+			sd_stat.write_fail = 2;
+			sd_stat.write_resp = d[0];
 			return 0;
+		}
 		sd_stat.sectors_written++;
 	}
 
@@ -734,20 +737,27 @@ DRESULT sd_disk_write (
 	if (sd_disk_status (drv) & STA_NOINIT) return RES_NOTRDY;
 	if (!(CardType & CT_BLOCK)) sect *= 512;	/* Convert LBA to byte address if needed */
 
+	sd_stat.write_fail = 0;
+	sd_stat.write_count = (BYTE)count;
 	if (count == 1) {	/* Single block write */
-		if ((send_cmd(CMD24, sect) == 0)	/* WRITE_BLOCK */
-			&& xmit_datablock(buff, 0xFE))
+		BYTE r = send_cmd(CMD24, sect);	/* WRITE_BLOCK */
+		if (r) { sd_stat.write_fail = 1; sd_stat.write_resp = r; }
+		else if (xmit_datablock(buff, 0xFE))
 			count = 0;
 	}
 	else {				/* Multiple block write */
 		if (CardType & CT_SDC) send_cmd(ACMD23, count);
-		if (send_cmd(CMD25, sect) == 0) {	/* WRITE_MULTIPLE_BLOCK */
+		BYTE r = send_cmd(CMD25, sect);	/* WRITE_MULTIPLE_BLOCK */
+		if (r) { sd_stat.write_fail = 1; sd_stat.write_resp = r; }
+		else {
 			do {
 				if (!xmit_datablock(buff, 0xFC)) break;
 				buff += 512;
 			} while (--count);
-			if (!xmit_datablock(0, 0xFD))	/* STOP_TRAN token */
+			if (!xmit_datablock(0, 0xFD)) {	/* STOP_TRAN token */
+				if (!sd_stat.write_fail) sd_stat.write_fail = 3;
 				count = 1;
+			}
 		}
 	}
 	deselect();
