@@ -124,6 +124,21 @@ def cmd_check(args):
         problems.append("core app budgets: %s" % e)
         print("  FAILED")
 
+    # docs/zapi.md is generated (tools/gen_zapi.py, `make zapi`) but
+    # committed, so the reference on GitHub is the one this tree has.
+    # The flash copy, /docs/zapi.txt, is made at build time and cannot
+    # be stale; this one can. The date line is not compared.
+    print("\nscheme api reference (docs/zapi.md) ...")
+    r = subprocess.run([sys.executable, os.path.join(ROOT, "tools", "gen_zapi.py"),
+                        "--check-md", os.path.join(ROOT, "docs", "zapi.md")],
+                       capture_output=True, text=True)
+    if r.returncode:
+        problems.append((r.stderr.strip() or r.stdout.strip())
+                        .replace("gen_zapi: ", "zapi: "))
+        print("  FAILED")
+    else:
+        print("  ok -- %s" % r.stdout.strip().replace("gen_zapi: ", ""))
+
     print("\narch ...")
     try:
         arch = spec.derive_arch(ROOT)

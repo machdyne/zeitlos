@@ -97,7 +97,7 @@ typedef struct {
 /*
  * Chunked file I/O -- FS_OPEN_READ/FS_OPEN_WRITE/FS_READ_CHUNK/
  * FS_WRITE_CHUNK/FS_CLOSE. Added for the Zeitlos Scheme API's `tget`/
- * `tput` (docs/scheme_api.md, "Networking") -- the whole-file
+ * `tput` (docs/scheme_api.md, "Writing a procedure in C": blocking) -- the whole-file
  * FS_READ/FS_WRITE above are the right shape for `te`'s small-file
  * ceiling (docs/editor.md) but the wrong one for a TFTP transfer that
  * isn't guaranteed to be small; these hold at most one chunk in

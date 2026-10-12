@@ -17,6 +17,22 @@ prompt:
 Type an expression and press Enter; repl works it out and prints the
 answer. `help` lists the commands repl has besides Scheme.
 
+**Looking things up.** Every procedure repl has is in its reference,
+`/docs/zapi.txt`, in flash. `help` with a name shows one: how to call
+it, what it does, and an example. `apropos` finds them by a word:
+
+```
+> help substring
+(substring "text" start end)
+  The characters from start up to end (not included), from 0.
+  > (substring "Zeitlos" 0 4)  =>  "Zeit"
+> apropos window
+win-create       Opens a window and returns its number, or #f if it...
+...
+```
+
+`page /docs/zapi.txt` reads the whole reference.
+
 ## Scheme in ten minutes
 
 Everything is an expression in brackets: the first word is what to do,
@@ -215,5 +231,7 @@ Open `/data/repl/examples/todo.scm` in `text` to read how it works, or copy it t
 | `(led #t)` | the board's LED on |
 | `(ps)`, `(run "text")` | processes; start an app |
 
-The full list is [scheme_api.md](scheme_api.md); how repl is built is
+The full list is `help`, `apropos` and `/docs/zapi.txt` on the machine,
+[zapi.md](zapi.md) here. Adding procedures is
+[scheme_api.md](scheme_api.md); how repl is built is
 [scheme.md](scheme.md).

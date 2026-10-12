@@ -250,6 +250,10 @@ from the prompt:
 
 (colors are `0` for black, `1` for white)
 
+`help ls` shows how to call a procedure, with an example, and
+`apropos file` finds the ones about files: every procedure repl has is
+in `/docs/zapi.txt`, in flash.
+
 To learn Scheme and write apps with windows, buttons and text fields,
 read [repl.md](repl.md) -- in flash as `/docs/repl.txt`, so `text`
 opens it with no card -- and try the example app:

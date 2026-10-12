@@ -150,7 +150,8 @@ with [welcome](welcome.md); to program it, [kernel](kernel.md) and
 | [terminal](terminal.md) | `term` |
 | [posix](posix.md) | POSIX userland |
 | [scheme](scheme.md) | Scheme in `repl` |
-| [scheme\_api](scheme_api.md) | The Scheme API |
+| [scheme\_api](scheme_api.md) | The Scheme API: adding procedures |
+| [zapi](zapi.md) | Every Scheme procedure in `repl` (generated) |
 | [basic\_app](basic_app.md) | `basic`: the BASIC computer |
 | [editor](editor.md) | `te` in `repl` |
 | [zcc](zcc.md) | The C compiler |

@@ -73,7 +73,7 @@ With the MTU, there is no need for position independent code or complicated addr
 | [wm](docs/window_manager.md) | Window manager + dock, with ten workspaces (Super+1 ... Super+0) |
 | [term](docs/terminal.md) | Terminal emulator (VT100, UTF-8, [line drawing](docs/terminal.md#line-drawing); start panel, scrollback; connects to shells and services) |
 | [console](docs/console.md) | Console service |
-| [repl](docs/scheme_api.md) | App service + [Lisp interpreter (subset of R4RS Scheme)](https://github.com/machdyne/ms) |
+| [repl](docs/repl.md) | App service + [Lisp interpreter (subset of R4RS Scheme)](https://github.com/machdyne/ms) |
 | [text](docs/text_editor.md) | Text editor (UTF-8 and Latin-9 files, Japanese) |
 | [files](docs/file_browser.md) | File browser: copy, move, rename, delete, new folder |
 | [cron](docs/cron.md) | Runs programs on a schedule (daily, weekly, hourly, every N, at boot), from `/data/cron/cron.cfg` on the sdcard or from the flash key/value store with no sdcard |
@@ -99,7 +99,7 @@ board boots to a desktop with no sdcard ([core apps in flash](#core-apps-in-flas
 
 | App | Description |
 |-----|-------------|
-| [repl](docs/scheme_api.md) | Scheme (see Core Apps) |
+| [repl](docs/repl.md) | Scheme (see Core Apps) |
 | [posix](docs/posix.md) | POSIX compatibility layer |
 | [basic](docs/basic_app.md) | A BASIC computer ([Machdyne BASIC](https://github.com/machdyne/basic)): a 320x240 screen of its own, in a window or full screen, and a port (`basic0`) a `term` can connect to |
 

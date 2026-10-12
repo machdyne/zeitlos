@@ -895,7 +895,7 @@ ZAR_APPS = $(filter-out $(CORE_APPS_OMIT),$(CORE_APPS))
 # making something smaller. Every core app must have one.
 CORE_BUDGETS = fs=36K/75K usb=35K/56K wm=110K/134K net=148K/285K term=62K/152K \
 	console=10K/14K cron=18K/48K text=60K/154K files=48K/104K repl=140K/304K
-CORE_RESERVE = 21K
+CORE_RESERVE = 48K
 # Core apps stored as they are, not compressed: their budget is then
 # their .bin. wm and net, the two largest started at boot: unpacked they
 # took 508ms and 933ms on hardware (docs/flash_apps.md, "Load times").
@@ -912,8 +912,24 @@ CORE_RAM_MAX = 1M
 # docs/<name>.txt is docs/<name>.md rendered as plain text by
 # tools/md2txt.py, for `text`. They come out of CORE_RESERVE, all
 # together, and mkzar.py refuses an archive where they do not.
-CORE_FILES = docs/welcome.txt docs/repl.txt data/repl/examples/todo.scm
+CORE_FILES = docs/welcome.txt docs/repl.txt docs/zapi.txt data/repl/examples/todo.scm
 CORE_FILES_OUT = $(OUTDIR)/files
+
+# docs/zapi.txt is not from a .md: it is the Scheme API reference, every
+# procedure repl has, made by tools/gen_zapi.py from the entries in
+# repl's sources -- what (help) and (apropos) read. The build fails if
+# a procedure has no entry (docs/scheme_api.md).
+ZAPI_SRCS = tools/gen_zapi.py sw/apps/repl/zapi.c sw/apps/repl/zapi_scheme.txt \
+	sw/ext/ms/ms.c sw/ext/ms/ms_stdlib.l sw/common/zversion.h
+
+$(CORE_FILES_OUT)/docs/zapi.txt: $(ZAPI_SRCS)
+	python3 tools/gen_zapi.py --txt $@
+
+# docs/zapi.md, the same reference as a page, committed: run after
+# changing a procedure or its entry. `zrelease check` says when it is
+# stale.
+zapi:
+	python3 tools/gen_zapi.py --md docs/zapi.md
 
 $(CORE_FILES_OUT)/docs/%.txt: docs/%.md tools/md2txt.py
 	python3 tools/md2txt.py $< $@
@@ -1478,4 +1494,4 @@ clean_bios:
 clean_apps:
 	cd sw/apps && make clean
 
-.PHONY: clean_bios bios apps core-bins core-apps core-files pnr_again tftp-dist nfs-dist timing path util test_blit test_uart hwmap FORCE soc
+.PHONY: clean_bios bios apps core-bins core-apps core-files zapi pnr_again tftp-dist nfs-dist timing path util test_blit test_uart hwmap FORCE soc

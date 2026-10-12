@@ -1,0 +1,451 @@
+# The Scheme language in repl: Machdyne Scheme's builtins (sw/ext/ms/ms.c,
+# as built with -DLIX), its special forms, and its standard library
+# (sw/ext/ms/ms_stdlib.l). The Zeitlos procedures are in zapi.c.
+#
+# tools/gen_zapi.py makes /docs/zapi.txt and docs/zapi.md from this and
+# zapi.c, and fails on a name ms has that is not here, or a name here
+# that ms does not have. The format is docs/scheme_api.md's:
+#
+#   @ Section
+#   : (name args)           a call shape; several make one entry
+#   :   Description.        indented two spaces
+#   :   > (example)  =>  value
+#
+# `~` lines name what is bound but deliberately not listed: internals
+# of the standard library, and the keywords and constants that are not
+# called. Lines starting with # are comments.
+
+~ append2 map1 for-each1 any-nil?
+~ else => nil t true false
+
+@ Syntax
+: (define name value)
+: (define (name args...) body...)
+:   Gives a value a name, or defines a procedure. A dotted last argument,
+:   (name a . rest), takes the remaining arguments as a list.
+:   > (define (square x) (* x x))
+: (defun name (args...) body...)
+:   The same as (define (name args...) body...).
+:   > (defun twice (x) (* 2 x))
+: (lambda (args...) body...)
+:   A procedure with no name. (lambda args body) takes any number, as a
+:   list.
+:   > ((lambda (x y) (+ x y)) 2 3)  =>  5
+: (quote x)
+:   x itself, not evaluated. 'x is short for it.
+:   > '(1 2 three)  =>  (1 2 three)
+: (quasiquote x)
+: (unquote x)
+: (unquote-splicing x)
+:   A template: `x is like 'x, except that ,e inside it is replaced by
+:   e's value and ,@e by the elements of the list e.
+:   > `(1 ,(+ 1 1) ,@(list 3 4))  =>  (1 2 3 4)
+: (if test then)
+: (if test then else)
+:   then if test is true (anything but #f), else otherwise.
+:   > (if (> 5 3) "bigger" "smaller")  =>  "bigger"
+: (cond (test expr...) ... (else expr...))
+:   The exprs of the first true test. (test => f) calls f with the
+:   test's value.
+:   > (cond ((< 5 0) "neg") ((= 5 0) "zero") (else "pos"))  =>  "pos"
+: (case key ((value...) expr...) ... (else expr...))
+:   The exprs of the clause listing key (compared with eqv?).
+:   > (case 3 ((1 2) "low") ((3 4) "mid") (else "high"))  =>  "mid"
+: (and expr...)
+:   The first false value, or the last value if none is false.
+:   > (and 1 2 3)  =>  3
+: (or expr...)
+:   The first true value, or #f.
+:   > (or #f 2 3)  =>  2
+: (begin expr...)
+:   Evaluates each in turn; the last one's value.
+:   > (begin (define a 1) (+ a 1))  =>  2
+: (let ((name value)...) body...)
+: (let loop ((name value)...) body...)
+:   Names values for the body. Named, loop is a procedure that runs the
+:   body again with new values.
+:   > (let ((w 10) (h 4)) (* w h))  =>  40
+: (let* ((name value)...) body...)
+:   As let, but each value can use the names before it.
+:   > (let* ((a 2) (b (* a 3))) b)  =>  6
+: (letrec ((name value)...) body...)
+:   As let, but the values can refer to each other: for local recursive
+:   procedures.
+:   > (letrec ((f (lambda (n) (if (= n 0) 1 (* n (f (- n 1))))))) (f 5))  =>  120
+: (set! name value)
+:   Changes the value of an existing name.
+:   > (begin (define n 1) (set! n 5) n)  =>  5
+: (while test body...)
+:   Runs the body as long as test is true. #f.
+:   > (begin (define i 0) (while (< i 3) (set! i (+ i 1))) i)  =>  3
+: (do ((name init step)...) (test result...) body...)
+:   A loop: runs the body and steps the names until test is true, then
+:   gives the result.
+:   > (do ((i 0 (+ i 1)) (s 0 (+ s i))) ((= i 5) s))  =>  10
+: (delay expr)
+:   A promise to evaluate expr later, once, with force.
+:   > (force (delay (+ 1 2)))  =>  3
+
+@ Numbers
+: (+ n...)
+: (- n...)
+: (* n...)
+: (/ n...)
+:   Arithmetic. Every number is a double: (/ 1 3) is 0.333333. (- n)
+:   negates, (/ n) is 1/n.
+:   > (+ 1 (* 2 3) (/ 10 4))  =>  9.5
+: (= a b...)
+: (< a b...)
+: (> a b...)
+: (<= a b...)
+: (>= a b...)
+:   Compares numbers, each with the next.
+:   > (< 1 2 3)  =>  #t
+: (quotient a b)
+: (remainder a b)
+: (modulo a b)
+:   Integer division: the quotient (towards zero), the remainder (the
+:   sign of a) and the modulo (the sign of b).
+:   > (list (quotient -7 2) (remainder -7 2) (modulo -7 2))  =>  (-3 -1 1)
+: (% a b)
+: (mod a b)
+:   The remainder of a divided by b, also for reals (C's fmod).
+:   > (% 7.5 2)  =>  1.5
+: (abs n)
+:   The absolute value.
+:   > (abs -4)  =>  4
+: (min n...)
+: (max n...)
+:   The smallest or largest.
+:   > (max 3 9 2)  =>  9
+: (gcd a b)
+: (lcm a b)
+:   Greatest common divisor, least common multiple.
+:   > (gcd 12 18)  =>  6
+: (expt a b)
+:   a to the power b.
+:   > (expt 2 10)  =>  1024
+: (sqrt n)
+:   The square root.
+:   > (sqrt 16)  =>  4
+: (floor n)
+: (ceiling n)
+: (truncate n)
+: (round n)
+:   To an integer: down, up, towards zero, or to the nearest (halves to
+:   the even one).
+:   > (list (floor 2.5) (ceiling 2.5) (round 2.5) (round 3.5))  =>  (2 3 2 4)
+: (zero? n)
+: (positive? n)
+: (negative? n)
+: (odd? n)
+: (even? n)
+:   Tests on a number.
+:   > (even? 10)  =>  #t
+: (exact? n)
+: (inexact? n)
+: (exact->inexact n)
+: (inexact->exact n)
+:   For portable code: every number is inexact (a double), so exact? is
+:   always #f and the conversions return n.
+:   > (exact? 1)  =>  #f
+: (number->string n)
+: (num->str n)
+:   A number as a string.
+:   > (number->string 42)  =>  "42"
+: (string->number "text")
+: (str->num "text")
+:   The number a string holds.
+:   > (+ 1 (string->number "41"))  =>  42
+: (square n)
+:   n times n.
+:   > (square 9)  =>  81
+: (1+ n)
+: (1- n)
+:   n plus one, n minus one.
+:   > (1+ 5)  =>  6
+: (range a b)
+:   The integers from a up to b, without b.
+:   > (range 0 5)  =>  (0 1 2 3 4)
+
+@ Equality and types
+: (eq? a b)
+:   The same object: true for the same symbol, #t, #f, ().
+:   > (eq? 'a 'a)  =>  #t
+: (eqv? a b)
+:   As eq?, and also equal numbers and characters.
+:   > (eqv? 2 2)  =>  #t
+: (equal? a b)
+:   The same structure and contents: lists and strings too.
+:   > (equal? (list 1 "a") (list 1 "a"))  =>  #t
+: (not x)
+:   #t if x is #f, else #f.
+:   > (not #f)  =>  #t
+: (number? x)
+: (string? x)
+: (symbol? x)
+: (boolean? x)
+: (char? x)
+: (vector? x)
+: (procedure? x)
+: (pair? x)
+: (null? x)
+: (atom? x)
+: (eof-object? x)
+:   Tests for a kind of value. atom? is anything but a pair;
+:   eof-object? is what read returns at the end.
+:   > (string? "hi")  =>  #t
+: (identity x)
+:   x.
+:   > (identity 5)  =>  5
+
+@ Lists
+: (cons x list)
+:   A list with x in front.
+:   > (cons 1 '(2 3))  =>  (1 2 3)
+: (car pair)
+:   The first element.
+:   > (car '(1 2 3))  =>  1
+: (cdr pair)
+:   Everything after the first.
+:   > (cdr '(1 2 3))  =>  (2 3)
+: (caar x)
+: (cadr x)
+: (cdar x)
+: (cddr x)
+: (caaar x)
+: (caadr x)
+: (cadar x)
+: (caddr x)
+: (cdaar x)
+: (cdadr x)
+: (cddar x)
+: (cdddr x)
+: (caaaar x)
+: (caaadr x)
+: (caadar x)
+: (caaddr x)
+: (cadaar x)
+: (cadadr x)
+: (caddar x)
+: (cadddr x)
+: (cdaaar x)
+: (cdaadr x)
+: (cdadar x)
+: (cdaddr x)
+: (cddaar x)
+: (cddadr x)
+: (cdddar x)
+: (cddddr x)
+:   car and cdr combined, read right to left: (cadr x) is
+:   (car (cdr x)), the second element.
+:   > (caddr '(1 2 3))  =>  3
+: (set-car! pair x)
+: (set-cdr! pair x)
+:   Changes a pair's first element or its rest.
+:   > (let ((l (list 1 2))) (set-car! l 9) l)  =>  (9 2)
+: (list x...)
+:   A list of the values.
+:   > (list 1 "two" 'three)  =>  (1 "two" three)
+: (length list)
+:   How many elements; for a string, how many characters.
+:   > (length '(a b c))  =>  3
+: (first list)
+: (second list)
+: (third list)
+: (rest list)
+:   The first, second or third element; everything after the first.
+:   > (second '(a b c))  =>  b
+: (last list)
+: (last-pair list)
+:   The last element; the last pair.
+:   > (last '(1 2 3))  =>  3
+: (list-ref list k)
+: (list-tail list k)
+:   Element k (from 0); the list after the first k.
+:   > (list-ref '(a b c) 1)  =>  b
+: (append list...)
+:   The lists joined into one.
+:   > (append '(1 2) '(3) '(4 5))  =>  (1 2 3 4 5)
+: (reverse list)
+:   The list backwards.
+:   > (reverse '(1 2 3))  =>  (3 2 1)
+: (map f list...)
+:   A list of f applied to each element (to each set of elements, with
+:   several lists).
+:   > (map + '(1 2) '(10 20))  =>  (11 22)
+: (for-each f list...)
+:   Calls f on each element, for its effect.
+:   > (for-each print '("a" "b"))
+: (filter pred list)
+: (remove pred list)
+:   The elements for which pred is true; for which it is false.
+:   > (filter odd? '(1 2 3 4 5))  =>  (1 3 5)
+: (reduce f init list)
+:   Combines the elements from the left: (f (f init x1) x2) ...
+:   > (reduce + 0 '(1 2 3 4))  =>  10
+: (sort list)
+:   Numbers in ascending order.
+:   > (sort '(3 1 2))  =>  (1 2 3)
+: (member x list)
+: (member? x list)
+:   The list from the first element equal? to x, or #f; member? says
+:   just #t or #f.
+:   > (member 2 '(1 2 3))  =>  (2 3)
+: (memq x list)
+: (memv x list)
+:   As member, comparing with eq? or eqv?.
+:   > (memq 'c '(a b c d))  =>  (c d)
+: (assoc key alist)
+: (assq key alist)
+: (assv key alist)
+:   The first pair in an association list whose car is key (by equal?,
+:   eq? or eqv?), or #f.
+:   > (assoc "b" '(("a" 1) ("b" 2)))  =>  ("b" 2)
+: (count x list)
+:   How many elements are equal? to x.
+:   > (count 'a '(a b a))  =>  2
+: (flatten list)
+:   The atoms of nested lists, in one list.
+:   > (flatten '(1 (2 (3)) 4))  =>  (1 2 3 4)
+: (list? x)
+: (nil? x)
+: (null x)
+:   list?: a proper list. nil? and null: the empty list, as null?.
+:   > (list? '(1 2))  =>  #t
+
+@ Strings
+: (string-append "text"...)
+: (str-append "text"...)
+:   The strings joined.
+:   > (string-append "Zeit" "los")  =>  "Zeitlos"
+: (string-length "text")
+: (str-length "text")
+:   How many characters.
+:   > (string-length "hello")  =>  5
+: (substring "text" start end)
+:   The characters from start up to end (not included), from 0.
+:   > (substring "Zeitlos" 0 4)  =>  "Zeit"
+: (string-ref "text" k)
+:   Character k, from 0.
+:   > (string-ref "abc" 1)  =>  #\b
+: (string-set! string k char)
+: (string-fill! string char)
+:   Changes character k, or all of them, in place.
+:   > (let ((s (string-copy "cat"))) (string-set! s 0 #\b) s)  =>  "bat"
+: (make-string k)
+: (make-string k char)
+:   A string of k characters (spaces, or char).
+:   > (make-string 3 #\*)  =>  "***"
+: (string char...)
+:   A string of the characters.
+:   > (string #\h #\i)  =>  "hi"
+: (string-copy "text")
+:   A new string with the same characters.
+:   > (string-copy "abc")  =>  "abc"
+: (string=? a b)
+: (string<? a b)
+: (string>? a b)
+: (string<=? a b)
+: (string>=? a b)
+:   Compares strings, in character-code order.
+:   > (string<? "apple" "banana")  =>  #t
+: (string->symbol "text")
+: (symbol->string symbol)
+:   Between strings and symbols.
+:   > (symbol->string 'hello)  =>  "hello"
+: (str->list "text")
+:   The characters as a list of one-letter symbols.
+:   > (str->list "abc")  =>  (a b c)
+: (list->str list)
+:   A string from a list of symbols, strings, and numbers (as character
+:   codes).
+:   > (list->str '(h "ey" 33))  =>  "hey!"
+
+@ Characters
+: (char->integer char)
+: (integer->char n)
+:   Between a character and its code.
+:   > (char->integer #\A)  =>  65
+: (char=? a b)
+: (char<? a b)
+: (char>? a b)
+: (char<=? a b)
+: (char>=? a b)
+:   Compares characters by code. Characters are written #\a, #\space,
+:   #\newline.
+:   > (char<? #\a #\b)  =>  #t
+: (char-upcase char)
+: (char-downcase char)
+:   The character in upper or lower case.
+:   > (char-upcase #\a)  =>  #\A
+: (char-alphabetic? char)
+: (char-numeric? char)
+: (char-whitespace? char)
+: (char-upper-case? char)
+: (char-lower-case? char)
+:   Tests on a character.
+:   > (char-numeric? #\7)  =>  #t
+
+@ Vectors
+: (vector x...)
+: (make-vector k)
+: (make-vector k fill)
+:   A vector of the values, or of k elements.
+:   > (vector 1 2 3)  =>  #(1 2 3)
+: (vector-length vector)
+:   How many elements.
+:   > (vector-length #(1 2 3))  =>  3
+: (vector-ref vector k)
+: (vector-set! vector k x)
+: (vector-fill! vector x)
+:   Element k, from 0; change it; change them all.
+:   > (let ((v (make-vector 3 0))) (vector-set! v 1 5) v)  =>  #(0 5 0)
+: (vector->list vector)
+: (list->vector list)
+:   Between vectors and lists.
+:   > (vector->list #(1 2))  =>  (1 2)
+
+@ Output
+: (display x)
+:   Shows x: a string as it is, without quotes. #f.
+:   > (display "hi")  =>  #f
+: (print x)
+:   As display, then a new line; other values as write shows them. #f.
+:   > (print "Hello")  =>  #f
+: (write x)
+:   Shows x as Scheme would read it: strings in quotes. #f.
+:   > (write "hi")  =>  #f
+
+@ Evaluation
+: (apply f list)
+:   Calls f with the list's elements as its arguments.
+:   > (apply + '(1 2 3))  =>  6
+: (eval expr)
+:   Evaluates a value as code, in the global environment.
+:   > (eval '(+ 1 2))  =>  3
+: (read "text")
+:   The first expression in a string, as data, not evaluated; an
+:   eof-object if there is none.
+:   > (read "(+ 1 2)")  =>  (+ 1 2)
+: (force promise)
+:   A delay's value, worked out the first time.
+:   > (force (delay (* 6 7)))  =>  42
+: (call-with-current-continuation f)
+: (call/cc f)
+:   Calls f with an escape procedure: calling it returns its argument
+:   from call/cc at once.
+:   > (call/cc (lambda (k) (+ 1 (k 42))))  =>  42
+: (dynamic-wind before thunk after)
+:   Calls before, thunk and after, each with no arguments; after runs
+:   even if thunk escapes. thunk's value.
+:   > (dynamic-wind (lambda () 1) (lambda () 2) (lambda () 3))  =>  2
+: (gc)
+:   Collects garbage now and shows how many cells are live. #t.
+:   > (gc)  =>  #t
+: (dump)
+:   Shows every name bound in the global environment. #t.
+:   > (dump)  =>  #t
+: (exit)
+:   Abandons the current evaluation. repl itself carries on.
+:   > (exit)

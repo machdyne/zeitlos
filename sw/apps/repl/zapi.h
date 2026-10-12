@@ -11,7 +11,7 @@
  * ms_def_builtin() (sw/ext/ms/ms.c). This file is deliberately the
  * ONLY place new procedures get added -- ms.c itself never needs
  * touching again once its own small registration/construction patch
- * (docs/scheme_api.md \S3) is in place.
+ * (docs/scheme_api.md, "Writing a procedure in C") is in place.
  */
 
 #include <stdbool.h>

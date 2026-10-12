@@ -123,13 +123,15 @@ there was `.bss`.
 
 The archive also carries **files**: `CORE_FILES` in the top-level
 `Makefile`: `docs/welcome.txt`, `docs/repl.txt` (the beginner's guide
-to Scheme, [repl.md](repl.md)) and `data/repl/examples/todo.scm`, its example
+to Scheme, [repl.md](repl.md)), `docs/zapi.txt` (every procedure repl
+has, what its `help` and `apropos` read, [zapi.md](zapi.md)) and
+`data/repl/examples/todo.scm`, its example
 app. Each is read-only, at its path
 under the card, with or without a card, and a file of the same name on
 the card wins over it -- the same rule as for apps:
 
 ```
-CORE_FILES = docs/welcome.txt docs/repl.txt data/repl/examples/todo.scm
+CORE_FILES = docs/welcome.txt docs/repl.txt docs/zapi.txt data/repl/examples/todo.scm
 ```
 
 A `docs/<name>.txt` is `docs/<name>.md` rendered as plain text by
@@ -138,6 +140,10 @@ A `docs/<name>.txt` is `docs/<name>.md` rendered as plain text by
 headings underlined, tables as aligned columns, code blocks indented,
 and the Markdown that only a renderer needs dropped. The card keeps
 `welcome.md`; flash shows `welcome.txt` beside it.
+
+`docs/zapi.txt` is the exception: no `.md` makes it. `tools/gen_zapi.py`
+makes it from the entries beside repl's code, so it always lists what
+the repl in the same archive has ([scheme_api.md](scheme_api.md)).
 
 **What sees them.** The kernel's file calls fall through to flash when
 the card has no such file, or there is no card, and the path is not
@@ -309,21 +315,23 @@ percent either way):
 | `cron` | 21,648 | 16,118 | 35,008 | 16K |
 | `text` | 85,492 | 57,712 | 155,520 | 16K |
 | `files` | 66,252 | 45,820 | 91,904 | 16K |
-| `repl` | ~190,000 | ~129,000 | ~307,000 | 64K |
-| files in flash (welcome.txt, repl.txt, todo.scm) | | 20,421 | | |
-| **archive** | | **~656,000** | | |
+| `repl` | 196,792 | 117,968 | 310,880 | 64K |
+| files in flash (welcome.txt, repl.txt, zapi.txt, todo.scm) | | 46,958 | | |
+| **archive** | | **671,880** | | |
 
 Compression (`mkzar.py`, LZ4, [executables.md](executables.md#compressed-executables))
-saves about 143KB (82KB of it measured, the rest repl's estimate): every
+saves about 187,000 bytes: every
 app but `wm` and `net`, which are kept as they are (`CORE_STORE`) for
 the time it costs to unpack them at boot (below; in brackets, what they
-would take compressed). The budgets sum to 667KB, with the reserve 21KB
-more: about 160KB of the region is unassigned. The archive took about
-823,000 bytes before, with budgets that left 1.8KB.
+would take compressed). `repl` alone saves 79KB of it: Scheme's
+strings and tables compress well. The budgets sum to 667KB, with the
+reserve 48KB more: about 133KB of the region is unassigned. The archive
+took about 823,000 bytes before, with budgets that left 1.8KB.
 
-`repl` is not built in this tree without `ext/`; its figures are the
-board's last, less the page gap below, and its compressed size a guess
-at the others' ratio -- its budget (140K) leaves room for being wrong.
+`repl` needs its submodules (`git submodule update --init sw/ext/ms
+sw/ext/te sw/ext/basic`); without them it does not build, and these
+figures were an estimate until October 2026. Its flash budget (140K)
+now has 22KB to spare; its RAM budget (304K) has 416 bytes.
 
 **The page gap.** Each app's `.bin` used to carry 0-4KB of zeros
 between `.rodata` and `.data`, because the app linker script started
@@ -333,7 +341,7 @@ took about 20KB out of the archive. It came to light when 1.5KB more
 code made `fs.bin` 4KB longer.
 
 **Flash is no longer tight; RAM is.** Since compression the flash
-budgets and the reserve add up to 688KB of the 848KB region, each the
+budgets and the reserve add up to 715KB of the 848KB region, each the
 app's compressed size plus a few KB (about 4KB of code, at the ratio).
 Before, they left about 1.8KB of it. The RAM budgets are a few KB over each image
 too, so that the boot set with `usb` in it still meets the RAM rule
@@ -356,7 +364,7 @@ top-level `Makefile`, next to `CORE_APPS`:
 ```
 CORE_BUDGETS = fs=36K/75K usb=35K/56K wm=110K/134K net=148K/285K term=62K/152K \
 	console=10K/14K cron=18K/48K text=60K/154K files=48K/104K repl=140K/304K
-CORE_RESERVE = 21K
+CORE_RESERVE = 48K
 CORE_STORE = wm net
 CORE_ZAR_MAX = 848K
 CORE_AT_BOOT = fs usb wm net console
@@ -467,10 +475,11 @@ What that means now:
 
 - **`init()`** does not start it. `term`'s REPL button does, on demand,
   as before, and finds it in flash.
-- **RAM.** Its image is 308,608 bytes, plus its 64K stack. That is RAM
+- **RAM.** Its image is 310,880 bytes, plus its 64K stack. That is RAM
   only while it runs; the budgets' RAM rule ("Budgets") counts it as
   one of the one or two apps started beside the boot set.
-- **Its budget** is 192K of flash and 320K of RAM. `repl` grows when
+- **Its budget** is 140K of flash (117,968 used) and 304K of RAM
+  (311,296: 416 bytes to spare). `repl` grows when
   Scheme procedures (zapi) are added, so this is the budget that will
   bite first: a new procedure is paid for with a smaller one, a
   reserve, or a decision to raise the budget, not found out when the

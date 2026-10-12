@@ -124,7 +124,7 @@ int fs_list_into(const char *path, char *buf, uint32_t buf_cap,
 	uint32_t *truncated);
 
 // -- chunked file I/O -- for a transfer too large to hold entirely in
-// memory at once (tget/tput, docs/scheme_api.md "Networking") -- the
+// memory at once (tget/tput, docs/scheme_api.md, "Writing a procedure in C": blocking) -- the
 // three functions above load/hold a whole file; these move it one
 // bounded chunk at a time instead. Returns a small opaque handle
 // (>= 0) on success, or -1 on failure (file doesn't exist for

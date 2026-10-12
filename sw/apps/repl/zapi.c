@@ -14,6 +14,19 @@
  * "expected a string"/"expected a number" builtins already do --
  * deliberately not a second, quieter error convention just for
  * Zeitlos-added procedures.
+ *
+ * THE REFERENCE IS MADE FROM THIS FILE. Each procedure has an entry in
+ * `//:` lines, under the latest `//@ Section` line above it, which
+ * tools/gen_zapi.py turns into /docs/zapi.txt (in flash, what (help)
+ * and (apropos) read) and docs/zapi.md:
+ *
+ *   //@ Files
+ *   //: (file-size "file")
+ *   //:   The file's size in bytes, or #f if it is missing or empty.
+ *   //:   > (file-size "/docs/repl.txt")  =>  6015
+ *
+ * The build fails on a procedure with no entry, and on an entry with
+ * no procedure. docs/scheme_api.md has the rules.
  */
 
 #include <stdlib.h>
@@ -51,6 +64,8 @@
 								// (z_video_mode_get/_set), not zsoc.h's
 								// direct-MMIO inlines.
 #include "zapi.h"
+#include "zapi_doc.h"
+#include "../../common/zpaths.h"
 
 // -- small shared helpers --
 
@@ -87,6 +102,13 @@ static bool zapi_arg_truthy(ms_val *v) {
 
 // -- Files --
 
+//@ Files
+//: (ls)
+//: (ls "path")
+//:   The names in a directory, each a full path, as a list of strings.
+//:   () for an empty or missing directory. No path: the root.
+//:   > (ls "/docs")
+//
 // (ls) or (ls "path") -- list of filenames (each a full "/"-prefixed
 // path, e.g. "/WM") as strings. An empty or missing directory just
 // returns an empty list, not an error -- consistent with fs_list()'s
@@ -111,6 +133,10 @@ static ms_val *zapi_ls(ms_val *args) {
 
 }
 
+//: (file-size "file")
+//:   The file's size in bytes, or #f if it is missing or empty.
+//:   > (file-size "/docs/repl.txt")  =>  6015
+//
 // (file-size "name") -- size in bytes, or #f if missing (or
 // genuinely empty -- fs_size()'s own documented ambiguity, zfsapp.h).
 static ms_val *zapi_file_size(ms_val *args) {
@@ -120,6 +146,11 @@ static ms_val *zapi_file_size(ms_val *args) {
 	return ms_mk_num(sz);
 }
 
+//: (read-file "file")
+//:   The whole file as a string; #f if it is missing, empty or cannot
+//:   be read. For text: a zero byte ends the string.
+//:   > (read-file "/ram/a.txt")  =>  "hi"
+//
 // (read-file "name") -- whole file contents as a string, or #f if
 // missing/unreadable.
 static ms_val *zapi_read_file(ms_val *args) {
@@ -156,6 +187,10 @@ static ms_val *zapi_read_file(ms_val *args) {
 
 }
 
+//: (write-file "file" "text")
+//:   Creates or replaces the file with the text. #t, or #f on failure.
+//:   > (write-file "/ram/a.txt" "hi")  =>  #t
+//
 // (write-file "name" "contents") -- creates/truncates + writes;
 // #t/#f. Same embedded-NUL caveat as read-file above, in reverse:
 // strlen() is what decides how much of `contents` gets written.
@@ -171,6 +206,10 @@ static ms_val *zapi_write_file(ms_val *args) {
 
 }
 
+//: (delete-file "file")
+//:   Deletes the file. #t, or #f on failure.
+//:   > (delete-file "/ram/a.txt")  =>  #t
+//
 // (delete-file "name") -- #t/#f.
 static ms_val *zapi_delete_file(ms_val *args) {
 	const char *name = zapi_arg_str(ms_car(args), "delete-file");
@@ -182,7 +221,7 @@ static ms_val *zapi_delete_file(ms_val *args) {
 // A window created here is owned by `repl`'s OWN pid, not whichever
 // `term` connection happened to type the command -- z_win_create()
 // runs inside repl's process regardless of which connection's line
-// triggered it, so this falls out for free (docs/scheme_api.md \S4,
+// triggered it, so this falls out for free (docs/scheme_api.md, "Writing a procedure in C",
 // "Window ownership"). A window's lifetime is tied to repl itself,
 // not to any one connection -- it survives a `term` disconnect the
 // same way a Scheme `define` already does (both live in the same
@@ -200,7 +239,7 @@ static ms_val *zapi_delete_file(ms_val *args) {
 // small, fixed-size, bounded table -- same "small on purpose" spirit
 // as Z_REPL_MAX_CONNS (repl.c) itself. Maps a window's own wm-
 // assigned id (exposed to Scheme as a plain number, see
-// docs/scheme_api.md \S4's "handles are plain numbers" note) to the
+// docs/scheme_api.md's "Handles" note) to the
 // z_win_t (x/y/w/h) z_win_fill_rect()/z_win_draw_text()/z_win_hw_*()
 // all need to compute the right clip/offset. Raise if real usage
 // needs more than a handful of windows open via Scheme at once.
@@ -463,6 +502,12 @@ static int zapi_widget_new(int id, int x, int y, int w, int h, const char *who) 
 	return k;
 }
 
+//@ Windows and apps
+//: (button w x y width height "label")
+//:   A push button in window w; returns its number. Pressing it sends
+//:   the window's handler (button n).
+//:   > (button w 4 30 50 16 "+1")  =>  1
+//
 // (button w x y width height "label") -- a push button in window w;
 // returns its number. Pressing it sends the window's handler
 // (button n).
@@ -476,6 +521,12 @@ static ms_val *zapi_button(ms_val *args) {
 	return ms_mk_num(zapi_widgets[k].num);
 }
 
+//: (field w x y width)
+//: (field w x y width "text")
+//:   A one-line text field in window w; returns its number. Enter in it
+//:   sends the handler (enter n).
+//:   > (field w 4 4 100 "type here")  =>  2
+//
 // (field w x y width) or (field w x y width "text") -- a one-line text
 // field; returns its number. Enter in it sends (enter n).
 static ms_val *zapi_field(ms_val *args) {
@@ -506,6 +557,10 @@ static zapi_widget_t *zapi_field_or_panic(ms_val *args, const char *who) {
 	return &zapi_widgets[k];
 }
 
+//: (field-text w n)
+//:   The text in field n of window w, as a string.
+//:   > (field-text w 2)  =>  "type here"
+//
 // (field-text w n) -- what text field n holds, as a string.
 static ms_val *zapi_field_text(ms_val *args) {
 	zapi_widget_t *w = zapi_field_or_panic(args, "field-text");
@@ -514,6 +569,10 @@ static ms_val *zapi_field_text(ms_val *args) {
 	return ms_mk_str(s);
 }
 
+//: (field-set! w n "text")
+//:   Replaces the text in field n of window w. #t.
+//:   > (field-set! w 2 "")  =>  #t
+//
 // (field-set! w n "text") -- replaces it.
 static ms_val *zapi_field_set(ms_val *args) {
 	zapi_widget_t *w = zapi_field_or_panic(args, "field-set!");
@@ -711,6 +770,15 @@ void zapi_win_event_done(void) {
 	}
 }
 
+//: (win-create)
+//: (win-create "title")
+//: (win-create "title" width height)
+//: (win-create "title" width height x y)
+//:   Opens a window and returns its number, or #f if it cannot. Without
+//:   x y the window manager places it. The drawing area is 4 pixels
+//:   narrower and 15 shorter than the size given.
+//:   > (define w (win-create "Drawing" 200 120))
+//
 // (win-create) or (win-create "title") or (win-create "title" w h) or
 // (win-create "title" w h x y) -- title/w/h/x/y all optional, but
 // positional (can't skip w/h to give just x/y) -- x/y (both or
@@ -854,6 +922,10 @@ bool zapi_win_msg(z_msg_t *msg) {
 
 }
 
+//: (win-destroy w)
+//:   Closes window w. #t, or #f if there is no such window.
+//:   > (win-destroy w)  =>  #t
+//
 // (win-destroy id) -- #t/#f.
 static ms_val *zapi_win_destroy(ms_val *args) {
 
@@ -870,6 +942,10 @@ static ms_val *zapi_win_destroy(ms_val *args) {
 
 }
 
+//: (win-clear w)
+//:   Blanks window w's drawing area. #t.
+//:   > (win-clear w)  =>  #t
+//
 // (win-clear id) -- #t, or raises an error for an id this process
 // didn't create (see zapi_win_or_panic()'s own comment).
 static ms_val *zapi_win_clear(ms_val *args) {
@@ -878,6 +954,12 @@ static ms_val *zapi_win_clear(ms_val *args) {
 	return ms_mk_bool(true);
 }
 
+//: (line w x0 y0 x1 y1 colour)
+//:   A line in window w, in window coordinates (0 0 is the top left of
+//:   the drawing area). Colour 1 is the foreground (white, amber, green,
+//:   or black on paper: see video-mode), 0 the background. #t.
+//:   > (line w 0 0 195 104 1)  =>  #t
+//
 // (line id x0 y0 x1 y1 color) -- hardware-accelerated
 // (z_fb_hw_line(), the GPU line rasterizer). Coordinates are WINDOW-
 // relative -- (0,0) is this window's own content top-left (see
@@ -903,6 +985,10 @@ static ms_val *zapi_line(ms_val *args) {
 
 }
 
+//: (box w x0 y0 x1 y1 colour)
+//:   A filled rectangle in window w, corners included. #t.
+//:   > (box w 20 20 60 50 1)  =>  #t
+//
 // (box id x0 y0 x1 y1 color) -- hardware-accelerated filled box
 // (z_fb_hw_box()). Window-relative coordinates, same as `line` above.
 // #t, or raises an error (zapi_win_or_panic()'s own comment).
@@ -926,6 +1012,10 @@ static ms_val *zapi_box(ms_val *args) {
 
 }
 
+//: (text w x y "text" colour)
+//:   Text in window w in the 6x12 font, x y its top left. #t.
+//:   > (text w 70 30 "Hello" 1)  =>  #t
+//
 // (text id x y "s" color) -- z_font_6x12 (dense/compact, a reasonable
 // default for arbitrary program output; nothing yet exposes a way to
 // pick a different one -- z_font_8x16/_5x7/_5x8 all exist, zfont.h,
@@ -953,12 +1043,21 @@ static ms_val *zapi_text(ms_val *args) {
 
 // -- Messaging --
 
+//@ Processes and messages
+//: (getpid)
+//:   This process's pid (repl's own).
+//:   > (getpid)  =>  9
+//
 // (getpid) -- this process's own pid.
 static ms_val *zapi_getpid(ms_val *args) {
 	(void)args;
 	return ms_mk_num(z_getpid());
 }
 
+//: (pid-lookup "name")
+//:   The pid registered under a name, such as "wm0" or "net0", or #f.
+//:   > (pid-lookup "wm0")  =>  3
+//
 // (pid-lookup "name") -- resolves a registered name ("wm0", "net0",
 // ...) to a pid, or #f.
 static ms_val *zapi_pid_lookup(ms_val *args) {
@@ -968,6 +1067,11 @@ static ms_val *zapi_pid_lookup(ms_val *args) {
 	return ms_mk_num(pid);
 }
 
+//: (msg-send pid subject tag "text")
+//:   Sends a string message to a process, without waiting. #t, or #f if
+//:   it could not be sent.
+//:   > (msg-send (pid-lookup "myapp") 100 1 "hello")  =>  #t
+//
 // (msg-send pid subject tag "data") -- fire-and-forget Z_STR message.
 // #t/#f. Deliberately Z_STR-only for v1 (matches Z_REPL_EVAL's own
 // Z_STR-first convention, sw/common/zrepl.h) -- richer payloads
@@ -1021,13 +1125,20 @@ static bool zapi_msg_wait_timeout(z_msg_t *msg, uint32_t subject, uint32_t tag,
 
 }
 
+//: (msg-wait subject tag)
+//: (msg-wait subject tag timeout-ms)
+//:   Waits for a message with that subject and tag and returns its text;
+//:   #f on a timeout or a message that is not a string. Without a
+//:   timeout it can wait for ever, and repl answers nothing meanwhile.
+//:   > (msg-wait 101 1 1000)  =>  "hi"
+//
 // (msg-wait subject tag) or (msg-wait subject tag timeout-ms) --
 // blocks for a matching reply, returns its payload as a string (or
 // #f if the reply wasn't a Z_STR, or on timeout). With no timeout
 // given, this can block indefinitely -- z_msg_wait()'s own contract
 // exactly, same accepted-blocking-call tradeoff class this process
 // already has for `te`/`tget`/`tput` (docs/editor.md,
-// docs/scheme_api.md's own Networking section). With a timeout given,
+// docs/scheme_api.md, "Writing a procedure in C": blocking). With a timeout given,
 // see zapi_msg_wait_timeout()'s own comment for what that actually
 // costs.
 static ms_val *zapi_msg_wait(ms_val *args) {
@@ -1063,7 +1174,7 @@ static ms_val *zapi_msg_wait(ms_val *args) {
 // `tget`/`tput` are a direct port of `sh.c`'s own existing commands
 // (sw/os/sh.c) -- the TFTP-over-zstream plumbing they use already
 // exists and works, this just makes it reachable from Scheme. See
-// docs/scheme_api.md's own "Networking" section for the full
+// docs/scheme_api.md, "Writing a procedure in C", for the
 // writeup, including the accepted tradeoff both share with `te`
 // (docs/editor.md): both block this whole process for the duration
 // of the transfer (matching zstream.h's own "the consumer side IS
@@ -1105,6 +1216,13 @@ static uint32_t zapi_next_tftp_tag(void) {
 // uses (z_uptime_ticks() is ~732Hz).
 #define ZAPI_TFTP_TIMEOUT_TICKS (10 * 732)
 
+//@ Network
+//: (tget "host" "remote-file")
+//: (tget "host" "remote-file" "local-file")
+//:   Fetches a file by TFTP (needs `net` running); returns the number of
+//:   bytes written. Raises an error saying what failed.
+//:   > (tget "192.168.1.10" "notes.txt" "/ram/notes.txt")  =>  1834
+//
 // (tget ip-or-host remote-file) or (tget ip-or-host remote-file
 // local-file) -- fetches a file via TFTP (needs `run net`), returns
 // the number of bytes written on success. Any failure (DNS/host
@@ -1173,6 +1291,12 @@ static ms_val *zapi_tget(ms_val *args) {
 
 }
 
+//: (tput "host" "local-file")
+//: (tput "host" "local-file" "remote-file")
+//:   Sends a file by TFTP (needs `net` running). #t, or an error saying
+//:   what failed.
+//:   > (tput "192.168.1.10" "/ram/notes.txt")  =>  #t
+//
 // (tput ip-or-host local-file) or (tput ip-or-host local-file
 // remote-file) -- sends a file via TFTP (needs `run net`). #t on
 // success; any failure raises a real Scheme error, same reasoning as
@@ -1332,6 +1456,12 @@ static ms_val *zapi_read_form(const char *src) {
 // side can drift silently.
 #define ZAPI_PS_MAX 32		// was 16, below the kernel's 32: rows past it went unreported
 
+//@ Processes and messages
+//: (ps)
+//:   The process table, one list per process: (pid base size pc sp
+//:   flags).
+//:   > (map car (ps))  =>  (1 2 3 4 5 9)
+//
 // (ps) -- a snapshot of the process table as a list of lists, one row
 // per live process:
 //
@@ -1390,6 +1520,11 @@ static ms_val *zapi_ps(ms_val *args) {
 
 }
 
+//: (run "name")
+//:   Starts an app by its bare name, found as the kernel finds it (see
+//:   layout.md). Returns the new pid, or #f if it could not start.
+//:   > (run "text")  =>  10
+//
 // (run "name") -- starts a process from a file on the filesystem (bare
 // name, no path or extension: "net", not "/NET.BIN"), exactly as sh.c's
 // own `run` and wm's dock do. Returns the new pid, or #f if it
@@ -1410,6 +1545,10 @@ static ms_val *zapi_run(ms_val *args) {
 	return ms_mk_num(pid);
 }
 
+//: (kill pid)
+//:   Ends a process, any process, with no question asked. #t or #f.
+//:   > (kill 10)  =>  #t
+//
 // (kill pid) -- #t/#f. No ownership check anywhere in this path: any
 // process can kill any other, the same trust model the rest of this
 // kernel has (see z_proc_kill()'s own comment, zeitlos.h).
@@ -1423,6 +1562,11 @@ static ms_val *zapi_kill(ms_val *args) {
 	return ms_mk_bool(z_proc_kill((uint32_t)pid) == Z_OK);
 }
 
+//@ Time and memory
+//: (uptime)
+//:   Timer ticks since boot (about 732 a second; wraps after 68 days).
+//:   > (/ (uptime) 732)  =>  1520.4
+//
 // (uptime) -- ticks since boot, as a number.
 //
 // This replaces the old BUILTIN `uptime` command, which printed a
@@ -1437,6 +1581,11 @@ static ms_val *zapi_uptime(ms_val *args) {
 	return ms_mk_num(z_uptime_ticks());
 }
 
+//: (delay-ms n)
+//:   Waits at least n milliseconds, then returns #t. repl answers
+//:   nothing else while it waits.
+//:   > (delay-ms 500)  =>  #t
+//
 // (delay-ms n) -- busy-waits at least n milliseconds, then returns #t.
 //
 // BLOCKS THIS ENTIRE PROCESS, which on `repl` means every other
@@ -1455,6 +1604,13 @@ static ms_val *zapi_delay_ms(ms_val *args) {
 
 // -- Memory --
 
+//: (free)
+//:   Memory figures as an association list, in bytes: "scheme-cells-used",
+//:   "scheme-cells-total" (cells, not bytes), "scheme-bytes", "c-heap",
+//:   "static", "mem-total", "mem-used", "mem-free", "mem-largest-free",
+//:   and block counts.
+//:   > (cadr (assoc "mem-free" (free)))  =>  412160
+//
 // (free) -- an association list of memory figures, all in BYTES except
 // the two cell counts:
 //
@@ -1534,12 +1690,17 @@ static ms_val *zapi_free(ms_val *args) {
 
 // -- Files (continued) --
 
+//@ Files
+//: (mkdir "path")
+//:   Makes a directory. #t or #f.
+//:   > (mkdir "/ram/notes")  =>  #t
+//
 // (mkdir "path") -- #t/#f. (touch-file "path") -- creates an empty
 // file, #t/#f.
 //
 // `touch-file`, not `touch`: R4RS has no `touch`, but "touch" is a
 // tempting name for a caller to bind themselves, and more importantly
-// the bare-word command syntax (docs/scheme_api.md \S1) means ANY bound
+// the bare-word command syntax (docs/scheme_api.md, "How a line reaches Scheme") means ANY bound
 // callable becomes a typeable command -- so a short, generic name here
 // is a name taken away from the user's own global environment for
 // good. The `-file` suffix also matches the existing read-file/
@@ -1550,11 +1711,19 @@ static ms_val *zapi_mkdir(ms_val *args) {
 	return ms_mk_bool(fs_mkdir(path) != 0);
 }
 
+//: (touch-file "file")
+//:   Makes an empty file. #t or #f.
+//:   > (touch-file "/ram/notes/todo.txt")  =>  #t
 static ms_val *zapi_touch_file(ms_val *args) {
 	const char *path = zapi_arg_str(ms_car(args), "touch-file");
 	return ms_mk_bool(fs_touch(path) != 0);
 }
 
+//: (load "file")
+//:   Reads a file of Scheme and evaluates every expression in it. #t, or
+//:   #f if the file is missing, empty or cannot be read.
+//:   > (load "/data/repl/examples/todo.scm")  =>  #t
+//
 // (load "file.l") -- reads a file and evaluates EVERY form in it
 // against the shared global environment, returning #t (or #f if the
 // file couldn't be read).
@@ -1613,6 +1782,13 @@ static ms_val *zapi_load(ms_val *args) {
 
 }
 
+//@ Output
+//: (print-console x)
+//: (print-console)
+//:   As print, but always to the serial console, not to the terminal
+//:   that ran the command. For tracing. Alone, a new line. #f.
+//:   > (print-console "step 2")  =>  #f
+//
 // (print-console x) -- prints to the SERIAL CONSOLE, deliberately, no
 // matter where this process's stdout is currently pointed.
 //
@@ -1678,6 +1854,12 @@ static ms_val *zapi_print_console(ms_val *args) {
 
 }
 
+//@ Files
+//: (df)
+//:   Card capacity as an association list, in KB: "total-kb", "used-kb",
+//:   "free-kb".
+//:   > (df)  =>  (("total-kb" 7744512) ("used-kb" 20480) ("free-kb" 7724032))
+//
 // (df) -- filesystem capacity, as an association list, all figures in
 // KILOBYTES:
 //
@@ -1739,6 +1921,12 @@ static bool zapi_clock_ok(void) {
 	return z_rtc_available() && z_rtc_valid();
 }
 
+//@ Time and memory
+//: (current-time)
+//:   Seconds since 1970 (Unix time, UTC), or #f if the clock was never
+//:   set.
+//:   > (current-time)  =>  1791810000
+//
 // (current-time) -- seconds since the Unix epoch, UTC, as a number.
 // #f if the clock is unavailable or has never been set.
 //
@@ -1763,6 +1951,13 @@ static ms_val *zapi_current_time(ms_val *args) {
 	return ms_mk_num(z_rtc_seconds());
 }
 
+//: (current-date)
+//: (current-date unix-time)
+//:   The date and time in UTC as (year month day hour minute second
+//:   weekday yearday); month 1-12, weekday 0 for Sunday. #f if the clock
+//:   was never set.
+//:   > (current-date 0)  =>  (1970 1 1 0 0 0 4 0)
+//
 // (current-date) -- the clock broken into calendar fields, UTC:
 //
 //   (year month day hour minute second weekday yearday)
@@ -1828,6 +2023,14 @@ static ms_val *zapi_current_date(ms_val *args) {
 
 // -- registration --
 
+//@ Display
+//: (video-mode)
+//: (video-mode "mode")
+//: (video-mode n)
+//:   The screen's phosphor: "white", "amber", "green" or "paper" (0-3).
+//:   Returns the mode in effect afterwards.
+//:   > (video-mode "amber")  =>  "amber"
+//
 // (video-mode) -- current virtual phosphor mode as a string, one of
 // "white", "amber", "green", "paper".
 //
@@ -1941,6 +2144,12 @@ static const char *zapi_game_mode_name(uint32_t m) {
 	}
 }
 
+//: (game-mode)
+//: (game-mode "mode")
+//: (game-mode n)
+//:   Game mode: "off", "on" or "wrap" (0-2), shown as a 320x240 view of
+//:   the framebuffer. Returns the mode in effect. Alt+Esc leaves it.
+//:   > (game-mode "on")  =>  "on"
 static ms_val *zapi_game_mode(ms_val *args) {
 
 	if (!ms_is_nil(args)) {
@@ -2000,6 +2209,11 @@ static ms_val *zapi_game_mode(ms_val *args) {
 
 }
 
+//: (game-view)
+//: (game-view x y)
+//:   The game-mode view's top left, in framebuffer pixels, as (x y).
+//:   > (game-view 100 50)  =>  (100 50)
+//
 // (game-view)       -- the viewport origin, as a list (x y)
 // (game-view x y)   -- move it, returning the origin afterwards
 //
@@ -2060,6 +2274,14 @@ static z_color_layout_t zapi_color_layout(void) {
 	return l;
 }
 
+//: (color-mode)
+//: (color-mode n)
+//: (color-mode 4 "layout")
+//:   Game-mode colour: #f when off, else 2, 4, 8 or 16 colours; 0 or #f
+//:   turns it off. A 4-colour layout is "below" (default) or "right".
+//:   Returns the state in effect.
+//:   > (color-mode 16)  =>  16
+//
 // (color-mode)            -- #f if colour is off, else the number of
 //                            colours: 2, 4, 8 or 16
 // (color-mode 16)         -- set it: 0 or #f is off, 2/4/8/16 on
@@ -2121,6 +2343,12 @@ static ms_val *zapi_color_mode(ms_val *args) {
 
 }
 
+//: (palette i r g b)
+//: (palette "name")
+//:   Sets colour i (0-15) to r g b (each 0-15), or the whole palette to
+//:   "c64" or "ega" (the power-on colours). #t.
+//:   > (palette 1 15 0 0)  =>  #t
+//
 // (palette i r g b)  -- palette entry i (0-15), each channel 0-15
 // (palette "c64")    -- a whole palette: "c64" or "ega" (the power-on
 //                       colours)
@@ -2172,6 +2400,13 @@ static ms_val *zapi_palette(ms_val *args) {
 
 }
 
+//: (composite-color)
+//: (composite-color on)
+//:   On a composite colour board: #t if the output is in colour, #f for
+//:   black and white (only #f turns colour off). Returns the state in
+//:   effect.
+//:   > (composite-color #f)  =>  #f
+//
 // (composite-color)     -- on a composite colour board: #t if the
 //                          output is in colour, #f if black and white
 // (composite-color #f)  -- black and white; #t for colour again
@@ -2188,6 +2423,11 @@ static ms_val *zapi_composite_color(ms_val *args) {
 	return ms_mk_bool(!z_cvbs_mono());
 }
 
+//: (color-fill x y width height c)
+//:   Fills a rectangle of the framebuffer with colour c (0-15), in
+//:   game-mode colour. #t.
+//:   > (color-fill 0 0 320 240 6)  =>  #t
+//
 // (color-fill x y w h c) -- a rectangle in colour c (0-15), in
 // framebuffer coordinates of plane 0 (the viewport's), through the
 // current layout: every plane set or cleared to match c. #t.
@@ -2216,6 +2456,11 @@ static ms_val *zapi_color_fill(ms_val *args) {
 
 }
 
+//: (game-frame)
+//:   The display's frame counter, 0-65535; wraps. Compare for change,
+//:   not with >.
+//:   > (game-frame)  =>  4711
+//
 // (game-frame) -- the display's own frame counter, 0..65535.
 //
 // Wraps every ~18 minutes at 60Hz. Compare for inequality or subtract;
@@ -2225,6 +2470,10 @@ static ms_val *zapi_game_frame(ms_val *args) {
 	return ms_mk_num(z_game_frame());
 }
 
+//: (game-wait)
+//:   Waits for the next frame to start, then returns #t.
+//:   > (game-wait)  =>  #t
+//
 // (game-wait) -- block until the next frame boundary, returning #t.
 //
 // BLOCKS THIS ENTIRE PROCESS for up to 16.7ms, with the same
@@ -2239,6 +2488,11 @@ static ms_val *zapi_game_wait(ms_val *args) {
 	return ms_mk_bool(true);
 }
 
+//@ Gamepads
+//: (gamepad-count)
+//:   How many USB gamepads are attached, 0-2.
+//:   > (gamepad-count)  =>  1
+//
 // (gamepad-count) -- how many USB gamepads are attached right now, 0-2.
 //
 // Reads the hardware every call rather than caching, so plugging a pad
@@ -2249,6 +2503,12 @@ static ms_val *zapi_gamepad_count(ms_val *args) {
 	return ms_mk_num(z_pad_count());
 }
 
+//: (gamepad)
+//: (gamepad n)
+//:   The buttons held on pad n (default 0), as a list of left right up
+//:   down a b x y select start; #f if there is no such pad.
+//:   > (gamepad)  =>  (right a)
+//
 // (gamepad)   -- state of pad 0
 // (gamepad n) -- state of pad n (0 or 1)
 //
@@ -2372,6 +2632,11 @@ static void zapi_gpio_check_port(int port, const char *who) {
 	zapi_gpio_check(port, 0, who);
 }
 
+//@ GPIO and LEDs
+//: (gpio-ports)
+//:   How many GPIO ports this board has; 0 means no GPIO.
+//:   > (gpio-ports)  =>  2
+//
 // (gpio-ports) -- how many GPIO ports this bitstream has pins for.
 //
 // 0 on a board without GPIO, which makes this the presence test too:
@@ -2382,6 +2647,12 @@ static ms_val *zapi_gpio_ports(ms_val *args) {
 	return ms_mk_num((double)z_gpio_port_count());
 }
 
+//: (gpio-dir port)
+//: (gpio-dir port mask)
+//:   A port's direction register, a bit per pin, 1 = output. Returns
+//:   what it reads back.
+//:   > (gpio-dir 0 15)  =>  15
+//
 // (gpio-dir p)        -- the DIR register, 1 bit per pin, 1 = output
 // (gpio-dir p mask)   -- set it, returning what it reads back as
 static ms_val *zapi_gpio_dir(ms_val *args) {
@@ -2408,6 +2679,12 @@ static ms_val *zapi_gpio_dir(ms_val *args) {
 
 }
 
+//: (gpio-out port)
+//: (gpio-out port value)
+//:   A port's output register (not the pins: see gpio-in). Returns what
+//:   it reads back.
+//:   > (gpio-out 0 5)  =>  5
+//
 // (gpio-out p)       -- the OUT register
 // (gpio-out p v)     -- set it, returning what it reads back as
 //
@@ -2436,6 +2713,11 @@ static ms_val *zapi_gpio_out(ms_val *args) {
 
 }
 
+//: (gpio-in port)
+//:   A port's eight pins, as a number. 255 with nothing connected (each
+//:   pin has a pull-up).
+//:   > (gpio-in 0)  =>  255
+//
 // (gpio-in p) -- the pins, all eight, as a number.
 //
 // Read-only, unlike the two above: there is no writing to a pin.
@@ -2455,6 +2737,12 @@ static ms_val *zapi_gpio_in(ms_val *args) {
 
 }
 
+//: (gpio-mode port pin)
+//: (gpio-mode port pin "mode")
+//:   A pin's mode: "in" or "out"; set "in", "out" or "od" (open drain,
+//:   which then reads as "in").
+//:   > (gpio-mode 0 3 "out")  =>  "out"
+//
 // (gpio-mode p n)          -- "in" or "out"
 // (gpio-mode p n "out")    -- set it; also "in" and "od"
 //
@@ -2502,6 +2790,10 @@ static ms_val *zapi_gpio_mode(ms_val *args) {
 
 }
 
+//: (gpio-get port pin)
+//:   A pin's level, #t or #f.
+//:   > (gpio-get 0 3)  =>  #t
+//
 // (gpio-get p n) -- the pin, as #t or #f.
 //
 // Reads the PIN, not OUT: on an output this is normally what is being
@@ -2524,6 +2816,12 @@ static ms_val *zapi_gpio_get(ms_val *args) {
 
 }
 
+//: (gpio-set port pin level)
+//:   Sets a pin's output to #t or #f (or 1 or 0); an input pin keeps it
+//:   for when it is an output.
+//:   Returns the pin's level afterwards.
+//:   > (gpio-set 0 3 #f)  =>  #f
+//
 // (gpio-set p n v) -- drive a pin. Returns the pin afterwards.
 //
 // Does NOT change the mode. A pin still configured as an input will
@@ -2561,6 +2859,10 @@ static ms_val *zapi_gpio_set(ms_val *args) {
 
 }
 
+//: (gpio-toggle port pin)
+//:   Flips a pin's output. Returns the pin's level afterwards.
+//:   > (gpio-toggle 0 3)  =>  #t
+//
 // (gpio-toggle p n) -- flip OUT, returning the pin afterwards.
 static ms_val *zapi_gpio_toggle(ms_val *args) {
 
@@ -2581,6 +2883,11 @@ static ms_val *zapi_gpio_toggle(ms_val *args) {
 
 }
 
+//: (gpio-od port pin level)
+//:   Open-drain write: #f (or 0) pulls the line low, #t lets it go.
+//:   Returns the line's level afterwards.
+//:   > (gpio-od 0 3 #t)  =>  #t
+//
 // (gpio-od p n v) -- open-drain write. Returns the pin afterwards.
 //
 // `v` is THE LEVEL THE LINE ENDS UP AT, not a direction: #f pulls it
@@ -2622,6 +2929,11 @@ static ms_val *zapi_gpio_od(ms_val *args) {
 
 }
 
+//: (led)
+//: (led on)
+//:   The board LED, #t or #f.
+//:   > (led #t)  =>  #t
+//
 // (led)    -- the board LED, as #t/#f
 // (led v)  -- set it
 //
@@ -2638,6 +2950,11 @@ static ms_val *zapi_led(ms_val *args) {
 
 }
 
+//: (leds)
+//: (leds n)
+//:   The debug LED bar, as a number (on boards that have one).
+//:   > (leds 170)  =>  170
+//
 // (leds)   -- the `LED_DEBUG LED bar, as a number
 // (leds v) -- set it
 //
@@ -2784,6 +3101,16 @@ static ms_val *zapi_i2c_result(int rv) {
 	return ms_mk_bool(rv == Z_I2C_OK);
 }
 
+//@ I2C and SPI
+//: (i2c-init port scl-pin sda-pin)
+//: (i2c-init port scl-pin sda-pin khz)
+//: (i2c-init "name")
+//:   An I2C bus on two GPIO pins (100kHz by default), or by name: a
+//:   bench bus, or "pmod1" for a PMOD port's pins 1-2. Returns a bus
+//:   number, or #f: the lines are not both high (try i2c-recover), or
+//:   no such bus (see i2c-error).
+//:   > (define bus (i2c-init 0 0 1))
+//
 // (i2c-init port scl-pin sda-pin)        -- 100kHz
 // (i2c-init port scl-pin sda-pin khz)
 //
@@ -2852,6 +3179,12 @@ static ms_val *zapi_i2c_init(ms_val *args) {
 
 }
 
+//: (i2c-error)
+//:   Why the last I2C call failed: "ok", "nack" (nobody answered),
+//:   "timeout" (a line stuck low: pull-ups?), "busy", or for a named
+//:   bus "no such bus" or "no bench running".
+//:   > (i2c-error)  =>  "nack"
+//
 // (i2c-error) -- why the last i2c call failed: "ok", "nack",
 // "timeout" or "busy".
 //
@@ -2868,6 +3201,10 @@ static ms_val *zapi_i2c_error(ms_val *args) {
 	return ms_mk_str(s);
 }
 
+//: (i2c-scan bus)
+//:   The 7-bit addresses that answer, as a list.
+//:   > (i2c-scan bus)  =>  (60 104)
+//
 // (i2c-scan bus) -- addresses that answered, as a list.
 static ms_val *zapi_i2c_scan(ms_val *args) {
 
@@ -2893,6 +3230,10 @@ static ms_val *zapi_i2c_scan(ms_val *args) {
 
 }
 
+//: (i2c-recover bus)
+//:   Clocks the bus to free a device holding SDA low. #t or #f.
+//:   > (i2c-recover bus)  =>  #t
+//
 // (i2c-recover bus) -- unwedge a slave stuck holding SDA down.
 static ms_val *zapi_i2c_recover(ms_val *args) {
 	z_i2cx_t *b;
@@ -2902,6 +3243,12 @@ static ms_val *zapi_i2c_recover(ms_val *args) {
 	return zapi_i2c_result(b->bench ? Z_I2C_OK : z_i2c_recover(&b->pins));
 }
 
+//: (i2c-write bus addr data)
+//: (i2c-write bus addr)
+//:   Writes a list of bytes or a string (at most 32) to the device at a
+//:   7-bit address; with no data, just the address. #t or #f.
+//:   > (i2c-write bus 60 '(0 175))  =>  #t
+//
 // (i2c-write bus addr data) -- data is a list of bytes or a string.
 // `addr` is the 7-BIT address (0x3c, not 0x78) as everywhere else.
 static ms_val *zapi_i2c_write(ms_val *args) {
@@ -2926,6 +3273,11 @@ static ms_val *zapi_i2c_write(ms_val *args) {
 
 }
 
+//: (i2c-read bus addr n)
+//: (i2c-read bus addr)
+//:   Reads n bytes (1-32, default 1), as a list; #f on failure.
+//:   > (i2c-read bus 104 2)  =>  (12 200)
+//
 // (i2c-read bus addr n) -- a list of n bytes, or #f.
 static ms_val *zapi_i2c_read(ms_val *args) {
 
@@ -2956,6 +3308,11 @@ static ms_val *zapi_i2c_read(ms_val *args) {
 
 }
 
+//: (i2c-reg bus addr reg)
+//: (i2c-reg bus addr reg value)
+//:   Reads one register (a byte, or #f), or writes it (#t or #f).
+//:   > (i2c-reg bus 104 117)  =>  104
+//
 // (i2c-reg bus addr reg)     -- read one register, or #f
 // (i2c-reg bus addr reg val) -- write it, returning #t or #f
 //
@@ -3009,6 +3366,11 @@ static ms_val *zapi_i2c_reg(ms_val *args) {
 
 }
 
+//: (i2c-khz bus)
+//:   The speed the last transfer reached, in kHz (0 on a bench bus).
+//:   Far below the asked speed means weak pull-ups.
+//:   > (i2c-khz bus)  =>  92
+//
 // (i2c-khz bus) -- what the bus actually managed on the last transfer.
 //
 // Usually below what was asked for, and how far below is diagnostic:
@@ -3023,6 +3385,15 @@ static ms_val *zapi_i2c_khz(ms_val *args) {
 	return ms_mk_num(b->bench ? 0.0 : (double)z_i2c_measured_khz(&b->pins));
 }
 
+//: (spi-init port sck mosi)
+//: (spi-init port sck mosi miso)
+//: (spi-init port sck mosi miso cs)
+//: (spi-init port sck mosi miso cs mode)
+//: (spi-init port sck mosi miso cs mode khz)
+//:   An SPI bus on GPIO pins (mode 0, 1MHz by default); a miso or cs
+//:   left out, or -1, is a pin the device lacks. Returns a bus number.
+//:   > (define spi (spi-init 0 0 1 2 3))
+//
 // (spi-init port sck mosi miso cs)             -- mode 0, 1MHz
 // (spi-init port sck mosi miso cs mode)
 // (spi-init port sck mosi miso cs mode khz)
@@ -3083,6 +3454,11 @@ static ms_val *zapi_spi_init(ms_val *args) {
 
 }
 
+//: (spi-select bus on)
+//:   Asserts (#t) or releases (#f or 0) chip select. Returns #t or #f,
+//:   as asserted.
+//:   > (spi-select spi #t)  =>  #t
+//
 // (spi-select bus v) -- assert or release CS. A no-op with no CS pin.
 //
 // Separate from (spi-xfer) because almost every real device wants
@@ -3105,6 +3481,12 @@ static ms_val *zapi_spi_select(ms_val *args) {
 
 }
 
+//: (spi-xfer bus data)
+//: (spi-xfer bus n)
+//:   Sends a list of bytes (or a string) and returns the bytes received,
+//:   as many as were sent. With a count, sends n 255s.
+//:   > (spi-xfer spi '(159 255 255 255))  =>  (255 239 64 24)
+//
 // (spi-xfer bus data) -- send bytes and return what came back.
 //
 // SPI is full duplex: every byte out produces a byte in, and this
@@ -3164,6 +3546,11 @@ static ms_val *zapi_spi_xfer(ms_val *args) {
 // system exists. A Scheme one-liner that changed its baud rate would
 // take the machine's only diagnostic channel with it.
 
+//@ UART1
+//: (uart1?)
+//:   #t if this board has a general-purpose second UART.
+//:   > (uart1?)  =>  #t
+//
 // (uart1?) -- is there a general-purpose UART1 in this bitstream?
 //
 // #f on a ULX3S even though it has a UART1, because there that UART is
@@ -3174,6 +3561,12 @@ static ms_val *zapi_uart1_p(ms_val *args) {
 	return ms_mk_bool(z_uart1_present());
 }
 
+//: (uart1-open)
+//: (uart1-open baud)
+//:   Opens UART1 at 8N1, 115200 by default. #f if there is no UART1 or
+//:   the rate is more than 3% off at this clock.
+//:   > (uart1-open 9600)  =>  #t
+//
 // (uart1-open)       -- 115200, 8N1
 // (uart1-open baud)
 //
@@ -3194,6 +3587,10 @@ static ms_val *zapi_uart1_open(ms_val *args) {
 
 }
 
+//: (uart1-baud-error baud)
+//:   How far off a baud rate would be, in percent.
+//:   > (uart1-baud-error 921600)  =>  8.5
+//
 // (uart1-baud-error baud) -- how far off `baud` would be, in percent.
 //
 // A real number, so 8.5 means 8.5%. Anything over 3 is refused by
@@ -3218,6 +3615,10 @@ static ms_val *zapi_uart1_baud_error(ms_val *args) {
 
 }
 
+//: (uart1-close)
+//:   Closes UART1. #t.
+//:   > (uart1-close)  =>  #t
+//
 // (uart1-close) -- stop. Leaves the divisor alone, so reopening at the
 // same rate costs nothing.
 static ms_val *zapi_uart1_close(ms_val *args) {
@@ -3226,6 +3627,11 @@ static ms_val *zapi_uart1_close(ms_val *args) {
 	return ms_mk_bool(true);
 }
 
+//: (uart1-write data)
+//:   Sends a string or a list of bytes; returns how many went. Waits
+//:   until they are all taken. An error if there is no UART1.
+//:   > (uart1-write "hello")  =>  5
+//
 // (uart1-write "text") or (uart1-write '(1 2 3)) -- returns how many
 // bytes went out.
 //
@@ -3251,6 +3657,12 @@ static ms_val *zapi_uart1_write(ms_val *args) {
 
 }
 
+//: (uart1-read)
+//: (uart1-read n)
+//:   The bytes waiting (up to n, 1-32, default 32), as a list; () if
+//:   none. Never waits. An error if there is no UART1.
+//:   > (list->str (uart1-read))  =>  "OK"
+//
 // (uart1-read)    -- up to 32 bytes, as a list. () if nothing waiting.
 // (uart1-read n)
 //
@@ -3280,12 +3692,21 @@ static ms_val *zapi_uart1_read(ms_val *args) {
 
 }
 
+//: (uart1-ready?)
+//:   #t if at least one byte is waiting.
+//:   > (uart1-ready?)  =>  #f
+//
 // (uart1-ready?) -- is there at least one byte waiting?
 static ms_val *zapi_uart1_ready(ms_val *args) {
 	(void)args;
 	return ms_mk_bool(z_uart1_rx_ready());
 }
 
+//: (uart1-status)
+//:   Errors since the last call, as a list of overrun, framing, parity
+//:   and break; () if none.
+//:   > (uart1-status)  =>  ()
+//
 // (uart1-status) -- errors since the last call, as a list of symbols:
 // (overrun), (framing), (parity), (break), or () if all is well.
 //
@@ -3334,6 +3755,13 @@ static ms_val *zapi_uart1_status(ms_val *args) {
 
 // -- Randomness --
 
+//@ Random numbers
+//: (random)
+//: (random n)
+//:   A real from 0 up to 1, or an integer from 0 to n-1 (0 if n is not
+//:   positive), from the system's secure generator.
+//:   > (random 6)  =>  4
+//
 // (random)    -- a real in [0, 1)
 // (random n)  -- an integer in [0, n), for a positive integer n
 //
@@ -3367,6 +3795,10 @@ static ms_val *zapi_random(ms_val *args) {
 
 }
 
+//: (random-hex n)
+//:   n random bytes (at most 256) as 2n hex digits.
+//:   > (random-hex 4)  =>  "9f03c2e1"
+//
 // (random-hex n) -- n random BYTES as a 2n-character lowercase hex
 // string.
 //
@@ -3409,6 +3841,11 @@ static ms_val *zapi_random_hex(ms_val *args) {
 
 }
 
+//: (random-secure?)
+//:   #t if the generator is seeded by working hardware; check before
+//:   making keys.
+//:   > (random-secure?)  =>  #t
+//
 // (random-secure?) -- #t if the generator is seeded from a present and
 // healthy hardware source, #f if it is running on the fallback.
 //
@@ -3423,6 +3860,11 @@ static ms_val *zapi_random_secure(ms_val *args) {
 	return ms_mk_bool(z_rng_secure());
 }
 
+//: (random-stir "text")
+//:   Mixes a string into the generator. Never makes it worse, and never
+//:   makes random-secure? true. #t.
+//:   > (random-stir "keypress timings")  =>  #t
+//
 // (random-stir s) -- mix a string into the entropy pool.
 //
 // For a program that has a source of unpredictability nothing else can
@@ -3438,7 +3880,80 @@ static ms_val *zapi_random_stir(ms_val *args) {
 	return ms_mk_bool(true);
 }
 
+// -- Help: looking things up in /docs/zapi.txt --
+//
+// The reference is a core file in flash (CORE_FILES, docs/flash_apps.md),
+// made by tools/gen_zapi.py from this file's `//:` entries and
+// zapi_scheme.txt -- so it lists exactly what this build of repl has.
+// The scanning is in zapi_doc.c, testable on the host.
+
+#define ZAPI_DOC_FILE Z_PATH_DOCS_ZAPI
+
+static int zapi_doc_read(void *ctx, void *buf, int max) {
+	return fs_read_chunk(*(int *)ctx, buf, max);
+}
+
+// Opens the reference, or says why not. -1 if it cannot.
+static int zapi_doc_open(void) {
+	int h = fs_open_read(ZAPI_DOC_FILE);
+	if (h < 0) printf("help: %s is missing\n", ZAPI_DOC_FILE);
+	return h;
+}
+
+//@ Help
+//: (help "name")
+//: (help)
+//:   Shows a procedure's entry: how to call it, what it does, an
+//:   example; #f if there is none. At the prompt, help name does the
+//:   same. Alone, says how to look things up.
+//:   > (help "ls")  =>  #t
+//
+// #f, with a word about apropos, for a name with no entry. With no
+// argument, the same pointer as repl's own `help` builtin gives.
+static ms_val *zapi_help(ms_val *args) {
+
+	if (ms_is_nil(args)) {
+		printf("(help \"name\") for one procedure, (apropos \"text\") "
+			"to search, page %s for all of them\n", ZAPI_DOC_FILE);
+		return ms_mk_bool(true);
+	}
+
+	const char *name = zapi_arg_str(ms_car(args), "help");
+
+	int h = zapi_doc_open();
+	if (h < 0) return ms_mk_bool(false);
+	int n = zdoc_help(name, zapi_doc_read, &h);
+	fs_close_handle(h);
+
+	if (!n) printf("help: no entry for %s -- try (apropos \"%s\")\n",
+		name, name);
+	return ms_mk_bool(n > 0);
+
+}
+
+//: (apropos "text")
+//: (apropos)
+//:   Lists the procedures whose name or description contains the text,
+//:   ignoring case, each with the first line of its description.
+//:   Returns how many there are. Alone, or with "", lists them all.
+//:   > (apropos "file")  =>  9
+static ms_val *zapi_apropos(ms_val *args) {
+
+	const char *text = ms_is_nil(args) ? ""
+		: zapi_arg_str(ms_car(args), "apropos");
+
+	int h = zapi_doc_open();
+	if (h < 0) return ms_mk_bool(false);
+	int n = zdoc_apropos(text, zapi_doc_read, &h);
+	fs_close_handle(h);
+
+	return ms_mk_num(n);
+
+}
+
 void zapi_register(void) {
+	ms_def_builtin("help", zapi_help);
+	ms_def_builtin("apropos", zapi_apropos);
 	ms_def_builtin("ls", zapi_ls);
 	ms_def_builtin("file-size", zapi_file_size);
 	ms_def_builtin("read-file", zapi_read_file);
@@ -3452,6 +3967,18 @@ void zapi_register(void) {
 	ms_def_builtin("field-text", zapi_field_text);
 	ms_def_builtin("field-set!", zapi_field_set);
 	ms_def_builtin("%win-mark", zapi_win_mark);
+	//@ Windows and apps
+	//: (win-on w handler)
+	//:   Makes window w an app's: handler is called with each event, a
+	//:   list: (redraw), (key k), (click x y), (button n), (enter n) or
+	//:   (close). repl.md shows how.
+	//:   > (win-on w (lambda (e) (if (eq? (car e) 'redraw) (show))))
+	//
+	//@ Output
+	//: (newline)
+	//:   Starts a new line of output.
+	//:   > (begin (display "a") (newline) (display "b"))
+	//
 	// The Scheme half of win-on: the handlers live in a list in the
 	// global environment, which is what keeps them from being
 	// collected, and %win-event is what repl.c calls with an event.
@@ -3484,6 +4011,10 @@ void zapi_register(void) {
 	// already is, rather than a second implementation: code written
 	// against either name works, and there's no behavior to keep in
 	// sync because there's only one function.
+	//@ Files
+	//: (file->str "file")
+	//:   The same as read-file.
+	//:   > (file->str "/ram/a.txt")  =>  "hi"
 	ms_def_builtin("file->str", zapi_read_file);
 	ms_def_builtin("ps", zapi_ps);
 	ms_def_builtin("run", zapi_run);

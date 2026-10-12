@@ -51,6 +51,9 @@
 #define Z_DIR_DATA                "/data"
 
 #define Z_DIR_DOCS                "/docs"
+/* The Scheme API reference, in flash (CORE_FILES): repl's (help) and
+ * (apropos) read it (tools/gen_zapi.py, docs/scheme_api.md). */
+#define Z_PATH_DOCS_ZAPI          "/docs/zapi.txt"
 
 /* The person's own files. Empty on a new card; the first directory a
  * save or open dialog shows, and where a shell starts. */

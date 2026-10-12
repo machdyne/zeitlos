@@ -73,6 +73,7 @@
 					// Scheme procedure, see zapi.c)
 
 #include "../../common/zauth.h"	// `lock`: docs/security.md
+#include "../../common/zpaths.h"	// Z_PATH_DOCS_ZAPI, in HELP_TEXT
 #include "../../common/zeitlos.h"
 #include "../../common/zport.h"
 #include "../../common/zsoc.h"	// Z_TICK_HZ, for the idle wait in main()
@@ -285,7 +286,7 @@ static bool form_complete(const char *s, void *user) {
 static const char HELP_TEXT[] =
 	"builtins: help ping echo te <f> page <f> scheme <e> lock quit\r\n"
 	"connect:  port <n> serial [baud] usbserial telnet <h> ssh <h>  (F11)\r\n"
-	"scheme:   ls ps free uptime run kill load mkdir delay-ms ...\r\n"
+	"scheme:   help <name>  apropos <text>  page " Z_PATH_DOCS_ZAPI "\r\n"
 	"F12 leaves any port; bare word = call, so `ps` is (ps)";
 
 // build-time check -- see HELP_TEXT's own comment. A negative array
@@ -559,7 +560,7 @@ static void window_event(z_msg_t *msg) {
 
 }
 
-// -- bare-word command syntax (docs/scheme_api.md \S1) --
+// -- bare-word command syntax (docs/scheme_api.md, "How a line reaches Scheme") --
 //
 // translates e.g. "tget 1.2.3.4 firmware.bin" into
 // `(tget "1.2.3.4" "firmware.bin")` -- but only actually attempted by
@@ -941,12 +942,12 @@ static bool dispatch_line(const char *line, char *out, uint32_t out_cap,
 	}
 
 	// no builtin matched -- try bare-word command syntax
-	// (docs/scheme_api.md \S1) before falling back to evaluating the
+	// (docs/scheme_api.md, "How a line reaches Scheme") before falling back to evaluating the
 	// line exactly as typed: e.g. "ls" -> "(ls)",
 	// `tget 1.2.3.4 f` -> `(tget "1.2.3.4" "f")` -- but ONLY if the
 	// first word is CURRENTLY bound to something callable
 	// (ms_is_callable(), sw/ext/ms/ms.c) -- deliberately no separate
-	// curated keyword list to maintain (docs/scheme_api.md \S1c: "any
+	// curated keyword list to maintain (docs/scheme_api.md, "How a line reaches Scheme": "any
 	// bound procedure", not an allow-list). An unbound first word, or
 	// one bound to something non-callable (a plain variable), falls
 	// through completely unchanged -- eval_scheme() sees exactly
