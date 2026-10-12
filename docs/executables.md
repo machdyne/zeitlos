@@ -25,10 +25,12 @@ file names in the kernel.
 offset  size  field
 0       4     magic    "ZEXE"
 4       2     version  currently 1
-6       2     flags    bits 3:0 stack size code; bit 15 driver; 14:4 must be 0
+6       2     flags    bits 3:0 stack size code; bit 8 compressed;
+                       bit 15 driver; the rest must be 0
 8       4     bss_size bytes to allocate and zero after data
-12      4     entry    reserved; 0 means "base address"
-16      ...   data     the loadable image, verbatim
+12      4     entry    0; compressed: the data's size, unpacked
+16      ...   data     the loadable image, verbatim -- or compressed,
+                       as an LZ4 block
 ```
 
 `.bss` becomes a **number** instead of a region of zeros -- the loader
@@ -36,7 +38,7 @@ offset  size  field
 
 `data_size` is deliberately not stored: it is `file_size - 16`, and the
 filesystem already knows the file size. One fewer field that can
-disagree with reality.
+disagree with reality. A compressed file is the exception (below).
 
 **Header at the start**, not the end. Both were considered; the loader
 needs `bss_size` *before* it allocates, so a trailing header would mean
@@ -153,6 +155,89 @@ if it ever has to. An app sets it with `APP_DRIVER = 1` in its Makefile
 (`mkexec.py --driver`). A kernel from before it refuses the binary --
 "unknown ZEXE flags" -- rather than run a driver without its powers.
 
+## Compressed executables
+
+Bit 8 of `flags` (`Z_EXEC_FLAG_COMPRESSED`): the data after the header
+is an **LZ4 block** ([lz4_Block_format.md](https://github.com/lz4/lz4/blob/dev/doc/lz4_Block_format.md)),
+and `entry` holds the image's size unpacked -- the file's size no
+longer says it, and the loader needs it before it allocates. The header
+is not compressed, so the first 16 bytes still tell a loader everything
+(`z_exec_parse()` reports the unpacked size as `data_size`, and
+`stored_size` and `compressed` besides): sizing a process, the stack
+code, the driver flag are all as before.
+
+**Who writes them.** `tools/mkzar.py`, for the core apps in the flash
+archive -- every one but those named in `CORE_STORE` (`wm` and `net`, for
+the time they took to unpack at boot), anything
+that is not a plain ZEXE file, and anything that would not get smaller.
+Its compressor (`lz4_compress()`, hash chains and lazy matching) packs
+about as small as lz4's own high-compression mode, keeps the format's
+end rules so any LZ4 decoder reads its blocks, and every block is
+unpacked again before it is stored. A core app's `.bin` in the tree
+stays plain, and so do the binaries `tftp-dist` and `nfs-dist` publish,
+for now.
+
+**Who reads them.** Every ZEXE loader unpacks:
+
+| loader | from | input |
+|---|---|---|
+| `z_zar_load_exec()` (`sw/os/zar.c`) | the flash archive | the flash window, a word per read |
+| `load_card()` (`sw/os/kfs.c`) | any file: card, `/usb`, `/ram`, `/nfs` | `zfs_read()` |
+| `machine_load_bin()` (`sim/machine.c`) | a file on the host | memory |
+
+So a compressed binary copied out of flash (`/apps/wm`, say) onto the
+card still runs. A load that does not unpack to exactly its size --
+truncated, or with a length or offset that points outside the image --
+is refused, and the process is not started. LZ4 carries no checksum: a
+changed literal byte is not caught (nor was it before compression).
+
+**The decoder** is `sw/common/zexec_lz4.c`, about 1.5KB of code
+(compiled `-O2` in a `-Os` kernel) and 280 bytes of state (one copy in
+the kernel, taken in turn, since a load can wait on `fs` mid-stream
+while another starts). It writes straight into the new process's memory
+and reads its history from there, so it needs no window; a long literal
+run is filled straight from the source into the image. Its cost is per
+*sequence* more than per byte -- `wm` is 9,777 sequences of 4 literal
+bytes and a 7-byte match on average -- so nearly every one takes a fast
+path: no length bytes, the whole sequence already in the buffer, read
+with plain pointer steps and no refill checks. About 9 instructions a
+byte in `sim/` (from 12 without it).
+
+**Why LZ4, and not DEFLATE.** DEFLATE came first: smaller (57% of the
+images, to LZ4's 68%), but measured on hardware `wm` took **1,251ms**
+to load. A PicoRV32 at 48MHz runs about 7 million instructions a second
+(0.14 IPC, [dcache.md](dcache.md)), and DEFLATE cost about 41 a byte
+(Huffman decoding, table lookups; measured in `sim/`). LZ4 has no
+entropy coding -- byte-aligned literal runs and back-references -- and
+cost 12 a byte at first: `wm` in **646ms**. With the fast path, 9. The
+DEFLATE decoder (`zinflate.c`) stays where it was, for the web client
+and PNG.
+
+**What it saves**: a compressed app takes 68% of its size in flash. With
+`wm` and `net` stored as they are, the archive's apps went from 615KB to
+507KB (421KB with all of them compressed; `flash_apps.md`, "How much
+fits").
+
+**What it costs**: CPU time at every load. `init` and `run` print every
+load's time, the unpacking's share of it, and how much of that the
+loading process actually had the CPU for -- `init: usb loaded in 127 ms
+(125 ms unpacking, 125 ms of it on the CPU)`; a CPU figure well under
+the unpacking one says the other processes took the difference. That is what `CORE_STORE` -- an app kept
+uncompressed -- is decided by.
+
+**Finding the program once.** A launch asked the kernel's resolver
+three times in a row -- for the size, for where it is from, for the
+load -- and each was one or two lookups through `fs` (`/nfs/apps`, then
+the card's `/apps`). The resolver now keeps its last answer for half a
+second (`exec_resolve_kept()`, `sw/os/kfs.c`), so the second and third
+are free; the load still refuses a file that does not match the sizes
+it was given.
+
+**`entry`** was reserved for a start address other than the image's
+first byte. Nothing ever used it: every app is linked at and started
+from 0x80000000. Should one ever be needed, it is a new header version,
+which today's loaders refuse.
+
 ## Backward compatibility
 
 A file with no `ZEXE` magic is treated as the old raw format:
@@ -175,7 +260,11 @@ true: a new version would be refused by that loader.
 
 The flash archive does not have its own copy of this field. A ZAR entry
 is the whole ZEXE file (`sw/os/zar.h`), so `wm`, `net`, `term`,
-`console` and `cron` carry whatever `mkexec.py` wrote.
+`console` and `cron` carry whatever `mkexec.py` wrote -- compressed by
+`mkzar.py`, the header otherwise as it was.
+
+A compressed binary is refused by a kernel from before bit 8 ("unknown
+ZEXE flags"), rather than run as compressed bytes.
 
 ## Pieces
 
@@ -186,6 +275,8 @@ is the whole ZEXE file (`sw/os/zar.h`), so `wm`, `net`, `term`,
 | `fs_exec_info()` | reads and parses the header (`sw/os/fs/fs.c`) |
 | `fs_load_exec()` | loads data, `memset()`s bss |
 | `z_exec_stack()` | size code to bytes, against a default and a cap (`sw/common/zexec.h`) |
+| `sw/common/zexec_lz4.c` | unpacks a compressed image into the process's memory |
+| `tools/mkzar.py` | compresses the core apps for the flash archive |
 | `k_proc_create_exec()` | the launch: the cap, the refusal and its message (`sw/os/kernel.c`) |
 
 Split into inspect-then-load rather than one call because the caller

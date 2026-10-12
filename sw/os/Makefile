@@ -90,7 +90,7 @@ LDSCRIPT = ../common/riscv-os.ld
 OBJS = kernel.o kruntime.o mem.o zar.o \
 	kblk.o kfs.o zfsc.o kusb.o zusbc.o \
 	uart.o hid.o rescue.o sh.o xfer.o xmodem.o ui.o msg.o pidreg.o fsapi.o flashapi.o kvstore.o kvlog.o auth.o authcore.o zsha256.o jumpapi.o zjump.o procapi.o zobj.o zstream.o zdns.o zsoc.o zgpio.o \
-	cfg.o zcfg.o zfont_data.o zfmt.o ktrace.o
+	cfg.o zcfg.o zfont_data.o zfmt.o ktrace.o zexec_lz4.o
 
 # kernel.o's recipe below builds every object in one go (they're not
 # independent processes, and mostly don't need to be) -- but for
@@ -166,6 +166,13 @@ kernel.o: $(KSRCS)
 # and docs/build.md, "Integer-only printf (ZFMT)".
 zfmt.o: ../common/zfmt.c
 	$(CC) $(CFLAGS) -c ../common/zfmt.c -o zfmt.o
+
+# Compressed executables (ZEXE bit 8): the decoder every loader shares,
+# from flash (zar.c) and from a file (kfs.c). docs/executables.md.
+# -O2 (after CFLAGS' -Os, so it wins): the decoder is the load time of
+# every compressed core app, 11% fewer instructions for about 300 bytes.
+zexec_lz4.o: ../common/zexec_lz4.c ../common/zexec_lz4.h
+	$(CC) $(CFLAGS) -O2 -c ../common/zexec_lz4.c -o zexec_lz4.o
 
 # Z_KERNEL_BUILD: the kernel claims the SHA-256 block (rtl/sha256.v) as
 # Z_HW_OWNER_KERNEL, having no pid of its own. docs/sha256_hw.md.

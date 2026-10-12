@@ -331,6 +331,46 @@ static exec_src_t exec_resolve(const char *name, char *resolved, z_exec_info_t *
 	return SRC_NONE;
 }
 
+// The last resolution, for the calls that follow it: a launch asks
+// three times in a row (the size, where from, the load), and each ask is
+// one or two lookups through fs -- on the card, a walk of /apps, which
+// was most of what `init: wm loaded in ...` measured. Kept for half a
+// second from when it was made: a file replaced in that moment (by
+// another process, which the kernel does not see) is the window, and the
+// load checks what it reads against the sizes anyway.
+#define RESOLVE_KEEP	(Z_TICK_HZ / 2)
+static struct {
+	char			name[RESOLVED_MAX];
+	char			resolved[RESOLVED_MAX];
+	exec_src_t		src;
+	z_exec_info_t	info;
+	uint32_t		tick;
+	bool			valid;
+} last_res;
+
+static exec_src_t exec_resolve_kept(const char *name, char *resolved, z_exec_info_t *info) {
+	z_exec_info_t tmp;
+	if (!info) info = &tmp;
+	if (name && last_res.valid && !strcmp(name, last_res.name) &&
+		z_uptime_ticks() - last_res.tick < RESOLVE_KEEP) {
+		strcpy(resolved, last_res.resolved);
+		*info = last_res.info;
+		return last_res.src;
+	}
+	exec_src_t src = exec_resolve(name, resolved, info);
+	last_res.valid = false;
+	if (name && strlen(name) < RESOLVED_MAX && src != SRC_NONE) {
+		strcpy(last_res.name, name);
+		strcpy(last_res.resolved, resolved);
+		last_res.src = src;
+		last_res.info = *info;
+		last_res.tick = z_uptime_ticks();
+		last_res.valid = true;
+	}
+	return src;
+}
+#define exec_resolve exec_resolve_kept
+
 int fs_exec_info_any(char *path, z_exec_info_t *info) {
 	char resolved[RESOLVED_MAX];
 	return exec_resolve(path, resolved, info) == SRC_NONE ? 1 : 0;
@@ -352,9 +392,44 @@ int fs_exec_is_flash(char *path) {
 	return exec_resolve(path, resolved, NULL) == SRC_ZAR ? 1 : 0;
 }
 
+// -- compressed executables (docs/executables.md) --
+//
+// One decoder for every load (3.3KB of tables and buffer), kept here
+// rather than on a stack: a load runs on the stack of whoever asked,
+// which may be wm's 8KB. A load from a file waits on fs mid-stream, so
+// another can start meanwhile; it waits its turn.
+static z_exec_lz4_t k_unpack;
+static volatile bool k_unpack_busy;
+
+uint32_t k_exec_unpack_ticks, k_exec_unpack_cpu;
+
+int k_exec_unpack(uint8_t *out, uint32_t len, z_exec_fill_t fill, void *ctx) {
+	while (k_unpack_busy) k_proc_wait_ticks(1);
+	k_unpack_busy = true;
+	uint32_t me = z_pid, t0 = z_uptime_ticks(), c0 = z_procs[me].cpu_ticks;
+	int r = z_exec_lz4(&k_unpack, out, len, fill, ctx);
+	k_exec_unpack_ticks = z_uptime_ticks() - t0;
+	k_exec_unpack_cpu = z_procs[me].cpu_ticks - c0;
+	k_unpack_busy = false;
+	return r ? 1 : 0;
+}
+
+typedef struct { int32_t fd; uint32_t left; } card_src_t;
+
+static uint32_t card_fill(void *ctx, uint8_t *buf, uint32_t cap) {
+	card_src_t *c = (card_src_t *)ctx;
+	if (cap > c->left) cap = c->left;
+	if (!cap) return 0;
+	int32_t r = zfs_read(c->fd, buf, cap);
+	if (r <= 0) { c->left = 0; return 0; }
+	c->left -= (uint32_t)r;
+	return (uint32_t)r;
+}
+
 // The data section to `dst` (physical: a new process's memory), the
 // bss zeroed after it. The reads come back in fs's replies and the
-// kernel copies each straight to its place.
+// kernel copies each straight to its place -- or, compressed, unpacks
+// them there.
 static int load_card(uint32_t dst, const char *path, const z_exec_info_t *info) {
 	int32_t fd = zfs_open(path, Z_O_RDONLY | Z_O_NOFLASH);
 	uint8_t *p = (uint8_t *)dst;
@@ -362,6 +437,15 @@ static int load_card(uint32_t dst, const char *path, const z_exec_info_t *info) 
 	if (info->data_off && zfs_lseek(fd, (int32_t)info->data_off, Z_SEEK_SET) < 0) {
 		zfs_close(fd);
 		return 1;
+	}
+	if (info->compressed) {
+		card_src_t c = { fd, info->stored_size };
+		int r = k_exec_unpack(p, info->data_size, card_fill, &c);
+		zfs_close(fd);
+		if (r) return 1;
+		if (info->bss_size) memset(p + info->data_size, 0, info->bss_size);
+		z_icache_flush();
+		return 0;
 	}
 	uint32_t done = 0;
 	while (done < info->data_size) {

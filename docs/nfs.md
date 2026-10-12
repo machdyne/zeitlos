@@ -20,7 +20,9 @@ nfs: mounted at /nfs
 Written and tested on the host, end to end: fs and `net`'s real client
 (`sw/apps/net/nfs.c`) against a scripted NFSv3 server over a fake TCP
 that delivers in pieces (`sw/apps/fs/tests/nfs_fake.h`, in `test_fs`).
-**Not yet tried against a real Linux `nfsd` on hardware.**
+**On hardware:** mounted from a Linux `nfsd` over a USB ethernet
+adapter, and a program run from `/nfs/apps` by its bare name. Not yet
+measured: read throughput, a server going away mid-read.
 
 | | |
 |---|---|

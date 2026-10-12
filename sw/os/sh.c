@@ -190,10 +190,23 @@ static core_src_t core_exec_info(const char *name, z_exec_info_t *info) {
 	return fs_exec_is_flash((char *)name) ? CORE_SRC_FLASH : CORE_SRC_SD;
 }
 
+// The load, timed: how long each core app takes to arrive (unpacked
+// from flash, or read from the card) is what CORE_STORE is decided by
+// (docs/flash_apps.md).
 static int core_load_exec(uint32_t dst, const char *name,
 	const z_exec_info_t *info, core_src_t src) {
 	(void)src;	// the resolver re-checks; see fs_load_exec_any()
-	return fs_load_exec_any(dst, (char *)name, info);
+	uint32_t t0 = z_uptime_ticks();
+	int r = fs_load_exec_any(dst, (char *)name, info);
+	t0 = z_uptime_ticks() - t0;
+	if (info->compressed)
+		printf("init: %s loaded in %ld ms (%ld ms unpacking, %ld ms of it on the CPU)\n",
+			name, (long)(t0 * 1000u / Z_TICK_HZ),
+			(long)(k_exec_unpack_ticks * 1000u / Z_TICK_HZ),
+			(long)(k_exec_unpack_cpu * 1000u / Z_TICK_HZ));
+	else
+		printf("init: %s loaded in %ld ms\n", name, (long)(t0 * 1000u / Z_TICK_HZ));
+	return r;
 }
 
 static const char *core_src_name(core_src_t src) {
@@ -221,9 +234,16 @@ static bool boot_fs(void) {
 		printf("init: unable to create fs process\n");
 		return false;
 	}
-	z_zar_load_exec(k_proc_base(pid), "fs", &xi);
+	t0 = z_uptime_ticks();
+	if (z_zar_load_exec(k_proc_base(pid), "fs", &xi)) {
+		k_proc_kill(pid);
+		printf("init: fs did not load -- no filesystem\n");
+		return false;
+	}
 	k_proc_start(pid);
-	printf("init: fs started as pid %ld\n", (long)pid);
+	printf("init: fs started as pid %ld, loaded in %ld ms%s\n", (long)pid,
+		(long)((z_uptime_ticks() - t0) * 1000u / Z_TICK_HZ),
+		xi.compressed ? " (compressed)" : "");
 
 	// It answers once it has tried the card; wait for that, a few
 	// seconds at most, asleep (a tick at a time) rather than spinning.
@@ -1184,21 +1204,28 @@ void sh(void) {
 					printf("no wm: launch argument ignored\n");
 				}
 			}
-			// One line: what runs, from where, and as which process --
-			// `text: pid 6, 84020 bytes from /nfs/apps/text at 404e7000`.
-			// (k_proc_create_exec() says why, when it cannot.)
+			// One line: what runs, from where, as which process, and how
+			// long the load took -- `text: pid 6, 155520 bytes from flash
+			// (compressed) at 404e7000, 210 ms`. (k_proc_create_exec() says
+			// why, when it cannot.)
 			static char where[FS_PATH_MAX];
 			if (fs_exec_where(arg, where, sizeof(where))) strcpy(where, "?");
 			uint32_t pid = k_proc_create_exec(arg, &xi);
 			if (!pid) continue;
-			uint32_t base = k_proc_base(pid);
-			printf("%s: pid %ld, %ld bytes%s from %s at %08lx\n", arg, (long)pid,
-				(long)size, xi.is_zexe ? "" : " (raw)", where, (unsigned long)base);
+			uint32_t base = k_proc_base(pid), t0 = z_uptime_ticks();
 			if (fs_load_exec_any(base, arg, &xi)) {
-				printf("%s: loading failed -- not started\n", arg);
+				printf("%s: loading from %s failed -- not started\n", arg, where);
 				k_proc_kill(pid);
 				continue;
 			}
+			printf("%s: pid %ld, %ld bytes%s from %s at %08lx, %ld ms", arg,
+				(long)pid, (long)size, xi.is_zexe ? "" : " (raw)", where,
+				(unsigned long)base, (long)((z_uptime_ticks() - t0) * 1000u / Z_TICK_HZ));
+			if (xi.compressed)
+				printf(" (%ld ms unpacking, %ld on the CPU)",
+					(long)(k_exec_unpack_ticks * 1000u / Z_TICK_HZ),
+					(long)(k_exec_unpack_cpu * 1000u / Z_TICK_HZ));
+			printf("\n");
 			k_proc_start(pid);
 
 		}

@@ -88,7 +88,9 @@
  *                                     from the start of the archive
  *                   4   4   flags     bit 0 Z_ZAR_FILE: a file, not an app
  *                   8   4   offset    of the data, from the start
- *                   12  4   size      bytes (an app: the whole ZEXE file)
+ *                   12  4   size      bytes (an app: the whole ZEXE file, as
+ *                                       mkzar.py stored it -- compressed,
+ *                                       ZEXE flags bit 8, unless CORE_STORE)
  *   ...           the names, then the data, each item 4-byte aligned
  *
  * Built by tools/mkzar.py. See Makefile's flash_apps target for where
@@ -186,6 +188,16 @@ int z_zar_exec_info(const char *name, z_exec_info_t *info);
 // it has just written code through the data path, and the cache caches
 // fetches only, so it never saw those stores. See z_icache_flush() in
 // sw/common/zsoc.h for the failure this prevents.
+// A compressed image (Z_EXEC_FLAG_COMPRESSED) unpacked to `out`, its
+// input from `fill`: 0, or 1 if it is bad. One decoder, shared
+// by the loaders, taken in turn -- kfs.c has it.
+#include "../common/zexec_lz4.h"
+int k_exec_unpack(uint8_t *out, uint32_t len, z_exec_fill_t fill, void *ctx);
+// How long the last one took, in ticks, and how many of them the loading
+// process had the CPU for (the rest went to the others): the shell
+// prints both beside the whole load (init, run).
+extern uint32_t k_exec_unpack_ticks, k_exec_unpack_cpu;
+
 int z_zar_load_exec(uint32_t dst, const char *name,
 	const z_exec_info_t *info);
 

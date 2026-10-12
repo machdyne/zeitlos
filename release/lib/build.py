@@ -350,7 +350,8 @@ def zar_command(root, zar, apps):
     runs."""
     b = spec.core_budgets(root)
     cmd = [sys.executable, os.path.join(root, "tools/mkzar.py"),
-           "--budgets", b["budgets_text"], "--files-max", str(b["reserve"]), zar]
+           "--budgets", b["budgets_text"], "--store", b.get("store", ""),
+           "--files-max", str(b["reserve"]), zar]
     cmd += ["%s=sw/apps/%s/%s.bin" % (a, a, a) for a in apps]
     cmd += ["%s=output/releases/files/%s" % (f, f) for f in b["files"]]
     return cmd

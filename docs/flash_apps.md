@@ -95,10 +95,15 @@ offset  size  field
 ...           the names, then the data, each 4-byte aligned
 ```
 
-The stored files are ZEXE (`sw/common/zexec.h`) **verbatim**, exactly as
-each app's own Makefile produced them. `tools/mkzar.py` concatenates
-them without re-encoding, so there is one executable format to keep
-working rather than two.
+The stored apps are ZEXE files (`sw/common/zexec.h`), **compressed**:
+`tools/mkzar.py` packs each app's image as an LZ4 block and sets the
+header's bit 8, and the kernel unpacks it into the process's memory as
+it loads
+([executables.md](executables.md#compressed-executables)). The format
+is still ZAR2 -- an entry is one file, whatever is in it -- and still
+one executable format, with a flag. `CORE_STORE` in the `Makefile`
+names apps to keep verbatim (`wm` and `net`). Files in flash are stored as they
+are.
 
 `Z_ZAR_FLASH_OFFSET` in `sw/os/zar.h` and the offset in `Makefile`'s
 `flash_sw` image must agree. A mismatch presents as "no core apps in
@@ -289,26 +294,36 @@ Two budgets, and RAM is the one that binds.
 `0x1FC000` on ECP5). It was 802,816 from `0x138000` while the kernel's
 region was 224KB ([fs_driver.md](fs_driver.md)), 770,048 from
 `0x140000` before that, and 589,824 before the jumploader moved out of
-it ([zboot.md](zboot.md) section 5). With `usb`, after the NFS client (October 2026), built
-here (the board's toolchain gives sizes a few percent either way):
+it ([zboot.md](zboot.md) section 5). With `usb`, after compression
+(October 2026), built here (the board's toolchain gives sizes a few
+percent either way):
 
-| app | in flash | in RAM (image) | stack |
-|---|---:|---:|---:|
-| `fs` | 45,204 | 75,848 | 64K |
-| `usb` | 44,560 | 55,396 | 16K |
-| `wm` | 108,764 | 136,360 | 8K |
-| `net` | 144,468 | 290,396 | 32K |
-| `term` | 87,420 | 135,572 | 8K |
-| `console` | 11,112 | 12,488 | 16K |
-| `cron` | 21,648 | 35,008 | 16K |
-| `text` | 85,492 | 155,520 | 16K |
-| `files` | 66,252 | 91,904 | 16K |
-| `repl` | ~190,000 | ~307,000 | 64K |
-| files in flash (welcome.txt, repl.txt, todo.scm) | 20,225 | | |
-| **archive** | **~823,000** | | |
+| app | `.bin` | in flash (compressed) | in RAM (image) | stack |
+|---|---:|---:|---:|---:|
+| `fs` | 45,204 | 33,384 | 75,848 | 64K |
+| `usb` | 44,560 | 32,439 | 55,396 | 16K |
+| `wm` | 108,772 | stored: 108,772 (70,900) | 136,368 | 8K |
+| `net` | 144,644 | stored: 144,644 (97,329) | 290,580 | 32K |
+| `term` | 87,420 | 59,386 | 135,572 | 8K |
+| `console` | 11,112 | 8,301 | 12,488 | 16K |
+| `cron` | 21,648 | 16,118 | 35,008 | 16K |
+| `text` | 85,492 | 57,712 | 155,520 | 16K |
+| `files` | 66,252 | 45,820 | 91,904 | 16K |
+| `repl` | ~190,000 | ~129,000 | ~307,000 | 64K |
+| files in flash (welcome.txt, repl.txt, todo.scm) | | 20,421 | | |
+| **archive** | | **~656,000** | | |
+
+Compression (`mkzar.py`, LZ4, [executables.md](executables.md#compressed-executables))
+saves about 143KB (82KB of it measured, the rest repl's estimate): every
+app but `wm` and `net`, which are kept as they are (`CORE_STORE`) for
+the time it costs to unpack them at boot (below; in brackets, what they
+would take compressed). The budgets sum to 667KB, with the reserve 21KB
+more: about 160KB of the region is unassigned. The archive took about
+823,000 bytes before, with budgets that left 1.8KB.
 
 `repl` is not built in this tree without `ext/`; its figures are the
-board's last, less the page gap below.
+board's last, less the page gap below, and its compressed size a guess
+at the others' ratio -- its budget (140K) leaves room for being wrong.
 
 **The page gap.** Each app's `.bin` used to carry 0-4KB of zeros
 between `.rodata` and `.data`, because the app linker script started
@@ -317,9 +332,10 @@ the 16-byte page the kernel already used (`SEG_PAGE_LDFLAGS`), which
 took about 20KB out of the archive. It came to light when 1.5KB more
 code made `fs.bin` 4KB longer.
 
-**The budgets are tight.** They add up, with the reserve, to all but
-about 1.8KB of the region. Each is the app's size on the board's
-toolchain plus a few KB. The RAM budgets are a few KB over each image
+**Flash is no longer tight; RAM is.** Since compression the flash
+budgets and the reserve add up to 688KB of the 848KB region, each the
+app's compressed size plus a few KB (about 4KB of code, at the ratio).
+Before, they left about 1.8KB of it. The RAM budgets are a few KB over each image
 too, so that the boot set with `usb` in it still meets the RAM rule
 below (1,024 of 1,024 KB). `net`'s TCP send window took 2K of `wm`'s
 RAM slack (`net` 280K, `wm` 133K). The NFS client ([nfs.md](nfs.md))
@@ -333,14 +349,15 @@ against the region (`CORE_ZAR_MAX`, 848K), so a budget that turns out
 too tight costs a bump, never a broken flash.
 
 **Budgets.** Each core app has one: the most it may take in flash
-(its `.bin`) and in RAM (its image: code, data and `.bss`, not its
-stack). They are `CORE_BUDGETS` in the top-level `Makefile`, next to
-`CORE_APPS`:
+(its `.bin` as stored, compressed) and in RAM (its image, unpacked:
+code, data and `.bss`, not its stack). They are `CORE_BUDGETS` in the
+top-level `Makefile`, next to `CORE_APPS`:
 
 ```
-CORE_BUDGETS = fs=45K/75K usb=48K/56K wm=107K/134K net=144K/285K term=91K/152K \
-	console=14K/14K cron=26K/48K text=86K/154K files=70K/104K repl=194K/304K
+CORE_BUDGETS = fs=36K/75K usb=35K/56K wm=110K/134K net=148K/285K term=62K/152K \
+	console=10K/14K cron=18K/48K text=60K/154K files=48K/104K repl=140K/304K
 CORE_RESERVE = 21K
+CORE_STORE = wm net
 CORE_ZAR_MAX = 848K
 CORE_AT_BOOT = fs usb wm net console
 CORE_RAM_MAX = 1M
@@ -360,7 +377,32 @@ budgets themselves to two rules:
   largest of the rest fit in `CORE_RAM_MAX` -- one or two apps on
   demand beside the boot set, on the smallest board.
 
-`make flash_apps` prints each app against its budget.
+`make flash_apps` prints each app against its budget, and `(stored)`
+by one kept uncompressed. `zrelease check` also refuses a `CORE_STORE`
+name that is not a core app.
+
+**Load times.** Unpacking costs CPU at every start, where a stored app
+is a copy. `init` prints how long each core app took (`init: usb loaded
+in 127 ms (125 ms unpacking, 125 ms of it on the CPU)`), and `run`
+the same; an app that starts too slowly for its job goes into
+`CORE_STORE` (its flash budget is then its `.bin` again).
+
+Measured on hardware, boot, LZ4 with its fast path: `fs` (45KB) 129ms,
+`usb` (45KB) 125ms, `wm` (109KB) 508ms unpacking (452ms on the CPU),
+`net` (145KB) 933ms (550ms on the CPU -- `wm` was running by then).
+About 2.8us a byte where nothing else runs, on a CPU that manages about
+7 million instructions a second; a plain copy from flash is about 0.8us
+a byte. `wm` and `net` went into `CORE_STORE`: they are what boot waits
+for. DEFLATE, first, had loaded `wm` in 1,251ms. A version of the LZ4
+decoder that wrote the image a word at a time (four times fewer stores,
+40% more instructions) came out even in the simulator's counts, and
+was not kept.
+
+**Next: documents in flash.** With the room, `read` is to become a core
+app, and the archive's `.txt` files (`welcome.txt`, `repl.txt`, from
+`md2txt.py`) are to be replaced by the Markdown itself -- `welcome.md`,
+`repl.md` and a few more -- for `read` to show. After compression has
+been tested on hardware.
 
 **RAM.** The core apps do not all run at once. Boot starts `fs` first
 (the filesystem, [fs_driver.md](fs_driver.md)), then `usb` (the USB

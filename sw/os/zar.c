@@ -11,6 +11,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <string.h>
+#include <stdio.h>
 
 #include "zar.h"
 #include "../common/zsoc.h"
@@ -151,6 +152,18 @@ int z_zar_exec_info(const char *name, z_exec_info_t *info) {
 
 }
 
+// Compressed input for k_exec_unpack(), from the flash window.
+typedef struct { volatile const uint8_t *p; uint32_t left; } zar_src_t;
+
+static uint32_t zar_fill(void *ctx, uint8_t *buf, uint32_t cap) {
+	zar_src_t *z = (zar_src_t *)ctx;
+	if (cap > z->left) cap = z->left;
+	zar_copy(buf, z->p, cap);
+	z->p += cap;
+	z->left -= cap;
+	return cap;
+}
+
 int z_zar_load_exec(uint32_t dst, const char *name,
 	const z_exec_info_t *info) {
 
@@ -164,12 +177,24 @@ int z_zar_load_exec(uint32_t dst, const char *name,
 		info->data_off;
 	uint8_t *out = (uint8_t *)(uintptr_t)dst;
 
-	zar_copy(out, src, info->data_size);
+	if (info->compressed) {
+		// Unpacked straight into the process's memory, the flash read
+		// a word at a time into the decoder's buffer (zar_fill()).
+		zar_src_t z = { src, info->stored_size };
+		if (k_exec_unpack(out, info->data_size, zar_fill, &z)) {
+			printf("%s: the flash copy does not unpack -- not started\n", name);
+			return 1;
+		}
+	} else {
+		zar_copy(out, src, info->data_size);
+	}
 
 	if (info->bss_size)
 		memset(out + info->data_size, 0, info->bss_size);
 
+#ifndef ZAR_HOST_TEST
 	z_icache_flush();
+#endif
 
 	return 0;
 

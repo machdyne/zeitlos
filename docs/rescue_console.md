@@ -33,9 +33,9 @@ with no `wm` behind the console, it says to type `reboot`.
 ## Status (October 2026)
 
 Tested on hardware: boot with ESC held, the shell, the takeover. The
-8x8 font, Ctrl+Alt+Esc and `exit` are built and host-tested
-(`test_rescue` 54 checks; wm's `test_lock` 45, the rescue part 16),
-awaiting hardware.
+8x8 font, Ctrl+Alt+Esc, `exit` and Ctrl+Alt+Del from
+the console are built and host-tested (`test_rescue` 54 checks; wm's
+`test_lock` 66), awaiting hardware.
 
 ## Using it
 

@@ -6,6 +6,7 @@
 #include <sys/select.h>
 
 #include "machine.h"
+#include "../sw/common/zexec_lz4.h"
 #include "simos.h"
 
 /* ------------------------------------------------------------------- */
@@ -602,7 +603,22 @@ void machine_destroy(machine_t *m) {
  * An unknown VERSION is refused rather than guessed at, matching
  * z_exec_parse(): half-loading a future format corrupts memory
  * silently, where refusing says so.
+ *
+ * A COMPRESSED image (flags bit 8, the core apps as the flash archive
+ * holds them) is unpacked with the kernel's own decoder
+ * (sw/common/zexec_lz4.c); `entry` is its unpacked size.
  */
+typedef struct { const uint8_t *p; size_t left; } sim_src_t;
+
+static uint32_t sim_fill(void *ctx, uint8_t *buf, uint32_t cap) {
+	sim_src_t *s = ctx;
+	if (cap > s->left) cap = (uint32_t)s->left;
+	memcpy(buf, s->p, cap);
+	s->p += cap;
+	s->left -= cap;
+	return cap;
+}
+
 static uint32_t rd32le(const uint8_t *p) {
 	return (uint32_t)p[0] | ((uint32_t)p[1] << 8) |
 	       ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
@@ -618,7 +634,7 @@ int machine_load_bin(machine_t *m, const char *path) {
 
 	uint8_t hdr[16];
 	size_t  data_off = 0;
-	uint32_t bss_size = 0;
+	uint32_t bss_size = 0, unpacked = 0;
 
 	if (sz >= 16 && fread(hdr, 1, 16, f) == 16 &&
 	    hdr[0] == 'Z' && hdr[1] == 'E' && hdr[2] == 'X' && hdr[3] == 'E') {
@@ -634,13 +650,23 @@ int machine_load_bin(machine_t *m, const char *path) {
 
 		bss_size = rd32le(hdr + 8);
 		data_off = 16;
+		if (hdr[6] | (hdr[7] << 8)) {
+			uint32_t flags = (uint32_t)hdr[6] | ((uint32_t)hdr[7] << 8);
+			if (flags & 0x0100u) unpacked = rd32le(hdr + 12);
+			if ((flags & 0x0100u) && !unpacked) {
+				fprintf(stderr, "zeitlos-sim: %s: compressed, with no size\n", path);
+				fclose(f);
+				return -1;
+			}
+		}
 		/* hdr[6..7] names a stack tier. The kernel applies it;
 		 * this simulator gives the process the whole of RAM. */
 	}
 
 	fseek(f, (long)data_off, SEEK_SET);
 
-	size_t data_size = (size_t)sz - data_off;
+	size_t data_size = (size_t)sz - data_off, stored = data_size;
+	if (unpacked) data_size = unpacked;
 
 	if (data_size + bss_size > m->ram_size) {
 		fprintf(stderr, "zeitlos-sim: %s needs %zu bytes (%zu data + %u bss), "
@@ -650,7 +676,19 @@ int machine_load_bin(machine_t *m, const char *path) {
 		return -1;
 	}
 
-	if (fread(m->ram, 1, data_size, f) != data_size) {
+	if (unpacked) {
+		uint8_t *z = malloc(stored ? stored : 1);
+		static z_exec_lz4_t st;
+		sim_src_t src = { z, stored };
+		int bad = !z || fread(z, 1, stored, f) != stored ||
+			z_exec_lz4(&st, m->ram, (uint32_t)data_size, sim_fill, &src) != 0;
+		free(z);
+		if (bad) {
+			fprintf(stderr, "zeitlos-sim: %s: does not unpack\n", path);
+			fclose(f);
+			return -1;
+		}
+	} else if (fread(m->ram, 1, data_size, f) != data_size) {
 		fprintf(stderr, "zeitlos-sim: short read on %s\n", path);
 		fclose(f);
 		return -1;
@@ -660,8 +698,8 @@ int machine_load_bin(machine_t *m, const char *path) {
 	memset(m->ram + data_size, 0, bss_size);
 
 	if (data_off)
-		fprintf(stderr, "zeitlos-sim: %s: ZEXE, %zu data + %u bss\n",
-			path, data_size, bss_size);
+		fprintf(stderr, "zeitlos-sim: %s: ZEXE, %zu data%s + %u bss\n",
+			path, data_size, unpacked ? " (unpacked)" : "", bss_size);
 
 	/* Matches sw/os/kernel.c's k_proc_create(): pc at the app's link
 	 * address, sp at the top of its memory region, with the sentinel

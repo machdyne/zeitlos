@@ -526,8 +526,15 @@ z_obj_t *k_proc_run(z_obj_t *args) {
 		pid = k_proc_create_exec(name, &xi);
 		if (pid) {
 			uint32_t base = k_proc_base(pid);
-			fs_load_exec_any(base, name, &xi);
-			k_proc_start(pid);
+			// Not started on a failed load: a file cut short, or a
+			// compressed image that does not unpack.
+			if (fs_load_exec_any(base, name, &xi)) {
+				printf("%s: loading failed -- not started\n", name);
+				k_proc_kill(pid);
+				pid = 0;
+			} else {
+				k_proc_start(pid);
+			}
 		}
 	}
 

@@ -35,15 +35,31 @@
  *   offset  size  field
  *   0       4     magic    "ZEXE"
  *   4       2     version  format version (currently 1)
- *   6       2     flags    bits 3:0 the stack size code; bit 15 DRIVER;
- *                           14:4 are 0
+ *   6       2     flags    bits 3:0 the stack size code; bit 8
+ *                           COMPRESSED; bit 15 DRIVER; the rest 0
  *   8       4     bss_size bytes of .bss to allocate and zero after data
- *   12      4     entry    reserved; 0 means "base address"
- *   16      ...   data     the loadable image, verbatim
+ *   12      4     entry    0; COMPRESSED: the data's size, uncompressed
+ *   16      ...   data     the loadable image, verbatim -- or COMPRESSED,
+ *                           as an LZ4 block (lz4_Block_format.md)
  *
  * data_size is deliberately NOT stored: it is file_size - 16, and the
  * filesystem already knows the file size. One fewer field that can
- * disagree with reality.
+ * disagree with reality. Except when compressed: then the file size
+ * says nothing about it, and the `entry` word carries it.
+ *
+ * -- Compressed (bit 8) --
+ *
+ * The core apps in the flash archive are stored compressed: tools/
+ * mkzar.py sets the bit, puts the image's size in `entry` and packs the
+ * image as LZ4, the header itself left as it is so a loader learns the
+ * sizes from the first 16 bytes as before. Every loader unpacks it
+ * (sw/common/zexec_lz4.c): the kernel's from flash and from a file,
+ * and the simulator's. docs/executables.md, "Compressed executables".
+ *
+ * `entry` was reserved for a start address other than the image's
+ * first byte. Nothing ever used it: every app is linked at and started
+ * from 0x80000000. Should a start address ever be needed, it is a new
+ * header version -- a loader refuses a version it does not know.
  *
  * Header at the START rather than the end (both were on the table):
  * the loader wants bss_size BEFORE it allocates, and a trailing header
@@ -104,7 +120,8 @@
 #define Z_EXEC_VERSION      1
 #define Z_EXEC_HEADER_SIZE  16
 
-// Bits 3:0 of flags: the stack size code. Bits 14:4 are reserved.
+// Bits 3:0 of flags: the stack size code. Bit 8: compressed. Bits 14:9
+// and 7:4 are reserved.
 #define Z_EXEC_STACK_MASK      0x000fu
 
 // Bit 15: the program is a DRIVER (docs/userspace_drivers.md, "Drivers").
@@ -119,7 +136,13 @@
 #define Z_EXEC_FLAG_DRIVER     0x8000u
 
 // Every flag bit this loader understands; any other is refused.
-#define Z_EXEC_FLAGS_KNOWN     (Z_EXEC_STACK_MASK | Z_EXEC_FLAG_DRIVER)
+// The data is an LZ4 block, and `entry` is its size unpacked. A kernel
+// from before this refuses the binary (unknown flags), rather than run
+// compressed bytes.
+#define Z_EXEC_FLAG_COMPRESSED 0x0100u
+
+#define Z_EXEC_FLAGS_KNOWN     (Z_EXEC_STACK_MASK | Z_EXEC_FLAG_COMPRESSED | \
+	Z_EXEC_FLAG_DRIVER)
 #define Z_EXEC_STACK_UNSPEC    0
 #define Z_EXEC_STACK_RESERVED  15
 #define Z_EXEC_STACK_MAX_CODE  14
@@ -173,7 +196,9 @@ typedef struct {
 // What a loader actually needs, after parsing.
 typedef struct {
 	uint32_t	data_off;	// where the loadable image starts in the file
-	uint32_t	data_size;	// bytes to read from the file
+	uint32_t	data_size;	// bytes of image (unpacked, when compressed)
+	uint32_t	stored_size;	// bytes of it in the file: data_size unless compressed
+	int			compressed;	// Z_EXEC_FLAG_COMPRESSED: unpack stored_size bytes
 	uint32_t	bss_size;	// bytes to zero immediately after it
 	uint32_t	total;		// data_size + bss_size -- the process image size
 	int			is_zexe;	// 1 = real header, 0 = legacy raw binary
@@ -200,6 +225,8 @@ static inline int z_exec_parse(const void *hdr, uint32_t hdr_len,
 
 	info->data_off = 0;
 	info->data_size = file_size;
+	info->stored_size = file_size;
+	info->compressed = 0;
 	info->bss_size = 0;
 	info->total = file_size;
 	info->is_zexe = 0;
@@ -221,6 +248,14 @@ static inline int z_exec_parse(const void *hdr, uint32_t hdr_len,
 
 	info->data_off = Z_EXEC_HEADER_SIZE;
 	info->data_size = file_size - Z_EXEC_HEADER_SIZE;
+	info->stored_size = info->data_size;
+	if (flags & Z_EXEC_FLAG_COMPRESSED) {
+		uint32_t n = (uint32_t)h[12] | ((uint32_t)h[13] << 8) |
+			((uint32_t)h[14] << 16) | ((uint32_t)h[15] << 24);
+		if (!n) return 1;		// compressed, and nothing to unpack to
+		info->data_size = n;
+		info->compressed = 1;
+	}
 	info->bss_size = bss;
 	info->total = info->data_size + bss;
 	info->is_zexe = 1;

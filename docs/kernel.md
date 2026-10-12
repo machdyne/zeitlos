@@ -491,6 +491,16 @@ It was 224KB from Phase 2b (the filesystem left) and 256KB before;
 the history below says what it was when it happened. Builds: default
 134,264 (29,576 free), `KTRACE=1 KDIAG=1` 138,564.
 
+**October 2026: 151,112 bytes, 12,728 free** -- under `KERNEL_WARN_FREE`
+(16KB), so the build lists the largest symbols. What took it there: the
+NFS search and `nfs` command, the rescue console's toggle, the shell's
+`ls` and `run` changes, load timing, and the decoder for compressed
+executables (`sw/common/zexec_lz4.c`, about 1KB;
+[executables.md](executables.md#compressed-executables)). The DEFLATE
+decoder tried first was 3.3KB, with 3.3KB of `.bss`. Building the kernel with
+`ZFMT_LITE`'s stdout ([build.md](build.md)) would win back about 7KB;
+its three `fflush(stdout)` calls (the prompt) would have to go first.
+
 **`.bss` is not in the image.** Until Phase 3, `sw/os/Makefile` linked
 `kernel.bin` with `objcopy --pad-to=_end`, so `.bss` was in the file as
 zeros, on the belief that the BIOS copy was what zeroed it. It was not

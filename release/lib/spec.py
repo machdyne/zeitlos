@@ -311,7 +311,8 @@ def core_budgets(root):
             "budgets_text": lines.get("budgets", "").strip(),
             "reserve": _size(lines.get("reserve", "0") or "0"),
             "at_boot": tuple(lines.get("at-boot", "").split()),
-            "ram_max": _size(lines.get("ram-max", "0") or "0")}
+            "ram_max": _size(lines.get("ram-max", "0") or "0"),
+            "store": lines.get("store", "").strip()}
 
 
 def check_core_budgets(root, zar_limit):
@@ -325,6 +326,9 @@ def check_core_budgets(root, zar_limit):
     for a in budgets:
         if a not in every:
             problems.append("CORE_BUDGETS has %s, which is not a core app" % a)
+    for a in b.get("store", "").split():
+        if a not in every:
+            problems.append("CORE_STORE has %s, which is not a core app" % a)
     # 16 bytes of header and 24 per entry: the archive's own overhead
     flash = sum(budgets[a][0] for a in every if a in budgets)
     need = flash + b["reserve"] + 16 + 24 * len(every)

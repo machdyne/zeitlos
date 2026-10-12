@@ -860,7 +860,8 @@ flash_os: flash_sw
 # core apps in flash" rather than an error.
 #
 # Depends on `apps` so the .bin files exist; mkzar.py stores them
-# verbatim (they are already ZEXE files).
+# compressed (docs/executables.md, "Compressed executables"), but for
+# CORE_STORE.
 #
 # repl is NOT here. It and posix are the shells term connects to, and
 # both live on the sdcard -- term starts one when its REPL or POSIX
@@ -876,8 +877,9 @@ CORE_APPS = fs usb wm net term console cron text files repl
 ZAR_APPS = $(filter-out $(CORE_APPS_OMIT),$(CORE_APPS))
 
 # THE BUDGETS: the most each core app may take, as FLASH/RAM -- its
-# .bin in the archive, and its image in memory (code, data and .bss;
-# not the stack, which is fixed by APP_STACK). The archive build fails
+# .bin as stored in the archive, COMPRESSED (mkzar.py, docs/executables.md),
+# and its image in memory, unpacked (code, data and .bss; not the stack,
+# which is fixed by APP_STACK). The archive build fails
 # when an app is over either, naming it, so growth past a budget is a
 # decision rather than something found out when the archive no longer
 # fits. `zrelease check` holds the budgets themselves to two rules
@@ -891,9 +893,13 @@ ZAR_APPS = $(filter-out $(CORE_APPS_OMIT),$(CORE_APPS))
 #
 # A budget is raised by taking from another, from the reserve, or by
 # making something smaller. Every core app must have one.
-CORE_BUDGETS = fs=45K/75K usb=48K/56K wm=107K/134K net=144K/285K term=91K/152K \
-	console=14K/14K cron=26K/48K text=86K/154K files=70K/104K repl=194K/304K
+CORE_BUDGETS = fs=36K/75K usb=35K/56K wm=110K/134K net=148K/285K term=62K/152K \
+	console=10K/14K cron=18K/48K text=60K/154K files=48K/104K repl=140K/304K
 CORE_RESERVE = 21K
+# Core apps stored as they are, not compressed: their budget is then
+# their .bin. wm and net, the two largest started at boot: unpacked they
+# took 508ms and 933ms on hardware (docs/flash_apps.md, "Load times").
+CORE_STORE = wm net
 # The archive's region (Z_FLASH_ZAR_END - Z_FLASH_ZAR_OFF): mkzar.py
 # refuses an archive bigger than this, whatever the budgets say, so it
 # can never spill into the flashtest sector after it.
@@ -928,7 +934,8 @@ core-bins:
 
 $(OUTDIR)/apps.zar: core-bins core-files
 	mkdir -p $(OUTDIR)
-	python3 tools/mkzar.py --budgets "$(CORE_BUDGETS)" --files-max $(CORE_RESERVE) --max $(CORE_ZAR_MAX) \
+	python3 tools/mkzar.py --budgets "$(CORE_BUDGETS)" --store "$(CORE_STORE)" \
+		--files-max $(CORE_RESERVE) --max $(CORE_ZAR_MAX) \
 		$(OUTDIR)/apps.zar \
 		$(foreach a,$(ZAR_APPS),$(a)=sw/apps/$(a)/$(a).bin) \
 		$(foreach f,$(CORE_FILES),$(f)=$(CORE_FILES_OUT)/$(f))
@@ -943,6 +950,7 @@ core-apps:
 	@echo "reserve: $(CORE_RESERVE)"
 	@echo "at-boot: $(CORE_AT_BOOT)"
 	@echo "ram-max: $(CORE_RAM_MAX)"
+	@echo "store: $(CORE_STORE)"
 	@echo "files: $(CORE_FILES)"
 
 # One image with the kernel: see flash_sw above.

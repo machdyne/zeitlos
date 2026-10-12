@@ -20,9 +20,14 @@
 # the ZEXE header). Given, every app must have one and be within it,
 # or there is no archive (docs/flash_apps.md, "Budgets").
 #
-# The .bin files are stored VERBATIM -- they are already ZEXE files
-# produced by each app's own Makefile, and re-encoding them here would
-# mean two places that have to agree about the format instead of one.
+# Each app is stored COMPRESSED (docs/executables.md, "Compressed
+# executables"): its ZEXE header kept, with flags bit 8 set and `entry`
+# set to the image's size, and the image after it as an LZ4 block
+# (lz4_compress() below). The kernel unpacks it into the process's
+# memory as it loads. --store "name ..." (CORE_STORE) keeps the named apps verbatim;
+# so is anything that is not a plain ZEXE file, or would not get
+# smaller. The budgets' flash figure is the size STORED; their RAM
+# figure is the image's, unpacked. Files are stored verbatim.
 
 import os
 import struct
@@ -34,6 +39,147 @@ HEADER_SIZE = 16
 ENTRY_SIZE = 16
 MAX_ENTRIES = 32          # keep in sync with Z_ZAR_MAX_ENTRIES
 FLAG_FILE = 1             # Z_ZAR_FILE
+
+EXEC_COMPRESSED = 0x0100  # Z_EXEC_FLAG_COMPRESSED, sw/common/zexec.h
+EXEC_KNOWN = 0x000F | EXEC_COMPRESSED | 0x8000   # Z_EXEC_FLAGS_KNOWN
+
+
+def lz4_compress(src, depth=48):
+    """An LZ4 block (lz4_Block_format.md), as sw/common/zexec_lz4.c reads
+    it: hash chains `depth` deep, and one step of lazy matching -- about
+    the size lz4's own high-compression mode gets (68% of a core app).
+    The format's end rules are kept (no match starts in the last 12
+    bytes, the last 5 are literals), so any LZ4 decoder reads it."""
+    n = len(src)
+    out = bytearray()
+    head = {}
+    prev = [-1] * (n + 1)
+    mflimit = n - 12          # no match starts past here
+    matchlimit = n - 5        # and none runs past here
+
+    def find(i):
+        if i > mflimit:
+            return 0, 0
+        j = head.get(src[i:i + 4], -1)
+        best, boff, d, lim = 0, 0, 0, matchlimit - i
+        while j >= 0 and i - j <= 65535 and d < depth:
+            if best == 0 or src[j + best] == src[i + best]:
+                l = 4
+                while l < lim and src[j + l] == src[i + l]:
+                    l += 1
+                if l > best:
+                    best, boff = l, i - j
+                    if l == lim:
+                        break
+            j = prev[j]
+            d += 1
+        return (best, boff) if best >= 4 else (0, 0)
+
+    def length(r):
+        while r >= 255:
+            out.append(255)
+            r -= 255
+        out.append(r)
+
+    def emit(a, b, ml, off):
+        ll = b - a
+        out.append((min(ll, 15) << 4) | (min(ml - 4, 15) if ml else 0))
+        if ll >= 15:
+            length(ll - 15)
+        out.extend(src[a:b])
+        if ml:
+            out.append(off & 255)
+            out.append(off >> 8)
+            if ml >= 19:
+                length(ml - 19)
+
+    i = anchor = inserted = 0   # every position before `inserted` is in the chains
+
+    def insert_to(end):
+        nonlocal inserted
+        end = min(end, mflimit + 1)
+        while inserted < end:
+            k = src[inserted:inserted + 4]
+            prev[inserted] = head.get(k, -1)
+            head[k] = inserted
+            inserted += 1
+
+    while i <= mflimit:
+        insert_to(i)
+        l, o = find(i)
+        if not l:
+            i += 1
+            continue
+        insert_to(i + 1)
+        l2, o2 = find(i + 1)
+        if l2 > l + 1:              # a longer match a byte on: take that
+            i += 1
+            l, o = l2, o2
+        emit(anchor, i, l, o)
+        i += l
+        anchor = i
+    emit(anchor, n, 0, 0)
+    return bytes(out)
+
+
+def lz4_decompress(src, n):
+    """The other way, for checking: what zexec_lz4.c does, in Python."""
+    out = bytearray()
+    p = 0
+    while True:
+        t = src[p]
+        p += 1
+        ll = t >> 4
+        if ll == 15:
+            while True:
+                b = src[p]
+                p += 1
+                ll += b
+                if b != 255:
+                    break
+        out += src[p:p + ll]
+        p += ll
+        if len(out) == n:
+            assert p == len(src), "mkzar: LZ4 input left over"
+            return bytes(out)
+        d = src[p] | src[p + 1] << 8
+        p += 2
+        ml = (t & 15) + 4
+        if ml == 19:
+            while True:
+                b = src[p]
+                p += 1
+                ml += b
+                if b != 255:
+                    break
+        assert 0 < d <= len(out)
+        for _ in range(ml):
+            out.append(out[-d])
+
+
+def compress(data):
+    """A ZEXE file, compressed (bit 8, `entry` = the image's size); or
+    the same bytes, for anything that is not one or would not shrink."""
+    if len(data) < 16 or data[:4] != b"ZEXE":
+        return data
+    ver, flags, bss, entry = struct.unpack("<HHII", data[4:16])
+    if ver != 1 or entry or flags & ~EXEC_KNOWN or flags & EXEC_COMPRESSED:
+        return data
+    image = data[16:]
+    if not image:
+        return data
+    z = lz4_compress(image)
+    if 16 + len(z) >= len(data):
+        return data
+    assert lz4_decompress(z, len(image)) == image, "mkzar: LZ4 did not round-trip"
+    return struct.pack("<4sHHII", b"ZEXE", ver, flags | EXEC_COMPRESSED,
+                       bss, len(image)) + z
+
+
+def compressed(data):
+    if len(data) < 16 or data[:4] != b"ZEXE":
+        return False
+    return bool(struct.unpack("<H", data[6:8])[0] & EXEC_COMPRESSED)
 
 
 def size(text):
@@ -61,7 +207,9 @@ def ram_image(data):
     """Code + data + .bss, from a ZEXE header; the file size if none."""
     if data[:4] != b"ZEXE":
         return len(data)
-    bss = struct.unpack("<I", data[8:12])[0]
+    bss, entry = struct.unpack("<II", data[8:16])
+    if compressed(data):
+        return entry + bss
     return len(data) - 16 + bss
 
 
@@ -69,16 +217,20 @@ def main(argv):
     budgets = None
     files_max = None
     zar_max = None
-    while len(argv) > 2 and argv[1] in ("--budgets", "--files-max", "--max"):
+    store = set()
+    while len(argv) > 2 and argv[1] in ("--budgets", "--files-max", "--max", "--store"):
         if argv[1] == "--budgets":
             budgets = parse_budgets(argv[2])
+        elif argv[1] == "--store":
+            store = set(argv[2].split())
         elif argv[1] == "--max":
             zar_max = size(argv[2])
         else:
             files_max = size(argv[2])
         argv = argv[:1] + argv[3:]
     if len(argv) < 3:
-        print("usage: mkzar.py [--budgets \"name=FLASH/RAM ...\"] [--files-max N] [--max N] "
+        print("usage: mkzar.py [--budgets \"name=FLASH/RAM ...\"] [--store \"name ...\"] "
+              "[--files-max N] [--max N] "
               "<output.zar> <name>=<file.bin> ... <dir/file>=<file> ...", file=sys.stderr)
         return 1
 
@@ -127,6 +279,8 @@ def main(argv):
         if not is_file and data[:4] != b"ZEXE":
             print("mkzar: warning: %s has no ZEXE header (legacy binary)"
                   % path, file=sys.stderr)
+        if not is_file and name not in store:
+            data = compress(data)
 
         entries.append((name, data, is_file))
 
@@ -200,8 +354,9 @@ def main(argv):
     for name, data, is_file in entries:
         if budgets is not None and name in budgets:
             bf, br = budgets[name]
-            print("         %-16s %7d of %7d flash  %7d of %7d RAM"
-                  % (name, len(data), bf, ram_image(data), br))
+            print("         %-16s %7d of %7d flash  %7d of %7d RAM%s"
+                  % (name, len(data), bf, ram_image(data), br,
+                     "" if compressed(data) else "  (stored)"))
         else:
             print("         %-16s %7d" % (name, len(data)))
 
