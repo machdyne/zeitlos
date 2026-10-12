@@ -49,7 +49,7 @@ static void puts_r(const char *s) {
 
 // Does the cell hold character c (as r_glyph() draws it)?
 static int cell_is(int col, int row, uint8_t c) {
-	const z_font_t *f = &z_font_5x8;
+	const z_font_t *f = &z_font_8x8;
 	const uint8_t *g = f->glyphs + z_font_index(f, c) * f->h;
 	for (int j = 0; j < 8; j++)
 		if (vram[(row * 8 + j) * R_STRIDE + col] != r_rev8(g[j])) return 0;

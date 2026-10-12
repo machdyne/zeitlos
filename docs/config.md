@@ -51,6 +51,7 @@ travel with the card. `settings` edits them; see
 | `apps.zerdesk.allow` | `subnet` | `zerdesk` | accept viewers from this subnet only, or `any` ([remote_desktop.md](remote_desktop.md)) |
 | `apps.zerdesk.port` | `8080` | `zerdesk` | the remote desktop, on this port |
 | `apps.zerdesk.viewers` | `6` | `zerdesk` | viewers at once, 1-6; past that, a plain-text 503 while a relay is free |
+| `system.apps.nfs_first` | `yes` | kernel | a bare program name is looked for in `/nfs/apps` first, while an NFS export is mounted; `no` for the card's `/apps` first as before ([nfs.md](nfs.md)) |
 | `system.font.japanese` | `no` | `wm`, `settings` | start `jfont` at boot, so Japanese draws at 6x12 -- about 190KB of RAM ([text_encoding.md](text_encoding.md)); `settings` switches it on and off at once |
 | `system.keyboard.layouts` | `us` | `wm` | keyboard layouts, comma-separated; the first is used at start, Super+Space cycles |
 | `system.rtc.timezone` | `UTC` | `clock`, `cal`, `irc` | local time shown; the RTC itself stays UTC (file times too -- [filesystem.md](filesystem.md#timestamps)) |

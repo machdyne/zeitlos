@@ -30,6 +30,8 @@
 #   APP_CFLAGS    extra compiler flags (-D, -I) for this app.
 #   GFX_HW_BLIT   1 (default) draws text with the hardware glyph
 #                 blitter (-DZ_GFX_HW_BLIT); 0 for the software path.
+#   ZFMT_LITE     0 (default). 1, with ZFMT = 1, also replaces stdout's
+#                 stdio (zfmt.c, ZFMT_LITE_STDIO).
 #   ZFMT          0 (default). 1 replaces newlib's printf family with
 #                 sw/common/zfmt.c: integers only, ~50KB smaller. For
 #                 the core apps in flash; see below.
@@ -150,6 +152,13 @@ ifeq ($(ZFMT_FLOAT),1)
 ZFMT_CFLAGS = -DZFMT_FLOAT
 else
 ZFMT_CFLAGS = -DZ_ZFMT
+endif
+# ZFMT_LITE = 1: stdout without newlib's stdio as well (zfmt.c,
+# "ZFMT_LITE_STDIO"): printf, puts, putchar, fputs and fflush write
+# whole lines to fd 1 from a 128-byte buffer. For an app that uses no
+# other FILE call; about 7 KB less (net).
+ifeq ($(ZFMT_LITE),1)
+ZFMT_CFLAGS += -DZFMT_NO_STDIO -DZFMT_LITE_STDIO
 endif
 endif
 

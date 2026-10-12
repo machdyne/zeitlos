@@ -26,13 +26,18 @@
  *   needed to accept connections while the machine kept making its own.
  *   The pool is the one change that made telnet, ssh and web sessions
  *   stop excluding one another.
- * - **Stop-and-wait sending**: at most one unacknowledged outbound
- *   segment at a time (tcp_send() returns false if the previous one
- *   hasn't been acked yet -- caller should just retry on a later
- *   poll). No sliding window, no pipelining. Telnet traffic is small
- *   and bursty in both directions, not throughput-sensitive, so this
- *   costs nothing in practice while avoiding a real send-window/
- *   retransmit-queue implementation entirely.
+ * - **A send window** (docs/networking.md, "Sending"). Up to
+ *   TCP_TX_MAX segments per connection are queued, of up to the
+ *   peer's MSS (at most TCP_MAX_PAYLOAD, 1460) each, from one pool of
+ *   TCP_TX_SEGS shared by every connection. They go out as the peer's
+ *   window, a slow-start congestion window and room in the NIC
+ *   (tcp_link_room()) allow, and stay as the retransmit copy until
+ *   acknowledged. Three duplicate ACKs resend the oldest at once; a
+ *   timeout resends everything unacked from the oldest (go-back-N) at
+ *   a congestion window of one. tcp_send() returns false when the
+ *   queue or the pool is full -- hold the data and try again on a
+ *   later poll. It was stop-and-wait, one 536-byte segment per round
+ *   trip, until bulk sending (relays, sockets, ssh) mattered.
  * - **No out-of-order reassembly.** A segment that doesn't arrive
  *   with the expected sequence number is dropped (not buffered) --
  *   relies on the peer's own retransmit timer to resend it in order.
@@ -74,9 +79,8 @@
  *   headers and is also the largest segment this stack will deliver
  *   whole. Those two must stay in step.
  *
- *   TCP_MAX_PAYLOAD below still governs what we SEND, and stays at
- *   536: the peer's MSS is whatever it advertises, which is not
- *   parsed here.
+ *   What we SEND is the peer's MSS option, at most TCP_MAX_PAYLOAD
+ *   (1460), or 536 when it sends none.
  * - **No half-close support.** A remote-initiated FIN gets our own
  *   FIN sent right back immediately (see tcp.c) instead of going
  *   through CLOSE_WAIT and waiting for the application to decide --
@@ -111,14 +115,29 @@
 
 typedef struct tcp_conn tcp_conn_t;
 
-// max application-data bytes we ever SEND in one segment -- see the
-// "no options at all" note above for why this is exactly RFC 879's
-// default MSS rather than something derived from ETH_MTU. This is a
-// SEND-side convention, not an enforced limit on what a peer can send
-// TO us -- see TCP_MAX_RX_PAYLOAD below for the receive-side version
-// of this constant, which is NOT the same number and must not be
-// confused with it.
-#define TCP_MAX_PAYLOAD  536
+// max application-data bytes we ever SEND in one segment: a full
+// Ethernet frame, which every NIC here sends (net_phy.h). The peer's MSS
+// option lowers it per connection (tcp_mss()). Not a limit on what a
+// peer sends TO us -- that is TCP_MAX_RX_PAYLOAD below.
+#define TCP_MAX_PAYLOAD  1460
+
+// What a peer that sends no MSS option gets (RFC 879), and the floor
+// of the windows.
+#define TCP_DEFAULT_MSS  536
+
+// The send queue: segments in the shared pool, and the most one
+// connection may hold. A connection with segments out never takes the
+// last free one, which is kept for a connection that has none: so an
+// interactive session gets one while others send in bulk. ~1.5KB each: 6 is ~9KB of
+// net's RAM, which is what its budget had room for (docs/flash_apps.md).
+// Five 1460-byte segments are ~7KB in flight per round trip, where
+// stop-and-wait had 536 bytes.
+#ifndef TCP_TX_SEGS
+#define TCP_TX_SEGS 6
+#endif
+#ifndef TCP_TX_MAX
+#define TCP_TX_MAX 5
+#endif
 
 // max application-data bytes we can ever RECEIVE in one segment --
 // this file's own receive path (tcp_handle(), tcp.c) never sends an
@@ -243,6 +262,20 @@ void tcp_set_rx_window_max(uint16_t w);
 // window_for()): lowered by a listener that cannot keep up, raised
 // again when it can.
 void tcp_set_rx_window(tcp_conn_t *c, uint16_t w);
+
+// The MSS advertised on every SYN from now on, TCP_ADVERTISE_MSS until
+// set: per NIC (net_phy.h rx_mss). At most TCP_MAX_RX_PAYLOAD.
+void tcp_set_rx_mss(uint16_t mss);
+uint16_t tcp_rx_mss(void);
+
+// Frames the NIC can take right now -- net_phy.c, from the driver's
+// tx_room(). Segments wait for room rather than being handed to a full
+// NIC and lost.
+int tcp_link_room(void);
+
+// A connection has segments waiting for room in the NIC: net's loop
+// should look again on the next tick rather than sleep (net.c).
+bool tcp_tx_waiting(void);
 void tcp_ack_now(tcp_conn_t *c);
 
 typedef enum {
@@ -285,6 +318,12 @@ void tcp_init(uint32_t our_ip);
 // every event on this connection until TCP_EVENT_CLOSED; `user` is
 // the caller's, returned by tcp_user().
 tcp_conn_t *tcp_connect(uint32_t dst_ip, uint16_t dst_port,
+	tcp_event_handler_t handler, void *user);
+
+// The same from a given local port (0: any). NULL also if that port is
+// in use. A port below 1024 is what an NFS server wants from a client
+// (nfs.c), unless the export says `insecure`.
+tcp_conn_t *tcp_connect_from(uint32_t dst_ip, uint16_t dst_port, uint16_t lport,
 	tcp_event_handler_t handler, void *user);
 
 // -- listening --

@@ -586,10 +586,14 @@ typedef struct {
 #define Z_WM_ARG_MAX             96
 
 // How long a pending argument stays claimable, in kernel ticks
-// (Z_TICK_HZ is 732, zsoc.h -- so this is roughly four seconds).
-// Generous next to how long an app takes to reach its first message
-// loop, short next to how long a user takes to click the next thing.
-#define Z_WM_ARG_TIMEOUT         3000
+// (Z_TICK_HZ is 732, zsoc.h -- so this is about fifteen seconds).
+// It was four, and a launch that took longer -- a big binary from the
+// card on a busy machine (vi, 230KB with a 1MB stack) -- lost its
+// argument and opened an empty buffer instead of the file named: a far
+// worse failure than the one the expiry is for. Every launcher sets
+// the argument, even to "", so an expired one is only ever left by an
+// app that never asks for it.
+#define Z_WM_ARG_TIMEOUT         11000
 
 // -- clipboard --
 //
@@ -838,6 +842,11 @@ typedef struct {
 #define Z_WM_LOCK_NOW            0
 #define Z_WM_LOCK_RELOAD         1
 
+// Z_WM_RESCUE -- the rescue console (docs/rescue_console.md), from the
+// kernel shell's `exit`: Z_UINT32 0, put the windows back. (Ctrl+Alt+Esc
+// is wm's own hotkey, both ways.) No reply.
+#define Z_WM_RESCUE              (Z_SUBJ_WM + 34)
+
 #define Z_WM_PACK_PLACE(x, y) \
 	((((uint32_t)(y) & 0x3FF) << 10) | ((uint32_t)(x) & 0x3FF))
 #define Z_WM_UNPACK_PLACE_X(v)   ((int)((v) & 0x3FF))
@@ -866,7 +875,7 @@ typedef struct {
 } z_wm_win_info_t;
 
 // Still inside the block zsubjects.h gives this protocol:
-Z_SUBJECTS_IN(Z_SUBJ_WM, Z_WM_LOCK);
+Z_SUBJECTS_IN(Z_SUBJ_WM, Z_WM_RESCUE);
 Z_SUBJECTS_IN(Z_SUBJ_WM_GAME, Z_WM_GAME_REVOKED);
 
 #endif

@@ -917,6 +917,7 @@ not take the keys away from the window they are for.
 |---|---|
 | Super+Space | next keyboard layout in `system.keyboard.layouts`; its two-letter label shows on the dock for a moment, and speech says its name |
 | Super+L | lock the screen ([security.md](security.md)); also `lock` in the repl or at the console. Acted on in the main loop, after any drag is released |
+| Ctrl+Alt+Esc | the rescue console ([rescue_console.md](rescue_console.md)): every window hidden as for the lock, the kernel's shell on the screen; again, or the shell's `exit` (`Z_WM_RESCUE`), repaints them. Not while locked |
 | Super+K | start the on-screen keyboard ([keyboard_app.md](keyboard_app.md)); it is single-instance, so a second press does nothing |
 | Super+P | next phosphor -- white, amber, green, paper, round again, in `settings`' order. Writes the video register only: `system.video.mode` (the default) is untouched, so a reboot, or a config reload (which re-applies it, `sw/os/cfg.c`), brings the default back |
 | Ctrl+Super+Minus / Ctrl+Super+Equal | monochrome brightness down / up on HDMI/DVI (and with the keypad - / +), by key like the volume; a caption shows "Brightness N/16" and speech says it. 16 levels, 8 at boot unless `system.video.brightness` says otherwise; like Super+P it does not change that setting. Colour mode is unaffected. "No brightness control on this display" on VGA, composite, or an older bitstream ([socctl.md](socctl.md#brightness)) |
@@ -2279,6 +2280,50 @@ framebuffer (`sw/common/tests/zrender.h`, in its strict-region mode,
 which enforces regions per pixel as zgfx does) and a scripted kernel
 playing one app and `Z_SYS_AUTH`. 29 checks; each of the nine
 properties was confirmed to fail with the code protecting it removed.
+
+## Rebooting
+
+**Ctrl+Alt+Del** asks, in a box `wm` draws: **Reboot** or **Cancel**.
+Enter takes the highlighted button (Reboot at first), Left, Right or
+Tab moves between them, R and C choose directly, Esc cancels, and a
+click on either works. Reboot is the kernel's (`z_reboot()`, the shell's
+`reboot`): open files synced, then the FPGA reconfigured. If the kernel
+cannot (a bitstream that reloads from somewhere it should not), the box
+says so and stays, on Cancel.
+
+**Cancel leaves the screen exactly as it was**, whatever that was:
+
+- **The desktop, or an app holding the screen**: every window was frozen
+  with its region kept -- the freeze a titlebar drag uses, so nothing is
+  cleared and nothing draws over the box -- and is thawed. The box's
+  rectangle is repaired; an app holding the screen is asked to redraw
+  instead, since only it can paint its frame.
+- **Game mode**: the box is drawn inside the 320x240 viewport (on
+  composite always), and the viewport is left where it was; Super+mouse
+  does not move it while the box is up.
+- **The rescue console**: the kernel passes Ctrl+Alt+Del on to `wm`,
+  as it does Ctrl+Alt+Esc; `wm` turns the console off (its text stays
+  on the glass), draws the box, and on Cancel turns it back on, and the
+  kernel draws the shell again. In a rescue console with no `wm`
+  behind it (`wm` crashed, or ESC held at boot) there is nothing to
+  draw a box, and the kernel prints a line saying to type `reboot`.
+
+**Not from the lock screen**: the keys are swallowed there. A lock
+asked for while the box is up (`Z_WM_LOCK`, the idle timer) cancels it
+first. Like the lock, the box goes up only at a safe point in the main
+loop (`confirm_engage()`), after a drag or resize is released; while it
+is up, `wm_confirm` is part of `WM_HIDDEN()`, so every key goes to the
+box and nothing `wm` or an app draws reaches the screen.
+
+The button labels are drawn with `z_fb_draw_text2()`: the highlighted
+one is dark text on a lit button, and `z_fb_draw_text()` lays a 0
+background under every glyph, so it came out as a black block on the
+first try on hardware ([widgets.md](widgets.md#labels-on-a-lit-widget)).
+
+`tests/test_lock.c` sections 12 and 13: the box drawn only within its
+rectangle, both labels legible (checked on their glyph cells), the app frozen with its region and thawed, Esc, Tab+Enter,
+a click, a kernel that cannot reboot, the rescue console off and on
+again, and the lock screen.
 
 ## Known limitations / future work
 

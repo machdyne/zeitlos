@@ -87,7 +87,8 @@ By extension, through the shared table in `sw/common/ztype.h`:
 
 | extension | app |
 | --- | --- |
-| `TXT`, `ASC`, `MD` | `text` |
+| `TXT`, `ASC`, `CFG` | `text` |
+| `MD` | `read` |
 | `ZBM` | `draw` |
 | *(none)* | run it, if it's really a program |
 | anything else | "no application is associated" |

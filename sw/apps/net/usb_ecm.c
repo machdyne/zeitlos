@@ -39,6 +39,14 @@ bool usb_ecm_supported(void)
 	return z_soc_has_feature2(Z_FEATURE2_USB_HOST);
 }
 
+// An adapter is attached now (and `usb` is running): net's choice
+// between a silent ESP32 link and a USB adapter (net.c).
+bool usb_ecm_present(void)
+{
+	z_usbnet_info_t in;
+	return z_usbnet_info(&in) && in.present;
+}
+
 // Take the adapter: give `usb` our ring and our address, and keep its
 // ring. NULL if `usb` is not there.
 static bool open_rings(void)
@@ -103,9 +111,16 @@ bool usb_ecm_mac(uint8_t mac[6])
 // ring -- memory, not a request. About once a second it also checks
 // that `usb` is the one the rings were opened with: a restarted `usb`
 // has a new ring, and the old one is no longer its memory.
+static bool ref_out;		// a frame lent by recv_ref() and not yet done
+
 static void check_gen(void)
 {
 	uint32_t now = z_uptime_ticks();
+
+	// Not while net is reading a frame in place in the ring: reopening
+	// would leave it reading the old ring, and recv_done() would step
+	// the new ring's tail past a frame. It is done within this pass.
+	if (ref_out) return;
 
 	if (now - last_check >= Z_TICK_HZ) {
 		last_check = now;
@@ -159,6 +174,7 @@ uint16_t usb_ecm_recv_ref(const uint8_t **frame)
 		last_put = srv->rx_at[i];
 		last_take = c;
 		*frame = (const uint8_t *)srv->rx[i] + Z_USBNET_RX_OFF;
+		ref_out = true;
 		return n;
 	}
 	check_gen();
@@ -167,6 +183,8 @@ uint16_t usb_ecm_recv_ref(const uint8_t **frame)
 
 void usb_ecm_recv_done(void)
 {
+	if (!ref_out) return;
+	ref_out = false;
 	cli.rx_tail++;		// after net is done with it: usb may reuse it
 	rx_frames++;
 }
@@ -193,6 +211,13 @@ uint16_t usb_ecm_recv(uint8_t *buf, uint16_t maxlen)
 	// No frame: the moment to notice a plug event.
 	check_gen();
 	return 0;
+}
+
+// Free slots in the transmit ring (net_phy.h tx_room).
+int usb_ecm_tx_room(void)
+{
+	if (!srv || !srv->info.present) return 0;
+	return (int)Z_USBNET_TX_SLOTS - (int)(cli.tx_head - srv->tx_tail);
 }
 
 bool usb_ecm_send(const uint8_t *buf, uint16_t len)

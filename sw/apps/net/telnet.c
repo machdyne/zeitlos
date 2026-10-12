@@ -266,10 +266,10 @@ void telnet_poll(void) {
 	if (!tcp_is_connected(conn)) return;
 	if (tx_queue_len == 0) return;
 
-	uint16_t mss = tcp_mss(conn);
-	uint16_t n = tx_queue_len > mss ? mss : tx_queue_len;
-
-	if (tcp_send(conn, tx_queue, n)) {
+	while (tx_queue_len) {
+		uint16_t mss = tcp_mss(conn);
+		uint16_t n = tx_queue_len > mss ? mss : tx_queue_len;
+		if (!tcp_send(conn, tx_queue, n)) break;
 		memmove(tx_queue, tx_queue + n, tx_queue_len - n);
 		tx_queue_len -= n;
 	}

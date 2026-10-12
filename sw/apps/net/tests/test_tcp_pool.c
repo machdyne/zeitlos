@@ -70,6 +70,12 @@ void z_rng_bytes(void *b, uint32_t n) {
 bool z_rng_secure(void) { return true; }
 void z_rng_stir_event(void) { }
 
+/* tcp.c builds its segments in the outgoing frame (ip.h): here, a
+ * buffer of its own, handed to the ip_send() above. */
+static uint8_t ip_txb[1600];
+uint8_t *ip_tx_payload(void) { return ip_txb; }
+bool ip_send_built(uint32_t ip, uint8_t proto, uint16_t len) { return ip_send(ip, proto, ip_txb, len); }
+
 #include "../tcp.c"
 
 /* -- checks -- */
@@ -472,10 +478,11 @@ int main(void) {
 		CK(nout == 1 && last()->ack == 6 && !(last()->flags & F_FIN), "the FIN acked; ours not sent");
 		CK(tcp_can_send(c) && !tcp_is_connected(c), "CLOSE_WAIT: can still send");
 		CK(tcp_send(c, (const uint8_t *)"answer", 6) && last()->len == 6, "and does");
-		CK(!tcp_close(c), "close waits for that segment's ack");
-		rx(PEER, 13000, 23, 6, ours + 6, F_ACK, 0, NULL, 0);
 		nout = 0;
-		CK(tcp_close(c) && (last()->flags & F_FIN) && last()->seq == ours + 6, "then our FIN");
+		CK(tcp_close(c) && nout == 0, "close is taken; the FIN waits for that segment's ack");
+		CK(!tcp_send(c, (const uint8_t *)"x", 1), "nothing more after close");
+		rx(PEER, 13000, 23, 6, ours + 6, F_ACK, 0, NULL, 0);
+		CK(nout == 1 && (last()->flags & F_FIN) && last()->seq == ours + 6, "then our FIN");
 		rx(PEER, 13000, 23, 6, ours + 7, F_ACK, 0, NULL, 0);
 		CK(pr->closed == 1 && tcp_count() == 0, "acked: CLOSED once, slot free");
 		rx(PEER, 13000, 23, 5, 0, F_ACK | F_FIN, 0, NULL, 0);

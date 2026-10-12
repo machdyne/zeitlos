@@ -387,9 +387,9 @@ void ssh_poll(void) {
 	if (!tcp_is_connected(conn)) return;
 	if (tx_queue_len == 0) return;
 
-	n = tx_queue_len > tcp_mss(conn) ? tcp_mss(conn) : tx_queue_len;
-
-	if (tcp_send(conn, tx_queue, n)) {
+	while (tx_queue_len) {
+		n = tx_queue_len > tcp_mss(conn) ? tcp_mss(conn) : tx_queue_len;
+		if (!tcp_send(conn, tx_queue, n)) break;
 		memmove(tx_queue, tx_queue + n, tx_queue_len - n);
 		tx_queue_len -= n;
 	}

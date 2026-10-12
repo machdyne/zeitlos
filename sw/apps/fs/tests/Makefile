@@ -5,13 +5,13 @@ CC ?= cc
 COMMON = ../../../common
 CFLAGS = -std=gnu99 -Wall -O1 -g \
 	-fsanitize=alignment,address,undefined -fno-sanitize-recover=all \
-	-I$(COMMON) -DFS_HOST_TEST -DZFSAPP_DIRECT '-DFS_IN_WINDOW(d,n,b,s)=1'
+	-I$(COMMON) -I../../net -DFS_HOST_TEST -DZFSAPP_DIRECT '-DFS_IN_WINDOW(d,n,b,s)=1'
 
-test_fs: test_fs.c ../fs.c ../fsvol.h $(COMMON)/zfsc.c $(COMMON)/zfsapp.c $(COMMON)/zposix.c ../fatfs/ff.c ../fatfs/ffunicode.c
+test_fs: test_fs.c nfs_fake.h ../../net/nfs.c ../fs.c ../fsvol.h $(COMMON)/zfsc.c $(COMMON)/zfsapp.c $(COMMON)/zposix.c ../fatfs/ff.c ../fatfs/ffunicode.c
 	$(CC) $(CFLAGS) -DZPOSIX_HOST_TEST -o $@ test_fs.c ../fs.c $(COMMON)/zfsc.c $(COMMON)/zfsapp.c $(COMMON)/zposix.c ../fatfs/ff.c ../fatfs/ffunicode.c
 
 # The same, with the client built as the kernel builds it (sw/os/kfs.c).
-test_fs_kernel: test_fs.c ../fs.c ../fsvol.h $(COMMON)/zfsc.c $(COMMON)/zfsapp.c $(COMMON)/zposix.c ../fatfs/ff.c ../fatfs/ffunicode.c
+test_fs_kernel: test_fs.c nfs_fake.h ../../net/nfs.c ../fs.c ../fsvol.h $(COMMON)/zfsc.c $(COMMON)/zfsapp.c $(COMMON)/zposix.c ../fatfs/ff.c ../fatfs/ffunicode.c
 	$(CC) $(CFLAGS) -DZFSC_KERNEL -DZPOSIX_HOST_TEST -o $@ test_fs.c ../fs.c $(COMMON)/zfsc.c $(COMMON)/zfsapp.c $(COMMON)/zposix.c ../fatfs/ff.c ../fatfs/ffunicode.c
 
 # Rename's checks and FAT timestamps (fsvol.h), on FatFs itself.

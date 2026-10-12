@@ -46,6 +46,12 @@ void z_rng_bytes(void *b, uint32_t n) { uint8_t *p = b; while (n--) { rngs = rng
 bool z_rng_secure(void) { return true; }
 void z_rng_stir_event(void) { }
 
+/* tcp.c builds its segments in the outgoing frame (ip.h): here, a
+ * buffer of its own, handed to the ip_send() above. */
+static uint8_t ip_txb[1600];
+uint8_t *ip_tx_payload(void) { return ip_txb; }
+bool ip_send_built(uint32_t ip, uint8_t proto, uint16_t len) { return ip_send(ip, proto, ip_txb, len); }
+
 #include "../tcp.c"
 #include "../relay.c"
 
@@ -229,10 +235,14 @@ int main(void) {
 	for (int i = mark; i < nmo; i++) if (mo[i].subject == Z_PORT_DATA_ACK) acks++;
 	CK(acks == 1, "only what fits is acked; the rest held (%d)", acks);
 	uint32_t sent = 0, seq = ours + 7;
+	/* Segments leave from relay_poll() and, as ACKs open the window,
+	 * from inside rx(): read them all with a cursor. */
+	int cur = 0;
+	nseg = 0;
 	for (int round = 0; round < 20; round++) {
-		nseg = 0;
 		relay_poll();
-		for (int i = 0; i < nseg; i++) if (segs[i].len) { sent += segs[i].len; seq = segs[i].seq + segs[i].len; }
+		for (int i = cur; i < nseg; i++) if (segs[i].len) { sent += segs[i].len; seq = segs[i].seq + segs[i].len; }
+		cur = nseg;
 		rx(4000, 23, 106, seq, TCP_FLAG_ACK, NULL, 0);
 	}
 	acks = 0;
@@ -248,13 +258,15 @@ int main(void) {
 		relay_msg(&m);
 		static uint8_t got[4000];
 		uint32_t gl = 0;
+		cur = 0;
+		nseg = 0;
 		for (int round = 0; round < 30; round++) {
-			nseg = 0;
 			relay_poll();
-			for (int i = 0; i < nseg; i++) if (segs[i].len) {
+			for (int i = cur; i < nseg; i++) if (segs[i].len) {
 				memcpy(got + gl, segs[i].data, segs[i].len); gl += segs[i].len;
 				seq = segs[i].seq + segs[i].len;
 			}
+			cur = nseg;
 			rx(4000, 23, 106, seq, TCP_FLAG_ACK, NULL, 0);
 		}
 		int a = 0;
@@ -293,13 +305,15 @@ int main(void) {
 		relay_msg(&m);
 		uint32_t got = 0, s2 = 0;
 		bool fin_early = false, fin = false;
+		cur = 0;
+		nseg = 0;
 		for (int round = 0; round < 10 && !fin; round++) {
-			nseg = 0;
 			relay_poll();
-			for (int i = 0; i < nseg; i++) {
+			for (int i = cur; i < nseg; i++) {
 				if (segs[i].flags & TCP_FLAG_FIN) { fin = true; if (got < sizeof(last)) fin_early = true; s2 = segs[i].seq + 1; }
 				else if (segs[i].len) { got += segs[i].len; s2 = segs[i].seq + segs[i].len; }
 			}
+			cur = nseg;
 			if (!fin) rx(4000, 23, pseq, s2, TCP_FLAG_ACK, NULL, 0);
 		}
 		CK(got == sizeof(last) && fin && !fin_early, "all 900 bytes out before the FIN (%u)", got);
@@ -331,8 +345,9 @@ int main(void) {
 		relay_poll();
 		CK(nseg >= 1 && segs[0].len == 5 && !memcmp(segs[0].data, "reply", 5),
 			"the answer goes out after the peer's FIN");
-		rx(4001, 23, 506, segs[0].seq + 5, TCP_FLAG_ACK, NULL, 0);
+		uint32_t aseq = segs[0].seq + 5;
 		nseg = 0;
+		rx(4001, 23, 506, aseq, TCP_FLAG_ACK, NULL, 0);
 		relay_poll();
 		CK(nseg == 1 && (segs[0].flags & TCP_FLAG_FIN), "then our FIN");
 		rx(4001, 23, 506, segs[0].seq + 1, TCP_FLAG_ACK, NULL, 0);

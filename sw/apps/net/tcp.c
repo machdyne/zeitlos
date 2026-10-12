@@ -79,17 +79,30 @@ struct tcp_conn {
 	uint32_t snd_nxt;       // next seq we'll use
 	uint32_t rcv_nxt;       // next seq we expect from the peer
 
-	// -- the single outstanding (unacked) segment, if any -- see
-	// tcp.h's "stop-and-wait" note. tx_pending is the only thing that
-	// tells "nothing outstanding" from "a bare SYN/FIN is", since
-	// tx_len can legitimately be 0 in both.
+	// -- an outstanding SYN or FIN, which carries no data. Data goes
+	// through the send queue below; the two are never out at once (a
+	// SYN is acked before data flows, and a FIN waits for the queue to
+	// empty).
 	bool     tx_pending;
 	uint32_t tx_seq;
 	uint8_t  tx_flags;
 	uint16_t tx_len;
-	uint8_t  tx_buf[TCP_MAX_PAYLOAD];
-	uint32_t last_send_tick;
+	uint32_t last_send_tick;    // of the oldest unacked segment or control
 	uint8_t  retries;
+
+	// -- the send queue (tcp.h, "sending") --
+	// Segments in order, as indices into txpool[]: the first qsent have
+	// been sent (and are unacked), the rest wait for the window, the
+	// congestion window or room in the NIC. snd_nxt is the highest
+	// sequence number sent so far and never moves back; a retransmit
+	// resends segments with the numbers they were first sent with.
+	uint8_t  q[TCP_TX_MAX];
+	uint8_t  qn, qsent;
+	uint8_t  cwnd;              // segments in flight allowed (slow start)
+	uint8_t  dupacks;
+	uint16_t snd_wnd;           // the peer's advertised window
+	bool     close_pending;     // tcp_close() with data still queued
+	bool     link_wait;         // stopped for room in the NIC
 
 	// The peer closed while our own segment was still unacked: send
 	// our FIN as soon as it is. It used to be left unsent, and the
@@ -110,6 +123,31 @@ struct tcp_conn {
 
 static tcp_conn_t conns[TCP_MAX_CONN];
 
+// The segments being sent, for every connection: one shared pool, so a
+// connection that is not sending holds none. A segment stays until it
+// is acknowledged, as the copy to retransmit.
+typedef struct {
+	uint32_t seq;               // valid once sent
+	uint16_t len;
+	bool     used, sent;
+	uint8_t  data[TCP_MAX_PAYLOAD];
+} txseg_t;
+
+static txseg_t txpool[TCP_TX_SEGS];
+
+// Frames the NIC can take now (net_phy.c). Weak: the host tests have no
+// NIC, and then there is no limit.
+extern int tcp_link_room(void) __attribute__((weak));
+extern bool ip_tx_parked(void) __attribute__((weak));
+
+// Set while a received segment is processed (established()): a FIN that
+// tcp_close() left waiting must follow the ACK of that segment's data,
+// not overtake it with a stale ack number.
+static bool fin_hold;
+
+// The MSS we advertise; per NIC (tcp_set_rx_mss()).
+static uint16_t adv_mss = TCP_ADVERTISE_MSS;
+
 static struct {
 	uint16_t port;
 	tcp_accept_t accept;
@@ -126,6 +164,7 @@ static uint16_t rx_window_max = TCP_RX_WINDOW;
 static uint32_t rx_in_order, rx_dup, rx_gap;
 
 static void send_ack(tcp_conn_t *c);
+static void tx_push(tcp_conn_t *c);
 static void notify(tcp_conn_t *c, tcp_event_t ev, const uint8_t *data, uint16_t len);
 
 // -- checksum: RFC 793 pseudo-header (src/dst IP, zero, protocol=6,
@@ -278,11 +317,19 @@ void tcp_stats(uint32_t *in_order, uint32_t *dup, uint32_t *gap) {
 void tcp_stats_reset(void) { rx_in_order = rx_dup = rx_gap = 0; }
 
 void tcp_set_rx_window_max(uint16_t w) {
-	if (w < TCP_MAX_PAYLOAD) w = TCP_MAX_PAYLOAD;
+	if (w < TCP_DEFAULT_MSS) w = TCP_DEFAULT_MSS;
 	rx_window_max = (w > TCP_RX_WINDOW) ? TCP_RX_WINDOW : w;
 	for (int i = 0; i < TCP_MAX_CONN; i++)
 		if (conns[i].rx_window > rx_window_max) conns[i].rx_window = rx_window_max;
 }
+
+void tcp_set_rx_mss(uint16_t mss) {
+	if (mss < 64) mss = 64;
+	if (mss > TCP_MAX_RX_PAYLOAD) mss = TCP_MAX_RX_PAYLOAD;
+	adv_mss = mss;
+}
+
+uint16_t tcp_rx_mss(void) { return adv_mss; }
 
 void tcp_set_rx_window(tcp_conn_t *c, uint16_t w) {
 	c->rx_window = w > rx_window_max ? rx_window_max : w;
@@ -295,9 +342,15 @@ static bool active(const tcp_conn_t *c) {
 }
 
 void tcp_debug(const tcp_conn_t *c, bool *pending, uint8_t *retries, uint16_t *len) {
-	*pending = c->tx_pending;
+	*pending = c->tx_pending || c->qn;
 	*retries = c->retries;
-	*len = c->tx_len;
+	*len = c->qn ? txpool[c->q[0]].len : c->tx_len;
+}
+
+bool tcp_tx_waiting(void) {
+	for (int i = 0; i < TCP_MAX_CONN; i++)
+		if (conns[i].state != TCP_CLOSED && conns[i].link_wait) return true;
+	return false;
 }
 
 int tcp_count(void) {
@@ -321,7 +374,7 @@ int tcp_count(void) {
 static uint16_t window_for(const tcp_conn_t *c) {
 	int n = tcp_count();
 	uint32_t share = rx_window_max / (uint32_t)(n > 0 ? n : 1);
-	if (share < TCP_ADVERTISE_MSS) share = TCP_ADVERTISE_MSS;
+	if (share < adv_mss) share = adv_mss;
 	return c->rx_window < share ? c->rx_window : (uint16_t)share;
 }
 
@@ -332,6 +385,10 @@ static void slot_free(tcp_conn_t *c) {
 	c->state = TCP_CLOSED;
 	c->tx_pending = false;
 	c->fin_pending = false;
+	for (int i = 0; i < c->qn; i++) txpool[c->q[i]].used = false;
+	c->qn = c->qsent = 0;
+	c->close_pending = false;
+	c->link_wait = false;
 	c->handler = NULL;
 	c->user = NULL;
 	c->gen++;
@@ -361,8 +418,14 @@ static tcp_conn_t *alloc(bool inbound) {
 	c->inbound = inbound;
 	c->half_close = false;
 	c->rx_window = rx_window_max;
-	c->snd_mss = TCP_MAX_PAYLOAD;       // RFC 879's default until the peer says
+	c->snd_mss = TCP_DEFAULT_MSS;       // RFC 879's default until the peer says
 	c->retries = 0;
+	c->qn = c->qsent = 0;
+	c->cwnd = 2;
+	c->dupacks = 0;
+	c->snd_wnd = TCP_DEFAULT_MSS;       // until the peer's first segment says
+	c->close_pending = false;
+	c->link_wait = false;
 	return c;
 }
 
@@ -417,7 +480,7 @@ void tcp_init(uint32_t ip) {
 static bool send_raw(uint32_t rip, uint16_t lport, uint16_t rport, uint32_t seq,
 		uint32_t ack, uint8_t flags, uint16_t window, const uint8_t *data, uint16_t len) {
 
-	static uint8_t pkt[TCP_HDR_LEN + 4 + TCP_MAX_PAYLOAD];
+	uint8_t *pkt = ip_tx_payload();     // built in the outgoing frame (ip.h)
 	uint16_t opt_len = 0;
 
 	pkt[0] = (uint8_t)(lport >> 8); pkt[1] = (uint8_t)lport;
@@ -445,17 +508,17 @@ static bool send_raw(uint32_t rip, uint16_t lport, uint16_t rport, uint32_t seq,
 	if (opt_len) {
 		pkt[20] = 2;                // maximum segment size
 		pkt[21] = 4;
-		pkt[22] = (TCP_ADVERTISE_MSS >> 8) & 0xFF;
-		pkt[23] = TCP_ADVERTISE_MSS & 0xFF;
+		pkt[22] = (uint8_t)(adv_mss >> 8);
+		pkt[23] = (uint8_t)adv_mss;
 	}
-	if (len) memcpy(pkt + TCP_HDR_LEN + opt_len, data, len);
+	if (len) memmove(pkt + TCP_HDR_LEN + opt_len, data, len);
 
 	uint16_t seg_len = (uint16_t)(TCP_HDR_LEN + opt_len + len);
 	uint16_t csum = tcp_checksum(our_ip, rip, pkt, seg_len);
 	pkt[16] = (uint8_t)(csum >> 8);
 	pkt[17] = (uint8_t)csum;
 
-	return ip_send(rip, 6, pkt, seg_len);
+	return ip_send_built(rip, 6, seg_len);
 }
 
 static bool seg_send(tcp_conn_t *c, uint32_t seq, uint8_t flags,
@@ -464,9 +527,8 @@ static bool seg_send(tcp_conn_t *c, uint32_t seq, uint8_t flags,
 		c->rcv_nxt, flags, window_for(c), data, len);
 }
 
-// Sends a new segment and arms it for retransmission -- anything that
-// consumes a sequence number (SYN, FIN, data). Caller has checked
-// !c->tx_pending.
+// Sends a SYN or FIN and arms it for retransmission. Caller has checked
+// !c->tx_pending. (Data goes through the send queue: tx_push().)
 static void send_tracked(tcp_conn_t *c, uint8_t flags, const uint8_t *data, uint16_t len) {
 	uint32_t seq = c->snd_nxt, consumed = len;
 
@@ -475,7 +537,6 @@ static void send_tracked(tcp_conn_t *c, uint8_t flags, const uint8_t *data, uint
 	c->tx_seq = seq;
 	c->tx_flags = flags;
 	c->tx_len = len;
-	if (len) memcpy(c->tx_buf, data, len);
 	c->last_send_tick = z_uptime_ticks();
 	c->retries = 0;
 
@@ -519,24 +580,146 @@ static uint16_t parse_mss(const uint8_t *p, uint8_t data_offset) {
 	return 0;
 }
 
+// The peer's MSS option, within what we send at most. None: RFC 879's
+// 536, which alloc() set.
 static void take_mss(tcp_conn_t *c, const uint8_t *p, uint8_t data_offset) {
 	uint16_t m = parse_mss(p, data_offset);
-	if (m >= 64 && m < c->snd_mss) c->snd_mss = m;
+	if (m >= 64) c->snd_mss = m < TCP_MAX_PAYLOAD ? m : TCP_MAX_PAYLOAD;
+}
+
+// -- the send queue --
+
+static bool sendable(const tcp_conn_t *c) {
+	return c->state == TCP_ESTABLISHED || c->state == TCP_CLOSE_WAIT ||
+		(c->state == TCP_LAST_ACK && c->fin_pending);
+}
+
+// Our FIN, once everything before it is acknowledged: for tcp_close()
+// (close_pending) or after the peer's FIN (fin_pending).
+static void fin_when_drained(tcp_conn_t *c) {
+	if (c->qn || c->tx_pending) return;
+	if (c->close_pending) {
+		c->close_pending = false;
+		send_tracked(c, TCP_FLAG_ACK | TCP_FLAG_FIN, NULL, 0);
+		c->state = (c->state == TCP_CLOSE_WAIT) ? TCP_LAST_ACK : TCP_FIN_WAIT_1;
+	} else if (c->fin_pending && c->state == TCP_LAST_ACK) {
+		c->fin_pending = false;
+		send_tracked(c, TCP_FLAG_ACK | TCP_FLAG_FIN, NULL, 0);
+	}
+}
+
+static bool seg_resend(tcp_conn_t *c, txseg_t *s) {
+	return seg_send(c, s->seq, TCP_FLAG_ACK | TCP_FLAG_PSH, s->data, s->len);
+}
+
+// Sends what the windows allow. The first unacked segment always goes,
+// whatever the peer's window says: with nothing in flight that is the
+// zero-window probe, and it is what stop-and-wait always did.
+static void tx_push(tcp_conn_t *c) {
+	c->link_wait = false;
+	if (sendable(c)) {
+		while (c->qsent < c->qn) {
+			txseg_t *s = &txpool[c->q[c->qsent]];
+			if (c->qsent > 0) {
+				uint32_t end = (s->sent ? s->seq : c->snd_nxt) + s->len;
+				uint32_t allow = (uint32_t)c->cwnd * c->snd_mss;
+				if (allow > c->snd_wnd) allow = c->snd_wnd;
+				if (end - c->snd_una > allow) break;
+			}
+			{
+				int (*volatile room)(void) = tcp_link_room;	// weak: NULL in host tests
+				if (room && room() <= 0) { c->link_wait = true; break; }
+			}
+			if (!s->sent) s->seq = c->snd_nxt;
+			if (!seg_resend(c, s)) {
+				// Parked for ARP: it will go when the address resolves,
+				// so it counts as sent. Anything else: the NIC refused.
+				bool (*volatile parked)(void) = ip_tx_parked;
+				if (!parked || !parked()) { c->link_wait = true; break; }
+			}
+			if (!s->sent) {
+				s->sent = true;
+				c->snd_nxt += s->len;
+			}
+			if (c->qsent == 0) {
+				c->last_send_tick = z_uptime_ticks();
+			}
+			c->qsent++;
+		}
+	}
+	if (!fin_hold) fin_when_drained(c);
+}
+
+// An acknowledgement for data. `bare`: no data, no SYN or FIN -- a
+// candidate duplicate ACK.
+static void tcp_ack_data(tcp_conn_t *c, uint32_t ack, uint16_t win, bool bare) {
+	int32_t adv = (int32_t)(ack - c->snd_una);
+	if (adv < 0 || (int32_t)(ack - c->snd_nxt) > 0) return;   // old, or never sent
+	bool same_win = (win == c->snd_wnd);
+	bool reopened = (c->snd_wnd == 0 && win > 0);
+	c->snd_wnd = win;
+	if (adv > 0) {
+		while (c->qn) {
+			txseg_t *s = &txpool[c->q[0]];
+			if (!s->sent || (int32_t)(s->seq + s->len - ack) > 0) break;
+			s->used = false;
+			memmove(c->q, c->q + 1, (size_t)(c->qn - 1));
+			c->qn--;
+			if (c->qsent) c->qsent--;
+		}
+		c->snd_una = ack;
+		c->dupacks = 0;
+		c->retries = 0;
+		c->last_send_tick = z_uptime_ticks();
+		if (c->cwnd < TCP_TX_MAX) c->cwnd++;
+	} else if (c->qsent && win == 0) {
+		// The peer is alive and full: our probe is answered, so it is
+		// not a lost segment -- go on probing, never give up on it.
+		c->retries = 0;
+	} else if (c->qsent && reopened) {
+		// The window reopened: the probe it refused goes again now,
+		// not at its backed-off timeout.
+		seg_resend(c, &txpool[c->q[0]]);
+		c->retries = 0;
+		c->last_send_tick = z_uptime_ticks();
+	} else if (bare && same_win && c->qsent) {
+		// Three duplicates: the oldest was lost and the rest arrived
+		// (RFC 5681 fast retransmit). Send it again now, not after the
+		// timeout.
+		if (++c->dupacks == 3) {
+			seg_resend(c, &txpool[c->q[0]]);
+			c->cwnd = (uint8_t)(c->cwnd > 2 ? c->cwnd / 2 : 1);
+			c->last_send_tick = z_uptime_ticks();
+		}
+	}
+	tx_push(c);
 }
 
 // -- the API --
 
 tcp_conn_t *tcp_connect(uint32_t dst_ip, uint16_t dst_port,
 		tcp_event_handler_t handler, void *user) {
+	return tcp_connect_from(dst_ip, dst_port, 0, handler, user);
+}
 
-	tcp_conn_t *c = alloc(false);
+tcp_conn_t *tcp_connect_from(uint32_t dst_ip, uint16_t dst_port, uint16_t lport,
+		tcp_event_handler_t handler, void *user) {
+
+	tcp_conn_t *c;
 	uint32_t isn;
 	int tries;
 
+	if (lport) {
+		for (int i = 0; i < TCP_MAX_CONN; i++)
+			if (conns[i].state != TCP_CLOSED && conns[i].local_port == lport)
+				return NULL;
+	}
+	c = alloc(false);
 	if (!c) return NULL;
+	c->local_port = lport;
 
 	// A local port no live connection is using.
-	for (tries = 0; tries < 16; tries++) {
+	for (tries = 0; !lport && tries < 16; tries++) {
 		uint16_t p = next_local_port++;
 		if (next_local_port < 49152) next_local_port = 49152;  // wrap, avoid 0
 		bool used = false;
@@ -595,20 +778,43 @@ bool tcp_is_inbound(const tcp_conn_t *c) { return c->inbound; }
 uint16_t tcp_mss(const tcp_conn_t *c) { return c->snd_mss; }
 
 bool tcp_send(tcp_conn_t *c, const uint8_t *data, uint16_t len) {
-	if (!tcp_can_send(c)) return false;
+	int i;
+	if (!tcp_can_send(c) || c->close_pending) return false;
 	if (len == 0) return true;          // nothing to send: not an empty segment
 	if (c->tx_pending) return false;
 	if (len > c->snd_mss) return false;
-	send_tracked(c, TCP_FLAG_ACK | TCP_FLAG_PSH, data, len);
+	if (c->qn >= TCP_TX_MAX) return false;
+	{
+		// A connection that already has segments out may not take the
+		// last free one: that is kept for one that has none, so a bulk
+		// sender cannot shut an interactive session out.
+		int nfree = 0;
+		for (int k = 0; k < TCP_TX_SEGS; k++) if (!txpool[k].used) nfree++;
+		if (nfree == 0 || (c->qn && nfree < 2)) return false;
+	}
+	for (i = 0; i < TCP_TX_SEGS && txpool[i].used; i++) { }
+	txpool[i].used = true;
+	txpool[i].sent = false;
+	txpool[i].len = len;
+	memcpy(txpool[i].data, data, len);
+	// An empty queue starts the timer here: a NIC that never has room
+	// (an adapter unplugged) times the connection out like a lost peer.
+	if (!c->qn) {
+		c->last_send_tick = z_uptime_ticks();
+		c->retries = 0;
+	}
+	c->q[c->qn++] = (uint8_t)i;
+	tx_push(c);
 	return true;
 }
 
+// The FIN follows the data still queued, once it is all acknowledged.
 bool tcp_close(tcp_conn_t *c) {
 	if (!tcp_can_send(c)) return false;
+	if (c->close_pending) return true;
 	if (c->tx_pending) return false;
-	send_tracked(c, TCP_FLAG_ACK | TCP_FLAG_FIN, NULL, 0);
-	// From CLOSE_WAIT the peer's FIN is already in: only ours to be acked.
-	c->state = (c->state == TCP_CLOSE_WAIT) ? TCP_LAST_ACK : TCP_FIN_WAIT_1;
+	c->close_pending = true;
+	fin_when_drained(c);
 	return true;
 }
 
@@ -662,7 +868,8 @@ static void peer_fin(tcp_conn_t *c) {
 		notify(c, TCP_EVENT_EOF, NULL, 0);
 		return;
 	}
-	if (!c->tx_pending) send_tracked(c, TCP_FLAG_ACK | TCP_FLAG_FIN, NULL, 0);
+	c->close_pending = false;
+	if (!c->tx_pending && !c->qn) send_tracked(c, TCP_FLAG_ACK | TCP_FLAG_FIN, NULL, 0);
 	else c->fin_pending = true;
 	c->state = TCP_LAST_ACK;
 	notify(c, TCP_EVENT_CLOSED, NULL, 0);
@@ -670,11 +877,17 @@ static void peer_fin(tcp_conn_t *c) {
 
 // Data and FIN on an established connection.
 static void established(tcp_conn_t *c, uint32_t seq, uint32_t ack, uint8_t flags,
-		const uint8_t *data, uint16_t data_len) {
+		uint16_t win, const uint8_t *data, uint16_t data_len) {
 
 	uint32_t gen = c->gen;
 
-	if (flags & TCP_FLAG_ACK) process_ack(c, ack);
+	if (flags & TCP_FLAG_ACK) {
+		process_ack(c, ack);
+		fin_hold = true;
+		tcp_ack_data(c, ack, win, data_len == 0 && !(flags & (TCP_FLAG_SYN | TCP_FLAG_FIN)));
+		fin_hold = false;
+		if (!still(c, gen)) return;
+	}
 
 	if (data_len > 0) {
 		if (seq == c->rcv_nxt) {
@@ -721,6 +934,10 @@ static void established(tcp_conn_t *c, uint32_t seq, uint32_t ack, uint8_t flags
 	// Only an in-order FIN; one beyond a gap waits for the retransmit.
 	if ((flags & TCP_FLAG_FIN) && seq + data_len == c->rcv_nxt && c->state == TCP_ESTABLISHED)
 		peer_fin(c);
+
+	// A FIN tcp_close() was waiting to send, now that this segment is
+	// acked: it carries the current ack number.
+	if (still(c, gen)) fin_when_drained(c);
 }
 
 void tcp_handle(uint32_t src_ip, const uint8_t *p, uint16_t len) {
@@ -741,6 +958,7 @@ void tcp_handle(uint32_t src_ip, const uint8_t *p, uint16_t len) {
 		((uint32_t)p[10] << 8) | p[11];
 	uint8_t data_offset = (uint8_t)((p[12] >> 4) * 4);
 	uint8_t flags = p[13];
+	uint16_t win = (uint16_t)((p[14] << 8) | p[15]);
 
 	if (data_offset < TCP_HDR_LEN || data_offset > len) return;   // malformed
 
@@ -770,6 +988,7 @@ void tcp_handle(uint32_t src_ip, const uint8_t *p, uint16_t len) {
 				c->rcv_nxt = seq + 1;
 				c->snd_una = isn;
 				c->snd_nxt = isn;
+				c->snd_wnd = win;
 				take_mss(c, p, data_offset);
 				h = accept(c, dst_port, src_ip, src_port, &user);
 				if (h) {
@@ -813,6 +1032,7 @@ void tcp_handle(uint32_t src_ip, const uint8_t *p, uint16_t len) {
 		if (!(flags & TCP_FLAG_SYN) || !(flags & TCP_FLAG_ACK)) return;
 		if (!process_ack(c, ack)) return;
 		c->rcv_nxt = seq + 1;
+		c->snd_wnd = win;
 		take_mss(c, p, data_offset);
 		c->state = TCP_ESTABLISHED;
 		send_ack(c);
@@ -835,12 +1055,13 @@ void tcp_handle(uint32_t src_ip, const uint8_t *p, uint16_t len) {
 			if (!still(c, gen)) return;
 		}
 		// The handshake's last ACK may carry data, or even a FIN.
-		established(c, seq, ack, flags, data, data_len);
+		c->snd_wnd = win;
+		established(c, seq, ack, flags, win, data, data_len);
 		break;
 	}
 
 	case TCP_ESTABLISHED:
-		established(c, seq, ack, flags, data, data_len);
+		established(c, seq, ack, flags, win, data, data_len);
 		break;
 
 	case TCP_FIN_WAIT_1: {
@@ -880,17 +1101,20 @@ void tcp_handle(uint32_t src_ip, const uint8_t *p, uint16_t len) {
 
 	case TCP_CLOSE_WAIT:
 		// Half-closed: nothing more comes in, but our data is acked.
-		if (flags & TCP_FLAG_ACK) process_ack(c, ack);
+		if (flags & TCP_FLAG_ACK) {
+			process_ack(c, ack);
+			tcp_ack_data(c, ack, win, data_len == 0 && !(flags & TCP_FLAG_FIN));
+		}
 		if (flags & TCP_FLAG_FIN) send_ack(c);          // a retransmitted FIN
 		break;
 
 	case TCP_LAST_ACK:
-		if ((flags & TCP_FLAG_ACK) && process_ack(c, ack)) {
-			if (c->fin_pending) {
-				// that was our data; now the FIN it was holding up
-				c->fin_pending = false;
-				send_tracked(c, TCP_FLAG_ACK | TCP_FLAG_FIN, NULL, 0);
-			} else {
+		if ((flags & TCP_FLAG_ACK) && c->fin_pending) {
+			// Our data is still going: acked, then the FIN it was
+			// holding up (fin_when_drained(), from tcp_ack_data()).
+			tcp_ack_data(c, ack, win, data_len == 0 && !(flags & TCP_FLAG_FIN));
+		} else if ((flags & TCP_FLAG_ACK) && process_ack(c, ack)) {
+			{
 				// Done. After a half-close this is the owner's CLOSED;
 				// otherwise it had CLOSED already and this is a no-op.
 				uint32_t gen = c->gen;
@@ -924,7 +1148,32 @@ void tcp_poll(void) {
 			continue;
 		}
 
-		if (!c->tx_pending) continue;
+		if (!c->tx_pending) {
+			// Data. The oldest unacked segment's timer: on expiry,
+			// everything unacked is sent again from it (go-back-N) at a
+			// congestion window of one, growing again with each ACK.
+			if ((c->qsent || c->link_wait) && now - c->last_send_tick >=
+					((uint32_t)TCP_RTO_TICKS_BASE << (c->retries < TCP_RTO_MAX_SHIFT ?
+						c->retries : TCP_RTO_MAX_SHIFT))) {
+				if (c->retries >= TCP_MAX_RETRIES) {
+					uint32_t gen = c->gen;
+					printf("tcp: giving up after %d retries, connection abandoned\n",
+						TCP_MAX_RETRIES);
+					notify(c, TCP_EVENT_CLOSED, NULL, 0);
+					if (still(c, gen)) slot_free(c);
+					continue;
+				}
+				c->retries++;
+				c->qsent = 0;
+				c->cwnd = 1;
+				c->dupacks = 0;
+				tx_push(c);
+				c->last_send_tick = now;
+			} else if (c->qsent < c->qn) {
+				tx_push(c);     // waiting for room in the NIC, or the window
+			}
+			continue;
+		}
 
 		uint32_t rto = (uint32_t)TCP_RTO_TICKS_BASE <<
 			(c->retries < TCP_RTO_MAX_SHIFT ? c->retries : TCP_RTO_MAX_SHIFT);
@@ -941,7 +1190,7 @@ void tcp_poll(void) {
 			continue;
 		}
 
-		seg_send(c, c->tx_seq, c->tx_flags, c->tx_buf, c->tx_len);
+		seg_send(c, c->tx_seq, c->tx_flags, NULL, 0);
 		c->last_send_tick = now;
 		c->retries++;
 	}

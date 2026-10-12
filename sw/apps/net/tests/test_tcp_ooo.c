@@ -34,6 +34,12 @@ bool z_rng_secure(void) { return true; }
 void z_rng_stir_event(void) { }
 
 #define TCP_REASSEMBLY 1
+/* tcp.c builds its segments in the outgoing frame (ip.h): here, a
+ * buffer of its own, handed to the ip_send() above. */
+static uint8_t ip_txb[1600];
+uint8_t *ip_tx_payload(void) { return ip_txb; }
+bool ip_send_built(uint32_t ip, uint8_t proto, uint16_t len) { return ip_send(ip, proto, ip_txb, len); }
+
 #include "../tcp.c"
 
 /* The pool's first slot plays the old single TCB. */

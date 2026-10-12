@@ -7,12 +7,14 @@
  * ssid/psk  -> ESP32 STA (ZNIC_STA)
  * dhcp/ip/mask/gw/dns -> net.c IP stack
  * phy=auto|usb|builtin -> which NIC (docs/usb_ethernet.md)
+ * nfs=address:/export -> mounted at /nfs (docs/nfs.md)
  */
 
 #include <stdint.h>
 
 #define NETCFG_SSID_MAX 32
 #define NETCFG_PSK_MAX  63
+#define NETCFG_NFS_MAX  127
 
 /* How many ssid=/psk= pairs net.cfg may list, in order of preference.
  * The backend tries them first to last and takes the first one whose
@@ -42,6 +44,9 @@ typedef struct {
 	char psk[NETCFG_PSK_MAX + 1];
 	int n_wifi;
 	netcfg_wifi_t wifi[NETCFG_WIFI_MAX];
+	/* nfs=address:/export -- mounted at /nfs once there is an
+	 * address (nfs.c, docs/nfs.md); empty: none */
+	char nfs[NETCFG_NFS_MAX + 1];
 } netcfg_t;
 
 /* 0 even if the file is missing (has_file=0). -1 on a malformed file. */

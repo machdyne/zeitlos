@@ -474,6 +474,23 @@ bool relay_msg(const z_msg_t *msg) {
 
 // -- moving bytes --
 
+// Moves held listener messages into the transmit buffer, as far as it
+// has room, acknowledging each to the listener once it is all in.
+static void relay_refill(relay_t *r) {
+	while (r->held_n) {
+		uint32_t left = r->held[0].len - r->held[0].off;
+		uint32_t n = (uint32_t)(RELAY_TX - r->tx_len);
+		if (n > left) n = left;
+		memcpy(r->tx + r->tx_len, r->held[0].data + r->held[0].off, n);
+		r->tx_len = (uint16_t)(r->tx_len + n);
+		r->held[0].off += n;
+		if (r->held[0].off < r->held[0].len) break;
+		ack_data(r->owner, r->held[0].tag);
+		memmove(&r->held[0], &r->held[1], sizeof(r->held[0]) * (size_t)(r->held_n - 1));
+		r->held_n--;
+	}
+}
+
 void relay_poll(void) {
 	check_listeners();
 	for (int i = 0; i < RELAY_MAX; i++) {
@@ -486,36 +503,29 @@ void relay_poll(void) {
 		}
 		if (!r->state || !r->tcp) continue;
 
-		// listener -> peer
-		if (r->tx_len && tcp_can_send(r->tcp)) {
-			uint16_t mss = tcp_mss(r->tcp);
-			uint16_t n = r->tx_len > mss ? mss : r->tx_len;
-			if (tcp_send(r->tcp, r->tx, n)) {
+		// listener -> peer: as many segments as TCP's send queue takes
+		// (tcp.h, "a send window"), refilling from the held messages
+		// between, until it refuses or there is nothing left.
+		for (;;) {
+			bool sent = false;
+			while (r->tx_len && tcp_can_send(r->tcp)) {
+				uint16_t mss = tcp_mss(r->tcp);
+				uint16_t n = r->tx_len > mss ? mss : r->tx_len;
+				if (!tcp_send(r->tcp, r->tx, n)) break;
 				memmove(r->tx, r->tx + n, (size_t)(r->tx_len - n));
 				r->tx_len = (uint16_t)(r->tx_len - n);
 				r->active = z_uptime_ticks();
+				sent = true;
 			}
+			if (!sent || !r->held_n) break;
+			relay_refill(r);
 		}
-		while (r->held_n) {
-			uint32_t left = r->held[0].len - r->held[0].off;
-			uint32_t n = (uint32_t)(RELAY_TX - r->tx_len);
-			if (n > left) n = left;
-			memcpy(r->tx + r->tx_len, r->held[0].data + r->held[0].off, n);
-			r->tx_len = (uint16_t)(r->tx_len + n);
-			r->held[0].off += n;
-			if (r->held[0].off < r->held[0].len) break;
-			ack_data(r->owner, r->held[0].tag);
-			memmove(&r->held[0], &r->held[1], sizeof(r->held[0]) * (size_t)(r->held_n - 1));
-			r->held_n--;
-		}
+		relay_refill(r);
 
-		// the listener closed: once all it sent has gone, close TCP.
-		// (The tx/held test is belt and braces today: the lines above
-		// always send first, and stop-and-wait refuses a FIN while a
-		// segment is out -- the host test cannot tell it is missing.
-		// It is for the day this function is reordered.)
+		// the listener closed: once all it sent is in TCP's queue, close.
+		// The FIN follows that data once it is acknowledged (tcp_close()).
 		if (r->state == R_CLOSING && !r->tx_len && !r->held_n && tcp_can_send(r->tcp))
-			tcp_close(r->tcp);          // retried until the last segment is acked
+			tcp_close(r->tcp);
 
 		// A stall report: something is waiting, in either direction,
 		// and nothing has moved for 3 s. The whole state in one line:

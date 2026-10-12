@@ -116,9 +116,26 @@ static uint16_t ip_checksum(const uint8_t *data, uint16_t len) {
 
 }
 
-bool ip_send(uint32_t dst_ip, uint8_t protocol, const uint8_t *payload, uint16_t len) {
+bool ip_tx_parked(void) {
+	return pending_valid;
+}
 
-	static uint8_t pkt[IP_HDR_LEN + IP_MAX_PAYLOAD];
+uint8_t *ip_tx_payload(void) {
+	return eth_tx_payload() + IP_HDR_LEN;
+}
+
+bool ip_send(uint32_t dst_ip, uint8_t protocol, const uint8_t *payload, uint16_t len) {
+	if (len > IP_MAX_PAYLOAD) return false;
+	if (payload != ip_tx_payload())
+		memmove(ip_tx_payload(), payload, len);
+	return ip_send_built(dst_ip, protocol, len);
+}
+
+// The packet is built in the outgoing frame itself (ip_tx_payload()):
+// the header goes in front of it there.
+bool ip_send_built(uint32_t dst_ip, uint8_t protocol, uint16_t len) {
+
+	uint8_t *pkt = eth_tx_payload();
 	if (len > IP_MAX_PAYLOAD) return false;
 
 	uint16_t total_len = IP_HDR_LEN + len;
@@ -147,8 +164,6 @@ bool ip_send(uint32_t dst_ip, uint8_t protocol, const uint8_t *payload, uint16_t
 	pkt[10] = (csum >> 8) & 0xFF;
 	pkt[11] = csum & 0xFF;
 
-	memcpy(pkt + IP_HDR_LEN, payload, len);
-
 	// limited broadcast (255.255.255.255) never goes through ARP --
 	// it's not a real host to resolve, and there may not even BE an
 	// ARP-resolvable next hop yet (this is exactly the situation
@@ -159,27 +174,28 @@ bool ip_send(uint32_t dst_ip, uint8_t protocol, const uint8_t *payload, uint16_t
 	if (dst_ip == 0xFFFFFFFFu) {
 		static const uint8_t bcast_mac[6] =
 			{ 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
-		return eth_send(bcast_mac, ETHERTYPE_IPV4, pkt, total_len);
+		return eth_send_built(bcast_mac, ETHERTYPE_IPV4, total_len);
 	}
 
 	uint32_t next_hop = ip_is_local(dst_ip) ? dst_ip : our_gateway;
 
 	uint8_t dst_mac[6];
 	if (!arp_lookup(next_hop, dst_mac)) {
-		arp_request(next_hop);
 		// queue this fully-built packet (header/payload/checksum
 		// already done above) so ip_poll() can actually send it once
 		// ARP resolves, instead of just dropping it here -- see that
 		// function's own comment, and the pending-packet fields just
-		// above it, for the full story.
+		// above it, for the full story. Copied BEFORE the ARP request:
+		// the packet is in the outgoing frame, which the request reuses.
 		pending_next_hop = next_hop;
 		memcpy(pending_pkt, pkt, total_len);
 		pending_len = total_len;
 		pending_valid = true;
+		arp_request(next_hop);
 		return false;
 	}
 
-	return eth_send(dst_mac, ETHERTYPE_IPV4, pkt, total_len);
+	return eth_send_built(dst_mac, ETHERTYPE_IPV4, total_len);
 
 }
 
@@ -198,8 +214,8 @@ static void icmp_handle(uint32_t src_ip, const uint8_t *p, uint16_t len) {
 
 	// echo reply: identical payload (identifier/sequence/data),
 	// type changed to 0 (echo reply), checksum recomputed
-	static uint8_t reply[IP_MAX_PAYLOAD];
-	for (uint16_t i = 0; i < len; i++) reply[i] = p[i];
+	uint8_t *reply = ip_tx_payload();	// built in the outgoing frame
+	memcpy(reply, p, len);
 	reply[0] = 0;	// type: echo reply
 	reply[1] = 0;	// code
 	reply[2] = 0; reply[3] = 0;	// checksum, filled in below
@@ -208,7 +224,7 @@ static void icmp_handle(uint32_t src_ip, const uint8_t *p, uint16_t len) {
 	reply[2] = (csum >> 8) & 0xFF;
 	reply[3] = csum & 0xFF;
 
-	ip_send(src_ip, 1, reply, len);	// protocol 1 = ICMP
+	ip_send_built(src_ip, 1, len);	// protocol 1 = ICMP
 
 }
 

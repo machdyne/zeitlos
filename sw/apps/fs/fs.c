@@ -14,6 +14,8 @@
  *                by request (sw/common/zusbc.c, since Phase 3)
  *   underneath   the flash archive's files (Z_SYS_ZAR): read-only,
  *                shadowed by the card, there with no card at all
+ *   /nfs         an NFS export, read-only, through net's NFS client
+ *                (sw/common/znfsproto.h, docs/nfs.md), while mounted
  *
  * Clients speak sw/common/zfsproto.h: apps through zfsapp (zfsc.c), the
  * kernel -- its shell, program loading, cfg, the old Z_SYS_FS_* calls --
@@ -39,6 +41,7 @@
 #include "../../common/zsoc.h"
 #include "../../common/zproc.h"
 #include "../../common/zusbc.h"
+#include "../../common/znfsproto.h"
 #include "fatfs/ff.h"
 #include "fatfs/diskio.h"
 #include "fsvol.h"
@@ -64,12 +67,22 @@
 
 typedef struct {
 	bool		used;
-	bool		zar;			// a file in flash: zoff/zsize/zpos, no FIL
+	bool		zar;			// not FatFs's: a file in flash, or on NFS --
+								// zoff/zsize/zpos, no FIL, read-only
+	bool		nfs;			// ... on NFS: the server's handle in nfh
 	uint8_t		vol;
 	uint32_t	owner;			// pid
 	uint32_t	zoff, zsize, zpos;
-	FIL			f;
-	DWORD		clmt[FS_CLMT];
+	union {
+		struct {
+			FIL		f;
+			DWORD	clmt[FS_CLMT];
+		};
+		struct {
+			uint8_t		nfh[Z_NFS_FH_MAX];
+			uint32_t	nfh_len;
+		};
+	};
 } fs_file_t;
 
 // A listing is three things in turn: the volumes that hang off "/"
@@ -80,12 +93,21 @@ typedef struct {
 	bool		on_card;		// d is open
 	bool		under;			// the card's namespace (not /ram, /usb)
 	bool		root;
+	bool		nfs;			// a directory on NFS: nfh, ncookie, nverf
 	uint8_t		phase;			// 0 volumes, 1 card, 2 flash, 3 done
 	uint8_t		mi;
 	uint32_t	page;			// the client's page size (zfsc.c)
 	uint32_t	owner;
 	uint32_t	zit;
-	DIR			d;
+	union {
+		DIR			d;
+		struct {
+			uint8_t		nfh[Z_NFS_FH_MAX];
+			uint32_t	nfh_len;
+			uint64_t	ncookie;
+			uint8_t		nverf[8];
+		};
+	};
 	char		path[FS_PATH];	// as asked, for the flash part
 } fs_dir_t;
 
@@ -298,6 +320,79 @@ static bool zar_child(const char *dir, uint32_t *iter, z_zar_args_t *a) {
 	if (z_zar(a) != Z_OK) return false;
 	*iter = a->iter;
 	return true;
+}
+
+// -- NFS ---------------------------------------------------------------
+//
+// /nfs is net's (znfsproto.h): one request, one reply, as fs asks usb
+// for a drive's sectors. net holds nothing per file; the handles are
+// kept here. While net works on a request nobody else is served -- as
+// while the card works -- and a server that does not answer costs a
+// client NFS_WAIT at most.
+
+#define NFS_WAIT	(FS_TICK_HZ * 6)	// net gives up on the server at 5 s
+
+static bool prefix_eq(const char *a, const char *b, uint32_t n);
+
+static bool nfs_ok;				// net says the export is mounted
+static uint32_t nfs_tag, nfs_stale;
+static z_nfsreq_t nfs_rq;
+
+// "/nfs" or "/nfs/...": what follows ("" for the root), else NULL.
+static const char *nfs_path(const char *path) {
+	uint32_t n = sizeof(Z_DIR_NFS) - 1;
+	if (!prefix_eq(path, Z_DIR_NFS, n) || (path[n] && path[n] != '/')) return NULL;
+	return path + n;
+}
+
+static void nfs_req(uint32_t op) {
+	memset(&nfs_rq, 0, sizeof(nfs_rq));
+	nfs_rq.op = op;
+}
+
+// nfs_rq to net; its reply, borrowed (net's memory, valid until fs sends
+// net something else), or NULL with *err set.
+static const z_nfsrep_t *nfs_call(int32_t *err) {
+	uint32_t pid;
+	z_msg_t m;
+	z_blob_t b;
+	z_obj_t o;
+	if (!nfs_ok) { *err = -Z_ENOENT; return NULL; }
+	if (!z_pid_lookup("net0", &pid)) { *err = -Z_ENODEV; return NULL; }
+	if (nfs_stale && z_msg_take_match(&m, Z_NET_NFS_REPLY, nfs_stale) == Z_OK)
+		nfs_stale = 0;			// a late answer to a request given up on
+	b.len = sizeof(nfs_rq);
+	b.data = (uint8_t *)&nfs_rq;
+	o.type = Z_BLOB;
+	o.val.ptr = &b;
+	if (!++nfs_tag) ++nfs_tag;
+	if (z_msg_new_send(pid, Z_NET_NFS_REQ, nfs_tag, o) != Z_OK) { *err = -Z_ENODEV; return NULL; }
+	if (z_msg_recv_match(&m, Z_NET_NFS_REPLY, nfs_tag, NFS_WAIT) != Z_OK) {
+		nfs_stale = nfs_tag;
+		*err = -Z_ETIMEDOUT;
+		return NULL;
+	}
+	const z_nfsrep_t *r = (const z_nfsrep_t *)z_blob_data(&m.obj);
+	if (!r || z_blob_len(&m.obj) < sizeof(*r) || r->len > z_blob_len(&m.obj) - sizeof(*r)) {
+		*err = -Z_EIO;
+		return NULL;
+	}
+	if (r->result == -Z_ENODEV) nfs_ok = false;	// unmounted under us
+	*err = r->result;
+	return r;
+}
+
+// The handle and attributes of `rest` ("/apps/x", "" the export's root).
+static int32_t nfs_lookup(const char *rest, z_fs_info_t *fi, uint8_t *fh, uint32_t *fh_len) {
+	int32_t err;
+	nfs_req(Z_NFSOP_LOOKUP);
+	strcpy(nfs_rq.path, rest[0] ? rest : "/");
+	const z_nfsrep_t *r = nfs_call(&err);
+	if (!r || err < 0) return err < 0 ? err : -Z_EIO;
+	if (!r->fh_len || r->fh_len > Z_NFS_FH_MAX) return -Z_EIO;
+	*fi = r->info;
+	if (fh) { memcpy(fh, r->fh, r->fh_len); *fh_len = r->fh_len; }
+	return 0;
 }
 
 // -- paths -------------------------------------------------------------
@@ -574,6 +669,23 @@ static int32_t op_open(const z_fsreq_t *rq, uint32_t pid, fs_client_t *c) {
 	if (fd == FS_MAX_FILES) return -Z_EMFILE;
 	fs_file_t *f = &files[fd];
 
+	const char *nrest = nfs_path(rq->path);
+	if (nrest) {				// read-only, through net
+		int32_t r;
+		if ((rq->flags & Z_O_ACCMODE) != Z_O_RDONLY ||
+			(rq->flags & (Z_O_CREAT | Z_O_TRUNC | Z_O_APPEND))) return -Z_EROFS;
+		memset(f, 0, sizeof(*f));
+		if ((r = nfs_lookup(nrest, &fi, f->nfh, &f->nfh_len)) < 0) return r;
+		if (fi.type == Z_FS_TYPE_DIR) return -Z_EISDIR;
+		f->used = true;
+		f->zar = true;
+		f->nfs = true;
+		f->owner = pid;
+		f->zsize = fi.size;
+		put_info(c, &fi);
+		return fd;
+	}
+
 	switch (rq->flags & Z_O_ACCMODE) {
 	case Z_O_RDONLY: mode = FA_READ; break;
 	case Z_O_WRONLY: mode = FA_WRITE; break;
@@ -597,6 +709,7 @@ static int32_t op_open(const z_fsreq_t *rq, uint32_t pid, fs_client_t *c) {
 		memset(f, 0, sizeof(*f));
 		f->used = true;
 		f->zar = true;
+		f->nfs = false;
 		f->owner = pid;
 		f->zoff = zo;
 		f->zsize = zs;
@@ -633,7 +746,34 @@ static int32_t op_open(const z_fsreq_t *rq, uint32_t pid, fs_client_t *c) {
 	return fd;
 }
 
+// Up to `want` bytes from the server, Z_NFS_RSIZE a request.
+static int32_t nfs_read(fs_file_t *f, uint8_t *to, uint32_t want) {
+	uint32_t got = 0;
+	while (got < want && f->zpos < f->zsize) {
+		int32_t err;
+		nfs_req(Z_NFSOP_READ);
+		memcpy(nfs_rq.fh, f->nfh, f->nfh_len);
+		nfs_rq.fh_len = f->nfh_len;
+		nfs_rq.off = f->zpos;
+		nfs_rq.len = want - got;
+		const z_nfsrep_t *r = nfs_call(&err);
+		if (!r || err < 0) return got ? (int32_t)got : (err < 0 ? err : -Z_EIO);
+		uint32_t n = r->len < want - got ? r->len : want - got;
+		memcpy(to + got, r + 1, n);
+		got += n;
+		f->zpos += n;
+		if (!n || (r->flags & Z_NFSREP_EOF)) break;
+	}
+	return (int32_t)got;
+}
+
 static FRESULT file_read(fs_file_t *f, void *to, uint32_t want, UINT *br) {
+	if (f->nfs) {
+		int32_t n = nfs_read(f, to, want);
+		if (n < 0) { *br = 0; return FR_DISK_ERR; }
+		*br = (UINT)n;
+		return FR_OK;
+	}
 	if (f->zar) {
 		uint32_t left = f->zsize - f->zpos;
 		uint32_t n = want < left ? want : left;
@@ -763,6 +903,13 @@ static int32_t op_stat(const z_fsreq_t *rq, fs_client_t *c) {
 	z_fs_info_t fi;
 	if (!real) return -Z_ENAMETOOLONG;
 	memset(&fi, 0, sizeof(fi));
+	const char *nrest = nfs_path(rq->path);
+	if (nrest) {
+		int32_t r = nfs_lookup(nrest, &fi, NULL, NULL);
+		if (r < 0) return r;
+		put_info(c, &fi);
+		return 0;
+	}
 	if (fs_is_root(real)) {		// a volume root, or a synthetic one
 		if (real != rq->path && !(fs_vol_of(real) == 1 ? ram_ok : usb_ok))
 			return -Z_ENOENT;
@@ -823,6 +970,7 @@ static int32_t op_rename(const z_fsreq_t *rq) {
 	FRESULT r;
 	if (!from || !to) return -Z_ENAMETOOLONG;
 	if (!from[0] || !to[0]) return -Z_EINVAL;
+	if (nfs_path(rq->path) || nfs_path(rq->path2)) return -Z_EROFS;
 	// FatFs would rename within `from`'s drive whatever `to` says.
 	if (fs_vol_of(from) != fs_vol_of(to)) return -Z_EXDEV;
 	if (fs_is_root(from) || fs_is_root(to) ||
@@ -863,7 +1011,7 @@ static uint32_t dir_page(const z_fsreq_t *rq) {
 }
 
 static void dir_close(fs_dir_t *d) {
-	if (d->on_card) f_closedir(&d->d);
+	if (d->on_card && !d->nfs) f_closedir(&d->d);
 	d->on_card = false;
 	d->used = false;
 }
@@ -871,14 +1019,49 @@ static void dir_close(fs_dir_t *d) {
 // A page of entries into the reply. At the end of the directory it is
 // closed here and the reply says so (Z_FSREP_END), which saves the
 // client a READDIR and a CLOSEDIR.
+// A page of an NFS directory: net converts the server's entries to
+// z_fs_dirent_t, so they come straight through.
+static int32_t nfs_dir_fill(fs_dir_t *d, fs_client_t *c) {
+	int32_t err;
+	nfs_req(Z_NFSOP_READDIR);
+	memcpy(nfs_rq.fh, d->nfh, d->nfh_len);
+	nfs_rq.fh_len = d->nfh_len;
+	nfs_rq.off = d->ncookie;
+	memcpy(nfs_rq.verf, d->nverf, 8);
+	nfs_rq.len = d->page;
+	const z_nfsrep_t *r = nfs_call(&err);
+	if (!r || err < 0) return err < 0 ? err : -Z_EIO;
+	uint32_t len = r->len < d->page ? r->len : d->page;
+	memcpy(c->data, r + 1, len);
+	c->rep->len = len;
+	d->ncookie = r->cookie;
+	memcpy(d->nverf, r->verf, 8);
+	if (r->flags & Z_NFSREP_EOF) {
+		dir_close(d);
+		c->rep->flags |= Z_FSREP_END;
+	}
+	return r->result;
+}
+
 static int32_t dir_fill(fs_dir_t *d, fs_client_t *c) {
 	uint32_t at = 0;
 	int32_t n = 0;
 	z_fs_info_t fi;
 	char full[FS_PATH];
 
+	if (d->nfs) return nfs_dir_fill(d, c);
+
 	while (d->phase < 3) {
 		if (d->phase == 0) {			// the volumes off "/"
+			if (d->root && d->mi == N_MOUNTS && nfs_ok) {	// and /nfs, while mounted
+				memset(&fi, 0, sizeof(fi));
+				fi.attr = Z_FS_ATTR_DIR | Z_FS_ATTR_RDONLY;
+				fi.type = Z_FS_TYPE_DIR;
+				if (!dir_put(c, d->page, &at, Z_DIR_NFS + 1, &fi)) break;
+				n++;
+				d->mi++;
+				continue;
+			}
 			if (!d->root || d->mi >= N_MOUNTS) { d->phase = 1; continue; }
 			if (mount_live(d->mi)) {
 				memset(&fi, 0, sizeof(fi));
@@ -951,6 +1134,23 @@ static int32_t op_opendir(const z_fsreq_t *rq, uint32_t pid, fs_client_t *c) {
 	if (dd == FS_MAX_DIRS) return -Z_EMFILE;
 	fs_dir_t *d = &dirs[dd];
 	memset(d, 0, sizeof(*d));
+	const char *nrest = nfs_path(path);
+	if (nrest) {
+		z_fs_info_t fi;
+		int32_t r = nfs_lookup(nrest, &fi, d->nfh, &d->nfh_len);
+		if (r < 0) return r;
+		if (fi.type != Z_FS_TYPE_DIR) return -Z_ENOTDIR;
+		d->nfs = true;
+		d->page = dir_page(rq);
+		d->used = true;
+		d->owner = pid;
+		int32_t n = dir_fill(d, c);
+		if (n < 0) {
+			if (d->used) dir_close(d);
+			return n;
+		}
+		return dd;
+	}
 	d->under = (real == path);
 	d->root = (path[0] == '/' && path[1] == 0);
 	d->page = dir_page(rq);
@@ -982,6 +1182,7 @@ static int32_t op_readdir(const z_fsreq_t *rq, uint32_t pid, fs_client_t *c) {
 
 static int vol_of_path(const char *path) {
 	char rb[FS_PATH];
+	if (nfs_path(path)) return -1;		// not a FatFs volume: `nfs` is net's
 	const char *real = resolve(path[0] ? path : "/", rb, sizeof rb);
 	return real ? fs_vol_of(real) : -1;
 }
@@ -1090,6 +1291,7 @@ static int32_t serve(const z_fsreq_t *rq, uint32_t pid, uint8_t *buf,
 	case Z_FSOP_UNLINK: {
 		FRESULT fr;
 		FILINFO fno;
+		if (nfs_path(rq->path)) return -Z_EROFS;
 		if (!(real = resolve(rq->path, rb, sizeof rb))) return -Z_ENAMETOOLONG;
 		need(real);
 		fr = f_unlink(real);
@@ -1101,6 +1303,7 @@ static int32_t serve(const z_fsreq_t *rq, uint32_t pid, uint8_t *buf,
 		return fs_err(fr);
 	}
 	case Z_FSOP_MKDIR:
+		if (nfs_path(rq->path)) return -Z_EROFS;
 		if (!(real = resolve(rq->path, rb, sizeof rb))) return -Z_ENAMETOOLONG;
 		need(real);
 		return fs_err(f_mkdir(real));
@@ -1259,6 +1462,12 @@ int main(void) {
 		}
 		// `usb` says a drive came or went (zusbproto.h).
 		if (m.subject == Z_USB_EVENT) { usb_poll(false); continue; }
+		// net: the NFS export mounted, or not (znfsproto.h).
+		if (m.subject == Z_NET_NFS_EVENT) {
+			nfs_ok = (m.obj.type == Z_UINT32 && m.obj.val.uint32);
+			say(nfs_ok ? "fs: " Z_DIR_NFS " mounted\n" : "fs: " Z_DIR_NFS " gone\n");
+			continue;
+		}
 		if (m.subject != Z_FS_REQ) continue;
 		fs_serve_msg(&m);
 		if ((++served & 255u) == 0) sweep_dead();
@@ -1272,4 +1481,5 @@ void fs_test_start(bool with_grants) { grants = with_grants; fs_start(); }
 void fs_test_serve(z_msg_t *m) { fs_serve_msg(m); }
 void fs_test_sweep(void) { sweep_dead(); }
 void fs_test_usb_poll(void) { usb_poll(false); }
+void fs_test_nfs(bool up) { nfs_ok = up; }
 #endif

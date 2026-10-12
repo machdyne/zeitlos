@@ -1,10 +1,18 @@
 # Rescue console
 
 The kernel shell on the monitor, typed at on the USB keyboard, with no
-window manager. For a machine whose desktop does not come up -- a bad
-`wm`, a broken card, a display left blank -- when there is no serial
-cable to hand. The serial console keeps working alongside it: both
-show the same prompt and the same output, and either can type.
+window manager in the way. For a machine whose desktop does not come
+up -- a bad `wm`, a broken card, a display left blank -- when there is
+no serial cable to hand, and for a quick look at the console any time.
+The serial console keeps working alongside it: both show the same
+prompt and the same output, and either can type.
+
+**Ctrl+Alt+Esc, any time on the desktop.** wm hides every window and
+the console takes the screen; nothing is stopped, the apps keep
+running. **Ctrl+Alt+Esc again, or `exit`**, and the windows come back
+where they were. Not from the lock screen (that would be a shell past
+the lock); a lock asked for while it is up (`lock`) takes it down and
+locks.
 
 **Hold ESC on the USB keyboard while the machine boots, until the
 console appears.** Init is skipped, as with ESC on the serial console;
@@ -18,14 +26,21 @@ It also comes up by itself:
 
 Starting `wm` by any route (`init`, `run wm`) hands the screen back.
 
+**Ctrl+Alt+Del** from the console asks to reboot, as on the desktop,
+and Cancel comes back here ([window_manager.md](window_manager.md#rebooting));
+with no `wm` behind the console, it says to type `reboot`.
+
 ## Status (October 2026)
 
-Built, host-tested (`test_rescue`, 54 checks), reviewed, awaiting
-hardware.
+Tested on hardware: boot with ESC held, the shell, the takeover. The
+8x8 font, Ctrl+Alt+Esc and `exit` are built and host-tested
+(`test_rescue` 54 checks; wm's `test_lock` 45, the rescue part 16),
+awaiting hardware.
 
 ## Using it
 
-- 80 x 60 characters, the 5x8 font, white on black; an underline is the
+- 80 x 60 characters, the 8x8 font (each glyph fills its cell; the
+  5x8 font's gaps were hard to read on hardware), white on black; an underline is the
   cursor. On composite video, which always shows 320x240 of the
   picture, 40 x 30 in that corner.
 - On entering, it shows the end of the console log (about a screenful),
@@ -101,8 +116,8 @@ kernel calls it at a few points (`rescue.h`):
   pause cannot keep the shell from reading what is typed.
 - **wm is known by its pid**, recorded when it is created, as well as by
   its registered name: a broken wm can crash before it registers.
-- **The screen**: glyphs are CPU byte stores into VRAM (a 5x8 glyph in
-  an 8-pixel cell is one byte a row, as on the panic screen); scrolling
+- **The screen**: glyphs are CPU byte stores into VRAM (an 8x8 glyph
+  is one byte a row); scrolling
   and clearing are blitter copies and fills, programmed with interrupts
   masked from the idle check to the start, as `zgfx.c` does, so a
   program still drawing after wm died cannot interleave its own
@@ -117,6 +132,31 @@ kernel calls it at a few points (`rescue.h`):
   (`k_uart_rx_put()`), so the shell reads it as typed on the serial
   console. Nothing is queued for apps meanwhile, so `wm` starts with no
   stale keys.
+
+## Ctrl+Alt+Esc
+
+It is wm's screen lock with the kernel's console where the lock screen
+would be (`wm.c`, `rescue_engage()` and `rescue_release()`, next to
+`lock_engage()` and `lock_release()`):
+
+1. The hotkey is wm's, by key (ESC is the same key on every layout),
+   acted on at a safe point in its loop -- after a drag, as the lock.
+2. An app holding the screen is revoked and game mode's viewport put
+   away; every window is frozen (bounded wait for the acks) and given
+   an empty region, so nothing an app draws reaches the glass. wm draws
+   nothing either while it is up (`WM_HIDDEN()`).
+3. `Z_SYS_RESCUE` 1: the kernel shows the console. While it is up the
+   kernel turns every key press into shell input, except Ctrl+Alt+Esc,
+   and passes the releases on, so wm does not think a key held as it
+   hid is still down.
+4. Back -- Ctrl+Alt+Esc, or `exit` (the shell sends wm `Z_WM_RESCUE`):
+   `Z_SYS_RESCUE` 0, then every window its region and a repair of the
+   whole screen, as `lock_release()` does. The apps redraw their
+   windows.
+
+If wm crashes while it is up, the console simply stays (that is what
+it does for a crash anyway); `exit` then says there is no desktop and
+`run wm` starts one. The cost: ~0.7KB of kernel, ~0.8KB of wm.
 
 ## Testing
 

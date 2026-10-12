@@ -83,8 +83,14 @@ typedef struct {
 // (sw/apps/usb formats with vsnprintf and write()s the line) leaves
 // stdio out entirely -- fwrite here is what would otherwise keep it,
 // and with it malloc, in the link.
+#ifdef ZFMT_LITE_STDIO
+static void zl_write(const char *s, size_t n);
+#endif
+
 static void zf_flush(zf_out_t *o) {
-#ifndef ZFMT_NO_STDIO
+#if defined(ZFMT_LITE_STDIO)
+	if (o->f && o->tn) zl_write(o->tmp, o->tn);
+#elif !defined(ZFMT_NO_STDIO)
 	if (o->f && o->tn) fwrite(o->tmp, 1, o->tn, o->f);
 #endif
 	o->tn = 0;
@@ -584,7 +590,11 @@ int ZF(vfprintf)(FILE *f, const char *fmt, va_list ap) {
 	o.f = f; o.buf = NULL; o.cap = 0; o.len = 0; o.tn = 0;
 	zf_format(&o, fmt, ap);
 	zf_flush(&o);
+#ifdef ZFMT_LITE_STDIO
+	return (int)o.len;
+#else
 	return ferror(f) ? -1 : (int)o.len;
+#endif
 }
 
 int ZF(fprintf)(FILE *f, const char *fmt, ...) {
@@ -608,6 +618,65 @@ int ZF(printf)(const char *fmt, ...) {
 	va_end(ap);
 	return r;
 }
+
+#ifdef ZFMT_LITE_STDIO
+
+// -- ZFMT_LITE_STDIO: stdout without newlib's stdio --
+//
+// For a core app whose only FILE output is printf, puts, putchar and
+// fflush to stdout (net). newlib's FILE machinery -- fwrite, the
+// buffering, fflush, fclose, realloc for the buffer -- is about 7 KB of
+// code, and a 1 KB buffer from the heap at the first write. This is a
+// line buffer of 128 bytes that write()s fd 1 at each newline and when
+// it fills: the same whole lines newlib's line-buffered stdout gave the
+// console log. Every FILE is stdout here, stderr included. fflush() is
+// NOT replaced -- newlib's would bring stdio back, and defining one
+// clashes with it in the link -- so an app built this way must not
+// call it (a partial line waits for its newline); nothing is flushed
+// at exit either (a core app does not exit with half a line). app.mk's
+// ZFMT_LITE = 1.
+
+#include <unistd.h>
+
+#undef putchar
+#undef puts
+#undef fputs
+
+static char zl_line[128];
+static unsigned zl_n;
+
+static void zl_drain(void) {
+	if (zl_n) write(1, zl_line, zl_n);
+	zl_n = 0;
+}
+
+static void zl_write(const char *s, size_t n) {
+	while (n--) {
+		char c = *s++;
+		zl_line[zl_n++] = c;
+		if (c == '\n' || zl_n == sizeof(zl_line)) zl_drain();
+	}
+}
+
+int puts(const char *s) {
+	zl_write(s, strlen(s));
+	zl_write("\n", 1);
+	return 1;
+}
+
+int putchar(int c) {
+	char ch = (char)c;
+	zl_write(&ch, 1);
+	return (unsigned char)c;
+}
+
+int fputs(const char *s, FILE *f) {
+	(void)f;
+	zl_write(s, strlen(s));
+	return 1;
+}
+
+#endif
 
 #ifdef ZFMT_FLOAT
 

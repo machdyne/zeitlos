@@ -143,7 +143,8 @@ kernel.o: $(KSRCS)
 	$(CC) $(CFLAGS) -c procapi.c -o procapi.o
 	$(CC) $(CFLAGS) -c ktrace.c -o ktrace.o
 	$(CC) $(CFLAGS) -c ../common/zobj.c -o zobj.o
-	# only z_font_5x8 survives --gc-sections: the panic screen's font
+	# only z_font_5x8 (the panic screen) and z_font_8x8 (the rescue
+	# console, rescue.c) survive --gc-sections
 	# (sw/os/uart.c, k_klog_panic_screen())
 	$(CC) $(CFLAGS) -c ../common/zfont_data.c -o zfont_data.o
 	$(CC) $(CFLAGS) -c cfg.c -o cfg.o

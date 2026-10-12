@@ -20,6 +20,7 @@ another, and `net` can accept connections as well as make them.
 | **Raw sockets** | how an app gets a TCP connection of its own |
 | **Throughput** | why bulk transfer is slow, and what actually bounds it |
 | **Diagnostics** | the counters, and what each one rules out |
+| **NFS** | a read-only NFSv3 client in `net`, for `/nfs` -- [nfs.md](nfs.md) |
 
 ## Three MACs and an adapter, chosen at runtime
 
@@ -34,7 +35,8 @@ binary serves every board:
 | `usb_ecm.c` | a USB ethernet adapter (CDC-ECM), on any board with the USB host controller | the adapter's own, which nothing reports |
 
 A MAC in the bitstream wins; the USB adapter is what a board with none
-gets, and `net.cfg`'s `phy = auto | usb | builtin` overrides that
+gets -- or one whose ESP32 link never answers while an adapter is
+plugged in ([usb_ethernet.md](usb_ethernet.md#configuration)) -- and `net.cfg`'s `phy = auto | usb | builtin` overrides that
 either way. The USB backend differs from the three MACs in three ways
 worth knowing before reading the rest of this document — its hardware
 can arrive and leave while `net` runs, it has a MAC address of its own
@@ -556,7 +558,9 @@ still making its own.
   of `rx_window_max`, never below one MSS. One connection gets the
   whole of it, as before.
 - **The peer's MSS** is taken from its SYN; `tcp_mss()` is what
-  `tcp_send()` accepts, at most 536.
+  `tcp_send()` accepts, at most 1460 (536 when the peer sends none).
+- **A send window** (see "Sending" below): up to five segments in
+  flight per connection.
 - **Half-close**, for a connection that asks (`tcp_set_half_close()`):
   the peer's FIN is `TCP_EVENT_EOF` and CLOSE_WAIT, the owner goes on
   sending, and its `tcp_close()` finishes it. net's relay asks; the
@@ -568,7 +572,7 @@ still making its own.
 
 `tests/test_tcp_pool.c` (`make test`) plays the network against the
 real `tcp.c`: it builds the segments a peer sends and parses every one
-the stack sends back. 73 checks -- handshakes both ways, the MSS
+the stack sends back. 74 checks -- handshakes both ways, the MSS
 option, RSTs, the reservation, window sharing, the half-open timeout,
 RFC 5961, TIME_WAIT, the deferred FIN, a handler that aborts and
 reopens inside an event, three interleaved connections, half-close, the
@@ -579,6 +583,66 @@ which today's code makes redundant (every later step also tests the
 connection's state); it is kept for the next line added there.
 
 For a 1 MB board: `make TCP_MAX_CONN=4 TCP_MIN_OUTBOUND_FREE=1`.
+
+## Sending
+
+TCP sends with a window. Until October 2026 it was stop-and-wait: one
+segment of at most 536 bytes, then nothing until its ACK -- 536 bytes a
+round trip, whatever the link. Now:
+
+- **Segments of the peer's MSS**, up to 1460 (a full frame, which every
+  NIC here sends), and **up to five in flight** per connection: ~7KB a
+  round trip.
+- **One pool of six segment buffers** shared by all connections
+  (`TCP_TX_SEGS`, `TCP_TX_MAX` in `tcp.h`), so a connection that is not
+  sending holds none, and a second always has one while a first sends
+  in bulk: a connection with segments out never takes the last free
+  one. A segment stays in the pool until acknowledged: it is the
+  retransmit copy. This replaced a 536-byte copy in every connection.
+- **The windows:** the peer's advertised window, and a congestion
+  window that starts at two segments and grows by one per ACK (slow
+  start). The first unacked segment always goes, whatever the peer's
+  window -- with nothing in flight, that is the zero-window probe. A
+  peer that keeps answering the probe with a zero window is alive, and
+  is probed for as long as it takes; when its window reopens, the
+  probe goes again at once.
+- **Loss:** three duplicate ACKs resend the oldest segment at once
+  (fast retransmit); a timeout (0.5s, doubling) resends everything
+  unacked from the oldest at a congestion window of one.
+- **Room in the NIC** (`net_phy_t.tx_room`, `tcp_link_room()`). The
+  ENC28J60 and RMII drivers wait for the hardware, so a burst paces
+  itself. The USB adapter's ring has two slots and drops a frame when
+  full; the ESP32 link has a window of four. For those, TCP holds a
+  segment until there is room rather than lose it, and `net`'s loop
+  looks again on the next tick (`tcp_tx_waiting()`). A NIC that never
+  has room (an adapter unplugged) times the connection out as a lost
+  peer would. The ESP32 link's window is cleared when no DATA_ACK has
+  come for three ticks (lost acks), as its `send()` does. A segment
+  parked for ARP (`ip_tx_parked()`) counts as sent.
+- **`tcp_send()`** queues and returns false when the connection's queue
+  or the pool is full; the callers (relay, sockets, telnet, ssh) now
+  offer segments in a loop until it refuses, rather than one per pass.
+- **`tcp_close()`** with data still queued is taken: the FIN follows
+  once all of it is acknowledged. It used to fail while a segment was
+  out, and the sockets and telnet, which call it once, never closed.
+- **Fewer copies on the way down.** TCP, UDP and ICMP build their
+  packets straight into the outgoing Ethernet frame
+  (`ip_tx_payload()`, `ip_send_built()`, `eth_tx_payload()`), not in a
+  buffer each that IP and Ethernet then copied again: two copies of
+  every frame fewer, and ~4.5KB of `net`'s RAM, which paid for most of
+  the pool.
+
+The receive side: the USB adapter now advertises an MSS of 1460 and a
+window of four of them (`net_phy_t.rx_mss`, `rx_capacity`): its buffer
+holds far more than the ENC28J60's ring, where 536 measured better
+(below). The other NICs keep 536.
+
+`tests/test_tcp_window.c` (`make test`), 59 checks: slow start, the
+peer's window and the probe, fast retransmit, a timeout's go-back,
+partial ACKs, a full NIC delaying segments rather than losing them,
+ARP parking, the shared pool and its reserve, the FIN after queued
+data (also when the peer's data and FIN arrive with the ACK), a long
+zero window, and the advertised MSS.
 
 ## Throughput
 
@@ -763,7 +827,7 @@ the network without the file write.
 
 | | |
 |---|---|
-| **Stop-and-wait sending** | one segment of at most 536 bytes outstanding. Fine for telnet and requests; it caps uploads, and what the servers send -- a large file over HTTP most of all ([netserve.md](netserve.md)). |
+| **A small send window** | five segments in flight per connection, six in the whole system ("Sending"): about 7KB a round trip, bounded by `net`'s RAM budget. No window scaling, so never past 64KB either. |
 | **No out-of-order reassembly** | the big one. A lost segment discards everything behind it. See "Throughput". |
 | **A pool of 8** | eight TCP connections in the whole system, two always kept for outbound; two sockets (`NET_SOCK_SLOTS`), one telnet and one ssh session at a time (see "More than one socket" and "Connections"). |
 | **No window scaling, SACK or timestamps** | only an MSS option, on the SYN. |

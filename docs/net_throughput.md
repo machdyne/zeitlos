@@ -18,6 +18,11 @@ was in the kernel -- keeping the drivers in userspace
   -- the reader no longer spins on a NAK in mid-frame and `net`'s copies
   run a word at a time. To the SD card, 88KB/s: the card write, 17.8ms
   a block, is now the limit.
+- **Round 5 built, awaiting hardware: TCP sends with a window** --
+  up to five full-size segments in flight instead of one of 536 bytes;
+  the USB adapter receives 1460-byte segments. TCP, UDP and ICMP build
+  straight into the outgoing frame (two copies of each frame fewer).
+  Works with every NIC ([networking.md](networking.md), "Sending").
 - **Round 4 built, awaiting hardware:** writes are gathered 8KB at a
   time for every program (write-behind), `net` handles a frame where
   `usb` left it and lends TFTP blocks to the receiver instead of copying
@@ -87,9 +92,9 @@ Round 4's set, after the receiver turned out to bind:
 | | change | where | state |
 |---|---|---|---|
 | 1 | a USB stick's NAKs retried by the engine (15 a round), short spins, a 3s limit by time | `usb` | built |
-| 2 | TCP: a window of segments in flight, MSS 1460 over USB ethernet | `net` | next |
 | 3 | write-behind: 8KB of small writes per program become one request to `fs` | zfsapp, zfsc, kernel | built |
 | 4 | fewer copies in `net`: frames handled in `usb`'s ring, TFTP blocks lent to the receiver | `net`, zstream | built |
+| 2 | (round 5) TCP send window: 5 segments of up to 1460 in flight, slow start, fast retransmit, NIC room; MSS 1460 received over USB; packets built in the outgoing frame | `net` | built |
 
 The order: A+B+C, measure; then D (if the server has it) or E; then F
 when the receiver binds; G and H are hardware.
@@ -232,3 +237,35 @@ Expected: the card write per block falls from 17.8ms toward ~6ms, so
 to the card ~150KB/s, bound by the network again; received alone,
 somewhat past 148KB/s (one copy fewer, ~0.3ms of 6.7). Measure with
 the three `tget`s above and `usbbench` on a stick.
+
+## Round 5: TCP sends with a window
+
+Proposal 2. Everything that sends bulk over TCP -- net's relay (the
+HTTP, telnet and ssh servers), sockets, the ssh and telnet clients --
+was stop-and-wait: one segment of at most 536 bytes, then nothing until
+its ACK. At a ~5ms round trip that is ~100KB/s at best, and with a peer
+that delays its ACKs (Windows, 200ms) a few KB/s.
+
+- **Up to five segments in flight**, of the peer's MSS up to 1460, from
+  a pool of six shared by all connections; slow start from two; three
+  duplicate ACKs resend the oldest at once, a timeout resends all
+  unacked from it. `tcp_close()` with data queued sends the FIN after
+  it. Details: [networking.md](networking.md), "Sending".
+- **Every NIC**: the ENC28J60 and RMII send synchronously, so a burst
+  paces itself; the USB adapter (2 ring slots) and the ESP32 link
+  (window of 4) report room (`tx_room`), and a segment waits for it
+  rather than being dropped into a full queue.
+- **Receiving over USB**: MSS 1460 and a window of 4 x 1460 advertised
+  (`rx_mss`, `rx_capacity`); the ENC28J60, RMII and ESP32 keep 536.
+- **Fewer copies sending**: TCP, UDP and ICMP build their packets in
+  the outgoing Ethernet frame; IP and Ethernet no longer copy each one
+  again. That also paid for most of the pool's RAM: `net` is 284,132
+  bytes, its budget 280K (2K of RAM from `wm`'s slack).
+- **Tests:** `test_tcp_window` 59 checks (new); `test_tcp_pool` 74,
+  `test_relay` 48 (reading segments sent from inside an ACK too).
+
+Expected: bulk TCP sends ~5-10x faster on a LAN. Through the relay
+segments are at most 1KB (`RELAY_TX`), so ~5KB a round trip. To
+measure: fetch a large file from Zeitlos's web server with
+`curl -o /dev/null -w '%{speed_download}' http://<board>/<file>`
+before and after, and an ssh session's `cat` of a big file.

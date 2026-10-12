@@ -366,12 +366,11 @@ Static files from one directory on the card, read-only.
   status, bytes.
 - **The subnet rule** (`apps.netserve.allow`) applies here too.
 
-Throughput is TCP's: one segment of up to 536 bytes in flight at a
-time (networking.md, "Known limits"), so a page arrives at LAN speed
-for small files and a few tens of KB/s for large ones. A client that
-delays its ACKs (Windows, 200 ms) makes large files slow. Sending two
-segments at a time, and full-size ones, is the open item that would fix
-that (networking.md).
+Throughput is TCP's: up to five segments in flight at a time
+(networking.md, "Sending"). Through net's relay they are up to 1KB
+each -- its staging buffer (`RELAY_TX`) -- so ~5KB a round trip, where
+it was one 536-byte segment. A client that delays its ACKs (Windows,
+200 ms) costs much less now: it has several segments to acknowledge.
 
 ## Half-close
 
@@ -698,9 +697,9 @@ guarantees it) and tcp.c's generation check after a DATA event.
 
 ## Not yet
 
-- **Throughput:** TCP sends one segment of at most 536 bytes at a time
-  (networking.md, "Known limits"); two at a time, and full-size ones,
-  would speed up large HTTP files most.
+- **Throughput:** full-size segments through the relay: sending from
+  the listener's held messages directly, rather than through its 1KB
+  staging buffer.
 - SSH `exec` (`ssh host command`), and scp/sftp.
 - **Telnet BINARY** (RFC 856). Enter is normalised to one CR and
   nothing else is negotiated, which is right for typing and wrong for

@@ -37,6 +37,13 @@ void fs_test_start(bool with_grants);
 void fs_test_serve(z_msg_t *m);
 void fs_test_sweep(void);
 void fs_test_usb_poll(void);
+void fs_test_nfs(bool up);
+#define NET_PID		9
+static bool in_fs;				// fs is serving: what it sends is fs's
+static uint32_t nfs_events, nfs_event_val;
+static bool net_pump(void);
+#include "../../../common/znfsproto.h"
+void nfs_handle_msg(const z_msg_t *msg);
 
 #define FS_PID		7
 static uint32_t client = 5;		// who is calling
@@ -66,11 +73,32 @@ z_rv z_msg_new_send(uint32_t to, uint32_t subject, uint32_t tag, z_obj_t obj) {
 	z_msg_t m;
 	memset(&m, 0, sizeof m);
 	m.to = to; m.subject = subject; m.tag = tag; m.obj = obj;
+	if (to == NET_PID) {			// net's NFS client (nfs_fake.h)
+		CHECK(subject == Z_NET_NFS_REQ);
+		m.from = in_fs ? FS_PID : client;
+		nfs_handle_msg(&m);
+		return Z_OK;
+	}
+	if (subject == Z_NET_NFS_EVENT) {	// net to fs
+		CHECK(to == FS_PID && obj.type == Z_UINT32);
+		nfs_events++;
+		nfs_event_val = obj.val.uint32;
+		fs_test_nfs(obj.val.uint32 != 0);
+		return Z_OK;
+	}
+	if (subject == Z_NET_NFS_REPLY) {	// net's answer, to fs or the "shell"
+		m.from = NET_PID;
+		reply = m;
+		have_reply = true;
+		return Z_OK;
+	}
 	if (to == FS_PID) {
 		CHECK(subject == Z_FS_REQ);
 		reqs++;
 		m.from = client;
+		in_fs = true;
 		fs_test_serve(&m);
+		in_fs = false;
 		return Z_OK;
 	}
 	CHECK(to == client && subject == Z_FS_REPLY);
@@ -110,6 +138,7 @@ z_rv z_msg_take_match(z_msg_t *msg, uint32_t subject, uint32_t tag) {
 
 z_rv z_msg_recv_match(z_msg_t *msg, uint32_t subject, uint32_t tag, uint32_t t) {
 	(void)t;
+	while (!have_reply && net_pump()) { }	// net works while fs waits for it
 	if (!have_reply || reply.subject != subject || reply.tag != tag) return Z_FAIL;
 	*msg = reply;
 	have_reply = false;
@@ -117,6 +146,7 @@ z_rv z_msg_recv_match(z_msg_t *msg, uint32_t subject, uint32_t tag, uint32_t t) 
 }
 
 bool z_pid_lookup(const char *name, uint32_t *pid) {
+	if (!strcmp(name, "net0")) { *pid = NET_PID; return true; }
 	if (strcmp(name, Z_FS_SERVICE)) return false;
 	*pid = FS_PID;
 	return true;
@@ -156,6 +186,9 @@ uint32_t z_blob_len(const z_obj_t *o) {
 void *z_blob_data(const z_obj_t *o) {
 	return (o && o->type == Z_BLOB && o->val.ptr) ? ((z_blob_t *)o->val.ptr)->data : NULL;
 }
+z_obj_t z_obj_uint32(uint32_t u) { z_obj_t o; memset(&o, 0, sizeof o); o.type = Z_UINT32; o.val.uint32 = u; return o; }
+
+#include "nfs_fake.h"
 
 // -- the disks -----------------------------------------------------------
 
@@ -928,6 +961,171 @@ static void test_writeback(void) {
 	CHECK(zfs_unlink("/wb.bin") == 0 && zfs_unlink("/wb2.txt") == 0);
 }
 
+// The "kernel shell" asking net (Z_NFSOP_MOUNT and friends): the reply.
+static int32_t shell_nfs(uint32_t op, const char *path, char *out, size_t outcap) {
+	z_nfsreq_t rq;
+	z_blob_t b;
+	z_obj_t o;
+	z_msg_t m;
+	memset(&rq, 0, sizeof rq);
+	rq.op = op;
+	if (path) strcpy(rq.path, path);
+	b.len = sizeof rq; b.data = (uint8_t *)&rq;
+	o.type = Z_BLOB; o.val.ptr = &b;
+	z_msg_new_send(NET_PID, Z_NET_NFS_REQ, 77, o);
+	if (z_msg_recv_match(&m, Z_NET_NFS_REPLY, 77, 0) != Z_OK) return -999;
+	const z_nfsrep_t *r = z_blob_data(&m.obj);
+	if (out && outcap) {
+		size_t n = r->len < outcap - 1 ? r->len : outcap - 1;
+		memcpy(out, r + 1, n);
+		out[n] = 0;
+	}
+	return r->result;
+}
+
+static bool listed(const char *dir, const char *name, uint32_t *count, z_fs_info_t *fi_out) {
+	zfs_dir_t d;
+	static uint32_t page[512];
+	const z_fs_dirent_t *e;
+	bool hit = false;
+	uint32_t n = 0;
+	if (zfs_opendir_at(&d, dir, page, 2048) != 0) return false;
+	while ((e = zfs_readdir(&d)) != NULL) {
+		n++;
+		if (!strcmp(e->name, name)) { hit = true; if (fi_out) *fi_out = e->info; }
+	}
+	zfs_closedir_at(&d);
+	if (count) *count = n;
+	return hit;
+}
+
+static void test_nfs(void) {
+	z_fs_info_t fi;
+	static uint8_t buf[12000];
+	char spec[200];
+	uint32_t n;
+	int32_t fd;
+
+	tree_init();
+	// Not mounted: nothing under /nfs, and fs does not even ask net.
+	CHECK(zfs_stat("/nfs", &fi) == -Z_ENOENT);
+	CHECK(zfs_open("/nfs/hello.txt", Z_O_RDONLY) == -Z_ENOENT);
+	CHECK(!listed("/", "nfs", NULL, NULL));
+	CHECK(shell_nfs(Z_NFSOP_STATUS, NULL, spec, sizeof spec) == 0);
+
+	// Mounting: rpcbind, MOUNT, from a port below 1024; fs is told.
+	CHECK(shell_nfs(Z_NFSOP_MOUNT, "10.0.0.9:/nothere", NULL, 0) == -Z_EIO);
+	CHECK(nfs_events == 0);
+	CHECK(shell_nfs(Z_NFSOP_MOUNT, "nfsbox:/export", NULL, 0) == -Z_EINVAL);
+	CHECK(shell_nfs(Z_NFSOP_MOUNT, "10.0.0.9:/export", NULL, 0) == 0);
+	CHECK(nfs_events == 1 && nfs_event_val == 1);
+	CHECK(nfs_low_ports >= 3);
+	CHECK(shell_nfs(Z_NFSOP_STATUS, NULL, spec, sizeof spec) == 1 && !strcmp(spec, "10.0.0.9:/export"));
+
+	// The volume
+	CHECK(listed("/", "nfs", NULL, &fi) && fi.type == Z_FS_TYPE_DIR);
+	CHECK(zfs_stat("/nfs", &fi) == 0 && fi.type == Z_FS_TYPE_DIR && (fi.attr & Z_FS_ATTR_RDONLY));
+	CHECK(zfs_stat("/NFS/Hello.txt", &fi) == -Z_ENOENT);	// the server's names are its own
+	CHECK(zfs_stat("/nfs/hello.txt", &fi) == 0 && fi.size == 5 && fi.type == Z_FS_TYPE_FILE);
+	CHECK(fi.fdate == (uint16_t)(fs_fattime_of(1700000000u) >> 16));
+	CHECK(zfs_stat("/nfs/missing", &fi) == -Z_ENOENT);
+	CHECK(zfs_stat("/nfs/hello.txt/x", &fi) == -Z_ENOTDIR);
+	CHECK(zfs_stat("/nfs/noattr", &fi) == 0 && fi.size == 3);	// GETATTR after LOOKUP
+
+	// Reading: a 10000-byte file, three 4KB requests to the server in
+	// one read; then from the middle.
+	fd = zfs_open("/nfs/apps/text", Z_O_RDONLY);
+	CHECK(fd >= 0);
+	memset(nfs_calls, 0, sizeof nfs_calls);
+	int32_t got = zfs_read(fd, buf, sizeof buf);
+	CHECK(got == 10000 && nfs_calls[6] == 3);
+	bool same = true;
+	node_t *tn = node(3);
+	for (int i = 0; i < 10000; i++) if (buf[i] != file_byte(tn, (uint32_t)i)) same = false;
+	CHECK(same);
+	CHECK(zfs_read(fd, buf, 10) == 0);
+	CHECK(zfs_lseek(fd, 9990, Z_SEEK_SET) == 9990);
+	CHECK(zfs_read(fd, buf, 100) == 10 && buf[0] == file_byte(tn, 9990));
+	CHECK(zfs_close(fd) == 0);
+
+	// The cache: a second file in /apps is one LOOKUP, not a walk.
+	memset(nfs_calls, 0, sizeof nfs_calls);
+	CHECK(zfs_stat("/nfs/apps/text", &fi) == 0 && fi.size == 10000);
+	CHECK(nfs_calls[3] == 1);
+
+	// Read-only, all of it
+	CHECK(zfs_open("/nfs/new.txt", Z_O_WRONLY | Z_O_CREAT) == -Z_EROFS);
+	CHECK(zfs_open("/nfs/hello.txt", Z_O_RDWR) == -Z_EROFS);
+	CHECK(zfs_unlink("/nfs/hello.txt") == -Z_EROFS);
+	CHECK(zfs_mkdir("/nfs/d") == -Z_EROFS);
+	CHECK(zfs_rename("/nfs/hello.txt", "/nfs/h2") == -Z_EROFS);
+	CHECK(zfs_rename("/hello.txt", "/nfs/h2") == -Z_EROFS);
+	CHECK(zfs_open("/nfs/apps", Z_O_RDONLY) == -Z_EISDIR);
+
+	// Listings: the root's, and one of 70 files over several pages,
+	// from a server that leaves out the directory's own attributes.
+	CHECK(listed("/nfs", "apps", &n, &fi) && n == 4 && fi.type == Z_FS_TYPE_DIR);
+	CHECK(listed("/nfs/big", "file_69.txt", &n, &fi) && n == 70 && fi.size == 69);
+	CHECK(listed("/nfs/big", "file_00.txt", NULL, NULL));
+	{
+		zfs_dir_t d;
+		uint32_t page[64];
+		CHECK(zfs_opendir_at(&d, "/nfs/hello.txt", page, sizeof page) == -Z_ENOTDIR);
+	}
+
+	// A program's way in: open with NOFLASH, the header, then the rest.
+	fd = zfs_open("/nfs/apps/text", Z_O_RDONLY | Z_O_NOFLASH);
+	CHECK(fd >= 0 && zfs_read(fd, buf, 32) == 32);
+	CHECK(zfs_close(fd) == 0);
+
+	// A server that stops answering: fs gives up (net's 5 s), and net,
+	// once its own deadline passes, is free again.
+	srv_silent = true;
+	CHECK(zfs_stat("/nfs/hello.txt", &fi) == -Z_ETIMEDOUT);
+	ticks += 10 * 732;
+	nfs_poll();
+	srv_silent = false;
+	CHECK(zfs_stat("/nfs/hello.txt", &fi) == 0);
+
+	// Unmounted: gone again.
+	CHECK(shell_nfs(Z_NFSOP_UMOUNT, NULL, NULL, 0) == 0);
+	CHECK(nfs_events == 2 && nfs_event_val == 0);
+	CHECK(zfs_stat("/nfs/hello.txt", &fi) == -Z_ENOENT);
+	CHECK(!listed("/", "nfs", NULL, NULL));
+
+	// net.cfg's mount: a server not answering yet is tried again every
+	// 30 s until the mount is made ...
+	srv_silent = true;
+	nfs_mount_at_boot("10.0.0.9:/export");
+	while (net_pump()) ;
+	ticks += 6 * 732;
+	nfs_poll();								// the first try gives up
+	CHECK(!nfs_test_up() && nfs_events == 2);
+	srv_silent = false;
+	ticks += 10 * 732;
+	nfs_poll();
+	while (net_pump()) ;
+	CHECK(!nfs_test_up());					// not yet: 30 s
+	ticks += 21 * 732;
+	nfs_poll();
+	while (net_pump()) nfs_poll();
+	CHECK(nfs_test_up() && nfs_events == 3 && nfs_event_val == 1);
+	CHECK(zfs_stat("/nfs/hello.txt", &fi) == 0);
+	CHECK(shell_nfs(Z_NFSOP_UMOUNT, NULL, NULL, 0) == 0);
+	// ... but not once the shell has unmounted or mounted something.
+	srv_silent = true;
+	nfs_mount_at_boot("10.0.0.9:/export");
+	while (net_pump()) ;
+	ticks += 6 * 732;
+	nfs_poll();
+	CHECK(shell_nfs(Z_NFSOP_UMOUNT, NULL, NULL, 0) == 0);
+	srv_silent = false;
+	ticks += 31 * 732;
+	nfs_poll();
+	while (net_pump()) nfs_poll();
+	CHECK(!nfs_test_up() && nfs_events == 4);
+}
+
 int main(void) {
 	card = calloc(CARD_SECTORS, 512);
 	ram = calloc(RAM_SECTORS, 512);
@@ -948,6 +1146,7 @@ int main(void) {
 	test_slots();
 	test_restart();
 	test_writeback();
+	test_nfs();
 	CHECK(grant_misuse == 0 && !grant_open_now);
 	printf("test_fs: %d checks, %d failed\n", checks, fails);
 	return fails != 0;

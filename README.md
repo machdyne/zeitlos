@@ -69,7 +69,7 @@ With the MTU, there is no need for position independent code or complicated addr
 
 | App | Description |
 |-----|-------------|
-| kernel | Microkernel + kernel shell (serial console) |
+| kernel | Microkernel + kernel shell (serial console; on the monitor as the [rescue console](docs/rescue_console.md): hold ESC at boot) |
 | [wm](docs/window_manager.md) | Window manager + dock, with ten workspaces (Super+1 ... Super+0) |
 | [term](docs/terminal.md) | Terminal emulator (VT100, UTF-8, [line drawing](docs/terminal.md#line-drawing); start panel, scrollback; connects to shells and services) |
 | [console](docs/console.md) | Console service |
@@ -86,9 +86,9 @@ and started again by the kernel if they crash
 
 | Driver | Description |
 |-----|-------------|
-| [fs](docs/fs_driver.md) | Filesystem: FatFs, the sdcard, USB sticks at `/usb`, the RAM disk (`/ram`, `/tmp`), the flash underlay, and programs loaded from the card |
+| [fs](docs/fs_driver.md) | Filesystem: FatFs, the sdcard, USB sticks at `/usb`, the RAM disk (`/ram`, `/tmp`), NFS at `/nfs` (read-only, through net), the flash underlay, and programs loaded from the card |
 | [usb](docs/usb_driver.md) | USB host: hubs, keyboard and mouse setup, mass storage, USB ethernet and USB serial |
-| [net](docs/networking.md) | Networking: Ethernet (RMII, SPI, USB or the ESP32 link), IP, TCP, DNS, DHCP, NTP, TFTP, telnet and SSH |
+| [net](docs/networking.md) | Networking: Ethernet (RMII, SPI, USB or the ESP32 link), IP, TCP, DNS, DHCP, NTP, TFTP, telnet, SSH and a read-only [NFS](docs/nfs.md) client (`/nfs`) |
 
 The drivers and core apps are written to flash with the kernel, so a
 board boots to a desktop with no sdcard ([core apps in flash](#core-apps-in-flash)).

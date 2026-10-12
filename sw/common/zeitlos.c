@@ -83,6 +83,17 @@ void hid_inject(int32_t packed_event) {
 	z_kernel_ptr(Z_SYS_HID_INJECT, (uint32_t *)&obj, 0);
 }
 
+// The rescue console on or off (Z_SYS_RESCUE) -- wm's, around hiding
+// and redrawing its windows. False if it could not be shown.
+bool z_rescue(bool on) {
+	z_kernel_ptr_t z_kernel_ptr = (z_kernel_ptr_t)(uintptr_t)(reg_kernel);
+	z_obj_t obj = {0};
+	obj.type = Z_UINT32;
+	obj.val.uint32 = on ? 1u : 0u;
+	z_obj_t *rv = (z_obj_t *)z_kernel_ptr(Z_SYS_RESCUE, (uint32_t *)&obj, 0);
+	return rv && rv->val.uint32 == Z_OK;
+}
+
 // -- held modifiers -- zkbd.h's z_kbd_live_mods() --
 //
 // reg_usbN_info bits 25:24 say what the port has (1 = a keyboard) and

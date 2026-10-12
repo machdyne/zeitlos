@@ -117,6 +117,10 @@
 #endif
 #include "tftp.h"
 #include "tcp.h"
+#if NET_NFS
+#include "nfs.h"
+#include "../../common/znfsproto.h"
+#endif
 #include "../../common/zrng.h"
 #include "telnet.h"
 #if NET_SOCK
@@ -150,6 +154,14 @@ static uint8_t our_mac[6] = { 0x02, 0x00, 0x00, 0x00, 0x00, 0x01 };
 #ifndef NET_DHCP
 #define NET_DHCP 1
 #endif
+
+// How long an ESP32 link that bitstream detection chose gets to say
+// HELLO before a USB adapter is used instead (phy=auto, see main()):
+// at least ESP32_PROBE_MIN, then as soon as an adapter is there, and
+// never past ESP32_PROBE_MAX. A module that is plugged in boots and
+// answers well inside the minimum.
+#define ESP32_PROBE_MIN		(Z_TICK_HZ * 3)
+#define ESP32_PROBE_MAX		(Z_TICK_HZ * 10)
 #ifndef NET_STATIC_IP
 #define NET_STATIC_IP       0xC0A8B2E6u	// 192.168.178.230
 #endif
@@ -653,12 +665,12 @@ static void sock_update_window(int k) {
 	uint32_t space = SOCK_RX_QUEUE_LEN - x->rx_len;
 	uint32_t w;
 
-	if (space > TCP_ADVERTISE_MSS) space -= TCP_ADVERTISE_MSS;
+	if (space > tcp_rx_mss()) space -= tcp_rx_mss();
 	else space = 0;
 
 	if (space > TCP_RX_WINDOW) space = TCP_RX_WINDOW;
 
-	w = (space < TCP_ADVERTISE_MSS) ? 0 : space;
+	w = (space < tcp_rx_mss()) ? 0 : space;
 
 	if ((uint16_t)w == x->win_last) return;
 
@@ -1514,6 +1526,10 @@ int main(void) {
 		return 1;
 	}
 
+	// The MSS to advertise is the NIC's (net_phy.h rx_mss): 1460 where
+	// its buffer holds full frames well, 536 otherwise.
+	if (net_phy->rx_mss) tcp_set_rx_mss(net_phy->rx_mss);
+
 	// Static footprint, so a change to the buffers is visible rather
 	// than something to infer from a board that stopped booting.
 	//
@@ -1525,11 +1541,11 @@ int main(void) {
 	printf("net: buffers: %d sockets, rx queue %d, window %d (phy %d), "
 		"mss %d, reassembly %s\n", (int)NET_SOCK_SLOTS,
 		(int)SOCK_RX_QUEUE_LEN, (int)TCP_RX_WINDOW,
-		(int)phy_rx_capacity(), (int)TCP_ADVERTISE_MSS,
+		(int)phy_rx_capacity(), (int)tcp_rx_mss(),
 		TCP_REASSEMBLY ? "on" : "off");
 #else
 	printf("net: buffers: window %d, mss %d, reassembly %s\n",
-		(int)TCP_RX_WINDOW, (int)TCP_ADVERTISE_MSS,
+		(int)TCP_RX_WINDOW, (int)tcp_rx_mss(),
 		TCP_REASSEMBLY ? "on" : "off");
 #endif
 
@@ -1549,6 +1565,41 @@ int main(void) {
 		printf("net: phy_init (%s) failed -- see that driver's header comment "
 			"for what to check first.\n", NET_PHY_NAME);
 		return 1;
+	}
+
+	// Detection picked the ESP32 link because the bitstream has one,
+	// but the module is a PMOD that may not be plugged in -- while a USB
+	// ethernet adapter is. With phy=auto, give the ESP32 a few seconds to
+	// say HELLO; if it does not, and an adapter is attached, use that.
+	// The ESP32's addresses (net.cfg's static lines, dhcp=0) are for the
+	// inside of its NAT, not this network, so the adapter gets DHCP,
+	// with them as the fallback.
+	bool phy_fell_back = false;
+	if (cfg.phy == NET_PHY_AUTO && net_phy->poll_wifi && usb_ecm_supported()) {
+		uint32_t t0 = z_uptime_ticks();
+		for (;;) {
+			uint8_t junk[64];		// no frames come before HELLO
+			uint32_t gone = z_uptime_ticks() - t0;
+			if (esp32link_hello_ok()) break;
+			if (gone >= ESP32_PROBE_MIN && usb_ecm_present()) break;
+			if (gone >= ESP32_PROBE_MAX) break;
+			esp32link_recv(junk, sizeof(junk));
+			z_proc_wait(1);
+		}
+		if (!esp32link_hello_ok() && usb_ecm_present()) {
+			printf("net: no HELLO from the ESP32, and a USB ethernet adapter "
+				"is attached -- using the adapter (phy=builtin in net.cfg "
+				"keeps the ESP32)\n");
+			esp32link_hold();
+			net_phy_use_usb();
+			tcp_set_rx_mss(net_phy->rx_mss);
+			tcp_set_rx_window_max(phy_rx_capacity());
+			if (!phy_init(our_mac)) {
+				printf("net: phy_init (%s) failed\n", NET_PHY_NAME);
+				return 1;
+			}
+			phy_fell_back = true;
+		}
 	}
 
 	// A wireless backend associates from the main loop below rather
@@ -1582,7 +1633,7 @@ int main(void) {
 
 #if NET_DHCP
 	int want_dhcp = NET_DHCP;
-	if (cfg.dhcp != -1)
+	if (cfg.dhcp != -1 && !phy_fell_back)
 		want_dhcp = cfg.dhcp;
 	if (want_dhcp) {
 		if (dhcp_acquire(our_mac, &use_ip, &use_netmask, &use_gateway, &use_dns)) {
@@ -1631,6 +1682,12 @@ int main(void) {
 	// on it -- the first request goes out a few seconds from now, off
 	// ntp_poll(), and a machine that never manages a sync is a machine
 	// that just doesn't know the time, not a broken one.
+#if NET_NFS
+	// net.cfg's nfs=: mounted at /nfs in the background (nfs.c); fs
+	// hears when it is up.
+	nfs_mount_at_boot(cfg.nfs);
+#endif
+
 #if NTP_ENABLE
 	ntp_enabled = ntp_init(OUR_NTP);
 #else
@@ -1694,6 +1751,9 @@ int main(void) {
 			else if (msg.subject == Z_STREAM_OPEN) handle_stream_open(&msg);
 			else if (msg.subject == Z_NET_TFTP_PUT) handle_tftp_put_request(&msg);
 			else if (msg.subject == Z_NET_DNS_RESOLVE) handle_dns_resolve(&msg);
+#if NET_NFS
+			else if (msg.subject == Z_NET_NFS_REQ) nfs_handle_msg(&msg);
+#endif
 			// A DNS reply arriving HERE, at net, is net's own DNS
 			// request coming back to itself -- ntp.c asks dns.c
 			// directly and names this process as the requester, since
@@ -1797,6 +1857,9 @@ int main(void) {
 		NP_PHASE(NP_SSH, ssh_poll());
 #endif
 		NP_PHASE(NP_DNS, dns_poll());
+#if NET_NFS
+		nfs_poll();
+#endif
 #if NTP_ENABLE
 		// Cheap: one comparison in the state this is in almost all of
 		// the time. See ntp.c's own ntp_poll().
@@ -1878,6 +1941,13 @@ int main(void) {
 		// look again before sleeping. Stop-and-wait TFTP lost a block's
 		// worth of sleep to this often enough to halve its speed.
 		if (usb_ecm_rx_pending()) continue;
+
+		// TCP segments waiting for room in the NIC (tcp_link_room()):
+		// it frees without waking us, so look again next tick.
+		if (tcp_tx_waiting()) {
+			z_proc_wait(1);
+			continue;
+		}
 
 		if (net_phy->idle_ticks) {
 			uint32_t w = net_phy->idle_ticks();

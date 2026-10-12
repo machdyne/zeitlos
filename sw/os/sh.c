@@ -35,6 +35,8 @@ extern bool k_readline_from_uart;	// kruntime.c
 #include "fsapi.h"
 #include "msg.h"
 #include "rescue.h"		// the rescue console: the boot window, init
+#include "../common/znfsproto.h"	// `nfs`
+#include "../common/zfsproto.h"		// Z_E*
 #include "hid.h"		// k_hid_stats(), HID_FIFO_SIZE -- the `ic` command
 #include "pidreg.h"
 #include "cfg.h"		// /sys/zeitlos.cfg -- k_cfg_load() at boot, `cfg`
@@ -378,6 +380,55 @@ static int boot_cancel_requested(void) {
 
 }
 
+
+// `nfs`, `nfs mount address:/export`, `nfs umount`: a request to net
+// (znfsproto.h), and its answer. A mount is three conversations with
+// the server, five seconds each at most.
+static void sh_nfs(const char *sub, const char *arg) {
+	static z_nfsreq_t rq;		// not on the shell's stack: ~340 bytes
+	static uint32_t tag = 0x4e460000u;
+	uint32_t netp;
+	z_blob_t b;
+	z_obj_t o;
+	z_msg_t m;
+	memset(&rq, 0, sizeof(rq));
+	if (!sub) rq.op = Z_NFSOP_STATUS;
+	else if (!strcmp(sub, "mount") && arg && strlen(arg) < sizeof(rq.path)) {
+		rq.op = Z_NFSOP_MOUNT;
+		strcpy(rq.path, arg);
+	} else if (!strcmp(sub, "umount") || !strcmp(sub, "unmount")) rq.op = Z_NFSOP_UMOUNT;
+	else {
+		printf("usage: nfs | nfs mount <address>:/export | nfs umount\n");
+		return;
+	}
+	if (!z_pid_lookup("net0", &netp)) {
+		printf("nfs: net is not running\n");
+		return;
+	}
+	b.len = sizeof(rq);
+	b.data = (uint8_t *)&rq;
+	o.type = Z_BLOB;
+	o.val.ptr = &b;
+	tag++;
+	if (z_msg_new_send(netp, Z_NET_NFS_REQ, tag, o) != Z_OK ||
+		z_msg_recv_match(&m, Z_NET_NFS_REPLY, tag, Z_TICK_HZ * 20) != Z_OK) {
+		printf("nfs: no answer from net (a net without NFS?)\n");
+		return;
+	}
+	const z_nfsrep_t *r = (const z_nfsrep_t *)z_blob_data(&m.obj);
+	if (!r || z_blob_len(&m.obj) < sizeof(*r)) return;
+	if (rq.op == Z_NFSOP_STATUS) {
+		if (r->flags & Z_NFSREP_MOUNTING) printf("nfs: mounting %s\n", (const char *)(r + 1));
+		else if (r->result == 1) printf("nfs: %s mounted at " Z_DIR_NFS "\n", (const char *)(r + 1));
+		else printf("nfs: not mounted (nfs mount <address>:/export, or nfs= in net.cfg)\n");
+	} else if (r->result < 0) {
+		printf("nfs: failed (%ld)%s\n", (long)r->result,
+			r->result == -Z_EINVAL ? ": give the server as an address, address:/export" :
+			r->result == -Z_EBUSY ? ": busy, try again" : " -- net says why above");
+	} else if (rq.op == Z_NFSOP_MOUNT) {
+		printf("nfs: mounted at " Z_DIR_NFS "\n");
+	}
+}
 
 // "cache" shell command (docs/icache.md, docs/dcache.md).
 //
@@ -1107,9 +1158,6 @@ void sh(void) {
 				continue;
 			}
 			uint32_t size = xi.total;
-			printf("creating process (file: %s size: %ld%s)\n", arg,
-				(long)size, xi.is_zexe ? "" : " raw");
-			fflush(stdout);
 			// The stack size is in the header just parsed. See
 			// k_proc_create_exec() in kernel.c.
 			// Anything after the name is the program's launch
@@ -1132,27 +1180,39 @@ void sh(void) {
 					o.type = Z_STR;
 					o.val.str = run_arg;
 					z_msg_new_send(wmp, Z_WM_SET_ARG, 0, o);
-					printf("launch argument: %s\n", run_arg);
 				} else {
 					printf("no wm: launch argument ignored\n");
 				}
 			}
+			// One line: what runs, from where, and as which process --
+			// `text: pid 6, 84020 bytes from /nfs/apps/text at 404e7000`.
+			// (k_proc_create_exec() says why, when it cannot.)
+			static char where[FS_PATH_MAX];
+			if (fs_exec_where(arg, where, sizeof(where))) strcpy(where, "?");
 			uint32_t pid = k_proc_create_exec(arg, &xi);
-			printf(" - pid: %ld\n", pid);
-			if (!pid) {
-				printf("unable to create process\n");
+			if (!pid) continue;
+			uint32_t base = k_proc_base(pid);
+			printf("%s: pid %ld, %ld bytes%s from %s at %08lx\n", arg, (long)pid,
+				(long)size, xi.is_zexe ? "" : " (raw)", where, (unsigned long)base);
+			if (fs_load_exec_any(base, arg, &xi)) {
+				printf("%s: loading failed -- not started\n", arg);
+				k_proc_kill(pid);
 				continue;
 			}
-
-			uint32_t base = k_proc_base(pid);
-			printf(" - base: %lx\n", base);
-			printf(" - loading file\n");
-			printf("loading %s from %s\n", arg,
-				fs_exec_is_flash(arg) ? "flash" : "sd");
-			fs_load_exec_any(base, arg, &xi);
-			printf(" - starting process\n");
 			k_proc_start(pid);
 
+		}
+
+		// EXIT: leave the rescue console for the desktop it was called
+		// up from (docs/rescue_console.md). wm puts the windows back.
+		else if (sh_is(buffer, cmdlen, "exit")) {
+			uint32_t wmp;
+			if (!k_rescue_on)
+				printf("exit: not in the rescue console\n");
+			else if (!rescue_by_wm() || !z_pid_lookup("wm0", &wmp))
+				printf("exit: no desktop to return to -- `run wm` starts one\n");
+			else
+				z_msg_new_send(wmp, Z_WM_RESCUE, 0, z_obj_uint32(0));
 		}
 
 		// RE-RUN THE INIT SCRIPT
@@ -1248,6 +1308,12 @@ void sh(void) {
 		}
 		else if (sh_is(buffer, cmdlen, "usbunmount")) {
 			fs_usb_unmount();
+		}
+
+		// NFS: net's client, fs's /nfs (docs/nfs.md). `nfs` says what is
+		// mounted; `nfs mount address:/export`, `nfs umount`.
+		else if (sh_is(buffer, cmdlen, "nfs")) {
+			sh_nfs(get_arg(buffer, 1), get_arg(buffer, 2));
 		}
 
 		// LIST USB DEVICES, and the other USB commands (rtl/usb/,
@@ -2304,6 +2370,8 @@ void sh_help(void) {
 	printf(" tput <ip-or-host> <local-file> [remote-file]  send a file via tftp (needs `run net`)\n");
 	printf(" run <file> [arg]  create a new process; arg is its launch argument\n");
 	printf(" init               start wm, net, repl and posix (runs at boot)\n");
+	printf(" exit               leave the rescue console for the desktop (Ctrl+Alt+Esc)\n");
+	printf(" nfs [mount <addr>:/export | umount]  the NFS export at /nfs (read-only)\n");
 	printf(" cfg [reload|get k] show or re-read " Z_PATH_SYS_CONFIG " (docs/config.md)\n");
 	printf(" kill <pid>        kill a process\n");
 	printf(" kill -c <pid>     ... as a crash (a driver restarts; wm: rescue console)\n");

@@ -508,6 +508,8 @@ void noecho(void);
 // mouse.
 int32_t hid_read_key(void);
 void hid_inject(int32_t packed_event);
+// The kernel's rescue console on or off, for wm (docs/rescue_console.md).
+bool z_rescue(bool on);
 // Unblock wm0 if it is sleeping. net writes the visor pointer into
 // reg_vmouse (plain MMIO, no IRQ) and then calls this -- so does
 // sw/apps/automate (check Z_FEATURE2_VMOUSE, zsoc.h, first). USB HID and

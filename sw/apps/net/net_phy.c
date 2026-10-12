@@ -45,6 +45,12 @@ static const net_phy_t phy_esp32link = {
 	// their framing; two is the safe advertisement.
 	2 * 536,
 	esp32link_idle_ticks,
+	0,
+	0,
+	0,
+	0,
+	0,		// rx_mss: 536 -- the FIFO holds one full frame
+	esp32link_tx_room,
 };
 
 // Not const: rx_capacity is filled in by net_phy_select() from the
@@ -90,12 +96,15 @@ static const net_phy_t phy_usb_ecm = {
 	usb_ecm_debug_dump,
 	0,
 	// The adapter's own buffer, which nothing reports; see usb_ecm.c.
-	4 * 536,
+	// Four full segments: adapters buffer 16KB and more.
+	4 * 1460,
 	usb_ecm_idle_ticks,
 	usb_ecm_mac,
 	0,
 	usb_ecm_recv_ref,
 	usb_ecm_recv_done,
+	1460,
+	usb_ecm_tx_room,
 };
 
 const net_phy_t *net_phy = 0;
@@ -138,4 +147,18 @@ const net_phy_t *net_phy_select(int mode)
 			&phy_usb_ecm : 0;
 
 	return net_phy;
+}
+
+// The USB adapter instead of the chosen MAC: net.c, when the ESP32
+// link chosen by detection never answers and an adapter is attached.
+const net_phy_t *net_phy_use_usb(void)
+{
+	net_phy = &phy_usb_ecm;
+	return net_phy;
+}
+
+// tcp.h: frames the NIC can take now.
+int tcp_link_room(void)
+{
+	return (net_phy && net_phy->tx_room) ? net_phy->tx_room() : 255;
 }

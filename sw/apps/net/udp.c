@@ -58,7 +58,7 @@ void udp_close(uint16_t port) {
 bool udp_send(uint32_t dst_ip, uint16_t dst_port, uint16_t src_port,
 	const uint8_t *data, uint16_t len) {
 
-	static uint8_t pkt[UDP_HDR_LEN + UDP_MAX_PAYLOAD];
+	uint8_t *pkt = ip_tx_payload();		// built in the outgoing frame
 	if (len > UDP_MAX_PAYLOAD) return false;
 
 	uint16_t total_len = UDP_HDR_LEN + len;
@@ -71,9 +71,9 @@ bool udp_send(uint32_t dst_ip, uint16_t dst_port, uint16_t src_port,
 	pkt[5] = total_len & 0xFF;
 	pkt[6] = 0; pkt[7] = 0;	// checksum: not computed, see udp.h
 
-	memcpy(pkt + UDP_HDR_LEN, data, len);
+	memmove(pkt + UDP_HDR_LEN, data, len);
 
-	return ip_send(dst_ip, 17, pkt, total_len);	// protocol 17 = UDP
+	return ip_send_built(dst_ip, 17, total_len);	// protocol 17 = UDP
 
 }
 

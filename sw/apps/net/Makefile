@@ -6,6 +6,8 @@ APP = net
 # smaller. It prints no floating point. docs/build.md, "Integer-only
 # printf (ZFMT)".
 ZFMT = 1
+# ... and stdout without newlib's stdio: about 7KB (sw/common/app.mk).
+ZFMT_LITE = 1
 APP_MAIN_RULE = 0
 
 # NOTE: every later append to CFLAGS in this file must also say
@@ -113,6 +115,11 @@ override CFLAGS += -DNTP_ENABLE=$(NTP_ENABLE)
 # that is in `web`. It saves sock.o.
 NET_SOCK ?= 1
 override CFLAGS += -DNET_SOCK=$(NET_SOCK)
+
+# The NFS client for fs's /nfs volume (nfs.c, docs/nfs.md): read-only
+# NFSv3 over TCP. On by default; NET_NFS=0 leaves it out.
+NET_NFS ?= 1
+override CFLAGS += -DNET_NFS=$(NET_NFS)
 
 # How many raw sockets at once (sock.h): 2, so the browser can fetch
 # while irc holds a connection. 1 is the old single socket. A slot past
@@ -262,6 +269,12 @@ else
 SOCK_OBJ =
 endif
 
+ifeq ($(NET_NFS), 1)
+NFS_OBJ = nfs.o
+else
+NFS_OBJ =
+endif
+
 ifeq ($(SSH_ENABLE), 1)
 SSH_OBJ = monocypher.o monocypher-ed25519.o z25519.o \
 	zsha256.o ssh_wire.o ssh_crypto.o ssh_proto.o ssh.o
@@ -276,7 +289,7 @@ endif
 # zrtc.o rides with ntp.o rather than being listed separately: it is
 # the calendar arithmetic ntp.c uses to print the time it just set, and
 # nothing else in this app has any use for a date.
-OBJS = zeitlos.o zobj.o zstream.o zport.o zrng.o zfsapp.o zusbc.o netcfg.o screen.o zscreen.o zinput.o $(PHY_OBJ) eth.o arp.o ip.o udp.o $(DHCP_OBJ) dns.o $(NTP_OBJ) tcp.o relay.o telnet.o $(SOCK_OBJ) $(SSH_OBJ) tftp.o $(PROF_OBJ) net.o
+OBJS = zeitlos.o zobj.o zstream.o zport.o zrng.o zfsapp.o zusbc.o netcfg.o screen.o zscreen.o zinput.o $(PHY_OBJ) eth.o arp.o ip.o udp.o $(DHCP_OBJ) dns.o $(NTP_OBJ) tcp.o relay.o telnet.o $(SOCK_OBJ) $(NFS_OBJ) $(SSH_OBJ) tftp.o $(PROF_OBJ) net.o
 
 # each rule below lists its own .c file as a prerequisite -- without
 # this, `make` has no way to know a source file changed (it was only
@@ -305,7 +318,7 @@ OBJS = zeitlos.o zobj.o zstream.o zport.o zrng.o zfsapp.o zusbc.o netcfg.o scree
 FORCE:
 
 .net_config_selected: FORCE
-	@cur="$(NET_DHCP) $(NET_STATIC_IP) $(NET_STATIC_NETMASK) $(NET_STATIC_GATEWAY) $(NET_STATIC_DNS) $(NET_STATIC_NTP) $(NTP_SERVER) $(NTP_ENABLE) $(SSH_ENABLE) $(SSH_MAX_PACKET) $(NET_SOCK) $(NET_SOCK_SLOTS) $(TCP_RX_WINDOW) $(TCP_ADVERTISE_MSS) $(TCP_REASSEMBLY) $(NET_PROFILE)"; \
+	@cur="$(NET_DHCP) $(NET_STATIC_IP) $(NET_STATIC_NETMASK) $(NET_STATIC_GATEWAY) $(NET_STATIC_DNS) $(NET_STATIC_NTP) $(NTP_SERVER) $(NTP_ENABLE) $(SSH_ENABLE) $(SSH_MAX_PACKET) $(NET_SOCK) $(NET_NFS) $(NET_SOCK_SLOTS) $(TCP_RX_WINDOW) $(TCP_ADVERTISE_MSS) $(TCP_REASSEMBLY) $(NET_PROFILE)"; \
 	if [ ! -f $@ ] || [ "$$(cat $@ 2>/dev/null)" != "$$cur" ]; then \
 		echo "$$cur" > $@; \
 	fi
@@ -360,6 +373,9 @@ ntp.o: ntp.c ntp.h udp.h dns.h ../../common/zrtc.h ../../common/znet.h .net_conf
 
 tcp.o: tcp.c tcp.h ../../common/zrng.h
 	$(CC) $(CFLAGS) -c tcp.c -o tcp.o
+
+nfs.o: nfs.c nfs.h tcp.h netcfg.h ../../common/znfsproto.h ../fs/fsvol.h
+	$(CC) $(CFLAGS) -c nfs.c -o nfs.o
 
 relay.o: relay.c relay.h tcp.h ip.h ../../common/znet.h ../../common/zport.h
 	$(CC) $(CFLAGS) -c relay.c -o relay.o
@@ -452,6 +468,9 @@ test:
 	$(HOSTCC) --std=gnu99 -Wall -I. -I../../common -o /tmp/test_tcp_pool \
 		tests/test_tcp_pool.c
 	/tmp/test_tcp_pool
+	$(HOSTCC) --std=gnu99 -Wall -I. -I../../common -o /tmp/test_tcp_window \
+		tests/test_tcp_window.c
+	/tmp/test_tcp_window
 	$(HOSTCC) --std=gnu99 -Wall -DTCP_REASSEMBLY=1 -I. -I../../common \
 		-o /tmp/test_tcp_pool_ooo tests/test_tcp_pool.c
 	/tmp/test_tcp_pool_ooo

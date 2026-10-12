@@ -287,7 +287,13 @@ phy = auto | usb | builtin
 
 - **`auto`** (the default): a MAC built into the bitstream if there is
   one, otherwise a USB adapter if this build has the USB host
-  controller.
+  controller. One exception: the ESP32 link is a PMOD (Kabellos) that
+  may not be plugged in, so when it is the MAC chosen, `net` gives the
+  ESP32 at least 3 seconds to say `HELLO` (at most 10, waiting for an
+  adapter). If none comes and a USB adapter is attached, `net` holds
+  the ESP32 in reset and uses the adapter, with DHCP: `net.cfg`'s
+  static lines and `dhcp=0` are the ESP32's inside network, not this
+  one, and are only the fallback if no DHCP server answers.
 - **`usb`**: a USB adapter even on a board that has a MAC.
 - **`builtin`**: never USB. On a board with no MAC, `net` exits
   cleanly, as it did before this existed.

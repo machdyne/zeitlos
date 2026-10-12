@@ -335,13 +335,36 @@ static uint32_t game_grab_pid;
 // docs/window_manager.md for what that does and does not promise).
 static bool wm_locked;
 static bool lock_pending;           // engage at the next safe point in the loop
+
+// The rescue console (docs/rescue_console.md): Ctrl+Alt+Esc hides every
+// window, as the lock does, and the kernel draws its shell; again, or
+// the shell's `exit` (Z_WM_RESCUE), redraws them where they were.
+static bool wm_rescued;
+static uint8_t rescue_pending;      // RESCUE_IN / RESCUE_OUT, at a safe point
+#define RESCUE_IN   1
+#define RESCUE_OUT  2
+
+// Ctrl+Alt+Del (docs/window_manager.md, "Rebooting"): a dialog asks
+// "Reboot" or "Cancel" over whatever the screen showed -- the desktop,
+// game mode's viewport, an app holding the screen, the rescue console
+// -- and Cancel leaves it as it was. Every window is frozen meanwhile,
+// so nothing draws over the box; not from the lock screen.
+static bool wm_confirm;
+static bool reboot_pending;         // engage at the next safe point
+
+// The screen is not the desktop's: locked, the rescue console's, or
+// the reboot dialog's. Nothing wm or an app draws may reach it.
+#define WM_HIDDEN() (wm_locked || wm_rescued || wm_confirm)
+static void confirm_release(void);
+static void rescue_release(void);
+static void rescue_step(void);
 static uint32_t lock_last_input;    // tick of the last key or pointer movement
 static z_auth_status_t lock_st;     // the password's presence and the policy
 
 // What every former z_gfx_clear_visible() in this file now calls: no
 // restriction, except that nothing wm draws may land on the caption.
 static void wm_unclip(void) {
-	if (wm_locked) {
+	if (WM_HIDDEN()) {
 		static const z_clip_t nothing = { 0, 0, -1, -1 };
 		z_gfx_set_visible(&nothing, 1);
 		return;
@@ -2042,7 +2065,7 @@ static uint32_t wm_idle_ticks(void) {
 	uint32_t soon = 0;
 	int i;
 
-	if (lock_pending) return 1;
+	if (lock_pending || rescue_pending || reboot_pending) return 1;
 
 	// Locking when idle: wake at the moment it is due.
 	if (!wm_locked && lock_st.lock_idle_min && (lock_st.flags & Z_AUTH_HAS_PASSWORD)) {
@@ -2669,8 +2692,8 @@ static int window_visible_region(int idx, z_clip_t *out, int max) {
 	if (idx < 0 || idx >= WM_MAX_WINDOWS || !windows[idx].used)
 		return 0;
 
-	// Locked: the lock screen is in front of everything.
-	if (wm_locked) return 0;
+	// Locked, or the rescue console: in front of everything.
+	if (WM_HIDDEN()) return 0;
 
 	z_clip_t win = { (int)windows[idx].x, (int)windows[idx].y,
 	                 (int)(windows[idx].x + windows[idx].w - 1),
@@ -3361,7 +3384,7 @@ static void caption_blit(void) {
 	if (!cap_vis) { cap_dirty = false; return; }
 
 	// Not over the lock screen; left dirty, drawn after unlocking.
-	if (wm_locked) return;
+	if (WM_HIDDEN()) return;
 
 	// Not while an app owns the screen, and not in the middle of a
 	// drag's XOR band: the band's erase would XOR the caption. Left
@@ -4008,7 +4031,7 @@ static void ws_switch(int to) {
 	if (to < 0 || to >= WS_COUNT) return;
 	// Not while a game holds the screen, the screen is locked, or a
 	// window is being dragged or resized.
-	if (game_grab_pid || wm_locked || dragging >= 0 || resizing >= 0) return;
+	if (game_grab_pid || WM_HIDDEN() || dragging >= 0 || resizing >= 0) return;
 	if (to == cur_ws) { ws_announce(); return; }
 
 	// Remember what had focus here -- if it belongs here: a window just
@@ -4139,7 +4162,7 @@ static void ws_move_focused(int dir) {
 	int to;
 
 	if (focused < 0 || focused == dock_idx || !windows[focused].used) return;
-	if (game_grab_pid || wm_locked || dragging >= 0 || resizing >= 0) return;
+	if (game_grab_pid || WM_HIDDEN() || dragging >= 0 || resizing >= 0) return;
 
 	for (int i = 0; i < WM_MAX_WINDOWS; i++) {
 		used[i] = windows[i].used && i != dock_idx;
@@ -4386,6 +4409,12 @@ static void lock_engage(void) {
 	if (wm_locked) { lock_pending = false; return; }
 	if (dragging >= 0 || resizing >= 0 || xor_band_idx >= 0) return;   // after release
 	lock_pending = false;
+	// A lock asked for while the reboot dialog is up (Z_WM_LOCK, the
+	// idle timer): as if Cancel, then the lock.
+	if (wm_confirm) confirm_release();
+	// A lock asked for from the rescue console (its `lock`, settings):
+	// the lock wins, and the console goes first.
+	if (wm_rescued) rescue_release();
 
 	// An app holding the whole screen, or the game-mode camera, would
 	// show something other than the lock screen.
@@ -4417,6 +4446,184 @@ static void lock_release(void) {
 	lock_last_input = z_uptime_ticks();
 	lock_reload();
 	printf("wm: screen unlocked\n");
+}
+
+// The rescue console, the way the lock works: every window frozen and
+// its region emptied, so nothing reaches the screen; then the kernel
+// draws its shell there (Z_SYS_RESCUE). Safe points only, as
+// lock_engage().
+static void rescue_engage(void) {
+	if (wm_locked || wm_rescued || wm_confirm) return;
+	if (game_grab_pid) game_revoke();
+	if (z_game_enabled()) z_game_view_set_enabled(false, false);
+	freeze_all(NULL);
+	wm_rescued = true;
+	if (game_grab_pid) game_revoke();
+	send_clip_all_except_ex(-1, false);     // their regions, all empty now
+	if (!z_rescue(true)) {
+		// No console to show (a bitstream without the GPU's blitter
+		// path, or the kernel refused): straight back.
+		printf("wm: the rescue console is not available\n");
+		wm_rescued = false;
+		send_clip_all_except_ex(-1, false);
+		repair_region(0, 0, WM_SCREEN_W, WM_SCREEN_H, -1);
+		return;
+	}
+	printf("wm: rescue console (Ctrl+Alt+Esc, or `exit`, to return)\n");
+}
+
+// Back: the kernel stops drawing, then every window gets its region
+// and the whole screen is repaired, as lock_release() does -- windows
+// where they were, contents redrawn by their apps.
+static void rescue_release(void) {
+	if (!wm_rescued) return;
+	z_rescue(false);
+	wm_rescued = false;
+	send_clip_all_except_ex(-1, false);
+	repair_region(0, 0, WM_SCREEN_W, WM_SCREEN_H, -1);
+	printf("wm: back from the rescue console\n");
+}
+
+static void rescue_step(void) {
+	if (dragging >= 0 || resizing >= 0 || xor_band_idx >= 0) return;   // after release
+	if (wm_confirm) return;             // after the reboot dialog
+	uint8_t want = rescue_pending;
+	rescue_pending = 0;
+	if (want == RESCUE_IN) rescue_engage();
+	else if (want == RESCUE_OUT) rescue_release();
+}
+
+// -- the reboot dialog (Ctrl+Alt+Del) --
+//
+// Drawn in the part of the framebuffer the display shows: all of it,
+// or game mode's 320x240 viewport (and always that on composite), so
+// the box is small enough for either.
+
+#define CONFIRM_W    240
+#define CONFIRM_H    72
+#define CONFIRM_BW   72
+#define CONFIRM_BH   16
+
+static bool confirm_rescued;        // it came up over the rescue console
+static int confirm_sel;             // 0 Reboot, 1 Cancel
+static int confirm_x, confirm_y;
+static const char *confirm_msg;
+
+static void confirm_button(int i, int *x, int *y) {
+	*x = confirm_x + (i ? CONFIRM_W - 24 - CONFIRM_BW : 24);
+	*y = confirm_y + CONFIRM_H - 10 - CONFIRM_BH;
+}
+
+static void confirm_text(int y, const char *t) {
+	z_fb_draw_text(confirm_x + (CONFIRM_W - (int)strlen(t) * z_font_5x8.w) / 2, y,
+		t, 1, &z_font_5x8, NULL);
+}
+
+static void confirm_draw(void) {
+	static const char *const label[2] = { "Reboot", "Cancel" };
+	int vx = 0, vy = 0, vw = WM_SCREEN_W, vh = WM_SCREEN_H;
+	if (z_game_enabled() || z_video_is_composite()) {
+		vx = (int)z_game_get_view_x();
+		vy = (int)z_game_get_view_y();
+		vw = Z_GAME_VIEW_W;
+		vh = Z_GAME_VIEW_H;
+	}
+	confirm_x = vx + (vw - CONFIRM_W) / 2;
+	confirm_y = vy + (vh - CONFIRM_H) / 2;
+	// A wrapping viewport can hang off the edge; the box cannot.
+	if (confirm_x > WM_SCREEN_W - CONFIRM_W) confirm_x = WM_SCREEN_W - CONFIRM_W;
+	if (confirm_y > WM_SCREEN_H - CONFIRM_H) confirm_y = WM_SCREEN_H - CONFIRM_H;
+
+	z_gfx_clear_visible();
+	z_fb_hw_fill_rect(confirm_x, confirm_y, CONFIRM_W, CONFIRM_H, 1);
+	z_fb_hw_fill_rect(confirm_x + 2, confirm_y + 2, CONFIRM_W - 4, CONFIRM_H - 4, 0);
+	confirm_text(confirm_y + 10, confirm_msg ? confirm_msg : "Reboot Zeitlos?");
+	confirm_text(confirm_y + 24, "Unsaved work in open apps is lost.");
+	for (int i = 0; i < 2; i++) {
+		int bx, by;
+		bool on = (i == confirm_sel);
+		confirm_button(i, &bx, &by);
+		z_fb_hw_fill_rect(bx, by, CONFIRM_BW, CONFIRM_BH, 1);
+		if (!on) z_fb_hw_fill_rect(bx + 1, by + 1, CONFIRM_BW - 2, CONFIRM_BH - 2, 0);
+		// text2 for both: z_fb_draw_text() always lays a 0 background,
+		// so ink 0 on the lit button would be a black block, not a
+		// label (docs/widgets.md, "Labels on a lit widget").
+		z_fb_draw_text2(bx + (CONFIRM_BW - (int)strlen(label[i]) * z_font_5x8.w) / 2,
+			by + (CONFIRM_BH - z_font_5x8.h) / 2, label[i], on ? 0 : 1, on ? 1 : 0,
+			&z_font_5x8, NULL);
+	}
+	wm_unclip();
+}
+
+// Safe points only, as lock_engage(): freeze_all() services messages.
+static void confirm_engage(void) {
+	if (wm_locked || wm_confirm) { reboot_pending = false; return; }
+	if (dragging >= 0 || resizing >= 0 || xor_band_idx >= 0) return;   // after release
+	reboot_pending = false;
+	confirm_rescued = wm_rescued;
+	// Over the rescue console the kernel stops drawing and its text
+	// stays on the glass; elsewhere every window stops, its pixels
+	// left as they are (the freeze a titlebar drag uses).
+	if (wm_rescued) z_rescue(false);
+	else freeze_all(NULL);
+	wm_confirm = true;
+	confirm_sel = 0;
+	confirm_msg = NULL;
+	confirm_draw();
+	printf("wm: reboot? (Enter reboots, Esc cancels)\n");
+}
+
+// Cancel: back to exactly what was there.
+static void confirm_release(void) {
+	if (!wm_confirm) return;
+	wm_confirm = false;
+	if (confirm_rescued) {
+		z_rescue(true);                 // the kernel draws its console again
+		return;
+	}
+	send_clip_all_except_ex(-1, false); // thawed, nothing asked to redraw
+	if (game_grab_pid) {
+		// The app owns the whole screen; only it can paint it back.
+		int g = window_of_pid(game_grab_pid);
+		if (g >= 0) send_redraw(game_grab_pid, g);
+	} else {
+		repair_region(confirm_x, confirm_y, CONFIRM_W, CONFIRM_H, -1);
+	}
+	printf("wm: reboot cancelled\n");
+}
+
+static void confirm_choose(int i) {
+	if (i) { confirm_release(); return; }
+	confirm_msg = "Rebooting...";
+	confirm_draw();
+	printf("wm: rebooting (Ctrl+Alt+Del)\n");
+	z_reboot();
+	// Still here: the kernel said why on the console.
+	confirm_msg = "Reboot failed -- see the console";
+	confirm_sel = 1;
+	confirm_draw();
+}
+
+static void confirm_key(uint8_t usage, uint32_t keysym) {
+	if (usage == 0x29 || keysym == 'c' || keysym == 'C') { confirm_choose(1); return; }
+	if (keysym == 'r' || keysym == 'R') { confirm_choose(0); return; }
+	if (usage == 0x28 || usage == 0x58 || usage == 0x2C) { confirm_choose(confirm_sel); return; }
+	if (usage == 0x50 || usage == 0x4F || usage == 0x2B) {   // Left, Right, Tab
+		confirm_sel ^= 1;
+		confirm_draw();
+	}
+}
+
+static void confirm_click(int cx, int cy) {
+	for (int i = 0; i < 2; i++) {
+		int bx, by;
+		confirm_button(i, &bx, &by);
+		if (cx >= bx && cx < bx + CONFIRM_BW && cy >= by && cy < by + CONFIRM_BH) {
+			confirm_sel = i;
+			confirm_choose(i);
+			return;
+		}
+	}
 }
 
 static void lock_try(void) {
@@ -4522,6 +4729,40 @@ static void dispatch_keys(void) {
 
 		if (keysym == Z_KEY_NONE) continue;   // bare modifier change, or
 		                                       // an unmapped usage code
+
+		// The reboot dialog has every key while it is up.
+		if (wm_confirm) {
+			if (pressed) confirm_key(usage, keysym);
+			kbd_sent[usage] = 0;
+			continue;
+		}
+
+		// Ctrl+Alt+Del -- the reboot dialog. By usage (Delete, or the
+		// keypad's Del): the same key on every layout. From the rescue
+		// console too (the kernel passes it on); not from the lock
+		// screen, where it is swallowed.
+		if ((usage == 0x4C || usage == 0x63) && (modifiers & Z_KBD_MOD_CTRL) && alt) {
+			if (pressed && !wm_locked) reboot_pending = true;
+			kbd_sent[usage] = 0;
+			continue;
+		}
+
+		// Ctrl+Alt+Esc -- the rescue console, and back. By usage: ESC
+		// is the same key on every layout. While it is up the kernel
+		// keeps every press but this one, and passes on the releases,
+		// which go nowhere. Not from the lock screen: that would be a
+		// shell past the lock.
+		if (wm_rescued) {
+			if (pressed && usage == 0x29 && (modifiers & Z_KBD_MOD_CTRL) && alt)
+				rescue_pending = RESCUE_OUT;
+			kbd_sent[usage] = 0;
+			continue;
+		}
+		if (usage == 0x29 && (modifiers & Z_KBD_MOD_CTRL) && alt && !wm_locked) {
+			if (pressed) rescue_pending = RESCUE_IN;
+			kbd_sent[usage] = 0;
+			continue;
+		}
 
 		// Locked: the lock screen has every key. No hotkey, no app.
 		if (wm_locked) {
@@ -6090,7 +6331,14 @@ static void handle_message(z_msg_t *msg) {
 			if (wm_locked) {
 				game_revoke();
 				lock_draw();
+			} else if (wm_rescued) {
+				game_revoke();          /* nor over the rescue console */
 			}
+			break;
+
+		case Z_WM_RESCUE:
+			/* The kernel shell's `exit`: back to the desktop. */
+			if (wm_rescued) rescue_pending = RESCUE_OUT;
 			break;
 
 		case Z_WM_LOCK:
@@ -6785,6 +7033,7 @@ int main(void) {
 		}
 		bool btn_down = (btn & 1) != 0;
 		bool btn_was_down = (last_btn & 1) != 0;
+		if (wm_confirm && btn_down && !btn_was_down) confirm_click(cx, cy);
 
 		/* THE CLICK THAT MANAGES WINDOWS IS THE ONE THAT PAINTS
 		 * OVER THE GAME. Focus changes, raising, dragging and the
@@ -6793,7 +7042,7 @@ int main(void) {
 		 *
 		 * dispatch_mouse() below still runs, so the owner gets the
 		 * click; it is only wm's own handling of it that stops. */
-		if (btn_down && !btn_was_down && !game_grab_pid && !wm_locked) {
+		if (btn_down && !btn_was_down && !game_grab_pid && !WM_HIDDEN()) {
 
 			int hit = hit_test(cx, cy);
 
@@ -7255,7 +7504,7 @@ int main(void) {
 		// reaching the app, and before the capture is released below,
 		// so the app still receives the button-up that ends its own
 		// gesture.
-		if (!wm_locked) {
+		if (!WM_HIDDEN()) {
 			dispatch_mouse(cx, cy, btn);
 			dispatch_wheel(cx, cy);
 		}
@@ -7277,7 +7526,7 @@ int main(void) {
 		// that is merely HELD generates no events at all between its
 		// press and its release, so an event-derived copy would be
 		// stale exactly when it matters.
-		if (z_game_enabled()) {
+		if (z_game_enabled() && !wm_confirm) {
 			// z_kbd_live_mods() (zkbd.h) reads the keyboard's own
 			// report. This ORed both ports' registers, which counted a
 			// mouse's button byte as modifiers.
@@ -7322,12 +7571,14 @@ int main(void) {
 		 * mode anybody should be in. */
 		// The screen lock: asked for (Super+L, Z_WM_LOCK, boot), or
 		// due because nothing has moved for sys.lock.idle minutes.
-		if (!wm_locked && !lock_pending && lock_st.lock_idle_min &&
+		if (!wm_locked && !wm_rescued && !wm_confirm && !lock_pending && lock_st.lock_idle_min &&
 		    (lock_st.flags & Z_AUTH_HAS_PASSWORD) &&
 		    (int32_t)(z_uptime_ticks() - lock_last_input) >=
 		    (int32_t)(lock_st.lock_idle_min * 60u * Z_TICK_HZ))
 			lock_pending = true;
 		if (lock_pending) lock_engage();
+		if (rescue_pending) rescue_step();
+		if (reboot_pending) confirm_engage();
 
 		caption_tick();
 

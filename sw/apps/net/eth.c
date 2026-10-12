@@ -52,8 +52,20 @@ void eth_init(const uint8_t mac[6]) {
 	for (int i = 0; i < 6; i++) eth_our_mac[i] = mac[i];
 }
 
+uint8_t *eth_tx_payload(void) {
+	return tx.buf + ETH_HDR_LEN;
+}
+
 bool eth_send(const uint8_t dst_mac[6], uint16_t ethertype,
 	const uint8_t *payload, uint16_t len) {
+	if ((uint32_t)ETH_HDR_LEN + len > sizeof(tx.buf)) return false;
+	if (payload != tx.buf + ETH_HDR_LEN)
+		memmove(tx.buf + ETH_HDR_LEN, payload, len);
+	return eth_send_built(dst_mac, ethertype, len);
+}
+
+// The payload is already in place (eth_tx_payload()).
+bool eth_send_built(const uint8_t dst_mac[6], uint16_t ethertype, uint16_t len) {
 
 	if ((uint32_t)ETH_HDR_LEN + len > sizeof(tx.buf)) return false;
 
@@ -61,8 +73,6 @@ bool eth_send(const uint8_t dst_mac[6], uint16_t ethertype,
 	for (int i = 0; i < 6; i++) tx.buf[6 + i] = eth_our_mac[i];
 	tx.buf[12] = (ethertype >> 8) & 0xFF;
 	tx.buf[13] = ethertype & 0xFF;
-
-	memcpy(tx.buf + ETH_HDR_LEN, payload, len);
 
 	uint16_t framelen = ETH_HDR_LEN + len;
 

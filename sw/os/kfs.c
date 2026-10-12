@@ -16,6 +16,8 @@
 #include "../common/zfsc.h"
 #include "../common/zpaths.h"
 #include "../common/zsoc.h"
+#include "../common/znfsproto.h"	// Z_DIR_NFS
+#include "cfg.h"					// k_cfg_find(): system.apps.nfs_first
 
 bool kfs_up(void) {
 	uint32_t pid;
@@ -86,22 +88,65 @@ bool fs_stat_info(const char *path, z_fs_info_t *fi) {
 
 // `ls`: directories with a trailing '/', files with their size. What is
 // only in flash is marked read-only by its attribute, and listed with
-// the card's own entries, as apps see it.
-void fs_list_dir(char *path) {
+// the card's own entries, as apps see it. A path is from the root (the
+// kernel shell's only directory), with or without its leading '/'; a
+// file lists itself; a last component with * or ? lists what in its
+// directory matches. Not zglob.h's [classes] and UTF-8: that is 1.4KB
+// of a kernel with little room, for a debugging shell.
+static bool wild(const char *p, const char *n) {
+	const char *sp = NULL, *sn = NULL;
+	while (*n) {
+		char a = *p, b = *n;
+		if (a >= 'A' && a <= 'Z') a += 32;
+		if (b >= 'A' && b <= 'Z') b += 32;
+		if (a == '*') { sp = ++p; sn = n; continue; }
+		if (a && (a == '?' || a == b)) { p++; n++; continue; }
+		if (!sp) return false;
+		p = sp; n = ++sn;
+	}
+	while (*p == '*') p++;
+	return !*p;
+}
+
+static void list_entry(const char *name, const z_fs_info_t *fi) {
+	if (fi->type == Z_FS_TYPE_DIR) printf("%s/\n", name);
+	else printf("%-24s %lu%s\n", name, (unsigned long)fi->size,
+		(fi->attr & Z_FS_ATTR_RDONLY) ? "  (ro)" : "");
+}
+
+void fs_list_dir(char *arg) {
+	static char path[FS_PATH_MAX];
 	zfs_dir_t d;
 	uint32_t page[128];		// 512 bytes: this may be the shell's stack
 	const z_fs_dirent_t *e;
-	int32_t r = zfs_opendir_at(&d, path && path[0] ? path : "/", page, sizeof(page));
-	if (r < 0) {
-		printf("(cannot list %s: %s)\n", path && path[0] ? path : "/",
-			r == -Z_ENODEV ? "no filesystem -- is fs running?" : "error");
+	const char *dir = path, *pat = NULL;
+	char *last = path;
+	z_fs_info_t fi;
+
+	if (!arg || !arg[0]) arg = "/";
+	snprintf(path, sizeof(path), "%s%s", arg[0] == '/' ? "" : "/", arg);
+
+	for (char *q = path; *q; q++) {
+		if (*q == '/') { last = q; pat = NULL; }
+		else if ((*q == '*' || *q == '?') && !pat) pat = last + 1;
+	}
+	if (pat) {
+		if (last == path) dir = "/";
+		else *last = 0;
+	} else if (zfs_stat(path, &fi) == 0 && fi.type != Z_FS_TYPE_DIR) {
+		list_entry(last + 1, &fi);
 		return;
 	}
-	while ((e = zfs_readdir(&d)) != NULL) {
-		if (e->info.type == Z_FS_TYPE_DIR) printf("%s/\n", e->name);
-		else printf("%-24s %lu%s\n", e->name, (unsigned long)e->info.size,
-			(e->info.attr & Z_FS_ATTR_RDONLY) ? "  (ro)" : "");
+
+	int32_t r = zfs_opendir_at(&d, dir, page, sizeof(page));
+	if (r < 0) {
+		printf("ls: %s: %s\n", arg,
+			r == -Z_ENODEV ? "no filesystem -- is fs running?" :
+			r == -Z_ENOENT ? "no such file or directory" : "cannot list");
+		return;
 	}
+	while ((e = zfs_readdir(&d)) != NULL)
+		if (!pat || wild(pat, e->name)) list_entry(e->name, &e->info);
 	zfs_closedir_at(&d);
 }
 
@@ -206,7 +251,19 @@ int32_t kfs_read_file(const char *path, void *buf, uint32_t cap) {
 // only way it got there was somebody putting it there.
 
 #define APPS_DIR		Z_DIR_APPS "/"
-#define RESOLVED_MAX	(64 + sizeof(APPS_DIR))
+#define NFS_APPS_DIR	Z_DIR_NFS Z_DIR_APPS "/"
+#define RESOLVED_MAX	(64 + sizeof(NFS_APPS_DIR))
+
+// system.apps.nfs_first (zeitlos.cfg), yes unless it says otherwise: a
+// bare name is looked for in /nfs/apps first, the PC's freshly built
+// copy, while an export is mounted (docs/nfs.md). Unmounted, fs answers
+// a /nfs path at once, without asking net.
+static bool nfs_first(void) {
+	const char *v = k_cfg_find("system.apps.nfs_first");
+	if (!v) return true;
+	return !(v[0] == 'n' || v[0] == 'N' || v[0] == '0' || v[0] == 'f' || v[0] == 'F' ||
+		((v[0] == 'o' || v[0] == 'O') && (v[1] == 'f' || v[1] == 'F')));
+}
 
 typedef enum { SRC_NONE = 0, SRC_CARD, SRC_ZAR } exec_src_t;
 
@@ -257,6 +314,14 @@ static exec_src_t exec_resolve(const char *name, char *resolved, z_exec_info_t *
 		return SRC_NONE;
 	}
 
+	// Not the drivers: fs and usb are what /nfs is reached through,
+	// and net is the client itself, so none of them is taken from it.
+	if (nfs_first() && strcmp(name, "fs") && strcmp(name, "usb") && strcmp(name, "net")) {
+		strcpy(resolved, NFS_APPS_DIR);
+		strcat(resolved, name);
+		if (fs_exec_info(resolved, info) == 0 && info->total) return SRC_CARD;
+	}
+
 	strcpy(resolved, APPS_DIR);
 	strcat(resolved, name);
 	if (fs_exec_info(resolved, info) == 0 && info->total) return SRC_CARD;
@@ -269,6 +334,17 @@ static exec_src_t exec_resolve(const char *name, char *resolved, z_exec_info_t *
 int fs_exec_info_any(char *path, z_exec_info_t *info) {
 	char resolved[RESOLVED_MAX];
 	return exec_resolve(path, resolved, info) == SRC_NONE ? 1 : 0;
+}
+
+// Where `path` would run from, for the shell to say: the file it
+// resolves to ("/nfs/apps/text", "/apps/text"), or "flash".
+int fs_exec_where(char *path, char *out, uint32_t cap) {
+	char resolved[RESOLVED_MAX];
+	exec_src_t s = exec_resolve(path, resolved, NULL);
+	if (s == SRC_NONE || !cap) return 1;
+	strncpy(out, s == SRC_ZAR ? "flash" : resolved, cap - 1);
+	out[cap - 1] = 0;
+	return 0;
 }
 
 int fs_exec_is_flash(char *path) {
@@ -333,11 +409,14 @@ uint32_t fs_exec_exists_many(const char *const *names, uint32_t n, uint8_t *foun
 
 	for (uint32_t i = 0; i < n; i++) found[i] = 0;
 
-	if (zfs_opendir_at(&d, Z_DIR_APPS, page, sizeof(page)) == 0) {
+	// /nfs/apps first, as exec_resolve() looks there first; then the card's.
+	for (int pass = nfs_first() ? 0 : 1; pass < 2; pass++)
+	if (zfs_opendir_at(&d, pass ? Z_DIR_APPS : Z_DIR_NFS Z_DIR_APPS, page, sizeof(page)) == 0) {
 		while ((e = zfs_readdir(&d)) != NULL) {
 			// the card's entries only: flash is asked below, directly
+			// (everything on /nfs is read-only, and counts)
 			if (e->info.type == Z_FS_TYPE_DIR || !e->info.size ||
-				(e->info.attr & Z_FS_ATTR_RDONLY)) continue;
+				(pass && (e->info.attr & Z_FS_ATTR_RDONLY))) continue;
 			for (uint32_t i = 0; i < n; i++)
 				if (!found[i] && names[i] && !name_is_path(names[i]) &&
 					name_eq_ci(e->name, names[i])) {

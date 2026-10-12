@@ -22,6 +22,9 @@ const z_ftype_t z_ftypes[] = {
 	// renders Markdown.
 	{ "TXT", "text", "Text"          },
 	{ "ASC", "text", "Text"          },
+	// Configuration: /sys/zeitlos.cfg, /data/net/net.cfg and every app's
+	// own -- key=value text, edited by hand (docs/config.md).
+	{ "CFG", "text", "Configuration" },
 	// MD opens in the VIEWER, not the editor: a Markdown file is
 	// something to read far more often than something to edit, and
 	// `read` renders it rather than showing the markup. `text` still

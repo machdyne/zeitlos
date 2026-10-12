@@ -891,8 +891,8 @@ ZAR_APPS = $(filter-out $(CORE_APPS_OMIT),$(CORE_APPS))
 #
 # A budget is raised by taking from another, from the reserve, or by
 # making something smaller. Every core app must have one.
-CORE_BUDGETS = fs=45K/75K usb=48K/56K wm=107K/135K net=144K/278K term=91K/152K \
-	console=14K/14K cron=26K/48K text=86K/162K files=70K/104K repl=194K/304K
+CORE_BUDGETS = fs=45K/75K usb=48K/56K wm=107K/134K net=144K/285K term=91K/152K \
+	console=14K/14K cron=26K/48K text=86K/154K files=70K/104K repl=194K/304K
 CORE_RESERVE = 21K
 # The archive's region (Z_FLASH_ZAR_END - Z_FLASH_ZAR_OFF): mkzar.py
 # refuses an archive bigger than this, whatever the budgets say, so it
@@ -1059,6 +1059,18 @@ TFTP_DIR ?= /srv/tftp
 
 tftp-dist:
 	@tools/tftp-dist.sh $(TFTP_DIR)
+
+# The same into an NFS export, as $(NFS_DIR)/apps/<name>: a machine with
+# the export mounted at /nfs runs the latest build of an app by its bare
+# name (docs/nfs.md). Each file is renamed into place, so a machine
+# reading one meanwhile never sees half of it. Like tftp-dist, it builds
+# nothing.
+#
+#   $ make apps && make nfs-dist NFS_DIR=/srv/nfs/zeitlos
+NFS_DIR ?= /srv/nfs/zeitlos
+
+nfs-dist:
+	@tools/nfs-dist.sh $(NFS_DIR)
 
 # Summarise the last place-and-route: one line per clock, and the
 # critical path for any that failed.
@@ -1458,4 +1470,4 @@ clean_bios:
 clean_apps:
 	cd sw/apps && make clean
 
-.PHONY: clean_bios bios apps core-bins core-apps core-files pnr_again tftp-dist timing path util test_blit test_uart hwmap FORCE soc
+.PHONY: clean_bios bios apps core-bins core-apps core-files pnr_again tftp-dist nfs-dist timing path util test_blit test_uart hwmap FORCE soc

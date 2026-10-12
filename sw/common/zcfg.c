@@ -49,6 +49,8 @@ const z_cfg_known_t z_cfg_known[] = {
 	  "irc: server and port to connect to at start; empty: wait for /connect" },
 	{ "apps.term.auto_connect", "",
 	  "what a new term window connects to, e.g. port repl0 (empty: start panel)" },
+	{ "system.apps.nfs_first", "yes",
+	  "programs are looked for in /nfs/apps first while an NFS export is mounted (docs/nfs.md)" },
 	{ "system.keyboard.layouts", "us",
 	  "keyboard layouts, comma-separated, first at start (us gb de fr es it br ch se no dk fi pt be jp, ja for Japanese input ... see docs/keyboard_layouts.md) -- Super+Space cycles" },
 	{ "system.font.japanese", "no",

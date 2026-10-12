@@ -7,7 +7,9 @@ kernel is one of them. This is Phase 2 of
 
 **Status (October 2026):** built and running on lakritz: the card,
 `/ram` and `/tmp`, the flash underlay, USB sticks at `/usb`, executables
-from the card. It is restarted after a crash with `/ram` kept, and
+from the card; an NFS export at `/nfs` (read-only, through `net`,
+written October 2026 and awaiting its first test against a real
+server). It is restarted after a crash with `/ram` kept, and
 libc's `open()`/`fopen()` reach it from apps built with `POSIX_IO = 1`
 ([posix_io.md](posix_io.md)). Limits are under "Known limits".
 
@@ -18,6 +20,7 @@ libc's `open()`/`fopen()` reach it from apps built with `POSIX_IO = 1`
 | `/` | the SD card (FatFs drive 0) | directly: `fatfs/sdmm.c`, the card's SPI driver, is linked into `fs` (a driver may use the SD nibble, [mpu.md](mpu.md)) |
 | `/ram`, `/tmp` | the RAM disk (drive 1) | kernel memory, by sector, through `Z_SYS_BLK` |
 | `/usb` | USB mass storage (drive 2) | the `usb` driver's drive, by request (`zusbc.c`, `Z_USBOP_MSC_*`; [usb_driver.md](usb_driver.md)) |
+| `/nfs` | an NFS export, read-only, while one is mounted | by request to `net`, which speaks NFSv3 to the server (`znfsproto.h`; [nfs.md](nfs.md)) |
 | underneath `/` | the flash archive's files | read-only, through `Z_SYS_ZAR` |
 
 The rules are the ones the kernel's filesystem had (and

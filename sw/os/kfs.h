@@ -64,6 +64,7 @@ int fs_close_read(kfs_file_t *f);
 int fs_exec_info(char *path, z_exec_info_t *info);		// the card only
 int fs_exec_info_any(char *path, z_exec_info_t *info);
 int fs_exec_is_flash(char *path);
+int fs_exec_where(char *path, char *out, uint32_t cap);
 int fs_load_exec_any(uint32_t dst, char *path, const z_exec_info_t *info);
 uint32_t fs_exec_exists_many(const char *const *names, uint32_t n, uint8_t *found);
 

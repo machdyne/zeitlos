@@ -211,8 +211,11 @@ shows both `ram` and `tmp`: two names for one volume.
 A **bare name** (a dock icon, `z_proc_run("poker")`, boot starting
 `wm`) is looked up:
 
-1. `/apps/<name>`
-2. the flash archive, under `<name>`
+1. `/nfs/apps/<name>`, while an NFS export is mounted at `/nfs` and
+   `system.apps.nfs_first` is on (the default) -- not for the drivers
+   `fs`, `usb` and `net` ([nfs.md](nfs.md))
+2. `/apps/<name>`
+3. the flash archive, under `<name>`
 
 and nowhere else. To hot-swap a core app during development, put the
 new build at `/apps/wm` (for example `xf apps/wm`) and reboot; delete it

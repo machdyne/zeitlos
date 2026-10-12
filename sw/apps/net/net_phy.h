@@ -132,6 +132,19 @@ typedef struct {
 	// net has finished with it; it must not be written. 0: none.
 	uint16_t (*recv_ref)(const uint8_t **frame);
 	void (*recv_done)(void);
+
+	// The TCP MSS to advertise, 0 for TCP_ADVERTISE_MSS (536). Larger
+	// segments are fewer to handle, but each needs a full frame of the
+	// receive buffer: measured worse on the ENC28J60 (tcp.h), better
+	// where the buffer is large -- the USB adapter's.
+	uint16_t rx_mss;
+
+	// Optional: frames send() can take right now without dropping one.
+	// NULL where send() waits for the hardware (ENC28J60, RMII), so a
+	// burst paces itself. The USB adapter's ring has 2 slots and the
+	// ESP32 link a window of 4; TCP holds segments until there is room
+	// (tcp_link_room()) instead of losing them to a full queue.
+	int (*tx_room)(void);
 } net_phy_t;
 
 // What net.cfg's phy= key selects. Default auto: a MAC built into the
@@ -148,6 +161,7 @@ extern const net_phy_t *net_phy;
 // bitstream positively reports no ethernet hardware; net.c exits
 // cleanly on that rather than probing registers that are not there.
 const net_phy_t *net_phy_select(int mode);
+const net_phy_t *net_phy_use_usb(void);
 
 // Call-site spellings kept from the #define era, so eth.c and the rest
 // of net.c did not have to change when this became a runtime choice.

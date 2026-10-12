@@ -44,6 +44,7 @@ uint16_t usb_ecm_recv(uint8_t *buf, uint16_t maxlen);
 uint16_t usb_ecm_recv_ref(const uint8_t **frame);
 void usb_ecm_recv_done(void);
 bool usb_ecm_send(const uint8_t *buf, uint16_t len);
+int usb_ecm_tx_room(void);
 void usb_ecm_debug_dump(void);
 uint32_t usb_ecm_idle_ticks(void);
 
@@ -54,5 +55,6 @@ bool usb_ecm_rx_pending(void);
 // Is there a USB host controller in this bitstream at all? net_phy.c
 // asks before choosing this backend.
 bool usb_ecm_supported(void);
+bool usb_ecm_present(void);
 
 #endif

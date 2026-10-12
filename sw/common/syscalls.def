@@ -304,3 +304,9 @@ Z_MKSYSCALL(BLK, k_blk)
 // The flash archive, read-only, for the filesystem driver's underlay
 // (sw/common/zproc.h, z_zar_args_t; sw/os/kblk.c). Appended last.
 Z_MKSYSCALL(ZAR, k_zar)
+
+// The rescue console on the screen, for wm (sw/os/rescue.c; wm.c,
+// rescue_engage()): Z_UINT32 1 shows it -- wm has hidden its windows
+// first -- 0 takes it down before wm redraws them. Ctrl+Alt+Esc and the
+// shell's `exit` are how. Appended last.
+Z_MKSYSCALL(RESCUE, k_rescue)

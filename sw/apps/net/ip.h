@@ -35,6 +35,17 @@ void ip_handle(const uint8_t src_mac[6], const uint8_t *payload, uint16_t len);
 // wire *yet*, just not that it never will.
 bool ip_send(uint32_t dst_ip, uint8_t protocol, const uint8_t *payload, uint16_t len);
 
+// The same, for a payload already built in place: at ip_tx_payload(),
+// which is inside the outgoing Ethernet frame (eth_tx_payload()). TCP,
+// UDP and ICMP build there, so a segment is not copied again on its way
+// down. Valid until the next send of any kind.
+uint8_t *ip_tx_payload(void);
+
+// The last send was parked waiting for ARP (ip_poll() sends it): not a
+// failure of the link, though ip_send() returned false.
+bool ip_tx_parked(void);
+bool ip_send_built(uint32_t dst_ip, uint8_t protocol, uint16_t len);
+
 // call every main-loop iteration (net.c, alongside eth_poll()/
 // tcp_poll()/etc.) -- flushes ip_send()'s pending packet (see its own
 // comment in ip.c) the moment ARP resolves the destination it was

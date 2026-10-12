@@ -162,9 +162,21 @@ was about half of each binary:
 `text`, when it became a core app: 145,600 bytes to 88,880 in flash,
 215,608 to 162,992 in RAM. `files` links no `printf` and does not set it.
 
-What is left is `malloc`, the string functions and newlib's FILE layer,
-none of them worth replacing. `console` and `cron` call no `printf` at
-all and have nothing to gain.
+What is left is `malloc`, the string functions and newlib's FILE layer.
+`console` and `cron` call no `printf` at all and have nothing to gain.
+
+**`ZFMT_LITE = 1`** (with `ZFMT = 1`) replaces the FILE layer too, for
+an app whose only output is `printf`, `puts`, `putchar` and `fputs` to
+stdout: `zfmt.c` then keeps a 128-byte line buffer and `write()`s fd 1
+at each newline and when it fills -- the same whole lines newlib's
+line-buffered stdout gave the console log. newlib's `fwrite`, its
+buffering, `fclose`, `fflush` and the `realloc` behind them leave the
+link: about 8KB of flash and of RAM in `net`, which set it to make room
+for the NFS client ([nfs.md](nfs.md)), and the 1KB stdout buffer newlib
+took from the heap. Every FILE is stdout (stderr included), and
+`fflush()` is not replaced -- calling it would bring newlib's stdio
+back -- so an app built this way must not call it; a partial line waits
+for its newline.
 
 | | before | after |
 |---|---:|---:|

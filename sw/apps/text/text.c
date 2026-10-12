@@ -1656,7 +1656,7 @@ static void do_paste(void) {
 	// because it is live only for the duration of this call, and 4KB
 	// of a 16KB stack is affordable for one call that makes no
 	// further nested calls of consequence.
-	static char clip[Z_WM_CLIP_MAX];
+	char clip[Z_WM_CLIP_MAX];
 
 	int avail = z_clip_get(clip, sizeof(clip));
 	if (avail <= 0) return;

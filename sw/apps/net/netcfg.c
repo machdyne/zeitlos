@@ -162,6 +162,13 @@ int netcfg_load(netcfg_t *out)
 					free(buf);
 					return -1;
 				}
+			} else if (!strcmp(p, "nfs")) {
+				if (strlen(val) > NETCFG_NFS_MAX) {
+					printf("netcfg: nfs= too long\n");
+					free(buf);
+					return -1;
+				}
+				strcpy(out->nfs, val);
 			} else if (!strcmp(p, "dhcp")) {
 				out->dhcp = (val[0] != '0');
 			} else if (!strcmp(p, "ip")) {

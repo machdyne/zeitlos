@@ -369,7 +369,9 @@ radio has started.
 **If nothing after "ESP32 released":** no `HELLO` means nothing is
 coming back on pin 10. Check the module is the right way round and runs
 zeitlos-nic (`--info`), not ESP-AT. A module still on ESP-AT boots
-fine and simply never answers in ZNIC.
+fine and simply never answers in ZNIC. (With a USB ethernet adapter
+plugged in as well and `phy=auto`, `net` gives up on the module after
+a few seconds and uses the adapter -- [usb_ethernet.md](usb_ethernet.md#configuration).)
 
 ## Power
 

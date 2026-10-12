@@ -580,7 +580,7 @@ Two properties make it safe:
 - **Claiming is destructive.** wm marks the slot empty as soon as it
   answers, so a second app starting later gets nothing rather than
   re-opening the previous app's file.
-- **It expires** (`Z_WM_ARG_TIMEOUT`, about four seconds). Without
+- **It expires** (`Z_WM_ARG_TIMEOUT`, about fifteen seconds). Without
   that, an argument set for an app that never asks — an older build, or
   one that dies during startup — would sit in the slot and be collected
   by whatever the user launched next, which is a confusing way for the

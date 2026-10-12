@@ -32,8 +32,9 @@ apps. Windows can be moved around by their titlebar.
 
 Zeitlos works fully without a mouse if you don't have one plugged in --
 and without a keyboard, through the on-screen one (Super+K). The rule
-of thumb: **Alt** acts on the focused window, **Super** on the system as
-a whole -- game mode, speech, keyboard layouts. Every key combination
+of thumb: **Alt** acts on the focused window, **Super** on the desktop as
+a whole -- game mode, speech, keyboard layouts -- and **Ctrl+Alt** on the
+machine itself. Every key combination
 there is:
 
 **Windows and the dock** ([window_manager.md](window_manager.md))
@@ -46,6 +47,14 @@ there is:
 | Alt+Minus | shade the focused window, or unshade it (the key right of 0, whatever it types) |
 | Arrows, Enter | while the dock has focus: move between icons, launch one |
 
+**System**
+
+| Keys | What they do |
+|---|---|
+| Ctrl+Alt+Del | reboot, after asking: Reboot or Cancel (Enter, Esc, or click); Cancel leaves the screen as it was ([window_manager.md](window_manager.md#rebooting)) |
+| Ctrl+Alt+Esc | the rescue console: the kernel shell on the screen, windows hidden; again, or `exit`, brings them back ([rescue_console.md](rescue_console.md)) |
+| Super+L | lock the screen ([security.md](security.md)) |
+
 **Keyboard and languages** ([keyboard_layouts.md](keyboard_layouts.md))
 
 | Keys | What they do |
@@ -53,7 +62,6 @@ there is:
 | Super+Space | next keyboard layout (set the list in `settings`) |
 | Super+K | the on-screen keyboard ([keyboard_app.md](keyboard_app.md)) |
 | Super+P | switch to next phosphor mode: white, amber, green, paper |
-| Super+L | lock the screen ([security.md](security.md)) |
 | Super+Minus / Super+Equal | system volume down / up, 10% a press -- also Super with the keypad - / + ([audio.md](audio.md#system-volume)) |
 | Ctrl+Super+Minus / Ctrl+Super+Equal | screen brightness down / up on HDMI/DVI, 16 levels -- the monochrome phosphor only ([socctl.md](socctl.md#brightness)) |
 | Ctrl+Super+[ / Ctrl+Super+] | previous / next page of dock icons (the two keys right of P, whatever they type) |

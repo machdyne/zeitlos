@@ -4,8 +4,8 @@
  *
  * The rescue console -- see rescue.h and docs/rescue_console.md.
  *
- * A terminal of 80x60 characters drawn straight into VRAM: z_font_5x8 in
- * 8-pixel cells (a glyph row is one byte store, as on the panic screen,
+ * A terminal of 80x60 characters drawn straight into VRAM: z_font_8x8,
+ * one byte store per glyph row (as the panic screen's 5x8 font is,
  * uart.c), the blitter to scroll and clear. What it shows is the
  * console log (uart.c), so it needs no output path of its own: every
  * byte the serial console gets is logged, and pid 0 draws the log from
@@ -129,7 +129,7 @@ static uint8_t r_rev8(uint8_t b) {
 }
 
 static void r_glyph(int col, int row, uint8_t c) {
-	const z_font_t *f = &z_font_5x8;
+	const z_font_t *f = &z_font_8x8;	// full cells: 5x8 left 3px gaps, hard to read
 	int gi = z_font_index(f, c);
 	if (gi < 0) gi = z_font_index(f, '?');
 	const uint8_t *g = f->glyphs + gi * f->h;
@@ -293,19 +293,52 @@ int rescue_boot_poll(uint32_t elapsed) {
 	return elapsed < settle ? RESCUE_POLL_WAIT : RESCUE_POLL_NO;
 }
 
-void rescue_enter(const char *why) {
+// Asked for by wm (Ctrl+Alt+Esc, Z_SYS_RESCUE): wm has hidden its
+// windows and is waiting to put them back. Ctrl+Alt+Esc, Ctrl+Alt+Del
+// (wm's reboot dialog) and every key release then go on to wm rather
+// than to the shell; `exit` asks wm too.
+static bool r_by_wm;
+
+static void r_enter(const char *why, bool by_wm) {
 	if (k_rescue_on || !z_soc_has_feature(Z_FEATURE_GPU)) return;
 	uint32_t end = k_klog_end();
 	r_pos = end > R_BACK ? end - R_BACK : 0;
 	r_skip = r_pos != 0;
 	r_fresh = true;
-	k_hid_flush();			// ESC's press, held to get here: not for wm
+	r_by_wm = by_wm;
+	// ESC's press, held to get here, is not for a wm that starts later.
+	// One that asked keeps its keys: it is waiting for their releases.
+	if (!by_wm) k_hid_flush();
 	k_rescue_on = true;
 	printf("rescue: %s\n", why);
 	uint32_t old = maskirq(0xFFFFFFFF);
 	r_dirty = true;
 	k_uart_wake_waiter();		// pid 0, if it waits for input, draws
 	maskirq(old);
+}
+
+void rescue_enter(const char *why) {
+	r_enter(why, false);
+}
+
+bool rescue_by_wm(void) {
+	return k_rescue_on && r_by_wm;
+}
+
+// Z_SYS_RESCUE: Z_UINT32 1 on, 0 off -- wm's, around hiding and
+// redrawing its windows.
+z_obj_t *k_rescue(z_obj_t *args) {
+	if (!args || args->type != Z_UINT32) return &z_fail;
+	if (args->val.uint32) {
+		r_enter("Ctrl+Alt+Esc -- Ctrl+Alt+Esc again, or `exit`, returns to the desktop",
+			true);
+		return k_rescue_on ? &z_ok : &z_fail;
+	}
+	if (k_rescue_on) {
+		k_rescue_on = false;		// wm redraws everything from here
+		r_by_wm = false;
+	}
+	return &z_ok;
 }
 
 static bool r_is_wm(const char *name) {
@@ -327,6 +360,7 @@ void rescue_exec(const char *name, uint32_t pid) {
 	r_wm_pid = pid;
 	if (k_rescue_on) {
 		k_rescue_on = false;	// wm clears the screen and takes it
+		r_by_wm = false;
 		printf("rescue: handing the screen to wm\n");
 	}
 }
@@ -334,6 +368,7 @@ void rescue_exec(const char *name, uint32_t pid) {
 void rescue_ended(uint32_t pid) {
 	bool wm = pid == r_wm_pid || r_is_wm(k_pidreg_name_for(pid));
 	if (pid == r_wm_pid) r_wm_pid = 0;
+	if (wm) r_by_wm = false;	// on already: there is no desktop to go back to
 	if (wm && !k_rescue_on) rescue_enter("wm ended -- `run wm` starts it again");
 }
 
@@ -403,8 +438,25 @@ void rescue_pump(void) {
 	r_busy = false;
 }
 
+// Ctrl (either) + Alt (either) + ESC, or + Delete (the reboot dialog,
+// wm's too), as a press.
+static bool r_hotkey(uint32_t ev) {
+	uint8_t mods = (uint8_t)(ev >> 9), u = (uint8_t)(ev >> 1);
+	return (ev & 1) && (u == R_ESC || u == 0x4C || u == 0x63) &&
+		(mods & 0x11) && (mods & 0x44);
+}
+
 bool rescue_key(uint32_t ev) {
 	if (!k_rescue_on) return false;
+	// For the wm that is waiting to come back: its hotkey, and every
+	// release, so it does not believe a key held when it hid is still
+	// down. Neither types anything here.
+	if (r_by_wm && (r_hotkey(ev) || !(ev & 1))) return false;
+	// With no desktop behind it there is no dialog to ask with.
+	if (r_hotkey(ev) && (uint8_t)(ev >> 1) != R_ESC) {
+		printf("\nCtrl+Alt+Del: type `reboot` to restart\n");
+		return true;
+	}
 	if (ev & 1) {
 		int c = r_ascii((uint8_t)(ev >> 1), (uint8_t)(ev >> 9),
 			((ev >> 17) & Z_KBD_LOCK_CAPS) != 0);

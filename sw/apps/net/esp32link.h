@@ -9,6 +9,7 @@
 bool     esp32link_init(const uint8_t mac[6]);
 uint16_t esp32link_recv(uint8_t *buf, uint16_t maxlen);
 bool     esp32link_send(const uint8_t *buf, uint16_t len);
+int      esp32link_tx_room(void);
 void     esp32link_debug_dump(void);
 /* Non-blocking bring-up for the main loop (do not block wm). */
 void     esp32link_poll_wifi(const netcfg_t *cfg);
@@ -16,6 +17,7 @@ void     esp32link_poll_wifi(const netcfg_t *cfg);
  * wait can be a real sleep instead of one tick. */
 uint32_t esp32link_idle_ticks(void);
 int      esp32link_hello_ok(void);
+void     esp32link_hold(void);
 int      esp32link_link_is_up(void);
 
 /* Drain whatever the ESP32 already pushed into the BRAM FIFO

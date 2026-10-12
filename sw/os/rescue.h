@@ -15,7 +15,10 @@
  * points only:
  *
  *   sh.c      rescue_boot_poll() in the boot window, rescue_enter() when
- *             ESC was held or wm could not be started
+ *             ESC was held or wm could not be started, rescue_by_wm()
+ *             for `exit`
+ *   wm        Z_SYS_RESCUE (k_rescue()): Ctrl+Alt+Esc hides the windows
+ *             and shows this; again, or `exit`, brings them back
  *   kernel.c  rescue_exec() when a program is started (wm: hand over),
  *             rescue_ended() when one exits or crashes (wm: take over)
  *   uart.c    rescue_note() for each byte of console output,
@@ -52,6 +55,10 @@ void rescue_note(void);
 void rescue_pump(void);
 // Is there output not drawn yet? (pid 0 waiting for input)
 bool rescue_pending(void);
+
+// On, and asked for by a wm that is waiting to redraw its windows
+// (sh.c's `exit`).
+bool rescue_by_wm(void);
 
 // A key event, packed as hid.c's HID_EVENT(). True if the rescue
 // console took it (it is then not queued for apps).

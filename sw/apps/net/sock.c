@@ -186,8 +186,8 @@ void sock_abort(int s) {
 	k->conn = NULL;
 }
 
-// One segment per slot per call: tcp.c keeps one unacknowledged
-// segment per connection, so offering more would only be refused.
+// As many segments per slot as TCP's send queue takes (tcp.h, "a send
+// window"); it refuses the rest until ACKs free room.
 void sock_poll(void) {
 
 	for (int s = 0; s < NET_SOCK_SLOTS; s++) {
@@ -197,8 +197,9 @@ void sock_poll(void) {
 
 		if (!k->established || k->tx_queue_len == 0) continue;
 
-		n = k->tx_queue_len > tcp_mss(k->conn) ? tcp_mss(k->conn) : k->tx_queue_len;
-		if (tcp_send(k->conn, k->tx_queue, n)) {
+		while (k->tx_queue_len) {
+			n = k->tx_queue_len > tcp_mss(k->conn) ? tcp_mss(k->conn) : k->tx_queue_len;
+			if (!tcp_send(k->conn, k->tx_queue, n)) break;
 			memmove(k->tx_queue, k->tx_queue + n, (size_t)(k->tx_queue_len - n));
 			k->tx_queue_len = (uint16_t)(k->tx_queue_len - n);
 		}

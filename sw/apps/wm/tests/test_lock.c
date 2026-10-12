@@ -8,7 +8,8 @@
  *      sw/apps/wm/tests/test_lock.c sw/common/zwin.c sw/common/zwidget.c \
  *      sw/common/zfont_data.c sw/common/zobj.c sw/common/zeitlos.c \
  *      sw/common/zkbd.c sw/common/zspeak.c sw/common/zcaption.c \
- *      sw/common/zcfg.c sw/apps/wm/dock_icons.c sw/apps/wm/win_icons.c
+ *      sw/common/zcfg.c sw/apps/wm/dock_icons.c sw/apps/wm/win_icons.c \
+ *      sw/apps/wm/workspace.c
  *   /tmp/wmlock /tmp/wmlock
  *
  * Exit 0 pass, 1 fail, 77 skipped.
@@ -26,6 +27,13 @@
  *     password set does not even ask the kernel;
  *   - a lock asked for mid-drag waits for the release;
  *   - an app grabbing the screen while locked is revoked at once.
+ *
+ * And the rescue console (docs/rescue_console.md), which hides the
+ * desktop the same way: Ctrl+Alt+Esc freezes and empties every window,
+ * then asks the kernel (Z_SYS_RESCUE); nothing wm draws reaches the
+ * screen meanwhile; Ctrl+Alt+Esc again, or the shell's `exit`
+ * (Z_WM_RESCUE), gives the regions back and repaints. Not from the lock
+ * screen, and a lock asked for from it wins.
  */
 #include "../../../common/tests/zrender.h"
 
@@ -57,6 +65,15 @@ static struct {
 
 static z_msg_t queue[16];
 static int qn;
+
+// The kernel's side of the rescue console, and the keyboard.
+static struct { int on_calls, off_calls; bool on, refuse; } kr;
+static int reboots;
+static int32_t keyq[16];
+static int kqn;
+static void key(uint8_t usage, uint8_t mods, bool pressed) {
+	if (kqn < 16) keyq[kqn++] = (int32_t)(((uint32_t)mods << 9) | ((uint32_t)usage << 1) | (pressed ? 1u : 0u));
+}
 
 static struct {
 	bool has, nosys;
@@ -105,6 +122,26 @@ static uint32_t *k_syscall(uint32_t id, uint32_t *args, uint32_t b) {
 		if (!qn) return (uint32_t *)&k_fail;
 		*(z_msg_t *)args = queue[0];
 		memmove(queue, queue + 1, (size_t)(--qn) * sizeof(z_msg_t));
+		return (uint32_t *)&k_ok;
+	case Z_SYS_RESCUE: {
+		z_obj_t *o = (z_obj_t *)args;
+		if (o->val.uint32) {
+			kr.on_calls++;
+			if (kr.refuse) return (uint32_t *)&k_fail;
+			kr.on = true;
+		} else {
+			kr.off_calls++;
+			kr.on = false;
+		}
+		return (uint32_t *)&k_ok;
+	}
+	case Z_SYS_REBOOT:
+		reboots++;                  // and, as a kernel that cannot, returns
+		return (uint32_t *)&k_fail;
+	case Z_SYS_HID_READ_KEY:
+		((z_obj_t *)args)->type = Z_INT32;
+		((z_obj_t *)args)->val.int32 = kqn ? keyq[0] : -1;
+		if (kqn) memmove(keyq, keyq + 1, (size_t)(--kqn) * sizeof(keyq[0]));
 		return (uint32_t *)&k_ok;
 	case Z_SYS_AUTH: {
 		z_auth_args_t *a = (z_auth_args_t *)args;
@@ -349,6 +386,177 @@ int main(int argc, char **argv) {
 		uint32_t w = wm_idle_ticks();
 		expect(w > 0 && w <= 60u * Z_TICK_HZ, "wm wakes when the idle lock is due");
 	}
+
+	// -- the rescue console --
+	printf("9. Ctrl+Alt+Esc: the rescue console\n");
+	if (wm_locked) { type("hunter2"); lock_key(0x0d, false); }
+	expect(!wm_locked, "unlocked to begin with");
+	repair_region(0, 0, WM_SCREEN_W, WM_SCREEN_H, -1);
+	memset(&app, 0, sizeof(app));
+	key(0x29, Z_KBD_MOD_LCTRL | Z_KBD_MOD_LALT, true);
+	key(0x29, Z_KBD_MOD_LCTRL | Z_KBD_MOD_LALT, false);
+	dispatch_keys();
+	expect(rescue_pending == RESCUE_IN && !wm_rescued, "the hotkey asks; the main loop acts");
+	rescue_step();
+	expect(wm_rescued && kr.on && kr.on_calls == 1, "hidden, and the kernel asked to show it");
+	expect(app.freezes == 1 && app.last_empty, "the app frozen first, then given an empty region");
+	take();
+	repair_region(0, 0, WM_SCREEN_W, WM_SCREEN_H, -1);
+	caption_set("a caption over the rescue console", 0);
+	caption_blit();
+	expect(changed() == 0, "nothing wm draws reaches the screen");
+	key(0x04, 0, true);                         /* an 'a' the kernel let through */
+	dispatch_keys();
+	expect(wm_rescued && rescue_pending == 0, "other keys do nothing");
+	int rd = app.redraws;
+	key(0x29, Z_KBD_MOD_RCTRL | Z_KBD_MOD_LALT, true);
+	dispatch_keys();
+	rescue_step();
+	expect(!wm_rescued && !kr.on && kr.off_calls == 1, "Ctrl+Alt+Esc again: the kernel stops first");
+	expect(!app.last_empty && app.redraws > rd, "the app has its region back and redraws");
+
+	printf("10. `exit`: Z_WM_RESCUE\n");
+	rescue_pending = RESCUE_IN;
+	rescue_step();
+	{
+		z_msg_t m;
+		memset(&m, 0, sizeof(m));
+		m.from = 0;
+		m.subject = Z_WM_RESCUE;
+		m.obj.type = Z_UINT32;
+		handle_message(&m);
+		expect(rescue_pending == RESCUE_OUT, "the shell's exit asks wm");
+		rescue_step();
+		expect(!wm_rescued && !kr.on, "back on the desktop");
+		handle_message(&m);
+		expect(rescue_pending == 0, "and is ignored when not in it");
+	}
+
+	printf("11. refused, mid-drag, locked\n");
+	kr.refuse = true;
+	rescue_pending = RESCUE_IN;
+	rescue_step();
+	expect(!wm_rescued && !app.last_empty, "a kernel that cannot show it: straight back");
+	kr.refuse = false;
+	dragging = idx;
+	rescue_pending = RESCUE_IN;
+	rescue_step();
+	expect(!wm_rescued && rescue_pending == RESCUE_IN, "waits for a drag to end");
+	dragging = -1;
+	rescue_step();
+	expect(wm_rescued, "then goes");
+	lock_pending = true;
+	lock_engage();
+	expect(wm_locked && !wm_rescued && !kr.on, "a lock asked for from it wins: console down, locked");
+	key(0x29, Z_KBD_MOD_LCTRL | Z_KBD_MOD_LALT, true);
+	dispatch_keys();
+	expect(rescue_pending == 0 && wm_locked, "no rescue console from the lock screen");
+	type("hunter2");
+	lock_key(0x0d, false);
+
+	printf("12. Ctrl+Alt+Del: the reboot dialog\n");
+	expect(!wm_locked && !wm_rescued, "on the desktop to begin with");
+	repair_region(0, 0, WM_SCREEN_W, WM_SCREEN_H, -1);
+	memset(&app, 0, sizeof(app));
+	take();
+	key(0x4C, Z_KBD_MOD_LCTRL | Z_KBD_MOD_LALT, true);
+	key(0x4C, Z_KBD_MOD_LCTRL | Z_KBD_MOD_LALT, false);
+	dispatch_keys();
+	expect(reboot_pending && !wm_confirm, "the hotkey asks; the main loop acts");
+	confirm_engage();
+	expect(wm_confirm && app.freezes == 1 && !app.last_empty, "the app frozen, its region kept");
+	expect(changed() > 0, "the box is drawn");
+	{
+		bool inside = true;
+		for (int y = 0; y < WM_SCREEN_H && inside; y++)
+			for (int x = 0; x < WM_SCREEN_W; x++)
+				if (snap[y][x] != (uint8_t)z_render_get(x, y) &&
+				    (x < confirm_x || x >= confirm_x + CONFIRM_W ||
+				     y < confirm_y || y >= confirm_y + CONFIRM_H)) { inside = false; break; }
+		expect(inside, "and nothing outside it");
+	}
+	// Each label is ink AND ground within its own cells: drawn with
+	// z_fb_draw_text(), ink 0 on the lit button lays a 0 background
+	// under it on the hardware -- a black block (docs/widgets.md). The
+	// software renderer here inks only, so the check is on the cells.
+	for (int i = 0; i < 2; i++) {
+		static const char *const label[2] = { "Reboot", "Cancel" };
+		int bx, by, lit = 0, dark = 0;
+		confirm_button(i, &bx, &by);
+		int lw = (int)strlen(label[i]) * z_font_5x8.w;
+		int lx = bx + (CONFIRM_BW - lw) / 2, ly = by + (CONFIRM_BH - z_font_5x8.h) / 2;
+		for (int y = ly; y < ly + z_font_5x8.h; y++)
+			for (int x = lx; x < lx + lw; x++)
+				if (z_render_get(x, y)) lit++; else dark++;
+		bool on = (i == confirm_sel);
+		expect(lit > 20 && dark > 20 && (on ? lit > dark : dark > lit),
+			on ? "the highlighted button: dark text on a lit ground"
+			   : "the other: lit text on a dark ground");
+	}
+	take();
+	repair_region(0, 0, WM_SCREEN_W, WM_SCREEN_H, -1);
+	expect(changed() == 0, "nothing wm draws reaches the screen meanwhile");
+	key(0x04, 0, true);                         /* an 'a' */
+	dispatch_keys();
+	expect(wm_confirm && reboots == 0, "other keys do nothing");
+	int sc = app.set_clips;
+	key(0x29, 0, true);                         /* Esc */
+	dispatch_keys();
+	expect(!wm_confirm && reboots == 0, "Esc cancels");
+	expect(app.set_clips > sc && !app.last_empty, "the app thawed with its region");
+
+	reboot_pending = true;
+	confirm_engage();
+	key(0x2B, 0, true);                         /* Tab: to Cancel */
+	key(0x28, 0, true);                         /* Enter */
+	dispatch_keys();
+	expect(!wm_confirm && reboots == 0, "Tab, Enter: Cancel");
+
+	reboot_pending = true;
+	confirm_engage();
+	key(0x28, 0, true);
+	dispatch_keys();
+	expect(reboots == 1 && wm_confirm && confirm_sel == 1, "Enter: Reboot; a kernel that cannot leaves the box up, on Cancel");
+	key(0x28, 0, true);
+	dispatch_keys();
+	expect(!wm_confirm, "then Enter cancels");
+
+	reboot_pending = true;
+	confirm_engage();
+	{
+		int bx, by;
+		confirm_button(1, &bx, &by);
+		confirm_click(bx + 3, by + 3);
+		expect(!wm_confirm && reboots == 1, "a click on Cancel");
+	}
+
+	printf("13. the reboot dialog over the rescue console, and the lock\n");
+	rescue_pending = RESCUE_IN;
+	rescue_step();
+	expect(wm_rescued && kr.on, "in the rescue console");
+	int offs = kr.off_calls, ons = kr.on_calls;
+	key(0x4C, Z_KBD_MOD_RCTRL | Z_KBD_MOD_RALT, true);   /* passed on by the kernel */
+	dispatch_keys();
+	confirm_engage();
+	expect(wm_confirm && wm_rescued && !kr.on && kr.off_calls == offs + 1,
+		"the kernel stops drawing; the console stays behind the box");
+	key(0x29, Z_KBD_MOD_LCTRL | Z_KBD_MOD_LALT, true);   /* Ctrl+Alt+Esc is just a key here */
+	dispatch_keys();
+	expect(!wm_confirm && wm_rescued && kr.on && kr.on_calls == ons + 1,
+		"cancelled (Esc): back to the rescue console");
+	rescue_pending = RESCUE_OUT;
+	rescue_step();
+	expect(!wm_rescued, "and out of it");
+	reboot_pending = true;
+	confirm_engage();
+	lock_pending = true;
+	lock_engage();
+	expect(wm_locked && !wm_confirm, "a lock while it is up: cancelled, then locked");
+	key(0x4C, Z_KBD_MOD_LCTRL | Z_KBD_MOD_LALT, true);
+	dispatch_keys();
+	expect(!reboot_pending && wm_locked, "no reboot dialog from the lock screen");
+	type("hunter2");
+	lock_key(0x0d, false);
 
 	printf("wm lock test: %d checks, %d failed\n", checks, failures);
 	return failures ? 1 : 0;

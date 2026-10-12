@@ -28,6 +28,12 @@ void eth_init(const uint8_t mac[6]);
 
 // builds and sends one frame: dst_mac + our own MAC + ethertype +
 // payload, padded to the minimum frame size if needed.
+// The outgoing frame's payload area: a protocol above may build its
+// packet here and send it with eth_send_built(), with no copy of its
+// own (ip.c). Valid until the next send.
+uint8_t *eth_tx_payload(void);
+bool eth_send_built(const uint8_t dst_mac[6], uint16_t ethertype, uint16_t len);
+
 bool eth_send(const uint8_t dst_mac[6], uint16_t ethertype,
 	const uint8_t *payload, uint16_t len);
 

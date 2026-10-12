@@ -289,23 +289,23 @@ Two budgets, and RAM is the one that binds.
 `0x1FC000` on ECP5). It was 802,816 from `0x138000` while the kernel's
 region was 224KB ([fs_driver.md](fs_driver.md)), 770,048 from
 `0x140000` before that, and 589,824 before the jumploader moved out of
-it ([zboot.md](zboot.md) section 5). With `usb`, October 2026, built
+it ([zboot.md](zboot.md) section 5). With `usb`, after the NFS client (October 2026), built
 here (the board's toolchain gives sizes a few percent either way):
 
 | app | in flash | in RAM (image) | stack |
 |---|---:|---:|---:|
-| `fs` | 42,396 | 72,444 | 64K |
-| `usb` | 41,936 | 52,604 | 16K |
-| `wm` | 106,124 | 133,696 | 8K |
-| `net` | 137,896 | 272,236 | 32K |
-| `term` | 87,292 | 135,444 | 8K |
+| `fs` | 45,204 | 75,848 | 64K |
+| `usb` | 44,560 | 55,396 | 16K |
+| `wm` | 108,764 | 136,360 | 8K |
+| `net` | 144,468 | 290,396 | 32K |
+| `term` | 87,420 | 135,572 | 8K |
 | `console` | 11,112 | 12,488 | 16K |
-| `cron` | 19,940 | 32,656 | 16K |
-| `text` | 84,800 | 158,912 | 16K |
-| `files` | 65,504 | 91,140 | 16K |
+| `cron` | 21,648 | 35,008 | 16K |
+| `text` | 85,492 | 155,520 | 16K |
+| `files` | 66,252 | 91,904 | 16K |
 | `repl` | ~190,000 | ~307,000 | 64K |
-| files in flash (welcome.txt, repl.txt, todo.scm) | 19,692 | | |
-| **archive** | **~807,000** | | |
+| files in flash (welcome.txt, repl.txt, todo.scm) | 20,225 | | |
+| **archive** | **~823,000** | | |
 
 `repl` is not built in this tree without `ext/`; its figures are the
 board's last, less the page gap below.
@@ -321,7 +321,14 @@ code made `fs.bin` 4KB longer.
 about 1.8KB of the region. Each is the app's size on the board's
 toolchain plus a few KB. The RAM budgets are a few KB over each image
 too, so that the boot set with `usb` in it still meets the RAM rule
-below (1,024 of 1,024 KB). `mkzar.py --max` checks the archive itself
+below (1,024 of 1,024 KB). `net`'s TCP send window took 2K of `wm`'s
+RAM slack (`net` 280K, `wm` 133K). The NFS client ([nfs.md](nfs.md))
+cost `net` about 8KB of flash and 14KB of RAM; it paid for itself in
+flash and most of the RAM by building `net` with `ZFMT_LITE` (stdout
+without newlib's stdio, [build.md](build.md)), about 8KB of each, and
+`text`'s paste buffer moved from `.bss` to the stack (4KB), so `net`
+went to 285K of RAM and `text` came down to 154K. The reboot dialog
+(Ctrl+Alt+Del) took `wm` to 134K: 1,022 of 1,024 KB. `mkzar.py --max` checks the archive itself
 against the region (`CORE_ZAR_MAX`, 848K), so a budget that turns out
 too tight costs a bump, never a broken flash.
 
@@ -331,8 +338,8 @@ stack). They are `CORE_BUDGETS` in the top-level `Makefile`, next to
 `CORE_APPS`:
 
 ```
-CORE_BUDGETS = fs=45K/75K usb=48K/56K wm=107K/135K net=144K/278K term=91K/152K \
-	console=14K/14K cron=26K/48K text=86K/162K files=70K/104K repl=194K/304K
+CORE_BUDGETS = fs=45K/75K usb=48K/56K wm=107K/134K net=144K/285K term=91K/152K \
+	console=14K/14K cron=26K/48K text=86K/154K files=70K/104K repl=194K/304K
 CORE_RESERVE = 21K
 CORE_ZAR_MAX = 848K
 CORE_AT_BOOT = fs usb wm net console

@@ -792,8 +792,14 @@ bool esp32link_init(const uint8_t mac[6])
 	/* Do not block here: HELLO/STA/LINK are collected by the main
 	 * loop's polls. */
 	printf("esp32link: ESP32 released, HELLO/STA in main loop\n");
-	fflush(stdout);
 	return true;
+}
+
+/* Back into reset (EN low), for net giving the link up for a USB
+ * adapter: a module that is there after all stays quiet. */
+void esp32link_hold(void)
+{
+	reg_esp32_ctl = ESP32_CTL_GPIO0;
 }
 
 int esp32link_hello_ok(void)
@@ -949,6 +955,39 @@ int esp32link_vmouse_buttons(void)
 	return zinput_buttons();
 }
 
+
+// Frames send() can take before the window is full (net_phy.h
+// tx_room): TCP waits for room rather than overrunning the window,
+// which send() would treat as lost frames.
+//
+// A full window that no DATA_ACK empties within a few ticks is taken as
+// lost acks -- the FIFO overran, or a transaction timed out -- and
+// cleared, as send() does when it finds the window full. Without this
+// TCP, which no longer calls send() while there is no room, would wait
+// on acks that never come.
+#define ESP_TX_FULL_TICKS 3
+static uint32_t tx_full_since;
+static bool tx_full;
+
+int esp32link_tx_room(void)
+{
+	znic_drain();
+	if (tx_outstanding < ZNIC_TX_WINDOW) {
+		tx_full = false;
+		return (int)ZNIC_TX_WINDOW - (int)tx_outstanding;
+	}
+	if (!tx_full) {
+		tx_full = true;
+		tx_full_since = z_uptime_ticks();
+		return 0;
+	}
+	if (z_uptime_ticks() - tx_full_since < ESP_TX_FULL_TICKS)
+		return 0;
+	tx_lost += tx_outstanding;
+	tx_outstanding = 0;
+	tx_full = false;
+	return ZNIC_TX_WINDOW;
+}
 
 bool esp32link_send(const uint8_t *buf, uint16_t len)
 {
