@@ -264,9 +264,16 @@ Fixed in round 10 (they were limits here before):
   waiting, at its next calls (`zfsc.c`, `stale_drain()`; the same in
   `zusbc.c`).
 - **The reply slots.** A slot is given to another client only once its
-  own has copied the reply in it: it has sent again, died, or 256
-  requests went by. With all six holding unread replies, a seventh
-  client is told `-Z_EAGAIN`, and `zfsc.c` waits a tick and asks again.
+  own has copied the reply in it: it has sent again, died, 256
+  requests went by, or the reply is a second old (`FS_SLOT_HOLD_TICKS`,
+  as the bulk buffer always was). With all six holding unread replies,
+  a seventh client is told `-Z_EAGAIN`, and `zfsc.c` waits a tick and
+  asks again. The second was added for a quiet machine: six processes
+  that had each touched a file once (automate, basic, repl, term, wm,
+  ...) held all six slots for good, because the 256 requests never
+  came, and the seventh -- posix running `cat` in the languages demo --
+  gave up after about 3 s with "cannot open", then could not load
+  `zcc` either.
 - **A USB stick no longer pauses `fs`.** `usb` brings a new drive up
   itself, a TEST UNIT READY at a time between its other work, and says
   so once it is ready; `fs` mounts it then. `usbmount` still waits for

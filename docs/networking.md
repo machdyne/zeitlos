@@ -229,6 +229,45 @@ board with ethernet and no audio would silently have had no ethernet
 interrupt. Latent rather than active, since every board with ethernet
 today also has audio. Moved out.
 
+### Transmit timing when the FPGA drives REF_CLK
+
+On klinge and sergei_ml0/ml1/ml2 (`` `ETH_RMII_DRIVE_REFCLK ``) the FPGA
+makes the PHY's 50MHz REF_CLK, and the LAN8720A samples TXD and TX_EN on
+its rising edge: steady 4ns before it, 1.5ns after. The October change
+that put the RMII pin flops in the I/O cells (`rtl/ethmac_rmii.v`, "RMII
+pin registers") left REF_CLK on a plain `assign`, so it reached its pad
+through fabric routing while TXD left from the I/O cells with a short,
+fixed delay. Both start at the same internal edge, so TXD changed at
+about the moment the PHY sampled it. On sergei_ml2 every frame left
+corrupt while reception worked -- `rx_ready=1`, no CRC errors, and DHCP
+never answered (`no offer after 4 attempt(s)`). Boards whose PHY drives
+the clock (lakritz_katze) were not affected: the clock arrives after
+the PHY's edge, which is what TXD needs.
+
+Now, on those boards, both leave through I/O cells and are half a cycle
+apart by construction:
+
+- REF_CLK goes out of an `ODDRX1F` (D0=1, D1=0: the clock itself), as on
+  7-series, so its pad delay is the silicon's in every build
+  (`rtl/sysctl.v`).
+- TXD and TX_EN go out of `ODDRX1F`s with D0 the bit already on the
+  wire and D1 the next one, so they change on the falling edge: about
+  10ns of setup and 10ns of hold at the PHY. Half a cycle more latency,
+  uniformly; the frame is unchanged.
+
+Checked in simulation with behavioural models of the ECP5 cells: both
+RMII benches pass through the I/O-cell path, with and without
+`` `ETH_RMII_DRIVE_REFCLK ``, and `tb_ethmac_rmii_tx.v` fails when the
+DDR path is deliberately broken. Not yet measured on the board.
+
+    iverilog -g2005 -DETH_PIN_IO_FF -DETH_RMII_DRIVE_REFCLK -I rtl \
+        -o /tmp/tx rtl/tb/tb_ethmac_rmii_tx.v rtl/ethmac_rmii.v \
+        rtl/tb/ecp5_io_cells.v
+
+(`rtl/tb/ecp5_io_cells.v` has behavioural models of `IFS1P3DX`,
+`OFS1P3DX` and `ODDRX1F`; without these defines the benches use plain
+flops.)
+
 ### A lost wakeup on the software side
 
 Separately, and independent of the wiring: `k_proc_unblock()` was

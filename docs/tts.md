@@ -445,6 +445,11 @@ again; a narrator that dies simply lets it run out, and the service
 logs `tts: [narrator ... lease expired]`. `Z_TTS_QUIT` is not blocked:
 Super+S turns speech off whoever is narrating.
 
+A narrator that is quiet for longer than its lease must send
+`Z_TTS_NARRATE` again before it runs out: `automate` does every 10 s
+while it waits, since a demo can be silent through a compile or a
+drawing for longer than 30 s.
+
 `z_speak_narrate(lease_s)` (`zspeak.h`) sends it.
 
 **When the pack does not load**, `tts` says why at startup: it cannot

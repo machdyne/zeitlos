@@ -40,7 +40,7 @@ work="${TMPDIR:-/tmp}/zcc-dev"
 [ -x "$sim" ] || { echo "no simulator -- run 'make' in sim/" >&2; exit 1; }
 
 rm -rf "$work"
-mkdir -p "$work/libz" "$work/include" "$work/common"
+mkdir -p "$work/libz" "$work/include" "$work/common" "$work/tmp"
 
 cp "$here/../libz/libz.bin" "$here/../libz/libz.sym" "$here/../libz/libz.h" \
    "$work/libz/"
@@ -56,7 +56,7 @@ for src in "$here"/t0*.c "$here"/l0*.c; do
     cp "$here"/*.h "$work/" 2>/dev/null || true
 
     echo "-I /include -I /libz -I /common -L /libz -o /$name.bin /$name.c" \
-        > "$work/zcc.args"
+        > "$work/tmp/zcc.args"
 
     if ! "$sim" -q -r "$work" -n 4000000000 -m 4194304 "$devzcc" \
             > "$work/$name.devlog" 2>&1; then

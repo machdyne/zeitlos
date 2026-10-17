@@ -1,0 +1,132 @@
+# Zeitlos -- "interpreted languages": Scheme, BASIC and C, about 80 s.
+#
+#   > run posix
+#   > run repl
+#   > run automate /data/automate/lang.zds
+#
+# Revision 9. No speech: captions carry it all. Start posix and repl
+# first, so nothing is waited on on camera: `need` below checks they
+# are up (instantly, when they are) and stops the demo with a reason if
+# one is missing. `speech off` stops a tts left running, which would
+# otherwise announce every window that takes the focus. No narrate or
+# say anywhere: either would start tts again.
+#
+# Layout, 640x480:
+#   term   416x215 at (0,0): Scheme, then the POSIX shell for C
+#   Scheme 200x140 at (424,0), opened by the Scheme code itself and
+#          closed again before BASIC
+#   BASIC  324x255 at (316,160), overlapping term's lower right
+# The Scheme button "More" is at (2,2) in the Scheme window's drawing
+# area, which starts at (426,13): its middle is (458,23) on screen.
+
+need posix0
+need repl0
+reset
+interruptible off
+caption-size 2
+caption-pos bottom
+type-speed 16
+speech off
+
+# -- the stage: a terminal on Scheme ----------------------------------
+run term at 0 0
+# Long enough to read term's start screen before REPL is chosen.
+pause 1500
+key enter
+pause 600
+
+caption Three languages: Scheme, BASIC and C
+pause 2500
+
+# -- 1. Scheme: a window, string art, a button ------------------------
+caption Scheme: a window and a button, typed live
+type (define w (win-create "Scheme" 200 140 424 0))
+key enter
+# The new window takes the focus, and with it the keys: give them back
+# to the terminal before typing on.
+pause 300
+focus term
+type (define (ray i y) (line w 0 i i y 1) (line w 195 i (- 195 i) y 1))
+key enter
+type (define (fan y n) (do ((i 20 (+ i n))) ((> i 124)) (ray i y)))
+key enter
+type (fan 124 12)
+key enter
+pause 700
+# Built-in help: every procedure is documented on the machine. `help
+# button` is (help "button"): how to call it, what it does, an example
+# -- then the very call it describes is typed.
+caption Built-in help, for every procedure
+type help button
+key enter
+pause 2800
+caption Scheme: a window and a button, typed live
+# More: the fan mirrored along the top as well, both twice as dense --
+# two curves become a web of four.
+type (define (more) (fan 124 6) (fan 20 6))
+key enter
+type (win-on w (lambda (e) (if (eq? (car e) 'button) (more) (fan 124 12))))
+key enter
+type (button w 2 2 60 16 "More")
+key enter
+pause 500
+click 458 23
+pause 1500
+# Closed again before BASIC: the click gave it the focus, so the keys
+# go back to the terminal first.
+focus term
+pause 300
+type (win-destroy w)
+key enter
+pause 400
+
+# -- 2. BASIC, beside it ----------------------------------------------
+# Opened here, not at the start, so it is not under the terminal while
+# Scheme is typed. It opens focused.
+caption BASIC
+run basic at 316 160
+pause 300
+type 10 FOR R = 4 TO 100 STEP 6: CIRCLE 160, 110, R: NEXT
+key enter
+type RUN
+key enter
+pause 1800
+
+# -- 3. C: compiled on the board, run full screen ---------------------
+caption C, compiled on the board by zcc
+focus term
+pause 300
+type port posix0
+key enter
+pause 500
+type cat /data/automate/mandel.c
+key enter
+# Long enough to see the source go by. (A hang here, and later "cannot
+# open", was fs refusing a seventh client: docs/demo.md.)
+pause 3000
+# Absolute paths: posix gives a program its arguments but not the
+# shell's directory, so `-o mandel` after `cd /ram` did not land in /ram.
+type zcc /data/automate/mandel.c -o /ram/mandel && /ram/mandel
+key enter
+# zcc, then the fractal row by row and 4 s of colour cycling; mandel
+# gives the screen back by itself. Waited for, not timed: the script
+# goes on when the screen comes back, however long the board takes.
+# No speech.
+caption-off
+await-fullscreen 60000
+
+# -- the end -----------------------------------------------------------
+pause 800
+caption Zeitlos. Timeless computing.
+pause 2500
+pause 1200
+caption-off
+
+# Tidy up, off camera: back to repl, which stays running for the next
+# take.
+key f12
+pause 400
+key enter
+pause 300
+reset
+end

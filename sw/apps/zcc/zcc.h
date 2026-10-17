@@ -284,6 +284,11 @@ int emit_image_end_label(void);
 /* Instruction emission. These are the only things that know RV32
  * encodings. */
 void emit_word(uint32_t insn);
+/* The peephole (emit.c): on by default, off with -nopeep. */
+extern int emit_peephole;
+/* parse.c's assignment to a local: takes back a just-emitted
+ * `addi a0,s0,off` and gives off, or returns 0 and leaves it. */
+int emit_take_local_addr(int *off);
 
 /*
  * A rollback point.

@@ -7,7 +7,7 @@
  *      sw/common/tests/test_dialog.c sw/common/zwin.c \
  *      sw/common/zwidget.c sw/common/zflist.c sw/common/zedit.c \
  *      sw/common/zfsapp.c sw/common/zfont_data.c sw/common/zobj.c \
- *      sw/common/zeitlos.c
+ *      sw/common/zeitlos.c sw/common/tests/zspeak_stub.c
  *   /tmp/test_dialog
  *
  * Exit 0 pass, 1 fail, 77 skipped.

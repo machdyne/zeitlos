@@ -48,3 +48,12 @@ SUBSYSTEM=="usb", ATTRS{idVendor}=="16d0", ATTRS{idProduct}=="116d", \
 SUBSYSTEM=="tty", ATTRS{idVendor}=="303a", ATTRS{idProduct}=="1001", \
     ENV{ID_MM_DEVICE_IGNORE}="1", MODE="0660", GROUP="dialout", \
     SYMLINK+="kabellos"
+
+# DirtyJTAG (1209:c0ca), the programmer `make prog`/`make flash` drive
+# through openFPGALoader (-c dirtyJtag), so neither needs sudo. Its
+# second interface is a CDC-ACM serial port (ttyACM*), which the
+# dialout rule below covers for minicom.
+SUBSYSTEM=="usb", ATTRS{idVendor}=="1209", ATTRS{idProduct}=="c0ca", \
+    MODE="0660", GROUP="plugdev", TAG+="uaccess"
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1209", ATTRS{idProduct}=="c0ca", \
+    ENV{ID_MM_DEVICE_IGNORE}="1", MODE="0660", GROUP="dialout"

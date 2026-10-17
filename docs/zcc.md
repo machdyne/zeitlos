@@ -109,6 +109,7 @@ and neither touches the front end:
 - **A peephole pass over the emitted stream.** `sw ra,0(sp)` /
   `lw t0,0(sp)` pairs across a push/pop with nothing in between
   collapse to a `mv`, and a great deal of the output is exactly that.
+  **Done** (October 2026) -- see "The peephole" below.
 - **A small register stack**, using `t1`–`t6` for the first six levels
   of expression nesting and falling back to memory below that. Most
   expressions never go six deep.
@@ -118,6 +119,45 @@ Two other known-cheap wins, both noted at their site in `parse.c`:
 expression is emitted before the body and jumped around (buffering its
 tokens and re-parsing them after the body removes that), and function
 parameters are all spilled to the frame at entry.
+
+## The peephole
+
+`emit.c` rewrites the last few instructions as each new one is emitted
+(`peep()`), plus one rule in `parse.c`. Four shapes, none of which
+changes what a program does:
+
+| Before | After |
+|---|---|
+| `addi a0,s0,off` / `lw a0,0(a0)` -- a local's value | `lw a0,off(s0)` |
+| push a0 / X / pop R, where X only sets a0 from a constant or a local | `mv R,a0` / X |
+| `li a0,K` / `op a0,R,a0` -- add, sub, and, or, xor, shifts, slt | `opi a0,R,K` |
+| `x = value` for a local scalar: address pushed, value, popped, stored | value, `sw a0,off(s0)` |
+
+`r = zr * zr >> 12` went from 27 instructions to 9.
+
+**Safe by construction.** Everything else in zcc observes .text
+positions through a few functions -- `emit_here()` (which also freezes
+the next word, since its caller may patch it), placing a label,
+recording a fixup, patching a word, seeking, rolling back -- and each
+moves a barrier past what it saw. Rewrites only touch words after the
+barrier, so no branch target, fixup or patch site can move. Rewriting
+is off while code is written below the high-water mark (the
+frame-size slots `function_body()` seeks back to fill). Each rule
+checks every register it relies on: R is never a0, sp, s0 or zero, and
+X reads nothing but zero and s0.
+
+**Checked:** the 12 tests produce the same output as GCC; the device
+`zcc` produces byte-identical images to the host one (`run_dev.sh`; the
+two header-heavy tests need more than the 4MB `zcc` gets on the board,
+with or without the peephole, so that check was made at 8MB); and the
+demo's Mandelbrot is pixel-for-pixel the same.
+
+| | without | with |
+|---|---|---|
+| freestanding test images | 2.6-6.5KB | 9-19% smaller |
+| `sw/data/demo/mandel.c`, drawing | 37.5M instructions | 17.8M |
+
+`-nopeep` turns it off, to compare or to bisect a miscompilation.
 
 ## The supported subset
 
@@ -492,6 +532,38 @@ read, and the tree only ever wants the fixed-width names.
 
 Sizes are rv32/ilp32: `int` and `long` are both 32 bits, `int32_t` is
 `int`, and there is no `int64_t`.
+
+## Fixes found by the demo (October 2026)
+
+**First, what headers cost on the board.** The demo's `mandel.c`
+included `libz.h`, `zsoc.h` and `zwm.h`; the device `zcc` took 67.6M
+instructions over it and needed more than its 4MB, and on the board ran
+out of memory after 30 s. The same program declaring its three calls
+and five registers itself compiles in 2.6M instructions in under 1MB.
+A program meant to be compiled on the machine should include only what
+it uses -- or nothing.
+
+
+Writing `sw/data/demo/mandel.c` ([demo.md](demo.md#the-languages-demo))
+found three things that stopped any program using the system headers:
+
+- **The ABI check.** libz went to ABI 7 in September, `main.c` still
+  expected 5, and every libz build was refused. ABI changes only ever
+  append to `libz_table.def`, so the compiler needed the number and
+  nothing else: `LIBZ_EXPECTED_ABI` is 7.
+- **`_Static_assert`**, which zcc does not parse, reached every program
+  through `zsubjects.h` (via `zwm.h`, `zport.h` and others). Under
+  `__zcc__` that header maps each check to a repeated `extern`
+  declaration; GCC still makes them.
+- **`extern const T name[];`** at file scope -- an array of unstated
+  size, defined elsewhere, as `zsoc.h` declares its feature tables --
+  was "array needs a size". It now gets a placeholder, as a block-scope
+  `extern` already did: there is no linker to resolve it, so a program
+  that only declares one compiles and one that uses one gets the
+  placeholder, as before.
+
+`tests/l04_headers.c` includes `zsoc.h` and `zwm.h` through libz and
+fails without the last two.
 
 ## Diagnostics
 

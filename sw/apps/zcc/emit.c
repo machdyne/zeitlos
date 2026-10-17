@@ -68,6 +68,31 @@ static void buf_align(buf_t *b, int align) {
 static buf_t text, data;
 static int bss_size;
 
+/* -- the peephole (docs/zcc.md, "The peephole") --
+ *
+ * The code generator is an accumulator machine with a memory stack, and
+ * most of what it emits is that machine's overhead rather than the
+ * program: `r = zr * zr >> 12` was 27 instructions, two of them a mul
+ * and a shift. emit_word() rewrites the last few instructions as each
+ * new one arrives, for three shapes that cannot change what the program
+ * does (see peep()).
+ *
+ * SAFE BY CONSTRUCTION, not by care: nothing that has been OBSERVED may
+ * change. Every way the rest of zcc can observe a position in .text --
+ * emit_here(), a label placed, a fixup recorded, a word patched, a seek
+ * or rollback -- moves `peep_barrier` past it, and peep() only ever
+ * touches words at or after the barrier. So no branch target, no
+ * recorded patch site and no fixup can move or change.
+ *
+ * Off while code is being REWRITTEN below the high-water mark (the
+ * frame-size slots parse.c seeks back to fill), where shrinking would
+ * leave stale words; and off with -nopeep (main.c), for comparison. */
+int emit_peephole = 1;
+static int peep_barrier;
+static int text_hw;                 /* the furthest .text has reached */
+
+static void peep_freeze(int upto) { if (upto > peep_barrier) peep_barrier = upto; }
+
 /* ------------------------------------------------------------------ */
 /* labels and fixups                                                    */
 
@@ -118,6 +143,7 @@ int emit_new_label(void) {
 }
 
 void emit_place_label(int label) {
+    peep_freeze(text.len);
     labels[label].sec = LBL_TEXT;
     labels[label].offset = text.len;
     labels[label].placed = 1;
@@ -166,6 +192,7 @@ void emit_data_fixup_label(int data_label, int off, int target_label, int addend
 }
 
 void emit_fixup(int at, fix_kind_t kind, int label, int addend) {
+    peep_freeze(at + 4);
     if (nfixups == fixups_cap) {
         fixups_cap = fixups_cap ? fixups_cap * 2 : 256;
         fixup_t *n = zalloc(sizeof(fixup_t) * (size_t)fixups_cap);
@@ -179,13 +206,16 @@ void emit_fixup(int at, fix_kind_t kind, int label, int addend) {
     nfixups++;
 }
 
-int emit_here(void) { return text.len; }
+/* The caller may patch the word that comes next, so it is frozen too. */
+int emit_here(void) { peep_freeze(text.len + 4); return text.len; }
 
 void emit_prepend_blob(const void *bytes, int len) {
     if (text.len)
         zcc_fatal("internal error: the runtime blob must be placed before "
                   "any code is emitted");
     buf_put(&text, bytes, len);
+    peep_freeze(text.len);
+    text_hw = text.len;
 }
 
 int emit_pin_text_label(int offset) {
@@ -204,7 +234,7 @@ int emit_image_end_label(void) {
     return l;
 }
 
-void emit_seek(int off) { text.len = off; }
+void emit_seek(int off) { text.len = off; peep_barrier = off; }
 
 void emit_data_poke(int label, const void *src, int len) {
     memcpy(data.p + labels[label].offset, src, (size_t)len);
@@ -228,6 +258,8 @@ emit_mark_t emit_mark(void) {
  * the mark was taken. */
 void emit_rollback(emit_mark_t m) {
     text.len = m.text_len;
+    peep_barrier = text.len;            /* the discarded code is gone */
+    text_hw = text.len;
     data.len = m.data_len;
     bss_size = m.bss_size;
     nlabels = m.nlabels;
@@ -235,13 +267,23 @@ void emit_rollback(emit_mark_t m) {
     ndatafixes = m.ndatafixes;
 }
 
-void emit_word(uint32_t insn) {
+static uint32_t read_word(int at);
+static int peep(uint32_t insn);
+
+static void put_word(uint32_t insn) {
     uint8_t b[4] = { (uint8_t)insn, (uint8_t)(insn >> 8),
                      (uint8_t)(insn >> 16), (uint8_t)(insn >> 24) };
     buf_put(&text, b, 4);
+    if (text.len > text_hw) text_hw = text.len;
+}
+
+void emit_word(uint32_t insn) {
+    if (emit_peephole && text.len == text_hw && peep(insn)) return;
+    put_word(insn);
 }
 
 void emit_patch_word(int at, uint32_t insn) {
+    peep_freeze(at + 4);
     text.p[at + 0] = (uint8_t)insn;
     text.p[at + 1] = (uint8_t)(insn >> 8);
     text.p[at + 2] = (uint8_t)(insn >> 16);
@@ -299,6 +341,124 @@ static uint32_t enc_j(int op, int rd, int imm) {
 #define OP_STORE  0x23
 #define OP_IMM    0x13
 #define OP_REG    0x33
+
+/* -- the peephole's rules -- */
+
+#define F_OP(w)   ((int)((w) & 0x7f))
+#define F_RD(w)   ((int)(((w) >> 7) & 31))
+#define F_F3(w)   ((int)(((w) >> 12) & 7))
+#define F_RS1(w)  ((int)(((w) >> 15) & 31))
+#define F_RS2(w)  ((int)(((w) >> 20) & 31))
+#define F_F7(w)   ((int)((w) >> 25))
+#define F_IMM(w)  ((int32_t)(w) >> 20)
+
+#define R_ZERO 0
+#define R_SP   2
+#define R_T0   5
+#define R_S0   8
+#define R_A0   10
+
+/* The last-but-k word, if it may be rewritten (at or after the barrier). */
+static int peep_at(int k, uint32_t *w) {
+    int at = text.len - 4 * k;
+    if (at < peep_barrier || at < 0) return 0;
+    *w = read_word(at);
+    return 1;
+}
+
+/* Only ever called with text.len == text_hw (emit_word checks), so
+ * the dropped words are the newest and the mark comes down with them. */
+static void peep_drop(int k) { text.len -= 4 * k; text_hw = text.len; }
+
+/* Sets a0 from something that reads neither memory below s0's frame
+ * nor any register but zero and s0: li, lui, a local's address, a
+ * local's value. Moving it across a push/pop cannot change it. */
+static int peep_simple_a0(uint32_t w) {
+    if (F_RD(w) != R_A0) return 0;
+    if (F_OP(w) == OP_LUI) return 1;
+    if (F_OP(w) == OP_IMM && F_F3(w) == 0 &&
+        (F_RS1(w) == R_ZERO || F_RS1(w) == R_S0)) return 1;
+    if (F_OP(w) == OP_LOAD && F_RS1(w) == R_S0) return 1;
+    return 0;
+}
+
+/* Returns 1 if `insn` was absorbed (the words before it rewritten so
+ * that together they do exactly what they did with it appended). */
+static int peep(uint32_t insn) {
+    uint32_t w1, w2, w3, w4;
+
+    /* 1. A local's value: `addi a0,s0,off` then `lw a0,0(a0)` is
+     *    `lw a0,off(s0)`. Any load width. */
+    if (F_OP(insn) == OP_LOAD && F_RD(insn) == R_A0 && F_RS1(insn) == R_A0 &&
+        F_IMM(insn) == 0 && peep_at(1, &w1) &&
+        F_OP(w1) == OP_IMM && F_F3(w1) == 0 && F_RD(w1) == R_A0 &&
+        F_RS1(w1) == R_S0) {
+        peep_drop(1);
+        put_word(enc_i(OP_LOAD, R_A0, F_F3(insn), R_S0, F_IMM(w1)));
+        return 1;
+    }
+
+    /* 2. No push and pop round a simple right operand:
+     *      addi sp,sp,-16 / sw a0,0(sp) / X / lw R,0(sp) / addi sp,sp,16
+     *    is `mv R,a0` / X when X only sets a0 from a constant or a local
+     *    (peep_simple_a0): R ends up with what the pop gave it, a0 with
+     *    what X gave it, and the stack slot was never read again. */
+    if (insn == enc_i(OP_IMM, R_SP, 0, R_SP, 16) &&
+        peep_at(1, &w1) && peep_at(2, &w2) && peep_at(3, &w3) && peep_at(4, &w4) &&
+        F_OP(w1) == OP_LOAD && F_F3(w1) == 2 && F_RS1(w1) == R_SP && F_IMM(w1) == 0 &&
+        F_RD(w1) != R_A0 && F_RD(w1) != R_SP && F_RD(w1) != R_S0 && F_RD(w1) != R_ZERO &&
+        peep_simple_a0(w2) &&
+        w3 == enc_s(OP_STORE, 2, R_SP, R_A0, 0) &&
+        w4 == enc_i(OP_IMM, R_SP, 0, R_SP, -16)) {
+        int r = F_RD(w1);
+        peep_drop(4);
+        put_word(enc_i(OP_IMM, r, 0, R_A0, 0));        /* mv r,a0 */
+        put_word(w2);
+        return 1;
+    }
+
+    /* 3. A constant right operand: `li a0,K` then `op a0,R,a0` is
+     *    `opi a0,R,K`. R keeps the left operand, as it would have. */
+    if (F_OP(insn) == OP_REG && F_RD(insn) == R_A0 && F_RS2(insn) == R_A0 &&
+        F_RS1(insn) != R_A0 && peep_at(1, &w1) &&
+        F_OP(w1) == OP_IMM && F_F3(w1) == 0 && F_RD(w1) == R_A0 &&
+        F_RS1(w1) == R_ZERO) {
+        int k = F_IMM(w1), f3 = F_F3(insn), f7 = F_F7(insn), rs1 = F_RS1(insn);
+        uint32_t out = 0;
+        if (f7 == 0x00 && (f3 == 0 || f3 == 2 || f3 == 3 || f3 == 4 ||
+                           f3 == 6 || f3 == 7))
+            out = enc_i(OP_IMM, R_A0, f3, rs1, k);      /* add slt sltu xor or and */
+        else if (f7 == 0x20 && f3 == 0 && k != -2048)
+            out = enc_i(OP_IMM, R_A0, 0, rs1, -k);      /* sub */
+        else if (k >= 0 && k <= 31 && f7 == 0x00 && (f3 == 1 || f3 == 5))
+            out = enc_i(OP_IMM, R_A0, f3, rs1, k);      /* sll srl */
+        else if (k >= 0 && k <= 31 && f7 == 0x20 && f3 == 5)
+            out = enc_i(OP_IMM, R_A0, 5, rs1, k | 0x400); /* sra */
+        if (out) {
+            peep_drop(1);
+            put_word(out);
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+/* For an assignment to a local (parse.c): if the destination's address
+ * was the very last thing emitted, as `addi a0,s0,off`, and nothing has
+ * observed it, take it back and give its offset -- the store can then
+ * go straight to off(s0), with no push and pop round the value. */
+int emit_take_local_addr(int *off) {
+    uint32_t w1;
+    if (!emit_peephole || text.len != text_hw) return 0;
+    if (!peep_at(1, &w1)) return 0;
+    if (F_OP(w1) != OP_IMM || F_F3(w1) != 0 || F_RD(w1) != R_A0 ||
+        F_RS1(w1) != R_S0) return 0;
+    *off = F_IMM(w1);
+    peep_drop(1);
+    text_hw = text.len;
+    return 1;
+}
 
 void ei_lui(int rd, uint32_t imm20)   { emit_word(enc_u(OP_LUI, rd, imm20 & 0xfffff)); }
 void ei_auipc(int rd, uint32_t imm20) { emit_word(enc_u(OP_AUIPC, rd, imm20 & 0xfffff)); }

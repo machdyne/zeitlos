@@ -56,8 +56,6 @@
 static bscreen_t scr;
 static bedit_t ed;
 static z_win_t win;
-static int chrome_w, chrome_h;
-static bool chrome_known;
 
 static bool full;                   /* full screen (game mode) */
 static int page;                    /* the game-mode page drawn next */
@@ -300,6 +298,9 @@ static void on_msg(z_msg_t *msg, void *user) {
     case Z_WM_WINDOW_MOVED:
         z_win_parse_rect(&win, &msg->obj);
         break;
+    case Z_WM_WINDOW_RESIZED:                   /* open_window()'s resize */
+        z_win_apply_resized(&win, &msg->obj);
+        break;
     case Z_WM_KEY:
         if (Z_WM_UNPACK_KEY_PRESSED(msg->obj.val.uint32))
             inbox_add(Z_WM_UNPACK_KEY_KEYSYM(msg->obj.val.uint32));
@@ -370,22 +371,17 @@ static void messages(void) {
 }
 
 static bool open_window(void) {
-    if (z_win_create_cb(&win, "BASIC", (uint32_t)(BS_W + chrome_w),
-            (uint32_t)(BS_H + chrome_h), -1, -1, Z_WIN_FLAG_CLOSE_ICON,
-            on_msg, NULL) != Z_OK)
-        return false;
-    if (!chrome_known) {
-        /* the frame is wm's business: measure it, then ask for the size
-         * that gives the screen its own 320x240 pixels (as chip8 does) */
-        chrome_w = (int)win.w - z_win_content_w(&win);
-        chrome_h = (int)win.h - z_win_content_h(&win);
-        chrome_known = true;
-        if (chrome_w || chrome_h) {
-            z_win_destroy(&win);
-            return open_window();
-        }
-    }
-    return true;
+    /* The size that gives the screen its own 320x240 pixels, asked for
+     * once. It used to be measured from a first window, which was then
+     * closed and opened again at the right size (as chip8 still does);
+     * in that moment term, underneath, got the area back, was asked to
+     * repaint it and lost it again, and its text and scrollbar were left
+     * inside the BASIC window. Resizing the first window instead hung
+     * the demo. The frame is a constant (zwin.h), so neither is needed:
+     * one window, the right size, where the script asked for it. */
+    return z_win_create_cb(&win, "BASIC", (uint32_t)(BS_W + Z_WIN_CHROME_W),
+            (uint32_t)(BS_H + Z_WIN_CHROME_H), -1, -1, Z_WIN_FLAG_CLOSE_ICON,
+            on_msg, NULL) == Z_OK;
 }
 
 /* ---- what the interpreter asks of the system (basic.h) ---- */

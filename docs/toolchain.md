@@ -58,7 +58,8 @@ Zeitlos design as failing 48 MHz on Lakritz — which it plainly does not,
 since it runs. **If your timing report looks alarming, check your tool
 versions before you start changing RTL.**
 
-The packages also cannot build the GateMate boards at all.
+The packages also cannot build the GateMate boards at all: no
+`nextpnr-himbaechel`, and no `gmpack`.
 
 ### From OSS CAD Suite (recommended)
 
@@ -83,8 +84,58 @@ source ~/work/fpga/oss-cad-suite/environment
 it to `~/.bashrc` to make it permanent, but note it shadows any
 system-installed yosys.
 
-This is already what `Makefile` assumes for GateMate boards, which
-reference `~/work/fpga/gatemate/oss-cad-suite/bin/nextpnr-himbaechel`.
+The suite is also what the GateMate recipe in `Makefile` expects, but
+it no longer hardcodes a path -- put the suite on `PATH` and `yosys`,
+`nextpnr-himbaechel` and `gmpack` are all found there.
+
+#### Replacing a from-source yosys/nextpnr install
+
+The suite is self-contained and activates like a Python virtualenv, so
+**shadow the old install rather than deleting it.** If something turns
+out to be missing you want to be one `deactivate` away from your
+previous setup, not one rebuild away.
+
+Find out what you have first -- a from-source build normally lands in
+`/usr/local`:
+
+```
+$ which -a yosys nextpnr-ecp5 nextpnr-himbaechel ecppack
+$ ls -d /usr/local/share/yosys /usr/local/share/nextpnr 2>/dev/null
+```
+
+Then unpack the suite somewhere of its own and activate it:
+
+```
+$ cd ~/work/fpga
+$ tar xzf ~/Downloads/oss-cad-suite-linux-x64-YYYYMMDD.tgz
+$ source ~/work/fpga/oss-cad-suite/environment
+```
+
+The prompt gains an `OSS CAD Suite` marker while it is active, and
+`deactivate` puts your previous `PATH` back. Nothing was removed and
+nothing was overwritten.
+
+**One suite covers every Zeitlos board**, which is the reason to switch
+wholesale rather than keep a split setup: `nextpnr-ecp5`/`ecppack`/
+`ecpbram`, `nextpnr-ice40`/`icepack`/`icebram`, `nextpnr-himbaechel`
+with the GateMate chipdb plus `gmpack`, and `openFPGALoader`,
+`iverilog`, `gtkwave` and `verilator` alongside.
+
+**The one real gotcha: `python3` is shadowed too.** The activation
+script prepends both `bin` and `py3bin`, and `py3bin/python3` is the
+suite's own 3.11. Anything `pip install --user`ed against your system
+Python will not import in an activated shell. Zeitlos itself is safe --
+everything under `tools/`, `release/lib/`, `sw/bios/makehex.py` and
+`sw/data/images/` is pure standard library -- but it will bite an
+unrelated script eventually, and the symptom is a `ModuleNotFoundError`
+for something you know is installed. Use `/usr/bin/python3` explicitly,
+or `deactivate` first.
+
+If you later want the old tools gone for good, a source install has no
+uninstall target, so it is a manual sweep of `/usr/local/bin/{yosys*,
+nextpnr-*,ecp*,ice*}`, `/usr/local/share/{yosys,nextpnr,trellis}` and
+`/usr/local/lib/libtrellis*`. Worth doing only once the suite has built
+every board you care about.
 
 **Yosys 0.69 and the DDR3 boards.** oss-cad-suite 2026-10-01 (Yosys
 0.69+173, nextpnr-ecp5 0.11.1-40) is what Konfekt, Schoko, Noir and
@@ -186,14 +237,204 @@ test DSPs again).
 
 ### GateMate boards (Kölsch, Lebkuchen)
 
-These additionally need Cologne Chip's own place-and-route tool, `p_r`,
-which is proprietary and not redistributed by anyone else:
+**The GateMate flow is fully open. Cologne Chip's proprietary `p_r` is
+not needed and is not used.** Earlier revisions of this document said
+otherwise; that was true before `nextpnr-himbaechel` grew a GateMate
+microarchitecture and before Project Peppercorn's `gmpack` existed.
 
-https://www.colognechip.com/programmable-logic/gatemate/
+Three tools, in order:
 
-Download it from there, get `nextpnr-himbaechel` from OSS CAD Suite, and
-adjust the `PR` and `SYNTH` paths near the top of `Makefile`. Neither
-apt nor OSS CAD Suite alone is sufficient for GateMate.
+| Step | Tool | Comes from |
+|---|---|---|
+| Synthesis | `yosys -p synth_gatemate` | yosys, built in since 0.13 |
+| Place & route | `nextpnr-himbaechel --device CCGM1A1` | nextpnr, `himbaechel` arch, `gatemate` uarch |
+| Bitstream pack | `gmpack` | Project Peppercorn (`libgm`) |
+
+`openFPGALoader -c dirtyJtag` programs the result.
+
+Verified end to end on Ubuntu 24.04 with OSS CAD Suite `20260911`
+(yosys 0.69+20, nextpnr 0.11.1-26-ga601751d, gmpack v1.13-6-gb1eb52f):
+a Lebkuchen bitstream built, routed and packed to a 517 KB `.bit`.
+
+#### Option A -- OSS CAD Suite (recommended)
+
+Nothing extra to do. The suite already ships `nextpnr-himbaechel` with
+`chipdb-CCGM1A1.bin` and `chipdb-CCGM1A2.bin` compiled in, plus
+`gmpack`. Check before building:
+
+```
+$ ls $(dirname $(which nextpnr-himbaechel))/../share/nextpnr/himbaechel/gatemate/
+chipdb-CCGM1A1.bin  chipdb-CCGM1A2.bin
+$ gmpack --help | head -2
+```
+
+A `nextpnr-himbaechel` without that chipdb directory fails with
+`Unknown device CCGM1A1`, which reads like a typo rather than a missing
+database.
+
+#### Option B -- from source
+
+Needed if you build yosys and nextpnr from source anyway. **A
+distro-packaged nextpnr will not work**: Debian and Ubuntu build
+`nextpnr-ecp5`, `nextpnr-ice40` and `nextpnr-nexus`, none of which is
+`himbaechel`, and even a source build of nextpnr omits GateMate unless
+configured for it explicitly.
+
+```
+sudo apt install cmake build-essential python3-dev \
+                 libboost-all-dev libeigen3-dev
+```
+
+**1. Project Peppercorn** -- supplies both `gmpack` and the device
+database nextpnr's chipdb is generated from.
+
+```
+git clone https://github.com/YosysHQ/prjpeppercorn.git
+cd prjpeppercorn/libgm
+cmake -B build -DCMAKE_INSTALL_PREFIX=/usr/local
+cmake --build build -j$(nproc)
+sudo cmake --install build
+```
+
+**Do not use `git clone --depth 1` here.** The build reads
+`git describe --tags` to stamp a version, a shallow clone has no tags,
+and the failure surfaces several steps later as:
+
+```
+CMake Error at CMakeLists.txt:97 (add_executable):
+  No SOURCES given to target: gmpack
+```
+
+which mentions neither git nor tags. `git fetch --unshallow --tags`
+fixes an existing shallow clone. Keep the checkout -- nextpnr needs it
+in step 2.
+
+**2. nextpnr with the GateMate microarchitecture.** A separate binary
+from `nextpnr-ecp5`; building it does not disturb an existing install.
+
+```
+git clone https://github.com/YosysHQ/nextpnr.git
+cd nextpnr
+cmake -B build \
+      -DARCH=himbaechel \
+      -DHIMBAECHEL_UARCH=gatemate \
+      -DHIMBAECHEL_PEPPERCORN_PATH=/path/to/prjpeppercorn \
+      -DHIMBAECHEL_GATEMATE_DEVICES=CCGM1A1 \
+      -DCMAKE_INSTALL_PREFIX=/usr/local
+cmake --build build -j$(nproc)
+sudo cmake --install build
+```
+
+`HIMBAECHEL_PEPPERCORN_PATH` is mandatory, checked at configure time,
+and points at the top of the checkout rather than at `libgm`.
+`HIMBAECHEL_GATEMATE_DEVICES=all` means `CCGM1A1 CCGM1A2`; only
+`CCGM1A1` is needed for Kölsch and Lebkuchen and building just that one
+is faster.
+
+The build generates the chipdb by running
+`himbaechel/uarch/gatemate/gen/arch_gen.py` against the Peppercorn
+database. That step alone takes a few minutes and produces a ~59 MB
+`.bba` before it is compiled to binary, so expect GateMate builds to be
+slower and hungrier than ECP5 ones. **Keep nextpnr and prjpeppercorn
+roughly in step** -- the chipdb is generated by the nextpnr in the same
+tree, so a stale Peppercorn checkout against a new nextpnr (or the
+reverse) is the usual cause of a chipdb that builds and then
+misbehaves.
+
+**3. yosys.** No GateMate-specific configuration. `synth_gatemate` has
+been built in since 2021 and both flags Zeitlos uses are as old:
+
+```
+$ yosys -p "help synth_gatemate" | grep -E "luttree|noclkbuf"
+```
+
+#### Flags that are not optional
+
+The GateMate recipe in `Makefile` passes all of these. They are called
+out because leaving one off produces an error that does not obviously
+point back at the flag.
+
+**`-noclkbuf` on `synth_gatemate`.** Without it, yosys's `clkbufmap`
+pass inserts `CC_BUFG` cells on every clock net -- eleven of them, on
+this design -- and nextpnr rejects them outright:
+
+```
+ERROR: Cell type 'CC_BUFG' is unsupported (instantiated as '$auto$clkbufmap.cc:261:execute$187025').
+```
+
+The GateMate uarch does its own clock routing from the `CC_PLL`
+outputs, so the buffers are not merely unnecessary, they are in the way.
+
+**`--ignore-loops` on nextpnr.** `rtl/trng.v` is a ring-oscillator
+TRNG, which is a deliberate combinational loop. Timing analysis will
+not proceed past it:
+
+```
+ERROR: Timing analysis failed due to combinational loops.
+```
+
+The ECP5 recipe has always passed this for the same reason. The
+oscillators appear in timing reports as clock domains named
+`trng_i.ro_clk[*]`.
+
+**`--router router1`, not `router2`.** router2 fails on the Zeitlos SOC
+at CCGM1A1 size, and not from congestion -- it dies on the *first* arc
+of some net, between near-adjacent CPEs, immediately on entering the
+main router loop:
+
+```
+ERROR: Failed to route arc 0.0 of net 'gpu_video_i.vc_next[8]', from X127Y129/CPE.COMBOUT1_int to X126Y128/CPE.D0_01_int.
+```
+
+Observed at both 65% and 72% `CPE_LT`, on different nets each time, and
+lowering `--placer-heap-beta` to spread the placement out does not help.
+router1 gets past it. `GM_ROUTER` in `Makefile` selects this; if
+router1 ever fails too, try `--vopt no-cpe-cp` next -- the GateMate
+uarch has an undocumented option set (`clk-cp`, `no-cpe-cp`,
+`no-bridges`) and `use_cp_for_cpe`, on by default, governs exactly the
+kind of CPE-internal resource those failing arcs name.
+
+#### Performance mode is a core voltage, not a tool preference
+
+`--vopt fpga_mode=` picks which silicon nextpnr thinks it is timing:
+`lowpower`, `economy` or `speed`, corresponding to core supply
+voltages. **It defaults to `speed` regardless of the board**, and it
+warns when that disagrees with the `CC_PLL` instances, which
+`rtl/sysctl.v` declares as `ECONOMY`:
+
+```
+Warning: PLL 'pll_inst0' PERF_MD mode is 'ECONOMY' but FPGA performance mode is 'SPEED'.
+```
+
+Set `GM_PERF` to whatever the board's core rail actually is. A number
+produced at the wrong performance mode is not conservative or
+optimistic, it is just wrong.
+
+`--vopt time_mode=` picks the process/voltage/temperature corner:
+`best`, `typical` or `worst`. `worst` is signoff and is the default
+here (`GM_CORNER`). `typical` is closer to what one specific board at
+room temperature does, and is only safe against a frequency confirmed
+on hardware.
+
+#### Read GateMate timing numbers with care
+
+`nextpnr-himbaechel` does **not** infer a target frequency from the
+`CC_PLL` instances, so without `--freq` it timing-drives the design
+against an arbitrary default. `GM_FREQ` in `Makefile` supplies it.
+
+Even then, the GateMate timing model is younger than the ECP5 one and
+its post-routing numbers are not yet trustworthy. On a minimal
+Lebkuchen build the post-*placement* estimate was 48.21 MHz and the
+post-*routing* figure 33.25 MHz -- but the critical path breakdown
+behind that second number contains entries like
+`2.56 ns logic, -5.78 ns routing`, and cross-domain paths are reported
+at `-1356.85 MHz`. Negative delays are a model artifact, not a design
+property.
+
+Practical consequence: on GateMate, treat the post-placement estimate
+as the guide, build with `--timing-allow-fail`, and **validate real
+Fmax on hardware.** This is the opposite of the advice for ECP5, where
+a failing timing report is a genuine warning.
 
 ---
 

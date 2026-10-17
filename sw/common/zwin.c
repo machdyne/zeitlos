@@ -251,6 +251,20 @@ z_rv z_win_create_cb(z_win_t *win, const char *title, uint32_t w, uint32_t h,
 	win->clip[0] = zwin_clip_none;
 	win->clip_n = 1;
 
+	// A NEW window: nothing of it is on the glass yet. The struct may
+	// have held a window before (destroyed, then created again in the
+	// same z_win_t, as basic used to), and that window's clip_was would
+	// otherwise say part of this one was already painted, so a damage
+	// REDRAW would skip it.
+	win->clip_was_n = 0;
+	win->clip_was_held = 0;
+	win->clip_widened = 0;
+	win->paint_n = 0;
+	win->paint_set = 0;
+	win->paint_full = 0;
+	win->frozen = 0;
+	win->drew_frozen = 0;
+
 	z_msg_new_send(wmpid, Z_WM_CREATE_WINDOW, 0, args);
 
 	z_msg_t reply;
@@ -374,9 +388,26 @@ static void win_use_clip(const z_win_t *win) {
 	// itself regardless reaches nothing. Passing zero rectangles to
 	// zgfx would mean unrestricted, which is the opposite -- the same
 	// trap Z_WM_SET_CLIP's own comment documents.
+	//
+	// And never outside the window's CURRENT region. The damage was
+	// measured when the window last gained pixels; if it lost some of
+	// them again before repainting -- basic opens a window, closes it
+	// and opens its real one in the same place, so term gained that
+	// area and lost it again -- the list still covers pixels that now
+	// belong to the window on top, and term's scrollbar was drawn
+	// into BASIC's screen through it. Intersected, it cannot be.
 	if (win->paint_set) {
-		if (win->paint_n > 0) z_gfx_set_visible(win->paint, win->paint_n);
-		else z_gfx_set_visible(&zwin_clip_none, 1);
+		static z_clip_t both[Z_WM_MAX_CLIP];
+		int n = 0;
+		if (win->paint_n > 0 && win->clip_n > 0)
+			n = zwin_region_and(win->paint, win->paint_n,
+				win->clip, win->clip_n, both, Z_WM_MAX_CLIP);
+		if (n < 0)          // too fragmented: the region itself is safe
+			z_gfx_set_visible(win->clip, win->clip_n);
+		else if (n > 0)
+			z_gfx_set_visible(both, n);
+		else
+			z_gfx_set_visible(&zwin_clip_none, 1);
 		return;
 	}
 	// Never told a region (clip_n == 0): draw NOTHING, not everything.

@@ -394,6 +394,14 @@ void z_win_draw_utf8_2(const z_win_t *win, int x, int y, const char *s,
 // chokepoint carries that rather than every app remembering to.
 void z_win_content_rect(const z_win_t *win, z_clip_t *out);
 
+// The frame around the content area: an outer size of (w + Z_WIN_CHROME_W,
+// h + Z_WIN_CHROME_H) gives exactly w x h of content. The insets
+// z_win_content_rect() applies -- 2 px on each side, the titlebar on top;
+// KEEP IN SYNC with it. For an app that needs its own pixels (basic's
+// 320x240 screen) without opening a window just to measure the frame.
+#define Z_WIN_CHROME_W	4
+#define Z_WIN_CHROME_H	(Z_WM_TITLEBAR_H + 4)
+
 // Puts `win`'s visible region in force for the z_fb_* (zgfx.h) calls
 // that follow, as every z_win_* drawing call does for itself. For a
 // process with several windows drawing through z_fb_* directly (repl's

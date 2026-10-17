@@ -1313,10 +1313,20 @@
 `define FPGA_GATEMATE
 `define OSC48
 `define MEM 8
-//`define MEM_QQSPI
-//`define MEM_QQSPI_SINGLE
+`define MEM_QQSPI
+`define MEM_QQSPI_SINGLE
 `define MEM_VRAM
+`define MEM_ROM
+`define MEM_GLYPH
+`define ICACHE
+`define ICACHE_KB 2
+`define ICACHE_LINE_WORDS 4
+
+// `MONTMUL is a drop candidate if this does not fit or does not close
+// timing -- it is the largest block here that nothing in the boot path
+// needs. Measure before deciding; see docs/lebkuchen.md.
 `define MONTMUL
+
 `define GPU
 `define GPU_RASTER
 `define GPU_BLIT
@@ -1678,6 +1688,24 @@
 `ifndef GPIO_I2CS_SLOTS
 `define GPIO_I2CS_SLOTS 0
 `endif
+// GateMate always sets NO_CPU_MUL_FAST. The top-level Makefile passes
+// -nomult to synth_gatemate, so `CPU_MUL_FAST's full unpipelined 32x32
+// multiplier lands in LUTs rather than in dedicated hardware.
+// Measured on Lebkuchen (CCGM1A1): ~7 points of CPE_LT, which is more
+// than MEM_QQSPI + MEM_ROM + MEM_GLYPH + a 2KB ICACHE cost put
+// together, and it is squarely on the critical path.
+//
+// This is a property of the synthesis flags, not of any one board, so
+// it belongs here rather than in each GateMate board's block.
+// `CPU_MUL stays defined either way, so the sequential shift-add
+// multiplier is used instead: still around an order of magnitude
+// faster than the libgcc routine, and no timing risk. Nothing in
+// software changes -- both are RV32IM as far as the compiler is
+// concerned. See docs/muldiv.md and docs/zeitlos32.md.
+`ifdef FPGA_GATEMATE
+`define NO_CPU_MUL_FAST
+`endif
+
 `ifdef NO_CPU_MUL_FAST
 `undef CPU_MUL_FAST
 `endif

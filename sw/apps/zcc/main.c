@@ -23,7 +23,7 @@
 /* The libz ABI this compiler was built to speak. Must match
  * LIBZ_ABI_VERSION in libz/libz.h; the two are checked against each
  * other every time a blob is loaded. */
-#define LIBZ_EXPECTED_ABI 5
+#define LIBZ_EXPECTED_ABI 7
 
 /*
  * Loads libz.bin and libz.sym from a directory.
@@ -161,6 +161,7 @@ static void usage(const char *argv0) {
         "  -D NAME[=V] define a macro\n"
         "  -U NAME     undefine a macro\n"
         "  -L DIR      look for the libz runtime here\n"
+        "  -nopeep     no peephole: the plain stack-machine code (docs/zcc.md)\n"
         "  -nolibz     freestanding: no runtime, zcc emits its own entry stub\n"
         "  -E          preprocess only, print the token stream\n"
         "  -v          report image sizes on stderr\n"
@@ -288,6 +289,10 @@ int main(int argc, char **argv) {
                 d = argv[i];
             }
             if (nlibdirs < 8) libdirs[nlibdirs++] = d;
+        } else if (!strcmp(a, "-nopeep")) {
+            /* The emitter's peephole off (emit.c), to compare against
+             * or to bisect a miscompilation to it. */
+            emit_peephole = 0;
         } else if (!strcmp(a, "-nolibz")) {
             nolibz = 1;
         } else if (!strcmp(a, "-E")) {

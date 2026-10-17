@@ -1,6 +1,6 @@
 # The demos
 
-Two scripted demos of Zeitlos, played by [`automate`](automate.md),
+Scripted demos of Zeitlos, played by [`automate`](automate.md),
 narrated by the system's own voice ([tts.md](tts.md)) with
 [captions](captions.md). The scripts are `automate`'s, in its folder,
 and the media they show are the card's examples, in `/media`
@@ -12,6 +12,8 @@ and the media they show are the card's examples, in `/media`
 | `/data/automate/long.zds` | about four minutes, for YouTube: captions at 2x |
 | `/data/automate/store.zds` | `long.zds` forever, in [attract mode](automate.md#attract-mode) |
 | `/data/automate/demo.zds` | what `run automate` plays: `long.zds` |
+| `/data/automate/lang.zds` | about 80 seconds, programming: Scheme, BASIC and C ([below](#the-languages-demo)) |
+| `/data/automate/mandel.c` | the C program `lang.zds` compiles on the board: a 16-colour Mandelbrot |
 | `/media/images/zeitlos.svg` | a vector clock face — made by `gen_media.py` |
 | `/media/images/squirrel.pgm` | a photograph, grey, 1.6x — made by `gen_media.py` from `sw/data/images/squirrel.jpg` |
 | `/media/images/squirrel.jpg` | the original, for testing `view`'s JPEG path on its own |
@@ -79,6 +81,112 @@ The pointer needs a bitstream with the virtual mouse
 (`Z_FEATURE2_VMOUSE`); flash gateware and software together as always.
 Speech needs `tts` and its speech pack on the card, and a bitstream
 with the audio mixer.
+
+## The languages demo
+
+`lang.zds`, "interpreted languages": three languages built in, each
+typed live.
+
+    > run posix
+    > run repl
+    > run automate /data/automate/lang.zds
+
+Start the two services first. The script begins with `need posix0` and
+`need repl0` ([automate.md](automate.md)), which pass at once when they
+are running and stop the demo with a reason when one is not -- so
+nothing is waited on in front of the camera.
+
+**It is silent**: captions only. It begins with `speech off`, which
+stops a `tts` left running from something else -- otherwise `wm` would
+announce every window that takes the focus -- and it uses no `narrate`
+or `say`, either of which would start `tts` again.
+
+| | What happens |
+|---|---|
+| stage | `term` at the top left; its start screen stays up 1.5 s, then REPL |
+| Scheme | six lines typed into `term`: a window, a line-art "fan", `help button` (the built-in reference -- every procedure has an entry: how to call it, what it does, an example), a handler, and a button; the pointer clicks it and the art fills in; then `(win-destroy w)` closes the window again |
+| BASIC | opened at the lower right, beside the terminal, only now (so it is not under the terminal while Scheme is typed); one line of circles and `RUN` |
+| C | `port posix0` in the same terminal, `cat` the source, then `zcc /data/automate/mandel.c -o /ram/mandel && /ram/mandel` on the board -- absolute paths, because posix gives a program its arguments but not the shell's directory, so `-o mandel` after `cd /ram` did not land in `/ram`: full screen, 16 colours, row by row, then 4 s of colour cycling, and the screen comes back |
+
+Captions throughout: "Three languages: Scheme, BASIC and C" at the
+start and "Zeitlos. Timeless computing." at the end.
+
+**The Scheme** is one complete form per line, because `repl` reads each
+line as a form ([scheme.md](scheme.md)), and every line fits `term`'s 80
+columns with the prompt. The click mirrors the fan along the top as well and draws both twice
+as densely -- two curves become a web of four; the new lines include
+the old ones, so nothing is erased.
+
+**`mandel.c`** is 4.12 fixed point (`zcc` has no floating point), 32
+iterations, with the main-cardioid and period-2-bulb tests, 32 pixels
+per plane built in plain variables and stored as one word per quadrant
+(`docs/color.md`, the 16-colour layout). The set is symmetric about the
+real axis, so the top half is computed and the bottom half mirrored.
+
+How fast, at the board's 6.98 MIPS: the first version was 89M
+instructions (13 s); the tests, symmetry and plain variables made it
+37.5M; `zcc`'s peephole ([zcc.md](zcc.md#the-peephole)) makes the same
+code 17.8M -- about 2.6 s.
+
+**It waits four frames after taking the screen** before clearing it.
+The grab is a message, and `wm` -- with `term` still printing the
+compile's output -- could still be drawing when `mandel` cleared,
+through the line engine and blitter, which finish on their own: thick
+stray lines at the top and bottom when it started.
+
+**It includes no headers.** It declares the three runtime calls it
+makes and names the five registers it writes. With `libz.h`, `zsoc.h`
+and `zwm.h` it was 67.6M instructions to compile and needed more than
+`zcc`'s 4MB -- on the board, out of memory after 30 s. Without them it
+is 2.6M instructions in under 1MB (measured with the device `zcc` on the
+simulator): almost all of a compile is reading headers
+([zcc.md](zcc.md#what-it-costs-to-run)). Checked off the board: compiled by the host `zcc`
+against libz and run on the simulator with its framebuffer pointed at
+memory (the simulator's VRAM is only 512x384), every one of the 76,800
+pixels matches a GCC build of the same function. It refuses, with a message, on a board
+without game-mode colour.
+
+**`cat` hanging, then "cannot open".** Not the typing: `fs` (the
+filesystem driver) keeps a reply slot for each of its six most recent
+clients until that client has read its reply -- sent again, died, or
+256 more requests went by. On a quiet machine the 256 never came: by
+the C part six processes that had each touched a file once (automate,
+basic, repl, term, wm, ...) held all six, and `posix` was told "try
+again" until it gave up -- blocked inside the call meanwhile, so the
+terminal looked disconnected. One take hung, the next said `cat: ...:
+cannot open` after about 3 s and then `run: zcc: cannot start`. By
+hand, with fewer programs about, it worked. A slot is now also free
+once its reply is a second old ([fs_driver.md](fs_driver.md)). `fs`
+runs from flash: it needs `make dev-flash`, not just a new card.
+
+**The narrator lease** lasts 30 s and speaking renews it, but this demo
+is silent for longer than that. When it ran out, `wm` announced every
+window that took the focus ("Scheme", "BASIC", "term0") over the demo;
+`automate` now renews it every 10 s while it waits.
+
+**Focus.** The Scheme window takes the focus when `win-create` opens
+it, and the keys with it; the script gives them back with `focus term`
+before typing on. The click on its button does the same, which is why
+the window is closed with `focus term` first, then `(win-destroy w)`.
+
+**The fractal is waited for, not timed**: `await-fullscreen` returns
+when `mandel` gives the screen back, however long the board takes to
+compile and draw.
+
+**Typing** is 16 ms a character (`type-speed 16`), from 25 in two
+steps of a quarter.
+
+**Term's text inside the BASIC window.** basic used to open a window,
+measure wm's frame from it, close it and open the real one, in the same
+place. In that moment term, underneath, got the area back, was asked to
+repaint it, and lost it again, and its text and scrollbar were left in
+BASIC's screen. Resizing the first window instead hung the demo once
+in two takes. The frame is a constant (`Z_WIN_CHROME_W`/`_H`,
+`zwin.h`), so basic now opens one window at the right size and nothing
+else ([`basic_app.c`](../sw/apps/basic/basic_app.c), `open_window()`).
+
+**Tidying up** happens after the end caption: back to REPL (F12) for
+the next take, then `reset`.
 
 ## Honesty
 

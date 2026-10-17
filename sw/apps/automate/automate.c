@@ -146,10 +146,13 @@ static void check_abort(void) {
 }
 
 // The one wait everything uses: services messages, notices a person.
+static void narrator_keep(void);
+
 static bool wait_ms(uint32_t ms) {
 	uint32_t end = now() + ms_ticks(ms);
 	for (;;) {
 		pump();
+		narrator_keep();
 		check_abort();
 		if (aborted) return false;
 		int32_t left = (int32_t)(end - now());
@@ -159,6 +162,18 @@ static bool wait_ms(uint32_t ms) {
 }
 
 // -- speech --
+
+static void narrator_lease(void);
+
+// The lease lasts 30 s and speaking renews it -- but a demo can be
+// silent for longer than that (typing, a compile, a fractal), and when
+// it ran out wm went back to announcing every window that took the
+// focus, over the demo ("Scheme", "BASIC", "term0"). Every wait renews
+// it every 10 s while tts is known.
+static void narrator_keep(void) {
+	if (tts_pid && (int32_t)(now() - lease_sent) > (int32_t)ms_ticks(10000))
+		narrator_lease();
+}
 
 static void narrator_lease(void) {
 	if (!tts_pid) return;
@@ -736,6 +751,50 @@ static bool exec_line(char *line) {
 		}
 	}
 	else if (!strcmp(cmd, "pause"))     return wait_ms((uint32_t)num(&s, 1000));
+	else if (!strcmp(cmd, "await-fullscreen")) {
+		// await-fullscreen [MS]: a program that takes the whole screen
+		// (game mode -- mandel.c, basic's SCREEN 1) was just started:
+		// wait for it to take the screen, then for it to give it back,
+		// up to MS (30000) for each. A demo then shows all of it, however
+		// fast the board compiles and draws, with no dead air after.
+		uint32_t ms = (uint32_t)num(&s, 30000), end = now() + ms_ticks(ms);
+		while (!z_game_enabled()) {
+			if ((int32_t)(now() - end) >= 0) {
+				printf("automate: await-fullscreen: nothing took the screen\n");
+				return true;
+			}
+			if (!wait_ms(50)) return false;
+		}
+		end = now() + ms_ticks(ms);
+		while (z_game_enabled()) {
+			if ((int32_t)(now() - end) >= 0) {
+				printf("automate: await-fullscreen: still full screen\n");
+				return true;
+			}
+			if (!wait_ms(50)) return false;
+		}
+		return wait_ms(200);	// wm repaints the desktop
+	}
+	else if (!strcmp(cmd, "need")) {
+		// need NAME [MS]: a service the demo depends on, by registered
+		// name (tts0, posix0, repl0), must be up -- instant when it is
+		// already running, which is the point: start it before the
+		// demo, not on camera. If it never appears the demo stops with
+		// a reason, rather than going on to film a take that fails.
+		char *n = word(&s);
+		uint32_t ms = (uint32_t)num(&s, 3000), pid;
+		if (!n) return true;
+		uint32_t end = now() + ms_ticks(ms);
+		while (!z_pid_lookup(n, &pid)) {
+			if ((int32_t)(now() - end) >= 0) {
+				printf("automate: '%s' is not running -- start it before "
+					"the demo; stopping\n", n);
+				finished = stopped = true;
+				return true;
+			}
+			if (!wait_ms(50)) return false;
+		}
+	}
 	else if (!strcmp(cmd, "run") || !strcmp(cmd, "run&")) {
 		// run APP [FILE] [at X Y]
 		char *name = word(&s);
@@ -886,10 +945,18 @@ static bool exec_line(char *line) {
 	}
 	else if (!strcmp(cmd, "speech")) {
 		char *w = word(&s);
-		if (w && !strcmp(w, "off") && tts_pid) {
-			z_msg_new_send(tts_pid, Z_TTS_NARRATE, 0, z_obj_uint32(0));
-			z_msg_new_send(tts_pid, Z_TTS_QUIT, 0, z_obj_none());
+		if (w && !strcmp(w, "off")) {
+			// Any tts that is running, not only one started here: a
+			// silent demo must not have wm announcing every window that
+			// takes the focus. (This used to fall through to starting
+			// tts when none was known.)
+			uint32_t pid = tts_pid;
+			if (pid || z_pid_lookup(Z_TTS_SERVICE, &pid)) {
+				z_msg_new_send(pid, Z_TTS_NARRATE, 0, z_obj_uint32(0));
+				z_msg_new_send(pid, Z_TTS_QUIT, 0, z_obj_none());
+			}
 			tts_pid = 0;
+			nmarks = 0;
 		} else ensure_tts();
 	}
 	else if (!strcmp(cmd, "attract"))   attract_s = num(&s, 60);

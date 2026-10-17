@@ -49,7 +49,7 @@ line (surrounding quotes are stripped, `\n` is a line break).
 | `caption-style [compact] [inverse]` | |
 | `rate WPM` | speaking rate |
 | `voice synth\|female\|recorded` | switch voice, silently, once the current sentence has finished |
-| `speech on\|off` | starts `tts` if needed (and silences its "Speech on") |
+| `speech on\|off` | `on` starts `tts` if needed (and silences its "Speech on"); `off` stops any `tts` that is running, whoever started it, so `wm` does not announce windows over a silent demo. `narrate` and `say` start it again |
 
 **Speech and the CPU.** The recorded voice renders at 55-60% of the
 48MHz CPU while it speaks, and on hardware *anything* running beside it
@@ -164,6 +164,8 @@ commands only track a position and `tbicon` falls back to
 | | |
 |---|---|
 | `pause MS` | |
+| `await-fullscreen [MS]` | a program that takes the whole screen (game mode) was just started: wait until it does, then until it gives it back, up to MS (30000) each -- for a program whose running time depends on the board |
+| `need NAME [MS]` | a service the demo depends on must be registered (`tts0`, `posix0`, `repl0`): instant when it is running; after MS (3000) the demo stops with a reason -- start services before the camera rolls, not on it |
 | `print TEXT` | a line on the console (`automate: -- TEXT`) -- the demos log their revision this way |
 | `video white\|amber\|green\|paper` | the virtual phosphor |
 | `reset` | close everything this script started, hide the caption, white phosphor, US layout |

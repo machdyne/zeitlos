@@ -128,6 +128,7 @@ typedef struct {
 	uint32_t	pid;		// + 1; 0 is free
 	uint32_t	last;		// for choosing which to reuse
 	bool		unread;		// its last reply may not be copied yet
+	uint32_t	sent;		// when that reply went (ticks)
 	z_blob_t	hdr;
 	z_fsrep_t	*rep;		// this reply: &small.h or &bulk->h
 	uint8_t		*data;		// and its data
@@ -143,6 +144,7 @@ static fs_bulk_t *bulk;
 static uint32_t bulk_owner;		// pid + 1; 0 is free
 static uint32_t bulk_when;
 #define FS_BULK_HOLD_TICKS	FS_TICK_HZ
+#define FS_SLOT_HOLD_TICKS	FS_TICK_HZ	// a reply slot, the same way
 
 static FATFS vol_card, vol_ram, vol_usb;
 static bool card_ok, card_held;	// held: `umount /`, left alone until `mount`
@@ -605,11 +607,21 @@ static bool gone(uint32_t pid);
 // A slot can be given to another client once its own has copied its
 // last reply: it has sent something since (a client copies before it
 // sends again), or it has died, or 256 requests have been served since,
-// far longer than a client takes to run. Before this, a seventh client
-// could take the slot of a reply nobody had read yet.
+// or a second has passed since the reply went -- both far longer than
+// a client takes to copy it, which it does the moment it wakes with it
+// (zfsc.c). Before this, a seventh client could take the slot of a
+// reply nobody had read yet.
+//
+// The second is what a quiet machine needs. Six processes that each
+// touched a file once -- automate reading its script, basic, repl, term,
+// wm -- held all six slots for good when nothing else used fs: the 256
+// requests never came. The seventh, posix opening a file for `cat`, was
+// told -Z_EAGAIN until zfsc gave up (about 3 s) and the file "could not
+// be opened"; then `run zcc` could not be loaded, for the same reason.
+// The bulk buffer has always been held this way (FS_BULK_HOLD_TICKS).
 static bool slot_free(const fs_client_t *c) {
 	return !c->pid || !c->unread || client_clock - c->last > 256 ||
-		gone(c->pid - 1);
+		now_ticks() - c->sent >= FS_SLOT_HOLD_TICKS || gone(c->pid - 1);
 }
 
 // This client's reply slot, or NULL if every slot holds a reply its
@@ -1389,6 +1401,7 @@ static void fs_serve_msg(z_msg_t *m) {
 	c->hdr.len = (uint32_t)sizeof(z_fsrep_t) + c->rep->len;
 	c->hdr.data = (uint8_t *)c->rep;
 	c->unread = true;
+	c->sent = now_ticks();
 	reply.type = Z_BLOB;
 	reply.val.ptr = &c->hdr;
 	z_msg_new_send(m->from, Z_FS_REPLY, m->tag, reply);

@@ -3327,7 +3327,14 @@ module sysctl #()
 		.S(1'b0)
 	);
 `else
-	assign ETH_REFCLK = eth_refclk;
+	// Out of an I/O cell, as on 7-series: D0=1, D1=0 is the clock
+	// itself. A plain assign sent it through fabric routing the placer
+	// chose afresh in every build, so its delay -- and with it where
+	// the PHY's edge fell against TXD -- changed from build to build.
+	// Now it is the silicon's, matched to the TXD/TX_EN output cells
+	// (rtl/ethmac_rmii.v, which launches those half a cycle away).
+	ODDRX1F eth_refclk_oddr (.SCLK(clk50mhz), .RST(1'b0),
+		.D0(1'b1), .D1(1'b0), .Q(ETH_REFCLK));
 `endif
 `else
    wire eth_refclk = ETH_REFCLK;

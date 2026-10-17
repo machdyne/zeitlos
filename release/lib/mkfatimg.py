@@ -479,6 +479,8 @@ DEMO_FILES = [
     (zcard_dir("Z_PATH_AUTOMATE_DEFAULT") + "/short.zds",    "sw/data/demo/short.zds"),
     (zcard_dir("Z_PATH_AUTOMATE_DEFAULT") + "/long.zds",     "sw/data/demo/long.zds"),
     (zcard_dir("Z_PATH_AUTOMATE_DEFAULT") + "/store.zds",    "sw/data/demo/store.zds"),
+    (zcard_dir("Z_PATH_AUTOMATE_DEFAULT") + "/lang.zds",     "sw/data/demo/lang.zds"),
+    (zcard_dir("Z_PATH_AUTOMATE_DEFAULT") + "/mandel.c",     "sw/data/demo/mandel.c"),
     (zcard("Z_DIR_MEDIA_IMAGES", "squirrel.pgm"), "sw/data/demo/squirrel.pgm"),
     (zcard("Z_DIR_MEDIA_IMAGES", "zeitlos.svg"),  "sw/data/demo/zeitlos.svg"),
     (zcard("Z_DIR_MEDIA_AUDIO",  "lvb11.mid"),    "sw/data/audio/lvb11.mid"),

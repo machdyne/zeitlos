@@ -1,6 +1,15 @@
 #ifndef ZSUBJECTS_H
 #define ZSUBJECTS_H
 
+/* zcc (sw/apps/zcc, docs/zcc.md) has no _Static_assert, and every header
+ * that names its subjects reaches this one -- so without this, no program
+ * that includes zeitlos.h compiles on the board. The checks are
+ * compile-time only and GCC makes them on every normal build; under zcc
+ * each becomes a harmless repeated declaration. */
+#if defined(__zcc__) && !defined(_Static_assert)
+#define _Static_assert(cond, msg) extern int z_static_assert_zcc_
+#endif
+
 /*
  * Zeitlos -- message subject numbers: who owns which.
  *

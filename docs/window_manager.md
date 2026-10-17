@@ -2198,6 +2198,17 @@ replaced every `z_gfx_clear_visible()` in `wm.c`), so nothing -- app,
 chrome or dock -- can draw over it. Use `sw/common/zcaption.h` rather
 than the message.
 
+## Drawing never leaves the region
+
+While a REDRAW names damage, a window draws through that damage list
+(`win_use_clip()`, `sw/common/zwin.c`). The list is intersected with the
+window's current region, so a window that lost some of those pixels
+again before it repainted cannot draw on them: no app draws outside its
+region, whatever it was last told to repaint. And a `z_win_t` that is
+used for a second window (destroyed, then created again) starts with
+nothing known to be on the glass, so its first paint is never measured
+against the window it held before.
+
 ## The label box on the dock
 
 The box over the right end of the dock shows the keyboard layout for a

@@ -617,12 +617,50 @@ module ethmac_rmii_wb
 	wire [1:0] txd_c = tx_en_c ? tx_shift[1:0] : 2'b00;
 
 `ifdef ETH_PIN_IO_FF
+`ifdef ETH_RMII_DRIVE_REFCLK
+	// THE FPGA DRIVES REF_CLK (sergei_ml0/ml1/ml2, klinge): TXD and TX_EN
+	// change on the FALLING edge, half a REF_CLK cycle away from the
+	// rising edge the PHY samples them on.
+	//
+	// Here REF_CLK and TXD both start at eth_refclk and both leave
+	// through I/O cells (rtl/sysctl.v sends REF_CLK out of an ODDRX1F),
+	// so they reach their pins at about the same time. Launched on the
+	// rising edge, as below, TXD would change just as the PHY samples
+	// it -- the LAN8720A wants it steady 4ns before the edge and 1.5ns
+	// after -- and every frame would leave corrupt while reception
+	// works (sergei_ml2, October 2026: DHCP never answered, RX fine).
+	// Launched on the falling edge it is steady ~10ns either side, by
+	// construction and in every build.
+	//
+	// ODDRX1F puts D0 on the pin while SCLK is high and D1 while it is
+	// low, both taken at the rising edge: D0 is the bit already on the
+	// wire, D1 the next one, so the pin changes at the falling edge.
+	// Half a cycle more latency, uniformly: the frame is unchanged.
+	reg tx_en_w = 1'b0;
+	reg [1:0] txd_w = 2'b00;
+
+	always @(posedge eth_refclk) begin
+		tx_en_w <= tx_en_c;
+		txd_w <= txd_c;
+	end
+
+	ODDRX1F tx_en_ddr (.SCLK(eth_refclk), .RST(1'b0),
+		.D0(tx_en_w), .D1(tx_en_c), .Q(eth_tx_en));
+	ODDRX1F txd0_ddr (.SCLK(eth_refclk), .RST(1'b0),
+		.D0(txd_w[0]), .D1(txd_c[0]), .Q(eth_txd[0]));
+	ODDRX1F txd1_ddr (.SCLK(eth_refclk), .RST(1'b0),
+		.D0(txd_w[1]), .D1(txd_c[1]), .Q(eth_txd[1]));
+`else
+	// The PHY drives REF_CLK (lakritz_katze): the clock reaches the
+	// FPGA after the PHY's own edge, so TXD launched on its rising edge
+	// is late enough for the PHY's hold and early enough for its setup.
 	OFS1P3DX tx_en_ff (.SCLK(eth_refclk), .SP(1'b1), .CD(1'b0),
 		.D(tx_en_c), .Q(eth_tx_en));
 	OFS1P3DX txd0_ff (.SCLK(eth_refclk), .SP(1'b1), .CD(1'b0),
 		.D(txd_c[0]), .Q(eth_txd[0]));
 	OFS1P3DX txd1_ff (.SCLK(eth_refclk), .SP(1'b1), .CD(1'b0),
 		.D(txd_c[1]), .Q(eth_txd[1]));
+`endif
 `else
 	reg tx_en_q = 1'b0;
 	reg [1:0] txd_q = 2'b00;

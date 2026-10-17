@@ -118,11 +118,11 @@ z_rv z_msg_new_send(uint32_t to, uint32_t subject, uint32_t tag, z_obj_t obj) {
 
 // zfsc's pause before asking again (-Z_EAGAIN). The first one lets
 // the client test_slots() chose die, which frees its slot.
-static uint32_t waits, die_on_wait;
+static uint32_t waits, die_on_wait, tick_on_wait;
 void k_proc_wait_ticks(uint32_t t);
 void z_proc_wait(uint32_t t) {
-	(void)t;
 	waits++;
+	if (tick_on_wait) ticks += t;
 	if (die_on_wait) { alive[die_on_wait] = false; die_on_wait = 0; }
 }
 
@@ -897,6 +897,23 @@ static void test_slots(void) {
 	CHECK(zfs_stat("/ram", &fi) == 0 && fi.type == Z_FS_TYPE_DIR);
 	CHECK(waits == 1);
 	alive[40] = true;
+
+	// Nobody dies and nothing else uses fs: the slots still free once
+	// their replies are a second old. Before, a quiet machine with six
+	// processes that had each touched a file once refused the seventh
+	// for good (`cat` in the languages demo, docs/demo.md).
+	client = me;
+	for (int i = 0; i < 300; i++) zfs_stat("/ram", &fi);
+	for (uint32_t p = 40; p < 45; p++) {		// this one and five more
+		client = p;
+		CHECK(zfs_stat("/ram", &fi) == 0);
+	}
+	client = 47;
+	waits = 0;
+	tick_on_wait = 1;
+	CHECK(zfs_stat("/ram", &fi) == 0 && fi.type == Z_FS_TYPE_DIR);
+	CHECK(waits >= 700 && waits <= 740);		// one second of ticks
+	tick_on_wait = 0;
 	client = me;
 }
 

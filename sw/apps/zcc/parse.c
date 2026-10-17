@@ -1453,6 +1453,20 @@ static val_t assign_expr(void) {
         tk = tk->next;
         if (!l.is_lval) zcc_error_at_tok("assignment to something that is not an lvalue");
         type_t *lt = l.ty;
+        int off;
+        /* A local scalar (its address was just emitted as one addi, and
+         * nothing observed it): the value is stored straight into the
+         * frame, with no push and pop round it. Same store, same a0
+         * afterwards. Struct assignment keeps the general path, whose
+         * byte loop wants the address in t0. */
+        if (lt->kind != TY_STRUCT && lt->kind != TY_UNION &&
+            lt->kind != TY_ARRAY && emit_take_local_addr(&off)) {
+            val_t r = rvalue(assign_expr());
+            check_assignable(lt, r.ty);
+            ei_store(REG_A0, REG_S0, off, lt->size);
+            val_t v = { .ty = lt };
+            return v;
+        }
         gen_push();                             /* the destination address */
         val_t r = rvalue(assign_expr());
         check_assignable(lt, r.ty);
@@ -2190,6 +2204,17 @@ static void global_declaration(void) {
             s->label = l;
             global_init(ty, bytes, 0, l);
             emit_data_poke(l, bytes, ty->size);
+        } else if (is_extern) {
+            /* `extern const T table[];` -- a declaration of something
+             * defined elsewhere, which may leave the size out: zsoc.h
+             * declares its feature tables that way. There is no linker,
+             * so nothing here can resolve to the real object; it gets a
+             * placeholder, as a block-scope extern does above. A header
+             * that merely declares such a table now compiles, and a
+             * program that USES one gets the placeholder, as before. */
+            if (!s->label)
+                s->label = emit_bss_label(ty->size > 0 ? ty->size : 4,
+                                          ty->align);
         } else {
             if (ty->kind == TY_ARRAY && ty->array_len < 0)
                 zcc_error_at_tok("array '%s' needs a size", name);
