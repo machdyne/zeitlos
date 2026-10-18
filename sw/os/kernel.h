@@ -173,6 +173,24 @@ typedef struct {
 	// "CPU accounting"; Z_SYS_CPU_STAT).
 	uint64_t		cpu_cycles;
 
+	// Which process this is, across pid reuse: a number taken from a
+	// boot-wide counter when the slot is filled, never 0, never taken
+	// twice. Pids are reused lowest-first (k_proc_create()), so a pid
+	// alone cannot say "the process I was dealing with is still the
+	// one there" -- a program started just after a kill gets the dead
+	// one's pid. Read with Z_SYS_PROC_SERIAL. Last in the struct so no
+	// earlier field moves.
+	uint32_t		serial;
+
+	// This process's arena (Z_SYS_ARENA, docs/kernel.md "Arenas"): one
+	// block of the pool beside its own, sized at run time, written
+	// through the MPU's grant window while it runs. 0/0 when it has
+	// none. `arena_pending` is a block being filled during a move, so
+	// that a kill in the middle of one frees it too.
+	uint32_t		arena_base;
+	uint32_t		arena_size;
+	uint32_t		arena_pending;
+
 } z_proc;
 
 // Z_PROC_FLAG_ACTIVE / _DIE / _BLOCKED are defined in
@@ -190,6 +208,9 @@ uint32_t k_proc_runnable_count(void);
 // ring rather than a zombie slot.
 void k_proc_exit_record(uint32_t pid, int32_t status);
 z_obj_t *k_proc_status(z_obj_t *args);
+z_obj_t *k_proc_serial(z_obj_t *args);	// Z_SYS_PROC_SERIAL
+z_obj_t *k_arena(z_obj_t *args);		// Z_SYS_ARENA
+void k_arena_dump(void);				// `free`: the arenas and the reserve
 void k_proc_unblock(uint32_t pid);
 z_obj_t *k_proc_wait(z_obj_t *args);
 void k_proc_wait_ticks(uint32_t ticks);	// kernel code, in its own process

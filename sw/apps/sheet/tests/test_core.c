@@ -185,7 +185,7 @@ int main(void) {
 	eq("=10-4", "6");
 	eq("=6*7", "42");
 	eq("=1/8", "0.125");
-	eq("=1/3", "0.3333");
+	eq("=1/3", "0.33333333");
 	eq("=2+3*4", "14");
 	eq("=(2+3)*4", "20");
 	eq("=-5+2", "-3");
@@ -643,6 +643,258 @@ int main(void) {
 	ck_int("set outside grid", sheet_set(&sh, -1, 0, "x"), SHEET_ERR_REF);
 	ck_int("set past last col",
 		sheet_set(&sh, 0, SHEET_COLS, "x"), SHEET_ERR_REF);
+
+	// -- 0.0.7: operators and functions ------------------------------
+
+	sheet_init(&sh);
+	sheet_set(&sh, 1, 1, "10");		// B2
+	sheet_set(&sh, 2, 1, "0");		// B3
+	eq("=2^10", "1024");
+	eq("=2^-2", "0.25");
+	eq("=-2^2", "4");
+	eq("=2*3^2", "18");
+	eq("=1<2", "1");
+	eq("=2<=1", "0");
+	eq("=B2=10", "1");
+	eq("=B2<>10", "0");
+	eq("=1+1>1", "1");
+	eq("=IF(B2>5,1,2)", "1");
+	eq("=IF(B2>50,1,2)", "2");
+	eq("=IF(B3=0,0,B2/B3)", "0");		// the branch not taken is not an error
+	eq("=IF(B3<>0,B2/B3,-1)", "-1");
+	eq("=IF(1,2)", "2");
+	eq("=IF(0,2)", "0");
+	eq("=B2/B3", "#DIV0");
+	eq("=AND(1,B2)", "1");
+	eq("=AND(1,0)", "0");
+	eq("=OR(0,B3,1)", "1");
+	eq("=NOT(B3)", "1");
+	eq("=TRUE+TRUE", "2");
+	eq("=MOD(7,3)", "1");
+	eq("=MOD(-1,3)", "2");
+	eq("=MOD(1,0)", "#DIV0");
+	eq("=SQRT(2)", "1.41421356");
+	eq("=SQRT(144)", "12");
+	eq("=SQRT(-1)", "#NUM");
+	eq("=POWER(1.5,2)", "2.25");
+	// eight decimals: 0.05/12 is right to the cent over 30 years
+	eq("=ROUND(PMT(0.05/12,360,200000),2)", "-1073.64");
+	eq("=ROUND(PMT(0.0041666,360,200000),2)", "-1073.63");
+	eq("=100000*100000", "10000000000");
+	eq("=1000000*1000000", "#NUM");
+	eq("=0.1+0.2=0.3", "1");
+	eq("=ROUND(PMT(0,10,1000),2)", "-100");
+	eq("=ROUND(FV(0.06/12,120,-100),2)", "16387.93");
+	eq("=ROUND(PV(0.0067,240,-500),2)", "59599.64");
+	sheet_set(&sh, 4, 0, "-1000");	// A5..A8
+	sheet_set(&sh, 5, 0, "300");
+	sheet_set(&sh, 6, 0, "400");
+	sheet_set(&sh, 7, 0, "500");
+	eq("=ROUND(NPV(0.1,A6:A8),2)", "978.96");
+	eq("=ROUND(NPV(0.1,300,400,500)+A5,2)", "-21.04");
+	eq("=0^-1", "#DIV0");
+	eq("=1.5^2", "2.25");
+	// a table: D1:E4
+	sheet_set(&sh, 0, 3, "1"); sheet_set(&sh, 0, 4, "100");
+	sheet_set(&sh, 1, 3, "5"); sheet_set(&sh, 1, 4, "500");
+	sheet_set(&sh, 2, 3, "10"); sheet_set(&sh, 2, 4, "1000");
+	eq("=VLOOKUP(5,D1:E3,2)", "500");
+	eq("=VLOOKUP(7,D1:E3,2)", "500");
+	eq("=VLOOKUP(7,D1:E3,2,0)", "#NUM");
+	eq("=VLOOKUP(99,D1:E3,2)", "1000");
+	eq("=VLOOKUP(0,D1:E3,2)", "#NUM");
+	eq("=VLOOKUP(5,D1:E3,3)", "#REF");
+	eq("=INDEX(D1:E3,3,2)", "1000");
+	eq("=INDEX(D1:E3,4,1)", "#REF");
+	eq("=#REF!+1", "#REF");
+	eq("=FOO(1)", "#NAME");
+
+	// -- formats ----------------------------------------------------
+
+	sheet_init(&sh);
+	sheet_set(&sh, 0, 0, "1234567.891");
+	sheet_set(&sh, 0, 1, "-0.125");
+	sheet_set_format(&sh, 0, 0, 0, 0, SHEET_FMT_COMMA, 2);
+	{
+		char out[64];
+		sheet_display(&sh, 0, 0, out, sizeof out, 40, NULL);
+		ck("comma 2", out, "1,234,567.89");
+		sheet_set_format(&sh, 0, 0, 0, 0, SHEET_FMT_MONEY, 0);
+		sheet_display(&sh, 0, 0, out, sizeof out, 40, NULL);
+		ck("money 0", out, "$1,234,568");
+		sheet_display(&sh, 0, 0, out, sizeof out, 8, NULL);
+		ck("too narrow", out, "########");
+		sheet_set_format(&sh, 0, 1, 0, 1, SHEET_FMT_PERCENT, 1);
+		sheet_display(&sh, 0, 1, out, sizeof out, 40, NULL);
+		ck("percent", out, "-12.5%");
+		sheet_set_format(&sh, 0, 1, 0, 1, SHEET_FMT_FIXED, 0);
+		sheet_display(&sh, 0, 1, out, sizeof out, 40, NULL);
+		ck("fixed 0 no -0", out, "0");
+		sheet_set_format(&sh, 0, 0, 9, 1, SHEET_FMT_GENERAL, 0);
+		ck_int("general clears", sh.nfmts, 0);
+		int k, d;
+		ck_int("parse ,2", sheet_parse_format(",2", &k, &d) && k == SHEET_FMT_COMMA && d == 2, 1);
+		ck_int("parse $", sheet_parse_format("$", &k, &d) && k == SHEET_FMT_MONEY && d == 2, 1);
+		ck_int("parse junk", sheet_parse_format("Q", &k, &d), 0);
+		// round trip through the file
+		sheet_set_format(&sh, 0, 0, 4, 1, SHEET_FMT_COMMA, 1);
+		sink_t k1;
+		k1.n = 0;
+		sheet_write(&sh, sink_emit, &k1);
+		ck_int("format written", strstr(k1.buf, "!f A1:B5 ,1\n") != NULL, 1);
+		sheet_load_begin(&sh);
+		char *line = strtok(k1.buf, "\n");
+		while (line) { sheet_load_line(&sh, line); line = strtok(NULL, "\n"); }
+		sheet_load_end(&sh);
+		sheet_display(&sh, 0, 0, out, sizeof out, 40, NULL);
+		ck("format read back", out, "1,234,567.9");
+	}
+
+	// -- moving formulas --------------------------------------------
+
+	{
+		char o[SHEET_SRC_MAX];
+		sheet_rewrite("=A1+$B$2+C$3+$D4", o, sizeof o, SHEET_MOVE_COPY, 1, 1);
+		ck("copy rel/abs", o, "=B2+$B$2+D$3+$D5");
+		sheet_rewrite("=SUM(A1:A3)*LOG10", o, sizeof o, SHEET_MOVE_COPY, 2, 0);
+		ck("copy range", o, "=SUM(A3:A5)*LOG10");
+		sheet_rewrite("=A1+1", o, sizeof o, SHEET_MOVE_COPY, -1, 0);
+		ck("copy off grid", o, "=#REF!+1");
+		sheet_rewrite("=A1+A5+SUM(A2:A9)", o, sizeof o, SHEET_MOVE_INS_ROWS, 2, 3);
+		ck("insert rows", o, "=A1+A8+SUM(A2:A12)");
+		sheet_rewrite("=A1+A5+SUM(A2:A9)+A3", o, sizeof o, SHEET_MOVE_DEL_ROWS, 2, 3);
+		ck("delete rows", o, "=A1+#REF!+SUM(A2:A6)+#REF!");
+		sheet_rewrite("=SUM(A3:A5)", o, sizeof o, SHEET_MOVE_DEL_ROWS, 2, 3);
+		ck("delete whole range", o, "=SUM(#REF!)");
+		sheet_rewrite("=SUM(A1:D1)+$C$1", o, sizeof o, SHEET_MOVE_DEL_COLS, 1, 1);
+		ck("delete col", o, "=SUM(A1:C1)+$B$1");
+		sheet_rewrite("=sum(b2:c3)", o, sizeof o, SHEET_MOVE_INS_COLS, 0, 2);
+		ck("insert cols, case", o, "=sum(D2:E3)");
+		sheet_rewrite("=1.5E3+2", o, sizeof o, SHEET_MOVE_COPY, 5, 5);
+		ck("numbers alone", o, "=1.5E3+2");
+	}
+
+	sheet_init(&sh);
+	sheet_set(&sh, 0, 0, "1");			// A1
+	sheet_set(&sh, 1, 0, "2");			// A2
+	sheet_set(&sh, 2, 0, "3");			// A3
+	sheet_set(&sh, 3, 0, "=SUM(A1:A3)");	// A4
+	sheet_set_format(&sh, 3, 0, 3, 0, SHEET_FMT_FIXED, 2);
+	ck_int("insert row", sheet_insert_rows(&sh, 1, 1), SHEET_OK);
+	ck("moved formula", sheet_src(&sh, 4, 0), "=SUM(A1:A4)");
+	ck("A2 empty", sheet_src(&sh, 1, 0), "");
+	sheet_set(&sh, 1, 0, "10");
+	{
+		char out[32];
+		sheet_display(&sh, 4, 0, out, sizeof out, 20, NULL);
+		ck("sum after insert, format moved", out, "16.00");
+	}
+	ck_int("delete rows", sheet_delete_rows(&sh, 0, 2), SHEET_OK);
+	ck("after delete", sheet_src(&sh, 2, 0), "=SUM(A1:A2)");
+	ck_int("delete col A", sheet_delete_cols(&sh, 0, 1), SHEET_OK);
+	ck_int("now empty", sh.ncells, 0);
+	sheet_set(&sh, SHEET_ROWS - 1, 0, "last");
+	ck_int("insert would push off", sheet_insert_rows(&sh, 5, 1), SHEET_ERR_FULL);
+	ck("still there", sheet_src(&sh, SHEET_ROWS - 1, 0), "last");
+
+	// -- sort ---------------------------------------------------------
+
+	{
+		static char tmp[65536];
+		sheet_init(&sh);
+		const char *names[] = { "pear", "Apple", "fig", "", "banana" };
+		const char *qty[] = { "3", "10", "x", "5", "1" };
+		for (int r = 0; r < 5; r++) {
+			if (*names[r]) sheet_set(&sh, r, 0, names[r]);
+			sheet_set(&sh, r, 1, qty[r]);
+			sheet_set(&sh, r, 2, "=B1*2");		// relative: moves with its row
+			char f[16];
+			snprintf(f, sizeof f, "=B%d*2", r + 1);
+			sheet_set(&sh, r, 2, f);
+		}
+		ck_int("sort", sheet_sort(&sh, 0, 0, 4, 2, 1, false, tmp, sizeof tmp), 1);
+		ck("sort 1", sheet_src(&sh, 0, 0), "banana");
+		ck("sort 2", sheet_src(&sh, 1, 0), "pear");
+		ck("sort 3", sheet_src(&sh, 2, 0), "");
+		ck("sort 4", sheet_src(&sh, 3, 0), "Apple");
+		ck("sort text last", sheet_src(&sh, 4, 0), "fig");
+		ck("formula followed", sheet_src(&sh, 3, 2), "=B4*2");
+		char out[32];
+		sheet_display(&sh, 3, 2, out, sizeof out, 20, NULL);
+		ck("formula value", out, "20");
+		ck_int("sort desc by name", sheet_sort(&sh, 0, 0, 4, 2, 0, true, tmp, sizeof tmp), 1);
+		ck("desc 1", sheet_src(&sh, 0, 0), "pear");
+		ck("desc empty last", sheet_src(&sh, 4, 0), "");
+		ck_int("scratch too small", sheet_sort(&sh, 0, 0, 4, 2, 0, false, tmp, 16), 0);
+		ck("unchanged", sheet_src(&sh, 0, 0), "pear");
+	}
+
+	// -- ranges, snapshots --------------------------------------------
+
+	{
+		static uint8_t buf[200000];
+		sheet_init(&sh);
+		sheet_set(&sh, 0, 0, "1");
+		sheet_set(&sh, 1, 0, "=A1+1");
+		sheet_set(&sh, 1, 1, "=$A$1*B1");
+		int n = sheet_range_save(&sh, 0, 0, 1, 1, buf, sizeof buf);
+		ck_int("range size", n, sheet_range_size(&sh, 0, 0, 1, 1));
+		sheet_range_load(&sh, 5, 2, 2, 2, true, buf, n, true, 0, 0);
+		ck("pasted rel", sheet_src(&sh, 6, 2), "=C6+1");
+		ck("pasted abs", sheet_src(&sh, 6, 3), "=$A$1*D6");
+		sheet_set_format(&sh, 0, 0, 3, 3, SHEET_FMT_MONEY, 2);
+		sheet_set_colw(&sh, 2, 15);
+		int sn = sheet_snapshot(&sh, buf, sizeof buf);
+		ck_int("snapshot size", sn, sheet_snapshot_size(&sh));
+		sheet_init(&sh);
+		ck_int("restore", sheet_restore(&sh, buf, sn), 1);
+		ck("restored cell", sheet_src(&sh, 6, 2), "=C6+1");
+		ck_int("restored width", sheet_colw(&sh, 2), 15);
+		ck_int("restored format", sheet_format_at(&sh, 1, 1, NULL), SHEET_FMT_MONEY);
+		char out[32];
+		sheet_display(&sh, 1, 0, out, sizeof out, 20, NULL);
+		ck("restored value", out, "$2.00");
+		ck_int("snapshot too small", sheet_snapshot(&sh, buf, 20), -1);
+		// the chart: saved, read back, moved by an insert
+		sheet_init(&sh);
+		sheet_set(&sh, 1, 1, "1");
+		sh.chart.set = true; sh.chart.kind = SHEET_CHART_PIE;
+		sh.chart.r0 = 1; sh.chart.r1 = 5; sh.chart.c0 = 0; sh.chart.c1 = 2;
+		sink_t k2;
+		k2.n = 0;
+		sheet_write(&sh, sink_emit, &k2);
+		ck_int("chart written", strstr(k2.buf, "!g pie A2:C6\n") != NULL, 1);
+		sheet_load_begin(&sh);
+		char *ln = strtok(k2.buf, "\n");
+		while (ln) { sheet_load_line(&sh, ln); ln = strtok(NULL, "\n"); }
+		ck_int("chart read", sh.chart.set && sh.chart.kind == SHEET_CHART_PIE && sh.chart.r1 == 5 && sh.chart.c1 == 2, 1);
+		sheet_insert_rows(&sh, 0, 2);
+		ck_int("chart moved", sh.chart.r0 == 3 && sh.chart.r1 == 7, 1);
+		sn = sheet_snapshot(&sh, buf, sizeof buf);
+		sheet_init(&sh);
+		sheet_restore(&sh, buf, sn);
+		ck_int("chart in snapshot", sh.chart.set && sh.chart.r0 == 3 && sh.chart.kind == SHEET_CHART_PIE, 1);
+	}
+
+	// -- loading is not quadratic: a full sheet ------------------------
+
+	{
+		sheet_init(&sh);
+		for (int i = 0; i < SHEET_MAX_CELLS; i++) {
+			char v[16];
+			snprintf(v, sizeof v, "=%d+1", i);
+			sheet_set(&sh, i / SHEET_COLS, i % SHEET_COLS, v);
+		}
+		char out[32];
+		sheet_display(&sh, 0, 5, out, sizeof out, 20, NULL);
+		ck("full sheet evaluates", out, "6");
+		// 64 changes wrap the generation: cached values still right
+		for (int i = 0; i < 70; i++) sheet_set(&sh, 0, 0, i & 1 ? "=2" : "=3");
+		sheet_display(&sh, 0, 5, out, sizeof out, 20, NULL);
+		ck("after generation wrap", out, "6");
+		sheet_display(&sh, 0, 0, out, sizeof out, 20, NULL);
+		ck("last edit", out, "2");
+	}
 
 	printf("\n%d checks, %s\n", checks,
 		fails ? "FAILURES" : "all passed");

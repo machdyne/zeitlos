@@ -93,14 +93,19 @@ static int lower_bound(const sheet_t *s, uint16_t key) {
 // -- the text arena --
 
 // Every cached value is stale once anything changes, because a formula
-// anywhere can depend on any cell. Resetting is a walk of the cell
-// array rather than of the grid, so it costs the number of cells that
-// exist, not the number that could.
+// anywhere can depend on any cell. A cell's state carries the
+// generation it was computed in (st_get() below), so moving to the
+// next generation forgets them all at once; only when the six-bit
+// count wraps are the cells visited, once in 64 changes. Before 0.0.7
+// every change visited every cell, which made loading a file -- a
+// change per cell -- quadratic.
 static void invalidate(sheet_t *s) {
 
-	for (int i = 0; i < s->ncells; i++)
-		if (s->cells[i].kind == SHEET_KIND_FORMULA)
-			s->cells[i].state = ST_IDLE;
+	s->gen = (uint8_t)((s->gen + 1) & 63);
+
+	if (s->gen == 0)
+		for (int i = 0; i < s->ncells; i++)
+			s->cells[i].state = ST_IDLE;		// generation 0, idle
 
 }
 
@@ -211,6 +216,9 @@ void sheet_init(sheet_t *s) {
 	s->modified = false;
 	s->depth = 0;
 	s->load_row = 0;
+	s->gen = 0;
+	s->nfmts = 0;
+	memset(&s->chart, 0, sizeof s->chart);
 
 	for (int i = 0; i < SHEET_COLS; i++) s->colw[i] = SHEET_COLW_DEF;
 
@@ -297,10 +305,10 @@ sheet_err_t sheet_set(sheet_t *s, int row, int col, const char *src) {
 	c->len = (uint8_t)len;
 	c->kind = classify(&s->arena[off], &c->val);
 	c->err = SHEET_OK;
-	c->state = (c->kind == SHEET_KIND_FORMULA) ? ST_IDLE : ST_DONE;
 
 	s->modified = true;
 	invalidate(s);
+	c->state = (uint8_t)((s->gen << 2) | (c->kind == SHEET_KIND_FORMULA ? ST_IDLE : ST_DONE));
 
 	return SHEET_OK;
 
@@ -448,6 +456,11 @@ typedef struct {
 	sheet_t		*s;
 	const char	*p;
 	sheet_err_t	err;
+	// Inside the branch IF did not take: parsed, so the formula is
+	// checked whole, but not evaluated -- references are not followed
+	// and arithmetic errors do not count. IF(B1=0,0,A1/B1) is the
+	// reason: the division must not be an error when B1 is 0.
+	int			skip;
 } pstate_t;
 
 static bool parse_expr(pstate_t *ps, z_fix_t *out);
@@ -459,6 +472,12 @@ static void skipws(pstate_t *ps) {
 static bool fail(pstate_t *ps, sheet_err_t e) {
 	if (ps->err == SHEET_OK) ps->err = e;
 	return false;
+}
+
+// An arithmetic error: an error, except in a branch not taken.
+static bool soft(pstate_t *ps, sheet_err_t e, z_fix_t *out) {
+	if (ps->skip) { *out = 0; return true; }
+	return fail(ps, e);
 }
 
 // Aggregate accumulator -- see the function table below.
@@ -540,25 +559,118 @@ static sheet_err_t acc_range(sheet_t *s, acc_t *a,
 
 }
 
+// -- multiplying and dividing --
+//
+// z_fix_mul() checks its double-scaled intermediate for overflow,
+// which at six decimals refuses 4000 * 4000. These split the operands
+// at the decimal point instead, so they fail only when the RESULT does
+// not fit -- and divide by long division, for the same reason.
+
+static bool fx_mul(z_fix_t a, z_fix_t b, z_fix_t *out) {
+	const uint64_t S = (uint64_t)z_fix_scale(SHEET_DP), lim = (uint64_t)INT64_MAX;
+	bool neg = (a < 0) != (b < 0);
+	uint64_t ua = a < 0 ? (uint64_t)(-a) : (uint64_t)a, ub = b < 0 ? (uint64_t)(-b) : (uint64_t)b;
+	uint64_t ai = ua / S, af = ua % S, bi = ub / S, bf = ub % S;
+	if (ai && bi > (lim / S) / ai) return false;
+	if (ai > lim / S || bi > lim / S) return false;
+	uint64_t r = ai * bi * S, t[3] = { ai * bf, af * bi, (af * bf + S / 2) / S };
+	for (int i = 0; i < 3; i++) { if (r > lim - t[i]) return false; r += t[i]; }
+	*out = neg ? -(z_fix_t)r : (z_fix_t)r;
+	return true;
+}
+
+static bool fx_div(z_fix_t a, z_fix_t b, z_fix_t *out) {
+	const uint64_t S = (uint64_t)z_fix_scale(SHEET_DP);
+	if (!b) return false;
+	bool neg = (a < 0) != (b < 0);
+	uint64_t ua = a < 0 ? (uint64_t)(-a) : (uint64_t)a, ub = b < 0 ? (uint64_t)(-b) : (uint64_t)b;
+	uint64_t q = ua / ub, r = ua % ub, f = 0;
+	if (q > (uint64_t)INT64_MAX / S || ub > UINT64_MAX / 10) return false;
+	for (int i = 0; i < SHEET_DP; i++) { r *= 10; f = f * 10 + r / ub; r %= ub; }
+	if (r * 2 >= ub) f++;		// rounded, not truncated
+	uint64_t v = q * S + f;
+	if (v > (uint64_t)INT64_MAX) return false;
+	*out = neg ? -(z_fix_t)v : (z_fix_t)v;
+	return true;
+}
+
+// -- the financial functions, and powers --
+//
+// (1 + rate) ^ periods at the sheet's four decimals is a dollar out on
+// a mortgage, and even at nine (z_fix's most) the (g - 1) / rate in an
+// annuity magnifies the last digit into cents. So these few use
+// double precision -- software floating point, a few KB of libgcc, in
+// an app that otherwise has none -- and come back to four decimals at
+// the end, as every other result does.
+
+static double fx2d(z_fix_t v) { return (double)v / (double)z_fix_scale(SHEET_DP); }
+
+static bool d2fx(double d, z_fix_t *out) {
+	d *= (double)z_fix_scale(SHEET_DP);
+	if (d != d || d > 9.2e18 || d < -9.2e18) return false;
+	*out = (z_fix_t)(d < 0 ? d - 0.5 : d + 0.5);
+	return true;
+}
+
+// b ^ n for a whole n, by squaring.
+static double dpow(double b, int32_t n) {
+	bool neg = n < 0;
+	uint32_t e = neg ? (uint32_t)(-(int64_t)n) : (uint32_t)n;
+	double r = 1.0;
+	while (e) {
+		if (e & 1) r *= b;
+		e >>= 1;
+		if (e) b *= b;
+	}
+	return neg ? 1.0 / r : r;
+}
+
+static bool is_int(z_fix_t v) {
+	return v % z_fix_scale(SHEET_DP) == 0;
+}
+
+static int32_t to_int(z_fix_t v) {
+	z_fix_t q = v / z_fix_scale(SHEET_DP);
+	if (q > INT32_MAX) return INT32_MAX;
+	if (q < INT32_MIN) return INT32_MIN;
+	return (int32_t)q;
+}
+
 // -- functions --
 
 typedef enum {
-	FN_SUM = 0, FN_AVG, FN_MIN, FN_MAX, FN_COUNT,
-	FN_ABS, FN_INT, FN_ROUND,
+	FN_SUM = 0, FN_AVG, FN_MIN, FN_MAX, FN_COUNT,		// aggregates
+	FN_ABS, FN_INT, FN_ROUND, FN_MOD, FN_SQRT, FN_POWER,
+	FN_IF, FN_AND, FN_OR, FN_NOT,
+	FN_PMT, FN_PV, FN_FV, FN_NPV,
+	FN_VLOOKUP, FN_INDEX,
 	FN_NONE
 } fn_id_t;
 
 static const struct { const char *name; fn_id_t id; } fn_table[] = {
-	{ "SUM",     FN_SUM   },
-	{ "AVG",     FN_AVG   },
-	{ "AVERAGE", FN_AVG   },		// both spellings; people type either
-	{ "MIN",     FN_MIN   },
-	{ "MAX",     FN_MAX   },
-	{ "COUNT",   FN_COUNT },
-	{ "ABS",     FN_ABS   },
-	{ "INT",     FN_INT   },
-	{ "ROUND",   FN_ROUND },
-	{ NULL,      FN_NONE  },
+	{ "SUM",     FN_SUM    },
+	{ "AVG",     FN_AVG    },
+	{ "AVERAGE", FN_AVG    },		// both spellings; people type either
+	{ "MIN",     FN_MIN    },
+	{ "MAX",     FN_MAX    },
+	{ "COUNT",   FN_COUNT  },
+	{ "ABS",     FN_ABS    },
+	{ "INT",     FN_INT    },
+	{ "ROUND",   FN_ROUND  },
+	{ "MOD",     FN_MOD    },
+	{ "SQRT",    FN_SQRT   },
+	{ "POWER",   FN_POWER  },
+	{ "IF",      FN_IF     },
+	{ "AND",     FN_AND    },
+	{ "OR",      FN_OR     },
+	{ "NOT",     FN_NOT    },
+	{ "PMT",     FN_PMT    },
+	{ "PV",      FN_PV     },
+	{ "FV",      FN_FV     },
+	{ "NPV",     FN_NPV    },
+	{ "VLOOKUP", FN_VLOOKUP },
+	{ "INDEX",   FN_INDEX  },
+	{ NULL,      FN_NONE   },
 };
 
 static bool name_eq(const char *a, int alen, const char *b) {
@@ -585,15 +697,95 @@ static fn_id_t fn_lookup(const char *name, int len) {
 }
 
 static bool fn_is_aggregate(fn_id_t f) {
-	return f == FN_SUM || f == FN_AVG || f == FN_MIN ||
-		f == FN_MAX || f == FN_COUNT;
+	return f <= FN_COUNT;
+}
+
+// One argument: a value, or a rectangle.
+typedef struct {
+	bool	range;
+	int		r0, c0, r1, c1;
+	z_fix_t	v;
+} arg_t;
+
+#define ARGS_MAX 6
+
+// A range at ps->p, if there is one there ("A1:B9").
+static bool try_range(pstate_t *ps, arg_t *a) {
+
+	int r0, c0, r1, c1;
+	const char *after = NULL;
+
+	if (!sheet_parse_ref(ps->p, &r0, &c0, &after)) return false;
+
+	const char *q = after;
+	while (*q == ' ' || *q == '\t') q++;
+	if (*q != ':') return false;
+	q++;
+	while (*q == ' ' || *q == '\t') q++;
+	if (!sheet_parse_ref(q, &r1, &c1, &after)) return false;
+
+	ps->p = after;
+	a->range = true;
+	a->r0 = r0 < r1 ? r0 : r1;
+	a->r1 = r0 < r1 ? r1 : r0;
+	a->c0 = c0 < c1 ? c0 : c1;
+	a->c1 = c0 < c1 ? c1 : c0;
+	return true;
+
+}
+
+static bool truth(z_fix_t v) { return v != 0; }
+
+static z_fix_t boolv(bool b) { return b ? z_fix_scale(SHEET_DP) : 0; }
+
+// IF(cond, then, else): the branch not taken is parsed in skip mode.
+static bool parse_if(pstate_t *ps, z_fix_t *out) {
+
+	z_fix_t c, a = 0, b = 0;
+
+	if (!parse_expr(ps, &c)) return false;
+	skipws(ps);
+	if (*ps->p != ',') return fail(ps, SHEET_ERR_SYNTAX);
+	ps->p++;
+
+	bool take = truth(c);
+
+	if (!take) ps->skip++;
+	bool ok = parse_expr(ps, &a);
+	if (!take) ps->skip--;
+	if (!ok) return false;
+
+	skipws(ps);
+	if (*ps->p == ',') {
+		ps->p++;
+		if (take) ps->skip++;
+		ok = parse_expr(ps, &b);
+		if (take) ps->skip--;
+		if (!ok) return false;
+		skipws(ps);
+	}
+
+	if (*ps->p != ')') return fail(ps, SHEET_ERR_SYNTAX);
+	ps->p++;
+
+	*out = take ? a : b;
+	return true;
+
+}
+
+// The value at (row, col), as a lookup returns it.
+static bool cell_value(pstate_t *ps, int row, int col, z_fix_t *out) {
+	if (ps->skip) { *out = 0; return true; }
+	sheet_err_t e = eval_cell(ps->s, row, col, out);
+	if (e != SHEET_OK) return fail(ps, e);
+	return true;
 }
 
 // Parses "(" args ")" and produces the function's value.
 static bool parse_call(pstate_t *ps, fn_id_t f, z_fix_t *out) {
 
 	acc_t a;
-	z_fix_t argv[2];
+	arg_t argv[ARGS_MAX];
 	int argc = 0;
 
 	acc_init(&a);
@@ -602,11 +794,18 @@ static bool parse_call(pstate_t *ps, fn_id_t f, z_fix_t *out) {
 	if (*ps->p != '(') return fail(ps, SHEET_ERR_SYNTAX);
 	ps->p++;
 
+	if (f == FN_IF) return parse_if(ps, out);
+
 	skipws(ps);
+
+	// NPV's discounting goes cell by cell, in order, through every
+	// value and range after the rate.
+	double npv = 0, npv_f = 1;
+	int npv_i = 0;
 
 	// A call with no arguments at all. SUM() is 0, which is harmless
 	// and occasionally what a generated file contains; ABS() is not,
-	// and is caught by the arity check below.
+	// and is caught by the arity checks below.
 	if (*ps->p == ')') {
 		ps->p++;
 	} else {
@@ -619,44 +818,45 @@ static bool parse_call(pstate_t *ps, fn_id_t f, z_fix_t *out) {
 			// the reference first and rewinding is what lets "A1" be
 			// an ordinary value and "A1:A9" be a rectangle without two
 			// grammars for the same characters.
-			const char *save = ps->p;
-			int r0, c0, r1, c1;
-			const char *after = NULL;
-			bool is_range = false;
+			arg_t one;
+			one.range = false;
+			one.v = 0;
 
-			if (sheet_parse_ref(ps->p, &r0, &c0, &after)) {
+			if (try_range(ps, &one)) {
 
-				const char *q = after;
-				while (*q == ' ' || *q == '\t') q++;
-
-				if (*q == ':') {
-					q++;
-					while (*q == ' ' || *q == '\t') q++;
-					if (sheet_parse_ref(q, &r1, &c1, &after)) {
-						is_range = true;
-						ps->p = after;
+				if (fn_is_aggregate(f)) {
+					if (!ps->skip) {
+						sheet_err_t e = acc_range(ps->s, &a, one.r0, one.c0, one.r1, one.c1);
+						if (e != SHEET_OK) return fail(ps, e);
 					}
-				}
-
-			}
-
-			if (is_range) {
-
-				if (!fn_is_aggregate(f)) return fail(ps, SHEET_ERR_NUM);
-
-				sheet_err_t e = acc_range(ps->s, &a, r0, c0, r1, c1);
-				if (e != SHEET_OK) return fail(ps, e);
+				} else if (f == FN_NPV && argc >= 1) {
+					// fed through below, cell by cell
+					if (!ps->skip) {
+						for (int r = one.r0; r <= one.r1; r++)
+							for (int c = one.c0; c <= one.c1; c++) {
+								if (sheet_empty(ps->s, r, c) || sheet_kind(ps->s, r, c) == SHEET_KIND_TEXT) continue;
+								z_fix_t v;
+								if (!cell_value(ps, r, c, &v)) return false;
+								npv += fx2d(v) / dpow(npv_f, ++npv_i);
+							}
+					}
+				} else if (argc < ARGS_MAX) {
+					argv[argc++] = one;
+				} else return fail(ps, SHEET_ERR_NUM);
 
 			} else {
-
-				ps->p = save;
 
 				z_fix_t v;
 				if (!parse_expr(ps, &v)) return false;
 
 				if (fn_is_aggregate(f)) acc_add(&a, v);
-				else if (argc < 2) argv[argc++] = v;
-				else return fail(ps, SHEET_ERR_NUM);
+				else if (f == FN_NPV && argc >= 1) {
+					if (!ps->skip) npv += fx2d(v) / dpow(npv_f, ++npv_i);
+				} else if (argc < ARGS_MAX) {
+					argv[argc].range = false;
+					argv[argc++].v = v;
+					if (f == FN_NPV) npv_f = 1.0 + fx2d(v);
+				} else return fail(ps, SHEET_ERR_NUM);
 
 			}
 
@@ -671,7 +871,18 @@ static bool parse_call(pstate_t *ps, fn_id_t f, z_fix_t *out) {
 
 	}
 
+	if (ps->skip) { *out = 0; return true; }
+
 	if (a.bad) return fail(ps, SHEET_ERR_NUM);
+
+	// Value arguments only, from here, except for the lookups.
+	z_fix_t v0 = argc > 0 ? argv[0].v : 0, v1 = argc > 1 ? argv[1].v : 0;
+	z_fix_t v2 = argc > 2 ? argv[2].v : 0, v3 = argc > 3 ? argv[3].v : 0;
+	if (f != FN_VLOOKUP && f != FN_INDEX)
+		for (int i = 0; i < argc; i++)
+			if (argv[i].range) return fail(ps, SHEET_ERR_NUM);
+
+	z_fix_t one = z_fix_scale(SHEET_DP);
 
 	switch (f) {
 
@@ -684,8 +895,7 @@ static bool parse_call(pstate_t *ps, fn_id_t f, z_fix_t *out) {
 			// no answer -- reporting it as 0 would put a plausible
 			// number in a cell that has none.
 			if (!a.count) return fail(ps, SHEET_ERR_DIV0);
-			if (!z_fix_div(a.sum, (z_fix_t)a.count * z_fix_scale(SHEET_DP),
-				SHEET_DP, out)) return fail(ps, SHEET_ERR_NUM);
+			if (!fx_div(a.sum, (z_fix_t)a.count * one, out)) return fail(ps, SHEET_ERR_NUM);
 			return true;
 
 		case FN_MIN:
@@ -703,7 +913,7 @@ static bool parse_call(pstate_t *ps, fn_id_t f, z_fix_t *out) {
 
 		case FN_ABS:
 			if (argc != 1) return fail(ps, SHEET_ERR_NUM);
-			*out = argv[0] < 0 ? -argv[0] : argv[0];
+			*out = v0 < 0 ? -v0 : v0;
 			return true;
 
 		case FN_INT: {
@@ -712,25 +922,129 @@ static bool parse_call(pstate_t *ps, fn_id_t f, z_fix_t *out) {
 			// division truncates toward zero, so the negative case
 			// needs the extra step.
 			if (argc != 1) return fail(ps, SHEET_ERR_NUM);
-			z_fix_t sc = z_fix_scale(SHEET_DP);
-			z_fix_t q = argv[0] / sc;
-			if (argv[0] < 0 && (argv[0] % sc) != 0) q--;
-			*out = q * sc;
+			z_fix_t q = v0 / one;
+			if (v0 < 0 && (v0 % one) != 0) q--;
+			*out = q * one;
 			return true;
 		}
 
 		case FN_ROUND: {
 			if (argc != 2) return fail(ps, SHEET_ERR_NUM);
-			z_fix_t sc = z_fix_scale(SHEET_DP);
-			int places = (int)(argv[1] / sc);
+			int places = (int)(v1 / one);
 			if (places < 0) places = 0;
 			if (places > SHEET_DP) places = SHEET_DP;
 			z_fix_t unit = z_fix_scale(SHEET_DP - places);
-			z_fix_t v = argv[0];
 			z_fix_t half = unit / 2;
-			if (v >= 0) *out = ((v + half) / unit) * unit;
-			else        *out = -(((-v + half) / unit) * unit);
+			if (v0 >= 0) *out = ((v0 + half) / unit) * unit;
+			else         *out = -(((-v0 + half) / unit) * unit);
 			return true;
+		}
+
+		case FN_MOD: {
+			// The sign of the divisor, as spreadsheets have it:
+			// MOD(-1, 3) is 2.
+			if (argc != 2) return fail(ps, SHEET_ERR_NUM);
+			if (!v1) return fail(ps, SHEET_ERR_DIV0);
+			z_fix_t m = v0 % v1;
+			if (m && ((m < 0) != (v1 < 0))) m += v1;
+			*out = m;
+			return true;
+		}
+
+		case FN_SQRT: {
+			if (argc != 1 || v0 < 0) return fail(ps, SHEET_ERR_NUM);
+			// sqrt(v / 10^4) * 10^4 = sqrt(v * 10^4)
+			if (v0 > INT64_MAX / one) return fail(ps, SHEET_ERR_NUM);
+			uint64_t x = (uint64_t)v0 * (uint64_t)one, r = 0, bit = 1ull << 62;
+			while (bit > x) bit >>= 2;
+			while (bit) {
+				if (x >= r + bit) { x -= r + bit; r = (r >> 1) + bit; }
+				else r >>= 1;
+				bit >>= 2;
+			}
+			if (x > r) r++;			// to nearest: the remainder is past r + 1/2
+			*out = (z_fix_t)r;
+			return true;
+		}
+
+		case FN_POWER: {
+			if (argc != 2) return fail(ps, SHEET_ERR_NUM);
+			if (!is_int(v1)) return fail(ps, SHEET_ERR_NUM);
+			if (v0 == 0 && v1 < 0) return fail(ps, SHEET_ERR_DIV0);
+			if (!d2fx(dpow(fx2d(v0), to_int(v1)), out)) return fail(ps, SHEET_ERR_NUM);
+			return true;
+		}
+
+		case FN_AND: case FN_OR: {
+			if (argc < 1) return fail(ps, SHEET_ERR_NUM);
+			bool r = (f == FN_AND);
+			for (int i = 0; i < argc; i++) {
+				if (f == FN_AND) r = r && truth(argv[i].v);
+				else r = r || truth(argv[i].v);
+			}
+			*out = boolv(r);
+			return true;
+		}
+
+		case FN_NOT:
+			if (argc != 1) return fail(ps, SHEET_ERR_NUM);
+			*out = boolv(!truth(v0));
+			return true;
+
+		case FN_PMT: case FN_PV: case FN_FV: {
+			// PMT(rate, periods, pv [, fv])   PV(rate, periods, pmt [, fv])
+			// FV(rate, periods, pmt [, pv]) -- the usual signs: money paid
+			// out is negative.
+			if (argc < 3 || argc > 4 || !is_int(v1)) return fail(ps, SHEET_ERR_NUM);
+			double r = fx2d(v0), n = (double)to_int(v1), x = fx2d(v2), y = fx2d(v3), res;
+			if (r == 0) {
+				if (f == FN_PMT) { if (n == 0) return fail(ps, SHEET_ERR_DIV0); res = -(x + y) / n; }
+				else res = -(y + x * n);
+			} else {
+				double g = dpow(1.0 + r, to_int(v1)), af = (g - 1.0) / r;
+				if (f == FN_PMT) { if (af == 0) return fail(ps, SHEET_ERR_DIV0); res = -(x * g + y) / af; }
+				else if (f == FN_PV) res = -(x * af + y) / g;
+				else res = -(x * af + y * g);
+			}
+			if (!d2fx(res, out)) return fail(ps, SHEET_ERR_NUM);
+			return true;
+		}
+
+		case FN_NPV:
+			if (argc < 1) return fail(ps, SHEET_ERR_NUM);
+			if (!d2fx(npv, out)) return fail(ps, SHEET_ERR_NUM);
+			return true;
+
+		case FN_VLOOKUP: {
+			// VLOOKUP(value, range, column [, exact]): the row whose first
+			// cell is the value (exact), or the largest not above it
+			// (otherwise -- the first column sorted ascending, as 1-2-3
+			// and every spreadsheet since have it).
+			if (argc < 3 || argv[0].range || !argv[1].range || argv[2].range) return fail(ps, SHEET_ERR_NUM);
+			bool exact = argc > 3 && !argv[3].range && v3 == 0;
+			arg_t *g = &argv[1];
+			int col = to_int(v2) - 1;
+			if (col < 0 || g->c0 + col > g->c1) return fail(ps, SHEET_ERR_REF);
+			int best = -1;
+			z_fix_t bestv = 0;
+			for (int r = g->r0; r <= g->r1; r++) {
+				if (sheet_empty(ps->s, r, g->c0) || sheet_kind(ps->s, r, g->c0) == SHEET_KIND_TEXT) continue;
+				z_fix_t k;
+				if (!cell_value(ps, r, g->c0, &k)) return false;
+				if (k == v0) { best = r; break; }
+				if (!exact && k < v0 && (best < 0 || k > bestv)) { best = r; bestv = k; }
+			}
+			if (best < 0) return fail(ps, SHEET_ERR_NUM);
+			return cell_value(ps, best, g->c0 + col, out);
+		}
+
+		case FN_INDEX: {
+			// INDEX(range, row [, column]), from 1.
+			if (argc < 2 || !argv[0].range || argv[1].range) return fail(ps, SHEET_ERR_NUM);
+			arg_t *g = &argv[0];
+			int r = g->r0 + to_int(v1) - 1, c = g->c0 + (argc > 2 ? to_int(v2) - 1 : 0);
+			if (r < g->r0 || r > g->r1 || c < g->c0 || c > g->c1) return fail(ps, SHEET_ERR_REF);
+			return cell_value(ps, r, c, out);
 		}
 
 		default:
@@ -765,6 +1079,12 @@ static bool parse_primary(pstate_t *ps, z_fix_t *out) {
 
 	}
 
+	// A reference a row or column deletion took away (sheet_rewrite()).
+	if (!strncmp(ps->p, "#REF!", 5)) {
+		ps->p += 5;
+		return soft(ps, SHEET_ERR_REF, out);
+	}
+
 	// A name: either a function call or a cell reference. Which it is
 	// is decided by what follows the letters, so both are read from
 	// the same starting point and one of them rewinds.
@@ -789,6 +1109,10 @@ static bool parse_primary(pstate_t *ps, z_fix_t *out) {
 
 		}
 
+		// TRUE and FALSE, as 1 and 0
+		if (name_eq(start, (int)(q - start), "TRUE")) { ps->p = q; *out = boolv(true); return true; }
+		if (name_eq(start, (int)(q - start), "FALSE")) { ps->p = q; *out = 0; return true; }
+
 		int row, col;
 		const char *end = NULL;
 
@@ -796,6 +1120,8 @@ static bool parse_primary(pstate_t *ps, z_fix_t *out) {
 			return fail(ps, SHEET_ERR_REF);
 
 		ps->p = end;
+
+		if (ps->skip) { *out = 0; return true; }
 
 		sheet_err_t e = eval_cell(ps->s, row, col, out);
 		if (e != SHEET_OK) return fail(ps, e);
@@ -828,9 +1154,31 @@ static bool parse_unary(pstate_t *ps, z_fix_t *out) {
 
 }
 
-static bool parse_term(pstate_t *ps, z_fix_t *out) {
+// x ^ n, integer n -- above * and /, as everywhere.
+static bool parse_power(pstate_t *ps, z_fix_t *out) {
 
 	if (!parse_unary(ps, out)) return false;
+
+	for (;;) {
+
+		skipws(ps);
+		if (*ps->p != '^') return true;
+		ps->p++;
+
+		z_fix_t e;
+		if (!parse_unary(ps, &e)) return false;
+		if (ps->skip) { *out = 0; continue; }
+		if (!is_int(e)) return fail(ps, SHEET_ERR_NUM);
+		if (*out == 0 && e < 0) return fail(ps, SHEET_ERR_DIV0);
+		if (!d2fx(dpow(fx2d(*out), to_int(e)), out)) return fail(ps, SHEET_ERR_NUM);
+
+	}
+
+}
+
+static bool parse_term(pstate_t *ps, z_fix_t *out) {
+
+	if (!parse_power(ps, out)) return false;
 
 	for (;;) {
 
@@ -842,22 +1190,22 @@ static bool parse_term(pstate_t *ps, z_fix_t *out) {
 		ps->p++;
 
 		z_fix_t rhs;
-		if (!parse_unary(ps, &rhs)) return false;
+		if (!parse_power(ps, &rhs)) return false;
 
 		if (op == '*') {
-			if (!z_fix_mul(*out, rhs, SHEET_DP, out))
-				return fail(ps, SHEET_ERR_NUM);
+			if (!fx_mul(*out, rhs, out))
+				return soft(ps, SHEET_ERR_NUM, out);
 		} else {
-			if (rhs == 0) return fail(ps, SHEET_ERR_DIV0);
-			if (!z_fix_div(*out, rhs, SHEET_DP, out))
-				return fail(ps, SHEET_ERR_NUM);
+			if (rhs == 0) return soft(ps, SHEET_ERR_DIV0, out);
+			if (!fx_div(*out, rhs, out))
+				return soft(ps, SHEET_ERR_NUM, out);
 		}
 
 	}
 
 }
 
-static bool parse_expr(pstate_t *ps, z_fix_t *out) {
+static bool parse_sum(pstate_t *ps, z_fix_t *out) {
 
 	if (!parse_term(ps, out)) return false;
 
@@ -876,10 +1224,53 @@ static bool parse_expr(pstate_t *ps, z_fix_t *out) {
 		bool ok = (op == '+') ? z_fix_add(*out, rhs, out)
 		                      : z_fix_sub(*out, rhs, out);
 
-		if (!ok) return fail(ps, SHEET_ERR_NUM);
+		if (!ok) return soft(ps, SHEET_ERR_NUM, out);
 
 	}
 
+}
+
+// Comparisons, lowest of all: = <> < > <= >=, giving 1 or 0.
+static bool parse_expr(pstate_t *ps, z_fix_t *out) {
+
+	if (!parse_sum(ps, out)) return false;
+
+	for (;;) {
+
+		skipws(ps);
+
+		const char *p = ps->p;
+		int op;		// 1 =, 2 <>, 3 <, 4 >, 5 <=, 6 >=
+		if (p[0] == '=') op = 1, ps->p += 1;
+		else if (p[0] == '<' && p[1] == '>') op = 2, ps->p += 2;
+		else if (p[0] == '<' && p[1] == '=') op = 5, ps->p += 2;
+		else if (p[0] == '>' && p[1] == '=') op = 6, ps->p += 2;
+		else if (p[0] == '<') op = 3, ps->p += 1;
+		else if (p[0] == '>') op = 4, ps->p += 1;
+		else return true;
+
+		z_fix_t rhs;
+		if (!parse_sum(ps, &rhs)) return false;
+
+		z_fix_t l = *out;
+		bool r = op == 1 ? l == rhs : op == 2 ? l != rhs : op == 3 ? l < rhs :
+			op == 4 ? l > rhs : op == 5 ? l <= rhs : l >= rhs;
+		*out = boolv(r);
+
+	}
+
+}
+
+// Evaluation state, tagged with the recalculation it belongs to: the
+// low two bits are ST_*, the rest s->gen. A state from an older
+// generation reads as ST_IDLE, which is what invalidate() achieves
+// without visiting every cell.
+static int st_get(const sheet_t *s, const sheet_cell_t *c) {
+	return (c->state >> 2) == s->gen ? (c->state & 3) : ST_IDLE;
+}
+
+static void st_set(const sheet_t *s, sheet_cell_t *c, int st) {
+	c->state = (uint8_t)((s->gen << 2) | st);
 }
 
 static sheet_err_t eval_cell(sheet_t *s, int row, int col, z_fix_t *out) {
@@ -898,12 +1289,14 @@ static sheet_err_t eval_cell(sheet_t *s, int row, int col, z_fix_t *out) {
 		return (sheet_err_t)c->err;
 	}
 
+	int st = st_get(s, c);
+
 	// A formula that reaches a cell already being evaluated has, by
 	// definition, come back to where it started. One comparison, no
 	// dependency graph.
-	if (c->state == ST_BUSY) return SHEET_ERR_CIRC;
+	if (st == ST_BUSY) return SHEET_ERR_CIRC;
 
-	if (c->state == ST_DONE) {
+	if (st == ST_DONE) {
 		*out = c->val;
 		return (sheet_err_t)c->err;
 	}
@@ -915,13 +1308,14 @@ static sheet_err_t eval_cell(sheet_t *s, int row, int col, z_fix_t *out) {
 		return SHEET_ERR_DEPTH;
 	}
 
-	c->state = ST_BUSY;
+	st_set(s, c, ST_BUSY);
 	s->depth++;
 
 	pstate_t ps;
 	ps.s = s;
 	ps.p = &s->arena[c->off] + 1;		// past the '='
 	ps.err = SHEET_OK;
+	ps.skip = 0;
 
 	z_fix_t v = 0;
 	bool ok = parse_expr(&ps, &v);
@@ -943,13 +1337,13 @@ static sheet_err_t eval_cell(sheet_t *s, int row, int col, z_fix_t *out) {
 		sheet_err_t e = ps.err == SHEET_OK ? SHEET_ERR_SYNTAX : ps.err;
 
 		if (e == SHEET_ERR_DEPTH) {
-			c->state = ST_IDLE;
+			st_set(s, c, ST_IDLE);
 			return e;
 		}
 
 		c->err = (uint8_t)e;
 		c->val = 0;
-		c->state = ST_DONE;
+		st_set(s, c, ST_DONE);
 
 		return e;
 
@@ -957,7 +1351,7 @@ static sheet_err_t eval_cell(sheet_t *s, int row, int col, z_fix_t *out) {
 
 	c->err = SHEET_OK;
 	c->val = v;
-	c->state = ST_DONE;
+	st_set(s, c, ST_DONE);
 
 	*out = v;
 	return SHEET_OK;
@@ -966,6 +1360,700 @@ static sheet_err_t eval_cell(sheet_t *s, int row, int col, z_fix_t *out) {
 
 sheet_err_t sheet_value(sheet_t *s, int row, int col, z_fix_t *out) {
 	return eval_cell(s, row, col, out);
+}
+
+
+// -- the chart --
+
+const char *sheet_chart_name(int kind) {
+	static const char *const n[] = { "bar", "stack", "line", "pie" };
+	return (kind >= 0 && kind < SHEET_CHART_KINDS) ? n[kind] : "bar";
+}
+
+// -- number formats --
+
+bool sheet_parse_format(const char *p, int *kind, int *dec) {
+
+	while (*p == ' ') p++;
+
+	int k;
+	switch (*p) {
+		case 'G': case 'g': *kind = SHEET_FMT_GENERAL; *dec = 0; return !p[1] || p[1] == ' ';
+		case 'F': case 'f': k = SHEET_FMT_FIXED; break;
+		case ',':           k = SHEET_FMT_COMMA; break;
+		case '%':           k = SHEET_FMT_PERCENT; break;
+		case '$':           k = SHEET_FMT_MONEY; break;
+		default: return false;
+	}
+
+	p++;
+	int d = 2;
+	if (*p >= '0' && *p <= '9') { d = *p - '0'; p++; }
+	if (d > SHEET_DP) d = SHEET_DP;
+	if (*p && *p != ' ') return false;
+
+	*kind = k;
+	*dec = d;
+	return true;
+
+}
+
+int sheet_format_name(int kind, int dec, char *out, int cap) {
+
+	if (cap < 3) { if (cap) out[0] = 0; return 0; }
+
+	static const char lead[] = "GF,%$";
+	out[0] = lead[kind >= 0 && kind <= SHEET_FMT_MONEY ? kind : 0];
+
+	if (kind == SHEET_FMT_GENERAL) { out[1] = 0; return 1; }
+
+	out[1] = (char)('0' + dec);
+	out[2] = 0;
+	return 2;
+
+}
+
+int sheet_format_at(const sheet_t *s, int row, int col, int *dec) {
+
+	for (int i = s->nfmts - 1; i >= 0; i--) {
+		const sheet_fmt_t *f = &s->fmts[i];
+		if (row >= f->r0 && row <= f->r1 && col >= f->c0 && col <= f->c1) {
+			if (dec) *dec = f->dec;
+			return f->kind;
+		}
+	}
+
+	if (dec) *dec = 0;
+	return SHEET_FMT_GENERAL;
+
+}
+
+bool sheet_set_format(sheet_t *s, int r0, int c0, int r1, int c1, int kind, int dec) {
+
+	if (r0 > r1) { int t = r0; r0 = r1; r1 = t; }
+	if (c0 > c1) { int t = c0; c0 = c1; c1 = t; }
+	if (r0 < 0) r0 = 0;
+	if (c0 < 0) c0 = 0;
+	if (r1 >= SHEET_ROWS) r1 = SHEET_ROWS - 1;
+	if (c1 >= SHEET_COLS) c1 = SHEET_COLS - 1;
+	if (dec < 0) dec = 0;
+	if (dec > SHEET_DP) dec = SHEET_DP;
+
+	// Ranges the new one covers entirely no longer show anywhere.
+	int n = 0;
+	for (int i = 0; i < s->nfmts; i++) {
+		sheet_fmt_t *f = &s->fmts[i];
+		if (f->r0 >= r0 && f->r1 <= r1 && f->c0 >= c0 && f->c1 <= c1) continue;
+		s->fmts[n++] = *f;
+	}
+	s->nfmts = n;
+	s->modified = true;
+
+	// General on nothing else: nothing to record.
+	if (kind == SHEET_FMT_GENERAL) {
+		bool under = false;
+		for (int i = 0; i < n && !under; i++) {
+			sheet_fmt_t *f = &s->fmts[i];
+			if (f->r0 <= r1 && f->r1 >= r0 && f->c0 <= c1 && f->c1 >= c0) under = true;
+		}
+		if (!under) return true;
+	}
+
+	if (s->nfmts >= SHEET_MAX_FMTS) return false;
+
+	sheet_fmt_t *f = &s->fmts[s->nfmts++];
+	f->r0 = (uint16_t)r0;
+	f->r1 = (uint16_t)r1;
+	f->c0 = (uint8_t)c0;
+	f->c1 = (uint8_t)c1;
+	f->kind = (uint8_t)kind;
+	f->dec = (uint8_t)dec;
+	return true;
+
+}
+
+// `v` as `kind` with `dec` places, into out; its length, or -1 if it
+// does not fit `width`.
+static int format_num(z_fix_t v, int kind, int dec, char *out, int cap, int width) {
+
+	char digits[40];
+	int o = 0;
+
+	if (kind == SHEET_FMT_PERCENT) {
+		z_fix_t p;
+		if (!fx_mul(v, (z_fix_t)100 * z_fix_scale(SHEET_DP), &p)) return -1;
+		v = p;
+	}
+
+	bool neg = v < 0;
+	int n = z_fix_format(neg ? -v : v, SHEET_DP, dec, digits, sizeof digits);
+	if (n <= 0) return -1;
+
+	// Rounded to nothing: no minus sign on "0.00".
+	bool zero = true;
+	for (int i = 0; i < n; i++) if (digits[i] >= '1' && digits[i] <= '9') zero = false;
+	if (zero) neg = false;
+
+	char tmp[64];
+	if (neg) tmp[o++] = '-';
+	if (kind == SHEET_FMT_MONEY) tmp[o++] = '$';
+
+	int intlen = 0;
+	while (intlen < n && digits[intlen] != '.') intlen++;
+
+	for (int i = 0; i < n; i++) {
+		tmp[o++] = digits[i];
+		bool group = (kind == SHEET_FMT_COMMA || kind == SHEET_FMT_MONEY);
+		int left = intlen - 1 - i;
+		if (group && i < intlen && left > 0 && left % 3 == 0) tmp[o++] = ',';
+	}
+	if (kind == SHEET_FMT_PERCENT) tmp[o++] = '%';
+
+	if (o > width || o >= cap) return -1;
+	memcpy(out, tmp, (size_t)o);
+	out[o] = 0;
+	return o;
+
+}
+
+// -- moving formulas --
+
+// A reference at p: [$]col[$]row, one letter. Fills its parts; the
+// length, or 0.
+static int ref_at(const char *p, int *row, int *col, bool *acol, bool *arow) {
+
+	const char *q = p;
+	*acol = *arow = false;
+	if (*q == '$') { *acol = true; q++; }
+	char c = *q;
+	if (c >= 'a' && c <= 'z') c = (char)(c - 32);
+	if (c < 'A' || c > 'Z') return 0;
+	q++;
+	if ((*q >= 'A' && *q <= 'Z') || (*q >= 'a' && *q <= 'z')) return 0;
+	if (*q == '$') { *arow = true; q++; }
+	int r = 0, nd = 0;
+	while (*q >= '0' && *q <= '9') { r = r * 10 + (*q - '0'); q++; if (++nd > 4) return 0; }
+	if (!nd || !r) return 0;
+	// not part of a longer name ("A1B", "A1(")
+	if ((*q >= 'A' && *q <= 'Z') || (*q >= 'a' && *q <= 'z') || *q == '(' || *q == '_') return 0;
+	*row = r - 1;
+	*col = c - 'A';
+	return (int)(q - p);
+
+}
+
+static int put_ref(char *o, int n, int cap, int row, int col, bool acol, bool arow) {
+
+	char b[12];
+	int k = 0;
+	if (acol) b[k++] = '$';
+	b[k++] = (char)('A' + col);
+	if (arow) b[k++] = '$';
+	char t[6];
+	int tn = 0, r = row + 1;
+	while (r && tn < 5) { t[tn++] = (char)('0' + r % 10); r /= 10; }
+	while (tn) b[k++] = t[--tn];
+	for (int i = 0; i < k; i++) { if (n >= cap - 1) return -1; o[n++] = b[i]; }
+	return n;
+
+}
+
+static int put_str(char *o, int n, int cap, const char *s) {
+	while (*s) { if (n >= cap - 1) return -1; o[n++] = *s++; }
+	return n;
+}
+
+// One coordinate through a structural change: the new value, or -1
+// when deleted. `lo`/`hi`: as the start or the end of a range, which
+// a deletion clips rather than kills.
+static int move_coord(int v, sheet_move_t how, int at, int n, int end) {
+
+	bool ins = (how == SHEET_MOVE_INS_ROWS || how == SHEET_MOVE_INS_COLS);
+	if (ins) return v >= at ? v + n : v;
+
+	if (v < at) return v;
+	if (v >= at + n) return v - n;
+	// inside what went
+	if (end == 0) return -1;		// a lone reference
+	return end < 0 ? at : at - 1;	// range start: what follows; range end: what precedes
+
+}
+
+bool sheet_rewrite(const char *src, char *out, int cap, sheet_move_t how, int a, int b) {
+
+	if (cap > SHEET_SRC_MAX) cap = SHEET_SRC_MAX;
+	int n = 0;
+	const char *p = src;
+	bool rows = (how == SHEET_MOVE_INS_ROWS || how == SHEET_MOVE_DEL_ROWS);
+	int limit = rows ? SHEET_ROWS : SHEET_COLS;
+
+	while (*p) {
+
+		char ch = *p;
+
+		// a name (function) and anything glued to it is copied as it is
+		if ((ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') || ch == '$') {
+
+			int r0, c0, r1, c1;
+			bool ac0, ar0, ac1, ar1;
+			int k0 = ref_at(p, &r0, &c0, &ac0, &ar0);
+
+			if (!k0) {
+				// copy the whole word, so "LOG10" is not split
+				while ((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') ||
+					(*p >= '0' && *p <= '9') || *p == '$' || *p == '_' || *p == '.') {
+					if (n >= cap - 1) return false;
+					out[n++] = *p++;
+				}
+				continue;
+			}
+
+			int k1 = 0;
+			if (p[k0] == ':') k1 = ref_at(p + k0 + 1, &r1, &c1, &ac1, &ar1);
+
+			bool bad = false;
+
+			if (how == SHEET_MOVE_COPY) {
+				if (!ar0) r0 += a;
+				if (!ac0) c0 += b;
+				if (r0 < 0 || r0 >= SHEET_ROWS || c0 < 0 || c0 >= SHEET_COLS) bad = true;
+				if (k1) {
+					if (!ar1) r1 += a;
+					if (!ac1) c1 += b;
+					if (r1 < 0 || r1 >= SHEET_ROWS || c1 < 0 || c1 >= SHEET_COLS) bad = true;
+				}
+			} else {
+				int *v0 = rows ? &r0 : &c0, *v1 = rows ? &r1 : &c1;
+				if (k1) {
+					bool fwd = *v0 <= *v1;
+					int lo = fwd ? *v0 : *v1, hi = fwd ? *v1 : *v0;
+					int nlo = move_coord(lo, how, a, b, -1), nhi = move_coord(hi, how, a, b, 1);
+					if (nhi < nlo || nlo >= limit || nhi >= limit) bad = true;
+					*v0 = fwd ? nlo : nhi;
+					*v1 = fwd ? nhi : nlo;
+				} else {
+					*v0 = move_coord(*v0, how, a, b, 0);
+					if (*v0 < 0 || *v0 >= limit) bad = true;
+				}
+			}
+
+			if (bad) n = put_str(out, n, cap, "#REF!");
+			else {
+				n = put_ref(out, n, cap, r0, c0, ac0, ar0);
+				if (k1 && n >= 0) {
+					if (n >= cap - 1) return false;
+					out[n++] = ':';
+					n = put_ref(out, n, cap, r1, c1, ac1, ar1);
+				}
+			}
+			if (n < 0) return false;
+			p += k0 + (k1 ? 1 + k1 : 0);
+			continue;
+
+		}
+
+		if (ch >= '0' && ch <= '9') {
+			// a number: copied whole, so "1E5" or "2.5" are not refs
+			while ((*p >= '0' && *p <= '9') || *p == '.') {
+				if (n >= cap - 1) return false;
+				out[n++] = *p++;
+			}
+			if ((*p == 'E' || *p == 'e') && (p[1] == '+' || p[1] == '-' || (p[1] >= '0' && p[1] <= '9'))) {
+				if (n >= cap - 2) return false;
+				out[n++] = *p++;
+				out[n++] = *p++;
+				while (*p >= '0' && *p <= '9') { if (n >= cap - 1) return false; out[n++] = *p++; }
+			}
+			continue;
+		}
+
+		if (n >= cap - 1) return false;
+		out[n++] = *p++;
+
+	}
+
+	out[n] = 0;
+	return true;
+
+}
+
+// A formula's text after `how`, into the arena; the cell's text is
+// replaced. False if the sheet is full.
+static bool rewrite_cell(sheet_t *s, int i, sheet_move_t how, int a, int b) {
+
+	sheet_cell_t *c = &s->cells[i];
+	if (c->kind != SHEET_KIND_FORMULA) return true;
+
+	char tmp[SHEET_SRC_MAX];
+	if (!sheet_rewrite(&s->arena[c->off], tmp, sizeof tmp, how, a, b)) {
+		// would not fit: say so in the cell rather than lose it quietly
+		memcpy(tmp, "=#REF!", 7);
+	}
+	int len = (int)strlen(tmp);
+	if (len == c->len && !memcmp(tmp, &s->arena[c->off], (size_t)len)) return true;
+
+	int off = arena_put(s, tmp, len);
+	if (off < 0) return false;
+	c = &s->cells[i];
+	s->arena_live -= c->len + 1;
+	c->off = (uint16_t)off;
+	c->len = (uint8_t)len;
+	return true;
+
+}
+
+// Formats through a structural change.
+static void move_formats(sheet_t *s, bool rows, bool ins, int at, int n) {
+
+	int k = 0;
+	for (int i = 0; i < s->nfmts; i++) {
+		sheet_fmt_t f = s->fmts[i];
+		int lo = rows ? f.r0 : f.c0, hi = rows ? f.r1 : f.c1;
+		int limit = rows ? SHEET_ROWS : SHEET_COLS;
+		sheet_move_t how = rows ? (ins ? SHEET_MOVE_INS_ROWS : SHEET_MOVE_DEL_ROWS)
+			: (ins ? SHEET_MOVE_INS_COLS : SHEET_MOVE_DEL_COLS);
+		int nlo = move_coord(lo, how, at, n, -1), nhi = move_coord(hi, how, at, n, 1);
+		if (nhi < nlo || nlo >= limit) continue;
+		if (nhi >= limit) nhi = limit - 1;
+		if (rows) { f.r0 = (uint16_t)nlo; f.r1 = (uint16_t)nhi; }
+		else { f.c0 = (uint8_t)nlo; f.c1 = (uint8_t)nhi; }
+		s->fmts[k++] = f;
+	}
+	s->nfmts = k;
+
+}
+
+static sheet_err_t structural(sheet_t *s, bool rows, bool ins, int at, int n) {
+
+	int limit = rows ? SHEET_ROWS : SHEET_COLS;
+	if (n <= 0 || at < 0 || at >= limit) return SHEET_OK;
+	if (at + n > limit) n = limit - at;
+
+	sheet_move_t how = rows ? (ins ? SHEET_MOVE_INS_ROWS : SHEET_MOVE_DEL_ROWS)
+		: (ins ? SHEET_MOVE_INS_COLS : SHEET_MOVE_DEL_COLS);
+
+	// Inserting must not push anything off the edge.
+	if (ins) {
+		for (int i = 0; i < s->ncells; i++) {
+			int v = rows ? s->cells[i].key / SHEET_COLS : s->cells[i].key % SHEET_COLS;
+			if (v >= limit - n) return SHEET_ERR_FULL;
+		}
+	}
+
+	// Keys: the order of what remains is unchanged by moving whole rows
+	// or columns, so the array stays sorted and is compacted in place.
+	int k = 0;
+	for (int i = 0; i < s->ncells; i++) {
+		sheet_cell_t c = s->cells[i];
+		int r = c.key / SHEET_COLS, col = c.key % SHEET_COLS;
+		int v = rows ? r : col;
+		int nv = move_coord(v, how, at, n, 0);
+		if (nv < 0) { s->arena_live -= c.len + 1; continue; }
+		if (rows) r = nv; else col = nv;
+		c.key = mkkey(r, col);
+		s->cells[k++] = c;
+	}
+	s->ncells = k;
+
+	// Column moves can reorder within a row? No: every column at or past
+	// `at` moves by the same amount, so order within a row holds too.
+
+	// Every formula's references.
+	for (int i = 0; i < s->ncells; i++)
+		if (!rewrite_cell(s, i, how, at, n)) return SHEET_ERR_FULL;
+
+	if (!rows) {
+		// widths move with their columns
+		if (ins) {
+			for (int c = SHEET_COLS - 1; c >= at + n; c--) s->colw[c] = s->colw[c - n];
+			for (int c = at; c < at + n; c++) s->colw[c] = SHEET_COLW_DEF;
+		} else {
+			for (int c = at; c < SHEET_COLS; c++)
+				s->colw[c] = (c + n < SHEET_COLS) ? s->colw[c + n] : SHEET_COLW_DEF;
+		}
+	}
+
+	move_formats(s, rows, ins, at, n);
+
+	// the chart's range, the same way
+	if (s->chart.set) {
+		sheet_chart_t *g = &s->chart;
+		int lo = rows ? g->r0 : g->c0, hi = rows ? g->r1 : g->c1;
+		int nlo = move_coord(lo, how, at, n, -1), nhi = move_coord(hi, how, at, n, 1);
+		if (nhi < nlo || nlo >= limit) g->set = false;
+		else {
+			if (nhi >= limit) nhi = limit - 1;
+			if (rows) { g->r0 = (uint16_t)nlo; g->r1 = (uint16_t)nhi; }
+			else { g->c0 = (uint8_t)nlo; g->c1 = (uint8_t)nhi; }
+		}
+	}
+
+	s->modified = true;
+	invalidate(s);
+	return SHEET_OK;
+
+}
+
+sheet_err_t sheet_insert_rows(sheet_t *s, int at, int n) { return structural(s, true, true, at, n); }
+sheet_err_t sheet_delete_rows(sheet_t *s, int at, int n) { return structural(s, true, false, at, n); }
+sheet_err_t sheet_insert_cols(sheet_t *s, int at, int n) { return structural(s, false, true, at, n); }
+sheet_err_t sheet_delete_cols(sheet_t *s, int at, int n) { return structural(s, false, false, at, n); }
+
+// -- ranges as bytes --
+
+static void norm(int *r0, int *c0, int *r1, int *c1) {
+	if (*r0 > *r1) { int t = *r0; *r0 = *r1; *r1 = t; }
+	if (*c0 > *c1) { int t = *c0; *c0 = *c1; *c1 = t; }
+}
+
+int sheet_range_size(const sheet_t *s, int r0, int c0, int r1, int c1) {
+
+	norm(&r0, &c0, &r1, &c1);
+	int n = 0;
+	for (int r = r0; r <= r1; r++) {
+		int i = lower_bound(s, mkkey(r, c0));
+		uint16_t last = mkkey(r, c1);
+		for (; i < s->ncells && s->cells[i].key <= last; i++) n += 5 + s->cells[i].len;
+	}
+	return n;
+
+}
+
+int sheet_range_save(const sheet_t *s, int r0, int c0, int r1, int c1, void *buf, int cap) {
+
+	norm(&r0, &c0, &r1, &c1);
+	uint8_t *o = buf;
+	int n = 0;
+	for (int r = r0; r <= r1; r++) {
+		int i = lower_bound(s, mkkey(r, c0));
+		uint16_t last = mkkey(r, c1);
+		for (; i < s->ncells && s->cells[i].key <= last; i++) {
+			const sheet_cell_t *c = &s->cells[i];
+			if (n + 5 + c->len > cap) return -1;
+			int dr = r - r0, dc = c->key % SHEET_COLS - c0;
+			o[n++] = (uint8_t)dr;
+			o[n++] = (uint8_t)(dr >> 8);
+			o[n++] = (uint8_t)dc;
+			o[n++] = 0;
+			o[n++] = c->len;
+			memcpy(o + n, &s->arena[c->off], c->len);
+			n += c->len;
+		}
+	}
+	return n;
+
+}
+
+sheet_err_t sheet_range_load(sheet_t *s, int r0, int c0, int h, int w,
+	bool clear, const void *buf, int len, bool adjust, int from_r, int from_c) {
+
+	if (clear) sheet_clear_range(s, r0, c0, r0 + h - 1, c0 + w - 1);
+
+	const uint8_t *p = buf;
+	sheet_err_t first = SHEET_OK;
+	int i = 0;
+	while (i + 5 <= len) {
+		int dr = p[i] | (p[i + 1] << 8), dc = p[i + 2], l = p[i + 4];
+		i += 5;
+		if (i + l > len) break;
+		char t[SHEET_SRC_MAX];
+		memcpy(t, p + i, (size_t)l);
+		t[l] = 0;
+		i += l;
+		int r = r0 + dr, c = c0 + dc;
+		if (!in_grid(r, c)) continue;
+		if (adjust && t[0] == '=') {
+			char m[SHEET_SRC_MAX];
+			if (sheet_rewrite(t, m, sizeof m, SHEET_MOVE_COPY, r - (from_r + dr), c - (from_c + dc)))
+				memcpy(t, m, strlen(m) + 1);
+		}
+		sheet_err_t e = sheet_set(s, r, c, t);
+		if (e != SHEET_OK && first == SHEET_OK) first = e;
+	}
+	return first;
+
+}
+
+// -- sorting --
+
+// How a row's key compares: numbers (by value), then text (by its
+// letters, ignoring case), then empty.
+typedef struct {
+	uint8_t		cls;		// 0 number, 1 text, 2 empty
+	z_fix_t		v;
+	const char	*t;
+} skey_t;
+
+static int key_cmp(const skey_t *a, const skey_t *b) {
+	if (a->cls != b->cls) return a->cls < b->cls ? -1 : 1;
+	if (a->cls == 0) return a->v < b->v ? -1 : a->v > b->v ? 1 : 0;
+	if (a->cls == 1) {
+		const char *x = a->t, *y = b->t;
+		for (;; x++, y++) {
+			char cx = *x, cy = *y;
+			if (cx >= 'a' && cx <= 'z') cx = (char)(cx - 32);
+			if (cy >= 'a' && cy <= 'z') cy = (char)(cy - 32);
+			if (cx != cy) return (unsigned char)cx < (unsigned char)cy ? -1 : 1;
+			if (!cx) return 0;
+		}
+	}
+	return 0;
+}
+
+bool sheet_sort(sheet_t *s, int r0, int c0, int r1, int c1, int key,
+	bool desc, void *tmp, int tmpcap) {
+
+	norm(&r0, &c0, &r1, &c1);
+	int h = r1 - r0 + 1;
+	if (h < 2 || key < c0 || key > c1) return true;
+
+	// Scratch: the keys, the order and its inverse (2 bytes a row each),
+	// then the range's text -- all of it the caller's, so a sort costs
+	// nothing when none is running.
+	int need = sheet_range_size(s, r0, c0, r1, c1);
+	int key_bytes = h * (int)sizeof(skey_t);
+	int ord_bytes = (h * 4 + 7) & ~7;
+	if (key_bytes + ord_bytes + need > tmpcap) return false;
+	skey_t *keys = tmp;
+	uint16_t *ord = (uint16_t *)((uint8_t *)tmp + key_bytes);
+	uint16_t *dest = ord + h;
+	uint8_t *saved = (uint8_t *)tmp + key_bytes + ord_bytes;
+	tmpcap -= key_bytes + ord_bytes;
+
+	// The keys, evaluated before anything moves.
+	for (int r = r0; r <= r1; r++) {
+		skey_t *k = &keys[r - r0];
+		if (sheet_empty(s, r, key)) { k->cls = 2; continue; }
+		if (sheet_kind(s, r, key) == SHEET_KIND_TEXT) {
+			k->cls = 1;
+			k->t = sheet_src(s, r, key);
+			if (*k->t == '\'') k->t++;
+			continue;
+		}
+		k->cls = 0;
+		if (sheet_value(s, r, key, &k->v) != SHEET_OK) k->cls = 1, k->t = "";
+	}
+
+	// Stable insertion sort of row indices: at most 999 rows, and a
+	// sort is a deliberate act, not something done per keystroke.
+	for (int i = 0; i < h; i++) ord[i] = (uint16_t)i;
+	for (int i = 1; i < h; i++) {
+		uint16_t t = ord[i];
+		int j = i;
+		while (j > 0) {
+			int c = key_cmp(&keys[ord[j - 1]], &keys[t]);
+			// descending reverses numbers and text, but empty stays last
+			if (desc && keys[ord[j - 1]].cls != 2 && keys[t].cls != 2 &&
+				keys[ord[j - 1]].cls == keys[t].cls) c = -c;
+			if (c <= 0) break;
+			ord[j] = ord[j - 1];
+			j--;
+		}
+		ord[j] = t;
+	}
+
+	// The text is saved now (the keys point into the arena, which the
+	// moves below may compact), then written back row by row.
+	int len = sheet_range_save(s, r0, c0, r1, c1, saved, tmpcap);
+	if (len < 0) return false;
+
+	// where each old row goes
+	for (int i = 0; i < h; i++) dest[ord[i]] = (uint16_t)i;
+
+	sheet_clear_range(s, r0, c0, r1, c1);
+
+	int i = 0;
+	while (i + 5 <= len) {
+		int dr = saved[i] | (saved[i + 1] << 8), dc = saved[i + 2], l = saved[i + 4];
+		i += 5;
+		char t[SHEET_SRC_MAX];
+		memcpy(t, saved + i, (size_t)l);
+		t[l] = 0;
+		i += l;
+		int nr = r0 + dest[dr];
+		if (t[0] == '=') {
+			char m[SHEET_SRC_MAX];
+			if (sheet_rewrite(t, m, sizeof m, SHEET_MOVE_COPY, nr - (r0 + dr), 0))
+				memcpy(t, m, strlen(m) + 1);
+		}
+		if (sheet_set(s, nr, c0 + dc, t) != SHEET_OK) return false;
+	}
+	return true;
+
+}
+
+// -- the whole document --
+
+bool sheet_range_stats(sheet_t *s, int r0, int c0, int r1, int c1,
+	z_fix_t *sum, int *count) {
+	acc_t a;
+	acc_init(&a);
+	if (acc_range(s, &a, r0, c0, r1, c1) != SHEET_OK || a.bad) return false;
+	*sum = a.sum;
+	*count = a.count;
+	return true;
+}
+
+int sheet_snapshot_size(const sheet_t *s) {
+	return 8 + SHEET_COLS + s->nfmts * (int)sizeof(sheet_fmt_t) + (int)sizeof(sheet_chart_t) +
+		sheet_range_size(s, 0, 0, SHEET_ROWS - 1, SHEET_COLS - 1);
+}
+
+int sheet_snapshot(const sheet_t *s, void *buf, int cap) {
+
+	uint8_t *o = buf;
+	int fb = s->nfmts * (int)sizeof(sheet_fmt_t) + (int)sizeof(sheet_chart_t);
+	if (cap < 8 + SHEET_COLS + fb) return -1;
+	memcpy(o, "ZSS1", 4);
+	o[4] = (uint8_t)s->nfmts;
+	o[5] = o[6] = o[7] = 0;
+	memcpy(o + 8, s->colw, SHEET_COLS);
+	memcpy(o + 8 + SHEET_COLS, s->fmts, (size_t)fb - sizeof(sheet_chart_t));
+	memcpy(o + 8 + SHEET_COLS + fb - (int)sizeof(sheet_chart_t), &s->chart, sizeof(sheet_chart_t));
+	int h = 8 + SHEET_COLS + fb;
+	int n = sheet_range_save(s, 0, 0, SHEET_ROWS - 1, SHEET_COLS - 1, o + h, cap - h);
+	return n < 0 ? -1 : h + n;
+
+}
+
+bool sheet_restore(sheet_t *s, const void *buf, int len) {
+
+	const uint8_t *p = buf;
+	if (len < 8 + SHEET_COLS || memcmp(p, "ZSS1", 4)) return false;
+	int nf = p[4];
+	int fb = nf * (int)sizeof(sheet_fmt_t) + (int)sizeof(sheet_chart_t);
+	if (nf > SHEET_MAX_FMTS || len < 8 + SHEET_COLS + fb) return false;
+
+	bool modified = s->modified;
+	sheet_init(s);
+	memcpy(s->colw, p + 8, SHEET_COLS);
+	memcpy(s->fmts, p + 8 + SHEET_COLS, (size_t)nf * sizeof(sheet_fmt_t));
+	memcpy(&s->chart, p + 8 + SHEET_COLS + fb - (int)sizeof(sheet_chart_t), sizeof(sheet_chart_t));
+	s->nfmts = nf;
+
+	// Straight into the arrays, in key order, as saved: a cell at a
+	// time through sheet_set() would be a binary search and a move per
+	// cell for no reason.
+	int h = 8 + SHEET_COLS + fb, i = h;
+	while (i + 5 <= len && s->ncells < SHEET_MAX_CELLS) {
+		int r = p[i] | (p[i + 1] << 8), c = p[i + 2], l = p[i + 4];
+		i += 5;
+		if (i + l > len) break;
+		int off = arena_put(s, (const char *)p + i, l);
+		i += l;
+		if (off < 0) break;
+		sheet_cell_t *cell = &s->cells[s->ncells++];
+		cell->key = mkkey(r, c);
+		cell->off = (uint16_t)off;
+		cell->len = (uint8_t)l;
+		cell->kind = classify(&s->arena[off], &cell->val);
+		cell->err = SHEET_OK;
+		cell->state = ST_IDLE;
+	}
+	invalidate(s);
+	s->modified = modified;
+	return true;
+
 }
 
 // -- display --
@@ -1018,6 +2106,16 @@ int sheet_display(sheet_t *s, int row, int col, char *out, int cap,
 
 		return n;
 
+	}
+
+	// A number format, when one applies and fits; else General.
+	int dec, kind = sheet_format_at(s, row, col, &dec);
+	if (kind != SHEET_FMT_GENERAL) {
+		int n = format_num(v, kind, dec, out, cap, width);
+		if (n >= 0) return n;
+		for (int k = 0; k < width; k++) out[k] = '#';
+		out[width] = 0;
+		return width;
 	}
 
 	// Full precision if it fits, then progressively fewer decimals.
@@ -1075,6 +2173,37 @@ bool sheet_write(const sheet_t *s, sheet_emit_fn emit, void *ctx) {
 
 	}
 
+	// Number formats: "!f A1:B9 ,2", in order (later ones win).
+	for (int i = 0; i < s->nfmts; i++) {
+		const sheet_fmt_t *f = &s->fmts[i];
+		char ln[40], a[8], b[8], fm[4];
+		sheet_ref_name(f->r0, f->c0, a, sizeof a);
+		sheet_ref_name(f->r1, f->c1, b, sizeof b);
+		sheet_format_name(f->kind, f->dec, fm, sizeof fm);
+		int n = 0;
+		for (const char *q = "!f "; *q; q++) ln[n++] = *q;
+		for (const char *q = a; *q; q++) ln[n++] = *q;
+		if (f->r0 != f->r1 || f->c0 != f->c1) {
+			ln[n++] = ':';
+			for (const char *q = b; *q; q++) ln[n++] = *q;
+		}
+		ln[n++] = ' ';
+		for (const char *q = fm; *q; q++) ln[n++] = *q;
+		ln[n++] = '\n';
+		if (!emit(ctx, ln, n)) return false;
+	}
+
+	// The chart: "!g bar A1:D9".
+	if (s->chart.set) {
+		char ln[40], a[8], b[8];
+		sheet_ref_name(s->chart.r0, s->chart.c0, a, sizeof a);
+		sheet_ref_name(s->chart.r1, s->chart.c1, b, sizeof b);
+		int n = 0;
+		const char *parts[] = { "!g ", sheet_chart_name(s->chart.kind), " ", a, ":", b, "\n" };
+		for (int i = 0; i < 7; i++) for (const char *q = parts[i]; *q; q++) ln[n++] = *q;
+		if (!emit(ctx, ln, n)) return false;
+	}
+
 	for (int i = 0; i < s->ncells; i++) {
 
 		const sheet_cell_t *c = &s->cells[i];
@@ -1110,6 +2239,47 @@ bool sheet_load_line(sheet_t *s, const char *line) {
 	if (*p == '!') {
 
 		p++;
+
+		// "!g bar A1:D9" -- the chart (0.0.7).
+		if ((*p == 'g' || *p == 'G') && (p[1] == ' ' || p[1] == '\t')) {
+			p += 2;
+			while (*p == ' ') p++;
+			int kind = -1;
+			for (int k = 0; k < SHEET_CHART_KINDS; k++) {
+				const char *nm = sheet_chart_name(k);
+				int l = (int)strlen(nm);
+				if (!strncmp(p, nm, (size_t)l) && p[l] == ' ') { kind = k; p += l; break; }
+			}
+			if (kind < 0) return false;
+			while (*p == ' ') p++;
+			int r0, c0, r1, c1;
+			const char *e = NULL;
+			if (!sheet_parse_ref(p, &r0, &c0, &e) || *e != ':' || !sheet_parse_ref(e + 1, &r1, &c1, NULL))
+				return false;
+			s->chart.set = true;
+			s->chart.kind = (uint8_t)kind;
+			s->chart.r0 = (uint16_t)(r0 < r1 ? r0 : r1);
+			s->chart.r1 = (uint16_t)(r0 < r1 ? r1 : r0);
+			s->chart.c0 = (uint8_t)(c0 < c1 ? c0 : c1);
+			s->chart.c1 = (uint8_t)(c0 < c1 ? c1 : c0);
+			return true;
+		}
+
+		// "!f A1:B9 ,2" -- a number format on a range (0.0.7).
+		if ((*p == 'f' || *p == 'F') && (p[1] == ' ' || p[1] == '\t')) {
+			p += 2;
+			while (*p == ' ') p++;
+			int r0, c0, r1, c1, kind, dec;
+			const char *e = NULL;
+			if (!sheet_parse_ref(p, &r0, &c0, &e)) return false;
+			r1 = r0; c1 = c0;
+			if (*e == ':' && !sheet_parse_ref(e + 1, &r1, &c1, &e)) return false;
+			if (!sheet_parse_format(e, &kind, &dec)) return false;
+			bool mod = s->modified;
+			sheet_set_format(s, r0, c0, r1, c1, kind, dec);
+			s->modified = mod;
+			return true;
+		}
 
 		// "!w <col> <n>". Anything else is ignored rather than
 		// refused: a directive from a later version of the format

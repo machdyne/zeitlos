@@ -37,6 +37,7 @@
 
 int fs_open_read(const char *p) { (void)p; return -1; }
 int fs_open_write(const char *p) { (void)p; return -1; }
+int fs_write_file(char *p, char *b, int n) { (void)p; (void)b; (void)n; return 0; }
 int fs_read_chunk(int h, void *b, int n) { (void)h; (void)b; (void)n; return 0; }
 int fs_write_chunk(int h, const void *b, int n) { (void)h; (void)b; return n; }
 int fs_close_handle(int h) { (void)h; return 1; }
@@ -145,7 +146,7 @@ int main(int argc, char **argv) {
 	sel_row = 2;
 	sel_col = 1;
 
-	if (edit_mode) {
+	if (edit_mode == 1) {
 
 		// A formula comfortably longer than the bar, with the caret
 		// parked mid-string rather than at either end.
@@ -162,6 +163,30 @@ int main(int argc, char **argv) {
 		edit_caret = 18;
 
 	}
+
+	// 2: the / menu open; 3: the Insert submenu. The selection's
+	// sum, average and count show in the bar in the default mode.
+	if (edit_mode >= 4 && edit_mode <= 7) {
+		// a small table: quarters by region
+		sheet_init(&sh);
+		const char *hdr[] = { "Sales", "North", "South", "East" };
+		const char *q[] = { "Q1", "Q2", "Q3", "Q4", "Q5", "Q6" };
+		static const char *v[6][3] = { { "120", "80", "45" }, { "150", "95", "60" }, { "135", "120", "-20" },
+			{ "170", "110", "90" }, { "160", "130", "70" }, { "190", "140", "100" } };
+		for (int k = 0; k < 4; k++) sheet_set(&sh, 0, k, hdr[k]);
+		for (int r = 0; r < 6; r++) {
+			sheet_set(&sh, r + 1, 0, q[r]);
+			for (int k = 0; k < 3; k++) sheet_set(&sh, r + 1, k + 1, v[r][k]);
+		}
+		sh.chart.set = true;
+		sh.chart.kind = (uint8_t)(edit_mode - 4);
+		sh.chart.r0 = 0; sh.chart.r1 = 6; sh.chart.c0 = 0; sh.chart.c1 = edit_mode == 7 ? 1 : 3;
+		chart_mode = true;
+	}
+	if (edit_mode == 2) { menu = M_TOP; menu_hot = 2; }
+	if (edit_mode == 3) { menu = M_INSERT; menu_hot = 0; }
+
+	if (!chart_mode) sheet_set_format(&sh, 1, 3, 7, 3, SHEET_FMT_MONEY, 2);
 
 	scroll_to_cursor();
 	repaint();

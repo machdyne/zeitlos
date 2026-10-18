@@ -31,6 +31,7 @@
 
 int fs_open_read(const char *p) { (void)p; return -1; }
 int fs_open_write(const char *p) { (void)p; return -1; }
+int fs_write_file(char *p, char *b, int n) { (void)p; (void)b; (void)n; return 0; }
 int fs_read_chunk(int h, void *b, int n) { (void)h; (void)b; (void)n; return 0; }
 int fs_write_chunk(int h, const void *b, int n) { (void)h; (void)b; return n; }
 int fs_close_handle(int h) { (void)h; return 1; }

@@ -26,6 +26,129 @@ having room for its five icons.
 +-----------------------------------+
 ```
 
+## Using it
+
+**F1** opens this page, here.
+
+Move with the arrows, Tab, Enter, PageUp/PageDown, Home/End; type into
+the cell under the cursor -- a number, text, or a formula starting with
+`=`. Shift+arrows (or a drag) select a range. Everything works without
+a pointer.
+
+**/** opens the command line in the edit bar, as in VisiCalc and 1-2-3:
+
+```
+/ Insert Delete Number Width Sort Extend Undo Redo Goto Find Chart Help
+```
+
+The first letter (or the arrows and Enter) picks one; Esc backs out.
+Insert and Delete ask *Rows* or *Columns*, Sort *Ascending* or
+*Descending*, Extend *Down* or *Right*. To type text that starts with
+`/`, start it with `'` (`'/2` is the text `/2`).
+
+| key | does |
+|---|---|
+| arrows, Tab / Shift+Tab, Enter | move (right / left, down) |
+| Shift+arrows, mouse drag | select a range |
+| PageUp / PageDown, Home / End, Ctrl+Home | a screen; first / last column; A1 |
+| any printable character | starts a fresh entry, replacing the cell |
+| F2, or a click on the edit bar | edit the cell's contents |
+| Escape | cancel the entry |
+| Delete / Backspace | clear the selection |
+| Ctrl+Z / Ctrl+Y (Ctrl+Shift+Z) | undo / redo -- every change, as far back as memory allows |
+| Ctrl+C / Ctrl+X / Ctrl+V | copy / cut / paste -- formulas move with the paste |
+| Ctrl+D / Ctrl+R | fill the selection down / right from its first row / column |
+| Ctrl+1 | number format for the selection |
+| Ctrl+G | go to a cell |
+| Ctrl+F, F3 | find text or a value; find the next |
+| F10 | chart the selection (or show the sheet's chart) |
+| Alt+Left / Alt+Right | narrow / widen the column |
+| Ctrl+N / Ctrl+O / Ctrl+S | new / open / save |
+| F1 | this page |
+
+While typing, Up and Down **commit and move**, the way a spreadsheet
+does -- typing down a column should not need Enter between every cell.
+
+### The edit bar
+
+Shows the cell's reference and what it holds -- or, for a range, its
+**sum, average and count**: select a column of numbers and the total
+is there without a formula.
+
+### Formulas
+
+```
+=B2*C2              + - * /, ^ (power), parentheses
+=A1>100             comparisons = <> < > <= >= give 1 or 0
+=SUM(B2:B20)        a range
+=IF(C2=0,0,B2/C2)   the branch not taken is not evaluated
+=PMT(0.05/12,360,200000)  a 30-year loan: -1073.64 a month
+```
+
+| | |
+|---|---|
+| `SUM` `AVERAGE` (`AVG`) `MIN` `MAX` `COUNT` | of ranges and values; text and empty cells skipped |
+| `ABS` `INT` `ROUND(x,n)` `MOD(x,y)` `SQRT` `POWER(x,n)` | `INT` rounds down, `MOD` takes the divisor's sign |
+| `IF(c,a,b)` `AND` `OR` `NOT` `TRUE` `FALSE` | logic, as 1 and 0 |
+| `PMT(rate,n,pv[,fv])` `PV(rate,n,pmt[,fv])` `FV(rate,n,pmt[,pv])` `NPV(rate,values...)` | loans and savings; money paid out is negative |
+| `VLOOKUP(x,range,col[,0])` `INDEX(range,row[,col])` | a table's value: exact with 0, else the largest not above `x` |
+
+Numbers are kept to **eight decimal places** and up to 92 thousand
+million either way: a result past that is `#NUM`, never a wrong number.
+
+**References move when they are copied.** `=A1*2` pasted one row down
+becomes `=A2*2`; a `$` pins the part after it -- `$A$1` never moves,
+`$A1` keeps its column, `A$1` its row. Inserting and deleting rows and
+columns moves every reference that points past them; a reference to a
+deleted cell becomes `#REF!`.
+
+### Number formats
+
+Ctrl+1 (or /Number) formats the selection:
+
+| type | shows 1234.5 as |
+|---|---|
+| `G` | 1234.5 (general: as short as it can be -- the default) |
+| `F2` | 1234.50 |
+| `,2` | 1,234.50 |
+| `$2` | $1,234.50 |
+| `%1` | 123450.0% (for 0.125: 12.5%) |
+
+The digit is the number of decimals (0-8). A number too wide for its
+column shows `####` -- never a truncated number.
+
+### Charts
+
+Select a table and press **F10**: the first column, if it has text,
+names the categories; the first row, if it has text, names the series;
+every other column is a series (up to six). The chart takes the window.
+**B**ar, **S**tacked, **L**ine or **P**ie switches its kind; Esc goes
+back to the grid. The chart is saved with the sheet, and F10 with no
+selection shows it again -- after the numbers have changed, too.
+
+Series are told apart by **patterns** -- solid, hatching, grey, lines --
+and, in a line chart, by marker shapes, the way charts were drawn on a
+one-bit screen or a laser printer.
+
+### Undo
+
+Every change can be undone -- typing, pasting, clearing, filling,
+sorting, inserting and deleting rows and columns, formats and widths
+-- and redone. History is kept in the memory the machine can spare
+(512KB on most boards; 16KB on one without an arena) and the oldest
+steps go first when it fills; it is cleared when another file is
+opened.
+
+### Other formats
+
+`.csv` opens here; `.xlsx`, `.ods` and `.tsv` open and save through
+`convert` (below, and [convert.md](convert.md)).
+
+### Limits
+
+26 columns (A-Z) by 999 rows; 4,096 non-empty cells, 40KB of cell text
+in all, 95 characters a cell; 64 formatted ranges; one chart.
+
 ## The model is in its own file
 
 `sheet_core.c` holds cells, formulas, evaluation and the file format,
@@ -33,9 +156,9 @@ and contains no drawing, windows or messages. `sheet.c` is the window.
 
 ```
 cd sw/apps/sheet
-make test          # the model:      126 checks
+make test          # the model:      236 checks
 make test-layout   # the geometry: 12,817 checks
-make test-files    # the file paths:  111 checks
+make test-files    # files, and editing through the keys: 142 checks
 make render        # draws the panel to /tmp/sheet.pbm
 ```
 
@@ -61,10 +184,24 @@ z_fix_mul(a, b, dp, &out);
 z_fix_format(v, dp, places, out, cap);
 ```
 
-calc runs at 6 places against a 10-digit display; sheet runs at 4
-(`SHEET_DP`). A spreadsheet holds money and counts far more often than
-the result of dividing by three, and the two places traded away buy
-two more digits of integer range.
+calc runs at 6 places against a 10-digit display; sheet runs at 8
+(`SHEET_DP`). It ran at 4 until 0.0.7, for integer range -- and a
+monthly interest rate, 0.05/12, came out as 0.0042: a 30-year mortgage
+payment five dollars out. At eight places it is right to the cent.
+
+The range the four places bought was only ever needed because
+`z_fix_mul()` checks its double-scaled intermediate, not its result
+(at eight places it refuses 4,000 x 4,000). `sheet_core.c` multiplies
+with its own `fx_mul()`, which splits each operand at the decimal point
+and fails only when the *product* does not fit, and divides by long
+division; the range left, +-92 thousand million, is ample for the books
+this is for, and past it is `#NUM`.
+
+The financial functions and `^` are the one place doubles are used:
+`(1 + rate) ^ periods` and the `(g - 1) / rate` of an annuity magnify
+the last fixed-point digit into cents. They are computed in software
+double precision (a few KB of libgcc) and rounded back to eight places,
+like every other result.
 
 **Mixing precisions is the caller's problem.** Nothing records which
 `dp` a value was made at, so handing a 6-place value to a 4-place
@@ -94,15 +231,16 @@ have to understand.
 
 | | |
 |---|---|
-| `SHEET_MAX_CELLS` | 1024 non-empty cells (16 bytes each) |
-| `SHEET_ARENA` | 16KB of cell source text |
+| `SHEET_MAX_CELLS` | 4096 non-empty cells (16 bytes each) |
+| `SHEET_ARENA` | 40KB of cell source text |
 | `SHEET_SRC_MAX` | 96 bytes per cell |
+| `SHEET_MAX_FMTS` | 64 formatted ranges |
 
-`sizeof(sheet_t)` is 32,816 bytes — 16KB of cells at 16 bytes each,
-16KB of arena, and the column widths. The same order as `text`'s
-document buffer and line table. A full 26-column block is 39 rows deep at that
-cap; past it, an edit fails cleanly (`#FULL`, and a dialog) rather
-than losing data quietly. An existing cell can still be edited or
+`sizeof(sheet_t)` is about 107KB: 64KB of cells, 40KB of arena, the
+column widths, the formats and the chart. 0.0.6 had 1,024 cells and
+16KB -- 39 full rows, a demonstration rather than a ledger; 4,096 is
+800 rows of five columns. Past either limit an edit fails cleanly
+(`#FULL`, and a dialog) rather than losing data quietly. An existing cell can still be edited or
 cleared when the array is full, which is what makes a full sheet
 recoverable rather than stuck.
 
@@ -111,10 +249,10 @@ its old text rather than moving anything, and the arena is compacted
 when it fills. Compaction has to move live strings in ascending offset
 order or a string gets copied over one not yet moved — and cells are
 sorted by key, not offset, so the order is worked out with a
-stack-local index array and a shellsort. 2KB of a 16KB stack, taken at
-the top of a `sheet_set()` call and released immediately; the
-alternatives were a permanent 2KB of `.bss` for something that runs
-rarely, or a repeated minimum scan at 1024² comparisons.
+stack-local index array and a shellsort: 8KB at 4,096 cells, which is
+why the app asks for a 64KB stack (`APP_STACK`). The alternatives were
+a permanent 8KB of `.bss` for something that runs rarely, or a repeated
+minimum scan at 4096² comparisons.
 
 `make test` rewrites one cell 4,000 times specifically to force
 compaction, and checks the cells around it are undisturbed.
@@ -146,21 +284,18 @@ round-trips through an editor that strips it.
 
 ## Formulas
 
-```
-=1+2*3            operators + - * /, precedence, parentheses
-=-A1              unary minus
-=A1+B2            references, case-insensitive, $ accepted and ignored
-=SUM(A1:A13)      ranges, in function arguments
-=SUM(A1:A3,100,B1)  mixed ranges and values
-=SUM(A1:A9)/COUNT(A1:A9)   nesting
-```
+The grammar, lowest precedence first: comparisons (`= <> < > <= >=`,
+giving 1 or 0), `+ -`, `* /`, `^` (whole powers), unary `- +`, then
+numbers, references, `(...)`, `TRUE`/`FALSE`, `#REF!` and function
+calls. The functions are listed under "Using it".
 
-`SUM` `AVG` (or `AVERAGE`) `MIN` `MAX` `COUNT` `ABS` `INT` `ROUND(x,n)`.
+`IF` parses both branches -- a formula is checked whole -- but
+evaluates only the one taken: the other runs in a *skip* mode in which
+references are not followed and arithmetic errors do not count. That
+is what makes `=IF(B1=0,0,A1/B1)` a number rather than `#DIV0`.
 
-`$` is accepted and ignored rather than rejected: nothing here copies
-formulas between cells, so absolute and relative mean the same thing,
-and refusing to load a file over a distinction with no effect would be
-the worse answer. A two-letter column (`AA1`) is `#REF` — a reference
+`$` is meaningful since 0.0.7, because things now copy formulas
+(paste, fill, sort): see "Moving formulas" below. A two-letter column (`AA1`) is `#REF` — a reference
 to somewhere this grid does not have, which is a better answer than a
 syntax error in a confusing place.
 
@@ -220,9 +355,13 @@ an unrelated later evaluation wrong.
 
 ### Recalculation
 
-On demand, memoised. Any edit resets every cached value: a walk of the
-cell array, so it costs the number of cells that exist rather than the
-number that could.
+On demand, memoised. Any edit makes every cached value stale -- but
+without visiting the cells: each cached state carries the six-bit
+*generation* it was computed in, and an edit moves the sheet to the
+next one, so every older value reads as not yet computed. Only when the
+count wraps (once in 64 edits) are the cells walked. Before 0.0.7 every
+edit walked every cell, which made loading a file -- an edit per cell
+-- quadratic: 4,096 cells would have been 16 million steps.
 
 An **invariant worth knowing before changing anything in
 `sheet_core.c`**: evaluation never moves a cell. It writes the cached
@@ -256,9 +395,12 @@ quoting and no escaping anywhere, because a cell cannot contain a
 newline and the line always starts with a reference. An empty sheet is
 nine bytes.
 
-- `!` starts a directive. `!w <col> <n>` sets a column width; anything
+- `!` starts a directive. `!w <col> <n>` sets a column width;
+  `!f A1:B9 ,2` formats a range (0.0.7; later lines win); `!g bar
+  A1:D9` is the chart (0.0.7: `bar`, `stack`, `line`, `pie`). Anything
   else is ignored rather than refused, so a directive from a later
-  version costs an old build nothing but the line.
+  version costs an old build nothing but the line -- a 0.0.6 sheet app
+  reads a 0.0.7 file, without its formats and chart.
 - `#` starts a comment, and blank lines are fine.
 - Leading whitespace is skipped, and CRLF is tolerated without the
   `\r` reaching the cell.
@@ -290,6 +432,18 @@ verbatim, so a CSV that happens to contain `=SUM(A1:A9)` loads as a
 formula, which is what someone who typed that into a CSV by hand
 meant.
 
+### xlsx, ods, tsv
+
+Through `convert` ([convert.md](convert.md)). Opening one -- from the
+Open dialog or by double-clicking it in `files` -- converts it into a
+`.zss` in `/tmp` and opens that in a sheet of its own; its first
+**Save** asks where to keep it, starting in `/home`. **Save As** onto a
+name ending `.xlsx`, `.ods` or `.tsv` exports: the sheet is written to
+`/tmp` and converted, with `convert`'s window for progress and Cancel,
+and the document keeps its own name. Formulas the sheet evaluates
+survive both ways; others arrive as their values. The sheet's limits
+apply to what comes in: A-Z, 1-999.
+
 ### Both directions are streamed
 
 The writer takes an emit callback and the reader takes one line at a
@@ -297,38 +451,6 @@ time; neither ever holds more than a line. This is not a stylistic
 choice: `fs_mallocfile()` (`zfsapp.h`) allocates the file's size on
 the heap, and the heap here shares 16KB with the stack. A sheet is
 easily bigger than that.
-
-## Keyboard
-
-Everything works without a pointer.
-
-| | |
-|---|---|
-| arrows | move the cursor |
-| shift+arrows | extend the selection |
-| Tab / shift+Tab | right / left |
-| Enter | down |
-| PageUp / PageDown | a screen at a time |
-| mouse wheel | three rows a notch; the view moves, the cell cursor stays |
-| Home / End | first column / last used column |
-| Ctrl+Home | A1 |
-| any printable character | starts a fresh entry, replacing the cell |
-| `=` | starts a formula (it is just a printable character) |
-| F2 | edit the cell's existing contents |
-| Delete / Backspace | clear the selection |
-| Escape | cancel the entry in progress |
-| Alt+Left / Alt+Right | narrow / widen the current column |
-| Ctrl+C / Ctrl+X / Ctrl+V | copy / cut / paste |
-| Ctrl+N / Ctrl+O / Ctrl+S | new / open / save |
-
-While typing, Up and Down **commit and move**, the way a spreadsheet
-does — typing down a column should not need Enter between every cell.
-
-Alt+Left/Right for column width exists because there is no unmodified
-key spare: every printable character starts an entry. A mouse-only way
-to change a column would be a dead end on a machine with no pointer,
-and keyboard-only operation is first-class here (see
-`docs/window_manager.md`).
 
 ## Mouse
 
@@ -451,12 +573,78 @@ that size. The window cannot actually get there
 was worth fixing: an unreachable size that underflows is a bug waiting
 for the day the floor changes.
 
+## Moving formulas
+
+`sheet_rewrite()` is one tokenizer for every way a formula moves:
+
+- **copying** (paste, fill, sort) moves the relative parts of each
+  reference by the distance moved; `$` parts stay;
+- **inserting** rows or columns moves every reference at or past them,
+  absolute or not, since the cell it named has moved;
+- **deleting** turns a reference to a deleted cell into `#REF!`, and
+  clips a range that loses an end -- `SUM(A2:A9)` with rows 3-5 deleted
+  is `SUM(A2:A6)`; a range wholly deleted is `#REF!`.
+
+A reference is a letter, digits, and optional `$`s, not glued to a
+name: `LOG10(` and `1.5E3` are left alone. Format ranges and the
+chart's range move with the cells.
+
+Inserting refuses before it starts if it would push a non-empty cell
+off the grid. Deleting cannot fail.
+
+Copying within the sheet carries cells, not text: Ctrl+C keeps the
+range's cells in the app's memory as well as putting tab-separated
+text on the system clipboard, and Ctrl+V uses the cells -- formulas
+moved -- when the clipboard still holds exactly that text (a checksum
+says so); otherwise it pastes the text, from anywhere. A selection a
+whole multiple of what was copied is filled with copies.
+
+## Undo
+
+Two stacks of records -- undo and redo -- each record what a change
+overwrote: the **cells of a rectangle** (an edit, a paste, a fill, a
+sort, a clear), the **widths and formats** (a format, a width), or the
+**whole document** (inserting and deleting rows and columns, which move
+everything). Undoing a record first pushes what is there now onto the
+other stack, then puts the record back, so undo and redo are one
+operation in two directions. A rectangle is stored compactly -- each
+non-empty cell's position and text -- so typing into one cell costs a
+dozen bytes of history.
+
+The memory is one block, taken at start from the arena
+([kernel.md](kernel.md#arenas)) when the machine has 512KB (or 128KB)
+to give, otherwise 32KB of the app's own: half for undo, a quarter for
+redo, an eighth each for the copied cells and for scratch (a sort's).
+When a stack fills, its oldest records go: history gets shorter, an
+edit is never refused. A record larger than the whole stack (a
+structural change to a big sheet on a board without an arena) empties
+it instead -- that change is then not undoable, and no older one can be
+undone past it.
+
+## Charts
+
+`chart.c`, about 450 lines, draws from the chart's range and the cells'
+current values -- nothing is cached, so a chart always shows the
+numbers as they are. On a one-bit display, series are told apart the
+way they were on a Hercules card or a laser printer: an 8x8 **pattern**
+per series (solid, rising and falling hatch, grey, horizontal and
+vertical lines, cross-hatch, dots) for bars and wedges, outlined; a
+**marker** per series (filled and open squares, x, +, filled and open
+diamonds) on lines. A legend at the right shows each.
+
+Everything is drawn with the blitter -- pattern fills
+(`z_win_fill_pattern()`, new in `zwin.h`), boxes and lines -- so a bar
+chart is a few hundred operations. The axis gets a tidy 1-2-5 step and
+dotted rules. The pie is worked out row by row: each pixel's angle as an
+integer *pseudo-angle* (monotonic in the true angle, one division) is
+compared with where each wedge ends, and each run of one wedge on a row
+is one pattern fill. Sine and cosine, needed only for the wedges' edges,
+are a short series.
+
+`make render` with modes 4-7 draws each kind to look at.
+
 ## Not implemented
 
-No cell formatting (a number is shown as short as it can be, so `2.00`
-displays as `2`), no row insert/delete, no sort, no charts, no
-multiple sheets, no undo. Each wants a real design rather than a
-corner of this file.
-
-`ROUND(x, n)` is there for when a specific number of decimals actually
-matters in a cell.
+Multiple sheets, text results from formulas (`VLOOKUP` returns numbers;
+a text cell reads as 0), dates and times as such, named ranges,
+printing. Each wants a real design rather than a corner of this file.

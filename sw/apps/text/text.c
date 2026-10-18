@@ -126,16 +126,43 @@
 // cap still works. Cost is 8KB of .bss.
 #define MAX_LINES    4096
 
-static char buf[TEXT_MAX];
+// -- storage: a gap buffer, in .bss or in the arena --
+// docs/text_editor.md, "The document"
+//
+// The text is doc[0..gs) followed by doc[gs+gl..cap): the gap, all the
+// free space there is, sits between. It is always at the END OF A
+// PARAGRAPH -- just after a newline, or at the end of the document --
+// so no display line, no word and no character ever straddles it, and
+// anything that reads a line can take a pointer to it (P()). Typing
+// moves only the rest of its own paragraph, wherever that paragraph is
+// in the document, and the gap only moves when the edit is in another
+// paragraph.
+//
+// A document of up to TEXT_MAX bytes lives in sbuf, in .bss, as it
+// always has; a larger one moves to the app's arena (Z_SYS_ARENA,
+// docs/kernel.md "Arenas"), which is sized as the document grows. On a
+// board too small for arenas the limit is what it was.
+
+static char sbuf[TEXT_MAX];
+static char *doc = sbuf;
+static int cap = TEXT_MAX;		// bytes of storage for text
+static int gs, gl = TEXT_MAX;	// the gap: [gs, gs + gl) physically
 static int len;
-static int cursor;			// offset into buf, 0..len
+static int cursor;			// offset into the text, 0..len
 static bool modified;
+
+// The byte at text offset i, and a pointer to it that is good up to
+// the gap or the end of the storage, whichever comes first (PEND()).
+#define B(i)	(doc[(i) < gs ? (i) : (i) + gl])
+static inline char *P(int i) { return &doc[i < gs ? i : i + gl]; }
+static inline const char *PEND(int i) { return i < gs ? &doc[gs] : &doc[cap]; }
 
 // How the file on disk is encoded, so it is saved back the same way.
 // The buffer is UTF-8 either way (see the header comment).
 typedef enum {
 	ENC_UTF8 = 0,		// also every file that is plain ASCII
 	ENC_LATIN9,			// ISO 8859-15: every byte one character
+	ENC_CP1252,			// Windows-1252: Latin-1, plus punctuation in 0x80-0x9f
 } enc_t;
 
 static enc_t file_enc;
@@ -148,11 +175,16 @@ static bool file_bom;		// the file started with a UTF-8 byte order mark
 // it, so these two agree with each other and with the drawing code on
 // where every character starts.
 
+// A character never straddles the gap (it sits after a newline), so
+// decoding from P(off) up to PEND(off) sees the whole of it.
 static int next_off(int off) {
 	if (off >= len) return len;
-	const char *p = &buf[off];
-	z_utf8_next(&p, &buf[len]);
-	return (int)(p - buf);
+	if ((uint8_t)B(off) < 0x80) return off + 1;	// ASCII: the common case
+	const char *p = P(off), *q = p;
+	const char *end = PEND(off);
+	if (end > q + (len - off)) end = q + (len - off);
+	z_utf8_next(&p, end);
+	return off + (int)(p - q);
 }
 
 static int prev_off(int off) {
@@ -163,7 +195,7 @@ static int prev_off(int off) {
 	// sequence -- is a one-byte character.
 	int k = off - 1;
 	int lim = off - Z_UTF8_MAX > 0 ? off - Z_UTF8_MAX : 0;
-	while (k > lim && ((uint8_t)buf[k] & 0xC0) == 0x80) k--;
+	while (k > lim && ((uint8_t)B(k) & 0xC0) == 0x80) k--;
 	if (next_off(k) == off) return k;
 	return off - 1;
 }
@@ -173,8 +205,12 @@ static int prev_off(int off) {
 // none for a combining mark. A control character (a tab or NUL from a
 // loaded file) is drawn as a space, so it takes one.
 static int width_at(int off) {
-	const char *p = &buf[off];
-	uint32_t cp = z_utf8_next(&p, &buf[len]);
+	uint8_t c = (uint8_t)B(off);
+	if (c < 0x7F) return 1;		// ASCII, control characters included
+	const char *p = P(off);
+	const char *end = PEND(off);
+	if (end > p + (len - off)) end = p + (len - off);
+	uint32_t cp = z_utf8_next(&p, end);
 	int w = z_cp_width(cp);
 	return (w == 0 && cp < 0x20) ? 1 : w;
 }
@@ -248,13 +284,42 @@ static bool sel_clear(void) {
 	return had;
 }
 
-// Offset of the first byte of each display line. uint16_t is exactly
-// wide enough for a TEXT_MAX of 32768 and half the size of the
-// obvious alternative -- if TEXT_MAX ever goes to 64K this has to
-// become uint32_t, since an offset of 65536 would wrap to 0 here and
-// the failure would look like the document silently folding in half.
-static uint16_t line_off[MAX_LINES];
-static int nlines;
+// -- the line table: where each display line starts --
+// docs/text_editor.md, "Wrapping"
+//
+// A gap buffer too. Lines [0, lg) are stored as their offset; the free
+// slots [lg, lg + lgl) follow; and every line after them is stored as
+// its distance from the END of the text, len - offset. An edit happens
+// at the gap, so the lines after it -- every line below the caret --
+// need no change when the text before them grows or shrinks: their
+// distance from the end is what it was. A keystroke rewrites only its
+// own paragraph's lines, however long the document; before this table
+// had a gap, it shifted every line below by the length typed.
+//
+// In .bss the table is 16 bits wide, which holds both kinds of entry
+// for a TEXT_MAX of 32768; in the arena it is 32 bits and grows with
+// the document. `big` says which.
+static uint16_t sline[MAX_LINES];
+static int nlines;			// lcap - lgl, kept for everything that reads it
+
+static bool big;
+static uint32_t *bline;
+static int lcap = MAX_LINES;
+static int lg, lgl = MAX_LINES;	// the table's gap
+
+// Slot `p`, raw. Out of line: called from dozens of places, and the
+// two-way branch inlined at each would cost more flash than the call
+// costs time.
+static __attribute__((noinline)) int LT(int p) { return big ? (int)bline[p] : (int)sline[p]; }
+static __attribute__((noinline)) void LT_SET(int p, int v) {
+	if (big) bline[p] = (uint32_t)v;
+	else sline[p] = (uint16_t)v;
+}
+
+// Where display line `l` starts.
+static __attribute__((noinline)) int LO(int l) {
+	return l < lg ? LT(l) : len - LT(l + lgl);
+}
 
 static char filename[Z_FS_PATH_MAX];	// "" when the document has never been saved
 
@@ -340,29 +405,314 @@ static void undo_break(void) {
 	undo_next = -1;
 }
 
-static void edit_insert(int at, const char *s, int n) {
-	z_undo_record(&undo, Z_UNDO_INS, at, s, n, cursor, undo_group);
-	memmove(&buf[at + n], &buf[at], (size_t)(len - at));
-	memcpy(&buf[at], s, (size_t)n);
+// What edits cost, counted for the host test (tests/utf8.c, section
+// 18): bytes moved, bytes wrapped, line-table entries shifted.
+#ifdef TEXT_HOST_TEST
+static long cost_moved, cost_wrapped, cost_shifted;
+#define COST(v, n) ((v) += (n))
+#else
+#define COST(v, n) ((void)0)
+#endif
+
+// -- the gap --
+
+// Moves the gap to text offset `pos`. What moves is the text between
+// where it was and where it goes.
+static void gap_to(int pos) {
+	if (pos < gs) memmove(&doc[pos + gl], &doc[pos], (size_t)(gs - pos));
+	else if (pos > gs) memmove(&doc[gs], &doc[gs + gl], (size_t)(pos - gs));
+	COST(cost_moved, pos < gs ? gs - pos : pos - gs);
+	gs = pos;
+}
+
+// The text as one run, doc[0..len): for the few things that read the
+// whole document -- saving, undo, Replace All. Costs the text after the
+// gap, once; typing puts the gap back where it is wanted.
+static void doc_flat(void) {
+	gap_to(len);
+}
+
+// One past the newline that ends the paragraph containing `off`, or
+// the end of the text. `off` just after a newline is the start of the
+// NEXT paragraph, which is the one an edit there belongs to.
+static int para_end(int off) {
+	for (int i = off; i < len; i++)
+		if (B(i) == '\n') return i + 1;
+	return len;
+}
+
+// -- the arena: storage for a document past TEXT_MAX --
+//
+// [ text: cap bytes ][ line table: lcap words ]. Grown by doubling,
+// when an edit would not fit -- see doc_room(). A resize may move the
+// arena (zeitlos.h, z_arena_set()), so everything in it is held as an
+// offset and the two pointers are set again after every call.
+
+#define ARENA_TEXT_MIN	(2 * TEXT_MAX)
+
+static uint8_t *arena;			// base, while `big`
+
+static void arena_point(void *base) {
+	arena = (uint8_t *)base;
+	doc = (char *)arena;
+	bline = (uint32_t *)(arena + cap);
+}
+
+static int round4k(long n) { return (int)((n + 4095) & ~4095L); }
+
+// Grows the arena so the text has room for `ncap` bytes and the line
+// table for `nlcap` lines. False, changing nothing, if the machine has
+// not got it.
+static bool arena_resize(int ncap, int nlcap) {
+	ncap = round4k(ncap);
+	if (ncap < cap) ncap = cap;
+	if (nlcap < lcap) nlcap = lcap;
+	void *base;
+	uint32_t got;
+	if (z_arena_set((uint32_t)ncap + (uint32_t)nlcap * 4u, &base, &got) != Z_ARENA_OK)
+		return false;
+	uint8_t *a = (uint8_t *)base;
+	// The line table moves up first -- it sits above the text, and the
+	// text's tail is about to move into where it was.
+	if (ncap != cap) {
+		memmove(a + ncap, a + cap, (size_t)lcap * 4u);
+		memmove(a + ncap - (len - gs), a + cap - (len - gs), (size_t)(len - gs));
+		gl = ncap - len;
+		cap = ncap;
+	}
+	arena_point(a);
+	// More lines: the entries after the table's gap move to its new
+	// end, and the gap takes the slots added.
+	if (nlcap != lcap) {
+		int after = lcap - lg - lgl;
+		memmove(&bline[nlcap - after], &bline[lcap - after], (size_t)after * 4u);
+		lgl += nlcap - lcap;
+		lcap = nlcap;
+	}
+	return true;
+}
+
+// Moves a document that has outgrown sbuf into a new arena, sized for
+// `need` bytes of text and twice that to grow into.
+static bool go_big(int need) {
+	int ncap = round4k((long)need * 2 > ARENA_TEXT_MIN ? (long)need * 2 : ARENA_TEXT_MIN);
+	int nlcap = MAX_LINES * 2;
+	if (nlcap < ncap / 16) nlcap = ncap / 16;
+	void *base;
+	uint32_t got;
+	if (z_arena_set((uint32_t)ncap + (uint32_t)nlcap * 4u, &base, &got) != Z_ARENA_OK)
+		return false;
+	uint8_t *a = (uint8_t *)base;
+	memcpy(a, sbuf, (size_t)gs);
+	memcpy(a + ncap - (len - gs), sbuf + gs + gl, (size_t)(len - gs));
+	// The line table, its gap kept where it is: the entries before it
+	// at the start, the ones after it at the new end.
+	uint32_t *nl = (uint32_t *)(a + ncap);
+	int after = lcap - lg - lgl;
+	for (int l = 0; l < lg; l++) nl[l] = sline[l];
+	for (int i = 0; i < after; i++) nl[nlcap - after + i] = sline[lcap - after + i];
+	lgl = nlcap - lg - after;
+	cap = ncap;
+	lcap = nlcap;
+	gl = cap - len;
+	big = true;
+	arena_point(a);
+	printf("text: %d bytes: moved to an arena of %lu KB\n", need,
+		(unsigned long)(got / 1024));
+	return true;
+}
+
+// Back to sbuf, and the arena freed, when a document small enough to
+// live there is opened or started. Only between documents: the text
+// is empty at that point.
+static void go_small(void) {
+	if (!big) return;
+	z_arena_set(0, NULL, NULL);
+	big = false;
+	arena = NULL;
+	bline = NULL;
+	doc = sbuf;
+	cap = TEXT_MAX;
+	lcap = MAX_LINES;
+	lg = 0;
+	lgl = lcap;
+	nlines = 0;
+	gs = 0;
+	gl = cap - len;
+}
+
+// Room for `n` more bytes of text: true if there is, after growing the
+// arena if it had to. A document that would pass TEXT_MAX on a board
+// that has no arena to give is simply full, as it always was.
+static bool doc_room(int n) {
+	if (n <= gl) return true;
+	long need = (long)len + n;
+	if (need > 0x7FFFFFF) return false;
+	if (!big) return go_big((int)need);
+	long ncap = (long)cap * 2;
+	if (ncap < need + need / 4) ncap = need + need / 4;
+	return arena_resize((int)ncap, lcap) ||
+		arena_resize((int)(need + 4096), lcap);
+}
+
+// Room for `n` display lines in the line table.
+static bool lines_room(int n) {
+	if (n <= lcap) return true;
+	if (!big && len == 0) return false;		// no document to move
+	if (!big) {
+		if (!go_big(len + 1)) return false;
+		if (n <= lcap) return true;
+	}
+	int nl = lcap * 2;
+	if (nl < n) nl = n;
+	return arena_resize(cap, nl) || arena_resize(cap, n + 256);
+}
+
+// -- edits --
+//
+// The only two places the text changes (loading, undo and Replace All
+// aside, which re-lay out what they touch). Each moves the gap to the
+// end of the paragraph it edits, if it is not there already, and then
+// moves only the rest of that paragraph. Both assume the room is there
+// (doc_room()).
+//
+// Before each one the line table is brought up to date (layout_sync())
+// and its gap put just after the line the edit is in (lines_at_edit()),
+// so every line below is held as its distance from the end and stays
+// right through the edit. What changed is left for layout_sync(): the
+// text from dirty_lo to dirty_hi is new, and the table's entries past
+// it are already where they belong.
+
+static int dirty_lo = -1, dirty_hi;
+
+// Bumped by every change to the text, so autosave can tell whether
+// what it is writing is still the document (see "autosave" below).
+static uint32_t edit_gen, edit_tick;
+
+static void layout_sync(void);
+static int line_at(int off);
+
+// The table's gap to line `k`: entries crossing it change from offset
+// to distance-from-the-end, or back. What moves is the lines between
+// where it was and where it goes -- none when the edit is where the
+// last one was.
+static void lgap_to(int k) {
+	COST(cost_shifted, k < lg ? lg - k : k - lg);
+	while (lg > k) { lg--; LT_SET(lg + lgl, len - LT(lg)); }
+	while (lg < k) { LT_SET(lg, len - LT(lg + lgl)); lg++; }
+}
+
+// -- wrapping in the background -- docs/text_editor.md, "Wrapping" --
+//
+// Wrapping a whole large document -- on loading, a resize, a font
+// change, a Replace All -- is done a slice at a time between messages,
+// so the window comes up as soon as the screen's worth is wrapped and
+// keys and clicks are answered meanwhile. While it runs the table ends
+// at the FRONTIER, the start of the next line still to wrap; it is held
+// as its distance from the end, like the lines after the table's gap,
+// so edits before it leave it right. Anything that needs a line past it
+// wraps up to there first (line_at(), lines_through()).
+
+#define WRAP_SLICE	8192		// bytes wrapped per pass of the main loop
+
+static bool wrap_bg;
+static int wrap_rest;			// len - the frontier
+
+static int next_line_start(int off);
+static bool line_put(int off);
+
+// Wraps on from the frontier until a line past `upto` is in the table,
+// and at least `budget` bytes, or to the end.
+static void wrap_more(int upto, long budget) {
+	if (!wrap_bg) return;
+	lgap_to(nlines);
+	int off = len - wrap_rest;
+	long done = 0;
+	while (off >= 0 && (off <= upto || done < budget)) {
+		if (!line_put(off)) { off = -1; break; }	// the table is full
+		int nx = next_line_start(off);
+		done += (nx < 0 ? len : nx) - off;
+		off = nx;
+	}
+	if (off < 0) wrap_bg = false;
+	else wrap_rest = len - off;
+}
+
+// Display line `l` and the screen after it are in the table, or the
+// document has ended first.
+static void lines_through(int l) {
+	while (wrap_bg && nlines <= l + rows) wrap_more(-1, 2048);
+}
+
+// Before an edit of [a, b): the table up to date, wrapped past the end
+// of the paragraph b is in -- so the edit's own paragraph is all there
+// to wrap again -- and its gap just after a's line.
+static void lines_at_edit(int a, int b) {
+	layout_sync();
+	if (wrap_bg) wrap_more(para_end(b), 0);
+	lgap_to(line_at(a) + 1);
+}
+
+// Opens n bytes of room at `at` and returns where they are: the gap
+// goes to the end of the paragraph, and the rest of the paragraph moves
+// up. The bytes are the caller's to fill.
+static char *raw_insert(int at, int n) {
+	lines_at_edit(at, at);
+	gap_to(para_end(at));
+	memmove(&doc[at + n], &doc[at], (size_t)(gs - at));
+	COST(cost_moved, gs - at);
+	gs += n;
+	gl -= n;
 	len += n;
+	dirty_lo = at;
+	dirty_hi = at + n;
+	edit_gen++;
+	edit_tick = z_uptime_ticks();
+	return &doc[at];
+}
+
+// Removes [a, b). `rec` records it for undo first, while the bytes are
+// still there to be kept.
+static void raw_delete(int a, int b, bool rec) {
+	lines_at_edit(a, b);
+	gap_to(para_end(b));
+	if (rec) z_undo_record(&undo, Z_UNDO_DEL, a, &doc[a], b - a, cursor, undo_group);
+	memmove(&doc[a], &doc[b], (size_t)(gs - b));
+	COST(cost_moved, gs - b);
+	gs -= (b - a);
+	gl += (b - a);
+	len -= (b - a);
+	dirty_lo = a;
+	dirty_hi = a;
+	edit_gen++;
+	edit_tick = z_uptime_ticks();
+}
+
+static void edit_insert(int at, const char *s, int n) {
+	if (n <= 0) return;
+	z_undo_record(&undo, Z_UNDO_INS, at, s, n, cursor, undo_group);
+	memcpy(raw_insert(at, n), s, (size_t)n);
 }
 
 static void edit_delete(int a, int b) {
 	if (a < 0) a = 0;
 	if (b > len) b = len;
 	if (b <= a) return;
-	z_undo_record(&undo, Z_UNDO_DEL, a, &buf[a], b - a, cursor, undo_group);
-	memmove(&buf[a], &buf[b], (size_t)(len - b));
-	len -= (b - a);
+	raw_delete(a, b, true);
 }
 
-// Removes buf[a..b).
+// Removes text [a..b).
 static void buf_delete_range(int a, int b) {
 	edit_delete(a, b);
 }
 
 static void buf_clear(void) {
 	len = 0;
+	wrap_bg = false;
+	go_small();
+	gs = 0;
+	gl = cap;
+	dirty_lo = -1;
 	cursor = 0;
 	modified = false;
 	filename[0] = 0;
@@ -402,20 +752,29 @@ static int wrap_one(int start) {
 	// line of it breaks at the width, between any two characters,
 	// which is where Japanese is broken anyway.
 	while (i < len) {
-		char c = buf[i];
-		if (c == '\n') return i + 1;
+		char c = B(i);
+		if (c == '\n') { COST(cost_wrapped, i - start); return i + 1; }
+		// Printable ASCII, one column and one byte: most text, so
+		// it does not pay for a decode.
+		if ((uint8_t)c >= 0x20 && (uint8_t)c < 0x7F) {
+			if (count + 1 > cols) break;
+			if (c == ' ') last_space = i;
+			i++;
+			count++;
+			continue;
+		}
 		int w = width_at(i);
 		if (count + w > cols) break;
-		if (c == ' ') last_space = i;
 		i = next_off(i);
 		count += w;
 	}
 
+	COST(cost_wrapped, i - start);
 	if (i >= len) return len;
 
 	// The character that didn't fit is a newline -- it ends this line
 	// anyway, and there is nothing to wrap.
-	if (buf[i] == '\n') return i + 1;
+	if (B(i) == '\n') return i + 1;
 
 	// Break after the last space, if this line had one. Otherwise
 	// this is a single word longer than the whole line, and the only
@@ -435,62 +794,141 @@ static int wrap_one(int start) {
 	// than `cols`, which is fine and is why line_col_max() exists --
 	// trailing spaces are invisible, and draw_row() clamps what it
 	// actually paints.
-	while (b < len && buf[b] == ' ') b++;
-	if (b < len && buf[b] == '\n') b++;
+	while (b < len && B(b) == ' ') b++;
+	if (b < len && B(b) == '\n') b++;
 
 	return b;
 
 }
 
-// Rebuilds line_off[] from display line `from` onward. line_off[from]
+// Rebuilds line_off[] from display line `from` onward. LO(from)
 // must already be correct -- which is what makes this safe to call
 // with the line at the start of an edited paragraph: wrapping is
 // paragraph-local, so that offset cannot have moved.
+// The line start after `off` in the sequence wrap_from() produces, or
+// -1 after the last line. A document ending in a newline has one more,
+// empty, line after it -- that's where the cursor sits after pressing
+// Enter at the end, and without it there would be nowhere to put it.
+static int next_line_start(int off) {
+	if (off >= len) return -1;			// the trailing empty line was last
+	int next = wrap_one(off);
+	if (next >= len)
+		return (len > 0 && B(len - 1) == '\n') ? len : -1;
+	return next;
+}
+
+// Drops every line from `from` on: the gap then runs to the end.
+static void lines_cut(int from) {
+	if (from < lg) lg = from;
+	else lgap_to(from);
+	lgl = lcap - lg;
+	nlines = lg;
+}
+
+// One more line at the gap, as an offset. False if the table is full
+// and cannot grow, which only a document of nearly nothing but
+// newlines on a board with no arena reaches: the display then stops,
+// the way it always did at MAX_LINES.
+static bool line_put(int off) {
+	if (!lgl && !lines_room(lcap + 1)) return false;
+	LT_SET(lg++, off);
+	lgl--;
+	nlines = lcap - lgl;
+	return true;
+}
+
+// Rebuilds the table from display line `from` onward. LO(from) must
+// already be correct -- which is what makes this safe to call with the
+// line at the start of an edited paragraph: wrapping is paragraph-
+// local, so that offset cannot have moved.
 static void wrap_from(int from) {
 
 	if (from < 0) from = 0;
 	if (from > nlines) from = nlines;
 
-	int off = (from < nlines) ? (int)line_off[from] : 0;
+	int off = (from < nlines) ? LO(from) : 0;
 	if (from == 0) off = 0;
 
-	nlines = from;
+	// The rest is wrapped in the background: as far as the caret and
+	// a slice more now, the remainder between messages.
+	lines_cut(from);
+	wrap_bg = true;
+	wrap_rest = len - off;
+	wrap_more(cursor, WRAP_SLICE);
 
-	for (;;) {
+	dirty_lo = -1;
 
-		if (nlines >= MAX_LINES) break;
+}
 
-		line_off[nlines++] = (uint16_t)off;
+// After an edit, the line table again: only its own paragraph is
+// wrapped -- from that paragraph's first line to the first paragraph
+// start past the change, where the old table takes over. Those old
+// lines are after the table's gap (lines_at_edit() put it there), held
+// as their distance from the end, so they are already right: nothing
+// below the edit is touched at all.
+static void layout_sync(void) {
 
-		if (off >= len) break;			// this is the trailing empty line
+	if (dirty_lo < 0) return;
+	int hi = dirty_hi;
+	dirty_lo = -1;
 
-		int next = wrap_one(off);
+	// The paragraph the edit is in starts at or before the line before
+	// the gap. Every line before the gap is unchanged, as is the text
+	// in front of it.
+	int L0 = lg > 0 ? lg - 1 : 0;
+	while (L0 > 0 && LO(L0) > 0 && B(LO(L0) - 1) != '\n') L0--;
 
-		if (next >= len) {
-			// A document ending in a newline has one more, empty,
-			// line after this one -- that's where the cursor sits
-			// after pressing Enter at the end, and without it there
-			// would be nowhere to put it.
-			if (len > 0 && buf[len - 1] == '\n') { off = len; continue; }
-			break;
-		}
+	// The first line after the gap that starts a paragraph the edit
+	// did not touch: the newline before it lies at or past hi. Lines
+	// the edit removed are skipped on the way: they map below hi.
+	int K = lg;
+	while (K < nlines && (LO(K) - 1 < hi || B(LO(K) - 1) != '\n')) K++;
+	int stop = (K < nlines) ? LO(K) : wrap_bg ? len - wrap_rest : -2;
+	int off = LO(L0);
 
-		off = next;
-
+	// Out with lines [L0, K), in with the paragraph's lines as they
+	// now wrap -- written at the gap, which then sits after them.
+	int after = K - lg;				// old entries after the gap to drop
+	lgl += lg - L0;
+	lg = L0;
+	lgl += after;
+	nlines = lcap - lgl;
+	while (off >= 0 && off != stop) {
+		if (!line_put(off)) { off = -1; break; }
+		off = next_line_start(off);
 	}
+	// Wrapped to the end after all (only if the frontier was not a
+	// line start of the new text, which lines_at_edit() rules out):
+	// nothing is left for the background.
+	if (off < 0) wrap_bg = false;
 
 }
 
 static void rewrap_all(void) {
-	nlines = 0;
+	lines_cut(0);
 	wrap_from(0);
 }
+
+#ifdef TEXT_HOST_TEST
+// Is the table as layout_sync() leaves it the table a full rewrap
+// builds? For the host test (tests/utf8.c).
+static bool layout_check(void) {
+	while (wrap_bg) wrap_more(-1, 1L << 30);
+	int off = 0, l = 0;
+	while (off >= 0 && l < nlines) {
+		if (LO(l) != off) return false;
+		l++;
+		off = next_line_start(off);
+	}
+	return l == nlines && (off < 0 || lgl == 0);
+}
+#endif
 
 // One past the last byte of display line `l`.
 static int line_end(int l) {
 
 	if (l < 0 || l >= nlines) return len;
-	if (l + 1 < nlines) return (int)line_off[l + 1];
+	if (l + 1 < nlines) return LO(l + 1);
 
 	return len;
 
@@ -500,10 +938,10 @@ static int line_end(int l) {
 // part of the line but is not a glyph.
 static int line_draw_len(int l) {
 
-	int a = (int)line_off[l];
+	int a = LO(l);
 	int b = line_end(l);
 
-	if (b > a && buf[b - 1] == '\n') b--;
+	if (b > a && B(b - 1) == '\n') b--;
 
 	return b - a;
 
@@ -518,7 +956,7 @@ static int line_draw_len(int l) {
 // scrollbar.
 static int line_col_max(int l) {
 
-	int a = (int)line_off[l];
+	int a = LO(l);
 	int n = chars_between(a, a + line_draw_len(l));
 
 	return n > cols ? cols : n;
@@ -532,7 +970,7 @@ static int line_pos(int l, int col) {
 	if (col > maxcol) col = maxcol;
 	if (col < 0) col = 0;
 
-	int a = (int)line_off[l];
+	int a = LO(l);
 	return off_after(a, a + line_draw_len(l), col);
 
 }
@@ -543,11 +981,13 @@ static int line_pos(int l, int col) {
 // thousands.
 static int line_at(int off) {
 
+	if (wrap_bg && off >= len - wrap_rest) wrap_more(off, 0);
+
 	int lo = 0, hi = nlines - 1, res = 0;
 
 	while (lo <= hi) {
 		int mid = (lo + hi) / 2;
-		if ((int)line_off[mid] <= off) { res = mid; lo = mid + 1; }
+		if (LO(mid) <= off) { res = mid; lo = mid + 1; }
 		else hi = mid - 1;
 	}
 
@@ -563,7 +1003,7 @@ static int para_line_at(int off) {
 
 	int l = line_at(off);
 
-	while (l > 0 && line_off[l] > 0 && buf[line_off[l] - 1] != '\n') l--;
+	while (l > 0 && LO(l) > 0 && B(LO(l) - 1) != '\n') l--;
 
 	return l;
 
@@ -674,7 +1114,7 @@ static void draw_caret(void) {
 		return;
 	}
 
-	int col = chars_between((int)line_off[l], cursor);
+	int col = chars_between(LO(l), cursor);
 	if (col > cols) col = cols;
 
 	z_clip_t c;
@@ -774,7 +1214,7 @@ static void draw_row(int r) {
 	// n is BYTES, clamped to the first `cols` characters; nc is how
 	// many characters that is. Columns are characters (see the header
 	// comment), so every x position below comes from a character count.
-	int off = (int)line_off[l];
+	int off = LO(l);
 	int n = off_after(off, off + line_draw_len(l), cols) - off;
 	if (n <= 0) return;
 
@@ -789,7 +1229,7 @@ static void draw_row(int r) {
 	char tmp[Z_SCREEN_W / 5 * Z_UTF8_MAX + 1];
 	if (n > (int)sizeof(tmp) - 1) n = (int)sizeof(tmp) - 1;
 
-	memcpy(tmp, &buf[off], (size_t)n);
+	memcpy(tmp, P(off), (size_t)n);		// a line never straddles the gap
 	tmp[n] = 0;
 
 	// Tabs would advance by one glyph cell here, which disagrees with
@@ -1029,6 +1469,7 @@ static void scroll_repaint(void) {
 // into view.
 static void wheel_scroll(int notches) {
 
+	if (notches < 0) lines_through(top_line - 3 * notches);
 	int max = nlines - rows;
 	int t = top_line - 3 * notches;
 
@@ -1105,7 +1546,8 @@ static void build_title(char *t, int cap, const char *path, bool star) {
 	// saved in, and the one thing about a file that is otherwise
 	// invisible. UTF-8 -- every new document -- says nothing. The
 	// name is cut, at a character boundary, to leave room for it.
-	const char *enc = (file_enc == ENC_LATIN9) ? " (Latin-9)" : "";
+	const char *enc = (file_enc == ENC_LATIN9) ? " (Latin-9)" :
+		(file_enc == ENC_CP1252) ? " (Windows-1252)" : "";
 	int room = cap - (int)strlen(enc);
 	if (room < 2) room = cap;
 
@@ -1185,21 +1627,52 @@ static void remember_dir(const char *path) {
 
 // -- encodings -- docs/text_editor.md, "Encodings" --
 //
-// In a Latin-9 file every byte is a character, including 0x80-0x9f,
-// which ISO 8859-15 leaves as C1 control codes. Those are kept as the
-// codepoints of the same value (U+0080-U+009F) so that ANY file read
-// as Latin-9 is written back byte for byte, whatever it contains.
+// Two single-byte encodings, in which every byte is a character:
+//
+// Latin-9 (ISO 8859-15) leaves 0x80-0x9f as C1 control codes. Those are
+// kept as the codepoints of the same value (U+0080-U+009F) so that ANY
+// file read as Latin-9 is written back byte for byte.
+//
+// Windows-1252 is what Windows Notepad and Word's "plain text" wrote
+// for decades: Latin-1 from 0xa0, and curly quotes, dashes, the euro
+// and a few letters in 0x80-0x9f. The five bytes it leaves undefined
+// are kept as U+0081 and so on, for the same round trip.
 
-static uint32_t l9_byte_to_cp(uint8_t b) {
-	return (b >= 0x80 && b < 0xA0) ? b : z_l9_to_cp(b);
+static const uint16_t cp1252_hi[32] = {
+	0x20AC, 0,      0x201A, 0x0192, 0x201E, 0x2026, 0x2020, 0x2021,
+	0x02C6, 0x2030, 0x0160, 0x2039, 0x0152, 0,      0x017D, 0,
+	0,      0x2018, 0x2019, 0x201C, 0x201D, 0x2022, 0x2013, 0x2014,
+	0x02DC, 0x2122, 0x0161, 0x203A, 0x0153, 0,      0x017E, 0x0178,
+};
+
+// The codepoint for byte b in the file's single-byte encoding.
+static uint32_t sb_byte_to_cp(uint8_t b) {
+	if (b >= 0x80 && b < 0xA0) {
+		if (file_enc == ENC_CP1252 && cp1252_hi[b - 0x80]) return cp1252_hi[b - 0x80];
+		return b;
+	}
+	return (file_enc == ENC_CP1252) ? b : z_l9_to_cp(b);
 }
 
-// The Latin-9 byte for cp, or -1 if there is none.
-static int l9_cp_to_byte(uint32_t cp) {
-	if (cp >= 0x80 && cp < 0xA0) return (int)cp;
+// The byte for cp in the file's single-byte encoding, or -1 if it has
+// none.
+static int sb_cp_to_byte(uint32_t cp) {
 	if (cp == 0) return 0;
+	if (file_enc == ENC_CP1252) {
+		if (cp < 0x80) return (int)cp;
+		if (cp < 0xA0) return cp1252_hi[cp - 0x80] ? -1 : (int)cp;
+		if (cp <= 0xFF) return (int)cp;
+		for (int i = 0; i < 32; i++)
+			if (cp1252_hi[i] == cp) return 0x80 + i;
+		return -1;
+	}
+	if (cp >= 0x80 && cp < 0xA0) return (int)cp;
 	uint8_t b = z_cp_to_l9(cp);
 	return b ? b : -1;
+}
+
+static const char *enc_name(void) {
+	return file_enc == ENC_CP1252 ? "Windows-1252" : "Latin-9";
 }
 
 // How to read these bytes. Plain ASCII is UTF-8. Otherwise count the
@@ -1209,34 +1682,45 @@ static int l9_cp_to_byte(uint32_t cp) {
 // lone byte 0xE4, which cannot start a UTF-8 character before a
 // letter). A UTF-8 file with a stray bad byte or two stays UTF-8 and
 // keeps those bytes as they are.
+//
+// A single-byte file is Windows-1252 if it has any byte in 0x80-0x9f
+// that Windows-1252 gives a character to -- a curly quote, a dash, the
+// euro. In Latin-9 those bytes are control codes nobody writes into a
+// text file, so their presence is the tell; without them the two read
+// the same except for eight letters, and Latin-9 is kept.
 static enc_t detect_enc(const char *b, int n) {
 
 	int good = 0, bad = 0;
+	bool c1 = false;
 	const char *p = b, *end = b + n;
 
 	while (p < end) {
-		if ((uint8_t)*p < 0x80) { p++; continue; }
+		uint8_t c = (uint8_t)*p;
+		if (c < 0x80) { p++; continue; }
+		if (c < 0xA0 && cp1252_hi[c - 0x80]) c1 = true;
 		const char *q = p;
 		z_utf8_next(&p, end);
 		if (p - q == 1) bad++;
 		else good++;
 	}
 
-	return bad > good ? ENC_LATIN9 : ENC_UTF8;
+	if (bad <= good) return ENC_UTF8;
+	return c1 ? ENC_CP1252 : ENC_LATIN9;
 
 }
 
-// Converts the Latin-9 bytes in buf[0..len) to UTF-8 in place. Returns
-// false, changing nothing, if the result would not fit TEXT_MAX --
-// every accented letter doubles.
-static bool latin9_to_utf8_in_place(void) {
+// Converts the single-byte text in doc[0..len) (file_enc; the gap at
+// the end, as loading leaves it) to UTF-8 in place. Returns false,
+// changing nothing, if the result would not fit -- every accented
+// letter doubles, and past TEXT_MAX that needs an arena.
+static bool sb_to_utf8_in_place(void) {
 
 	int out = 0;
 	for (int i = 0; i < len; i++) {
 		char u[Z_UTF8_MAX];
-		out += z_utf8_put(l9_byte_to_cp((uint8_t)buf[i]), u);
+		out += z_utf8_put(sb_byte_to_cp((uint8_t)doc[i]), u);
 	}
-	if (out > TEXT_MAX) return false;
+	if (out > cap && !doc_room(out - len)) return false;
 
 	// Backwards, so the growing output never overtakes the input still
 	// to be read: the write position is always at or after the read
@@ -1244,25 +1728,29 @@ static bool latin9_to_utf8_in_place(void) {
 	int j = out;
 	for (int i = len - 1; i >= 0; i--) {
 		char u[Z_UTF8_MAX];
-		int k = z_utf8_put(l9_byte_to_cp((uint8_t)buf[i]), u);
+		int k = z_utf8_put(sb_byte_to_cp((uint8_t)doc[i]), u);
 		j -= k;
-		memcpy(&buf[j], u, (size_t)k);
+		memcpy(&doc[j], u, (size_t)k);
 	}
 
 	len = out;
+	gs = len;
+	gl = cap - len;
 	return true;
 
 }
 
-// Characters in the document that Latin-9 has no byte for.
-static int latin9_unsavable(void) {
+// Characters in the document that the file's single-byte encoding has
+// no byte for.
+static int sb_unsavable(void) {
 
 	int lost = 0;
-	const char *p = buf, *end = buf + len;
+	doc_flat();
+	const char *p = doc, *end = doc + len;
 
 	while (p < end) {
 		uint32_t cp = z_utf8_next(&p, end);
-		if (l9_cp_to_byte(cp) < 0) lost++;
+		if (sb_cp_to_byte(cp) < 0) lost++;
 	}
 
 	return lost;
@@ -1282,13 +1770,28 @@ static bool write_document(const char *path) {
 
 	bool ok = true;
 
+	// In one run, so the pieces below are plain slices of it.
+	doc_flat();
+
 	if (file_enc == ENC_UTF8) {
 
 		if (file_bom && fs_write_chunk(h, "\xEF\xBB\xBF", 3) != 3) ok = false;
 
 		for (int i = 0; ok && i < len; ) {
 			int n = len - i > 4096 ? 4096 : len - i;
-			if (fs_write_chunk(h, &buf[i], n) != n) ok = false;
+			// From a buffer of our own when the document is in the
+			// arena: what goes to fs travels as a message, and a
+			// message carries only memory in the sender's own block
+			// (zproc.h, Z_SYS_ARENA). Read straight from the arena,
+			// it would be refused.
+			const char *src = &doc[i];
+			char stage[4096];
+			if (big) {
+				if (n > (int)sizeof(stage)) n = (int)sizeof(stage);
+				memcpy(stage, src, (size_t)n);
+				src = stage;
+			}
+			if (fs_write_chunk(h, src, n) != n) ok = false;
 			i += n;
 		}
 
@@ -1296,10 +1799,10 @@ static bool write_document(const char *path) {
 
 		char out[256];
 		int o = 0;
-		const char *p = buf, *end = buf + len;
+		const char *p = doc, *end = doc + len;
 
 		while (ok && p < end) {
-			int b = l9_cp_to_byte(z_utf8_next(&p, end));
+			int b = sb_cp_to_byte(z_utf8_next(&p, end));
 			out[o++] = (char)(b < 0 ? '?' : b);
 			if (o == (int)sizeof(out) || p >= end) {
 				if (fs_write_chunk(h, out, o) != o) ok = false;
@@ -1315,19 +1818,190 @@ static bool write_document(const char *path) {
 }
 
 
+// -- autosave -- docs/text_editor.md, "Autosave" --
+//
+// Two seconds after the last edit, a copy of the document goes to the
+// RAM disk -- /ram, never the card: writing to the card at moments the
+// person did not choose is how a hard power-off corrupts it -- written
+// AUTOSAVE_CHUNK bytes per pass of the main loop so that typing
+// is never held up by it -- an edit in the middle abandons the copy,
+// and it starts again at the next pause. It is written as
+// T<hash>.NEW and renamed over T<hash>.SAV only when complete, so a
+// .SAV is always a whole document. T<hash>.INF beside it says which
+// file it is a copy of, and in what encoding that file is saved.
+//
+// Saving, or choosing not to save, deletes the copy. If text ends any
+// other way -- a crash, a kill -- the copy is still there, and opening
+// the file offers it back (autosave_offer()). The RAM disk does not
+// survive a reboot, and on a board with none there is no autosave.
+
+#define AUTOSAVE_IDLE	(2 * Z_TICK_HZ)
+#define AUTOSAVE_CHUNK	4096
+
+static int as_h = -1, as_pos;
+static uint32_t as_gen, as_done_gen;
+static int8_t as_ram = -1;		// is there a RAM disk? -1: not asked yet
+
+static bool as_have_ram(void) {
+	if (as_ram < 0) {
+		z_fs_info_t fi;
+		as_ram = fs_stat(Z_DIR_RAM, &fi) ? 1 : 0;
+	}
+	return as_ram > 0;
+}
+
+// /ram/T<7 hex digits>.<ext>: 8.3, from an FNV-1a hash of the path ("" for
+// a document never saved).
+static void as_name(char *out, int cap, const char *path, const char *ext) {
+	uint32_t h = 2166136261u;
+	for (const char *p = path; *p; p++) h = (h ^ (uint8_t)*p) * 16777619u;
+	snprintf(out, (size_t)cap, Z_DIR_RAM "/T%07lX.%s", (unsigned long)(h & 0x0FFFFFFFu), ext);
+}
+
+static void as_abort(void) {
+	char n[40];
+	if (as_h >= 0) { fs_close_handle(as_h); as_h = -1; }
+	as_name(n, sizeof(n), filename, "NEW");
+	fs_unlink(n);
+}
+
+// The document is saved, or its changes are being thrown away: the
+// copy goes, and nothing is written until the next edit.
+static void autosave_discard(void) {
+	char n[40];
+	as_done_gen = edit_gen;
+	if (!as_have_ram()) return;
+	as_abort();
+	as_name(n, sizeof(n), filename, "SAV");
+	fs_unlink(n);
+	as_name(n, sizeof(n), filename, "INF");
+	fs_unlink(n);
+	as_done_gen = edit_gen;
+}
+
+// One step: start a copy after the pause, write a piece of it, or
+// finish it. True while a copy is being written, so the main loop
+// comes straight back rather than waiting.
+static bool autosave_step(void) {
+
+	char n[40], m[40];
+
+	if (as_h >= 0 && as_gen != edit_gen) as_abort();	// edited meanwhile
+
+	if (as_h < 0) {
+		if (!modified || edit_gen == as_done_gen ||
+			z_uptime_ticks() - edit_tick < AUTOSAVE_IDLE) return false;
+		if (!as_have_ram()) { as_done_gen = edit_gen; return false; }
+		as_name(n, sizeof(n), filename, "NEW");
+		if ((as_h = fs_open_write(n)) < 0) {
+			as_done_gen = edit_gen;			// cannot write it: not until the next edit
+			return false;
+		}
+		as_gen = edit_gen;
+		as_pos = 0;
+		return true;
+	}
+
+	if (as_pos < len) {
+		// A piece of the text, never across the gap, through a buffer
+		// of our own: a message carries only memory in our block.
+		char stage[AUTOSAVE_CHUNK];
+		int k = len - as_pos;
+		if (k > AUTOSAVE_CHUNK) k = AUTOSAVE_CHUNK;
+		if (as_pos < gs && as_pos + k > gs) k = gs - as_pos;
+		memcpy(stage, P(as_pos), (size_t)k);
+		if (fs_write_chunk(as_h, stage, k) != k) {
+			as_abort();
+			as_done_gen = edit_gen;			// the RAM disk is full: wait for the next edit
+			return false;
+		}
+		as_pos += k;
+		return true;
+	}
+
+	// Complete: in place of the last copy, with its note.
+	fs_close_handle(as_h);
+	as_h = -1;
+	as_name(n, sizeof(n), filename, "SAV");
+	as_name(m, sizeof(m), filename, "NEW");
+	fs_unlink(n);
+	if (!fs_rename(m, n, NULL)) { fs_unlink(m); as_done_gen = edit_gen; return false; }
+	as_name(n, sizeof(n), filename, "INF");
+	{
+		char inf[Z_FS_PATH_MAX + 16];
+		int k = snprintf(inf, sizeof(inf), "%s\n%d %d\n", filename, (int)file_enc, (int)file_bom);
+		fs_write_file(n, inf, k);
+	}
+	as_done_gen = as_gen;
+	printf("text: autosaved %d bytes\n", len);
+	return false;
+
+}
+
+static bool load_file(const char *path);
+static void update_title(void);
+
+// After a file is opened: if a copy of it from a session that did not
+// end tidily is in /tmp, offer it. Yes puts it in the document, still
+// unsaved, still belonging to the file and its encoding; No deletes it.
+static void autosave_offer(void) {
+
+	char sav[40], inf[40], note[Z_FS_PATH_MAX + 16];
+	if (!as_have_ram()) return;
+	as_name(sav, sizeof(sav), filename, "SAV");
+	as_name(inf, sizeof(inf), filename, "INF");
+
+	int n = fs_read_file(inf, note, (int)sizeof(note) - 1);
+	if (n <= 0) return;
+	note[n] = 0;
+	char *nl = strchr(note, '\n');
+	if (!nl) return;
+	*nl = 0;
+	if (strcmp(note, filename)) return;			// a hash that collided
+	// "<enc> <bom>": two digits, read without sscanf, which would bring
+	// newlib's scanf into the link.
+	int enc = (nl[1] >= '0' && nl[1] <= '2') ? nl[1] - '0' : 0;
+	int bom = nl[1] && nl[3] == '1';
+	{
+		int h = fs_open_read(sav);
+		if (h < 0) return;
+		fs_close_handle(h);
+	}
+
+	int r = z_dialog_confirm(&dlg_ctx, "Recover",
+		"Unsaved changes from a\nsession that did not end\nwere kept. Recover them?",
+		Z_DIALOG_YES_NO);
+	if (r != Z_DIALOG_YES) { autosave_discard(); return; }
+
+	char keep[Z_FS_PATH_MAX];
+	snprintf(keep, sizeof(keep), "%s", filename);
+	if (!load_file(sav)) return;
+	snprintf(filename, sizeof(filename), "%s", keep);
+	if (keep[0]) remember_dir(keep);
+	file_enc = (enc_t)enc;
+	file_bom = bom != 0;
+	z_undo_saved(&undo);
+	undo.saved = UINT32_MAX;				// not what is on disk
+	modified = false;
+	set_modified(true);
+	as_done_gen = edit_gen;					// it is in /tmp already
+	update_title();
+
+}
+
 static bool do_save_to(const char *path) {
 
-	// A Latin-9 file that has gained characters Latin-9 cannot hold:
-	// ask, rather than quietly turning them into question marks. Yes
-	// switches the file to UTF-8, which holds everything; No writes
-	// Latin-9 anyway, with '?' in their place.
-	if (file_enc == ENC_LATIN9) {
-		int lost = latin9_unsavable();
+	// A single-byte file that has gained characters its encoding cannot
+	// hold: ask, rather than quietly turning them into question marks.
+	// Yes switches the file to UTF-8, which holds everything; No writes
+	// the old encoding anyway, with '?' in their place.
+	if (file_enc != ENC_UTF8) {
+		int lost = sb_unsavable();
 		if (lost) {
-			char msg[96];
+			char msg[112];
 			snprintf(msg, sizeof(msg),
-				"%d character%s cannot be saved\nas Latin-9. Save as UTF-8\ninstead?",
-				lost, lost == 1 ? "" : "s");
+				"%d character%s cannot be saved\nas %s. Save as UTF-8\ninstead?",
+				lost, lost == 1 ? "" : "s", enc_name());
 			int r = z_dialog_confirm(&dlg_ctx, "Encoding", msg, Z_DIALOG_YES_NO_CANCEL);
 			if (r == Z_DIALOG_CANCEL) return false;
 			if (r == Z_DIALOG_YES) file_enc = ENC_UTF8;
@@ -1343,6 +2017,10 @@ static bool do_save_to(const char *path) {
 		return false;
 	}
 
+	// The copy in /tmp is of the document under its old name, which
+	// is about to change if this is a Save As.
+	autosave_discard();
+
 	if (path != filename) {
 		int i = 0;
 		for (; path[i] && i < (int)sizeof(filename) - 1; i++)
@@ -1352,12 +2030,54 @@ static bool do_save_to(const char *path) {
 
 	remember_dir(filename);
 	set_modified(false);
+	as_done_gen = edit_gen;		// on disk now: nothing to keep a copy of
 	z_undo_saved(&undo);		// undoing back to here is "unmodified" again
 	undo_break();
 	update_title();
 
 	return true;
 
+}
+
+// Save As onto another system's format -- report.docx, notes.odt,
+// .rtf, .html: the document is written to /tmp as it is (Markdown if it
+// is a .md, plain text otherwise) and handed to convert, whose own
+// window shows the progress, Cancel and any error (docs/convert.md).
+// The document itself keeps its name and its unsaved state: an export
+// is a copy, not a save.
+// The extension of `path`, lower-cased into `out` (empty if none).
+static void ext_of(const char *path, char *out) {
+	const char *e = NULL;
+	for (const char *p = path; *p; p++) if (*p == '.') e = p + 1; else if (*p == '/') e = NULL;
+	int n = 0;
+	if (e) for (; e[n] && n < 5; n++) out[n] = (char)(e[n] | 0x20);
+	out[n] = 0;
+}
+
+static bool export_ext(const char *path) {
+	char e[6];
+	ext_of(path, e);
+	return !strcmp(e, "docx") || !strcmp(e, "odt") || !strcmp(e, "rtf") ||
+		!strcmp(e, "html") || !strcmp(e, "htm");
+}
+
+static bool do_export(const char *path) {
+	char job[Z_FS_PATH_MAX + 80], e[6];
+	ext_of(filename, e);
+	const char *tmp = !strcmp(e, "md") ? Z_DIR_TMP "/text-export.md" : Z_DIR_TMP "/text-export.txt";
+	enc_t enc = file_enc;
+	file_enc = ENC_UTF8;			// what convert reads best
+	bool ok = write_document(tmp);
+	file_enc = enc;
+	int n = snprintf(job, sizeof(job), "in=%s\nout=%s\nui=1\n", tmp, path);
+	if (ok && n > 0 && n < (int)sizeof(job) &&
+		fs_write_file(Z_DIR_TMP "/text-export.job", job, n) == n) {
+		z_launch_arg_set("-j " Z_DIR_TMP "/text-export.job");
+		if (z_proc_run("convert")) return true;
+	}
+	z_dialog_confirm(&dlg_ctx, "Export", ok ? "convert could not\nbe started." :
+		"Could not write the\ncopy to convert.", Z_DIALOG_OK_CANCEL);
+	return false;
 }
 
 // Returns false if the user cancelled.
@@ -1374,6 +2094,25 @@ static bool do_save_as(void) {
 	if (!z_dialog_save(&dlg_ctx, last_dir, suggest, path, sizeof(path)))
 		return false;
 
+	// Another file of that name: ask. The save dialog leaves this to
+	// the caller (zdialog.h), and Save As is where it matters -- the
+	// first save of a new document, or Ctrl+Shift+S onto a name that
+	// is already taken.
+	if (strcmp(path, filename)) {
+		int h = fs_open_read(path);
+		if (h >= 0) {
+			fs_close_handle(h);
+			char msg[112];
+			const char *base = path;
+			for (const char *q = path; *q; q++) if (*q == '/') base = q + 1;
+			snprintf(msg, sizeof(msg), "%.40s already exists.\nReplace it?", base);
+			if (z_dialog_confirm(&dlg_ctx, "Save As", msg, Z_DIALOG_YES_NO) != Z_DIALOG_YES)
+				return false;
+		}
+	}
+
+	if (export_ext(path)) return do_export(path);
+
 	return do_save_to(path);
 
 }
@@ -1381,6 +2120,14 @@ static bool do_save_as(void) {
 static bool do_save(void) {
 
 	if (!filename[0]) return do_save_as();
+
+	// A file in /tmp is gone at the next boot -- most often a document
+	// convert made from another system's format and opened here
+	// (docs/convert.md). Its first save asks where, starting at /home.
+	if (!strncmp(filename, Z_DIR_TMP "/", sizeof(Z_DIR_TMP))) {
+		strcpy(last_dir, Z_DIR_HOME);
+		return do_save_as();
+	}
 
 	return do_save_to(filename);
 
@@ -1397,7 +2144,7 @@ static bool confirm_discard(void) {
 		"Save changes before\ncontinuing?", Z_DIALOG_YES_NO_CANCEL);
 
 	if (r == Z_DIALOG_CANCEL) return false;
-	if (r == Z_DIALOG_NO) return true;
+	if (r == Z_DIALOG_NO) { autosave_discard(); return true; }
 
 	// Yes -- and if the save itself is cancelled or fails, the whole
 	// operation is off. Silently discarding after a failed save would
@@ -1432,13 +2179,6 @@ static bool load_file(const char *path) {
 
 	int size = fs_size((char *)path);
 
-	if (size > TEXT_MAX) {
-		z_dialog_confirm(&dlg_ctx, "Too large",
-			"That file is larger than\nthis editor can hold.",
-			Z_DIALOG_OK_CANCEL);
-		return false;
-	}
-
 	// Read straight into our own buffer rather than through
 	// fs_mallocfile(), which would allocate a second copy of the
 	// whole file out of a heap that is 16KB shared with the stack
@@ -1454,12 +2194,38 @@ static bool load_file(const char *path) {
 
 	buf_clear();
 
+	// Past TEXT_MAX the document goes to the arena, sized for the file
+	// (doc_room()); where there is no arena to be had, it is as it
+	// always was: too large.
+	if (size > cap && !doc_room(size)) {
+		fs_close_handle(h);
+		z_dialog_confirm(&dlg_ctx, "Too large",
+			"That file is larger than\nthis editor can hold on\nthis machine.",
+			Z_DIALOG_OK_CANCEL);
+		return false;
+	}
+
+	// The gap stays at the end while the file comes in. Into the arena
+	// through a buffer of our own: fs writes into a client's block
+	// through the grant window, and the arena is not in it.
 	for (;;) {
-		int n = fs_read_chunk(h, &buf[len], TEXT_MAX - len);
+		int n;
+		if (big) {
+			char stage[4096];
+			int want = cap - len < (int)sizeof(stage) ? cap - len : (int)sizeof(stage);
+			if (want <= 0 && !doc_room(4096)) break;
+			if (want <= 0) want = cap - len < (int)sizeof(stage) ? cap - len : (int)sizeof(stage);
+			n = fs_read_chunk(h, stage, want);
+			if (n > 0) memcpy(&doc[len], stage, (size_t)n);
+		} else {
+			if (len >= cap) break;
+			n = fs_read_chunk(h, &doc[len], cap - len);
+		}
 		if (n <= 0) break;
 		len += n;
-		if (len >= TEXT_MAX) break;
 	}
+	gs = len;
+	gl = cap - len;
 
 	fs_close_handle(h);
 
@@ -1469,8 +2235,8 @@ static bool load_file(const char *path) {
 	{
 		int w = 0;
 		for (int r = 0; r < len; r++) {
-			if (buf[r] == '\r' && r + 1 < len && buf[r + 1] == '\n') continue;
-			buf[w++] = buf[r];
+			if (doc[r] == '\r' && r + 1 < len && doc[r + 1] == '\n') continue;
+			doc[w++] = doc[r];
 		}
 		len = w;
 	}
@@ -1478,16 +2244,18 @@ static bool load_file(const char *path) {
 	// The encoding (see detect_enc()). A UTF-8 byte order mark is
 	// taken off -- it is not text, and would sit in front of the first
 	// character as a box -- and put back on save.
-	if (len >= 3 && (uint8_t)buf[0] == 0xEF && (uint8_t)buf[1] == 0xBB &&
-	    (uint8_t)buf[2] == 0xBF) {
-		memmove(buf, buf + 3, (size_t)(len - 3));
+	if (len >= 3 && (uint8_t)doc[0] == 0xEF && (uint8_t)doc[1] == 0xBB &&
+	    (uint8_t)doc[2] == 0xBF) {
+		memmove(doc, doc + 3, (size_t)(len - 3));
 		len -= 3;
 		file_bom = true;
 	}
+	gs = len;
+	gl = cap - len;
 
-	file_enc = file_bom ? ENC_UTF8 : detect_enc(buf, len);
+	file_enc = file_bom ? ENC_UTF8 : detect_enc(doc, len);
 
-	if (file_enc == ENC_LATIN9 && !latin9_to_utf8_in_place()) {
+	if (file_enc != ENC_UTF8 && !sb_to_utf8_in_place()) {
 		buf_clear();
 		z_dialog_confirm(&dlg_ctx, "Too large",
 			"That file is too large for\nthis editor once its accented\nletters are converted.",
@@ -1521,7 +2289,22 @@ static void do_open(void) {
 
 	if (!z_dialog_open(&dlg_ctx, last_dir, path, sizeof(path))) return;
 
-	if (load_file(path)) repaint();
+	// Another system's document: convert opens it, as Markdown, in a
+	// text (or read) of its own (docs/convert.md).
+	{
+		char e[6];
+		ext_of(path, e);
+		if (!strcmp(e, "docx") || !strcmp(e, "odt") || !strcmp(e, "rtf") || !strcmp(e, "epub")) {
+			z_launch_arg_set(path);
+			z_proc_run("convert");
+			return;
+		}
+	}
+
+	if (load_file(path)) {
+		autosave_offer();
+		repaint();
+	}
 
 }
 
@@ -1578,7 +2361,7 @@ static void after_edit(int para) {
 	// showed up as text disappearing after a paste.
 	sel_anchor = -1;
 
-	wrap_from(para);
+	layout_sync();
 	set_modified(true);
 
 	bool scrolled = scroll_to_cursor();
@@ -1634,7 +2417,10 @@ static void do_copy(void) {
 	// Pointed straight at the document -- z_clip_set() copies into
 	// its own staging buffer before sending, precisely so a caller
 	// can do this rather than needing a spare 4KB of its own.
-	z_clip_set(&buf[sel_start()], sel_end() - sel_start());
+	// A selection across the gap is put in one run first; a copy is a
+	// one-off, and the next keystroke moves the gap back.
+	if (sel_start() < gs && sel_end() > gs) doc_flat();
+	z_clip_set(P(sel_start()), sel_end() - sel_start());
 
 }
 
@@ -1682,8 +2468,8 @@ static void do_paste(void) {
 		para = para_line_at(cursor);
 	}
 
-	if (n > TEXT_MAX - len) {
-		n = TEXT_MAX - len;
+	if (n > gl && !doc_room(n)) {
+		n = gl;
 		// Cut at a character boundary: half a UTF-8 sequence would be
 		// a malformed byte left in the document.
 		while (n > 0 && ((uint8_t)clip[n] & 0xC0) == 0x80) n--;
@@ -1725,7 +2511,7 @@ static void insert_seq(const char *seq, int k, int n) {
 	int done = 0;
 
 	for (; done < n; done++) {
-		if (len + k > TEXT_MAX) break;
+		if (k > gl && !doc_room(k)) break;
 		edit_insert(cursor, seq, k);
 		cursor += k;
 	}
@@ -1871,10 +2657,11 @@ static void move_cursor(int to) {
 static void move_line_ex(int delta, bool extend) {
 
 	int l = line_at(cursor);
-	int col = chars_between((int)line_off[l], cursor);
+	int col = chars_between(LO(l), cursor);
 
 	int target = l + delta;
 	if (target < 0) target = 0;
+	lines_through(target);
 	if (target >= nlines) target = nlines - 1;
 	if (target == l) return;
 
@@ -1913,7 +2700,7 @@ static void echo_line(void) {
 		return;
 	}
 
-	z_speak_n(&buf[line_off[l]], (uint32_t)n, Z_TTS_F_INTERRUPT);
+	z_speak_n(P(LO(l)), (uint32_t)n, Z_TTS_F_INTERRUPT);
 
 }
 
@@ -1926,7 +2713,7 @@ static void echo_char(int at) {
 		return;
 	}
 
-	if (buf[at] == '\n') {
+	if (B(at) == '\n') {
 		z_speak_static("new line", Z_TTS_F_INTERRUPT);
 		return;
 	}
@@ -1937,7 +2724,7 @@ static void echo_char(int at) {
 	// between processes (docs/text_encoding.md).
 	char one[Z_UTF8_MAX + 1];
 	int k = next_off(at) - at;
-	memcpy(one, &buf[at], (size_t)k);
+	memcpy(one, P(at), (size_t)k);
 	one[k] = 0;
 	z_speak(one, Z_TTS_F_INTERRUPT);
 
@@ -1951,12 +2738,13 @@ static void echo_word(void) {
 	if (!z_speak_available()) return;
 
 	int end = cursor - 1;			// the separator just inserted
-	while (end > 0 && (buf[end - 1] == ' ' || buf[end - 1] == '\n')) end--;
+	while (end > 0 && (B(end - 1) == ' ' || B(end - 1) == '\n')) end--;
 	int start = end;
-	while (start > 0 && buf[start - 1] != ' ' && buf[start - 1] != '\n') start--;
+	while (start > 0 && B(start - 1) != ' ' && B(start - 1) != '\n') start--;
 
+	// A word has no newline in it, so never the gap either.
 	if (end > start)
-		z_speak_n(&buf[start], (uint32_t)(end - start), Z_TTS_F_INTERRUPT);
+		z_speak_n(P(start), (uint32_t)(end - start), Z_TTS_F_INTERRUPT);
 
 }
 
@@ -1973,13 +2761,14 @@ static int read_get(void *user, int n, const char **text, uint32_t *flags) {
 
 	(void)user;
 
+	if (n >= 0) lines_through(n);
 	if (n < 0 || n >= nlines) return -1;
 
-	int a = (int)line_off[n];
+	int a = LO(n);
 	int e = line_end(n);
 
-	*text = &buf[a];
-	*flags = (n + 1 < nlines && e > a && buf[e - 1] != '\n') ?
+	*text = P(a);
+	*flags = (n + 1 < nlines && e > a && B(e - 1) != '\n') ?
 		Z_TTS_F_CONTINUES : 0;
 
 	return line_draw_len(n);
@@ -1992,7 +2781,7 @@ static int read_get(void *user, int n, const char **text, uint32_t *flags) {
 // the next Super+A starts from wherever they have moved it since.
 static void read_at(void *user, int n) {
 	(void)user;
-	if (n >= 0 && n < nlines) move_cursor((int)line_off[n]);
+	if (n >= 0 && n < nlines) move_cursor(LO(n));
 }
 
 static z_sayall_t reader = { read_get, read_at, NULL };
@@ -2034,17 +2823,37 @@ static void read_selection(void) {
 	}
 	int a = sel_start(), b = sel_end();
 	printf("text: Super+C: reading the selection, %d characters\n", b - a);
-	z_speak_n(&buf[a], (uint32_t)(b - a), Z_TTS_F_INTERRUPT);
+	if (a < gs && b > gs) doc_flat();
+	z_speak_n(P(a), (uint32_t)(b - a), Z_TTS_F_INTERRUPT);
 }
 
 // -- undo and redo -- docs/text_editor.md, "Undo" --
 
+// The log's edits, put back through the gap like any other edit
+// (zundo.h, z_undo_ops_t): each costs its own paragraph, so undoing a
+// word in a megabyte is as quick as typing it was, and undoing a
+// Replace All walks the document once.
+static bool undo_ins(void *user, const z_undo_t *u, int pos, uint32_t log, int n) {
+	(void)user;
+	if (n > gl && !doc_room(n)) return false;
+	z_undo_bytes_get(u, log, raw_insert(pos, n), n);
+	return true;
+}
+
+static void undo_del(void *user, int pos, int n) {
+	(void)user;
+	raw_delete(pos, pos + n, false);
+}
+
+static const z_undo_ops_t undo_ops = { undo_ins, undo_del, NULL };
+
 static void do_undo(bool redo) {
 
 	int from = 0;
+
 	bool ok = redo
-		? z_undo_redo(&undo, buf, &len, TEXT_MAX, &cursor, &from)
-		: z_undo_undo(&undo, buf, &len, TEXT_MAX, &cursor, &from);
+		? z_undo_redo_ops(&undo, &undo_ops, &cursor, &from)
+		: z_undo_undo_ops(&undo, &undo_ops, &cursor, &from);
 
 	// Whatever is typed next starts a group of its own.
 	undo_break();
@@ -2052,6 +2861,7 @@ static void do_undo(bool redo) {
 
 	if (cursor > len) cursor = len;
 	if (cursor < 0) cursor = 0;
+	layout_sync();
 	after_edit(para_line_at(from));
 
 	// Back at the saved text -- by undo or by redo -- is unmodified.
@@ -2073,9 +2883,17 @@ static char fold_ascii(char c) {
 	return (c >= 'A' && c <= 'Z') ? (char)(c + 32) : c;
 }
 
+// find_text at physical doc[i], for passes that work on the storage
+// directly (replace_all_core()).
+static bool match_raw(int i, int n) {
+	for (int k = 0; k < n; k++)
+		if (fold_ascii(doc[i + k]) != fold_ascii(find_text[k])) return false;
+	return true;
+}
+
 static bool match_at(int i, int n) {
 	for (int k = 0; k < n; k++)
-		if (fold_ascii(buf[i + k]) != fold_ascii(find_text[k])) return false;
+		if (fold_ascii(B(i + k)) != fold_ascii(find_text[k])) return false;
 	return true;
 }
 
@@ -2132,10 +2950,274 @@ static void find_next(void) {
 	if (!find_from(has_sel() ? sel_end() : cursor)) find_report();
 }
 
+// -- replace -- docs/text_editor.md, "Replace" --
+//
+// Ctrl+H asks what to find and what to put in its place (which may be
+// nothing), counts the matches, and offers to replace them all at once
+// or one at a time. Matching is find's: ASCII letters either case.
+
+static char repl_text[128];
+
+// Matches of find_text, left to right and not overlapping -- the same
+// set Replace All replaces.
+static int count_matches(void) {
+	int nf = (int)strlen(find_text), n = 0;
+	if (!nf) return 0;
+	for (int i = 0; i + nf <= len; ) {
+		if (match_at(i, nf)) { n++; i += nf; }
+		else i++;
+	}
+	return n;
+}
+
+// Can Replace All of `n` matches be recorded for undo? Each match is a
+// delete and an insert, and the log forgets its oldest edits when it
+// fills -- which here would forget the start of the replace itself and
+// leave an undo that puts back only some of it.
+static bool replace_all_undoable(int n) {
+	int nf = (int)strlen(find_text), nr = (int)strlen(repl_text);
+	return n * (nr ? 2 : 1) <= UNDO_RECORDS &&
+		(long)n * (nf + nr) <= UNDO_BYTES;
+}
+
+// Replaces every match in one pass over the buffer, however many there
+// are: the alternative, an edit per match, moves the rest of the
+// document once per match. When the replacement is longer the document
+// is first moved to the top of the buffer, so the output -- which grows
+// -- never overtakes the input it is read from.
+//
+// Returns the number replaced, or -1, changing nothing, if the result
+// would not fit TEXT_MAX. Each replacement is recorded for undo as one
+// group when `record`; otherwise the history is cleared, since it no
+// longer leads back to anything.
+static int replace_all_core(bool record) {
+
+	int nf = (int)strlen(find_text), nr = (int)strlen(repl_text);
+	int n = count_matches();
+	if (!n) return 0;
+	if (nr > nf) {
+		long grow = (long)n * (nr - nf);
+		if ((long)len + grow > 0x7FFFFFF || (grow > gl && !doc_room((int)grow))) return -1;
+	}
+
+	layout_sync();
+	int first = -1;
+	for (int i = 0; i + nf <= len; i++) if (match_at(i, nf)) { first = i; break; }
+	int para = para_line_at(first);
+
+	// One run, with all the free space after it: the pass below reads
+	// and writes doc[] directly. The line table as offsets throughout:
+	// everything from the first match on is wrapped again below, and
+	// what is before it stays as it is.
+	doc_flat();
+	lgap_to(nlines);
+	int shift = (nr > nf) ? cap - len : 0;
+	if (shift) memmove(&doc[shift], doc, (size_t)len);
+
+	int c0 = cursor, newcur = -1;
+	int src = shift, end = shift + len, dst = 0, done = 0;
+
+	if (record) undo_begin(UK_OTHER, first);
+
+	while (src < end) {
+		if (newcur < 0 && src - shift >= c0) newcur = dst;
+		if (src + nf <= end && match_raw(src, nf)) {
+			if (record) {
+				z_undo_record(&undo, Z_UNDO_DEL, dst, &doc[src], nf, c0, undo_group);
+				z_undo_record(&undo, Z_UNDO_INS, dst, repl_text, nr, c0, undo_group);
+			}
+			memmove(&doc[dst], repl_text, (size_t)nr);
+			// A caret inside the match goes after its replacement.
+			if (newcur < 0 && src - shift + nf > c0) newcur = dst + nr;
+			dst += nr;
+			src += nf;
+			done++;
+		} else
+			doc[dst++] = doc[src++];
+	}
+
+	len = dst;
+	gs = len;
+	gl = cap - len;
+	cursor = newcur < 0 ? len : newcur;
+	edit_gen++;
+	edit_tick = z_uptime_ticks();
+	wrap_from(para);
+	if (record) undo_break();
+	else {
+		z_undo_reset(&undo);
+		undo.saved = UINT32_MAX;		// nothing leads back to the file now
+		undo_break();
+	}
+	after_edit(para);
+	return done;
+
+}
+
+// The selection is a match: replace it, as one edit of its own.
+static bool replace_selection(void) {
+	int nr = (int)strlen(repl_text);
+	int a = sel_start(), b = sel_end();
+	if (nr - (b - a) > gl && !doc_room(nr - (b - a))) return false;
+	int para = para_line_at(a);
+	undo_begin(UK_OTHER, a);
+	edit_delete(a, b);
+	if (nr) edit_insert(a, repl_text, nr);
+	cursor = a + nr;
+	sel_anchor = -1;
+	undo_break();
+	after_edit(para);
+	return true;
+}
+
+static void say_full(void) {
+	z_dialog_confirm(&dlg_ctx, "Replace",
+		"The document would not hold\nthe replacements.", Z_DIALOG_OK_CANCEL);
+}
+
+static void do_replace(void) {
+
+	char q[sizeof(find_text)], r[sizeof(repl_text)];
+
+	// The selection, when it is a short piece of one line, is what most
+	// people mean to replace.
+	const char *initial = find_text;
+	char selq[sizeof(find_text)];
+	if (has_sel() && sel_end() - sel_start() < (int)sizeof(selq)) {
+		int n = 0;
+		for (int i = sel_start(); i < sel_end() && B(i) != '\n'; i++) selq[n++] = B(i);
+		selq[n] = 0;
+		if (n == sel_end() - sel_start()) initial = selq;
+	}
+
+	if (!z_dialog_prompt(&dlg_ctx, "Replace", "Find:", initial, q, sizeof(q)) || !q[0]) {
+		repaint();
+		return;
+	}
+	if (!z_dialog_prompt_empty_ok(&dlg_ctx, "Replace", "Replace with:", repl_text, r, sizeof(r))) {
+		repaint();
+		return;
+	}
+	snprintf(find_text, sizeof(find_text), "%s", q);
+	snprintf(repl_text, sizeof(repl_text), "%s", r);
+
+	int n = count_matches();
+	if (!n) { find_report(); return; }
+
+	char msg[160];
+	snprintf(msg, sizeof(msg), "%d match%s for \"%.40s\".\nReplace all of them?\n(No: one at a time.)",
+		n, n == 1 ? "" : "es", find_text);
+	int how = z_dialog_confirm(&dlg_ctx, "Replace", msg, Z_DIALOG_YES_NO_CANCEL);
+
+	if (how == Z_DIALOG_CANCEL) { repaint(); return; }
+
+	if (how == Z_DIALOG_YES) {
+		bool record = replace_all_undoable(n);
+		if (!record && z_dialog_confirm(&dlg_ctx, "Replace",
+				"That many changes cannot\nbe undone. Replace all\nanyway?",
+				Z_DIALOG_YES_NO) != Z_DIALOG_YES) {
+			repaint();
+			return;
+		}
+		int done = replace_all_core(record);
+		if (done < 0) { say_full(); repaint(); return; }
+		snprintf(msg, sizeof(msg), "Replaced %d.", done);
+		z_dialog_confirm(&dlg_ctx, "Replace", msg, Z_DIALOG_OK_CANCEL);
+		repaint();
+		return;
+	}
+
+	// One at a time: each match selected and shown, then asked about.
+	// At most as many steps as there were matches, so saying No to
+	// every one ends rather than going round for ever.
+	int start = has_sel() ? sel_start() : cursor;
+	for (int step = 0; step < n; step++) {
+		if (!find_from(start)) break;
+		int a = z_dialog_confirm(&dlg_ctx, "Replace", "Replace this one?",
+			Z_DIALOG_YES_NO_CANCEL);
+		if (a == Z_DIALOG_CANCEL) break;
+		if (a == Z_DIALOG_YES) {
+			if (!replace_selection()) { say_full(); break; }
+			start = cursor;
+		} else
+			start = sel_end();
+	}
+	repaint();
+
+}
+
+// -- go to line -- docs/text_editor.md, "Go to line" --
+//
+// Lines here are the file's lines -- what a compiler or another editor
+// numbers -- not the wrapped display lines.
+
+static int doc_line_of(int off) {
+	int n = 1;
+	for (int i = 0; i < off && i < len; i++) if (B(i) == '\n') n++;
+	return n;
+}
+
+static int doc_line_start(int line) {
+	int n = 1, i = 0;
+	for (; i < len && n < line; i++) if (B(i) == '\n') n++;
+	return i;
+}
+
+// Words (runs of anything but spaces, tabs and newlines) and characters.
+static void doc_counts(int *words, int *chars) {
+	int w = 0;
+	bool in = false;
+	for (int i = 0; i < len; i++) {
+		char c = B(i);
+		bool sp = c == ' ' || c == '\n' || c == '\t';
+		if (!sp && !in) w++;
+		in = !sp;
+	}
+	*words = w;
+	// The two sides of the gap: no character straddles it.
+	*chars = (int)z_utf8_count(doc, (size_t)gs) +
+		(int)z_utf8_count(&doc[gs + gl], (size_t)(len - gs));
+}
+
+static void goto_line(int line) {
+	int total = doc_line_of(len);
+	if (line < 1) line = 1;
+	if (line > total) line = total;
+	undo_break();
+	move_cursor(doc_line_start(line));
+	echo_line();
+}
+
+static void do_goto(void) {
+
+	int words, chars;
+	doc_counts(&words, &chars);
+	int here = doc_line_of(cursor), total = doc_line_of(len);
+
+	char msg[160], cur[16], ans[16];
+	snprintf(msg, sizeof(msg), "Line %d of %d.\n%d word%s, %d character%s.\nGo to line:",
+		here, total, words, words == 1 ? "" : "s", chars, chars == 1 ? "" : "s");
+	snprintf(cur, sizeof(cur), "%d", here);
+
+	if (!z_dialog_prompt(&dlg_ctx, "Go to line", msg, cur, ans, sizeof(ans))) {
+		repaint();
+		return;
+	}
+	int line = 0;
+	for (const char *p = ans; *p; p++) {
+		if (*p < '0' || *p > '9') { repaint(); return; }
+		if (line < 100000000) line = line * 10 + (*p - '0');
+	}
+	repaint();
+	goto_line(line);
+
+}
+
 static void handle_key(uint32_t keysym, uint8_t mods) {
 
 	mods_now = mods;
 
+	if (keysym == Z_KEY_F1) { z_dialog_help(&dlg_ctx, "text_editor"); return; }	// docs/app_help.md
 	if (keysym == Z_KEY_F3) { find_next(); return; }	// find again
 
 	if (mods & Z_KBD_MOD_CTRL) {
@@ -2146,7 +3228,12 @@ static void handle_key(uint32_t keysym, uint8_t mods) {
 		switch (keysym) {
 			case 0x0e: do_new(); return;		// Ctrl+N
 			case 0x0f: do_open(); return;		// Ctrl+O
-			case 0x13: do_save(); return;		// Ctrl+S
+			case 0x13:							// Ctrl+S; Ctrl+Shift+S is Save As
+				if (mods & Z_KBD_MOD_SHIFT) do_save_as();
+				else do_save();
+				return;
+			case 0x08: do_replace(); return;	// Ctrl+H
+			case 0x0c: do_goto(); return;		// Ctrl+L
 			case 0x11: do_close(); return;		// Ctrl+Q
 			case 0x03: do_copy(); return;		// Ctrl+C
 			case 0x18: do_cut(); return;		// Ctrl+X
@@ -2184,7 +3271,7 @@ static void handle_key(uint32_t keysym, uint8_t mods) {
 		case Z_KEY_PAGEDOWN:	move_line_ex(rows - 1, ext); echo_line(); return;
 
 		case Z_KEY_HOME:
-			move_cursor_ex((int)line_off[line_at(cursor)], ext);
+			move_cursor_ex(LO(line_at(cursor)), ext);
 			echo_line();
 			return;
 
@@ -2268,6 +3355,7 @@ static void handle_mouse(uint32_t packed) {
 
 		if (z_scrollbar_mouse(&sbar, cx, cy, buttons)) {
 			top_line = (int)sbar.value;
+			lines_through(top_line);
 			/* Only the view moved -- the document is unchanged, so
 			 * the rows that stay on screen are already correct. */
 			scroll_repaint();
@@ -2418,8 +3506,8 @@ int main(void) {
 	// docs/app_runtime.md and k_pidreg_init()'s call site in
 	// kernel.c), and a line table full of garbage would draw from
 	// arbitrary offsets in the buffer.
-	memset(buf, 0, sizeof(buf));
-	memset(line_off, 0, sizeof(line_off));
+	memset(sbuf, 0, sizeof(sbuf));
+	memset(sline, 0, sizeof(sline));
 
 	buf_clear();
 	nlines = 0;
@@ -2483,7 +3571,9 @@ int main(void) {
 	// reports its own failures and leaves an empty buffer, so there
 	// is nothing to check here -- but it needs the window to exist,
 	// because it reports them in a dialog.
-	if (have_arg) load_file(launch_arg);
+	// A copy left by a session that did not end: of the file opened,
+	// or, when none was, of a document that was never saved.
+	if (!have_arg || load_file(launch_arg)) autosave_offer();
 
 	rewrap_all();
 	update_title();
@@ -2594,6 +3684,19 @@ int main(void) {
 #if TEXT_INSTRUMENT
 		ins_report();
 #endif
+
+		// A piece of the autosave copy, while one is being written.
+		if (autosave_step()) continue;
+
+		// Wrapping in the background: a slice, then the queue again,
+		// with no wait while there is more -- the scrollbar grows as
+		// it goes (docs/text_editor.md, "Wrapping").
+		if (wrap_bg) {
+			wrap_more(-1, WRAP_SLICE);
+			z_scrollbar_set_range(&sbar, nlines, rows);
+			z_scrollbar_draw(&sbar, false);
+			continue;
+		}
 
 		/* Block until something arrives.
 		 *

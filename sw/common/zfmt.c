@@ -341,9 +341,16 @@ static void zf_int(zf_out_t *o, unsigned long long v, int neg, int base,
 	// Values that fit in 32 bits -- nearly all of them -- are divided
 	// in 32 bits, so libgcc's 64-bit division is linked only by a
 	// binary that really prints a 64-bit number.
+	//
+	// ZFMT_NO64 (app.mk's ZFMT_NO64 = 1) drops the 64-bit path for a
+	// program that never prints a 64-bit number: a %lld then prints its
+	// low 32 bits, and libgcc's 64-bit division (2.3KB) leaves the link.
+#ifndef ZFMT_NO64
 	if (v >> 32) {
 		while (v) { digits[nd++] = hex[v % (unsigned)base]; v /= (unsigned)base; }
-	} else {
+	} else
+#endif
+	{
 		uint32_t w = (uint32_t)v;
 		while (w) { digits[nd++] = hex[w % (uint32_t)base]; w /= (uint32_t)base; }
 	}

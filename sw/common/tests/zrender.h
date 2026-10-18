@@ -358,11 +358,13 @@ void z_fb_draw_text2(int x, int y, const char *s, int fg, int bg,
 }
 
 // Codepoints and UTF-8, mapped to glyph bytes the way zgfx.c maps them
-// (its cp_glyph_byte()): Latin-9 byte if the font has it, else the
-// missing-glyph box, else '?'. C0 draws nothing and takes a cell.
+// (its cp_glyph_byte()): Latin-9 byte if the font has it, else its
+// look-alike (zutf8.h), else the missing-glyph box, else '?'. C0 draws nothing and takes a cell.
 static uint8_t zr_cp_byte(const z_font_t *f, uint32_t cp) {
 	if (cp < 0x20) return (uint8_t)cp;
 	uint8_t b = z_cp_to_l9(cp);
+	if (b && z_font_index(f, b) >= 0) return b;
+	b = z_cp_lookalike(cp);
 	if (b && z_font_index(f, b) >= 0) return b;
 	return z_font_index(f, Z_GLYPH_MISSING) >= 0 ? Z_GLYPH_MISSING : '?';
 }

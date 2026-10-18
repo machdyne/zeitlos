@@ -167,6 +167,8 @@ with [welcome](welcome.md); to program it, [kernel](kernel.md) and
 | [file\_browser](file_browser.md) | `files` |
 | [text\_editor](text_editor.md) | `text` |
 | [sheet\_app](sheet_app.md) | `sheet` |
+| [convert](convert.md) | `convert`: documents, tables, archives |
+| [app\_help](app_help.md) | F1: help in apps, from these docs |
 | [web\_app](web_app.md) | `web` |
 | [read\_app](read_app.md) | `read` |
 | [hex\_editor](hex_editor.md) | `hex` |

@@ -122,6 +122,16 @@ int main(void) {
 	key(' ', 0);
 	expect(!dlg.done, "OK with an empty field still does nothing");
 
+	printf("prompt: z_dialog_prompt_empty_ok() takes an empty field\n");
+	new_prompt("");
+	prompt_empty_ok = true;
+	key(0x0d, 0);
+	expect(dlg.done && dlg.result == Z_DIALOG_YES, "Enter on an empty field is OK");
+	new_prompt("");
+	key(0x1b, 0);
+	expect(dlg.done && dlg.result == Z_DIALOG_CANCEL, "Escape still cancels");
+	prompt_empty_ok = false;
+
 	printf("prompt: typing on a button goes back to the field\n");
 	new_prompt("port");
 	key('\t', 0);			// OK

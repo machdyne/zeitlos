@@ -992,6 +992,27 @@ void z_win_fill_rect(const z_win_t *win, int x, int y, int w, int h, int color) 
 
 }
 
+void z_win_fill_pattern(const z_win_t *win, int x, int y, int w, int h, const uint8_t *pat) {
+
+	win_use_clip(win);
+
+	z_clip_t clip;
+	z_win_content_rect(win, &clip);
+
+	// Clamped to the content area here, as z_win_fill_rect() does: the
+	// blitter clamps to the screen only.
+	int x0 = clip.x0 + x, y0 = clip.y0 + y;
+	int x1 = x0 + w - 1, y1 = y0 + h - 1;
+	if (x0 < clip.x0) x0 = clip.x0;
+	if (y0 < clip.y0) y0 = clip.y0;
+	if (x1 > clip.x1) x1 = clip.x1;
+	if (y1 > clip.y1) y1 = clip.y1;
+	if (x1 < x0 || y1 < y0) return;
+
+	z_fb_hw_fill_pattern(x0, y0, x1 - x0 + 1, y1 - y0 + 1, pat);
+
+}
+
 void z_win_clear(const z_win_t *win) {
 
 	win_use_clip(win);

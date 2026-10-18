@@ -7,6 +7,18 @@ APP = text
 # "Integer-only printf (ZFMT)".
 ZFMT = 1
 
+# ...and stdout without newlib's stdio (docs/build.md, "ZFMT_LITE"):
+# text's only output is printf to the console log, and it never calls
+# fflush(). That takes newlib's FILE layer, its buffering and the
+# realloc behind it out of the link -- about 7.5KB of flash and of RAM,
+# which paid for Replace, Go to line, Save As and Windows-1252 in 0.0.7
+# with room to spare (docs/text_editor.md, "Size").
+ZFMT_LITE = 1
+
+# ...and no 64-bit division: text prints no 64-bit number (app.mk,
+# ZFMT_NO64), which keeps 2.3KB of libgcc out of a core app.
+ZFMT_NO64 = 1
+
 # zfsapp.o is needed by zflist.o (the file browser inside the dialogs)
 # as well as by text.c itself, and zdialog.o/zflist.o are what make
 # this the first app to link either.

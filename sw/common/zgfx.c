@@ -2665,6 +2665,9 @@ static uint8_t cp_glyph_byte(const z_font_t *font, uint32_t cp) {
 	uint8_t b = z_cp_to_l9(cp);
 	if (b && z_font_index(font, b) >= 0) return b;
 
+	b = z_cp_lookalike(cp);		// a curly quote drawn as a straight one
+	if (b && z_font_index(font, b) >= 0) return b;
+
 	if (z_font_index(font, Z_GLYPH_MISSING) >= 0) return Z_GLYPH_MISSING;
 	return '?';
 

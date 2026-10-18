@@ -761,6 +761,23 @@ uint32_t z_proc_run(const char *name);
 // caller that got Z_FAIL could not tell it from a malformed call.
 z_rv z_proc_status(uint32_t pid, uint32_t *state, int32_t *status);
 
+// The serial of the process running at `pid`, or 0 if none
+// (syscalls.def, PROC_SERIAL; zproc.h, z_proc_serial_args_t). Pids are
+// reused, so "is the process I started still running?" is
+// z_proc_serial(pid) == the serial read when it was started -- read it
+// right after z_proc_run(). z_proc_serial(z_getpid()) is the caller's
+// own.
+uint32_t z_proc_serial(uint32_t pid);
+
+// This app's arena (zproc.h, Z_SYS_ARENA; docs/kernel.md, "Arenas"):
+// memory beside its own block, as large as it asks for while the
+// machine has it. z_arena_set() resizes it -- 0 frees it -- and returns
+// Z_ARENA_OK or a Z_ARENA_E_* code; either way *base is where it now
+// is (NULL with none) and *size its size, if those are not NULL. A
+// resize may move it, contents kept: hold offsets, not pointers.
+int32_t z_arena_set(uint32_t size, void **base, uint32_t *size_out);
+uint32_t z_arena_get(void **base);
+
 // Returns Z_OK/Z_FAIL (it returned void until the Scheme API's (kill
 // ...) needed a real answer -- see zeitlos.c). Existing callers that
 // ignore the value are unaffected and need no change.

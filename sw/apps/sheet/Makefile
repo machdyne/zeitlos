@@ -16,7 +16,7 @@ APP = sheet
 #   second caller. Every app that links the dialog needs this too: a
 #   shared widget is only shared if the build says so.
 OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o zwidget.o zspeak.o \
-	zfsapp.o zflist.o zdialog.o zedit.o zfix.o ztype.o sheet_core.o sheet.o
+	zfsapp.o zflist.o zdialog.o zedit.o zfix.o ztype.o sheet_core.o chart.o sheet.o
 
 sheet_core.o: sheet_core.c sheet_core.h
 	$(CC) $(CFLAGS) -c sheet_core.c -o sheet_core.o
@@ -42,7 +42,8 @@ sheet_core.o: sheet_core.c sheet_core.h
 # that isn't available.
 HOSTSRC = ../../common/zwin.c ../../common/zwidget.c \
 	../../common/zfont_data.c ../../common/zobj.c ../../common/zeitlos.c \
-	../../common/zfix.c sheet_core.c
+	../../common/zfix.c sheet_core.c chart.c \
+	../../common/tests/zspeak_stub.c
 
 test:
 	cc --std=gnu99 -Wall -Wextra -o sheet_test \
@@ -70,5 +71,9 @@ render:
 .PHONY: test test-layout test-files render
 
 CLEAN_EXTRA = sheet_test sheet_layout sheet_files sheet_render
+
+# 64KB of stack and heap: compacting the cell text sorts an index of
+# every cell on the stack (8KB at 4096 cells), and formulas recurse.
+APP_STACK = 64K
 
 include ../../common/app.mk

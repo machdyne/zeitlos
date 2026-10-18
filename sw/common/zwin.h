@@ -316,6 +316,11 @@ void z_win_clear(const z_win_t *win);
 // whole window -- see sw/apps/hello_win for the pattern.
 void z_win_fill_rect(const z_win_t *win, int x, int y, int w, int h, int color);
 
+// The same rectangle filled with an 8x8 pattern (MSB-first rows, as
+// z_pattern_table in zwidget.h), anchored to the screen's grid
+// (zgfx.h, z_fb_hw_fill_pattern()) -- so adjacent fills tile.
+void z_win_fill_pattern(const z_win_t *win, int x, int y, int w, int h, const uint8_t *pat);
+
 // draws text at (x,y) relative to the top-left of the content area
 // (i.e. (0,0) is just below the titlebar, not the top of the window).
 // '\n' starts a new line. clipped to the window's own bounds. pass
@@ -481,6 +486,7 @@ bool z_launch_arg_take(char *out, int outlen);
 // quoted argument is unquoted; anything else is the path unchanged.
 // docs/posix.md, "Quoting".
 bool z_launch_path_take(char *out, int outlen);
+
 
 // -- clipboard --
 //

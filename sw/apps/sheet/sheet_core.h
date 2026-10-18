@@ -94,20 +94,36 @@
 // header is sized for.
 #define SHEET_ROWS        999
 
-// 4 decimal places, against calc's 6 -- see zfix.h on why this is a
-// per-app choice. A spreadsheet holds money and counts far more often
-// than the result of dividing by three, and the two places traded away
-// here buy two more digits of integer range.
-#define SHEET_DP          4
+// 8 decimal places. It was 4 until 0.0.7, to buy integer range -- but
+// a monthly interest rate is 0.05/12 = 0.0041666..., which at four
+// places is 0.0042 (a 30-year mortgage payment five dollars out) and
+// at six still a few cents. At eight it is right to the cent.
+//
+// The range left is +-92 thousand million, ample for the books this
+// is for; a result past it is #NUM, never a wrong number. The range
+// the four places bought was only ever needed because z_fix_mul()
+// checks its double-scaled intermediate rather than its result:
+// sheet_core.c's fx_mul() splits at the decimal point instead, so any
+// product that fits is computed.
+#define SHEET_DP          8
 
 // Non-empty cells, and bytes of source text across all of them.
 //
-// 1024 x 16 bytes + 16KB is 32KB of .bss, which is the same order as
-// sw/apps/text's document buffer and line table. A full 26-column
-// block is 39 rows deep at this cap; past that, setting a cell fails
-// cleanly (SHEET_ERR_FULL) rather than losing data quietly.
-#define SHEET_MAX_CELLS   1024
-#define SHEET_ARENA       16384
+// 4096 x 16 bytes + 40KB is 104KB of .bss: a ledger of 800 rows by
+// five columns, which is the size of thing a sheet like this is for.
+// (0.0.6 had 1024 and 16KB -- 39 full rows -- which was a demo, not a
+// tool.) Past either, setting a cell fails cleanly (SHEET_ERR_FULL)
+// rather than losing data quietly. The arena's offsets are 16 bits, so
+// it can grow to 64KB without a format change.
+#ifndef SHEET_MAX_CELLS
+#define SHEET_MAX_CELLS   4096
+#endif
+#ifndef SHEET_ARENA
+#define SHEET_ARENA       40960
+#endif
+
+// Number-format ranges (sheet_set_format()): later ones win.
+#define SHEET_MAX_FMTS    64
 
 // Longest source text for one cell, including the NUL. Also the size
 // of the app's edit buffer -- they have to agree, or a cell could hold
@@ -167,6 +183,48 @@ typedef struct {
 
 } sheet_cell_t;
 
+// -- number formats --
+//
+// Applied to rectangles, the way 1-2-3's /Range Format is: a list of
+// (range, format), the last that covers a cell winning. A list rather
+// than a byte per cell because the cell struct has no room and most
+// sheets format a few columns, not thousands of cells one by one.
+typedef enum {
+	SHEET_FMT_GENERAL = 0,	// as short as it can be (the default)
+	SHEET_FMT_FIXED,		// n decimals:            1234.50
+	SHEET_FMT_COMMA,		// thousands, n decimals: 1,234.50
+	SHEET_FMT_PERCENT,		// x100, n decimals, %:   12.5%
+	SHEET_FMT_MONEY,		// $, thousands, n dec:   $1,234.50
+} sheet_fmt_kind_t;
+
+typedef struct {
+	uint16_t	r0, r1;		// rows, inclusive
+	uint8_t		c0, c1;		// columns, inclusive
+	uint8_t		kind;		// sheet_fmt_kind_t
+	uint8_t		dec;		// decimals, 0..SHEET_DP
+} sheet_fmt_t;
+
+// -- the chart --
+//
+// One per sheet, saved with it ("!g bar A1:D9"): a range and a kind.
+// sw/apps/sheet/chart.c draws it.
+typedef enum {
+	SHEET_CHART_BAR = 0,	// bars side by side, a pattern per series
+	SHEET_CHART_STACK,		// bars stacked
+	SHEET_CHART_LINE,		// lines, a marker per series
+	SHEET_CHART_PIE,		// the first series, as a pie
+	SHEET_CHART_KINDS
+} sheet_chart_kind_t;
+
+typedef struct {
+	bool		set;
+	uint8_t		kind;
+	uint16_t	r0, r1;
+	uint8_t		c0, c1;
+} sheet_chart_t;
+
+const char *sheet_chart_name(int kind);		// "bar", "stack", "line", "pie"
+
 typedef struct {
 
 	sheet_cell_t	cells[SHEET_MAX_CELLS];
@@ -190,6 +248,15 @@ typedef struct {
 	// to keep it: a CSV line says nothing about which row it is, so
 	// the count has to live between calls.
 	int				load_row;
+
+	// Which recalculation a cached value belongs to. Bumped by every
+	// change instead of walking every cell (sheet_core.c, invalidate()).
+	uint8_t			gen;
+
+	sheet_fmt_t		fmts[SHEET_MAX_FMTS];
+	int				nfmts;
+
+	sheet_chart_t	chart;
 
 } sheet_t;
 
@@ -307,5 +374,81 @@ bool sheet_write_csv(const sheet_t *s, sheet_emit_fn emit, void *ctx);
 void sheet_load_csv_begin(sheet_t *s);
 bool sheet_load_csv_line(sheet_t *s, const char *line);
 void sheet_load_csv_end(sheet_t *s);
+
+// -- number formats --
+
+// Formats the rectangle (either corner order). SHEET_FMT_GENERAL
+// removes formatting there. Ranges the new one covers entirely are
+// dropped; false when the list is full.
+bool sheet_set_format(sheet_t *s, int r0, int c0, int r1, int c1, int kind, int dec);
+// The format of a cell (GENERAL when none applies); *dec its decimals.
+int sheet_format_at(const sheet_t *s, int row, int col, int *dec);
+// "F2", ",0", "%1", "$2", "G" -- what a person types, and the file holds.
+bool sheet_parse_format(const char *s, int *kind, int *dec);
+int sheet_format_name(int kind, int dec, char *out, int cap);
+
+// -- moving formulas --
+//
+// A formula refers to cells as RELATIVE (A1: "the cell two to my
+// left") or ABSOLUTE ($A$1, or $A1 / A$1 for one half). Copying a
+// formula moves its relative references with it; inserting or deleting
+// rows or columns moves every reference that points past the change.
+
+typedef enum {
+	SHEET_MOVE_COPY = 0,	// relative refs move by (dr, dc)
+	SHEET_MOVE_INS_ROWS,	// rows >= at move down by n
+	SHEET_MOVE_DEL_ROWS,	// rows at..at+n-1 go: refs to them become #REF!
+	SHEET_MOVE_INS_COLS,
+	SHEET_MOVE_DEL_COLS,
+} sheet_move_t;
+
+// Rewrites `src` (a formula, "=...") into `out`. A reference moved off
+// the grid, or into deleted cells, becomes #REF!, which evaluates to
+// the #REF error. False if the result does not fit `cap` or
+// SHEET_SRC_MAX.
+bool sheet_rewrite(const char *src, char *out, int cap, sheet_move_t how,
+	int a, int b);	// COPY: a = dr, b = dc; others: a = at, b = n
+
+// Inserts or deletes whole rows or columns, rewriting every formula
+// and format range. Inserting refuses (SHEET_ERR_FULL) when it would
+// push a cell off the grid.
+sheet_err_t sheet_insert_rows(sheet_t *s, int at, int n);
+sheet_err_t sheet_delete_rows(sheet_t *s, int at, int n);
+sheet_err_t sheet_insert_cols(sheet_t *s, int at, int n);
+sheet_err_t sheet_delete_cols(sheet_t *s, int at, int n);
+
+// Sorts the rows of a rectangle by column `key` (inside it): numbers
+// first, in order, then text, alphabetically, ignoring case, then
+// empty -- or the reverse with `desc`. Stable. Formulas move as if
+// copied. `tmp` is scratch: 24 bytes a row plus the rectangle's text
+// (sheet_range_size()); false (and nothing changed) when it is too
+// small.
+bool sheet_sort(sheet_t *s, int r0, int c0, int r1, int c1, int key,
+	bool desc, void *tmp, int tmpcap);
+
+// The sum and count of the numbers in a rectangle -- what the edit bar
+// shows for a selection. False when one of them is an error.
+bool sheet_range_stats(sheet_t *s, int r0, int c0, int r1, int c1,
+	z_fix_t *sum, int *count);
+
+// -- serialising: undo, clipboard, sort --
+//
+// A range's cells as bytes: per non-empty cell, row and column
+// relative to (r0, c0) as two bytes each, a length byte and the text.
+// sheet_range_size() is what sheet_range_save() needs.
+int sheet_range_size(const sheet_t *s, int r0, int c0, int r1, int c1);
+int sheet_range_save(const sheet_t *s, int r0, int c0, int r1, int c1,
+	void *buf, int cap);
+// Writes saved cells at (r0, c0); with `clear`, the rectangle h x w is
+// emptied first. With `adjust`, formulas are moved as if copied from
+// (from_r, from_c). Returns SHEET_OK or the first error (FULL).
+sheet_err_t sheet_range_load(sheet_t *s, int r0, int c0, int h, int w,
+	bool clear, const void *buf, int len, bool adjust, int from_r, int from_c);
+
+// The whole document: cells, widths and formats. sheet_snapshot()
+// returns the length, or -1 if `cap` is too small.
+int sheet_snapshot_size(const sheet_t *s);
+int sheet_snapshot(const sheet_t *s, void *buf, int cap);
+bool sheet_restore(sheet_t *s, const void *buf, int len);
 
 #endif

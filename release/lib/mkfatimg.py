@@ -166,6 +166,7 @@ def sectors_per_cluster(image_bytes):
 # nothing depends on which group an app is in.
 SUPPLEMENTAL = [
     (zcard("Z_DIR_APPS", "sheet"), "sw/apps/sheet/sheet.bin"),
+    (zcard("Z_DIR_APPS", "convert"), "sw/apps/convert/convert.bin"),
     (zcard("Z_DIR_APPS", "read"), "sw/apps/read/read.bin"),
     (zcard("Z_DIR_APPS", "ask"), "sw/apps/ask/ask.bin"),
     (zcard("Z_DIR_APPS", "draw"), "sw/apps/draw/draw.bin"),

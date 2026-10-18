@@ -289,6 +289,31 @@ static inline uint32_t z_l9_to_cp(uint8_t b) {
 	}
 }
 
+// For DRAWING a character Latin-9 has no byte for: the Latin-9 byte of
+// the character it looks like, or 0. The curly quotes, dashes and
+// bullets every word processor and Windows-1252 file is full of would
+// otherwise all be the missing-glyph box (docs/text_encoding.md,
+// "Look-alikes"). Only for the glyph -- the text keeps the real
+// character, so a copy, a save or speech gets it unchanged.
+static inline uint8_t z_cp_lookalike(uint32_t cp) {
+	// Ranges, not a switch: this sits in every app's glyph path,
+	// wm's included, and a table is a third of the code.
+	static const struct { uint16_t lo, hi; uint8_t b; } t[] = {
+		{ 0x02C6, 0x02C6, '^' },  { 0x02DC, 0x02DC, '~' },
+		{ 0x2010, 0x2015, '-' },  { 0x2018, 0x201B, '\'' },
+		{ 0x201C, 0x201F, '"' },  { 0x2022, 0x2022, 0xB7 },	// middle dot
+		{ 0x2026, 0x2026, '.' },  { 0x2032, 0x2032, '\'' },
+		{ 0x2033, 0x2033, '"' },  { 0x2039, 0x2039, '<' },
+		{ 0x203A, 0x203A, '>' },  { 0x2044, 0x2044, '/' },
+		{ 0x2212, 0x2212, '-' },  { 0x2215, 0x2215, '/' },
+		{ 0x2219, 0x2219, 0xB7 },
+	};
+	if (cp < 0x02C6 || cp > 0x2219) return 0;
+	for (unsigned i = 0; i < sizeof t / sizeof t[0]; i++)
+		if (cp >= t[i].lo && cp <= t[i].hi) return t[i].b;
+	return 0;
+}
+
 // The Latin-9 byte for a codepoint, or 0 if Latin-9 has none -- which
 // includes the eight Latin-1 characters Latin-9 dropped (¤ ¦ ¨ ´ ¸ ¼
 // ½ ¾) and the C1 controls. NUL maps to 0 as well, which is never a

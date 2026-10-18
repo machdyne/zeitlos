@@ -12,6 +12,18 @@ working links. `.MD` files opened from the file browser come here
 rather than to `text` — a Markdown file is something to read far more
 often than something to edit.
 
+## Using it
+
+**F1** in any app with help opens its page here, at its "Using it"
+section -- this one, for `read` ([app_help.md](app_help.md)).
+
+Space and PageDown page forward, Shift+Space and PageUp back, the
+arrows a line, Home and End the ends; the wheel scrolls. Tab cycles
+the links on screen and Enter follows one (a click does too);
+Backspace goes back. Ctrl+O opens another document -- a `.docx`,
+`.odt`, `.rtf` or `.epub` is converted first. Drag to select, Ctrl+C
+to copy. The full list is under [Keys](#keys).
+
 ## Files of any size
 
 The document is never held in memory. That constraint drives the whole
@@ -510,6 +522,13 @@ file browser does. External `http://` links say so rather than
 silently doing nothing.
 
 Backspace goes back, through a 12-deep history.
+
+## Other systems' documents
+
+A `.docx`, `.odt`, `.rtf` or `.epub` chosen in the Open dialog goes to
+`convert` ([convert.md](convert.md)), which turns it into Markdown and
+opens that: in `text` when it is small enough to edit there, otherwise
+in a `read` of its own.
 
 ## Keys
 

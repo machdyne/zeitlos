@@ -1426,6 +1426,7 @@ void sh(void) {
 		// (see k_mem_dump()'s own comment in mem.c).
 		else if (sh_is(buffer, cmdlen, "free")) {
 			k_mem_dump();
+			k_arena_dump();
 		}
 
 		// INSTRUCTION CACHE STATUS / CONTROL (rtl/cache.v)

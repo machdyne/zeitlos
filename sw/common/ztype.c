@@ -116,6 +116,45 @@ const z_ftype_t z_ftypes[] = {
 	{ "PBM", "view", "Netpbm image"  },
 	{ "PGM", "view", "Netpbm image"  },
 	{ "PPM", "view", "Netpbm image"  },
+	// SVG is drawn by view as well (sw/common/zsvg.c, VIEW_SVG, on by
+	// default): a diagram in one bit is what it does best.
+	{ "SVG", "view", "SVG drawing"   },
+
+	// Sound -- each player takes the file as its launch argument and
+	// starts on it, with the rest of /media/audio and /home in its
+	// list (docs/play_app.md, docs/track_app.md, docs/midi_app.md).
+	{ "WAV", "play",  "WAV audio"      },
+	{ "AU",  "play",  "AU audio"       },
+	{ "MOD", "track", "Tracker module" },
+	{ "MID", "midi",  "MIDI song"      },
+	{ "MIDI","midi",  "MIDI song"      },
+
+	// 3D models -- sw/apps/gpu3d's STL viewer (docs/gpu3d_app.md).
+	{ "STL", "gpu3d", "STL model"      },
+
+	// Web pages saved on the card -- sw/apps/web opens a path as a
+	// file: URL, with relative links and images on the card too
+	// (docs/web_app.md, "Local files").
+	{ "HTM", "web",   "Web page"       },
+	{ "HTML","web",   "Web page"       },
+
+	// Other systems' documents, tables and archives -- sw/apps/convert
+	// (docs/convert.md), given the file alone, converts it and opens
+	// the result: a document as Markdown in text (or in read, when it
+	// is larger than text can take here), a table in sheet, an archive
+	// extracted beside itself and shown in files. A window shows
+	// progress, with Cancel, for anything that takes a moment.
+	{ "DOCX","convert", "Word document"      },
+	{ "ODT", "convert", "OpenDocument text"  },
+	{ "RTF", "convert", "Rich text"          },
+	{ "EPUB","convert", "E-book"             },
+	{ "XLSX","convert", "Excel workbook"     },
+	{ "ODS", "convert", "OpenDocument sheet" },
+	{ "TSV", "convert", "Tab-separated table"},
+	{ "ZIP", "convert", "Zip archive"        },
+	{ "TAR", "convert", "Tar archive"        },
+	{ "TGZ", "convert", "Tar archive"        },
+	{ "GZ",  "convert", "Gzip file"          },
 
 	// Demo scripts -- sw/apps/automate, docs/automate.md.
 	{ "ZDS", "automate", "Demo script" },

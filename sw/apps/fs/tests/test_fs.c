@@ -167,6 +167,14 @@ z_rv z_grant_close(void) {
 	return Z_OK;
 }
 
+// Z_SYS_PROC_SERIAL: a dead pid has none; respawn() starts another
+// program at a pid, as the kernel does with the lowest free one.
+static uint32_t generation[64];
+uint32_t z_proc_serial(uint32_t pid) {
+	return (pid < 64 && alive[pid]) ? pid * 1000u + generation[pid] + 1u : 0;
+}
+static void respawn(uint32_t pid) { generation[pid]++; alive[pid] = true; }
+
 z_rv z_proc_status(uint32_t pid, uint32_t *state, int32_t *status) {
 	(void)status;
 	if (state) *state = (pid < 64 && alive[pid]) ? Z_PROC_STATE_RUNNING : Z_PROC_STATE_EXITED;
@@ -668,6 +676,81 @@ static void test_contention(void) {
 	grant_allowed = true;
 }
 
+// A writer is killed and another program is given its pid at once, as
+// the kernel does: pid alone says the owner is still running. Before
+// owners were recorded with their serial, its descriptors stayed open
+// for good -- a slot gone for every such kill, the file "in use" for a
+// rename -- and an unlink left the late close to write into a deleted
+// entry.
+static void test_reuse(void) {
+	z_fs_info_t fi;
+	client = 6;
+	int32_t w = zfs_open("/reuse.txt", Z_O_WRONLY | Z_O_CREAT | Z_O_TRUNC);
+	CHECK(w >= 0);
+	CHECK(zfs_write(w, "half written", 12) == 12);
+	respawn(6);					// killed; pid 6 is a new program now
+	client = 5;
+	// rename is not refused for a writer that has gone
+	CHECK(zfs_rename("/reuse.txt", "/reused.txt") == 0);
+	CHECK(zfs_stat("/reused.txt", &fi) == 0 && fi.size == 12);
+	// and the new pid-6 program cannot use the dead one's descriptor
+	// (fstat goes straight to fs; a small write would sit in zfsc's
+	// buffer, which every simulated client here shares)
+	client = 6;
+	CHECK(zfs_fstat(w, &fi) == -Z_EBADF);
+
+	// unlink straight after a kill: the handle is closed first
+	int32_t u = zfs_open("/gone.txt", Z_O_WRONLY | Z_O_CREAT | Z_O_TRUNC);
+	CHECK(u >= 0);
+	CHECK(zfs_write(u, "abc", 3) == 3);
+	CHECK(zfs_fsync(u) == 0);	// out of zfsc's buffer, which clients here share
+	respawn(6);
+	client = 5;
+	CHECK(zfs_unlink("/gone.txt") == 0);
+	CHECK(zfs_stat("/gone.txt", &fi) == -Z_ENOENT);
+	// nothing is left open: all sixteen descriptors are there to take
+	int32_t fds[16]; int got = 0;
+	for (int i = 0; i < 16; i++) if ((fds[got] = zfs_open("/reused.txt", Z_O_RDONLY)) >= 0) got++;
+	CHECK(got == 16);
+	for (int i = 0; i < got; i++) CHECK(zfs_close(fds[i]) == 0);
+	// a file made since reads back, so the late close did not land
+	int32_t n = zfs_open("/after.txt", Z_O_WRONLY | Z_O_CREAT | Z_O_TRUNC);
+	CHECK(n >= 0 && zfs_write(n, "fresh", 5) == 5 && zfs_close(n) == 0);
+	char *m = fs_mallocfile("/after.txt");
+	CHECK(m && !memcmp(m, "fresh", 5));
+	free(m);
+
+	// directory handles too: all four taken by a program that is then
+	// killed, each part-way through a listing longer than one page (a
+	// listing that fits one page is closed by fs as it is sent)
+	CHECK(zfs_mkdir("/many") == 0);
+	char nm[40];
+	for (int i = 0; i < 60; i++) {
+		snprintf(nm, sizeof nm, "/many/a fairly long file name %02d.txt", i);
+		int32_t t = zfs_open(nm, Z_O_WRONLY | Z_O_CREAT);
+		CHECK(t >= 0 && zfs_close(t) == 0);
+	}
+	client = 6;
+	zfs_dir_t *d[4];
+	for (int i = 0; i < 4; i++) CHECK((d[i] = zfs_opendir("/many")) != NULL);
+	client = 5;
+	CHECK(zfs_opendir("/many") == NULL);	// all four are taken
+	respawn(6);
+	zfs_dir_t *mine = zfs_opendir("/many");
+	CHECK(mine != NULL);
+	if (mine) CHECK(zfs_closedir(mine) == 0);
+	// fs closed the dead program's listings; free the client's pages
+	for (int i = 0; i < 4; i++) free(d[i]);
+	for (int i = 0; i < 60; i++) {
+		snprintf(nm, sizeof nm, "/many/a fairly long file name %02d.txt", i);
+		CHECK(zfs_unlink(nm) == 0);
+	}
+	CHECK(zfs_unlink("/many") == 0);
+
+	CHECK(zfs_unlink("/reused.txt") == 0);
+	CHECK(zfs_unlink("/after.txt") == 0);
+}
+
 static void test_owners(void) {
 	z_fs_info_t fi;
 	client = 5;
@@ -1157,6 +1240,7 @@ int main(void) {
 	test_listing();
 	test_contention();
 	test_owners();
+	test_reuse();
 	test_usb();
 	test_posix();
 	test_stale();

@@ -24,6 +24,7 @@
 #include "pidreg.h"
 #include "kfs.h"		// files, through fs (docs/fs_driver.md)
 #include "kblk.h"	// k_blk, k_zar: the syscall table
+#include "zar.h"	// the launch reserve for arenas (k_arena_reserve())
 #include "../common/zpaths.h"
 #include "fsapi.h"
 #include "procapi.h"
@@ -272,6 +273,11 @@ extern char __global_pointer$;
 volatile uint32_t __attribute__((section(".bss"))) z_pid = 0;
 volatile z_proc __attribute__((section(".bss"))) z_procs[Z_PROCS_MAX];
 volatile uint32_t __attribute__((section(".bss"))) z_kernel_ticks = 0;
+
+// The last process serial handed out (z_proc.serial, kernel.h). 32 bits
+// is about four billion process starts before it wraps, and a wrap
+// skips 0, which means "no process".
+static __attribute__((section(".bss"))) uint32_t k_proc_serial_last;
 
 // --
 
@@ -1312,6 +1318,16 @@ static uint32_t *k_sched_switch(uint32_t *regs, bool prefer) {
 		// not additional information worth this risk to observe
 		// directly.
 		k_mem_free((void *)z_procs[z_pid].base);
+		// and its arena, and a block it was being moved into
+		if (z_procs[z_pid].arena_pending) {
+			k_mem_free((void *)z_procs[z_pid].arena_pending);
+			z_procs[z_pid].arena_pending = 0;
+		}
+		if (z_procs[z_pid].arena_base) {
+			k_mem_free((void *)z_procs[z_pid].arena_base);
+			z_procs[z_pid].arena_base = 0;
+			z_procs[z_pid].arena_size = 0;
+		}
 		k_pidreg_release_all(z_pid);
 		// release any file handles this process left open.
 		// Same shape and same reason as the pidreg sweep
@@ -1707,6 +1723,15 @@ static void k_mpu_init(void) {
 // process starts with drivers not allowed) -- ends it without having to
 // find and fix the other side's state.
 static bool k_grant_window(uint32_t pid, uint32_t *base, uint32_t *limit) {
+	// An app's window is its arena, if it has one (docs/kernel.md,
+	// "Arenas"). Only drivers open grants, and a driver may not have an
+	// arena, so the one window is never wanted for both.
+	if (!(z_procs[pid].flags & Z_PROC_FLAG_DRIVER)) {
+		if (!z_procs[pid].arena_size) return false;
+		*base = z_procs[pid].arena_base;
+		*limit = z_procs[pid].arena_base + z_procs[pid].arena_size;
+		return true;
+	}
 	uint32_t w = z_procs[pid].gwin;
 	if (!w) return false;
 	uint32_t c = w - 1;
@@ -1800,6 +1825,11 @@ bool k_user_ok(const void *ptr, uint32_t len) {
 	uint32_t lo = ((a & 0xf0000000u) == 0x80000000u) ? 0x80000000u
 		: z_procs[pid].base;
 	if (a >= lo && a - lo <= size && len <= size - (a - lo)) return true;
+	// ...or inside its arena
+	{
+		uint32_t ab = z_procs[pid].arena_base, as = z_procs[pid].arena_size;
+		if (as && a >= ab && a - ab <= as && len <= as - (a - ab)) return true;
+	}
 	// ...or inside the grant window it has open: the kernel may write
 	// where the MPU lets the app write (docs/mpu.md, "The grant window")
 	{
@@ -2510,6 +2540,11 @@ uint32_t k_proc_create(uint32_t size, uint32_t stack_size) {
 		z_procs[p].gwin = 0;
 		z_procs[p].mpu_mask = Z_MPU_MASK_DEFAULT;
 		z_procs[p].handoff = 0;
+		if (++k_proc_serial_last == 0) k_proc_serial_last = 1;
+		z_procs[p].serial = k_proc_serial_last;
+		z_procs[p].arena_base = 0;
+		z_procs[p].arena_size = 0;
+		z_procs[p].arena_pending = 0;
 		for (int i = 0; i < 32; i++) {
 			z_procs[p].regs[i] = 0x00000000;
 		}
@@ -2866,6 +2901,177 @@ z_obj_t *k_proc_status(z_obj_t *args) {
 	 * is information, and a caller that got Z_FAIL could not tell it
 	 * apart from a malformed call. */
 	return &z_ok;
+}
+
+// Z_SYS_PROC_SERIAL: the serial of the process at a pid, or 0 if no
+// process is running there (sw/common/zproc.h, z_proc_serial_args_t).
+// A process that is dying counts as gone, as in k_proc_status() above.
+// The pair (pid, serial) names one process for good: when the serial
+// read later is not the one recorded, the process that was there has
+// ended, whatever now holds its pid.
+z_obj_t *k_proc_serial(z_obj_t *args) {
+
+	z_proc_serial_args_t *a = (z_proc_serial_args_t *)args;
+
+	if (!a) return &z_fail;
+
+	a->serial = 0;
+	if (a->pid < Z_PROCS_MAX &&
+		(z_procs[a->pid].flags & Z_PROC_FLAG_ACTIVE) &&
+		!(z_procs[a->pid].flags & Z_PROC_FLAG_DIE))
+		a->serial = z_procs[a->pid].serial;
+
+	return &z_ok;
+}
+
+// -- arenas -- docs/kernel.md, "Arenas" ---------------------------
+//
+// One block per app beside its own, sized while it runs: for a
+// document, a cache, anything that is large only sometimes. An image's
+// .bss is fixed at build time and has to be the same on a 1MB board as
+// on a 32MB one; an arena is as big as what it holds, when it holds it.
+//
+// Placed from the top of the pool down (k_mem_alloc_top()), process
+// images from the bottom up. Grown in place when the block above is
+// free, else down into a free block below (the contents slide down),
+// else by moving to a new block and copying. A move changes the base,
+// which is why the program addresses its arena by offset. The copy runs
+// with interrupts on: the block being filled is recorded in
+// arena_pending first, so a kill meanwhile frees it.
+//
+// The MPU's grant window holds it while the app runs (k_grant_window()),
+// so only the owner can write it; anyone can read it, as anything.
+// Drivers may not have one: they need the window for grants.
+//
+// An arena may not take the pool below the launch reserve -- what the
+// largest core app in flash needs to start, image and stack -- so that
+// whatever else the person opens still opens. On a 1MB board that is
+// everything there is, and arenas are refused: those boards keep to
+// what their apps hold in .bss.
+
+static __attribute__((section(".bss"))) uint32_t k_arena_reserve_bytes;
+
+static uint32_t k_arena_reserve(void) {
+	if (k_arena_reserve_bytes) return k_arena_reserve_bytes;
+	uint32_t best = 256 * 1024;			// the floor, with no archive to ask
+	uint32_t n = z_zar_present() ? z_zar_count() : 0;
+	for (uint32_t i = 0; i < n; i++) {
+		char name[Z_ZAR_NAME_MAX + 1];
+		z_exec_info_t xi;
+		if (z_zar_is_file(i) || !z_zar_name(i, name)) continue;
+		if (z_zar_exec_info(name, &xi)) continue;
+		uint32_t st = z_exec_stack_bytes(xi.flags & Z_EXEC_STACK_MASK);
+		if (!st) st = Z_PROC_STACK_SIZE_DEFAULT;
+		uint32_t need = k_mem_align_up(xi.total + st, Z_MEM_ALIGNMENT);
+		if (need > best) best = need;
+	}
+	k_arena_reserve_bytes = best;
+	return best;
+}
+
+// For the shell's `free`: each arena, and the reserve they keep clear.
+void k_arena_dump(void) {
+	int n = 0;
+	for (uint32_t p = 0; p < Z_PROCS_MAX; p++) {
+		if (!z_procs[p].arena_size) continue;
+		const char *nm = k_pidreg_name_for(p);
+		printf(" arena: pid %lu%s%s, %lu KB at %08lx\n", (unsigned long)p,
+			nm ? " " : "", nm ? nm : "",
+			(unsigned long)(z_procs[p].arena_size / 1024),
+			(unsigned long)z_procs[p].arena_base);
+		n++;
+	}
+	printf(" arenas: %d; kept clear for launching: %lu KB\n", n,
+		(unsigned long)(k_arena_reserve() / 1024));
+}
+
+z_obj_t *k_arena(z_obj_t *args) {
+
+	z_arena_args_t *a = (z_arena_args_t *)args;
+	if (!k_user_ok_words(a, sizeof(*a))) return &z_fail;
+
+	uint32_t pid = z_pid;
+	volatile z_proc *p = &z_procs[pid];
+	a->result = Z_ARENA_OK;
+
+	if (a->size != Z_ARENA_QUERY) {
+
+		uint32_t want = a->size ? k_mem_align_up(a->size, Z_MEM_ALIGNMENT) : 0;
+		uint32_t cur = p->arena_size;
+
+		if (pid == 0 || p->base < (uint32_t)(uintptr_t)&_end ||
+			(p->flags & Z_PROC_FLAG_DRIVER)) {
+			a->result = Z_ARENA_E_PERM;
+		} else if (want > Z_ARENA_MAX) {
+			a->result = Z_ARENA_E_NOMEM;
+		} else if (want == 0) {
+			uint32_t old = maskirq(0xffffffffu);
+			if (cur) k_mem_free((void *)p->arena_base);
+			p->arena_base = 0;
+			p->arena_size = 0;
+			maskirq(old);
+		} else if (want < cur) {
+			uint32_t old = maskirq(0xffffffffu);
+			if (k_mem_resize((void *)p->arena_base, want)) p->arena_size = want;
+			else a->result = Z_ARENA_E_NOMEM;		// no descriptor for the tail
+			maskirq(old);
+		} else if (want > cur) {
+
+			uint32_t old = maskirq(0xffffffffu);
+			uint32_t extra = want - cur;
+			uint32_t free_now = k_mem_free_bytes();
+			maskirq(old);
+
+			if (free_now < extra || free_now - extra < k_arena_reserve()) {
+				a->result = Z_ARENA_E_RESERVE;
+			} else if (!cur) {
+				old = maskirq(0xffffffffu);
+				void *b = k_mem_alloc_top(want);
+				if (b) { p->arena_base = (uint32_t)(uintptr_t)b; p->arena_size = want; }
+				maskirq(old);
+				if (!b) a->result = Z_ARENA_E_NOMEM;
+			} else {
+				old = maskirq(0xffffffffu);
+				bool in_place = k_mem_resize((void *)p->arena_base, want);
+				uint32_t down = in_place ? 0 : k_mem_grow_down((void *)p->arena_base, want);
+				uint32_t from = p->arena_base;
+				if (in_place) p->arena_size = want;
+				else if (down) { p->arena_base = down; p->arena_size = want; }
+				maskirq(old);
+				if (down)
+					memmove((void *)(uintptr_t)down, (const void *)(uintptr_t)from, cur);
+				else if (!in_place) {
+					// A move holds both blocks until the copy is done:
+					// the new one may not take the pool below the
+					// reserve either, even for that long.
+					old = maskirq(0xffffffffu);
+					void *b = (k_mem_free_bytes() >= want + k_arena_reserve())
+						? k_mem_alloc_top(want) : NULL;
+					if (b) p->arena_pending = (uint32_t)(uintptr_t)b;
+					maskirq(old);
+					if (!b) a->result = (k_mem_free_bytes() >= want + k_arena_reserve())
+						? Z_ARENA_E_NOMEM : Z_ARENA_E_RESERVE;
+					else {
+						memcpy(b, (const void *)(uintptr_t)from, cur);
+						old = maskirq(0xffffffffu);
+						k_mem_free((void *)(uintptr_t)from);
+						p->arena_base = (uint32_t)(uintptr_t)b;
+						p->arena_size = want;
+						p->arena_pending = 0;
+						maskirq(old);
+					}
+				}
+			}
+		}
+
+		// The MPU has to cover the new block before this returns to
+		// the app, which is about to write it.
+		if (k_mpu_grants) k_grant_load(pid);
+	}
+
+	a->base = p->arena_base;
+	a->size = p->arena_size;
+	return a->result == Z_ARENA_OK ? &z_ok : &z_fail;
 }
 
 z_obj_t *z_exit(z_obj_t *obj) {

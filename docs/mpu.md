@@ -561,6 +561,11 @@ killed, its pid being reused by a process that has not opted in --
 closes the window without anyone having to find the driver's state and
 fix it.
 
+**It also holds an app's arena** ([kernel.md](kernel.md#arenas)): a
+process that is not a driver never opens a grant, so for it the window
+is its arena, loaded on every switch like a grant, and the app may write
+there as in its own block. A driver may not have an arena.
+
 **The kernel honours it too:** a buffer inside the open window may be
 passed to a syscall that writes (`k_user_ok()`), so the server can
 hand the client's buffer straight to a file read.

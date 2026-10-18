@@ -52,7 +52,9 @@ alone and the combination is what actually governs:
 ### The process table
 
 `z_proc` (`sw/os/kernel.h`): base, size, flags, wake tick, CPU ticks,
-32 saved registers, and the GPU scissor. **188 bytes.**
+32 saved registers, the GPU scissor, the grant window, the MPU mask,
+the hand-off, CPU cycles, the process's serial and its arena. **224
+bytes** on rv32 (the `uint64_t` cycle count aligns the end to 8).
 `z_procs[Z_PROCS_MAX]` lives in kernel `.bss` with an explicit
 `__attribute__((section(".bss")))` -- see "The `gp` hazard" below for
 why that annotation is load-bearing rather than decorative.
@@ -430,7 +432,91 @@ pre-CSR fallback. First-fit over a linked list of blocks.
 |---|---|---|
 | `Z_MEM_ALIGNMENT` | 4096 | every allocation is page-aligned |
 | `Z_MEM_MIN_BLOCK_SIZE` | 32768 | every allocation is rounded up to this |
-| `Z_MEM_MAX_BLOCKS` | 256 | `mem_blocks[]` is a fixed array; `alloc_metadata()` returns NULL when full |
+| `Z_MEM_MAX_BLOCKS` | 256 | `mem_blocks[]` is a fixed array of descriptors: at most this many blocks, used and free, at once; `alloc_metadata()` returns NULL when all are in the list |
+
+### Descriptors are recycled
+
+Until 0.0.7 they were not. `alloc_metadata()` took the next entry of
+`mem_blocks[]` and nothing ever gave one back: when `k_mem_free()`
+coalesced a block with a free neighbour it unlinked the neighbour's
+descriptor from the list and left it, and `mem_block_count` only grew.
+Every allocation that splits a free block takes one, so the **255th
+allocation since boot failed**, and every one after it, however much of
+the pool was free. Each app launch is an allocation, so a board that
+starts programs often -- cron, the dock, a demo -- would one day be
+unable to start anything. `free`'s "meta" line was the only sign: it
+counted descriptors ever taken, not ones in use.
+
+Unlinked descriptors now go on a free list, chained through `next`, and
+are taken from it first. The limit is now what the table says: blocks
+in the list at once. "meta" in `free` and `blocks_used` in
+`Z_SYS_MEM_STATS` report that.
+
+```
+cc -std=gnu99 -Wall -Wno-discarded-qualifiers -no-pie -I sw/os -I sw/common \
+   -o /tmp/test_mem sw/os/tests/test_mem.c && /tmp/test_mem
+```
+
+`test_mem.c` includes `mem.c` and walks its list: 5,000 alloc/free
+pairs, alone and around a block that stays (the old code failed at the
+255th); 200,000 random steps checked for overlap, alignment, coverage of
+the whole pool, coalescing and descriptors in use equal to blocks in
+the list; and a full pool, holes, and recovery.
+
+### Arenas
+
+An app's memory is fixed when it starts: its image, `.bss` included,
+and the stack-and-heap allowance its header asks for. That has to be
+the same on a 1MB board as on a 32MB one, so an app that is only
+sometimes large -- an editor with a long document -- either takes the
+memory everywhere or cannot have it anywhere. Since 0.0.7 an app may
+also have **one arena**: a block of the pool beside its own, sized while
+it runs (`Z_SYS_ARENA`, `zproc.h`; `z_arena_set()`/`z_arena_get()`,
+`zeitlos.h`).
+
+```c
+void *base;
+uint32_t got;
+if (z_arena_set(2u << 20, &base, &got) == Z_ARENA_OK) ...   // 2MB
+z_arena_set(0, NULL, NULL);                                  // gone
+```
+
+- **One, and resizable**, rather than an allocator: one extra block per
+  process is all it can add to the pool's fragmentation, and the one
+  extra region the MPU has is enough for it (below).
+- **Placed from the top** of the pool down (`k_mem_alloc_top()`), while
+  process images come from the bottom up, so the two do not interleave.
+- **Resized** in place when the block next to it is free -- shrinking
+  always is -- else grown down into a free block below it (the contents
+  slide down), else **moved**: a new block, a copy, the old one freed. A
+  move changes the base, so an app addresses its arena by offset and
+  takes the base again after every call. The copy runs with interrupts
+  on; the block being filled is in `arena_pending` meanwhile, so a kill
+  in the middle frees it too. A failed call changes nothing.
+- **Kept clear for launching.** No arena may take the pool below the
+  largest core app's image plus stack, read from the flash archive at
+  the first call (`k_arena_reserve()`), so whatever the person opens
+  next still opens; a move counts both blocks while it lasts. On a 1MB
+  board that is all there is, and arenas are refused: those boards keep
+  to what their apps hold in `.bss`, exactly as before.
+- **Freed** with the process -- exit, kill or crash -- in the same place
+  its block is, so nothing can leak it.
+- **Written only by its owner.** While the app runs, the MPU's grant
+  window ([mpu.md](mpu.md#the-grant-window)) holds the arena: the window
+  was used only by drivers, which open grants into a client's block,
+  and a driver may not have an arena, so one window serves both. Anyone
+  can read it, as anything. Syscalls accept it (`k_user_ok()`).
+- **Not a message payload.** A borrowed payload must lie in the sender's
+  block, and a driver's grant into a client covers the block, not the
+  arena -- so file I/O into or out of an arena goes through a buffer in
+  the app's own memory. `fs` refuses a buffer outside the window rather
+  than writing there.
+
+`free` in the kernel shell lists each arena and the reserve.
+`sw/os/tests/test_mem.c` covers the allocator's side -- placement from
+the top, shrinking and growing in place, growing down, and two thousand
+resizes -- and `sw/apps/text` is the first user
+([text_editor.md](text_editor.md#the-document)).
 
 The ramdisk takes a SHARE of the pool rather than a fixed size
 (`Z_RAMDISK_DIVISOR`, an eighth, capped at 4MB) -- scratch space should
@@ -769,6 +855,33 @@ An entry for a pid already in the ring is replaced rather than
 duplicated: pids are reused, and a stale entry would answer a question
 about the NEW process with the OLD one's status -- worse than UNKNOWN.
 
+## Process serials
+
+A pid names a slot, not a process. `k_proc_create()` takes the lowest
+free slot, so a program started just after another ended usually gets
+its pid, and "is pid 7 still running?" is answered yes by whatever took
+pid 7. The exit ring above already had to work around that.
+
+So every process also gets a **serial** when its slot is filled
+(`z_proc.serial`): the next value of a boot-wide counter, never 0,
+never given twice (32 bits; a wrap skips 0). `Z_SYS_PROC_SERIAL`
+returns the serial of the process at a pid, or 0 when nothing is
+running there -- a process being torn down counts as gone, as it does
+for `Z_SYS_PROC_STATUS`.
+
+```c
+uint32_t pid = z_proc_run("convert");
+uint32_t ser = z_proc_serial(pid);       // right away
+...
+if (z_proc_serial(pid) != ser)            // ended, whatever has pid now
+```
+
+The pair (pid, serial) names one process for good. The filesystem
+driver uses it for descriptor owners ([fs_driver.md](fs_driver.md),
+"Owners that are gone"). The syscall is appended at the end of
+`syscalls.def`, so no earlier number moves; the field is appended at
+the end of `z_proc`, so no earlier offset moves.
+
 ## The limits, and raising them
 
 `docs/posix.md`'s Phase 5 wants pipes as processes, which is what
@@ -867,8 +980,10 @@ stack, a few KB of image -- costs 32KB and `ls | grep | wc` costs 96KB
 before doing any work. At 4KB (which is already `Z_MEM_ALIGNMENT`, so
 no new rounding rule) the same pipeline costs about 48KB.
 
-`Z_MEM_MAX_BLOCKS` has to rise with it, or the block table becomes the
-new limit. 1024 entries is 16KB of `.bss` against today's 4KB.
+`Z_MEM_MAX_BLOCKS` may have to rise with it: it bounds the blocks in
+the list at any one time (descriptors are recycled since 0.0.7, so it
+is not a lifetime limit), and smaller blocks mean more of them. 1024
+entries is 16KB of `.bss` against today's 4KB.
 
 **This is the change to be least confident about.** A smaller minimum
 means more, smaller blocks and more external fragmentation, and

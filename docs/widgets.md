@@ -125,6 +125,12 @@ without thinking about it.
 `Z_SB_THICK` is 12, but that is a click target rather than a visual
 weight: the thumb is drawn 8px across, inside it.
 
+The thumb's size and place, and the value a drag gives, are `a * b / c`
+in units times pixels. Since 0.0.7 they are worked out in 32 bits
+(`sb_muldiv()`), exactly while `total * length` fits -- any document
+there is memory for -- and closely beyond, rather than in 64: libgcc's
+64-bit division was 1.3KB in every app with a scrollbar.
+
 ### Anything that blanks must dodge the grip
 
 The resize grip is chrome drawn by wm in the window's bottom-right
@@ -363,6 +369,13 @@ field**, and no button focused. While the field has focus every key
 edits it, **Space included**, and Enter is OK. Tab cycles field → OK →
 Cancel → field; on a focused button Space or Enter presses it, and
 typing a character returns to the field with that character.
+
+`z_dialog_prompt_empty_ok()` is the same prompt where **nothing** is
+an answer: OK with the field empty returns true and an empty string,
+and only Cancel, Escape or the close icon return false. The plain
+prompt refuses an empty OK -- an empty folder name is not an answer --
+but `text`'s "Replace with:" needs one, since replacing with nothing is
+how every match is deleted.
 
 `z_dialog_prompt_secret()` is the same prompt for a password: its
 field (`z_edit_t.secret`, `zedit.h`) shows `*` for every character and

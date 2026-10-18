@@ -25,6 +25,7 @@
 #include "zflist.h"
 #include "zdialog.h"
 #include "zedit.h"
+#include "zfsapp.h"		// fs_stat(), for z_help_open()
 
 // -- shared dialog state --
 //
@@ -665,6 +666,8 @@ static int dlg_outlen;
 
 // -- input --
 
+static bool prompt_empty_ok;	// z_dialog_prompt_empty_ok(): OK with nothing typed
+
 // Acts on button `act` being pressed, whether by pointer or keyboard.
 //
 // Factored out so the two input paths cannot drift: a dialog where
@@ -678,7 +681,7 @@ static void dlg_activate_button(int act) {
 		// OK only counts with something typed -- an empty name is
 		// not an answer, and silently accepting one would have the
 		// caller create "" and fail.
-		if (act == 0 && dlg.edit.len > 0) {
+		if (act == 0 && (dlg.edit.len > 0 || prompt_empty_ok)) {
 			dlg.result = Z_DIALOG_YES;
 			dlg.done = true;
 		} else if (act != 0) {
@@ -913,7 +916,7 @@ static void dlg_key(uint32_t keysym, uint8_t mods) {
 		}
 
 		if (keysym == 0x0d) {
-			if (dlg.edit.len > 0) {
+			if (dlg.edit.len > 0 || prompt_empty_ok) {
 				dlg.result = Z_DIALOG_YES;
 				dlg.done = true;
 			}
@@ -1166,8 +1169,17 @@ bool z_dialog_prompt(const z_dialog_ctx_t *ctx, const char *title,
 		dlg.edit.len = dlg.edit.cur = 0;
 	}
 
-	return out[0] != 0;
+	return prompt_empty_ok ? ok : out[0] != 0;
 
+}
+
+bool z_dialog_prompt_empty_ok(const z_dialog_ctx_t *ctx, const char *title,
+	const char *msg, const char *initial, char *out, int outlen) {
+	bool ok;
+	prompt_empty_ok = true;
+	ok = z_dialog_prompt(ctx, title, msg, initial, out, outlen);
+	prompt_empty_ok = false;
+	return ok;
 }
 
 bool z_dialog_prompt_secret(const z_dialog_ctx_t *ctx, const char *title,
@@ -1232,5 +1244,52 @@ int z_dialog_confirm(const z_dialog_ctx_t *ctx, const char *title,
 	dlg_repaint();
 
 	return dlg_run();
+
+}
+
+// -- help (F1) -- zdialog.h, docs/app_help.md --
+
+int z_help_open(const char *doc) {
+
+	// "/docs/" doc ".md" and "#using-it", without printf: not every app
+	// that links this carries one.
+	char arg[Z_WM_ARG_MAX];
+	int n = 0;
+	const char *parts[] = { "/docs/", doc, ".md" };
+
+	for (int i = 0; i < 3; i++)
+		for (const char *p = parts[i]; *p; p++) {
+			if (n >= (int)sizeof(arg) - 12) return Z_HELP_NO_DOC;
+			arg[n++] = *p;
+		}
+	arg[n] = 0;
+
+	// /docs is on the card: a flash-only system has no manuals at all.
+	z_fs_info_t fi;
+	if (!fs_stat(arg, &fi)) return Z_HELP_NO_DOC;
+
+	// read, at the section for users...
+	int plain = n;
+	for (const char *p = "#using-it"; *p; p++) arg[n++] = *p;
+	arg[n] = 0;
+	z_launch_arg_set(arg);
+	if (z_proc_run("read")) return Z_HELP_OK;
+
+	// ...or, where read is not on the card, text: the page, from its top
+	arg[plain] = 0;
+	z_launch_arg_set(arg);
+	if (z_proc_run("text")) return Z_HELP_OK;
+
+	return Z_HELP_NO_APP;
+
+}
+
+void z_dialog_help(const z_dialog_ctx_t *ctx, const char *doc) {
+
+	int r = z_help_open(doc);
+	if (r == Z_HELP_OK) return;
+
+	// One message for both: short, because text's RAM budget pays for it.
+	z_dialog_confirm(ctx, "Help", "Help is in /docs,\non the SD card.", Z_DIALOG_OK_CANCEL);
 
 }

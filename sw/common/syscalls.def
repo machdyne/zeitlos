@@ -310,3 +310,18 @@ Z_MKSYSCALL(ZAR, k_zar)
 // first -- 0 takes it down before wm redraws them. Ctrl+Alt+Esc and the
 // shell's `exit` are how. Appended last.
 Z_MKSYSCALL(RESCUE, k_rescue)
+
+// Which process is at a pid, across pid reuse: its creation serial, or
+// 0 when nothing is running there (sw/common/zproc.h,
+// z_proc_serial_args_t; sw/os/kernel.c, k_proc_serial()). Pids are
+// reused lowest-first, so "is pid 7 still running?" can be answered yes
+// by the program that took pid 7 after the one the caller meant had
+// died. The filesystem driver records the serial of each descriptor's
+// owner for exactly that (docs/fs_driver.md, "Owners that are gone").
+// Appended last.
+Z_MKSYSCALL(PROC_SERIAL, k_proc_serial)
+
+// The calling app's arena: one block of memory beside its own, sized at
+// run time (sw/common/zproc.h, z_arena_args_t; sw/os/kernel.c,
+// k_arena(); docs/kernel.md "Arenas"). Appended last.
+Z_MKSYSCALL(ARENA, k_arena)

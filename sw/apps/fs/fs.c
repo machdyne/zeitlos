@@ -72,6 +72,7 @@ typedef struct {
 	bool		nfs;			// ... on NFS: the server's handle in nfh
 	uint8_t		vol;
 	uint32_t	owner;			// pid
+	uint32_t	owner_serial;	// that process's serial: see owner_gone()
 	uint32_t	zoff, zsize, zpos;
 	union {
 		struct {
@@ -98,6 +99,7 @@ typedef struct {
 	uint8_t		mi;
 	uint32_t	page;			// the client's page size (zfsc.c)
 	uint32_t	owner;
+	uint32_t	owner_serial;
 	uint32_t	zit;
 	union {
 		DIR			d;
@@ -603,6 +605,7 @@ static void usb_poll(bool force) {
 // -- clients -----------------------------------------------------------
 
 static bool gone(uint32_t pid);
+static void sweep_before(void);
 
 // A slot can be given to another client once its own has copied its
 // last reply: it has sent something since (a client copies before it
@@ -677,6 +680,7 @@ static int32_t op_open(const z_fsreq_t *rq, uint32_t pid, fs_client_t *c) {
 	z_fs_info_t fi;
 
 	if (!real) return -Z_ENAMETOOLONG;
+	sweep_before();
 	for (fd = 0; fd < FS_MAX_FILES && files[fd].used; fd++) ;
 	if (fd == FS_MAX_FILES) return -Z_EMFILE;
 	fs_file_t *f = &files[fd];
@@ -693,6 +697,7 @@ static int32_t op_open(const z_fsreq_t *rq, uint32_t pid, fs_client_t *c) {
 		f->zar = true;
 		f->nfs = true;
 		f->owner = pid;
+		f->owner_serial = z_proc_serial(pid);
 		f->zsize = fi.size;
 		put_info(c, &fi);
 		return fd;
@@ -723,6 +728,7 @@ static int32_t op_open(const z_fsreq_t *rq, uint32_t pid, fs_client_t *c) {
 		f->zar = true;
 		f->nfs = false;
 		f->owner = pid;
+		f->owner_serial = z_proc_serial(pid);
 		f->zoff = zo;
 		f->zsize = zs;
 		memset(&fi, 0, sizeof(fi));
@@ -751,6 +757,7 @@ static int32_t op_open(const z_fsreq_t *rq, uint32_t pid, fs_client_t *c) {
 	}
 	f->used = true;
 	f->owner = pid;
+	f->owner_serial = z_proc_serial(pid);
 	memset(&fi, 0, sizeof(fi));
 	fi.size = (uint32_t)f_size(&f->f);
 	fi.type = Z_FS_TYPE_FILE;
@@ -981,6 +988,7 @@ static int32_t op_rename(const z_fsreq_t *rq) {
 	const char *to = resolve(rq->path2, rt, sizeof rt);
 	FRESULT r;
 	if (!from || !to) return -Z_ENAMETOOLONG;
+	sweep_before();
 	if (!from[0] || !to[0]) return -Z_EINVAL;
 	if (nfs_path(rq->path) || nfs_path(rq->path2)) return -Z_EROFS;
 	// FatFs would rename within `from`'s drive whatever `to` says.
@@ -1142,6 +1150,7 @@ static int32_t op_opendir(const z_fsreq_t *rq, uint32_t pid, fs_client_t *c) {
 	int32_t dd;
 	if (!real) return -Z_ENAMETOOLONG;
 	if (strlen(path) >= FS_PATH) return -Z_ENAMETOOLONG;
+	sweep_before();
 	for (dd = 0; dd < FS_MAX_DIRS && dirs[dd].used; dd++) ;
 	if (dd == FS_MAX_DIRS) return -Z_EMFILE;
 	fs_dir_t *d = &dirs[dd];
@@ -1156,6 +1165,7 @@ static int32_t op_opendir(const z_fsreq_t *rq, uint32_t pid, fs_client_t *c) {
 		d->page = dir_page(rq);
 		d->used = true;
 		d->owner = pid;
+		d->owner_serial = z_proc_serial(pid);
 		int32_t n = dir_fill(d, c);
 		if (n < 0) {
 			if (d->used) dir_close(d);
@@ -1175,6 +1185,7 @@ static int32_t op_opendir(const z_fsreq_t *rq, uint32_t pid, fs_client_t *c) {
 		return fs_err(r);
 	d->used = true;
 	d->owner = pid;
+	d->owner_serial = z_proc_serial(pid);
 	int32_t n = dir_fill(d, c);
 	if (n < 0) {
 		if (d->used) dir_close(d);
@@ -1305,6 +1316,7 @@ static int32_t serve(const z_fsreq_t *rq, uint32_t pid, uint8_t *buf,
 		FILINFO fno;
 		if (nfs_path(rq->path)) return -Z_EROFS;
 		if (!(real = resolve(rq->path, rb, sizeof rb))) return -Z_ENAMETOOLONG;
+		sweep_before();
 		need(real);
 		fr = f_unlink(real);
 		// FatFs says DENIED for a directory with something in it as
@@ -1351,22 +1363,47 @@ static int32_t serve(const z_fsreq_t *rq, uint32_t pid, uint8_t *buf,
 }
 
 // A client that has gone has left its descriptors open; they are closed
-// once it no longer exists. Checked now and then, not per request.
+// once it no longer exists.
 static bool gone(uint32_t pid) {
 	uint32_t st = Z_PROC_STATE_UNKNOWN;
 	z_proc_status(pid, &st, NULL);
 	return st != Z_PROC_STATE_RUNNING;
 }
 
+// A descriptor's owner is gone when the process running at its pid is
+// not the one that opened it -- including when another program has
+// since been given that pid. Pids are reused lowest-first, so a program
+// started just after a kill usually is: judged by pid alone, the dead
+// one's files stayed open for good (docs/fs_driver.md, "Owners that are
+// gone").
+static bool owner_gone(uint32_t pid, uint32_t serial) {
+	return z_proc_serial(pid) != serial;
+}
+
 static void sweep_dead(void) {
 	if (bulk_owner && gone(bulk_owner - 1)) bulk_owner = 0;
 	for (int i = 0; i < FS_MAX_FILES; i++)
-		if (files[i].used && gone(files[i].owner)) {
+		if (files[i].used && owner_gone(files[i].owner, files[i].owner_serial)) {
 			if (!files[i].zar) f_close(&files[i].f);
 			files[i].used = false;
 		}
 	for (int i = 0; i < FS_MAX_DIRS; i++)
-		if (dirs[i].used && gone(dirs[i].owner)) dir_close(&dirs[i]);
+		if (dirs[i].used && owner_gone(dirs[i].owner, dirs[i].owner_serial))
+			dir_close(&dirs[i]);
+}
+
+// Before an open, an opendir, an unlink or a rename: whatever a dead process left
+// open is closed first. Otherwise a file deleted right after its
+// writer was killed is closed later by the periodic sweep, and that
+// close writes the size and date into the directory entry of a file
+// that no longer exists; a rename is refused as "in use" by a writer
+// that is gone; and an open can fail with no descriptor free. One
+// syscall per open descriptor, nothing when none are.
+static void sweep_before(void) {
+	bool any = false;
+	for (int i = 0; i < FS_MAX_FILES && !any; i++) any = files[i].used;
+	for (int i = 0; i < FS_MAX_DIRS && !any; i++) any = dirs[i].used;
+	if (any) sweep_dead();
 }
 
 // The answer to a client with no slot free: try again (zfsc.c does).

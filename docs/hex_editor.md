@@ -35,6 +35,8 @@ nothing is ever loaded whole.
 
 ## Using it
 
+**F1** opens this page, here ([app_help.md](app_help.md)).
+
 Titlebar buttons, left to right: **new**, **open**, **save**, **font**,
 **close**. New and save do nothing until phase 3.
 

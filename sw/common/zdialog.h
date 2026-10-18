@@ -150,6 +150,13 @@ int z_dialog_confirm(const z_dialog_ctx_t *ctx, const char *title,
 bool z_dialog_prompt(const z_dialog_ctx_t *ctx, const char *title,
 	const char *msg, const char *initial, char *out, int outlen);
 
+// z_dialog_prompt() where nothing is a valid answer: OK with the field
+// empty returns true and an empty `out`, so only Cancel (or Escape, or
+// the close icon) returns false. For text's "Replace with:", where
+// replacing with nothing is how you delete every match.
+bool z_dialog_prompt_empty_ok(const z_dialog_ctx_t *ctx, const char *title,
+	const char *msg, const char *initial, char *out, int outlen);
+
 // z_dialog_prompt() for a password: the field shows '*' and takes
 // printable ASCII only, and the dialog's own copy is wiped before this
 // returns. The caller should wipe `out` once it is done with it.
@@ -157,5 +164,23 @@ bool z_dialog_prompt_secret(const z_dialog_ctx_t *ctx, const char *title,
 	const char *msg, char *out, int outlen);
 
 #define Z_DIALOG_MSG_LINES   4
+
+// -- help (F1) --
+//
+// Opens an app's manual: /docs/<doc>.md in `read`, at the heading
+// "Using it" -- or, where `read` is not on the card, in `text` (a core
+// app, always in flash), as plain Markdown. One document per app, the
+// same one GitHub shows, so the help cannot drift from the docs.
+// docs/app_help.md.
+//
+// z_help_open() says what happened; z_dialog_help() does the same and,
+// when there is no manual to show -- a system running from flash with
+// no card, whose /docs is on the card -- says so in a dialog instead of
+// doing nothing.
+#define Z_HELP_OK		0
+#define Z_HELP_NO_DOC	1	// /docs/<doc>.md is not there (no card)
+#define Z_HELP_NO_APP	2	// neither read nor text would start
+int z_help_open(const char *doc);
+void z_dialog_help(const z_dialog_ctx_t *ctx, const char *doc);
 
 #endif

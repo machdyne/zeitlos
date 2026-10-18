@@ -322,6 +322,26 @@ depth was 32KB of `.bss` for something nobody reaches with two
 buttons and no menu. The oldest is dropped rather than refusing to
 record a new one.
 
+## Local files
+
+Since 0.0.7 `web` opens a page on the machine itself: a `file:` URL, or
+an absolute path typed into the bar (`/home/site/index.html` becomes
+`file:///home/site/index.html`). The file browser opens `.htm` and
+`.html` files this way ([file_browser.md](file_browser.md)).
+
+The file is read into the spool like a response body -- 4KB per pass
+of the main loop, so the window keeps answering `wm` and Stop works
+while a large file is read -- and then goes through the same completion
+as a `200 text/html` from a server. Everything after that is the
+network path unchanged: indexing, the scroll position, the history, and
+**relative links and images**, which resolve against the `file:` URL
+and so are files beside the page. A saved site browses like the live
+one. `%XX` in a link is decoded before the file is opened, so
+`my%20page.html` is the file `my page.html`.
+
+`net` is not needed and not asked. The page is read as UTF-8: there
+are no response headers to name another character set.
+
 ---
 
 ## Phases

@@ -169,6 +169,44 @@ typedef struct {
 							// meaningful only when state is EXITED
 } z_proc_status_args_t;
 
+// -- Z_SYS_PROC_SERIAL --
+//
+// The serial of the process running at `pid`: a number unique to that
+// process for as long as the machine is up, never 0. 0 means nothing
+// is running there (or it is being torn down). Record (pid, serial)
+// when you start dealing with a process; it is the same process later
+// exactly when the serial read then is the same. A pid alone is not
+// enough: pids are reused lowest-first.
+typedef struct {
+	uint32_t	pid;		// IN
+	uint32_t	serial;		// OUT: 0 if no process is running there
+} z_proc_serial_args_t;
+
+// -- Z_SYS_ARENA -- docs/kernel.md, "Arenas" --
+//
+// The calling app's arena: one block beside its own, sized at run time.
+// IN `size`: the size wanted (rounded up to 4KB; 0 frees it), or
+// Z_ARENA_QUERY to change nothing. OUT `base`/`size`: the arena as it
+// now is -- after a failed change, as it was. A change may MOVE it: the
+// contents are kept, up to the smaller of the two sizes, but `base` is
+// new, so an app keeps offsets into its arena, never pointers across a
+// call. Arena memory is the app's to read and write, and to pass to
+// syscalls; it is not a borrowed message payload, and drivers cannot
+// write into it -- file reads go through a buffer of the app's own.
+#define Z_ARENA_QUERY		0xFFFFFFFFu
+#define Z_ARENA_MAX			(512u * 1024 * 1024)
+
+#define Z_ARENA_OK			0
+#define Z_ARENA_E_PERM		(-1)	// drivers and the kernel cannot have one
+#define Z_ARENA_E_NOMEM		(-2)	// no block of that size
+#define Z_ARENA_E_RESERVE	(-3)	// would leave too little to start the largest core app
+
+typedef struct {
+	uint32_t	size;		// IN: wanted, or Z_ARENA_QUERY; OUT: now
+	uint32_t	base;		// OUT: physical address, 0 when there is none
+	int32_t		result;		// OUT: Z_ARENA_*
+} z_arena_args_t;
+
 typedef struct {
 	z_proc_info_t	*out;		// OUT: caller-owned array, >= max entries
 	uint32_t		max;		// capacity of `out`, in entries

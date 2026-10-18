@@ -54,11 +54,40 @@ volatile static __attribute__((section(".bss")))
 static __attribute__((section(".bss"))) k_mem_block_t mem_blocks[Z_MEM_MAX_BLOCKS];
 static __attribute__((section(".bss"))) int mem_block_count = 0;
 
+// Descriptors given back. The pool used to be take-only: a free that
+// coalesced unlinked a neighbour's descriptor from block_list and
+// nothing ever used it again, while mem_block_count only grew. Every
+// k_mem_alloc() that splits a free block takes one, so after 255
+// allocations since boot -- each app launch is one -- alloc_metadata()
+// failed for good and nothing could be started any more, however much
+// memory was free (sw/os/tests/test_mem.c, "churn"). Unlinked
+// descriptors now go on this list, chained through `next`, and are
+// taken from it first.
+static __attribute__((section(".bss"))) k_mem_block_t *mem_desc_free = NULL;
+static __attribute__((section(".bss"))) int mem_desc_live = 0;	// in block_list
+
 // Allocate a new metadata block from the fixed pool
 static k_mem_block_t* alloc_metadata(void) {
-    if (mem_block_count >= Z_MEM_MAX_BLOCKS)
-        return NULL;
-    return &mem_blocks[mem_block_count++];
+    k_mem_block_t *d;
+    if (mem_desc_free) {
+        d = mem_desc_free;
+        mem_desc_free = d->next;
+    } else {
+        if (mem_block_count >= Z_MEM_MAX_BLOCKS)
+            return NULL;
+        d = &mem_blocks[mem_block_count++];
+    }
+    mem_desc_live++;
+    return d;
+}
+
+// A descriptor that has just been unlinked from block_list.
+static void release_metadata(k_mem_block_t *d) {
+    d->used = false;
+    d->size = 0;
+    d->next = mem_desc_free;
+    mem_desc_free = d;
+    mem_desc_live--;
 }
 
 uint32_t k_mem_align_up(uint32_t val, uint32_t align) {
@@ -67,6 +96,8 @@ uint32_t k_mem_align_up(uint32_t val, uint32_t align) {
 
 void k_mem_init(uint32_t total_size) {
     mem_block_count = 0;
+    mem_desc_free = NULL;
+    mem_desc_live = 0;
 
     k_mem_block_t* first = alloc_metadata();
     first->start = Z_MEM_BASE;
@@ -138,6 +169,154 @@ void* k_mem_alloc(uint32_t size) {
     return NULL; // Out of memory
 }
 
+// -- for arenas (Z_SYS_ARENA, kernel.c; docs/kernel.md, "Arenas") --
+
+// Descriptors that can still be taken, from the free list or the table.
+static int meta_avail(void) {
+    int n = Z_MEM_MAX_BLOCKS - mem_block_count;
+    for (k_mem_block_t *d = mem_desc_free; d; d = d->next) n++;
+    return n;
+}
+
+static k_mem_block_t *find_used(uint32_t addr, k_mem_block_t **prevp) {
+    k_mem_block_t *prev = NULL;
+    for (k_mem_block_t *b = (k_mem_block_t *)block_list; b; prev = b, b = b->next)
+        if (b->used && b->start == addr) {
+            if (prevp) *prevp = prev;
+            return b;
+        }
+    return NULL;
+}
+
+// From the TOP of the highest free block that holds `size`: arenas are
+// placed from the top of the pool down while process images are placed
+// from the bottom up, so the two do not interleave and leave each other
+// holes. `size` is rounded up to Z_MEM_ALIGNMENT; there is no 32KB
+// minimum, an arena is as small as it is.
+void *k_mem_alloc_top(uint32_t size) {
+    size = k_mem_align_up(size ? size : 1, Z_MEM_ALIGNMENT);
+
+    k_mem_block_t *best = NULL, *bprev = NULL, *prev = NULL;
+    for (k_mem_block_t *b = (k_mem_block_t *)block_list; b; prev = b, b = b->next) {
+        if (b->used) continue;
+        uint32_t top = (b->start + b->size) & ~(uint32_t)(Z_MEM_ALIGNMENT - 1);
+        if (top >= b->start + size) { best = b; bprev = prev; }
+    }
+    if (!best) return NULL;
+
+    uint32_t end = best->start + best->size;
+    uint32_t top = end & ~(uint32_t)(Z_MEM_ALIGNMENT - 1);
+    uint32_t start = top - size;
+    int need = (start > best->start) + (end > top);
+    if (meta_avail() < need) return NULL;
+
+    k_mem_block_t *blk = best;
+    if (start > best->start) {
+        // best keeps the free space below; a new descriptor is the block
+        blk = alloc_metadata();
+        blk->start = start;
+        blk->size = end - start;
+        blk->next = best->next;
+        best->size = start - best->start;
+        best->next = blk;
+    }
+    (void)bprev;
+    if (end > top) {
+        k_mem_block_t *t = alloc_metadata();
+        t->start = top;
+        t->size = end - top;
+        t->used = false;
+        t->next = blk->next;
+        blk->next = t;
+    }
+    blk->start = start;
+    blk->size = size;
+    blk->used = true;
+    return (void *)(uintptr_t)start;
+}
+
+// The size of the used block at `ptr`, or 0.
+uint32_t k_mem_block_size(void *ptr) {
+    k_mem_block_t *b = find_used((uint32_t)(uintptr_t)ptr, NULL);
+    return b ? b->size : 0;
+}
+
+// Resizes the used block at `ptr` IN PLACE if it can, keeping its
+// start: always when shrinking -- the tail goes back to the pool,
+// joining a free neighbour -- and when growing if the block after it is
+// free and large enough. Returns false, changing nothing, if not.
+bool k_mem_resize(void *ptr, uint32_t size) {
+    k_mem_block_t *b = find_used((uint32_t)(uintptr_t)ptr, NULL);
+    if (!b || !size) return false;
+    size = k_mem_align_up(size, Z_MEM_ALIGNMENT);
+    if (size == b->size) return true;
+
+    k_mem_block_t *n = b->next;
+    if (size < b->size) {
+        uint32_t tail = b->size - size;
+        if (n && !n->used) {
+            n->start -= tail;
+            n->size += tail;
+        } else {
+            if (meta_avail() < 1) return false;
+            k_mem_block_t *t = alloc_metadata();
+            t->start = b->start + size;
+            t->size = tail;
+            t->used = false;
+            t->next = n;
+            b->next = t;
+        }
+        b->size = size;
+        return true;
+    }
+
+    uint32_t extra = size - b->size;
+    if (!n || n->used || n->size < extra) return false;
+    if (n->size == extra) {
+        b->next = n->next;
+        release_metadata(n);
+    } else {
+        n->start += extra;
+        n->size -= extra;
+    }
+    b->size = size;
+    return true;
+}
+
+// Grows the used block at `ptr` DOWNWARD into a free block below it,
+// keeping its end: the new start is returned, and the caller moves the
+// contents down to it (they are still at `ptr`). 0 if the free block
+// below is missing or too small.
+uint32_t k_mem_grow_down(void *ptr, uint32_t size) {
+    k_mem_block_t *prev;
+    k_mem_block_t *b = find_used((uint32_t)(uintptr_t)ptr, &prev);
+    if (!b || !prev || prev->used) return 0;
+    size = k_mem_align_up(size, Z_MEM_ALIGNMENT);
+    if (size <= b->size) return 0;
+    uint32_t extra = size - b->size;
+    if (prev->size < extra) return 0;
+    if (prev->size == extra) {
+        // prev is used up: find the one before it to unlink it
+        k_mem_block_t *pp = NULL;
+        for (k_mem_block_t *x = (k_mem_block_t *)block_list; x && x != prev; x = x->next) pp = x;
+        if (pp) pp->next = b;
+        else block_list = b;
+        release_metadata(prev);
+    } else
+        prev->size -= extra;
+    b->start -= extra;
+    b->size = size;
+    return b->start;
+}
+
+// Bytes in free blocks, all together.
+uint32_t k_mem_free_bytes(void) {
+    uint32_t n = 0;
+    for (k_mem_block_t *b = (k_mem_block_t *)block_list; b; b = b->next)
+        if (!b->used) n += b->size;
+    return n;
+}
+
 void k_mem_free(void* ptr) {
     uint32_t addr = (uint32_t)(uintptr_t)ptr;
     k_mem_block_t* blk = block_list;
@@ -149,14 +328,17 @@ void k_mem_free(void* ptr) {
 
             // Try coalescing with next block if free
             if (blk->next && !blk->next->used) {
-                blk->size += blk->next->size;
-                blk->next = blk->next->next;
+                k_mem_block_t *gone = blk->next;
+                blk->size += gone->size;
+                blk->next = gone->next;
+                release_metadata(gone);
             }
 
             // Try coalescing with previous block if free
             if (prev && !prev->used) {
                 prev->size += blk->size;
                 prev->next = blk->next;
+                release_metadata(blk);
             }
 
             return;
@@ -214,7 +396,7 @@ static void mem_collect(z_mem_stats_args_t *s) {
 	}
 
 	s->free = s->total - s->used;
-	s->blocks_used = (uint32_t)mem_block_count;
+	s->blocks_used = (uint32_t)mem_desc_live;
 	s->blocks_max = Z_MEM_MAX_BLOCKS;
 
 }
@@ -259,7 +441,7 @@ z_rv k_mem_dump(void) {
 		(long)(free_total / 1024), free_blocks, free_blocks == 1 ? "" : "s",
 		(long)(largest_free / 1024));
 	printf("  meta: %d/%d block descriptors in use\n",
-		mem_block_count, Z_MEM_MAX_BLOCKS);
+		mem_desc_live, Z_MEM_MAX_BLOCKS);
 
 	return Z_OK;
 

@@ -3003,6 +3003,20 @@ static void do_open(void) {
 		return;
 	}
 
+	// Another system's document (docx, odt, rtf, epub): convert
+	// turns it into Markdown and opens that -- here again, or in text
+	// when it is small enough to edit (docs/convert.md).
+	{
+		const char *app = z_ftype_app_for(p);
+		if (app && !strcmp(app, "convert")) {
+			loading = false;
+			repaint();
+			z_launch_arg_set(p);
+			z_proc_run("convert");
+			return;
+		}
+	}
+
 	// Say so BEFORE the blocking open, not after: open_path() does
 	// not return until the document is indexed, and nothing in this
 	// app runs in between.
@@ -3094,6 +3108,8 @@ static void scroll_flush(void) {
 }
 
 static void handle_key(uint32_t keysym, uint8_t mods) {
+
+	if (keysym == Z_KEY_F1) { z_dialog_help(&dlg_ctx, "read_app"); return; }	// docs/app_help.md
 
 	int page = view_h / (BODY_FONT->h + 1);
 	if (page < 1) page = 1;
@@ -3456,6 +3472,7 @@ int main(void) {
 			 * thing Markdown produces. */
 			uint32_t want_off = 0;
 			bool have_off = false;
+			char *heading = NULL;	// "#using-it": a heading's anchor, as a link would
 
 			for (int h = 0; arg[h]; h++) {
 
@@ -3477,13 +3494,20 @@ int main(void) {
 					arg[h] = 0;
 					want_off = v;
 					have_off = true;
+				} else if (arg[h + 1]) {
+					// An app's help (F1, z_help_open() in zdialog.h)
+					// lands on its "Using it" section this way.
+					arg[h] = 0;
+					heading = &arg[h + 1];
 				}
 
 				break;
 
 			}
 
-			if (open_path(arg) && have_off) {
+			bool opened = open_path(arg);
+			if (opened && heading) goto_anchor(heading);
+			if (opened && have_off) {
 
 				/* line_at_offset() extends the sparse index as
 				 * far as the offset and returns the source line

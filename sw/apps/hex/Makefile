@@ -37,7 +37,8 @@ OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o zwidget.o zspeak.o \
 # See tests/trampoline.h for why both are needed.
 HOSTCC ?= cc
 HOSTSRC = ../../common/zwin.c ../../common/zwidget.c \
-	../../common/zfont_data.c ../../common/zobj.c ../../common/zeitlos.c
+	../../common/zfont_data.c ../../common/zobj.c ../../common/zeitlos.c \
+	../../common/tests/zspeak_stub.c
 HOSTFLAGS = -std=gnu99 -Wall -no-pie -I ../../common
 
 # The layout render (sw/common/tests/zrender.h) -- see

@@ -110,6 +110,9 @@ int fs_open_write(const char *p) {
 
 }
 
+// sheet's export writes a job file for convert: accepted, not kept
+int fs_write_file(char *p, char *b, int n) { (void)p; (void)b; return n; }
+
 int fs_read_chunk(int h, void *buf, int maxlen) {
 
 	if (h < 0 || h >= STUB_FILES || !stub_open[h]) return -1;
@@ -437,6 +440,118 @@ int main(void) {
 	if (bad) { printf("  FAIL  %d cells differ after a round trip\n", bad); fails++; }
 
 	ck("total survives the round trip", shown(121, 2), before);
+
+	// -- editing: undo, fill, paste, structure, sort, menu ---------
+
+	printf("editing:\n");
+
+	mem_init();
+	sheet_init(&sh);
+	history_clear();
+	cur_row = cur_col = sel_row = sel_col = 0;
+
+	// typing: "5" Enter, "=A1*2" Enter
+	handle_key('5', 0); handle_key('\r', 0);
+	handle_key('=', 0); handle_key('A', 0); handle_key('1', 0); handle_key('*', 0); handle_key('2', 0);
+	handle_key('\r', 0);
+	ck("typed formula", shown(1, 0), "10");
+
+	handle_key('z', Z_KBD_MOD_CTRL);
+	ck("undo the formula", sheet_src(&sh, 1, 0), "");
+	handle_key('z', Z_KBD_MOD_CTRL);
+	ck("undo the number", sheet_src(&sh, 0, 0), "");
+	handle_key('z', Z_KBD_MOD_CTRL);	// nothing left: harmless
+	handle_key('y', Z_KBD_MOD_CTRL);
+	ck("redo the number", sheet_src(&sh, 0, 0), "5");
+	handle_key('y', Z_KBD_MOD_CTRL);
+	ck("redo the formula", sheet_src(&sh, 1, 0), "=A1*2");
+
+	// a commit that changes nothing is not an undo step
+	cur_row = sel_row = 0; cur_col = sel_col = 0;
+	int before_used = ust.used;
+	handle_key(Z_KEY_F2, 0); handle_key('\r', 0);
+	ok("no-op edit not recorded", ust.used == before_used);
+
+	// fill down: B1 =A1+1 into B1:B5
+	sheet_set(&sh, 0, 1, "=A1+1");
+	sheet_set(&sh, 2, 0, "7");
+	cur_row = 0; cur_col = 1; sel_row = 4; sel_col = 1;
+	handle_key('d', Z_KBD_MOD_CTRL);
+	ck("filled B3", sheet_src(&sh, 2, 1), "=A3+1");
+	ck("filled B3 value", shown(2, 1), "8");
+	ck("filled B5", sheet_src(&sh, 4, 1), "=A5+1");
+	handle_key('z', Z_KBD_MOD_CTRL);
+	ck("fill undone", sheet_src(&sh, 2, 1), "");
+	ck("fill undo keeps B1", sheet_src(&sh, 0, 1), "=A1+1");
+
+	// copy B1, paste at D10 (relative), and a 2x2 tile
+	cur_row = sel_row = 0; cur_col = sel_col = 1;
+	do_copy();
+	cur_row = sel_row = 9; cur_col = sel_col = 3;
+	paste_cells();
+	ck("pasted relative", sheet_src(&sh, 9, 3), "=C10+1");
+	cur_row = 11; cur_col = 3; sel_row = 12; sel_col = 4;
+	paste_cells();
+	ck("tiled 1", sheet_src(&sh, 12, 4), "=D13+1");
+	handle_key('z', Z_KBD_MOD_CTRL);
+	ck("tile undone", sheet_src(&sh, 12, 4), "");
+	ck("first paste stays", sheet_src(&sh, 9, 3), "=C10+1");
+
+	// insert a row through the menu: "/" "I" "R" at row 2
+	cur_row = sel_row = 1; cur_col = sel_col = 0;
+	handle_key('/', 0); handle_key('i', 0); handle_key('r', 0);
+	ok("menu closed", menu == M_NONE);
+	ck("row moved down", sheet_src(&sh, 2, 0), "=A1*2");
+	ck("reference followed", sheet_src(&sh, 10, 3), "=C11+1");
+	handle_key('z', Z_KBD_MOD_CTRL);
+	ck("insert undone", sheet_src(&sh, 1, 0), "=A1*2");
+	ck("insert undone, refs", sheet_src(&sh, 9, 3), "=C10+1");
+	handle_key('y', Z_KBD_MOD_CTRL);
+	ck("insert redone", sheet_src(&sh, 2, 0), "=A1*2");
+
+	// Esc backs out of a submenu, then out of the menu
+	handle_key('/', 0); handle_key('d', 0);
+	ok("in submenu", menu == M_DELETE);
+	handle_key(0x1b, 0);
+	ok("back to top", menu == M_TOP);
+	handle_key(0x1b, 0);
+	ok("menu gone", menu == M_NONE);
+
+	// sort A20:B23 by B, descending, through the menu
+	sheet_init(&sh); history_clear();
+	const char *nm[] = { "c", "a", "d", "b" };
+	const char *vv[] = { "3", "1", "4", "2" };
+	for (int i = 0; i < 4; i++) { sheet_set(&sh, 19 + i, 0, nm[i]); sheet_set(&sh, 19 + i, 1, vv[i]); }
+	cur_row = 19; cur_col = 1; sel_row = 22; sel_col = 0;
+	handle_key('/', 0); handle_key('s', 0); handle_key('d', 0);
+	ck("sorted first", sheet_src(&sh, 19, 0), "d");
+	ck("sorted last", sheet_src(&sh, 22, 0), "a");
+	handle_key('z', Z_KBD_MOD_CTRL);
+	ck("sort undone", sheet_src(&sh, 19, 0), "c");
+
+	// width: Alt+Right, undone
+	cur_row = sel_row = 0; cur_col = sel_col = 2;
+	int w0 = sheet_colw(&sh, 2);
+	handle_key(Z_KEY_RIGHT, Z_KBD_MOD_ALT);
+	ok("wider", sheet_colw(&sh, 2) == w0 + 1);
+	handle_key('z', Z_KBD_MOD_CTRL);
+	ok("width undone", sheet_colw(&sh, 2) == w0);
+
+	// a big structural change in the fallback memory: the history
+	// drops what does not fit rather than failing the edit
+	for (int i = 0; i < 2000; i++) {
+		char v[16];
+		snprintf(v, sizeof v, "cell %d", i);
+		sheet_set(&sh, i / 20, i % 20, v);
+	}
+	cur_row = sel_row = 0;
+	run_command(C_INS_ROWS);
+	ck("insert on a full-ish sheet", sheet_src(&sh, 1, 0), "cell 0");
+
+	// a cell can still start with '/' after an apostrophe
+	cur_row = sel_row = 200; cur_col = sel_col = 0;
+	handle_key('\'', 0); handle_key('/', 0); handle_key('2', 0); handle_key('\r', 0);
+	ck("text starting with /", shown(200, 0), "/2");
 
 	printf("\n%d checks, %s\n", checks, fails ? "FAILURES" : "all passed");
 

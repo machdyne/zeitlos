@@ -76,6 +76,7 @@
 #include "../../common/ztype.h"
 
 #include "sheet_core.h"
+#include "chart.h"
 
 // -- the document --
 
@@ -528,7 +529,14 @@ static void draw_headers(void) {
 
 }
 
+static void draw_menu(void);
+static int menu;
+static bool chart_mode;
+
 static void draw_bar(void) {
+
+	if (menu) { draw_menu(); return; }
+	if (chart_mode) return;
 
 	int cw = z_win_content_w(&win);
 
@@ -556,6 +564,34 @@ static void draw_bar(void) {
 
 	// The content: what is being typed, or the cell's own source.
 	const char *text = editing ? edit : sheet_src(&sh, cur_row, cur_col);
+
+	// A selection shows what is in it, as a line of arithmetic nobody
+	// has to type: sum, average and count of its numbers.
+	char stats[64];
+	if (!editing && (sel_row != cur_row || sel_col != cur_col)) {
+		int r0, c0, r1, c1, count = 0;
+		z_fix_t sum = 0;
+		sel_rect(&r0, &c0, &r1, &c1);
+		int n2 = 0;
+		if (sheet_range_stats(&sh, r0, c0, r1, c1, &sum, &count) && count) {
+			const char *parts[] = { "Sum ", NULL, "  Avg ", NULL, "  Count ", NULL };
+			char a[24], b[24], c[12];
+			z_fix_format(sum, SHEET_DP, Z_FIX_STRIP, a, sizeof a);
+			z_fix_t avg = sum / count;
+			z_fix_format(avg, SHEET_DP, 2, b, sizeof b);
+			int cn = 0, cv = count;
+			char t[12];
+			int tn = 0;
+			while (cv && tn < 11) { t[tn++] = (char)('0' + cv % 10); cv /= 10; }
+			while (tn) c[cn++] = t[--tn];
+			c[cn] = 0;
+			parts[1] = a; parts[3] = b; parts[5] = c;
+			for (int i = 0; i < 6; i++)
+				for (const char *q = parts[i]; *q && n2 < (int)sizeof(stats) - 1; q++) stats[n2++] = *q;
+		}
+		stats[n2] = 0;
+		text = stats;
+	}
 
 	int avail = (cw - REF_W - 4) / CHAR_W;
 	if (avail < 1) avail = 1;
@@ -639,7 +675,38 @@ static void draw_grid(void) {
 // drag that extends a selection, a scrollbar being dragged -- would
 // flash on every sample. Committing a cell entry is the same, and it
 // is the single most common thing anyone does here.
+// -- the chart view (F10) --
+//
+// The chart takes the window, as 1-2-3's graph took the screen: the
+// grid is not drawn behind it. A key changes its kind; Esc goes back.
+
+static void chart_repaint(void) {
+
+	int cw = z_win_content_w(&win), ch = z_win_content_h(&win);
+	z_win_fill_rect(&win, 0, 0, cw, BAR_H, 0);
+	static const char *const kinds[] = { "Bar", "Stacked", "Line", "Pie" };
+	char t[80];
+	int n = 0;
+	const char *lead = "Chart: ";
+	for (const char *q = lead; *q; q++) t[n++] = *q;
+	for (int k = 0; k < SHEET_CHART_KINDS; k++) {
+		const char *q = kinds[k];
+		if (k == sh.chart.kind) t[n++] = '[';
+		while (*q) t[n++] = *q++;
+		if (k == sh.chart.kind) t[n++] = ']';
+		t[n++] = ' ';
+	}
+	for (const char *q = "  Esc: back"; *q; q++) t[n++] = *q;
+	t[n] = 0;
+	z_win_draw_text(&win, 2, 2, t, 1, cur_font);
+	z_win_fill_rect(&win, 0, BAR_H - 1, cw, 1, 1);
+	chart_draw(&win, &sh, &sh.chart, 0, BAR_H, cw, ch - BAR_H - Z_WIN_GRIP_INSET, cur_font);
+
+}
+
 static void repaint_view(void) {
+
+	if (chart_mode) { chart_repaint(); return; }
 
 	update_scroll_range();
 
@@ -659,6 +726,8 @@ static void repaint_view(void) {
 // moment ago (a Z_WM_REDRAW, a dialog that has just closed over us).
 static void repaint(void) {
 
+	if (chart_mode) { z_win_clear(&win); chart_repaint(); return; }
+
 	z_win_clear(&win);
 
 	update_scroll_range();
@@ -675,6 +744,8 @@ static void repaint(void) {
 // A cursor move repaints only what changed: the two cells, their row
 // and column headers, and the edit bar.
 static void move_repaint(int old_row, int old_col) {
+
+	if (chart_mode) return;
 
 	if (scroll_to_cursor()) {
 		repaint_view();
@@ -696,6 +767,7 @@ static void move_repaint(int old_row, int old_col) {
 // ---------------------------------------------------------------
 
 static void forward_msg(z_msg_t *msg, void *user);
+static void history_clear(void);
 
 static z_dialog_ctx_t dlg_ctx;
 
@@ -741,7 +813,56 @@ static bool file_emit(void *ctx, const char *s, int len) {
 
 }
 
+// Another system's table format -- .xlsx, .ods, .tsv. sheet reads and
+// writes only its own and CSV; convert does the rest (docs/convert.md):
+// saving to one of these writes the sheet to /tmp and converts it,
+// with convert's own window for progress, Cancel and errors, and
+// opening one hands it to convert, which opens the result here.
+static bool is_foreign(const char *path) {
+
+	const char *e = z_ftype_ext(path);
+	if (!e) return false;
+
+	char l[6];
+	int n = 0;
+	for (; e[n] && n < 5; n++) l[n] = (char)(e[n] | 0x20);
+	l[n] = 0;
+
+	return !strcmp(l, "xlsx") || !strcmp(l, "ods") || !strcmp(l, "tsv");
+
+}
+
+static bool do_export(const char *path) {
+
+	static const char tmp[] = Z_DIR_TMP "/sheet-export.zss";
+	static const char jobf[] = Z_DIR_TMP "/sheet-export.job";
+	char job[Z_FS_PATH_MAX + 64];
+
+	int h = fs_open_write(tmp);
+	bool ok = h >= 0 && sheet_write(&sh, file_emit, &h);
+	if (h >= 0) { fs_sync(h); fs_close_handle(h); }
+
+	// no printf here: it is 50KB this app does not otherwise carry
+	int n = 0;
+	const char *parts[] = { "in=", tmp, "\nout=", path, "\nui=1\n" };
+	for (unsigned i = 0; i < sizeof parts / sizeof parts[0]; i++)
+		for (const char *p = parts[i]; *p && n < (int)sizeof(job) - 1; p++) job[n++] = *p;
+	job[n] = 0;
+	if (ok && n < (int)sizeof(job) - 1 && fs_write_file((char *)jobf, job, n) == n) {
+		z_launch_arg_set("-j " Z_DIR_TMP "/sheet-export.job");
+		if (z_proc_run("convert")) return true;
+	}
+
+	z_dialog_confirm(&dlg_ctx, "Export", ok ? "convert could not\nbe started." :
+		"Could not write the\ncopy to convert.", Z_DIALOG_OK_CANCEL);
+	return false;
+
+}
+
 static bool do_save_to(const char *path) {
+
+	// an export is a copy: the sheet keeps its own name and state
+	if (is_foreign(path)) return do_export(path);
 
 	int h = fs_open_write(path);
 
@@ -804,6 +925,13 @@ static bool do_save(void) {
 
 	if (!filename[0]) return do_save_as();
 
+	// A sheet in /tmp is gone at the next boot -- most often one
+	// convert made from an .xlsx or .ods. Its first save asks where.
+	if (!strncmp(filename, Z_DIR_TMP "/", sizeof(Z_DIR_TMP))) {
+		strcpy(last_dir, Z_DIR_HOME);
+		return do_save_as();
+	}
+
 	bool ok = do_save_to(filename);
 
 	repaint();
@@ -819,6 +947,15 @@ static bool do_save(void) {
 static char line_buf[1024];
 
 static bool load_path(const char *path) {
+
+	if (is_foreign(path)) {
+		// convert opens the result in a sheet of its own
+		z_launch_arg_set(path);
+		if (!z_proc_run("convert"))
+			z_dialog_confirm(&dlg_ctx, "Open failed",
+				"convert is not on\nthis card.", Z_DIALOG_OK_CANCEL);
+		return false;
+	}
 
 	int h = fs_open_read(path);
 
@@ -872,6 +1009,7 @@ static bool load_path(const char *path) {
 
 	if (csv) sheet_load_csv_end(&sh);
 	else sheet_load_end(&sh);
+	history_clear();		// another document: no history to undo into
 
 	int fn = 0;
 	while (path[fn] && fn < (int)sizeof(filename) - 1) {
@@ -910,6 +1048,7 @@ static void do_new(void) {
 	if (!confirm_discard()) { repaint(); return; }
 
 	sheet_init(&sh);
+	history_clear();
 
 	filename[0] = 0;
 	cur_row = cur_col = sel_row = sel_col = 0;
@@ -956,6 +1095,233 @@ static void do_close(void) {
 }
 
 // ---------------------------------------------------------------
+// memory: undo, the clipboard, scratch
+// ---------------------------------------------------------------
+//
+// One block, from the arena when the machine has one to give
+// (docs/kernel.md, "Arenas"), else a small one of our own: undo and
+// redo history, the cells last copied, and scratch for a sort. Taken
+// once at start; nothing here is held as a pointer across a resize,
+// because there is none.
+
+#define MEM_WANT	(512u * 1024u)
+#define MEM_LESS	(128u * 1024u)
+
+static uint8_t mem_small[32768] __attribute__((aligned(8)));
+static uint8_t *mem;
+static uint32_t mem_size;
+
+static uint8_t *clip_mem, *scratch;
+static int clip_cap, scratch_cap;
+
+// -- undo --
+//
+// Two stacks of records, undo and redo. A record is what a change
+// overwrote: the cells of a rectangle (most edits), the widths and
+// formats (a format or a width), or the whole document (inserting and
+// deleting rows and columns, which move everything). Undoing one
+// pushes what is there NOW onto the other stack and puts the record
+// back, so undo and redo are one operation in two directions.
+//
+// When a stack is full the oldest records go: history gets shorter,
+// it never refuses an edit.
+
+enum { U_CELLS = 1, U_META, U_SNAP };
+
+typedef struct {
+	uint8_t		*b;
+	int			cap, used;
+} ustack_t;
+
+// [len u32][type u8][0][r0 u16][c0 u16][h u16][w u16] payload [len u32]
+#define UHDR	14
+#define UTRL	4
+
+typedef struct {
+	int		type, r0, c0, h, w, len;
+	uint8_t	*payload;
+} urec_t;
+
+static ustack_t ust, rst;
+
+static void wr32(uint8_t *p, uint32_t v) { p[0] = (uint8_t)v; p[1] = (uint8_t)(v >> 8); p[2] = (uint8_t)(v >> 16); p[3] = (uint8_t)(v >> 24); }
+static uint32_t rd32(const uint8_t *p) { return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24; }
+static void wr16(uint8_t *p, int v) { p[0] = (uint8_t)v; p[1] = (uint8_t)(v >> 8); }
+static int rd16(const uint8_t *p) { return p[0] | (p[1] << 8); }
+
+static void mem_init(void) {
+
+	static const uint32_t want[] = { MEM_WANT, MEM_LESS };
+	for (unsigned i = 0; i < sizeof want / sizeof want[0] && !mem; i++) {
+		void *base = NULL;
+		uint32_t got = 0;
+		if (z_arena_set(want[i], &base, &got) == Z_ARENA_OK && base && got) {
+			mem = base;
+			mem_size = got;
+		}
+	}
+	if (!mem) { mem = mem_small; mem_size = sizeof(mem_small); }
+
+	// undo half, redo a quarter, clipboard and scratch an eighth each
+	uint32_t q = (mem_size / 8) & ~7u;
+	ust.b = mem;            ust.cap = (int)(q * 4);
+	rst.b = mem + q * 4;    rst.cap = (int)(q * 2);
+	clip_mem = mem + q * 6; clip_cap = (int)q;
+	scratch = mem + q * 7;  scratch_cap = (int)(mem_size - q * 7);
+	ust.used = rst.used = 0;
+
+}
+
+// Room for `need` bytes on top of `s`, dropping the oldest records.
+static bool u_room(ustack_t *s, int need) {
+
+	if (need > s->cap) { s->used = 0; return false; }
+
+	while (s->used + need > s->cap) {
+		int first = UHDR + (int)rd32(s->b) + UTRL;
+		memmove(s->b, s->b + first, (size_t)(s->used - first));
+		s->used -= first;
+	}
+	return true;
+
+}
+
+static void u_head(uint8_t *p, int type, int r0, int c0, int h, int w, int len) {
+	wr32(p, (uint32_t)len);
+	p[4] = (uint8_t)type;
+	p[5] = 0;
+	wr16(p + 6, r0);
+	wr16(p + 8, c0);
+	wr16(p + 10, h);
+	wr16(p + 12, w);
+}
+
+// Saves what the rectangle holds now, as a record on `s`.
+static bool u_push_cells(ustack_t *s, int r0, int c0, int r1, int c1) {
+
+	int len = sheet_range_size(&sh, r0, c0, r1, c1);
+	if (!u_room(s, UHDR + len + UTRL)) return false;
+	uint8_t *p = s->b + s->used;
+	u_head(p, U_CELLS, r0, c0, r1 - r0 + 1, c1 - c0 + 1, len);
+	sheet_range_save(&sh, r0, c0, r1, c1, p + UHDR, len);
+	wr32(p + UHDR + len, (uint32_t)len);
+	s->used += UHDR + len + UTRL;
+	return true;
+
+}
+
+static int meta_size(void) {
+	return SHEET_COLS + 1 + sh.nfmts * (int)sizeof(sheet_fmt_t);
+}
+
+static bool u_push_meta(ustack_t *s) {
+
+	int len = meta_size();
+	if (!u_room(s, UHDR + len + UTRL)) return false;
+	uint8_t *p = s->b + s->used;
+	u_head(p, U_META, cur_row, cur_col, 1, 1, len);
+	memcpy(p + UHDR, sh.colw, SHEET_COLS);
+	p[UHDR + SHEET_COLS] = (uint8_t)sh.nfmts;
+	memcpy(p + UHDR + SHEET_COLS + 1, sh.fmts, (size_t)sh.nfmts * sizeof(sheet_fmt_t));
+	wr32(p + UHDR + len, (uint32_t)len);
+	s->used += UHDR + len + UTRL;
+	return true;
+
+}
+
+static bool u_push_snap(ustack_t *s) {
+
+	int len = sheet_snapshot_size(&sh);
+	if (!u_room(s, UHDR + len + UTRL)) return false;
+	uint8_t *p = s->b + s->used;
+	u_head(p, U_SNAP, cur_row, cur_col, 1, 1, len);
+	sheet_snapshot(&sh, p + UHDR, len);
+	wr32(p + UHDR + len, (uint32_t)len);
+	s->used += UHDR + len + UTRL;
+	return true;
+
+}
+
+static bool u_top(ustack_t *s, urec_t *r) {
+
+	if (!s->used) return false;
+	int len = (int)rd32(s->b + s->used - UTRL);
+	uint8_t *p = s->b + s->used - UTRL - len - UHDR;
+	r->len = len;
+	r->type = p[4];
+	r->r0 = rd16(p + 6);
+	r->c0 = rd16(p + 8);
+	r->h = rd16(p + 10);
+	r->w = rd16(p + 12);
+	r->payload = p + UHDR;
+	return true;
+
+}
+
+// Before a change to the cells of a rectangle: what is there goes on
+// the undo stack, and the redo stack is no longer a future.
+static void will_change(int r0, int c0, int r1, int c1) {
+	if (r0 > r1) { int t = r0; r0 = r1; r1 = t; }
+	if (c0 > c1) { int t = c0; c0 = c1; c1 = t; }
+	u_push_cells(&ust, r0, c0, r1, c1);
+	rst.used = 0;
+}
+
+static void will_change_meta(void) { u_push_meta(&ust); rst.used = 0; }
+static void will_change_all(void) { u_push_snap(&ust); rst.used = 0; }
+
+static void update_title(void);
+
+// Undo (from = the undo stack) or redo.
+static void u_apply(ustack_t *from, ustack_t *to) {
+
+	urec_t r;
+	if (!u_top(from, &r)) return;
+
+	// The inverse goes on the other stack, which is other memory, so
+	// the record stays where it is until it has been put back.
+	int size = UHDR + r.len + UTRL;
+	uint8_t *copy = r.payload;
+
+	switch (r.type) {
+		case U_CELLS:
+			u_push_cells(to, r.r0, r.c0, r.r0 + r.h - 1, r.c0 + r.w - 1);
+			sheet_range_load(&sh, r.r0, r.c0, r.h, r.w, true, copy, r.len, false, 0, 0);
+			cur_row = r.r0; cur_col = r.c0;
+			sel_row = r.r0 + r.h - 1; sel_col = r.c0 + r.w - 1;
+			break;
+		case U_META:
+			u_push_meta(to);
+			memcpy(sh.colw, copy, SHEET_COLS);
+			sh.nfmts = copy[SHEET_COLS];
+			memcpy(sh.fmts, copy + SHEET_COLS + 1, (size_t)sh.nfmts * sizeof(sheet_fmt_t));
+			break;
+		case U_SNAP:
+			u_push_snap(to);
+			sheet_restore(&sh, copy, r.len);
+			break;
+	}
+
+	from->used -= size;
+
+	sh.modified = true;
+	editing = false;
+	if (cur_row >= SHEET_ROWS) cur_row = SHEET_ROWS - 1;
+	if (cur_col >= SHEET_COLS) cur_col = SHEET_COLS - 1;
+	if (sel_row >= SHEET_ROWS) sel_row = SHEET_ROWS - 1;
+	if (sel_col >= SHEET_COLS) sel_col = SHEET_COLS - 1;
+	update_title();
+	scroll_to_cursor();
+	repaint_view();
+
+}
+
+static void history_clear(void) { ust.used = rst.used = 0; }
+
+static void do_undo(void) { u_apply(&ust, &rst); }
+static void do_redo(void) { u_apply(&rst, &ust); }
+
+// ---------------------------------------------------------------
 // editing
 // ---------------------------------------------------------------
 
@@ -999,6 +1365,9 @@ static void commit_edit(void) {
 
 	editing = false;
 
+	if (!strcmp(edit, sheet_src(&sh, cur_row, cur_col))) { draw_cell(cur_row, cur_col); draw_bar(); return; }
+
+	will_change(cur_row, cur_col, cur_row, cur_col);
 	sheet_err_t e = sheet_set(&sh, cur_row, cur_col, edit);
 
 	if (e == SHEET_ERR_FULL)
@@ -1061,12 +1430,31 @@ static void edit_delete(void) {
 // out of here pastes into `text` as something readable, and a table
 // pasted in from anywhere arrives in the right cells.
 
-static char clip_buf[1024];
+static char clip_buf[Z_WM_CLIP_MAX];
+
+// What was copied, as cells: so a paste here moves formulas the way a
+// spreadsheet does (=A1 copied one row down is =A2), which the text on
+// the system clipboard cannot say. Used when the clipboard still holds
+// what this copy put there -- recognised by a checksum of it.
+static int clip_len = -1, clip_h, clip_w, clip_r0, clip_c0;
+static uint32_t clip_sum;
+
+static uint32_t text_sum(const char *t, int n) {
+	uint32_t h = 2166136261u;
+	for (int i = 0; i < n; i++) h = (h ^ (uint8_t)t[i]) * 16777619u;
+	return h;
+}
 
 static void do_copy(void) {
 
 	int r0, c0, r1, c1;
 	sel_rect(&r0, &c0, &r1, &c1);
+
+	clip_len = sheet_range_save(&sh, r0, c0, r1, c1, clip_mem, clip_cap);
+	clip_h = r1 - r0 + 1;
+	clip_w = c1 - c0 + 1;
+	clip_r0 = r0;
+	clip_c0 = c0;
 
 	int n = 0;
 
@@ -1092,7 +1480,34 @@ static void do_copy(void) {
 
 	clip_buf[n] = 0;
 
+	clip_sum = text_sum(clip_buf, n);
 	z_clip_set(clip_buf, n);
+
+}
+
+// Our own copy: cells, with formulas moved. A selection that is a
+// multiple of what was copied is filled with copies of it.
+static void paste_cells(void) {
+
+	int r0, c0, r1, c1;
+	sel_rect(&r0, &c0, &r1, &c1);
+	int th = r1 - r0 + 1, tw = c1 - c0 + 1;
+	int nr = (th % clip_h == 0) ? th / clip_h : 1, nc = (tw % clip_w == 0) ? tw / clip_w : 1;
+	int er = r0 + nr * clip_h - 1, ec = c0 + nc * clip_w - 1;
+	if (er >= SHEET_ROWS) er = SHEET_ROWS - 1;
+	if (ec >= SHEET_COLS) ec = SHEET_COLS - 1;
+	will_change(r0, c0, er, ec);
+	sheet_err_t e = SHEET_OK;
+	for (int i = 0; i < nr; i++)
+		for (int j = 0; j < nc; j++) {
+			sheet_err_t e2 = sheet_range_load(&sh, r0 + i * clip_h, c0 + j * clip_w, clip_h, clip_w,
+				true, clip_mem, clip_len, true, clip_r0, clip_c0);
+			if (e2 != SHEET_OK) e = e2;
+		}
+	if (e == SHEET_ERR_FULL)
+		z_dialog_confirm(&dlg_ctx, "Sheet full", "No room for more cells.\nSome were not pasted.", Z_DIALOG_OK_CANCEL);
+	update_title();
+	repaint();
 
 }
 
@@ -1100,6 +1515,24 @@ static void do_paste(void) {
 
 	int got = z_clip_get(clip_buf, (int)sizeof(clip_buf));
 	if (!got) return;
+
+	if (clip_len >= 0 && text_sum(clip_buf, got) == clip_sum) {
+		paste_cells();
+		return;
+	}
+	// Text from elsewhere: tab-separated, a row a line. Its size first,
+	// for the undo record.
+	{
+		int rows = 1, cols = 1, cc = 1;
+		for (int i = 0; i < got; i++) {
+			if (clip_buf[i] == '\t') { cc++; if (cc > cols) cols = cc; }
+			else if (clip_buf[i] == '\n') { if (i + 1 < got) rows++; cc = 1; }
+		}
+		int er = cur_row + rows - 1, ec = cur_col + cols - 1;
+		if (er >= SHEET_ROWS) er = SHEET_ROWS - 1;
+		if (ec >= SHEET_COLS) ec = SHEET_COLS - 1;
+		will_change(cur_row, cur_col, er, ec);
+	}
 
 	int r = cur_row, c = cur_col;
 	char cell[SHEET_SRC_MAX];
@@ -1147,10 +1580,394 @@ static void do_clear_selection(void) {
 	int r0, c0, r1, c1;
 	sel_rect(&r0, &c0, &r1, &c1);
 
+	will_change(r0, c0, r1, c1);
 	sheet_clear_range(&sh, r0, c0, r1, c1);
 
 	update_title();
 	repaint_view();
+
+}
+
+// ---------------------------------------------------------------
+// commands
+// ---------------------------------------------------------------
+
+static void after_change(void) {
+	update_title();
+	repaint_view();
+}
+
+static void say(const char *title, const char *msg) {
+	z_dialog_confirm(&dlg_ctx, title, msg, Z_DIALOG_OK_CANCEL);
+	repaint();
+}
+
+// Fill down (Ctrl+D) and right (Ctrl+R): the selection's first row
+// (column) copied into the rest of it, formulas moving as they go --
+// the way a column of totals or a row of months is made.
+static void do_fill(bool down) {
+
+	int r0, c0, r1, c1;
+	sel_rect(&r0, &c0, &r1, &c1);
+	if (down ? r1 == r0 : c1 == c0) return;
+
+	int len = down ? sheet_range_save(&sh, r0, c0, r0, c1, scratch, scratch_cap)
+		: sheet_range_save(&sh, r0, c0, r1, c0, scratch, scratch_cap);
+	if (len < 0) { say("Fill", "Too much to fill\nat once."); return; }
+
+	if (down) will_change(r0 + 1, c0, r1, c1);
+	else will_change(r0, c0 + 1, r1, c1);
+
+	sheet_err_t e = SHEET_OK;
+	if (down) {
+		for (int r = r0 + 1; r <= r1 && e == SHEET_OK; r++)
+			e = sheet_range_load(&sh, r, c0, 1, c1 - c0 + 1, true, scratch, len, true, r0, c0);
+	} else {
+		for (int c = c0 + 1; c <= c1 && e == SHEET_OK; c++)
+			e = sheet_range_load(&sh, r0, c, r1 - r0 + 1, 1, true, scratch, len, true, r0, c0);
+	}
+	if (e == SHEET_ERR_FULL) say("Sheet full", "No room for more cells.\nSome were not filled.");
+	after_change();
+
+}
+
+// Rows or columns, inserted before the cursor or deleted from it --
+// as many as the selection spans.
+static void do_structural(bool rows, bool ins) {
+
+	int r0, c0, r1, c1;
+	sel_rect(&r0, &c0, &r1, &c1);
+	int at = rows ? r0 : c0, n = rows ? r1 - r0 + 1 : c1 - c0 + 1;
+
+	will_change_all();
+	sheet_err_t e = rows ? (ins ? sheet_insert_rows(&sh, at, n) : sheet_delete_rows(&sh, at, n))
+		: (ins ? sheet_insert_cols(&sh, at, n) : sheet_delete_cols(&sh, at, n));
+
+	if (e != SHEET_OK) {
+		// nothing changed (inserting refuses before it starts); the
+		// record just pushed would undo nothing
+		if (ust.used) { urec_t r; if (u_top(&ust, &r)) ust.used -= UHDR + r.len + UTRL; }
+		say(ins ? "Insert" : "Delete", e == SHEET_ERR_FULL && ins ?
+			"That would push cells\npast the edge of the sheet." : "No room: the sheet\nis full.");
+		return;
+	}
+	after_change();
+
+}
+
+// Ctrl+1, or /Format: a format for the selection.
+static void do_format(void) {
+
+	int r0, c0, r1, c1;
+	sel_rect(&r0, &c0, &r1, &c1);
+	int dec, kind = sheet_format_at(&sh, cur_row, cur_col, &dec);
+	char cur[8], in[16];
+	sheet_format_name(kind, dec, cur, sizeof cur);
+
+	if (!z_dialog_prompt(&dlg_ctx, "Format",
+		"G general  F2 fixed  ,2 1,000.00\n%1 percent  $2 money  (digit: places)",
+		cur, in, sizeof in)) { repaint(); return; }
+
+	int k, d;
+	if (!sheet_parse_format(in, &k, &d)) {
+		say("Format", "Not a format: G, F2, ,2,\n%1 or $2 (any 0-8 places).");
+		return;
+	}
+	will_change_meta();
+	if (!sheet_set_format(&sh, r0, c0, r1, c1, k, d))
+		say("Format", "Too many formatted\nranges: 64 at most.");
+	repaint();
+	update_title();
+
+}
+
+// /Width: the current column's width, typed.
+static void do_width(void) {
+
+	char cur[8], in[8];
+	int w = sheet_colw(&sh, cur_col), n = 0;
+	char t[4];
+	int tn = 0;
+	while (w && tn < 3) { t[tn++] = (char)('0' + w % 10); w /= 10; }
+	while (tn) cur[n++] = t[--tn];
+	cur[n] = 0;
+
+	if (!z_dialog_prompt(&dlg_ctx, "Width", "Column width, in characters:", cur, in, sizeof in)) {
+		repaint();
+		return;
+	}
+	int v = 0;
+	for (const char *p = in; *p >= '0' && *p <= '9'; p++) v = v * 10 + (*p - '0');
+	if (v) {
+		will_change_meta();
+		int r0, c0, r1, c1;
+		sel_rect(&r0, &c0, &r1, &c1);
+		for (int c = c0; c <= c1; c++) sheet_set_colw(&sh, c, v);
+	}
+	update_title();
+	scroll_to_cursor();
+	repaint();
+
+}
+
+// F10, or /Chart: the chart of the selection -- or, with none, the
+// sheet's chart as it was last made.
+static void do_chart(void) {
+
+	if (sel_row != cur_row || sel_col != cur_col) {
+		int r0, c0, r1, c1;
+		sel_rect(&r0, &c0, &r1, &c1);
+		sheet_chart_t *g = &sh.chart;
+		if (!g->set || g->r0 != r0 || g->r1 != r1 || g->c0 != c0 || g->c1 != c1) {
+			if (!g->set) g->kind = SHEET_CHART_BAR;
+			g->set = true;
+			g->r0 = (uint16_t)r0; g->r1 = (uint16_t)r1;
+			g->c0 = (uint8_t)c0; g->c1 = (uint8_t)c1;
+			sh.modified = true;
+			update_title();
+		}
+	} else if (!sh.chart.set) {
+		say("Chart", "Select the table to chart\n(labels in the first row\nand column), then F10.");
+		return;
+	}
+	chart_mode = true;
+	repaint();
+
+}
+
+static void chart_key(uint32_t k) {
+
+	int kind = -1;
+	switch (k) {
+		case 'b': case 'B': kind = SHEET_CHART_BAR; break;
+		case 's': case 'S': kind = SHEET_CHART_STACK; break;
+		case 'l': case 'L': kind = SHEET_CHART_LINE; break;
+		case 'p': case 'P': kind = SHEET_CHART_PIE; break;
+		case 0x1b: case Z_KEY_F10: case '\r': case '\n':
+			chart_mode = false;
+			repaint();
+			return;
+		default: return;
+	}
+	if (kind != sh.chart.kind) {
+		sh.chart.kind = (uint8_t)kind;
+		sh.modified = true;
+		update_title();
+	}
+	repaint();
+
+}
+
+// /Sort: the selection's rows, by the cursor's column.
+static void do_sort(bool desc) {
+
+	int r0, c0, r1, c1;
+	sel_rect(&r0, &c0, &r1, &c1);
+	if (r1 == r0) {
+		say("Sort", "Select the rows to sort\n(all their columns), then\nput the cursor in the key.");
+		return;
+	}
+	will_change(r0, c0, r1, c1);
+	if (!sheet_sort(&sh, r0, c0, r1, c1, cur_col, desc, scratch, scratch_cap)) {
+		urec_t r;
+		if (u_top(&ust, &r)) ust.used -= UHDR + r.len + UTRL;
+		say("Sort", "Too large to sort here:\nsort fewer rows at a time.");
+		return;
+	}
+	after_change();
+
+}
+
+// Ctrl+G: go to a cell.
+static void do_goto(void) {
+
+	char in[16];
+	if (!z_dialog_prompt(&dlg_ctx, "Go to", "Cell (like B12):", "", in, sizeof in) || !in[0]) {
+		repaint();
+		return;
+	}
+	int r, c;
+	const char *p = in;
+	while (*p == ' ') p++;
+	if (!sheet_parse_ref(p, &r, &c, NULL)) { say("Go to", "Not a cell: A1 to Z999."); return; }
+	cur_row = sel_row = r;
+	cur_col = sel_col = c;
+	scroll_to_cursor();
+	repaint();
+
+}
+
+// Ctrl+F: the next cell, after the cursor, whose text or value
+// contains what is asked, in reading order; F3 again for the next.
+static char find_text[SHEET_SRC_MAX];
+
+static bool contains_ci(const char *h, const char *n) {
+	int nl = (int)strlen(n);
+	for (; *h; h++) {
+		int i = 0;
+		for (; i < nl; i++) {
+			char a = h[i], b = n[i];
+			if (!a) return false;
+			if (a >= 'a' && a <= 'z') a = (char)(a - 32);
+			if (b >= 'a' && b <= 'z') b = (char)(b - 32);
+			if (a != b) break;
+		}
+		if (i == nl) return true;
+	}
+	return false;
+}
+
+static void find_next(void) {
+
+	if (!find_text[0]) return;
+	int start = cur_row * SHEET_COLS + cur_col;
+	// the cells are kept in key order: one walk round from the cursor
+	for (int pass = 0; pass < 2; pass++) {
+		for (int i = 0; i < sh.ncells; i++) {
+			int key = sh.cells[i].key;
+			if (pass == 0 ? key <= start : key > start) continue;
+			int r = key / SHEET_COLS, c = key % SHEET_COLS;
+			char shown[48];
+			sheet_display(&sh, r, c, shown, sizeof shown, 40, NULL);
+			if (contains_ci(sheet_src(&sh, r, c), find_text) || contains_ci(shown, find_text)) {
+				cur_row = sel_row = r;
+				cur_col = sel_col = c;
+				scroll_to_cursor();
+				repaint_view();
+				return;
+			}
+		}
+	}
+	say("Find", "Not found.");
+
+}
+
+static void do_find(void) {
+
+	char in[SHEET_SRC_MAX];
+	if (!z_dialog_prompt(&dlg_ctx, "Find", "Find (F3 finds the next):", find_text, in, sizeof in) || !in[0]) {
+		repaint();
+		return;
+	}
+	memcpy(find_text, in, sizeof find_text);
+	repaint();
+	find_next();
+
+}
+
+// ---------------------------------------------------------------
+// the / menu
+// ---------------------------------------------------------------
+//
+// "/" opens a line of commands in the edit bar, as it did in VisiCalc
+// and 1-2-3: each starts with a different letter, and that letter (or
+// the arrows and Enter) chooses it. Everything here is also on a key
+// of its own; the menu is how those are found without a manual.
+
+typedef struct {
+	const char	*label;		// first letter chooses
+	int			id;
+} mitem_t;
+
+enum {
+	M_NONE = 0,
+	M_TOP, M_INSERT, M_DELETE, M_SORT, M_FILL,	// menus
+	C_INS_ROWS = 100, C_INS_COLS, C_DEL_ROWS, C_DEL_COLS, C_FORMAT, C_WIDTH,
+	C_SORT_UP, C_SORT_DOWN, C_FILL_DOWN, C_FILL_RIGHT, C_UNDO, C_REDO,
+	C_GOTO, C_FIND, C_HELP, C_CHART,
+};
+
+static const mitem_t m_top[] = {
+	{ "Insert", M_INSERT }, { "Delete", M_DELETE }, { "Number", C_FORMAT },
+	{ "Width", C_WIDTH }, { "Sort", M_SORT }, { "Extend", M_FILL },
+	{ "Undo", C_UNDO }, { "Redo", C_REDO }, { "Goto", C_GOTO },
+	{ "Find", C_FIND }, { "Chart", C_CHART }, { "Help", C_HELP }, { NULL, 0 },
+};
+static const mitem_t m_insert[] = { { "Rows", C_INS_ROWS }, { "Columns", C_INS_COLS }, { NULL, 0 } };
+static const mitem_t m_delete[] = { { "Rows", C_DEL_ROWS }, { "Columns", C_DEL_COLS }, { NULL, 0 } };
+static const mitem_t m_sort[] = { { "Ascending", C_SORT_UP }, { "Descending", C_SORT_DOWN }, { NULL, 0 } };
+static const mitem_t m_fill[] = { { "Down", C_FILL_DOWN }, { "Right", C_FILL_RIGHT }, { NULL, 0 } };
+
+static int menu_hot;			// menu: M_NONE when closed (declared above draw_bar)
+
+static const mitem_t *menu_items(void) {
+	return menu == M_INSERT ? m_insert : menu == M_DELETE ? m_delete :
+		menu == M_SORT ? m_sort : menu == M_FILL ? m_fill : m_top;
+}
+
+static void draw_menu(void) {
+
+	int cw = z_win_content_w(&win);
+	z_win_fill_rect(&win, 0, 0, cw, BAR_H, 0);
+	const char *title = menu == M_INSERT ? "Insert:" : menu == M_DELETE ? "Delete:" :
+		menu == M_SORT ? "Sort:" : menu == M_FILL ? "Extend:" : "/";
+	z_win_draw_text(&win, 2, 2, title, 1, cur_font);
+	int x = 2 + ((int)strlen(title) + 1) * CHAR_W;
+	const mitem_t *it = menu_items();
+	for (int i = 0; it[i].label; i++) {
+		int w = (int)strlen(it[i].label) * CHAR_W;
+		if (x + w > cw - 2) break;
+		bool hot = (i == menu_hot);
+		if (hot) z_win_fill_rect(&win, x - 1, 1, w + 2, BAR_H - 2, 1);
+		z_win_draw_text2(&win, x, 2, it[i].label, hot ? 0 : 1, hot ? 1 : 0, cur_font);
+		x += w + CHAR_W;
+	}
+	z_win_fill_rect(&win, 0, BAR_H - 1, cw, 1, 1);
+
+}
+
+static void run_command(int id);
+
+static void menu_choose(int id) {
+	if (id < 100) { menu = id; menu_hot = 0; draw_menu(); return; }
+	menu = M_NONE;
+	draw_bar();
+	run_command(id);
+}
+
+static void menu_key(uint32_t k) {
+
+	const mitem_t *it = menu_items();
+	int n = 0;
+	while (it[n].label) n++;
+
+	if (k == 0x1b) {
+		if (menu == M_TOP) { menu = M_NONE; draw_bar(); }
+		else { menu = M_TOP; menu_hot = 0; draw_menu(); }
+		return;
+	}
+	if (k == Z_KEY_LEFT) { menu_hot = (menu_hot + n - 1) % n; draw_menu(); return; }
+	if (k == Z_KEY_RIGHT || k == ' ') { menu_hot = (menu_hot + 1) % n; draw_menu(); return; }
+	if (k == '\r' || k == '\n') { menu_choose(it[menu_hot].id); return; }
+
+	char c = (char)k;
+	if (c >= 'a' && c <= 'z') c = (char)(c - 32);
+	for (int i = 0; i < n; i++)
+		if (it[i].label[0] == c) { menu_choose(it[i].id); return; }
+
+}
+
+static void run_command(int id) {
+
+	switch (id) {
+		case C_INS_ROWS:   do_structural(true, true); break;
+		case C_INS_COLS:   do_structural(false, true); break;
+		case C_DEL_ROWS:   do_structural(true, false); break;
+		case C_DEL_COLS:   do_structural(false, false); break;
+		case C_FORMAT:     do_format(); break;
+		case C_WIDTH:      do_width(); break;
+		case C_SORT_UP:    do_sort(false); break;
+		case C_SORT_DOWN:  do_sort(true); break;
+		case C_FILL_DOWN:  do_fill(true); break;
+		case C_FILL_RIGHT: do_fill(false); break;
+		case C_UNDO:       do_undo(); break;
+		case C_REDO:       do_redo(); break;
+		case C_GOTO:       do_goto(); break;
+		case C_FIND:       do_find(); break;
+		case C_HELP:       z_dialog_help(&dlg_ctx, "sheet_app"); break;
+		case C_CHART:      do_chart(); break;
+		default: break;
+	}
 
 }
 
@@ -1196,6 +2013,12 @@ static void handle_key(uint32_t keysym, uint8_t mods) {
 	bool alt = (mods & Z_KBD_MOD_ALT) != 0;
 
 	mods_now = mods;
+
+	if (menu) { menu_key(keysym); return; }
+	if (chart_mode && keysym != Z_KEY_F1) { chart_key(keysym); return; }
+
+	// F1: the manual, at "Using it" (zdialog.h, z_dialog_help()).
+	if (keysym == Z_KEY_F1) { z_dialog_help(&dlg_ctx, "sheet_app"); return; }
 
 	if (editing) {
 
@@ -1270,6 +2093,13 @@ static void handle_key(uint32_t keysym, uint8_t mods) {
 	if (ctrl) {
 
 		switch (keysym) {
+			case 'z': case 'Z': if (shift) do_redo(); else do_undo(); return;
+			case 'y': case 'Y': do_redo(); return;
+			case 'd': case 'D': do_fill(true); return;
+			case 'r': case 'R': do_fill(false); return;
+			case 'g': case 'G': do_goto(); return;
+			case 'f': case 'F': do_find(); return;
+			case '1':           do_format(); return;
 			case 'c': case 'C': do_copy(); return;
 			case 'x': case 'X': do_copy(); do_clear_selection(); return;
 			case 'v': case 'V': do_paste(); return;
@@ -1290,6 +2120,7 @@ static void handle_key(uint32_t keysym, uint8_t mods) {
 	// first-class here).
 	if (alt && (keysym == Z_KEY_LEFT || keysym == Z_KEY_RIGHT)) {
 
+		will_change_meta();
 		sheet_set_colw(&sh, cur_col,
 			sheet_colw(&sh, cur_col) + (keysym == Z_KEY_RIGHT ? 1 : -1));
 
@@ -1339,6 +2170,22 @@ static void handle_key(uint32_t keysym, uint8_t mods) {
 			draw_bar();
 			return;
 
+		case Z_KEY_F3:
+			find_next();
+			return;
+
+		case Z_KEY_F10:
+			do_chart();
+			return;
+
+		// The command line, as in VisiCalc and 1-2-3. A cell's text can
+		// still start with '/': type ' first ('/2 is the text "/2").
+		case '/':
+			menu = M_TOP;
+			menu_hot = 0;
+			draw_menu();
+			return;
+
 		case '\b':
 		case 0x7f:
 		case Z_KEY_DELETE:
@@ -1385,6 +2232,8 @@ static bool hit_col_edge(int cx, int *col) {
 }
 
 static void handle_mouse(uint32_t packed) {
+
+	if (chart_mode) return;
 
 	int cx, cy;
 
@@ -1571,6 +2420,7 @@ int main(void) {
 	printf("sheet: starting\n");
 
 	sheet_init(&sh);
+	mem_init();
 
 	cur_row = cur_col = sel_row = sel_col = 0;
 	top_row = left_col = 0;

@@ -72,6 +72,8 @@
 #define Z_SUBJ_FS_N        16
 #define Z_SUBJ_USB         448          //  16 zusbproto.h the USB driver
 #define Z_SUBJ_USB_N       16
+#define Z_SUBJ_CONVERT     464          //   8 zconvert.h  convert -> its caller
+#define Z_SUBJ_CONVERT_N   8
 #define Z_SUBJ_TTS         0x54540000u  // 64K ztts.h      speech ("TT", tts.md)
 #define Z_SUBJ_TTS_N       0x10000
 #define Z_SUBJ_WM_GAME     (-32768)     //  16 zwm.h       wm game mode
@@ -99,7 +101,8 @@ Z_SUBJ_AFTER_(Z_SUBJ_ASK, Z_SUBJ_STREAM);
 Z_SUBJ_AFTER_(Z_SUBJ_STREAM, Z_SUBJ_BENCH);
 Z_SUBJ_AFTER_(Z_SUBJ_BENCH, Z_SUBJ_FS);
 Z_SUBJ_AFTER_(Z_SUBJ_FS, Z_SUBJ_USB);
-Z_SUBJ_AFTER_(Z_SUBJ_USB, Z_SUBJ_TTS);
+Z_SUBJ_AFTER_(Z_SUBJ_USB, Z_SUBJ_CONVERT);
+Z_SUBJ_AFTER_(Z_SUBJ_CONVERT, Z_SUBJ_TTS);
 _Static_assert((unsigned long)(unsigned int)Z_SUBJ_WM_GAME >=
 	(unsigned long)Z_SUBJ_TTS + Z_SUBJ_TTS_N, "Z_SUBJ_WM_GAME overlaps Z_SUBJ_TTS");
 

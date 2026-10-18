@@ -83,6 +83,20 @@ Japanese character, a Latin-1 symbol Latin-9 dropped, a malformed byte
 -- always one cell wide, so the text after it stays in its column. A
 font without the box (5x7, 8x16) shows `?` instead.
 
+### Look-alikes
+
+Some characters Latin-9 lacks are everywhere in real text: the curly
+quotes, the en and em dashes, the bullet and the ellipsis that word
+processors put in, and that every Windows-1252 file is full of. Since
+0.0.7 the codepoint drawing functions draw those as the character they
+look like -- `"` for “ and ”, `'` for ‘ and ’, `-` for the dashes and
+the minus sign, `·` for a bullet, `.` for an ellipsis, `<` `>` for the
+single guillemets -- rather than as the box (`z_cp_lookalike()`,
+`zutf8.h`). It is **drawing only**: the text keeps the real character,
+so a copy, a save or speech gets it unchanged. It applies wherever text
+is drawn by codepoint -- `text`, `read`, `web`, the dialogs -- and not
+to `term`, which maps characters to cells itself.
+
 ## Drawing
 
 The byte functions -- `z_fb_draw_char()`, `z_fb_draw_text()`,
@@ -199,7 +213,8 @@ with the `ja` layouts ([keyboard_layouts.md](keyboard_layouts.md),
 ## Known gaps
 
 - **`text` is UTF-8** now -- the first app to keep UTF-8 internally
-  ([text_editor.md](text_editor.md), "Encodings").
+  ([text_editor.md](text_editor.md), "Encodings"). It reads and writes
+  back Latin-9 and, since 0.0.7, Windows-1252 files byte for byte.
 - **`term`, `read` and `vi` are UTF-8** too: `term` decodes what
   arrives into one Latin-9 cell per character, two for a wide one
   ([terminal.md](terminal.md), "UTF-8"); `read` turns each line into

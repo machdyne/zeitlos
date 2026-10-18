@@ -19,10 +19,12 @@ widget, so it doubles as the worked example for `docs/widgets.md`.
 
 ## Using it
 
+**F1** opens this page, here ([app_help.md](app_help.md)).
+
 Titlebar buttons, left to right: **new**, **open**, **save**, **close**.
 The title shows the current filename, prefixed with `*` when there are
-unsaved changes, and followed by `(Latin-9)` for a file that will be
-saved in that encoding -- see "Encodings" below.
+unsaved changes, and followed by `(Latin-9)` or `(Windows-1252)` for a
+file that will be saved in that encoding -- see "Encodings" below.
 
 | key | does |
 | --- | --- |
@@ -35,6 +37,7 @@ saved in that encoding -- see "Encodings" below.
 | PageUp / PageDown | a screen at a time |
 | mouse wheel | three lines a notch; the view moves, the caret stays |
 | Ctrl+N / Ctrl+O / Ctrl+S | new / open / save |
+| Ctrl+Shift+S | save as -- a new name, or a new place |
 | Ctrl+Q | close |
 | Shift + any movement key | extend the selection |
 | click and drag | select |
@@ -45,6 +48,8 @@ saved in that encoding -- see "Encodings" below.
 | Ctrl+Y or Ctrl+Shift+Z | redo |
 | Ctrl+F | find |
 | Ctrl+G or F3 | find the same text again |
+| Ctrl+H | replace -- all at once, or one at a time |
+| Ctrl+L | go to line; also says the line you are on, and the words and characters |
 | right-click | copy the selection |
 
 Clicking places the caret. Clicking past the end of a line, or below the
@@ -64,17 +69,35 @@ the resize grip stays clickable — see `Z_WIN_GRIP_INSET` in
 
 ## The document
 
-One flat `char` array, `TEXT_MAX` = 32KB, with insert and delete done by
-`memmove`.
+A **gap buffer**: the text is `doc[0..gs)` followed by
+`doc[gs+gl..cap)`, with all the free space -- the gap -- between. Until
+0.0.7 it was one flat array, and every keystroke moved everything after
+the caret, which at 32KB was a few milliseconds and would have been a
+third of a second per key in a megabyte.
 
-Not a gap buffer, and that is a choice rather than an oversight. At 32KB
-the worst-case move is the whole buffer — a few milliseconds on this
-CPU, and only when typing at the very start of a full document. A gap
-buffer would remove that and add a second representation of "where the
-text is" that every function in the file would have to understand. If
-typing ever feels heavy on real hardware, this is the first thing to
-change, and the change is confined to `insert_seq()` /
-`buf_delete_range()`.
+The gap is always at the **end of a paragraph**: just after a newline,
+or at the end of the document. So no display line, no word and no
+character ever straddles it, and anything that reads a line, a word or a
+character takes a plain pointer to it (`P()`, `B()`); only saving, Replace
+All and a copy of a selection that spans paragraphs put the text in one
+run first (`doc_flat()`). An edit moves the gap to the end of its own
+paragraph -- nothing, if the last edit was in the same paragraph -- and
+then moves only the rest of that paragraph. **Typing costs its own
+paragraph, wherever in the document it is.**
+
+**Where it lives.** A document of up to `TEXT_MAX` = 32KB is in `sbuf`,
+in `.bss`, as it always was: a small file never touches anything else,
+and a 1MB board is exactly as it was. Past 32KB the document moves to
+the app's **arena** ([kernel.md](kernel.md#arenas)), one block of memory
+beside the app sized while it runs, with the text at the bottom and the
+line table above it. The arena is grown by doubling when an edit would
+not fit, so a typed character almost never waits for it, and given back
+when a small document is opened or a new one started. A grow may move
+the arena, so the editor holds offsets into it, never pointers across a
+call. There is **no fixed document cap**: the limit is the memory the
+board can spare (the kernel keeps enough clear to start the largest core
+app). Where there is none -- a 1MB board -- a file past 32KB is "too
+large", as it always was.
 
 The buffer is not NUL-terminated as a rule; `len` is the length and the
 text may contain any byte. Anything handing a string to a drawing call
@@ -84,8 +107,11 @@ Files are read with `fs_open_read()` and `fs_read_chunk()` straight into
 that buffer, **not** with `fs_mallocfile()`. The latter would allocate a
 second copy of the whole file out of a heap that is 16KB shared with the
 stack (`Z_PROC_STACK_SIZE_DEFAULT`, `sw/os/kernel.h`), so a 20KB
-document would fail to open for no reason the user could ever guess.
-CRLF is normalized to LF on the way in.
+document would fail to open for no reason the user could ever guess. In
+the arena, reads and writes go through a 4KB buffer of the app's own:
+`fs` writes into a client through the MPU's grant window, which covers
+the app's block and not its arena, and a message carries only memory in
+the sender's block. CRLF is normalized to LF on the way in.
 
 ## Encodings
 
@@ -117,6 +143,7 @@ fully decode is never corrupted by opening and saving it.
 | ASCII only | UTF-8 | UTF-8 |
 | starts with a UTF-8 byte order mark | UTF-8; the mark is taken off | UTF-8, with the mark put back |
 | more valid UTF-8 sequences than invalid bytes | UTF-8; stray bad bytes kept as they are | UTF-8 |
+| otherwise, with a byte in 0x80-0x9f that Windows-1252 defines | Windows-1252, converted to UTF-8 in the buffer | Windows-1252 |
 | anything else | ISO 8859-15 (Latin-9), converted to UTF-8 in the buffer | Latin-9 |
 
 The test is `detect_enc()`: text written as UTF-8 is all valid multi-
@@ -125,14 +152,28 @@ bytes that cannot start one (ä in Latin-1 is the lone byte 0xE4). The
 byte order mark is taken off because it is not text -- it would sit in
 front of the first character as a box.
 
-A Latin-9 file is converted **in place**, backwards so the growing
+Of the two single-byte encodings, **Windows-1252** is what Notepad's
+"ANSI", Word's "plain text" and most mail clients wrote for decades:
+Latin-1 from 0xA0 up, and in 0x80-0x9F the characters a word processor
+puts everywhere -- curly quotes, en and em dashes, the euro, the
+ellipsis, Œ, Š, Ž, ™. Latin-9 has control codes there that nobody types
+into a text file, so **one such byte is the tell**. Without one the two
+read the same apart from eight letters, and Latin-9 is kept. (Before
+0.0.7 a Windows file opened as Latin-9 and every quote was a control
+code, drawn as the box.) The quotes and dashes have no glyph in the
+hardware fonts, so they are drawn as the straight quote and hyphen they
+look like ([text_encoding.md](text_encoding.md#look-alikes)); the
+document holds the real characters, and saves them.
+
+A single-byte file is converted **in place**, backwards so the growing
 output never overtakes the input, because there is no room for a second
 copy (see "The document" above). Every accented letter doubles, so a
 file under 32KB can be too large once converted; that is refused with a
 message and nothing loaded. **Every byte survives**, 0x80-0x9F
 included: ISO 8859-15 leaves those as control codes, and they are kept
 as the codepoints of the same value so that any file read as Latin-9 is
-written back byte for byte.
+written back byte for byte. Windows-1252 does the same with the five
+bytes it leaves undefined (0x81, 0x8D, 0x8F, 0x90, 0x9D).
 
 ### Saving
 
@@ -140,11 +181,13 @@ A file is written back in the encoding it was read in, a piece at a
 time through `fs_open_write()` / `fs_write_chunk()` -- again, no second
 copy. New documents are UTF-8.
 
-A Latin-9 file that has gained a character Latin-9 cannot hold -- a
-Japanese character, an em dash, a Polish letter -- asks before saving:
+A Latin-9 or Windows-1252 file that has gained a character its encoding
+cannot hold -- a Japanese character, a Polish letter, an em dash in a
+Latin-9 file -- asks before saving:
 
 - **Yes** saves it as UTF-8 from now on, which holds everything;
-- **No** saves Latin-9 anyway, with `?` in place of each such character;
+- **No** saves the old encoding anyway, with `?` in place of each such
+  character;
 - **Cancel** saves nothing.
 
 ### Paste and speech
@@ -178,26 +221,45 @@ tests (`sw/common/tests/ztramp.h`); exits 77 without them.
 
 ## Wrapping
 
-`line_off[]` holds the buffer offset each display line starts at.
-`MAX_LINES` is 4096 — unreachable for 32KB of prose, which wraps to a
-few hundred, and only approached by a file of nothing but newlines. At
-the cap the document stops being *displayed* past that point; it is not
-truncated on disk and editing above the cap still works. Cost is 8KB of
-`.bss`.
+The line table holds where each display line starts. It is a **gap
+buffer too**: lines before its gap are stored as their offset, lines
+after it as their **distance from the end of the text**. An edit is made
+with the table's gap just after the edit's own line (`lines_at_edit()`),
+so every line below the caret is held as a distance from the end, and
+that does not change when text before it grows or shrinks. A keystroke
+therefore rewrites only its own paragraph's entries and moves the
+table's gap by about one line; before 0.0.7 it rewrapped **everything
+after the caret** on every key.
 
-`uint16_t` offsets are exactly wide enough for a 32768-byte buffer. **If
-`TEXT_MAX` ever goes to 64K this must become `uint32_t`** — an offset of
-65536 would wrap to 0 and the failure would look like the document
-silently folding in half.
+In `.bss` the table is 16 bits wide and `MAX_LINES` = 4096 long, which
+holds both kinds of entry for a 32KB buffer and is unreachable for 32KB
+of prose; a file of nothing but short lines that needs more moves to the
+arena, where the table is 32 bits wide and grows with the document. On a
+board with no arena, at the cap the document stops being *displayed*
+past that point; it is not truncated on disk and editing above the cap
+still works.
 
-The property everything else rests on is that **wrapping is
+The property everything rests on is that **wrapping is
 paragraph-local**: where a line breaks depends only on the text since
 the last `\n`. So an edit can never change how anything before its own
-paragraph is laid out, and every edit rewraps from the start of its own
-paragraph rather than from the top of the document. That is what keeps
-typing cheap in a long file — `para_line_at()` finds the start,
-`wrap_from()` rebuilds from there. Only a resize rewraps everything,
-because a column-count change genuinely can move every line.
+paragraph is laid out, and after an edit `layout_sync()` wraps from the
+start of the paragraph to the first paragraph start past the change,
+where the old table takes over again. Only a resize or a font change
+rewraps everything, because a column-count change genuinely can move
+every line; so do loading and Replace All.
+
+**That whole-document wrap runs in the background.** It wraps as far as
+the caret and one slice (`WRAP_SLICE`, 8KB) more, which is enough to
+draw the window, and the main loop wraps the rest a slice at a time
+between messages, the scrollbar growing as it goes. While it runs the
+table ends at the **frontier**, the start of the next line still to wrap,
+held -- like the lines after the table's gap -- as its distance from the
+end, so typing before it leaves it right. Anything that needs a line
+past it wraps up to there first: finding a line (`line_at()`), moving
+down, scrolling, the scrollbar, reading aloud, and an edit, which first
+wraps past the end of its own paragraph so that `layout_sync()` can stop
+at the frontier. A 1.1MB file is drawn after 151 lines are wrapped; the
+other 19,690 take 133 slices.
 
 Lines include their terminating `\n`, and a wrapped line includes the
 space it broke after, so every byte of the document belongs to exactly
@@ -217,6 +279,22 @@ clamps to the same limit so it can't follow them out over the scrollbar.
 A word longer than the whole line is broken mid-word. Letting it run off
 the edge would be prettier and less useful: a URL or a line of pasted
 code should still be readable.
+
+### What a keystroke costs, measured
+
+`tests/utf8.c` section 18 loads a 1.1MB file of 19,841 display lines and
+counts, per key typed, the bytes moved, the bytes wrapped and the line
+entries changed:
+
+| typing at | bytes moved | bytes wrapped | line entries changed |
+|---|---:|---:|---:|
+| the start | 108 | 162 | 1 |
+| the middle | 46 | 192 | 0 |
+| the end | 92 | 192 | 1 |
+
+-- the size of one paragraph, wherever it is. With a flat buffer and a
+plain table the same keystroke at the start would have moved 1.1MB and
+rewrapped 1.1MB.
 
 ## Drawing
 
@@ -370,6 +448,14 @@ no app types in it. `text.c` tells it every edit through `edit_insert()`
 and `edit_delete()`, the only two places the buffer changes (loading
 aside, which starts the history over), and decides the groups.
 
+**Undo goes through the gap.** The log puts its edits back through two
+operations the editor supplies (`z_undo_undo_ops()`, `z_undo_ops_t`),
+which `text` implements as the same gap edits typing uses, line table
+and all. So undoing a word costs its paragraph, as typing it did, and
+undoing a Replace All walks the document once rather than moving it once
+per match. The plain-buffer `z_undo_undo()` is the same loop over a
+`memmove` pair.
+
 ## Find
 
 **Ctrl+F** asks for the text (the dialog's field takes any character,
@@ -377,19 +463,161 @@ German and Japanese included) and selects the next match after the
 caret, wrapping round to the top; **Ctrl+G** or **F3** finds the same
 text again. ASCII letters match either case, as the posix shell's
 wildcards do; everything else matches exactly, so accented and Japanese
-text is found as typed. A search with no match says so. No replace yet.
+text is found as typed. A search with no match says so.
+
+## Replace
+
+**Ctrl+H** asks two things: what to find (the selection, if it is a
+short piece of one line, else the last search), and what to put in its
+place -- which may be **nothing**, the way to delete every match
+(`z_dialog_prompt_empty_ok()`, `zdialog.h`). Matching is find's. Then it
+says how many matches there are and asks:
+
+- **Yes**: replace them all, at once;
+- **No**: one at a time -- each match is selected and shown, and asked
+  about: Yes replaces it, No leaves it, Cancel stops. It goes round the
+  document at most once, so saying No to every match ends;
+- **Cancel**: nothing.
+
+**Replace All is one step of undo**, however many matches: one Ctrl+Z
+puts every one back, case and all. It is also **one pass over the
+document**, not an edit per match, which would move the rest of the
+document once per match -- a thousand replacements in 32KB would be 32MB
+of copying, several seconds. When the replacement is longer than what it
+replaces, the document is first moved to the top of the buffer, so the
+output -- which grows -- never overtakes the text it is read from; the
+same trick as the Latin-9 conversion, the other way round. A Replace All
+that would not fit in 32KB is refused and changes nothing.
+
+The undo log holds 256 edits and 6KB of text (below), and a replacement
+is two edits. When a Replace All is bigger than that it **says so and
+asks first**, and if you go ahead the history is cleared rather than
+left holding the last part of the replace -- an undo that put back only
+some of the matches would be worse than none.
+
+One-at-a-time replacements are an edit each, undone one by one.
+
+`replace_all_core()`, `replace_selection()` and `count_matches()` are
+the parts with no dialog in them, and what `tests/utf8.c` section 14
+drives.
+
+## Go to line
+
+**Ctrl+L** says where you are and how much there is -- line 12 of 340,
+1,204 words, 7,301 characters -- and asks for a line to go to, the
+current one filled in. Lines are the **file's** lines, what a compiler
+or another editor numbers, not the wrapped display lines; words are runs
+of anything but spaces, tabs and newlines, and characters are
+characters, not bytes. A number past the end goes to the last line. The
+line arrived at is spoken, like any other move.
+
+## Save As
+
+**Ctrl+Shift+S** is Save As: the save dialog, starting in the directory
+of the last dialog, with the file's own name filled in. Saving onto
+**another** file that already exists asks first ("Replace it?"); the
+save dialog leaves that to its caller (`zdialog.h`), and before 0.0.7 a
+new document's first save overwrote a file of the same name without a
+word. The document then belongs to the new name, in the same encoding.
+
+
+### Other systems' formats
+
+Saving as **`.docx`, `.odt`, `.rtf` or `.html`** exports: the document
+is written to `/tmp` as it is -- Markdown if it is a `.md`, plain text
+otherwise -- and handed to `convert` ([convert.md](convert.md)), whose
+own window shows the progress, **Cancel** and any error. An export is a
+copy: the document keeps its own name and its unsaved state. A `.md`
+exports with its headings, lists and emphasis as Word or LibreOffice
+headings, lists and bold/italic.
+
+Opening a `.docx`, `.odt`, `.rtf` or `.epub` (from the Open dialog, or
+by double-clicking one in `files`) hands it to `convert`, which turns
+it into Markdown in `/tmp` and opens that in a new `text` window -- or
+in `read`, when it is larger than `text` can take on this machine.
+
+**A file in `/tmp` saves with Save As**, starting in `/home`: `/tmp` is
+the RAM disk and is gone at the next boot, and the usual reason a
+document is there is that `convert` put it there. Plain **Ctrl+S** on
+such a file asks where, every time, until it is saved elsewhere.
+
+## Size
+
+`text` is a core app, in flash, and its RAM is the binding budget: the
+apps that start at boot plus the two largest others have to fit a 1MB
+board ([flash_apps.md](flash_apps.md), "Budgets"). Replace, Go to line,
+Save As and Windows-1252 were paid for by building with `ZFMT_LITE`
+(stdout without newlib's stdio, [build.md](build.md)): `text` prints
+only whole lines to the console log and never calls `fflush()`. Measured
+with the same compiler before and after, `text` went from 57,544 to
+55,319 bytes in flash and from 156,976 to 152,808 in RAM -- smaller than
+before, with the features. The gap buffer, the line table's gap and the
+arena then took it to 57,620 and 156,812; background wrapping and
+autosave took 2.6KB more, which was paid back by `ZFMT_NO64` (no 64-bit
+division, 2.3KB -- `text` prints no 64-bit number) and by the scrollbar
+doing its arithmetic in 32 bits (`sb_muldiv()`, `zwidget.c`, 1.3KB in
+every app with a scrollbar). With everything in 0.0.7, `text` is 155,396
+bytes in RAM against 156,976 in 0.0.6.
+
+## Autosave
+
+Two seconds after the last edit, a copy of the document goes to the
+**RAM disk** (`/ram`) -- never to the card. Writing to the card at a
+moment the person did not choose is how a hard power-off corrupts it, so
+on a board with no RAM disk there is no autosave at all. The copy is
+written **4KB per pass of the main loop**, so typing is never held up by
+it, and an edit in the middle abandons it; it starts again at the next
+pause. It is written as `T<hash>.NEW` and renamed over `T<hash>.SAV`
+only when complete, so a `.SAV` is always a whole document; `T<hash>.INF`
+beside it records which file it is a copy of and the encoding that file
+is saved in. The hash is of the file's path (an 8.3 name,
+`/ram/T1A2B3C4.SAV`), so finding the copy of a file is one open, not a
+search.
+
+**Saving deletes the copy**, and so does answering No to "Save changes
+before continuing?". If `text` ends any other way -- a crash, a kill --
+the copy stays, and the next time that file is opened `text` says
+unsaved changes from a session that did not end were kept, and offers
+them back: Yes puts them in the document, still unsaved and still
+belonging to the file and its encoding; No deletes the copy. A document
+that was never saved has one slot of its own, offered when `text` starts
+with no file.
+
+What it does not cover is the power going off: the RAM disk does not
+survive a reboot, by design. It protects the work from `text` itself,
+not from the machine.
 
 ## Not implemented
 
-Replace. Anything past the fixed-size document (32KB).
+Nothing planned for 0.0.7 is left out. Two things that are not done:
+the undo log is fixed at 256 edits and 6KB of text (above), and a
+document that was never saved has a single autosave slot, so two
+untitled windows share it.
 
 ## Tests
 
 Undo and find run through the real `text.c` in `tests/utf8.c` (sections
 11 and 12): typing, Enter, Backspace runs, typing over a selection,
 multibyte text, the saved point, and find with case, wrapping and a
-German word. `sw/common/tests/test_undo.c` covers the log on its own,
-including what happens when it fills.
+German word. Section 13 is Windows-1252 (detection, all 256 bytes back
+byte for byte, an em dash and Œ saved to their bytes, hiragana counted
+as unsavable, and a Latin-9 file with no tell staying Latin-9); 14 is
+replace (shorter, longer, empty and non-overlapping replacements, caret
+placement, one undo and redo for all, too many to undo, too large to
+fit, and one-at-a-time); 15 is go to line and the counts. 16 makes 4,000 random inserts and
+deletes and checks the text against a model and the line table against
+a full rewrap after every one; 16b undoes and redoes 60 random edits,
+group by group, checking the table at each step; 17 is a 400KB file in
+the arena: typing in three places and two hundred, undo, pastes that
+grow the arena through moves, Replace All, going back to `.bss`, and
+refusal where no arena can be had; 16c edits a document while it is
+still being wrapped in the background -- before the frontier, paging
+past it, beyond it, Replace All restarting it, undo; 18 is the megabyte
+measurement above, the background wrap counted, and random edits on it;
+19 is autosave: nothing before the pause, pieces after it, an edit
+abandoning a copy, the copy byte for byte with its note, saving deleting
+it, and a copy taken from the arena across the gap. `sw/common/tests/test_undo.c` covers the log on
+its own, including what happens when it fills.
 
 ## Speech
 

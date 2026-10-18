@@ -53,6 +53,21 @@ fallen out of the kernel's 16-entry exit ring -- it finished long
 enough ago to have been forgotten. That is a **successful** reply, not
 an error; treat it as "finished, status unknown".
 
+Pids are reused -- the kernel gives a new process the lowest free
+slot -- so "is the child I started still running?" is not
+`z_proc_status()` on its pid alone, which answers RUNNING for whatever
+took that pid next. Record its serial when you start it and compare:
+
+```c
+uint32_t pid = z_proc_run("convert");
+uint32_t ser = z_proc_serial(pid);
+...
+bool still_mine = (z_proc_serial(pid) == ser);
+```
+
+`z_proc_serial()` returns 0 when nothing is running at the pid
+([kernel.md](kernel.md#process-serials)).
+
 The status is whatever the process passed to `z_exit()`. Note that a
 process returning from `main()` normally exits 0 through its crt0, and
 one that is killed never runs `z_exit()` at all, so its status is
@@ -60,6 +75,27 @@ whatever the ring last recorded for that pid -- or UNKNOWN.
 
 See `docs/kernel.md` for the ring and why it is not a zombie table,
 and `docs/posix.md` for the shell that motivated it.
+
+## Memory that is large only sometimes: the arena
+
+An app's `.bss` and its stack-and-heap allowance are fixed at build
+time, and have to suit a 1MB board. For something that is large only
+sometimes -- a long document, a cache -- ask for an **arena**, one block
+beside the app's own, sized while it runs:
+
+```c
+void *base;
+uint32_t got;
+int32_t r = z_arena_set(bytes, &base, &got);	// 0 frees it
+```
+
+It may **move** when resized (contents kept), so keep offsets into it,
+not pointers, and take `base` again after each call. It is refused
+(`Z_ARENA_E_RESERVE`) when it would leave too little free to start the
+largest core app -- on a 1MB board, always -- so an app has to work
+without one. Arena memory cannot be a message payload, so file reads
+and writes go through a buffer in the app's own memory. Details in
+[kernel.md](kernel.md#arenas); `sw/apps/text` is the worked example.
 
 ## printf is the most expensive thing an app can call
 

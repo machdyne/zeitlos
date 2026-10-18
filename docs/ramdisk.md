@@ -50,7 +50,10 @@ an app's `malloc()` is bounded by its stack+heap allowance
 (`docs/executables.md`), so a megabyte of it needs
 either a new syscall exposing `k_mem_alloc()`, or a "stack size" that
 is mostly not stack. **Both are new mechanisms invented for one
-caller.**
+caller.** (The first of them exists since 0.0.7, once there were callers
+-- an editor's document, a reader's cache -- that a disk did not suit:
+the arena, [kernel.md](kernel.md#arenas). `/ram` stays the place for
+scratch files.)
 
 FatFs already has a block-device seam (`diskio.h`) and multi-volume
 support, so a second drive costs one small driver and one line of

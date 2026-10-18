@@ -32,6 +32,8 @@
 #                 blitter (-DZ_GFX_HW_BLIT); 0 for the software path.
 #   ZFMT_LITE     0 (default). 1, with ZFMT = 1, also replaces stdout's
 #                 stdio (zfmt.c, ZFMT_LITE_STDIO).
+#   ZFMT_NO64     0 (default). 1, with ZFMT = 1, for a program that
+#                 prints no 64-bit number: no 64-bit division linked.
 #   ZFMT          0 (default). 1 replaces newlib's printf family with
 #                 sw/common/zfmt.c: integers only, ~50KB smaller. For
 #                 the core apps in flash; see below.
@@ -159,6 +161,12 @@ endif
 # other FILE call; about 7 KB less (net).
 ifeq ($(ZFMT_LITE),1)
 ZFMT_CFLAGS += -DZFMT_NO_STDIO -DZFMT_LITE_STDIO
+endif
+# ZFMT_NO64 = 1: for a program that prints no 64-bit numbers -- a
+# %lld prints its low 32 bits, and libgcc's 64-bit division (about
+# 2.3KB) is not linked (zfmt.c, zf_int()).
+ifeq ($(ZFMT_NO64),1)
+ZFMT_CFLAGS += -DZFMT_NO64
 endif
 endif
 

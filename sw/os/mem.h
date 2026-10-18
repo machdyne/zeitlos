@@ -52,6 +52,13 @@ void k_mem_init(uint32_t total_size);
 void *k_mem_alloc(uint32_t size);
 void k_mem_free(void *ptr);
 uint32_t k_mem_align_up(uint32_t val, uint32_t align);
+
+// For arenas (Z_SYS_ARENA; docs/kernel.md, "Arenas"). See mem.c.
+void *k_mem_alloc_top(uint32_t size);
+uint32_t k_mem_block_size(void *ptr);
+bool k_mem_resize(void *ptr, uint32_t size);
+uint32_t k_mem_grow_down(void *ptr, uint32_t size);
+uint32_t k_mem_free_bytes(void);
 z_rv k_mem_dump(void);	// `free` in sh.c -- see its own comment in mem.c
 
 // Z_SYS_MEM_STATS handler -- args are z_mem_stats_args_t

@@ -127,6 +127,23 @@ static void test_latin9(void) {
 
 }
 
+// The look-alikes stand in only for what Latin-9 cannot draw, and what
+// they stand in with is something both fonts can.
+static void test_lookalike(void) {
+	static const uint32_t cps[] = { 0x2018, 0x2019, 0x201C, 0x201D, 0x2013,
+		0x2014, 0x2022, 0x2026, 0x2039, 0x203A, 0x2212 };
+	for (unsigned i = 0; i < sizeof cps / sizeof cps[0]; i++) {
+		uint8_t b = z_cp_lookalike(cps[i]);
+		CHECK(b && !z_cp_to_l9(cps[i]), "a look-alike for something Latin-9 lacks");
+		CHECK(z_font_index(&z_font_5x8, b) >= 0 && z_font_index(&z_font_6x12, b) >= 0,
+			"the look-alike has a glyph in both fonts");
+	}
+	CHECK(z_cp_lookalike(0x201C) == '"' && z_cp_lookalike(0x2014) == '-',
+		"curly quote to straight, em dash to hyphen");
+	CHECK(z_cp_lookalike('A') == 0 && z_cp_lookalike(0x20AC) == 0 &&
+		z_cp_lookalike(0x3042) == 0, "nothing for what Latin-9 has, or for kana");
+}
+
 static void test_fonts(void) {
 
 	const z_font_t *hw[] = { &z_font_5x8, &z_font_6x12 };
@@ -225,6 +242,7 @@ int main(void) {
 	test_decode();
 	test_encode();
 	test_latin9();
+	test_lookalike();
 	test_fonts();
 
 	printf("%d checks, %d failed\n", run, failed);

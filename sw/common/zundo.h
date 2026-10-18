@@ -56,7 +56,7 @@ typedef struct {
 	uint8_t		op;			// Z_UNDO_INS / Z_UNDO_DEL
 } z_undo_rec_t;
 
-typedef struct {
+typedef struct z_undo_s_ {
 	z_undo_rec_t	*rec;
 	int				rec_cap;
 	char			*bytes;
@@ -171,17 +171,30 @@ static inline void z_undo_record(z_undo_t *u, uint8_t op, int32_t pos,
 
 }
 
-// Takes back the latest group. Applies it to buf[0..*len) (capacity
-// cap), sets *cursor, and sets *from to the lowest offset it changed
-// (so the editor can rewrap from there). Returns false if there was
-// nothing to undo.
-static inline bool z_undo_undo(z_undo_t *u, char *buf, int *len, int cap,
+// -- applying undo and redo --
+//
+// Through two operations the editor supplies, so that it can apply them
+// its own way -- sw/apps/text through its gap buffer, where each costs
+// only the text between it and the last one rather than the whole
+// document after it. `ins` puts n bytes, read with z_undo_bytes_get()
+// from the log at `log`, at `pos`, and returns false if they do not fit;
+// `del` removes n bytes at `pos`.
+typedef struct {
+	bool	(*ins)(void *user, const struct z_undo_s_ *u, int pos, uint32_t log, int n);
+	void	(*del)(void *user, int pos, int n);
+	void	*user;
+} z_undo_ops_t;
+
+// Takes back the latest group, sets *cursor, and sets *from to the
+// lowest offset it changed (so the editor can rewrap from there).
+// Returns false if there was nothing to undo.
+static inline bool z_undo_undo_ops(z_undo_t *u, const z_undo_ops_t *o,
 	int *cursor, int *from) {
 
 	if (!z_undo_can_undo(u)) return false;
 
 	uint16_t g = z_undo_at(u, u->top - 1)->group;
-	int lo = *len;
+	int lo = 0x7FFFFFFF;
 
 	bool done = false;
 	while (u->top > u->first && z_undo_at(u, u->top - 1)->group == g) {
@@ -190,57 +203,80 @@ static inline bool z_undo_undo(z_undo_t *u, char *buf, int *len, int cap,
 		if (done && u->top == u->saved) break;
 		done = true;
 		z_undo_rec_t *r = z_undo_at(u, u->top - 1);
-		if (r->op == Z_UNDO_INS) {
-			memmove(&buf[r->pos], &buf[r->pos + r->n], (size_t)(*len - r->pos - r->n));
-			*len -= r->n;
-		} else {
-			if (*len + r->n > cap) break;	// cannot happen: it was there
-			memmove(&buf[r->pos + r->n], &buf[r->pos], (size_t)(*len - r->pos));
-			z_undo_bytes_get(u, r->log, &buf[r->pos], r->n);
-			*len += r->n;
-		}
+		if (r->op == Z_UNDO_INS) o->del(o->user, r->pos, r->n);
+		else if (!o->ins(o->user, u, r->pos, r->log, r->n)) break;	// cannot happen: it was there
 		if (r->pos < lo) lo = r->pos;
 		*cursor = r->cursor;
 		u->top--;
 	}
 
-	*from = lo;
+	*from = lo == 0x7FFFFFFF ? 0 : lo;
 	return true;
 
 }
 
-// Puts back the group undo last took back. Same contract as z_undo_undo().
-static inline bool z_undo_redo(z_undo_t *u, char *buf, int *len, int cap,
+// Puts back the group undo last took back. Same contract.
+static inline bool z_undo_redo_ops(z_undo_t *u, const z_undo_ops_t *o,
 	int *cursor, int *from) {
 
 	if (!z_undo_can_redo(u)) return false;
 
 	uint16_t g = z_undo_at(u, u->top)->group;
-	int lo = *len;
+	int lo = 0x7FFFFFFF;
 
 	bool done = false;
 	while (u->top < u->end && z_undo_at(u, u->top)->group == g) {
-		if (done && u->top == u->saved) break;	// as in z_undo_undo()
+		if (done && u->top == u->saved) break;	// as in z_undo_undo_ops()
 		done = true;
 		z_undo_rec_t *r = z_undo_at(u, u->top);
 		if (r->op == Z_UNDO_INS) {
-			if (*len + r->n > cap) break;
-			memmove(&buf[r->pos + r->n], &buf[r->pos], (size_t)(*len - r->pos));
-			z_undo_bytes_get(u, r->log, &buf[r->pos], r->n);
-			*len += r->n;
+			if (!o->ins(o->user, u, r->pos, r->log, r->n)) break;
 			*cursor = r->pos + r->n;
 		} else {
-			memmove(&buf[r->pos], &buf[r->pos + r->n], (size_t)(*len - r->pos - r->n));
-			*len -= r->n;
+			o->del(o->user, r->pos, r->n);
 			*cursor = r->pos;
 		}
 		if (r->pos < lo) lo = r->pos;
 		u->top++;
 	}
 
-	*from = lo;
+	*from = lo == 0x7FFFFFFF ? 0 : lo;
 	return true;
 
+}
+
+// The same, applied to a plain buffer buf[0..*len) of capacity cap.
+
+typedef struct { char *buf; int *len; int cap; } z_undo_flat_t;
+
+static inline bool z_undo_flat_ins(void *user, const struct z_undo_s_ *u,
+	int pos, uint32_t log, int n) {
+	z_undo_flat_t *f = (z_undo_flat_t *)user;
+	if (*f->len + n > f->cap) return false;
+	memmove(&f->buf[pos + n], &f->buf[pos], (size_t)(*f->len - pos));
+	z_undo_bytes_get((const z_undo_t *)u, log, &f->buf[pos], n);
+	*f->len += n;
+	return true;
+}
+
+static inline void z_undo_flat_del(void *user, int pos, int n) {
+	z_undo_flat_t *f = (z_undo_flat_t *)user;
+	memmove(&f->buf[pos], &f->buf[pos + n], (size_t)(*f->len - pos - n));
+	*f->len -= n;
+}
+
+static inline bool z_undo_undo(z_undo_t *u, char *buf, int *len, int cap,
+	int *cursor, int *from) {
+	z_undo_flat_t f = { buf, len, cap };
+	z_undo_ops_t o = { z_undo_flat_ins, z_undo_flat_del, &f };
+	return z_undo_undo_ops(u, &o, cursor, from);
+}
+
+static inline bool z_undo_redo(z_undo_t *u, char *buf, int *len, int cap,
+	int *cursor, int *from) {
+	z_undo_flat_t f = { buf, len, cap };
+	z_undo_ops_t o = { z_undo_flat_ins, z_undo_flat_del, &f };
+	return z_undo_redo_ops(u, &o, cursor, from);
 }
 
 #endif

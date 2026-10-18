@@ -722,6 +722,17 @@ static void sb_abs_rect(const z_scrollbar_t *sb, int *x0, int *y0,
 
 }
 
+// a * b / c for a, b >= 0 and c > 0, in 32 bits. Exact while c * b
+// fits in 32 bits -- lines times pixels, for any document there is
+// memory for -- and close beyond. The 64-bit division it replaces
+// brought 1.3KB of libgcc into every app with a scrollbar.
+static int32_t sb_muldiv(int32_t a, int32_t b, int32_t c) {
+	uint32_t q = (uint32_t)a / (uint32_t)c, r = (uint32_t)a % (uint32_t)c;
+	uint32_t ub = (uint32_t)b, uc = (uint32_t)c;
+	if (ub && uc > 0xFFFFFFFFu / ub) return (int32_t)(q * ub + r / (uc / ub));
+	return (int32_t)(q * ub + (r * ub) / uc);
+}
+
 // Thumb size and offset along the bar, both in pixels. A size of 0
 // means "nothing to scroll" -- the caller draws no thumb at all
 // rather than a full-length one, which would otherwise put a solid
@@ -734,14 +745,14 @@ static void sb_thumb(const z_scrollbar_t *sb, int *off, int *size) {
 	if (sb->len <= 0) return;
 	if (sb->total <= 0 || sb->page >= sb->total) return;
 
-	int size_px = (int)(((int64_t)sb->page * sb->len) / sb->total);
+	int size_px = (int)sb_muldiv(sb->page, sb->len, sb->total);
 	if (size_px < SB_THUMB_MIN) size_px = SB_THUMB_MIN;
 	if (size_px > sb->len) size_px = sb->len;
 
 	int span = sb->total - sb->page;		// > 0, checked above
 	int travel = sb->len - size_px;
 	int off_px = travel > 0
-		? (int)(((int64_t)sb->value * travel) / span)
+		? (int)sb_muldiv(sb->value < 0 ? 0 : sb->value, travel, span)
 		: 0;
 
 	if (off_px < 0) off_px = 0;
@@ -945,7 +956,7 @@ bool z_scrollbar_mouse(z_scrollbar_t *sb, int cx, int cy, uint8_t buttons) {
 			if (pos > travel) pos = travel;
 
 			changed = z_scrollbar_set_value(sb,
-				(int32_t)(((int64_t)pos * span) / travel));
+				sb_muldiv(pos, span, travel));
 
 		}
 

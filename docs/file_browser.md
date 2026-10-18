@@ -22,13 +22,15 @@ something means.
 
 ## Using it
 
+**F1** opens this page, here ([app_help.md](app_help.md)).
+
 Double-click a folder to enter it, or the `..` row to go up. Arrow
 keys, PageUp/PageDown, Home/End move the selection; Enter opens;
 Backspace goes up a level. The mouse wheel scrolls the list three rows
 a notch without moving the selection, here and in every app's Open and
 Save dialogs ([user_input.md](user_input.md#scroll-wheel)).
 
-**Tab** moves between the list and the six buttons, **Shift+Tab**
+**Tab** moves between the list and the seven buttons, **Shift+Tab**
 goes back, and **Enter** or **Space** presses the focused button. The
 focused control draws a ring around it. This app is fully usable with
 no mouse at all, which is a first-class case in this system — arrows
@@ -43,6 +45,7 @@ list and Tab is the only way across.
 | Copy | | prompts "Copy to:" with the file's own path, to edit |
 | Move | | prompts "Move to:" the same way |
 | Delete | Delete | asks first, naming the file, then removes it |
+| Convert | | prompts for a name whose ending picks the format, and converts ([convert.md](convert.md)) |
 
 Each row shows the entry's **size and date** on the right: bytes up to
 9999, then `K` and `M` to one decimal place, and `<dir>` for a folder.
@@ -81,6 +84,24 @@ Delete uses `fs_unlink()`, which removes an empty directory but not one
 with anything in it — and can't report which failure it was, so the
 message covers both rather than guessing.
 
+### Convert
+
+**Convert** turns the selected file into another format with
+`convert` ([convert.md](convert.md)). The prompt starts from the same
+path with the ending the file most likely wants -- the other system's
+format for this system's own files (`.txt`/`.md` to `.docx`, `.zss`/
+`.csv` to `.xlsx`) and this system's for the other's (`.docx`, `.odt`,
+`.rtf`, `.epub`, `.html` to `.md`; `.xlsx`, `.ods`, `.tsv` to `.zss`) --
+and an archive's own name without its ending, as the folder to extract
+into. Change the ending to pick another format: `report.odt`,
+`report.rtf`, `budget.ods`.
+
+`convert` runs as its own process with a small window: a progress bar
+and **Cancel**, which stops it at once and leaves nothing behind. The
+browser does not wait for it -- it stays usable meanwhile -- and
+re-reads the folder, selecting the new file, when it is done. One
+conversion at a time from here.
+
 ## Opening a file
 
 By extension, through the shared table in `sw/common/ztype.h`:
@@ -90,8 +111,29 @@ By extension, through the shared table in `sw/common/ztype.h`:
 | `TXT`, `ASC`, `CFG` | `text` |
 | `MD` | `read` |
 | `ZBM` | `draw` |
+| `ZSS`, `CSV` | `sheet` |
+| `BMP`, `GIF`, `JPG`, `JPEG`, `PNG`, `PNM`, `PBM`, `PGM`, `PPM`, `SVG` | `view` |
+| `WAV`, `AU` | `play` |
+| `MOD` | `track` |
+| `MID`, `MIDI` | `midi` |
+| `STL` | `gpu3d` |
+| `HTM`, `HTML` | `web`, as a local page ([web_app.md](web_app.md#local-files)) |
+| `BIN`, `ROM`, `IMG`, `DAT` | `hex` |
+| `CH8`, `SC8`, `XO8` | `chip8` |
+| `NET` | `bench` |
+| `ZDS` | `automate` |
+| `DOCX`, `ODT`, `RTF`, `EPUB` | `convert`: as Markdown, in `text` -- or `read` when larger than `text` can take on this machine |
+| `XLSX`, `ODS`, `TSV` | `convert`: as a `.zss`, in `sheet` |
+| `ZIP`, `TAR`, `TGZ`, `GZ` | `convert`: extracted beside the archive, shown here |
 | *(none)* | run it, if it's really a program |
 | anything else | "no application is associated" |
+
+Opening another system's document or table converts it into `/tmp`
+(the RAM disk: gone at the next boot), so the original is never
+touched; the first **Save** of the converted copy asks where to keep
+it, starting in `/home`. An archive is extracted beside itself, into a
+folder of its name (`photos-2` if `photos` is taken), which then opens
+in a new browser window.
 
 An extension nothing claims gets a dialog rather than silence — a
 double-click that appears to do nothing reads as the app being broken.
@@ -114,6 +156,19 @@ can hand the loader a path several directories deep, and a longer name
 is silently truncated, which surfaces as a confusing "no such file"
 rather than an error about length. 64 matches `Z_FLIST_PATH_MAX`, which
 is what the browser can produce.
+
+`SVG`, the sound files, `MOD`, `MID`, `STL` and `HTML` are new in 0.0.7:
+every one of those apps already took a file as its launch argument, and
+the table simply did not name them, so a double-click said "no
+application is associated" for a file the system could open. 
+`sw/common/tests/test_ztype.c` now checks the table against the tree --
+every app it names is a program `sw/apps` builds, and no extension is
+listed twice:
+
+```
+cc -std=gnu99 -Wall -I sw/common -o /tmp/test_ztype \
+   sw/common/tests/test_ztype.c sw/common/ztype.c && /tmp/test_ztype
+```
 
 ## Adding a file type
 

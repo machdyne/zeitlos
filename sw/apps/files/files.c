@@ -12,8 +12,17 @@
  * was factored out of the file dialogs on exactly the assumption that
  * a browser would want the same thing: rows with an icon, keyboard and
  * mouse selection, its own scrollbar, and directory navigation. This
- * file is the window around it, six buttons, and the decision about
+ * file is the window around it, seven buttons, and the decision about
  * what double-clicking something means.
+ *
+ * -- other systems' files --
+ *
+ * docx, odt, rtf, epub, xlsx, ods, tsv, zip, tar and gz open in
+ * `convert` (ztype.c), which converts and opens the result itself
+ * (docs/convert.md). The Convert button goes the other way, or any
+ * way: it asks for a name, whose ending picks the format, and runs
+ * `convert` with its progress window; the list is re-read when it is
+ * done. Nothing here waits for it: the browser stays usable meanwhile.
  *
  * -- opening a file --
  *
@@ -47,12 +56,13 @@
 #include "../../common/zdialog.h"
 #include "../../common/zfsapp.h"
 #include "../../common/ztype.h"
+#include "../../common/zconvert.h"
 
-// Sized so the list shows a useful number of rows and the three
+// Sized so the list shows a useful number of rows and the seven
 // buttons fit across the bottom without crowding -- that second one
 // is the binding constraint, and it is why this is the floor rather
 // than merely the initial size (Z_WIN_FLAG_MIN_IS_CREATE, zwm.h).
-#define WIN_W   300
+#define WIN_W   348
 #define WIN_H   260
 
 static z_win_t win;
@@ -68,9 +78,10 @@ static z_dialog_ctx_t dlg_ctx;
 #define BTN_COPY    3
 #define BTN_MOVE    4
 #define BTN_DELETE  5
-#define BTN_COUNT   6
+#define BTN_CONVERT 6
+#define BTN_COUNT   7
 
-// Six across the window's minimum width: (300 - 2*4 - 5*4) / 6.
+// Seven across the window's minimum width: (348 - 2*4 - 6*4) / 7.
 #define BTN_W       45
 #define BTN_H       16
 #define BTN_GAP     4
@@ -80,8 +91,14 @@ static z_widget_t widgets[BTN_COUNT];
 static z_widget_set_t wset;
 
 static const char *const btn_labels[BTN_COUNT] = {
-	"Open", "New Dir", "Rename", "Copy", "Move", "Delete"
+	"Open", "New Dir", "Rename", "Copy", "Move", "Delete", "Convert"
 };
+
+// The conversion the Convert button started, if one is running, and
+// the name to select when it is done.
+static z_conv_t conv;
+static char conv_sel[Z_FS_NAME_MAX];
+static bool conv_done;
 
 // The details column in the list (size and date per row, zflist.h):
 // the widget lists through FS_LIST_EX when given somewhere to put it.
@@ -99,7 +116,8 @@ static int list_y, list_h, btn_y;
 // the tab order lives here rather than in either of them.
 //
 // FOCUS_LIST is the list; anything else is a widget index. Tab cycles
-// list -> Open -> New Dir -> Rename -> Copy -> Move -> Delete -> list.
+// list -> Open -> New Dir -> Rename -> Copy -> Move -> Delete -> Convert ->
+// list.
 #define FOCUS_LIST  (-1)
 
 static int focus = FOCUS_LIST;
@@ -569,6 +587,110 @@ static void do_delete(void) {
 
 }
 
+// The extension `path` should get by default when converted: the
+// other system's format for this system's own files, and this
+// system's for the other's. "" for an archive (a folder), NULL for
+// something convert does not read.
+static const char *convert_default(const char *path, bool *strip_tar) {
+
+	static const char *const map[][2] = {
+		{ "TXT", "docx" }, { "MD", "docx" }, { "ASC", "docx" },
+		{ "DOCX", "md" }, { "ODT", "md" }, { "RTF", "md" }, { "EPUB", "md" },
+		{ "HTM", "md" }, { "HTML", "md" },
+		{ "ZSS", "xlsx" }, { "CSV", "xlsx" },
+		{ "XLSX", "zss" }, { "ODS", "zss" }, { "TSV", "zss" },
+		{ "ZIP", "" }, { "TAR", "" }, { "TGZ", "" }, { "GZ", "" },
+	};
+
+	const char *ext = z_ftype_ext(path);
+	*strip_tar = false;
+	if (!ext) return NULL;
+
+	for (unsigned i = 0; i < sizeof map / sizeof map[0]; i++) {
+		const char *a = map[i][0], *b = ext;
+		while (*a && (*b & ~32) == *a) { a++; b++; }
+		if (*a || *b) continue;
+		if (!strcmp(map[i][0], "GZ")) {
+			// "x.tar.gz" is a tar archive: its folder is "x"
+			int n = (int)strlen(path);
+			*strip_tar = n > 7 && path[n - 7] == '.' && (path[n - 6] | 32) == 't' &&
+				(path[n - 5] | 32) == 'a' && (path[n - 4] | 32) == 'r';
+		}
+		return map[i][1];
+	}
+	return NULL;
+
+}
+
+static void do_convert(void) {
+
+	const char *name = z_flist_selected(&flist);
+	if (!name || z_flist_selected_is_dir(&flist)) return;
+
+	if (conv.running) {
+		z_dialog_confirm(&dlg_ctx, "Convert",
+			"A conversion is already\nrunning.", Z_DIALOG_OK_CANCEL);
+		return;
+	}
+
+	char from[Z_FLIST_PATH_MAX], to[Z_FLIST_PATH_MAX];
+	if (!z_flist_selected_path(&flist, from, sizeof(from))) return;
+
+	bool strip_tar;
+	const char *ext = convert_default(from, &strip_tar);
+	if (!ext) {
+		z_dialog_confirm(&dlg_ctx, "Convert",
+			"convert does not read\nthis kind of file.", Z_DIALOG_OK_CANCEL);
+		return;
+	}
+
+	// The same name with the new ending; an archive's folder is its
+	// name without one.
+	int n = (int)strlen(from);
+	memcpy(to, from, (size_t)n + 1);
+	char *dot = strrchr(to, '.');
+	if (dot && dot > strrchr(to, '/')) *dot = 0;
+	if (strip_tar) { dot = strrchr(to, '.'); if (dot) *dot = 0; }
+	if (*ext) {
+		n = (int)strlen(to);
+		if (n + 1 + (int)strlen(ext) < (int)sizeof(to)) {
+			to[n++] = '.';
+			strcpy(to + n, ext);
+		}
+	}
+
+	char out[Z_FLIST_PATH_MAX];
+	if (!z_dialog_prompt(&dlg_ctx, "Convert",
+		*ext ? "To (the ending picks the format):" : "Extract into the folder:",
+		to, out, sizeof(out)) || !out[0])
+		return;
+	if (!strcmp(out, from)) return;
+
+	z_fs_info_t fi;
+	if (*ext && fs_stat(out, &fi)) {
+		if (fi.type == Z_FS_TYPE_DIR) { fail_dialog("Convert", Z_FS_ERR_EXIST); return; }
+		if (z_dialog_confirm(&dlg_ctx, "Convert",
+			"Replace the file that\nis already there?", Z_DIALOG_YES_NO) != Z_DIALOG_YES)
+			return;
+	}
+
+	if (!z_conv_start(&conv, from, out, NULL, Z_CONV_UI)) {
+		z_dialog_confirm(&dlg_ctx, "Convert",
+			conv.result == Z_CONV_E_GONE ? "convert is not on\nthis card." :
+			"Could not start: is\n/tmp writable?", Z_DIALOG_OK_CANCEL);
+		return;
+	}
+
+	// selected afterwards if it landed in this folder
+	const char *slash = strrchr(out, '/');
+	const char *base = slash ? slash + 1 : out;
+	n = (int)strlen(base);
+	if (n >= (int)sizeof(conv_sel)) n = (int)sizeof(conv_sel) - 1;
+	memcpy(conv_sel, base, (size_t)n);
+	conv_sel[n] = 0;
+
+}
+
 // ---------------------------------------------------------------
 // input
 // ---------------------------------------------------------------
@@ -590,6 +712,7 @@ static void handle_mouse(uint32_t packed) {
 			case BTN_COPY:   do_copy_move(false); break;
 			case BTN_MOVE:   do_copy_move(true); break;
 			case BTN_DELETE: do_delete(); break;
+			case BTN_CONVERT: do_convert(); break;
 			default: break;
 		}
 		return;
@@ -637,6 +760,8 @@ static void handle_mouse(uint32_t packed) {
 
 static void handle_key(uint32_t keysym, uint8_t mods) {
 
+	if (keysym == Z_KEY_F1) { z_dialog_help(&dlg_ctx, "file_browser"); return; }	// docs/app_help.md
+
 	// Tab moves between the list and the buttons; Shift+Tab goes
 	// back. This is the whole reason the buttons are reachable at all
 	// without a pointer.
@@ -662,6 +787,7 @@ static void handle_key(uint32_t keysym, uint8_t mods) {
 				case BTN_COPY:   do_copy_move(false); break;
 				case BTN_MOVE:   do_copy_move(true); break;
 				case BTN_DELETE: do_delete(); break;
+				case BTN_CONVERT: do_convert(); break;
 				default: break;
 			}
 
@@ -717,6 +843,14 @@ static void widgets_init(void) {
 static void forward_msg(z_msg_t *msg, void *user) {
 
 	(void)user;
+
+	// The conversion's progress and end. Its window shows the
+	// progress; this only needs the end, and acts on it from the main
+	// loop -- this can be running inside a dialog.
+	if (z_conv_msg(&conv, msg)) {
+		if (!conv.running) conv_done = true;
+		return;
+	}
 
 	switch (msg->subject) {
 
@@ -843,6 +977,15 @@ int main(void) {
 
 			}
 
+		}
+
+		if (conv.running) {
+			z_conv_poll(&conv);
+			if (!conv.running) conv_done = true;
+		}
+		if (conv_done) {
+			conv_done = false;
+			reload(conv.result == 0 ? conv_sel : NULL);
 		}
 
 		for (volatile int i = 0; i < 200; i++);	// light throttle

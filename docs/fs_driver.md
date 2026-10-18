@@ -207,9 +207,11 @@ operations for the kernel shell (`MKFS`, `MOUNT`, `UMOUNT`,
 - One request at a time, in arrival order. FatFs is not reentrant, and
   a process serialises its own work for free. Nothing holds the
   scheduler: `fs` is preempted like any process.
-- Descriptors belong to the pid that opened them, and are refused
-  (`-Z_EBADF`) to anyone else. When a client dies, its descriptors are
-  closed by a sweep: every 4 idle seconds, and every 256 requests.
+- Descriptors belong to the process that opened them -- its pid and
+  its serial -- and are refused (`-Z_EBADF`) to anyone else. When a
+  client dies, its descriptors are closed by a sweep: before every
+  open, opendir, unlink and rename, every 4 idle seconds, and every
+  256 requests. See "Owners that are gone" below.
 - A read handle gets a cluster map (FatFs fast seek). Without one, a
   backwards seek walks the cluster chain from the start, one card read
   per step.
@@ -235,18 +237,54 @@ over a small archive, the card's driver over another RAM disk, and the
   its shadowing and `Z_O_NOFLASH`; the volumes listed at the root;
   `/usb` following a drive that comes, goes and comes back.
 - **Files:** both read paths; rename's checks, busy included.
-- **Clients:** descriptor ownership and the sweep; two clients reading
-  by copy at once; how many requests a listing and a whole-file read
-  take.
+- **Clients:** descriptor ownership and the sweep; a killed writer
+  whose pid is given straight to a new program (`test_reuse()`): the
+  rename that would have been refused as busy, the unlink, all sixteen
+  descriptors free again, the dead one's descriptor refused to the new
+  program, and four directory listings left half-read; two clients
+  reading by copy at once; how many requests a listing and a
+  whole-file read take.
 - **Hygiene:** that a reply is never sent with the window open.
 
 It also covers, since round 10: `zposix.c` over it
 ([posix_io.md](posix_io.md)), late replies, the reply slots and
 `-Z_EAGAIN`, and a restart keeping `/ram`.
 
-It builds with AddressSanitizer and UBSan's alignment check. 3,701
-checks; 3,744 in the kernel-client build. `test_fsvol` is the kernel's
+It builds with AddressSanitizer and UBSan's alignment check. 9,402
+checks; 9,445 in the kernel-client build. `test_fsvol` is the kernel's
 old `test_fsrename.c`, moved with the code it tests: 59 checks.
+
+## Owners that are gone
+
+A descriptor is recorded with its owner's pid **and serial**
+(`Z_SYS_PROC_SERIAL`, [kernel.md](kernel.md#process-serials)), and its
+owner is gone when the process now at that pid has another serial, or
+none. Before 0.0.7 it was the pid alone, judged by `z_proc_status()`,
+and that was wrong in a way that mattered: the kernel gives a new
+process the lowest free slot, so a program started just after a kill
+usually takes the dead one's pid. Its files then looked open by a
+running process for good:
+
+- **a slot lost per kill** -- sixteen descriptors and four listings in
+  all, so a handful of killed programs made `open` fail with
+  `-Z_EMFILE`;
+- **rename refused** as "in use" for a file whose writer was dead;
+- **a late close into a deleted entry.** Even with the pid not reused,
+  an unlink straight after a kill ran before the next sweep. FatFs does
+  not stop a file being removed while open (`FF_FS_LOCK` is 0), and the
+  sweep's `f_close()` then wrote the size and date into the directory
+  entry of a file that no longer existed.
+
+So the sweep also runs **before every open, opendir, unlink and
+rename**: whatever a dead process left open is closed before anything
+can depend on it. It costs one syscall per descriptor open at the time,
+and nothing when none are. The periodic sweeps stay, for descriptors
+nobody else touches.
+
+What a sweep cannot help is a write that was in flight when the writer
+was killed; the file keeps what reached the card. A program that must
+not leave a half-written file writes a temporary name and renames it
+when done.
 
 ## Known limits
 

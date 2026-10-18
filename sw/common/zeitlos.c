@@ -646,6 +646,41 @@ uint32_t z_proc_run(const char *name) {
 // still compiles unchanged -- and the Scheme API's (kill ...) wants a
 // real #t/#f rather than an unconditional "sure, probably" (see
 // docs/scheme_api.md).
+int32_t z_arena_set(uint32_t size, void **base, uint32_t *size_out) {
+
+	z_arena_args_t args;
+	args.size = size;
+	args.base = 0;
+	args.result = Z_ARENA_E_PERM;	// what an old kernel, without it, means
+
+	z_kernel_ptr_t z_kernel_ptr = (z_kernel_ptr_t)(uintptr_t)(reg_kernel);
+	z_kernel_ptr(Z_SYS_ARENA, (uint32_t *)&args, 0);
+
+	if (base) *base = (void *)(uintptr_t)args.base;
+	if (size_out) *size_out = args.base ? args.size : 0;
+	return args.result;
+
+}
+
+uint32_t z_arena_get(void **base) {
+	uint32_t n = 0;
+	z_arena_set(Z_ARENA_QUERY, base, &n);
+	return n;
+}
+
+uint32_t z_proc_serial(uint32_t pid) {
+
+	z_proc_serial_args_t args;
+	args.pid = pid;
+	args.serial = 0;
+
+	z_kernel_ptr_t z_kernel_ptr = (z_kernel_ptr_t)(uintptr_t)(reg_kernel);
+	z_kernel_ptr(Z_SYS_PROC_SERIAL, (uint32_t *)&args, 0);
+
+	return args.serial;
+
+}
+
 z_rv z_proc_status(uint32_t pid, uint32_t *state, int32_t *status) {
 
 	z_proc_status_args_t args;

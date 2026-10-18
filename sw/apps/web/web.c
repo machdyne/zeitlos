@@ -1200,6 +1200,7 @@ static void img_overlay(uint32_t block, layout_img_t *o);
 static void start_fetch(const url_t *u, bool push_history);
 static bool from_redirect;
 static void fetch_failed(const char *why);
+static void local_close(void);
 static void handle_port_msg(z_msg_t *msg);
 
 // -- drawing -------------------------------------------------------
@@ -1757,6 +1758,7 @@ static void fetch_failed(const char *why) {
 
 	sock_disconnect();
 	spool_close();
+	local_close();
 
 	// An image that failed leaves the PAGE alone -- it is still
 	// there, still readable, and the reader only asked for a
@@ -2163,12 +2165,102 @@ static void load_image(uint32_t block, const html_line_t *l) {
 
 }
 
+// -- local files ---------------------------------------------------
+//
+// file: URLs, and absolute paths typed into the bar (go_to_text()).
+// The file is copied into the spool by local_pump(), LOCAL_CHUNK bytes
+// per pass of the main loop, so the window keeps answering wm and
+// Stop works while a large file is read; then response_done() takes
+// it as a 200 text/html response. Copying rather than indexing the
+// file where it lies keeps one path for everything after the fetch:
+// a page on the card, its images and its links are handled by the
+// same code as a page from the network.
+
+#define LOCAL_CHUNK 4096
+
+static int32_t local_fd = -1;
+
+static void local_close(void) {
+	if (local_fd >= 0) { fs_close_handle(local_fd); local_fd = -1; }
+}
+
+static int hexval(char c) {
+	if (c >= '0' && c <= '9') return c - '0';
+	if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+	if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+	return -1;
+}
+
+// The path of a file: URL, %XX decoded: a link to "my%20page.html"
+// names the file "my page.html".
+static void local_path(const url_t *u, char *out, uint32_t cap) {
+	uint32_t o = 0;
+	for (const char *p = u->path; *p && o + 1 < cap; p++) {
+		int hi, lo;
+		if (p[0] == '%' && (hi = hexval(p[1])) >= 0 && (lo = hexval(p[2])) >= 0) {
+			out[o++] = (char)(hi * 16 + lo);
+			p += 2;
+		} else
+			out[o++] = *p;
+	}
+	out[o] = 0;
+}
+
+static void local_begin(void) {
+
+	char path[URL_PATH_MAX];
+
+	local_close();
+	local_path(&fetch_url, path, sizeof(path));
+	local_fd = fs_open_read(path);
+	if (local_fd < 0) {
+		char msg[URL_PATH_MAX + 32];
+		snprintf(msg, sizeof(msg), "cannot open %s", path);
+		fetch_failed(msg);
+		return;
+	}
+	if (!spool_begin()) { local_close(); return; }
+
+	memset(&last_res, 0, sizeof(last_res));
+	last_res.status = 200;
+	snprintf(last_res.content_type, sizeof(last_res.content_type), "text/html");
+	have_res = true;
+	conn_reusable = false;
+
+	state = W_RECEIVING;
+	snprintf(status, sizeof(status), "reading %s...", path);
+	draw_bar();
+
+}
+
+// One chunk; at the end of the file, the response is complete.
+static void local_pump(void) {
+
+	static char chunk[LOCAL_CHUNK];
+
+	int32_t n = fs_read_chunk(local_fd, chunk, LOCAL_CHUNK);
+	if (n < 0) {
+		local_close();
+		fetch_failed("read failed");
+		return;
+	}
+	if (n > 0) {
+		// A short read is not the end: only 0 is. The next chunk
+		// comes on the next pass.
+		on_body(NULL, chunk, (uint32_t)n);
+		return;
+	}
+	local_close();
+	response_done();
+
+}
+
 static void start_fetch(const url_t *u, bool push_history) {
 
 	uint32_t ip;
 	z_obj_t arg;
 
-	if (!url_is_network(u)) {
+	if (!url_is_network(u) && u->scheme != URL_SCHEME_FILE) {
 		if (u->scheme == URL_SCHEME_OTHER) {
 			char msg[160];
 			snprintf(msg, sizeof(msg), "cannot follow a %s: link",
@@ -2221,7 +2313,8 @@ static void start_fetch(const url_t *u, bool push_history) {
 		return;
 	}
 
-	if (!net_pid && !z_pid_lookup("net0", &net_pid)) {
+	if (u->scheme != URL_SCHEME_FILE &&
+		!net_pid && !z_pid_lookup("net0", &net_pid)) {
 		fetch_failed("net is not running -- try `run net`");
 		return;
 	}
@@ -2283,6 +2376,16 @@ static void start_fetch(const url_t *u, bool push_history) {
 	// one's, replayed against connection two's URL.
 	http_init(&http, false, on_headers, on_body, NULL);
 	have_res = false;
+
+	// A local file is read into the spool like a response body, a
+	// chunk per pass of the main loop, and then goes through
+	// response_done() like one -- so indexing, links, images and the
+	// history behave exactly as for a page from the network.
+	if (fetch_url.scheme == URL_SCHEME_FILE) {
+		if (!fetching_image) img_forget();
+		local_begin();
+		return;
+	}
 
 	// Reuse the open connection when this fetch is to the same
 	// origin and the last response left it usable.
@@ -2453,7 +2556,22 @@ static void go_to_text(const char *text) {
 		text = buf;
 	}
 
-	if (!url_parse(text, &u) || !url_is_network(&u)) {
+	// An absolute path is a file on this machine: what the file
+	// browser hands over for a double-clicked .html, and what a person
+	// types to look at one (docs/web_app.md, "Local files").
+	if (text[0] == '/') {
+		size_t n = strlen(text);
+		if (n + 8 > sizeof(buf)) {
+			fetch_failed("that path is too long");
+			return;
+		}
+		memcpy(buf, "file://", 7);
+		memcpy(buf + 7, text, n + 1);
+		text = buf;
+	}
+
+	if (!url_parse(text, &u) ||
+		(!url_is_network(&u) && u.scheme != URL_SCHEME_FILE)) {
 		fetch_failed("that is not a URL this browser can open");
 		return;
 	}
@@ -3162,8 +3280,11 @@ int main(void) {
 
 	{
 		char arg[URL_MAX];
-		if (z_launch_arg_take(arg, sizeof(arg))) {
-			// Launched with a URL: that is where the reader wants to
+		// z_launch_path_take(): a path with a space in it arrives
+		// quoted from a shell, and bare from the file browser.
+		if (z_launch_path_take(arg, sizeof(arg))) {
+			// Launched with a URL, or a file (docs/web_app.md,
+			// "Local files"): that is where the reader wants to
 			// be, so the bar gives up focus and the page gets it.
 			url_focus = false;
 			url_editing = false;
@@ -3316,6 +3437,8 @@ int main(void) {
 			continue;
 		}
 #endif
+
+		if (local_fd >= 0 && net_busy()) { local_pump(); continue; }
 
 		if (state == W_INDEXING) {
 

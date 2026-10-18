@@ -1471,6 +1471,8 @@ static void handle_key(uint32_t keysym, uint8_t mods) {
 
 	bool ctrl = (mods & Z_KBD_MOD_CTRL) != 0;
 
+	if (keysym == Z_KEY_F1) { z_dialog_help(&dlg_ctx, "hex_editor"); return; }	// docs/app_help.md
+
 	switch (keysym) {
 
 		case Z_KEY_LEFT:   move_by(-1); return;
