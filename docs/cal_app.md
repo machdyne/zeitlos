@@ -47,6 +47,8 @@ it. Nothing else is markable and nothing is selectable: see
 | Backspace | delete a digit |
 | Tab / Shift+Tab | move between the arrows |
 
+**F1** shows a short help box ([app_help.md](app_help.md)).
+
 Fully usable with no pointer, which is the standing requirement
 (`docs/window_manager.md`). Arrows are bound directly because there is
 nothing else on this window for them to belong to — no list, no text

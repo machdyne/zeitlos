@@ -28,7 +28,7 @@ having room for its five icons.
 
 ## Using it
 
-**F1** opens this page, here.
+**F1** shows a short help box; its **Read docs** button opens this page ([app_help.md](app_help.md)).
 
 Move with the arrows, Tab, Enter, PageUp/PageDown, Home/End; type into
 the cell under the cursor -- a number, text, or a formula starting with
@@ -64,7 +64,7 @@ Insert and Delete ask *Rows* or *Columns*, Sort *Ascending* or
 | F10 | chart the selection (or show the sheet's chart) |
 | Alt+Left / Alt+Right | narrow / widen the column |
 | Ctrl+N / Ctrl+O / Ctrl+S | new / open / save |
-| F1 | this page |
+| F1 | help; Read docs opens this page |
 
 While typing, Up and Down **commit and move**, the way a spreadsheet
 does -- typing down a column should not need Enter between every cell.

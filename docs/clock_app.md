@@ -21,6 +21,8 @@ copy of that fact that could disagree with what is on screen.
 
 Keyboard: Tab / Left / Right move focus, Enter or Space activates.
 
+**F1** shows a short help box ([app_help.md](app_help.md)).
+
 There is deliberately **no Sync button**. Net keeps the clock in step
 by itself — once shortly after the network comes up, then hourly — so a
 button for it would be furniture that does nothing observable in the

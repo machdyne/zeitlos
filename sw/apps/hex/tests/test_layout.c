@@ -52,7 +52,7 @@ bool z_dialog_open(const z_dialog_ctx_t *c, const char *d, char *o, int n) {
 bool z_dialog_save(const z_dialog_ctx_t *c, const char *d, const char *s,
 	char *o, int n) { (void)c; (void)d; (void)s; (void)o; (void)n; return false; }
 // F1 (zdialog.h): nothing to open on a build machine.
-void z_dialog_help(const z_dialog_ctx_t *c, const char *d) { (void)c; (void)d; }
+void z_dialog_help(const z_dialog_ctx_t *c, const char *t, const char *x, const char *d) { (void)c; (void)t; (void)x; (void)d; }
 
 int z_dialog_confirm(const z_dialog_ctx_t *c, const char *t, const char *m,
 	int b) { (void)c; (void)t; (void)m; (void)b; return 0; }

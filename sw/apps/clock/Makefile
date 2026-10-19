@@ -8,7 +8,7 @@ APP_MAIN_RULE = 0
 # every app's list -- it's the calendar arithmetic behind the date
 # line and the hour hand.
 # zcfg.o: system.rtc.timezone -- docs/config.md
-OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o zwidget.o zspeak.o zrtc.o zcfg.o clock.o
+OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o zwidget.o zspeak.o zrtc.o zcfg.o zdialog.o zfsapp.o clock.o
 
 clock.o: clock.c ../../common/zrtc.h ../../common/zntp.h
 	$(CC) $(CFLAGS) -c clock.c -S -MF /dev/null -o clock.asm

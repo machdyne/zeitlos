@@ -352,7 +352,13 @@ flash and most of the RAM by building `net` with `ZFMT_LITE` (stdout
 without newlib's stdio, [build.md](build.md)), about 8KB of each, and
 `text`'s paste buffer moved from `.bss` to the stack (4KB), so `net`
 went to 285K of RAM and `text` came down to 154K. The reboot dialog
-(Ctrl+Alt+Del) took `wm` to 134K: 1,022 of 1,024 KB. `mkzar.py --max` checks the archive itself
+(Ctrl+Alt+Del) took `wm` to 134K: 1,022 of 1,024 KB. The F1 help box
+([app_help.md](app_help.md)) took `text` to 157K and `files`' flash to
+49K; the RAM came from the slack in `usb` (55K) and `console` (13K):
+1,023 of 1,024 KB, and 716KB of flash. Find and copying, moving and
+deleting whole folders ([zwalk.md](zwalk.md)) took `files` to 57K of
+flash and 120K of RAM -- outside the RAM rule, which counts the two
+largest (`repl`, `text`). `mkzar.py --max` checks the archive itself
 against the region (`CORE_ZAR_MAX`, 848K), so a budget that turns out
 too tight costs a bump, never a broken flash.
 
@@ -362,8 +368,8 @@ code, data and `.bss`, not its stack). They are `CORE_BUDGETS` in the
 top-level `Makefile`, next to `CORE_APPS`:
 
 ```
-CORE_BUDGETS = fs=36K/75K usb=35K/56K wm=110K/134K net=148K/285K term=62K/152K \
-	console=10K/14K cron=18K/48K text=60K/154K files=48K/104K repl=140K/304K
+CORE_BUDGETS = fs=36K/75K usb=35K/55K wm=110K/134K net=148K/285K term=62K/152K \
+	console=10K/13K cron=18K/48K text=60K/157K files=57K/120K repl=140K/304K
 CORE_RESERVE = 48K
 CORE_STORE = wm net
 CORE_ZAR_MAX = 848K

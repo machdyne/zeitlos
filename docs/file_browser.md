@@ -17,12 +17,12 @@ of `/ram` and `/usb` is mounted.
 Most of this app is the `z_flist_t` widget (`sw/common/zflist.h`),
 which was factored out of the file dialogs on exactly the assumption
 that a browser would want the same thing. What's left is the window
-around it, six buttons, and the decision about what double-clicking
+around it, eight buttons, and the decision about what double-clicking
 something means.
 
 ## Using it
 
-**F1** opens this page, here ([app_help.md](app_help.md)).
+**F1** shows a short help box; its **Read docs** button opens this page ([app_help.md](app_help.md)).
 
 Double-click a folder to enter it, or the `..` row to go up. Arrow
 keys, PageUp/PageDown, Home/End move the selection; Enter opens;
@@ -30,7 +30,7 @@ Backspace goes up a level. The mouse wheel scrolls the list three rows
 a notch without moving the selection, here and in every app's Open and
 Save dialogs ([user_input.md](user_input.md#scroll-wheel)).
 
-**Tab** moves between the list and the seven buttons, **Shift+Tab**
+**Tab** moves between the list and the eight buttons, **Shift+Tab**
 goes back, and **Enter** or **Space** presses the focused button. The
 focused control draws a ring around it. This app is fully usable with
 no mouse at all, which is a first-class case in this system — arrows
@@ -44,8 +44,10 @@ list and Tab is the only way across.
 | Rename | F2 | prompts with the current name; the new one stays in this directory |
 | Copy | | prompts "Copy to:" with the file's own path, to edit |
 | Move | | prompts "Move to:" the same way |
-| Delete | Delete | asks first, naming the file, then removes it |
+| Delete | Delete | asks first, naming the file, then removes it -- a folder with everything in it |
 | Convert | | prompts for a name whose ending picks the format, and converts ([convert.md](convert.md)) |
+| Find | Ctrl+F | finds files by name or by text inside, in this folder and below; **Stop** while a find, copy or delete runs |
+| | Esc | stops a find, copy or delete at once; with results up, back to the folder |
 
 Each row shows the entry's **size and date** on the right: bytes up to
 9999, then `K` and `M` to one decimal place, and `<dir>` for a folder.
@@ -66,9 +68,24 @@ moving onto one is refused ("destination exists").
 **Move within a volume** is a single rename and instant, whatever the
 size. **Between volumes** (the card and `/ram` or `/usb`) a rename is
 impossible, so it is a copy followed by a delete, and the original is
-removed only once the copy has succeeded. A folder can be renamed or
-moved within its volume but not copied, and not moved between volumes:
-both of those are a recursive copy, which is not written.
+removed only once the copy has succeeded.
+
+**Folders** copy, move and delete with everything in them. A copy (of
+a file or a folder), a move between volumes, and deleting a folder run
+a step at a time ([zwalk.md](zwalk.md)) while the window stays usable:
+the line above the list counts files and bytes, the list can still be
+browsed, and **Esc** or **Stop** ends it before the next step. Stopped
+part-way:
+
+- a **copy** keeps what it had finished and says so -- never half a
+  file: the file it was writing is deleted;
+- a **move** stopped while copying leaves the original untouched; once
+  the copy is complete the original is deleted, and stopping that says
+  part of it is still there;
+- a **delete** says part of it is gone already.
+
+A folder cannot be copied into itself ("the destination is inside the
+folder"), and a copy never overwrites a folder.
 
 A file some program has **open for writing** cannot be renamed or
 moved ("in use"). Renaming it would lose what that program then writes;
@@ -80,9 +97,38 @@ Buttons are laid out from the **left**, deliberately: right-aligning
 them the way a dialog does would put the last one underneath the resize
 grip.
 
-Delete uses `fs_unlink()`, which removes an empty directory but not one
-with anything in it — and can't report which failure it was, so the
-message covers both rather than guessing.
+Deleting a file uses `fs_unlink()` at once; a file in use cannot be
+deleted, and the message says so.
+
+### Find
+
+**Ctrl+F** (or **Find**) asks what to look for, in the folder shown and
+every folder below it:
+
+| typed | finds |
+| --- | --- |
+| `report` | names containing "report", any case: `Report.md`, `old-report.txt`, a folder `reports` |
+| `*.md` | names matching the pattern: `*` any run of characters, `?` one |
+| `"invoice"` | files with "invoice" inside them, any case (ASCII) |
+| `*.txt "invoice"` | both: `.txt` files with "invoice" inside |
+
+The results replace the folder while they are up, as paths below
+where the find started, and arrive as they are found: the line above
+says how many, and how many files have been looked at. **Esc** stops
+the find at once and keeps what it found; Esc again goes back to the
+folder. **Enter** or a double-click opens a result as the list would
+(a folder is gone into); **Backspace** goes to the result's folder with
+it selected -- to rename, copy or delete it there. **Ctrl+F** again
+starts a new find.
+
+How fast: a name find costs one directory listing per folder; a text
+find reads every file, 2KB a step, so it goes at the card's speed --
+the window answers throughout either way. A find keeps over a thousand
+results in its arena (64KB, only while a find, copy or delete runs or
+results are up), about eighty without one (a board with too little
+memory); the line says "(not all)" when results or a
+very large folder were cut short. Folders more than 16 deep are not
+entered.
 
 ### Convert
 

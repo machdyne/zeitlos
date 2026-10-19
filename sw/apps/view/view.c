@@ -756,6 +756,22 @@ static void scroll_to(int nx, int ny) {
 
 static void handle_key(uint32_t keysym) {
 
+	if (keysym == Z_KEY_F1) {	// docs/app_help.md
+		static const char help[] =
+			"An image viewer: BMP, PNM, GIF, JPEG, PNG, ZBM and SVG, "
+			"shown in black and white.\n\n"
+			"o\tOpen an image\n"
+			"Arrows\tScroll\n"
+			"PgUp/PgDn\tScroll a page\n"
+			"Home\tBack to the top left\n"
+			"End\tTo the bottom\n\n"
+			"Open with the icon in the title bar, or double-click an "
+			"image in files. Large images are scaled down to fit "
+			"640x480; drag the scrollbars or use the wheel to pan.";
+		z_dialog_help(&dlg_ctx, "View help", help, "view_app");
+		return;
+	}
+
 	switch (keysym) {
 
 		case Z_KEY_LEFT:     scroll_to(scroll_x - SCROLL_STEP, scroll_y); break;

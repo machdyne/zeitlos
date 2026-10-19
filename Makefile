@@ -893,8 +893,8 @@ ZAR_APPS = $(filter-out $(CORE_APPS_OMIT),$(CORE_APPS))
 #
 # A budget is raised by taking from another, from the reserve, or by
 # making something smaller. Every core app must have one.
-CORE_BUDGETS = fs=36K/75K usb=35K/56K wm=110K/134K net=148K/285K term=62K/152K \
-	console=10K/14K cron=18K/48K text=60K/154K files=48K/104K repl=140K/304K
+CORE_BUDGETS = fs=36K/75K usb=35K/55K wm=110K/134K net=148K/285K term=62K/152K \
+	console=10K/13K cron=18K/48K text=60K/157K files=57K/120K repl=140K/304K
 CORE_RESERVE = 48K
 # Core apps stored as they are, not compressed: their budget is then
 # their .bin. wm and net, the two largest started at boot: unpacked they

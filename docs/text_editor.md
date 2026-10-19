@@ -19,7 +19,7 @@ widget, so it doubles as the worked example for `docs/widgets.md`.
 
 ## Using it
 
-**F1** opens this page, here ([app_help.md](app_help.md)).
+**F1** shows a short help box; its **Read docs** button opens this page ([app_help.md](app_help.md)).
 
 Titlebar buttons, left to right: **new**, **open**, **save**, **close**.
 The title shows the current filename, prefixed with `*` when there are

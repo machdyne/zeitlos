@@ -103,6 +103,8 @@ stall.
 | `s` | channel dump to the serial console |
 | `q`, Escape, close icon | stop |
 
+**F1** shows a short help box ([app_help.md](app_help.md)).
+
 `r` only offers rates the board's outputs can actually carry. On a
 board with S/PDIF that means an even divider of 23 or less, so it stays
 at 46875 Hz and the key does nothing — 22kHz and 11kHz are below the

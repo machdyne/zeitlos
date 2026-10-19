@@ -1,0 +1,250 @@
+# find, diff, unzip, tar, cp -r, rm -r (tools.c, tree.c).
+#
+# Fixtures from tests/gen_tools.py, run by run.sh. gen_cases.txt (made
+# by the same script) compares diff with GNU diff -u and find with a
+# sorted walk; these assert the rest. A `! N` line presses Ctrl+C at
+# the Nth px_intr() poll (run_cases.c).
+
+# -- find --
+$ find tree -name *.c
+tree/Sub2/z.c
+tree/a.c
+tree/sub/deep/A.C
+tree/sub/x.c
+
+# quoted or not, -name is find's pattern, never the shell's; case-blind as FAT is
+$ find tree -name '*.c' -type f
+tree/Sub2/z.c
+tree/a.c
+tree/sub/deep/A.C
+tree/sub/x.c
+
+$ find tree -type d
+tree
+tree/Sub2
+tree/empty
+tree/sub
+tree/sub/deep
+
+$ find tree -name S*
+tree/Sub2
+tree/sub
+
+$ find tree/a.c tree/empty
+tree/a.c
+tree/empty
+
+$ find nothere
+find: nothere: no such file or directory
+? 1
+
+$ find tree -bogus
+usage: find [DIR...] [-name PATTERN] [-type f|d]
+? 1
+
+# FIND_DEPTH: 32 levels below the start, then it says so
+$ find deep -type f
+find: deep/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d: more than 32 levels deep, not entered
+? 1
+
+$ cd tree && find -name *.h
+./sub/deep/y.h
+
+$ cd /
+
+# Ctrl+C: stops at once, the rest of the line is abandoned, status 130
+$ find tree && echo not reached
+! 4
+tree
+tree/.hidden
+tree/Sub2
+^C
+? 130
+
+# a pipeline stops too: what the first stage wrote never reaches wc
+$ find tree | wc
+! 3
+^C
+? 130
+
+# -- diff (its output is checked against GNU diff in gen_cases.txt) --
+$ diff notes.txt nothere
+diff: nothere: cannot open
+? 2
+
+$ diff notes.txt
+usage: diff FILE1 FILE2
+? 2
+
+$ diff notes.txt notes.txt
+
+$ diff notes.gz bad.gz
+Binary files notes.gz and bad.gz differ
+? 1
+
+# -- unzip --
+$ unzip -l arch/t.zip
+        11  top.txt
+         0  dir/
+       950  dir/inner.txt
+        21  dir/sub/stored.txt
+3 files, 982 bytes
+
+$ unzip arch/t.zip -d out1
+top.txt
+dir/inner.txt
+dir/sub/stored.txt
+3 files, 982 bytes
+
+$ cat out1/dir/sub/stored.txt
+stored, not deflated
+
+$ find out1 -type f
+out1/dir/inner.txt
+out1/dir/sub/stored.txt
+out1/top.txt
+
+# nothing is overwritten without -o, and nothing at all is written then
+$ unzip arch/t.zip -d out1
+unzip: top.txt exists (-o to overwrite)
+? 1
+
+$ unzip -o arch/t.zip -d out1
+top.txt
+dir/inner.txt
+dir/sub/stored.txt
+3 files, 982 bytes
+
+# a ../ name: the whole archive refused before anything is written
+$ unzip arch/evil.zip -d out2
+unzip: arch/evil.zip: an archive path outside the folder
+? 1
+
+$ find out2
+out2
+
+$ unzip notes.txt -d out6
+unzip: notes.txt: not a file of that kind
+? 1
+
+$ unzip
+usage: unzip [-l] [-o] ARCHIVE.zip [-d DIR]
+? 1
+
+# Ctrl+C half-way through a 300 KB entry: the half-written file is removed
+$ unzip arch/big.zip -d outbig
+! 6
+big.bin
+^C
+? 130
+
+$ find outbig
+outbig
+
+$ unzip arch/big.zip -d outbig
+big.bin
+1 file, 300000 bytes
+
+# diff's bound: 256 KB and 8192 lines a file
+$ diff outbig/big.bin notes.txt
+diff: outbig/big.bin: larger than 256 KB, not compared
+? 2
+
+# -- tar --
+$ tar -tf arch/t.tgz
+pkg/README
+pkg/src/main.c
+2 files, 37 bytes
+
+$ tar -xf arch/t.tar.gz -C out3
+pkg/README
+pkg/src/main.c
+2 files, 37 bytes
+
+$ find out3
+out3
+out3/pkg
+out3/pkg/README
+out3/pkg/empty
+out3/pkg/src
+out3/pkg/src/main.c
+
+$ tar xvf arch/t.tar -C out4
+pkg/README
+pkg/src/main.c
+2 files, 37 bytes
+
+$ cat out4/pkg/src/main.c
+int main(void) { return 0; }
+
+$ tar -xf arch/t.tar -C out4
+tar: pkg/README exists (-o to overwrite)
+? 1
+
+$ tar -xf arch/t.tgz -C out4 -o
+pkg/README
+pkg/src/main.c
+2 files, 37 bytes
+
+$ tar -xf notes.txt -C out5
+tar: notes.txt: the file is damaged
+? 1
+
+$ tar -cf x.tar
+usage: tar -xf ARCHIVE.tar|.tgz|.tar.gz [-C DIR] [-o]
+       tar -tf ARCHIVE    (list)
+? 1
+
+$ tar -xf arch/big.tgz -C outbig2
+! 6
+big.bin
+^C
+? 130
+
+$ find outbig2
+outbig2
+
+# -- cp -r, rm -r (sw/common/zwalk.c) --
+$ cp -r tree tcopy
+$ find tcopy -type f
+tcopy/.hidden
+tcopy/Sub2/z.c
+tcopy/a.c
+tcopy/b.txt
+tcopy/sub/deep/A.C
+tcopy/sub/deep/y.h
+tcopy/sub/x.c
+
+# an existing directory as the destination: into it
+$ cp -r tree/sub tcopy/empty
+$ find tcopy/empty
+tcopy/empty
+tcopy/empty/sub
+tcopy/empty/sub/deep
+tcopy/empty/sub/deep/A.C
+tcopy/empty/sub/deep/y.h
+tcopy/empty/sub/x.c
+
+# never over an existing name
+$ cp -r tree/sub tcopy
+cp: /tcopy/sub: the destination is already there
+? 1
+
+$ cp -r tree tree/inside
+cp: tree: the destination is inside the folder
+? 1
+
+$ rm -r tcopy
+$ find tcopy
+find: tcopy: no such file or directory
+? 1
+
+$ rm -r /
+rm: refusing to remove /
+? 1
+
+# -- Ctrl+C in the older builtins: the same poll --
+$ cat numbers.txt
+! 1
+^C
+? 130

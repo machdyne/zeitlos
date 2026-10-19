@@ -94,9 +94,9 @@ TLS_OBJ =
 endif
 
 OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o zwidget.o zspeak.o \
-	zfsapp.o zflist.o zedit.o zinflate.o zimg.o zsvg.o \
+	zfsapp.o zflist.o zdialog.o zedit.o zinflate.o zimg.o zsvg.o \
 	zport.o zstream.o zdns.o \
-	url.o uni.o http.o html.o layout.o page.o toolbar.o smallweb.o bodyview.o $(TLS_OBJ) web.o
+	url.o uni.o http.o html.o layout.o page.o toolbar.o smallweb.o bodyview.o find.o bookmark.o $(TLS_OBJ) web.o
 
 # WEB_TLS changes CFLAGS without changing a single source file, so
 # make on its own would happily relink a mixture of objects built with
@@ -147,9 +147,9 @@ zfsapp.o:
 zflist.o:
 	$(CC) $(CFLAGS) -c ../../common/zflist.c -o zflist.o
 
-# sw/common/zedit.c -- the URL field. web no longer links zdialog.c
-# at all: the toolbar replaced the modal prompt, and the text field it
-# used moved here when web became its second caller.
+# sw/common/zedit.c -- the URL field. The toolbar replaced the modal
+# URL prompt, and the text field it used moved here when web became its
+# second caller. zdialog.o is linked again only for the F1 help box.
 zedit.o:
 	$(CC) $(CFLAGS) -c ../../common/zedit.c -o zedit.o
 
@@ -304,8 +304,11 @@ test: $(BUILD)/test_url $(BUILD)/test_http $(BUILD)/test_html \
       $(BUILD)/test_ecdsa $(BUILD)/test_ecdsa_hw $(BUILD)/test_solinas \
       $(BUILD)/test_toolbar \
       $(BUILD)/test_verify \
-      $(BUILD)/test_sha384 $(BUILD)/test_smallweb $(BUILD)/test_bodyview
+      $(BUILD)/test_sha384 $(BUILD)/test_smallweb $(BUILD)/test_bodyview \
+      $(BUILD)/test_bookmark $(BUILD)/test_find
 	@echo "--- url ---"    && $(BUILD)/test_url
+	@echo "--- bookmarks ---" && $(BUILD)/test_bookmark
+	@echo "--- find in page ---" && $(BUILD)/test_find
 	@echo "--- gopher, gemini ---" && $(BUILD)/test_smallweb
 	@echo "--- scroll by blit ---" && $(BUILD)/test_bodyview
 	@echo "--- toolbar ---" && $(BUILD)/test_toolbar
@@ -330,6 +333,15 @@ $(BUILD):
 # body becomes -- docs/gopher_gemini.md.
 $(BUILD)/test_smallweb: tests/test_smallweb.c smallweb.c smallweb.h url.c url.h | $(BUILD)
 	$(HOSTCC) $(HOSTFLAGS) -o $@ tests/test_smallweb.c smallweb.c url.c
+
+# Bookmarks: the file and the page made from it (docs/web_app.md).
+$(BUILD)/test_bookmark: tests/test_bookmark.c bookmark.c bookmark.h | $(BUILD)
+	$(HOSTCC) $(HOSTFLAGS) -o $@ tests/test_bookmark.c bookmark.c
+
+# Find in page: find.c, then through page_scan() and layout_locate().
+$(BUILD)/test_find: tests/test_find.c find.c find.h page.c layout.c html.c uni.c | $(BUILD)
+	$(HOSTCC) $(HOSTFLAGS) -I $(COMMON) -o $@ \
+		tests/test_find.c find.c page.c layout.c html.c uni.c $(RENDER_SRC)
 
 $(BUILD)/test_url: tests/test_url.c url.c url.h | $(BUILD)
 	$(HOSTCC) $(HOSTFLAGS) -o $@ tests/test_url.c url.c

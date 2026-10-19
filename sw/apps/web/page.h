@@ -158,6 +158,21 @@ static inline const char *page_title(const page_t *p) { return p->title; }
 uint32_t page_fetch(page_t *p, uint32_t first, uint32_t count,
 	html_line_t *out);
 
+// Hands blocks first, first+1, ... to `fn` IN PLACE -- no copy -- until
+// `max` have been passed, `fn` returns true, or the indexed blocks run
+// out. Returns how many were passed. One seek and one replay, like
+// page_fetch(), so a long walk done as a series of calls costs a
+// replay of at most one stride per call.
+//
+// For find-in-page (docs/web_app.md): the whole document is searched
+// in bounded steps from the main loop, without copying a 6KB
+// html_line_t per block. `fn` must not call back into this file.
+typedef bool (*page_scan_fn)(void *user, uint32_t block,
+	const html_line_t *l);
+
+uint32_t page_scan(page_t *p, uint32_t first, uint32_t max,
+	page_scan_fn fn, void *user);
+
 // Moves `pos` by `lines` display lines, positive for down. Returns
 // the number of lines actually moved, which is smaller at either end
 // of the document.

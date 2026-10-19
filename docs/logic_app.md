@@ -215,6 +215,8 @@ Tab and Shift+Tab move between controls; Enter and Space activate.
 `R` runs a capture and `D` decodes — on an instrument the big button
 has a shortcut, and RUN is the one you press over and over.
 
+**F1** shows a short help box ([app_help.md](app_help.md)).
+
 Keyboard-only operation matters here more than usual: this app is most
 useful exactly when something is wrong, and requiring a pointer to
 reach a button is a dead end for anyone whose pointer is the thing that

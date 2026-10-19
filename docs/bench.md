@@ -49,6 +49,8 @@ never silent.
 | Escape | the status line back |
 | wheel, Up, Down | scroll |
 
+**F1** shows a short help box ([app_help.md](app_help.md)).
+
 Bench is started with a netlist (`bench /data/bench/examples/panel.net`, by opening a
 `.net` file, or empty from the dock), and the open icon loads another. `/data/bench/examples/panel.net` is on the card as an example.
 

@@ -70,6 +70,8 @@ stack", so none of them needed changing.
 | `reset` | throws the bank away and starts over |
 | a game's name | starts it |
 
+**F1** shows a short help box ([app_help.md](app_help.md)).
+
 The house stops lending at 20,000. The refusal says the limit rather
 than just saying no — "no" without a number is a door with no handle.
 

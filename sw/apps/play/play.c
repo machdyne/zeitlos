@@ -1805,7 +1805,51 @@ static void do_open(void) {
     draw_all();
 }
 
+/* F1 (docs/app_help.md): the short help box. Pauses playback the way
+ * do_open() does and for the same reason -- the box runs its own
+ * loop and nothing feeds the audio meanwhile -- then resumes. */
+static void help_box(void) {
+
+    static const char help[] =
+        "Play WAV, .au and raw audio files.\n\n"
+        "Space\tPlay / pause\n"
+        "s\tStop, back to the start\n"
+        "o\tOpen a file\n"
+        "n / p\tNext / previous file\n"
+        "- / =\tVolume down / up\n"
+        ", / .\tBack / forward 5 seconds\n"
+        "w\tWaveform on/off\n"
+        "h or ?\tFull key list\n"
+        "q, Esc\tQuit\n\n"
+        "The buttons and slider do the same with the mouse. "
+        "Playback pauses while this box is open.";
+    z_dialog_ctx_t ctx;
+    int prev = state;
+
+    if (state == ST_PLAYING) {
+        state = ST_PAUSED;
+        audio_enable(false);
+    }
+
+    memset(&ctx, 0, sizeof(ctx));
+    ctx.parent = &win;
+    ctx.on_msg = on_dialog_msg;
+    z_dialog_help(&ctx, "Play help", help, "play_app");
+
+    if (prev == ST_PLAYING) {
+        state = ST_PLAYING;
+        audio_enable(true);
+    }
+    set_play_icon();
+    draw_all();
+}
+
 static void handle_key(uint32_t ks) {
+
+    if (ks == Z_KEY_F1) {
+        if (windowed) { show_help = false; help_box(); }
+        return;
+    }
 
     /* Any key dismisses help, and the key that dismissed it is NOT
      * then acted on. Pressing something to make a panel go away and

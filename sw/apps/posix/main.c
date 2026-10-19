@@ -71,6 +71,15 @@ typedef struct {
      * waiting for term to come back before the line can continue. */
     bool        resume_pending;
     int         resume_status;
+
+    /* While a builtin runs: Ctrl+C seen (conn_poll()), when the
+     * terminal was last looked at, and what was typed meanwhile --
+     * given to the line editor once the prompt is back, as typeahead
+     * always was. */
+    bool        intr;
+    uint32_t    poll_last;
+    char        ahead[64];
+    uint32_t    ahead_len;
 } px_conn_t;
 
 static px_conn_t conns[PX_MAX_CONNS];
@@ -185,6 +194,11 @@ static uint32_t out_len;
 static px_conn_t *out_conn;
 static uint32_t out_dropped;
 
+/* The session whose builtin is running right now, if any. */
+static px_conn_t *busy;
+
+static bool wait_room(px_conn_t *c);
+
 /*
  * Tries to send the batch. Returns false and KEEPS the bytes if the
  * far end is not ready.
@@ -237,8 +251,15 @@ static void conn_out(void *ctx, const char *buf, int len) {
              * bytes rather than the buffered ones keeps the output in
              * order -- a truncated tail is readable, an interleaved
              * middle is not. Counted so it can be reported once rather
-             * than per chunk. */
-            if (!out_flush()) { out_dropped += (uint32_t)len; return; }
+             * than per chunk.
+             *
+             * Unless a builtin of this session is producing it: then
+             * the far end's acks are waited for (wait_room()), so a
+             * `find /` prints all of itself instead of its first 36 KB. */
+            if (!out_flush() && !(c == busy && wait_room(c))) {
+                if (!c->intr) out_dropped += (uint32_t)len;
+                return;
+            }
             room = OUT_BATCH - out_len;
         }
 
@@ -248,6 +269,91 @@ static void conn_out(void *ctx, const char *buf, int len) {
         buf += take;
         len -= (int)take;
     }
+}
+
+/* ------------------------------------------------------------------ */
+/* Ctrl+C, while a builtin runs                                         */
+
+/*
+ * A builtin runs inside px_exec_line() and this loop is not reading the
+ * mailbox meanwhile -- so without help, a Ctrl+C would sit in the queue
+ * until `find /` had finished, and so would the acks that let its
+ * output out. sh.c's px_intr() calls conn_poll() between pieces of work.
+ *
+ * It takes only THIS session's DATA and DATA_ACK (z_msg_take_match(),
+ * by subject and tag -- the tag is the slot, as in find_conn()), so
+ * every other message stays queued, in order, for the main loop, and
+ * nothing re-enters handle_data(). The acks are what out_flush()
+ * waits on; a 0x03 in the data is Ctrl+C; anything else typed is kept
+ * as typeahead, up to `ahead`, and anything after a Ctrl+C is dropped,
+ * as a terminal flushes input on an interrupt.
+ */
+static void take_mail(px_conn_t *c) {
+
+    z_msg_t m;
+    uint32_t tag = (uint32_t)(c - conns) + 1;
+
+    while (z_msg_take_match(&m, Z_PORT_DATA_ACK, tag) == Z_OK)
+        if (c->port.connected && m.from == c->port.peer_pid)
+            z_port_handle_ack(&c->port, &m);
+
+    while (z_msg_take_match(&m, Z_PORT_DATA, tag) == Z_OK) {
+        if (!c->port.connected || m.from != c->port.peer_pid) {
+            z_port_reject_stranger(&m);
+            continue;
+        }
+        z_port_send_ack(&m);
+        const uint8_t *data = (const uint8_t *)z_blob_data(&m.obj);
+        uint32_t len = z_blob_len(&m.obj);
+        for (uint32_t i = 0; data && i < len && !c->intr; i++) {
+            if (data[i] == 0x03) { c->intr = true; c->ahead_len = 0; }
+            else if (c->ahead_len < sizeof(c->ahead)) c->ahead[c->ahead_len++] = (char)data[i];
+        }
+    }
+}
+
+/* sh->poll: about fifty times a second at most -- each look is two
+ * syscalls, and px_intr() may be called per line. */
+static bool conn_poll(void *ctx) {
+    px_conn_t *c = (px_conn_t *)ctx;
+    uint32_t now = z_uptime_ticks();
+    if (!c->intr && now - c->poll_last >= Z_TICK_HZ / 50) {
+        c->poll_last = now;
+        take_mail(c);
+        out_flush();
+    }
+    return c->intr;
+}
+
+/* The batch is full and the far end has not acked: wait for it, up to
+ * two seconds -- a terminal that takes longer is not reading, and the
+ * old rule (drop, and count it) applies. False on Ctrl+C as well. */
+static bool wait_room(px_conn_t *c) {
+
+    uint32_t tag = (uint32_t)(c - conns) + 1, start = z_uptime_ticks();
+
+    while (!c->intr && z_uptime_ticks() - start < 2u * Z_TICK_HZ) {
+        z_msg_t m;
+        if (z_msg_recv_match(&m, Z_PORT_DATA_ACK, tag, Z_TICK_HZ / 20) == Z_OK &&
+            c->port.connected && m.from == c->port.peer_pid)
+            z_port_handle_ack(&c->port, &m);
+        take_mail(c);
+        if (out_flush()) return true;
+    }
+    return false;
+}
+
+/* Runs a line, or resumes one after its child (line NULL), with this
+ * session marked busy so that conn_poll() and wait_room() apply. */
+static void exec_for(px_conn_t *c, char *line, int status) {
+    px_conn_t *was = busy;
+    busy = c;
+    c->intr = false;
+    c->poll_last = z_uptime_ticks();
+    px_current_conn = c;
+    if (line) px_exec_line(&c->sh, line);
+    else px_resume(&c->sh, status);
+    busy = was;
 }
 
 /* ------------------------------------------------------------------ */
@@ -334,8 +440,7 @@ static void handle_connect(const z_msg_t *msg) {
 
         if (c->resume_pending) {
             c->resume_pending = false;
-            px_current_conn = c;
-            px_resume(&c->sh, c->resume_status);
+            exec_for(c, NULL, c->resume_status);
             out_flush();
             if (c->sh.child_pid) { c->waiting = true; return; }
         }
@@ -376,6 +481,8 @@ static void handle_connect(const z_msg_t *msg) {
     conns[slot].is_sink = sink;
     conns[slot].owner = NULL;
     conns[slot].switching = false;
+    conns[slot].ahead_len = 0;
+    conns[slot].intr = false;
 
     if (sink) {
         /* Bound to whichever session is running a command right now.
@@ -518,15 +625,18 @@ bool px_switch_port(void *conn, const char *name, char *err, uint32_t cap) {
     return true;
 }
 
+static void feed_bytes(px_conn_t *c, const uint8_t *data, uint32_t len);
+
 /* Called when a command finishes, whether it ran a child or not. */
 static void finish_line(px_conn_t *c) {
 
     out_flush();
 
     /* Leaving for another port: no prompt -- term is going. */
-    if (c->switching) return;
+    if (c->switching) { c->ahead_len = 0; return; }
 
     if (c->sh.want_exit) {
+        c->ahead_len = 0;
         conn_out(c, "bye\r\n", 5);
         out_flush();
         z_port_close(&c->port);
@@ -536,17 +646,28 @@ static void finish_line(px_conn_t *c) {
     prompt(c);
 }
 
+/* What was typed while a builtin ran, as if typed now: before any newer
+ * input (handle_data()), or from the main loop once nothing newer came. */
+static void drain_ahead(px_conn_t *c) {
+    uint8_t ahead[sizeof(c->ahead)];
+    uint32_t n = c->ahead_len;
+    if (!n || c->waiting || c->tty_away || !c->port.connected) return;
+    memcpy(ahead, c->ahead, n);
+    c->ahead_len = 0;
+    feed_bytes(c, ahead, n);
+    out_flush();
+}
+
 static void run_line(px_conn_t *c, char *line) {
 
     px_shell_init(&c->sh, conn_out, c);
-
-    /* So that a child spawned by this command knows where to send its
-     * output back to. */
-    px_current_conn = c;
+    c->sh.poll = conn_poll;
 
     if (*line) z_line_history_add(&line_history, line);
 
-    px_exec_line(&c->sh, line);
+    /* exec_for() also sets px_current_conn, so that a child spawned by
+     * this command knows where to send its output back to. */
+    exec_for(c, line, 0);
     out_flush();
 
     if (c->sh.child_pid) {
@@ -629,6 +750,14 @@ static void handle_data(const z_msg_t *msg) {
 
     if (!data) return;
 
+    drain_ahead(c);
+    feed_bytes(c, data, len);
+    out_flush();
+}
+
+/* Typed bytes into the line editor, running each line completed. */
+static void feed_bytes(px_conn_t *c, const uint8_t *data, uint32_t len) {
+
     /* Input arriving while a child is running is DROPPED, not queued.
      *
      * Queuing it would mean typing ahead into a shell that is about to
@@ -671,10 +800,9 @@ static void handle_data(const z_msg_t *msg) {
 
             z_line_reset(&c->line);
             run_line(c, linebuf);
+            if (c->waiting || !c->port.connected) return;
         }
     }
-
-    out_flush();
 }
 
 int main(void) {
@@ -708,6 +836,8 @@ int main(void) {
                 handle_close(&msg);
             }
         }
+
+        for (int i = 0; i < PX_MAX_CONNS; i++) drain_ahead(&conns[i]);
 
         /* Anything that could not be delivered last time. Retried
          * here, not in out_flush(), so that draining the mailbox for
@@ -768,8 +898,7 @@ int main(void) {
                 continue;
             }
 
-            px_current_conn = c;
-            px_resume(&c->sh, (int)status);
+            exec_for(c, NULL, (int)status);
             out_flush();
 
             if (c->sh.child_pid) { c->waiting = true; continue; }

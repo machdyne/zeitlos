@@ -9,6 +9,6 @@ APP = logic
 #
 #   zsoc.o: z_soc_has_feature2() and the GPIO registers -- see logic.c.
 OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o zwidget.o zspeak.o \
-	zsoc.o zgpio.o logic.o
+	zsoc.o zgpio.o zfsapp.o zdialog.o logic.o
 
 include ../../common/app.mk

@@ -14,8 +14,8 @@ often than something to edit.
 
 ## Using it
 
-**F1** in any app with help opens its page here, at its "Using it"
-section -- this one, for `read` ([app_help.md](app_help.md)).
+**F1** shows a short help box; in any app, its **Read docs** button
+opens that app's page here ([app_help.md](app_help.md)).
 
 Space and PageDown page forward, Shift+Space and PageUp back, the
 arrows a line, Home and End the ends; the wheel scrolls. Tab cycles

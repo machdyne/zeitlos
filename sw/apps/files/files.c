@@ -12,8 +12,17 @@
  * was factored out of the file dialogs on exactly the assumption that
  * a browser would want the same thing: rows with an icon, keyboard and
  * mouse selection, its own scrollbar, and directory navigation. This
- * file is the window around it, seven buttons, and the decision about
+ * file is the window around it, eight buttons, and the decision about
  * what double-clicking something means.
+ *
+ * -- find, and copying or deleting a whole folder --
+ *
+ * All three walk a tree, one small step at a time, from this app's
+ * event loop: sw/common/zwalk.c, docs/zwalk.md. Each step is one
+ * filesystem call, the loop gives the steps a 20ms slice and then
+ * reads its messages again, so the window answers throughout and Esc
+ * (or Stop) ends a walk before its next step. Found files stream into
+ * a results list that replaces the folder while it is up.
  *
  * -- other systems' files --
  *
@@ -57,12 +66,14 @@
 #include "../../common/zfsapp.h"
 #include "../../common/ztype.h"
 #include "../../common/zconvert.h"
+#include "../../common/zwalk.h"
+#include "../../common/zpaths.h"
 
-// Sized so the list shows a useful number of rows and the seven
+// Sized so the list shows a useful number of rows and the eight
 // buttons fit across the bottom without crowding -- that second one
 // is the binding constraint, and it is why this is the floor rather
 // than merely the initial size (Z_WIN_FLAG_MIN_IS_CREATE, zwm.h).
-#define WIN_W   348
+#define WIN_W   380
 #define WIN_H   260
 
 static z_win_t win;
@@ -79,10 +90,11 @@ static z_dialog_ctx_t dlg_ctx;
 #define BTN_MOVE    4
 #define BTN_DELETE  5
 #define BTN_CONVERT 6
-#define BTN_COUNT   7
+#define BTN_FIND    7		// "Stop" while a walk runs
+#define BTN_COUNT   8
 
-// Seven across the window's minimum width: (348 - 2*4 - 6*4) / 7.
-#define BTN_W       45
+// Eight across the window's minimum width: (380 - 2*4 - 7*4) / 8.
+#define BTN_W       43
 #define BTN_H       16
 #define BTN_GAP     4
 #define MARGIN      4
@@ -91,7 +103,7 @@ static z_widget_t widgets[BTN_COUNT];
 static z_widget_set_t wset;
 
 static const char *const btn_labels[BTN_COUNT] = {
-	"Open", "New Dir", "Rename", "Copy", "Move", "Delete", "Convert"
+	"Open", "New Dir", "Rename", "Copy", "Move", "Delete", "Convert", "Find"
 };
 
 // The conversion the Convert button started, if one is running, and
@@ -99,6 +111,44 @@ static const char *const btn_labels[BTN_COUNT] = {
 static z_conv_t conv;
 static char conv_sel[Z_FS_NAME_MAX];
 static bool conv_done;
+
+// -- walks: find, and copying, moving or deleting a folder --
+//
+// zwalk.h. One at a time. Its memory is the arena while one runs (and
+// while find's results are up), else a small block here: enough for
+// folders of a hundred-odd entries and a page of results, on a board
+// without arenas.
+
+#define WK_NONE		0
+#define WK_FIND		1
+#define WK_COPY		2
+#define WK_MOVE		3		// a copy, then deleting the source
+#define WK_DELETE	4
+
+#define WALK_ARENA		(64u * 1024u)
+#define WALK_STATIC		6144
+
+static zwalk_t walk;
+static int walk_kind;
+static bool walking;
+static uint8_t walk_static[WALK_STATIC];
+static uint8_t *walk_mem;
+static uint32_t walk_cap;
+static bool walk_arena;
+static char walk_from[Z_FLIST_PATH_MAX];	// move: the source, deleted after
+static char walk_sel[Z_FS_NAME_MAX];		// select this when done
+static uint32_t walk_drawn;					// tick of the last status line
+
+// find's results: offsets, then the names (relative to find_root)
+static z_listbox_t rlist;
+static bool results;
+static char find_root[Z_FLIST_PATH_MAX];
+static uint32_t *res_off;
+static char *res_pool;
+static int res_n, res_max;
+static uint32_t res_used, res_cap;
+
+static void walk_release(void);
 
 // The details column in the list (size and date per row, zflist.h):
 // the widget lists through FS_LIST_EX when given somewhere to put it.
@@ -117,7 +167,7 @@ static int list_y, list_h, btn_y;
 //
 // FOCUS_LIST is the list; anything else is a widget index. Tab cycles
 // list -> Open -> New Dir -> Rename -> Copy -> Move -> Delete -> Convert ->
-// list.
+// Find -> list. With results up, "the list" is the results list.
 #define FOCUS_LIST  (-1)
 
 static int focus = FOCUS_LIST;
@@ -127,6 +177,13 @@ static int focus = FOCUS_LIST;
 // button. Without it there is no way to tell whether typing an arrow
 // key will move the selection or do nothing.
 static void draw_list_focus(void) {
+
+	// The results list draws its own ring (zwidget.h).
+	if (results) {
+		z_listbox_set_focus(&rlist, focus == FOCUS_LIST);
+		z_listbox_draw(&rlist, false);
+		return;
+	}
 
 	z_clip_t c;
 	z_win_content_rect(&win, &c);
@@ -187,6 +244,7 @@ static void layout(void) {
 	if (list_h < 0) list_h = 0;
 
 	z_flist_set_geom(&flist, MARGIN, list_y, cw - 2 * MARGIN, list_h);
+	z_listbox_set_geom(&rlist, MARGIN, list_y, cw - 2 * MARGIN, list_h);
 
 	for (int i = 0; i < BTN_COUNT; i++) {
 		widgets[i].x = (int16_t)(MARGIN + i * (BTN_W + BTN_GAP));
@@ -199,7 +257,11 @@ static void layout(void) {
 
 // The current directory, above the list. Elided from the LEFT when it
 // doesn't fit: the interesting end of a path is the last component.
+static void status_draw(void);
+
 static void path_draw(void) {
+
+	if (walking || results) { status_draw(); return; }
 
 	z_clip_t content;
 	z_win_content_rect(&win, &content);
@@ -281,8 +343,13 @@ static void repaint(void) {
 
 	path_draw();
 
-	z_flist_invalidate(&flist);
-	z_flist_draw(&flist, true);
+	if (results) {
+		z_listbox_invalidate(&rlist);
+		z_listbox_draw(&rlist, true);
+	} else {
+		z_flist_invalidate(&flist);
+		z_flist_draw(&flist, true);
+	}
 
 	z_widget_draw_all(&wset, true);
 	draw_list_focus();
@@ -478,16 +545,21 @@ static void do_rename(void) {
 
 }
 
+static bool walk_begin(int kind, int op, const char *src, const char *dst);
+static int cat(char *d, int n, int cap, const char *s);
+
 // Copy and Move ask where to, starting from where the file is now, so
 // the common cases are an edit of the end of the line: a new name, or
 // another directory in front of the same name. A destination that is
 // an existing directory means "into it", as in posix's `mv`/`cp`.
 //
-// Move between volumes (the card and /ram, say) is a copy then a
-// delete, done by fs_move(), which removes the original only once the
-// copy has succeeded. Copying a whole folder is not offered: that is a
-// recursive walk with its own failure modes, and is posix's `cp` to
-// grow if it is wanted.
+// A copy -- of a file or a whole folder -- runs as a walk (zwalk.h):
+// a chunk at a time from the event loop, with its progress on the
+// line above the list and Esc or Stop to end it, which leaves what
+// was copied so far and says so (never half a file). A move within a
+// volume is a rename and instant; between volumes (the card and /ram)
+// it is that copy and then a walk deleting the source, which starts
+// only once the copy is complete.
 static void do_copy_move(bool move) {
 
 	const char *title = move ? "Move" : "Copy";
@@ -499,12 +571,7 @@ static void do_copy_move(bool move) {
 	int err = Z_FS_ERR_IO;
 
 	if (!z_flist_selected_path(&flist, from, sizeof(from))) return;
-
-	if (!move && z_flist_selected_is_dir(&flist)) {
-		z_dialog_confirm(&dlg_ctx, title,
-			"Folders can be moved\nor renamed, not copied.", Z_DIALOG_OK_CANCEL);
-		return;
-	}
+	bool isdir = z_flist_selected_is_dir(&flist);
 
 	if (!z_dialog_prompt(&dlg_ctx, title, move ? "Move to:" : "Copy to:",
 		from, to, sizeof(to)) || !to[0])
@@ -521,29 +588,31 @@ static void do_copy_move(bool move) {
 	}
 
 	if (move) {
-		if (!fs_move(from, to, &err)) { fail_dialog(title, err); return; }
-	} else {
-		// fs_copy_file() overwrites; a copy onto an existing file
-		// asks first, as Delete does.
-		if (fs_stat(to, &fi)) {
-			if (fi.type == Z_FS_TYPE_DIR) { fail_dialog(title, Z_FS_ERR_EXIST); return; }
-			if (z_dialog_confirm(&dlg_ctx, title,
-				"Replace the file that\nis already there?", Z_DIALOG_YES_NO)
-				!= Z_DIALOG_YES)
-				return;
-		}
-		if (!fs_copy_file(from, to)) {
-			z_dialog_confirm(&dlg_ctx, title,
-				"The copy failed. Is\nthere space for it?", Z_DIALOG_OK_CANCEL);
-			reload(name);
+		if (fs_rename(from, to, &err)) { reload(NULL); return; }
+		if (err != Z_FS_ERR_XDEV) { fail_dialog(title, err); return; }
+		if (fs_stat(to, &fi)) { fail_dialog(title, Z_FS_ERR_EXIST); return; }
+	} else if (fs_stat(to, &fi)) {
+		// A copy onto an existing file asks first, as Delete does; a
+		// folder is never replaced.
+		if (isdir || fi.type == Z_FS_TYPE_DIR) { fail_dialog(title, Z_FS_ERR_EXIST); return; }
+		if (z_dialog_confirm(&dlg_ctx, title,
+			"Replace the file that\nis already there?", Z_DIALOG_YES_NO)
+			!= Z_DIALOG_YES)
 			return;
-		}
+		if (!fs_unlink(to)) { fail_dialog(title, Z_FS_ERR_BUSY); return; }
 	}
 
-	reload(move ? NULL : name);
+	cat(walk_from, 0, (int)sizeof(walk_from), from);
+	if (walk_begin(move ? WK_MOVE : WK_COPY, ZW_COPY, from, to)) {
+		const char *b = strrchr(to, '/');
+		// the copy's own name, when it lands in this folder
+		cat(walk_sel, 0, (int)sizeof(walk_sel), b ? b + 1 : to);
+	}
 
 }
 
+// A file is deleted at once. A folder -- with everything in it -- is a
+// walk (zwalk.h): progress above the list, Esc or Stop to end it.
 static void do_delete(void) {
 
 	const char *name = z_flist_selected(&flist);
@@ -556,28 +625,23 @@ static void do_delete(void) {
 
 	// The name goes in the question. "Delete this file?" is a
 	// question the user cannot actually check the answer to.
-	char msg[96];
-	int n = 0;
-
-	const char *lead = isdir ? "Delete the folder\n" : "Delete the file\n";
-	for (const char *p = lead; *p && n < (int)sizeof(msg) - 2; p++)
-		msg[n++] = *p;
-	for (const char *p = name; *p && n < (int)sizeof(msg) - 2; p++)
-		msg[n++] = *p;
-	if (n < (int)sizeof(msg) - 1) msg[n++] = '?';
-	msg[n] = 0;
+	char msg[128];
+	int n = cat(msg, 0, (int)sizeof(msg), isdir ? "Delete the folder\n" : "Delete the file\n");
+	n = cat(msg, n, (int)sizeof(msg), name);
+	cat(msg, n, (int)sizeof(msg), isdir ? "\nand everything in it?" : "?");
 
 	if (z_dialog_confirm(&dlg_ctx, "Delete", msg, Z_DIALOG_YES_NO)
 		!= Z_DIALOG_YES)
 		return;
 
+	if (isdir) {
+		walk_begin(WK_DELETE, ZW_DELETE, path, NULL);
+		return;
+	}
+
 	if (!fs_unlink(path)) {
-		// fs_unlink() removes an empty directory but not one with
-		// anything in it, and cannot tell us which failure this was
-		// -- so the message covers both rather than guessing.
 		z_dialog_confirm(&dlg_ctx, "Failed",
-			isdir ? "The folder could not be\ndeleted. Is it empty?"
-			      : "The file could not\nbe deleted.",
+			"The file could not be\ndeleted. Is it in use?",
 			Z_DIALOG_OK_CANCEL);
 		return;
 	}
@@ -692,8 +756,393 @@ static void do_convert(void) {
 }
 
 // ---------------------------------------------------------------
+// walks: find, copy, move, delete -- zwalk.h, docs/zwalk.md
+// ---------------------------------------------------------------
+
+// No printf here (files has none): strings by hand.
+static int cat(char *d, int n, int cap, const char *s) {
+	while (s && *s && n < cap - 1) d[n++] = *s++;
+	d[n] = 0;
+	return n;
+}
+
+static int cat_u(char *d, int n, int cap, uint32_t v) {
+	char t[12];
+	int k = 0;
+	do { t[k++] = (char)('0' + v % 10); v /= 10; } while (v);
+	while (k && n < cap - 1) d[n++] = t[--k];
+	d[n] = 0;
+	return n;
+}
+
+// "1.2 MB", "340 KB", "12 bytes"
+static int cat_size(char *d, int n, int cap, uint32_t b) {
+	if (b >= 1024u * 1024u) {
+		n = cat_u(d, n, cap, b / (1024u * 1024u));
+		n = cat(d, n, cap, ".");
+		n = cat_u(d, n, cap, (b % (1024u * 1024u)) * 10u / (1024u * 1024u));
+		return cat(d, n, cap, " MB");
+	}
+	if (b >= 1024u) return cat(d, cat_u(d, n, cap, b / 1024u), cap, " KB");
+	return cat(d, cat_u(d, n, cap, b), cap, " bytes");
+}
+
+// The arena if there is one (64KB, else less), else walk_static.
+static void walk_acquire(void) {
+
+	static const uint32_t want[] = { WALK_ARENA, WALK_ARENA / 2, WALK_ARENA / 4 };
+	void *base;
+	uint32_t got;
+
+	if (walk_mem) return;
+	for (int i = 0; i < 3; i++) {
+		if (z_arena_set(want[i], &base, &got) == Z_ARENA_OK && base && got) {
+			walk_mem = (uint8_t *)base;
+			walk_cap = got;
+			walk_arena = true;
+			return;
+		}
+	}
+	walk_mem = walk_static;
+	walk_cap = WALK_STATIC;
+	walk_arena = false;
+
+}
+
+static void walk_release(void) {
+	if (walk_arena) z_arena_set(0, NULL, NULL);
+	walk_mem = NULL;
+	walk_cap = 0;
+	walk_arena = false;
+}
+
+// Buttons for the state we are in: while a walk runs only Find, as
+// Stop; with results up, Open and Find.
+static void buttons_update(void) {
+	for (int i = 0; i < BTN_COUNT; i++)
+		widgets[i].enabled = !walking && (!results || i == BTN_OPEN || i == BTN_FIND);
+	widgets[BTN_FIND].enabled = true;
+	widgets[BTN_FIND].label = walking ? "Stop" : "Find";
+	z_widget_invalidate(&wset);
+}
+
+// The line above the list, while a walk runs or results are up.
+static void status_draw(void) {
+
+	char line[120];
+	int n = 0;
+	const int cap = (int)sizeof(line);
+
+	switch (walk_kind) {
+	case WK_FIND:
+		n = cat(line, n, cap, walking ? "Finding... " : "");
+		n = cat_u(line, n, cap, (uint32_t)res_n);
+		n = cat(line, n, cap, " found");
+		if (walking) {
+			n = cat(line, n, cap, ", ");
+			n = cat_u(line, n, cap, walk.files);
+			n = cat(line, n, cap, " files looked at");
+		} else {
+			n = cat(line, n, cap, " in ");
+			n = cat(line, n, cap, find_root);
+			if (walk.truncated || res_n >= res_max) n = cat(line, n, cap, " (not all)");
+		}
+		break;
+	case WK_COPY:
+	case WK_MOVE:
+		n = cat(line, n, cap, walk.op == ZW_DELETE ? "Removing the source... " :
+			walk_kind == WK_MOVE ? "Moving... " : "Copying... ");
+		n = cat_u(line, n, cap, walk.files);
+		n = cat(line, n, cap, " files, ");
+		n = cat_size(line, n, cap, walk.bytes);
+		break;
+	case WK_DELETE:
+		n = cat(line, n, cap, "Deleting... ");
+		n = cat_u(line, n, cap, walk.files + walk.dirs);
+		n = cat(line, n, cap, " deleted");
+		break;
+	default:
+		break;
+	}
+	n = cat(line, n, cap, walking ? "  (Esc stops)" : "  (Esc: back)");
+
+	z_clip_t content, clip;
+	z_win_content_rect(&win, &content);
+	int cw = z_win_content_w(&win);
+	clip.x0 = content.x0 + MARGIN;
+	clip.y0 = content.y0 + MARGIN;
+	clip.x1 = content.x0 + cw - MARGIN - 1;
+	clip.y1 = clip.y0 + z_font_5x8.h - 1;
+	if (clip.x1 < clip.x0) return;
+	z_fb_hw_fill_rect(clip.x0, clip.y0, clip.x1 - clip.x0 + 1, z_font_5x8.h, 0);
+	z_fb_draw_text(clip.x0, clip.y0, line, 1, &z_font_5x8, &clip);
+	walk_drawn = z_uptime_ticks();
+
+}
+
+static const char *res_label(void *user, int i) {
+	(void)user;
+	return (i >= 0 && i < res_n) ? res_pool + res_off[i] : "";
+}
+
+// A match: its path below find_root, into the results.
+static void res_add(const char *path) {
+
+	int skip = (int)strlen(find_root);
+	if (skip > 1) skip++;			// and the '/'
+	else skip = 1;					// "/"
+	const char *rel = path + skip;
+	uint32_t l = (uint32_t)strlen(rel) + 1;
+
+	if (res_n >= res_max || res_used + l > res_cap) return;
+	memcpy(res_pool + res_used, rel, l);
+	res_off[res_n++] = res_used;
+	res_used += l;
+	z_listbox_set_items(&rlist, res_n, res_label, NULL);
+	if (res_n == 1) z_listbox_select(&rlist, 0);
+
+}
+
+static void results_leave(void) {
+	results = false;
+	z_listbox_set_items(&rlist, 0, res_label, NULL);	// its names go with the memory
+	if (!walking) { walk_kind = WK_NONE; walk_release(); }
+	buttons_update();
+	repaint();
+}
+
+// The end of a walk, by itself or stopped.
+static void walk_finish(int r, bool stopped) {
+
+	char msg[160];
+	int n = 0;
+	const int cap = (int)sizeof(msg);
+	int kind = walk_kind;
+
+	walking = false;
+
+	if (kind == WK_FIND) {
+		buttons_update();
+		repaint();
+		return;
+	}
+
+	// a move whose copy is done: now the source
+	if (kind == WK_MOVE && r == ZW_DONE && !stopped && walk.op != ZW_DELETE) {
+		uint32_t files = walk.files, bytes = walk.bytes;
+		if (zw_start(&walk, ZW_DELETE, walk_from, NULL, walk_mem, walk_cap)) {
+			walk.bytes = bytes;
+			walk.files = files;
+			walking = true;
+			path_draw();
+			return;
+		}
+		r = ZW_FAIL;
+	}
+
+	if (stopped || r == ZW_FAIL) {
+		if (stopped) n = cat(msg, n, cap, "Stopped.");
+		else {
+			n = cat(msg, n, cap, "Stopped: ");
+			n = cat(msg, n, cap, zw_strerror(walk.err));
+			n = cat(msg, n, cap, "\n");
+			n = cat(msg, n, cap, walk.hit);
+		}
+		if (walk.op == ZW_DELETE)
+			n = cat(msg, n, cap, kind == WK_MOVE
+				? "\nThe copy is complete; part of\nthe original is still there."
+				: "\nPart of it is deleted already.");
+		else if (walk.partial)
+			n = cat(msg, n, cap, "\nWhat was copied so far is left\nin the destination.");
+		z_dialog_confirm(&dlg_ctx, kind == WK_DELETE ? "Delete" :
+			kind == WK_MOVE ? "Move" : "Copy", msg, Z_DIALOG_OK_CANCEL);
+	}
+
+	walk_kind = WK_NONE;
+	walk_release();
+	buttons_update();
+	reload(walk_sel[0] ? walk_sel : NULL);
+
+}
+
+static void walk_stop(void) {
+	if (!walking) return;
+	zw_cancel(&walk);
+	walk_finish(ZW_DONE, true);
+}
+
+// Steps for up to 20ms, then back to the messages.
+static void walk_pump(void) {
+
+	uint32_t t0 = z_uptime_ticks();
+
+	while (walking && z_uptime_ticks() - t0 < Z_TICK_HZ / 50) {
+		int r = zw_step(&walk);
+		if (r == ZW_HIT) {
+			res_add(walk.hit);
+			z_listbox_draw(&rlist, false);
+		} else if (r == ZW_DONE || r == ZW_FAIL) {
+			walk_finish(r, false);
+			return;
+		}
+	}
+
+	if (walking && z_uptime_ticks() - walk_drawn > Z_TICK_HZ / 5) status_draw();
+
+}
+
+// Starts a walk. Find keeps part of the memory for its results:
+// the listing needs room for one big folder, the results the rest.
+static bool walk_begin(int kind, int op, const char *src, const char *dst) {
+
+	walk_acquire();
+	uint32_t wcap = walk_cap;
+	if (kind == WK_FIND) {
+		wcap = walk_cap / 2;
+		if (wcap > 24576) wcap = 24576;
+		if (wcap < 3584) wcap = 3584;		// zw_start()'s least, and a little
+	}
+	if (!zw_start(&walk, op, src, dst, walk_mem, wcap)) {
+		int err = walk.err;
+		walk_release();
+		char msg[96];
+		int n = cat(msg, 0, (int)sizeof(msg), "Not possible:\n");
+		n = cat(msg, n, (int)sizeof(msg), zw_strerror(err));
+		cat(msg, n, (int)sizeof(msg), ".");
+		z_dialog_confirm(&dlg_ctx, kind == WK_FIND ? "Find" : kind == WK_DELETE ?
+			"Delete" : kind == WK_MOVE ? "Move" : "Copy", msg, Z_DIALOG_OK_CANCEL);
+		return false;
+	}
+	walk_kind = kind;
+	walking = true;
+	walk_drawn = 0;
+	walk_sel[0] = 0;
+
+	if (kind == WK_FIND) {
+		uint8_t *r = walk_mem + wcap;
+		uint32_t rcap = walk_cap - wcap;
+		res_max = (int)(rcap / 32);
+		res_off = (uint32_t *)(void *)r;
+		res_pool = (char *)(r + (uint32_t)res_max * 4u);
+		res_cap = rcap - (uint32_t)res_max * 4u;
+		res_n = 0;
+		res_used = 0;
+		z_listbox_set_items(&rlist, 0, res_label, NULL);
+		z_listbox_select(&rlist, -1);
+		results = true;
+		focus = FOCUS_LIST;
+		z_widget_focus_set(&wset, -1);
+	}
+
+	buttons_update();
+	repaint();
+	return true;
+
+}
+
+// Ctrl+F, or the Find button: names, "text inside", or both.
+static void do_find(void) {
+
+	char q[96], name[ZW_NAME_MAX], text[ZW_TEXT_MAX];
+	int nn = 0, tn = 0;
+
+	if (!z_dialog_prompt(&dlg_ctx, "Find",
+		"In this folder and below. A name\n"
+		"(report, *.md), \"text\" inside files,\n"
+		"or both: *.txt \"invoice\"",
+		NULL, q, sizeof(q)) || !q[0])
+		return;
+
+	// Split: the quoted part is text, the rest the name.
+	for (const char *p = q; *p; p++) {
+		if (*p == '"') {
+			for (p++; *p && *p != '"'; p++)
+				if (tn < ZW_TEXT_MAX - 1) text[tn++] = *p;
+			if (!*p) break;
+		} else if (nn < ZW_NAME_MAX - 1 && (nn > 0 || *p != ' ')) {
+			name[nn++] = *p;
+		}
+	}
+	while (nn > 0 && name[nn - 1] == ' ') nn--;
+	name[nn] = 0;
+	text[tn] = 0;
+
+	// a new find replaces the results up now
+	if (walk_kind == WK_FIND) { walk_kind = WK_NONE; results = false; walk_release(); }
+
+	cat(find_root, 0, (int)sizeof(find_root), flist.path);
+	if (walk_begin(WK_FIND, ZW_FIND, flist.path, NULL))
+		zw_find_set(&walk, name, text);
+
+}
+
+// The full path of result `i`.
+static bool res_path(int i, char *out, int cap) {
+	if (i < 0 || i >= res_n) return false;
+	int n = cat(out, 0, cap, find_root);
+	if (n > 1) n = cat(out, n, cap, "/");
+	n = cat(out, n, cap, res_pool + res_off[i]);
+	return n < cap - 1;
+}
+
+// Enter, a double-click, or Open on a result: a folder is gone into
+// (leaving the results), a file opened as from the list.
+static void res_open(void) {
+	char path[Z_FLIST_PATH_MAX];
+	z_fs_info_t fi;
+	if (!res_path(z_listbox_selected(&rlist), path, sizeof(path))) return;
+	if (fs_stat(path, &fi) && fi.type == Z_FS_TYPE_DIR) {
+		walk_stop();
+		z_flist_chdir(&flist, path);
+		results_leave();
+		return;
+	}
+	launch(path);
+}
+
+// Backspace on a result: its folder, with it selected.
+static void res_goto(void) {
+	char path[Z_FLIST_PATH_MAX];
+	if (!res_path(z_listbox_selected(&rlist), path, sizeof(path))) return;
+	char *slash = strrchr(path, '/');
+	if (!slash) return;
+	char name[Z_FS_NAME_MAX];
+	cat(name, 0, (int)sizeof(name), slash + 1);
+	if (slash == path) slash[1] = 0;
+	else *slash = 0;
+	walk_stop();
+	z_flist_chdir(&flist, path);
+	results_leave();
+	reload(name);
+}
+
+// ---------------------------------------------------------------
 // input
 // ---------------------------------------------------------------
+
+static void do_find(void);
+static void res_open(void);
+
+// A button, pressed by pointer or key.
+static void button(int act) {
+	if (act == BTN_FIND) {
+		if (walking) walk_stop();
+		else do_find();
+		return;
+	}
+	if (walking) return;
+	if (results) { if (act == BTN_OPEN) res_open(); return; }
+	switch (act) {
+		case BTN_OPEN:   do_open(); break;
+		case BTN_MKDIR:  do_mkdir(); break;
+		case BTN_RENAME: do_rename(); break;
+		case BTN_COPY:   do_copy_move(false); break;
+		case BTN_MOVE:   do_copy_move(true); break;
+		case BTN_DELETE: do_delete(); break;
+		case BTN_CONVERT: do_convert(); break;
+		default: break;
+	}
+}
 
 static void handle_mouse(uint32_t packed) {
 
@@ -704,19 +1153,7 @@ static void handle_mouse(uint32_t packed) {
 
 	int act = z_widget_mouse(&wset, cx, cy, buttons);
 
-	if (act >= 0) {
-		switch (act) {
-			case BTN_OPEN:   do_open(); break;
-			case BTN_MKDIR:  do_mkdir(); break;
-			case BTN_RENAME: do_rename(); break;
-			case BTN_COPY:   do_copy_move(false); break;
-			case BTN_MOVE:   do_copy_move(true); break;
-			case BTN_DELETE: do_delete(); break;
-			case BTN_CONVERT: do_convert(); break;
-			default: break;
-		}
-		return;
-	}
+	if (act >= 0) { button(act); return; }
 
 	// A click on a button moved widget focus (z_widget_mouse does
 	// that); keep this app's own tab position in step with it.
@@ -736,6 +1173,12 @@ static void handle_mouse(uint32_t packed) {
 		z_widget_focus_set(&wset, -1);
 		z_widget_draw_all(&wset, false);
 		draw_list_focus();
+	}
+
+	if (results) {
+		if (z_listbox_mouse(&rlist, cx, cy, buttons) == Z_LIST_ACTIVATED)
+			res_open();
+		return;
 	}
 
 	int r = z_flist_mouse(&flist, cx, cy, buttons);
@@ -760,7 +1203,40 @@ static void handle_mouse(uint32_t packed) {
 
 static void handle_key(uint32_t keysym, uint8_t mods) {
 
-	if (keysym == Z_KEY_F1) { z_dialog_help(&dlg_ctx, "file_browser"); return; }	// docs/app_help.md
+	if (keysym == Z_KEY_F1) {	// docs/app_help.md
+		static const char help[] =
+			"Browse, open and manage files.\n\n"
+			"Enter\tOpen the selection\n"
+			"Backspace\tUp a folder\n"
+			"F2\tRename\n"
+			"Delete\tDelete (asks first)\n"
+			"Ctrl+F\tFind by name, \"text\" inside, or both\n"
+			"Esc\tStop a find, copy or delete\n"
+			"Tab\tTo the buttons; Space presses\n\n"
+			"Results: Enter opens, Backspace goes to the "
+			"file's folder, Esc goes back.\n\n"
+			"Copy and Move ask for the destination, starting from the "
+			"file's own path: an existing folder means into it. "
+			"Folders copy, move and delete with everything in them. "
+			"Convert saves the file in another format, picked by the "
+			"ending you give it (.docx, .md, .xlsx, ...).\n\n"
+			Z_DIR_HOME " is yours, " Z_DIR_TMP " is the RAM disk (gone at power-off).";
+		z_dialog_help(&dlg_ctx, "Files help", help, "file_browser");
+		return;
+	}
+
+	// Esc stops a walk; with it stopped, it takes the results away.
+	if (keysym == 0x1b) {
+		if (walking) walk_stop();
+		else if (results) results_leave();
+		return;
+	}
+
+	// Ctrl+F: find (or a new find, over the results).
+	if (keysym == 0x06) {
+		if (!walking || walk_kind == WK_FIND) { walk_stop(); do_find(); }
+		return;
+	}
 
 	// Tab moves between the list and the buttons; Shift+Tab goes
 	// back. This is the whole reason the buttons are reachable at all
@@ -778,18 +1254,7 @@ static void handle_key(uint32_t keysym, uint8_t mods) {
 		// they are far more useful. Tab is the only way across.
 		if (keysym == 0x0d || keysym == ' ') {
 
-			int act = z_widget_key_activate(&wset);
-
-			switch (act) {
-				case BTN_OPEN:   do_open(); break;
-				case BTN_MKDIR:  do_mkdir(); break;
-				case BTN_RENAME: do_rename(); break;
-				case BTN_COPY:   do_copy_move(false); break;
-				case BTN_MOVE:   do_copy_move(true); break;
-				case BTN_DELETE: do_delete(); break;
-				case BTN_CONVERT: do_convert(); break;
-				default: break;
-			}
+			button(z_widget_key_activate(&wset));
 
 			// Everything above can repaint, which clears the rings.
 			draw_list_focus();
@@ -801,11 +1266,25 @@ static void handle_key(uint32_t keysym, uint8_t mods) {
 
 	}
 
+	if (results) {
+		int r;
+		if (keysym == 0x0d) { res_open(); return; }
+		if (keysym == 0x08) { res_goto(); return; }	// Backspace: its folder
+		r = z_listbox_key(&rlist, keysym);
+		if (r != Z_LIST_NONE) z_listbox_draw(&rlist, false);
+		if (r == Z_LIST_ACTIVATED) res_open();
+		return;
+	}
+
 	if (keysym == 0x0d) {		// Enter -- same as the Open button
 		do_open();
 		draw_list_focus();
 		return;
 	}
+
+	// While a copy or delete runs, the list can be browsed, and
+	// nothing else done to it.
+	if (walking && (keysym == Z_KEY_F2 || keysym == Z_KEY_DELETE)) return;
 
 	// The usual shortcuts, in the list: F2 renames, Delete deletes
 	// (still asking first).
@@ -912,6 +1391,7 @@ int main(void) {
 
 	z_flist_init(&flist, &win);
 	flist.info = finfo;
+	z_listbox_init(&rlist, &win);
 
 	layout();
 
@@ -954,8 +1434,13 @@ int main(void) {
 				case Z_WM_WHEEL:
 
 					// The list scrolls; the selection stays put (zflist.h).
-					if (msg.obj.type == Z_UINT32)
+					if (msg.obj.type != Z_UINT32) break;
+					if (results) {
+						z_listbox_wheel(&rlist, Z_WM_WHEEL_NOTCHES(msg.obj.val.uint32));
+						z_listbox_draw(&rlist, false);
+					} else {
 						z_flist_wheel(&flist, Z_WM_WHEEL_NOTCHES(msg.obj.val.uint32));
+					}
 
 					break;
 
@@ -963,6 +1448,8 @@ int main(void) {
 
 					if (msg.obj.type == Z_UINT32 &&
 						(int32_t)msg.obj.val.uint32 == win.id) {
+						// A copy in progress leaves no half file.
+						if (walking) zw_cancel(&walk);
 						z_win_destroy(&win);
 						printf("files: exiting\n");
 						exit(0);
@@ -987,6 +1474,10 @@ int main(void) {
 			conv_done = false;
 			reload(conv.result == 0 ? conv_sel : NULL);
 		}
+
+		// A walk runs in the gaps: a 20ms slice, then the messages
+		// again -- and no waiting while it has work.
+		if (walking) { walk_pump(); continue; }
 
 		for (volatile int i = 0; i < 200; i++);	// light throttle
 

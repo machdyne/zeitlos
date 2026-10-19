@@ -12,7 +12,7 @@ APP = irc
 # for the host. zrtc.o and zcfg.o: timestamps in system.rtc.timezone,
 # and the apps.irc.* keys. zdns.o: the server's name.
 OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o zedit.o zport.o \
-	zdns.o zcfg.o zrtc.o irc_core.o irc.o
+	zdns.o zcfg.o zrtc.o zwidget.o zspeak.o zfsapp.o zdialog.o irc_core.o irc.o
 
 HOSTCC ?= cc
 

@@ -31,6 +31,8 @@ RUN
 | Ctrl+C | stops a running program |
 | F6 | full screen, or back to the window |
 
+**F1** shows a short help box ([app_help.md](app_help.md)).
+
 Typing goes through the keyboard layout, so `PRINT "Grüße"` shows what was
 typed: the screen and BASIC's strings are Latin-9 (ISO 8859-15), as in
 the 8x8 font (`z_font_8x8`, `sw/data/font/font8x8.mem`: Daniel Hepper's

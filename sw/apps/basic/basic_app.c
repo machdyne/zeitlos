@@ -39,6 +39,7 @@
 #include "../../common/zgfx.h"
 #include "../../common/zkbd.h"
 #include "../../common/zfsapp.h"
+#include "../../common/zdialog.h"
 #include "../../common/zcolor.h"
 #include "../../common/zport.h"
 #include "../../common/zi2cx.h"
@@ -214,6 +215,26 @@ static void inbox_add(uint32_t k) {
 }
 
 static void key(uint32_t k) {
+    if (k == Z_KEY_F1 && !full) {               /* docs/app_help.md */
+        /* in the window only: full screen, a box on the desktop
+         * underneath would take the keys without being seen */
+        static const char help[] =
+            "A small home computer: type BASIC, PRINT and draw on a "
+            "320x240 screen of its own.\n\n"
+            "Enter\tRun the line, or store a numbered one\n"
+            "Backspace\tErase the last character\n"
+            "Up\tRecall the last line entered\n"
+            "Esc\tErase the line; stop a running program\n"
+            "Ctrl+C\tStop a running program\n"
+            "F6\tFull screen, or back to the window\n\n"
+            "Number each line (10 PRINT \"HELLO\"), then RUN. LIST, "
+            "SAVE name, LOAD name and DIR work on " Z_DIR_BASIC_PROGRAMS "; HELP "
+            "lists every command.";
+        z_dialog_ctx_t ctx = { &win, on_msg, NULL };
+        z_dialog_help(&ctx, "BASIC help", help, "basic_app");
+        show(true);
+        return;
+    }
     if (k == Z_KEY_F6) {                        /* full screen, or back */
         bp_full_screen(!full);
         return;

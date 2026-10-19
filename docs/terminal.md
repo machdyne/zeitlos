@@ -108,6 +108,7 @@ nothing to say; keys go to the panel instead.
 
 | key | does |
 | --- | --- |
+| **F1** | help -- on the start panel only; connected, it goes to the far end ([app_help.md](app_help.md)) |
 | **F11** | the Open bar -- go somewhere new |
 | **F12** | disconnect and return to the panel -- from anywhere |
 

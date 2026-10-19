@@ -3217,7 +3217,24 @@ static void handle_key(uint32_t keysym, uint8_t mods) {
 
 	mods_now = mods;
 
-	if (keysym == Z_KEY_F1) { z_dialog_help(&dlg_ctx, "text_editor"); return; }	// docs/app_help.md
+	if (keysym == Z_KEY_F1) {	// docs/app_help.md
+		static const char help[] =
+			"A plain text editor for notes, lists and Markdown.\n\n"
+			"Ctrl+N/O/S\tNew, open, save\n"
+			"Ctrl+Shift+S\tSave as\n"
+			"Ctrl+Q\tClose\n"
+			"Ctrl+C/X/V\tCopy, cut, paste\n"
+			"Ctrl+A\tSelect all\n"
+			"Ctrl+Z/Y\tUndo, redo\n"
+			"Ctrl+F, F3\tFind, find again\n"
+			"Ctrl+H\tReplace\n"
+			"Ctrl+L\tGo to line; counts words\n\n"
+			"Shift with the arrows, or a drag, selects. "
+			"A .docx, .odt or .rtf opens converted, as Markdown in " Z_DIR_TMP
+			" (the RAM disk): Save puts it in " Z_DIR_HOME ".";
+		z_dialog_help(&dlg_ctx, "Text help", help, "text_editor");
+		return;
+	}
 	if (keysym == Z_KEY_F3) { find_next(); return; }	// find again
 
 	if (mods & Z_KBD_MOD_CTRL) {

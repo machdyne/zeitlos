@@ -494,6 +494,10 @@ void z_listbox_set_items(z_listbox_t *lb, int count, z_list_label_fn label,
 // does not draw.
 void z_listbox_select(z_listbox_t *lb, int index);
 
+// The wheel: three rows a notch, positive is up. The selection stays
+// where it is. Marks dirty; does not draw.
+void z_listbox_wheel(z_listbox_t *lb, int notches);
+
 int z_listbox_selected(const z_listbox_t *lb);
 
 void z_listbox_set_focus(z_listbox_t *lb, bool focused);

@@ -62,6 +62,8 @@ learning to read at all. Pixel-doubled it is comfortable. So the app
 enters game mode at startup where the bitstream has it, and **F2**
 drops to a window.
 
+**F1** shows a short help box ([app_help.md](app_help.md)).
+
 It does **not** page-flip, unlike every other full-screen app here.
 `z_game_flip()` exists for things that redraw the world every frame; a
 quiz screen redraws one field when a letter is typed. Flipping would

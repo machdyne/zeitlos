@@ -77,6 +77,7 @@
 #include "../../common/zfont.h"
 #include "../../common/zkbd.h"
 #include "../../common/zwidget.h"
+#include "../../common/zdialog.h"
 
 // Fixed size, and large: this is an instrument face, and every part of
 // it needs to be visible at once.
@@ -1184,7 +1185,41 @@ static void handle_mouse(uint32_t packed) {
 
 }
 
+// F1's box (docs/app_help.md) holds the keys while it is up; what
+// reaches this is the window's, handled as the main loop does.
+static void help_on_msg(z_msg_t *msg, void *user) {
+	(void)user;
+	if (msg->subject == Z_WM_SET_CLIP) {
+		z_win_apply_clip(&win, &msg->obj);
+	} else if (msg->subject == Z_WM_REDRAW && msg->obj.type == Z_UINT32 &&
+		z_win_redraw_id(msg->obj.val.uint32) == win.id) {
+		z_win_apply_redraw(&win, msg->obj.val.uint32);
+		repaint();
+		z_win_redraw_done(&win);
+	} else if (msg->subject == Z_WM_WINDOW_MOVED) {
+		z_win_parse_rect(&win, &msg->obj);
+	}
+}
+
 static void handle_key(uint32_t keysym, uint8_t mods) {
+
+	if (keysym == Z_KEY_F1) {	// docs/app_help.md
+		static const char help[] =
+			"A logic analyser for the GPIO pins: drive or watch them, "
+			"capture and measure, burst a square wave, decode I2C.\n\n"
+			"Tab\tNext control (Shift+Tab: previous)\n"
+			"Enter/Space\tPress the control\n"
+			"R\tRun a capture\n"
+			"D\tDecode I2C in the capture\n\n"
+			"A channel's mode button cycles IN, OUT, OD; its toggle sets "
+			"the level. Set RATE, DEPTH and TRIG, then RUN; the readout "
+			"shows the real rate and the frequency and duty of the TRIG "
+			"channel. BURST needs its channel set to OUT.";
+		z_dialog_ctx_t ctx = { &win, help_on_msg, NULL };
+		z_dialog_help(&ctx, "Logic help", help, "logic_app");
+		repaint();
+		return;
+	}
 
 	switch (keysym) {
 

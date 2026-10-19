@@ -25,6 +25,8 @@ list that erases only what moved -- are in the comment at the top of
 
 A crash strobes the screen and starts a new run.
 
+**F1** shows a short help box ([app_help.md](app_help.md)). In the window only.
+
 ## Full screen in colour
 
 On a board with game-mode colour ([color.md](color.md)), full screen

@@ -1182,6 +1182,22 @@ static void handle_mouse(uint32_t packed) {
 
 static void handle_key(uint32_t keysym, uint8_t mods) {
 
+	if (keysym == Z_KEY_F1) {	// docs/app_help.md
+		static const char help[] =
+			"Read, write, verify and erase an SPI memory module "
+			"in an MMOD socket.\n\n"
+			"Tab\tNext button (Shift+Tab: back)\n"
+			"Enter/Space\tPress the focused button\n"
+			"d\tDETECT the module\n"
+			"Open, Save\tTitlebar icons: pick the file\n\n"
+			"DETECT first: WRITE and ERASE stay disabled until it "
+			"has found the module and checked its chip select. "
+			"FILE/ROM picks the source; click START or LEN to type "
+			"a range, ALL for the whole device.";
+		z_dialog_help(&dlg, "MMOD help", help, "mmod");
+		return;
+	}
+
 	switch (keysym) {
 	case '\t':
 		z_widget_focus_next(&wset, (mods & Z_KBD_MOD_SHIFT) != 0);

@@ -19,7 +19,7 @@ APP = chess
 #   and sw/data/icons. Re-run the generator by hand after editing the
 #   art; it is deliberately NOT a make rule, because a build that
 #   silently regenerates committed source hides what changed.
-OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o zrng.o \
+OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o zrng.o zwidget.o zspeak.o zfsapp.o zdialog.o \
 	ce_core.o ce_psq.o ce_eval.o ce_search.o ce_book.o \
 	pieces.o game.o board_ui.o input.o chess.o
 

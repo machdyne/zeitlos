@@ -1842,6 +1842,30 @@ static void find_next(void) {
 
 }
 
+// F1 and /Help: the short version; "Read docs" is the manual.
+static void show_help(void) {
+	static const char help[] =
+		"A spreadsheet: numbers, text and formulas in a grid.\n\n"
+		"Type into the cell; =A1*2 is a formula, =SUM(B2:B9) a "
+		"range. Enter moves down, Tab right, Shift+arrows select.\n\n"
+		"/\tCommands: insert, delete, number format, width, sort, "
+		"extend, goto, find, chart\n"
+		"F2\tEdit the cell\n"
+		"Ctrl+Z/Y\tUndo, redo\n"
+		"Ctrl+C/X/V\tCopy, cut, paste\n"
+		"Ctrl+D/R\tFill down, right\n"
+		"Ctrl+1\tNumber format\n"
+		"Ctrl+G\tGo to a cell\n"
+		"Ctrl+F, F3\tFind, find next\n"
+		"F10\tChart the selection\n"
+		"Alt+Left\tNarrow the column (Alt+Right widens)\n"
+		"Ctrl+N/O/S\tNew, open, save\n\n"
+		"Functions: SUM AVERAGE MIN MAX COUNT ABS INT ROUND MOD "
+		"SQRT POWER IF AND OR NOT PMT PV FV NPV VLOOKUP INDEX.\n\n"
+		"Select a range to see its sum, average and count.";
+	z_dialog_help(&dlg_ctx, "Sheet help", help, "sheet_app");
+}
+
 static void do_find(void) {
 
 	char in[SHEET_SRC_MAX];
@@ -1964,7 +1988,7 @@ static void run_command(int id) {
 		case C_REDO:       do_redo(); break;
 		case C_GOTO:       do_goto(); break;
 		case C_FIND:       do_find(); break;
-		case C_HELP:       z_dialog_help(&dlg_ctx, "sheet_app"); break;
+		case C_HELP:       show_help(); break;
 		case C_CHART:      do_chart(); break;
 		default: break;
 	}
@@ -2017,8 +2041,8 @@ static void handle_key(uint32_t keysym, uint8_t mods) {
 	if (menu) { menu_key(keysym); return; }
 	if (chart_mode && keysym != Z_KEY_F1) { chart_key(keysym); return; }
 
-	// F1: the manual, at "Using it" (zdialog.h, z_dialog_help()).
-	if (keysym == Z_KEY_F1) { z_dialog_help(&dlg_ctx, "sheet_app"); return; }
+	// F1: help (zdialog.h, z_dialog_help(); docs/app_help.md).
+	if (keysym == Z_KEY_F1) { show_help(); return; }
 
 	if (editing) {
 

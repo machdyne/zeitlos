@@ -17,6 +17,7 @@
  *   $ command to run
  *   expected output, line by line
  *   ? 1                 <- expect this exit status (default 0)
+ *   ! 5                 <- press Ctrl+C at the 5th px_intr() poll
  *
  * A case ends at the next `$` or `#`. Expected output is compared
  * exactly, with CRLF normalised to LF -- the shell emits CRLF to a
@@ -26,6 +27,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdbool.h>
 
 #include "../posix.h"
 
@@ -47,6 +49,16 @@ static void capture(void *ctx, const char *buf, int len) {
 }
 
 static int passed, failed;
+
+/* Ctrl+C, simulated: sh->poll answers true from the Nth call on --
+ * main.c's conn_poll() on the device. -1: never. */
+static long intr_after = -1, polls;
+
+static bool test_poll(void *ctx) {
+    (void)ctx;
+    polls++;
+    return intr_after >= 0 && polls >= intr_after;
+}
 
 static void report(const char *cmd, const char *want, int want_status,
                    int got_status) {
@@ -130,6 +142,8 @@ int main(int argc, char **argv) {
             if (have_cmd) {
                 px_shell_t sh;
                 px_shell_init(&sh, capture, NULL);
+                sh.poll = test_poll;
+                polls = 0;
                 out_len = 0; out[0] = 0;
 
                 char run[PX_LINE_MAX];
@@ -142,6 +156,7 @@ int main(int argc, char **argv) {
                 have_cmd = 0;
                 want[0] = 0;
                 want_status = 0;
+                intr_after = -1;
             }
 
             if (!got) break;
@@ -158,6 +173,11 @@ int main(int argc, char **argv) {
 
         if (line[0] == '?') {
             want_status = atoi(line + 1);
+            continue;
+        }
+
+        if (line[0] == '!') {
+            intr_after = atol(line + 1);
             continue;
         }
 

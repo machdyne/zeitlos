@@ -45,6 +45,9 @@
 #include "../ask.c"
 #undef main
 
+/* The F1 help box (sw/common/zdialog.c) is not linked here. */
+void z_dialog_help(const z_dialog_ctx_t *c, const char *t, const char *x, const char *d) { (void)c; (void)t; (void)x; (void)d; }
+
 /* -- everything that would need a filesystem, an index or a message --
  *
  * Do-nothing on purpose: this renders geometry, and anything that

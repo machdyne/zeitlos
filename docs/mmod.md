@@ -16,6 +16,8 @@ an MMOD socket, and back the boot ROM up to one.
 | **VERIFY** | compare device against file or ROM |
 | **ERASE** | sector-aligned, confirmed |
 
+**F1** shows a short help box ([app_help.md](app_help.md)).
+
 `panel.c` holds layout, drawing and state; `mmod.c` includes it and
 adds the device code and event loop. The split is so `tests/render.c`
 can draw the panel on a build machine without the event loop.

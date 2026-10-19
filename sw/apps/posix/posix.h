@@ -99,7 +99,32 @@ typedef struct {
     uint32_t    child_pid;
     char        pending[PX_LINE_MAX];   /* rest of the line, after the child */
     int         pending_join;           /* 0 none, 1 &&, 2 || */
+
+    /*
+     * Ctrl+C. A builtin runs to completion inside px_exec_line(), so
+     * nothing reads the terminal while it runs -- unless it asks. A
+     * long-running builtin calls px_intr() between pieces of work; that
+     * calls `poll`, which main.c points at a function that looks for a
+     * Ctrl+C from this session's terminal (and lets its output drain).
+     * Once seen, `intr` stays set for the rest of the line: the builtin
+     * stops, the line is abandoned, the status is 130. NULL `poll`
+     * (the default) means nothing can interrupt.
+     */
+    bool      (*poll)(void *ctx);
+    bool        intr;
 } px_shell_t;
+
+/* True once Ctrl+C has been pressed during this line. Cheap enough to
+ * call per entry, per line, per 4 KB. */
+bool px_intr(px_shell_t *sh);
+
+/* Builtins in tools.c (docs/posix.md, "find, diff, unzip, tar"). */
+void px_bi_find(px_shell_t *sh, int argc, char **argv);
+void px_bi_diff(px_shell_t *sh, int argc, char **argv);
+void px_bi_unzip(px_shell_t *sh, int argc, char **argv);
+void px_bi_tar(px_shell_t *sh, int argc, char **argv);
+/* cp -r SRC DST (dst NULL: rm -r SRC), on sw/common/zwalk.c */
+void px_tree_op(px_shell_t *sh, const char *what, const char *src, const char *dst);
 
 void px_puts(px_shell_t *sh, const char *s);
 void px_printf(px_shell_t *sh, const char *fmt, ...);

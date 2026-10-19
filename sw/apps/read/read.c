@@ -3109,7 +3109,20 @@ static void scroll_flush(void) {
 
 static void handle_key(uint32_t keysym, uint8_t mods) {
 
-	if (keysym == Z_KEY_F1) { z_dialog_help(&dlg_ctx, "read_app"); return; }	// docs/app_help.md
+	if (keysym == Z_KEY_F1) {	// docs/app_help.md
+		static const char help[] =
+			"A reader for Markdown and text: manuals, notes, books.\n\n"
+			"Space, PgDn\tNext page (Shift+Space back)\n"
+			"Arrows\tA line\n"
+			"Home, End\tStart, end\n"
+			"Tab\tNext link; Enter follows it\n"
+			"Backspace\tBack\n"
+			"Ctrl+O\tOpen\n"
+			"Ctrl+C\tCopy the selection (drag to select)\n\n"
+			"A .docx, .odt, .rtf or .epub is converted to read.";
+		z_dialog_help(&dlg_ctx, "Read help", help, "read_app");
+		return;
+	}
 
 	int page = view_h / (BODY_FONT->h + 1);
 	if (page < 1) page = 1;
@@ -3495,8 +3508,8 @@ int main(void) {
 					want_off = v;
 					have_off = true;
 				} else if (arg[h + 1]) {
-					// An app's help (F1, z_help_open() in zdialog.h)
-					// lands on its "Using it" section this way.
+					// A link into a page's section from outside,
+					// as `read page.md#using-it`.
 					arg[h] = 0;
 					heading = &arg[h + 1];
 				}

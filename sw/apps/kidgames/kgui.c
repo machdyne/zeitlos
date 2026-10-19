@@ -12,6 +12,7 @@
 #include "../../common/zgfx.h"
 #include "../../common/zfont.h"
 #include "../../common/zkbd.h"
+#include "../../common/zdialog.h"
 
 #include "kgui.h"
 #include "kgpad.h"
@@ -517,6 +518,48 @@ static bool debounce_ok(kg_key_t k, char ch, uint32_t now)
 	return true;
 }
 
+/* What pump_once() does for this window, for while the F1 help box is
+ * up (docs/app_help.md). */
+static void help_on_msg(z_msg_t *msg, void *user)
+{
+	(void)user;
+
+	if (msg->subject == Z_WM_SET_CLIP) {
+		z_win_apply_clip(&win, &msg->obj);
+	} else if (msg->subject == Z_WM_REDRAW) {
+		z_win_apply_redraw(&win, msg->obj.val.uint32);
+		z_win_damage_ignore(&win);
+		kg_repaint();
+		z_win_redraw_done(&win);
+	} else if (msg->subject == Z_WM_WINDOW_MOVED) {
+		z_win_parse_rect(&win, &msg->obj);
+		aim_viewport();
+	}
+}
+
+/* F1, from any screen. Here in the pump rather than in a game, so all
+ * ten get it; map_key() never sees F1, so no game can have used it.
+ * Short on purpose: in game mode the box has to fit the 320x240
+ * viewport to be seen at all. */
+static void show_help(void)
+{
+	static const char help[] =
+		"Ten learning games for kids: spelling, words, counting, "
+		"math and memory.\n\n"
+		"Arrows\tMove (Space: next)\n"
+		"Enter\tChoose, or answer\n"
+		"Letters\tType an answer\n"
+		"Backspace\tRub out a letter\n"
+		"Esc\tBack to the menu; quits there\n"
+		"F2\tFull screen or window\n\n"
+		"Clicking works too: the menu, the keyboard on the screen, "
+		"letters and cards.";
+	z_dialog_ctx_t ctx = { &win, help_on_msg, NULL };
+
+	z_dialog_help(&ctx, "Kidgames help", help, "kidgames_app");
+	kg_repaint();
+}
+
 /*
  * One turn of the message loop.
  *
@@ -583,6 +626,7 @@ static kg_key_t pump_once(void)
 				break;
 			}
 
+			if (keysym == Z_KEY_F1) { show_help(); break; }
 			if (keysym == Z_KEY_F2) { kg_toggle_mode(); break; }
 
 			k = map_key(keysym, &ch);

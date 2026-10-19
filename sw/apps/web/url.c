@@ -503,3 +503,59 @@ bool url_is_network(const url_t *u) {
 	return u->scheme == URL_SCHEME_HTTP || u->scheme == URL_SCHEME_HTTPS ||
 		u->scheme == URL_SCHEME_GOPHER || u->scheme == URL_SCHEME_GEMINI;
 }
+
+static int hexdig(char c) {
+	if (c >= '0' && c <= '9') return c - '0';
+	if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+	if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+	return -1;
+}
+
+void url_file_name(const url_t *u, const char *ext, char *out, uint32_t cap) {
+
+	const char *p = u->path, *seg, *s;
+	uint32_t n = 0, el = ext ? (uint32_t)strlen(ext) : 0;
+	bool dot = false;
+
+	if (!out || cap == 0) return;
+	out[0] = 0;
+	if (cap < 2) return;
+
+	// gopher: "/T/selector" -- the type character is not a name.
+	if (u->scheme == URL_SCHEME_GOPHER && p[0] == '/' && p[1]) p += 2;
+	if (u->scheme == URL_SCHEME_OTHER) p = "";
+
+	seg = strrchr(p, '/');
+	seg = seg ? seg + 1 : p;
+
+	// Room is kept for the extension, so "notes" never becomes a
+	// truncated "notes.ht".
+	for (s = seg; *s && n + 1 + el < cap; s++) {
+		int hi, lo;
+		char c = *s;
+		if (c == '%' && (hi = hexdig(s[1])) >= 0 && (lo = hexdig(s[2])) >= 0) {
+			c = (char)(hi * 16 + lo);
+			s += 2;
+		}
+		if ((unsigned char)c < 32 || (unsigned char)c > 126 ||
+			strchr("\\/:*?\"<>|", c))
+			c = '_';
+		if (c == '.') dot = true;
+		out[n++] = c;
+	}
+	out[n] = 0;
+
+	// "." and ".." are not names, and a name that is all dots is not
+	// a useful one.
+	if (!strcmp(out, ".") || !strcmp(out, "..")) { n = 0; out[0] = 0; dot = false; }
+
+	if (n == 0) {
+		snprintf(out, cap, "%s%s", ext ? "page" : "download", ext ? ext : "");
+		return;
+	}
+
+	if (ext && !dot && n + el < cap) {
+		memcpy(out + n, ext, el + 1);
+	}
+
+}

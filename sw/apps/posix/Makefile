@@ -39,9 +39,18 @@ OWN_CFLAGS = $(CFLAGS) -Werror
 #   drags in zgfx/zfont_data, which --gc-sections then drops almost all
 #   of; without section GC this app is several KB larger for one call.
 # zgz.o, zinflate.o: zcat and gunzip (sw/common/zgz.c over zinflate.c)
+#
+#   zf_*.o: unzip and tar (tools.c) -- sw/common/formats' archive
+#   extraction, the code convert uses. zf_xml.o only because zf_zip.c's
+#   entry reader refers to it; --gc-sections drops all of it but that.
+#
+#   zwalk.o: cp -r and rm -r (sw/common/zwalk.c, docs/zwalk.md).
 OBJS = zeitlos.o zobj.o zport.o zline.o zfsapp.o zfsutil.o zwin.o zgfx.o zfont_data.o \
 	zconnect.o zdns.o zinflate.o zgz.o \
-	vfs.o sh.o main.o
+	zf_core.o zf_xml.o zf_zip.o zf_arch.o zwalk.o \
+	vfs.o sh.o tools.o tree.o main.o
+
+SRC_DIRS = ../../common/formats
 
 vfs.o: vfs.c posix.h
 	$(CC) $(OWN_CFLAGS) -c vfs.c -o vfs.o
@@ -49,6 +58,10 @@ sh.o: sh.c posix.h
 	$(CC) $(OWN_CFLAGS) -c sh.c -o sh.o
 main.o: main.c posix.h
 	$(CC) $(OWN_CFLAGS) -c main.c -o main.o
+tools.o: tools.c posix.h
+	$(CC) $(OWN_CFLAGS) -c tools.c -o tools.o
+tree.o: tree.c posix.h
+	$(CC) $(OWN_CFLAGS) -c tree.c -o tree.o
 
 # The shell's own test suite, built with the HOST compiler.
 #

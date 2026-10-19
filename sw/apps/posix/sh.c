@@ -35,6 +35,7 @@
 #include "zproc.h"           /* ps: z_proc_info_t, Z_PROC_FLAG_* */
 #include "zsoc.h"            /* ps: Z_TICK_HZ, for CPU seconds */
 #include "zgz.h"            /* zcat, gunzip */
+#include "formats/zf_zip.h" /* zz_window_take(): one inflate window, shared with unzip/tar */
 
 void *px_current_conn;
 
@@ -48,6 +49,13 @@ void px_shell_init(px_shell_t *sh, px_out_fn out, void *ctx) {
     sh->pending_join = 0;
     sh->in = NULL;
     sh->in_len = 0;
+    sh->poll = NULL;
+    sh->intr = false;
+}
+
+bool px_intr(px_shell_t *sh) {
+    if (!sh->intr && sh->poll && sh->poll(sh->ctx)) sh->intr = true;
+    return sh->intr;
 }
 
 /*
@@ -293,20 +301,23 @@ static void bi_cat(px_shell_t *sh, int argc, char **argv) {
         static char chunk[1024];
         for (;;) {
             int n = fs_read_chunk(h, chunk, sizeof(chunk));
-            if (n <= 0) break;
+            if (n <= 0 || px_intr(sh)) break;
             sink(sh, chunk, n);
         }
         fs_close_handle(h);
+        if (px_intr(sh)) return;
     }
 }
 
 /* -- gzip: zcat and gunzip (sw/common/zgz.c, docs/posix.md) --------
  *
- * The 32 KB window zinflate needs is here, static: posix has the
- * memory, and apps that never decompress anything do not pay for it.
+ * The 32 KB window zinflate needs is sw/common/formats' static one,
+ * borrowed with zz_window_take() for the command and given back after:
+ * unzip and tar (tools.c) inflate through the same window, and two
+ * copies of 32 KB that are never in use at once would be one too many.
  * zgz checks the trailer -- the CRC-32 and length -- so a corrupt file
  * is reported, never quietly decoded to something else. */
-static uint8_t gz_window[Z_INFLATE_WINDOW];
+static uint8_t *gz_window;
 static z_gz_t gz_file;
 static char gz_buf[1024];
 
@@ -318,7 +329,8 @@ static void bi_zcat(px_shell_t *sh, int argc, char **argv) {
         return;
     }
 
-    for (int i = 1; i < argc; i++) {
+    gz_window = zz_window_take();
+    for (int i = 1; i < argc && gz_window && !px_intr(sh); i++) {
         char abs[PX_PATH_MAX];
         int32_t r;
         if (!px_resolve(argv[i], abs, sizeof(abs))) {
@@ -331,13 +343,15 @@ static void bi_zcat(px_shell_t *sh, int argc, char **argv) {
             sh->status = 1;
             continue;
         }
-        while ((r = z_gz_read(&gz_file, gz_buf, sizeof(gz_buf))) > 0) sink(sh, gz_buf, (int)r);
+        while ((r = z_gz_read(&gz_file, gz_buf, sizeof(gz_buf))) > 0 && !px_intr(sh))
+            sink(sh, gz_buf, (int)r);
         if (r < 0) {
             px_printf(sh, "zcat: %s: %s\n", argv[i], z_gz_strerror(r));
             sh->status = 1;
         }
         z_gz_close(&gz_file);
     }
+    if (gz_window) zz_window_give();
 }
 
 /*
@@ -360,7 +374,8 @@ static void bi_gunzip(px_shell_t *sh, int argc, char **argv) {
         }
     }
 
-    for (int i = 1; i < argc; i++) {
+    gz_window = zz_window_take();
+    for (int i = 1; i < argc && gz_window && !px_intr(sh); i++) {
         char abs[PX_PATH_MAX], out[PX_PATH_MAX];
         size_t n;
         int h, ok = 1;
@@ -400,12 +415,14 @@ static void bi_gunzip(px_shell_t *sh, int argc, char **argv) {
             sh->status = 1;
             continue;
         }
-        while ((r = z_gz_read(&gz_file, gz_buf, sizeof(gz_buf))) > 0)
+        while ((r = z_gz_read(&gz_file, gz_buf, sizeof(gz_buf))) > 0) {
+            if (px_intr(sh)) { ok = 0; break; }     /* Ctrl+C: removed below */
             if (fs_write_chunk(h, gz_buf, (int)r) != (int)r) {
                 px_printf(sh, "gunzip: %s: write failed (card full?)\n", out);
                 ok = 0;
                 break;
             }
+        }
         if (ok && r < 0) {
             px_printf(sh, "gunzip: %s: %s\n", argv[i], z_gz_strerror(r));
             ok = 0;
@@ -423,14 +440,20 @@ static void bi_gunzip(px_shell_t *sh, int argc, char **argv) {
         }
     }
 
-    if (!files) {
+    if (gz_window) zz_window_give();
+    if (!files && !px_intr(sh)) {
         px_puts(sh, "usage: gunzip [-k] [-f] <file.gz> ...\n");
         sh->status = 1;
     }
 }
 
 static void bi_rm(px_shell_t *sh, int argc, char **argv) {
-    if (argc < 2) { px_puts(sh, "usage: rm <file> ...\n"); sh->status = 1; return; }
+    /* rm -r: a tree, through zwalk (tools.c) */
+    if (argc > 2 && !strcmp(argv[1], "-r")) {
+        for (int i = 2; i < argc && !px_intr(sh); i++) px_tree_op(sh, "rm", argv[i], NULL);
+        return;
+    }
+    if (argc < 2) { px_puts(sh, "usage: rm [-r] <file> ...\n"); sh->status = 1; return; }
     for (int i = 1; i < argc; i++) {
         char abs[PX_PATH_MAX];
         if (!px_resolve(argv[i], abs, sizeof(abs)) || !fs_unlink(abs)) {
@@ -502,8 +525,10 @@ static bool copy_file(px_shell_t *sh, const char *from, const char *to) {
 }
 
 static void bi_cp(px_shell_t *sh, int argc, char **argv) {
+    /* cp -r: a tree, through zwalk (tools.c) */
+    if (argc == 4 && !strcmp(argv[1], "-r")) { px_tree_op(sh, "cp", argv[2], argv[3]); return; }
     if (argc != 3) {
-        px_puts(sh, "usage: cp <from> <to>\n");
+        px_puts(sh, "usage: cp [-r] <from> <to>\n");
         sh->status = 1;
         return;
     }
@@ -703,7 +728,7 @@ static bool feed_lines(px_shell_t *sh, const char *path,
 
     for (;;) {
         int got = fs_read_chunk(h, buf, (int)sizeof(buf));
-        if (got <= 0) break;
+        if (got <= 0 || px_intr(sh)) break;
         for (int i = 0; i < got; i++) {
             if (buf[i] == '\n') {
                 line[n] = 0;
@@ -762,7 +787,7 @@ static bool wc_count(px_shell_t *sh, const char *path, wc_acc_t *a) {
 
     for (;;) {
         int got = fs_read_chunk(h, buf, (int)sizeof(buf));
-        if (got <= 0) break;
+        if (got <= 0 || px_intr(sh)) break;
         wc_bytes(a, buf, got);
     }
     fs_close_handle(h);
@@ -1270,14 +1295,18 @@ static const builtin_t builtins[] = {
     { "zcat",  bi_zcat,  "print .gz files, decompressed" },
     { "gunzip", bi_gunzip, "FILE.gz to FILE (-k keep it, -f overwrite)" },
     { "echo",  bi_echo,  "print arguments" },
-    { "rm",    bi_rm,    "delete files" },
-    { "cp",    bi_cp,    "copy a file" },
+    { "rm",    bi_rm,    "delete files (-r: directories and all in them)" },
+    { "cp",    bi_cp,    "copy a file (-r: a directory and all in it)" },
     { "mv",    bi_mv,    "rename or move a file or directory" },
     { "touch", bi_touch, "create a file if it does not exist" },
     { "clear", bi_clear, "clear the screen" },
     { "reboot", bi_reboot, "reconfigure the FPGA, after syncing open files" },
     { "jump", bi_jump, "boot the gateware at a flash address (hex)" },
     { "mkdir", bi_mkdir, "make directories" },
+    { "find",  px_bi_find,  "list a tree  (find [DIR] -name '*.c' -type f|d)" },
+    { "diff",  px_bi_diff,  "differences between two files, as diff -u" },
+    { "unzip", px_bi_unzip, "unzip [-l] [-o] A.zip [-d DIR]" },
+    { "tar",   px_bi_tar,   "tar -xf|-tf A.tar|.tgz|.tar.gz [-C DIR] [-o]" },
     { "wc",    bi_wc,    "count lines, words and characters" },
     { "head",  bi_head,  "first lines of a file  (head -5 f)" },
     { "tail",  bi_tail,  "last lines of a file   (tail -5 f)" },
@@ -1303,7 +1332,8 @@ static void bi_help(px_shell_t *sh, int argc, char **argv) {
         px_printf(sh, "  %-8s %s\n", builtins[i].name, builtins[i].help);
     px_puts(sh, "\nanything else is run as a program: 'zcc hello.c -o hello'\n"
                 "redirection: > and >>   chaining: && and ||\n"
-                "quoting: 'a b' \"a b\" a\\ b   wildcards: * ? [abc]\n");
+                "quoting: 'a b' \"a b\" a\\ b   wildcards: * ? [abc]\n"
+                "Ctrl+C stops a builtin that is still running\n");
 }
 
 /* ------------------------------------------------------------------ */
@@ -1454,6 +1484,8 @@ static void exec_one(px_shell_t *sh, char *cmd) {
 
         exec_simple(sh, stages[i]);
 
+        if (sh->intr) { cap_active = false; break; }
+
         if (sh->child_pid) {
             cap_active = false;
             px_printf(sh, "posix: '%s' is a program, not a builtin -- "
@@ -1506,9 +1538,15 @@ static bool expand_globs(px_shell_t *sh, int *argc, char **argv, uint8_t *fl) {
     int n = 0;
     size_t used = 0;
 
+    /* find's -name PATTERN is find's to match, in every directory it
+     * walks -- not the shell's, in this one. Passed on as typed, its
+     * quoted characters still marked, which z_glob_match() honours. */
+    bool find_cmd = *argc > 0 && !strcmp(argv[0], "find");
+
     for (int i = 0; i < *argc; i++) {
 
-        if (!(fl[i] & Z_ARG_WILD)) {
+        if (!(fl[i] & Z_ARG_WILD) ||
+            (find_cmd && i > 0 && !strcmp(argv[i - 1], "-name"))) {
             if (n >= PX_MAX_ARGS) goto too_many;
             ofl[n] = fl[i];
             out[n++] = argv[i];
@@ -1616,6 +1654,12 @@ static void exec_simple(px_shell_t *sh, char *cmd) {
         builtins[i].fn(sh, argc, argv);
         px_close_all_files();
         out_fd = 1;
+        if (sh->intr) {
+            /* To the terminal whatever the redirection: it is the
+             * person being told, not the file. */
+            out_raw(sh, "^C\r\n", 4);
+            sh->status = 130;
+        }
         return;
     }
 
@@ -1692,7 +1736,7 @@ static void exec_rest(px_shell_t *sh, char *p, int first_join) {
 
         if (!skip) {
             exec_one(sh, seg);
-            if (sh->want_exit) return;
+            if (sh->want_exit || sh->intr) return;     /* Ctrl+C: the rest of the line too */
 
             if (sh->child_pid) {
                 /* Suspend. The rest of the line, and how it joins to
@@ -1721,6 +1765,7 @@ void px_exec_line(px_shell_t *sh, char *line) {
     sh->child_pid = 0;
     sh->pending[0] = 0;
     sh->pending_join = 0;
+    sh->intr = false;
     exec_rest(sh, line, 0);
 }
 
@@ -1733,6 +1778,7 @@ void px_resume(px_shell_t *sh, int status) {
 
     sh->child_pid = 0;
     sh->status = status;
+    sh->intr = false;
 
     if (!sh->pending[0]) return;
 

@@ -163,6 +163,7 @@
 #define Z_DIR_WEB_DATA            "/data/web"
 #define Z_PATH_WEB_ROOTS          "/data/web/roots.der"
 #define Z_PATH_WEB_PINS           "/data/web/pins.txt"
+#define Z_PATH_WEB_BOOKMARKS      "/data/web/bookmarks.txt"
 #define Z_PATH_WEB_SPOOL          "/tmp/web.spool"
 
 /* zcc (docs/zcc.md) */

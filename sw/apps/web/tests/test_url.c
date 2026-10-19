@@ -242,6 +242,45 @@ int main(void) {
 	ck(!strcmp(u.path, "/a%2Fb"), "percent path untouched");
 	ck(!strcmp(u.query, "q=%20"), "percent query untouched");
 
+	// -- file names for saving (url_file_name) --
+	{
+		static const struct { const char *url, *ext, *want; } fn[] = {
+			{ "https://en.wikipedia.org/wiki/Main_Page", ".html", "Main_Page.html" },
+			{ "https://example.com/", ".html", "page.html" },
+			{ "https://example.com", ".html", "page.html" },
+			{ "http://x/docs/a.txt?v=2#top", ".html", "a.txt" },
+			{ "http://x/my%20page.htm", ".html", "my page.htm" },
+			{ "http://x/a%3Ab*c", ".html", "a_b_c.html" },
+			{ "http://x/files/", NULL, "download" },
+			{ "http://x/files/v1.2.tar.gz", NULL, "v1.2.tar.gz" },
+			{ "http://x/dl", NULL, "dl" },
+			{ "gemini://g.org/", ".gmi", "page.gmi" },
+			{ "gemini://g.org/log/2026.gmi", ".gmi", "2026.gmi" },
+			{ "gopher://h.net/", ".txt", "page.txt" },
+			{ "gopher://h.net/1", ".txt", "page.txt" },
+			{ "gopher://h.net/1/phlog", ".txt", "phlog.txt" },
+			{ "gopher://h.net/0/notes.txt", ".txt", "notes.txt" },
+			{ "gopher://h.net/9/bin/zeitlos.bin", NULL, "zeitlos.bin" },
+			{ "about:bookmarks", ".html", "page.html" },
+			{ "http://x/..", ".html", "page.html" },
+		};
+		for (unsigned i = 0; i < sizeof(fn) / sizeof(fn[0]); i++) {
+			char what[URL_MAX + 160];
+			ck(url_parse(fn[i].url, &u), fn[i].url);
+			url_file_name(&u, fn[i].ext, buf, sizeof(buf));
+			snprintf(what, sizeof(what), "file name for %s: got '%s' want '%s'",
+				fn[i].url, buf, fn[i].want);
+			ck(!strcmp(buf, fn[i].want), what);
+		}
+
+		// A small buffer keeps room for the extension and never overflows.
+		ck(url_parse("http://x/averyveryverylongname", &u), "long name parse");
+		url_file_name(&u, ".html", buf, 12);
+		ck(strlen(buf) == 11 && !strcmp(buf + 6, ".html"), "long name cut before the extension");
+		url_file_name(&u, ".html", buf, 1);
+		ck(buf[0] == 0, "cap 1 is empty");
+	}
+
 	printf("%s: %d checks, %d failures\n",
 		fails ? "FAIL" : "ok", checks, fails);
 

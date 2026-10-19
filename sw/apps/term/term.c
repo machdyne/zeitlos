@@ -67,6 +67,7 @@
 #include "../../common/zcfg.h"		// apps.term.auto_connect
 #include "../../common/zspeak.h"	// Super+A, Super+C -- docs/tts.md
 #include "../../common/zsayall.h"
+#include "../../common/zdialog.h"	// F1 on the start panel -- docs/app_help.md
 
 // which font to render with. The titlebar's Aa icon switches between
 // z_font_5x8 and z_font_6x12 while running, and resizes the window to
@@ -1390,6 +1391,46 @@ static bool panel_contains_px(int cx, int cy) {
 		cy >= panel_py() && cy < panel_py() + panel_ph();
 }
 
+static void handle_redraw(uint32_t packed);
+
+// The help box's view of this window while it is up: keep the region,
+// repaint on a redraw -- what the main loop does with these.
+static void help_on_msg(z_msg_t *m, void *user) {
+	(void)user;
+	if (m->subject == Z_WM_SET_CLIP) {
+		z_win_apply_clip(&win, &m->obj);
+	} else if (m->subject == Z_WM_REDRAW) {
+		handle_redraw(m->obj.val.uint32);
+		frame();
+		z_win_redraw_done(&win);
+	} else if (m->subject == Z_WM_WINDOW_MOVED) {
+		z_win_parse_rect(&win, &m->obj);
+	}
+}
+
+// F1, on the start panel only: connected, every key belongs to the far
+// end, and F1 is a key a remote program may want (docs/app_help.md).
+static void show_help(void) {
+	static const char help[] =
+		"A terminal: a window onto a shell, the console, a serial "
+		"port or a computer on the network.\n\n"
+		"On this panel:\n"
+		"Tab, arrows\tChoose a button\n"
+		"Enter\tStart it\n"
+		"Esc\tHide the panel (any key: back)\n"
+		"Typing\tOpens the bar: port, serial, telnet, ssh\n\n"
+		"Anywhere:\n"
+		"F11\tConnect somewhere else\n"
+		"F12\tDisconnect, back to this panel\n"
+		"Shift+PgUp\tScroll back (Shift+PgDn forward)\n"
+		"Drag\tSelect\n"
+		"Ctrl+Shift+C\tCopy (Ctrl+Shift+V pastes)\n\n"
+		"Connected, every other key goes to the far end -- F1 too.";
+	z_dialog_ctx_t ctx = { &win, help_on_msg, NULL };
+	z_dialog_help(&ctx, "Term help", help, "terminal");
+	panel_dirty = true;
+}
+
 // Keys while disconnected and the bar is not up.
 static void panel_key(uint32_t keysym, uint8_t mods) {
 
@@ -1421,6 +1462,10 @@ static void panel_key(uint32_t keysym, uint8_t mods) {
 	case ' ':
 		idx = z_widget_key_activate(&panel_set);
 		if (idx >= 0) panel_activate(idx);
+		break;
+
+	case Z_KEY_F1:
+		show_help();
 		break;
 
 	case 0x1b:					// Esc

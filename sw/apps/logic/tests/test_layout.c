@@ -173,7 +173,8 @@ void z_proc_wait(uint32_t t){(void)t;}
 bool z_win_apply_clip(z_win_t*w,z_obj_t*o){(void)w;(void)o;return true;}
 void z_win_apply_redraw(z_win_t*w,uint32_t p){(void)w;(void)p;}
 bool z_win_parse_rect(z_win_t*w,z_obj_t*o){(void)w;(void)o;return true;}
-void z_win_redraw_done(const z_win_t*w){(void)w;}
+void z_win_redraw_done(z_win_t*w){(void)w;}
+void z_dialog_help(const z_dialog_ctx_t *c, const char *t, const char *x, const char *d) { (void)c; (void)t; (void)x; (void)d; }
 int z_win_redraw_id(uint32_t p){(void)p;return -1;}
 z_rv z_win_create_flags(z_win_t*w,const char*t,uint32_t a,uint32_t b,int32_t c,int32_t d,uint32_t f){
   (void)w;(void)t;(void)a;(void)b;(void)c;(void)d;(void)f;return Z_OK;}

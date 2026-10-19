@@ -28,6 +28,8 @@ faster.
 | `+` / `-` | scale in steps |
 | Alt | suppresses all of the above |
 
+**F1** shows a short help box ([app_help.md](app_help.md)).
+
 Alt is deliberately inert: `Alt`+arrows is wm's own window-move
 gesture (`wm.c`'s `alt_move_focused()`), and an app that also acted on
 Alt would be fighting the window manager for one gesture.

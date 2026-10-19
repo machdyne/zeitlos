@@ -47,6 +47,7 @@
 #include "../../common/zfont.h"
 #include "../../common/zkbd.h"
 #include "../../common/zwidget.h"
+#include "../../common/zdialog.h"
 #include "calc_core.h"
 
 #define MARGIN      4
@@ -228,7 +229,39 @@ static void handle_mouse(uint32_t packed) {
 
 }
 
+// The help box's view of this window while it is up: what the main
+// loop does with these messages.
+static void help_on_msg(z_msg_t *m, void *user) {
+	(void)user;
+	if (m->subject == Z_WM_SET_CLIP) {
+		z_win_apply_clip(&win, &m->obj);
+	} else if (m->subject == Z_WM_REDRAW) {
+		z_win_apply_redraw(&win, m->obj.val.uint32);
+		repaint();
+		z_win_redraw_done(&win);
+	} else if (m->subject == Z_WM_WINDOW_MOVED) {
+		z_win_parse_rect(&win, &m->obj);
+	}
+}
+
 static void handle_key(uint32_t keysym, uint8_t mods) {
+
+	if (keysym == Z_KEY_F1) {	// docs/app_help.md
+		static const char help[] =
+			"A four-function calculator.\n\n"
+			"0-9 .\tEnter a number\n"
+			"+ - * /\tOperator\n"
+			"Enter, =\tEquals (again repeats)\n"
+			"Backspace\tDelete a digit\n"
+			"Esc, Del\tClear\n"
+			"Tab, Space\tFocus, press a button\n\n"
+			"Click the keypad or type. The +- button changes the "
+			"sign. No precedence: 2 * 3 + 4 is 10, left to right. "
+			"A digit after = starts a new number.";
+		z_dialog_ctx_t ctx = { &win, help_on_msg, NULL };
+		z_dialog_help(&ctx, "Calc help", help, "calc_app");
+		return;
+	}
 
 	// Tab moves the keypad focus, for consistency with the rest of
 	// the system. It is not the fast path here and is not meant to

@@ -38,6 +38,7 @@
 #include "../../common/zsoc.h"
 #include "../../common/zkbd.h"
 #include "../../common/zfont.h"
+#include "../../common/zdialog.h"
 #include "../../common/games/zbank.h"
 
 #include "cs_banner.h"
@@ -471,11 +472,49 @@ static void run_command(const char *line)
     say("try a game name, borrow, repay, bank or quit");
 }
 
+/* What the main loop does for this window, for while the help box is
+ * up (docs/app_help.md). */
+static void help_on_msg(z_msg_t *msg, void *user)
+{
+    (void)user;
+    if (msg->subject == Z_WM_SET_CLIP) {
+        z_win_apply_clip(&win, &msg->obj);
+    } else if (msg->subject == Z_WM_REDRAW) {
+        if (msg->obj.type != Z_UINT32) return;
+        z_win_apply_redraw(&win, msg->obj.val.uint32);
+        repaint();
+        z_win_redraw_done(&win);
+    } else if (msg->subject == Z_WM_WINDOW_MOVED) {
+        z_win_parse_rect(&win, &msg->obj);
+        layout();
+    }
+}
+
 static void handle_key(uint32_t packed)
 {
     uint32_t sym = Z_WM_UNPACK_KEY_KEYSYM(packed);
 
     if (!Z_WM_UNPACK_KEY_PRESSED(packed)) return;
+
+    if (sym == Z_KEY_F1) {      /* docs/app_help.md */
+        static const char help[] =
+            "The front desk: your chips, what you owe, and the five "
+            "games.\n\n"
+            "Up/Down\tChoose a game\n"
+            "Return\tPlay it (or click it)\n"
+            "Typing\tA command; Return runs it\n"
+            "Esc\tClear the command\n\n"
+            "borrow 500\tBorrow (default 1000); 20% vig\n"
+            "repay 500\tRepay (default: all owed)\n"
+            "bank\tShow net worth\n"
+            "reset\tStart the bank over\n"
+            "quit\tClose the casino\n\n"
+            "Type a game's name to start it. Worth is chips minus debt.";
+        z_dialog_ctx_t ctx = { &win, help_on_msg, NULL };
+        z_dialog_help(&ctx, "Casino help", help, "casino_app");
+        repaint();
+        return;
+    }
 
     if (sym == Z_KEY_UP && cmd_len == 0) {
         if (sel > 0) sel--;

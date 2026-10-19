@@ -1111,6 +1111,23 @@ void z_listbox_select(z_listbox_t *lb, int index) {
 
 }
 
+void z_listbox_wheel(z_listbox_t *lb, int notches) {
+
+	// The view moves, the selection stays -- as in zflist.c and every
+	// other list (docs/user_input.md, "Scroll wheel").
+	int rows = lb_rows(lb);
+	int top = lb->top - 3 * notches;		// up (positive) is back
+
+	if (top > lb->count - rows) top = lb->count - rows;
+	if (top < 0) top = 0;
+	if (top == lb->top) return;
+
+	lb->top = top;
+	z_scrollbar_set_value(&lb->sb, top);
+	lb->dirty = true;
+
+}
+
 int z_listbox_selected(const z_listbox_t *lb) {
 	return lb->sel;
 }

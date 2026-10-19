@@ -1731,6 +1731,27 @@ static void handle_key(uint32_t keysym, uint8_t mods) {
 
 	switch (keysym) {
 
+		case Z_KEY_F1: {	// docs/app_help.md
+			static const char help[] =
+				"A wireframe 3D viewer: spins a cube and opens STL "
+				"files. The FPS readout measures the GPU.\n\n"
+				"Drag\tRotate (click stops the spin)\n"
+				"Ctrl+drag\tRotate from anywhere in the window\n"
+				"Shift+move\tScale (when not spinning)\n"
+				"Space\tSpin on or off\n"
+				"+ / -\tScale in steps\n"
+				"R\tReset rotation and scale\n"
+				"S\tSolid shading on or off\n"
+				"E\tSwitch erase mode\n"
+				"O\tOpen an STL file (or the titlebar icon)";
+			z_dialog_help(&dlg_ctx, "Gpu3d help", help, "gpu3d_app");
+			/* The box held the loop: don't count that time as spin
+			 * or as one very slow frame. */
+			spin_last_tick = fps_tick = z_uptime_ticks();
+			fps_frames = 0;
+			break;
+		}
+
 		case ' ':
 			/* advance_spin() refreshes spin_last_tick every frame,
 			 * so there is no stale delta to discard here. */

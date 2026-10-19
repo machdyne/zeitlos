@@ -17,6 +17,8 @@
  *   html.c     bytes to blocks                      tests/test_html.c
  *   layout.c   blocks to pixels                     tests/test_layout.c
  *   page.c     the index and scroll arithmetic      tests/test_page.c
+ *   find.c     find in page                         tests/test_find.c
+ *   bookmark.c the bookmarks file and page          tests/test_bookmark.c
  *
  * That split is the whole strategy. A browser has more places to be
  * subtly wrong than anything else in this tree, and almost none of
@@ -83,6 +85,7 @@
 #include "../../common/zweb.h"
 #include "../../common/zdns.h"
 #include "../../common/zfsapp.h"
+#include "../../common/zdialog.h"
 
 #include "url.h"
 #include "../../common/zedit.h"
@@ -103,6 +106,8 @@
 #include "html.h"
 #include "layout.h"
 #include "page.h"
+#include "find.h"
+#include "bookmark.h"
 
 // The default window, on a 640x480 screen.
 //
@@ -189,6 +194,51 @@ static bool fetching_image;
 // The image spool's write handle, separate from the page's.
 static int img_wr = -1;
 static uint32_t spool_len;
+
+// Bytes of the current image or save fetch. Kept apart from spool_len,
+// which is the PAGE's length and must not grow while a picture or a
+// saved link arrives beside it -- the copy that saves a page, and the
+// fetch service's stream, both read the spool up to spool_len.
+static uint32_t side_len;
+
+// -- saving to disk (docs/web_app.md, "Saving") --
+//
+// A save is written to "<name>.part" and renamed over the real name
+// only once every byte is there, so a stopped or failed save leaves no
+// half-written file -- the .part is removed instead.
+//
+// Two ways in. A page from http, https or a file is already in the
+// spool exactly as it arrived (after Content-Encoding is undone), so
+// it is COPIED from there, a chunk per pass of the main loop -- no
+// network. Gopher and Gemini pages are spooled as the HTML they were
+// converted to, which is not their source, so they -- and a link saved
+// with Shift+Enter -- are FETCHED again straight into the file. That
+// fetch is the image fetch with a different destination: fetching_image
+// is set, img_wr is the .part, and the page is left alone.
+static bool dl_on;				// a save is running
+static bool dl_net;				// ...as a fetch (else a copy of the spool)
+static int dl_wr = -1;			// the copy's write handle
+static uint32_t dl_off;			// bytes copied
+static char dl_path[256];
+static char dl_tmp[256 + 8];
+
+// A short message shown in the URL field in place of the address --
+// "bookmarked", "saved 12 KB to ...", "not found" -- until the next
+// key or page.
+static char bar_note[192];
+
+// -- find in page (docs/web_app.md, "Find in page") --
+static find_t fnd;
+static bool find_running;
+static uint16_t find_top_sub;	// skip the part of the top block above the view
+
+// The match, as drawn: its block and display line, the x offset from
+// the text origin (cfg.x), and its size in pixels. Cleared by
+// anything that moves the page.
+static bool hl_on;
+static uint32_t hl_block;
+static uint16_t hl_sub;
+static int hl_dx, hl_w, hl_h;
 
 // Milliseconds since boot, for verify.c's timing report.
 static uint32_t web_ms(void) {
@@ -693,6 +743,10 @@ static void sw_out(void *user, const char *d, uint32_t n) {
 	on_body(user, d, n);
 }
 
+static void sw_discard(void *user, const char *d, uint32_t n) {
+	(void)user; (void)d; (void)n;
+}
+
 // Puts `url` + "?" in the URL bar with the caret after it, and the
 // server's question on the status line: how both a Gemini input
 // request (status 1x) and a Gopher search item (type 7) are answered.
@@ -703,6 +757,10 @@ static bool have_res;
 static int redirects;
 static url_t fetch_url;			// what the current request is for
 static bool fetch_is_head;
+
+// Gopher and Gemini bytes, from the socket or out of TLS. Declared
+// outside the TLS block: `make WEB_TLS=0` uses it too.
+static void sw_recv(const uint8_t *d, uint32_t n);
 
 #if WEB_TLS
 
@@ -1154,7 +1212,16 @@ static void sw_recv(const uint8_t *d, uint32_t n) {
 		n = SW_MAX_BYTES - sw_rx;
 		sw_limit_hit = true;
 	}
-	sw_feed(&swc, (const char *)d, n);
+	if (dl_net) {
+		// Saving: Gemini's header line goes to the parser a byte at a
+		// time, so that exactly the bytes after it are the file.
+		uint32_t i = 0;
+		while (swc.gemini && !swc.header_done && i < n)
+			sw_feed(&swc, (const char *)d + i++, 1);
+		if (i < n && (!swc.gemini || sw_status_class(&swc) == 2))
+			on_body(NULL, (const char *)d + i, n - i);
+	} else
+		sw_feed(&swc, (const char *)d, n);
 	sw_rx += n;
 
 	// What the server said, once: the first thing to look at when a
@@ -1202,6 +1269,10 @@ static bool from_redirect;
 static void fetch_failed(const char *why);
 static void local_close(void);
 static void handle_port_msg(z_msg_t *msg);
+static bool is_bm_url(const url_t *u);
+static void bookmarks_begin(void);
+static void save_commit(void);
+static void save_abandon(const char *why);
 
 // -- drawing -------------------------------------------------------
 
@@ -1390,7 +1461,10 @@ static void draw_bar(void) {
 	// While a page is loading the field shows progress; the rest of
 	// the time it shows the URL, or whatever is being typed into it.
 	if (!url_editing) {
-		if (state == W_READY || state == W_IDLE)
+		if (bar_note[0] && (state == W_READY || state == W_IDLE ||
+			state == W_ERROR))
+			z_edit_set(&url_edit, bar_note);
+		else if (state == W_READY || state == W_IDLE)
 			z_edit_set(&url_edit, cur_url_text);
 		else
 			z_edit_set(&url_edit, status);
@@ -1446,6 +1520,19 @@ static void draw_body(void) {
 			1, &crect);
 		// A blit would carry the box along with the text it framed.
 		bv_invalidate(&bv);
+	}
+
+	// The find match, boxed the same way, when its line is on screen.
+	if (hl_on) {
+		for (int k = 0; k < bv.nvis; k++) {
+			int y;
+			if (bv.vblock[k] != hl_block || bv.vsub[k] != hl_sub) continue;
+			y = crect.y0 + bv.vy[k];
+			z_fb_hw_box(cfg.x + hl_dx - 1, y - 1, cfg.x + hl_dx + hl_w,
+				y + hl_h, 1, &crect);
+			bv_invalidate(&bv);
+			break;
+		}
 	}
 
 }
@@ -1567,6 +1654,7 @@ static void scroll_by(int32_t lines) {
 
 	if (page_advance(&pg, &cfg, &top, lines) != 0) {
 		sel_link = -1;
+		hl_on = false;
 		// Forward: move what is on the glass and draw only the new lines
 		// (bodyview.c); anything it cannot do exactly, a full repaint.
 		if (lines > 0 && !fetching_image && bv_scroll_to(&bv, top))
@@ -1577,6 +1665,7 @@ static void scroll_by(int32_t lines) {
 }
 
 static void scroll_to_top(void) {
+	hl_on = false;
 	top.block = 0;
 	top.sub = 0;
 	sel_link = -1;
@@ -1585,6 +1674,7 @@ static void scroll_to_top(void) {
 
 static void scroll_to_end(void) {
 	if (page_blocks(&pg) == 0) return;
+	hl_on = false;
 	top.block = page_blocks(&pg) - 1;
 	top.sub = 0;
 	page_advance(&pg, &cfg, &top, -(lines_per_screen() - 1));
@@ -1609,16 +1699,23 @@ static bool spool_begin(void) {
 	// went blank the instant an image was clicked, which looked like
 	// the image had replaced the document.
 	if (fetching_image) {
-		snprintf(img_spool_path, sizeof(img_spool_path), "%s.img",
-			spool_path);
+		// A save fetch: the same, into the .part beside the chosen
+		// name. Reopened from empty on a redirect.
+		if (dl_net)
+			snprintf(img_spool_path, sizeof(img_spool_path), "%s", dl_tmp);
+		else
+			snprintf(img_spool_path, sizeof(img_spool_path), "%s.img",
+				spool_path);
 		if (img_wr >= 0) { fs_close_handle(img_wr); img_wr = -1; }
 		fs_unlink(img_spool_path);
 		img_wr = fs_open_write(img_spool_path);
 		if (img_wr < 0) {
-			fetch_failed("cannot open the image spool for writing");
+			fetch_failed(dl_net ? "cannot create the file"
+				: "cannot open the image spool for writing");
 			return false;
 		}
 		spool_wlen = 0;
+		side_len = 0;
 		return true;
 	}
 
@@ -1726,16 +1823,20 @@ static void on_body(void *user, const char *data, uint32_t len) {
 		}
 	}
 
-	spool_len += len;
+	if (fetching_image) side_len += len;
+	else spool_len += len;
 	tm.body_bytes += len;
 
 	// Repainting per chunk would be a repaint every 536 bytes. Once
 	// every 16KB is often enough to show progress and rare enough not
 	// to be the reason the transfer is slow.
-	if ((spool_len & 0x3FFF) < len) {
-		snprintf(status, sizeof(status), "receiving... %lu KB",
-			(unsigned long)(spool_len / 1024));
-		draw_bar();
+	{
+		uint32_t got = fetching_image ? side_len : spool_len;
+		if ((got & 0x3FFF) < len) {
+			snprintf(status, sizeof(status), "%s... %lu KB",
+				dl_net ? "saving" : "receiving", (unsigned long)(got / 1024));
+			draw_bar();
+		}
 	}
 
 }
@@ -1757,13 +1858,21 @@ static void sock_disconnect(void) {
 static void fetch_failed(const char *why) {
 
 	sock_disconnect();
-	spool_close();
+	// Not for an image or a save: the page's spool is still open for
+	// reading, and closing it here blanked the page whenever a picture
+	// could not be fetched.
+	if (!fetching_image) spool_close();
 	local_close();
 
 	// An image that failed leaves the PAGE alone -- it is still
 	// there, still readable, and the reader only asked for a
 	// picture. The box says what went wrong; the document does not
 	// become an error screen because one image was unreachable.
+	if (fetching_image && dl_net) {
+		save_abandon(why);
+		return;
+	}
+
 	if (fetching_image) {
 		fetching_image = false;
 		img_loading = false;
@@ -1833,7 +1942,10 @@ static void send_request(void) {
 		memset(&last_res, 0, sizeof(last_res));
 		last_res.status = 200;
 		have_res = true;
-		sw_begin(&swc, &fetch_url, sw_out, NULL);
+		// A save wants the bytes as sent, not the HTML they become:
+		// sw_recv() writes them itself and the converter's output is
+		// thrown away (it still reads Gemini's header line).
+		sw_begin(&swc, &fetch_url, dl_net ? sw_discard : sw_out, NULL);
 		if (!transport_send((const uint8_t *)req, n)) {
 			fetch_failed("could not send the request");
 			return;
@@ -1891,9 +2003,15 @@ static void response_done(void) {
 	// a success is text/html in the spool, a Gemini redirect is a 3xx
 	// with a Location, so the redirect limit and loop check below
 	// apply to it unchanged.
-	if (sw_mode() && !fetching_image) {
+	if (sw_mode() && (!fetching_image || dl_net)) {
 
 		char msg[SW_META_MAX + 64];
+
+		// A save is all of it or nothing.
+		if (dl_net && sw_limit_hit) {
+			fetch_failed("it is longer than 4 MB");
+			return;
+		}
 
 		// Cut short at SW_MAX_BYTES: say so, at the end of what arrived.
 		if (sw_limit_hit) {
@@ -1912,6 +2030,10 @@ static void response_done(void) {
 		if (swc.gemini) {
 			switch (sw_status_class(&swc)) {
 			case 1:
+				if (dl_net) {
+					fetch_failed("the capsule asks for input -- open it first");
+					return;
+				}
 				sock_disconnect();
 				spool_close();
 				ask_in_bar(&fetch_url, swc.meta[0] ? swc.meta : "input requested");
@@ -1942,15 +2064,18 @@ static void response_done(void) {
 				fetch_failed(msg);
 				return;
 			}
-			if (sw_status_class(&swc) == 2 && swc.body == SW_BODY_DISCARD) {
+			if (!dl_net && sw_status_class(&swc) == 2 &&
+				swc.body == SW_BODY_DISCARD) {
 				snprintf(msg, sizeof(msg), "cannot show %s", swc.meta);
 				fetch_failed(msg);
 				return;
 			}
+#if WEB_TLS
 			if (pin_was_new)
 				printf("web: gemini: first visit to %s, its key is now pinned\n",
 					fetch_url.host);
-		} else if (swc.body == SW_BODY_DISCARD) {
+#endif
+		} else if (!dl_net && swc.body == SW_BODY_DISCARD) {
 			snprintf(msg, sizeof(msg), "gopher items of type '%c' cannot "
 				"be shown here", swc.gopher_type);
 			fetch_failed(msg);
@@ -2011,8 +2136,12 @@ static void response_done(void) {
 		}
 
 		fetch_url = dest;
-		url_format(&fetch_url, cur_url_text, sizeof(cur_url_text), true);
-		snprintf(status, sizeof(status), "redirected to %s", cur_url_text);
+		// An image or a save is not where the reader is: the bar keeps
+		// the page's address.
+		if (!fetching_image)
+			url_format(&fetch_url, cur_url_text, sizeof(cur_url_text), true);
+		snprintf(status, sizeof(status), "redirected to %s",
+			fetching_image ? fetch_url.host : cur_url_text);
 		repaint();
 		from_redirect = true;
 		start_fetch(&fetch_url, false);
@@ -2022,7 +2151,24 @@ static void response_done(void) {
 
 	tm.t_body = web_ms() - tm.t_fetch - tm.t_dns - tm.t_connect - tm.t_ready;
 
+	// A save of an error page is not a save.
+	if (dl_net && fetching_image &&
+		(last_res.status < 200 || last_res.status >= 300)) {
+		char msg[48];
+		snprintf(msg, sizeof(msg), "the server answered %u",
+			(unsigned)last_res.status);
+		fetch_failed(msg);
+		return;
+	}
+
 	if (!spool_finish()) return;
+
+	if (fetching_image && dl_net) {
+		fetching_image = false;
+		state = W_READY;
+		save_commit();
+		return;
+	}
 
 	// An image finishes here: decode it into the placeholder box and
 	// repaint. The page's URL, index and scroll position are all
@@ -2259,8 +2405,9 @@ static void start_fetch(const url_t *u, bool push_history) {
 
 	uint32_t ip;
 	z_obj_t arg;
+	bool bm_page = is_bm_url(u);	// about:bookmarks, made here
 
-	if (!url_is_network(u) && u->scheme != URL_SCHEME_FILE) {
+	if (!bm_page && !url_is_network(u) && u->scheme != URL_SCHEME_FILE) {
 		if (u->scheme == URL_SCHEME_OTHER) {
 			char msg[160];
 			snprintf(msg, sizeof(msg), "cannot follow a %s: link",
@@ -2313,13 +2460,23 @@ static void start_fetch(const url_t *u, bool push_history) {
 		return;
 	}
 
-	if (u->scheme != URL_SCHEME_FILE &&
+	if (u->scheme != URL_SCHEME_FILE && !bm_page &&
 		!net_pid && !z_pid_lookup("net0", &net_pid)) {
 		fetch_failed("net is not running -- try `run net`");
 		return;
 	}
 
 	fetch_url = *u;
+
+	// A new page: what was said, found or highlighted on the old one
+	// means nothing now.
+	if (!fetching_image) {
+		if (dl_on && !dl_net) save_abandon("another page was opened");
+		bar_note[0] = 0;
+		hl_on = false;
+		find_running = false;
+		if (fnd.result == FIND_FOUND) fnd.result = FIND_IDLE;
+	}
 
 	// An image fetch does not change where the reader is. Writing the
 	// image's address here put it in the URL bar, which said the
@@ -2354,7 +2511,7 @@ static void start_fetch(const url_t *u, bool push_history) {
 	if (fetching_image) {
 		char where[URL_MAX];
 		url_format(&fetch_url, where, sizeof(where), true);
-		printf("web: image fetch %s\n", where);
+		printf("web: %s fetch %s\n", dl_net ? "save" : "image", where);
 	} else
 	printf("web: fetch %s%s\n", cur_url_text,
 		from_redirect ? " (redirect)" : "");
@@ -2384,6 +2541,12 @@ static void start_fetch(const url_t *u, bool push_history) {
 	if (fetch_url.scheme == URL_SCHEME_FILE) {
 		if (!fetching_image) img_forget();
 		local_begin();
+		return;
+	}
+
+	if (bm_page) {
+		img_forget();
+		bookmarks_begin();
 		return;
 	}
 
@@ -2551,7 +2714,8 @@ static void go_to_text(const char *text) {
 	// with no scheme and no leading slash as a hostname rather than
 	// as a relative path, which is what every browser does and is the
 	// difference between the URL bar being usable and not.
-	if (!strstr(text, "://") && text[0] != '/' && !strchr(text, ' ')) {
+	if (!strstr(text, "://") && text[0] != '/' && !strchr(text, ' ') &&
+		strncmp(text, "about:", 6)) {
 		snprintf(buf, sizeof(buf), "http://%s", text);
 		text = buf;
 	}
@@ -2571,7 +2735,8 @@ static void go_to_text(const char *text) {
 	}
 
 	if (!url_parse(text, &u) ||
-		(!url_is_network(&u) && u.scheme != URL_SCHEME_FILE)) {
+		(!url_is_network(&u) && u.scheme != URL_SCHEME_FILE &&
+		 !is_bm_url(&u))) {
 		fetch_failed("that is not a URL this browser can open");
 		return;
 	}
@@ -2582,20 +2747,32 @@ static void go_to_text(const char *text) {
 
 static void load_image(uint32_t block, const html_line_t *l);
 
+// One block, for following or saving a link. Shared: each is 6KB.
+static html_line_t link_line;
+
+// A link on the current page, as a URL. The bookmarks page has no base
+// to resolve against (about: is not hierarchical), and every link on
+// it is absolute anyway.
+static bool resolve_href(const char *href, url_t *dest) {
+	if (cur_url.scheme == URL_SCHEME_OTHER)
+		return url_parse(href, dest) && dest->scheme != URL_SCHEME_NONE;
+	return url_resolve_str(&cur_url, href, dest);
+}
+
 static void follow_link(uint32_t block, uint8_t idx) {
 
-	static html_line_t l;
+	html_line_t *lp = &link_line;
 	url_t dest;
 
-	if (page_fetch(&pg, block, 1, &l) != 1) return;
-	if (idx >= l.nlinks) return;
+	if (page_fetch(&pg, block, 1, lp) != 1) return;
+	if (idx >= lp->nlinks) return;
 
 	// An image box is clickable like a link, but clicking it loads
 	// the picture in place rather than navigating away from the page
 	// it illustrates.
-	if (l.kind == HTML_IMAGE) { load_image(block, &l); return; }
+	if (lp->kind == HTML_IMAGE) { load_image(block, lp); return; }
 
-	if (!url_resolve_str(&cur_url, l.links[idx], &dest)) {
+	if (!resolve_href(lp->links[idx], &dest)) {
 		fetch_failed("that link is not a URL this browser can parse");
 		return;
 	}
@@ -2641,8 +2818,10 @@ static void svc_start_next(void) {
 
 	int i;
 
+	// Not while a page is being saved: a fetch rewrites the spool the
+	// save is reading.
 	if (svc_active >= 0 || state == W_RESOLVING || state == W_CONNECTING ||
-		state == W_RECEIVING) return;
+		state == W_RECEIVING || dl_on) return;
 
 	for (i = 0; i < SVC_QUEUE; i++) {
 		if (svc_q[i].used && svc_q[i].handle == 0) {
@@ -2821,9 +3000,500 @@ static void select_link(int dir) {
 
 }
 
+// -- notes on the bar ----------------------------------------------
+
+static void help_on_msg(z_msg_t *msg, void *user);
+
+static void note(const char *msg) {
+	snprintf(bar_note, sizeof(bar_note), "%s", msg);
+	draw_bar();
+}
+
+// -- bookmarks (docs/web_app.md, "Bookmarks"; bookmark.c) ----------
+//
+// The file is read when the list is shown or a bookmark is toggled,
+// and written ONLY by Ctrl+D -- never on exit, never "just in case".
+
+static bool is_bm_url(const url_t *u) {
+	return u->scheme == URL_SCHEME_OTHER &&
+		!strcmp(u->scheme_text, "about") && !strcmp(u->path, "bookmarks");
+}
+
+static void bm_spool_out(void *user, const char *d, uint32_t n) {
+	on_body(user, d, n);
+}
+
+// about:bookmarks: the list as HTML, into the spool, and from there
+// the same completion as any page -- so it is indexed, drawn, scrolled
+// and its links followed by the code that does that for the web.
+static void bookmarks_begin(void) {
+
+	char *file;
+
+	if (!spool_begin()) return;
+
+	memset(&last_res, 0, sizeof(last_res));
+	last_res.status = 200;
+	snprintf(last_res.content_type, sizeof(last_res.content_type), "text/html");
+	snprintf(last_res.charset, sizeof(last_res.charset), "utf-8");
+	have_res = true;
+	conn_reusable = false;
+
+	file = fs_mallocfile((char *)Z_PATH_WEB_BOOKMARKS);
+	bm_html(file, file ? (uint32_t)strlen(file) : 0, Z_PATH_WEB_BOOKMARKS,
+		bm_spool_out, NULL);
+	free(file);
+
+	response_done();
+
+}
+
+// Ctrl+D: bookmark this page, or -- when it already is -- ask, and
+// remove it.
+static void toggle_bookmark(void) {
+
+	z_dialog_ctx_t ctx = { &win, help_on_msg, NULL };
+	char *file, *nf;
+	uint32_t len, n;
+	char line[BM_LINE_MAX];
+
+	if (state != W_READY || !cur_url_text[0]) {
+		note("open a page first, then Ctrl+D bookmarks it");
+		return;
+	}
+	if (is_bm_url(&cur_url)) {
+		note("this is the bookmarks page -- Ctrl+D on a page adds it");
+		return;
+	}
+
+	file = fs_mallocfile((char *)Z_PATH_WEB_BOOKMARKS);
+	len = file ? (uint32_t)strlen(file) : 0;
+
+	if (bm_find(file, len, cur_url_text, NULL, NULL)) {
+
+		int yes = z_dialog_confirm(&ctx, "Bookmark",
+			"This page is bookmarked.\nRemove the bookmark?",
+			Z_DIALOG_YES_NO);
+
+		repaint();
+		if (yes == Z_DIALOG_YES) {
+			len = bm_remove(file, len, cur_url_text);
+			if (len ? fs_write_file((char *)Z_PATH_WEB_BOOKMARKS, file,
+					(int)len) == (int)len
+				: fs_unlink((char *)Z_PATH_WEB_BOOKMARKS) != 0)
+				note("bookmark removed");
+			else
+				note("could not write the bookmarks file");
+		}
+		free(file);
+		return;
+
+	}
+
+	n = bm_format(line, sizeof(line), cur_url_text, page_title(&pg));
+	nf = n ? malloc(len + n + 2) : NULL;
+	if (!nf) {
+		free(file);
+		note(n ? "out of memory" : "this address cannot be bookmarked");
+		return;
+	}
+
+	if (len) memcpy(nf, file, len);
+	if (len && nf[len - 1] != '\n') nf[len++] = '\n';
+	memcpy(nf + len, line, n + 1);
+	len += n;
+	free(file);
+
+	fs_mkdir(Z_DIR_WEB_DATA);
+	if (fs_write_file((char *)Z_PATH_WEB_BOOKMARKS, nf, (int)len) == (int)len)
+		note("bookmarked -- Ctrl+B lists them");
+	else
+		note("could not write the bookmarks file");
+	free(nf);
+
+}
+
+static void show_bookmarks(void) {
+	url_t u;
+	// Not under an image fetch, which would take the list for a picture.
+	if (fetching_image) { note("an image is loading -- Esc stops it"); return; }
+	if (url_parse(BM_PAGE_URL, &u)) start_fetch(&u, true);
+}
+
+// -- find in page (docs/web_app.md, "Find in page"; find.c) --------
+//
+// The document is searched as text, block by block, FIND_BUDGET blocks
+// per pass of the main loop: nothing is drawn until there is a match,
+// a long page stays responsive while it is searched, and Escape stops
+// it at once.
+
+#define FIND_BUDGET  32
+
+static bool find_cb(void *user, uint32_t block, const html_line_t *l) {
+
+	(void)user;
+
+	// A fresh search starts at the top of the VIEW, which may be part
+	// way down its first block.
+	if (find_top_sub) {
+		uint16_t s, e;
+		if (block == fnd.block && fnd.off == 0 && !fnd.wrapped &&
+			layout_line_range(l, &cfg, find_top_sub, &s, &e))
+			fnd.off = fnd.start_off = s;
+		find_top_sub = 0;
+	}
+
+	if (!find_feed(&fnd, block, l->text, l->len)) return false;
+
+	if (fnd.result == FIND_FOUND) {
+
+		layout_loc_t loc;
+
+		hl_block = block;
+		hl_sub = 0;
+		hl_on = false;
+
+		if (layout_locate(l, &cfg, (uint16_t)fnd.found_off, &loc)) {
+			// Boxed on its first line only, if it wraps.
+			uint32_t n = fnd.nlen;
+			if (fnd.found_off + n > loc.end)
+				n = loc.end > fnd.found_off ? loc.end - fnd.found_off : 1;
+			hl_sub = (uint16_t)loc.line;
+			hl_dx = loc.x - cfg.x;
+			hl_w = (int)n * loc.cw;
+			hl_h = loc.ch + 1;
+			hl_on = true;
+		}
+
+	}
+
+	return true;
+
+}
+
+// The match: left where it is if its line is already in full view,
+// otherwise scrolled to, two lines down from the top for context.
+static void find_show(void) {
+
+	bool seen = false;
+
+	snprintf(bar_note, sizeof(bar_note), "\"%s\" found%s -- F3 finds the next",
+		fnd.needle, fnd.wrapped ? " after wrapping to the top" : "");
+
+	for (int k = 0; k < bv.nvis; k++)
+		if (bv.vblock[k] == hl_block && bv.vsub[k] == hl_sub &&
+			bv.vy[k] + hl_h <= view_y + view_h)
+			seen = true;
+
+	if (!seen || !bv.valid) {
+		top.block = hl_block;
+		top.sub = hl_sub;
+		page_advance(&pg, &cfg, &top, -2);
+		sel_link = -1;
+	}
+
+	repaint();
+
+}
+
+static void find_step(void) {
+
+	uint32_t n;
+
+	if (state != W_READY) { find_running = false; return; }
+
+	n = page_scan(&pg, fnd.block, FIND_BUDGET, find_cb, NULL);
+	if (fnd.result == FIND_RUN && n < FIND_BUDGET) find_wrap(&fnd);
+
+	if (fnd.result == FIND_RUN) {
+		snprintf(bar_note, sizeof(bar_note), "finding \"%s\"... %lu of %lu",
+			fnd.needle, (unsigned long)fnd.block,
+			(unsigned long)page_blocks(&pg));
+		draw_bar();
+		return;
+	}
+
+	find_running = false;
+
+	if (fnd.result == FIND_FOUND) { find_show(); return; }
+
+	snprintf(bar_note, sizeof(bar_note), "\"%s\" is not on this page",
+		fnd.needle);
+	hl_on = false;
+	repaint();
+
+}
+
+static bool find_ready(void) {
+	if (state == W_READY && page_blocks(&pg)) return true;
+	note("there is no page to search yet");
+	return false;
+}
+
+static void find_from_view(void) {
+	find_top_sub = top.sub;
+	find_begin(&fnd, fnd.needle, top.block, 0);
+	hl_on = false;
+	find_running = true;
+}
+
+// Ctrl+F.
+static void find_prompt(void) {
+
+	z_dialog_ctx_t ctx = { &win, help_on_msg, NULL };
+	char buf[FIND_MAX];
+
+	if (!find_ready()) return;
+
+	if (!z_dialog_prompt(&ctx, "Find", "Find in this page:",
+		fnd.nlen ? fnd.needle : NULL, buf, sizeof(buf))) {
+		repaint();
+		return;
+	}
+
+	repaint();
+	if (!find_ready()) return;
+
+	if (!find_begin(&fnd, buf, top.block, 0)) return;
+	find_from_view();
+
+}
+
+// F3, Ctrl+G: the next match, or the first one below the view when the
+// last search ended (or was on another page); the prompt if there has
+// been no search yet.
+static void find_next(void) {
+
+	if (!fnd.nlen) { find_prompt(); return; }
+	if (!find_ready()) return;
+
+	if (find_again(&fnd)) { hl_on = false; find_running = true; }
+	else find_from_view();
+
+}
+
+// -- saving to disk (docs/web_app.md, "Saving") --------------------
+//
+// See dl_on. Only ever started by Ctrl+S or Shift+Enter; nothing here
+// writes the card on its own.
+
+// The save dialog, then -- if the name is taken -- whether to replace
+// it. Sets dl_path and dl_tmp.
+static bool save_ask(const char *suggest) {
+
+	z_dialog_ctx_t ctx = { &win, help_on_msg, NULL };
+	z_fs_info_t info;
+	bool ok;
+
+	ok = z_dialog_save(&ctx, Z_DIR_HOME, suggest, dl_path, sizeof(dl_path));
+
+	if (ok && fs_stat(dl_path, &info)) {
+		char msg[sizeof(dl_path) + 32];
+		snprintf(msg, sizeof(msg), "%s exists.\nReplace it?", dl_path);
+		ok = z_dialog_confirm(&ctx, "Save", msg, Z_DIALOG_YES_NO) ==
+			Z_DIALOG_YES;
+	}
+
+	repaint();
+	if (!ok) return false;
+
+	snprintf(dl_tmp, sizeof(dl_tmp), "%s.part", dl_path);
+	return true;
+
+}
+
+// The .part is complete: it becomes the file.
+static void save_commit(void) {
+
+	z_fs_info_t info;
+	uint32_t bytes = dl_net ? side_len : dl_off;
+	int err = 0;
+
+	if (dl_wr >= 0) { fs_close_handle(dl_wr); dl_wr = -1; }
+
+	if (fs_stat(dl_path, &info)) fs_unlink(dl_path);	// replace was agreed
+
+	if (fs_rename(dl_tmp, dl_path, &err))
+		snprintf(bar_note, sizeof(bar_note), "saved %lu bytes to %.150s",
+			(unsigned long)bytes, dl_path);
+	else
+		snprintf(bar_note, sizeof(bar_note),
+			"saved as %.130s -- could not rename it (error %d)", dl_tmp, err);
+
+	printf("web: %s\n", bar_note);
+
+	dl_on = false;
+	dl_net = false;
+	draw_bar();
+
+}
+
+// Stopped or failed: nothing is left behind but the message.
+static void save_abandon(const char *why) {
+
+	if (dl_net) {
+		fetching_image = false;
+		img_loading = false;
+		if (img_wr >= 0) { fs_close_handle(img_wr); img_wr = -1; }
+		state = W_READY;
+	}
+	if (dl_wr >= 0) { fs_close_handle(dl_wr); dl_wr = -1; }
+
+	fs_unlink(dl_tmp);
+
+	dl_on = false;
+	dl_net = false;
+
+	snprintf(bar_note, sizeof(bar_note), "not saved: %s", why);
+	printf("web: save: %s\n", bar_note);
+	draw_bar();
+
+}
+
+// Fetched into the file: see dl_on.
+static void save_fetch(const url_t *u) {
+
+	url_t dest = *u;
+
+	dl_on = true;
+	dl_net = true;
+	url_focus = false;
+	url_editing = false;
+	redirects = 0;
+	fetch_is_head = false;
+	fetching_image = true;
+
+	start_fetch(&dest, false);
+
+}
+
+// One chunk of the spool into the .part, per pass of the main loop.
+//
+// Through spool_wbuf, which is idle: a copy runs only on a page that
+// has finished loading, and no fetch can start until it ends. 16KB per
+// call because an SD write costs per call far more than per byte.
+static void save_copy_pump(void) {
+
+	uint32_t want = spool_len - dl_off, n;
+
+	if (want == 0) { save_commit(); return; }
+	if (want > SPOOL_BUF) want = SPOOL_BUF;
+
+	n = spool_read(NULL, dl_off, (char *)spool_wbuf, want);
+	if (n == 0) { save_abandon("could not read the page back"); return; }
+
+	if (fs_write_chunk(dl_wr, spool_wbuf, (int)n) != (int)n) {
+		save_abandon("could not write -- card full?");
+		return;
+	}
+
+	dl_off += n;
+	snprintf(bar_note, sizeof(bar_note), "saving... %lu of %lu KB",
+		(unsigned long)(dl_off / 1024), (unsigned long)(spool_len / 1024));
+	draw_bar();
+
+}
+
+// A gopher search item cannot be fetched without its terms.
+static bool save_wants_query(const url_t *u) {
+	return u->scheme == URL_SCHEME_GOPHER && sw_gopher_type(u) == '7' &&
+		!u->has_query;
+}
+
+// Ctrl+S: the page's source.
+static void save_page(void) {
+
+	char name[96];
+	const char *ext = ".html";
+	bool refetch = cur_url.scheme == URL_SCHEME_GEMINI ||
+		cur_url.scheme == URL_SCHEME_GOPHER;
+
+	if (state != W_READY || spool_rd < 0 || !cur_url_text[0]) {
+		note("there is no page to save yet");
+		return;
+	}
+	if (refetch && save_wants_query(&cur_url)) {
+		note("a search cannot be saved");
+		return;
+	}
+
+	if (cur_url.scheme == URL_SCHEME_GEMINI) ext = ".gmi";
+	else if (cur_url.scheme == URL_SCHEME_GOPHER &&
+		sw_gopher_type(&cur_url) != 'h') ext = ".txt";
+
+	url_file_name(&cur_url, ext, name, sizeof(name));
+	if (!save_ask(name)) return;
+
+	if (refetch) { save_fetch(&cur_url); return; }
+
+	fs_unlink(dl_tmp);
+	dl_wr = fs_open_write(dl_tmp);
+	if (dl_wr < 0) { note("not saved: cannot create the file"); return; }
+
+	dl_on = true;
+	dl_net = false;
+	dl_off = 0;
+	url_focus = false;
+	url_editing = false;
+	note("saving...");
+
+}
+
+// Shift+Enter: where the selected link points, fetched into a file
+// without opening it.
+static void save_link(void) {
+
+	char name[96];
+	url_t dest;
+	const layout_hit_t *h;
+
+	if (state != W_READY || sel_link < 0 || sel_link >= nhits) {
+		note("Tab to a link first -- Shift+Enter saves where it points");
+		return;
+	}
+
+	h = &hits[sel_link];
+	if (page_fetch(&pg, h->block, 1, &link_line) != 1 ||
+		h->link >= link_line.nlinks) return;
+
+	if (!resolve_href(link_line.links[h->link], &dest) ||
+		(!url_is_network(&dest) && dest.scheme != URL_SCHEME_FILE)) {
+		note("that link cannot be saved");
+		return;
+	}
+	if (save_wants_query(&dest)) { note("a search cannot be saved"); return; }
+
+	url_file_name(&dest, NULL, name, sizeof(name));
+	if (!save_ask(name)) return;
+
+	save_fetch(&dest);
+
+}
+
+static bool scroll_key(uint32_t k) {
+	return k == Z_KEY_DOWN || k == Z_KEY_UP || k == Z_KEY_PAGEDOWN ||
+		k == Z_KEY_PAGEUP || k == ' ' || k == Z_KEY_HOME || k == Z_KEY_END;
+}
+
+static void show_help(void);
+
 static void handle_key(uint32_t k, uint8_t mods) {
 
-	(void)mods;
+	if (k == Z_KEY_F1) { show_help(); return; }	// docs/app_help.md
+
+	// A note lasts until the next key.
+	if (bar_note[0] && !find_running && !dl_on) {
+		bar_note[0] = 0;
+		draw_bar();
+	}
+
+	// While a page is being saved only scrolling, and Escape to stop
+	// it: anything that fetched would take the connection or the
+	// spool out from under the save.
+	if (dl_on && k != 0x1b && !scroll_key(k)) {
+		note("saving -- Esc stops it");
+		return;
+	}
 
 	// While the URL field has focus, typing goes there and nowhere
 	// else -- otherwise 'g' in the middle of a hostname would open a
@@ -2859,7 +3529,16 @@ static void handle_key(uint32_t k, uint8_t mods) {
 
 	switch (k) {
 
-	case 0x1b:            web_stop(); break;	// Escape: stop loading
+	case 0x1b:				// Escape: stop a find, a save, or loading
+		if (find_running) {
+			find_running = false;
+			note("find stopped");
+		} else if (dl_on && !dl_net) {
+			save_abandon("stopped");
+		} else {
+			web_stop();
+		}
+		break;
 	case Z_KEY_DOWN:      scroll_by(1); break;
 	case Z_KEY_UP:        scroll_by(-1); break;
 	case Z_KEY_PAGEDOWN:
@@ -2872,9 +3551,17 @@ static void handle_key(uint32_t k, uint8_t mods) {
 
 	case '\r':
 	case '\n':
-		if (sel_link >= 0 && sel_link < nhits)
+		if (mods & Z_KBD_MOD_SHIFT) save_link();
+		else if (sel_link >= 0 && sel_link < nhits)
 			follow_link(hits[sel_link].block, hits[sel_link].link);
 		break;
+
+	case 0x02:            show_bookmarks(); break;	// Ctrl+B
+	case 0x04:            toggle_bookmark(); break;	// Ctrl+D
+	case 0x06:            find_prompt(); break;		// Ctrl+F
+	case 0x07:									// Ctrl+G
+	case Z_KEY_F3:        find_next(); break;
+	case 0x13:            save_page(); break;		// Ctrl+S
 
 	case 'g':
 	case 0x0C:				// Ctrl+L, as everywhere else
@@ -2942,10 +3629,16 @@ static void handle_mouse(uint32_t packed) {
 
 			if (!(buttons & 1)) return;
 
+			if (dl_on && hit != TB_HIT_GO) {
+				note("saving -- Stop or Esc stops it");
+				return;
+			}
+
 			switch (hit) {
 
 			case TB_HIT_GO:
-				if (net_busy()) web_stop();
+				if (dl_on && !dl_net) save_abandon("stopped");
+				else if (net_busy()) web_stop();
 				else web_go();
 				break;
 
@@ -2984,7 +3677,7 @@ static void handle_mouse(uint32_t packed) {
 		draw_bar();
 	}
 
-	if (!(buttons & 1) || state != W_READY) return;
+	if (!(buttons & 1) || state != W_READY || dl_on) return;
 
 	// Hit rectangles are in SCREEN coordinates, because that is what
 	// layout.c draws in; the pointer arrives content-relative.
@@ -3232,6 +3925,136 @@ static void handle_port_msg(z_msg_t *msg) {
 
 }
 
+// One message, as the main loop handles it. Also the help box's
+// on_msg: while it is up, everything not addressed to it lands here
+// (keys and the pointer are the box's), so the page keeps loading and
+// the window keeps its region and acks its redraws.
+static void dispatch(z_msg_t *msg) {
+
+	switch (msg->subject) {
+
+	case Z_WM_KEY:
+		if (msg->obj.type != Z_UINT32) break;
+		if (!Z_WM_UNPACK_KEY_PRESSED(msg->obj.val.uint32)) break;
+		handle_key(Z_WM_UNPACK_KEY_KEYSYM(msg->obj.val.uint32),
+			(uint8_t)Z_WM_UNPACK_KEY_MODIFIERS(msg->obj.val.uint32));
+		break;
+
+	case Z_WM_MOUSE:
+		if (msg->obj.type == Z_UINT32) handle_mouse(msg->obj.val.uint32);
+		break;
+
+	case Z_WM_WHEEL:
+		// Accumulated, and applied once the mailbox is empty
+		// (below): scroll_by() repaints the page, and a fast
+		// spin arrives as a burst of notches.
+		if (msg->obj.type == Z_UINT32)
+			wheel_pending += Z_WM_WHEEL_NOTCHES(msg->obj.val.uint32);
+		break;
+
+	case Z_WM_SET_CLIP:
+		z_win_apply_clip(&win, &msg->obj);
+		break;
+
+	case Z_WM_REDRAW:
+		z_win_apply_redraw(&win, msg->obj.type == Z_UINT32
+			? msg->obj.val.uint32 : 0);
+		repaint_for_wm();
+		break;
+
+	case Z_WM_WINDOW_RESIZED:
+		if (z_win_apply_resized(&win, &msg->obj)) {
+			// The viewport keeps its top BLOCK across a
+			// resize but not its sub-line: the block it was
+			// showing now wraps differently, and a sub-line
+			// index into the old wrapping means nothing.
+			top.sub = 0;
+			sel_link = -1;
+			repaint();
+		}
+		break;
+
+	case Z_WM_WINDOW_MOVED:
+
+		// No repaint of our own: relayout() rebuilds crect
+		// from the new position at the top of every repaint,
+		// and the REDRAW wm sends after a move asks for one
+		// anyway.
+		z_win_parse_rect(&win, &msg->obj);
+		break;
+
+	case Z_PORT_CONNECTED:
+	case Z_PORT_REFUSED:
+	case Z_PORT_DATA:
+	case Z_PORT_CLOSE:
+		handle_port_msg(msg);
+		break;
+
+	case Z_PORT_DATA_ACK:
+		z_port_handle_ack(&sock, msg);
+		break;
+
+	case Z_WEB_FETCH:
+		handle_web_fetch(msg);
+		break;
+
+	case Z_WEB_CANCEL:
+		handle_web_cancel(msg);
+		break;
+
+	case Z_STREAM_OPEN:
+		handle_stream_open(msg);
+		break;
+
+	case Z_STREAM_PULL:
+		svc_stream_pump();
+		break;
+
+	case Z_STREAM_ABORT:
+		if (svc_streaming) {
+			zstream_producer_close(&svc_stream);
+			svc_streaming = false;
+		}
+		break;
+
+	default:
+		break;
+
+	}
+
+}
+
+// F1: the help box (docs/app_help.md). Its on_msg is dispatch(), so
+// a load in progress carries on underneath it.
+static void help_on_msg(z_msg_t *msg, void *user) {
+	(void)user;
+	dispatch(msg);
+}
+
+static void show_help(void) {
+	static const char help[] =
+		"A text-mode web browser for http, https, gopher and gemini.\n\n"
+		"g, Ctrl+L\tEdit the URL (Enter goes, Esc undoes)\n"
+		"Tab\tSelect the next link\n"
+		"Enter\tFollow the selected link\n"
+		"Up/Down\tScroll a line\n"
+		"Space/PgDn\tScroll a page (PgUp back)\n"
+		"Home/End\tTop or end of the page\n"
+		"b, Bksp\tBack (f: forward)\n"
+		"r\tReload\n"
+		"Ctrl+F\tFind in the page (F3, Ctrl+G: next)\n"
+		"Ctrl+D\tBookmark the page (again: remove)\n"
+		"Ctrl+B\tShow the bookmarks\n"
+		"Ctrl+S\tSave the page's source to a file\n"
+		"Shift+Enter\tSave the selected link's target\n"
+		"Esc\tStop loading, finding or saving\n\n"
+		"Click a link to follow it, or an image box to load the "
+		"image. The toolbar has Go/Stop, Back and Forward.";
+	z_dialog_ctx_t ctx = { &win, help_on_msg, NULL };
+	z_dialog_help(&ctx, "Web help", help, "web_app");
+	repaint();
+}
+
 int main(void) {
 
 	printf("web: starting\n");
@@ -3304,96 +4127,7 @@ int main(void) {
 
 		while (z_msg_read(&msg) == Z_OK) {
 
-			switch (msg.subject) {
-
-			case Z_WM_KEY:
-				if (msg.obj.type != Z_UINT32) break;
-				if (!Z_WM_UNPACK_KEY_PRESSED(msg.obj.val.uint32)) break;
-				handle_key(Z_WM_UNPACK_KEY_KEYSYM(msg.obj.val.uint32),
-					(uint8_t)Z_WM_UNPACK_KEY_MODIFIERS(msg.obj.val.uint32));
-				break;
-
-			case Z_WM_MOUSE:
-				if (msg.obj.type == Z_UINT32) handle_mouse(msg.obj.val.uint32);
-				break;
-
-			case Z_WM_WHEEL:
-				// Accumulated, and applied once the mailbox is empty
-				// (below): scroll_by() repaints the page, and a fast
-				// spin arrives as a burst of notches.
-				if (msg.obj.type == Z_UINT32)
-					wheel_pending += Z_WM_WHEEL_NOTCHES(msg.obj.val.uint32);
-				break;
-
-			case Z_WM_SET_CLIP:
-				z_win_apply_clip(&win, &msg.obj);
-				break;
-
-			case Z_WM_REDRAW:
-				z_win_apply_redraw(&win, msg.obj.type == Z_UINT32
-					? msg.obj.val.uint32 : 0);
-				repaint_for_wm();
-				break;
-
-			case Z_WM_WINDOW_RESIZED:
-				if (z_win_apply_resized(&win, &msg.obj)) {
-					// The viewport keeps its top BLOCK across a
-					// resize but not its sub-line: the block it was
-					// showing now wraps differently, and a sub-line
-					// index into the old wrapping means nothing.
-					top.sub = 0;
-					sel_link = -1;
-					repaint();
-				}
-				break;
-
-			case Z_WM_WINDOW_MOVED:
-
-				// No repaint of our own: relayout() rebuilds crect
-				// from the new position at the top of every repaint,
-				// and the REDRAW wm sends after a move asks for one
-				// anyway.
-				z_win_parse_rect(&win, &msg.obj);
-				break;
-
-			case Z_PORT_CONNECTED:
-			case Z_PORT_REFUSED:
-			case Z_PORT_DATA:
-			case Z_PORT_CLOSE:
-				handle_port_msg(&msg);
-				break;
-
-			case Z_PORT_DATA_ACK:
-				z_port_handle_ack(&sock, &msg);
-				break;
-
-			case Z_WEB_FETCH:
-				handle_web_fetch(&msg);
-				break;
-
-			case Z_WEB_CANCEL:
-				handle_web_cancel(&msg);
-				break;
-
-			case Z_STREAM_OPEN:
-				handle_stream_open(&msg);
-				break;
-
-			case Z_STREAM_PULL:
-				svc_stream_pump();
-				break;
-
-			case Z_STREAM_ABORT:
-				if (svc_streaming) {
-					zstream_producer_close(&svc_stream);
-					svc_streaming = false;
-				}
-				break;
-
-			default:
-				break;
-
-			}
+			dispatch(&msg);
 
 		}
 
@@ -3439,6 +4173,11 @@ int main(void) {
 #endif
 
 		if (local_fd >= 0 && net_busy()) { local_pump(); continue; }
+
+		// A page being saved from the spool, and a search: a bounded
+		// step each, between messages, so Escape is seen at once.
+		if (dl_on && !dl_net) { save_copy_pump(); continue; }
+		if (find_running) { find_step(); continue; }
 
 		if (state == W_INDEXING) {
 

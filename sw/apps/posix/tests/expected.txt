@@ -190,14 +190,18 @@ posix -- see docs/posix.md
   zcat     print .gz files, decompressed
   gunzip   FILE.gz to FILE (-k keep it, -f overwrite)
   echo     print arguments
-  rm       delete files
-  cp       copy a file
+  rm       delete files (-r: directories and all in them)
+  cp       copy a file (-r: a directory and all in it)
   mv       rename or move a file or directory
   touch    create a file if it does not exist
   clear    clear the screen
   reboot   reconfigure the FPGA, after syncing open files
   jump     boot the gateware at a flash address (hex)
   mkdir    make directories
+  find     list a tree  (find [DIR] -name '*.c' -type f|d)
+  diff     differences between two files, as diff -u
+  unzip    unzip [-l] [-o] A.zip [-d DIR]
+  tar      tar -xf|-tf A.tar|.tgz|.tar.gz [-C DIR] [-o]
   wc       count lines, words and characters
   head     first lines of a file  (head -5 f)
   tail     last lines of a file   (tail -5 f)
@@ -217,5 +221,6 @@ posix -- see docs/posix.md
 anything else is run as a program: 'zcc hello.c -o hello'
 redirection: > and >>   chaining: && and ||
 quoting: 'a b' "a b" a\ b   wildcards: * ? [abc]
+Ctrl+C stops a builtin that is still running
 $ exit
 [exit]

@@ -16,7 +16,7 @@ APP = cal
 #
 #   zcfg.o: system.rtc.timezone -- docs/config.md
 OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o zwidget.o zspeak.o zrtc.o \
-	zcfg.o cal_core.o cal.o
+	zcfg.o zdialog.o zfsapp.o cal_core.o cal.o
 
 # -- host-side tests --
 #

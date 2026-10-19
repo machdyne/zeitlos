@@ -48,8 +48,9 @@ $ zcc hello.c -o hello && run hello
 
 | | |
 |---|---|
-| files | `ls [-l]` `cat` `cp` `mv` `rm` `touch` `mkdir` `rmdir` `zcat` `gunzip` |
-| text | `wc` `head` `tail` `grep` `sort` `uniq` |
+| files | `ls [-l]` `cat` `cp [-r]` `mv` `rm [-r]` `touch` `mkdir` `rmdir` `find` |
+| archives | `zcat` `gunzip` `unzip` `tar` |
+| text | `wc` `head` `tail` `grep` `sort` `uniq` `diff` |
 | places | `cd` `pwd` |
 | processes | `ps` `kill` `run` `free` |
 | other | `echo` `clear` `df` `port` `help` `exit` `reboot` `jump` |
@@ -175,11 +176,115 @@ only once the whole file is out and checked (`-k` keeps it), and
 removes a half-written output if anything fails. Decompressing runs at
 roughly 80 KB/s on the machine, the CRC included. There is no `gzip` to compress yet.
 
+### Ctrl+C
+
+Ctrl+C stops a builtin that is still running -- `find /`, `cat` of a
+big file, `diff`, `unzip`, `tar`, `cp -r`, `rm -r`, `zcat`, `gunzip`,
+`wc`, `grep`, `head`, `tail`, `sort`, `uniq` -- at its next entry, line
+or 4 KB, which on this machine is at once. The shell prints `^C`, the
+status is 130, and the rest of the line is abandoned: `find / && echo
+done` does not echo, and a pipeline stops where it is. A file being
+written when it happens (`unzip`, `tar`, `gunzip`, `cp -r`) is removed,
+not left half-written; what was finished before it stays.
+
+How: a builtin runs inside `px_exec_line()`, and nothing reads the
+terminal meanwhile -- so long-running builtins call `px_intr()` between
+pieces of work, which calls the shell's `poll` hook. On the machine
+that is `conn_poll()` in `main.c`: at most fifty times a second it takes
+this session's own DATA and DATA_ACK messages out of the mailbox
+(`z_msg_take_match()`, so everything else stays queued, in order, and
+nothing re-enters the message handlers), looks for a 0x03, and lets the
+acks through so the output keeps flowing. Other keys typed meanwhile are
+kept (64 bytes) and given to the line editor when the prompt is back, as
+typeahead always was; keys after a Ctrl+C are dropped. While a builtin
+of a session is producing output faster than the terminal takes it, the
+shell now waits for the terminal (up to 2 s per 4 KB) instead of
+dropping the overflow. A program started with `run` is not a builtin
+and is not stopped by Ctrl+C (`kill` it).
+
+### find, diff, unzip, tar
+
+```
+$ find                          <- everything below here
+$ find src docs -name *.c       <- by name, in several trees
+$ find -type d                  <- directories only (f: files only)
+$ diff old.c new.c              <- as diff -u
+$ unzip -l pack.zip             <- list
+$ unzip pack.zip -d pack        <- extract into pack/ (made if need be)
+$ tar -tf src.tar.gz            <- list
+$ tar -xf src.tgz -C /ram/src   <- extract (.tar, .tgz, .tar.gz)
+$ cp -r proj proj.old           <- a tree
+$ rm -r proj.old
+```
+
+**find** `[DIR...] [-name PATTERN] [-type f|d]` prints the starting
+point and everything below it, depth first, each directory's entries
+in the order `ls` sorts them -- so its output does not depend on the
+history of the card. `-name` matches the last part of each path with
+the shell's wildcards (`*`, `?`, `[a-z]`, case-blind as FAT is). Its
+pattern is find's, not the shell's: quoted or not, it is never expanded
+in the current directory, so `find -name *.c` and `find -name '*.c'`
+are the same. The walk has no recursion: a fixed stack of 32 directory
+levels below each starting point (`FIND_DEPTH`), with the names still to
+visit kept in one 16 KB arena (`FIND_ARENA`). A directory deeper than
+that, one with more than 256 entries (as `ls`), or a tree whose waiting
+names do not fit is reported -- `find: ...: more than 32 levels deep,
+not entered` -- the rest is still walked, and the status is 1.
+
+**diff** `FILE1 FILE2` prints what `diff -u` prints -- `---`/`+++`
+(without timestamps), `@@` hunks, three lines of context, `\ No newline
+at end of file` -- and its status is 0 for the same, 1 for different, 2
+for trouble. It is Myers' algorithm in linear space (the middle snake,
+as GNU diff), so the diff is a shortest one; on input with many equally
+short answers (the same few lines repeated) it may choose a different
+one from GNU's, which is just as valid. Both files are held in memory
+while it runs (`malloc()`, freed after): each at most **256 KB and 8192
+lines**, past which it says `diff: big.log: larger than 256 KB, not
+compared` with status 2. A region whose differences take more than 1024
+steps to pin down (`DIFF_COST`) is shown as all removed and all added --
+still a correct diff, just not the shortest -- which bounds the time on
+two files with nothing in common. A file with a NUL byte gets `Binary
+files A and B differ`.
+
+**unzip** `[-l] [-o] ARCHIVE.zip [-d DIR]` and **tar** `-xf|-tf
+ARCHIVE [-C DIR] [-o]` (`tar xf` and `v`, `z` are accepted; a gzip'ed
+tar is known by its first bytes) extract through `sw/common/formats`
+(`zf_extract_zip()`, `zf_extract_tar()`, `zf_extract_tgz()`), the code
+`convert` uses, and print each file as it is written, then a total.
+Every name is checked before anything is created: one that is absolute
+or climbs out with `..` makes the whole archive refused. An entry is cut
+off at 64 MB, CRCs are checked, links and devices in a tar are skipped.
+**An existing file is not overwritten** without `-o`: `unzip` checks the
+whole archive first and writes nothing if one is there; `tar` can only
+read front to back, so it stops at the first. `unzip -l` reads only the
+zip's directory; `tar -tf` has to read (and decompress) the whole
+archive. The 32 KB inflate window is the formats library's static one,
+which `zcat` and `gunzip` now borrow too (`zz_window_take()`) -- one in
+the program, not two; nothing here needs `zf_heap`, which only the
+document and table readers use.
+
+**cp -r** `SRC DST` and **rm -r** `PATH ...` walk the tree with
+`sw/common/zwalk.c` ([zwalk.md](zwalk.md)), one filesystem call a step,
+with a 32 KB working block `malloc()`ed for the command. As with `cp`
+and `mv`, an existing directory as `DST` means "into it"; a copy never
+replaces an existing name or goes into its own source, and is at most
+16 levels deep (`ZW_DEPTH`; deeper entries are counted and reported).
+`rm -r /` is refused.
+
+The code is `sw/apps/posix/tools.c` (find, diff, unzip, tar) and
+`tree.c` (cp -r, rm -r, on `sw/common/zwalk.c`, [zwalk.md](zwalk.md)). Tests: `tests/tools.txt`
+asserts their output, Ctrl+C included (a `! N` line presses it at the
+Nth poll), and `tests/gen_tools.py` builds the fixtures and a second
+case file whose expected output comes from GNU `diff -u` on 21 pairs of
+files and from a sorted walk in Python for `find`.
+
 ### What streams and what does not
 
-`cat`, `cp`, `wc`, `grep`, `head`, `tail`, `uniq`, `zcat` and `gunzip`
-read a file in chunks and have **no size limit**. `sort` has to hold every line and
-refuses above 512 lines or 16KB rather than dropping the rest.
+`cat`, `cp`, `wc`, `grep`, `head`, `tail`, `uniq`, `zcat`, `gunzip`,
+`unzip` and `tar` read a file in chunks and have **no size limit**.
+`sort` has to hold every line and refuses above 512 lines or 16KB rather
+than dropping the rest; `diff` holds both files and refuses above 256 KB
+or 8192 lines each.
 
 **A pipe holds its intermediate in memory, capped at 16KB**, and says
 so when it truncates. So `wc big.c` is fine and `cat big.c | wc` may

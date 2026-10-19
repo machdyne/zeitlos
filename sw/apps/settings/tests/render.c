@@ -75,6 +75,8 @@ bool z_dialog_prompt_secret(const z_dialog_ctx_t *c, const char *t, const char *
 	return out[0] != 0;
 }
 
+void z_dialog_help(const z_dialog_ctx_t *c, const char *t, const char *x, const char *d) { (void)c; (void)t; (void)x; (void)d; }
+
 static int confirm_answer = Z_DIALOG_YES;
 int z_dialog_confirm(const z_dialog_ctx_t *c, const char *t, const char *m, int b) {
 	(void)c; (void)t; (void)m; (void)b;

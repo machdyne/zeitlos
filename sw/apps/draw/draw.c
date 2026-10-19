@@ -100,6 +100,7 @@
 #include "../../common/zwidget.h"
 #include "../../common/zflist.h"
 #include "../../common/zdialog.h"
+#include "../../common/zkbd.h"	// Z_KEY_F1
 #include "../../common/zfsapp.h"
 #include "../../common/zbm.h"
 #include "../../common/ztype.h"
@@ -1516,6 +1517,21 @@ static void forward_msg(z_msg_t *msg, void *user) {
 
 }
 
+// F1 (docs/app_help.md). No manual of its own in docs/ yet.
+static void show_help(void) {
+	static const char help[] =
+		"Paint in black and white on a 640x480 page.\n\n"
+		"Left column\tPick a tool: pencil, brush, eraser, line, "
+		"rectangle, filled rectangle, oval\n"
+		"Bottom row\tPick the pattern for brush and fill\n"
+		"Drag\tDraw with the tool\n"
+		"Scrollbars\tPan the page (or the wheel)\n"
+		"Title icons\tNew, open, save\n\n"
+		"The pencil draws white when you start on black. "
+		"There is no undo.";
+	z_dialog_help(&dlg_ctx, "Draw help", help, NULL);
+}
+
 int main(void) {
 
 	printf("draw: starting\n");
@@ -1602,6 +1618,14 @@ int main(void) {
 						scroll_y = (int)vsb.value;
 						scroll_view();
 					}
+					break;
+
+				case Z_WM_KEY:
+					// The only key: everything else is the mouse.
+					if (msg.obj.type == Z_UINT32 &&
+					    Z_WM_UNPACK_KEY_PRESSED(msg.obj.val.uint32) &&
+					    Z_WM_UNPACK_KEY_KEYSYM(msg.obj.val.uint32) == Z_KEY_F1)
+						show_help();
 					break;
 
 				case Z_WM_MOUSE:

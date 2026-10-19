@@ -1,6 +1,7 @@
 /*
- * Host test for sw/common/zdialog.c's text prompt: the REAL key and
- * mouse handlers, driven directly, with no window and no wm.
+ * Host test for sw/common/zdialog.c's text prompt and help box: the
+ * REAL key and mouse handlers, driven directly, with no window and no
+ * wm. HELP_PBM=<file> also draws a help box into a PBM to look at.
  *
  *   sudo sysctl -w vm.mmap_min_addr=0      # see ztramp.h
  *   cc -std=gnu99 -Wall -no-pie -I sw/common -o /tmp/test_dialog \
@@ -165,6 +166,120 @@ int main(void) {
 	expect(dlg.wset.focused == 0, "confirm focuses Yes");
 	key(' ', 0);
 	expect(dlg.done && dlg.result == Z_DIALOG_YES, "Space presses it");
+
+	// -- help (z_dialog_help()) --
+
+	printf("help: wraps at word boundaries, tabs line up\n");
+	{
+		static const char t[] =
+			"A short line.\n"
+			"\n"
+			"This one is long enough that it has to wrap at least once in a box this narrow.\n"
+			"Ctrl+S\tSave the file, and this description wraps under itself.\n"
+			"Averyveryverylongwordwithnospacesthatcannotbreakanywhereatallreally\n";
+		char line[HELP_COLS_MAX + 1];
+		int hang = 0, n = 0, bad = 0, hung = 0;
+		help_layout(t, 30 * 5 + 2 * DLG_MARGIN);
+		expect(help.cols == 30, "30 columns in a 30-column box");
+		for (const char *p = t; *p; n++) {
+			int h0 = hang;
+			p = help_next(p, help.cols, &hang, line);
+			if ((int)strlen(line) > help.cols) bad++;
+			if (h0 == HELP_TAB && !strncmp(line, "            ", HELP_TAB) && line[HELP_TAB] != ' ')
+				hung++;
+			if (n == 2 && strcmp(line, "This one is long enough that"))
+				printf("    line 2 is \"%s\"\n", line), bad++;
+		}
+		expect(n == help.total, "help_count() agrees with drawing");
+		expect(!bad, "no line wider than the box, words kept whole");
+		expect(hung >= 1, "a wrapped key description continues at the tab column");
+		expect(!help.sb_on && help.rows == help.total, "short text: no scrollbar, box fits it");
+	}
+
+	printf("help: long text scrolls; keys move it, Enter closes\n");
+	{
+		static char t[4096];
+		int n = 0;
+		for (int i = 0; i < 40; i++) {
+			const char *l = "F3\tFind the next match.\n";
+			while (*l) t[n++] = *l++;
+		}
+		t[n] = 0;
+		memset(&dlg, 0, sizeof(dlg));
+		dlg.win.w = HELP_W;
+		dlg.win.h = 200;
+		help_layout(t, HELP_W - DLG_FRAME_W);
+		expect(help.sb_on && help.rows == HELP_ROWS && help.total == 40,
+			"40 lines: a scrollbar, HELP_ROWS shown");
+		expect(help.cols < (HELP_W - DLG_FRAME_W - 2 * DLG_MARGIN) / 5,
+			"the scrollbar takes its width from the text");
+		z_scrollbar_init(&help.sb, &dlg.win, Z_SB_VERT);
+		z_scrollbar_set_range(&help.sb, help.total, help.rows);
+		dlg.btn_y = 170;
+		dlg_buttons_init(labels_help, 1);
+		z_widget_focus_set(&dlg.wset, 0);
+		help_key(Z_KEY_DOWN, 0);
+		expect(help.top == 1, "Down scrolls a line");
+		help_key(Z_KEY_END, 0);
+		expect(help.top == 40 - HELP_ROWS, "End: the last page, not past it");
+		help_key(Z_KEY_PAGEUP, 0);
+		expect(help.top == 40 - HELP_ROWS - (HELP_ROWS - 1), "PgUp: a page less a line");
+		help_key(Z_KEY_HOME, 0);
+		expect(help.top == 0, "Home");
+		help_wheel(-1);
+		expect(help.top == 3, "wheel down: three lines");
+		expect(!dlg.done, "scrolling does not close");
+		help.doc = NULL;
+		help_key(0x0d, 0);
+		expect(dlg.done, "Enter on Close closes");
+		memset(&dlg, 0, sizeof(dlg));
+		help_key(Z_KEY_F1, 0);
+		expect(dlg.done, "F1 again closes");
+	}
+
+	printf("help: Read docs only by choice\n");
+	{
+		memset(&dlg, 0, sizeof(dlg));
+		dlg.win.w = HELP_W;
+		dlg.win.h = 120;
+		help_layout("x", HELP_W - DLG_FRAME_W);
+		help.doc = NULL;			// so activating it launches nothing here
+		dlg.btn_y = 90;
+		dlg_buttons_init(labels_help_docs, 2);
+		z_widget_focus_set(&dlg.wset, dlg.widget_count - 1);
+		expect(dlg.wset.focused == 1, "Close starts focused, not Read docs");
+		expect(dlg.widgets[1].x > dlg.widgets[0].x, "Close is the rightmost button");
+		expect(dlg.widgets[1].x + DLG_BTN_W == z_win_content_w(&dlg.win) - DLG_MARGIN,
+			"at the right margin");
+	}
+
+	// A picture, for the eye: HELP_PBM=/path/help.pbm
+	if (getenv("HELP_PBM")) {
+		static const char t[] =
+			"Text is a plain text editor for notes, lists and Markdown.\n"
+			"\n"
+			"Ctrl+O\tOpen a file\n"
+			"Ctrl+S\tSave (Ctrl+Shift+S: save as)\n"
+			"Ctrl+F\tFind; F3 finds the next match\n"
+			"Ctrl+Z\tUndo the last change, and again for the one before\n"
+			"F1\tThis help\n"
+			"\n"
+			"Select with Shift and the arrows, or drag with the mouse. "
+			"Files in /tmp are on the RAM disk: save them to /home to keep them.\n";
+		memset(&dlg, 0, sizeof(dlg));
+		dlg.win = scratch;
+		dlg.win.w = HELP_W;
+		help_layout(t, HELP_W - DLG_FRAME_W);
+		help.doc = "text_editor";
+		dlg.win.h = 4 + DLG_MARGIN + help.rows * DLG_LINE_H + DLG_MARGIN + DLG_BTN_H + DLG_MARGIN;
+		dlg.win.clip[0].x1 = dlg.win.x + dlg.win.w - 1;
+		dlg.win.clip[0].y1 = dlg.win.y + dlg.win.h - 1;
+		dlg.btn_y = z_win_content_h(&dlg.win) - DLG_MARGIN - DLG_BTN_H;
+		dlg_buttons_init(labels_help_docs, 2);
+		z_widget_focus_set(&dlg.wset, 1);
+		help_repaint();
+		z_render_write(getenv("HELP_PBM"), &dlg.win, 2);
+	}
 
 	printf("test_dialog: %d checks, %d failed\n", checks, failures);
 	return failures ? 1 : 0;

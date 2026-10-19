@@ -441,6 +441,8 @@ reads.
 | `h` or `?` | help — the key list with what each one does |
 | `q`, Escape, close icon | quit |
 
+**F1** shows a short help box ([app_help.md](app_help.md)).
+
 `h` puts the bindings on screen **with their meanings**. A list of keys
 without them is a reminder, not help: only readable by someone who
 already knows what they do. Any key dismisses it, and the key that

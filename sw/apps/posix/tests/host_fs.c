@@ -88,10 +88,11 @@ int fs_write_chunk(int h, const void *buf, int len) {
     return (int)fwrite(buf, 1, (size_t)len, handles[h]);
 }
 
+/* 1 on success, 0 on failure, as zfsapp.h says -- this returned the
+ * new offset once, so a seek to 0 read as a failure (unzip seeks). */
 int fs_seek(int h, uint32_t off) {
-    if (h < 0 || h >= MAXH || !handles[h]) return -1;
-    if (fseek(handles[h], (long)off, SEEK_SET) != 0) return -1;
-    return (int)ftell(handles[h]);
+    if (h < 0 || h >= MAXH || !handles[h]) return 0;
+    return fseek(handles[h], (long)off, SEEK_SET) == 0 ? 1 : 0;
 }
 
 int fs_close_handle(int h) {

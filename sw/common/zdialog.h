@@ -167,20 +167,22 @@ bool z_dialog_prompt_secret(const z_dialog_ctx_t *ctx, const char *title,
 
 // -- help (F1) --
 //
-// Opens an app's manual: /docs/<doc>.md in `read`, at the heading
-// "Using it" -- or, where `read` is not on the card, in `text` (a core
-// app, always in flash), as plain Markdown. One document per app, the
-// same one GitHub shows, so the help cannot drift from the docs.
-// docs/app_help.md.
+// The app's own help, in a small box: `text` word-wrapped to a fixed
+// width (the same for every app), with a scrollbar when it is longer
+// than the box, and Close. When `read` is installed and the app's
+// manual /docs/<doc>.md is on the card, "Read docs" sits beside Close
+// and opens it. `doc` may be NULL for an app with no manual.
 //
-// z_help_open() says what happened; z_dialog_help() does the same and,
-// when there is no manual to show -- a system running from flash with
-// no card, whose /docs is on the card -- says so in a dialog instead of
-// doing nothing.
-#define Z_HELP_OK		0
-#define Z_HELP_NO_DOC	1	// /docs/<doc>.md is not there (no card)
-#define Z_HELP_NO_APP	2	// neither read nor text would start
-int z_help_open(const char *doc);
-void z_dialog_help(const z_dialog_ctx_t *ctx, const char *doc);
+// `text` follows two rules: '\n' ends a line (an empty line separates
+// paragraphs), and '\t' moves to a fixed column, with a wrapped line
+// continuing there -- so "Ctrl+S\tSave" lines up as a table of keys.
+// Keep it to what fits a few screens: what the app is for, its keys,
+// how to do the main thing. docs/app_help.md.
+//
+// ctx->on_msg may be NULL: the dialog then keeps the parent window's
+// region current and acks its redraws itself, and the caller repaints
+// that window once this returns.
+void z_dialog_help(const z_dialog_ctx_t *ctx, const char *title,
+	const char *text, const char *doc);
 
 #endif

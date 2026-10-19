@@ -194,4 +194,18 @@ int layout_draw(const html_line_t *l, const layout_cfg_t *cfg,
 bool layout_line_range(const html_line_t *l, const layout_cfg_t *cfg,
 	int n, uint16_t *start, uint16_t *end);
 
+// Where character `off` of the block text is drawn: its display line,
+// the screen x of its cell, the cell size, and where that line ends
+// (exclusive). For find-in-page's highlight (docs/web_app.md, "Find in
+// page"). False for a block with no text rows, or past the last line.
+typedef struct {
+	int			line;
+	int			x;
+	int			cw, ch;
+	uint16_t	end;
+} layout_loc_t;
+
+bool layout_locate(const html_line_t *l, const layout_cfg_t *cfg,
+	uint16_t off, layout_loc_t *loc);
+
 #endif

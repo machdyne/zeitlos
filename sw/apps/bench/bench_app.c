@@ -661,7 +661,7 @@ static void modules_tick(void) {
 
 /* ---- messages ---- */
 
-static bool quit, open_wanted;
+static bool quit, open_wanted, help_wanted;
 
 static void on_msg(z_msg_t *m) {
     z_port_t *c;
@@ -687,7 +687,8 @@ static void on_msg(z_msg_t *m) {
     case Z_WM_KEY: {
         uint32_t k = Z_WM_UNPACK_KEY_KEYSYM(m->obj.val.uint32);
         if (!Z_WM_UNPACK_KEY_PRESSED(m->obj.val.uint32)) break;
-        if (k == Z_KEY_F5) load();
+        if (k == Z_KEY_F1) help_wanted = true;  /* not from inside a handler */
+        else if (k == Z_KEY_F5) load();
         else if (k == Z_KEY_F6) {
             view_mode = (view_mode + 1) % 3;
             log_follow = true;
@@ -776,6 +777,28 @@ static void open_netlist(void) {
     load();
 }
 
+/* F1 (docs/app_help.md). Virtual time, the modules and the real pins
+ * stand still while it is up; bench0's clients are still answered. */
+static void show_help(void) {
+    static const char help[] =
+        "Virtual parts, nets and I2C buses from a netlist, shown live.\n\n"
+        "Click\tPress a button, flip a switch\n"
+        "Click a pin\tIts net, in the status line\n"
+        "F5\tRead the netlist again\n"
+        "F6\tCards, bus log, consoles\n"
+        "1, 2, 3\tTime at x1, x60, x3600\n"
+        "Space\tPause time\n"
+        "Esc\tThe status line back\n"
+        "Up/Down\tScroll (or the wheel)\n\n"
+        "Open another netlist with the open icon in the title bar. "
+        "Edit a .net in a text editor, then press F5.";
+    z_dialog_ctx_t dlg = { 0 };
+    dlg.parent = &win;
+    dlg.on_msg = dialog_msg;
+    z_dialog_help(&dlg, "Bench help", help, "bench");
+    last_ticks = z_uptime_ticks();          /* no jump in virtual time */
+}
+
 int main(void) {
     z_launch_path_take(path, sizeof(path));
     if (!z_fb_hw_blit_mem_available()) {
@@ -802,6 +825,10 @@ int main(void) {
         if (open_wanted) {
             open_wanted = false;
             open_netlist();
+        }
+        if (help_wanted) {
+            help_wanted = false;
+            show_help();
         }
         real_tick();
         modules_tick();

@@ -30,6 +30,12 @@ apps. Windows can be moved around by their titlebar.
 
 ### Using the keyboard
 
+**F1** is the help key: in an app, it shows a short help box with
+what the app does and its keys, and -- with `read` and the manuals on
+the SD card -- a **Read docs** button for the full page
+([app_help.md](app_help.md)). In `term` it works on the start panel;
+once connected, F1 goes to the other end like any other key.
+
 Zeitlos works fully without a mouse if you don't have one plugged in --
 and without a keyboard, through the on-screen one (Super+K). The rule
 of thumb: **Alt** acts on the focused window, **Super** on the desktop as
@@ -106,6 +112,7 @@ it). New windows open on the workspace you are on.
 
 | Keys | What they do |
 |---|---|
+| F1 | on the start panel: help |
 | F11 | the Open bar -- go somewhere new |
 | F12 | disconnect and return to the start panel |
 | Esc | on the start panel: hide it to read the old session |
@@ -128,6 +135,8 @@ on in `settings`.
 | F2 | rename |
 | Delete | delete (asks first) |
 | Tab | move between the list and the buttons |
+| Ctrl+F | find by name, or "text" inside files, here and below |
+| Esc | stop a find, copy or delete; leave the results |
 
 **The web browser** ([web_app.md](web_app.md))
 
@@ -135,12 +144,17 @@ on in `settings`.
 |---|---|
 | `g` or Ctrl+L | type an address (Gopher and Gemini too) |
 | Enter | go to the typed address -- or follow the selected link |
-| Escape | stop a page that is loading; in the address field, put back what was there |
+| Escape | stop a page that is loading, a find or a save; in the address field, put back what was there |
 | Tab | select the next link |
 | `b` or Backspace / `f` | back / forward |
 | `r` | reload |
 | Arrows, PgUp / PgDn, Space | scroll |
 | Home / End | top / bottom of the page |
+| Ctrl+F / F3 or Ctrl+G | find in the page / find the next |
+| Ctrl+D | bookmark the page (on a bookmarked page: remove it) |
+| Ctrl+B | show the bookmarks |
+| Ctrl+S | save the page's source to a file |
+| Shift+Enter | save where the selected link points |
 
 **IRC** ([irc_app.md](irc_app.md))
 

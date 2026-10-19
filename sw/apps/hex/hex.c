@@ -1471,7 +1471,21 @@ static void handle_key(uint32_t keysym, uint8_t mods) {
 
 	bool ctrl = (mods & Z_KBD_MOD_CTRL) != 0;
 
-	if (keysym == Z_KEY_F1) { z_dialog_help(&dlg_ctx, "hex_editor"); return; }	// docs/app_help.md
+	if (keysym == Z_KEY_F1) {	// docs/app_help.md
+		static const char help[] =
+			"Look at and change any file byte by byte.\n\n"
+			"0-9, a-f\tType a byte, two digits (hex pane)\n"
+			"Tab\tSwitch hex / character pane\n"
+			"Backspace\tBack a byte (changes nothing)\n"
+			"Ctrl+G\tGo to an offset (hex; .123 decimal)\n"
+			"Ctrl+Home/End\tStart, end of the file\n"
+			"Ctrl+O/S\tOpen, save\n"
+			"Ctrl+Z\tUndo\n"
+			"Ctrl+Q\tClose\n\n"
+			"It overwrites: the file never changes size.";
+		z_dialog_help(&dlg_ctx, "Hex help", help, "hex_editor");
+		return;
+	}
 
 	switch (keysym) {
 

@@ -30,6 +30,26 @@ verified certificate chain. See "Where this stands" at the end.
 | Documents | streaming HTML parser, sparse checkpoint index, unlimited page size |
 | Images | BMP, PNM, GIF, JPEG and PNG, dithered to 1bpp; SVG rendered as vectors |
 
+**F1** shows a short help box ([app_help.md](app_help.md)).
+
+### Keys
+
+| Key | What it does |
+|---|---|
+| `g`, Ctrl+L | edit the address (Enter goes, Escape puts back what was there) |
+| Tab / Enter | select the next link / follow it |
+| Shift+Enter | save where the selected link points, without opening it ([Saving](#saving)) |
+| Arrows, PgUp / PgDn, Space, Home / End | scroll |
+| `b` or Backspace / `f` | back / forward |
+| `r` | reload |
+| Ctrl+F | find text in the page ([Find in page](#find-in-page)) |
+| F3, Ctrl+G | find the next match, wrapping round at the end |
+| Ctrl+D | bookmark this page; on a bookmarked page, remove it (asks first) ([Bookmarks](#bookmarks)) |
+| Ctrl+B | show the bookmarks |
+| Ctrl+S | save the page's source to a file ([Saving](#saving)) |
+| Escape | stop loading, finding or saving |
+| F1 | help |
+
 ---
 
 ## Why no JavaScript
@@ -342,6 +362,85 @@ one. `%XX` in a link is decoded before the file is opened, so
 `net` is not needed and not asked. The page is read as UTF-8: there
 are no response headers to name another character set.
 
+## Bookmarks
+
+**Ctrl+D** bookmarks the page on screen, at once, and the URL field says
+"bookmarked". On a page that is already bookmarked it asks whether to
+remove the bookmark instead -- one key both ways, so there is no list to
+manage.
+
+**Ctrl+B** shows them, as a page at the address `about:bookmarks`:
+generated as HTML into the spool and then shown by the same renderer as
+any page, so Tab, Enter, clicking, scrolling, Back and Find all work on
+it with no code of their own. It can be typed into the address bar too.
+
+They live in `/data/web/bookmarks.txt` (`Z_PATH_WEB_BOOKMARKS`), one per
+line:
+
+```
+https://en.wikipedia.org/wiki/FPGA<TAB>Field-programmable gate array
+gemini://geminiprotocol.net/<TAB>Project Gemini
+```
+
+Plain text so that it can be edited, sorted or copied with anything. A
+line with no tab is a URL that is its own title; blank lines and lines
+starting with `#` are skipped. The file is read when the list is shown,
+and **written only when Ctrl+D is pressed** -- never on exit, never in
+the background. `bookmark.c`, tested by `tests/test_bookmark.c`.
+
+## Find in page
+
+**Ctrl+F** asks for text (a prompt box), and the page scrolls to the
+first match at or below the top of the view, with a box drawn round it.
+**F3** or **Ctrl+G** finds the next; past the end the search wraps to the
+top and says so ("found after wrapping to the top"), and when the text is
+nowhere on the page it says that instead. Case does not matter. The
+match is looked for in the text as displayed -- `&amp;` is `&` -- not in
+the markup.
+
+A long page is not repainted to be searched. The search walks the
+document's blocks as text with `page_scan()` (page.c), which hands each
+block over in place from the checkpoint index, 32 blocks per pass of the
+main loop: the window keeps answering, the URL field shows how far it
+has got, and **Escape stops it at once**. Only the match is drawn -- the
+view does not move at all when the match is already on screen.
+
+`find.c` holds the search itself -- what a match is, where to go next,
+when a wrapped search has come round to where it began -- and
+`layout_locate()` says where a character is drawn. `tests/test_find.c`
+runs both against strings and through a 3,000-block page in steps of
+every size.
+
+## Saving
+
+**Ctrl+S** saves the page's **source** -- the HTML, gemtext or text the
+server sent, not the rendered text -- to a file chosen in the save dialog,
+which starts in `/home` and offers a name from the URL: the last part of
+the path, or `page.html` / `page.gmi` / `page.txt`. An existing file is
+replaced only after asking.
+
+**Shift+Enter** on a link selected with Tab saves where it points --
+a file, an image, another page -- without opening it.
+
+How the bytes are found:
+
+- An **http, https or file** page is already in the spool exactly as it
+  arrived (with `Content-Encoding: gzip` undone), so it is **copied** from
+  there -- 16KB per pass of the main loop, no network.
+- A **Gopher or Gemini** page is spooled as the HTML it was converted to,
+  which is not its source, so it -- like a saved link -- is **fetched
+  again** straight into the file, Gemini's status line stripped. That is
+  the image fetch with a different destination: the page stays on
+  screen, untouched, and the address bar keeps its address.
+
+Either way the file is written as `<name>.part` and renamed to the name
+only when every byte is there. **Escape** (or Stop) cancels at once and
+removes the `.part`, as does a failure -- a server error status, a full
+card, a Gemini response over the 4MB cap -- so a save never leaves a
+half-written file under the name asked for. While a save runs, only
+scrolling and Escape are taken: anything that fetched would take the
+connection or the spool out from under it.
+
 ---
 
 ## Phases
@@ -363,7 +462,7 @@ are no response headers to name another character set.
 | 5b | SVG rendering | **done** -- see [svg.md](svg.md) |
 | 5c | TCP out-of-order reassembly | written, tested, and OFF -- see [networking.md](networking.md) |
 | 5d | TLS session resumption | see [tls_resumption.md](tls_resumption.md) |
-| 5e | Progressive rendering, reader mode, anchors, GET forms, bookmarks, find-in-page, a real cache | |
+| 5e | Progressive rendering, reader mode, anchors, GET forms, bookmarks, find-in-page, saving, a real cache | bookmarks, find in page and saving to disk **done**; the rest open |
 | 6 | Optional off-board proxy for the scripted web | |
 
 ### Where the time goes
@@ -446,6 +545,8 @@ against hardware as well.
 | `html.c` | streaming HTML parser | `test_html.c`, 97 + invariants |
 | `layout.c` | wrapping, styles, images, hit testing | `test_layout.c`, 249 checks |
 | `page.c` | checkpoint index, scroll arithmetic | `test_page.c`, 193 checks |
+| `find.c` | find in page | `test_find.c`, 62 checks, through `page.c` and `layout.c` |
+| `bookmark.c` | the bookmarks file and `about:bookmarks` | `test_bookmark.c`, 31 checks |
 | `tls_crypto.c` | HMAC, HKDF, key schedule, AEAD | `test_tls_crypto.c`, 38 checks |
 | `tls.c` | record layer, TLS 1.3 handshake | `test_tls.c`, live handshakes against OpenSSL |
 | `der.c` | DER reader | `test_x509.c`, plus a mutation sweep under ASan |
@@ -480,7 +581,8 @@ make render DOC=~/pages/wikipedia.html && display /tmp/web.pbm
 Keys: arrows and PageUp/PageDown scroll, Home/End jump, Tab selects a
 link, Enter follows it, `g` or Ctrl+L focuses the URL bar, `b` or
 Backspace goes back, `f` forward, `r` reloads. In the URL bar, Enter
-navigates and Escape restores what was there.
+navigates and Escape restores what was there. Ctrl+F finds, Ctrl+D and
+Ctrl+B bookmark, Ctrl+S saves -- see "Keys" at the top.
 
 The mouse works on links, images, the URL bar, the Back and Forward
 buttons, and the scrollbar, and the wheel scrolls three lines a notch

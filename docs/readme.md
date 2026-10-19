@@ -164,11 +164,12 @@ with [welcome](welcome.md); to program it, [kernel](kernel.md) and
 
 | Document | Subject |
 |---|---|
-| [file\_browser](file_browser.md) | `files` |
+| [file\_browser](file_browser.md) | `files`: browse, find, copy, move, delete |
+| [zwalk](zwalk.md) | find, copy and delete a folder tree a step at a time, stoppable at once |
 | [text\_editor](text_editor.md) | `text` |
 | [sheet\_app](sheet_app.md) | `sheet` |
 | [convert](convert.md) | `convert`: documents, tables, archives |
-| [app\_help](app_help.md) | F1: help in apps, from these docs |
+| [app\_help](app_help.md) | F1: a help box in every app, with a button to these docs |
 | [web\_app](web_app.md) | `web` |
 | [read\_app](read_app.md) | `read` |
 | [hex\_editor](hex_editor.md) | `hex` |

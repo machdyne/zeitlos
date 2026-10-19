@@ -29,6 +29,7 @@
 #include "../../common/zfont.h"
 #include "../../common/zkbd.h"
 #include "../../common/zedit.h"
+#include "../../common/zdialog.h"
 #include "../../common/zport.h"
 #include "../../common/zobj.h"
 #include "../../common/zdns.h"
@@ -693,7 +694,11 @@ static void repaint(void) {
 
 // -- input events --
 
+static void help_box(void);
+
 static void handle_key(uint32_t k, uint8_t mods) {
+
+	if (k == Z_KEY_F1) { help_box(); return; }	// docs/app_help.md
 
 	if (mods & Z_KBD_MOD_CTRL) {
 		if (k == 'n' || k == 'N') { switch_view(1); return; }
@@ -819,6 +824,28 @@ static void handle_msg(z_msg_t *msg) {
 
 	}
 
+}
+
+// F1 (docs/app_help.md). handle_msg() is its on_msg: keys and the
+// pointer are the box's, so what reaches it is the window's and the
+// connection's, and the chat keeps flowing underneath.
+static void help_on_msg(z_msg_t *msg, void *user) {
+	(void)user;
+	handle_msg(msg);
+}
+
+static void help_box(void) {
+	static const char help[] =
+		"Chat on IRC: channels and private messages.\n\n"
+		"Enter\tSend the line, or run a /command\n"
+		"Ctrl+N/P\tNext / previous view (channel or person)\n"
+		"PgUp/PgDn\tScroll back and forward (or the wheel)\n\n"
+		"Start with /connect host [port], then /join #channel. "
+		"Lines not starting with / go to the current view. "
+		"/help lists all the commands.";
+	z_dialog_ctx_t ctx = { &win, help_on_msg, NULL };
+	z_dialog_help(&ctx, "IRC help", help, "irc_app");
+	dirty = true;
 }
 
 int main(void) {

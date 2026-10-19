@@ -7,7 +7,7 @@ APP = calc
 # zfix.o is the arithmetic itself, shared with sw/apps/sheet
 # (sw/common/zfix.c).
 OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o zwidget.o zspeak.o \
-	zfix.o calc_core.o calc.o
+	zfix.o zdialog.o zfsapp.o calc_core.o calc.o
 
 calc_core.o: calc_core.c calc_core.h
 	$(CC) $(CFLAGS) -c calc_core.c -o calc_core.o

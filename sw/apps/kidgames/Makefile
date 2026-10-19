@@ -21,7 +21,13 @@ APP_CFLAGS = $(EXTRA_CFLAGS)
 # using them needs the object in the link. It was missing until the
 # first real RISC-V link -- see `linkcheck` below for why nothing on
 # this side noticed, and what now does.
-COMMONOBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o zrng.o zfsapp.o
+#
+# zdialog.o is kgui.c's, for the F1 help box (docs/app_help.md);
+# zwidget/zspeak/zedit/zflist are what zdialog.c references. Section GC
+# drops the open/save dialogs' half (zedit, zflist) from the image, but
+# `linkcheck` works on whole objects, so they are listed all the same.
+COMMONOBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o zrng.o zfsapp.o \
+	zwidget.o zspeak.o zedit.o zflist.o zdialog.o
 
 APPOBJS = kgui.o kgwidget.o kgpad.o kgfont.o kgfmt.o \
 	kgsave.o kgrand.o wordlist.o levelup.o kground.o \
@@ -83,7 +89,7 @@ PANELSRC = kgui.c kgpad.c kgfont.c kgfmt.c \
 TESTSRC = $(PANELSRC) kgwidget.c games.c levelup.c wordlist.c \
 	kground.c kgsave.c games_word.c games_number.c games_guess.c \
 	games_memory.c games_animal.c animals.c kgart.c kgsound.c \
-	tests/kg_rand_host.c
+	tests/kg_rand_host.c tests/kg_dialog_stub.c
 
 # The pure half: a parser, a serialiser and some word tables, with no
 # Zeitlos headers and no framebuffer anywhere in them. Built with
@@ -136,7 +142,8 @@ includecheck:
 # asm (`rdcycle`) and cannot be assembled on an x86 build machine. Its
 # exports are allow-listed by prefix instead -- one narrow hole, named
 # rather than papered over.
-COMMON_HOSTABLE = zeitlos zobj zgfx zfont_data zwin zfsapp
+COMMON_HOSTABLE = zeitlos zobj zgfx zfont_data zwin zfsapp zwidget zspeak \
+	zedit zflist zdialog
 
 # Only symbols with one of these prefixes are ours; anything else
 # undefined is libc (memcpy, strlen, puts) and resolves at the real
@@ -283,7 +290,7 @@ WHAT ?= menu
 render:
 	$(HOSTCC) $(PANELFLAGS) -o /tmp/kg_render tests/render.c $(PANELSRC) \
 		kgsave.c wordlist.c levelup.c animals.c kgart.c kgsound.c \
-		tests/kg_rand_host.c
+		tests/kg_rand_host.c tests/kg_dialog_stub.c
 	/tmp/kg_render /tmp/kidgames.pbm $(WHAT)
 	@echo "wrote /tmp/kidgames.pbm ($(WHAT)) -- others: make render \
 WHAT=pad|digits|field|msg|font"

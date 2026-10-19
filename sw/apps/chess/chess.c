@@ -55,6 +55,7 @@
 #include "../../common/zsoc.h"
 #include "../../common/zkbd.h"
 #include "../../common/zrng.h"
+#include "../../common/zdialog.h"
 
 #include "ce_core.h"
 #include "ce_eval.h"
@@ -447,6 +448,42 @@ static void do_action(ci_action_t a) {
 
 /* -- messages ------------------------------------------------------- */
 
+/* F1's box (docs/app_help.md) holds the keys and the pointer while it
+ * is up; what reaches this is the window's, handled as pump() does. */
+static void help_on_msg(z_msg_t *msg, void *user) {
+
+	(void)user;
+
+	switch (msg->subject) {
+	case Z_WM_SET_CLIP:
+		z_win_apply_clip(&win, &msg->obj);
+		break;
+	case Z_WM_REDRAW:
+		if (msg->obj.type != Z_UINT32) break;
+		if (z_win_redraw_id(msg->obj.val.uint32) != win.id) break;
+		z_win_apply_redraw(&win, msg->obj.val.uint32);
+		repaint();
+		z_win_redraw_done(&win);
+		break;
+	case Z_WM_WINDOW_MOVED:
+		z_win_parse_rect(&win, &msg->obj);
+		relayout();
+		break;
+	case Z_WM_WINDOW_RESIZED:
+		if (z_win_apply_resized(&win, &msg->obj)) {
+			relayout();
+			repaint();
+		}
+		break;
+	case Z_WM_CLOSE:
+		running = false;
+		break;
+	default:
+		break;
+	}
+
+}
+
 static void handle_key(uint32_t packed, bool allow_input) {
 
 	uint32_t sym = Z_WM_UNPACK_KEY_KEYSYM(packed);
@@ -482,10 +519,28 @@ static void handle_key(uint32_t packed, bool allow_input) {
 
 	if (sym == Z_KEY_F2) { do_action(CI_GAME_MODE); return; }
 
+	if (sym == Z_KEY_F1 && !game_mode) {	/* docs/app_help.md */
+		static const char help[] =
+			"Chess against the computer, at eight levels, by keyboard "
+			"or mouse.\n\n"
+			"Typing\tA move: e4, Nf3, e2e4, O-O; Enter plays it\n"
+			"Click\tA piece, then the square to move it to\n"
+			"Esc\tClear the line, put the piece down, stop "
+			"the engine thinking\n"
+			"F2\tFull screen (Esc comes back)\n\n"
+			"Commands, typed the same way: new [white|black|two|demo], "
+			"level 1-8, undo, flip, hint, hints, moves, fen, bench, "
+			"quit.";
+		z_dialog_ctx_t ctx = { &win, help_on_msg, NULL };
+		z_dialog_help(&ctx, "Chess help", help, "chess_app");
+		repaint();
+		return;
+	}
+
 	if (sym == Z_KEY_F1) {
-		/* A rolling tour of the help text on the message line. The
-		 * panel is too narrow for all of it at once and a modal help
-		 * window would be a second window to service. */
+		/* Full screen, a box on the desktop underneath would not be
+		 * seen: a rolling tour of the help text on the message line
+		 * instead. The panel is too narrow for all of it at once. */
 		static int hl;
 		const char *s = input_help_line(hl++);
 		if (!s) { hl = 0; s = input_help_line(hl++); }

@@ -96,6 +96,7 @@
 #include "../../common/zfont.h"
 #include "../../common/zkbd.h"
 #include "../../common/zwidget.h"
+#include "../../common/zdialog.h"
 #include "../../common/zcfg.h"		// system.rtc.timezone
 
 // Fixed size, and small: a clock is something you leave open in a
@@ -529,7 +530,38 @@ static void handle_mouse(uint32_t packed) {
 
 }
 
+// The help box's view of this window while it is up: what the main
+// loop does with these messages. The hands stand still meanwhile.
+static void help_on_msg(z_msg_t *m, void *user) {
+	(void)user;
+	if (m->subject == Z_WM_SET_CLIP) {
+		z_win_apply_clip(&win, &m->obj);
+	} else if (m->subject == Z_WM_REDRAW) {
+		z_win_apply_redraw(&win, m->obj.val.uint32);
+		layout();
+		repaint();
+		z_win_redraw_done(&win);
+	} else if (m->subject == Z_WM_WINDOW_MOVED) {
+		z_win_parse_rect(&win, &m->obj);
+		layout();
+	}
+}
+
 static void handle_key(uint32_t keysym, uint8_t mods) {
+
+	if (keysym == Z_KEY_F1) {	// docs/app_help.md
+		static const char help[] =
+			"A wall clock, analog or digital.\n\n"
+			"Tab, arrows\tChoose Analog or Digital\n"
+			"Enter/Space\tSwitch to it\n\n"
+			"Or click the buttons. The time comes from the RTC, "
+			"which net sets over NTP; until then it shows no time. "
+			"The time zone is set in settings, and shown under the "
+			"digital time.";
+		z_dialog_ctx_t ctx = { &win, help_on_msg, NULL };
+		z_dialog_help(&ctx, "Clock help", help, "clock_app");
+		return;
+	}
 
 	switch (keysym) {
 

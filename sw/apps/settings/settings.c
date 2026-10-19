@@ -73,6 +73,7 @@
 #include "../../common/zcfg.h"
 #include "../../common/zrtc.h"		// the city table, and z_tz_parse()
 #include "../../common/zauth.h"		// the password and screen lock: docs/security.md
+#include "../../common/zpaths.h"
 
 // Fixed size, not resizable: a preferences panel has no content to
 // reveal.
@@ -965,6 +966,21 @@ static void handle_mouse(uint32_t packed) {
 }
 
 static void handle_key(uint32_t keysym, uint8_t mods) {
+
+	if (keysym == Z_KEY_F1) {	// docs/app_help.md
+		static const char help[] =
+			"System preferences, saved to " Z_PATH_SYS_CONFIG ".\n\n"
+			"Tab\tNext control (Shift+Tab back)\n"
+			"Arrows\tMove focus; in the list: select\n"
+			"Enter/Space\tPress the focused button\n"
+			"A-Z, 0-9\tJump to a time zone\n"
+			"Enter\tIn the list: save the zone\n\n"
+			"Display colours apply at once. Pick a time zone, then "
+			"Set time zone. Edit changes a value; Reload file "
+			"re-reads the file after editing it elsewhere.";
+		z_dialog_help(&dlg, "Settings help", help, "settings_app");
+		return;
+	}
 
 	bool back = (mods & Z_KBD_MOD_SHIFT) != 0;
 

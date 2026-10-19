@@ -103,6 +103,8 @@ Everything works without a pointer, and not via Tab: digits, `.`,
 `+ - * /`, Enter (`=`), Escape (clear) and Backspace all do the
 obvious thing directly.
 
+**F1** shows a short help box ([app_help.md](app_help.md)).
+
 Tab focus over the keypad exists for consistency with the rest of the
 system, and Space presses the focused button. **Enter is deliberately
 not that** — it's `=` on a calculator, which is what a hand reaching

@@ -12,7 +12,9 @@ MOD_MAX_FILE ?= $(shell echo $$((192*1024)))
 MOD_VOLUME ?= 35
 APP_CFLAGS = -DMOD_MAX_FILE=$(MOD_MAX_FILE) -DMOD_VOLUME_DEFAULT=$(MOD_VOLUME)
 
-OBJS = zeitlos.o zobj.o zsoc.o zfsapp.o zkbd.o zgfx.o zwin.o zfont_data.o modplay.o track.o
+# zdialog.o (with the zwidget.o and zspeak.o it needs): the F1 help box.
+OBJS = zeitlos.o zobj.o zsoc.o zfsapp.o zkbd.o zgfx.o zwin.o zfont_data.o modplay.o \
+	zwidget.o zspeak.o zdialog.o track.o
 
 # Host-side tests for the playback engine.
 #

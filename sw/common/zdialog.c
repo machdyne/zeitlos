@@ -25,7 +25,7 @@
 #include "zflist.h"
 #include "zdialog.h"
 #include "zedit.h"
-#include "zfsapp.h"		// fs_stat(), for z_help_open()
+#include "zfsapp.h"		// fs_stat(), for z_dialog_help()
 
 // -- shared dialog state --
 //
@@ -50,17 +50,29 @@ typedef enum {
 	DLG_KIND_PROMPT,
 } dlg_kind_t;
 
+// What a kind of dialog does with its window. Reached only through
+// this table, so an app links the kinds it opens and no others: a
+// help box (z_dialog_help()) does not pull in the file list, and an
+// app with only confirm boxes does not pull in help. Section GC
+// (docs/build.md) drops whatever no entry point points at.
+typedef struct {
+	void (*repaint)(void);
+	void (*key)(uint32_t keysym, uint8_t mods);
+	void (*mouse)(int cx, int cy, uint8_t buttons);
+	void (*wheel)(int notches);
+} dlg_ops_t;
+
 static struct {
 
 	z_win_t			win;
+	const dlg_ops_t	*ops;
 	const z_dialog_ctx_t	*ctx;
 	dlg_kind_t		kind;
 
 	bool			done;
 	int				result;
 
-	// -- open/save --
-	z_flist_t		flist;
+	// -- open/save -- (the list itself is dlg_flist, below)
 	// The text being typed. The buffer stays here -- z_edit_t does
 	// not own storage, so an app can keep one in static state without
 	// a heap -- and the editing lives in sw/common/zedit.c.
@@ -85,6 +97,12 @@ static struct {
 
 } dlg;
 
+// The open/save dialogs' file list: by far the largest thing here
+// (some 7KB), so it stands apart from `dlg` -- an app that only shows
+// confirm and help boxes then does not carry it, since section GC
+// drops data nothing references as it drops code.
+static z_flist_t dlg_flist;
+
 // -- geometry --
 
 #define DLG_MARGIN      6
@@ -93,6 +111,8 @@ static struct {
 #define DLG_BTN_H       16
 #define DLG_BTN_GAP     6
 #define DLG_FIELD_H     14
+// window width less content width: 2px inset each side (z_win_content_rect())
+#define DLG_FRAME_W     4
 
 // The file dialogs are a fixed size. Deliberately: a resizable dialog
 // means handling Z_WM_WINDOW_RESIZED and relaying out mid-loop, for a
@@ -108,9 +128,44 @@ static struct {
 // -- forward decls --
 
 static void dlg_repaint(void);
+static void dlg_parent(z_msg_t *msg);
 static void dlg_mouse(int cx, int cy, uint8_t buttons);
 static void dlg_activate_button(int act);
 static void dlg_key(uint32_t keysym, uint8_t mods);
+
+// -- the parent's messages --
+//
+// Everything addressed to the app's own window goes to ctx->on_msg.
+// An app with no on_msg (one that only ever opens a help box, say, and
+// has no handler factored out of its loop) still has a parent window
+// that wm keeps talking to while the dialog is up: its visible region
+// changes as the dialog opens and closes, and wm blocks on an ack for
+// every redraw. So the dialog keeps that window's region itself and
+// acks its redraws without painting -- the caller repaints once the
+// dialog returns. Anything else for it is dropped:
+// keys and the pointer are the dialog's while it is modal.
+static void dlg_parent(z_msg_t *msg) {
+
+	const z_dialog_ctx_t *ctx = dlg.ctx;
+
+	if (!ctx) return;
+	if (ctx->on_msg) { ctx->on_msg(msg, ctx->user); return; }
+	if (!ctx->parent) return;
+
+	// The parent is the caller's own window, given as const so that
+	// centering on it cannot change it; keeping its region current is
+	// what the caller's loop would have done with these two.
+	z_win_t *pw = (z_win_t *)ctx->parent;
+
+	if (msg->subject == Z_WM_SET_CLIP) {
+		z_win_apply_clip(pw, &msg->obj);
+	} else if (msg->subject == Z_WM_REDRAW && msg->obj.type == Z_UINT32 &&
+		z_win_redraw_id(msg->obj.val.uint32) == pw->id) {
+		z_win_apply_redraw(pw, msg->obj.val.uint32);
+		z_win_redraw_done(pw);
+	}
+
+}
 
 // -- message routing --
 //
@@ -129,10 +184,10 @@ static void dlg_dispatch(z_msg_t *msg) {
 
 			if (z_win_redraw_id(packed) == dlg.win.id) {
 				z_win_apply_redraw(&dlg.win, packed);
-				dlg_repaint();
+				if (dlg.ops) dlg.ops->repaint();
 				z_win_redraw_done(&dlg.win);
-			} else if (dlg.ctx && dlg.ctx->on_msg) {
-				dlg.ctx->on_msg(msg, dlg.ctx->user);
+			} else {
+				dlg_parent(msg);
 			}
 
 			break;
@@ -152,9 +207,8 @@ static void dlg_dispatch(z_msg_t *msg) {
 			// never been told a region draws nothing (win_use_clip(),
 			// zwin.c), so a dialog that drops it comes up as an empty
 			// frame with no buttons in it.
-			if (!z_win_apply_clip(&dlg.win, &msg->obj) &&
-				dlg.ctx && dlg.ctx->on_msg)
-				dlg.ctx->on_msg(msg, dlg.ctx->user);
+			if (!z_win_apply_clip(&dlg.win, &msg->obj))
+				dlg_parent(msg);
 
 			break;
 
@@ -164,8 +218,8 @@ static void dlg_dispatch(z_msg_t *msg) {
 
 			if (id && id->type == Z_INT32 && id->val.int32 == dlg.win.id)
 				z_win_parse_rect(&dlg.win, &msg->obj);
-			else if (dlg.ctx && dlg.ctx->on_msg)
-				dlg.ctx->on_msg(msg, dlg.ctx->user);
+			else
+				dlg_parent(msg);
 
 			break;
 
@@ -181,8 +235,8 @@ static void dlg_dispatch(z_msg_t *msg) {
 				(int32_t)msg->obj.val.uint32 == dlg.win.id) {
 				dlg.result = Z_DIALOG_CANCEL;
 				dlg.done = true;
-			} else if (dlg.ctx && dlg.ctx->on_msg) {
-				dlg.ctx->on_msg(msg, dlg.ctx->user);
+			} else {
+				dlg_parent(msg);
 			}
 
 			break;
@@ -203,19 +257,20 @@ static void dlg_dispatch(z_msg_t *msg) {
 			int cx, cy;
 			z_win_mouse_content_xy(&dlg.win, msg->obj.val.uint32, &cx, &cy);
 
-			dlg_mouse(cx, cy,
-				(uint8_t)Z_WM_UNPACK_MOUSE_BUTTONS(msg->obj.val.uint32));
+			if (dlg.ops)
+				dlg.ops->mouse(cx, cy,
+					(uint8_t)Z_WM_UNPACK_MOUSE_BUTTONS(msg->obj.val.uint32));
 
 			break;
 
 		}
 
 		case Z_WM_WHEEL:
-			// The file list scrolls; a prompt or a confirm has nothing
-			// to scroll. Ours for the same reason Z_WM_MOUSE is.
-			if (msg->obj.type == Z_UINT32 &&
-			    (dlg.kind == DLG_KIND_OPEN || dlg.kind == DLG_KIND_SAVE))
-				z_flist_wheel(&dlg.flist, Z_WM_WHEEL_NOTCHES(msg->obj.val.uint32));
+			// The file list and the help text scroll; a prompt or a
+			// confirm has nothing to scroll. Ours for the same reason
+			// Z_WM_MOUSE is.
+			if (msg->obj.type == Z_UINT32 && dlg.ops && dlg.ops->wheel)
+				dlg.ops->wheel((int)Z_WM_WHEEL_NOTCHES(msg->obj.val.uint32));
 			break;
 
 		case Z_WM_KEY: {
@@ -225,8 +280,9 @@ static void dlg_dispatch(z_msg_t *msg) {
 			uint32_t packed = msg->obj.val.uint32;
 			if (!Z_WM_UNPACK_KEY_PRESSED(packed)) break;	// ignore key-up
 
-			dlg_key(Z_WM_UNPACK_KEY_KEYSYM(packed),
-				(uint8_t)Z_WM_UNPACK_KEY_MODIFIERS(packed));
+			if (dlg.ops)
+				dlg.ops->key(Z_WM_UNPACK_KEY_KEYSYM(packed),
+					(uint8_t)Z_WM_UNPACK_KEY_MODIFIERS(packed));
 
 			break;
 
@@ -238,8 +294,7 @@ static void dlg_dispatch(z_msg_t *msg) {
 			// else all belong to the parent -- dialogs are neither
 			// resizable nor equipped with extra titlebar icons, so
 			// nothing addressed to this window can turn up here.
-			if (dlg.ctx && dlg.ctx->on_msg)
-				dlg.ctx->on_msg(msg, dlg.ctx->user);
+			dlg_parent(msg);
 
 			break;
 
@@ -309,8 +364,7 @@ static int dlg_run(void) {
 
 		while (z_msg_read(&msg) == Z_OK) {
 			if (msg.subject == Z_WM_REDRAW) saw_redraw = true;
-			if (dlg.ctx && dlg.ctx->on_msg)
-				dlg.ctx->on_msg(&msg, dlg.ctx->user);
+			dlg_parent(&msg);
 		}
 
 		if (saw_redraw) break;
@@ -363,9 +417,9 @@ static void dlg_center(const z_dialog_ctx_t *ctx, int w, int h,
 // mid-session cannot use the plain z_win_create() path.
 static void dlg_create_cb(z_msg_t *msg, void *user) {
 
-	const z_dialog_ctx_t *ctx = (const z_dialog_ctx_t *)user;
+	(void)user;		// dlg.ctx, already set
 
-	if (ctx && ctx->on_msg) ctx->on_msg(msg, ctx->user);
+	dlg_parent(msg);
 
 }
 
@@ -495,7 +549,7 @@ static void path_draw(void) {
 	if (avail <= 0) return;
 
 	int maxch = avail / z_font_5x8.w;
-	const char *p = dlg.flist.path;
+	const char *p = dlg_flist.path;
 	int len = (int)strlen(p);
 
 	char shown[Z_FLIST_PATH_MAX + 4];
@@ -595,8 +649,8 @@ static void dlg_repaint(void) {
 	} else {
 
 		path_draw();
-		z_flist_invalidate(&dlg.flist);
-		z_flist_draw(&dlg.flist, true);
+		z_flist_invalidate(&dlg_flist);
+		z_flist_draw(&dlg_flist, true);
 
 		if (dlg.kind == DLG_KIND_SAVE) field_draw();
 
@@ -616,14 +670,14 @@ static void dlg_accept(char *out, int outlen) {
 
 		// A directory is not an answer -- descend into it instead,
 		// which is what a user pressing OK on a folder means.
-		if (z_flist_selected_is_dir(&dlg.flist)) {
-			z_flist_key(&dlg.flist, 0x0d);		// Enter -- navigate
+		if (z_flist_selected_is_dir(&dlg_flist)) {
+			z_flist_key(&dlg_flist, 0x0d);		// Enter -- navigate
 			path_draw();
-			z_flist_draw(&dlg.flist, true);
+			z_flist_draw(&dlg_flist, true);
 			return;
 		}
 
-		if (!z_flist_selected_path(&dlg.flist, out, outlen)) return;
+		if (!z_flist_selected_path(&dlg_flist, out, outlen)) return;
 
 		dlg.result = Z_DIALOG_YES;
 		dlg.done = true;
@@ -642,7 +696,7 @@ static void dlg_accept(char *out, int outlen) {
 	int n = 0;
 
 	if (dlg.edit.buf[0] != '/') {
-		for (const char *s = dlg.flist.path; *s && n < outlen - 1; s++)
+		for (const char *s = dlg_flist.path; *s && n < outlen - 1; s++)
 			out[n++] = *s;
 		if (n > 0 && out[n - 1] != '/' && n < outlen - 1) out[n++] = '/';
 	}
@@ -771,7 +825,7 @@ static void dlg_mouse(int cx, int cy, uint8_t buttons) {
 
 	}
 
-	int r = z_flist_mouse(&dlg.flist, cx, cy, buttons);
+	int r = z_flist_mouse(&dlg_flist, cx, cy, buttons);
 
 	if (r == Z_FLIST_NONE) return;
 
@@ -779,7 +833,7 @@ static void dlg_mouse(int cx, int cy, uint8_t buttons) {
 	// line to match, and for save, leave the field alone (the name
 	// being typed survives changing directory, which is what makes
 	// "type the name, then go find the folder" work).
-	if (r == Z_FLIST_ACTIVATED && z_flist_activated_dir(&dlg.flist)) {
+	if (r == Z_FLIST_ACTIVATED && z_flist_activated_dir(&dlg_flist)) {
 		path_draw();
 		return;
 	}
@@ -789,8 +843,8 @@ static void dlg_mouse(int cx, int cy, uint8_t buttons) {
 		// Selecting a file copies its name into the field, the way
 		// every save dialog does -- it's the fastest way to overwrite
 		// an existing file, and the user can still edit it.
-		const char *name = z_flist_selected(&dlg.flist);
-		if (name && !z_flist_selected_is_dir(&dlg.flist)) {
+		const char *name = z_flist_selected(&dlg_flist);
+		if (name && !z_flist_selected_is_dir(&dlg_flist)) {
 			field_set(name);
 			field_draw();
 		}
@@ -849,7 +903,7 @@ static void dlg_key(uint32_t keysym, uint8_t mods) {
 
 			z_widget_draw_all(&dlg.wset, false);
 			field_draw();
-			z_flist_draw(&dlg.flist, true);
+			z_flist_draw(&dlg_flist, true);
 
 			return;
 
@@ -958,7 +1012,7 @@ static void dlg_key(uint32_t keysym, uint8_t mods) {
 	if (dlg.kind == DLG_KIND_SAVE && keysym == '\t') {
 		dlg.field_focus = !dlg.field_focus;
 		field_draw();
-		z_flist_draw(&dlg.flist, true);
+		z_flist_draw(&dlg_flist, true);
 		return;
 	}
 
@@ -972,21 +1026,29 @@ static void dlg_key(uint32_t keysym, uint8_t mods) {
 		return;
 	}
 
-	int r = z_flist_key(&dlg.flist, keysym);
+	int r = z_flist_key(&dlg_flist, keysym);
 
 	if (r == Z_FLIST_NONE) return;
 
 	path_draw();
 
 	if (dlg.kind == DLG_KIND_SAVE) {
-		const char *name = z_flist_selected(&dlg.flist);
-		if (name && !z_flist_selected_is_dir(&dlg.flist)) {
+		const char *name = z_flist_selected(&dlg_flist);
+		if (name && !z_flist_selected_is_dir(&dlg_flist)) {
 			field_set(name);
 			field_draw();
 		}
 	}
 
 }
+
+static void dlg_wheel(int notches) {
+	if (dlg.kind == DLG_KIND_OPEN || dlg.kind == DLG_KIND_SAVE)
+		z_flist_wheel(&dlg_flist, notches);
+}
+
+// Open, save, confirm and prompt: the handlers above.
+static const dlg_ops_t std_ops = { dlg_repaint, dlg_key, dlg_mouse, dlg_wheel };
 
 // -- entry points --
 
@@ -1007,6 +1069,7 @@ static bool file_dialog(const z_dialog_ctx_t *ctx, dlg_kind_t kind,
 	int h = DLG_FILE_H + (is_save ? (DLG_FIELD_H + DLG_MARGIN) : 0);
 
 	if (!dlg_create(ctx, kind, title, DLG_FILE_W, h)) return false;
+	dlg.ops = &std_ops;
 
 	// Stashed for the shared input handlers rather than threaded
 	// through every one of them -- see dlg_out's own comment.
@@ -1031,11 +1094,11 @@ static bool file_dialog(const z_dialog_ctx_t *ctx, dlg_kind_t kind,
 	dlg.list_h = dlg.field_y - DLG_MARGIN - dlg.list_y;
 	if (dlg.list_h < 0) dlg.list_h = 0;
 
-	z_flist_init(&dlg.flist, &dlg.win);
-	z_flist_set_geom(&dlg.flist, DLG_MARGIN, dlg.list_y,
+	z_flist_init(&dlg_flist, &dlg.win);
+	z_flist_set_geom(&dlg_flist, DLG_MARGIN, dlg.list_y,
 		cw - 2 * DLG_MARGIN, dlg.list_h);
 	// No directory given: the person's own (docs/layout.md, rule 5).
-	z_flist_chdir(&dlg.flist, start_dir ? start_dir : Z_DIR_HOME);
+	z_flist_chdir(&dlg_flist, start_dir ? start_dir : Z_DIR_HOME);
 
 	dlg_buttons_init(labels, 2);
 
@@ -1142,6 +1205,7 @@ bool z_dialog_prompt(const z_dialog_ctx_t *ctx, const char *title,
 
 	if (!dlg_create(ctx, DLG_KIND_PROMPT, title ? title : "", w, h))
 		return false;
+	dlg.ops = &std_ops;
 
 	dlg.msg = msg;
 	dlg.button_set = Z_DIALOG_OK_CANCEL;
@@ -1222,6 +1286,7 @@ int z_dialog_confirm(const z_dialog_ctx_t *ctx, const char *title,
 
 	if (!dlg_create(ctx, DLG_KIND_CONFIRM, title ? title : "", w, h))
 		return Z_DIALOG_CANCEL;
+	dlg.ops = &std_ops;
 
 	dlg.msg = msg;
 	dlg.button_set = buttons;
@@ -1248,48 +1313,278 @@ int z_dialog_confirm(const z_dialog_ctx_t *ctx, const char *title,
 }
 
 // -- help (F1) -- zdialog.h, docs/app_help.md --
+//
+// A fixed-width box of the app's own text, word-wrapped, with a
+// scrollbar when it is longer than the box; Close, and "Read docs"
+// beside it when `read` and the app's manual are both there.
+//
+// The text is the app's: a few lines on what it is for, its keys, and
+// how to do the main thing. It lives in the app so that F1 answers on
+// a system with no card at all (no /docs, no read), and it is short so
+// that it costs the app little. The manual is the long version.
+//
+// The layout is two rules, both cheap enough to re-run on every paint
+// (a help text is a kilobyte or two):
+//   '\n' ends a line; an empty line is a gap between paragraphs.
+//   '\t' moves to column HELP_TAB, and a line that wraps after one
+//        continues at that column -- so "Ctrl+S\tSave the file" lines
+//        up as a two-column table of keys without any table code.
 
-int z_help_open(const char *doc) {
+#define HELP_W			300		// the whole window: one width for every app
+#define HELP_ROWS		16		// at most this many lines show; more scroll
+#define HELP_TAB		12		// columns
+#define HELP_COLS_MAX	60		// the most a 300px line holds, and then some
 
-	// "/docs/" doc ".md" and "#using-it", without printf: not every app
-	// that links this carries one.
-	char arg[Z_WM_ARG_MAX];
-	int n = 0;
-	const char *parts[] = { "/docs/", doc, ".md" };
+static const char *const labels_help_docs[2] = { "Read docs", "Close" };
+static const char *const labels_help[1]      = { "Close" };
 
-	for (int i = 0; i < 3; i++)
-		for (const char *p = parts[i]; *p; p++) {
-			if (n >= (int)sizeof(arg) - 12) return Z_HELP_NO_DOC;
-			arg[n++] = *p;
+static struct {
+	const char		*text;
+	const char		*doc;		// non-NULL: the "Read docs" button is there
+	int				cols, rows, total, top;
+	int				sb_on;
+	z_scrollbar_t	sb;
+} help;
+
+// One display line from `p` into `out` (cols wide at most, NUL-ended);
+// returns where the next starts. `*hang` carries a tab's column over a
+// wrap and is cleared at the end of a source line.
+static const char *help_next(const char *p, int cols, int *hang, char *out) {
+
+	int n = 0, brk_n = -1;
+	const char *brk_p = NULL;
+
+	while (n < *hang) out[n++] = ' ';
+
+	while (*p && *p != '\n') {
+
+		if (n >= cols) {
+			if (brk_p) { n = brk_n; p = brk_p; }
+			while (*p == ' ') p++;
+			while (n > *hang && out[n - 1] == ' ') n--;
+			out[n] = 0;
+			return p;
 		}
-	arg[n] = 0;
 
-	// /docs is on the card: a flash-only system has no manuals at all.
-	z_fs_info_t fi;
-	if (!fs_stat(arg, &fi)) return Z_HELP_NO_DOC;
+		if (*p == '\t') {
+			int to = (n < HELP_TAB) ? HELP_TAB : n + 1;
+			while (n < to && n < cols) out[n++] = ' ';
+			*hang = n;
+			brk_n = n; brk_p = ++p;
+			continue;
+		}
 
-	// read, at the section for users...
-	int plain = n;
-	for (const char *p = "#using-it"; *p; p++) arg[n++] = *p;
-	arg[n] = 0;
-	z_launch_arg_set(arg);
-	if (z_proc_run("read")) return Z_HELP_OK;
+		if (*p == ' ') { brk_n = n; brk_p = p + 1; }
+		out[n++] = *p++;
 
-	// ...or, where read is not on the card, text: the page, from its top
-	arg[plain] = 0;
-	z_launch_arg_set(arg);
-	if (z_proc_run("text")) return Z_HELP_OK;
+	}
 
-	return Z_HELP_NO_APP;
+	out[n] = 0;
+	if (*p == '\n') p++;
+	*hang = 0;
+	return p;
 
 }
 
-void z_dialog_help(const z_dialog_ctx_t *ctx, const char *doc) {
+static int help_count(int cols) {
+	char line[HELP_COLS_MAX + 1];
+	int n = 0, hang = 0;
+	for (const char *p = help.text; *p; n++) p = help_next(p, cols, &hang, line);
+	return n;
+}
 
-	int r = z_help_open(doc);
-	if (r == Z_HELP_OK) return;
+static void help_draw_text(void) {
 
-	// One message for both: short, because text's RAM budget pays for it.
-	z_dialog_confirm(ctx, "Help", "Help is in /docs,\non the SD card.", Z_DIALOG_OK_CANCEL);
+	char line[HELP_COLS_MAX + 1];
+	int hang = 0, i = 0;
+	const char *p = help.text;
+
+	z_win_fill_rect(&dlg.win, DLG_MARGIN, DLG_MARGIN,
+		help.cols * z_font_5x8.w, help.rows * DLG_LINE_H, 0);
+
+	for (; *p && i < help.top + help.rows; i++) {
+		p = help_next(p, help.cols, &hang, line);
+		if (i >= help.top)
+			z_win_draw_text(&dlg.win, DLG_MARGIN,
+				DLG_MARGIN + (i - help.top) * DLG_LINE_H, line, 1, &z_font_5x8);
+	}
+
+}
+
+static void help_repaint(void) {
+	z_win_clear(&dlg.win);
+	help_draw_text();
+	if (help.sb_on) z_scrollbar_draw(&help.sb, true);
+	z_widget_draw_all(&dlg.wset, true);
+}
+
+static void help_scroll(int to) {
+	if (!help.sb_on || !z_scrollbar_set_value(&help.sb, to)) return;
+	help.top = help.sb.value;
+	help_draw_text();
+	z_scrollbar_draw(&help.sb, false);
+}
+
+// "/docs/<doc>.md" into `out`, or false if it does not fit.
+static bool help_doc_path(const char *doc, char *out, int cap) {
+	const char *parts[3] = { Z_DIR_DOCS "/", doc, ".md" };
+	int n = 0;
+	for (int i = 0; i < 3; i++)
+		for (const char *p = parts[i]; *p; p++) {
+			if (n >= cap - 1) return false;
+			out[n++] = *p;
+		}
+	out[n] = 0;
+	return true;
+}
+
+static void help_activate(int act) {
+
+	if (act == 0 && help.doc) {
+		char path[Z_WM_ARG_MAX];
+		if (help_doc_path(help.doc, path, sizeof(path))) {
+			z_launch_arg_set(path);
+			z_proc_run("read");
+		}
+	}
+
+	dlg.done = true;
+
+}
+
+static void help_key(uint32_t keysym, uint8_t mods) {
+
+	int page = help.rows > 1 ? help.rows - 1 : 1;
+
+	switch (keysym) {
+		case Z_KEY_UP:       help_scroll(help.top - 1); return;
+		case Z_KEY_DOWN:     help_scroll(help.top + 1); return;
+		case Z_KEY_PAGEUP:   help_scroll(help.top - page); return;
+		case Z_KEY_PAGEDOWN: help_scroll(help.top + page); return;
+		case Z_KEY_HOME:     help_scroll(0); return;
+		case Z_KEY_END:      help_scroll(help.total); return;
+		case '\t':
+			z_widget_focus_next(&dlg.wset, (mods & Z_KBD_MOD_SHIFT) != 0);
+			z_widget_draw_all(&dlg.wset, false);
+			return;
+		case ' ':
+			if (help.sb_on && dlg.wset.focused < 0) {
+				help_scroll(help.top + page);
+				return;
+			}
+			// fall through: Space presses the focused button
+		case 0x0d:
+			// Enter on Close, or with nothing focused, closes. It never
+			// starts read unless "Read docs" is what has the focus.
+			help_activate(dlg.wset.focused);
+			return;
+		case 0x1b:
+		case Z_KEY_F1:		// the key that opened it also closes it
+			dlg.done = true;
+			return;
+		default:
+			return;
+	}
+
+}
+
+static void help_mouse(int cx, int cy, uint8_t buttons) {
+
+	int act = z_widget_mouse(&dlg.wset, cx, cy, buttons);
+
+	if (act >= 0) { help_activate(act); return; }
+	if (dlg.wset.pressed >= 0) return;
+
+	if (help.sb_on && z_scrollbar_mouse(&help.sb, cx, cy, buttons)) {
+		help.top = help.sb.value;
+		help_draw_text();
+	}
+
+}
+
+static void help_wheel(int notches) {
+	help_scroll(help.top - 3 * notches);		// up (positive) is back
+}
+
+static const dlg_ops_t help_ops = { help_repaint, help_key, help_mouse, help_wheel };
+
+// The text area's width in columns, for a content area `cw` wide.
+static int help_cols_for(int cw, bool sb) {
+	int c = (cw - 2 * DLG_MARGIN - (sb ? Z_SB_THICK + 2 : 0)) / z_font_5x8.w;
+	return c > HELP_COLS_MAX ? HELP_COLS_MAX : c;
+}
+
+// Sizes the box for `text` in a content area `cw` wide: columns,
+// lines, rows shown, and whether it scrolls. Separate from
+// z_dialog_help() so the host test lays it out exactly as the real one.
+static void help_layout(const char *text, int cw) {
+
+	help.text = text ? text : "";
+	help.top = 0;
+	help.sb_on = 0;
+	help.cols = help_cols_for(cw, false);
+	help.total = help_count(help.cols);
+
+	if (help.total > HELP_ROWS) {
+		help.sb_on = 1;
+		help.cols = help_cols_for(cw, true);
+		help.total = help_count(help.cols);
+	}
+
+	help.rows = help.total < HELP_ROWS ? help.total : HELP_ROWS;
+	if (help.rows < 1) help.rows = 1;
+
+}
+
+void z_dialog_help(const z_dialog_ctx_t *ctx, const char *title,
+	const char *text, const char *doc) {
+
+	// "Read docs" only where it would work: the manual is on the card
+	// (a system running from flash has no /docs) and read is installed.
+	char path[Z_WM_ARG_MAX];
+	z_fs_info_t fi;
+	const char *with_doc = NULL;
+
+	if (doc && help_doc_path(doc, path, sizeof(path)) &&
+		z_exec_exists("read") && fs_stat(path, &fi))
+		with_doc = doc;
+
+	speak_dialog(title, text);
+
+	// Laid out for the content width before the window exists, to know
+	// its height; z_win_content_w() of the made window is the same
+	// number (the frame is DLG_FRAME_W across, as the confirm box
+	// assumes).
+	help_layout(text, HELP_W - DLG_FRAME_W);
+	help.doc = with_doc;
+
+	int h = Z_WM_TITLEBAR_H + 4 + DLG_MARGIN + help.rows * DLG_LINE_H +
+		DLG_MARGIN + DLG_BTN_H + DLG_MARGIN;
+
+	if (!dlg_create(ctx, DLG_KIND_CONFIRM, title ? title : "Help", HELP_W, h))
+		return;
+	dlg.ops = &help_ops;
+
+	int cw = z_win_content_w(&dlg.win);
+	if (cw != HELP_W - DLG_FRAME_W) help_layout(text, cw);
+
+	if (help.sb_on) {
+		z_scrollbar_init(&help.sb, &dlg.win, Z_SB_VERT);
+		z_scrollbar_set_geom(&help.sb, cw - Z_SB_THICK - 2, DLG_MARGIN,
+			help.rows * DLG_LINE_H);
+		z_scrollbar_set_range(&help.sb, help.total, help.rows);
+	}
+
+	dlg.btn_y = z_win_content_h(&dlg.win) - DLG_MARGIN - DLG_BTN_H;
+
+	if (with_doc) dlg_buttons_init(labels_help_docs, 2);
+	else dlg_buttons_init(labels_help, 1);
+
+	// Close has the focus, so Enter and Space close; reading the manual
+	// is a deliberate Tab or click away.
+	z_widget_focus_set(&dlg.wset, dlg.widget_count - 1);
+
+	help_repaint();
+	dlg_run();
 
 }

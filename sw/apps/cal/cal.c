@@ -83,6 +83,7 @@
 #include "../../common/zfont.h"
 #include "../../common/zkbd.h"
 #include "../../common/zwidget.h"
+#include "../../common/zdialog.h"
 
 #include "../../common/zcfg.h"		// system.rtc.timezone
 #include "cal_core.h"
@@ -665,7 +666,42 @@ static void handle_mouse(uint32_t packed) {
 
 }
 
+// The help box's view of this window while it is up: what the main
+// loop does with these messages.
+static void help_on_msg(z_msg_t *m, void *user) {
+	(void)user;
+	if (m->subject == Z_WM_SET_CLIP) {
+		z_win_apply_clip(&win, &m->obj);
+	} else if (m->subject == Z_WM_REDRAW) {
+		z_win_apply_redraw(&win, m->obj.val.uint32);
+		layout();
+		repaint();
+		z_win_redraw_done(&win);
+	} else if (m->subject == Z_WM_WINDOW_MOVED) {
+		z_win_parse_rect(&win, &m->obj);
+		layout();
+	}
+}
+
 static void handle_key(uint32_t keysym, uint8_t mods) {
+
+	if (keysym == Z_KEY_F1) {	// docs/app_help.md
+		static const char help[] =
+			"A month calendar, with today marked.\n\n"
+			"Left/Right\tPrevious / next month\n"
+			"Up/Down\tPrevious / next year\n"
+			"Home, t\tBack to today\n"
+			"0-9\tType a year\n"
+			"Enter\tGo to it (or press the arrow)\n"
+			"Esc\tAbandon the typed year\n"
+			"Backspace\tDelete a digit\n\n"
+			"Click < or > to change month. Type four digits and "
+			"Enter to jump to a year (1970-2105). Today needs the "
+			"clock set: run net.";
+		z_dialog_ctx_t ctx = { &win, help_on_msg, NULL };
+		z_dialog_help(&ctx, "Cal help", help, "cal_app");
+		return;
+	}
 
 	// -- year entry first --
 	//

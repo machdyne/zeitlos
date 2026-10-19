@@ -53,6 +53,7 @@
 #include "../../common/zgfx.h"
 #include "../../common/zfont.h"
 #include "../../common/zkbd.h"
+#include "../../common/zdialog.h"
 #include "../../common/zask.h"
 #include "../../common/zobj.h"
 #include "../../common/zmsg.h"
@@ -439,12 +440,50 @@ static void open_selected(void)
  * Input
  * ------------------------------------------------------------------ */
 
+static void handle_service(z_msg_t *msg);
+
+/* The help box's view of this window while it is up: what drain()
+ * does with these. A query in flight pauses until it closes. */
+static void help_on_msg(z_msg_t *m, void *user)
+{
+    (void)user;
+    if (m->subject == Z_WM_SET_CLIP) {
+        z_win_apply_clip(&win, &m->obj);
+    } else if (m->subject == Z_WM_REDRAW) {
+        z_win_apply_redraw(&win, m->obj.val.uint32);
+        draw_all();
+        z_win_redraw_done(&win);
+    } else if (m->subject == Z_WM_WINDOW_MOVED) {
+        z_win_parse_rect(&win, &m->obj);
+    } else if (m->subject != Z_WM_KEY && m->subject != Z_WM_MOUSE) {
+        handle_service(m);
+    }
+}
+
 static void handle_key(uint32_t packed)
 {
     uint32_t k = Z_WM_UNPACK_KEY_KEYSYM(packed);
     uint8_t mods = (uint8_t)Z_WM_UNPACK_KEY_MODIFIERS(packed);
 
     if (!Z_WM_UNPACK_KEY_PRESSED(packed)) return;
+
+    if (k == Z_KEY_F1) {                        /* docs/app_help.md */
+        static const char help[] =
+            "Finds passages in the datasets on the card that answer "
+            "a question, and opens them in read.\n\n"
+            "Enter\tSearch; again: open the selection\n"
+            "Up/Down\tSelect a result\n"
+            "1-9\tOpen that result\n"
+            "Esc\tCancel a search, or clear\n"
+            "Ctrl+U\tClear the line\n"
+            "Ctrl+W\tDelete a word\n"
+            "Ctrl+Q\tQuit\n\n"
+            "Type a question and press Enter. Click a result to open "
+            "it, or a pack button to browse its index.";
+        z_dialog_ctx_t ctx = { &win, help_on_msg, NULL };
+        z_dialog_help(&ctx, "Ask help", help, "ask_app");
+        return;
+    }
 
     if (mods & Z_KBD_MOD_CTRL) {
         if (k == 0x11) {                        /* Ctrl+Q */

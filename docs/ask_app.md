@@ -23,6 +23,8 @@ whole thing.
 +----------------------------------------------------------------------+
 ```
 
+**F1** shows a short help box ([app_help.md](app_help.md)).
+
 ---
 
 ## The rule

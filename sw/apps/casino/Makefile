@@ -10,7 +10,7 @@ GAMES = $(COMMON)/games
 include $(COMMON)/arch.mk
 
 OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o zfsapp.o zbank.o \
-	cs_banner.o casino.o
+	zwidget.o zspeak.o zdialog.o cs_banner.o casino.o
 
 zbank.o:
 	$(CC) $(CFLAGS) -c $(GAMES)/zbank.c -o zbank.o

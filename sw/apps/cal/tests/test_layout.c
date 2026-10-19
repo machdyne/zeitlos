@@ -35,6 +35,9 @@
 #include "../cal.c"
 #undef main
 
+// The F1 help box (sw/common/zdialog.c) is not linked into host tests.
+void z_dialog_help(const z_dialog_ctx_t *c, const char *t, const char *x, const char *d) { (void)c; (void)t; (void)x; (void)d; }
+
 static int checks, fails;
 
 static void ok(bool cond, const char *what) {

@@ -49,6 +49,8 @@ message of the day, errors, notices, people quitting.
 | PageUp, PageDown, the wheel | scroll back and forward |
 | Enter | send the line |
 
+**F1** shows a short help box ([app_help.md](app_help.md)).
+
 The status line says which view this is, your nick and server, and
 lists the other views that have something new: `#fpga*` for new lines,
 `alice!` when someone said your nick. A line that mentions you is drawn

@@ -163,4 +163,15 @@ bool url_same_origin(const url_t *a, const url_t *b);
 // `net`.
 bool url_is_network(const url_t *u);
 
+// A file name to save `u` under -- what the save dialog offers
+// (docs/web_app.md, "Saving"). The last segment of the path, %XX
+// decoded, with every character a FAT name cannot hold made '_'. For
+// gopher the item type is not part of it: /0/notes.txt is notes.txt.
+//
+// `ext` (".html", ".gmi" ...) is added to a name that has no '.' of
+// its own, and an empty name is "page" plus `ext`. With ext == NULL --
+// a link saved before anyone knows what it is -- a name is left as it
+// is, and an empty one is "download". At most cap - 1 characters.
+void url_file_name(const url_t *u, const char *ext, char *out, uint32_t cap);
+
 #endif

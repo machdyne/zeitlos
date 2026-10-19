@@ -18,6 +18,8 @@ window with scrollbars. The open icon in the titlebar
 (`Z_WIN_FLAG_OPEN_ICON`) brings up the file dialog; `o` does the same
 from the keyboard.
 
+**F1** shows a short help box ([app_help.md](app_help.md)).
+
 | Format | Variants decoded | Notes |
 |---|---|---|
 | BMP | 1/4/8/24/32bpp, uncompressed | RLE4/RLE8 and BI_BITFIELDS refused |

@@ -80,6 +80,7 @@
 #include "../../common/zgfx.h"
 #include "../../common/zcolor.h"
 #include "../../common/zkbd.h"
+#include "../../common/zdialog.h"
 
 // ===========================================================================
 // CONFIGURATION
@@ -1861,10 +1862,54 @@ static void leave_game_mode(void) {
 	geometry_changed();
 }
 
+// What drain_messages() does for this window, while the help box has
+// the message queue. The game is paused meanwhile, so a redraw just
+// repaints the current frame.
+static void help_on_msg(z_msg_t *m, void *user) {
+	(void)user;
+	if (m->subject == Z_WM_SET_CLIP) {
+		z_win_apply_clip(&win, &m->obj);
+	} else if (m->subject == Z_WM_REDRAW) {
+		z_win_apply_redraw(&win, m->obj.val.uint32);
+		z_win_damage_ignore(&win);
+		update_geometry();
+		line_count[cur_buf ^ 1] = 0;
+		fill_content(0);
+		render();
+		z_win_redraw_done(&win);
+	} else if (m->subject == Z_WM_WINDOW_MOVED) {
+		z_win_parse_rect(&win, &m->obj);
+		update_geometry();
+		line_count[cur_buf ^ 1] = 0;
+	}
+}
+
+// F1, in the window only: full screen has no desktop to show it on.
+static void show_help(void) {	// docs/app_help.md
+	static const char help[] =
+		"A wireframe space game: fly through an asteroid field and "
+		"shoot rocks and UFOs.\n\n"
+		"Arrows\tSteer\n"
+		"Space\tFire\n"
+		"F2\tFull screen, or back to the window\n"
+		"C\tFull screen: colour on or off\n"
+		"Esc\tLeave full screen\n\n"
+		"A crash strobes the screen and starts a new run.";
+	z_dialog_ctx_t ctx = { &win, help_on_msg, NULL };
+	z_dialog_help(&ctx, "Space3d help", help, "space3d_app");
+	// Releases went to the box: don't leave the ship steering.
+	key_left = key_right = key_up = key_down = false;
+}
+
 static void handle_key(uint32_t packed) {
 
 	uint32_t keysym = Z_WM_UNPACK_KEY_KEYSYM(packed);
 	bool pressed = Z_WM_UNPACK_KEY_PRESSED(packed) != 0;
+
+	if (keysym == Z_KEY_F1) {
+		if (pressed && !game_mode) show_help();
+		return;
+	}
 
 	if (game_mode && keysym == 0x1b) {
 		if (!pressed) exit_armed = true;

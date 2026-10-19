@@ -190,6 +190,8 @@ Fully usable with no pointer.
   Outside the list, the arrow keys do too.
 - **Enter or Space** activates one.
 
+**F1** shows a short help box ([app_help.md](app_help.md)).
+
 That isn't an afterthought. A settings app reachable only with a mouse
 is exactly the wrong thing to have on a machine whose pointer might be
 the thing you're trying to fix.

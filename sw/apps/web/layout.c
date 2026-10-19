@@ -322,6 +322,32 @@ bool layout_line_range(const html_line_t *l, const layout_cfg_t *cfg,
 
 }
 
+bool layout_locate(const html_line_t *l, const layout_cfg_t *cfg,
+	uint16_t off, layout_loc_t *loc) {
+
+	wrap_t w;
+	const z_font_t *f = block_font(l, cfg);
+	int n;
+
+	if (l->kind == HTML_IMAGE || l->kind == HTML_RULE ||
+		l->kind == HTML_BLANK) return false;
+
+	wrap_block(l, cfg, &w);
+
+	// The last line starting at or before `off`. An offset on the space
+	// a line was broken at belongs to the line before it.
+	for (n = 0; n + 1 < w.n && w.start[n + 1] <= off; n++) ;
+	if (n >= w.n || off < w.start[n] || off > w.end[n]) return false;
+
+	loc->line = n;
+	loc->x = cfg->x + block_indent(l, cfg) + (off - w.start[n]) * f->w;
+	loc->cw = f->w;
+	loc->ch = f->h;
+	loc->end = w.end[n];
+	return true;
+
+}
+
 // -- style lookup ---------------------------------------------------
 
 // Which span, if any, covers character `i`. Linear over the block's

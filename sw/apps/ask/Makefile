@@ -20,11 +20,10 @@ endif
 
 APP_CFLAGS = $(SLICE_DEFS)
 
-# No zwidget/zdialog/zflist here, deliberately: `ask` has one text
-# field and one list, both of which it draws itself in about forty
-# lines. Linking the toolkit for that would cost more than it saves,
-# and section GC cannot drop what a widget set's function pointers
-# reach.
+# `ask` draws its one text field and one list itself, in about forty
+# lines, rather than with zwidget. zdialog.o (with the zwidget.o and
+# zspeak.o it needs) is linked only for the F1 help box
+# (docs/app_help.md).
 
 # Objects, and why each is linked:
 #
@@ -32,8 +31,8 @@ APP_CFLAGS = $(SLICE_DEFS)
 #   stdio -- see test/Makefile -- which is how the on-card format is
 #   validated against the packer that writes it, before any of this
 #   reaches a board.
-OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o zfsapp.o \
-	aidx.o ask.o
+OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o zwidget.o zspeak.o \
+	zdialog.o zfsapp.o aidx.o ask.o
 
 # A .zexe rather than a raw --pad-to binary. The index lives on the
 # HEAP, not in .bss, so this app's .bss is small -- but the format is

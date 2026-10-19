@@ -1,0 +1,382 @@
+/*
+ * Host test for files' find, folder copy/move/delete: the REAL files.c
+ * (main renamed), zwalk.c, zflist.c, zwin.c and zwidget.c, over a real
+ * directory tree under /tmp through a host version of the zfsapp
+ * calls. Dialogs are scripted. `make test` in sw/apps/files.
+ *
+ * Needs -no-pie and vm.mmap_min_addr=0 (sw/common/tests/ztramp.h);
+ * exits 77 (skipped) without them. TEST_PBM=dir also writes renders.
+ *
+ * No arena here (the trampoline answers ARENA with "refused"), so
+ * this runs on files' own small block -- the path a board without
+ * arenas takes, and the tighter one.
+ */
+
+#include "../../../common/tests/zrender.h"
+#include "../../../common/tests/ztramp.h"
+
+#include <dirent.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#include <errno.h>
+
+#define main files_main_unused
+#include "../files.c"
+#undef main
+
+// -- host fs: real files under root --
+
+static char root[200];
+
+static const char *hp(const char *p) {
+	static char b[4][1024];
+	static int k;
+	k = (k + 1) & 3;
+	snprintf(b[k], sizeof(b[k]), "%s%s", root, p);
+	return b[k];
+}
+
+#define MAXH 8
+static FILE *hs[MAXH];
+
+static int hopen(const char *p, const char *mode) {
+	FILE *f = fopen(hp(p), mode);
+	if (!f) return -1;
+	for (int i = 0; i < MAXH; i++) if (!hs[i]) { hs[i] = f; return i; }
+	fclose(f);
+	return -1;
+}
+int fs_open_read(const char *p) { return hopen(p, "rb"); }
+int fs_open_write(const char *p) { return hopen(p, "wb"); }
+int fs_read_chunk(int h, void *b, int n) { return (int)fread(b, 1, (size_t)n, hs[h]); }
+int fs_write_chunk(int h, const void *b, int n) { return (int)fwrite(b, 1, (size_t)n, hs[h]); }
+int fs_close_handle(int h) { if (h >= 0 && hs[h]) { fclose(hs[h]); hs[h] = NULL; } return 1; }
+int fs_unlink(char *p) { return remove(hp(p)) == 0; }
+int fs_mkdir(const char *p) { return mkdir(hp(p), 0777) == 0; }
+int fs_size(char *p) { struct stat st; return stat(hp(p), &st) ? 0 : (int)st.st_size; }
+int fs_write_file(char *p, char *b, int n) {
+	FILE *f = fopen(hp(p), "wb");
+	if (!f) return -1;
+	fwrite(b, 1, (size_t)n, f);
+	fclose(f);
+	return n;
+}
+
+int fs_stat(const char *p, z_fs_info_t *fi) {
+	struct stat st;
+	if (stat(hp(p), &st)) return 0;
+	memset(fi, 0, sizeof(*fi));
+	fi->type = S_ISDIR(st.st_mode) ? Z_FS_TYPE_DIR : Z_FS_TYPE_FILE;
+	fi->size = S_ISDIR(st.st_mode) ? 0 : (uint32_t)st.st_size;
+	return 1;
+}
+
+// /ram is "another volume": a rename across it is XDEV, as on the board.
+static bool on_ram(const char *p) { return !strncmp(p, "/ram", 4) && (!p[4] || p[4] == '/'); }
+
+int fs_rename(const char *a, const char *b, int *err) {
+	struct stat st;
+	if (on_ram(a) != on_ram(b)) { if (err) *err = Z_FS_ERR_XDEV; return 0; }
+	if (stat(hp(b), &st) == 0) { if (err) *err = Z_FS_ERR_EXIST; return 0; }
+	if (rename(hp(a), hp(b))) { if (err) *err = Z_FS_ERR_NOENT; return 0; }
+	if (err) *err = 0;
+	return 1;
+}
+
+static int cmpstr(const void *a, const void *b) { return strcmp(*(char **)a, *(char **)b); }
+
+int fs_list_ex(const char *path, char *buf, uint32_t cap, z_fs_info_t *info,
+	uint32_t max, uint32_t *count, uint32_t *trunc) {
+	DIR *d = opendir(hp(path));
+	struct dirent *de;
+	char *names[1024];
+	int nn = 0;
+	uint32_t used = 0, n = 0;
+	*count = 0; if (trunc) *trunc = 0;
+	if (!d) return 0;
+	while ((de = readdir(d)) && nn < 1024)
+		if (strcmp(de->d_name, ".") && strcmp(de->d_name, ".."))
+			names[nn++] = strdup(de->d_name);
+	closedir(d);
+	qsort(names, (size_t)nn, sizeof(char *), cmpstr);
+	for (int i = 0; i < nn; i++) {
+		char e[600];
+		z_fs_info_t fi;
+		if (n >= max) { if (trunc) *trunc = 1; break; }
+		snprintf(e, sizeof(e), "%s%s%s", path,
+			path[strlen(path) - 1] == '/' ? "" : "/", names[i]);
+		size_t l = strlen(e) + 1;
+		if (used + l > cap) { if (trunc) *trunc = 1; break; }
+		memcpy(buf + used, e, l);
+		used += (uint32_t)l;
+		fs_stat(e, &fi);
+		if (info) info[n] = fi;
+		n++;
+	}
+	for (int i = 0; i < nn; i++) free(names[i]);
+	*count = n;
+	return n > 0;
+}
+
+int fs_list_into(const char *path, char *buf, uint32_t cap, uint8_t *types,
+	uint32_t max, uint32_t *count, uint32_t *trunc) {
+	static z_fs_info_t fi[1024];
+	int r = fs_list_ex(path, buf, cap, fi, max > 1024 ? 1024 : max, count, trunc);
+	if (types) for (uint32_t i = 0; i < *count; i++) types[i] = fi[i].type;
+	return r;
+}
+
+// -- dialogs, scripted --
+
+static const char *prompt_answer;
+static int confirm_answer = Z_DIALOG_YES;
+static char last_confirm[256];
+static int confirms;
+
+bool z_dialog_prompt(const z_dialog_ctx_t *c, const char *t, const char *m,
+	const char *i, char *o, int n) {
+	(void)c; (void)t; (void)m; (void)i;
+	if (!prompt_answer) return false;
+	snprintf(o, (size_t)n, "%s", prompt_answer);
+	return true;
+}
+int z_dialog_confirm(const z_dialog_ctx_t *c, const char *t, const char *m, int b) {
+	(void)c; (void)t; (void)b;
+	snprintf(last_confirm, sizeof(last_confirm), "%s", m);
+	confirms++;
+	return confirm_answer;
+}
+void z_dialog_help(const z_dialog_ctx_t *c, const char *t, const char *x, const char *d) {
+	(void)c; (void)t; (void)x; (void)d;
+}
+
+// convert is another program; not exercised here
+bool z_conv_start(z_conv_t *c, const char *in, const char *out, const char *to,
+	uint32_t f) { (void)c; (void)in; (void)out; (void)to; (void)f; return false; }
+bool z_conv_msg(z_conv_t *c, const z_msg_t *m) { (void)c; (void)m; return false; }
+void z_conv_poll(z_conv_t *c) { (void)c; }
+const char *z_conv_strerror(int32_t e) { (void)e; return ""; }
+
+// The row icons go through the hardware icon blitter, which
+// zrender.h does not emulate (test_dialog.c does the same).
+void z_fb_draw_icon(int x, int y, int icon, int fg, int bg, const z_clip_t *clip) {
+	(void)x; (void)y; (void)icon; (void)fg; (void)bg; (void)clip;
+}
+
+// -- checks --
+
+static int checks, failures;
+static void expect(bool ok, const char *what) {
+	checks++;
+	if (!ok) { failures++; printf("  FAIL: %s\n", what); }
+}
+
+static void put(const char *p, const char *text) {
+	FILE *f = fopen(hp(p), "wb");
+	fputs(text, f);
+	fclose(f);
+}
+static void mk(const char *p) { mkdir(hp(p), 0777); }
+static bool exists(const char *p) { struct stat st; return stat(hp(p), &st) == 0; }
+static void sh(const char *fmt, const char *a) {
+	char cmd[1200];
+	snprintf(cmd, sizeof(cmd), fmt, a, a);
+	if (system(cmd)) {}
+}
+static bool same(const char *a, const char *b) {
+	char cmd[1200];
+	snprintf(cmd, sizeof(cmd), "diff -r %s%s %s%s >/dev/null", root, a, root, b);
+	return system(cmd) == 0;
+}
+
+static void tree(void) {
+	char cmd[600];
+	snprintf(cmd, sizeof(cmd), "rm -rf %s && mkdir -p %s", root, root);
+	if (system(cmd)) exit(2);
+	mk("/home");
+	mk("/ram");
+	mk("/home/a");
+	put("/home/a/readme.md", "Hello\n");
+	put("/home/a/notes.txt", "buy milk\nTODO call\n");
+	mk("/home/a/sub");
+	put("/home/a/sub/deep.md", "nothing\n");
+	mk("/home/a/sub/empty");
+	FILE *f = fopen(hp("/home/a/sub/big.bin"), "wb");
+	for (int i = 0; i < 20000; i++) fputc(i & 0xff, f);
+	fclose(f);
+	put("/home/top.md", "x\n");
+}
+
+static void pump(void) {
+	for (int i = 0; i < 100000 && walking; i++) walk_pump();
+}
+
+static void select_name(const char *name) {
+	z_flist_refresh_select(&flist, name);
+}
+
+static void pbm(const char *name) {
+	const char *d = getenv("TEST_PBM");
+	char p[600];
+	if (!d) return;
+	snprintf(p, sizeof(p), "%s/%s", d, name);
+	z_render_write(p, &win, 2);
+}
+
+static bool all_closed(void) {
+	for (int i = 0; i < MAXH; i++) if (hs[i]) return false;
+	return true;
+}
+
+int main(void) {
+
+	snprintf(root, sizeof(root), "/tmp/files_walk.%d", (int)getpid());
+
+	if (!z_render_open(&win, WIN_W, WIN_H) || !z_tramp_install()) {
+		printf("test_walk: skipped (needs -no-pie and vm.mmap_min_addr=0)\n");
+		return 77;
+	}
+
+	tree();
+
+	widgets_init();
+	dlg_ctx.parent = &win;
+	z_flist_init(&flist, &win);
+	flist.info = finfo;
+	z_listbox_init(&rlist, &win);
+	layout();
+	z_flist_chdir(&flist, "/home");
+	repaint();
+
+	printf("find by name\n");
+	prompt_answer = "*.md";
+	handle_key(0x06, Z_KBD_MOD_CTRL);
+	expect(walking && results, "Ctrl+F starts a find and shows results");
+	expect(!widgets[BTN_COPY].enabled && !strcmp(widgets[BTN_FIND].label, "Stop"),
+		"buttons: only Stop while it runs");
+	pump();
+	expect(!walking && results, "done, results stay up");
+	expect(res_n == 3, "three .md files");
+	expect(res_n == 3 && !strcmp(res_label(NULL, 0), "a/readme.md") &&
+		!strcmp(res_label(NULL, 1), "a/sub/deep.md") &&
+		!strcmp(res_label(NULL, 2), "top.md"), "relative to where it started, in order");
+	expect(walk_mem == walk_static, "no arena here: files' own block");
+	repaint();
+	pbm("find.pbm");
+
+	printf("Backspace on a result: its folder\n");
+	z_listbox_select(&rlist, 1);
+	handle_key(0x08, 0);
+	expect(!results && !strcmp(flist.path, "/home/a/sub"), "in its folder");
+	expect(z_flist_selected(&flist) && !strcmp(z_flist_selected(&flist), "deep.md"), "with it selected");
+	expect(walk_mem == NULL, "memory given back");
+
+	printf("find text, and Esc stops at once\n");
+	z_flist_chdir(&flist, "/home");
+	prompt_answer = "\"todo\"";
+	handle_key(0x06, Z_KBD_MOD_CTRL);
+	expect(!strcmp(walk.text, "todo") && !walk.name[0], "the quoted part is text");
+	zw_step(&walk);
+	handle_key(0x1b, 0);
+	expect(!walking && results, "first Esc stops, results stay");
+	expect(all_closed(), "nothing left open");
+	handle_key(0x1b, 0);
+	expect(!results && !walk_mem, "second Esc: back to the folder");
+	prompt_answer = "*.txt \"TODO\"";
+	handle_key(0x06, Z_KBD_MOD_CTRL);
+	expect(!strcmp(walk.name, "*.txt") && !strcmp(walk.text, "TODO"), "name and text");
+	pump();
+	expect(res_n == 1 && !strcmp(res_label(NULL, 0), "a/notes.txt"), "found it");
+	handle_key(0x1b, 0);
+
+	printf("copy a folder\n");
+	select_name("a");
+	prompt_answer = "/home/b";
+	confirms = 0;
+	button(BTN_COPY);
+	expect(walking && walk_kind == WK_COPY, "a walk");
+	pbm("copying.pbm");
+	pump();
+	expect(!walking && same("/home/a", "/home/b") && exists("/home/b/sub/empty"), "the whole tree");
+	expect(confirms == 0, "no dialog when it worked");
+	expect(z_flist_selected(&flist) && !strcmp(z_flist_selected(&flist), "b"), "the copy selected");
+
+	printf("copy into an existing folder means into it\n");
+	select_name("top.md");
+	prompt_answer = "/home/b";
+	button(BTN_COPY);
+	pump();
+	expect(exists("/home/b/top.md"), "/home/b/top.md");
+
+	printf("copy onto an existing file asks, and replaces\n");
+	put("/home/b/top.md", "old\n");
+	confirm_answer = Z_DIALOG_YES;
+	button(BTN_COPY);
+	pump();
+	expect(same("/home/top.md", "/home/b/top.md"), "replaced");
+
+	printf("stop a copy part-way\n");
+	sh("rm -rf %s/home/c", root);
+	select_name("a");
+	prompt_answer = "/home/c";
+	button(BTN_COPY);
+	while (!walk.infile || strcmp(walk.src + strlen(walk.src) - 7, "big.bin")) zw_step(&walk);
+	zw_step(&walk);				// a chunk of big.bin written
+	confirms = 0;
+	handle_key(0x1b, 0);
+	expect(!walking && confirms == 1 && strstr(last_confirm, "left"), "says what is left");
+	expect(!exists("/home/c/sub/big.bin"), "no half file");
+	expect(exists("/home/c/readme.md"), "what was copied stays");
+	expect(all_closed(), "nothing open");
+
+	printf("move a folder to another volume: copy, then delete\n");
+	select_name("c");
+	prompt_answer = "/ram";
+	button(BTN_MOVE);
+	expect(walking && walk_kind == WK_MOVE, "a walk, not a rename");
+	pump();
+	expect(exists("/ram/c/readme.md") && !exists("/home/c"), "moved");
+
+	printf("move within a volume is a rename\n");
+	select_name("b");
+	prompt_answer = "/home/b2";
+	button(BTN_MOVE);
+	expect(!walking && exists("/home/b2/sub/deep.md") && !exists("/home/b"), "renamed at once");
+
+	printf("delete a folder with everything in it\n");
+	select_name("b2");
+	confirm_answer = Z_DIALOG_YES;
+	confirms = 0;
+	button(BTN_DELETE);
+	expect(confirms == 1 && strstr(last_confirm, "everything"), "asks, saying so");
+	pump();
+	expect(!exists("/home/b2"), "gone");
+
+	printf("delete: No does nothing\n");
+	select_name("a");
+	confirm_answer = Z_DIALOG_NO;
+	button(BTN_DELETE);
+	expect(!walking && exists("/home/a"), "still there");
+
+	printf("Ctrl+F does nothing during a copy; Delete key neither\n");
+	confirm_answer = Z_DIALOG_YES;
+	prompt_answer = "/home/d";
+	button(BTN_COPY);
+	zw_step(&walk);
+	handle_key(0x06, Z_KBD_MOD_CTRL);
+	expect(walk_kind == WK_COPY, "still copying");
+	handle_key(Z_KEY_DELETE, 0);
+	expect(exists("/home/a"), "nothing deleted");
+	pump();
+	expect(same("/home/a", "/home/d"), "and it finished");
+
+	{
+		char cmd[600];
+		snprintf(cmd, sizeof(cmd), "rm -rf %s", root);
+		if (system(cmd)) {}
+	}
+
+	printf("test_walk: %d checks, %d failed\n", checks, failures);
+	return failures ? 1 : 0;
+
+}

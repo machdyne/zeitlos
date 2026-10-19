@@ -116,3 +116,18 @@ if [ -x "$here/px_case_test" ]; then
     echo
     "$here/px_case_test" "$work" "$here/cases.txt" || exit 1
 fi
+
+# -- find, diff, unzip, tar (tools.c) --
+#
+# Their fixtures, made only now for the same reason as the names above.
+# tools.txt asserts the answers; gen_tools.py adds cases whose expected
+# output comes from the real thing -- GNU `diff -u` on pairs of files,
+# Python's sorted walk for `find` -- so the comparison is with another
+# implementation, not with what this one printed last time.
+python3 "$here/gen_tools.py" "$work" "$work/gen_cases.txt" || exit 1
+if [ -x "$here/px_case_test" ]; then
+    echo
+    "$here/px_case_test" "$work" "$here/tools.txt" || exit 1
+    echo
+    "$here/px_case_test" "$work" "$work/gen_cases.txt" || exit 1
+fi

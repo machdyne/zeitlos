@@ -53,6 +53,7 @@
  *   n         next module
  *   space     pause
  *   [ / ]     stereo separation
+ *   F1        short help box (docs/app_help.md)
  *   q / ESC   quit (or the window's close icon)
  */
 
@@ -73,6 +74,7 @@
 #include "../../common/zwin.h"
 #include "../../common/zfont.h"
 #include "../../common/zgfx.h"
+#include "../../common/zdialog.h"
 
 #include "modplay.h"
 
@@ -770,8 +772,60 @@ static void draw_all(void) {
 
 static void apply_volume(void);
 
+/* Messages for this window while the help box is up. Playback is
+ * paused meanwhile, so a full repaint in one go cannot stall anything. */
+static void help_on_msg(z_msg_t *m, void *user) {
+	(void)user;
+	if (m->subject == Z_WM_SET_CLIP) {
+		z_win_apply_clip(&win, &m->obj);
+	} else if (m->subject == Z_WM_REDRAW) {
+		z_win_apply_redraw(&win, m->obj.val.uint32);
+		draw_all();
+		while (hdr_dirty) header_step();
+		while (show_pattern && pat_pending < PATTERN_ROWS) pattern_step();
+		z_win_redraw_done(&win);
+	} else if (m->subject == Z_WM_WINDOW_MOVED) {
+		z_win_parse_rect(&win, &m->obj);
+	}
+}
+
+/* F1. The tracker is driven from this loop, so the box pauses the
+ * module the way space does and resumes it afterwards. */
+static void show_help(void) {
+	static const char help[] =
+		"Play ProTracker .mod files from " Z_DIR_MEDIA_AUDIO " and "
+		Z_DIR_HOME ".\n\n"
+		"Space\tPause / resume\n"
+		"n\tNext module\n"
+		"- / =\tVolume down / up\n"
+		"[ / ]\tStereo separation\n"
+		"v\tPattern grid on/off\n"
+		"r\tChange the sample rate\n"
+		"s\tChannel dump to the serial console\n"
+		"q, Esc\tQuit\n\n"
+		"Music pauses while this box is open.";
+	z_dialog_ctx_t ctx = { &win, help_on_msg, NULL };
+	int was_paused = paused;
+
+	if (!was_paused) { paused = 1; z_audio_stop(); }
+	z_dialog_help(&ctx, "Track help", help, "track_app");
+	if (!was_paused) {
+		paused = 0;
+		z_audio_start(rate_div);
+		if (hw_mix) z_audio_mixer_enable(true);
+		hw_next_256 = z_uptime_ticks() << 8;
+	}
+	/* the mix-rate reading would otherwise count the pause */
+	rr_frames = 0;
+	rr_start_tick = z_uptime_ticks();
+	draw_all();
+}
+
 static void handle_key(uint32_t key) {
 	switch (key) {
+	case Z_KEY_F1:
+		if (windowed) show_help();
+		break;
 	case 'q':
 	case 0x1b:                      /* Escape -- see zkbd.c */
 		want_quit = 1;

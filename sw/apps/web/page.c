@@ -354,6 +354,88 @@ uint32_t page_fetch(page_t *p, uint32_t first, uint32_t count,
 // Display lines in one block, at this width. One fetch each; callers
 // that need many in a row should be walking, not calling this in a
 // loop over the whole document.
+// -- page_scan(): blocks handed over in place, for find-in-page --
+
+static struct {
+	page_scan_fn	fn;
+	void			*user;
+	uint32_t		first;		// relative to the checkpoint
+	uint32_t		abs;		// the block number of `first`
+	uint32_t		limit;		// blocks the index knows
+	uint32_t		max;
+	uint32_t		seen;
+	uint32_t		got;
+	bool			stop;
+} scn;
+
+static void scan_emit(void *user, const html_line_t *l) {
+
+	(void)user;
+
+	if (!scn.stop && scn.seen >= scn.first && scn.got < scn.max) {
+		uint32_t b = scn.abs + scn.got;
+		// Never past what the index knows: a block that html_finish()
+		// flushes and the index dropped has no number to scroll to.
+		if (b >= scn.limit) { scn.stop = true; return; }
+		if (scn.fn(scn.user, b, l)) scn.stop = true;
+		scn.got++;
+	}
+
+	scn.seen++;
+
+}
+
+uint32_t page_scan(page_t *p, uint32_t first, uint32_t max,
+	page_scan_fn fn, void *user) {
+
+	static char buf[PAGE_IO_CHUNK];
+	const page_ckpt_t *c;
+	uint32_t off;
+
+	if (!p->read || max == 0 || !fn) return 0;
+	if (first >= p->nblocks) return 0;
+
+	c = ckpt_for(p, first);
+	if (!c) return 0;
+
+	scn.fn = fn;
+	scn.user = user;
+	scn.first = first - c->block;
+	scn.abs = first;
+	scn.limit = p->nblocks;
+	scn.max = max;
+	scn.seen = 0;
+	scn.got = 0;
+	scn.stop = false;
+
+	html_init(&ctx, scan_emit, NULL);
+	html_set_charset(&ctx, p->charset);
+	html_restore(&ctx, &c->st, c->off);
+
+	off = c->off;
+
+	while (off < p->size && !scn.stop && scn.got < scn.max) {
+
+		uint32_t want = p->size - off;
+		uint32_t got;
+
+		if (want > sizeof(buf)) want = sizeof(buf);
+
+		got = p->read(p->user, off, buf, want);
+		if (got == 0) break;
+
+		html_feed(&ctx, buf, got);
+		off += got;
+
+	}
+
+	if (!scn.stop && scn.got < scn.max && off >= p->size && p->complete)
+		html_finish(&ctx);
+
+	return scn.got;
+
+}
+
 static int block_lines(page_t *p, const layout_cfg_t *cfg, uint32_t n) {
 
 	static html_line_t one;
