@@ -7,69 +7,29 @@
  * Drives an optical TOSLINK module (Sergei's AUD_OPTICAL) or a coax
  * driver. One pin, no clock, no PLL.
  *
- * -- THE RATE, WHICH IS THE WHOLE DESIGN CONSTRAINT --
+ * -- THE RATE --
  *
  * A stereo frame is 64 time slots, each biphase-mark coded into two
- * half-cells, so the line runs at 128 * fs. From a 48MHz sys_clk with
- * both EHXPLLLs already spoken for, the reachable rates are the ones
- * where 48e6 / (128 * fs) is an integer -- fs = 375000/N:
+ * half-cells, so the line runs at 128 * fs. The half-cell clock is
+ * NOT made here: rtl/audio_out.v's accumulator produces exactly 128
+ * ticks per frame at whatever rate software set, and this block
+ * advances one half-cell per tick. Since both outputs count the same
+ * ticks they cannot drift, by construction rather than by care.
  *
- *     N=7   53571.4 Hz    N=9   41666.7 Hz
- *     N=8   46875.0 Hz    N=10  37500.0 Hz
+ * Until 0.0.7 this block had its own fractional divider and the only
+ * rates reachable from 48MHz were fs = 48e6 / (64 * RATE): 46875 Hz
+ * for an exact 8-cycle half-cell, or 44117.6 Hz with 8/9-cycle
+ * half-cells. Neither is a standard rate, and 46875 Hz went out
+ * labelled "48 kHz". The shared accumulator makes true 48000 and
+ * 44100 Hz reachable (half-cells of 7.8125 and 8.503 cycles, i.e. 7/8
+ * and 8/9 cycles). Every edge stays within one sys_clk of its ideal
+ * place and the error never accumulates, which is well inside what an
+ * IEC 60958 receiver's PLL tolerates. See docs/audio.md, "Exact
+ * sample rates".
  *
- * No standard rate is among them. 44.1kHz wants N = 8.5034 and 48kHz
- * wants 7.8125.
- *
- * SO THIS RUNS AT 46875 Hz, N=8, half-cell = 8 sys_clk exactly.
- *
- * That is 2.34% below 48kHz and 6.29% above 44.1kHz -- much closer to
- * 48k than the arithmetic first suggests, and well inside the capture
- * range of any receiver that recovers its clock from the biphase
- * stream, which is all of them. The declared rate in channel status is
- * a separate field (fs_code) and advisory; receivers PLL to what
- * actually arrives.
- *
- * -- WHY THERE IS NO UPSAMPLER --
- *
- * The obvious question is whether to run the mixer at 44.1kHz and
- * resample into a 46875Hz S/PDIF stream. The answer is no, for two
- * reasons.
- *
- * A tracker does not have a native rate. MOD playback resamples every
- * channel through a phase accumulator anyway, so the output rate is a
- * free parameter and 46875 costs exactly nothing -- pitch and tempo
- * are unaffected. Set `AUDIO_RATE_RESET to 16 on a board with a
- * transmitter and the whole audio block, analogue and digital, runs at
- * one rate.
- *
- * And a 1.0629 ratio is a real sample-rate conversion, not an
- * upsample. Zero-order hold at that ratio produces aliasing across the
- * whole band -- it would be plainly audible, and worse than the 6%
- * pitch error it was meant to avoid. Doing it properly means an
- * interpolating resampler, which is more logic than the mixer itself.
- *
- * The one case that would want it is playing 44.1kHz material
- * unresampled while ALSO feeding a digital output. That is not what
- * this machine does.
- *
- * -- ANY RATE, ODD OR EVEN --
- *
- * A half-cell is rate/2 sys_clk, which is not an integer for an odd
- * rate. The divider below handles that by accumulating rather than
- * dividing, so exactly 128 half-cells land in every frame whatever the
- * rate. An odd rate costs half a cycle of edge jitter and nothing
- * else.
- *
- * That matters because the rate is a RUNTIME register that any app can
- * write, and the value every app actually asks for is 17. An earlier
- * version required an even rate, said so only in a comment, and
- * truncated when it got 17 -- producing a line 6.2% faster than the
- * samples feeding it.
- *
- * What is still worth respecting is the RECEIVER's range: IEC 60958
- * parts are typically specified for 32kHz and up, so the 22kHz and
- * 11kHz settings in sw/common/zaudio.h are below what a DAC will lock
- * to no matter how clean the line is. See z_audio_spdif_ok().
+ * IEC 60958 receivers are typically specified for 32 kHz and up, so
+ * the 22.05 kHz and 11.025 kHz rates are below what a DAC will lock to
+ * no matter how clean the line is. See z_audio_rate_ok_hz().
  *
  * -- FRAME FORMAT --
  *
@@ -103,9 +63,8 @@ module audio_spdif (
 	// stay a transmitted signal.
 	input wire enable,
 
-	// same divider the rest of the audio block uses; a half-cell is
-	// rate/2 sys_clk. See the note above on why this wants to be even.
-	input wire [7:0] rate,
+	// one pulse per half-cell, 128 per frame, from rtl/audio_out.v
+	input wire tick,
 
 	// one pulse per sample period, from rtl/audio_out.v. The S/PDIF
 	// frame is resynced to it, so the two outputs cannot drift.
@@ -114,9 +73,16 @@ module audio_spdif (
 	input wire signed [15:0] sample_l,
 	input wire signed [15:0] sample_r,
 
-	// channel status sampling-frequency nibble, byte 3 bits 0-3.
-	// Advisory: receivers recover the real rate from the line. 0000 is
-	// 44.1kHz, 0100 is 48kHz.
+	// channel status sampling-frequency nibble: byte 3 bits 0-3, i.e.
+	// channel-status bits 24-27 with fs_code[0] = bit 24. As a NUMBER
+	// that is the AES3 byte value (Linux's IEC958_AES3_CON_FS_*):
+	//   0 = 44.1 kHz   2 = 48 kHz    3 = 32 kHz    4 = 22.05 kHz
+	//   6 = 24 kHz     8 = 88.2 kHz  10 = 96 kHz
+	// Until 0.0.7 the reset value was 4'b0100, written as the
+	// standard's table writes it (bits 24..27 left to right) but read
+	// here as a number -- which sets bit 26 and declares 22.05 kHz.
+	// Advisory either way: receivers recover the real rate from the
+	// line, which is why nobody heard it.
 	input wire [3:0] fs_code,
 
 	output reg spdif
@@ -164,40 +130,16 @@ module audio_spdif (
 	reg signed [15:0] stage_l;
 	reg signed [15:0] stage_r;
 
-	reg [15:0] acc;
 	reg [6:0] hc;          // half-cell within the frame, 0..127
 	reg [7:0] blkframe;    // frame within the 192-frame block
 	reg pre_inv;
 	reg signed [15:0] hold_l;
 	reg signed [15:0] hold_r;
 
-	// FRACTIONAL half-cell divider.
-	//
-	// A frame is 64*rate sys_clk and carries exactly 128 half-cells,
-	// so a half-cell is rate/2 cycles -- which is not an integer for
-	// an odd rate. The first version did `rate >> 1` and TRUNCATED:
-	// at rate 17 it produced 8-cycle half-cells, so the line ran a
-	// 1024-cycle frame against the sample path's 1088. 46875 Hz of
-	// S/PDIF fed from 44118 Hz of samples, 6.2% apart, with nothing
-	// correcting it -- frames duplicated and dropped continuously, and
-	// the output was audibly wrong.
-	//
-	// The docs said "RATE must be even" and nothing enforced it, while
-	// the default rate every app asks for is 17. A constraint that is
-	// only written down is not a constraint.
-	//
-	// So instead of dividing, this accumulates: add 128 every cycle
-	// and emit a half-cell each time a frame period's worth has piled
-	// up. That puts EXACTLY 128 half-cells in every frame at any rate,
-	// odd or even, and makes drift structurally impossible rather than
-	// merely unlikely.
-	//
-	// The cost for an odd rate is that half-cells alternate between 8
-	// and 9 cycles: half a cycle, 10ns, on a 177ns cell. Receivers PLL
-	// to the stream and tolerate far more than that. An even rate
-	// divides exactly and has no jitter at all.
-	wire [15:0] frame_cycles = { 2'b0, rate, 6'b0 };   // 64 * rate
-	wire tick = (acc >= frame_cycles);
+	// The half-cell clock is `tick`, from audio_out.v -- see this
+	// file's header. It used to be a fractional divider here; the
+	// history of that divider (a truncated rate/2 that ran the line 6%
+	// fast at RATE 17) is why the clock now has exactly one owner.
 
 	wire sub = hc[6];          // 0 = subframe A (left), 1 = B (right)
 	wire [5:0] pos = hc[5:0];  // half-cell within the subframe
@@ -253,7 +195,6 @@ module audio_spdif (
 
 		if (rst) begin
 
-			acc <= 16'd0;
 			hc <= 7'd0;
 			blkframe <= 8'd0;
 			pre_inv <= 1'b0;
@@ -270,10 +211,10 @@ module audio_spdif (
 			//
 			// frame_req latches the sample pair and nothing else. The
 			// half-cell counter owns the frame: it wraps every 128
-			// half-cells, which is 128 * rate/2 = 64 * rate cycles,
-			// exactly the audio frame period -- both dividers come off
-			// the same clock with the same ratio, so once started they
-			// cannot drift.
+			// half-cells, which is 128 ticks -- exactly the audio
+			// frame period -- both count the same
+			// ticks from audio_out.v, so once started they cannot
+			// drift.
 			//
 			// Both used to advance blkframe, because frame_req and the
 			// hc wrap land within a cycle or two of each other and
@@ -290,8 +231,6 @@ module audio_spdif (
 				stage_l <= enable ? sample_l : 16'sd0;
 				stage_r <= enable ? sample_r : 16'sd0;
 			end
-
-			acc <= tick ? (acc - frame_cycles + 16'd128) : (acc + 16'd128);
 
 			if (tick) begin
 

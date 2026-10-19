@@ -531,7 +531,7 @@ each sample as consecutive values. Loud, tuneless, and only loosely
 correlated with the trigger — which reads as "the audio isn't tied to
 anything" rather than as a format mismatch.
 
-**No sound at all.** `z_audio_start()` is what sets
+**No sound at all.** `z_audio_start_hz()` is what sets
 `Z_AUDIO_CTRL_EN`, and without `EN` the DAC is muted no matter how many
 channels the mixer is happily summing. An earlier version dropped the
 call in order to avoid overriding the board's sample rate, and the

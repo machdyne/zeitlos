@@ -105,11 +105,13 @@ stall.
 
 **F1** shows a short help box ([app_help.md](app_help.md)).
 
-`r` only offers rates the board's outputs can actually carry. On a
-board with S/PDIF that means an even divider of 23 or less, so it stays
-at 46875 Hz and the key does nothing — 22kHz and 11kHz are below the
-32kHz floor every IEC 60958 receiver is specified to, and an odd
-divider makes the line ragged. See `docs/audio.md`.
+`r` cycles 48 / 44.1 / 22.05 / 11.025 kHz, offering only rates the
+board's outputs can actually carry. On a board with S/PDIF that means
+48 and 44.1 kHz — 22 kHz and 11 kHz are below the 32 kHz floor every
+IEC 60958 receiver is specified to. Every rate is exact on a bitstream
+with exact rates and the nearest old divider otherwise; the engine is
+told what the hardware really runs at either way. See `docs/audio.md`,
+"Exact sample rates".
 
 `s` is off by default because `printf` over the UART is slow enough to
 disturb the timing it would be reporting on.
@@ -235,7 +237,7 @@ and it plays the wrong memory.
 ## See also
 
 `docs/audio.md` for the hardware: the mixer, the FIFO, the output
-stages, and why an S/PDIF board runs at 46875 Hz.
+stages, and the exact sample rates.
 
 ## Speech
 

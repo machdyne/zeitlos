@@ -1,0 +1,8 @@
+# sw/common/zaudio.h's rate arithmetic on the host: FSDIV for every
+# rate, the old dividers, the S/PDIF code, z_audio_start*() register
+# writes. The registers are a mapped page at 0x7000_0000, so the
+# header is tested unmodified.
+#   make -C sw/common/tests -f Makefile.zaudio
+all:
+	cc -std=gnu99 -O1 -g -Wall -Wextra -fsanitize=address,undefined -I .. -o /tmp/test_zaudio test_zaudio.c
+	/tmp/test_zaudio

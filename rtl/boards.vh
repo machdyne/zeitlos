@@ -230,15 +230,21 @@
 //   `AUDIO_PT8211   PT8211/TM8211 serial DAC     (AUD_BCK/WS/DIN)
 //   `AUDIO_SPDIF    IEC 60958 transmitter        (AUD_OPTICAL)
 //
-// A board with `AUDIO_SPDIF should also set `AUDIO_RATE_RESET to 16.
+// `AUDIO_EXACT adds rtl/audio.v's FSDIV register: the sample clock is
+// a modulo accumulator in rtl/audio_out.v, so any whole-Hz rate --
+// 48000, 44100, 32000, 22050, 11025 -- is exact from the 48MHz
+// sys_clk, on every output at once. Without it the only rates are
+// fs = 48MHz / (64 * RATE): 44117.6 Hz, 46875 Hz, and so on. It costs
+// a 16-bit accumulator in place of the old 8-bit down-counter (S/PDIF
+// boards lose their own divider in exchange) -- measured per board in
+// docs/audio.md. Every board with `AUDIO has it; a target can remove
+// it (`-AUDIO_EXACT` in its spec) if a build will not fit.
 //
-// S/PDIF is 128 half-cells per frame, so the line runs at 128*fs, and
-// from a 48MHz sys_clk the reachable rates are fs = 375000/N. No
-// standard rate is among them -- 44.1kHz wants N=8.5034 and 48kHz
-// wants 7.8125. N=8 gives 46875Hz with a half-cell of exactly 8
-// cycles: 2.34% below 48kHz, well inside any receiver's capture range,
-// and exact so there is no jitter at all. RATE=16 is that rate, and it
-// must be even because a half-cell is rate/2. See rtl/audio_spdif.v.
+// A board with `AUDIO_SPDIF should also set `AUDIO_FS_RESET to 48000
+// and `AUDIO_RATE_RESET to 16. The first is the power-on rate with
+// `AUDIO_EXACT; the second is what a build without it falls back to:
+// 46875 Hz, the only old-style rate whose S/PDIF half-cell is a whole
+// number of clocks. See rtl/audio_spdif.v.
 //
 // Both may be defined together on a board that has both; the mixer and
 // FIFO are shared and only the last stage differs. rtl/audio_out.v
@@ -257,8 +263,11 @@
 //   `AUDIO_FIFO_LOG2    FIFO depth is 2**this, in stereo frames.
 //                       Default 7 (128 frames, 2.9ms at 44.1kHz).
 //                       NOT free to raise -- see sysctl.v's own note.
-//   `AUDIO_RATE_RESET   power-on sample rate divider, fs = 48MHz/(64*R).
-//                       Default 8'd17 -> 44117.6Hz.
+//   `AUDIO_FS_RESET     power-on sample rate in Hz with `AUDIO_EXACT.
+//                       Default 44100.
+//   `AUDIO_RATE_RESET   power-on sample rate divider, fs = 48MHz/(64*R),
+//                       on a build without `AUDIO_EXACT. Default
+//                       8'd17 -> 44117.6Hz.
 //   `AUDIO_CTRL_RESET   power-on CTRL. Default 8'h00. Set bit 2
 //                       (SWAPLR) here if a board's PT8211 comes up
 //                       with its channels reversed -- once, rather
@@ -427,6 +436,7 @@
 `define SPI_SDCARD
 `define SPI_ETH
 `define AUDIO
+`define AUDIO_EXACT
 `define AUDIO_SD
 `define AUDIO_MIXER
 
@@ -579,6 +589,7 @@
 `define SPI_SDCARD
 `define SPI_ETH
 `define AUDIO
+`define AUDIO_EXACT
 `define AUDIO_SD
 `define AUDIO_MIXER
 
@@ -712,6 +723,7 @@
 `define ETH_RMII
 `define ETH_RX_SLOTS 4
 `define AUDIO
+`define AUDIO_EXACT
 `define AUDIO_PT8211
 `define AUDIO_MIXER
 
@@ -768,6 +780,7 @@
 // See the note on ETH_RX_SLOTS under BOARD_SERGEI_ML1.
 `define ETH_RX_SLOTS 4
 `define AUDIO
+`define AUDIO_EXACT
 `define AUDIO_PT8211
 `define AUDIO_MIXER
 
@@ -852,6 +865,7 @@
 // See the note on ETH_RX_SLOTS under BOARD_SERGEI_ML1.
 `define ETH_RX_SLOTS 4
 `define AUDIO
+`define AUDIO_EXACT
 `define AUDIO_PT8211
 `define AUDIO_MIXER
 
@@ -918,6 +932,7 @@
 `define USB_HOST
 `define SPI_SDCARD
 `define AUDIO
+`define AUDIO_EXACT
 `define AUDIO_SD
 `define AUDIO_MIXER
 
@@ -1022,10 +1037,12 @@
 `define ETH_RMII_DRIVE_REFCLK
 `define ETH_RX_SLOTS 4
 `define AUDIO
+`define AUDIO_EXACT
 `define AUDIO_SPDIF
 `define AUDIO_MIXER
-// 46875Hz -- the S/PDIF rate, as on Sergei ML1.
+// 48000Hz with `AUDIO_EXACT, 46875Hz without -- as on Sergei ML1.
 `define AUDIO_RATE_RESET 8'd16
+`define AUDIO_FS_RESET 48000
 
 `elsif BOARD_SERGEI_ML1
 
@@ -1070,11 +1087,14 @@
 // Power of two, 2 or more. 2KB of block RAM each, one DP16KD per slot.
 `define ETH_RX_SLOTS 4
 `define AUDIO
+`define AUDIO_EXACT
 `define AUDIO_SPDIF
 `define AUDIO_MIXER
-// 46875Hz -- the only rate whose S/PDIF half-cell is an exact whole
-// number of sys_clk. See the `AUDIO_SPDIF note above.
+// 48000Hz exactly with `AUDIO_EXACT. Without it, 46875Hz -- the only
+// old-style rate whose S/PDIF half-cell is an exact whole number of
+// sys_clk. See the `AUDIO_SPDIF note above.
 `define AUDIO_RATE_RESET 8'd16
+`define AUDIO_FS_RESET 48000
 
 // GPIO on the 6-pin PMOD, four pins, off by default.
 //
@@ -1165,10 +1185,12 @@
 `define ETH_RMII
 `define ETH_RX_SLOTS 4
 `define AUDIO
+`define AUDIO_EXACT
 `define AUDIO_MIXER
 `define ETH_RMII_DRIVE_REFCLK
 `define AUDIO_SPDIF
 `define AUDIO_RATE_RESET 8'd16
+`define AUDIO_FS_RESET 48000
 
 `elsif BOARD_MOZART_MX1
 
@@ -1232,6 +1254,7 @@
 `define ETH_RMII
 `define ETH_RX_SLOTS 4
 `define AUDIO
+`define AUDIO_EXACT
 `define AUDIO_MIXER
 `define AUDIO_PT8211
 
@@ -1296,10 +1319,12 @@
 // See the note on ETH_RX_SLOTS under BOARD_SERGEI_ML1.
 `define ETH_RX_SLOTS 4
 `define AUDIO
+`define AUDIO_EXACT
 `define AUDIO_SPDIF
 `define AUDIO_MIXER
-// 46875Hz, as BOARD_SERGEI_ML1: the S/PDIF half-cell in whole sys_clks.
+// 48000Hz (46875Hz without `AUDIO_EXACT), as BOARD_SERGEI_ML1.
 `define AUDIO_RATE_RESET 8'd16
+`define AUDIO_FS_RESET 48000
 
 // GPIO on the 6-pin PMOD, four pins, off by default -- the same trade
 // as BOARD_SERGEI_ML1 (pin 1 is the optical S/PDIF output), on the
@@ -1419,6 +1444,7 @@
 `define ESP32_RXFIFO_BITS 13
 
 `define AUDIO
+`define AUDIO_EXACT
 `define AUDIO_SPDIF
 `define AUDIO_MIXER
 // 46875Hz -- see the `AUDIO_SPDIF note above. ULX3S runs from a 25MHz
@@ -1426,6 +1452,7 @@
 // 48.0000 MHz (480MHz VCO / 10), so the S/PDIF arithmetic is identical
 // to the 48MHz-crystal boards and the half-cell is still 8 cycles.
 `define AUDIO_RATE_RESET 8'd16
+`define AUDIO_FS_RESET 48000
 
 `elsif BOARD_KONFEKT
 
@@ -1475,6 +1502,7 @@
 `define USB_HID
 `define SPI_SDCARD
 `define AUDIO
+`define AUDIO_EXACT
 `define AUDIO_SD
 // No `AUDIO_MIXER. Lakritz, the same die with this block plus
 // `SPI_ETH, measured 23395 of 24288 TRELLIS_COMB (96%) at the commit

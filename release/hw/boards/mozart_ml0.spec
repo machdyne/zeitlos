@@ -45,6 +45,7 @@ defines =
     ETH_RMII
     ETH_RX_SLOTS=4
     AUDIO
+    AUDIO_EXACT
     AUDIO_PT8211
     AUDIO_MIXER
     ZLINK_FAST_PINS

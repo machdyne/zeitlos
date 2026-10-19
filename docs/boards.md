@@ -583,6 +583,46 @@ audio mixer (36 DPR16X4), the raster engine (11), the TRNG (8) and video
 (3); the blitter's arithmetic is the other candidate (zlink.md's plan,
 last round).
 
+## Exact audio rates (0.0.7)
+
+`AUDIO_EXACT` ([audio.md](audio.md#exact-sample-rates)) on every board
+with `AUDIO`. Measured with Yosys 0.70 and nextpnr-ecp5 0.11.1 (YoWASP),
+default seed, against the same tree without it:
+
+| target | COMB before | COMB after | FF | DP16KD | `CLK_48` before / after |
+|---|---|---|---|---|---|
+| `lakritz_gpio` | 22,257 (91%) | 22,311 (91%) | 9,815 → 9,936 | 39 → 39 | 50.31 / 54.72 MHz |
+| `sergei_ml1` | 20,802 (47%) | 21,338 (48%) | 9,272 → 9,297 | 47 → 47 | 48.24 / 51.17 MHz |
+
+The audio block on its own (`synth_ecp5 -abc9 -top audio_wb`):
+
+| outputs | LUT4 | CCU2C | FF |
+|---|---|---|---|
+| sigma-delta (Lakritz) | 1,300 → 1,378 | 223 → 233 | 1,347 → 1,388 |
+| S/PDIF (Sergei) | 1,412 → 1,444 | 252 → 248 | 1,448 → 1,473 |
+
+So the block costs about 100 LUT-equivalents with a sigma-delta output
+and about 30 with S/PDIF, where the transmitter's own divider goes away.
+Sergei's +536 placed is **not** the audio block: its synthesis grows by
+544 LUT4 overall while `audio_wb` alone grows by 32, so the rest is
+abc9 mapping the rest of the SoC differently — the same mapper noise
+the USB comparison above records. Lakritz, the board the question was
+about, places at +54 and meets 48 MHz, so `AUDIO_EXACT` stays on
+everywhere, `lakritz_gpio` included.
+
+## DDMI audio, round 2 (data islands)
+
+`GPU_DDMI_AUDIO` is not on any board yet ([ddmi_audio.md](ddmi_audio.md)).
+Measured by adding it, against the same tree without it:
+
+| target | COMB without | COMB with | `CLK_48` | seed |
+|---|---|---|---|---|
+| `lakritz_gpio` | 22,311 (91%) | 22,759 (93%) | 52.30 MHz | default |
+| `sergei_ml1` | 21,338 (48%) | 21,349 (48%) | 53.68 MHz | 3 (the default seed's router did not converge in 30 minutes) |
+
+`gpu_ddmi` alone grows by about 250 LUT-equivalents and 40 FF; the
+Sergei figure is mapper noise in the other direction.
+
 ## Boards with nothing to measure
 
 iCE40 targets in the Makefile (`riegel`, `eis`, `kolibri`, `bonbon`,

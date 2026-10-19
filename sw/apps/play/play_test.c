@@ -503,11 +503,16 @@ static void t_tables(void) {
 static void t_pitch(void) {
 
     struct { unsigned src; unsigned out; } cases[] = {
-        { 44100, 44118 },     /* the default board rate */
-        { 22050, 44118 },     /* 2x up */
+        { 44100, 44100 },     /* the default board rate (exact rates) */
+        { 48000, 48000 },     /* an S/PDIF board (exact rates) */
+        { 22050, 44100 },     /* 2x up */
+        { 44100, 48000 },     /* CD audio on an S/PDIF board */
+        { 11025, 11025 },
+        { 44100, 44118 },     /* the old default divider (17) */
+        { 22050, 44118 },
         { 8000,  44118 },     /* awkward ratio up */
         { 48000, 44118 },     /* down */
-        { 44100, 46875 },     /* an S/PDIF board */
+        { 44100, 46875 },     /* an S/PDIF board, old divider (16) */
         { 11025, 22059 },
     };
     unsigned i;

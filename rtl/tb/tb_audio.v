@@ -33,6 +33,14 @@
  *   8  sigma-delta stability -- full-scale sine, error terms bounded,
  *      no limit cycle
  *   9  interrupt -- asserts below the watermark, clears above it
+ *  10  system volume
+ *  11  exact rates -- FSDIV: CONFIG bit, RATE->FSDIV, power-on values
+ *      from FS_RESET, frame periods counted to the cycle at 48000,
+ *      44100, 32000 and 22050 Hz, and the PT8211 round trip with
+ *      jittered (non-integer) tick spacing
+ *  12  DDMI audio feed -- each frame handed to the DDMI FIFO 1, 2 or 4
+ *      times (ddmi_rep), with the post-volume samples, and zeros when
+ *      muted
  */
 
 // rtl/audio.v includes boards.vh (for `AUDIO_MIXER), so this needs
@@ -41,6 +49,8 @@
 // configuration a board does, rather than silently testing the
 // mixer-less variant and reporting a pass for it.
 `define AUDIO_MIXER
+`define AUDIO_EXACT
+`define GPU_DDMI_AUDIO
 
 `timescale 1ns / 1ps
 
@@ -65,6 +75,7 @@ module tb_audio;
 	localparam [31:0] REG_CONFIG = 32'd6;
 	localparam [31:0] REG_CLKHZ  = 32'd7;
 	localparam [31:0] REG_VOLUME = 32'd14;
+	localparam [31:0] REG_FSDIV  = 32'd15;
 
 	localparam [7:0] CTRL_EN     = 8'h01;
 	localparam [7:0] CTRL_IRQEN  = 8'h02;
@@ -126,6 +137,47 @@ module tb_audio;
 	integer pt_words;
 	integer pt_frames;
 
+	// section 11: a free-running cycle counter, for counting frame
+	// periods exactly rather than in floating-point nanoseconds
+	integer cyc = 0;
+	integer c0, c1;
+	always @(posedge clk) cyc <= cyc + 1;
+
+	// Two more blocks that are never addressed, only reset: they
+	// exist to show what FS_RESET turns into at power-on (the gcd
+	// arithmetic in audio.v's localparams).
+	wire [31:0] r48_dat, r441_dat;
+	wire r48_ack, r441_ack;
+	audio_wb #(.DEPTH_LOG2(4), .CLK_HZ(48000000), .RATE_RESET(8'd16),
+		.FS_RESET(48000)) r48 (
+		.wb_clk_i(clk), .wb_rst_i(rst), .wb_adr_i(32'd0), .wb_dat_i(32'd0),
+		.wb_dat_o(r48_dat), .wb_we_i(1'b0), .wb_sel_i(4'b0), .wb_stb_i(1'b0),
+		.wb_ack_o(r48_ack), .wb_cyc_i(1'b0), .int_o(),
+		.AUDIO_L(), .AUDIO_R(), .AUD_BCK(), .AUD_WS(), .AUD_DIN(),
+		.AUD_OPTICAL(), .mx_adr_o(), .mx_dat_o(), .mx_dat_i(32'd0),
+		.mx_we_o(), .mx_sel_o(), .mx_stb_o(), .mx_cyc_o(), .mx_ack_i(1'b0));
+	audio_wb #(.DEPTH_LOG2(4), .CLK_HZ(48000000), .RATE_RESET(8'd17),
+		.FS_RESET(44100)) r441 (
+		.wb_clk_i(clk), .wb_rst_i(rst), .wb_adr_i(32'd0), .wb_dat_i(32'd0),
+		.wb_dat_o(r441_dat), .wb_we_i(1'b0), .wb_sel_i(4'b0), .wb_stb_i(1'b0),
+		.wb_ack_o(r441_ack), .wb_cyc_i(1'b0), .int_o(),
+		.AUDIO_L(), .AUDIO_R(), .AUD_BCK(), .AUD_WS(), .AUD_DIN(),
+		.AUD_OPTICAL(), .mx_adr_o(), .mx_dat_o(), .mx_dat_i(32'd0),
+		.mx_we_o(), .mx_sel_o(), .mx_stb_o(), .mx_cyc_o(), .mx_ack_i(1'b0));
+
+	// frame period over n frames, in sys_clk cycles, at the current rate
+	task count_frames;
+		input integer n;
+		output integer cycles;
+		begin
+			@(posedge dut.out_i.frame_req);
+			c0 = cyc;
+			repeat (n) @(posedge dut.out_i.frame_req);
+			c1 = cyc;
+			cycles = c1 - c0;
+		end
+	endtask
+
 	// -- sigma-delta observation --
 	integer sd_l_ones;
 	integer sd_samples;
@@ -151,8 +203,19 @@ module tb_audio;
 		.AUDIO_R(audio_r),
 		.AUD_BCK(aud_bck),
 		.AUD_WS(aud_ws),
-		.AUD_DIN(aud_din)
+		.AUD_DIN(aud_din),
+		.ddmi_we(dwe),
+		.ddmi_wdata(dwd),
+		.ddmi_rep(drep)
 	);
+
+	// section 12: what the DDMI feed hands over
+	wire dwe;
+	wire [31:0] dwd;
+	reg [1:0] drep = 2'd0;
+	integer dcount = 0;
+	reg [31:0] dlast = 0;
+	always @(posedge clk) if (dwe) begin dcount = dcount + 1; dlast <= dwd; end
 
 	initial begin
 		clk = 1'b0;
@@ -351,7 +414,7 @@ module tb_audio;
 		// 5a41330a want 5a41130a" is not a helpful way to be told.
 		check("CONFIG", rd, {
 			16'h5A41,      // signature
-			1'b0,          // reserved
+			1'b1,          // bit 15: exact rates (FSDIV) present
 			1'b1,          // bit 14: system volume (VOLUME) present
 			1'b1,          // bit 13: mixer channels can fetch 16-bit
 			1'b1,          // bit 12: hardware mixer present
@@ -367,6 +430,8 @@ module tb_audio;
 
 		wb_read(REG_RATE, rd);
 		check("RATE reset", rd, 32'd17);
+		wb_read(REG_FSDIV, rd);
+		check("FSDIV reset (FS_RESET 0: RATE 17)", rd, { 16'd1088, 16'd128 });
 
 		wb_read(REG_WMARK, rd);
 		check("WMARK reset", rd, DEPTH / 2);
@@ -610,6 +675,113 @@ module tb_audio;
 			end
 		end
 
+		$display("");
+		$display("=== 11. exact rates (FSDIV) ===");
+		wb_write(REG_VOLUME, 32'd256);
+
+		wb_read(REG_CONFIG, rd);
+		check("CONFIG HAS_EXACT", { 31'b0, rd[15] }, 32'd1);
+
+		// RATE is the old way of saying the same thing
+		wb_write(REG_RATE, 32'd17);
+		wb_read(REG_FSDIV, rd);
+		check("RATE 17 -> FSDIV", rd, { 16'd1088, 16'd128 });
+		wb_read(REG_RATE, rd);
+		check("RATE reads back", rd, 32'd17);
+		wb_write(REG_RATE, 32'd0);		// clamped to 2, as it always was
+		wb_read(REG_FSDIV, rd);
+		check("RATE 0 -> FSDIV clamped", rd, { 16'd128, 16'd128 });
+
+		// FSDIV leaves RATE alone (see the register map)
+		wb_write(REG_RATE, 32'd16);
+		wb_write(REG_FSDIV, { 16'd125, 16'd16 });
+		wb_read(REG_FSDIV, rd);
+		check("FSDIV reads back", rd, { 16'd125, 16'd16 });
+		wb_read(REG_RATE, rd);
+		check("RATE untouched by FSDIV", rd, 32'd16);
+
+		// byte lanes: only STEP's low byte
+		@(posedge clk);
+		wb_adr <= REG_FSDIV; wb_dat_w <= 32'hFFFF_FF20; wb_we <= 1'b1;
+		wb_sel <= 4'b0001; wb_stb <= 1'b1; wb_cyc <= 1'b1;
+		@(posedge clk); while (!wb_ack) @(posedge clk);
+		wb_stb <= 1'b0; wb_cyc <= 1'b0; wb_we <= 1'b0;
+		@(posedge clk);
+		wb_read(REG_FSDIV, rd);
+		check("FSDIV byte lane 0 only", rd, { 16'd125, 16'd32 });
+
+		// power-on values from FS_RESET
+		check("FS_RESET 48000 step", { 16'b0, r48.fs_step }, 32'd16);
+		check("FS_RESET 48000 mod ", { 16'b0, r48.fs_mod }, 32'd125);
+		check("FS_RESET 48000 S/PDIF code", { 28'b0, r48.spdif_fs }, 32'd2);
+		check("FS_RESET 44100 step", { 16'b0, r441.fs_step }, 32'd147);
+		check("FS_RESET 44100 mod ", { 16'b0, r441.fs_mod }, 32'd1250);
+		check("FS_RESET 44100 S/PDIF code", { 28'b0, r441.spdif_fs }, 32'd0);
+
+		// Frame periods, counted to the cycle. These are EXACT, not
+		// within a tolerance: n frames of fs at 48MHz is a whole number
+		// of cycles for each n below, and the accumulator's error never
+		// builds up, so the count must come out spot on.
+		wb_write(REG_CTRL, CTRL_FLUSH);
+		wb_write(REG_CTRL, CTRL_EN);
+
+		wb_write(REG_FSDIV, { 16'd125, 16'd16 });		// 48000
+		count_frames(48, i);
+		check("48000 Hz: 48 frames in 48000 cycles", i, 48000);
+
+		wb_write(REG_FSDIV, { 16'd1250, 16'd147 });		// 44100
+		count_frames(441, i);
+		check("44100 Hz: 441 frames in 480000 cycles", i, 480000);
+
+		wb_write(REG_FSDIV, { 16'd375, 16'd32 });		// 32000
+		count_frames(32, i);
+		check("32000 Hz: 32 frames in 48000 cycles", i, 48000);
+
+		wb_write(REG_FSDIV, { 16'd2500, 16'd147 });		// 22050
+		count_frames(441, i);
+		check("22050 Hz: 441 frames in 960000 cycles", i, 960000);
+
+		// The PT8211 receiver with a tick that is NOT a whole number
+		// of cycles: 7/11 of a tick per cycle, so half-BCKs are 3 or 4
+		// cycles in an irregular pattern. The receiver only looks at
+		// pin edges, so jitter that the serialiser mishandles shows up
+		// as wrong words.
+		wb_write(REG_FSDIV, { 16'd11, 16'd7 });
+		for (j = 0; j < 4; j = j + 1) begin
+			sl = 16'h8001 ^ (j * 16'h1357);
+			sr = 16'h0FE2 ^ (j * 16'h2468);
+			wb_write(REG_CTRL, CTRL_FLUSH);
+			wb_write(REG_CTRL, CTRL_EN);
+			for (i = 0; i < 60; i = i + 1)
+				wb_write(REG_DATA, { sl, sr });
+			pt_wait_frames(3);
+			check("jittered pt8211 left ", { 16'b0, pt_pair_a }, { 16'b0, sl });
+			check("jittered pt8211 right", { 16'b0, pt_pair_b }, { 16'b0, sr });
+		end
+
+		$display("");
+		$display("=== 12. DDMI audio feed ===");
+		wb_write(REG_VOLUME, 32'd256);
+		wb_write(REG_FSDIV, { 16'd11, 16'd7 });		// fast, keeps it short
+		for (j = 0; j < 3; j = j + 1) begin
+			drep = j;
+			wb_write(REG_CTRL, CTRL_FLUSH);
+			wb_write(REG_CTRL, CTRL_EN);
+			sl = 16'h1234 + j;
+			sr = 16'hA5C3 - j;
+			for (i = 0; i < 40; i = i + 1)
+				wb_write(REG_DATA, { sl, sr });
+			wait_frames(4);
+			dcount = 0;
+			wait_frames(8);
+			check("frames handed over per 8", dcount, 8 << j);
+			check("the frame", dlast, { sl, sr });
+		end
+		wb_write(REG_CTRL, CTRL_FLUSH);			// EN clear: muted
+		wait_frames(4);
+		check("muted: zeros", dlast, 32'h0);
+		drep = 0;
+
 		if (errors == 0)
 			$display("=== tb_audio: PASS ===");
 		else
@@ -721,12 +893,14 @@ module tb_audio;
 		.clk(clk),
 		.rst(ex_rst),
 		.enable(1'b1),
-		.rate(8'd2),
+		.step(16'd128),		// RATE 2, the old way: mod = 64 * 2
+		.mod(16'd128),
 		.swap_lr(1'b0),
 		.sample_l(ex_l),
 		.sample_r(ex_r),
 		.sample_valid(1'b1),
 		.frame_req(ex_frame_req),
+		.tick(),
 		.sd_l(),
 		.sd_r(),
 		.pt_bck(ex_bck),

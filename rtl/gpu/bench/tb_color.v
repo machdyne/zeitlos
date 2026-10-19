@@ -53,7 +53,7 @@
 //
 //   iverilog -g2005 -DGPU_DDMI -DTB_STUBS -o /tmp/tb_color_ddmi.out \
 //       rtl/gpu/bench/tb_color.v /tmp/gpu_video_fix.v \
-//       rtl/gpu/gpu_ddmi.v rtl/gpu/tmds_encoder.v
+//       rtl/gpu/gpu_ddmi.v rtl/gpu/tmds_encoder.v rtl/gpu/ddmi_island.v
 //   vvp /tmp/tb_color_ddmi.out
 //
 // Each runs about thirty whole frames: a few minutes, or about twenty

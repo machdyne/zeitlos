@@ -165,6 +165,15 @@ localparam SYSCLK = 48_000_000;
 `ifndef AUDIO_RATE_RESET
 `define AUDIO_RATE_RESET 8'd17
 `endif
+// Power-on rate in Hz on a build with `AUDIO_EXACT (rtl/audio.v's
+// FSDIV): any whole-Hz rate, exactly, from the same 48MHz. 44100 is
+// the default; the S/PDIF boards set 48000, the rate IEC 60958 gear
+// expects first. Without `AUDIO_EXACT this is ignored and
+// `AUDIO_RATE_RESET is the power-on rate, as before. See docs/audio.md,
+// "Exact sample rates".
+`ifndef AUDIO_FS_RESET
+`define AUDIO_FS_RESET 44100
+`endif
 // log2 of the hardware mixer's channel count. 3 = eight channels;
 // 2 = four, which is all a ProTracker MOD needs and is the dial to
 // reach for when placement is tight. See rtl/audio_mixer.v.
@@ -188,9 +197,8 @@ localparam SYSCLK = 48_000_000;
 // rtl/audio.v's CONFIG register. Software cannot otherwise tell -- the
 // register interface is identical whichever output is wired.
 //
-// Bit 2 is RESERVED for the optical S/PDIF transmitter on Sergei and
-// is deliberately not defined anywhere yet; see rtl/audio.v's header
-// for what attaching one involves.
+// Bit 2 is the optical S/PDIF transmitter (`AUDIO_SPDIF); bit 3 is DDMI
+// audio (`GPU_DDMI_AUDIO: the frames also go out on the DDMI connector).
 localparam [3:0] AUDIO_FORMATS =
 `ifdef AUDIO_SD
 	4'b0001 |
@@ -200,6 +208,9 @@ localparam [3:0] AUDIO_FORMATS =
 `endif
 `ifdef AUDIO_SPDIF
 	4'b0100 |
+`endif
+`ifdef GPU_DDMI_AUDIO
+	4'b1000 |
 `endif
 	4'b0000;
 
@@ -3468,6 +3479,32 @@ module sysctl #()
 	localparam BRIGHT_AVAILABLE = 1'b0;
 `endif
 	wire [3:0] socctl_video_bright;
+	// DDMI audio (docs/ddmi_audio.md): data islands on the DDMI
+	// output, built only with `GPU_DDMI_AUDIO (which needs `GPU_DDMI).
+`ifdef GPU_DDMI_AUDIO
+	localparam DDMI_AUDIO_AVAILABLE = 1'b1;
+`else
+	localparam DDMI_AUDIO_AVAILABLE = 1'b0;
+`endif
+	// ... with sound when the board also has the audio block
+`ifdef GPU_DDMI_AUDIO
+`ifdef AUDIO
+	localparam DDMI_SOUND_AVAILABLE = 1'b1;
+`else
+	localparam DDMI_SOUND_AVAILABLE = 1'b0;
+`endif
+`else
+	localparam DDMI_SOUND_AVAILABLE = 1'b0;
+`endif
+	wire socctl_ddmi_en;
+	wire socctl_ddmi_sound;
+	wire [3:0] socctl_ddmi_fs;
+	wire [19:0] socctl_ddmi_acr_n;
+	wire [19:0] socctl_ddmi_acr_cts;
+	wire [1:0] socctl_ddmi_rep;
+	// the frames, from rtl/audio.v into rtl/gpu/ddmi_island.v's FIFO
+	wire ddmi_aud_we;
+	wire [31:0] ddmi_aud_wdata;
 	wire socctl_color_en;
 	wire [1:0] socctl_color_np;
 	wire [5:0] socctl_color_off;
@@ -3528,6 +3565,17 @@ module sysctl #()
 		.CVBS_AVAIL(CVBS_AVAILABLE),
 		.CVBS_MONO_RESET(CVBS_MONO_DEFAULT),
 		.BRIGHT_AVAIL(BRIGHT_AVAILABLE),
+		.DDMI_AUDIO_AVAIL(DDMI_AUDIO_AVAILABLE),
+		.DDMI_SOUND_AVAIL(DDMI_SOUND_AVAILABLE),
+		.AUDIO_CLK_HZ(SYSCLK),
+`ifdef AUDIO
+`ifdef AUDIO_EXACT
+		.AUDIO_FS_RESET(`AUDIO_FS_RESET),
+`else
+		.AUDIO_FS_RESET(0),
+`endif
+		.AUDIO_RATE_RESET(`AUDIO_RATE_RESET),
+`endif
 `ifdef PROGRAMN_PIN
 		.RECONFIG_AVAIL(1)
 `else
@@ -3571,6 +3619,12 @@ module sysctl #()
 		.reconfig(socctl_reconfig),
 		.video_mode(socctl_video_mode),
 		.video_bright(socctl_video_bright),
+		.ddmi_en(socctl_ddmi_en),
+		.ddmi_sound(socctl_ddmi_sound),
+		.ddmi_fs(socctl_ddmi_fs),
+		.ddmi_acr_n(socctl_ddmi_acr_n),
+		.ddmi_acr_cts(socctl_ddmi_acr_cts),
+		.ddmi_rep(socctl_ddmi_rep),
 		.view_load(socctl_view_load),
 		.game_en(socctl_game_en),
 		.game_wrap(socctl_game_wrap),
@@ -3789,14 +3843,14 @@ module sysctl #()
 	//
 	// FORMATS tells software which DAC is actually wired here, which it
 	// cannot otherwise know -- the register interface is identical
-	// either way. Bit 2 is reserved for the optical S/PDIF transmitter
-	// on Sergei; nothing sets it yet.
+	// either way. Bit 2 is the optical S/PDIF transmitter.
 `ifdef AUDIO
 	audio_wb #(
 		.DEPTH_LOG2(`AUDIO_FIFO_LOG2),
 		.FORMATS(AUDIO_FORMATS),
 		.CLK_HZ(SYSCLK),
 		.RATE_RESET(`AUDIO_RATE_RESET),
+		.FS_RESET(`AUDIO_FS_RESET),
 		.CTRL_RESET(`AUDIO_CTRL_RESET)
 	) audio_i (
 		.wb_clk_i(wbm_clk),
@@ -3845,8 +3899,16 @@ module sysctl #()
 		.mx_sel_o(wbm_audio_sel),
 		.mx_stb_o(wbm_audio_stb),
 		.mx_cyc_o(wbm_audio_cyc),
-		.mx_ack_i(wbm_audio_ack)
+		.mx_ack_i(wbm_audio_ack),
+
+		// DDMI audio: frames into rtl/gpu/ddmi_island.v's FIFO
+		.ddmi_we(ddmi_aud_we),
+		.ddmi_wdata(ddmi_aud_wdata),
+		.ddmi_rep(socctl_ddmi_rep)
 	);
+`else
+	assign ddmi_aud_we = 1'b0;
+	assign ddmi_aud_wdata = 32'd0;
 `endif
 
 	// WISHBONE SLAVE: USB HID
@@ -4117,6 +4179,13 @@ module sysctl #()
 		.pixel(gpu_pixel),
 		.video_mode(socctl_video_mode),
 		.video_bright(socctl_video_bright),
+		.ddmi_en(socctl_ddmi_en),
+		.ddmi_sound(socctl_ddmi_sound),
+		.ddmi_fs(socctl_ddmi_fs),
+		.ddmi_acr_n(socctl_ddmi_acr_n),
+		.ddmi_acr_cts(socctl_ddmi_acr_cts),
+		.ddmi_we(ddmi_aud_we),
+		.ddmi_wdata(ddmi_aud_wdata),
 		.view_load(socctl_view_load),
 		// GAME_AVAILABLE is already `GAME && `GPU, and socctl has
 		// already gated its own enable bit with it -- so this is belt

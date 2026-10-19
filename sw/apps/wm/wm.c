@@ -189,6 +189,7 @@ static const dock_app_t dock_candidates[] = {
 	{ "keyboard",	z_icon_keyboard_data },
 
 	{ "ask",			z_icon_ask_data   },
+	{ "slide",		z_icon_slide_data   },
 	{ "irc",			z_icon_irc_data  },
 	{ "hex",			z_icon_hex_data   },
 	{ "mmod",		z_icon_mmod_data, 0, Z_FEATURE2_GPIO },

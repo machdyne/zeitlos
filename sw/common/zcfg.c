@@ -81,6 +81,8 @@ const z_cfg_known_t z_cfg_known[] = {
 	  "display colour at boot and on reload: white, amber, green or paper" },
 	{ "system.video.brightness", "8",
 	  "HDMI/DVI monochrome brightness at boot and on reload: 1-16" },
+	{ "system.video.ddmi_audio", "no",
+	  "DDMI boards: send sound and display info over the HDMI connector at boot (yes/no)" },
 	{ "system.video.composite", "color",
 	  "composite colour boards: color, or mono for black and white" },
 };

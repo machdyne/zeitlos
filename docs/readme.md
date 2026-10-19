@@ -58,6 +58,7 @@ with [welcome](welcome.md); to program it, [kernel](kernel.md) and
 | [color](color.md) | Game-mode colour: bitplanes and a 16-entry palette |
 | [composite](composite.md) | Composite NTSC/PAL output |
 | [audio](audio.md) | Hardware mixer and outputs |
+| [ddmi_audio](ddmi_audio.md) | Sound and display info over the DDMI connector (in progress) |
 | [uart](uart.md) | UART0 |
 | [uart1](uart1.md) | Second UART and the `serial` service |
 | [usb\_cdc](usb_cdc.md) | USB CDC-ACM console |

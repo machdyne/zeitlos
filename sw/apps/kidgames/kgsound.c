@@ -125,11 +125,11 @@ void kg_sound_init(void)
 
 	if (!have_audio) return;
 
-	/* Start the DAC if nothing else has. z_audio_start() flushes and
-	 * re-enables unconditionally -- harmless, and the only way to be
-	 * sure the rate divider is one we know, which CH_STEP is computed
-	 * against. */
-	z_audio_start(Z_AUDIO_RATE_44K);
+	/* Start the DAC if nothing else has. z_audio_start_hz() flushes
+	 * and re-enables unconditionally -- harmless. CH_STEP is computed
+	 * from z_audio_rate_hz() afterwards, so the board's preferred rate
+	 * is as good as any. */
+	z_audio_start_hz(z_audio_preferred_hz());
 	z_audio_mixer_enable(true);
 
 	Z_AUDIO_CH_BASE(SND_CH)    = phys_of(wave);

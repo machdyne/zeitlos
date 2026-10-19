@@ -1561,7 +1561,7 @@ static void init_widgets(void) {
 int main(void) {
 
     char arg[MIDI_PATH_MAX];
-    uint32_t rate_div, ui_tick;
+    uint32_t ui_tick;
 
     printf("\nmidi -- General MIDI file player\n");
 
@@ -1574,9 +1574,9 @@ int main(void) {
         return 1;
     }
 
-    rate_div = reg_audio_rate & 0xFF;
-    if (!z_audio_rate_ok(rate_div)) rate_div = Z_AUDIO_RATE_44K;
-    z_audio_start(rate_div);
+    /* The rate the hardware is running at, if every output can carry
+     * it; the synthesiser renders at whatever this is. */
+    z_audio_start_hz(z_audio_preferred_hz());
     audio_claim();
     out_hz = z_audio_rate_hz();
 

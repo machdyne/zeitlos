@@ -272,8 +272,46 @@
  *             turned the cursor into a Z; 15 would have cleared DIRTY
  *             bits under the screen streamer.
  *
- *             The decode is four bits wide now (rtl/sysctl.v), so 8,
- *             10..12 and 15 are free and read as zero.
+ *             The decode is four bits wide now (rtl/sysctl.v), so 8
+ *             and 15 are free and read as zero (10..12 are DDMI audio).
+ *
+ *  10  DDMI   DDMI audio (docs/ddmi_audio.md): data islands, the video
+ *             preamble and guard band, and the InfoFrames on the DDMI
+ *             output.
+ *             bit 0 EN: 1 = send them. Adopted at the next frame
+ *             boundary by gpu_video.v, so the output never changes
+ *             mid-frame. Resets to 0: the board comes up sending
+ *             plain DVI and the kernel sets this from
+ *             system.video.ddmi_audio in zeitlos.cfg.
+ *             bit 1 SOUND: with EN, also send the audio -- sample
+ *             packets, clock regeneration, the Audio InfoFrame.
+ *             Resets to 1, so EN alone is "picture info and sound".
+ *             bits 7:4 FS: the channel-status rate code the samples
+ *             carry (0 44.1k, 2 48k, 3 32k; as S/PDIF's).
+ *             bits 13:12 REP: each frame is sent 2^REP times (0..2),
+ *             for rates below 32 kHz, which displays do not take.
+ *             FS and REP are set by sw/common/zaudio.h with the rate;
+ *             they reset to match the board's power-on rate.
+ *             Reads back as { 16'h5A44, 2'b0, rep, 2'b0, sound_avail,
+ *             avail, fs, 2'b0, sound, en }, "ZD".
+ *             avail = DDMI_AUDIO_AVAIL (`GPU_DDMI_AUDIO); en reads 0
+ *             and does nothing without it. sound_avail = that and
+ *             `AUDIO: there is a sample stream to send.
+ *
+ *  11  ACRN   [19:0] DDMI audio clock regeneration N, and
+ *  12  ACRCTS [19:0] CTS: the display rebuilds 128 fs as
+ *             25.2 MHz * N / CTS. zaudio.h sets both with the rate;
+ *             they reset to match the power-on rate (6144 / 25200 at
+ *             48 kHz, 6272 / 28000 at 44.1 kHz). Read 0 without
+ *             sound_avail. Words 11 and 12 alias GAME and VIEW on a
+ *             3-bit-decode bitstream: software writes them only after
+ *             word 10's signature says this is the block it thinks.
+ *
+ *             Word 10 because on a 3-bit-decode bitstream it aliases
+ *             VIDEO, and software reads the signature before it ever
+ *             writes: VIDEO's 0x5643 is not 0x5A44, so the probe
+ *             (z_ddmi_audio_available(), sw/common/zsoc.h) answers
+ *             no and nothing is written.
  *
  *  14  CVBS   composite colour (docs/composite.md, "Colour").
  *             bit 0 MONO: 1 = no colour on the composite output -- the
@@ -327,6 +365,15 @@ module socctl_wb #(
     // 1 on a board with DDMI: monochrome brightness (VIDEO bits 11:8)
     // does something. Reads back as VIDEO bit 15. Set by sysctl.v.
     parameter BRIGHT_AVAIL = 1'b0,
+    // 1 with `GPU_DDMI_AUDIO: the DDMI register's EN does something.
+    parameter DDMI_AUDIO_AVAIL = 1'b0,
+    // ... and with `AUDIO too: there is sound to send (SOUND, ACRN,
+    // ACRCTS). The power-on rate, for their reset values: as
+    // rtl/audio.v's own (FS_RESET Hz, or RATE_RESET the old way).
+    parameter DDMI_SOUND_AVAIL = 1'b0,
+    parameter integer AUDIO_CLK_HZ = 48000000,
+    parameter integer AUDIO_FS_RESET = 0,
+    parameter integer AUDIO_RATE_RESET = 17,
     parameter CVBS_MONO_RESET = 1'b0,
     // Defaults to 0 -- a socctl instantiated without being told
     // anything reports no game mode, which is the safe answer.
@@ -374,6 +421,19 @@ module socctl_wb #(
     // synchronises it with video_mode. VIDEO bits 11:8; see VIDEO in
     // this file's header and BRIGHT_AVAIL.
     output wire [3:0] video_bright,
+
+    // DDMI register bit 0, forced low without DDMI_AUDIO_AVAIL. Into
+    // gpu_video.v, which adopts it at a frame boundary.
+    output wire ddmi_en,
+
+    // DDMI audio's sound half: SOUND (with EN), the channel-status
+    // code, the clock regeneration pair -- into gpu_video.v, which
+    // adopts them at a frame boundary -- and REP, into rtl/audio.v.
+    output wire ddmi_sound,
+    output wire [3:0] ddmi_fs,
+    output wire [19:0] ddmi_acr_n,
+    output wire [19:0] ddmi_acr_cts,
+    output wire [1:0] ddmi_rep,
 
     // -- game mode configuration -> rtl/gpu/gpu_video.v --
     //
@@ -458,6 +518,8 @@ module socctl_wb #(
     localparam COLOR_SIG = 16'h5A50;
     // top half of CVBS -- "ZV"
     localparam CVBS_SIG = 16'h5A56;
+    // top half of DDMI -- "ZD"
+    localparam DDMI_SIG = 16'h5A44;
 
     reg [31:0] ctrl;
     reg [1:0] video;
@@ -477,12 +539,42 @@ module socctl_wb #(
     reg [3:0] pidx;
     reg [11:0] prgb;
     reg cvbs;
+    reg ddmi;
+    reg dsound;
+    reg [3:0] dfs;
+    reg [1:0] drep;
+    reg [19:0] dn;
+    reg [19:0] dcts;
+
+    // power-on values for the sound half: the board's power-on rate,
+    // as rtl/audio.v computes it (rtl/audio_rates.vh)
+`include "audio_rates.vh"
+    localparam integer AR_RATE = (AUDIO_RATE_RESET < 2) ? 2 : AUDIO_RATE_RESET;
+    localparam integer AR_STEP = (AUDIO_FS_RESET > 0) ? ar_step(AUDIO_FS_RESET, AUDIO_CLK_HZ) : 128;
+    localparam integer AR_MOD = (AUDIO_FS_RESET > 0) ? ar_mod(AUDIO_FS_RESET, AUDIO_CLK_HZ) : 64 * AR_RATE;
+    localparam integer AR_HZ = (AUDIO_CLK_HZ / 128) * AR_STEP / AR_MOD;
+    localparam [1:0] AR_REP = (AR_HZ >= 32000) ? 2'd0 : (2 * AR_HZ >= 32000) ? 2'd1 : 2'd2;
+    localparam integer AR_K = 1 << AR_REP;
+    localparam [19:0] AR_N = ar_acr_n(AR_STEP, AR_MOD, AR_K, AUDIO_CLK_HZ);
+    localparam [19:0] AR_CTS = ar_acr_cts(AR_STEP, AR_MOD, AR_K, AUDIO_CLK_HZ);
+    localparam integer AR_HZ_DDMI = AR_HZ * AR_K;
+    localparam [3:0] AR_FS =
+        (AR_HZ_DDMI < 38000) ? 4'd3 :
+        (AR_HZ_DDMI < 46000) ? 4'd0 :
+        (AR_HZ_DDMI < 68000) ? 4'd2 :
+        (AR_HZ_DDMI < 92000) ? 4'd8 : 4'd10;
 
     assign cursor_busy = ctrl[0];
     assign cursor_hide = ctrl[1];
     assign reconfig = recfg && (RECONFIG_AVAIL != 0);
     assign video_mode = video;
     assign video_bright = bright;
+    assign ddmi_en = ddmi && (DDMI_AUDIO_AVAIL != 0);
+    assign ddmi_sound = dsound && (DDMI_SOUND_AVAIL != 0);
+    assign ddmi_fs = dfs;
+    assign ddmi_acr_n = dn;
+    assign ddmi_acr_cts = dcts;
+    assign ddmi_rep = drep;
 
     // FORCED low, not merely ignored, on a bitstream without game
     // mode -- see the GAME register's note in this file's header on
@@ -598,6 +690,12 @@ module socctl_wb #(
             pidx <= 4'd0;
             prgb <= 12'd0;
             cvbs <= CVBS_MONO_RESET;
+            ddmi <= 1'b0;
+            dsound <= 1'b1;
+            dfs <= AR_FS;
+            drep <= AR_REP;
+            dn <= AR_N;
+            dcts <= AR_CTS;
 
             wb_ack_o <= 1'b0;
             wb_dat_o <= 32'h0000_0000;
@@ -687,6 +785,26 @@ module socctl_wb #(
                     if (wb_adr_i == 32'd14 && wb_sel_i[0])
                         cvbs <= wb_dat_i[0];
 
+                    if (wb_adr_i == 32'd10) begin
+                        if (wb_sel_i[0]) begin
+                            ddmi <= wb_dat_i[0];
+                            dsound <= wb_dat_i[1];
+                            dfs <= wb_dat_i[7:4];
+                        end
+                        if (wb_sel_i[1])
+                            drep <= (wb_dat_i[13:12] > 2'd2) ? 2'd2 : wb_dat_i[13:12];
+                    end
+                    if (wb_adr_i == 32'd11) begin
+                        if (wb_sel_i[0]) dn[7:0] <= wb_dat_i[7:0];
+                        if (wb_sel_i[1]) dn[15:8] <= wb_dat_i[15:8];
+                        if (wb_sel_i[2]) dn[19:16] <= wb_dat_i[19:16];
+                    end
+                    if (wb_adr_i == 32'd12) begin
+                        if (wb_sel_i[0]) dcts[7:0] <= wb_dat_i[7:0];
+                        if (wb_sel_i[1]) dcts[15:8] <= wb_dat_i[15:8];
+                        if (wb_sel_i[2]) dcts[19:16] <= wb_dat_i[19:16];
+                    end
+
                     if (wb_adr_i == 32'd13 && wb_sel_i == 4'b1111) begin
                         pwe <= 1'b1;
                         pidx <= wb_dat_i[27:24];
@@ -734,6 +852,13 @@ module socctl_wb #(
                         // signature and nothing else.
                         32'd14: wb_dat_o <= { CVBS_SIG, 14'b0,
                                               (CVBS_AVAIL != 0), cvbs };
+                        32'd10: wb_dat_o <= { DDMI_SIG, 2'b0,
+                                              ((DDMI_SOUND_AVAIL != 0) ? drep : 2'd0), 2'b0,
+                                              (DDMI_SOUND_AVAIL != 0), (DDMI_AUDIO_AVAIL != 0),
+                                              ((DDMI_SOUND_AVAIL != 0) ? dfs : 4'd0), 2'b0,
+                                              ddmi_sound, ddmi_en };
+                        32'd11: wb_dat_o <= { 12'b0, (DDMI_SOUND_AVAIL != 0) ? dn : 20'd0 };
+                        32'd12: wb_dat_o <= { 12'b0, (DDMI_SOUND_AVAIL != 0) ? dcts : 20'd0 };
                         32'd9: wb_dat_o <= { COLOR_SIG, (COLOR_AVAIL != 0), 1'b0,
                                              ((COLOR_AVAIL != 0) ? coff : 6'd0), 5'b0,
                                              ((COLOR_AVAIL != 0) ? np : 2'd0), color_en };

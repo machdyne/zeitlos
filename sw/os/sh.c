@@ -1775,6 +1775,26 @@ void sh(void) {
 			k_cfg_shell(sub, key);
 		}
 
+		// DDMI audio, now and until the next boot or `cfg reload`
+		// (docs/ddmi_audio.md). The way back from a display that shows
+		// nothing with system.video.ddmi_audio set: `ddmi off` here,
+		// then fix the file.
+		else if (sh_is(buffer, cmdlen, "ddmi")) {
+			char *sub = get_arg(buffer, 1);
+			if (!z_ddmi_audio_available()) {
+				printf("ddmi: this bitstream has no DDMI audio\n");
+			} else if (sub && (!strcmp(sub, "on") || !strcmp(sub, "off"))) {
+				z_ddmi_audio_set(!strcmp(sub, "on"));
+				printf("ddmi: %s from the next frame -- set "
+					"system.video.ddmi_audio in " Z_PATH_SYS_CONFIG
+					" to keep it\n", sub);
+			} else if (sub) {
+				printf("usage: ddmi [on|off]\n");
+			} else {
+				printf("ddmi: %s\n", z_ddmi_audio_on() ? "on" : "off");
+			}
+		}
+
 		else if (sh_is(buffer, cmdlen, "df")) {
 			// One FAT scan, not two -- see fs_df_kb() in fs.c.
 			uint32_t total = 0, freek = 0;
@@ -2401,6 +2421,7 @@ void sh_help(void) {
 	printf(" exit               leave the rescue console for the desktop (Ctrl+Alt+Esc)\n");
 	printf(" nfs [mount <addr>:/export | umount]  the NFS export at /nfs (read-only)\n");
 	printf(" cfg [reload|get k] show or re-read " Z_PATH_SYS_CONFIG " (docs/config.md)\n");
+	printf(" ddmi [on|off]     DDMI audio now, until boot or cfg reload (docs/ddmi_audio.md)\n");
 	printf(" kill <pid>        kill a process\n");
 	printf(" kill -c <pid>     ... as a crash (a driver restarts; wm: rescue console)\n");
 	printf(" sched [late 0|1] [drvwake on|off]  scheduler switches\n");

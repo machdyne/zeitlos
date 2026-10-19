@@ -321,12 +321,18 @@ static void t_pitch(void) {
         { 108, 4186.01, "C8 = 4186Hz" },
         { 127, 12543.85, "G9 = 12543Hz" }
     };
-    unsigned k;
+    unsigned k, ri;
+    /* the board rates: exact 44.1k and 48k, and the old dividers */
+    static const uint32_t rates[] = { 44100, 48000, 46875, 44118 };
 
     printf("\n[5] pitch\n");
 
     synth_build_bank(bank, 16);
-    synth_init(&sy, 46875, 16);
+
+    for (ri = 0; ri < sizeof(rates) / sizeof(rates[0]); ri++) {
+    uint32_t out_hz = rates[ri];
+    synth_init(&sy, out_hz, 16);
+    printf("  at %u Hz\n", (unsigned)out_hz);
 
     for (k = 0; k < sizeof(cases) / sizeof(cases[0]); k++) {
 
@@ -349,9 +355,10 @@ static void t_pitch(void) {
          * table, so the tone is step * out_hz / (256 * 2^14). */
         /* step counts BYTES, and a 16-bit table is two bytes per
          * sample -- so the tone is step * out_hz / (2 * 256 * 2^14). */
-        hz = (double)sy.voice[v].step * 46875.0
+        hz = (double)sy.voice[v].step * (double)out_hz
             / (SYNTH_WAVE_LEN * 2.0 * 16384.0);
         check_near(hz, cases[k].hz, cases[k].hz * 0.004, cases[k].name);
+    }
     }
 
     /* An octave is exactly a doubling; anything else means the octave

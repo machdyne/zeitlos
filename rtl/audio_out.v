@@ -27,36 +27,69 @@
  * both formats need the same frame tick. That is the point of sharing
  * it: one sample rate, one place to get it wrong.
  *
- * -- clocking: counters, not a PLL --
+ * -- clocking: one accumulator, not a PLL --
  *
  * Both EHXPLLL blocks are used on every board in this lineup
  * (rtl/sysctl.v's pll0/pll1), so there is no third PLL to have and
- * this divides sys_clk instead.
+ * the sample clock is counted out of sys_clk.
  *
- * `rate` is the half-period of BCK in sys_clk cycles, so
+ * Everything here runs off ONE tick at 128 * fs, made by a modulo
+ * accumulator:
  *
- *     f_bck = CLK_HZ / (2 * rate)          f_s = f_bck / 32
- *     f_s   = CLK_HZ / (64 * rate)
+ *     acc += step;  if (acc >= mod) { acc -= mod; tick }
  *
- * At 48MHz, rate=17 gives 44117.6 Hz -- 0.04% high, a 0.7-cent pitch
- * error, inaudible. rate=34 gives 22058.8 Hz. It is a register rather
- * than a parameter (rtl/audio.v's RATE) because a MOD player and a
- * sample player want different answers and neither wants a rebuild.
+ * so ticks arrive at CLK_HZ * step / mod per second, on average
+ * exactly, whatever the ratio. 128 ticks are one stereo frame:
  *
- * `rate` is clamped to 2 below rather than trusted. A zero written
- * there would make bck_tick true every cycle and free-run the
- * serialiser at 24MHz -- not a hang, but not something worth being
- * able to do to yourself from userspace either.
+ *   S/PDIF      one half-cell per tick (128 per frame -- see
+ *               rtl/audio_spdif.v, which takes `tick` from here)
+ *   PT8211      one half-BCK slot per TWO ticks (64 slots per frame)
+ *   sigma-delta only the frame (frame_req, below)
+ *
+ * step and mod are rtl/audio.v's FSDIV register, which software sets
+ * from a rate in Hz (sw/common/zaudio.h, z_audio_start_hz()) reduced
+ * by their common divisor. At 48MHz:
+ *
+ *     48000 Hz   step 16    mod 125      exact
+ *     44100 Hz   step 147   mod 1250     exact
+ *     32000 Hz   step 32    mod 375      exact
+ *     22050 Hz   step 147   mod 2500     exact
+ *     11025 Hz   step 147   mod 5000     exact
+ *
+ * The old RATE register is the special case step = 128,
+ * mod = 64 * RATE: fs = CLK_HZ / (64 * RATE), exactly what this block
+ * always did. 17 is 44117.6 Hz, 16 is 46875 Hz.
+ *
+ * -- what exactness costs: jitter of one sys_clk --
+ *
+ * At 48 kHz a tick is 7.8125 sys_clk, so ticks are 7 or 8 cycles
+ * apart and a PT8211 half-BCK is 15 or 16. Every edge is within one
+ * sys_clk (21ns) of where it ideally belongs, and none drifts: the
+ * error never accumulates. S/PDIF receivers PLL to the line and take
+ * far more than that (IEC 60958 receivers tolerate a quarter of a
+ * unit interval, about 40ns here); the PT8211 latches on WS and a
+ * 21ns WS wobble is far below anything audible from that part; the
+ * sigma-delta does not care at all. The odd legacy RATE values
+ * already alternated half-cells by one cycle the same way.
+ *
+ * -- step 0 and step > mod --
+ *
+ * Neither hangs anything. step = 0 never ticks, so frames stop and
+ * the FIFO stops draining -- silence, and software's own fault.
+ * step >= mod ticks on every cycle (acc then just wraps), which is
+ * the fastest the stage can run: the same place the old RATE clamp
+ * of 2 landed. Neither is reachable through zaudio.h.
  *
  * -- PT8211 frame timing --
  *
  * phase[5:0] counts 64 half-BCK slots per frame: 32 BCK periods, 16
  * per channel. BCK is phase[0] and WS is phase[5], so both come free
- * out of the same counter.
+ * out of the same counter. A slot is two ticks; `half` says which of
+ * the two this is, and the slot logic below runs on the second.
  *
  * The DAC samples DIN on the RISING edge of BCK, so DIN is updated on
- * the falling edge -- half a BCK period (rate sys_clk cycles, 354ns at
- * the default rate) of setup. LSB-justified with exactly 16 bits per
+ * the falling edge -- half a BCK period (two ticks, ~325ns at 48 kHz)
+ * of setup. LSB-justified with exactly 16 bits per
  * half-frame means the word starts immediately after the WS edge, so
  * MSB-first from the WS transition is the whole rule.
  *
@@ -107,8 +140,10 @@ module audio_out #(
 	// an undefined state rather than a quiet one.
 	input wire enable,
 
-	// half-BCK period in clk cycles; see this file's header
-	input wire [7:0] rate,
+	// tick = CLK_HZ * step / mod per second = 128 * fs; see this
+	// file's header. From rtl/audio.v's FSDIV (or RATE) register.
+	input wire [15:0] step,
+	input wire [15:0] mod,
 
 	// swap the two channels in the output stage -- see header
 	input wire swap_lr,
@@ -126,6 +161,9 @@ module audio_out #(
 	// FIFO on this.
 	output reg frame_req,
 
+	// 128 per frame, one cycle each. S/PDIF's half-cell clock.
+	output wire tick,
+
 	// 1-bit DACs (Obst, Lakritz)
 	output wire sd_l,
 	output wire sd_r,
@@ -136,15 +174,22 @@ module audio_out #(
 	output wire pt_din
 );
 
-	reg [7:0] div_ctr;
+	reg [15:0] acc;
+	reg half;
 	reg [5:0] phase;
 	reg signed [15:0] hold_l;
 	reg signed [15:0] hold_r;
 	reg [15:0] sr;
 
-	// Clamped, not trusted -- see this file's header.
-	wire [7:0] rate_eff = (rate < 8'd2) ? 8'd2 : rate;
-	wire bck_tick = (div_ctr == 8'd0);
+	// The accumulator. 17 bits for the sum so that acc + step cannot
+	// wrap before the comparison sees it; tick is "no borrow" from
+	// sum - mod, which yosys shares with the subtraction itself.
+	wire [16:0] acc_sum = { 1'b0, acc } + { 1'b0, step };
+	wire [16:0] acc_sub = acc_sum - { 1'b0, mod };
+	assign tick = !acc_sub[16];
+
+	// one half-BCK slot every second tick
+	wire bck_tick = tick && half;
 
 	// word_a is sent while WS is low, word_b while WS is high
 	wire [15:0] word_a = swap_lr ? hold_r : hold_l;
@@ -158,7 +203,8 @@ module audio_out #(
 
 		if (rst) begin
 
-			div_ctr <= 8'd0;
+			acc <= 16'd0;
+			half <= 1'b0;
 			phase <= 6'd0;
 			hold_l <= 16'sd0;
 			hold_r <= 16'sd0;
@@ -169,9 +215,12 @@ module audio_out #(
 
 			frame_req <= 1'b0;
 
+			acc <= tick ? acc_sub[15:0] : acc_sum[15:0];
+			if (tick)
+				half <= ~half;
+
 			if (bck_tick) begin
 
-				div_ctr <= rate_eff - 8'd1;
 				phase <= phase + 6'd1;
 
 				// One slot BEFORE the frame wrap -- see header.
@@ -198,10 +247,6 @@ module audio_out #(
 					else
 						sr <= { sr[14:0], 1'b0 };
 				end
-
-			end else begin
-
-				div_ctr <= div_ctr - 8'd1;
 
 			end
 
@@ -232,7 +277,7 @@ endmodule
  * Second-order error-feedback sigma-delta modulator.
  *
  * Runs at sys_clk, so the oversampling ratio is the whole frame
- * period: 48MHz / 44.1kHz = 1088. The noise transfer function is
+ * period: 48MHz / 44.1kHz = 1088, 1000 at 48 kHz. The noise transfer function is
  * (1 - z^-1)^2, which at that OSR pushes quantisation noise far enough
  * above the audio band that the RC filter on the board can deal with
  * what is left.

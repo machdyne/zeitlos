@@ -57,4 +57,5 @@ defines =
     USB_HID
     SPI_SDCARD
     AUDIO
+    AUDIO_EXACT
     AUDIO_SD

@@ -6,6 +6,13 @@ mode); `tb_video_mode.v`, `tb_game_mode.v` and `tb_gamepad.v` have
 since joined them, so the directory name is now broader than its
 history.
 
+- `tb_ddmi_capture.v` -- the DDMI output as a file of characters, one
+  line per pixel clock, checked by `tools/ddmi/ddmi.py` (a receiver
+  model): plain DVI against the golden `ddmi_dvi_golden.sha256`, data
+  islands and InfoFrames with `-DGPU_DDMI_AUDIO +en=1`, the switch at a
+  frame boundary with `+en=2`, and the 10:1 serialiser against the
+  parallel words. `make test_ddmi` runs every variant. See
+  `docs/ddmi_audio.md`, "The bench".
 - `tb_glyph.v` -- draws two synthetic 4-row glyphs back-to-back and
   checks the resulting framebuffer rows are correct. Catches the
   glyph-fetch pipeline timing bug documented in
@@ -89,7 +96,7 @@ design makes that pattern land correctly). `tb_line.v` and
   11:8): the 8-bit channel values for a lit pixel in every phosphor
   mode at levels 0, 7, 11 and 15; level 7 is exactly the old inks; a
   change waits for the frame boundary; colour mode ignores it. Needs
-  `-DGPU_DDMI` and `rtl/gpu/gpu_ddmi.v rtl/gpu/tmds_encoder.v`
+  `-DGPU_DDMI` and `rtl/gpu/gpu_ddmi.v rtl/gpu/tmds_encoder.v rtl/gpu/ddmi_island.v`
   (primitive stubs are in the bench). See `docs/socctl.md`,
   "Brightness".
 - `tb_cvbs_color.v` -- composite COLOUR. A small software receiver:
@@ -203,7 +210,7 @@ iverilog -g2005 -o /tmp/tb_game.out \
 vvp /tmp/tb_game.out          # several minutes
 
 # tb_color.v -- the same patched gpu_video.v. Add -DGPU_DDMI -DTB_STUBS
-# and rtl/gpu/gpu_ddmi.v rtl/gpu/tmds_encoder.v to check DDMI too.
+# and rtl/gpu/gpu_ddmi.v rtl/gpu/tmds_encoder.v rtl/gpu/ddmi_island.v to check DDMI too.
 iverilog -g2005 -o /tmp/tb_color.out \
     rtl/gpu/bench/tb_color.v /tmp/gpu_video_fix.v
 vvp /tmp/tb_color.out         # several minutes

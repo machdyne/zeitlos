@@ -452,11 +452,11 @@ bool music_init(void) {
 	 * hardware at all.
 	 *
 	 * The rate is read back and written straight out again, so the
-	 * board keeps whatever `AUDIO_RATE_RESET gave it -- which matters,
-	 * because an S/PDIF board needs 16 and a constant here would break
-	 * exactly those boards. Enable the output; do not second-guess
-	 * the rate. */
-	z_audio_start(reg_audio_rate & 0xFFu);
+	 * board keeps whatever it is running at -- which matters, because
+	 * an S/PDIF board needs 32kHz or more and a constant here could
+	 * break exactly those boards. Enable the output; do not
+	 * second-guess the rate. */
+	z_audio_start_hz(z_audio_rate_hz());
 
 	z_audio_mixer_enable(true);
 

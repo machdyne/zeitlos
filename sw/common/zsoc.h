@@ -1297,6 +1297,60 @@ static inline bool z_cvbs_set_mono(bool mono) {
 	return true;
 }
 
+// -- DDMI audio (socctl word 10, docs/ddmi_audio.md) --
+//
+// Data islands on the DDMI output: the AVI InfoFrame (640x480, 4:3,
+// full-range RGB, IT content), the SPD InfoFrame and the sound (with
+// the audio block). Only on a bitstream built with `GPU_DDMI_AUDIO;
+// off at power-on. The kernel sets it from system.video.ddmi_audio in
+// zeitlos.cfg (sw/os/cfg.c), and nothing else should: there is no EDID
+// on these boards, so whether the display accepts it is the person's
+// call, made once in the config file. Takes effect at the next frame.
+//
+// Word 10: on a 3-bit-decode bitstream it aliases VIDEO, but the
+// signature is read before anything is written, and VIDEO's 0x5643 is
+// not this one.
+#define reg_socctl_ddmi   (*(volatile uint32_t*)0x70000228)
+#define reg_socctl_acrn   (*(volatile uint32_t*)0x7000022c)
+#define reg_socctl_acrcts (*(volatile uint32_t*)0x70000230)
+#define Z_DDMI_EN         (1u << 0)
+#define Z_DDMI_SOUND      (1u << 1)    // with EN: the audio too (resets 1)
+#define Z_DDMI_FS_SHIFT   4            // [7:4] channel-status rate code
+#define Z_DDMI_AVAIL      (1u << 8)    // read-only
+#define Z_DDMI_SOUND_AVAIL (1u << 9)   // read-only: there is audio to send
+#define Z_DDMI_REP_SHIFT  12           // [13:12] each frame sent 2^REP times
+#define Z_DDMI_SIG        0x5A44u      // "ZD" -- KEEP IN SYNC with socctl.v
+
+static inline bool z_ddmi_audio_available(void) {
+	if (!z_video_mode_present()) return false;
+	if (((reg_socctl_ddmi >> 16) & 0xffffu) != Z_DDMI_SIG) return false;
+	return (reg_socctl_ddmi & Z_DDMI_AVAIL) != 0;
+}
+
+// true if data islands are being sent (or will be from the next frame)
+static inline bool z_ddmi_audio_on(void) {
+	if (!z_ddmi_audio_available()) return false;
+	return (reg_socctl_ddmi & Z_DDMI_EN) != 0;
+}
+
+// On or off from the next frame. False on a bitstream without it.
+// Everything else in the register (SOUND, the rate code, REP) is kept.
+static inline bool z_ddmi_audio_set(bool on) {
+	uint32_t v;
+	if (!z_ddmi_audio_available()) return false;
+	v = reg_socctl_ddmi & ((1u << 1) | (0xfu << 4) | (3u << 12));
+	reg_socctl_ddmi = v | (on ? Z_DDMI_EN : 0u);
+	return true;
+}
+
+// true if this bitstream can send sound over DDMI (`GPU_DDMI_AUDIO and
+// the audio block). The sound's rate settings are zaudio.h's business:
+// z_audio_set_rate_hz() keeps them matching the rate.
+static inline bool z_ddmi_sound_available(void) {
+	return z_ddmi_audio_available() &&
+		(reg_socctl_ddmi & Z_DDMI_SOUND_AVAIL) != 0;
+}
+
 // One palette entry, RGB444 (0xRGB). Takes effect immediately, not at
 // a frame boundary -- write in vblank (z_game_in_vblank(), or straight
 // after z_game_wait_frame()) to avoid a one-pixel glitch mid-picture.

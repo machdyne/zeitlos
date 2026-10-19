@@ -198,6 +198,22 @@ module gpu_video #(
 	// 10 green-on-black            11 black-on-white ("paper")
 	input [1:0] video_mode,
 
+	// DDMI audio: data islands on the DDMI output (socctl's DDMI
+	// register, docs/ddmi_audio.md). Wishbone domain, synchronised and
+	// adopted at the frame boundary like video_mode. Only looked at in
+	// a build with `GPU_DDMI_AUDIO; anything else ignores it.
+	input ddmi_en,
+
+	// ... and its sound half (socctl's DDMI, ACRN, ACRCTS), adopted
+	// with it; and the frames to send, written on `clk` by rtl/audio.v
+	// into the FIFO in rtl/gpu/ddmi_island.v.
+	input ddmi_sound,
+	input [3:0] ddmi_fs,
+	input [19:0] ddmi_acr_n,
+	input [19:0] ddmi_acr_cts,
+	input ddmi_we,
+	input [31:0] ddmi_wdata,
+
 	// Monochrome brightness on DDMI, 0..15, from the same VIDEO
 	// register; wishbone domain, synchronised and adopted with
 	// video_mode. 7 is the 0x80 ink this output has always used. See
@@ -356,6 +372,16 @@ module gpu_video #(
 	reg [1:0] video_mode_active;
 	reg [3:0] bright_sync0, bright_sync1;
 	reg [3:0] bright_active;
+	reg ddmi_en_sync0, ddmi_en_sync1, ddmi_en_active;
+	// The sound half's settings change only when software sets a rate,
+	// and are adopted at a frame boundary after two flops, like the
+	// rest. A multi-bit value caught mid-change could be torn for one
+	// frame -- one ACR packet with a wrong N, which a sink rides out
+	// (it averages CTS anyway) -- and is then right from the next.
+	reg ddmi_snd_sync0, ddmi_snd_sync1, ddmi_snd_active;
+	reg [3:0] ddmi_fs_sync0, ddmi_fs_sync1, ddmi_fs_active;
+	reg [19:0] ddmi_n_sync0, ddmi_n_sync1, ddmi_n_active;
+	reg [19:0] ddmi_cts_sync0, ddmi_cts_sync1, ddmi_cts_active;
 
 	// XOR, not OR.
 	//
@@ -655,10 +681,24 @@ module gpu_video #(
 	ODDRX1F ddr0_blue  (.D0(out_tmds_blue  [0] ), .D1(out_tmds_blue  [1] ), .Q(dvi_p[0]), .SCLK(bclk), .RST(0));
 `endif
 
-	gpu_ddmi #() gpu_ddmi_i
+`ifdef GPU_DDMI_AUDIO
+	gpu_ddmi #(.ISLANDS(1)) gpu_ddmi_i
+`else
+	gpu_ddmi #(.ISLANDS(0)) gpu_ddmi_i
+`endif
 	(
 		.pclk(pclk),
 		.tmds_clk(bclk),
+		.hc(hc),
+		.vc(vc),
+		.islands_en(ddmi_en_active),
+		.sound_en(ddmi_snd_active),
+		.fs_code(ddmi_fs_active),
+		.acr_n(ddmi_n_active),
+		.acr_cts(ddmi_cts_active),
+		.aud_clk(clk),
+		.aud_we(ddmi_we),
+		.aud_wdata(ddmi_wdata),
 		.in_vga_red(ddmi_red),
 		.in_vga_green(ddmi_green),
 		.in_vga_blue(ddmi_blue),
@@ -1106,6 +1146,16 @@ module gpu_video #(
 		video_mode_sync1 <= video_mode_sync0;
 		bright_sync0 <= video_bright;
 		bright_sync1 <= bright_sync0;
+		ddmi_en_sync0 <= ddmi_en;
+		ddmi_en_sync1 <= ddmi_en_sync0;
+		ddmi_snd_sync0 <= ddmi_sound;
+		ddmi_snd_sync1 <= ddmi_snd_sync0;
+		ddmi_fs_sync0 <= ddmi_fs;
+		ddmi_fs_sync1 <= ddmi_fs_sync0;
+		ddmi_n_sync0 <= ddmi_acr_n;
+		ddmi_n_sync1 <= ddmi_n_sync0;
+		ddmi_cts_sync0 <= ddmi_acr_cts;
+		ddmi_cts_sync1 <= ddmi_cts_sync0;
 
 		view_sync0 <= view_load;
 		view_sync1 <= view_sync0;
@@ -1114,6 +1164,11 @@ module gpu_video #(
 		if (!resetn) begin
 			video_mode_active <= GPU_MODE_WHITE;
 			bright_active <= 4'd7;
+			ddmi_en_active <= 1'b0;
+			ddmi_snd_active <= 1'b0;
+			ddmi_fs_active <= 4'd0;
+			ddmi_n_active <= 20'd0;
+			ddmi_cts_active <= 20'd0;
 			view_sync0 <= 1'b0;
 			view_sync1 <= 1'b0;
 			view_sync2 <= 1'b0;
@@ -1144,6 +1199,11 @@ module gpu_video #(
 			if (hc == h_disp_stop - 1 && vc == v_disp_stop - 1) begin
 				video_mode_active <= video_mode_sync1;
 				bright_active <= bright_sync1;
+				ddmi_en_active <= ddmi_en_sync1;
+				ddmi_snd_active <= ddmi_snd_sync1;
+				ddmi_fs_active <= ddmi_fs_sync1;
+				ddmi_n_active <= ddmi_n_sync1;
+				ddmi_cts_active <= ddmi_cts_sync1;
 				game_active <= game_cap;
 				wrap_active <= wrap_cap;
 				vx_active <= vx_adopt;

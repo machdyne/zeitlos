@@ -230,10 +230,14 @@ FLAC fail all three.
 
 ### Sample rates
 
-The DAC rate is not negotiable and not round: `CLK_HZ / (64 * RATE)` —
-44117.6 Hz at the default divider, 46875 Hz on an S/PDIF board. **No
-file's rate ever equals it**, not even a 44100 Hz one, which is 0.04%
-off.
+The DAC rate is whatever the board is running at: exactly 44100 Hz by
+default, 48000 Hz on an S/PDIF board ([audio.md](audio.md), "Exact
+sample rates"). A 44.1 kHz file on a 44.1 kHz board (or a 48 kHz file
+on an S/PDIF board) is therefore played **without resampling** — the
+step is exactly 1. Before 0.0.7 the rate was `CLK_HZ / (64 * RATE)`,
+44117.6 or 46875 Hz, and no file's rate ever equalled it; on a
+bitstream without exact rates that is still what `play` gets, and
+`z_audio_rate_hz()` says so.
 
 On the mixer path this is free: `CH_STEP` is a phase increment and the
 hardware does the conversion. On the software path it goes through a
@@ -241,13 +245,13 @@ hardware does the conversion. On the software path it goes through a
 `modplay.c` uses, deliberately, so that reading one is reading both.
 
 `play` starts from **whatever rate the board came up with** rather than
-a constant. `AUDIO_RATE_RESET` in `boards.vh` exists so a board can
-pick a rate its outputs can carry, and an app that overwrites it throws
-that away. On an S/PDIF board nothing below 32 kHz will lock at the
-receiver.
+a constant (`z_audio_preferred_hz()`). `AUDIO_FS_RESET` in `boards.vh`
+exists so a board can pick a rate its outputs can carry, and an app
+that overwrites it throws that away. On an S/PDIF board nothing below
+32 kHz will lock at the receiver.
 
 Lowering the output rate is a real lever on the software path, where
-everything scales per output frame — `RATE 22` gives 34090 Hz and cuts
+everything scales per output frame — 32 kHz instead of 44.1 kHz cuts
 the work 27%. On the mixer path it changes nothing, because the CPU no
 longer sees output frames.
 

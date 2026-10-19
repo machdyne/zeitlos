@@ -157,6 +157,29 @@ static void apply(bool verbose) {
 		}
 	}
 
+	// DDMI audio (docs/ddmi_audio.md): data islands on the DDMI output.
+	// Off unless the file says yes -- there is no EDID to ask the
+	// display, so this is the person's choice, and a display that
+	// shows nothing with it on is put right by setting it back here
+	// (from a PC, or over the serial console). Same rule as above:
+	// absent leaves it alone; accepted and ignored on a bitstream
+	// without it, so one config file serves every board.
+	{
+		const char *d = k_cfg_find("system.video.ddmi_audio");
+		if (d) {
+			bool on = !strcmp(d, "yes") || !strcmp(d, "on") || !strcmp(d, "1");
+			bool off = !strcmp(d, "no") || !strcmp(d, "off") || !strcmp(d, "0");
+			if (!on && !off)
+				printf("cfg: system.video.ddmi_audio: '%s' is not yes or no "
+					"-- ignored\n", d);
+			else if (z_ddmi_audio_available())
+				z_ddmi_audio_set(on);
+			else if (verbose && on)
+				printf("cfg: system.video.ddmi_audio: this bitstream has no "
+					"DDMI audio\n");
+		}
+	}
+
 }
 
 // -- loading --

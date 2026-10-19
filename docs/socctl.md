@@ -46,6 +46,9 @@ Word-addressed, matching every other simple slave in this codebase.
 | `0x7000_0224` | COLOR | game-mode colour: bit 0 enable, bits 2:1 planes−1, bits 13:8 plane 1..3 `{dy,dx}` offsets, bit 15 avail (R/O). Reads back as `{0x5A50, avail, …}`. Adopted with GAME/VIEW at a frame boundary; **a GAME write with bit 0 clear also clears the enable.** See [color.md](color.md). |
 | `0x7000_0234` | PALETTE | write-only, whole-word stores: bits 27:24 entry, bits 11:0 RGB444. Reads 0. See [color.md](color.md). |
 | `0x7000_0238` | CVBS | composite colour: bit 0 MONO (black and white: no burst, the palette's brightness), bit 1 avail (R/O). Reads back as `{0x5A56, ..., avail, mono}`. See [composite.md](composite.md#colour). |
+| `0x7000_0228` | DDMI | DDMI audio: bit 0 EN (data islands, InfoFrames and sound on the DDMI output, from the next frame; resets to 0), bit 1 SOUND (with EN, the audio too; resets to 1), bits 7:4 FS (channel-status rate code), bit 8 avail and bit 9 sound avail (R/O), bits 13:12 REP (each frame sent 2^REP times). Reads back as `{0x5A44, ...}`. EN is set by the kernel from `system.video.ddmi_audio`; FS and REP by `zaudio.h` with the rate. See [ddmi_audio.md](ddmi_audio.md). |
+| `0x7000_022c` | ACRN | DDMI audio clock regeneration N, `[19:0]`; set by `zaudio.h`, resets to the power-on rate's. |
+| `0x7000_0230` | ACRCTS | ... and CTS, `[19:0]`. The display rebuilds 128 fs as 25.2 MHz × N / CTS. |
 
 The decode is four address bits wide (sixteen words). It was three
 before COLOR and PALETTE, and those two sit at words 9 and 13 so that

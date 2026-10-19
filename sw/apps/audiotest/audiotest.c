@@ -127,17 +127,29 @@ static void show_info(void) {
 	printf("  magic    %08lx\n", (unsigned long)reg_audio_magic);
 	printf("  config   %08lx\n", (unsigned long)reg_audio_config);
 	printf("  clk      %lu Hz\n", (unsigned long)reg_audio_clkhz);
-	printf("  rate div %lu -> %lu Hz\n",
-		(unsigned long)(reg_audio_rate & 0xFF), (unsigned long)rate_hz);
+	if (z_audio_has_exact())
+		printf("  rate     %lu Hz (exact: FSDIV %lu/%lu)\n",
+			(unsigned long)rate_hz,
+			(unsigned long)(reg_audio_fsdiv & 0xFFFF),
+			(unsigned long)(reg_audio_fsdiv >> 16));
+	else
+		printf("  rate div %lu -> %lu Hz (no exact rates in this bitstream)\n",
+			(unsigned long)(reg_audio_rate & 0xFF), (unsigned long)rate_hz);
 	printf("  fifo     %lu frames (%lu ms at this rate)\n",
 		(unsigned long)depth,
 		(unsigned long)(rate_hz ? (depth * 1000) / rate_hz : 0));
 	printf("  wmark    %lu frames\n", (unsigned long)reg_audio_wmark);
+	if (z_ddmi_sound_available())
+		printf("  ddmi     %s, N %lu CTS %lu, each frame x%lu\n",
+			z_ddmi_audio_on() ? "on" : "off (system.video.ddmi_audio)",
+			(unsigned long)reg_socctl_acrn, (unsigned long)reg_socctl_acrcts,
+			(unsigned long)(1u << ((reg_socctl_ddmi >> Z_DDMI_REP_SHIFT) & 3u)));
 
 	printf("  dac      ");
 	if (fmt & Z_AUDIO_FORMAT_SD) printf("1-bit sigma-delta ");
 	if (fmt & Z_AUDIO_FORMAT_PT8211) printf("PT8211 ");
 	if (fmt & Z_AUDIO_FORMAT_SPDIF) printf("S/PDIF ");
+	if (fmt & Z_AUDIO_FORMAT_DDMI) printf("DDMI%s ", z_ddmi_audio_on() ? "" : "(off)");
 	if (!fmt) printf("none reported");
 	printf("\n");
 }
@@ -242,15 +254,11 @@ int main(void) {
 	/* Start from the rate the BOARD came up with, not a constant.
 	 *
 	 * boards.vh picks a power-on rate the board's outputs can carry --
-	 * Sergei sets 16 (46875Hz), the only rate whose S/PDIF half-cell
-	 * is a whole number of sys_clk. Overwriting that with a hardcoded
-	 * 44.1kHz is how this test ended up driving a digital output at a
-	 * rate the board had deliberately avoided. */
-	{
-		uint32_t rd = reg_audio_rate & 0xFF;
-		if (!z_audio_rate_ok(rd)) rd = Z_AUDIO_RATE_44K;
-		z_audio_start(rd);
-	}
+	 * Sergei comes up at 48kHz for its S/PDIF receiver. Overwriting
+	 * that with a hardcoded rate is how this test once ended up
+	 * driving a digital output at a rate the board had deliberately
+	 * avoided. */
+	z_audio_start_hz(z_audio_preferred_hz());
 	rate_hz = z_audio_rate_hz();
 
 	show_info();
@@ -259,15 +267,14 @@ int main(void) {
 	 * about: it makes every test below sound wrong for a reason that
 	 * has nothing to do with what they are testing. */
 	if ((z_audio_formats() & Z_AUDIO_FORMAT_SPDIF) &&
-		!z_audio_rate_ok(reg_audio_rate & 0xFF)) {
-		printf("\n  *** RATE %lu IS WRONG FOR S/PDIF ***\n",
-			(unsigned long)(reg_audio_rate & 0xFF));
-		printf("  Needs an EVEN divider of 23 or less (16 = 46875 Hz).\n");
-		printf("  Odd rates need the fractional divider in\n");
-		printf("  rtl/audio_spdif.v -- if you have only run\n");
-		printf("  'make dev-flash', the BITSTREAM does not have it and\n");
-		printf("  the line runs 6%% fast. Everything below will sound\n");
-		printf("  like static over the signal.\n");
+		!z_audio_rate_ok_hz(rate_hz)) {
+		printf("\n  *** %lu Hz IS WRONG FOR S/PDIF ***\n",
+			(unsigned long)rate_hz);
+		printf("  Receivers need 32 kHz or more; without exact rates\n");
+		printf("  the old divider must also be EVEN (16 = 46875 Hz).\n");
+		printf("  If you have only run 'make dev-flash', the BITSTREAM\n");
+		printf("  may predate rtl/audio_spdif.v's fixes. Everything\n");
+		printf("  below will sound like static over the signal.\n");
 	}
 
 	printf("\n");

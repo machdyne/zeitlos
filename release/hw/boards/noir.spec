@@ -55,5 +55,6 @@ defines =
     USB_HOST
     SPI_SDCARD
     AUDIO
+    AUDIO_EXACT
     AUDIO_SD
     AUDIO_MIXER

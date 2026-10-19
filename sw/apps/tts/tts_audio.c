@@ -113,9 +113,10 @@ bool ta_init(void) {
 	}
 
 	// The FIFO takes 16-bit stereo frames at a rate set globally. The
-	// voice is made at 11025Hz, which the hardware can run at directly
-	// (11029Hz, 0.04% off) -- except over S/PDIF, which cannot go that
-	// low, so there each sample is sent four times at 44.1kHz.
+	// voice is made at 11025Hz, which the hardware runs at directly
+	// (exactly, with exact rates; 11029Hz on an older bitstream) --
+	// except over S/PDIF, which cannot go that low, so there each
+	// sample is sent four times at 44100Hz.
 	mode = TA_FIFO;
 	fmt16 = true;
 	bps = 2;
@@ -311,7 +312,7 @@ void ta_start(const char *text, uint32_t len, bool spell, const phon_opts_t *o) 
 	if (mode == TA_FIFO) {
 		rd = 0;
 		underruns = 0;
-		z_audio_start(up == 4 ? Z_AUDIO_RATE_44K : Z_AUDIO_RATE_11K);
+		z_audio_start_hz(up == 4 ? Z_AUDIO_HZ_44K : Z_AUDIO_HZ_11K);
 		fifo_feed();
 		playing = true;
 		stuck_since = z_uptime_ticks();

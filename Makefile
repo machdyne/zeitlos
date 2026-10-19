@@ -46,6 +46,7 @@ RTL_PICO = \
 	rtl/gpu/gpu_cursor.v \
 	rtl/gpu/gpu_ddmi.v \
 	rtl/gpu/tmds_encoder.v \
+	rtl/gpu/ddmi_island.v \
 	rtl/uart.v \
 	rtl/usb_hid.v \
 	rtl/usb/usb_sie.v \
@@ -1440,6 +1441,87 @@ usb_fmax_sweep:
 			NR, v[1], m, v[NR], (v[1] < 48) ? "  ** MIN FAILS 48 **" : "" }'
 
 CAND ?= rtl/gpu/gpu_blit.v
+# The audio block: FIFO, PT8211, sigma-delta, volume and exact rates
+# (rtl/tb/tb_audio.v, about ten minutes with the exhaustive PT8211
+# check; QUICK=1 skips it), the S/PDIF transmitter at the old divider
+# and at exact 48000 / 44100 Hz across a spread of frame phases
+# (rtl/tb/tb_audio_spdif.v), and zaudio.h's rate arithmetic on the
+# host. docs/audio.md, "Exact sample rates".
+test_audio:
+	@mkdir -p output
+	iverilog -g2005 -I rtl -o output/tb_audio rtl/tb/tb_audio.v \
+		rtl/audio.v rtl/audio_out.v rtl/audio_mixer.v rtl/audio_spdif.v
+	@vvp -n output/tb_audio $(if $(QUICK),+quick,) | tee output/tb_audio.log | grep -E "FAIL|===|ok  (CONFIG HAS_EXACT|48000|44100)"
+	@grep -q "tb_audio: PASS" output/tb_audio.log
+	iverilog -g2005 -o output/tb_audio_spdif rtl/tb/tb_audio_spdif.v rtl/audio_spdif.v
+	@set -e; for a in "" "+step=16 +mod=125" "+step=147 +mod=1250" \
+		"+step=128 +mod=1088" "+step=16 +mod=125 +offset=37" \
+		"+step=147 +mod=1250 +offset=90" "+step=16 +mod=125 +offset=127"; do \
+		vvp -n output/tb_audio_spdif $$a > output/tb_audio_spdif.log; \
+		grep -E "^tb_audio_spdif:|FAIL|TIMEOUT|PASS" output/tb_audio_spdif.log; \
+		grep -q "tb_audio_spdif: PASS" output/tb_audio_spdif.log; \
+	done
+	$(MAKE) -s -C sw/common/tests -f Makefile.zaudio
+
+# DDMI: tools/ddmi/ddmi.py's model against its references, then the
+# DDMI output captured from RTL (rtl/gpu/bench/tb_ddmi_capture.v) and
+# checked by the model's receiver: gpu_ddmi.v alone with every 8-bit
+# value against the model's own encoder, the whole of gpu_video.v
+# against the DVI golden -- built without the data-island scheduler and
+# with it switched off -- and with it on: AVI/SPD/GCP present, every
+# character as the model sends it, a switch mid-frame taking effect at
+# the next frame, and sound: a known sample sequence through the FIFO
+# and out bit-exact, at 48 kHz and at 22.05 kHz sent twice, with N/CTS
+# and channel status checked. About half an hour. docs/ddmi_audio.md.
+DDMI_TB_RTL = rtl/gpu/gpu_ddmi.v rtl/gpu/tmds_encoder.v rtl/gpu/ddmi_island.v rtl/tb/ecp5_io_cells.v
+test_ddmi:
+	@mkdir -p output
+	python3 tools/ddmi/test_ddmi.py
+	@sed 's/^\tinput \[31:0\] gb_dat_i,$$/\tinput [31:0] gb_dat_i/' \
+		rtl/gpu/gpu_video.v > output/gpu_video_tb.v
+	iverilog -g2005 -DGPU_DDMI -DDIRECT -o output/tb_ddmi_direct \
+		rtl/gpu/bench/tb_ddmi_capture.v $(DDMI_TB_RTL)
+	iverilog -g2005 -DGPU_DDMI -DGPU_DDMI_AUDIO -DDIRECT -o output/tb_ddmi_direct_i \
+		rtl/gpu/bench/tb_ddmi_capture.v $(DDMI_TB_RTL)
+	iverilog -g2005 -DGPU_DDMI -o output/tb_ddmi_video \
+		rtl/gpu/bench/tb_ddmi_capture.v output/gpu_video_tb.v $(DDMI_TB_RTL)
+	iverilog -g2005 -DGPU_DDMI -DGPU_DDMI_AUDIO -o output/tb_ddmi_video_i \
+		rtl/gpu/bench/tb_ddmi_capture.v output/gpu_video_tb.v $(DDMI_TB_RTL)
+	@echo "-- gpu_ddmi alone, DVI"
+	@vvp -n output/tb_ddmi_direct +out=output/ddmi_direct.txt +frames=1 | grep -E "ok|FAIL|RESULT"
+	python3 tools/ddmi/ddmi.py output/ddmi_direct.txt --expect dvi --pattern xor --model
+	@echo "-- gpu_ddmi alone, islands on"
+	@vvp -n output/tb_ddmi_direct_i +out=output/ddmi_direct_i.txt +frames=1 +en=1 | grep -E "ok|FAIL|RESULT"
+	python3 tools/ddmi/ddmi.py output/ddmi_direct_i.txt --expect hdmi --pattern xor --model --schedule round2
+	@echo "-- gpu_video, no islands built: the golden"
+	@vvp -n output/tb_ddmi_video +out=output/ddmi_video.txt +frames=1 | grep -E "ok|FAIL|RESULT"
+	python3 tools/ddmi/ddmi.py output/ddmi_video.txt --expect dvi \
+		--sha256 rtl/gpu/bench/ddmi_dvi_golden.sha256
+	@echo "-- gpu_video, islands built and off: still the golden"
+	@vvp -n output/tb_ddmi_video_i +out=output/ddmi_video_off.txt +frames=1 +en=0 | grep -E "ok|FAIL|RESULT"
+	python3 tools/ddmi/ddmi.py output/ddmi_video_off.txt --expect dvi \
+		--sha256 rtl/gpu/bench/ddmi_dvi_golden.sha256
+	@echo "-- gpu_video, islands on"
+	@vvp -n output/tb_ddmi_video_i +out=output/ddmi_video_on.txt +frames=1 +en=1 | grep -E "ok|FAIL|RESULT"
+	python3 tools/ddmi/ddmi.py output/ddmi_video_on.txt --expect hdmi --model --schedule round2
+	@echo "-- gpu_video, switched on mid-frame"
+	@vvp -n output/tb_ddmi_video_i +out=output/ddmi_video_sw.txt +frames=2 +en=2 | grep -E "ok|FAIL|RESULT"
+	python3 tools/ddmi/ddmi.py output/ddmi_video_sw.txt --expect hdmi --frame-islands 0,525
+	@echo "-- gpu_ddmi alone, sound at 48 kHz"
+	@vvp -n output/tb_ddmi_direct_i +out=output/ddmi_snd48.txt +frames=1 +en=1 +snd=1 | grep -E "ok|FAIL|RESULT"
+	python3 tools/ddmi/ddmi.py output/ddmi_snd48.txt --expect hdmi --pattern xor --audio-seq --audio-hz 48000
+	@echo "-- gpu_ddmi alone, 22.05 kHz sent twice: 44.1 kHz"
+	@vvp -n output/tb_ddmi_direct_i +out=output/ddmi_snd22.txt +frames=1 +en=1 +snd=1 \
+		+period=2177 +rep=2 +n=6272 +cts=28000 +fs=0 | grep -E "ok|FAIL|RESULT"
+	python3 tools/ddmi/ddmi.py output/ddmi_snd22.txt --expect hdmi --audio-seq --audio-rep 2 --audio-hz 44100
+	@echo "-- gpu_video, sound running, islands off: still the golden"
+	@vvp -n output/tb_ddmi_video_i +out=output/ddmi_snd_off.txt +frames=1 +en=0 +snd=1 | grep -E "ok|FAIL|RESULT"
+	python3 tools/ddmi/ddmi.py output/ddmi_snd_off.txt --expect dvi \
+		--sha256 rtl/gpu/bench/ddmi_dvi_golden.sha256
+	@echo "-- gpu_video, islands and sound on"
+	@vvp -n output/tb_ddmi_video_i +out=output/ddmi_snd_on.txt +frames=1 +en=1 +snd=1 | grep -E "ok|FAIL|RESULT"
+	python3 tools/ddmi/ddmi.py output/ddmi_snd_on.txt --expect hdmi --audio-seq --audio-hz 48000
+
 test_blit:
 	@mkdir -p output
 	@sed 's/^module gpu_blit_wb/module gpu_blit_cand/' $(CAND) \
@@ -1494,4 +1576,4 @@ clean_bios:
 clean_apps:
 	cd sw/apps && make clean
 
-.PHONY: clean_bios bios apps core-bins core-apps core-files zapi pnr_again tftp-dist nfs-dist timing path util test_blit test_uart hwmap FORCE soc
+.PHONY: clean_bios bios apps core-bins core-apps core-files zapi pnr_again tftp-dist nfs-dist timing path util test_audio test_ddmi test_blit test_uart hwmap FORCE soc

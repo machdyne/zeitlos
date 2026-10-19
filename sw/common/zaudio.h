@@ -58,7 +58,7 @@
  *
  * POLLED, for a beep or a test tone:
  *
- *     z_audio_start(Z_AUDIO_RATE_44K);
+ *     z_audio_start_hz(z_audio_preferred_hz());
  *     while (playing) {
  *         while (!z_audio_full())
  *             z_audio_push(left, right);
@@ -138,6 +138,20 @@
 #define reg_audio_volume     (*(volatile uint32_t*)0x70000538)
 #define Z_AUDIO_VOLUME_UNITY 256u
 #define Z_AUDIO_CONFIG_HAS_VOLUME (1u << 14)
+
+/* FSDIV (rtl/audio.v, register 15): the sample clock as { MOD, STEP },
+ * fs = CLKHZ * STEP / (128 * MOD). Present when CONFIG bit 15 is set
+ * (z_audio_has_exact()). Do not write it directly: z_audio_start_hz()
+ * and z_audio_set_rate_hz() do the arithmetic, and also keep RATE and
+ * the S/PDIF channel-status code in step with it. docs/audio.md,
+ * "Exact sample rates". */
+#define reg_audio_fsdiv      (*(volatile uint32_t*)0x7000053c)
+#define Z_AUDIO_CONFIG_HAS_EXACT (1u << 15)
+
+/* MIXVOL's second byte: the S/PDIF channel-status rate code (AES3
+ * byte 3: 0 = 44.1k, 2 = 48k, 3 = 32k, 4 = 22.05k). A byte store, so
+ * MIXVOL itself is untouched. */
+#define reg_audio_spdif_fs   (*(volatile uint8_t*)0x70000521)
 
 /*
  * Hardware mixer channel registers (rtl/audio_mixer.v).
@@ -227,33 +241,46 @@
 #define Z_AUDIO_MIXER_PRESENT  (1u << 12)  // hardware mixer is built
 #define Z_AUDIO_MIXER_FMT16    (1u << 13)  // ...and its channels can
                                            // fetch 16-bit samples
-#define Z_AUDIO_FORMAT_SPDIF   (1u << 10)  // RESERVED -- optical S/PDIF
-                                           // (Sergei). Nothing sets
-                                           // this yet; see docs/audio.md.
+#define Z_AUDIO_FORMAT_SPDIF   (1u << 10)  // optical S/PDIF (Sergei,
+                                           // ULX3S)
+#define Z_AUDIO_FORMAT_DDMI    (1u << 11)  // DDMI audio: also over the
+                                           // DDMI connector, when
+                                           // system.video.ddmi_audio is on
+                                           // (docs/ddmi_audio.md)
 
 /*
- * Sample rate dividers. fs = CLKHZ / (64 * RATE), so these are exact
- * at 48MHz and nowhere else -- read reg_audio_clkhz and compute rather
- * than assuming, if you care to a Hz.
+ * Sample rates, in Hz. Use these with z_audio_start_hz().
  *
- * 44117.6Hz is 0.04% above 44100, a 0.7-cent pitch error. Inaudible,
- * and it is what you get without a PLL: both of the ECP5's are already
- * used for the system and pixel clocks, so every audio clock here is
- * counted down from the 48MHz sys_clk.
- *
- * Z_AUDIO_RATE_46K is the odd one out and is here for a specific
- * future reason: 46875Hz is the ONLY rate on this clocking whose
- * S/PDIF biphase half-cell is an exact integer number of sys_clk
- * cycles (8). A board with the optical transmitter (Sergei, not
- * supported yet) will want it. For a tracker it costs nothing -- MOD
- * playback resamples through a phase accumulator, so the output rate
- * is a free parameter and pitch is unaffected. For playing back
- * material authored at 44.1kHz it is 6.3% sharp unless you resample.
+ * On a bitstream with exact rates (z_audio_has_exact(), every board
+ * since 0.0.7) each of these is EXACT: the sample clock is an
+ * accumulator, not a divider, so 44100 Hz is 44100 Hz. On an older
+ * bitstream z_audio_start_hz() picks the nearest of the old dividers
+ * below -- 44117.6 Hz for 44100, 46875 Hz for 48000 -- and
+ * z_audio_rate_hz() reports what was actually got. Code that asks
+ * z_audio_rate_hz() for the real rate (every mixer STEP, every
+ * resampler) is right on both without knowing which it has.
  */
-#define Z_AUDIO_RATE_44K  17   // 44117.6 Hz
-#define Z_AUDIO_RATE_46K  16   // 46875.0 Hz -- see above
-#define Z_AUDIO_RATE_22K  34   // 22058.8 Hz
-#define Z_AUDIO_RATE_11K  68   // 11029.4 Hz
+#define Z_AUDIO_HZ_48K  48000u
+#define Z_AUDIO_HZ_44K  44100u
+#define Z_AUDIO_HZ_32K  32000u
+#define Z_AUDIO_HZ_22K  22050u
+#define Z_AUDIO_HZ_11K  11025u
+
+/*
+ * The OLD rate dividers: fs = CLKHZ / (64 * RATE). Still accepted by
+ * z_audio_start(), which turns the four below into the exact rates
+ * they always approximated (17 -> 44100, 16 -> 48000, 34 -> 22050,
+ * 68 -> 11025); any other value is written to RATE as it always was.
+ * New code should use z_audio_start_hz() and the Z_AUDIO_HZ_* values.
+ *
+ * 46875 Hz (RATE 16) was the S/PDIF boards' rate before exact rates:
+ * the only one whose biphase half-cell was a whole number of sys_clk
+ * cycles. With exact rates those boards run at a true 48000 instead.
+ */
+#define Z_AUDIO_RATE_44K  17   // 44117.6 Hz (44100 with exact rates)
+#define Z_AUDIO_RATE_46K  16   // 46875.0 Hz (48000 with exact rates)
+#define Z_AUDIO_RATE_22K  34   // 22058.8 Hz (22050 with exact rates)
+#define Z_AUDIO_RATE_11K  68   // 11029.4 Hz (11025 with exact rates)
 
 
 /*
@@ -297,11 +324,132 @@ static inline bool z_audio_has_volume(void) {
 	return (cfg >> 16) == Z_AUDIO_CONFIG_SIG && (cfg & Z_AUDIO_CONFIG_HAS_VOLUME);
 }
 
-// Exact sample rate in Hz for the divider currently programmed.
+/*
+ * Does this bitstream have exact sample rates (FSDIV, CONFIG bit 15)?
+ * Same order as z_audio_has_volume(), for the same reason.
+ */
+static inline bool z_audio_has_exact(void) {
+	uint32_t cfg;
+	if (!z_audio_present()) return false;
+	cfg = reg_audio_config;
+	return (cfg >> 16) == Z_AUDIO_CONFIG_SIG && (cfg & Z_AUDIO_CONFIG_HAS_EXACT);
+}
+
+static inline uint32_t z_audio__clkhz(void) {
+	uint32_t clk = reg_audio_clkhz;
+	return clk ? clk : 48000000u;
+}
+
+/*
+ * The sample rate the hardware is running at now, in Hz -- the true
+ * one, whichever way it was set. Compute every mixer STEP and every
+ * resampling ratio from this, never from a constant: the rate is
+ * shared by every app and is whatever the last z_audio_start*() said.
+ *
+ * Rounded to the nearest Hz; with exact rates that is the rate itself.
+ */
 static inline uint32_t z_audio_rate_hz(void) {
-	uint32_t r = reg_audio_rate & 0xFF;
-	if (r < 2) r = 2;
-	return reg_audio_clkhz / (64u * r);
+	uint32_t clk = z_audio__clkhz();
+	if (z_audio_has_exact()) {
+		uint32_t v = reg_audio_fsdiv;
+		uint32_t step = v & 0xFFFFu, mod = v >> 16;
+		/* fs = (clk / 128) * step / mod, in 32 bits: whole part and
+		 * remainder separately, since (clk/128) * step overflows. The
+		 * remainder product is < mod * step < 2^32. */
+		uint32_t base = clk >> 7;
+		if (!mod || !step) return 0;
+		if (step >= mod) return base;	/* ticks every cycle */
+		return (base / mod) * step + ((base % mod) * step + mod / 2) / mod;
+	} else {
+		uint32_t r = reg_audio_rate & 0xFF;
+		if (r < 2) r = 2;
+		return (clk + 32u * r) / (64u * r);
+	}
+}
+
+/* Greatest common divisor, for reducing FSDIV. */
+static inline uint32_t z_audio__gcd(uint32_t a, uint32_t b) {
+	while (b) { uint32_t t = a % b; a = b; b = t; }
+	return a;
+}
+
+/*
+ * Best approximation to p/q (p < q) with a denominator no larger than
+ * maxd, by continued fractions: the last convergent that fits, or the
+ * semiconvergent beyond it when that is closer. Returns the
+ * denominator and sets *num. All in 32 bits: every term is checked
+ * against maxd before it is formed.
+ */
+static inline uint32_t z_audio__approx(uint32_t p, uint32_t q, uint32_t maxd,
+	uint32_t *num)
+{
+	uint32_t h0 = 0, h1 = 1, k0 = 1, k1 = 0;
+	while (q) {
+		uint32_t a = p / q, r = p % q, t;
+		if (k1 && a > (maxd - k0) / k1) {
+			/* next convergent is too big: try a semiconvergent */
+			t = (maxd - k0) / k1;
+			if (2 * t > a) {
+				h1 = t * h1 + h0;
+				k1 = t * k1 + k0;
+			}
+			break;
+		}
+		t = a * h1 + h0; h0 = h1; h1 = t;
+		t = a * k1 + k0; k0 = k1; k1 = t;
+		p = q; q = r;
+	}
+	*num = h1;
+	return k1;
+}
+
+/*
+ * The FSDIV word, { MOD[31:16], STEP[15:0] }, for `hz` at this
+ * board's clock: STEP/MOD = 128 hz / clk, reduced by their common
+ * divisor. Every standard rate reduces to MOD < 65536 and is then
+ * exact (48000 -> 16/125, 44100 -> 147/1250). An unusual rate that
+ * does not reduce that far gets the closest STEP/MOD that fits, which
+ * is within 1e-5 (a hundredth of a cent) -- far below what an ear or a
+ * receiver can tell. 0 for a rate outside 1 Hz .. clk/200 (240 kHz at
+ * 48MHz), which is as fast as the PT8211 and S/PDIF stages are meant
+ * to run.
+ */
+static inline uint32_t z_audio_fsdiv_for(uint32_t hz) {
+	uint32_t clk = z_audio__clkhz();
+	uint32_t num, g, step, mod;
+	if (!hz || hz > clk / 200u) return 0;
+	num = hz << 7;			/* < clk, so fits easily */
+	g = z_audio__gcd(num, clk);
+	step = num / g;
+	mod = clk / g;
+	if (mod > 0xFFFFu)
+		mod = z_audio__approx(num, clk, 0xFFFFu, &step);
+	if (!step) step = 1;
+	return (mod << 16) | step;
+}
+
+/* The nearest old-style divider to `hz` (fs = clk / (64 * RATE)),
+ * 2..255. What a bitstream without exact rates is given. */
+static inline uint32_t z_audio_div_for(uint32_t hz) {
+	uint32_t clk = z_audio__clkhz(), d;
+	if (!hz) return 255;
+	d = (clk + 32u * hz) / (64u * hz);
+	if (d < 2) d = 2;
+	if (d > 255) d = 255;
+	return d;
+}
+
+/* IEC 60958 channel-status rate code (AES3 byte 3) for the standard
+ * rate nearest `hz`: 0 = 44.1k, 2 = 48k, 3 = 32k, 4 = 22.05k,
+ * 6 = 24k, 8 = 88.2k, 10 = 96k. */
+static inline uint8_t z_audio_spdif_code(uint32_t hz) {
+	if (hz < 23000) return 4;
+	if (hz < 28000) return 6;
+	if (hz < 38000) return 3;
+	if (hz < 46000) return 0;
+	if (hz < 68000) return 2;
+	if (hz < 92000) return 8;
+	return 10;
 }
 
 static inline uint32_t z_audio_level(void) {
@@ -365,7 +513,118 @@ static inline bool z_audio_push(int16_t left, int16_t right) {
 }
 
 /*
- * Start playback at the given rate divider (a Z_AUDIO_RATE_* value).
+ * DDMI audio's clock regeneration for the rate now running: the
+ * display rebuilds 128 fs as 25.2 MHz * N / CTS. Exact: with the
+ * sample clock at clk * STEP / (128 MOD) and each frame sent k times,
+ * N / CTS = 40 k STEP / (21 MOD) at 48 MHz, reduced, then scaled to
+ * the N sinks expect (6144 at 48 kHz, 6272 at 44.1 kHz, 4096 at 32
+ * kHz), or near 128 fs / 1000 for any other rate. The same arithmetic
+ * as rtl/audio_rates.vh, which gives the power-on values (always a
+ * standard or old-divider rate, so always the exact branch).
+ */
+static inline void z_audio_ddmi_acr(uint32_t step, uint32_t mod, uint32_t k,
+	uint32_t *n_out, uint32_t *cts_out)
+{
+	uint32_t clk = z_audio__clkhz();
+	uint32_t n0 = k * step * (clk / 1200000u), c0 = mod * 21u, g, fs, std = 0, j;
+	g = z_audio__gcd(n0, c0);
+	n0 /= g;
+	c0 /= g;
+	/* fs on the DDMI side, and whether it is a whole number of Hz */
+	{
+		uint32_t base = clk >> 7, num_hi = (base / mod) * step * k;
+		uint32_t rem = (base % mod) * step;		/* < mod * step < 2^32 */
+		fs = num_hi + (rem / mod) * k + ((rem % mod) * k) / mod;
+		if ((rem % mod) == 0) {
+			switch (fs) {
+			case 32000: std = 4096; break;
+			case 44100: std = 6272; break;
+			case 48000: std = 6144; break;
+			case 88200: std = 12544; break;
+			case 96000: std = 12288; break;
+			case 176400: std = 25088; break;
+			case 192000: std = 24576; break;
+			}
+		}
+	}
+	if (std && (std % n0) == 0) {
+		j = std / n0;
+	} else if (n0 > (fs * 128u) / 300u) {
+		/* An unusual rate whose exact N is past what sinks take: the
+		 * closest N/CTS with CTS at most 84000 -- 25.2 MHz / 300, so N
+		 * stays inside the 128 fs / 300 a sink allows -- by continued
+		 * fractions. Off by a few parts per million at worst
+		 * (test_zaudio.c checks under 5) -- a source that measures CTS
+		 * by counting, as most do, wobbles by 40 ppm. */
+		uint32_t num, den = z_audio__approx(n0, c0, 84000u, &num);
+		n0 = num;
+		c0 = den;
+		j = c0 ? (25200u + c0 / 2) / c0 : 1;
+		if (!j) j = 1;
+	} else {
+		j = ((fs * 128u) / 1000u + n0 / 2) / n0;
+		if (!j) j = 1;
+	}
+	*n_out = n0 * j;
+	*cts_out = c0 * j;
+}
+
+/*
+ * Keep DDMI audio's settings matching the rate the hardware runs at:
+ * frames repeated 2^REP times so the display sees at least 32 kHz,
+ * N and CTS, the channel-status rate code. Nothing to do on a
+ * bitstream without DDMI sound. z_audio_set_rate_hz() calls this.
+ */
+static inline void z_audio__ddmi_sync(void) {
+	uint32_t step, mod, hz, rep = 0, n, cts, v;
+	if (!z_ddmi_sound_available()) return;
+	if (z_audio_has_exact()) {
+		v = reg_audio_fsdiv;
+		step = v & 0xFFFFu;
+		mod = v >> 16;
+	} else {
+		uint32_t r = reg_audio_rate & 0xFF;
+		step = 128;
+		mod = 64u * (r < 2 ? 2 : r);
+	}
+	if (!step || !mod) return;
+	hz = z_audio_rate_hz();
+	while (rep < 2 && (hz << rep) < 32000u) rep++;
+	z_audio_ddmi_acr(step, mod, 1u << rep, &n, &cts);
+	reg_socctl_acrn = n;
+	reg_socctl_acrcts = cts;
+	v = reg_socctl_ddmi & (Z_DDMI_EN | Z_DDMI_SOUND);
+	reg_socctl_ddmi = v | ((uint32_t)z_audio_spdif_code(hz << rep) << Z_DDMI_FS_SHIFT)
+		| (rep << Z_DDMI_REP_SHIFT);
+}
+
+/*
+ * Change the sample rate WITHOUT touching the FIFO, the mute or the
+ * mixer -- for an app that changes rate while it plays (track's rate
+ * key). Everything z_audio_start_hz() says about the rate applies.
+ */
+static inline void z_audio_set_rate_hz(uint32_t hz) {
+	/* RATE first: it resets FSDIV to the old-style divider, which is
+	 * then what a bitstream without exact rates keeps, and what an
+	 * older binary reading RATE sees -- close, rather than stale. */
+	reg_audio_rate = z_audio_div_for(hz);
+	if (z_audio_has_exact()) {
+		uint32_t fsdiv = z_audio_fsdiv_for(hz);
+		if (fsdiv) reg_audio_fsdiv = fsdiv;
+	}
+	if (z_audio_present() && (z_audio_formats() & Z_AUDIO_FORMAT_SPDIF))
+		reg_audio_spdif_fs = z_audio_spdif_code(z_audio_rate_hz());
+	if (z_audio_present() && (z_audio_formats() & Z_AUDIO_FORMAT_DDMI))
+		z_audio__ddmi_sync();
+}
+
+/*
+ * Start playback at `hz` (a Z_AUDIO_HZ_* value, or any whole-Hz rate).
+ *
+ * Exact on a bitstream with exact rates; the nearest old divider on
+ * one without. Either way z_audio_rate_hz() afterwards says what the
+ * hardware is really doing, and that is the number to compute steps
+ * and resampling from.
  *
  * Flushes first, deliberately: whatever is in the FIFO from a previous
  * run is stale by definition, and starting by playing it produces a
@@ -377,7 +636,32 @@ static inline bool z_audio_push(int16_t left, int16_t right) {
  * interrupt immediately (the FIFO is empty, so it is below the
  * watermark) into whatever handler happened to be there.
  */
+static inline void z_audio_start_hz(uint32_t hz) {
+	reg_audio_ctrl = Z_AUDIO_CTRL_FLUSH;
+	z_audio_set_rate_hz(hz);
+	reg_audio_ctrl = Z_AUDIO_CTRL_EN | Z_AUDIO_CTRL_CLRUR;
+}
+
+/*
+ * Start playback at an OLD rate divider (a Z_AUDIO_RATE_* value).
+ *
+ * Kept so code written before z_audio_start_hz() still builds and
+ * still does the right thing: the four named dividers become the exact
+ * rates they stood for, so an app asking for Z_AUDIO_RATE_44K gets
+ * 44100 Hz. Anything else goes to RATE unchanged.
+ */
 static inline void z_audio_start(uint32_t rate_div) {
+	uint32_t hz = 0;
+	switch (rate_div) {
+	case Z_AUDIO_RATE_44K: hz = Z_AUDIO_HZ_44K; break;
+	case Z_AUDIO_RATE_46K: hz = Z_AUDIO_HZ_48K; break;
+	case Z_AUDIO_RATE_22K: hz = Z_AUDIO_HZ_22K; break;
+	case Z_AUDIO_RATE_11K: hz = Z_AUDIO_HZ_11K; break;
+	}
+	if (hz) {
+		z_audio_start_hz(hz);
+		return;
+	}
 	reg_audio_ctrl = Z_AUDIO_CTRL_FLUSH;
 	reg_audio_rate = rate_div;
 	reg_audio_ctrl = Z_AUDIO_CTRL_EN | Z_AUDIO_CTRL_CLRUR;
@@ -555,30 +839,66 @@ static inline void z_audio_mixer_enable(bool on) {
 }
 
 /*
- * Lowest rate divider a digital output can carry.
- *
- * IEC 60958 receivers are typically specified from 32kHz up, so the
- * 22kHz and 11kHz settings above are below what a DAC will lock to no
- * matter how clean the line is -- 48e6/(64*RATE) has to stay at or
- * above 32000, which means RATE <= 23.
- *
- * The transmitter itself does not care and will happily send 11kHz.
- * The receiver on the other end is the constraint, and it is the one
+ * Lowest rate a digital output can carry: IEC 60958 receivers are
+ * typically specified from 32kHz up, so 22.05 kHz and 11.025 kHz are
+ * below what a DAC will lock to no matter how clean the line is. The
+ * transmitter itself does not care and will happily send 11kHz; the
+ * receiver on the other end is the constraint, and it is the one
  * thing the FPGA cannot check.
+ */
+#define Z_AUDIO_HZ_MIN_SPDIF 32000u
+
+/*
+ * Is `hz` a rate this board's outputs can all carry?
+ *
+ * On a board with only analogue outputs, anything the stage can make
+ * is fine. With a digital transmitter, nothing below 32 kHz. Apps that
+ * offer a rate control should filter through this; apps that just
+ * play should use z_audio_preferred_hz().
+ */
+static inline bool z_audio_rate_ok_hz(uint32_t hz) {
+	uint32_t clk = z_audio__clkhz();
+	if (hz < 1000u || hz > clk / 200u) return false;
+	if (z_audio_formats() & Z_AUDIO_FORMAT_SPDIF) {
+		if (hz < Z_AUDIO_HZ_MIN_SPDIF) return false;
+		/* Without exact rates the old rule applies too: an EVEN
+		 * divider, because a bitstream from before the fractional
+		 * S/PDIF divider truncated an odd one and ran the line 6%
+		 * fast. Preferring even costs nothing and is right on both. */
+		if (!z_audio_has_exact() && (z_audio_div_for(hz) & 1u))
+			return false;
+	}
+	return true;
+}
+
+/*
+ * The rate an app that just wants to play should start at: the rate
+ * the hardware is running at now if every output can carry it,
+ * otherwise this board's natural one -- 48 kHz with a digital output,
+ * 44.1 kHz without.
+ *
+ * "Now" matters. The rate is shared by every app, and the board comes
+ * up at the one its outputs want (`AUDIO_FS_RESET in rtl/boards.vh);
+ * an app that overwrote it with a constant would throw that away, and
+ * would retune whatever else is playing.
+ */
+static inline uint32_t z_audio_preferred_hz(void) {
+	uint32_t hz = z_audio_rate_hz();
+	if (z_audio_rate_ok_hz(hz)) return hz;
+	/* 48 kHz with a digital output: exact with FSDIV, and divider 16
+	 * (46875 Hz, even) on an older bitstream, as those boards always
+	 * ran. */
+	if (z_audio_formats() & Z_AUDIO_FORMAT_SPDIF)
+		return Z_AUDIO_HZ_48K;
+	return Z_AUDIO_HZ_44K;
+}
+
+/*
+ * OLD: is the rate divider `rate_div` usable on this board? Kept for
+ * code written against dividers; new code uses z_audio_rate_ok_hz().
  */
 #define Z_AUDIO_RATE_MIN_SPDIF 23
 
-/*
- * Is `rate_div` usable on this board?
- *
- * On a board with only analogue outputs, any rate is fine. With a
- * transmitter, anything below 32kHz will not lock. Apps that offer a
- * rate control should filter through this rather than assuming, and
- * they should START from whatever rate the board came up with --
- * `AUDIO_RATE_RESET` in boards.vh exists so a board can pick a rate
- * its outputs can actually carry, and an app that overwrites it with a
- * constant throws that away.
- */
 static inline bool z_audio_rate_ok(uint32_t rate_div) {
 	if (rate_div < 2) return false;
 	if (z_audio_formats() & Z_AUDIO_FORMAT_SPDIF) {

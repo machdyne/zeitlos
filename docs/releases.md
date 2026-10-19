@@ -37,6 +37,7 @@ helpfully rebuilding something nobody has looked at.
 
 ```
 release/dist/0.0.3/
+  zeitlos-lakritz_ddmi_audio.img    sound over HDMI (docs/ddmi_audio.md)
   zeitlos-lakritz_gpio.img          gateware + kernel + core apps
   zeitlos-lakritz_kabellos.img
   zeitlos-lakritz_katze.img
@@ -288,6 +289,7 @@ the balls `boards/lakritz_v0.lpf` already had them on. `zrelease check`
 asserts it, and prints the delta for every target:
 
 ```
+lakritz_ddmi_audio   ok -- -7 vs the board .lpf
 lakritz_gpio         ok -- +8, -5 vs the board .lpf
                           gpio in port A
 lakritz_katze        ok -- +8, -5 vs the board .lpf

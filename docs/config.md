@@ -68,6 +68,7 @@ travel with the card. `settings` edits them; see
 | `system.video.mode` | `white` | kernel | display colour, applied at boot and on reload |
 | `system.video.brightness` | `8` | kernel | HDMI/DVI monochrome brightness, 1-16, applied at boot and on reload |
 | `system.video.composite` | `color` | kernel | composite colour boards: `color`, or `mono` for black and white |
+| `system.video.ddmi_audio` | `no` | kernel | DDMI boards built with it: `yes` sends sound and display info over the HDMI connector |
 
 The same table, with one-line help, is `z_cfg_known[]` in
 `sw/common/zcfg.c` -- `cfg` at the console prints it with the values in
@@ -190,6 +191,25 @@ colour mode, VGA and composite are unaffected
 reload; absent leaves the display as it is; ignored on boards without
 HDMI/DVI.
 
+### `system.video.ddmi_audio`
+
+`yes` or `no` (also `on`/`off`, `1`/`0`), on a board whose bitstream
+has DDMI audio (`GPU_DDMI_AUDIO`; [ddmi_audio.md](ddmi_audio.md)).
+`yes` adds data islands to the HDMI/DVI output: an AVI InfoFrame that
+tells a TV the picture is 640x480, 4:3, full-range RGB and computer
+content -- so it does not stretch, crop or grey the blacks, and often
+switches to its low-latency mode -- and the sound: everything the
+board plays, as the jack or S/PDIF does, at the system volume. Takes
+effect at the next frame.
+
+**Off by default, and only on if this file says so.** These boards
+cannot ask the display what it accepts (no EDID), so this is your call.
+A display that shows nothing with it on -- a DVI-only monitor might --
+is put right by setting `no` here: edit `zeitlos.cfg` on the card from
+a PC; or at the serial console, `ddmi off` turns it off at once (until
+the next boot or `cfg reload`) and `xf`/`xmf` can bring a corrected file. Absent leaves the output as it is,
+which at power-on is plain DVI; ignored on every other board.
+
 ### `system.video.composite`
 
 `color` or `mono`, on a composite board built with colour
@@ -254,6 +274,9 @@ at boot:
 What picks up a reload:
 
 - `system.video.mode` -- immediately; the kernel applies it.
+- `system.video.brightness`, `system.video.composite`,
+  `system.video.ddmi_audio` -- at the next frame; the kernel applies
+  them.
 - `system.rtc.timezone` -- on the next second in `clock`, the next check in `cal`.
 - `apps.term.auto_connect` -- the next term window opened.
 - `system.keyboard.layouts` -- the next key pressed (`wm`).

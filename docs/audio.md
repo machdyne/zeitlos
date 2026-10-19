@@ -2,7 +2,8 @@
 
 Sample playback: eight channels mixed in hardware, a FIFO for software
 mixing, a sample clock, and whichever output the board has — 1-bit
-sigma-delta, PT8211, or S/PDIF.
+sigma-delta, PT8211, S/PDIF, or DDMI audio over the
+HDMI-type connector ([ddmi_audio.md](ddmi_audio.md)).
 
     rtl/audio.v          FIFO, registers, interrupt, output-source mux
     rtl/audio_out.v      PT8211 serialiser + 2nd-order sigma-delta
@@ -27,7 +28,7 @@ reasons still apply to anything added next.
 |---|---|
 | Channels | 8 in hardware, time-multiplexed |
 | Format | 8- or 16-bit signed samples in main memory, per channel; 16-bit stereo out |
-| Rate | programmable, 44117.6 Hz default (46875 on S/PDIF boards) |
+| Rate | any whole-Hz rate, exact: 44100 Hz default, 48000 on S/PDIF boards ([Exact sample rates](#exact-sample-rates)) |
 | Buffer | 1024 frames, block RAM — software-mixing path only |
 | Interrupt | `cpu_irq[7]`, level, on FIFO below watermark |
 | Registers | `0x7000_05xx` |
@@ -45,9 +46,9 @@ Per board:
 | Sergei ML0 | as Sergei ML1 | as Sergei ML1 | as Sergei ML1 |
 | ULX3S | coax S/PDIF | `AUD_OPTICAL` E5 | `AUDIO`, `AUDIO_SPDIF` |
 
-Every board also sets `AUDIO_MIXER`. The S/PDIF boards set
-`AUDIO_RATE_RESET 8'd16` — see [S/PDIF](#spdif) on why that rate is not
-negotiable.
+Every board also sets `AUDIO_MIXER` and `AUDIO_EXACT`. The S/PDIF
+boards set `AUDIO_FS_RESET 48000` (and `AUDIO_RATE_RESET 8'd16`, the
+fallback for a build without exact rates) — see [S/PDIF](#spdif).
 
 The register interface is identical on all three. Only
 `audio_out.v`'s last stage differs, and software should not branch on
@@ -205,29 +206,103 @@ notes.
 
 Both `EHXPLLL` blocks are used (`pll0` for the system clocks, `pll1`
 for pixel and TMDS bit clocks), so there is no third PLL to have. Every
-audio clock is counted down from the 48 MHz `sys_clk`.
+audio clock is counted out of the 48 MHz `sys_clk`.
 
-`RATE` is the half-period of BCK in `sys_clk` cycles:
+### Exact sample rates
+
+Since 0.0.7 the sample clock is **one modulo accumulator** in
+`audio_out.v`, not a divider:
 
 ```
-f_bck = CLK_HZ / (2 * RATE)        f_s = f_bck / 32
-f_s   = CLK_HZ / (64 * RATE)
+acc += STEP;  if (acc >= MOD) { acc -= MOD; tick }
+ticks per second = CLK_HZ * STEP / MOD = 128 * fs
 ```
 
-| RATE | fs | error | note |
+128 ticks are one stereo frame. S/PDIF takes a half-cell per tick, the
+PT8211 a half-BCK per two, the sigma-delta only the frame. `STEP` and
+`MOD` are the `FSDIV` register (15), which `z_audio_start_hz()` sets
+from a rate in Hz, reduced by their common divisor:
+
+| fs | STEP | MOD | |
 |---|---|---|---|
-| 16 | 46875.0 Hz | +6.29% vs 44.1k | exact S/PDIF half-cell — see below |
-| **17** | **44117.6 Hz** | **+0.04%** | default. 0.7 cents. Inaudible. |
-| 34 | 22058.8 Hz | +0.04% | |
+| **48000** | 16 | 125 | S/PDIF boards' default |
+| **44100** | 147 | 1250 | everyone else's default |
+| 32000 | 32 | 375 | |
+| 22050 | 147 | 2500 | |
+| 11025 | 147 | 5000 | `tts`'s native rate |
+| 96000 | 32 | 125 | |
 
-`RATE` is a register rather than a parameter because a MOD player and a
-sample player want different answers and neither wants a rebuild. The
-power-on value is `AUDIO_RATE_RESET` in `boards.vh`, defaulting to 17.
+Every one of those is **exact** — 441 frames of 44100 Hz take exactly
+480000 cycles, which `tb_audio.v` counts. A rate that does not reduce to
+`MOD` < 65536 gets the closest fraction that fits, within 1e-5 (a
+hundredth of a cent); `sw/common/tests/test_zaudio.c` checks every rate
+from 1 kHz to 240 kHz.
 
-`RATE` is clamped to a minimum of 2 in hardware. A zero written there
-would make the tick true every cycle and free-run the serialiser at
-24 MHz — not a hang, but not something userspace should be able to do
-to itself either.
+**The cost is jitter of one `sys_clk`.** At 48 kHz a tick is 7.8125
+cycles, so ticks are 7 or 8 apart and a PT8211 half-BCK 15 or 16. Every
+edge is within 21 ns of its ideal place and the error never
+accumulates. S/PDIF receivers PLL to the line and tolerate far more
+(about 40 ns here); the PT8211 latches on WS; the sigma-delta does not
+care. The old odd `RATE` values already alternated by a cycle the same
+way.
+
+**In logic**, measured on `lakritz_gpio` (no S/PDIF, so nothing is
+shared away): **+54 TRELLIS_COMB** (22257 → 22311 of 24288, 91% both),
++121 FF, no block RAM, and `CLK_48` still closes (50.3 → 54.7 MHz;
+seed noise, not an improvement). On the S/PDIF boards the transmitter's
+own divider is gone in exchange — see [boards.md](boards.md). Every
+board with `AUDIO` sets `AUDIO_EXACT`; a target can remove it with
+`-AUDIO_EXACT` in its spec.
+
+### The old divider, still there
+
+`RATE` (register 4) still works, as the special case `STEP = 128`,
+`MOD = 64 * RATE`:
+
+| RATE | fs | |
+|---|---|---|
+| 16 | 46875.0 Hz | the S/PDIF boards' rate before exact rates |
+| 17 | 44117.6 Hz | the old default, 0.04% sharp |
+| 34 | 22058.8 Hz | |
+| 68 | 11029.4 Hz | |
+
+A write to `RATE` sets `FSDIV` to that, so a program that only knows
+`RATE` still works on a new bitstream; `z_audio_start()` goes further and
+turns the four named dividers into the exact rates they always stood for
+(17 → 44100, 16 → 48000, 34 → 22050, 68 → 11025). `RATE` reads back the
+last value **written** to it, and `z_audio_set_rate_hz()` writes the
+nearest divider there before writing `FSDIV`, so an older binary reading
+`RATE` still gets a close answer. `RATE` is clamped to a minimum of 2.
+
+On a bitstream **without** exact rates (`CONFIG` bit 15 clear),
+`z_audio_start_hz()` writes the nearest divider and `z_audio_rate_hz()`
+reports what that really is — 44118 for 44100, 46875 for 48000.
+
+### Software: rates in Hz
+
+```c
+z_audio_start_hz(z_audio_preferred_hz());   // start at the board's rate
+uint32_t out = z_audio_rate_hz();           // the TRUE rate, always
+Z_AUDIO_CH_STEP(c) = z_audio_step(sample_hz, out);
+```
+
+- `z_audio_start_hz(hz)` / `z_audio_set_rate_hz(hz)` — flush-and-start,
+  or change the rate while playing (track's `r` key). Both keep `RATE`
+  and the S/PDIF channel-status code in step.
+- `z_audio_rate_hz()` — what the hardware is doing now. **Compute every
+  step and resampling ratio from this**, never a constant: the rate is
+  shared by every app.
+- `z_audio_rate_ok_hz(hz)` — can every output carry it? Below 32 kHz is
+  refused on a board with S/PDIF.
+- `z_audio_preferred_hz()` — the current rate if it is ok, otherwise the
+  board's natural one (48 kHz with S/PDIF, 44.1 kHz without). Every app
+  that just plays starts here.
+- `Z_AUDIO_HZ_48K`, `_44K`, `_32K`, `_22K`, `_11K`.
+
+Apps moved to this in 0.0.7: `play`, `midi`, `track`, `audiotest`,
+`gamedemo`, `chip8`, `kidgames`, `tts`. One visible effect: `play` no
+longer resamples a 44.1 kHz file on a 44.1 kHz board — the step is
+exactly 1.
 
 ---
 
@@ -338,17 +413,18 @@ No decode mask change was needed: `sysctl.v` widened the tenant mask to
 | 1 | `0504` | `CTRL` | RW | see below |
 | 2 | `0508` | `STATUS` | R | see below |
 | 3 | `050c` | `DATA` | W | `{ left[31:16], right[15:0] }` |
-| 4 | `0510` | `RATE` | RW | `[7:0]` half-BCK period in sysclk cycles |
+| 4 | `0510` | `RATE` | RW | `[7:0]` old divider, fs = CLK_HZ / (64 RATE); a write also sets `FSDIV` |
 | 5 | `0514` | `WMARK` | RW | `[15:0]` interrupt watermark, frames |
-| 6 | `0518` | `CONFIG` | R | `{ 0x5A41, 3'b0, HAS_MIXER, FORMATS, DEPTH_LOG2 }` |
+| 6 | `0518` | `CONFIG` | R | `{ 0x5A41, HAS_EXACT, HAS_VOLUME, MIXER_FMT16, HAS_MIXER, FORMATS, DEPTH_LOG2 }` |
 | 7 | `051c` | `CLKHZ` | R | `CLK_HZ`, for computing fs exactly |
-| 8 | `0520` | `MIXVOL` | RW | `[7:0]` mixer master scale, `[11:8]` S/PDIF `fs_code` |
+| 8 | `0520` | `MIXVOL` | RW | `[7:0]` mixer master scale, `[11:8]` S/PDIF `fs_code` (0 = 44.1k, 2 = 48k, 3 = 32k) |
 | 9 | `0524` | `MIXSTAT` | R | `[7:0]` bit per channel, set while sounding |
 | 10 | `0528` | `MIXDBG_ADR` | R | address of the mixer's last fetch |
 | 11 | `052c` | `MIXDBG_DAT` | R | the word it read |
 | 12 | `0530` | `MIXPOSSEL` | RW | `[2:0]` which channel `MIXPOS` reports |
 | 13 | `0534` | `MIXPOS` | R | that channel's phase, 18.14, integer part is a byte offset from `BASE` |
 | 14 | `0538` | `VOLUME` | RW | `[8:0]` the system volume, 0..256 (256 = unity); resets to 128, 50% -- see "System volume" |
+| 15 | `053c` | `FSDIV` | RW | `{ MOD[31:16], STEP[15:0] }`, fs = CLK_HZ STEP / (128 MOD) -- see [Exact sample rates](#exact-sample-rates). 0 without `AUDIO_EXACT` |
 | 16..63 | `0540`+ | per-channel mixer state | W | six words per channel |
 
 `CTRL`: 0 `EN`, 1 `IRQEN`, 2 `SWAPLR`, 3 `FLUSH`, 4 `CLRUR`, 5
@@ -359,8 +435,11 @@ DAC's input from the hardware mixer instead of the FIFO). `FLUSH` and
 `STATUS`: `[15:0]` `LEVEL`, 16 `EMPTY`, 17 `FULL`, 18 `BELOW`,
 19 `UNDERRUN`.
 
-`CONFIG` `FORMATS`: bit 0 sigma-delta, bit 1 PT8211, bit 2 S/PDIF.
+`CONFIG` `FORMATS`: bit 0 sigma-delta, bit 1 PT8211, bit 2 S/PDIF, bit 3
+DDMI audio (the frames also go out on the DDMI connector when
+`system.video.ddmi_audio` is on — [ddmi_audio.md](ddmi_audio.md)).
 Bit 13: mixer channels can fetch 16-bit samples. Bit 14: `VOLUME` exists.
+Bit 15: `FSDIV` exists (exact rates).
 Bit 12 says the hardware mixer is **built** — software cannot infer
 that from anything else, because `MIXSTAT` reads 0 both when the mixer
 is absent and when it is present with every channel idle. A build
@@ -467,6 +546,12 @@ under each.
     # MOD engine, on the host compiler
     cd sw/apps/track && make test
 
+    # zaudio.h's rate arithmetic (FSDIV for every rate), on the host
+    make -C sw/common/tests -f Makefile.zaudio
+
+    # all of the audio ones above except the mixer and arbiter
+    make test_audio            # QUICK=1 skips the 65536-value sweep
+
 `-I rtl` is required for the audio ones: `audio.v` includes `boards.vh`
 to see `AUDIO_MIXER`, and `tb_audio.v` defines it itself so the
 testbench builds the same configuration a board does rather than
@@ -476,7 +561,12 @@ silently testing the mixer-less variant and reporting a pass for it.
 (fill/full/drop/flush), frame rate against the arithmetic, PT8211 round
 trip including both `SWAPLR` polarities, **all 65536 16-bit values**
 through the serialiser, underrun hold-and-sticky-bit, sigma-delta DC
-transfer, sigma-delta stability at full scale, and the interrupt.
+transfer, sigma-delta stability at full scale, the interrupt, the
+system volume, and **exact rates**: `CONFIG` bit 15, `RATE` → `FSDIV`,
+the power-on `FSDIV` from `FS_RESET` (two extra instances), frame
+periods counted to the cycle at 48000 / 44100 / 32000 / 22050 Hz, and
+the PT8211 receiver against a tick that is not a whole number of cycles
+(7/11 per cycle).
 
 ### Three testbench bugs worth recording
 
@@ -516,6 +606,16 @@ That ordering is the point of doing it before the MOD player. A tracker
 exercises pitch, volume, looping and multi-channel mixing at once, so
 when it sounds wrong there is nothing to bisect against. This gives it
 something.
+
+**Exact rates, to check on hardware** (collected for the final
+hardware-test phase, not yet run): `audiotest` prints `rate 44100 Hz
+(exact: FSDIV 147/1250)` on a new bitstream; a 440 Hz tone measured with
+a tuner or a phone app at 44.1 kHz and, on Sergei/ULX3S, 48 kHz; the
+S/PDIF receiver's display reads 48 kHz (it read 22.05 kHz or nothing
+before, from the channel-status bug); `track`'s `r` key cycles only the
+rates the board can carry and pitch stays put; `play` a 44.1 kHz WAV and
+a 48 kHz WAV on each board; speech (`tts`) on the FIFO path at 11025 Hz;
+the PT8211 on Mozart has no audible change.
 
 ---
 
@@ -1007,11 +1107,11 @@ while other things happen.
 | `-` / `=` | volume |
 | `[` / `]` | stereo separation |
 | `v` | pattern view on/off |
-| `r` | sample rate, 44.1k / 22k / 11k |
+| `r` | sample rate, 48k / 44.1k / 22.05k / 11.025k (only those the board's outputs carry) |
 | `q`, Escape, close icon | stop |
 
-22 kHz by default, or 46875 Hz on a board that sets
-`AUDIO_RATE_RESET 8'd16` for S/PDIF.
+Whatever rate the board is running at: 44.1 kHz, or 48 kHz on an S/PDIF
+board (`AUDIO_FS_RESET`).
 
 ### The display
 
@@ -1280,88 +1380,70 @@ Coax and optical are the same signal into different drivers, so both
 use `AUDIO_SPDIF` and the same port name.
 
 **ULX3S's 25 MHz crystal does not change the arithmetic.** `pll0_25`
-produces a `sys_clk` of exactly 48.0000 MHz (480 MHz VCO ÷ 10), so the
-half-cell is still 8 cycles and fs is still 46875 Hz. Worth checking
-rather than assuming — a part landing on 47.99 MHz would have needed a
-different divider and a different answer.
+produces a `sys_clk` of exactly 48.0000 MHz (480 MHz VCO ÷ 10), so every
+rate below is the same there.
 
-### The rate, which is the whole design
+### The rate
 
 A stereo frame is 64 time slots, each biphase-mark coded into two
-half-cells, so the line runs at **128 × fs**. From 48 MHz with both
-EHXPLLLs already spoken for, the reachable rates are those where
-48e6 / (128·fs) is an integer — fs = 375000/N:
+half-cells, so the line runs at **128 × fs** — which is exactly the
+tick [Exact sample rates](#exact-sample-rates) describes. The
+transmitter advances one half-cell per tick, so it and the analogue
+outputs count the same ticks and **cannot drift**, by construction.
 
-| N | fs | vs 44.1k | vs 48k |
-|---|---|---|---|
-| 7 | 53571.4 | +21.5% | +11.6% |
-| **8** | **46875.0** | +6.29% | **−2.34%** |
-| 9 | 41666.7 | −5.5% | −13.2% |
-| 10 | 37500.0 | −15.0% | −21.9% |
+With exact rates the S/PDIF boards run at a **true 48000 Hz** (half-cells
+of 7.8125 cycles: 7 or 8) and say so in channel status. Before 0.0.7
+they could not: from 48 MHz only fs = 375000/N was reachable as a whole
+number of cycles per half-cell, and no standard rate is among those, so
+they ran at **46875 Hz** (N = 8, exactly 8 cycles) — 2.34% below 48 kHz,
+inside any receiver's capture range, but not 48 kHz. That is still the
+rate of a build without `AUDIO_EXACT` (`AUDIO_RATE_RESET 8'd16`).
 
-No standard rate is among them: 44.1 kHz wants N = 8.5034, 48 kHz wants
-7.8125.
-
-**So it runs at 46875 Hz** — N=8, half-cell exactly 8 `sys_clk`. That
-is 2.34% below 48 kHz, much closer than the 6.29% above 44.1 kHz, and
-comfortably inside the capture range of anything that recovers its
-clock from the biphase stream, which is every receiver. Channel status
-declares 48 kHz (`fs_code`, register 8 bits 11:8); that field is
-advisory and receivers PLL to what actually arrives.
-
-Exact, so there is no jitter at all, and no new clock domain.
+**Channel status said 22.05 kHz until 0.0.7.** The rate code is
+channel-status bits 24–27, bit 24 first; as a number (the AES3 byte
+value, Linux's `IEC958_AES3_CON_FS_*`) 48 kHz is **2**. The register
+reset to `4'b0100` — the standard's table *written* left to right — and
+read it as a number, which sets bit 26: 22.05 kHz. Receivers recover the
+real rate from the line, so nobody heard it, and the testbench agreed
+because it had been written from the same misreading. The code is now
+kept matching the rate by `z_audio_set_rate_hz()` (0 for 44.1 kHz, 2 for
+48, 3 for 32) and resets to match `AUDIO_FS_RESET`.
 
 ### Why there is no upsampler
 
-Two reasons, and the first is the one that matters.
+Exact rates removed the question for the case that mattered: 44.1 kHz
+material can now be played at 44.1 kHz on an S/PDIF board too, with
+nothing resampled at all. Everything else is resampled once, in
+software (`play`) or by the mixer's phase accumulator, to whatever the
+output runs at.
 
-**A tracker has no native rate.** MOD playback resamples every channel
-through a phase accumulator anyway, so the output rate is a free
-parameter and 46875 costs nothing — pitch and tempo are unaffected. Set
-`AUDIO_RATE_RESET` to 16 and the whole audio block, analogue and
-digital alike, runs at one rate.
+### Edges: within one clock
 
-**And 1.0629 is a real sample-rate conversion, not an upsample.**
-Zero-order hold at that ratio aliases across the whole band — plainly
-audible, and worse than the 6% pitch shift it was meant to avoid. Doing
-it properly needs an interpolating resampler, which is more logic than
-the mixer itself. The only case that would want it is playing 44.1 kHz
-material unresampled while also feeding a digital output, which is not
-what this machine does.
+A half-cell is 7.8125 cycles at 48 kHz and 8.503 at 44.1 kHz, so edges
+land on a 7/8- or 8/9-cycle pattern, each within one `sys_clk` (21 ns)
+of where it belongs, with no accumulated error. Receivers PLL to the
+stream and tolerate about twice that.
 
-### Any rate, odd or even
-
-A half-cell is `rate/2` `sys_clk`, which is not an integer for an odd
-rate. The divider accumulates rather than dividing — it adds 128 every
-cycle and emits a half-cell each time a frame period's worth has piled
-up — so **exactly 128 half-cells land in every frame at any rate**, and
-drift is structurally impossible rather than merely unlikely.
-
-An odd rate costs half a cycle of edge jitter, 10 ns on a 177 ns cell.
-Receivers PLL to the stream and tolerate far more. An even rate divides
-exactly and has none.
-
-This replaced a `rate >> 1` that **truncated**. At rate 17 it produced
-8-cycle half-cells, so the line ran a 1024-cycle frame against the
-sample path's 1088: 46875 Hz of S/PDIF fed from 44118 Hz of samples,
-6.2% apart, frames duplicated and dropped continuously. The docs said
-"RATE must be even", nothing enforced it, and the rate every app asked
-for was 17. **A constraint that is only written down is not a
-constraint.**
+The divider this replaced had its own history worth keeping: a
+`rate >> 1` that **truncated**, so at rate 17 the line ran a 1024-cycle
+frame against the sample path's 1088 and frames were duplicated and
+dropped continuously. **A constraint that is only written down is not a
+constraint** — and a clock with two owners is two clocks. Now there is
+one.
 
 ### What the receiver needs, which hardware cannot check
 
 IEC 60958 parts are typically specified from **32 kHz** up, so
-`Z_AUDIO_RATE_22K` and `Z_AUDIO_RATE_11K` are below what a DAC will
-lock to however clean the line is. `48e6 / (64 * RATE) >= 32000` means
-`RATE <= 23`.
+22.05 kHz and 11.025 kHz are below what a DAC will lock to however
+clean the line is.
 
-`z_audio_rate_ok()` in `sw/common/zaudio.h` answers this, and apps that
-offer a rate control should filter through it. They should also **start
-from whatever rate the board came up with** — `AUDIO_RATE_RESET` exists
-so a board can pick a rate its outputs can carry, and an app that
-overwrites it with a constant throws that away. Both `track` and
-`audiotest` used to do exactly that.
+`z_audio_rate_ok_hz()` in `sw/common/zaudio.h` answers this, and apps
+that offer a rate control should filter through it. They should also
+**start from whatever rate the board came up with** —
+`z_audio_preferred_hz()` — because `AUDIO_FS_RESET` exists so a board
+can pick a rate its outputs can carry, and an app that overwrites it
+with a constant throws that away. Both `track` and `audiotest` used to
+do exactly that.
 
 ### Frame format
 
@@ -1394,7 +1476,12 @@ into bits, and reconstructs samples, parity, block structure and
 channel status from the wire.
 
     iverilog -g2005 -o /tmp/tb rtl/tb/tb_audio_spdif.v rtl/audio_spdif.v
-    vvp /tmp/tb
+    vvp /tmp/tb                          # RATE 16, 46875 Hz
+    vvp /tmp/tb +step=16 +mod=125        # exactly 48000 Hz
+    vvp /tmp/tb +step=147 +mod=1250      # exactly 44100 Hz
+    vvp /tmp/tb +offset=37               # frame_req 37 ticks late
+
+`make test_audio` runs all of these and a spread of phases.
 
 That distinction earned itself immediately. Four bugs, none of which a
 comparator against an expected bit vector would have caught:
@@ -1442,7 +1529,9 @@ Set per board in `rtl/boards.vh`; defaults live in `rtl/sysctl.v`.
 | `AUDIO_SPDIF` | — | IEC 60958 transmitter |
 | `AUDIO_MIXER` | per board | eight channels of hardware mixing |
 | `AUDIO_FIFO_LOG2` | 10 | FIFO depth is 2^this, in frames |
-| `AUDIO_RATE_RESET` | `8'd17` | power-on rate divider; 16 on S/PDIF boards |
+| `AUDIO_EXACT` | set on every audio board | exact sample rates (`FSDIV`); about 54 COMB on Lakritz |
+| `AUDIO_FS_RESET` | `44100` | power-on rate in Hz with `AUDIO_EXACT`; 48000 on S/PDIF boards |
+| `AUDIO_RATE_RESET` | `8'd17` | power-on rate divider without `AUDIO_EXACT`; 16 on S/PDIF boards |
 | `AUDIO_MIXER_CH_BITS` | 3 | log2 of the mixer's channel count |
 | `AUDIO_CTRL_RESET` | `8'h00` | power-on `CTRL`; set bit 2 for `SWAPLR` |
 

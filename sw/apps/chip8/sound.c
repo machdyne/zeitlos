@@ -129,12 +129,12 @@ void c8_sound_init(void) {
 
 	build_square();
 
-	/* Start the DAC if nothing else already has. z_audio_start()
+	/* Start the DAC if nothing else already has. z_audio_start_hz()
 	 * flushes and re-enables unconditionally, which is harmless here
-	 * -- this app is the only thing making noise while it runs -- and
-	 * is the only way to be sure the rate divider is something we
-	 * know. */
-	z_audio_start(Z_AUDIO_RATE_44K);
+	 * -- this app is the only thing making noise while it runs. The
+	 * rate is the board's preferred one; CH_STEP is computed from
+	 * z_audio_rate_hz() afterwards, so any rate is right. */
+	z_audio_start_hz(z_audio_preferred_hz());
 	z_audio_mixer_enable(true);
 
 	Z_AUDIO_CH_BASE(C8_SND_CH)    = phys_of(wave);

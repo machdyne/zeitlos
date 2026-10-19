@@ -6,7 +6,18 @@
  *
  *   iverilog -g2005 -o /tmp/tb_spdif rtl/tb/tb_audio_spdif.v \
  *       rtl/audio_spdif.v
- *   vvp /tmp/tb_spdif
+ *   vvp /tmp/tb_spdif                          RATE 16, 46875 Hz
+ *   vvp /tmp/tb_spdif +step=16 +mod=125        exactly 48000 Hz
+ *   vvp /tmp/tb_spdif +step=147 +mod=1250      exactly 44100 Hz
+ *   vvp /tmp/tb_spdif +offset=N                frame_req N ticks late
+ *
+ * `make test_audio` runs all of these (and a sweep of offsets).
+ *
+ * The half-cell clock is a tick from rtl/audio_out.v's accumulator
+ * (step/mod per tick, 128 ticks per frame). This bench makes that tick
+ * with the same arithmetic, so any rate audio.v's FSDIV can express
+ * can be tested here, including the non-integer half-cells of 48000
+ * and 44100 Hz.
  *
  * The model below is a RECEIVER, not a bit comparator: it measures
  * half-cell widths off the line, finds preambles by their biphase
@@ -34,13 +45,18 @@ module tb_audio_spdif;
 	localparam real CLK_HALF_NS = 10.416667;   // 48MHz
 	parameter integer RATE = 16;               // 46875 Hz, half-cell = 8
 
+	// The tick: CLK_HZ * step / mod per second. RATE is step 128,
+	// mod 64 * RATE; +step=/+mod= override for the exact rates.
+	integer STEP = 128;
+	integer MOD = 64 * RATE;
+
 	reg clk = 0;
 	reg rst = 1;
 	reg enable = 1;
 	reg frame_req = 0;
 	reg signed [15:0] sample_l = 0;
 	reg signed [15:0] sample_r = 0;
-	reg [3:0] fs_code = 4'b0100;               // "48 kHz"
+	reg [3:0] fs_code = 4'd2;                  // "48 kHz" (AES3 byte value)
 	wire spdif;
 
 	integer errors = 0;
@@ -48,51 +64,72 @@ module tb_audio_spdif;
 
 	always #(CLK_HALF_NS) clk = ~clk;
 
+	// the tick, as rtl/audio_out.v makes it
+	reg [16:0] tx_acc;
+	wire [16:0] tx_sum = tx_acc + STEP;
+	wire tx_tick = (tx_sum >= MOD);
+	always @(posedge clk) begin
+		if (rst) tx_acc <= 0;
+		else tx_acc <= tx_tick ? (tx_sum - MOD) : tx_sum;
+	end
+
 	audio_spdif dut (
 		.clk(clk), .rst(rst), .enable(enable),
-		.rate(RATE[7:0]), .frame_req(frame_req),
+		.tick(tx_tick), .frame_req(frame_req),
 		.sample_l(sample_l), .sample_r(sample_r),
 		.fs_code(fs_code), .spdif(spdif)
 	);
 
 	// ------------------------------------------------------------
-	// frame generator: one frame_req every 64*RATE cycles
+	// frame generator: one frame_req every 128 ticks
 	// ------------------------------------------------------------
 	integer fcount = 0;
 
 	// PHASE OFFSET between this generator and the transmitter's own
-	// half-cell counter, in clocks. Zero is what the suite has always
+	// half-cell counter, in TICKS. Zero is what the suite has always
 	// used, and it is the ONE value at which the two happen to agree.
 	// Real hardware has no reason to: audio_out.v raises frame_req at
-	// phase 62 of its own 64-slot counter, and audio_spdif.v's hc
-	// counter starts wherever reset left it.
+	// tick 124 of its own 128, and audio_spdif.v's hc counter is
+	// wherever reset left it relative to that.
 	//
 	// This suite passed for a long time at offset 0 and only at offset
-	// 0. Run it across the frame and it fails at roughly a quarter of
+	// 0. Run it across the frame and it failed at roughly a quarter of
 	// the phases with parity errors -- the transmitter was latching
 	// the sample straight into hold_l/hold_r on frame_req, so a
 	// sample that arrived mid-subframe replaced the high bits of a
 	// value already partly on the wire.
 	//
-	//   make -C rtl spdif-phase     sweeps every phase
-	//   vvp tb +offset=300          reproduces the original failure
+	//   make test_audio            sweeps a spread of phases
+	//   vvp tb +offset=37          one phase
 	//
 	// A testbench that only ever exercises one phase relationship
 	// between two independent counters is testing one point of a
 	// space, and this is what was hiding in the rest of it.
 	integer frame_offset = 0;
 
+	// Returns after the clock edge that consumed a tick. tx_tick is
+	// read before that edge's non-blocking updates land, so it is the
+	// value the transmitter saw on the same edge.
+	task wait_tick;
+		begin
+			@(posedge clk);
+			while (!tx_tick) @(posedge clk);
+		end
+	endtask
+
 	initial begin
+		if ($value$plusargs("step=%d", STEP)) ;
+		if ($value$plusargs("mod=%d", MOD)) ;
 		@(negedge rst);
 		if (!$value$plusargs("offset=%d", frame_offset)) frame_offset = 0;
-		repeat (frame_offset) @(posedge clk);
+		$display("tb_audio_spdif: step %0d mod %0d (%0.1f Hz), offset %0d ticks",
+			STEP, MOD, 48.0e6 * STEP / MOD / 128.0, frame_offset);
+		repeat (frame_offset) wait_tick;
 		forever begin
-			// EXACTLY 64*RATE cycles per frame, pulse included. The
-			// first version added two more for the pulse itself, so
-			// the generator ran 1026 cycles against the transmitter's
-			// 1024 and the two slowly drifted apart -- which showed up
-			// as samples being latched mid-subframe.
-			repeat ((64 * RATE) - 1) @(posedge clk);
+			// EXACTLY 128 ticks per frame, pulse included -- the
+			// frame is defined by ticks, not cycles, and at an exact
+			// rate it is not a whole number of cycles.
+			repeat (128) wait_tick;
 			frame_req <= 1'b1;
 			@(posedge clk);
 			frame_req <= 1'b0;
@@ -141,22 +178,21 @@ module tb_audio_spdif;
 		end
 	endtask
 
-	// half-cell strobe: RATE/2 clocks, aligned by the first edge after
-	// reset and then free-running, exactly like the transmitter's own
-	// divider
-	// The receiver must recover the half-cell clock the same way a real
-	// one does -- from the line -- because at an odd RATE the
-	// transmitter's half-cells are not all the same length. A fixed
-	// divider here would only work for even rates and would hide
-	// exactly the bug this file exists to catch.
+	// Half-cell strobe: the same step/mod accumulator as the
+	// transmitter's tick, from the same reset, so it lands on the same
+	// edges. At an odd RATE or an exact rate the half-cells are not
+	// all the same length (8/9 or 7/8 cycles); a fixed divider here
+	// would only work for the even RATEs and would hide exactly the
+	// bug this file exists to catch.
 	reg [15:0] rx_acc;
-	wire hc_stb = (rx_acc >= (64 * RATE));
+	wire [16:0] rx_sum = rx_acc + STEP;
+	wire hc_stb = (rx_sum >= MOD);
 
 	always @(posedge clk) begin
 		if (rst) begin
 			rx_acc <= 0;
 		end else begin
-			rx_acc <= hc_stb ? (rx_acc - (64 * RATE) + 128) : (rx_acc + 128);
+			rx_acc <= hc_stb ? (rx_sum - MOD) : rx_sum;
 
 			if (hc_stb) begin
 				rx_hist <= { rx_hist[6:0], spdif };
@@ -325,7 +361,7 @@ module tb_audio_spdif;
 		begin
 			sample_l = l; sample_r = r;
 			repeat (frames) @(posedge frame_req);
-			repeat (64 * RATE) @(posedge clk);
+			@(posedge frame_req);
 		end
 	endtask
 
@@ -412,7 +448,10 @@ module tb_audio_spdif;
 		check("cs bit 0 (consumer)", rx_cs[0], 0);
 		check("cs bit 1 (linear PCM)", rx_cs[1], 0);
 		check("cs bit 2 (copy permitted)", rx_cs[2], 1);
-		check("cs bits 24-27 (fs code)", rx_cs[27:24], 4'b0100);
+		// 48 kHz is bit 25 (AES3 byte 3 = 2). Until 0.0.7 this
+		// expected 4'b0100 -- bit 26, which is 22.05 kHz -- and so
+		// agreed with a transmitter that said the wrong thing.
+		check("cs bits 24-27 (fs code)", rx_cs[27:24], 4'd2);
 
 		$display("");
 		$display("=== 4. enable low is silence, not a dead line ===");

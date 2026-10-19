@@ -5,11 +5,11 @@
 # Mirrors the BOARD_SERGEI_ML1 block of rtl/boards.vh. See
 # boards/lakritz.spec for why this is duplicated rather than read.
 #
-# AUDIO_RATE_RESET=16 is not optional here and is not a preference:
-# S/PDIF is 128 half-cells per frame, so from a 48MHz sys_clk only
-# fs = 375000/N is reachable, and 16 is the divider whose half-cell is
-# an exact whole number of clocks (8). rtl/boards.vh's `AUDIO_SPDIF
-# note has the derivation. Any other value here is jitter.
+# AUDIO_FS_RESET=48000 is the power-on rate (exact, with AUDIO_EXACT).
+# AUDIO_RATE_RESET=16 is the fallback for a build without AUDIO_EXACT:
+# then only fs = 375000/N is reachable, and 16 is the divider whose
+# S/PDIF half-cell is an exact whole number of clocks (8).
+# rtl/boards.vh's `AUDIO_SPDIF note has the derivation.
 
 description = Sergei ML1
 board       = sergei_ml1
@@ -61,6 +61,8 @@ defines =
     ETH_RMII_DRIVE_REFCLK
     ETH_RX_SLOTS=4
     AUDIO
+    AUDIO_EXACT
     AUDIO_SPDIF
     AUDIO_MIXER
     AUDIO_RATE_RESET=8'd16
+    AUDIO_FS_RESET=48000

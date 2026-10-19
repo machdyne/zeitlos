@@ -181,15 +181,15 @@ static int windowed;
 static int volume = MOD_VOLUME_DEFAULT;
 
 static int separation = 65;
-/* Set from the hardware at startup, NOT to a constant.
+/* The output rate in Hz. Set from the hardware at startup, NOT to a
+ * constant.
  *
  * boards.vh picks a power-on rate its outputs can actually carry --
- * Sergei sets 16 (46875Hz) because that is the only rate whose S/PDIF
- * half-cell is a whole number of sys_clk. This app used to overwrite
- * that with 22kHz at startup, which is below the 32kHz floor every
- * IEC 60958 receiver is specified to, so the digital output produced
- * garbage on a board that was configured correctly. */
-static uint32_t rate_div;
+ * Sergei comes up at 48kHz for its S/PDIF receiver. This app used to
+ * overwrite that with 22kHz at startup, which is below the 32kHz floor
+ * every IEC 60958 receiver is specified to, so the digital output
+ * produced garbage on a board that was configured correctly. */
+static uint32_t out_rate_hz;
 
 /* Hardware mixing (rtl/audio_mixer.v) when the bitstream has it.
  *
@@ -811,7 +811,7 @@ static void show_help(void) {
 	z_dialog_help(&ctx, "Track help", help, "track_app");
 	if (!was_paused) {
 		paused = 0;
-		z_audio_start(rate_div);
+		z_audio_start_hz(out_rate_hz);
 		if (hw_mix) z_audio_mixer_enable(true);
 		hw_next_256 = z_uptime_ticks() << 8;
 	}
@@ -845,7 +845,7 @@ static void handle_key(uint32_t key) {
 			 * MIXEN -- so unpausing used to hand the DAC back to the
 			 * (empty) FIFO and play silence. Re-enable it, and resync
 			 * the tick clock so the pause does not count as lateness. */
-			z_audio_start(rate_div);
+			z_audio_start_hz(out_rate_hz);
 			if (hw_mix) z_audio_mixer_enable(true);
 			hw_next_256 = z_uptime_ticks() << 8;
 		}
@@ -869,15 +869,19 @@ static void handle_key(uint32_t key) {
 		 * only the resampling quality changes.
 		 */
 		/* Skip anything this board's outputs cannot carry -- on a
-		 * board with a transmitter that rules out 22k and 11k. */
-		next = rate_div;
+		 * board with a transmitter that rules out 22k and 11k. 48,
+		 * 44.1, 22.05 and 11.025 kHz are exact on a bitstream with exact
+		 * rates and the nearest old divider otherwise; the engine is
+		 * given whatever the hardware reports either way. */
+		next = out_rate_hz;
 		do {
-			if (next == Z_AUDIO_RATE_44K) next = Z_AUDIO_RATE_22K;
-			else if (next == Z_AUDIO_RATE_22K) next = Z_AUDIO_RATE_11K;
-			else next = Z_AUDIO_RATE_44K;
-		} while (!z_audio_rate_ok(next) && next != rate_div);
-		rate_div = next;
-		reg_audio_rate = rate_div;
+			if (next == Z_AUDIO_HZ_48K) next = Z_AUDIO_HZ_44K;
+			else if (next == Z_AUDIO_HZ_44K) next = Z_AUDIO_HZ_22K;
+			else if (next == Z_AUDIO_HZ_22K) next = Z_AUDIO_HZ_11K;
+			else next = Z_AUDIO_HZ_48K;
+		} while (!z_audio_rate_ok_hz(next) && next != out_rate_hz);
+		out_rate_hz = next;
+		z_audio_set_rate_hz(out_rate_hz);
 		player.rate = z_audio_rate_hz();
 		modplay_retempo(&player);
 		hw_next_256 = z_uptime_ticks() << 8;
@@ -1227,7 +1231,7 @@ static int play(int index) {
 	last_drawn_row = -1;
 	last_drawn_order = -1;
 
-	z_audio_start(rate_div);
+	z_audio_start_hz(out_rate_hz);
 	z_audio_clear_underrun();
 
 	if (hw_mix) {
@@ -1385,10 +1389,9 @@ int main(void) {
 	 * can afford either; a game running alongside can afford neither,
 	 * which is what phase 3's hardware mixer is for. */
 	/* Start from the rate the board came up with. */
-	rate_div = reg_audio_rate & 0xFF;
-	if (!z_audio_rate_ok(rate_div)) rate_div = Z_AUDIO_RATE_44K;
+	out_rate_hz = z_audio_preferred_hz();
 
-	z_audio_start(rate_div);
+	z_audio_start_hz(out_rate_hz);
 
 	hw_mix = z_audio_mixer_present();
 	printf("track: mixing in %s\n", hw_mix ? "HARDWARE" : "software");

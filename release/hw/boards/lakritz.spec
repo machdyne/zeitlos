@@ -78,6 +78,7 @@ defines =
     SPI_SDCARD
     SPI_ETH
     AUDIO
+    AUDIO_EXACT
     AUDIO_SD
     AUDIO_MIXER
     USB_CDC

@@ -189,16 +189,24 @@
  *   3  DATA    W   push one frame: { left[31:16], right[15:0] }.
  *                  Signed 16-bit, twos complement. A write while FULL
  *                  is DROPPED, silently -- see below. Reads return 0.
- *   4  RATE    RW  [7:0] half-BCK period in sys_clk cycles.
- *                  fs = CLK_HZ / (64 * RATE). Resets to 17 ->
- *                  44117.6 Hz at 48MHz. 34 -> 22058.8 Hz.
+ *   4  RATE    RW  [7:0] legacy rate divider: fs = CLK_HZ / (64 * RATE).
+ *                  17 -> 44117.6 Hz at 48MHz, 34 -> 22058.8 Hz.
+ *                  A write also sets FSDIV to { 64 * RATE, 128 },
+ *                  which is the same rate expressed the new way, so a
+ *                  program that only knows RATE keeps working. Reads
+ *                  back the last value WRITTEN here, not the current
+ *                  rate: software that sets FSDIV writes the nearest
+ *                  divider here first so that an older binary reading
+ *                  RATE still gets a close answer. See FSDIV.
  *   5  WMARK   RW  [15:0] interrupt watermark. Resets to depth/2.
- *   6  CONFIG  R   { 16'h5A41, 0, HAS_VOLUME[14], MIXER_FMT16[13],
- *                    HAS_MIXER[12], FORMATS[11:8], DEPTH_LOG2[7:0] }
+ *   6  CONFIG  R   { 16'h5A41, HAS_EXACT[15], HAS_VOLUME[14],
+ *                    MIXER_FMT16[13], HAS_MIXER[12], FORMATS[11:8],
+ *                    DEPTH_LOG2[7:0] }
+ *                  HAS_EXACT: FSDIV (register 15) exists, so any
+ *                  whole-Hz rate is reachable -- see FSDIV.
  *                  FORMATS bit 0 = a 1-bit DAC is wired on this board,
  *                  bit 1 = a PT8211 is, bit 2 = an optical S/PDIF
- *                  transmitter is (RESERVED, nothing sets it yet --
- *                  see the attach-point note below). Reported from
+ *                  transmitter is. Reported from
  *                  rtl/sysctl.v's own `ifdefs, so software can tell
  *                  which output it is actually driving.
  *                  The 16'h5A41 ("ZA") signature is the same trick,
@@ -215,6 +223,21 @@
  *                  four-channel module wants 255. Software owns this
  *                  because software knows how many channels the
  *                  module has. See audio_mixer.v on the arithmetic.
+ *                  [11:8] SPDIFFS: the S/PDIF channel-status rate
+ *                  code (audio_spdif.v's fs_code; 0 = 44.1k, 2 = 48k,
+ *                  3 = 32k). z_audio_start_hz() keeps it matching the
+ *                  rate; reset matches the power-on rate.
+ *  15  FSDIV   RW  { MOD[31:16], STEP[15:0] } -- the exact sample
+ *                  rate (`AUDIO_EXACT, CONFIG bit 15). audio_out.v's
+ *                  accumulator ticks CLK_HZ * STEP / MOD times a
+ *                  second, 128 ticks per frame, so
+ *                      fs = CLK_HZ * STEP / (128 * MOD)
+ *                  with STEP/MOD = 128 fs / CLK_HZ reduced by their
+ *                  common divisor: 48 kHz is { 125, 16 }, 44.1 kHz
+ *                  { 1250, 147 }, 32 kHz { 375, 32 }. Byte lanes
+ *                  honoured. Reads 0 on a build without it.
+ *                  sw/common/zaudio.h's z_audio_start_hz() does the
+ *                  arithmetic; nothing else should write this.
  *  14  VOLUME  RW  [8:0] the SYSTEM volume, 0..256, 256 = unity. Resets
  *                  to 128 (50%). Scales everything played -- FIFO and
  *                  mixer alike -- before every DAC; set by wm (Super+Plus
@@ -343,6 +366,11 @@ module audio_wb #(
 	// 17 -> 44117.6 Hz at 48MHz. See RATE above.
 	parameter [7:0] RATE_RESET = 8'd17,
 
+	// Power-on rate in Hz, used when the build has `AUDIO_EXACT. 0
+	// means "RATE_RESET, the old way" -- and so does any build
+	// without `AUDIO_EXACT, whatever this says.
+	parameter integer FS_RESET = 0,
+
 	// Power-on CTRL. Muted, no interrupt, no channel swap. If a board
 	// turns out to need SWAPLR set, change it HERE rather than making
 	// every app do it -- see audio_out.v's header.
@@ -375,6 +403,15 @@ module audio_wb #(
 	// Optical S/PDIF (Sergei)
 	output wire AUD_OPTICAL,
 
+	// DDMI audio (docs/ddmi_audio.md): the frames every output plays,
+	// written into rtl/gpu/ddmi_island.v's FIFO on this clock. Each
+	// frame is written 2^ddmi_rep times (socctl's DDMI register), so a
+	// rate below what a display takes (22.05 / 11.025 kHz) goes out as
+	// 44.1 kHz. Tied off in a build without `GPU_DDMI_AUDIO.
+	output reg ddmi_we,
+	output reg [31:0] ddmi_wdata,
+	input wire [1:0] ddmi_rep,
+
 	// Wishbone MASTER on the main bus -- the hardware mixer's sample
 	// fetches. Third master on rtl/arbiter_main.v. Read only; the
 	// write signals exist so the port matches the others.
@@ -397,6 +434,35 @@ module audio_wb #(
 	localparam HAS_MIXER = 1'b0;
 `endif
 	localparam [7:0] DEPTH_LOG2_B = DEPTH_LOG2;
+
+	// -- exact sample rates (FSDIV) --
+`ifdef AUDIO_EXACT
+	localparam HAS_EXACT = 1'b1;
+`else
+	localparam HAS_EXACT = 1'b0;
+`endif
+
+	// The reset value's arithmetic (gcd, STEP/MOD), shared with
+	// socctl.v's DDMI audio clock regeneration.
+`include "audio_rates.vh"
+
+	// Rate in Hz at power-on, and the FSDIV that gives it.
+	localparam integer RATE_EFF_RESET = (RATE_RESET < 2) ? 2 : RATE_RESET;
+	localparam USE_FS_RESET = HAS_EXACT && (FS_RESET > 0);
+	localparam [15:0] STEP_RESET = USE_FS_RESET ? ar_step(FS_RESET, CLK_HZ) : 16'd128;
+	localparam [15:0] MOD_RESET = USE_FS_RESET ? ar_mod(FS_RESET, CLK_HZ) : 64 * RATE_EFF_RESET;
+	localparam integer HZ_RESET = USE_FS_RESET ? FS_RESET : CLK_HZ / (64 * RATE_EFF_RESET);
+
+	// S/PDIF channel-status rate code for that rate (audio_spdif.v's
+	// fs_code; software keeps it in step with later changes). Nearest
+	// standard rate, so a legacy 46875 Hz says 48 kHz as it always has.
+	localparam [3:0] SPDIF_FS_RESET =
+		(HZ_RESET < 27000) ? 4'd4 :                 // 22.05 kHz
+		(HZ_RESET < 38000) ? 4'd3 :                 // 32 kHz
+		(HZ_RESET < 46000) ? 4'd0 :                 // 44.1 kHz
+		(HZ_RESET < 68000) ? 4'd2 :                 // 48 kHz
+		(HZ_RESET < 92000) ? 4'd8 :                 // 88.2 kHz
+		4'd10;                                      // 96 kHz
 
 	// Width of the zero padding that widens `level` to the 16 bits
 	// LEVEL and WMARK are compared and reported in. Named rather than
@@ -422,6 +488,12 @@ module audio_wb #(
 
 	reg [7:0] ctrl;
 	reg [7:0] rate;
+
+	// FSDIV: the sample clock. See audio_out.v's header.
+	reg [15:0] fs_step;
+	reg [15:0] fs_mod;
+	wire tick;
+	wire [7:0] wr_rate_eff = (wb_dat_i[7:0] < 8'd2) ? 8'd2 : wb_dat_i[7:0];
 	reg [7:0] mixvol;
 
 	// VOLUME (register 14): the system volume, applied after the source
@@ -592,6 +664,38 @@ module audio_wb #(
 	wire signed [15:0] vol_l = vol_prod_l[23:8];
 	wire signed [15:0] vol_r = vol_prod_r[23:8];
 
+	// -- DDMI audio feed --
+	//
+	// A third sibling of audio_out, like S/PDIF: the same frame, taken
+	// on the same frame_req, muted by the same EN. The FIFO it writes
+	// is in the pixel clock domain (rtl/gpu/ddmi_island.v); this side
+	// only has to say "here is a frame", 1, 2 or 4 times in a row.
+`ifdef GPU_DDMI_AUDIO
+	reg [2:0] ddmi_left;
+	always @(posedge wb_clk_i) begin
+		if (wb_rst_i) begin
+			ddmi_we <= 1'b0;
+			ddmi_wdata <= 32'd0;
+			ddmi_left <= 3'd0;
+		end else begin
+			ddmi_we <= 1'b0;
+			if (frame_req) begin
+				ddmi_wdata <= ctrl_en ? { vol_l, vol_r } : 32'd0;
+				ddmi_we <= 1'b1;
+				ddmi_left <= (ddmi_rep == 2'd0) ? 3'd0 : (ddmi_rep == 2'd1) ? 3'd1 : 3'd3;
+			end else if (ddmi_left != 3'd0) begin
+				ddmi_we <= 1'b1;
+				ddmi_left <= ddmi_left - 3'd1;
+			end
+		end
+	end
+`else
+	always @(posedge wb_clk_i) begin
+		ddmi_we <= 1'b0;
+		ddmi_wdata <= 32'd0;
+	end
+`endif
+
 `ifdef AUDIO_SPDIF
 	// S/PDIF sits alongside the analogue output stage, not downstream
 	// of it: same frame_req, same source mux, its own pin. Both run at
@@ -600,7 +704,7 @@ module audio_wb #(
 		.clk(wb_clk_i),
 		.rst(wb_rst_i),
 		.enable(ctrl_en),
-		.rate(rate),
+		.tick(tick),
 		.frame_req(frame_req),
 		.sample_l(vol_l),
 		.sample_r(vol_r),
@@ -651,12 +755,14 @@ module audio_wb #(
 		.clk(wb_clk_i),
 		.rst(wb_rst_i),
 		.enable(ctrl_en),
-		.rate(rate),
+		.step(fs_step),
+		.mod(fs_mod),
 		.swap_lr(ctrl_swap),
 		.sample_l(vol_l),
 		.sample_r(vol_r),
 		.sample_valid(src_valid),
 		.frame_req(frame_req),
+		.tick(tick),
 		.sd_l(sd_l),
 		.sd_r(sd_r),
 		.pt_bck(AUD_BCK),
@@ -680,10 +786,12 @@ module audio_wb #(
 			ram_ready <= 1'b0;
 			ctrl <= CTRL_RESET;
 			rate <= RATE_RESET;
+			fs_step <= STEP_RESET;
+			fs_mod <= MOD_RESET;
 			mixvol <= 8'd128;
 			volume <= 9'd128;		// 50%: the system's default volume
 			mixpos_sel <= 3'd0;
-			spdif_fs <= 4'b0100;   // "48 kHz"
+			spdif_fs <= SPDIF_FS_RESET;
 			wmark <= DEPTH / 2;
 			underrun <= 1'b0;
 			wb_ack_o <= 1'b0;
@@ -815,8 +923,21 @@ module audio_wb #(
 						end
 					end
 
+					// RATE also sets FSDIV to the same rate, the old
+					// way -- see the register map.
 					if (wb_adr_i == 32'd4) begin
-						if (wb_sel_i[0]) rate <= wb_dat_i[7:0];
+						if (wb_sel_i[0]) begin
+							rate <= wb_dat_i[7:0];
+							fs_step <= 16'd128;
+							fs_mod <= { 2'b00, wr_rate_eff, 6'b000000 };
+						end
+					end
+
+					if (HAS_EXACT && wb_adr_i == 32'd15) begin
+						if (wb_sel_i[0]) fs_step[7:0] <= wb_dat_i[7:0];
+						if (wb_sel_i[1]) fs_step[15:8] <= wb_dat_i[15:8];
+						if (wb_sel_i[2]) fs_mod[7:0] <= wb_dat_i[23:16];
+						if (wb_sel_i[3]) fs_mod[15:8] <= wb_dat_i[31:24];
 					end
 
 					if (wb_adr_i == 32'd5) begin
@@ -875,7 +996,7 @@ module audio_wb #(
 						// supported". Same argument, and the same
 						// remedy, as bit 12 for the mixer itself.
 						32'd6: wb_dat_o <= {
-							CONFIG_SIG, 1'b0, 1'b1 /* HAS_VOLUME */, HAS_MIXER_FMT16,
+							CONFIG_SIG, HAS_EXACT, 1'b1 /* HAS_VOLUME */, HAS_MIXER_FMT16,
 							HAS_MIXER, FORMATS, DEPTH_LOG2_B
 						};
 						32'd7: wb_dat_o <= CLK_HZ;
@@ -893,6 +1014,7 @@ module audio_wb #(
 						// audio_mixer.v's pos_o comment.
 						32'd13: wb_dat_o <= mix_pos;
 						32'd14: wb_dat_o <= { 23'b0, volume };
+						32'd15: wb_dat_o <= HAS_EXACT ? { fs_mod, fs_step } : 32'h0;
 						default: wb_dat_o <= 32'h0000_0000;
 					endcase
 

@@ -15,9 +15,33 @@ WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
 ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 */
+/*
+ * Zeitlos: with ISLANDS = 1 (`GPU_DDMI_AUDIO, docs/ddmi_audio.md) the
+ * periods between the pixels also carry data islands and the video
+ * preamble and guard band, from rtl/gpu/ddmi_island.v, whenever
+ * `islands_en` is high. With it low -- or ISLANDS = 0, where it is
+ * forced low and yosys removes the scheduler -- the output is the DVI
+ * this module always produced, character for character
+ * (rtl/gpu/bench/ddmi_dvi_golden.sha256).
+ */
 module gpu_ddmi (
            input pclk,
            input tmds_clk, /* 5 times faster of pclk */
+
+           // gpu_video.v's counters and the frame-adopted enable
+           input [10:0] hc,
+           input [10:0] vc,
+           input islands_en,
+
+           // the sound half (ddmi_island.v): settings in this clock
+           // domain, frames written on aud_clk
+           input sound_en,
+           input [3:0] fs_code,
+           input [19:0] acr_n,
+           input [19:0] acr_cts,
+           input aud_clk,
+           input aud_we,
+           input [31:0] aud_wdata,
 
            input [7:0] in_vga_red,
            input [7:0] in_vga_green,
@@ -34,15 +58,34 @@ module gpu_ddmi (
        );
 
 parameter DDR_ENABLED = 1;
+parameter ISLANDS = 0;
 localparam OUT_TMDS_MSB = DDR_ENABLED ? 1 : 0;
 
-/* */
+/* data islands: per channel MODE, TERC4 nibble, and CTL bits */
+wire [1:0] m0, m1, m2;
+wire [3:0] t0, t1, t2;
+wire [1:0] ctl1, ctl2;
+
+ddmi_island island_i (
+    .pclk(pclk),
+    .en(islands_en && (ISLANDS != 0)),
+    .hc(hc), .vc(vc),
+    .hsync(in_vga_hsync), .vsync(in_vga_vsync),
+    .sound_en(sound_en && (ISLANDS != 0)),
+    .fs_code(fs_code), .acr_n(acr_n), .acr_cts(acr_cts),
+    .aud_clk(aud_clk), .aud_we(aud_we && (ISLANDS != 0)), .aud_wdata(aud_wdata),
+    .mode0(m0), .t0(t0),
+    .mode1(m1), .t1(t1), .ctl1(ctl1),
+    .mode2(m2), .t2(t2), .ctl2(ctl2)
+);
+
+/* channel 0 is blue and carries the syncs; 1 is green, 2 is red */
 wire [9:0] tmds_red;
 wire [9:0] tmds_green;
 wire [9:0] tmds_blue;
-tmds_encoder tmsds_encoder_i0(pclk, ~in_vga_blank, in_vga_red,   0,          0,              tmds_red);
-tmds_encoder tmsds_encoder_i1(pclk, ~in_vga_blank, in_vga_green, 0,          0,              tmds_green);
-tmds_encoder tmsds_encoder_i2(pclk, ~in_vga_blank, in_vga_blue,  in_vga_vsync, in_vga_hsync, tmds_blue);
+tmds_encoder #(.CH(2)) tmsds_encoder_i0(pclk, ~in_vga_blank, in_vga_red,   ctl2[1],      ctl2[0],      m2, t2, tmds_red);
+tmds_encoder #(.CH(1)) tmsds_encoder_i1(pclk, ~in_vga_blank, in_vga_green, ctl1[1],      ctl1[0],      m1, t1, tmds_green);
+tmds_encoder #(.CH(0)) tmsds_encoder_i2(pclk, ~in_vga_blank, in_vga_blue,  in_vga_vsync, in_vga_hsync, m0, t0, tmds_blue);
 
 /**/
 reg       tmds_shift_load   = 0;

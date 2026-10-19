@@ -289,7 +289,7 @@ static int       fh = -1;
 static char      cur_path[PLAY_PATH_MAX];
 static uint32_t  read_pos, data_end;
 static uint32_t  out_hz;
-static uint32_t  rate_div;
+static uint32_t  start_hz;
 static int       volume = PLAY_VOLUME;
 static bool      interp = true;
 static bool      show_scope = true;
@@ -2047,16 +2047,16 @@ int main(void) {
         return 1;
     }
 
-    /* Start from the rate the BOARD came up with rather than a
-     * constant. `AUDIO_RATE_RESET exists so a board can pick a rate
-     * its outputs can actually carry -- 46875Hz on an S/PDIF board,
-     * where anything below 32kHz will not lock at the receiver -- and
-     * an app that overwrites it throws that away. Everything is
-     * resampled to whatever this turns out to be, so no file cares. */
-    rate_div = reg_audio_rate & 0xFF;
-    if (!z_audio_rate_ok(rate_div)) rate_div = Z_AUDIO_RATE_44K;
-
-    z_audio_start(rate_div);
+    /* Start from the rate the hardware is running at rather than a
+     * constant. `AUDIO_FS_RESET exists so a board can pick a rate its
+     * outputs can actually carry -- 48kHz on an S/PDIF board, where
+     * anything below 32kHz will not lock at the receiver -- and an app
+     * that overwrites it throws that away. Everything is resampled to
+     * whatever this turns out to be, so no file cares; with exact
+     * rates a 44.1kHz file on a 44.1kHz board is not resampled at all
+     * (the step is exactly 1). */
+    start_hz = z_audio_preferred_hz();
+    z_audio_start_hz(start_hz);
     audio_claim();
     out_hz = z_audio_rate_hz();
 
