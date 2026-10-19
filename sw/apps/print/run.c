@@ -271,6 +271,68 @@ static int pick_dpi(const ipp_info_t *info) {
 	return best;
 }
 
+// -- trays ---------------------------------------------------------------------------------
+
+static bool same_size(int aw, int ah, int bw, int bh) {
+	// either way round, within 2 mm (sizes in tenths of mm)
+	int d1 = (aw > bw ? aw - bw : bw - aw) + (ah > bh ? ah - bh : bh - ah);
+	int d2 = (aw > bh ? aw - bh : bh - aw) + (ah > bw ? ah - bw : bw - ah);
+	return d1 <= 20 || d2 <= 20;
+}
+
+static void copy_word(char *d, int n, const char *s, int len) {
+	int i;
+	if (len > n - 1) len = n - 1;
+	for (i = 0; i < len; i++) d[i] = s[i];
+	d[len] = 0;
+}
+
+bool run_pick_tray(const job_t *j, const ipp_info_t *info, int wmm, int hmm,
+	char *source, int sn, char *type, int tn) {
+	const char *p;
+	int i;
+	source[0] = 0;
+	type[0] = 0;
+	if (j->media_source[0]) {
+		copy_word(source, sn, j->media_source, (int)strlen(j->media_source));
+		return true;
+	}
+	// the setting: "PAPER SOURCE [TYPE]", separated by ; or ,
+	for (p = j->trays; *p; ) {
+		const char *w[3];
+		int wl[3], nw = 0;
+		while (*p == ' ' || *p == ';' || *p == ',') p++;
+		while (*p && *p != ';' && *p != ',') {
+			if (*p == ' ') { p++; continue; }
+			if (nw < 3) w[nw] = p;
+			while (*p && *p != ' ' && *p != ';' && *p != ',') p++;
+			if (nw < 3) { wl[nw] = (int)(p - w[nw]); nw++; }
+		}
+		if (nw >= 2) {
+			char name[16];
+			const zpage_size_t *z;
+			copy_word(name, sizeof(name), w[0], wl[0]);
+			z = zpage_find(name);
+			if (z && z->kind == ZPAGE_PAPER && same_size(z->w, z->h, wmm, hmm)) {
+				copy_word(source, sn, w[1], wl[1]);
+				if (nw == 3) copy_word(type, tn, w[2], wl[2]);
+				return true;
+			}
+		}
+	}
+	// what the printer says is loaded where
+	if (info) {
+		for (i = 0; i < info->ntray; i++) {
+			const int tw = (info->tray[i].w + 5) / 10, th = (info->tray[i].h + 5) / 10;
+			if (info->tray[i].source[0] && tw && th && same_size(tw, th, wmm, hmm)) {
+				copy_word(source, sn, info->tray[i].source, (int)strlen(info->tray[i].source));
+				return true;
+			}
+		}
+	}
+	return false;
+}
+
 #define BUSY_WAIT_MS	5000
 #define BUSY_TRIES		360		// half an hour of a printer at work
 
@@ -360,8 +422,13 @@ static bool attempt(run_t *r, transport_t *t, const ipp_url_t *u, const job_t *j
 	ij.media = media;
 	ij.media_w = wmm * 10;
 	ij.media_h = hmm * 10;
-	ij.media_type = j->media_type;
-	ij.media_source = j->media_source;
+	{
+		static char tray[24], ttype[24];
+		run_pick_tray(j, &info, wmm, hmm, tray, sizeof(tray), ttype, sizeof(ttype));
+		ij.media_source = tray[0] ? tray : NULL;
+		ij.media_type = j->media_type[0] ? j->media_type : ttype[0] ? ttype : NULL;
+		r->tray = tray[0] ? tray : NULL;
+	}
 	ij.quality = !strcmp(j->quality, "draft") ? 3 : !strcmp(j->quality, "high") ? 5 :
 		!strcmp(j->quality, "normal") ? 4 : 0;
 	// a raster carries its copies, and PostScript says them itself

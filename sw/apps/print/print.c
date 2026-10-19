@@ -45,12 +45,16 @@ static const char *fmt_pref(void) {
 // -- the window -------------------------------------------------------------------
 
 #define WIN_W		300
-#define WIN_H		60
-#define INFO_H		112
 #define BAR_Y		28
 #define BAR_H		8
 #define BTN_W		50
 #define BTN_H		14
+#define PAD			6
+#define INFO_LINES	8
+// the window's whole height (wm adds its chrome inside it): the title,
+// the line, the bar or the printer's answer, then the button below
+#define WIN_H		(BAR_Y + BAR_H + PAD + BTN_H + PAD + Z_WIN_CHROME_H)
+#define INFO_H		(BAR_Y + INFO_LINES * 10 + PAD + BTN_H + PAD + Z_WIN_CHROME_H)
 
 static z_win_t win;
 static bool win_up, cancelled, dismissed;
@@ -58,11 +62,11 @@ static bool done_shown;
 static int permille;
 static char w_title[64];			// "A tour of slide"
 static char w_line[96];				// what it is doing, or how it ended
-static char w_info[8][64];			// a printer's answer, for print ADDRESS
+static char w_info[INFO_LINES][64];			// a printer's answer, for print ADDRESS
 static int w_ninfo;
 
-static int btn_x(void) { return z_win_content_w(&win) - BTN_W - 6; }
-static int btn_y(void) { return z_win_content_h(&win) - BTN_H - 6; }
+static int btn_x(void) { return z_win_content_w(&win) - BTN_W - PAD; }
+static int btn_y(void) { return z_win_content_h(&win) - BTN_H - PAD; }
 
 static void text(int x, int y, const char *s) { z_win_draw_text(&win, x, y, s, 1, &z_font_5x8); }
 
@@ -449,6 +453,31 @@ static bool mem_setup(void) {
 
 // -- setting up: what does the printer say? ---------------------------------------------------
 
+// A size the printer gives (1/100 mm) as a paper's name: "A4", or
+// "210x297".
+static void paper_label(int w, int h, char *out, int n) {
+	int i;
+	for (i = 0; i < zpage_count(); i++) {
+		const zpage_size_t *z = zpage_at(i);
+		int a = (w + 5) / 10, b = (h + 5) / 10;
+		if (z->kind != ZPAGE_PAPER) continue;
+		if ((a - z->w <= 20 && z->w - a <= 20 && b - z->h <= 20 && z->h - b <= 20) ||
+			(a - z->h <= 20 && z->h - a <= 20 && b - z->w <= 20 && z->w - b <= 20)) {
+			run_say(out, n, z->label, NULL);
+			return;
+		}
+	}
+	if (!w || !h) { run_say(out, n, "?", NULL); return; }
+	{
+		char t[16];
+		int k = fmt_int(t, (w + 50) / 100);
+		t[k++] = 'x';
+		k += fmt_int(t + k, (h + 50) / 100);
+		t[k] = 0;
+		run_say(out, n, t, NULL);
+	}
+}
+
 static void probe(const char *addr) {
 	ipp_url_t u;
 	ipp_info_t info;
@@ -483,7 +512,39 @@ static void probe(const char *addr) {
 		run_say(w_info[w_ninfo++], 64, "Raster dpi: ", b);
 	}
 	run_say(w_info[w_ninfo++], 64, "Paper: ", info.media_default);
-	if (info.nready) run_say(w_info[w_ninfo++], 64, "Loaded: ", info.media_ready[0]);
+	if (info.ntray) {
+		// what is in which tray, as the printer says: "main A4, rear A5"
+		int i;
+		k = 0;
+		b[0] = 0;
+		for (i = 0; i < info.ntray && k < 50; i++) {
+			char sz[16];
+			paper_label(info.tray[i].w, info.tray[i].h, sz, sizeof(sz));
+			if (i) { b[k++] = ','; b[k++] = ' '; b[k] = 0; }
+			run_say(b + k, (int)sizeof(b) - k, info.tray[i].source[0] ? info.tray[i].source : "?", " ");
+			k = (int)strlen(b);
+			run_say(b + k, (int)sizeof(b) - k, sz, NULL);
+			k = (int)strlen(b);
+		}
+		run_say(w_info[w_ninfo++], 64, "Loaded: ", b);
+	} else if (info.nready) {
+		run_say(w_info[w_ninfo++], 64, "Loaded: ", info.media_ready[0]);
+	}
+	if (info.nsources) {
+		int i;
+		k = 0;
+		b[0] = 0;
+		for (i = 0; i < info.nsources && k < 50; i++) {
+			run_say(b + k, (int)sizeof(b) - k, i ? " " : "", info.sources[i]);
+			k = (int)strlen(b);
+		}
+		run_say(w_info[w_ninfo++], 64, "Trays: ", b);
+	}
+	{
+		char t[96];
+		z_cfg_get("apps.print.trays", t, sizeof(t));
+		if (t[0]) run_say(w_info[w_ninfo++], 64, "apps.print.trays: ", t);
+	}
 	{
 		const char *f = !strcmp(fmt_pref(), "auto") ? (info.pdf ? "PDF" : info.pwg ? "PWG raster" : "PostScript") : fmt_pref();
 		run_say(w_info[w_ninfo++], 64, "This will print as ", f);
@@ -546,6 +607,7 @@ int main(void) {
 		finish(false, Z_PRINT_E_FAILED);
 	}
 	z_cfg_get("apps.print.paper", j.default_paper, sizeof(j.default_paper));
+	z_cfg_get("apps.print.trays", j.trays, sizeof(j.trays));
 	run_say(w_title, sizeof(w_title), j.title[0] ? j.title : "Printing", NULL);
 	run_say(dest, sizeof(dest), j.dest[0] ? j.dest : printer, NULL);
 	win_open(WIN_H);
@@ -597,6 +659,10 @@ int main(void) {
 			run_say(b + k, (int)sizeof(b) - k, job_sheets(&j) == 1 ? " sheet" : " sheets", NULL);
 			k = (int)strlen(b);
 			run_say(b + k, (int)sizeof(b) - k, ", sent as ", r.format ? r.format : "PostScript");
+			if (r.tray) {
+				k = (int)strlen(b);
+				run_say(b + k, (int)sizeof(b) - k, ", from ", r.tray);
+			}
 			status("Printed: ", b);
 		} else {
 			status(r.err[0] ? r.err : "The printer did not take the job", NULL);

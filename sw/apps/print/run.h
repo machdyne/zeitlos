@@ -39,6 +39,7 @@ typedef struct {
 	char		err[96];		// why it failed
 	const char	*format;		// what went to the printer: "PDF" ...
 	int			dpi;			// at what resolution (raster)
+	const char	*tray;			// the tray it went to, NULL: the printer's choice
 } run_t;
 
 // a then b into d (cap bytes), cut short if need be: messages, without
@@ -53,6 +54,13 @@ void run_init(void);
 bool run_raster(run_t *r, const job_t *j, out_t *o, int dpi, int space,
 	const int margins_mm10[4]);
 bool run_vec(run_t *r, const job_t *j, out_t *o, int fmt);
+
+// The tray a sheet of wmm x hmm (tenths of mm) prints from, and its
+// media-type when the job names none: the job's own media-source, else
+// apps.print.trays ("a4 main; a5 rear labels"), else a tray the printer
+// says holds that size (media-col-ready). False: the printer's choice.
+bool run_pick_tray(const job_t *j, const ipp_info_t *info, int wmm, int hmm,
+	char *source, int sn, char *type, int tn);
 
 // Asks an IPP printer what it takes.
 bool run_probe(run_t *r, transport_t *t, const ipp_url_t *u, ipp_info_t *info);

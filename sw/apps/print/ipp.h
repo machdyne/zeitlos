@@ -73,6 +73,14 @@ typedef struct {
 	char	media_default[48];
 	char	media_ready[4][48];
 	int		nready;
+	char	sources[6][16];			// media-source-supported: "main", "rear" ...
+	int		nsources;
+	struct {						// media-col-ready: what is in which tray
+		int		w, h;				// media-size, 1/100 mm (0: not said)
+		char	source[16];			// media-source ("" if not said)
+		char	type[24];			// media-type
+	} tray[6];
+	int		ntray;
 	int		margin[4];				// left, top, right, bottom, 1/100 mm: the
 									// largest each lists (not borderless)
 	bool	has_margins;

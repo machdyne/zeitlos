@@ -100,7 +100,7 @@ typedef struct card {
 
 #define DECK_FONTS_MAX 32
 #define DECK_TITLE_MAX 64
-#define DECK_PRINT_MAX 64
+#define DECK_PRINT_MAX 128
 
 typedef struct deck {
 	zpage_t		page;

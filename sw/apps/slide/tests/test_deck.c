@@ -91,6 +91,23 @@ static deck_t *sample(void) {
 	return d;
 }
 
+// A job's options written to memory (no pages): what /print sends.
+typedef struct { uint8_t *b; uint32_t n, cap; } jbuf_t;
+static bool jb_write(void *ctx, const void *d, uint32_t len) {
+	jbuf_t *j = ctx;
+	if (j->n + len > j->cap) return false;
+	memcpy(j->b + j->n, d, len);
+	j->n += len;
+	return true;
+}
+static uint32_t job_into(uint8_t *b, uint32_t cap, zp_writer_t *w, const pj_settings_t *ps) {
+	static jbuf_t j;
+	j.b = b; j.n = 0; j.cap = cap;
+	zp_writer_init(w, jb_write, &j);
+	printjob_options(ps, w);
+	return w->failed ? 0 : j.n;
+}
+
 int main(void) {
 	pool_init(mem, sizeof(mem));
 	size_t free0 = pool_free_bytes();
@@ -266,7 +283,7 @@ int main(void) {
 	// -- printing: the /print words, and the deck keeping its settings --
 	{
 		pj_settings_t ps;
-		char keep[64], err[64];
+		char keep[DECK_PRINT_MAX], err[64];
 		ck(printjob_parse(&ps, "4up cut", "/print pdf 2-3 paper a4 copies 2", 0, 7, keep, sizeof(keep), err, sizeof(err)),
 			"print words parse");
 		ck(ps.nup == 4 && ps.cut && ps.dest == PJ_PDF && ps.first == 1 && ps.count == 2 &&
@@ -278,6 +295,24 @@ int main(void) {
 		ck(!printjob_parse(&ps, "", "print paper tabloid", 0, 7, NULL, 0, err, sizeof(err)), "unknown paper");
 		ck(!printjob_parse(&ps, "", "print 17up", 0, 7, NULL, 0, err, sizeof(err)), "17up");
 		ck(!printjob_parse(&ps, "pdf", NULL, 0, 7, NULL, 0, err, sizeof(err)), "a deck does not keep pdf");
+		// a tray and a media type: the printer's words, kept
+		ck(printjob_parse(&ps, "", "print setup paper a5 tray Rear type labels", 0, 7, keep, sizeof(keep), err, sizeof(err)) &&
+			!strcmp(ps.tray, "rear") && !strcmp(ps.type, "labels") &&
+			!strcmp(keep, "paper a5 tray rear type labels"), "tray and type kept");
+		ck(printjob_parse(&ps, keep, "print tray auto", 0, 7, keep, sizeof(keep), err, sizeof(err)) &&
+			!ps.tray[0] && !strcmp(keep, "paper a5 type labels"), "tray auto: the printer's choice");
+		ck(!printjob_parse(&ps, "", "print tray", 0, 7, NULL, 0, err, sizeof(err)) && err[0], "tray: of what?");
+		{
+			// into the job as IPP's own names
+			static uint8_t jb[4096];
+			zp_writer_t w;
+			uint32_t n;
+			char v[32];
+			printjob_parse(&ps, "tray rear type labels", NULL, 0, 7, NULL, 0, err, sizeof(err));
+			n = job_into(jb, sizeof(jb), &w, &ps);
+			ck(n && zp_job_get(jb, n, "media-source", v, sizeof(v)) && !strcmp(v, "rear") &&
+				zp_job_get(jb, n, "media-type", v, sizeof(v)) && !strcmp(v, "labels"), "the job says media-source and media-type");
+		}
 	}
 	{
 		static const char t[] = "(deck (version 1) (page \"classic\" landscape) (print \"2up cut\") (card \"a\"))";

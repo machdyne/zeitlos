@@ -249,6 +249,7 @@ uint32_t ipp_get_attributes(uint8_t *buf, uint32_t max, const char *uri) {
 		"printer-make-and-model", "printer-state", "printer-state-reasons",
 		"document-format-supported", "pwg-raster-document-resolution-supported",
 		"pwg-raster-document-type-supported", "media-default", "media-ready",
+		"media-source-supported", "media-col-ready",
 		"media-left-margin-supported", "media-top-margin-supported",
 		"media-right-margin-supported", "media-bottom-margin-supported",
 	};
@@ -318,8 +319,9 @@ static bool is(const char *a, const char *b) { return !strcmp(a, b); }
 
 bool ipp_parse(const uint8_t *d, int n, ipp_info_t *info) {
 	int p = 8;
-	char name[64] = "";
+	char name[64] = "", member[32] = "";
 	int depth = 0;
+	bool in_ready = false, in_size = false;
 	memset(info, 0, sizeof(*info));
 	if (n < 9) return false;
 	info->status = (d[2] << 8) | d[3];
@@ -339,9 +341,41 @@ bool ipp_parse(const uint8_t *d, int n, ipp_info_t *info) {
 		if (p + vl > n) return false;
 		v = d + p;
 		p += vl;
-		if (tag == 0x34) { depth++; continue; }		// a collection: skipped whole
-		if (tag == 0x37) { if (depth) depth--; continue; }
-		if (depth) continue;
+		// collections: media-col-ready is read (what is in which tray),
+		// the rest skipped whole
+		if (tag == 0x34) {
+			if (!depth) {
+				in_ready = is(name, "media-col-ready") && info->ntray < 6;
+				if (in_ready) memset(&info->tray[info->ntray], 0, sizeof(info->tray[0]));
+				member[0] = 0;
+			} else if (depth == 1) {
+				in_size = is(member, "media-size");
+			}
+			depth++;
+			continue;
+		}
+		if (tag == 0x37) {
+			if (depth) depth--;
+			if (depth == 1) in_size = false;
+			if (!depth && in_ready) {
+				if (info->tray[info->ntray].w || info->tray[info->ntray].source[0]) info->ntray++;
+				in_ready = false;
+			}
+			continue;
+		}
+		if (depth) {
+			if (!in_ready) continue;
+			if (tag == 0x4A) { scopy(member, sizeof(member), v, vl); continue; }
+			if (depth == 2 && in_size && tag == V_INT && vl == 4) {
+				if (is(member, "x-dimension")) info->tray[info->ntray].w = (int)rd32(v);
+				else if (is(member, "y-dimension")) info->tray[info->ntray].h = (int)rd32(v);
+			} else if (depth == 1 && is(member, "media-source")) {
+				scopy(info->tray[info->ntray].source, sizeof(info->tray[0].source), v, vl);
+			} else if (depth == 1 && is(member, "media-type")) {
+				scopy(info->tray[info->ntray].type, sizeof(info->tray[0].type), v, vl);
+			}
+			continue;
+		}
 
 		if (is(name, "status-message") && (tag == V_TEXT || tag == 0x35)) {
 			scopy(info->message, sizeof(info->message), v, vl);
@@ -370,6 +404,8 @@ bool ipp_parse(const uint8_t *d, int n, ipp_info_t *info) {
 			if (info->ndpi < 4) info->dpi[info->ndpi++] = (int)rd32(v);
 		} else if (is(name, "media-default")) {
 			scopy(info->media_default, sizeof(info->media_default), v, vl);
+		} else if (is(name, "media-source-supported")) {
+			if (info->nsources < 6) scopy(info->sources[info->nsources++], 16, v, vl);
 		} else if (is(name, "media-ready")) {
 			if (info->nready < 4) scopy(info->media_ready[info->nready++], 48, v, vl);
 		} else if (vl == 4 && (tag == V_INT) && !strncmp(name, "media-", 6) &&

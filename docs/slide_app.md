@@ -166,12 +166,14 @@ status line says how it ended.
 | `frame`, `noframe` | a hairline round each card |
 | `actual`, `fit` | a paper-shaped deck at its own size, or as large as fits |
 | `paper a4`, `paper page`, `paper auto` | the sheet: a paper, each card's own shape (a PDF of slides), or the deck's own paper / `apps.print.paper` |
+| `tray rear`, `tray auto` | the printer's tray (its own names: `print` lists them); `auto` leaves it to `apps.print.trays` and the printer ([print](print.md#trays)) |
+| `type labels`, `type auto` | the paper's kind, for a printer that cares (`labels`, `photographic`, `envelope` ...) |
 | `draft`, `normal`, `high` | print quality |
 | `copies 3` | |
 | `setup` | only change the settings, print nothing |
 
-The settings -- `4up`, `cut`, `frame`, `actual`, `paper`, the
-quality -- are the deck's: kept in its file as `(print "4up cut paper
+The settings -- `4up`, `cut`, `frame`, `actual`, `paper`, `tray`,
+`type`, the quality -- are the deck's: kept in its file as `(print "4up cut paper
 a4")`, so a deck of index cards prints the way it should every time.
 The cards, the copies and `pdf`/`ps` are for that time only.
 

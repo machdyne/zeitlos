@@ -73,6 +73,11 @@ static void show_info(const ipp_info_t *i) {
 	printf(" dpi\n  media %s, ready:", i->media_default);
 	for (k = 0; k < i->nready; k++) printf(" %s", i->media_ready[k]);
 	printf("\n  margins (1/100 mm) %d %d %d %d\n", i->margin[0], i->margin[1], i->margin[2], i->margin[3]);
+	printf("  trays:");
+	for (k = 0; k < i->nsources; k++) printf(" %s", i->sources[k]);
+	printf("\n  loaded:");
+	for (k = 0; k < i->ntray; k++) printf(" %s=%dx%d", i->tray[k].source, i->tray[k].w, i->tray[k].h);
+	printf("\n");
 }
 
 int main(int argc, char **argv) {

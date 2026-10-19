@@ -41,6 +41,8 @@ typedef struct {
 	char		quality[8];		// "quality": "draft", "normal", "high"
 	char		media_type[24];	// "media-type": "stationery", "photographic" ...
 	char		media_source[24];// "media-source": "auto", "main", "rear" ...
+	char		trays[96];		// not an option: the service's setting
+								// (apps.print.trays), "a4 main; a5 rear labels"
 } job_t;
 
 // Reads the options and finds the pages. `start` and `bytes` hold

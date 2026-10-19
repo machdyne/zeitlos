@@ -26,6 +26,8 @@ typedef struct {
 	bool	cut, frame, actual;
 	char	paper[16];
 	char	quality[8];
+	char	tray[16];		// IPP media-source: "main", "rear" ... ("" the printer's)
+	char	type[24];		// IPP media-type: "labels", "photographic" ...
 	int		dest;			// PJ_PRINTER, PJ_PDF, PJ_PS
 	int		first, count;	// cards; count < 0 all
 } pj_settings_t;

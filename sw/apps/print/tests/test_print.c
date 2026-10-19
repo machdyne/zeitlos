@@ -295,6 +295,68 @@ static void test_fmt(void) {
 	fmt_int(b, -2147483647 - 1); ck(!strcmp(b, "-2147483648"), "INT_MIN");
 }
 
+// Trays: what a PIXMA says it has loaded (media-col-ready), and the
+// choice of tray for a sheet.
+static void test_trays(void) {
+	ib_t b = { { 0 }, 0 };
+	ipp_info_t i;
+	job_t j;
+	char src[24], type[24];
+	ib8(&b, 2); ib8(&b, 0); ib16(&b, 0); ib8(&b, 0); ib8(&b, 0); ib8(&b, 0); ib8(&b, 1);
+	ib8(&b, 4);
+	ibattr(&b, 0x44, "media-source-supported", "main", 4);
+	ibattr(&b, 0x44, NULL, "rear", 4);
+	// main: A4 (210 x 297 mm), rear: A5 labels
+	ibattr(&b, 0x34, "media-col-ready", "", 0);
+	ibattr(&b, 0x4A, NULL, "media-size", 10);
+	ibattr(&b, 0x34, NULL, "", 0);
+	ibattr(&b, 0x4A, NULL, "x-dimension", 11); ibint(&b, 0x21, NULL, 21000);
+	ibattr(&b, 0x4A, NULL, "y-dimension", 11); ibint(&b, 0x21, NULL, 29700);
+	ibattr(&b, 0x37, NULL, "", 0);
+	ibattr(&b, 0x4A, NULL, "media-source", 12); ibattr(&b, 0x44, NULL, "main", 4);
+	ibattr(&b, 0x4A, NULL, "media-type", 10); ibattr(&b, 0x44, NULL, "stationery", 10);
+	ibattr(&b, 0x37, NULL, "", 0);
+	ibattr(&b, 0x34, NULL, "", 0);				// the next value of the same attribute
+	ibattr(&b, 0x4A, NULL, "media-size", 10);
+	ibattr(&b, 0x34, NULL, "", 0);
+	ibattr(&b, 0x4A, NULL, "x-dimension", 11); ibint(&b, 0x21, NULL, 14800);
+	ibattr(&b, 0x4A, NULL, "y-dimension", 11); ibint(&b, 0x21, NULL, 21000);
+	ibattr(&b, 0x37, NULL, "", 0);
+	ibattr(&b, 0x4A, NULL, "media-source", 12); ibattr(&b, 0x44, NULL, "rear", 4);
+	ibattr(&b, 0x37, NULL, "", 0);
+	ibattr(&b, 0x44, "media-default", "iso_a4_210x297mm", 16);
+	ib8(&b, 3);
+	ck(ipp_parse(b.b, b.n, &i), "trays: parses");
+	ck(i.nsources == 2 && !strcmp(i.sources[1], "rear"), "trays: media-source-supported");
+	ck(i.ntray == 2 && i.tray[0].w == 21000 && i.tray[0].h == 29700 &&
+		!strcmp(i.tray[0].source, "main") && !strcmp(i.tray[0].type, "stationery") &&
+		i.tray[1].w == 14800 && !strcmp(i.tray[1].source, "rear"), "trays: media-col-ready");
+	ck(!strcmp(i.media_default, "iso_a4_210x297mm"), "trays: attributes after the collections");
+
+	memset(&j, 0, sizeof(j));
+	// from what the printer says: A5 from the rear, A4 from main, Letter
+	// the printer's choice
+	ck(run_pick_tray(&j, &i, 1480, 2100, src, sizeof(src), type, sizeof(type)) &&
+		!strcmp(src, "rear") && !type[0], "tray: A5 is in the rear");
+	ck(run_pick_tray(&j, &i, 2970, 2100, src, sizeof(src), type, sizeof(type)) &&
+		!strcmp(src, "main"), "tray: A4, landscape, is in main");
+	ck(!run_pick_tray(&j, &i, 2159, 2794, src, sizeof(src), type, sizeof(type)) && !src[0],
+		"tray: Letter is nowhere: the printer chooses");
+	// the setting wins over the printer, and gives a type
+	strcpy(j.trays, "a4 main; a5 manual labels");
+	ck(run_pick_tray(&j, &i, 1480, 2100, src, sizeof(src), type, sizeof(type)) &&
+		!strcmp(src, "manual") && !strcmp(type, "labels"), "tray: apps.print.trays, with a type");
+	ck(run_pick_tray(&j, NULL, 2100, 2970, src, sizeof(src), type, sizeof(type)) &&
+		!strcmp(src, "main") && !type[0], "tray: the setting alone");
+	strcpy(j.trays, "  a5 rear , bogus x ,a4 main");
+	ck(run_pick_tray(&j, NULL, 2100, 2970, src, sizeof(src), type, sizeof(type)) &&
+		!strcmp(src, "main"), "tray: commas, spaces, an unknown paper");
+	// the job's own media-source wins over all
+	strcpy(j.media_source, "rear");
+	ck(run_pick_tray(&j, &i, 2100, 2970, src, sizeof(src), type, sizeof(type)) &&
+		!strcmp(src, "rear"), "tray: the job's own");
+}
+
 int main(int argc, char **argv) {
 	static uint8_t mem[8 << 20];
 	(void)argc; (void)argv;
@@ -302,6 +364,7 @@ int main(int argc, char **argv) {
 	test_pwg();
 	test_url();
 	test_ipp();
+	test_trays();
 	test_http();
 	test_job();
 	test_fmt();

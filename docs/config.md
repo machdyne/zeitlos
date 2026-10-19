@@ -43,6 +43,7 @@ travel with the card. `settings` edits them; see
 | `apps.print.format` | `auto` | `print` | to an IPP printer: `auto` (PDF if the printer takes it, else PWG raster), `pwg`, `pdf` or `ps` ([print.md](print.md)) |
 | `apps.print.paper` | `letter` | `print` | the paper when a job does not name one: `letter`, `a4`, `legal`, `a5`, `4x6` ... |
 | `apps.print.printer` | (none) | `print` | the printer: `ipp://ADDRESS/ipp/print` (driverless IPP: a PIXMA, most printers since 2013) or `socket://ADDRESS` (PostScript on port 9100, a laser) ([print.md](print.md#setting-up)) |
+| `apps.print.trays` | *(none)* | `print` | which tray holds which paper, for a printer with several: `a4 main; a5 rear labels` -- paper, the printer's tray name, and optionally the paper's kind ([print.md](print.md#trays)) |
 | `apps.netserve.allow` | `subnet` | `netserve` | accept connections from this subnet only, or `any` ([netserve.md](netserve.md)) |
 | `apps.netserve.echo` | `off` | `netserve`, `init` | an echo service on this port, for testing |
 | `apps.netserve.http` | `off` | `netserve`, `init` | HTTP: a port and a directory to serve, `80 /data/netserve/www` |

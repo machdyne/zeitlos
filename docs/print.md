@@ -39,6 +39,7 @@ and a print job finishes even if the app is closed.
 | `apps.print.printer` | (none) | the printer's address |
 | `apps.print.paper` | `letter` | the paper when a job does not name one: `letter`, `a4`, `legal`, `a5`, `a6`, `4x6`, `5x7`, `3x5` |
 | `apps.print.format` | `auto` | to an IPP printer: `auto`, `pwg`, `pdf` or `ps` |
+| `apps.print.trays` | (none) | which tray holds which paper: `a4 main; a5 rear labels` ([Trays](#trays)) |
 
 **The address** is one of:
 
@@ -56,6 +57,41 @@ LAN settings*), and the router lists it among its clients.
 **No drivers.** A driverless printer says what it takes when asked
 (*Get-Printer-Attributes*), and print makes that: there is nothing to
 install for a model. That is also how Linux prints to a PIXMA.
+
+### Trays
+
+A printer with more than one paper source -- a PIXMA's cassette
+(`main`) and rear feeder (`rear`) -- takes each sheet from the tray
+that holds its paper. print chooses the tray for a job, first match
+wins:
+
+1. the job's own tray: slide's `/print tray rear` (kept in the deck
+   with `/print setup tray rear`), or any app's `media-source` option;
+2. **`apps.print.trays`**: pairs of paper and tray, separated by `;`
+   or `,`, with the paper's kind after the tray if it matters --
+   `a4 main; a5 rear labels`. A job on A5 goes to the rear tray as
+   labels, one on A4 to the cassette;
+3. what the printer says is loaded where (IPP's *media-col-ready*), for
+   a printer that knows -- many know the cassette's size, set on the
+   panel, but not what is in the rear feeder;
+4. otherwise the printer's own choice.
+
+`print ADDRESS` (or `print` alone) shows the printer's trays by their
+IPP names (`main`, `rear`, `manual`, `by-pass-tray`, `auto` ...), what
+it says is in them, and the `apps.print.trays` setting. The finished
+job says which tray it went to: *Printed: 1 sheet, sent as PDF, from
+rear*.
+
+A PIXMA with A4 in the cassette and A5 labels in the rear feeder:
+
+```
+apps.print.paper: a4
+apps.print.trays: a4 main; a5 rear labels
+```
+
+and a deck of A5 labels (`/page a5`) prints from the rear, everything
+else from the cassette. A label deck on A4 paper that should still come
+from the rear says so itself: `/print setup tray rear`.
 
 ## What goes to the printer
 
@@ -282,11 +318,13 @@ that is not this one:
 - as PostScript: drawn by Ghostscript and compared the same way;
 - `paper=page`: each PDF page the card's own shape;
 - over IPP to **ippeveprinter**, CUPS's reference IPP Everywhere
-  printer: the probe, then Print-Job as PDF (what `auto` picks),
+  printer: the probe (with its trays and what it says is loaded in
+  them), then Print-Job as PDF (what `auto` picks),
   PWG raster and PostScript, the second and third waiting while the
   printer is busy with the first; the three documents it kept are
   checked as above. (On a build machine without IPv6 ippeveprinter
-  will not start; `tests/no_ipv6.c` makes it.)
+  will not start; `tests/no_ipv6.c` makes it. It also wants DNS-SD:
+  `dbus-daemon --system --fork; avahi-daemon -D` in a container.)
 - to a port-9100 socket: the PostScript arrives byte for byte.
 
 ## Not yet

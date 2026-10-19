@@ -1298,7 +1298,7 @@ static const char *const cmd_help[] = {
 	"select all | delete | duplicate",
 	"undo | redo",
 	"image               place a picture (a file dialog)",
-	"print [pdf | ps] [this | N-M] [4up] [cut] [frame] [paper a4] [actual] [copies N]",
+	"print [pdf | ps] [this | N-M] [4up] [cut] [frame] [paper a4] [tray rear] [actual] [copies N]",
 	"print setup ...     only the settings, which the deck keeps",
 	"show | open | save | save as | new deck | help | tour",
 };

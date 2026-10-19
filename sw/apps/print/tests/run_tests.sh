@@ -99,6 +99,11 @@ if have ippeveprinter; then
 		if $H --probe $URL > "$OUT/probe.log" && grep -q "pwg-raster pdf postscript" "$OUT/probe.log"; then
 			ok "IPP: Get-Printer-Attributes"
 		else bad "IPP probe"; cat "$OUT/probe.log"; fi
+		# what is in which tray (media-col-ready): ippeveprinter has Letter
+		# in main and an envelope in the by-pass tray
+		if grep -q "loaded: main=21590x27940 by-pass-tray=" "$OUT/probe.log"; then
+			ok "IPP: trays and what is loaded in them"
+		else bad "IPP trays"; grep -A1 "trays:" "$OUT/probe.log"; fi
 		for pref in auto pwg ps; do
 			if $H --ipp $URL --prefer $pref "$OUT/tour.zpp" > "$OUT/ipp_$pref.log" 2>&1; then
 				ok "IPP Print-Job, $pref: $(grep 'sent as' "$OUT/ipp_$pref.log" | cut -d' ' -f2-)"

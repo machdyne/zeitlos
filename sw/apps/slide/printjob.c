@@ -93,6 +93,20 @@ static bool words(pj_settings_t *s, const char *str, bool one_off, int cur, int 
 			continue;
 		}
 		if (!strcmp(w, "normal")) { s->quality[0] = 0; continue; }
+		if (!strcmp(w, "tray") || !strcmp(w, "type")) {
+			// the printer's own words (print ADDRESS lists its trays):
+			// kept as they are; "auto" leaves it to the printer
+			char *dst = w[1] == 'r' ? s->tray : s->type;
+			int cap = w[1] == 'r' ? (int)sizeof(s->tray) : (int)sizeof(s->type), k = 0;
+			while (*p == ' ') p++;
+			while (*p && *p != ' ' && k < cap - 1) { char c = *p++; v[k++] = (char)(c >= 'A' && c <= 'Z' ? c + 32 : c); }
+			v[k] = 0;
+			while (*p && *p != ' ') p++;
+			if (!k) { say(err, err_n, w, ": which? (print shows the printer's)"); return false; }
+			if (!strcmp(v, "auto")) dst[0] = 0;
+			else memcpy(dst, v, (size_t)k + 1);
+			continue;
+		}
 		if (!strcmp(w, "paper") || !strcmp(w, "copies")) {
 			int k = 0;
 			while (*p == ' ') p++;
@@ -126,7 +140,7 @@ static bool words(pj_settings_t *s, const char *str, bool one_off, int cur, int 
 
 bool printjob_parse(pj_settings_t *s, const char *deck_words, const char *line,
 	int cur, int ncard, char *keep, int keep_n, char *err, int err_n) {
-	char tmp[96], dw[96];
+	char tmp[128], dw[128];
 	// the deck's words may be `keep` itself
 	say(dw, sizeof(dw), deck_words ? deck_words : "", NULL);
 	deck_words = dw;
@@ -148,6 +162,8 @@ bool printjob_parse(pj_settings_t *s, const char *deck_words, const char *line,
 		if (s->actual) add(tmp, sizeof(tmp), "actual");
 		if (s->quality[0]) add(tmp, sizeof(tmp), s->quality);
 		if (s->paper[0]) { add(tmp, sizeof(tmp), "paper"); add(tmp, sizeof(tmp), s->paper); }
+		if (s->tray[0]) { add(tmp, sizeof(tmp), "tray"); add(tmp, sizeof(tmp), s->tray); }
+		if (s->type[0]) { add(tmp, sizeof(tmp), "type"); add(tmp, sizeof(tmp), s->type); }
 		say(keep, keep_n, tmp, NULL);
 	}
 	return true;
@@ -173,6 +189,8 @@ void printjob_options(const pj_settings_t *s, zp_writer_t *w) {
 	if (s->frame) zp_job(w, "frame", "1");
 	if (s->actual) zp_job(w, "size", "actual");
 	if (s->quality[0]) zp_job(w, "quality", s->quality);
+	if (s->tray[0]) zp_job(w, "media-source", s->tray);
+	if (s->type[0]) zp_job(w, "media-type", s->type);
 	if (s->paper[0]) zp_job(w, "paper", s->paper);
 	else if (s->dest == PJ_PDF) zp_job(w, "paper", "page");	// a PDF of slides: a page each, their shape
 }
