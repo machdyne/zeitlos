@@ -418,26 +418,33 @@ of them to keep in step either.
 
 ## Upgrades
 
-**Not implemented.** Today a new release means writing a new card. This
-section records how in-place upgrades are planned to work, so that
-nothing in the layout gets in their way.
+**Implemented for TFTP** ([update.md](update.md)). Every card image
+carries `/sys/manifest`, `release/zrelease tftp` publishes a release,
+and `update v0.0.7 -t tftp <server>` on the board brings the card in
+line with it. NFS and HTTPS as sources come later.
 
 The principle is that **an upgrade replaces only what changed and
 touches nothing it did not ship.** `/data/casino/bank.dat`, an edited
 `/data/bbs/bbs.cfg`, and everything in `/home` survive.
 
-The plan:
+How it works:
 
-1. The release tool writes a manifest, for example `/sys/manifest`,
-   with one line per file the release shipped: its path, a hash, and a
-   policy, either `replace` or `keep`.
+1. The release tool writes a manifest, `/sys/manifest`, with one line
+   per file the release shipped: its path, its SHA-256 and CRC-32, its
+   size, and a policy, either `replace` or `keep` (declared per list in
+   `release/lib/mkfatimg.py`).
    - `replace`: programs, `libz`, `en.spk`, `roots.der`, `/docs`,
-     example media, `/sys/version`.
+     example media.
    - `keep`: files people edit, such as `/sys/zeitlos.cfg`,
-     `/data/bbs/bbs.cfg` and `/data/fed/fed.cfg`.
+     `/data/net/net.cfg`, `/data/bbs/bbs.cfg`, `/data/fed/fed.cfg` and
+     the examples.
+   - `/sys/manifest` and `/sys/version` describe the card and are not
+     in it; the updater writes them itself.
 2. An updater compares the new manifest with the one on the card:
    - A `replace` file whose hash differs is overwritten.
-   - A `keep` file is written only if it is missing.
+   - A `keep` file is written if it is missing, and replaced only while
+     the card copy still has the hash an earlier release shipped -- it
+     was never edited.
    - A file in the new manifest that was not in the old one is added.
    - A file in the old manifest that is gone from the new one, and that
      still has the old hash, is removed. If its hash differs, someone

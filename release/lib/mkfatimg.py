@@ -198,6 +198,9 @@ SUPPLEMENTAL = [
     (zcard("Z_DIR_APPS", "keyboard"), "sw/apps/keyboard/keyboard.bin"),
     (zcard("Z_DIR_APPS", "automate"), "sw/apps/automate/automate.bin"),
     (zcard("Z_DIR_APPS", "cryptobench"), "sw/apps/cryptobench/cryptobench.bin"),
+    # Brings the card up to date with a newer release (docs/update.md).
+    # On the card, so it updates itself along with everything else.
+    (zcard("Z_DIR_APPS", "update"), "sw/apps/update/update.bin"),
 ]
 
 # The BBS and its zfed node (docs/bbs.md, docs/fed.md). Their data is in
@@ -381,7 +384,12 @@ FPGA_FILES = [
     (zcard("Z_DIR_ZFPGA_DB", "boards/noir.lpf"), "sw/apps/zfpga/db/boards/noir.lpf"),
     (zcard("Z_DIR_ZFPGA_DB", "boards/klinge.brd"), "sw/apps/zfpga/db/boards/klinge.brd"),
     (zcard("Z_DIR_ZFPGA_DB", "boards/klinge.lpf"), "sw/apps/zfpga/db/boards/klinge.lpf"),
-    # something to build: docs/zfpga-test.md walks through these
+]
+
+# Something to build with zfpga: docs/zfpga-test.md walks through
+# these. Their own list because they are examples -- a person may edit
+# them where they are, so an update keeps an edited one (KEEP, below).
+FPGA_EXAMPLES = [
     (zcard("Z_DIR_ZFPGA_DB", "examples/blink.v"), "sw/apps/zfpga/db/examples/blink.v"),
     (zcard("Z_DIR_ZFPGA_DB", "examples/blinkf.v"), "sw/apps/zfpga/db/examples/blinkf.v"),
     (zcard("Z_DIR_ZFPGA_DB", "examples/empty.zn"), "sw/apps/zfpga/db/examples/empty.zn"),
@@ -422,6 +430,12 @@ EXAMPLES = [
 # there as the documented place to start editing, not to set anything.
 CONFIG_FILES = [
     (zcard("Z_PATH_SYS_CONFIG"), "sw/data/zeitlos.cfg"),
+    # net's settings (docs/networking.md, docs/esp32link.md), the same
+    # kind of template: every line commented out. A file with nothing
+    # set behaves exactly as no file -- netcfg_load() only notes that
+    # one was there -- so shipping it changes no board's network; it is
+    # the documented place to start, as zeitlos.cfg is.
+    (zcard("Z_PATH_NET_CONFIG"), "sw/data/net.cfg"),
 ]
 
 # The BBS's and fed's data (NETWORK above), where each looks for it
@@ -721,18 +735,58 @@ def plan_size(sizes):
     return size, sectors_per_cluster(size)
 
 
-def build(root, out_path, ark_dir=None, verbose=True, packs=None):
-    """Build the SD card image. Returns a list of (name, size) shipped.
+# -- what an update does with each file (docs/update.md) --
+#
+# Every file a card ships has a policy, carried into the manifest
+# (/sys/manifest on the card, <name>/manifest in an update release):
+#
+#   REPLACE  the card copy is made to match the release. Programs, the
+#            zcc runtime and headers, docs, fonts, chip databases, media.
+#   KEEP     files a person edits where they are: configuration and
+#            examples. Written when missing. Replaced only while the
+#            card copy is still exactly what an earlier release shipped
+#            (its hash is the one in /sys/manifest); an edited copy is
+#            never touched.
+#
+# The policy is declared per LIST, below, so a new list has to choose.
+REPLACE = "r"
+KEEP = "k"
 
-    `packs` names the ask packs to ship; None means
-    ask_packs_requested() (the environment, or ASK_PACKS_DEFAULT). A
-    pack ships as a directory and is listed as one entry,
-    "opt/ark/<pack>/", rather than as its tens of thousands of files --
-    MANIFEST.json would otherwise carry every Wikipedia article's
-    number.
+# The ask packs are not in the manifest (docs/update.md, "Not yet"):
+# an update leaves /opt/ark/<pack> and /data/ask/<pack> alone. The ARK
+# scroll is: a few small .md files every card has.
+
+
+class Plan(object):
+    """Everything a card holds, checked, before anything is written.
+
+    files  [(dest, src_abs, policy)] in the order the image copies them;
+           dest has no leading slash ("apps/files"). Packs are copied
+           after the first `early` of them, which keeps the image's
+           directory order what it always was.
+    packs  [(packname, [(card_path, src_abs)])]
+    dirs   folders a card has even when empty (dest form)
     """
-    preflight()
 
+    def __init__(self):
+        self.files = []
+        self.early = 0
+        self.packs = []
+        self.dirs = []
+        self.sizes = []
+
+    def manifest_files(self):
+        """The files an update knows about: all but the packs."""
+        return list(self.files)
+
+
+def plan(root, ark_dir=None, packs=None, verbose=True):
+    """Gather and check everything a card holds. Writes nothing.
+
+    The one card list, shared by build() (the image) and by the update
+    release (release/lib/store.py). Raises FatError for anything
+    missing, listed twice, or unopenable by FatFs.
+    """
     ark_dir = ark_dir or os.path.join(root, "sw/data/ark")
 
     apps = SUPPLEMENTAL + NETWORK + CASINO + GAMES_DEMOS + MISC + SHELLS + SELFHOST
@@ -757,20 +811,20 @@ def build(root, out_path, ark_dir=None, verbose=True, packs=None):
                        "flash; CORE_APPS in the Makefile): %s"
                        % ", ".join(on_card))
 
+    data_lists = (LIBZ_FILES + LIBZ_EXTRA + CONFIG_FILES + NETWORK_FILES
+                  + FONT_FILES + DESK_FILES + EXAMPLES + FPGA_FILES
+                  + FPGA_EXAMPLES + DEMO_FILES + CHIP8_FILES)
+
     # Check every input up front. Finding out that gamedemo.bin was
     # never built after formatting a 64MB image and copying twelve
     # other files is a slower way to learn the same thing.
-    missing = [p for _, p in apps
-               if not os.path.exists(os.path.join(root, p))]
-
+    #
     # libz.bin and libz.sym come from a separate make (sw/apps/zcc
     # builds them as a dependency), and a card whose zcc cannot find
     # them compiles only freestanding programs -- so their absence is
     # an error here rather than a quiet omission.
-    missing += [p for _, p in LIBZ_FILES + LIBZ_EXTRA + CONFIG_FILES + NETWORK_FILES + FONT_FILES
-                + DESK_FILES + EXAMPLES + FPGA_FILES + DEMO_FILES + CHIP8_FILES
-                if not os.path.exists(os.path.join(root, p))]
-
+    missing = [p for _, p in apps + data_lists
+               if not os.path.exists(os.path.join(root, p))]
     if missing:
         raise FatError("not built yet:\n  %s\n"
                        "  Run the app builds first (sw/apps, and "
@@ -787,8 +841,6 @@ def build(root, out_path, ark_dir=None, verbose=True, packs=None):
     if not audio:
         print("    note: no %s files in %s, card will have none"
               % (AUDIO_EXT, AUDIO_DIR))
-
-    demo = list(DEMO_FILES)
 
     speech = os.environ.get("SPEECH_PACK") or os.path.join(root, SPEECH_PACK)
     if not os.path.exists(speech):
@@ -816,15 +868,58 @@ def build(root, out_path, ark_dir=None, verbose=True, packs=None):
     if not ark:
         raise FatError("%s: no .md files found" % ark_dir)
 
-    # -- ask packs: resolve and size them BEFORE formatting --
-    #
-    # Both failure modes here are ones this file already warns about
-    # for apps: a missing input found after the image is half written,
-    # and running out of room "halfway through a 64MB image, with
-    # mcopy's own silence for an error message".
-    pack_files = []
+    pl = Plan()
+
+    def add(dest, src_abs, policy):
+        pl.files.append((dest, src_abs, policy))
+
+    def add_list(lst, policy):
+        for dest, rel in lst:
+            add(dest, os.path.join(root, rel), policy)
+
+    # -- the order the image has always been written in --
+    add_list(apps, REPLACE)
+    for a in audio:
+        add(zcard("Z_DIR_MEDIA_AUDIO", a), os.path.join(audio_src, a), REPLACE)
+    add_list(DEMO_FILES, REPLACE)
+    if speech:
+        add(SPEECH_DEST.lstrip("/"), speech, REPLACE)
+    for d in docs:
+        add(zcard("Z_DIR_DOCS", d), os.path.join(root, "docs", d), REPLACE)
+    for a in ark:
+        add(zcard("Z_DIR_ARK", a), os.path.join(ark_dir, a), REPLACE)
+    pl.early = len(pl.files)        # the ask packs go here in the image
+    add_list(LIBZ_FILES + LIBZ_EXTRA, REPLACE)
+    add_list(EXAMPLES, KEEP)
+    add_list(FPGA_FILES, REPLACE)
+    add_list(FPGA_EXAMPLES, KEEP)
+    add_list(CONFIG_FILES + NETWORK_FILES, KEEP)
+    add_list(FONT_FILES, REPLACE)
+    add_list(DESK_FILES, KEEP)      # "can be edited in place" (remote_desktop.md)
+    add_list(CHIP8_FILES, REPLACE)
+    # Headers by directory rather than by name: the set is "whatever
+    # sw/common exports", and a list here would go stale silently --
+    # the symptom being a missing include on the device, long after.
+    for dest, srcdir, exts in LIBZ_HEADER_DIRS:
+        d = os.path.join(root, srcdir)
+        for h in sorted(os.listdir(d)):
+            if h.endswith(exts):
+                add("%s/%s" % (dest, h), os.path.join(d, h), REPLACE)
+
+    pl.dirs = list(EMPTY_DIRS)
+
+    # Every destination once, across every list: an update could not
+    # say which of two sources a path is.
+    seen = set()
+    dupes = sorted(d for d, _s, _p in pl.files
+                   if d.lower() in seen or seen.add(d.lower()))
+    if dupes:
+        raise FatError("card path listed more than once: %s"
+                       % ", ".join(dupes))
+
+    # -- ask packs: resolve them BEFORE anything is formatted --
     for packname in (ask_packs_requested() if packs is None else packs):
-        pack_files.append((packname, ask_pack_files(root, packname)))
+        pl.packs.append((packname, ask_pack_files(root, packname)))
 
     # Every name, checked BEFORE formatting. mcopy would store a
     # component create_name() rejects, and the board would not open
@@ -833,47 +928,36 @@ def build(root, out_path, ark_dir=None, verbose=True, packs=None):
     # their set is "whatever sw/common exports", which is also where
     # zsubjects.h (nine characters, one dot) stopped the old 8.3 check
     # after the image had already been formatted.
-    card_paths = []
-    for name, _rel in apps + LIBZ_FILES + LIBZ_EXTRA + EXAMPLES \
-            + FPGA_FILES + CONFIG_FILES + NETWORK_FILES + FONT_FILES + DESK_FILES \
-            + CHIP8_FILES:
-        card_paths.append("/" + name)
-    for a in audio:
-        card_paths.append("/" + zcard("Z_DIR_MEDIA_AUDIO", a))
-    for card, _rel in demo:
-        card_paths.append("/" + card)
-    if speech:
-        card_paths.append(SPEECH_DEST)
-    for d in docs:
-        card_paths.append("/" + zcard("Z_DIR_DOCS", d))
-    for a in ark:
-        card_paths.append("/" + zcard("Z_DIR_ARK", a))
-    for _packname, files in pack_files:
+    for dest, _s, _p in pl.files:
+        check_card_path("/" + dest)
+    for _packname, files in pl.packs:
         for card, _src in files:
-            card_paths.append(card)
-    for dest, srcdir, exts in LIBZ_HEADER_DIRS:
-        for h in sorted(os.listdir(os.path.join(root, srcdir))):
-            if h.endswith(exts):
-                card_paths.append("/%s/%s" % (dest, h))
-    for dest in card_paths:
-        check_card_path(dest)
+            check_card_path(card)
 
-    # Everything that goes on the card, for sizing.
-    sizes = [os.path.getsize(src) for _n, fs in pack_files for _c, src in fs]
-    nfiles_pack = len(sizes)
-    for _n, rel in apps + LIBZ_FILES + LIBZ_EXTRA + EXAMPLES + FPGA_FILES \
-            + CONFIG_FILES + NETWORK_FILES + FONT_FILES + DESK_FILES + CHIP8_FILES:
-        sizes.append(os.path.getsize(os.path.join(root, rel)))
-    for a in audio:
-        sizes.append(os.path.getsize(os.path.join(audio_src, a)))
-    for _c, rel in demo:
-        sizes.append(os.path.getsize(os.path.join(root, rel)))
-    if speech:
-        sizes.append(os.path.getsize(speech))
-    for d in docs:
-        sizes.append(os.path.getsize(os.path.join(root, "docs", d)))
-    for a in ark:
-        sizes.append(os.path.getsize(os.path.join(ark_dir, a)))
+    pl.sizes = [os.path.getsize(src) for _n, fs in pl.packs for _c, src in fs]
+    pl.sizes += [os.path.getsize(src) for _d, src, _p in pl.files]
+    return pl
+
+
+def build(root, out_path, ark_dir=None, verbose=True, packs=None,
+          name=None):
+    """Build the SD card image. Returns a list of (name, size) shipped.
+
+    `packs` names the ask packs to ship; None means
+    ask_packs_requested() (the environment, or ASK_PACKS_DEFAULT). A
+    pack ships as a directory and is listed as one entry,
+    "opt/ark/<pack>/", rather than as its tens of thousands of files --
+    MANIFEST.json would otherwise carry every Wikipedia article's
+    number.
+
+    `name` is the release name /sys/manifest records ("v" + the tree's
+    version when not given), so an update knows what the card is.
+    """
+    preflight()
+    pl = plan(root, ark_dir=ark_dir, packs=packs, verbose=verbose)
+
+    sizes = pl.sizes
+    nfiles_pack = sum(len(fs) for _n, fs in pl.packs)
     size_bytes, spc = plan_size(sizes)
     if verbose:
         print("    %d files (%d in ask packs), %.1f MB of content -> "
@@ -917,25 +1001,15 @@ def build(root, out_path, ark_dir=None, verbose=True, packs=None):
             _run(["mmd", "-i", out_path, "::/%s" % sub])
             made_dirs.add(sub)
 
-    for name, rel in apps:
-        copy(os.path.join(root, rel), "/" + name)
-    for a in audio:
-        copy(os.path.join(audio_src, a), "/" + zcard("Z_DIR_MEDIA_AUDIO", a))
-    for card, rel in demo:
-        copy(os.path.join(root, rel), "/" + card)
-    if speech:
-        copy(speech, SPEECH_DEST)
-    for d in docs:
-        copy(os.path.join(root, "docs", d), "/" + zcard("Z_DIR_DOCS", d))
-    for a in ark:
-        copy(os.path.join(ark_dir, a), "/" + zcard("Z_DIR_ARK", a))
+    for dest, src, _p in pl.files[:pl.early]:
+        copy(src, "/" + dest)
 
-    # -- ask packs (resolved in preflight above) --
+    # -- ask packs (resolved in plan()) --
     # Packs go in as whole directory trees, one `mcopy -s` per tree.
     # Copying file by file is a subprocess per file, each re-reading the
     # FAT: fine for arklite's thousand files, hours for arkmed's tens of
     # thousands. Every name was checked against FatFs before mkfs.
-    for packname, files in pack_files:
+    for packname, files in pl.packs:
         base = os.path.join(root, ASK_OUT, packname)
         total = sum(os.path.getsize(src) for _c, src in files)
         for half in PACK_HALVES:
@@ -948,40 +1022,30 @@ def build(root, out_path, ark_dir=None, verbose=True, packs=None):
             print("  ask pack %-10s %6d files  %7.1f MB"
                   % (packname, len(files), total / 1e6))
 
-    for name, rel in LIBZ_FILES + LIBZ_EXTRA + EXAMPLES:
-        copy(os.path.join(root, rel), "/" + name)
+    for dest, src, _p in pl.files[pl.early:]:
+        copy(src, "/" + dest)
 
-    # -- the zfpga databases --
-    for name, rel in FPGA_FILES:
-        copy(os.path.join(root, rel), "/" + name)
+    # /sys/manifest: what this card holds and what an update may do
+    # with each file (docs/update.md); /sys/version beside it, which
+    # release wrote the card (docs/layout.md). Neither is in the
+    # manifest -- the updater writes them itself, last. The tree's
+    # Z_OS_VERSION, which `zrelease build` has already checked against
+    # the version it was asked for.
+    import manifest as manifest_mod
+    version = tree_version(root)
+    m = manifest_mod.make(pl, name or ("v" + version), version,
+                          manifest_mod.describe(root),
+                          packs=[n for n, _f in pl.packs])
+    for text, dest in ((m.text, P["Z_PATH_SYS_MANIFEST"]),
+                       (manifest_mod.version_text(m), P["Z_PATH_SYS_VERSION"])):
+        tmpf = out_path + ".sysfile"
+        with open(tmpf, "w") as f:
+            f.write(text)
+        copy(tmpf, dest)
+        os.unlink(tmpf)
 
-    # -- the configuration template, and the data apps look for --
-    for name, rel in CONFIG_FILES + NETWORK_FILES + FONT_FILES + DESK_FILES \
-            + CHIP8_FILES:
-        copy(os.path.join(root, rel), "/" + name)
-
-    # /sys/version: which release wrote this card (docs/layout.md). The
-    # tree's Z_OS_VERSION, which `zrelease build` has already checked
-    # against the version it was asked for.
-    vfile = out_path + ".version"
-    with open(vfile, "w") as f:
-        f.write("zeitlos %s\n" % tree_version(root))
-    copy(vfile, P["Z_PATH_SYS_VERSION"])
-    os.unlink(vfile)
-
-    for d in EMPTY_DIRS:
+    for d in pl.dirs:
         mkdir_p("/" + d)
-
-    # Headers by directory rather than by name: the set is "whatever
-    # sw/common exports", and a list here would go stale silently --
-    # the symptom being a missing include on the device, long after.
-    # Their names were checked with everything else, before mkfs.
-    for dest, srcdir, exts in LIBZ_HEADER_DIRS:
-        d = os.path.join(root, srcdir)
-        for h in sorted(os.listdir(d)):
-            if not h.endswith(exts):
-                continue
-            copy(os.path.join(d, h), "/%s/%s" % (dest, h))
 
     # fsck.fat is not a formality here. mcopy writing into an image it
     # has no exclusive claim on is the kind of thing that produces a

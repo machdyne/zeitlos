@@ -57,7 +57,8 @@ def fake_root():
     lists = (mkfatimg.SUPPLEMENTAL + mkfatimg.NETWORK + mkfatimg.CASINO + mkfatimg.GAMES_DEMOS
              + mkfatimg.MISC + mkfatimg.SHELLS + mkfatimg.SELFHOST
              + mkfatimg.LIBZ_FILES + mkfatimg.LIBZ_EXTRA + mkfatimg.EXAMPLES
-             + mkfatimg.FPGA_FILES + mkfatimg.CONFIG_FILES + mkfatimg.NETWORK_FILES
+             + mkfatimg.FPGA_FILES + mkfatimg.FPGA_EXAMPLES
+             + mkfatimg.CONFIG_FILES + mkfatimg.NETWORK_FILES
              + mkfatimg.FONT_FILES + mkfatimg.DESK_FILES + mkfatimg.DEMO_FILES
              + mkfatimg.CHIP8_FILES)
     for _dest, rel in lists:
@@ -69,6 +70,10 @@ def fake_root():
         os.makedirs(os.path.join(r, srcdir), exist_ok=True)
     os.makedirs(os.path.join(r, "sw", "data"), exist_ok=True)
     os.symlink(os.path.join(ROOT, "docs"), os.path.join(r, "docs"))
+    # The core-app check asks the Makefile (`make core-apps`), so the
+    # scratch tree needs the real one. Without it every variant failed
+    # with "No rule to make target 'core-apps'" before formatting.
+    os.symlink(os.path.join(ROOT, "Makefile"), os.path.join(r, "Makefile"))
     os.symlink(os.path.join(ROOT, "sw", "data", "ark"),
                os.path.join(r, "sw", "data", "ark"))
     os.makedirs(os.path.join(r, "tools", "ask"), exist_ok=True)

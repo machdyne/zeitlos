@@ -6,6 +6,7 @@
 #   zrelease check                 specs vs rtl/boards.vh, flash layout
 #   zrelease layout                the flash map, as this tool reads it
 #   zrelease sdcard                build only the SD card image
+#   zrelease tftp                  publish the card for `update` over TFTP
 #   zrelease build <version>       build everything into dist/<version>/
 #   zrelease verify <version>      re-check what is in dist/<version>/
 #   zrelease ship  <version>       create or update the GitHub release
@@ -39,6 +40,7 @@ import gzip
 import json
 import os
 import shutil
+import socket
 import subprocess
 import sys
 
@@ -49,12 +51,14 @@ sys.path.insert(0, os.path.join(HERE, "lib"))
 import build as build_mod      # noqa: E402
 import gen                     # noqa: E402
 import layout as layout_mod    # noqa: E402
+import manifest as manifest_mod  # noqa: E402
 import mkfatimg                # noqa: E402
 import mkflashimg              # noqa: E402
 import nicfw                   # noqa: E402
 import notes as notes_mod      # noqa: E402
 import ship as ship_mod        # noqa: E402
 import spec                    # noqa: E402
+import store as store_mod      # noqa: E402
 import zpaths as zpaths_mod    # noqa: E402
 
 
@@ -770,6 +774,84 @@ def cmd_sdcard(args):
     return 0
 
 
+def _host_address():
+    """This machine's address on its default route, for the hint
+    printed after publishing. Best effort; nothing is sent."""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("192.0.2.1", 9))
+        a = s.getsockname()[0]
+        s.close()
+        return a
+    except OSError:
+        return "<this-machine>"
+
+
+def cmd_tftp(args):
+    """The card's contents as an update release (docs/update.md).
+
+    Builds nothing: it gathers the same files `sdcard` would, from the
+    tree as it is, so the apps must be built first. Safe to run under
+    sudo for that reason (a TFTP root is often root-owned), though
+    owning the directory is simpler:
+        sudo install -d -o $USER /srv/tftp/release
+    """
+    dest = os.path.abspath(args.dest)
+    version = mkfatimg.tree_version(ROOT)
+    name = args.name or ("v" + version)
+    try:
+        store_mod.check_name(name)
+    except store_mod.StoreError as e:
+        die(str(e))
+
+    print("\ngathering the card's files ...")
+    try:
+        # No ask packs: an update leaves /opt/ark/<pack> and
+        # /data/ask/<pack> alone for now (docs/update.md, "Not yet").
+        pl = mkfatimg.plan(ROOT, ark_dir=args.ark, packs=())
+    except mkfatimg.FatError as e:
+        die("card: %s" % e)
+    m = manifest_mod.make(pl, name, version, manifest_mod.describe(ROOT))
+    total = sum(f[2] for f in m.files)
+    print("  %s: %d files, %.1f MB, snapshot %s (%s)"
+          % (name, len(m.files), total / 1e6, m.id, m.header["source"]))
+
+    if args.dry_run:
+        print("\n--dry-run: nothing written to %s" % dest)
+        return 0
+
+    print("\npublishing to %s ..." % dest)
+    try:
+        st = store_mod.publish(dest, m, store_mod.sources_for(pl, m),
+                               latest=not args.no_latest)
+    except (store_mod.StoreError, OSError) as e:
+        die("publish: %s" % e)
+
+    if st.unchanged:
+        print("  unchanged: %s already is snapshot %s" % (name, m.id))
+    else:
+        print("  %d new objects (%.1f MB), %d already there, %d pruned"
+              % (st.objects_new, st.bytes_new / 1e6, st.objects_kept,
+                 st.pruned))
+        if st.previous_id:
+            print("  %s: snapshot %s -> %s" % (name, st.previous_id, m.id))
+    if not args.no_latest:
+        print("  LATEST -> %s" % name)
+
+    print("\non the board:")
+    if os.path.basename(dest) == "release":
+        host = _host_address()
+        print("  run update %s -t tftp %s" % (name, host))
+        if any(f[0] == store_mod.BOOT_PATH for f in m.files):
+            print("\na card without update gets it first with:")
+            print("  tget %s release/%s/update /apps/update" % (host, name))
+        print("\n(the TFTP server's root must be %s)" % os.path.dirname(dest))
+    else:
+        print("  the board asks for release/%s/manifest: serve %s as "
+              "<tftp root>/release" % (name, dest))
+    return 0
+
+
 def cmd_verify(args):
     version = build_mod.normalise_version(args.version)
     out = distdir(version)
@@ -923,6 +1005,23 @@ def main(argv):
                     help="one of a release's card variants (default: "
                          "zdocs + arklite, or $ZEITLOS_ASK_PACKS)")
     sd.set_defaults(func=cmd_sdcard)
+
+    # The card as an update release (docs/update.md): objects named by
+    # hash and a manifest, for `update -t tftp` on the board.
+    tf = sub.add_parser("tftp", help="publish the card's files for "
+                        "`update` over TFTP")
+    tf.add_argument("--dest", default="/srv/tftp/release",
+                    help="the store, served as release/ by the TFTP "
+                         "server (default /srv/tftp/release)")
+    tf.add_argument("--name",
+                    help="release name (default v<version>, from "
+                         "sw/common/zversion.h)")
+    tf.add_argument("--no-latest", action="store_true",
+                    help="do not point LATEST at this release")
+    tf.add_argument("--ark", help="ARK checkout (default sw/data/ark)")
+    tf.add_argument("--dry-run", action="store_true",
+                    help="gather and hash, write nothing")
+    tf.set_defaults(func=cmd_tftp)
 
     v = sub.add_parser("verify", help="re-check a built release")
     v.add_argument("version")

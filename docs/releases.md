@@ -97,12 +97,16 @@ release/
   lib/spec.py           spec parsing, composition, derived SW config
   lib/gen.py            generated files and their cleanup
   lib/mkflashimg.py     image assembly and region validation
-  lib/mkfatimg.py       sdcard images, via mtools
+  lib/mkfatimg.py       the card's file list (plan()) and sdcard images, via mtools
+  lib/manifest.py       /sys/manifest and update manifests (docs/update.md)
+  lib/store.py          update releases: objects + manifest (`zrelease tftp`)
   lib/build.py          drives the top-level Makefile
   lib/ship.py           gh release create/upload
   lib/notes.py          NOTES.md, README.txt, MANIFEST.json
   lib/selftest.py       end-to-end test with the toolchain stubbed
   lib/test_incremental.py  the build-later-publish-again workflow
+  lib/test_mkfatimg.py  sdcard images, for real (mtools)
+  lib/test_store.py     manifests and update releases
   dist/<version>/       artifacts (gitignored)
 
 output/releases/<board>/    bitstreams and logs from a release build,
@@ -797,6 +801,23 @@ kernel and every app.
 The ARK scroll comes from `sw/data/ark` by default; `--ark` points
 elsewhere. Its commit goes into `MANIFEST.json`.
 
+**The list and the writer are separate.** `plan()` in `mkfatimg.py`
+gathers and checks every file -- inputs present, no destination twice,
+every name one FatFs can open -- and writes nothing; `build()` writes an
+image from it, and `zrelease tftp` writes an update release from the
+same plan ([update.md](update.md)). Each list declares what an update
+may do with its files (`REPLACE` or `KEEP`).
+
+**Every card carries `/sys/manifest`**: each file's SHA-256, CRC-32,
+size and policy, and the snapshot id of the whole ([update.md](update.md#the-manifest)).
+`/sys/version` gains a second line naming that snapshot. Neither is
+listed in the manifest itself.
+
+**Two configuration templates**, every line commented out:
+`/sys/zeitlos.cfg` (`sw/data/zeitlos.cfg`) and `/data/net/net.cfg`
+(`sw/data/net.cfg`). A net.cfg with nothing set behaves exactly as no
+file, so shipping one changes no board's network.
+
 ---
 
 ## The tool leaves no trace
@@ -993,6 +1014,21 @@ identical content — which would churn the checksum and force a needless
 re-upload on every incremental build. An existing one is kept;
 `--rebuild-sdcard` forces it.
 
+## Update releases: `zrelease tftp`
+
+```
+$ release/zrelease tftp                   # /srv/tftp/release, as v<version>
+```
+
+The card's files, as an update release a board fetches with
+`update -t tftp`: one object per file, named by its hash, and a
+manifest per release name. No gateware, no version check, no
+`dist/`; like `sdcard`, it takes the tree as it is and builds nothing.
+Everything about it -- the store, snapshots, policies, the TFTP server --
+is in [update.md](update.md).
+
+---
+
 ## Publishing and updating
 
 ```
@@ -1049,13 +1085,25 @@ covers the multi-sitting workflow above: that a second build adds to
 every target rather than the last command's, and that rebuilding one
 target in place leaves the others alone.
 
-Both clean up after themselves. `git status` is unchanged afterwards.
+```
+$ python3 release/lib/test_store.py
+$ python3 release/lib/test_mkfatimg.py
+```
+
+check the manifest and update releases (no tools needed), and the card
+images themselves (needs dosfstools, mtools and the zdocs pack:
+`./tools/ask/ask build tools/ask/dist/zdocs.spec`). The board's side of
+updates, `sw/apps/update`, is tested against stores these write:
+`make -C sw/apps/update/tests` ([update.md](update.md#testing)).
+
+All of them clean up after themselves. `git status` is unchanged
+afterwards.
 
 ---
 
 ## Changes outside `release/`
 
-Eight, all small and all commented in place:
+Ten, all small and all commented in place:
 
 | File | Change |
 | --- | --- |
@@ -1067,6 +1115,8 @@ Eight, all small and all commented in place:
 | `sw/common/zversion.h` | new; `Z_OS_VERSION` moved out of `zeitlos.h`, which now includes it |
 | `tools/mkfatimg.sh` | header pointing at the no-root path |
 | `esp32/nic_build.py` | new -- builds zeitlos-nic per board; `release/lib/nicfw.py` imports it for the Kabellos firmware asset |
+| `sw/common/zpaths.h` | `Z_PATH_SYS_MANIFEST` (`/sys/manifest`, [update.md](update.md)) |
+| `sw/data/net.cfg` | new -- the commented `net.cfg` template, shipped to `/data/net/net.cfg` |
 
 `zversion.h` is still hand-maintained and still carries no build date or
 git hash, for the reason its own header gives: both would change the

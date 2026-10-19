@@ -1,0 +1,6 @@
+# build products; see Makefile and tests/Makefile
+update.elf
+tests/test_update
+tests/fixture/
+tests/test_net
+tests/upd_host.o

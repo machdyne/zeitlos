@@ -476,6 +476,33 @@ static void handle_connect(const z_msg_t *msg) {
         return;
     }
 
+    /* A sink belongs to the session whose running command IS the
+     * program asking -- matched by pid, not "whichever session ran
+     * something last". px_current_conn is never cleared, so binding to
+     * it sent the output of a program started from the kernel console
+     * (`run update ...`) into whatever term window had last typed a
+     * command, or dropped it.
+     *
+     * Not one of ours: REFUSED, so the program falls back to the
+     * console, which is where the person who started it is looking.
+     * Every program that asks (zcc, zfpga, i2c, convert, sechs, zlink,
+     * fed, update) treats a failed connect that way. */
+    px_conn_t *sink_owner = NULL;
+    if (sink) {
+        for (int i = 0; i < PX_MAX_CONNS; i++)
+            if (conns[i].port.connected && !conns[i].is_sink &&
+                conns[i].sh.child_pid == msg->from) {
+                sink_owner = &conns[i];
+                break;
+            }
+        if (!sink_owner) {
+            printf("posix: stdout sink from pid %lu refused: not a "
+                   "command of any session\n", (unsigned long)msg->from);
+            z_port_refuse(msg, "not started by this shell");
+            return;
+        }
+    }
+
     z_port_accept(&conns[slot].port, msg, (uint32_t)(slot + 1));
 
     conns[slot].is_sink = sink;
@@ -485,17 +512,14 @@ static void handle_connect(const z_msg_t *msg) {
     conns[slot].intr = false;
 
     if (sink) {
-        /* Bound to whichever session is running a command right now.
-         * If none is -- a program started from somewhere else that
-         * happens to know our name -- its output goes nowhere rather
-         * than to an arbitrary terminal. */
-        conns[slot].owner = px_current_conn;
+        /* Bound to the session running it (found above). */
+        conns[slot].owner = sink_owner;
         /* To the console, not to the terminal: this is about whether
          * the terminal routing works, so sending it through the thing
          * being diagnosed would tell us nothing. */
-        printf("posix: stdout sink from pid %lu as conn %d, owner %s\n",
+        printf("posix: stdout sink from pid %lu as conn %d, for session %d\n",
                (unsigned long)msg->from, slot + 1,
-               px_current_conn ? "set" : "NONE -- output will be dropped");
+               (int)(sink_owner - conns) + 1);
         return;                 /* no banner, no prompt: not a session */
     }
 

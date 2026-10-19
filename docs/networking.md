@@ -43,6 +43,14 @@ can arrive and leave while `net` runs, it has a MAC address of its own
 that `net` adopts, and it has no receive interrupt, so it polls
 adaptively instead. See [usb_ethernet.md](usb_ethernet.md).
 
+**`/data/net/net.cfg`** holds `net`'s settings, one `key=value` a line:
+`phy`, `dhcp`, `ip`, `mask`, `gw`, `dns`, `ssid`/`psk` (up to four
+networks) and `nfs`. Without the file, `net` uses DHCP. Every card ships
+a template with each key explained and every line commented out
+(`sw/data/net.cfg`); a file with nothing set behaves exactly as no file.
+An update never replaces it once it has been edited
+([update.md](update.md#policies)).
+
 **The third column is not trivia.** It bounds TCP throughput directly,
 and a number derived from one of these is wrong on the other two —
 which is why `net_phy_t` carries `rx_capacity` as a runtime field

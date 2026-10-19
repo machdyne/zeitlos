@@ -56,12 +56,18 @@ Beyond the apps, `/docs`, `/media` and the ARK scroll:
   itself. It is `esp32/zeitlos-nic/web/index.html`, the page the ESP32
   builds in; the copy on the card can be edited in place
   (`docs/remote_desktop.md`, "Served by Zeitlos").
+- **`/apps/update`** -- brings the card up to date with a newer
+  release over the network (`docs/update.md`); on the card so that it
+  updates itself with the rest.
 - **`/apps/cryptobench`** -- times the cryptography with and without the
   hardware blocks, and checks their answers (`docs/crypto_hw_options.md`).
 - **`/data/zcc/libz`** -- the zcc runtime: `libz.bin`, `libz.sym`, and
   the headers a program compiled on the device includes.
-- **`/sys/zeitlos.cfg`** and **`/sys/version`** -- the configuration
-  template (every line commented out) and which release wrote the card.
+- **`/sys/zeitlos.cfg`** and **`/data/net/net.cfg`** -- the
+  configuration templates, every line commented out.
+- **`/sys/version`** and **`/sys/manifest`** -- which release and
+  snapshot wrote the card, and every file it holds with its hash and
+  what an update may do with it (`docs/update.md`).
 - **`/home`**, empty: the person's.
 
 `libz.bin` is not the copy linked inside `zcc.bin`. That one is the

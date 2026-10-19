@@ -42,6 +42,9 @@
 #define Z_DIR_SYS                 "/sys"
 #define Z_PATH_SYS_CONFIG         "/sys/zeitlos.cfg"
 #define Z_PATH_SYS_VERSION        "/sys/version"
+/* What the card holds, file by file, and what an update may do with
+ * each (docs/update.md). Written by the release tool and by `update`. */
+#define Z_PATH_SYS_MANIFEST       "/sys/manifest"
 
 /* Programs, one flat file each, and everything else each app has.
  * An app names its own files with z_data_file() (sw/common/zdata.h);

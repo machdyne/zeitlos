@@ -1949,6 +1949,18 @@ no `posix` running, or a second instance registered as `posix1` --
 relay not being built**, so "zcc printed to the serial console" is not
 evidence either way without checking whether a `posix0` was up.
 
+**Which session gets it (October 2026).** A `stdout` connection
+belongs to the session whose running command *is* the program asking:
+posix matches the connecting pid against each session's `child_pid`.
+One that matches no session is **refused**, so the program falls back
+to the console. Before this it was bound to `px_current_conn`, which
+is never cleared -- "the session that last ran anything" -- so a
+program started from the kernel console or repl while posix was up
+(`run update ...`) wrote into whatever term window had typed the last
+command, or nowhere. Every program that asks (zcc, zfpga, i2c, sechs,
+convert, zlink, fed, update) already treats a failed connect as "use
+the console". The `tty` handoff below still uses `px_current_conn`.
+
 **`vi` is the second case.** It wants raw keystrokes and cursor
 addressing, and relaying every byte through `posix` would add latency
 to each one and require `posix` not to interpret them. Handing the
