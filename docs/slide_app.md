@@ -97,6 +97,7 @@ move, Enter or a click picks one: one that needs nothing more runs
 | `transition cut / wipe / push [MS]` | how the show arrives at this card |
 | `advance SECONDS` | go on by itself in a show (0: never) |
 | `grid N` | snap to N units (0: off) |
+| `zoom 100` / `200` / `400` / `fit` | the editor's zoom (Ctrl+= / Ctrl+- / Ctrl+0) |
 | `select all`, `delete`, `duplicate`, `undo`, `redo` | |
 | `image` | place a picture (a file dialog) |
 | `print`, `print pdf`, `print ps`, `print setup ...` | see "Printing" below |
@@ -109,7 +110,8 @@ move, Enter or a click picks one: one that needs nothing more runs
 | F4, / | the command line; again: the / menu |
 | F5 / Shift+F5 | show from this card / from the first |
 | F6 | all cards (the sorter) |
-| PageUp / PageDown, the wheel | previous / next card |
+| PageUp / PageDown, the wheel | previous / next card (zoomed in, the wheel scrolls) |
+| Ctrl+= / Ctrl+- / Ctrl+0 | zoom in / out (100%, 200%, 400%) / fit the window again |
 | Ctrl+M | a new card |
 | Ctrl+Z / Ctrl+Y | undo / redo, 64 steps |
 | Ctrl+C / Ctrl+X / Ctrl+V | copy / cut / paste, also between decks; plain text pastes as a text box |
@@ -130,6 +132,14 @@ cross. `image` puts a 4:3 frame on the card at once, which takes the
 picture's shape when it has loaded (unless you moved or resized it
 meanwhile); if the file turns out not to be a picture, the frame goes
 again with a message.
+
+**Zoom.** The editor fits the card in the window (at most 100%).
+**Ctrl+=** zooms in -- 100%, 200%, 400% -- around the selection, or the
+middle of the view; **Ctrl+-** zooms out and **Ctrl+0** fits the card
+again (or `/zoom 200`, `/zoom fit`). Zoomed in, scrollbars appear, the
+wheel scrolls (Shift+wheel across), and typing keeps the caret in view.
+Only the part in view is drawn, so a card at 400% costs no more to
+redraw than one at 100%. The status line shows the zoom.
 
 **The sorter** (F6) shows every card small. Arrows move, a drag
 reorders, Delete removes, F5 shows from there, Enter or Escape goes back
@@ -288,8 +298,4 @@ make -C sw/apps/slide job        # the tour as a print job, /tmp/slide/deck.zpp
 - **The `slide` language** (Phase 4): Scheme over zapi.
 - **Diagrams** (Phase 5): connectors that follow their shapes, editing
   a polygon's points.
-- **Zoom and scroll**: the editor shows the whole card, at 100% or
-  smaller to fit the window; it does not zoom in yet (proposed: Ctrl+=
-  / Ctrl+- / Ctrl+0 for 200% and 400% and back, scrolling with the
-  wheel and the scrollbars while zoomed).
-- No dock icon yet.
+- Zoom past 400%, and scrolling by dragging the card itself.

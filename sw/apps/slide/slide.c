@@ -57,11 +57,21 @@ static z_dialog_ctx_t dlg;
 #define BAR_Y()      (z_win_content_h(&win) - BAR_H)
 static editor_t ed;
 
-static int card_x, card_y;		// the card's top-left, content coordinates
-static int view_w, view_h;		// the card on screen, pixels
+// The card is drawn at scale16 into "card pixels" (the whole card,
+// card_pw x card_ph). The window shows view_w x view_h of them starting
+// at (scroll_x, scroll_y), at content position (card_x, card_y): the
+// whole card when it fits, a part of it when zoomed in. cbuf and dbuf
+// hold just that part -- a zc target whose origin is the scroll.
+static int card_x, card_y;		// the view's top-left, content coordinates
+static int view_w, view_h;		// the view, pixels
+static int card_pw, card_ph;	// the whole card at this scale, pixels
+static int scroll_x, scroll_y;	// the view's top-left, card pixels
 static int32_t scale16;			// pixels per unit, 16.16
-static uint32_t *cbuf, *dbuf;	// the rendered card; it plus overlays
+static int zoom;				// 0: fit the window (at most 100%); else 100, 200, 400
+static uint32_t *cbuf, *dbuf;	// the rendered view; it plus overlays
 static int bwpl, bw, bh;		// their shape
+static z_scrollbar_t sb_h, sb_v;
+static bool sb_h_on, sb_v_on;
 
 static uint8_t mods_now;
 static char path[200];			// the deck's file, "" untitled
@@ -143,24 +153,56 @@ static int to_px(int u) {
 
 // -- buffers and layout ----------------------------------------------------------------
 
+#define ZOOM_MAX 400
+
 static void layout(void) {
 	int cw = z_win_content_w(&win), ch = z_win_content_h(&win);
 	int aw = cw - TOOL_W - 2 * MARGIN, ah = ch - BAR_H - 2 * MARGIN;
 	int32_t sx, sy, s;
 	deck_t *d = ed.d;
+	if (!sb_h.win) {
+		z_scrollbar_init(&sb_h, &win, Z_SB_HORZ);
+		z_scrollbar_init(&sb_v, &win, Z_SB_VERT);
+	}
 	if (aw < 32) aw = 32;
 	if (ah < 32) ah = 32;
 	sx = (int32_t)(((int64_t)aw << 16) / d->page.gw);
 	sy = (int32_t)(((int64_t)ah << 16) / d->page.gh);
 	s = sx < sy ? sx : sy;
-	if (s > ZC_XF_ONE) s = ZC_XF_ONE;		// never larger than 100% in the editor
+	if (s > ZC_XF_ONE) s = ZC_XF_ONE;		// fitted: never larger than 100%
+	if (zoom) s = (int32_t)(((int64_t)zoom << 16) / 100);
 	scale16 = s;
-	view_w = to_px(d->page.gw);
-	view_h = to_px(d->page.gh);
+	card_pw = to_px(d->page.gw);
+	card_ph = to_px(d->page.gh);
+	// scrollbars where the card is larger than the room for it (one
+	// takes room from the other's direction)
+	sb_h_on = sb_v_on = false;
+	if (card_pw > aw) { sb_h_on = true; ah -= Z_SB_THICK; }
+	if (card_ph > ah) {
+		sb_v_on = true;
+		aw -= Z_SB_THICK;
+		if (!sb_h_on && card_pw > aw) { sb_h_on = true; ah -= Z_SB_THICK; }
+	}
+	view_w = card_pw < aw ? card_pw : aw;
+	view_h = card_ph < ah ? card_ph : ah;
+	if (scroll_x > card_pw - view_w) scroll_x = card_pw - view_w;
+	if (scroll_y > card_ph - view_h) scroll_y = card_ph - view_h;
+	if (scroll_x < 0) scroll_x = 0;
+	if (scroll_y < 0) scroll_y = 0;
 	card_x = TOOL_W + MARGIN + (aw - view_w) / 2;
 	card_y = MARGIN + (ah - view_h) / 2;
 	if (card_x < TOOL_W + MARGIN) card_x = TOOL_W + MARGIN;
 	if (card_y < MARGIN) card_y = MARGIN;
+	if (sb_h_on) {
+		z_scrollbar_set_geom(&sb_h, card_x, card_y + view_h + 2, view_w);
+		z_scrollbar_set_range(&sb_h, card_pw, view_w);
+		z_scrollbar_set_value(&sb_h, scroll_x);
+	}
+	if (sb_v_on) {
+		z_scrollbar_set_geom(&sb_v, card_x + view_w + 2, card_y, view_h);
+		z_scrollbar_set_range(&sb_v, card_ph, view_h);
+		z_scrollbar_set_value(&sb_v, scroll_y);
+	}
 	if (!cbuf || bw != view_w || bh != view_h) {
 		int wpl = (view_w + 31) / 32;
 		pool_free(cbuf);
@@ -178,6 +220,7 @@ static void layout(void) {
 
 static void card_target(zc_target_t *t, uint32_t *b) {
 	zc_target_bits(t, b, bwpl, bw, bh);
+	zc_target_origin(t, scroll_x, scroll_y);
 }
 
 static void units_rect_to_px(int x0, int y0, int x1, int y1, int *a, int *b, int *c, int *d) {
@@ -294,6 +337,9 @@ static void present(int x0, int y0, int x1, int y1) {
 	zc_target_t t;
 	z_clip_t content;
 	int y, w0, w1;
+	// card pixels to the view's
+	x0 -= scroll_x; x1 -= scroll_x;
+	y0 -= scroll_y; y1 -= scroll_y;
 	if (x0 < 0) x0 = 0;
 	if (y0 < 0) y0 = 0;
 	if (x1 > bw) x1 = bw;
@@ -305,7 +351,7 @@ static void present(int x0, int y0, int x1, int y1) {
 		memcpy(dbuf + (size_t)y * bwpl + w0, cbuf + (size_t)y * bwpl + w0,
 			(size_t)(w1 - w0 + 1) * 4);
 	card_target(&t, dbuf);
-	zc_clip(&t, w0 * 32, y0, (w1 + 1) * 32, y1);
+	zc_clip(&t, scroll_x + w0 * 32, scroll_y + y0, scroll_x + (w1 + 1) * 32, scroll_y + y1);
 	if (mode != MODE_SORTER) {
 		int a, b, c, d;
 		overlays(&t, &a, &b, &c, &d);
@@ -327,7 +373,7 @@ static void update_card(void) {
 	int px0 = 0, py0 = 0, px1 = -1, py1 = -1;
 	if (!cbuf) return;
 	if (ed.all_dirty) {
-		px0 = 0; py0 = 0; px1 = bw; py1 = bh;
+		px0 = scroll_x; py0 = scroll_y; px1 = scroll_x + bw; py1 = scroll_y + bh;
 		card_target(&t, cbuf);
 		render_card(&t, &xf, ed.d, edit_card(&ed), ed.tool == TOOL_BROWSE ? RENDER_SHOW : RENDER_EDIT);
 	} else if (ed.dx1 >= ed.dx0) {
@@ -555,6 +601,7 @@ static void draw_status(void) {
 		else if (ed.nsel == 1) { s_add(&s, "  | "); s_add(&s, ed.sel[0]->name); }
 		else if (ed.nsel > 1) { s_add(&s, "  | "); s_int(&s, ed.nsel); s_add(&s, " selected"); }
 		if (ed.snap > 1) { s_add(&s, "  grid "); s_int(&s, ed.snap); }
+		if (zoom) { s_add(&s, "  "); s_int(&s, zoom); s_add(&s, "%"); }
 		s_add(&s, "   / for commands, F1 help, F5 show");
 	}
 	z_win_draw_utf8(&win, 4, y + 1, t, 1, FONT);
@@ -654,6 +701,104 @@ static void paint_desk(void) {
 	z_win_fill_rect(&win, card_x - 1, card_y + view_h, view_w + 2, 1, 1);
 	z_win_fill_rect(&win, card_x - 1, card_y, 1, view_h, 1);
 	z_win_fill_rect(&win, card_x + view_w, card_y, 1, view_h, 1);
+	if (sb_h_on) z_scrollbar_draw(&sb_h, true);
+	if (sb_v_on) z_scrollbar_draw(&sb_v, true);
+}
+
+// -- zoom and scroll ---------------------------------------------------------------------
+//
+// Ctrl+= in, Ctrl+- out, Ctrl+0 back to fitting the window. Zoomed, the
+// wheel scrolls (Shift: across) and the scrollbars move the view.
+
+static void repaint(void);
+
+// Moves the view (card pixels); true if it moved.
+static bool scroll_to(int x, int y) {
+	if (x > card_pw - view_w) x = card_pw - view_w;
+	if (y > card_ph - view_h) y = card_ph - view_h;
+	if (x < 0) x = 0;
+	if (y < 0) y = 0;
+	if (x == scroll_x && y == scroll_y) return false;
+	scroll_x = x;
+	scroll_y = y;
+	if (sb_h_on) z_scrollbar_set_value(&sb_h, scroll_x);
+	if (sb_v_on) z_scrollbar_set_value(&sb_v, scroll_y);
+	if (sb_h_on) z_scrollbar_draw(&sb_h, false);
+	if (sb_v_on) z_scrollbar_draw(&sb_v, false);
+	ov_x1 = -1;				// the old overlay scrolled away with the rest
+	edit_damage_all(&ed);
+	update_card();
+	return true;
+}
+
+// The percentage on show (fitted: what fitting came to).
+static int zoom_percent(void) { return (int)(((int64_t)scale16 * 100 + 32768) >> 16); }
+
+// The zoom steps: fit, then 100, 200, 400.
+static int zoom_step(int dir) {
+	static const int steps[] = { 100, 200, 400 };
+	int i, now = zoom ? zoom : zoom_percent();
+	if (dir > 0) {
+		for (i = 0; i < 3; i++) if (steps[i] > now) return steps[i];
+		return ZOOM_MAX;
+	}
+	for (i = 2; i >= 0; i--) if (steps[i] < now) return steps[i];
+	return 0;
+}
+
+
+// Zooms to `z` (0 fit), keeping the card point under view position
+// (vx, vy) where it is.
+static void set_zoom(int z, int vx, int vy) {
+	int ux, uy;
+	if (z == zoom) return;
+	ux = to_units(scroll_x + vx);
+	uy = to_units(scroll_y + vy);
+	zoom = z;
+	layout();
+	if (z) {
+		int nx = to_px(ux) - vx, ny = to_px(uy) - vy;
+		scroll_x = nx; scroll_y = ny;
+		layout();				// clamps, and sets the scrollbars
+	} else {
+		scroll_x = scroll_y = 0;
+	}
+	repaint();
+}
+
+// The view's centre, or the selection's when there is one in view.
+static void zoom_anchor(int *vx, int *vy) {
+	*vx = view_w / 2;
+	*vy = view_h / 2;
+	if (ed.nsel) {
+		int x0, y0, x1, y1;
+		obj_bounds(ed.sel[0], &x0, &y0, &x1, &y1);
+		x0 = to_px((x0 + x1) / 2) - scroll_x;
+		y0 = to_px((y0 + y1) / 2) - scroll_y;
+		if (x0 >= 0 && x0 < view_w && y0 >= 0 && y0 < view_h) { *vx = x0; *vy = y0; }
+	}
+}
+
+// Keeps a card-pixel box in view (the caret while typing at 400%).
+static void keep_in_view(int x0, int y0, int x1, int y1) {
+	int nx = scroll_x, ny = scroll_y, m = 8;
+	if (!zoom) return;
+	if (x1 + m > nx + view_w) nx = x1 + m - view_w;
+	if (x0 - m < nx) nx = x0 - m;
+	if (y1 + m > ny + view_h) ny = y1 + m - view_h;
+	if (y0 - m < ny) ny = y0 - m;
+	scroll_to(nx, ny);
+}
+
+static void keep_caret_in_view(void) {
+	zc_fix cx, cy, chh;
+	int px, py, ph;
+	if (!ed.text_obj || !zoom) return;
+	edit_caret(&ed, &cx, &cy, &chh);
+	px = (int)(((int64_t)cx * scale16) >> 24);
+	py = (int)(((int64_t)cy * scale16) >> 24);
+	ph = (int)(((int64_t)chh * scale16) >> 24);
+	keep_in_view(px, py, px + 1, py + ph);
 }
 
 static void repaint(void) {
@@ -708,6 +853,7 @@ static void set_deck(deck_t *d) {
 		render_drop_recent();
 	}
 	g_deck = d;
+	scroll_x = scroll_y = 0;
 	edit_reset(&ed, d);
 	pool_free(tbuf);
 	tbuf = NULL;
@@ -909,6 +1055,7 @@ static void do_help(void) {
 		"F5\tShow (Shift+F5: from card 1)\n"
 		"F6\tAll cards: drag to reorder\n"
 		"PgUp/PgDn\tPrevious, next card\n"
+		"Ctrl+= - 0\tZoom in, out, fit\n"
 		"Ctrl+M\tNew card\n"
 		"Ctrl+Z/Y\tUndo, redo\n"
 		"Ctrl+C/X/V\tCopy, cut, paste\n"
@@ -1114,6 +1261,21 @@ static void run_command(const char *line) {
 	else if (!strcmp(app, "image")) do_image();
 	else if (!strcmp(app, "help")) do_help();
 	else if (!strcmp(app, "print")) do_print(line);
+	else if (!strcmp(app, "zoom")) {
+		const char *r = line;
+		int z = 0, vx, vy;
+		while (*r == '/' || *r == ' ') r++;
+		r += 4;
+		while (*r == ' ') r++;
+		while (*r >= '0' && *r <= '9') z = z * 10 + (*r++ - '0');
+		if (*r == '%') r++;
+		if (z && z != 100 && z != 200 && z != 400) {
+			copy_str(ed.msg, sizeof(ed.msg), "zoom 100, 200, 400 or fit");
+		} else {
+			zoom_anchor(&vx, &vy);
+			set_zoom(z, vx, vy);
+		}
+	}
 	else if (!strcmp(app, "tour")) { if (may_discard()) load_path(Z_PATH_SLIDE_TOUR); }
 	else if (!strcmp(app, "quit")) { if (may_discard()) quit_now = true; }
 }
@@ -1341,6 +1503,14 @@ static void handle_key(uint32_t k, uint8_t mods) {
 		return;
 	}
 
+	if (ctrl && mode != MODE_SORTER && (k == '=' || k == '+' || k == '-' || k == '_' || k == '0')) {
+		int vx, vy;
+		zoom_anchor(&vx, &vy);
+		set_zoom(k == '0' ? 0 : zoom_step(k == '=' || k == '+' ? 1 : -1), vx, vy);
+		keep_caret_in_view();
+		draw_status();
+		return;
+	}
 	if (k == Z_KEY_HELP) { do_help(); return; }
 	if (k == Z_KEY_PROMPT) { open_prompt(""); return; }
 	if (k == Z_KEY_RENAME && mode != MODE_SORTER) {
@@ -1372,6 +1542,7 @@ static void handle_key(uint32_t k, uint8_t mods) {
 		else if (ctrl && (k == 's' || k == 'S')) do_save();
 		else edit_text_key(&ed, k, mods);
 		update_card();
+		keep_caret_in_view();
 		draw_bar();
 		update_title();
 		return;
@@ -1522,6 +1693,17 @@ static void handle_mouse(uint32_t packed) {
 		if (down) menu_click(cx, cy);
 		return;
 	}
+	if (mode != MODE_SORTER && !ed.drag && !ed.npoly) {
+		// the scrollbars, zoomed in
+		if (sb_h_on && z_scrollbar_has_pointer(&sb_h, cx, cy)) {
+			if (z_scrollbar_mouse(&sb_h, cx, cy, b)) scroll_to(sb_h.value, scroll_y);
+			return;
+		}
+		if (sb_v_on && z_scrollbar_has_pointer(&sb_v, cx, cy)) {
+			if (z_scrollbar_mouse(&sb_v, cx, cy, b)) scroll_to(scroll_x, sb_v.value);
+			return;
+		}
+	}
 	if (mode == MODE_COMMAND && down) { mode = MODE_EDIT; draw_status(); }
 
 	if (down) {
@@ -1562,7 +1744,7 @@ static void handle_mouse(uint32_t packed) {
 			draw_bar();
 			return;
 		}
-		edit_press(&ed, to_units(cx - card_x), to_units(cy - card_y), shift, dbl);
+		edit_press(&ed, to_units(cx - card_x + scroll_x), to_units(cy - card_y + scroll_y), shift, dbl);
 		update_card();
 		draw_bar();
 		return;
@@ -1582,8 +1764,8 @@ static void handle_mouse(uint32_t packed) {
 		return;
 	}
 	if (ed.drag || ed.npoly) {
-		edit_motion(&ed, to_units(cx - card_x), to_units(cy - card_y), shift);
-		if (up) edit_release(&ed, to_units(cx - card_x), to_units(cy - card_y));
+		edit_motion(&ed, to_units(cx - card_x + scroll_x), to_units(cy - card_y + scroll_y), shift);
+		if (up) edit_release(&ed, to_units(cx - card_x + scroll_x), to_units(cy - card_y + scroll_y));
 		update_card();
 		if (up) { draw_bar(); update_title(); }
 	}
@@ -1715,6 +1897,11 @@ int main(void) {
 					if (sort_top > rows - sorter_rows_visible()) sort_top = rows - sorter_rows_visible();
 					if (sort_top < 0) sort_top = 0;
 					draw_sorter();
+				} else if (zoom && (sb_h_on || sb_v_on)) {
+					// zoomed in: the wheel scrolls (Shift: across)
+					int n = Z_WM_WHEEL_NOTCHES(msg.obj.val.uint32) * 40;
+					if ((mods_now & Z_KBD_MOD_SHIFT) || !sb_v_on) scroll_to(scroll_x - n, scroll_y);
+					else scroll_to(scroll_x, scroll_y - n);
 				} else {
 					edit_goto(&ed, ed.cur - (Z_WM_WHEEL_NOTCHES(msg.obj.val.uint32) > 0 ? 1 : -1));
 					update_card();

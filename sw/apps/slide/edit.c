@@ -1295,6 +1295,7 @@ static const char *const cmd_help[] = {
 	"transition cut | wipe | push [MS]",
 	"advance SECONDS     go on by itself in a show (0: never)",
 	"grid N              snap to N units (0: off)",
+	"zoom 100 | 200 | 400 | fit   (Ctrl+= Ctrl+- Ctrl+0)",
 	"select all | delete | duplicate",
 	"undo | redo",
 	"image               place a picture (a file dialog)",
@@ -1311,7 +1312,7 @@ bool edit_command(editor_t *e, const char *line, const char **app) {
 	cmd_arg_t ca;
 	const char *w;
 	static const char *app_words[] = {
-		"show", "open", "save", "image", "print", "help", "tour", "quit", NULL
+		"show", "open", "save", "image", "print", "help", "tour", "quit", "zoom", NULL
 	};
 	int i;
 

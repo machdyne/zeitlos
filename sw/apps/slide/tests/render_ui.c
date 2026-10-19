@@ -172,6 +172,33 @@ int main(int argc, char **argv) {
 	repaint();
 	shot("sorter");
 
+	// zoomed in to 200% on the selected oval: scrollbars, the view
+	// centred on it; then scrolled with the wheel's code path
+	z_render_clear();
+	mode = MODE_EDIT;
+	ed.tool = TOOL_SELECT;
+	edit_goto(&ed, 0);
+	edit_select(&ed, d->card[0]->obj[3], false);
+	handle_key('=', Z_KBD_MOD_CTRL);		// the window fits it at 100%: one step is 200%
+	repaint();
+	shot("zoom");
+	if (zoom != 200 || !sb_h_on || !sb_v_on) { printf("render: Ctrl+= is not 200%% with scrollbars (%d)\n", zoom); return 1; }
+	{
+		// zooming on the selection keeps it in view
+		int x0, y0, x1, y1, cx, cy;
+		obj_bounds(d->card[0]->obj[3], &x0, &y0, &x1, &y1);
+		cx = to_px((x0 + x1) / 2) - scroll_x;
+		cy = to_px((y0 + y1) / 2) - scroll_y;
+		if (cx < 0 || cx >= view_w || cy < 0 || cy >= view_h) { printf("render: zoom lost the selection\n"); return 1; }
+	}
+	scroll_to(0, 0);
+	z_render_clear();
+	repaint();
+	shot("zoom_top");
+	handle_key('0', Z_KBD_MOD_CTRL);
+	if (zoom || sb_h_on || sb_v_on || scroll_x || scroll_y) { printf("render: Ctrl+0 did not fit the card again\n"); return 1; }
+	edit_select_none(&ed);
+
 	// the / menu over the card: F4, then /
 	z_render_clear();
 	mode = MODE_EDIT;

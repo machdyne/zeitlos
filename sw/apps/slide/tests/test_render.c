@@ -301,6 +301,39 @@ int main(int argc, char **argv) {
 		}
 	}
 
+	// zoomed in, the editor draws only the part in view: a target whose
+	// origin is the scroll. Every part, at any origin, is that part of
+	// the whole card drawn at once (patterns stay on the card, text and
+	// pictures line up)
+	{
+		enum { ZW = 1024, ZH = 684, ZWPL = ZW / 32 };
+		static uint32_t whole[ZH][ZWPL], part[200][8];
+		static const int ox[] = { 0, 1, 31, 33, 77, 500, 1024 - 250 };
+		static const int oy[] = { 0, 3, 129, 484 };
+		zc_target_t t;
+		zc_xf_t xf = zc_xf_scale(2 * ZC_XF_ONE, 0, 0);
+		int a, b, x, y, bad = 0;
+		memset(whole, 0, sizeof(whole));
+		zc_target_bits(&t, &whole[0][0], ZWPL, ZW, ZH);
+		render_card(&t, &xf, d, d->card[0], RENDER_EDIT);
+		for (a = 0; a < (int)(sizeof(ox) / sizeof(ox[0])); a++)
+			for (b = 0; b < (int)(sizeof(oy) / sizeof(oy[0])); b++) {
+				memset(part, 0x5a, sizeof(part));
+				zc_target_bits(&t, &part[0][0], 8, 250, 200);
+				zc_target_origin(&t, ox[a], oy[b]);
+				render_card(&t, &xf, d, d->card[0], RENDER_EDIT);
+				for (y = 0; y < 200; y++)
+					for (x = 0; x < 250; x++) {
+						int wx = ox[a] + x, wy = oy[b] + y;
+						bool pw = wx < ZW && wy < ZH ? (whole[wy][wx >> 5] >> (wx & 31)) & 1 : 0;
+						bool pp = (part[y][x >> 5] >> (x & 31)) & 1;
+						if (wx < ZW && wy < ZH && pw != pp) bad++;
+					}
+			}
+		ck(bad == 0, "zoomed: every part of the view is that part of the whole card");
+		if (bad) printf("  %d pixels differ\n", bad);
+	}
+
 	// the deck's memory comes back when it goes, image caches included
 	deck_free(d);
 	render_drop_recent();
