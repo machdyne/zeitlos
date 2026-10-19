@@ -90,6 +90,7 @@ const z_ftype_t z_ftypes[] = {
 	// wants, and `text` still opens one perfectly well when asked
 	// directly -- the same arrangement MD already has with `read`.
 	{ "ZSS", "sheet", "Spreadsheet"   },
+	{ "ZSL", "slide", "Slide deck"    },
 	{ "CSV", "sheet", "CSV table"     },
 
 	// Zeitlos bitmap -- sw/common/zbm.h, written by sw/apps/draw.

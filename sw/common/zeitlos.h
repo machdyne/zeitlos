@@ -714,6 +714,16 @@ bool z_pid_lookup(const char *name, uint32_t *pid);
 // latency it sits inside.
 bool z_game_set_enabled(bool on, bool wrap);
 
+// Take the whole 640x480 screen, or give it back, WITHOUT game mode's
+// 320x240 view: the app draws the desktop's own framebuffer, wm stops
+// managing windows and sends every key and click to the app (the same
+// Z_WM_GAME_GRAB game mode sends), and repaints the desktop when the
+// screen comes back. For a full-screen show (sw/apps/slide). wm takes
+// the screen back with Super+Esc and sends Z_WM_GAME_REVOKED; the app
+// draws nothing more once it has that. Works on every board. False
+// without a wm.
+bool z_screen_grab(bool on);
+
 // the calling process's own pid. Mainly useful for the same reason
 // wm.c needs it: to tell "is this thing mine?" apart from "is this
 // thing owned by whatever pid I happen to have been started as" --

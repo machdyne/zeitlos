@@ -40,6 +40,13 @@
 
 /* The system's own files: not any app's (docs/layout.md, rule 3). */
 #define Z_DIR_SYS                 "/sys"
+/* Fonts any app may draw with through zcanvas (docs/fonts.md): Hershey
+ * stroke fonts (.zhf), misc-fixed bitmaps (.zfn), and the
+ * acknowledgement the Hershey data travels with. No app owns them, so
+ * they are the system's (docs/layout.md, rule 3), put there by the
+ * release tool. */
+#define Z_DIR_SYS_FONTS           "/sys/fonts"
+#define Z_PATH_SYS_FONTS_NOTICE   "/sys/fonts/hershey.txt"
 #define Z_PATH_SYS_CONFIG         "/sys/zeitlos.cfg"
 #define Z_PATH_SYS_VERSION        "/sys/version"
 /* What the card holds, file by file, and what an update may do with
@@ -131,6 +138,7 @@
 /* fed (docs/fed.md). The default of apps.fed.dir. */
 #define Z_DIR_FED                 "/data/fed"
 
+
 /* jfont (docs/text_encoding.md, "Japanese") */
 #define Z_PATH_JFONT_FONT         "/data/jfont/jp12.zfn"
 
@@ -155,6 +163,10 @@
  * directory in apps.netserve.http. */
 #define Z_PATH_NETSERVE_AUTHKEYS  "/data/netserve/authkeys"
 #define Z_DIR_NETSERVE_WWW        "/data/netserve/www"
+
+/* slide (docs/slide_app.md) */
+#define Z_DIR_SLIDE_DATA          "/data/slide"
+#define Z_PATH_SLIDE_TOUR         "/data/slide/tour.zsl"
 
 /* tts (docs/tts.md, docs/tts_data.md) */
 #define Z_PATH_TTS_PACK           "/data/tts/speech/en.spk"

@@ -7,7 +7,7 @@ The function keys mean the same thing in every app.
 | **F1** | **Help** | the app's help box ([app_help.md](app_help.md)), in a window and in a full-screen window; **in game mode, nothing** |
 | **F2** | **Rename / edit in place** | `files`: rename; `sheet`: edit the cell |
 | **F3** | **Search / next** | no search yet: ask what to find (as Ctrl+F); then the next match -- `text`, `sheet`, `web`, `files` |
-| **F4** | **The app's prompt** | gives the command or input box the focus -- `sheet`'s command line (and its `/` menu), `web`'s address field; in apps whose prompt always has the focus (`chess`, the casino tables, `basic`, `ask`, `mesh`, `irc`) typing goes there anyway |
+| **F4** | **The app's prompt** | gives the command or input box the focus -- `sheet`'s command line (and its `/` menu), `slide`'s command line, `web`'s address field; in apps whose prompt always has the focus (`chess`, the casino tables, `basic`, `ask`, `mesh`, `irc`) typing goes there anyway |
 | **F5-F8** | **The app's own** | listed in its F1 box -- `web` F5 reload, `files` F5 read the folder again, `sheet` F5 chart, `bench` F5/F6, `midi` F5-F7, `mesh` F5/F6, `chip8` F5-F8 |
 | **F9, F10** | **Reserved** | bound by nothing, for later |
 | **F11** | **Full screen** | a resizable window: full screen -- the whole screen, no titlebar, no dock (wm does it); an app with a game mode: game mode |
@@ -63,8 +63,14 @@ nothing. Apps keep the mode they start in.
 
 Apps here have no drop-down menus. Many have a command or input line
 instead, and pressing `/` at the start of it opens a selectable menu of
-its commands (`sheet`; new apps follow). F4 gives that line the focus
+its commands (`sheet`, `slide`; new apps follow). F4 gives that line the focus
 from anywhere in the app.
+
+Where the line has to be opened first, `/` opens it too, so F4 and `/`
+mean the same thing from the app's main view: `sheet` (where the menu
+*is* the prompt), `slide` (the command line; `/` or F4 again on the
+empty line opens the menu). They differ only where `/` is something you
+type -- a cell, a text box -- and there F4 still works.
 
 ## What changed (0.0.7)
 

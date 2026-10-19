@@ -3185,13 +3185,15 @@ static void game_revoke(void) {
 // itself through z_game_set_enabled().
 static void game_toggle(void) {
 
-	if (!z_game_available()) return;
-
-	/* Alt+Esc DURING A GRAB takes the screen back rather than moving a
+	/* Super+Esc DURING A GRAB takes the screen back rather than moving a
 	 * camera -- the camera is meaningless when an app owns the
 	 * framebuffer, and this is the only way out if the app has stopped
-	 * listening. */
+	 * listening. Before the availability test: z_screen_grab() takes the
+	 * screen on boards with no game mode at all (a slide show), and the
+	 * way out has to work there too. */
 	if (game_grab_pid) { game_revoke(); return; }
+
+	if (!z_game_available()) return;
 
 	bool on = !z_game_enabled();
 

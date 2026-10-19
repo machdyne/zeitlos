@@ -430,10 +430,21 @@ static void dither_row_threshold(z_img_t *im, const uint8_t *gray, int y) {
 
 }
 
+// Grey output (z_img_decode_gray()): when set, rows go here instead of
+// the ditherer. Module state like the dither mode, for the one decode
+// running.
+static z_img_gray_fn gray_out;
+static void *gray_user;
+
 // One decoded row into the document, whichever quantiser is in force.
 static void emit_row(z_img_t *im, const uint8_t *gray, int y) {
 
 	if (y < 0 || y >= im->out_h) return;
+
+	if (gray_out) {
+		gray_out(gray_user, gray, y, im->out_w);
+		return;
+	}
 
 	Z_PROF_BEGIN(Z_IMGP_DITHER);
 
@@ -617,8 +628,12 @@ static int decode_zbm(z_img_t *im) {
 
 		if (y >= im->out_h) break;
 
-		uint32_t *dst = im->doc + (uint32_t)y * (uint32_t)im->doc_wpl;
-		int words = src_wpl > im->doc_wpl ? im->doc_wpl : src_wpl;
+		// grey output: through one row of words, expanded to bytes
+		static uint32_t zrow[Z_IMG_MAX_WPL];
+		uint32_t *dst = gray_out ? zrow :
+			im->doc + (uint32_t)y * (uint32_t)im->doc_wpl;
+		int cap = gray_out ? Z_IMG_MAX_WPL : im->doc_wpl;
+		int words = src_wpl > cap ? cap : src_wpl;
 
 		if (im->read(im->ctx, (uint8_t *)dst, words * 4) != words * 4)
 			return Z_IMG_E_IO;
@@ -627,6 +642,13 @@ static int decode_zbm(z_img_t *im) {
 		if (src_wpl > words) {
 			rv = skip_bytes(im, (uint32_t)(src_wpl - words) * 4);
 			if (rv != Z_IMG_OK) return rv;
+		}
+
+		if (gray_out) {
+			int x;
+			for (x = 0; x < im->out_w; x++)
+				grayrow[x] = ((zrow[x >> 5] >> (x & 31)) & 1u) ? 255 : 0;
+			gray_out(gray_user, grayrow, y, im->out_w);
 		}
 
 	}
@@ -2402,14 +2424,42 @@ static int decode_jpg(z_img_t *im) {
 
 // -- dispatch --
 
+static int decode_any(z_img_t *im, z_img_fmt_t fmt);
+
 int z_img_decode(z_img_t *im, z_img_fmt_t fmt) {
+
+	gray_out = NULL;
+	gray_user = NULL;
+	if (!im->doc) return Z_IMG_E_FORMAT;
+	return decode_any(im, fmt);
+
+}
+
+int z_img_decode_gray(z_img_t *im, z_img_fmt_t fmt, z_img_gray_fn row,
+	void *user) {
+
+	int rv;
+
+	if (!row || im->doc_w <= 0 || im->doc_h <= 0 ||
+		im->doc_w > Z_IMG_MAX_W || im->doc_h > Z_IMG_MAX_H)
+		return Z_IMG_E_FORMAT;
+	gray_out = row;
+	gray_user = user;
+	rv = decode_any(im, fmt);
+	gray_out = NULL;
+	gray_user = NULL;
+	return rv;
+
+}
+
+static int decode_any(z_img_t *im, z_img_fmt_t fmt) {
 
 	im->src_w = im->src_h = 0;
 	im->out_w = im->out_h = 0;
 	im->shift = 0;
 	im->was_ordered = false;
 
-	if (!im->read || !im->doc) return Z_IMG_E_FORMAT;
+	if (!im->read) return Z_IMG_E_FORMAT;
 
 	switch (fmt) {
 

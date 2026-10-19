@@ -97,6 +97,11 @@ so a copy, a save or speech gets it unchanged. It applies wherever text
 is drawn by codepoint -- `text`, `read`, `web`, the dialogs -- and not
 to `term`, which maps characters to cells itself.
 
+Text on pages -- slide's cards, anything printed -- is drawn in
+software by `zcfont`, with public-domain Hershey stroke fonts and
+misc-fixed bitmaps at any size, covering Latin-9, Greek and the common
+typographic characters ([fonts](fonts.md)).
+
 ## Drawing
 
 The byte functions -- `z_fb_draw_char()`, `z_fb_draw_text()`,

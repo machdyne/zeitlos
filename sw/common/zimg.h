@@ -184,6 +184,21 @@ z_img_fmt_t z_img_sniff(const uint8_t *hdr, int n);
 // bitmap, which is usually more useful than a blank window.
 int z_img_decode(z_img_t *im, z_img_fmt_t fmt);
 
+// Decodes to GREY rows instead of the dithered document: each output row,
+// out_w samples from 0 (black) to 255 (white), goes to `row` as it is
+// decoded. For an app that scales an image before dithering it, once,
+// at the size it is shown (sw/common/zcanvas.h, zc_dither()), or that
+// prints it in grey.
+//
+// im->doc may be NULL; doc_w/doc_h still bound the output (and may not
+// exceed Z_IMG_MAX_W/H), so the power-of-two reduction works as for a
+// document. Rows arrive top to bottom, except an interlaced GIF's, which
+// come in its four passes -- a caller keeps a whole image anyway. The
+// row buffer is only valid during the call.
+typedef void (*z_img_gray_fn)(void *user, const uint8_t *gray, int y, int w);
+int z_img_decode_gray(z_img_t *im, z_img_fmt_t fmt, z_img_gray_fn row,
+	void *user);
+
 // Short human-readable form of a Z_IMG_E_* code, for a dialog.
 const char *z_img_strerror(int rv);
 

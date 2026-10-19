@@ -1,0 +1,46 @@
+# sw/common/zcanvas.c on the host. `make -f Makefile.zcanvas` runs the
+# checks; `make -f Makefile.zcanvas look` also writes the scenes as
+# PGM under /tmp/zcanvas so they can be looked at.
+all:
+	cc -std=c99 -g -Wall -Wextra -fsanitize=address,undefined -o /tmp/test_zcanvas test_zcanvas.c ../zcanvas.c
+	/tmp/test_zcanvas
+
+look: all
+	mkdir -p /tmp/zcanvas
+	/tmp/test_zcanvas /tmp/zcanvas
+
+# zcfont.c with the real font files in sw/data/font.
+fonts:
+	cc -std=c99 -g -Wall -Wextra -fsanitize=address,undefined -o /tmp/test_zcfont test_zcfont.c ../zcfont.c ../zcanvas.c ../zfont_data.c
+	/tmp/test_zcfont ../../data/font
+
+look-fonts: fonts
+	mkdir -p /tmp/zcanvas
+	/tmp/test_zcfont ../../data/font /tmp/zcanvas
+
+# zpage.c (card shapes, sheets) and zimg.c's grey output.
+page:
+	cc -std=gnu99 -g -Wall -Wextra -fsanitize=address,undefined -fno-sanitize=shift -o /tmp/test_zpage test_zpage.c ../zpage.c ../zcanvas.c ../zimg.c
+	/tmp/test_zpage ../../..
+
+look-page: page
+	mkdir -p /tmp/zcanvas
+	/tmp/test_zpage ../../.. /tmp/zcanvas
+
+# zpaper.c: pages recorded through zcanvas, read back, played onto a
+# grey raster (docs/zpaper.md).
+paper:
+	cc -std=gnu99 -g -Wall -Wextra -fsanitize=address,undefined -fno-sanitize=shift -o /tmp/test_zpaper test_zpaper.c ../zpaper.c ../zpage.c ../zcanvas.c ../zcfont.c ../zfont_data.c
+	/tmp/test_zpaper ../../data/font
+
+look-paper: paper
+	mkdir -p /tmp/zcanvas
+	/tmp/test_zpaper ../../data/font /tmp/zcanvas
+
+# zimgjob.c and zco.c: a picture decoded a slice at a time from a main
+# loop, stopped at any point (docs/responsive.md).
+imgjob:
+	cc -std=gnu99 -g -Wall -Wextra -fsanitize=address,undefined -fno-sanitize=shift -DZ_IMG_HAVE_PNG=1 -o /tmp/test_zimgjob test_zimgjob.c ../zimgjob.c ../zco.c ../zimg.c ../zinflate.c
+	/tmp/test_zimgjob ../../..
+
+test: all fonts page paper imgjob

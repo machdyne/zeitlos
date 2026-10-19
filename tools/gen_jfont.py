@@ -22,7 +22,8 @@ All little-endian.
     4       1          glyph width in pixels (12)
     5       1          glyph height in pixels (12)
     6       1          bytes per glyph row (2: MSB-first, top `w` bits)
-    7       1          0
+    7       1          ascent: the baseline row from the top (0 in this
+                       file: the bottom row; docs/fonts.md)
     8       4          count
     12      2*count    Unicode codepoints, ascending (all in the BMP)
     ...     0 or 2     padding to a multiple of 4

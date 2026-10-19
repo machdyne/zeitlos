@@ -21,7 +21,7 @@ beside Close and opens the full page from `docs/` in `read`.
 
 F1 is the first key of a map every app follows ([keys.md](keys.md)).
 
-Apps with it: `text`, `files`, `read`, `sheet`, `hex`, `calc`, `cal`, `clock`, `settings`, `ask`, `bench`, `view`, `draw`, `play`, `mmod`, `track`, `web`, `irc`, `basic`, `logic`, `chess`, `casino`, `blackjack`, `craps`, `poker`, `roulette`, `slots`, `kidgames`, `space3d`, `gpu3d`, `chip8`, `info`, `snake`, `blocks`, `bricks`.
+Apps with it: `text`, `files`, `read`, `sheet`, `hex`, `calc`, `cal`, `clock`, `settings`, `ask`, `bench`, `view`, `draw`, `play`, `mmod`, `track`, `web`, `irc`, `basic`, `logic`, `chess`, `casino`, `blackjack`, `craps`, `poker`, `roulette`, `slots`, `kidgames`, `space3d`, `gpu3d`, `chip8`, `info`, `snake`, `blocks`, `bricks`, `slide`.
 
 **In game mode F1 does nothing.** A box would open on the desktop
 underneath, where nobody can see it, so the box is for the window

@@ -105,6 +105,7 @@ with [welcome](welcome.md); to program it, [kernel](kernel.md) and
 | [keyboard\_layouts](keyboard_layouts.md) | 22 layouts and Japanese input |
 | [line\_editing](line_editing.md) | Shared line editor |
 | [text\_encoding](text_encoding.md) | UTF-8, Latin-9 and the fonts |
+| [fonts](fonts.md) | Public-domain fonts for pages: Hershey stroke fonts, misc-fixed |
 | [tts](tts.md) | Speech |
 | [tts\_data](tts_data.md) | Speech data: `tools/speech` |
 | [captions](captions.md) | System-wide captions |
@@ -114,10 +115,13 @@ with [welcome](welcome.md); to program it, [kernel](kernel.md) and
 | Document | Subject |
 |---|---|
 | [window\_manager](window_manager.md) | `wm` developer guide |
+| [responsive](responsive.md) | Staying responsive: long work in slices, progress, instant stop; `zco` coroutines, `zimgjob` |
 | [widgets](widgets.md) | Widgets and dialogs |
 | [libz](libz.md) | Runtime for zcc-compiled programs |
 | [png](png.md) | PNG decoding |
 | [svg](svg.md) | SVG rendering |
+| [zcanvas](zcanvas.md) | Drawing pages: fills, strokes, patterns, images, bands; page shapes |
+| [zpaper](zpaper.md) | Pages for printing: described by an app, played back by the print service |
 | [remote\_desktop](remote_desktop.md) | Remote desktop in a browser: the ESP32 link, or `zerdesk` over Ethernet |
 
 ## Networking
@@ -168,6 +172,8 @@ with [welcome](welcome.md); to program it, [kernel](kernel.md) and
 | [zwalk](zwalk.md) | find, copy and delete a folder tree a step at a time, stoppable at once |
 | [text\_editor](text_editor.md) | `text` |
 | [sheet\_app](sheet_app.md) | `sheet` |
+| [slide\_app](slide_app.md) | `slide`: cards, slides and pages |
+| [print](print.md) | `print`: printing over IPP or to port 9100, PDF and PostScript files |
 | [convert](convert.md) | `convert`: documents, tables, archives |
 | [app\_help](app_help.md) | F1: a help box in every app, with a button to these docs |
 | [keys](keys.md) | Function keys: the same meaning in every app (F1 help ... F11 full screen, F12 app home) |

@@ -41,7 +41,7 @@ Build the hardware map from RTL with `make hwmap` (see [docs/hwmap.md](docs/hwma
 ### OS
 
  - [Microkernel](docs/kernel.md): the kernel schedules, manages memory, passes messages, routes interrupts and enforces memory protection; the filesystem, the USB host stack and the network run as **[driver processes](docs/userspace_drivers.md)**, loaded from flash or the sdcard like any app, and restarted if they crash
- - Pre-emptive multitasking
+ - Pre-emptive multitasking, and apps that [stay responsive](docs/responsive.md): long work in slices with progress and an instant stop
  - Flat memory model with virtual address space for apps
  - Text [configuration file](docs/config.md) (`/sys/zeitlos.cfg`), loaded at boot and reloadable
  - FAT filesystem with long filenames, on MicroSD, USB sticks and a [RAM disk](docs/ramdisk.md), served by the [`fs` driver](docs/fs_driver.md); C's `open()`/`fopen()` for apps that ask for them ([POSIX file I/O](docs/posix_io.md))
@@ -49,7 +49,8 @@ Build the hardware map from RTL with `make hwmap` (see [docs/hwmap.md](docs/hwma
  - Object-based interprocess [messaging](docs/messaging.md), streaming and [ports](docs/ports.md)
  - International text: UTF-8 throughout, [22 keyboard layouts](docs/keyboard_layouts.md) (US, UK, German, French, Spanish, Italian, Portuguese, Nordic, Swiss, Belgian, Japanese and more) with dead keys and AltGr, switched with Super+Space; accented letters and the euro sign drawn by the hardware fonts ([ISO 8859-15](docs/text_encoding.md)); Japanese drawn from a public-domain 12x12 font and typed with a romaji [input method](docs/keyboard_layouts.md#japanese-input)
  - [Speech](docs/tts.md) for blind and headless use, and system-wide [captions](docs/captions.md)
- - Image decoding and [vector rendering](docs/svg.md) shared by every app (`sw/common`)
+ - Image decoding and [vector rendering](docs/svg.md) shared by every app (`sw/common`), and a [page rasterizer](docs/zcanvas.md) with [public-domain fonts](docs/fonts.md) (Hershey stroke fonts, misc-fixed) for drawing at any scale, on screen or for print
+ - [Printing](docs/print.md) without drivers: to IPP Everywhere printers (as PDF or PWG raster) and PostScript lasers, or to PDF files, from any app through [one page description](docs/zpaper.md)
  - IP/ARP/ICMP/UDP/DHCP/NTP/DNS/TFTP/TCP/telnet/ssh [networking](docs/networking.md), and [servers](docs/netserve.md): SSH (password or keys), telnet, and a static web server
  - A [password and screen lock](docs/security.md) (Super+L), kept with other machine settings in a power-safe [key/value store in flash](docs/kvstore.md)
  - TLS 1.3 with X.509 certificate verification -- see [tls](docs/tls.md) and [x509](docs/x509.md)
@@ -110,6 +111,8 @@ board boots to a desktop with no sdcard ([core apps in flash](#core-apps-in-flas
 | App | Description |
 |-----|-------------|
 | [sheet](docs/sheet_app.md) | Spreadsheet |
+| [slide](docs/slide_app.md) | Cards, slides and pages: shapes, text in public-domain fonts, pictures, full-screen shows, printing |
+| [print](docs/print.md) | Printing: driverless IPP (PDF or PWG raster) or PostScript on port 9100, and PDF or PostScript files |
 | [web](docs/web_app.md) | Web browser: HTTP/1.1 and TLS 1.3, gzip, in-place images and SVG; [Gopher and Gemini](docs/gopher_gemini.md) |
 | [read](docs/read_app.md) | Text reader for files of unlimited size (with rendered Markdown) |
 | [bench](docs/bench.md) | Virtual parts -- I/O expanders, LEDs, buttons, lamps -- on I2C buses, from a netlist, shown live; with [ls99](docs/ls99.md) virtual Zwölf modules |

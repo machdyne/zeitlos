@@ -18,6 +18,8 @@ APPS = casino poker roulette blackjack slots craps \
 	view \
 	text \
 	sheet \
+	slide \
+	print \
 	convert \
 	hex \
 	files \

@@ -160,6 +160,7 @@ By extension, through the shared table in `sw/common/ztype.h`:
 | `MD` | `read` |
 | `ZBM` | `draw` |
 | `ZSS`, `CSV` | `sheet` |
+| `ZSL` | `slide` |
 | `BMP`, `GIF`, `JPG`, `JPEG`, `PNG`, `PNM`, `PBM`, `PGM`, `PPM`, `SVG` | `view` |
 | `WAV`, `AU` | `play` |
 | `MOD` | `track` |

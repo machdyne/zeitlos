@@ -166,6 +166,8 @@ def sectors_per_cluster(image_bytes):
 # nothing depends on which group an app is in.
 SUPPLEMENTAL = [
     (zcard("Z_DIR_APPS", "sheet"), "sw/apps/sheet/sheet.bin"),
+    (zcard("Z_DIR_APPS", "slide"), "sw/apps/slide/slide.bin"),
+    (zcard("Z_DIR_APPS", "print"), "sw/apps/print/print.bin"),
     (zcard("Z_DIR_APPS", "convert"), "sw/apps/convert/convert.bin"),
     (zcard("Z_DIR_APPS", "read"), "sw/apps/read/read.bin"),
     (zcard("Z_DIR_APPS", "ask"), "sw/apps/ask/ask.bin"),
@@ -473,7 +475,23 @@ DESK_FILES = [
 # pack.
 FONT_FILES = [
     (zcard("Z_PATH_JFONT_FONT"), "sw/data/font/jp12.zfn"),
+    (zcard("Z_PATH_SYS_FONTS_NOTICE"), "sw/data/font/hershey/NOTICE"),
 ]
+
+# zcanvas's fonts (docs/fonts.md), to /sys/fonts -- no app owns them
+# (docs/layout.md, rule 3): every .zhf and .zfn
+# tools/gen_fonts.py made, committed to the tree. Listed from the folders
+# (the set is the generator's, not hand-kept here); the list is still
+# fixed when the module loads, so a missing folder fails the build like
+# any other missing input.
+_FONT_ROOT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                           "..", ".."))
+for _sub, _ext in (("zhf", ".zhf"), ("zfn", ".zfn")):
+    _d = os.path.join(_FONT_ROOT, "sw", "data", "font", _sub)
+    for _n in sorted(os.listdir(_d)) if os.path.isdir(_d) else []:
+        if _n.endswith(_ext):
+            FONT_FILES.append((zcard("Z_DIR_SYS_FONTS", _n),
+                               "sw/data/font/%s/%s" % (_sub, _n)))
 
 # Tracker modules, from sw/data/audio. Whatever is there is shipped --
 # a glob rather than a list, because these are data files somebody
@@ -503,6 +521,12 @@ DEMO_FILES = [
     (zcard("Z_DIR_MEDIA_IMAGES", "zeitlos.svg"),  "sw/data/demo/zeitlos.svg"),
     (zcard("Z_DIR_MEDIA_AUDIO",  "lvb11.mid"),    "sw/data/audio/lvb11.mid"),
     (zcard("Z_DIR_MEDIA_IMAGES", "squirrel.jpg"), "sw/data/images/squirrel.jpg"),
+]
+
+# slide's tour, opened by /tour (docs/slide_app.md). Its picture is the
+# squirrel in DEMO_FILES, by its card path.
+SLIDE_FILES = [
+    (zcard("Z_PATH_SLIDE_TOUR"), "sw/data/slide/tour.zsl"),
 ]
 
 # chip8's own ROMs, where its open dialog starts (docs/chip8_app.md).
@@ -816,7 +840,7 @@ def plan(root, ark_dir=None, packs=None, verbose=True):
 
     data_lists = (LIBZ_FILES + LIBZ_EXTRA + CONFIG_FILES + NETWORK_FILES
                   + FONT_FILES + DESK_FILES + EXAMPLES + FPGA_FILES
-                  + FPGA_EXAMPLES + DEMO_FILES + CHIP8_FILES)
+                  + FPGA_EXAMPLES + DEMO_FILES + CHIP8_FILES + SLIDE_FILES)
 
     # Check every input up front. Finding out that gamedemo.bin was
     # never built after formatting a 64MB image and copying twelve
@@ -900,6 +924,7 @@ def plan(root, ark_dir=None, packs=None, verbose=True):
     add_list(FONT_FILES, REPLACE)
     add_list(DESK_FILES, KEEP)      # "can be edited in place" (remote_desktop.md)
     add_list(CHIP8_FILES, REPLACE)
+    add_list(SLIDE_FILES, KEEP)     # the person may have edited the tour
     # Headers by directory rather than by name: the set is "whatever
     # sw/common exports", and a list here would go stale silently --
     # the symptom being a missing include on the device, long after.

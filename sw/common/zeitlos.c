@@ -601,6 +601,18 @@ bool z_game_set_enabled(bool on, bool wrap) {
 
 }
 
+bool z_screen_grab(bool on) {
+
+	uint32_t wm_pid;
+
+	if (!z_pid_lookup("wm0", &wm_pid)) return false;
+	if (wm_pid == z_getpid()) return false;
+	z_msg_new_send(wm_pid, on ? Z_WM_GAME_GRAB : Z_WM_GAME_RELEASE,
+		0, z_obj_uint32(0));
+	return true;
+
+}
+
 int z_jump(uint32_t target) {
 	z_jump_args_t a = { target, 0 };
 	z_kernel_ptr_t z_kernel_ptr = (z_kernel_ptr_t)(uintptr_t)(reg_kernel);

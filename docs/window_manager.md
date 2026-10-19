@@ -2781,6 +2781,19 @@ than before; one that handles it can put itself back in a window.
 
 It is also the only way out if the app has stopped listening.
 
+### A grab without game mode: `z_screen_grab()`
+
+`z_screen_grab(true)` (`zeitlos.h`) sends the same `Z_WM_GAME_GRAB`
+without touching the game-mode register: the app draws the desktop's
+own 640x480 framebuffer, wm suspends window management and routes every
+key and click to it, exactly as above. `z_screen_grab(false)` sends
+`Z_WM_GAME_RELEASE` and wm repaints the desktop. `slide`'s full-screen
+show is the user (docs/slide_app.md, "Showing a deck").
+
+Because such a grab exists on boards without game mode, Super+Esc tests
+for a grab **before** it tests `z_game_available()`: the way out works
+on every board, whether or not there is a camera to move.
+
 ### The failure that matters
 
 **An app that owned the screen and has gone** -- crashed, closed, killed

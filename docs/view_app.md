@@ -520,6 +520,10 @@ adding `zimg.o` to `OBJS`; `draw` is the obvious candidate, since its
 canvas is the same size and the same packing, and opening a JPEG into
 it would need no conversion.
 
+An app that shows an image at a size of its own, or prints it, takes
+the grey rows instead with `z_img_decode_gray()`, before any dithering,
+and scales and dithers once itself ([zcanvas](zcanvas.md#images)).
+
 ## Diagnostics
 
 `view` uses no `printf`. It writes to the 16550 at `0xf0000000`

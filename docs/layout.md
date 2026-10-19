@@ -29,7 +29,8 @@ no fallback code ships and none has to be removed later.
 │   └── ...
 ├── sys/               the system's own files
 │   ├── zeitlos.cfg
-│   └── version
+│   ├── version
+│   └── fonts/         zcanvas's fonts: *.zhf, *.zfn (docs/fonts.md)
 ├── docs/              the documentation, as released
 ├── media/             example media, and yours
 │   ├── audio/
@@ -306,6 +307,7 @@ The complete mapping from the pre-v0.0.6 card. Destinations under
 | `/ark/<pack>/` | `/opt/ark/<pack>/` | |
 | `/ark/scrollr1.md` (the Ark scroll, `sw/data/ark`) | `/opt/ark/scrollr1.md` | |
 | (new) | `/data/chip8/roms/redoct.ch8` | chip8 |
+| (new) | `/data/slide/tour.zsl` | slide |
 | `/zcc.args`, `/vi.args`, `/zfpga.args` | `/tmp/zcc.args`, … | |
 | `ss.bin` (card root) | `/home/ss.bin` | |
 | `/user/`, and netlists of the person's own in `/bench/` | `/home/` | |
