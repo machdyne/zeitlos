@@ -20,7 +20,8 @@ apps.print.printer: ipp://192.168.1.50/ipp/print
 ```
 
 then run `print` alone: it asks the printer what it is and what it
-takes, and shows the answer. If that works, printing will.
+takes, and shows the answer until **OK** (or Esc, Enter, the close
+box). If that works, printing will.
 
 From `slide`, **Ctrl+P** prints the deck. A small window shows what
 print is doing -- the sheet it is on, waiting while the printer is

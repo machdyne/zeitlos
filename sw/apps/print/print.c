@@ -369,15 +369,20 @@ static void win_open(int h) {
 	draw_all();
 }
 
+// What the printer said (print ADDRESS) is to be read: it stays up
+// until OK, like a failure.
+static bool hold_open;
+
 // The end: the outcome stays up until it is dismissed -- a few seconds
-// for one that worked, until OK for one that did not.
+// for a job that worked, until OK for one that did not and for what a
+// probe found.
 static void finish(bool ok, int code) {
 	uint32_t start = z_uptime_ticks();
 	z_msg_t m;
 	send(Z_PRINT_DONE, (uint32_t)code);
 	done_shown = true;
 	if (win_up) draw_all();
-	while (win_up && !dismissed && (!ok || z_uptime_ticks() - start < Z_TICK_HZ * 4u)) {
+	while (win_up && !dismissed && (!ok || hold_open || z_uptime_ticks() - start < Z_TICK_HZ * 4u)) {
 		if (z_msg_recv(&m, Z_TICK_HZ / 4) == Z_OK) on_msg(&m, NULL);
 	}
 	if (win_up) z_win_destroy(&win);
@@ -452,6 +457,7 @@ static void probe(const char *addr) {
 	char b[64];
 	int k;
 	run_say(w_title, sizeof(w_title), "Printer: ", addr);
+	hold_open = true;
 	win_open(INFO_H);
 	status("Asking it what it takes", NULL);
 	if (!ipp_url(addr, &u) || u.kind == URL_SOCKET) {
