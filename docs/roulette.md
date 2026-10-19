@@ -446,9 +446,9 @@ identical.
 | `wheel euro\|american` | |
 | `bank`, `buyin`, `game`, `quit` | |
 
-Left-click places a chip, right-click takes one back. `F1` steps
-through the help, `F2` toggles full screen, `Escape` clears the command
-line.
+Left-click places a chip, right-click takes one back. `F1` shows the
+help box in the window (nothing in game mode), `F11` toggles full screen
+([keys.md](keys.md)), `Escape` clears the command line.
 
 **Splits and corners are typed by their members** because they have no
 names — the command looks up which selector covers exactly those

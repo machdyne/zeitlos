@@ -74,7 +74,7 @@ const char *bj_input_help_line(int i)
         "insure 10, or `no` to decline",
         "decks 1-8, h17|s17, pays 3:2|6:5, das, surrender",
         "hint toggles basic strategy advice",
-        "bank, buyin, game, quit -- F1 cycles this help",
+        "bank, buyin, game (full screen), quit",
         0
     };
     if (i < 0) return 0;

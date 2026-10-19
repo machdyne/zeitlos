@@ -3109,7 +3109,7 @@ static void scroll_flush(void) {
 
 static void handle_key(uint32_t keysym, uint8_t mods) {
 
-	if (keysym == Z_KEY_F1) {	// docs/app_help.md
+	if (keysym == Z_KEY_HELP) {	// docs/app_help.md
 		static const char help[] =
 			"A reader for Markdown and text: manuals, notes, books.\n\n"
 			"Space, PgDn\tNext page (Shift+Space back)\n"

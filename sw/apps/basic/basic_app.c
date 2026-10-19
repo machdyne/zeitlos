@@ -215,7 +215,7 @@ static void inbox_add(uint32_t k) {
 }
 
 static void key(uint32_t k) {
-    if (k == Z_KEY_F1 && !full) {               /* docs/app_help.md */
+    if (k == Z_KEY_HELP && !full) {             /* docs/app_help.md */
         /* in the window only: full screen, a box on the desktop
          * underneath would take the keys without being seen */
         static const char help[] =
@@ -226,7 +226,7 @@ static void key(uint32_t k) {
             "Up\tRecall the last line entered\n"
             "Esc\tErase the line; stop a running program\n"
             "Ctrl+C\tStop a running program\n"
-            "F6\tFull screen, or back to the window\n\n"
+            "F11\tFull screen, or back to the window\n\n"
             "Number each line (10 PRINT \"HELLO\"), then RUN. LIST, "
             "SAVE name, LOAD name and DIR work on " Z_DIR_BASIC_PROGRAMS "; HELP "
             "lists every command.";
@@ -235,7 +235,7 @@ static void key(uint32_t k) {
         show(true);
         return;
     }
-    if (k == Z_KEY_F6) {                        /* full screen, or back */
+    if (k == Z_KEY_FULL_SCREEN) {               /* full screen, or back */
         bp_full_screen(!full);
         return;
     }
@@ -401,7 +401,8 @@ static bool open_window(void) {
      * the demo. The frame is a constant (zwin.h), so neither is needed:
      * one window, the right size, where the script asked for it. */
     return z_win_create_cb(&win, "BASIC", (uint32_t)(BS_W + Z_WIN_CHROME_W),
-            (uint32_t)(BS_H + Z_WIN_CHROME_H), -1, -1, Z_WIN_FLAG_CLOSE_ICON,
+            (uint32_t)(BS_H + Z_WIN_CHROME_H), -1, -1,
+            Z_WIN_FLAG_CLOSE_ICON | Z_WIN_FLAG_GAME_MODE,
             on_msg, NULL) == Z_OK;
 }
 

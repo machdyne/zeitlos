@@ -19,25 +19,34 @@ beside Close and opens the full page from `docs/` in `read`.
 +--------------------------------------------------+
 ```
 
-Apps with it: `text`, `files`, `read`, `sheet`, `hex`, `term` (start panel), `calc`, `cal`, `clock`, `settings`, `ask`, `bench`, `view`, `draw`, `play`, `mmod`, `track`, `web`, `irc`, `basic`, `logic`, `chess`, `casino`, `kidgames`, `space3d`, `gpu3d`.
+F1 is the first key of a map every app follows ([keys.md](keys.md)).
 
-Apps whose F1 was already their own help keep it: `midi` and `mesh`
-(a key panel in the window), and the casino games `blackjack`, `craps`,
-`poker`, `roulette` and `slots` (one help line at a time in the status
-bar). `chess` had the status-bar kind too; in its window F1 is now the
-box, and in full screen, where a box cannot show, it is the old lines.
-`chip8` uses F1 for the display scale (an emulator's keys are the
-program's), so it has no help box. In `basic`, `chess` and `space3d`
-the box is for the window only, not full screen.
+Apps with it: `text`, `files`, `read`, `sheet`, `hex`, `calc`, `cal`, `clock`, `settings`, `ask`, `bench`, `view`, `draw`, `play`, `mmod`, `track`, `web`, `irc`, `basic`, `logic`, `chess`, `casino`, `blackjack`, `craps`, `poker`, `roulette`, `slots`, `kidgames`, `space3d`, `gpu3d`, `chip8`, `info`, `snake`, `blocks`, `bricks`.
+
+**In game mode F1 does nothing.** A box would open on the desktop
+underneath, where nobody can see it, so the box is for the window
+only in `basic`, `chess`, the casino tables, `space3d`, `chip8` and the
+arcade games (`snake`, `blocks`, `bricks`, [arcade.md](arcade.md)).
+`chess` and the tables used to roll their help one line at a time
+through the message bar in full screen (and the tables in the window
+too); that is gone -- the tables' box is built from the same lines
+their message bar shows for an unknown command, so the two cannot
+differ. A window in full screen (F11) is still a window: F1 shows the
+box there as anywhere.
+
+`midi` and `mesh` keep help of their own on F1, a key panel in the
+window: both have to keep servicing something while it is up -- the
+synthesizer's audio buffer, the radio node's serial stream -- and the
+box is modal, which would stall them.
 
 While the box is up the app behind waits: a game or a running BASIC
 program pauses, music in `play` and `track` pauses and resumes, the
 clock's hands stop. `web` and `irc` keep going underneath -- a page
 keeps loading, chat keeps arriving.
 
-In `term`, F1 works on the **start panel** only. Connected, every key
-belongs to the program at the other end, and F1 is a key a remote
-program may want -- so term sends it on, like any other key.
+`term` is the exception ([keys.md](keys.md), "term"): it sends F1-F10
+to the program running in it and interprets none of them, so it has no
+box. Its start panel already shows what there is to know.
 
 ## Why a box of the app's own, and the manual as well
 
@@ -84,7 +93,7 @@ and `/docs/<doc>.md` (fs_stat()). It opens the page from the top.
 ```c
 #include "../../common/zdialog.h"
 
-if (keysym == Z_KEY_F1) {
+if (keysym == Z_KEY_HELP) {	/* F1 -- zkbd.h, docs/keys.md */
 	static const char help[] =
 		"Browse, open and manage files.\n\n"
 		"Enter\tOpen the selection\n"
@@ -137,7 +146,10 @@ layout code on the host: wrapping at words, the tab column and the
 hanging indent, the scrollbar only when needed, scrolling, Close
 focused first. `HELP_PBM=help.pbm` draws one to look at.
 
-Board checks for the final phase: F1 in each app shows its box;
-Read docs appears with `read` and the card, not without either, and
-opens the right page; the app behind is repainted when the box closes;
-F1 in a connected `term` reaches the far end.
+Board checks for the final phase: F1 in each app shows its box,
+including the casino tables, `chip8` and `info`; Read docs appears
+with `read` and the card, not without either, and opens the right
+page; the app behind is repainted when the box closes; F1 in game mode
+does nothing; F1 in a full-screen (F11) window shows the box; F1 in a
+connected `term` reaches the far end, and on its start panel does
+nothing.

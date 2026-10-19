@@ -118,17 +118,19 @@ argument slot (`Z_WM_SET_ARG`, `zwm.h`).
   SPACE          the gamepad's A button (hex 5 by default)
   ENTER          the gamepad's START button (hex F by default)
 
-  F1 F2 F3   scale 1x / 2x / 4x
-  F4         cycle compatibility profile (resets the machine)
-  F5         reset
-  F6         full-screen game mode
-  F7 F8      slower / faster
-  F9         screenshot to chip8ss.zbm beside the ROM
-  F10        debugger pane
-  F11        single step        F12  run / pause
-  Shift+F1   cycle the XO-CHIP grey mapping
+  F1         help (in the window)
+  F5         reset              Shift+F5  next compatibility profile
+  F6         scale 1x/2x/4x     Shift+F6  cycle the XO-CHIP grey mapping
+  F7         debugger pane      Shift+F7  screenshot to chip8ss.zbm
+  F8         run / pause        Shift+F8  single step
+  - =        slower / faster
+  F11        full-screen game mode
   ESC        leave game mode, or quit
 ```
+
+The function keys follow [keys.md](keys.md): F1 help, F11 game mode, F5-F8
+chip8's own, each with a second job on Shift; F2-F4, F9, F10 and F12
+are not bound. Speed is on `-` and `=`, which are not on the hex keypad.
 
 The titlebar carries an **open icon**: click it to pick another ROM
 without going back to the shell. The outgoing ROM's saved flags are
@@ -166,7 +168,7 @@ survived a trip through a FAT filesystem -- misnaming is common, and a
 
 Only then the extension: `.xo8`/`.xo`, `.sc8`/`.sc`, otherwise CHIP-8,
 matched case-insensitively because FAT short names arrive uppercase and
-people type lowercase. F4 still cycles it at run time.
+people type lowercase. Shift+F5 still cycles it at run time.
 
 ## The display
 
@@ -244,7 +246,7 @@ Background stays black in every mapping. A dithered background is noise
 across the whole screen, and 0 is the only level that is exactly and
 seamlessly off.
 
-Shift+F1 cycles it at run time; `palette fill|index|solid` sets it per
+Shift+F6 cycles it at run time; `palette fill|index|solid` sets it per
 ROM in `chip8.cfg`.
 
 Content-relative rather than screen-relative, which is the opposite of
@@ -474,7 +476,7 @@ from the outside looks exactly like a game that ignored the keypress.
 
 About 150KB of `.bss` measured from the built objects, against a 1MB
 process pool (`docs/app_runtime.md`). The ROM image is a second copy so
-that F5 and F4 can reset without re-reading the file, which matters
+that F5 and Shift+F5 can reset without re-reading the file, which matters
 because the picker may have been the only thing that knew the path.
 
 ### .bss is free; malloc() is not
@@ -640,11 +642,11 @@ drawing.
 Game mode is entered *by* a keypress and its input is read as a **level**
 from the USB report once inside. So on the first poll after entering,
 the key that got us here is still physically down -- and game mode ends
-in the same frame it began. From the outside that looks like F6
+in the same frame it began. From the outside that looks like F11
 clearing the screen and doing nothing else, which is exactly how it
 presented on hardware.
 
-`exit_armed` fixes it: ESC and F6 must both be seen *up* once before
+`exit_armed` fixes it: ESC and F11 must both be seen *up* once before
 either counts. Not a timeout, which would be a guess about how quickly
 somebody lets go of a key and would still fail for anyone who held it a
 moment longer.
@@ -836,9 +838,9 @@ are registered in `sw/common/ztype.c` so the file browser opens them.
 
 ## The debugger
 
-`F10` grows the window and draws a pane below the guest image:
+`F7` grows the window and draws a pane below the guest image:
 registers, the run/pause state, and eight instructions of live
-disassembly from PC. `F11` steps one instruction, `F12` runs and
+disassembly from PC. `Shift+F8` steps one instruction, `F8` runs and
 pauses.
 
 **A pane and not a second window.** A second window was the obvious
@@ -905,7 +907,7 @@ and is entirely plausible, so there are tests for all four.
 
 ## Screenshots
 
-`F9` writes `chip8ss.zbm` beside the ROM. ZBM (`zbm.h`) because the
+`Shift+F7` writes `chip8ss.zbm` beside the ROM. ZBM (`zbm.h`) because the
 renderer's output is *already* in exactly that pixel format -- the
 framebuffer's own, LSB leftmost -- so a screenshot is a 16-byte header
 and the buffer with no conversion anywhere, and `draw` and `view` can

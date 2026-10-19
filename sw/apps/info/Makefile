@@ -7,7 +7,8 @@ APP_MAIN_RULE = 0
 # no dialogs, no file browsing and -- since the SD figure was removed
 # (see info.c) -- no filesystem access at all. It reads a few syscalls
 # and draws bars. logo_small.o is the generated wordmark bitmap.
-OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o logo_small.o info.o
+OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o zwidget.o zspeak.o zdialog.o \
+	zfsapp.o logo_small.o info.o
 
 # logo_small.c/.h are generated from sw/data/images/zeitlos.bin by
 # gen_logo_small.py -- see that script. Checked in, so building needs

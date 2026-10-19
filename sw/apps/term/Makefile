@@ -43,12 +43,12 @@ override CFLAGS += -DTERM_FONT_NAME=$(FONT)
 #   zspeak.o: The start panel's buttons and the scrollback scrollbar. Section GC
 #   drops the widget kinds term never uses (sliders, swatches).
 #
-#   zdns.o: The F11 Open bar (term.c) -- shared with repl's port/serial/telnet/
+#   zdns.o: The Open bar (term.c; typing on the welcome panel) -- shared with repl's port/serial/telnet/
 #   ssh commands. zdns comes with it: telnet and ssh resolve hostnames.
 #
 #   zcfg.o: apps.term.auto_connect -- docs/config.md
 OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o zwidget.o zspeak.o zsayall.o zkbd.o zvt100.o \
-	zport.o zdns.o zconnect.o zcfg.o zfsapp.o zdialog.o term.o
+	zport.o zdns.o zconnect.o zcfg.o zfsapp.o term.o
 
 # 8KB, same as wm. Port sends outlive the call and are bounded.
 APP_STACK = 8K

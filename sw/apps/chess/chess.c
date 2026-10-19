@@ -517,9 +517,9 @@ static void handle_key(uint32_t packed, bool allow_input) {
 
 	if (!allow_input) return;
 
-	if (sym == Z_KEY_F2) { do_action(CI_GAME_MODE); return; }
+	if (sym == Z_KEY_FULL_SCREEN) { do_action(CI_GAME_MODE); return; }
 
-	if (sym == Z_KEY_F1 && !game_mode) {	/* docs/app_help.md */
+	if (sym == Z_KEY_HELP && !game_mode) {	/* docs/app_help.md */
 		static const char help[] =
 			"Chess against the computer, at eight levels, by keyboard "
 			"or mouse.\n\n"
@@ -527,7 +527,7 @@ static void handle_key(uint32_t packed, bool allow_input) {
 			"Click\tA piece, then the square to move it to\n"
 			"Esc\tClear the line, put the piece down, stop "
 			"the engine thinking\n"
-			"F2\tFull screen (Esc comes back)\n\n"
+			"F11\tFull screen (Esc comes back)\n\n"
 			"Commands, typed the same way: new [white|black|two|demo], "
 			"level 1-8, undo, flip, hint, hints, moves, fen, bench, "
 			"quit.";
@@ -537,17 +537,8 @@ static void handle_key(uint32_t packed, bool allow_input) {
 		return;
 	}
 
-	if (sym == Z_KEY_F1) {
-		/* Full screen, a box on the desktop underneath would not be
-		 * seen: a rolling tour of the help text on the message line
-		 * instead. The panel is too narrow for all of it at once. */
-		static int hl;
-		const char *s = input_help_line(hl++);
-		if (!s) { hl = 0; s = input_help_line(hl++); }
-		game_set_message(&game, s);
-		repaint();
-		return;
-	}
+	/* Game mode: F1 does nothing (docs/keys.md). */
+	if (sym == Z_KEY_HELP) return;
 
 	do_action(input_key(&game, sym));
 
@@ -697,7 +688,7 @@ int main(void) {
 
 	if (z_win_create_flags(&win, "chess", WIN_W, WIN_H, -1, -1,
 		Z_WIN_FLAG_CLOSE_ICON | Z_WIN_FLAG_CLOSE_KILLS_OWNER |
-		Z_WIN_FLAG_RESIZABLE) != Z_OK) {
+		Z_WIN_FLAG_RESIZABLE | Z_WIN_FLAG_GAME_MODE) != Z_OK) {
 		printf("chess: failed to create window -- is wm running?\n");
 		return 1;
 	}

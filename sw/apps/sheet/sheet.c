@@ -675,7 +675,7 @@ static void draw_grid(void) {
 // drag that extends a selection, a scrollbar being dragged -- would
 // flash on every sample. Committing a cell entry is the same, and it
 // is the single most common thing anyone does here.
-// -- the chart view (F10) --
+// -- the chart view (F5) --
 //
 // The chart takes the window, as 1-2-3's graph took the screen: the
 // grid is not drawn behind it. A key changes its kind; Esc goes back.
@@ -1710,7 +1710,7 @@ static void do_width(void) {
 
 }
 
-// F10, or /Chart: the chart of the selection -- or, with none, the
+// F5, or /Chart: the chart of the selection -- or, with none, the
 // sheet's chart as it was last made.
 static void do_chart(void) {
 
@@ -1727,7 +1727,7 @@ static void do_chart(void) {
 			update_title();
 		}
 	} else if (!sh.chart.set) {
-		say("Chart", "Select the table to chart\n(labels in the first row\nand column), then F10.");
+		say("Chart", "Select the table to chart\n(labels in the first row\nand column), then F5.");
 		return;
 	}
 	chart_mode = true;
@@ -1743,7 +1743,7 @@ static void chart_key(uint32_t k) {
 		case 's': case 'S': kind = SHEET_CHART_STACK; break;
 		case 'l': case 'L': kind = SHEET_CHART_LINE; break;
 		case 'p': case 'P': kind = SHEET_CHART_PIE; break;
-		case 0x1b: case Z_KEY_F10: case '\r': case '\n':
+		case 0x1b: case Z_KEY_F5: case '\r': case '\n':
 			chart_mode = false;
 			repaint();
 			return;
@@ -1817,9 +1817,12 @@ static bool contains_ci(const char *h, const char *n) {
 	return false;
 }
 
+static void do_find(void);
+
+// F3 with nothing found yet asks what to find (docs/keys.md).
 static void find_next(void) {
 
-	if (!find_text[0]) return;
+	if (!find_text[0]) { do_find(); return; }
 	int start = cur_row * SHEET_COLS + cur_col;
 	// the cells are kept in key order: one walk round from the cursor
 	for (int pass = 0; pass < 2; pass++) {
@@ -1848,7 +1851,7 @@ static void show_help(void) {
 		"A spreadsheet: numbers, text and formulas in a grid.\n\n"
 		"Type into the cell; =A1*2 is a formula, =SUM(B2:B9) a "
 		"range. Enter moves down, Tab right, Shift+arrows select.\n\n"
-		"/\tCommands: insert, delete, number format, width, sort, "
+		"/, F4\tCommands: insert, delete, number format, width, sort, "
 		"extend, goto, find, chart\n"
 		"F2\tEdit the cell\n"
 		"Ctrl+Z/Y\tUndo, redo\n"
@@ -1856,8 +1859,8 @@ static void show_help(void) {
 		"Ctrl+D/R\tFill down, right\n"
 		"Ctrl+1\tNumber format\n"
 		"Ctrl+G\tGo to a cell\n"
-		"Ctrl+F, F3\tFind, find next\n"
-		"F10\tChart the selection\n"
+		"F3, Ctrl+F\tFind (again: the next match)\n"
+		"F5\tChart the selection\n"
 		"Alt+Left\tNarrow the column (Alt+Right widens)\n"
 		"Ctrl+N/O/S\tNew, open, save\n\n"
 		"Functions: SUM AVERAGE MIN MAX COUNT ABS INT ROUND MOD "
@@ -2039,10 +2042,10 @@ static void handle_key(uint32_t keysym, uint8_t mods) {
 	mods_now = mods;
 
 	if (menu) { menu_key(keysym); return; }
-	if (chart_mode && keysym != Z_KEY_F1) { chart_key(keysym); return; }
+	if (chart_mode && keysym != Z_KEY_HELP) { chart_key(keysym); return; }
 
 	// F1: help (zdialog.h, z_dialog_help(); docs/app_help.md).
-	if (keysym == Z_KEY_F1) { show_help(); return; }
+	if (keysym == Z_KEY_HELP) { show_help(); return; }
 
 	if (editing) {
 
@@ -2189,21 +2192,23 @@ static void handle_key(uint32_t keysym, uint8_t mods) {
 			move_to(cur_row + 1, cur_col, false);
 			return;
 
-		case Z_KEY_F2:
+		case Z_KEY_RENAME:	// F2: edit the cell
 			begin_edit(true);
 			draw_bar();
 			return;
 
-		case Z_KEY_F3:
+		case Z_KEY_FIND:	// F3: find, then the next match
 			find_next();
 			return;
 
-		case Z_KEY_F10:
+		case Z_KEY_F5:		// sheet's own: the chart
 			do_chart();
 			return;
 
 		// The command line, as in VisiCalc and 1-2-3. A cell's text can
 		// still start with '/': type ' first ('/2 is the text "/2").
+		// F4 is the app prompt everywhere (docs/keys.md).
+		case Z_KEY_PROMPT:
 		case '/':
 			menu = M_TOP;
 			menu_hot = 0;

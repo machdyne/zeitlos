@@ -496,7 +496,7 @@ static void handle_key(uint32_t packed)
 
     if (!Z_WM_UNPACK_KEY_PRESSED(packed)) return;
 
-    if (sym == Z_KEY_F1) {      /* docs/app_help.md */
+    if (sym == Z_KEY_HELP) {      /* docs/app_help.md */
         static const char help[] =
             "The front desk: your chips, what you owe, and the five "
             "games.\n\n"

@@ -155,6 +155,10 @@ four-figure bet was the case that showed it.
 | `decks 1-8`, `h17`, `s17`, `pays 3:2\|6:5`, `das`, `surr` | |
 | `bank`, `buyin`, `game`, `quit` | |
 
+`F1` shows the help box in the window -- these lines, and `F11` (or
+`game`) for full screen; in game mode F1 does nothing. `F11` toggles
+full screen ([keys.md](keys.md)).
+
 Return on an empty line deals. It commits the bet that is already set
 rather than choosing one, so it cannot cost anything unintended — the
 same reasoning that gives roulette's Return the spin.

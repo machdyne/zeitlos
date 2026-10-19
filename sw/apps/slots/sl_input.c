@@ -78,7 +78,7 @@ const char *sl_input_help_line(int i)
         "Return or SPIN to play; bet 5; lines 1-5; max",
         "cherries pay from the left -- reel 1, then reels 1 and 2",
         "any three bars pay, whatever kind they are",
-        "bank, buyin, game, quit -- F1 cycles this help",
+        "bank, buyin, game (full screen), quit",
         0
     };
     if (i < 0) return 0;

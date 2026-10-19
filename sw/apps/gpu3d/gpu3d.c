@@ -1731,7 +1731,7 @@ static void handle_key(uint32_t keysym, uint8_t mods) {
 
 	switch (keysym) {
 
-		case Z_KEY_F1: {	// docs/app_help.md
+		case Z_KEY_HELP: {	// docs/app_help.md
 			static const char help[] =
 				"A wireframe 3D viewer: spins a cube and opens STL "
 				"files. The FPS readout measures the GPU.\n\n"

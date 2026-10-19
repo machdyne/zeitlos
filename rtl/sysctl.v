@@ -3375,6 +3375,7 @@ module sysctl #()
 	// unconditionally so the wire exists even on boards built without
 	// GPU_CURSOR, where it simply goes nowhere.
 	wire socctl_cursor_busy;
+	wire socctl_cursor_hide;
 
 	// Virtual phosphor mode -- socctl.v holds it, rtl/gpu/gpu_video.v
 	// consumes it. Declared unconditionally for the same reason
@@ -3566,6 +3567,7 @@ module sysctl #()
 		.wb_ack_o(wbs_socctl_ack_o),
 		.wb_cyc_i(wbm_cyc_socctl),
 		.cursor_busy(socctl_cursor_busy),
+		.cursor_hide(socctl_cursor_hide),
 		.reconfig(socctl_reconfig),
 		.video_mode(socctl_video_mode),
 		.video_bright(socctl_video_bright),
@@ -4226,6 +4228,7 @@ module sysctl #()
 		.curs_x(gpu_curs_x),
 		.curs_y(gpu_curs_y),
 		.curs_alt(socctl_cursor_busy),
+		.curs_hide(socctl_cursor_hide),
 	);
 `endif
 

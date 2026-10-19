@@ -29,7 +29,7 @@ RUN
 | Up | recalls the last line entered |
 | Escape | erases the line being typed; stops a running program |
 | Ctrl+C | stops a running program |
-| F6 | full screen, or back to the window |
+| F11 | full screen, or back to the window (Escape stays BASIC's there) |
 
 **F1** shows a short help box ([app_help.md](app_help.md)).
 
@@ -42,14 +42,14 @@ public-domain font8x8, completed to Latin-9).
 
 ## From a terminal
 
-BASIC is also the port `basic0`: in `term`, F11 and `port basic0`. The
+BASIC is also the port `basic0`: in `term`, type `port basic0` on the welcome panel. The
 terminal types into the same BASIC as the window, with the same keys, and
 shows everything it prints -- text only: graphics are drawn in the BASIC
 window as always, and `term` shows none of them. Characters travel as
 UTF-8 both ways, as everywhere in Zeitlos, so `Grüße` and `€` work.
 
 One terminal at a time; a second is refused. Closing BASIC tells the
-terminal so. `F6` (full screen) is the window's key only.
+terminal so. `F11` (full screen) is the window's key only ([keys.md](keys.md)).
 
 ## The screen
 
@@ -120,7 +120,7 @@ turns white into black and back; on other colours it flips them to a
 partner colour, and drawing twice still erases). Text is printed in the
 ink colour on the paper colour and replaces its cell, as before.
 
-**Where the colours show.** Full screen (`SCREEN 1`, F6) on a machine
+**Where the colours show.** Full screen (`SCREEN 1`, F11) on a machine
 with game-mode colour ([color.md](color.md)) shows them as colours. The
 window cannot -- the desktop is black and white -- so there the paper
 colour is black and every other colour white: text stays readable
@@ -132,7 +132,7 @@ as a dithered grey of its brightness was tried first, and a program
 that set a coloured `PAPER` came back from full screen as a window
 full of dots with its text lost in them. Nothing is reset when the
 screen changes: the program's colours, ink and paper are all kept, and
-F6 shows them again.
+F11 shows them again.
 
 One thing follows from "the paper is black": an area cleared with an
 earlier `PAPER` shows white after the paper changes, until the next

@@ -45,8 +45,8 @@ To test the UART1 provider, on a board that has one
 > run term
 ```
 
-then `serial 9600` at the `repl` prompt, or F11 in `term` and type
-`serial 9600`. F12 disconnects. With nothing plugged into the port you
+then `serial 9600` at the `repl` prompt, or type `serial 9600` on
+`term`'s start panel. F12 disconnects. With nothing plugged into the port you
 should see the provider's banner and then silence, which is the
 correct result -- it proves the handover without needing a device on
 the other end.
@@ -473,7 +473,7 @@ and `sw/apps/zcc` on the client side.
    (`docs/terminal.md`).
 4. Real providers: ~~UART port~~ -- done, `sw/apps/serial` over UART1
    (`docs/uart1.md`), reachable via `repl`'s `serial [baud]` command
-   or `term`'s F11 Open bar. One connection at a time, and here that
+   or `term`'s Open bar. One connection at a time, and here that
    is the point rather than a phase-1 limitation: there is one wire,
    and two `term` windows on it would interleave their keystrokes into
    one byte stream and split the replies between them at random.
@@ -497,7 +497,7 @@ and `sw/apps/zcc` on the client side.
 `sw/common/zconnect.h` turns a target -- `port <name>`, `serial
 [baud]`, `telnet <host>`, `ssh [user@]host` -- into the provider name
 and scalar CONNECT argument this protocol carries. Both `repl`'s
-commands and `term`'s F11 Open bar go through it, so there is one
+commands and `term`'s Open bar go through it, so there is one
 implementation of each kind rather than two that drift.
 
 See `docs/connections.md`.

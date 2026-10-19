@@ -100,7 +100,7 @@
 #include "../../common/zwidget.h"
 #include "../../common/zflist.h"
 #include "../../common/zdialog.h"
-#include "../../common/zkbd.h"	// Z_KEY_F1
+#include "../../common/zkbd.h"	// Z_KEY_HELP
 #include "../../common/zfsapp.h"
 #include "../../common/zbm.h"
 #include "../../common/ztype.h"
@@ -1624,7 +1624,7 @@ int main(void) {
 					// The only key: everything else is the mouse.
 					if (msg.obj.type == Z_UINT32 &&
 					    Z_WM_UNPACK_KEY_PRESSED(msg.obj.val.uint32) &&
-					    Z_WM_UNPACK_KEY_KEYSYM(msg.obj.val.uint32) == Z_KEY_F1)
+					    Z_WM_UNPACK_KEY_KEYSYM(msg.obj.val.uint32) == Z_KEY_HELP)
 						show_help();
 					break;
 

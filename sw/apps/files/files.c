@@ -1201,16 +1201,21 @@ static void handle_mouse(uint32_t packed) {
 
 }
 
+// Where files started (its launch folder, or /): F12 goes back there.
+static char start_dir[Z_FLIST_PATH_MAX] = "/";
+
 static void handle_key(uint32_t keysym, uint8_t mods) {
 
-	if (keysym == Z_KEY_F1) {	// docs/app_help.md
+	if (keysym == Z_KEY_HELP) {	// docs/app_help.md
 		static const char help[] =
 			"Browse, open and manage files.\n\n"
 			"Enter\tOpen the selection\n"
 			"Backspace\tUp a folder\n"
 			"F2\tRename\n"
 			"Delete\tDelete (asks first)\n"
-			"Ctrl+F\tFind by name, \"text\" inside, or both\n"
+			"F3, Ctrl+F\tFind by name, \"text\" inside, or both\n"
+			"F5\tRead the folder again\n"
+			"F12\tHome: back to the folder files started in\n"
 			"Esc\tStop a find, copy or delete\n"
 			"Tab\tTo the buttons; Space presses\n\n"
 			"Results: Enter opens, Backspace goes to the "
@@ -1232,8 +1237,25 @@ static void handle_key(uint32_t keysym, uint8_t mods) {
 		return;
 	}
 
-	// Ctrl+F: find (or a new find, over the results).
-	if (keysym == 0x06) {
+	// F12, home (docs/keys.md): the folder files started in, with any
+	// find or results put away.
+	if (keysym == Z_KEY_APP_HOME) {
+		if (walking) walk_stop();
+		if (results) results_leave();
+		z_flist_chdir(&flist, start_dir);
+		repaint();
+		return;
+	}
+
+	// F5: the folder read again, the selection kept where it can be.
+	if (keysym == Z_KEY_F5 && !results) {
+		z_flist_refresh(&flist);
+		repaint();
+		return;
+	}
+
+	// Ctrl+F or F3: find (or a new find, over the results).
+	if (keysym == 0x06 || keysym == Z_KEY_FIND) {
 		if (!walking || walk_kind == WK_FIND) { walk_stop(); do_find(); }
 		return;
 	}
@@ -1284,11 +1306,11 @@ static void handle_key(uint32_t keysym, uint8_t mods) {
 
 	// While a copy or delete runs, the list can be browsed, and
 	// nothing else done to it.
-	if (walking && (keysym == Z_KEY_F2 || keysym == Z_KEY_DELETE)) return;
+	if (walking && (keysym == Z_KEY_RENAME || keysym == Z_KEY_DELETE)) return;
 
 	// The usual shortcuts, in the list: F2 renames, Delete deletes
 	// (still asking first).
-	if (keysym == Z_KEY_F2) { do_rename(); draw_list_focus(); return; }
+	if (keysym == Z_KEY_RENAME) { do_rename(); draw_list_focus(); return; }
 	if (keysym == Z_KEY_DELETE) { do_delete(); draw_list_focus(); return; }
 
 	int r = z_flist_key(&flist, keysym);
@@ -1401,7 +1423,9 @@ int main(void) {
 	{
 		char arg[Z_FLIST_PATH_MAX];
 		if (!z_launch_path_take(arg, sizeof(arg))) arg[0] = 0;
-		z_flist_chdir(&flist, arg[0] ? arg : "/");
+		/* not snprintf: it would bring all of printf into files */
+		if (arg[0]) cat(start_dir, 0, (int)sizeof(start_dir), arg);
+		z_flist_chdir(&flist, start_dir);
 	}
 
 	repaint();

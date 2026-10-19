@@ -267,8 +267,8 @@ that folding by click and folding by command leave the game identical.
 | `game` | full screen; Escape comes back |
 | `help`, `quit` | |
 
-`F1` steps through the help on the message line. `F2` toggles full
-screen. `Escape` clears the command line, and stops an opponent
+`F1` shows the help box in the window (in game mode, nothing). `F11`
+toggles full screen ([keys.md](keys.md)). `Escape` clears the command line, and stops an opponent
 thinking. `-` and `+` step the bet amount by half the pot, the same as
 the two small buttons.
 

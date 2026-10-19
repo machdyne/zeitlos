@@ -15,7 +15,7 @@ A new `term` window is **not connected to anything**. It shows a panel:
 ```
 +------------------------------------------------------+
 |                term0 -- not connected                 |
-|  [ REPL ]  [ POSIX ]  [ CONSOLE ]  [ OPEN F11 ]       |
+|  [ REPL ]  [ POSIX ]  [ CONSOLE ]  [ OPEN ]           |
 |  REPL    Scheme and system commands            ready  |
 |  POSIX   Unix-style shell, zcc and vi  not installed  |
 |  CONSOLE Boot log and kernel shell             ready  |
@@ -99,21 +99,30 @@ local echo if neither answered. Two things changed that.
   keys at you, which looks broken and is not.
 - **There are two shells.** With a card present, repl and posix both
   start at boot and neither is the obvious default. One click is
-  cheaper than a wrong guess followed by F11 and typing.
+  cheaper than a wrong guess followed by F12 and typing.
 
 **There is no local echo any more.** A terminal connected to nothing has
 nothing to say; keys go to the panel instead.
 
-### F11 and F12
+### The function keys
+
+term is the exception to the function-key map ([keys.md](keys.md)): it
+does not interpret F1-F10 at all. Connected, they go to the program at
+the far end as the usual VT sequences; on the panel they do nothing.
+The panel itself is the help, so term has no help box.
 
 | key | does |
 | --- | --- |
-| **F1** | help -- on the start panel only; connected, it goes to the far end ([app_help.md](app_help.md)) |
-| **F11** | the Open bar -- go somewhere new |
-| **F12** | disconnect and return to the panel -- from anywhere |
+| **F1-F10** | to the far end (nothing on the panel) |
+| **F11** | full screen, as for any window -- wm's, not term's ([window_manager.md](window_manager.md)) |
+| **F12** | term's home: disconnect and return to the panel -- from anywhere |
 
-Both are intercepted before the port and work whatever the window is
-connected to. That is the point of F12: a remote with no quit command,
+Somewhere new is typed on the panel, or chosen with its OPEN button:
+F12 and then typing is how you go elsewhere. (F11 used to open the
+bar from inside a connection; F11 is full screen everywhere now.)
+
+F12 is intercepted before the port and works whatever the window is
+connected to. That is its point: a remote with no quit command,
 or a child program that has hung, still has a way out. It used to go
 back to `repl0`; with no default connection, "back where you started"
 is the panel, and REPL is one key from there.

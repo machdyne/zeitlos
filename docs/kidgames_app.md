@@ -59,8 +59,9 @@ in a window is the same bug in game mode.
 
 At 1:1 a 5x8 glyph is unreadable across a room by someone who is still
 learning to read at all. Pixel-doubled it is comfortable. So the app
-enters game mode at startup where the bitstream has it, and **F2**
-drops to a window.
+enters game mode at startup where the bitstream has it, and **F11**
+drops to a window (and back) ([keys.md](keys.md)). **Esc** goes up a level: from a game
+to the menu, and from the menu out.
 
 **F1** shows a short help box ([app_help.md](app_help.md)).
 

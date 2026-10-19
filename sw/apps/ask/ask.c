@@ -467,7 +467,7 @@ static void handle_key(uint32_t packed)
 
     if (!Z_WM_UNPACK_KEY_PRESSED(packed)) return;
 
-    if (k == Z_KEY_F1) {                        /* docs/app_help.md */
+    if (k == Z_KEY_HELP) {                        /* docs/app_help.md */
         static const char help[] =
             "Finds passages in the datasets on the card that answer "
             "a question, and opens them in read.\n\n"

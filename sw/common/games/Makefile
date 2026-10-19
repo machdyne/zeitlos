@@ -27,6 +27,16 @@ test:
 		tests/games_test.c zrand.c zbank.c zcard.c zdeck.c zdice.c
 	/tmp/zgames_test
 
+# The arcade runtime and its sound engine (docs/arcade.md, docs/sfx.md),
+# on tests/ar_host.c's software framebuffer: incremental frames against
+# full repaints in every mode, sprites, scores, copies, input, sound.
+SAN = -fsanitize=address,undefined -fno-sanitize-recover=undefined
+test-arcade:
+	$(HOSTCC) -std=gnu99 -Wall -Wextra -O1 -g $(SAN) -DZSFX_HOSTED \
+		-DAR_HOST_TESTS -o /tmp/zarcade_test tests/test_zarcade.c \
+		zarcade.c zsfx.c tests/ar_host.c ../zfont_data.c
+	/tmp/zarcade_test
+
 # Every source an app will compile, checked with the host compiler and
 # the header search the target build actually has. zrand_sys.c and the
 # filesystem half of zbank.c reach into ../ for Zeitlos headers, which
@@ -39,6 +49,9 @@ includecheck:
 	@$(HOSTCC) -std=gnu99 -Wall -fsyntax-only zdeck.c || exit 1
 	@$(HOSTCC) -std=gnu99 -Wall -fsyntax-only zcardart.c || exit 1
 	@$(HOSTCC) -std=gnu99 -Wall -fsyntax-only zdice.c || exit 1
+	@$(HOSTCC) -std=gnu99 -Wall -fsyntax-only zarcade.c || exit 1
+	@$(HOSTCC) -std=gnu99 -Wall -fsyntax-only -DZ_APP_NAME='"test"' zarcade_sys.c || exit 1
+	@$(HOSTCC) -std=gnu99 -Wall -fsyntax-only zsfx.c || exit 1
 	@echo "includecheck: every games source resolves its headers with no -I"
 
 # The card and dice tiles are generated and COMMITTED, so these must
@@ -51,4 +64,4 @@ art:
 clean:
 	rm -f *.o *.d
 
-.PHONY: test includecheck art clean
+.PHONY: test test-arcade includecheck art clean

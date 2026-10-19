@@ -142,6 +142,9 @@ board boots to a desktop with no sdcard ([core apps in flash](#core-apps-in-flas
 | [chip8](docs/chip8_app.md) | CHIP-8 game emulator |
 | [gamedemo](docs/gamedemo.md) | 2D side-scrolling platformer game |
 | space3d | First-person 3D space shooter game |
+| [snake](docs/snake_app.md) | The classic snake game: four ways to play, two players, 16 colours full screen |
+| [blocks](docs/blocks_app.md) | Falling blocks: endless, 40 lines against the clock, 3 minutes for points |
+| [bricks](docs/bricks_app.md) | Break the wall with a paddle and a ball: twelve rounds, capsules, mouse or keys |
 | [kidgames](docs/kidgames_app.md) | Educational games for kids |
 | [casino](docs/casino.md) | The front desk: bankroll, loans, and it launches the five below |
 | [blackjack](docs/blackjack.md) | 6 decks, S17, 3:2, with a basic-strategy hint |
@@ -219,7 +222,8 @@ board boots straight to the graphical desktop with nothing else
 attached -- with an editor, a file browser, Scheme, USB sticks and the
 network. `posix` comes from the card;
 without one, `term` still reaches telnet, ssh and serial through its
-Open bar (F11). See
+Open bar (type on its welcome panel). The function keys mean the same
+in every app ([docs/keys.md](docs/keys.md)). See
 [Core apps in flash](#core-apps-in-flash) below.
 
 ### Quick start: prebuilt images

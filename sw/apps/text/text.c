@@ -3217,7 +3217,7 @@ static void handle_key(uint32_t keysym, uint8_t mods) {
 
 	mods_now = mods;
 
-	if (keysym == Z_KEY_F1) {	// docs/app_help.md
+	if (keysym == Z_KEY_HELP) {	// docs/app_help.md
 		static const char help[] =
 			"A plain text editor for notes, lists and Markdown.\n\n"
 			"Ctrl+N/O/S\tNew, open, save\n"
@@ -3235,7 +3235,7 @@ static void handle_key(uint32_t keysym, uint8_t mods) {
 		z_dialog_help(&dlg_ctx, "Text help", help, "text_editor");
 		return;
 	}
-	if (keysym == Z_KEY_F3) { find_next(); return; }	// find again
+	if (keysym == Z_KEY_FIND) { find_next(); return; }	// F3: find, then again
 
 	if (mods & Z_KBD_MOD_CTRL) {
 

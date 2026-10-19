@@ -9,7 +9,7 @@
  *
  * Starts in the 320x240 pixel-doubled viewport where the bitstream has
  * one, because 5x8 text at 1:1 is not readable from across a room by
- * someone who is still learning to read at all. F2 drops to a window.
+ * someone who is still learning to read at all. F11 drops to a window.
  *
  * Structure is the original's, unchanged: initialise once, show the
  * menu, call the selected game's run() directly, loop back when it

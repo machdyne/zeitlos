@@ -11,6 +11,9 @@ Shows what the machine is — the Zeitlos wordmark, the OS version, the
 gateware's feature bits — and what it's doing: memory, SD card, load,
 uptime and a process list, refreshed once a second.
 
+**F1** shows a short help box ([app_help.md](app_help.md)); there is nothing
+else to press.
+
 ## Two goals in tension
 
 This app is a showcase, and it's also the kind of thing people leave

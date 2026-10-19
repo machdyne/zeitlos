@@ -31,6 +31,7 @@
 #include "upd_net.h"
 #include "zstream.h"
 #include "zobj.h"
+#include "zport.h"
 
 static int fails, checks;
 #define CHECK(c, ...) do { checks++; if (!(c)) { fails++; \
@@ -40,8 +41,10 @@ static int fails, checks;
 #define PID_NET 2
 #define PID_POSIX 9
 
-// Stands for zport.h's PORT_ACK: any message that is not the stream's.
-#define PORT_ACK 0x7A01
+// Z_PORT_DATA_ACK (zport.h) stands for any message that is not the
+// stream's. The real subject, not a made-up number: check-subjects
+// (tools/check_subjects.py, run by sw/apps/Makefile) rejects a subject
+// from no block in zsubjects.h, tests included.
 
 // -- the mailbox ---------------------------------------------------------------
 
@@ -125,7 +128,7 @@ static void deliver(void) {
 	off += n;
 	sent_chunks++;
 	for (int i = 0; i < sc.acks_between; i++, acks_sent++)
-		z_msg_new_send(PID_UPD, PORT_ACK, 1, z_obj_none());
+		z_msg_new_send(PID_UPD, Z_PORT_DATA_ACK, 1, z_obj_none());
 	if (n < 1468) {			// the short (or empty) block: the end
 		last_sent = true;
 		if (!sc.eof_on_pull) {
@@ -184,7 +187,7 @@ static void net_run(void) {
 
 static int other_acks;
 static void other(z_msg_t *m) {
-	if (m->subject == PORT_ACK) other_acks++;
+	if (m->subject == Z_PORT_DATA_ACK) other_acks++;
 }
 
 static uint8_t *pattern(uint32_t n, uint32_t seed) {

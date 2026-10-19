@@ -41,7 +41,7 @@ module tb;
 		.wb_adr_i(adr), .wb_dat_i(dat_w), .wb_dat_o(dat_r),
 		.wb_we_i(we), .wb_sel_i(sel), .wb_stb_i(stb),
 		.wb_ack_o(ack), .wb_cyc_i(cyc),
-		.cursor_busy(), .video_mode(), .view_load(), .game_en(),
+		.cursor_busy(), .cursor_hide(), .video_mode(), .view_load(), .game_en(),
 		.game_wrap(), .view_x(), .view_y(),
 		.frame_ctr(16'd0), .in_vblank(1'b0), .reconfig(),
 		.vram_we(vram_we), .vram_adr(vram_adr));

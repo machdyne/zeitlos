@@ -53,6 +53,7 @@ Insert and Delete ask *Rows* or *Columns*, Sort *Ascending* or
 | PageUp / PageDown, Home / End, Ctrl+Home | a screen; first / last column; A1 |
 | any printable character | starts a fresh entry, replacing the cell |
 | F2, or a click on the edit bar | edit the cell's contents |
+| F4, or `/` | the command line: a menu of commands |
 | Escape | cancel the entry |
 | Delete / Backspace | clear the selection |
 | Ctrl+Z / Ctrl+Y (Ctrl+Shift+Z) | undo / redo -- every change, as far back as memory allows |
@@ -60,11 +61,13 @@ Insert and Delete ask *Rows* or *Columns*, Sort *Ascending* or
 | Ctrl+D / Ctrl+R | fill the selection down / right from its first row / column |
 | Ctrl+1 | number format for the selection |
 | Ctrl+G | go to a cell |
-| Ctrl+F, F3 | find text or a value; find the next |
-| F10 | chart the selection (or show the sheet's chart) |
+| F3, Ctrl+F | find text or a value (F3 asks when nothing has been searched yet); again: the next |
+| F5 | chart the selection (or show the sheet's chart) |
 | Alt+Left / Alt+Right | narrow / widen the column |
 | Ctrl+N / Ctrl+O / Ctrl+S | new / open / save |
 | F1 | help; Read docs opens this page |
+
+The function keys mean the same in every app ([keys.md](keys.md)).
 
 While typing, Up and Down **commit and move**, the way a spreadsheet
 does -- typing down a column should not need Enter between every cell.
@@ -119,11 +122,11 @@ column shows `####` -- never a truncated number.
 
 ### Charts
 
-Select a table and press **F10**: the first column, if it has text,
+Select a table and press **F5**: the first column, if it has text,
 names the categories; the first row, if it has text, names the series;
 every other column is a series (up to six). The chart takes the window.
-**B**ar, **S**tacked, **L**ine or **P**ie switches its kind; Esc goes
-back to the grid. The chart is saved with the sheet, and F10 with no
+**B**ar, **S**tacked, **L**ine or **P**ie switches its kind; Esc (or F5)
+goes back to the grid. The chart is saved with the sheet, and F5 with no
 selection shows it again -- after the numbers have changed, too.
 
 Series are told apart by **patterns** -- solid, hatching, grey, lines --

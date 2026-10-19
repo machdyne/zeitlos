@@ -1,0 +1,39 @@
+# sw/apps/blocks -- build rules are shared: sw/common/app.mk, docs/build.md.
+#
+# The falling-blocks game, on the arcade runtime (sw/common/games/
+# zarcade.[ch], docs/arcade.md) and its sound engine (zsfx.[ch],
+# docs/sfx.md). docs/blocks_app.md.
+
+APP = blocks
+APP_LISTING = 0
+
+SRC_DIRS = $(COMMON_DIR)/games
+
+# Objects, and why each is linked:
+#
+#   zgfx, zcolor           the blitter and game-mode colour
+#   zwin, zwidget, zspeak,
+#   zdialog                the window and its F1 help box
+#   zfsapp                 the high-score file
+#   zarcade, zarcade_sys   the arcade runtime: window or full screen
+#   zsfx                   effects and music on the hardware mixer
+OBJS = zeitlos.o zobj.o zgfx.o zcolor.o zfont_data.o zwin.o zwidget.o \
+	zspeak.o zdialog.o zfsapp.o \
+	zarcade.o zarcade_sys.o zsfx.o \
+	bk_game.o bk_draw.o bk_sound.o blocks.o
+
+# -- host-side tests: the rules, and pictures of every screen --
+
+test:
+	$(MAKE) -C tests
+
+render:
+	$(MAKE) -C tests render
+
+clean: clean-tests
+clean-tests:
+	$(MAKE) -C tests clean
+
+.PHONY: test render clean-tests
+
+include ../../common/app.mk

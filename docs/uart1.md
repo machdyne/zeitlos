@@ -346,7 +346,7 @@ At most 32 bytes per call.
 
 ## See also
 
-- `docs/connections.md` — the four connection kinds, and term's F11 Open bar
+- `docs/connections.md` — the four connection kinds, and term's Open bar
 - `docs/ports.md` — the port mechanism `serial` uses
 - `docs/gpio.md` — for bit-banging a second serial port on a GPIO pin, if you need more than one
 - `sw/common/zuart.h` — the interface, and the reasoning for each choice

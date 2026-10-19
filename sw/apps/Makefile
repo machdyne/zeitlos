@@ -61,6 +61,9 @@ APPS = casino poker roulette blackjack slots craps \
 	vi \
 	zetta \
 	space3d \
+	snake \
+	blocks \
+	bricks \
 	audiotest \
 	play \
 	track \
@@ -90,7 +93,7 @@ APPS = casino poker roulette blackjack slots craps \
 # (docs/messaging.md, "Subjects and tags"): checked first, in a second,
 # so a protocol that skipped the registry fails the build rather than
 # colliding with another at run time.
-all: check-subjects
+all: check-subjects check-fkeys
 	@for a in $(APPS); do \
 		echo "==> $$a"; \
 		$(MAKE) -C $$a || exit 1; \
@@ -99,7 +102,14 @@ all: check-subjects
 check-subjects:
 	@python3 ../../tools/check_subjects.py ..
 
-.PHONY: check-subjects
+# The function keys mean the same thing in every app (docs/keys.md): F1
+# help, F2 rename/edit, F3 find, F4 the prompt, F11 full screen, F12
+# home (term, web, files); F9 and F10 reserved. Apps say which by name
+# (zkbd.h), and this holds them to it.
+check-fkeys:
+	@python3 ../../tools/check_fkeys.py ..
+
+.PHONY: check-subjects check-fkeys
 
 clean:
 	@for a in $(APPS); do \

@@ -72,7 +72,7 @@ effect. Keep the two together when adding a key.
 
 ### `apps.term.auto_connect`
 
-The same text the term Open bar (F11) takes:
+The same text term's Open bar takes (typed on its start panel):
 
 ```
 apps.term.auto_connect: port repl0

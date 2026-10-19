@@ -15,7 +15,7 @@ include $(COMMON)/arch.mk
 #   host render linked it explicitly and the target link did not, so this
 #   only surfaced as an undefined reference at the very end -- which is
 #   what a target link is for.
-OBJS = zeitlos.o zobj.o zgfx.o zshape.o zfont_data.o zwin.o zrng.o zfsapp.o \
+OBJS = zeitlos.o zobj.o zgfx.o zwidget.o zspeak.o zdialog.o zshape.o zfont_data.o zwin.o zrng.o zfsapp.o \
 	zrand.o zrand_sys.o zbank.o \
 	sl_reels.o sl_game.o sl_art.o sl_board.o sl_input.o slots.o
 

@@ -170,6 +170,7 @@ with [welcome](welcome.md); to program it, [kernel](kernel.md) and
 | [sheet\_app](sheet_app.md) | `sheet` |
 | [convert](convert.md) | `convert`: documents, tables, archives |
 | [app\_help](app_help.md) | F1: a help box in every app, with a button to these docs |
+| [keys](keys.md) | Function keys: the same meaning in every app (F1 help ... F11 full screen, F12 app home) |
 | [web\_app](web_app.md) | `web` |
 | [read\_app](read_app.md) | `read` |
 | [hex\_editor](hex_editor.md) | `hex` |
@@ -197,6 +198,11 @@ with [welcome](welcome.md); to program it, [kernel](kernel.md) and
 | Document | Subject |
 |---|---|
 | [space3d\_app](space3d_app.md) | `space3d`: wireframe space game; 16-colour dual playfield in full screen |
+| [snake\_app](snake_app.md) | `snake`: the classic, one or two players, window or full screen, 16 colours |
+| [blocks\_app](blocks_app.md) | `blocks`: falling blocks; endless, 40 lines, 3 minutes; the stack drops by VRAM copies |
+| [bricks\_app](bricks_app.md) | `bricks`: paddle, ball and a wall of bricks; twelve rounds, capsules, mouse or keys |
+| [arcade](arcade.md) | The arcade runtime: one 320x240 game screen in a window or full screen, colour or mono |
+| [sfx](sfx.md) | Game sound: effects and music on the hardware mixer |
 | [chess\_app](chess_app.md) | `chess` |
 | [chess\_engine](chess_engine.md) | The chess engine |
 | [chip8\_app](chip8_app.md) | `chip8` |

@@ -456,7 +456,7 @@ static z_win_t win;
 // update_geometry(). Nothing here keeps its own copy of the content
 // rect formula; zwin.c owns it, for the reasons set out in that
 // function's own comment.
-// -- full screen (F2) --
+// -- full screen (F11) --
 //
 // The window is already 320x240, which is exactly a game-mode page, so
 // full screen is not a different renderer -- it is the same one drawing
@@ -1891,7 +1891,7 @@ static void show_help(void) {	// docs/app_help.md
 		"shoot rocks and UFOs.\n\n"
 		"Arrows\tSteer\n"
 		"Space\tFire\n"
-		"F2\tFull screen, or back to the window\n"
+		"F11\tFull screen, or back to the window\n"
 		"C\tFull screen: colour on or off\n"
 		"Esc\tLeave full screen\n\n"
 		"A crash strobes the screen and starts a new run.";
@@ -1906,7 +1906,7 @@ static void handle_key(uint32_t packed) {
 	uint32_t keysym = Z_WM_UNPACK_KEY_KEYSYM(packed);
 	bool pressed = Z_WM_UNPACK_KEY_PRESSED(packed) != 0;
 
-	if (keysym == Z_KEY_F1) {
+	if (keysym == Z_KEY_HELP) {
 		if (pressed && !game_mode) show_help();
 		return;
 	}
@@ -1923,7 +1923,7 @@ static void handle_key(uint32_t packed) {
 		return;
 	}
 
-	if (keysym == Z_KEY_F2) {
+	if (keysym == Z_KEY_FULL_SCREEN) {
 		if (pressed) {
 			if (game_mode) leave_game_mode();
 			else enter_game_mode();
@@ -2005,7 +2005,8 @@ int main(void) {
 	printf("space3d: wireframe space game\n");
 
 	if (z_win_create_flags(&win, "space3d", WIN_W, WIN_H, -1, -1,
-	    Z_WIN_FLAG_CLOSE_ICON | Z_WIN_FLAG_CLOSE_KILLS_OWNER) != Z_OK) {
+	    Z_WIN_FLAG_CLOSE_ICON | Z_WIN_FLAG_CLOSE_KILLS_OWNER |
+	    Z_WIN_FLAG_GAME_MODE) != Z_OK) {
 		printf("space3d: failed to create window\n");
 		return 1;
 	}

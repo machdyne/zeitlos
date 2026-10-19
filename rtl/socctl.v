@@ -44,7 +44,12 @@
  * codebase, e.g. rtl/gpio.v, rtl/csrs.v):
  *
  *   0  CTRL   bit 0: cursor shape. 0 = normal (X), 1 = busy (Z).
- *             Resets to 1. bits 31:1 reserved, must be written 0.
+ *             bit 1: cursor hidden. 1 = the hardware cursor is not
+ *             drawn at all -- for a game that has taken the screen
+ *             (sw/apps/wm hides it while a game holds the grab).
+ *             Resets to 1 (busy, shown). bits 31:2 reserved, must be
+ *             written 0. Software that predates bit 1 writes it as 0
+ *             and so always shows the cursor, as before.
  *   1  MAGIC  fixed 32'h5A43_5452 ("ZCTR"). Same purpose as csrs.v's
  *             own MAGIC: reading an address nothing decodes does not
  *             fault on this bus, so a known constant is the only way
@@ -351,6 +356,11 @@ module socctl_wb #(
     // is one frame drawn with the old shape.
     output wire cursor_busy,
 
+    // 1 = draw no cursor at all. Feeds rtl/gpu/gpu_cursor.v's
+    // curs_hide; crosses into the pixel clock domain the same way, and
+    // for the same reason it is safe, as cursor_busy above.
+    output wire cursor_hide,
+
     // Virtual phosphor mode -> rtl/gpu/gpu_video.v's own video_mode
     // input. Crosses into the pixel clock domain there rather than
     // here, because that is where the timing needed to make the change
@@ -469,6 +479,7 @@ module socctl_wb #(
     reg cvbs;
 
     assign cursor_busy = ctrl[0];
+    assign cursor_hide = ctrl[1];
     assign reconfig = recfg && (RECONFIG_AVAIL != 0);
     assign video_mode = video;
     assign video_bright = bright;

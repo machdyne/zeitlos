@@ -225,6 +225,9 @@ CASINO = [
 
 GAMES_DEMOS = [
     (zcard("Z_DIR_APPS", "space3d"), "sw/apps/space3d/space3d.bin"),
+    (zcard("Z_DIR_APPS", "snake"), "sw/apps/snake/snake.bin"),
+    (zcard("Z_DIR_APPS", "blocks"), "sw/apps/blocks/blocks.bin"),
+    (zcard("Z_DIR_APPS", "bricks"), "sw/apps/bricks/bricks.bin"),
     (zcard("Z_DIR_APPS", "gamedemo"), "sw/apps/gamedemo/gamedemo.bin"),
     (zcard("Z_DIR_APPS", "gpu3d"), "sw/apps/gpu3d/gpu3d.bin"),
     (zcard("Z_DIR_APPS", "gpudemo"), "sw/apps/gpudemo/gpudemo.bin"),

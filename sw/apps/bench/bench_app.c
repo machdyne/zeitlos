@@ -687,7 +687,7 @@ static void on_msg(z_msg_t *m) {
     case Z_WM_KEY: {
         uint32_t k = Z_WM_UNPACK_KEY_KEYSYM(m->obj.val.uint32);
         if (!Z_WM_UNPACK_KEY_PRESSED(m->obj.val.uint32)) break;
-        if (k == Z_KEY_F1) help_wanted = true;  /* not from inside a handler */
+        if (k == Z_KEY_HELP) help_wanted = true;  /* not from inside a handler */
         else if (k == Z_KEY_F5) load();
         else if (k == Z_KEY_F6) {
             view_mode = (view_mode + 1) % 3;

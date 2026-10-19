@@ -19,13 +19,13 @@ list that erases only what moved -- are in the comment at the top of
 |---|---|
 | Arrows | steer (the ship strafes) |
 | Space | fire |
-| F2 | full screen (game mode), or back to the window |
+| F11 | full screen (game mode), or back to the window ([keys.md](keys.md)) |
 | C | in full screen: colour on or off |
 | Esc | leave full screen (once released) |
 
 A crash strobes the screen and starts a new run.
 
-**F1** shows a short help box ([app_help.md](app_help.md)). In the window only.
+**F1** shows a short help box ([app_help.md](app_help.md)). In the window only; in game mode it does nothing.
 
 ## Full screen in colour
 

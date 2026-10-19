@@ -269,7 +269,7 @@ static void draw_hdr(void) {
 	int n = 0;
 	z_win_fill_rect(&win, rx, 0, W - rx, y_rule0, 0);
 	if (mode == MODE_LOG) {
-		text(rx, 1, "node console -- F2 or Esc to go back", rcols, false);
+		text(rx, 1, "node console -- F5 or Esc to go back", rcols, false);
 		return;
 	}
 	if (mode == MODE_HELP) {
@@ -416,8 +416,8 @@ static const char *const help[] = {
 	"PgUp/PgDn  scroll the messages (or the wheel)",
 	"Esc        clear the line",
 	"Ctrl+W     delete a word      Ctrl+U  clear the line",
-	"F2         the node's console log",
-	"F4         notifications for direct messages on/off",
+	"F5         the node's console log",
+	"F6         notifications for direct messages on/off",
 	"Ctrl+Q     quit",
 	"",
 	"A channel reaches everyone on it; a node is a direct message.",
@@ -660,13 +660,13 @@ static bool on_key(uint32_t packed) {
 	case Z_KEY_PAGEDOWN:
 		scroll -= msg_rows - 1; if (scroll < 0) scroll = 0;
 		dirty |= D_MSGS; return true;
-	case Z_KEY_F1:
+	case Z_KEY_HELP:
 		mode = mode == MODE_HELP ? MODE_CHAT : MODE_HELP;
 		dirty |= D_HDR | D_MSGS; return true;
-	case Z_KEY_F2:
+	case Z_KEY_F5:
 		mode = mode == MODE_LOG ? MODE_CHAT : MODE_LOG;
 		dirty |= D_HDR | D_MSGS; return true;
-	case Z_KEY_F4:
+	case Z_KEY_F6:
 		notify = !notify;
 		say(notify ? "notifications on" : "notifications off");
 		return true;

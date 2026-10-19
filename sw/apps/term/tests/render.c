@@ -552,9 +552,9 @@ int main(int argc, char **argv) {
 
 	// -- 4. the Open bar: Esc, and connecting through it --
 	printf("4. Open bar dismissal (the original bug)\n");
-	key(Z_KEY_F11, 0);
+	bar_open();	/* (it was F11; now typing on the panel opens it) */
 	frame_check("bar open");
-	expect(bar_active, "F11 opens the bar");
+	expect(bar_active, "the bar opens");
 	type("port pos");
 	frame_check("bar typing");
 	write_pbm(prefix, "4-bar");
@@ -563,7 +563,7 @@ int main(int argc, char **argv) {
 	expect(!bar_active, "Esc dismisses");
 
 	reg_posix = true;
-	key(Z_KEY_F11, 0);
+	bar_open();	/* (it was F11; now typing on the panel opens it) */
 	type("port posix0");
 	key(0x0d, 0);
 	frame_check("bar dismissed by a successful connect");
@@ -574,7 +574,7 @@ int main(int argc, char **argv) {
 
 	// Output written UNDER the bar while it is up must not show
 	// through, and must be there when it goes.
-	key(Z_KEY_F11, 0);
+	bar_open();	/* (it was F11; now typing on the panel opens it) */
 	output_lines(151, 160, 2, "output under the bar");
 	key(0x1b, 0);
 	frame_check("bar gone, output under it restored");
@@ -671,7 +671,7 @@ int main(int argc, char **argv) {
 
 	// -- 8. a wm redraw with the bar up --
 	printf("8. redraw with the bar up\n");
-	key(Z_KEY_F11, 0);
+	bar_open();	/* (it was F11; now typing on the panel opens it) */
 	frame_check("bar before redraw");
 	z_render_clear();
 	handle_redraw(Z_WM_PACK_MOUSE(0, 0, 0, 0) /* id/flags unused here */);
@@ -689,7 +689,7 @@ int main(int argc, char **argv) {
 
 	// -- 9. F12 and a far-end close both return to the panel --
 	printf("9. F12, a refused connect, and a close from the far end\n");
-	key(Z_KEY_F12, 0);
+	key(Z_KEY_APP_HOME, 0);
 	frame_check("F12");
 	expect(!port.connected && panel_visible, "F12 disconnects to the panel");
 	expect(closes_sent >= 1, "F12 told the far end");
@@ -748,7 +748,7 @@ int main(int argc, char **argv) {
 	expect(port.connected && port.peer_pid == PID_REPL, "auto-connected to repl0");
 	expect(!panel_visible, "panel gone after auto-connect");
 
-	key(Z_KEY_F12, 0);
+	key(Z_KEY_APP_HOME, 0);
 	frame_check("F12 after auto-connect");
 	expect(panel_visible && !port.connected && !auto_pending,
 		"F12 lands on the panel and does NOT auto-connect again");
@@ -768,7 +768,7 @@ int main(int argc, char **argv) {
 		"connected once the provider registered");
 
 	// Never appears: gives up with a reason.
-	key(Z_KEY_F12, 0);
+	key(Z_KEY_APP_HOME, 0);
 	cfg_auto_connect = "port nothing0";
 	auto_begin();
 	frame_check("waiting for a provider that never comes");
@@ -853,7 +853,7 @@ int main(int argc, char **argv) {
 		expect(view_off == 0 && vt.cursor_y >= vskip &&
 			vt.cursor_y < vskip + vis_rows, "short: back to live, cursor in view");
 
-		key(Z_KEY_F11, 0);
+		bar_open();	/* (it was F11; now typing on the panel opens it) */
 		frame_check("short: Open bar");
 		expect(vskip == VT_ROWS - vis_rows, "short: the bar pulls the view down");
 		key(0x1b, 0);

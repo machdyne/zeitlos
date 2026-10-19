@@ -94,6 +94,10 @@ typedef struct {
 	// height while real_h keeps the app's, which is never told. See
 	// "-- maximize and shade --".
 	bool		maxed, shaded;
+	// Full screen (F11, docs/keys.md): maximized with no titlebar --
+	// no_titlebar is set while it lasts, maxed too (so the dock hides
+	// and rx..rh hold the way back).
+	bool		fulled;
 	uint32_t	rx, ry, rw, rh;
 	uint32_t	real_h;
 
@@ -194,6 +198,9 @@ static const dock_app_t dock_candidates[] = {
 	{ "basic",		z_icon_basic_data },
 	{ "chip8",		z_icon_chip8_data },
 	{ "space3d",	z_icon_space3d_data },
+	{ "snake",		z_icon_snake_data },
+	{ "blocks",		z_icon_blocks_data },
+	{ "bricks",		z_icon_bricks_data },
 	{ "gpu3d",		z_icon_gpu3d_data },
 	{ "gamedemo",	z_icon_gamedemo_data },
 };
@@ -1108,6 +1115,10 @@ static bool ptr_wakeups;
 
 static uint32_t wm_busy_mask;
 
+// The cursor is hidden while a game holds the screen (game_grab_pid):
+// main() notices a grab starting or ending and calls wm_busy_apply().
+static bool wm_cursor_hidden;
+
 // Reports what it wrote and whether the hardware is even there. This
 // is deliberately noisy: the cursor is the only visible effect, so a
 // silent failure here looks identical to "the feature doesn't work"
@@ -1123,7 +1134,7 @@ static void wm_busy_apply(void) {
 	// cursor as an X.
 	bool busy = (wm_busy_mask != 0);
 
-	z_cursor_set_busy(busy);
+	z_cursor_set(busy, wm_cursor_hidden);
 
 	// Read it back. socctl's CTRL register is readable, so this
 	// distinguishes the three ways this can fail -- no socctl in the
@@ -1137,8 +1148,8 @@ static void wm_busy_apply(void) {
 	}
 
 	uint32_t rb = reg_socctl_ctrl & Z_SOCCTL_CURSOR_BUSY;
-	printf("wm: busy=0x%lx cursor=%s%s\n", (unsigned long)wm_busy_mask,
-		rb ? "Z" : "X",
+	printf("wm: busy=0x%lx cursor=%s%s%s\n", (unsigned long)wm_busy_mask,
+		rb ? "Z" : "X", wm_cursor_hidden ? " (hidden)" : "",
 		((rb != 0) == busy) ? "" : " (READBACK MISMATCH)");
 }
 
@@ -3563,6 +3574,9 @@ static const char *dock_spoken_name(const char *name) {
 		{ "basic",    "BASIC" },
 		{ "chip8",    "Chip 8" },
 		{ "space3d",  "Space 3D" },
+		{ "snake",    "Snake" },
+		{ "blocks",   "Blocks" },
+		{ "bricks",   "Bricks" },
 		{ "gpu3d",    "GPU 3D" },
 		{ "gamedemo", "Game demo" },
 	};
@@ -3938,6 +3952,50 @@ static void toggle_maximize(int idx) {
 	set_rect(idx, (WM_SCREEN_W - nw) / 2, (WM_SCREEN_H - nh) / 2, nw, nh);
 	dock_update();
 	z_speak_static("maximized", Z_TTS_F_INTERRUPT);
+
+}
+
+// -- full screen -- docs/keys.md, "F11" --
+//
+// F11 on a resizable window that has no game mode of its own: the
+// window takes the whole screen (or as much as its limits allow,
+// centred), loses its titlebar, and the dock hides -- maximize without
+// the chrome. F11 or Esc brings it back. The app is told through the
+// usual rect messages, the top bit of whose h says the titlebar is gone
+// (Z_WM_RECT_BARE).
+// False if this window is not one F11 is wm's for: the key goes on to
+// the app (game mode, or nothing).
+static bool toggle_fullscreen(int idx) {
+
+	if (idx < 0 || idx == dock_idx || !windows[idx].used) return false;
+	wm_window_t *w = &windows[idx];
+
+	if (w->fulled) {
+		w->fulled = false;
+		w->no_titlebar = false;
+		w->maxed = false;
+		set_rect(idx, (int)w->rx, (int)w->ry, (int)w->rw, (int)w->rh);
+		dock_update();
+		z_speak_static("window", Z_TTS_F_INTERRUPT);
+		return true;
+	}
+
+	if (!(w->flags & Z_WIN_FLAG_RESIZABLE) || (w->flags & Z_WIN_FLAG_GAME_MODE) ||
+	    w->no_titlebar)
+		return false;
+	if (w->shaded) toggle_shade(idx);
+
+	int nw = WM_SCREEN_W, nh = WM_SCREEN_H;
+	if (w->max_w && nw > (int)w->max_w) nw = (int)w->max_w;
+	if (w->max_h && nh > (int)w->max_h) nh = (int)w->max_h;
+	if (!w->maxed) { w->rx = w->x; w->ry = w->y; w->rw = w->w; w->rh = w->h; }
+	w->maxed = true;
+	w->fulled = true;
+	w->no_titlebar = true;
+	set_rect(idx, (WM_SCREEN_W - nw) / 2, (WM_SCREEN_H - nh) / 2, nw, nh);
+	dock_update();
+	z_speak_static("full screen", Z_TTS_F_INTERRUPT);
+	return true;
 
 }
 
@@ -4908,6 +4966,28 @@ static void dispatch_keys(void) {
 			continue;
 		}
 
+		// F11 -- full screen for the focused window, when it is wm's
+		// to give (toggle_fullscreen()); Esc -- out of it again, so
+		// nobody who pressed F11 by accident is stuck without knowing
+		// the key. Both are spent when wm acts on them, release and
+		// all; otherwise they go to the app as usual. Not during a
+		// game grab: there every key is the game's.
+		if (!game_grab_pid && !(modifiers & (Z_KBD_MOD_CTRL | Z_KBD_MOD_GUI)) && !alt &&
+		    (keysym == Z_KEY_FULL_SCREEN || keysym == 0x1b)) {
+			static bool f11_ate, esc_ate;
+			bool *ate = (keysym == 0x1b) ? &esc_ate : &f11_ate;
+			if (pressed) {
+				*ate = false;
+				if (focused >= 0 && (keysym == Z_KEY_FULL_SCREEN || windows[focused].fulled))
+					*ate = toggle_fullscreen(focused);
+			}
+			if (*ate) {
+				if (!pressed) *ate = false;
+				kbd_sent[usage] = 0;
+				continue;
+			}
+		}
+
 		// Super+Esc -- toggle game mode. Super, not Alt: Super is for
 		// what is global -- the viewport, speech, the keyboard -- and
 		// Alt for the focused window (docs/welcome.md). It was Alt+Esc.
@@ -5067,6 +5147,7 @@ static int create_window(uint32_t owner_pid, const char *title,
 		windows[i].max_w = 0;
 		windows[i].max_h = 0;
 		windows[i].maxed = false;
+		windows[i].fulled = false;
 		windows[i].shaded = false;
 		windows[i].rx = windows[i].ry = windows[i].rw = windows[i].rh = 0;
 		windows[i].real_h = 0;
@@ -5787,8 +5868,11 @@ static void send_win_rect(uint32_t to, uint32_t subject, uint32_t tag, int idx) 
 		v[3].type = Z_UINT32; v[3].val.uint32 = windows[idx].w;
 		// A shaded window's h is its titlebar; the app keeps its
 		// own size and is only ever told that one.
+		// Full screen: no titlebar, the content starts at the top --
+		// the top bit of h says so (Z_WM_RECT_BARE, zwin.c).
 		v[4].type = Z_UINT32; v[4].val.uint32 =
-			windows[idx].shaded ? windows[idx].real_h : windows[idx].h;
+			(windows[idx].shaded ? windows[idx].real_h : windows[idx].h) |
+			(windows[idx].fulled ? Z_WM_RECT_BARE : 0);
 	}
 
 	win_rect_tbl[s].len = (uint32_t)n;
@@ -7020,6 +7104,12 @@ int main(void) {
 
 		// -- keyboard (interrupt-captured, drained here) --
 		dispatch_keys();
+
+		// -- the cursor: none while a game holds the screen --
+		if ((game_grab_pid != 0) != wm_cursor_hidden) {
+			wm_cursor_hidden = !wm_cursor_hidden;
+			wm_busy_apply();
+		}
 
 		// -- mouse --
 		vmouse_yield_to_usb();

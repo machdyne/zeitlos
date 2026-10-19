@@ -1475,6 +1475,8 @@ Software side, in `sw/apps/track/Makefile`:
   service, not a design. One exception now exists: while the speech
   service runs, all three leave channel 7 (`Z_AUDIO_CH_SPEECH`) to it,
   and `midi` plays seven voices -- see [tts.md](tts.md), "Audio".
+  Games on [zsfx](sfx.md) (`snake`, `blocks`, `bricks`) do the same: music on 0-3, effects
+  on 4-6 and 7 only without speech.
 - **Editing.** `track` is a player. Pattern editing is real UI work and
   wants its own pass.
 - **`CTRL` bit 5**, reserved for enabling the digital output

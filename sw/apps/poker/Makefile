@@ -15,7 +15,7 @@ APP_LISTING = 0
 #
 #   zfsapp.o: zbank reads and writes /data/casino/bank.dat, so the filesystem half of the
 #   app runtime comes with it.
-OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o zrng.o \
+OBJS = zeitlos.o zobj.o zgfx.o zwidget.o zspeak.o zdialog.o zfont_data.o zwin.o zrng.o \
 	zcard.o zdeck.o zrand.o zrand_sys.o zbank.o zfsapp.o zcardart.o \
 	pk_eval.o pk_game.o pk_ai.o table_ui.o input.o poker.o
 

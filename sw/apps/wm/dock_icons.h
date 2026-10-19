@@ -48,5 +48,8 @@ extern const uint8_t z_icon_track_data[32 * 4];
 extern const uint8_t z_icon_view_data[32 * 4];
 extern const uint8_t z_icon_web_data[32 * 4];
 extern const uint8_t z_icon_basic_data[32 * 4];
+extern const uint8_t z_icon_snake_data[32 * 4];
+extern const uint8_t z_icon_blocks_data[32 * 4];
+extern const uint8_t z_icon_bricks_data[32 * 4];
 
 #endif

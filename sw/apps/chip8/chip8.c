@@ -24,15 +24,14 @@
  *   SPACE and ENTER alias the gamepad's A and START buttons, so they
  *   follow whatever `pad a=` and `pad start=` say for this ROM.
  *
- *   F1/F2/F3   scale 1x / 2x / 4x
- *   F4         cycle compatibility profile (resets)
- *   F5         reset
- *   F6         full-screen game mode
- *   F7/F8      slower / faster
- *   F9         screenshot to chip8ss.zbm
- *   F10        debugger pane
- *   F11        single step        F12  run / pause
- *   Shift+F1   cycle the XO-CHIP grey mapping
+ *   (the function keys follow docs/keys.md)
+ *   F1         help (in the window)
+ *   F5         reset              Shift+F5  next compatibility profile
+ *   F6         scale 1x/2x/4x     Shift+F6  XO-CHIP grey mapping
+ *   F7         debugger pane      Shift+F7  screenshot to chip8ss.zbm
+ *   F8         run / pause        Shift+F8  single step
+ *   - =        slower / faster
+ *   F11        full-screen game mode
  *   ESC        leave game mode, or quit
  */
 
@@ -163,6 +162,8 @@ static uint8_t pad_key[C8_PAD_COUNT] = {
 	0x5, 0x0, 0x1, 0x3,
 	0xF, 0xE
 };
+
+static void show_help(void);
 
 static int keysym_to_hex(uint32_t keysym) {
 
@@ -823,71 +824,72 @@ static void handle_key(uint32_t packed) {
 		return;
 	}
 
-	/* Shift+F1 cycles the XO-CHIP grey mapping.
-	 *
-	 * On a modifier because the twelve F-keys are spoken for, and on
-	 * F1 because it sits next to the other display controls. It only
-	 * does anything visible for a two-plane ROM; said out loud either
-	 * way, so pressing it on a CHIP-8 game is not a silent no-op. */
-	if (keysym == Z_KEY_F1 && (mods & Z_KBD_MOD_SHIFT)) {
-		int p = (rnd.pal + 1) % C8_PAL_COUNT;
-		c8_render_set_palette(&rnd, p);
-		need_full_redraw = true;
-		printf("chip8: grey mapping '%s'%s\n", c8_palette_name(p),
-			vm.two_plane ? "" : " (no effect until a ROM uses plane 2)");
-		return;
-	}
-
-	switch (keysym) {
-	case Z_KEY_F1: case Z_KEY_F2: case Z_KEY_F3: {
-		int s = (keysym == Z_KEY_F1) ? 1 : (keysym == Z_KEY_F2) ? 2 : 4;
-		if (game_mode) return;          /* 2x is forced there */
-		if (c8_render_set_scale(&rnd, s)) resize_window();
-		return;
-	}
-	case Z_KEY_F4:
-		profile = (profile + 1) % C8_PROFILE_COUNT;
-		reset_machine();
-		return;
-	case Z_KEY_F5:
-		reset_machine();
-		return;
-	case Z_KEY_F6:
-		if (game_mode) leave_game_mode();
-		else enter_game_mode();
-		return;
-	case Z_KEY_F7:
-		if (ipf > 1) ipf -= (ipf > 20) ? 10 : 1;
-		printf("chip8: %d instructions/frame\n", ipf);
-		return;
-	case Z_KEY_F8:
-		ipf += (ipf >= 20) ? 10 : 1;
-		printf("chip8: %d instructions/frame\n", ipf);
-		return;
-	case Z_KEY_F9:
-		screenshot();
-		return;
-	case Z_KEY_F10:
-		if (game_mode) return;
-		dbg_on = !dbg_on;
-		resize_window();
-		return;
-	case Z_KEY_F11:
-		/* Stepping implies pausing. Pressing step on a running
-		 * machine and having it execute one instruction and then
-		 * thousands more is not what anybody means by it. */
-		paused = true;
-		step_pending = true;
-		return;
-	case Z_KEY_F12:
-		paused = !paused;
-		return;
-	case 0x1B:                          /* ESC */
-		if (game_mode) leave_game_mode();
-		else quit = true;
-		return;
-	default:
-		break;
+	/* The function keys follow docs/keys.md: F1 help, F11 game mode,
+	 * F5-F8 chip8's own, each with a second job on Shift. F2-F4, F9,
+	 * F10 and F12 mean things chip8 has no use for, so they are not
+	 * bound. Speed is on - and =, which are not on the hex keypad. */
+	{
+		bool shift = (mods & Z_KBD_MOD_SHIFT) != 0;
+		switch (keysym) {
+		case Z_KEY_HELP:
+			if (!game_mode) show_help();
+			return;
+		case Z_KEY_F5:
+			if (shift) profile = (profile + 1) % C8_PROFILE_COUNT;
+			reset_machine();
+			return;
+		case Z_KEY_F6:
+			if (shift) {
+				/* Only visible for a two-plane ROM; said out
+				 * loud either way, so it is never a silent no-op. */
+				int p = (rnd.pal + 1) % C8_PAL_COUNT;
+				c8_render_set_palette(&rnd, p);
+				need_full_redraw = true;
+				printf("chip8: grey mapping '%s'%s\n", c8_palette_name(p),
+					vm.two_plane ? "" : " (no effect until a ROM uses plane 2)");
+			} else if (!game_mode) {        /* 2x is forced there */
+				int sc = rnd.scale >= 4 ? 1 : rnd.scale * 2;
+				if (c8_render_set_scale(&rnd, sc)) resize_window();
+			}
+			return;
+		case Z_KEY_F7:
+			if (shift) {
+				screenshot();
+			} else if (!game_mode) {
+				dbg_on = !dbg_on;
+				resize_window();
+			}
+			return;
+		case Z_KEY_F8:
+			if (shift) {
+				/* Stepping implies pausing: one instruction and
+				 * then thousands more is not what anybody means. */
+				paused = true;
+				step_pending = true;
+			} else {
+				paused = !paused;
+			}
+			return;
+		case '-':
+			if (ipf > 1) ipf -= (ipf > 20) ? 10 : 1;
+			printf("chip8: %d instructions/frame\n", ipf);
+			return;
+		case '=':
+		case '+':
+			ipf += (ipf >= 20) ? 10 : 1;
+			printf("chip8: %d instructions/frame\n", ipf);
+			return;
+		case Z_KEY_FULL_SCREEN:
+			if (game_mode) leave_game_mode();
+			else enter_game_mode();
+			return;
+		case 0x1B:                          /* ESC */
+			if (game_mode) leave_game_mode();
+			else quit = true;
+			return;
+		default:
+			break;
+		}
 	}
 
 	k = keysym_to_hex(keysym);
@@ -901,6 +903,28 @@ static void handle_key(uint32_t packed) {
  * up, so this is reentrant with respect to redraws but not with
  * respect to itself -- `picking` stops a second click on the icon from
  * stacking a second dialog on the first. */
+/* F1: the help box, in the window (docs/keys.md: nothing in game mode). */
+static void show_help(void) {
+	static const char help[] =
+		"A CHIP-8, SUPER-CHIP and XO-CHIP machine. The guest's hex "
+		"keypad is the 4x4 block 1-4, Q-R, A-F, Z-V; Space and Enter are "
+		"the pad's A and START.\n\n"
+		"F5\tReset (Shift: next compatibility profile)\n"
+		"F6\tScale 1x, 2x, 4x (Shift: XO-CHIP grey mapping)\n"
+		"F7\tDebugger pane (Shift: screenshot)\n"
+		"F8\tRun or pause (Shift: one step)\n"
+		"- =\tSlower, faster\n"
+		"F11\tFull-screen game mode (Esc comes back)\n"
+		"Esc\tQuit\n\n"
+		"The open icon on the titlebar picks another ROM.";
+	z_dialog_ctx_t ctx;
+	memset(&ctx, 0, sizeof(ctx));
+	ctx.parent = &win;
+	ctx.on_msg = on_msg;
+	z_dialog_help(&ctx, "chip8 help", help, "chip8_app");
+	need_full_redraw = true;
+}
+
 static bool picking;
 
 static void open_another_rom(void) {
@@ -1038,13 +1062,13 @@ static void poll_game_input(void) {
 		if (now != was) c8_key(&vm, k, now);
 	}
 
-	/* ESC (0x29) and F6 (0x3F) both leave. Read raw, since nothing is
+	/* ESC (0x29) and F11 (0x44) both leave. Read raw, since nothing is
 	 * delivering messages here.
 	 *
 	 * Both must be seen UP once before either counts -- see
 	 * exit_armed. */
 	{
-		bool held = usage_held(0x29) || usage_held(0x3F);
+		bool held = usage_held(0x29) || usage_held(0x44);
 		if (!held) exit_armed = true;
 		else if (exit_armed) leave_game_mode();
 	}
@@ -1223,9 +1247,9 @@ int main(void) {
 		printf("chip8: configuration from chip8.cfg applied\n");
 	if (flags_have_file)
 		printf("chip8: restored saved flags from %s\n", flags_path);
-	printf("chip8: F1/F2/F3 scale, F4 profile, F5 reset, F6 game mode,\n");
-	printf("chip8: F7/F8 speed, F9 screenshot, F10 debugger,\n");
-	printf("chip8: F11 step, F12 run/pause, shift+F1 greys, ESC quits.\n");
+	printf("chip8: F1 help, F5 reset (+shift: profile), F6 scale (+shift: greys),\n");
+	printf("chip8: F7 debugger (+shift: screenshot), F8 run/pause (+shift: step),\n");
+	printf("chip8: - = speed, F11 game mode, ESC quits.\n");
 
 	last_frame = frame_now();
 

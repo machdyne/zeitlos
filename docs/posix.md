@@ -795,7 +795,7 @@ Concretely, `posix` is a port provider (`docs/ports.md`) registering as
 `posix0`, exactly parallel to `repl`. `term` reaches it through
 `zconnect.h` with a new target name (**not needed in the event** --
 section 9d), so `repl` and `posix` coexist and
-`term`'s F11 bar picks between them. Nothing about `repl` changes.
+`term`'s Open bar picks between them. Nothing about `repl` changes.
 
 ### 4.2 The process model — three options
 
@@ -1151,7 +1151,7 @@ months.
    out, and says so rather than failing obscurely.
 
 4. **`posix` sits beside `repl`, it does not replace it.** `repl` is
-   Scheme and works. `term`'s F11 bar picks between them.
+   Scheme and works. `term`'s Open bar picks between them.
 
 5. **Self-hosting is a real goal**, so section 3.3's Phase-2 subset and
    section 3.4's multi-file structure are designed for from the start
@@ -1569,7 +1569,7 @@ passes it through with no lookup and no fixed list, so `posix0` is
 reachable three ways with nothing added:
 
 - `port posix0` from a `repl` prompt;
-- **F11 in `term`, then `open> port posix0`** -- the same
+- **typing on `term`'s start panel: `open> port posix0`** -- the same
   `z_conn_prepare()` path, differing only in who initiates it;
 - `Z_TERM_SET_PORT` from any other provider.
 
@@ -1797,7 +1797,7 @@ bytes never pass through this process at all, so there is no relaying,
 no batching, and no shell latency between a keystroke and the editor.
 
 **This is the opposite direction from connecting TO posix.** Reaching
-`posix0` from `term` -- by F11, or `port posix0` from `repl` -- has
+`posix0` from `term` -- by its Open bar, or `port posix0` from `repl` -- has
 worked since Phase 4 and needed no code (section 9d). What 5.2 adds is
 `posix` GIVING its terminal away to a child and taking it back. Same
 `Z_TERM_SET_PORT` message, opposite end.

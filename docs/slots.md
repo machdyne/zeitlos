@@ -247,6 +247,10 @@ over is a digit with nothing left.
 | `max` | the biggest stake you can actually afford, not the biggest there is |
 | `bank`, `buyin`, `game`, `quit` | |
 
+`F1` shows the help box in the window -- these lines, and `F11` (or
+`game`) for full screen; in game mode F1 does nothing. `F11` toggles
+full screen ([keys.md](keys.md)).
+
 The `bet` and `lines` buttons **cycle** rather than opening anything — a
 slot machine has no keyboard, and somebody clicking `bet` wants the next
 value.

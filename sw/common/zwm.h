@@ -181,6 +181,17 @@
 // the cursor even though it is not focused.
 #define Z_WIN_FLAG_NO_FOCUS           (1u << 10)
 
+// The app has a game mode of its own and F11 is its key for it
+// (docs/keys.md). Without this flag, F11 on a RESIZABLE window is wm's:
+// full screen -- the whole screen, no titlebar, no dock -- and F11 or
+// Esc again restores it. A fixed-size window gets F11 either way.
+#define Z_WIN_FLAG_GAME_MODE          (1u << 11)
+
+// In wm's window rect messages (the "h" of the map z_win_parse_rect()
+// reads): set while the window is full screen and has no titlebar, so
+// the content starts at the top edge. A window is never 2^31 tall.
+#define Z_WM_RECT_BARE                0x80000000u
+
 // clamp this window's minimum size to whatever size it was CREATED
 // at, instead of the global Z_WM_MIN_WIDTH/HEIGHT floor below.
 // Meaningless without Z_WIN_FLAG_RESIZABLE also set.

@@ -285,7 +285,7 @@ static bool form_complete(const char *s, void *user) {
 // so far.
 static const char HELP_TEXT[] =
 	"builtins: help ping echo te <f> page <f> scheme <e> lock quit\r\n"
-	"connect:  port <n> serial [baud] usbserial telnet <h> ssh <h>  (F11)\r\n"
+	"connect:  port <n> serial [baud] usbserial telnet <h> ssh <h>\r\n"
 	"scheme:   help <name>  apropos <text>  page " Z_PATH_DOCS_ZAPI "\r\n"
 	"F12 leaves any port; bare word = call, so `ps` is (ps)";
 

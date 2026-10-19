@@ -47,7 +47,7 @@ file that will be saved in that encoding -- see "Encodings" below.
 | Ctrl+Z | undo |
 | Ctrl+Y or Ctrl+Shift+Z | redo |
 | Ctrl+F | find |
-| Ctrl+G or F3 | find the same text again |
+| Ctrl+G or F3 | find the same text again (F3 with nothing found yet asks, as Ctrl+F) |
 | Ctrl+H | replace -- all at once, or one at a time |
 | Ctrl+L | go to line; also says the line you are on, and the words and characters |
 | right-click | copy the selection |

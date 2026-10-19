@@ -7,7 +7,7 @@ APP_LISTING = 0
 # Objects, and why each is linked:
 #
 #   zfsapp.o: The bank lives in a file, so this app links the filesystem wrappers.
-OBJS = zeitlos.o zobj.o zgfx.o zshape.o zfont_data.o zwin.o zrng.o zfsapp.o \
+OBJS = zeitlos.o zobj.o zgfx.o zwidget.o zspeak.o zdialog.o zshape.o zfont_data.o zwin.o zrng.o zfsapp.o \
 	zrand.o zrand_sys.o zbank.o \
 	rl_table.o rl_wheel.o rl_board.o rl_input.o roulette.o
 

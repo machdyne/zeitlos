@@ -221,6 +221,10 @@ stack down twice.
 | `down 6` | takes a place bet back; the line is contract and stays |
 | `bank`, `buyin`, `game`, `quit` | |
 
+`F1` shows the help box in the window -- these lines, and `F11` (or
+`game`) for full screen; in game mode F1 does nothing. `F11` toggles
+full screen ([keys.md](keys.md)).
+
 Refusals say **why** where the reason is a phase rather than a typo —
 "the line is closed once a point is on, use come" rather than "no". On a
 craps table the answer is usually about *when*, not *what*.

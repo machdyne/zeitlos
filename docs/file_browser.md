@@ -46,8 +46,10 @@ list and Tab is the only way across.
 | Move | | prompts "Move to:" the same way |
 | Delete | Delete | asks first, naming the file, then removes it -- a folder with everything in it |
 | Convert | | prompts for a name whose ending picks the format, and converts ([convert.md](convert.md)) |
-| Find | Ctrl+F | finds files by name or by text inside, in this folder and below; **Stop** while a find, copy or delete runs |
+| Find | F3, Ctrl+F | finds files by name or by text inside, in this folder and below; **Stop** while a find, copy or delete runs |
 | | Esc | stops a find, copy or delete at once; with results up, back to the folder |
+| | F5 | reads the folder again |
+| | F12 | home: back to the folder `files` started in (the one it was launched with, or `/`) |
 
 Each row shows the entry's **size and date** on the right: bytes up to
 9999, then `K` and `M` to one decimal place, and `<dir>` for a folder.

@@ -323,7 +323,9 @@ bool z_win_parse_rect(z_win_t *win, z_obj_t *obj) {
 	win->x = x->val.uint32;
 	win->y = y->val.uint32;
 	win->w = w->val.uint32;
-	win->h = h->val.uint32;
+	// The top bit of h: full screen, no titlebar (Z_WM_RECT_BARE).
+	win->h = h->val.uint32 & ~Z_WM_RECT_BARE;
+	win->bare = (uint8_t)(h->val.uint32 >> 31);
 	win->geom_changed = 1;
 
 	return true;
@@ -945,7 +947,7 @@ void z_win_content_rect(const z_win_t *win, z_clip_t *out) {
 	// specifically for visual breathing room, not to dodge anything
 	// else drawn nearby.
 	out->x0 = win->x + 2;
-	out->y0 = win->y + Z_WM_TITLEBAR_H + 2;
+	out->y0 = win->y + (win->bare ? 0 : Z_WM_TITLEBAR_H) + 2;
 	out->x1 = win->x + win->w - 3;
 	out->y1 = win->y + win->h - 3;
 }

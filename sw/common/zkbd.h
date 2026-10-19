@@ -171,6 +171,18 @@
 #define Z_KEY_F11       (Z_KEY_NAMED_BASE + 0x1a)
 #define Z_KEY_F12       (Z_KEY_NAMED_BASE + 0x1b)
 
+// What the function keys mean, in every app (docs/keys.md). Apps use
+// these names, not Z_KEY_F1.., so a grep shows who does what, and
+// tools/check_fkeys.py holds them to it. F5-F8 are the app's own and
+// keep their numbers; F9 and F10 are reserved and bound by nothing.
+// term is the exception: it forwards F1-F10 to the program inside.
+#define Z_KEY_HELP         Z_KEY_F1    // the help box (nothing in game mode)
+#define Z_KEY_RENAME       Z_KEY_F2    // rename a file, edit a cell
+#define Z_KEY_FIND         Z_KEY_F3    // search, or the next match
+#define Z_KEY_PROMPT       Z_KEY_F4    // focus the app's command/input box
+#define Z_KEY_FULL_SCREEN  Z_KEY_F11   // full screen, or game mode
+#define Z_KEY_APP_HOME     Z_KEY_F12   // the app's home (term, web, files)
+
 // Dead keys: a key that types nothing itself but changes the next
 // letter (dead acute then e is e-acute). Only z_kbd_translate() and
 // z_kbd_event_to_keysym() return these, and wm consumes them -- it

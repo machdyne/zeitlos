@@ -967,7 +967,7 @@ static void handle_mouse(uint32_t packed) {
 
 static void handle_key(uint32_t keysym, uint8_t mods) {
 
-	if (keysym == Z_KEY_F1) {	// docs/app_help.md
+	if (keysym == Z_KEY_HELP) {	// docs/app_help.md
 		static const char help[] =
 			"System preferences, saved to " Z_PATH_SYS_CONFIG ".\n\n"
 			"Tab\tNext control (Shift+Tab back)\n"

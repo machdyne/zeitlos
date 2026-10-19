@@ -887,6 +887,43 @@ on-screen keyboard cannot shade by click -- Alt+Minus works from it.
 With speech on, "maximized", "restored", "shaded" and "unshaded" are
 said.
 
+### Full screen (F11)
+
+**F11** on a resizable window makes it **full screen**: maximized as
+above -- the whole screen, or as much as its `Z_WM_SET_LIMITS` allows,
+centred -- and with **no titlebar**, so the app has every pixel; the dock
+hides as for any maximized window. **F11 or Esc** puts it back where it
+was, titlebar and all. Esc is there so that nobody who pressed F11 by
+accident is stuck without knowing the key: while the focused window is
+full screen wm takes Esc (press and release) for this; otherwise Esc
+goes to the app as always. It is the function-key map's F11
+([keys.md](keys.md)), done once in wm rather than in every app.
+
+wm takes F11 only for a window that is `Z_WIN_FLAG_RESIZABLE` and not
+`Z_WIN_FLAG_GAME_MODE`. An app with a game mode of its own (`space3d`,
+`chess`, the casino tables, `kidgames`, `basic`, `chip8`, the arcade
+games) creates its window with that flag, and F11 is delivered to it
+for game mode; so is F11 on a fixed-size window. During a game's
+screen grab (`Z_WM_GAME_GRAB`) F11 and Esc are the game's.
+
+Full screen sets `maxed` and `no_titlebar` together with `fulled`
+(`toggle_fullscreen()`), so hit testing, the grip, drawing and the
+dock all follow the existing paths -- a titlebar-less window is what the
+dock already is. Alt+Equal and Alt+Minus do nothing to a full-screen
+window. The app learns it from the rect messages: `send_win_rect()`'s
+map sets the top bit of `h` while the window is full screen
+(`Z_WM_RECT_BARE`, zwm.h -- no window is 2^31 tall, and a new key would
+have cost every app that keeps windows a few bytes it does not have),
+which `z_win_parse_rect()` strips into `z_win_t.bare`, and `z_win_content_rect()`
+then starts the content at the top edge instead of below the titlebar.
+An app that draws through the content rect needs no code for it. With
+speech on, "full screen" and "window" are said.
+
+While an app holds the screen with a game grab, wm also **hides the
+hardware cursor** (socctl CTRL bit 1, `z_cursor_set()`;
+[socctl.md](socctl.md), "No cursor while a game has the screen") and
+shows it again when the grab ends, however it ends.
+
 ### Resizing on request
 
 An app can ask for a new size with `z_win_resize(win, w, h)` (`zwin.h`),

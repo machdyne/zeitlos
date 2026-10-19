@@ -1479,7 +1479,7 @@ static void help_key(uint32_t keysym, uint8_t mods) {
 			help_activate(dlg.wset.focused);
 			return;
 		case 0x1b:
-		case Z_KEY_F1:		// the key that opened it also closes it
+		case Z_KEY_HELP:		// the key that opened it also closes it
 			dlg.done = true;
 			return;
 		default:

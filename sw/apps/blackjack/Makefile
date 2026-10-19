@@ -9,7 +9,7 @@ GAMES = $(COMMON)/games
 
 include $(COMMON)/arch.mk
 
-OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o zrng.o zfsapp.o \
+OBJS = zeitlos.o zobj.o zgfx.o zwidget.o zspeak.o zdialog.o zfont_data.o zwin.o zrng.o zfsapp.o \
 	zcard.o zdeck.o zrand.o zrand_sys.o zbank.o zcardart.o \
 	bj_game.o bj_hint.o bj_board.o bj_input.o blackjack.o
 

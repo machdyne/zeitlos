@@ -28,6 +28,10 @@ module gpu_cursor #()
 	// unsynchronised bit is fine crossing into pclk here.
 	input curs_alt,
 
+	// 1 = no cursor: rtl/socctl.v's cursor_hide (CTRL bit 1), set by
+	// sw/apps/wm while a game holds the screen.
+	input curs_hide,
+
 );
 
 	// the sprite is a 5x5 diamond of points, each an offset (-2..+2)
@@ -107,7 +111,7 @@ module gpu_cursor #()
 
 	always @(posedge pclk) begin
 
-		if (curs_alt ? hit_z : hit_x)
+		if (!curs_hide && (curs_alt ? hit_z : hit_x))
 			pixel <= 1'b1;
 		else
 			pixel <= 1'b0;

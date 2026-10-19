@@ -230,6 +230,29 @@ the single-buffered display list works unchanged and nothing ever
 repairs the background. Palette effects: twinkling stars in two
 groups, flickering fire, a drifting nebula. C toggles it.
 
+**snake** ([snake_app.md](snake_app.md)), through the arcade runtime
+([arcade.md](arcade.md)). Sixteen colours, single-buffered: the picture
+is painted by dirty rectangles and everything that moves is an overlay,
+so no back buffer is needed. The snakes' bodies are four palette
+entries each, recomputed every frame, so a rainbow flows down the snake
+with no cell redrawn; the food breathes, the bonus glints, sparks
+flicker, and a crash flashes the walls and shakes the viewport. C
+toggles colour.
+
+**blocks** ([blocks_app.md](blocks_app.md)), on the same runtime.
+Sixteen colours as seven shapes plus a light edge each: a shape is
+planes 0-2, its edge adds plane 3, which leaves black and one theme
+colour (8) that follows the level and breathes with the music. When rows
+clear, the stack above falls by VRAM-to-VRAM copies of every plane, not
+by redrawing. C toggles colour.
+
+**bricks** ([bricks_app.md](bricks_app.md)), on the same runtime. Six
+brick colours, silver and gold, the paddle and the walls; the effects
+are all palette writes -- the gold glints, the paddle's ends flash on a
+hit, bolts and trails breathe, the backdrop takes each round's colour,
+pulses with the music and flashes red or white, and on the title the
+brick colours rotate through the letters. C toggles colour.
+
 **Scheme** ([scheme_api.md](scheme_api.md)). `(color-mode)`,
 `(palette ...)` and `(color-fill ...)`, for trying it out from a REPL.
 

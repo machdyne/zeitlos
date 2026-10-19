@@ -17,7 +17,7 @@
  * two equally good shells to choose between.
  *
  * So term now opens on a START PANEL: REPL, POSIX, CONSOLE and OPEN
- * (F11) buttons, each connection's button live only once its provider
+ * buttons, each connection's button live only once its provider
  * has registered. One click, or Tab/Enter, decides. Typing anything else
  * starts the Open bar with it, so `telnet host` can simply be typed.
  * F12 disconnects and returns here from any connection, and so does a
@@ -67,7 +67,6 @@
 #include "../../common/zcfg.h"		// apps.term.auto_connect
 #include "../../common/zspeak.h"	// Super+A, Super+C -- docs/tts.md
 #include "../../common/zsayall.h"
-#include "../../common/zdialog.h"	// F1 on the start panel -- docs/app_help.md
 
 // which font to render with. The titlebar's Aa icon switches between
 // z_font_5x8 and z_font_6x12 while running, and resizes the window to
@@ -954,7 +953,7 @@ static void term_toggle_font(void) {
 }
 
 // ---------------------------------------------------------------
-// the Open bar (F11)
+// the Open bar (typing on the start panel, or its OPEN button)
 // ---------------------------------------------------------------
 //
 // A one-line prompt across the bottom row where you type a target --
@@ -963,9 +962,9 @@ static void term_toggle_font(void) {
 // of resolving them live in sw/common/zconnect.h, shared with repl.
 //
 // A line, not a dialog: a widget panel would need its own window (wm
-// has no modal dialogs), and F11 is most useful exactly when whatever
-// you were connected to has stopped answering -- a prompt bar needs
-// nothing from anyone.
+// has no modal dialogs), and F12 then typing is most useful exactly when
+// whatever you were connected to has stopped answering -- a prompt bar
+// needs nothing from anyone.
 //
 // It is an overlay (see overlay_owns()), not text written into the
 // emulator: writing it into the vt would destroy a row of the session
@@ -1196,7 +1195,7 @@ static int panel_ph(void) { return (PANEL_R1 - PANEL_R0 + 1) * cell_h; }
 
 static void panel_layout(void) {
 
-	static const char *labels[PB_COUNT] = { "REPL", "POSIX", "CONSOLE", "OPEN F11" };
+	static const char *labels[PB_COUNT] = { "REPL", "POSIX", "CONSOLE", "OPEN" };
 
 	int total = PB_COUNT * PANEL_BTN_W + (PB_COUNT - 1) * PANEL_BTN_GAP;
 	int x = panel_px() + (panel_pw() - total) / 2;
@@ -1393,44 +1392,6 @@ static bool panel_contains_px(int cx, int cy) {
 
 static void handle_redraw(uint32_t packed);
 
-// The help box's view of this window while it is up: keep the region,
-// repaint on a redraw -- what the main loop does with these.
-static void help_on_msg(z_msg_t *m, void *user) {
-	(void)user;
-	if (m->subject == Z_WM_SET_CLIP) {
-		z_win_apply_clip(&win, &m->obj);
-	} else if (m->subject == Z_WM_REDRAW) {
-		handle_redraw(m->obj.val.uint32);
-		frame();
-		z_win_redraw_done(&win);
-	} else if (m->subject == Z_WM_WINDOW_MOVED) {
-		z_win_parse_rect(&win, &m->obj);
-	}
-}
-
-// F1, on the start panel only: connected, every key belongs to the far
-// end, and F1 is a key a remote program may want (docs/app_help.md).
-static void show_help(void) {
-	static const char help[] =
-		"A terminal: a window onto a shell, the console, a serial "
-		"port or a computer on the network.\n\n"
-		"On this panel:\n"
-		"Tab, arrows\tChoose a button\n"
-		"Enter\tStart it\n"
-		"Esc\tHide the panel (any key: back)\n"
-		"Typing\tOpens the bar: port, serial, telnet, ssh\n\n"
-		"Anywhere:\n"
-		"F11\tConnect somewhere else\n"
-		"F12\tDisconnect, back to this panel\n"
-		"Shift+PgUp\tScroll back (Shift+PgDn forward)\n"
-		"Drag\tSelect\n"
-		"Ctrl+Shift+C\tCopy (Ctrl+Shift+V pastes)\n\n"
-		"Connected, every other key goes to the far end -- F1 too.";
-	z_dialog_ctx_t ctx = { &win, help_on_msg, NULL };
-	z_dialog_help(&ctx, "Term help", help, "terminal");
-	panel_dirty = true;
-}
-
 // Keys while disconnected and the bar is not up.
 static void panel_key(uint32_t keysym, uint8_t mods) {
 
@@ -1462,10 +1423,6 @@ static void panel_key(uint32_t keysym, uint8_t mods) {
 	case ' ':
 		idx = z_widget_key_activate(&panel_set);
 		if (idx >= 0) panel_activate(idx);
-		break;
-
-	case Z_KEY_F1:
-		show_help();
 		break;
 
 	case 0x1b:					// Esc
@@ -2246,9 +2203,10 @@ static int key_to_bytes(uint32_t keysym, char *buf, int buflen) {
 		{ Z_KEY_F8,       "\x1b[19~" },
 		{ Z_KEY_F9,       "\x1b[20~" },
 		{ Z_KEY_F10,      "\x1b[21~" },
-		// F11 and F12 are term's own (the Open bar, disconnect) and
-		// never reach here; they stay in the table so it remains a
-		// complete record of the ordinary mapping.
+		// F11 is wm's (full screen) and F12 term's own (home:
+		// disconnect) -- docs/keys.md -- so neither reaches here;
+		// they stay in the table so it remains a complete record of
+		// the ordinary mapping.
 		{ Z_KEY_F11,      "\x1b[23~" },
 		{ Z_KEY_F12,      "\x1b[24~" },
 	};
@@ -2335,15 +2293,16 @@ static void handle_key_event(uint32_t packed) {
 
 	if (bar_key(keysym)) return;
 
-	// F11 goes somewhere new; F12 leaves. Neither is a key anything on
-	// the far end relies on, and both work whatever this window is
-	// connected to -- which is the point: a remote with no quit
-	// command of its own, or a child that has hung, still has a way
-	// out. (Ctrl-] is the telnet-client convention, but zkbd only
-	// folds Ctrl+letter into control codes; extending that to
-	// punctuation would be a keyboard-layer change for every app.)
-	if (keysym == Z_KEY_F11) { bar_open(); return; }
-	if (keysym == Z_KEY_F12) {
+	// F12 is term's home (docs/keys.md): it leaves, whatever this
+	// window is connected to -- which is the point: a remote with no
+	// quit command of its own, or a child that has hung, still has a
+	// way out, and the welcome panel it lands on is where somewhere
+	// new is typed. F1-F10 go to the far end: term interprets none of
+	// them (the welcome panel says what there is to know), and F11 is
+	// wm's (full screen). (Ctrl-] is the telnet-client convention, but
+	// zkbd only folds Ctrl+letter into control codes; extending that
+	// to punctuation would be a keyboard-layer change for every app.)
+	if (keysym == Z_KEY_APP_HOME) {
 		if (port.connected) term_disconnect("disconnected (F12)");
 		else panel_show(NULL);
 		return;

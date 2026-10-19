@@ -33,6 +33,7 @@
 #include "../../common/zgfx.h"
 #include "../../common/zsoc.h"
 #include "../../common/zkbd.h"
+#include "../../common/zdialog.h"
 #include "../../common/zrng.h"
 #include "../../common/games/zrand.h"
 #include "../../common/games/zbank.h"
@@ -378,6 +379,41 @@ static void do_action(si_action_t a)
 
 /* -- messages -------------------------------------------------------------- */
 
+/* While the help box is up: keep the table painted (zdialog.h). */
+static void help_on_msg(z_msg_t *msg, void *user)
+{
+    (void)user;
+    if (msg->subject == Z_WM_SET_CLIP) {
+        z_win_apply_clip(&win, &msg->obj);
+    } else if (msg->subject == Z_WM_REDRAW && msg->obj.type == Z_UINT32 &&
+               z_win_redraw_id(msg->obj.val.uint32) == win.id) {
+        z_win_apply_redraw(&win, msg->obj.val.uint32);
+        repaint();
+        z_win_redraw_done(&win);
+    }
+}
+
+/* F1: the help box (docs/app_help.md), built from the same lines the
+ * message bar shows for an unknown command, so the two never differ. */
+static void show_help(void)
+{
+    static char text[768];
+    size_t n = 0;
+    int i;
+    const char *line;
+    n = (size_t)snprintf(text, sizeof(text), "%s\n\n", "A slot machine. Type a command and press Enter.");
+    for (i = 0; (line = sl_input_help_line(i)) != 0 && n < sizeof(text); i++)
+        n += (size_t)snprintf(text + n, sizeof(text) - n, "%s\n", line);
+    if (n < sizeof(text))
+        snprintf(text + n, sizeof(text) - n,
+            "\nF11 (or `game`): full screen; Esc comes back.");
+    {
+        z_dialog_ctx_t ctx = { &win, help_on_msg, NULL };
+        z_dialog_help(&ctx, "Slots help", text, "slots");
+    }
+    repaint();
+}
+
 static void handle_key(uint32_t packed, bool allow_input)
 {
     uint32_t sym = Z_WM_UNPACK_KEY_KEYSYM(packed);
@@ -398,14 +434,11 @@ static void handle_key(uint32_t packed, bool allow_input)
     if (!pressed) return;
     if (!allow_input) return;
 
-    if (sym == Z_KEY_F2) { do_action(SI_GAME_MODE); return; }
+    if (sym == Z_KEY_FULL_SCREEN) { do_action(SI_GAME_MODE); return; }
 
-    if (sym == Z_KEY_F1) {
-        static int hl;
-        const char *s = sl_input_help_line(hl++);
-        if (!s) { hl = 0; s = sl_input_help_line(hl++); }
-        say(s);
-        do_action(SI_STATUS);
+    /* The help box in a window; in game mode nothing (docs/keys.md). */
+    if (sym == Z_KEY_HELP) {
+        if (!game_mode) show_help();
         return;
     }
 
@@ -525,7 +558,7 @@ int main(void)
 
     if (z_win_create_flags(&win, "slots", WIN_W, WIN_H, -1, -1,
         Z_WIN_FLAG_CLOSE_ICON | Z_WIN_FLAG_CLOSE_KILLS_OWNER |
-        Z_WIN_FLAG_RESIZABLE) != Z_OK) {
+        Z_WIN_FLAG_RESIZABLE | Z_WIN_FLAG_GAME_MODE) != Z_OK) {
         puts("slots: failed to create window -- is wm running?");
         return 1;
     }

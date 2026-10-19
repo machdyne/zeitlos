@@ -1471,7 +1471,7 @@ static void handle_key(uint32_t keysym, uint8_t mods) {
 
 	bool ctrl = (mods & Z_KBD_MOD_CTRL) != 0;
 
-	if (keysym == Z_KEY_F1) {	// docs/app_help.md
+	if (keysym == Z_KEY_HELP) {	// docs/app_help.md
 		static const char help[] =
 			"Look at and change any file byte by byte.\n\n"
 			"0-9, a-f\tType a byte, two digits (hex pane)\n"

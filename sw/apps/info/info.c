@@ -61,6 +61,8 @@
 #include "../../common/zgfx.h"
 #include "../../common/zfont.h"
 #include "../../common/zproc.h"
+#include "../../common/zkbd.h"
+#include "../../common/zdialog.h"
 #include "logo_small.h"
 
 // -- window --
@@ -822,11 +824,20 @@ static void repaint(void) {
 
 // ---------------------------------------------------------------
 
+static bool help_wanted;     /* F1, acted on from the main loop */
+
 static void forward_msg(z_msg_t *msg, void *user) {
 
 	(void)user;
 
 	switch (msg->subject) {
+
+		case Z_WM_KEY:
+			if (msg->obj.type == Z_UINT32 &&
+			    Z_WM_UNPACK_KEY_PRESSED(msg->obj.val.uint32) &&
+			    Z_WM_UNPACK_KEY_KEYSYM(msg->obj.val.uint32) == Z_KEY_HELP)
+				help_wanted = true;
+			break;
 
 		// The part of this window not covered by the windows in front
 		// of it. Confines every subsequent draw to it -- see
@@ -899,6 +910,22 @@ int main(void) {
 
 		z_msg_t msg;
 		while (z_msg_read(&msg) == Z_OK) forward_msg(&msg, NULL);
+
+		// F1: the help box (docs/app_help.md). Not from inside
+		// forward_msg(), which is what the box itself pumps through.
+		if (help_wanted) {
+			static const char help[] =
+				"What the machine is and what it is doing: the OS "
+				"version, the gateware's features, memory, the SD "
+				"card, load, uptime and the processes, refreshed "
+				"once a second.\n\n"
+				"There is nothing to press: leave it open, or close "
+				"it with the titlebar's close icon.";
+			z_dialog_ctx_t ctx = { &win, forward_msg, NULL };
+			help_wanted = false;
+			z_dialog_help(&ctx, "info help", help, "info_app");
+			repaint();
+		}
 
 		uint32_t now = z_uptime_ticks();
 

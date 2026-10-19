@@ -358,7 +358,12 @@ went to 285K of RAM and `text` came down to 154K. The reboot dialog
 1,023 of 1,024 KB, and 716KB of flash. Find and copying, moving and
 deleting whole folders ([zwalk.md](zwalk.md)) took `files` to 57K of
 flash and 120K of RAM -- outside the RAM rule, which counts the two
-largest (`repl`, `text`). `mkzar.py --max` checks the archive itself
+largest (`repl`, `text`). The dock icons and spoken names of the
+arcade games ([arcade.md](arcade.md): `snake`, `blocks`, `bricks`, about
+172 bytes each) took `wm` to 135K (137,100 bytes of 138,240 with all three), the last
+kilobyte: 1,024 of 1,024 KB.
+The next byte for the boot set comes out of another budget, or out of
+something made smaller. `mkzar.py --max` checks the archive itself
 against the region (`CORE_ZAR_MAX`, 848K), so a budget that turns out
 too tight costs a bump, never a broken flash.
 
@@ -368,7 +373,7 @@ code, data and `.bss`, not its stack). They are `CORE_BUDGETS` in the
 top-level `Makefile`, next to `CORE_APPS`:
 
 ```
-CORE_BUDGETS = fs=36K/75K usb=35K/55K wm=110K/134K net=148K/285K term=62K/152K \
+CORE_BUDGETS = fs=36K/75K usb=35K/55K wm=110K/135K net=148K/285K term=62K/152K \
 	console=10K/13K cron=18K/48K text=60K/157K files=57K/120K repl=140K/304K
 CORE_RESERVE = 48K
 CORE_STORE = wm net

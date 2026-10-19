@@ -823,7 +823,7 @@ static void show_help(void) {
 
 static void handle_key(uint32_t key) {
 	switch (key) {
-	case Z_KEY_F1:
+	case Z_KEY_HELP:
 		if (windowed) show_help();
 		break;
 	case 'q':

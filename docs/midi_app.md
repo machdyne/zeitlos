@@ -397,9 +397,9 @@ transport lives on keys the layout does not touch.
 | Left / Right | previous / next file |
 | `-` / `=` | volume |
 | F1 | help |
-| F2 | mute / unmute drums |
-| F3 | force mono — a diagnostic, see below |
-| F4 | panic — all notes off |
+| F5 | mute / unmute drums |
+| F6 | force mono — a diagnostic, see below |
+| F7 | panic — all notes off |
 | Escape, close icon | quit |
 
 Per-channel muting on `1`..`9` and `0` is **gone**: those are black

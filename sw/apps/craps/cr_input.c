@@ -108,7 +108,7 @@ const char *cr_input_help_line(int i)
         "any7, craps, eleven, two, twelve -- all one-roll, all terrible",
         "odds are the only fair bet here: back the line with them",
         "down 6 takes a bet back; the line is contract and stays",
-        "bank, buyin, game, quit -- F1 cycles this help",
+        "bank, buyin, game (full screen), quit",
         0
     };
     if (i < 0) return 0;

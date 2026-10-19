@@ -142,7 +142,7 @@ void c8_debug_draw(const z_win_t *win, int x, int y, const c8_t *vm,
 	if (vm->halted)
 		LINE("%s", "exited (00FD).  F5 resets, ESC quits");
 	else
-		LINE("%s", "F10 panel  F11 step  F12 run/pause  ESC quit");
+		LINE("%s", "F7 panel  F8 run/pause  Shift+F8 step  ESC quit");
 
 	#undef LINE
 

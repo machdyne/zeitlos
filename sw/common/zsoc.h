@@ -777,6 +777,12 @@ static inline bool z_soc_feature_confirmed_absent(uint32_t feature) {
 // software cannot draw over it.
 #define Z_SOCCTL_CURSOR_BUSY (1u << 0)
 
+// No cursor at all (rtl/socctl.v CTRL bit 1). wm sets it while a game
+// holds the screen (Z_WM_GAME_GRAB), where the pointer is the game's
+// business and an X over the picture is only in the way. A bitstream
+// that predates the bit stores it and ignores it: the cursor stays.
+#define Z_SOCCTL_CURSOR_HIDE (1u << 1)
+
 // true only if this bitstream actually has rtl/socctl.v. Same magic
 // check, and the same reason for it, as z_soc_csrs_present().
 static inline bool z_socctl_present(void) {
@@ -791,6 +797,14 @@ static inline bool z_socctl_present(void) {
 // at all and stalls the CPU forever; see rtl/cache.v's own note.)
 static inline void z_cursor_set_busy(bool busy) {
 	reg_socctl_ctrl = busy ? Z_SOCCTL_CURSOR_BUSY : 0;
+}
+
+// Both cursor bits at once: the shape, and whether it is drawn. CTRL is
+// written whole, so the caller owns both (wm does; z_cursor_set_busy()
+// above shows the cursor again as a side effect).
+static inline void z_cursor_set(bool busy, bool hidden) {
+	reg_socctl_ctrl = (busy ? Z_SOCCTL_CURSOR_BUSY : 0) |
+		(hidden ? Z_SOCCTL_CURSOR_HIDE : 0);
 }
 
 // -- virtual phosphor modes (rtl/gpu/gpu_video.v) --

@@ -36,19 +36,22 @@ verified certificate chain. See "Where this stands" at the end.
 
 | Key | What it does |
 |---|---|
-| `g`, Ctrl+L | edit the address (Enter goes, Escape puts back what was there) |
+| F4, `g`, Ctrl+L | edit the address (Enter goes, Escape puts back what was there) |
 | Tab / Enter | select the next link / follow it |
 | Shift+Enter | save where the selected link points, without opening it ([Saving](#saving)) |
 | Arrows, PgUp / PgDn, Space, Home / End | scroll |
 | `b` or Backspace / `f` | back / forward |
-| `r` | reload |
-| Ctrl+F | find text in the page ([Find in page](#find-in-page)) |
-| F3, Ctrl+G | find the next match, wrapping round at the end |
+| F5, `r` | reload |
+| F3, Ctrl+F | find text in the page ([Find in page](#find-in-page)); F3 again finds the next |
+| Ctrl+G | find the next match, wrapping round at the end |
+| F12 | home: the page `web` was started with, or the bookmarks |
 | Ctrl+D | bookmark this page; on a bookmarked page, remove it (asks first) ([Bookmarks](#bookmarks)) |
 | Ctrl+B | show the bookmarks |
 | Ctrl+S | save the page's source to a file ([Saving](#saving)) |
 | Escape | stop loading, finding or saving |
 | F1 | help |
+
+The function keys mean the same in every app ([keys.md](keys.md)).
 
 ---
 

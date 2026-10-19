@@ -1,0 +1,385 @@
+/*
+ * Zeitlos -- host tests of the arcade runtime (zarcade.c) and its sound
+ * engine (zsfx.c), on the software framebuffer of ar_host.c.
+ *
+ *   make -C sw/common/games test-arcade
+ *
+ * The test that matters most is the first: the runtime promises that a
+ * game which only marks what changed and resubmits its overlays ends up
+ * with EXACTLY the picture a full repaint would give -- no ghost of a
+ * sprite that moved, no hole where one went away. So it runs random
+ * frames of moving overlays and dirty rectangles in every mode (with
+ * and without another window over ours), and after each frame repaints
+ * everything from scratch and compares the two framebuffers.
+ */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "../zarcade_int.h"
+#include "../zsfx.h"
+#include "ar_host.h"
+
+static int fails, checks;
+
+#define CHECK(c, ...) do { checks++; if (!(c)) { fails++; \
+	printf("FAIL %s:%d: ", __FILE__, __LINE__); printf(__VA_ARGS__); \
+	printf("\n"); } } while (0)
+
+/* -- a little model to paint: a few rectangles on a patterned floor -- */
+
+static uint8_t model[AR_H / 8][AR_W / 8];     /* colour per 8x8 cell */
+
+static void paint(void *user, const ar_rect_t *r) {
+	int cx, cy;
+	(void)user;
+	ar_fill2(r->x, r->y, r->w, r->h, 0, 1, &ar_ink_dots);
+	for (cy = r->y / 8; cy < (r->y + r->h + 7) / 8 && cy < AR_H / 8; cy++)
+		for (cx = r->x / 8; cx < (r->x + r->w + 7) / 8 && cx < AR_W / 8; cx++)
+			if (model[cy][cx])
+				ar_fill(cx * 8 + 1, cy * 8 + 1, 6, 6, model[cy][cx]);
+	/* text across tile boundaries, as a status line would */
+	ar_text(3, 2, "SCORE 0123", 15, &z_font_8x8, 1);
+}
+
+static ar_desc_t desc = {
+	"test", NULL, NULL, NULL,
+	{ 0x000, 0x111, 0x222, 0x333, 0x444, 0x555, 0x666, 0x777,
+	  0x888, 0x999, 0xaaa, 0xbbb, 0xccc, 0xddd, 0xeee, 0xfff },
+	{ { { 0 } } },
+	paint, NULL, false, NULL
+};
+
+static ar_sprite_t spr[3];
+
+static const char *const ball[6] = {
+	".5555.", "5ffff5", "5f99f5", "5f99f5", "5ffff5", ".5555."
+};
+static const char *const ship[4] = {
+	"...a...", "..aaa..", ".aa3aa.", "aa...aa"
+};
+
+typedef struct { int x, y, vx, vy, kind, c; } mover_t;
+
+static void one_mode(const char *name, int mode, bool covered) {
+
+	static uint8_t inc[AR_HOST_FB_BYTES], full[AR_HOST_FB_BYTES];
+	mover_t m[24];
+	int f, i, worst = 0;
+
+	if (mode == 0) ar_set_fullscreen(false);
+	else {
+		ar__s.want_color = (mode == 2);
+		ar_set_fullscreen(true);
+		ar_set_color(mode == 2);
+	}
+	ar_host_cover(0, 0, 0, 0);
+	if (covered) ar_host_cover(150, 80, 120, 200);
+
+	for (i = 0; i < 24; i++) {
+		m[i].x = (int)ar_rand_below(300);
+		m[i].y = (int)ar_rand_below(220);
+		m[i].vx = (int)ar_rand_below(7) - 3;
+		m[i].vy = (int)ar_rand_below(7) - 3;
+		m[i].kind = (int)ar_rand_below(4);
+		m[i].c = 2 + (int)ar_rand_below(13);
+	}
+
+	ar__invalidate();
+	ar_host_render_only();
+
+	for (f = 0; f < 300; f++) {
+		/* the model changes now and then */
+		if (ar_rand_below(4) == 0) {
+			int cx = (int)ar_rand_below(AR_W / 8), cy = (int)ar_rand_below(AR_H / 8);
+			model[cy][cx] = (uint8_t)ar_rand_below(16);
+			ar_dirty(cx * 8, cy * 8, 8, 8);
+		}
+		/* overlays move; some stand still; one comes and goes */
+		for (i = 0; i < 24; i++) {
+			mover_t *o = &m[i];
+			if (i % 5 != 0) { o->x += o->vx; o->y += o->vy; }
+			if (o->x < -10 || o->x > 325) o->vx = -o->vx;
+			if (o->y < -10 || o->y > 245) o->vy = -o->vy;
+			if (i == 7 && (f / 13) % 2) continue;
+			switch (o->kind) {
+			case 0: ar_ov_fill(o->x, o->y, 3, 3, o->c); break;
+			case 1: ar_ov_sprite(&spr[0], o->x, o->y); break;
+			case 2: ar_ov_sprite(&spr[1], o->x, o->y); break;
+			default: ar_ov_fill(o->x, o->y, 9, 2, o->c); break;
+			}
+		}
+		if (f == 150) ar_parts_burst(160, 120, 40, 3, 3, 400, 30, 6);
+		ar_parts_frame(1);
+
+		ar_host_render_only();
+		ar_host_fb_copy(inc);
+
+		/* the same picture from nothing: everything dirty, every
+		 * overlay drawn anew (and the same list resubmitted) */
+		ar__invalidate();
+		{
+			/* resubmit exactly what this frame had */
+			extern void ar__test_resubmit(void);
+			ar__test_resubmit();
+		}
+		ar_host_render_only();
+		ar_host_fb_copy(full);
+
+		{
+			int d = ar_host_fb_diff(inc, full);
+			if (d > worst) worst = d;
+		}
+	}
+	CHECK(worst == 0, "%s: incremental frames match a full repaint "
+		"(worst %d pixels differ)", name, worst);
+}
+
+static void test_sprites(void) {
+	ar_sprite_t s;
+	int x, y, k;
+	CHECK(ar_sprite_make(&s, ball, 6, 6, NULL), "sprite built");
+	CHECK(s.stride == 4, "stride rounded to a word (%d)", s.stride);
+	for (y = 0; y < 6; y++)
+		for (x = 0; x < 6; x++) {
+			int m = (s.mask[y] >> x) & 1;
+			int want = ball[y][x] != '.';
+			int c = 0;
+			for (k = 0; k < 4; k++)
+				if (s.plane[k] && ((s.plane[k][y] >> x) & 1)) c |= 1 << k;
+			CHECK(m == want, "mask at %d,%d", x, y);
+			if (want) {
+				int v = ball[y][x] >= 'a' ? ball[y][x] - 'a' + 10 : ball[y][x] - '0';
+				CHECK(c == v, "colour %d at %d,%d is %d", v, x, y, c);
+			}
+			for (k = 0; k < 4; k++)
+				if (s.plane[k]) CHECK(!(((s.plane[k][y] >> x) & 1) && !m),
+					"plane %d bit outside the mask", k);
+			CHECK(!(((s.mono[y] >> x) & 1) && !m), "mono bit outside the mask");
+		}
+	{
+		uint8_t rc[16];
+		for (k = 0; k < 16; k++) rc[k] = (uint8_t)k;
+		rc[5] = 2;
+		CHECK(ar_sprite_make(&s, ball, 6, 6, rc), "recoloured");
+		CHECK(s.plane[2] == NULL || !(s.plane[2][0] & 0x1e),
+			"5 became 2: no plane-2 bits in the top row");
+	}
+}
+
+static void test_scores(void) {
+	ar_table_t t;
+	char out[1024];
+	const char *file = "1 500 AAA\n0 100 BOB\n0 300 CAT\n1 200 DOG\n0 200 EEL\n";
+	int n;
+	n = ar_scores_parse(file, 0, &t);
+	CHECK(n == 3, "three for mode 0 (%d)", n);
+	CHECK(t.e[0].score == 300 && !strcmp(t.e[0].who, "CAT"), "sorted, best first");
+	CHECK(t.e[2].score == 100, "worst last");
+	CHECK(ar_scores_rank(&t, 250) == 1, "250 goes second");
+	CHECK(ar_scores_rank(&t, 50) == 3, "50 still makes a short table");
+	CHECK(ar_scores_rank(&t, 0) == -1, "nothing for 0");
+	CHECK(ar_scores_insert(&t, 250, "ZED") == 1, "inserted at 1");
+	n = ar_scores_format(out, sizeof out, file, 0, &t);
+	CHECK(n > 0, "formats");
+	CHECK(strstr(out, "1 500 AAA") && strstr(out, "1 200 DOG"), "other modes kept");
+	CHECK(strstr(out, "0 250 ZED"), "new entry written");
+	{
+		ar_table_t u;
+		ar_scores_parse(out, 0, &u);
+		CHECK(u.n == 4 && u.e[1].score == 250, "round trip");
+	}
+	{
+		int i;
+		for (i = 0; i < 15; i++) ar_scores_insert(&t, 1000 + (uint32_t)i, "X");
+		CHECK(t.n == AR_SCORES && t.e[0].score == 1014, "full table keeps the best ten");
+		CHECK(ar_scores_rank(&t, 5) == -1, "a full table refuses a small one");
+		CHECK(!strcmp(t.e[0].who, "X--"), "short initials padded (%s)", t.e[0].who);
+	}
+	CHECK(ar_scores_parse("garbage\n\n0\n0 x\n", 0, &t) == 0, "junk is ignored");
+}
+
+static void test_helpers(void) {
+	ar_ink_t k;
+	char b[16];
+	ar_ink_level(&k, 0);
+	CHECK(k.row[0] == 0 && k.row[7] == 0, "level 0 is black");
+	ar_ink_level(&k, 16);
+	CHECK(k.row[0] == 0xff && k.row[5] == 0xff, "level 16 is white");
+	ar_ink_level(&k, 8);
+	{
+		int i, n = 0;
+		for (i = 0; i < 8; i++) { uint8_t v = k.row[i]; while (v) { n += v & 1; v >>= 1; } }
+		CHECK(n == 32, "level 8 is half (%d)", n);
+	}
+	CHECK(ar_rgb_mix(0x000, 0xfff, 256) == 0xfff, "mix to the end");
+	CHECK(ar_rgb_mix(0x0f0, 0xf00, 0) == 0x0f0, "mix at the start");
+	CHECK(ar_rgb_mix(0x000, 0xeee, 128) == 0x777, "mix halfway (%03x)", ar_rgb_mix(0x000, 0xeee, 128));
+	ar_utoa(b, 42, 6, '0');
+	CHECK(!strcmp(b, "000042"), "utoa pads (%s)", b);
+	ar_utoa(b, 0, 0, ' ');
+	CHECK(!strcmp(b, "0"), "utoa zero");
+	ar_utoa(b, 4294967295u, 0, ' ');
+	CHECK(!strcmp(b, "4294967295"), "utoa max");
+	{
+		int i, hist[5] = { 0 };
+		for (i = 0; i < 5000; i++) hist[ar_rand_below(5)]++;
+		for (i = 0; i < 5; i++) CHECK(hist[i] > 850 && hist[i] < 1150, "rand_below even (%d)", hist[i]);
+	}
+	{
+		ar_repeat_t r = { 0, false };
+		int i, fired = 0;
+		for (i = 0; i < 40; i++) fired += ar_repeat(&r, true, 10, 5);
+		CHECK(fired == 1 + 6, "repeat: the press, then every 5 after 10 (%d)", fired);
+		CHECK(!ar_repeat(&r, false, 10, 5) && ar_repeat(&r, true, 10, 5), "release resets");
+	}
+}
+
+static void test_copy(void) {
+	static uint8_t a[AR_HOST_FB_BYTES], b[AR_HOST_FB_BYTES];
+	int mode;
+	for (mode = 0; mode < 3; mode++) {
+		if (mode == 0) ar_set_fullscreen(false);
+		else { ar_set_fullscreen(true); ar_set_color(mode == 2); }
+		ar_host_cover(0, 0, 0, 0);
+		/* a column of cells, copied down by 8 (overlapping) must equal
+		 * the model moved down by 8 and repainted */
+		memset(model, 0, sizeof(model));
+		{
+			int y;
+			for (y = 2; y < 20; y++) model[y][5] = (uint8_t)(1 + y % 15);
+		}
+		ar__invalidate();
+		ar_host_render_only();
+		CHECK(ar_copy(40, 16, 40, 24, 8, 8 * 18), "mode %d: copy allowed", mode);
+		{
+			int y;
+			for (y = 19; y >= 2; y--) model[y + 1][5] = model[y][5];
+		}
+		ar_host_fb_copy(a);
+		ar_dirty(0, 0, 40, 8);  /* the text row is unaffected; nothing to mark */
+		ar__invalidate();
+		ar_host_render_only();
+		ar_host_fb_copy(b);
+		{
+			/* compare only the column */
+			int x, y, d = 0;
+			for (y = 3 * 8; y < 21 * 8; y++)
+				for (x = 40; x < 48; x++) {
+					int k;
+					for (k = 0; k < (mode == 2 ? 4 : 1); k++) {
+						int px = ar__s.ox + x + ((k & 1) ? 320 : 0);
+						int py = ar__s.oy + y + ((k & 2) ? 240 : 0);
+						d += a[py * 640 + px] != b[py * 640 + px];
+					}
+				}
+			CHECK(d == 0, "mode %d: overlapping copy down is exact (%d pixels)", mode, d);
+		}
+	}
+	ar_set_fullscreen(false);
+	ar_host_cover(100, 100, 50, 50);
+	CHECK(!ar_copy(0, 0, 0, 8, 8, 8), "a covered window refuses a copy");
+	ar_host_cover(0, 0, 0, 0);
+}
+
+static void test_input(void) {
+	ar_event_t e;
+	while (ar__dequeue(&e)) ;
+	ar__key(0x110002u, true, 0);         /* left arrow */
+	ar__key('A', true, 0);               /* shift+a: player 1 left */
+	CHECK(ar_held(0) == AR_BTN_LEFT, "arrows are player 0");
+	CHECK(ar_held(1) == AR_BTN_LEFT, "A is player 1's left, any case");
+	CHECK(ar_pressed(0) & AR_BTN_LEFT, "and it was a press this frame");
+	ar__key('a', false, 0);              /* released without shift */
+	CHECK(ar_held(1) == 0, "released whatever the case");
+	{
+		int keys = 0, buttons = 0;
+		while (ar__dequeue(&e)) {
+			if (e.type == AR_EV_KEY) keys++;
+			if (e.type == AR_EV_BUTTON) buttons++;
+		}
+		CHECK(keys == 3 && buttons == 3, "key and button events (%d, %d)", keys, buttons);
+	}
+	ar__frame_input();
+	CHECK(ar_pressed(0) == 0, "a new frame forgets the press");
+	CHECK(ar_held(0) == AR_BTN_LEFT, "but not the hold");
+	ar__key(0x110002u, false, 0);
+}
+
+static void test_sfx(void) {
+	static const zsfx_seg_t seg[] = {
+		{ ZSFX_SQUARE, 3, 440, 880, 200, 100 },
+		{ ZSFX_NOISE, 2, 1000, 1000, 100, 0 },
+	};
+	static const zsfx_fx_t fx = { 1, 2, seg };
+	static const char *const rows[16] = {
+		"C-4 E-4 A-2 K--", "--- --- --- H--", "=== --- --- S--", "", "", "", "", "",
+		"", "", "", "", "", "", "", "A-4"
+	};
+	static const zsfx_song_t song = {
+		480, 4, { { ZSFX_SQUARE, 20, 240, 0 }, { ZSFX_TRI, 20, 240, 0 },
+		{ ZSFX_TRI, 20, 240, 0 }, { ZSFX_DRUMS, 255, 0, 0 } }, rows, 1, "0"
+	};
+	uint32_t notes;
+	int i;
+
+	CHECK(zsfx_parse_cell("A-4") == 44000, "A-4 is 440Hz");
+	CHECK(zsfx_parse_cell("A-5") == 88000, "an octave up doubles");
+	CHECK(zsfx_parse_cell("C#4") == 27718, "sharps");
+	CHECK(zsfx_parse_cell("---") == ZSFX_CELL_HOLD, "hold");
+	CHECK(zsfx_parse_cell("===") == ZSFX_CELL_OFF, "off");
+	CHECK(zsfx_parse_cell("S--") == ZSFX_CELL_DRUM + 1, "snare");
+	CHECK(zsfx_parse_cell("B#4") == zsfx_parse_cell("C-5"), "B# is C");
+	CHECK(zsfx_order_len("01 2a") == 4 && zsfx_order_at("01 2a", 3) == 10, "orders");
+
+	CHECK(zsfx_init(), "init on the host");
+	notes = zsfxh_notes;
+	zsfx_play(&fx, 0);
+	CHECK(zsfxh_notes == notes + 1, "an effect starts a note");
+	for (i = 0; i < 10; i++) zsfx_tick(1);
+	CHECK(zsfxh_notes == notes + 2, "and its second segment, a new wave, another");
+	/* four effects at once: channels 4..7 */
+	notes = zsfxh_notes;
+	for (i = 0; i < 6; i++) zsfx_play(&fx, 0);
+	CHECK(zsfxh_notes == notes + 6, "more effects than channels steal the oldest");
+
+	zsfx_music_enable(true);
+	notes = zsfxh_notes;
+	zsfx_music_play(&song);
+	zsfx_tick(1);
+	CHECK(zsfxh_notes >= notes + 4, "row 0: three notes and a kick (%u)", zsfxh_notes - notes);
+	for (i = 0; i < 200; i++) zsfx_tick(1);
+	CHECK(zsfxh_peak[0] <= 20, "music gains are the instrument's (%d)", zsfxh_peak[0]);
+	zsfx_music_enable(false);
+	notes = zsfxh_notes;
+	for (i = 0; i < 100; i++) zsfx_tick(1);
+	CHECK(zsfxh_notes == notes, "music off: no notes");
+	zsfx_suspend(true);
+	zsfx_play(&fx, 0);
+	CHECK(zsfxh_notes == notes, "suspended: no effects");
+	zsfx_suspend(false);
+	zsfx_shutdown();
+}
+
+int main(void) {
+
+	ar_init(&desc);
+	CHECK(ar_sprite_make(&spr[0], ball, 6, 6, NULL), "ball");
+	CHECK(ar_sprite_make(&spr[1], ship, 7, 4, NULL), "ship");
+
+	one_mode("window", 0, false);
+	one_mode("window, covered", 0, true);
+	one_mode("full screen mono", 1, false);
+	one_mode("full screen colour", 2, false);
+
+	test_sprites();
+	test_scores();
+	test_helpers();
+	test_copy();
+	test_input();
+	test_sfx();
+
+	printf("zarcade: %d checks, %d failed\n", checks, fails);
+	return fails ? 1 : 0;
+}

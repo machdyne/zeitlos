@@ -501,13 +501,13 @@ seconds.
 | Ctrl+W / Ctrl+U | delete a word / the line |
 | Esc | clear the line; leave the log or help |
 | F1 | keys |
-| F2 | the node's console log (last 48 lines) |
-| F4 | captions for direct messages on/off |
+| F5 | the node's console log (last 48 lines) |
+| F6 | captions for direct messages on/off |
 | Ctrl+Q, close icon | quit (telling the node, and `serial`) |
 
 A click on a conversation shows it. A direct message arriving for a
 conversation not on screen is shown as a caption at the top of the
-desktop for four seconds (`zcaption.h`), until F4 turns that off. The
+desktop for four seconds (`zcaption.h`), until F6 turns that off. The
 title bar carries the unread total: `mesh (3)`.
 
 Text is UTF-8 throughout and laid out by display columns (`z_cp_width()`,
@@ -683,7 +683,7 @@ they are not committed yet).
    caption at the top of the screen.
 5. Umlauts and the euro sign from the keyboard layout, in the line and
    in what is sent (a phone shows them correctly).
-6. F2: the node's console. Resize the window smaller and larger.
+6. F5: the node's console. Resize the window smaller and larger.
 7. Close it with the close icon, and `run mesh` again straight away:
    it must connect (this is the `serial` fix above). Unplug the Heltec
    while it is open: "no Meshtastic node on USB"; plug it back: the

@@ -1846,7 +1846,7 @@ static void help_box(void) {
 
 static void handle_key(uint32_t ks) {
 
-    if (ks == Z_KEY_F1) {
+    if (ks == Z_KEY_HELP) {
         if (windowed) { show_help = false; help_box(); }
         return;
     }

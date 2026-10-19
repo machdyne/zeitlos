@@ -443,7 +443,8 @@ bool kg_init(void)
 	 * single-window app is a message to handle for no benefit.
 	 */
 	if (z_win_create_flags(&win, "kidgames", KG_WIN_W, KG_WIN_H, -1, -1,
-		Z_WIN_FLAG_CLOSE_ICON | Z_WIN_FLAG_CLOSE_KILLS_OWNER) != Z_OK) {
+		Z_WIN_FLAG_CLOSE_ICON | Z_WIN_FLAG_CLOSE_KILLS_OWNER |
+		Z_WIN_FLAG_GAME_MODE) != Z_OK) {
 		puts("kidgames: failed to create window");
 		return false;
 	}
@@ -551,7 +552,7 @@ static void show_help(void)
 		"Letters\tType an answer\n"
 		"Backspace\tRub out a letter\n"
 		"Esc\tBack to the menu; quits there\n"
-		"F2\tFull screen or window\n\n"
+		"F11\tFull screen or window\n\n"
 		"Clicking works too: the menu, the keyboard on the screen, "
 		"letters and cards.";
 	z_dialog_ctx_t ctx = { &win, help_on_msg, NULL };
@@ -626,8 +627,8 @@ static kg_key_t pump_once(void)
 				break;
 			}
 
-			if (keysym == Z_KEY_F1) { show_help(); break; }
-			if (keysym == Z_KEY_F2) { kg_toggle_mode(); break; }
+			if (keysym == Z_KEY_HELP) { show_help(); break; }
+			if (keysym == Z_KEY_FULL_SCREEN) { kg_toggle_mode(); break; }
 
 			k = map_key(keysym, &ch);
 			if (k == KG_KEY_NONE) break;

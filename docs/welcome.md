@@ -33,8 +33,15 @@ apps. Windows can be moved around by their titlebar.
 **F1** is the help key: in an app, it shows a short help box with
 what the app does and its keys, and -- with `read` and the manuals on
 the SD card -- a **Read docs** button for the full page
-([app_help.md](app_help.md)). In `term` it works on the start panel;
-once connected, F1 goes to the other end like any other key.
+([app_help.md](app_help.md)). In game mode it does nothing, and `term`
+sends it (and F2-F10) to the program running in it.
+
+The function keys mean the same thing everywhere ([keys.md](keys.md)):
+**F1** help, **F2** rename or edit, **F3** find / next, **F4** the app's
+prompt, **F5-F8** the app's own, **F11** full screen -- the whole
+screen, no titlebar, no dock; **F11 or Esc** comes back -- or, in an app
+with one, game mode, and **F12** the app's home (`term`, `web`,
+`files`). F9 and F10 are reserved.
 
 Zeitlos works fully without a mouse if you don't have one plugged in --
 and without a keyboard, through the on-screen one (Super+K). The rule
@@ -50,6 +57,7 @@ there is:
 | Alt+Tab | cycle focus between windows and the dock |
 | Alt+Arrow | move the focused window |
 | Alt+Equal | maximize the focused window, or put it back (the key left of Backspace, whatever it types) |
+| F11 (then F11 or Esc) | full screen for the focused window: no titlebar, no dock -- or game mode in an app that has one |
 | Alt+Minus | shade the focused window, or unshade it (the key right of 0, whatever it types) |
 | Arrows, Enter | while the dock has focus: move between icons, launch one |
 
@@ -112,9 +120,9 @@ it). New windows open on the workspace you are on.
 
 | Keys | What they do |
 |---|---|
-| F1 | on the start panel: help |
-| F11 | the Open bar -- go somewhere new |
-| F12 | disconnect and return to the start panel |
+| F1-F10 | to the program running in it |
+| F11 | full screen, or back |
+| F12 | disconnect and return to the start panel (type there to go somewhere new) |
 | Esc | on the start panel: hide it to read the old session |
 | Shift+PgUp / Shift+PgDn | scroll back / forward a page |
 | Shift+Up / Shift+Down | scroll one line |
@@ -135,22 +143,25 @@ on in `settings`.
 | F2 | rename |
 | Delete | delete (asks first) |
 | Tab | move between the list and the buttons |
-| Ctrl+F | find by name, or "text" inside files, here and below |
+| F3 or Ctrl+F | find by name, or "text" inside files, here and below |
+| F5 | read the folder again |
+| F12 | back to the folder files started in |
 | Esc | stop a find, copy or delete; leave the results |
 
 **The web browser** ([web_app.md](web_app.md))
 
 | Keys | What they do |
 |---|---|
-| `g` or Ctrl+L | type an address (Gopher and Gemini too) |
+| F4, `g` or Ctrl+L | type an address (Gopher and Gemini too) |
 | Enter | go to the typed address -- or follow the selected link |
 | Escape | stop a page that is loading, a find or a save; in the address field, put back what was there |
 | Tab | select the next link |
 | `b` or Backspace / `f` | back / forward |
-| `r` | reload |
+| F5 or `r` | reload |
 | Arrows, PgUp / PgDn, Space | scroll |
 | Home / End | top / bottom of the page |
-| Ctrl+F / F3 or Ctrl+G | find in the page / find the next |
+| F3 or Ctrl+F / F3 again or Ctrl+G | find in the page / find the next |
+| F12 | home: the page web started with, or the bookmarks |
 | Ctrl+D | bookmark the page (on a bookmarked page: remove it) |
 | Ctrl+B | show the bookmarks |
 | Ctrl+S | save the page's source to a file |
@@ -174,7 +185,7 @@ on in `settings`.
 | Ctrl+C / Ctrl+X / Ctrl+V | copy / cut / paste |
 | Ctrl+Z | undo |
 | Ctrl+Y or Ctrl+Shift+Z | redo |
-| Ctrl+F | find |
+| Ctrl+F (or F3) | find |
 | Ctrl+G or F3 | find the same text again |
 | Shift + any movement key | extend the selection |
 | Tab | four spaces |

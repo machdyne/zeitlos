@@ -698,7 +698,7 @@ static void help_box(void);
 
 static void handle_key(uint32_t k, uint8_t mods) {
 
-	if (k == Z_KEY_F1) { help_box(); return; }	// docs/app_help.md
+	if (k == Z_KEY_HELP) { help_box(); return; }	// docs/app_help.md
 
 	if (mods & Z_KBD_MOD_CTRL) {
 		if (k == 'n' || k == 'N') { switch_view(1); return; }

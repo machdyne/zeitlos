@@ -38,7 +38,7 @@ Word-addressed, matching every other simple slave in this codebase.
 
 | Address | Register | Description |
 |---|---|---|
-| `0x7000_0200` | CTRL | bit 0: cursor shape. 0 = normal (X), 1 = busy (Z). **Resets to 1.** Bits 31:1 reserved, write 0. |
+| `0x7000_0200` | CTRL | bit 0: cursor shape. 0 = normal (X), 1 = busy (Z). bit 1: cursor hidden. **Resets to 1** (busy, shown). Bits 31:2 reserved, write 0. |
 | `0x7000_0204` | MAGIC | fixed `0x5A43_5452` (`"ZCTR"`) |
 | `0x7000_0208` | VIDEO | bits 1:0: virtual phosphor mode. Bits 11:8: monochrome brightness on DDMI, written only with bit 15 set (see [Brightness](#brightness)). Reads back as `{0x5643, avail, 3'b0, level, 6'b0, mode}`. Mode reset value comes from the board's `GPU_*` defines; level resets to 7. |
 | `0x7000_0218` | RECONFIG | write the key `0x5A52_4254` (`"ZRBT"`), as one whole-word store, to pull PROGRAMN and reconfigure the FPGA -- reboot. Any other value or a partial store is ignored. Reads back as `{0x5A52, 15'b0, avail}`; `avail` is set only on boards defining `PROGRAMN_PIN`, and the request is forced off in hardware elsewhere. Software uses `z_reboot()`, which syncs open files first -- see `docs/zboot.md` section 6. |
@@ -156,6 +156,29 @@ during startup, the cursor stays Z -- which is exactly what is true.
 Defaulting to X would additionally hide the indicator entirely on the
 fast path, where the core apps finish loading before `wm` first writes
 the register.
+
+### No cursor while a game has the screen
+
+CTRL bit 1 hides the cursor altogether (`gpu_cursor.v`'s `curs_hide`).
+`wm` sets it whenever an app holds the screen (`Z_WM_GAME_GRAB`, which
+`z_game_set_enabled()` sends): the picture is the game's, and the
+pointer is the game's business -- bricks moves its paddle with it, but
+an X drawn over the playfield helps nobody. It clears it when the grab
+ends, however it ends (release, Alt+Esc, the window closing): `wm`
+compares "is there a grab" with "is the cursor hidden" once per loop,
+so there is no path that forgets.
+
+`wm` owns CTRL, so it writes both bits together (`z_cursor_set(busy,
+hidden)` in zsoc.h); `z_cursor_set_busy()`, which gpu3d also calls,
+writes bit 1 as 0 and so shows the cursor again. A bitstream from
+before bit 1 stores it and ignores it: the cursor simply stays.
+
+Moving the pointer out of sight with the virtual mouse (`reg_vmouse`)
+was the alternative that needs no new gateware, and does not work: wm
+reads the pointer from vmouse while it is present, so the game's mouse
+would stop, and `vmouse_yield_to_usb()` hands the pointer back to the
+USB mouse the moment it moves -- the cursor would be back at the first
+nudge.
 
 ## Who sets it
 

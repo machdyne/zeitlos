@@ -50,9 +50,8 @@ and `e2E4` work.
 | `bench` | Time this board -- see below. |
 | `help`, `quit` | |
 
-`F1` shows a short help box ([app_help.md](app_help.md)); full screen it
-steps through the help text on the message line instead. `F2` toggles
-full screen. `Escape` clears the command line and puts down any piece
+`F1` shows a short help box ([app_help.md](app_help.md)) in the window;
+in game mode it does nothing. `F11` toggles full screen ([keys.md](keys.md)). `Escape` clears the command line and puts down any piece
 you have picked up, and stops the engine thinking.
 
 A command is only looked up after the line has failed to parse as a

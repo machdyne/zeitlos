@@ -179,6 +179,7 @@ static layout_cfg_t cfg;
 static page_pos_t top;
 
 static url_t cur_url;			// what is on screen (or being fetched)
+static char home_url[URL_MAX];	// F12: what web was started with, if anything
 static char cur_url_text[URL_MAX];
 
 static int spool_rd = -1;		// read handle, open while a page is live
@@ -3479,7 +3480,7 @@ static void show_help(void);
 
 static void handle_key(uint32_t k, uint8_t mods) {
 
-	if (k == Z_KEY_F1) { show_help(); return; }	// docs/app_help.md
+	if (k == Z_KEY_HELP) { show_help(); return; }	// docs/app_help.md
 
 	// A note lasts until the next key.
 	if (bar_note[0] && !find_running && !dl_on) {
@@ -3560,10 +3561,15 @@ static void handle_key(uint32_t k, uint8_t mods) {
 	case 0x04:            toggle_bookmark(); break;	// Ctrl+D
 	case 0x06:            find_prompt(); break;		// Ctrl+F
 	case 0x07:									// Ctrl+G
-	case Z_KEY_F3:        find_next(); break;
+	case Z_KEY_FIND:      find_next(); break;	// F3: find, then next
 	case 0x13:            save_page(); break;		// Ctrl+S
 
+	case Z_KEY_APP_HOME:	// F12: home (docs/keys.md)
+		go_to_text(home_url[0] ? home_url : "about:bookmarks");
+		break;
+
 	case 'g':
+	case Z_KEY_PROMPT:		// F4: the app's prompt (docs/keys.md)
 	case 0x0C:				// Ctrl+L, as everywhere else
 		// Focus the field rather than opening a dialog. The URL is
 		// already on screen and already the thing being edited; a
@@ -3583,6 +3589,7 @@ static void handle_key(uint32_t k, uint8_t mods) {
 	case 'f':             go_forward(); break;
 
 	case 'r':
+	case Z_KEY_F5:			// F5 refreshes, as in every browser
 		if (cur_url_text[0]) {
 			url_t u;
 			if (url_parse(cur_url_text, &u)) start_fetch(&u, false);
@@ -4034,15 +4041,16 @@ static void help_on_msg(z_msg_t *msg, void *user) {
 static void show_help(void) {
 	static const char help[] =
 		"A text-mode web browser for http, https, gopher and gemini.\n\n"
-		"g, Ctrl+L\tEdit the URL (Enter goes, Esc undoes)\n"
+		"F4, g, Ctrl+L\tEdit the URL (Enter goes, Esc undoes)\n"
 		"Tab\tSelect the next link\n"
 		"Enter\tFollow the selected link\n"
 		"Up/Down\tScroll a line\n"
 		"Space/PgDn\tScroll a page (PgUp back)\n"
 		"Home/End\tTop or end of the page\n"
 		"b, Bksp\tBack (f: forward)\n"
-		"r\tReload\n"
-		"Ctrl+F\tFind in the page (F3, Ctrl+G: next)\n"
+		"F5, r\tReload\n"
+		"F3, Ctrl+F\tFind in the page (again: next; Ctrl+G too)\n"
+		"F12\tHome: the page web started with, or the bookmarks\n"
 		"Ctrl+D\tBookmark the page (again: remove)\n"
 		"Ctrl+B\tShow the bookmarks\n"
 		"Ctrl+S\tSave the page's source to a file\n"
@@ -4111,6 +4119,7 @@ int main(void) {
 			// be, so the bar gives up focus and the page gets it.
 			url_focus = false;
 			url_editing = false;
+			snprintf(home_url, sizeof(home_url), "%s", arg);
 			go_to_text(arg);
 		} else {
 			// Now that a window paints only inside the region it has

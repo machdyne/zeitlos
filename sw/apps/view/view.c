@@ -756,7 +756,7 @@ static void scroll_to(int nx, int ny) {
 
 static void handle_key(uint32_t keysym) {
 
-	if (keysym == Z_KEY_F1) {	// docs/app_help.md
+	if (keysym == Z_KEY_HELP) {	// docs/app_help.md
 		static const char help[] =
 			"An image viewer: BMP, PNM, GIF, JPEG, PNG, ZBM and SVG, "
 			"shown in black and white.\n\n"

@@ -30,7 +30,8 @@ both use it.
 repl works out the target and then tells the term window that asked to
 go there (`Z_TERM_SET_PORT`, `sw/common/zterm.h`). F12 disconnects.
 
-**From term**, with **F11**:
+**From term**, by typing on its start panel (or its OPEN button; F12
+first if the window is connected):
 
 ```
 open> telnet 192.168.1.10
@@ -65,8 +66,8 @@ A widget panel would need its own window — wm has no modal dialogs — so
 a second window appears in front of the one you were typing in, and
 there is a focus question to answer when it closes. A prompt bar is
 what a terminal already is, it needs no new window, and it is
-unambiguously keyboard-driven. That last part matters: F11 is most
-useful exactly when whatever you were connected to has stopped
+unambiguously keyboard-driven. That last part matters: F12 and typing
+are most useful exactly when whatever you were connected to has stopped
 answering.
 
 It draws in **reverse video, cell by cell, through term's own
@@ -81,23 +82,24 @@ screen, not a stack. On dismissal the row is marked dirty and the
 ordinary redraw path puts the session's content back. Nothing in the
 session ever knows it happened.
 
-## F11 and F12
+## F12
 
 | | |
 |---|---|
-| **F11** | open the bar — go somewhere new |
-| **F12** | disconnect — back to term's start panel |
+| **F12** | term's home: disconnect — back to term's start panel, where the bar is |
 
-Adjacent on the keyboard and adjacent in meaning. Neither is a VT100
-key anything sends on purpose, which is why term can intercept them
-before the port sees them.
+F12 is not a key anything at the far end relies on, which is why term
+can intercept it before the port sees it. F1-F10 go to the far end, and
+F11 is full screen (wm's, as for every window) — the function-key map
+is in `docs/keys.md`. F11 used to open the bar from inside a connection;
+going somewhere new is now F12 and then typing.
 
 F12 used to return to `repl0`. term no longer has a default connection
 -- it opens on a panel with REPL, POSIX and OPEN buttons -- so "back
 where you started" is that panel. See `docs/terminal.md`.
 
 On the panel, **typing anything opens the bar with it**, so a target can
-simply be typed without pressing F11 first.
+simply be typed; the OPEN button opens it empty.
 
 **The bar owns every key while it is up, including F12.** Otherwise
 Escape and F12 would both be "get me out of this", which is two answers

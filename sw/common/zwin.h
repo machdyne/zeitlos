@@ -100,8 +100,16 @@ typedef struct {
 	// but the glass keeps this window's last paint. The next real
 	// region thaws. drew_frozen: a draw was attempted meanwhile --
 	// reported in the thawing region's ack so wm sends a REDRAW.
-	int			frozen;
-	int			drew_frozen;
+	uint8_t		frozen;
+	uint8_t		drew_frozen;
+
+	// Full screen (F11, docs/keys.md): wm draws no titlebar, so the
+	// content starts at the top edge. From the top bit of the h in
+	// wm's rect messages (Z_WM_RECT_BARE); z_win_content_rect()
+	// follows it. (Bytes, these
+	// three: repl keeps several windows inside a RAM budget with no
+	// slack, docs/flash_apps.md.)
+	uint8_t		bare;
 } z_win_t;
 
 // sends Z_WM_CREATE_WINDOW and blocks for the reply. title may be

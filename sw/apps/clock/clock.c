@@ -549,7 +549,7 @@ static void help_on_msg(z_msg_t *m, void *user) {
 
 static void handle_key(uint32_t keysym, uint8_t mods) {
 
-	if (keysym == Z_KEY_F1) {	// docs/app_help.md
+	if (keysym == Z_KEY_HELP) {	// docs/app_help.md
 		static const char help[] =
 			"A wall clock, analog or digital.\n\n"
 			"Tab, arrows\tChoose Analog or Digital\n"

@@ -251,9 +251,9 @@ static const struct { const char *key; const char *what; } help_keys[] = {
     { "left/rt", "previous / next file" },
     { "- / =",   "volume down / up" },
     { "F1",      "this help" },
-    { "F2",      "mute / unmute drums" },
-    { "F3",      "force mono (diagnostic: L and R identical)" },
-    { "F4",      "panic -- all notes off" },
+    { "F5",      "mute / unmute drums" },
+    { "F6",      "force mono (diagnostic: L and R identical)" },
+    { "F7",      "panic -- all notes off" },
     { "esc",     "quit" }
 };
 #define HELP_ROWS ((int)(sizeof(help_keys) / sizeof(help_keys[0])))
@@ -768,7 +768,7 @@ static void draw_help_row(int i) {
  *
  * The cost is that it consumes almost the whole alphanumeric area, so
  * the transport moved to keys the layout does not touch -- space,
- * Enter, Tab, the arrows and F1..F4. Per-channel muting on 1..9 and 0
+ * Enter, Tab, the arrows and F1, F5-F7. Per-channel muting on 1..9 and 0
  * had to go entirely: those are black keys now. It was a diagnostic
  * aid and the keyboard is worth more.
  *
@@ -1417,15 +1417,15 @@ static void handle_key(uint32_t ks, bool pressed) {
         case '=':
         case '+':          set_volume(volume + 4); break;
 
-        case Z_KEY_F1:     show_help = true;
+        case Z_KEY_HELP:   show_help = true;
                            help_row = 0;
                            z_win_clear(&win);
                            z_widget_invalidate(&wset);
                            break;
-        case Z_KEY_F2:     toggle_mute(SMF_DRUM_CHANNEL); break;
-        case Z_KEY_F3:     force_mono = !force_mono;
+        case Z_KEY_F5:     toggle_mute(SMF_DRUM_CHANNEL); break;
+        case Z_KEY_F6:     force_mono = !force_mono;
                            dirty |= DIRTY_HINT; break;
-        case Z_KEY_F4:     kbd_all_off();
+        case Z_KEY_F7:     kbd_all_off();
                            synth_all_off(&sy);
                            voices_silence();
                            kbd_refresh();
