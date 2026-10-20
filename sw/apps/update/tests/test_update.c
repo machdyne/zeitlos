@@ -236,9 +236,15 @@ static int h_fetch_open(void *c, const char *name, char *err, int errlen) {
 	return UPD_OK;
 }
 
+// A TFTP block at most, and usually less: the size varies from call to
+// call, so LZ4 block headers and data are split at every kind of place.
+static uint32_t chunk_seed = 1;
+
 static int h_fetch_read(void *c, uint8_t *b, int cap, char *err, int errlen) {
 	(void)c; (void)err; (void)errlen;
-	int n = cap < 1468 ? cap : 1468;		// a TFTP block
+	chunk_seed = chunk_seed * 1103515245u + 12345u;
+	int n = 1 + (int)((chunk_seed >> 16) % 1468);
+	if (n > cap) n = cap;
 	return (int)fread(b, 1, n, src);
 }
 
@@ -551,7 +557,7 @@ static void format1(void) {
 		char f[1200];
 		full(f, "/sys/manifest");
 		char *b = slurp(f, NULL);
-		CHECK(b && !strncmp(b, "zeitlos-manifest 2\n", 19), "written as format 2");
+		CHECK(b && !strncmp(b, "zeitlos-manifest 3\n", 19), "written as format 3");
 		free(b);
 	}
 
@@ -562,6 +568,40 @@ static void format1(void) {
 	CHECK(r == UPD_DONE && fetches == 0, "nothing to fetch (%d, %d)", r, fetches);
 	CHECK(bytes_read > 300000 && bytes_read < 340000,
 		"every file read once, by CRC (%ld bytes)", bytes_read);
+}
+
+static void lz_objects(void) {
+	printf("LZ4 objects (format 3)\n");
+	fresh_card();
+	run("v1", false, false);
+	int r = run("v2", false, false);
+	CHECK(r == UPD_DONE && card_is_release("v2", NULL), "v1 -> v2 from LZ4 objects");
+	fresh_card();
+	r = run("v2", false, false);
+	CHECK(r == UPD_DONE && said("over the network"),
+		"a blank card: the summary says what came over the network");
+	CHECK(card_matches_src("/apps/big", "v2"), "a 300 KB file decoded whole, ten blocks");
+
+	printf("a format-2 store (raw objects)\n");
+	char saved[700];
+	snprintf(saved, sizeof saved, "%s", store);
+	snprintf(store, sizeof store, "%s/store2", fx);
+	fresh_card();
+	r = run("v2", false, false);
+	CHECK(r == UPD_DONE && card_is_release("v2", NULL) && manifest_is(id_v2),
+		"is still read: same snapshot, raw objects (%d)", r);
+	{
+		char f[1200];
+		full(f, "/sys/manifest");
+		char *b = slurp(f, NULL);
+		CHECK(b && !strncmp(b, "zeitlos-manifest 3\n", 19),
+			"and the card's manifest is written as format 3");
+		free(b);
+	}
+	snprintf(store, sizeof store, "%s", saved);
+	r = run("v2", false, false);
+	CHECK(r == UPD_DONE && said("up to date"),
+		"then the format-3 store finds it up to date: same snapshot id");
 }
 
 static void memory(void) {
@@ -678,19 +718,22 @@ static void bad_store(void) {
 
 	printf("a damaged object\n");
 	int r;
-	// Same length, one byte changed: only the hash can tell.
-	static const char *damage[2] = {
+	// The objects are LZ4 blocks (format 3): a byte changed in a block
+	// header, one
+	// in a block's data, and one too many at the end. Each must be
+	// refused -- by the decoder or by the CRC -- and never installed.
+	static const char *damage[3] = {
 		"printf X | dd of=\"$f\" bs=1 seek=0 conv=notrunc 2>/dev/null",
+		"printf X | dd of=\"$f\" bs=1 seek=12 conv=notrunc 2>/dev/null",
 		"printf X >> \"$f\"" };
-	static const char *why[2] = { "does not match the manifest",
-		"longer than the manifest says" };
-	for (int d = 0; d < 2; d++) {
+	static const char *what[3] = { "header", "data", "longer" };
+	for (int d = 0; d < 3; d++) {
 		fresh_card();
 		run("v1", false, false);
 		sh("cd '%s/o' && for f in */*; do %s; done", store, damage[d]);
 		r = run("v2", false, false);
-		CHECK(r == UPD_PARTIAL && said(why[d]), "%s: refused (%d)",
-			d ? "longer" : "same length", r);
+		CHECK(r == UPD_PARTIAL && (said("damaged") || said("does not match")),
+			"%s: refused (%d)", what[d], r);
 		CHECK(said("retrying"), "after one retry");
 		CHECK(card_is_release("v1", NULL) && manifest_is(id_v1),
 			"and the card is still v1, consistent%s%s", tree_bad ? ": " : "", tree_first);
@@ -716,7 +759,7 @@ static void bad_store(void) {
 	sh("rm -rf '%s' && cp -r '%s' '%s'", store, saved, store);
 
 	printf("a newer manifest format\n");
-	sh("sed -i 's/^zeitlos-manifest 2/zeitlos-manifest 3/' '%s/v2/manifest'", store);
+	sh("sed -i 's/^zeitlos-manifest 3/zeitlos-manifest 4/' '%s/v2/manifest'", store);
 	r = run("v2", false, false);
 	CHECK(r == UPD_FAILED && said("newer than this update"), "is refused (%d)", r);
 	CHECK(said("release/v2/update /apps/update"), "and says how to get a newer update");
@@ -808,6 +851,7 @@ int main(int argc, char **argv) {
 	v1_to_v2();
 	no_manifest();
 	format1();
+	lz_objects();
 	memory();
 	verify();
 	in_use();

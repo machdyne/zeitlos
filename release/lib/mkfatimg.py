@@ -815,6 +815,22 @@ class Plan(object):
         return list(self.files)
 
 
+def app_inputs():
+    """Every (card path, source) list of programs, in image order."""
+    return SUPPLEMENTAL + NETWORK + CASINO + GAMES_DEMOS + MISC + SHELLS + SELFHOST
+
+
+def data_inputs():
+    """Every (card path, source) list of required data files.
+
+    One place, used by plan() and by the tests' scratch tree, so a new
+    list cannot be added to one and not the other.
+    """
+    return (LIBZ_FILES + LIBZ_EXTRA + CONFIG_FILES + NETWORK_FILES
+            + FONT_FILES + DESK_FILES + EXAMPLES + FPGA_FILES
+            + FPGA_EXAMPLES + DEMO_FILES + CHIP8_FILES + SLIDE_FILES)
+
+
 def plan(root, ark_dir=None, packs=None, verbose=True):
     """Gather and check everything a card holds. Writes nothing.
 
@@ -824,7 +840,7 @@ def plan(root, ark_dir=None, packs=None, verbose=True):
     """
     ark_dir = ark_dir or os.path.join(root, "sw/data/ark")
 
-    apps = SUPPLEMENTAL + NETWORK + CASINO + GAMES_DEMOS + MISC + SHELLS + SELFHOST
+    apps = app_inputs()
 
     # A name listed twice copies once and then fails, halfway through a
     # 64MB image, with mcopy's own silence for an error message. Said
@@ -846,9 +862,7 @@ def plan(root, ark_dir=None, packs=None, verbose=True):
                        "flash; CORE_APPS in the Makefile): %s"
                        % ", ".join(on_card))
 
-    data_lists = (LIBZ_FILES + LIBZ_EXTRA + CONFIG_FILES + NETWORK_FILES
-                  + FONT_FILES + DESK_FILES + EXAMPLES + FPGA_FILES
-                  + FPGA_EXAMPLES + DEMO_FILES + CHIP8_FILES + SLIDE_FILES)
+    data_lists = data_inputs()
 
     # Check every input up front. Finding out that gamedemo.bin was
     # never built after formatting a 64MB image and copying twelve

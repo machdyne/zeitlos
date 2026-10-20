@@ -47,7 +47,32 @@
 # plain TFTP transfer could not keep out anyway.
 #
 # Format 1 (round 0) had no CRC: `f <sha256> <size> <policy> <path>`.
-# It is still read; this writes 2.
+#
+# -- format 3: the objects are LZ4 blocks --
+#
+# The lines are format 2's; what changes is the store. Format 3's
+# objects (`o/ab/<20 hex>.lz`) are the file in 32 KB blocks, each
+# preceded by a 4-byte little-endian word: bit 31 set, the block is
+# stored as it is; clear, it is an LZ4 block (lz4_Block_format.md, as
+# sw/common/zexec_lz4.c reads it). The low 31 bits are the length of
+# what follows. Every block but the last holds 32768 bytes of the file;
+# the manifest's size says how many the last holds. Blocks are
+# independent, so the board needs no history window, and each is
+# decoded into a 32 KB buffer.
+#
+# Not gzip: measured under QEMU on the real card, inflate costs ~100-140
+# instructions per byte here (~9 cycles each on this CPU), which would
+# make an update 2-4x SLOWER than uncompressed; LZ4 is ~10. The base
+# card is 17.4 MB and 10.4 MB as LZ4 blocks. (The same lesson that
+# moved compressed executables from DEFLATE to LZ4: docs/executables.md.)
+#
+# The CRC-32 and the SHA-256 are still of the file as it is on the
+# card, so a card's /sys/manifest means the same in every format; the
+# snapshot id, over the lines alone, is the same for 2 and 3. An update
+# that reads only format 2 refuses 3 and prints how to fetch the
+# release's own updater (docs/update.md).
+#
+# Formats 1 and 2 are still read; this writes 3.
 #
 # -- the snapshot id --
 #
@@ -64,10 +89,12 @@
 import datetime
 import hashlib
 import os
+import struct
 import subprocess
+import sys
 import zlib
 
-FORMAT = 2
+FORMAT = 3
 MAGIC = "zeitlos-manifest"
 ID_DIGITS = 12
 
@@ -124,9 +151,82 @@ def hashes_file(path):
     return h.hexdigest(), "%08x" % (c & 0xFFFFFFFF)
 
 
-def object_path(sha):
-    """Where an update release keeps a file's contents: o/ab/abcdef..."""
-    return "o/%s/%s" % (sha[:2], sha[:OBJECT_DIGITS])
+def object_path(sha, fmt=FORMAT):
+    """Where an update release keeps a file's contents: o/ab/abcdef...,
+    as LZ4 blocks in o/ab/abcdef....lz from format 3."""
+    return "o/%s/%s%s" % (sha[:2], sha[:OBJECT_DIGITS],
+                          ".lz" if fmt >= 3 else "")
+
+
+LZ_BLOCK = 32768
+LZ_STORED = 0x80000000
+
+
+def _mkzar():
+    # tools/mkzar.py's compressor: the one the flash archive uses, whose
+    # output sw/common/zexec_lz4.c reads. Pure Python, no dependency.
+    here = os.path.dirname(os.path.abspath(__file__))
+    tools = os.path.normpath(os.path.join(here, "..", "..", "tools"))
+    if tools not in sys.path:
+        sys.path.insert(0, tools)
+    import mkzar
+    return mkzar
+
+
+def lz_blocks(data):
+    """A format-3 object: `data` as LZ4 blocks (see the top of this
+    file). Deterministic, so a republish rewrites nothing; each block
+    checked by decoding it again before it is used."""
+    mk = _mkzar()
+    out = bytearray()
+    for i in range(0, len(data), LZ_BLOCK):
+        blk = data[i:i + LZ_BLOCK]
+        z = mk.lz4_compress(blk) if len(blk) > 16 else blk
+        if len(z) >= len(blk) or mk.lz4_decompress(z, len(blk)) != blk:
+            out += struct.pack("<I", LZ_STORED | len(blk)) + blk
+        else:
+            out += struct.pack("<I", len(z)) + z
+    return bytes(out)
+
+
+def lz_unblock(obj, size):
+    """The file back from a format-3 object (for checking and tests)."""
+    mk = _mkzar()
+    out = bytearray()
+    p = 0
+    while len(out) < size:
+        w = struct.unpack("<I", obj[p:p + 4])[0]
+        p += 4
+        n = w & ~LZ_STORED
+        want = min(LZ_BLOCK, size - len(out))
+        part = obj[p:p + n]
+        p += n
+        out += part if w & LZ_STORED else mk.lz4_decompress(part, want)
+    if p != len(obj):
+        raise ManifestError("data after the last block")
+    return bytes(out)
+
+
+def lz_check(path, size):
+    """Whether a format-3 object's block headers add up to `size`
+    bytes and end where the file does -- a damaged or truncated object,
+    found without decoding it."""
+    total = os.path.getsize(path)
+    p = got = 0
+    with open(path, "rb") as f:
+        while got < size:
+            h = f.read(4)
+            if len(h) < 4:
+                return False
+            w = struct.unpack("<I", h)[0]
+            n = w & ~LZ_STORED
+            want = min(LZ_BLOCK, size - got)
+            if (w & LZ_STORED and n != want) or (not w & LZ_STORED and not 0 < n < want):
+                return False
+            f.seek(n, 1)
+            p += 4 + n
+            got += want
+    return p == total
 
 
 def describe(root):

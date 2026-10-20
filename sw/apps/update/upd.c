@@ -43,8 +43,9 @@
 #include "upd.h"
 #include "zsha256.h"
 #include "zpaths.h"         /* the card's fixed paths (docs/layout.md) */
+#include "zexec_lz4.h"      /* format 3's LZ4 blocks */
 
-#define FORMAT          2       // 1 (no CRC) is still read
+#define FORMAT          3       // LZ4 objects; 1 (no CRC) and 2 (raw) are still read
 #define MAGIC           "zeitlos-manifest"
 #define ID_DIGITS       12
 #define OBJECT_DIGITS   20
@@ -736,96 +737,228 @@ typedef struct {
 	int index, count;
 	uint32_t bytes_total, bytes_done;
 	uint32_t t0;
+	uint32_t wire_done;     // bytes that came over the network (LZ4)
 } progress_t;
 
 // Fetches object `obj` into card file `upd`, checking it. UPD_OK, or
 // UPD_ERR with a reason said; stopped: -10.
+//
 // Checked by CRC-32 and size; by SHA-256 too with -v (`strong`) or for
 // an entry with no CRC. Software SHA-256 here is ~70 KB/s on a Lakritz,
 // slower than TFTP delivers, so it would set the update's speed.
-static int fetch_one(const char *obj, const char *upd, const upd_entry_t *e,
-	progress_t *pg, const char *label, bool strong) {
+//
+// `lz`: the object is LZ4 blocks (manifest format 3, release/lib/
+// manifest.py): the file in 32 KB blocks, each after a 4-byte word --
+// bit 31 set: stored as it is; clear: an LZ4 block -- whose low bits
+// are the length that follows. Each block is collected, decoded into a
+// 32 KB buffer, and passed on; the checks are on the decoded bytes,
+// which are the file. Every length is checked against the manifest's
+// size before anything is copied, so damage cannot write past a block
+// or grow the file.
 
-	static uint8_t buf[IO_BUF + UPD_CHUNK_MAX];
+// What one fetch writes and checks, shared by the raw and gzip paths.
+typedef struct {
+	int h;                  // the .upd being written
+	const upd_entry_t *e;
+	uint8_t *wbuf;          // IO_BUF bytes, flushed to the card when full
+	uint32_t fill, got;     // bytes in wbuf; bytes of the file so far
+	uint32_t crc;
+	bool use_sha;
+	z_sha256_ctx sha;
+	bool too_long, write_failed;
+} sink_t;
+
+static void sink_flush(sink_t *k) {
+	if (!k->fill || k->write_failed) return;
+	if (io->write(io->ctx, k->h, k->wbuf, (int)k->fill) != (int)k->fill)
+		k->write_failed = true;
+	k->fill = 0;
+}
+
+static void sink_put(sink_t *k, const uint8_t *p, uint32_t n) {
+	if (k->got + n > k->e->size) { k->too_long = true; return; }
+	k->crc = crc32_update(k->crc, p, n);
+	if (k->use_sha) z_sha256_update(&k->sha, p, n);
+	k->got += n;
+	while (n) {
+		uint32_t room = IO_BUF - k->fill, m = n < room ? n : room;
+		memcpy(k->wbuf + k->fill, p, m);
+		k->fill += m;
+		p += m;
+		n -= m;
+		if (k->fill == IO_BUF) sink_flush(k);
+	}
+}
+
+// -- LZ4 blocks ------------------------------------------------------------
+
+#define LZ_BLOCK   32768
+#define LZ_STORED  0x80000000u
+
+typedef struct {
+	uint32_t size;          // the file's size (the manifest's)
+	uint32_t done;          // bytes of the file decoded so far
+	uint8_t hdr[4];
+	int nhdr;               // header bytes collected
+	uint32_t need, have;    // this block's data: its length, collected
+	uint32_t want;          // what it decodes to
+	bool stored;
+	const char *bad;
+} lzdec_t;
+
+static uint8_t lz_in[LZ_BLOCK], lz_out[LZ_BLOCK];
+
+typedef struct { const uint8_t *p; uint32_t n; } lzsrc_t;
+
+static uint32_t lz_fill(void *ctx, uint8_t *buf, uint32_t cap) {
+	lzsrc_t *s = ctx;
+	uint32_t n = s->n < cap ? s->n : cap;
+	memcpy(buf, s->p, n);
+	s->p += n;
+	s->n -= n;
+	return n;
+}
+
+// Feeds `n` bytes of the object; decoded file bytes go to `k`.
+static void lz_feed(lzdec_t *z, sink_t *k, const uint8_t *p, uint32_t n) {
+	static z_exec_lz4_t st;
+	while (n && !z->bad && !k->too_long && !k->write_failed) {
+		if (z->nhdr < 4) {
+			if (z->done == z->size) { z->bad = "data after the end"; return; }
+			z->hdr[z->nhdr++] = *p++;
+			n--;
+			if (z->nhdr < 4) continue;
+			uint32_t w = (uint32_t)z->hdr[0] | (uint32_t)z->hdr[1] << 8 |
+				(uint32_t)z->hdr[2] << 16 | (uint32_t)z->hdr[3] << 24;
+			z->stored = (w & LZ_STORED) != 0;
+			z->need = w & ~LZ_STORED;
+			z->want = z->size - z->done < LZ_BLOCK ? z->size - z->done : LZ_BLOCK;
+			z->have = 0;
+			if (z->stored ? z->need != z->want : !(z->need && z->need < z->want)) {
+				z->bad = "a block of the wrong length";
+				return;
+			}
+			continue;
+		}
+		uint32_t m = z->need - z->have < n ? z->need - z->have : n;
+		if (z->stored) {
+			sink_put(k, p, m);                  // straight through
+		} else {
+			memcpy(lz_in + z->have, p, m);
+		}
+		z->have += m;
+		p += m;
+		n -= m;
+		if (z->have < z->need) continue;
+		if (!z->stored) {
+			lzsrc_t src = { lz_in, z->need };
+			if (z_exec_lz4(&st, lz_out, z->want, lz_fill, &src)) {
+				z->bad = "an LZ4 block that does not decode";
+				return;
+			}
+			sink_put(k, lz_out, z->want);
+		}
+		z->done += z->want;
+		z->nhdr = 0;
+	}
+}
+
+static int fetch_one(const char *obj, const char *upd, const upd_entry_t *e,
+	progress_t *pg, const char *label, bool strong, bool lz) {
+
+	static uint8_t in[UPD_CHUNK_MAX], wbuf[IO_BUF];
 	char err[96];
-	z_sha256_ctx c;
 	uint8_t d[Z_SHA256_DIGEST];
 	char hex[HASH_HEX + 1];
-	uint32_t got = 0, fill = 0, last = io->ms(io->ctx), t_file = last;
+	uint32_t wire = 0, last = io->ms(io->ctx), t_file = last;
 	char sz[16];
+	lzdec_t zd;
+	memset(&zd, 0, sizeof zd);
+	zd.size = e->size;
 
 	err[0] = 0;
 	if (io->fetch_open(io->ctx, obj, err, sizeof err) != UPD_OK) {
 		say("\n  %s: %s\n", obj, err[0] ? err : "cannot fetch");
 		return UPD_ERR;
 	}
-	int h = io->open_write(io->ctx, upd);
-	if (h < 0) {
+	sink_t k;
+	memset(&k, 0, sizeof k);
+	k.h = io->open_write(io->ctx, upd);
+	if (k.h < 0) {
 		io->fetch_close(io->ctx);
 		say("\n  cannot write %s\n", upd);
 		return UPD_ERR;
 	}
-	bool use_sha = strong || !e->has_crc;
-	uint32_t crc = 0;
-	if (use_sha) z_sha256_init(&c);
+	k.e = e;
+	k.wbuf = wbuf;
+	k.use_sha = strong || !e->has_crc;
+	if (k.use_sha) z_sha256_init(&k.sha);
+
 	int rc = UPD_OK;
 	for (;;) {
 		if (io->stop && io->stop(io->ctx)) { rc = -10; break; }
-		int n = io->fetch_read(io->ctx, buf + fill, UPD_CHUNK_MAX, err, sizeof err);
+		int n = io->fetch_read(io->ctx, in, sizeof in, err, sizeof err);
 		if (n < 0) {
 			say("\n  %s: %s\n", obj, err[0] ? err : "transfer failed");
 			rc = UPD_ERR;
 			break;
 		}
-		if (n > 0) {
-			if (got + (uint32_t)n > e->size) {
-				say("\n  %s: longer than the manifest says\n", obj);
-				rc = UPD_ERR;
-				break;
-			}
-			crc = crc32_update(crc, buf + fill, (uint32_t)n);
-			if (use_sha) z_sha256_update(&c, buf + fill, (uint32_t)n);
-			got += (uint32_t)n;
-			fill += (uint32_t)n;
-		}
-		if (fill >= IO_BUF || (n == 0 && fill)) {
-			if (io->write(io->ctx, h, buf, (int)fill) != (int)fill) {
-				say("\n  writing %s failed (card full?)\n", upd);
-				rc = UPD_ERR;
-				break;
-			}
-			fill = 0;
-		}
 		if (n == 0) break;
+		wire += (uint32_t)n;
+		pg->wire_done += (uint32_t)n;
+		if (!lz)
+			sink_put(&k, in, (uint32_t)n);
+		else
+			lz_feed(&zd, &k, in, (uint32_t)n);
+		if (k.too_long) {
+			say("\n  %s: longer than the manifest says\n", obj);
+			rc = UPD_ERR;
+			break;
+		}
+		if (zd.bad) {
+			say("\n  %s: damaged (%s)\n", obj, zd.bad);
+			rc = UPD_ERR;
+			break;
+		}
+		if (k.write_failed) break;
 		uint32_t now = io->ms(io->ctx);
 		if (e->size >= PROGRESS_MIN && now - last >= PROGRESS_MS) {
 			last = now;
-			uint32_t done_all = pg->bytes_done + got;
+			uint32_t done_all = pg->bytes_done + k.got;
 			uint32_t el = now - pg->t0;
 			uint32_t rate = kb_per_s(done_all, el);
 			uint32_t left = rate ? (pg->bytes_total - done_all) / 1024 / rate : 0;
 			say("\r  [%d/%d] %s  %s  %lu%%  %lu KB/s  ~%lu s left   ",
 				pg->index, pg->count, label, size_str(e->size, sz, sizeof sz),
-				(unsigned long)percent(got, e->size),
+				(unsigned long)percent(k.got, e->size),
 				(unsigned long)rate, (unsigned long)left);
 		}
 	}
 	io->fetch_close(io->ctx);
-	if (io->close(io->ctx, h) != UPD_OK && rc == UPD_OK) {
+	sink_flush(&k);
+	if (k.write_failed && rc == UPD_OK) {
+		say("\n  writing %s failed (card full?)\n", upd);
+		rc = UPD_ERR;
+	}
+	if (io->close(io->ctx, k.h) != UPD_OK && rc == UPD_OK) {
 		say("\n  closing %s failed\n", upd);
 		rc = UPD_ERR;
 	}
+	if (rc == UPD_OK && lz && (zd.done != zd.size || zd.nhdr)) {
+		say("\n  %s: damaged (it ends in the middle of a block)\n", obj);
+		rc = UPD_ERR;
+	}
 	if (rc == UPD_OK) {
-		bool ok = got == e->size;
-		if (ok && e->has_crc && crc != e->crc) ok = false;
-		if (ok && use_sha) {
-			z_sha256_final(&c, d);
+		bool ok = k.got == e->size;
+		if (ok && e->has_crc && k.crc != e->crc) ok = false;
+		if (ok && k.use_sha) {
+			z_sha256_final(&k.sha, d);
 			to_hex(d, Z_SHA256_DIGEST, hex);
 			ok = hash_eq(hex, e->hash);
 		}
 		if (!ok) {
 			say("\n  %s: %s does not match the manifest\n", obj,
-				got != e->size ? "its size" : "its hash");
+				k.got != e->size ? "its size" : "its hash");
 			rc = UPD_ERR;
 		}
 	}
@@ -834,6 +967,7 @@ static int fetch_one(const char *obj, const char *upd, const upd_entry_t *e,
 		return rc;
 	}
 	uint32_t el = io->ms(io->ctx) - t_file;
+	(void)wire;
 	if (e->size >= PROGRESS_MIN)
 		say("\r  [%d/%d] %s  %s  ok  %lu KB/s                \n", pg->index,
 			pg->count, label, size_str(e->size, sz, sizeof sz),
@@ -1158,7 +1292,8 @@ int upd_run(const upd_io_t *io_, const upd_opts_t *o) {
 		}
 	}
 
-	progress_t pg = { 0, nwrite, bytes, 0, io->ms(io->ctx) };
+	progress_t pg = { 0, nwrite, bytes, 0, io->ms(io->ctx), 0 };
+	bool lz = R.format >= 3;
 	bool stopped = false, broken = false;
 	int nbusy = 0, nfailed = 0, ndone = 0, nremoved = 0;
 	for (int k = 0; k < nitems; k++) {
@@ -1186,12 +1321,12 @@ int upd_run(const upd_io_t *io_, const upd_opts_t *o) {
 			say("  [%d/%d] %s  %s  already fetched\n", pg.index, pg.count,
 				label, size_str(re->size, sz, sizeof sz));
 		} else {
-			snprintf(obj, sizeof obj, "%s/o/%.2s/%.*s", dir, re->hash,
-				OBJECT_DIGITS, re->hash);
-			int fr = fetch_one(obj, p_upd, re, &pg, label, o->verify);
+			snprintf(obj, sizeof obj, "%s/o/%.2s/%.*s%s", dir, re->hash,
+				OBJECT_DIGITS, re->hash, lz ? ".lz" : "");
+			int fr = fetch_one(obj, p_upd, re, &pg, label, o->verify, lz);
 			if (fr == UPD_ERR) {
 				say("  retrying %s\n", label);
-				fr = fetch_one(obj, p_upd, re, &pg, label, o->verify);
+				fr = fetch_one(obj, p_upd, re, &pg, label, o->verify, lz);
 			}
 			if (fr == -10) {
 				stopped = true;
@@ -1269,9 +1404,15 @@ int upd_run(const upd_io_t *io_, const upd_opts_t *o) {
 		say("update: %s in %lu s: %d written, %d removed", stopped ? "stopped" :
 			(nbusy || nfailed) ? "partly done" : "done",
 			(unsigned long)(el / 1000), ndone, nremoved);
-		if (pg.bytes_done >= PROGRESS_MIN)
-			say(" (%s, %lu KB/s)", size_str(pg.bytes_done, sz, sizeof sz),
+		if (pg.bytes_done >= PROGRESS_MIN) {
+			say(" (%s, %lu KB/s", size_str(pg.bytes_done, sz, sizeof sz),
 				(unsigned long)kb_per_s(pg.bytes_done, el));
+			if (lz && pg.wire_done) {
+				char w[16];
+				say("; %s over the network", size_str(pg.wire_done, w, sizeof w));
+			}
+			say(")");
+		}
 		if (nbusy) say(", %d in use", nbusy);
 		if (nfailed) say(", %d failed", nfailed);
 		say(".\n");

@@ -26,6 +26,7 @@
 #   - an image's /sys/manifest has the same snapshot id.
 #
 
+import hashlib
 import os
 import shutil
 import subprocess
@@ -79,7 +80,7 @@ def test_manifest():
     check(m3.id != m.id, "a policy change is a new snapshot")
     raises(lambda: mf.parse(m.text.replace("f " + "a" * 64, "f " + "d" * 64)),
            mf.ManifestError, "a changed hash no longer matches the id")
-    raises(lambda: mf.parse(m.text.replace("zeitlos-manifest 2", "zeitlos-manifest 3")),
+    raises(lambda: mf.parse(m.text.replace("zeitlos-manifest 3", "zeitlos-manifest 4")),
            mf.ManifestError, "a newer format is refused")
     raises(lambda: mf.parse("hello\n"), mf.ManifestError, "not a manifest")
     lines = m.text.splitlines()
@@ -96,8 +97,30 @@ def test_manifest():
     o = mf.parse(old)
     check(o.format == 1 and o.files[0][4] is None and o.files[0][2] == 5,
           "a format-1 manifest is read (no CRC)")
-    check(m.text.startswith("zeitlos-manifest 2\n") and " 0000000a 1 r apps/a\n" in m.text,
-          "format 2 writes the CRC after the SHA-256")
+    check(m.text.startswith("zeitlos-manifest 3\n") and " 0000000a 1 r apps/a\n" in m.text,
+          "format 3 writes the CRC after the SHA-256, as format 2 did")
+    m2l = "zeitlos-manifest 2\n" + m.text.split("\n", 1)[1]
+    o2 = mf.parse(m2l)
+    check(o2.format == 2 and o2.id == m.id, "a format-2 manifest is read; same snapshot id")
+    check(mf.object_path("ab" + "0" * 62, 2) == "o/ab/ab" + "0" * 18 and
+          mf.object_path("ab" + "0" * 62) == "o/ab/ab" + "0" * 18 + ".lz",
+          "format 3's objects are .lz, format 2's are not")
+    # LZ4 blocks: sizes around the block boundary, and what is not compressible
+    import random as _r
+    rnd = _r.Random(3)
+    for n in (0, 1, 15, 16, 17, 32767, 32768, 32769, 65536, 100001):
+        txt = (b"the quick brown fox " * 6000)[:n]
+        noise = bytes(rnd.getrandbits(8) for _ in range(n))
+        for d in (txt, noise):
+            z = mf.lz_blocks(d)
+            ok = mf.lz_unblock(z, n) == d
+            if not ok:
+                break
+        if not ok:
+            break
+    check(ok, "LZ4 blocks round-trip, 0 to 100001 bytes, text and noise")
+    check(len(mf.lz_blocks(b"x" * 100000)) < 2000, "text shrinks")
+    check(len(mf.lz_blocks(noise)) == len(noise) + 4 * 4, "noise is stored, 4 bytes a block")
     raises(lambda: mf.build("n", "v", "s", [], [("apps/x", "a" * 64, 1, "r", "xyz")]),
            mf.ManifestError, "a CRC that is not 8 hex digits is refused")
     vt = mf.version_text(m)
@@ -130,6 +153,13 @@ def publish(root, st_dir, name="v0.0.7", latest=True):
     return m, store.publish(st_dir, m, store.sources_for(pl, m), latest=latest)
 
 
+def content(st_dir, sha, fmt=mf.FORMAT, size=None):
+    """What an object holds, decoded if it is LZ4 blocks."""
+    with open(os.path.join(st_dir, mf.object_path(sha, fmt)), "rb") as f:
+        d = f.read()
+    return mf.lz_unblock(d, size) if fmt >= 3 else d
+
+
 def objects(st_dir):
     out = set()
     for dp, _dn, fn in os.walk(os.path.join(st_dir, "o")):
@@ -147,13 +177,22 @@ def test_store(root):
         check(st.objects_new == uniq and not st.unchanged,
               "%d objects written for %d files" % (st.objects_new, len(m.files)))
         bad = [p for p, sha, size, _, _c in m.files
-               if mf.sha256_file(os.path.join(st_dir, mf.object_path(sha))) != sha]
+               if hashlib.sha256(content(st_dir, sha, size=size)).hexdigest() != sha]
         check(not bad, "every object holds the bytes its name says")
         import zlib
         badc = [p for p, sha, size, _, c in m.files
-                if "%08x" % (zlib.crc32(open(os.path.join(st_dir, mf.object_path(sha)), "rb").read())
+                if "%08x" % (zlib.crc32(content(st_dir, sha, size=size))
                              & 0xFFFFFFFF) != c]
         check(not badc, "and its CRC-32 is zlib's")
+        some = max(m.files, key=lambda f: f[2])
+        p = os.path.join(st_dir, mf.object_path(some[1]))
+        check(mf.lz_check(p, some[2]) and os.path.getsize(p) < some[2],
+              "objects are LZ4 blocks that add up to the file, and smaller "
+              "(%s: %d -> %d)" % (some[0], some[2], os.path.getsize(p)))
+        check(open(p, "rb").read() == mf.lz_blocks(content(st_dir, some[1], size=some[2])),
+              "compressed deterministically")
+        check(all(mf.lz_check(os.path.join(st_dir, mf.object_path(f[1])), f[2])
+                  for f in m.files), "every object's blocks add up")
         longest = max(len("release/" + mf.object_path(f[1])) for f in m.files)
         check(longest <= 63, "longest TFTP name %d bytes (net takes 63)" % longest)
         with open(os.path.join(st_dir, "v0.0.7", "manifest")) as f:
@@ -190,17 +229,48 @@ def test_store(root):
         m3, st3 = publish(root, st_dir)
         check(st3.objects_new == 1 and st3.previous_id == m.id and m3.id != m.id,
               "one new object, snapshot %s -> %s" % (m.id, m3.id))
-        check(old_sha[:mf.OBJECT_DIGITS] in objects(st_dir),
+        check(old_sha[:mf.OBJECT_DIGITS] + ".lz" in objects(st_dir),
               "the old object stays while manifest.prev names it")
         prev = mf.parse(open(os.path.join(st_dir, "v0.0.7", "manifest.prev")).read())
         check(prev.id == m.id, "manifest.prev is the replaced one")
         with open(app, "wb") as f:
             f.write(first + b" again")
         m4, st4 = publish(root, st_dir)
-        check(st4.pruned == 1 and old_sha[:mf.OBJECT_DIGITS] not in objects(st_dir),
+        check(st4.pruned == 1 and old_sha[:mf.OBJECT_DIGITS] + ".lz" not in objects(st_dir),
               "pruned once nothing names it")
         with open(app, "wb") as f:
             f.write(first)
+
+        print("a format-2 store, republished")
+        # As round 1 left a store: format-2 manifest, raw objects.
+        st2 = os.path.join(tmp, "old")
+        pl = mkfatimg.plan(root, packs=())
+        m_new = mf.make(pl, "v0.0.7", "0.0.7", "test")
+        lines = m_new.text.split("\n", 1)[1]
+        m_old = mf.parse("zeitlos-manifest 2\n" + lines)
+        os.makedirs(os.path.join(st2, "v0.0.7"))
+        for _p, sha, _s, _pol, _c in m_old.files:
+            o = os.path.join(st2, mf.object_path(sha, 2))
+            os.makedirs(os.path.dirname(o), exist_ok=True)
+            shutil.copyfile(store.sources_for(pl, m_old)[sha], o)
+        open(os.path.join(st2, "v0.0.7", "manifest"), "w").write(m_old.text)
+        stx = store.publish(st2, m_new, store.sources_for(pl, m_new))
+        cur = mf.parse(open(os.path.join(st2, "v0.0.7", "manifest")).read())
+        check(not stx.unchanged and cur.format == 3,
+              "same snapshot, but rewritten as format 3")
+        leaves = objects(st2)
+        nraw = sum(1 for x in leaves if not x.endswith(".lz"))
+        ngz = sum(1 for x in leaves if x.endswith(".lz"))
+        check(nraw and ngz, "raw objects stay while manifest.prev (format 2) "
+              "names them (%d raw, %d LZ4)" % (nraw, ngz))
+        store.publish(st2, mf.make(pl, "v0.0.7", "0.0.7", "test2"),
+                      store.sources_for(pl, m_new))
+        # unchanged now: manifest.prev is still the format-2 one
+        os.unlink(os.path.join(st2, "v0.0.7", "manifest.prev"))
+        store.publish(st2, mf.make(pl, "v0.0.7", "0.0.7", "test3"),
+                      store.sources_for(pl, m_new))
+        check(not [x for x in objects(st2) if not x.endswith(".lz")],
+              "and are pruned once nothing names them")
 
         print("names and LATEST")
         _m5, _st5 = publish(root, st_dir, name="v0.0.7-audio", latest=False)
@@ -226,6 +296,9 @@ def test_cli(root):
     # zrelease takes ROOT from its own location (abspath, not realpath),
     # so a symlinked release/ makes the scratch tree its root.
     os.symlink(os.path.join(ROOT, "release"), os.path.join(root, "release"))
+    # the LZ4 compressor the store uses (manifest.lz_blocks())
+    os.symlink(os.path.join(ROOT, "tools", "mkzar.py"),
+               os.path.join(root, "tools", "mkzar.py"))
     for h in ("zpaths.h", "zversion.h"):
         dst = os.path.join(root, "sw", "common", h)
         if not os.path.exists(dst):

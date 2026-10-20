@@ -18,9 +18,10 @@ all: run
 
 # upd.c's allocations are counted (alloc_hook.h): the peak a run needs,
 # and a heap that runs out as the board's does.
-test_update: test_update.c ../upd.c ../upd.h $(COMMON)/zsha256.c alloc_hook.h
+test_update: test_update.c ../upd.c ../upd.h $(COMMON)/zsha256.c $(COMMON)/zexec_lz4.c alloc_hook.h
 	$(CC) $(CFLAGS) -c -include alloc_hook.h -o upd_host.o ../upd.c
-	$(CC) $(CFLAGS) -o $@ test_update.c upd_host.o $(COMMON)/zsha256.c
+	$(CC) $(CFLAGS) -o $@ test_update.c upd_host.o $(COMMON)/zsha256.c \
+		$(COMMON)/zexec_lz4.c
 
 # The mailbox and TFTP source, with the real stream and object code.
 test_net: test_net.c ../upd_net.c ../upd_net.h $(COMMON)/zstream.c $(COMMON)/zobj.c

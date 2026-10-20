@@ -19,7 +19,9 @@ $ update v0.0.7 -t tftp 192.168.1.10          on the board, in posix
 |---|---|
 | **Done** (round 0) | the host side: `zrelease tftp`, the manifest, `/sys/manifest` on every card image, the `net.cfg` template on the card |
 | **Done** (round 1) | `update` on the board, over TFTP. Run on a Lakritz against a real store; three things found there and fixed: a lost end-of-file ("Inside"), a slow first check (now CRC-32, "Two hashes"), and running out of memory writing the manifest ("Inside"). Tested on the host against stores the release tool writes, including a run stopped at every step and one out of memory at every point |
-| Later | `-t nfs`; an ABI check; core apps on the card on request; the ask packs; HTTPS from GitHub releases as the default |
+| **Done** (round 2) | objects as LZ4 blocks (manifest format 3, "Compression"); host-tested, including a format-2 store read by the new `update` |
+| Next | an ABI check; HTTPS from GitHub releases as the default; then `-t nfs` |
+| Later | core apps on the card on request; the ask packs; a signed pack |
 
 What an update **does not touch**: the kernel and the core apps in
 flash (`CORE_APPS` in the Makefile). Flash is updated as before
@@ -64,8 +66,10 @@ arrives (`61%  140 KB/s  ~28 s left`). Run again, the same command says
 `up to date` after fetching one manifest.
 
 **How much.** The base card is 408 files, 17.4 MB, and its manifest
-43 KB (October 2026, without the speech pack). A card with nothing on
-it is a few minutes at TFTP's rate. A card from before manifests is
+43 KB (October 2026, without the speech pack); the store holds it as
+10.4 MB of LZ4 blocks ("Compression"), and the summary says how much
+came over the network. A card with nothing on it is a few minutes at
+TFTP's rate. A card from before manifests is
 checked first: every file of the shipped size is read once, at the
 speed the card reads (FatFs reads about 600 KB/s, [sdcard.md](sdcard.md)),
 and only what differs is fetched. After that, and for any card with a
@@ -264,7 +268,7 @@ TFTP_OPTIONS="--secure"
 ```
 
 The board asks for names relative to the server's root:
-`release/v0.0.7/manifest`, `release/o/3f/3f2a9c01e4b7d0a1c2e4`. A
+`release/v0.0.7/manifest`, `release/o/3f/3f2a9c01e4b7d0a1c2e4.lz`. A
 store elsewhere than `<tftp root>/release` has to be served as that.
 
 No `net.cfg` is needed on the board: with none, `net` takes its address
@@ -279,14 +283,14 @@ from DHCP, which is the point of starting with TFTP.
   v0.0.7/manifest                 what a card of v0.0.7 holds
   v0.0.7/manifest.prev            the one it replaced (see "Publishing again")
   v0.0.7/update                   apps/update, by a name to type (see "A card without update")
-  o/3f/3f2a9c01e4b7d0a1c2e4       a file's contents, named by its hash
+  o/3f/3f2a9c01e4b7d0a1c2e4.lz    a file's contents as LZ4 blocks, named by its hash
 ```
 
 **Objects, not a copy of the card.** Three reasons, all from TFTP:
 
 - `net` takes filenames of at most 63 bytes (`sw/apps/net/tftp.c`).
   `release/v0.0.7/data/zcc/libz/include/zplat_zeitlos.h` is already 52,
-  and longer card paths exist. An object's name is 33 bytes, whatever
+  and longer card paths exist. An object's name is 36 bytes, whatever
   the path.
 - TFTP cannot list a directory. The board asks for the manifest, then
   for exactly the objects it names; nothing else needs a name.
@@ -349,7 +353,7 @@ The same format for `/sys/manifest` on a card (what is there) and
 `<name>/manifest` in a store (what should be):
 
 ```
-zeitlos-manifest 2
+zeitlos-manifest 3
 name v0.0.7
 version 0.0.7
 snapshot 3f2a9c01e4b7
@@ -377,12 +381,65 @@ f 9d41c2a07b55...                 8e0f61d2 1734 k sys/zeitlos.cfg
 
 `release/lib/manifest.py` writes and reads it.
 
-**Format 1**, the first round's, had no CRC. It is still read, on a
-card and in a store. A card's is rewritten as format 2 by its next
-update, from the manifests alone. A store's still works, but with no
-CRC to compare the board falls back to SHA-256 for everything, which
-is slow on a board without the SHA-256 block: run `zrelease tftp` again
-and the store is format 2.
+**Formats.** Each step is still read, on a card and in a store; an
+update writes format 3.
+
+| | lines | objects | |
+|---|---|---|---|
+| 1 | no CRC | raw | round 0. With no CRC to compare, the board falls back to SHA-256, slow without the SHA-256 block |
+| 2 | SHA-256 and CRC-32 | raw, `o/ab/<hash>` | round 1 |
+| 3 | as 2 | LZ4 blocks, `o/ab/<hash>.lz` | |
+
+The snapshot id is over the lines alone, so formats 2 and 3 of the
+same files have the same id: a card updated from a format-2 store is
+`up to date` against the format-3 store of the same tree. Republishing
+a format-2 store (`zrelease tftp` again) rewrites its manifest as
+format 3 and adds the `.lz` objects; the raw ones stay while
+`manifest.prev` names them, and are pruned the publish after.
+
+An `update` from round 1 reads up to format 2 and refuses 3, printing
+the line that fetches the release's own updater (`tget <server>
+release/v0.0.7/update /apps/update`, "A card without update"); the
+store keeps that copy uncompressed for exactly this.
+
+### Compression
+
+Format 3's objects are the file in 32 KB blocks, each after a 4-byte
+little-endian word: bit 31 set, the block is stored as it is; clear,
+it is an LZ4 block (`lz4_Block_format.md`). The low 31 bits are the
+length that follows. Every block but the last holds 32768 bytes of the
+file; the manifest's size says how many the last holds. Blocks are
+independent, so the board needs no history window: it collects a
+block, decodes it into a 32 KB buffer with `sw/common/zexec_lz4.c` --
+the decoder that unpacks compressed executables from flash -- and
+writes it out. Every length is checked against the manifest's size
+before anything is copied, and the CRC-32 is of the decoded file, as
+before. The compressor is `tools/mkzar.py`'s, the flash archive's,
+which needs nothing installed; a block that would not get smaller is
+stored. Publishing the whole base card takes it about 20 s; a
+republish compresses only new objects.
+
+**Not gzip**, though gzip -9 packs the card smaller (7.8 MB, 45%). On
+this CPU -- a PicoRV32 at 48 MHz, about 9 cycles an instruction,
+measured by counting instructions under QEMU against cycle counts in
+[cryptobench.md](cryptobench.md) -- inflate costs 98 to 139
+instructions per byte it produces (docs and an app, `zinflate.c`), so
+a TFTP update would go at 40-55 KB/s instead of 150-200, and an HTTPS
+one would spend more on inflating than it saved on decrypting. LZ4
+costs 9.5 to 10.6 instructions a byte. [executables.md](executables.md)
+made the same choice for the same reason.
+
+| | the base card | decoding, per byte |
+|---|---|---|
+| raw | 17.4 MB | -- |
+| LZ4 blocks (as published) | 10.4 MB, 60% | ~10 instructions |
+| LZ4-HC (lz4 module, for comparison) | 10.2 MB, 59% | same decoder |
+| gzip -9 | 7.8 MB, 45% | ~100-140 instructions |
+
+It matters most for HTTPS, where every byte received costs ~450 cycles
+to decrypt. Over TFTP the gain depends on what limits a transfer there
+-- the network's round trips, or the card's writes, which LZ4 does not
+change -- and is still to be measured on the board.
 
 ### Policies
 
@@ -419,10 +476,14 @@ $ python3 release/lib/test_store.py
 No toolchain needed; the apps are faked. It checks the manifest (round
 trip, ordering, content-only ids, damage and newer formats refused,
 bad paths), that every card file has a policy and which are `keep`,
-publishing (objects named by and holding their hash, every TFTP name
-within 63 bytes, LATEST, INDEX), publishing again unchanged, a rebuilt
-app (one new object, `manifest.prev`, pruning a publish later), a
-damaged object, `zrelease tftp` from the command line, and -- with
+LZ4 blocks (round trip from 0 to 100,001 bytes around the block size,
+text and noise, noise stored), publishing (objects named by their hash
+and decoding to it, block headers that add up, deterministic output,
+every TFTP name within 63 bytes, LATEST, INDEX), publishing again
+unchanged, a rebuilt app (one new object, `manifest.prev`, pruning a
+publish later), a format-2 store republished as format 3 (its raw
+objects kept while `manifest.prev` names them, then pruned), a damaged
+object, `zrelease tftp` from the command line, and -- with
 mtools -- that a card image's `/sys/manifest` has the same snapshot id
 as the store made from the same tree and lists exactly the card's
 files.
@@ -448,7 +509,11 @@ followed by one that must leave exactly the release (upd.c's
 allocations are counted through `alloc_hook.h`, and `--update` prints
 the peak); **the run stopped
 after every one of its mutating calls** and then run again to the end;
-a damaged object (same length, and longer), a missing one, a damaged
+LZ4 objects (a 300 KB file decoded across ten blocks; the transfer
+handed over in chunks of varying size, so block headers and data are
+split at every kind of place), a format-2 store with raw objects read
+by the new `update`; a damaged object (a block header, a block's data,
+a byte too many), a missing one, a damaged
 and a newer-format manifest, no such release, a bad name, not enough
 room, `-n`, `latest`, and `update` with no release.
 

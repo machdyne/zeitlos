@@ -94,8 +94,9 @@ build (`make flash_apps`, a release) until the entry is written.
 | `zrelease check` | fails if `docs/zapi.md` is stale (the date line is not compared) |
 | `make -C sw/common/zapi/tests` | runs the Scheme examples through a desktop ms and compares their values, then tests `zapi_doc.c` |
 
-`/docs/zapi.txt` is about 26KB, from `CORE_RESERVE` (48K, of which the
-files in flash use 46KB; [flash_apps.md](flash_apps.md)).
+`/docs/zapi.txt` is about 26KB, from `CORE_RESERVE` (56K since round
+9, when the files in flash reached 49,241 bytes and passed 48K;
+[flash_apps.md](flash_apps.md)).
 
 ## help and apropos
 

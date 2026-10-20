@@ -54,13 +54,11 @@ def fake_root():
     # FONT_FILES and DEMO_FILES are required inputs, the same as the
     # apps. Leaving them out of this scratch tree made the bank fail
     # before it formatted anything, on a tree that had not been changed.
-    lists = (mkfatimg.SUPPLEMENTAL + mkfatimg.NETWORK + mkfatimg.CASINO + mkfatimg.GAMES_DEMOS
-             + mkfatimg.MISC + mkfatimg.SHELLS + mkfatimg.SELFHOST
-             + mkfatimg.LIBZ_FILES + mkfatimg.LIBZ_EXTRA + mkfatimg.EXAMPLES
-             + mkfatimg.FPGA_FILES + mkfatimg.FPGA_EXAMPLES
-             + mkfatimg.CONFIG_FILES + mkfatimg.NETWORK_FILES
-             + mkfatimg.FONT_FILES + mkfatimg.DESK_FILES + mkfatimg.DEMO_FILES
-             + mkfatimg.CHIP8_FILES)
+    # The same lists plan() requires (mkfatimg.app_inputs() and
+    # data_inputs()), so a list added there is faked here too: when
+    # SLIDE_FILES arrived, a hand-kept copy of this list made every
+    # test fail with "not built yet: sw/data/slide/tour.zsl".
+    lists = mkfatimg.app_inputs() + mkfatimg.data_inputs()
     for _dest, rel in lists:
         p = os.path.join(r, rel)
         os.makedirs(os.path.dirname(p), exist_ok=True)
@@ -115,10 +113,7 @@ def test_variant(root, key, tmp):
     on_card = card_files(img)
     # every listed app and data file, where the programs look for it --
     # /data/bbs/bbs.cfg, /data/fed/fed.cfg and the rest included
-    listed = [n for n, _ in mkfatimg.SUPPLEMENTAL + mkfatimg.NETWORK + mkfatimg.CASINO
-              + mkfatimg.GAMES_DEMOS + mkfatimg.MISC + mkfatimg.SHELLS + mkfatimg.SELFHOST
-              + mkfatimg.CONFIG_FILES + mkfatimg.NETWORK_FILES + mkfatimg.FONT_FILES
-              + mkfatimg.DESK_FILES + mkfatimg.CHIP8_FILES]
+    listed = [n for n, _ in mkfatimg.app_inputs() + mkfatimg.data_inputs()]
     absent = [n for n in listed if ("/" + n).lower() not in on_card]
     check(not absent, "%s: all %d listed apps and data files on the card%s" % (
         key, len(listed), "" if not absent else " (missing e.g. %s)" % absent[0]))

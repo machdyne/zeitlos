@@ -10,6 +10,7 @@
 #   OUT/src/v1/, src/v2/  each release's files, laid out as on a card
 #   OUT/ids               "v1 <snapshot id>" and "v2 <snapshot id>"
 #   OUT/v1.manifest1      v1's manifest in format 1 (no CRC)
+#   OUT/store2/           v2 as a format-2 store (raw objects)
 #
 
 import os
@@ -92,6 +93,18 @@ def main():
                     "source fixture", "made 2026-10-19T12:00:00Z", "packs"]
             with open(os.path.join(out, "v1.manifest1"), "w") as f:
                 f.write("\n".join(head + lines) + "\n")
+        if name == "v2":
+            # The same release as round 1 published it: format 2, raw
+            # objects -- a store not yet republished.
+            st2 = os.path.join(out, "store2")
+            m2 = mf.parse("zeitlos-manifest 2\n" + m.text.split("\n", 1)[1])
+            os.makedirs(os.path.join(st2, "v2"))
+            for path, sha, _s, _p, _c in m2.files:
+                o = os.path.join(st2, mf.object_path(sha, 2))
+                os.makedirs(os.path.dirname(o), exist_ok=True)
+                shutil.copyfile(os.path.join(src, path), o)
+            with open(os.path.join(st2, "v2", "manifest"), "w") as f:
+                f.write(m2.text)
     with open(os.path.join(out, "ids"), "w") as f:
         f.writelines(ids)
 

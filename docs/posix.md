@@ -2085,7 +2085,9 @@ program started from the kernel console or repl while posix was up
 (`run update ...`) wrote into whatever term window had typed the last
 command, or nowhere. Every program that asks (zcc, zfpga, i2c, sechs,
 convert, zlink, fed, update) already treats a failed connect as "use
-the console". The `tty` handoff below still uses `px_current_conn`.
+the console". The `tty` handoff below is matched the same way, to the
+session waiting for that pid, since a command run in another session
+meanwhile moves `px_current_conn`.
 
 **`vi` is the second case.** It wants raw keystrokes and cursor
 addressing, and relaying every byte through `posix` would add latency

@@ -1023,7 +1023,8 @@ $ release/zrelease tftp                   # /srv/tftp/release, as v<version>
 ```
 
 The card's files, as an update release a board fetches with
-`update -t tftp`: one object per file, named by its hash, and a
+`update -t tftp`: one object per file, named by its hash and stored as
+LZ4 blocks, and a
 manifest per release name. No gateware, no version check, no
 `dist/`; like `sdcard`, it takes the tree as it is and builds nothing.
 Everything about it -- the store, snapshots, policies, the TFTP server --

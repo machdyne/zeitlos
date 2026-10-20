@@ -50,7 +50,8 @@ import manifest as manifest_mod
 
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$")
 RESERVED = ("o",)
-OBJ_RE = re.compile(r"^[0-9a-f]{%d}$" % manifest_mod.OBJECT_DIGITS)
+# An object's file name: raw (formats 1 and 2) or LZ4 blocks (3).
+OBJ_RE = re.compile(r"^[0-9a-f]{%d}(\.lz)?$" % manifest_mod.OBJECT_DIGITS)
 
 # The longest name the board will ask TFTP for, under the store's own
 # directory on the server ("release/" by default). net's limit is 63
@@ -132,8 +133,11 @@ def _referenced(store):
             except (OSError, UnicodeDecodeError,
                     manifest_mod.ManifestError) as e:
                 raise StoreError("%s: %s -- not pruning" % (p, e))
+            # The name the manifest's format gives the object: a
+            # format-2 manifest.prev keeps its raw objects, a format-3
+            # manifest its .lz ones.
             for _path, sha, _size, _pol, _crc in m.files:
-                refs.add(sha[:manifest_mod.OBJECT_DIGITS])
+                refs.add(manifest_mod.object_path(sha, m.format).rpartition("/")[2])
     return refs
 
 
@@ -151,7 +155,7 @@ def _prune(store):
             p = os.path.join(d, leaf)
             # Leftovers of an interrupted publish (we hold the lock, so
             # nobody else is writing one now), and objects nothing uses.
-            stale_tmp = ".tmp" in leaf and OBJ_RE.match(leaf.split(".")[0])
+            stale_tmp = ".tmp" in leaf and OBJ_RE.match(leaf.split(".tmp")[0])
             if stale_tmp or (OBJ_RE.match(leaf) and leaf not in refs):
                 os.unlink(p)
                 pruned += 0 if stale_tmp else 1
@@ -179,7 +183,7 @@ def publish(store, m, sources, latest=True, verbose=True):
     check_name(m.name)
     st = Stats()
 
-    longest = max(len("release/" + manifest_mod.object_path("0" * 64)),
+    longest = max(len("release/" + manifest_mod.object_path("0" * 64, m.format)),
                   len("release/%s/manifest.prev" % m.name))
     if longest > TFTP_NAME_MAX:
         raise StoreError("names would be %d bytes, past TFTP's %d"
@@ -194,47 +198,66 @@ def publish(store, m, sources, latest=True, verbose=True):
     try:
         # 1. objects
         done = set()
-        for path, sha, size, _pol, _crc in m.files:
+        lz = m.format >= 3
+        for path, sha, size, _pol, crc in m.files:
             if sha in done:
                 continue
             done.add(sha)
-            obj = os.path.join(store, manifest_mod.object_path(sha))
+            obj = os.path.join(store, manifest_mod.object_path(sha, m.format))
             if os.path.exists(obj):
-                if os.path.getsize(obj) != size:
+                # Damage, not something to skip: a raw object's size, an
+                # LZ4 one's block headers (which must add up to the
+                # file's size and end where the object does).
+                if lz:
+                    bad = not manifest_mod.lz_check(obj, size)
+                    what = "its blocks do not add up to %d bytes" % size
+                else:
+                    bad = os.path.getsize(obj) != size
+                    what = "it is %d bytes" % os.path.getsize(obj)
+                if bad:
                     raise StoreError(
-                        "%s: is %d bytes, %s should be %d -- a damaged "
-                        "store or a hash collision; delete it and publish "
-                        "again" % (obj, os.path.getsize(obj), path, size))
+                        "%s does not hold %s (%s) -- a damaged store or a "
+                        "hash collision; delete it and publish again"
+                        % (obj, path, what))
                 st.objects_kept += 1
                 continue
             src = sources[sha]
             _mkdir(os.path.dirname(obj))
             tmp = "%s.tmp%d" % (obj, os.getpid())
-            shutil.copyfile(src, tmp)
-            # Checked after the copy: a source rebuilt while publishing
-            # would otherwise land under the wrong name.
-            if manifest_mod.sha256_file(tmp) != sha:
-                os.unlink(tmp)
+            with open(src, "rb") as f:
+                data = f.read()
+            # Checked on what is written: a source rebuilt while
+            # publishing would otherwise land under the wrong name.
+            import hashlib
+            if hashlib.sha256(data).hexdigest() != sha:
                 raise StoreError("%s changed while publishing; run again"
                                  % src)
+            with open(tmp, "wb") as f:
+                f.write(manifest_mod.lz_blocks(data) if lz else data)
             os.chmod(tmp, 0o644)
             os.replace(tmp, obj)
             st.objects_new += 1
-            st.bytes_new += size
+            st.bytes_new += os.path.getsize(obj)
 
         # 2. the manifest, last of the release's own files
         rdir = os.path.join(store, m.name)
         _mkdir(rdir)
         cur = os.path.join(rdir, "manifest")
         old_text = None
+        same_format = False
         if os.path.isfile(cur):
             with open(cur, encoding="utf-8") as f:
                 old_text = f.read()
             try:
-                st.previous_id = manifest_mod.parse(old_text).id
+                old = manifest_mod.parse(old_text)
+                st.previous_id = old.id
+                same_format = old.format == m.format
             except manifest_mod.ManifestError:
                 st.previous_id = None
-        if st.previous_id == m.id:
+                same_format = False
+        # The same files in another format (raw objects becoming LZ4)
+        # is a new manifest even with the same snapshot id.
+        if st.previous_id == m.id and same_format:
             # Same files: leave it, `made` and all, so INDEX still says
             # when these files were first published.
             st.unchanged = True
@@ -249,11 +272,18 @@ def publish(store, m, sources, latest=True, verbose=True):
         boot = [sha for path, sha, _s, _p, _c in m.files if path == BOOT_PATH]
         bdst = os.path.join(rdir, "update")
         if boot:
-            want = os.path.join(store, manifest_mod.object_path(boot[0]))
+            # Uncompressed, whatever the format: it is what a person
+            # tget's onto a card that has no update yet, or one too old
+            # to read LZ4 objects.
             if not (os.path.isfile(bdst) and
                     manifest_mod.sha256_file(bdst) == boot[0]):
-                with open(want, "rb") as f:
-                    _write_atomic(bdst, f.read())
+                with open(sources[boot[0]], "rb") as f:
+                    data = f.read()
+                import hashlib
+                if hashlib.sha256(data).hexdigest() != boot[0]:
+                    raise StoreError("%s changed while publishing; run again"
+                                     % sources[boot[0]])
+                _write_atomic(bdst, data)
         elif os.path.exists(bdst):
             os.unlink(bdst)
 

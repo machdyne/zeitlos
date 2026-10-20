@@ -362,6 +362,11 @@ largest (`repl`, `text`). The dock icons and spoken names of the
 arcade games ([arcade.md](arcade.md): `snake`, `blocks`, `bricks`, about
 172 bytes each) took `wm` to 135K (137,100 bytes of 138,240 with all three), the last
 kilobyte: 1,024 of 1,024 KB.
+The files in flash (`CORE_FILES`) passed the 48K reserve in round 9:
+the Scheme reference, `docs/zapi.txt`, reached 26,429 bytes with the
+procedures added then, and the four files 49,241 of 49,152. The reserve
+went to 56K, from the unassigned part of the region (676KB of budgets
+plus the reserve is now 732KB of 848KB).
 The next byte for the boot set comes out of another budget, or out of
 something made smaller. `mkzar.py --max` checks the archive itself
 against the region (`CORE_ZAR_MAX`, 848K), so a budget that turns out
@@ -375,7 +380,7 @@ top-level `Makefile`, next to `CORE_APPS`:
 ```
 CORE_BUDGETS = fs=36K/75K usb=35K/55K wm=110K/135K net=148K/285K term=62K/152K \
 	console=10K/13K cron=18K/48K text=60K/157K files=57K/120K repl=140K/304K
-CORE_RESERVE = 48K
+CORE_RESERVE = 56K
 CORE_STORE = wm net
 CORE_ZAR_MAX = 848K
 CORE_AT_BOOT = fs usb wm net console
