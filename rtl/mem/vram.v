@@ -5,7 +5,7 @@
  * 32-bit dual-port VRAM
  */
 
-module vram_wb #()
+module vram_wb
 (
    input wb_clk_i,
    input wb_rst_i,

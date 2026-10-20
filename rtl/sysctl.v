@@ -2409,21 +2409,37 @@ module sysctl #()
 	wire [31:0] wbm_cpu_arb0_dat_i;
 	wire wbm_cpu_arb0_ack;
 
-	// _p: after the MPU, so a blocked access never reaches VRAM either
-	wire wbm_cpu_arb0_cyc = cs_vram && wbm_cpu_cyc_p;
+	// The CPU reaches VRAM the way it reaches every other slave: through
+	// the cache's bypass and wb_arbiter_main, as a request on the main
+	// bus (wbm_*) while the CPU holds it (marb_master 0) -- and the ack
+	// goes back the same way (the cs_vram term of the main bus's ack).
+	//
+	// It used to take the CPU's own signals after the MPU
+	// (wbm_cpu_*_p), so a CPU store's address went through the MPU's
+	// comparators, local_now, this arbiter and into the write enables of
+	// VRAM's forty block RAMs in ONE cycle. On mozart_ml2 that was
+	// sys_clk's critical path (~21ns, 47MHz of 48 on every seed tried):
+	// the MPU sits by the CPU and VRAM's RAMs are spread across the chip.
+	// The main bus's signals are registers in the cache, so the path now
+	// starts there. The MPU still blocks: the cache only issues a request
+	// the MPU let through. It costs no cycle: a CPU access to VRAM takes
+	// 7 either way (rtl/tb/tb_vram_path.v, which runs both wirings), and
+	// less with the blitter busy -- the old wiring could claim the VRAM
+	// bus on a stale cs_vram, decoded from the PREVIOUS main-bus address.
+	wire wbm_cpu_arb0_cyc = cs_vram && wbm_cyc && (marb_master == 2'd0);
 
    wb_arbiter_vram #() varb0_i
    (
       .clk(wbm_clk),
       .rst(wbm_rst),
    
-      // Master 0 (CPU)
-      .m0_adr_i(wbm_cpu_adr),
-      .m0_dat_i(wbm_cpu_dat_o),
+      // Master 0 (CPU, via the cache and the main bus)
+      .m0_adr_i(wbm_adr),
+      .m0_dat_i(wbm_dat_o),
       .m0_dat_o(wbm_cpu_arb0_dat_i), 
-      .m0_we_i(wbm_cpu_we),
-      .m0_sel_i(wbm_cpu_sel),
-      .m0_stb_i(wbm_cpu_stb_p),
+      .m0_we_i(wbm_we),
+      .m0_sel_i(wbm_sel),
+      .m0_stb_i(wbm_stb),
       .m0_cyc_i(wbm_cpu_arb0_cyc),
       .m0_ack_o(wbm_cpu_arb0_ack),
 
