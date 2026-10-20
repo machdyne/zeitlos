@@ -74,6 +74,10 @@ def fake_root():
     os.symlink(os.path.join(ROOT, "Makefile"), os.path.join(r, "Makefile"))
     os.symlink(os.path.join(ROOT, "sw", "data", "ark"),
                os.path.join(r, "sw", "data", "ark"))
+    # The manifests record the tree's ABI id (docs/update.md, "ABI").
+    os.makedirs(os.path.join(r, "sw", "common"), exist_ok=True)
+    os.symlink(os.path.join(ROOT, "sw", "common", "zabi.h"),
+               os.path.join(r, "sw", "common", "zabi.h"))
     os.makedirs(os.path.join(r, "tools", "ask"), exist_ok=True)
     os.symlink(os.path.join(ROOT, mkfatimg.ASK_OUT),
                os.path.join(r, mkfatimg.ASK_OUT))

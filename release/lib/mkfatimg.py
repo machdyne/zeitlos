@@ -1085,7 +1085,8 @@ def build(root, out_path, ark_dir=None, verbose=True, packs=None,
     version = tree_version(root)
     m = manifest_mod.make(pl, name or ("v" + version), version,
                           manifest_mod.describe(root),
-                          packs=[n for n, _f in pl.packs])
+                          packs=[n for n, _f in pl.packs],
+                          abi=manifest_mod.read_abi(root))
     for text, dest in ((m.text, P["Z_PATH_SYS_MANIFEST"]),
                        (manifest_mod.version_text(m), P["Z_PATH_SYS_VERSION"])):
         tmpf = out_path + ".sysfile"

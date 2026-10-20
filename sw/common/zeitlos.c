@@ -680,6 +680,23 @@ uint32_t z_arena_get(void **base) {
 	return n;
 }
 
+char *z_abi(char *out, uint32_t size) {
+
+	z_abi_args_t args;
+	uint32_t i;
+	for (i = 0; i < sizeof args.id; i++) args.id[i] = 0;
+
+	z_kernel_ptr_t z_kernel_ptr = (z_kernel_ptr_t)(uintptr_t)(reg_kernel);
+	z_kernel_ptr(Z_SYS_ABI, (uint32_t *)&args, 0);
+
+	if (!size) return out;
+	args.id[sizeof args.id - 1] = 0;
+	for (i = 0; i + 1 < size && args.id[i]; i++) out[i] = args.id[i];
+	out[i] = 0;
+	return out;
+
+}
+
 uint32_t z_proc_serial(uint32_t pid) {
 
 	z_proc_serial_args_t args;

@@ -105,9 +105,18 @@ KSRCS = kernel.c kruntime.c mem.c \
 	kblk.c kfs.c ../common/zfsc.c ../common/zfsc.h ../common/zfsproto.h \
 	kusb.c ../common/zusbc.c ../common/zusbc.h ../common/zusbproto.h uart.c hid.c rescue.c rescue.h sh.c xfer.c xmodem.c ui.c msg.c pidreg.c fsapi.c flashapi.c kvstore.c kvlog.c auth.c authcore.c jumpapi.c procapi.c cfg.c ktrace.c \
 	../common/zobj.c ../common/zsha256.c ../common/zstream.c ../common/zdns.c ../common/zsoc.c ../common/zcfg.c ../common/zjump.c \
-	../common/zfont_data.c
+	../common/zfont_data.c ../common/zabi.h
 
-kernel: kernel.elf kernel.bin
+# The ABI id the kernel reports (Z_SYS_ABI) is committed in
+# ../common/zabi.h; a kernel built from sources it does not match would
+# tell `update` the wrong thing, so the build stops first
+# (tools/gen_abi.py, docs/update.md "ABI").
+kernel: check-abi kernel.elf kernel.bin
+
+check-abi:
+	@python3 ../../tools/gen_abi.py --check >/dev/null
+
+.PHONY: check-abi
 
 kernel.o: $(KSRCS)
 	$(CC) $(CFLAGS) -c kernel.c -o kernel.o

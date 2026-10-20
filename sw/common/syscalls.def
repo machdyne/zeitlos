@@ -325,3 +325,8 @@ Z_MKSYSCALL(PROC_SERIAL, k_proc_serial)
 // run time (sw/common/zproc.h, z_arena_args_t; sw/os/kernel.c,
 // k_arena(); docs/kernel.md "Arenas"). Appended last.
 Z_MKSYSCALL(ARENA, k_arena)
+
+// The ABI id the kernel was built with (sw/common/zabi.h, Z_ABI_ID;
+// zproc.h, z_abi_args_t; docs/update.md "ABI"): what `update` compares
+// with a release's before it replaces the card. Appended last.
+Z_MKSYSCALL(ABI, k_abi)

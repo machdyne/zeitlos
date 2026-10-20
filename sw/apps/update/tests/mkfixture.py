@@ -60,7 +60,10 @@ def lay_out(files, dest):
             f.write(data)
 
 
-def publish(name, files, src, st, latest):
+ABI = "0123456789abcdef"     # the fixture's ABI id (test_update.c, FX_ABI)
+
+
+def publish(name, files, src, st, latest, abi=""):
     entries, sources = [], {}
     for path, (pol, data) in files.items():
         p = os.path.join(src, path)
@@ -68,7 +71,7 @@ def publish(name, files, src, st, latest):
         entries.append((path, sha, len(data), pol, crc))
         sources[sha] = p
     m = mf.build(name, "0.0.7", "fixture", ["home"], entries,
-                 made="2026-10-19T12:00:00Z")
+                 made="2026-10-19T12:00:00Z", abi=abi)
     store.publish(st, m, sources, latest=latest)
     return m
 
@@ -94,6 +97,9 @@ def main():
             with open(os.path.join(out, "v1.manifest1"), "w") as f:
                 f.write("\n".join(head + lines) + "\n")
         if name == "v2":
+            # v2 again, saying which ABI it was built for (docs/update.md,
+            # "ABI"); v1 and v2 say nothing, as releases before it.
+            publish("v2abi", files, src, st, latest=False, abi=ABI)
             # The same release as round 1 published it: format 2, raw
             # objects -- a store not yet republished.
             st2 = os.path.join(out, "store2")

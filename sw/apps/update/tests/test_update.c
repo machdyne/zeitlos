@@ -299,8 +299,13 @@ static void fresh_card(void) {
 	sh("rm -rf '%s' && mkdir -p '%s'", card, card);
 }
 
+// What the "kernel" says (z_abi()) and -f, for the runs below.
+#define FX_ABI "0123456789abcdef"   // mkfixture.py, ABI
+static const char *kernel_abi = FX_ABI;
+static bool force;
+
 static int run(const char *release, bool dry, bool verify) {
-	upd_opts_t o = { release, "release", "test", dry, verify };
+	upd_opts_t o = { release, "release", "test", dry, verify, force, kernel_abi };
 	outlen = 0;
 	outbuf[0] = 0;
 	fetches = 0;
@@ -797,13 +802,75 @@ static void misc(void) {
 
 	printf("what the card has\n");
 	outlen = 0;
-	upd_show(&IO);
+	upd_show(&IO, FX_ABI);
 	CHECK(said("zeitlos 0.0.7") && said("/sys/manifest: 9 files"),
 		"update with no release shows the version and the manifest");
 	fresh_card();
 	outlen = 0;
-	upd_show(&IO);
+	upd_show(&IO, FX_ABI);
 	CHECK(said("written before updates"), "and says so for a card without one");
+}
+
+// The release's ABI against the flash's (docs/update.md, "ABI").
+static void abi(void) {
+	int r;
+	printf("abi\n");
+	CHECK(upd_abi_check("ab", 2, "ab") == UPD_ABI_SAME &&
+		upd_abi_check("ab", 2, "abc") == UPD_ABI_DIFFERENT &&
+		upd_abi_check("abc", 3, "ab") == UPD_ABI_DIFFERENT &&
+		upd_abi_check("ab", 2, "") == UPD_ABI_NO_KERNEL &&
+		upd_abi_check("ab", 2, NULL) == UPD_ABI_NO_KERNEL &&
+		upd_abi_check(NULL, 0, "ab") == UPD_ABI_NO_RELEASE,
+		"upd_abi_check(): same, different, no kernel id, no release id");
+
+	fresh_card();
+	run("v1", false, false);
+	r = run("v2abi", false, false);
+	CHECK(r == UPD_DONE && said("as the flash has") && card_is_release("v2", NULL),
+		"the same ABI: updated (%d)", r);
+	char f[1200];
+	full(f, "/sys/manifest");
+	char *b = slurp(f, NULL);
+	CHECK(b && strstr(b, "\nabi " FX_ABI "\n"), "the card's manifest records it");
+	free(b);
+	outlen = 0;
+	upd_show(&IO, FX_ABI);
+	CHECK(said("abi: card " FX_ABI ", flash " FX_ABI "\n"), "update shows both");
+	outlen = 0;
+	upd_show(&IO, "fedcba9876543210");
+	CHECK(said("DIFFERENT"), "and says when they differ");
+	outlen = 0;
+	upd_show(&IO, "");
+	CHECK(said("flash unknown"), "and when the kernel cannot say");
+
+	kernel_abi = "fedcba9876543210";
+	fresh_card();
+	run("v1", false, false);
+	r = run("v2abi", false, false);
+	CHECK(r == UPD_FAILED && said("refused") && said("-f") && fetches == 0,
+		"another ABI: refused before fetching anything (%d)", r);
+	CHECK(card_is_release("v1", NULL) && manifest_is(id_v1), "and nothing changed");
+	r = run("v2abi", true, false);
+	CHECK(r == UPD_DONE && said("would be refused") && card_is_release("v1", NULL),
+		"-n says it would be refused, and changes nothing (%d)", r);
+	force = true;
+	r = run("v2abi", false, false);
+	force = false;
+	CHECK(r == UPD_DONE && said("-f: the release is abi") && card_is_release("v2", NULL),
+		"-f: updated anyway (%d)", r);
+
+	kernel_abi = "";
+	fresh_card();
+	r = run("v2abi", false, false);
+	CHECK(r == UPD_DONE && said("older than the ABI check") && card_is_release("v2", NULL),
+		"a kernel that cannot say: a warning, and updated (%d)", r);
+
+	kernel_abi = "fedcba9876543210";
+	fresh_card();
+	r = run("v2", false, false);
+	CHECK(r == UPD_DONE && said("not checked"),
+		"a release that does not say: not checked (%d)", r);
+	kernel_abi = FX_ABI;
 }
 
 static void read_ids(void) {
@@ -820,7 +887,7 @@ static void read_ids(void) {
 int main(int argc, char **argv) {
 	if (argc < 2) {
 		printf("usage: test_update FIXTURE [-v]\n"
-		       "       test_update --update CARD STORE RELEASE [-n] [-v]\n");
+		       "       test_update --update CARD STORE RELEASE [-n] [-v] [-f]   (ZABI=id: the flash's)\n");
 		return 2;
 	}
 	// The core on any directory and store: a card laid out on the host
@@ -835,7 +902,13 @@ int main(int argc, char **argv) {
 		verbose = true;
 		snprintf(card, sizeof card, "%s", argv[2]);
 		snprintf(store, sizeof store, "%s", argv[3]);
-		upd_opts_t o = { argv[4], "release", "a directory", dry, ver };
+		bool frc = false;
+		for (int i = 5; i < argc; i++)
+			if (!strcmp(argv[i], "-f")) frc = true;
+		// The host has no kernel to ask: like a kernel too old to say
+		// (a warning), unless ZABI=<id> says what the flash is.
+		const char *ka = getenv("ZABI") ? getenv("ZABI") : "";
+		upd_opts_t o = { argv[4], "release", "a directory", dry, ver, frc, ka };
 		heap_peak = 0;
 		int r = upd_run(&IO, &o);
 		printf("(heap: %lu bytes at the peak)\n", (unsigned long)heap_peak);
@@ -858,6 +931,7 @@ int main(int argc, char **argv) {
 	stopped_everywhere();
 	bad_store();
 	misc();
+	abi();
 
 	printf("\n%d checks, %d failed\n", checks, fails);
 	return fails ? 1 : 0;

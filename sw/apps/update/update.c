@@ -6,6 +6,8 @@
  *   update latest -t tftp server        whatever the server's LATEST names
  *   update -n v0.0.7 -t tftp server     what would change; changes nothing
  *   update -v v0.0.7 -t tftp server     hash every file, trust no manifest
+ *   update -f v0.0.7 -t tftp server     though the release's ABI is not the
+ *                                       flash's (docs/update.md, "ABI")
  *   update ... -d DIR                   the store is DIR/ on the server,
  *                                       not release/
  *
@@ -206,6 +208,7 @@ static void usage(void) {
 		"       update latest -t tftp SERVER    whatever the server's LATEST names\n"
 		"options: -n (what would change; changes nothing)\n"
 		"         -v (hash every file, trust no manifest)\n"
+		"         -f (update though the release's ABI is not the flash's)\n"
 		"         -d DIR (the store is DIR/ on the server; default release)\n"
 		"see docs/update.md\n");
 }
@@ -220,6 +223,7 @@ static int run(int argc, char **argv) {
 		const char *a = argv[i];
 		if (!strcmp(a, "-n")) o.dry_run = true;
 		else if (!strcmp(a, "-v")) o.verify = true;
+		else if (!strcmp(a, "-f")) o.force = true;
 		else if (!strcmp(a, "-h") || !strcmp(a, "--help")) { usage(); return UPD_DONE; }
 		else if (!strcmp(a, "-d") && i + 1 < argc) o.dir = argv[++i];
 		else if (!strcmp(a, "-t") && i + 1 < argc) {
@@ -244,9 +248,15 @@ static int run(int argc, char **argv) {
 		io_fetch_open, io_fetch_read, io_fetch_close, io_out, io_ms, NULL
 	};
 
+	// What the kernel and core apps in flash were built against
+	// (Z_SYS_ABI); "" from a kernel older than that syscall.
+	static char kabi[Z_ABI_ID_MAX];
+	z_abi(kabi, sizeof kabi);
+	o.kernel_abi = kabi;
+
 	if (!o.release) {
 		if (method) { usage(); return UPD_USAGE; }
-		return upd_show(&io);
+		return upd_show(&io, kabi);
 	}
 	if (!method) {
 		io_out(NULL, "update: from the project's own releases over https: not yet.\n"

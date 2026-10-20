@@ -932,6 +932,13 @@ $(CORE_FILES_OUT)/docs/zapi.txt: $(ZAPI_SRCS)
 zapi:
 	python3 tools/gen_zapi.py --md docs/zapi.md
 
+# sw/common/zabi.h, the ABI id, committed: run after changing an
+# interface between flash and the card (tools/gen_abi.py says which
+# files those are; docs/update.md, "ABI"). The kernel and apps builds
+# and `zrelease check` fail while it is stale.
+abi:
+	python3 tools/gen_abi.py
+
 $(CORE_FILES_OUT)/docs/%.txt: docs/%.md tools/md2txt.py
 	python3 tools/md2txt.py $< $@
 
@@ -1576,4 +1583,4 @@ clean_bios:
 clean_apps:
 	cd sw/apps && make clean
 
-.PHONY: clean_bios bios apps core-bins core-apps core-files zapi pnr_again tftp-dist nfs-dist timing path util test_audio test_ddmi test_blit test_uart hwmap FORCE soc
+.PHONY: clean_bios bios apps core-bins core-apps core-files zapi abi pnr_again tftp-dist nfs-dist timing path util test_audio test_ddmi test_blit test_uart hwmap FORCE soc

@@ -23,6 +23,8 @@
 #     manifest.prev with its objects, and pruned one publish later;
 #   - LATEST and INDEX; a bad name refused;
 #   - `zrelease tftp` end to end, from the command line;
+#   - the abi line: written, read, not in the snapshot id, and a new
+#     one republishes an otherwise unchanged release;
 #   - an image's /sys/manifest has the same snapshot id.
 #
 
@@ -123,6 +125,17 @@ def test_manifest():
     check(len(mf.lz_blocks(noise)) == len(noise) + 4 * 4, "noise is stored, 4 bytes a block")
     raises(lambda: mf.build("n", "v", "s", [], [("apps/x", "a" * 64, 1, "r", "xyz")]),
            mf.ManifestError, "a CRC that is not 8 hex digits is refused")
+    # The abi line (docs/update.md, "ABI"): a header, not content.
+    ma = mf.build("v0.0.7", "0.0.7", "abc", ["home"], files,
+                  made="2026-10-19T00:00:00Z", abi="03a25f4cbf544cf0")
+    check("\nabi 03a25f4cbf544cf0\n" in ma.text and mf.parse(ma.text).abi == "03a25f4cbf544cf0",
+          "the abi line is written and read back")
+    check(ma.id == m.id and "\nabi " not in m.text and mf.parse(m.text).abi == "",
+          "it is not part of the snapshot id; without one there is no line")
+    raises(lambda: mf.build("n", "v", "s", [], [], abi="XYZ"), mf.ManifestError,
+           "an abi that is not hex is refused")
+    tree_abi = mf.read_abi(ROOT)
+    check(len(tree_abi) == 16, "read_abi() reads the tree's sw/common/zabi.h")
     vt = mf.version_text(m)
     check(vt.startswith("zeitlos 0.0.7\nsnapshot v0.0.7 %s " % m.id),
           "/sys/version: the old first line, then the snapshot")
@@ -272,6 +285,22 @@ def test_store(root):
         check(not [x for x in objects(st2) if not x.endswith(".lz")],
               "and are pruned once nothing names them")
 
+        print("the same files, another ABI")
+        # An interface changed and no binary did: same snapshot id, but
+        # the manifest must say the new ABI or `update` checks the old.
+        st3 = os.path.join(tmp, "abi")
+        pl = mkfatimg.plan(root, packs=())
+        store.publish(st3, mf.make(pl, "v0.0.7", "0.0.7", "a", abi="1111"),
+                      store.sources_for(pl, m_new))
+        sty = store.publish(st3, mf.make(pl, "v0.0.7", "0.0.7", "b", abi="2222"),
+                            store.sources_for(pl, m_new))
+        cur = mf.parse(open(os.path.join(st3, "v0.0.7", "manifest")).read())
+        check(not sty.unchanged and cur.abi == "2222",
+              "a new abi rewrites the manifest though the snapshot is the same")
+        stz = store.publish(st3, mf.make(pl, "v0.0.7", "0.0.7", "c", abi="2222"),
+                            store.sources_for(pl, m_new))
+        check(stz.unchanged, "and the same abi again is unchanged")
+
         print("names and LATEST")
         _m5, _st5 = publish(root, st_dir, name="v0.0.7-audio", latest=False)
         check(open(os.path.join(st_dir, "LATEST")).read() == "v0.0.7\n",
@@ -314,6 +343,9 @@ def test_cli(root):
         check("run update v" in out and "-t tftp" in out,
               "prints the command for the board")
         check(os.path.isfile(os.path.join(dest, "LATEST")), "the store was written")
+        rel = open(os.path.join(dest, "LATEST")).read().strip()
+        mt = mf.parse(open(os.path.join(dest, rel, "manifest")).read())
+        check(mt.abi == mf.read_abi(ROOT), "its manifest records the ABI id")
         r = subprocess.run([sys.executable, os.path.join(root, "release", "zrelease"),
                             "tftp", "--dest", dest], capture_output=True, text=True)
         check(r.returncode == 0 and "unchanged" in r.stdout, "a second run says unchanged")
@@ -344,6 +376,8 @@ def test_image(root):
         m_rel = mf.make(pl, "v0.0.7", "0.0.7", "x")
         check(m_img.id == m_rel.id,
               "same snapshot id as the update release (%s)" % m_img.id)
+        check(m_img.abi and m_img.abi == mf.read_abi(root),
+              "it records the tree's ABI id (%s)" % m_img.abi)
         listed = set(f[0] for f in m_img.files)
         on_card = test_mkfatimg.card_files(img)
         missing = [p for p in listed if "/" + p.lower() not in on_card]

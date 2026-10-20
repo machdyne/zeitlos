@@ -143,6 +143,20 @@ def cmd_check(args):
     else:
         print("  ok -- %s" % r.stdout.strip().replace("gen_zapi: ", ""))
 
+    # sw/common/zabi.h is generated (tools/gen_abi.py, `make abi`) and
+    # committed: the kernel reports it, and every release records it, so
+    # a stale one would make `update` accept a card the flash cannot run
+    # (docs/update.md, "ABI").
+    print("\nabi id (sw/common/zabi.h) ...")
+    r = subprocess.run([sys.executable, os.path.join(ROOT, "tools", "gen_abi.py"),
+                        "--check"], capture_output=True, text=True)
+    if r.returncode:
+        problems.append((r.stderr.strip() or r.stdout.strip())
+                        .split("\n")[0].replace("gen_abi: ", "abi: "))
+        print("  FAILED")
+    else:
+        print("  ok -- %s" % r.stdout.strip().replace("gen_abi: ", ""))
+
     print("\narch ...")
     try:
         arch = spec.derive_arch(ROOT)
@@ -811,10 +825,12 @@ def cmd_tftp(args):
         pl = mkfatimg.plan(ROOT, ark_dir=args.ark, packs=())
     except mkfatimg.FatError as e:
         die("card: %s" % e)
-    m = manifest_mod.make(pl, name, version, manifest_mod.describe(ROOT))
+    m = manifest_mod.make(pl, name, version, manifest_mod.describe(ROOT),
+                          abi=manifest_mod.read_abi(ROOT))
     total = sum(f[2] for f in m.files)
-    print("  %s: %d files, %.1f MB, snapshot %s (%s)"
-          % (name, len(m.files), total / 1e6, m.id, m.header["source"]))
+    print("  %s: %d files, %.1f MB, snapshot %s, abi %s (%s)"
+          % (name, len(m.files), total / 1e6, m.id, m.abi or "none",
+             m.header["source"]))
 
     if args.dry_run:
         print("\n--dry-run: nothing written to %s" % dest)

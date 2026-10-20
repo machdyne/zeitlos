@@ -882,6 +882,24 @@ driver uses it for descriptor owners ([fs_driver.md](fs_driver.md),
 `syscalls.def`, so no earlier number moves; the field is appended at
 the end of `z_proc`, so no earlier offset moves.
 
+## The ABI id
+
+`Z_SYS_ABI` (`zproc.h`, `z_abi_args_t`; `z_abi()` in `zeitlos.h`)
+fills in the ABI id the kernel was built with: `Z_ABI_ID` from
+`sw/common/zabi.h`, a fingerprint of the interfaces between flash and
+the card (syscalls, their structs, the executable format, the core
+apps' protocols), made by `tools/gen_abi.py`. The kernel build stops
+when the committed id is stale, so it is the id of the sources the
+kernel was compiled from. `update` compares it with a release's before
+writing a card ([update.md](update.md#abi)). A kernel older than the
+syscall answers `z_fail` and leaves the struct alone, so `z_abi()`
+returns `""` there.
+
+```c
+char id[Z_ABI_ID_MAX];
+z_abi(id, sizeof id);          // "03a25f4cbf544cf0", or "" on an older kernel
+```
+
 ## The limits, and raising them
 
 `docs/posix.md`'s Phase 5 wants pipes as processes, which is what

@@ -18,6 +18,7 @@
 #   name v0.0.7
 #   version 0.0.7
 #   snapshot 3f2a9c01e4b7
+#   abi 03a25f4cbf544cf0
 #   source v0.0.6-45-g58e067a-dirty
 #   made 2026-10-19T09:40:12Z
 #   packs zdocs arklite
@@ -82,6 +83,15 @@
 # made from the same tree have the same id, and "is this card up to
 # date?" is one comparison. `source` and `made` are for people.
 #
+# -- the abi line --
+#
+# The ABI id of the tree the files were built from (sw/common/zabi.h,
+# tools/gen_abi.py): what the kernel and core apps in flash must report
+# for these files to run (docs/update.md, "ABI"). A header line, so not
+# part of the snapshot id, and readers that predate it skip it. Written
+# when the tree has a zabi.h; a manifest without one says nothing about
+# its ABI, and `update` treats it like a kernel that cannot say.
+#
 # The `packs` line records which ask packs an image carried; their
 # files are not listed (docs/update.md, "Not yet").
 #
@@ -89,6 +99,7 @@
 import datetime
 import hashlib
 import os
+import re
 import struct
 import subprocess
 import sys
@@ -124,6 +135,10 @@ class Manifest(object):
     @property
     def name(self):
         return self.header.get("name", "")
+
+    @property
+    def abi(self):
+        return self.header.get("abi", "")
 
 
 def sha256_file(path):
@@ -275,17 +290,33 @@ def snapshot_id(dirs, files, fmt=FORMAT):
     return h.hexdigest()[:ID_DIGITS]
 
 
-def make(pl, name, version, source, packs=(), made=None):
+ABI_H = os.path.join("sw", "common", "zabi.h")
+ABI_RE = re.compile(r'^#define\s+Z_ABI_ID\s+"([0-9a-f]+)"\s*$', re.M)
+
+
+def read_abi(root):
+    """The ABI id sw/common/zabi.h commits, or "" when the tree has none.
+    `zrelease check` and the builds make sure it is current."""
+    try:
+        with open(os.path.join(root, ABI_H), encoding="utf-8") as f:
+            m = ABI_RE.search(f.read())
+    except OSError:
+        return ""
+    return m.group(1) if m else ""
+
+
+def make(pl, name, version, source, packs=(), made=None, abi=""):
     """A manifest for a mkfatimg.Plan. Hashes every file."""
     files = []
     for dest, src, policy in pl.manifest_files():
         sha, crc = hashes_file(src)
         files.append((dest, sha, os.path.getsize(src), policy, crc))
     dirs = [d.strip("/") for d in pl.dirs]
-    return build(name, version, source, dirs, files, packs=packs, made=made)
+    return build(name, version, source, dirs, files, packs=packs, made=made,
+                 abi=abi)
 
 
-def build(name, version, source, dirs, files, packs=(), made=None):
+def build(name, version, source, dirs, files, packs=(), made=None, abi=""):
     for path, _sha, _size, policy, crc in files:
         _check_path(path)
         if policy not in ("r", "k"):
@@ -295,6 +326,8 @@ def build(name, version, source, dirs, files, packs=(), made=None):
         int(crc, 16)
     for d in dirs:
         _check_path(d)
+    if abi and not re.fullmatch(r"[0-9a-f]{1,23}", abi):
+        raise ManifestError("abi %r is not an id" % abi)
     m = Manifest()
     if made is None:
         made = datetime.datetime.now(datetime.timezone.utc) \
@@ -305,12 +338,15 @@ def build(name, version, source, dirs, files, packs=(), made=None):
         "name": name,
         "version": version,
         "snapshot": snapshot_id(dirs, files),
+        "abi": abi,
         "source": source or "unknown",
         "made": made,
         "packs": " ".join(packs),
     }
     head = ["%s %d" % (MAGIC, FORMAT)]
-    for k in ("name", "version", "snapshot", "source", "made", "packs"):
+    for k in ("name", "version", "snapshot", "abi", "source", "made", "packs"):
+        if k == "abi" and not abi:
+            continue
         head.append(("%s %s" % (k, m.header[k])).rstrip())
     m.text = "\n".join(head + _body(dirs, files)) + "\n"
     return m

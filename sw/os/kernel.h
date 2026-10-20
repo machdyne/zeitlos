@@ -210,6 +210,7 @@ void k_proc_exit_record(uint32_t pid, int32_t status);
 z_obj_t *k_proc_status(z_obj_t *args);
 z_obj_t *k_proc_serial(z_obj_t *args);	// Z_SYS_PROC_SERIAL
 z_obj_t *k_arena(z_obj_t *args);		// Z_SYS_ARENA
+z_obj_t *k_abi(z_obj_t *args);			// Z_SYS_ABI
 void k_arena_dump(void);				// `free`: the arenas and the reserve
 void k_proc_unblock(uint32_t pid);
 z_obj_t *k_proc_wait(z_obj_t *args);

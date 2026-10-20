@@ -207,6 +207,19 @@ typedef struct {
 	int32_t		result;		// OUT: Z_ARENA_*
 } z_arena_args_t;
 
+// -- Z_SYS_ABI -- docs/update.md, "ABI" --
+//
+// The ABI id the kernel was built with (Z_ABI_ID, sw/common/zabi.h): a
+// fingerprint of the interfaces between flash and the card. OUT `id`:
+// the id as a NUL-terminated string of hex digits. A kernel older than
+// this syscall leaves the struct as it was, so a caller that cleared
+// `id` reads "" for "this kernel cannot say".
+#define Z_ABI_ID_MAX		24
+
+typedef struct {
+	char		id[Z_ABI_ID_MAX];	// OUT
+} z_abi_args_t;
+
 typedef struct {
 	z_proc_info_t	*out;		// OUT: caller-owned array, >= max entries
 	uint32_t		max;		// capacity of `out`, in entries

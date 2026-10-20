@@ -779,6 +779,11 @@ z_rv z_proc_status(uint32_t pid, uint32_t *state, int32_t *status);
 // own.
 uint32_t z_proc_serial(uint32_t pid);
 
+// The ABI id the running kernel was built with (zproc.h, Z_SYS_ABI;
+// docs/update.md, "ABI") into `out`, NUL-terminated; "" when the kernel
+// is older than the syscall. Returns `out`.
+char *z_abi(char *out, uint32_t size);
+
 // This app's arena (zproc.h, Z_SYS_ARENA; docs/kernel.md, "Arenas"):
 // memory beside its own block, as large as it asks for while the
 // machine has it. z_arena_set() resizes it -- 0 frees it -- and returns

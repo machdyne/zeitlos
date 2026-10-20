@@ -74,6 +74,9 @@ typedef struct {
 	const char *source;     // for the summary: "tftp 192.168.1.10"
 	bool dry_run;           // -n: say what would change, change nothing
 	bool verify;            // -v: hash every file, trust no manifest
+	bool force;             // -f: update though the release's ABI is not the flash's
+	const char *kernel_abi; // the running kernel's ABI id (z_abi()); "" or
+	                        // NULL when it is too old to say (docs/update.md, "ABI")
 } upd_opts_t;
 
 // Exit statuses.
@@ -84,8 +87,17 @@ typedef struct {
 
 int upd_run(const upd_io_t *io, const upd_opts_t *o);
 
-// What the card has: /sys/version and the manifest's counts.
-int upd_show(const upd_io_t *io);
+// What the card has: /sys/version and the manifest's counts, and the
+// ABI the card's files were built for beside the one the flash has.
+int upd_show(const upd_io_t *io, const char *kernel_abi);
+
+// Whether a release's files may be written on this flash (docs/update.md,
+// "ABI"): UPD_ABI_SAME, or why not, or why it cannot be told.
+#define UPD_ABI_SAME        0
+#define UPD_ABI_DIFFERENT   1   // refused unless -f
+#define UPD_ABI_NO_KERNEL   2   // the kernel predates Z_SYS_ABI: a warning
+#define UPD_ABI_NO_RELEASE  3   // the release does not say: a note
+int upd_abi_check(const char *release_abi, int release_len, const char *kernel_abi);
 
 // Exposed for the tests.
 typedef struct {
@@ -101,8 +113,8 @@ typedef struct {
 typedef struct {
 	char *text;         // the whole file, NUL-terminated (owned)
 	uint32_t len;
-	const char *name, *version, *snapshot, *source, *made, *packs;
-	int name_len, version_len, snapshot_len, source_len, made_len, packs_len;
+	const char *name, *version, *snapshot, *source, *made, *packs, *abi;
+	int name_len, version_len, snapshot_len, source_len, made_len, packs_len, abi_len;
 	upd_entry_t *files;
 	int nfiles;
 	const char **dirs;  // into the text, each up to its '\n'

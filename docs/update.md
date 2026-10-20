@@ -20,7 +20,8 @@ $ update v0.0.7 -t tftp 192.168.1.10          on the board, in posix
 | **Done** (round 0) | the host side: `zrelease tftp`, the manifest, `/sys/manifest` on every card image, the `net.cfg` template on the card |
 | **Done** (round 1) | `update` on the board, over TFTP. Run on a Lakritz against a real store; three things found there and fixed: a lost end-of-file ("Inside"), a slow first check (now CRC-32, "Two hashes"), and running out of memory writing the manifest ("Inside"). Tested on the host against stores the release tool writes, including a run stopped at every step and one out of memory at every point |
 | **Done** (round 2) | objects as LZ4 blocks (manifest format 3, "Compression"); host-tested, including a format-2 store read by the new `update` |
-| Next | an ABI check; HTTPS from GitHub releases as the default; then `-t nfs` |
+| **Done** (round 3) | the ABI check ("ABI"): `tools/gen_abi.py`, `sw/common/zabi.h`, `Z_SYS_ABI`, the manifest's `abi` line, `update -f`; host-tested |
+| Next | HTTPS from GitHub releases as the default; then `-t nfs` |
 | Later | core apps on the card on request; the ask packs; a signed pack |
 
 What an update **does not touch**: the kernel and the core apps in
@@ -36,6 +37,7 @@ update v0.0.7 -t tftp 192.168.1.10  update from a TFTP server (an address or a n
 update latest -t tftp server        whatever the server's LATEST names
 update -n v0.0.7 -t tftp server     what would change; changes nothing
 update -v v0.0.7 -t tftp server     SHA-256 every file on the card; trust no manifest
+update -f v0.0.7 -t tftp server     though the release's ABI is not the flash's ("ABI")
 update ... -d DIR                   the store is DIR/ on the server, not release/
 ```
 
@@ -50,6 +52,7 @@ $ update v0.0.7 -t tftp 192.168.1.10
 update: v0.0.7 from tftp 192.168.1.10
 update: release is v0.0.7 snapshot 3f2a9c01e4b7 (v0.0.6-45-g58e067a-dirty, 2026-10-19T09:40:12Z)
 update: card has   v0.0.7 snapshot 81c0d2e3f4a5 (v0.0.6-44-gb9736d1, 2026-10-18T17:02:55Z)
+update: abi 03a25f4cbf544cf0, as the flash has
 update: 3 to write (812 KB), 1 to remove, 318 unchanged
   [1/3] apps/sheet  205 KB  ok  96 KB/s
   [2/3] apps/update  51 KB  ok
@@ -97,7 +100,87 @@ makes `update` wait for it (up to ten seconds) rather than fail.
 **Exit status:** 0 the card matches the release (or `-n`, or nothing
 to do); 1 partly done -- a file was in use or a fetch failed, run it
 again; 2 nothing could be done (no network, no such release, a damaged
-manifest, not enough room); 3 a usage error.
+manifest, not enough room, another ABI without `-f`); 3 a usage error.
+
+`update` with no release shows `/sys/version`, the manifest's counts,
+and the ABI the card's files were built for beside the flash's:
+
+```
+$ update
+zeitlos 0.0.7
+snapshot v0.0.7 3f2a9c01e4b7 v0.0.6-45-g58e067a 2026-10-19T09:40:12Z
+/sys/manifest: 408 files, 17.4 MB
+abi: card 03a25f4cbf544cf0, flash 03a25f4cbf544cf0
+```
+
+### ABI
+
+An update writes the card and leaves flash alone, and the card's
+programs talk to what is in flash: they call the kernel's syscalls
+with its argument structs, are loaded by its executable loader at the
+address they were linked for, and send messages to the core apps (fs,
+wm, net, usb, term, ...) in those apps' protocols. A release built
+against different interfaces can have programs that crash or misbehave
+on this flash. So:
+
+- **The id.** `tools/gen_abi.py` reduces the files that define those
+  interfaces -- `syscalls.def` (the syscall names in order), the app
+  linker script, and the headers listed in the tool (`zeitlos.h`,
+  `zproc.h`, `zmsg.h`, `zexec.h`, `zfsproto.h`, `zwm.h`, `znet.h`,
+  `zsubjects.h`, ...) -- to what a compiled program depends on, and
+  hashes that: 16 hex digits. Comments, whitespace, `#include` lines,
+  prototypes and inline helper functions are left out, so documenting
+  or refactoring a header does not change it; a struct field, a
+  `#define`'s value, a syscall added or moved, a message subject does.
+- **Committed.** The id is in `sw/common/zabi.h`, generated and
+  committed like `docs/zapi.md`. The kernel build, the apps build
+  (`sw/apps/Makefile`) and `zrelease check` fail while it is stale:
+
+  ```
+  gen_abi: sw/common/zabi.h is stale: it says 03a25f4cbf544cf0, the sources say e95de854f6cbba6f.
+  gen_abi: an interface between flash and the card changed (...); run `make abi` and commit sw/common/zabi.h with the change.
+  ```
+
+  So an interface change cannot reach a board or a release without a
+  new id. `make abi` writes it; commit it with the change.
+- **The kernel says.** `Z_SYS_ABI` (appended last in `syscalls.def`;
+  `z_abi()` in `zeitlos.h`) returns the id the kernel was built with.
+  The core apps are flashed with the kernel from the same tree, so it
+  speaks for them too.
+- **The release says.** Every manifest has an `abi` line: the store's
+  (`zrelease tftp`) and a card image's `/sys/manifest`. After an update
+  the card's `/sys/manifest` has the release's.
+- **`update` compares** them before writing anything:
+
+  | release | kernel | |
+  |---|---|---|
+  | same id | | goes ahead (`abi ..., as the flash has`) |
+  | another id | | **refused**, nothing changed; `-f` goes ahead, `-n` says it would be refused |
+  | an id | too old to say (no `Z_SYS_ABI`) | a warning, and goes ahead |
+  | no `abi` line (an older release) | | a note (`not checked`), and goes ahead |
+
+  ```
+  update: refused: the release is built for abi 7c1e0a9d3b2f4e61, and the kernel and
+          core apps in flash are abi 03a25f4cbf544cf0. Its programs may not run on this flash.
+          Flash the release's kernel and core apps first, then run update again;
+          or update anyway with -f (docs/update.md, "ABI"). Nothing was changed.
+  ```
+
+  A card that is already `up to date` is not checked: nothing would be
+  written.
+
+The id says "the same interfaces", not "compatible interfaces": a
+syscall appended at the end is harmless to old programs, but it is a
+new id all the same, since which changes are compatible cannot be told
+from the text. A false alarm costs a `-f`; a missed one, a crash.
+Flash it as [releases.md](releases.md#flashing-the-parts-separately)
+says, kernel and core apps together, then update the card.
+
+What the id does not cover: the bitstream (the CSRs say what a
+bitstream has, [csrs.md](csrs.md)), card paths (`zpaths.h`, read by
+flash and card alike but changed often, and a moved file is found by
+neither side rather than misread), and a core app's behaviour as
+opposed to its protocol.
 
 ### A card without `update`
 
@@ -357,6 +440,7 @@ zeitlos-manifest 3
 name v0.0.7
 version 0.0.7
 snapshot 3f2a9c01e4b7
+abi 03a25f4cbf544cf0
 source v0.0.6-45-g58e067a-dirty
 made 2026-10-19T09:40:12Z
 packs zdocs arklite
@@ -373,6 +457,10 @@ f 9d41c2a07b55...                 8e0f61d2 1734 k sys/zeitlos.cfg
   Each group is sorted by path (bytewise), so the board merges two
   manifests in one pass with no memory per file. The path is the rest of the line; it has no leading
   slash.
+- `abi` is the ABI id of the tree the files were built from ("ABI").
+  A header, so not in the snapshot id; written since round 3, and a
+  reader that predates it skips it. Republishing the same files with
+  another `abi` rewrites the manifest though the snapshot is the same.
 - `packs` says which ask packs an image carried. Their files are not
   listed.
 - `/sys/manifest` and `/sys/version` are not in it. They describe the
@@ -456,10 +544,6 @@ Every file the release ships has one, declared per list in
 - **Ask packs** (`/opt/ark/<pack>`, `/data/ask/<pack>`): not published,
   and an update leaves them alone. The ARK scroll (`/opt/ark/*.md`) is
   included.
-- **ABI.** Card apps compile in `sw/common/syscalls.def` and the core
-  apps' message protocols, and an update does not change flash. Until
-  there is a check, update a card only against a flash built from the
-  same tree, as with a card image.
 - **Core apps on the card**, NFS, HTTPS: later rounds.
 - **Kabellos boards** cannot fetch from a TFTP server on the LAN (the
   ESP32's NAPT drops the replies, [esp32link.md](esp32link.md#known-issues)).
@@ -483,10 +567,23 @@ every TFTP name within 63 bytes, LATEST, INDEX), publishing again
 unchanged, a rebuilt app (one new object, `manifest.prev`, pruning a
 publish later), a format-2 store republished as format 3 (its raw
 objects kept while `manifest.prev` names them, then pruned), a damaged
-object, `zrelease tftp` from the command line, and -- with
+object, the `abi` line (written, read back, not in the snapshot id, a
+new one republishing an otherwise unchanged release, and in
+`zrelease tftp`'s manifest), `zrelease tftp` from the command line, and -- with
 mtools -- that a card image's `/sys/manifest` has the same snapshot id
-as the store made from the same tree and lists exactly the card's
-files.
+as the store made from the same tree, records the tree's ABI id, and
+lists exactly the card's files.
+
+```
+$ python3 tools/test_gen_abi.py
+```
+
+checks the ABI id: that `sw/common/zabi.h` is current, that a comment,
+whitespace, a prototype, an inline helper, an `#include`, a `#` in a
+block comment and the kernel function behind a syscall do not change
+it, and that a struct field, a `#define`'s value, a syscall appended,
+a syscall replaced, the app link address and a function-pointer typedef
+do (and leave the committed id stale).
 
 `python3 release/lib/test_mkfatimg.py` covers the image itself.
 
@@ -515,7 +612,10 @@ split at every kind of place), a format-2 store with raw objects read
 by the new `update`; a damaged object (a block header, a block's data,
 a byte too many), a missing one, a damaged
 and a newer-format manifest, no such release, a bad name, not enough
-room, `-n`, `latest`, and `update` with no release.
+room, `-n`, `latest`, `update` with no release; and the ABI: the same
+id (updated, recorded in the card's manifest, shown by `update`), another
+(refused before anything is fetched, `-n`, `-f`), a kernel that cannot
+say (a warning), and a release that does not say (not checked).
 
 `test_net` runs `upd_net.c` with the real `zstream.c` and `zobj.c`, a
 mailbox per process, and a `net` that answers the way `tftp.c` does --
@@ -534,5 +634,8 @@ the numbers above were checked against the real tree (a card image
 from `zrelease sdcard`, unpacked with `mcopy -s`):
 
 ```
-$ sw/apps/update/tests/test_update --update CARD-DIR STORE-DIR v0.0.7 [-n] [-v]
+$ sw/apps/update/tests/test_update --update CARD-DIR STORE-DIR v0.0.7 [-n] [-v] [-f]
 ```
+
+There is no kernel to ask on the host, so it behaves like a kernel too
+old to say, unless `ZABI=<id>` gives the flash's id.

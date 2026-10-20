@@ -811,7 +811,9 @@ same plan ([update.md](update.md)). Each list declares what an update
 may do with its files (`REPLACE` or `KEEP`).
 
 **Every card carries `/sys/manifest`**: each file's SHA-256, CRC-32,
-size and policy, and the snapshot id of the whole ([update.md](update.md#the-manifest)).
+size and policy, the snapshot id of the whole, and the ABI id of the
+tree it was built from ([update.md](update.md#the-manifest),
+[update.md](update.md#abi)).
 `/sys/version` gains a second line naming that snapshot. Neither is
 listed in the manifest itself.
 
@@ -1091,11 +1093,14 @@ target in place leaves the others alone.
 ```
 $ python3 release/lib/test_store.py
 $ python3 release/lib/test_mkfatimg.py
+$ python3 tools/test_gen_abi.py
 ```
 
 check the manifest and update releases (no tools needed), and the card
 images themselves (needs dosfstools, mtools and the zdocs pack:
-`./tools/ask/ask build tools/ask/dist/zdocs.spec`). The board's side of
+`./tools/ask/ask build tools/ask/dist/zdocs.spec`), and the ABI id
+(`sw/common/zabi.h`; `zrelease check` fails when it is stale, and
+`make abi` remakes it -- [update.md](update.md#abi)). The board's side of
 updates, `sw/apps/update`, is tested against stores these write:
 `make -C sw/apps/update/tests` ([update.md](update.md#testing)).
 

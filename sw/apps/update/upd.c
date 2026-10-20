@@ -334,6 +334,7 @@ int upd_manifest_parse(upd_manifest_t *m, char *text, uint32_t len,
 			else HDR("source", source)
 			else HDR("made", made)
 			else HDR("packs", packs)
+			else HDR("abi", abi)
 #undef HDR
 		}
 		p = nl + 1;
@@ -666,6 +667,9 @@ static void emit(sbuf_t *s, const upd_manifest_t *R, const upd_manifest_t *I,
 	sb_str(s, "snapshot ");
 	*id_off = s->n;
 	sb_add(s, "000000000000\n", ID_DIGITS + 1);	// filled in afterwards
+	// The ABI the files were built for: the release's, as its files are
+	// what the card now has (docs/update.md, "ABI").
+	if (R->abi && R->abi_len > 0) sb_field(s, "abi", R->abi, R->abi_len);
 	sb_field(s, "source", R->source, R->source_len);
 	sb_field(s, "made", R->made, R->made_len);
 	// The packs the CARD has: an update release lists none, and leaves
@@ -1130,6 +1134,51 @@ int upd_run(const upd_io_t *io_, const upd_opts_t *o) {
 		goto out;
 	}
 
+	// -- the ABI: can the flash run these files? (docs/update.md, "ABI")
+	//
+	// The kernel and core apps in flash are not updated; the card's
+	// programs talk to them. A release built against other interfaces
+	// is refused before anything is written, unless -f.
+	switch (upd_abi_check(R.abi, R.abi_len, o->kernel_abi)) {
+	case UPD_ABI_SAME:
+		say("update: abi %.*s, as the flash has\n", R.abi_len, R.abi);
+		break;
+	case UPD_ABI_NO_RELEASE:
+		say("update: the release does not say which ABI it was built for: "
+			"not checked\n");
+		break;
+	case UPD_ABI_NO_KERNEL:
+		say("update: warning: this kernel is older than the ABI check and "
+			"cannot say\n"
+			"        what it runs; updating anyway. If programs fail to "
+			"start afterwards,\n"
+			"        flash the release's kernel and core apps "
+			"(docs/update.md, \"ABI\").\n");
+		break;
+	default:
+		if (o->force || o->dry_run) {
+			say("update: %s: the release is abi %.*s, the flash is abi %s:\n"
+				"        its programs may not run until the flash has the "
+				"release's\n"
+				"        kernel and core apps (docs/update.md, \"ABI\")\n",
+				o->force ? "-f" : "warning", R.abi_len, R.abi, o->kernel_abi);
+			if (!o->force)
+				say("        (without -n, this would be refused; -f to "
+					"update anyway)\n");
+			break;
+		}
+		say("update: refused: the release is built for abi %.*s, and the "
+			"kernel and\n", R.abi_len, R.abi);
+		say("        core apps in flash are abi %s. Its programs may not run "
+			"on this flash.\n", o->kernel_abi);
+		say("        Flash the release's kernel and core apps first, then run "
+			"update again;\n"
+			"        or update anyway with -f (docs/update.md, \"ABI\"). "
+			"Nothing was changed.\n");
+		status = UPD_FAILED;
+		goto out;
+	}
+
 	// -- 3. the plan --
 	int cap = R.nfiles + (have_I ? I.nfiles : 0);
 	items = calloc(cap ? cap : 1, sizeof *items);
@@ -1435,7 +1484,15 @@ out:
 	return status;
 }
 
-int upd_show(const upd_io_t *io_) {
+int upd_abi_check(const char *rel, int rel_len, const char *kernel) {
+	if (!rel || rel_len <= 0) return UPD_ABI_NO_RELEASE;
+	if (!kernel || !kernel[0]) return UPD_ABI_NO_KERNEL;
+	if ((int)strlen(kernel) == rel_len && !memcmp(kernel, rel, rel_len))
+		return UPD_ABI_SAME;
+	return UPD_ABI_DIFFERENT;
+}
+
+int upd_show(const upd_io_t *io_, const char *kernel_abi) {
 	io = io_;
 	char *text;
 	uint32_t len;
@@ -1460,6 +1517,14 @@ int upd_show(const upd_io_t *io_) {
 	char sz[16];
 	say("%s: %d files, %s\n", SYS_MANIFEST, m.nfiles,
 		size_str(total > 0xFFFFFFFFu ? 0xFFFFFFFFu : (uint32_t)total, sz, sizeof sz));
+	// The card's files' ABI and the flash's (docs/update.md, "ABI").
+	const char *ka = kernel_abi && kernel_abi[0] ? kernel_abi : "unknown (an older kernel)";
+	if (m.abi && m.abi_len > 0)
+		say("abi: card %.*s, flash %s%s\n", m.abi_len, m.abi, ka,
+			upd_abi_check(m.abi, m.abi_len, kernel_abi) == UPD_ABI_DIFFERENT
+				? "  -- DIFFERENT: flash the matching kernel and core apps" : "");
+	else
+		say("abi: card not recorded, flash %s\n", ka);
 	upd_manifest_free(&m);
 	return UPD_DONE;
 }

@@ -251,12 +251,13 @@ def publish(store, m, sources, latest=True, verbose=True):
             try:
                 old = manifest_mod.parse(old_text)
                 st.previous_id = old.id
-                same_format = old.format == m.format
+                same_format = old.format == m.format and old.abi == m.abi
             except manifest_mod.ManifestError:
                 st.previous_id = None
                 same_format = False
-        # The same files in another format (raw objects becoming LZ4)
-        # is a new manifest even with the same snapshot id.
+        # The same files in another format (raw objects becoming LZ4),
+        # or built against another ABI (an interface changed and no
+        # binary did), is a new manifest even with the same snapshot id.
         if st.previous_id == m.id and same_format:
             # Same files: leave it, `made` and all, so INDEX still says
             # when these files were first published.

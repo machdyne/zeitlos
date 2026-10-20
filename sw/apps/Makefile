@@ -95,7 +95,7 @@ APPS = casino poker roulette blackjack slots craps \
 # (docs/messaging.md, "Subjects and tags"): checked first, in a second,
 # so a protocol that skipped the registry fails the build rather than
 # colliding with another at run time.
-all: check-subjects check-fkeys
+all: check-subjects check-fkeys check-abi
 	@for a in $(APPS); do \
 		echo "==> $$a"; \
 		$(MAKE) -C $$a || exit 1; \
@@ -111,7 +111,13 @@ check-subjects:
 check-fkeys:
 	@python3 ../../tools/check_fkeys.py ..
 
-.PHONY: check-subjects check-fkeys
+# The ABI id (sw/common/zabi.h, tools/gen_abi.py): an app built against
+# interfaces the committed id does not describe would be shipped in a
+# release that claims the wrong id (docs/update.md, "ABI").
+check-abi:
+	@python3 ../../tools/gen_abi.py --check >/dev/null
+
+.PHONY: check-subjects check-fkeys check-abi
 
 clean:
 	@for a in $(APPS); do \
