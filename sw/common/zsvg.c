@@ -352,13 +352,35 @@ typedef struct {
 	float			cx, cy;			// current point, device space
 	bool			open;
 
+	// sink.outline: the subpath so far, and its shape's paint
+	int				np;
+	bool			o_filled, o_stroked, no_edges;
+	int				o_level;
+
 } ctx_t;
+
+static void out_point(ctx_t *c, float x, float y) {
+	if (!c->s->sink.outline || !c->s->pts) return;
+	if (c->np > 0 && c->s->pts[2 * c->np - 2] == x && c->s->pts[2 * c->np - 1] == y) return;
+	if (c->np >= c->s->max_pts) return;
+	c->s->pts[2 * c->np] = x;
+	c->s->pts[2 * c->np + 1] = y;
+	c->np++;
+}
+
+static void out_flush(ctx_t *c, bool closed) {
+	if (c->s->sink.outline && c->np >= 2)
+		c->s->sink.outline(c->s->sink.user, c->s->pts, c->np, closed,
+			c->o_filled, c->o_level, c->o_stroked);
+	c->np = 0;
+}
 
 static void add_edge(ctx_t *c, float x0, float y0, float x1, float y1) {
 
 	z_svg_edge_t *e;
 
 	if (y0 == y1) return;			// horizontal edges contribute nothing
+	if (c->no_edges) return;
 
 	if (c->n >= c->s->max_edges) { c->overflow = true; return; }
 
@@ -374,6 +396,7 @@ static void add_edge(ctx_t *c, float x0, float y0, float x1, float y1) {
 
 static void line_to(ctx_t *c, float x, float y) {
 	add_edge(c, c->cx, c->cy, x, y);
+	out_point(c, x, y);
 	c->cx = x; c->cy = y;
 }
 
@@ -383,13 +406,18 @@ static void move_to(ctx_t *c, float x, float y) {
 	// close it, but strokes are emitted separately.
 	if (c->open && (c->cx != c->sx || c->cy != c->sy))
 		add_edge(c, c->cx, c->cy, c->sx, c->sy);
+	out_flush(c, false);
 	c->sx = c->cx = x;
 	c->sy = c->cy = y;
 	c->open = true;
+	out_point(c, x, y);
 }
 
 static void close_path(ctx_t *c) {
 	if (c->open) add_edge(c, c->cx, c->cy, c->sx, c->sy);
+	// the start again is implied by `closed`
+	if (c->np >= 2 && c->s->pts[2 * c->np - 2] == c->sx && c->s->pts[2 * c->np - 1] == c->sy) c->np--;
+	out_flush(c, true);
 	c->cx = c->sx; c->cy = c->sy;
 }
 
@@ -1141,6 +1169,7 @@ int z_svg_render(z_svg_t *s) {
 
 	memset(&c, 0, sizeof(c));
 	c.s = s;
+	c.no_edges = s->sink.outline && !s->sink.span && !s->sink.line;
 	xf_identity(&base);
 	xf_identity(&c.xf);
 
@@ -1317,6 +1346,12 @@ int z_svg_render(z_svg_t *s) {
 			// would cover what is beneath, and here there is nothing
 			// to cover with.
 			if (level == 0) filled = false;
+			// (what the shapes below settle for a line and a polyline)
+			c.o_filled = tag_is(tag, tlen, "line") ? false :
+				tag_is(tag, tlen, "polyline") ? paint_is_none(aend, tend, "fill", false) : filled;
+			c.o_stroked = tag_is(tag, tlen, "line") || tag_is(tag, tlen, "polyline") ? true : stroked;
+			c.o_level = level;
+			c.np = 0;
 
 			if (tag_is(tag, tlen, "path")) {
 				if (attr(aend, tend, "d", &vs, &ve))
@@ -1337,6 +1372,12 @@ int z_svg_render(z_svg_t *s) {
 			} else {
 				shape_points(&c, aend, tend, true);
 			}
+
+			// a <line>, <polyline> and <polygon> say what they are
+			if (tag_is(tag, tlen, "polygon")) {
+				if (c.np >= 2 && c.s->pts[2 * c.np - 2] == c.sx && c.s->pts[2 * c.np - 1] == c.sy) c.np--;
+				out_flush(&c, true);
+			} else out_flush(&c, false);
 
 			if (c.overflow) return Z_SVG_E_TOOCOMPLEX;
 
@@ -1444,6 +1485,7 @@ int z_svg_render_bitmap(z_svg_t *s, uint32_t *bits, int wpl) {
 
 	s->sink.span = bmp_span;
 	s->sink.line = bmp_line;
+	s->sink.outline = NULL;
 	s->sink.user = &b;
 
 	return z_svg_render(s);

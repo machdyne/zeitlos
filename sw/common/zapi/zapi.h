@@ -16,7 +16,7 @@
 
 #include <stdbool.h>
 
-#include "../../common/zmsg.h"	// z_msg_t -- see zapi_win_msg() below
+#include "../zmsg.h"	// z_msg_t -- see zapi_win_msg() below
 
 // registers every zapi_* procedure below into ms_global_env. Call
 // once, from main(), right after ms_init_lix() succeeds -- same
@@ -56,6 +56,9 @@ extern int repl_cur_conn;
 // widgets drawn over a redraw, a closed window destroyed -- and is
 // called after the expression has run, whether or not it failed.
 int zapi_win_event(z_msg_t *msg, char *expr, int cap, int *conn);
+// Whether wm window `id` is one Scheme made (an app with windows of its
+// own as well -- slide -- tells its messages from theirs).
+bool zapi_win_owns(int id);
 void zapi_win_event_done(void);
 
 #endif

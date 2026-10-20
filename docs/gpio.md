@@ -1056,7 +1056,7 @@ Arguments are parsed strictly rather than with `atoi()`, because
 
 ## From Scheme
 
-`repl`, via `sw/apps/repl/zapi.c`. See `docs/scheme_api.md` for the
+`repl`, via `sw/common/zapi/zapi.c`. See `docs/scheme_api.md` for the
 language mechanics.
 
 ```

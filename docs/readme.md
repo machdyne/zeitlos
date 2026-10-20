@@ -174,6 +174,7 @@ with [welcome](welcome.md); to program it, [kernel](kernel.md) and
 | [text\_editor](text_editor.md) | `text` |
 | [sheet\_app](sheet_app.md) | `sheet` |
 | [slide\_app](slide_app.md) | `slide`: cards, slides and pages |
+| [slide\_scripting](slide_scripting.md) | `slide`'s controls run Scheme: scripts, timers, the message box, example decks |
 | [print](print.md) | `print`: printing over IPP or to port 9100, PDF and PostScript files |
 | [convert](convert.md) | `convert`: documents, tables, archives |
 | [app\_help](app_help.md) | F1: a help box in every app, with a button to these docs |

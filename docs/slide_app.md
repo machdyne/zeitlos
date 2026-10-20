@@ -16,9 +16,11 @@ when it is shown on the whole screen, and a page when it is printed:
 one drawing, at any scale.
 
 It is a HyperCard-shaped app grown in phases (the plan is
-`claude/slide-proposal.md` in the project): so far the editor, the
-show and printing. Buttons and actions, and the Scheme `slide`
-language, come next (see "Not yet").
+`claude/slide-proposal.md` in the project): the editor, the show,
+printing, buttons and controls with their actions, scripts in Scheme
+([slide_scripting.md](slide_scripting.md)), and diagrams -- flowchart
+shapes, connectors that follow them, curves, groups, SVG in and out
+(see "Diagrams").
 
 ```
 +----------------------------------------------------------+
@@ -45,7 +47,7 @@ shows most of this on its own cards.
 The tools are down the left: **b**rowse (a click is the next card,
 Shift+click the one before), select (**v**), **t**ext,
 **r**ectangle, ro**u**nded rectangle, **o**val, **l**ine, **a**rrow,
-**p**olygon and **i**mage -- the letter picks the tool. Drag to draw;
+**p**olygon, **f**reehand and **i**mage -- the letter picks the tool. Drag to draw;
 Shift keeps squares, circles and 45-degree lines. A polygon is a click
 per corner and Enter (or a double-click) to finish; ending on the first
 corner closes it. A text box is a drag,
@@ -99,7 +101,14 @@ move, Enter or a click picks one: one that needs nothing more runs
 | `grid N` | snap to N units (0: off) |
 | `zoom 100` / `200` / `400` / `fit` | the editor's zoom (Ctrl+= / Ctrl+- / Ctrl+0) |
 | `select all`, `delete`, `duplicate`, `undo`, `redo` | |
-| `image` | place a picture (a file dialog) |
+| `image` | place a picture (a file dialog); an `.svg` comes in as shapes, as `import` |
+| `diamond`, `slant`, `pill`, `document`, `cylinder` `[TEXT]` | flowchart shapes; see "Diagrams" |
+| `connect [elbow]`, `connect none`, `route straight / elbow` | connectors |
+| `smooth`, `sharp` | a polygon as a curve, or straight again |
+| `group`, `ungroup` | the selection as one (Ctrl+G, Ctrl+Shift+G) |
+| `flip across / down`, `rotate [left]` | mirror, or a quarter turn |
+| `export svg [all]` | this card (or every card) as SVG |
+| `import [FILE.svg]` | a drawing's outlines as polygons on this card |
 | `print`, `print pdf`, `print ps`, `print setup ...` | see "Printing" below |
 | `show`, `open`, `save`, `save as`, `new deck`, `help`, `tour`, `quit` | |
 
@@ -116,6 +125,7 @@ move, Enter or a click picks one: one that needs nothing more runs
 | Ctrl+Z / Ctrl+Y | undo / redo, 64 steps |
 | Ctrl+C / Ctrl+X / Ctrl+V | copy / cut / paste, also between decks; plain text pastes as a text box |
 | Ctrl+D, Ctrl+A | duplicate, select all |
+| Ctrl+G / Ctrl+Shift+G | group / ungroup the selection |
 | Delete / Backspace | delete the selection |
 | Tab / Shift+Tab | select the next / previous object |
 | Ctrl+N / Ctrl+O / Ctrl+S | new / open / save (also the titlebar icons) |
@@ -145,16 +155,73 @@ redraw than one at 100%. The status line shows the zoom.
 reorders, Delete removes, F5 shows from there, Enter or Escape goes back
 to the chosen card.
 
+### Controls and actions
+
+A card can hold **controls** as well as drawing: buttons, check boxes,
+radio buttons, fields to type into, sliders and lists. They work with
+the **browse** tool (b), in a show, and in a deck run as an app; with
+the other tools they are objects like any other, to move, resize and
+style (`/font`, `/fill`, `/line`).
+
+| command | places |
+|---|---|
+| `button LABEL` | a button (`OK` by default) |
+| `check LABEL`, `radio LABEL` | a check box, a radio button; `/group NAME` makes radios that exclude each other (all on the card, without a group) |
+| `field` | a field: typed into in browse mode; Enter in a one-line field runs its action, in a taller one starts a line; Tab goes to the next field |
+| `slider [MIN MAX]` | a slider, 0..100 unless given; `/range MIN MAX`, `/value N` |
+| `list A, B, C` | a list to choose one from; `/text A, B, C` changes its items |
+
+A button's label and a field's text are edited in place (F2, Enter or a
+double-click), like a text box; a check's or radio's label with `/text`.
+
+**An action** is what a click does: `/action` on the selection, or, with
+nothing selected, what arriving at the card does. It is written in plain
+words, steps separated by `;`, and kept in the deck as Scheme forms (so
+Phase 4's scripts read it as it is):
+
+| `/action ...` | kept as | does |
+|---|---|---|
+| `go next` (`prev first last back`), `go 3`, `go results` | `(go 'next)`, `(go 3)`, `(go "results")` | another card; `back` is the one before, as visited |
+| `show NAME`, `hide NAME`, `toggle NAME` | `(show "NAME")` ... | an object on the card or its background |
+| `set-text NAME words`, `set-value NAME N` | `(set-text "NAME" "words")` | a text, a control's value |
+| `speak words`, `speak-text NAME` | `(speak "words")` | says it, or an object's text, aloud |
+| `run clock`, `run view /media/images/x.jpg` | `(run "clock")` | starts an app |
+| `open /data/slide/other.zsl` | `(open "...")` | another deck |
+| `wait 500` | `(wait 500)` | the rest after half a second -- the app stays responsive meanwhile |
+| `none` | | no action |
+
+`/action` alone says what the action is. Forms can also be typed as
+they are: `/action (go 'next) (speak "Hello")`. A check runs its action
+after it changes, a radio when chosen, a slider when let go, a list when
+an item is chosen. A card whose action goes on to a card whose action
+goes on ... is stopped after a few. Anything that is not one of these
+verbs is Scheme: `(if (> score 5) (go 'next) (speak "Not yet"))` --
+see [slide_scripting.md](slide_scripting.md) for the language, the
+deck's and cards' scripts, timers and the message box.
+
+**A deck as an app.** `/app on` marks the deck: it then opens showing
+just the card, controls working -- a quiz, a form, a kiosk, a small
+calculator. **F7** switches between that and editing it, for any deck.
+Values changed while it runs (a check, a field) are not saved unless the
+deck is edited and saved. `/loop on` makes a show (and `go next` on the
+last card) go round to the first.
+
 ### Showing a deck
 
 F5 takes the whole screen. Space, Right, Down, PageDown, Enter or a
 left click: the next card. Left, Up, PageUp, Backspace or a right click:
 back. The wheel moves both ways. Home and End: first and last. A number
 and Enter: that card. **B** blanks the screen black, **W** white, **S**
-shows the card at its own size instead of filling the screen. Escape or
+shows the card at its own size instead of filling the screen, **T**
+speaks each card's notes as it arrives (again: stops). Escape or
 **q** ends the show and leaves the editor on the card it ended on. A key
 or a click during a transition finishes it at once. Super+Esc always
-takes the screen back (docs/window_manager.md).
+takes the screen back (docs/window_manager.md). Controls work in a show:
+a click on one is the control's, anywhere else the next card; while a
+field is being typed into, keys are the field's (Escape leaves it).
+Transitions are `cut wipe push iris dissolve` (`/transition iris 500`);
+a card's own action runs as it arrives, and a deck with `/loop on` goes
+round.
 Pictures still loading appear when they are ready: the card on the
 screen's first, then the next card's; changing cards never waits.
 
@@ -200,6 +267,55 @@ but at the printer's resolution: Hershey text and shapes are sharp at
 any size, pictures print in real grey from their file, and hidden
 objects are left out.
 
+### Diagrams
+
+**Flowchart shapes.** `/diamond Is it?` puts a decision on the card --
+and `/slant` (input, output), `/pill` (start, end), `/document`,
+`/cylinder` (a store) -- with its words in the middle, like the text a
+rectangle, a rounded rectangle or an oval can hold too (Enter, or a
+double-click, types into any of them). `/flip across` mirrors a slant or
+a document.
+
+**Connectors.** Select two shapes (click, Shift+click) and `/connect`:
+an arrow from the first to the second, straight from edge to edge;
+`/connect elbow` goes across, along and across, the way a flowchart's
+lines do. Drawing a line with the line or arrow tool from one shape to
+another connects them too. Move or resize either shape and the
+connector follows; `/route straight` or `/route elbow` changes its way,
+`/connect none` lets it go (a plain line again). A connector names its
+shapes in the file -- `(connect "ok" "store")` -- so naming a shape
+(F2) keeps it connected; copied together, the copies are connected to
+each other.
+
+**Curves.** The **f**reehand tool draws what the pointer does: the jitter
+is dropped, and what is left is a smooth curve, closed if it ends where
+it began. `/smooth` makes any polygon a curve through the middles of its
+sides (`/sharp`: straight again). A selected polygon shows a handle on
+each corner: drag one to move it, double-click it to remove it, and
+double-click on a side to put a corner there.
+
+**Groups.** `/group` (Ctrl+G) makes the selection one: a click on any
+part selects it all, and it moves, copies and deletes together;
+`/ungroup` (Ctrl+Shift+G) parts it. A group shows its corners only.
+`/rotate` turns the selection a quarter turn about its middle (`/rotate
+left` the other way); `/flip down` mirrors it top to bottom.
+
+**SVG out.** `/export svg` writes the card shown as an SVG file (a save
+dialog; the deck's name with `.svg`), for a drawing program or a web
+page; `/export svg all` writes every card, `name-01.svg`,
+`name-02.svg` ... It is the card as it prints: shapes as paths in their
+greys and patterns, text as text (a reader's own fonts, each run kept
+to its width, so it fits where it was), pictures embedded
+([zpaper.md](zpaper.md#as-svg)).
+
+**SVG in.** `/import drawing.svg` (or the image tool, picking an
+`.svg`) brings a drawing in as shapes to edit: each outline a polygon,
+filled ones in the nearest grey, strokes as lines, curves kept as their
+corners, all one group, fitted into the middle of the card and selected
+-- one Ctrl+Z takes it back. A filled shape's holes (the inside of an
+"o") come in white. SVG's text, gradients and line widths are not
+brought in ([zsvg.h](../sw/common/zsvg.h)); at most 256 outlines are.
+
 ## The deck
 
 Every card has a name (`card1`, `intro`, ...) and may have a
@@ -243,14 +359,17 @@ the language in Phase 4 is a separate form inside it.
   (notes "Say hello.")))
 ```
 
-Objects are `text rect rrect oval line poly image`, each with a name
+Objects are `text rect rrect oval diamond slant pill document cylinder
+line poly image button check radio field slider list`, each with a name
 and a `(box x y w h)` in page units. The other forms are the commands'
 words: `(fill none | shade N | pattern N)`, `(line W TONE)`,
 `(radius N)`, `(arrows ...)`, `(points x y ...)`, `(closed)`,
 `(src "path")`, `(contrast N)`, `(bright N)`, `(hidden)`, `(locked)`,
-`(advance MS)`; and the deck's `(print "...")`, how it prints.
-`(action ...)` and `(script ...)` are kept as they are
-for the coming phases. A custom page is
+`(smooth)`, `(flip across|down)`, `(gid N)` (a group), `(connect "FROM" "TO")`,
+`(advance MS)`; controls' `(value N)`, `(range MIN MAX)`,
+`(group "NAME")`; `(action "FORMS")` on an object or a card;
+`(script "...")` on a card or the deck ([slide_scripting.md](slide_scripting.md));
+and the deck's `(print "...")`, how it prints, `(app)` and `(loop)`. A custom page is
 `(page custom paper|ratio W H landscape)`.
 
 A form slide does not know is skipped, so an older slide reads a newer
@@ -280,8 +399,8 @@ without decoding again; opening another deck lets them go.
 ## Host tests
 
 ```
-make -C sw/apps/slide test       # the model, the file, the renderer (pictures loading, stopping, again), the editor
-make -C sw/apps/slide render     # the window, as /tmp/slide_ui_*.pbm (the / menu, a card loading)
+make -C sw/apps/slide test       # the model, the file, the renderer (pictures, zoom), the editor (diagrams, SVG import), actions and controls, Scheme and the example decks, SVG export (/tmp/slide/svg)
+make -C sw/apps/slide render     # the window, as /tmp/slide_ui_*.pbm (the / menu, zoom, a form of controls, run as an app, a flowchart, the steps of the slide demo (docs/demo.md))
 make -C sw/apps/slide look-deck  # every card of the tour as /tmp/slide/deck_N.pgm
 make -C sw/apps/slide job        # the tour as a print job, /tmp/slide/deck.zpp
 ```
@@ -293,9 +412,10 @@ make -C sw/apps/slide job        # the tour as a print job, /tmp/slide/deck.zpp
 
 - **Printing**: notes pages, and a print dialog (the words above are
   the way for now).
-- **Buttons, actions and timers** (Phase 3): `(action ...)` is kept in
-  the file but does nothing; the browse tool only turns cards.
-- **The `slide` language** (Phase 4): Scheme over zapi.
-- **Diagrams** (Phase 5): connectors that follow their shapes, editing
-  a polygon's points.
+- **Controls**: a list that scrolls (one longer than its box shows
+  what fits), a vertical slider, a kiosk mode that cannot be left;
+  a debugger for scripts (errors say where; Esc stops).
+- **Diagrams**: resizing a group as one (it moves as one), connectors
+  that avoid the shapes between theirs, text along a connector, line
+  widths and text from an imported SVG.
 - Zoom past 400%, and scrolling by dragging the card itself.

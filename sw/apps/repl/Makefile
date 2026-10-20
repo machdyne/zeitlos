@@ -24,6 +24,9 @@ APP_MAIN_RULE = 0
 MS_DIR = ../../ext/ms
 MS_PLATFORM_DIR = ../../common/ms_platform
 
+# The Scheme API (zapi) is shared with slide: sw/common/zapi.
+ZAPI_DIR = ../../common/zapi
+
 # Cell heap / GC-protect-stack sizing -- overridable at the command
 # line, e.g. `make MS_HEAP_SIZE=8000`. See docs/scheme.md for the
 # memory-budget reasoning behind the defaults below; 4000 cells left
@@ -126,8 +129,8 @@ zspi.o: ../../common/zspi.c ../../common/zspi.h ../../common/zgpio.h \
 # regenerated whenever the submodule's stdlib source is newer than the
 # last build's header -- see gen_ms_stdlib.py's own header comment for
 # why this isn't committed to the repo instead.
-ms_stdlib.h: gen_ms_stdlib.py $(MS_DIR)/ms_stdlib.l
-	python3 gen_ms_stdlib.py $(MS_DIR)/ms_stdlib.l ms_stdlib.h
+ms_stdlib.h: $(ZAPI_DIR)/gen_ms_stdlib.py $(MS_DIR)/ms_stdlib.l
+	python3 $(ZAPI_DIR)/gen_ms_stdlib.py $(MS_DIR)/ms_stdlib.l ms_stdlib.h
 
 ms.o: ms_stdlib.h
 	$(CC) $(CFLAGS) $(MS_CFLAGS) -c $(MS_DIR)/ms.c -o ms.o
@@ -168,15 +171,15 @@ te_bridge.o: te_bridge.c te_bridge.h $(TE_SUPPORT_DIR)/te_host_io.h te_max_file_
 # reports MS_HEAP_SIZE, so this translation unit has to see the same
 # value ms.o and repl.o were built with. Same
 # one-variable-feeds-every-compile reasoning documented above.
-zapi.o: zapi.c zapi.h ms_api.h ../../common/zfsapp.h ../../common/zwin.h \
+zapi.o: $(ZAPI_DIR)/zapi.c $(ZAPI_DIR)/zapi.h $(ZAPI_DIR)/ms_api.h ../../common/zfsapp.h ../../common/zwin.h \
 	../../common/zdns.h ../../common/znet.h ../../common/zstream.h \
-	../../common/zproc.h ../../common/zrtc.h zapi_doc.h
-	$(CC) $(CFLAGS) $(MS_SIZE_CFLAGS) -c zapi.c -o zapi.o
+	../../common/zproc.h ../../common/zrtc.h $(ZAPI_DIR)/zapi_doc.h
+	$(CC) $(CFLAGS) $(MS_SIZE_CFLAGS) -c $(ZAPI_DIR)/zapi.c -o zapi.o
 
 # (help)/(apropos)'s lookup in /docs/zapi.txt -- no Scheme, no fs, so
-# tests/test_zapi_doc.c builds it on the host
-zapi_doc.o: zapi_doc.c zapi_doc.h
-	$(CC) $(CFLAGS) -c zapi_doc.c -o zapi_doc.o
+# sw/common/zapi/tests/test_zapi_doc.c builds it on the host
+zapi_doc.o: $(ZAPI_DIR)/zapi_doc.c $(ZAPI_DIR)/zapi_doc.h
+	$(CC) $(CFLAGS) -c $(ZAPI_DIR)/zapi_doc.c -o zapi_doc.o
 
 # the `page` command's VT100 file viewer -- see page.h. No ms/te flags
 # needed: it talks to zport and zfsapp only, and knows nothing about
@@ -184,7 +187,7 @@ zapi_doc.o: zapi_doc.c zapi_doc.h
 page.o: page.c page.h ../../common/zfsapp.h ../../common/zport.h
 	$(CC) $(CFLAGS) -c page.c -o page.o
 
-repl.o:
+repl.o: repl.c $(ZAPI_DIR)/zapi.h $(ZAPI_DIR)/ms_api.h
 	$(CC) $(CFLAGS) $(MS_SIZE_CFLAGS) -c repl.c -S -MF /dev/null -o repl.asm
 	$(CC) $(CFLAGS) $(MS_SIZE_CFLAGS) -c repl.c -o repl.o
 

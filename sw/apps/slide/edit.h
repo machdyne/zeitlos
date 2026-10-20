@@ -25,6 +25,7 @@ enum {
 	TOOL_LINE,
 	TOOL_ARROW,
 	TOOL_POLY,
+	TOOL_PEN,		// freehand: a smooth polygon, drawn as the pointer goes
 	TOOL_IMAGE,
 	TOOL_COUNT
 };
@@ -35,9 +36,10 @@ enum {
 	DRAG_HANDLE,		// one handle of the one selected object
 	DRAG_CREATE,		// a new shape, corner to corner
 	DRAG_BAND,			// rubber band selection
+	DRAG_PEN,			// a freehand line being drawn (into poly[])
 };
 
-#define SEL_MAX 128
+#define SEL_MAX 256
 #define UNDO_MAX 64
 
 typedef struct {
@@ -97,9 +99,17 @@ bool edit_is_selected(const editor_t *e, const obj_t *o);
 void edit_select_all(editor_t *e);
 // topmost object at (x, y), NULL for none; `tol` units around lines
 obj_t *edit_hit(const editor_t *e, int x, int y, int tol);
+// Lays the card's connectors again (deck.h, card_route()) and marks what
+// moved for redrawing; the window calls it before drawing.
+void edit_route(editor_t *e);
 // handle of `o` at (x, y): 0..7 clockwise from top-left, -1 none (lines: 0, 1)
+// Handles: a box's eight; a line's two ends; a polygon's eight and then
+// one at each corner (handle 8 + i is corner i), up to EDIT_POINTS_MAX
+// corners -- dragged to move it, double-clicked to take it away.
+#define EDIT_POINTS_MAX  32
+#define EDIT_HANDLES_MAX (8 + EDIT_POINTS_MAX)
 int edit_handle_at(const obj_t *o, int x, int y, int tol);
-int edit_handles(const obj_t *o, int hx[8], int hy[8]);
+int edit_handles(const obj_t *o, int hx[EDIT_HANDLES_MAX], int hy[EDIT_HANDLES_MAX]);
 
 // -- the mouse ----------------------------------------------------------------
 
@@ -141,6 +151,11 @@ void edit_move_card(editor_t *e, int from, int to);
 // in e->msg. Some commands are the app's (open, save, image, show...);
 // those come back as false with *app set to the command word.
 bool edit_command(editor_t *e, const char *line, const char **app);
+
+// An SVG drawing's outlines as polygons on the card (/import): fitted
+// into its middle, grouped and selected, one undo step. Returns how many
+// it made (0: none, said in e->msg); -1 for a file that is not SVG.
+int edit_import_svg(editor_t *e, const char *doc, uint32_t len);
 // Every command with a line of help, for the "/" list and docs.
 int edit_command_count(void);
 const char *edit_command_help(int i);

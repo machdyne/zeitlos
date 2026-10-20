@@ -3,7 +3,7 @@
 # procedure repl has is in it. --run-examples runs the Scheme-language
 # examples through a desktop build of ms and compares their values.
 #
-#   make -C sw/apps/repl/tests
+#   make -C sw/common/zapi/tests
 #
 # Needs the ms submodule (git submodule update --init sw/ext/ms).
 ROOT = ../../../..

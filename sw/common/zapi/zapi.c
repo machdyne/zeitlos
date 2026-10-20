@@ -35,29 +35,29 @@
 #include <unistd.h>	// sbrk() -- see the `free` procedure below
 
 #include "ms_api.h"
-#include "../../common/zfsapp.h"
-#include "../../common/zwm.h"
-#include "../../common/zwin.h"
-#include "../../common/zfont.h"
-#include "../../common/zkbd.h"	// Z_KEY_*, for window key events
-#include "../../common/zdns.h"
-#include "../../common/znet.h"
-#include "../../common/zstream.h"
-#include "../../common/zproc.h"
-#include "../../common/zrtc.h"	// the wall clock -- see (current-time)/
+#include "../zfsapp.h"
+#include "../zwm.h"
+#include "../zwin.h"
+#include "../zfont.h"
+#include "../zkbd.h"	// Z_KEY_*, for window key events
+#include "../zdns.h"
+#include "../znet.h"
+#include "../zstream.h"
+#include "../zproc.h"
+#include "../zrtc.h"	// the wall clock -- see (current-time)/
 								// (current-date) below
-#include "../../common/zrng.h"	// the system CSPRNG -- see (random) below
-#include "../../common/zpad.h"	// gamepads -- see (gamepad ...) below
-#include "../../common/zcolor.h"	// game-mode colour -- see (color-mode ...)
-#include "../../common/zuart.h"	// UART1 -- see (uart1-* ...) below
-#include "../../common/zi2c.h"	// bit-bang I2C -- see (i2c-* ...) below
-#include "../../common/zi2cx.h"	// ...or a bus by name: a bench bus, "pmodN"
-#include "../../common/zspi.h"	// bit-bang SPI -- see (spi-* ...) below
-#include "../../common/zgpio.h"	// the GPIO ports -- see (gpio-* ...)
+#include "../zrng.h"	// the system CSPRNG -- see (random) below
+#include "../zpad.h"	// gamepads -- see (gamepad ...) below
+#include "../zcolor.h"	// game-mode colour -- see (color-mode ...)
+#include "../zuart.h"	// UART1 -- see (uart1-* ...) below
+#include "../zi2c.h"	// bit-bang I2C -- see (i2c-* ...) below
+#include "../zi2cx.h"	// ...or a bus by name: a bench bus, "pmodN"
+#include "../zspi.h"	// bit-bang SPI -- see (spi-* ...) below
+#include "../zgpio.h"	// the GPIO ports -- see (gpio-* ...)
 								// below. Direct MMIO, no syscall: this is
 								// a peripheral an app touches itself, same
 								// as zpad.h above. See docs/gpio.md.
-#include "../../common/zsoc.h"	// Z_VIDEO_MODE_*, z_video_mode_name(),
+#include "../zsoc.h"	// Z_VIDEO_MODE_*, z_video_mode_name(),
 								// z_video_mode_from_name() -- the naming
 								// helpers only. The actual get/set go
 								// through zeitlos.h's syscall wrappers
@@ -65,7 +65,7 @@
 								// direct-MMIO inlines.
 #include "zapi.h"
 #include "zapi_doc.h"
-#include "../../common/zpaths.h"
+#include "../zpaths.h"
 
 // -- small shared helpers --
 
@@ -621,6 +621,8 @@ static void zapi_focus_next(int slot) {
 	if (old >= 0 && old != k) zapi_widget_draw(old);
 	zapi_widget_draw(k);
 }
+
+bool zapi_win_owns(int id) { return zapi_slot_of(id) >= 0; }
 
 int zapi_win_event(z_msg_t *msg, char *expr, int cap, int *conn) {
 
@@ -1521,8 +1523,11 @@ static ms_val *zapi_ps(ms_val *args) {
 }
 
 //: (run "name")
+//: (run "name" "argument")
 //:   Starts an app by its bare name, found as the kernel finds it (see
-//:   layout.md). Returns the new pid, or #f if it could not start.
+//:   layout.md), with an argument for it if one is given -- a file to
+//:   open, as `files` would. "name argument" in one string is the same.
+//:   Returns the new pid, or #f if it could not start.
 //:   > (run "text")  =>  10
 //
 // (run "name") -- starts a process from a file on the filesystem (bare
@@ -1540,7 +1545,17 @@ static ms_val *zapi_ps(ms_val *args) {
 // procedures.
 static ms_val *zapi_run(ms_val *args) {
 	const char *name = zapi_arg_str(ms_car(args), "run");
-	uint32_t pid = z_proc_run(name);
+	char app[64];
+	const char *arg = NULL;
+	uint32_t pid;
+	int i = 0;
+	// "view /media/x.jpg": the app, and its argument
+	while (name[i] && name[i] != ' ' && i < (int)sizeof(app) - 1) { app[i] = name[i]; i++; }
+	app[i] = 0;
+	if (name[i] == ' ') { arg = name + i; while (*arg == ' ') arg++; }
+	if (!ms_is_nil(ms_cdr(args))) arg = zapi_arg_str(ms_car(ms_cdr(args)), "run");
+	if (arg && *arg) z_launch_arg_set(arg);
+	pid = z_proc_run(app);
 	if (!pid) return ms_mk_bool(false);
 	return ms_mk_num(pid);
 }

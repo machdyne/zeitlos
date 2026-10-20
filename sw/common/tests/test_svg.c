@@ -21,6 +21,7 @@
 
 #include <math.h>
 
+#include <stdbool.h>
 #include "zsvg.h"
 
 // zsvg.c's own maths, checked against libm below. Declared here
@@ -69,6 +70,37 @@ static int render(const char *doc, int max_edges) {
 	s.edges = edges;
 	s.max_edges = max_edges ? max_edges : (int)(sizeof(edges)/sizeof(edges[0]));
 	s.sink.span = sp; s.sink.line = ln;
+	return z_svg_render(&s);
+}
+
+// -- outlines (sink.outline): the geometry itself --
+
+typedef struct { int n; bool closed, filled, stroked; int level; float x0, y0, xl, yl; } outl_t;
+static outl_t outs[16];
+static int nouts;
+static float opts[2 * 256];
+
+static void ol(void *u, const float *xy, int n, bool closed, bool filled, int level, bool stroked) {
+	(void)u;
+	if (nouts >= 16) return;
+	outs[nouts].n = n; outs[nouts].closed = closed; outs[nouts].filled = filled;
+	outs[nouts].stroked = stroked; outs[nouts].level = level;
+	outs[nouts].x0 = xy[0]; outs[nouts].y0 = xy[1];
+	outs[nouts].xl = xy[2 * n - 2]; outs[nouts].yl = xy[2 * n - 1];
+	nouts++;
+}
+
+static int outline(const char *doc) {
+	z_svg_t s;
+	static z_svg_edge_t few[16];
+	memset(&s, 0, sizeof(s));
+	nouts = 0;
+	s.doc = doc; s.len = (uint32_t)strlen(doc);
+	s.w = 64; s.h = 64;
+	s.edges = few;		// none are kept: a small array is enough
+	s.max_edges = 16;
+	s.sink.outline = ol;
+	s.pts = opts; s.max_pts = 256;
 	return z_svg_render(&s);
 }
 
@@ -267,6 +299,30 @@ int main(void) {
 			"</svg>", 0);
 		ck(rv == Z_SVG_OK, "an unknown element does not fail the document");
 		ck(fb[20][20], "and the shapes around it still draw");
+	}
+
+	// Outlines: each subpath once, in order, closed or not, with its paint
+	{
+		int rv = outline("<svg viewBox='0 0 64 64'>"
+			"<rect x='8' y='8' width='16' height='8' fill='black'/>"
+			"<path d='M40 40 L56 40 L48 56' fill='none' stroke='black'/>"
+			"<path d='M0 0 L10 0 L10 10 Z M20 20 L30 20 L30 30 Z' fill='#808080'/>"
+			"<line x1='0' y1='60' x2='60' y2='60' stroke='black'/>"
+			"<circle cx='32' cy='32' r='10' fill='black'/>"
+			"</svg>");
+		ck(rv == Z_SVG_OK, "outlines: drawn");
+		ck(nouts == 6, "outlines: one per subpath");
+		ck(outs[0].n == 4 && outs[0].closed && outs[0].filled && !outs[0].stroked &&
+			outs[0].x0 == 8 && outs[0].y0 == 8 && outs[0].xl == 8 && outs[0].yl == 16,
+			"outlines: a rect is four corners, closed, in order");
+		ck(outs[1].n == 3 && !outs[1].closed && !outs[1].filled && outs[1].stroked &&
+			outs[1].xl == 48 && outs[1].yl == 56, "outlines: an open stroked path stays open");
+		ck(outs[2].closed && outs[3].closed && outs[3].x0 == 20 && outs[2].level > 0 &&
+			outs[2].level < Z_SVG_LEVELS - 1, "outlines: two subpaths, grey");
+		ck(outs[4].n == 2 && !outs[4].filled && outs[4].stroked, "outlines: a line");
+		ck(outs[5].n > 12 && outs[5].closed, "outlines: a circle, flattened");
+		ck(outline("<svg viewBox='0 0 64 64'><polygon points='1,1 9,1 5,9'/></svg>") == Z_SVG_OK &&
+			nouts == 1 && outs[0].n == 3 && outs[0].closed, "outlines: a polygon is closed");
 	}
 
 	printf("%s: %d checks, %d failures\n", fails ? "FAIL" : "ok",

@@ -82,6 +82,8 @@ static void scene(zc_target_t *t, const zc_xf_t *xf, bool with_photo) {
 	zc_stroke(t, &path, ZC_I(4), false, &work, &black);
 	zc_text_draw(t, xf, &st, ZC_I(30), ZC_I(270), "Paper, Zeitlos!", 15, &black);
 	zc_text_draw(t, xf, &sm, ZC_I(30), ZC_I(300), "mono 6x12", 9, &black);
+	// a run shorter than a word of padding (it was once read as too short)
+	zc_text_draw(t, xf, &sm, ZC_I(150), ZC_I(300), "OK?", 3, &black);
 	// pictures through the transform, as anything turned must be
 	{
 		zc_xf_t g = { (ZC_I(32) << 8) / 8, 0, 0, (ZC_I(32) << 8) / 8, ZC_I(440), ZC_I(40) };
@@ -201,7 +203,7 @@ int main(int argc, char **argv) {
 			}
 		}
 		ck(!r.bad, "read to the end cleanly");
-		ck(ops[ZP_FILL] >= 3 && ops[ZP_STROKE] >= 1 && ops[ZP_TEXT] == 4 && ops[ZP_IMAGE] == 2 &&
+		ck(ops[ZP_FILL] >= 3 && ops[ZP_STROKE] >= 1 && ops[ZP_TEXT] == 6 && ops[ZP_IMAGE] == 2 &&
 			ops[ZP_IMAGE_FILE] == 1 && ops[ZP_CLIP] >= 2, "every kind recorded");
 		ck(zp_max_points(job.p, job.n) > 16, "longest path");
 	}

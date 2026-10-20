@@ -1175,7 +1175,7 @@ static void bi_help(px_shell_t *sh, int argc, char **argv);
 /* One line per process: its pid (what `kill` takes), the name it
  * registered, whether it is running, waiting or being killed, its
  * memory, and the CPU it has used since it started. repl's (ps) is the
- * same snapshot as data (sw/apps/repl/zapi.c). */
+ * same snapshot as data (sw/common/zapi/zapi.c). */
 static void bi_ps(px_shell_t *sh, int argc, char **argv) {
     static z_proc_info_t procs[PX_PS_MAX];
     uint32_t truncated = 0, n;

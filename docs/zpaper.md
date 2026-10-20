@@ -111,12 +111,39 @@ the print service, one band of a sheet at a time:
   decode) is counted in `skipped`, and the rest of the page still
   prints.
 
+## As SVG
+
+`sw/common/zpsvg.h`: a page of a job as an SVG document, for a drawing
+program or a web page -- what slide's `/export svg` writes
+([slide_app.md](slide_app.md#diagrams)).
+
+```c
+zp_svg_t s = { put, load, release, font, ctx };
+zp_svg_page(&s, job, len, 0);		// page 1, written through put()
+```
+
+| Record | becomes |
+|---|---|
+| `CLIP` | a `<clipPath>` and a group |
+| `RECT`, `FILL` | a `<rect>`, a `<path>` (even-odd kept) |
+| `STROKE` | a `<path>` with a round pen of its width |
+| shades / patterns | greys / an SVG `<pattern>` of the 8x8 bits, one bit a page unit |
+| `TEXT` | `<text>` in the nearest generic family (sans-serif, serif, cursive, fantasy, monospace), bold and italic kept; with `font`, its width as `textLength`, so a reader's font fits where the run was |
+| `IMAGE_FILE` | an `<image>`, its file embedded (JPEG, PNG, GIF, BMP) when `load` gives it, else linked; grey, as it prints |
+| `IMAGE` | an `<image>`: the pixels as an 8-bit grey BMP |
+
+The document is in page units (`viewBox="0 0 512 342"` for a classic
+card), its size in millimetres for a paper page. It is written a
+string at a time, so a card's SVG needs no memory of its own. A mask
+image (rare: icons) is not said; it is counted in `skipped`.
+
 ## Testing
 
 `make -C sw/common/tests -f Makefile.zcanvas paper` (`test_zpaper`,
 ASan and UBSan):
 - a page of every kind of record, recorded, read back and decoded:
-  options, page shapes, a text run, a picture by path;
+  options, page shapes, a text run (and one of three letters, shorter
+  than the padding: such runs were once dropped), a picture by path;
 - **played back at 300 dpi in bands is drawn directly at 300 dpi**:
   151 of 1.2 million inked pixels differ (0.012%), all on the edge of
   an ellipse flattened at 16 units a page unit rather than at device
@@ -128,3 +155,8 @@ ASan and UBSan):
   3000 copies with two bytes scribbled on, read without a fault.
 
 `look-paper` writes the pages to `/tmp/zcanvas`.
+
+SVG: `make -C sw/apps/slide test` (`tests/test_svg.c`) writes a
+flowchart card and every card of the tour through `zp_svg_page()`,
+checks that each document is well-formed (tags nest and close, text
+escaped, runs with their widths) and leaves them in `/tmp/slide/svg`.

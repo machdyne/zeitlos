@@ -18,6 +18,13 @@ bool show_alloc(void);
 // answered meanwhile. Returns the card it ended on.
 int show_run(deck_t *d, int start, z_win_t *win);
 
+// What a show did that the editor finishes: a deck an action opened
+// ("(open ...)" ends the show), else NULL. Good until the next show.
+const char *show_open_request(void);
+
+// Starts an app for an action: "clock", "view /media/images/x.jpg".
+void show_launch(const char *cmd);
+
 // Copies a 1bpp bitmap rectangle to the screen at (dx, dy), through the
 // blitter where it can. Shared with the editor.
 void blit_to_screen(const uint32_t *src, int wpl, int sx, int sy, int dx, int dy,

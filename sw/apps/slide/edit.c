@@ -3,12 +3,14 @@
  */
 
 #include "edit.h"
+#include "act.h"
 #include "../../common/zpool.h"
 
 #include <string.h>
 
 #include "../../common/zkbd.h"
 #include "../../common/zutf8.h"
+#include "../../common/zsvg.h"
 
 static void msg(editor_t *e, const char *s) {
 	size_t n = strlen(s);
@@ -86,7 +88,7 @@ void edit_damage_obj(editor_t *e, const obj_t *o) {
 	obj_bounds(o, &x0, &y0, &x1, &y1);
 	m = o->line_w + 3;
 	if (o->arrows) m += render_arrow_len(o->line_w);
-	if (o->kind == OB_TEXT && o->text && o->text[0]) {
+	if (OB_EDITS_TEXT(o->kind) && o->text && o->text[0]) {
 		// text may run past its box: below it, and an italic to the right
 		static text_layout_t L;
 		zc_fix bottom;
@@ -125,9 +127,8 @@ bool edit_is_selected(const editor_t *e, const obj_t *o) {
 	return false;
 }
 
-void edit_select(editor_t *e, obj_t *o, bool add) {
+static void select_one(editor_t *e, obj_t *o, bool add) {
 	int i;
-	if (!add) edit_select_none(e);
 	for (i = 0; i < e->nsel; i++) {
 		if (e->sel[i] == o) {
 			if (add) {		// shift-click on a selected object deselects it
@@ -140,6 +141,41 @@ void edit_select(editor_t *e, obj_t *o, bool add) {
 	}
 	if (e->nsel < SEL_MAX) e->sel[e->nsel++] = o;
 	edit_damage_obj(e, o);
+}
+
+void edit_select(editor_t *e, obj_t *o, bool add) {
+	card_t *c = edit_card(e);
+	int i;
+	if (!add) edit_select_none(e);
+	select_one(e, o, add);
+	// the rest of its group with it
+	if (o->gid && c)
+		for (i = 0; i < c->nobj; i++)
+			if (c->obj[i] != o && c->obj[i]->gid == o->gid) select_one(e, c->obj[i], add);
+}
+
+// Copies just made (a duplicate, a paste): their groups are new groups,
+// and a connector copied with its shapes connects the copies.
+static void fix_copies(card_t *c, obj_t **made, char (*old)[OB_NAME_MAX], int n) {
+	int i, k;
+	uint16_t top = 0, map_from[SEL_MAX], map_to[SEL_MAX];
+	int nmap = 0;
+	for (i = 0; i < c->nobj; i++) if (c->obj[i]->gid > top) top = c->obj[i]->gid;
+	for (i = 0; i < n; i++) {
+		obj_t *o = made[i];
+		if (!o->gid) continue;
+		for (k = 0; k < nmap && map_from[k] != o->gid; k++) ;
+		if (k == nmap && nmap < SEL_MAX) { map_from[nmap] = o->gid; map_to[nmap] = ++top; nmap++; }
+		if (k < nmap) o->gid = map_to[k];
+	}
+	for (i = 0; i < n; i++) {
+		obj_t *o = made[i];
+		if (!obj_is_connector(o)) continue;
+		for (k = 0; k < n; k++) {
+			if (!strcmp(o->from, old[k])) memcpy(o->from, made[k]->name, OB_NAME_MAX);
+			if (!strcmp(o->to, old[k])) memcpy(o->to, made[k]->name, OB_NAME_MAX);
+		}
+	}
 }
 
 void edit_select_all(editor_t *e) {
@@ -201,6 +237,40 @@ static bool obj_hit(const obj_t *o, int x, int y, int tol) {
 	return x >= x0 - tol && x <= x1 + tol && y >= y0 - tol && y <= y1 + tol;
 }
 
+// The topmost shape (not a line, not a connector) at (x, y), for a line
+// drawn from one to another.
+static obj_t *shape_at(const editor_t *e, int x, int y) {
+	card_t *c = edit_card(e);
+	int i;
+	if (!c) return NULL;
+	for (i = c->nobj - 1; i >= 0; i--) {
+		obj_t *o = c->obj[i];
+		int x0, y0, x1, y1;
+		if (o->kind == OB_LINE || o->kind == OB_POLY) continue;
+		obj_bounds(o, &x0, &y0, &x1, &y1);
+		if (x >= x0 && x <= x1 && y >= y0 && y <= y1) return o;
+	}
+	return NULL;
+}
+
+// Connectors laid again after whatever moved: what changed is redrawn.
+void edit_route(editor_t *e) {
+	card_t *c = edit_card(e), *bg = NULL;
+	int chg[2 * 16][4], n, i;
+	if (!c) return;
+	if (!e->on_bg) {
+		card_t *k = e->d->card[e->cur];
+		if (k->bg >= 0 && k->bg < e->d->nbg) bg = e->d->bg[k->bg];
+	}
+	n = card_route(c, bg, chg, 16);
+	if (n > 16) { edit_damage_all(e); return; }
+	for (i = 0; i < 2 * n; i++) {
+		// with room for an arrowhead and a thick line
+		int m = 20;
+		edit_damage(e, chg[i][0] - m, chg[i][1] - m, chg[i][2] + m, chg[i][3] + m);
+	}
+}
+
 obj_t *edit_hit(const editor_t *e, int x, int y, int tol) {
 	card_t *c = edit_card(e);
 	int i;
@@ -210,7 +280,7 @@ obj_t *edit_hit(const editor_t *e, int x, int y, int tol) {
 	return NULL;
 }
 
-int edit_handles(const obj_t *o, int hx[8], int hy[8]) {
+int edit_handles(const obj_t *o, int hx[EDIT_HANDLES_MAX], int hy[EDIT_HANDLES_MAX]) {
 	int x0, y0, x1, y1, xm, ym;
 	if (o->kind == OB_LINE) {
 		hx[0] = o->x; hy[0] = o->y;
@@ -228,11 +298,20 @@ int edit_handles(const obj_t *o, int hx[8], int hy[8]) {
 	hx[5] = xm; hy[5] = y1;
 	hx[6] = x0; hy[6] = y1;
 	hx[7] = x0; hy[7] = ym;
+	if (o->kind == OB_POLY && !obj_is_connector(o) && o->npts <= EDIT_POINTS_MAX) {
+		int i;
+		for (i = 0; i < o->npts; i++) { hx[8 + i] = o->pts[2 * i]; hy[8 + i] = o->pts[2 * i + 1]; }
+		return 8 + o->npts;
+	}
 	return 8;
 }
 
 int edit_handle_at(const obj_t *o, int x, int y, int tol) {
-	int hx[8], hy[8], n = edit_handles(o, hx, hy), i;
+	int hx[EDIT_HANDLES_MAX], hy[EDIT_HANDLES_MAX], n = edit_handles(o, hx, hy), i;
+	// a corner before the box's handles: they can be in the same place
+	for (i = n - 1; i >= 8; i--)
+		if (iabs(x - hx[i]) <= tol && iabs(y - hy[i]) <= tol) return i;
+	if (n > 8) n = 8;
 	for (i = 0; i < n; i++)
 		if (iabs(x - hx[i]) <= tol && iabs(y - hy[i]) <= tol) return i;
 	return -1;
@@ -374,6 +453,135 @@ static void add_obj(editor_t *e, obj_t *o, bool checkpoint) {
 	e->modified = true;
 }
 
+// -- /import FILE.svg: a drawing's outlines as polygons ---------------------------
+//
+// zsvg (sw/common/zsvg.h) flattens the drawing's shapes, fitted into the
+// middle of the card; each subpath becomes a polygon -- filled ones in
+// the grey of their fill, strokes as lines -- all one group, selected,
+// one undo step. A filled shape's later subpaths inside its first (the
+// hole of an "o") are filled white.
+
+static void simplify(const int16_t *p, int a, int b, int tol, uint8_t *keep);
+
+#define IMPORT_MAX_OBJS SEL_MAX		// all of it selected, to move as one
+#define IMPORT_MAX_PTS  1024
+
+typedef struct {
+	editor_t	*e;
+	z_svg_t		*s;
+	card_t		*c;
+	uint16_t	gid;
+	int			made, dropped;
+	int			shape;				// s->n_shapes at the shape's first subpath
+	int			bx0, by0, bx1, by1;	// that subpath's box
+	int16_t		*p;					// IMPORT_MAX_PTS points
+	uint8_t		*keep;
+} import_t;
+
+static void import_outline(void *user, const float *xy, int n, bool closed,
+	bool filled, int level, bool stroked) {
+	import_t *im = user;
+	obj_t *o;
+	int i, k = 0, x0 = 32767, y0 = 32767, x1 = -32768, y1 = -32768;
+	bool first, hole = false;
+	if (im->made >= IMPORT_MAX_OBJS) { im->dropped++; return; }
+	if (!filled && !stroked) return;
+	if (n > IMPORT_MAX_PTS) n = IMPORT_MAX_PTS;
+	for (i = 0; i < n; i++) {
+		int x = (int)(xy[2 * i] + (xy[2 * i] < 0 ? -0.5f : 0.5f));
+		int y = (int)(xy[2 * i + 1] + (xy[2 * i + 1] < 0 ? -0.5f : 0.5f));
+		if (k && im->p[2 * k - 2] == x && im->p[2 * k - 1] == y) continue;
+		im->p[2 * k] = (int16_t)x;
+		im->p[2 * k + 1] = (int16_t)y;
+		k++;
+		if (x < x0) x0 = x;
+		if (x > x1) x1 = x;
+		if (y < y0) y0 = y;
+		if (y > y1) y1 = y;
+	}
+	if (k < 2 || (k < 3 && (closed || filled))) return;
+	first = im->s->n_shapes != im->shape;
+	if (first) { im->shape = im->s->n_shapes; im->bx0 = x0; im->by0 = y0; im->bx1 = x1; im->by1 = y1; }
+	else if (filled && x0 >= im->bx0 && y0 >= im->by0 && x1 <= im->bx1 && y1 <= im->by1) hole = true;
+	// a curve came as many short pieces: keep the ones that matter
+	memset(im->keep, 0, (size_t)k);
+	im->keep[0] = im->keep[k - 1] = 1;
+	simplify(im->p, 0, k - 1, 1, im->keep);
+	o = obj_new(OB_POLY);
+	if (!o) { im->dropped++; return; }
+	o->pts = pool_alloc((size_t)k * 4);
+	if (!o->pts) { obj_free(o); im->dropped++; return; }
+	for (i = 0, n = 0; i < k; i++) {
+		if (!im->keep[i]) continue;
+		o->pts[2 * n] = im->p[2 * i];
+		o->pts[2 * n + 1] = im->p[2 * i + 1];
+		n++;
+	}
+	o->npts = (uint16_t)n;
+	o->closed = (closed || filled) ? 1 : 0;
+	o->line_w = stroked ? 1 : 0;
+	o->line_tone = 16;
+	if (filled) {
+		o->fill = FILL_SHADE;
+		o->fill_v = hole ? 0 : (uint8_t)(level * 16 / (Z_SVG_LEVELS - 1));
+	} else o->fill = FILL_NONE;
+	o->gid = im->gid;
+	obj_fit_box(o);
+	card_unique_obj_name(im->c, OB_POLY, o->name, OB_NAME_MAX);
+	if (!im->made) edit_checkpoint(im->e, false);		// the step undo takes back
+	if (!card_add(im->c, -1, o)) { obj_free(o); im->dropped++; return; }
+	im->made++;
+}
+
+int edit_import_svg(editor_t *e, const char *doc, uint32_t len) {
+	import_t *im;
+	z_svg_t *s;
+	card_t *c = edit_card(e);
+	int i, rv, gw = e->d->page.gw, gh = e->d->page.gh;
+	static z_svg_edge_t no_edges[16];
+	if (!c) return -1;
+	if (!z_svg_sniff(doc, len)) { msg(e, "That is not an SVG drawing"); return -1; }
+	im = pool_zalloc(sizeof(import_t));
+	s = pool_zalloc(sizeof(z_svg_t));
+	if (im) im->p = pool_alloc(IMPORT_MAX_PTS * 2 * sizeof(int16_t));
+	if (im) im->keep = pool_alloc(IMPORT_MAX_PTS);
+	if (s) s->pts = pool_alloc(IMPORT_MAX_PTS * 2 * sizeof(float));
+	if (!im || !s || !im->p || !im->keep || !s->pts) {
+		if (im) { pool_free(im->p); pool_free(im->keep); }
+		if (s) pool_free(s->pts);
+		pool_free(im); pool_free(s);
+		msg(e, "Out of memory");
+		return -1;
+	}
+	edit_select_none(e);
+	for (i = 0; i < c->nobj; i++) if (c->obj[i]->gid > im->gid) im->gid = c->obj[i]->gid;
+	im->gid++;
+	im->e = e;
+	im->s = s;
+	im->c = c;
+	im->shape = -1;
+	s->doc = doc;
+	s->len = len;
+	// in the middle of the card, most of it
+	s->x = gw / 10; s->y = gh / 10; s->w = gw - gw / 5; s->h = gh - gh / 5;
+	s->edges = no_edges;
+	s->max_edges = 16;
+	s->max_pts = IMPORT_MAX_PTS;
+	s->sink.outline = import_outline;
+	s->sink.user = im;
+	rv = z_svg_render(s);
+	if (rv != Z_SVG_OK && !im->made) msg2(e, "Cannot import: ", z_svg_strerror(rv));
+	else if (!im->made) msg(e, "Nothing to import: the drawing has no outlines");
+	else if (im->dropped) msg(e, "Imported, but not all of it: the card had no room for more");
+	else msg(e, "Imported as polygons, grouped (ungroup: Ctrl+Shift+G)");
+	rv = im->made;
+	if (rv) edit_select(e, c->obj[c->nobj - 1], false);		// and its group
+	edit_damage_all(e);
+	pool_free(s->pts); pool_free(s);
+	pool_free(im->p); pool_free(im->keep); pool_free(im);
+	return rv;
+}
+
 // A new object of the tool's kind, with the defaults the last one had.
 static obj_t *new_for_tool(editor_t *e, int tool) {
 	int kind;
@@ -418,6 +626,44 @@ void edit_press(editor_t *e, int x, int y, bool shift, bool dbl) {
 		obj_t *h;
 		if (e->nsel == 1 && !(e->sel[0]->flags & OBF_LOCKED)) {
 			int hi = edit_handle_at(e->sel[0], x, y, HANDLE_TOL);
+			obj_t *s0 = e->sel[0];
+			if (dbl && hi >= 8 && s0->npts > 2) {
+				// a double-click on a corner takes it away
+				int k = hi - 8;
+				edit_checkpoint(e, false);
+				edit_damage_obj(e, s0);
+				memmove(&s0->pts[2 * k], &s0->pts[2 * k + 2], (size_t)(s0->npts - k - 1) * 2 * sizeof(int16_t));
+				s0->npts--;
+				obj_fit_box(s0);
+				edit_damage_obj(e, s0);
+				return;
+			}
+			if (dbl && hi < 0 && s0->kind == OB_POLY && !obj_is_connector(s0) && s0->npts < EDIT_POINTS_MAX &&
+				obj_hit(s0, x, y, HANDLE_TOL)) {
+				// on an edge: a new corner there
+				int k, best = 0;
+				long bd = -1;
+				int16_t *np;
+				for (k = 0; k < s0->npts - (s0->closed ? 0 : 1); k++) {
+					int ax = s0->pts[2 * k], ay = s0->pts[2 * k + 1];
+					int bx = s0->pts[2 * ((k + 1) % s0->npts)], by = s0->pts[2 * ((k + 1) % s0->npts) + 1];
+					long d = (long)iabs(x - (ax + bx) / 2) + iabs(y - (ay + by) / 2);
+					if (bd < 0 || d < bd) { bd = d; best = k; }
+				}
+				np = pool_alloc((size_t)(s0->npts + 1) * 2 * sizeof(int16_t));
+				if (!np) return;
+				edit_checkpoint(e, false);
+				memcpy(np, s0->pts, (size_t)(best + 1) * 2 * sizeof(int16_t));
+				np[2 * (best + 1)] = (int16_t)x;
+				np[2 * (best + 1) + 1] = (int16_t)y;
+				memcpy(&np[2 * (best + 2)], &s0->pts[2 * (best + 1)], (size_t)(s0->npts - best - 1) * 2 * sizeof(int16_t));
+				pool_free(s0->pts);
+				s0->pts = np;
+				s0->npts++;
+				obj_fit_box(s0);
+				edit_damage_obj(e, s0);
+				return;
+			}
 			if (hi >= 0) {
 				int x0, y0, x1, y1;
 				obj_bounds(e->sel[0], &x0, &y0, &x1, &y1);
@@ -433,7 +679,7 @@ void edit_press(editor_t *e, int x, int y, bool shift, bool dbl) {
 			e->drag = DRAG_BAND;
 			return;
 		}
-		if (dbl && h->kind == OB_TEXT && !(h->flags & OBF_LOCKED)) {
+		if (dbl && OB_EDITS_TEXT(h->kind) && !(h->flags & OBF_LOCKED)) {
 			edit_select(e, h, false);
 			edit_text_begin(e, h, x, y);
 			return;
@@ -459,6 +705,13 @@ void edit_press(editor_t *e, int x, int y, bool shift, bool dbl) {
 			e->npoly++;
 			edit_damage(e, x - 4, y - 4, x + 4, y + 4);
 		}
+		return;
+	case TOOL_PEN:
+		edit_select_none(e);
+		e->poly[0] = (int16_t)x;
+		e->poly[1] = (int16_t)y;
+		e->npoly = 1;
+		e->drag = DRAG_PEN;
 		return;
 	case TOOL_TEXT: case TOOL_RECT: case TOOL_RRECT: case TOOL_OVAL:
 	case TOOL_LINE: case TOOL_ARROW:
@@ -492,6 +745,16 @@ static void constrain_point(editor_t *e, int *x, int *y) {
 
 void edit_motion(editor_t *e, int x, int y, bool shift) {
 	e->constrain = shift;
+	if (e->drag == DRAG_PEN && e->npoly > 0) {
+		// a point every few units; at the cap, the last one follows
+		int lx = e->poly[2 * e->npoly - 2], ly = e->poly[2 * e->npoly - 1];
+		if (iabs(x - lx) + iabs(y - ly) >= 3) {
+			if (e->npoly < 128) e->npoly++;
+			e->poly[2 * e->npoly - 2] = (int16_t)x;
+			e->poly[2 * e->npoly - 1] = (int16_t)y;
+			edit_damage(e, imin(x, lx) - 3, imin(y, ly) - 3, imax(x, lx) + 3, imax(y, ly) + 3);
+		}
+	}
 	if (e->drag == DRAG_CREATE) {
 		x = edit_snap(e, x);
 		y = edit_snap(e, y);
@@ -562,6 +825,14 @@ bool edit_drag_box(const editor_t *e, int *x0, int *y0, int *x1, int *y1, int *k
 			*kind = OB_LINE;
 			return true;
 		}
+		if (e->handle >= 8 && o->kind == OB_POLY) {
+			// a corner: the side to it from the corner before
+			int k = e->handle - 8, p = k > 0 ? k - 1 : (o->closed ? o->npts - 1 : 1);
+			*x0 = o->pts[2 * p]; *y0 = o->pts[2 * p + 1];
+			*x1 = e->bx; *y1 = e->by;
+			*kind = OB_LINE;
+			return true;
+		}
 		handle_box(e, x0, y0, x1, y1);
 		*kind = o->kind == OB_OVAL ? OB_OVAL : OB_RECT;
 		return true;
@@ -594,10 +865,64 @@ void edit_release(editor_t *e, int x, int y) {
 	e->drag = DRAG_NONE;
 }
 
+// Ramer-Douglas-Peucker: keeps the points that matter for a line drawn
+// by hand, dropping the jitter (tol units). Marks what stays in keep[].
+static void simplify(const int16_t *p, int a, int b, int tol, uint8_t *keep) {
+	int i, best = -1;
+	long bd = 0, dx = p[2 * b] - p[2 * a], dy = p[2 * b + 1] - p[2 * a + 1];
+	long len2 = dx * dx + dy * dy;
+	for (i = a + 1; i < b; i++) {
+		long ex = p[2 * i] - p[2 * a], ey = p[2 * i + 1] - p[2 * a + 1], d;
+		// the distance from the chord, squared and scaled by its length squared
+		if (len2) { long c = ex * dy - ey * dx; d = c * c / len2; }
+		else d = ex * ex + ey * ey;
+		if (d > bd) { bd = d; best = i; }
+	}
+	if (best >= 0 && bd > (long)tol * tol) {
+		keep[best] = 1;
+		simplify(p, a, best, tol, keep);
+		simplify(p, best, b, tol, keep);
+	}
+}
+
+static void finish_pen(editor_t *e) {
+	static uint8_t keep[128];
+	obj_t *o;
+	int i, n = 0;
+	bool closed;
+	if (e->npoly < 3) { e->npoly = 0; edit_damage_all(e); return; }
+	memset(keep, 0, sizeof(keep));
+	keep[0] = keep[e->npoly - 1] = 1;
+	simplify(e->poly, 0, e->npoly - 1, 2, keep);
+	closed = e->npoly >= 6 && iabs(e->poly[0] - e->poly[2 * e->npoly - 2]) +
+		iabs(e->poly[1] - e->poly[2 * e->npoly - 1]) <= 8;
+	o = obj_new(OB_POLY);
+	if (!o) { e->npoly = 0; return; }
+	o->pts = pool_alloc((size_t)e->npoly * 4);
+	if (!o->pts) { obj_free(o); e->npoly = 0; return; }
+	for (i = 0; i < e->npoly; i++) {
+		if (!keep[i]) continue;
+		if (closed && i == e->npoly - 1 && n > 2) break;	// the end is the start
+		o->pts[2 * n] = e->poly[2 * i];
+		o->pts[2 * n + 1] = e->poly[2 * i + 1];
+		n++;
+	}
+	o->npts = (uint16_t)n;
+	o->closed = closed ? 1 : 0;
+	o->smooth = 1;
+	obj_fit_box(o);
+	e->npoly = 0;
+	add_obj(e, o, true);
+	edit_damage_all(e);
+}
+
 static void release(editor_t *e, int drag) {
 	card_t *c = edit_card(e);
 	if (!c) return;
 	switch (drag) {
+	case DRAG_PEN:
+		finish_pen(e);
+		return;
 	case DRAG_MOVE: {
 		int dx = e->bx - e->ax, dy = e->by - e->ay, i;
 		bool any = false;
@@ -619,6 +944,13 @@ static void release(editor_t *e, int drag) {
 		if (e->bx == e->ax && e->by == e->ay) return;
 		edit_checkpoint(e, false);
 		edit_damage_obj(e, o);
+		if (e->handle >= 8 && o->kind == OB_POLY && e->handle - 8 < o->npts) {
+			o->pts[2 * (e->handle - 8)] = (int16_t)e->bx;
+			o->pts[2 * (e->handle - 8) + 1] = (int16_t)e->by;
+			obj_fit_box(o);
+			edit_damage_obj(e, o);
+			return;
+		}
 		edit_drag_box(e, &x0, &y0, &x1, &y1, &k);
 		(void)k;
 		if (o->kind == OB_LINE) obj_set_box(o, x0, y0, x1 - x0, y1 - y0);
@@ -645,8 +977,16 @@ static void release(editor_t *e, int drag) {
 		bool tiny = w < 4 && h < 4;
 		if (!o) return;
 		if (o->kind == OB_LINE) {
+			obj_t *a, *b;
 			if (tiny) { obj_free(o); msg(e, "Drag to draw a line"); return; }
 			obj_set_box(o, e->ax, e->ay, e->bx - e->ax, e->by - e->ay);
+			// from one shape to another: a connector, which follows them
+			a = shape_at(e, e->ax, e->ay);
+			b = shape_at(e, e->bx, e->by);
+			if (a && b && a != b) {
+				obj_make_connector(o, a->name, b->name, false);
+				msg2(e, "Connected; /route elbow bends it, /connect none lets go: ", b->name);
+			}
 		} else if (tiny) {
 			// a click: the default size, from the click
 			obj_set_box(o, e->ax, e->ay, o->w, o->h);
@@ -932,6 +1272,7 @@ void edit_delete(editor_t *e) {
 void edit_duplicate(editor_t *e) {
 	card_t *c = edit_card(e);
 	obj_t *made[SEL_MAX];
+	static char old[SEL_MAX][OB_NAME_MAX];
 	int i, n = 0;
 	if (!c || !e->nsel) return;
 	edit_checkpoint(e, false);
@@ -940,12 +1281,14 @@ void edit_duplicate(editor_t *e) {
 		if (!o) break;
 		obj_move(o, 10, 10);
 		o->flags &= (uint8_t)~OBF_LOCKED;
+		memcpy(old[n], o->name, OB_NAME_MAX);
 		card_unique_obj_name(c, o->kind, o->name, OB_NAME_MAX);
 		if (!card_add(c, -1, o)) { obj_free(o); break; }
 		made[n++] = o;
 	}
+	fix_copies(c, made, old, n);
 	edit_select_none(e);
-	for (i = 0; i < n; i++) edit_select(e, made[i], true);
+	for (i = 0; i < n; i++) select_one(e, made[i], true);
 }
 
 void edit_order(editor_t *e, int how) {
@@ -1067,23 +1410,34 @@ int edit_paste(editor_t *e, const char *text, uint32_t len) {
 		n = 1;
 	}
 	edit_select_none(e);
+	{
+		static char old[SEL_MAX][OB_NAME_MAX];
+		obj_t *made[SEL_MAX];
+		int m = 0;
+		for (i = before; i < c->nobj && m < SEL_MAX; i++) {
+			memcpy(old[m], c->obj[i]->name, OB_NAME_MAX);
+			made[m++] = c->obj[i];
+		}
+		for (i = 0; i < m; i++) {
+			int k;
+			for (k = 0; k < before; k++)
+				if (!strcmp(c->obj[k]->name, made[i]->name)) {
+					card_unique_obj_name(c, made[i]->kind, made[i]->name, OB_NAME_MAX);
+					break;
+				}
+		}
+		fix_copies(c, made, old, m);
+	}
 	for (i = before; i < c->nobj; i++) {
 		obj_t *o = c->obj[i];
 		int k;
-		// a pasted name already on the card gets a new one; one pasted
-		// where its original still is moves aside
-		for (k = 0; k < before; k++) {
-			if (!strcmp(c->obj[k]->name, o->name)) {
-				card_unique_obj_name(c, o->kind, o->name, OB_NAME_MAX);
-				break;
-			}
-		}
+		// one pasted where its original still is moves aside
 		for (k = 0; k < before; k++)
 			if (c->obj[k]->x == o->x && c->obj[k]->y == o->y && c->obj[k]->kind == o->kind) {
 				obj_move(o, 10, 10);
 				break;
 			}
-		edit_select(e, o, true);
+		select_one(e, o, true);
 	}
 	return n;
 }
@@ -1211,6 +1565,155 @@ static void set_flag(editor_t *e, obj_t *o, void *p) {
 static void set_contrast(editor_t *e, obj_t *o, void *p) { (void)e; o->contrast = (int8_t)((cmd_arg_t *)p)->i0; }
 static void set_bright(editor_t *e, obj_t *o, void *p) { (void)e; o->bright = (int8_t)((cmd_arg_t *)p)->i0; }
 
+// The middle of the selection's box.
+static void sel_middle(const editor_t *e, int *cx, int *cy) {
+	int i, a = 0, b = 0, c = 0, d = 0;
+	for (i = 0; i < e->nsel; i++) {
+		int p, q, r, s;
+		obj_bounds(e->sel[i], &p, &q, &r, &s);
+		if (!i) { a = p; b = q; c = r; d = s; }
+		else { a = imin(a, p); b = imin(b, q); c = imax(c, r); d = imax(d, s); }
+	}
+	*cx = (a + c) / 2;
+	*cy = (b + d) / 2;
+}
+
+static void flip_sel(editor_t *e, bool down) {
+	int cx, cy, i, k;
+	sel_middle(e, &cx, &cy);
+	edit_checkpoint(e, false);
+	for (i = 0; i < e->nsel; i++) {
+		obj_t *o = e->sel[i];
+		if (o->flags & OBF_LOCKED) continue;
+		edit_damage_obj(e, o);
+		if (o->kind == OB_LINE) {
+			if (!down) { o->x = (int16_t)(2 * cx - o->x); o->w = (int16_t)-o->w; }
+			else { o->y = (int16_t)(2 * cy - o->y); o->h = (int16_t)-o->h; }
+		} else if (o->kind == OB_POLY) {
+			for (k = 0; k < o->npts; k++) {
+				if (!down) o->pts[2 * k] = (int16_t)(2 * cx - o->pts[2 * k]);
+				else o->pts[2 * k + 1] = (int16_t)(2 * cy - o->pts[2 * k + 1]);
+			}
+			obj_fit_box(o);
+		} else {
+			if (!down) o->x = (int16_t)(2 * cx - o->x - o->w);
+			else o->y = (int16_t)(2 * cy - o->y - o->h);
+			// a shape that is not symmetric shows it
+			o->flags ^= (uint8_t)(down ? OBF_FLIPY : OBF_FLIPX);
+		}
+		edit_damage_obj(e, o);
+	}
+}
+
+static void rotate_sel(editor_t *e, bool left) {
+	int cx, cy, i, k;
+	sel_middle(e, &cx, &cy);
+	edit_checkpoint(e, false);
+#define ROT_X(x, y) (left ? cx + ((y) - cy) : cx - ((y) - cy))
+#define ROT_Y(x, y) (left ? cy - ((x) - cx) : cy + ((x) - cx))
+	for (i = 0; i < e->nsel; i++) {
+		obj_t *o = e->sel[i];
+		if (o->flags & OBF_LOCKED) continue;
+		edit_damage_obj(e, o);
+		if (o->kind == OB_LINE) {
+			int ax = o->x, ay = o->y, bx = o->x + o->w, by = o->y + o->h;
+			int nax = ROT_X(ax, ay), nay = ROT_Y(ax, ay), nbx = ROT_X(bx, by), nby = ROT_Y(bx, by);
+			o->x = (int16_t)nax; o->y = (int16_t)nay;
+			o->w = (int16_t)(nbx - nax); o->h = (int16_t)(nby - nay);
+		} else if (o->kind == OB_POLY) {
+			for (k = 0; k < o->npts; k++) {
+				int x = o->pts[2 * k], y = o->pts[2 * k + 1];
+				o->pts[2 * k] = (int16_t)ROT_X(x, y);
+				o->pts[2 * k + 1] = (int16_t)ROT_Y(x, y);
+			}
+			obj_fit_box(o);
+		} else {
+			// the box turned about its middle: its middle moves, its
+			// sides swap
+			int mx = o->x + o->w / 2, my = o->y + o->h / 2;
+			int nmx = ROT_X(mx, my), nmy = ROT_Y(mx, my), w = o->w, h = o->h;
+			o->w = (int16_t)h; o->h = (int16_t)w;
+			o->x = (int16_t)(nmx - h / 2); o->y = (int16_t)(nmy - w / 2);
+		}
+		edit_damage_obj(e, o);
+	}
+#undef ROT_X
+#undef ROT_Y
+}
+
+static void set_smooth(editor_t *e, obj_t *o, void *p) {
+	(void)e;
+	if (o->kind == OB_POLY) o->smooth = (uint8_t)((cmd_arg_t *)p)->i0;
+}
+
+static void set_group(editor_t *e, obj_t *o, void *p) {
+	cmd_arg_t *c = p;
+	(void)e;
+	strncpy(o->group, c->a->v[1], sizeof(o->group) - 1);
+	o->group[sizeof(o->group) - 1] = 0;
+}
+static void set_range(editor_t *e, obj_t *o, void *p) {
+	cmd_arg_t *c = p;
+	(void)e;
+	o->vmin = (int16_t)c->i0;
+	o->vmax = (int16_t)c->i1;
+	if (o->value < o->vmin) o->value = o->vmin;
+	if (o->value > o->vmax) o->value = o->vmax;
+}
+static void set_value(editor_t *e, obj_t *o, void *p) {
+	cmd_arg_t *c = p;
+	(void)e;
+	o->value = (int16_t)c->i0;
+	if (o->kind == OB_SLIDER) {
+		if (o->value < o->vmin) o->value = o->vmin;
+		if (o->value > o->vmax) o->value = o->vmax;
+	} else if (o->kind == OB_CHECK || o->kind == OB_RADIO) {
+		o->value = o->value ? 1 : 0;
+	}
+}
+
+// A control in the middle of the card, selected: "button Next",
+// "list red, green, blue", "slider 0 10".
+static bool add_control(editor_t *e, int kind, const char *rest, const args_t *a) {
+	obj_t *o = obj_new(kind);
+	int gw = e->d->page.gw, gh = e->d->page.gh;
+	if (!o) { msg(e, "Out of memory"); return false; }
+	if (kind == OB_SLIDER) {
+		if (a->n >= 3 && is_num(a->v[1]) && is_num(a->v[2]) && num(a->v[2]) > num(a->v[1])) {
+			o->vmin = (int16_t)clampi(num(a->v[1]), -9999, 9998);
+			o->vmax = (int16_t)clampi(num(a->v[2]), o->vmin + 1, 9999);
+		}
+		o->value = o->vmin;
+	} else if (kind == OB_LIST) {
+		// "a, b, c": a line each
+		char b[200];
+		int k = 0;
+		const char *p = *rest ? rest : "One, Two, Three";
+		while (*p && k < (int)sizeof(b) - 1) {
+			if (*p == ',') { b[k++] = '\n'; p++; while (*p == ' ') p++; continue; }
+			b[k++] = *p++;
+		}
+		b[k] = 0;
+		obj_set_text(o, b, (uint32_t)k);
+	} else if (OB_IS_FLOW(kind)) {
+		if (*rest) obj_set_text(o, rest, (uint32_t)strlen(rest));
+	} else {
+		static const char *const def[] = { "OK", "Check", "Option", "", "", "" };
+		const char *t = *rest ? rest : def[kind - OB_BUTTON];
+		obj_set_text(o, t, (uint32_t)strlen(t));
+	}
+	o->x = (int16_t)((gw - o->w) / 2);
+	o->y = (int16_t)((gh - o->h) / 2);
+	if (e->snap > 1) {
+		o->x = (int16_t)(o->x / e->snap * e->snap);
+		o->y = (int16_t)(o->y / e->snap * e->snap);
+	}
+	o->font = (uint8_t)deck_font_index(e->d, "sans");
+	add_obj(e, o, true);
+	msg2(e, "Placed: ", obj_kind_name(kind));
+	return true;
+}
+
 static void lineup(editor_t *e, const char *how) {
 	int i, a, b, c, d;
 	if (e->nsel < 2) { msg(e, "Select two or more to line up"); return; }
@@ -1292,7 +1795,7 @@ static const char *const cmd_help[] = {
 	"hide | unhide | lock | unlock",
 	"contrast N | bright N   an image's, -100..100",
 	"notes TEXT          the speaker's notes for this card",
-	"transition cut | wipe | push [MS]",
+	"transition cut | wipe | push | iris | dissolve [MS]",
 	"advance SECONDS     go on by itself in a show (0: never)",
 	"grid N              snap to N units (0: off)",
 	"zoom 100 | 200 | 400 | fit   (Ctrl+= Ctrl+- Ctrl+0)",
@@ -1301,6 +1804,28 @@ static const char *const cmd_help[] = {
 	"image               place a picture (a file dialog)",
 	"print [pdf | ps] [this | N-M] [4up] [cut] [frame] [paper a4] [tray rear] [actual] [copies N]",
 	"print setup ...     only the settings, which the deck keeps",
+	"export svg [all]    this card (or every card) as SVG, for a drawing program or a web page",
+	"import FILE.svg     a drawing's outlines as polygons on this card",
+	"button LABEL        a button (its action: action ...)",
+	"check LABEL | radio LABEL   a check box, a radio button",
+	"field               a field to type into",
+	"slider [MIN MAX]    a slider",
+	"list A, B, C        a list to choose from",
+	"diamond | slant | pill | document | cylinder [TEXT]   flowchart shapes",
+	"connect [elbow] | none   an arrow from the first selected shape to the second; or let go",
+	"route straight | elbow   a connector's way",
+	"smooth | sharp      a polygon's corners: a curve through them, or straight",
+	"action go next | show NAME | speak TEXT ...   what a click does; nothing selected: on arriving",
+	"text WORDS          a check's or radio's label; a list's items: A, B, C",
+	"group NAME          radios that exclude each other",
+	"group | ungroup     the selection as one (Ctrl+G, Ctrl+Shift+G)",
+	"flip across | down   mirror the selection, about its middle",
+	"rotate [left]       a quarter turn, right (or left), about the selection's middle",
+	"range MIN MAX | value N   a slider's range, a control's value",
+	"app on | off        the deck opens as an app (F7: edit it)",
+	"loop on | off       the show goes round",
+	"script [deck | card]   edit a script in text: the deck's, the card's, or the selection's action",
+	"(go 'next) ...      Scheme, run at once: the message box",
 	"show | open | save | save as | new deck | help | tour",
 };
 
@@ -1312,7 +1837,8 @@ bool edit_command(editor_t *e, const char *line, const char **app) {
 	cmd_arg_t ca;
 	const char *w;
 	static const char *app_words[] = {
-		"show", "open", "save", "image", "print", "help", "tour", "quit", "zoom", NULL
+		"show", "open", "save", "image", "print", "help", "tour", "quit", "zoom", "script",
+		"export", "import", NULL
 	};
 	int i;
 
@@ -1515,7 +2041,7 @@ bool edit_command(editor_t *e, const char *line, const char **app) {
 	}
 	if (!strcmp(w, "transition")) {
 		card_t *c = e->d->card[e->cur];
-		static const char *tn[TR_KINDS] = { "cut", "wipe", "push" };
+		static const char *tn[TR_KINDS] = { "cut", "wipe", "push", "iris", "dissolve" };
 		int t = -1;
 		if (a.n < 2) { msg(e, "transition cut|wipe|push [MS]"); return false; }
 		for (i = 0; i < TR_KINDS; i++) if (!strcmp(a.v[1], tn[i])) t = i;
@@ -1534,6 +2060,157 @@ bool edit_command(editor_t *e, const char *line, const char **app) {
 	if (!strcmp(w, "grid")) {
 		e->snap = (a.n > 1 && is_num(a.v[1])) ? clampi(num(a.v[1]), 0, 100) : 0;
 		msg(e, e->snap > 1 ? "Snapping to the grid" : "Grid off");
+		return true;
+	}
+	if (!strcmp(w, "smooth") || !strcmp(w, "sharp")) {
+		ca.i0 = w[0] == 's' && w[1] == 'm';
+		return each_sel(e, set_smooth, &ca);
+	}
+	if (!strcmp(w, "connect")) {
+		// two shapes selected: an arrow from the first to the second;
+		// a line selected: "connect none" lets it go
+		bool elbow = a.n > 1 && !strcmp(a.v[1], "elbow");
+		if (a.n > 1 && !strcmp(a.v[1], "none")) {
+			int k;
+			edit_checkpoint(e, false);
+			for (k = 0; k < e->nsel; k++) { e->sel[k]->from[0] = 0; e->sel[k]->to[0] = 0; }
+			msg(e, "Not connected: the line stays where it is");
+			return true;
+		}
+		if (e->nsel != 2 || e->sel[0]->kind == OB_LINE || e->sel[1]->kind == OB_LINE) {
+			msg(e, "Select two shapes (Shift+click), the first where the arrow starts");
+			return false;
+		}
+		{
+			obj_t *o = obj_new(OB_LINE), *from = e->sel[0], *to = e->sel[1];
+			if (!o) { msg(e, "Out of memory"); return false; }
+			o->arrows = AR_END;
+			if (!obj_make_connector(o, from->name, to->name, elbow)) { obj_free(o); msg(e, "Out of memory"); return false; }
+			edit_select_none(e);
+			add_obj(e, o, true);
+			edit_route(e);
+			msg2(e, "Connected to ", to->name);
+		}
+		return true;
+	}
+	if (!strcmp(w, "route")) {
+		bool elbow = a.n > 1 && !strcmp(a.v[1], "elbow");
+		int k, done = 0;
+		if (a.n < 2 || (strcmp(a.v[1], "elbow") && strcmp(a.v[1], "straight"))) { msg(e, "route straight | elbow"); return false; }
+		edit_checkpoint(e, false);
+		for (k = 0; k < e->nsel; k++) {
+			obj_t *o = e->sel[k];
+			if (!obj_is_connector(o)) continue;
+			edit_damage_obj(e, o);
+			if (obj_make_connector(o, o->from, o->to, elbow)) done++;
+		}
+		edit_route(e);
+		edit_damage_all(e);
+		if (!done) { msg(e, "Select a connector (a line from shape to shape)"); return false; }
+		return true;
+	}
+	if (!strcmp(w, "text")) {
+		// the selection's text: a label, a list's items ("a, b, c")
+		const char *r = rest_of(line);
+		char b[400];
+		int k = 0;
+		obj_t *o;
+		if (e->nsel != 1) { msg(e, "Select one object"); return false; }
+		o = e->sel[0];
+		while (*r && k < (int)sizeof(b) - 1) {
+			if (o->kind == OB_LIST && *r == ',') { b[k++] = '\n'; r++; while (*r == ' ') r++; continue; }
+			b[k++] = *r++;
+		}
+		b[k] = 0;
+		edit_checkpoint(e, false);
+		edit_damage_obj(e, o);
+		obj_set_text(o, b, (uint32_t)k);
+		edit_damage_obj(e, o);
+		return true;
+	}
+	// -- controls (Phase 3), diagram shapes (Phase 5) --
+	{
+		static const char *const kinds[] = { "button", "check", "radio", "field", "slider", "list",
+			"diamond", "slant", "pill", "document", "cylinder", NULL };
+		for (i = 0; kinds[i]; i++) if (!strcmp(w, kinds[i])) break;
+		if (kinds[i]) return add_control(e, OB_BUTTON + i, rest_of(line), &a);
+	}
+	if (!strcmp(w, "action")) {
+		const char *r = rest_of(line);
+		char forms[400];
+		char **field = NULL;
+		if (e->nsel == 1) field = &e->sel[0]->action;
+		else if (e->nsel == 0) field = &e->d->card[e->cur]->action;
+		else { msg(e, "One object at a time (or none: the card's)"); return false; }
+		if (!*r) {
+			msg2(e, e->nsel ? "Its action: " : "On arriving: ", *field ? *field : "none");
+			return false;
+		}
+		if (!strcmp(r, "none")) {
+			edit_checkpoint(e, false);
+			obj_set_str(field, NULL);
+			msg(e, "No action");
+			return true;
+		}
+		if (!act_from_words(r, forms, sizeof(forms))) { msg(e, forms); return false; }
+		edit_checkpoint(e, false);
+		obj_set_str(field, forms);
+		msg2(e, e->nsel ? "Action: " : "On arriving: ", forms);
+		return true;
+	}
+	if (!strcmp(w, "group")) {
+		if (a.n < 2) {
+			// the selection made one: clicked, moved, copied together
+			card_t *c = edit_card(e);
+			uint16_t top = 0;
+			if (e->nsel < 2 || !c) { msg(e, "Select two or more to group (group NAME: radios)"); return false; }
+			for (i = 0; i < c->nobj; i++) if (c->obj[i]->gid > top) top = c->obj[i]->gid;
+			edit_checkpoint(e, false);
+			for (i = 0; i < e->nsel; i++) e->sel[i]->gid = (uint16_t)(top + 1);
+			msg(e, "Grouped (ungroup: Ctrl+Shift+G)");
+			return true;
+		}
+		ca.a = &a;
+		return each_sel(e, set_group, &ca);
+	}
+	if (!strcmp(w, "ungroup")) {
+		if (!e->nsel) { msg(e, "Select a group"); return false; }
+		edit_checkpoint(e, false);
+		for (i = 0; i < e->nsel; i++) e->sel[i]->gid = 0;
+		msg(e, "Ungrouped");
+		return true;
+	}
+	if (!strcmp(w, "flip")) {
+		bool down = a.n > 1 && (!strcmp(a.v[1], "down") || !strcmp(a.v[1], "vertical") || !strcmp(a.v[1], "v"));
+		if (!e->nsel) { msg(e, "Select something to flip"); return false; }
+		flip_sel(e, down);
+		return true;
+	}
+	if (!strcmp(w, "rotate")) {
+		if (!e->nsel) { msg(e, "Select something to turn"); return false; }
+		rotate_sel(e, a.n > 1 && (!strcmp(a.v[1], "left") || !strcmp(a.v[1], "-90")));
+		return true;
+	}
+	if (!strcmp(w, "range")) {
+		if (a.n < 3 || !is_num(a.v[1]) || !is_num(a.v[2]) || num(a.v[2]) <= num(a.v[1])) {
+			msg(e, "range MIN MAX");
+			return false;
+		}
+		ca.i0 = clampi(num(a.v[1]), -9999, 9998);
+		ca.i1 = clampi(num(a.v[2]), ca.i0 + 1, 9999);
+		return each_sel(e, set_range, &ca);
+	}
+	if (!strcmp(w, "value")) {
+		if (a.n < 2 || !is_num(a.v[1])) { msg(e, "value N"); return false; }
+		ca.i0 = clampi(num(a.v[1]), -9999, 9999);
+		return each_sel(e, set_value, &ca);
+	}
+	if (!strcmp(w, "app") || !strcmp(w, "loop")) {
+		bool on = a.n < 2 || strcmp(a.v[1], "off");
+		edit_checkpoint(e, true);
+		if (w[0] == 'a') e->d->app = on; else e->d->loop = on;
+		msg(e, w[0] == 'a' ? (on ? "Opens as an app (F7 edits it)" : "Opens to edit") :
+			(on ? "The show goes round" : "The show stops at the end"));
 		return true;
 	}
 	msg2(e, "Not a command: ", w);

@@ -40,7 +40,7 @@ typedef struct ms_val ms_val;	/* fully opaque here on purpose -- repl.c
 	 * internals) */
 
 typedef ms_val *(*ms_builtin)(ms_val *args);	/* the shape every
-	 * zapi_* function (sw/apps/repl/zapi.c) has, same as every bi_*
+	 * zapi_* function (sw/common/zapi/zapi.c) has, same as every bi_*
 	 * builtin inside ms.c itself -- args is a pre-evaluated Scheme
 	 * list, see ms_car()/ms_cdr() below for walking it */
 
@@ -62,6 +62,14 @@ long ms_heap_used(void);	/* cells currently live, out of MS_HEAP_SIZE
 	 * sw/apps/repl/Makefile's MS_SIZE_CFLAGS) */
 size_t ms_cell_size(void);	/* sizeof(ms_val) on THIS build/target --
 	 * varies with pointer width, don't assume a fixed number */
+
+/* -- embedder hooks (sw/ext/ms README, "Hooks: messages and stopping") --
+ * ms_log_hook gets every error/panic message instead of stderr;
+ * ms_step_hook is asked every few thousand evaluations whether to stop
+ * (true: a "stopped" panic, caught by ms_panic_recovery). */
+typedef enum { MS_LOG_INFO, MS_LOG_ERROR, MS_LOG_PANIC } ms_log_level_api;
+extern void (*ms_log_hook)(int level, const char *msg);
+extern bool (*ms_step_hook)(void);
 
 /* -- session lifecycle -- */
 extern ms_val *ms_global_env;
@@ -96,7 +104,7 @@ void ms_panic_disarm(void);
 extern int ms_out_of_memory_count;
 
 /* -- Zeitlos Scheme API registration/construction (docs/scheme_api.md)
- * -- NOT part of upstream ms.c. Lets sw/apps/repl/zapi.c register its
+ * -- NOT part of upstream ms.c. Lets sw/common/zapi/zapi.c register its
  * own C-backed Scheme procedures and build/inspect ms_val* arguments
  * and return values, without needing the real (still deliberately
  * opaque, see ms_val's own comment above) struct definition. See

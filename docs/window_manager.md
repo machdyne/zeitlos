@@ -2172,7 +2172,7 @@ every caller written before this feature existed is unaffected.
   `z_win_destroy()` on that specific id. This is the right choice
   for any app that can own MORE than one window at a time off a
   single pid: `repl`'s Scheme `win-create` (`docs/scheme_api.md`,
-  `sw/apps/repl/zapi.c`) is exactly that case (a single `repl`
+  `sw/common/zapi/zapi.c`) is exactly that case (a single `repl`
   process can have several Scheme-created windows open
   simultaneously, tracked in `zapi_windows[]`) -- setting
   `Z_WIN_FLAG_CLOSE_KILLS_OWNER` there would take down `repl` itself,

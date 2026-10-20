@@ -10,7 +10,9 @@
 deck_t *g_deck;
 
 static const char *kind_names[OB_KINDS] = {
-	"text", "rect", "rrect", "oval", "line", "poly", "image"
+	"text", "rect", "rrect", "oval", "line", "poly", "image",
+	"button", "check", "radio", "field", "slider", "list",
+	"diamond", "slant", "pill", "document", "cylinder"
 };
 
 const char *obj_kind_name(int kind) {
@@ -52,10 +54,17 @@ obj_t *obj_new(int kind) {
 	o->text_tone = 16;
 	o->size = 16;
 	o->pad = 4;
+	// a shape's text is in its middle
+	if (OB_IS_SHAPE(kind)) { o->align = AL_CENTER; o->valign = VA_MIDDLE; }
 	switch (kind) {
 	case OB_TEXT:
 		o->h = 24;
 		o->w = 200;
+		break;
+	case OB_DIAMOND: case OB_SLANT: case OB_PILL: case OB_DOC: case OB_DRUM:
+		o->w = 110; o->h = 60;
+		o->line_w = 1;
+		o->size = 14;
 		break;
 	case OB_RECT: case OB_OVAL:
 		o->line_w = 1;
@@ -70,6 +79,35 @@ obj_t *obj_new(int kind) {
 		break;
 	case OB_POLY:
 		o->line_w = 1;
+		break;
+	case OB_BUTTON:
+		o->w = 90; o->h = 24;
+		o->line_w = 1;
+		o->radius = 6;
+		o->align = AL_CENTER; o->valign = VA_MIDDLE;
+		o->size = 14;
+		break;
+	case OB_CHECK: case OB_RADIO:
+		o->w = 120; o->h = 18;
+		o->valign = VA_MIDDLE;
+		o->size = 14;
+		break;
+	case OB_FIELD:
+		o->w = 180; o->h = 24;
+		o->line_w = 1;
+		o->size = 14;
+		o->pad = 4;
+		break;
+	case OB_SLIDER:
+		o->w = 160; o->h = 18;
+		o->vmax = 100;
+		break;
+	case OB_LIST:
+		o->w = 140; o->h = 80;
+		o->line_w = 1;
+		o->size = 13;
+		o->pad = 3;
+		o->value = -1;
 		break;
 	default:
 		break;
@@ -170,6 +208,162 @@ void obj_set_box(obj_t *o, int x, int y, int w, int h) {
 	o->h = (int16_t)h;
 }
 
+// -- connectors --------------------------------------------------------------
+
+bool obj_is_connector(const obj_t *o) {
+	return (o->kind == OB_LINE || o->kind == OB_POLY) && o->from[0] && o->to[0];
+}
+
+static const obj_t *find_on(const card_t *c, const card_t *bg, const char *name) {
+	obj_t *o = c ? card_find_obj(c, name) : NULL;
+	if (!o && bg) o = card_find_obj(bg, name);
+	return o;
+}
+
+// Where the ray from o's centre towards (tx, ty) leaves o: its edge, as
+// its shape has it (an oval's ellipse, a diamond's sides, else the box).
+static void edge_toward(const obj_t *o, int tx, int ty, int *ex, int *ey) {
+	int x0, y0, x1, y1;
+	long cx, cy, dx, dy, hw, hh;
+	obj_bounds(o, &x0, &y0, &x1, &y1);
+	cx = (x0 + x1) / 2; cy = (y0 + y1) / 2;
+	hw = (x1 - x0) / 2; hh = (y1 - y0) / 2;
+	dx = tx - cx; dy = ty - cy;
+	if ((!dx && !dy) || hw <= 0 || hh <= 0) { *ex = (int)cx; *ey = (int)cy; return; }
+	if (o->kind == OB_OVAL) {
+		// t such that (t dx / hw)^2 + (t dy / hh)^2 = 1, in 1/4096
+		double a = (double)dx / hw, b = (double)dy / hh;
+		double t = 1.0 / __builtin_sqrt(a * a + b * b);
+		*ex = (int)(cx + dx * t + (dx > 0 ? 0.5 : -0.5));
+		*ey = (int)(cy + dy * t + (dy > 0 ? 0.5 : -0.5));
+		return;
+	}
+	if (o->kind == OB_DIAMOND) {
+		// |x| / hw + |y| / hh = 1
+		double t = 1.0 / ((dx < 0 ? -dx : dx) / (double)hw + (dy < 0 ? -dy : dy) / (double)hh);
+		*ex = (int)(cx + dx * t + (dx > 0 ? 0.5 : -0.5));
+		*ey = (int)(cy + dy * t + (dy > 0 ? 0.5 : -0.5));
+		return;
+	}
+	// the box: whichever side the ray meets first
+	if ((dx < 0 ? -dx : dx) * hh >= (dy < 0 ? -dy : dy) * hw) {
+		*ex = (int)(cx + (dx > 0 ? hw : -hw));
+		*ey = (int)(cy + dy * hw / (dx < 0 ? -dx : dx));
+		if (o->kind == OB_SLANT) {
+			// a side leans in by k over the height: the point on it at that height
+			long k = hw / 2 < hh ? hw / 2 : hh, h = 2 * hh, down = *ey - y0;
+			bool up = (dx > 0) != ((o->flags & OBF_FLIPX) != 0);
+			*ex += (int)((dx > 0 ? -1 : 1) * (up ? k * down : k * (h - down)) / h);
+		}
+	} else {
+		*ex = (int)(cx + dx * hh / (dy < 0 ? -dy : dy));
+		*ey = (int)(cy + (dy > 0 ? hh : -hh));
+	}
+}
+
+void obj_fit_box(obj_t *o) {
+	int i, a = 30000, b = 30000, c = -30000, d = -30000;
+	for (i = 0; i < o->npts; i++) {
+		int x = o->pts[2 * i], y = o->pts[2 * i + 1];
+		if (x < a) a = x;
+		if (x > c) c = x;
+		if (y < b) b = y;
+		if (y > d) d = y;
+	}
+	o->x = (int16_t)a; o->y = (int16_t)b;
+	o->w = (int16_t)(c - a); o->h = (int16_t)(d - b);
+}
+
+bool obj_make_connector(obj_t *o, const char *from, const char *to, bool elbow) {
+	if (o->kind != OB_LINE && o->kind != OB_POLY) return false;
+	copy_name(o->from, OB_NAME_MAX, from);
+	copy_name(o->to, OB_NAME_MAX, to);
+	if (elbow && (o->kind != OB_POLY || o->npts != 4)) {
+		int16_t *p = pool_alloc(4 * 2 * sizeof(int16_t));
+		if (!p) return false;
+		pool_free(o->pts);
+		o->pts = p;
+		o->npts = 4;
+		o->kind = OB_POLY;
+		o->closed = 0;
+		memset(p, 0, 8 * sizeof(int16_t));
+	} else if (!elbow && o->kind == OB_POLY) {
+		pool_free(o->pts);
+		o->pts = NULL;
+		o->npts = 0;
+		o->kind = OB_LINE;
+	}
+	return true;
+}
+
+int card_route(card_t *c, const card_t *bg, int (*chg)[4], int max) {
+	int i, n = 0;
+	for (i = 0; i < c->nobj; i++) {
+		obj_t *o = c->obj[i];
+		const obj_t *a, *b;
+		int ax0, ay0, ax1, ay1, bx0, by0, bx1, by1, acx, acy, bcx, bcy;
+		int old[4];
+		bool moved = false;
+		if (!obj_is_connector(o)) continue;
+		a = find_on(c, bg, o->from);
+		b = find_on(c, bg, o->to);
+		if (!a || !b || a == o || b == o) continue;
+		obj_bounds(o, &old[0], &old[1], &old[2], &old[3]);
+		obj_bounds(a, &ax0, &ay0, &ax1, &ay1);
+		obj_bounds(b, &bx0, &by0, &bx1, &by1);
+		acx = (ax0 + ax1) / 2; acy = (ay0 + ay1) / 2;
+		bcx = (bx0 + bx1) / 2; bcy = (by0 + by1) / 2;
+		if (o->kind == OB_LINE) {
+			int sx, sy, ex, ey;
+			edge_toward(a, bcx, bcy, &sx, &sy);
+			edge_toward(b, acx, acy, &ex, &ey);
+			if (o->x != sx || o->y != sy || o->w != ex - sx || o->h != ey - sy) {
+				o->x = (int16_t)sx; o->y = (int16_t)sy;
+				o->w = (int16_t)(ex - sx); o->h = (int16_t)(ey - sy);
+				moved = true;
+			}
+		} else if (o->npts == 4) {
+			int16_t q[8];
+			int dx = bcx - acx, dy = bcy - acy;
+			if ((dx < 0 ? -dx : dx) >= (dy < 0 ? -dy : dy)) {
+				// across, along, across: out of a's side, into b's
+				// (the ends on the shapes' own outlines, straight out from their middles)
+				int mx = (dx > 0 ? (ax1 + bx0) : (ax0 + bx1)) / 2, sx, sy, ex, ey;
+				edge_toward(a, dx > 0 ? ax1 + 1000 : ax0 - 1000, acy, &sx, &sy);
+				edge_toward(b, dx > 0 ? bx0 - 1000 : bx1 + 1000, bcy, &ex, &ey);
+				q[0] = (int16_t)sx; q[1] = (int16_t)acy;
+				q[2] = (int16_t)mx; q[3] = (int16_t)acy;
+				q[4] = (int16_t)mx; q[5] = (int16_t)bcy;
+				q[6] = (int16_t)ex; q[7] = (int16_t)bcy;
+			} else {
+				// down, across, down
+				int my = (dy > 0 ? (ay1 + by0) : (ay0 + by1)) / 2, sx, sy, ex, ey;
+				edge_toward(a, acx, dy > 0 ? ay1 + 1000 : ay0 - 1000, &sx, &sy);
+				edge_toward(b, bcx, dy > 0 ? by0 - 1000 : by1 + 1000, &ex, &ey);
+				q[0] = (int16_t)acx; q[1] = (int16_t)sy;
+				q[2] = (int16_t)acx; q[3] = (int16_t)my;
+				q[4] = (int16_t)bcx; q[5] = (int16_t)my;
+				q[6] = (int16_t)bcx; q[7] = (int16_t)ey;
+			}
+			if (memcmp(q, o->pts, sizeof(q))) {
+				memcpy(o->pts, q, sizeof(q));
+				obj_fit_box(o);
+				moved = true;
+			}
+		}
+		if (moved) {
+			if (n < max && chg) {
+				int x0, y0, x1, y1;
+				obj_bounds(o, &x0, &y0, &x1, &y1);
+				chg[2 * n][0] = old[0]; chg[2 * n][1] = old[1]; chg[2 * n][2] = old[2]; chg[2 * n][3] = old[3];
+				chg[2 * n + 1][0] = x0; chg[2 * n + 1][1] = y0; chg[2 * n + 1][2] = x1; chg[2 * n + 1][3] = y1;
+			}
+			n++;
+		}
+	}
+	return n;
+}
+
 // -- cards ---------------------------------------------------------------
 
 card_t *card_new(const char *name) {
@@ -187,6 +381,7 @@ void card_free(card_t *c) {
 	for (i = 0; i < c->nobj; i++) obj_free(c->obj[i]);
 	pool_free(c->obj);
 	pool_free(c->notes);
+	pool_free(c->action);
 	pool_free(c->script);
 	pool_free(c);
 }
@@ -199,7 +394,8 @@ card_t *card_dup(const card_t *c) {
 	n->trans = c->trans;
 	n->trans_ms = c->trans_ms;
 	n->advance_ms = c->advance_ms;
-	if (!dup_str(&n->notes, c->notes) || !dup_str(&n->script, c->script)) {
+	if (!dup_str(&n->notes, c->notes) || !dup_str(&n->script, c->script) ||
+		!dup_str(&n->action, c->action)) {
 		card_free(n);
 		return NULL;
 	}

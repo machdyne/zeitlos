@@ -91,6 +91,15 @@ typedef struct {
 	// a degenerate segment; the callback should tolerate it.
 	void (*line)(void *user, int x0, int y0, int x1, int y1);
 
+	// The outlines themselves, for a program that keeps the geometry
+	// (slide's /import): each subpath once, its points in order in
+	// device pixels (curves already flattened), `closed` if it ended
+	// with a close, and its shape's paint. Points go into z_svg_t's
+	// `pts` (a subpath longer than it is cut). May be NULL; with span
+	// and line NULL as well, no edges are kept at all.
+	void (*outline)(void *user, const float *xy, int n, bool closed,
+		bool filled, int level, bool stroked);
+
 	void *user;
 
 } z_svg_sink_t;
@@ -124,6 +133,10 @@ typedef struct {
 	int				max_edges;
 
 	z_svg_sink_t	sink;
+
+	// For sink.outline: room for one subpath's points (x, y pairs).
+	float			*pts;
+	int				max_pts;
 
 	// Filled in by z_svg_render().
 	float			src_w, src_h;	// the document's own dimensions

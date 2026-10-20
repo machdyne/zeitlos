@@ -423,7 +423,7 @@ like from outside was a permanently blank window, a window manager
 timing out waiting for a redraw acknowledgement, and no response to any
 key -- because the app never reached its message loop at all.
 
-`sw/apps/repl/zapi.c`'s `(random n)` has the same exposure: `(random
+`sw/common/zapi/zapi.c`'s `(random n)` has the same exposure: `(random
 16)` will hang the REPL.
 
 Poker no longer calls it -- `poker.c` supplies raw words from

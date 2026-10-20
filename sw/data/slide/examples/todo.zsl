@@ -1,0 +1,15 @@
+; slide deck (docs/slide_app.md) -- an example: a to-do list (docs/slide_scripting.md)
+(deck (version 1)
+	(page "classic" landscape)
+	(title "To do")
+	(app)
+	(script ";; A list of things to do: type one, Add; choose one, Done.\n(define (lines s)\n  (let loop ((i 0) (start 0) (out '()))\n    (cond ((= i (string-length s)) (reverse (if (> i start) (cons (substring s start i) out) out)))\n          ((char=? (string-ref s i) #\\newline) (loop (+ i 1) (+ i 1) (cons (substring s start i) out)))\n          (else (loop (+ i 1) start out)))))\n(define (unlines l)\n  (cond ((null? l) \"\") ((null? (cdr l)) (car l)) (else (string-append (car l) \"\\n\" (unlines (cdr l))))))\n(define (add)\n  (let ((t (get-text \"new\")))\n    (if (> (string-length t) 0)\n        (begin (set-text \"items\" (unlines (append (lines (get-text \"items\")) (list t))))\n               (set-text \"new\" \"\")))))\n(define (done)\n  (let ((chosen (get-value \"items\")))\n    (if chosen\n        (begin (set-text \"items\" (unlines (remove (lambda (x) (equal? x chosen)) (lines (get-text \"items\")))))\n               (set-value \"items\" -1)))))")
+	(background "band"
+		(rect "band" (box 0 0 512 30) (fill shade 12) (line 0 16))
+		(text "title" (box 8 6 400 20) (font "m6x13" 13) (color 0) (pad 0) (text "To do")))
+
+	(card "todo" (background "band")
+		(field "new" (box 30 46 330 26) (font "sans" 16) (pad 4) (text "") (action "(add)"))
+		(button "add" (box 372 46 110 26) (radius 6) (font "sans" 15) (align center middle) (text "Add") (action "(add)"))
+		(list "items" (box 30 84 330 230) (font "sans" 16) (pad 3) (text "Try slide's controls\nWrite a deck\nPrint it") (value -1))
+		(button "done" (box 372 84 110 26) (radius 6) (font "sans" 15) (align center middle) (text "Done") (action "(done)")))))

@@ -85,6 +85,11 @@
 : (delay expr)
 :   A promise to evaluate expr later, once, with force.
 :   > (force (delay (+ 1 2)))  =>  3
+: (define-macro (name args...) body...)
+:   A macro: called with its arguments as written, not evaluated; what
+:   its body returns (a form, usually made with quasiquote) is then
+:   evaluated in its place. Not hygienic. slide's (after ...) is one.
+:   > (begin (define-macro (twice x) `(begin ,x ,x)) (twice 1))  =>  1
 
 @ Numbers
 : (+ n...)
@@ -428,6 +433,9 @@
 :   The first expression in a string, as data, not evaluated; an
 :   eof-object if there is none.
 :   > (read "(+ 1 2)")  =>  (+ 1 2)
+: (macroexpand-1 form)
+:   What a macro call turns into, once; any other form as it is.
+:   > (begin (define-macro (twice x) `(begin ,x ,x)) (macroexpand-1 '(twice y)))  =>  (begin y y)
 : (force promise)
 :   A delay's value, worked out the first time.
 :   > (force (delay (* 6 7)))  =>  42

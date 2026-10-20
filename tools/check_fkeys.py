@@ -35,7 +35,7 @@ import sys
 root = sys.argv[1] if len(sys.argv) > 1 else os.path.join(
     os.path.dirname(os.path.abspath(__file__)), '..', 'sw')
 
-EXEMPT = ('common/zkbd.c', 'apps/term/term.c', 'apps/repl/zapi.c',
+EXEMPT = ('common/zkbd.c', 'apps/term/term.c', 'common/zapi/zapi.c',
           'apps/hello_win/hello_win.c')
 HOME_OK = ('apps/term/', 'apps/web/', 'apps/files/')
 

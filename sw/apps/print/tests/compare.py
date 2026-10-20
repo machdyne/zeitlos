@@ -16,6 +16,14 @@ Exit 0 when every page is within MAX_PERCENT (default 1) of its ink.
 import sys
 from PIL import Image, ImageFilter
 
+def page(prefix, p, pages):
+    # pdftoppm pads the number to the width of the last one (pdf-01 of 10)
+    import os
+    for name in ["%s-%0*d.pgm" % (prefix, w, p) for w in (1, 2, 3)]:
+        if os.path.exists(name):
+            return name
+    return "%s-%d.pgm" % (prefix, p)
+
 def ink(path):
     im = Image.open(path).convert("L")
     return im.point(lambda v: 255 if v < 128 else 0)
@@ -25,8 +33,8 @@ def main():
     limit = float(sys.argv[4]) if len(sys.argv) > 4 else 1.0
     worst = 0.0
     for p in range(1, pages + 1):
-        a = ink("%s-%d.pgm" % (ours, p))
-        b = ink("%s-%d.pgm" % (theirs, p))
+        a = ink(page(ours, p, pages))
+        b = ink(page(theirs, p, pages))
         if a.size != b.size:
             print("page %d: sizes differ %s %s" % (p, a.size, b.size))
             sys.exit(1)

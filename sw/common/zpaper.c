@@ -524,7 +524,7 @@ bool zp_decode(const zp_rec_t *rec, zp_op_t *op) {
 		return true;
 	}
 	case ZP_TEXT:
-		if (n < 104) return false;
+		if (n < 100) return false;
 		rd_paint(p, &op->paint);
 		op->xf.a = rds32(p + 12);
 		op->xf.b = rds32(p + 16);

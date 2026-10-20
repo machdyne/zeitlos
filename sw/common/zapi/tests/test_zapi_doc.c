@@ -6,7 +6,7 @@
  * against the real zapi.txt that tools/gen_zapi.py makes (see the
  * Makefile beside this), read whole and a byte at a time.
  *
- *   make -C sw/apps/repl/tests
+ *   make -C sw/common/zapi/tests
  */
 
 #include <stdio.h>

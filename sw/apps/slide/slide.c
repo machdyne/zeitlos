@@ -35,19 +35,28 @@
 
 #include "../../common/zpool.h"
 #include "../../common/zprint.h"
+#include "../../common/zpsvg.h"
 #include "deck.h"
 #include "deckio.h"
 #include "render.h"
 #include "edit.h"
 #include "show.h"
 #include "printjob.h"
+#include "act.h"
+#include "script.h"
+#include "../../common/zspeak.h"
 
 // -- layout --------------------------------------------------------------------
 
-#define TOOL_W      24		// the tool column
+// A deck run as an app (deck->app, F7) shows just the card: no tools,
+// no bar, no margin.
+static bool app_mode;
+static void set_app_mode(bool on);
+
+#define TOOL_W      (app_mode ? 0 : 24)		// the tool column
 #define TOOL_H      20
-#define MARGIN      6
-#define BAR_H       30		// the property strip and the status line
+#define MARGIN      (app_mode ? 0 : 6)
+#define BAR_H       (app_mode ? 0 : 30)		// the property strip and the status line
 #define SW_SIZE     11		// a fill swatch
 #define FONT        (&z_font_5x8)
 
@@ -261,9 +270,30 @@ static void overlays(zc_target_t *t, int *bx0, int *by0, int *bx1, int *by1) {
 		if ((s) > d) d = (s); \
 	} while (0)
 
-	if (ed.tool != TOOL_BROWSE) {
-		for (i = 0; i < ed.nsel; i++) {
-			int hx[8], hy[8], n = edit_handles(ed.sel[i], hx, hy), k;
+	if (ed.tool != TOOL_BROWSE && !app_mode) {
+		bool one_group = ed.nsel > 1 && ed.sel[0]->gid;
+		for (i = 1; i < ed.nsel && one_group; i++) if (ed.sel[i]->gid != ed.sel[0]->gid) one_group = false;
+		if (one_group) {
+			// a group is one thing: its corners only
+			int gx0 = 32767, gy0 = 32767, gx1 = -32768, gy1 = -32768, k;
+			for (i = 0; i < ed.nsel; i++) {
+				int x0, y0, x1, y1;
+				obj_bounds(ed.sel[i], &x0, &y0, &x1, &y1);
+				if (x0 < gx0) gx0 = x0;
+				if (y0 < gy0) gy0 = y0;
+				if (x1 > gx1) gx1 = x1;
+				if (y1 > gy1) gy1 = y1;
+			}
+			for (k = 0; k < 4; k++) {
+				int px = to_px(k & 1 ? gx1 : gx0), py = to_px(k & 2 ? gy1 : gy0);
+				GROW(px - 2, py - 2, px + 2, py + 2);
+				if (t) zc_fill_rect_dev(t, px - 2, py - 2, 5, 5, &x_);
+			}
+		}
+		for (i = 0; i < ed.nsel && !one_group; i++) {
+			int hx[EDIT_HANDLES_MAX], hy[EDIT_HANDLES_MAX], n = edit_handles(ed.sel[i], hx, hy), k;
+			// a polygon's corners are moved one selected at a time
+			if (ed.nsel > 1 && n > 8) n = 8;
 			for (k = 0; k < n; k++) {
 				int px = to_px(hx[k]), py = to_px(hy[k]);
 				GROW(px - 2, py - 2, px + 2, py + 2);
@@ -372,16 +402,17 @@ static void update_card(void) {
 	int a, b, c, d;
 	int px0 = 0, py0 = 0, px1 = -1, py1 = -1;
 	if (!cbuf) return;
+	edit_route(&ed);			// connectors follow what moved
 	if (ed.all_dirty) {
 		px0 = scroll_x; py0 = scroll_y; px1 = scroll_x + bw; py1 = scroll_y + bh;
 		card_target(&t, cbuf);
-		render_card(&t, &xf, ed.d, edit_card(&ed), ed.tool == TOOL_BROWSE ? RENDER_SHOW : RENDER_EDIT);
+		render_card(&t, &xf, ed.d, edit_card(&ed), (ed.tool == TOOL_BROWSE || app_mode) ? RENDER_SHOW : RENDER_EDIT);
 	} else if (ed.dx1 >= ed.dx0) {
 		units_rect_to_px(ed.dx0, ed.dy0, ed.dx1, ed.dy1, &px0, &py0, &px1, &py1);
 		card_target(&t, cbuf);
 		zc_clip(&t, px0, py0, px1, py1);
 		if (!zc_clip_empty(&t))
-			render_card(&t, &xf, ed.d, edit_card(&ed), ed.tool == TOOL_BROWSE ? RENDER_SHOW : RENDER_EDIT);
+			render_card(&t, &xf, ed.d, edit_card(&ed), (ed.tool == TOOL_BROWSE || app_mode) ? RENDER_SHOW : RENDER_EDIT);
 	}
 	edit_damage_clear(&ed);
 	overlays(NULL, &a, &b, &c, &d);
@@ -464,6 +495,11 @@ static void make_icons(void) {
 			zc_path_line(&p, ZC_I(14), ZC_I(14));
 			zc_stroke(&t, &p, ZC_I(1), true, &w, &ink);
 			break;
+		case TOOL_PEN:			// a hand-drawn wave
+			zc_path_move(&p, ZC_I(1), ZC_I(11));
+			zc_path_cubic(&p, ZC_I(5), ZC_I(1), ZC_I(9), ZC_I(17), ZC_I(15), ZC_I(4));
+			zc_stroke(&t, &p, ZC_I(2), false, &w, &ink);
+			break;
 		case TOOL_IMAGE:
 			zc_frame_rect(&t, &p, ZC_I(1), ZC_I(2), ZC_I(14), ZC_I(12), ZC_I(1), &ink);
 			zc_path_reset(&p);
@@ -479,6 +515,7 @@ static void make_icons(void) {
 }
 
 static void draw_tools(void) {
+	if (app_mode) return;
 	int i;
 	z_clip_t content;
 	uint32_t mask = (1u << (TOOL_W - 2)) - 1;
@@ -517,6 +554,7 @@ static obj_t *one_sel(void) { return ed.nsel == 1 ? ed.sel[0] : NULL; }
 static void draw_status(void);
 
 static void draw_bar(void) {
+	if (app_mode) return;
 	int y = BAR_Y(), i;
 	obj_t *o = one_sel();
 	z_win_fill_rect(&win, TOOL_W, y, z_win_content_w(&win) - TOOL_W, BAR_H, 0);
@@ -554,7 +592,7 @@ static void draw_bar(void) {
 		char t[40];
 		str_t s = { t, 0, sizeof(t) };
 		int x = FONTBTN_X + TOOL_W;
-		if (o && o->kind == OB_TEXT) {
+		if (o && OB_HAS_FONT(o->kind)) {
 			s_add(&s, ed.d->font[o->font < ed.d->nfont ? o->font : 0]);
 			s_add(&s, " ");
 			s_int(&s, o->size);
@@ -566,7 +604,7 @@ static void draw_bar(void) {
 		for (i = 0; i < 3; i++) {
 			static const char *lab[3] = { "B", "I", "U" };
 			int bx = STYLE_X(i) + TOOL_W;
-			bool on = o && o->kind == OB_TEXT && (o->style & (1 << i));
+			bool on = o && OB_HAS_FONT(o->kind) && (o->style & (1 << i));
 			z_win_fill_rect(&win, bx, y + 3, 12, SW_SIZE + 2, on ? 1 : 0);
 			if (!on) z_win_fill_rect(&win, bx + 1, y + 4, 10, SW_SIZE, 0);
 			z_win_draw_text2(&win, bx + 4, y + 6, lab[i], on ? 0 : 1, on ? 1 : 0, FONT);
@@ -576,6 +614,7 @@ static void draw_bar(void) {
 }
 
 static void draw_status(void) {
+	if (app_mode) return;
 	int y = BAR_Y() + 18;
 	int w = z_win_content_w(&win);
 	char t[160];
@@ -889,6 +928,8 @@ static bool load_path(const char *p) {
 	remember_dir(p);
 	render_set_dir(last_dir);
 	set_deck(d);
+	// a deck made to be used opens to be used (F7 edits it)
+	set_app_mode(d->app);
 	return true;
 }
 
@@ -1026,6 +1067,146 @@ static void do_print(const char *line) {
 		"Printing: see the print window");
 }
 
+// -- /export svg (docs/slide_app.md, "Diagrams") -------------------------------
+//
+// A card as its print job would draw it (printjob_pages), the job kept
+// in memory, then written as SVG (sw/common/zpsvg.h) a buffer at a time.
+
+typedef struct { uint8_t *b; uint32_t n, cap; } membuf_t;
+
+static bool mem_write(void *ctx, const void *d, uint32_t len) {
+	membuf_t *m = ctx;
+	if (m->n + len > m->cap) {
+		uint32_t cap = m->cap ? m->cap * 2 : 16384;
+		uint8_t *nb;
+		while (cap < m->n + len) cap *= 2;
+		nb = pool_realloc(m->b, cap);
+		if (!nb) return false;
+		m->b = nb;
+		m->cap = cap;
+	}
+	memcpy(m->b + m->n, d, len);
+	m->n += len;
+	return true;
+}
+
+typedef struct { int fd; uint32_t n; char b[512]; bool ok; } svgout_t;
+
+static bool svg_flush(svgout_t *o) {
+	if (o->n && fs_write_chunk(o->fd, o->b, (int)o->n) != (int)o->n) o->ok = false;
+	o->n = 0;
+	return o->ok;
+}
+
+static bool svg_put(void *ctx, const char *s, uint32_t len) {
+	svgout_t *o = ctx;
+	while (len) {
+		uint32_t k = sizeof(o->b) - o->n;
+		if (k > len) k = len;
+		memcpy(o->b + o->n, s, k);
+		o->n += k; s += k; len -= k;
+		if (o->n == sizeof(o->b) && !svg_flush(o)) return false;
+	}
+	return o->ok;
+}
+
+static uint8_t *svg_load(void *ctx, const char *p, uint32_t *len) { (void)ctx; return load_file(p, len); }
+static void svg_release(void *ctx, uint8_t *p) { (void)ctx; pool_free(p); }
+static bool svg_font(void *ctx, const char *name, const zc_font_t **out) {
+	(void)ctx;
+	*out = render_font_named(name);
+	return *out != NULL;
+}
+
+// Card `ci` to `file`; false with ed.msg said.
+static bool export_card(int ci, const char *file) {
+	membuf_t m = { NULL, 0, 0 };
+	zp_writer_t w;
+	svgout_t *o;
+	zp_svg_t sv;
+	bool ok;
+	zp_writer_init(&w, mem_write, &m);
+	if (!printjob_pages(ed.d, ci, 1, &w) || w.failed) {
+		pool_free(m.b);
+		copy_str(ed.msg, sizeof(ed.msg), "Cannot export: not enough memory for the card");
+		return false;
+	}
+	o = pool_alloc(sizeof(svgout_t));
+	if (!o) { pool_free(m.b); copy_str(ed.msg, sizeof(ed.msg), "Cannot export: not enough memory"); return false; }
+	o->n = 0;
+	o->ok = true;
+	o->fd = fs_open_write(file);
+	if (o->fd < 0) {
+		pool_free(o); pool_free(m.b);
+		copy_str(ed.msg, sizeof(ed.msg), "Cannot write the file");
+		return false;
+	}
+	memset(&sv, 0, sizeof(sv));
+	sv.put = svg_put;
+	sv.load = svg_load;
+	sv.release = svg_release;
+	sv.font = svg_font;
+	sv.ctx = o;
+	ok = zp_svg_page(&sv, m.b, m.n, 0) && svg_flush(o);
+	fs_close_handle(o->fd);
+	pool_free(o);
+	pool_free(m.b);
+	if (!ok) copy_str(ed.msg, sizeof(ed.msg), "Cannot write the file (is the disk full?)");
+	return ok;
+}
+
+// /export svg [all]: this card (a file chosen in the save dialog), or
+// every card (deck-01.svg, deck-02.svg ... beside the name chosen).
+static void do_export(const char *line) {
+	char p[200], file[200];
+	bool all = false, svg = false;
+	const char *r = line;
+	int i;
+	size_t l;
+	while (*r == '/' || *r == ' ') r++;
+	r += 6;
+	while (*r) {
+		while (*r == ' ') r++;
+		if (!strncmp(r, "svg", 3)) svg = true;
+		else if (!strncmp(r, "all", 3)) all = true;
+		else if (*r) { copy_str(ed.msg, sizeof(ed.msg), "export svg [all]"); return; }
+		while (*r && *r != ' ') r++;
+	}
+	(void)svg;			// the only kind so far
+	sibling(p, sizeof(p), ".svg");
+	if (!z_dialog_save(&dlg, last_dir, p, file, sizeof(file))) return;
+	l = strlen(file);
+	if ((l < 4 || strcmp(file + l - 4, ".svg")) && l + 4 < sizeof(file)) { strcat(file, ".svg"); l += 4; }
+	if (!all) {
+		if (fs_size(file) > 0 &&
+			z_dialog_confirm(&dlg, "Export", "That file exists. Replace it?", Z_DIALOG_YES_NO) != Z_DIALOG_YES)
+			return;
+		copy_str(ed.msg, sizeof(ed.msg), "Writing the card as SVG");
+		draw_status();
+		if (export_card(ed.cur, file)) {
+			copy_str(ed.msg, sizeof(ed.msg), "Wrote ");
+			copy_str(ed.msg + 6, (int)sizeof(ed.msg) - 6, file);
+		}
+		return;
+	}
+	for (i = 0; i < ed.d->ncard; i++) {
+		char f[208];
+		// name.svg -> name-01.svg
+		memcpy(f, file, l - 4);
+		f[l - 4] = '-';
+		f[l - 3] = (char)('0' + (i + 1) / 10 % 10);
+		f[l - 2] = (char)('0' + (i + 1) % 10);
+		copy_str(f + l - 1, (int)sizeof(f) - (int)(l - 1), ".svg");
+		copy_str(ed.msg, sizeof(ed.msg), "Writing card ");
+		ed.msg[13] = (char)('0' + (i + 1) / 10 % 10);
+		ed.msg[14] = (char)('0' + (i + 1) % 10);
+		ed.msg[15] = 0;
+		draw_status();
+		if (!export_card(i, f)) return;
+	}
+	copy_str(ed.msg, sizeof(ed.msg), "Wrote every card as SVG");
+}
+
 // True when it is fine to throw the deck away (saved, or the person said so).
 static bool may_discard(void) {
 	int r;
@@ -1044,7 +1225,8 @@ static void do_help(void) {
 		"pictures, show the deck on the whole screen.\n\n"
 		"b v t\tBrowse, select, text\n"
 		"r u o\tRectangle, rounded, oval\n"
-		"l a p i\tLine, arrow, polygon, image\n"
+		"l a p\tLine, arrow, polygon\n"
+		"f i\tFreehand, image\n"
 		"Shift+drag\tSquares, circles, 45 degrees\n"
 		"Enter\tEdit the text box; end a polygon\n"
 		"/ or F4\tCommands: font, fill, line, align, "
@@ -1054,16 +1236,22 @@ static void do_help(void) {
 		"Esc\tStop loading pictures (Enter: again)\n"
 		"F5\tShow (Shift+F5: from card 1)\n"
 		"F6\tAll cards: drag to reorder\n"
+		"F7\tUse the deck as an app (F7: edit)\n"
+		"/button\tControls; b (browse) uses them\n"
+		"/(...)\tScheme, at once; /script edits scripts\n"
+		"/diamond\tFlowcharts; /connect joins two shapes\n"
+		"/export svg\tThe card for the web (/import a drawing)\n"
 		"PgUp/PgDn\tPrevious, next card\n"
 		"Ctrl+= - 0\tZoom in, out, fit\n"
 		"Ctrl+M\tNew card\n"
 		"Ctrl+Z/Y\tUndo, redo\n"
 		"Ctrl+C/X/V\tCopy, cut, paste\n"
 		"Ctrl+D\tDuplicate\n"
+		"Ctrl+G\tGroup (Ctrl+Shift+G: ungroup)\n"
 		"Ctrl+N/O/S\tNew, open, save\n"
 		"Ctrl+P\tPrint (/print pdf: a PDF file)\n\n"
 		"In a show: Space or a click goes on, Left goes back, "
-		"B blanks, Esc ends.";
+		"B blanks, T speaks the notes, Esc ends.";
 	z_dialog_help(&dlg, "Slide help", help, "slide_app");
 }
 
@@ -1100,12 +1288,50 @@ static void image_ref(const char *img, char *out, int cap) {
 static obj_t *fit_obj;
 static int16_t fit_box[4];
 
+// /import [FILE.svg]: a drawing's outlines as polygons (edit_import_svg)
+static void import_file(const char *p) {
+	uint32_t n;
+	uint8_t *b = load_file(p, &n);
+	if (!b) { copy_str(ed.msg, sizeof(ed.msg), "Cannot read the file"); return; }
+	copy_str(ed.msg, sizeof(ed.msg), "Importing the drawing");
+	draw_status();
+	edit_import_svg(&ed, (const char *)b, n);
+	pool_free(b);
+	ed.tool = TOOL_SELECT;
+	draw_tools();
+	update_title();
+}
+
+static void do_import(const char *line) {
+	char p[200];
+	const char *r = line;
+	while (*r == '/' || *r == ' ') r++;
+	r += 6;
+	while (*r == ' ') r++;
+	if (*r) {
+		if (*r == '/' || !path[0]) copy_str(p, sizeof(p), r);
+		else {
+			copy_str(p, sizeof(p), last_dir);
+			if (p[0] && p[strlen(p) - 1] != '/') copy_str(p + strlen(p), (int)(sizeof(p) - strlen(p)), "/");
+			copy_str(p + strlen(p), (int)(sizeof(p) - strlen(p)), r);
+		}
+	} else if (!z_dialog_open(&dlg, last_dir, p, sizeof(p))) return;
+	import_file(p);
+}
+
+static bool is_svg_name(const char *p) {
+	size_t n = strlen(p);
+	return n >= 4 && p[n - 4] == '.' && (p[n - 3] | 32) == 's' && (p[n - 2] | 32) == 'v' && (p[n - 1] | 32) == 'g';
+}
+
 static void do_image(void) {
 	char p[200], ref[200];
 	obj_t *o;
 	int w = ed.d->page.gw * 2 / 3, h = w * 3 / 4;
 	ed.tool = TOOL_SELECT;
 	if (!z_dialog_open(&dlg, last_dir, p, sizeof(p))) return;
+	// a drawing comes in as shapes, to edit, not as a picture
+	if (is_svg_name(p)) { import_file(p); return; }
 	image_ref(p, ref, sizeof(ref));
 	o = obj_new(OB_IMAGE);
 	if (!o) return;
@@ -1223,13 +1449,149 @@ static void do_paste(void) {
 
 // -- the show ---------------------------------------------------------------------------------------------
 
-static void do_show(int from) {
-	int end;
+// -- controls and actions in the window (act.h) -------------------------------------------
+//
+// With the browse tool, or a deck run as an app, the controls work:
+// buttons, checks, fields ... and arriving at a card runs its action.
+
+static player_t pl;
+static int pl_card = -1;			// the card the player last saw
+static deck_t *pl_deck;
+static char open_wanted[200];		// a deck an action asked for, opened from the loop
+
+static bool playing(void) { return app_mode || (ed.tool == TOOL_BROWSE && mode != MODE_SORTER && !ed.on_bg); }
+
+static void pl_sync(void) {
+	pl.d = ed.d;
+	pl.cur = ed.cur;
+}
+
+static int next_card(void) {
+	if (ed.cur + 1 < ed.d->ncard) return ed.cur + 1;
+	return ed.d->loop ? 0 : ed.cur;
+}
+
+// The card's look changed (a value, a field's text, a shown object).
+static void card_changed(void) {
+	if (!app_mode) ed.modified = true;		// a deck run as an app keeps no state
+	edit_damage_all(&ed);
+	update_card();
+}
+
+static void h_go(void *u, int to) {
+	(void)u;
+	edit_goto(&ed, to);
+	player_reset(&pl);
+	pl_sync();
+	pl_card = to;
+	update_card();
+	draw_bar();
+	act_arrived(ed.d, to);
+	script_card(ed.d, to);
+}
+static void h_changed(void *u) { (void)u; card_changed(); }
+static void h_eval(void *u, deck_t *d, int cur, const char *f) { (void)u; script_eval(d, cur, f, NULL, 0); }
+static void h_clicked(void *u, deck_t *d, int cur, obj_t *o) { (void)u; script_clicked(d, cur, o); }
+static int h_current(void *u) { (void)u; return ed.cur; }
+
+static void forward_msg(z_msg_t *msg, void *user);
+
+// While a script runs: Esc stops it; the window's own messages are
+// answered (a redraw, its region); keys and the mouse wait for it to
+// finish -- they are dropped.
+static bool stop_check(void) {
+	z_msg_t m;
+	int n;
+	for (n = 0; n < 8 && z_msg_read(&m) == Z_OK; n++) {
+		if (m.subject == Z_WM_KEY) {
+			if (m.obj.type == Z_UINT32 && Z_WM_UNPACK_KEY_PRESSED(m.obj.val.uint32) &&
+				Z_WM_UNPACK_KEY_KEYSYM(m.obj.val.uint32) == 0x1b) {
+				copy_str(ed.msg, sizeof(ed.msg), "Stopped the script (Esc)");
+				return true;
+			}
+			continue;
+		}
+		if (m.subject == Z_WM_MOUSE || m.subject == Z_WM_WHEEL) continue;
+		if (script_window_msg(&m)) continue;
+		forward_msg(&m, NULL);
+	}
+	return false;
+}
+static void h_open(void *u, const char *p) { (void)u; copy_str(open_wanted, sizeof(open_wanted), p); }
+static void h_msg(void *u, const char *m) { (void)u; copy_str(ed.msg, sizeof(ed.msg), m); draw_status(); }
+static void h_speak(void *u, const char *t) { (void)u; z_speak(t, 0); }
+static void h_run(void *u, const char *c) { (void)u; show_launch(c); }
+static uint32_t h_now(void *u) { (void)u; return z_uptime_ticks(); }
+
+static void act_host_editor(void) {
+	act_host_t h;
+	memset(&h, 0, sizeof(h));
+	h.go = h_go; h.changed = h_changed; h.open_deck = h_open; h.message = h_msg;
+	h.speak = h_speak; h.run = h_run; h.now = h_now; h.tick_hz = Z_TICK_HZ;
+	h.eval = h_eval; h.clicked = h_clicked; h.current = h_current;
+	act_init(&h);
+	script_stop_check(stop_check);
+}
+
+// Called from the main loop: a new card (or deck) since last time, in
+// browse or app mode, runs the card's action.
+static deck_t *scripted;			// the deck whose script has run (in use)
+
+static void pl_check_card(void) {
+	if (pl_deck != ed.d) { act_reset(); player_reset(&pl); pl_deck = ed.d; pl_card = -1; scripted = NULL; }
+	if (!playing()) {
+		if (pl.focus || pl.pressed) player_reset(&pl);
+		pl_card = -1;
+		if (scripted) { script_stop_timers(); scripted = NULL; }
+		return;
+	}
+	if (scripted != ed.d) {
+		// the deck starts being used: its own script first
+		scripted = ed.d;
+		script_deck(ed.d, ed.cur);
+	}
+	if (pl_card != ed.cur) {
+		player_reset(&pl);
+		pl_sync();
+		pl_card = ed.cur;
+		act_arrived(ed.d, ed.cur);
+		script_card(ed.d, ed.cur);
+	}
+}
+
+static void wanted_size(int *w, int *h);
+
+// F7: a deck run as an app, or edited.
+static void set_app_mode(bool on) {
+	int w, h;
+	if (on == app_mode) return;
 	edit_cancel(&ed);
 	edit_text_end(&ed);
+	edit_select_none(&ed);
+	player_reset(&pl);
+	pl_card = -1;
+	app_mode = on;
+	if (on) { zoom = 0; scroll_x = scroll_y = 0; mode = MODE_EDIT; }
+	wanted_size(&w, &h);
+	layout();
+	z_win_resize(&win, (uint32_t)w, (uint32_t)h);
+	repaint();
+}
+
+static void do_show(int from) {
+	int end;
+	const char *o;
+	edit_cancel(&ed);
+	edit_text_end(&ed);
+	player_reset(&pl);
 	end = show_run(ed.d, from, &win);
+	act_host_editor();
+	pl_card = -1;
+	scripted = NULL;			// the show ran it; browsing again runs it again
 	if (mode != MODE_SORTER) edit_goto(&ed, end);
 	edit_damage_all(&ed);
+	o = show_open_request();
+	if (o) copy_str(open_wanted, sizeof(open_wanted), o);
 	// wm repaints the desktop and asks for this window's content
 }
 
@@ -1237,10 +1599,154 @@ static void do_show(int from) {
 
 static bool quit_now;
 
+// -- scripts, edited in `text` ---------------------------------------------------------
+//
+// /script writes the script (the deck's, the card's, or a control's
+// action) to a file in /tmp and opens it in `text`. While it is open,
+// slide looks at the file now and then; each time it is saved, the deck
+// takes it -- checked first: its parentheses must close.
+
+static struct {
+	char		path[80];
+	int			kind;			// 0 deck, 1 card, 2 object's action
+	int			card;
+	char		obj[OB_NAME_MAX];
+	int			size;			// as last seen
+	uint32_t	sum;
+	uint32_t	looked;
+	bool		on;
+} sedit;
+
+static uint32_t sum_of(const char *b, int n) {
+	uint32_t h = 2166136261u;
+	int i;
+	for (i = 0; i < n; i++) h = (h ^ (uint8_t)b[i]) * 16777619u;
+	return h;
+}
+
+static char **sedit_field(void) {
+	card_t *c;
+	if (sedit.kind == 0) return &ed.d->script;
+	if (sedit.card < 0 || sedit.card >= ed.d->ncard) return NULL;
+	c = ed.d->card[sedit.card];
+	if (sedit.kind == 1) return &c->script;
+	{
+		obj_t *o = card_find_obj(c, sedit.obj);
+		if (!o && c->bg >= 0) o = card_find_obj(ed.d->bg[c->bg], sedit.obj);
+		return o ? &o->action : NULL;
+	}
+}
+
+static void do_script(const char *line) {
+	const char *r = line;
+	char **f;
+	int n;
+	while (*r == '/' || *r == ' ') r++;
+	r += 6;						// "script"
+	while (*r == ' ') r++;
+	memset(&sedit, 0, sizeof(sedit));
+	sedit.card = ed.cur;
+	if (!strncmp(r, "deck", 4)) sedit.kind = 0;
+	else if (!strncmp(r, "card", 4) || ed.nsel != 1) sedit.kind = 1;
+	else { sedit.kind = 2; copy_str(sedit.obj, sizeof(sedit.obj), ed.sel[0]->name); }
+	f = sedit_field();
+	if (!f) return;
+	{
+		// a file name from what it is: /tmp/deck.scm, /tmp/card-intro.scm
+		str_t s = { sedit.path, 0, sizeof(sedit.path) };
+		const char *nm = sedit.kind == 0 ? "deck" : sedit.kind == 1 ? ed.d->card[ed.cur]->name : sedit.obj;
+		int i;
+		s_add(&s, Z_DIR_TMP "/");
+		s_add(&s, sedit.kind == 0 ? "" : sedit.kind == 1 ? "card-" : "action-");
+		for (i = 0; nm[i] && s.n < s.cap - 6; i++) {
+			char c = nm[i];
+			char t[2] = { (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ? c : '-', 0 };
+			s_add(&s, t);
+		}
+		s_add(&s, ".scm");
+	}
+	{
+		const char *head = sedit.kind == 0 ?
+			";; The deck's script: run when the deck starts being used.\n;; (when-clicked \"ok\" (go 'next))\n\n" :
+			sedit.kind == 1 ? ";; This card's script: run on arriving at it.\n;; (every 1000 (set-text \"clock\" (current-time)))\n\n" :
+			"";
+		const char *body = *f ? *f : "";
+		int hl = *f ? 0 : (int)strlen(head), bl = (int)strlen(body);
+		char *b = pool_alloc((size_t)(hl + bl + 2));
+		if (!b) { copy_str(ed.msg, sizeof(ed.msg), "Out of memory"); return; }
+		memcpy(b, head, (size_t)hl);
+		memcpy(b + hl, body, (size_t)bl);
+		n = hl + bl;
+		if (!n || b[n - 1] != '\n') b[n++] = '\n';
+		fs_write_file(sedit.path, b, n);
+		sedit.size = n;
+		sedit.sum = sum_of(b, n);
+		pool_free(b);
+	}
+	sedit.on = true;
+	sedit.looked = z_uptime_ticks();
+	z_launch_arg_set(sedit.path);
+	if (!z_proc_run("text")) { copy_str(ed.msg, sizeof(ed.msg), "Could not start text"); sedit.on = false; return; }
+	copy_str(ed.msg, sizeof(ed.msg), "Editing the script in text: save it (Ctrl+S) and slide takes it");
+}
+
+// A second or so after the last look: has the file been saved?
+static void sedit_poll(void) {
+	int n;
+	char *b, **f, err[64];
+	if (!sedit.on || z_uptime_ticks() - sedit.looked < Z_TICK_HZ) return;
+	sedit.looked = z_uptime_ticks();
+	n = fs_size(sedit.path);
+	if (n < 0) { sedit.on = false; return; }
+	if (n > 16000) { copy_str(ed.msg, sizeof(ed.msg), "That script is too long (16 KB)"); draw_status(); return; }
+	b = pool_alloc((size_t)n + 1);
+	if (!b) return;
+	if (fs_read_file(sedit.path, b, n) != n) { pool_free(b); return; }
+	b[n] = 0;
+	if (n == sedit.size && sum_of(b, n) == sedit.sum) { pool_free(b); return; }
+	sedit.size = n;
+	sedit.sum = sum_of(b, n);
+	if (!script_check(b, err, sizeof(err))) {
+		copy_str(ed.msg, sizeof(ed.msg), "The script was not taken: ");
+		copy_str(ed.msg + strlen(ed.msg), (int)(sizeof(ed.msg) - strlen(ed.msg)), err);
+		pool_free(b);
+		draw_status();
+		return;
+	}
+	f = sedit_field();
+	if (f) {
+		// trailing blank lines are not kept
+		while (n && (b[n - 1] == '\n' || b[n - 1] == ' ')) b[--n] = 0;
+		edit_checkpoint(&ed, sedit.kind == 0);
+		obj_set_str(f, n ? b : NULL);
+		ed.modified = true;
+		// in use: the deck's script again, so its new definitions count
+		if (sedit.kind == 0 && scripted == ed.d) scripted = NULL;
+		copy_str(ed.msg, sizeof(ed.msg), sedit.kind == 0 ? "The deck's script was saved" :
+			sedit.kind == 1 ? "The card's script was saved" : "The action was saved");
+		update_title();
+	}
+	pool_free(b);
+	draw_status();
+}
+
 static void run_command(const char *line) {
 	const char *app = NULL;
 	int gw = ed.d->page.gw, gh = ed.d->page.gh;
 	ed.msg[0] = 0;
+	{
+		// the message box: Scheme, at once, on this card
+		const char *r = line;
+		while (*r == ' ' || *r == '/') r++;
+		if (*r == '(') {
+			char out[sizeof(ed.msg) - 4];
+			bool ok = script_eval(ed.d, ed.cur, r, out, sizeof(out));
+			copy_str(ed.msg, sizeof(ed.msg), ok ? "=> " : "Error: ");
+			copy_str(ed.msg + strlen(ed.msg), (int)(sizeof(ed.msg) - strlen(ed.msg)), out);
+			edit_damage_all(&ed);
+			return;
+		}
+	}
 	edit_command(&ed, line, &app);
 	if (ed.d->page.gw != gw || ed.d->page.gh != gh) {
 		// a new page shape: the window follows it
@@ -1261,6 +1767,9 @@ static void run_command(const char *line) {
 	else if (!strcmp(app, "image")) do_image();
 	else if (!strcmp(app, "help")) do_help();
 	else if (!strcmp(app, "print")) do_print(line);
+	else if (!strcmp(app, "export")) do_export(line);
+	else if (!strcmp(app, "import")) do_import(line);
+	else if (!strcmp(app, "script")) do_script(line);
 	else if (!strcmp(app, "zoom")) {
 		const char *r = line;
 		int z = 0, vx, vy;
@@ -1285,7 +1794,7 @@ static void run_command(const char *line) {
 static const struct { char key; int tool; } tool_keys[] = {
 	{ 'b', TOOL_BROWSE }, { 'v', TOOL_SELECT }, { 't', TOOL_TEXT }, { 'r', TOOL_RECT },
 	{ 'u', TOOL_RRECT }, { 'o', TOOL_OVAL }, { 'l', TOOL_LINE }, { 'a', TOOL_ARROW },
-	{ 'p', TOOL_POLY }, { 'i', TOOL_IMAGE },
+	{ 'p', TOOL_POLY }, { 'f', TOOL_PEN }, { 'i', TOOL_IMAGE },
 };
 
 static void set_tool(int t) {
@@ -1479,9 +1988,36 @@ static void open_prompt(const char *pre) {
 	draw_status();
 }
 
+// A key in a deck run as an app: only what a reader needs.
+static void app_key(uint32_t k, bool shift) {
+	int to = -1;
+	if (k == Z_KEY_HELP) { do_help(); return; }
+	if (k == Z_KEY_F5) { do_show(shift ? 0 : ed.cur); return; }
+	if (k == Z_KEY_RIGHT || k == Z_KEY_DOWN || k == Z_KEY_PAGEDOWN) to = next_card();
+	else if (k == Z_KEY_LEFT || k == Z_KEY_UP || k == Z_KEY_PAGEUP)
+		to = ed.cur > 0 ? ed.cur - 1 : ed.d->loop ? ed.d->ncard - 1 : 0;
+	else if (k == Z_KEY_HOME) to = 0;
+	else if (k == Z_KEY_END) to = ed.d->ncard - 1;
+	if (to >= 0 && to != ed.cur) {
+		edit_goto(&ed, to);
+		update_card();
+	}
+}
+
 static void handle_key(uint32_t k, uint8_t mods) {
 	bool ctrl = (mods & Z_KBD_MOD_CTRL) != 0, shift = (mods & Z_KBD_MOD_SHIFT) != 0;
 	ed.msg[0] = 0;
+
+	if (mode != MODE_COMMAND) {
+		// F7, slide's own: the deck as an app, or back to editing it
+		if (k == Z_KEY_F7) { set_app_mode(!app_mode); return; }
+		if (playing() && !ctrl) {
+			bool r;
+			pl_sync();
+			if (player_key(&pl, k, &r)) { if (r) card_changed(); return; }
+		}
+		if (app_mode) { app_key(k, shift); return; }
+	}
 
 	if (mode == MODE_COMMAND) {
 		if (menu_on) { menu_key(k); return; }
@@ -1516,7 +2052,7 @@ static void handle_key(uint32_t k, uint8_t mods) {
 	if (k == Z_KEY_RENAME && mode != MODE_SORTER) {
 		// edit in place: the text box's text, else the name
 		if (ed.text_obj) return;
-		if (ed.nsel == 1 && ed.sel[0]->kind == OB_TEXT) {
+		if (ed.nsel == 1 && OB_EDITS_TEXT(ed.sel[0]->kind)) {
 			edit_text_begin(&ed, ed.sel[0], -1, -1);
 			update_card();
 		} else {
@@ -1556,6 +2092,11 @@ static void handle_key(uint32_t k, uint8_t mods) {
 		case 'x': do_copy(true); break;
 		case 'v': do_paste(); break;
 		case 'd': edit_duplicate(&ed); break;
+		case 'g': {
+			const char *app;
+			edit_command(&ed, shift ? "ungroup" : "group", &app);
+			break;
+		}
 		case 'a': edit_select_all(&ed); break;
 		case 'm': edit_new_card(&ed, false); break;
 		case 's': do_save(); break;
@@ -1591,7 +2132,7 @@ static void handle_key(uint32_t k, uint8_t mods) {
 		break;
 	case 0x0d:
 		if (ed.npoly) edit_finish_poly(&ed);
-		else if (ed.nsel == 1 && ed.sel[0]->kind == OB_TEXT) edit_text_begin(&ed, ed.sel[0], -1, -1);
+		else if (ed.nsel == 1 && OB_EDITS_TEXT(ed.sel[0]->kind)) edit_text_begin(&ed, ed.sel[0], -1, -1);
 		else if (ed.nsel == 1 && render_load_retry(ed.sel[0])) edit_damage_obj(&ed, ed.sel[0]);
 		break;
 	case Z_KEY_DELETE: case 0x7f:
@@ -1654,7 +2195,7 @@ static void bar_click(int cx, int cy) {
 			return;
 		}
 	}
-	if (cx >= FONTBTN_X + TOOL_W && cx < FONTBTN_X + TOOL_W + FONTBTN_W && o && o->kind == OB_TEXT) {
+	if (cx >= FONTBTN_X + TOOL_W && cx < FONTBTN_X + TOOL_W + FONTBTN_W && o && OB_HAS_FONT(o->kind)) {
 		// the next family; shift-click... the size is the "size" command
 		const char *cur = ed.d->font[o->font < ed.d->nfont ? o->font : 0];
 		int k, next = 0;
@@ -1738,10 +2279,17 @@ static void handle_mouse(uint32_t packed) {
 			draw_bar();
 			return;
 		}
-		if (ed.tool == TOOL_BROWSE) {
-			edit_goto(&ed, shift ? ed.cur - 1 : ed.cur + 1);
-			update_card();
-			draw_bar();
+		if (playing()) {
+			// a control takes the click; elsewhere it turns the card
+			bool took;
+			pl_sync();
+			if (player_press(&pl, to_units(cx - card_x + scroll_x), to_units(cy - card_y + scroll_y), &took))
+				card_changed();
+			if (!took) {
+				edit_goto(&ed, shift ? ed.cur - 1 : next_card());
+				update_card();
+				draw_bar();
+			}
 			return;
 		}
 		edit_press(&ed, to_units(cx - card_x + scroll_x), to_units(cy - card_y + scroll_y), shift, dbl);
@@ -1761,6 +2309,11 @@ static void handle_mouse(uint32_t packed) {
 				update_title();
 			}
 		}
+		return;
+	}
+	if (playing() && (pl.pressed || pl.drag)) {
+		int ux = to_units(cx - card_x + scroll_x), uy = to_units(cy - card_y + scroll_y);
+		if (up ? player_release(&pl, ux, uy) : player_motion(&pl, ux, uy)) card_changed();
 		return;
 	}
 	if (ed.drag || ed.npoly) {
@@ -1854,6 +2407,7 @@ int main(void) {
 	dlg.parent = &win;
 	dlg.on_msg = forward_msg;
 	dlg.user = NULL;
+	act_host_editor();
 
 	if (have_arg) load_path(arg);
 	layout();
@@ -1865,6 +2419,8 @@ int main(void) {
 		uint32_t mouse_last = 0;
 
 		while (z_msg_read(&msg) == Z_OK) {
+			// a window a script made has its own messages
+			if (script_window_msg(&msg)) continue;
 			switch (msg.subject) {
 			case Z_WM_KEY:
 				if (msg.obj.type != Z_UINT32) break;
@@ -1943,6 +2499,19 @@ int main(void) {
 		}
 		if (mouse_pending) handle_mouse(mouse_last);
 		if (quit_now) break;
+		if (open_wanted[0]) {
+			// an action's (open ...): another deck, from here rather
+			// than from inside the action that asked
+			char p[200];
+			copy_str(p, sizeof(p), open_wanted);
+			open_wanted[0] = 0;
+			if (may_discard()) load_path(p);
+			repaint();
+		}
+		pl_check_card();
+		sedit_poll();
+		if (act_waiting()) act_tick();
+		if (script_timers()) script_tick();
 		update_title();
 		if (render_loading()) {
 			// nothing waiting: a slice of a picture (docs/responsive.md),
@@ -1964,7 +2533,7 @@ int main(void) {
 			continue;
 		}
 		if (load_msg) load_status();
-		z_proc_wait(Z_TICK_HZ / 30);
+		z_proc_wait(act_waiting() || script_timers() || pl.pressed || pl.drag ? Z_TICK_HZ / 50 : Z_TICK_HZ / 30);
 	}
 	z_win_destroy(&win);
 	return 0;

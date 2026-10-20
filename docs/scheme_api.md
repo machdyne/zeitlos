@@ -18,13 +18,13 @@ the host. Not yet tried on hardware: `help` and `apropos` themselves.
 
 | | |
 |---|---|
-| `sw/apps/repl/zapi.c` | the Zeitlos procedures, each with its reference entry |
-| `sw/apps/repl/zapi_scheme.txt` | entries for the Scheme language: ms's builtins, special forms, standard library |
+| `sw/common/zapi/zapi.c` | the Zeitlos procedures, each with its reference entry |
+| `sw/common/zapi/zapi_scheme.txt` | entries for the Scheme language: ms's builtins, special forms, standard library |
 | `tools/gen_zapi.py` | makes the reference, and fails if it does not match repl |
 | `/docs/zapi.txt` | the reference in flash (`CORE_FILES`), made at build time |
 | `docs/zapi.md` | the same as a page, committed: `make zapi` |
-| `sw/apps/repl/zapi_doc.c` | the lookup behind `help` and `apropos` |
-| `sw/apps/repl/ms_api.h` | what a procedure written in C can use of ms |
+| `sw/common/zapi/zapi_doc.c` | the lookup behind `help` and `apropos` |
+| `sw/common/zapi/ms_api.h` | what a procedure written in C can use of ms |
 
 ## Adding a procedure
 
@@ -92,7 +92,7 @@ build (`make flash_apps`, a release) until the entry is written.
 | `make zapi` | writes `docs/zapi.md`; its date changes only when something else does |
 | `$(OUTDIR)/files/docs/zapi.txt` | the flash copy, a `make core-files` target |
 | `zrelease check` | fails if `docs/zapi.md` is stale (the date line is not compared) |
-| `make -C sw/apps/repl/tests` | runs the Scheme examples through a desktop ms and compares their values, then tests `zapi_doc.c` |
+| `make -C sw/common/zapi/tests` | runs the Scheme examples through a desktop ms and compares their values, then tests `zapi_doc.c` |
 
 `/docs/zapi.txt` is about 26KB, from `CORE_RESERVE` (48K, of which the
 files in flash use 46KB; [flash_apps.md](flash_apps.md)).

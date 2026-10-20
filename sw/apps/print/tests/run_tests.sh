@@ -46,8 +46,8 @@ else
 fi
 if $H --pwg "$OUT/nup.pwg" "$OUT/nup.zpp" >/dev/null &&
 	python3 tests/pwg_decode.py "$OUT/nup.pwg" > "$OUT/nup.log" &&
-	grep -q "2 pages, well formed" "$OUT/nup.log" && grep -q iso_a4 "$OUT/nup.log"; then
-	ok "four to a sheet on A4, cut marks: 2 sheets"
+	grep -q "3 pages, well formed" "$OUT/nup.log" && grep -q iso_a4 "$OUT/nup.log"; then
+	ok "four to a sheet on A4, cut marks: 3 sheets for 10 cards"
 else
 	bad "four to a sheet"; cat "$OUT/nup.log"
 fi

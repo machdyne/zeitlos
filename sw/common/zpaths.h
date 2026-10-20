@@ -167,6 +167,7 @@
 /* slide (docs/slide_app.md) */
 #define Z_DIR_SLIDE_DATA          "/data/slide"
 #define Z_PATH_SLIDE_TOUR         "/data/slide/tour.zsl"
+#define Z_DIR_SLIDE_EXAMPLES      "/data/slide/examples"
 
 /* tts (docs/tts.md, docs/tts_data.md) */
 #define Z_PATH_TTS_PACK           "/data/tts/speech/en.spk"

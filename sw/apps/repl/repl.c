@@ -84,10 +84,10 @@
 #include "../../common/zdns.h"
 #include "../../common/zconnect.h"
 #include "../../common/znet.h"	// Z_NET_SSH_PREPARE, see the `ssh` command
-#include "ms_api.h"
+#include "../../common/zapi/ms_api.h"
 #include "te_bridge.h"
 #include "page.h"
-#include "zapi.h"
+#include "../../common/zapi/zapi.h"
 
 // hostname/IP resolution for the "telnet <ip-or-hostname>" command
 // below now goes through sw/common/zdns.h's z_resolve_host() -- see

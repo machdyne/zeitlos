@@ -111,7 +111,7 @@ board boots to a desktop with no sdcard ([core apps in flash](#core-apps-in-flas
 | App | Description |
 |-----|-------------|
 | [sheet](docs/sheet_app.md) | Spreadsheet |
-| [slide](docs/slide_app.md) | Cards, slides and pages: shapes, text in public-domain fonts, pictures, full-screen shows, printing |
+| [slide](docs/slide_app.md) | Cards, slides and pages: shapes, text in public-domain fonts, pictures, full-screen shows, printing; buttons and fields, and [scripts](docs/slide_scripting.md) in Scheme -- decks that are apps |
 | [print](docs/print.md) | Printing: driverless IPP (PDF or PWG raster) or PostScript on port 9100, and PDF or PostScript files |
 | [web](docs/web_app.md) | Web browser: HTTP/1.1 and TLS 1.3, gzip, in-place images and SVG; [Gopher and Gemini](docs/gopher_gemini.md) |
 | [read](docs/read_app.md) | Text reader for files of unlimited size (with rendered Markdown) |

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Generates sw/apps/repl/ms_stdlib.h from sw/ext/ms/ms_stdlib.l (the
+Generates an app's ms_stdlib.h (repl's, slide's) from sw/ext/ms/ms_stdlib.l (the
 `ms` submodule's own standard library source).
 
 Building Machdyne Scheme with -DLIX removes all file I/O -- no
@@ -16,7 +16,7 @@ write that one line out. Nothing Zeitlos-specific about the format --
 this is upstream's own expected embedding contract, not something we
 invented.
 
-Regenerated automatically by sw/apps/repl/Makefile (a build
+Regenerated automatically by sw/apps/repl/Makefile and sw/apps/slide/Makefile (a build
 dependency on both this script and sw/ext/ms/ms_stdlib.l -- see that
 Makefile) whenever the submodule's stdlib source is newer than the
 last generated header, so `git submodule update` pulling in an

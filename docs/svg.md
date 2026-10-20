@@ -184,12 +184,21 @@ at the document size and panned, exactly like a large bitmap.
 A file larger than the buffer is refused rather than truncated: half a
 drawing is not a drawing.
 
+**The outlines themselves.** A program that keeps the geometry rather
+than the pixels -- slide's `/import` ([slide_app.md](slide_app.md#diagrams))
+-- sets `sink.outline` and gives `pts` room for a subpath's points: each
+subpath comes once, its points in order (curves flattened, in device
+pixels), whether it was closed, and its shape's fill level and stroke.
+With no span or line sink as well, no edges are kept, so any drawing
+fits.
+
 ## Testing
 
     cc -std=gnu99 -I sw/common -o /tmp/t sw/common/tests/test_svg.c \
        sw/common/zsvg.c -lm && /tmp/t
 
-35 checks. Because the renderer emits spans rather than pixels, the
+49 checks (the outlines among them: a rect's four corners in order, an
+open stroke left open, subpaths, a flattened circle). Because the renderer emits spans rather than pixels, the
 test collects them into a small bitmap and asserts on what was
 actually covered — the only thing that catches a rasterizer being
 subtly wrong.

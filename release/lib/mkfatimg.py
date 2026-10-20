@@ -517,6 +517,8 @@ DEMO_FILES = [
     (zcard_dir("Z_PATH_AUTOMATE_DEFAULT") + "/store.zds",    "sw/data/demo/store.zds"),
     (zcard_dir("Z_PATH_AUTOMATE_DEFAULT") + "/lang.zds",     "sw/data/demo/lang.zds"),
     (zcard_dir("Z_PATH_AUTOMATE_DEFAULT") + "/mandel.c",     "sw/data/demo/mandel.c"),
+    (zcard_dir("Z_PATH_AUTOMATE_DEFAULT") + "/slide.zds",    "sw/data/demo/slide.zds"),
+    (zcard_dir("Z_PATH_AUTOMATE_DEFAULT") + "/slide_demo.zsl", "sw/data/demo/slide_demo.zsl"),
     (zcard("Z_DIR_MEDIA_IMAGES", "squirrel.pgm"), "sw/data/demo/squirrel.pgm"),
     (zcard("Z_DIR_MEDIA_IMAGES", "zeitlos.svg"),  "sw/data/demo/zeitlos.svg"),
     (zcard("Z_DIR_MEDIA_AUDIO",  "lvb11.mid"),    "sw/data/audio/lvb11.mid"),
@@ -528,6 +530,12 @@ DEMO_FILES = [
 SLIDE_FILES = [
     (zcard("Z_PATH_SLIDE_TOUR"), "sw/data/slide/tour.zsl"),
 ]
+# and the example decks, small apps with scripts (docs/slide_scripting.md):
+# every .zsl in sw/data/slide/examples, listed when the module loads
+_SLIDE_EX = os.path.join(_FONT_ROOT, "sw", "data", "slide", "examples")
+for _n in sorted(os.listdir(_SLIDE_EX)) if os.path.isdir(_SLIDE_EX) else []:
+    if _n.endswith(".zsl"):
+        SLIDE_FILES.append((zcard("Z_DIR_SLIDE_EXAMPLES", _n), "sw/data/slide/examples/" + _n))
 
 # chip8's own ROMs, where its open dialog starts (docs/chip8_app.md).
 # An XO-CHIP demo; at 65,000 bytes it picks its own profile, so the

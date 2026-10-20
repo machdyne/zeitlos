@@ -920,7 +920,7 @@ CORE_FILES_OUT = $(OUTDIR)/files
 # procedure repl has, made by tools/gen_zapi.py from the entries in
 # repl's sources -- what (help) and (apropos) read. The build fails if
 # a procedure has no entry (docs/scheme_api.md).
-ZAPI_SRCS = tools/gen_zapi.py sw/apps/repl/zapi.c sw/apps/repl/zapi_scheme.txt \
+ZAPI_SRCS = tools/gen_zapi.py sw/common/zapi/zapi.c sw/common/zapi/zapi_scheme.txt \
 	sw/ext/ms/ms.c sw/ext/ms/ms_stdlib.l sw/common/zversion.h
 
 $(CORE_FILES_OUT)/docs/zapi.txt: $(ZAPI_SRCS)

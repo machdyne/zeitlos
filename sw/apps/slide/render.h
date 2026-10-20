@@ -91,6 +91,18 @@ bool render_load_retry(obj_t *o);
 enum { RENDER_IMG_NONE = 0, RENDER_IMG_WAITING, RENDER_IMG_READY, RENDER_IMG_FAILED,
 	RENDER_IMG_STOPPED };
 int render_image_state(const obj_t *o);
+// -- controls --
+// The control drawn pressed (a button held down) and the field being
+// typed into (a caret after its text); NULL for none.
+void render_ui_state(const obj_t *pressed, const obj_t *focus);
+// A list's items (its text, a line each) and row height in units.
+int render_list_items(const obj_t *o);
+bool render_list_item(const obj_t *o, int i, const char **s, uint32_t *len);
+int render_list_row_h(const deck_t *d, const obj_t *o);
+// A slider: its knob's centre across (units), and the value at x.
+int render_slider_x(const obj_t *o);
+int render_slider_value(const obj_t *o, int x);
+
 // Asks for a card's pictures (its background's too) without drawing it:
 // the show asks for the next card's while this one is up. `first` puts
 // them at the front of the queue (the card the person is looking at).

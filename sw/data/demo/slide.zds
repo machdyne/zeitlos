@@ -1,0 +1,115 @@
+# Zeitlos -- slide, in about 45 seconds: for a short video.
+#
+#   > run automate /data/automate/slide.zds
+#
+# Revision 1. Shows sw/apps/slide (docs/slide_app.md): a flowchart drawn
+# live with connectors that follow their shapes, the deck shown full
+# screen with its transitions, Scheme in the message box, and a deck
+# that is an app (the calculator example). The deck is
+# /data/automate/slide_demo.zsl; the demo adds a card to it and never
+# saves it.
+#
+# Every step here is also run on the build machine, at the same
+# coordinates: make -C sw/apps/slide render (tests/render_ui.c, "what
+# sw/data/demo/slide.zds does"), so a change to slide that would make
+# the demo miss fails there first.
+#
+# THE RULE (docs/demo.md): speech and action never overlap.
+
+reset
+interruptible off
+caption-size 3
+caption-pos bottom
+rate 190
+type-speed 60
+speech on
+voice recorded
+
+# -- 1. a deck ---------------------------------------------------------
+# The window is 548x384 inside: the card at (30, 6) at 100%.
+run slide /data/automate/slide_demo.zsl at 40 20
+origin slide
+pause 600
+narrate slide: cards, slides and apps | This is slide. Cards, slides, and apps.
+
+# -- 2. a flowchart, drawn live ----------------------------------------
+narrate Draw a flowchart | Draw a flow chart.
+key ctrl+m
+key v
+key /
+type pill Start
+key enter
+drag 286 177 120 66 500
+key /
+type diamond Ready?
+key enter
+key /
+type fill 2
+key enter
+key /
+type cylinder Saved
+key enter
+drag 286 177 450 276 500
+# the arrow tool, from shape to shape: connected
+key a
+drag 120 66 286 177 600
+drag 286 177 450 276 600
+key v
+pause 300
+narrate Connectors follow | And the arrows follow their shapes.
+drag 286 177 330 120 900
+pause 300
+drag 450 276 400 250 700
+pause 400
+key esc
+key /
+type transition iris 600
+key enter
+
+# -- 3. the show -------------------------------------------------------
+narrate Show it, full screen | Show it, full screen.
+key shift+f5
+pause 1500
+key space
+pause 1800
+key space
+pause 1800
+key space
+pause 1800
+key space
+pause 1800
+key esc
+pause 400
+
+# -- 4. Scheme, at once ------------------------------------------------
+narrate Scheme inside | With scheme inside.
+key /
+type (* 6 7)
+key enter
+pause 1500
+
+# -- 5. a deck as an app -----------------------------------------------
+# The demo's changes are not saved: kill, not close (no "Save first?").
+kill slide
+narrate Decks become apps | And a deck can be an app.
+run slide /data/slide/examples/calculator.zsl at 64 40
+origin slide
+pause 500
+click 163 232
+click 225 232
+click 349 176
+pause 200
+click 287 232
+click 163 176
+click 287 288
+pause 1500
+kill slide
+
+# -- 6. the end --------------------------------------------------------
+origin screen
+caption github.com/machdyne/zeitlos
+say Zeitlos. Time less cum pewting.
+pause 1200
+caption-off
+reset
+end

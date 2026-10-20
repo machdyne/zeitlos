@@ -63,7 +63,7 @@ void sb_str(sbuf_t *b, const char *s) {
 
 // -- writing -------------------------------------------------------------
 
-static const char *tr_names[TR_KINDS] = { "cut", "wipe", "push" };
+static const char *tr_names[TR_KINDS] = { "cut", "wipe", "push", "iris", "dissolve" };
 static const char *al_names[3] = { "left", "center", "right" };
 static const char *va_names[3] = { "top", "middle", "bottom" };
 
@@ -108,7 +108,7 @@ static void write_obj(sbuf_t *b, const deck_t *d, const obj_t *o, int depth) {
 	sb_puts(b, " ");
 	sb_int(b, o->line_tone);
 	sb_puts(b, ")");
-	if (o->kind == OB_RRECT) form_int(b, "radius", o->radius);
+	if (o->kind == OB_RRECT || o->kind == OB_BUTTON) form_int(b, "radius", o->radius);
 	if (o->kind == OB_LINE || o->kind == OB_POLY) {
 		static const char *ar[4] = { "none", "start", "end", "both" };
 		sb_puts(b, " (arrows ");
@@ -118,6 +118,7 @@ static void write_obj(sbuf_t *b, const deck_t *d, const obj_t *o, int depth) {
 	if (o->kind == OB_POLY) {
 		int i;
 		if (o->closed) sb_puts(b, " (closed)");
+		if (o->smooth) sb_puts(b, " (smooth)");
 		sb_puts(b, " (points");
 		for (i = 0; i < o->npts; i++) {
 			sb_puts(b, " ");
@@ -127,7 +128,7 @@ static void write_obj(sbuf_t *b, const deck_t *d, const obj_t *o, int depth) {
 		}
 		sb_puts(b, ")");
 	}
-	if (o->kind == OB_TEXT || (o->text && o->text[0])) {
+	if (o->kind == OB_TEXT || OB_IS_CONTROL(o->kind) || (o->text && o->text[0])) {
 		sb_puts(b, " (font ");
 		sb_str(b, (o->font < d->nfont) ? d->font[o->font] : "sans");
 		sb_puts(b, " ");
@@ -149,6 +150,26 @@ static void write_obj(sbuf_t *b, const deck_t *d, const obj_t *o, int depth) {
 		if (o->contrast) form_int(b, "contrast", o->contrast);
 		if (o->bright) form_int(b, "bright", o->bright);
 	}
+	if (o->kind == OB_CHECK || o->kind == OB_RADIO || o->kind == OB_SLIDER || o->kind == OB_LIST)
+		form_int(b, "value", o->value);
+	if (o->kind == OB_SLIDER) {
+		sb_puts(b, " (range ");
+		sb_int(b, o->vmin);
+		sb_puts(b, " ");
+		sb_int(b, o->vmax);
+		sb_puts(b, ")");
+	}
+	if (o->kind == OB_RADIO && o->group[0]) form_str(b, "group", o->group);
+	if (obj_is_connector(o)) {
+		sb_puts(b, " (connect ");
+		sb_str(b, o->from);
+		sb_puts(b, " ");
+		sb_str(b, o->to);
+		sb_puts(b, ")");
+	}
+	if (o->gid) form_int(b, "gid", o->gid);
+	if (o->flags & OBF_FLIPX) sb_puts(b, " (flip across)");
+	if (o->flags & OBF_FLIPY) sb_puts(b, " (flip down)");
 	if (o->flags & OBF_HIDDEN) sb_puts(b, " (hidden)");
 	if (o->flags & OBF_LOCKED) sb_puts(b, " (locked)");
 	if (o->action) form_str(b, "action", o->action);
@@ -171,6 +192,7 @@ static void write_card(sbuf_t *b, const deck_t *d, const card_t *c, bool is_bg,
 		sb_puts(b, ")");
 	}
 	if (c->advance_ms) form_int(b, "advance", (long)c->advance_ms);
+	if (c->action) form_str(b, "action", c->action);
 	for (i = 0; i < c->nobj; i++) write_obj(b, d, c->obj[i], depth + 1);
 	if (c->notes) { ind(b, depth + 1); sb_puts(b, "(notes "); sb_str(b, c->notes); sb_puts(b, ")"); }
 	if (c->script) { ind(b, depth + 1); sb_puts(b, "(script "); sb_str(b, c->script); sb_puts(b, ")"); }
@@ -195,6 +217,7 @@ bool deckio_write(sbuf_t *b, const deck_t *d) {
 	if (d->title[0]) { ind(b, 1); sb_puts(b, "(title "); sb_str(b, d->title); sb_puts(b, ")"); }
 	if (d->print[0]) { ind(b, 1); sb_puts(b, "(print "); sb_str(b, d->print); sb_puts(b, ")"); }
 	if (d->app) { ind(b, 1); sb_puts(b, "(app)"); }
+	if (d->loop) { ind(b, 1); sb_puts(b, "(loop)"); }
 	if (d->script) { ind(b, 1); sb_puts(b, "(script "); sb_str(b, d->script); sb_puts(b, ")"); }
 	for (i = 0; i < d->nbg; i++) write_card(b, d, d->bg[i], true, 1);
 	for (i = 0; i < d->ncard; i++) write_card(b, d, d->card[i], false, 1);
@@ -450,14 +473,17 @@ static obj_t *read_obj(rd_t *r, int kind) {
 		} else if (!strcmp(r->atom, "closed")) {
 			o->closed = 1;
 			close_form(r);
+		} else if (!strcmp(r->atom, "smooth")) {
+			o->smooth = 1;
+			close_form(r);
 		} else if (!strcmp(r->atom, "points")) {
-			int16_t tmp[2 * 256];
+			static int16_t tmp[2 * 1024];
 			int n = 0;
 			for (;;) {
 				next(r);
 				if (r->tok == T_CLOSE) break;
 				if (r->tok != T_ATOM || !is_int(r->atom)) { fail(r, "points: numbers"); break; }
-				if (n < 2 * 256) {
+				if (n < 2 * 1024) {
 					long v = to_int(r->atom);
 					tmp[n++] = (int16_t)(v < -9999 ? -9999 : v > 9999 ? 9999 : v);
 				}
@@ -522,6 +548,32 @@ static obj_t *read_obj(rd_t *r, int kind) {
 		} else if (!strcmp(r->atom, "locked")) {
 			o->flags |= OBF_LOCKED;
 			close_form(r);
+		} else if (!strcmp(r->atom, "value")) {
+			o->value = (int16_t)rd_int(r, -9999, 9999);
+			close_form(r);
+		} else if (!strcmp(r->atom, "range")) {
+			o->vmin = (int16_t)rd_int(r, -9999, 9999);
+			o->vmax = (int16_t)rd_int(r, -9999, 9999);
+			if (o->vmax <= o->vmin) o->vmax = (int16_t)(o->vmin + 1);
+			close_form(r);
+		} else if (!strcmp(r->atom, "gid")) {
+			o->gid = (uint16_t)rd_int(r, 0, 65535);
+			close_form(r);
+		} else if (!strcmp(r->atom, "flip")) {
+			next(r);
+			if (r->tok == T_ATOM && !strcmp(r->atom, "across")) o->flags |= OBF_FLIPX;
+			if (r->tok == T_ATOM && !strcmp(r->atom, "down")) o->flags |= OBF_FLIPY;
+			if (r->tok != T_CLOSE) close_form(r);
+		} else if (!strcmp(r->atom, "connect")) {
+			if (!rd_str(r)) break;
+			str_into(r, o->from, OB_NAME_MAX);
+			if (!rd_str(r)) break;
+			str_into(r, o->to, OB_NAME_MAX);
+			close_form(r);
+		} else if (!strcmp(r->atom, "group")) {
+			if (!rd_str(r)) break;
+			str_into(r, o->group, sizeof(o->group));
+			close_form(r);
 		} else if (!strcmp(r->atom, "action")) {
 			set_str(r, &o->action);
 		} else if (!strcmp(r->atom, "script")) {
@@ -575,6 +627,8 @@ static card_t *read_card(rd_t *r, bool is_bg) {
 			close_form(r);
 		} else if (!strcmp(r->atom, "notes")) {
 			set_str(r, &c->notes);
+		} else if (!strcmp(r->atom, "action")) {
+			set_str(r, &c->action);
 		} else if (!strcmp(r->atom, "script")) {
 			set_str(r, &c->script);
 		} else {
@@ -656,6 +710,9 @@ deck_t *deckio_read(const char *s, uint32_t len, char *err, int errcap) {
 		} else if (!strcmp(r.atom, "app")) {
 			d->app = true;
 			close_form(&r);
+		} else if (!strcmp(r.atom, "loop")) {
+			d->loop = true;
+			close_form(&r);
 		} else if (!strcmp(r.atom, "script")) {
 			set_str(&r, &d->script);
 		} else if (!strcmp(r.atom, "card") || !strcmp(r.atom, "background")) {
@@ -675,6 +732,13 @@ deck_t *deckio_read(const char *s, uint32_t len, char *err, int errcap) {
 	if (d->ncard == 0) {
 		card_t *c = card_new("card 1");
 		if (!c || !deck_insert_card(d, 0, c)) { card_free(c); fail(&r, "out of memory"); goto bad; }
+	}
+	{
+		// connectors as their shapes are now (a file edited by hand)
+		int i;
+		for (i = 0; i < d->nbg; i++) card_route(d->bg[i], NULL, NULL, 0);
+		for (i = 0; i < d->ncard; i++)
+			card_route(d->card[i], d->card[i]->bg >= 0 && d->card[i]->bg < d->nbg ? d->bg[d->card[i]->bg] : NULL, NULL, 0);
 	}
 	return d;
 bad:

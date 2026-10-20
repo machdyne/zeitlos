@@ -635,6 +635,68 @@ static void pull_back(int fx, int fy, int *tx, int *ty, int by) {
 	*ty = fy + (int)((dy * (len - by)) / len);
 }
 
+// A flowchart shape's outline into p_shape (units): a diamond, a
+// slant, a pill, a document, a cylinder's outer edge.
+static void flow_path(const obj_t *o, zc_fix X, zc_fix Y, zc_fix W, zc_fix H) {
+	bool fx = (o->flags & OBF_FLIPX) != 0, fy = (o->flags & OBF_FLIPY) != 0;
+	zc_path_reset(&p_shape);
+	switch (o->kind) {
+	case OB_DIAMOND:
+		zc_path_move(&p_shape, X + W / 2, Y);
+		zc_path_line(&p_shape, X + W, Y + H / 2);
+		zc_path_line(&p_shape, X + W / 2, Y + H);
+		zc_path_line(&p_shape, X, Y + H / 2);
+		zc_path_close(&p_shape);
+		break;
+	case OB_SLANT: {
+		zc_fix k = W / 4 < H / 2 ? W / 4 : H / 2;
+		if (!fx) {
+			zc_path_move(&p_shape, X + k, Y);
+			zc_path_line(&p_shape, X + W, Y);
+			zc_path_line(&p_shape, X + W - k, Y + H);
+			zc_path_line(&p_shape, X, Y + H);
+		} else {
+			zc_path_move(&p_shape, X, Y);
+			zc_path_line(&p_shape, X + W - k, Y);
+			zc_path_line(&p_shape, X + W, Y + H);
+			zc_path_line(&p_shape, X + k, Y + H);
+		}
+		zc_path_close(&p_shape);
+		break;
+	}
+	case OB_PILL:
+		zc_path_rrect(&p_shape, X, Y, W, H, (W < H ? W : H) / 2);
+		break;
+	case OB_DOC: {
+		// three straight sides; the fourth a wave, a quarter of the way
+		// in at its deepest
+		zc_fix d = H / 8, e = fy ? Y + d : Y + H - d, s = fy ? Y + H : Y;
+		zc_path_move(&p_shape, X, s);
+		zc_path_line(&p_shape, X + W, s);
+		zc_path_line(&p_shape, X + W, e);
+		if (!fx)
+			zc_path_cubic(&p_shape, X + W * 3 / 4, e + (fy ? -2 : 2) * d, X + W / 4, e - (fy ? -2 : 2) * d, X, e);
+		else
+			zc_path_cubic(&p_shape, X + W * 3 / 4, e - (fy ? -2 : 2) * d, X + W / 4, e + (fy ? -2 : 2) * d, X, e);
+		zc_path_close(&p_shape);
+		break;
+	}
+	case OB_DRUM: {
+		// the top an ellipse, the sides straight, the bottom half an
+		// ellipse; the front of the top is drawn after (draw_shape)
+		zc_fix ry = H / 8 > ZC_I(2) ? H / 8 : ZC_I(2), cx = X + W / 2, rx = W / 2;
+		zc_path_move(&p_shape, X, Y + ry);
+		zc_path_arc(&p_shape, cx, Y + ry, rx, ry, 512, 1024);
+		zc_path_line(&p_shape, X + W, Y + H - ry);
+		zc_path_arc(&p_shape, cx, Y + H - ry, rx, ry, 0, 512);
+		zc_path_close(&p_shape);
+		break;
+	}
+	default:
+		break;
+	}
+}
+
 static void draw_shape(zc_target_t *t, const zc_xf_t *xf, const obj_t *o) {
 	int x0, y0, x1, y1;
 	zc_paint_t fp = fill_paint(o), lp = tone_paint(o->line_tone);
@@ -685,6 +747,35 @@ static void draw_shape(zc_target_t *t, const zc_xf_t *xf, const obj_t *o) {
 	case OB_POLY: {
 		int i, n = o->npts;
 		if (n < 2) break;
+		if (o->smooth && n >= 3) {
+			// a curve through the middles of its sides, its corners the
+			// control points; an open one starts and ends on its ends
+			#define MX(i) ZC_I(o->pts[2 * (i)] + o->pts[2 * (((i) + 1) % n)]) / 2
+			#define MY(i) ZC_I(o->pts[2 * (i) + 1] + o->pts[2 * (((i) + 1) % n) + 1]) / 2
+			zc_path_reset(&p_shape);
+			if (o->closed) {
+				zc_path_move(&p_shape, MX(n - 1), MY(n - 1));
+				for (i = 0; i < n; i++)
+					zc_path_quad(&p_shape, ZC_I(o->pts[2 * i]), ZC_I(o->pts[2 * i + 1]), MX(i), MY(i));
+				if (o->fill) zc_fill(t, &p_shape, ZC_NONZERO, &fp);
+			} else {
+				zc_path_move(&p_shape, ZC_I(o->pts[0]), ZC_I(o->pts[1]));
+				zc_path_line(&p_shape, MX(0), MY(0));
+				for (i = 1; i < n - 1; i++)
+					zc_path_quad(&p_shape, ZC_I(o->pts[2 * i]), ZC_I(o->pts[2 * i + 1]), MX(i), MY(i));
+				zc_path_line(&p_shape, ZC_I(o->pts[2 * n - 2]), ZC_I(o->pts[2 * n - 1]));
+			}
+			#undef MX
+			#undef MY
+			if (o->line_w) zc_stroke(t, &p_shape, lw, o->closed != 0, &p_work, &lp);
+			if (!o->closed && o->arrows && o->line_w) {
+				if (o->arrows & AR_END)
+					arrowhead(t, xf, o->pts[2 * n - 4], o->pts[2 * n - 3], o->pts[2 * n - 2], o->pts[2 * n - 1], o->line_w, &lp);
+				if (o->arrows & AR_START)
+					arrowhead(t, xf, o->pts[2], o->pts[3], o->pts[0], o->pts[1], o->line_w, &lp);
+			}
+			break;
+		}
 		if (o->closed && o->fill && n >= 3) {
 			zc_path_reset(&p_shape);
 			for (i = 0; i < n; i++) {
@@ -713,6 +804,20 @@ static void draw_shape(zc_target_t *t, const zc_xf_t *xf, const obj_t *o) {
 		}
 		break;
 	}
+	case OB_DIAMOND: case OB_SLANT: case OB_PILL: case OB_DOC: case OB_DRUM:
+		flow_path(o, X, Y, W, H);
+		if (o->fill) zc_fill(t, &p_shape, ZC_NONZERO, &fp);
+		if (o->line_w) {
+			zc_stroke(t, &p_shape, lw, true, &p_work, &lp);
+			if (o->kind == OB_DRUM) {
+				// the lid's near edge
+				zc_fix ry = H / 8 > ZC_I(2) ? H / 8 : ZC_I(2);
+				zc_path_reset(&p_shape);
+				zc_path_arc(&p_shape, X + W / 2, Y + ry, W / 2, ry, 0, 512);
+				zc_stroke(t, &p_shape, lw, false, &p_work, &lp);
+			}
+		}
+		break;
 	case OB_IMAGE:
 		draw_image(t, xf, (obj_t *)o);
 		if (o->line_w) zc_frame_rect(t, &p_shape, X, Y, W, H, lw, &lp);
@@ -722,11 +827,264 @@ static void draw_shape(zc_target_t *t, const zc_xf_t *xf, const obj_t *o) {
 	}
 }
 
+// -- controls ------------------------------------------------------------------
+//
+// Drawn from the deck like everything else, at any scale: on screen, in
+// a show, on paper. The player (act.h) says which one is pressed and
+// which field is being typed into.
+
+static const obj_t *ui_pressed, *ui_focus;
+
+void render_ui_state(const obj_t *pressed, const obj_t *focus) {
+	ui_pressed = pressed;
+	ui_focus = focus;
+}
+
+// One line of a label in a box (units), vertically centred.
+static void label(zc_target_t *t, const zc_xf_t *xf, const deck_t *d, const obj_t *o,
+	const char *s, uint32_t n, zc_fix x, zc_fix w, zc_fix y0, zc_fix h, int align,
+	const zc_paint_t *ink) {
+	zc_style_t st;
+	zc_fix asc, desc, lh, tw;
+	render_style(d, o, &st);
+	zc_text_metrics(&st, &asc, &desc, &lh);
+	tw = zc_text_width(&st, s, n);
+	if (align == AL_CENTER) x += (w - tw) / 2;
+	else if (align == AL_RIGHT) x += w - tw;
+	zc_text_draw(t, xf, &st, x, y0 + (h - (asc + desc)) / 2 + asc, s, n, ink);
+}
+
+// The target's clip narrowed to a box in units; *save gets the old one.
+static void clip_units(zc_target_t *t, const zc_xf_t *xf, int x0, int y0, int x1, int y1,
+	int save[4]) {
+	zc_fix ax, ay, bx, by;
+	save[0] = t->cx0; save[1] = t->cy0; save[2] = t->cx1; save[3] = t->cy1;
+	zc_xf_apply(xf, ZC_I(x0), ZC_I(y0), &ax, &ay);
+	zc_xf_apply(xf, ZC_I(x1), ZC_I(y1), &bx, &by);
+	if (bx < ax) { zc_fix k = ax; ax = bx; bx = k; }
+	if (by < ay) { zc_fix k = ay; ay = by; by = k; }
+	zc_clip(t, (int)((ax + ZC_HALF) >> ZC_FRAC), (int)((ay + ZC_HALF) >> ZC_FRAC),
+		(int)((bx + ZC_HALF) >> ZC_FRAC), (int)((by + ZC_HALF) >> ZC_FRAC));
+}
+
+static void unclip(zc_target_t *t, const int save[4]) {
+	t->cx0 = save[0]; t->cy0 = save[1]; t->cx1 = save[2]; t->cy1 = save[3];
+}
+
+// The items of a list: line i of its text.
+int render_list_items(const obj_t *o) {
+	const char *p = o->text;
+	int n = 0;
+	if (!p || !*p) return 0;
+	for (n = 1; *p; p++) if (*p == '\n') n++;
+	return n;
+}
+
+bool render_list_item(const obj_t *o, int i, const char **s, uint32_t *len) {
+	const char *p = o->text, *e;
+	if (!p || i < 0) return false;
+	while (i > 0) {
+		p = strchr(p, '\n');
+		if (!p) return false;
+		p++;
+		i--;
+	}
+	e = strchr(p, '\n');
+	*s = p;
+	*len = e ? (uint32_t)(e - p) : (uint32_t)strlen(p);
+	return true;
+}
+
+// A list's row height, units.
+int render_list_row_h(const deck_t *d, const obj_t *o) {
+	zc_style_t st;
+	zc_fix lh;
+	render_style(d, o, &st);
+	zc_text_metrics(&st, NULL, NULL, &lh);
+	return (int)((lh + ZC_ONE - 1) >> ZC_FRAC) + 2;
+}
+
+// Where a slider's knob is: its centre across, units.
+int render_slider_x(const obj_t *o) {
+	int x0, y0, x1, y1, kw, span, v = o->value, r = o->vmax - o->vmin;
+	obj_bounds(o, &x0, &y0, &x1, &y1);
+	kw = (y1 - y0) * 2 / 3;
+	if (kw < 6) kw = 6;
+	span = x1 - x0 - kw;
+	if (r <= 0) r = 1;
+	if (v < o->vmin) v = o->vmin;
+	if (v > o->vmax) v = o->vmax;
+	return x0 + kw / 2 + (int)((long)span * (v - o->vmin) / r);
+}
+
+// The value at x (units) on a slider.
+int render_slider_value(const obj_t *o, int x) {
+	int x0, y0, x1, y1, kw, span, r = o->vmax - o->vmin;
+	long v;
+	obj_bounds(o, &x0, &y0, &x1, &y1);
+	kw = (y1 - y0) * 2 / 3;
+	if (kw < 6) kw = 6;
+	span = x1 - x0 - kw;
+	if (span < 1) span = 1;
+	v = o->vmin + ((long)(x - x0 - kw / 2) * r + span / 2) / span;
+	if (v < o->vmin) v = o->vmin;
+	if (v > o->vmax) v = o->vmax;
+	return (int)v;
+}
+
+static void draw_control(zc_target_t *t, const zc_xf_t *xf, const deck_t *d, const obj_t *o) {
+	int x0, y0, x1, y1;
+	zc_paint_t white = zc_white(), black = zc_black(), ink = tone_paint(o->text_tone);
+	zc_paint_t lp = tone_paint(o->line_tone), fp = fill_paint(o);
+	zc_fix X, Y, W, H, lw = ZC_I(o->line_w ? o->line_w : 1);
+	bool pressed = o == ui_pressed;
+	obj_bounds(o, &x0, &y0, &x1, &y1);
+	X = ZC_I(x0); Y = ZC_I(y0); W = ZC_I(x1 - x0); H = ZC_I(y1 - y0);
+	zc_path_set_xf(&p_shape, xf);
+	switch (o->kind) {
+	case OB_BUTTON: {
+		const char *s = o->text ? o->text : "";
+		zc_path_reset(&p_shape);
+		zc_path_rrect(&p_shape, X, Y, W, H, ZC_I(o->radius));
+		zc_fill(t, &p_shape, ZC_NONZERO, pressed ? &black : o->fill ? &fp : &white);
+		if (o->line_w) zc_frame_rrect(t, &p_shape, X, Y, W, H, ZC_I(o->radius), lw, &lp);
+		label(t, xf, d, o, s, (uint32_t)strlen(s), X + ZC_I(o->pad), W - ZC_I(2 * o->pad), Y, H,
+			o->align, pressed ? &white : &ink);
+		break;
+	}
+	case OB_CHECK:
+	case OB_RADIO: {
+		const char *s = o->text ? o->text : "";
+		int bs = (y1 - y0) < o->size ? (y1 - y0) : o->size;
+		zc_fix B, bx, by;
+		if (bs < 6) bs = 6;
+		B = ZC_I(bs);
+		bx = X;
+		by = Y + (H - B) / 2;
+		if (o->fill) {
+			zc_path_reset(&p_shape);
+			zc_path_rect(&p_shape, X, Y, W, H);
+			zc_fill(t, &p_shape, ZC_NONZERO, &fp);
+		}
+		zc_path_reset(&p_shape);
+		if (o->kind == OB_CHECK) zc_path_rect(&p_shape, bx, by, B, B);
+		else zc_path_ellipse(&p_shape, bx + B / 2, by + B / 2, B / 2, B / 2);
+		zc_fill(t, &p_shape, ZC_NONZERO, pressed ? &black : &white);
+		if (o->kind == OB_CHECK) zc_frame_rect(t, &p_shape, bx, by, B, B, ZC_I(1), &lp);
+		else zc_frame_ellipse(t, &p_shape, bx, by, B, B, ZC_I(1), &lp);
+		if (o->value) {
+			if (o->kind == OB_CHECK) {
+				// a cross, as the Mac did it
+				zc_fix m = B / 5;
+				zc_path_reset(&p_shape);
+				zc_path_move(&p_shape, bx + m, by + m);
+				zc_path_line(&p_shape, bx + B - m, by + B - m);
+				zc_path_move(&p_shape, bx + B - m, by + m);
+				zc_path_line(&p_shape, bx + m, by + B - m);
+				zc_stroke(t, &p_shape, ZC_I(bs >= 12 ? 2 : 1), false, &p_work, pressed ? &white : &black);
+			} else {
+				zc_path_reset(&p_shape);
+				zc_path_ellipse(&p_shape, bx + B / 2, by + B / 2, B / 4, B / 4);
+				zc_fill(t, &p_shape, ZC_NONZERO, pressed ? &white : &black);
+			}
+		}
+		label(t, xf, d, o, s, (uint32_t)strlen(s), X + B + ZC_I(5), W - B - ZC_I(5), Y, H,
+			AL_LEFT, &ink);
+		break;
+	}
+	case OB_FIELD: {
+		zc_path_reset(&p_shape);
+		zc_path_rect(&p_shape, X, Y, W, H);
+		zc_fill(t, &p_shape, ZC_NONZERO, o->fill ? &fp : &white);
+		if (o->line_w) zc_frame_rect(t, &p_shape, X, Y, W, H, lw, &lp);
+		{
+			int save[4];
+			clip_units(t, xf, x0, y0, x1, y1, save);
+			draw_text(t, xf, d, o);
+			if (o == ui_focus) {
+				// the caret, after the last character
+				static text_layout_t L;
+				zc_fix cx, cy;
+				render_text_layout(d, o, &L);
+				if (L.n) {
+					int i = L.n - 1;
+					const char *tx = o->text ? o->text : "";
+					uint32_t end = (uint32_t)strlen(tx);
+					cx = render_line_x(o, &L, i) + zc_text_width(&L.st, tx + L.line[i].start,
+						end - L.line[i].start);
+					if (end && tx[end - 1] == '\n') { cx = render_line_x(o, &L, 0); i++; }
+					cy = L.top + L.line_h * i;
+				} else {
+					cx = L.x0;
+					cy = L.top;
+				}
+				zc_path_reset(&p_shape);
+				zc_path_rect(&p_shape, cx, cy, ZC_I(1), L.line_h ? L.line_h : ZC_I(o->size));
+				zc_fill(t, &p_shape, ZC_NONZERO, &black);
+			}
+			unclip(t, save);
+		}
+		break;
+	}
+	case OB_SLIDER: {
+		int kx = render_slider_x(o), kw = (y1 - y0) * 2 / 3;
+		zc_fix ty = Y + H / 2 - ZC_I(1);
+		if (kw < 6) kw = 6;
+		if (o->fill) {
+			zc_path_reset(&p_shape);
+			zc_path_rect(&p_shape, X, Y, W, H);
+			zc_fill(t, &p_shape, ZC_NONZERO, &fp);
+		}
+		// the track: filled to the knob
+		zc_path_reset(&p_shape);
+		zc_path_rect(&p_shape, X, ty, W, ZC_I(3));
+		zc_fill(t, &p_shape, ZC_NONZERO, &white);
+		zc_frame_rect(t, &p_shape, X, ty, W, ZC_I(3), ZC_I(1), &lp);
+		zc_path_reset(&p_shape);
+		zc_path_rect(&p_shape, X, ty, ZC_I(kx - x0), ZC_I(3));
+		zc_fill(t, &p_shape, ZC_NONZERO, &black);
+		// the knob
+		zc_path_reset(&p_shape);
+		zc_path_rrect(&p_shape, ZC_I(kx - kw / 2), Y, ZC_I(kw), H, ZC_I(2));
+		zc_fill(t, &p_shape, ZC_NONZERO, pressed ? &black : &white);
+		zc_frame_rrect(t, &p_shape, ZC_I(kx - kw / 2), Y, ZC_I(kw), H, ZC_I(2), ZC_I(1), &lp);
+		break;
+	}
+	case OB_LIST: {
+		int rh = render_list_row_h(d, o), n = render_list_items(o), i, save[4];
+		zc_path_reset(&p_shape);
+		zc_path_rect(&p_shape, X, Y, W, H);
+		zc_fill(t, &p_shape, ZC_NONZERO, o->fill ? &fp : &white);
+		clip_units(t, xf, x0 + 1, y0 + 1, x1 - 1, y1 - 1, save);
+		for (i = 0; i < n; i++) {
+			const char *s;
+			uint32_t len;
+			int ry = y0 + o->pad + i * rh;
+			if (ry >= y1) break;
+			if (!render_list_item(o, i, &s, &len)) break;
+			if (i == o->value) {
+				zc_path_reset(&p_shape);
+				zc_path_rect(&p_shape, X, ZC_I(ry), W, ZC_I(rh));
+				zc_fill(t, &p_shape, ZC_NONZERO, &black);
+			}
+			label(t, xf, d, o, s, len, X + ZC_I(o->pad + 2), W - ZC_I(2 * o->pad + 4), ZC_I(ry),
+				ZC_I(rh), o->align, i == o->value ? &white : &ink);
+		}
+		unclip(t, save);
+		if (o->line_w) zc_frame_rect(t, &p_shape, X, Y, W, H, lw, &lp);
+		break;
+	}
+	default:
+		break;
+	}
+}
+
 void render_obj(zc_target_t *t, const zc_xf_t *xf, const deck_t *d,
 	const obj_t *o, int mode) {
 	if ((o->flags & OBF_HIDDEN) && mode != RENDER_EDIT) return;
-	draw_shape(t, xf, o);
-	if (o->kind == OB_TEXT) draw_text(t, xf, d, o);
+	if (OB_IS_CONTROL(o->kind)) draw_control(t, xf, d, o);
+	else draw_shape(t, xf, o);
+	if (o->kind == OB_TEXT || OB_IS_SHAPE(o->kind)) draw_text(t, xf, d, o);
 	if ((o->flags & OBF_HIDDEN) && mode == RENDER_EDIT) {
 		// hidden, in the editor: there, but greyed over with a light screen
 		static const uint8_t screen[8] = { 0x88, 0, 0x22, 0, 0x88, 0, 0x22, 0 };
