@@ -45,10 +45,13 @@ OWN_CFLAGS = $(CFLAGS) -Werror
 #   entry reader refers to it; --gc-sections drops all of it but that.
 #
 #   zwalk.o: cp -r and rm -r (sw/common/zwalk.c, docs/zwalk.md).
+#
+#   zco.o: a command runs in a coroutine (job.c, docs/posix.md "How a
+#   command runs"), so the main loop serves every session meanwhile.
 OBJS = zeitlos.o zobj.o zport.o zline.o zfsapp.o zfsutil.o zwin.o zgfx.o zfont_data.o \
 	zconnect.o zdns.o zinflate.o zgz.o \
-	zf_core.o zf_xml.o zf_zip.o zf_arch.o zwalk.o \
-	vfs.o sh.o tools.o tree.o main.o
+	zf_core.o zf_xml.o zf_zip.o zf_arch.o zwalk.o zco.o \
+	vfs.o sh.o tools.o tree.o job.o main.o
 
 SRC_DIRS = ../../common/formats
 
@@ -62,6 +65,8 @@ tools.o: tools.c posix.h
 	$(CC) $(OWN_CFLAGS) -c tools.c -o tools.o
 tree.o: tree.c posix.h
 	$(CC) $(OWN_CFLAGS) -c tree.c -o tree.o
+job.o: job.c posix.h
+	$(CC) $(OWN_CFLAGS) -c job.c -o job.o
 
 # The shell's own test suite, built with the HOST compiler.
 #
@@ -70,7 +75,9 @@ tree.o: tree.c posix.h
 # sh.c and vfs.c contain no port, message or window code at all -- that
 # is main.c's whole job -- so they can be driven directly against a
 # host filesystem. See tests/run.sh for why that split was worth
-# arranging rather than testing this only on hardware.
+# arranging rather than testing this only on hardware. main.c's loop is
+# tested too, with a fake kernel around it (tests/run_main.c), and the
+# builtins' stack use on the machine's CPU in tests/stack_sim/.
 test:
 	@$(MAKE) -C tests run
 

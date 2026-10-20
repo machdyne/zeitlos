@@ -20,6 +20,44 @@ from the keyboard.
 
 **F1** shows a short help box ([app_help.md](app_help.md)).
 
+## Loading without stopping
+
+Opening a picture shows the window at once, and the picture is decoded
+**a slice at a time** from the main loop, about 20 ms a pass
+([responsive.md](responsive.md)): its rows appear as they are decoded,
+a few times a second, and the title says `name 40%  Esc stops`. The
+window scrolls, moves and redraws meanwhile. **Esc** stops it at once
+-- the file closed -- and the picture that was there before (or the
+empty window) comes back as it was, scrolled where it was. Opening
+another file while one loads stops the first.
+
+How: `sw/common/zimgjob.h`'s document mode reads the file a 2KB chunk
+a step and runs `z_img_decode_rows()` -- `z_img_decode()` with a call
+after each row -- in a coroutine (`zco.h`) that hands back every four
+rows and whenever it needs bytes not read yet. It still dithers straight
+into a 1bpp document; no grey image is held, whatever the picture's
+size.
+
+So that Esc can leave the picture that was there, there are **two
+documents**: the new picture is decoded into the one not on screen, and
+the two swap roles when it is done (no copy). That is the one memory
+cost of this: 38,400 bytes of `.bss`. The decoder's stack (8KB -- it
+uses about 2KB on the board at most, PNG; JPEG about 0.5KB), its state
+and the chunk share their bytes with the SVG text buffer, which is only
+in use while a drawing is rendered, never while a picture loads.
+
+An SVG is still rendered in one call (it is text, kilobytes, and
+`zsvg` has no rows to hand back between); it is drawn into the other
+document too, so a drawing that cannot be drawn leaves the picture that
+was there.
+
+The host test is `make -f sw/common/tests/Makefile.zcanvas imgjob`: a
+picture decoded in slices into a document equals the picture decoded by
+`z_img_decode()` in one call (JPEG, PNG, PGM; view's 640x480 and web's
+box sizes), stopping it at thirty-odd points closes the file each time
+and leaves the decoder right for the next, and a file that is not a
+picture fails cleanly.
+
 | Format | Variants decoded | Notes |
 |---|---|---|
 | BMP | 1/4/8/24/32bpp, uncompressed | RLE4/RLE8 and BI_BITFIELDS refused |
@@ -73,6 +111,13 @@ build — see "Third profile" below):
 comparison is ≈112KB, so both can be resident at once with most of the
 1MB pool still free. At `ZIMG_OPT=-Os` the text figure is ~2.9KB
 lower.
+
+That table is from before PNG, SVG and loading in slices. Since 0.0.7
+there is a **second document** (38,400 bytes more, see "Loading without
+stopping"), and the decoder's 10KB of stack, state and chunk share the
+SVG text buffer. The default build (`-Os`, PNG and SVG on, `size
+view.elf`): text 163,404, bss 253,752 -- against 158,372 and 214,876
+before the change.
 
 ### The scratch union
 
@@ -541,8 +586,9 @@ but is a change to shared code and belongs on its own.
 
 ## Not implemented
 
-- **Full-screen mode.** ESC is already swallowed by `handle_key()` so
-  the binding is not claimed by anything else in the meantime. It
+- **Full-screen mode.** ESC (when no picture is loading) is swallowed
+  by `handle_key()` so the binding is not claimed by anything else in
+  the meantime. It
   needs wm support that does not exist: a `Z_WIN_FLAG_UNDECORATED` to
   expose wm's existing internal `no_titlebar` (currently set only for
   the dock, `wm.c:2181`), a `Z_WM_SET_FULLSCREEN` that stashes and

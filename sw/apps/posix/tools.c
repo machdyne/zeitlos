@@ -9,7 +9,10 @@
  *
  * All four are long-running on a big tree or file, so all four check
  * px_intr() as they go: Ctrl+C stops them at the next entry, line or
- * 4 KB of output -- see px_intr() in sh.c and conn_poll() in main.c.
+ * 4 KB of output, and on the machine that is also where they hand back
+ * to the main loop (job.c). Their state is in statics, which is one
+ * reason only one command runs at a time. Memory comes from px_malloc()
+ * (job.c), so a command stopped without unwinding gives it back.
  */
 
 #include <stdint.h>
@@ -288,7 +291,7 @@ static int diff_read(px_shell_t *sh, const char *path, diff_file_t *f) {
         px_printf(sh, "diff: %s: cannot open\n", path);
         return 2;
     }
-    f->text = malloc(DIFF_BYTES + 1);
+    f->text = px_malloc(DIFF_BYTES + 1);
     if (!f->text) { fs_close_handle(h); px_puts(sh, "diff: out of memory\n"); return 2; }
 
     for (;;) {
@@ -324,8 +327,8 @@ static int diff_read(px_shell_t *sh, const char *path, diff_file_t *f) {
         return 2;
     }
 
-    f->off = malloc(sizeof(uint32_t) * (size_t)(n + 1));
-    f->hash = malloc(sizeof(uint32_t) * (size_t)(n + 1));
+    f->off = px_malloc(sizeof(uint32_t) * (size_t)(n + 1));
+    f->hash = px_malloc(sizeof(uint32_t) * (size_t)(n + 1));
     if (!f->off || !f->hash) { px_puts(sh, "diff: out of memory\n"); return 2; }
 
     /* FNV-1a over each line, newline included: the last line with no
@@ -514,9 +517,9 @@ static void diff_print(diff_t *d, const char *n1, const char *n2) {
 }
 
 static void diff_free(diff_t *d) {
-    free(d->a.text); free(d->a.off); free(d->a.hash);
-    free(d->b.text); free(d->b.off); free(d->b.hash);
-    free(d->fd); free(d->bd); free(d->del); free(d->ins);
+    px_free(d->a.text); px_free(d->a.off); px_free(d->a.hash);
+    px_free(d->b.text); px_free(d->b.off); px_free(d->b.hash);
+    px_free(d->fd); px_free(d->bd); px_free(d->del); px_free(d->ins);
 }
 
 void px_bi_diff(px_shell_t *sh, int argc, char **argv) {
@@ -549,10 +552,10 @@ void px_bi_diff(px_shell_t *sh, int argc, char **argv) {
     }
 
     int vlen = d.a.n + d.b.n + 3;
-    d.fd = malloc(sizeof(int) * (size_t)vlen);
-    d.bd = malloc(sizeof(int) * (size_t)vlen);
-    d.del = calloc((size_t)d.a.n + 1, 1);
-    d.ins = calloc((size_t)d.b.n + 1, 1);
+    d.fd = px_malloc(sizeof(int) * (size_t)vlen);
+    d.bd = px_malloc(sizeof(int) * (size_t)vlen);
+    d.del = px_calloc((size_t)d.a.n + 1, 1);
+    d.ins = px_calloc((size_t)d.b.n + 1, 1);
     d.voff = d.b.n + 1;
     if (!d.fd || !d.bd || !d.del || !d.ins) {
         px_puts(sh, "diff: out of memory\n");
@@ -890,4 +893,10 @@ void px_bi_tar(px_shell_t *sh, int argc, char **argv) {
         zf_src_io(&src, &io);
         arch_done(zf_extract_tar(&src, &d), &io);
     }
+}
+
+/* A command stopped without unwinding (job.c): no cancel hook left
+ * pointing at a shell that is not running. */
+void px_tools_abandon(void) {
+    zf_cancel_poll = NULL;
 }

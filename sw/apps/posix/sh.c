@@ -12,11 +12,17 @@
  * `&&` and `||`, and the builtins that make an edit-compile-run loop
  * work.
  *
- * Phase 5: pipes. They need two commands running at once, and every
- * command here runs to completion before the next starts. The honest
- * way to add them is a small coroutine discipline inside this process
- * -- a builtin that yields when its output buffer fills -- and that is
- * a bigger change than it looks, so it is not being smuggled in early.
+ * Pipes between builtins are here too, as buffers: the stages run one
+ * after the other (exec_one()).
+ *
+ * -- Where it runs --
+ *
+ * On the machine a line runs in a coroutine (job.c): px_intr() and the
+ * output path hand back to main.c's loop between pieces of work, so the
+ * other sessions are served while a long builtin runs. Nothing in this
+ * file depends on that -- the host transcript test calls
+ * px_exec_line() directly -- but the statics below are why only one
+ * command runs at a time (job.c's header).
  */
 
 #include <stdint.h>
@@ -51,9 +57,13 @@ void px_shell_init(px_shell_t *sh, px_out_fn out, void *ctx) {
     sh->in_len = 0;
     sh->poll = NULL;
     sh->intr = false;
+    sh->job_line[0] = 0;
+    sh->job_resume = false;
+    sh->job_status = 0;
 }
 
 bool px_intr(px_shell_t *sh) {
+    px_job_tick();
     if (!sh->intr && sh->poll && sh->poll(sh->ctx)) sh->intr = true;
     return sh->intr;
 }
@@ -1226,6 +1236,11 @@ static void bi_free(px_shell_t *sh, int argc, char **argv) {
         uint32_t heap = (uint32_t)sbrk(0) - (uint32_t)&_end;
         px_printf(sh, "this shell: %lu KB static, %lu KB heap\n",
             (unsigned long)(stat / 1024), (unsigned long)(heap / 1024));
+        /* The commands' stack (job.c): its size, and the most any
+         * command has used of it since posix started -- the number to
+         * look at if PX_JOB_STACK is ever in doubt. */
+        px_printf(sh, "command stack: %lu KB, at most %lu bytes used so far\n",
+            (unsigned long)(px_job_stack_size() / 1024), (unsigned long)px_job_stack_peak());
     }
 #endif
     sh->status = 0;
@@ -1333,7 +1348,7 @@ static void bi_help(px_shell_t *sh, int argc, char **argv) {
     px_puts(sh, "\nanything else is run as a program: 'zcc hello.c -o hello'\n"
                 "redirection: > and >>   chaining: && and ||\n"
                 "quoting: 'a b' \"a b\" a\\ b   wildcards: * ? [abc]\n"
-                "Ctrl+C stops a builtin that is still running\n");
+                "Ctrl+C stops a command that is running or waiting its turn\n");
 }
 
 /* ------------------------------------------------------------------ */
@@ -1795,4 +1810,21 @@ void px_resume(px_shell_t *sh, int status) {
     sh->pending_join = 0;
 
     exec_rest(sh, rest, join);
+}
+
+/*
+ * After a command that was stopped without unwinding -- it ran off its
+ * stack (job.c) -- the shell's own statics are put back as they are
+ * between commands: output to the terminal, no pipe being filled, no
+ * descriptor open, the inflate window free for the next zcat or unzip.
+ */
+void px_shell_abandon(void) {
+    cap_active = false;
+    cap_len = 0;
+    cap_overflow = false;
+    out_fd = 1;
+    px_close_all_files();
+    gz_window = NULL;
+    zz_window_give();
+    px_tools_abandon();
 }

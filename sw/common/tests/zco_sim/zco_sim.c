@@ -85,6 +85,19 @@ static uint32_t decode_direct(void) {
 	return d.sum;
 }
 
+// -- running off the stack --
+// A chain of calls deeper than its stack. The stack sits at the top of
+// a larger buffer, so what it overwrites below is ours.
+static uint8_t region[8192];
+static volatile uint32_t sink;
+static uint32_t burn(int n) {
+	volatile uint8_t pad[96];
+	for (int i = 0; i < 96; i++) pad[i] = (uint8_t)(n + i);	// every byte, as real locals are used
+	if (n == 0) { zco_yield(); return pad[0]; }
+	return burn(n - 1) + pad[95];
+}
+static void hog(void *arg) { (void)arg; sink = burn(40); zco_yield(); sink++; }
+
 int main(void) {
 	zco_t co;
 	uint32_t out = 0, expect, resumes = 0;
@@ -120,6 +133,21 @@ int main(void) {
 		ck(d.sum == whole && whole != 0, "a JPEG decoded in slices == decoded whole");
 		printf("zco: the JPEG in %lu slices, %dx%d\n", (unsigned long)turns, im.out_w, im.out_h);
 	}
+	printf("zco: the JPEG used %lu of %lu stack bytes\n",
+		(unsigned long)zco_stack_used(&co), (unsigned long)sizeof(stack2));
+	ck(!co.overflow && zco_stack_used(&co) > 0 && zco_stack_used(&co) < sizeof(stack2),
+		"the high-water mark is believable");
+
+	{
+		uint32_t n = 0;
+		zco_init(&co, hog, NULL, region + 6144, 2048);	// ~5KB of calls, 2KB of stack
+		while (zco_resume(&co) && n < 100) n++;
+		ck(co.overflow && co.done, "running off the stack is caught");
+		ck(!zco_resume(&co), "and it is never resumed again");
+		ck(sink == 0, "it did not get past the yield it overflowed at");
+		printf("zco: overflow caught after %lu resumes, used %lu, sink %lu\n", (unsigned long)n, (unsigned long)zco_stack_used(&co), (unsigned long)sink);
+	}
+
 	printf(fails ? "zco: FAILED\n" : "zco: ok\n");
 	return fails ? 1 : 0;
 }

@@ -33,6 +33,36 @@
  * area and runs on its own stack, so a stack in the arena is as good
  * as the process's. On the build machine (the host tests) it is
  * ucontext. One coroutine runs at a time; it may not start another.
+ *
+ * -- the stack is a fixed buffer --
+ *
+ * Nothing grows it, and nothing stops a call chain from running off
+ * its bottom into whatever lies below. So zco_init() fills it with a
+ * pattern, and every time the coroutine hands back, zco checks that
+ * the lowest ZCO_GUARD bytes still hold it. If not, the coroutine is
+ * finished on the spot -- `overflow` set, never resumed again -- and
+ * zco_resume() returns false as for an ending: the caller treats it as
+ * a failure. That catches the overflow at the first yield after it,
+ * which is too late to undo what it wrote, but early enough that a
+ * stack too small shows up in a test rather than as a corruption
+ * somewhere else, much later. zco_stack_used() says how deep it went,
+ * to size a stack from a test run.
+ *
+ * Both read the pattern, so both can be fooled by a frame that
+ * reserves a large array and writes only part of it: the call chain
+ * can step over the guard, and the high-water mark reads low. Give a
+ * coroutine a stack well above what zco_stack_used() reports -- twice
+ * is a sensible rule -- rather than just enough. sw/apps/posix/job.c
+ * adds a slack zone below its stack and checks that too.
+ *
+ * -- where the stack lives --
+ *
+ * If the coroutine calls malloc(), its stack must not come from
+ * malloc(): newlib's _sbrk() refuses to grow the heap past the current
+ * stack pointer, so with the stack inside the heap every allocation in
+ * the coroutine fails. Put it in a static buffer, an arena, or the
+ * main loop's own frame (posix). A coroutine that allocates nothing
+ * may have its stack anywhere.
  */
 
 #include <stdint.h>
@@ -56,7 +86,10 @@ struct zco {
 	void		*stack;
 	size_t		bytes;
 	bool		started, done, running;
+	bool		overflow;	// it ran off its stack (see above): done, failed
 };
+
+#define ZCO_GUARD	128		// bytes at the stack's bottom that must stay untouched
 
 // Readies fn(arg) to run on `stack` (bytes, 16-aligned or not: it is
 // aligned here). Nothing runs until zco_resume().
@@ -75,5 +108,9 @@ zco_t *zco_current(void);
 // Forget it, wherever it stands: it is never resumed. Its stack is the
 // caller's to free.
 void zco_abandon(zco_t *co);
+
+// The most of its stack it has used so far, in bytes (the high-water
+// mark of the pattern zco_init() laid down).
+size_t zco_stack_used(const zco_t *co);
 
 #endif

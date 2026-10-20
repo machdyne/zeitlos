@@ -187,20 +187,133 @@ done` does not echo, and a pipeline stops where it is. A file being
 written when it happens (`unzip`, `tar`, `gunzip`, `cp -r`) is removed,
 not left half-written; what was finished before it stays.
 
-How: a builtin runs inside `px_exec_line()`, and nothing reads the
-terminal meanwhile -- so long-running builtins call `px_intr()` between
-pieces of work, which calls the shell's `poll` hook. On the machine
-that is `conn_poll()` in `main.c`: at most fifty times a second it takes
-this session's own DATA and DATA_ACK messages out of the mailbox
-(`z_msg_take_match()`, so everything else stays queued, in order, and
-nothing re-enters the message handlers), looks for a 0x03, and lets the
-acks through so the output keeps flowing. Other keys typed meanwhile are
-kept (64 bytes) and given to the line editor when the prompt is back, as
-typeahead always was; keys after a Ctrl+C are dropped. While a builtin
-of a session is producing output faster than the terminal takes it, the
-shell now waits for the terminal (up to 2 s per 4 KB) instead of
-dropping the overflow. A program started with `run` is not a builtin
-and is not stopped by Ctrl+C (`kill` it).
+Ctrl+C also takes back a command that is still **waiting its turn**
+behind another session's (below): it never starts, and the prompt comes
+back with `^C`.
+
+### How a command runs
+
+A command line runs in a **coroutine** (`job.c`, on `sw/common/zco.h`;
+[responsive.md](responsive.md)), on a stack of its own, and the main
+loop resumes it whenever it has nothing else to do. The builtins did not
+change: they hand back from the two places they already had --
+
+- `px_intr()`, which every long builtin calls between pieces of work
+  (an entry, a line, 1-4 KB), once its slice -- about 10 ms -- is used.
+  Between slices it is one clock read, so the checks stay cheap;
+- the output path, when the terminal has not yet acked what was sent:
+  the command waits there for the acks (up to 2 s for each 4 KB, then
+  the overflow is dropped and counted, as before) -- and while it
+  waits, the main loop sleeps until the next message instead of
+  spinning.
+
+Meanwhile the main loop reads **every** message and serves every
+session: other terminals' typing and echo, their output and its acks,
+connects and disconnects, children's output relayed from their sinks,
+children exiting. A long `find /` or `cat` in one terminal no longer
+stops another from typing. A key reaches the main loop within one slice
+plus whatever the builtin does between two `px_intr()` calls.
+
+**One command at a time.** The builtins keep their working state in
+statics -- the argument buffer `argv` points into, the redirection and
+descriptor table (emptied after every command), the pipe buffers,
+`px_printf()`'s buffer, find's walker, diff's buffers, the archive
+state, the one 32 KB inflate window, zgz's stream, cp -r's walker -- so
+two commands cannot be interleaved, not even an `echo` between two
+slices of a `find` (it would re-split into the buffer the find's
+arguments live in). So a command typed in a second session while one is
+running **waits its turn**, in the order typed, and the terminal says
+so:
+
+```
+$ echo hi
+(waiting for a command in another session -- Ctrl+C cancels)
+hi
+$
+```
+
+Its typing is still echoed and edited at once; Ctrl+C takes it out of
+the queue. (The working directory was always one for the whole process,
+so nothing is lost there.) Making the builtins' state per session would
+let quick commands run between another's slices; it is a larger change
+than it looks, and was left until somebody misses it.
+
+**Ctrl+C** arrives in the main loop as ordinary input and sets the
+session's flag; the builtin sees it at its next `px_intr()` and unwinds
+through its own cleanup -- files closed, half-written ones removed,
+memory freed -- printing `^C`, status 130, the rest of the line
+abandoned. A command is never abandoned in the middle (`zco_abandon()`):
+it holds open files and memory.
+
+**Typeahead**: keys typed while a command of the same session runs or
+waits are kept (64 bytes) and given to the line editor when the prompt
+is back, as before; keys after a Ctrl+C are dropped.
+
+**A session that closes** (or whose terminal dies) while its command
+runs: the command is told to stop as if by Ctrl+C and unwinds, its
+output going nowhere; its slot is not given to a new connection until
+it has. A command still waiting is simply dropped.
+
+**A program started with `run`** is not a builtin and runs as its own
+process; the session waits for it without blocking anything (the main
+loop polls its status, section 9e, 5.1), and the rest of the line after
+it -- `zcc x.c && run x` -- runs as a command of its own, in its turn.
+It is not stopped by Ctrl+C (`kill` it). The terminal handoff (5.2) is
+unchanged; the session a child's `tty:` request belongs to is now found
+by the child's pid, as its stdout sink is, rather than "the session
+that ran something last".
+
+### The command's stack
+
+`PX_JOB_STACK`, **8 KB**, on the process's own stack (in `main()`'s
+frame, part of `APP_STACK`), with 2 KB of slack below it. Measured with
+`zco_stack_used()` after each builtin, every slice handing back:
+
+| Builtin (the heaviest case) | rv32 (simulator) | x86-64 (host tests) |
+|---|---|---|
+| `find /` (34 levels deep) | 3672 | 7848 |
+| `find tree -name *.c` | 3168 | |
+| `tar -xf t.tgz` | 2792 | 4632 |
+| `unzip -o t.zip` | 2712 | 5080 |
+| `grep`, `cat f \| grep \| sort`, `head`, `tail`, `wc` | 2248 | 3720 |
+| `rm -r`, `cp -r` | 2208, 1920 | 5944, 5656 |
+| `diff` of two 6000-line files | 2188 | 3928 |
+| `gunzip`, `zcat` | 1936, 1664 | 3960, 3688 |
+| `sort`, `uniq`, `echo > f`, `ps`, `help` | under 2 KB | under 3.8 KB |
+
+The rv32 column is `tests/stack_sim/` -- the builtins themselves, built
+for the machine and run under the simulator (`sim/zsim-headless -n 0 -m
+16777216 -r /tmp/posix-tests sw/apps/posix/tests/stack_sim/px_stack.bin`,
+after `run.sh` has built the fixture); the host column is printed by
+`make test`. The deepest is `find`, 3.7 KB: twice that, rounded up, is
+8 KB. `free` shows the stack and the most any command has used of it
+since posix started.
+
+On the process stack and not in the heap because of `malloc()`: newlib's
+`_sbrk()` (`zeitlos.c`) refuses to grow the heap past the stack pointer
+of whoever asks, and from a stack that was itself `malloc()`ed -- below
+the heap's end -- it refused everything: `diff` and `cp -r` inside a
+command reported "out of memory" (the simulator run found it).
+
+**Running off it.** zco checks a 128-byte guard at the bottom after
+every slice, and `job.c` checks the 2 KB of slack below it as a second,
+wider guard (a frame with a large array it only partly writes can step
+over 128 bytes; the host tests did, through `exec_simple()`'s `argv`).
+Either written, the command is finished on the spot and never resumed;
+the session gets `posix: the command ran out of its 8 KB stack and was
+stopped; its files are closed, half-written ones left as they are`, and
+a prompt. What it held is let go: the descriptor table and every file
+the process has open (the main loop keeps none, so every open handle is
+the command's), all memory it took through `px_malloc()`, the inflate
+window, the shell's pipe and redirection state. Then:
+
+- **trustworthy**: everything outside the stack when only the guard or
+  the slack was written -- the sessions, the line editors, the queue,
+  the output buffers, the other sessions' state, the heap;
+- **not**: a file it was writing (left as far as it got, not removed --
+  its own cleanup never ran), and anything below the slack if the slack
+  was written: the terminal then also says `memory below it was written
+  too -- restart posix`, as the console does.
 
 ### find, diff, unzip, tar
 
@@ -289,6 +402,15 @@ or 8192 lines each.
 **A pipe holds its intermediate in memory, capped at 16KB**, and says
 so when it truncates. So `wc big.c` is fine and `cat big.c | wc` may
 not be.
+
+Streaming pipes -- the left side handing back when the pipe buffer is
+full, the right side consuming -- would now fit the coroutine, and were
+not done. They need each stage in a coroutine of its own (a second
+stack each), the filters reading `sh->in` through a function that waits
+for more rather than a whole buffer, and the statics above made per
+stage: `out_fd`, the capture state, `px_printf()`'s buffer and the line
+filters' buffers at least, and `zcat`/`unzip`/`tar` could not both be
+in a pipeline because of the one inflate window.
 
 ### `mv` and `ls -l`
 
@@ -1705,6 +1827,10 @@ started one.
 That is 5.1, and it is now done (section 9e). Pipes are 5.3 and need
 5.2 first.
 
+(Later, a command did come to run in a coroutine after all -- not for
+pipes but so that a long builtin stops holding up the other sessions;
+see "How a command runs".)
+
 
 
 ---
@@ -2548,11 +2674,24 @@ this migration stays possible, and ship copy-per-output first.
 
 ### Not verified on hardware
 
-`sw/apps/posix/main.c` has no automated test and cannot have one here:
-the port protocol needs a second process, `term` and `wm`, none of
-which `sim/` has. Every bug in the terminal handoff was found on a
-board, which is why `sw/apps/ttytest` exists at 200 lines -- it is the
-smallest thing that exercises that path.
+The terminal handoff needs a second process, `term` and `wm`, none of
+which `sim/` has. Every bug in it was found on a board, which is why
+`sw/apps/ttytest` exists at 200 lines -- it is the smallest thing that
+exercises that path.
+
+`main.c`'s loop itself now has a host test, `tests/run_main.c`: it
+includes the real `main.c` and plays the kernel's messages and the term
+windows around it (acks, slow acks, closes, a peer that dies, a child
+that runs and exits). It checks that a long `find` or `cat` in one
+session does not hold up another's typing and that the other's command
+runs after it; Ctrl+C in the middle of fifteen long builtins (and of six
+of them at each of their first twelve slices), with nothing left open,
+allocated or half-written; Ctrl+C on a waiting command; a session
+closing or dying mid-command; a slow terminal getting all of a 700 KB
+`cat`, in order; typeahead; a child; and a command running off its
+stack. `tests/run_cases.c` now runs every case in the coroutine,
+handing back at every `px_intr()`, and checks after each that nothing is
+left open or allocated.
 
 `sh.c` and `vfs.c` ARE covered, by two suites with different jobs:
 `tests/cases.txt` asserts what each command produces, and

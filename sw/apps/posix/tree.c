@@ -64,14 +64,14 @@ void px_tree_op(px_shell_t *sh, const char *what, const char *src, const char *d
         strcpy(d + n, base);
     }
 
-    mem = malloc(cap);
-    if (!mem) { cap = 8192; mem = malloc(cap); }
+    mem = px_malloc(cap);
+    if (!mem) { cap = 8192; mem = px_malloc(cap); }
     if (!mem) { px_printf(sh, "%s: out of memory\n", what); sh->status = 1; return; }
 
     if (!zw_start(w, dst ? ZW_COPY : ZW_DELETE, s, dst ? d : NULL, mem, cap)) {
         px_printf(sh, "%s: %s: %s\n", what, w->err == ZW_E_EXISTS ? d : src,
                   zw_strerror(w->err));
-        free(mem);
+        px_free(mem);
         sh->status = 1;
         return;
     }
@@ -91,5 +91,5 @@ void px_tree_op(px_shell_t *sh, const char *what, const char *src, const char *d
                   what, (unsigned long)w->skipped, w->skipped == 1 ? "y" : "ies", ZW_DEPTH);
         sh->status = 1;
     }
-    free(mem);
+    px_free(mem);
 }

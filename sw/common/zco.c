@@ -13,6 +13,39 @@ static zco_t *cur;
 
 zco_t *zco_current(void) { return cur; }
 
+// -- the stack guard (zco.h) --
+
+#define PATTERN 0x7A636F21u		// "zco!"
+
+// The stack as whole, aligned words.
+static uint32_t *words(const zco_t *co, size_t *n) {
+	uintptr_t lo = ((uintptr_t)co->stack + 3) & ~(uintptr_t)3;
+	uintptr_t hi = ((uintptr_t)co->stack + co->bytes) & ~(uintptr_t)3;
+	*n = hi > lo ? (size_t)(hi - lo) / 4 : 0;
+	return (uint32_t *)lo;
+}
+
+static void fill(zco_t *co) {
+	size_t n, i;
+	uint32_t *w = words(co, &n);
+	for (i = 0; i < n; i++) w[i] = PATTERN;
+}
+
+static bool guard_ok(const zco_t *co) {
+	size_t n, i;
+	const uint32_t *w = words(co, &n);
+	for (i = 0; i < ZCO_GUARD / 4 && i < n; i++)
+		if (w[i] != PATTERN) return false;
+	return true;
+}
+
+size_t zco_stack_used(const zco_t *co) {
+	size_t n, i;
+	const uint32_t *w = words(co, &n);
+	for (i = 0; i < n && w[i] == PATTERN; i++) ;
+	return (n - i) * 4;
+}
+
 #if defined(__riscv)
 
 // zco_switch(save, load): the callee-saved registers out to `save`, in
@@ -74,6 +107,7 @@ void zco_init(zco_t *co, zco_fn fn, void *arg, void *stack, size_t bytes) {
 	co->arg = arg;
 	co->stack = stack;
 	co->bytes = bytes;
+	fill(co);
 	co->co.r[0] = (uint32_t)(uintptr_t)entry;		// ra: where the first switch returns
 	co->co.r[1] = (uint32_t)(top - 16);				// sp
 }
@@ -95,6 +129,7 @@ void zco_init(zco_t *co, zco_fn fn, void *arg, void *stack, size_t bytes) {
 	co->arg = arg;
 	co->stack = stack;
 	co->bytes = bytes;
+	fill(co);
 	getcontext(&co->co.uc);
 	co->co.uc.uc_stack.ss_sp = stack;
 	co->co.uc.uc_stack.ss_size = bytes;
@@ -116,6 +151,11 @@ bool zco_resume(zco_t *co) {
 	zco_switch(&co->caller, &co->co);
 	// back here when it yields or ends
 	cur = NULL;
+	if (!guard_ok(co)) {
+		co->overflow = true;
+		co->done = true;
+		co->running = false;
+	}
 	return !co->done;
 }
 

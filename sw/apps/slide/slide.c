@@ -1041,7 +1041,7 @@ static void do_print(const char *line) {
 			return;
 	}
 	if (!z_print_begin(&printing, ed.d->title[0] ? ed.d->title : (path[0] ? path : "slide"))) {
-		copy_str(ed.msg, sizeof(ed.msg), "Cannot print: no room in /tmp");
+		copy_str(ed.msg, sizeof(ed.msg), "Cannot print: no room in " Z_DIR_TMP);
 		return;
 	}
 	printjob_options(&s, &printing.w);
@@ -1055,7 +1055,7 @@ static void do_print(const char *line) {
 	draw_status();
 	if (!printjob_pages(ed.d, s.first, s.count, &printing.w)) {
 		z_print_abort(&printing);
-		copy_str(ed.msg, sizeof(ed.msg), "Cannot print: no room in /tmp for the job");
+		copy_str(ed.msg, sizeof(ed.msg), "Cannot print: no room in " Z_DIR_TMP " for the job");
 		return;
 	}
 	if (!z_print_end(&printing)) {

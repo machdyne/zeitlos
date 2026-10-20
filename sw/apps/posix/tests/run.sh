@@ -13,8 +13,9 @@
 # invitation to look, not to re-record.
 #
 # What it exercises is sh.c and vfs.c, which contain no port, message
-# or window code at all. main.c's plumbing is not covered here and
-# needs a machine.
+# or window code at all. main.c's loop is covered at the end, by
+# run_main.c with a fake kernel; the terminal handoff still needs a
+# machine.
 
 set -e
 
@@ -114,7 +115,7 @@ mkdir -p "$work/ram" "$work/mvdir"
 
 if [ -x "$here/px_case_test" ]; then
     echo
-    "$here/px_case_test" "$work" "$here/cases.txt" || exit 1
+    PX_STACK_FILE="$work/stack.txt" "$here/px_case_test" "$work" "$here/cases.txt" || exit 1
 fi
 
 # -- find, diff, unzip, tar (tools.c) --
@@ -127,7 +128,52 @@ fi
 python3 "$here/gen_tools.py" "$work" "$work/gen_cases.txt" || exit 1
 if [ -x "$here/px_case_test" ]; then
     echo
-    "$here/px_case_test" "$work" "$here/tools.txt" || exit 1
+    PX_STACK_FILE="$work/stack.txt" "$here/px_case_test" "$work" "$here/tools.txt" || exit 1
     echo
-    "$here/px_case_test" "$work" "$work/gen_cases.txt" || exit 1
+    PX_STACK_FILE="$work/stack.txt" "$here/px_case_test" "$work" "$work/gen_cases.txt" || exit 1
+fi
+
+# The stack each command used in the coroutine (run_cases.c), deepest
+# first: what PX_JOB_STACK is sized from (docs/posix.md, "The command's
+# stack"). Host frames -- wider than the machine's.
+if [ -s "$work/stack.txt" ]; then
+    echo
+    echo "command stack used (host, bytes), deepest per command:"
+    sort -k2 -n -r "$work/stack.txt" | awk '!seen[$1]++' | head -40 |
+        awk '{ printf "  %-8s %6d  ", $1, $2; $1 = ""; $2 = ""; sub(/^  /, ""); print }'
+fi
+
+# -- the main loop (run_main.c: the real main.c, a fake kernel) --
+#
+# Big inputs, so that a command takes many slices: big.txt about 1 MB
+# (cat, grep, zcat ..., and in arch/huge.zip and huge.tgz), dbig*.txt for diff (inside its 256 KB and 8192
+# lines), a directory of big files for cp -r.
+python3 - "$work" <<'PY'
+import gzip, os, random, sys
+w = sys.argv[1]
+r = random.Random(3)
+lines = ["line %d %s" % (i, r.choice(["alpha", "beta", "gamma", "delta 7"])) for i in range(40000)]
+open(os.path.join(w, "big.txt"), "w").write("\n".join(lines) + "\n")
+open(os.path.join(w, "big.gz"), "wb").write(gzip.compress(open(os.path.join(w, "big.txt"), "rb").read()))
+d = lines[:6000]
+open(os.path.join(w, "dbig.txt"), "w").write("\n".join(d) + "\n")
+d2 = list(d)
+for k in range(0, 6000, 50):
+    d2[k] = d2[k] + " changed"
+open(os.path.join(w, "dbig2.txt"), "w").write("\n".join(d2) + "\n")
+import io, tarfile, zipfile
+data = open(os.path.join(w, "big.txt"), "rb").read()
+with zipfile.ZipFile(os.path.join(w, "arch/huge.zip"), "w", zipfile.ZIP_DEFLATED) as z:
+    z.writestr("big.bin", data)
+with tarfile.open(os.path.join(w, "arch/huge.tgz"), "w:gz") as t:
+    ti = tarfile.TarInfo("big.bin")
+    ti.size = len(data)
+    t.addfile(ti, io.BytesIO(data))
+os.makedirs(os.path.join(w, "bigdir"), exist_ok=True)
+for k in range(4):
+    open(os.path.join(w, "bigdir", "f%d.txt" % k), "w").write("\n".join(lines[:8000]) + "\n")
+PY
+if [ -x "$here/px_main_test" ]; then
+    echo
+    "$here/px_main_test" "$work" || exit 1
 fi

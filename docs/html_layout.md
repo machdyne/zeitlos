@@ -391,6 +391,14 @@ are all the same; only where the bytes land and what happens when they
 stop differ. It therefore inherits connection reuse, so clicking an
 image on the page you just loaded usually costs no handshake at all.
 
+Once it has arrived the picture is **decoded a slice at a time** from
+the main loop (`imgdec.c`, over `sw/common/zimgjob.h`), so the page
+scrolls and answers meanwhile; the bar says `picture 40% -- Esc
+stops`, and Esc or Stop ends it at once -- the box then says `stopped
+-- click to load`. Whichever way it ends, or when the page changes
+under it, the spool's handle is closed and the file removed
+([web_app.md](web_app.md#pictures)). An SVG is still drawn in one go.
+
 **The blit stride is in BYTES**, not words -- `o.wpl * 4`, the same as
 `sw/apps/view` passes. Getting this wrong scrambles every row by a
 factor of four, and it does not look like a stride bug: it looks like

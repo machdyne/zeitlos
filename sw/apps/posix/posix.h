@@ -17,6 +17,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <stddef.h>
 
 #define PX_PATH_MAX   256
 #define PX_MAX_FD     12
@@ -101,22 +102,88 @@ typedef struct {
     int         pending_join;           /* 0 none, 1 &&, 2 || */
 
     /*
-     * Ctrl+C. A builtin runs to completion inside px_exec_line(), so
-     * nothing reads the terminal while it runs -- unless it asks. A
-     * long-running builtin calls px_intr() between pieces of work; that
-     * calls `poll`, which main.c points at a function that looks for a
-     * Ctrl+C from this session's terminal (and lets its output drain).
-     * Once seen, `intr` stays set for the rest of the line: the builtin
-     * stops, the line is abandoned, the status is 130. NULL `poll`
-     * (the default) means nothing can interrupt.
+     * Ctrl+C. A long-running builtin calls px_intr() between pieces of
+     * work; that asks `poll` whether Ctrl+C has been pressed. On the
+     * machine the command runs in a coroutine (job.c) and the main loop
+     * reads the terminal meanwhile, so main.c's `poll` just reports the
+     * flag the main loop set. Once seen, `intr` stays set for the rest
+     * of the line: the builtin stops, the line is abandoned, the status
+     * is 130. NULL `poll` (the default) means nothing can interrupt.
      */
     bool      (*poll)(void *ctx);
     bool        intr;
+
+    /* job.c's: the line waiting to run, or the status to resume with */
+    char        job_line[PX_LINE_MAX];
+    bool        job_resume;
+    int         job_status;
 } px_shell_t;
 
 /* True once Ctrl+C has been pressed during this line. Cheap enough to
- * call per entry, per line, per 4 KB. */
+ * call per entry, per line, per 4 KB: it is also where a command in a
+ * coroutine hands back to the main loop once its slice is used
+ * (px_job_tick()). */
 bool px_intr(px_shell_t *sh);
+
+/*
+ * -- running commands (job.c, docs/posix.md "How a command runs") --
+ *
+ * One command at a time, in a coroutine on a stack of its own; the
+ * others wait in order. The main loop calls px_job_step() whenever it
+ * has nothing else to do.
+ */
+#define PX_JOB_NONE     0
+#define PX_JOB_QUEUED   1
+#define PX_JOB_RUNNING  2
+
+#define PX_STEP_IDLE     0      /* nothing to run */
+#define PX_STEP_RAN      1      /* ran a slice; more to do */
+#define PX_STEP_BLOCKED  2      /* waiting for the terminal to take its output */
+#define PX_STEP_DONE     3      /* *ended's command has finished */
+#define PX_STEP_OVERFLOW 4      /* *ended's command ran off its stack: stopped, let go */
+#define PX_STEP_OVERRUN  5      /* ... and wrote below it, into PX_JOB_SLACK */
+
+/*
+ * The coroutine's stack, from measurement (docs/posix.md, "The
+ * command's stack"): on the machine's CPU (tests/stack_sim, under the
+ * simulator) the deepest builtin is `find` over a deep tree at 3672
+ * bytes -- diff, unzip, tar.gz, grep and sort all stay under 2.8 KB.
+ * Twice that, rounded up, is 8 KB. PX_JOB_SLACK more lies below it,
+ * filled and checked after every slice, so that an overrun is caught
+ * before it reaches anything else (job.c).
+ */
+#define PX_JOB_STACK    (8 * 1024)
+#define PX_JOB_SLACK    2048
+
+/* `mem` is PX_JOB_STACK + PX_JOB_SLACK bytes (or any size above the
+ * slack); `slice_ticks` how long a resume runs before px_intr() hands
+ * back -- 0 hands back at every call, which the tests use. */
+void px_job_init(void *mem, size_t bytes, uint32_t slice_ticks);
+bool px_job_submit(px_shell_t *sh, const char *line);
+bool px_job_submit_resume(px_shell_t *sh, int status);  /* px_resume(), after a child */
+int  px_job_state(const px_shell_t *sh);
+int  px_job_ahead(const px_shell_t *sh);    /* commands that run before it */
+bool px_job_cancel(px_shell_t *sh);         /* a QUEUED command; true if it was */
+bool px_job_pending(void);
+px_shell_t *px_job_current(void);
+int  px_job_step(px_shell_t **ended);
+void px_job_tick(void);                     /* from px_intr() */
+bool px_job_wait(void);                     /* from the output path: false outside a command */
+size_t px_job_stack_size(void);
+size_t px_job_stack_last(void);
+size_t px_job_stack_peak(void);
+
+/* Memory a command holds, let go of if the command is stopped without
+ * unwinding (it ran off its stack). */
+void *px_malloc(size_t n);
+void *px_calloc(size_t n, size_t size);
+void px_free(void *p);
+int  px_alloc_count(void);
+
+/* The shell's own state after a command that never unwound: no
+ * redirection, no pipe, no descriptors, the inflate window free. */
+void px_shell_abandon(void);
+void px_tools_abandon(void);
 
 /* Builtins in tools.c (docs/posix.md, "find, diff, unzip, tar"). */
 void px_bi_find(px_shell_t *sh, int argc, char **argv);

@@ -77,6 +77,7 @@ sw/apps/posix/posix.map
 sw/apps/posix/posix.dasm
 sw/apps/posix/tests/px_shell_test
 sw/apps/posix/tests/px_case_test
+sw/apps/posix/tests/px_main_test
 
 # Host test and render products, built in place by `make test` /
 # `make render` (the web browser's go in build/, which also holds the

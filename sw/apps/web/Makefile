@@ -93,10 +93,13 @@ else
 TLS_OBJ =
 endif
 
+# zco.o, zimgjob.o, imgdec.o: a picture decoded into its box a slice at
+# a time from the main loop (docs/responsive.md).
 OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o zwidget.o zspeak.o \
 	zfsapp.o zflist.o zdialog.o zedit.o zinflate.o zimg.o zsvg.o \
+	zco.o zimgjob.o \
 	zport.o zstream.o zdns.o \
-	url.o uni.o http.o html.o layout.o page.o toolbar.o smallweb.o bodyview.o find.o bookmark.o $(TLS_OBJ) web.o
+	url.o uni.o http.o html.o layout.o page.o toolbar.o smallweb.o bodyview.o find.o bookmark.o imgdec.o $(TLS_OBJ) web.o
 
 # WEB_TLS changes CFLAGS without changing a single source file, so
 # make on its own would happily relink a mixture of objects built with
@@ -305,8 +308,9 @@ test: $(BUILD)/test_url $(BUILD)/test_http $(BUILD)/test_html \
       $(BUILD)/test_toolbar \
       $(BUILD)/test_verify \
       $(BUILD)/test_sha384 $(BUILD)/test_smallweb $(BUILD)/test_bodyview \
-      $(BUILD)/test_bookmark $(BUILD)/test_find
+      $(BUILD)/test_bookmark $(BUILD)/test_find $(BUILD)/test_imgdec
 	@echo "--- url ---"    && $(BUILD)/test_url
+	@echo "--- pictures ---" && $(BUILD)/test_imgdec ../../..
 	@echo "--- bookmarks ---" && $(BUILD)/test_bookmark
 	@echo "--- find in page ---" && $(BUILD)/test_find
 	@echo "--- gopher, gemini ---" && $(BUILD)/test_smallweb
@@ -328,6 +332,14 @@ test: $(BUILD)/test_url $(BUILD)/test_http $(BUILD)/test_html \
 
 $(BUILD):
 	@mkdir -p $(BUILD)
+
+# A picture decoded into its box a slice at a time, stopped anywhere:
+# the same bits as in one call, and its spool closed and removed.
+$(BUILD)/test_imgdec: tests/test_imgdec.c imgdec.c imgdec.h $(COMMON)/zimgjob.c \
+		$(COMMON)/zco.c $(COMMON)/zimg.c $(COMMON)/zinflate.c | $(BUILD)
+	$(HOSTCC) $(HOSTFLAGS) -fsanitize=address,undefined -fno-sanitize=shift \
+		-DZ_IMG_HAVE_PNG=1 -o $@ tests/test_imgdec.c imgdec.c \
+		$(COMMON)/zimgjob.c $(COMMON)/zco.c $(COMMON)/zimg.c $(COMMON)/zinflate.c
 
 # Gopher and Gemini: requests, the Gemini header, and the HTML each
 # body becomes -- docs/gopher_gemini.md.

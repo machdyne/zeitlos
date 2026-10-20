@@ -71,6 +71,7 @@
 #include "../../common/zdialog.h"
 #include "../../common/zfsapp.h"
 #include "../../common/zimg.h"
+#include "../../common/zimgjob.h"
 #if VIEW_SVG
 #include "../../common/zsvg.h"
 #endif
@@ -101,7 +102,41 @@
 // and escape has an ASCII code of its own.
 #define KEY_ESCAPE  27
 
-static uint32_t doc[DOC_H][DOC_WPL] __attribute__((section(".bss")));
+// Two documents: the picture on screen, and the next one being decoded
+// into the other, so stopping a load (Esc) leaves the picture that was
+// there. `doc` is the one shown -- the new one while it loads, so its
+// rows appear as they are decoded -- and `prev` what to go back to.
+static uint32_t doc_mem[2][DOC_H][DOC_WPL] __attribute__((section(".bss")));
+static uint32_t (*doc)[DOC_WPL] = doc_mem[0];
+
+// -- loading without stopping (docs/responsive.md) --
+//
+// A picture is decoded a slice at a time from the main loop: zimgjob
+// reads the file a chunk a step and runs the decoder in a coroutine,
+// which dithers straight into the document (no grey image is held).
+// The decoder's stack, its state and the chunk live in scratch.dec; on
+// the board it uses about 2KB of the stack at most (PNG), so 8KB. They
+// share their bytes with an SVG's text, which is only held while a
+// drawing is rendered -- never while a picture loads.
+#define DEC_STACK   (8 * 1024)
+static union {
+	uint8_t		dec[Z_IMGJOB_DOC_MEM_STACK(DEC_STACK)];
+#if VIEW_SVG
+	char		svg_text[VIEW_SVG_MAX];
+#endif
+} scratch __attribute__((section(".bss"), aligned(8)));
+static z_imgjob_t job;
+static bool loading;
+static uint32_t shown_at;			// when the rows so far were last drawn
+static int shown_rows;
+static int shown_pct;				// in the title, in tens
+static struct {						// what to go back to on Esc
+	uint32_t (*doc)[DOC_WPL];
+	int w, h, sx, sy;
+} prev;
+#if VIEW_INSTRUMENT
+static uint32_t load_t0;
+#endif
 
 static z_win_t win;
 static z_scrollbar_t vsb, hsb;
@@ -314,7 +349,14 @@ static void update_title(void) {
 	char next[sizeof(title_buf)];
 	int n;
 
-	if (!img_w) {
+	if (loading) {
+		// "name 40%  Esc stops": in tens, since each title costs a
+		// repaint of the windows below it
+		n = (int)z_utf8_copy(next, sizeof(next), basename_of(job.path));
+		n = str_append(next, sizeof(next), n, " ");
+		n = str_append_dec(next, sizeof(next), n, shown_pct * 10);
+		str_append(next, sizeof(next), n, "%  Esc stops");
+	} else if (!img_w) {
 		str_copy(next, sizeof(next), "view");
 	} else {
 		// Cut at a character boundary: a long file name is UTF-8.
@@ -324,7 +366,8 @@ static void update_title(void) {
 		n = str_append(next, sizeof(next), n, "x");
 		n = str_append_dec(next, sizeof(next), n, img_h);
 		n = str_append(next, sizeof(next), n, " ");
-		str_append(next, sizeof(next), n, z_img_fmt_name(img_fmt));
+		str_append(next, sizeof(next), n,
+			img_fmt == Z_IMG_FMT_NONE ? "SVG" : z_img_fmt_name(img_fmt));
 	}
 
 	if (!strcmp(next, title_buf)) return;
@@ -494,7 +537,7 @@ static void repaint(void) {
 	z_scrollbar_draw(&vsb, true);
 	z_scrollbar_draw(&hsb, true);
 
-	if (!img_w) {
+	if (!img_w && !loading) {
 		// Nothing loaded. Say how to load something rather than
 		// leaving an empty window that looks broken.
 		z_win_draw_text(&win, 8, 8,
@@ -530,14 +573,12 @@ static void show_error(const char *what, int rv) {
 // is not a drawing.
 static void load_svg(z_img_file_t *src, const char *path) {
 
-	static char text[VIEW_SVG_MAX] __attribute__((section(".bss")));
+	char *text = scratch.svg_text;	// no picture is loading (load_file())
 	static z_svg_edge_t edges[VIEW_SVG_EDGES]
 		__attribute__((section(".bss")));
 
 	z_svg_t sv;
 	int n, rv;
-
-	(void)path;
 
 	if (z_img_file_rewind(src) != Z_IMG_OK) {
 		show_error("rewind", Z_IMG_E_IO);
@@ -569,26 +610,171 @@ static void load_svg(z_img_file_t *src, const char *path) {
 	sv.edges = edges;
 	sv.max_edges = VIEW_SVG_EDGES;
 
-	memset(doc, 0, sizeof(doc));
+	// Into the other document, so a drawing that fails leaves the
+	// picture that was there.
+	{
+		uint32_t (*other)[DOC_WPL] = doc == doc_mem[0] ? doc_mem[1] : doc_mem[0];
 
-	rv = z_svg_render_bitmap(&sv, &doc[0][0], DOC_WPL);
+		memset(other, 0, sizeof(doc_mem[0]));
 
-	if (rv != Z_SVG_OK) {
-		z_dialog_confirm(&dlg_ctx, "Cannot draw",
-			z_svg_strerror(rv), Z_DIALOG_OK_CANCEL);
-		return;
+		rv = z_svg_render_bitmap(&sv, &other[0][0], DOC_WPL);
+
+		if (rv != Z_SVG_OK) {
+			z_dialog_confirm(&dlg_ctx, "Cannot draw",
+				z_svg_strerror(rv), Z_DIALOG_OK_CANCEL);
+			return;
+		}
+
+		doc = other;
 	}
+
+	str_copy(filename, sizeof(filename), path);
+	remember_dir(filename);
+	img_fmt = Z_IMG_FMT_NONE;
 
 	img_w = DOC_W;
 	img_h = DOC_H;
 	scroll_x = 0;
 	scroll_y = 0;
+	z_scrollbar_set_value(&vsb, 0);
+	z_scrollbar_set_value(&hsb, 0);
 
+	layout();
+	update_title();
 	repaint();
 
 }
 
 #endif
+
+// Back to the picture that was there before a load began.
+static void load_back(void) {
+
+	doc = prev.doc;
+	img_w = prev.w;
+	img_h = prev.h;
+	layout();
+	z_scrollbar_set_value(&hsb, prev.sx);
+	z_scrollbar_set_value(&vsb, prev.sy);
+	scroll_x = hsb.value;
+	scroll_y = vsb.value;
+
+}
+
+// Esc: the load stops at once -- the file closed -- and the picture
+// that was there comes back.
+static void load_stop(void) {
+
+	if (!loading) return;
+
+	z_imgjob_stop(&job);
+	z_imgjob_end(&job);
+	loading = false;
+	load_back();
+	update_title();
+	repaint();
+	dbg("view: load stopped\n");
+
+}
+
+// A slice of the load, from the main loop when no message is waiting.
+static void load_step(void) {
+
+	int st = z_imgjob_step(&job, Z_TICK_HZ / 50);
+	uint32_t now = z_uptime_ticks();
+	int pct;
+
+	// The picture's size is known from its first row: the scrollbars
+	// follow it from then on.
+	if (job.w && (job.w != img_w || job.h != img_h)) {
+		img_w = job.w;
+		img_h = job.h;
+		layout();
+		z_scrollbar_draw(&vsb, true);
+		z_scrollbar_draw(&hsb, true);
+	}
+
+	if (st == Z_IMGJOB_RUNNING) {
+
+		// The rows so far, a few times a second.
+		if (job.rows_done != shown_rows && now - shown_at >= Z_TICK_HZ / 8) {
+			shown_rows = job.rows_done;
+			shown_at = now;
+			repaint_image();
+		}
+
+		pct = z_imgjob_permille(&job) / 100;
+		if (pct != shown_pct) {
+			shown_pct = pct;
+			update_title();
+		}
+		return;
+
+	}
+
+	loading = false;
+
+#if VIEW_INSTRUMENT
+	{
+		uint32_t t1 = z_uptime_ticks();
+		dbg("view: decode ");
+		dbg(z_img_fmt_name(job.fmt));
+		dbg(" -> ");
+		dbg_dec((int32_t)job.w);
+		dbg("x");
+		dbg_dec((int32_t)job.h);
+		dbg(" in ");
+		dbg_dec((int32_t)(t1 - load_t0));
+		dbg(" ticks (");
+		dbg_dec((int32_t)(((t1 - load_t0) * 1000u) / Z_TICK_HZ));
+		dbg(" ms)\n");
+	}
+#endif
+#if Z_PROF
+	prof_report();
+#endif
+
+	if (st != Z_IMGJOB_DONE) {
+
+		int err = job.err;
+
+		// Nothing of it could be shown: the picture that was there
+		// stays.
+		z_imgjob_end(&job);
+		load_back();
+		update_title();
+		repaint();
+		if (err == Z_IMGJOB_E_OPEN)
+			z_dialog_confirm(&dlg_ctx, "Cannot open",
+				"The file could not be\nopened.", Z_DIALOG_OK_CANCEL);
+		else if (err == Z_IMGJOB_E_MEM)
+			z_dialog_confirm(&dlg_ctx, "Cannot open",
+				"Not enough memory.", Z_DIALOG_OK_CANCEL);
+		else
+			show_error("decode", err);
+		return;
+
+	}
+
+	// A picture cut short is still worth showing -- what there was,
+	// with the scroll range matching it -- and says why.
+	img_w = job.w;
+	img_h = job.h;
+	img_fmt = job.fmt;
+	img_ordered = job.ordered;
+
+	str_copy(filename, sizeof(filename), job.path);
+	remember_dir(filename);
+
+	z_imgjob_end(&job);
+
+	layout();
+	update_title();
+	repaint();
+
+	if (job.err != Z_IMG_OK) show_error("decode", job.err);
+
+}
 
 static void load_file(const char *path) {
 
@@ -602,13 +788,11 @@ static void load_file(const char *path) {
 	// Static rather than on the stack: an app's stack is not the
 	// place for a kilobyte that is used once per file open.
 	static uint8_t hdr[1024];
-	z_img_t im;
 	z_img_fmt_t fmt;
-	int n, rv;
+	int n;
 
-#if VIEW_INSTRUMENT
-	uint32_t t0, t1;
-#endif
+	// One picture at a time: a load under way gives way to this one.
+	load_stop();
 
 	if (z_img_file_open(&src, path) != Z_IMG_OK) {
 		z_dialog_confirm(&dlg_ctx, "Cannot open",
@@ -616,9 +800,8 @@ static void load_file(const char *path) {
 		return;
 	}
 
-	// Sniff on content, then rewind. The decoders all expect to start
-	// at byte 0; identifying by extension instead would be shorter
-	// but gets a surprising number of real files wrong.
+	// Sniff on content. Identifying by extension instead would be
+	// shorter but gets a surprising number of real files wrong.
 	n = z_img_file_read(&src, hdr, sizeof(hdr));
 
 #if VIEW_SVG
@@ -631,89 +814,54 @@ static void load_file(const char *path) {
 	}
 #endif
 
+	z_img_file_close(&src);
+
 	fmt = z_img_sniff(hdr, n);
 
 	if (fmt == Z_IMG_FMT_NONE) {
-		z_img_file_close(&src);
 		z_dialog_confirm(&dlg_ctx, "Cannot open",
 			"This is not an image file\nview recognises.",
 			Z_DIALOG_OK_CANCEL);
 		return;
 	}
 
-	if (z_img_file_rewind(&src) != Z_IMG_OK) {
-		z_img_file_close(&src);
-		show_error("rewind", Z_IMG_E_IO);
+	// The new picture goes into the other document, and is what the
+	// window shows while it loads: its rows appear as they are
+	// decoded. The one there now is kept to go back to.
+	prev.doc = doc;
+	prev.w = img_w;
+	prev.h = img_h;
+	prev.sx = scroll_x;
+	prev.sy = scroll_y;
+	doc = doc == doc_mem[0] ? doc_mem[1] : doc_mem[0];
+
+	z_prof_reset();
+#if VIEW_INSTRUMENT
+	load_t0 = z_uptime_ticks();
+#endif
+
+	// Cleared by the job, not after failing: a decoder that stops
+	// partway leaves what it managed on screen, which is more use than
+	// a blank window. The ditherer also relies on this -- rows narrower
+	// than the document leave the remaining words untouched (see
+	// dither_row_fs() in zimg.c).
+	if (!z_imgjob_start_doc(&job, path, &doc[0][0], DOC_WPL, DOC_W, DOC_H,
+		scratch.dec, sizeof(scratch.dec))) {
+		int err = job.err;
+		z_imgjob_end(&job);
+		doc = prev.doc;
+		z_dialog_confirm(&dlg_ctx, "Cannot open",
+			err == Z_IMGJOB_E_MEM ? "Not enough memory."
+				: "The file could not be\nopened.", Z_DIALOG_OK_CANCEL);
 		return;
 	}
 
-	memset(&im, 0, sizeof(im));
-	im.read = z_img_file_read;
-	im.ctx = &src;
-	im.doc = &doc[0][0];
-	im.doc_wpl = DOC_WPL;
-	im.doc_w = DOC_W;
-	im.doc_h = DOC_H;
+	loading = true;
+	shown_rows = 0;
+	shown_pct = 0;
+	shown_at = z_uptime_ticks();
 
-	// Cleared before decoding, not after failing: a decoder that
-	// stops partway leaves what it managed on screen, which is more
-	// use than a blank window. The ditherer also relies on this --
-	// rows narrower than the document leave the remaining words
-	// untouched (see dither_row_fs() in zimg.c).
-	z_img_clear(&im);
-
-#if VIEW_INSTRUMENT
-	t0 = z_uptime_ticks();
-#endif
-
-	z_prof_reset();
-
-	rv = z_img_decode(&im, fmt);
-
-#if VIEW_INSTRUMENT
-	t1 = z_uptime_ticks();
-	dbg("view: decode ");
-	dbg(z_img_fmt_name(fmt));
-	dbg(" ");
-	dbg_dec((int32_t)im.src_w);
-	dbg("x");
-	dbg_dec((int32_t)im.src_h);
-	dbg(" -> ");
-	dbg_dec((int32_t)im.out_w);
-	dbg("x");
-	dbg_dec((int32_t)im.out_h);
-	dbg(" in ");
-	dbg_dec((int32_t)(t1 - t0));
-	dbg(" ticks (");
-	dbg_dec((int32_t)(((t1 - t0) * 1000u) / Z_TICK_HZ));
-	dbg(" ms)\n");
-#endif
-
-	z_img_file_close(&src);
-
-#if Z_PROF
-	prof_report();
-#endif
-
-	if (rv != Z_IMG_OK) {
-		img_w = im.out_w;
-		img_h = im.out_h;
-		img_fmt = fmt;
-		// A partial image is still worth showing, but the scroll
-		// range must match what is actually there.
-		if (img_w < 0) img_w = 0;
-		if (img_h < 0) img_h = 0;
-		show_error("decode", rv);
-	} else {
-		img_w = im.out_w;
-		img_h = im.out_h;
-		img_fmt = fmt;
-		img_ordered = im.was_ordered;
-	}
-
-	str_copy(filename, sizeof(filename), path);
-	remember_dir(filename);
-
+	img_w = img_h = 0;
 	scroll_x = scroll_y = 0;
 	z_scrollbar_set_value(&vsb, 0);
 	z_scrollbar_set_value(&hsb, 0);
@@ -761,6 +909,7 @@ static void handle_key(uint32_t keysym) {
 			"An image viewer: BMP, PNM, GIF, JPEG, PNG, ZBM and SVG, "
 			"shown in black and white.\n\n"
 			"o\tOpen an image\n"
+			"Esc\tStop loading one\n"
 			"Arrows\tScroll\n"
 			"PgUp/PgDn\tScroll a page\n"
 			"Home\tBack to the top left\n"
@@ -789,7 +938,10 @@ static void handle_key(uint32_t keysym) {
 			break;
 
 		case KEY_ESCAPE:
-			// Reserved for leaving full-screen mode, which needs wm
+			// Stops a picture loading, and leaves the one that was
+			// there (docs/view_app.md).
+			if (loading) { load_stop(); break; }
+			// Otherwise reserved for leaving full-screen mode, which needs wm
 			// support that does not exist yet (an undecorated-window
 			// flag and a way to suppress the dock). Swallowed rather
 			// than ignored so the binding is not quietly claimed by
@@ -906,7 +1058,7 @@ int main(void) {
 	// unreliable on this hardware (docs/app_runtime.md), and a
 	// document full of garbage would be blitted to the screen before
 	// anything else had a chance to run.
-	memset(doc, 0, sizeof(doc));
+	memset(doc_mem, 0, sizeof(doc_mem));
 
 	img_w = img_h = 0;
 	img_fmt = Z_IMG_FMT_NONE;
@@ -1008,6 +1160,9 @@ int main(void) {
 
 					if (msg.obj.type == Z_UINT32 &&
 						(int32_t)msg.obj.val.uint32 == win.id) {
+						// its file closed: nothing sweeps a handle
+						// at exit (zimg.h)
+						if (loading) { z_imgjob_stop(&job); loading = false; }
 						z_win_destroy(&win);
 						dbg("view: exiting\n");
 						return 0;
@@ -1023,6 +1178,9 @@ int main(void) {
 			}
 
 		}
+
+		// A picture loading: a slice of it, then back for messages.
+		if (loading) { load_step(); continue; }
 
 		// Yield. Without this the loop spins, the process stays
 		// RUNNABLE forever and takes a full scheduler share from

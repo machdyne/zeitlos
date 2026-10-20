@@ -65,9 +65,26 @@ loop does the I/O -- it reads the file and hands the coroutine each
 chunk. The decoders in `zimg` allocate nothing, which is what makes them
 a good fit. One coroutine runs at a time and may not start another.
 
+**The stack is a fixed buffer, and it is guarded.** Nothing grows it,
+and nothing stops a call chain from running off its bottom into
+whatever lies below. So `zco_init()` fills it with a pattern, and every
+time the coroutine hands back, `zco_resume()` checks that the lowest
+128 bytes (`ZCO_GUARD`) still hold it. If not, the coroutine is
+finished there and then -- `co.overflow` set, never resumed -- and
+`zco_resume()` returns false as for an ending; the caller treats it as
+a failure (zimgjob reports FAILED). That is after the fact: it cannot
+undo what the overflow wrote, but it turns "a corruption somewhere,
+much later" into a failure at the next yield, in a test.
+`zco_stack_used(&co)` is the high-water mark, for sizing a stack from a
+test run. Both read the pattern, so a frame that reserves a big array
+and writes little of it can step over the guard and make the mark read
+low: give a coroutine about **twice** what `zco_stack_used()` reports.
+(The squirrel JPEG decode reports 516 bytes of its 16KB.)
+
 `sw/common/tests/zco_sim/` checks it on RISC-V in the simulator (locals
 across 321 switches, deep recursion, a JPEG decoded in a coroutine
-equal to the same JPEG decoded directly):
+equal to the same JPEG decoded directly, and a call chain run off a
+2KB stack caught at its first yield):
 
 ```
 make -C sw/common/tests/zco_sim
@@ -129,17 +146,83 @@ Printing does not decode on screen: the job names each picture's file,
 and the print service decodes it at the size it prints
 ([zpaper.md](zpaper.md)).
 
-## Other apps
+### Into a document
 
-These still make long calls in their main loops and should move to the
-pattern above:
+```c
+static uint8_t mem[Z_IMGJOB_DOC_MEM_STACK(8 * 1024)];
+z_imgjob_start_doc(&job, path, doc, wpl, w, h, mem, sizeof(mem));
+/* step, permille, stop: as above;  job.rows_done rows are in doc */
+```
+
+For an app that shows a picture in one bit (view, web): zimg's own
+ditherer writes into the caller's 1bpp document through
+`z_img_decode_rows()` (`z_img_decode()` with a call after each row), so
+no grey image is held. The job allocates nothing: the decoder's state,
+the 2KB chunk and its stack come out of `mem`, so a stopped job holds
+only its file, which `z_imgjob_stop()` closes. On the board the
+decoders use at most about 2KB of that stack (PNG; JPEG about 0.5KB),
+so 8KB. The host test also checks document mode: sliced equals one
+call, and the file is closed at every stop.
+
+## view
+
+Opening a picture shows the window at once; the rows appear as they are
+decoded, and the title says how far (`name 40%  Esc stops`). Scrolling
+and redraws work meanwhile. **Esc** stops it and the picture that was
+there comes back, at its scroll position: the new one decodes into a
+second document (38KB) and the two swap when it is done. SVG is still
+drawn in one call (zsvg has no row callback to hand back from).
+
+## web
+
+After a picture's fetch, the page stays live while it decodes into its
+box (`sw/apps/web/imgdec.c`, document mode): the bar says
+`picture 40% -- Esc stops` and Go becomes Stop. Esc or Stop ends it and
+the box says `stopped -- click to load`. However a decode ends -- done,
+failed, stopped, or dropped by following a link, Back, reload -- the
+spool is closed and removed. Pictures still load when their box is
+clicked, one at a time: loading every picture on a page by itself would
+need several pictures' memory and fetches at once.
+
+## draw
+
+Opening and saving in [draw](draw_app.md) are state machines
+(`sw/apps/draw/drawio.c`): 2KB a read or write, ~20ms a step, the title
+showing `Loading NAME 45%  (Esc stops)`. A load reads into a second page
+and swaps it in only when the whole file is in, so Esc or a damaged file
+leaves the drawing as it was (that page is 37.5KB of .bss: the cheapest
+way that is right on a 1MB board, where there is no arena). A save
+writes NAME.part and renames it when complete; Esc or a failure deletes
+the .part and the old file is untouched. During a save the page is
+read-only; during a load drawing is ignored; New/Open/Save are ignored
+until the job ends; closing stops a load, or closes once a save
+succeeds. Host test: `make -C sw/apps/draw test` (stops at every step of
+each).
+
+## posix
+
+A command line runs in a coroutine on an 8KB stack, with 2KB of slack
+below it checked after every slice, kept in `main()`'s frame
+(`sw/apps/posix/job.c`). It hands back from `px_intr()` every ~10ms,
+and from the output path while the terminal has not acked. Between
+slices the main loop serves every session: echo, editing, output, Ctrl+C,
+connects and children. Builtins keep their state in statics, so one
+command runs at a time and the others wait their turn, with a note on
+their terminal. Ctrl+C stops a running command cooperatively, through
+the builtin's own cleanup, or takes a waiting one out of the queue.
+Details in [posix.md](posix.md), "How a command runs".
+
+**A coroutine that calls `malloc()` must not have its stack from
+`malloc()`** (or anywhere in the heap's way): newlib's `_sbrk()` refuses
+to grow the heap past the current stack pointer, so with the stack in
+the heap every `malloc` inside the coroutine fails. posix keeps its
+command stack in `main()`'s frame for that reason. A coroutine that
+allocates nothing (zimgjob's decoders) can have its stack anywhere.
+
+## Still to do
 
 | App | The long call | The way out |
 |---|---|---|
-| `view` | `z_img_decode()` of the whole picture, dithered to the window | the same coroutine as zimgjob, with the dithering row callback; the rows drawn so far show the progress |
-| `web` | `z_img_decode()` of each picture on a page | queue them as slide does; the page lays out with placeholder boxes first |
-| `draw` | reading and writing the canvas file in one loop | a state machine: a chunk a step, with a progress bar |
-
-zimgjob could take a "dither into this window" mode for `view` and
-`web`; until then each can run its own coroutine the way zimgjob.c does
-(about 150 lines).
+| `view`, `web` | SVG, drawn in one call | a row or element callback in zsvg to yield from |
+| `draw` | a brush or eraser stroke across the whole page in one mouse sample (~50ms) | stamp a bounded number of points per step |
+| `sheet` | recalculating a 4,096-cell sheet (to be measured on the board) | a coroutine around the evaluator, or a generation-stepped recalc |

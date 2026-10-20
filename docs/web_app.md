@@ -48,7 +48,7 @@ verified certificate chain. See "Where this stands" at the end.
 | Ctrl+D | bookmark this page; on a bookmarked page, remove it (asks first) ([Bookmarks](#bookmarks)) |
 | Ctrl+B | show the bookmarks |
 | Ctrl+S | save the page's source to a file ([Saving](#saving)) |
-| Escape | stop loading, finding or saving |
+| Escape | stop loading (a page or a picture), finding or saving |
 | F1 | help |
 
 The function keys mean the same in every app ([keys.md](keys.md)).
@@ -550,6 +550,7 @@ against hardware as well.
 | `page.c` | checkpoint index, scroll arithmetic | `test_page.c`, 193 checks |
 | `find.c` | find in page | `test_find.c`, 62 checks, through `page.c` and `layout.c` |
 | `bookmark.c` | the bookmarks file and `about:bookmarks` | `test_bookmark.c`, 31 checks |
+| `imgdec.c` | a picture decoded into its box a slice at a time | `test_imgdec.c`, 1117 checks |
 | `tls_crypto.c` | HMAC, HKDF, key schedule, AEAD | `test_tls_crypto.c`, 38 checks |
 | `tls.c` | record layer, TLS 1.3 handshake | `test_tls.c`, live handshakes against OpenSSL |
 | `der.c` | DER reader | `test_x509.c`, plus a mutation sweep under ASan |
@@ -600,6 +601,35 @@ than skipping the check.
 
 Clicking an image box loads the picture in place. Clicking a link
 follows it.
+
+### Pictures
+
+A picture is fetched into its own spool (`/tmp/web.spool.img`) like
+any other fetch, and then **decoded a slice at a time** from the main
+loop, about 20 ms a pass (`imgdec.c` over `sw/common/zimgjob.h`,
+[responsive.md](responsive.md)): the page scrolls, redraws and answers
+keys while it decodes, the bar says `picture 40% -- Esc stops`, and the
+Go button is Stop. **Esc** or **Stop** ends it at once; the page stays
+and the box says `stopped -- click to load`. The picture appears when
+it is done.
+
+One picture is decoded at a time, as one is held at a time: clicking
+another box, following a link, Back, Forward, reloading or opening any
+other page drops the one under way. However it ends -- done, failed,
+stopped or dropped -- its spool's handle is closed and the file
+removed. Clicking the box that is already decoding does nothing.
+
+The decoder runs in a coroutine on an 8KB stack (it uses about 2KB on
+the board, PNG; JPEG about 0.5KB), which with its state and the 2KB
+chunk being read is 10KB of `.bss`; it allocates nothing.
+`tests/test_imgdec.c` (in `make test`) checks that a picture decoded in
+slices is the picture decoded in one call (JPEG, PNG, PGM, in three box
+sizes), that stopping it at thirty-odd points, or starting the next
+picture over it, leaves no file open and no spool behind, and that a
+spool that is not a picture fails and is cleaned up.
+
+An SVG is still rendered in one call when it arrives: it is text,
+kilobytes, walked as a whole.
 
 Things that are known-missing rather than broken:
 

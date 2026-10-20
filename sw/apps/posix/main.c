@@ -72,14 +72,18 @@ typedef struct {
     bool        resume_pending;
     int         resume_status;
 
-    /* While a builtin runs: Ctrl+C seen (conn_poll()), when the
-     * terminal was last looked at, and what was typed meanwhile --
-     * given to the line editor once the prompt is back, as typeahead
-     * always was. */
+    /* While its command runs or waits its turn (job.c): Ctrl+C seen
+     * (busy_input()), and what was typed meanwhile -- given to the line
+     * editor once the prompt is back, as typeahead always was. */
     bool        intr;
-    uint32_t    poll_last;
     char        ahead[64];
     uint32_t    ahead_len;
+
+    /* Output not yet sent: see "Output batching" below. One per
+     * session, so that one terminal that is slow to take its output
+     * never holds up -- or receives -- another's. */
+    char        out[4096];
+    uint32_t    out_len;
 } px_conn_t;
 
 static px_conn_t conns[PX_MAX_CONNS];
@@ -180,28 +184,26 @@ static const char *PROMPT = "$ ";
  * writes would have its TAIL SILENTLY DROPPED. repl hit exactly this
  * with paste echo, nine characters in and one missing; the note is in
  * repl.c and it is the reason this was written batched from the start.
- */
-/* 4KB, not 1KB.
  *
- * A child's output arrives as a burst -- `zcc` with no arguments
- * prints its whole usage text in one go -- and this buffer is what
- * absorbs it while the far end acks. 1KB did not, and the excess was
- * dropped outright. */
-#define OUT_BATCH 4096
+ * 4KB a session, not 1KB. A child's output arrives as a burst -- `zcc`
+ * with no arguments prints its whole usage text in one go -- and this
+ * buffer is what absorbs it while the far end acks. 1KB did not, and
+ * the excess was dropped outright.
+ *
+ * One buffer per session. There used to be one for the process, handed
+ * from session to session -- which was safe only because nothing else
+ * ran while a command printed. Now another session's echo arrives
+ * between two slices of a `find`, and with a shared buffer it would
+ * either have to drop the find's unsent bytes or send them to the wrong
+ * terminal.
+ */
+#define OUT_BATCH ((uint32_t)sizeof(((px_conn_t *)0)->out))
 
-static char out_batch[OUT_BATCH];
-static uint32_t out_len;
-static px_conn_t *out_conn;
 static uint32_t out_dropped;
 
-/* The session whose builtin is running right now, if any. */
-static px_conn_t *busy;
-
-static bool wait_room(px_conn_t *c);
-
 /*
- * Tries to send the batch. Returns false and KEEPS the bytes if the
- * far end is not ready.
+ * Tries to send what is batched. Returns false and KEEPS the bytes if
+ * the far end is not ready.
  *
  * The old version dropped on the first refusal, and that is what
  * `posix: z_port_send failed (44 bytes)` was: z_port_send() refuses
@@ -210,24 +212,44 @@ static bool wait_room(px_conn_t *c);
  * fifteen lines in a burst overran it long before any ack was read,
  * and the tail of its output simply vanished.
  *
- * Retrying here instead of pumping acks inline is deliberate. Pumping
- * would mean calling z_msg_read() from inside the send path, which
- * re-enters handle_data(), which calls conn_out(), which calls this --
- * unbounded recursion on a 16KB stack, reached only under exactly the
- * load that triggers it. The main loop retries instead, where there is
- * no call stack to grow.
+ * Never reads the mailbox: the acks are read by the main loop, which a
+ * command waiting for room hands back to (conn_out()).
  */
-static bool out_flush(void) {
+static bool out_flush(px_conn_t *c) {
 
-    if (!out_len) return true;
-    if (!out_conn || !out_conn->port.connected) { out_len = 0; return true; }
+    if (!c->out_len) return true;
+    if (!c->port.connected) { c->out_len = 0; return true; }
 
-    if (z_port_send(&out_conn->port, out_batch, out_len) != Z_OK)
+    if (z_port_send(&c->port, c->out, c->out_len) != Z_OK)
         return false;
 
-    out_len = 0;
+    c->out_len = 0;
     return true;
 
+}
+
+static void flush_all(void) {
+    for (int i = 0; i < PX_MAX_CONNS; i++) out_flush(&conns[i]);
+}
+
+/* The batch is full and the far end has not acked yet. Inside this
+ * session's own command (job.c): hand back to the main loop, which
+ * reads the acks and serves everybody else, and try again when resumed
+ * -- for up to two seconds, past which a terminal is not reading and
+ * the old rule (drop, and count it) applies. Anywhere else -- echo, a
+ * child's output relayed by the main loop -- there is nobody to wait
+ * for: false, dropped. False on Ctrl+C and on a session that has gone. */
+static bool wait_room(px_conn_t *c) {
+
+    uint32_t start = z_uptime_ticks();
+
+    if (px_job_current() != &c->sh) return false;
+    for (;;) {
+        if (c->intr || !c->port.connected) return false;
+        if (z_uptime_ticks() - start >= 2u * Z_TICK_HZ) return false;
+        if (!px_job_wait()) return false;
+        if (out_flush(c)) return true;
+    }
 }
 
 static void conn_out(void *ctx, const char *buf, int len) {
@@ -240,11 +262,12 @@ static void conn_out(void *ctx, const char *buf, int len) {
      * moment the editor exits. */
     if (c->tty_away) return;
 
-    if (out_conn != c) { out_flush(); out_conn = c; }
+    /* A session that has gone, whose command is still unwinding. */
+    if (!c->port.connected) return;
 
     while (len > 0) {
 
-        uint32_t room = OUT_BATCH - out_len;
+        uint32_t room = OUT_BATCH - c->out_len;
 
         if (!room) {
             /* Full and the far end will not take it. Dropping the NEW
@@ -253,107 +276,95 @@ static void conn_out(void *ctx, const char *buf, int len) {
              * middle is not. Counted so it can be reported once rather
              * than per chunk.
              *
-             * Unless a builtin of this session is producing it: then
-             * the far end's acks are waited for (wait_room()), so a
-             * `find /` prints all of itself instead of its first 36 KB. */
-            if (!out_flush() && !(c == busy && wait_room(c))) {
-                if (!c->intr) out_dropped += (uint32_t)len;
+             * Unless this session's own command is producing it: then
+             * it waits for the far end's acks (wait_room()), so a
+             * `find /` prints all of itself instead of its first 36 KB
+             * -- and, being a coroutine, waits without holding up
+             * anybody else. */
+            if (!out_flush(c) && !wait_room(c)) {
+                if (!c->intr && c->port.connected) out_dropped += (uint32_t)len;
                 return;
             }
-            room = OUT_BATCH - out_len;
+            room = OUT_BATCH - c->out_len;
         }
 
         uint32_t take = ((uint32_t)len < room) ? (uint32_t)len : room;
-        memcpy(out_batch + out_len, buf, take);
-        out_len += take;
+        memcpy(c->out + c->out_len, buf, take);
+        c->out_len += take;
         buf += take;
         len -= (int)take;
     }
 }
 
 /* ------------------------------------------------------------------ */
-/* Ctrl+C, while a builtin runs                                         */
+/* While a command runs                                                 */
 
 /*
- * A builtin runs inside px_exec_line() and this loop is not reading the
- * mailbox meanwhile -- so without help, a Ctrl+C would sit in the queue
- * until `find /` had finished, and so would the acks that let its
- * output out. sh.c's px_intr() calls conn_poll() between pieces of work.
- *
- * It takes only THIS session's DATA and DATA_ACK (z_msg_take_match(),
- * by subject and tag -- the tag is the slot, as in find_conn()), so
- * every other message stays queued, in order, for the main loop, and
- * nothing re-enters handle_data(). The acks are what out_flush()
- * waits on; a 0x03 in the data is Ctrl+C; anything else typed is kept
- * as typeahead, up to `ahead`, and anything after a Ctrl+C is dropped,
- * as a terminal flushes input on an interrupt.
+ * A command runs in a coroutine (job.c), and this loop goes on reading
+ * every message while it does -- so a Ctrl+C from its terminal arrives
+ * here, as ordinary DATA, and sets the session's flag. The builtin sees
+ * it at its next px_intr(), through this:
  */
-static void take_mail(px_conn_t *c) {
+static bool conn_poll(void *ctx) {
+    return ((px_conn_t *)ctx)->intr;
+}
 
-    z_msg_t m;
-    uint32_t tag = (uint32_t)(c - conns) + 1;
+/* Typed into a session whose command is running or waiting its turn.
+ * 0x03 is Ctrl+C: a running command is told (above) and unwinds; a
+ * waiting one is simply taken out of the queue. Anything else typed is
+ * kept as typeahead, up to `ahead`, for the prompt that comes back; and
+ * anything after a Ctrl+C is dropped, as a terminal flushes input on an
+ * interrupt. */
+static void prompt(px_conn_t *c);
 
-    while (z_msg_take_match(&m, Z_PORT_DATA_ACK, tag) == Z_OK)
-        if (c->port.connected && m.from == c->port.peer_pid)
-            z_port_handle_ack(&c->port, &m);
+static void busy_input(px_conn_t *c, const uint8_t *data, uint32_t len) {
 
-    while (z_msg_take_match(&m, Z_PORT_DATA, tag) == Z_OK) {
-        if (!c->port.connected || m.from != c->port.peer_pid) {
-            z_port_reject_stranger(&m);
+    for (uint32_t i = 0; data && i < len && !c->intr; i++) {
+        if (data[i] != 0x03) {
+            if (c->ahead_len < sizeof(c->ahead)) c->ahead[c->ahead_len++] = (char)data[i];
             continue;
         }
-        z_port_send_ack(&m);
-        const uint8_t *data = (const uint8_t *)z_blob_data(&m.obj);
-        uint32_t len = z_blob_len(&m.obj);
-        for (uint32_t i = 0; data && i < len && !c->intr; i++) {
-            if (data[i] == 0x03) { c->intr = true; c->ahead_len = 0; }
-            else if (c->ahead_len < sizeof(c->ahead)) c->ahead[c->ahead_len++] = (char)data[i];
+        c->ahead_len = 0;
+        if (px_job_cancel(&c->sh)) {
+            /* Never started: nothing to unwind. As if it had been
+             * stopped at once. */
+            conn_out(c, "^C\r\n", 4);
+            c->sh.status = 130;
+            prompt(c);
+            return;
         }
+        c->intr = true;
     }
 }
 
-/* sh->poll: about fifty times a second at most -- each look is two
- * syscalls, and px_intr() may be called per line. */
-static bool conn_poll(void *ctx) {
-    px_conn_t *c = (px_conn_t *)ctx;
-    uint32_t now = z_uptime_ticks();
-    if (!c->intr && now - c->poll_last >= Z_TICK_HZ / 50) {
-        c->poll_last = now;
-        take_mail(c);
-        out_flush();
-    }
-    return c->intr;
-}
+/* Runs a line, or continues one after its child (line NULL): into the
+ * queue, to run when it is its turn -- at once, usually. A session
+ * whose command has to wait for another session's is told so. */
+static void submit(px_conn_t *c, const char *line, int status) {
 
-/* The batch is full and the far end has not acked: wait for it, up to
- * two seconds -- a terminal that takes longer is not reading, and the
- * old rule (drop, and count it) applies. False on Ctrl+C as well. */
-static bool wait_room(px_conn_t *c) {
-
-    uint32_t tag = (uint32_t)(c - conns) + 1, start = z_uptime_ticks();
-
-    while (!c->intr && z_uptime_ticks() - start < 2u * Z_TICK_HZ) {
-        z_msg_t m;
-        if (z_msg_recv_match(&m, Z_PORT_DATA_ACK, tag, Z_TICK_HZ / 20) == Z_OK &&
-            c->port.connected && m.from == c->port.peer_pid)
-            z_port_handle_ack(&c->port, &m);
-        take_mail(c);
-        if (out_flush()) return true;
-    }
-    return false;
-}
-
-/* Runs a line, or resumes one after its child (line NULL), with this
- * session marked busy so that conn_poll() and wait_room() apply. */
-static void exec_for(px_conn_t *c, char *line, int status) {
-    px_conn_t *was = busy;
-    busy = c;
     c->intr = false;
-    c->poll_last = z_uptime_ticks();
-    px_current_conn = c;
-    if (line) px_exec_line(&c->sh, line);
-    else px_resume(&c->sh, status);
-    busy = was;
+    if (line) px_job_submit(&c->sh, line);
+    else px_job_submit_resume(&c->sh, status);
+
+    if (px_job_ahead(&c->sh)) {
+        static const char note[] =
+            "(waiting for a command in another session -- Ctrl+C cancels)\r\n";
+        conn_out(c, note, (int)sizeof(note) - 1);
+    }
+}
+
+/* Is this session's command running or waiting its turn? */
+static bool busy(const px_conn_t *c) {
+    return px_job_state(&c->sh) != PX_JOB_NONE;
+}
+
+/* A session ending while its command runs or waits: a waiting one is
+ * dropped, a running one is told to stop as if by Ctrl+C -- and its
+ * slot stays taken until it has unwound (handle_connect()), its output
+ * going nowhere (conn_out()). */
+static void stop_command(px_conn_t *c) {
+    c->ahead_len = 0;
+    if (!px_job_cancel(&c->sh) && busy(c)) c->intr = true;
 }
 
 /* ------------------------------------------------------------------ */
@@ -373,7 +384,7 @@ static px_conn_t *find_conn(const z_msg_t *msg) {
 
 static void prompt(px_conn_t *c) {
     conn_out(c, PROMPT, (int)strlen(PROMPT));
-    out_flush();
+    out_flush(c);
 }
 
 static void handle_connect(const z_msg_t *msg) {
@@ -391,10 +402,13 @@ static void handle_connect(const z_msg_t *msg) {
      * much alive, holding the shell state, the pending line, the
      * child it is waiting on and the pid to call the terminal back
      * from. Handing that slot to the next connection destroys all of
-     * it, and the terminal has nowhere to return to. */
+     * it, and the terminal has nowhere to return to.
+     *
+     * Nor is a slot free while the command of a session that has gone
+     * is still unwinding: the command is using its shell state. */
     int slot;
     for (slot = 0; slot < PX_MAX_CONNS; slot++)
-        if (!conns[slot].port.connected && !conns[slot].tty_away) break;
+        if (!conns[slot].port.connected && !conns[slot].tty_away && !busy(&conns[slot])) break;
 
     if (slot == PX_MAX_CONNS) {
         z_port_refuse(msg, "posix: too many connections");
@@ -439,10 +453,11 @@ static void handle_connect(const z_msg_t *msg) {
         z_line_reset(&c->line);
 
         if (c->resume_pending) {
+            /* The rest of the line, as a command of its own; it prompts
+             * when it ends (job_ended()). */
             c->resume_pending = false;
-            exec_for(c, NULL, c->resume_status);
-            out_flush();
-            if (c->sh.child_pid) { c->waiting = true; return; }
+            submit(c, NULL, c->resume_status);
+            return;
         }
 
         finish_line(c);
@@ -462,8 +477,15 @@ static void handle_connect(const z_msg_t *msg) {
          * Accept-then-close gives it CONNECTED followed by CLOSE, which
          * reads as "acknowledged, and this channel is done". The child's
          * real conversation is with the term window, which is about to
-         * be pointed at it. */
-        px_conn_t *owner = (px_conn_t *)px_current_conn;
+         * be pointed at it.
+         *
+         * The session it belongs to is the one waiting for it, by pid,
+         * as for a sink below -- not px_current_conn, which by now may
+         * be another session's command, run while this one waits. */
+        px_conn_t *owner = NULL;
+        for (int i = 0; i < PX_MAX_CONNS; i++)
+            if (conns[i].waiting && !conns[i].is_sink && conns[i].sh.child_pid == msg->from)
+                owner = &conns[i];
 
         z_port_accept(&conns[slot].port, msg, (uint32_t)(slot + 1));
         conns[slot].is_sink = false;
@@ -510,6 +532,12 @@ static void handle_connect(const z_msg_t *msg) {
     conns[slot].switching = false;
     conns[slot].ahead_len = 0;
     conns[slot].intr = false;
+    conns[slot].out_len = 0;
+    /* Whatever the slot's last session left: a child it was waiting
+     * for when it went is no business of this one. */
+    conns[slot].waiting = false;
+    conns[slot].resume_pending = false;
+    conns[slot].sh.child_pid = 0;
 
     if (sink) {
         /* Bound to the session running it (found above). */
@@ -567,7 +595,8 @@ static void handle_close(const z_msg_t *msg) {
         c->port.connected = false;
         return;
     }
-    if (out_conn == c) { out_flush(); out_conn = 0; }
+    out_flush(c);
+    c->out_len = 0;
 
     /* A sink closing used to re-prompt the session that ran the child,
      * as a proxy for "the child finished". That proxy is gone: the
@@ -582,6 +611,7 @@ static void handle_close(const z_msg_t *msg) {
         return;
     }
 
+    stop_command(c);
     z_port_close(&c->port);
 }
 
@@ -594,7 +624,8 @@ static void handle_close(const z_msg_t *msg) {
 static void peer_gone(px_conn_t *c) {
     printf("posix: session %d: its peer (pid %lu) is gone -- closed\n",
            (int)(c - conns) + 1, (unsigned long)c->port.peer_pid);
-    if (out_conn == c) { out_len = 0; out_conn = 0; }
+    c->out_len = 0;
+    stop_command(c);
     z_port_forget(&c->port);
     c->is_sink = false;
     c->owner = NULL;
@@ -614,7 +645,6 @@ static void check_peers(void) {
             c->switching = false;
             conn_out(c, "port: the terminal did not switch\r\n", 36);
             prompt(c);
-            out_flush();
         }
         if (z_port_peer_gone(&c->port)) {
             peer_gone(c);
@@ -654,7 +684,7 @@ static void feed_bytes(px_conn_t *c, const uint8_t *data, uint32_t len);
 /* Called when a command finishes, whether it ran a child or not. */
 static void finish_line(px_conn_t *c) {
 
-    out_flush();
+    out_flush(c);
 
     /* Leaving for another port: no prompt -- term is going. */
     if (c->switching) { c->ahead_len = 0; return; }
@@ -662,7 +692,7 @@ static void finish_line(px_conn_t *c) {
     if (c->sh.want_exit) {
         c->ahead_len = 0;
         conn_out(c, "bye\r\n", 5);
-        out_flush();
+        out_flush(c);
         z_port_close(&c->port);
         return;
     }
@@ -670,16 +700,16 @@ static void finish_line(px_conn_t *c) {
     prompt(c);
 }
 
-/* What was typed while a builtin ran, as if typed now: before any newer
+/* What was typed while a command ran, as if typed now: before any newer
  * input (handle_data()), or from the main loop once nothing newer came. */
 static void drain_ahead(px_conn_t *c) {
     uint8_t ahead[sizeof(c->ahead)];
     uint32_t n = c->ahead_len;
-    if (!n || c->waiting || c->tty_away || !c->port.connected) return;
+    if (!n || c->waiting || c->tty_away || !c->port.connected || busy(c)) return;
     memcpy(ahead, c->ahead, n);
     c->ahead_len = 0;
     feed_bytes(c, ahead, n);
-    out_flush();
+    out_flush(c);
 }
 
 static void run_line(px_conn_t *c, char *line) {
@@ -689,10 +719,45 @@ static void run_line(px_conn_t *c, char *line) {
 
     if (*line) z_line_history_add(&line_history, line);
 
-    /* exec_for() also sets px_current_conn, so that a child spawned by
-     * this command knows where to send its output back to. */
-    exec_for(c, line, 0);
-    out_flush();
+    /* To job.c, which runs it when it is its turn and sets
+     * px_current_conn, so that a child spawned by this command knows
+     * where to send its output back to. job_ended() takes it from
+     * there. */
+    submit(c, line, 0);
+}
+
+/* A command has ended: run to its end, stopped by Ctrl+C, or cut off
+ * because it ran off its stack (`how`, PX_STEP_*). */
+static void job_ended(px_conn_t *c, int how) {
+
+    bool gone = !c->port.connected && !c->tty_away;
+
+    c->intr = false;
+
+    if (how != PX_STEP_DONE) {
+        char msg[160];
+        int n = snprintf(msg, sizeof(msg),
+            "posix: the command ran out of its %u KB stack and was stopped; "
+            "its files are closed, half-written ones left as they are\r\n",
+            (unsigned)(px_job_stack_size() / 1024));
+        printf("posix: session %d: command overran its stack (%s)\n",
+               (int)(c - conns) + 1, how == PX_STEP_OVERRUN ?
+               "and wrote below it -- restart posix" : "contained");
+        conn_out(c, msg, n);
+        if (how == PX_STEP_OVERRUN) {
+            static const char more[] = "posix: memory below it was written too -- restart posix\r\n";
+            conn_out(c, more, (int)sizeof(more) - 1);
+        }
+        c->sh.child_pid = 0;
+    }
+
+    /* Its session went while it ran: nobody to prompt. A child it
+     * started carries on unwatched, as after any other disconnect. */
+    if (gone) {
+        c->ahead_len = 0;
+        c->sh.child_pid = 0;
+        return;
+    }
 
     if (c->sh.child_pid) {
         /* Do NOT prompt, and do not block. The main loop watches for
@@ -703,7 +768,6 @@ static void run_line(px_conn_t *c, char *line) {
     }
 
     finish_line(c);
-    return;
 }
 
 static void handle_data(const z_msg_t *msg) {
@@ -755,7 +819,7 @@ static void handle_data(const z_msg_t *msg) {
         if (data && len && dest && dest->port.connected)
             conn_out(dest, (const char *)data, (int)len);
 
-        out_flush();
+        if (dest) out_flush(dest);
 
         /* Acked even when the bytes had to be dropped. Withholding
          * here would make the child wait forever on a connection that
@@ -774,9 +838,13 @@ static void handle_data(const z_msg_t *msg) {
 
     if (!data) return;
 
+    /* Its command is running or waiting its turn: Ctrl+C, or
+     * typeahead. */
+    if (busy(c)) { busy_input(c, data, len); return; }
+
     drain_ahead(c);
     feed_bytes(c, data, len);
-    out_flush();
+    out_flush(c);
 }
 
 /* Typed bytes into the line editor, running each line completed. */
@@ -824,13 +892,70 @@ static void feed_bytes(px_conn_t *c, const uint8_t *data, uint32_t len) {
 
             z_line_reset(&c->line);
             run_line(c, linebuf);
-            if (c->waiting || !c->port.connected) return;
+
+            /* The command now runs or waits its turn: what follows it
+             * in this burst of typing is typeahead, or its Ctrl+C. */
+            busy_input(c, data + i + 1, len - i - 1);
+            return;
         }
     }
 }
 
-int main(void) {
+/* Any child that has finished since the last pass.
+ *
+ * Polled rather than pushed: the kernel has no "process exited"
+ * message, and adding one is a bigger change than this needed
+ * (docs/kernel.md). At Z_TICK_HZ/10 the cost is one syscall per waiting
+ * connection per 100ms, and the latency between a compile finishing and
+ * the prompt returning is the same 100ms -- which is below what anyone
+ * notices and well above what it costs. */
+static void watch_children(void) {
 
+    for (int i = 0; i < PX_MAX_CONNS; i++) {
+
+        px_conn_t *c = &conns[i];
+        uint32_t state = 0;
+        int32_t status = 0;
+
+        /* NOT `!c->port.connected`: a session whose terminal is away
+         * has no port, and it is precisely the one that needs watching
+         * -- the child holding its terminal is the child it is waiting
+         * for. */
+        if (!c->waiting) continue;
+        if (!c->port.connected && !c->tty_away) continue;
+
+        z_proc_status(c->sh.child_pid, &state, &status);
+        if (state == Z_PROC_STATE_RUNNING) continue;
+
+        /* UNKNOWN as well as EXITED: a child that finished long enough
+         * ago to have fallen out of the kernel's exit ring is still
+         * finished, and leaving the terminal without a prompt forever
+         * would be the worse failure. Its status is 0, which is the
+         * same thing this shell assumed about every child before there
+         * was a status at all. */
+        c->waiting = false;
+
+        /* The child had the terminal. Ask for it back and stop here:
+         * term has to actually arrive, as a fresh CONNECT, before
+         * anything can be printed. The status waits with the slot and
+         * handle_connect() resumes the line. */
+        if (c->tty_away) {
+            printf("posix: child %lu gone (state %lu); asking term %lu "
+                   "to come back to '%s'\n",
+                   (unsigned long)c->sh.child_pid, (unsigned long)state,
+                   (unsigned long)c->tty_term_pid, instance_name);
+            c->resume_pending = true;
+            c->resume_status = (int)status;
+            px_tty_return(c);
+            continue;
+        }
+
+        /* The rest of the line, if any, as a command of its own. */
+        submit(c, NULL, (int)status);
+    }
+}
+
+static void serve_init(void *job_mem, size_t job_bytes) {
 
     if (z_pid_register("posix", instance_name, sizeof(instance_name)))
         printf("posix: starting as pid %ld, registered as '%s'.\n",
@@ -845,99 +970,91 @@ int main(void) {
     for (int i = 0; i < PX_MAX_CONNS; i++)
         conns[i].port.connected = false;
 
-    while (1) {
+    /* About 10 ms a slice: a key waits at most that, plus whatever the
+     * builtin does between two px_intr() calls (one entry, one line,
+     * one chunk). */
+    px_job_init(job_mem, job_bytes, Z_TICK_HZ / 100);
+}
 
-        z_msg_t msg;
-        while (z_msg_read(&msg) == Z_OK) {
-            if (msg.subject == Z_PORT_CONNECT) {
-                handle_connect(&msg);
-            } else if (msg.subject == Z_PORT_DATA) {
-                handle_data(&msg);
-            } else if (msg.subject == Z_PORT_DATA_ACK) {
-                px_conn_t *c = find_conn(&msg);
-                if (c) z_port_handle_ack(&c->port, &msg);
-            } else if (msg.subject == Z_PORT_CLOSE) {
-                handle_close(&msg);
-            }
+/*
+ * One pass of the main loop (docs/responsive.md, "The shape of a main
+ * loop"): every message waiting, then the sessions' own business, then
+ * a slice of the command if there is one -- and only if there is none,
+ * a sleep.
+ */
+static void serve_pass(void) {
+
+    z_msg_t msg;
+    while (z_msg_read(&msg) == Z_OK) {
+        if (msg.subject == Z_PORT_CONNECT) {
+            handle_connect(&msg);
+        } else if (msg.subject == Z_PORT_DATA) {
+            handle_data(&msg);
+        } else if (msg.subject == Z_PORT_DATA_ACK) {
+            px_conn_t *c = find_conn(&msg);
+            if (c) z_port_handle_ack(&c->port, &msg);
+        } else if (msg.subject == Z_PORT_CLOSE) {
+            handle_close(&msg);
         }
-
-        for (int i = 0; i < PX_MAX_CONNS; i++) drain_ahead(&conns[i]);
-
-        /* Anything that could not be delivered last time. Retried
-         * here, not in out_flush(), so that draining the mailbox for
-         * acks cannot re-enter the send path. */
-        out_flush();
-
-        if (out_dropped) {
-            printf("posix: dropped %lu bytes of output (far end not "
-                   "reading)\n", (unsigned long)out_dropped);
-            out_dropped = 0;
-        }
-
-        /* Any child that has finished since the last pass.
-         *
-         * Polled rather than pushed: the kernel has no "process
-         * exited" message, and adding one is a bigger change than this
-         * needed (docs/kernel.md). At Z_TICK_HZ/10 the cost is one
-         * syscall per waiting connection per 100ms, and the latency
-         * between a compile finishing and the prompt returning is the
-         * same 100ms -- which is below what anyone notices and well
-         * above what it costs. */
-        for (int i = 0; i < PX_MAX_CONNS; i++) {
-
-            px_conn_t *c = &conns[i];
-            uint32_t state = 0;
-            int32_t status = 0;
-
-            /* NOT `!c->port.connected`: a session whose terminal is
-             * away has no port, and it is precisely the one that needs
-             * watching -- the child holding its terminal is the child
-             * it is waiting for. */
-            if (!c->waiting) continue;
-            if (!c->port.connected && !c->tty_away) continue;
-
-            z_proc_status(c->sh.child_pid, &state, &status);
-            if (state == Z_PROC_STATE_RUNNING) continue;
-
-            /* UNKNOWN as well as EXITED: a child that finished long
-             * enough ago to have fallen out of the kernel's exit ring
-             * is still finished, and leaving the terminal without a
-             * prompt forever would be the worse failure. Its status is
-             * 0, which is the same thing this shell assumed about
-             * every child before there was a status at all. */
-            c->waiting = false;
-
-            /* The child had the terminal. Ask for it back and stop
-             * here: term has to actually arrive, as a fresh CONNECT,
-             * before anything can be printed. The status waits with
-             * the slot and handle_connect() resumes the line. */
-            if (c->tty_away) {
-                printf("posix: child %lu gone (state %lu); asking term %lu "
-                       "to come back to '%s'\n",
-                       (unsigned long)c->sh.child_pid, (unsigned long)state,
-                       (unsigned long)c->tty_term_pid, instance_name);
-                c->resume_pending = true;
-                c->resume_status = (int)status;
-                px_tty_return(c);
-                continue;
-            }
-
-            exec_for(c, NULL, (int)status);
-            out_flush();
-
-            if (c->sh.child_pid) { c->waiting = true; continue; }
-
-            finish_line(c);
-        }
-
-        /* Blocks rather than spins. docs/app_runtime.md records what
-         * the difference is worth on this machine: a `view` JPEG
-         * decode went from 7.7s to 3.1s once the other processes
-         * stopped busy-waiting. A shell is idle almost all the time,
-         * so this is the single most important line in the loop. */
-        check_peers();
-        z_proc_wait(Z_TICK_HZ / 10);
     }
 
+    for (int i = 0; i < PX_MAX_CONNS; i++) drain_ahead(&conns[i]);
+
+    /* Anything that could not be delivered last time. Retried here,
+     * where the acks have just been read, never by reading the mailbox
+     * from inside the send path. */
+    flush_all();
+
+    if (out_dropped) {
+        printf("posix: dropped %lu bytes of output (far end not "
+               "reading)\n", (unsigned long)out_dropped);
+        out_dropped = 0;
+    }
+
+    watch_children();
+    check_peers();
+
+    if (px_job_pending()) {
+        px_shell_t *ended;
+        int r = px_job_step(&ended);
+        if (ended) job_ended((px_conn_t *)ended->ctx, r);
+        flush_all();
+        /* Waiting for a terminal's acks: sleep until a message comes
+         * (an ack wakes it) rather than spin. Otherwise straight back
+         * for the next slice -- no waiting while busy. */
+        if (r == PX_STEP_BLOCKED) z_proc_wait(Z_TICK_HZ / 50);
+        return;
+    }
+
+    /* Blocks rather than spins. docs/app_runtime.md records what the
+     * difference is worth on this machine: a `view` JPEG decode went
+     * from 7.7s to 3.1s once the other processes stopped busy-waiting.
+     * A shell is idle almost all the time, so this is the single most
+     * important line in the loop. */
+    z_proc_wait(Z_TICK_HZ / 10);
+}
+
+#ifndef PX_HOST_MAIN
+int main(void) {
+
+    /*
+     * The command's stack and the slack below it (job.c): on the
+     * process's own stack, in main()'s frame, which lasts as long as
+     * the process -- part of APP_STACK, not .bss or the heap.
+     *
+     * Not the heap, because of malloc(). _sbrk() (zeitlos.c) refuses to
+     * grow the heap past the stack pointer of whoever asks; asked from
+     * a coroutine whose stack was malloc()ed -- below the heap's end --
+     * it refused everything, and diff, cp -r and the port's own send
+     * buffers inside a command could not get memory at all (the
+     * simulator showed it: tests/stack_sim). Up here the coroutine's
+     * stack is above the heap like any other stack, and _sbrk() means
+     * what it says.
+     */
+    uint8_t job_mem[PX_JOB_STACK + PX_JOB_SLACK] __attribute__((aligned(16)));
+
+    serve_init(job_mem, sizeof(job_mem));
+    for (;;) serve_pass();
     return 0;
 }
+#endif

@@ -77,9 +77,7 @@
  *
  * -- not implemented yet --
  *
- * No new/save/load: the titlebar-icon API those want now exists
- * (Z_WIN_FLAG_NEW_ICON and friends, zwm.h) and sw/apps/text shows the
- * pattern, including the file dialogs in sw/common/zdialog.h. No undo.
+ * No undo.
  * No flood fill -- see the note above tool_icons[] for why the one
  * that was here got removed and what bringing it back would need.
  */
@@ -105,6 +103,7 @@
 #include "../../common/zbm.h"
 #include "../../common/ztype.h"
 #include "draw_icons.h"
+#include "drawio.h"
 
 #define VRAM        ((volatile uint32_t *)0x20000000)
 #define VRAM_WPL    (Z_SCREEN_W / 32)	// framebuffer words per line
@@ -143,7 +142,20 @@
 // z_fb_set_pixel()'s convention (zgfx.c), and matching it is what lets
 // canvas_blit() move whole words at a time instead of reformatting
 // every pixel on the way to the screen.
-static uint32_t canvas[CANVAS_H][CANVAS_WORDS];
+//
+// Two of them, and `canvas` points at the one on screen. The other,
+// `spare`, is where a file loads (drawio.h): the two swap only once the
+// whole file is in, so stopping a load, or a damaged file, leaves the
+// drawing as it was. That costs a second 37.5K of .bss; the cheaper
+// ways out are not correct (reading into the canvas loses the old
+// drawing on a stop) or not cheaper (keeping the old drawing in a /tmp
+// file is the same 37.5K in the RAM disk, plus the time to write it).
+static uint32_t canvas_a[CANVAS_H][CANVAS_WORDS];
+static uint32_t canvas_b[CANVAS_H][CANVAS_WORDS];
+static uint32_t (*canvas)[CANVAS_WORDS] = canvas_a;
+static uint32_t (*spare)[CANVAS_WORDS] = canvas_b;
+
+#define CANVAS_BYTES  ((int)sizeof(canvas_a))
 
 // Whether this bitstream's blitter can read main memory. Probed once at
 // startup (z_fb_hw_blit_mem_available(), zgfx.h) rather than per call,
@@ -155,6 +167,10 @@ static bool use_hw_blit;
 // Forward-declared: the drawing tools further down call it, and it is
 // defined with the rest of the file handling near the bottom.
 static void set_modified(bool m);
+
+// Whether a file is loading or saving (see "files" near the bottom):
+// the canvas takes no drawing meanwhile.
+static bool busy(void);
 
 // -- the file --
 //
@@ -168,7 +184,7 @@ static void set_modified(bool m);
 // existing file into unreadable garbage with only the byte count to
 // notice from, and nothing outside draw could identify a saved image
 // at all. Files written before it are still loadable -- see
-// z_bm_is_legacy_size() and load_canvas() below.
+// z_bm_is_legacy_size() and drawio.c.
 static char filename[Z_FS_PATH_MAX];
 static bool modified;
 
@@ -351,13 +367,44 @@ static inline void canvas_pset_pat(int x, int y, const uint8_t *pat) {
 }
 
 static void canvas_clear(void) {
-	memset(canvas, 0, sizeof(canvas));
+	memset(canvas, 0, CANVAS_BYTES);
 }
 
+// A word at a time: pixel by pixel, a page-sized fill took a few
+// hundred ms -- longer than the main loop may stop (docs/responsive.md).
+// Same pixels as canvas_pset_pat() over the rect, clipped to the page.
 static void canvas_fill_rect(int x, int y, int w, int h, const uint8_t *pat) {
-	for (int j = 0; j < h; j++)
-		for (int i = 0; i < w; i++)
-			canvas_pset_pat(x + i, y + j, pat);
+
+	int x0 = x, y0 = y, x1 = x + w - 1, y1 = y + h - 1;
+
+	if (x0 < 0) x0 = 0;
+	if (y0 < 0) y0 = 0;
+	if (x1 >= CANVAS_W) x1 = CANVAS_W - 1;
+	if (y1 >= CANVAS_H) y1 = CANVAS_H - 1;
+	if (x1 < x0 || y1 < y0) return;
+
+	int wa = x0 >> 5, wb = x1 >> 5;
+	uint32_t ma = 0xFFFFFFFFu << (x0 & 31);
+	uint32_t mb = (x1 & 31) == 31 ? 0xFFFFFFFFu : ~(0xFFFFFFFFu << ((x1 & 31) + 1));
+
+	for (int j = y0; j <= y1; j++) {
+
+		// the pattern row is MSB-leftmost, the canvas LSB-leftmost:
+		// reverse it, then repeat it across the word
+		uint32_t rev = 0;
+		for (int i = 0; i < 8; i++)
+			if ((pat[j & 7] >> (7 - i)) & 1) rev |= 1u << i;
+		uint32_t pw = rev * 0x01010101u;
+
+		for (int wi = wa; wi <= wb; wi++) {
+			uint32_t m = 0xFFFFFFFFu;
+			if (wi == wa) m &= ma;
+			if (wi == wb) m &= mb;
+			canvas[j][wi] = (canvas[j][wi] & ~m) | (pw & m);
+		}
+
+	}
+
 }
 
 static void canvas_rect(int x0, int y0, int x1, int y1, int color) {
@@ -1045,6 +1092,10 @@ static void handle_mouse(uint32_t packed) {
 	// a widget gesture in progress owns the pointer
 	if (wset.pressed >= 0) return;
 
+	// While a file loads or saves the canvas takes no drawing: a load is
+	// about to replace it and a save is writing it (see "files" below).
+	if (busy()) return;
+
 	int dx, dy;
 	to_doc(cx, cy, &dx, &dy);
 
@@ -1165,10 +1216,36 @@ static void update_title(void) {
 // ---------------------------------------------------------------
 // files
 // ---------------------------------------------------------------
-
-#define CANVAS_BYTES  ((int)sizeof(canvas))
+//
+// Opening and saving never stop the app (docs/responsive.md): each is a
+// draw_io_t job (drawio.h) that the main loop steps ~20 ms at a time
+// while nothing else is waiting, with its progress in the titlebar and
+// Esc (or Ctrl+C) to stop it. While one runs:
+//
+//   - a load reads into `spare`, not the canvas; the two swap only when
+//     the whole file is in, so a stop or a damaged file leaves the old
+//     drawing. Drawing is ignored: the drawing on screen is about to go.
+//   - a save writes NAME.part from the canvas, which is read-only until
+//     it ends (drawing is ignored), and renames it when complete.
+//   - New, Open and Save are ignored: one file job at a time, and the
+//     title says which is running. Scrolling, the tools and F1 work.
+//   - close: during a load, stops it and then closes as usual; during
+//     a save, closes once the save has succeeded (Esc stops the save
+//     and keeps the window).
+//
+// "Save changes first?" -> Yes starts a save and remembers what asked
+// (after_save); that runs once the save is done, and is dropped if the
+// save fails or is stopped.
 
 static void forward_msg(z_msg_t *msg, void *user);
+
+static draw_io_t io;
+
+enum { AFTER_NONE = 0, AFTER_NEW, AFTER_OPEN, AFTER_CLOSE };
+static int after_save;
+
+static uint32_t io_shown_tick;
+static int io_shown_pct = -1;
 
 static void set_modified(bool m) {
 
@@ -1177,6 +1254,12 @@ static void set_modified(bool m) {
 	modified = m;
 	update_title();
 
+}
+
+static void copy_path(char *d, int cap, const char *s) {
+	int i = 0;
+	for (; s[i] && i < cap - 1; i++) d[i] = s[i];
+	d[i] = 0;
 }
 
 static void remember_dir(const char *path) {
@@ -1192,86 +1275,123 @@ static void remember_dir(const char *path) {
 
 }
 
-// Writes header + pixels. Two writes, so this goes through a handle
-// rather than fs_write_file(), which takes a single buffer -- the
-// alternative is a 38416-byte staging copy this app has nowhere to
-// put.
-static bool write_canvas(const char *path) {
+// Appends s to d (capacity cap, `*n` used so far). By hand rather than
+// snprintf(), which would link a second printf engine (~17K).
+static void put(char *d, int cap, int *n, const char *s, int max) {
+	for (int i = 0; s[i] && i < max && *n < cap - 1; i++) d[(*n)++] = s[i];
+	d[*n] = 0;
+}
 
-	z_bm_header_t hdr;
-	z_bm_header_init(&hdr, CANVAS_W, CANVAS_H);
+static bool busy(void) {
+	return draw_io_running(&io);
+}
 
-	int h = fs_open_write(path);
-	if (h < 0) return false;
+// "Loading NAME 45%  (Esc stops)" in the titlebar, a few times a second.
+static void show_progress(bool force) {
 
-	bool ok = true;
+	int pct = draw_io_permille(&io) / 10;
+	uint32_t now = z_uptime_ticks();
 
-	if (fs_write_chunk(h, &hdr, Z_BM_HEADER_SIZE) != Z_BM_HEADER_SIZE)
-		ok = false;
+	if (!force && (pct == io_shown_pct || now - io_shown_tick < Z_TICK_HZ / 8))
+		return;
 
-	if (ok && fs_write_chunk(h, canvas, CANVAS_BYTES) != CANVAS_BYTES)
-		ok = false;
+	io_shown_pct = pct;
+	io_shown_tick = now;
 
-	// Always close, including on the error path -- a leaked handle is
-	// a permanently lost slot in a table of Z_FS_MAX_OPEN (8), and
-	// nothing sweeps them when a process exits (see zfs.h).
-	fs_close_handle(h);
+	const char *name = io.path;
+	for (const char *p = io.path; *p; p++) if (*p == '/') name = p + 1;
 
-	return ok;
+	char t[64], num[5];
+	int n = 0, k = 0;
+	if (pct >= 100) num[k++] = (char)('0' + pct / 100);
+	if (pct >= 10) num[k++] = (char)('0' + pct / 10 % 10);
+	num[k++] = (char)('0' + pct % 10);
+	num[k] = 0;
+
+	put(t, sizeof(t), &n, io.kind == DRAW_IO_LOAD ? "Loading " : "Saving ", 99);
+	put(t, sizeof(t), &n, name, 30);
+	put(t, sizeof(t), &n, " ", 99);
+	put(t, sizeof(t), &n, num, 99);
+	put(t, sizeof(t), &n, "%  (Esc stops)", 99);
+	z_win_set_title(&win, t);
 
 }
 
-static bool do_save_to(const char *path) {
+static void report_failure(const char *title) {
 
-	int wrote = write_canvas(path) ? CANVAS_BYTES : 0;
+	char m[Z_FS_PATH_MAX + 64];
 
-	if (wrote != CANVAS_BYTES) {
-		z_dialog_confirm(&dlg_ctx, "Save failed",
-			"The image could not be\nwritten completely.", Z_DIALOG_OK_CANCEL);
-		return false;
+	if (io.err == DRAW_IO_E_KEPT) {
+		int n = 0;
+		put(m, sizeof(m), &n, "The old file is gone;\nthe image is in\n", 99);
+		put(m, sizeof(m), &n, io.part, 200);
+		z_dialog_confirm(&dlg_ctx, title, m, Z_DIALOG_OK_CANCEL);
+		return;
 	}
 
-	if (path != filename) {
-		int i = 0;
-		for (; path[i] && i < (int)sizeof(filename) - 1; i++)
-			filename[i] = path[i];
-		filename[i] = 0;
+	z_dialog_confirm(&dlg_ctx, title, draw_io_error(io.err), Z_DIALOG_OK_CANCEL);
+
+}
+
+// Starts a save of the canvas to `path`; `after` runs when it is done.
+static void start_save_to(const char *path, int after) {
+
+	// a shape being dragged out is not part of the canvas yet, and the
+	// canvas is read-only from here on
+	if (drawing) { preview_erase(); drawing = false; }
+
+	if (!draw_io_save_start(&io, path, canvas, CANVAS_W, CANVAS_H)) {
+		report_failure("Save failed");
+		return;
 	}
 
-	remember_dir(filename);
-	set_modified(false);
-	update_title();
-
-	return true;
+	after_save = after;
+	show_progress(true);
 
 }
 
-static bool do_save_as(void) {
+static void start_save(int after, bool ask) {
 
-	char path[Z_FS_PATH_MAX];
-	const char *suggest = filename[0] ? filename : "";
+	if (busy()) return;
 
-	for (const char *p = filename; *p; p++)
-		if (*p == '/') suggest = p + 1;
+	if (ask || !filename[0]) {
 
-	if (!z_dialog_save(&dlg_ctx, last_dir, suggest, path, sizeof(path)))
-		return false;
+		char path[Z_FS_PATH_MAX];
+		const char *suggest = filename[0] ? filename : "";
 
-	return do_save_to(path);
+		for (const char *p = filename; *p; p++)
+			if (*p == '/') suggest = p + 1;
+
+		if (!z_dialog_save(&dlg_ctx, last_dir, suggest, path, sizeof(path)))
+			return;
+
+		start_save_to(path, after);
+		return;
+
+	}
+
+	start_save_to(filename, after);
 
 }
 
-static bool do_save(void) {
+static void start_load(const char *path) {
 
-	if (!filename[0]) return do_save_as();
+	if (drawing) { preview_erase(); drawing = false; }
 
-	return do_save_to(filename);
+	if (!draw_io_load_start(&io, path, spare, CANVAS_W, CANVAS_H)) {
+		report_failure("Open failed");
+		update_title();
+		return;
+	}
+
+	show_progress(true);
 
 }
 
-// Offers to save when there are unsaved changes. false means the user
-// cancelled and whatever prompted this must not proceed.
-static bool confirm_discard(void) {
+// Offers to save when there are unsaved changes. true: go ahead now.
+// false: not now -- cancelled, or a save has started and `after` runs
+// when it is done.
+static bool confirm_discard(int after) {
 
 	if (!modified) return true;
 
@@ -1281,22 +1401,23 @@ static bool confirm_discard(void) {
 	if (r == Z_DIALOG_CANCEL) return false;
 	if (r == Z_DIALOG_NO) return true;
 
-	// Yes -- and a cancelled or failed save calls the whole thing
-	// off, rather than discarding the drawing anyway.
-	return do_save();
+	start_save(after, false);
+	return false;
 
 }
 
-static void do_new(void) {
+static void reset_view(void) {
+	scroll_x = scroll_y = 0;
+	z_scrollbar_set_value(&vsb, 0);
+	z_scrollbar_set_value(&hsb, 0);
+}
 
-	if (!confirm_discard()) return;
+static void new_now(void) {
 
 	canvas_clear();
 
 	filename[0] = 0;
-	scroll_x = scroll_y = 0;
-	z_scrollbar_set_value(&vsb, 0);
-	z_scrollbar_set_value(&hsb, 0);
+	reset_view();
 
 	set_modified(false);
 	update_title();
@@ -1304,126 +1425,118 @@ static void do_new(void) {
 
 }
 
-// Reads a ZBM into the canvas. Returns false (having shown a dialog)
-// if the file isn't one, or isn't this canvas's size.
-static bool load_canvas(const char *path) {
-
-	int size = fs_size((char *)path);
-
-	if (size <= 0) {
-		z_dialog_confirm(&dlg_ctx, "Open failed",
-			"That file could not\nbe read.", Z_DIALOG_OK_CANCEL);
-		return false;
-	}
-
-	int h = fs_open_read(path);
-
-	if (h < 0) {
-		z_dialog_confirm(&dlg_ctx, "Open failed",
-			"That file could not\nbe read.", Z_DIALOG_OK_CANCEL);
-		return false;
-	}
-
-	z_bm_header_t hdr;
-	bool legacy = false;
-
-	if (fs_read_chunk(h, &hdr, Z_BM_HEADER_SIZE) != Z_BM_HEADER_SIZE) {
-		fs_close_handle(h);
-		z_dialog_confirm(&dlg_ctx, "Not an image",
-			"That file is too short\nto be a ZBM.", Z_DIALOG_OK_CANCEL);
-		return false;
-	}
-
-	if (!z_bm_header_valid(&hdr)) {
-
-		// No magic. It may be a headerless file from before the
-		// format had one, and the only evidence available for that is
-		// its length -- see z_bm_is_legacy_size(). Rewind to 0,
-		// because what we just read as a header was pixel data.
-		if (!z_bm_is_legacy_size((uint32_t)size, CANVAS_W, CANVAS_H)) {
-			fs_close_handle(h);
-			z_dialog_confirm(&dlg_ctx, "Not an image",
-				"That file is not\na ZBM bitmap.", Z_DIALOG_OK_CANCEL);
-			return false;
-		}
-
-		legacy = true;
-		fs_seek(h, 0);
-
-	} else if (hdr.width != CANVAS_W || hdr.height != CANVAS_H) {
-
-		// A real ZBM, just not one this app can hold. Said plainly
-		// rather than loaded at the wrong stride, which would look
-		// like a corrupted image and get blamed on the save.
-		fs_close_handle(h);
-		z_dialog_confirm(&dlg_ctx, "Wrong size",
-			"That image is not\n640x480.", Z_DIALOG_OK_CANCEL);
-		return false;
-
-	}
-
-	if (legacy) printf("draw: loading headerless (pre-ZBM) file\n");
-
-	// Straight into the canvas -- fs_mallocfile() would need a second
-	// 37.5KB out of a heap that is 16KB shared with the stack
-	// (Z_PROC_STACK_SIZE_DEFAULT, sw/os/kernel.h) and could never
-	// succeed. A short read therefore leaves the canvas partly
-	// updated, which is visible but harmless; refusing to touch it
-	// until the whole file is known good would cost a staging buffer
-	// this app has nowhere to put.
-	char *dst = (char *)canvas;
-	int got = 0;
-
-	while (got < CANVAS_BYTES) {
-		int n = fs_read_chunk(h, dst + got, CANVAS_BYTES - got);
-		if (n <= 0) break;
-		got += n;
-	}
-
-	fs_close_handle(h);
-
-	if (got != CANVAS_BYTES)
-		z_dialog_confirm(&dlg_ctx, "Open failed",
-			"The image was only\npartly readable.", Z_DIALOG_OK_CANCEL);
-
-	return true;
-
-}
-
-static void do_open(void) {
-
-	if (!confirm_discard()) return;
+static void open_now(void) {
 
 	char path[Z_FS_PATH_MAX];
 
 	if (!z_dialog_open(&dlg_ctx, last_dir, path, sizeof(path))) return;
 
-	if (!load_canvas(path)) return;
-
-	int i = 0;
-	for (; path[i] && i < (int)sizeof(filename) - 1; i++) filename[i] = path[i];
-	filename[i] = 0;
-
-	remember_dir(filename);
-
-	scroll_x = scroll_y = 0;
-	z_scrollbar_set_value(&vsb, 0);
-	z_scrollbar_set_value(&hsb, 0);
-
-	set_modified(false);
-	update_title();
-	repaint();
+	start_load(path);
 
 }
 
-static void do_close(void) {
-
-	if (!confirm_discard()) return;
+static void close_now(void) {
 
 	z_win_destroy(&win);
 
 	printf("draw: exiting\n");
 	exit(0);
+
+}
+
+static void do_new(void) {
+	if (busy()) return;
+	if (confirm_discard(AFTER_NEW)) new_now();
+}
+
+static void do_open(void) {
+	if (busy()) return;
+	if (confirm_discard(AFTER_OPEN)) open_now();
+}
+
+static void do_close(void) {
+
+	if (busy() && io.kind == DRAW_IO_SAVE) {
+		// quit once it is saved; Esc stops the save and keeps the window
+		after_save = AFTER_CLOSE;
+		return;
+	}
+
+	if (busy()) {
+		draw_io_stop(&io);
+		update_title();
+	}
+
+	if (confirm_discard(AFTER_CLOSE)) close_now();
+
+}
+
+// Esc / Ctrl+C: the running job stops; the app is as it was before it.
+static void stop_io(void) {
+
+	if (!busy()) return;
+
+	draw_io_stop(&io);
+	after_save = AFTER_NONE;
+	update_title();
+
+}
+
+// A step of the running job, from the main loop; and what follows when
+// it ends.
+static void io_step(void) {
+
+	int s = draw_io_step(&io, Z_TICK_HZ / 50);
+
+	if (s == DRAW_IO_RUNNING) { show_progress(false); return; }
+
+	io_shown_pct = -1;
+
+	if (io.kind == DRAW_IO_LOAD) {
+
+		if (s != DRAW_IO_DONE) {
+			update_title();
+			report_failure("Open failed");
+			return;
+		}
+
+		if (io.legacy) printf("draw: loaded a headerless (pre-ZBM) file\n");
+
+		uint32_t (*t)[CANVAS_WORDS] = canvas;
+		canvas = spare;
+		spare = t;
+
+		copy_path(filename, (int)sizeof(filename), io.path);
+		remember_dir(filename);
+		reset_view();
+
+		modified = false;
+		update_title();
+		repaint();
+		return;
+
+	}
+
+	int after = after_save;
+	after_save = AFTER_NONE;
+
+	if (s != DRAW_IO_DONE) {
+		update_title();
+		report_failure("Save failed");
+		return;
+	}
+
+	copy_path(filename, (int)sizeof(filename), io.path);
+	remember_dir(filename);
+	modified = false;
+	update_title();
+
+	switch (after) {
+		case AFTER_NEW:   new_now(); break;
+		case AFTER_OPEN:  open_now(); break;
+		case AFTER_CLOSE: close_now(); break;
+		default: break;
+	}
 
 }
 
@@ -1517,7 +1630,7 @@ static void forward_msg(z_msg_t *msg, void *user) {
 
 }
 
-// F1 (docs/app_help.md). No manual of its own in docs/ yet.
+// F1 (docs/app_help.md). The manual is docs/draw_app.md.
 static void show_help(void) {
 	static const char help[] =
 		"Paint in black and white on a 640x480 page.\n\n"
@@ -1526,10 +1639,12 @@ static void show_help(void) {
 		"Bottom row\tPick the pattern for brush and fill\n"
 		"Drag\tDraw with the tool\n"
 		"Scrollbars\tPan the page (or the wheel)\n"
-		"Title icons\tNew, open, save\n\n"
+		"Title icons\tNew, open, save\n"
+		"Esc\tStop loading or saving: the drawing and the file "
+		"stay as they were (also Ctrl+C)\n\n"
 		"The pencil draws white when you start on black. "
 		"There is no undo.";
-	z_dialog_help(&dlg_ctx, "Draw help", help, NULL);
+	z_dialog_help(&dlg_ctx, "Draw help", help, "draw_app");
 }
 
 int main(void) {
@@ -1576,24 +1691,15 @@ int main(void) {
 
 	layout();
 
-	// A file to open, if something launched us with one (the file
-	// browser does -- see Z_WM_SET_ARG in zwm.h). Done AFTER the
-	// dialog context is set up, since load_canvas() reports failures
-	// through a dialog, and after layout() so a repaint is valid.
-	if (z_launch_path_take(launch_path, sizeof(launch_path)) &&
-		load_canvas(launch_path)) {
-
-		int i = 0;
-		for (; launch_path[i] && i < (int)sizeof(filename) - 1; i++)
-			filename[i] = launch_path[i];
-		filename[i] = 0;
-
-		remember_dir(filename);
-
-	}
-
 	update_title();
 	repaint();
+
+	// A file to open, if something launched us with one (the file
+	// browser does -- see Z_WM_SET_ARG in zwm.h). Loaded by the main
+	// loop like any other open, AFTER the dialog context is set up,
+	// since a failure is reported through a dialog.
+	if (z_launch_path_take(launch_path, sizeof(launch_path)))
+		start_load(launch_path);
 
 	for (;;) {
 
@@ -1620,13 +1726,18 @@ int main(void) {
 					}
 					break;
 
-				case Z_WM_KEY:
-					// The only key: everything else is the mouse.
-					if (msg.obj.type == Z_UINT32 &&
-					    Z_WM_UNPACK_KEY_PRESSED(msg.obj.val.uint32) &&
-					    Z_WM_UNPACK_KEY_KEYSYM(msg.obj.val.uint32) == Z_KEY_HELP)
-						show_help();
+				case Z_WM_KEY: {
+					// F1, and Esc / Ctrl+C to stop a load or save:
+					// everything else is the mouse.
+					if (msg.obj.type != Z_UINT32 ||
+					    !Z_WM_UNPACK_KEY_PRESSED(msg.obj.val.uint32)) break;
+					uint32_t k = Z_WM_UNPACK_KEY_KEYSYM(msg.obj.val.uint32);
+					uint32_t mods = Z_WM_UNPACK_KEY_MODIFIERS(msg.obj.val.uint32);
+					if (k == Z_KEY_HELP) show_help();
+					else if (k == 0x1b || (k == 0x03 && (mods & Z_KBD_MOD_CTRL)))
+						stop_io();
 					break;
+				}
 
 				case Z_WM_MOUSE:
 					if (msg.obj.type == Z_UINT32)
@@ -1643,7 +1754,7 @@ int main(void) {
 					switch (Z_WM_UNPACK_TBICON_KIND(v)) {
 						case Z_WM_TBICON_NEW:  do_new(); break;
 						case Z_WM_TBICON_OPEN: do_open(); break;
-						case Z_WM_TBICON_SAVE: do_save(); break;
+						case Z_WM_TBICON_SAVE: start_save(AFTER_NONE, false); break;
 						default: break;
 					}
 
@@ -1668,9 +1779,15 @@ int main(void) {
 
 		}
 
+		// Nothing waiting: a slice of a load or save, and straight back
+		// to the messages (docs/responsive.md).
+		if (busy()) {
+			io_step();
+			continue;
+		}
+
 		for (volatile int i = 0; i < 200; i++);	// light throttle
 
-	
 		/* Yield. This loop used to spin, so the app was RUNNABLE
 		 * forever and took a full scheduler share from whatever was
 		 * in the foreground -- see docs/app_runtime.md. a paint program only changes on input. */

@@ -221,6 +221,6 @@ posix -- see docs/posix.md
 anything else is run as a program: 'zcc hello.c -o hello'
 redirection: > and >>   chaining: && and ||
 quoting: 'a b' "a b" a\ b   wildcards: * ? [abc]
-Ctrl+C stops a builtin that is still running
+Ctrl+C stops a command that is running or waiting its turn
 $ exit
 [exit]

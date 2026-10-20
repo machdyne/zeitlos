@@ -199,6 +199,15 @@ typedef void (*z_img_gray_fn)(void *user, const uint8_t *gray, int y, int w);
 int z_img_decode_gray(z_img_t *im, z_img_fmt_t fmt, z_img_gray_fn row,
 	void *user);
 
+// z_img_decode(), and `done(user, y)` once row y is in the document --
+// so a caller can show the rows decoded so far, or hand control back
+// every few rows (sw/common/zimgjob.h runs it in a coroutine). Rows
+// come in the order z_img_decode() writes them (an interlaced GIF's in
+// its passes, a BMP's usually bottom up).
+typedef void (*z_img_row_fn)(void *user, int y);
+int z_img_decode_rows(z_img_t *im, z_img_fmt_t fmt, z_img_row_fn done,
+	void *user);
+
 // Short human-readable form of a Z_IMG_E_* code, for a dialog.
 const char *z_img_strerror(int rv);
 

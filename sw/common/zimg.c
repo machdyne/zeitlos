@@ -436,6 +436,10 @@ static void dither_row_threshold(z_img_t *im, const uint8_t *gray, int y) {
 static z_img_gray_fn gray_out;
 static void *gray_user;
 
+// z_img_decode_rows(): told after each row reaches the document.
+static z_img_row_fn row_done;
+static void *row_done_user;
+
 // One decoded row into the document, whichever quantiser is in force.
 static void emit_row(z_img_t *im, const uint8_t *gray, int y) {
 
@@ -453,6 +457,8 @@ static void emit_row(z_img_t *im, const uint8_t *gray, int y) {
 	else                                dither_row_fs(im, gray, y);
 
 	Z_PROF_END(Z_IMGP_DITHER);
+
+	if (row_done) row_done(row_done_user, y);
 
 }
 
@@ -649,6 +655,8 @@ static int decode_zbm(z_img_t *im) {
 			for (x = 0; x < im->out_w; x++)
 				grayrow[x] = ((zrow[x >> 5] >> (x & 31)) & 1u) ? 255 : 0;
 			gray_out(gray_user, grayrow, y, im->out_w);
+		} else if (row_done) {
+			row_done(row_done_user, y);
 		}
 
 	}
@@ -2430,8 +2438,25 @@ int z_img_decode(z_img_t *im, z_img_fmt_t fmt) {
 
 	gray_out = NULL;
 	gray_user = NULL;
+	row_done = NULL;
 	if (!im->doc) return Z_IMG_E_FORMAT;
 	return decode_any(im, fmt);
+
+}
+
+int z_img_decode_rows(z_img_t *im, z_img_fmt_t fmt, z_img_row_fn done,
+	void *user) {
+
+	int rv;
+
+	gray_out = NULL;
+	gray_user = NULL;
+	if (!im->doc) return Z_IMG_E_FORMAT;
+	row_done = done;
+	row_done_user = user;
+	rv = decode_any(im, fmt);
+	row_done = NULL;
+	return rv;
 
 }
 
@@ -2445,6 +2470,7 @@ int z_img_decode_gray(z_img_t *im, z_img_fmt_t fmt, z_img_gray_fn row,
 		return Z_IMG_E_FORMAT;
 	gray_out = row;
 	gray_user = user;
+	row_done = NULL;
 	rv = decode_any(im, fmt);
 	gray_out = NULL;
 	gray_user = NULL;

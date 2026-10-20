@@ -14,6 +14,7 @@
 #include <stdio.h>
 
 #include "../../../common/zeitlos.h"
+#include "../../../common/zpaths.h"
 #include "../../../common/zpool.h"
 #include "../run.h"
 #include "../res.h"
@@ -75,7 +76,7 @@ int main(void) {
 	zc_scratch(scratch, sizeof(scratch));
 	zc_text_cache(cache, sizeof(cache));
 	res_init(load, 4u << 20);
-	data = load("/tmp/job.zpp", &len);
+	data = load(Z_DIR_TMP "/job.zpp", &len);
 	if (!data || !job_open(&j, data, len, start, bytes)) { printf("no job\n"); return 1; }
 	printf("job: %d pages, %lu bytes\n", j.npages, (unsigned long)len);
 

@@ -13,7 +13,7 @@ APP = draw
 #   second caller. Every app that links the dialog needs this too: a
 #   shared widget is only shared if the build says so.
 OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o zwidget.o zspeak.o \
-	zfsapp.o zflist.o zdialog.o zedit.o draw_icons.o draw.o
+	zfsapp.o zflist.o zdialog.o zedit.o draw_icons.o drawio.o draw.o
 
 # draw_icons.c/.h are hand-edited (binary literals with an ASCII
 # picture of each row in the comment), not generated -- see
@@ -22,3 +22,16 @@ draw_icons.o: draw_icons.c draw_icons.h
 	$(CC) $(CFLAGS) -c draw_icons.c -o draw_icons.o
 
 include ../../common/app.mk
+
+# -- host tests --------------------------------------------------------------
+#
+#   make test     the load and save state machines (drawio.c): slicing,
+#                 stopping at every step, the .part, damaged files
+
+HOSTCC ?= cc
+HOST_CFLAGS = -std=gnu99 -g -Wall -Wextra -fsanitize=address,undefined \
+	-fno-sanitize=shift
+
+test:
+	$(HOSTCC) $(HOST_CFLAGS) -o /tmp/test_draw_io tests/test_drawio.c tests/hostfs.c drawio.c
+	/tmp/test_draw_io

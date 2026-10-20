@@ -110,9 +110,12 @@ APP_CFLAGS = $(IMG_DEFS) $(INSTR_DEFS) $(PROF_DEFS)
 #   zdialog.c owned it privately until sw/apps/web's URL bar became its
 #   second caller. Every app that links the dialog needs this too: a
 #   shared widget is only shared if the build says so.
+#   zimgjob.o, zco.o: a picture decoded a slice at a time from the
+#   main loop, so the window answers and Esc stops it
+#   (docs/responsive.md).
 OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o zwidget.o zspeak.o \
 	zfsapp.o zflist.o zdialog.o zedit.o zimg.o zinflate.o zsvg.o \
-	zprof.o view.o
+	zprof.o zco.o zimgjob.o view.o
 
 zimg.o:
 	$(CC) $(CFLAGS) $(ZIMG_OPT) -c ../../common/zimg.c -o zimg.o

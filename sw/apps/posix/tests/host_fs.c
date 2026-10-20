@@ -47,6 +47,13 @@ static const char *hp(const char *path) {
 #define MAXH 8
 static FILE *handles[MAXH];
 
+/* Files open now: after every command, none (run_cases.c). */
+int host_open_handles(void) {
+    int n = 0;
+    for (int i = 0; i < MAXH; i++) if (handles[i]) n++;
+    return n;
+}
+
 static int alloc_handle(FILE *f) {
     for (int i = 0; i < MAXH; i++)
         if (!handles[i]) { handles[i] = f; return i; }
@@ -270,11 +277,20 @@ bool z_pid_lookup(const char *name, uint32_t *pid) {
 }
 
 /* main.c's, which asks term to switch; here, the answers it can give */
+/* main.c's own, in the main-loop test (run_main.c), which also has
+ * its own clock. */
+#ifndef PX_HOST_MAIN
+uint32_t z_uptime_ticks(void) {
+    static uint32_t t;
+    return t++;
+}
+
 bool px_switch_port(void *conn, const char *name, char *err, uint32_t cap) {
     (void)conn;
     if (strlen(name) > 20) { snprintf(err, cap, "name too long"); return false; }
     return true;
 }
+#endif
 
 /* `free`: fixed figures, the shape of a small board's pool */
 bool z_mem_stats(z_mem_stats_args_t *m) {

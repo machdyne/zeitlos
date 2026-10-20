@@ -91,6 +91,7 @@
 #include "../../common/zedit.h"
 #include "../../common/zinflate.h"
 #include "../../common/zimg.h"
+#include "imgdec.h"
 #if WEB_SVG
 #include "../../common/zsvg.h"
 #endif
@@ -399,7 +400,16 @@ static char     img_status[64];
 // rather than holding the document in memory, so reusing the spool
 // would destroy the page the image belongs to.
 static char img_spool_path[URL_MAX];
-static int  img_fd = -1;			// read, during decode
+static int  img_fd = -1;			// read, while it is sniffed (and an SVG read)
+
+// The picture being decoded into img_bits, a slice per pass of the main
+// loop (imgdec.h): the page stays live meanwhile, and Esc or Stop ends
+// it. img_box_w/h is the box it was given.
+static imgdec_t idec;
+static int img_box_w, img_box_h;
+static int img_shown_pct;			// in the bar, in tens
+static void img_progress(void);
+static void img_decode_stop(void);
 
 // The box this block's placeholder occupies, in pixels.
 //
@@ -435,13 +445,6 @@ static void img_box_size(uint32_t block, int *w, int *h) {
 	if (*w > IMG_MAX_W) *w = IMG_MAX_W;
 	*h = IMG_MAX_H;
 
-}
-
-// zimg's byte source. Reads from the spooled image file.
-static int img_read(void *ctx, uint8_t *buf, int len) {
-	(void)ctx;
-	if (img_fd < 0) return 0;
-	return fs_read_chunk(img_fd, (char *)buf, len);
 }
 
 // Decodes what was spooled into img_bits, scaled to the box.
@@ -513,9 +516,16 @@ static bool img_render_svg(int box_w, int box_h) {
 
 #endif
 
-static bool img_decode_spooled(int box_w, int box_h) {
+// What img_decode_spooled() did.
+#define IMG_DEC_FAILED   0		// img_status says why
+#define IMG_DEC_DONE     1		// an SVG, drawn at once
+#define IMG_DEC_STARTED  2		// a picture, decoding: img_pump()
 
-	z_img_t im;
+// Starts the spooled picture on its way into img_bits, scaled to the
+// box. A picture is decoded a slice at a time from the main loop
+// (img_pump()); an SVG is drawn here, at once.
+static int img_decode_spooled(int box_w, int box_h) {
+
 	// 1KB. SVG is text, and its <svg> tag sits after an XML
 	// declaration, a DOCTYPE and often a generator comment -- offset
 	// 114 in an ordinary Inkscape file. A 16-byte sniff, which is all
@@ -523,67 +533,50 @@ static bool img_decode_spooled(int box_w, int box_h) {
 	// unrecognised.
 	static uint8_t hdr[1024];
 	z_img_fmt_t fmt;
-	int n, rv;
+	int n;
 
-	if (img_fd < 0) return false;
-	if (fs_seek(img_fd, 0) < 0) return false;
+	if (img_fd < 0) return IMG_DEC_FAILED;
+	if (fs_seek(img_fd, 0) < 0) return IMG_DEC_FAILED;
 
 	n = fs_read_chunk(img_fd, (char *)hdr, (int)sizeof(hdr));
-	if (n <= 0) { snprintf(img_status, sizeof(img_status), "empty file"); return false; }
+	if (n <= 0) { snprintf(img_status, sizeof(img_status), "empty file"); return IMG_DEC_FAILED; }
 
 #if WEB_SVG
 	// SVG first: it is text, not one of zimg's formats, and it is
 	// what site logos and Wikipedia's diagrams actually are.
 	if (z_svg_sniff((const char *)hdr, (uint32_t)n))
-		return img_render_svg(box_w, box_h);
+		return img_render_svg(box_w, box_h) ? IMG_DEC_DONE : IMG_DEC_FAILED;
 #endif
 
 	fmt = z_img_sniff(hdr, n);
 	if (fmt == Z_IMG_FMT_NONE) {
 		snprintf(img_status, sizeof(img_status), "unrecognised image format");
-		return false;
+		return IMG_DEC_FAILED;
 	}
-
-	if (fs_seek(img_fd, 0) < 0) return false;
 
 	if (box_w > IMG_MAX_W) box_w = IMG_MAX_W;
 	if (box_h > IMG_MAX_H) box_h = IMG_MAX_H;
+	img_box_w = box_w;
+	img_box_h = box_h;
 
-	memset(&im, 0, sizeof(im));
-	im.read = img_read;
-	im.ctx = NULL;
-	im.doc = img_bits;
-	im.doc_wpl = IMG_WPL;
-	im.doc_w = box_w;
-	im.doc_h = box_h;
+	// The job reads the spool through a handle of its own.
+	fs_close_handle(img_fd);
+	img_fd = -1;
 
-	z_img_clear(&im);
-
-	rv = z_img_decode(&im, fmt);
-	if (rv != Z_IMG_OK) {
-		snprintf(img_status, sizeof(img_status), "%s", z_img_strerror(rv));
-		return false;
+	if (!imgdec_start(&idec, img_spool_path, img_bits, IMG_WPL, box_w, box_h)) {
+		snprintf(img_status, sizeof(img_status), "%s",
+			idec.job.err == Z_IMGJOB_E_MEM ? "no memory for it"
+				: "cannot read the image spool");
+		return IMG_DEC_FAILED;
 	}
-
-	img_w = im.out_w;
-	img_h = im.out_h;
-	if (img_w > box_w) img_w = box_w;
-	if (img_h > box_h) img_h = box_h;
-
-	// The BOX is printed too. Without it a scaled-down image is a
-	// mystery: the only thing that decides the scale is whether the
-	// source fits the box (zimg.c's fit_scale()), so the box is the
-	// number that explains the result.
-	printf("web: image %s %dx%d -> %dx%d (1/%d) box %dx%d%s\n",
-		z_img_fmt_name(fmt), im.src_w, im.src_h, img_w, img_h,
-		1 << im.shift, box_w, box_h,
-		im.was_ordered ? ", ordered dither" : "");
-
-	return true;
+	img_shown_pct = -1;
+	return IMG_DEC_STARTED;
 
 }
 
 static void img_forget(void) {
+	// a picture still decoding goes too: its spool closed and removed
+	imgdec_stop(&idec);
 	img_have = false;
 	img_loading = false;
 	img_src[0] = '\0';
@@ -1397,6 +1390,11 @@ static bool net_busy(void) {
 		state == W_RECEIVING || state == W_IMG;
 }
 
+// The button is Stop while a picture decodes, too.
+static bool busy(void) {
+	return net_busy() || imgdec_busy(&idec);
+}
+
 // What the button showed when the bar was last drawn, so the main loop
 // redraws it exactly when that stops being true.
 static bool drawn_busy;
@@ -1405,8 +1403,10 @@ static void web_stop(void) {
 	// Logged either way: whether a Stop arrived, and in which state, is
 	// the first question when one seems not to work.
 	printf("web: stop (state %d, %s)\n", (int)state,
-		net_busy() ? "stopping" : "nothing loading");
+		net_busy() ? "stopping" : imgdec_busy(&idec) ? "stopping the picture"
+			: "nothing loading");
 	if (net_busy()) fetch_failed("stopped");
+	else if (imgdec_busy(&idec)) img_decode_stop();
 }
 
 static void draw_go(int x, int y, int h) {
@@ -1419,7 +1419,7 @@ static void draw_go(int x, int y, int h) {
 	z_fb_hw_fill_rect(c.x0 + x, c.y0 + y, 1, h, 1);
 	z_fb_hw_fill_rect(c.x0 + x + TB_BTN_W - 1, c.y0 + y, 1, h, 1);
 
-	if (net_busy()) {
+	if (busy()) {
 		for (int dy = 0; dy < h; dy++)
 			for (int dx = 0; dx < TB_BTN_W; dx++)
 				if (toolbar_cross_px(dx, dy, TB_BTN_W, h))
@@ -1475,7 +1475,7 @@ static void draw_bar(void) {
 	z_edit_draw(&win, &url_edit, tb.field_x, 1, tb.field_w, BAR_H - 3,
 		&z_font_5x8);
 
-	drawn_busy = net_busy();
+	drawn_busy = busy();
 	if (tb.buttons) {
 		draw_go(tb.go_x, 1, BAR_H - 3);
 		draw_arrow(tb.back_x, 1, BAR_H - 3, true, hist_at > 0);
@@ -2185,7 +2185,19 @@ static void response_done(void) {
 		img_fd = fs_open_read(img_spool_path);
 
 		img_box_size(img_block, &bw, &bh);
-		img_have = img_decode_spooled(bw, bh);
+		switch (img_decode_spooled(bw, bh)) {
+		case IMG_DEC_STARTED:
+			// Decoded from the main loop (img_pump()); the box keeps
+			// its caption meanwhile and the bar shows how far.
+			img_progress();
+			return;
+		case IMG_DEC_DONE:
+			img_have = true;
+			break;
+		default:
+			img_have = false;
+			break;
+		}
 
 		// The box now follows the picture, so there is no leftover
 		// between the image and the text below it.
@@ -2256,6 +2268,87 @@ static void response_done(void) {
 
 }
 
+// -- decoding it, a slice at a time ---------------------------------
+//
+// The fetch has finished and the picture is in its spool; the main loop
+// calls img_pump() whenever no message is waiting (docs/responsive.md).
+
+// "picture 40% -- Esc stops" in the bar, in tens.
+static void img_progress(void) {
+	int pct = imgdec_permille(&idec) / 100;
+	if (pct == img_shown_pct) return;
+	img_shown_pct = pct;
+	snprintf(bar_note, sizeof(bar_note), "picture %d%% -- Esc stops", pct * 10);
+	draw_bar();
+}
+
+// It is over, one way or another: the picture into its box, or the box
+// says why not. The spool is closed and gone by now.
+static void img_decoded(int st) {
+
+	const z_imgjob_t *j = &idec.job;
+
+	if (!strncmp(bar_note, "picture ", 8)) bar_note[0] = 0;
+
+	if (st == Z_IMGJOB_DONE) {
+
+		img_w = j->w < img_box_w ? j->w : img_box_w;
+		img_h = j->h < img_box_h ? j->h : img_box_h;
+		img_have = img_w > 0 && img_h > 0;
+		img_status[0] = 0;
+
+		if (j->err != Z_IMG_OK)
+			printf("web: image cut short: %s\n", z_img_strerror(j->err));
+
+		// The BOX is printed too. Without it a scaled-down image is a
+		// mystery: the only thing that decides the scale is whether the
+		// source fits the box (zimg.c's fit_scale()), so the box is the
+		// number that explains the result.
+		printf("web: image %s -> %dx%d box %dx%d%s\n",
+			z_img_fmt_name(j->fmt), img_w, img_h, img_box_w, img_box_h,
+			j->ordered ? ", ordered dither" : "");
+
+	} else {
+
+		img_have = false;
+		if (st == Z_IMGJOB_STOPPED)
+			snprintf(img_status, sizeof(img_status), "stopped -- click to load");
+		else if (j->err == Z_IMGJOB_E_MEM)
+			snprintf(img_status, sizeof(img_status), "no memory for it");
+		else if (j->err == Z_IMGJOB_E_OPEN)
+			snprintf(img_status, sizeof(img_status), "cannot read the image spool");
+		else
+			snprintf(img_status, sizeof(img_status), "%s", z_img_strerror(j->err));
+
+	}
+
+	// The box now follows the picture, so there is no leftover
+	// between the image and the text below it.
+	if (img_have) {
+		cfg.img_src = img_src;
+		cfg.img_dw = img_w;
+		cfg.img_dh = img_h;
+	}
+
+	// The body, explicitly: this is the moment the page changes.
+	repaint_all();
+
+}
+
+static void img_pump(void) {
+	int st = imgdec_step(&idec, Z_TICK_HZ / 50);
+	if (st == Z_IMGJOB_RUNNING) img_progress();
+	else img_decoded(st);
+}
+
+// Esc or Stop: the picture stops at once and the page stays.
+static void img_decode_stop(void) {
+	if (!imgdec_busy(&idec)) return;
+	imgdec_stop(&idec);
+	printf("web: image decode stopped\n");
+	img_decoded(Z_IMGJOB_STOPPED);
+}
+
 // -- loading an image in place -------------------------------------
 //
 // The page stays exactly as it is: the image goes to its OWN spool
@@ -2276,6 +2369,7 @@ static void load_image(uint32_t block, const html_line_t *l) {
 	url_t dest;
 
 	if (state == W_RECEIVING || state == W_IMG) return;	// one at a time
+	if (imgdec_busy(&idec) && block == img_block) return;	// on its way
 
 	if (!l->nlinks) {
 		snprintf(img_status, sizeof(img_status), "this image has no address");
@@ -3645,7 +3739,7 @@ static void handle_mouse(uint32_t packed) {
 
 			case TB_HIT_GO:
 				if (dl_on && !dl_net) save_abandon("stopped");
-				else if (net_busy()) web_stop();
+				else if (busy()) web_stop();
 				else web_go();
 				break;
 
@@ -4152,7 +4246,7 @@ int main(void) {
 		// Go becomes Stop when a load reaches the network and back
 		// when it ends, however it ends -- redrawn here rather than at
 		// each of the many places the state changes.
-		if (net_busy() != drawn_busy) draw_bar();
+		if (busy() != drawn_busy) draw_bar();
 
 		// -- idle work --
 		//
@@ -4187,6 +4281,9 @@ int main(void) {
 		// step each, between messages, so Escape is seen at once.
 		if (dl_on && !dl_net) { save_copy_pump(); continue; }
 		if (find_running) { find_step(); continue; }
+
+		// A picture into its box, a slice at a time.
+		if (imgdec_busy(&idec)) { img_pump(); continue; }
 
 		if (state == W_INDEXING) {
 

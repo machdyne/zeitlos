@@ -10,6 +10,7 @@
 #include "../../common/zimg.h"
 #include "../../common/zfont.h"
 #include "../../common/zpaper.h"
+#include "../../common/zpaths.h"
 
 #define RES_FONTS	24
 #define RES_IMAGES	16
@@ -96,7 +97,7 @@ bool res_font(void *ctx, const char *name, const zc_font_t **out) {
 		int k;
 		char path[64];
 		int n = 0;
-		const char *dir = "/sys/fonts/";
+		const char *dir = Z_DIR_SYS_FONTS "/";
 		memset(&fonts[nfonts], 0, sizeof(fonts[nfonts]));
 		for (i = 0; i < ZP_FONT_MAX - 1 && name[i]; i++) fonts[nfonts].name[i] = name[i];
 		for (k = 0; k < 2 && !fonts[nfonts].ok; k++) {
