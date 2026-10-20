@@ -223,6 +223,23 @@ int main(void) {
 	k_msg_release_pid(0xFFFFFFFFu);
 	CHECK(at(2, 0).obj.type == Z_STR && z_mailboxes[2].count == 1, "pid 0 was released");
 
+	// Payload pointers: a window address is the sender's block; an
+	// address in the sender's arena is physical already and stays so
+	// (slide writing a deck from its pool reached fs as 0x2000xxxx)
+	z_procs[7].base = 0x40500000u;
+	z_procs[7].size = 0x40000u;
+	z_procs[7].arena_base = 0x40e00000u;
+	z_procs[7].arena_size = 0x600000u;
+	CHECK((uint32_t)(uintptr_t)z_translate(7, (void *)(uintptr_t)0x80001000u) == 0x40501000u,
+		"a window address goes to the block");
+	CHECK((uint32_t)(uintptr_t)z_translate(7, (void *)(uintptr_t)0x40e01bb0u) == 0x40e01bb0u,
+		"an arena address stays as it is");
+	CHECK((uint32_t)(uintptr_t)z_translate(7, (void *)(uintptr_t)0x41400000u) != 0x41400000u,
+		"just past the arena is not passed through");
+	z_procs[7].arena_size = 0;
+	z_procs[7].base = 0;
+	z_procs[7].size = 0;
+
 	printf("test_msg: %d checks, %d failed\n", checks, fails);
 	return fails != 0;
 

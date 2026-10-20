@@ -3431,6 +3431,9 @@ static void caption_set(const char *utf8, uint32_t tag) {
 
 	uint32_t now = z_uptime_ticks();
 	uint32_t ms = Z_CAPTION_GET_TIMEOUT_MS(tag);
+	// Never for ever: a caption left up by a demo that stopped, or a
+	// program that died, goes after a minute (docs/captions.md).
+	if (!ms || ms > Z_CAPTION_MAX_MS) ms = Z_CAPTION_MAX_MS;
 	cap_has_deadline = cap_vis && ms;
 	cap_deadline = now + ms * Z_TICK_HZ / 1000u;
 

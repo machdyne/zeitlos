@@ -63,6 +63,9 @@ static const char *deck_text =
 	"  (text \"ticks\" (box 20 20 100 20) (text \"0\")))\n"
 	" (card \"three\" (action \"(go 'next)\")))\n";
 
+static int saves;
+static bool h_save(void *u) { (void)u; saves++; return true; }
+
 int main(void) {
 	char err[96], out[160];
 	act_host_t h;
@@ -79,7 +82,7 @@ int main(void) {
 	memset(&h, 0, sizeof(h));
 	h.go = h_go; h.changed = h_changed; h.open_deck = h_open; h.message = h_msg;
 	h.speak = h_speak; h.now = h_now; h.tick_hz = 1000;
-	h.eval = h_eval; h.clicked = h_clicked; h.current = h_current;
+	h.eval = h_eval; h.clicked = h_clicked; h.current = h_current; h.save = h_save;
 	act_init(&h);
 	script_stop_check(stop_check);
 
@@ -162,6 +165,27 @@ int main(void) {
 	// -- the check the script editor makes --
 	ck(script_check("(define (f x) (+ x 1)) ; a comment (\n(f 1)", err, sizeof(err)), "a script that reads");
 	ck(!script_check("(define (f x) (+ x 1)", err, sizeof(err)) && strstr(err, "not closed"), "a ( not closed");
+	// records: add-item, remove-item, save-deck
+	cur = 0;
+	ck(script_eval(D, 0, "(add-item \"l\" \"blue\" \" \" 3)", out, sizeof(out)) &&
+		!strcmp(act_find(D, 0, "l")->text, "red\ngreen\nblue 3"), "add-item: a line of values at the end");
+	ck(script_eval(D, 0, "(remove-item \"l\")", out, sizeof(out)) && !strcmp(out, "#t") &&
+		!strcmp(act_find(D, 0, "l")->text, "red\nblue 3") && act_find(D, 0, "l")->value == -1,
+		"remove-item: the chosen one (green)");
+	ck(script_eval(D, 0, "(remove-item \"l\")", out, sizeof(out)) && !strcmp(out, "#f"), "remove-item: none chosen");
+	act_find(D, 0, "l")->value = 1;
+	ck(script_eval(D, 0, "(remove-item \"l\")", out, sizeof(out)) && !strcmp(act_find(D, 0, "l")->text, "red"),
+		"remove-item: the last one");
+	act_find(D, 0, "l")->value = 0;
+	ck(script_eval(D, 0, "(remove-item \"l\")", out, sizeof(out)) && !strcmp(act_find(D, 0, "l")->text, ""),
+		"remove-item: the only one");
+	ck(script_eval(D, 0, "(add-item \"l\" \"a\\nb\")", out, sizeof(out)) && !strcmp(act_find(D, 0, "l")->text, "a b"),
+		"add-item: into an empty list; a newline in a value is a space");
+	obj_set_text(act_find(D, 0, "name"), "Ada", 3);
+	ck(script_eval(D, 0, "(take-text \"name\")", out, sizeof(out)) && !strcmp(out, "\"Ada\"") &&
+		!act_find(D, 0, "name")->text[0], "take-text: the text, and the field emptied");
+	ck(script_eval(D, 0, "(save-deck)", out, sizeof(out)) && !strcmp(out, "#t") && saves == 1, "save-deck: the host saves");
+
 	ck(!script_check("(f))", err, sizeof(err)) && strstr(err, "too many"), "a ) too many");
 	ck(!script_check("(display \"hi)", err, sizeof(err)) && strstr(err, "string"), "a string not closed");
 
@@ -171,9 +195,9 @@ int main(void) {
 	// -- the example decks (sw/data/slide/examples), driven as a person
 	// would: clicks on their buttons --
 	{
-		static const char *const names[] = { "quiz", "calculator", "todo", "clock" };
+		static const char *const names[] = { "quiz", "calculator", "todo", "clock", "phonebook" };
 		int e;
-		for (e = 0; e < 4; e++) {
+		for (e = 0; e < 5; e++) {
 			char path[256], *text;
 			FILE *f;
 			long n;
@@ -232,6 +256,18 @@ int main(void) {
 				CLICK("done");
 				ck(!strstr(act_find(D, 0, "items")->text, "Try slide") && act_find(D, 0, "items")->value == -1,
 					"todo: Done takes the chosen one");
+			} else if (e == 4) {
+				obj_t *bk = act_find(D, 0, "book");
+				int n0 = saves;
+				obj_set_text(act_find(D, 0, "name"), "Grace Hopper", 12);
+				obj_set_text(act_find(D, 0, "phone"), "1906", 4);
+				CLICK("add");
+				ck(strstr(bk->text, "\nGrace Hopper  1906") && !act_find(D, 0, "name")->text[0] &&
+					saves == n0 + 1, "phone book: Add, cleared, saved");
+				bk->value = 0;
+				CLICK("delete");
+				ck(!strstr(bk->text, "Ada") && strstr(bk->text, "Grace") && saves == n0 + 2,
+					"phone book: Delete the chosen one, saved");
 			} else {
 				script_card(D, 0);
 				ck(script_timers(), "clock: the card ticks");

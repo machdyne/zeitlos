@@ -1,0 +1,19 @@
+; slide deck (docs/slide_app.md) -- an example: a phone book, the app the
+; slide demo builds (docs/demo.md). Its records are the list's items,
+; kept in the deck itself: Add and Delete save it (save-deck).
+(deck (version 1)
+	(page "classic" landscape)
+	(title "Phone book")
+	(app)
+	(card "book"
+		(text "title" (box 20 15 472 50) (font "serif" 28) (align center middle) (text "Phone book"))
+		(text "l1" (box 40 56 180 20) (font "sans" 16) (text "Name"))
+		(field "name" (box 40 76 180 24) (font "sans" 14) (pad 4) (text ""))
+		(text "l2" (box 40 104 180 20) (font "sans" 16) (text "Phone"))
+		(field "phone" (box 40 124 180 24) (font "sans" 14) (pad 4) (text ""))
+		(button "add" (box 40 160 90 24) (radius 6) (font "sans" 14) (align center middle) (text "Add")
+			(action "(add-item \"book\" (take-text \"name\") \"  \" (take-text \"phone\")) (save-deck)"))
+		(button "delete" (box 136 160 90 24) (radius 6) (font "sans" 14) (align center middle) (text "Delete")
+			(action "(remove-item \"book\") (save-deck)"))
+		(list "book" (box 240 80 230 220) (font "sans" 13) (pad 3) (value -1)
+			(text "Ada Lovelace  1815\nAlan Turing  1912"))))

@@ -34,11 +34,15 @@ three lines.
 | `Z_CAPTION_BOTTOM` / `_TOP` / `_CENTER` | position; bottom sits just above the dock |
 | `Z_CAPTION_COMPACT` | a box fitted to the text instead of a full-width band |
 | `Z_CAPTION_INVERSE` | lit box, dark text (default: dark box, lit frame and text) |
-| `Z_CAPTION_TIMEOUT(ms)` | hide by itself; 0 = until replaced |
+| `Z_CAPTION_TIMEOUT(ms)` | hide by itself; 0 = after a minute at most (`Z_CAPTION_MAX_MS`), unless replaced first |
 
 There is **one** caption. Showing one replaces the last. It does not
 belong to the process that set it and outlives it; give it a timeout if
-it should go away by itself.
+it should go away sooner. **No caption stays up for ever:** one without
+a timeout, or with one longer than a minute, goes after a minute
+(`Z_CAPTION_MAX_MS`), so a demo that stopped or a program that died
+cannot leave its words on the screen. A narration that needs longer
+shows its caption again.
 
 ### How big
 

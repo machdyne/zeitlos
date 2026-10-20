@@ -60,6 +60,10 @@ status line: `/(get-text "score")`, `/(go 3)`, `/(set-text "title"
 | `(set-value "name" n)` | a check (1 or 0), a slider (kept in its range), a list (the item's number from 0; -1 none) |
 | `(card-name)` `(card-number)` `(card-count)` `(deck-title)` | where you are |
 | `(speak "words")` `(speak-text "name")` | aloud, through the speech service |
+| `(take-text "name")` | an object's text, and the object emptied: a form's field read as its record is made |
+| `(add-item "name" values...)` | a record: the values (strings as they are, numbers written) as one line at the end of a list's items or a field's text |
+| `(remove-item "name")` | the chosen item of a list taken out (`#f` if none is chosen) |
+| `(save-deck)` | the deck written to its file, with what its fields and lists hold now: an app's records kept in the deck itself (the deck needs a file: `/save as`) |
 | `(open "/data/slide/other.zsl")` | another deck |
 | `(beep)` | |
 
@@ -112,6 +116,7 @@ F7 shows how it is made):
 | `quiz.zsl` | radios in a group, a score kept in the deck's script, `(after 1200 (go 'next))`, a card's script that shows the result, `(when-clicked "again" ...)` |
 | `calculator.zsl` | a field as a display, sixteen buttons whose actions call the deck's procedures |
 | `todo.zsl` | a field and a list: items added and removed with string procedures; Enter in the field adds |
+| `phonebook.zsl` | a small database: two fields, Add and Delete (`(add-item "book" (take-text "name") "  " (take-text "phone"))`, `remove-item`), the records kept in the deck by `(save-deck)` -- the app the slide demo builds ([demo.md](demo.md#the-slide-demo)) |
 | `clock.zsl` | `(every 1000 ...)` on a card, `current-date`; a stopwatch whose timer is kept in a variable and cancelled |
 
 ## Memory

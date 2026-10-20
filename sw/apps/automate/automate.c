@@ -212,8 +212,16 @@ static uint32_t speech_estimate_ms(const char *t) {
 static void say(const char *text, bool wait);
 
 static bool sync_speech(void) {
+	uint32_t said_at = now();
 	for (;;) {
 		uint32_t t = now();
+		// A wait that goes on is said: if the demo stops here, the log
+		// shows whether automate was still running (and waiting for
+		// what) or not running at all.
+		if ((int32_t)(t - said_at) >= (int32_t)ms_ticks(5000)) {
+			printf("automate: still waiting for speech (%d marks)\n", nmarks);
+			said_at = t;
+		}
 		for (int i = 0; i < nmarks; ) {
 			if ((int32_t)(t - marks[i].deadline) >= 0) {
 				printf("automate: speech mark %u timed out\n", marks[i].mark);

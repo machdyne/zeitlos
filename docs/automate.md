@@ -43,7 +43,7 @@ line (surrounding quotes are stripped, `\n` is a line break).
 | `narrate TEXT` | caption TEXT and say it (waits) |
 | `narrate CAPTION \| SPOKEN` | caption one thing, say another — a short caption, a full sentence |
 | `narrate& ...` | the same, without waiting |
-| `caption TEXT` / `caption-off` | |
+| `caption TEXT` / `caption-off` | a caption stays up a minute at most ([captions.md](captions.md)) |
 | `caption-size 1..3` | 2 by default (see [captions.md](captions.md#how-big)) |
 | `caption-pos bottom\|top\|center` | |
 | `caption-style [compact] [inverse]` | |
@@ -67,6 +67,11 @@ falls back to the synthesised voice and `automate` warns at
 thing heard in the new voice. Both demos open in the synthesised voice
 and hand over to the recorded one. The synthesised voice mangles
 "computer" and "FPGA"; give it easy words.
+
+**A long wait says so**: every five seconds that `narrate`, `say` or
+`sync` is still waiting, the console gets `automate: still waiting for
+speech (N marks)` -- so a demo that stops shows whether automate is
+still running, and waiting for what, or not running at all.
 
 **Waiting for speech** is by marks: every utterance carries one, and
 `tts` answers `Z_TTS_MARK_DONE` when it has been spoken. Every wait has

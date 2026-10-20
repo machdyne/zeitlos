@@ -1,13 +1,14 @@
-# Zeitlos -- slide, in about 45 seconds: for a short video.
+# Zeitlos -- slide, in about 90 seconds: for a video.
 #
 #   > run automate /data/automate/slide.zds
 #
-# Revision 1. Shows sw/apps/slide (docs/slide_app.md): a flowchart drawn
-# live with connectors that follow their shapes, the deck shown full
-# screen with its transitions, Scheme in the message box, and a deck
-# that is an app (the calculator example). The deck is
-# /data/automate/slide_demo.zsl; the demo adds a card to it and never
-# saves it.
+# Revision 7. Shows sw/apps/slide (docs/slide_app.md): a deck, a
+# flowchart drawn live with arrows that follow their shapes, a pitch
+# card printed to a PDF, the deck shown full screen, and then an
+# interactive deck built from nothing -- a phone book with Add and
+# Delete that keeps its records in its own deck -- and used.
+# One slide from start to end, started on an ordinary deck. The demo's
+# deck is not saved; the phone book is saved to /tmp/phonebook.zsl.
 #
 # Every step here is also run on the build machine, at the same
 # coordinates: make -C sw/apps/slide render (tests/render_ui.c, "what
@@ -15,31 +16,42 @@
 # the demo miss fails there first.
 #
 # THE RULE (docs/demo.md): speech and action never overlap.
+#
+# Every drag is followed by a pause: a 500 ms drag is 30 pointer
+# messages, and slide's mailbox holds 32. Keys typed straight after one
+# could find it full and be lost -- revision 9 lost "Phone book" that
+# way (the empty text box went with Esc).
 
 reset
 interruptible off
 caption-size 3
-caption-pos bottom
+# At the top: at the bottom the caption (y 372-423 at 3x, above the
+# dock at 432) would cover slide's command line, where the typing is.
+# The window goes just under it, at y 32: its 399 pixels end above the
+# dock, and the caption covers only its title bar.
+caption-pos top
 rate 190
-type-speed 60
+type-speed 45
 speech on
 voice recorded
 
-# -- 1. a deck ---------------------------------------------------------
-# The window is 548x384 inside: the card at (30, 6) at 100%.
-run slide /data/automate/slide_demo.zsl at 40 20
+# -- 1. a deck -----------------------------------------------------------
+# The editor's window is 548x384 inside: the card at (30, 6) at 100%.
+run slide /data/automate/slide_demo.zsl at 40 32
 origin slide
 pause 600
-narrate slide: cards, slides and apps | This is slide. Cards, slides, and apps.
+narrate slide: design and print decks | This is slide. Design, show, and print decks.
 
-# -- 2. a flowchart, drawn live ----------------------------------------
+# -- 2. a flowchart, drawn live ------------------------------------------
 narrate Draw a flowchart | Draw a flow chart.
 key ctrl+m
+pause 300
 key v
 key /
 type pill Start
 key enter
 drag 286 177 120 66 500
+pause 400
 key /
 type diamond Ready?
 key enter
@@ -50,10 +62,13 @@ key /
 type cylinder Saved
 key enter
 drag 286 177 450 276 500
+pause 400
 # the arrow tool, from shape to shape: connected
 key a
 drag 120 66 286 177 600
+pause 400
 drag 286 177 450 276 600
+pause 400
 key v
 pause 300
 narrate Connectors follow | And the arrows follow their shapes.
@@ -66,46 +81,165 @@ key /
 type transition iris 600
 key enter
 
+# -- 2b. a pitch, printed ---------------------------------------------------
+# The demo deck's pitch card (fictional figures); printed to a PDF named
+# on the line, so there is no dialog, and no paper. The print window
+# shows the job and closes itself after four seconds.
+narrate A pitch: raising money for Zeitlos | Here is a pitch, raising money for Zeitlos.
+key /
+type go pitch
+key enter
+pause 1500
+narrate Print it, here to a PDF | And print it. Here, to a PDF file.
+key /
+type print this /tmp/pitch.pdf
+key enter
+pause 5000
+# the print window took the focus (and closed): keys to slide again
+focus slide
+pause 300
+
 # -- 3. the show -------------------------------------------------------
+# The next card is drawn while one is shown: going on is the transition.
 narrate Show it, full screen | Show it, full screen.
 key shift+f5
-pause 1500
+pause 2200
 key space
-pause 1800
+pause 2200
 key space
-pause 1800
+pause 2200
 key space
-pause 1800
-key space
-pause 1800
+pause 2200
 key esc
 pause 400
 
-# -- 4. Scheme, at once ------------------------------------------------
-narrate Scheme inside | With scheme inside.
-key /
-type (* 6 7)
-key enter
-pause 1500
-
-# -- 5. a deck as an app -----------------------------------------------
-# The demo's changes are not saved: kill, not close (no "Save first?").
-kill slide
-narrate Decks become apps | And a deck can be an app.
-run slide /data/slide/examples/calculator.zsl at 64 40
-origin slide
+# -- 4. an app, from nothing ---------------------------------------------
+narrate Build interactive slide decks | Build interactive slide decks. Like a phone book.
+# A new deck; the demo's is not saved
+key ctrl+n
 pause 500
-click 163 232
-click 225 232
-click 349 176
-pause 200
-click 287 232
-click 163 176
-click 287 288
-pause 1500
-kill slide
+key n
+pause 500
+key t
+drag 50 21 522 71 500
+pause 400
+type Phone book
+key esc
+key v
+click 286 46
+key /
+type font serif 28
+key enter
+key /
+type align center middle
+key enter
+key t
+drag 70 62 250 82 300
+pause 400
+type Name
+key esc
+key t
+drag 70 110 250 130 300
+pause 400
+type Phone
+key esc
+key v
+key /
+type field
+key enter
+drag 286 177 160 94 500
+pause 400
+key /
+type name name
+key enter
+key /
+type field
+key enter
+drag 286 177 160 142 500
+pause 400
+key /
+type name phone
+key enter
+key /
+type button Add
+key enter
+drag 286 177 115 178 500
+pause 400
+key /
+type name add
+key enter
+narrate Its buttons speak Scheme | Its buttons speak scheme.
+# (typed no faster than slide reads keys: a key wm cannot deliver to a
+# full mailbox is lost, and a lost bracket is a button that does nothing)
+type-speed 40
+key /
+type action (add-item "book" (take-text "name") "  " (take-text "phone")) (save-deck)
+key enter
+type-speed 45
+key /
+type button Delete
+key enter
+drag 286 177 211 178 500
+pause 400
+key /
+type name delete
+key enter
+type-speed 40
+key /
+type action (remove-item "book") (save-deck)
+key enter
+key /
+type list Ada Lovelace  1815, Alan Turing  1912
+key enter
+type-speed 45
+drag 286 177 340 126 500
+pause 400
+# its corner: larger
+drag 410 166 500 306 500
+pause 400
+key /
+type name book
+key enter
+key esc
+key /
+type app on
+key enter
+# saved: Add and Delete keep the records in it (save-deck). A phone
+# book from a run before is replaced: "y" answers the question (with no
+# question, y does nothing in the editor)
+key /
+type save as /tmp/phonebook.zsl
+key enter
+pause 600
+key y
+pause 600
+
+# -- 5. use it -----------------------------------------------------------
+# F7: the window becomes the card, 512x342 inside, the card at (0, 0).
+narrate Run it | Run it.
+key f7
+pause 800
+origin slide
+mouse 130 88 400
+click
+type Grace Hopper
+mouse 130 136 400
+click
+type 1906
+mouse 85 172 400
+click
+pause 1200
+mouse 300 91 500
+click
+pause 400
+mouse 181 172 400
+click
+pause 800
+narrate A phone book, kept in its own deck | A phone book, kept in its own deck.
+pause 800
 
 # -- 6. the end --------------------------------------------------------
+kill slide
 origin screen
 caption github.com/machdyne/zeitlos
 say Zeitlos. Time less cum pewting.

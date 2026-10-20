@@ -32,6 +32,9 @@ static void scroll_for(z_edit_t *e, int cols) {
 	if (e->scroll < 0) e->scroll = 0;
 }
 
+static int fills[64][5], nfill, text_x, text_y;
+static bool text_solid;
+
 int main(void) {
 	char buf[64];
 	z_edit_t e;
@@ -104,14 +107,44 @@ int main(void) {
 		ck(z_edit_key(&u, 0xE4) == false || u.len == 5, "a 2-byte one does not fit either");
 	}
 
+	// Drawing never clears where the text is and then draws it again
+	// (that flashed while typing): the text goes down solid, cell
+	// backgrounds and all, and the black fills stay off its cells.
+	{
+		static const z_font_t f58 = { 5, 8, 32, 126, NULL, 0, 0 };
+		z_win_t w;
+		char b[32];
+		z_edit_t u;
+		int i;
+		bool over = false;
+		memset(&w, 0, sizeof(w));
+		z_edit_init(&u, b, sizeof b, "hello");
+		u.focus = true;
+		nfill = 0; text_x = -1;
+		z_edit_draw(&w, &u, 10, 20, 200, 14, &f58);
+		for (i = 0; i < nfill; i++)
+			if (fills[i][4] == 0 && fills[i][0] < text_x + 25 && fills[i][0] + fills[i][2] > text_x &&
+				fills[i][1] < text_y + 8 && fills[i][1] + fills[i][3] > text_y) over = true;
+		ck(text_x == 13 && text_y == 23 && text_solid, "the text, solid, inside the padding");
+		ck(!over, "nothing cleared under the text");
+		ck(text_y + 8 <= 20 + 14 - 1 - 2, "and two rows clear of the bottom line (a 14-row box)");
+	}
+
 	printf("%s: %d checks, %d failures\n", fails?"FAIL":"ok", checks, fails);
 	return fails ? 1 : 0;
 }
 
 /* The draw path needs a framebuffer; stubbed so the editing logic
- * above can be linked and tested on its own. */
-void z_win_content_rect(const z_win_t *w, z_clip_t *c) { (void)w; (void)c; }
-void z_fb_hw_fill_rect(int a,int b,int c,int d,int e){(void)a;(void)b;(void)c;(void)d;(void)e;}
+ * above can be linked and tested on its own (and the drawing calls
+ * recorded). */
+void z_win_content_rect(const z_win_t *w, z_clip_t *c) { (void)w; c->x0 = 0; c->y0 = 0; c->x1 = 639; c->y1 = 479; }
+void z_fb_hw_fill_rect(int a,int b,int c,int d,int e) {
+	if (nfill < 64) { fills[nfill][0] = a; fills[nfill][1] = b; fills[nfill][2] = c; fills[nfill][3] = d; fills[nfill][4] = e; nfill++; }
+}
+void z_fb_draw_utf8_2(int x, int y, const char *t, int fg, int bg, const z_font_t *font, const z_clip_t *clip) {
+	(void)t; (void)fg; (void)bg; (void)font; (void)clip;
+	text_x = x; text_y = y; text_solid = bg == 0 && fg == 1;
+}
 
 
 void z_fb_draw_char(int x, int y, char c, int color, const z_font_t *font, const z_clip_t *clip) { (void)x;(void)y;(void)c;(void)color;(void)font;(void)clip; }

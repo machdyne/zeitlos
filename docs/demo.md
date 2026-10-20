@@ -14,7 +14,7 @@ and the media they show are the card's examples, in `/media`
 | `/data/automate/demo.zds` | what `run automate` plays: `long.zds` |
 | `/data/automate/lang.zds` | about 80 seconds, programming: Scheme, BASIC and C ([below](#the-languages-demo)) |
 | `/data/automate/mandel.c` | the C program `lang.zds` compiles on the board: a 16-colour Mandelbrot |
-| `/data/automate/slide.zds` | about 45 seconds, [slide](slide_app.md): a flowchart drawn live, the deck shown, Scheme, a deck as an app ([below](#the-slide-demo)) |
+| `/data/automate/slide.zds` | about 90 seconds, [slide](slide_app.md): a flowchart drawn live, a pitch printed to PDF, the deck shown, then a phone book built from nothing and used ([below](#the-slide-demo)) |
 | `/data/automate/slide_demo.zsl` | the deck `slide.zds` opens (and adds a card to, without saving) |
 | `/media/images/zeitlos.svg` | a vector clock face — made by `gen_media.py` |
 | `/media/images/squirrel.pgm` | a photograph, grey, 1.6x — made by `gen_media.py` from `sw/data/images/squirrel.jpg` |
@@ -192,29 +192,61 @@ the next take, then `reset`.
 
 ## The slide demo
 
-`slide.zds`, about 45 seconds: [slide](slide_app.md) doing what makes
-it different, for a short video.
+`slide.zds`, about 90 seconds: [slide](slide_app.md) walked through --
+drawing, a pitch printed, the show -- ending with an interactive deck
+built in it from nothing.
 
     > run automate /data/automate/slide.zds
 
 | | What happens |
 |---|---|
-| a deck | `slide` opens `slide_demo.zsl` at (40, 20): a title card |
+| a deck | `slide` opens `slide_demo.zsl` at (40, 32): a title card. "slide: design and print decks" |
 | a flowchart, live | Ctrl+M, a new card; `/pill Start`, `/diamond Ready?` (`/fill 2`), `/cylinder Saved`, each dragged into place; two arrows drawn with the arrow tool from shape to shape, which connects them; the diamond and the store dragged, and the arrows follow; `/transition iris 600` |
-| the show | Shift+F5: the title, the new card (an iris), the deck's own cards (iris, dissolve), "Made on Zeitlos" (push); Esc |
-| Scheme | `/(* 6 7)` in the message box: `=> 42` in the status line |
-| an app | `slide` killed (the demo never saves its card) and run again on `/data/slide/examples/calculator.zsl`, which opens as an app: 12 * 34 = 408, clicked |
-| the end | the repository's address, and "Zeitlos" |
+| a pitch, printed | `/go pitch`: a fictional seed-round card (EUR 10M for a toaster screensaver, a bar chart of toasters planned); `/print this /tmp/pitch.pdf` -- a PDF named on the line, so no dialog and no paper; the print window shows the job and closes itself; `focus slide` gives the keys back to slide (without it, Shift+F5 went nowhere) |
+| the show | Shift+F5: the title, the flowchart (an iris), the pitch, the next card; Esc |
+| an interactive deck | "Build interactive slide decks": Ctrl+N ("Save the deck first?" No); a title and two labels with the text tool; `/field` twice (`/name name`, `/name phone`); `/button Add` with `/action (add-item "book" (take-text "name") "  " (take-text "phone")) (save-deck)`; `/button Delete` with `/action (remove-item "book") (save-deck)`; `/list Ada Lovelace  1815, Alan Turing  1912`, made larger by its corner, `/name book`; `/app on`; `/save as /tmp/phonebook.zsl` ("y" if a run before left one) |
+| using it | F7: the window is the card. "Grace Hopper", "1906", Add: the record is in the list, the fields empty, the deck saved. Ada chosen, Delete |
+| the end | `slide` killed, the repository's address, and "Zeitlos" |
 
-The window is 548 x 384 inside, so the card is at 100% and at (30, 6)
-in it: every pointer position in the script is the card's plus that.
-The same steps, at the same positions, run on the build machine in
-`make -C sw/apps/slide render` (`tests/render_ui.c`), which checks the
-flowchart the demo makes (three shapes where it put them, two
-connectors, the connectors moved when the diamond did) and the
-message box's answer, and draws it as `/tmp/slide_ui_demo.pbm`. A
-change to slide's layout or defaults that would make the demo miss
-fails there first.
+The finished app is also an example deck,
+`/data/slide/examples/phonebook.zsl`.
+
+The pointer positions are the window's content: the editor's card at
+(30, 6) at 100% (548 x 384 inside); a deck run as an app has its card
+at (0, 0) whatever the window's size (so a click lands before wm has
+made the window the card's size as well as after). The same steps,
+at the same positions, run on the build machine in `make -C
+sw/apps/slide render` (`tests/render_ui.c`), which checks what the
+demo makes -- Ctrl+M as wm sends it (13) making an empty card, three
+shapes where the drags put them, connectors that move with the
+diamond, `/go pitch`, the PDF named on the print line, the phone
+book's objects where the drags put them, the records after Add and
+Delete, and the saved file holding them -- and draws
+`/tmp/slide_ui_demo.pbm`, `_demo_build.pbm` and `_demo_app.pbm`.
+
+**A pause after every drag.** A 500 ms drag is about 30 pointer
+messages, and an app's mailbox holds 32: keys typed straight after one
+could find slide's full and be lost. That lost the phone book's title
+once (the text box, still empty, went with Esc). Every drag in the
+script is followed by `pause 400`.
+
+**Typing speed.** wm delivers each key as a message, and a full
+mailbox (32) loses the rest. Code is typed at 40 ms a character, not
+faster: in revision 3 the Add button's action, typed at 18 ms, could
+lose a character and leave a button that did nothing.
+
+**Captions at the top.** At the bottom, a 3x caption sits at y
+372-423, just above the dock (y 432), and covered slide's command line
+-- the typing the demo is about. At the top it is y 8-59; the window
+opens at y 32, so the caption covers its title bar and nothing else,
+and its 399 pixels end above the dock.
+
+One `slide` from start to end, started on an ordinary deck. Revisions
+1 and 2 started `slide` on the calculator example, an app deck; both
+times the script got no further than that window appearing on the
+board (not reproduced on the build machine: `render appstart` starts
+slide that way and goes on). Captions go by themselves after a minute
+at most ([captions.md](captions.md)).
 
 The narration follows the rule: each line is said, then the thing
 happens under its caption.

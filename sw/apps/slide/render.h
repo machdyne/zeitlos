@@ -30,6 +30,11 @@ void render_set_dir(const char *dir);
 // The page is painted white first.
 void render_card(zc_target_t *t, const zc_xf_t *xf, const deck_t *d,
 	const card_t *c, int mode);
+
+// Called between objects while a card is drawn (NULL: nothing): the
+// show draws the next card in a coroutine (zco.h) that hands back
+// there, so a key never waits for a whole card.
+void render_set_between(void (*fn)(void));
 void render_obj(zc_target_t *t, const zc_xf_t *xf, const deck_t *d,
 	const obj_t *o, int mode);
 
@@ -49,6 +54,11 @@ typedef struct {
 void render_text_layout(const deck_t *d, const obj_t *o, text_layout_t *L);
 // x (units) of the start of line i
 zc_fix render_line_x(const obj_t *o, const text_layout_t *L, int i);
+
+// What an object can ink, in units: its box and what can run past it
+// (strokes, arrowheads, text). Objects outside the target's clip are
+// not drawn at all.
+void render_ink_bounds(const deck_t *d, const obj_t *o, int *x0, int *y0, int *x1, int *y1);
 
 // The style text in this object draws with (the face chosen for its
 // bold/italic, the size).

@@ -110,7 +110,8 @@ move, Enter or a click picks one: one that needs nothing more runs
 | `export svg [all]` | this card (or every card) as SVG |
 | `import [FILE.svg]` | a drawing's outlines as polygons on this card |
 | `print`, `print pdf`, `print ps`, `print setup ...` | see "Printing" below |
-| `show`, `open`, `save`, `save as`, `new deck`, `help`, `tour`, `quit` | |
+| `save as [PATH]` | the deck to another file: the save dialog, or PATH (beside the deck without a folder; asks before replacing a file) |
+| `show`, `open`, `save`, `new deck`, `help`, `tour`, `quit` | |
 
 | key | does |
 |---|---|
@@ -124,7 +125,7 @@ move, Enter or a click picks one: one that needs nothing more runs
 | Ctrl+M | a new card |
 | Ctrl+Z / Ctrl+Y | undo / redo, 64 steps |
 | Ctrl+C / Ctrl+X / Ctrl+V | copy / cut / paste, also between decks; plain text pastes as a text box |
-| Ctrl+D, Ctrl+A | duplicate, select all |
+| Ctrl+D, Ctrl+A | duplicate, select all (wm sends Ctrl+letter as its control code -- Ctrl+M is 13 -- and slide reads it as the letter) |
 | Ctrl+G / Ctrl+Shift+G | group / ungroup the selection |
 | Delete / Backspace | delete the selection |
 | Tab / Shift+Tab | select the next / previous object |
@@ -199,6 +200,18 @@ verbs is Scheme: `(if (> score 5) (go 'next) (speak "Not yet"))` --
 see [slide_scripting.md](slide_scripting.md) for the language, the
 deck's and cards' scripts, timers and the message box.
 
+**A click redraws what it changed, not the card.** Actions, scripts
+and the controls say which objects they touched (`act_touch()`,
+`act.h`), and slide draws those areas once, after the click: a
+calculator's key redraws the key and the display, about a twentieth
+of the card, where it used to draw the whole card three times (pressed,
+released, the display set). Objects outside the area are not drawn at
+all; what an object can ink -- its strokes, arrowheads, words that run
+past its box -- is worked out by the renderer (`render_ink_bounds()`),
+so what is drawn in parts is the card drawn whole (`make render`
+checks exactly that). `make bench-click` counts a click's instructions
+under valgrind.
+
 **A deck as an app.** `/app on` marks the deck: it then opens showing
 just the card, controls working -- a quiz, a form, a kiosk, a small
 calculator. **F7** switches between that and editing it, for any deck.
@@ -224,6 +237,14 @@ a card's own action runs as it arrives, and a deck with `/loop on` goes
 round.
 Pictures still loading appear when they are ready: the card on the
 screen's first, then the next card's; changing cards never waits.
+**The next card is drawn while this one is shown**, an object at a
+time in a coroutine (zco, [responsive.md](responsive.md)) that hands
+back after every object: going on is then only the transition, and a
+key never waits for a whole card to be drawn. A card of large script
+text that takes a second to draw used to take that second out of its
+own time on the screen. Anything that changes a card (an action, a
+picture arriving, B, W, S) throws the drawing ahead away, and it is
+drawn again.
 
 ### Printing
 
@@ -237,6 +258,7 @@ status line says how it ended.
 | word | |
 |---|---|
 | `pdf`, `ps` | to a PDF or PostScript file instead (a file dialog; the deck's name with `.pdf`) |
+| `NAME.pdf`, `NAME.ps` | to that file, without the dialog (beside the deck without a folder; a file already there is replaced): `/print this /tmp/pitch.pdf` |
 | `this`, `3`, `2-5`, `all` | which cards |
 | `4up` (1up .. 16up) | cards to a sheet |
 | `cut`, `nocut` | cut marks between them |
@@ -391,7 +413,8 @@ arena for 6 MB, and takes 3 MB, 1.5 MB or 768 KB if that is all there
 is. Everything lives in that one pool: the deck, undo (each step is the
 card -- or, for a change of cards, the deck -- as `.zsl` text), the
 128 KB glyph cache, pictures decoded to grey, and the two screen
-buffers of a show. A picture is decoded once and dithered at the size
+buffers of a show (and 16 KB of stack for drawing the next card ahead;
+it uses about 2 KB). A picture is decoded once and dithered at the size
 it is drawn, so a resize stays sharp. Pictures let go of (by undo, cut,
 an edit) are kept a while -- four, up to 1.2 MB -- so they come back
 without decoding again; opening another deck lets them go.
@@ -400,7 +423,8 @@ without decoding again; opening another deck lets them go.
 
 ```
 make -C sw/apps/slide test       # the model, the file, the renderer (pictures, zoom), the editor (diagrams, SVG import), actions and controls, Scheme and the example decks, SVG export (/tmp/slide/svg)
-make -C sw/apps/slide render     # the window, as /tmp/slide_ui_*.pbm (the / menu, zoom, a form of controls, run as an app, a flowchart, the steps of the slide demo (docs/demo.md))
+make -C sw/apps/slide render     # the window, as /tmp/slide_ui_*.pbm (the / menu, zoom, a form of controls, run as an app, a flowchart, the steps of the slide demo (docs/demo.md)); clicks drawn in parts == the card drawn whole; the next card drawn ahead == drawn at once
+make -C sw/apps/slide bench-click  # what a click on the calculator costs, in instructions (valgrind)
 make -C sw/apps/slide look-deck  # every card of the tour as /tmp/slide/deck_N.pgm
 make -C sw/apps/slide job        # the tour as a print job, /tmp/slide/deck.zpp
 ```

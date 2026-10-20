@@ -168,9 +168,18 @@ z_rv z_mailbox_pop_match(uint32_t pid, uint32_t subject, uint32_t tag,
 // app-to-app or app-to-wm; sh.c's tget/tput were the first
 // kernel-to-app case).
 static inline void *z_translate(uint32_t pid, void *vptr) {
+	uint32_t a = (uint32_t)(uintptr_t)vptr, ab, as;
 	if (!vptr) return NULL;
 	if (pid == 0) return vptr;
-	return (void *)((uint32_t)vptr - 0x80000000 + z_procs[pid].base);
+	// A pointer into the sender's arena is physical already: the app
+	// reaches its arena at its own address (docs/mpu.md), not through
+	// the window. Translated as a window address it pointed nowhere --
+	// slide's deck, written from its pool, reached fs as 0x2000xxxx
+	// ("fs0 passed a bad pointer", the save refused).
+	ab = z_procs[pid].arena_base;
+	as = z_procs[pid].arena_size;
+	if (as && (a & 0xf0000000u) != 0x80000000u && a >= ab && a - ab < as) return vptr;
+	return (void *)(a - 0x80000000u + z_procs[pid].base);
 }
 
 // resolve a z_obj_t that (possibly) belongs to process `from_pid` so

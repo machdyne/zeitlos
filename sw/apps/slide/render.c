@@ -1079,9 +1079,70 @@ static void draw_control(zc_target_t *t, const zc_xf_t *xf, const deck_t *d, con
 	}
 }
 
+// What an object can ink, in units: its box, with room for strokes and
+// arrowheads, and for text that runs past it (a long word, more lines
+// than fit, a label wider than its button).
+void render_ink_bounds(const deck_t *d, const obj_t *o, int *x0, int *y0, int *x1, int *y1) {
+	int m = 2 + o->line_w;
+	obj_bounds(o, x0, y0, x1, y1);
+	if (o->kind == OB_LINE || o->kind == OB_POLY) m += 8 + 4 * o->line_w;	// arrowheads
+	if (o->text && o->text[0]) {
+		int a = *x0, b = *y0, c = *x1, e = *y1;
+		if (o->kind == OB_BUTTON || o->kind == OB_CHECK || o->kind == OB_RADIO || o->kind == OB_FIELD) {
+			// one line, on its box: as wide as the words, as tall as the font
+			zc_style_t st;
+			zc_fix asc, desc, lh;
+			int over;
+			render_style(d, o, &st);
+			zc_text_metrics(&st, &asc, &desc, &lh);
+			// past the box only by as much as it is wider or taller
+			over = (int)(zc_text_width(&st, o->text, (uint32_t)strlen(o->text)) >> ZC_FRAC) + 2 - (c - a);
+			if (over > 0) { a -= over; c += over; }
+			over = (int)((asc + desc) >> ZC_FRAC) + 2 - (e - b);
+			if (over > 0) { b -= over; e += over; }
+			m += o->size / 4;		// italic leans, the pen spreads
+		} else if (o->kind == OB_TEXT || OB_IS_SHAPE(o->kind)) {
+			static text_layout_t lay;
+			int i;
+			render_text_layout(d, o, &lay);
+			if (lay.n) {
+				int top = (int)(lay.top >> ZC_FRAC), bot = (int)((lay.top + lay.line_h * lay.n) >> ZC_FRAC) + 1;
+				if (top < b) b = top;
+				if (bot > e) e = bot;
+				for (i = 0; i < lay.n; i++) {
+					int lx = (int)(render_line_x(o, &lay, i) >> ZC_FRAC);
+					int rx = lx + (int)(lay.line[i].width >> ZC_FRAC) + 1;
+					if (lx < a) a = lx;
+					if (rx > c) c = rx;
+				}
+			}
+			m += o->size / 3 + 2;		// italic leans, the pen spreads
+		}
+		*x0 = a; *y0 = b; *x1 = c; *y1 = e;
+	}
+	*x0 -= m; *y0 -= m; *x1 += m; *y1 += m;
+}
+
+// Whether nothing of o can reach the target's clip (it need not be
+// drawn: a click redraws one button, not the card). A recording target
+// (printing) is never culled.
+static bool culled(const zc_target_t *t, const zc_xf_t *xf, const deck_t *d, const obj_t *o) {
+	int x0, y0, x1, y1;
+	zc_fix ax, ay, bx, by;
+	if (t->rec) return false;
+	render_ink_bounds(d, o, &x0, &y0, &x1, &y1);
+	zc_xf_apply(xf, ZC_I(x0), ZC_I(y0), &ax, &ay);
+	zc_xf_apply(xf, ZC_I(x1), ZC_I(y1), &bx, &by);
+	if (bx < ax) { zc_fix k = ax; ax = bx; bx = k; }
+	if (by < ay) { zc_fix k = ay; ay = by; by = k; }
+	return (int)(bx >> ZC_FRAC) + 1 < t->cx0 || (int)(ax >> ZC_FRAC) - 1 >= t->cx1 ||
+		(int)(by >> ZC_FRAC) + 1 < t->cy0 || (int)(ay >> ZC_FRAC) - 1 >= t->cy1;
+}
+
 void render_obj(zc_target_t *t, const zc_xf_t *xf, const deck_t *d,
 	const obj_t *o, int mode) {
 	if ((o->flags & OBF_HIDDEN) && mode != RENDER_EDIT) return;
+	if (culled(t, xf, d, o)) return;
 	if (OB_IS_CONTROL(o->kind)) draw_control(t, xf, d, o);
 	else draw_shape(t, xf, o);
 	if (o->kind == OB_TEXT || OB_IS_SHAPE(o->kind)) draw_text(t, xf, d, o);
@@ -1097,6 +1158,8 @@ void render_obj(zc_target_t *t, const zc_xf_t *xf, const deck_t *d,
 		zc_fill(t, &p_shape, ZC_NONZERO, &p);
 	}
 }
+
+static void (*r_between)(void);
 
 void render_card(zc_target_t *t, const zc_xf_t *xf, const deck_t *d,
 	const card_t *c, int mode) {
@@ -1115,7 +1178,15 @@ void render_card(zc_target_t *t, const zc_xf_t *xf, const deck_t *d,
 	}
 	if (c->bg >= 0 && c->bg < d->nbg) {
 		const card_t *b = d->bg[c->bg];
-		for (i = 0; i < b->nobj; i++) render_obj(t, xf, d, b->obj[i], mode);
+		for (i = 0; i < b->nobj; i++) {
+			render_obj(t, xf, d, b->obj[i], mode);
+			if (r_between) r_between();
+		}
 	}
-	for (i = 0; i < c->nobj; i++) render_obj(t, xf, d, c->obj[i], mode);
+	for (i = 0; i < c->nobj; i++) {
+		render_obj(t, xf, d, c->obj[i], mode);
+		if (r_between) r_between();
+	}
 }
+
+void render_set_between(void (*fn)(void)) { r_between = fn; }

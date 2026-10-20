@@ -202,6 +202,11 @@ static void layout(void) {
 	card_y = MARGIN + (ah - view_h) / 2;
 	if (card_x < TOOL_W + MARGIN) card_x = TOOL_W + MARGIN;
 	if (card_y < MARGIN) card_y = MARGIN;
+	// A deck run as an app: its card at the window's corner, whatever
+	// the window's size -- the same place before wm has made the window
+	// the card's size and after (a click meant for a button lands on it
+	// either way; a demo's pointer relies on it)
+	if (app_mode) card_x = card_y = 0;
 	if (sb_h_on) {
 		z_scrollbar_set_geom(&sb_h, card_x, card_y + view_h + 2, view_w);
 		z_scrollbar_set_range(&sb_h, card_pw, view_w);
@@ -553,12 +558,36 @@ static obj_t *one_sel(void) { return ed.nsel == 1 ? ed.sel[0] : NULL; }
 
 static void draw_status(void);
 
+// Set by repaint(): the strip is drawn whole, whatever it showed.
+static bool bar_force = true;
+
 static void draw_bar(void) {
 	if (app_mode) return;
 	int y = BAR_Y(), i;
 	obj_t *o = one_sel();
+	{
+		// Drawn only when what it shows changed: it was redrawn -- cleared
+		// and drawn again -- on every key typed into a text box, and
+		// flashed (the status line under it is drawn either way).
+		static uint32_t last[10];
+		uint32_t now[10];
+		now[0] = (uint32_t)(uintptr_t)o;
+		now[1] = o ? o->fill : 0;
+		now[2] = o ? o->fill_v : 0;
+		now[3] = o ? o->line_w : 0;
+		now[4] = o ? o->font : 0;
+		now[5] = o ? o->size : 0;
+		now[6] = o ? o->style : 0;
+		now[7] = o ? o->kind : 0;
+		now[8] = (uint32_t)z_win_content_w(&win);
+		now[9] = (uint32_t)y;
+		if (!bar_force && !memcmp(now, last, sizeof(now))) { draw_status(); return; }
+		memcpy(last, now, sizeof(now));
+		bar_force = false;
+	}
 	z_win_fill_rect(&win, TOOL_W, y, z_win_content_w(&win) - TOOL_W, BAR_H, 0);
 	z_win_fill_rect(&win, 0, y, z_win_content_w(&win), 1, 1);
+	y -= 1;		// the strip a row higher: a clear row above the command line
 	for (i = 0; i < NSWATCH; i++) {
 		int x = SWATCH_X(i) + TOOL_W;
 		bool on = o && ((i == 0 && o->fill == FILL_NONE) ||
@@ -619,12 +648,19 @@ static void draw_status(void) {
 	int w = z_win_content_w(&win);
 	char t[160];
 	str_t s = { t, 0, sizeof(t) };
-	z_win_fill_rect(&win, 0, y - 1, w, 12, 0);
+	static bool was_command;
 	if (mode == MODE_COMMAND) {
+		// Typed into a key at a time: nothing cleared and drawn again
+		// (it flashed), the field draws over itself (zedit.c). Its box
+		// is 14 rows, so the text has its padding above and below.
+		if (!was_command) z_win_fill_rect(&win, 0, y - 2, w, 14, 0);
+		was_command = true;
 		z_win_draw_text(&win, 4, y + 1, "/", 1, FONT);
-		z_edit_draw(&win, &cmd_field, 12, y - 1, w - 16, 11, FONT);
+		z_edit_draw(&win, &cmd_field, 12, y - 2, w - 16, 14, FONT);
 		return;
 	}
+	was_command = false;
+	z_win_fill_rect(&win, 0, y - 2, w, 14, 0);
 	if (ed.msg[0]) {
 		s_add(&s, ed.msg);
 	} else {
@@ -731,6 +767,11 @@ static void sorter_keep_visible(void) {
 static void paint_desk(void) {
 	static const uint8_t desk[8] = { 0x88, 0x00, 0x22, 0x00, 0x88, 0x00, 0x22, 0x00 };
 	int cw = z_win_content_w(&win), ch = BAR_Y();
+	// A deck run as an app is its card, at the window's corner: no desk.
+	// Drawn at F7 it was drawn in the editor's larger window an instant
+	// before wm made the window the card's size, and the strips of it
+	// outside the new window stayed on the desktop.
+	if (app_mode) return;
 	z_win_fill_pattern(&win, TOOL_W, 0, cw - TOOL_W, card_y - 1, desk);
 	z_win_fill_pattern(&win, TOOL_W, card_y + view_h + 1, cw - TOOL_W, ch - card_y - view_h - 1, desk);
 	z_win_fill_pattern(&win, TOOL_W, card_y - 1, card_x - TOOL_W - 1, view_h + 2, desk);
@@ -841,6 +882,7 @@ static void keep_caret_in_view(void) {
 }
 
 static void repaint(void) {
+	bar_force = true;
 	layout();
 	draw_tools();
 	if (mode == MODE_SORTER) {
@@ -933,6 +975,34 @@ static bool load_path(const char *p) {
 	return true;
 }
 
+// Writes go to fs from memory in slide's own image, never from the
+// pool: the pool is the arena, and a whole-sector write to the RAM disk
+// (/tmp, /ram) from arena memory is refused on the board ("fs0 passed a
+// bad pointer ...", FatFs 1) -- FatFs hands such a write the caller's
+// own buffer. So everything written goes through this, a sector-sized
+// piece at a time.
+static char bounce[1024];
+
+static bool write_from(int h, const char *d, uint32_t n) {
+	while (n) {
+		int k = (int)(n > sizeof(bounce) ? sizeof(bounce) : n);
+		memcpy(bounce, d, (size_t)k);
+		if (fs_write_chunk(h, bounce, k) != k) return false;
+		d += k;
+		n -= (uint32_t)k;
+	}
+	return true;
+}
+
+static bool write_whole_file(const char *p, const char *d, uint32_t n) {
+	int h = fs_open_write(p);
+	bool ok;
+	if (h < 0) return false;
+	ok = write_from(h, d, n);
+	fs_close_handle(h);
+	return ok;
+}
+
 static bool save_to(const char *p) {
 	sbuf_t b;
 	int h;
@@ -945,13 +1015,7 @@ static bool save_to(const char *p) {
 	}
 	h = fs_open_write(p);
 	if (h >= 0) {
-		uint32_t off = 0;
-		ok = true;
-		while (off < b.len) {
-			int n = (int)(b.len - off > 4096 ? 4096 : b.len - off);
-			if (fs_write_chunk(h, b.buf + off, n) != n) { ok = false; break; }
-			off += (uint32_t)n;
-		}
+		ok = write_from(h, b.buf, b.len);
 		fs_close_handle(h);
 	}
 	sb_free(&b);
@@ -973,15 +1037,26 @@ static bool ends_with_zsl(const char *p) {
 		(p[n - 1] | 32) == 'l';
 }
 
-static bool do_save_as(void) {
+// Save as: a file chosen in the dialog, or `given` (/save as PATH; a
+// name without a folder goes beside the deck).
+static bool do_save_as_path(const char *given) {
 	char p[200];
-	if (!z_dialog_save(&dlg, last_dir, path[0] ? path : "deck.zsl", p, sizeof(p))) return false;
+	if (given && *given) {
+		if (given[0] == '/') copy_str(p, sizeof(p), given);
+		else {
+			copy_str(p, sizeof(p), last_dir);
+			if (p[0] && p[strlen(p) - 1] != '/') copy_str(p + strlen(p), (int)(sizeof(p) - strlen(p)), "/");
+			copy_str(p + strlen(p), (int)(sizeof(p) - strlen(p)), given);
+		}
+	} else if (!z_dialog_save(&dlg, last_dir, path[0] ? path : "deck.zsl", p, sizeof(p))) return false;
 	if (!ends_with_zsl(p) && strlen(p) + 4 < sizeof(p)) strcat(p, ".zsl");
 	if (fs_size(p) > 0 && strcmp(p, path) &&
 		z_dialog_confirm(&dlg, "Save as", "That file exists. Replace it?", Z_DIALOG_YES_NO) != Z_DIALOG_YES)
 		return false;
 	return save_to(p);
 }
+
+static bool do_save_as(void) { return do_save_as_path(NULL); }
 
 static bool do_save(void) {
 	if (!path[0]) return do_save_as();
@@ -1007,10 +1082,41 @@ static void sibling(char *out, int n, const char *ext) {
 	copy_str(out, n, b);
 }
 
-static void do_print(const char *line) {
+// A file named on a /print line ("/print this talk.pdf"): taken out of
+// `line` into `file`, with "pdf" or "ps" put in its place so the rest
+// reads as usual. False if there is none.
+static bool print_file_word(char *line, char *file, int n) {
+	char *w = line;
+	while (*w) {
+		char *e;
+		size_t l;
+		while (*w == ' ') w++;
+		e = w;
+		while (*e && *e != ' ') e++;
+		l = (size_t)(e - w);
+		if ((l > 4 && !strncmp(e - 4, ".pdf", 4)) || (l > 3 && !strncmp(e - 3, ".ps", 3))) {
+			bool pdf = e[-1] == 'f';
+			char rest[200];
+			if ((int)l >= n) return false;
+			memcpy(file, w, l);
+			file[l] = 0;
+			copy_str(rest, sizeof(rest), e);
+			copy_str(w, (int)(sizeof(rest)), pdf ? "pdf" : "ps");
+			copy_str(w + strlen(w), (int)sizeof(rest), rest);
+			return true;
+		}
+		w = e;
+	}
+	return false;
+}
+
+static void do_print(const char *line_in) {
 	pj_settings_t s;
-	char err[64], keep[DECK_PRINT_MAX], file[200];
+	char err[64], keep[DECK_PRINT_MAX], file[200], line[200], named[200];
 	const char *ext;
+	bool given;
+	copy_str(line, sizeof(line), line_in);
+	given = print_file_word(line, named, sizeof(named));
 	if (!printjob_parse(&s, ed.d->print, line, ed.cur, ed.d->ncard, keep, sizeof(keep), err, sizeof(err))) {
 		copy_str(ed.msg, sizeof(ed.msg), err);
 		return;
@@ -1031,12 +1137,21 @@ static void do_print(const char *line) {
 		char p[200];
 		ext = s.dest == PJ_PDF ? ".pdf" : ".ps";
 		sibling(p, sizeof(p), ext);
-		if (!z_dialog_save(&dlg, last_dir, p, file, sizeof(file))) return;
+		if (given) {
+			// named on the line: no dialog, and a file there is replaced,
+			// as printing it again means
+			if (named[0] == '/') copy_str(file, sizeof(file), named);
+			else {
+				copy_str(file, sizeof(file), last_dir);
+				if (file[0] && file[strlen(file) - 1] != '/') copy_str(file + strlen(file), (int)(sizeof(file) - strlen(file)), "/");
+				copy_str(file + strlen(file), (int)(sizeof(file) - strlen(file)), named);
+			}
+		} else if (!z_dialog_save(&dlg, last_dir, p, file, sizeof(file))) return;
 		{
 			size_t l = strlen(file), e = strlen(ext);
 			if ((l < e || strcmp(file + l - e, ext)) && l + e < sizeof(file)) strcat(file, ext);
 		}
-		if (fs_size(file) > 0 &&
+		if (!given && fs_size(file) > 0 &&
 			z_dialog_confirm(&dlg, "Print to a file", "That file exists. Replace it?", Z_DIALOG_YES_NO) != Z_DIALOG_YES)
 			return;
 	}
@@ -1093,7 +1208,7 @@ static bool mem_write(void *ctx, const void *d, uint32_t len) {
 typedef struct { int fd; uint32_t n; char b[512]; bool ok; } svgout_t;
 
 static bool svg_flush(svgout_t *o) {
-	if (o->n && fs_write_chunk(o->fd, o->b, (int)o->n) != (int)o->n) o->ok = false;
+	if (o->n && !write_from(o->fd, o->b, o->n)) o->ok = false;
 	o->n = 0;
 	return o->ok;
 }
@@ -1471,12 +1586,32 @@ static int next_card(void) {
 	return ed.d->loop ? 0 : ed.cur;
 }
 
-// The card's look changed (a value, a field's text, a shown object).
-static void card_changed(void) {
-	if (!app_mode) ed.modified = true;		// a deck run as an app keeps no state
-	edit_damage_all(&ed);
-	update_card();
+// What actions, scripts and the player touched since last time (act.h):
+// those areas drawn again, once -- a click redraws its button and what
+// its action changed, not the card.
+static void apply_dirty(void) {
+	act_dirty_t dt[ACT_DIRTY_MAX];
+	bool model;
+	int n = act_dirty_take(dt, &model), i;
+	card_t *c = edit_card(&ed);
+	if (!n) return;
+	if (model && !app_mode) ed.modified = true;		// a deck run as an app keeps no state
+	if (mode == MODE_SORTER) return;
+	if (n < 0 || !c) { edit_damage_all(&ed); update_card(); return; }
+	// one at a time: a button and the display it changed are two small
+	// areas, not the box around both
+	for (i = 0; i < n; i++) {
+		edit_damage(&ed, dt[i].r[0], dt[i].r[1], dt[i].r[2], dt[i].r[3]);
+		// and where it is now (if it is still there: an undo may have
+		// replaced it)
+		if (render_card_has(ed.d, c, dt[i].o)) edit_damage_obj(&ed, dt[i].o);
+		update_card();
+	}
 }
+
+// The card's look changed (a value, a field's text, a shown object):
+// act.h says which part, drawn by apply_dirty() after the event.
+static void card_changed(void) { apply_dirty(); }
 
 static void h_go(void *u, int to) {
 	(void)u;
@@ -1489,10 +1624,16 @@ static void h_go(void *u, int to) {
 	act_arrived(ed.d, to);
 	script_card(ed.d, to);
 }
-static void h_changed(void *u) { (void)u; card_changed(); }
+static void h_changed(void *u) { (void)u; }		// act_touch() says what, apply_dirty() draws it
 static void h_eval(void *u, deck_t *d, int cur, const char *f) { (void)u; script_eval(d, cur, f, NULL, 0); }
 static void h_clicked(void *u, deck_t *d, int cur, obj_t *o) { (void)u; script_clicked(d, cur, o); }
 static int h_current(void *u) { (void)u; return ed.cur; }
+static bool save_to(const char *p);
+static bool h_save(void *u) {
+	(void)u;
+	if (!path[0]) { copy_str(ed.msg, sizeof(ed.msg), "save-deck: the deck has no file yet (/save as)"); draw_status(); return false; }
+	return save_to(path);
+}
 
 static void forward_msg(z_msg_t *msg, void *user);
 
@@ -1528,7 +1669,7 @@ static void act_host_editor(void) {
 	memset(&h, 0, sizeof(h));
 	h.go = h_go; h.changed = h_changed; h.open_deck = h_open; h.message = h_msg;
 	h.speak = h_speak; h.run = h_run; h.now = h_now; h.tick_hz = Z_TICK_HZ;
-	h.eval = h_eval; h.clicked = h_clicked; h.current = h_current;
+	h.eval = h_eval; h.clicked = h_clicked; h.current = h_current; h.save = h_save;
 	act_init(&h);
 	script_stop_check(stop_check);
 }
@@ -1678,7 +1819,7 @@ static void do_script(const char *line) {
 		memcpy(b + hl, body, (size_t)bl);
 		n = hl + bl;
 		if (!n || b[n - 1] != '\n') b[n++] = '\n';
-		fs_write_file(sedit.path, b, n);
+		write_whole_file(sedit.path, b, (uint32_t)n);
 		sedit.size = n;
 		sedit.sum = sum_of(b, n);
 		pool_free(b);
@@ -1761,7 +1902,11 @@ static void run_command(const char *line) {
 	else if (!strcmp(app, "save")) {
 		const char *r = line;
 		while (*r == '/' || *r == ' ') r++;
-		if (!strncmp(r, "save as", 7)) do_save_as(); else do_save();
+		if (!strncmp(r, "save as", 7)) {
+			r += 7;
+			while (*r == ' ') r++;
+			do_save_as_path(r);
+		} else do_save();
 	}
 	else if (!strcmp(app, "new deck")) do_new();
 	else if (!strcmp(app, "image")) do_image();
@@ -1787,6 +1932,17 @@ static void run_command(const char *line) {
 	}
 	else if (!strcmp(app, "tour")) { if (may_discard()) load_path(Z_PATH_SLIDE_TOUR); }
 	else if (!strcmp(app, "quit")) { if (may_discard()) quit_now = true; }
+}
+
+// An action's (open ...): another deck, from the main loop rather than
+// from inside the action that asked.
+static void take_open_request(void) {
+	char p[200];
+	if (!open_wanted[0]) return;
+	copy_str(p, sizeof(p), open_wanted);
+	open_wanted[0] = 0;
+	if (may_discard()) load_path(p);
+	repaint();
 }
 
 // -- input ---------------------------------------------------------------------------------------------------
@@ -2039,6 +2195,10 @@ static void handle_key(uint32_t k, uint8_t mods) {
 		return;
 	}
 
+	// wm sends Ctrl+letter as its control code (Ctrl+M is 13, Ctrl+Z 26:
+	// zkbd.c): the letter again, so the shortcuts below can say 'm'
+	if (ctrl && k >= 1 && k <= 26) k = 'a' + k - 1;
+
 	if (ctrl && mode != MODE_SORTER && (k == '=' || k == '+' || k == '-' || k == '_' || k == '0')) {
 		int vx, vy;
 		zoom_anchor(&vx, &vy);
@@ -2170,7 +2330,7 @@ static int last_click_x, last_click_y;
 static uint8_t btn_prev;
 
 static void bar_click(int cx, int cy) {
-	int y = BAR_Y(), i;
+	int y = BAR_Y() - 1, i;		// as draw_bar() draws it
 	obj_t *o = one_sel();
 	if (cy < y + 3 || cy > y + 3 + SW_SIZE + 2) return;
 	for (i = 0; i < NSWATCH; i++) {
@@ -2346,6 +2506,9 @@ static void forward_msg(z_msg_t *msg, void *user) {
 	case Z_WM_WINDOW_RESIZED:
 		z_win_apply_resized(&win, &msg->obj);
 		layout();
+		// the card may sit elsewhere in the new size: drawn there now,
+		// not when wm next asks
+		repaint();
 		break;
 	default:
 		break;
@@ -2499,19 +2662,13 @@ int main(void) {
 		}
 		if (mouse_pending) handle_mouse(mouse_last);
 		if (quit_now) break;
-		if (open_wanted[0]) {
-			// an action's (open ...): another deck, from here rather
-			// than from inside the action that asked
-			char p[200];
-			copy_str(p, sizeof(p), open_wanted);
-			open_wanted[0] = 0;
-			if (may_discard()) load_path(p);
-			repaint();
-		}
+		apply_dirty();
+		take_open_request();
 		pl_check_card();
 		sedit_poll();
 		if (act_waiting()) act_tick();
 		if (script_timers()) script_tick();
+		apply_dirty();
 		update_title();
 		if (render_loading()) {
 			// nothing waiting: a slice of a picture (docs/responsive.md),

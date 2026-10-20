@@ -178,10 +178,7 @@ static ms_val *s_set_text(ms_val *a) {
 	o = act_find(ctx_deck, cur_card(), n);
 	if (!o) { say("no object called ", n); return ms_mk_bool(false); }
 	s = ms_is_str(ms_car(ms_cdr(a))) ? NULL : ms_to_string(ms_car(ms_cdr(a)), false);
-	{
-		const char *t = s ? s : ms_str_val(ms_car(ms_cdr(a)));
-		obj_set_text(o, t, (uint32_t)strlen(t));
-	}
+	act_set_text(ctx_deck, o, s ? s : ms_str_val(ms_car(ms_cdr(a))));
 	free(s);
 	if (H()->changed) H()->changed(H()->u);
 	return ms_mk_bool(true);
@@ -237,6 +234,98 @@ static ms_val *s_card_number(ms_val *a) { (void)a; return ms_mk_num(cur_card() +
 static ms_val *s_card_count(ms_val *a) { (void)a; return ms_mk_num(ctx_deck ? ctx_deck->ncard : 0); }
 static ms_val *s_deck_title(ms_val *a) { (void)a; return mk_strc(ctx_deck ? ctx_deck->title : ""); }
 
+// (take-text "name"): an object's text, and the object emptied -- a
+// form's field read as its record is made: (add-item "list" (take-text
+// "name")).
+static ms_val *s_take_text(ms_val *a) {
+	const char *n = arg_str(a, 0);
+	obj_t *o = n ? act_find(ctx_deck, cur_card(), n) : NULL;
+	ms_val *v;
+	if (!o) { if (n) say("no object called ", n); return ms_mk_bool(false); }
+	v = mk_strc(o->text ? o->text : "");
+	act_set_text(ctx_deck, o, "");
+	return v;
+}
+
+// (add-item "name" values...): a line made of the values (strings as
+// they are, numbers written) added at the end of a list's items or a
+// field's text -- a record, in a deck that keeps records.
+static ms_val *s_add_item(ms_val *a) {
+	const char *n = arg_str(a, 0);
+	obj_t *o = n ? act_find(ctx_deck, cur_card(), n) : NULL;
+	char *line, *all;
+	size_t ln = 0, cap = 64, old;
+	ms_val *v;
+	if (!o) { if (n) say("no object called ", n); return ms_mk_bool(false); }
+	line = malloc(cap);
+	if (!line) return ms_mk_bool(false);
+	line[0] = 0;
+	for (v = ms_cdr(a); ms_is_pair(v); v = ms_cdr(v)) {
+		char *t = ms_is_str(ms_car(v)) ? NULL : ms_to_string(ms_car(v), false);
+		const char *p = t ? t : ms_str_val(ms_car(v));
+		size_t k = strlen(p);
+		if (ln + k + 1 > cap) {
+			char *b;
+			while (ln + k + 1 > cap) cap *= 2;
+			b = realloc(line, cap);
+			if (!b) { free(t); free(line); return ms_mk_bool(false); }
+			line = b;
+		}
+		// one line: a newline in a value would make two records
+		{
+			size_t i;
+			for (i = 0; i < k; i++) line[ln++] = p[i] == '\n' ? ' ' : p[i];
+		}
+		line[ln] = 0;
+		free(t);
+	}
+	old = o->text ? strlen(o->text) : 0;
+	while (old && o->text[old - 1] == '\n') old--;
+	all = malloc(old + 1 + ln + 1);
+	if (!all) { free(line); return ms_mk_bool(false); }
+	if (old) { memcpy(all, o->text, old); all[old++] = '\n'; }
+	memcpy(all + old, line, ln + 1);
+	act_set_text(ctx_deck, o, all);
+	free(all);
+	free(line);
+	return ms_mk_bool(true);
+}
+
+// (remove-item "name"): the chosen item of a list taken out (#f if none
+// is chosen).
+static ms_val *s_remove_item(ms_val *a) {
+	const char *n = arg_str(a, 0);
+	obj_t *o = n ? act_find(ctx_deck, cur_card(), n) : NULL;
+	const char *s;
+	uint32_t len;
+	char *b;
+	size_t at, tl, k = 0;
+	if (!o) { if (n) say("no object called ", n); return ms_mk_bool(false); }
+	if (o->kind != OB_LIST || !o->text || !render_list_item(o, o->value, &s, &len)) return ms_mk_bool(false);
+	tl = strlen(o->text);
+	at = (size_t)(s - o->text);
+	b = malloc(tl + 1);
+	if (!b) return ms_mk_bool(false);
+	memcpy(b, o->text, at);
+	k = at;
+	// the line and its newline (or, for the last line, the one before it)
+	if (at + len < tl) memcpy(b + k, o->text + at + len + 1, tl - at - len - 1), k += tl - at - len - 1;
+	else if (k) k--;
+	b[k] = 0;
+	act_set_text(ctx_deck, o, b);
+	o->value = -1;
+	free(b);
+	return ms_mk_bool(true);
+}
+
+// (save-deck): the deck written to its file, with what its fields and
+// lists hold now -- an app's records kept in the deck itself.
+static ms_val *s_save_deck(ms_val *a) {
+	(void)a;
+	if (!H()->save) { say("save-deck: not here", NULL); return ms_mk_bool(false); }
+	return ms_mk_bool(H()->save(H()->u));
+}
+
 static ms_val *s_after(ms_val *a) {
 	int i;
 	double ms;
@@ -291,6 +380,10 @@ bool script_start(void) {
 		ms_def_builtin("card-number", s_card_number);
 		ms_def_builtin("card-count", s_card_count);
 		ms_def_builtin("deck-title", s_deck_title);
+		ms_def_builtin("take-text", s_take_text);
+		ms_def_builtin("add-item", s_add_item);
+		ms_def_builtin("remove-item", s_remove_item);
+		ms_def_builtin("save-deck", s_save_deck);
 		ms_def_builtin("%slide-after", s_after);
 		ms_def_builtin("%slide-cancel", s_cancel);
 		ms_load_string(slide_scm, ms_global_env);

@@ -142,6 +142,14 @@ being decoded again. In a show, the card on the screen's pictures load
 first, then the next card's, so that moving on usually finds them ready;
 moving on never waits for them.
 
+A show also draws the **next card** ahead, the same way: render_card()
+calls a hook between objects (`render_set_between()`), and in the
+show's coroutine that hook yields, so the main loop answers a key
+after at most one object, and going on to the next card costs only the
+transition. And a click on a control draws only what the click
+changed (`act_touch()`), not the card: the areas, after the event,
+once.
+
 Printing does not decode on screen: the job names each picture's file,
 and the print service decodes it at the size it prints
 ([zpaper.md](zpaper.md)).

@@ -22,6 +22,12 @@ int show_run(deck_t *d, int start, z_win_t *win);
 // ("(open ...)" ends the show), else NULL. Good until the next show.
 const char *show_open_request(void);
 
+// For the host tests: card `cur`'s next card drawn ahead in the
+// coroutine, as a show does, then drawn directly; the number of times
+// it handed back (one per object), -1 if the two differ or it failed.
+// *stack: how much of the coroutine's stack it used.
+int show_selftest(deck_t *d, int cur, size_t *stack);
+
 // Starts an app for an action: "clock", "view /media/images/x.jpg".
 void show_launch(const char *cmd);
 

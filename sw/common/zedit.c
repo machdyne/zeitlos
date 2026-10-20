@@ -180,7 +180,13 @@ void z_edit_draw(const z_win_t *win, z_edit_t *e,
 	scroll_to_caret(e, cols);
 
 	// One engine, so program order is drawing order -- see zedit.h.
-	z_fb_hw_fill_rect(x0 + 1, y0 + 1, x1 - x0 - 1, y1 - y0 - 1, 0);
+	//
+	// Nothing is cleared and then drawn again: that flashed on every
+	// key while typing fast (slide's command line in a recorded demo
+	// showed it plainly). The frame is drawn over itself; the text is
+	// drawn SOLID, each cell with its own background; only what lies
+	// around the text is cleared -- the padding, which never holds
+	// anything but the caret, and the field to the right of the text.
 	z_fb_hw_fill_rect(x0, y0, x1 - x0 + 1, 1, 1);
 	z_fb_hw_fill_rect(x0, y1, x1 - x0 + 1, 1, 1);
 	z_fb_hw_fill_rect(x0, y0, 1, y1 - y0 + 1, 1);
@@ -193,21 +199,32 @@ void z_edit_draw(const z_win_t *win, z_edit_t *e,
 
 	if (clip.x1 < clip.x0) return;
 
-	(void)n;
-	// UTF-8 from the first visible character; the clip cuts it at
-	// the box's right edge.
-	if (e->secret) {
-		// As many stars as characters from the first visible one --
-		// all ASCII, so bytes are characters and characters columns.
+	{
+		int ty0 = y0 + PAD_Y, ty1 = y0 + PAD_Y + font->h;	// the text's rows, [ty0, ty1)
+		int tx = x0 + PAD_X, tw;
+		const char *vis = e->buf + e->scroll;
 		char stars[96];
-		int k = e->len - e->scroll;
-		if (k > (int)sizeof(stars) - 1) k = (int)sizeof(stars) - 1;
-		if (k < 0) k = 0;
-		memset(stars, '*', (size_t)k);
-		stars[k] = 0;
-		z_fb_draw_utf8(x0 + PAD_X, y0 + PAD_Y, stars, 1, font, &clip);
-	} else
-		z_fb_draw_utf8(x0 + PAD_X, y0 + PAD_Y, e->buf + e->scroll, 1, font, &clip);
+		if (ty1 > y1) ty1 = y1;
+		if (e->secret) {
+			// As many stars as characters from the first visible one --
+			// all ASCII, so bytes are characters and characters columns.
+			int k = e->len - e->scroll;
+			if (k > (int)sizeof(stars) - 1) k = (int)sizeof(stars) - 1;
+			if (k < 0) k = 0;
+			memset(stars, '*', (size_t)k);
+			stars[k] = 0;
+			vis = stars;
+		}
+		tw = z_utf8_cols(vis, strlen(vis)) * font->w;
+		// the padding: above and below the text, and left of it
+		if (ty0 > y0 + 1) z_fb_hw_fill_rect(x0 + 1, y0 + 1, x1 - x0 - 1, ty0 - y0 - 1, 0);
+		if (ty1 < y1) z_fb_hw_fill_rect(x0 + 1, ty1, x1 - x0 - 1, y1 - ty1, 0);
+		z_fb_hw_fill_rect(x0 + 1, ty0, tx - x0 - 1, ty1 - ty0, 0);
+		// the text, cells and all; then the field past its end
+		(void)n;
+		z_fb_draw_utf8_2(tx, ty0, vis, 1, 0, font, &clip);
+		if (tx + tw < x1) z_fb_hw_fill_rect(tx + tw, ty0, x1 - (tx + tw), ty1 - ty0, 0);
+	}
 
 	if (e->focus) {
 		int cx = x0 + PAD_X +

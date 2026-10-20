@@ -60,6 +60,9 @@ typedef struct {
 	void	(*clicked)(void *u, deck_t *d, int cur, obj_t *o);
 	// The card shown now (after a (go ...)).
 	int		(*current)(void *u);
+	// (save-deck): the deck to its file; false (said) if it has none
+	// or the write failed. NULL: not offered (a show).
+	bool	(*save)(void *u);
 	void	*u;
 } act_host_t;
 
@@ -88,6 +91,32 @@ void act_tick(void);
 
 // Drops whatever is waiting and the history (another deck, leaving).
 void act_reset(void);
+
+// -- what to draw again ------------------------------------------------------
+//
+// Verbs, scripts and the player do not draw: they say what they touched,
+// and the app draws those areas once, after the event (a click redraws
+// a button and the display it changed, not the card).
+
+#define ACT_DIRTY_MAX 16
+typedef struct {
+	const obj_t	*o;
+	int			r[4];		// what it covered when first touched, units (x0 y0 x1 y1)
+} act_dirty_t;
+
+// o's look is changing (a value, its words, shown or hidden): call it
+// before the change. _ui: only how it looks pressed or focused, nothing
+// the deck keeps.
+void act_touch(const deck_t *d, const obj_t *o);
+void act_touch_ui(const deck_t *d, const obj_t *o);
+// Everything (another card's worth of change).
+void act_touch_all(void);
+// What was touched since last asked, and forgets it: n entries in out
+// (ACT_DIRTY_MAX at most), -1 for everything, 0 nothing. *model: a
+// value or a text changed.
+int act_dirty_take(act_dirty_t *out, bool *model);
+// set-text: o's words, touched.
+void act_set_text(const deck_t *d, obj_t *o, const char *t);
 
 // The object called `name` on card `cur` or its background, or NULL.
 obj_t *act_find(deck_t *d, int cur, const char *name);

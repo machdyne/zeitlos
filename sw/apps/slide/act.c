@@ -99,6 +99,9 @@ static int hist[HIST_MAX], nhist;
 static bool going_back;
 
 static char *pending;			// forms after a (wait)
+static act_dirty_t dirty[ACT_DIRTY_MAX];	// touched since the app last asked
+static int ndirty;							// -1: everything
+static bool dirty_model;					// a value or a text changed (not just a press)
 static uint32_t pending_at;
 static deck_t *pending_deck;
 static int pending_cur;
@@ -107,6 +110,41 @@ void act_reset(void) {
 	pool_free(pending);
 	pending = NULL;
 	nhist = 0;
+	ndirty = 0;
+	dirty_model = false;
+}
+
+// -- what changed: drawn again by the app, once, after the event ----------
+//
+// Each object touched is kept with the area it covered when first
+// touched (its old words, its old place), so the app draws that and
+// where it is now.
+
+void act_touch_ui(const deck_t *d, const obj_t *o) {
+	int i;
+	if (ndirty < 0) return;
+	if (!o) { ndirty = -1; return; }
+	for (i = 0; i < ndirty; i++) if (dirty[i].o == o) return;
+	if (ndirty == ACT_DIRTY_MAX) { ndirty = -1; return; }
+	dirty[ndirty].o = o;
+	render_ink_bounds(d, o, &dirty[ndirty].r[0], &dirty[ndirty].r[1], &dirty[ndirty].r[2], &dirty[ndirty].r[3]);
+	ndirty++;
+}
+
+void act_touch(const deck_t *d, const obj_t *o) {
+	dirty_model = true;
+	act_touch_ui(d, o);
+}
+
+void act_touch_all(void) { dirty_model = true; ndirty = -1; }
+
+int act_dirty_take(act_dirty_t *out, bool *model) {
+	int n = ndirty, i;
+	if (out) for (i = 0; i < n; i++) out[i] = dirty[i];
+	if (model) *model = dirty_model;
+	ndirty = 0;
+	dirty_model = false;
+	return n;
 }
 
 bool act_waiting(void) { return pending != NULL; }
@@ -148,6 +186,11 @@ static int depth;
 
 static void run_forms(deck_t *d, int cur, const char *p);
 
+void act_set_text(const deck_t *d, obj_t *o, const char *t) {
+	act_touch(d, o);			// where the old words were
+	obj_set_text(o, t, (uint32_t)strlen(t));
+}
+
 static void run_from(deck_t *d, int cur, const char *p) {
 	if (depth >= 8) { say("actions going round in circles: stopped", NULL); return; }
 	depth++;
@@ -184,12 +227,15 @@ static void run_forms(deck_t *d, int cur, const char *p) {
 			}
 		} else if (!strcmp(v, "show") && o) {
 			o->flags &= (uint8_t)~OBF_HIDDEN;
+			act_touch(d, o);
 			if (host.changed) host.changed(host.u);
 		} else if (!strcmp(v, "hide") && o) {
 			o->flags |= OBF_HIDDEN;
+			act_touch(d, o);
 			if (host.changed) host.changed(host.u);
 		} else if (!strcmp(v, "toggle") && o) {
 			o->flags ^= OBF_HIDDEN;
+			act_touch(d, o);
 			if (host.changed) host.changed(host.u);
 		} else if (!strcmp(v, "set-text") && o && f.n == 2) {
 			char num[16];
@@ -202,7 +248,7 @@ static void run_forms(deck_t *d, int cur, const char *p) {
 				num[k] = 0;
 				t = num;
 			}
-			obj_set_text(o, t, (uint32_t)strlen(t));
+			act_set_text(d, o, t);
 			if (host.changed) host.changed(host.u);
 		} else if (!strcmp(v, "set-value") && o && f.n == 2 && f.a[1].kind == A_NUM) {
 			o->value = (int16_t)f.a[1].num;
@@ -210,6 +256,7 @@ static void run_forms(deck_t *d, int cur, const char *p) {
 				if (o->value < o->vmin) o->value = o->vmin;
 				if (o->value > o->vmax) o->value = o->vmax;
 			}
+			act_touch(d, o);
 			if (host.changed) host.changed(host.u);
 		} else if (!strcmp(v, "speak") && f.n == 1) {
 			if (host.speak) host.speak(host.u, f.a[0].s);
@@ -453,6 +500,8 @@ obj_t *player_hit(player_t *p, int x, int y) {
 }
 
 void player_reset(player_t *p) {
+	// (what showed pressed or focused is drawn again by whoever resets:
+	// another card, another deck, leaving -- all drawn whole)
 	p->pressed = p->focus = p->drag = NULL;
 	p->inside = false;
 	render_ui_state(NULL, NULL);
@@ -460,6 +509,14 @@ void player_reset(player_t *p) {
 
 static void ui(player_t *p) {
 	render_ui_state(p->pressed && p->inside ? p->pressed : NULL, p->focus);
+}
+
+// The field typed into, now f (NULL none): both drawn again.
+static void set_focus(player_t *p, obj_t *f) {
+	if (p->focus == f) return;
+	if (p->focus) act_touch_ui(p->d, p->focus);
+	if (f) act_touch_ui(p->d, f);
+	p->focus = f;
 }
 
 // The radios of o's group on its card (and background) off, o on.
@@ -472,8 +529,12 @@ static void radio_set(player_t *p, obj_t *o) {
 	for (k = 0; k < n; k++)
 		for (i = 0; i < cs[k]->nobj; i++) {
 			obj_t *r = cs[k]->obj[i];
-			if (r->kind == OB_RADIO && !strcmp(r->group, o->group)) r->value = 0;
+			if (r->kind == OB_RADIO && !strcmp(r->group, o->group) && r->value) {
+				act_touch(p->d, r);
+				r->value = 0;
+			}
 		}
+	act_touch(p->d, o);
 	o->value = 1;
 }
 
@@ -486,18 +547,20 @@ bool player_press(player_t *p, int x, int y, bool *took) {
 	obj_t *o = player_hit(p, x, y);
 	bool redraw = false;
 	*took = o != NULL;
-	if (p->focus && p->focus != o) { p->focus = NULL; redraw = true; }
+	if (p->focus && p->focus != o) { set_focus(p, NULL); redraw = true; }
 	if (!o) { ui(p); return redraw; }
 	switch (o->kind) {
 	case OB_BUTTON: case OB_CHECK: case OB_RADIO:
+		act_touch_ui(p->d, o);
 		p->pressed = o;
 		p->inside = true;
 		redraw = true;
 		break;
 	case OB_SLIDER: {
 		int v = render_slider_value(o, x);
+		act_touch(p->d, o);
 		p->drag = o;
-		if (v != o->value) { o->value = (int16_t)v; redraw = true; }
+		if (v != o->value) o->value = (int16_t)v;
 		p->pressed = o;
 		p->inside = true;
 		redraw = true;
@@ -507,6 +570,7 @@ bool player_press(player_t *p, int x, int y, bool *took) {
 		int rh = render_list_row_h(p->d, o), i;
 		i = (y - o->y - o->pad) / (rh > 0 ? rh : 1);
 		if (y - o->y - o->pad >= 0 && i < render_list_items(o) && i != o->value) {
+			act_touch(p->d, o);
 			o->value = (int16_t)i;
 			ui(p);
 			fire(p, o);
@@ -515,7 +579,7 @@ bool player_press(player_t *p, int x, int y, bool *took) {
 		break;
 	}
 	case OB_FIELD:
-		if (p->focus != o) { p->focus = o; redraw = true; }
+		if (p->focus != o) { set_focus(p, o); redraw = true; }
 		break;
 	}
 	ui(p);
@@ -525,22 +589,22 @@ bool player_press(player_t *p, int x, int y, bool *took) {
 bool player_motion(player_t *p, int x, int y) {
 	if (p->drag) {
 		int v = render_slider_value(p->drag, x);
-		if (v != p->drag->value) { p->drag->value = (int16_t)v; return true; }
+		if (v != p->drag->value) { act_touch(p->d, p->drag); p->drag->value = (int16_t)v; return true; }
 		return false;
 	}
 	if (p->pressed) {
 		bool in = inside(p->pressed, x, y);
-		if (in != p->inside) { p->inside = in; ui(p); return true; }
+		if (in != p->inside) { act_touch_ui(p->d, p->pressed); p->inside = in; ui(p); return true; }
 	}
 	return false;
 }
 
 bool player_release(player_t *p, int x, int y) {
 	obj_t *o = p->pressed;
-	bool redraw = false;
 	if (p->drag) {
 		obj_t *s = p->drag;
 		player_motion(p, x, y);
+		act_touch_ui(p->d, s);
 		p->drag = NULL;
 		p->pressed = NULL;
 		ui(p);
@@ -548,17 +612,17 @@ bool player_release(player_t *p, int x, int y) {
 		return true;
 	}
 	if (!o) return false;
+	act_touch_ui(p->d, o);
 	p->pressed = NULL;
 	if (inside(o, x, y)) {
-		if (o->kind == OB_CHECK) o->value = !o->value;
+		if (o->kind == OB_CHECK) { act_touch(p->d, o); o->value = !o->value; }
 		else if (o->kind == OB_RADIO) radio_set(p, o);
 		ui(p);
 		fire(p, o);
 		return true;
 	}
 	ui(p);
-	redraw = true;
-	return redraw;
+	return true;
 }
 
 // The next field on the card after `o` (Tab), wrapping; NULL if none.
@@ -576,8 +640,9 @@ bool player_key(player_t *p, uint32_t k, bool *redraw) {
 	obj_t *f = p->focus;
 	*redraw = false;
 	if (!f) return false;
-	if (k == 0x1b) { p->focus = NULL; ui(p); *redraw = true; return true; }
-	if (k == '\t') { p->focus = next_field(p, f); ui(p); *redraw = true; return true; }
+	if (k == 0x1b) { set_focus(p, NULL); ui(p); *redraw = true; return true; }
+	if (k == '\t') { set_focus(p, next_field(p, f)); ui(p); *redraw = true; return true; }
+	act_touch(p->d, f);			// its words change (or its action runs)
 	{
 		const char *t = f->text ? f->text : "";
 		uint32_t n = (uint32_t)strlen(t);

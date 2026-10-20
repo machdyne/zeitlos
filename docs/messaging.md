@@ -100,6 +100,13 @@ That means a pointer created by process A can be converted to the
 directly readable by anyone, kernel or app, without copying the data
 it points to.
 
+A pointer into the sender's **arena** ([kernel.md](kernel.md#arenas))
+is physical already -- an app reaches its arena at its own address,
+not through the window -- and is passed on as it is. Translating it as
+a window address made it point nowhere: a card app writing a file from
+its arena (slide saving a deck to `/tmp`) reached `fs` as `0x2000xxxx`,
+and the write was refused (`sw/os/tests/test_msg.c` checks both).
+
 So instead of serializing message payloads into a byte buffer,
 Zeitlos passes `Z_STR`/`Z_LIST`/`Z_MAP` payloads **by reference**:
 

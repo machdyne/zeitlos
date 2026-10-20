@@ -14,6 +14,7 @@
 #include "act.h"
 #include "script.h"
 #include "../../common/zpool.h"
+#include "../../common/zco.h"
 
 #include <string.h>
 
@@ -113,15 +114,23 @@ static void draw_card(uint32_t *b, const deck_t *d, int i, int blank) {
 // -- transitions -------------------------------------------------------------------
 
 static bool skip_wanted(void) {
-	// a key or a click during a transition finishes it at once
+	// A key pressed or a click during a transition finishes it at once.
+	// Not the RELEASE of the key that started it, which arrives a moment
+	// later: that used to finish every transition at its first frame,
+	// so a show driven from the keyboard never showed one. Key releases
+	// are taken out of the way here.
 	z_msg_t m;
-	if (z_msg_read(&m) == Z_OK) {
-		if (m.subject == Z_WM_KEY || m.subject == Z_WM_MOUSE || m.subject == Z_WM_GAME_REVOKED) {
-			z_msg_unread(&m);
-			return m.subject != Z_WM_MOUSE ||
-				Z_WM_UNPACK_MOUSE_BUTTONS(m.obj.val.uint32) != 0;
-		}
+	while (z_msg_read(&m) == Z_OK) {
+		if (m.subject == Z_WM_KEY && m.obj.type == Z_UINT32 &&
+			!Z_WM_UNPACK_KEY_PRESSED(m.obj.val.uint32))
+			continue;
 		z_msg_unread(&m);
+		// pointer motion, or a button let go: not a reason to stop (and
+		// left for the loop, which keeps track of the buttons)
+		if (m.subject == Z_WM_MOUSE && m.obj.type == Z_UINT32 &&
+			Z_WM_UNPACK_MOUSE_BUTTONS(m.obj.val.uint32) == 0)
+			return false;
+		return m.subject == Z_WM_KEY || m.subject == Z_WM_MOUSE || m.subject == Z_WM_GAME_REVOKED;
 	}
 	return false;
 }
@@ -226,9 +235,147 @@ static void say_notes(void) {
 	if (s_speak_notes && n && *n) z_speak(n, 0);
 }
 
+// -- the next card, drawn ahead ------------------------------------------------
+//
+// While the audience looks at a card, the next one is drawn into the
+// other buffer, an object at a time, in a coroutine the main loop
+// resumes when nothing is waiting (docs/responsive.md). Going on is
+// then only the transition: a card of large script text that takes a
+// second to draw no longer eats a second of the next card's time on
+// the screen. Anything that changes a card (an action, a picture
+// loaded, B, S) throws it away; it is drawn again.
+
+#define PRE_STACK (16 * 1024)
+
+static int next_of(int cur);
+
+static zco_t pre_co;
+static uint8_t *pre_stack;
+static int pre_card = -1;		// the card in buf[1 - s_cb], or being drawn there
+static bool pre_done;
+static bool pre_on;			// pre_co holds a drawing in progress
+
+static void pre_between(void) { if (zco_current() == &pre_co) zco_yield(); }
+
+static void pre_fn(void *arg) {
+	(void)arg;
+	draw_card(buf[1 - s_cb], sd, pre_card, 0);
+}
+
+static void pre_drop(void) {
+	if (pre_on) zco_abandon(&pre_co);
+	pre_on = false;
+	pre_done = false;
+	pre_card = -1;
+}
+
+// Starts or continues the next card for up to `ticks`; true while there
+// is more to do.
+static bool pre_step(uint32_t ticks) {
+	int next = next_of(s_cur);
+	uint32_t t0 = z_uptime_ticks();
+	if (s_blank || next == s_cur || !pre_stack) return false;
+	if (pre_card != next) {
+		pre_drop();
+		pre_card = next;
+		zco_init(&pre_co, pre_fn, NULL, pre_stack, PRE_STACK);
+		pre_on = true;
+	}
+	if (pre_done) return false;
+	while (pre_on) {
+		z_msg_t m;
+		if (!zco_resume(&pre_co)) {
+			pre_on = false;
+			pre_done = !pre_co.overflow;
+			if (pre_co.overflow) pre_card = -1;
+			break;
+		}
+		if (z_uptime_ticks() - t0 >= ticks) break;
+		if (z_msg_read(&m) == Z_OK) { z_msg_unread(&m); break; }	// someone is waiting
+	}
+	return pre_on;
+}
+
+static void redraw_now(void);
+
+// What actions, scripts and the controls touched (act.h), drawn again:
+// only those areas, from the buffer shown, straight to the screen.
+static void draw_dirty(void) {
+	act_dirty_t dt[ACT_DIRTY_MAX];
+	int n = act_dirty_take(dt, NULL), i;
+	zc_target_t t;
+	zc_xf_t xf;
+	int cx, cy, cw, ch;
+	if (!n) return;
+	pre_drop();				// an action may have changed the next card too
+	if (s_blank) return;
+	if (n < 0) { redraw_now(); return; }
+	card_xf(sd, &xf, &cx, &cy, &cw, &ch);
+	for (i = 0; i < n; i++) {
+		int u[4], x0, y0, x1, y1;
+		zc_fix ax, ay, bx, by;
+		u[0] = dt[i].r[0]; u[1] = dt[i].r[1]; u[2] = dt[i].r[2]; u[3] = dt[i].r[3];
+		if (render_card_has(sd, sd->card[s_cur], dt[i].o)) {
+			int a, b, c, e;
+			render_ink_bounds(sd, dt[i].o, &a, &b, &c, &e);
+			if (a < u[0]) u[0] = a;
+			if (b < u[1]) u[1] = b;
+			if (c > u[2]) u[2] = c;
+			if (e > u[3]) u[3] = e;
+		}
+		zc_xf_apply(&xf, ZC_I(u[0]), ZC_I(u[1]), &ax, &ay);
+		zc_xf_apply(&xf, ZC_I(u[2]), ZC_I(u[3]), &bx, &by);
+		x0 = (int)(ax >> ZC_FRAC) - 1; y0 = (int)(ay >> ZC_FRAC) - 1;
+		x1 = (int)(bx >> ZC_FRAC) + 2; y1 = (int)(by >> ZC_FRAC) + 2;
+		if (x0 < cx) x0 = cx;
+		if (y0 < cy) y0 = cy;
+		if (x1 > cx + cw) x1 = cx + cw;
+		if (y1 > cy + ch) y1 = cy + ch;
+		if (x1 <= x0 || y1 <= y0) continue;
+		// whole words across, so the blit starts on one
+		x0 &= ~31;
+		x1 = (x1 + 31) & ~31;
+		if (x1 > SW) x1 = SW;
+		zc_target_bits(&t, buf[s_cb], SWPL, SW, SH);
+		zc_clip(&t, x0, y0, x1, y1);
+		{
+			// outside the card stays as it is (black)
+			int k0 = x0 > cx ? x0 : cx, k1 = x1 < cx + cw ? x1 : cx + cw;
+			zc_clip(&t, k0, y0, k1, y1);
+		}
+		render_card(&t, &xf, sd, sd->card[s_cur], RENDER_SHOW);
+		blit_to_screen(buf[s_cb], SWPL, x0, y0, x0, y0, x1 - x0, y1 - y0);
+	}
+}
+
 static void redraw_now(void) {
+	pre_drop();
 	draw_card(buf[s_cb], sd, s_cur, s_blank);
 	blit_to_screen(buf[s_cb], SWPL, 0, 0, 0, 0, SW, SH);
+}
+
+int show_selftest(deck_t *d, int cur, size_t *stack) {
+	size_t n = (size_t)SWPL * SH;
+	int yields = 0;
+	if (!show_alloc()) return -1;
+	if (!pre_stack) pre_stack = pool_alloc(PRE_STACK);
+	if (!pre_stack) return -1;
+	sd = d;
+	s_cur = cur;
+	s_cb = 0;
+	s_blank = 0;
+	pre_card = next_of(cur);
+	pre_done = false;
+	render_set_between(pre_between);
+	zco_init(&pre_co, pre_fn, NULL, pre_stack, PRE_STACK);
+	pre_on = true;
+	while (zco_resume(&pre_co)) yields++;
+	pre_on = false;
+	render_set_between(NULL);
+	*stack = zco_stack_used(&pre_co);
+	if (pre_co.overflow) return -1;
+	draw_card(buf[0], d, pre_card, 0);
+	return memcmp(buf[0], buf[1], n * 4) ? -1 : yields;
 }
 
 // To card `to`, with its transition (going back is a cut: a transition
@@ -241,7 +388,11 @@ static void go_card(int to) {
 	nc = sd->card[to];
 	player_reset(&s_pl);
 	s_pl.cur = to;
-	draw_card(buf[1 - s_cb], sd, to, s_blank);
+	if (!(pre_done && pre_card == to && !s_blank)) {
+		pre_drop();
+		draw_card(buf[1 - s_cb], sd, to, s_blank);
+	}
+	pre_drop();
 	transition(to > s_cur && !s_blank ? nc->trans : TR_CUT, nc->trans_ms, buf[s_cb], buf[1 - s_cb]);
 	s_cb = 1 - s_cb;
 	s_cur = to;
@@ -259,7 +410,7 @@ static int next_of(int cur) {
 }
 
 static void h_go(void *u, int to) { (void)u; go_card(to); }
-static void h_changed(void *u) { (void)u; redraw_now(); }
+static void h_changed(void *u) { (void)u; }		// act_touch() says what: draw_dirty()
 static void h_open(void *u, const char *path) {
 	int i;
 	(void)u;
@@ -334,6 +485,10 @@ int show_run(deck_t *d, int start, z_win_t *win) {
 	sd = d;
 	s_cur = start;
 	s_cb = 0;
+	pre_card = -1;
+	pre_done = pre_on = false;
+	if (!pre_stack) pre_stack = pool_alloc(PRE_STACK);		// none: each card is drawn when it is needed
+	render_set_between(pre_between);
 	s_blank = 0;
 	s_open[0] = 0;
 	s_running = true;
@@ -374,7 +529,7 @@ int show_run(deck_t *d, int start, z_win_t *win) {
 				if (m.obj.type != Z_UINT32 || !Z_WM_UNPACK_KEY_PRESSED(m.obj.val.uint32)) break;
 				k = Z_WM_UNPACK_KEY_KEYSYM(m.obj.val.uint32);
 				// typing into a field comes first (Esc leaves it)
-				if (player_key(&s_pl, k, &r)) { if (r) redraw = true; break; }
+				if (player_key(&s_pl, k, &r)) break;		// (what it changed: draw_dirty())
 				if (k == 0x1b || k == 'q' || k == 'Q') { s_running = false; break; }
 				if (k >= '0' && k <= '9') { typed = typed * 10 + (int)(k - '0'); if (typed > 99999) typed = 0; break; }
 				if (k == 0x0d && typed) { go = typed - 1; typed = 0; break; }
@@ -404,12 +559,12 @@ int show_run(deck_t *d, int start, z_win_t *win) {
 				if ((b & Z_MOUSE_BTN_LEFT) && !(last_btn & Z_MOUSE_BTN_LEFT)) {
 					// a control takes the click; elsewhere it is the next card
 					bool took;
-					if (player_press(&s_pl, ux, uy, &took)) redraw = true;
+					player_press(&s_pl, ux, uy, &took);
 					if (!took && !s_blank) go = next_of(s_cur);
 				} else if ((b & Z_MOUSE_BTN_LEFT) && (last_btn & Z_MOUSE_BTN_LEFT)) {
-					if (player_motion(&s_pl, ux, uy)) redraw = true;
+					player_motion(&s_pl, ux, uy);
 				} else if (!(b & Z_MOUSE_BTN_LEFT) && (last_btn & Z_MOUSE_BTN_LEFT)) {
-					if (player_release(&s_pl, ux, uy)) redraw = true;
+					player_release(&s_pl, ux, uy);
 				}
 				if ((b & Z_MOUSE_BTN_RIGHT) && !(last_btn & Z_MOUSE_BTN_RIGHT)) go = s_cur - 1;
 				last_btn = b;
@@ -423,6 +578,8 @@ int show_run(deck_t *d, int start, z_win_t *win) {
 				// Super+Esc: wm has the screen back already; draw nothing more
 				s_pl.focus = NULL;
 				render_ui_state(NULL, NULL);
+				pre_drop();
+				render_set_between(NULL);
 				return s_cur;
 			case Z_WM_CLOSE:
 				s_running = false;
@@ -452,28 +609,35 @@ int show_run(deck_t *d, int start, z_win_t *win) {
 			blit_to_screen(buf[s_cb], SWPL, 0, 0, 0, 0, SW, SH);
 			if (repaint) s_shown_at = z_uptime_ticks();
 			repaint = false;
+			act_dirty_take(NULL, NULL);			// all of it drawn
 		}
+		draw_dirty();
 
 		// an action's (wait) come due, a script's timers
 		if (act_waiting()) act_tick();
 		if (script_timers()) script_tick();
+		draw_dirty();
 
 		// nothing to answer: load a picture a slice at a time, never
 		// longer than a key can wait (docs/responsive.md)
 		if (render_loading()) {
 			bool fin;
 			obj_t *o = render_load_step(Z_TICK_HZ / 50, &fin);
+			if (fin) pre_drop();		// it may be on the next card
 			if (!s_blank && render_card_has(d, d->card[s_cur], o) &&
 				(fin || z_uptime_ticks() - bar_at >= Z_TICK_HZ / 2)) {
 				// its picture, or how far it has got
 				redraw_now();
 				bar_at = z_uptime_ticks();
 			}
-		} else {
+		} else if (!pre_step(Z_TICK_HZ / 50)) {
+			// (the next card is ready: nothing to do until something happens)
 			z_proc_wait(act_waiting() || script_timers() || s_pl.pressed ? Z_TICK_HZ / 50 : Z_TICK_HZ / 20);
 		}
 	}
 
+	pre_drop();
+	render_set_between(NULL);
 	player_reset(&s_pl);
 	act_reset();
 	script_stop_timers();

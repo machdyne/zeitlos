@@ -85,19 +85,11 @@ void edit_damage(editor_t *e, int x0, int y0, int x1, int y1) {
 
 void edit_damage_obj(editor_t *e, const obj_t *o) {
 	int x0, y0, x1, y1, m;
-	obj_bounds(o, &x0, &y0, &x1, &y1);
-	m = o->line_w + 3;
+	// what it can ink (render.c culls by the same bounds), and a little
+	// for the selection's handles
+	render_ink_bounds(e->d, o, &x0, &y0, &x1, &y1);
+	m = 3;
 	if (o->arrows) m += render_arrow_len(o->line_w);
-	if (OB_EDITS_TEXT(o->kind) && o->text && o->text[0]) {
-		// text may run past its box: below it, and an italic to the right
-		static text_layout_t L;
-		zc_fix bottom;
-		render_text_layout(e->d, o, &L);
-		bottom = L.top + L.line_h * (L.n + 1);
-		if ((bottom >> ZC_FRAC) > y1) y1 = bottom >> ZC_FRAC;
-		if ((L.top >> ZC_FRAC) < y0) y0 = L.top >> ZC_FRAC;
-		m += o->size / 3 + 2;
-	}
 	edit_damage(e, x0 - m, y0 - m, x1 + m, y1 + m);
 }
 
@@ -1826,6 +1818,7 @@ static const char *const cmd_help[] = {
 	"loop on | off       the show goes round",
 	"script [deck | card]   edit a script in text: the deck's, the card's, or the selection's action",
 	"(go 'next) ...      Scheme, run at once: the message box",
+	"save as [PATH]      the deck to another file (a dialog without PATH)",
 	"show | open | save | save as | new deck | help | tour",
 };
 

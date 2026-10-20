@@ -121,6 +121,14 @@ render: tests/patterns.c
 		$(COMMON)/zeitlos.c $(COMMON)/zedit.c $(COMMON)/zpage.c $(COMMON)/zpaper.c $(COMMON)/zcanvas.c $(COMMON)/zco.c $(COMMON)/zimgjob.c \
 		$(COMMON)/zcfont.c $(COMMON)/zimg.c $(COMMON)/zinflate.c $(COMMON)/zspeak.c $(COMMON)/zprint.c -lm
 	/tmp/slide_render_ui ../../..
+	/tmp/slide_render_ui ../../.. bench
+	/tmp/slide_render_ui ../../.. appstart
+
+# What a click on the calculator example costs, in host instructions
+# (bench_* in tests/render_ui.c): a guide to the board, about 1:1.3
+bench-click: render
+	valgrind --tool=callgrind --callgrind-out-file=/tmp/slide_click.cg /tmp/slide_render_ui ../../.. bench
+	callgrind_annotate --inclusive=yes /tmp/slide_click.cg | grep -E "bench_|render_card|ms_eval |update_card|script_eval" | head -20
 
 # Every card of a deck as PGM in /tmp/slide (DECK=path).
 DECK ?= ../../data/slide/tour.zsl

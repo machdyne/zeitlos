@@ -55,6 +55,9 @@
 // replaced or hidden. Up to about 109 minutes.
 #define Z_CAPTION_TIMEOUT(ms)   (((((uint32_t)(ms)) / 100u) & 0xFFFFu) << 16)
 #define Z_CAPTION_GET_TIMEOUT_MS(o) ((((o) >> 16) & 0xFFFFu) * 100u)
+// The longest a caption stays up: no timeout (0), or a longer one, is
+// this. A caption nobody takes down (its program stopped) goes by itself.
+#define Z_CAPTION_MAX_MS        60000u
 
 // -- showing one --
 
