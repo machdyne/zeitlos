@@ -1,15 +1,180 @@
-# gamedemo
+# mausrun
 
-A side-scrolling run-and-jump demo for game mode. You are a mouse; you
-collect cheese, jump over boxes and pits, and avoid cats.
+**Maus Run**: a side-scrolling run-and-jump game for game mode. You are
+a mouse; you run to the cheese wheel at the end of each level, collect
+the cheese, jump the boxes and pits, bounce on the cats (it makes them
+dizzy, and then they nap), find what the ? boxes hold, and look for the
+star hidden in every level -- through a meadow, a garden, a kitchen and
+over the roofs at night.
 
-The level is 2048 pixels long against a 320 pixel viewport. That is the
-entire reason this exists — it exercises the scrolling machinery rather
-than fitting neatly on one screen.
+It began as `gamedemo`, a demonstration of the scrolling machinery --
+one 2048-pixel level against a 320-pixel view, a debug line on the
+screen -- and was renamed and made into a game for children (0.0.7,
+[games proposal](#history)). The demonstration is all still here and
+still documented below; the game is in front of it.
 
-Lives in `sw/apps/gamedemo/`, with its art, generator and level all in
-that directory. Nothing it needs has been added to `sw/common` beyond
-`zgame.[ch]`, which is general.
+Lives in `sw/apps/mausrun/`, with its art and generator there and its
+levels in `sw/data/mausrun/levels/`. Nothing it needs has been added to
+`sw/common` beyond `zgame.[ch]`, which is general.
+
+## Playing
+
+The title screen drifts over the first level while a mouse runs along
+the bottom with three cats after it. Its menu:
+
+| | |
+|---|---|
+| **PLAY** | from level 1 |
+| **CONTINUE: LEVEL n** | from the furthest level reached (shown once there is one) |
+| **< EASY >** | the skill: Left and Right change it ([below](#skill)) |
+| **QUIT** | back to the desktop |
+
+Each line is spoken as the cursor reaches it, when speech is on.
+
+A level starts with its number and name in a box -- "LEVEL 2, Over the
+Hills", spoken -- and goes after three seconds or a press of Space. Run
+to the **cheese wheel** to finish it (a level without one: its far
+end). A cat, a frog, an owl or a thorn bush costs a **heart** (the
+status line shows them): the mouse blinks for two seconds, when nothing
+can hurt it, and goes on from where it is. A **pit** costs a heart too,
+and the mouse comes back at the last **mouse hole** it passed (a hole
+lights up with a cheese in it when it does), or at the start. With no
+hearts left it is **GAME OVER**, and Space plays the same level again
+with every heart back -- never back to level 1. Finishing a level shows **WELL DONE!** with the
+cheese counted up, its **three stars** lit one by one -- one for
+finishing, one for every cheese, one for the star hidden in the level --
+and the time, and the next level is unlocked (remembered: CONTINUE).
+The title shows the stars found so far of every level's three. After the last level, **YOU DID IT!** and the
+sky cycles through a rainbow.
+
+The **status line** along the top: cheese found of the level's, the
+hearts, the level and the score, in the 8x8 font -- 16 screen pixels a
+letter at the doubled 320x240 view, readable from across the room. Under
+it, the power-ups in hand, each with a bar for the time it has left
+(they blink for the last three seconds).
+
+On easy, a mouse that stands still for four seconds is shown which way
+to go: a big arrow blinks at the right of the view.
+
+### What is in a level
+
+| | |
+|---|---|
+| grass, ground, boxes | as they always were |
+| **spring** | land on it and fly, about five tiles up |
+| **shelf** | solid from above only: jump up through it, land on it |
+| **biscuit** | stand on it and it cracks, then crumbles (a second on easy); it is baked again five seconds later |
+| **thorn bush** | its points hurt; its top is clear of them |
+| **water** | slow; Jump is a stroke, any time, and coming up through the surface is a hop out onto the bank |
+| **? box** | bump it from below: out pops a power-up (a heart when the mouse is short of hearts) |
+| **mouse hole** | the checkpoint |
+| **cheese wheel** | the end of the level |
+| **moving plank** | to and fro along its track; solid from above, and it carries the mouse |
+| **hidden star** | one in each level, somewhere high or out of the way: the third star |
+
+### Who lives there
+
+Nobody is ever hurt. Coming down on a head bounces the mouse up and
+leaves the foe **dizzy** (stars) for a second and a half, then
+**napping** (zzz) -- ten seconds on easy -- and harmless while it does.
+
+| | |
+|---|---|
+| **cat** | walks its beat, turns at walls and ledges |
+| **sleeping cat** | harmless while it sleeps, and jumping on it does not wake it; **landing** near it does, and then it comes for the mouse -- tiptoe past |
+| **frog** | sits, and hops back and forth about its place, croaking |
+| **owl** | flies to and fro, bobbing, at night |
+
+### Power-ups
+
+Lying in a level or out of a ? box; walked into to take them, each
+announced (spoken) and shown under the status line.
+
+| | | how long (easy / normal / hard) |
+|---|---|---|
+| **feather** | one more jump in the air | 30 / 20 / 15 s |
+| **bubble** | the next bump is free (it pops) | until then |
+| **magnet** | the cheese nearby flies to the mouse | 30 / 20 / 15 s |
+| **bell** | everyone runs away, and nobody hurts | 30 / 20 / 15 s |
+| **fast shoes** | half as fast again (and the music livelier) | 30 / 20 / 15 s |
+| **heart** | a heart more (up to seven) | |
+
+### Themes
+
+A level's `theme` line says how it looks and sounds; the map says what
+is where, the same in every theme.
+
+| | four colours | the far layer | grass is | thorns are | boxes are | tune |
+|---|---|---|---|---|---|---|
+| **meadow** | the original sky blue, brown, green, cream | trees | grass | thorns | boxes | Meadow (A minor) |
+| **garden** | brighter, greens readable at night | sunflowers | grass | thorns | boxes | Garden (G major, bouncy) |
+| **kitchen** | a pale wall (a lamp-lit one at night) | wallpaper, a shelf of jars and cups | floor tiles | mousetraps | boxes | Kitchen (C major, plucked) |
+| **roofs** | night blue and brick | houses up the hill | roof tiles | thorns | chimneys | Roofs (D minor, a lullaby) |
+
+Each theme lights its own day, sunset, night and dawn (`mr_lights[]`),
+so `time` still says which of them a level gets. Outdoors at night there
+is a moon; the kitchen has no sky, so no stars, moon, birds or lightning,
+and only the meadow and the garden have waterfalls in their pits (a
+kitchen's gap and a roof's edge fall to nothing). A tune changes only
+when the theme does, so two meadow levels in a row play straight on.
+
+### Moving platforms
+
+A run of three or more `P` cells is a plank's track: a plank two tiles
+wide goes to and fro along it at half a pixel a frame, solid from above
+as a shelf is, and carries whoever stands on it (until they jump or
+walk off). `levelcheck` takes the track for a shelf along its whole run:
+the mouse can stand anywhere the plank goes by waiting for it there, and
+riding it goes no further than walking along it would -- which holds
+for planks that move sideways, and is why there are no others.
+
+### Particles and weather
+
+A pool of 96 little things that fly and go: dust from a landing and a
+spring, crumbs from a biscuit, splashes, sparkles from a cheese or a
+stomp, confetti at a mouse hole and the cheese wheel, feathers for the
+second jump, zzz over sleepers, the magnet's cheese -- and the level's
+**weather**: falling leaves, snow, rain or fireflies (up to 36 of the
+pool, so a burst always has room). Each is one fill or one little
+bitmap: one or two blits.
+
+### Skill
+
+The same three settings as the arcade games ([arcade.md](arcade.md#skill)),
+easy by default:
+
+| | Easy | Normal | Hard |
+|---|---|---|---|
+| hearts | 5 | 3 | 3 |
+| cats' pace (1/16 px a frame) | 6 | 9 | 12 |
+| a foe's nap after the stars | 10 s | 7 s | 5 s |
+| power-ups last | 30 s | 20 s | 15 s |
+| a sleeping cat wakes to a landing within | 24 px | 40 px | 56 px |
+| a biscuit holds | 1 s | 0.7 s | 0.5 s |
+| music (calm first, [sfx.md](sfx.md#calm-first)) | from 1 | from 3 | from 5 |
+
+and on easy, the arrow. The music grows a step every two levels.
+Normal's hearts and cats are the game as `gamedemo` played. The choice is kept in
+`/data/mausrun/progress.txt`; without one it comes from
+`apps.arcade.skill`, then easy.
+
+### What is remembered
+
+`/data/mausrun/progress.txt`, plain lines:
+
+```
+skill easy
+unlocked 3
+best 1 28
+best 2 17
+stars 1 7
+stars 2 3
+```
+
+the skill, the furthest level reached, the most cheese found in each
+level, and its stars (1 finished, 2 every cheese, 4 the hidden star:
+7 is all three; they are only ever added to). Lines the game does not know are kept when it writes the file
+(`progress.c`, host-tested).
 
 ## What it demonstrates
 
@@ -23,7 +188,7 @@ that directory. Nothing it needs has been added to `sw/common` beyond
 | Software masked sprites | `spr_draw()` — see below |
 | Gamepads, two ports, hotplug | `zpad.h` |
 | Keyboard fallback | `input_read()` |
-| Hardware mixer sound effects | `zaudio.h`, if the board has one |
+| Sound effects and music | zsfx ([sfx.md](sfx.md)), on the hardware mixer if the board has one |
 | Four colours, double-buffered | `zcolor.h`, if the board has colour — see [Colour](#colour) |
 
 ## Controls
@@ -35,12 +200,20 @@ with one still responds to the keyboard.
 
 | Action | Keyboard | Pad |
 |---|---|---|
-| Move | left / right | d-pad |
-| Jump | up or space | A, B or up |
-| Restart | R | start |
-| Quit | Esc | select |
-| Colour on/off | C | |
-| A quarter of a day later | T | |
+| Move | Left / Right | d-pad |
+| Jump | Up or Space | A, B or up |
+| Choose (menus, boxes) | Enter or Space | A, B or Start |
+| Pause, and go on | P | Start |
+| Back: pause in play, then the menu; on the menu, quit | Esc | Select |
+| Volume down / up | - / = | |
+| Music on or off | M | |
+| Colour on or off | C | |
+
+The old diagnostic keys are gone: A (the ambient layer off) and T (a
+quarter of a day later), and `[ ]` (the music against the effects --
+the balance is fixed now). So are R (restart; GAME OVER asks) and Esc
+quitting at once from the middle of a level. mausrun is always in game
+mode ([keys.md](keys.md)).
 
 Unplugging a pad mid-jump releases every button rather than leaving the
 mouse running forever — that falls out of the hardware clearing pad
@@ -116,6 +289,39 @@ it is dark brown speckled with cream at the same cost as before.
 The HUD text is drawn into plane 0 only, so it shows dark brown over
 the sky -- and at night into plane 1 as well, so it shows cream.
 
+### Colour, and what a frame costs
+
+A frame's cost here is its blitter operations: each is register writes
+and a wait, and the game gets a share of the CPU to issue them in. The
+host render counts them (`make render`, `themes` prints them per level,
+and where they go -- `MAUSRUN_PROF`). Colour drew about three times
+mono's:
+
+| level 1, a frame | blits | far layer | tiles | the rest |
+|---|---|---|---|---|
+| colour, round 4 | 259 | 105 | 110 | 44 |
+| mono, round 4 | 78 | | | |
+| colour, round 5 | **94** | 32 | 23 | 39 |
+| mono, round 5 | **34** | | | |
+
+Three changes, the pictures identical (compared pixel for pixel with
+round 4's on every level):
+
+- **Runs of tiles.** Every tile also exists as a strip of 21 copies
+  (`strips_init()`); a run of the same tile in a row -- the ground --
+  is drawn from it in one blit a band and plane, not one a tile.
+  Twenty grass tiles were a hundred blits in colour and are five.
+  Mono gains the same way.
+- **Whole far sprites.** A cloud is one 32x16 draw and a tree or a
+  house one 16x32 (`far_init()`), not two cells.
+- **The fewest passes a plane.** A sprite whose colour and outline
+  share a plane's bit takes one pass on it (OR or ANDN the mask), and
+  one with no outline -- its mask is its data, clouds and trees -- one
+  pass a plane whatever its colour (`c_sprite_wh()`).
+
+So colour now costs less than mono did. Build with `-DMAUSRUN_DEBUG`
+to see the blits and the frames per update on the console.
+
 ### Palette effects
 
 The palette changes the colour of everything on screen at once for
@@ -126,10 +332,10 @@ frame boundary (`fx_tick()`), so no change lands half way down a
 picture.
 
 **Time of day.** The four colours drift through day, sunset, night and
-dawn on a one-minute loop, interpolated a channel at a time between
-keyframes. Everything relights together -- sky, clouds, cheese, the
-mouse -- because they share entries, which is exactly how light
-behaves. T jumps a quarter of a day.
+dawn on a two-and-a-half-minute loop (it was one minute: the night came
+round too often), interpolated a channel at a time between keyframes.
+Everything relights together -- sky, clouds, cheese, the mouse --
+because they share entries, which is exactly how light behaves.
 
 | | sky | dark | green | cream |
 |---|---|---|---|---|
@@ -295,9 +501,12 @@ The general shape of the mistake is worth remembering: **"something else
 covers this" is only safe if it is true for every column**, and the
 exception here was the one feature the level is built around.
 
-### The frame rate is the smoothness, and the HUD shows it
+### The frame rate is the smoothness
 
-`dt` and the blit count are on the HUD on purpose.
+`dt` and the blit count were on the HUD on purpose while this was a
+demonstration; the HUD is the player's now, and building with
+`-DMAUSRUN_DEBUG` (`make CFLAGS_EXTRA=-DMAUSRUN_DEBUG`, or add it to the
+Makefile) prints both on the console once a second instead.
 
 Motion smoothness **is** the frame rate. There is no amount of
 interpolation that makes 12 distinct positions a second look like 60. So
@@ -346,10 +555,11 @@ a blit per tile.
 
 ### The decisive experiment
 
-`A` toggles the ambient layer. It is a diagnostic, not a feature.
-
-Watch the HUD: if blits drop sharply and `dt` does not move, the drawing
-was never the bottleneck and the answer is in the scheduler.
+The `A` key used to toggle the ambient layer, as a diagnostic: if blits
+drop sharply and `dt` does not move, the drawing was never the
+bottleneck and the answer is in the scheduler. It is gone from the game;
+the same experiment is a one-line change to `draw_world()` in a
+`MAUSRUN_DEBUG` build.
 
 ### Why it is probably not the drawing
 
@@ -475,21 +685,123 @@ MSB-first order `z_font_t` glyphs use. Getting this backwards mirrors
 every sprite within each 16-pixel group, which looks like a shuffled
 sprite sheet rather than a bit-order bug.
 
-## The level
+## Levels
 
-`level.c`, as ASCII, so the level is its own picture:
+Text files, `sw/data/mausrun/levels/01.txt`, `02.txt`, ..., copied to
+`/data/mausrun/levels` on the card (`Z_DIR_MAUSRUN_LEVELS`), by the card
+image and by `update`. **Every one of them is also compiled in**
+(`levels_builtin.c`, generated by `gen_levels.py` and committed, as
+`sprites.c` is), so the game has all its levels on any card. A file on
+the card wins over the compiled-in level of its number, and files past
+the last compiled-in one add levels; one that does not parse is
+reported on the console and the compiled-in level played instead.
+`levelcheck` checks every compiled-in level, and that each file says
+what its compiled-in copy says -- an edited level without
+`python3 gen_levels.py` fails the tests.
+
+Until games round 5 only level 1 was compiled in, and the level files
+were in the card's list of inputs but not in the list of what to write
+(`release/lib/mkfatimg.py`), so neither an image nor an `update` put
+them on the card: the game found one level, and finishing it was "YOU
+DID IT! EVERY LEVEL". The image test (`release/lib/test_mkfatimg.py`,
+"all listed apps and data files on the card") catches exactly that; it
+needs mtools and dosfstools to run.
+
+```
+# mausrun -- a level
+name Over the Hills        shown and spoken when it starts
+time day                   day, night, or cycle (the 2.5-minute day)
+music 0                    which tune (without it, the theme's)
+weather leaves             none, leaves, snow, rain or fireflies
+theme meadow               meadow, garden, kitchen or roofs (the look and the tune)
+map
+................................................................
+...                        15 rows, up to 512 columns
+```
+
+The map is ASCII, so the level is its own picture:
 
 ```
 .  sky      =  grass floor   #  ground fill
-B  box      c  cheese
-M  mouse start             C  cat start
+B  box      c  cheese        M  mouse start
+S  spring   -  shelf         K  biscuit       ^  thorns
+~  water    ?  ? box         H  mouse hole    G  cheese wheel
+w  feather  b  bubble        m  magnet        l  bell
+k  fast shoes                h  heart
+*  the hidden star           P  a moving plank's track
+C  cat      Z  sleeping cat  F  frog          O  owl
 ```
+
+Rows may be different lengths (short ones are sky to the end); the map
+is 24 to 512 columns wide; up to 24 foes. Rows 12 to 14 are drawn as
+earth where they are ground, so a pond can go down into them. The parser (`level.c`) is a
+pure function of the text, shared with the host tools, and says what is
+wrong and on which line.
 
 There is **no pit tile**. A pit is a run of columns with no floor, and
 falling out of the bottom of the map is the failure condition — so a
 hole in the floor is a pit by construction. The obvious alternative, a
 pit tile you collide with, would need its own case in the physics for no
-gain.
+gain. The level is finished at its cheese wheel, or, without one, by
+running into its last two columns.
+
+Level 1, **The Meadow**, is the original map, kept as everyone learned
+it -- with one cheese moved one column left: `levelcheck` found that the
+one at row 2, column 74 could never be reached by any jump. Round 3
+only added things to find to it: two ? boxes, three mouse holes, the
+cheese wheel and falling leaves, and round 4 its hidden star; the
+ground, the boxes, the cheese and the cats are where they always were.
+Level 2, **Over the Hills**, is
+rolling hills in daylight with little pits, and since round 3 a spring,
+shelves, a thorn bush, a sleeping cat, ? boxes and mouse holes. Level 4,
+**The Garden at Night** (level 3 in round 3), has everything: a pond with frogs and lily
+pads, a picnic of biscuits over a gap, a spring to a high shelf, rose
+bushes, a sleeping cat, an owl over the boxes, and fireflies.
+
+Round 4 made eight levels, two to a theme, every one with a hidden star
+(levels 1 and 2 got theirs without anything else moving):
+
+| | | theme | |
+|---|---|---|---|
+| 1 | The Meadow | meadow, the day's cycle | the original |
+| 2 | Over the Hills | meadow, day | |
+| 3 | The Vegetable Patch | garden, day | two planks over wide gaps, a pond, frogs, a sleeping cat in the cabbages |
+| 4 | The Garden at Night | garden, night | round 3's level 3 |
+| 5 | The Kitchen Floor | kitchen, day | mousetraps, cupboards, shelves up the wall, a biscuit bridge |
+| 6 | Up on the Worktop | kitchen, night | a spring up, the sink and its frog, a tray to the high shelf |
+| 7 | Over the Roofs | roofs, night, snow | gaps between houses, chimneys, owls, a plank |
+| 8 | Chimney Tops | roofs, night, fireflies | planks, a sleeping cat on a roof, the last cheese wheel |
+
+### levelcheck: can it be finished?
+
+`tests/levelcheck.c` reads a level with the game's parser and searches
+every way the mouse can move with the game's own physics (`phys.c`) --
+left, right or neither, jumping or not, a frame at a time, breadth
+first over the exact fixed-point state. A level passes when the search
+reaches the goal (the cheese wheel, or the last two columns); any
+cheese the mouse can never touch is an error too, and so is a hidden
+star. Springs, shelves and
+water are physics and so are in the search; thorns end a path, as a pit
+does; a biscuit counts as solid (it is, until stood on); no power-up is
+used -- every level must be finishable without one. It reports the
+quickest finish:
+
+```
+01.txt: "The Meadow", 128 columns, 21 cheese, 3 foes: finished in 970 frames at best (16.2 s)
+02.txt: "Over the Hills", 160 columns, 38 cheese, 6 foes: finished in 1210 frames at best (20.2 s)
+03.txt: "The Vegetable Patch", 150 columns, 18 cheese, 5 foes: finished in 1130 frames at best (18.8 s)
+04.txt: "The Garden at Night", 146 columns, 21 cheese, 6 foes: finished in 1098 frames at best (18.3 s)
+05.txt: "The Kitchen Floor", 150 columns, 17 cheese, 5 foes: finished in 1130 frames at best (18.8 s)
+06.txt: "Up on the Worktop", 150 columns, 21 cheese, 5 foes: finished in 1139 frames at best (19.0 s)
+07.txt: "Over the Roofs", 150 columns, 19 cheese, 4 foes: finished in 1130 frames at best (18.8 s)
+08.txt: "Chimney Tops", 160 columns, 20 cheese, 5 foes: finished in 1202 frames at best (20.0 s)
+```
+
+Foes are left out -- they move, and the mouse can wait for them, or
+bounce on them. `make -C sw/apps/mausrun test` runs it over every level (and on a
+level with a six-tile pit, which it must refuse); `make check` prints
+the figures. `make render` draws each level as one long picture
+(`tests/levelstrip.c`, `out/level_NN.png`).
 
 ## Tuning, and why the numbers are what they are
 
@@ -498,9 +810,10 @@ independently. With gravity 6 in 1/16-pixel units, a jump of -96 gives
 32 frames of airtime, which at a run speed of 32 covers exactly **64px —
 four tiles** — and reaches **48px — three tiles** — high.
 
-The level is built against those two numbers: no gap is wider than three
-tiles and no step taller than two, so every jump has a tile of margin.
-Change any of the four constants and the level needs rechecking.
+The levels are built against those two numbers: no gap is wider than
+three tiles and no step taller than two, so every jump has a tile of
+margin. The constants are in `phys.h`; change any of them and
+`levelcheck` rechecks every level with the new physics.
 
 ## Bugs worth recording
 
@@ -630,179 +943,66 @@ the process.
 
 ## Testing
 
-The game builds and runs on the host against stubbed hardware, driven by
-an autoplay routine that runs right and jumps when the tile map says a
-gap or wall is within reach. It reports how far it got:
-
 ```
-RESULT frames=4001 max_x=2017 score=20 lives=3 won=1
+make -C sw/apps/mausrun test      # the parser, progress.txt, levelcheck
+make -C sw/apps/mausrun render    # every level as a picture, and the game played
 ```
 
-That is the whole level traversed with lives intact, which is the
-property worth checking automatically — a level nobody can finish is a
-much easier mistake to make than a level that renders wrong, and much
-harder to notice by eye.
+`tests/test_level.c` reads level 1 and small levels written for it --
+names, the time, CR LF lines, too few rows, too narrow, no start, a
+character that means nothing, 512 columns and 513, more cats than there
+is room for -- and writes and reads `progress.txt`, keeping lines it
+does not know. `levelcheck` (above) proves every level can be finished.
 
-The stubs also flag any blit or text draw that lands outside the
-framebuffer, so the world-to-framebuffer folding is checked on every
-frame of every run rather than by inspection.
+`make render` also plays the game itself on the build host
+(`tests/host/`): `mausrun.c` unchanged, compiled with its frame waits
+pointed at the host (`mr_wrap_game.c`), against a software machine
+(`mr_host.c`) -- the SOC register pages it reads directly (the USB
+keyboard report, the game-mode view and frame counter, the colour
+control) mapped at their real addresses, a 640x480 framebuffer with the
+blitter's fills, patterns, shades, copies and raster ops, the real
+`zcolor.c` and `zgame.c`, files from the tree. A script and a small
+autopilot (`render.c`: jump at edges and walls, over cats where it can
+land, back off a cat in front of a pit) take it through the title and
+its skill line, level 1 to WELL DONE!, level 2, the hearts lost one by
+one to GAME OVER, and back to a title that offers CONTINUE: LEVEL 2;
+every screen is written to `out/` as the display would show it, in
+colour and in monochrome. A second run, `render_mausrun out garden`,
+starts from a `progress.txt` that has level 4 unlocked, swims the pond
+(and shows it in monochrome), takes a feather, a magnet and a bubble,
+passes the sleeping cat and the owl, comes down on a cat (dizzy stars)
+and finishes the level: its stars counted up, and on to level 5. A
+third, `render_mausrun out themes`, plays a few seconds of each of the
+eight levels and photographs them, drops the mouse onto each level's
+first plank and checks that the plank carries it (the run fails if
+not), and ends on a title showing the stars. Without ASan: its shadow
+memory covers the register addresses. `tests/test_sound.c` reads every
+cell of every tune with zsfx's own parser.
 
-Cats have no avoidance logic in the autoplay, so a full run with cats
-enabled dies to one — correctly. `NOCATS=1` disables them for the
-traversal check.
+## Sound
 
-## Music and sound
+On the arcade games' sound engine, zsfx ([sfx.md](sfx.md)), since round
+3: `sound.c` has mausrun's effects as zsfx programs (jump, land, coin,
+ouch, fall, spring, stomp, power-up, pop, splash, mouse hole, cheese
+wheel, heart, ? box, crumble, croak, hoot, wake, the menu's and the
+results' ticks), panned to where they happen, and a tune for each
+theme: **Meadow**, the tune the game always had, as a zsfx score (its
+drums now zsfx's kick, snare and hat), and since round 4 **Garden**,
+**Kitchen** and **Roofs** -- all four laid out tune, harmony, bass,
+drums, sixteen rows a pattern and four patterns. They play calm first:
+tune and bass only, slow, on the title and level 1 on easy, a step
+fuller every two levels and with the fast shoes ([Skill](#skill)).
 
-`music.c` / `music.h`. Four channels of music plus four of effects, on
-the eight the hardware mixer has. They never overlap, so a jump landing
-during a bass note cannot cut the bass off — which is what sharing a
-channel pool would do at exactly the busiest moment.
+`-` and `=` are zsfx's master volume, music and effects together; M
+turns the music off and on in time; pause holds every channel. On a
+board without the mixer every call does nothing and the game plays
+silently.
 
-### The score is ASCII, like the level
-
-```
-/*   lead harm bass perc */
-    "A-4 A-3 A-2 C-2",
-    "--- --- --- ---",
-    "C-5 C-4 --- C-6",
-```
-
-Top to bottom is time, left to right is the four channels. `---` holds,
-`===` is note off. Percussion uses pitch to pick a drum, because its
-instrument is noise and pitch is the only knob that matters: `C-2` kick,
-`C-4` snare, `C-6` hat.
-
-Sixteen rows per pattern, four patterns, 8 rows/second — so the loop is
-eight seconds. Short on purpose: the failure mode of game music is not
-being boring, it is being **annoying**, and a short loop that stays out
-of the way beats a long one that demands attention.
-
-### How a note becomes a sound
-
-The mixer plays 8-bit samples and loops them. It has no oscillators and
-no notion of pitch. So an instrument here is **one cycle of a waveform,
-64 bytes**, set to loop forever — and playing it faster makes it a
-higher note:
-
-```
-note frequency = playback rate / 64
-```
-
-Four instruments cost 256 bytes total and no runtime synthesis. A single
-cycle also loops seamlessly by construction (its end joins its start),
-so there is no click and no loop-point tuning — that is the property
-that makes 64 bytes enough.
-
-Instruments: 50% square (lead), 25% pulse (harmony), triangle (bass),
-LFSR noise (percussion). The two pulse widths share a fundamental but
-differ in harmonics, which is what makes them audibly different
-instruments rather than one being a quieter copy of the other.
-
-Measured pitch accuracy is within 0.02 Hz across six octaves.
-
-### Music vs effects
-
-The comparison that matters is an effect's gain against the **sum** of
-the music gains, because music is four channels sounding together and an
-effect is one.
-
-The first version had music summing to 350 against an effect gain of
-140 — so the music was two and a half times louder than any effect, and
-every jump and coin vanished underneath it. Each instrument looked
-reasonable next to 140 on its own, which is exactly how the mistake
-survived being looked at.
-
-| | music sum | effect | ratio |
-|---|---|---|---|
-| original | 350 | 140 | 0.4x (−8 dB) — effects buried |
-| now | 85 | 255 | 3.0x (+10 dB) |
-
-In practice better than the ratio suggests: music channels spend most of
-their time part-way through an envelope decay, while an effect is always
-heard from its own peak.
-
-**The fix was to bring the music down, not push the effects up**, and
-that was forced. One 8-bit channel simply cannot get loud on this mixer
-— full scale takes roughly four channels at full gain, so a lone effect
-tops out near 20% of full scale no matter what. There was no headroom to
-push into.
-
-`MUS_MUSIC_VOL_DEFAULT` and `MUS_SFX_VOL_DEFAULT` scale the two
-independently at runtime; `[` and `]` move the music only. That is the
-knob for this problem — the master moves both together and so cannot fix
-a balance.
-
-### Volume
-
-`music_set_volume()` is **the** volume knob. It writes the mixer's own
-output scale (`MIXVOL`), so it covers music and effects together:
-
-```
-out = clamp16((sum_of_channels * mixvol) >> 10)
-```
-
-The hardware resets it to 128 — `audio_mixer.v` calls that safe for all
-eight channels, with 255 being what a 4-channel MOD wants. `music.h`'s
-`MUS_VOL_DEFAULT` is 64, a straight 50% cut against the hardware
-default. In game, `-` and `=` step it. `MUS_VOL_DEFAULT` is 255, and the level is
-set by keeping the music gains low rather than by holding the master
-down — see "Music vs effects" above for why there is no headroom to do
-it the other way.
-
-**Editing the per-channel gains in `music.c` instead is a wrong turn**,
-and a convincing one. Those set the *balance* between the four
-instruments; halving them leaves every jump, coin and landing exactly as
-loud, because effects never pass through them — and those fire
-constantly during play. The game barely gets quieter and the edit looks
-like it did nothing.
-
-The write is a **read-modify-write**, and that is not optional: bits
-[11:8] of the same register hold the S/PDIF `fs_code`. A bare write
-zeroes the sample-rate code and breaks digital output on every board
-that has it, while sounding perfectly fine on the analogue board it was
-tested on — the worst way for a bug to behave.
-
-If turning the volume down genuinely does not get quieter, suspect the
-**gateware**. `docs/audio.md` records an output-scaler bug whose exact
-signature was *"turned the volume down and it's just as loud"*: a signed
-part-select rectified the negative half of the waveform, so positive
-half-cycles scaled with `MIXVOL` normally while negative ones railed
-regardless. It is fixed in the current RTL, so a `make flash` is the
-check.
-
-### Envelopes
-
-A looped waveform at constant gain is an organ, not a game. Each channel
-carries a volume that decays every frame, written back with `EN` but
-**not** `TRIG` — `docs/audio.md` is explicit that this changes gain
-without restarting the sample, which is exactly what a volume-only
-tracker row needs and the reason an envelope costs one register write.
-
-Percussion is the same mechanism with a fast decay on the noise
-instrument. No separate code path.
-
-### Timing
-
-Advanced from the game loop, once per frame, no interrupt and no thread.
-`z_game_flip()` already returns the frames that actually elapsed, so a
-frame the game overran advances the music by the right amount instead of
-dragging the tempo down with the frame rate.
-
-Rows per second derives from `z_video_frame_hz()`, so tempo is the same
-on a 50Hz PAL composite board. Deriving it from a fixed frame count
-would make every song 20% slow there — the classic version of this bug.
-
-### Replacing the instruments with real samples
-
-`ins_data[]` / `ins_len[]` are just pointers and lengths. Point them at
-8-bit signed sample data of any length and the pitch maths still holds,
-as long as the buffer is one cycle (or a whole number of cycles) of the
-tone — that is what makes `rate = freq * len` correct. A multi-cycle
-sample works too; divide its length by the number of cycles it contains.
-
-Entirely optional throughout: `z_audio_mixer_present()` is false on
-boards without `AUDIO_MIXER`, every call becomes a no-op, and the game
-plays silently rather than not at all.
+mausrun's own `music.c` -- four channels of music and four of effects,
+64-byte single-cycle instruments, per-frame envelopes, the score as
+ASCII -- is gone: zsfx was made general from it (its lessons are in
+[sfx.md](sfx.md): the music kept quiet against one-channel effects, the
+read-modify-write of the mixer's scale, the tempo from the frame rate).
 
 ## Trees stood in the floor
 
@@ -837,3 +1037,28 @@ every tile is a copy, as it always was.
 Now `GD_GROUND_ROW * GD_TILE_H - 2 * GD_SPR_H`, written in terms of the
 constants rather than the literal 176, so it follows if the ground row
 ever moves.
+
+## History
+
+`gamedemo` until 0.0.7, when it became `mausrun` (the games proposal,
+round 2): the name everywhere (the app, the dock and its spoken name,
+the card, the docs), the debug line and keys out, the screens, the
+status line, levels from files, progress, skill, and `levelcheck`. A
+card updated with `update` loses `/apps/gamedemo` by itself: it is gone
+from the release.
+
+Round 3: the springs, shelves, biscuits, thorns, water, ? boxes, mouse
+holes and the cheese wheel; sleeping cats, frogs and owls, and bouncing
+on all of them; hearts lost without starting over; the power-ups; the
+particles and the weather; level 3; and the sound moved onto zsfx.
+
+Round 4: the themes (garden, kitchen and roofs beside the meadow: their
+colours, far layers, tiles and tunes), moving planks, the three stars
+and the hidden star, five new levels (eight in all), and a new dock
+icon -- the mouse and its cheese.
+
+Round 5 (fixes after a first play): every level compiled in and the
+level files on the card at last ([Levels](#levels)); the day 2.5
+minutes long; colour drawn in a third of the blits ([Colour, and what a
+frame costs](#colour-and-what-a-frame-costs)); and wm no longer paints
+its dock over the game three seconds in (docs/window_manager.md).

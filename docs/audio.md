@@ -300,7 +300,7 @@ Z_AUDIO_CH_STEP(c) = z_audio_step(sample_hz, out);
 - `Z_AUDIO_HZ_48K`, `_44K`, `_32K`, `_22K`, `_11K`.
 
 Apps moved to this in 0.0.7: `play`, `midi`, `track`, `audiotest`,
-`gamedemo`, `chip8`, `kidgames`, `tts`. One visible effect: `play` no
+`mausrun`, `chip8`, `kidgames`, `tts`. One visible effect: `play` no
 longer resamples a 44.1 kHz file on a 44.1 kHz board — the step is
 exactly 1.
 
@@ -911,7 +911,7 @@ not a cost one.
 
 **Backwards compatibility.** `CH_CTRL[18]` is clear at reset and
 `z_audio_ch_ctrl()` has never set it, so every channel comes up 8-bit.
-The three existing users -- `sw/apps/track`, `sw/apps/gamedemo`,
+The three existing users -- `sw/apps/track`, `sw/apps/mausrun`,
 `sw/apps/audiotest` -- all build CH_CTRL through that one helper and
 need **no changes**; all three were rebuilt to confirm it. 8-bit output
 is bit-identical, not merely equivalent, which is what

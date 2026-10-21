@@ -130,7 +130,7 @@ It used to be each app's own `-D`, repeated with a paragraph of
 explanation in 36 Makefiles and missing from 19 others. Making it the
 default left 52 of 56 binaries byte-identical: every app that already
 had it, and every app that draws no text. Four changed, and got faster
-text: `chip8`, `gamedemo`, `mmod` and `repl`.
+text: `chip8`, `mausrun`, `mmod` and `repl`.
 
 `make GFX_HW_BLIT=0` (after `make clean`: `-MD` tracks headers, not
 flags) builds the software path, to tell a blitter problem from a
@@ -335,7 +335,7 @@ be byte-identical -- and turning it on for them was its own change:
 |---|---:|---:|---:|
 | `audiotest` | 96,400 | 71,524 | 24,876 (25%) |
 | `chip8` | 186,572 | 149,960 | 36,612 (19%) |
-| `gamedemo` | 154,868 | 104,336 | 50,532 (32%) |
+| `mausrun` | 154,868 | 104,336 | 50,532 (32%) |
 | `gpudemo` | 112,796 | 75,620 | 37,176 (32%) |
 | `hello_win` | 139,876 | 92,052 | 47,824 (34%) |
 | `mmod` | 182,488 | 127,236 | 55,252 (30%) |

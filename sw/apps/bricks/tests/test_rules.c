@@ -395,13 +395,14 @@ static void test_lives_and_over(void) {
 
 /* -- every level, the autopilot playing, with the invariants -- */
 
-static void soak(int level, uint32_t s, int frames, int *clears, int *losses) {
+static void soak(int level, uint32_t s, int frames, int *clears, int *losses,
+	int skill) {
 	br_game_t g;
 	int f, i;
 	uint32_t last_score = 0;
 	int failed0 = failed;
 	seed = s;
-	br_new(&g, level, rnd);
+	br_new_skill(&g, level, skill, rnd);
 	for (f = 0; f < frames; f++) {
 		bool fire;
 		int t = br_ai_target(&g, &fire), c = g.px + g.pw / 2, d = t - c;
@@ -425,7 +426,7 @@ static void soak(int level, uint32_t s, int frames, int *clears, int *losses) {
 			if (b->stuck) CHECK(x >= g.px && x + BR_BALL <= g.px + g.pw);
 			if (failed > failed0 + 20) { printf("level %d frame %d\n", level, f); exit(1); }
 		}
-		CHECK(g.speed >= 400 && g.speed <= 1088);
+		CHECK(g.speed >= (skill == BR_SKILL_EASY ? 240 : 400) && g.speed <= br_speed_max(&g));
 		CHECK(g.px >= BR_FX0 && g.px + g.pw <= BR_FX1);
 		CHECK(g.score >= last_score);
 		last_score = g.score;
@@ -438,12 +439,71 @@ static void soak(int level, uint32_t s, int frames, int *clears, int *losses) {
 			br_next_level(&g);
 			CHECK(g.bricks_left == count_breakable(&g));
 		} else if (g.over) {
-			br_new(&g, level, rnd);
+			br_new_skill(&g, level, skill, rnd);
 			last_score = 0;
 		} else if (br_balls(&g) == 0) {
 			br_serve(&g);
 		}
 	}
+}
+
+/* Easy: a slow ball, a long paddle, five of them, and a floor. */
+static void test_easy(void) {
+	br_game_t g, n;
+	int f, bounced = 0;
+	br_new_skill(&g, 1, BR_SKILL_EASY, never);
+	br_new(&n, 1, never);
+	CHECK(n.skill == BR_SKILL_NORMAL && n.lives == BR_LIVES && n.pw == BR_PADDLE_W && !n.floor_up);
+	CHECK(n.speed_base == 480);
+	CHECK(g.lives == BR_LIVES_EASY);
+	CHECK(g.pw == BR_PADDLE_WIDE && g.pw_wide == BR_PADDLE_EASY_WIDE);
+	CHECK(g.speed_base == 288);
+	CHECK(g.speed_base * 10 <= n.speed_base * 6);
+	CHECK(br_speed_max(&g) == 512);
+	CHECK(g.floor_up);
+	/* rounds 1-3: every other row */
+	CHECK(count_breakable(&g) * 2 <= count_breakable(&n) + 19);
+	CHECK(count_breakable(&g) == g.bricks_left);
+	{
+		br_game_t g4;
+		br_new_skill(&g4, 4, BR_SKILL_EASY, never);
+		br_new(&n, 4, never);
+		CHECK(count_breakable(&g4) == count_breakable(&n));
+	}
+
+	/* the floor: a ball missed by the paddle comes back once */
+	br_fire(&g);
+	br_paddle_centre(&g, 40);
+	g.ball[0].x = 250 << 8;
+	g.ball[0].y = 200 << 8;
+	g.ball[0].sy = 1;
+	for (f = 0; f < 600 && !count_ev(&g, BR_EV_LOST); f++) {
+		br_clear_events(&g);
+		br_step(&g);
+		bounced += count_ev(&g, BR_EV_FLOOR);
+		if (bounced && g.ball[0].sy < 0 && (g.ball[0].y >> 8) < 120) {
+			/* on its way up again: send it straight back down,
+			 * away from the paddle */
+			g.ball[0].sy = 1;
+			g.ball[0].x = 250 << 8;
+		}
+	}
+	CHECK(bounced == 1);
+	CHECK(!g.floor_up);
+	CHECK(count_ev(&g, BR_EV_LOST) == 1);
+	CHECK(g.lives == BR_LIVES_EASY - 1);
+	br_clear_events(&g);
+	br_serve(&g);
+	CHECK(g.floor_up);                 /* back with the next ball */
+	CHECK(g.pw == BR_PADDLE_WIDE);
+
+	/* E on easy: 64 */
+	give(&g, BR_CAP_WIDE);
+	CHECK(g.pw == BR_PADDLE_EASY_WIDE);
+
+	/* hard: faster than normal */
+	br_new_skill(&g, 1, BR_SKILL_HARD, never);
+	CHECK(g.speed_base > 480 && g.lives == BR_LIVES && !g.floor_up);
 }
 
 int main(void) {
@@ -456,12 +516,25 @@ int main(void) {
 	test_serve();
 	test_capsules();
 	test_lives_and_over();
+	test_easy();
 
 	for (l = 1; l <= br_levels(); l++)
 		for (k = 0; k < 4; k++)
-			soak(l, 1000u + (uint32_t)(l * 77 + k * 1013), 30000, &clears, &losses);
+			soak(l, 1000u + (uint32_t)(l * 77 + k * 1013), 30000, &clears, &losses,
+				BR_SKILL_NORMAL);
 	printf("soak: %d levels cleared, %d paddles lost\n", clears, losses);
 	CHECK(clears > br_levels());
+
+	{
+		int ec = 0, el = 0, hc = 0, hl = 0;
+		for (l = 1; l <= br_levels(); l++) {
+			soak(l, 5000u + (uint32_t)(l * 31), 30000, &ec, &el, BR_SKILL_EASY);
+			soak(l, 7000u + (uint32_t)(l * 31), 30000, &hc, &hl, BR_SKILL_HARD);
+		}
+		printf("soak, easy: %d levels cleared, %d paddles lost; hard: %d, %d\n",
+			ec, el, hc, hl);
+		CHECK(el <= hl);
+	}
 
 	printf("bricks rules: %d checks, %d failed\n", checks, failed);
 	return failed != 0;

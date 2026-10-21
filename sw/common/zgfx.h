@@ -354,7 +354,7 @@ void z_fb_hw_fill_rect_rop(int x, int y, int w, int h, int color, int rop);
 //
 // Both planes share src_stride and the src_x/src_y rectangle, so a
 // sprite sheet can keep them as two bitmaps of identical geometry --
-// which is what sw/apps/gamedemo's gen_sprites.py emits.
+// which is what sw/apps/mausrun's gen_sprites.py emits.
 //
 // TWO passes and not one: a single-pass masked blit would need the
 // hardware to fetch two source streams at once, which is a second

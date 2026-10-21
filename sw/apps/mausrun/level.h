@@ -1,0 +1,180 @@
+#ifndef MAUSRUN_LEVEL_H
+#define MAUSRUN_LEVEL_H
+
+/*
+ * mausrun -- the levels. See docs/mausrun.md, "Levels".
+ *
+ * A level is a tile map 15 rows tall (240px / 16, exactly one viewport)
+ * and up to MR_LEVEL_COLS_MAX columns long, written as ASCII so the
+ * level IS its own picture. Levels are text files on the card,
+ * /data/mausrun/levels/01.txt, 02.txt, ... (sw/data/mausrun/levels in
+ * the tree); all of the tree's levels are also compiled in
+ * (levels_builtin.c), so the game has them on any card.
+ *
+ * -- the file --
+ *
+ *     # comments and blank lines are ignored
+ *     name The Meadow          shown and spoken when the level starts
+ *     time cycle               day, night, or cycle (the 2.5-minute day)
+ *     music 0                  which tune
+ *     weather leaves           none, leaves, snow, rain or fireflies
+ *     theme garden             meadow, garden, kitchen or roofs
+ *     map
+ *     ....................     15 rows of the map
+ *     ...
+ *
+ * Rows may differ in length; short ones are sky to the end. Within the
+ * map nothing is a comment: every line is a row.
+ *
+ * -- the map --
+ *
+ *   .   empty sky
+ *   =   grass-topped ground (the normal floor)
+ *   #   solid ground (fill under the grass, and platform undersides)
+ *   B   a box -- solid, climbable by jumping on
+ *   c   cheese -- collectible, not solid
+ *   M   the mouse's start position (becomes empty sky)
+ *
+ * Round 3 (docs/mausrun.md, "What is in a level"):
+ *
+ *   S   a spring: land on it and fly        -   a shelf, solid from above
+ *   K   a biscuit: crumbles when stood on   ^   thorns: they hurt
+ *   ~   water: swim (jump to stroke up)     ?   a box: bump it from below
+ *   H   a mouse hole: the checkpoint        G   the cheese wheel: the end
+ *   w b m l k h   a feather, a bubble, a magnet, a bell, sneakers, a heart
+ *
+ * Round 4 (docs/mausrun.md, "Themes"):
+ *
+ *   *   the hidden star (a level's third star)
+ *   P   a moving platform's track: a platform two tiles wide goes to
+ *       and fro along each run of three or more
+ *
+ * and who lives there (each starts in that cell, which becomes sky):
+ *
+ *   C   a cat        Z   a sleeping cat     F   a frog     O   an owl
+ *
+ * A PIT is a run of columns with no floor tiles: falling off the bottom
+ * of the map is the failure condition, so a hole in the floor is a pit
+ * by construction. The level is won by running into its last two
+ * columns.
+ *
+ * Parsing is a pure function of the text (mr_level_parse()), so the
+ * host tools -- tests/levelcheck.c, tests/levelstrip.c -- read exactly
+ * what the game reads.
+ */
+
+#include <stdint.h>
+#include <stdbool.h>
+#include "sprites.h"
+
+#define MR_LEVEL_ROWS 15
+#define MR_LEVEL_COLS_MAX 512
+#define MR_LEVEL_COLS_MIN 24       /* a viewport and a half */
+
+#define MR_MAX_FOES 24
+
+enum { MR_FOE_CAT = 0, MR_FOE_SLEEPER, MR_FOE_FROG, MR_FOE_OWL };
+
+/* What drifts across the view (the level's `weather` line). */
+enum { MR_WEATHER_NONE = 0, MR_WEATHER_LEAVES, MR_WEATHER_SNOW,
+	MR_WEATHER_RAIN, MR_WEATHER_FIREFLIES };
+
+/* Row 11 is the usual surface; 12..14 the fill under it, drawn as
+ * run-length fills rather than tiles (docs/mausrun.md). */
+#define MR_GROUND_ROW 11
+#define MR_SUBSURFACE_ROW 12
+
+/* The look and the tune (the level's `theme` line). */
+enum { MR_THEME_MEADOW = 0, MR_THEME_GARDEN, MR_THEME_KITCHEN, MR_THEME_ROOFS,
+	MR_THEMES };
+
+/* How the light goes (docs/mausrun.md, "Palette effects"). */
+enum { MR_TIME_CYCLE = 0, MR_TIME_DAY, MR_TIME_NIGHT };
+
+typedef struct {
+	int32_t x, y;
+	uint8_t kind;           /* MR_FOE_* */
+} mr_foe_spawn_t;
+
+typedef struct {
+	char name[32];
+	uint8_t time;           /* MR_TIME_* */
+	uint8_t music;          /* the tune: the theme's unless a music line says */
+	uint8_t weather;        /* MR_WEATHER_* */
+	uint8_t theme;          /* MR_THEME_* */
+	bool goal;              /* has a G; else the last two columns win */
+	bool star;              /* has a hidden star */
+} mr_level_info_t;
+
+/* The level in play: tile ids, one byte per cell. */
+extern uint8_t mr_level[MR_LEVEL_ROWS][MR_LEVEL_COLS_MAX];
+extern int mr_level_cols;
+extern int mr_first_solid_row;     /* rows above it are all sky */
+extern mr_level_info_t mr_level_info;
+
+extern int32_t mr_start_x, mr_start_y;
+extern mr_foe_spawn_t mr_foe_spawns[MR_MAX_FOES];
+extern int mr_foe_count;
+extern int mr_cheese_total;
+
+/* The level's size: runtime values now, spelled as the constants they
+ * used to be. */
+#define MR_LEVEL_COLS mr_level_cols
+#define MR_WORLD_W ((int32_t)mr_level_cols * MR_TILE_W)
+#define MR_WORLD_H (MR_LEVEL_ROWS * MR_TILE_H)   /* 240 px */
+#define MR_FIRST_SOLID_ROW mr_first_solid_row
+
+/* Parse a level file into the level in play. 0 on success; otherwise
+ * -1, with `err` saying what was wrong and on which line (the level in
+ * play is then whatever was half read: load another). */
+int mr_level_parse(const char *text, int len, char *err, int errlen);
+
+/* The levels compiled in (levels_builtin.c, generated by
+ * gen_levels.py from the level files): level n's text, or NULL past the
+ * last; parse it into the level in play (false if there is none); and
+ * level 1, which there always is. */
+extern const char *const mr_builtin_levels[];
+extern const int mr_builtin_count;
+const char *mr_level_builtin_text(int n);
+bool mr_level_builtin_n(int n);
+void mr_level_builtin(void);
+
+/* Solid for collision purposes. Cheese is NOT solid -- it is walked
+ * through and collected. */
+static inline int mr_tile_solid(uint8_t t) {
+	switch (t) {
+	case MR_TILE_GROUND: case MR_TILE_GRASS: case MR_TILE_BOX:
+	case MR_TILE_SPRING: case MR_TILE_CRUMBLE: case MR_TILE_CRACKED:
+	case MR_TILE_QBOX: case MR_TILE_USEDBOX:
+		return 1;
+	default:
+		return 0;
+	}
+}
+
+/* Drawn as earth under the surface (rows 12..14 are fills, not tiles:
+ * mausrun.c, draw_subsurface()). */
+static inline int mr_tile_earth(uint8_t t) {
+	return t == MR_TILE_GROUND || t == MR_TILE_GRASS;
+}
+
+/* Picked up by walking into it: cheese and the power-ups. */
+static inline int mr_tile_item(uint8_t t) {
+	return t == MR_TILE_CHEESE || (t >= MR_TILE_FEATHER && t <= MR_TILE_HEART) ||
+		t == MR_TILE_STAR;
+}
+
+/* Tile at a WORLD pixel position. Above, below, left and right of the
+ * map all read as empty: a high jump does not clip on nothing, a pit
+ * is lethal rather than a floor, and the level ends in open air (the
+ * camera clamp is what stops the player leaving). */
+static inline uint8_t mr_tile_at(int32_t wx, int32_t wy) {
+	int32_t c, r;
+	if (wx < 0 || wy < 0) return MR_TILE_EMPTY;
+	c = wx / MR_TILE_W;
+	r = wy / MR_TILE_H;
+	if (c >= mr_level_cols || r >= MR_LEVEL_ROWS) return MR_TILE_EMPTY;
+	return mr_level[r][c];
+}
+
+#endif

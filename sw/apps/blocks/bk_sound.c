@@ -91,12 +91,22 @@ static const zsfx_seg_t s_select[] = {
 };
 static const zsfx_seg_t s_letter[] = { { ZSFX_PULSE25, 2, 1568, 1568, 110, 0 } };
 
+/* a rising whoosh, then a little chime: saved */
+static const zsfx_seg_t s_rescue[] = {
+	{ ZSFX_NOISE, 18, 300, 3200, 40, 160 },
+	{ ZSFX_NOISE, 10, 3200, 4000, 160, 0 },
+	{ ZSFX_SINE, 6, 1047, 1047, 190, 170 },
+	{ ZSFX_SINE, 6, 1319, 1319, 190, 170 },
+	{ ZSFX_SINE, 16, 1568, 1568, 180, 0 },
+};
+
 static const zsfx_fx_t fx[BK_SND_N] = {
 	[BK_SND_MOVE]    = { 0, 1, s_move },
 	[BK_SND_ROTATE]  = { 0, 1, s_rotate },
 	[BK_SND_KICK]    = { 0, 2, s_kick },
 	[BK_SND_LOCK]    = { 1, 1, s_lock },
 	[BK_SND_LAND]    = { 0, 1, s_land },
+	[BK_SND_RESCUE]  = { 5, 5, s_rescue },
 	[BK_SND_HARD]    = { 2, 2, s_hard },
 	[BK_SND_HOLD]    = { 1, 2, s_hold },
 	[BK_SND_CLEAR1]  = { 3, 2, s_clear1 },

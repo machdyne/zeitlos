@@ -535,7 +535,7 @@ occluded window repaints instead of scrolling. See "Copies, the
 scissor, and fully visible windows" at the end of this file for why
 that test is about the destination rather than about whether a region
 exists at all. `hw_blit_mem_core()` -- the canvas path, used by draw, info and
-gamedemo -- intersects the destination rectangle with each visible
+mausrun -- intersects the destination rectangle with each visible
 rectangle and moves the source origin by the same offsets, one pass per
 rectangle. It did NOT at first: it passed the same rectangle every
 pass and let the scissor cut, which was invisible while a raise
@@ -987,7 +987,7 @@ the affected pixels **with the CPU** — `z_fb_get_pixel()`, a software
 sprite path, a direct VRAM poke — must call `z_fb_hw_sync()` first.
 Another *blit* is fine; only CPU access needs the barrier.
 
-`gamedemo` needs this in two places, and both are the kind of thing that
+`mausrun` needs this in two places, and both are the kind of thing that
 would otherwise fail once a year on a loaded system rather than in
 testing:
 
@@ -1002,7 +1002,7 @@ blit's duration.
 
 So the useful shape is: start the blit for item N, prepare item N+1,
 start its blit (which waits for N as a side effect), and so on. In
-`gamedemo`'s tile loop the per-tile work — indexing the map, folding the
+`mausrun`'s tile loop the per-tile work — indexing the map, folding the
 world x into the page, computing the destination — is roughly 20 cycles
 against a ~120 cycle blit, so it overlaps almost entirely.
 
@@ -1177,7 +1177,7 @@ Greys, on a display that has none. Seventeen stable levels from one
 - disabled controls, scrollbar troughs, selection washes
 - chart and histogram shading
 - textured backgrounds drawn as one fill rather than a blit per tile —
-  the case that prompted this, after `gamedemo`'s ground went from 63
+  the case that prompted this, after `mausrun`'s ground went from 63
   tile blits to one fill and lost its texture
 
 ### Cost

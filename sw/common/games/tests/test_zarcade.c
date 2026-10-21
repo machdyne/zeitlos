@@ -200,6 +200,56 @@ static void test_scores(void) {
 	CHECK(ar_scores_parse("garbage\n\n0\n0 x\n", 0, &t) == 0, "junk is ignored");
 }
 
+void ar__skill_load(void);
+
+static void test_skill(void) {
+	char out[256];
+	int n;
+	CHECK(ar_skill_word("easy") == AR_SKILL_EASY, "easy");
+	CHECK(ar_skill_word(" Normal") == AR_SKILL_NORMAL, "Normal, leading space");
+	CHECK(ar_skill_word("HARD\n") == AR_SKILL_HARD, "HARD, then a newline");
+	CHECK(ar_skill_word("hardly") == -1, "not a prefix match");
+	CHECK(ar_skill_parse("") == -1, "no settings, no skill");
+	CHECK(ar_skill_parse("x 1\nskill hard\ny 2\n") == AR_SKILL_HARD, "found among others");
+	CHECK(ar_skill_parse("skill easy\nskill normal") == AR_SKILL_NORMAL, "the last one wins");
+	CHECK(ar_skill_parse("skill wobbly\n") == -1, "an unknown word is none");
+	n = ar_skill_format(out, sizeof out, "x 1\nskill hard\ny 2\n", AR_SKILL_EASY);
+	CHECK(n > 0 && strcmp(out, "x 1\ny 2\nskill easy\n") == 0, "others kept, skill replaced (%s)", out);
+	n = ar_skill_format(out, sizeof out, NULL, AR_SKILL_NORMAL);
+	CHECK(n > 0 && strcmp(out, "skill normal\n") == 0, "from nothing");
+	CHECK(ar_skill_format(out, 8, "", AR_SKILL_NORMAL) < 0, "too small: refused");
+
+	/* load: settings first, then the configuration, then easy */
+	ar_host_set_settings("");
+	ar_host_cfg_skill = -1;
+	ar__skill_load();
+	CHECK(ar_skill() == AR_SKILL_EASY, "the default is easy");
+	ar_host_cfg_skill = AR_SKILL_HARD;
+	ar__skill_load();
+	CHECK(ar_skill() == AR_SKILL_HARD, "apps.arcade.skill when nothing is saved");
+	ar_host_set_settings("skill normal\n");
+	ar__skill_load();
+	CHECK(ar_skill() == AR_SKILL_NORMAL, "a saved choice beats the configuration");
+	ar_skill_set(AR_SKILL_EASY);
+	CHECK(strcmp(ar_host_settings(), "skill easy\n") == 0, "set writes it back");
+	CHECK(ar_skill_table(3) == 19, "easy tables are mode + 16");
+	ar_skill_set(AR_SKILL_NORMAL);
+	CHECK(ar_skill_table(3) == 3, "normal keeps the old tables");
+	ar_skill_set(AR_SKILL_HARD);
+	CHECK(ar_skill_table(3) == 35, "hard + 32");
+	ar_skill_set(7);
+	CHECK(ar_skill() == AR_SKILL_HARD, "out of range: ignored");
+	CHECK(strcmp(ar_skill_name(AR_SKILL_EASY), "EASY") == 0, "names");
+	n = ar_host_says;
+	ar_say("Easy");
+	CHECK(ar_host_says == n + 1 && strcmp(ar_host_said, "Easy") == 0, "ar_say speaks");
+	ar_say("");
+	CHECK(ar_host_says == n + 1, "nothing to say: silent");
+	ar_host_set_settings("");
+	ar_host_cfg_skill = -1;
+	ar__skill_load();
+}
+
 static void test_helpers(void) {
 	ar_ink_t k;
 	char b[16];
@@ -359,6 +409,32 @@ static void test_sfx(void) {
 	zsfx_play(&fx, 0);
 	CHECK(zsfxh_notes == notes, "suspended: no effects");
 	zsfx_suspend(false);
+
+	/* layers: row 0 has three notes and a kick */
+	zsfx_music_enable(true);
+	zsfx_music_layers(0x5, 0x0);
+	notes = zsfxh_notes;
+	zsfx_music_play(&song);
+	zsfx_tick(1);
+	CHECK(zsfxh_notes == notes + 2, "layers 0x5, no drums: two notes (%u)", zsfxh_notes - notes);
+	zsfx_music_layers(0x0f, 0x0f);
+	notes = zsfxh_notes;
+	zsfx_music_play(&song);
+	zsfx_tick(1);
+	CHECK(zsfxh_notes >= notes + 4, "everything again (%u)", zsfxh_notes - notes);
+	zsfx_music_intensity(0);
+	notes = zsfxh_notes;
+	zsfx_music_play(&song);
+	zsfx_tick(1);
+	CHECK(zsfxh_notes == notes + 2, "intensity 0: tune and bass (%u)", zsfxh_notes - notes);
+	zsfx_music_intensity(4);
+	notes = zsfxh_notes;
+	zsfx_music_play(&song);
+	zsfx_tick(1);
+	CHECK(zsfxh_notes >= notes + 4, "intensity 4 has the kick (%u)", zsfxh_notes - notes);
+	zsfx_music_intensity(ZSFX_INTENSITY_FULL);
+	zsfx_music_tempo(100);
+	zsfx_suspend(false);
 	zsfx_shutdown();
 }
 
@@ -375,6 +451,7 @@ int main(void) {
 
 	test_sprites();
 	test_scores();
+	test_skill();
 	test_helpers();
 	test_copy();
 	test_input();

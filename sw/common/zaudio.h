@@ -819,7 +819,7 @@ static inline bool z_audio_mixer_fmt16(void) {
  * CH_CTRL with the sample format chosen explicitly.
  *
  * z_audio_ch_ctrl() is unchanged and still builds an 8-bit channel --
- * every existing caller (sw/apps/track, sw/apps/gamedemo,
+ * every existing caller (sw/apps/track, sw/apps/mausrun,
  * sw/apps/audiotest) keeps working with no edit. This is the one to
  * call when you want 16 bits, and only after z_audio_mixer_fmt16()
  * says the hardware has it.

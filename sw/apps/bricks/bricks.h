@@ -44,7 +44,8 @@ typedef enum {
 	ST_NAME
 } br_state_t;
 
-enum { MENU_PLAY = 0, MENU_SCORES, MENU_ITEMS };
+/* The menu; MENU_SKILL is EASY / NORMAL / HARD. */
+enum { MENU_SKILL = 0, MENU_PLAY, MENU_SCORES, MENU_ITEMS };
 
 #define READY_ROW_FRAMES 3        /* the cascade: a row every 3 frames */
 #define READY_FRAMES     110

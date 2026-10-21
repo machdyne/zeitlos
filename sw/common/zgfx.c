@@ -1709,7 +1709,7 @@ static bool hw_blit_mem_one(const void *src, int src_stride,
 // A memory-source blit, clipped to the caller's visible region.
 //
 // This is the primitive every "canvas" draws through -- draw's
-// document (canvas_blit), info's wordmark, gamedemo's tiles. It used
+// document (canvas_blit), info's wordmark, mausrun's tiles. It used
 // to set GPU_BLIT_CTRL_CLIP but never PROGRAM the scissor from the
 // visible region: it inherited whatever rectangle the last blit left,
 // which after a fill is the whole screen. So a canvas blitted straight

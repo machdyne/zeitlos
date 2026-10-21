@@ -60,7 +60,7 @@ static const ar_host_step_t script[] = {
 	 * since when the stack tops out is not known in advance */
 	T(4000, 'K'),
 
-	{ 12000, ARH_END, 0, 0, NULL, 0, 0, 0, 0 },
+	{ 20000, ARH_END, 0, 0, NULL, 0, 0, 0, 0 },
 };
 
 static void tap(uint32_t k) {
@@ -90,8 +90,36 @@ void ar_host_hook(uint32_t frame) {
 		games++;
 	}
 	if (bk.st == ST_TITLE && games == 1 && bk.st_frames == 30) {
-		tap('J'); tap(ARH_K_DOWN); tap('\r');
+		tap('J'); tap(ARH_K_DOWN); tap(ARH_K_DOWN); tap('\r');
 		games++;
+	}
+	/* then easy, little pieces: the skill line, the mode, and a stack
+	 * dropped straight down until it is rescued */
+	if (bk.st == ST_TITLE && games == 3) {
+		switch (bk.st_frames) {
+		case 30: tap(ARH_K_UP); tap(ARH_K_UP); tap(ARH_K_UP); break;
+		case 34: ar_host_snapshot("40_title_skill"); tap(ARH_K_LEFT); break;
+		case 38: ar_host_snapshot("41_title_easy"); tap(ARH_K_DOWN); tap(ARH_K_DOWN); break;
+		case 42: ar_host_snapshot("42_title_little"); tap('\r'); games++; break;
+		default: break;
+		}
+	}
+	{
+		static uint32_t little_at;
+		static bool saved, playing;
+		if (games == 4 && bk.st == ST_PLAY && bk.mode == BK_MODE_LITTLE) {
+			if (!little_at) little_at = frame;
+			if (frame == little_at + 900) ar_host_snapshot("43_little_play");
+			if (frame == little_at + 1000) tap('K');
+			if (frame > little_at + 1000 && !saved && (frame % 8) == 0) tap(' ');
+			if (!saved && bk.g.rescues < BK_RESCUES) {
+				saved = true;
+				ar_host_snapshot("44_little_saved");
+				tap('J');
+				playing = true;
+			}
+			if (playing && frame == little_at + 4000) ar_host_snapshot("45_little_later");
+		}
 	}
 	if (bk.st == ST_PLAY && bk.mode == BK_MODE_40 && bk.g.lines >= 20 &&
 	    !mid40) {
@@ -125,12 +153,15 @@ void ar_host_hook(uint32_t frame) {
 int main(int argc, char **argv) {
 	const char *dir = argc > 1 ? argv[1] : ".";
 	int r;
+	ar_host_set_settings("skill normal\n");
 	ar_host_run(script, dir);
 	r = game_main();
 	printf("render: %d pictures, %u frames, %llu blitter operations, "
 		"%u notes\n", ar_host_shots(), ar_host_frame(),
 		(unsigned long long)arh_ops, zsfxh_notes);
 	printf("render: scores file:\n%s", ar_host_scores());
+	printf("render: settings file:\n%s", ar_host_settings());
+	printf("render: last spoken: %s (%d lines)\n", ar_host_said, ar_host_says);
 	printf("render: %u frames checked against a full repaint, %u differed\n",
 		ar_host_verified(), ar_host_verify_bad());
 	{

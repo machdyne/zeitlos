@@ -214,7 +214,7 @@ with [welcome](welcome.md); to program it, [kernel](kernel.md) and
 | [chess\_app](chess_app.md) | `chess` |
 | [chess\_engine](chess_engine.md) | The chess engine |
 | [chip8\_app](chip8_app.md) | `chip8` |
-| [gamedemo](gamedemo.md) | `gamedemo` |
+| [mausrun](mausrun.md) | `mausrun` |
 | [kidgames\_app](kidgames_app.md) | `kidgames` |
 | [casino](casino.md) | The casino apps, overview |
 | [casino\_app](casino_app.md) | `casino`, the front desk |

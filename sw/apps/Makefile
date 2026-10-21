@@ -70,7 +70,7 @@ APPS = casino poker roulette blackjack slots craps \
 	play \
 	track \
 	midi \
-	gamedemo \
+	mausrun \
 	chip8 \
 	basic \
 	chess \

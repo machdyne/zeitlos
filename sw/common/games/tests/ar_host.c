@@ -145,6 +145,46 @@ const char *ar_host_scores(void) {
 	return scores;
 }
 
+static char settings[1024];
+static int settings_len;
+int ar_host_cfg_skill = -1;
+char ar_host_said[64];
+int ar_host_says;
+
+int arh_read_settings(char *buf, int cap) {
+	int n = settings_len < cap ? settings_len : cap;
+	memcpy(buf, settings, (size_t)n);
+	return n;
+}
+
+bool arh_write_settings(const char *buf, int len) {
+	if (len >= (int)sizeof(settings)) return false;
+	memcpy(settings, buf, (size_t)len);
+	settings_len = len;
+	return true;
+}
+
+const char *ar_host_settings(void) {
+	settings[settings_len] = 0;
+	return settings;
+}
+
+void ar_host_set_settings(const char *text) {
+	settings_len = (int)strlen(text);
+	if (settings_len >= (int)sizeof(settings)) settings_len = (int)sizeof(settings) - 1;
+	memcpy(settings, text, (size_t)settings_len);
+}
+
+int arh_cfg_skill(void) { return ar_host_cfg_skill; }
+
+void arh_say(const char *text) {
+	size_t n = strlen(text);
+	if (n >= sizeof ar_host_said) n = sizeof ar_host_said - 1;
+	memcpy(ar_host_said, text, n);
+	ar_host_said[n] = 0;
+	ar_host_says++;
+}
+
 uint32_t arh_seed(void) { return 12345u; }
 
 /* ===================================================================

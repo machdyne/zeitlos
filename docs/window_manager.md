@@ -1951,7 +1951,7 @@ way, so callers (`zwin.c`, apps) don't need to know which is active.
 **Every app gets the hardware path.** `sw/common/app.mk` defines
 `Z_GFX_HW_BLIT` for all of them (`GFX_HW_BLIT ?= 1`, [build.md](build.md));
 it used to be each app's own `-D`, and 19 apps never had it, four of
-which draw text (`chip8`, `gamedemo`, `mmod`, `repl`) and so drew it in
+which draw text (`chip8`, `mausrun`, `mmod`, `repl`) and so drew it in
 software. The software path is still selected on its own, per glyph,
 for a font that is not resident in glyph memory or a glyph not wholly
 on screen. `make GFX_HW_BLIT=0` builds an app with the software path
@@ -2762,6 +2762,16 @@ a grab cannot be claimed on another process's behalf.
 
 **Suspended:** the click that manages windows -- focus changes, raising,
 dragging, the dock. That block is the one that paints over the game.
+And **every repaint**: `repair_region()` returns at once while a grab is
+held, whoever asks. The dock's launch timeout asked: a game launched
+from the dock that never opens a window (mausrun) left its icon
+"launching", and three seconds later wm gave up waiting and repaired
+the dock's rectangle -- straight into the game's picture, pixel-doubled.
+Nothing of wm's is on the screen during a grab, and the whole screen is
+repaired when it ends (`Z_WM_GAME_RELEASE` and `game_revoke()` clear the
+grab first, then repair), so nothing is lost by refusing. A grab from
+the process the dock is waiting for also ends that wait: it has
+started.
 
 **Not suspended:** input. Keys and mouse both go to the grab owner
 instead of to whatever the cursor is over, because an app owning the
@@ -2798,8 +2808,11 @@ on every board, whether or not there is a camera to move.
 
 **An app that owned the screen and has gone** -- crashed, closed, killed
 -- must not leave wm suspended with a black desktop and no way back.
-`destroy_window()` revokes the grab on that path. Every other failure
-here is cosmetic; this one is unrecoverable without a reboot.
+`destroy_window()` revokes the grab on that path, and for an app with no
+window at all (mausrun), wm looks once a second whether the holder is
+still running (`z_proc_status()`) and revokes the grab if not. Every
+other failure here is cosmetic; this one is unrecoverable without a
+reboot.
 
 
 ### An app that was already a window

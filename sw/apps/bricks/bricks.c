@@ -40,6 +40,10 @@ static const char help_text[] =
 	"F11\tFull screen, or back to the window\n"
 	"C\tFull screen: colour on or off\n"
 	"M\tMusic on or off\n\n"
+	"Skill: on EASY the ball is slow, the paddle long, there are five "
+	"paddles and a glowing floor under the paddle that sends the ball "
+	"back once each time it is served. NORMAL is the classic game, HARD "
+	"is faster. Left and Right on the top line of the menu change it.\n\n"
 	"Catch the capsules that fall from broken bricks: E a longer "
 	"paddle, M three balls, S slower balls, C a paddle that catches, "
 	"L a paddle that fires, P another paddle. A new paddle every "
@@ -65,8 +69,17 @@ static bool autoplay_off;
  * small things
  * =================================================================== */
 
+/* The music follows the rounds: calm at the start, the whole band only
+ * later -- on easy at half the pace (zsfx_music_intensity()). */
+static void music_follow(void) {
+	int lv = br.g.level ? br.g.level : 1, i = lv - 1;
+	if (ar_skill() == AR_SKILL_EASY) i = (lv - 1) / 2;
+	else if (ar_skill() == AR_SKILL_HARD) i = lv + 1;
+	zsfx_music_intensity(i);
+}
+
 static void load_table(void) {
-	ar_scores_load(0, &br.table);
+	ar_scores_load(ar_skill_table(0), &br.table);
 	br.best = br.table.n ? br.table.e[0].score : 0;
 }
 
@@ -93,7 +106,7 @@ static void title(void) {
 	br.rank = -1;
 	set_state(ST_TITLE);
 	ar_dirty_all();
-	zsfx_music_tempo(100);
+	zsfx_music_intensity(3);
 	zsfx_music_play(&br_song_title);
 }
 
@@ -119,11 +132,11 @@ static void ready(bool quick) {
 static void start_game(void) {
 	load_table();
 	br_draw_reset();
-	br_new(&br.g, br.start_level, ar_rand_below);
+	br_new_skill(&br.g, br.start_level, ar_skill(), ar_rand_below);
 	br.key_speed = 0;
 	br.shown_score = 0xffffffffu;
 	ready(false);
-	zsfx_music_tempo(100);
+	music_follow();
 	zsfx_music_play(&br_song_game);
 }
 
@@ -157,7 +170,7 @@ static void name_done(void) {
 	br.name[3] = 0;
 	load_table();
 	br.rank = ar_scores_insert(&br.table, br.g.score, br.name);
-	if (!ar_scores_save(0, &br.table))
+	if (!ar_scores_save(ar_skill_table(0), &br.table))
 		printf("bricks: could not save the high scores\n");
 	br_sound(BR_SND_SELECT, -1);
 	show_scores(br.rank);
@@ -173,13 +186,36 @@ static void after_over(void) {
 	}
 }
 
+static const char *const menu_say[MENU_ITEMS] = { "Skill", "Play", "High scores" };
+
+static void say_menu(void) {
+	char b[48];
+	strcpy(b, menu_say[br.menu]);
+	if (br.menu == MENU_SKILL) {
+		strcat(b, ", ");
+		strcat(b, ar_skill_spoken(ar_skill()));
+	}
+	ar_say(b);
+}
+
 static void menu_move(int d) {
 	br.menu = (br.menu + d + MENU_ITEMS) % MENU_ITEMS;
 	br_sound(BR_SND_MENU, -1);
 	dirty_panel();
+	say_menu();
+}
+
+static void skill_change(int d) {
+	ar_skill_set((ar_skill() + d + AR_SKILLS) % AR_SKILLS);
+	load_table();
+	br_sound(BR_SND_MENU, -1);
+	dirty_panel();
+	br_draw_hud_dirty();
+	ar_say(ar_skill_spoken(ar_skill()));
 }
 
 static void menu_go(void) {
+	if (br.menu == MENU_SKILL) { skill_change(1); return; }
 	br_sound(BR_SND_SELECT, -1);
 	if (br.menu == MENU_SCORES) show_scores(-1);
 	else start_game();
@@ -284,6 +320,9 @@ static void handle(const ar_event_t *e) {
 		if (e->key == AR_BTN_UP || e->key == AR_BTN_DOWN) {
 			menu_move(e->key == AR_BTN_UP ? -1 : 1);
 			menu_hold = 0;
+		} else if ((e->key == AR_BTN_LEFT || e->key == AR_BTN_RIGHT) &&
+		           br.menu == MENU_SKILL) {
+			skill_change(e->key == AR_BTN_RIGHT ? 1 : -1);
 		} else if ((e->key == AR_BTN_LEFT || e->key == AR_BTN_RIGHT) &&
 		           br.menu == MENU_PLAY) {
 			br.start_level += (e->key == AR_BTN_RIGHT) ? 1 : -1;
@@ -446,7 +485,7 @@ static void update(uint32_t dt) {
 				br_draw_reset();
 				br_next_level(&br.g);
 				ready(false);
-				zsfx_music_tempo(100 + 2 * ((br.g.level - 1) % 12));
+				music_follow();
 				zsfx_music_play(&br_song_game);
 			}
 			break;
@@ -486,6 +525,8 @@ int main(void) {
 	if (!br_draw_init()) printf("bricks: out of sprite memory\n");
 
 	br.start_level = 1;
+	br.menu = MENU_PLAY;
+	printf("bricks: skill %s\n", ar_skill_name(ar_skill()));
 	title();
 
 	while (!quit) {

@@ -20,6 +20,9 @@ enum {
 	SN_SND_GAMEOVER,
 	SN_SND_READY,
 	SN_SND_LETTER,
+	SN_SND_BUMP,         /* easy: a crash that costs a heart */
+	SN_SND_BONK,         /* easy: steered into something while stopped */
+	SN_SND_HEART,        /* easy: a heart won back */
 	SN_SND_COUNT
 };
 

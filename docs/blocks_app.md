@@ -19,6 +19,45 @@ Built on the arcade runtime ([arcade.md](arcade.md)) and its sound engine
 | **Endless** | for points; faster every ten rows; start at any level from 1 to 10 (left/right on the menu) |
 | **40 lines** | clear forty rows as quickly as you can; the speed stays at level 1; the best ten times are kept |
 | **3 minutes** | as many points as you can in three minutes |
+| **Little pieces** | endless, with shapes of one, two and three blocks in a well eight wide |
+
+## Skill
+
+The top line of the menu, `< EASY >`, sets how hard it is (Left and
+Right; [arcade.md](arcade.md#skill)). **Easy is the default.**
+
+| | Easy | Normal | Hard |
+|---|---|---|---|
+| falling | half normal's speed | the familiar curve | as normal five levels on: three rows a second from the start |
+| a new level every | 15 rows | 10 rows | 8 rows |
+| fastest at | level 8 | level 20 | level 20 |
+| a shape lies before locking | a second | half a second | a third of a second |
+| the music starts | calm: tune and bass, 70% | with the kick, 86%; the whole band by level 3 | the whole band, 98% |
+| next shapes shown | 1 | 5 | 5 |
+| a full well | **swept**: three times a game | ends the game | ends the game |
+
+On easy, when the stack reaches the top, the **top half of the well is
+swept away** -- a rising whoosh, sparks across the well, "SAVED" -- and
+the game goes on with the score kept. Three of those are shown as
+hearts under the time; the fourth full well ends the game. Normal is
+the game as it was, rule for rule (the rules tests' autopilot scores
+exactly what it did before skills existed); only its music once started
+as calm as easy's, which made it feel slower than it was. Hard was two
+levels on and 26 frames to lock, and was not very hard. Each skill keeps its own high scores
+for each way to play.
+
+### Little pieces
+
+A well eight wide -- the two outer columns are walls in the theme's
+colour, drawn where they are and never moved, not even while the stack
+falls after a clear -- and four little shapes: a single block, two in a
+row, three in a row, and three in a corner, from a bag of seven (one
+single, two of each other). A row of eight clears. Everything else --
+holding, the ghost, levels, skill -- is as in endless. For a child
+still learning which way a shape turns, it is the gentlest way in.
+
+The music grows with the level: tune and bass alone at level 1, the
+drums from about level 5 ([sfx.md](sfx.md), "Calm first").
 
 The best ten of each are kept, with initials, in `/data/blocks/scores.txt`
 ([arcade.md](arcade.md), "Scores"). A 40-line time is stored as 9999999
@@ -54,7 +93,7 @@ says which a button came from (`AR_EV_BUTTON`'s `source`).
 - **The well** is 10 wide and 20 deep, with two more rows above it where
   shapes appear. A shape that cannot appear, or one that locks entirely
   above the well, ends the game.
-- **Seven shapes**, named by the letter each looks like: I O T S Z J L.
+- **Seven shapes** (little pieces: four little ones, above), named by the letter each looks like: I O T S Z J L.
   They come from a shuffled bag of all seven, so the same shape never
   comes more than twelve apart and none goes missing for long. The next
   five are shown.
@@ -62,7 +101,7 @@ says which a button came from (`AR_EV_BUTTON`'s `source`).
   does not fit is tried at up to four nearby offsets -- the wall kicks --
   before it is refused, using the kick tables players know.
 - **Locking:** a shape that has landed locks after half a second (30
-  frames). Moving or turning it restarts that, up to fifteen times;
+  frames; a second on easy). Moving or turning it restarts that, up to fifteen times;
   falling to a new lowest row resets the count.
 - **Holding** swaps the shape for the held one (or the next, the first
   time), once per shape. The held shape is grey while it cannot be used.
@@ -209,3 +248,11 @@ to topping out, initials and the table, then forty lines to the end --
 and with `AR_HOST_VERIFY` it checks **every frame** against a repaint
 from nothing ([arcade.md](arcade.md), "On a build host"), every frame of
 every fall included. Not one differs.
+
+Skill and little pieces have their own cases: easy's speed, lock delay
+and levels (every 15, at most 8); three sweeps of a full well, then the
+end; the little bag, the walls in every row after every clear, a row of
+eight clearing, a shape stopped by a wall; and the autopilot playing 400
+little pieces with the walls checked every frame. The render plays the
+skill line and an easy game of little pieces until a sweep (pictures
+40-44), every frame compared with a full repaint.

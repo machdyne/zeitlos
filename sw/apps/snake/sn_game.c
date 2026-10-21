@@ -13,19 +13,29 @@ static const int8_t ddy[4] = { 0, 1, 0, -1 };
 #define OPP(d) (((d) + 2) & 3)
 #define FULL (SN_CELL_PX << 8)
 
-/* -- tuning: cells per second x10 -- */
-#define SPEED_CLASSIC   70
-#define SPEED_STEP       3      /* faster per food, classic and open */
-#define SPEED_MAX      150
-#define SPEED_MAZE      80
-#define SPEED_MAZE_LVL   6
-#define SPEED_VERSUS    85
+/* -- tuning: cells per second x10, per skill (easy, normal, hard) --
+ *
+ * Normal is the game as it was before skills. Easy starts at half its
+ * speed and gets faster at a third of the rate; hard starts where a
+ * normal game is after a dozen foods. */
+static const uint8_t speed_classic[3]  = {  35,  70,  90 };
+static const uint8_t speed_step[3]     = {   1,   3,   4 };  /* per food */
+static const uint8_t speed_max[3]      = {  70, 150, 170 };
+static const uint8_t speed_maze[3]     = {  40,  80,  95 };
+static const uint8_t speed_maze_lvl[3] = {   3,   6,   7 };
+static const uint8_t speed_versus[3]   = {  45,  85, 100 };
 #define SPEED_TITLE     95
+#define SPEED_BACK       3      /* easy: steps slower after a bump */
 
 #define GROW_PER_FOOD    2
 #define BONUS_EVERY      5      /* foods */
-#define BONUS_FRAMES   420      /* 7 seconds at 60Hz */
+static const uint16_t bonus_frames[3] = { 840, 420, 360 };   /* 14, 7, 6 s */
 #define MAZE_GOAL       12
+#define EASY_REACH      14      /* easy: food within this many cells */
+
+static int sk(const sn_game_t *g) {
+	return g->skill <= SN_SKILL_HARD ? g->skill : SN_SKILL_NORMAL;
+}
 
 uint16_t sn_speed_for(int cps10) {
 	/* 8 px a cell, 60 frames a second, 8.8 fixed point */
@@ -97,6 +107,16 @@ static uint16_t place_item(sn_game_t *g) {
 			if (dx * dx + dy * dy < 5) near = true;
 		}
 		if (near && i < SN_GW * SN_GH / 2) continue;
+		/* Easy: food a short way from the head, while there is room
+		 * for it there; anywhere after that. */
+		if (g->skill == SN_SKILL_EASY && i < SN_GW * SN_GH * 3 / 4 &&
+		    g->s[0].active && g->s[0].alive) {
+			uint16_t h = g->s[0].body[g->s[0].head];
+			int dx = sn_cx(c) - sn_cx(h), dy = sn_cy(c) - sn_cy(h);
+			if (dx < 0) dx = -dx;
+			if (dy < 0) dy = -dy;
+			if (dx + dy > EASY_REACH) continue;
+		}
 		return c;
 	}
 	return SN_NONE;
@@ -108,13 +128,29 @@ static void place_food(sn_game_t *g) {
 	if (g->food != SN_NONE) event(g, SN_EV_FOOD, 0, g->food, 0);
 }
 
-static int base_speed(const sn_game_t *g) {
+int sn_start_cps(const sn_game_t *g) {
+	int k = sk(g);
 	switch (g->mode) {
-	case SN_MODE_MAZE:   return SPEED_MAZE + SPEED_MAZE_LVL * (g->level % 6);
-	case SN_MODE_VERSUS: return SPEED_VERSUS;
+	case SN_MODE_MAZE:   return speed_maze[k] + speed_maze_lvl[k] * (g->level % 6);
+	case SN_MODE_VERSUS: return speed_versus[k];
 	case SN_MODE_TITLE:  return SPEED_TITLE;
-	default:             return SPEED_CLASSIC;
+	default:             return speed_classic[k];
 	}
+}
+
+int sn_max_cps(const sn_game_t *g) {
+	if (g->mode == SN_MODE_CLASSIC || g->mode == SN_MODE_OPEN)
+		return speed_max[sk(g)];
+	return sn_start_cps(g);
+}
+
+int sn_cps(const sn_snake_t *s) {
+	/* the inverse of sn_speed_for(), rounded */
+	return ((int)s->speed * 600 + 1024) / 2048;
+}
+
+static int base_speed(const sn_game_t *g) {
+	return sn_start_cps(g);
 }
 
 static void put_body(sn_game_t *g, int p, uint16_t c, uint8_t links) {
@@ -134,6 +170,8 @@ static void spawn(sn_game_t *g, int p, int x, int y, int dir) {
 	s->alive = true;
 	s->dir = (uint8_t)dir;
 	s->speed = sn_speed_for(base_speed(g));
+	s->hearts = (g->skill == SN_SKILL_EASY && g->mode != SN_MODE_TITLE) ? SN_HEARTS : 0;
+	s->foods_to_heart = SN_HEART_EVERY;
 	s->len = 0;
 	s->tail = 0;
 	/* Three cells behind the start, tail first. */
@@ -153,12 +191,19 @@ static void spawn(sn_game_t *g, int p, int x, int y, int dir) {
 
 void sn_new(sn_game_t *g, sn_mode_t mode, int level,
 	uint32_t (*rand_below)(uint32_t n)) {
+	sn_new_skill(g, mode, level, SN_SKILL_NORMAL, rand_below);
+}
+
+void sn_new_skill(sn_game_t *g, sn_mode_t mode, int level, int skill,
+	uint32_t (*rand_below)(uint32_t n)) {
 
 	const char *const *lv;
 	int x, y;
 
 	memset(g, 0, sizeof(*g));
 	g->mode = mode;
+	g->skill = (uint8_t)(skill >= SN_SKILL_EASY && skill <= SN_SKILL_HARD ?
+		skill : SN_SKILL_NORMAL);
 	g->level = (uint8_t)level;
 	g->rand_below = rand_below;
 	g->wrap = (mode == SN_MODE_OPEN);
@@ -211,6 +256,91 @@ static void die(sn_game_t *g, int p, uint16_t where) {
 	event(g, SN_EV_DIE, p, where, 0);
 }
 
+/* Could the head of p move into n now? (The tail leaves its cell on
+ * this move when the snake is not growing.) */
+static bool can_enter(const sn_game_t *g, int p, uint16_t n, bool tail_moves) {
+	const sn_snake_t *s = &g->s[p];
+	const sn_cell_t *c;
+	int q;
+	if (n == SN_NONE) return false;
+	c = &g->grid[n];
+	if (c->what == SN_WALL || c->what == SN_BLOCKED) return false;
+	if (c->what == SN_BODY &&
+	    !(c->who == p && n == s->body[s->tail] && tail_moves))
+		return false;
+	for (q = 0; q < SN_PLAYERS; q++) {
+		const sn_snake_t *o = &g->s[q];
+		if (q != p && o->active && o->alive && o->next == n) return false;
+	}
+	return true;
+}
+
+/* Any way out at all, for a stopped snake? */
+static bool has_way_out(const sn_game_t *g, int p) {
+	const sn_snake_t *s = &g->s[p];
+	uint16_t h = s->body[s->head];
+	int d;
+	for (d = 0; d < 4; d++)
+		if (can_enter(g, p, sn_neighbour(g, h, d), s->grow == 0)) return true;
+	return false;
+}
+
+/* A crash. On easy, while a heart is left over, the snake stops instead
+ * of dying, a little slower; it dies on the last heart, or when there
+ * is nowhere it could go. */
+static void hit(sn_game_t *g, int p, uint16_t where) {
+	sn_snake_t *s = &g->s[p];
+	if (s->hearts > 1) {
+		if (s->next != SN_NONE) {
+			/* stopped in the middle of a move (a head-on): the head
+			 * no longer reaches into the cell it was entering */
+			uint16_t h = s->body[s->head];
+			g->grid[h].links &= (uint8_t)~(1u << s->dir);
+		}
+		s->hearts--;
+		s->stopped = true;
+		s->next = SN_NONE;
+		s->progress = 0;
+		s->nq = 0;
+		event(g, SN_EV_BUMP, p, where, s->hearts);
+		if (g->mode == SN_MODE_CLASSIC || g->mode == SN_MODE_OPEN) {
+			int lo = sn_start_cps(g);
+			int cps = sn_cps(s) - SPEED_BACK * speed_step[sk(g)];
+			if (cps < lo) cps = lo;
+			if (sn_speed_for(cps) != s->speed) {
+				s->speed = sn_speed_for(cps);
+				event(g, SN_EV_SPEEDUP, p, where, 0);
+			}
+		}
+		if (!has_way_out(g, p)) {
+			s->hearts = 0;
+			die(g, p, where);
+		}
+		return;
+	}
+	s->hearts = 0;
+	die(g, p, where);
+}
+
+/* A stopped snake moves again when it is steered somewhere free; a turn
+ * into something else is a bonk, and costs nothing. */
+static void try_restart(sn_game_t *g, int p) {
+	sn_snake_t *s = &g->s[p];
+	uint16_t h = s->body[s->head];
+	while (s->nq) {
+		uint8_t d = s->queue[0];
+		uint16_t n = sn_neighbour(g, h, d);
+		s->queue[0] = s->queue[1];
+		s->nq--;
+		if (can_enter(g, p, n, s->grow == 0)) {
+			s->dir = d;
+			s->stopped = false;
+			return;
+		}
+		event(g, SN_EV_BONK, p, n == SN_NONE ? h : n, 0);
+	}
+}
+
 static void start_move(sn_game_t *g, int p) {
 
 	sn_snake_t *s = &g->s[p];
@@ -227,7 +357,7 @@ static void start_move(sn_game_t *g, int p) {
 	s->tail_moves = (s->grow == 0);
 	n = sn_neighbour(g, h, s->dir);
 
-	if (n == SN_NONE) { die(g, p, h); return; }
+	if (n == SN_NONE) { hit(g, p, h); return; }
 
 	{
 		const sn_cell_t *c = &g->grid[n];
@@ -243,13 +373,13 @@ static void start_move(sn_game_t *g, int p) {
 				sn_snake_t *o = &g->s[c->who];
 				if (o->alive && n == o->body[o->head] &&
 				    o->dir == OPP(s->dir)) {
-					die(g, c->who, n);
-					die(g, p, n);
+					hit(g, c->who, n);
+					hit(g, p, n);
 					return;
 				}
 			}
 		}
-		if (!ok) { die(g, p, n); return; }
+		if (!ok) { hit(g, p, n); return; }
 	}
 
 	/* Head on: both enter the same cell. */
@@ -257,8 +387,8 @@ static void start_move(sn_game_t *g, int p) {
 		sn_snake_t *o = &g->s[q];
 		if (q == p || !o->active || !o->alive) continue;
 		if (o->next == n) {
-			die(g, q, n);
-			die(g, p, n);
+			hit(g, q, n);
+			hit(g, p, n);
 			return;
 		}
 	}
@@ -307,9 +437,17 @@ static void complete_move(sn_game_t *g, int p) {
 		s->eaten++;
 		event(g, SN_EV_EAT, p, n, value);
 
+		if (s->hearts && s->hearts < SN_HEARTS_MAX && --s->foods_to_heart == 0) {
+			s->hearts++;
+			s->foods_to_heart = SN_HEART_EVERY;
+			event(g, SN_EV_HEART, p, n, s->hearts);
+		} else if (s->hearts >= SN_HEARTS_MAX) {
+			s->foods_to_heart = SN_HEART_EVERY;
+		}
+
 		if (g->mode == SN_MODE_CLASSIC || g->mode == SN_MODE_OPEN) {
-			uint16_t mx = sn_speed_for(SPEED_MAX);
-			uint16_t ns = (uint16_t)(s->speed + sn_speed_for(SPEED_STEP));
+			uint16_t mx = sn_speed_for(speed_max[sk(g)]);
+			uint16_t ns = (uint16_t)(s->speed + sn_speed_for(speed_step[sk(g)]));
 			if (ns > mx) ns = mx;
 			if (ns != s->speed) {
 				s->speed = ns;
@@ -323,7 +461,7 @@ static void complete_move(sn_game_t *g, int p) {
 			if (g->foods_to_bonus) g->foods_to_bonus--;
 			if (g->foods_to_bonus == 0 && g->bonus == SN_NONE) {
 				g->bonus = place_item(g);
-				g->bonus_left = g->bonus_total = BONUS_FRAMES;
+				g->bonus_left = g->bonus_total = bonus_frames[sk(g)];
 				g->foods_to_bonus = BONUS_EVERY;
 				if (g->bonus != SN_NONE)
 					event(g, SN_EV_BONUS_SHOW, 0, g->bonus, 0);
@@ -355,21 +493,27 @@ void sn_step(sn_game_t *g) {
 		sn_snake_t *s = &g->s[p];
 		if (!s->active || !s->alive) continue;
 
+		if (s->stopped) {
+			try_restart(g, p);
+			if (s->stopped) continue;
+		}
+
 		if (s->next == SN_NONE) {
 			start_move(g, p);
-			if (!s->alive) continue;
+			if (!s->alive || s->stopped) continue;
 		}
 
 		s->progress = (uint16_t)(s->progress + s->speed);
-		while (s->alive && s->progress >= FULL) {
+		while (s->alive && !s->stopped && s->progress >= FULL) {
 			s->progress = (uint16_t)(s->progress - FULL);
 			complete_move(g, p);
 			start_move(g, p);
 		}
+		if (s->stopped) s->progress = 0;
 		if (!s->alive) s->progress = 0;
 	}
 
-	if (g->bonus != SN_NONE) {
+	if (g->bonus != SN_NONE && !(g->s[0].stopped || g->s[1].stopped)) {
 		if (g->bonus_left) g->bonus_left--;
 		if (g->bonus_left == 0) {
 			event(g, SN_EV_BONUS_GONE, 0, g->bonus, 0);

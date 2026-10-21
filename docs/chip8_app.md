@@ -545,7 +545,7 @@ only). Focus-respecting by construction -- a game does not keep
 running while you type in another window.
 
 **Game mode:** read the raw USB HID key registers as a level, the way
-`gamedemo.c` does. There is no focus in game mode and nothing to
+`mausrun.c` does. There is no focus in game mode and nothing to
 respect.
 
 Gamepad via `zpad.h` with a per-ROM key map, because mapping a d-pad
@@ -583,7 +583,7 @@ to typing, which is the thing the focus rule exists to prevent.
 ### Game mode input
 
 No focus, no message traffic. The hex keypad is read straight from the
-USB report as a level, the way `gamedemo.c` does, and turned into edges
+USB report as a level, the way `mausrun.c` does, and turned into edges
 here by diffing against the previous mask -- the edges still matter
 because `FX0A` completes on one.
 

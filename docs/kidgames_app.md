@@ -634,7 +634,7 @@ the sound's whole duration, from inside a message pump with other work
 to do.
 
 Channel **7**, not 0. Every other app that makes a noise takes channel
-0 -- chip8's buzzer, gamedemo's music, audiotest. The mixer is global
+0 -- chip8's buzzer, mausrun's music, audiotest. The mixer is global
 state that outlives any one app, so a cue on channel 0 would cut off
 whatever a tracker in another window was playing.
 
@@ -649,7 +649,7 @@ does not fail quietly: it requests an address nothing decodes, an
 undecoded address on this bus never acks, and the mixer holds its
 grant on the main arbiter forever. The CPU is starved of the bus and
 *the machine* stops -- not the app. `phys_of()` translates, the same
-way chip8, gamedemo and track all do. This is now the fourth copy of
+way chip8, mausrun and track all do. This is now the fourth copy of
 that function, which is a better argument for moving it into
 `sw/common` than the third was.
 

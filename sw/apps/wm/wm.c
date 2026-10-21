@@ -203,7 +203,7 @@ static const dock_app_t dock_candidates[] = {
 	{ "blocks",		z_icon_blocks_data },
 	{ "bricks",		z_icon_bricks_data },
 	{ "gpu3d",		z_icon_gpu3d_data },
-	{ "gamedemo",	z_icon_gamedemo_data },
+	{ "mausrun",	z_icon_mausrun_data },
 };
 #define DOCK_CANDIDATE_COUNT \
 	(int)(sizeof(dock_candidates) / sizeof(dock_candidates[0]))
@@ -1825,6 +1825,14 @@ static void repair_chrome_in_rect(int rx, int ry, int rw, int rh, int skip)
 
 static void repair_region(int rx, int ry, int rw, int rh, int exclude_idx) {
 
+	// An app holds the screen (game mode): nothing of wm's is on it,
+	// and painting would draw over the game. The dock's launch timeout
+	// did exactly that -- three seconds into a game that never opens a
+	// window (mausrun), the dock appeared over it, pixel-doubled. The
+	// whole screen is repaired when the grab ends: Z_WM_GAME_RELEASE
+	// and game_revoke() clear game_grab_pid first, then repair.
+	if (game_grab_pid) return;
+
 	dbg_repairs++;
 
 	// See draw_window_box(): wm's own drawing must not inherit a
@@ -2189,7 +2197,7 @@ static void dock_launch(int slot) {
 
 	if (!pid) {
 
-		printf("wm: dock: failed to launch '%s' -- file missing, or no free process slot\n", name);
+		printf("wm: dock: cannot launch '%s' (no file or no slot)\n", name);
 
 		// undo the inverted state immediately -- z_proc_run() failed
 		// synchronously (no process was even created), so there's no
@@ -3137,6 +3145,7 @@ static int32_t view_y = 0;
  * wm's own hotkeys keep working too. It is the only process that sees
  * every keystroke and that has to stay true whoever owns the screen. */
 static uint32_t game_grab_pid = 0;
+static uint32_t grab_check_at;     // next look at whether the holder lives
 
 static int window_of_pid(uint32_t pid) {
 	for (int i = 0; i < WM_MAX_WINDOWS; i++)
@@ -3584,7 +3593,7 @@ static const char *dock_spoken_name(const char *name) {
 		{ "blocks",   "Blocks" },
 		{ "bricks",   "Bricks" },
 		{ "gpu3d",    "GPU 3D" },
-		{ "gamedemo", "Game demo" },
+		{ "mausrun", "Maus Run" },
 	};
 	for (unsigned i = 0; i < sizeof(map) / sizeof(map[0]); i++)
 		if (strcmp(map[i][0], name) == 0) return map[i][1];
@@ -3772,7 +3781,7 @@ static void speech_read(uint32_t what) {
 			z_obj_uint32(Z_WM_READ_PACK(focused, what)));
 		return;
 	}
-	printf("wm: Super+%c: '%s' cannot be read aloud (not Z_WIN_FLAG_READABLE)\n",
+	printf("wm: Super+%c: '%s' is not readable\n",
 		what == Z_WM_READ_SELECTION ? 'C' : 'A', w->title);
 
 	char buf[Z_SPEAK_SLOT_MAX];
@@ -5228,7 +5237,7 @@ static int create_window(uint32_t owner_pid, const char *title,
 
 		zorder[zorder_count++] = i;
 
-		printf("wm: created window %d '%s' owner=%ld at (%ld,%ld) %ldx%ld\n",
+		printf("wm: win %d '%s' pid %ld at %ld,%ld %ldx%ld\n",
 			i, windows[i].title, (long)owner_pid,
 			(long)windows[i].x, (long)windows[i].y,
 			(long)windows[i].w, (long)windows[i].h);
@@ -5497,7 +5506,7 @@ static void reap_orphans(void) {
 		if (owner == my_pid) continue;
 		if (z_proc_status(owner, &st, NULL) == Z_OK && st == Z_PROC_STATE_RUNNING)
 			continue;
-		printf("wm: pid %lu is gone; removing its window %d\n", (unsigned long)owner, i);
+		printf("wm: pid %lu gone; window %d removed\n", (unsigned long)owner, i);
 		destroy_window((uint32_t)i);	// repairs its own region
 		if (next_place_pid == owner) next_place_pid = 0;
 	}
@@ -5684,7 +5693,7 @@ static void handle_close_click(int idx) {
 	uint32_t owner = windows[idx].owner_pid;
 	uint32_t flags = windows[idx].flags;
 
-	printf("wm: close icon clicked for window %d (owner=%ld, kills_owner=%d)\n",
+	printf("wm: close win %d (owner %ld, kill %d)\n",
 		idx, (long)owner, (flags & Z_WIN_FLAG_CLOSE_KILLS_OWNER) ? 1 : 0);
 
 	if (flags & Z_WIN_FLAG_CLOSE_KILLS_OWNER) {
@@ -6417,6 +6426,12 @@ static void handle_message(z_msg_t *msg) {
 			 * if a caller sets it (zmsg.h), so a grab cannot be
 			 * claimed on another process's behalf. */
 			game_grab_pid = msg->from;
+			/* A game launched from the dock that takes the screen
+			 * without opening a window has started: the icon need
+			 * not wait out DOCK_LAUNCH_TIMEOUT_TICKS. */
+			for (int di = 0; di < DOCK_APP_COUNT; di++)
+				if (dock_launching[di] && dock_launching_pid[di] == msg->from)
+					dock_launching[di] = false;
 			/* Not over the lock screen: revoked at once. */
 			if (wm_locked) {
 				game_revoke();
@@ -6911,9 +6926,9 @@ int main(void) {
 	// discoverable name in that unlikely case.
 	char wm_name[24];
 	if (z_pid_register("wm", wm_name, sizeof(wm_name)))
-		printf("wm: starting as pid %ld, registered as '%s'.\n", (long)my_pid, wm_name);
+		printf("wm: pid %ld, '%s'\n", (long)my_pid, wm_name);
 	else
-		printf("wm: starting as pid %ld (name registration failed).\n", (long)my_pid);
+		printf("wm: pid %ld (no name)\n", (long)my_pid);
 
 	for (int i = 0; i < WM_MAX_WINDOWS; i++)
 		windows[i].used = false;
@@ -7089,7 +7104,7 @@ int main(void) {
 			if (!dock_launching[di]) continue;
 			if ((int32_t)(z_uptime_ticks() - dock_launching_deadline[di]) < 0)
 				continue;
-			printf("wm: dock: gave up waiting for '%s' (pid %ld) to create a window\n",
+			printf("wm: dock: '%s' (pid %ld) made no window\n",
 				dock_apps[di]->name, (long)dock_launching_pid[di]);
 			dock_launching[di] = false;
 			if (dock_idx >= 0)
@@ -7099,6 +7114,17 @@ int main(void) {
 
 		// -- windows left behind by a process that has ended --
 		reap_orphans();
+
+		// -- a grab left behind by a process that has ended -- a game
+		// with no window (mausrun) that crashes would otherwise keep
+		// the screen, and every key, forever. Once a second.
+		if (game_grab_pid && (int32_t)(z_uptime_ticks() - grab_check_at) >= 0) {
+			uint32_t gst = Z_PROC_STATE_UNKNOWN;
+			grab_check_at = z_uptime_ticks() + Z_TICK_HZ;
+			if (z_proc_status(game_grab_pid, &gst, NULL) != Z_OK ||
+			    gst != Z_PROC_STATE_RUNNING)
+				game_revoke();
+		}
 
 		// -- keyboard layout label -- see draw_dock()'s kbd_osd.
 		if (kbd_osd && (int32_t)(z_uptime_ticks() - kbd_osd_deadline) >= 0) {

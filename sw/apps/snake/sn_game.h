@@ -65,7 +65,20 @@ typedef struct {
 	uint32_t score;
 	uint16_t eaten;
 	uint8_t wins;
+	/* easy (docs/snake_app.md, "Skill"): a crash costs a heart and the
+	 * snake STOPS, waiting to be steered somewhere free */
+	uint8_t hearts;
+	bool stopped;
+	uint16_t foods_to_heart;
 } sn_snake_t;
+
+/* How hard: the same values as zarcade's AR_SKILL_*, kept apart so the
+ * rules need nothing from the runtime. */
+enum { SN_SKILL_EASY = 0, SN_SKILL_NORMAL, SN_SKILL_HARD };
+
+#define SN_HEARTS      3        /* easy: at the start */
+#define SN_HEARTS_MAX  5
+#define SN_HEART_EVERY 10       /* foods for another heart */
 
 typedef enum {
 	SN_MODE_CLASSIC = 0,    /* walls around the edge, faster per food */
@@ -86,7 +99,10 @@ enum {
 	SN_EV_DIE,              /* p, cell where it hit */
 	SN_EV_MOVE,             /* p: a move started */
 	SN_EV_LEVEL_DONE,       /* maze level eaten through */
-	SN_EV_SPEEDUP           /* p */
+	SN_EV_SPEEDUP,          /* p (and on easy, a slow-down after a bump) */
+	SN_EV_BUMP,             /* p, cell it bumped into; a heart lost */
+	SN_EV_BONK,             /* p: steered into something while stopped */
+	SN_EV_HEART             /* p: a heart won back */
 };
 
 typedef struct {
@@ -101,6 +117,7 @@ typedef struct {
 	sn_mode_t mode;
 	uint8_t players;
 	uint8_t level;          /* maze: 0.. */
+	uint8_t skill;          /* SN_SKILL_* */
 	bool wrap;
 	sn_cell_t grid[SN_GW * SN_GH];
 	sn_snake_t s[SN_PLAYERS];
@@ -128,9 +145,19 @@ static inline int sn_cx(uint16_t c) { return c % SN_GW; }
 static inline int sn_cy(uint16_t c) { return c / SN_GW; }
 static inline uint16_t sn_cell(int x, int y) { return (uint16_t)(y * SN_GW + x); }
 
-/* Set up a game. `level` matters for the maze. */
+/* Set up a game. `level` matters for the maze. sn_new() is normal
+ * skill: the game as it always was. */
 void sn_new(sn_game_t *g, sn_mode_t mode, int level,
 	uint32_t (*rand_below)(uint32_t n));
+void sn_new_skill(sn_game_t *g, sn_mode_t mode, int level, int skill,
+	uint32_t (*rand_below)(uint32_t n));
+
+/* The speed a snake starts at, and the fastest it gets, in cells per
+ * second x10, for this game's mode, level and skill. */
+int sn_start_cps(const sn_game_t *g);
+int sn_max_cps(const sn_game_t *g);
+/* A snake's speed now, cells per second x10. */
+int sn_cps(const sn_snake_t *s);
 
 /* A turn from the player. */
 void sn_turn(sn_game_t *g, int p, int dir);

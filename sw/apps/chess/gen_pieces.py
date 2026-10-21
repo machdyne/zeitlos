@@ -5,7 +5,7 @@
 #   python3 gen_pieces.py
 #
 # Emits pieces.c / pieces.h. Generated C is committed alongside the
-# generator, the same arrangement sw/apps/gamedemo/gen_sprites.py and
+# generator, the same arrangement sw/apps/mausrun/gen_sprites.py and
 # sw/data/icons/gen_dock_icon_data.py use: the app builds with no
 # Python in the loop, and where the art came from is still obvious.
 #

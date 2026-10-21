@@ -400,6 +400,135 @@ static void test_ai(void) {
 	CHECK(g.lines >= 120, "and clears lines (%d)", g.lines);
 }
 
+/* Easy: slower, longer to lock, a level every 15, at most level 8. */
+static void test_easy(void) {
+	bk_game_t g, n;
+	int i;
+	bk_new_skill(&g, BK_MODE_ENDLESS, 1, BK_SKILL_EASY, rnd);
+	bk_new(&n, BK_MODE_ENDLESS, 1, rnd);
+	CHECK(n.skill == BK_SKILL_NORMAL && n.rescues == 0, "bk_new is normal, no rescues");
+	CHECK(g.rescues == BK_RESCUES, "easy has %d rescues", BK_RESCUES);
+	CHECK(bk_gravity_now(&g) * 2 <= bk_gravity_now(&n) + 1, "easy falls at half speed (%u vs %u)",
+		bk_gravity_now(&g), bk_gravity_now(&n));
+	CHECK(bk_lock_frames(&g) == 2 * bk_lock_frames(&n), "and takes twice as long to lock");
+	for (i = 0; i < 40; i++) {
+		memset(g.well, 0, sizeof(g.well));
+		fill_rows(&g, 4, 9);
+		drop_i_into(&g, 9);
+		bk_clear_done(&g);
+	}
+	CHECK(g.lines == 160 && g.level == 8, "easy: a level every 15, at most 8 (%d at %d)", g.level, g.lines);
+	bk_new_skill(&g, BK_MODE_ENDLESS, 1, BK_SKILL_HARD, rnd);
+	CHECK(bk_gravity_now(&g) == bk_gravity(6), "hard falls as normal at level 6");
+	CHECK(bk_lock_frames(&g) == 20 && bk_lines_per_level(&g) == 8,
+		"hard locks in 20 frames and levels up every 8 rows");
+	for (i = 0; i < 4; i++) {
+		memset(g.well, 0, sizeof(g.well));
+		fill_rows(&g, 4, 9);
+		drop_i_into(&g, 9);
+		bk_clear_done(&g);
+	}
+	CHECK(g.lines == 16 && g.level == 3, "hard: level 3 after 16 rows (%d)", g.level);
+}
+
+/* Easy: topping out clears the top half, three times; the fourth ends it. */
+static void test_rescue(void) {
+	bk_game_t g;
+	int x, y, k, rescues = 0;
+	bk_new_skill(&g, BK_MODE_ENDLESS, 1, BK_SKILL_EASY, rnd);
+	for (k = 0; k < 4000 && !g.over; k++) {
+		/* a stack with no full rows, up to the top */
+		if (!g.cur.type || g.cur.y < 0) break;
+		for (y = 2; y < BK_H; y++)
+			for (x = 0; x < BK_W; x++)
+				if (!g.well[y][x] && x != (y % BK_W)) g.well[y][x] = BK_GREY;
+		bk_clear_events(&g);
+		bk_hard_drop(&g);
+		if (bk_clearing(&g)) bk_clear_done(&g);
+		if (has_event(&g, BK_EV_RESCUE)) {
+			rescues++;
+			for (y = 0; y < BK_H / 2; y++)
+				for (x = 0; x < BK_W; x++)
+					CHECK(g.well[y][x] == 0 || (y < 2 && g.cur.type), "top half empty after a rescue");
+			CHECK(!g.over && g.cur.type, "and a new piece is in play");
+		}
+	}
+	CHECK(rescues == BK_RESCUES, "three rescues (%d)", rescues);
+	CHECK(g.over, "then the game ends");
+}
+
+/* Little pieces: an 8-wide well, small shapes, rows clear at 8. */
+static void test_little(void) {
+	bk_game_t g;
+	int i, y, seen[BK_TYPES] = { 0 }, pieces = 0, f;
+	bk_new_skill(&g, BK_MODE_LITTLE, 1, BK_SKILL_EASY, rnd);
+	CHECK(g.little, "little");
+	for (y = 0; y < BK_H; y++)
+		CHECK(g.well[y][0] == BK_WALL && g.well[y][BK_W - 1] == BK_WALL, "walls in row %d", y);
+	CHECK(bk_col0(&g) == 1 && bk_col1(&g) == 8, "columns 1..8");
+	for (i = 0; i < 70; i++) {
+		int t = bk_test_from_bag(&g);
+		CHECK(t >= BK_DOT && t <= BK_V3, "only little pieces (%d)", t);
+		if (t >= 0 && t < BK_TYPES) seen[t]++;
+	}
+	CHECK(seen[BK_DOT] && seen[BK_DUO] && seen[BK_I3] && seen[BK_V3], "all four come");
+	CHECK(bk_ncells(BK_DOT) == 1 && bk_ncells(BK_DUO) == 2 && bk_ncells(BK_I3) == 3 &&
+		bk_ncells(BK_V3) == 3 && bk_ncells(BK_T) == 4, "cell counts");
+
+	/* a row of 8 clears, and the walls stay */
+	memset(g.well, 0, sizeof(g.well));
+	bk_new_skill(&g, BK_MODE_LITTLE, 1, BK_SKILL_EASY, rnd);
+	for (i = 1; i <= 7; i++) g.well[BK_H - 1][i] = BK_GREY;
+	g.cur.type = BK_DOT; g.cur.rot = 0; g.cur.x = 8; g.cur.y = 2;
+	bk_clear_events(&g);
+	bk_hard_drop(&g);
+	CHECK(bk_clearing(&g) && g.clear_count == 1, "eight in a row is a line");
+	bk_clear_done(&g);
+	for (y = 0; y < BK_H; y++)
+		CHECK(g.well[y][0] == BK_WALL && g.well[y][BK_W - 1] == BK_WALL, "walls kept, row %d", y);
+	CHECK(g.lines == 1, "counted");
+	{
+		const bk_event_t *e = NULL;
+		(void)e;
+	}
+
+	/* a piece cannot go into the walls */
+	bk_new_skill(&g, BK_MODE_LITTLE, 1, BK_SKILL_EASY, rnd);
+	for (i = 0; i < 12; i++) bk_move(&g, -1);
+	{
+		int8_t c[4][2];
+		int k, minx = 99;
+		bk_cells(g.cur.type, g.cur.rot, c);
+		for (k = 0; k < 4; k++) if (g.cur.x + c[k][0] < minx) minx = g.cur.x + c[k][0];
+		CHECK(minx == 1, "stops at the wall (%d)", minx);
+	}
+
+	/* the autopilot plays little pieces */
+	bk_new_skill(&g, BK_MODE_LITTLE, 1, BK_SKILL_NORMAL, rnd);
+	for (f = 0; f < 200000 && !g.over && pieces < 400; f++) {
+		bk_plan_t p;
+		bk_clear_events(&g);
+		if (g.cur.type && bk_ai_plan(&g, &p)) {
+			if (p.use_hold) bk_hold(&g);
+			while (g.cur.rot != p.rot && bk_rotate(&g, 1)) ;
+			while (g.cur.x < p.x && bk_move(&g, 1)) ;
+			while (g.cur.x > p.x && bk_move(&g, -1)) ;
+			bk_hard_drop(&g);
+			pieces++;
+		}
+		bk_step(&g);
+		if (bk_clearing(&g)) bk_clear_done(&g);
+		for (y = 0; y < BK_H; y++)
+			if (g.well[y][0] != BK_WALL || g.well[y][BK_W - 1] != BK_WALL) {
+				CHECK(0, "walls intact at frame %d", f);
+				f = 1 << 30;
+				break;
+			}
+	}
+	printf("little pieces: %d pieces, %d lines%s\n", pieces, g.lines, g.over ? " (topped out)" : "");
+	CHECK(!g.over && g.lines >= 60, "the autopilot clears little lines (%d)", g.lines);
+}
+
 int main(void) {
 	test_shapes();
 	test_bag();
@@ -413,6 +542,9 @@ int main(void) {
 	test_over();
 	test_modes();
 	test_ai();
+	test_easy();
+	test_rescue();
+	test_little();
 	printf("blocks rules: %d checks, %d failed\n", checks, fails);
 	return fails ? 1 : 0;
 }

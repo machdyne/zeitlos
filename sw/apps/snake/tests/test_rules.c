@@ -98,6 +98,8 @@ static void put_food_ahead(sn_game_t *g, int p, int cells) {
 	const sn_snake_t *s = &g->s[p];
 	uint16_t h = s->body[s->head];
 	int x = sn_cx(h) + ddx[s->dir] * cells, y = sn_cy(h) + ddy[s->dir] * cells;
+	x = (x + SN_GW) % SN_GW;
+	y = (y + SN_GH) % SN_GH;
 	g->food = sn_cell(x, y);
 }
 
@@ -375,6 +377,192 @@ static void test_speed(void) {
 	CHECK(sn_speed_for(150) < (SN_CELL_PX << 8), "the top speed is under a cell a frame");
 }
 
+static int count_ev(const sn_game_t *g, int type) {
+	int i, n = 0;
+	for (i = 0; i < g->nev; i++) if (g->ev[i].type == type) n++;
+	return n;
+}
+
+/* Easy: a crash costs a heart, the snake waits to be steered. */
+static void test_easy(void) {
+	sn_game_t g;
+	int f, bumps = 0, bonks = 0;
+	uint16_t h;
+
+	sn_new_skill(&g, SN_MODE_CLASSIC, 0, SN_SKILL_EASY, rnd);
+	check_invariants(&g, "easy start");
+	CHECK(g.s[0].hearts == SN_HEARTS, "easy starts with %d hearts (%d)", SN_HEARTS, g.s[0].hearts);
+	CHECK(sn_cps(&g.s[0]) == 35, "and at 3.5 cells a second (%d)", sn_cps(&g.s[0]));
+	{
+		sn_game_t n;
+		sn_new(&n, SN_MODE_CLASSIC, 0, rnd);
+		CHECK(n.s[0].hearts == 0 && sn_cps(&n.s[0]) == 70, "normal: no hearts, 7 a second");
+		sn_new_skill(&n, SN_MODE_CLASSIC, 0, SN_SKILL_HARD, rnd);
+		CHECK(n.s[0].hearts == 0 && sn_cps(&n.s[0]) == 90, "hard: 9 a second");
+	}
+
+	/* into the top wall */
+	g.food = SN_NONE;
+	sn_turn(&g, 0, SN_UP);
+	for (f = 0; f < 3000 && !g.s[0].stopped; f++) {
+		sn_step(&g);
+		check_invariants(&g, "easy wall");
+		bumps += count_ev(&g, SN_EV_BUMP);
+	}
+	CHECK(g.s[0].stopped && g.s[0].alive && !g.over, "stopped at the wall, alive");
+	CHECK(bumps == 1 && g.s[0].hearts == SN_HEARTS - 1, "one bump, one heart (%d, %d)", bumps, g.s[0].hearts);
+	h = g.s[0].body[g.s[0].head];
+	CHECK(sn_cy(h) == 1, "head in the last free row (%d)", sn_cy(h));
+
+	/* nothing moves while stopped */
+	for (f = 0; f < 600; f++) {
+		sn_step(&g);
+		check_invariants(&g, "easy waiting");
+		CHECK(g.s[0].body[g.s[0].head] == h, "waits");
+		if (fails > 20) return;
+	}
+
+	/* steering into the wall again: ignored (the same direction) */
+	sn_turn(&g, 0, SN_UP);
+	CHECK(g.s[0].nq == 0, "a turn into the way it faces is not queued");
+	/* left is free: off it goes */
+	sn_turn(&g, 0, SN_LEFT);
+	sn_step(&g);
+	CHECK(!g.s[0].stopped && g.s[0].dir == SN_LEFT, "steered free, moving left");
+	run_moves(&g, 0, 2);
+	CHECK(g.s[0].alive && g.s[0].body[g.s[0].head] != h, "and moved");
+
+	/* bump twice more: the last heart is the game */
+	for (f = 0; f < 20000 && !g.over; f++) {
+		sn_step(&g);
+		check_invariants(&g, "easy to the end");
+		bumps += count_ev(&g, SN_EV_BUMP);
+		bonks += count_ev(&g, SN_EV_BONK);
+		if (g.s[0].stopped) {
+			/* steer back into what it hit? turn down the body side:
+			 * up again into the wall corner, a bonk, then down */
+			uint16_t hh = g.s[0].body[g.s[0].head];
+			if (sn_cx(hh) <= 1) sn_turn(&g, 0, SN_DOWN);
+			else sn_turn(&g, 0, SN_LEFT);
+		}
+	}
+	CHECK(g.over && !g.s[0].alive && g.s[0].hearts == 0, "over on the last heart");
+	CHECK(bumps == SN_HEARTS - 1, "%d bumps before that (%d)", SN_HEARTS - 1, bumps);
+}
+
+/* Easy: a stopped snake with nowhere to go is over, not stuck. */
+static void test_easy_cornered(void) {
+	sn_game_t g;
+	int f;
+	sn_new_skill(&g, SN_MODE_CLASSIC, 0, SN_SKILL_EASY, rnd);
+	g.food = SN_NONE;
+	g.s[0].grow = 20;
+	/* a spiral into the top-left corner: up, left, down... is hard to
+	 * script; instead wall the head in by hand */
+	{
+		uint16_t h = g.s[0].body[g.s[0].head];
+		int x = sn_cx(h), y = sn_cy(h);
+		g.grid[sn_cell(x + 1, y)].what = SN_WALL;
+		g.grid[sn_cell(x, y - 1)].what = SN_WALL;
+		g.grid[sn_cell(x, y + 1)].what = SN_WALL;
+	}
+	for (f = 0; f < 600 && !g.over; f++) sn_step(&g);
+	CHECK(g.over && !g.s[0].alive, "boxed in: over (hearts %d)", g.s[0].hearts);
+}
+
+/* Easy: hearts come back, the speed rises gently and falls on a bump. */
+static void test_easy_hearts(void) {
+	sn_game_t g;
+	int i, got = 0, top = 0;
+	sn_new_skill(&g, SN_MODE_OPEN, 0, SN_SKILL_EASY, rnd);
+	g.s[0].hearts = 2;
+	/* a staircase: a food two cells ahead, then a row down -- the
+	 * path never crosses itself in 25 foods */
+	for (i = 0; i < 25; i++) {
+		int k, m;
+		uint16_t at = g.s[0].next != SN_NONE ? g.s[0].next : g.s[0].body[g.s[0].head];
+		/* a turn down is queued (from the last round): the head goes
+		 * one down from `at`, then right */
+		if (i == 0) g.food = sn_cell((sn_cx(at) + 2) % SN_GW, sn_cy(at));
+		else g.food = sn_cell((sn_cx(at) + 2) % SN_GW, (sn_cy(at) + 1) % SN_GH);
+		sn_turn(&g, 0, SN_RIGHT);
+		for (m = 0; m < 6 && g.s[0].eaten == (uint16_t)i; m++) {
+			run_moves(&g, 0, 1);
+			for (k = 0; k < g.nev; k++) if (g.ev[k].type == SN_EV_HEART) got++;
+		}
+		sn_turn(&g, 0, SN_DOWN);
+		if (sn_cps(&g.s[0]) > top) top = sn_cps(&g.s[0]);
+		if (!g.s[0].alive || g.s[0].stopped) break;
+	}
+	CHECK(g.s[0].eaten == 25, "ate in the open field (%d)", g.s[0].eaten);
+	CHECK(g.s[0].hearts == 4 && got == 2, "a heart every ten foods (%d, got %d)", g.s[0].hearts, got);
+	CHECK(top <= 70 && top > 50, "faster, but gently (%d)", top);
+
+	/* a bump slows it down three steps */
+	{
+		int before = sn_cps(&g.s[0]), after;
+		g.s[0].grow = 8;
+		run_moves(&g, 0, 9);
+		before = sn_cps(&g.s[0]);
+		g.grid[sn_neighbour(&g, g.s[0].next != SN_NONE ? g.s[0].next : g.s[0].body[g.s[0].head], g.s[0].dir)].what = SN_WALL;
+		for (i = 0; i < 400 && !g.s[0].stopped; i++) sn_step(&g);
+		after = sn_cps(&g.s[0]);
+		CHECK(g.s[0].stopped, "bumped the new wall");
+		CHECK(after < before && after >= 35, "slower after the bump (%d -> %d)", before, after);
+	}
+}
+
+/* Easy: food within reach of the head. */
+static void test_easy_food(void) {
+	sn_game_t g;
+	int i, near = 0;
+	for (i = 0; i < 200; i++) {
+		uint16_t h;
+		int dx, dy;
+		sn_new_skill(&g, SN_MODE_CLASSIC, 0, SN_SKILL_EASY, rnd);
+		h = g.s[0].body[g.s[0].head];
+		dx = sn_cx(g.food) - sn_cx(h);
+		dy = sn_cy(g.food) - sn_cy(h);
+		if (dx < 0) dx = -dx;
+		if (dy < 0) dy = -dy;
+		if (dx + dy <= 14) near++;
+	}
+	CHECK(near == 200, "easy food is near the head (%d of 200)", near);
+}
+
+/* Easy, two players: a head-on stops both, nobody dies. */
+static void test_easy_versus(void) {
+	sn_game_t g;
+	int f;
+	sn_new_skill(&g, SN_MODE_VERSUS, 0, SN_SKILL_EASY, rnd);
+	g.food = SN_NONE;
+	CHECK(g.s[0].hearts == SN_HEARTS && g.s[1].hearts == SN_HEARTS, "both have hearts");
+	for (f = 0; f < 4000 && !(g.s[0].stopped && g.s[1].stopped) && !g.over; f++) {
+		sn_step(&g);
+		check_invariants(&g, "easy versus");
+	}
+	CHECK(!g.over, "nobody out after the first crashes");
+	CHECK(g.s[0].alive && g.s[1].alive, "both alive");
+}
+
+/* The autopilot on easy, with a steer-out when stopped: never stuck. */
+static void test_easy_autopilot(void) {
+	sn_game_t g;
+	int f, games = 0;
+	sn_new_skill(&g, SN_MODE_CLASSIC, 0, SN_SKILL_EASY, rnd);
+	for (f = 0; f < 60000; f++) {
+		if (g.over) { games++; sn_new_skill(&g, SN_MODE_CLASSIC, 0, SN_SKILL_EASY, rnd); }
+		if (g.s[0].stopped) sn_turn(&g, 0, (int)rnd(4));
+		else if (rnd(40) == 0) sn_turn(&g, 0, (int)rnd(4));
+		else sn_autopilot(&g, 0);
+		sn_step(&g);
+		check_invariants(&g, "easy autopilot");
+		if (fails > 20) break;
+	}
+	CHECK(f == 60000, "ran");
+	printf("easy, random turns: %d games over in %d frames\n", games, f);
+}
+
 int main(void) {
 	test_start();
 	test_move_and_eat();
@@ -389,6 +577,12 @@ int main(void) {
 	test_autopilot();
 	test_dissolve();
 	test_speed();
+	test_easy();
+	test_easy_cornered();
+	test_easy_hearts();
+	test_easy_food();
+	test_easy_versus();
+	test_easy_autopilot();
 	printf("snake rules: %d checks, %d failed\n", checks, fails);
 	return fails ? 1 : 0;
 }

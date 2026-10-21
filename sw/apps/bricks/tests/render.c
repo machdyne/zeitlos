@@ -69,7 +69,7 @@ static const ar_host_step_t script[] = {
 	 * the way); the rest is driven by the hook */
 	T(12000, 'K'),
 
-	{ 24000, ARH_END, 0, 0, NULL, 0, 0, 0, 0 },
+	{ 30000, ARH_END, 0, 0, NULL, 0, 0, 0, 0 },
 };
 
 static void tap(uint32_t k) {
@@ -155,6 +155,36 @@ void ar_host_hook(uint32_t frame) {
 		br_draw_field_dirty();
 	}
 
+	/* easy, once the normal game is over: the skill line, then a round
+	 * played, then the paddle kept away until the floor saves a ball */
+	{
+		static int easy;           /* 0 not yet, 1 menu, 2 playing, 3 away, 4 done */
+		static uint32_t at;
+		static bool was_up;
+		if (ended && easy == 0 && br.st == ST_TITLE && br.st_frames == 40) {
+			tap(ARH_K_UP);
+			easy = 1;
+			at = frame;
+		}
+		if (easy == 1 && frame == at + 4) { ar_host_snapshot("40_title_skill"); tap(ARH_K_LEFT); }
+		if (easy == 1 && frame == at + 8) { ar_host_snapshot("41_title_easy"); tap(ARH_K_DOWN); }
+		if (easy == 1 && frame == at + 12) { tap('J'); tap('\r'); easy = 2; at = frame; }
+		if (easy == 2 && frame == at + 400) ar_host_snapshot("42_easy_ready");
+		if (easy == 2 && frame == at + 1400) ar_host_snapshot("43_easy_play");
+		if (easy == 2 && frame == at + 1500 && br.st == ST_PLAY) { tap('K'); easy = 3; was_up = br.g.floor_up; }
+		if (easy == 3 && br.st == ST_PLAY) {
+			int bx = br.g.ball[0].x >> 8;
+			br_paddle_centre(&br.g, bx < 160 ? 290 : 30);
+			if (was_up && !br.g.floor_up) {
+				ar_host_snapshot("44_easy_floor_saved");
+				easy = 4;
+				tap('J');
+			}
+			was_up = br.g.floor_up;
+		}
+		if (easy >= 1) goto easy_done;
+	}
+
 	/* with the autopilot off, keep the paddle away from the ball */
 	if (frame >= 12000 && br.st == ST_PLAY) {
 		int bx = br.g.ball[0].x >> 8;
@@ -179,17 +209,22 @@ void ar_host_hook(uint32_t frame) {
 		ar_host_snapshot("33_title_again");
 		ended = true;
 	}
+easy_done:
+	;
 }
 
 int main(int argc, char **argv) {
 	const char *dir = argc > 1 ? argv[1] : ".";
 	int r;
+	ar_host_set_settings("skill normal\n");
 	ar_host_run(script, dir);
 	r = game_main();
 	printf("render: %d pictures, %u frames, %llu blitter operations, "
 		"%u notes\n", ar_host_shots(), ar_host_frame(),
 		(unsigned long long)arh_ops, zsfxh_notes);
 	printf("render: scores file:\n%s", ar_host_scores());
+	printf("render: settings file:\n%s", ar_host_settings());
+	printf("render: last spoken: %s (%d lines)\n", ar_host_said, ar_host_says);
 	printf("render: %u frames checked against a full repaint, %u differed\n",
 		ar_host_verified(), ar_host_verify_bad());
 	{

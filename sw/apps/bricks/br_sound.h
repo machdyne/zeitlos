@@ -30,6 +30,7 @@ enum {
 	BR_SND_SELECT,
 	BR_SND_LETTER,
 	BR_SND_OVER,
+	BR_SND_FLOOR,        /* easy: the safety floor saves a ball and breaks */
 	BR_SND_COUNT
 };
 

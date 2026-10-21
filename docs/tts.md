@@ -623,7 +623,7 @@ off gets all eight, exactly as before. While `tts0` is registered,
 
 An app that starts while speech is OFF, and speech started afterwards,
 still collide: the next utterance takes channel 7 back. Other mixer
-users (`gamedemo`) do not follow the convention yet. The reason
+users (`mausrun`) do not follow the convention yet. The reason
 this is not "let them collide": someone who cannot see the screen and
 has music playing still has to hear the file list to find the stop
 control. If starting speech takes a channel an app already holds, the

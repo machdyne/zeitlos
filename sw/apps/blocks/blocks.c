@@ -40,6 +40,11 @@ static const char help_text[] =
 	"C\tFull screen: colour on or off\n"
 	"M\tMusic on or off\n\n"
 	"On a pad: the d-pad moves, Up drops, A and B turn, X holds.\n\n"
+	"Skill: EASY falls slowly and forgives a full well three times "
+	"(the top half is swept away); NORMAL is the classic game; HARD "
+	"is faster. Left and Right on the top line of the menu change it. "
+	"LITTLE PIECES is endless with shapes of one, two and three blocks "
+	"in a narrower well.\n\n"
 	"Endless: faster every ten rows. 40 lines: against the clock. "
 	"3 minutes: as many points as you can. A T turned into a tight "
 	"slot is a twist, worth more.";
@@ -86,8 +91,41 @@ static uint32_t score_key(void) {
 	return bk.g.score;
 }
 
+bk_mode_t bk_menu_mode(int menu) {
+	switch (menu) {
+	case MENU_LITTLE: return BK_MODE_LITTLE;
+	case MENU_40:     return BK_MODE_40;
+	case MENU_3MIN:   return BK_MODE_3MIN;
+	default:          return BK_MODE_ENDLESS;
+	}
+}
+
+static bool menu_is_game(int m) {
+	return m >= MENU_ENDLESS && m <= MENU_3MIN;
+}
+
+static bool menu_has_level(int m) {
+	return m == MENU_ENDLESS || m == MENU_LITTLE;
+}
+
+static int top_level(void) {
+	return ar_skill() == AR_SKILL_EASY ? 8 : 10;
+}
+
+/* Calm first, a step a level (docs/sfx.md, "Calm first"): easy from
+ * the calmest (tune and bass, 70%), normal from the kick at 86% -- the
+ * whole band by level 3, about the pace the game always had -- and hard
+ * from the whole band at 98%. Normal started calm too once, and with
+ * its rules unchanged it felt slower than it was. */
+void bk_music(void) {
+	static const int8_t base[AR_SKILLS] = { 0, 4, 7 };
+	int lv = bk.g.level ? bk.g.level : 1;
+	int sk = ar_skill();
+	zsfx_music_intensity(base[sk >= 0 && sk < AR_SKILLS ? sk : 1] + lv - 1);
+}
+
 static void load_table(int mode) {
-	ar_scores_load(mode, &bk.table);
+	ar_scores_load(ar_skill_table(mode), &bk.table);
 	bk.best = bk.table.n ? bk.table.e[0].score : 0;
 }
 
@@ -112,11 +150,11 @@ static void title(void) {
 	bk_draw_reset();
 	bk.mode = BK_MODE_ENDLESS;
 	memset(&bk.g, 0, sizeof(bk.g));
-	load_table(bk.menu < MENU_SCORES ? bk.menu : 0);
+	load_table(bk_menu_mode(bk.menu));
 	bk.rank = -1;
 	set_state(ST_TITLE);
 	ar_dirty_all();
-	zsfx_music_tempo(100);
+	zsfx_music_intensity(3);
 	zsfx_music_play(&bk_song_title);
 }
 
@@ -132,7 +170,9 @@ static void start_game(bk_mode_t mode) {
 	bk.mode = mode;
 	load_table(mode);
 	bk_draw_reset();
-	bk_new(&bk.g, mode, mode == BK_MODE_ENDLESS ? bk.start_level : 1, ar_rand_below);
+	bk_new_skill(&bk.g, mode,
+		(mode == BK_MODE_ENDLESS || mode == BK_MODE_LITTLE) ? bk.start_level : 1,
+		ar_skill(), ar_rand_below);
 	bk_theme(bk.g.level);
 	bk.rows = 0;
 	bk.das_dir = 0;
@@ -140,7 +180,7 @@ static void start_game(bk_mode_t mode) {
 	bk.shown_score = 0xffffffffu;
 	set_state(ST_READY);
 	ar_dirty_all();
-	zsfx_music_tempo(100 + 3 * (bk.g.level - 1));
+	bk_music();
 	zsfx_music_play(&bk_song_game);
 #ifdef BK_AUTOPLAY
 	have_plan = false;
@@ -179,7 +219,7 @@ static void name_done(void) {
 	bk.name[3] = 0;
 	load_table(bk.mode);
 	bk.rank = ar_scores_insert(&bk.table, score_key(), bk.name);
-	if (!ar_scores_save(bk.mode, &bk.table))
+	if (!ar_scores_save(ar_skill_table(bk.mode), &bk.table))
 		printf("blocks: could not save the high scores\n");
 	bk_sound(BK_SND_SELECT);
 	show_scores(bk.mode, bk.rank);
@@ -235,6 +275,36 @@ static bool is_go(const ar_event_t *e) {
 		(e->key == AR_BTN_A || e->key == AR_BTN_START);
 }
 
+static const char *const menu_say[MENU_ITEMS] = {
+	"Skill", "Endless", "Little pieces", "40 lines", "3 minutes", "High scores"
+};
+
+static void say_menu(void) {
+	char b[48];
+	strcpy(b, menu_say[bk.menu]);
+	if (bk.menu == MENU_SKILL) {
+		strcat(b, ", ");
+		strcat(b, ar_skill_spoken(ar_skill()));
+	}
+	ar_say(b);
+}
+
+static void menu_move(int d) {
+	bk.menu = (bk.menu + d + MENU_ITEMS) % MENU_ITEMS;
+	if (menu_is_game(bk.menu)) load_table(bk_menu_mode(bk.menu));
+	bk_sound(BK_SND_MENU);
+	dirty_panel();
+	say_menu();
+}
+
+static void skill_change(int d) {
+	ar_skill_set((ar_skill() + d + AR_SKILLS) % AR_SKILLS);
+	if (bk.start_level > top_level()) bk.start_level = top_level();
+	bk_sound(BK_SND_MENU);
+	dirty_panel();
+	ar_say(ar_skill_spoken(ar_skill()));
+}
+
 static void handle(const ar_event_t *e) {
 
 	if (e->type == AR_EV_QUIT) { quit = true; return; }
@@ -287,23 +357,24 @@ static void handle(const ar_event_t *e) {
 
 	case ST_TITLE:
 		if (e->key == AR_BTN_UP || e->key == AR_BTN_DOWN) {
-			bk.menu = (bk.menu + (e->key == AR_BTN_UP ? -1 : 1) +
-				MENU_ITEMS) % MENU_ITEMS;
+			menu_move(e->key == AR_BTN_UP ? -1 : 1);
 			menu_hold = 0;
-			if (bk.menu < MENU_SCORES) load_table(bk.menu);
-			bk_sound(BK_SND_MENU);
-			dirty_panel();
 		} else if ((e->key == AR_BTN_LEFT || e->key == AR_BTN_RIGHT) &&
-		           bk.menu == MENU_ENDLESS) {
+		           bk.menu == MENU_SKILL) {
+			skill_change(e->key == AR_BTN_RIGHT ? 1 : -1);
+		} else if ((e->key == AR_BTN_LEFT || e->key == AR_BTN_RIGHT) &&
+		           menu_has_level(bk.menu)) {
 			bk.start_level += (e->key == AR_BTN_RIGHT) ? 1 : -1;
-			if (bk.start_level < 1) bk.start_level = 10;
-			if (bk.start_level > 10) bk.start_level = 1;
+			if (bk.start_level < 1) bk.start_level = top_level();
+			if (bk.start_level > top_level()) bk.start_level = 1;
 			bk_sound(BK_SND_MENU);
 			dirty_panel();
+		} else if (bk.menu == MENU_SKILL && is_go(e)) {
+			skill_change(1);
 		} else if (is_go(e)) {
 			bk_sound(BK_SND_SELECT);
 			if (bk.menu == MENU_SCORES) show_scores(BK_MODE_ENDLESS, -1);
-			else start_game((bk_mode_t)bk.menu);
+			else start_game(bk_menu_mode(bk.menu));
 		}
 		break;
 
@@ -422,7 +493,7 @@ static void after_events(void) {
 #endif
 		}
 		if (g->ev[i].type == BK_EV_CLEAR || g->ev[i].type == BK_EV_HOLD ||
-		    g->ev[i].type == BK_EV_LEVEL)
+		    g->ev[i].type == BK_EV_LEVEL || g->ev[i].type == BK_EV_RESCUE)
 			bk.hud_dirty = true;
 	}
 
@@ -460,6 +531,7 @@ static void stats_dirty(void) {
 		ar_dirty(STATS_X + 32, STATS_Y + 50, 56, 8);
 		bk.shown_time = t;
 	}
+	if (bk.hud_dirty) ar_dirty(STATS_X, STATS_Y + 64, 88, 8);
 	if (bk.queue_dirty) {
 		ar_dirty(NEXT_X, NEXT_Y, NEXT_W, QUEUE_Y + QUEUE_H - NEXT_Y);
 		ar_dirty(HOLD_X, HOLD_Y, HOLD_W, HOLD_H);
@@ -552,10 +624,7 @@ static void update(uint32_t dt) {
 			menu_hold += (int)dt;
 			if (menu_hold >= 24) {
 				menu_hold -= 7;
-				bk.menu = (bk.menu + ((h & AR_BTN_UP) ? -1 : 1) + MENU_ITEMS) % MENU_ITEMS;
-				if (bk.menu < MENU_SCORES) load_table(bk.menu);
-				bk_sound(BK_SND_MENU);
-				dirty_panel();
+				menu_move((h & AR_BTN_UP) ? -1 : 1);
 			}
 		} else {
 			menu_hold = 0;
@@ -578,6 +647,8 @@ int main(void) {
 	if (!bk_draw_init()) printf("blocks: out of sprite memory\n");
 
 	bk.start_level = 1;
+	bk.menu = MENU_ENDLESS;
+	printf("blocks: skill %s\n", ar_skill_name(ar_skill()));
 	title();
 
 	while (!quit) {

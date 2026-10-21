@@ -84,7 +84,22 @@ static const ar_host_step_t script[] = {
 	SHOT(4700, "20_maze"),
 	SHOT(9000, "21_maze_later"),
 
-	{ 9010, ARH_END, 0, 0, NULL, 0, 0, 0, 0 },
+	/* easy: the skill line, then classic until the snake bumps the
+	 * wall and waits */
+	T(9010, 0x1b), T(9020, 0x1b),
+	T(9030, ARH_K_UP), T(9040, ARH_K_UP), T(9050, ARH_K_UP),
+	SHOT(9060, "22_title_skill_normal"),
+	T(9070, ARH_K_LEFT),
+	SHOT(9080, "23_title_skill_easy"),
+	T(9090, ARH_K_DOWN),
+	T(9100, '\r'),
+	SHOT(9400, "24_easy_play"),
+	T(9410, 'K'),
+	SHOT(10400, "25_easy_bumped"),
+	T(10410, 'J'),
+	SHOT(11500, "26_easy_later"),
+
+	{ 11510, ARH_END, 0, 0, NULL, 0, 0, 0, 0 },
 };
 
 /* The open field wraps: a picture of a head half out of the top (cut
@@ -136,12 +151,16 @@ void ar_host_hook(uint32_t frame) {
 int main(int argc, char **argv) {
 	const char *dir = argc > 1 ? argv[1] : ".";
 	int r;
+	/* the first part of the script is the game as it was: normal */
+	ar_host_set_settings("skill normal\n");
 	ar_host_run(script, dir);
 	r = game_main();
 	printf("render: %d pictures, %u frames, %llu blitter operations, "
 		"%u notes\n", ar_host_shots(), ar_host_frame(),
 		(unsigned long long)arh_ops, zsfxh_notes);
 	printf("render: scores file:\n%s", ar_host_scores());
+	printf("render: settings file:\n%s", ar_host_settings());
+	printf("render: last spoken: %s (%d lines)\n", ar_host_said, ar_host_says);
 	printf("render: %u frames checked against a full repaint, %u differed\n",
 		ar_host_verified(), ar_host_verify_bad());
 	{

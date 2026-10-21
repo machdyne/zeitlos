@@ -27,6 +27,7 @@ enum {
 	BK_SND_SELECT,
 	BK_SND_LETTER,
 	BK_SND_LAND,
+	BK_SND_RESCUE,       /* easy: topped out, the top half swept away */
 	BK_SND_N
 };
 

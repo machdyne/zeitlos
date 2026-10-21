@@ -9,7 +9,7 @@
  *
  * -- what every arcade game here had to invent for itself --
  *
- * space3d, chip8 and gamedemo each carry their own answers to the same
+ * space3d, chip8 and mausrun each carry their own answers to the same
  * questions: how to draw into a window that other windows overlap, how
  * to go full screen (and come back) without wm drawing on top, which
  * key does that, how colour turns into bitplanes, how a keyboard and a
@@ -67,7 +67,7 @@
  *
  * ar_frame() returns the display frames that actually elapsed (1 when
  * keeping up), so the game can step the world that many times and keep
- * its speed when the machine is busy (docs/gamedemo.md, "The frame rate
+ * its speed when the machine is busy (docs/mausrun.md, "The frame rate
  * is the smoothness").
  *
  * -- keys the runtime owns --
@@ -405,6 +405,40 @@ int ar_scores_insert(ar_table_t *t, uint32_t score, const char *who);
 int ar_scores_parse(const char *text, int mode, ar_table_t *t);
 int ar_scores_format(char *out, int cap, const char *old_text, int mode,
 	const ar_table_t *t);
+
+/* -- skill (docs/arcade.md, "Skill") --
+ *
+ * Easy, normal or hard: what the game does with it is its own business
+ * (slower, more lives, mistakes that cost a heart rather than the
+ * game). The runtime keeps the choice: read at ar_init() from
+ * /data/<app>/settings.txt, else from apps.arcade.skill in zeitlos.cfg,
+ * else EASY; ar_skill_set() writes it back. Each skill keeps its own
+ * score tables, through ar_skill_table(). */
+enum { AR_SKILL_EASY = 0, AR_SKILL_NORMAL, AR_SKILL_HARD, AR_SKILLS };
+
+int ar_skill(void);
+/* Change it, and remember it (settings.txt). */
+void ar_skill_set(int skill);
+/* "EASY", "NORMAL", "HARD"; and "Easy" ... for ar_say() */
+const char *ar_skill_name(int skill);
+const char *ar_skill_spoken(int skill);
+/* The score table for `mode` at the current skill: `mode` itself on
+ * normal, so the tables from before skills existed are normal's;
+ * mode + 16 on easy, mode + 32 on hard. Modes are 0..15. */
+int ar_skill_table(int mode);
+
+/* -- the settings text, for the host tests --
+ * Lines "key value"; ar_skill_parse() reads "skill easy|normal|hard"
+ * (-1 if there is none), ar_skill_format() writes `old` back with the
+ * skill line replaced or added. */
+int ar_skill_parse(const char *text);
+int ar_skill_word(const char *w);        /* "easy" -> AR_SKILL_EASY, -1 */
+int ar_skill_format(char *out, int cap, const char *old, int skill);
+
+/* Say something, interrupting whatever was being said: menu items, so
+ * a child who cannot read yet still knows what is selected. Silent
+ * (and cheap) when speech is off. */
+void ar_say(const char *text);
 
 /* -- small helpers every game wants -- */
 

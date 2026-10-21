@@ -38,6 +38,33 @@ Twelve rounds, each with a name and its own backdrop -- *First Light*,
 again, faster and with tougher silver. The menu starts at any of the
 twelve (left/right on PLAY).
 
+### Skill
+
+The top line of the menu, `< EASY >`, sets how hard it is (Left and
+Right; [arcade.md](arcade.md#skill)). **Easy is the default.**
+
+| | Easy | Normal | Hard |
+|---|---|---|---|
+| serve speed, round 1 | 1.1 px a frame (66 a second) | 1.9 | 2.25 |
+| more each round | 0.06 | 0.125 | 0.125 |
+| speed-ups | 0.02 every 16 bricks | 0.05 every 8 | 0.06 every 8 |
+| top speed | 2 px a frame | 4.25 | 4.5 |
+| paddle | 48 (64 with E) | 32 (48 with E) | 32 (48 with E) |
+| paddles | 5 | 3 | 3 |
+| the **safety floor** | yes | no | no |
+| a held ball goes by itself after | 10 s | 6 s | 5 s |
+| rounds 1-3 | every other row | as drawn | as drawn |
+| capsules | from one break in two, more of the helpful ones | one in four | one in four |
+
+On easy a glowing bar runs along the bottom under the paddle: the
+**safety floor**. A ball that gets past the paddle bounces off it, once
+-- a springy sound, the bar breaking up in sparks -- and it comes back
+with the next ball served. Silver takes two hits at most. Normal is the
+game as it was. Each skill keeps its own high scores.
+
+The music grows with the rounds -- calm on round 1, the drums later,
+on easy at half the pace ([sfx.md](sfx.md), "Calm first").
+
 ### Capsules
 
 A broken coloured brick sometimes lets a capsule fall (never more than
@@ -210,3 +237,9 @@ it checks **every frame** against a repaint from nothing
 end of a round in a few thousand frames the script thins the wall out
 to its lowest row at one point, and drops the laser and catch capsules
 on the paddle so their pictures are drawn too.
+
+Easy has its own cases (speeds, lives, the paddle's two lengths, half
+the rows on rounds 1-3 and all of them on round 4, the floor bouncing
+once and coming back with the next ball), and the soak runs every round
+on easy and on hard as well. The render plays the skill line, an easy
+round and the floor saving a ball (pictures 40-44).

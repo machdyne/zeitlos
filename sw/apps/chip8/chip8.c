@@ -128,7 +128,7 @@ static bool flags_have_file;
  * down"; a full-screen one reads the USB report and asks "is the
  * physical W key held". Neither can answer the other's question:
  * a keysym is layout-resolved and has no repeat-free level, and a
- * usage code is not a character. gamedemo.c makes the same split for
+ * usage code is not a character. mausrun.c makes the same split for
  * the same reason. */
 static const char hex_keysym[16] = {
 	'x', '1', '2', '3',
@@ -192,7 +192,7 @@ static int keysym_to_hex(uint32_t keysym) {
 }
 
 /* Is this HID usage in either port's current report? Same shape as
- * gamedemo's kbd_held() -- the report is a level, which is exactly
+ * mausrun's kbd_held() -- the report is a level, which is exactly
  * what CHIP-8's EX9E/EXA1 want. */
 static bool usage_held(uint8_t usage) {
 	int port;

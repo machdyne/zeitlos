@@ -36,6 +36,7 @@ travel with the card. `settings` edits them; see
 
 | key | default | read by | effect |
 | --- | --- | --- | --- |
+| `apps.arcade.skill` | `easy` | `snake`, `blocks`, `bricks`, `mausrun` | how hard the arcade games start: `easy`, `normal` (the games as they were) or `hard`; a choice made in a game's menu is remembered there and wins ([arcade.md](arcade.md#skill)) |
 | `apps.bbs.dir` | `/data/bbs` | `bbs` | the BBS's data directory: its own `bbs.cfg`, the users, the bulletins ([bbs.md](bbs.md#the-data-directory)) |
 | `apps.irc.channels` | *(none)* | `irc` | channels to join once connected, `#zeitlos #fpga` ([irc_app.md](irc_app.md)) |
 | `apps.irc.nick` | `zeitlos` | `irc` | your nickname; an `_` is added while it is taken |

@@ -884,7 +884,7 @@ that spins in its main loop is runnable forever, so it takes a full
 share whether or not it has anything to do — and that share comes
 directly out of whatever is in the foreground.
 
-This was measured, not theorised. `gamedemo` running full-screen showed
+This was measured, not theorised. `mausrun` running full-screen showed
 `dt 4-5` (four to five display frames per update) with `wm`, `net` and
 `repl` alongside it, and `dt 2` with them killed. `ps` showed every
 process in `run` with no `Z_PROC_FLAG_BLOCKED` (0x4) set.

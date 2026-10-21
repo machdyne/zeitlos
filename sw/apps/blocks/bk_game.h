@@ -44,12 +44,17 @@
 #define BK_QUEUE 5
 
 enum { BK_EMPTY = 0, BK_I, BK_O, BK_T, BK_S, BK_Z, BK_J, BK_L, BK_GREY,
-	BK_TYPES = 8 };
+	/* little pieces (BK_MODE_LITTLE): one, two and three cells */
+	BK_DOT, BK_DUO, BK_I3, BK_V3,
+	/* the narrower well's side walls: never cleared, never moved */
+	BK_WALL,
+	BK_TYPES };
 
 typedef enum {
 	BK_MODE_ENDLESS = 0,   /* score; a level every ten lines */
 	BK_MODE_40,            /* forty lines against the clock */
 	BK_MODE_3MIN,          /* score in three minutes */
+	BK_MODE_LITTLE,        /* endless, little pieces, a well 8 wide */
 	BK_MODES
 } bk_mode_t;
 
@@ -64,8 +69,18 @@ enum {
 	BK_EV_CLEAR,           /* value: rows; flags below */
 	BK_EV_LEVEL,           /* value: the new level */
 	BK_EV_OVER,            /* topped out */
-	BK_EV_DONE             /* the mode's goal: 40 lines, or time */
+	BK_EV_DONE,            /* the mode's goal: 40 lines, or time */
+	BK_EV_RESCUE           /* easy: topped out, the top half cleared;
+	                          value: rescues left */
 };
+
+/* How hard: the values of zarcade's AR_SKILL_*, kept apart so the rules
+ * need nothing from the runtime. */
+enum { BK_SKILL_EASY = 0, BK_SKILL_NORMAL, BK_SKILL_HARD };
+
+#define BK_RESCUES      3      /* easy: top-outs forgiven per game */
+#define BK_LITTLE_L     1      /* little pieces: the walls' columns */
+#define BK_LITTLE_R     (BK_W - 2)
 
 #define BK_F_TWIST  1      /* the T turned into place: a twist */
 #define BK_F_B2B    2      /* back to back: four, or twist, after another */
@@ -90,6 +105,10 @@ typedef struct {
 
 typedef struct {
 	bk_mode_t mode;
+	uint8_t skill;         /* BK_SKILL_* */
+	bool little;           /* BK_MODE_LITTLE: walls in columns 0 and 9 */
+	uint8_t rescues;       /* easy: top-outs still forgiven */
+	uint8_t max_level;
 	uint8_t well[BK_H][BK_W];
 
 	bk_piece_t cur;
@@ -128,8 +147,25 @@ typedef struct {
 /* The four cells of a shape in a rotation, box coordinates (y down). */
 void bk_cells(int type, int rot, int8_t out[4][2]);
 
+/* A game at normal skill: as it always was. */
 void bk_new(bk_game_t *g, bk_mode_t mode, int start_level,
 	uint32_t (*rand_below)(uint32_t n));
+void bk_new_skill(bk_game_t *g, bk_mode_t mode, int start_level, int skill,
+	uint32_t (*rand_below)(uint32_t n));
+
+/* Cells a shape really has (1..4; bk_cells() always fills four, the
+ * little ones repeating their last). */
+int bk_ncells(int type);
+
+/* Lines for the next level, and the frames a piece may lie before it
+ * locks, at this game's skill. */
+int bk_lines_per_level(const bk_game_t *g);
+int bk_lock_frames(const bk_game_t *g);
+/* Rows a frame x256 for this game, now. */
+uint32_t bk_gravity_now(const bk_game_t *g);
+/* The playable columns: 0..9, or 1..8 with little pieces. */
+int bk_col0(const bk_game_t *g);
+int bk_col1(const bk_game_t *g);
 
 /* Player actions; true if something moved. */
 bool bk_move(bk_game_t *g, int dx);

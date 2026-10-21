@@ -16,10 +16,41 @@ engine ([sfx.md](sfx.md)). The source is `sw/apps/snake/`.
 
 | | |
 |---|---|
-| **Classic** | walls all round; every bite makes the snake faster, and the music with it |
+| **Classic** | walls all round; every bite makes the snake a little faster, and the music fuller |
 | **Open field** | no walls: leave by one edge and come back at the other |
 | **Mazes** | six levels of inner walls; eat twelve to clear a level, which then gets faster |
 | **Two players** | the arrows against W A S D (or two gamepads); a crash loses the round, a head-on is a draw; first to three rounds |
+
+## Skill
+
+The top line of the menu, `< EASY >`, sets how hard it is (Left and
+Right; [arcade.md](arcade.md#skill)). **Easy is the default.**
+
+| | Easy | Normal | Hard |
+|---|---|---|---|
+| speed, cells a second | 3.5, + 0.1 a bite, up to 7 | 7, + 0.3 a bite, up to 15 | 9, + 0.4, up to 17 |
+| mazes | 4, + 0.3 a level | 8, + 0.6 a level | 9.5, + 0.7 |
+| two players | 4.5 | 8.5 | 10 |
+| a crash | costs a **heart** | ends the game | ends the game |
+| the star | 14 seconds | 7 seconds | 6 seconds |
+| food | appears near the head | anywhere | anywhere |
+
+On easy the snake has **three hearts**, shown in the status line, and
+wins another every ten bites (five at most). Running into a wall or a
+snake costs one: there is a soft bump, the snake **stops**, and white
+dots blink in the cells it could go to. Nothing moves until it is
+steered somewhere free -- steering into something else only knocks. It
+is also a little slower after a bump, so a child who is struggling is
+never pushed further. The last heart ends the game as a crash always
+did, and so does a bump with nowhere left to go. In two players each
+snake has its own hearts, and a head-on bumps both.
+
+Normal is the game as it was before skills, rule for rule. Each skill
+keeps its own high scores.
+
+The music follows the snake: at 3.5 cells a second it is the tune and
+bass alone, slow; the drums come in as the snake speeds up
+([sfx.md](sfx.md), "Calm first").
 
 Each bite is worth more as the game goes on, and in the mazes more on
 later levels. Every fifth bite a **star** appears for seven seconds --
@@ -109,8 +140,11 @@ Effects for eating, the star (appearing, eaten, gone), crashing (a
 noise crash and a falling saw), each segment bursting, clearing a level,
 the menu, a round won, and game over -- each panned to where it happens.
 Two original tunes: "Garden" on the title screen and "Slither" in the
-game, which speeds up with the snake in the classic game and the open
-field. M turns the music off and on.
+game, which grows with the snake's speed -- calm and slow at first, the
+whole band only when the snake is fast. On easy a bump is a soft
+"boing", steering into something while stopped a knock, and a heart
+won back a chime. Menu lines are spoken as the cursor reaches them,
+when speech is on. M turns the music off and on.
 
 ## The title screen
 
@@ -124,7 +158,7 @@ it, so it never goes under the text.
 
 | File | Is |
 |---|---|
-| `sn_game.[ch]` | the rules: grid, snakes, moves, food, the star, collisions, the autopilot. No drawing; host-tested |
+| `sn_game.[ch]` | the rules: grid, snakes, moves, food, the star, collisions, hearts and stopping (easy), the speeds per skill, the autopilot. No drawing; host-tested |
 | `sn_levels.c` | the layouts, as ASCII pictures (40 x 28: `#` wall, `1`/`2` starts, `B` the title's panel) |
 | `sn_draw.c` | the picture: paint, overlays, palette, effects |
 | `sn_sound.c` | the effects and the two tunes |
@@ -164,3 +198,12 @@ every one of its 9,010 frames against a repaint from nothing
 ([arcade.md](arcade.md), "On a build host"). Until this, the script's
 "open field" was really a second two-player game: Esc between rounds
 did nothing, so the menu keys that followed started versus again.
+
+Easy has its own cases: the snake stops at a wall with a heart less and
+waits (600 frames, not a pixel moved); a turn the way it faces is not
+queued, a free one starts it again; the last heart ends the game; boxed
+in, it is over rather than stuck; a heart every ten bites, five at
+most; slower after a bump; food within reach of the head; a head-on in
+two players stops both; and a minute of random steering with the
+autopilot, the invariants checked every frame. The render plays the
+skill line and an easy game into the wall (pictures 22-26).

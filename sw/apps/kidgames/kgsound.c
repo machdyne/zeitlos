@@ -12,7 +12,7 @@
  * Channel 7, not 0.
  *
  * Every other app that makes a noise takes channel 0 -- chip8's
- * buzzer, gamedemo's music, audiotest. The mixer is global state and
+ * buzzer, mausrun's music, audiotest. The mixer is global state and
  * outlives any one app, so a cue fired here on channel 0 would cut off
  * whatever a tracker in another window was playing through it. Taking
  * the far end leaves the low channels, which everything else reaches
@@ -52,7 +52,7 @@ static bool have_audio;
  * starved of the bus and the machine stops -- not this app, the
  * machine.
  *
- * The same translation sw/apps/chip8's sound.c, gamedemo's music.c and
+ * The same translation sw/apps/chip8's sound.c, mausrun's music.c and
  * sw/apps/track all do, for the same reason. It is copied rather than
  * shared because none of them has put it in sw/common yet, and a
  * fourth copy is a better argument for doing so than a third was.

@@ -118,6 +118,13 @@ static const zsfx_seg_t s_over[] = {
 	{ ZSFX_TRI, 30, 220, 208, 190, 0 },
 };
 
+/* a springy "boing" up, then the glass of the floor going */
+static const zsfx_seg_t s_floor[] = {
+	{ ZSFX_TRI, 6, 220, 660, 230, 210 },
+	{ ZSFX_TRI, 8, 660, 880, 210, 120 },
+	{ ZSFX_NOISE, 14, 4000, 2000, 90, 0 },
+};
+
 static const zsfx_fx_t fx[BR_SND_COUNT] = {
 	[BR_SND_PADDLE]      = { 2, 2, s_paddle },
 	[BR_SND_WALL]        = { 0, 1, s_wall },
@@ -143,6 +150,7 @@ static const zsfx_fx_t fx[BR_SND_COUNT] = {
 	[BR_SND_SELECT]      = { 2, 2, s_select },
 	[BR_SND_LETTER]      = { 1, 1, s_letter },
 	[BR_SND_OVER]        = { 5, 4, s_over },
+	[BR_SND_FLOOR]       = { 5, 3, s_floor },
 };
 
 void br_sound(int which, int x) {

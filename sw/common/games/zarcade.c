@@ -1351,6 +1351,131 @@ bool ar_scores_save(int mode, const ar_table_t *t) {
 }
 
 /* ===================================================================
+ * skill
+ * =================================================================== */
+
+static int skill = AR_SKILL_EASY;
+static const char *const skill_words[AR_SKILLS] = { "easy", "normal", "hard" };
+static const char *const skill_names[AR_SKILLS] = { "EASY", "NORMAL", "HARD" };
+
+static const char *const skill_spoken[AR_SKILLS] = { "Easy", "Normal", "Hard" };
+
+int ar_skill(void) { return skill; }
+
+const char *ar_skill_spoken(int s) {
+	return (s >= 0 && s < AR_SKILLS) ? skill_spoken[s] : "";
+}
+
+const char *ar_skill_name(int s) {
+	return (s >= 0 && s < AR_SKILLS) ? skill_names[s] : "?";
+}
+
+int ar_skill_table(int mode) {
+	mode &= 15;
+	if (skill == AR_SKILL_EASY) return mode + 16;
+	if (skill == AR_SKILL_HARD) return mode + 32;
+	return mode;
+}
+
+/* A word, up to the first space, tab, CR or NL, ignoring case. */
+static bool word_is(const char *s, const char *w) {
+	while (*w) {
+		char c = *s++;
+		if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+		if (c != *w++) return false;
+	}
+	return *s == 0 || *s == ' ' || *s == '\t' || *s == '\r' || *s == '\n';
+}
+
+int ar_skill_word(const char *w) {
+	int i;
+	if (!w) return -1;
+	while (*w == ' ' || *w == '\t') w++;
+	for (i = 0; i < AR_SKILLS; i++)
+		if (word_is(w, skill_words[i])) return i;
+	return -1;
+}
+
+static bool line_is_skill(const char *s) {
+	while (*s == ' ' || *s == '\t') s++;
+	return word_is(s, "skill");
+}
+
+int ar_skill_parse(const char *text) {
+	const char *s = text;
+	int found = -1;
+	while (s && *s) {
+		const char *eol = s;
+		while (*eol && *eol != '\n') eol++;
+		if (line_is_skill(s)) {
+			const char *v = s;
+			while (*v == ' ' || *v == '\t') v++;
+			v += 5;
+			found = ar_skill_word(v);
+		}
+		s = *eol ? eol + 1 : eol;
+	}
+	return found;
+}
+
+int ar_skill_format(char *out, int cap, const char *old, int sk) {
+	int n = 0;
+	const char *s = old;
+	const char *w;
+	int lw;
+	if (sk < 0 || sk >= AR_SKILLS) sk = AR_SKILL_EASY;
+	while (s && *s) {
+		const char *eol = s;
+		while (*eol && *eol != '\n') eol++;
+		if (!line_is_skill(s) && eol > s) {
+			int len = (int)(eol - s);
+			if (n + len + 1 >= cap) return -1;
+			memcpy(out + n, s, (size_t)len);
+			n += len;
+			out[n++] = '\n';
+		}
+		s = *eol ? eol + 1 : eol;
+	}
+	w = skill_words[sk];
+	lw = (int)strlen(w);
+	if (n + 6 + lw + 1 >= cap) return -1;
+	memcpy(out + n, "skill ", 6); n += 6;
+	memcpy(out + n, w, (size_t)lw); n += lw;
+	out[n++] = '\n';
+	out[n] = 0;
+	return n;
+}
+
+#define SETTINGS_MAX 512
+
+void ar__skill_load(void) {
+	static char buf[SETTINGS_MAX];
+	int n = arh_read_settings(buf, SETTINGS_MAX - 1), s = -1;
+	if (n > 0) {
+		buf[n] = 0;
+		s = ar_skill_parse(buf);
+	}
+	if (s < 0) s = arh_cfg_skill();
+	skill = (s >= 0 && s < AR_SKILLS) ? s : AR_SKILL_EASY;
+}
+
+void ar_skill_set(int s) {
+	static char old[SETTINGS_MAX], out[SETTINGS_MAX];
+	int n;
+	if (s < 0 || s >= AR_SKILLS) return;
+	skill = s;
+	n = arh_read_settings(old, SETTINGS_MAX - 1);
+	if (n < 0) n = 0;
+	old[n] = 0;
+	n = ar_skill_format(out, SETTINGS_MAX, old, s);
+	if (n > 0) arh_write_settings(out, n);
+}
+
+void ar_say(const char *text) {
+	if (text && *text) arh_say(text);
+}
+
+/* ===================================================================
  * setup
  * =================================================================== */
 
@@ -1369,6 +1494,7 @@ void ar__core_init(const ar_desc_t *d) {
 	evq_head = evq_tail = 0;
 	for (i = 0; i < AR_PLAYERS; i++) kb_held[i] = pad_held[i] = latch[i] = 0;
 	ar_dirty_all();
+	ar__skill_load();
 }
 
 uint32_t ar_ticks(void) { return ar__s.ticks; }

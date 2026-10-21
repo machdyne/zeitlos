@@ -78,6 +78,21 @@ static const zsfx_seg_t s_letter[] = {
 	{ ZSFX_PULSE25, 2, 1568, 1568, 110, 0 },
 };
 
+/* easy: a soft "boing" rather than a crash, a dull knock, a chime */
+static const zsfx_seg_t s_bump[] = {
+	{ ZSFX_TRI, 4, 330, 220, 230, 200 },
+	{ ZSFX_TRI, 6, 220, 330, 200, 160 },
+	{ ZSFX_TRI, 10, 330, 196, 160, 0 },
+};
+static const zsfx_seg_t s_bonk[] = {
+	{ ZSFX_TRI, 4, 180, 140, 180, 0 },
+};
+static const zsfx_seg_t s_heart[] = {
+	{ ZSFX_SINE, 4, 784, 784, 200, 180 },
+	{ ZSFX_SINE, 4, 1047, 1047, 200, 180 },
+	{ ZSFX_SINE, 12, 1568, 1568, 190, 0 },
+};
+
 static const zsfx_fx_t fx[SN_SND_COUNT] = {
 	[SN_SND_EAT]        = { 2, 3, s_eat },
 	[SN_SND_BONUS_EAT]  = { 3, 5, s_bonus_eat },
@@ -93,6 +108,9 @@ static const zsfx_fx_t fx[SN_SND_COUNT] = {
 	[SN_SND_GAMEOVER]   = { 4, 4, s_gameover },
 	[SN_SND_READY]      = { 3, 3, s_ready },
 	[SN_SND_LETTER]     = { 1, 1, s_letter },
+	[SN_SND_BUMP]       = { 5, 3, s_bump },
+	[SN_SND_BONK]       = { 2, 1, s_bonk },
+	[SN_SND_HEART]      = { 4, 3, s_heart },
 };
 
 void sn_sound(int which, int x) {

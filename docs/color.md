@@ -214,7 +214,7 @@ white, so text stays readable (dithered greys were tried first and
 were not). A program that
 never uses colour runs exactly as before.
 
-**gamedemo** ([gamedemo.md](gamedemo.md#colour)). Four colours,
+**mausrun** ([mausrun.md](mausrun.md#colour)). Four colours,
 double-buffered, `z_color_4_below`: the monochrome layout's scroll
 room is spent on plane 1, since the renderer redraws every frame
 anyway. Colour per object from the existing 1bpp art; every primitive

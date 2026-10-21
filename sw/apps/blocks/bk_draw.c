@@ -68,8 +68,20 @@ void bk_mono_inks(ar_ink_t *ink) {
 	ink[BK_C_THEME] = ar_ink_grey50;
 }
 
-static int body_of(int t) { return t == BK_GREY ? BK_C_THEME : t; }
-static int edge_of(int t) { return t == BK_GREY ? BK_C_WHITE : t + 8; }
+/* The colour each kind of cell is drawn in: a shape its own (1..7);
+ * the little pieces borrow four of them; grey and the walls the theme. */
+static const uint8_t colour_of[BK_TYPES] = {
+	0, BK_I, BK_O, BK_T, BK_S, BK_Z, BK_J, BK_L, BK_C_THEME,
+	BK_T, BK_O, BK_I, BK_L, BK_C_THEME
+};
+static int body_of(int t) {
+	return (t > 0 && t < BK_TYPES) ? colour_of[t] : BK_C_THEME;
+}
+static int edge_of(int t) {
+	if (t == BK_WALL) return BK_C_THEME;
+	if (t == BK_GREY || t <= 0 || t >= BK_TYPES) return BK_C_WHITE;
+	return colour_of[t] + 8;
+}
 
 /* ===================================================================
  * sprites
@@ -102,7 +114,7 @@ static bool make_cell(ar_sprite_t *s, int t, bool ghost) {
 bool bk_draw_init(void) {
 	int t;
 	bool ok = true;
-	for (t = BK_I; t <= BK_GREY; t++) {
+	for (t = BK_I; t < BK_TYPES; t++) {
 		ok = make_cell(&cell_s[t], t, false) && ok;
 		ok = make_cell(&ghost_s[t], t, true) && ok;
 	}
@@ -127,9 +139,9 @@ static void shape_in_box(int t, int bx, int by, int bw, int bh, int size,
 	int as) {
 	int8_t c[4][2];
 	int i, minx = 9, maxx = -1, miny = 9, maxy = -1, w, h, ox, oy;
-	if (t < BK_I || t > BK_L) return;
+	if (t < BK_I || t > BK_V3 || t == BK_GREY) return;
 	bk_cells(t, 0, c);
-	for (i = 0; i < 4; i++) {
+	for (i = 0; i < bk_ncells(t); i++) {
 		if (c[i][0] < minx) minx = c[i][0];
 		if (c[i][0] > maxx) maxx = c[i][0];
 		if (c[i][1] < miny) miny = c[i][1];
@@ -139,7 +151,7 @@ static void shape_in_box(int t, int bx, int by, int bw, int bh, int size,
 	h = (maxy - miny + 1) * size;
 	ox = bx + (bw - w) / 2;
 	oy = by + (bh - h) / 2;
-	for (i = 0; i < 4; i++)
+	for (i = 0; i < bk_ncells(t); i++)
 		block(ox + (c[i][0] - minx) * size, oy + (c[i][1] - miny) * size,
 			as ? as : t, size);
 }
@@ -181,7 +193,7 @@ typedef struct {
 #define MAX_LINES 16
 static char tbuf[MAX_LINES][28];
 
-const char *const bk_mode_names[] = { "ENDLESS", "40 LINES", "3 MINUTES" };
+const char *const bk_mode_names[] = { "ENDLESS", "40 LINES", "3 MINUTES", "LITTLE" };
 
 static int panel(ar_rect_t *r, line_t *ln) {
 
@@ -197,39 +209,53 @@ static int panel(ar_rect_t *r, line_t *ln) {
 		r->x = 64; r->y = 64; r->w = 192; r->h = 156;
 		for (i = 0; i < MENU_ITEMS; i++) {
 			static const char *const items[MENU_ITEMS] = {
-				"ENDLESS", "40 LINES", "3 MINUTES", "HIGH SCORES"
+				"", "ENDLESS", "LITTLE PIECES", "40 LINES", "3 MINUTES",
+				"HIGH SCORES"
 			};
 			bool sel = (i == bk.menu);
 			char *b = tbuf[i];
+			if (i == MENU_SKILL) {
+				/* "< EASY >": Left and Right change it */
+				strcpy(b, sel ? "< " : "  ");
+				strcat(b, ar_skill_name(ar_skill()));
+				strcat(b, sel ? " >" : "  ");
+				LINE(8, b, sel ? BK_C_WHITE : 10, &z_font_8x8, 1);
+				continue;
+			}
 			b[0] = sel ? '>' : ' ';
 			b[1] = ' ';
 			strcpy(b + 2, items[i]);
 			strcat(b, sel ? " <" : "  ");
-			LINE(12 + i * 14, b, sel ? BK_C_WHITE : 9, &z_font_8x8, 1);
+			LINE(22 + (i - 1) * 12, b, sel ? BK_C_WHITE : 9, &z_font_8x8, 1);
 		}
-		strcpy(tbuf[4], "START LEVEL  ");
-		ar_utoa(tbuf[4] + strlen(tbuf[4]), (uint32_t)bk.start_level, 2, ' ');
-		LINE(74, tbuf[4], bk.menu == MENU_ENDLESS ? 10 : 14, &z_font_5x8, 1);
-		LINE(84, bk.menu == MENU_ENDLESS ? "LEFT/RIGHT TO CHANGE" : "",
-			14, &z_font_5x8, 1);
-		if (bk.menu < MENU_SCORES) {
-			strcpy(tbuf[5], "BEST ");
+		{
+			bool lv = (bk.menu == MENU_ENDLESS || bk.menu == MENU_LITTLE);
+			strcpy(tbuf[6], "START LEVEL  ");
+			ar_utoa(tbuf[6] + strlen(tbuf[6]), (uint32_t)bk.start_level, 2, ' ');
+			LINE(86, tbuf[6], lv ? 10 : 14, &z_font_5x8, 1);
+			LINE(95, lv ? "LEFT/RIGHT TO CHANGE" :
+				bk.menu == MENU_SKILL ? "LEFT/RIGHT: HOW HARD" : "",
+				14, &z_font_5x8, 1);
+		}
+		if (bk.menu >= MENU_ENDLESS && bk.menu <= MENU_3MIN) {
+			strcpy(tbuf[7], "BEST ");
 			if (bk.menu == MENU_40) {
-				if (bk.best) bk_format_time(tbuf[5] + 5, 9999999u - bk.best);
-				else strcat(tbuf[5], "--:--.-");
+				if (bk.best) bk_format_time(tbuf[7] + 5, 9999999u - bk.best);
+				else strcat(tbuf[7], "--:--.-");
 			} else {
-				ar_utoa(tbuf[5] + 5, bk.best, 7, '0');
+				ar_utoa(tbuf[7] + 5, bk.best, 7, '0');
 			}
-			LINE(98, tbuf[5], BK_C_WHITE, &z_font_8x8, 1);
+			LINE(106, tbuf[7], BK_C_WHITE, &z_font_8x8, 1);
 		}
-		LINE(118, "ARROWS  Z X  SPACE  H", 9, &z_font_5x8, 1);
-		LINE(130, "ENTER TO PLAY   M MUSIC", 9, &z_font_5x8, 1);
+		LINE(122, "ARROWS  Z X  SPACE  H", 9, &z_font_5x8, 1);
+		LINE(132, "ENTER TO PLAY   M MUSIC", 9, &z_font_5x8, 1);
 		LINE(142, "F1 HELP  F11 FULL SCREEN", 9, &z_font_5x8, 1);
 		return n;
 
 	case ST_SCORES:
 		r->x = 64; r->y = 64; r->w = 192; r->h = 156;
-		LINE(8, bk_mode_names[bk.score_view], 10, &z_font_8x8, 2);
+		LINE(4, bk_mode_names[bk.score_view], 10, &z_font_8x8, 2);
+		LINE(22, ar_skill_name(ar_skill()), 9, &z_font_5x8, 1);
 		for (i = 0; i < AR_SCORES; i++) {
 			char *b = tbuf[i];
 			ar_utoa(b, (uint32_t)i + 1, 2, ' ');
@@ -402,10 +428,24 @@ static void paint_well(const ar_rect_t *r) {
 		for (col = c0; col <= c1; col++) {
 			int t = bk.g.well[rr][col];
 			/* The sprite, not four fills: one blitter pass a plane,
-			 * and the same pixels as the falling piece's overlay. */
-			if (t) ar_sprite(&cell_s[t], COL_X(col), y);
+			 * and the same pixels as the falling piece's overlay.
+			 * Walls are drawn below, where they always are. */
+			if (t && t != BK_WALL) ar_sprite(&cell_s[t], COL_X(col), y);
 		}
 	}
+
+	/* little pieces: the walls, never moving, cleared rows or not */
+	if (bk.g.little)
+		for (row = r0; row <= r1; row++) {
+			int y;
+			if (row < BK_HIDDEN || row >= BK_H) continue;
+			y = ROW_Y(row);
+			if (y + BK_CELL <= r->y || y >= r->y + r->h) continue;
+			if (c0 == 0 && bk.g.well[row][0] == BK_WALL)
+				ar_sprite(&cell_s[BK_WALL], COL_X(0), y);
+			if (c1 == BK_W - 1 && bk.g.well[row][BK_W - 1] == BK_WALL)
+				ar_sprite(&cell_s[BK_WALL], COL_X(BK_W - 1), y);
+		}
 }
 
 static void paint_boxes(const ar_rect_t *r) {
@@ -447,6 +487,13 @@ static void paint_boxes(const ar_rect_t *r) {
 		text_if(r, STATS_X, y, "TIME", 9, &z_font_8x8, 1);
 		bk_format_time(v, bk.mode == BK_MODE_3MIN ? bk_frames_left(&bk.g) : bk.g.frames);
 		text_if(r, STATS_X + 32, y, v, BK_C_WHITE, &z_font_8x8, 1);
+		/* easy: the rescues left, as hearts */
+		if (bk.g.skill == BK_SKILL_EASY && overlaps(r, STATS_X, STATS_Y + 64, 88, 8)) {
+			static const uint32_t heart[6] = { 0x36, 0x7f, 0x7f, 0x3e, 0x1c, 0x08 };
+			int k;
+			for (k = 0; k < bk.g.rescues; k++)
+				ar_bitmap(heart, 4, 0, 0, STATS_X + k * 10, STATS_Y + 65, 7, 6, 5);
+		}
 	}
 
 	/* next, the first big and the rest small */
@@ -455,8 +502,9 @@ static void paint_boxes(const ar_rect_t *r) {
 		text_if(r, NEXT_X, NEXT_Y - 10, "NEXT", BK_C_WHITE, &z_font_8x8, 1);
 		box(NEXT_X, NEXT_Y, NEXT_W, NEXT_H);
 		shape_in_box(bk.g.queue[0], NEXT_X, NEXT_Y, NEXT_W, NEXT_H, 8, 0);
-		box(NEXT_X, QUEUE_Y, NEXT_W, QUEUE_H);
-		for (i = 1; i < BK_QUEUE; i++)
+		/* easy: only the next one -- less to look at */
+		if (bk.g.skill != BK_SKILL_EASY) box(NEXT_X, QUEUE_Y, NEXT_W, QUEUE_H);
+		for (i = 1; i < BK_QUEUE && bk.g.skill != BK_SKILL_EASY; i++)
 			shape_in_box(bk.g.queue[i], NEXT_X, QUEUE_Y + 4 + (i - 1) * 33,
 				NEXT_W, 33, 6, 0);
 	}
@@ -639,10 +687,16 @@ void bk_before_paint(void *user) {
 		/* the part already below the well is not there to copy */
 		if (y + h > WELL_Y + WELL_H) h = WELL_Y + WELL_H - y;
 		if (y + h + d > WELL_Y + WELL_H) h = WELL_Y + WELL_H - y - d;
-		if (h > 0 && !bk.copy_failed &&
-		    !ar_copy(WELL_X, y, WELL_X, y + d, WELL_W, h))
-			bk.copy_failed = true;
-		ar_dirty(WELL_X, y, WELL_W, d);
+		/* little pieces: the walls do not fall -- only the columns
+		 * between them move */
+		{
+			int x0 = WELL_X, w = WELL_W;
+			if (bk.g.little) { x0 = COL_X(1); w = (BK_W - 2) * BK_CELL; }
+			if (h > 0 && !bk.copy_failed &&
+			    !ar_copy(x0, y, x0, y + d, w, h))
+				bk.copy_failed = true;
+			ar_dirty(x0, y, w, d);
+		}
 	}
 
 	for (r = 0; r < BK_H; r++)
@@ -750,7 +804,7 @@ static void piece_overlays(const bk_piece_t *p, int dy_rows, bool ghost) {
 	int8_t c[4][2];
 	int i;
 	bk_cells(p->type, p->rot, c);
-	for (i = 0; i < 4; i++) {
+	for (i = 0; i < bk_ncells(p->type); i++) {
 		int row = p->y + dy_rows + c[i][1];
 		int x = COL_X(p->x + c[i][0]);
 		int y;
@@ -879,7 +933,7 @@ static void clear_effects(const bk_event_t *e) {
 	/* sparks from every block going, in its own colour */
 	for (r = BK_HIDDEN; r < BK_H; r++) {
 		if (!(bk.g.clear_rows & (1u << r))) continue;
-		for (x = 0; x < BK_W; x += (e->value >= 3 ? 1 : 2)) {
+		for (x = bk_col0(&bk.g); x <= bk_col1(&bk.g); x += (e->value >= 3 ? 1 : 2)) {
 			int t = bk.g.well[r][x];
 			ar_parts_burst(COL_X(x) + 5, ROW_Y(r) + 5, 1, edge_of(t), 1, 380, 14, 18);
 		}
@@ -996,7 +1050,23 @@ void bk_draw_events(void) {
 			bk_say("LEVEL", s + 6, 12);
 			bk_theme(e->value);
 			bk_sound(BK_SND_LEVEL);
-			zsfx_music_tempo(100 + 3 * (e->value - 1));
+			bk_music();
+			break;
+		}
+
+		case BK_EV_RESCUE: {
+			/* easy: the top half swept away -- a wind of sparks
+			 * across the well, and the well drawn again */
+			char s[12];
+			int x;
+			for (x = 0; x < BK_W; x++)
+				ar_parts_burst(COL_X(x) + 5, ROW_Y(BK_H / 2), 3, 10, 2, 420, 30, -8);
+			ar_utoa(s, (uint32_t)e->value, 0, ' ');
+			strcat(s, " MORE");
+			bk_say("SAVED", e->value ? s : "LAST ONE", 10);
+			bk_draw_well_dirty();
+			bk.hud_dirty = true;
+			bk_sound(BK_SND_RESCUE);
 			break;
 		}
 
@@ -1011,7 +1081,8 @@ static void lock_flash(const bk_piece_t *p) {
 	int8_t c[4][2];
 	int i;
 	bk_cells(p->type, p->rot, c);
-	for (i = 0; i < 4 && i < MAX_FLASH; i++) {
+	for (i = 0; i < MAX_FLASH; i++) flashes[i].t = 0;
+	for (i = 0; i < bk_ncells(p->type) && i < MAX_FLASH; i++) {
 		int row = p->y + c[i][1];
 		flashes[i].x = COL_X(p->x + c[i][0]);
 		flashes[i].y = ROW_Y(row);

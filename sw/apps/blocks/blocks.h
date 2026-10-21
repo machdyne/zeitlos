@@ -66,7 +66,14 @@ typedef enum {
 	ST_NAME
 } bk_state_t;
 
-enum { MENU_ENDLESS = 0, MENU_40, MENU_3MIN, MENU_SCORES, MENU_ITEMS };
+/* The menu, top to bottom. MENU_SKILL is EASY / NORMAL / HARD. */
+enum { MENU_SKILL = 0, MENU_ENDLESS, MENU_LITTLE, MENU_40, MENU_3MIN,
+	MENU_SCORES, MENU_ITEMS };
+
+/* The game a menu line starts (MENU_ENDLESS .. MENU_3MIN). */
+bk_mode_t bk_menu_mode(int menu);
+/* The music: calm at the start, the whole band at higher levels. */
+void bk_music(void);
 
 #define FLASH_FRAMES 16
 #define FALL_FRAMES  10
@@ -78,7 +85,7 @@ typedef struct {
 	bk_game_t g;
 	bk_mode_t mode;
 	int menu;
-	int start_level;          /* endless, 1..10 */
+	int start_level;          /* endless and little, 1..10 (easy 1..8) */
 	int score_view;
 
 	ar_table_t table;

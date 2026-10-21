@@ -143,7 +143,7 @@ board boots to a desktop with no sdcard ([core apps in flash](#core-apps-in-flas
 |-----|-------------|
 | [chess](docs/chess_app.md) | Chess, with a [built-in engine](docs/chess_engine.md) |
 | [chip8](docs/chip8_app.md) | CHIP-8 game emulator |
-| [gamedemo](docs/gamedemo.md) | 2D side-scrolling platformer game |
+| [mausrun](docs/mausrun.md) | Maus Run: a side-scrolling platformer for children -- eight levels in four themes, cheese, stars, cats |
 | space3d | First-person 3D space shooter game |
 | [snake](docs/snake_app.md) | The classic snake game: four ways to play, two players, 16 colours full screen |
 | [blocks](docs/blocks_app.md) | Falling blocks: endless, 40 lines against the clock, 3 minutes for points |

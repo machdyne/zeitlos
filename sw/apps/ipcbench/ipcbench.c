@@ -582,7 +582,7 @@ static void bench_exists(void) {
 		"term", "files", "text", "read", "web", "sheet", "draw", "view",
 		"track", "midi", "play", "calc", "clock", "cal", "info", "settings",
 		"keyboard", "ask", "irc", "hex", "mmod", "casino", "chess",
-		"kidgames", "basic", "chip8", "space3d", "gpu3d", "gamedemo",
+		"kidgames", "basic", "chip8", "space3d", "gpu3d", "mausrun",
 	};
 	const uint32_t n = sizeof(names) / sizeof(names[0]);
 	uint8_t found[sizeof(names) / sizeof(names[0])];

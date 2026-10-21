@@ -5,7 +5,7 @@ full screen, in colour or monochrome, for `snake` and the arcade games
 that follow it (`blocks`, `bricks`). Sound is its companion,
 [zsfx](sfx.md).
 
-space3d, chip8 and gamedemo each carry their own answers to the same
+space3d, chip8 and mausrun each carry their own answers to the same
 questions -- how to draw into a window other windows overlap, how to go
 full screen and come back, which keys do that, how colour becomes
 bitplanes, how a keyboard and a gamepad become one set of buttons, how
@@ -144,7 +144,7 @@ ar_shutdown();
 
 `ar_frame()` returns the display frames that actually elapsed, 1 when
 keeping up. Stepping the world that many times keeps its speed when
-the machine is busy ([gamedemo.md](gamedemo.md), "The frame rate is
+the machine is busy ([mausrun.md](mausrun.md), "The frame rate is
 the smoothness"). It waits on the display's frame counter, yielding
 while it waits (a game that spins takes a full scheduler share from
 everything else, [app_runtime.md](app_runtime.md)); on a board whose
@@ -309,13 +309,67 @@ entry:
 mode, score, three initials. `ar_scores_load/save/rank/insert`; lines
 of other modes are kept as they were.
 
+Each skill keeps its own tables (below): a game passes
+`ar_skill_table(mode)` as the mode, which is `mode` itself on normal --
+so the tables written before skills existed are normal's -- and
+`mode + 16` on easy, `mode + 32` on hard.
+
+## Skill
+
+Every arcade game has three settings: **easy**, **normal** and
+**hard**. What each means is the game's business -- slower, longer, more
+lives, a crash that costs a heart rather than the game -- but the
+choice is the runtime's, so that it works the same everywhere:
+
+- It is the **top line of each game's menu**, `< EASY >`, changed with
+  Left and Right (Enter steps it too), and spoken when it changes.
+- **Easy is the default.** The games are meant to be playable by a
+  five-year-old as they start; normal is the game as it was before
+  skills, unchanged, and hard starts where a normal game is after a
+  while.
+- It is remembered per game in `/data/<app>/settings.txt`, a line
+  `skill easy` (other lines in the file are kept).
+- Without a saved choice it comes from `apps.arcade.skill` in
+  `zeitlos.cfg` ([config.md](config.md)) -- `easy`, `normal` or `hard`
+  -- and then from easy. A saved choice wins over the configuration,
+  so a child's machine can be set to `normal` and still be put back to
+  easy from the menu.
+
+```c
+int s = ar_skill();                       /* AR_SKILL_EASY .. AR_SKILL_HARD */
+ar_skill_set(AR_SKILL_NORMAL);            /* and written to settings.txt */
+ar_skill_name(s);                         /* "EASY", for the menu */
+ar_skill_spoken(s);                       /* "Easy", for ar_say() */
+ar_scores_load(ar_skill_table(mode), &t); /* this skill's table */
+```
+
+The rules files take the skill as a plain number (`sn_new_skill()`,
+`bk_new_skill()`, `br_new_skill()`, with their own `*_SKILL_*` names of
+the same values), so they need nothing from the runtime and their host
+tests can play every skill.
+
+### Saying what is selected
+
+`ar_say(text)` speaks a line through the text-to-speech service
+([tts.md](tts.md)), interrupting whatever it was saying, and is silent
+and cheap when speech is off. The games say each menu line as the
+cursor reaches it ("Classic", "Skill, easy"), so a child who cannot
+read yet still knows what Enter will do.
+
+### Calm music
+
+All three games start their music calm and slow and let it grow with
+the game -- the tune and bass alone at first, the drums only later --
+through `zsfx_music_intensity()` ([sfx.md](sfx.md), "Calm first").
+The title screens play at intensity 3: no kick and no snare.
+
 ## Building a game on it
 
 ```make
 SRC_DIRS = $(COMMON_DIR)/games
 OBJS = zeitlos.o zobj.o zgfx.o zcolor.o zfont_data.o zwin.o zwidget.o \
 	zspeak.o zdialog.o zfsapp.o \
-	zarcade.o zarcade_sys.o zsfx.o \
+	zarcade.o zarcade_sys.o zsfx.o zcfg.o \
 	<the game's own objects>
 ```
 
@@ -323,8 +377,9 @@ OBJS = zeitlos.o zobj.o zgfx.o zcolor.o zfont_data.o zwin.o zwidget.o \
 ink expansion, sprites, text, the buttons, scores -- and includes no
 Zeitlos header beyond the font type. `zarcade_sys.c` is the half that
 talks to the machine (the window, wm's messages, game mode, the frame
-counter, the files, the blitter), through the small `arh_*` interface
-in `zarcade_int.h`.
+counter, the files, the configuration, speech, the blitter), through
+the small `arh_*` interface in `zarcade_int.h`. `zcfg.o` is for
+`apps.arcade.skill`.
 
 ## On a build host
 

@@ -230,7 +230,7 @@ GAMES_DEMOS = [
     (zcard("Z_DIR_APPS", "snake"), "sw/apps/snake/snake.bin"),
     (zcard("Z_DIR_APPS", "blocks"), "sw/apps/blocks/blocks.bin"),
     (zcard("Z_DIR_APPS", "bricks"), "sw/apps/bricks/bricks.bin"),
-    (zcard("Z_DIR_APPS", "gamedemo"), "sw/apps/gamedemo/gamedemo.bin"),
+    (zcard("Z_DIR_APPS", "mausrun"), "sw/apps/mausrun/mausrun.bin"),
     (zcard("Z_DIR_APPS", "gpu3d"), "sw/apps/gpu3d/gpu3d.bin"),
     (zcard("Z_DIR_APPS", "gpudemo"), "sw/apps/gpudemo/gpudemo.bin"),
     (zcard("Z_DIR_APPS", "chip8"), "sw/apps/chip8/chip8.bin"),
@@ -537,6 +537,14 @@ for _n in sorted(os.listdir(_SLIDE_EX)) if os.path.isdir(_SLIDE_EX) else []:
     if _n.endswith(".zsl"):
         SLIDE_FILES.append((zcard("Z_DIR_SLIDE_EXAMPLES", _n), "sw/data/slide/examples/" + _n))
 
+# mausrun's levels (docs/mausrun.md, "Levels"): every .txt in
+# sw/data/mausrun/levels, in order. Level 1 is also compiled in.
+MAUSRUN_FILES = []
+_MAUSRUN_LV = os.path.join(_FONT_ROOT, "sw", "data", "mausrun", "levels")
+for _n in sorted(os.listdir(_MAUSRUN_LV)) if os.path.isdir(_MAUSRUN_LV) else []:
+    if _n.endswith(".txt"):
+        MAUSRUN_FILES.append((zcard("Z_DIR_MAUSRUN_LEVELS", _n), "sw/data/mausrun/levels/" + _n))
+
 # chip8's own ROMs, where its open dialog starts (docs/chip8_app.md).
 # An XO-CHIP demo; at 65,000 bytes it picks its own profile, so the
 # folder needs no chip8.cfg.
@@ -828,7 +836,8 @@ def data_inputs():
     """
     return (LIBZ_FILES + LIBZ_EXTRA + CONFIG_FILES + NETWORK_FILES
             + FONT_FILES + DESK_FILES + EXAMPLES + FPGA_FILES
-            + FPGA_EXAMPLES + DEMO_FILES + CHIP8_FILES + SLIDE_FILES)
+            + FPGA_EXAMPLES + DEMO_FILES + CHIP8_FILES + SLIDE_FILES
+            + MAUSRUN_FILES)
 
 
 def plan(root, ark_dir=None, packs=None, verbose=True):
@@ -864,7 +873,7 @@ def plan(root, ark_dir=None, packs=None, verbose=True):
 
     data_lists = data_inputs()
 
-    # Check every input up front. Finding out that gamedemo.bin was
+    # Check every input up front. Finding out that mausrun.bin was
     # never built after formatting a 64MB image and copying twelve
     # other files is a slower way to learn the same thing.
     #
@@ -947,6 +956,7 @@ def plan(root, ark_dir=None, packs=None, verbose=True):
     add_list(DESK_FILES, KEEP)      # "can be edited in place" (remote_desktop.md)
     add_list(CHIP8_FILES, REPLACE)
     add_list(SLIDE_FILES, KEEP)     # the person may have edited the tour
+    add_list(MAUSRUN_FILES, REPLACE)  # the game's own levels (docs/mausrun.md)
     # Headers by directory rather than by name: the set is "whatever
     # sw/common exports", and a list here would go stale silently --
     # the symptom being a missing include on the device, long after.

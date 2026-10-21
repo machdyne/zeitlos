@@ -61,7 +61,7 @@ static const uint16_t pow2_48[48] = {
  * the mixer holds its grant on the main arbiter forever. The CPU is
  * starved of the bus and the machine stops.
  *
- * Same translation sw/apps/gamedemo's music.c and sw/apps/track both
+ * Same translation sw/apps/mausrun's music.c and sw/apps/track both
  * do, for the same reason. */
 static uint32_t phys_of(const void *p) {
 	uint32_t v = (uint32_t)(uintptr_t)p;

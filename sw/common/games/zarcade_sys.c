@@ -55,6 +55,8 @@
 #include "../zdialog.h"
 #include "../zfsapp.h"
 #include "../zdata.h"
+#include "../zcfg.h"
+#include "../zspeak.h"
 
 #include "zarcade_int.h"
 #include "zsfx.h"
@@ -129,6 +131,28 @@ bool arh_write_scores(const char *buf, int len) {
 	char path[64];
 	if (!z_data_file(path, sizeof path, "scores.txt")) return false;
 	return fs_write_file(path, (char *)buf, len) >= 0;
+}
+
+int arh_read_settings(char *buf, int cap) {
+	char path[64];
+	if (!z_data_file(path, sizeof path, "settings.txt")) return -1;
+	return fs_read_file(path, buf, cap);
+}
+
+bool arh_write_settings(const char *buf, int len) {
+	char path[64];
+	if (!z_data_file(path, sizeof path, "settings.txt")) return false;
+	return fs_write_file(path, (char *)buf, len) >= 0;
+}
+
+int arh_cfg_skill(void) {
+	char v[16];
+	if (!z_cfg_get("apps.arcade.skill", v, sizeof v)) return -1;
+	return ar_skill_word(v);
+}
+
+void arh_say(const char *text) {
+	z_speak(text, Z_TTS_F_INTERRUPT);
 }
 
 uint32_t arh_seed(void) {

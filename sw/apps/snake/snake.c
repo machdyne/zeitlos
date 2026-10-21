@@ -38,6 +38,10 @@ static const char help_text[] =
 	"F11\tFull screen, or back to the window\n"
 	"C\tFull screen: colour on or off\n"
 	"M\tMusic on or off\n\n"
+	"Skill: on EASY the snake starts slowly and a crash only costs a "
+	"heart -- it stops and waits for you to steer it somewhere free. "
+	"NORMAL is the classic game, HARD is faster. Left and Right on the "
+	"top line of the menu change it.\n\n"
 	"Classic: walls all round. Open field: the edges wrap. Mazes: eat "
 	"twelve to clear a level. Two players: the arrows against W A S D "
 	"(or two gamepads), first to three rounds.\n\n"
@@ -77,7 +81,30 @@ static void set_state(sn_state_t st) {
 }
 
 static int score_mode(sn_mode_t m) {
-	return (int)m;
+	return ar_skill_table((int)m);
+}
+
+/* The music follows the snake: calm and slow at the start, the whole
+ * band at full speed only when the snake is fast (zsfx.h,
+ * zsfx_music_intensity()). 3.5 cells a second is the calmest, every 0.8
+ * a step more. */
+static void music_follow(void) {
+	int cps = sn_cps(&sn.g.s[0]);
+	zsfx_music_intensity((cps - 35) / 8);
+}
+
+static const char *const menu_say[MENU_ITEMS] = {
+	"Skill", "Classic", "Open field", "Mazes", "Two players", "High scores"
+};
+
+static void say_menu(void) {
+	char b[48];
+	strcpy(b, menu_say[sn.menu]);
+	if (sn.menu == MENU_SKILL) {
+		strcat(b, ", ");
+		strcat(b, ar_skill_spoken(ar_skill()));
+	}
+	ar_say(b);
 }
 
 static void load_table(sn_mode_t m) {
@@ -92,7 +119,7 @@ static void title(void) {
 	sn.rank = -1;
 	ar_dirty_all();
 	set_state(ST_TITLE);
-	zsfx_music_tempo(100);
+	zsfx_music_intensity(3);
 	zsfx_music_play(&sn_song_title);
 }
 
@@ -108,12 +135,18 @@ static void show_scores(int view, int rank) {
 static void begin(sn_mode_t mode, int level, bool keep) {
 	uint32_t score = sn.g.s[0].score;
 	uint8_t w0 = sn.g.s[0].wins, w1 = sn.g.s[1].wins;
-	sn_new(&sn.g, mode, level, ar_rand_below);
+	uint8_t h0 = sn.g.s[0].hearts, h1 = sn.g.s[1].hearts;
+	sn_new_skill(&sn.g, mode, level, ar_skill(), ar_rand_below);
 	if (keep) {
 		sn.g.s[0].score = score;
 		sn.g.s[0].wins = w0;
 		sn.g.s[1].wins = w1;
+		/* a maze level keeps the hearts it had; a round of two
+		 * players starts each with a full set */
+		if (mode == SN_MODE_MAZE && h0) sn.g.s[0].hearts = h0;
+		(void)h1;
 	}
+	music_follow();
 	sn.mode = mode;
 	sn_draw_reset();
 	sn.dissolving[0] = sn.dissolving[1] = false;
@@ -127,17 +160,23 @@ static void start_game(sn_mode_t mode) {
 	else sn.hiscore = 0;
 	memset(&sn.g, 0, sizeof(sn.g));
 	begin(mode, 0, false);
-	zsfx_music_tempo(100);
 	zsfx_music_play(&sn_song_game);
 }
 
-/* The music speeds up with the snake. */
-static void follow_tempo(void) {
-	int base = sn_speed_for(70), sp = sn.g.s[0].speed;
-	int t = 100 + ((sp - base) * 60) / (sn_speed_for(150) - base);
-	if (sn.g.mode != SN_MODE_CLASSIC && sn.g.mode != SN_MODE_OPEN) t = 100;
-	if (t < 100) t = 100;
-	zsfx_music_tempo(t);
+static void menu_move(int d) {
+	sn.menu = (sn.menu + d + MENU_ITEMS) % MENU_ITEMS;
+	sn_sound(SN_SND_MENU, -1);
+	dirty_panel();
+	say_menu();
+}
+
+static void skill_change(int d) {
+	ar_skill_set((ar_skill() + d + AR_SKILLS) % AR_SKILLS);
+	sn_sound(SN_SND_MENU, -1);
+	load_table(SN_MODE_CLASSIC);
+	sn.hud_dirty = true;
+	dirty_panel();
+	ar_say(ar_skill_spoken(ar_skill()));
 }
 
 /* ===================================================================
@@ -237,11 +276,13 @@ static void handle(const ar_event_t *e) {
 	case ST_TITLE:
 		/* A press moves at once; holding repeats (update()). */
 		if (e->key == AR_BTN_UP || e->key == AR_BTN_DOWN) {
-			sn.menu = (sn.menu + (e->key == AR_BTN_UP ? -1 : 1) +
-				MENU_ITEMS) % MENU_ITEMS;
+			menu_move(e->key == AR_BTN_UP ? -1 : 1);
 			menu_hold = 0;
-			sn_sound(SN_SND_MENU, -1);
-			dirty_panel();
+		} else if (sn.menu == MENU_SKILL &&
+		           (e->key == AR_BTN_LEFT || e->key == AR_BTN_RIGHT)) {
+			skill_change(e->key == AR_BTN_RIGHT ? 1 : -1);
+		} else if (sn.menu == MENU_SKILL && is_go(e)) {
+			skill_change(1);
 		} else if (is_go(e)) {
 			sn_sound(SN_SND_SELECT, -1);
 			switch (sn.menu) {
@@ -380,7 +421,7 @@ static void game_step(void) {
 #endif
 	for (i = 0; i < sn.g.nev; i++) {
 		const sn_event_t *e = &sn.g.ev[i];
-		if (e->type == SN_EV_SPEEDUP) follow_tempo();
+		if (e->type == SN_EV_SPEEDUP) music_follow();
 		if (e->type == SN_EV_LEVEL_DONE && sn.st == ST_PLAY) {
 			set_state(ST_LEVEL);
 			sn_draw_celebrate(120);
@@ -461,11 +502,7 @@ static void update(uint32_t dt) {
 		} else {
 			menu_hold = 0;
 		}
-		if (d) {
-			sn.menu = (sn.menu + d + MENU_ITEMS) % MENU_ITEMS;
-			sn_sound(SN_SND_MENU, -1);
-			dirty_panel();
-		}
+		if (d) menu_move(d);
 	}
 }
 
@@ -485,6 +522,8 @@ int main(void) {
 	if (!sn_draw_init())
 		printf("snake: out of sprite memory\n");
 
+	sn.menu = MENU_CLASSIC;
+	printf("snake: skill %s\n", ar_skill_name(ar_skill()));
 	title();
 
 	while (!quit) {

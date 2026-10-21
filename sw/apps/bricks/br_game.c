@@ -188,14 +188,27 @@ static const char *const lv_names[] = {
 static const int16_t ang_sin[8] = { 36, 71, 104, 136, 165, 190, 212, 228 };
 static const int16_t ang_cos[8] = { 254, 246, 234, 217, 196, 171, 143, 116 };
 
-#define SPEED_MIN   416          /* the slow capsule: 1.6 px a frame */
-#define SPEED_MAX   1088         /* 4.25 */
-#define SPEED_STEP  12           /* every SPEED_HITS bricks hit */
-#define SPEED_HITS  8
+/* Speeds per skill (easy, normal, hard), 1/256 pixel a frame. Normal is
+ * the game as it was. Easy serves at 1.1 px a frame -- 66 px a second,
+ * well under two-thirds of normal -- and never goes past 2. */
+static const int16_t speed_min[3]   = { 240, 416, 416 };   /* the slow capsule */
+static const int16_t speed_max[3]   = { 512, 1088, 1152 };
+static const int16_t speed_step[3]  = { 6, 12, 16 };       /* every speed_hits */
+static const int8_t speed_hits[3]   = { 16, 8, 8 };
+static const int16_t serve_speed[3] = { 288, 480, 576 };   /* round 1 */
+static const int16_t serve_round[3] = { 16, 32, 32 };      /* more a round */
+static const int16_t serve_top[3]   = { 416, 704, 800 };
+static const int16_t top_boost[3]   = { 64, 160, 192 };
+static const int16_t serve_hold[3]  = { 600, 360, 300 };   /* frames */
 #define CAP_FALL    320          /* 1.25 px a frame */
 #define SHOT_SPEED  5
-#define SERVE_HOLD  360          /* a served ball goes by itself after 6 s */
 #define CATCH_HOLD  150
+
+static int sk(const br_game_t *g) {
+	return g->skill <= BR_SKILL_HARD ? g->skill : BR_SKILL_NORMAL;
+}
+
+int32_t br_speed_max(const br_game_t *g) { return speed_max[sk(g)]; }
 
 int br_levels(void) { return NLEVELS; }
 
@@ -243,13 +256,24 @@ static int32_t vel_y(const br_game_t *g, const br_ball_t *b) {
  * =================================================================== */
 
 static void load_rows(br_game_t *g, const char *const *rows) {
-	int r, c, silver_hp = 2 + (g->level - 1) / 6;
+	int r, c, silver_hp = 2 + (g->level - 1) / 6, row_n = 0;
+	/* easy: silver breaks in two at most, and the first three rounds
+	 * have every other row */
+	bool thin = g->skill == BR_SKILL_EASY && g->level <= 3;
 	if (silver_hp > 4) silver_hp = 4;
+	if (g->skill == BR_SKILL_EASY && silver_hp > 2) silver_hp = 2;
 	memset(g->brick, 0, sizeof(g->brick));
 	memset(g->hp, 0, sizeof(g->hp));
 	g->bricks_left = 0;
 	for (r = 0; r < BR_ROWS && rows[r]; r++) {
-		for (c = 0; c < BR_COLS && rows[r][c]; c++) {
+		bool skip = false;
+		if (thin) {
+			bool any = false;
+			for (c = 0; c < BR_COLS && rows[r][c]; c++)
+				if (rows[r][c] != '.') any = true;
+			if (any) skip = (row_n++ & 1) != 0;
+		}
+		for (c = 0; c < BR_COLS && rows[r][c] && !skip; c++) {
 			char ch = rows[r][c];
 			int t = BR_EMPTY;
 			if (ch >= '1' && ch <= '6') t = BR_C1 + (ch - '1');
@@ -263,8 +287,9 @@ static void load_rows(br_game_t *g, const char *const *rows) {
 }
 
 static void level_setup(br_game_t *g) {
-	g->speed_base = 480 + 32 * (g->level - 1);
-	if (g->speed_base > 704) g->speed_base = 704;
+	int k = sk(g);
+	g->speed_base = serve_speed[k] + serve_round[k] * (g->level - 1);
+	if (g->speed_base > serve_top[k]) g->speed_base = serve_top[k];
 	g->hits = 0;
 	g->cleared = false;
 	g->drop_wait = 2;
@@ -347,11 +372,11 @@ static void release_all(br_game_t *g) {
 
 static void set_power(br_game_t *g, int p) {
 	if (g->power == BR_P_WIDE && p != BR_P_WIDE) {
-		g->px += (BR_PADDLE_WIDE - BR_PADDLE_W) / 2;
-		g->pw = BR_PADDLE_W;
+		g->px += (g->pw_wide - g->pw_normal) / 2;
+		g->pw = g->pw_normal;
 	} else if (p == BR_P_WIDE && g->power != BR_P_WIDE) {
-		g->px -= (BR_PADDLE_WIDE - BR_PADDLE_W) / 2;
-		g->pw = BR_PADDLE_WIDE;
+		g->px -= (g->pw_wide - g->pw_normal) / 2;
+		g->pw = g->pw_wide;
 	}
 	if (g->power == BR_P_CATCH && p != BR_P_CATCH) release_all(g);
 	g->power = p;
@@ -404,7 +429,7 @@ static void take(br_game_t *g, int type, int x) {
 	case BR_CAP_CATCH: set_power(g, BR_P_CATCH); break;
 	case BR_CAP_LASER: set_power(g, BR_P_LASER); break;
 	case BR_CAP_MULTI: multi(g); break;
-	case BR_CAP_SLOW:  g->speed = SPEED_MIN; g->hits = 0; break;
+	case BR_CAP_SLOW:  g->speed = speed_min[sk(g)]; g->hits = 0; break;
 	case BR_CAP_LIFE:
 		if (g->lives < 9) g->lives++;
 		ev(g, BR_EV_LIFE, 0, 0, 0, x, 0);
@@ -421,9 +446,10 @@ void br_serve(br_game_t *g) {
 	memset(g->cap, 0, sizeof(g->cap));
 	memset(g->shot, 0, sizeof(g->shot));
 	g->power = BR_P_NONE;
-	g->pw = BR_PADDLE_W;
+	g->pw = g->pw_normal;
 	g->px = (BR_FX0 + BR_FX1 - g->pw) / 2;
 	g->speed = g->speed_base;
+	g->floor_up = (g->skill == BR_SKILL_EASY);
 	g->top_boost = false;
 	g->chain = 0;
 	g->fire_wait = 0;
@@ -431,15 +457,25 @@ void br_serve(br_game_t *g) {
 	b->live = true;
 	b->stuck = true;
 	b->stuck_off = (int16_t)(g->pw / 2 - BR_BALL / 2 + 4);
-	b->stuck_left = SERVE_HOLD;
+	b->stuck_left = serve_hold[sk(g)];
 	hold_balls(g);
 }
 
 void br_new(br_game_t *g, int level, uint32_t (*rand_below)(uint32_t n)) {
+	br_new_skill(g, level, BR_SKILL_NORMAL, rand_below);
+}
+
+void br_new_skill(br_game_t *g, int level, int skill,
+	uint32_t (*rand_below)(uint32_t n)) {
 	memset(g, 0, sizeof(*g));
 	g->rand_below = rand_below;
+	g->skill = (uint8_t)(skill >= BR_SKILL_EASY && skill <= BR_SKILL_HARD ?
+		skill : BR_SKILL_NORMAL);
+	/* easy: the long paddle from the start, and longer still with E */
+	g->pw_normal = g->skill == BR_SKILL_EASY ? BR_PADDLE_WIDE : BR_PADDLE_W;
+	g->pw_wide = g->skill == BR_SKILL_EASY ? BR_PADDLE_EASY_WIDE : BR_PADDLE_WIDE;
 	g->level = level < 1 ? 1 : level;
-	g->lives = BR_LIVES;
+	g->lives = g->skill == BR_SKILL_EASY ? BR_LIVES_EASY : BR_LIVES;
 	g->next_life = 20000;
 	load_level(g);
 	br_serve(g);
@@ -488,12 +524,18 @@ static int box_bricks(const br_game_t *g, int x, int y, int w, int h,
 }
 
 static void maybe_drop(br_game_t *g, int r, int c) {
-	static const uint8_t weight[BR_CAPS] = { 0, 22, 16, 18, 16, 20, 4 };
+	static const uint8_t weights[2][BR_CAPS] = {
+		{ 0, 22, 16, 18, 16, 20, 4 },
+		/* easy: more of the helpful ones, more paddles */
+		{ 0, 24, 14, 22, 24, 8, 8 },
+	};
+	const uint8_t *weight = weights[g->skill == BR_SKILL_EASY ? 1 : 0];
 	int i, slot = -1, t, roll, total = 0;
 	if (--g->drop_wait > 0) return;
 	for (i = 0; i < BR_MAX_CAPS; i++) if (!g->cap[i].type) { slot = i; break; }
 	if (slot < 0) return;
-	if (g->rand_below(4) != 0) return;
+	/* one break in four lets a capsule go -- one in two on easy */
+	if (g->rand_below(g->skill == BR_SKILL_EASY ? 2 : 4) != 0) return;
 	for (t = 1; t < BR_CAPS; t++) total += weight[t];
 	roll = (int)g->rand_below((uint32_t)total);
 	for (t = 1; t < BR_CAPS - 1 && roll >= weight[t]; t++) roll -= weight[t];
@@ -524,9 +566,9 @@ static void hit(br_game_t *g, int r, int c, bool by_ball) {
 	int t = g->brick[r][c];
 	if (t == BR_EMPTY) return;
 	if (t == BR_GOLD) { ev(g, BR_EV_GOLD, r, c, 0, BR_BRICK_X(c), BR_BRICK_Y(r)); return; }
-	if (++g->hits % SPEED_HITS == 0 && g->speed < SPEED_MAX) {
-		g->speed += SPEED_STEP;
-		if (g->speed > SPEED_MAX) g->speed = SPEED_MAX;
+	if (++g->hits % speed_hits[sk(g)] == 0 && g->speed < speed_max[sk(g)]) {
+		g->speed += speed_step[sk(g)];
+		if (g->speed > speed_max[sk(g)]) g->speed = speed_max[sk(g)];
 	}
 	if (t == BR_SILVER && --g->hp[r][c] > 0) {
 		ev(g, BR_EV_HIT, r, c, g->hp[r][c], BR_BRICK_X(c), BR_BRICK_Y(r));
@@ -587,8 +629,8 @@ static bool ball_substep(br_game_t *g, br_ball_t *b, int32_t dx, int32_t dy) {
 		ev(g, BR_EV_WALL, 0, 0, 1, ix + BR_BALL / 2, BR_FY0);
 		if (!g->top_boost) {
 			g->top_boost = true;
-			if (g->speed < g->speed_base + 160) {
-				g->speed = g->speed_base + 160;
+			if (g->speed < g->speed_base + top_boost[sk(g)]) {
+				g->speed = g->speed_base + top_boost[sk(g)];
 				ev(g, BR_EV_SPEED, 0, 0, 0, 0, 0);
 			}
 		}
@@ -614,6 +656,16 @@ static bool ball_substep(br_game_t *g, br_ball_t *b, int32_t dx, int32_t dy) {
 			aim(g, b, cx);
 			ev(g, BR_EV_PADDLE, 0, 0, b->ang, cx, BR_PADDLE_Y);
 		}
+		return true;
+	}
+	/* easy: the safety floor sends it back up, once */
+	if (g->floor_up && dy > 0 && oy + BR_BALL <= BR_FLOOR_Y &&
+	    iy + BR_BALL > BR_FLOOR_Y) {
+		b->y = (int32_t)(BR_FLOOR_Y - BR_BALL) << 8;
+		b->sy = -1;
+		g->floor_up = false;
+		g->chain = 0;
+		ev(g, BR_EV_FLOOR, 0, 0, 0, ix + BR_BALL / 2, BR_FLOOR_Y);
 		return true;
 	}
 	b->y = ny;
@@ -706,7 +758,7 @@ void br_step(br_game_t *g) {
 		g->lives--;
 		memset(g->cap, 0, sizeof(g->cap));
 		memset(g->shot, 0, sizeof(g->shot));
-		if (g->power == BR_P_WIDE) { g->px += (BR_PADDLE_WIDE - BR_PADDLE_W) / 2; g->pw = BR_PADDLE_W; }
+		if (g->power == BR_P_WIDE) { g->px += (g->pw_wide - g->pw_normal) / 2; g->pw = g->pw_normal; }
 		g->power = BR_P_NONE;
 		clamp_paddle(g);
 		ev(g, BR_EV_LOST, 0, 0, 0, lost_x, BR_FLOOR);

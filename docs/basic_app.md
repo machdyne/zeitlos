@@ -213,7 +213,7 @@ Full screen is game mode with the game grab (`Z_WM_GAME_GRAB`): wm sends
 the keys here, through the keyboard layout as in the window, and stops
 managing windows until BASIC gives the screen back or wm takes it
 (`Z_WM_GAME_REVOKED`, Alt+Esc). BASIC does not read the raw keyboard
-queue, which wm drains too (see `sw/apps/gamedemo/gamedemo.c`).
+queue, which wm drains too (see `sw/apps/mausrun/mausrun.c`).
 
 ## Machdyne BASIC in Zeitlos
 

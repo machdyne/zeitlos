@@ -20,13 +20,31 @@ static const int8_t base_cells[BK_TYPES][4][2] = {
 	{ { 0, 0 }, { 1, 0 }, { 1, 1 }, { 2, 1 } },   /* Z */
 	{ { 0, 0 }, { 0, 1 }, { 1, 1 }, { 2, 1 } },   /* J */
 	{ { 2, 0 }, { 0, 1 }, { 1, 1 }, { 2, 1 } },   /* L */
+	{ { 0, 0 }, { 0, 0 }, { 0, 0 }, { 0, 0 } },   /* grey: not a shape */
+	/* the little pieces: the last cell repeated up to four */
+	{ { 0, 0 }, { 0, 0 }, { 0, 0 }, { 0, 0 } },   /* dot */
+	{ { 0, 0 }, { 1, 0 }, { 1, 0 }, { 1, 0 } },   /* two */
+	{ { 0, 1 }, { 1, 1 }, { 2, 1 }, { 2, 1 } },   /* three in a row */
+	{ { 0, 0 }, { 0, 1 }, { 1, 1 }, { 1, 1 } },   /* three, a corner */
+	{ { 0, 0 }, { 0, 0 }, { 0, 0 }, { 0, 0 } },   /* wall */
 };
 
-static const uint8_t box_size[BK_TYPES] = { 0, 4, 2, 3, 3, 3, 3, 3 };
+static const uint8_t box_size[BK_TYPES] = { 0, 4, 2, 3, 3, 3, 3, 3, 0,
+	1, 2, 3, 2, 0 };
+static const uint8_t ncells[BK_TYPES] = { 0, 4, 4, 4, 4, 4, 4, 4, 0,
+	1, 2, 3, 3, 0 };
+
+static bool is_shape(int t) {
+	return (t >= BK_I && t <= BK_L) || (t >= BK_DOT && t <= BK_V3);
+}
+
+int bk_ncells(int type) {
+	return is_shape(type) ? ncells[type] : 4;
+}
 
 void bk_cells(int type, int rot, int8_t out[4][2]) {
 	int i, r, n;
-	if (type < 1 || type > BK_L) type = BK_O;
+	if (!is_shape(type)) type = BK_O;
 	n = box_size[type];
 	for (i = 0; i < 4; i++) {
 		int x = base_cells[type][i][0], y = base_cells[type][i][1];
@@ -81,15 +99,42 @@ static const uint16_t gravity_table[21] = {
 };
 
 #define SOFT_RATE     128     /* half a row a frame */
-#define LOCK_FRAMES    30
 #define LOCK_RESETS    15
 #define MAX_LEVEL      20
+
+/* Per skill (easy, normal, hard). Easy falls at half normal's speed,
+ * levels up every 15 rows and stops getting faster at 8. Hard falls as
+ * normal does five levels on (three rows a second from the start, where
+ * normal begins at one), locks in a third of a second and levels up
+ * every 8 rows -- it was two levels on, 26 frames and 10 rows, and was
+ * not very hard. */
+static const uint8_t lock_frames[3] = { 60, 30, 20 };
+static const uint8_t lines_per_level[3] = { 15, 10, 8 };
+#define HARD_LEVELS_ON 5
+static const uint8_t max_level[3] = { 8, MAX_LEVEL, MAX_LEVEL };
 
 uint32_t bk_gravity(int level) {
 	if (level < 1) level = 1;
 	if (level > MAX_LEVEL) level = MAX_LEVEL;
 	return gravity_table[level];
 }
+
+static int sk(const bk_game_t *g) {
+	return g->skill <= BK_SKILL_HARD ? g->skill : BK_SKILL_NORMAL;
+}
+
+uint32_t bk_gravity_now(const bk_game_t *g) {
+	switch (sk(g)) {
+	case BK_SKILL_EASY: return (bk_gravity(g->level) + 1) / 2;
+	case BK_SKILL_HARD: return bk_gravity(g->level + HARD_LEVELS_ON);
+	default:            return bk_gravity(g->level);
+	}
+}
+
+int bk_lines_per_level(const bk_game_t *g) { return lines_per_level[sk(g)]; }
+int bk_lock_frames(const bk_game_t *g) { return lock_frames[sk(g)]; }
+int bk_col0(const bk_game_t *g) { return g->little ? BK_LITTLE_L : 0; }
+int bk_col1(const bk_game_t *g) { return g->little ? BK_LITTLE_R : BK_W - 1; }
 
 static const uint16_t line_points[5] = { 0, 100, 300, 500, 800 };
 static const uint16_t twist_points[5] = { 400, 800, 1200, 1600, 1600 };
@@ -131,8 +176,12 @@ bool bk_fits(const bk_game_t *g, const bk_piece_t *p) {
 static uint8_t from_bag(bk_game_t *g) {
 	uint8_t t;
 	if (g->bag_n == 0) {
+		static const uint8_t little[7] = {
+			BK_DOT, BK_DUO, BK_DUO, BK_I3, BK_I3, BK_V3, BK_V3
+		};
 		int i;
-		for (i = 0; i < 7; i++) g->bag[i] = (uint8_t)(BK_I + i);
+		for (i = 0; i < 7; i++)
+			g->bag[i] = g->little ? little[i] : (uint8_t)(BK_I + i);
 		/* Fisher-Yates */
 		for (i = 6; i > 0; i--) {
 			int j = (int)g->rand_below((uint32_t)i + 1);
@@ -168,14 +217,41 @@ static bool on_ground(const bk_game_t *g) {
 	return !bk_fits(g, &p);
 }
 
+/* Little pieces: walls down both sides of every row that has none. */
+static void walls(bk_game_t *g) {
+	int y;
+	if (!g->little) return;
+	for (y = 0; y < BK_H; y++) {
+		g->well[y][0] = BK_WALL;
+		g->well[y][BK_W - 1] = BK_WALL;
+	}
+}
+
+/* Easy: the stack reached the top -- the top half of the well goes, and
+ * the game carries on. False when no rescue is left. */
+static bool rescue(bk_game_t *g) {
+	int y, x;
+	if (!g->rescues) return false;
+	g->rescues--;
+	for (y = 0; y < BK_H / 2; y++)
+		for (x = 0; x < BK_W; x++) g->well[y][x] = 0;
+	walls(g);
+	event(g, BK_EV_RESCUE, g->rescues);
+	return true;
+}
+
 /* A new piece at the top. If it cannot appear, the game is over. */
 static void spawn(bk_game_t *g, uint8_t type) {
 	bk_piece_t p;
 	p.type = type;
 	p.rot = 0;
-	p.x = (int8_t)(type == BK_O ? 4 : 3);
+	p.x = (int8_t)(type == BK_O || type == BK_DOT || type == BK_DUO ||
+		type == BK_V3 ? 4 : 3);
 	p.y = 0;
 	reset_piece_state(g);
+	if (!bk_fits(g, &p) && rescue(g)) {
+		/* fits now: the top half is empty */
+	}
 	if (!bk_fits(g, &p)) {
 		g->cur = p;
 		g->cur.type = 0;
@@ -193,13 +269,24 @@ static void spawn(bk_game_t *g, uint8_t type) {
 
 void bk_new(bk_game_t *g, bk_mode_t mode, int start_level,
 	uint32_t (*rand_below)(uint32_t n)) {
+	bk_new_skill(g, mode, start_level, BK_SKILL_NORMAL, rand_below);
+}
+
+void bk_new_skill(bk_game_t *g, bk_mode_t mode, int start_level, int skill,
+	uint32_t (*rand_below)(uint32_t n)) {
 	int i;
 	memset(g, 0, sizeof(*g));
 	g->mode = mode;
+	g->skill = (uint8_t)(skill >= BK_SKILL_EASY && skill <= BK_SKILL_HARD ?
+		skill : BK_SKILL_NORMAL);
+	g->little = (mode == BK_MODE_LITTLE);
+	g->rescues = g->skill == BK_SKILL_EASY ? BK_RESCUES : 0;
+	g->max_level = max_level[sk(g)];
 	g->rand_below = rand_below;
+	walls(g);
 	if (start_level < 1) start_level = 1;
-	if (start_level > MAX_LEVEL) start_level = MAX_LEVEL;
-	if (mode != BK_MODE_ENDLESS) start_level = 1;
+	if (start_level > g->max_level) start_level = g->max_level;
+	if (mode != BK_MODE_ENDLESS && mode != BK_MODE_LITTLE) start_level = 1;
 	g->start_level = (uint8_t)start_level;
 	g->level = (uint8_t)start_level;
 	g->combo = -1;
@@ -247,7 +334,8 @@ bool bk_rotate(bk_game_t *g, int dir) {
 	const int8_t (*tab)[5][2];
 
 	if (!active(g)) return false;
-	if (g->cur.type == BK_O) return false;     /* it looks the same */
+	if (g->cur.type == BK_O || g->cur.type == BK_DOT)
+		return false;                          /* it looks the same */
 
 	idx = g->cur.rot * 2 + (dir > 0 ? 0 : 1);
 	tab = (g->cur.type == BK_I) ? kick_i : kick_jlstz;
@@ -289,8 +377,8 @@ static bool is_twist(const bk_game_t *g) {
 static void set_level(bk_game_t *g) {
 	int lv;
 	if (g->mode == BK_MODE_40) return;
-	lv = g->start_level + g->lines / 10;
-	if (lv > MAX_LEVEL) lv = MAX_LEVEL;
+	lv = g->start_level + g->lines / bk_lines_per_level(g);
+	if (lv > g->max_level) lv = g->max_level;
 	if (lv > g->level) {
 		g->level = (uint8_t)lv;
 		event(g, BK_EV_LEVEL, lv);
@@ -338,7 +426,8 @@ static void lock_piece(bk_game_t *g) {
 				int cnt = 0, x;
 				for (y = 0; y < BK_H; y++) {
 					if (rows & (1u << y)) continue;
-					for (x = 0; x < BK_W; x++) if (g->well[y][x]) cnt++;
+					for (x = 0; x < BK_W; x++)
+						if (g->well[y][x] && g->well[y][x] != BK_WALL) cnt++;
 				}
 				if (cnt == 0) { pts += 3000; flags |= BK_F_PERFECT; }
 			}
@@ -360,7 +449,12 @@ static void lock_piece(bk_game_t *g) {
 	g->cur.type = 0;
 
 	if (above && n == 0) {
-		/* locked entirely above the well: out */
+		/* locked entirely above the well: out -- or, on easy, the top
+		 * half cleared and on with the next */
+		if (rescue(g)) {
+			spawn(g, next_from_queue(g));
+			return;
+		}
 		g->over = true;
 		event(g, BK_EV_OVER, 0);
 		return;
@@ -386,6 +480,7 @@ void bk_clear_done(bk_game_t *g) {
 		dst--;
 	}
 	for (; dst >= 0; dst--) memset(g->well[dst], 0, BK_W);
+	walls(g);
 
 	g->lines = (uint16_t)(g->lines + g->clear_count);
 	g->clear_rows = 0;
@@ -463,7 +558,7 @@ void bk_step(bk_game_t *g) {
 
 	/* gravity */
 	{
-		uint32_t rate = bk_gravity(g->level);
+		uint32_t rate = bk_gravity_now(g);
 		bool soft = g->soft && rate < SOFT_RATE;
 		if (soft) rate = SOFT_RATE;
 		g->fall += rate;
@@ -487,7 +582,7 @@ void bk_step(bk_game_t *g) {
 		g->landed = on_ground(g);
 		if (g->landed && !was) event(g, BK_EV_LAND, 0);
 		if (g->landed) {
-			if (++g->lock_timer >= LOCK_FRAMES) lock_piece(g);
+			if (++g->lock_timer >= bk_lock_frames(g)) lock_piece(g);
 		} else {
 			g->lock_timer = 0;
 		}
@@ -513,7 +608,7 @@ uint32_t bk_frames_left(const bk_game_t *g) {
  * look-ahead, no twists. For the demo and the host renders.
  * =================================================================== */
 
-static int evaluate(uint8_t w[BK_H][BK_W], int *lines_out) {
+static int evaluate(uint8_t w[BK_H][BK_W], int x0, int x1, int *lines_out) {
 	int x, y, lines = 0, height = 0, holes = 0, bump = 0, prev = -1;
 	int top[BK_W];
 
@@ -523,7 +618,7 @@ static int evaluate(uint8_t w[BK_H][BK_W], int *lines_out) {
 		lines += full;
 	}
 
-	for (x = 0; x < BK_W; x++) {
+	for (x = x0; x <= x1; x++) {
 		int h = 0, seen = 0;
 		for (y = 0; y < BK_H; y++) {
 			if (w[y][x]) {
@@ -551,7 +646,7 @@ static bool best_for(const bk_game_t *g, int type, int *best_score,
 	int rot, x;
 
 	for (rot = 0; rot < 4; rot++) {
-		if (type == BK_O && rot) break;
+		if ((type == BK_O || type == BK_DOT) && rot) break;
 		for (x = -2; x < BK_W; x++) {
 			bk_piece_t p;
 			int8_t c[4][2];
@@ -568,7 +663,7 @@ static bool best_for(const bk_game_t *g, int type, int *best_score,
 			memcpy(w, g->well, sizeof(w));
 			bk_cells(type, rot, c);
 			for (i = 0; i < 4; i++) w[p.y + c[i][1]][p.x + c[i][0]] = (uint8_t)type;
-			s = evaluate(w, &lines);
+			s = evaluate(w, bk_col0(g), bk_col1(g), &lines);
 			if (!found || s > *best_score) {
 				*best_score = s;
 				plan->rot = (uint8_t)rot;

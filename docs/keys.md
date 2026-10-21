@@ -57,7 +57,7 @@ a time (`kidgames`: a game, then the menu). `basic` keeps Esc for BASIC
 (it stops a program), so F11 is its way out. In game mode F1 does
 nothing. Apps keep the mode they start in.
 
-`gamedemo` is always in game mode and leaves with Esc.
+`mausrun` is always in game mode; Esc pauses a level, again goes to its menu, and on the menu quits.
 
 ## The prompt (F4) and the `/` menu
 

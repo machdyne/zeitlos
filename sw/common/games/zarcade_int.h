@@ -96,6 +96,19 @@ bool arh_pad_present(int player);
 int arh_read_scores(char *buf, int cap);
 bool arh_write_scores(const char *buf, int len);
 
+/* /data/<app>/settings.txt (the skill) */
+int arh_read_settings(char *buf, int cap);
+bool arh_write_settings(const char *buf, int len);
+
+/* apps.arcade.skill from the configuration: AR_SKILL_*, or -1 unset */
+int arh_cfg_skill(void);
+
+/* Speech, interrupting whatever was being said; silent without tts. */
+void arh_say(const char *text);
+
+/* The skill is read once, at setup (both halves call it). */
+void ar__skill_load(void);
+
 uint32_t arh_seed(void);
 
 #endif

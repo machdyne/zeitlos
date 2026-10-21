@@ -17,7 +17,7 @@
 #     cd sw/common/games && python3 gen_cards.py && git diff --stat
 #
 # Generated C is committed the same arrangement sw/apps/chess/gen_pieces.py,
-# sw/apps/gamedemo/gen_sprites.py and sw/data/icons use: the app builds
+# sw/apps/mausrun/gen_sprites.py and sw/data/icons use: the app builds
 # with no Python in the loop, and where the art came from is still
 # obvious.
 #

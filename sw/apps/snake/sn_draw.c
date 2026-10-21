@@ -334,6 +334,17 @@ static void paint_body(uint16_t c, const sn_cell_t *cell) {
 
 /* -- the status line -- */
 
+/* A heart, 7x6, for easy's lives (zgfx layout: LSB leftmost). */
+static const uint32_t heart_bits[6] = {
+	0x36, 0x7f, 0x7f, 0x3e, 0x1c, 0x08
+};
+
+static void hud_hearts(int x, int n) {
+	int i;
+	for (i = 0; i < n && i < SN_HEARTS_MAX; i++)
+		ar_bitmap(heart_bits, 4, 0, 0, x + i * 9, 5, 7, 6, SN_C_FOOD);
+}
+
 static void hud_text(int col, const char *s, int c) {
 	ar_text(col * 8, 4, s, c, &z_font_8x8, 1);
 }
@@ -360,7 +371,13 @@ static void paint_hud(void) {
 		for (i = 0; i < SN_WINS_NEEDED; i++) w[i] = i < g->s[0].wins ? '*' : '.';
 		w[SN_WINS_NEEDED] = 0;
 		hud_text(4, w, SN_C_WHITE);
-		hud_text(14, "FIRST TO 3", SN_C_LIGHT);
+		if (g->s[0].hearts || g->s[1].hearts) {
+			/* easy: each player's hearts, inside their side */
+			hud_hearts(64, g->s[0].hearts);
+			hud_hearts(256 - 9 * g->s[1].hearts - 8, g->s[1].hearts);
+		} else {
+			hud_text(14, "FIRST TO 3", SN_C_LIGHT);
+		}
 		hud_text(32, "P2", SN_C_P2);
 		for (i = 0; i < SN_WINS_NEEDED; i++) w[i] = i < g->s[1].wins ? '*' : '.';
 		hud_text(35, w, SN_C_WHITE);
@@ -371,9 +388,14 @@ static void paint_hud(void) {
 	ar_utoa(v, g->s[0].score, 6, '0');
 	hud_text(7, v, SN_C_WHITE);
 
-	hud_text(15, "HI", SN_C_LIGHT);
-	ar_utoa(v, g->s[0].score > sn.hiscore ? g->s[0].score : sn.hiscore, 6, '0');
-	hud_text(18, v, SN_C_WHITE);
+	if (g->s[0].hearts) {
+		/* easy: the hearts where the high score was */
+		hud_hearts(120, g->s[0].hearts);
+	} else {
+		hud_text(15, "HI", SN_C_LIGHT);
+		ar_utoa(v, g->s[0].score > sn.hiscore ? g->s[0].score : sn.hiscore, 6, '0');
+		hud_text(18, v, SN_C_WHITE);
+	}
 
 	if (g->mode == SN_MODE_MAZE) {
 		hud_text(27, "LEVEL", SN_C_LIGHT);
@@ -419,16 +441,24 @@ static int panel(ar_rect_t *r, line_t *ln) {
 		LINE(12, "SNAKE", SN_C_GOLD, &z_font_8x8, 4);
 		for (i = 0; i < MENU_ITEMS; i++) {
 			static const char *const items[MENU_ITEMS] = {
-				"CLASSIC", "OPEN FIELD", "MAZES", "TWO PLAYERS",
+				"", "CLASSIC", "OPEN FIELD", "MAZES", "TWO PLAYERS",
 				"HIGH SCORES"
 			};
 			bool sel = (i == sn.menu);
 			char *b = tbuf[i];
+			if (i == MENU_SKILL) {
+				/* "< EASY >": Left and Right change it */
+				strcpy(b, sel ? "< " : "  ");
+				strcat(b, ar_skill_name(ar_skill()));
+				strcat(b, sel ? " >" : "  ");
+				LINE(52, b, sel ? SN_C_WHITE : SN_C_GOLD, &z_font_8x8, 1);
+				continue;
+			}
 			b[0] = sel ? '>' : ' ';
 			b[1] = ' ';
 			strcpy(b + 2, items[i]);
 			strcat(b, sel ? " <" : "  ");
-			LINE(58 + i * 14, b, sel ? SN_C_WHITE : SN_C_LIGHT,
+			LINE(56 + i * 13, b, sel ? SN_C_WHITE : SN_C_LIGHT,
 				&z_font_8x8, 1);
 		}
 		LINE(134, "ENTER OR START TO PLAY", SN_C_LIGHT, &z_font_5x8, 1);
@@ -438,7 +468,8 @@ static int panel(ar_rect_t *r, line_t *ln) {
 	case ST_SCORES: {
 		ar_table_t t;
 		r->x = 56; r->y = 48; r->w = 208; r->h = 160;
-		LINE(8, sn_mode_names[sn.score_view], SN_C_GOLD, &z_font_8x8, 2);
+		LINE(4, sn_mode_names[sn.score_view], SN_C_GOLD, &z_font_8x8, 2);
+		LINE(22, ar_skill_name(ar_skill()), SN_C_LIGHT, &z_font_5x8, 1);
 		t = sn.table;
 		for (i = 0; i < AR_SCORES; i++) {
 			char *b = tbuf[i];
@@ -803,6 +834,23 @@ void sn_draw_frame(uint32_t dt) {
 	if (on_field)
 		for (i = 0; i < SN_PLAYERS; i++) snake_overlays(i);
 
+	/* Easy: a stopped snake shows where it could go -- blinking dots
+	 * in the free cells beside its head. */
+	if (sn.st == ST_PLAY && ((ar_ticks() >> 4) & 1))
+		for (i = 0; i < SN_PLAYERS; i++) {
+			const sn_snake_t *s = &g->s[i];
+			int d;
+			if (!s->active || !s->alive || !s->stopped) continue;
+			for (d = 0; d < 4; d++) {
+				uint16_t n = sn_neighbour(g, s->body[s->head], d);
+				int x, y;
+				if (n == SN_NONE || g->grid[n].what != SN_EMPTY) continue;
+				x = SN_PX(n) + 3;
+				y = SN_PY(n) + 3;
+				if (!hidden(x, y, 2, 2)) ar_ov_fill(x, y, 2, 2, SN_C_WHITE);
+			}
+		}
+
 	ar_parts_frame(dt);
 
 	for (i = 0; i < POPUPS; i++) {
@@ -878,6 +926,26 @@ void sn_draw_events(void) {
 
 		case SN_EV_FOOD:
 			sn_draw_cell_dirty(e->cell);
+			break;
+
+		case SN_EV_BUMP:
+			/* easy: a bump, not a crash -- a few stars and a soft
+			 * sound, and a heart less */
+			ar_parts_burst(x, y, 12, SN_C_GOLD, 2, 260, 26, 0);
+			sn_draw_flash(8);
+			ar_shake(2, 10);
+			sn_sound(SN_SND_BUMP, x);
+			sn.hud_dirty = true;
+			break;
+
+		case SN_EV_BONK:
+			sn_sound(SN_SND_BONK, x);
+			break;
+
+		case SN_EV_HEART:
+			ar_parts_burst(x, y, 16, SN_C_FOOD, 1, 300, 30, 0);
+			sn_sound(SN_SND_HEART, x);
+			sn.hud_dirty = true;
 			break;
 
 		default:

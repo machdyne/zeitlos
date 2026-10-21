@@ -66,7 +66,7 @@ static void hw_take(void) { }
 /* App virtual address -> physical. THE MIXER IS A BUS MASTER AND DOES
  * NOT GO THROUGH THE MTU: an app pointer handed to it is an address
  * nothing decodes, which never acks, and the whole machine stops
- * (sw/apps/gamedemo/music.c, sw/apps/track). */
+ * (sw/apps/track; mausrun learnt it first, in the music.c it had). */
 static uint32_t phys_of(const void *p) {
 	uint32_t v = (uint32_t)(uintptr_t)p;
 	uint32_t base = reg_mtu_base;
@@ -91,14 +91,14 @@ static uint32_t hw_out_hz(void) {
 static void hw_take(void) {
 	/* Enable the output if nothing has: without EN the DAC is muted
 	 * however busy the mixer is. The rate is left exactly as the board
-	 * set it -- an S/PDIF board needs its own (gamedemo's music.c). If
+	 * set it -- an S/PDIF board needs its own (mausrun's old music.c). If
 	 * speech is already playing, EN is on and is not touched. */
 	if (!(reg_audio_ctrl & Z_AUDIO_CTRL_EN))
 		z_audio_start(reg_audio_rate & 0xFFu);
 	z_audio_mixer_enable(true);
 	/* The mixer's output scale at its top: one 8-bit channel cannot
 	 * get loud on this mixer, so levels are set by keeping the music
-	 * gains low (gamedemo's music.h). Read-modify-write: the high
+	 * gains low (as mausrun's old music.h did). Read-modify-write: the high
 	 * bits hold the S/PDIF rate code. The system volume (wm's) is
 	 * separate and untouched. */
 	reg_audio_mixvol = (reg_audio_mixvol & ~0xFFu) | 0xFFu;
@@ -152,7 +152,7 @@ static void build_waves(void) {
 	for (i = 0; i < WAVE_LEN; i++) {
 		int q = i & 15, s;
 		/* Peaks of 100, not 127, so several channels together do not
-		 * clip the mixer's sum (gamedemo's music.c). */
+		 * clip the mixer's sum (mausrun's old music.c). */
 		waves[ZSFX_SQUARE][i]  = (int8_t)(i < 32 ? 100 : -100);
 		waves[ZSFX_PULSE25][i] = (int8_t)(i < 16 ? 100 : -100);
 		waves[ZSFX_PULSE12][i] = (int8_t)(i < 8 ? 100 : -100);
@@ -167,7 +167,7 @@ static void build_waves(void) {
 		}
 		waves[ZSFX_SINE][i] = (int8_t)s;
 	}
-	/* 16-bit maximal LFSR, as gamedemo's: period 65535, and a 4KB
+	/* 16-bit maximal LFSR, as mausrun's: period 65535, and a 4KB
 	 * window of it has no audible repeat. */
 	for (i = 0; i < NOISE_LEN; i++) {
 		uint16_t bit = ((lfsr >> 0) ^ (lfsr >> 2) ^ (lfsr >> 3) ^
@@ -216,6 +216,12 @@ static uint32_t row_accum;         /* frames x 256 since the last row */
 static uint32_t frames_per_row_x256;
 static int tempo_pct = 100;
 static uint8_t music_vol = 255;
+/* zsfx_music_layers(): the channels heard, and the drums heard on a
+ * drum channel (bit d = drum d: kick, snare, hat, open hat). */
+static uint8_t layer_ch = 0x0f, layer_drums = 0x0f;
+/* zsfx_master_volume(): everything, music and effects together */
+static uint8_t master = 255;
+#define MV(g) ((uint8_t)(((uint32_t)(g) * (master + 1u)) >> 8))
 static int32_t rows_played = -1;
 
 static uint8_t sfx_last;           /* the highest effect channel */
@@ -282,9 +288,9 @@ static void prog_frame(int ch, voice_t *vo, bool first) {
 
 	if (first || vo->cur_wave != (int8_t)s->wave) {
 		vo->cur_wave = (int8_t)s->wave;
-		hw_note(ch, wd, len, step_for(f * 100u, len), gl, gr);
+		hw_note(ch, wd, len, step_for(f * 100u, len), MV(gl), MV(gr));
 	} else {
-		hw_gain(ch, step_for(f * 100u, len), gl, gr);
+		hw_gain(ch, step_for(f * 100u, len), MV(gl), MV(gr));
 	}
 
 	if (++vo->sf >= s->frames) {
@@ -436,7 +442,7 @@ static void update_tempo(void) {
 	if (rpm < 30) rpm = 30;
 	/* frames per row = 60 * frame_hz / rpm; x256 for the fraction.
 	 * The frame rate is 60, or 50 on a PAL composite board -- the
-	 * tempo must not change with it (gamedemo's music.c). */
+	 * tempo must not change with it (mausrun's old music.c). */
 	{
 #ifdef ZSFX_HOSTED
 		uint32_t hz = 60;
@@ -469,7 +475,7 @@ static void note_on(int ch, const zsfx_ins_t *ins, uint32_t chz) {
 	vo->vphase = 0;
 	vo->cur_wave = (int8_t)ins->wave;
 	vo->pan = 0;
-	hw_note(ch, wd, len, step_for(chz, len), (uint8_t)g, (uint8_t)g);
+	hw_note(ch, wd, len, step_for(chz, len), MV(g), MV(g));
 }
 
 static void note_frame(int ch, voice_t *vo) {
@@ -489,7 +495,7 @@ static void note_frame(int ch, voice_t *vo) {
 		int t = ph < 8 ? ph - 4 : 12 - ph;     /* -4..4 */
 		chz = chz + (uint32_t)((int32_t)(chz / 512u) * vo->vib * t / 4);
 	}
-	hw_gain(ch, step_for(chz, len), (uint8_t)g, (uint8_t)g);
+	hw_gain(ch, step_for(chz, len), MV(g), MV(g));
 }
 
 static void music_row(void) {
@@ -506,6 +512,8 @@ static void music_row(void) {
 		uint32_t f;
 		int i;
 
+		if (!(layer_ch & (1u << ch))) continue;
+
 		/* Cells at 0, 4, 8, 12; a short row string is "hold". */
 		for (i = 0; i < ch * 4 && row[i]; i++) ;
 		if (!row[i]) continue;
@@ -520,6 +528,7 @@ static void music_row(void) {
 			};
 			static const uint8_t kitn[4] = { 2, 2, 1, 1 };
 			int d = (int)(f - ZSFX_CELL_DRUM) & 3;
+			if (!(layer_drums & (1u << d))) continue;
 			prog_start(ch, kit[d], kitn[d], 0, 0);
 			/* Drums follow the music level too: scaled at start by
 			 * running the program at the channel's gain. Programs
@@ -576,6 +585,35 @@ void zsfx_music_tempo(int percent) {
 }
 
 void zsfx_music_volume(uint8_t vol) { music_vol = vol; }
+
+void zsfx_master_volume(uint8_t vol) { master = vol; }
+uint8_t zsfx_master_get(void) { return master; }
+
+void zsfx_music_layers(uint8_t channels, uint8_t drums) {
+	int ch;
+	/* A channel just left out stops now, rather than ringing on to
+	 * the end of its note. */
+	for (ch = 0; ch < MUS_CH; ch++)
+		if ((layer_ch & ~channels) & (1u << ch)) {
+			v[ch].kind = V_IDLE;
+			if (ok) hw_off(ch);
+		}
+	layer_ch = channels & 0x0f;
+	layer_drums = drums & 0x0f;
+}
+
+/* The arrangement grows with the game: lead and bass alone at first,
+ * then the harmony, then the hats, the kick and last the snare; and
+ * the tempo from 70% to 110% of the song as written. */
+void zsfx_music_intensity(int level) {
+	static const uint8_t drums[ZSFX_INTENSITY_FULL + 1] = {
+		0x0, 0x0, 0x4, 0xc, 0xd, 0xd, 0xf, 0xf, 0xf, 0xf, 0xf
+	};
+	if (level < 0) level = 0;
+	if (level > ZSFX_INTENSITY_FULL) level = ZSFX_INTENSITY_FULL;
+	zsfx_music_layers(level == 0 ? 0x5 : 0xf, drums[level]);
+	zsfx_music_tempo(70 + 4 * level);
+}
 
 /* ===================================================================
  * the frame

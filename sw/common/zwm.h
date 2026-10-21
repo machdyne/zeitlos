@@ -633,7 +633,7 @@ typedef struct {
 // window's frame, and a Z_WM_REDRAW to every window's owner.
 //
 // For an app that has taken the framebuffer over entirely and is
-// giving it back. A full-screen game (sw/apps/gamedemo) draws straight
+// giving it back. A full-screen game (sw/apps/mausrun) draws straight
 // into VRAM over everything, including wm's own chrome and other
 // apps' content, and none of those know it happened -- wm repaints on
 // damage it caused itself, and this damage came from outside.

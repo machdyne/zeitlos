@@ -45,7 +45,8 @@ typedef enum {
 
 /* The menu, in order. */
 enum {
-	MENU_CLASSIC = 0,
+	MENU_SKILL = 0,         /* EASY / NORMAL / HARD, Left and Right */
+	MENU_CLASSIC,
 	MENU_OPEN,
 	MENU_MAZE,
 	MENU_VERSUS,

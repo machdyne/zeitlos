@@ -47,6 +47,13 @@ int ar_host_lit(int x, int y, int w, int h);
 void ar_host_cover(int x, int y, int w, int h);
 const char *ar_host_scores(void);
 
+/* settings.txt, apps.arcade.skill (-1 unset) and the last spoken line */
+const char *ar_host_settings(void);
+void ar_host_set_settings(const char *text);
+extern int ar_host_cfg_skill;
+extern char ar_host_said[64];
+extern int ar_host_says;
+
 extern uint64_t arh_ops;
 extern uint32_t zsfxh_notes, zsfxh_updates, zsfxh_offs;
 extern uint8_t zsfxh_peak[8];

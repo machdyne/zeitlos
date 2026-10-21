@@ -52,6 +52,7 @@
 #define BR_PADDLE_H 6
 #define BR_PADDLE_W 32
 #define BR_PADDLE_WIDE 48
+#define BR_PADDLE_EASY_WIDE 64   /* easy: 48 is the normal paddle, E makes 64 */
 #define BR_BALL     6
 #define BR_FLOOR    240          /* a ball whose top passes this is lost */
 
@@ -102,8 +103,16 @@ enum {
 	BR_EV_LOST,            /* x: the last ball fell */
 	BR_EV_CLEAR,           /* every brick that can break is broken */
 	BR_EV_LIFE,            /* an extra paddle, by points or capsule */
-	BR_EV_SPEED            /* the balls got faster */
+	BR_EV_SPEED,           /* the balls got faster */
+	BR_EV_FLOOR            /* x: easy's safety floor bounced a ball, and broke */
 };
+
+/* How hard: the values of zarcade's AR_SKILL_*, kept apart so the rules
+ * need nothing from the runtime. */
+enum { BR_SKILL_EASY = 0, BR_SKILL_NORMAL, BR_SKILL_HARD };
+
+#define BR_LIVES_EASY 5
+#define BR_FLOOR_Y   234          /* easy: the safety floor's top */
 
 typedef struct {
 	uint8_t type, r, c, value;
@@ -140,6 +149,9 @@ typedef struct {
 	int bricks_left;       /* that can break */
 
 	int level;             /* 1.. */
+	uint8_t skill;         /* BR_SKILL_* */
+	bool floor_up;         /* easy: the safety floor is there */
+	int pw_normal, pw_wide;  /* the paddle's two widths at this skill */
 	int px, pw;            /* the paddle: left edge, width */
 	int power;             /* BR_P_* */
 
@@ -169,8 +181,14 @@ typedef struct {
 	uint32_t (*rand_below)(uint32_t n);
 } br_game_t;
 
-/* A new game from `level`. */
+/* A new game from `level`, at normal skill (the game as it was), or at
+ * a skill. */
 void br_new(br_game_t *g, int level, uint32_t (*rand_below)(uint32_t n));
+void br_new_skill(br_game_t *g, int level, int skill,
+	uint32_t (*rand_below)(uint32_t n));
+
+/* The fastest the balls get at this game's skill, 1/256 pixel a frame. */
+int32_t br_speed_max(const br_game_t *g);
 
 /* The next level, with the paddle served. */
 void br_next_level(br_game_t *g);

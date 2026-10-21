@@ -78,7 +78,11 @@ void br_mono_inks(ar_ink_t *ink) {
 static ar_sprite_t brick_s[BR_TYPES];      /* by type */
 static ar_sprite_t cracked_s;              /* silver, hit */
 static ar_sprite_t ball_s;
-enum { PAD_NORMAL = 0, PAD_WIDE, PAD_CATCH, PAD_LASER, PADS };
+/* Three lengths (32 normal, 48 with E -- the normal one on easy -- and
+ * 64, easy with E); the light green while catching, emitters while
+ * firing, at the two shorter lengths. */
+enum { PAD_NORMAL = 0, PAD_WIDE, PAD_CATCH, PAD_LASER,
+	PAD_WIDE_CATCH, PAD_WIDE_LASER, PAD_EASY_WIDE, PADS };
 static ar_sprite_t paddle_s[PADS];
 static ar_sprite_t cap_s[BR_CAPS][2];      /* two frames: it rolls */
 static ar_sprite_t mini_s;                 /* a spare paddle, status line */
@@ -129,7 +133,7 @@ static bool make_brick(ar_sprite_t *s, int t, bool cracked) {
  * green while it catches; the glow while it fires, with an emitter at
  * each quarter). The light flashes when the ball hits. */
 static bool make_paddle(ar_sprite_t *s, int w, int light, bool emitters) {
-	uint8_t px[BR_PADDLE_WIDE * BR_PADDLE_H];
+	uint8_t px[BR_PADDLE_EASY_WIDE * BR_PADDLE_H];
 	int x, y, l0 = w / 2 - 5, l1 = w / 2 + 5;
 	for (y = 0; y < BR_PADDLE_H; y++)
 		for (x = 0; x < w; x++) {
@@ -196,6 +200,9 @@ bool br_draw_init(void) {
 	ok = make_paddle(&paddle_s[PAD_WIDE], BR_PADDLE_WIDE, BR_C_LIGHT, false) && ok;
 	ok = make_paddle(&paddle_s[PAD_CATCH], BR_PADDLE_W, BR_C_B1 + 3, false) && ok;
 	ok = make_paddle(&paddle_s[PAD_LASER], BR_PADDLE_W, BR_C_LIGHT, true) && ok;
+	ok = make_paddle(&paddle_s[PAD_WIDE_CATCH], BR_PADDLE_WIDE, BR_C_B1 + 3, false) && ok;
+	ok = make_paddle(&paddle_s[PAD_WIDE_LASER], BR_PADDLE_WIDE, BR_C_LIGHT, true) && ok;
+	ok = make_paddle(&paddle_s[PAD_EASY_WIDE], BR_PADDLE_EASY_WIDE, BR_C_LIGHT, false) && ok;
 	for (t = 1; t < BR_CAPS; t++) {
 		ok = make_cap(&cap_s[t][0], t, 0) && ok;
 		ok = make_cap(&cap_s[t][1], t, 1) && ok;
@@ -239,32 +246,42 @@ static int panel(ar_rect_t *r, line_t *ln) {
 	case ST_TITLE:
 		r->x = 72; r->y = 92; r->w = 176; r->h = 132;
 		for (i = 0; i < MENU_ITEMS; i++) {
-			static const char *const items[MENU_ITEMS] = { "PLAY", "HIGH SCORES" };
+			static const char *const items[MENU_ITEMS] = { "", "PLAY", "HIGH SCORES" };
 			bool sel = (i == br.menu);
 			char *b = tbuf[i];
+			if (i == MENU_SKILL) {
+				/* "< EASY >": Left and Right change it */
+				strcpy(b, sel ? "< " : "  ");
+				strcat(b, ar_skill_name(ar_skill()));
+				strcat(b, sel ? " >" : "  ");
+				LINE(6, b, sel ? BR_C_WHITE : BR_C_GOLD, &z_font_8x8, 1);
+				continue;
+			}
 			b[0] = sel ? '>' : ' ';
 			b[1] = ' ';
 			strcpy(b + 2, items[i]);
 			strcat(b, sel ? " <" : "  ");
-			LINE(10 + i * 14, b, sel ? BR_C_WHITE : BR_C_WALL_HI, &z_font_8x8, 1);
+			LINE(20 + (i - 1) * 13, b, sel ? BR_C_WHITE : BR_C_WALL_HI, &z_font_8x8, 1);
 		}
 		strcpy(tbuf[4], "START ROUND  ");
 		ar_utoa(tbuf[4] + strlen(tbuf[4]), (uint32_t)br.start_level, 2, ' ');
-		LINE(44, tbuf[4], br.menu == MENU_PLAY ? BR_C_GOLD : BR_C_WALL_HI,
+		LINE(50, tbuf[4], br.menu == MENU_PLAY ? BR_C_GOLD : BR_C_WALL_HI,
 			&z_font_5x8, 1);
-		LINE(54, br.menu == MENU_PLAY ? "LEFT/RIGHT TO CHANGE" : "",
+		LINE(60, br.menu == MENU_PLAY ? "LEFT/RIGHT TO CHANGE" :
+			br.menu == MENU_SKILL ? "LEFT/RIGHT: HOW HARD" : "",
 			BR_C_WALL_HI, &z_font_5x8, 1);
 		strcpy(tbuf[5], "BEST ");
 		ar_utoa(tbuf[5] + 5, br.best, 7, '0');
-		LINE(68, tbuf[5], BR_C_WHITE, &z_font_8x8, 1);
-		LINE(88, "MOUSE OR ARROWS, SPACE", BR_C_WALL_HI, &z_font_5x8, 1);
-		LINE(100, "ENTER TO PLAY   M MUSIC", BR_C_WALL_HI, &z_font_5x8, 1);
-		LINE(112, "F1 HELP  F11 FULL SCREEN", BR_C_WALL_HI, &z_font_5x8, 1);
+		LINE(74, tbuf[5], BR_C_WHITE, &z_font_8x8, 1);
+		LINE(90, "MOUSE OR ARROWS, SPACE", BR_C_WALL_HI, &z_font_5x8, 1);
+		LINE(102, "ENTER TO PLAY   M MUSIC", BR_C_WALL_HI, &z_font_5x8, 1);
+		LINE(114, "F1 HELP  F11 FULL SCREEN", BR_C_WALL_HI, &z_font_5x8, 1);
 		return n;
 
 	case ST_SCORES:
 		r->x = 72; r->y = 52; r->w = 176; r->h = 168;
-		LINE(8, "HIGH SCORES", BR_C_GOLD, &z_font_8x8, 1);
+		LINE(4, "HIGH SCORES", BR_C_GOLD, &z_font_8x8, 1);
+		LINE(14, ar_skill_name(ar_skill()), BR_C_WALL_HI, &z_font_5x8, 1);
 		for (i = 0; i < AR_SCORES; i++) {
 			char *b = tbuf[i];
 			ar_utoa(b, (uint32_t)i + 1, 2, ' ');
@@ -670,7 +687,12 @@ static void palette_frame(uint32_t dt) {
 }
 
 static const ar_sprite_t *paddle_sprite(void) {
-	if (br.g.pw == BR_PADDLE_WIDE) return &paddle_s[PAD_WIDE];
+	if (br.g.pw == BR_PADDLE_EASY_WIDE) return &paddle_s[PAD_EASY_WIDE];
+	if (br.g.pw == BR_PADDLE_WIDE) {
+		if (br.g.power == BR_P_CATCH) return &paddle_s[PAD_WIDE_CATCH];
+		if (br.g.power == BR_P_LASER) return &paddle_s[PAD_WIDE_LASER];
+		return &paddle_s[PAD_WIDE];
+	}
 	if (br.g.power == BR_P_CATCH) return &paddle_s[PAD_CATCH];
 	if (br.g.power == BR_P_LASER) return &paddle_s[PAD_LASER];
 	return &paddle_s[PAD_NORMAL];
@@ -754,6 +776,10 @@ void br_draw_frame(uint32_t dt) {
 		/* -- the paddle -- */
 		if (!hidden_by_panel(g->px, BR_PADDLE_Y, g->pw, BR_PADDLE_H))
 			ar_ov_sprite(paddle_sprite(), g->px, BR_PADDLE_Y);
+
+		/* -- easy: the safety floor under it, a glowing bar -- */
+		if (g->floor_up && !hidden_by_panel(BR_FX0, BR_FLOOR_Y, BR_FX1 - BR_FX0, 2))
+			ar_ov_fill(BR_FX0, BR_FLOOR_Y, BR_FX1 - BR_FX0, 2, BR_C_GLOW);
 	}
 
 	/* -- what the capsule was, rising -- */
@@ -801,6 +827,16 @@ void br_draw_events(void) {
 	for (i = 0; i < g->nev; i++) {
 		const br_event_t *e = &g->ev[i];
 		switch (e->type) {
+
+		case BR_EV_FLOOR: {
+			/* the floor bounced the ball and goes, in sparks */
+			int x;
+			for (x = BR_FX0 + 4; x < BR_FX1; x += 12)
+				ar_parts_burst(x, BR_FLOOR_Y, 2, BR_C_GLOW, 1, 300, 20, 14);
+			ar_parts_burst(e->x, BR_FLOOR_Y, 10, BR_C_WHITE, 1, 380, 18, 10);
+			br_sound(BR_SND_FLOOR, e->x);
+			break;
+		}
 
 		case BR_EV_WALL:
 			br_sound(BR_SND_WALL, e->x);

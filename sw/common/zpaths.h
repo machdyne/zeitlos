@@ -169,6 +169,10 @@
 #define Z_PATH_SLIDE_TOUR         "/data/slide/tour.zsl"
 #define Z_DIR_SLIDE_EXAMPLES      "/data/slide/examples"
 
+/* mausrun's levels, 01.txt 02.txt ... (docs/mausrun.md, "Levels");
+ * its progress.txt is in /data/mausrun, z_data_file()'s folder */
+#define Z_DIR_MAUSRUN_LEVELS      "/data/mausrun/levels"
+
 /* tts (docs/tts.md, docs/tts_data.md) */
 #define Z_PATH_TTS_PACK           "/data/tts/speech/en.spk"
 

@@ -429,5 +429,5 @@ Hardware checks collected so far (run in the final phase):
   modes look as before; the boot logo and rescue console are fine with
   it set in the config.
 - 48 / 44.1 / 22.05 / 11.025 kHz; `play`, `midi`, `track`, `tts`,
-  `chip8`, `kidgames`, `gamedemo`; volume keys; game-mode colour.
+  `chip8`, `kidgames`, `mausrun`; volume keys; game-mode colour.
 - 4:3, full range and no overscan on a TV.

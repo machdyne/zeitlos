@@ -6,7 +6,7 @@
 #
 # Emits cards.c / cards.h. Generated C is committed alongside the
 # generator, the same arrangement sw/apps/chess/gen_pieces.py,
-# sw/apps/gamedemo/gen_sprites.py and sw/data/icons use: the app builds
+# sw/apps/mausrun/gen_sprites.py and sw/data/icons use: the app builds
 # with no Python in the loop, and where the art came from is still
 # obvious.
 #

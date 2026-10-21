@@ -7,7 +7,7 @@
  *
  * Copyright (c) 2026 Lone Dynamics Corporation. All rights reserved.
  *
- * gamedemo's music.c, made general: the same trick (an instrument is
+ * mausrun's old music.c, made general: the same trick (an instrument is
  * one looped cycle of a waveform; pitch is the playback rate), the same
  * ASCII scores, the same per-frame envelopes -- plus effects that are
  * little programs instead of pre-rendered buffers, so they sweep, step
@@ -42,7 +42,7 @@
  * -- music --
  *
  * Patterns of 16 rows, one string per row, one 3-character cell per
- * channel separated by spaces, as in sw/apps/gamedemo/music.c:
+ * channel separated by spaces, as in sw/apps/mausrun/sound.c:
  *
  *     "C-4 E-4 A-2 K--"
  *
@@ -125,8 +125,31 @@ void zsfx_music_enable(bool on);
 bool zsfx_music_enabled(void);
 /* 100 = as written; 150 half as fast again. */
 void zsfx_music_tempo(int percent);
+/* Which song channels are heard (bit ch) and, on a drum channel,
+ * which drums (bit d: 0 kick, 1 snare, 2 closed hat, 3 open hat). The
+ * song keeps its place either way. 0x0f, 0x0f = everything (the
+ * default). Remembered across zsfx_music_play(). */
+void zsfx_music_layers(uint8_t channels, uint8_t drums);
+/* How much is going on, 0 (calm) .. ZSFX_INTENSITY_FULL, for a song
+ * laid out as the arcade games' are -- channel 0 the tune, 1 the
+ * harmony, 2 the bass, 3 the drums. Sets the layers and the tempo
+ * together:
+ *
+ *   0      tune and bass, 70%
+ *   1      + harmony, 74%
+ *   2      + closed hat         3  + open hat
+ *   4      + kick               6  + snare: the whole song
+ *   ...    the tempo 4% faster per step, 110% at 10
+ *
+ * docs/sfx.md, "Calm first". */
+#define ZSFX_INTENSITY_FULL 10
+void zsfx_music_intensity(int level);
 /* 0..255: music against effects (255 = the gains as written). */
 void zsfx_music_volume(uint8_t v);
+/* 0..255: everything, music and effects together (255, the default:
+ * the gains as written). For a game's own volume keys. */
+void zsfx_master_volume(uint8_t v);
+uint8_t zsfx_master_get(void);
 /* Rows played since the song started (-1 with no song playing): a beat
  * to pulse a picture to. Advances whether or not the music is muted. */
 int32_t zsfx_music_rows(void);
