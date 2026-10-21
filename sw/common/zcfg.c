@@ -85,6 +85,12 @@ const z_cfg_known_t z_cfg_known[] = {
 	  "DDMI boards: send sound and display info over the HDMI connector at boot (yes/no)" },
 	{ "system.video.composite", "color",
 	  "composite colour boards: color, or mono for black and white" },
+	{ "system.update.url", "",
+	  "update: where releases come from, http://host/.../release/ (default: the distribution update was built with; docs/distribution.md)" },
+	{ "system.update.key", "",
+	  "update: the Ed25519 public key (64 hex digits) releases from system.update.url are signed with (default: the built-in keys)" },
+	{ "system.update.key2", "",
+	  "update: a second key accepted too, while a distribution changes keys" },
 };
 
 const int z_cfg_known_count = (int)(sizeof(z_cfg_known) / sizeof(z_cfg_known[0]));

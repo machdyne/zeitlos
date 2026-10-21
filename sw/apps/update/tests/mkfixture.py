@@ -11,6 +11,20 @@
 #   OUT/ids               "v1 <snapshot id>" and "v2 <snapshot id>"
 #   OUT/v1.manifest1      v1's manifest in format 1 (no CRC)
 #   OUT/store2/           v2 as a format-2 store (raw objects)
+#   OUT/keys              "k1 <hex>" and "k2 <hex>": the fixture's public keys
+#
+# In the store besides v1, v2 and v2abi (docs/update.md, "Sets";
+# docs/distribution.md), all signed with k1 unless said:
+#
+#   s1, s2       a card in sets (base, games, dev; s2 adds net): s2 moves
+#                apps/mover from games to dev, adds apps/tetris (games)
+#                and apps/web (net), and drops apps/chess
+#   unsig        s1's files, not signed
+#   other        s1's files, signed with k2 only
+#   tamper       signed, then its manifest changed
+#   wrongname    s1's manifest and signature, under another name
+#   shacheck     a file whose object has the right size and CRC but not
+#                the SHA-256 the manifest says
 #
 
 import os
@@ -23,8 +37,12 @@ ROOT = os.path.normpath(os.path.join(HERE, "..", "..", "..", ".."))
 sys.path.insert(0, os.path.join(ROOT, "release", "lib"))
 sys.dont_write_bytecode = True
 
+import ed25519          # noqa: E402
 import manifest as mf   # noqa: E402
 import store            # noqa: E402
+
+K1 = bytes(range(1, 33))            # the fixture's keys: not secret
+K2 = bytes(range(101, 133))
 
 rnd = random.Random(7)
 BIG = bytes(rnd.getrandbits(8) for _ in range(300 * 1024 + 17))
@@ -53,7 +71,8 @@ V2 = {
 
 
 def lay_out(files, dest):
-    for path, (_pol, data) in files.items():
+    for path, v in files.items():
+        data = v[1]
         p = os.path.join(dest, path)
         os.makedirs(os.path.dirname(p), exist_ok=True)
         with open(p, "wb") as f:
@@ -63,16 +82,46 @@ def lay_out(files, dest):
 ABI = "0123456789abcdef"     # the fixture's ABI id (test_update.c, FX_ABI)
 
 
-def publish(name, files, src, st, latest, abi=""):
+SETS1 = [("base", "Base", "the shell and documents"),
+         ("games", "Games", "snake, chess"),
+         ("dev", "Development", "the compiler")]
+SETS2 = SETS1 + [("net", "Network", "the web")]
+
+S1 = {
+    "apps/posix": ("r", b"posix one\n", "base"),
+    "docs/d.md": ("r", b"# D\n", "base"),
+    "apps/snake": ("r", b"snake\n" * 20, "games"),
+    "apps/chess": ("r", b"chess, dropped in s2\n", "games"),
+    "apps/mover": ("r", b"mover, in games\n", "games"),
+    "apps/zcc": ("r", b"zcc\n" * 30, "dev"),
+    "data/zcc/hello.c": ("k", b"int main(void) { return 0; }\n", "dev"),
+}
+S2 = {
+    "apps/posix": ("r", b"posix two, longer\n", "base"),
+    "docs/d.md": S1["docs/d.md"],
+    "apps/snake": S1["apps/snake"],
+    "apps/mover": ("r", b"mover, now in dev\n", "dev"),
+    "apps/tetris": ("r", b"tetris\n", "games"),
+    "apps/zcc": S1["apps/zcc"],
+    "data/zcc/hello.c": S1["data/zcc/hello.c"],
+    "apps/web": ("r", b"web\n" * 10, "net"),
+}
+
+
+def publish(name, files, src, st, latest, abi="", sets=None,
+            made="2026-10-19T12:00:00Z", keys=(K1,)):
     entries, sources = [], {}
-    for path, (pol, data) in files.items():
+    for path, v in files.items():
+        pol, data = v[0], v[1]
         p = os.path.join(src, path)
         sha, crc = mf.hashes_file(p)
-        entries.append((path, sha, len(data), pol, crc))
+        entries.append((path, sha, len(data), pol, crc) + tuple(v[2:3]))
         sources[sha] = p
     m = mf.build(name, "0.0.7", "fixture", ["home"], entries,
-                 made="2026-10-19T12:00:00Z", abi=abi)
+                 made=made, abi=abi, sets=sets)
     store.publish(st, m, sources, latest=latest)
+    if keys:
+        store.sign(st, name, list(keys))
     return m
 
 
@@ -103,7 +152,7 @@ def main():
             # The same release as round 1 published it: format 2, raw
             # objects -- a store not yet republished.
             st2 = os.path.join(out, "store2")
-            m2 = mf.parse("zeitlos-manifest 2\n" + m.text.split("\n", 1)[1])
+            m2 = mf.parse(mf.text_in_format(m, 2))
             os.makedirs(os.path.join(st2, "v2"))
             for path, sha, _s, _p, _c in m2.files:
                 o = os.path.join(st2, mf.object_path(sha, 2))
@@ -111,6 +160,42 @@ def main():
                 shutil.copyfile(os.path.join(src, path), o)
             with open(os.path.join(st2, "v2", "manifest"), "w") as f:
                 f.write(m2.text)
+
+    # -- sets and signatures --
+    for name, files, sets, made in (("s1", S1, SETS1, "2026-10-21T10:00:00Z"),
+                                    ("s2", S2, SETS2, "2026-10-21T11:00:00Z")):
+        src = os.path.join(out, "src", name)
+        lay_out(files, src)
+        m = publish(name, files, src, st, latest=False, sets=sets, made=made)
+        ids.append("%s %s\n" % (name, m.id))
+    src1 = os.path.join(out, "src", "s1")
+    publish("unsig", S1, src1, st, False, sets=SETS1, keys=())
+    publish("other", S1, src1, st, False, sets=SETS1, keys=(K2,))
+    publish("tamper", S1, src1, st, False, sets=SETS1)
+    mp = os.path.join(st, "tamper", "manifest")
+    t = open(mp).read().replace("source fixture", "source someone else")
+    open(mp, "w").write(t)
+    os.makedirs(os.path.join(st, "wrongname"))
+    for f in ("manifest", "manifest.sig"):
+        shutil.copyfile(os.path.join(st, "s1", f), os.path.join(st, "wrongname", f))
+    # shacheck: apps/posix's object holds its bytes, but the manifest's
+    # SHA-256 is another (the object is named by it): size and CRC match.
+    data = S1["apps/posix"][1]
+    real, crc = mf.hashes_file(os.path.join(src1, "apps/posix"))
+    fake = "f" * 8 + real[8:]
+    m = mf.build("shacheck", "0.0.7", "fixture", ["home"],
+                 [("apps/posix", fake, len(data), "r", crc, "base")],
+                 made="2026-10-21T10:00:00Z", sets=SETS1[:1])
+    obj = os.path.join(st, mf.object_path(fake))
+    os.makedirs(os.path.dirname(obj), exist_ok=True)
+    open(obj, "wb").write(mf.lz_blocks(data))
+    os.makedirs(os.path.join(st, "shacheck"))
+    open(os.path.join(st, "shacheck", "manifest"), "w").write(m.text)
+    store.sign(st, "shacheck", [K1])
+
+    with open(os.path.join(out, "keys"), "w") as f:
+        f.write("k1 %s\nk2 %s\n" % (ed25519.public_key(K1).hex(),
+                                      ed25519.public_key(K2).hex()))
     with open(os.path.join(out, "ids"), "w") as f:
         f.writelines(ids)
 

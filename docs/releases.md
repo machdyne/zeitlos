@@ -54,9 +54,10 @@ release/dist/0.0.3/
                                     ESP32-C3, when a Kabellos target
                                     is built (see "Network module
                                     firmware")
-  zeitlos.img.gz                    sdcard image: apps, docs, zdocs
-  zeitlos-arklite.img.gz            ...plus Ark Lite for `ask`
-  zeitlos-arkmedium.img.gz          ...plus Ark Medium (~1.5GB and up)
+  zeitlos.img.gz                    sdcard image: every set, zdocs, Ark Lite
+  zeitlos-serious.img.gz            ...every set but games
+  zeitlos-base.img.gz               ...the base set alone
+  zeitlos-arkmedium.img.gz          every set and Ark Medium (~1.5GB and up)
   README.txt                        what each file is, offline
   MANIFEST.json                     defines, Fmax, utilisation, commit
   SHA256SUMS
@@ -100,7 +101,9 @@ release/
   lib/mkflashimg.py     image assembly and region validation
   lib/mkfatimg.py       the card's file list (plan()) and sdcard images, via mtools
   lib/manifest.py       /sys/manifest and update manifests (docs/update.md)
-  lib/store.py          update releases: objects + manifest (`zrelease tftp`)
+  lib/store.py          update releases: objects, manifest, manifest.sig
+  lib/dist.py           the distribution: dist.cfg, zdist.h, keygen (docs/distribution.md)
+  lib/ed25519.py        signatures, plain Python (RFC 8032)
   lib/build.py          drives the top-level Makefile
   lib/ship.py           gh release create/upload
   lib/notes.py          NOTES.md, README.txt, MANIFEST.json
@@ -108,7 +111,9 @@ release/
   lib/test_incremental.py  the build-later-publish-again workflow
   lib/test_mkfatimg.py  sdcard images, for real (mtools)
   lib/test_store.py     manifests and update releases
+  dist.cfg              the distribution: name, URL, public keys (committed)
   dist/<version>/       artifacts (gitignored)
+  dist/update/release/  the update store `build` writes and `ship` uploads
 
 output/releases/<board>/    bitstreams and logs from a release build,
                             kept apart from output/<board>
@@ -659,28 +664,42 @@ They go together, as one image: `make flash_sw` for a local build
 
 ## The sdcard images
 
-A release ships **one card image per corpus size**. They are identical
-except for the `ask` packs on them (`lib/mkfatimg.py`, `VARIANTS`):
+A release ships **four card images**, which differ in the **sets** of
+apps on them ([update.md](update.md#sets)) and in the `ask` packs
+(`lib/mkfatimg.py`, `VARIANTS`):
 
-| image | `ask` packs | size |
-|---|---|---|
-| `zeitlos.img.gz` | `zdocs` | 64 MB |
-| `zeitlos-arklite.img.gz` | `zdocs` + `arklite` | 64 MB |
-| `zeitlos-arkmedium.img.gz` | `zdocs` + `arkmed` | ~1.5 GB today, up to ~4 GB |
+| image | key | sets | `ask` packs | size | where |
+|---|---|---|---|---|---|
+| `zeitlos.img.gz` | `full` | all | `zdocs` + `arklite` | 64 MB | GitHub, the server |
+| `zeitlos-serious.img.gz` | `serious` | all but games | `zdocs` + `arklite` | 64 MB | GitHub, the server |
+| `zeitlos-base.img.gz` | `base` | base | `zdocs` | 64 MB | GitHub, the server |
+| `zeitlos-arkmedium.img.gz` | `arkmedium` | all but arklite | `zdocs` + `arkmed` | ~1.5 GB today, up to ~4 GB | GitHub only |
 
-`arkmed` contains Ark Lite, so the medium image carries `arkmed` and not
-`arklite` beside it. The packs are built by `tools/ask` beforehand; a
-missing one stops the build with the command that makes it.
+`serious` is for a machine without distractions. `arkmed` contains Ark
+Lite, so the medium image carries `arkmed` and not the arklite set
+beside it; it is only ever written as an image -- not on the
+distribution's server, and not something `update` fetches. Each card's
+`/sys/manifest` says which sets it has, and `update -s` adds more. The
+packs are built by `tools/ask` beforehand; a missing one stops the
+build with the command that makes it.
 
 ```
-$ release/zrelease build v0.0.4                          # all three
-$ release/zrelease build v0.0.4 --sdcards base,arklite   # without arkmed
-$ release/zrelease sdcard --variant arkmedium            # just one, no release
+$ release/zrelease build v0.0.4                              # all four
+$ release/zrelease build v0.0.4 --sdcards full,serious,base  # without arkmed
+$ release/zrelease sdcard --variant serious                  # just one, no release
+$ release/zrelease sdcard --sets base,dev,embedded           # any choice of sets
 ```
 
 `zrelease sdcard` with no `--variant` still makes the development card
-it always made (`zdocs` + `arklite`, or `$ZEITLOS_ASK_PACKS`), because
-`tools/mkfatimg.sh` calls it.
+it always made, now with every set (`zdocs` + `arklite`, or
+`$ZEITLOS_ASK_PACKS`), because `tools/mkfatimg.sh` calls it. An image
+built earlier under the same version is kept only if it has the same
+sets and packs.
+
+**The update store.** `build` also writes the card's files, every set,
+as an update store in `release/dist/update/release/`, one for every
+version (as the distribution's server has it). `ship` signs it and
+uploads it ([distribution.md](distribution.md#publishing)).
 
 ### Sizing, clusters, and what grows with the card
 
@@ -709,8 +728,10 @@ formatted. FatFs here is `FF_USE_LFN 1` with names up to 255 UTF-16
 units in UTF-8 (`sw/os/fs/fatfs/ffconf.h`); `mcopy` would store a
 component `create_name()` rejects, and the board would not open it.
 
-**A pack is ONE manifest entry**, `opt/ark/<pack>/`, not a line per file.
-`MANIFEST.json` would otherwise list every Wikipedia article's number.
+**A pack is ONE `MANIFEST.json` entry**, `opt/ark/<pack>/`, not a line
+per file, which would otherwise list every Wikipedia article's number.
+(The card's own `/sys/manifest` lists zdocs and arklite file by file,
+for `update`, and only names arkmed.)
 
 **GitHub refuses release assets over 2 GiB.** A card that compresses
 past that stops the build, rather than failing half way through `ship`.
@@ -1042,6 +1063,11 @@ $ release/zrelease ship v0.0.3
 
 Creates the release if the tag is new, updates it if not. `--draft`,
 `--prerelease`, `--title` and `--notes-only` do what they sound like.
+Then it signs the update store and uploads it, with every image but
+arkmedium, to the distribution's server (`--no-server` skips that,
+`--server-only` does only that). The key and the server are the release
+machine's, outside the repository: [distribution.md](distribution.md).
+Once, on that machine: `release/zrelease keygen --add`.
 
 Updating is the common case: a release goes out and one target needs a
 fix.

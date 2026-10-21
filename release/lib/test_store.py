@@ -82,7 +82,7 @@ def test_manifest():
     check(m3.id != m.id, "a policy change is a new snapshot")
     raises(lambda: mf.parse(m.text.replace("f " + "a" * 64, "f " + "d" * 64)),
            mf.ManifestError, "a changed hash no longer matches the id")
-    raises(lambda: mf.parse(m.text.replace("zeitlos-manifest 3", "zeitlos-manifest 4")),
+    raises(lambda: mf.parse(m.text.replace("zeitlos-manifest 4", "zeitlos-manifest 5")),
            mf.ManifestError, "a newer format is refused")
     raises(lambda: mf.parse("hello\n"), mf.ManifestError, "not a manifest")
     lines = m.text.splitlines()
@@ -99,11 +99,12 @@ def test_manifest():
     o = mf.parse(old)
     check(o.format == 1 and o.files[0][4] is None and o.files[0][2] == 5,
           "a format-1 manifest is read (no CRC)")
-    check(m.text.startswith("zeitlos-manifest 3\n") and " 0000000a 1 r apps/a\n" in m.text,
-          "format 3 writes the CRC after the SHA-256, as format 2 did")
-    m2l = "zeitlos-manifest 2\n" + m.text.split("\n", 1)[1]
-    o2 = mf.parse(m2l)
-    check(o2.format == 2 and o2.id == m.id, "a format-2 manifest is read; same snapshot id")
+    check(m.text.startswith("zeitlos-manifest 4\n") and " 0000000a 1 r base apps/a\n" in m.text,
+          "format 4 writes the CRC after the SHA-256, the set after the policy")
+    o2 = mf.parse(mf.text_in_format(m, 2))
+    check(o2.format == 2 and not o2.set_of, "a format-2 manifest is read, without sets")
+    o3 = mf.parse(mf.text_in_format(m, 3))
+    check(o3.format == 3 and o3.id == o2.id, "formats 2 and 3 have the same id")
     check(mf.object_path("ab" + "0" * 62, 2) == "o/ab/ab" + "0" * 18 and
           mf.object_path("ab" + "0" * 62) == "o/ab/ab" + "0" * 18 + ".lz",
           "format 3's objects are .lz, format 2's are not")
@@ -259,8 +260,7 @@ def test_store(root):
         st2 = os.path.join(tmp, "old")
         pl = mkfatimg.plan(root, packs=())
         m_new = mf.make(pl, "v0.0.7", "0.0.7", "test")
-        lines = m_new.text.split("\n", 1)[1]
-        m_old = mf.parse("zeitlos-manifest 2\n" + lines)
+        m_old = mf.parse(mf.text_in_format(m_new, 2))
         os.makedirs(os.path.join(st2, "v0.0.7"))
         for _p, sha, _s, _pol, _c in m_old.files:
             o = os.path.join(st2, mf.object_path(sha, 2))
@@ -269,8 +269,8 @@ def test_store(root):
         open(os.path.join(st2, "v0.0.7", "manifest"), "w").write(m_old.text)
         stx = store.publish(st2, m_new, store.sources_for(pl, m_new))
         cur = mf.parse(open(os.path.join(st2, "v0.0.7", "manifest")).read())
-        check(not stx.unchanged and cur.format == 3,
-              "same snapshot, but rewritten as format 3")
+        check(not stx.unchanged and cur.format == mf.FORMAT,
+              "rewritten as format %d" % mf.FORMAT)
         leaves = objects(st2)
         nraw = sum(1 for x in leaves if not x.endswith(".lz"))
         ngz = sum(1 for x in leaves if x.endswith(".lz"))
@@ -320,6 +320,128 @@ def test_store(root):
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def test_sets():
+    print("sets in the manifest (format 4)")
+    files = [("apps/a", "a" * 64, 1, "r", "0000000a", "base"),
+             ("apps/g", "b" * 64, 2, "r", "0000000b", "games")]
+    sets = [("base", "Base", "the shell"), ("games", "Games", "arcade, chess")]
+    m = mf.build("v1", "0.0.7", "x", ["home"], files, sets=sets,
+                 made="2026-10-21T00:00:00Z")
+    back = mf.parse(m.text)
+    check(back.set_of == {"apps/a": "base", "apps/g": "games"},
+          "each file's set is read back")
+    check(back.sets == sets and back.installed is None,
+          "a release lists the sets it offers, with titles; no installed line")
+    m2 = mf.build("v1", "0.0.7", "x", ["home"],
+                  files[:1] + [("apps/g", "b" * 64, 2, "r", "0000000b", "base")],
+                  sets=sets, made="2026-10-21T00:00:00Z")
+    check(m2.id != m.id, "moving a file to another set is a new snapshot")
+    m3 = mf.build("v1", "0.0.7", "x", ["home"], files, installed=["base"],
+                  made="2026-10-21T00:00:00Z")
+    check(mf.parse(m3.text).installed == ["base"] and m3.id == m.id,
+          "a card's installed line; not part of the id")
+    raises(lambda: mf.build("n", "v", "s", [], [("apps/x", "a" * 64, 1, "r",
+                                                  "00000000", "Games")]),
+           mf.ManifestError, "a set name with a capital is refused")
+    raises(lambda: mf.parse(m.text.replace(" r games apps/g", " r apps/g")),
+           mf.ManifestError, "a format-4 line without a set is refused")
+    carried = mf.build("v1", "0.0.7", "x", [], [("apps/old", "c" * 64, 3, "r",
+                                                  "0000000c", mf.NO_SET)])
+    check(mf.parse(carried.text).set_of["apps/old"] == "-",
+          "\"-\": an entry whose set is not known")
+
+
+def test_sign():
+    import ed25519
+    print("signatures")
+    seed = bytes.fromhex("9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60")
+    check(ed25519.public_key(seed).hex() ==
+          "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a" and
+          ed25519.sign(seed, b"").hex() ==
+          "e5564300c360ac729086e2cc806e828a84877f1eb8e5d974d873e06522490155"
+          "5fb8821590a33bacc61e39701cf9b46bd25bf5f0595bbe24655141438e7a100b",
+          "Ed25519 matches RFC 8032's first test vector")
+    seed3 = bytes.fromhex("c5aa8df43f9f837bedb7442f31dcb7b166d38535076f094b85ce3a2e0b4458f7")
+    sig3 = ed25519.sign(seed3, bytes.fromhex("af82"))
+    check(ed25519.public_key(seed3).hex() ==
+          "fc51cd8e6218a1a38da47ed00230f0580816ed13ba3303ac5deb911548908025" and
+          sig3.hex() == "6291d657deec24024827e69c3abe01a30ce548a284743a445e3680d7db5ac3ac"
+          "18ff9b538d16f290ae67f760984dc6594a7c15e9716ed28dc027beceea1ec40a",
+          "and its third")
+    tmp = tempfile.mkdtemp(prefix="sig-")
+    try:
+        st_dir = os.path.join(tmp, "release")
+        rdir = os.path.join(st_dir, "v1")
+        os.makedirs(rdir)
+        m = mf.build("v1", "0.0.7", "x", ["home"], [], made="2026-10-21T00:00:00Z")
+        open(os.path.join(rdir, "manifest"), "w").write(m.text)
+        pub = ed25519.public_key(seed)
+        other = ed25519.public_key(seed3)
+        check(store.sign(st_dir, "v1", [seed]), "sign() writes manifest.sig")
+        check(not store.sign(st_dir, "v1", [seed]), "and again changes nothing")
+        check(store.check_sig(st_dir, "v1", [pub]), "the signature checks")
+        check(not store.check_sig(st_dir, "v1", [other]), "not by another key")
+        store.sign(st_dir, "v1", [seed3, seed])
+        sig = open(os.path.join(rdir, "manifest.sig")).read()
+        check(sig.count("\ned25519 ") == 1 and store.check_sig(st_dir, "v1", [pub])
+              and store.check_sig(st_dir, "v1", [other]),
+              "two keys: a line each, either checks (changing keys)")
+        open(os.path.join(rdir, "manifest"), "a").write("x")
+        check(not store.check_sig(st_dir, "v1", [pub, other]),
+              "a changed manifest no longer checks")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_dist():
+    import dist
+    print("the distribution (release/dist.cfg)")
+    d = dist.load()
+    check(d.name and d.url.startswith("http://") and d.url.endswith("/"),
+          "dist.cfg: %s, %s" % (d.name, d.url))
+    hdr = open(os.path.join(ROOT, dist.HEADER)).read()
+    check(hdr == dist.header_text(d), "sw/apps/update/zdist.h is current")
+    tmp = tempfile.mkdtemp(prefix="dist-")
+    old = os.environ.get("ZEITLOS_HOME")
+    try:
+        cfg = os.path.join(tmp, "dist.cfg")
+        open(cfg, "w").write("name = A Fork\nurl = http://example.org:8080/z/release/\n")
+        f = dist.load(cfg)
+        check(f.name == "A Fork" and not f.keys, "a fork's dist.cfg")
+        for bad in ("url = https://example.org/release/\n",
+                    "url = http://example.org/release\n",
+                    "key = 1234\n", "colour = blue\n"):
+            open(cfg, "w").write("name = X\nurl = http://e.org/r/\n" + bad)
+            raises(lambda: dist.load(cfg), dist.DistError, "refused: %s" % bad.strip())
+        os.environ["ZEITLOS_HOME"] = os.path.join(tmp, "home")
+        pub = dist.keygen()
+        kp = dist.key_path()
+        check(os.path.isfile(kp) and (os.stat(kp).st_mode & 0o777) == 0o600,
+              "keygen: a private key, mode 600, in $ZEITLOS_HOME")
+        import ed25519
+        check(ed25519.public_key(dist.load_seed()).hex() == pub, "and it loads")
+        raises(lambda: dist.keygen(), dist.DistError, "an existing key is not replaced")
+        os.chmod(kp, 0o644)
+        raises(lambda: dist.load_seed(), dist.DistError, "a key others can read is refused")
+        os.chmod(kp, 0o600)
+        raises(lambda: dist.keygen(os.path.join(ROOT, "release", "x.key")),
+               dist.DistError, "a key inside the repository is refused")
+        open(cfg, "w").write("name = X\nurl = http://e.org/r/\n")
+        check(dist.add_key(pub, cfg) and dist.load(cfg).keys == [pub]
+              and not dist.add_key(pub, cfg), "--add: the public key into dist.cfg, once")
+        r = subprocess.run([sys.executable, os.path.join(ROOT, "release", "zrelease"),
+                            "http", "--dry-run"], capture_output=True, text=True,
+                           env=dict(os.environ))
+        check(r.returncode == 0 or "not built" in r.stdout + r.stderr,
+              "zrelease http --dry-run needs no key")
+    finally:
+        if old is None:
+            os.environ.pop("ZEITLOS_HOME", None)
+        else:
+            os.environ["ZEITLOS_HOME"] = old
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def test_cli(root):
     print("zrelease tftp, from the command line")
     # zrelease takes ROOT from its own location (abspath, not realpath),
@@ -346,6 +468,29 @@ def test_cli(root):
         rel = open(os.path.join(dest, "LATEST")).read().strip()
         mt = mf.parse(open(os.path.join(dest, rel, "manifest")).read())
         check(mt.abi == mf.read_abi(ROOT), "its manifest records the ABI id")
+        names = [n for n, _t, _d in mt.sets]
+        check(names[:1] == ["base"] and "games" in names and "arklite" in names
+              and all(mt.set_of[f[0]] in names for f in mt.files),
+              "it offers every set (%s), and each file is in one" % " ".join(names))
+        check(not os.path.exists(os.path.join(dest, rel, "manifest.sig")),
+              "TFTP stores are not signed")
+        import dist
+        home = os.path.join(tmp, "zhome")
+        env = dict(os.environ, ZEITLOS_HOME=home)
+        old = os.environ.get("ZEITLOS_HOME")
+        os.environ["ZEITLOS_HOME"] = home
+        try:
+            dist.keygen()
+        finally:
+            if old is None:
+                os.environ.pop("ZEITLOS_HOME", None)
+            else:
+                os.environ["ZEITLOS_HOME"] = old
+        r = subprocess.run([sys.executable, os.path.join(root, "release", "zrelease"),
+                            "http", "--dest", os.path.join(tmp, "h", "release")],
+                           capture_output=True, text=True, env=env)
+        check(r.returncode != 0 and "not in release/dist.cfg" in r.stderr,
+              "zrelease http refuses a key dist.cfg does not list")
         r = subprocess.run([sys.executable, os.path.join(root, "release", "zrelease"),
                             "tftp", "--dest", dest], capture_output=True, text=True)
         check(r.returncode == 0 and "unchanged" in r.stdout, "a second run says unchanged")
@@ -396,6 +541,9 @@ def main():
     root = test_mkfatimg.fake_root()
     try:
         test_manifest()
+        test_sets()
+        test_sign()
+        test_dist()
         test_policies(root)
         test_store(root)
         test_image(root)

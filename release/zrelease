@@ -49,6 +49,7 @@ ROOT = os.path.dirname(HERE)
 sys.path.insert(0, os.path.join(HERE, "lib"))
 
 import build as build_mod      # noqa: E402
+import dist as dist_mod        # noqa: E402
 import gen                     # noqa: E402
 import layout as layout_mod    # noqa: E402
 import manifest as manifest_mod  # noqa: E402
@@ -156,6 +157,26 @@ def cmd_check(args):
         print("  FAILED")
     else:
         print("  ok -- %s" % r.stdout.strip().replace("gen_abi: ", ""))
+
+    # sw/apps/update/zdist.h is release/dist.cfg as the board has it
+    # (docs/distribution.md), generated and committed like zabi.h.
+    print("\ndistribution (release/dist.cfg) ...")
+    try:
+        d = dist_mod.load()
+        r = subprocess.run([sys.executable, os.path.join(HERE, "lib", "dist.py"),
+                            "--check", os.path.join(ROOT, dist_mod.HEADER)],
+                           capture_output=True, text=True)
+        if r.returncode:
+            problems.append(r.stderr.strip().replace("dist: ", "distribution: "))
+            print("  FAILED")
+        else:
+            print("  ok -- %s, %s, %d key(s)%s" % (
+                d.name, d.url, len(d.keys),
+                "" if d.keys else ": boards cannot check updates from the "
+                "server until it has one (zrelease keygen --add)"))
+    except dist_mod.DistError as e:
+        problems.append(str(e))
+        print("  FAILED")
 
     print("\narch ...")
     try:
@@ -565,6 +586,14 @@ def cmd_build(args):
     # on its own.
     sdcards = _build_sdcards(args, out, previous)
 
+    # -- the update store (docs/update.md): the same card's files, for
+    # `update` over HTTP; signed and uploaded by `ship` --
+    if not args.no_sdcard:
+        print("\n=== update store ===")
+        st_dir = update_store_dir()
+        _publish_store(st_dir, "v" + version, ark=args.ark, require_packs=True,
+                       latest=True)
+
     ark_commit = _ark_commit(args.ark) or previous.get("ark_commit")
 
     # -- manifest, notes, checksums ------------------------------------
@@ -698,7 +727,7 @@ def _build_sdcards(args, out, previous):
     prev = _previous_sdcards(previous)
     cards = []
     print("\n=== SD card images ===")
-    for key, stem, packs in mkfatimg.VARIANTS:
+    for key, stem, sets, packs in mkfatimg.VARIANTS:
         if key not in wanted:
             continue
         gzname = stem + ".img.gz"
@@ -713,19 +742,23 @@ def _build_sdcards(args, out, previous):
         # no reason. Nothing on a card is board-specific, so an image
         # built earlier under this version is still correct -- unless
         # sw/ or docs/ changed, which is what --rebuild-sdcard is for.
+        # Only an image of the same sets and packs: zeitlos.img was the
+        # card with zdocs alone before sets (docs/update.md, "Sets").
         if (not args.rebuild_sdcard and os.path.exists(gz_existing)
-                and gzname in prev):
+                and gzname in prev
+                and prev[gzname].get("sets") == list(sets)
+                and prev[gzname].get("packs") == list(packs)):
             c = prev[gzname]
             print("    keeping %s (%d bytes) -- pass --rebuild-sdcard to "
                   "replace it" % (gzname, c["bytes"]))
             cards.append(c)
             continue
 
-        print("  %s  (%s)" % (gzname, " + ".join(packs)))
+        print("  %s  (%s; %s)" % (gzname, " ".join(sets), " + ".join(packs)))
         raw = os.path.join(out, stem + ".img")
         try:
             shipped = mkfatimg.build(ROOT, raw, ark_dir=args.ark,
-                                     packs=packs)
+                                     packs=packs, sets=sets)
         except mkfatimg.FatError as e:
             die("SD image %s: %s\n  To release without it: --sdcards %s"
                 % (gzname, e, ",".join(k for k in wanted if k != key)
@@ -742,6 +775,8 @@ def _build_sdcards(args, out, previous):
         cards.append({"file": gzname,
                       "variant": key,
                       "packs": list(packs),
+                      "sets": list(sets),
+                      "server": key in mkfatimg.SERVER_VARIANTS,
                       "bytes": gz_bytes,
                       "image_bytes": image_bytes,
                       "needs_8gb": image_bytes > mkfatimg.CARD_4GB_BYTES,
@@ -765,14 +800,23 @@ def cmd_sdcard(args):
     if d:
         os.makedirs(d, exist_ok=True)
 
-    packs = None
+    packs = sets = None
     if args.variant:
         try:
-            packs = mkfatimg.variant(args.variant)[2]
+            _k, _stem, sets, packs = mkfatimg.variant(args.variant)
         except mkfatimg.FatError as e:
             die(str(e))
+    if args.sets:
+        sets = [x for x in args.sets.replace(",", " ").split() if x]
+        if "base" not in sets:
+            sets.insert(0, "base")
+        if packs is None:
+            # the ask packs that come with those sets
+            packs = [pk for pk in mkfatimg.ask_packs_requested()
+                     if mkfatimg.PACK_SET.get(pk, "base") in sets]
     try:
-        shipped = mkfatimg.build(ROOT, out, ark_dir=args.ark, packs=packs)
+        shipped = mkfatimg.build(ROOT, out, ark_dir=args.ark, packs=packs,
+                                 sets=sets)
     except mkfatimg.FatError as e:
         die("SD image: %s" % e)
 
@@ -801,45 +845,58 @@ def _host_address():
         return "<this-machine>"
 
 
-def cmd_tftp(args):
-    """The card's contents as an update release (docs/update.md).
+def update_store_dir():
+    """Where `build` keeps the update store `ship` uploads: one store for
+    every version, as the server has (dist/update/release)."""
+    return os.path.join(HERE, "dist", "update", "release")
 
-    Builds nothing: it gathers the same files `sdcard` would, from the
-    tree as it is, so the apps must be built first. Safe to run under
-    sudo for that reason (a TFTP root is often root-owned), though
-    owning the directory is simpler:
-        sudo install -d -o $USER /srv/tftp/release
-    """
-    dest = os.path.abspath(args.dest)
-    version = mkfatimg.tree_version(ROOT)
-    name = args.name or ("v" + version)
+
+def _publish_store(dest, name, ark=None, require_packs=False, latest=True,
+                   dry_run=False, seeds=None):
+    """The card's files as an update release in `dest` (docs/update.md),
+    every set: the files of each and the ask packs in PACK_SET. Packs
+    not built are left out, with a note, unless `require_packs`.
+    Signs it with `seeds` when given. Returns (manifest, stats)."""
     try:
         store_mod.check_name(name)
     except store_mod.StoreError as e:
         die(str(e))
+    version = mkfatimg.tree_version(ROOT)
 
     print("\ngathering the card's files ...")
+    packs = []
+    for pk in mkfatimg.PACK_SET:
+        try:
+            mkfatimg.ask_pack_files(ROOT, pk)
+            packs.append(pk)
+        except mkfatimg.FatError as e:
+            if require_packs:
+                die("ask pack %s: %s" % (pk, e))
+            print("  note: ask pack %s is not built: the release has no %s "
+                  "set's pack" % (pk, mkfatimg.PACK_SET[pk]))
     try:
-        # No ask packs: an update leaves /opt/ark/<pack> and
-        # /data/ask/<pack> alone for now (docs/update.md, "Not yet").
-        pl = mkfatimg.plan(ROOT, ark_dir=args.ark, packs=())
+        pl = mkfatimg.plan(ROOT, ark_dir=ark, packs=packs)
     except mkfatimg.FatError as e:
         die("card: %s" % e)
     m = manifest_mod.make(pl, name, version, manifest_mod.describe(ROOT),
-                          abi=manifest_mod.read_abi(ROOT))
+                          abi=manifest_mod.read_abi(ROOT),
+                          sets=pl.offered_sets())
     total = sum(f[2] for f in m.files)
     print("  %s: %d files, %.1f MB, snapshot %s, abi %s (%s)"
           % (name, len(m.files), total / 1e6, m.id, m.abi or "none",
              m.header["source"]))
+    print("  sets: %s" % ", ".join(n for n, _t, _d in m.sets))
 
-    if args.dry_run:
+    if dry_run:
         print("\n--dry-run: nothing written to %s" % dest)
-        return 0
+        return m, None
 
     print("\npublishing to %s ..." % dest)
     try:
         st = store_mod.publish(dest, m, store_mod.sources_for(pl, m),
-                               latest=not args.no_latest)
+                               latest=latest)
+        if seeds:
+            store_mod.sign(dest, name, seeds)
     except (store_mod.StoreError, OSError) as e:
         die("publish: %s" % e)
 
@@ -851,8 +908,30 @@ def cmd_tftp(args):
                  st.pruned))
         if st.previous_id:
             print("  %s: snapshot %s -> %s" % (name, st.previous_id, m.id))
-    if not args.no_latest:
+    if seeds:
+        print("  signed with %d key(s)" % len(seeds))
+    if latest:
         print("  LATEST -> %s" % name)
+    return m, st
+
+
+def cmd_tftp(args):
+    """The card's contents as an update release (docs/update.md).
+
+    Builds nothing: it gathers the same files `sdcard` would, from the
+    tree as it is, so the apps must be built first. Safe to run under
+    sudo for that reason (a TFTP root is often root-owned), though
+    owning the directory is simpler:
+        sudo install -d -o $USER /srv/tftp/release
+    Unsigned: TFTP is for development on a LAN (docs/distribution.md).
+    """
+    dest = os.path.abspath(args.dest)
+    version = mkfatimg.tree_version(ROOT)
+    name = args.name or ("v" + version)
+    m, st = _publish_store(dest, name, ark=args.ark, latest=not args.no_latest,
+                           dry_run=args.dry_run)
+    if st is None:
+        return 0
 
     print("\non the board:")
     if os.path.basename(dest) == "release":
@@ -866,6 +945,128 @@ def cmd_tftp(args):
         print("  the board asks for release/%s/manifest: serve %s as "
               "<tftp root>/release" % (name, dest))
     return 0
+
+
+def _seeds_checked():
+    """The release machine's private key, refused unless release/dist.cfg
+    trusts it: a release signed with a key boards do not know is one
+    every board refuses."""
+    try:
+        seed = dist_mod.load_seed()
+        d = dist_mod.load()
+    except dist_mod.DistError as e:
+        die(str(e))
+    import ed25519
+    pub = ed25519.public_key(seed).hex()
+    if pub not in d.keys:
+        die("the signing key %s... is not in release/dist.cfg, so boards "
+            "would refuse what it signs: `zrelease keygen --add` adds a new "
+            "key, or add `key = %s` yourself" % (pub[:16], pub))
+    return [seed]
+
+
+def cmd_http(args):
+    """A signed update store for `update -t http` (docs/distribution.md):
+    the same files as `tftp`, plus manifest.sig. Serve DEST with any web
+    server as .../release/."""
+    dest = os.path.abspath(args.dest)
+    version = mkfatimg.tree_version(ROOT)
+    name = args.name or ("v" + version)
+    seeds = None if args.dry_run else _seeds_checked()
+    m, st = _publish_store(dest, name, ark=args.ark, latest=not args.no_latest,
+                           dry_run=args.dry_run, seeds=seeds)
+    if st is None:
+        return 0
+    print("\nserve %s over plain HTTP as http://HOST/.../%s/, then on the "
+          "board:" % (dest, os.path.basename(dest)))
+    print("  update %s -t http http://HOST/.../%s/" % (name, os.path.basename(dest)))
+    return 0
+
+
+def cmd_keygen(args):
+    # A key that is already there is used, not replaced: `keygen` then
+    # `keygen --add` adds the key made the first time.
+    if os.path.exists(dist_mod.key_path()) and not args.force:
+        try:
+            import ed25519
+            pub = ed25519.public_key(dist_mod.load_seed()).hex()
+        except dist_mod.DistError as e:
+            die(str(e))
+        print("private key: %s (already there; --force makes a new one)"
+              % dist_mod.key_path())
+    else:
+        try:
+            pub = dist_mod.keygen(force=args.force)
+        except dist_mod.DistError as e:
+            die(str(e))
+        print("private key: %s (keep it there; never commit it)" % dist_mod.key_path())
+    print("public key:  %s" % pub)
+    if args.add:
+        if dist_mod.add_key(pub):
+            print("added to release/dist.cfg; now `make -C sw/apps/update dist`, "
+                  "and commit both")
+        else:
+            print("release/dist.cfg already has it; `make -C sw/apps/update dist` "
+                  "puts it in zdist.h")
+    else:
+        print("add it to release/dist.cfg as `key = %s` (or run with --add)"
+              % pub)
+    return 0
+
+
+def _rsync(src, dst, extra=()):
+    cfg = dist_mod.local_cfg()
+    cmd = ["rsync", "-rlt", "--chmod=D755,F644"] + list(extra)
+    if cfg.get("ship_ssh"):
+        cmd += ["-e", cfg["ship_ssh"]]
+    cmd += (list(src) if isinstance(src, (list, tuple)) else [src]) + [dst]
+    print("  " + " ".join(cmd))
+    r = subprocess.run(cmd)
+    if r.returncode:
+        die("rsync failed (%d)" % r.returncode)
+
+
+def ship_server(version, dry=False):
+    """The update store and the server's images to the distribution's
+    server (docs/distribution.md, "Publishing"), as the release
+    machine's ~/.zeitlos/release.cfg says. Objects first, then the
+    manifests and their signatures, LATEST last: a board never sees a
+    manifest whose objects are not there yet."""
+    cfg = dist_mod.local_cfg()
+    st_dir = update_store_dir()
+    name = "v" + version
+    if not os.path.isfile(os.path.join(st_dir, name, "manifest")):
+        die("%s: no update store for %s -- `zrelease build %s` makes it"
+            % (st_dir, name, version))
+    seeds = _seeds_checked()
+    store_mod.sign(st_dir, name, seeds)
+    import ed25519
+    if not store_mod.check_sig(st_dir, name, [ed25519.public_key(x) for x in seeds]):
+        die("%s: the signature does not check" % name)
+    dst = cfg.get("ship_store")
+    imgs = cfg.get("ship_images")
+    if not dst:
+        die("%s/release.cfg has no ship_store (the rsync destination of "
+            "the update store, e.g. zeitlos@host:/srv/zeitlos/release/)"
+            % dist_mod.home())
+    print("\n=== the distribution's server ===")
+    if dry:
+        print("  --dry-run: would upload %s to %s" % (st_dir, dst))
+        return
+    dst = dst.rstrip("/") + "/"
+    _rsync(st_dir + "/o", dst)
+    _rsync(st_dir + "/", dst, ["--exclude", "o/", "--exclude", "LATEST",
+                               "--exclude", ".lock", "--delay-updates"])
+    _rsync(os.path.join(st_dir, "LATEST"), dst)
+    if imgs:
+        out = distdir(version)
+        files = [os.path.join(out, v[1] + ".img.gz") for v in mkfatimg.VARIANTS
+                 if v[0] in mkfatimg.SERVER_VARIANTS
+                 and os.path.isfile(os.path.join(out, v[1] + ".img.gz"))]
+        if files:
+            _rsync(files, imgs.rstrip("/") + "/%s/" % name)
+    else:
+        print("  (no ship_images in release.cfg: images not uploaded)")
 
 
 def cmd_verify(args):
@@ -929,12 +1130,17 @@ def cmd_verify(args):
 
 def cmd_ship(args):
     version = build_mod.normalise_version(args.version)
-    try:
-        ship_mod.ship(ROOT, version, distdir(version), dry=args.dry_run,
-                      draft=args.draft, prerelease=args.prerelease,
-                      notes_only=args.notes_only, title=args.title)
-    except ship_mod.ShipError as e:
-        die(str(e))
+    if not args.server_only:
+        try:
+            ship_mod.ship(ROOT, version, distdir(version), dry=args.dry_run,
+                          draft=args.draft, prerelease=args.prerelease,
+                          notes_only=args.notes_only, title=args.title)
+        except ship_mod.ShipError as e:
+            die(str(e))
+    # GitHub has everything, zeitlos-arkmedium included; the server has
+    # the update store and the other images (docs/distribution.md).
+    if not args.no_server and not args.notes_only:
+        ship_server(version, dry=args.dry_run)
     return 0
 
 
@@ -963,7 +1169,7 @@ def main(argv):
     b.add_argument("--no-sdcard", action="store_true")
     b.add_argument("--sdcards",
                    default=",".join(v[0] for v in mkfatimg.VARIANTS),
-                   help="card variants to build (default: all of %s). "
+                   help="card images to build (default: all of %s). "
                         "arkmedium needs the arkmed pack built first."
                         % ", ".join(v[0] for v in mkfatimg.VARIANTS))
     b.add_argument("--rebuild-sdcard", action="store_true",
@@ -1018,8 +1224,11 @@ def main(argv):
     sd.add_argument("--ark", help="ARK checkout (default sw/data/ark)")
     sd.add_argument("--variant",
                     choices=[v[0] for v in mkfatimg.VARIANTS],
-                    help="one of a release's card variants (default: "
-                         "zdocs + arklite, or $ZEITLOS_ASK_PACKS)")
+                    help="one of a release's card images (default: "
+                         "every set, zdocs + arklite, or $ZEITLOS_ASK_PACKS)")
+    sd.add_argument("--sets",
+                    help="only these sets, e.g. base,productivity (base is "
+                         "always there; docs/update.md, \"Sets\")")
     sd.set_defaults(func=cmd_sdcard)
 
     # The card as an update release (docs/update.md): objects named by
@@ -1051,7 +1260,33 @@ def main(argv):
                    help="update the release text, upload nothing")
     s.add_argument("--title")
     s.add_argument("--dry-run", action="store_true")
+    s.add_argument("--no-server", action="store_true",
+                   help="GitHub only: do not upload the update store and "
+                        "images to the distribution's server")
+    s.add_argument("--server-only", action="store_true",
+                   help="only the distribution's server, not GitHub")
     s.set_defaults(func=cmd_ship)
+
+    # A signed update store, for `update -t http` (docs/distribution.md).
+    h = sub.add_parser("http", help="publish the card's files, signed, for "
+                       "`update` over HTTP")
+    h.add_argument("--dest", default=os.path.join(HERE, "dist", "http", "release"),
+                   help="the store (default release/dist/http/release); "
+                        "serve it as .../release/")
+    h.add_argument("--name", help="the release name (default v<version>)")
+    h.add_argument("--ark", help="ARK checkout (default sw/data/ark)")
+    h.add_argument("--no-latest", action="store_true",
+                   help="leave LATEST as it is")
+    h.add_argument("--dry-run", action="store_true")
+    h.set_defaults(func=cmd_http)
+
+    k = sub.add_parser("keygen", help="make the release machine's signing "
+                       "key (outside the repository)")
+    k.add_argument("--add", action="store_true",
+                   help="add its public key to release/dist.cfg")
+    k.add_argument("--force", action="store_true",
+                   help="replace an existing key")
+    k.set_defaults(func=cmd_keygen)
 
     args = p.parse_args(argv)
 

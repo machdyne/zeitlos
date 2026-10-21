@@ -78,9 +78,21 @@ def fake_root():
     os.makedirs(os.path.join(r, "sw", "common"), exist_ok=True)
     os.symlink(os.path.join(ROOT, "sw", "common", "zabi.h"),
                os.path.join(r, "sw", "common", "zabi.h"))
-    os.makedirs(os.path.join(r, "tools", "ask"), exist_ok=True)
-    os.symlink(os.path.join(ROOT, mkfatimg.ASK_OUT),
-               os.path.join(r, mkfatimg.ASK_OUT))
+    # The ask packs: zdocs as built here, when it is; arklite and arkmed
+    # faked (a document and an index each), so every image can be made
+    # without fetching the Ark.
+    out = os.path.join(r, mkfatimg.ASK_OUT)
+    os.makedirs(out, exist_ok=True)
+    real = os.path.join(ROOT, mkfatimg.ASK_OUT, "zdocs")
+    if os.path.isdir(real):
+        os.symlink(real, os.path.join(out, "zdocs"))
+    for pk in ("arklite", "arkmed"):
+        for half, fn in ((mkfatimg.PACK_HALVES[0], "codex.md"),
+                         (mkfatimg.PACK_HALVES[1], "index.zak")):
+            d = os.path.join(out, pk, half, pk)
+            os.makedirs(d, exist_ok=True)
+            with open(os.path.join(d, fn), "w") as f:
+                f.write("FAKE %s %s\n" % (pk, fn))
     return r
 
 
@@ -92,19 +104,19 @@ def card_files(img):
                if l.startswith("::/"))
 
 
-def pack_built(name):
-    return os.path.isdir(os.path.join(ROOT, mkfatimg.ASK_OUT, name,
+def pack_built(name, root=ROOT):
+    return os.path.isdir(os.path.join(root, mkfatimg.ASK_OUT, name,
                                       mkfatimg.zcard("Z_DIR_ASK_PACKS"), name))
 
 
 def test_variant(root, key, tmp):
-    _k, stem, packs = mkfatimg.variant(key)
-    missing = [p for p in packs if not pack_built(p)]
+    _k, stem, sets, packs = mkfatimg.variant(key)
+    missing = [p for p in packs if not pack_built(p, root)]
     if missing:
         print("  skip  %s: pack %s not built" % (key, ", ".join(missing)))
         return
     img = os.path.join(tmp, stem + ".img")
-    shipped = mkfatimg.build(root, img, verbose=False, packs=packs)
+    shipped = mkfatimg.build(root, img, verbose=False, packs=packs, sets=sets)
     size = os.path.getsize(img)
     check(size >= mkfatimg.MIN_SIZE_MB * 1024 * 1024,
           "%s: %d MB image" % (key, size // (1024 * 1024)))
@@ -117,10 +129,33 @@ def test_variant(root, key, tmp):
     on_card = card_files(img)
     # every listed app and data file, where the programs look for it --
     # /data/bbs/bbs.cfg, /data/fed/fed.cfg and the rest included
-    listed = [n for n, _ in mkfatimg.app_inputs() + mkfatimg.data_inputs()]
+    every = [n for n, _ in mkfatimg.app_inputs() + mkfatimg.data_inputs()]
+    listed = [n for n in every if mkfatimg.set_of(n) in sets]
     absent = [n for n in listed if ("/" + n).lower() not in on_card]
-    check(not absent, "%s: all %d listed apps and data files on the card%s" % (
-        key, len(listed), "" if not absent else " (missing e.g. %s)" % absent[0]))
+    check(not absent, "%s: all %d listed apps and data files of its sets on "
+          "the card%s" % (key, len(listed),
+                          "" if not absent else " (missing e.g. %s)" % absent[0]))
+    extra = [n for n in every if mkfatimg.set_of(n) not in sets
+             and ("/" + n).lower() in on_card]
+    check(not extra, "%s: nothing from other sets%s" % (
+        key, "" if not extra else " (e.g. %s)" % extra[0]))
+    import manifest as mf
+    back = os.path.join(tmp, "m")
+    subprocess.run(["mcopy", "-n", "-i", img, "::/" + mkfatimg.P["Z_PATH_SYS_MANIFEST"].lstrip("/"),
+                    back], check=True, capture_output=True)
+    m = mf.parse(open(back).read())
+    check(m.installed == list(sets), "%s: /sys/manifest says it has %s"
+          % (key, " ".join(sets)))
+    listed_packs = [pk for pk in packs if pk in mkfatimg.PACK_SET]
+    check(all(any(f[0].startswith(mkfatimg.zcard("Z_DIR_ASK_PACKS", pk) + "/")
+                  for f in m.files) for pk in listed_packs)
+          and m.header.get("packs", "").split() ==
+          [pk for pk in packs if pk not in mkfatimg.PACK_SET],
+          "%s: packs %s listed file by file, %s only named"
+          % (key, listed_packs or "none",
+             [pk for pk in packs if pk not in mkfatimg.PACK_SET] or "none"))
+    if "games" not in sets or "net" not in sets:
+        return
     # Spot checks, by the registry's names (sw/common/zpaths.h), so that
     # they follow the layout rather than restate it.
     zc = mkfatimg.zcard
@@ -196,8 +231,39 @@ def main():
         check(s2 > 30000 * 3000, "slack is counted: 30K small files need "
               "more than their byte total (%d MB)" % (s2 // (1024 * 1024)))
 
+        print("sets")
+        every = [n for n, _ in mkfatimg.app_inputs() + mkfatimg.data_inputs()]
+        try:
+            unplaced = [n for n in every if not mkfatimg.set_of(n)]
+            check(not unplaced, "every card file of the lists has a set")
+        except mkfatimg.FatError as e:
+            check(False, "every card file of the lists has a set (%s)" % e)
+        try:
+            mkfatimg.set_of("apps/nosuchapp")
+            check(False, "an app with no set is refused")
+        except mkfatimg.FatError as e:
+            check("has no set" in str(e), "an app with no set is refused")
+        for n, _t, _d in mkfatimg.SETS:
+            check(any(mkfatimg.set_of(x) == n for x in every) or n in
+                  mkfatimg.PACK_SET.values(), "set %s has files" % n)
+        plb = mkfatimg.plan(root, packs=(), verbose=False, sets=("base",))
+        check(plb.sets == ["base"] and all(v == "base" for v in plb.set_of.values())
+              and mkfatimg.zcard("Z_DIR_APPS", "posix") in plb.set_of,
+              "a base plan has base's files only (%d)" % len(plb.files))
+        try:
+            mkfatimg.plan(root, packs=(), verbose=False, sets=("games",))
+            check(False, "a plan without base is refused")
+        except mkfatimg.FatError:
+            check(True, "a plan without base is refused")
+        try:
+            mkfatimg.plan(root, packs=("zdocs",), verbose=False,
+                          sets=("base",))
+            check(True, "zdocs comes with base")
+        except mkfatimg.FatError as e:
+            check(not pack_built("zdocs"), "zdocs comes with base (%s)" % e)
+
         print("variants")
-        for key, _stem, _packs in mkfatimg.VARIANTS:
+        for key, _stem, _sets, _packs in mkfatimg.VARIANTS:
             test_variant(root, key, tmp)
 
         print("card names")

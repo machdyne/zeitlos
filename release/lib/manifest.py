@@ -14,16 +14,19 @@
 #
 # -- the format --
 #
-#   zeitlos-manifest 1
+#   zeitlos-manifest 4
 #   name v0.0.7
 #   version 0.0.7
 #   snapshot 3f2a9c01e4b7
 #   abi 03a25f4cbf544cf0
 #   source v0.0.6-45-g58e067a-dirty
 #   made 2026-10-19T09:40:12Z
-#   packs zdocs arklite
+#   packs arkmed
+#   set base Base | the shell, settings, documents, fonts
+#   set games Games | arcade, casino, chess, chip8
+#   installed base games
 #   d home
-#   f <sha256 hex> <crc32 hex> <size> <policy> <path>
+#   f <sha256 hex> <crc32 hex> <size> <policy> <set> <path>
 #   ...
 #
 # Header lines are "key value"; a reader skips keys it does not know.
@@ -73,7 +76,7 @@
 # that reads only format 2 refuses 3 and prints how to fetch the
 # release's own updater (docs/update.md).
 #
-# Formats 1 and 2 are still read; this writes 3.
+# Formats 1 to 3 are still read; this writes 4.
 #
 # -- the snapshot id --
 #
@@ -92,6 +95,21 @@
 # when the tree has a zabi.h; a manifest without one says nothing about
 # its ABI, and `update` treats it like a kernel that cannot say.
 #
+# -- format 4: sets --
+#
+# A set is a label on a file (docs/update.md, "Sets"): each `f` line
+# says which set the file belongs to, after its policy. A set name is
+# 1-16 of [a-z0-9-], starting with a letter; "-" is a file whose set is
+# not known (a card's entry carried over from a manifest older than
+# format 4). The snapshot id is over the lines, so the set is part of
+# it: moving an app to another set is a new snapshot.
+#
+# `set <name> <title> | <description>` lines, in the release's order,
+# say which sets a release offers, for people (update's window, -s
+# all). `installed <names>` is on a card: the sets it has. A card with
+# no `installed` line was written before sets, when every card had
+# everything: it has every set.
+#
 # The `packs` line records which ask packs an image carried; their
 # files are not listed (docs/update.md, "Not yet").
 #
@@ -105,7 +123,7 @@ import subprocess
 import sys
 import zlib
 
-FORMAT = 3
+FORMAT = 4
 MAGIC = "zeitlos-manifest"
 ID_DIGITS = 12
 
@@ -120,11 +138,23 @@ class ManifestError(Exception):
     pass
 
 
+SET_RE = re.compile(r"[a-z][a-z0-9-]{0,15}$")
+NO_SET = "-"
+
+
+def check_set(name):
+    if not SET_RE.match(name or ""):
+        raise ManifestError("not a set name: %r" % name)
+
+
 class Manifest(object):
     def __init__(self):
         self.header = {}        # key -> value text
         self.dirs = []          # paths
         self.files = []         # [(path, sha256, size, policy, crc32)]
+        self.set_of = {}        # path -> set (format 4)
+        self.sets = []          # [(name, title, description)] offered
+        self.installed = None   # [names] on a card; None: not said
         self.format = FORMAT
         self.text = ""
 
@@ -271,10 +301,15 @@ def _check_path(p):
 
 
 def _line(f, fmt=FORMAT):
-    path, sha, size, pol, crc = f
+    # f: (path, sha, size, policy, crc) or (..., set)
+    path, sha, size, pol, crc = f[:5]
     if fmt == 1:
         return "f %s %d %s %s" % (sha, size, pol, path)
-    return "f %s %s %d %s %s" % (sha, crc, size, pol, path)
+    if fmt < 4:
+        return "f %s %s %d %s %s" % (sha, crc, size, pol, path)
+    if len(f) < 6 or not f[5]:
+        raise ManifestError("%s: no set" % path)
+    return "f %s %s %d %s %s %s" % (sha, crc, size, pol, f[5], path)
 
 
 def _body(dirs, files, fmt=FORMAT):
@@ -305,20 +340,31 @@ def read_abi(root):
     return m.group(1) if m else ""
 
 
-def make(pl, name, version, source, packs=(), made=None, abi=""):
-    """A manifest for a mkfatimg.Plan. Hashes every file."""
+def make(pl, name, version, source, packs=(), made=None, abi="",
+         sets=None, installed=None):
+    """A manifest for a mkfatimg.Plan. Hashes every file. `sets`: the
+    [(name, title, description)] offered (a release); `installed`: the
+    set names a card has (an image)."""
     files = []
     for dest, src, policy in pl.manifest_files():
         sha, crc = hashes_file(src)
-        files.append((dest, sha, os.path.getsize(src), policy, crc))
+        files.append((dest, sha, os.path.getsize(src), policy, crc,
+                      pl.set_of[dest]))
     dirs = [d.strip("/") for d in pl.dirs]
     return build(name, version, source, dirs, files, packs=packs, made=made,
-                 abi=abi)
+                 abi=abi, sets=sets, installed=installed)
 
 
-def build(name, version, source, dirs, files, packs=(), made=None, abi=""):
-    for path, _sha, _size, policy, crc in files:
+def build(name, version, source, dirs, files, packs=(), made=None, abi="",
+          sets=None, installed=None):
+    """files: (path, sha256, size, policy, crc32[, set]); a file without a
+    set is in `base`."""
+    files = [tuple(f) if len(f) >= 6 else tuple(f) + ("base",) for f in files]
+    for f in files:
+        path, _sha, _size, policy, crc, st = f
         _check_path(path)
+        if st != NO_SET:
+            check_set(st)
         if policy not in ("r", "k"):
             raise ManifestError("%s: unknown policy %r" % (path, policy))
         if len(crc) != 8 or crc != crc.lower():
@@ -332,8 +378,17 @@ def build(name, version, source, dirs, files, packs=(), made=None, abi=""):
     if made is None:
         made = datetime.datetime.now(datetime.timezone.utc) \
             .strftime("%Y-%m-%dT%H:%M:%SZ")
+    for sname, title, desc in sets or ():
+        check_set(sname)
+        if "|" in title or "\n" in title + desc:
+            raise ManifestError("set %s: a title has no | or newline" % sname)
+    for sname in installed or ():
+        check_set(sname)
     m.dirs = sorted(dirs, key=lambda s: s.encode())
-    m.files = sorted(files, key=lambda f: f[0].encode())
+    m.files = sorted((f[:5] for f in files), key=lambda f: f[0].encode())
+    m.set_of = {f[0]: f[5] for f in files}
+    m.sets = list(sets or ())
+    m.installed = list(installed) if installed is not None else None
     m.header = {
         "name": name,
         "version": version,
@@ -348,6 +403,10 @@ def build(name, version, source, dirs, files, packs=(), made=None, abi=""):
         if k == "abi" and not abi:
             continue
         head.append(("%s %s" % (k, m.header[k])).rstrip())
+    for sname, title, desc in m.sets:
+        head.append(("set %s %s | %s" % (sname, title, desc)).rstrip())
+    if m.installed is not None:
+        head.append(("installed %s" % " ".join(m.installed)).rstrip())
     m.text = "\n".join(head + _body(dirs, files)) + "\n"
     return m
 
@@ -370,9 +429,21 @@ def parse(text):
     m.format = fmt = int(magic[1])
     for n, line in enumerate(lines[1:], 2):
         if line.startswith("f "):
+            st = None
             if fmt == 1:
                 parts = line.split(" ", 4)
                 crc = None
+            elif fmt >= 4:
+                parts = line.split(" ", 6)
+                if len(parts) != 7:
+                    raise ManifestError("line %d: %r" % (n, line))
+                crc = parts.pop(2)
+                st = parts.pop(4)
+                if len(crc) != 8:
+                    raise ManifestError("line %d: %r" % (n, line))
+                int(crc, 16)
+                if st != NO_SET:
+                    check_set(st)
             else:
                 parts = line.split(" ", 5)
                 if len(parts) == 6:
@@ -386,6 +457,8 @@ def parse(text):
             int(parts[1], 16)
             _check_path(parts[4])
             m.files.append((parts[4], parts[1], int(parts[2]), parts[3], crc))
+            if st is not None:
+                m.set_of[parts[4]] = st
         elif line.startswith("d "):
             _check_path(line[2:])
             m.dirs.append(line[2:])
@@ -393,14 +466,46 @@ def parse(text):
             raise ManifestError("line %d: header after entries" % n)
         else:
             k, _sp, v = line.partition(" ")
-            m.header[k] = v
+            if k == "set":
+                sname, _sp, rest = v.partition(" ")
+                title, _sp, desc = rest.partition(" | ")
+                check_set(sname)
+                m.sets.append((sname, title.strip(), desc.strip()))
+            elif k == "installed":
+                m.installed = v.split()
+                for sname in m.installed:
+                    check_set(sname)
+            else:
+                m.header[k] = v
     paths = [f[0] for f in m.files]
     if paths != sorted(paths, key=lambda s: s.encode()) \
             or len(set(paths)) != len(paths):
         raise ManifestError("file lines are not sorted and unique")
-    if m.header.get("snapshot") != snapshot_id(m.dirs, m.files, fmt):
+    if m.header.get("snapshot") != snapshot_id(m.dirs, full_files(m), fmt):
         raise ManifestError("snapshot id does not match the entries")
     return m
+
+
+def text_in_format(m, fmt):
+    """m written as an older format (for tests, and for reading what an
+    older release tool wrote): no sets before 4, no CRC in 1."""
+    head = []
+    for line in m.text.split("\n")[1:]:
+        if line.startswith(("d ", "f ")) or not line:
+            break
+        k = line.partition(" ")[0]
+        if fmt < 4 and k in ("set", "installed"):
+            continue
+        if k == "snapshot":
+            line = "snapshot %s" % snapshot_id(m.dirs, full_files(m), fmt)
+        head.append(line)
+    return "\n".join(["%s %d" % (MAGIC, fmt)] + head +
+                     _body(m.dirs, full_files(m), fmt)) + "\n"
+
+
+def full_files(m):
+    """m's files with their sets: (path, sha, size, policy, crc, set)."""
+    return [f + (m.set_of.get(f[0]),) for f in m.files]
 
 
 def version_text(m):

@@ -303,9 +303,16 @@ static void fresh_card(void) {
 #define FX_ABI "0123456789abcdef"   // mkfixture.py, ABI
 static const char *kernel_abi = FX_ABI;
 static bool force;
+// -s, and signatures (docs/distribution.md): off unless a case sets them.
+static const char *sets_arg;
+static bool need_sig;
+static uint8_t keys[2 * 32];
+static int nkeys;
+static uint8_t key1[32], key2[32];
 
 static int run(const char *release, bool dry, bool verify) {
-	upd_opts_t o = { release, "release", "test", dry, verify, force, kernel_abi };
+	upd_opts_t o = { release, "release", "test", dry, verify, force, kernel_abi,
+		sets_arg, need_sig, keys, nkeys };
 	outlen = 0;
 	outbuf[0] = 0;
 	fetches = 0;
@@ -562,7 +569,7 @@ static void format1(void) {
 		char f[1200];
 		full(f, "/sys/manifest");
 		char *b = slurp(f, NULL);
-		CHECK(b && !strncmp(b, "zeitlos-manifest 3\n", 19), "written as format 3");
+		CHECK(b && !strncmp(b, "zeitlos-manifest 4\n", 19), "written as format 4");
 		free(b);
 	}
 
@@ -593,8 +600,8 @@ static void lz_objects(void) {
 	snprintf(store, sizeof store, "%s/store2", fx);
 	fresh_card();
 	r = run("v2", false, false);
-	CHECK(r == UPD_DONE && card_is_release("v2", NULL) && manifest_is(id_v2),
-		"is still read: same snapshot, raw objects (%d)", r);
+	CHECK(r == UPD_DONE && card_is_release("v2", NULL),
+		"is still read: raw objects (%d)", r);
 	{
 		char f[1200];
 		full(f, "/sys/manifest");
@@ -605,8 +612,11 @@ static void lz_objects(void) {
 	}
 	snprintf(store, sizeof store, "%s", saved);
 	r = run("v2", false, false);
-	CHECK(r == UPD_DONE && said("up to date"),
-		"then the format-3 store finds it up to date: same snapshot id");
+	CHECK(r == UPD_DONE && fetches == 0 && said("0 to write") && manifest_is(id_v2),
+		"then the format-4 store: nothing fetched but its manifest, the card's "
+		"rewritten as format 4 (%d, %d)", r, fetches);
+	r = run("v2", false, false);
+	CHECK(r == UPD_DONE && said("up to date"), "and up to date after that");
 }
 
 static void memory(void) {
@@ -764,7 +774,7 @@ static void bad_store(void) {
 	sh("rm -rf '%s' && cp -r '%s' '%s'", store, saved, store);
 
 	printf("a newer manifest format\n");
-	sh("sed -i 's/^zeitlos-manifest 3/zeitlos-manifest 4/' '%s/v2/manifest'", store);
+	sh("sed -i 's/^zeitlos-manifest 4/zeitlos-manifest 5/' '%s/v2/manifest'", store);
 	r = run("v2", false, false);
 	CHECK(r == UPD_FAILED && said("newer than this update"), "is refused (%d)", r);
 	CHECK(said("release/v2/update /apps/update"), "and says how to get a newer update");
@@ -873,6 +883,175 @@ static void abi(void) {
 	kernel_abi = FX_ABI;
 }
 
+// -- sets (docs/update.md, "Sets") --
+
+static bool has_from(const char *path, const char *rel) {
+	return card_matches_src(path, rel);
+}
+
+static bool installed_is(const char *line) {
+	char f[1200], want[160];
+	full(f, "/sys/manifest");
+	char *b = slurp(f, NULL);
+	snprintf(want, sizeof want, "\ninstalled %s\n", line);
+	bool ok = b && strstr(b, want);
+	free(b);
+	return ok;
+}
+
+static void sets(void) {
+	int r;
+	printf("sets\n");
+	fresh_card();
+	sets_arg = "games";
+	r = run("s1", false, false);
+	CHECK(r == UPD_DONE && has_from("/apps/posix", "s1") && has_from("/apps/snake", "s1")
+		&& has_from("/apps/mover", "s1") && !card_has("/apps/zcc")
+		&& !card_has("/data/zcc/hello.c"),
+		"a blank card, -s games: base and games, not dev (%d)", r);
+	CHECK(installed_is("base games") && said("adding games"),
+		"the card's manifest says base games");
+	r = run("s1", false, false);
+	CHECK(r == UPD_DONE && said("up to date") && fetches == 0,
+		"again: up to date, from the manifest alone (%d)", r);
+	sets_arg = NULL;
+	r = run("s1", false, false);
+	CHECK(r == UPD_DONE && said("up to date"), "and without -s: the card's sets");
+
+	r = run("s2", false, false);
+	CHECK(r == UPD_DONE && has_from("/apps/posix", "s2") && has_from("/apps/tetris", "s2")
+		&& !card_has("/apps/web") && !card_has("/apps/zcc"),
+		"s1 to s2: base and games brought up, net and dev not added (%d)", r);
+	CHECK(has_from("/apps/mover", "s2"),
+		"an app moved to a set the card lacks (games -> dev) is kept, and updated");
+	CHECK(!card_has("/apps/chess") && said("removed apps/chess"),
+		"one gone from the release is removed");
+	CHECK(installed_is("base games"), "still base games");
+	r = run("s2", false, false);
+	CHECK(r == UPD_DONE && said("up to date"),
+		"up to date though it holds an app of a set it does not have");
+
+	sets_arg = "dev";
+	r = run("s2", true, false);
+	CHECK(r == UPD_DONE && said("add      apps/zcc") && !card_has("/apps/zcc"),
+		"-n -s dev: says what it would add, adds nothing");
+	r = run("s2", false, false);
+	CHECK(r == UPD_DONE && has_from("/apps/zcc", "s2") && has_from("/data/zcc/hello.c", "s2")
+		&& installed_is("base games dev"), "-s dev: added (%d)", r);
+	sets_arg = "all";
+	r = run("s2", false, false);
+	CHECK(r == UPD_DONE && has_from("/apps/web", "s2")
+		&& installed_is("base games dev net"), "-s all: every set (%d)", r);
+	CHECK(card_is_release("s2", NULL), "and the card is s2 exactly%s%s",
+		tree_bad ? ": " : "", tree_first);
+
+	sets_arg = "chess";
+	r = run("s2", false, false);
+	CHECK(r == UPD_USAGE && said("has no set chess") && said(" games dev net"),
+		"a set the release does not have: refused, the sets named (%d)", r);
+	sets_arg = "games";
+	r = run("v2", false, false);
+	CHECK(r == UPD_USAGE && said("no sets"), "-s with a release without sets (%d)", r);
+
+	// A card from before sets has them all: v2's card, then s1.
+	sets_arg = NULL;
+	fresh_card();
+	run("v2", false, false);
+	r = run("s1", false, false);
+	CHECK(r == UPD_DONE && has_from("/apps/zcc", "s1") && has_from("/apps/snake", "s1")
+		&& installed_is("base games dev"),
+		"a card that does not say which sets: all of them (%d)", r);
+	fresh_card();
+	r = run("s1", false, false);
+	CHECK(r == UPD_DONE && installed_is("base games dev"),
+		"a blank card without -s: every set (%d)", r);
+}
+
+// -- signatures (docs/distribution.md) --
+
+static void signatures(void) {
+	int r;
+	printf("signatures\n");
+	need_sig = true;
+	memcpy(keys, key1, 32);
+	nkeys = 1;
+	fresh_card();
+	r = run("s1", false, false);
+	CHECK(r == UPD_DONE && said("signed by key") && card_is_release("s1", NULL),
+		"signed by the key it trusts: updated (%d)", r);
+	fresh_card();
+	r = run("unsig", false, false);
+	CHECK(r == UPD_FAILED && said("is not signed") && !card_has("/apps/posix"),
+		"not signed: refused, nothing written (%d)", r);
+	r = run("other", false, false);
+	CHECK(r == UPD_FAILED && said("not by a key this machine trusts") &&
+		said("system.update.key"), "signed by another key: refused (%d)", r);
+	memcpy(keys + 32, key2, 32);
+	nkeys = 2;
+	r = run("other", false, false);
+	CHECK(r == UPD_DONE, "trusting both keys: accepted (%d)", r);
+	nkeys = 1;
+	fresh_card();
+	r = run("tamper", false, false);
+	CHECK(r == UPD_FAILED && said("does not check") && !card_has("/apps/posix"),
+		"a manifest changed after signing: refused (%d)", r);
+	r = run("wrongname", false, false);
+	CHECK(r == UPD_FAILED && said("is the manifest of s1, not of wrongname"),
+		"a signed manifest under another name: refused (%d)", r);
+	need_sig = false;
+	fresh_card();
+	r = run("shacheck", false, false);
+	CHECK(r == UPD_DONE, "unsigned (TFTP): a file is checked by size and CRC (%d)", r);
+	need_sig = true;
+	fresh_card();
+	r = run("shacheck", false, false);
+	CHECK(r != UPD_DONE && said("its hash does not match") && !card_has("/apps/posix"),
+		"signed: by SHA-256 too, and the same file is refused (%d)", r);
+	nkeys = 0;
+	r = run("s1", false, false);
+	CHECK(r == UPD_FAILED && said("no key"), "no key at all: refused (%d)", r);
+	nkeys = 1;
+
+	// LATEST going backwards (v2, made before s2): refused; by name, or -f, not.
+	fresh_card();
+	run("s2", false, false);
+	r = run("latest", false, false);
+	CHECK(r == UPD_FAILED && said("before what the card has") && said("update v2"),
+		"LATEST naming an older release: refused (%d)", r);
+	CHECK(card_is_release("s2", NULL), "and nothing changed");
+	force = true;
+	r = run("latest", false, false);
+	force = false;
+	CHECK(r == UPD_DONE && card_is_release("v2", NULL), "-f: went back (%d)", r);
+	fresh_card();
+	run("s2", false, false);
+	r = run("v2", false, false);
+	CHECK(r == UPD_DONE && card_is_release("v2", NULL),
+		"naming the older release: goes back to it (%d)", r);
+	need_sig = false;
+	nkeys = 0;
+
+	uint8_t kk[3 * 32];
+	char two[200];
+	snprintf(two, sizeof two, "%s, %s", "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+		"ffeeddccbbaa99887766554433221100ffeeddccbbaa99887766554433221100");
+	CHECK(upd_keys_parse(two, kk, 3) == 2 && kk[1] == 0x11 && kk[32] == 0xff &&
+		upd_keys_parse("abc", kk, 3) == -1 && upd_keys_parse("", kk, 3) == 0,
+		"upd_keys_parse(): hex keys, separated by spaces or commas");
+}
+
+static void read_keys(void) {
+	char p[700], h1[80], h2[80];
+	snprintf(p, sizeof p, "%s/keys", fx);
+	FILE *f = fopen(p, "r");
+	if (!f || fscanf(f, "k1 %70s\nk2 %70s", h1, h2) != 2 ||
+			upd_keys_parse(h1, key1, 1) != 1 || upd_keys_parse(h2, key2, 1) != 1) {
+		printf("no keys in %s: run mkfixture.py first\n", p);
+		exit(2);
+	}
+	fclose(f);
+}
+
 static void read_ids(void) {
 	char p[700];
 	snprintf(p, sizeof p, "%s/ids", fx);
@@ -887,7 +1066,8 @@ static void read_ids(void) {
 int main(int argc, char **argv) {
 	if (argc < 2) {
 		printf("usage: test_update FIXTURE [-v]\n"
-		       "       test_update --update CARD STORE RELEASE [-n] [-v] [-f]   (ZABI=id: the flash's)\n");
+		       "       test_update --update CARD STORE RELEASE [-n] [-v] [-f] [-s SETS]\n"
+		       "           [--keys HEX]   (ZABI=id: the flash's)\n");
 		return 2;
 	}
 	// The core on any directory and store: a card laid out on the host
@@ -908,7 +1088,21 @@ int main(int argc, char **argv) {
 		// The host has no kernel to ask: like a kernel too old to say
 		// (a warning), unless ZABI=<id> says what the flash is.
 		const char *ka = getenv("ZABI") ? getenv("ZABI") : "";
-		upd_opts_t o = { argv[4], "release", "a directory", dry, ver, frc, ka };
+		// -s SETS; --keys HEX... to require signatures, as from a server.
+		const char *sa = NULL;
+		static uint8_t kb[8 * 32];
+		int nk = 0;
+		bool sig = false;
+		for (int i = 5; i + 1 < argc; i++) {
+			if (!strcmp(argv[i], "-s")) sa = argv[i + 1];
+			if (!strcmp(argv[i], "--keys")) {
+				nk = upd_keys_parse(argv[i + 1], kb, 8);
+				sig = true;
+				if (nk < 0) { printf("--keys: not keys\n"); return 2; }
+			}
+		}
+		upd_opts_t o = { argv[4], "release", "a directory", dry, ver, frc, ka,
+			sa, sig, kb, nk };
 		heap_peak = 0;
 		int r = upd_run(&IO, &o);
 		printf("(heap: %lu bytes at the peak)\n", (unsigned long)heap_peak);
@@ -919,6 +1113,7 @@ int main(int argc, char **argv) {
 	snprintf(card, sizeof card, "%s/card", fx);
 	snprintf(store, sizeof store, "%s/store", fx);
 	read_ids();
+	read_keys();
 
 	blank_card();
 	v1_to_v2();
@@ -932,6 +1127,8 @@ int main(int argc, char **argv) {
 	bad_store();
 	misc();
 	abi();
+	sets();
+	signatures();
 
 	printf("\n%d checks, %d failed\n", checks, fails);
 	return fails ? 1 : 0;

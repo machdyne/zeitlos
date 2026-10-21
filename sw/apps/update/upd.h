@@ -74,10 +74,22 @@ typedef struct {
 	const char *source;     // for the summary: "tftp 192.168.1.10"
 	bool dry_run;           // -n: say what would change, change nothing
 	bool verify;            // -v: hash every file, trust no manifest
-	bool force;             // -f: update though the release's ABI is not the flash's
+	bool force;             // -f: update though the release's ABI is not the flash's,
+	                        // or LATEST names an older release than the card's
 	const char *kernel_abi; // the running kernel's ABI id (z_abi()); "" or
 	                        // NULL when it is too old to say (docs/update.md, "ABI")
+	const char *sets;       // -s: sets to add, "games,audio", or "all"; NULL: none
+	// Signatures (docs/distribution.md). need_sig: the manifest must be
+	// signed (Ed25519, manifest.sig) by one of the nkeys 32-byte public
+	// keys at `keys`, and every object is checked by SHA-256 against it.
+	// Off for TFTP, which is for development on a LAN.
+	bool need_sig;
+	const uint8_t *keys;
+	int nkeys;
 } upd_opts_t;
+
+// The most sets a release may offer.
+#define UPD_SETS_MAX 24
 
 // Exit statuses.
 #define UPD_DONE        0   // the card matches the release
@@ -99,6 +111,10 @@ int upd_show(const upd_io_t *io, const char *kernel_abi);
 #define UPD_ABI_NO_RELEASE  3   // the release does not say: a note
 int upd_abi_check(const char *release_abi, int release_len, const char *kernel_abi);
 
+// Public keys as hex (64 digits each, separated by spaces or commas) into
+// `keys`, 32 bytes each: how many, or -1 if one is not a key.
+int upd_keys_parse(const char *hex, uint8_t *keys, int max);
+
 // Exposed for the tests.
 typedef struct {
 	const char *path;   // into the text; NOT terminated: path_len
@@ -108,7 +124,14 @@ typedef struct {
 	uint32_t crc;       // CRC-32 (zlib's), when has_crc
 	bool has_crc;       // false in a format-1 manifest
 	char policy;        // 'r' or 'k'
+	const char *set;    // format 4: its set, into the text ("-": not known);
+	uint8_t set_len;    // NULL before format 4
 } upd_entry_t;
+
+typedef struct {
+	const char *name, *title, *desc;    // into the text
+	uint8_t name_len, title_len, desc_len;
+} upd_set_t;
 
 typedef struct {
 	char *text;         // the whole file, NUL-terminated (owned)
@@ -121,6 +144,11 @@ typedef struct {
 	uint16_t *dir_len;
 	int ndirs;
 	int format;
+	upd_set_t sets[UPD_SETS_MAX];   // `set` lines: what a release offers
+	int nsets;
+	const char *installed;          // `installed` line: what a card has
+	int installed_len;
+	bool has_installed;
 } upd_manifest_t;
 
 // Parses text (taking ownership). 0, or a reason in err.

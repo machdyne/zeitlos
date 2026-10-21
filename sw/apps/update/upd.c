@@ -44,8 +44,9 @@
 #include "zsha256.h"
 #include "zpaths.h"         /* the card's fixed paths (docs/layout.md) */
 #include "zexec_lz4.h"      /* format 3's LZ4 blocks */
+#include "monocypher-ed25519.h" /* signatures (docs/distribution.md) */
 
-#define FORMAT          3       // LZ4 objects; 1 (no CRC) and 2 (raw) are still read
+#define FORMAT          4       // sets; 1 (no CRC), 2 (raw) and 3 (no sets) are still read
 #define MAGIC           "zeitlos-manifest"
 #define ID_DIGITS       12
 #define OBJECT_DIGITS   20
@@ -212,6 +213,17 @@ static bool name_ok(const char *s) {
 	return true;
 }
 
+// A set name (release/lib/manifest.py, SET_RE), or "-" when `dash`.
+static bool set_ok(const char *s, int n, bool dash) {
+	if (dash && n == 1 && s[0] == '-') return true;
+	if (n < 1 || n > 16 || s[0] < 'a' || s[0] > 'z') return false;
+	for (int i = 1; i < n; i++)
+		if (!((s[i] >= 'a' && s[i] <= 'z') || (s[i] >= '0' && s[i] <= '9') ||
+				s[i] == '-'))
+			return false;
+	return true;
+}
+
 // -- the manifest --------------------------------------------------------
 
 static void id_of(const upd_manifest_t *m, char out[ID_DIGITS + 1]);
@@ -300,6 +312,15 @@ int upd_manifest_parse(upd_manifest_t *m, char *text, uint32_t len,
 			if (q + 2 >= nl || (q[0] != 'r' && q[0] != 'k') || q[1] != ' ') goto bad;
 			e->policy = q[0];
 			q += 2;
+			if (m->format >= 4) {
+				// the set: [a-z][a-z0-9-]{0,15}, or "-"
+				char *s0 = q;
+				while (q < nl && *q != ' ') q++;
+				if (q >= nl || !set_ok(s0, (int)(q - s0), true)) goto bad;
+				e->set = s0;
+				e->set_len = (uint8_t)(q - s0);
+				q++;
+			}
 			e->path = q;
 			e->path_len = (uint16_t)(nl - q);
 			if (!path_ok(e->path, e->path_len)) goto bad;
@@ -328,6 +349,29 @@ int upd_manifest_parse(upd_manifest_t *m, char *text, uint32_t len,
 			const char *v = sp ? sp + 1 : nl;
 			int vl = (int)(nl - v);
 #define HDR(k, f) if (kl == (int)strlen(k) && !memcmp(p, k, kl)) { m->f = v; m->f##_len = vl; }
+			if (kl == 3 && !memcmp(p, "set", 3)) {
+				// set <name> <title> | <description>
+				if (m->nsets >= UPD_SETS_MAX) goto bad;
+				upd_set_t *st = &m->sets[m->nsets];
+				const char *a = v, *e2 = nl;
+				const char *sp2 = memchr(a, ' ', e2 - a);
+				if (!sp2 || !set_ok(a, (int)(sp2 - a), false)) goto bad;
+				st->name = a;
+				st->name_len = (uint8_t)(sp2 - a);
+				const char *t = sp2 + 1, *bar = NULL;
+				for (const char *x = t; x + 2 < e2; x++)
+					if (x[0] == ' ' && x[1] == '|' && x[2] == ' ') { bar = x; break; }
+				st->title = t;
+				st->title_len = (uint8_t)((bar ? bar : e2) - t > 255 ? 255 :
+					(bar ? bar : e2) - t);
+				st->desc = bar ? bar + 3 : e2;
+				st->desc_len = (uint8_t)(e2 - st->desc > 255 ? 255 : e2 - st->desc);
+				m->nsets++;
+			} else if (kl == 9 && !memcmp(p, "installed", 9)) {
+				m->installed = v;
+				m->installed_len = vl;
+				m->has_installed = true;
+			} else
 			HDR("name", name)
 			else HDR("version", version)
 			else HDR("snapshot", snapshot)
@@ -389,6 +433,10 @@ static void id_of(const upd_manifest_t *m, char out[ID_DIGITS + 1]) {
 			snprintf(line, sizeof line, " %lu %c ",
 				(unsigned long)e->size, e->policy);
 		z_sha256_update(&c, line, n);
+		if (m->format >= 4) {
+			z_sha256_update(&c, e->set, e->set_len);
+			z_sha256_update(&c, " ", 1);
+		}
 		z_sha256_update(&c, e->path, e->path_len);
 		z_sha256_update(&c, "\n", 1);
 	}
@@ -632,13 +680,19 @@ static void sb_add(sbuf_t *s, const char *p, uint32_t n) {
 
 static void sb_str(sbuf_t *s, const char *p) { sb_add(s, p, (uint32_t)strlen(p)); }
 
-// One file line, in this program's format (2). The caller leaves out an
-// entry with no CRC (from a format-1 manifest).
-static void sb_entry(sbuf_t *s, const upd_entry_t *e) {
+// One file line, in format `fmt` (3, or 4 with `set`). The caller leaves
+// out an entry with no CRC (from a format-1 manifest).
+static void sb_entry(sbuf_t *s, const upd_entry_t *e, int fmt,
+	const char *set, int set_len) {
 	char head[96];
 	int n = snprintf(head, sizeof head, "f %.64s %08lx %lu %c ", e->hash,
 		(unsigned long)e->crc, (unsigned long)e->size, e->policy);
 	sb_add(s, head, (uint32_t)n);
+	if (fmt >= 4) {
+		if (set && set_len > 0) sb_add(s, set, (uint32_t)set_len);
+		else sb_add(s, "-", 1);
+		sb_add(s, " ", 1);
+	}
 	sb_add(s, e->path, e->path_len);
 	sb_add(s, "\n", 1);
 }
@@ -656,11 +710,20 @@ static void sb_field(sbuf_t *s, const char *key, const char *v, int vl) {
 // release has it, the old entry for one that is not, nothing for a file
 // no longer shipped. *id_off and *body_off say where the snapshot id
 // goes and where the entries start.
-static void emit(sbuf_t *s, const upd_manifest_t *R, const upd_manifest_t *I,
-	const item_t *items, int nitems, uint32_t *id_off, uint32_t *body_off) {
+// The format the card's manifest is written in: the release's lines'
+// shape, so that "is the card this release?" is one comparison of ids --
+// 4 with sets, else 3.
+static int card_format(const upd_manifest_t *R) {
+	return R->format >= 4 ? 4 : 3;
+}
 
+static void emit(sbuf_t *s, const upd_manifest_t *R, const upd_manifest_t *I,
+	const item_t *items, int nitems, const char *installed,
+	uint32_t *id_off, uint32_t *body_off) {
+
+	int fmt = card_format(R);
 	char magic[32];
-	snprintf(magic, sizeof magic, "%s %d\n", MAGIC, FORMAT);
+	snprintf(magic, sizeof magic, "%s %d\n", MAGIC, fmt);
 	sb_str(s, magic);
 	sb_field(s, "name", R->name, R->name_len);
 	sb_field(s, "version", R->version, R->version_len);
@@ -676,6 +739,8 @@ static void emit(sbuf_t *s, const upd_manifest_t *R, const upd_manifest_t *I,
 	// them where they are (docs/update.md, "Not yet").
 	if (I && I->packs) sb_field(s, "packs", I->packs, I->packs_len);
 	else sb_field(s, "packs", R->packs, R->packs_len);
+	// The sets the card has now (docs/update.md, "Sets").
+	if (installed) sb_field(s, "installed", installed, (int)strlen(installed));
 	*body_off = s->n;
 
 	for (int d = 0; d < R->ndirs; d++) {
@@ -686,16 +751,24 @@ static void emit(sbuf_t *s, const upd_manifest_t *R, const upd_manifest_t *I,
 	for (int k = 0; k < nitems; k++) {
 		const item_t *it = &items[k];
 		switch (it->action) {
-		case A_SAME: case A_KEPT: case A_DONE:
-			sb_entry(s, &R->files[it->r]);
+		case A_SAME: case A_KEPT: case A_DONE: {
+			const upd_entry_t *re = &R->files[it->r];
+			sb_entry(s, re, fmt, re->set, re->set_len);
 			break;
+		}
 		case A_WRITE: case A_BUSY: case A_FAILED: case A_NOTREACHED:
 		case A_REMOVE:
 			// The old entry -- unless it came from a format-1
 			// manifest and has no CRC: then nothing, and the next run
-			// looks at the card copy itself.
-			if (it->i >= 0 && I->files[it->i].has_crc)
-				sb_entry(s, &I->files[it->i]);
+			// looks at the card copy itself. Its set: its own, else
+			// the release's for the path, else not known.
+			if (it->i >= 0 && I->files[it->i].has_crc) {
+				const upd_entry_t *ie = &I->files[it->i];
+				const upd_entry_t *re = it->r >= 0 ? &R->files[it->r] : NULL;
+				if (ie->set) sb_entry(s, ie, fmt, ie->set, ie->set_len);
+				else if (re) sb_entry(s, ie, fmt, re->set, re->set_len);
+				else sb_entry(s, ie, fmt, NULL, 0);
+			}
 			break;
 		default:
 			break;
@@ -706,11 +779,12 @@ static void emit(sbuf_t *s, const upd_manifest_t *R, const upd_manifest_t *I,
 // Returns the text (one allocation, exactly its size); *id gets its
 // snapshot id: SHA-256 over the entry lines, as the release tool makes it.
 static char *new_manifest(const upd_manifest_t *R, const upd_manifest_t *I,
-	const item_t *items, int nitems, uint32_t *len, char id[ID_DIGITS + 1]) {
+	const item_t *items, int nitems, const char *installed, uint32_t *len,
+	char id[ID_DIGITS + 1]) {
 
 	sbuf_t s = { NULL, 0, 0, true, false };
 	uint32_t id_off, body_off;
-	emit(&s, R, I, items, nitems, &id_off, &body_off);
+	emit(&s, R, I, items, nitems, installed, &id_off, &body_off);
 	uint32_t need = s.n;
 
 	s.b = malloc(need + 1);
@@ -718,7 +792,7 @@ static char *new_manifest(const upd_manifest_t *R, const upd_manifest_t *I,
 	s.n = 0;
 	s.cap = need + 1;
 	s.count = false;
-	emit(&s, R, I, items, nitems, &id_off, &body_off);
+	emit(&s, R, I, items, nitems, installed, &id_off, &body_off);
 	if (s.oom || s.n != need) { free(s.b); return NULL; }
 
 	z_sha256_ctx c;
@@ -982,6 +1056,196 @@ static int fetch_one(const char *obj, const char *upd, const upd_entry_t *e,
 	return UPD_OK;
 }
 
+// -- sets ------------------------------------------------------------------
+
+typedef struct {
+	const char *p[UPD_SETS_MAX];
+	uint8_t n[UPD_SETS_MAX];
+	int count;
+} setlist_t;
+
+static bool sl_has(const setlist_t *l, const char *s, int n) {
+	for (int i = 0; i < l->count; i++)
+		if (l->n[i] == n && !memcmp(l->p[i], s, n)) return true;
+	return false;
+}
+
+static void sl_add(setlist_t *l, const char *s, int n) {
+	if (n <= 0 || n > 16 || l->count >= UPD_SETS_MAX || sl_has(l, s, n)) return;
+	l->p[l->count] = s;
+	l->n[l->count] = (uint8_t)n;
+	l->count++;
+}
+
+// Names separated by spaces or commas.
+static void sl_parse(setlist_t *l, const char *s, int n) {
+	int i = 0;
+	while (i < n) {
+		while (i < n && (s[i] == ' ' || s[i] == ',')) i++;
+		int b = i;
+		while (i < n && s[i] != ' ' && s[i] != ',') i++;
+		if (i > b) sl_add(l, s + b, i - b);
+	}
+}
+
+static void sl_join(const setlist_t *l, char *out, int cap) {
+	int o = 0;
+	out[0] = 0;
+	for (int i = 0; i < l->count && o + l->n[i] + 2 < cap; i++) {
+		if (o) out[o++] = ' ';
+		memcpy(out + o, l->p[i], l->n[i]);
+		o += l->n[i];
+		out[o] = 0;
+	}
+}
+
+static bool offered(const upd_manifest_t *R, const char *s, int n) {
+	for (int j = 0; j < R->nsets; j++)
+		if (R->sets[j].name_len == n && !memcmp(R->sets[j].name, s, n)) return true;
+	return false;
+}
+
+// The snapshot id of what the card should hold: the release's folders
+// and its files this run includes, as the card's manifest will list
+// them when everything is done.
+static void id_of_items(const upd_manifest_t *R, const item_t *items, int nitems,
+	char out[ID_DIGITS + 1]) {
+	z_sha256_ctx c;
+	uint8_t d[Z_SHA256_DIGEST];
+	char hex[2 * Z_SHA256_DIGEST + 1];
+	z_sha256_init(&c);
+	for (int i = 0; i < R->ndirs; i++) {
+		z_sha256_update(&c, "d ", 2);
+		z_sha256_update(&c, R->dirs[i], R->dir_len[i]);
+		z_sha256_update(&c, "\n", 1);
+	}
+	int fmt = card_format(R);
+	for (int k = 0; k < nitems; k++) {
+		if (items[k].r < 0) continue;
+		const upd_entry_t *e = &R->files[items[k].r];
+		char line[32];
+		z_sha256_update(&c, "f ", 2);
+		z_sha256_update(&c, e->hash, HASH_HEX);
+		int n = snprintf(line, sizeof line, " %08lx %lu %c ", (unsigned long)e->crc,
+			(unsigned long)e->size, e->policy);
+		z_sha256_update(&c, line, n);
+		if (fmt >= 4) {
+			if (e->set) z_sha256_update(&c, e->set, e->set_len);
+			else z_sha256_update(&c, "-", 1);
+			z_sha256_update(&c, " ", 1);
+		}
+		z_sha256_update(&c, e->path, e->path_len);
+		z_sha256_update(&c, "\n", 1);
+	}
+	z_sha256_final(&c, d);
+	to_hex(d, Z_SHA256_DIGEST, hex);
+	memcpy(out, hex, ID_DIGITS);
+	out[ID_DIGITS] = 0;
+}
+
+static int cmp_text(const char *a, int an, const char *b, int bn) {
+	int n = an < bn ? an : bn;
+	int c = memcmp(a, b, n);
+	return c ? c : an - bn;
+}
+
+// -- signatures (docs/distribution.md) -------------------------------------
+//
+// <name>/manifest.sig: lines of "ed25519 <public key, 64 hex> <signature,
+// 128 hex>", each an Ed25519 signature (RFC 8032; Monocypher's
+// crypto_ed25519_check) of the manifest's bytes. One by a key this
+// machine trusts, that checks, is enough: several lines are how a
+// distribution changes keys.
+
+static bool unhex(const char *s, int n, uint8_t *out) {
+	for (int i = 0; i < n; i++) {
+		int a = hexval(s[2 * i]), b = hexval(s[2 * i + 1]);
+		if (a < 0 || b < 0) return false;
+		out[i] = (uint8_t)(a << 4 | b);
+	}
+	return true;
+}
+
+int upd_keys_parse(const char *s, uint8_t *keys, int max) {
+	int n = 0, i = 0, len = (int)strlen(s);
+	while (i < len) {
+		while (i < len && (s[i] == ' ' || s[i] == ',' || s[i] == '\t')) i++;
+		int b = i;
+		while (i < len && s[i] != ' ' && s[i] != ',' && s[i] != '\t') i++;
+		if (i == b) continue;
+		if (i - b != 64 || n >= max || !unhex(s + b, 32, keys + 32 * n)) return -1;
+		n++;
+	}
+	return n;
+}
+
+static int check_sig(const upd_opts_t *o, const char *dir, const char *name,
+	const char *mtext, uint32_t mlen) {
+
+	char obj[96], err[96], fp[17];
+	char *t;
+	uint32_t tl;
+	if (o->nkeys <= 0) {
+		say("update: no key to check %s's signature with: this update was "
+			"built without one,\n"
+			"        and /sys/zeitlos.cfg sets no system.update.key "
+			"(docs/distribution.md)\n", name);
+		return UPD_ERR;
+	}
+	snprintf(obj, sizeof obj, "%s/%s/manifest.sig", dir, name);
+	err[0] = 0;
+	if (fetch_slurp(obj, &t, &tl, err, sizeof err) != UPD_OK) {
+		say("update: %s is not signed (%s: %s), and releases from %s must be: "
+			"refused\n", name, obj, err, o->source);
+		return UPD_ERR;
+	}
+	say("update: checking the signature ...\n");
+	bool known = false, good = false;
+	fp[0] = 0;
+	char *p = t, *end = t + tl;
+	while (p < end && !good) {
+		char *nl = memchr(p, '\n', end - p);
+		if (!nl) nl = end;
+		uint8_t pub[32], sig[64];
+		if (nl - p == 8 + 64 + 1 + 128 && !memcmp(p, "ed25519 ", 8) &&
+				p[8 + 64] == ' ' && unhex(p + 8, 32, pub) &&
+				unhex(p + 8 + 65, 64, sig)) {
+			bool ours = false;
+			for (int k = 0; k < o->nkeys; k++)
+				if (!memcmp(o->keys + 32 * k, pub, 32)) ours = true;
+			if (ours) {
+				known = true;
+				if (crypto_ed25519_check(sig, pub, (const uint8_t *)mtext, mlen) == 0) {
+					good = true;
+					memcpy(fp, p + 8, 16);
+					fp[16] = 0;
+				}
+			} else if (!fp[0]) {
+				memcpy(fp, p + 8, 16);
+				fp[16] = 0;
+			}
+		}
+		p = nl + 1;
+	}
+	free(t);
+	if (good) {
+		say("update: signed by key %s, which this machine trusts\n", fp);
+		return UPD_OK;
+	}
+	if (known)
+		say("update: %s's signature does not check: the manifest was changed "
+			"after it was\n"
+			"        signed (in transit?). Refused; nothing was changed.\n", name);
+	else
+		say("update: %s is signed%s%s, but not by a key this machine trusts.\n"
+			"        If the distribution changed its key, set system.update.key "
+			"in\n"
+			"        /sys/zeitlos.cfg or flash a newer kernel and core apps "
+			"(docs/distribution.md).\n",
+			name, fp[0] ? " by key " : "", fp);
+	return UPD_ERR;
+}
+
 // -- the run -------------------------------------------------------------
 
 static void say_manifest(const char *what, const upd_manifest_t *m) {
@@ -1044,7 +1308,8 @@ int upd_run(const upd_io_t *io_, const upd_opts_t *o) {
 	const char *dir = o->dir && o->dir[0] ? o->dir : "release";
 
 	// -- 1. the release --
-	if (!strcmp(o->release, "latest")) {
+	bool following_latest = !strcmp(o->release, "latest");
+	if (following_latest) {
 		snprintf(obj, sizeof obj, "%s/LATEST", dir);
 		err[0] = 0;
 		if (fetch_slurp(obj, &text, &len, err, sizeof err) != UPD_OK) {
@@ -1075,13 +1340,31 @@ int upd_run(const upd_io_t *io_, const upd_opts_t *o) {
 		say("update: %s from %s: %s\n", obj, o->source, err);
 		return UPD_FAILED;
 	}
+	// Signed, before anything in it is believed (docs/distribution.md).
+	if (o->need_sig && check_sig(o, dir, name, text, len) != UPD_OK) {
+		free(text);
+		return UPD_FAILED;
+	}
 	int pr = upd_manifest_parse(&R, text, len, err, sizeof err);
 	if (pr) {
 		say("update: %s: %s\n", obj, err);
-		if (pr == -2)
-			say("        This release's own update can: fetch it with\n"
-				"        tget SERVER %s/%s/update %s\n"
-				"        and run update again.\n", dir, name, Z_DIR_APPS "/update");
+		if (pr == -2) {
+			if (o->need_sig)
+				say("        Flash the release's kernel and core apps, whose "
+					"update reads it.\n");
+			else
+				say("        This release's own update can: fetch it with\n"
+					"        tget SERVER %s/%s/update %s\n"
+					"        and run update again.\n", dir, name, Z_DIR_APPS "/update");
+		}
+		upd_manifest_free(&R);
+		return UPD_FAILED;
+	}
+	// The manifest names the release it is: one signed for another name
+	// is not this one, whatever the server says (docs/distribution.md).
+	if (!R.name || R.name_len != (int)strlen(name) || memcmp(R.name, name, R.name_len)) {
+		say("update: %s is the manifest of %.*s, not of %s: refused\n", obj,
+			R.name_len, R.name ? R.name : "nothing", name);
 		upd_manifest_free(&R);
 		return UPD_FAILED;
 	}
@@ -1126,11 +1409,114 @@ int upd_run(const upd_io_t *io_, const upd_opts_t *o) {
 		say("update: the card has no %s (written before updates): checking "
 			"every file\n", SYS_MANIFEST);
 	}
-	if (have_I && !o->verify && I.snapshot_len == ID_DIGITS &&
-			!memcmp(I.snapshot, R.snapshot, ID_DIGITS)) {
-		say("update: up to date\n");
-		sys_files(&I, recovered);
-		status = UPD_DONE;
+
+	// -- the sets (docs/update.md, "Sets") --
+	//
+	// The card's, the ones asked for, and base. A card that does not say
+	// has them all: it was written before sets, when every card had
+	// everything. So does one with no manifest at all, unless -s says
+	// which (a blank card).
+	setlist_t want, card, req, adding;
+	memset(&want, 0, sizeof want);
+	memset(&card, 0, sizeof card);
+	memset(&req, 0, sizeof req);
+	memset(&adding, 0, sizeof adding);
+	bool R_sets = R.format >= 4 && R.nsets > 0;
+	char installed[UPD_SETS_MAX * 17 + 1];
+	installed[0] = 0;
+	if (o->sets && o->sets[0]) sl_parse(&req, o->sets, (int)strlen(o->sets));
+	if (req.count && !R_sets) {
+		say("update: %s has no sets (an older release): -s cannot choose\n", name);
+		status = UPD_USAGE;
+		goto out;
+	}
+	if (R_sets) {
+		bool all = sl_has(&req, "all", 3);
+		for (int k = 0; k < req.count; k++) {
+			if ((req.n[k] == 3 && !memcmp(req.p[k], "all", 3)) ||
+					offered(&R, req.p[k], req.n[k]))
+				continue;
+			say("update: %s has no set %.*s. It has:", name, req.n[k], req.p[k]);
+			for (int j = 0; j < R.nsets; j++)
+				say(" %.*s", R.sets[j].name_len, R.sets[j].name);
+			say("\n");
+			status = UPD_USAGE;
+			goto out;
+		}
+		bool card_says = have_I && I.has_installed;
+		bool card_all = have_I ? !I.has_installed : !req.count;
+		if (card_says) sl_parse(&card, I.installed, I.installed_len);
+		for (int j = 0; j < R.nsets; j++) {
+			const upd_set_t *st = &R.sets[j];
+			bool base = st->name_len == 4 && !memcmp(st->name, "base", 4);
+			bool on_card = card_all || sl_has(&card, st->name, st->name_len);
+			if (all || on_card || base || sl_has(&req, st->name, st->name_len)) {
+				sl_add(&want, st->name, st->name_len);
+				if (!on_card && (have_I || !base)) sl_add(&adding, st->name, st->name_len);
+			}
+		}
+		sl_join(&want, installed, sizeof installed);
+		say("update: sets %s", installed);
+		if (adding.count) {
+			char a[UPD_SETS_MAX * 17 + 1];
+			sl_join(&adding, a, sizeof a);
+			say(" (adding %s)", a);
+		}
+		say("\n");
+	}
+
+	// -- 3. the plan: the two manifests, merged by path --
+	int cap = R.nfiles + (have_I ? I.nfiles : 0);
+	items = calloc(cap ? cap : 1, sizeof *items);
+	if (!items) {
+		say("update: out of memory\n");
+		goto out;
+	}
+	int nitems = 0, ri = 0, ii = 0;
+	while (ri < R.nfiles || (have_I && ii < I.nfiles)) {
+		item_t *it = &items[nitems++];
+		it->r = it->i = -1;
+		int c;
+		if (ri >= R.nfiles) c = 1;
+		else if (!have_I || ii >= I.nfiles) c = -1;
+		else c = path_cmp(R.files[ri].path, R.files[ri].path_len,
+			I.files[ii].path, I.files[ii].path_len);
+		if (c <= 0) it->r = ri++;
+		if (c >= 0) it->i = ii++;
+		// A file of a set the card does not get: not part of this run --
+		// unless the card has it already. An update never takes away
+		// what the release still ships; sets only say what is added.
+		if (R_sets && it->r >= 0 && it->i < 0) {
+			const upd_entry_t *re = &R.files[it->r];
+			if (re->set && !sl_has(&want, re->set, re->set_len)) nitems--;
+		}
+	}
+
+	if (have_I && !o->verify && I.snapshot_len == ID_DIGITS) {
+		char sid[ID_DIGITS + 1];
+		id_of_items(&R, items, nitems, sid);
+		bool same_sets = !R_sets || (I.has_installed &&
+			I.installed_len == (int)strlen(installed) &&
+			!memcmp(I.installed, installed, I.installed_len));
+		if (same_sets && !memcmp(I.snapshot, sid, ID_DIGITS)) {
+			say("update: up to date\n");
+			sys_files(&I, recovered);
+			status = UPD_DONE;
+			goto out;
+		}
+	}
+
+	// A server's LATEST that went backwards is refused: it could be an
+	// old release served on purpose, signed as it is. Naming the older
+	// release goes back to it (docs/distribution.md, "Going back").
+	if (o->need_sig && following_latest && have_I && I.made && R.made && !o->force &&
+			cmp_text(I.made, I.made_len, R.made, R.made_len) > 0) {
+		say("update: the server's latest, %s, was made %.*s -- before what the "
+			"card has (%.*s).\n", name, R.made_len, R.made, I.made_len, I.made);
+		say("        Refused: a server going backwards may be serving an old "
+			"release on purpose.\n"
+			"        To go back to it, name it: update %s (or -f).\n", name);
+		status = UPD_FAILED;
 		goto out;
 	}
 
@@ -1177,26 +1563,6 @@ int upd_run(const upd_io_t *io_, const upd_opts_t *o) {
 			"Nothing was changed.\n");
 		status = UPD_FAILED;
 		goto out;
-	}
-
-	// -- 3. the plan --
-	int cap = R.nfiles + (have_I ? I.nfiles : 0);
-	items = calloc(cap ? cap : 1, sizeof *items);
-	if (!items) {
-		say("update: out of memory\n");
-		goto out;
-	}
-	int nitems = 0, ri = 0, ii = 0;
-	while (ri < R.nfiles || (have_I && ii < I.nfiles)) {
-		item_t *it = &items[nitems++];
-		it->r = it->i = -1;
-		int c;
-		if (ri >= R.nfiles) c = 1;
-		else if (!have_I || ii >= I.nfiles) c = -1;
-		else c = path_cmp(R.files[ri].path, R.files[ri].path_len,
-			I.files[ii].path, I.files[ii].path_len);
-		if (c <= 0) it->r = ri++;
-		if (c >= 0) it->i = ii++;
 	}
 
 	uint32_t t0 = io->ms(io->ctx), last = t0;
@@ -1372,10 +1738,13 @@ int upd_run(const upd_io_t *io_, const upd_opts_t *o) {
 		} else {
 			snprintf(obj, sizeof obj, "%s/o/%.2s/%.*s%s", dir, re->hash,
 				OBJECT_DIGITS, re->hash, lz ? ".lz" : "");
-			int fr = fetch_one(obj, p_upd, re, &pg, label, o->verify, lz);
+			// Signed: every file by SHA-256 against the signed manifest,
+			// since a CRC keeps out accidents, not people.
+			bool strong = o->verify || o->need_sig;
+			int fr = fetch_one(obj, p_upd, re, &pg, label, strong, lz);
 			if (fr == UPD_ERR) {
 				say("  retrying %s\n", label);
-				fr = fetch_one(obj, p_upd, re, &pg, label, o->verify, lz);
+				fr = fetch_one(obj, p_upd, re, &pg, label, strong, lz);
 			}
 			if (fr == -10) {
 				stopped = true;
@@ -1432,7 +1801,8 @@ int upd_run(const upd_io_t *io_, const upd_opts_t *o) {
 	{
 		char id[ID_DIGITS + 1];
 		uint32_t mlen;
-		char *mt = new_manifest(&R, have_I ? &I : NULL, items, nitems, &mlen, id);
+		char *mt = new_manifest(&R, have_I ? &I : NULL, items, nitems,
+			R_sets ? installed : NULL, &mlen, id);
 		if (!mt) {
 			say("update: out of memory writing the manifest. The files are in "
 			"place; run update again and it will write it.\n");
@@ -1517,6 +1887,12 @@ int upd_show(const upd_io_t *io_, const char *kernel_abi) {
 	char sz[16];
 	say("%s: %d files, %s\n", SYS_MANIFEST, m.nfiles,
 		size_str(total > 0xFFFFFFFFu ? 0xFFFFFFFFu : (uint32_t)total, sz, sizeof sz));
+	// Its sets (docs/update.md, "Sets"); a card that does not say was
+	// written before sets, with all of them.
+	if (m.has_installed)
+		say("sets: %.*s\n", m.installed_len, m.installed);
+	else
+		say("sets: all (written before sets)\n");
 	// The card's files' ABI and the flash's (docs/update.md, "ABI").
 	const char *ka = kernel_abi && kernel_abi[0] ? kernel_abi : "unknown (an older kernel)";
 	if (m.abi && m.abi_len > 0)

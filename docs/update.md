@@ -6,12 +6,18 @@ people edited, the BBS's data and everything else that is theirs stay
 as they are. The plan this follows is in [layout.md](layout.md#upgrades).
 
 ```
-$ make apps                                   on the PC: build
-$ release/zrelease tftp                       publish to /srv/tftp/release
+$ update v0.0.7                               on the board, in posix: from the
+                                              distribution's server, signed
+$ update v0.0.7 -s games                      ... and add the games set
+> run update latest                           or at the kernel console
 
-$ update v0.0.7 -t tftp 192.168.1.10          on the board, in posix
-> run update v0.0.7 -t tftp 192.168.1.10      or at the kernel console
+$ make apps                                   development: build on the PC,
+$ release/zrelease tftp                       publish to /srv/tftp/release,
+$ update v0.0.7 -t tftp 192.168.1.10          and update from it
 ```
+
+Where releases come from, and why plain HTTP is safe, is
+[distribution.md](distribution.md).
 
 ## Status (October 2026)
 
@@ -21,8 +27,9 @@ $ update v0.0.7 -t tftp 192.168.1.10          on the board, in posix
 | **Done** (round 1) | `update` on the board, over TFTP. Run on a Lakritz against a real store; three things found there and fixed: a lost end-of-file ("Inside"), a slow first check (now CRC-32, "Two hashes"), and running out of memory writing the manifest ("Inside"). Tested on the host against stores the release tool writes, including a run stopped at every step and one out of memory at every point |
 | **Done** (round 2) | objects as LZ4 blocks (manifest format 3, "Compression"); host-tested, including a format-2 store read by the new `update` |
 | **Done** (round 3) | the ABI check ("ABI"): `tools/gen_abi.py`, `sw/common/zabi.h`, `Z_SYS_ABI`, the manifest's `abi` line, `update -f`; host-tested |
-| Next | HTTPS from GitHub releases as the default; then `-t nfs` |
-| Later | core apps on the card on request; the ask packs; a signed pack |
+| **Done** (round 4a) | sets ("Sets", manifest format 4, `-s`); signed releases over plain HTTP from the distribution's server as the default ([distribution.md](distribution.md)); the images `zeitlos`, `-serious`, `-base`, `-arkmedium`; zdocs and arklite as files an update knows; `zrelease http`, `keygen`, `ship` to the server; host-tested, including Monocypher checking signatures made by `release/lib/ed25519.py` |
+| Next (round 4b) | `update` as a core app in flash, with a window: the installer for a board with no card |
+| Later | NFS was dropped; core apps on the card on request |
 
 What an update **does not touch**: the kernel and the core apps in
 flash (`CORE_APPS` in the Makefile). Flash is updated as before
@@ -32,26 +39,34 @@ flash (`CORE_APPS` in the Makefile). Flash is updated as before
 ## On the board: `update`
 
 ```
-update                              what the card has
-update v0.0.7 -t tftp 192.168.1.10  update from a TFTP server (an address or a name)
-update latest -t tftp server        whatever the server's LATEST names
-update -n v0.0.7 -t tftp server     what would change; changes nothing
-update -v v0.0.7 -t tftp server     SHA-256 every file on the card; trust no manifest
-update -f v0.0.7 -t tftp server     though the release's ABI is not the flash's ("ABI")
-update ... -d DIR                   the store is DIR/ on the server, not release/
+update                              what the card has: version, sets, ABI
+update v0.0.7                       from the distribution's server (HTTP, signed)
+update latest                       whatever that server's LATEST names
+update v0.0.7 -s games              ... adding a set; -s games,dev; -s all
+update v0.0.7 -t http URL           from another server (same keys)
+update v0.0.7 -t tftp 192.168.1.10  from a TFTP server (an address or a name; unsigned)
+update -n v0.0.7                    what would change; changes nothing
+update -v v0.0.7                    SHA-256 every file on the card; trust no manifest
+update -f v0.0.7                    though the release's ABI is not the flash's ("ABI"),
+                                    or LATEST names an older release than the card's
+update ... -t tftp SERVER -d DIR    the store is DIR/ on the TFTP server, not release/
 ```
 
-No `net.cfg` is needed: with none, `net` takes its address from DHCP,
-which is why TFTP came first. `update v0.0.7` with no `-t` says that
-updating from the project's own releases is not there yet.
+No `net.cfg` is needed: with none, `net` takes its address from DHCP.
+The server is the one `update` was built with (Machdyne Zeitlos,
+`http://zeitlos.machdyne.com/release/`) unless `system.update.url` in
+`/sys/zeitlos.cfg` names another ([distribution.md](distribution.md)).
 
 A run looks like this:
 
 ```
-$ update v0.0.7 -t tftp 192.168.1.10
-update: v0.0.7 from tftp 192.168.1.10
+$ update v0.0.7
+update: checking the signature ...
+update: signed by key 5a1f0e9c27b3d814, which this machine trusts
+update: v0.0.7 from http://zeitlos.machdyne.com/release/
 update: release is v0.0.7 snapshot 3f2a9c01e4b7 (v0.0.6-45-g58e067a-dirty, 2026-10-19T09:40:12Z)
 update: card has   v0.0.7 snapshot 81c0d2e3f4a5 (v0.0.6-44-gb9736d1, 2026-10-18T17:02:55Z)
+update: sets base productivity audio net dev embedded games arklite
 update: abi 03a25f4cbf544cf0, as the flash has
 update: 3 to write (812 KB), 1 to remove, 318 unchanged
   [1/3] apps/sheet  205 KB  ok  96 KB/s
@@ -182,6 +197,69 @@ flash and card alike but changed often, and a moved file is found by
 neither side rather than misread), and a core app's behaviour as
 opposed to its protocol.
 
+### Sets
+
+A **set** is a label on a card file: which group it comes in. Every
+file has one, and a card has the sets someone chose -- all of them on
+`zeitlos.img`, `base` alone on `zeitlos-base.img`:
+
+| set | programs | and |
+|---|---|---|
+| base | posix, vi, zetta, settings, info, calc, clock, cal, keyboard, jfont, read, ask, update | fonts, `/docs`, the ARK scroll, `zeitlos.cfg`, `net.cfg`, the zdocs pack |
+| productivity | sheet, slide, print, convert, draw, view, automate | slide's tour and examples, `/media/images`, the demo scripts |
+| audio | play, midi, mmod, track, tts, audiotest | the speech pack, the `.mod` files, `/media/audio` |
+| net | web, irc, netserve, zerdesk, mesh, bbs, fed | `roots.der`, zerdesk's page, the BBS's and fed's data |
+| dev | zcc, zfpga, hex, cryptobench, hello_win, portdemo, ttytest | libz, zcc's headers and examples, zfpga's databases and examples |
+| embedded | basic, i2c, ls99, bench, logic, sechs, serial, zlink | bench's examples, the BASIC programs |
+| games | casino and its games, snake, blocks, bricks, mausrun, chess, kidgames, chip8, space3d, gpu3d, gpudemo | mausrun's levels, chip8's ROMs |
+| arklite | -- | the Ark Lite pack (about 18 MB) |
+
+`release/lib/mkfatimg.py` says which (`SETS`, `APP_SET`): an app's own
+`/data/<app>/` goes with it, and the release tool refuses a card file
+it cannot place. A set depends only on `base`, which every card has.
+
+**Adding:** `update v0.0.7 -s games` (several: `-s games,dev`; `-s all`
+for every set the release has). Without `-s`, an update keeps the sets
+the card has. A card written before sets has all of them. A blank card
+gets every set unless `-s` says which (then `base` and those).
+
+**Not removing.** There is no `-x`: a set, once on a card, stays. Taking
+files away is the easiest way into a broken state, and a hand-deleted
+app comes back at the next update, since the card's manifest still
+lists it.
+
+**One release per card.** `update v0.0.8 -s games` on a 0.0.7 card
+brings every set the card has to 0.0.8 as well as adding games: a
+0.0.7 app beside 0.0.8's `base` (the fonts, the zcc headers, the
+settings formats) or 0.0.8's kernel is what "ABI" refuses. To add a set
+without moving, name the card's own release: `update v0.0.7 -s games`.
+
+**When an app moves between sets.** One rule: *an update never removes
+what the release still ships; sets only decide what is added.* A file
+of the release is included if its set is on the card, or if the card
+has it already. So an app moved from games to dev stays on a card
+without dev, and is updated; a new app in a set the card has arrives;
+one in a set it does not have does not; a new set is offered, not
+installed. A file the release no longer ships at all is removed as
+always -- only if it is still exactly what was put there.
+
+`update` (no release) shows the card's sets. The release's manifest
+lists the sets it offers, with a title and a line each, for `-s all`
+and for people.
+
+### Going back
+
+`update v0.0.6` on a 0.0.7 card goes back: it is the same comparison,
+of the card with that release, whatever the numbers say. It needs the
+server to still have v0.0.6 (nothing is deleted there), and an ABI the
+flash runs -- else the flash goes back first. Apps only in 0.0.7 are
+removed (unless edited); the person's files stay, though a 0.0.6 app
+may not read something a 0.0.7 one saved.
+
+`update latest` does not go back: a LATEST naming a release signed as
+older than the card's is refused ([distribution.md](distribution.md#why-plain-http-is-safe));
+naming it, or `-f`, does.
+
 ### A card without `update`
 
 Cards written before round 1 have no `/apps/update`. The store keeps
@@ -215,7 +293,9 @@ Comparing the store's manifest with the card's `/sys/manifest`:
   hash; left, and reported, if someone changed it -- it is theirs now
   and drops out of the manifest.
 - **In no manifest**: never touched. `/home`, files you made, an app put
-  at `/apps/wm` by hand to shadow flash, the ask packs.
+  at `/apps/wm` by hand to shadow flash, the arkmed pack.
+- **Of a set the card does not have**: not written, unless the card has
+  that file already ("Sets").
 - **A card without `/sys/manifest`** (written before this): each shipped
   file of the shipped size is read and its CRC-32 compared (sizes that
   differ need no reading); `r` files are replaced if different, `k`
@@ -326,9 +406,17 @@ $ release/zrelease tftp --dry-run                 gather and hash, write nothing
 ```
 
 It gathers exactly what `zrelease sdcard` puts on a card, from the same
-list (`release/lib/mkfatimg.py`, `plan()`), so the two cannot differ.
-It builds nothing: build the apps first, as for a card. The ask packs
-are left out for now (below).
+list (`release/lib/mkfatimg.py`, `plan()`), so the two cannot differ:
+every set, and the zdocs and arklite packs when they are built (a pack
+not built leaves its files out, with a note; `build` requires them).
+It builds nothing: build the apps first, as for a card. It does not
+sign: TFTP is for development on a LAN.
+
+`zrelease http` writes the same store **signed**, for any web server
+(`--dest`, default `release/dist/http/release`), with the release
+machine's key ([distribution.md](distribution.md)). `zrelease build`
+writes it into `release/dist/update/release`, and `zrelease ship`
+signs that and uploads it to the distribution's server.
 
 Because it builds nothing, running it under `sudo` is harmless -- the
 Makefile's warning about `tftp-dist` is about builds run as root. Owning
@@ -363,7 +451,8 @@ from DHCP, which is the point of starting with TFTP.
 /srv/tftp/release/
   LATEST                          v0.0.7
   INDEX                           one line per release
-  v0.0.7/manifest                 what a card of v0.0.7 holds
+  v0.0.7/manifest                 what a card of v0.0.7 holds, every set
+  v0.0.7/manifest.sig             its signature (HTTP stores; distribution.md)
   v0.0.7/manifest.prev            the one it replaced (see "Publishing again")
   v0.0.7/update                   apps/update, by a name to type (see "A card without update")
   o/3f/3f2a9c01e4b7d0a1c2e4.lz    a file's contents as LZ4 blocks, named by its hash
@@ -381,9 +470,10 @@ from DHCP, which is the point of starting with TFTP.
   first, and the manifest is renamed into place last, so a board sees
   the old release or the new one, never a mixture.
 
-A file is stored once however many paths or releases share it, and the
-same layout maps onto GitHub release assets, which are one flat list,
-when updates come from there.
+A file is stored once however many paths or releases share it. The
+same store, signed, is what the distribution's server serves over HTTP
+(`zrelease http`, `zrelease ship`; [distribution.md](distribution.md)):
+one GET per object over one kept-alive connection.
 
 **INDEX** lists every release in the store:
 
@@ -436,24 +526,29 @@ The same format for `/sys/manifest` on a card (what is there) and
 `<name>/manifest` in a store (what should be):
 
 ```
-zeitlos-manifest 3
+zeitlos-manifest 4
 name v0.0.7
 version 0.0.7
 snapshot 3f2a9c01e4b7
 abi 03a25f4cbf544cf0
 source v0.0.6-45-g58e067a-dirty
 made 2026-10-19T09:40:12Z
-packs zdocs arklite
+packs
+set base Base | the shell, settings, the reader, documents and fonts
+set games Games | arcade, casino, chess, chip8 and more
+installed base games
 d home
-f 3f2a9c01e4b7d0a1c2e4...(64 hex) 1c2b3a49 612388 r apps/sheet
-f 9d41c2a07b55...                 8e0f61d2 1734 k sys/zeitlos.cfg
+f 3f2a9c01e4b7d0a1c2e4...(64 hex) 1c2b3a49 612388 r productivity apps/sheet
+f 9d41c2a07b55...                 8e0f61d2 1734 k base sys/zeitlos.cfg
 ```
 
 - Header lines are `key value`; a reader skips keys it does not know.
   The format number goes up only for a change an old reader would
   misread, and `update` refuses a newer one.
 - `d` lines are folders a card has even when empty; `f` lines are
-  files: SHA-256, CRC-32 (8 hex digits, zlib's), size, policy, path.
+  files: SHA-256, CRC-32 (8 hex digits, zlib's), size, policy, set,
+  path. A set is `[a-z][a-z0-9-]`, up to 16; `-` on a card is an entry
+  carried over from a manifest without sets.
   Each group is sorted by path (bytewise), so the board merges two
   manifests in one pass with no memory per file. The path is the rest of the line; it has no leading
   slash.
@@ -461,8 +556,12 @@ f 9d41c2a07b55...                 8e0f61d2 1734 k sys/zeitlos.cfg
   A header, so not in the snapshot id; written since round 3, and a
   reader that predates it skips it. Republishing the same files with
   another `abi` rewrites the manifest though the snapshot is the same.
-- `packs` says which ask packs an image carried. Their files are not
-  listed.
+- `set` lines (a release): the sets it offers, in order, `name title |
+  description`. `installed` (a card): the sets it has; a card without
+  the line has them all.
+- `packs` says which ask packs an image carried **whose files are not
+  listed** -- arkmed, which only an image has. zdocs and arklite are
+  listed file by file, in base and arklite.
 - `/sys/manifest` and `/sys/version` are not in it. They describe the
   card, and the updater writes them itself, last. `/sys/version` is
   `zeitlos 0.0.7` as before, then `snapshot <name> <id> <source> <made>`.
@@ -476,7 +575,8 @@ update writes format 3.
 |---|---|---|---|
 | 1 | no CRC | raw | round 0. With no CRC to compare, the board falls back to SHA-256, slow without the SHA-256 block |
 | 2 | SHA-256 and CRC-32 | raw, `o/ab/<hash>` | round 1 |
-| 3 | as 2 | LZ4 blocks, `o/ab/<hash>.lz` | |
+| 3 | as 2 | LZ4 blocks, `o/ab/<hash>.lz` | round 2 |
+| 4 | as 3, and the set | as 3 | round 4a. The set is in the snapshot id, so a card from a format-3 store is not `up to date` against the format-4 store of the same tree: the next run fetches nothing and rewrites the card's manifest |
 
 The snapshot id is over the lines alone, so formats 2 and 3 of the
 same files have the same id: a card updated from a format-2 store is
@@ -541,10 +641,12 @@ Every file the release ships has one, declared per list in
 
 ## Not yet
 
-- **Ask packs** (`/opt/ark/<pack>`, `/data/ask/<pack>`): not published,
-  and an update leaves them alone. The ARK scroll (`/opt/ark/*.md`) is
-  included.
-- **Core apps on the card**, NFS, HTTPS: later rounds.
+- **arkmed** (`/opt/ark/arkmed`, `/data/ask/arkmed`): on
+  `zeitlos-arkmedium.img` only, never in a release's manifest; an update
+  leaves it alone. zdocs and arklite are in the base and arklite sets.
+- **`update` in flash**, with a window, for a board with no card:
+  round 4b. Until then it is a card app (base).
+- **Core apps on the card**: not planned. NFS was dropped.
 - **Kabellos boards** cannot fetch from a TFTP server on the LAN (the
   ESP32's NAPT drops the replies, [esp32link.md](esp32link.md#known-issues)).
 - **Empty folders** a release no longer ships are left in place.
@@ -569,7 +671,16 @@ publish later), a format-2 store republished as format 3 (its raw
 objects kept while `manifest.prev` names them, then pruned), a damaged
 object, the `abi` line (written, read back, not in the snapshot id, a
 new one republishing an otherwise unchanged release, and in
-`zrelease tftp`'s manifest), `zrelease tftp` from the command line, and -- with
+`zrelease tftp`'s manifest); sets (each file's set read back, the
+offered sets and their titles, a card's `installed` line outside the
+snapshot id, a file moved to another set a new snapshot, bad set names
+refused, `-`); signatures (Ed25519 against RFC 8032's test vectors,
+`manifest.sig` written and checked, two keys, a changed manifest no
+longer checking); `release/dist.cfg` and `zdist.h` current, a fork's
+config, bad URLs and keys refused, `keygen` (mode 600, never inside the
+repository, `--add`); `zrelease tftp` from the command line (every set
+offered, not signed) and `zrelease http` refusing a key `dist.cfg` does
+not list, and -- with
 mtools -- that a card image's `/sys/manifest` has the same snapshot id
 as the store made from the same tree, records the tree's ABI id, and
 lists exactly the card's files.
@@ -585,13 +696,19 @@ it, and that a struct field, a `#define`'s value, a syscall appended,
 a syscall replaced, the app link address and a function-pointer typedef
 do (and leave the committed id stale).
 
-`python3 release/lib/test_mkfatimg.py` covers the image itself.
+`python3 release/lib/test_mkfatimg.py` covers the image itself, and
+the sets: every listed file has one, an app without one is refused,
+each set has files, a base plan has base's alone, one without base is
+refused; and each image (`base`, `serious`, `full`, `arkmedium`, with
+fake arklite and arkmed packs) has exactly its sets' files, says which
+in `/sys/manifest`, and lists zdocs and arklite file by file but only
+names arkmed.
 
 ```
 $ make -C sw/apps/update/tests
 ```
 
-runs two programs. `test_update` builds `upd.c` for the host (with ASan and UBSan), publishes two small
+runs three programs. `test_update` builds `upd.c` for the host (with ASan and UBSan), publishes two small
 releases with `release/lib`'s own `manifest.py` and `store.py`
 (`mkfixture.py`), and updates a card that is a directory: a blank card
 and the same release again; v1 to v2 with changed, added and removed
@@ -616,6 +733,34 @@ room, `-n`, `latest`, `update` with no release; and the ABI: the same
 id (updated, recorded in the card's manifest, shown by `update`), another
 (refused before anything is fetched, `-n`, `-f`), a kernel that cannot
 say (a warning), and a release that does not say (not checked).
+**Sets**: a blank card with `-s games` (base and games, not dev; the
+card's manifest says so); up to date again, with and without `-s`; s1
+to s2 (base and games updated, net and dev not added, an app moved
+from games to dev kept and updated, a dropped one removed, still up to
+date afterwards); `-n -s dev`, `-s dev`, `-s all`; a set the release
+does not have; `-s` with a release without sets; a card from before
+sets and a blank card, which get every set. **Signatures** (keys and
+signatures from `release/lib/ed25519.py`, checked by the board's
+Monocypher): accepted; not signed, signed by another key (and accepted
+when both are trusted), changed after signing, and another release's
+signed manifest under a new name, all refused with nothing written; a
+file with the right size and CRC but not the manifest's SHA-256,
+accepted over TFTP and refused when signed; no key at all; LATEST
+naming an older release refused, `-f` and naming it going back.
+
+`test_http` runs the HTTP client in `upd_net.c` against a `net` whose
+raw sockets behave like `net.c`'s (CONNECT and CONNECTED, the request
+as DATA, the reply in pieces of at most 4 KB with no more than eight
+unacknowledged) and a web server behind it: files of 0, 1, 4095,
+4096, 4097 and 300,000 bytes by Content-Length and by chunks (of every
+size, with an extension and a trailer), read 1, 7, 1468 or 2048 bytes
+at a time; twenty files on one connection; a new connection after
+`Connection: close`, after each HTTP/1.0 reply, and after a server that
+hangs up between files or just as a request goes out; a body ended by
+the close; the request line and `Host`; 404, a redirect to https and
+one elsewhere; a connection refused, a net that never answers, a
+hang-up mid-file and the retry; a file abandoned half way and the next
+one; and that net never has more than eight pieces unacknowledged.
 
 `test_net` runs `upd_net.c` with the real `zstream.c` and `zobj.c`, a
 mailbox per process, and a `net` that answers the way `tftp.c` does --
@@ -634,8 +779,10 @@ the numbers above were checked against the real tree (a card image
 from `zrelease sdcard`, unpacked with `mcopy -s`):
 
 ```
-$ sw/apps/update/tests/test_update --update CARD-DIR STORE-DIR v0.0.7 [-n] [-v] [-f]
+$ sw/apps/update/tests/test_update --update CARD-DIR STORE-DIR v0.0.7 [-n] [-v] [-f] [-s SETS] [--keys HEX]
 ```
+
+(`--keys` requires a signature by one of those keys, as from a server.)
 
 There is no kernel to ask on the host, so it behaves like a kernel too
 old to say, unless `ZABI=<id>` gives the flash's id.

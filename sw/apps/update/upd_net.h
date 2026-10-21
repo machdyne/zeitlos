@@ -5,7 +5,8 @@
  * Zeitlos
  * Copyright (c) 2026 Lone Dynamics Corporation. All rights reserved.
  *
- * update's mailbox and its TFTP source (docs/update.md, "Inside").
+ * update's mailbox and its sources, TFTP and HTTP (docs/update.md,
+ * "Inside").
  *
  * One loop reads every message this process gets. Stream messages from
  * `net` go to the consumer (zstream.h) and become EVENTS in a small
@@ -25,8 +26,16 @@
 #include "zmsg.h"
 
 // Set before use: net's pid, the server, and where other messages go.
+// TFTP.
 void upd_net_init(uint32_t net_pid, uint32_t server_ip,
 	void (*other)(z_msg_t *m), uint32_t tick_hz);
+
+// HTTP instead (docs/distribution.md): plain HTTP/1.1 to `host` (for
+// the Host header) at server_ip:port, over one of net's raw TCP sockets
+// (sw/apps/net/sock.h), kept open from one file to the next. A name
+// "release/v0.0.7/manifest" is fetched as GET /release/v0.0.7/manifest.
+void upd_net_init_http(uint32_t net_pid, uint32_t server_ip, uint16_t port,
+	const char *host, void (*other)(z_msg_t *m), uint32_t tick_hz);
 
 // Reads and dispatches what is in the mailbox, waiting up to
 // `wait_ticks` for the first message if there is none.

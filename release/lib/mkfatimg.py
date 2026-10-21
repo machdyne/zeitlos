@@ -89,11 +89,106 @@ LABEL = "ZEITLOS"
 #                             image carries arkmed and not arklite.
 #
 # (key, file stem, packs), in the order they are built and listed.
-VARIANTS = [
-    ("base",      "zeitlos",           ("zdocs",)),
-    ("arklite",   "zeitlos-arklite",   ("zdocs", "arklite")),
-    ("arkmedium", "zeitlos-arkmedium", ("zdocs", "arkmed")),
+# -- sets (docs/update.md, "Sets") --
+#
+# A set is a label on a card file: which group it comes in. `update -s`
+# adds sets to a card, and the images below are choices of sets. Every
+# card file has exactly one; plan() refuses a file it cannot place, so
+# a new app cannot ship without someone saying where it goes. Sets
+# depend only on `base`, which every card has.
+#
+# (name, title, description), in the order people see them.
+SETS = [
+    ("base",         "Base",
+     "the shell, settings, the reader, documents and fonts"),
+    ("productivity", "Productivity",
+     "sheet, slide, print, convert, draw, view, automate"),
+    ("audio",        "Audio",       "music, MIDI, trackers and speech"),
+    ("net",          "Network",     "web, IRC, BBS, mesh and servers"),
+    ("dev",          "Development", "the C compiler, FPGA tools, hex editor"),
+    ("embedded",     "Embedded",
+     "BASIC, bench, logic, I2C, serial and zlink"),
+    ("games",        "Games",       "arcade, casino, chess, chip8 and more"),
+    ("arklite",      "Ark Lite",
+     "an offline library: the Ark Codex and selected texts"),
 ]
+SET_NAMES = [n for n, _t, _d in SETS]
+
+# Programs (/apps/<name>) by set. An app's own data, /data/<name>/...,
+# goes with it.
+APP_SET = {
+    "posix": "base", "vi": "base", "zetta": "base", "settings": "base",
+    "info": "base", "calc": "base", "clock": "base", "cal": "base",
+    "keyboard": "base", "jfont": "base", "read": "base", "ask": "base",
+    "update": "base",
+    "sheet": "productivity", "slide": "productivity", "print": "productivity",
+    "convert": "productivity", "draw": "productivity", "view": "productivity",
+    "automate": "productivity",
+    "play": "audio", "midi": "audio", "mmod": "audio", "track": "audio",
+    "tts": "audio", "audiotest": "audio",
+    "web": "net", "irc": "net", "netserve": "net", "zerdesk": "net",
+    "mesh": "net", "bbs": "net", "fed": "net",
+    "zcc": "dev", "zfpga": "dev", "hex": "dev", "cryptobench": "dev",
+    "hello_win": "dev", "portdemo": "dev", "ttytest": "dev",
+    "basic": "embedded", "i2c": "embedded", "ls99": "embedded",
+    "bench": "embedded", "logic": "embedded", "sechs": "embedded",
+    "serial": "embedded", "zlink": "embedded",
+    "casino": "games", "poker": "games", "roulette": "games",
+    "blackjack": "games", "slots": "games", "craps": "games",
+    "snake": "games", "blocks": "games", "bricks": "games",
+    "mausrun": "games", "chess": "games", "kidgames": "games",
+    "chip8": "games", "space3d": "games", "gpu3d": "games",
+    "gpudemo": "games",
+}
+# /data/<name> folders that are not an app's: the core apps' (in flash,
+# their data on the card).
+DATA_SET = {"net": "base"}
+# Everything else, by where it goes on the card: (folder, set).
+PLACE_SET = [
+    (zcard("Z_DIR_DOCS"), "base"),
+    (zcard("Z_DIR_SYS"), "base"),
+    (zcard("Z_DIR_ARK"), "base"),             # the ARK scroll
+    (zcard("Z_DIR_MEDIA_AUDIO"), "audio"),
+    (zcard("Z_DIR_MEDIA_IMAGES"), "productivity"),
+]
+# The ask packs an update knows, by set. Others (arkmed) are only on an
+# image: not in its manifest, never touched by an update.
+PACK_SET = {"zdocs": "base", "arklite": "arklite"}
+
+
+def set_of(dest):
+    """The set of card file `dest` ("apps/sheet"). FatError if none."""
+    parts = dest.strip("/").split("/")
+    apps, data = zcard("Z_DIR_APPS"), zcard("Z_DIR_DATA")
+    if len(parts) == 2 and parts[0] == apps and parts[1] in APP_SET:
+        return APP_SET[parts[1]]
+    if len(parts) >= 3 and parts[0] == data:
+        if parts[1] in APP_SET:
+            return APP_SET[parts[1]]
+        if parts[1] in DATA_SET:
+            return DATA_SET[parts[1]]
+    d = dest.strip("/")
+    for place, st in PLACE_SET:
+        if d.startswith(place + "/"):
+            return st
+    raise FatError("%s has no set: add it to APP_SET, DATA_SET or PLACE_SET "
+                   "in release/lib/mkfatimg.py (docs/update.md, \"Sets\")" % dest)
+
+
+# The images a release builds: (key, file stem, sets, ask packs). The
+# packs in PACK_SET come with their set; the others are the image's
+# alone. zeitlos-arkmedium is published on GitHub only, not on the
+# distribution's server (docs/distribution.md).
+_ALL = tuple(SET_NAMES)
+VARIANTS = [
+    ("base",      "zeitlos-base",      ("base",), ("zdocs",)),
+    ("serious",   "zeitlos-serious",
+     tuple(n for n in _ALL if n != "games"), ("zdocs", "arklite")),
+    ("full",      "zeitlos",           _ALL, ("zdocs", "arklite")),
+    ("arkmedium", "zeitlos-arkmedium",
+     tuple(n for n in _ALL if n != "arklite"), ("zdocs", "arkmed")),
+]
+SERVER_VARIANTS = ("base", "serious", "full")
 
 
 def variant(key):
@@ -817,10 +912,23 @@ class Plan(object):
         self.packs = []
         self.dirs = []
         self.sizes = []
+        self.sets = []          # the set names this card or release has
+        self.set_of = {}        # dest -> set, for every manifest file
+        self.listed_packs = []  # packs whose files are in the manifest
 
     def manifest_files(self):
-        """The files an update knows about: all but the packs."""
-        return list(self.files)
+        """The files an update knows about: the card's files and the
+        packs in PACK_SET, as (dest, src_abs, policy)."""
+        out = list(self.files)
+        for packname, files in self.packs:
+            if packname in self.listed_packs:
+                out += [(card.lstrip("/"), src, REPLACE) for card, src in files]
+        return out
+
+    def offered_sets(self):
+        """SETS entries this plan has files in, in order."""
+        have = set(self.set_of.values())
+        return [s for s in SETS if s[0] in have]
 
 
 def app_inputs():
@@ -840,8 +948,11 @@ def data_inputs():
             + MAUSRUN_FILES)
 
 
-def plan(root, ark_dir=None, packs=None, verbose=True):
+def plan(root, ark_dir=None, packs=None, verbose=True, sets=None):
     """Gather and check everything a card holds. Writes nothing.
+
+    `sets`: the set names to include (SETS); None, all of them. An ask
+    pack in PACK_SET must be in one of them.
 
     The one card list, shared by build() (the image) and by the update
     release (release/lib/store.py). Raises FatError for anything
@@ -968,6 +1079,20 @@ def plan(root, ark_dir=None, packs=None, verbose=True):
 
     pl.dirs = list(EMPTY_DIRS)
 
+    # -- sets: every file has one; keep those of the sets asked for --
+    want = list(SET_NAMES) if sets is None else list(sets)
+    for st in want:
+        if st not in SET_NAMES:
+            raise FatError("no set `%s` (have: %s)" % (st, ", ".join(SET_NAMES)))
+    if "base" not in want:
+        raise FatError("every card has the base set")
+    pl.sets = [n for n in SET_NAMES if n in want]
+    every = {dest: set_of(dest) for dest, _src, _p in pl.files}
+    keep = [i for i, f in enumerate(pl.files) if every[f[0]] in pl.sets]
+    pl.early = sum(1 for i in keep if i < pl.early)
+    pl.files = [pl.files[i] for i in keep]
+    pl.set_of = {f[0]: every[f[0]] for f in pl.files}
+
     # Every destination once, across every list: an update could not
     # say which of two sources a path is.
     seen = set()
@@ -979,7 +1104,17 @@ def plan(root, ark_dir=None, packs=None, verbose=True):
 
     # -- ask packs: resolve them BEFORE anything is formatted --
     for packname in (ask_packs_requested() if packs is None else packs):
-        pl.packs.append((packname, ask_pack_files(root, packname)))
+        files = ask_pack_files(root, packname)
+        pl.packs.append((packname, files))
+        st = PACK_SET.get(packname)
+        if st is None:
+            continue            # the image's alone (arkmed)
+        if st not in pl.sets:
+            raise FatError("ask pack %s is in the set %s, which this card "
+                           "does not have" % (packname, st))
+        pl.listed_packs.append(packname)
+        for card, _src in files:
+            pl.set_of[card.lstrip("/")] = st
 
     # Every name, checked BEFORE formatting. mcopy would store a
     # component create_name() rejects, and the board would not open
@@ -1000,7 +1135,7 @@ def plan(root, ark_dir=None, packs=None, verbose=True):
 
 
 def build(root, out_path, ark_dir=None, verbose=True, packs=None,
-          name=None):
+          name=None, sets=None):
     """Build the SD card image. Returns a list of (name, size) shipped.
 
     `packs` names the ask packs to ship; None means
@@ -1010,11 +1145,14 @@ def build(root, out_path, ark_dir=None, verbose=True, packs=None,
     MANIFEST.json would otherwise carry every Wikipedia article's
     number.
 
+    `sets` names the sets to put on the card (SETS; None, all of them);
+    /sys/manifest says which it has (docs/update.md, "Sets").
+
     `name` is the release name /sys/manifest records ("v" + the tree's
     version when not given), so an update knows what the card is.
     """
     preflight()
-    pl = plan(root, ark_dir=ark_dir, packs=packs, verbose=verbose)
+    pl = plan(root, ark_dir=ark_dir, packs=packs, verbose=verbose, sets=sets)
 
     sizes = pl.sizes
     nfiles_pack = sum(len(fs) for _n, fs in pl.packs)
@@ -1095,8 +1233,10 @@ def build(root, out_path, ark_dir=None, verbose=True, packs=None,
     version = tree_version(root)
     m = manifest_mod.make(pl, name or ("v" + version), version,
                           manifest_mod.describe(root),
-                          packs=[n for n, _f in pl.packs],
-                          abi=manifest_mod.read_abi(root))
+                          packs=[n for n, _f in pl.packs
+                                 if n not in pl.listed_packs],
+                          abi=manifest_mod.read_abi(root),
+                          installed=pl.sets)
     for text, dest in ((m.text, P["Z_PATH_SYS_MANIFEST"]),
                        (manifest_mod.version_text(m), P["Z_PATH_SYS_VERSION"])):
         tmpf = out_path + ".sysfile"

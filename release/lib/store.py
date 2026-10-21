@@ -258,7 +258,8 @@ def publish(store, m, sources, latest=True, verbose=True):
         # The same files in another format (raw objects becoming LZ4),
         # or built against another ABI (an interface changed and no
         # binary did), is a new manifest even with the same snapshot id.
-        if st.previous_id == m.id and same_format:
+        if st.previous_id == m.id and same_format and \
+                _without_made(old_text) == _without_made(m.text):
             # Same files: leave it, `made` and all, so INDEX still says
             # when these files were first published.
             st.unchanged = True
@@ -267,6 +268,11 @@ def publish(store, m, sources, latest=True, verbose=True):
                 _write_atomic(os.path.join(rdir, "manifest.prev"),
                               old_text.encode("utf-8"))
             _write_atomic(cur, m.text.encode("utf-8"))
+            # A signature of the old text would now be a bad one: gone,
+            # until sign() makes the new one.
+            sig = os.path.join(rdir, SIG_NAME)
+            if os.path.exists(sig):
+                os.unlink(sig)
 
         # The updater itself, by a fixed name, for a card that has none
         # yet (or one too old to read this manifest's format).
@@ -298,6 +304,79 @@ def publish(store, m, sources, latest=True, verbose=True):
     finally:
         lockf.close()
     return st
+
+
+def _without_made(text):
+    """A manifest's text but for when and from which commit it was
+    made: what has to differ for a republish to count as a change."""
+    return "\n".join(l for l in (text or "").split("\n")
+                     if not l.startswith(("made ", "source ")))
+
+
+# -- signatures (docs/distribution.md) --
+#
+# <name>/manifest.sig: one line per key that signed the manifest,
+#
+#   ed25519 <public key, 64 hex> <signature, 128 hex>
+#
+# an Ed25519 signature (RFC 8032) over the manifest file's bytes exactly.
+# `update` accepts the manifest when any line is by a key it trusts and
+# checks; several lines let a distribution change keys without leaving
+# boards with the old one behind.
+SIG_NAME = "manifest.sig"
+
+
+def sig_text(manifest_bytes, seeds):
+    import ed25519
+    lines = []
+    for seed in seeds:
+        pub = ed25519.public_key(seed)
+        sig = ed25519.sign(seed, manifest_bytes)
+        lines.append("ed25519 %s %s" % (pub.hex(), sig.hex()))
+    return "".join(l + "\n" for l in lines)
+
+
+def sign(store, name, seeds):
+    """Signs release `name`'s manifest with each private key in `seeds`
+    (32 bytes each). Returns True if manifest.sig changed."""
+    if not seeds:
+        raise StoreError("no signing key")
+    rdir = os.path.join(store, name)
+    with open(os.path.join(rdir, "manifest"), "rb") as f:
+        data = f.read()
+    text = sig_text(data, seeds).encode("utf-8")
+    p = os.path.join(rdir, SIG_NAME)
+    if os.path.isfile(p):
+        with open(p, "rb") as f:
+            if f.read() == text:
+                return False
+    _write_atomic(p, text)
+    return True
+
+
+def check_sig(store, name, pubs):
+    """Whether release `name` is signed, as the board checks it, by one
+    of `pubs` (32-byte public keys)."""
+    import ed25519
+    rdir = os.path.join(store, name)
+    try:
+        with open(os.path.join(rdir, "manifest"), "rb") as f:
+            data = f.read()
+        with open(os.path.join(rdir, SIG_NAME), encoding="utf-8") as f:
+            lines = f.read().split("\n")
+    except OSError:
+        return False
+    for l in lines:
+        parts = l.split()
+        if len(parts) != 3 or parts[0] != "ed25519":
+            continue
+        try:
+            pub, sig = bytes.fromhex(parts[1]), bytes.fromhex(parts[2])
+        except ValueError:
+            continue
+        if pub in pubs and ed25519.verify(pub, data, sig):
+            return True
+    return False
 
 
 def sources_for(pl, m):

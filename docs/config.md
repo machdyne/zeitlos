@@ -71,6 +71,9 @@ travel with the card. `settings` edits them; see
 | `system.video.brightness` | `8` | kernel | HDMI/DVI monochrome brightness, 1-16, applied at boot and on reload |
 | `system.video.composite` | `color` | kernel | composite colour boards: `color`, or `mono` for black and white |
 | `system.video.ddmi_audio` | `no` | kernel | DDMI boards built with it: `yes` sends sound and display info over the HDMI connector |
+| `system.update.url` | *(the built-in distribution's)* | `update` | where releases come from, `http://host/.../release/`: a mirror, or another distribution ([distribution.md](distribution.md#following-another-distribution)) |
+| `system.update.key` | *(the built-in keys)* | `update` | the Ed25519 public key, 64 hex digits, releases from there must be signed with |
+| `system.update.key2` | *(none)* | `update` | a second key accepted too, while a distribution changes keys |
 
 The same table, with one-line help, is `z_cfg_known[]` in
 `sw/common/zcfg.c` -- `cfg` at the console prints it with the values in

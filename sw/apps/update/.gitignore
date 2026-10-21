@@ -3,4 +3,5 @@ update.elf
 tests/test_update
 tests/fixture/
 tests/test_net
+tests/test_http
 tests/upd_host.o

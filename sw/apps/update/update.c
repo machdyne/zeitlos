@@ -2,7 +2,12 @@
  * update -- bring the card up to date with a release (docs/update.md).
  *
  *   update                              what the card has
- *   update v0.0.7 -t tftp 192.168.1.10  from a TFTP server
+ *   update v0.0.7                       from the distribution's server, over
+ *                                       HTTP, signed (docs/distribution.md)
+ *   update latest                       whatever that server's LATEST names
+ *   update v0.0.7 -s games              ... adding the games set
+ *   update v0.0.7 -t http URL           from another server
+ *   update v0.0.7 -t tftp 192.168.1.10  from a TFTP server (unsigned: a LAN)
  *   update latest -t tftp server        whatever the server's LATEST names
  *   update -n v0.0.7 -t tftp server     what would change; changes nothing
  *   update -v v0.0.7 -t tftp server     hash every file, trust no manifest
@@ -34,6 +39,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "../../common/zeitlos.h"
@@ -44,10 +50,12 @@
 #include "../../common/zfsapp.h"
 #include "../../common/zwin.h"          /* z_launch_arg_take() */
 #include "../../common/zargs.h"
+#include "../../common/zcfg.h"
 #include "../posix/posix.h"             /* PX_STDOUT_TAG */
 
 #include "upd.h"
 #include "upd_net.h"
+#include "zdist.h"                      /* the built-in distribution */
 
 void uart_putc(char c);
 
@@ -204,20 +212,49 @@ static uint32_t io_ms(void *c) {
 static void usage(void) {
 	io_out(NULL,
 		"usage: update                          what the card has\n"
-		"       update RELEASE -t tftp SERVER   update from a TFTP server\n"
-		"       update latest -t tftp SERVER    whatever the server's LATEST names\n"
-		"options: -n (what would change; changes nothing)\n"
+		"       update RELEASE                  from " Z_DIST_NAME "\n"
+		"       update latest                   whatever its LATEST names\n"
+		"       update RELEASE -t http URL      from another server\n"
+		"       update RELEASE -t tftp SERVER   from a TFTP server\n"
+		"options: -s SETS (add sets: games,dev or all)\n"
+		"         -n (what would change; changes nothing)\n"
 		"         -v (hash every file, trust no manifest)\n"
 		"         -f (update though the release's ABI is not the flash's)\n"
 		"         -d DIR (the store is DIR/ on the server; default release)\n"
 		"see docs/update.md\n");
 }
 
+// http://host[:port]/path/ -> its parts. false if it is not one.
+static bool parse_url(const char *url, char *host, int hcap, uint16_t *port,
+	char *path, int pcap) {
+	if (strncmp(url, "http://", 7)) return false;
+	const char *h = url + 7, *e = h;
+	while (*e && *e != '/' && *e != ':') e++;
+	if (e == h || e - h >= hcap) return false;
+	memcpy(host, h, e - h);
+	host[e - h] = 0;
+	*port = 80;
+	if (*e == ':') {
+		long p = strtol(e + 1, (char **)&e, 10);
+		if (p < 1 || p > 65535) return false;
+		*port = (uint16_t)p;
+	}
+	if (*e && *e != '/') return false;
+	// the store's path, without the slashes around it: "release"
+	const char *p0 = *e ? e + 1 : e;
+	int n = (int)strlen(p0);
+	while (n && p0[n - 1] == '/') n--;
+	if (!n || n >= pcap) return false;
+	memcpy(path, p0, n);
+	path[n] = 0;
+	return true;
+}
+
 static int run(int argc, char **argv) {
 	upd_opts_t o;
 	memset(&o, 0, sizeof o);
 	o.dir = "release";
-	const char *method = NULL, *server = NULL;
+	const char *method = NULL, *server = NULL, *url = NULL;
 
 	for (int i = 0; i < argc; i++) {
 		const char *a = argv[i];
@@ -226,6 +263,7 @@ static int run(int argc, char **argv) {
 		else if (!strcmp(a, "-f")) o.force = true;
 		else if (!strcmp(a, "-h") || !strcmp(a, "--help")) { usage(); return UPD_DONE; }
 		else if (!strcmp(a, "-d") && i + 1 < argc) o.dir = argv[++i];
+		else if (!strcmp(a, "-s") && i + 1 < argc) o.sets = argv[++i];
 		else if (!strcmp(a, "-t") && i + 1 < argc) {
 			method = argv[++i];
 			if (!strcmp(method, "tftp")) {
@@ -234,6 +272,9 @@ static int run(int argc, char **argv) {
 					return UPD_USAGE;
 				}
 				server = argv[++i];
+			} else if (!strcmp(method, "http") && i + 1 < argc &&
+					!strncmp(argv[i + 1], "http://", 7)) {
+				url = argv[++i];
 			}
 		} else if (a[0] == '-') {
 			usage();
@@ -255,28 +296,73 @@ static int run(int argc, char **argv) {
 	o.kernel_abi = kabi;
 
 	if (!o.release) {
-		if (method) { usage(); return UPD_USAGE; }
+		if (method || o.sets) { usage(); return UPD_USAGE; }
 		return upd_show(&io, kabi);
 	}
-	if (!method) {
-		io_out(NULL, "update: from the project's own releases over https: not yet.\n"
-			"        Use a TFTP server on your network: update RELEASE -t tftp SERVER\n"
-			"        (docs/update.md).\n");
-		return UPD_USAGE;
-	}
+	if (!method) method = "http";
 	if (!strcmp(method, "nfs")) {
-		io_out(NULL, "update: -t nfs: not yet; use -t tftp SERVER (docs/update.md)\n");
+		io_out(NULL, "update: -t takes http or tftp\n");
 		return UPD_USAGE;
 	}
-	if (strcmp(method, "tftp")) {
-		io_out(NULL, "update: -t takes tftp\n");
+	if (strcmp(method, "tftp") && strcmp(method, "http")) {
+		io_out(NULL, "update: -t takes http or tftp\n");
 		return UPD_USAGE;
 	}
 
-	char err[64];
+	char err[64], m[256];
 	uint32_t server_ip = 0, net_pid = 0;
+	static char host[80], path[96], src[160];
+	static uint8_t keys[3 * 32];
+	uint16_t port = 0;
+	if (!strcmp(method, "http")) {
+		// The distribution (docs/distribution.md): zeitlos.cfg's, or the
+		// one this update was built with. Its key(s) likewise; a URL of
+		// its own and no key means a mirror of the built-in one.
+		static char cfg_url[Z_CFG_VAL_MAX], k1[Z_CFG_VAL_MAX], k2[Z_CFG_VAL_MAX];
+		if (!url && z_cfg_get("system.update.url", cfg_url, sizeof cfg_url) && cfg_url[0])
+			url = cfg_url;
+		if (!url) url = Z_DIST_URL;
+		if (!parse_url(url, host, sizeof host, &port, path, sizeof path)) {
+			snprintf(m, sizeof m, "update: %s is not an http://host/path/ URL\n", url);
+			io_out(NULL, m);
+			return UPD_USAGE;
+		}
+		int nk = 0;
+		bool from_cfg = false;
+		if (z_cfg_get("system.update.key", k1, sizeof k1) && k1[0]) {
+			from_cfg = true;
+			int r = upd_keys_parse(k1, keys, 1);
+			if (r < 0) {
+				io_out(NULL, "update: system.update.key in /sys/zeitlos.cfg is not "
+					"a key (64 hex digits)\n");
+				return UPD_USAGE;
+			}
+			nk += r;
+			if (z_cfg_get("system.update.key2", k2, sizeof k2) && k2[0]) {
+				r = upd_keys_parse(k2, keys + 32 * nk, 1);
+				if (r < 0) {
+					io_out(NULL, "update: system.update.key2 is not a key\n");
+					return UPD_USAGE;
+				}
+				nk += r;
+			}
+		}
+		if (!from_cfg) {
+			nk = upd_keys_parse(Z_DIST_KEYS, keys, 3);
+			if (nk < 0) nk = 0;
+		}
+		o.need_sig = true;
+		o.keys = keys;
+		o.nkeys = nk;
+		o.dir = path;
+		server = host;
+		snprintf(src, sizeof src, "%s", url);
+	} else {
+		snprintf(src, sizeof src, "tftp %s", server);
+	}
+	o.source = src;
+
 	if (!z_resolve_host(server, &server_ip, err, sizeof err)) {
-		char m[128];
 		snprintf(m, sizeof m, "update: %s: %s\n", server, err);
 		io_out(NULL, m);
 		return UPD_FAILED;
@@ -285,10 +371,10 @@ static int run(int argc, char **argv) {
 		io_out(NULL, "update: net is not running, so there is no network\n");
 		return UPD_FAILED;
 	}
-	upd_net_init(net_pid, server_ip, on_other, Z_TICK_HZ);
-	char src[96];
-	snprintf(src, sizeof src, "tftp %s", server);
-	o.source = src;
+	if (!strcmp(method, "http"))
+		upd_net_init_http(net_pid, server_ip, port, host, on_other, Z_TICK_HZ);
+	else
+		upd_net_init(net_pid, server_ip, on_other, Z_TICK_HZ);
 	return upd_run(&io, &o);
 }
 

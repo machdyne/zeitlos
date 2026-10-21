@@ -64,6 +64,22 @@ def card_contents(c):
     return "; ".join(PACK_DESC.get(p, p) for p in packs)
 
 
+def card_sets(c):
+    """Which sets a card has, for people (docs/update.md, "Sets")."""
+    sets = c.get("sets")
+    if not sets:
+        return "everything"
+    import mkfatimg
+    every = [n for n in mkfatimg.SET_NAMES if n not in ("arklite",)]
+    apps = [n for n in sets if n != "arklite"]
+    if apps == ["base"]:
+        return "the base set only"
+    if set(every) <= set(apps):
+        return "every set"
+    missing = [n for n in every if n not in apps]
+    return "every set but %s" % ", ".join(missing)
+
+
 def manifest(version, commit, dirty, targets, sdcard, layout, ark_commit):
     cs = cards(sdcard)
     base = next((c for c in cs if c.get("file") == "zeitlos.img.gz"),
@@ -306,17 +322,17 @@ def notes(version, commit, targets, sdcard, layout, prev_version=None):
     if cs:
         out.append("## SD card")
         out.append("")
-        out.append("Optional, and the same for every target. Each image has "
-                   "the non-core apps, the documentation and the ARK scroll; "
-                   "they differ only in how much reference material `ask` "
-                   "can search.")
+        out.append("Optional, and the same for every target. The images "
+                   "differ in which sets of apps they carry and how much "
+                   "reference material `ask` can search; `update -s` adds "
+                   "sets to a card later (docs/update.md).")
         out.append("")
-        out.append("| image | size | `ask` can search |")
-        out.append("|---|---|---|")
+        out.append("| image | size | apps | `ask` can search |")
+        out.append("|---|---|---|---|")
         for c in cs:
             mb, fits = card_size(c)
-            out.append("| `%s` | %d MB, %s | %s |"
-                       % (c["file"], mb, fits, card_contents(c)))
+            out.append("| `%s` | %d MB, %s | %s | %s |"
+                       % (c["file"], mb, fits, card_sets(c), card_contents(c)))
         out.append("")
         out.append("```")
         out.append("gzip -dc %s | sudo dd of=/dev/sdX bs=4M "
@@ -449,7 +465,7 @@ def asset_readme(version, commit, targets, sdcard, layout):
         out.append("  %s" % c["file"])
         out.append("      Optional sdcard image (%d MB, FAT32, %s). The same"
                    % (mb, fits))
-        out.append("      for every board: the additional apps (/apps),")
+        out.append("      for every board: %s of apps (/apps)," % card_sets(c))
         out.append("      the documentation (/docs), the ARK scroll (/opt/ark),")
         for line in textwrap.wrap("and for `ask`: %s." % card_contents(c),
                                   W - 6):

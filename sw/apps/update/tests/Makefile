@@ -11,21 +11,29 @@ CC ?= cc
 COMMON = ../../../common
 CFLAGS = -std=gnu99 -O1 -g -Wall -Wextra -Wno-unused-parameter \
 	-fsanitize=address,undefined -fno-omit-frame-pointer \
-	-I.. -I$(COMMON)
+	-I.. -I$(COMMON) -I$(MONO)
+MONO = ../../../ext/monocypher
 FIXTURE = $(CURDIR)/fixture
 
 all: run
 
 # upd.c's allocations are counted (alloc_hook.h): the peak a run needs,
 # and a heap that runs out as the board's does.
+# Signatures are checked with the board's Monocypher, against keys and
+# signatures made by release/lib/ed25519.py (mkfixture.py).
 test_update: test_update.c ../upd.c ../upd.h $(COMMON)/zsha256.c $(COMMON)/zexec_lz4.c alloc_hook.h
 	$(CC) $(CFLAGS) -c -include alloc_hook.h -o upd_host.o ../upd.c
 	$(CC) $(CFLAGS) -o $@ test_update.c upd_host.o $(COMMON)/zsha256.c \
-		$(COMMON)/zexec_lz4.c
+		$(COMMON)/zexec_lz4.c $(MONO)/monocypher.c $(MONO)/monocypher-ed25519.c
 
 # The mailbox and TFTP source, with the real stream and object code.
 test_net: test_net.c ../upd_net.c ../upd_net.h $(COMMON)/zstream.c $(COMMON)/zobj.c
 	$(CC) $(CFLAGS) -o $@ test_net.c ../upd_net.c $(COMMON)/zstream.c \
+		$(COMMON)/zobj.c -lm
+
+# The HTTP source, against a net with raw sockets and a web server.
+test_http: test_http.c ../upd_net.c ../upd_net.h $(COMMON)/zstream.c $(COMMON)/zobj.c
+	$(CC) $(CFLAGS) -o $@ test_http.c ../upd_net.c $(COMMON)/zstream.c \
 		$(COMMON)/zobj.c -lm
 
 # Stopping the run at every step longjmps out of it, so its allocations
@@ -33,12 +41,13 @@ test_net: test_net.c ../upd_net.c ../upd_net.h $(COMMON)/zstream.c $(COMMON)/zob
 # test_net the leaks are net's borrowed error strings (zstream_reject()
 # and zstream_send_error() allocate, as they do on the board) and the
 # one request update keeps when net never answers it.
-run: test_update test_net
+run: test_update test_net test_http
 	ASAN_OPTIONS=detect_leaks=0 ./test_net
+	ASAN_OPTIONS=detect_leaks=0 ./test_http
 	python3 -I mkfixture.py $(FIXTURE)
 	ASAN_OPTIONS=detect_leaks=0 ./test_update $(FIXTURE)
 
 clean:
-	rm -rf test_update test_net upd_host.o fixture
+	rm -rf test_update test_net test_http upd_host.o fixture
 
 .PHONY: all run clean
