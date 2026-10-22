@@ -53,7 +53,11 @@
 
 #define Z_FS_REQ		(Z_SUBJ_FS + 0)
 #define Z_FS_REPLY		(Z_SUBJ_FS + 1)
-Z_SUBJECTS_IN(Z_SUBJ_FS, Z_FS_REPLY);
+// fs to a watcher: something changed under what it watches (below,
+// "Watching"). tag: the watch's number; obj: nothing. Sent without
+// waiting, and at most one until the watcher has read what changed.
+#define Z_FS_CHANGED	(Z_SUBJ_FS + 2)
+Z_SUBJECTS_IN(Z_SUBJ_FS, Z_FS_CHANGED);
 
 // The name `fs` registers under, as z_pid_register() completes it.
 #define Z_FS_SERVICE	"fs0"
@@ -82,6 +86,10 @@ Z_SUBJECTS_IN(Z_SUBJ_FS, Z_FS_REPLY);
 #define Z_FSOP_MOUNT		18	// path: mount it now (the card, a USB drive)
 #define Z_FSOP_UMOUNT		19	// path: flush and release it; -Z_EBUSY with files open
 #define Z_FSOP_SYNCALL		20	// flush every file open for writing, of every client
+// Watching (below).
+#define Z_FSOP_WATCH		21	// path (a folder or a file)        -> a watch number
+#define Z_FSOP_WATCHREAD	22	// fd: the watch number            -> paths, a z_fs_watch_t
+#define Z_FSOP_UNWATCH		23	// fd: the watch number
 
 // Open flags (z_fsreq_t.flags). Zeitlos's own numbers, not any C
 // library's: the libc hooks translate.
@@ -177,5 +185,44 @@ typedef struct {
 	uint32_t	total_kb;
 	uint32_t	free_kb;
 } z_fs_vfs_t;
+
+/*
+ * -- Watching --
+ *
+ * A client asks to hear about changes under a folder (or to one file):
+ * a file there opened for writing, closed after it, deleted, or renamed
+ * into or out of it. Only that client hears -- there is no broadcast,
+ * so nobody else pays for it -- and only about other processes' changes,
+ * never its own.
+ *
+ * Edge-triggered: one Z_FS_CHANGED is sent, and then none until the
+ * watcher has sent WATCHREAD, which returns what changed since the last
+ * one and arms the watch again. So a busy folder cannot fill the
+ * watcher's mailbox, and fs, which never waits for anyone, does not
+ * have to: if the mailbox is full the notice goes later.
+ *
+ * WATCHREAD's result is how many paths follow; its data a z_fs_watch_t
+ * and then the paths, each NUL-terminated, as the processes that
+ * changed them named them. At most Z_FS_WATCH_PATHS are kept between
+ * reads; past that Z_FS_WATCH_MORE says some were dropped, and the
+ * watcher looks at the whole folder itself.
+ *
+ * `writers` is how many files under the watch are open for writing
+ * right now: a watcher that copies what changed waits for 0 (the last
+ * close is a change too, and is notified).
+ *
+ * Up to Z_FS_WATCHES watches at a time, for everyone together; a fifth
+ * is -Z_EMFILE. A watch ends with UNWATCH or with its process.
+ * Docs: docs/fs_driver.md, "Watching".
+ */
+#define Z_FS_WATCHES		4
+#define Z_FS_WATCH_PATHS	4
+
+typedef struct {
+	uint32_t	writers;	// files under the watch open for writing now
+	uint32_t	flags;		// Z_FS_WATCH_*
+} z_fs_watch_t;
+
+#define Z_FS_WATCH_MORE		0x0001	// more changed than came back
 
 #endif

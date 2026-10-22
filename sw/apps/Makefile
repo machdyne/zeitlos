@@ -45,6 +45,7 @@ APPS = casino poker roulette blackjack slots craps \
 	i2c \
 	zlink \
 	update \
+	backup \
 	portdemo \
 	ipcbench \
 	fs \

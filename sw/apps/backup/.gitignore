@@ -1,0 +1,10 @@
+# build products; see Makefile and tests/Makefile
+backup.elf
+tests/test_bk
+tests/test_fat
+tests/test_cli
+tests/test_job
+tests/test_watch
+tests/render_win
+tests/render/
+tests/drive/

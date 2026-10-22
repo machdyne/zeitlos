@@ -18,6 +18,7 @@
 # icon of its own. Each is in wm's memory only if its dock shows it.
 
 ask
+backup
 basic       "BASIC"
 blackjack                       hidden
 blocks      "Blocks"

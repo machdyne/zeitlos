@@ -142,6 +142,25 @@ static fs_dir_t dirs[FS_MAX_DIRS];
 static fs_client_t clients[FS_MAX_CLIENTS];
 static uint32_t client_clock;
 
+// Watches (zfsproto.h, "Watching"): each on the heap, made by the
+// first WATCH to need it and kept for the next (never freed: free()
+// would bring 1KB of the C library into fs), so a machine where nobody
+// watches pays 16 bytes and the code. pid 0: not in use (fs is never
+// its own client). file_watch[]: which watches a write handle counts in.
+typedef struct {
+	uint32_t	pid, serial;
+	bool		armed;			// no notice sent since the last WATCHREAD
+	bool		pending;		// something to tell
+	bool		more;			// paths dropped
+	uint8_t		writers;
+	uint8_t		npaths;
+	char		dir[FS_PATH];	// resolved
+	char		paths[Z_FS_WATCH_PATHS][Z_FS_PATH_MAX];
+} fs_watch_t;
+static fs_watch_t *watches[Z_FS_WATCHES];
+static uint8_t file_watch[FS_MAX_FILES];
+static uint8_t watch_note(const char *real, const char *asked, uint32_t pid);
+
 static fs_bulk_t *bulk;
 static uint32_t bulk_owner;		// pid + 1; 0 is free
 static uint32_t bulk_when;
@@ -158,9 +177,10 @@ static uint32_t usb_gen, usb_failed_gen;
 static uint32_t usb_sectors;
 
 static FILINFO fno;
-static FIL probe;				// rename's busy check
 static bool grants;				// the grant window works here
-static BYTE work[FF_MAX_SS];	// f_mkfs()
+// f_mkfs()'s work area and rename's busy probe are on the stack (64K)
+// rather than here: 1KB of image kept for the watches (docs/fs_driver.md,
+// "Watching").
 
 static uint32_t now_ticks(void) { return z_uptime_ticks(); }
 
@@ -539,6 +559,7 @@ static void layout_prepare(void) {
 }
 
 static bool ram_format(void) {
+	BYTE work[FF_MAX_SS];
 	MKFS_PARM opt;
 	z_blk_args_t a;
 	ram_ok = false;
@@ -758,6 +779,12 @@ static int32_t op_open(const z_fsreq_t *rq, uint32_t pid, fs_client_t *c) {
 	f->used = true;
 	f->owner = pid;
 	f->owner_serial = z_proc_serial(pid);
+	file_watch[fd] = 0;
+	if (mode & FA_WRITE) {
+		file_watch[fd] = watch_note(real, rq->path, pid);
+		for (uint32_t i = 0; i < Z_FS_WATCHES; i++)
+			if ((file_watch[fd] >> i) & 1u) watches[i]->writers++;
+	}
 	memset(&fi, 0, sizeof(fi));
 	fi.size = (uint32_t)f_size(&f->f);
 	fi.type = Z_FS_TYPE_FILE;
@@ -969,6 +996,7 @@ static int32_t op_stat(const z_fsreq_t *rq, fs_client_t *c) {
 // name and its 8.3 alias are the same file. A directory cannot be
 // opened as a file, so it is never busy.
 static bool write_open(const char *real) {
+	FIL probe;
 	bool busy = false;
 	if (f_open(&probe, real, FA_READ) != FR_OK) return false;
 	for (int i = 0; i < FS_MAX_FILES; i++) {
@@ -982,7 +1010,7 @@ static bool write_open(const char *real) {
 	return busy;
 }
 
-static int32_t op_rename(const z_fsreq_t *rq) {
+static int32_t op_rename(const z_fsreq_t *rq, uint32_t pid) {
 	char rf[FS_PATH], rt[FS_PATH];
 	const char *from = resolve(rq->path, rf, sizeof rf);
 	const char *to = resolve(rq->path2, rt, sizeof rt);
@@ -1000,6 +1028,7 @@ static int32_t op_rename(const z_fsreq_t *rq) {
 	if (write_open(from)) return -Z_EBUSY;
 	r = f_rename(from, fs_vol_strip(to));
 	if (r == FR_NO_PATH || r == FR_INVALID_NAME) return -Z_EINVAL;
+	if (r == FR_OK) { watch_note(from, rq->path, pid); watch_note(to, rq->path2, pid); }
 	return fs_err(r);
 }
 
@@ -1228,6 +1257,7 @@ static int32_t op_statvfs(const z_fsreq_t *rq, fs_client_t *c) {
 }
 
 static int32_t op_mkfs(const z_fsreq_t *rq) {
+	BYTE work[FF_MAX_SS];
 	int v = vol_of_path(rq->path);
 	if (v < 0) return -Z_EINVAL;
 	if (vol_busy(v)) return -Z_EBUSY;
@@ -1290,6 +1320,101 @@ static int32_t op_syncall(void) {
 	return n;
 }
 
+// -- watches -----------------------------------------------------------
+
+// Tell the watchers that have something to hear and may hear it. A
+// full mailbox: later (the next change, or the idle loop).
+static void watch_kick(void) {
+	for (uint32_t i = 0; i < Z_FS_WATCHES; i++) {
+		fs_watch_t *w = watches[i];
+		if (w && w->pid && w->armed && w->pending &&
+			z_msg_new_send(w->pid, Z_FS_CHANGED, i, z_obj_none()) == Z_OK)
+			w->armed = false;
+	}
+}
+
+// `real` (resolved; `asked`, as the client wrote it) changed, by `pid`.
+// The watches it is under note it; with fd >= 0, a handle opened for
+// writing, which they count until it closes. Returns that handle's mask.
+static uint8_t watch_note(const char *real, const char *asked, uint32_t pid) {
+	uint8_t mask = 0;
+	for (uint32_t i = 0; i < Z_FS_WATCHES; i++) {
+		fs_watch_t *w = watches[i];
+		if (!w || !w->pid || w->pid == pid) continue;
+		uint32_t n = (uint32_t)strlen(w->dir);
+		if ((n && !prefix_eq(real, w->dir, n)) || (real[n] && real[n] != '/')) continue;
+		mask |= (uint8_t)(1u << i);
+		w->pending = true;
+		uint32_t k;
+		for (k = 0; k < w->npaths && strcmp(w->paths[k], asked); k++) ;
+		if (k < w->npaths) continue;
+		if (w->npaths == Z_FS_WATCH_PATHS) { w->more = true; continue; }
+		strcpy(w->paths[w->npaths++], asked);
+	}
+	return mask;
+}
+
+// A write handle under watches closed (or its process went).
+static void watch_closed(int fd) {
+	for (uint32_t i = 0; i < Z_FS_WATCHES; i++)
+		if ((file_watch[fd] >> i) & 1u && watches[i]) {
+			if (watches[i]->writers) watches[i]->writers--;
+			watches[i]->pending = true;
+		}
+	file_watch[fd] = 0;
+}
+
+static int32_t op_watch(const z_fsreq_t *rq, uint32_t pid) {
+	char rb[FS_PATH];
+	const char *real = resolve(rq->path, rb, sizeof rb);
+	uint32_t i;
+	if (!real) return -Z_ENAMETOOLONG;
+	if (!real[0] || nfs_path(rq->path)) return -Z_EINVAL;
+	for (i = 0; i < Z_FS_WATCHES && watches[i] && watches[i]->pid; i++) ;
+	if (i == Z_FS_WATCHES) return -Z_EMFILE;
+	fs_watch_t *w = watches[i] ? watches[i] : malloc(sizeof *w);
+	if (!w) return -Z_ENOSPC;
+	memset(w, 0, sizeof *w);
+	w->pid = pid;
+	w->serial = z_proc_serial(pid);
+	w->armed = true;
+	strcpy(w->dir, real);
+	// without its trailing '/': "/" is "", "1:/" is "1:" (watch_note)
+	uint32_t n = (uint32_t)strlen(w->dir);
+	while (n && w->dir[n - 1] == '/') w->dir[--n] = 0;
+	watches[i] = w;
+	return (int32_t)i;
+}
+
+static fs_watch_t *watch_of(int32_t wd, uint32_t pid) {
+	if (wd < 0 || wd >= Z_FS_WATCHES || !watches[wd] || !pid || watches[wd]->pid != pid)
+		return NULL;
+	return watches[wd];
+}
+
+static void watch_end(uint32_t i) {
+	for (int f = 0; f < FS_MAX_FILES; f++) file_watch[f] &= (uint8_t)~(1u << i);
+	watches[i]->pid = 0;
+}
+
+static int32_t op_watchread(const z_fsreq_t *rq, uint32_t pid, fs_client_t *c) {
+	fs_watch_t *w = watch_of(rq->fd, pid);
+	if (!w) return -Z_EBADF;
+	z_fs_watch_t h = { w->writers, w->more ? Z_FS_WATCH_MORE : 0u };
+	uint32_t at = sizeof h, n = w->npaths;
+	memcpy(c->data, &h, sizeof h);
+	for (uint32_t k = 0; k < n; k++) {
+		uint32_t l = (uint32_t)strlen(w->paths[k]) + 1;
+		memcpy(c->data + at, w->paths[k], l);
+		at += l;
+	}
+	c->rep->len = at;
+	w->npaths = 0;
+	w->more = w->pending = false;
+	w->armed = true;
+	return (int32_t)n;
+}
+
 // -- dispatch ----------------------------------------------------------
 
 static int32_t serve(const z_fsreq_t *rq, uint32_t pid, uint8_t *buf,
@@ -1304,6 +1429,7 @@ static int32_t serve(const z_fsreq_t *rq, uint32_t pid, uint8_t *buf,
 	case Z_FSOP_CLOSE: {
 		if (!(f = file_of(rq->fd, pid))) return -Z_EBADF;
 		f->used = false;
+		if (file_watch[rq->fd]) watch_closed(rq->fd);
 		return f->zar ? 0 : fs_err(f_close(&f->f));
 	}
 	case Z_FSOP_READ:	return op_read(rq, pid, buf, buflen, c);
@@ -1324,6 +1450,7 @@ static int32_t serve(const z_fsreq_t *rq, uint32_t pid, uint8_t *buf,
 		// (sw/common/zposix.c).
 		if (fr == FR_DENIED && f_stat(real, &fno) == FR_OK && (fno.fattrib & AM_DIR))
 			return -Z_ENOTEMPTY;
+		if (fr == FR_OK) watch_note(real, rq->path, pid);
 		return fs_err(fr);
 	}
 	case Z_FSOP_MKDIR:
@@ -1331,7 +1458,7 @@ static int32_t serve(const z_fsreq_t *rq, uint32_t pid, uint8_t *buf,
 		if (!(real = resolve(rq->path, rb, sizeof rb))) return -Z_ENAMETOOLONG;
 		need(real);
 		return fs_err(f_mkdir(real));
-	case Z_FSOP_RENAME:		return op_rename(rq);
+	case Z_FSOP_RENAME:		return op_rename(rq, pid);
 	case Z_FSOP_OPENDIR:	return op_opendir(rq, pid, c);
 	case Z_FSOP_READDIR:	return op_readdir(rq, pid, c);
 	case Z_FSOP_CLOSEDIR:
@@ -1358,6 +1485,12 @@ static int32_t serve(const z_fsreq_t *rq, uint32_t pid, uint8_t *buf,
 	case Z_FSOP_MOUNT:		return op_mount(rq);
 	case Z_FSOP_UMOUNT:		return op_umount(rq);
 	case Z_FSOP_SYNCALL:	return op_syncall();
+	case Z_FSOP_WATCH:		return op_watch(rq, pid);
+	case Z_FSOP_WATCHREAD:	return op_watchread(rq, pid, c);
+	case Z_FSOP_UNWATCH:
+		if (!watch_of(rq->fd, pid)) return -Z_EBADF;
+		watch_end((uint32_t)rq->fd);
+		return 0;
 	default:				return -Z_EINVAL;
 	}
 }
@@ -1386,7 +1519,10 @@ static void sweep_dead(void) {
 		if (files[i].used && owner_gone(files[i].owner, files[i].owner_serial)) {
 			if (!files[i].zar) f_close(&files[i].f);
 			files[i].used = false;
+			if (file_watch[i]) watch_closed(i);
 		}
+	for (uint32_t i = 0; i < Z_FS_WATCHES; i++)
+		if (watches[i] && watches[i]->pid && owner_gone(watches[i]->pid, watches[i]->serial)) watch_end(i);
 	for (int i = 0; i < FS_MAX_DIRS; i++)
 		if (dirs[i].used && owner_gone(dirs[i].owner, dirs[i].owner_serial))
 			dir_close(&dirs[i]);
@@ -1442,6 +1578,7 @@ static void fs_serve_msg(z_msg_t *m) {
 	reply.type = Z_BLOB;
 	reply.val.ptr = &c->hdr;
 	z_msg_new_send(m->from, Z_FS_REPLY, m->tag, reply);
+	watch_kick();		// after the reply: a watcher's own request is answered first
 }
 
 // The RAM disk at start: the filesystem already on it if there is one,
@@ -1508,6 +1645,7 @@ int main(void) {
 		if (z_msg_recv(&m, FS_IDLE_TICKS) != Z_OK) {
 			usb_poll(false);
 			if ((++idle & 3u) == 0) sweep_dead();
+			watch_kick();
 			continue;
 		}
 		// `usb` says a drive came or went (zusbproto.h).
@@ -1530,6 +1668,7 @@ int main(void) {
 void fs_test_start(bool with_grants) { grants = with_grants; fs_start(); }
 void fs_test_serve(z_msg_t *m) { fs_serve_msg(m); }
 void fs_test_sweep(void) { sweep_dead(); }
+void fs_test_kick(void) { watch_kick(); }
 void fs_test_usb_poll(void) { usb_poll(false); }
 void fs_test_nfs(bool up) { nfs_ok = up; }
 #endif

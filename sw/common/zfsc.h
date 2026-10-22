@@ -76,6 +76,15 @@ int32_t zfs_mount(const char *path);
 int32_t zfs_umount(const char *path);
 int32_t zfs_syncall(void);
 
+// Watching a folder or a file for other processes' changes
+// (zfsproto.h, "Watching"; docs/fs_driver.md). zfs_watch() returns the
+// watch's number; a Z_FS_CHANGED message with it as tag then says
+// something changed, and zfs_watch_read() returns what (that many
+// paths, NUL-separated, into `paths`) and arms the watch again.
+int32_t zfs_watch(const char *path);
+int32_t zfs_watch_read(int32_t wd, z_fs_watch_t *h, char *paths, uint32_t cap);
+int32_t zfs_unwatch(int32_t wd);
+
 // True for a path `fs` serves: "/fs" and anything under it.
 bool zfs_path_is_ours(const char *path);
 

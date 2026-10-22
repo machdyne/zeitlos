@@ -205,7 +205,7 @@ file has one, and a card has the sets someone chose -- all of them on
 
 | set | programs | and |
 |---|---|---|
-| base | posix, vi, zetta, settings, info, calc, clock, cal, keyboard, jfont, read, ask, update | fonts, `/docs`, the ARK scroll, `zeitlos.cfg`, `net.cfg`, the zdocs pack |
+| base | posix, vi, zetta, settings, info, calc, clock, cal, keyboard, jfont, read, ask, update, backup | fonts, `/docs`, the ARK scroll, `zeitlos.cfg`, `net.cfg`, the zdocs pack |
 | productivity | sheet, slide, print, convert, draw, view, automate | slide's tour and examples, `/media/images`, the demo scripts |
 | audio | play, midi, mmod, track, tts, audiotest | the speech pack, the `.mod` files, `/media/audio` |
 | net | web, irc, netserve, zerdesk, mesh, bbs, fed | `roots.der`, zerdesk's page, the BBS's and fed's data |

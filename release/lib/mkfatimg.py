@@ -120,7 +120,7 @@ APP_SET = {
     "posix": "base", "vi": "base", "zetta": "base", "settings": "base",
     "info": "base", "calc": "base", "clock": "base", "cal": "base",
     "keyboard": "base", "jfont": "base", "read": "base", "ask": "base",
-    "update": "base",
+    "update": "base", "backup": "base",
     "sheet": "productivity", "slide": "productivity", "print": "productivity",
     "convert": "productivity", "draw": "productivity", "view": "productivity",
     "automate": "productivity",
@@ -298,6 +298,8 @@ SUPPLEMENTAL = [
     # Brings the card up to date with a newer release (docs/update.md).
     # On the card, so it updates itself along with everything else.
     (zcard("Z_DIR_APPS", "update"), "sw/apps/update/update.bin"),
+    # Dated backups of the card's files on a second drive (docs/backup.md).
+    (zcard("Z_DIR_APPS", "backup"), "sw/apps/backup/backup.bin"),
 ]
 
 # The BBS and its zfed node (docs/bbs.md, docs/fed.md). Their data is in

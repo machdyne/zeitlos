@@ -220,12 +220,48 @@ their terminal. Ctrl+C stops a running command cooperatively, through
 the builtin's own cleanup, or takes a waiting one out of the queue.
 Details in [posix.md](posix.md), "How a command runs".
 
-**A coroutine that calls `malloc()` must not have its stack from
-`malloc()`** (or anywhere in the heap's way): newlib's `_sbrk()` refuses
-to grow the heap past the current stack pointer, so with the stack in
-the heap every `malloc` inside the coroutine fails. posix keeps its
-command stack in `main()`'s frame for that reason. A coroutine that
-allocates nothing (zimgjob's decoders) can have its stack anywhere.
+**A coroutine that calls `malloc()` must have its stack above the
+heap**: newlib's `_sbrk()` refuses to grow the heap past the current
+stack pointer, so with the stack in the heap every `malloc` inside the
+coroutine fails -- and the same with a static buffer, since `.bss` lies
+below the heap. posix and backup keep the coroutine's stack in the
+frame of the function running the main loop for that reason. A
+coroutine that allocates nothing (zimgjob's decoders) can have its
+stack anywhere.
+
+## backup
+
+The window runs the engine ([backup.md](backup.md#the-window)) in a
+coroutine (`sw/apps/backup/bkjob.c`) on a 32 KB stack in `bkwin_run()`'s
+frame. It hands back after **every** request to fs -- each wrapped
+`bk_io_t` call, and each entry of a listing, so a listing's next page
+is a slice of its own -- and in its loops that make none (reading an
+index, comparing the card with it: `bk_io_t.yield`). Writes go one
+4 KB request at a time (zfsc.c's write-behind is off,
+`-DZFSC_WBUF=0`: with it, two writes went as one 8 KB request and one
+slice made two). Each slice is then at most one request: ~22 ms writing
+4 KB to a stick.
+
+Stopping cannot be `zco_abandon()`: the engine holds open files, its
+lock on the drive and memory of its own. Esc sets the engine's stop
+flag and the main loop resumes it until it returns, which it does at
+its next check -- after the next 4 KB, a listing entry, or one of the
+steps before it starts. `tests/test_job.c` runs it on the real fs
+driver and measures both: no slice made more than one request, and a
+backup cancelled at each of 431 points let go within 20 slices (the
+most is at the very start, before the first look at the flag).
+
+Still a stall: the first free-space count on a stick whose FSINFO is
+not valid (fs counts the whole FAT, answering nobody), and a dialog,
+during which the job waits.
+
+Watch adds nothing that waits: fs's notice is a message the loop reads
+with the others, the read of what changed is one small request when a
+notice came (or every 30 s), and the watch backup that follows is a job
+like any other, a slice at a time. On fs's side a change costs a loop
+over four watch slots and, for a watched one, a `z_msg_send()` that
+never blocks (zfsproto.h, "Watching"), so a save in `text` is not
+slowed by anyone watching.
 
 ## Still to do
 

@@ -336,7 +336,7 @@ int main(int argc, char **argv) {
 		if (dock_apps[i].view < 0) apps++;
 		if (!icon_of(i)) all_icons = 0;
 	}
-	expect(apps == 33, "33 apps, as before");
+	expect(apps == 34, "34 apps: the 33 before groups, and backup");
 	expect(all_icons, "every one, and every group, with its icon");
 	expect(bits_of(dock_next_icon, dock_next_len) && bits_of(dock_back_icon, dock_back_len),
 		"NEXT and BACK");
@@ -446,7 +446,7 @@ int main(int argc, char **argv) {
 	set_cfg(cfg_shipped);
 	dock_build();
 	expect(find_app("sound") < 0 && dock_nmain == 16, "Sound left with nothing: gone from the row");
-	expect(dock_views[dock_apps[find_app("tools")].view].count == 5, "Tools without mmod");
+	expect(dock_views[dock_apps[find_app("tools")].view].count == 6, "Tools without mmod");
 	expect(find_app("track") < 0 && find_app("mmod") < 0, "the apps gone");
 	hardware(true, true);
 
@@ -472,10 +472,10 @@ int main(int argc, char **argv) {
 	expect(find_app("ask") == 3, "then @rest, in name order");
 	expect(find_app("poker") < 0 && find_app("@next") < 0 && find_app("@games") < 0,
 		"@rest leaves out the hidden ones and the dock's own");
-	expect(dock_app_count == 3 + 33 - 2 && dock_nviews == 0, "@rest: every other app with an icon");
+	expect(dock_app_count == 3 + 34 - 2 && dock_nviews == 0, "@rest: every other app with an icon");
 	set_cfg(flat);
 	dock_build();
-	expect(dock_app_count == 33 && dock_paged && dock_pages == 3, "the old flat dock: three pages");
+	expect(dock_app_count == 33 && dock_paged && dock_pages == 3, "the old flat dock (it names its 33): three pages");
 	expect(dock_frame_len == WM_SCREEN_W - 2 * DOCK_MARGIN, "full width while paging");
 
 	// -- 9. reload: the dock is rebuilt and resized --
@@ -534,13 +534,13 @@ int main(int argc, char **argv) {
 	dock_build();
 	expect(strcmp(dock_apps[0].name, "term") == 0 && strcmp(dock_apps[1].name, "files") == 0 &&
 		strcmp(dock_apps[2].name, "text") == 0, "the core apps first");
-	expect(dock_app_count == 33, "then every app with an icon");
+	expect(dock_app_count == 34, "then every app with an icon");
 
 	// -- 13. a wm.cfg with no row wide, and one with problems --
 	printf("13. no row wide; problems\n");
 	set_cfg("row tall term\n");
 	dock_build();
-	expect(dock_app_count == 33, "no row wide: every app with an icon");
+	expect(dock_app_count == 34, "no row wide: every app with an icon");
 	set_cfg("side left\nfrobnicate\nrow wide term @nope\n");
 	dock_build();
 	expect(dock_app_count == 1 && dock_cfg_errors == 1, "the good lines apply");

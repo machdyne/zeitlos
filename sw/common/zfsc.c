@@ -437,6 +437,45 @@ int32_t zfs_rename(const char *from, const char *to) {
 	return path_op(Z_FSOP_RENAME, from, to);
 }
 
+// -- watching (zfsproto.h, "Watching") --
+// Apps only: the kernel watches nothing.
+#ifndef ZFSC_KERNEL
+
+int32_t zfs_watch(const char *path) { return path_op(Z_FSOP_WATCH, path, NULL); }
+
+int32_t zfs_watch_read(int32_t wd, z_fs_watch_t *h, char *paths, uint32_t cap) {
+	z_fsreq_t rq;
+	uint8_t got_buf[sizeof(z_fs_watch_t) + Z_FS_WATCH_PATHS * Z_FS_PATH_MAX] __attribute__((aligned(4)));
+	uint32_t got = 0;
+	req_init(&rq, Z_FSOP_WATCHREAD);
+	rq.fd = wd;
+	int32_t r = call(&rq, NULL, 0, got_buf, sizeof got_buf, &got);
+	if (r < 0) return r;
+	if (got < sizeof(z_fs_watch_t)) return -Z_EIO;
+	if (h) memcpy(h, got_buf, sizeof *h);
+	// the paths, as many as fit whole; the rest count as dropped
+	uint32_t at = sizeof(z_fs_watch_t), put = 0;
+	int32_t n = 0;
+	for (int32_t k = 0; k < r && at < got; k++) {
+		uint32_t l = (uint32_t)strnlen((const char *)got_buf + at, got - at) + 1;
+		if (paths && put + l <= cap) {
+			memcpy(paths + put, got_buf + at, l);
+			put += l;
+			n++;
+		} else if (h) h->flags |= Z_FS_WATCH_MORE;
+		at += l;
+	}
+	return n;
+}
+
+int32_t zfs_unwatch(int32_t wd) {
+	z_fsreq_t rq;
+	req_init(&rq, Z_FSOP_UNWATCH);
+	rq.fd = wd;
+	return call(&rq, NULL, 0, NULL, 0, NULL);
+}
+#endif
+
 int32_t zfs_fsync(int32_t fd) {
 	z_fsreq_t rq;
 	int32_t e;

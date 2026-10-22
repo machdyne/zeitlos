@@ -143,7 +143,7 @@ fails to start, the kernel still starts the core apps from flash, and
 `sw/common/zfsproto.h`. POSIX-shaped: descriptors, `open` flags,
 `lseek` with whence, `stat`, `opendir`/`readdir`, plus volume
 operations for the kernel shell (`MKFS`, `MOUNT`, `UMOUNT`,
-`SYNCALL`).
+`SYNCALL`), and watches ("Watching", below).
 
 - **Writes are never copied by the protocol.** `fs` reads the
   client's buffer where it is: the kernel resolved the blob to
@@ -179,6 +179,46 @@ operations for the kernel shell (`MKFS`, `MOUNT`, `UMOUNT`,
   Other mail stays queued in order. The timeout is 15 s, and 120 s for
   a format or the first free-space count on a large card.
 
+## Watching
+
+A program can ask to hear when other programs change files in a
+folder, or one file: `zfs_watch(path)` (`Z_FSOP_WATCH`) returns a watch
+number. backup's watch is the first user ([backup.md](backup.md#watch)).
+
+- **Only the watcher hears**, by a `Z_FS_CHANGED` message with the
+  watch's number as its tag and no payload. There is no broadcast: a
+  program that did not ask receives nothing and pays nothing.
+- **Changes are other programs'**: a file under the watch opened for
+  writing (`OPEN` with a write mode), closed after writing (`CLOSE`, or
+  the sweep closing a dead writer's file), deleted (`UNLINK`), or
+  renamed into or out of it (`RENAME`). Reads, `STAT`s, and the
+  watcher's own writes are not changes. Case does not matter, as on
+  FAT; the paths come back as the program that changed them wrote them.
+- **One notice, then quiet until it is read.** After sending
+  `Z_FS_CHANGED` fs sends no more for that watch until the watcher asks
+  `zfs_watch_read()` (`Z_FSOP_WATCHREAD`). That returns the paths
+  changed since the last read -- up to `Z_FS_WATCH_PATHS` (4), each
+  once, then `Z_FS_WATCH_MORE` -- and how many files under the watch
+  are open for writing now (`writers`), and arms the watch again. So
+  however busy the folder, the watcher's mailbox holds at most one
+  notice per watch, and fs never waits: `z_msg_send()` does not block,
+  and if the mailbox is full the notice is sent later, after the next
+  request or at the next idle second.
+- **Four watches** (`Z_FS_WATCHES`) for everyone together; a fifth is
+  `-Z_EMFILE`. A watch ends with `zfs_unwatch()` or its program (the
+  sweep). A file already open for writing when a watch begins is not
+  counted in `writers`.
+- `/nfs` cannot be watched (`-Z_EINVAL`); `/tmp` is `/ram`, so a watch
+  of either sees both. The kernel's client has no watch calls.
+
+**Cost.** Each watch lives on fs's heap (1.3 KB: its folder and four
+paths), made by the first `WATCH` to need it and reused, never freed
+(`free()` would bring 1 KB of the C library into fs). The code is about
+1.5 KB of fs's image; to stay inside fs's RAM budget (75K), f_mkfs()'s
+work area and rename's probe moved from `.bss` to the stack (1 KB),
+which fs's 64 KB holds. With nobody watching, a change costs a loop
+over four empty slots.
+
 ## Memory and flash
 
 | | flash | RAM |
@@ -188,7 +228,10 @@ operations for the kernel shell (`MKFS`, `MOUNT`, `UMOUNT`,
 
 - **fs's `.bss`:** 6 reply slots (12.5KB), 16 file descriptors, each
   with FatFs's 512-byte sector buffer and a 128-byte cluster map
-  (11KB), the three volumes, and the rename probe.
+  (11KB), and the three volumes. Since backup's Phase 3 the rename probe
+  and f_mkfs()'s work area are on the stack, and watches on the heap
+  ("Watching"): with xPack GCC 15.2, fs is 76,648 bytes in RAM (152 under
+  its budget) and 34,593 bytes stored.
 - **No printf in fs.** The few lines `fs` prints go through `say()`.
   The printf family, with the 64-bit division it brings, was 12KB of
   `fs`, in an archive with no room for it.
@@ -245,13 +288,22 @@ over a small archive, the card's driver over another RAM disk, and the
   reading by copy at once; how many requests a listing and a
   whole-file read take.
 - **Hygiene:** that a reply is never sent with the window open.
+- **Watching** (`test_watch()`): a write noticed at its open and at its
+  close, one notice until read, `writers`; reads, the watcher's own
+  writes, a neighbour with the same start of name and another volume
+  not noticed; case; rename in and out, unlink, a rename-save, a failed
+  unlink; the same path once, more than four, a buffer too small; a
+  full mailbox (sent at the idle wake, once); someone else's watch
+  number; a watch of a file, of `/tmp`, of `/`, and the fifth refused;
+  a dying writer (its close by the sweep notices) and a dying watcher
+  (its watch ends); `/nfs` refused.
 
 It also covers, since round 10: `zposix.c` over it
 ([posix_io.md](posix_io.md)), late replies, the reply slots and
 `-Z_EAGAIN`, and a restart keeping `/ram`.
 
-It builds with AddressSanitizer and UBSan's alignment check. 9,402
-checks; 9,445 in the kernel-client build. `test_fsvol` is the kernel's
+It builds with AddressSanitizer and UBSan's alignment check. 10,036
+checks; 9,445 in the kernel-client build (no watching there). `test_fsvol` is the kernel's
 old `test_fsrename.c`, moved with the code it tests: 59 checks.
 
 ## Owners that are gone

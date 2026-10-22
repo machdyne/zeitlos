@@ -38,6 +38,7 @@ void fs_test_serve(z_msg_t *m);
 void fs_test_sweep(void);
 void fs_test_usb_poll(void);
 void fs_test_nfs(bool up);
+void fs_test_kick(void);
 #define NET_PID		9
 static bool in_fs;				// fs is serving: what it sends is fs's
 static uint32_t nfs_events, nfs_event_val;
@@ -64,6 +65,8 @@ static z_msg_t held;
 static uint32_t takes;
 
 static int fails, checks;
+static bool watch_mailbox_full;
+static uint32_t changed_n, changed_to, changed_tag;
 #define CHECK(c) do { checks++; if (!(c)) { fails++; \
 	printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); } } while (0)
 
@@ -99,6 +102,14 @@ z_rv z_msg_new_send(uint32_t to, uint32_t subject, uint32_t tag, z_obj_t obj) {
 		in_fs = true;
 		fs_test_serve(&m);
 		in_fs = false;
+		return Z_OK;
+	}
+	if (subject == Z_FS_CHANGED) {	// fs to a watcher (test_watch())
+		CHECK(obj.type == Z_NONE);
+		if (watch_mailbox_full) return Z_FAIL;
+		changed_n++;
+		changed_to = to;
+		changed_tag = tag;
 		return Z_OK;
 	}
 	CHECK(to == client && subject == Z_FS_REPLY);
@@ -195,6 +206,7 @@ void *z_blob_data(const z_obj_t *o) {
 	return (o && o->type == Z_BLOB && o->val.ptr) ? ((z_blob_t *)o->val.ptr)->data : NULL;
 }
 z_obj_t z_obj_uint32(uint32_t u) { z_obj_t o; memset(&o, 0, sizeof o); o.type = Z_UINT32; o.val.uint32 = u; return o; }
+z_obj_t z_obj_none(void) { z_obj_t o; memset(&o, 0, sizeof o); o.type = Z_NONE; return o; }
 
 #include "nfs_fake.h"
 
@@ -251,7 +263,12 @@ z_rv z_blk(z_blk_args_t *a) {
 
 // -- the `usb` driver's drive (sw/common/zusbc.h), plugged in by tests --
 
+// Overridable: sw/apps/backup/tests/test_fat.c includes this file for its
+// kernel stubs, with a drive large enough for FAT32 and a hook that can
+// cut the power at a sector write.
+#ifndef USB_SECTORS
 #define USB_SECTORS 2048
+#endif
 static uint8_t *usbd;
 static bool usb_present, usb_ready;
 static uint32_t usb_gen, usb_starts, usb_reads;
@@ -278,6 +295,9 @@ int32_t zusb_msc_read(uint32_t lba, uint32_t count, void *buf) {
 }
 int32_t zusb_msc_write(uint32_t lba, uint32_t count, const void *buf) {
 	if (!usb_present || !usb_ready || lba + count > USB_SECTORS) return -Z_EIO;
+#ifdef USB_WRITE_HOOK
+	if (!USB_WRITE_HOOK(lba, count, buf)) return -Z_EIO;
+#endif
 	memcpy(usbd + lba * 512, buf, count * 512);
 	return 0;
 }
@@ -1226,6 +1246,198 @@ static void test_nfs(void) {
 	CHECK(!nfs_test_up() && nfs_events == 4);
 }
 
+// -- watching (zfsproto.h, "Watching") ---------------------------------
+// (apps' client only: the kernel's has no watch calls)
+#ifndef ZFSC_KERNEL
+
+static void wput(const char *path, const char *text) {
+	int32_t fd = zfs_open(path, Z_O_WRONLY | Z_O_CREAT | Z_O_TRUNC);
+	CHECK(fd >= 0);
+	CHECK(zfs_write(fd, text, (uint32_t)strlen(text)) == (int32_t)strlen(text));
+	CHECK(zfs_close(fd) == 0);
+}
+
+// What watch `wd` (client `who`) has heard: the count, paths in `out`.
+static int32_t heard(uint32_t who, int32_t wd, z_fs_watch_t *h, char *out, uint32_t cap) {
+	uint32_t was = client;
+	client = who;
+	int32_t n = zfs_watch_read(wd, h, out, cap);
+	client = was;
+	return n;
+}
+
+static bool has_path(const char *paths, int32_t n, const char *p) {
+	for (int32_t i = 0; i < n; i++, paths += strlen(paths) + 1)
+		if (!strcmp(paths, p)) return true;
+	return false;
+}
+
+static void test_watch(void) {
+	z_fs_watch_t h;
+	char paths[Z_FS_WATCH_PATHS * Z_FS_PATH_MAX];
+	const uint32_t W = 11, OTHER = 5;
+	client = OTHER;
+	zfs_mkdir("/home");
+	CHECK(zfs_mkdir("/home/w") == 0);
+	client = W;
+	int32_t wd = zfs_watch("/home/w/");
+	CHECK(wd >= 0 && wd < Z_FS_WATCHES);
+	CHECK(heard(W, wd, &h, paths, sizeof paths) == 0 && h.writers == 0 && h.flags == 0);
+
+	// a file written there: a notice at the open, then nothing until read
+	changed_n = 0;
+	client = OTHER;
+	int32_t fd = zfs_open("/home/w/a.txt", Z_O_WRONLY | Z_O_CREAT | Z_O_TRUNC);
+	CHECK(fd >= 0);
+	CHECK(changed_n == 1 && changed_to == W && changed_tag == (uint32_t)wd);
+	CHECK(zfs_write(fd, "abc", 3) == 3);
+	CHECK(changed_n == 1);
+	CHECK(heard(W, wd, &h, paths, sizeof paths) == 1 && !strcmp(paths, "/home/w/a.txt"));
+	CHECK(h.writers == 1);				// still being written
+	client = OTHER;
+	CHECK(zfs_close(fd) == 0);
+	CHECK(changed_n == 2);				// the close is a change
+	CHECK(heard(W, wd, &h, paths, sizeof paths) == 0 && h.writers == 0);
+
+	// reading it, its own changes, and elsewhere: nothing
+	changed_n = 0;
+	client = OTHER;
+	fd = zfs_open("/home/w/a.txt", Z_O_RDONLY);
+	CHECK(fd >= 0 && zfs_close(fd) == 0);
+	wput("/home/x.txt", "x");
+	wput("/home/wx.txt", "x");			// a name that starts the same
+	wput("/ram/w.txt", "x");
+	client = W;
+	wput("/home/w/mine.txt", "x");		// the watcher's own
+	CHECK(changed_n == 0);
+
+	// case does not matter, as on FAT; paths come back as written
+	client = OTHER;
+	wput("/HOME/W/Big.TXT", "x");
+	CHECK(changed_n == 1);
+	CHECK(heard(W, wd, &h, paths, sizeof paths) == 1 && !strcmp(paths, "/HOME/W/Big.TXT"));
+
+	// rename in and out, and unlink
+	changed_n = 0;
+	client = OTHER;
+	CHECK(zfs_rename("/home/x.txt", "/home/w/x.txt") == 0);
+	CHECK(changed_n == 1);
+	CHECK(heard(W, wd, &h, paths, sizeof paths) == 1 && !strcmp(paths, "/home/w/x.txt"));
+	client = OTHER;
+	CHECK(zfs_rename("/home/w/x.txt", "/home/x2.txt") == 0);
+	CHECK(heard(W, wd, &h, paths, sizeof paths) == 1 && !strcmp(paths, "/home/w/x.txt"));
+	client = OTHER;
+	CHECK(zfs_unlink("/home/w/a.txt") == 0);
+	CHECK(heard(W, wd, &h, paths, sizeof paths) == 1 && !strcmp(paths, "/home/w/a.txt"));
+	// a save as text does it: a new copy, renamed over the old
+	client = OTHER;
+	wput("/home/w/book.new", "v2");
+	CHECK(zfs_rename("/home/w/book.new", "/home/w/book.txt") == 0);
+	int32_t n = heard(W, wd, &h, paths, sizeof paths);
+	CHECK(n == 2 && has_path(paths, n, "/home/w/book.new") && has_path(paths, n, "/home/w/book.txt"));
+	CHECK(changed_n == 4);			// one per read: rename in, out, unlink, the save
+	// a failed change is none
+	changed_n = 0;
+	client = OTHER;
+	CHECK(zfs_unlink("/home/w/nope") < 0);
+	CHECK(changed_n == 0);
+
+	// the same path twice is once; past Z_FS_WATCH_PATHS, "more"
+	client = OTHER;
+	wput("/home/w/1", "a"); wput("/home/w/1", "b");
+	CHECK(heard(W, wd, &h, paths, sizeof paths) == 1 && h.flags == 0);
+	client = OTHER;
+	for (int i = 0; i < Z_FS_WATCH_PATHS + 2; i++) {
+		char p[32];
+		snprintf(p, sizeof p, "/home/w/m%d", i);
+		wput(p, "m");
+	}
+	n = heard(W, wd, &h, paths, sizeof paths);
+	CHECK(n == Z_FS_WATCH_PATHS && (h.flags & Z_FS_WATCH_MORE));
+	CHECK(heard(W, wd, &h, paths, sizeof paths) == 0 && h.flags == 0);
+	// a buffer too small for them all: the rest count as dropped
+	client = OTHER;
+	wput("/home/w/m0", "z"); wput("/home/w/m1", "z");
+	n = heard(W, wd, &h, paths, 12);
+	CHECK(n == 1 && !strcmp(paths, "/home/w/m0") && (h.flags & Z_FS_WATCH_MORE));
+
+	// a full mailbox: the notice goes later, still only one
+	changed_n = 0;
+	watch_mailbox_full = true;
+	client = OTHER;
+	wput("/home/w/late", "l");
+	CHECK(changed_n == 0);
+	watch_mailbox_full = false;
+	fs_test_kick();						// fs's idle wake
+	CHECK(changed_n == 1);
+	fs_test_kick();
+	CHECK(changed_n == 1);
+	CHECK(heard(W, wd, &h, paths, sizeof paths) == 1 && !strcmp(paths, "/home/w/late"));
+
+	// someone else's watch number, or none
+	CHECK(heard(OTHER, wd, &h, paths, sizeof paths) == -Z_EBADF);
+	CHECK(heard(W, 9, &h, paths, sizeof paths) == -Z_EBADF);
+	client = OTHER;
+	CHECK(zfs_unwatch(wd) == -Z_EBADF);
+
+	// a file, /ram, and Z_FS_WATCHES at most
+	client = W;
+	int32_t wf = zfs_watch("/home/w/book.txt");
+	int32_t wr = zfs_watch("/tmp");
+	int32_t w4 = zfs_watch("/");
+	CHECK(wf >= 0 && wr >= 0 && w4 >= 0);
+	CHECK(zfs_watch("/home") == -Z_EMFILE);
+	changed_n = 0;
+	client = OTHER;
+	wput("/home/w/book.txt", "v3");		// wd, wf and "/": three notices
+	CHECK(changed_n == 3);
+	CHECK(heard(W, wf, &h, paths, sizeof paths) == 1 && !strcmp(paths, "/home/w/book.txt"));
+	CHECK(heard(W, w4, &h, paths, sizeof paths) == 1);
+	client = OTHER;
+	wput("/home/w/other.txt", "o");		// not the file
+	CHECK(heard(W, wf, &h, paths, sizeof paths) == 0);
+	wput("/ram/r.txt", "r");				// /tmp is /ram
+	CHECK(heard(W, wr, &h, paths, sizeof paths) == 1 && !strcmp(paths, "/ram/r.txt"));
+	CHECK(heard(W, w4, &h, paths, sizeof paths) == 1 && !strcmp(paths, "/home/w/other.txt"));
+	client = W;
+	CHECK(zfs_unwatch(w4) == 0);
+	CHECK(zfs_unwatch(w4) == -Z_EBADF);
+	CHECK((w4 = zfs_watch("/home")) >= 0);	// the slot again
+	CHECK(zfs_unwatch(w4) == 0 && zfs_unwatch(wf) == 0 && zfs_unwatch(wr) == 0);
+
+	// a writer that dies: its handle is closed by the sweep, and that
+	// is a change; a watcher that dies: its watch ends
+	heard(W, wd, &h, paths, sizeof paths);
+	client = 8;
+	fd = zfs_open("/home/w/dying.txt", Z_O_WRONLY | Z_O_CREAT);
+	CHECK(fd >= 0);
+	CHECK(heard(W, wd, &h, paths, sizeof paths) == 1 && h.writers == 1);
+	changed_n = 0;
+	alive[8] = false; generation[8]++;
+	fs_test_sweep();
+	fs_test_kick();						// the idle wake: sweep, then notices
+	alive[8] = true;
+	CHECK(changed_n == 1);
+	CHECK(heard(W, wd, &h, paths, sizeof paths) == 0 && h.writers == 0);
+	alive[W] = false; generation[W]++;
+	fs_test_sweep();
+	alive[W] = true;
+	CHECK(heard(W, wd, &h, paths, sizeof paths) == -Z_EBADF);
+	changed_n = 0;
+	client = OTHER;
+	wput("/home/w/after.txt", "a");
+	CHECK(changed_n == 0);
+	// four again, now that it is gone
+	client = W;
+	int32_t all[Z_FS_WATCHES];
+	for (int i = 0; i < Z_FS_WATCHES; i++) CHECK((all[i] = zfs_watch("/home/w")) >= 0);
+	for (int i = 0; i < Z_FS_WATCHES; i++) CHECK(zfs_unwatch(all[i]) == 0);
+	// paths fs cannot watch
+	CHECK(zfs_watch("/nfs/x") == -Z_EINVAL);
+	client = OTHER;
+}
+#endif
+
 int main(void) {
 	card = calloc(CARD_SECTORS, 512);
 	ram = calloc(RAM_SECTORS, 512);
@@ -1248,6 +1460,9 @@ int main(void) {
 	test_restart();
 	test_writeback();
 	test_nfs();
+#ifndef ZFSC_KERNEL
+	test_watch();
+#endif
 	CHECK(grant_misuse == 0 && !grant_open_now);
 	printf("test_fs: %d checks, %d failed\n", checks, fails);
 	return fails != 0;

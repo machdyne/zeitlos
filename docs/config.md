@@ -37,6 +37,14 @@ travel with the card. `settings` edits them; see
 | key | default | read by | effect |
 | --- | --- | --- | --- |
 | `apps.arcade.skill` | `easy` | `snake`, `blocks`, `bricks`, `mausrun` | how hard the arcade games start: `easy`, `normal` (the games as they were) or `hard`; a choice made in a game's menu is remembered there and wins ([arcade.md](arcade.md#skill)) |
+| `apps.backup.to` | `/usb/backup` | `backup` | the folder on the backup drive that backups go to ([backup.md](backup.md#settings)) |
+| `apps.backup.from` | `/home /data /sys/zeitlos.cfg /sys/net.cfg` | `backup` | folders and files backed up, separated by spaces (quotes around a path with spaces) |
+| `apps.backup.skip` | `/data/ask *.tmp` | `backup` | left out: a path starting with `/`, or a name pattern (`*`, `?`); `none` for nothing beyond the fixed rules |
+| `apps.backup.keep` | `10` | `backup` | the newest backups never thinned to make room |
+| `apps.backup.verify` | `yes` | `backup` | read every copy back before its backup is complete |
+| `apps.backup.eject` | `no` | `backup` | release the drive after each backup, so it can be pulled |
+| `apps.backup.name` | `zeitlos` | `backup` | this computer's folder on the drive, so several can share one |
+| `apps.backup.watch` | `none` | `backup` | folders or files (inside `from`) whose saves are backed up on their own, 10 s after, while the backup window is open ([backup.md](backup.md#watch)) |
 | `apps.bbs.dir` | `/data/bbs` | `bbs` | the BBS's data directory: its own `bbs.cfg`, the users, the bulletins ([bbs.md](bbs.md#the-data-directory)) |
 | `apps.irc.channels` | *(none)* | `irc` | channels to join once connected, `#zeitlos #fpga` ([irc_app.md](irc_app.md)) |
 | `apps.irc.nick` | `zeitlos` | `irc` | your nickname; an `_` is added while it is taken |

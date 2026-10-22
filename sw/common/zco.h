@@ -57,12 +57,13 @@
  *
  * -- where the stack lives --
  *
- * If the coroutine calls malloc(), its stack must not come from
- * malloc(): newlib's _sbrk() refuses to grow the heap past the current
- * stack pointer, so with the stack inside the heap every allocation in
- * the coroutine fails. Put it in a static buffer, an arena, or the
- * main loop's own frame (posix). A coroutine that allocates nothing
- * may have its stack anywhere.
+ * If the coroutine calls malloc(), its stack must lie ABOVE the heap:
+ * newlib's _sbrk() (zeitlos.c) refuses to grow the heap past the
+ * current stack pointer. With the stack inside the heap every
+ * allocation in the coroutine fails -- and so it does with a static
+ * buffer, since .bss lies below the heap, which starts at _end. Put it
+ * in the main loop's own frame (posix, backup). A coroutine that
+ * allocates nothing may have its stack anywhere.
  */
 
 #include <stdint.h>

@@ -173,6 +173,7 @@ board boots to a desktop with no sdcard ([core apps in flash](#core-apps-in-flas
 | vi | Port of the [nextvi](https://github.com/kyx0r/nextvi) terminal text editor |
 | [zetta](docs/zetta.md) | Small full-screen terminal editor for prose, in the manner of nano |
 | [i2c](docs/i2c_app.md) | I2C from the posix shell, on a PMOD port or a bench bus |
+| [backup](docs/backup.md) | Dated backups of your files on a USB stick (or a card in a reader), and any version of any file back: `backup`, `backup history /home/book.txt`, `backup restore ...`, a window, and watch (each save in a folder backed up 10 s after); nothing on the card is written, and a power cut cannot cost a backup |
 | [update](docs/update.md) | Brings the card up to date with a newer release over the network, keeping what is yours: `update v0.0.7 -t tftp <server>` |
 | [sechs](docs/sechs_app.md) | Sechs modules (Zwölf LS10, LS11) on a PMOD port, from the posix shell |
 

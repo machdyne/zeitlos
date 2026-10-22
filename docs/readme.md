@@ -102,6 +102,7 @@ with [welcome](welcome.md); to program it, [kernel](kernel.md) and
 | [security](security.md) | Password and screen lock |
 | [console](console.md) | The console service |
 | [cron](cron.md) | Scheduled programs |
+| [backup](backup.md) | Dated backups of your files on a second drive, and getting any version back: a command, a window, and watch (each save backed up on its own while the window is open) |
 | [user\_input](user_input.md) | Keyboard and mouse |
 | [keyboard\_layouts](keyboard_layouts.md) | 22 layouts and Japanese input |
 | [line\_editing](line_editing.md) | Shared line editor |
