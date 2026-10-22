@@ -85,11 +85,12 @@ z_obj_t *k_proc_list(z_obj_t *args) {
 		a->out[n].flags = z_procs[i].flags;
 		a->out[n].cpu_ticks = z_procs[i].cpu_ticks;
 
-		// Name from the pid registry, or "" for a process that never
-		// registered one -- see z_proc_info_t's own comment in
-		// sw/common/zproc.h.
+		// Name from the pid registry, or, for a process that never
+		// registered one, the program it was started from -- see
+		// z_proc_info_t's own comment in sw/common/zproc.h.
 		{
 			const char *nm = k_pidreg_name_for(i);
+			if (!nm) nm = (const char *)z_procs[i].exe;
 			uint32_t c = 0;
 			if (nm)
 				for (; c < Z_PROC_NAME_MAX - 1 && nm[c]; c++)
@@ -104,5 +105,19 @@ z_obj_t *k_proc_list(z_obj_t *args) {
 	a->count = n;
 
 	return (&z_ok);
+
+}
+
+void k_proc_set_exe(uint32_t pid, const char *name) {
+
+	if (pid >= Z_PROCS_MAX) return;
+
+	volatile char *exe = z_procs[pid].exe;
+	const char *b = name ? name : "";
+	for (const char *q = b; *q; q++) if (*q == '/') b = q + 1;
+
+	uint32_t c = 0;
+	for (; c < sizeof(z_procs[pid].exe) - 1 && b[c]; c++) exe[c] = b[c];
+	exe[c] = 0;
 
 }

@@ -15,7 +15,7 @@
  * edited directly with binary literals (one byte per glyph row,
  * MSB-first -- bit 7 is the LEFTMOST pixel, matching
  * sw/common/zfont_data.c's own convention) rather than generated from
- * a PNG the way dock_icons.c is (see dock_icons.h): at 8x8, a shape
+ * a PNG the way the dock icons are (docs/dock.md): at 8x8, a shape
  * this simple is easier to eyeball and tweak directly as bits than to
  * round-trip through an image editor and a generator script every
  * time.

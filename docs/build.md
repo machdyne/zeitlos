@@ -167,7 +167,9 @@ What is left is `malloc`, the string functions and newlib's FILE layer.
 
 **`ZFMT_LITE = 1`** (with `ZFMT = 1`) replaces the FILE layer too, for
 an app whose only output is `printf`, `puts`, `putchar` and `fputs` to
-stdout (`net`, and `text` since 0.0.7 -- [text_editor.md](text_editor.md#size)): `zfmt.c` then keeps a 128-byte line buffer and `write()`s fd 1
+stdout (`net`, `text` since 0.0.7 -- [text_editor.md](text_editor.md#size) --
+and `wm`, whose ~15KB paid for reading the dock's icons from a file,
+[dock.md](dock.md)): `zfmt.c` then keeps a 128-byte line buffer and `write()`s fd 1
 at each newline and when it fills -- the same whole lines newlib's
 line-buffered stdout gave the console log. newlib's `fwrite`, its
 buffering, `fclose`, `fflush` and the `realloc` behind them leave the
@@ -181,7 +183,7 @@ for its newline.
 **`ZFMT_NO64 = 1`** (with `ZFMT = 1`), for a program that prints no
 64-bit number: `zfmt.c` then formats every integer in 32 bits, a `%lld`
 prints its low 32 bits, and libgcc's 64-bit division (`__udivdi3`,
-`__umoddi3`, about 2.3KB) is not linked. `text` sets it.
+`__umoddi3`, about 2.3KB) is not linked. `text`, `update` and `wm` set it.
 
 | | before | after |
 |---|---:|---:|

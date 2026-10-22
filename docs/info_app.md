@@ -173,9 +173,12 @@ thereafter — but a list showing nothing but numbers is close to useless
 to a person.
 
 The names come from the pid registry via a new
-`k_pidreg_name_for(pid)`. Only apps that call `z_pid_register()` appear
-by name (`wm`, `net`, `repl`, `term`, `portdemo`); the rest show `-`
-and their pid.
+`k_pidreg_name_for(pid)` -- `wm0`, `net0`, `repl0` for the apps that
+call `z_pid_register()`. Since the dock's running dots
+([dock.md](dock.md#running-apps)) every other process shows the program
+it was started from (`text`, `snake`), which the kernel records when it
+starts one (`z_proc.exe`, `k_proc_set_exe()` in `sw/os/procapi.c`); only
+the kernel's own process has no name and shows `-`.
 
 `Z_PROC_FLAG_ACTIVE`/`_DIE`/`_BLOCKED` also moved from `sw/os/kernel.h`
 to `sw/common/zproc.h`, because an app receiving those flags needs to

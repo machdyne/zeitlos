@@ -13,6 +13,7 @@
 *.o
 # Dependency files from -MD (the kernel's USB drivers leave them
 # beside their sources)
+*.swp
 *.d
 *.elf
 *.map

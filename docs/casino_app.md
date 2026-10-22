@@ -81,7 +81,10 @@ than just saying no — "no" without a number is a door with no handle.
 `sh`'s `run` do.
 
 **A game that is already open is not started again.** `z_proc_list()` is
-asked first, because four copies of blackjack all writing
+asked first (it reports each process by the program it was started
+from, `poker`, since the dock's running dots -- before that the games,
+which register no name, reported none, and this check never matched),
+because four copies of blackjack all writing
 `/data/casino/bank.dat` is exactly the concurrency `zbank_adjust()` is careful
 about, and there is no reason to invite it.
 
@@ -101,10 +104,10 @@ that show it are redrawn when it moves.
 games.
 
 **2.** `sw/data/icons/icon-casino.png` is included. Run
-`cd sw/data/icons && python3 gen_dock_icon_data.py`, then put **only**
-this one in `dock_candidates[]` in `sw/apps/wm/wm.c`:
+`cd sw/data/icons && python3 gen_dock_icon_data.py`, then name **only**
+this one in the dock's row in `sw/data/wm.cfg` ([dock.md](dock.md)):
 
-    { "casino",     z_icon_casino_data },
+    row wide ... casino ...
 
 The other game icons are still in the tree if you would rather have them
 on the dock as well, but the point of this app is that you do not need

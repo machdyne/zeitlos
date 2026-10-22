@@ -1,0 +1,70 @@
+# The dock's icons: one line per icon-<name>.png in this folder.
+# gen_dock_icon_data.py turns the two into dock.zic (docs/dock.md).
+#
+#   name  ["spoken name"]  [needs...]  [hidden]
+#
+# spoken  what speech says when the dock selection lands on it; the name
+#         itself when left out.
+# needs   hardware the app cannot do anything without: a Z_FEATURE_* or
+#         Z_FEATURE2_* name from sw/common/zsoc.h, lowercase without the
+#         prefix (audio, gpio). The dock leaves the icon out on a
+#         bitstream that does not have it.
+# hidden  @rest does not add it (a row that names it still shows it):
+#         casino's tables, which casino starts, and the dock's own icons.
+#
+# Names starting with @ are the dock's own: @next is icon-next.png,
+# @back the BACK icon of an open group, @<id> the icon of the group with
+# that id in wm.cfg (@games), and @group the icon of a group with no
+# icon of its own. Each is in wm's memory only if its dock shows it.
+
+ask
+basic       "BASIC"
+blackjack                       hidden
+blocks      "Blocks"
+bricks      "Bricks"
+cal         "Calendar"
+calc        "Calculator"
+casino
+chess
+chip8       "Chip 8"
+clock
+draw
+files
+gpu3d       "GPU 3D"
+hex         "Hex editor"
+info        "System info"
+irc         "Chat"
+keyboard
+kidgames    "Kid games"
+mausrun     "Maus Run"
+midi        "MIDI player"   audio
+mmod                        gpio
+play        "Audio player"  audio
+poker                           hidden
+read        "Reader"
+roulette                        hidden
+settings
+sheet       "Spreadsheet"
+slide
+slots                           hidden
+snake       "Snake"
+space3d     "Space 3D"
+term        "Terminal"
+text        "Text editor"
+track       "MOD player"    audio
+view        "Image viewer"
+web         "Web browser"
+
+@next       "Next page"         hidden
+@back       "Back"              hidden
+
+# The groups' icons: a box with a thick bar across its top. Their
+# spoken names are the names wm.cfg gives the groups.
+@desk                           hidden
+@games                          hidden
+@group                          hidden
+@misc                           hidden
+@net                            hidden
+@sound                          hidden
+@tools                          hidden
+@work                           hidden

@@ -894,9 +894,9 @@ ZAR_APPS = $(filter-out $(CORE_APPS_OMIT),$(CORE_APPS))
 #
 # A budget is raised by taking from another, from the reserve, or by
 # making something smaller. Every core app must have one.
-CORE_BUDGETS = fs=36K/75K usb=35K/55K wm=110K/135K net=148K/285K term=62K/152K \
+CORE_BUDGETS = fs=36K/75K usb=35K/55K wm=104K/136K net=148K/284K term=62K/152K \
 	console=10K/13K cron=18K/48K text=60K/157K files=57K/120K repl=140K/304K
-CORE_RESERVE = 56K
+CORE_RESERVE = 60K
 # Core apps stored as they are, not compressed: their budget is then
 # their .bin. wm and net, the two largest started at boot: unpacked they
 # took 508ms and 933ms on hardware (docs/flash_apps.md, "Load times").
@@ -913,7 +913,8 @@ CORE_RAM_MAX = 1M
 # docs/<name>.txt is docs/<name>.md rendered as plain text by
 # tools/md2txt.py, for `text`. They come out of CORE_RESERVE, all
 # together, and mkzar.py refuses an archive where they do not.
-CORE_FILES = docs/welcome.txt docs/repl.txt docs/zapi.txt data/repl/examples/todo.scm
+CORE_FILES = docs/welcome.txt docs/repl.txt docs/zapi.txt data/repl/examples/todo.scm \
+	data/wm/wm.cfg data/wm/dock.zic
 CORE_FILES_OUT = $(OUTDIR)/files
 
 # docs/zapi.txt is not from a .md: it is the Scheme API reference, every
@@ -944,6 +945,17 @@ $(CORE_FILES_OUT)/docs/%.txt: docs/%.md tools/md2txt.py
 
 # repl's examples, as they are, in repl's data directory (docs/repl.md)
 $(CORE_FILES_OUT)/data/repl/examples/%.scm: sw/apps/repl/examples/%.scm
+	mkdir -p $(dir $@)
+	cp $< $@
+
+# wm's dock (docs/dock.md): its arrangement and its icons. dock.zic is
+# made by sw/data/icons/gen_dock_icon_data.py and checked in, like the
+# icon data before it, so a build needs no Pillow.
+$(CORE_FILES_OUT)/data/wm/wm.cfg: sw/data/wm.cfg
+	mkdir -p $(dir $@)
+	cp $< $@
+
+$(CORE_FILES_OUT)/data/wm/dock.zic: sw/data/icons/dock.zic
 	mkdir -p $(dir $@)
 	cp $< $@
 

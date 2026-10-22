@@ -13,8 +13,8 @@
  * window's titlebar (the close button, and any future titlebar icon:
  * minimize, open file, save file, etc -- see sw/apps/wm/wm.c's file
  * header comment). NOT to be confused with "dock icons"
- * (sw/apps/wm/dock_icons.h), which are unrelated 32x32 app-launcher
- * bitmaps drawn straight from wm's own .rodata via z_fb_set_pixel().
+ * (/data/wm/dock.zic, docs/dock.md), which are unrelated 32x32 app-launcher
+ * bitmaps wm reads from that file and draws via z_fb_set_pixel().
  * Window icons instead live in hardware glyph memory
  * (rtl/mem/glyph.v) and are drawn through the hardware glyph blitter
  * (rtl/gpu/gpu_blit.v) -- same mechanism as font text -- so every

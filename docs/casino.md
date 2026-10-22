@@ -62,16 +62,19 @@ integration is visible.
 **1.** `casino poker roulette blackjack slots craps` are in `APPS` in
 `sw/apps/Makefile`.
 
-**2.** `dock_candidates[]` in `sw/apps/wm/wm.c` carries **one** entry:
+**2.** The dock's row in `sw/data/wm.cfg` names **one** of them,
+`casino` ([dock.md](dock.md)):
 
-    { "casino",     z_icon_casino_data },
+    row wide ... casino chess ...
 
 `sw/apps/casino` launches the other five by name through `z_proc_run()`,
 so they are on the card but not on the dock -- which is the point of
 having a front desk. The other icons are still in `sw/data/icons` if you
 would rather have them on the dock as well.
 
-The icon data is generated, so after changing that list:
+The other five are `hidden` in `sw/data/icons/apps.txt`, so `@rest`
+does not add them either. The icon file is generated, so after changing
+an icon or `apps.txt`:
 
     cd sw/data/icons && python3 gen_dock_icon_data.py
 

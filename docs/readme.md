@@ -116,6 +116,7 @@ with [welcome](welcome.md); to program it, [kernel](kernel.md) and
 | Document | Subject |
 |---|---|
 | [window\_manager](window_manager.md) | `wm` developer guide |
+| [dock](dock.md) | the dock's files: `wm.cfg` (what it shows) and `dock.zic` (its icons) |
 | [responsive](responsive.md) | Staying responsive: long work in slices, progress, instant stop; `zco` coroutines, `zimgjob` |
 | [widgets](widgets.md) | Widgets and dialogs |
 | [libz](libz.md) | Runtime for zcc-compiled programs |

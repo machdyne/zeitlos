@@ -3,82 +3,55 @@
 # Zeitlos OS
 # Copyright (c) 2025 Lone Dynamics Corporation. All rights reserved.
 #
-# Generates sw/apps/wm/dock_icons.c/.h from the 32x32 PNG source
-# images in this directory -- see dock_icons.h's own header comment
-# for the runtime side (draw_dock() in wm.c). Run this whenever an
-# icon PNG here is added or changed; the .c/.h it produces are
-# checked in (same "generated, do not hand-edit, regenerate if the
-# source changes" convention sw/common/zfont_data.c and
-# sw/os/logo_data.c already use for font/logo data -- see those
-# files' own header comments) rather than generated at build time,
-# so building the OS doesn't require Python/Pillow, only adding an
-# icon does.
+# Makes dock.zic -- the dock's icons, and what each app needs to run --
+# from the 32x32 PNGs and apps.txt in this directory (docs/dock.md).
+# dock.zic is checked in, so building the OS needs no Python/Pillow;
+# only changing an icon does. The Makefile copies it into the flash
+# archive as /data/wm/dock.zic (CORE_FILES).
 #
 # USAGE
 #
-#   python3 gen_dock_icon_data.py
+#   python3 gen_dock_icon_data.py           writes dock.zic
+#   python3 gen_dock_icon_data.py --check   fails if dock.zic is stale
 #
-#   Regenerates dock_icons.c/.h from every icon-*.png in this
-#   directory. That's the normal case -- to add a new dock icon:
+# TO ADD AN ICON
 #
-#     1. Export a 32x32 PNG from your editor of choice (LibreSprite,
-#        Aseprite, GIMP, ...) as icon-<name>.png, where <name> matches
-#        the `name` field you're about to add to wm.c's dock_apps[]
-#        table (see that table's own comment) -- e.g. icon-term.png
-#        for the "term" entry. The <name> becomes part of the
-#        generated C symbol (z_icon_<name>_data), so keep it a valid
-#        C identifier fragment: letters, digits, underscores only.
-#     2. Drop the PNG in this directory.
-#     3. Run this script (no arguments).
-#     4. Add the new entry to dock_apps[] in wm.c, including
-#        `.bitmap = &z_icon_<name>_data[0]` -- see that table.
-#     5. Rebuild wm.
+#   1. Draw a 32x32 PNG in two colours, pure black (off) and pure white
+#      (ink), anti-aliasing off: icon-<name>.png, <name> being the app's
+#      file name in /apps (or in flash).
+#   2. Add a line for it to apps.txt (spoken name, hardware it needs).
+#   3. Run this script.
+#   4. Name the app in a row of sw/data/wm.cfg if it should be in the
+#      dock's main view (an app with an icon is otherwise reached
+#      through @rest).
 #
-#   Explicit filenames also work, if you only want to (re)generate
-#   specific icons rather than everything in the directory:
+# Every PNG must have a line in apps.txt and every line a PNG; the
+# script stops otherwise, so an icon cannot be added half-way.
 #
-#     python3 gen_dock_icon_data.py icon-term.png icon-gpu3d.png
+# FORMAT (sw/apps/wm/dock_cfg.h has the reader)
 #
-# SOURCE IMAGE REQUIREMENTS
+#   0   "ZIC2"
+#   4   u16 count, u16 entry size (32)
+#   8   u32 bytes of spoken names, after the entries
+#  12   u32 bytes of icons, after the spoken names
+#  16   entries, in name order: name[16] u32 feature u32 feature2
+#       u16 flags (1 = hidden) u16 spoken offset u16 icon offset
+#       u16 icon length
+#       spoken names, NUL-terminated ("" for none)
+#       icons, each 32 rows of 4 bytes (MSB first, bit 1 = ink, white in
+#       the PNG), every byte XORed with the one a row above, then
+#       run-length coded: a byte c < 0x80 is c+1 literal bytes after
+#       it, c >= 0x80 is (c & 0x7f)+1 zero bytes. Icons are mostly
+#       empty and mostly vertical lines; this takes them to about 60%,
+#       and wm keeps only the ones its dock shows, compressed, and
+#       expands one when it draws it (docs/dock.md, "Memory").
 #
-#   - Exactly 32x32 pixels (DOCK_ICON_SIZE in wm.c).
-#   - Exactly two colors: pure black (0,0,0) as background/"off",
-#     pure white (255,255,255) as foreground/ink/"on". No
-#     anti-aliasing, no partial transparency, no gray -- every pixel
-#     must resolve to exactly one of those two colors, or this script
-#     stops and tells you which pixel didn't. In LibreSprite: draw in
-#     indexed/2-color mode with anti-aliasing off, so this is true by
-#     construction rather than something to fix up after exporting.
-#   - Any other 32x32 combination of "clearly meant to be black" and
-#     "clearly meant to be white" pixels will likely also work (this
-#     script treats anything closer to white as "on"), but isn't the
-#     tested/intended path -- the strict two-color check exists so a
-#     half-exported or accidentally-anti-aliased icon fails loudly
-#     here, at conversion time, rather than rendering as static on
-#     the actual 1bpp display.
-#
-# OUTPUT FORMAT
-#
-#   Each icon becomes a `static const uint8_t z_icon_<name>_data[128]`
-#   array: 32 rows of 4 bytes each (32 bits = 4 bytes per row, one
-#   row per scanline, top to bottom), MSB-first within each byte --
-#   the same "row-major, MSB-first, top bits of each byte" convention
-#   sw/common/zfont.h already documents for font glyph data (this is
-#   just that same convention at a width of exactly 32, so every byte
-#   is fully used, no partial top-bits-of-a-byte case to think about).
-#   Bit value 1 = "on"/ink/foreground (the white pixels), matching how
-#   every existing wm.c draw call already uses color=1 for foreground
-#   (z_fb_hw_box(..., 1, NULL), z_fb_draw_text(..., 1, ...)).
-#
-# DEPENDENCIES
-#
-#   Needs Pillow (`pip install Pillow --break-system-packages` or
-#   equivalent). Nothing else -- stdlib otherwise.
+# DEPENDENCIES: Pillow.
 
-import sys
-import glob
 import os
 import re
+import struct
+import sys
 
 try:
 	from PIL import Image
@@ -86,105 +59,198 @@ except ImportError:
 	print("error: this script needs Pillow (pip install Pillow)", file=sys.stderr)
 	sys.exit(1)
 
-ICON_SIZE = 32
-OUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "apps", "wm")
-OUT_C = os.path.join(OUT_DIR, "dock_icons.c")
-OUT_H = os.path.join(OUT_DIR, "dock_icons.h")
+HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.normpath(os.path.join(HERE, "..", "..", ".."))
+APPS_TXT = os.path.join(HERE, "apps.txt")
+OUT = os.path.join(HERE, "dock.zic")
+ZSOC_H = os.path.join(ROOT, "sw", "common", "zsoc.h")
 
-def icon_name_from_path(path):
-	base = os.path.basename(path)
-	base = re.sub(r"\.png$", "", base, flags=re.IGNORECASE)
-	base = re.sub(r"^icon-", "", base)
-	name = re.sub(r"[^A-Za-z0-9_]", "_", base)
-	if not name or not (name[0].isalpha() or name[0] == "_"):
-		print(f"error: '{path}' doesn't produce a usable C identifier "
-			f"(got '{name}') -- rename the file (icon-<name>.png, "
-			f"<name> = letters/digits/underscores)", file=sys.stderr)
-		sys.exit(1)
-	return name
+ICON = 32
+NAME_MAX = 16
+SPOKEN_MAX = 24
+ENTRY = NAME_MAX + 16
+HIDDEN = 1
+# The biggest file wm reads (DK_ZIC_MAX, dock_cfg.h): well past what is
+# needed, it only bounds a damaged file.
+ZIC_MAX = 65536
+# What wm's table holds (DK_ZIC_ENTRIES, DK_ZIC_NAMES): a file past
+# either is refused whole.
+ENTRIES_MAX = 64
+NAMES_MAX = 384
 
-def convert_one(path):
 
-	name = icon_name_from_path(path)
+def fail(msg):
+	print("error: " + msg, file=sys.stderr)
+	sys.exit(1)
+
+
+def features():
+	"""Z_FEATURE_X / Z_FEATURE2_X from zsoc.h: {"x": (word, bit)}."""
+	out = {}
+	pat = re.compile(r"#define\s+Z_FEATURE(2?)_(\w+)\s+\(1u\s*<<\s*(\d+)\)")
+	with open(ZSOC_H) as f:
+		for line in f:
+			m = pat.match(line.strip())
+			if m:
+				key = m.group(2).lower()
+				if key not in out:
+					out[key] = (2 if m.group(1) else 1, 1 << int(m.group(3)))
+	return out
+
+
+def read_apps():
+	feats = features()
+	apps = []
+	with open(APPS_TXT) as f:
+		for n, raw in enumerate(f, 1):
+			line = raw.split("#", 1)[0].strip()
+			if not line:
+				continue
+			m = re.match(r'(\S+)\s*(?:"([^"]*)")?\s*(.*)$', line)
+			name, spoken, rest = m.group(1), m.group(2) or "", m.group(3).split()
+			if len(name) >= NAME_MAX:
+				fail("apps.txt line %d: name longer than %d" % (n, NAME_MAX - 1))
+			if len(spoken) >= SPOKEN_MAX:
+				fail("apps.txt line %d: spoken name longer than %d" % (n, SPOKEN_MAX - 1))
+			f1 = f2 = flags = 0
+			for w in rest:
+				if w == "hidden":
+					flags |= HIDDEN
+				elif w in feats:
+					word, bit = feats[w]
+					if word == 1:
+						f1 |= bit
+					else:
+						f2 |= bit
+				else:
+					fail("apps.txt line %d: '%s' is not hidden or a feature in zsoc.h" % (n, w))
+			if any(a[0] == name for a in apps):
+				fail("apps.txt line %d: %s twice" % (n, name))
+			apps.append((name, spoken, f1, f2, flags))
+	return apps
+
+
+def png_for(name):
+	return os.path.join(HERE, "icon-%s.png" % name.lstrip("@"))
+
+
+def bitmap(path):
 	im = Image.open(path).convert("RGB")
-
-	if im.size != (ICON_SIZE, ICON_SIZE):
-		print(f"error: '{path}' is {im.size[0]}x{im.size[1]}, "
-			f"need exactly {ICON_SIZE}x{ICON_SIZE}", file=sys.stderr)
-		sys.exit(1)
-
+	if im.size != (ICON, ICON):
+		fail("%s is %dx%d, need %dx%d" % (path, im.size[0], im.size[1], ICON, ICON))
 	px = im.load()
-	rows = []
-
-	for y in range(ICON_SIZE):
-		row_bits = []
-		for x in range(ICON_SIZE):
-			r, g, b = px[x, y]
-			if (r, g, b) == (0, 0, 0):
-				row_bits.append(0)
-			elif (r, g, b) == (255, 255, 255):
-				row_bits.append(1)
-			else:
-				print(f"error: '{path}' pixel ({x},{y}) is "
-					f"{(r, g, b)}, not pure black or pure white -- "
-					f"re-export with anti-aliasing off (see this "
-					f"script's own header comment)", file=sys.stderr)
-				sys.exit(1)
-		row_bytes = []
-		for byte_i in range(ICON_SIZE // 8):
+	out = bytearray()
+	for y in range(ICON):
+		for xb in range(ICON // 8):
 			b = 0
-			for bit_i in range(8):
-				b = (b << 1) | row_bits[byte_i * 8 + bit_i]
-			row_bytes.append(b)
-		rows.append(row_bytes)
+			for i in range(8):
+				p = px[xb * 8 + i, y]
+				if p == (0, 0, 0):
+					bit = 0
+				elif p == (255, 255, 255):
+					bit = 1
+				else:
+					fail("%s pixel (%d,%d) is %s, not pure black or white -- "
+					     "re-export with anti-aliasing off" % (path, xb * 8 + i, y, p))
+				b = (b << 1) | bit
+			out.append(b)
+	return bytes(out)
 
-	return name, rows
+
+def encode(raw):
+	"""Row XOR, then run-length (see FORMAT)."""
+	x = bytes(raw[i] ^ (raw[i - 4] if i >= 4 else 0) for i in range(len(raw)))
+	out = bytearray()
+	i = 0
+	while i < len(x):
+		if x[i] == 0:
+			j = i
+			while j < len(x) and x[j] == 0 and j - i < 128:
+				j += 1
+			out.append(0x80 | (j - i - 1))
+		else:
+			j = i
+			while j < len(x) and x[j] != 0 and j - i < 128:
+				j += 1
+			out.append(j - i - 1)
+			out += x[i:j]
+		i = j
+	return bytes(out)
+
+
+def decode(blob):
+	x = bytearray()
+	i = 0
+	while i < len(blob):
+		c = blob[i]
+		i += 1
+		if c & 0x80:
+			x += b"\0" * ((c & 0x7f) + 1)
+		else:
+			x += blob[i:i + c + 1]
+			i += c + 1
+	for k in range(4, len(x)):
+		x[k] ^= x[k - 4]
+	return bytes(x)
+
+
+def build():
+	apps = sorted(read_apps(), key=lambda a: a[0])
+	listed = set(os.path.basename(png_for(a[0])) for a in apps)
+	for fn in sorted(os.listdir(HERE)):
+		if fn.startswith("icon-") and fn.endswith(".png") and fn not in listed:
+			fail("%s has no line in apps.txt" % fn)
+	for a in apps:
+		if not os.path.exists(png_for(a[0])):
+			fail("apps.txt has %s, but there is no %s" % (a[0], os.path.basename(png_for(a[0]))))
+
+	count = len(apps)
+	if count > ENTRIES_MAX:
+		fail("%d icons, more than wm reads (%d, DK_ZIC_ENTRIES in "
+		     "sw/apps/wm/dock_cfg.h)" % (count, ENTRIES_MAX))
+	names = sum(len(a[0]) + 1 for a in apps)
+	if names > NAMES_MAX:
+		fail("%d bytes of names, more than wm keeps (%d, DK_ZIC_NAMES in "
+		     "sw/apps/wm/dock_cfg.h)" % (names, NAMES_MAX))
+	spoken = bytearray()
+	icons = bytearray()
+	entries = bytearray()
+	for name, sp, f1, f2, flags in apps:
+		raw = bitmap(png_for(name))
+		blob = encode(raw)
+		if decode(blob) != raw:
+			fail("%s: the icon does not survive its own coding" % name)
+		soff = len(spoken)
+		spoken += sp.encode() + b"\0"
+		ioff = len(icons)
+		icons += blob
+		entries += name.encode().ljust(NAME_MAX, b"\0")
+		entries += struct.pack("<IIHHHH", f1, f2, flags, soff, ioff, len(blob))
+	if len(spoken) > 0xffff or len(icons) > 0xffff:
+		fail("too many icons for 16-bit offsets")
+
+	out = bytearray()
+	out += b"ZIC2" + struct.pack("<HHII", count, ENTRY, len(spoken), len(icons))
+	out += entries + spoken + icons
+	size = len(out)
+	if size > ZIC_MAX:
+		fail("dock.zic would be %d bytes, more than wm reads (%d, DK_ZIC_MAX in "
+		     "sw/apps/wm/dock_cfg.h)" % (size, ZIC_MAX))
+	return bytes(out), apps
+
 
 def main():
+	data, apps = build()
+	if "--check" in sys.argv[1:]:
+		old = open(OUT, "rb").read() if os.path.exists(OUT) else b""
+		if old != data:
+			fail("dock.zic is out of date: run sw/data/icons/gen_dock_icon_data.py")
+		print("dock.zic is current (%d icons, %d bytes)" % (len(apps), len(data)))
+		return
+	with open(OUT, "wb") as f:
+		f.write(data)
+	print("wrote %s: %d icons, %d bytes" % (OUT, len(apps), len(data)))
 
-	args = sys.argv[1:]
-	if args:
-		paths = args
-	else:
-		paths = sorted(glob.glob(os.path.join(
-			os.path.dirname(os.path.abspath(__file__)), "*.png")))
-
-	if not paths:
-		print("error: no PNGs given and none found alongside this script",
-			file=sys.stderr)
-		sys.exit(1)
-
-	icons = [convert_one(p) for p in paths]
-
-	with open(OUT_C, "w") as f:
-		f.write("/* Generated by sw/data/icons/gen_dock_icon_data.py -- do not hand-edit. */\n")
-		f.write("/* Regenerate if a source PNG in that directory changes or is added. */\n\n")
-		f.write("#include <stdint.h>\n")
-		f.write("#include \"dock_icons.h\"\n\n")
-		for name, rows in icons:
-			f.write(f"const uint8_t z_icon_{name}_data[{ICON_SIZE} * {ICON_SIZE // 8}] = {{\n")
-			for row_bytes in rows:
-				f.write("\t" + ", ".join(f"0x{b:02x}" for b in row_bytes) + ",\n")
-			f.write("};\n\n")
-
-	with open(OUT_H, "w") as f:
-		f.write("/* Generated by sw/data/icons/gen_dock_icon_data.py -- do not hand-edit. */\n")
-		f.write("/* Regenerate if a source PNG in that directory changes or is added. */\n\n")
-		f.write("#ifndef Z_DOCK_ICONS_H\n#define Z_DOCK_ICONS_H\n\n")
-		f.write("#include <stdint.h>\n\n")
-		f.write("/*\n")
-		f.write(" * 32x32 1bpp dock icon bitmaps -- see gen_dock_icon_data.py (this\n")
-		f.write(" * file's generator, sw/data/icons/) for the source PNGs and exact\n")
-		f.write(" * format. Each array is 32 rows of 4 bytes, MSB-first, bit 1 = ink.\n")
-		f.write(" * Referenced from wm.c's dock_apps[] table -- see that table's own\n")
-		f.write(" * comment for how to wire a new icon in after regenerating this file.\n")
-		f.write(" */\n\n")
-		for name, _ in icons:
-			f.write(f"extern const uint8_t z_icon_{name}_data[{ICON_SIZE} * {ICON_SIZE // 8}];\n")
-		f.write("\n#endif\n")
-
-	print(f"wrote {OUT_C} and {OUT_H} ({len(icons)} icon(s): "
-		f"{', '.join(n for n, _ in icons)})")
 
 if __name__ == "__main__":
 	main()

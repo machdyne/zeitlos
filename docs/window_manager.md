@@ -786,7 +786,8 @@ from the dock) has a keyboard equivalent, all handled directly in
 - **The dock is now focusable** (Alt+Tab reaches it like any other
   window) and, while it has focus, Left/Right/Up/Down move a selection
   cursor between icons (wrapping around) and Enter launches the
-  selected one -- see `dock_handle_key()`. This reuses the exact same
+  selected one (or opens it, for a group; in a group, Esc or
+  Backspace goes back to the row) -- see `dock_handle_key()`. This reuses the exact same
   `dock_launch()` codepath a mouse click already goes through (see
   below), just reached a different way; both keyboard Enter and a
   mouse click on an icon are just two calls into the same function
@@ -1507,16 +1508,20 @@ are `sw/apps/wm/workspace.c`, tested on the build machine
 ## The dock
 
 A small always-on-top launcher bar, anchored to the bottom left of
-the screen, with one 32x32 icon per app (`sw/apps/wm/wm.c`,
-`dock_candidates[]`). Adding another is one more
-`{ "name", z_icon_<name>_data }` entry there, plus a 32x32 PNG in
-`sw/data/icons/` and a run of `gen_dock_icon_data.py` -- see that
-script's own usage comment. Nothing else.
+the screen, with one 32x32 icon per app.
 
-The list is deliberately not reproduced here. It went stale the moment
-apps were added -- it used to say "currently `term`, `gpu3d` and
-`draw`" long after there were a dozen -- and `dock_candidates[]` is two
-lines of scrolling away.
+**What it shows is not in `wm.c`.** Two files decide it, both in the
+flash archive and both replaceable from the card -- [dock.md](dock.md)
+has them in full:
+
+- `/data/wm/wm.cfg` (`sw/data/wm.cfg`): which apps, in what order,
+  and which are in groups.
+- `/data/wm/dock.zic` (`sw/data/icons/`, made by
+  `gen_dock_icon_data.py` from the PNGs and `apps.txt`): the icons,
+  the spoken names, and the hardware each app needs.
+
+Adding an app to the dock is a PNG and a line in `apps.txt`, then its
+name in a row of `wm.cfg`. Nothing in `wm.c` changes.
 
 ### Paging
 
@@ -1529,6 +1534,9 @@ Up to seventeen resolved apps, nothing below applies: the dock is sized
 to its contents and grown from the left, every icon visible, no NEXT
 button and one page. Most machines will never reach that, and they
 should not pay for a mechanism they do not need.
+The built-in `wm.cfg` puts 14 apps and three groups in the row --
+exactly seventeen -- so the built-in dock does not page; an open group
+pages the same way when it holds more than fits beside its BACK.
 
 Past seventeen it pages:
 
@@ -1567,8 +1575,10 @@ Past seventeen it pages:
   Left/Right lands on it and Enter activates it -- so the keyboard and
   the mouse offer exactly the same targets.
 
-Capacity is now bounded by `dock_candidates[]` rather than by geometry,
-so the list may grow freely.
+Capacity is bounded by `DOCK_APPS_MAX` (48, `DK_ITEMS_MAX` in
+`dock_cfg.h`) rather than by geometry, so the row in `wm.cfg` may grow
+freely up to that; past it the last are left out and the console says
+so.
 
 **The arithmetic lives in `sw/apps/wm/dock_layout.h`, not in `wm.c`.**
 `draw_dock()`, `dock_click()` and `dock_handle_key()` all have to agree
@@ -1582,15 +1592,15 @@ reading wm's globals -- which is also what makes
 machine that has six. `make -C sw/apps/wm test` runs it, and needs no
 toolchain and no board.
 
-A candidate is only an *offer*: `dock_build()` keeps the ones that
-actually resolve via `z_exec_exists()` at startup, so an app that isn't
+A name in `wm.cfg` is only an *offer*: `dock_build()` keeps the ones
+that actually resolve via `z_exec_exists()`, so an app that isn't
 installed is skipped rather than becoming a button that does nothing.
 `draw` lives on the sdcard rather than in the flash core-app archive,
 so it appears only when a card carrying it is present.
 
-**Present is not the same as runnable**, and the dock checks both. A
-candidate may name a `Z_FEATURE_*`/`Z_FEATURE2_*` bit
-(`dock_app_t.feature`/`feature2`), and `dock_build()` drops it when
+**Present is not the same as runnable**, and the dock checks both. An
+icon in `dock.zic` may name a `Z_FEATURE_*`/`Z_FEATURE2_*` bit (the
+`needs` words in `apps.txt`), and `dock_build()` drops the app when
 `z_soc_has_feature()` says this bitstream does not have that hardware
 -- `track`, `midi` and `play` need `Z_FEATURE_AUDIO`, `mmod` needs
 `Z_FEATURE2_GPIO`. The alternative is a button that starts an app only
@@ -1669,10 +1679,13 @@ main loop:
 
 Icon content is real per-app pixel art: 32x32 1bpp bitmaps (the
 framebuffer itself is 1bpp, see `zgfx.h`), generated from source PNGs
-by `sw/data/icons/gen_dock_icon_data.py` into `sw/apps/wm/dock_icons.c`/
-`.h` (checked in, not generated at build time -- see that script's own
+by `sw/data/icons/gen_dock_icon_data.py` into `sw/data/icons/dock.zic`
+(checked in, not generated at build time -- see that script's own
 header comment for the full "add a new icon" steps and source-PNG
 requirements: exactly 32x32, exactly two colors, no anti-aliasing).
+wm reads it front to back at start and keeps, compressed, only the
+icons its dock shows, expanding one as it draws it ([dock.md](dock.md)). An app `wm.cfg` names that has no icon is
+drawn as the first letters of its name.
 `draw_dock()`'s `draw_icon_bitmap()` blits one via `z_fb_set_pixel()`
 per bit -- not the hardware blitter (that's for glyph/font data
 specifically, see below), and not a hot path (dock icons only redraw
@@ -1696,25 +1709,42 @@ syscall table) and always spawns a fresh process, the same as running
 whether an app is "already running" to focus instead. Revisit if that
 turns out to matter in practice.
 
-One placement note: the dock sits at a fixed `y` close to
-`WM_SCREEN_H` (see `DOCK_MARGIN`/`DOCK_ICON_SIZE` in `wm.c`), while
-every other window still uses the plain top-left cascade described
-under "App protocol" above (`x = 20 + (n % 8) * 24`, `y = 20 + (n % 8)
-* 20`, capped at `y = 160` for the first 8 windows) -- so in practice
-new windows don't reach far enough down the screen to land on the
-dock. Nothing currently *enforces* that the way it does for the
-screen's own edges (see "Placement cascade is intentionally minimal"
-under "Known limitations"); it just happens to hold given the current
-cascade formula and app window sizes.
+What the dock does show is how many copies are running: a 2x2 dot under
+an icon for each process of that app, up to six (under a group's icon,
+its apps' added up), wherever its windows
+are -- another workspace included -- and for a program with no window
+at all ([dock.md](dock.md#running-apps)). For room under the dots the
+dock is one row taller than its padding (41 pixels, `DOCK_DOT_ROOM`).
+
+The dock can be on any edge of the screen -- `side bottom | top | left
+| right` in `wm.cfg`, a column of up to 12 on the left or the right --
+with the same groups, paging, keys and dots ([dock.md](dock.md#sides)).
+
+Some of the dock's icons are **groups** (Sound, Tools, Games): a click,
+or Enter, shows the group's apps in place of the row, with BACK at its
+start; BACK, Esc or Backspace goes back, and so does launching an app
+from it, once its window shows ([dock.md](dock.md#groups)). Which apps
+are in the row and which in a group is `wm.cfg`'s to say.
+
+One placement note: the dock sits against one edge of the screen
+(`side` in `wm.cfg`, [dock.md](dock.md#sides)), while every other window
+uses the plain cascade described under "App protocol" above (`x = 20 +
+(n % 8) * 24`, `y = 20 + (n % 8) * 20`). Along the bottom or on the right
+the cascade does not reach far enough to land on it. On the left or
+along the top it would, so there the cascade starts past the dock
+(`dock_place_origin()`). Nothing *enforces* it the way the screen's own
+edges are enforced (see "Placement cascade is intentionally minimal"
+under "Known limitations"): a window can still be dragged onto the dock.
 
 
 ### Which apps the dock offers
 
-At startup `dock_build()` asks which candidates would launch, all at
-once: `z_exec_exists_many()` (`Z_SYS_EXEC_EXISTS_MANY`) answers for the
+`dock_build()` -- at start, and again after a configuration reload --
+reads `dock.zic` and `wm.cfg` ([dock.md](dock.md)), then asks which of
+the apps the row and its groups name would launch, all at once: `z_exec_exists_many()` (`Z_SYS_EXEC_EXISTS_MANY`) answers for the
 whole list with one pass over `/apps` and the flash archive for the
 rest, where asking name by name (`z_exec_exists()`) was a directory
-lookup and a header read per candidate. On a kernel without the call it
+lookup and a header read per app. On a kernel without the call it
 falls back to asking one by one. `ipcbench` section [6] times both.
 
 The one difference: a non-empty file in `/apps` counts without its
@@ -2134,7 +2164,7 @@ icons too, for the same reason (nothing else ever writes to glyph
 memory, so there's nothing to race over).
 
 **Window icon bitmaps are hand-edited, not generated** (unlike dock
-icons, `sw/apps/wm/dock_icons.c`, which come from
+icons, `/data/wm/dock.zic`, which come from
 `sw/data/icons/gen_dock_icon_data.py` and a source PNG) --
 `win_icons.c` uses binary literals (one `0b`-prefixed byte per glyph
 row) specifically so an 8x8 icon can be eyeballed and tweaked

@@ -96,7 +96,9 @@ and are **not** in `/apps` on a released card -- the release refuses a
 card list that has one. A copy placed there
 deliberately takes precedence over the flash copy (see "Finding a
 program"). Their data folders are on the card like any other app's:
-`/data/net/net.cfg`.
+`/data/net/net.cfg`. A core app's shipped data can be in flash too, at the
+same path: `wm`'s dock files, `/data/wm/wm.cfg` and `/data/wm/dock.zic`
+([dock.md](dock.md)), are files in flash, and a copy on the card wins.
 
 ### `/data/<name>/`
 

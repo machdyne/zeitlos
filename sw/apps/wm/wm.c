@@ -41,8 +41,9 @@
 #include "../../common/zspeak.h"	// speech -- docs/tts.md
 #include "../../common/zcfg.h"
 #include "../../common/zcaption.h"	// docs/captions.md
+#include "../../common/zfs.h"		// the dock's two files: docs/dock.md
+#include "../../common/zpaths.h"
 #include "../../common/zutf8.h"		// titles are UTF-8		// system.keyboard.layouts
-#include "dock_icons.h"
 #include "workspace.h"		// workspaces: the decisions (tested on the host)
 #include "kbd_accent.h"		// a dead key with Ctrl/Super/Alt is not an accent
 #include "win_icons.h"
@@ -109,110 +110,95 @@ typedef struct {
 
 // -- dock --
 //
-// a small always-on-top, non-draggable, non-focusable window (owned
-// -- dock --
+// a small always-on-top, non-draggable window owned by wm itself,
+// anchored to the bottom left of the screen, holding one 32x32 icon
+// per app. Clicking an icon launches that app via z_proc_run().
 //
-// a small always-on-top, non-draggable, non-focusable window (owned
-// by wm itself, like the demo windows below) anchored to the bottom
-// left of the screen, holding one 32x32 icon per app. Clicking an
-// icon launches that app via z_proc_run() (see zeitlos.h) -- the
-// syscall added alongside this feature specifically so a running
-// process (wm) can start another one; previously only the kernel
-// shell could do that. Hardcoded for now, per the file's own
-// "phased plan" framing -- see the header comment above and
-// docs/window_manager.md. Adding an app is one entry in dock_apps[]
-// below, PLUS a 32x32 icon -- see dock_icons.h's own header comment
-// (and sw/data/icons/gen_dock_icon_data.py, its generator) for the
-// full steps.
+// WHAT it shows is not in this file. Two files decide it
+// (docs/dock.md, dock_cfg.h):
 //
-// `name` is the bare filename on the FAT filesystem (same name
-// sh.c's `run <file>` and z_proc_run() expect -- no path, no
-// extension). `bitmap` is the icon's 32x32 1bpp pixel data (see
-// dock_icons.h) -- generate it from a source PNG with
-// sw/data/icons/gen_dock_icon_data.py rather than writing it by
-// hand.
+//   /data/wm/wm.cfg    which apps, in what order (sw/data/wm.cfg)
+//   /data/wm/dock.zic  the icons, spoken names, hardware each needs
+//                      (sw/data/icons/, made by gen_dock_icon_data.py)
 //
-// `feature`/`feature2` are the Z_FEATURE_*/Z_FEATURE2_* bit of the
-// hardware the app cannot do anything without, or 0 when it runs
-// anywhere. An icon for hardware the bitstream does not have is a
-// button that starts an app only to have it exit a second later
-// (mmod without a GPIO module, the audio apps on a board built
-// without AUDIO), so dock_build() drops those the same way it drops
-// apps that are not installed.
+// Both are in the flash archive, so every machine has them; a copy at
+// the same path on the card wins, which is how a person rearranges the
+// dock. dock_build() reads them at start and again whenever the
+// configuration is reloaded (`cfg reload`, settings).
+//
+// Adding an app to the dock is a PNG and a line in apps.txt (its
+// icon), and its name in a row of wm.cfg -- no change here.
+
+#include "dock_cfg.h"
+
+// One icon in the dock, in the order wm.cfg gives (dk_item_t,
+// dock_cfg.h): its name, the view it opens if it is a group's icon, and
+// where its icon and spoken name are in dock_store[] below. An app
+// wm.cfg names that has no icon is drawn as its name in letters
+// (draw_icon_letters()), so a missing or damaged dock.zic still leaves
+// a dock that works.
+//
+// The list holds the main row first (dock_nmain items), then each group
+// the row opens, its members in a run of their own -- a view
+// (dock_views[]). An item with `view` >= 0 is a group's icon: clicking
+// it shows that view in place of the row (docs/dock.md, "Groups").
+typedef dk_item_t dock_app_t;
+
+#define DOCK_APPS_MAX   DK_ITEMS_MAX
+
+static dock_app_t dock_apps[DOCK_APPS_MAX];
+static int dock_app_count;		// items in all, every view
+static int dock_nmain;			// the main row: items 0 .. dock_nmain-1
+
 typedef struct {
-	const char	*name;
-	const uint8_t	*bitmap;	// 32x32 1bpp, MSB-first -- see dock_icons.h
-	uint32_t	feature;	// Z_FEATURE_* or 0
-	uint32_t	feature2;	// Z_FEATURE2_* or 0
-} dock_app_t;
+	uint8_t		start, count;	// its members in dock_apps[]
+	uint16_t	name;		// "Games", for its icon's speech: in dock_store[]
+} dock_view_t;
 
-// Everything the dock COULD show. What it actually shows is decided at
-// startup by dock_build(), which keeps only the ones that resolve.
-//
-// An icon for an app that isn't installed is a button that does
-// nothing, and which apps exist genuinely varies per machine now: the
-// core apps are in flash and always present (sw/os/zar.h), while
-// anything else only exists if somebody put it on an sdcard. Listing a
-// candidate here is therefore an offer, not a promise -- adding a new
-// app to the dock needs no conditional logic, just an entry and an
-// icon (plus its Z_FEATURE_*/Z_FEATURE2_* bit when the app needs
-// hardware not every bitstream has -- see dock_app_t).
-// THE LIST MAY NOW GROW FREELY. It used to be capped by geometry:
-// DOCK_SLOTS_MAX icons fit across the screen in one row, and an
-// eighteenth simply ran off the right edge and stopped being
-// reachable, with nothing to warn you. The dock pages instead now --
-// see DOCK_PAGE_SIZE and dock_set_page() below.
-//
-// Paging only engages when the icons genuinely do not all fit. Up to
-// DOCK_SLOTS_MAX resolved apps, the dock is exactly what it always
-// was: one row, grown from the left, every icon visible, no NEXT
-// button and no pages. That matters because most machines will never
-// reach it, and they should not pay for a mechanism they do not
-// need.
-static const dock_app_t dock_candidates[] = {
-	{ "term",		z_icon_term_data  },
-	{ "files",		z_icon_files_data },
-	{ "text",		z_icon_text_data  },
-	{ "read",		z_icon_read_data  },
-	{ "web",			z_icon_web_data  },
-	{ "sheet",		z_icon_sheet_data },
-	{ "draw",		z_icon_draw_data  },
-	{ "view",		z_icon_view_data  },
-	{ "track",		z_icon_track_data, Z_FEATURE_AUDIO },
-	{ "midi",		z_icon_midi_data, Z_FEATURE_AUDIO },
-	{ "play",		z_icon_play_data, Z_FEATURE_AUDIO },
-	{ "calc",		z_icon_calc_data  },
-	{ "clock",		z_icon_clock_data },
-	{ "cal",			z_icon_cal_data   },
-	{ "info",		z_icon_info_data  },
-	{ "settings",	z_icon_settings_data },
-	{ "keyboard",	z_icon_keyboard_data },
+static dock_view_t dock_views[DK_GROUPS_MAX];
+static int dock_nviews;
 
-	{ "ask",			z_icon_ask_data   },
-	{ "slide",		z_icon_slide_data   },
-	{ "irc",			z_icon_irc_data  },
-	{ "hex",			z_icon_hex_data   },
-	{ "mmod",		z_icon_mmod_data, 0, Z_FEATURE2_GPIO },
-	{ "casino",		z_icon_casino_data },
-	{ "chess",		z_icon_chess_data },
-	{ "kidgames",	z_icon_kidgames_data },
-	{ "basic",		z_icon_basic_data },
-	{ "chip8",		z_icon_chip8_data },
-	{ "space3d",	z_icon_space3d_data },
-	{ "snake",		z_icon_snake_data },
-	{ "blocks",		z_icon_blocks_data },
-	{ "bricks",		z_icon_bricks_data },
-	{ "gpu3d",		z_icon_gpu3d_data },
-	{ "mausrun",	z_icon_mausrun_data },
-};
-#define DOCK_CANDIDATE_COUNT \
-	(int)(sizeof(dock_candidates) / sizeof(dock_candidates[0]))
+// What the dock shows: -1 the main row, else a group, opened in place.
+// The main row's page is kept while a group is open, so coming back
+// lands where the group was opened. dock_return_item: an app launched
+// from a group, whose launch ending (its window, a failure, the
+// timeout) takes the dock back to the row.
+static int dock_view = -1;
+static int dock_main_page;
+static int dock_return_item = -1;
 
-// The subset actually present, filled in by dock_build(). Pointers
-// into dock_candidates[] rather than copies, so the icon data isn't
-// duplicated.
-static const dock_app_t *dock_apps[DOCK_CANDIDATE_COUNT];
-static int dock_app_count;
+// As long as the longest view, so opening a group never moves the
+// dock: its width along the bottom or the top, its height on a side.
+static int dock_frame_len;
+// Which edge of the screen it is on (wm.cfg `side`, DK_SIDE_*).
+static uint8_t dock_side = DK_SIDE_BOTTOM;
+
+// What the dock keeps of its two files (docs/dock.md, "Memory"): the
+// icons it shows, compressed as they are in dock.zic, their spoken
+// names, and the groups' names -- nothing of an icon it does not show.
+// Also where wm.cfg is read to before it is parsed, which is why
+// wm.cfg may be at most this size.
+#define DOCK_STORE_MAX  3584
+static uint8_t dock_store[DOCK_STORE_MAX];
+static uint32_t dock_store_used;
+static int dock_zic_count;		// entries read, 0 when there was no usable file
+static uint16_t dock_next_icon = DK_NONE, dock_back_icon = DK_NONE;	// in dock_store
+static uint8_t dock_next_len, dock_back_len;
+
+// Running copies of each dock app (docs/dock.md, "Running apps"): one
+// dot under its icon per process, up to DK_DOTS_MAX. dock_count_due
+// asks the main loop for a recount (a window opened or closed, a
+// launch); dock_count_at is the backstop for programs without windows.
+static uint8_t dock_running[DOCK_APPS_MAX];
+static bool dock_dots = true;			// wm.cfg `dots`
+static bool dock_count_due = true;
+static uint32_t dock_count_at;
+
+// The configuration generation dock_build() last read (z_cfg_
+// generation()), and when the main loop next looks at it.
+static uint32_t dock_cfg_gen;
+static int dock_cfg_errors;		// problems the last wm.cfg read had
+static uint32_t dock_cfg_check_at;
 
 // Everything below indexes the live set, so this stays spelled the way
 // it always was.
@@ -224,6 +210,22 @@ static int dock_app_count;
 // call sites have to agree on the answer, and it needs to be testable
 // without a window manager.
 #include "dock_layout.h"
+
+// Which way the dock runs, and how many icons fit along it: 17 across
+// the screen, 12 down it.
+static bool dock_vert(void) { return dock_side == DK_SIDE_LEFT || dock_side == DK_SIDE_RIGHT; }
+static int dock_slots(void) { return dock_vert() ? DOCK_SLOTS_TALL : DOCK_SLOTS_MAX; }
+static int dock_full(void) { return z_dock_full(dock_vert() ? WM_SCREEN_H : WM_SCREEN_W); }
+
+// The running dots sit on the screen-edge side of the icons (below
+// them along the bottom, left of them on the left side), in a padding
+// one pixel deeper than the other (DOCK_DOT_ROOM).
+#define DOCK_DOT_ROOM   1
+static bool dock_dots_near(void) { return dock_side == DK_SIDE_TOP || dock_side == DK_SIDE_LEFT; }
+// The icons' distance from the dock's edge, across it.
+static int dock_cross(void) { return DOCK_PADDING + (dock_dots_near() ? DOCK_DOT_ROOM : 0); }
+// The dock's thickness, across it.
+#define DOCK_THICK      (DOCK_PADDING * 2 + DOCK_ICON_SIZE + DOCK_DOT_ROOM)
 
 // index into windows[]/zorder of the dock, or -1 before it's created
 // -- set once in main() and never destroyed, so unlike other window
@@ -398,6 +400,7 @@ static int dock_selected = -1;
 // rather than an app and so has no app index to be. -1 is already
 // taken by "nothing selected yet".
 #define DOCK_SEL_NEXT (-2)
+#define DOCK_SEL_BACK (-3)		// a group's BACK icon
 
 // -- paging --
 //
@@ -412,6 +415,7 @@ static int  dock_page;
 // dock's input handling lives; declared here because both the keyboard
 // hotkey in dispatch_keys() and dock_handle_key() reach it from above.
 static void dock_set_page(int p);
+static void dock_view_apply(void);
 
 // per-slot "an app launched from this icon hasn't created its first
 // window yet" state -- drawn as an inverted icon (draw_dock()) and
@@ -422,9 +426,14 @@ static void dock_set_page(int p);
 // message()'s Z_WM_CREATE_WINDOW case) or after DOCK_LAUNCH_TIMEOUT_
 // ITERS main-loop iterations with no window (main()'s own loop) --
 // see that constant's own comment for why a timeout exists at all.
-static bool dock_launching[DOCK_CANDIDATE_COUNT];
-static uint32_t dock_launching_pid[DOCK_CANDIDATE_COUNT];
-static uint32_t dock_launching_deadline[DOCK_CANDIDATE_COUNT];
+//
+// Kept small, as there may be 48 of them: a pid is a process-table index
+// (below Z_PROCS_MAX, 32), and the deadline is the low 16 bits of the
+// tick, compared as a 16-bit difference -- right for anything shorter
+// than 44 s, against a 3 s timeout.
+static bool dock_launching[DOCK_APPS_MAX];
+static uint8_t dock_launching_pid[DOCK_APPS_MAX];
+static uint16_t dock_launching_deadline[DOCK_APPS_MAX];
 
 static wm_window_t windows[WM_MAX_WINDOWS];
 
@@ -1240,73 +1249,362 @@ static bool check_core_services(void) {
 
 }
 
-// Decides which candidates the dock actually offers.
+// -- reading the dock's two files --
 //
-// Called once at startup. z_exec_exists() asks the kernel's own
-// resolver (filesystem first, flash core-app archive underneath), so
-// the answer is exactly what z_proc_run() would do -- a candidate is
-// kept if and only if clicking it would really launch something. The
-// feature checks ask the bitstream the same question one level down:
-// z_soc_has_feature*() answer "not confirmed present" with false, so
-// a candidate whose hardware this bitstream does not report is dropped
-// too -- clicking it would launch an app that has nothing to drive
-// (mmod with no GPIO module, the audio apps with no AUDIO), and it
-// would exit a second later, looking broken rather than absent.
+// Straight to the kernel's file calls rather than through zfsapp.c,
+// which brings the client for /ram and /usb with it. Both paths are in
+// flash under the card, which the fs driver serves for any path the
+// card does not have (docs/flash_apps.md, "Files in flash").
+
+// Milliseconds since `t0` (ticks), for the console lines below: how long
+// each step of building the dock took on this board.
+static uint32_t dock_ms(uint32_t t0) {
+	return (uint32_t)((z_uptime_ticks() - t0) * 1000u / Z_TICK_HZ);
+}
+
+// The whole file into `buf`. Its size; 0 if there is none (or it is
+// empty); -1 if it is larger than `max` or the read failed.
+static int dock_read_whole(const char *path, void *buf, uint32_t max) {
+
+	z_kernel_ptr_t k = (z_kernel_ptr_t)(uintptr_t)(reg_kernel);
+	z_fs_size_args_t sa;
+	sa.name = (char *)path;
+	sa.size = 0;
+	z_obj_t *rv = (z_obj_t *)k(Z_SYS_FS_SIZE, (uint32_t *)&sa, 0);
+	if (!rv || rv->val.uint32 != Z_OK || sa.size == 0) return 0;
+	if (sa.size > max) return -1;
+
+	z_fs_read_args_t ra;
+	ra.name = (char *)path;
+	ra.buf = buf;
+	ra.maxlen = sa.size;
+	ra.len = 0;
+	rv = (z_obj_t *)k(Z_SYS_FS_READ, (uint32_t *)&ra, 0);
+	if (!rv || rv->val.uint32 != Z_OK || ra.len != sa.size) return -1;
+
+	return (int)sa.size;
+
+}
+
+static void dock_cfg_report(void *ctx, int line, const char *msg, const char *word) {
+	const char *path = (const char *)ctx;
+	if (line > 0) printf("wm: dock: %s line %d: %s%s\n", path, line, msg, word);
+	else printf("wm: dock: %s: %s%s\n", path, msg, word);
+}
+
+// What the dock shows with no wm.cfg at all: the three core apps that
+// are in every flash archive, then every other app that has an icon.
+static const char dock_cfg_builtin[] = "row wide term files text @rest\n";
+
+// dock.zic, read front to back through the kernel's file calls
+// (dk_zic_read_table(), dk_zic_read_parts()).
+typedef struct {
+	int32_t		handle;
+	int		calls;		// how many reads it took, for the console
+} dock_zf_t;
+
+static int dock_zf_read(void *ctx, void *buf, uint32_t n) {
+	dock_zf_t *f = (dock_zf_t *)ctx;
+	z_kernel_ptr_t k = (z_kernel_ptr_t)(uintptr_t)(reg_kernel);
+	z_fs_read_chunk_args_t ca;
+	ca.handle = f->handle;
+	ca.buf = buf;
+	ca.maxlen = n;
+	ca.len = 0;
+	f->calls++;
+	z_obj_t *rv = (z_obj_t *)k(Z_SYS_FS_READ_CHUNK, (uint32_t *)&ca, 0);
+	if (!rv || rv->val.uint32 != Z_OK) return -1;
+	return (int)ca.len;
+}
+
+static bool dock_zf_open(dock_zf_t *f, const char *path) {
+	z_kernel_ptr_t k = (z_kernel_ptr_t)(uintptr_t)(reg_kernel);
+	z_fs_open_args_t oa;
+	oa.name = (char *)path;
+	oa.handle = -1;
+	f->calls = 1;
+	z_obj_t *rv = (z_obj_t *)k(Z_SYS_FS_OPEN_READ, (uint32_t *)&oa, 0);
+	f->handle = oa.handle;
+	return rv && rv->val.uint32 == Z_OK && oa.handle >= 0;
+}
+
+static void dock_zf_close(dock_zf_t *f) {
+	z_kernel_ptr_t k = (z_kernel_ptr_t)(uintptr_t)(reg_kernel);
+	z_fs_close_args_t cl;
+	cl.handle = f->handle;
+	k(Z_SYS_FS_CLOSE, (uint32_t *)&cl, 0);
+}
+
+static bool dock_has(uint32_t feature, uint32_t feature2) {
+	return (!feature || z_soc_has_feature(feature)) &&
+		(!feature2 || z_soc_has_feature2(feature2));
+}
+
+// Building the dock needs these only while it runs, and counting the
+// running apps needs a copy of the process table only while it runs;
+// the two never overlap, so they share one block. Static rather than
+// on wm's 8KB stack, which its heap shares.
+#define DOCK_PROCS_MAX  32			// Z_PROCS_MAX, sw/os/kernel.h
+static union {
+	struct {
+		dk_cfg_t	cfg;
+		dk_zic_t	zic;
+	} b;
+	z_proc_info_t	procs[DOCK_PROCS_MAX];
+} dock_scratch;
+#define dock_cfg    dock_scratch.b.cfg
+#define dock_tab    dock_scratch.b.zic
+
+// Decides what the dock offers: wm.cfg for which apps and in what
+// order, dock.zic for the icons, and then the same two questions as
+// always.
 //
-// Not re-run when an sdcard is inserted later. Doing that would mean
-// resizing and repainting the dock window underneath whatever the user
-// is doing, and the dock is drawn once at a size derived from the
-// count. Worth revisiting if hotplug ever becomes a thing people
-// actually do; for now a reboot picks up a new card.
+// z_exec_exists*() asks the kernel's own resolver (filesystem first,
+// flash core-app archive underneath), so an app is kept if and only if
+// clicking it would really launch something. The feature checks ask
+// the bitstream the same question one level down: an app whose hardware
+// this bitstream does not report (mmod with no GPIO module, the audio
+// apps with no AUDIO) would exit a second later, looking broken rather
+// than absent, so it is left out too.
+//
+// At start, and again when the configuration is reloaded
+// (dock_reload()). Each step says on the console how long it took.
 static void dock_build(void) {
 
+	uint32_t t_all = z_uptime_ticks(), t0;
+	int n;
+
 	dock_app_count = 0;
+	dock_nmain = 0;
+	dock_nviews = 0;
 	dock_page = 0;
+	dock_view = -1;
+	dock_main_page = 0;
+	dock_return_item = -1;
+	dock_next_icon = dock_back_icon = DK_NONE;
+	dock_next_len = dock_back_len = 0;
+	dock_store_used = 0;
 
-	// Which candidates exist, asked all at once: one pass over /apps
-	// in the kernel instead of a directory lookup per candidate, which
-	// was most of what this function cost (docs/window_manager.md,
-	// "The dock"). A kernel without the batched call fails it, and the
-	// loop below asks one by one as it always did.
-	const char *names[DOCK_CANDIDATE_COUNT];
-	uint8_t found[DOCK_CANDIDATE_COUNT];
-	for (int i = 0; i < DOCK_CANDIDATE_COUNT; i++)
-		names[i] = dock_candidates[i].name;
-	bool batched = (z_exec_exists_many(names, DOCK_CANDIDATE_COUNT, found) == Z_OK);
-
-	for (int i = 0; i < DOCK_CANDIDATE_COUNT; i++) {
-		if (dock_candidates[i].feature &&
-		    !z_soc_has_feature(dock_candidates[i].feature)) {
-			printf("wm: dock: '%s' needs hardware this bitstream "
-				"does not have, skipping\n", dock_candidates[i].name);
-			continue;
-		}
-		if (dock_candidates[i].feature2 &&
-		    !z_soc_has_feature2(dock_candidates[i].feature2)) {
-			printf("wm: dock: '%s' needs hardware this bitstream "
-				"does not have, skipping\n", dock_candidates[i].name);
-			continue;
-		}
-		if (batched ? !found[i] : !z_exec_exists(dock_candidates[i].name)) {
-			printf("wm: dock: '%s' not installed, skipping\n",
-				dock_candidates[i].name);
-			continue;
-		}
-		dock_apps[dock_app_count++] = &dock_candidates[i];
+	// -- the arrangement: read whole into the store, which is free
+	// until the icons are read into it below, and parsed from there
+	// (the parser keeps its own copy of the names). Two file calls.
+	t0 = z_uptime_ticks();
+	int csize = dock_read_whole(Z_PATH_WM_CONFIG, dock_store, sizeof(dock_store));
+	if (csize > 0) {
+		dk_cfg_init(&dock_cfg, dock_cfg_report, (void *)Z_PATH_WM_CONFIG);
+		dk_cfg_text(&dock_cfg, (const char *)dock_store, (uint32_t)csize);
+		printf("wm: dock: %s: %d bytes, %d problem(s), %lu ms\n", Z_PATH_WM_CONFIG,
+			csize, dock_cfg.errors, (unsigned long)dock_ms(t0));
+	} else {
+		printf("wm: dock: %s: %s -- using \"%s\"\n", Z_PATH_WM_CONFIG,
+			csize == 0 ? "not there" : "too large or unreadable",
+			"row wide term files text @rest");
+		dk_cfg_init(&dock_cfg, dock_cfg_report, (void *)"(built in)");
+		dk_cfg_text(&dock_cfg, dock_cfg_builtin, sizeof(dock_cfg_builtin) - 1);
 	}
 
-	printf("wm: dock: %d of %d apps available\n",
-		dock_app_count, DOCK_CANDIDATE_COUNT);
+	// -- the icons' table: names, flags, where each one is. The file
+	// stays open for the icons themselves, once it is known which.
+	t0 = z_uptime_ticks();
+	dock_zf_t zf;
+	bool zopen = dock_zf_open(&zf, Z_PATH_WM_ICONS);
+	// Read through the store's free end: it is free until the icons.
+	dock_zic_count = zopen ?
+		dk_zic_read_table(dock_zf_read, &zf, &dock_tab, dock_store, sizeof(dock_store), dock_has) : -1;
+	if (dock_zic_count <= 0) {
+		printf("wm: dock: %s: %s -- icons drawn as names\n", Z_PATH_WM_ICONS,
+			zopen ? "damaged" : "not there");
+		dock_zic_count = 0;
+	}
+	const dk_zic_t *zic = dock_zic_count > 0 ? &dock_tab : NULL;
+
+	// What is wanted of the parser later: its memory is reused below.
+	dock_dots = dock_cfg.dots;
+	dock_cfg_errors = dock_cfg.errors;
+
+	// The side, and the row written for it: `wide` along the bottom
+	// or the top, `tall` on the left or the right -- or, on a side,
+	// `wide` when the file has no `tall` (it pages down the side).
+	dock_side = dock_cfg.side;
+	int row = dk_side_row(dock_side);
+	if (!dock_cfg.has[row] && dock_cfg.has[DK_ROW_WIDE]) row = DK_ROW_WIDE;
+	if (!dock_cfg.has[row]) {
+		printf("wm: dock: %s: no row %s, showing all\n", Z_PATH_WM_CONFIG,
+			row == DK_ROW_TALL ? "tall" : "wide");
+		dock_cfg.rest[row] = 0;
+		dock_cfg.count[row] = 0;
+	}
+
+	dk_dock_t dk;
+	n = dk_list(&dock_cfg, row, zic, dock_apps, DOCK_APPS_MAX, &dk);
+
+	// -- which of those can run here -- the apps; a group's icon stays
+	// as long as one of its apps does (dk_keep()).
+	uint32_t t1 = z_uptime_ticks();
+	const char *names[DOCK_APPS_MAX];
+	uint8_t found[DOCK_APPS_MAX], keep[DOCK_APPS_MAX];
+	for (int i = 0; i < n; i++) names[i] = dock_apps[i].name;
+	bool batched = n > 0 && z_exec_exists_many(names, (uint32_t)n, found) == Z_OK;
+
+	int named = 0;
+	for (int i = 0; i < n; i++) {
+		keep[i] = 0;
+		if (dock_apps[i].view >= 0) continue;
+		named++;
+		if (dock_apps[i].zic >= 0 && (dock_tab.e[dock_apps[i].zic].flags & DK_ZIC_NOHW)) {
+			printf("wm: dock: '%s': no hardware for it\n", dock_apps[i].name);
+			continue;
+		}
+		if (batched ? !found[i] : !z_exec_exists(dock_apps[i].name)) {
+			printf("wm: dock: '%s': not installed\n", dock_apps[i].name);
+			continue;
+		}
+		keep[i] = 1;
+	}
+	uint32_t ms_exists = dock_ms(t1);
+
+	n = dk_keep(dock_apps, keep, &dk);
+	dock_app_count = n;
+	dock_nmain = dk.nmain;
+	dock_nviews = dk.nviews;
+
+	// -- what is kept: the groups' names (the file's, and the parser's
+	// copy is about to go), then the spoken names and icons the dock
+	// shows, read on through dock.zic. Nothing else of it stays.
+	for (int v = 0; v < dk.nviews; v++) {
+		const char *nm = dock_cfg.groups[dk.views[v].group].name;
+		uint32_t len = (uint32_t)strlen(nm) + 1;
+		dock_views[v].start = dk.views[v].start;
+		dock_views[v].count = dk.views[v].count;
+		dock_views[v].name = (uint16_t)dock_store_used;
+		memcpy(dock_store + dock_store_used, nm, len);
+		dock_store_used += len;
+	}
+
+	int icons = 0;
+	if (zic) {
+		for (int i = 0; i < n; i++) if (dock_apps[i].zic >= 0)
+			dock_tab.e[dock_apps[i].zic].flags |= DK_ZIC_WANT;
+		int nx = dk_zic_find(zic, "@next");
+		int bk = dk_zic_find(zic, "@back");
+		if (nx >= 0) dock_tab.e[nx].flags |= DK_ZIC_WANT;
+		if (bk >= 0 && dock_nviews) dock_tab.e[bk].flags |= DK_ZIC_WANT;
+		// The parser is done with: its memory is room to read through.
+		if (!dk_zic_read_parts(dock_zf_read, &zf, &dock_tab, (uint8_t *)&dock_cfg,
+			sizeof(dock_cfg), dock_store, sizeof(dock_store), &dock_store_used))
+			printf("wm: dock: %s: short, or over %u bytes; rest as names\n", Z_PATH_WM_ICONS,
+				(unsigned)sizeof(dock_store));
+		for (int i = 0; i < n; i++) {
+			int z = dock_apps[i].zic;
+			if (z < 0) continue;
+			dock_apps[i].icon_len = dock_tab.e[z].icon_len;
+			dock_apps[i].icon_off = dock_tab.e[z].icon;
+			if (dock_apps[i].icon_len) icons++;
+			if (dock_apps[i].view < 0) dock_apps[i].spoken_off = dock_tab.e[z].spoken;
+		}
+		if (nx >= 0 && dock_tab.e[nx].icon_len) {
+			dock_next_icon = dock_tab.e[nx].icon;
+			dock_next_len = dock_tab.e[nx].icon_len;
+		}
+		if (bk >= 0 && dock_tab.e[bk].icon_len) {
+			dock_back_icon = dock_tab.e[bk].icon;
+			dock_back_len = dock_tab.e[bk].icon_len;
+		}
+	}
+	if (zopen) dock_zf_close(&zf);
+	if (zic)
+		printf("wm: dock: %s: %d/%d icons, %lu bytes, %d reads, %lu ms\n",
+			Z_PATH_WM_ICONS, icons, dock_zic_count, (unsigned long)dock_store_used,
+			zf.calls, (unsigned long)(dock_ms(t0) - ms_exists));
+
+	int apps = 0;
+	for (int i = 0; i < n; i++) {
+		if (dock_apps[i].view >= 0) {
+			dock_apps[i].spoken_off = dock_views[dock_apps[i].view].name;
+			continue;
+		}
+		apps++;
+		if (!dock_apps[i].icon_len)
+			printf("wm: dock: '%s': no icon\n", dock_apps[i].name);
+	}
+
+	// The frame: as wide as the widest view, a group's counting its
+	// BACK, so it never moves when a group opens.
+	dock_frame_len = z_dock_len_for(dock_slots(), dock_full(), dock_nmain);
+	for (int v = 0; v < dock_nviews; v++) {
+		int w = z_dock_len_for(dock_slots(), dock_full(), dock_views[v].count + 1);
+		if (w > dock_frame_len) dock_frame_len = w;
+	}
 
 	// Paging engages only when the icons genuinely do not all fit.
 	// At exactly DOCK_SLOTS_MAX they do, and showing a NEXT button
 	// that leads to an empty page would be worse than useless.
-	dock_paged = z_dock_paged(dock_app_count);
-	dock_pages = z_dock_pages(dock_app_count);
+	dock_view_apply();
 
-	if (dock_paged)
-		printf("wm: dock: %d apps, %d pages of %d\n",
-			dock_app_count, dock_pages, DOCK_PAGE_SIZE);
+	printf("wm: dock: %d/%d apps, row %d, %d group(s), check %lu ms, "
+		"%d page(s), %lu ms\n",
+		apps, named, dock_nmain, dock_nviews, (unsigned long)ms_exists,
+		dock_pages, (unsigned long)dock_ms(t_all));
+
+	memset(dock_running, 0, sizeof(dock_running));
+	dock_count_due = true;
+
+	dock_cfg_gen = z_cfg_generation();
+
+}
+
+static void repair_region(int x, int y, int w, int h, int exclude_idx);
+
+// Is any running dot on screen? Then the recount has a deadline that
+// wakes wm (wm_idle_ticks()).
+static bool dock_dots_shown(void) {
+	if (!dock_dots || dock_idx < 0 || dock_hidden) return false;
+	for (int a = 0; a < DOCK_APP_COUNT; a++) if (dock_running[a]) return true;
+	return false;
+}
+
+// How many copies of each dock app are running, from the kernel's
+// process table: a process counts for an app when the name the kernel
+// reports for it is the app's (dk_proc_is()). Repaints the dock when a
+// count it shows changed. From the main loop only.
+static void dock_count(void) {
+
+	uint32_t trunc = 0;
+	uint32_t np = z_proc_list(dock_scratch.procs, DOCK_PROCS_MAX, &trunc);
+	bool changed = false;
+
+	dock_count_due = false;
+	dock_count_at = z_uptime_ticks() + 2 * Z_TICK_HZ;
+
+	// The apps first, then each group's icon: its apps' copies added up.
+	for (int pass = 0; pass < 2; pass++)
+	for (int a = 0; a < DOCK_APP_COUNT; a++) {
+		int n = 0;
+		int v = dock_apps[a].view;
+		if ((v >= 0) != (pass == 1)) continue;
+		if (v >= 0) {
+			for (int m = dock_views[v].start; m < dock_views[v].start + dock_views[v].count; m++)
+				n += dock_running[m];
+		} else {
+			for (uint32_t i = 0; i < np; i++) {
+				const z_proc_info_t *p = &dock_scratch.procs[i];
+				if (!(p->flags & Z_PROC_FLAG_ACTIVE) || (p->flags & Z_PROC_FLAG_DIE)) continue;
+				if (dk_proc_is(p->name, dock_apps[a].name)) n++;
+			}
+		}
+		if (n > 255) n = 255;
+		if (dock_running[a] != (uint8_t)n) {
+			// Only what is drawn: a fifth copy changes no dot.
+			int was = dock_running[a] < DK_DOTS_MAX ? dock_running[a] : DK_DOTS_MAX;
+			int now = n < DK_DOTS_MAX ? n : DK_DOTS_MAX;
+			if (was != now) changed = true;
+			dock_running[a] = (uint8_t)n;
+		}
+	}
+
+	if (changed && dock_dots && dock_idx >= 0 && !dock_hidden)
+		repair_region((int)windows[dock_idx].x, (int)windows[dock_idx].y,
+			(int)windows[dock_idx].w, (int)windows[dock_idx].h, -1);
 
 }
 
@@ -1326,7 +1624,7 @@ static void dock_build(void) {
 // "Hardware glyph blitting" in docs/window_manager.md). draw_dock()
 // just draws, trusting that font data is already there and stays
 // there.
-// blits a 32x32 1bpp bitmap (see dock_icons.h for the exact format)
+// blits a 32x32 1bpp bitmap (dock_cfg.h has the format)
 // at (x0,y0), one z_fb_set_pixel() call per bit. Only ever called for
 // the dock's icon slots -- a handful of calls per repair_region()
 // overlap, not a hot path (contrast sw/apps/term, which moved off
@@ -1335,38 +1633,50 @@ static void dock_build(void) {
 // typing -- see z_fb_draw_char2()'s comment in zgfx.h). If dock icons
 // ever need to redraw far more often than "something overlapped the
 // dock", worth revisiting the same way.
-static void draw_icon_bitmap(int x0, int y0, const uint8_t *bitmap) {
+static void draw_icon_bitmap(int x0, int y0, const uint8_t *bitmap, int ink) {
 
 	for (int row = 0; row < DOCK_ICON_SIZE; row++) {
 		for (int col = 0; col < DOCK_ICON_SIZE; col++) {
 			uint8_t byte = bitmap[row * (DOCK_ICON_SIZE / 8) + col / 8];
 			int bit = (byte >> (7 - (col % 8))) & 1;
-			if (bit) z_fb_set_pixel(x0 + col, y0 + row, 1, NULL);
+			if (bit) z_fb_set_pixel(x0 + col, y0 + row, ink, NULL);
 		}
 	}
 
 }
 
-// draws `bitmap` INVERTED -- a solid-filled slot with the icon's own
+// `ink` 0 draws it INVERTED -- a solid-filled slot with the icon's own
 // shape cut out of it, rather than the icon lit up against a dark
 // slot. Used for the "launching" state (dock_launching[], see its own
 // comment) so a launch in progress is visually obvious without adding
 // a whole separate iconography -- see draw_dock() below. The caller
 // is responsible for the solid fill itself (z_fb_hw_fill_rect(),
-// hardware-accelerated, matching this file's "everything through
-// gpu_blit/gpu_raster" convention -- see draw_dock()); this function
-// only punches the icon's own ink pixels back out to 0 on top of it,
-// same per-bit loop as draw_icon_bitmap() above, just inverted.
-static void draw_icon_bitmap_inverted(int x0, int y0, const uint8_t *bitmap) {
+// hardware-accelerated); this only punches the icon's own ink pixels
+// back out to 0 on top of it.
 
-	for (int row = 0; row < DOCK_ICON_SIZE; row++) {
-		for (int col = 0; col < DOCK_ICON_SIZE; col++) {
-			uint8_t byte = bitmap[row * (DOCK_ICON_SIZE / 8) + col / 8];
-			int bit = (byte >> (7 - (col % 8))) & 1;
-			if (bit) z_fb_set_pixel(x0 + col, y0 + row, 0, NULL);
-		}
-	}
+// An icon from the store, expanded as it is drawn (dk_icon_expand()).
+// False if there is none, or it does not expand: the caller draws the
+// name instead.
+static bool draw_icon_stored(int x0, int y0, uint16_t off, uint8_t len, bool inverted) {
+	uint8_t bits[DK_ICON_BYTES];
+	if (!len || off == DK_NONE || (uint32_t)off + len > dock_store_used) return false;
+	if (!dk_icon_expand(dock_store + off, len, bits)) return false;
+	draw_icon_bitmap(x0, y0, bits, inverted ? 0 : 1);
+	return true;
+}
 
+// An app with no icon in dock.zic (or no dock.zic at all): its name in
+// the slot, as many letters as fit (five of the 6x12 font), centred.
+// Inverted for the launching state, like an icon.
+static void draw_icon_letters(int x0, int y0, const char *name, bool inverted) {
+	const z_font_t *f = &z_font_6x12;
+	char s[DOCK_ICON_SIZE / 6 + 1];
+	int n = 0;
+	while (name[n] && n < (int)sizeof(s) - 1) { s[n] = name[n]; n++; }
+	s[n] = 0;
+	z_fb_draw_text2(x0 + (DOCK_ICON_SIZE - n * f->w) / 2,
+		y0 + (DOCK_ICON_SIZE - f->h) / 2, s,
+		inverted ? 0 : 1, inverted ? 1 : 0, f, NULL);
 }
 
 // draws the dock's own keyboard-focus indicator around dock_selected
@@ -1382,24 +1692,59 @@ static void draw_icon_bitmap_inverted(int x0, int y0, const uint8_t *bitmap) {
 // `DOCK_APP_COUNT, dock_page` fifteen times, which is how one of them
 // eventually gets the page wrong.
 
-static int dock_page_apps(int page) {
-	return z_dock_page_apps(DOCK_APP_COUNT, page);
+// The view on show: where its items start, how many, and whether a
+// BACK icon leads it (every group; never the main row).
+static int dock_vstart(void) { return dock_view < 0 ? 0 : dock_views[dock_view].start; }
+static int dock_vcount(void) { return dock_view < 0 ? dock_nmain : dock_views[dock_view].count; }
+static int dock_vlead(void)  { return dock_view < 0 ? 0 : 1; }
+
+static int dock_psize(void) {
+	return z_dock_vpage_size(dock_slots(), dock_vcount(), dock_vlead());
 }
 
+static int dock_page_apps(int page) {
+	return z_dock_vpage_apps(dock_slots(), dock_vcount(), dock_vlead(), page);
+}
+
+// The item (a dock_apps[] index) at `slot`, or -1.
 static int dock_app_at(int slot) {
-	return z_dock_app_at(DOCK_APP_COUNT, dock_page, slot);
+	int k = z_dock_vapp_at(dock_slots(), dock_vcount(), dock_vlead(), dock_page, slot);
+	return k < 0 ? -1 : dock_vstart() + k;
 }
 
 static bool dock_slot_is_next(int slot) {
-	return z_dock_slot_is_next(DOCK_APP_COUNT, slot);
+	return z_dock_vslot_is_next(dock_slots(), dock_vcount(), dock_vlead(), slot);
 }
 
-static int dock_slot_x(int slot) {
-	return z_dock_slot_x(DOCK_APP_COUNT, slot);
+static bool dock_slot_is_back(int slot) {
+	return z_dock_vslot_is_back(dock_vlead(), slot);
 }
 
-static int dock_slot_at_x(int local_x) {
-	return z_dock_slot_at_x(DOCK_APP_COUNT, dock_page, local_x);
+// Where `slot`'s icon is, relative to the dock window: along the dock
+// (the layout's), and across it (the padding, and the dots' row when
+// they are on the near side).
+static void dock_slot_xy(int slot, int *x, int *y) {
+	int along = z_dock_vslot_pos(dock_frame_len, dock_slots(), dock_vcount(), dock_vlead(), slot);
+	if (dock_vert()) { *x = dock_cross(); *y = along; }
+	else { *x = along; *y = dock_cross(); }
+}
+
+// The slot under screen point (cx, cy), or -1: the same geometry the
+// drawing uses, for clicks and for Super+W.
+static int dock_slot_at(int cx, int cy) {
+	const wm_window_t *w = &windows[dock_idx];
+	int lx = cx - (int)w->x, ly = cy - (int)w->y;
+	int along = dock_vert() ? ly : lx, across = (dock_vert() ? lx : ly) - dock_cross();
+	if (across < 0 || across >= DOCK_ICON_SIZE) return -1;	// in the padding
+	return z_dock_vslot_at(dock_frame_len, dock_slots(), dock_vcount(), dock_vlead(),
+		dock_page, along);
+}
+
+// The paging of the view on show.
+static void dock_view_apply(void) {
+	dock_paged = z_dock_vpaged(dock_slots(), dock_vcount(), dock_vlead());
+	dock_pages = z_dock_vpages(dock_slots(), dock_vcount(), dock_vlead());
+	if (dock_page >= dock_pages) dock_page = 0;
 }
 
 static void draw_dock_selection_ring(int ix, int iy) {
@@ -1419,11 +1764,28 @@ static void draw_ime_box(void) {
 	int cols = len;
 	if (l->ime != Z_KBD_IME_NONE && cols < Z_KBD_IME_PEND) cols = Z_KBD_IME_PEND;
 	int bw = cols * f->w + 8, bh = DOCK_ICON_SIZE;
-	int bx = (int)w->x + (int)w->w - DOCK_PADDING - bw;
-	int by = (int)w->y + DOCK_PADDING;
+	// Over the far end of the dock: the right end of a row, the bottom
+	// of a column, centred across it.
+	int bx, by;
+	if (dock_vert()) {
+		bx = (int)w->x + dock_cross() + (DOCK_ICON_SIZE - bw) / 2;
+		by = (int)w->y + (int)w->h - DOCK_PADDING - bh;
+		if (bx < 0) bx = 0;
+		if (bx + bw > WM_SCREEN_W) bx = WM_SCREEN_W - bw;
+	} else {
+		bx = (int)w->x + (int)w->w - DOCK_PADDING - bw;
+		by = (int)w->y + dock_cross();
+	}
 	z_fb_hw_fill_rect(bx, by, bw, bh, 1);
 	z_fb_draw_text2(bx + (bw - len * f->w) / 2, by + (bh - f->h) / 2, label, 0, 1, f, NULL);
 }
+
+// The running dots: 2x2, 2 apart, one pixel beyond the icon's outline
+// on the screen-edge side, in the padding that is one deeper there
+// (DOCK_DOT_ROOM), so a dot has a clear pixel on both sides of it.
+#define DOCK_DOT_SIZE   2
+#define DOCK_DOT_GAP    2
+#define DOCK_DOT_STEP   (DOCK_DOT_SIZE + DOCK_DOT_GAP)
 
 static void draw_dock(void) {
 
@@ -1473,9 +1835,10 @@ static void draw_dock(void) {
 	// region() clears+redraws whatever it covers regardless).
 	bool dock_focused = (focused == dock_idx);
 
-	for (int slot = 0; slot < DOCK_SLOTS_MAX; slot++) {
+	for (int slot = 0; slot < dock_slots(); slot++) {
 
 		bool is_next = dock_slot_is_next(slot);
+		bool is_back = dock_slot_is_back(slot);
 		int app = dock_app_at(slot);
 		int ix, iy;
 		bool selected;
@@ -1484,12 +1847,14 @@ static void draw_dock(void) {
 		// all -- no box, no icon. That empty space inside a
 		// full-width frame is what tells you at a glance that you are
 		// not on the first page.
-		if (app < 0 && !is_next) continue;
+		if (app < 0 && !is_next && !is_back) continue;
 
-		ix = x0 + dock_slot_x(slot);
-		iy = y0 + DOCK_PADDING;
+		dock_slot_xy(slot, &ix, &iy);
+		ix += x0;
+		iy += y0;
 
 		selected = is_next ? (dock_selected == DOCK_SEL_NEXT)
+		         : is_back ? (dock_selected == DOCK_SEL_BACK)
 		                   : (dock_selected == app);
 
 		if (dock_focused && selected)
@@ -1498,14 +1863,34 @@ static void draw_dock(void) {
 		z_fb_hw_box(ix, iy, ix + DOCK_ICON_SIZE - 1, iy + DOCK_ICON_SIZE - 1, 1, NULL);
 
 		if (is_next) {
-			draw_icon_bitmap(ix, iy, z_icon_next_data);
+			if (!draw_icon_stored(ix, iy, dock_next_icon, dock_next_len, false))
+				draw_icon_letters(ix, iy, ">", false);
+		} else if (is_back) {
+			if (!draw_icon_stored(ix, iy, dock_back_icon, dock_back_len, false))
+				draw_icon_letters(ix, iy, "<", false);
 		} else if (dock_launching[app]) {
 			// see dock_launching[]'s own comment -- solid fill, then
 			// the icon's own ink pixels punched back out to 0 on top.
 			z_fb_hw_fill_rect(ix, iy, DOCK_ICON_SIZE, DOCK_ICON_SIZE, 1);
-			draw_icon_bitmap_inverted(ix, iy, dock_apps[app]->bitmap);
-		} else {
-			draw_icon_bitmap(ix, iy, dock_apps[app]->bitmap);
+			if (!draw_icon_stored(ix, iy, dock_apps[app].icon_off, dock_apps[app].icon_len, true))
+				draw_icon_letters(ix, iy, dock_apps[app].name, true);
+		} else if (!draw_icon_stored(ix, iy, dock_apps[app].icon_off, dock_apps[app].icon_len, false)) {
+			draw_icon_letters(ix, iy, dock_apps[app].name, false);
+		}
+
+		// One dot per running copy, beside the icon on the screen-edge
+		// side, centred along it (docs/dock.md, "Running apps").
+		if (app >= 0 && dock_dots && dock_running[app]) {
+			int n = dock_running[app] < DK_DOTS_MAX ? dock_running[app] : DK_DOTS_MAX;
+			int along = (DOCK_ICON_SIZE - (n * DOCK_DOT_STEP - DOCK_DOT_GAP)) / 2;
+			int across = dock_dots_near() ? -1 - DOCK_DOT_SIZE : DOCK_ICON_SIZE + 1;
+			for (int d = 0; d < n; d++) {
+				int a = along + d * DOCK_DOT_STEP;
+				if (dock_vert())
+					z_fb_hw_fill_rect(ix + across, iy + a, DOCK_DOT_SIZE, DOCK_DOT_SIZE, 1);
+				else
+					z_fb_hw_fill_rect(ix + a, iy + across, DOCK_DOT_SIZE, DOCK_DOT_SIZE, 1);
+			}
 		}
 
 	}
@@ -2123,7 +2508,19 @@ static uint32_t wm_idle_ticks(void) {
 	for (i = 0; i < DOCK_APP_COUNT; i++) {
 		int32_t left;
 		if (!dock_launching[i]) continue;
-		left = (int32_t)(dock_launching_deadline[i] - now);
+		left = (int16_t)(dock_launching_deadline[i] - (uint16_t)now);
+		if (left <= 0)
+			return 1;
+		if (!soon || (uint32_t)left < soon)
+			soon = (uint32_t)left;
+	}
+
+	// The running dots' recount, while a dot is shown: a program that
+	// ends (killed from the kernel shell, a windowless one quitting)
+	// sends wm nothing, so without this its dot would stay until the
+	// next input. One wake every 2 s, and none with no dots up.
+	if (dock_dots_shown()) {
+		int32_t left = (int32_t)(dock_count_at - now);
 		if (left <= 0)
 			return 1;
 		if (!soon || (uint32_t)left < soon)
@@ -2142,6 +2539,74 @@ static uint32_t wm_idle_ticks(void) {
 	return soon;
 }
 
+// -- groups, opened in place (docs/dock.md, "Groups") --
+
+static void dock_speech_app(char *buf, uint32_t size, int app);
+
+static void dock_repaint(void) {
+	if (dock_idx >= 0)
+		repair_region(windows[dock_idx].x, windows[dock_idx].y,
+			windows[dock_idx].w, windows[dock_idx].h, -1);
+}
+
+// Shows group `v` in place of the row, from its first page, with the
+// selection on its first app.
+static void dock_open_view(int v) {
+	if (v < 0 || v >= dock_nviews) return;
+	if (dock_view < 0) dock_main_page = dock_page;
+	dock_view = v;
+	dock_page = 0;
+	dock_return_item = -1;
+	dock_view_apply();
+	dock_selected = dock_views[v].count ? dock_views[v].start : DOCK_SEL_BACK;
+	printf("wm: dock: group '%s' (%d apps)\n", (const char *)dock_store + dock_views[v].name,
+		dock_views[v].count);
+	dock_repaint();
+	if (z_speak_available()) {
+		char buf[Z_SPEAK_SLOT_MAX];
+		buf[0] = 0;
+		z_speak_cat(buf, sizeof(buf), (const char *)dock_store + dock_views[v].name);
+		z_speak_cat(buf, sizeof(buf), ": ");
+		dock_speech_app(buf, sizeof(buf), dock_selected >= 0 ? dock_selected : 0);
+		z_speak(buf, Z_TTS_F_INTERRUPT);
+	}
+}
+
+// Back to the row, on the page the group was opened from, with the
+// selection on the group's icon. `repaint` false when the caller
+// repaints anyway (the dock coming back from hiding).
+static void dock_close_view(bool repaint) {
+	if (dock_view < 0) return;
+	int v = dock_view;
+	dock_view = -1;
+	dock_page = dock_main_page;
+	dock_return_item = -1;
+	dock_view_apply();
+	dock_selected = -1;
+	for (int i = 0; i < dock_nmain; i++)
+		if (dock_apps[i].view == v) {
+			dock_selected = i;
+			// the page that icon is on, should the remembered one not be
+			int ps = dock_psize();
+			if (dock_paged && ps > 0) dock_page = i / ps;
+			break;
+		}
+	if (repaint) {
+		dock_repaint();
+		speak_dock_selection();
+	}
+}
+
+// Launched from a group: back to the row once the launch is over --
+// its window shown (dock_launching[] cleared), or the timeout. From the
+// main loop.
+static void dock_return_check(void) {
+	if (dock_return_item >= 0 && !dock_launching[dock_return_item]) {
+		dock_return_item = -1;
+		dock_close_view(true);
+	}
+}
+
 // launches dock_apps[slot], same as a mouse click on that icon (see
 // dock_click() below, which now just maps a click to a slot and calls
 // this) -- factored out so keyboard activation (dock_handle_key()'s
@@ -2151,13 +2616,19 @@ static void dock_launch(int slot) {
 
 	if (slot < 0 || slot >= DOCK_APP_COUNT) return;
 
+	// A group's icon opens the group.
+	if (dock_apps[slot].view >= 0) {
+		dock_open_view(dock_apps[slot].view);
+		return;
+	}
+
 	// Nothing launches while the system is busy. Right now the only
 	// reason is WM_BUSY_STARTUP -- init is still loading apps off the
 	// card (see init_finished()). The Z cursor is what tells the user
 	// to wait.
 	if (wm_is_busy()) {
 		printf("wm: dock: busy, not launching '%s' yet\n",
-			dock_apps[slot]->name);
+			dock_apps[slot].name);
 		return;
 	}
 
@@ -2184,20 +2655,20 @@ static void dock_launch(int slot) {
 	// whichever process the CPU happens to be running at the time.
 	dock_launching[slot] = true;
 	dock_launching_pid[slot] = 0;	// not known yet -- see below
-	dock_launching_deadline[slot] = z_uptime_ticks() + DOCK_LAUNCH_TIMEOUT_TICKS;
+	dock_launching_deadline[slot] = (uint16_t)(z_uptime_ticks() + DOCK_LAUNCH_TIMEOUT_TICKS);
 
 	if (dock_idx >= 0)
 		repair_region(windows[dock_idx].x, windows[dock_idx].y,
 			windows[dock_idx].w, windows[dock_idx].h, -1);
 
-	const char *name = dock_apps[slot]->name;
+	const char *name = dock_apps[slot].name;
 	printf("wm: dock: launching '%s'\n", name);
 
 	uint32_t pid = z_proc_run(name);
 
 	if (!pid) {
 
-		printf("wm: dock: cannot launch '%s' (no file or no slot)\n", name);
+		printf("wm: dock: cannot launch '%s'\n", name);
 
 		// undo the inverted state immediately -- z_proc_run() failed
 		// synchronously (no process was even created), so there's no
@@ -2205,6 +2676,7 @@ static void dock_launch(int slot) {
 		// normal way (handle_message()'s Z_WM_CREATE_WINDOW case), and
 		// no reason to wait out the timeout either.
 		dock_launching[slot] = false;
+		if (dock_view >= 0) dock_close_view(false);	// from a group: back to the row
 		if (dock_idx >= 0)
 			repair_region(windows[dock_idx].x, windows[dock_idx].y,
 				windows[dock_idx].w, windows[dock_idx].h, -1);
@@ -2214,7 +2686,13 @@ static void dock_launch(int slot) {
 	}
 
 	printf("wm: dock: launched '%s' as pid %ld\n", name, (long)pid);
-	dock_launching_pid[slot] = pid;
+	dock_launching_pid[slot] = (uint8_t)pid;
+
+	// From a group: back to the row once the launch is over -- its
+	// window shown, or the timeout -- so the icon's inverted look is
+	// still seen meanwhile. The main loop does it.
+	if (dock_view >= 0) dock_return_item = slot;
+	dock_count_due = true;
 
 }
 
@@ -2238,47 +2716,62 @@ static bool dock_handle_key(uint32_t keysym, bool pressed) {
 	bool prev     = (keysym == Z_KEY_LEFT || keysym == Z_KEY_UP);
 	bool next     = (keysym == Z_KEY_RIGHT || keysym == Z_KEY_DOWN);
 	bool activate = (keysym == CH_CR);   // Enter -- see zkbd.c's usage 0x28 mapping
+	// Esc or Backspace in a group: back to the row. In the row they are
+	// not the dock's.
+	bool back     = dock_view >= 0 &&
+		(keysym == 0x1b || keysym == CH_BS || keysym == CH_DEL);
 
-	if (!prev && !next && !activate) return false;
+	if (!prev && !next && !activate && !back) return false;
 	if (!pressed) return true;   // own the key, but only act on press
 
-	// Selection moves within the CURRENT PAGE, and the NEXT icon is
-	// part of that cycle rather than a special case -- it is one more
-	// thing to land on, and Enter on it does what clicking it does.
-	// So the keyboard and the mouse offer exactly the same set of
-	// targets, which is the only way the two stay explicable to the
-	// same person.
-	{
-		int first = dock_paged ? dock_page * DOCK_PAGE_SIZE : 0;
-		int count = dock_page_apps(dock_page);
-		int last  = first + count - 1;
+	if (back) {
+		dock_close_view(true);
+		return true;
+	}
 
-		if (dock_selected < first || dock_selected > last) {
-			if (dock_selected != DOCK_SEL_NEXT) dock_selected = first;
-		}
+	// Selection moves within the CURRENT PAGE of the view on show, and
+	// BACK (in a group) and NEXT (when it pages) are part of that cycle
+	// rather than special cases -- one more thing to land on each, and
+	// Enter on one does what clicking it does. So the keyboard and the
+	// mouse offer exactly the same targets, which is the only way the
+	// two stay explicable to the same person. The cycle: BACK, the
+	// page's apps, NEXT, around.
+	{
+		int count = dock_page_apps(dock_page);
+		int first = dock_vstart() + dock_page * dock_psize();
+		int last  = first + count - 1;
+		bool has_back = dock_vlead() != 0, has_next = dock_paged;
+
+		bool valid = (dock_selected == DOCK_SEL_BACK && has_back) ||
+			(dock_selected == DOCK_SEL_NEXT && has_next) ||
+			(count > 0 && dock_selected >= first && dock_selected <= last);
+		if (!valid) dock_selected = count > 0 ? first : has_back ? DOCK_SEL_BACK : DOCK_SEL_NEXT;
 
 		if (prev || next) {
 
 			int old_selected = dock_selected;
+			int s = dock_selected;
 
 			if (next) {
-				if (dock_selected == DOCK_SEL_NEXT) dock_selected = first;
-				else if (dock_selected == last)
-					dock_selected = dock_paged ? DOCK_SEL_NEXT : first;
-				else dock_selected++;
+				if (s == DOCK_SEL_BACK)      s = count ? first : has_next ? DOCK_SEL_NEXT : s;
+				else if (s == DOCK_SEL_NEXT) s = has_back ? DOCK_SEL_BACK : count ? first : s;
+				else if (s == last)          s = has_next ? DOCK_SEL_NEXT : has_back ? DOCK_SEL_BACK : first;
+				else s++;
 			} else {
-				if (dock_selected == DOCK_SEL_NEXT) dock_selected = last;
-				else if (dock_selected == first)
-					dock_selected = dock_paged ? DOCK_SEL_NEXT : last;
-				else dock_selected--;
+				if (s == DOCK_SEL_NEXT)      s = count ? last : has_back ? DOCK_SEL_BACK : s;
+				else if (s == DOCK_SEL_BACK) s = has_next ? DOCK_SEL_NEXT : count ? last : s;
+				else if (s == first)         s = has_back ? DOCK_SEL_BACK : has_next ? DOCK_SEL_NEXT : last;
+				else s--;
 			}
+			dock_selected = s;
 
 			if (dock_selected != old_selected) {
-				repair_region(windows[dock_idx].x, windows[dock_idx].y,
-					windows[dock_idx].w, windows[dock_idx].h, -1);
+				dock_repaint();
 				speak_dock_selection();
 			}
 
+		} else if (dock_selected == DOCK_SEL_BACK) {
+			dock_close_view(true);
 		} else if (dock_selected == DOCK_SEL_NEXT) {
 			dock_set_page(dock_page + 1);
 		} else {
@@ -3375,6 +3868,21 @@ static bool cap_layout(void) {
 		margin = 4;
 	}
 
+	// The screen the dock leaves (not in game mode, which has none):
+	// a caption is never over it. Beside a dock on the left or the
+	// right it is centred in what is left; above or below one along
+	// the bottom or the top, it keeps clear of it.
+	int fy0 = 0, fy1 = WM_SCREEN_H;
+	if (!cam && dock_idx >= 0 && !dock_hidden && windows[dock_idx].used) {
+		const wm_window_t *d = &windows[dock_idx];
+		switch (dock_side) {
+		case DK_SIDE_LEFT:   ax = (int)(d->x + d->w); aw = WM_SCREEN_W - ax; break;
+		case DK_SIDE_RIGHT:  aw = (int)d->x; break;
+		case DK_SIDE_TOP:    fy0 = (int)(d->y + d->h); break;
+		default:             fy1 = (int)d->y; break;
+		}
+	}
+
 	int w, h;
 	if (!z_caption_render(cap_text, o, aw - 2 * margin, &cap_bits[0][0],
 			CAP_BMP_WORDS, CAP_BMP_H, &w, &h))
@@ -3382,15 +3890,14 @@ static bool cap_layout(void) {
 
 	int x = ax + (aw - w) / 2, y;
 	switch (Z_CAPTION_GET_POS(o)) {
-	case 1:  y = ay + margin; break;
+	case 1:
+		y = ay + margin;
+		if (y < fy0 + margin) y = fy0 + margin;		// below the dock
+		break;
 	case 2:  y = ay + (ah - h) / 2; break;
 	default:
 		y = ay + ah - margin - h;
-		// Above the dock, not over it.
-		if (!cam && dock_idx >= 0 && !dock_hidden && windows[dock_idx].used) {
-			int dy = (int)windows[dock_idx].y - margin - h;
-			if (dy < y) y = dy;
-		}
+		if (y > fy1 - margin - h) y = fy1 - margin - h;	// above the dock
 		break;
 	}
 	if (y < 0) y = 0;
@@ -3569,35 +4076,12 @@ static void auto_focus(int idx) {
 	if (old != idx) speak_focus(idx);
 }
 
-static const char *dock_spoken_name(const char *name) {
-	static const char *const map[][2] = {
-		{ "term",     "Terminal" },
-		{ "text",     "Text editor" },
-		{ "read",     "Reader" },
-		{ "web",      "Web browser" },
-		{ "irc",      "Chat" },
-		{ "sheet",    "Spreadsheet" },
-		{ "view",     "Image viewer" },
-		{ "track",    "MOD player" },
-		{ "midi",     "MIDI player" },
-		{ "play",     "Audio player" },
-		{ "calc",     "Calculator" },
-		{ "cal",      "Calendar" },
-		{ "info",     "System info" },
-		{ "hex",      "Hex editor" },
-		{ "kidgames", "Kid games" },
-		{ "basic",    "BASIC" },
-		{ "chip8",    "Chip 8" },
-		{ "space3d",  "Space 3D" },
-		{ "snake",    "Snake" },
-		{ "blocks",   "Blocks" },
-		{ "bricks",   "Bricks" },
-		{ "gpu3d",    "GPU 3D" },
-		{ "mausrun", "Maus Run" },
-	};
-	for (unsigned i = 0; i < sizeof(map) / sizeof(map[0]); i++)
-		if (strcmp(map[i][0], name) == 0) return map[i][1];
-	return name;
+// What speech says for dock_apps[app]: dock.zic's spoken name
+// ("Text editor" for text), or the file name when it has none.
+static const char *dock_spoken(int app) {
+	uint16_t s = dock_apps[app].spoken_off;
+	return (s != DK_NONE && s < dock_store_used && dock_store[s]) ?
+		(const char *)dock_store + s : dock_apps[app].name;
 }
 
 // Bounded append; the buffer is always left NUL-terminated. Not
@@ -3607,6 +4091,31 @@ static void speech_cat(char *buf, uint32_t size, const char *s) {
 	uint32_t n = strlen(buf);
 	while (*s && n + 1 < size) buf[n++] = *s++;
 	buf[n] = 0;
+}
+
+// An app on the dock as speech says it: its spoken name, and how many
+// copies are running when there are any ("Text editor, 2 running").
+static void speech_num(char *buf, uint32_t size, int n) {
+	char rev[4], num[5];
+	int r = 0, k = 0;
+	do { rev[r++] = (char)('0' + n % 10); n /= 10; } while (n && r < 3);
+	while (r) num[k++] = rev[--r];
+	num[k] = 0;
+	speech_cat(buf, size, num);
+}
+
+static void dock_speech_app(char *buf, uint32_t size, int app) {
+	speech_cat(buf, size, dock_spoken(app));
+	int v = dock_apps[app].view;
+	if (v >= 0) {				// a group: "Games, 10 apps"
+		speech_cat(buf, size, ", ");
+		speech_num(buf, size, dock_views[v].count);
+		speech_cat(buf, size, dock_views[v].count == 1 ? " app" : " apps");
+	}
+	if (!dock_running[app]) return;
+	speech_cat(buf, size, ", ");
+	speech_num(buf, size, dock_running[app]);
+	speech_cat(buf, size, " running");
 }
 
 static const char *window_spoken_title(int idx) {
@@ -3634,12 +4143,15 @@ static void speak_focus(int idx) {
 
 	if (idx == dock_idx) {
 		z_speak_cat(buf, sizeof(buf), "Dock");
-		int app = (dock_selected >= 0) ? dock_app_at(dock_selected) : -1;
-		if (dock_selected == DOCK_SEL_NEXT) {
+		// dock_selected is an item (a dock_apps[] index), not a slot
+		int app = (dock_selected >= 0 && dock_selected < DOCK_APP_COUNT) ? dock_selected : -1;
+		if (dock_selected == DOCK_SEL_BACK) {
+			z_speak_cat(buf, sizeof(buf), ", back");
+		} else if (dock_selected == DOCK_SEL_NEXT) {
 			z_speak_cat(buf, sizeof(buf), ", next page");
 		} else if (app >= 0) {
 			z_speak_cat(buf, sizeof(buf), ", ");
-			z_speak_cat(buf, sizeof(buf), dock_spoken_name(dock_apps[app]->name));
+			dock_speech_app(buf, sizeof(buf), app);
 		}
 	} else {
 		z_speak_cat(buf, sizeof(buf), window_spoken_title(idx));
@@ -3660,10 +4172,19 @@ static void speak_dock_selection(void) {
 		z_speak_static("Next page", Z_TTS_F_INTERRUPT);
 		return;
 	}
+	if (dock_selected == DOCK_SEL_BACK) {
+		z_speak_static("Back", Z_TTS_F_INTERRUPT);
+		return;
+	}
 
-	int app = (dock_selected >= 0) ? dock_app_at(dock_selected) : -1;
-	if (app >= 0)
-		z_speak_static(dock_spoken_name(dock_apps[app]->name), Z_TTS_F_INTERRUPT);
+	// an item (a dock_apps[] index), not a slot
+	int app = (dock_selected >= 0 && dock_selected < DOCK_APP_COUNT) ? dock_selected : -1;
+	if (app >= 0) {
+		char buf[Z_SPEAK_SLOT_MAX];
+		buf[0] = 0;
+		dock_speech_app(buf, sizeof(buf), app);
+		z_speak(buf, Z_TTS_F_INTERRUPT);	// copied: a reload rewrites dock_apps
+	}
 
 }
 
@@ -3722,16 +4243,15 @@ static void speech_where(void) {
 
 		if (idx == dock_idx) {
 			// Same geometry as a click would use -- see dock_click().
-			int local_y = cy - (int)windows[dock_idx].y - DOCK_PADDING;
-			int slot = (local_y >= 0 && local_y < DOCK_ICON_SIZE) ?
-				dock_slot_at_x(cx - (int)windows[dock_idx].x) : -1;
+			int slot = dock_slot_at(cx, cy);
 			speech_cat(buf, sizeof(buf), "Dock");
 			if (slot >= 0 && dock_slot_is_next(slot)) {
 				speech_cat(buf, sizeof(buf), ", next page");
+			} else if (slot >= 0 && dock_slot_is_back(slot)) {
+				speech_cat(buf, sizeof(buf), ", back");
 			} else if (slot >= 0 && dock_app_at(slot) >= 0) {
 				speech_cat(buf, sizeof(buf), ", ");
-				speech_cat(buf, sizeof(buf),
-					dock_spoken_name(dock_apps[dock_app_at(slot)]->name));
+				dock_speech_app(buf, sizeof(buf), dock_app_at(slot));
 			}
 			z_speak(buf, Z_TTS_F_INTERRUPT);
 			return;
@@ -3919,7 +4439,7 @@ static void dock_update(void) {
 	wm_window_t *d = &windows[dock_idx];
 	int oy = (int)d->y;
 	if (any) { dock_home_y = d->y; d->y = WM_SCREEN_H; }
-	else d->y = dock_home_y;
+	else { d->y = dock_home_y; dock_close_view(false); }	// back on the row
 	dock_hidden = any;
 	if (any) focus_away_from(dock_idx);
 	send_clip_all();
@@ -5130,6 +5650,17 @@ static void dispatch_keys(void) {
 
 // -- window table --
 
+// Where the cascade of new windows starts: the screen's corner, or just
+// past a dock on the left or along the top, which the cascade's first
+// windows would otherwise land on. A dock on the right or the bottom is
+// out of its way (it reaches about 190 across, 160 down).
+static void dock_place_origin(int *x, int *y) {
+	*x = *y = 0;
+	if (dock_idx < 0 || DOCK_APP_COUNT <= 0) return;
+	if (dock_side == DK_SIDE_LEFT) *x = DOCK_MARGIN + DOCK_THICK;
+	if (dock_side == DK_SIDE_TOP) *y = DOCK_MARGIN + DOCK_THICK;
+}
+
 // fixed_x/fixed_y: pass -1,-1 for the usual auto-placed cascade
 // (the only thing every existing caller wanted); pass both >= 0 to
 // place the window at that exact position instead -- the dock (see
@@ -5138,6 +5669,8 @@ static void dispatch_keys(void) {
 // with everything else.
 static int create_window(uint32_t owner_pid, const char *title,
 	uint32_t w, uint32_t h, int32_t fixed_x, int32_t fixed_y, uint32_t flags) {
+
+	dock_count_due = true;		// a new copy of an app, usually
 
 	for (int i = 0; i < WM_MAX_WINDOWS; i++) {
 
@@ -5222,9 +5755,13 @@ static int create_window(uint32_t owner_pid, const char *title,
 		} else {
 			// simple cascade -- see docs/window_manager.md, placement
 			// strategy was left for a later pass
+			// It starts beside the dock when the dock is on the left
+			// or the top (dock_place_origin()), where it would land on it.
 			uint32_t n = zorder_count;
-			windows[i].x = 20 + (n % 8) * 24;
-			windows[i].y = 20 + (n % 8) * 20;
+			int ox, oy;
+			dock_place_origin(&ox, &oy);
+			windows[i].x = (uint32_t)(ox + 20 + (int)(n % 8) * 24);
+			windows[i].y = (uint32_t)(oy + 20 + (int)(n % 8) * 20);
 		}
 
 		if (title) {
@@ -5251,6 +5788,21 @@ static int create_window(uint32_t owner_pid, const char *title,
 
 }
 
+// Where the dock goes: against its side of the screen, DOCK_MARGIN in,
+// from the left end of a row or the top of a column. Full length while
+// it pages, so NEXT sits at the far end and the unused positions on a
+// short page read as deliberate empty space; sized to its contents
+// otherwise. Across, the padding on both sides and one pixel more for
+// the running dots (DOCK_THICK): a 2x2 dot with a clear pixel on both
+// sides does not fit four pixels of padding, its border included.
+static void dock_rect(int *x, int *y, int *w, int *h) {
+	int len = dock_frame_len;
+	if (dock_vert()) { *w = DOCK_THICK; *h = len; }
+	else { *w = len; *h = DOCK_THICK; }
+	*x = dock_side == DK_SIDE_RIGHT ? WM_SCREEN_W - DOCK_MARGIN - *w : DOCK_MARGIN;
+	*y = dock_side == DK_SIDE_BOTTOM ? WM_SCREEN_H - DOCK_MARGIN - *h : DOCK_MARGIN;
+}
+
 // creates the dock -- called once from main(), after any other
 // startup windows so it's naturally frontmost in zorder to begin
 // with (create_window() always appends to the front -- see its own
@@ -5268,26 +5820,57 @@ static int create_dock(void) {
 	// contents are data now and this is one subtraction away from
 	// being someone's very confusing afternoon.
 	if (DOCK_APP_COUNT <= 0) {
-		printf("wm: dock: no apps available, not creating dock\n");
+		printf("wm: dock: no apps, no dock\n");
 		return -1;
 	}
 
-	// Full width while paging, so NEXT sits at the far right and the
-	// unused positions on a short page read as deliberate empty
-	// space. Sized to its contents otherwise -- unchanged behaviour
-	// for any machine that has not overflowed.
-	uint32_t w = (uint32_t)z_dock_width(DOCK_APP_COUNT);
-	uint32_t h = DOCK_PADDING * 2 + DOCK_ICON_SIZE;
+	int x, y, w, h;
+	dock_rect(&x, &y, &w, &h);
 
-	int32_t x = DOCK_MARGIN;
-	int32_t y = WM_SCREEN_H - (int32_t)h - DOCK_MARGIN;
-
-	int idx = create_window(my_pid, "Dock", w, h, x, y, 0);
+	int idx = create_window(my_pid, "Dock", (uint32_t)w, (uint32_t)h, x, y, 0);
 	if (idx < 0) return -1;
 
 	windows[idx].no_titlebar = true;
 
 	return idx;
+
+}
+
+// The configuration was reloaded (`cfg reload`, settings): read wm.cfg
+// and dock.zic again, so an edited /data/wm/wm.cfg on the card takes
+// effect without a restart. The dock is resized to its new contents in
+// place; a launch still in progress loses its inverted icon (its window
+// still opens).
+static void dock_reload(void) {
+
+	printf("wm: dock: reloading\n");
+
+	memset(dock_launching, 0, sizeof(dock_launching));
+	dock_selected = -1;
+	dock_build();
+
+	if (dock_idx < 0) {
+		dock_idx = create_dock();
+		if (dock_idx < 0) return;
+		send_clip_all();
+		repair_region((int)windows[dock_idx].x, (int)windows[dock_idx].y,
+			(int)windows[dock_idx].w, (int)windows[dock_idx].h, -1);
+		return;
+	}
+
+	// Resized to the new contents, and moved if `side` changed. With
+	// no apps, an empty frame one icon long. Hidden (a window is
+	// maximized), it stays off the screen and comes back to the new
+	// place (dock_update()).
+	wm_window_t *d = &windows[dock_idx];
+	int nx, ny, nw, nh;
+	dock_rect(&nx, &ny, &nw, &nh);
+	if (dock_hidden) { dock_home_y = (uint32_t)ny; ny = (int)d->y; }
+	set_rect(dock_idx, nx, ny, nw, nh);
+	// set_rect() tells a window's owner, which for the dock is wm
+	// itself, so the regions of the windows it now covers or uncovers
+	// are sent from here.
+	send_clip_all();
 
 }
 
@@ -5389,6 +5972,8 @@ static bool bring_to_front(int idx) {
 }
 
 static void destroy_window(uint32_t id) {
+
+	dock_count_due = true;		// its app may have one copy fewer
 
 	/* An app that owned the screen and has gone -- crashed, closed,
 	 * killed -- must not leave wm suspended with a black desktop and
@@ -5759,8 +6344,8 @@ static void dock_set_page(int p) {
 	// Keyboard selection follows the page rather than staying on an
 	// app that is no longer shown. Selection ON the NEXT icon stays
 	// put, so Enter can be pressed repeatedly to walk the pages.
-	if (dock_selected != DOCK_SEL_NEXT)
-		dock_selected = dock_page * DOCK_PAGE_SIZE;
+	if (dock_selected != DOCK_SEL_NEXT && dock_selected != DOCK_SEL_BACK)
+		dock_selected = dock_vstart() + dock_page * dock_psize();
 
 	if (dock_idx >= 0)
 		repair_region(windows[dock_idx].x, windows[dock_idx].y,
@@ -5781,22 +6366,21 @@ static void dock_set_page(int p) {
 // docs/window_manager.md for anything that changes about that later).
 static void dock_click(int cx, int cy) {
 
-	wm_window_t *w = &windows[dock_idx];
-
-	int local_x = cx - (int)w->x;
-	int local_y = cy - (int)w->y - DOCK_PADDING;
 	int slot, app;
 
-	if (local_y < 0 || local_y >= DOCK_ICON_SIZE) return;	// in the padding, not an icon
-
-	// Asked rather than computed: NEXT is right-aligned and so is not
-	// on the stride, and an empty position on a short page must not
-	// answer to a click. See dock_slot_at_x().
-	slot = dock_slot_at_x(local_x);
+	// Asked rather than computed: NEXT is at the far end and so is not
+	// on the stride, the padding is no icon, and an empty position on a
+	// short page must not answer to a click. See dock_slot_at().
+	slot = dock_slot_at(cx, cy);
 	if (slot < 0) return;
 
 	if (dock_slot_is_next(slot)) {
 		dock_set_page(dock_page + 1);
+		return;
+	}
+
+	if (dock_slot_is_back(slot)) {
+		dock_close_view(true);
 		return;
 	}
 
@@ -7102,15 +7686,35 @@ int main(void) {
 		// subtraction so it stays correct across the 32-bit tick wrap.
 		for (int di = 0; di < DOCK_APP_COUNT; di++) {
 			if (!dock_launching[di]) continue;
-			if ((int32_t)(z_uptime_ticks() - dock_launching_deadline[di]) < 0)
+			if ((int16_t)((uint16_t)z_uptime_ticks() - dock_launching_deadline[di]) < 0)
 				continue;
 			printf("wm: dock: '%s' (pid %ld) made no window\n",
-				dock_apps[di]->name, (long)dock_launching_pid[di]);
+				dock_apps[di].name, (long)dock_launching_pid[di]);
 			dock_launching[di] = false;
 			if (dock_idx >= 0)
 				repair_region(windows[dock_idx].x, windows[dock_idx].y,
 					windows[dock_idx].w, windows[dock_idx].h, -1);
 		}
+
+		// -- the dock's files, after a configuration reload --
+		// (docs/dock.md). Looked at no more than once a second, and
+		// only when wm is awake anyway: a reload wakes nobody, so it
+		// takes effect at the next key, click or pointer movement
+		// rather than costing an idle wm a timer.
+		if ((int32_t)(z_uptime_ticks() - dock_cfg_check_at) >= 0) {
+			dock_cfg_check_at = z_uptime_ticks() + Z_TICK_HZ;
+			if (z_cfg_generation() != dock_cfg_gen) dock_reload();
+		}
+
+		// -- launched from a group: back to the row once the launch is
+		// over (its window, or the timeout) --
+		dock_return_check();
+
+		// -- the running dots: when something opened or closed, and
+		// every 2 s for programs without a window. Like the reload
+		// check above, only while wm is awake anyway.
+		if (dock_count_due || (int32_t)(z_uptime_ticks() - dock_count_at) >= 0)
+			dock_count();
 
 		// -- windows left behind by a process that has ended --
 		reap_orphans();

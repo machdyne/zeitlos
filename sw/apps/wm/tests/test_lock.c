@@ -8,7 +8,7 @@
  *      sw/apps/wm/tests/test_lock.c sw/common/zwin.c sw/common/zwidget.c \
  *      sw/common/zfont_data.c sw/common/zobj.c sw/common/zeitlos.c \
  *      sw/common/zkbd.c sw/common/zspeak.c sw/common/zcaption.c \
- *      sw/common/zcfg.c sw/apps/wm/dock_icons.c sw/apps/wm/win_icons.c \
+ *      sw/common/zcfg.c sw/apps/wm/dock_cfg.c sw/apps/wm/win_icons.c \
  *      sw/apps/wm/workspace.c
  *   /tmp/wmlock /tmp/wmlock
  *

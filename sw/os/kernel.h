@@ -191,6 +191,15 @@ typedef struct {
 	uint32_t		arena_size;
 	uint32_t		arena_pending;
 
+	// The program it was started from: the last part of the name
+	// k_proc_create_exec() was given ("text" for `run text` or
+	// /apps/text), cut to 15 characters; "" for a process not started
+	// from an executable. Reported by Z_SYS_PROC_LIST for a process
+	// that registered no name (procapi.c), which is how wm's dock knows
+	// which app a process is (docs/dock.md, "Running apps"). Last, so
+	// no earlier field moves.
+	char			exe[16];
+
 } z_proc;
 
 // Z_PROC_FLAG_ACTIVE / _DIE / _BLOCKED are defined in

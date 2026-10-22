@@ -513,10 +513,10 @@ shipped as modified files.
 **1.** Add `roulette` to `APPS` in `sw/apps/Makefile`.
 
 **2.** `sw/data/icons/icon-roulette.png` is included. Then
-`cd sw/data/icons && python3 gen_dock_icon_data.py`, and add one line to
-`dock_candidates[]` in `sw/apps/wm/wm.c`:
+`cd sw/data/icons && python3 gen_dock_icon_data.py`, and, to have it on
+the dock, name it in the row of `sw/data/wm.cfg` ([dock.md](dock.md)):
 
-    { "roulette",   z_icon_roulette_data },
+    row wide ... roulette ...
 
 **3.** Add to the table in `release/lib/mkfatimg.py`:
 

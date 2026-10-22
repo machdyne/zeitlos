@@ -443,8 +443,9 @@ cc -std=gnu99 -Wall -I sw/common -o /tmp/test_layout \
 
 ## The dock
 
-`hex` has a dock entry (`dock_candidates[]` in `sw/apps/wm/wm.c`), so it
-launches without going through the browser or the shell.
+`hex` is on the dock (its name in the row of `sw/data/wm.cfg`,
+[dock.md](dock.md)), so it launches without going through the browser
+or the shell.
 
 The icon is a small hex dump: two bytes, the pane divider, and the
 character column. It is drawn with the system's own `z_font_5x8`
@@ -458,12 +459,11 @@ Regenerate after editing `sw/data/icons/icon-hex.png`:
 cd sw/data/icons && python3 gen_dock_icon_data.py
 ```
 
-That rewrites the checked-in `sw/apps/wm/dock_icons.c/.h` for every
-icon, so check the diff is confined to the one you changed.
+That rewrites the checked-in `sw/data/icons/dock.zic` for every icon;
+`--check` says whether it is current.
 
-Note the dock holds **seventeen** icons before running off a 640px
-screen, and nothing clamps it; sixteen are listed now. See
-`docs/window_manager.md`, "The dock".
+The dock holds **seventeen** icons on a 640px screen and pages past
+that. See `docs/window_manager.md`, "The dock".
 
 ## File associations
 

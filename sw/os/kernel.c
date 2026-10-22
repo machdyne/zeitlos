@@ -2546,6 +2546,7 @@ uint32_t k_proc_create(uint32_t size, uint32_t stack_size) {
 		z_procs[p].arena_base = 0;
 		z_procs[p].arena_size = 0;
 		z_procs[p].arena_pending = 0;
+		z_procs[p].exe[0] = 0;	// k_proc_create_exec() names it
 		for (int i = 0; i < 32; i++) {
 			z_procs[p].regs[i] = 0x00000000;
 		}
@@ -2640,6 +2641,7 @@ uint32_t k_proc_create_exec(const char *name, const z_exec_info_t *xi) {
 
 	uint32_t pid = k_proc_create(xi->total, stack);
 	if (pid) {
+		k_proc_set_exe(pid, name);	// for Z_SYS_PROC_LIST (procapi.c)
 		// ZEXE flags bit 15: a driver (sw/common/zexec.h). Started like
 		// anything else; the flag is what lets it open the grant window.
 		if (flags & Z_EXEC_FLAG_DRIVER) {

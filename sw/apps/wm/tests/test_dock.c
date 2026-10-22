@@ -19,6 +19,7 @@
 #include <stdbool.h>
 
 #define WM_SCREEN_W 640
+#define WM_SCREEN_H 480
 
 #include "../dock_layout.h"
 
@@ -231,6 +232,62 @@ static void test_every_app_reachable_once(void) {
 
 }
 
+/* Views, along either axis: down a 480px screen for a dock on a side,
+ * with and without a group's BACK. */
+static void test_views(void) {
+
+	int slots, lead, n, page, slot, full;
+
+	CHECK_EQ(DOCK_SLOTS_TALL, 12);
+	CHECK(DOCK_MARGIN + z_dock_len_for(DOCK_SLOTS_TALL, 464, DOCK_SLOTS_TALL) <= 480 - DOCK_MARGIN);
+	CHECK(DOCK_MARGIN + DOCK_PADDING * 2 + (DOCK_SLOTS_TALL + 1) * DOCK_STRIDE - DOCK_ICON_GAP >
+		480 - DOCK_MARGIN);
+	CHECK_EQ(z_dock_full(480), 464);
+	CHECK_EQ(z_dock_len_for(12, 464, 12), 436);
+	CHECK_EQ(z_dock_len_for(12, 464, 13), 464);
+	CHECK_EQ(z_dock_len_for(12, 464, 0), z_dock_len_for(12, 464, 1));
+	CHECK_EQ(z_dock_width_for(17), z_dock_width(17));
+
+	/* across, lead 0: the same as the dock before groups */
+	for (n = 1; n <= 60; n++)
+		for (page = 0; page < z_dock_pages(n); page++)
+			for (slot = 0; slot < DOCK_SLOTS_MAX; slot++)
+				CHECK_EQ(z_dock_vapp_at(DOCK_SLOTS_MAX, n, 0, page, slot), z_dock_app_at(n, page, slot));
+
+	/* every app once, on either axis, with or without BACK */
+	for (slots = 12; slots <= 17; slots += 5)
+	for (lead = 0; lead <= 1; lead++)
+	for (n = 0; n <= 60; n++) {
+		int seen[64] = { 0 }, ok = 1, app;
+		for (page = 0; page < z_dock_vpages(slots, n, lead); page++)
+			for (slot = 0; slot < slots; slot++) {
+				app = z_dock_vapp_at(slots, n, lead, page, slot);
+				if (app >= 0 && app < n) seen[app]++;
+				else if (app >= n) ok = 0;
+			}
+		for (app = 0; app < n; app++) if (seen[app] != 1) ok = 0;
+		CHECK(ok);
+	}
+
+	/* down a side: NEXT hard against the bottom end, BACK at the top,
+	 * and a position answers only where something is */
+	full = z_dock_full(480);
+	CHECK(z_dock_vpaged(12, 12, 1));
+	CHECK(!z_dock_vpaged(12, 11, 1));
+	CHECK_EQ(z_dock_vpage_size(12, 30, 1), 10);
+	CHECK(z_dock_vslot_is_next(12, 30, 1, 11));
+	CHECK(z_dock_vslot_is_back(1, 0));
+	CHECK_EQ(z_dock_vslot_pos(full, 12, 30, 1, 11), full - DOCK_PADDING - DOCK_ICON_SIZE);
+	CHECK_EQ(z_dock_vslot_pos(full, 12, 30, 1, 3), DOCK_PADDING + 3 * DOCK_STRIDE);
+	CHECK_EQ(z_dock_vslot_at(full, 12, 30, 1, 0, DOCK_PADDING), 0);
+	CHECK_EQ(z_dock_vslot_at(full, 12, 30, 1, 0, DOCK_PADDING - 1), -1);
+	CHECK_EQ(z_dock_vslot_at(full, 12, 30, 1, 0, full - DOCK_PADDING - 1), 11);
+	CHECK_EQ(z_dock_vslot_at(full, 12, 30, 1, 2, DOCK_PADDING + 9 * DOCK_STRIDE), 9);   /* 30 = 10+10+10 */
+	CHECK_EQ(z_dock_vslot_at(full, 12, 25, 1, 2, DOCK_PADDING + 9 * DOCK_STRIDE), -1);  /* page 3 holds 5 */
+	CHECK_EQ(z_dock_vslot_at(full, 12, 25, 1, 2, DOCK_PADDING + 5 * DOCK_STRIDE), 5);
+
+}
+
 int main(void) {
 
 	test_capacity();
@@ -239,6 +296,7 @@ int main(void) {
 	test_paged_layout();
 	test_hit();
 	test_every_app_reachable_once();
+	test_views();
 
 	printf("%s: %d checks, %d failures\n",
 		failures ? "FAILED" : "ok", checks, failures);

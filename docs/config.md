@@ -285,6 +285,9 @@ What picks up a reload:
 - `system.rtc.timezone` -- on the next second in `clock`, the next check in `cal`.
 - `apps.term.auto_connect` -- the next term window opened.
 - `system.keyboard.layouts` -- the next key pressed (`wm`).
+- the dock's arrangement, `/data/wm/wm.cfg` (not a key here, a file of
+  its own: [dock.md](dock.md)) -- within a second of the next key,
+  click or pointer movement (`wm`).
 
 ### The settings app
 

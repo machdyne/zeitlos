@@ -131,9 +131,13 @@ typedef struct {
 	// close to useless to a person, though, which is what this is
 	// for.
 	//
-	// Not every process has one. Only apps that call
-	// z_pid_register() appear here by name; the rest report "",
-	// and a caller should fall back to the pid.
+	// A process that did not register one reports the program it was
+	// started from instead -- "text" for `run text` -- which is how
+	// wm's dock counts the copies of an app that are running
+	// (docs/dock.md, "Running apps"). A registered name is the base
+	// plus a number ("web0"); a program's name has no number added.
+	// Only a process not started from an executable (the kernel's own)
+	// reports "", and a caller should fall back to the pid.
 	char		name[Z_PROC_NAME_MAX];
 
 	// KTIMER ticks this process has been the running one for, since

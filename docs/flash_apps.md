@@ -126,13 +126,18 @@ The archive also carries **files**: `CORE_FILES` in the top-level
 to Scheme, [repl.md](repl.md)), `docs/zapi.txt` (every procedure repl
 has, what its `help` and `apropos` read, [zapi.md](zapi.md)) and
 `data/repl/examples/todo.scm`, its example
-app. Each is read-only, at its path
+app, and the dock's two files, `data/wm/wm.cfg` and `data/wm/dock.zic`
+([dock.md](dock.md)). Each is read-only, at its path
 under the card, with or without a card, and a file of the same name on
 the card wins over it -- the same rule as for apps:
 
 ```
-CORE_FILES = docs/welcome.txt docs/repl.txt docs/zapi.txt data/repl/examples/todo.scm
+CORE_FILES = docs/welcome.txt docs/repl.txt docs/zapi.txt data/repl/examples/todo.scm \
+	data/wm/wm.cfg data/wm/dock.zic
 ```
+
+The dock's files are how a card changes the dock: a `/data/wm/wm.cfg`
+on the card wins over the one in flash, whole.
 
 A `docs/<name>.txt` is `docs/<name>.md` rendered as plain text by
 `tools/md2txt.py`, for `text` on a machine with no card (and so no
@@ -229,7 +234,7 @@ program".
 Two consequences worth stating plainly:
 
 - **Nothing above this function changed when the apps moved.**
-  `dock_candidates[]` in wm, the extension table in `ztype.c`,
+  the dock's `wm.cfg`, the extension table in `ztype.c`,
   pidreg registrations and
   `run term` at the shell all still use bare names. The alternative --
   writing `/apps/` at every one of those call sites -- would have put a
@@ -367,6 +372,15 @@ the Scheme reference, `docs/zapi.txt`, reached 26,429 bytes with the
 procedures added then, and the four files 49,241 of 49,152. The reserve
 went to 56K, from the unassigned part of the region (676KB of budgets
 plus the reserve is now 732KB of 848KB).
+The dock's icons and its arrangement left `wm` for two files in flash
+([dock.md](dock.md)): 8KB more of files (6,856 + 1,212 bytes), so the
+reserve went to 60K, paid from `wm`'s flash budget, 110K to 104K
+(`wm` itself went from 111KB to 96KB, mostly by `ZFMT_LITE`). The total
+stays 732KB of 848KB.
+The dock on any side of the screen ([dock.md](dock.md#sides)) took
+`wm` past 135K of RAM (139,020 bytes): its budget went to 136K, paid
+from `net`'s, 285K to 284K, which `net` (290,580 bytes) still fits. The
+boot set's RAM stays 1,024 of 1,024 KB.
 The next byte for the boot set comes out of another budget, or out of
 something made smaller. `mkzar.py --max` checks the archive itself
 against the region (`CORE_ZAR_MAX`, 848K), so a budget that turns out
@@ -378,9 +392,9 @@ code, data and `.bss`, not its stack). They are `CORE_BUDGETS` in the
 top-level `Makefile`, next to `CORE_APPS`:
 
 ```
-CORE_BUDGETS = fs=36K/75K usb=35K/55K wm=110K/135K net=148K/285K term=62K/152K \
+CORE_BUDGETS = fs=36K/75K usb=35K/55K wm=104K/136K net=148K/284K term=62K/152K \
 	console=10K/13K cron=18K/48K text=60K/157K files=57K/120K repl=140K/304K
-CORE_RESERVE = 56K
+CORE_RESERVE = 60K
 CORE_STORE = wm net
 CORE_ZAR_MAX = 848K
 CORE_AT_BOOT = fs usb wm net console

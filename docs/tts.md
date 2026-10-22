@@ -114,7 +114,8 @@ stopped.
 
 **Super+W** hit-tests the pointer exactly as a click would. Over a dock
 icon it gives the app's name as a person would say it ("Calculator",
-not `calc` -- `dock_spoken_name()`, `wm.c`).
+not `calc` -- the spoken names in `sw/data/icons/apps.txt`,
+[dock.md](dock.md)).
 
 **Remote desktop.** The browser client forwards the Meta key
 (`esp32/zeitlos-nic/web/index.html`), but the host operating system

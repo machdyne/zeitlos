@@ -31,7 +31,8 @@
  *   +--------------------------------------------------+
  *
  * One row, always -- vertical space is the scarcest thing on a 480px
- * screen, so the dock does not get a second row.
+ * screen, so the dock does not get a second row. (Or one column, on the
+ * left or the right: the views below.)
  *
  * Up to DOCK_SLOTS_MAX apps, none of this engages: the dock is sized to
  * its contents and grown from the left, exactly as it always was, with
@@ -202,6 +203,120 @@ static inline int z_dock_slot_at_x(int napps, int page, int local_x) {
 
 	return -1;
 
+}
+
+/*
+ * -- views, along either axis (docs/dock.md, "Groups", "Sides") --
+ *
+ *   main row     [a][b][c] ...                 [>]
+ *   a group      [<][x][y][z] ...              [>]
+ *
+ * A view is `n` apps and a `lead` of 0 or 1 positions before them: the
+ * BACK icon, always in slot 0 of a group, so it is in the same place in
+ * every group. NEXT, when the view pages, is hard against the far end
+ * of the frame. The frame is as long as the longest view, so opening a
+ * group never moves the dock; a view shorter than the frame leaves
+ * empty space at its end, as a short page always did.
+ *
+ * None of this knows which way the dock runs. `slots` is how many
+ * positions fit along it -- DOCK_SLOTS_MAX across the screen, or
+ * DOCK_SLOTS_TALL down it -- and `full` the frame's length when it
+ * pages (z_dock_full()). A position is a distance along the frame
+ * (z_dock_vslot_pos()); wm turns it into x for a dock along the bottom
+ * or the top and into y for one on the left or the right.
+ *
+ * The functions above are these with lead 0, across the screen, and
+ * the frame sized to the view: the dock before it had groups or sides.
+ */
+
+/* Positions down the screen, margin to margin: 12 on a 480px screen. */
+#ifdef WM_SCREEN_H
+#define DOCK_SLOTS_TALL \
+	((WM_SCREEN_H - 2 * DOCK_MARGIN - 2 * DOCK_PADDING + DOCK_ICON_GAP) \
+		/ DOCK_STRIDE)
+#endif
+
+/* The frame's length when it pages: the screen's, margin to margin. */
+static inline int z_dock_full(int screen_len) {
+	return screen_len - 2 * DOCK_MARGIN;
+}
+
+/* Natural length for `positions` icons; `full` past `slots`. */
+static inline int z_dock_len_for(int slots, int full, int positions) {
+	if (positions > slots) return full;
+	if (positions < 1) positions = 1;
+	return DOCK_PADDING * 2 + positions * DOCK_ICON_SIZE +
+		(positions - 1) * DOCK_ICON_GAP;
+}
+
+/* Across the screen, as the dock along the bottom has always been. */
+static inline int z_dock_width_for(int positions) {
+	return z_dock_len_for(DOCK_SLOTS_MAX, z_dock_full(WM_SCREEN_W), positions);
+}
+
+static inline bool z_dock_vpaged(int slots, int n, int lead) {
+	return n + lead > slots;
+}
+
+/* Apps a page holds: every position but BACK's and NEXT's. */
+static inline int z_dock_vpage_size(int slots, int n, int lead) {
+	return z_dock_vpaged(slots, n, lead) ? slots - 1 - lead : n;
+}
+
+static inline int z_dock_vpages(int slots, int n, int lead) {
+	int ps = z_dock_vpage_size(slots, n, lead);
+	if (!z_dock_vpaged(slots, n, lead) || ps <= 0) return 1;
+	return (n + ps - 1) / ps;
+}
+
+static inline int z_dock_vpage_apps(int slots, int n, int lead, int page) {
+	int ps = z_dock_vpage_size(slots, n, lead), k;
+	if (page < 0) return 0;
+	if (!z_dock_vpaged(slots, n, lead)) return page == 0 ? n : 0;
+	k = n - page * ps;
+	if (k < 0) k = 0;
+	return k > ps ? ps : k;
+}
+
+static inline bool z_dock_vslot_is_back(int lead, int slot) {
+	return lead && slot == 0;
+}
+
+static inline bool z_dock_vslot_is_next(int slots, int n, int lead, int slot) {
+	return z_dock_vpaged(slots, n, lead) && slot == slots - 1;
+}
+
+/* The view's app (0..n-1) at `slot` on `page`, or -1: BACK, NEXT, or
+ * an empty position. */
+static inline int z_dock_vapp_at(int slots, int n, int lead, int page, int slot) {
+	int k;
+	if (slot < lead || slot >= slots) return -1;
+	if (z_dock_vslot_is_next(slots, n, lead, slot)) return -1;
+	k = slot - lead;
+	if (k >= z_dock_vpage_apps(slots, n, lead, page)) return -1;
+	return page * z_dock_vpage_size(slots, n, lead) + k;
+}
+
+/* Where `slot` starts along a frame `frame_len` long: NEXT hard against
+ * its far end, everything else on the stride. */
+static inline int z_dock_vslot_pos(int frame_len, int slots, int n, int lead, int slot) {
+	if (z_dock_vslot_is_next(slots, n, lead, slot))
+		return frame_len - DOCK_PADDING - DOCK_ICON_SIZE;
+	return DOCK_PADDING + slot * DOCK_STRIDE;
+}
+
+/* The slot at distance `pos` along the frame, or -1. Only positions
+ * that hold something answer: BACK, NEXT, or an app. */
+static inline int z_dock_vslot_at(int frame_len, int slots, int n, int lead, int page, int pos) {
+	int slot;
+	for (slot = 0; slot < slots; slot++) {
+		int sp;
+		if (!z_dock_vslot_is_back(lead, slot) && !z_dock_vslot_is_next(slots, n, lead, slot) &&
+			z_dock_vapp_at(slots, n, lead, page, slot) < 0) continue;
+		sp = z_dock_vslot_pos(frame_len, slots, n, lead, slot);
+		if (pos >= sp && pos < sp + DOCK_ICON_SIZE) return slot;
+	}
+	return -1;
 }
 
 #endif

@@ -71,7 +71,7 @@ With the MTU, there is no need for position independent code or complicated addr
 | App | Description |
 |-----|-------------|
 | kernel | Microkernel + kernel shell (serial console; on the monitor as the [rescue console](docs/rescue_console.md): hold ESC at boot) |
-| [wm](docs/window_manager.md) | Window manager + dock, with ten workspaces (Super+1 ... Super+0) |
+| [wm](docs/window_manager.md) | Window manager + dock, with ten workspaces (Super+1 ... Super+0); the dock is arranged by a file ([dock](docs/dock.md)) |
 | [term](docs/terminal.md) | Terminal emulator (VT100, UTF-8, [line drawing](docs/terminal.md#line-drawing); start panel, scrollback; connects to shells and services) |
 | [console](docs/console.md) | Console service |
 | [repl](docs/repl.md) | App service + [Lisp interpreter (subset of R4RS Scheme)](https://github.com/machdyne/ms) |

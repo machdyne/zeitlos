@@ -176,6 +176,13 @@
 /* tts (docs/tts.md, docs/tts_data.md) */
 #define Z_PATH_TTS_PACK           "/data/tts/speech/en.spk"
 
+/* wm's dock (docs/dock.md): its arrangement and its icons. Both are in
+ * the flash archive (CORE_FILES); a file at the same path on the card
+ * wins, which is how a person changes the dock. */
+#define Z_DIR_WM_DATA             "/data/wm"
+#define Z_PATH_WM_CONFIG          "/data/wm/wm.cfg"
+#define Z_PATH_WM_ICONS           "/data/wm/dock.zic"
+
 /* vi, nextvi in a term window (docs/posix.md) */
 #define Z_PATH_VI_ARGS            "/tmp/vi.args"
 

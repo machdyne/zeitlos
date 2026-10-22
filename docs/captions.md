@@ -31,7 +31,7 @@ three lines.
 | Option | |
 |---|---|
 | `Z_CAPTION_SCALE(1..3)` | size; 0 means 2 |
-| `Z_CAPTION_BOTTOM` / `_TOP` / `_CENTER` | position; bottom sits just above the dock |
+| `Z_CAPTION_BOTTOM` / `_TOP` / `_CENTER` | position; bottom sits just above the dock, top just below it; beside a dock on the left or the right, centred in what it leaves ([dock.md](dock.md#sides)) |
 | `Z_CAPTION_COMPACT` | a box fitted to the text instead of a full-width band |
 | `Z_CAPTION_INVERSE` | lit box, dark text (default: dark box, lit frame and text) |
 | `Z_CAPTION_TIMEOUT(ms)` | hide by itself; 0 = after a minute at most (`Z_CAPTION_MAX_MS`), unless replaced first |

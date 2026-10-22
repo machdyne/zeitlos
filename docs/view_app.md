@@ -601,11 +601,9 @@ but is a change to shared code and belongs on its own.
 - **Progressive JPEG.** Needs every coefficient of the image resident
   across scans, ~600KB for luma alone. Structurally impossible without
   dynamic memory, not a tuning problem.
-- **No dock icon yet.** Adding one means a 32×32 PNG through
-  `sw/data/icons/gen_dock_icon_data.py`, entries in
-  `sw/apps/wm/dock_icons.{c,h}`, and a line in `dock_candidates[]` in
-  `wm.c`. Deliberately left out of this change so that adding a viewer
-  does not also mean rebuilding the window manager.
+- **The dock icon** is `sw/data/icons/icon-view.png`, a line in
+  `apps.txt` and `view` in the row of `sw/data/wm.cfg`
+  ([dock.md](dock.md)); none of it is in the window manager's code.
 
 ## Testing
 

@@ -252,12 +252,12 @@ layout tests ask about text.
 
 **1.** Add `blackjack` to `APPS` in `sw/apps/Makefile`.
 **2.** `sw/data/icons/icon-blackjack.png` is included. Run
-`cd sw/data/icons && python3 gen_dock_icon_data.py`, and add
-`{ "blackjack",  z_icon_blackjack_data },` to `dock_candidates[]` in
-`sw/apps/wm/wm.c`.
+`cd sw/data/icons && python3 gen_dock_icon_data.py`, and name
+`blackjack` in the row of `sw/data/wm.cfg` to have it on the dock
+([dock.md](dock.md)).
 **3.** Add `("apps/blackjack", "sw/apps/blackjack/blackjack.bin"),` to
 `release/lib/mkfatimg.py`.
-**4.** Rebuild `wm` and `blackjack`.
+**4.** Rebuild `blackjack` (and the flash archive, for the dock's files).
 
 ## Still to come
 

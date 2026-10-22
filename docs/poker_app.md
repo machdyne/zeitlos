@@ -453,11 +453,12 @@ overwritten.
 
     cd sw/data/icons && python3 gen_dock_icon_data.py
 
-which regenerates `sw/apps/wm/dock_icons.c` and `.h` from every PNG in
-that directory. Add one line to `dock_candidates[]` in
-`sw/apps/wm/wm.c`:
+which regenerates `sw/data/icons/dock.zic` from every PNG in that
+directory and `apps.txt` (where poker is `hidden`, because casino starts
+it). To put it on the dock anyway, name it in the row of
+`sw/data/wm.cfg` ([dock.md](dock.md)):
 
-    { "poker",      z_icon_poker_data },
+    row wide ... casino poker ...
 
 **3. The card image.** Add to the table in `release/lib/mkfatimg.py`:
 

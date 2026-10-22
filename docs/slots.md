@@ -271,12 +271,12 @@ it writes, so a win in another game meanwhile is not clobbered.
 
 **1.** Add `slots` to `APPS` in `sw/apps/Makefile`.
 **2.** `sw/data/icons/icon-slots.png` is included. Run
-`cd sw/data/icons && python3 gen_dock_icon_data.py`, and add
-`{ "slots",      z_icon_slots_data },` to `dock_candidates[]` in
-`sw/apps/wm/wm.c`.
+`cd sw/data/icons && python3 gen_dock_icon_data.py`, and name `slots`
+in the row of `sw/data/wm.cfg` to have it on the dock
+([dock.md](dock.md)).
 **3.** Add `("apps/slots", "sw/apps/slots/slots.bin"),` to
 `release/lib/mkfatimg.py`.
-**4.** Rebuild `wm` and `slots`.
+**4.** Rebuild `slots` (and the flash archive, for the dock's files).
 
 ## A name clash the compiler caught
 
