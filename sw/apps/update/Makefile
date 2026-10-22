@@ -22,16 +22,15 @@ OBJS = zeitlos.o zobj.o zport.o zwin.o zgfx.o zfont_data.o zstream.o \
 # uses it.
 SRC_DIRS = ../../ext/monocypher
 
-# Stack and heap. The heap holds both manifests, their parsed entries,
-# the plan and the card's new manifest: measured at 126-138 KB at the
-# peak on the host for the 472-file base card of October 2026, and 285
-# KB for the 674 files of every set with the zdocs pack (a 77 KB
-# manifest) on 2026-10-21 (64-bit pointers; less here; `tests/
-# test_update --update` prints it). The host tests run it out of memory
-# at every point (tests/test_update.c, "memory"). 256K ran out on a
-# board once; 512K leaves room to grow. Static buffers, in .bss: two
-# 32 KB for LZ4 blocks, 36 KB for HTTP (upd_net.c), 8 KB for writes.
-APP_STACK = 512K
+# Stack and heap. No manifest is held in memory any more: they are read
+# from the card a line at a time (upd.c, "the manifests"), and the heap
+# holds the plan, a byte a file -- 1,680 bytes for the 1,680 files of
+# every set with the ask packs, whose manifest is 200 KB, and which ran
+# the 512K this used to have out when all three manifests were held
+# (October 2026). `tests/test_update --update` prints the peak. Static
+# buffers, in .bss: 64 KB for LZ4 blocks, 36 KB for HTTP (upd_net.c),
+# two manifest readers and headers, 8 KB for writes.
+APP_STACK = 64K
 
 # upd.c includes "zsha256.h" plainly, so the host tests can build it.
 APP_CFLAGS = -I../../common -I../../ext/monocypher

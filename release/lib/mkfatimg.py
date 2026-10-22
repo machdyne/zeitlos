@@ -101,7 +101,7 @@ LABEL = "ZEITLOS"
 SETS = [
     ("base",         "Base",
      "the shell, settings, the reader, documents and fonts"),
-    ("productivity", "Productivity",
+    ("work",         "Work",
      "sheet, slide, print, convert, draw, view, automate"),
     ("audio",        "Audio",       "music, MIDI, trackers and speech"),
     ("net",          "Network",     "web, IRC, BBS, mesh and servers"),
@@ -121,9 +121,9 @@ APP_SET = {
     "info": "base", "calc": "base", "clock": "base", "cal": "base",
     "keyboard": "base", "jfont": "base", "read": "base", "ask": "base",
     "update": "base", "backup": "base",
-    "sheet": "productivity", "slide": "productivity", "print": "productivity",
-    "convert": "productivity", "draw": "productivity", "view": "productivity",
-    "automate": "productivity",
+    "sheet": "work", "slide": "work", "print": "work",
+    "convert": "work", "draw": "work", "view": "work",
+    "automate": "work",
     "play": "audio", "midi": "audio", "mmod": "audio", "track": "audio",
     "tts": "audio", "audiotest": "audio",
     "web": "net", "irc": "net", "netserve": "net", "zerdesk": "net",
@@ -149,7 +149,7 @@ PLACE_SET = [
     (zcard("Z_DIR_SYS"), "base"),
     (zcard("Z_DIR_ARK"), "base"),             # the ARK scroll
     (zcard("Z_DIR_MEDIA_AUDIO"), "audio"),
-    (zcard("Z_DIR_MEDIA_IMAGES"), "productivity"),
+    (zcard("Z_DIR_MEDIA_IMAGES"), "work"),
 ]
 # The ask packs an update knows, by set. Others (arkmed) are only on an
 # image: not in its manifest, never touched by an update.

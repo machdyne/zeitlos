@@ -27,7 +27,7 @@ Where releases come from, and why plain HTTP is safe, is
 | **Done** (round 1) | `update` on the board, over TFTP. Run on a Lakritz against a real store; three things found there and fixed: a lost end-of-file ("Inside"), a slow first check (now CRC-32, "Two hashes"), and running out of memory writing the manifest ("Inside"). Tested on the host against stores the release tool writes, including a run stopped at every step and one out of memory at every point |
 | **Done** (round 2) | objects as LZ4 blocks (manifest format 3, "Compression"); host-tested, including a format-2 store read by the new `update` |
 | **Done** (round 3) | the ABI check ("ABI"): `tools/gen_abi.py`, `sw/common/zabi.h`, `Z_SYS_ABI`, the manifest's `abi` line, `update -f`; host-tested |
-| **Done** (round 4a) | sets ("Sets", manifest format 4, `-s`); signed releases over plain HTTP from the distribution's server as the default ([distribution.md](distribution.md)); the images `zeitlos`, `-serious`, `-base`, `-arkmedium`; zdocs and arklite as files an update knows; `zrelease http`, `keygen`, `ship` to the server; host-tested, including Monocypher checking signatures made by `release/lib/ed25519.py` |
+| **Done** (round 4a) | sets ("Sets", manifest format 4, `-s`); signed releases over plain HTTP from the distribution's server as the default ([distribution.md](distribution.md)); the images `zeitlos`, `-serious`, `-base`, `-arkmedium`; zdocs and arklite as files an update knows; `zrelease http`, `keygen`, `ship` to the server; host-tested, including Monocypher checking signatures made by `release/lib/ed25519.py`. Then, after "out of memory writing the manifest" on a board with every set: the manifests are read from the card a line at a time instead of held in memory ("Inside") |
 | Next (round 4b) | `update` as a core app in flash, with a window: the installer for a board with no card |
 | Later | NFS was dropped; core apps on the card on request |
 
@@ -66,7 +66,7 @@ update: signed by key 5a1f0e9c27b3d814, which this machine trusts
 update: v0.0.7 from http://zeitlos.machdyne.com/release/
 update: release is v0.0.7 snapshot 3f2a9c01e4b7 (v0.0.6-45-g58e067a-dirty, 2026-10-19T09:40:12Z)
 update: card has   v0.0.7 snapshot 81c0d2e3f4a5 (v0.0.6-44-gb9736d1, 2026-10-18T17:02:55Z)
-update: sets base productivity audio net dev embedded games arklite
+update: sets base work audio net dev embedded games arklite
 update: abi 03a25f4cbf544cf0, as the flash has
 update: 3 to write (812 KB), 1 to remove, 318 unchanged
   [1/3] apps/sheet  205 KB  ok  96 KB/s
@@ -206,7 +206,7 @@ file has one, and a card has the sets someone chose -- all of them on
 | set | programs | and |
 |---|---|---|
 | base | posix, vi, zetta, settings, info, calc, clock, cal, keyboard, jfont, read, ask, update, backup | fonts, `/docs`, the ARK scroll, `zeitlos.cfg`, `net.cfg`, the zdocs pack |
-| productivity | sheet, slide, print, convert, draw, view, automate | slide's tour and examples, `/media/images`, the demo scripts |
+| work | sheet, slide, print, convert, draw, view, automate | slide's tour and examples, `/media/images`, the demo scripts |
 | audio | play, midi, mmod, track, tts, audiotest | the speech pack, the `.mod` files, `/media/audio` |
 | net | web, irc, netserve, zerdesk, mesh, bbs, fed | `roots.der`, zerdesk's page, the BBS's and fed's data |
 | dev | zcc, zfpga, hex, cryptobench, hello_win, portdemo, ttytest | libz, zcc's headers and examples, zfpga's databases and examples |
@@ -382,18 +382,32 @@ transfer can be protected against anyway; SHA-256 names the objects,
 makes the snapshot id, is what `-v` checks, and is what will make a
 signed HTTPS update trustworthy.
 
-About 51 KB on the card (integer-only printf, no FILE layer, no 64-bit
-division); 512 KB of stack and heap. The heap holds the release's
-manifest (fetched into 64 KB, then trimmed to its size), the card's,
-their parsed entries, the plan, and the card's new manifest, which is
-written in one allocation of exactly its size, counted first. Measured
-on the host for the 408-file base card: about 110 KB at the peak with
-no card manifest and 175 KB with one (64-bit pointers; less on the
-board). The first board run had 256 KB and a writer that grew its
-buffers by doubling, holding old and new blocks at once, and stopped
-with "out of memory writing the manifest" after putting every file in
-place -- harmless, since the next run finds the files right and writes
-the manifest, but the reason the tests now count memory.
+About 92 KB on the card (integer-only printf, no FILE layer, no 64-bit
+division; Monocypher's Ed25519 check and the HTTP client since round
+4a), about 200 KB of static buffers, and 64 KB of stack and heap.
+
+**No manifest is held in memory.** Until round 4a the heap held the
+release's manifest, the card's, their parsed entries, the plan and the
+card's new manifest. With every set and the ask packs a manifest is
+some 1,700 lines and 200 KB, and that ran the 512 KB heap out on a
+board ("out of memory writing the manifest", October 2026; 522 KB at
+the peak on the host). Now:
+
+- the release's manifest is written to the card as it arrives,
+  `/sys/manifest.rel`, through the signature check, and removed at the
+  end;
+- both manifests are read back a line at a time (8 KB buffers): they
+  are sorted by path, so the plan is a merge that needs one line of
+  each, and the plan itself is one byte per file;
+- the card's new manifest is written straight to `/sys/manifest.upd`
+  after a first pass that only hashes it for its snapshot id, and is
+  left alone when it would be the same.
+
+Each step reads the two files again -- a few passes at the card's
+~600 KB/s -- and the heap peak is the plan: 1,680 bytes for that
+1,680-file card, 3,000 for the tests' 3,000-file one. The first board
+run, in round 1, ran out the same way with a smaller card and a 256 KB
+heap; that is why the tests count memory.
 
 ## Publishing: `zrelease tftp`
 
@@ -538,7 +552,7 @@ set base Base | the shell, settings, the reader, documents and fonts
 set games Games | arcade, casino, chess, chip8 and more
 installed base games
 d home
-f 3f2a9c01e4b7d0a1c2e4...(64 hex) 1c2b3a49 612388 r productivity apps/sheet
+f 3f2a9c01e4b7d0a1c2e4...(64 hex) 1c2b3a49 612388 r work apps/sheet
 f 9d41c2a07b55...                 8e0f61d2 1734 k base sys/zeitlos.cfg
 ```
 
@@ -718,7 +732,8 @@ files, a folder two deep and a name with a space; edited and unedited
 alone, without reading the unchanged files: the bytes read are
 counted) and a card without one (each file read once, by CRC); a
 file in use and the run that finishes it; **memory**: the heap
-limited from 2 KB upwards until the run succeeds, every failed run
+limited from one byte upwards until the run succeeds (at a few bytes:
+the plan), a 3,000-file card with a 400 KB manifest in under 16 KB, every failed run
 followed by one that must leave exactly the release (upd.c's
 allocations are counted through `alloc_hook.h`, and `--update` prints
 the peak); **the run stopped

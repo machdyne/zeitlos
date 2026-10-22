@@ -193,6 +193,14 @@ def main():
     open(os.path.join(st, "shacheck", "manifest"), "w").write(m.text)
     store.sign(st, "shacheck", [K1])
 
+    # big: a card of 3,000 small files, a 400 KB manifest -- larger than
+    # update could once hold in memory (upd.c, "the manifests").
+    BIG_CARD = {"data/big/%04d/file-with-a-longer-name-%04d.txt" % (i // 100, i):
+                ("r", b"%d\n" % i) for i in range(3000)}
+    src = os.path.join(out, "src", "big")
+    lay_out(BIG_CARD, src)
+    publish("big", BIG_CARD, src, st, False)
+
     with open(os.path.join(out, "keys"), "w") as f:
         f.write("k1 %s\nk2 %s\n" % (ed25519.public_key(K1).hex(),
                                       ed25519.public_key(K2).hex()))

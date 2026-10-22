@@ -1227,7 +1227,7 @@ def main(argv):
                     help="one of a release's card images (default: "
                          "every set, zdocs + arklite, or $ZEITLOS_ASK_PACKS)")
     sd.add_argument("--sets",
-                    help="only these sets, e.g. base,productivity (base is "
+                    help="only these sets, e.g. base,work (base is "
                          "always there; docs/update.md, \"Sets\")")
     sd.set_defaults(func=cmd_sdcard)
 

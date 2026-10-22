@@ -115,45 +115,4 @@ int upd_abi_check(const char *release_abi, int release_len, const char *kernel_a
 // `keys`, 32 bytes each: how many, or -1 if one is not a key.
 int upd_keys_parse(const char *hex, uint8_t *keys, int max);
 
-// Exposed for the tests.
-typedef struct {
-	const char *path;   // into the text; NOT terminated: path_len
-	uint16_t path_len;
-	const char *hash;   // SHA-256: 64 hex digits, into the text
-	uint32_t size;
-	uint32_t crc;       // CRC-32 (zlib's), when has_crc
-	bool has_crc;       // false in a format-1 manifest
-	char policy;        // 'r' or 'k'
-	const char *set;    // format 4: its set, into the text ("-": not known);
-	uint8_t set_len;    // NULL before format 4
-} upd_entry_t;
-
-typedef struct {
-	const char *name, *title, *desc;    // into the text
-	uint8_t name_len, title_len, desc_len;
-} upd_set_t;
-
-typedef struct {
-	char *text;         // the whole file, NUL-terminated (owned)
-	uint32_t len;
-	const char *name, *version, *snapshot, *source, *made, *packs, *abi;
-	int name_len, version_len, snapshot_len, source_len, made_len, packs_len, abi_len;
-	upd_entry_t *files;
-	int nfiles;
-	const char **dirs;  // into the text, each up to its '\n'
-	uint16_t *dir_len;
-	int ndirs;
-	int format;
-	upd_set_t sets[UPD_SETS_MAX];   // `set` lines: what a release offers
-	int nsets;
-	const char *installed;          // `installed` line: what a card has
-	int installed_len;
-	bool has_installed;
-} upd_manifest_t;
-
-// Parses text (taking ownership). 0, or a reason in err.
-int upd_manifest_parse(upd_manifest_t *m, char *text, uint32_t len,
-	char *err, int errlen);
-void upd_manifest_free(upd_manifest_t *m);
-
 #endif

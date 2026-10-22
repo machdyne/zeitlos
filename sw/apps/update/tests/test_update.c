@@ -626,7 +626,7 @@ static void memory(void) {
 	// with all the memory it wants, must leave exactly the release.
 	int failed = 0, bad = 0;
 	size_t ok_at = 0;
-	for (size_t lim = 2048; lim < 600000; lim += lim / 8) {
+	for (size_t lim = 1; lim < 600000; lim += lim / 8 + 1) {
 		fresh_card();
 		run("v1", false, false);
 		write_card("/data/x/cfg", "# edited\n");
@@ -642,18 +642,30 @@ static void memory(void) {
 				r, tree_first, outbuf);
 		}
 	}
-	CHECK(failed > 10 && ok_at, "ran out of memory at %d limits, then succeeded "
-		"with %lu bytes", failed, (unsigned long)ok_at);
+	// The manifests are read from the card, not held (upd.c, "the
+	// manifests"): the heap holds the plan, a byte a file, and little else.
+	CHECK(failed > 0 && ok_at && ok_at <= 4096, "ran out of memory at %d limits, "
+		"then succeeded with %lu bytes", failed, (unsigned long)ok_at);
 	CHECK(bad == 0, "after each, the next run left exactly v2 (%d bad)", bad);
 
 	heap_peak = 0;
 	fresh_card();
 	run("v1", false, false);
 	run("v2", false, false);
-	// Mostly the 64 KB a release manifest is fetched into.
-	CHECK(heap_peak < 128 * 1024, "the fixture's peak is %lu bytes",
+	CHECK(heap_peak < 4096, "the fixture's peak is %lu bytes",
 		(unsigned long)heap_peak);
 	CHECK(heap_now == 0, "and all of it is freed (%lu left)", (unsigned long)heap_now);
+
+	// A card of 3,000 files, a manifest of 400 KB: the heap is the plan.
+	heap_peak = 0;
+	fresh_card();
+	int r = run("big", false, false);
+	CHECK(r == UPD_DONE && card_is_release("big", NULL),
+		"3,000 files onto a blank card (%d)", r);
+	CHECK(heap_peak < 16 * 1024, "with a heap peak of %lu bytes",
+		(unsigned long)heap_peak);
+	r = run("big", false, false);
+	CHECK(r == UPD_DONE && said("up to date"), "and up to date after (%d)", r);
 }
 
 static void verify(void) {
@@ -1064,6 +1076,7 @@ static void read_ids(void) {
 }
 
 int main(int argc, char **argv) {
+	setvbuf(stdout, NULL, _IONBF, 0);
 	if (argc < 2) {
 		printf("usage: test_update FIXTURE [-v]\n"
 		       "       test_update --update CARD STORE RELEASE [-n] [-v] [-f] [-s SETS]\n"
