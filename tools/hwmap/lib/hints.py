@@ -78,7 +78,6 @@ MODULES = {
                             doc="gpu_raster"),
     "gpu_blit_wb":     dict(name="Blitter", cat="video", doc="gpu_blitter"),
     "gpu_video":       dict(name="Video out", cat="video", doc="composite"),
-    "gpu_cursor":      dict(name="HW cursor", cat="video", doc=None),
     "pll0":            dict(name="PLL0", cat="clock"),
     "pll1":            dict(name="PLL1", cat="clock"),
     "ddr3_clk":        dict(name="DDR3 clocks (PLL2, ECLK, DLL)", cat="clock", doc="ddr3"),

@@ -148,8 +148,10 @@ through a 16-entry palette: 4, 8 or 16 colours, still from the
 unchanged 640x480x1bpp surface and still with no changes to the
 rasterizer or the blitter. The spare pages this section and the next
 describe are what the extra planes are made of, so colour trades
-directly against back buffers and sprite storage. See
-[color.md](color.md).
+directly against back buffers and sprite storage. Boards built with
+`GAME_PLANES` 6 or 8 add a second VRAM sheet below the screen for
+planes 4..7: 64 or 256 colours without spending more of the first.
+See [color.md](color.md).
 
 While colour is on, the virtual phosphor (VIDEO) is not consulted;
 monochrome game mode honours it exactly as before.

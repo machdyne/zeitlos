@@ -215,7 +215,7 @@ The dividing line, concretely:
      ┌───────────┴───────────┐            Wishbone / IRQ 9
      │ usb_hid_compat.v  x2  │
      │ reg_usbN_* images,    │
-     │ accel/clamp cursor    ├──── curs_x/curs_y ──▶ gpu_cursor.v
+     │ accel/clamp cursor    ├──── curs_x/curs_y ──▶ gpu_video.v (cursor)
      │ (from rtl/usb_hid.v)  ├──── IRQ 5 / IRQ 6 ──▶ sw/os/hid.c
      └───────────────────────┘
 ```
@@ -272,7 +272,7 @@ Applying that rule:
 | Token/data/handshake sequencing, turnaround timeouts | Hardware | Sub-microsecond deadlines |
 | 1 ms frames and SOF | Hardware | Devices suspend without it |
 | Attach detect, debounce, reset, speed detect | Hardware | Long timers, trivial in logic |
-| **Boot-protocol mouse → cursor position** | **Hardware** | `gpu_curs_x`/`gpu_curs_y` are *wires* into `gpu_cursor.v`. Gateware consumes this, so gateware must produce it |
+| **Boot-protocol mouse → cursor position** | **Hardware** | `gpu_curs_x`/`gpu_curs_y` are *wires* into the hardware cursor (`gpu_video.v`). Gateware consumes this, so gateware must produce it |
 | Boot-protocol keyboard → `reg_usbN_keys` | Hardware | Free: same fixed layout, same auto-poll path |
 | Enumeration, descriptor parsing | Software | Variable-length TLV walking; a C loop, not a state machine |
 | Hub port management | Software | It is just control transfers to an ordinary device |

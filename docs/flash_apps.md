@@ -381,6 +381,15 @@ The dock on any side of the screen ([dock.md](dock.md#sides)) took
 `wm` past 135K of RAM (139,020 bytes): its budget went to 136K, paid
 from `net`'s, 285K to 284K, which `net` (290,580 bytes) still fits. The
 boot set's RAM stays 1,024 of 1,024 KB.
+The pointer's shapes ([cursor.md](cursor.md): the large pair read
+from the card, Super+M) took `wm` to 140,240 bytes: its budget went to
+137K, paid from `text`'s, 157K to 156K (`text` is 159,588 bytes) --
+`text` is one of the two largest apps the RAM rule counts beside the
+boot set, so the rule stays 1,024 of 1,024 KB. `term`'s 16K of room
+would not have done: it is in neither.
+Game-mode colour's second VRAM sheet ([color.md](color.md), "More than
+four planes") took it to 140,276 -- `zgfx`'s fills and blits can be told
+to reach below row 479, a variable and one store -- 12 bytes inside.
 The next byte for the boot set comes out of another budget, or out of
 something made smaller. `mkzar.py --max` checks the archive itself
 against the region (`CORE_ZAR_MAX`, 848K), so a budget that turns out
@@ -392,8 +401,8 @@ code, data and `.bss`, not its stack). They are `CORE_BUDGETS` in the
 top-level `Makefile`, next to `CORE_APPS`:
 
 ```
-CORE_BUDGETS = fs=36K/75K usb=35K/55K wm=104K/136K net=148K/284K term=62K/152K \
-	console=10K/13K cron=18K/48K text=60K/157K files=57K/120K repl=140K/304K
+CORE_BUDGETS = fs=36K/75K usb=35K/55K wm=104K/137K net=148K/284K term=62K/152K \
+	console=10K/13K cron=18K/48K text=60K/156K files=57K/120K repl=140K/304K
 CORE_RESERVE = 60K
 CORE_STORE = wm net
 CORE_ZAR_MAX = 848K

@@ -681,7 +681,7 @@ static kg_key_t pump_once(void)
 			 *    outside the window's content rect was dropped before
 			 *    the override could see it; and
 			 *
-			 *  - the halving was wrong anyway. gpu_cursor.v compares
+			 *  - the halving was wrong anyway. The hardware cursor compares
 			 *    against FRAMEBUFFER coordinates, so the pointer is
 			 *    positioned in framebuffer space and comes out
 			 *    pixel-doubled along with everything else, for free

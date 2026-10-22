@@ -1135,7 +1135,7 @@ static bool wm_cursor_hidden;
 // with nothing to go on. Prints once per state change, not per loop.
 static void wm_busy_apply(void) {
 	// The cursor sprite is drawn in hardware and composited at scanout
-	// (rtl/gpu/gpu_cursor.v), so this register is the only way to
+	// (docs/cursor.md), so this register is the only way to
 	// change its shape -- wm cannot draw over it.
 	//
 	// Requires a bitstream with rtl/socctl.v: this is an RTL change, so
@@ -1264,6 +1264,7 @@ static uint32_t dock_ms(uint32_t t0) {
 
 // The whole file into `buf`. Its size; 0 if there is none (or it is
 // empty); -1 if it is larger than `max` or the read failed.
+__attribute__((noinline))
 static int dock_read_whole(const char *path, void *buf, uint32_t max) {
 
 	z_kernel_ptr_t k = (z_kernel_ptr_t)(uintptr_t)(reg_kernel);
@@ -1283,6 +1284,50 @@ static int dock_read_whole(const char *path, void *buf, uint32_t max) {
 	if (!rv || rv->val.uint32 != Z_OK || ra.len != sa.size) return -1;
 
 	return (int)sa.size;
+
+}
+
+// -- the pointer's shapes (docs/cursor.md) --
+//
+// The hardware draws the pointer from four 16x16 slots: 0 and 1 are
+// today's X and Z, 2 and 3 the "large" pair -- a 9x9 X and Z, or the
+// user's own, /data/wm/cursor.zsp, when the card has it. zeitlos.cfg's
+// system.cursor.large says which pair shows at start; Super+M swaps
+// them. A reset (a warm reboot too) shows X and Z again until wm
+// sets this.
+static bool wm_cursor_large;
+static bool wm_cursor_hw;		// z_cursor_shapes_available(), asked once
+
+static void wm_cursor_slots(void) {
+	reg_socctl_cursor = wm_cursor_large ? 0x32u : 0x10u;	// { busy, normal }
+}
+
+// The large pair into slots 2 and 3: Z_PATH_WM_CURSOR (a .zsp with
+// `normal` and `busy`, read through `buf`), or without one the
+// built-in 9x9 X and Z.
+static void wm_cursor_setup(void *buf, uint32_t size) {
+
+	uint16_t sh[2 * Z_CURSOR_ROWS];		// normal, then busy
+	int line = 0;
+
+	wm_cursor_hw = z_cursor_shapes_available();
+	if (!wm_cursor_hw) return;
+	int len = dock_read_whole(Z_PATH_WM_CURSOR, buf, size);
+	bool ok = len > 0 && dk_cursor_parse((const char *)buf, (uint32_t)len, sh, sh + 16, &line);
+	if (len && !ok) printf("wm: %s: unusable (line %d)\n", Z_PATH_WM_CURSOR, line);
+	if (!ok) {
+		memset(sh, 0, sizeof(sh));
+		for (int d = -4; d <= 4; d++) {
+			sh[8 + d] |= (uint16_t)((1u << (8 + d)) | (1u << (8 - d)));
+			sh[24 + d] |= (uint16_t)(1u << (8 - d));
+		}
+		sh[20] = sh[28] = 0x1ff0;
+	}
+	// slots 2 and 3 are rows 32..63; the slots shown are set below
+	reg_socctl_cursor = 32u << 16;
+	for (int r = 0; r < 2 * Z_CURSOR_ROWS; r++) reg_socctl_curdata = sh[r];
+	wm_cursor_large = z_cfg_get_bool("system.cursor.large", false);
+	wm_cursor_slots();
 
 }
 
@@ -1402,6 +1447,9 @@ static void dock_build(void) {
 		dk_cfg_init(&dock_cfg, dock_cfg_report, (void *)"(built in)");
 		dk_cfg_text(&dock_cfg, dock_cfg_builtin, sizeof(dock_cfg_builtin) - 1);
 	}
+
+	// -- the pointer: the store is free again until the icons' table
+	wm_cursor_setup(dock_store, sizeof(dock_store));
 
 	// -- the icons' table: names, flags, where each one is. The file
 	// stays open for the icons themselves, once it is known which.
@@ -5485,6 +5533,24 @@ static void dispatch_keys(void) {
 					printf("wm: Super+P: %s\n", z_video_mode_name(m));
 				else
 					printf("wm: Super+P: this bitstream has no video modes\n");
+			}
+			continue;
+		}
+
+		// Super+M -- the pointer's other pair of shapes: the small X
+		// and Z, or the large ones (docs/cursor.md). Until the next
+		// reload; system.cursor.large says which shows at start.
+		if ((modifiers & Z_KBD_MOD_GUI) && (keysym == 'm' || keysym == 'M') &&
+		    !(modifiers & Z_KBD_MOD_CTRL) && !alt) {
+			if (pressed) {
+				if (wm_cursor_hw) {
+					wm_cursor_large = !wm_cursor_large;
+					wm_cursor_slots();
+					z_speak_static(wm_cursor_large ? "Large pointer" : "Small pointer",
+						Z_TTS_F_INTERRUPT);
+				} else {
+					printf("wm: Super+M: this bitstream's pointer is fixed\n");
+				}
 			}
 			continue;
 		}

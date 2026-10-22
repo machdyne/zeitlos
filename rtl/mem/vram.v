@@ -6,6 +6,23 @@
  */
 
 module vram_wb
+#(
+    // 9600 words: one 640x480x1bpp sheet, the desktop and four
+    // game-mode bitplanes. GAME_PLANES 6 adds half a second sheet
+    // (14400, rows 480..719) and 8 a whole one (19200, rows 480..959):
+    // rtl/sysctl.v sets it, docs/color.md "More than four planes".
+    //
+    // How yosys builds the array (0.70; 0.33 the same) depends on its
+    // depth. 9600 words: 20 DP16KD several deep, and a read
+    // multiplexer on each port (about 220 LUT4). 14400: the 16,384 x 1 shape, 32 DP16KD side by side
+    // and no multiplexer at all, two blocks more than the tightest
+    // packing and about 210 LUT4 fewer than 9600 -- on the 25F boards,
+    // whose LUTs are the scarcer resource, the better trade. Packings
+    // of 30 were tried (banks of 1,024 words, a 14,336 + 64 split):
+    // yosys builds them with 15:1 multiplexers, 1,000 LUT4 and more.
+    // 19200: 40 DP16KD and the same multiplexer as 9600.
+    parameter integer WORDS = 9600
+)
 (
    input wb_clk_i,
    input wb_rst_i,
@@ -61,7 +78,7 @@ module vram_wb
     // Simulation ignores the attribute; an older yosys without it
     // ignores it too and simply uses 40 blocks again.
     (* no_rw_check *)
-    reg [31:0] vram [0:9599];
+    reg [31:0] vram [0:WORDS-1];
 
     wire wb_active = wb_cyc_i && wb_stb_i;
 

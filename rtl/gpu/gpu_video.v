@@ -107,12 +107,12 @@
  *
  * The x and y OUTPUTS now carry framebuffer coordinates rather than
  * screen coordinates. In desktop mode those are the same thing, so
- * nothing changes. In game mode it means rtl/gpu/gpu_cursor.v needs
- * no modification at all: it compares against framebuffer
- * coordinates, so it draws the pointer at the right place in the
- * framebuffer -- and because consecutive screen pixels map to the
- * same framebuffer coordinate, the sprite comes out pixel-doubled
- * along with everything else, for free.
+ * nothing changes. In game mode it means the hardware cursor (the
+ * bottom of this file, docs/cursor.md) needs nothing of its own: it
+ * compares against framebuffer coordinates, so it draws the pointer at
+ * the right place in the framebuffer -- and because consecutive screen
+ * pixels map to the same framebuffer coordinate, the sprite comes out
+ * pixel-doubled along with everything else, for free.
  *
  * -- one off-by-one fixed on the way through --
  *
@@ -179,11 +179,58 @@ module gpu_video #(
 	// color_on below a constant 0, and yosys removes the lot: no
 	// extra VRAM reads, no block RAM, no palette, and the output
 	// muxes fold back to exactly the monochrome path.
-	parameter COLOR_AVAIL = 1'b0
+	parameter COLOR_AVAIL = 1'b0,
+
+	// The most bitplanes colour shows: 4, 6 or 8 (rtl/boards.vh's
+	// `GAME_PLANES; docs/color.md, "More than four planes"). Planes
+	// 4..7 are planes 0..3 of the second VRAM sheet, rows 480..959 --
+	// 480..719 with 6, where that sheet is half height -- and the
+	// palette has 2^GAME_PLANES entries. Ignored without COLOR_AVAIL.
+	parameter integer GAME_PLANES = 4,
+
+	// 1 keeps the cursor's shapes and the palette in distributed (LUT)
+	// RAM instead of their block RAM (cbuf, below): one DP16KD fewer,
+	// for a few dozen LUTs, on a board that is one block short
+	// (rtl/boards.vh's `GPU_CURSOR_LUTRAM). Same behaviour, same
+	// timing: the reads are registered just as the block RAM's are.
+	parameter CBUF_LUTRAM = 1'b0,
+
+	// -- the hardware cursor (docs/cursor.md) --
+	//
+	// 1 draws the pointer from four 16x16 shapes kept in the spare
+	// words of the plane line buffer (pbuf, below). 0 -- the default,
+	// so every testbench is unchanged -- draws none, and only `pixel`
+	// below can invert a pixel.
+	parameter CURSOR_AVAIL = 1'b0
 
 ) (
 
+	// An extra invert, XORed in with the cursor's own. Tied to 0 by
+	// rtl/sysctl.v; the benches use it to stand in for a cursor.
 	input pixel,
+
+	// -- the hardware cursor (CURSOR_AVAIL) --
+	//
+	// curs_x/y: the pointer, from rtl/usb_hid.v (or the virtual
+	// mouse), in framebuffer coordinates. curs_alt (busy) and
+	// curs_hide come from socctl's CTRL, curs_slots from its CURSOR
+	// register: { busy slot, normal slot }. All are used as they are
+	// in the pixel domain, as the old comparator cursor (gpu_cursor.v)
+	// used them: each is a
+	// human-paced value, and the worst a change mid-line can do is
+	// draw one line with the old one.
+	//
+	// curs_we writes one shape row, curs_wdata, to row curs_waddr
+	// ({ slot, row }) of the cursor's own block RAM: a one-clock
+	// strobe from socctl, in this module's clk (wishbone) domain.
+	input [9:0] curs_x,
+	input [9:0] curs_y,
+	input curs_alt,
+	input curs_hide,
+	input [3:0] curs_slots,
+	input curs_we,
+	input [5:0] curs_waddr,
+	input [31:0] curs_wdata,
 
 	input clk,
 	input pclk,
@@ -241,18 +288,22 @@ module gpu_video #(
 	// so "enter game mode, set the origin, switch colour on" written
 	// as three stores lands as one change on one frame.
 	//
-	// color_np is planes-1 (0..3 = 2, 4, 8, 16 colours). color_off
-	// holds a 2-bit {dy, dx} offset for each of planes 1..3, in that
-	// order from bit 0: dx adds 320 columns, dy adds 240 rows, both
-	// modulo the 640x480 torus. Plane 0 is the viewport itself.
+	// color_np is planes-1 (0..7 = 2 .. 256 colours; socctl never
+	// asks for more than GAME_PLANES). color_off holds a 2-bit
+	// {dy, dx} offset for each of planes 1..3, in that order from bit
+	// 0: dx adds 320 columns, dy adds 240 rows, both modulo the
+	// 640x480 torus. Plane 0 is the viewport itself. Planes 4..7 sit
+	// in the second sheet where planes 0..3 sit in the first, so they
+	// take the same offsets.
 	input color_en,
-	input [1:0] color_np,
+	input [2:0] color_np,
 	input [5:0] color_off,
 
 	// Palette write port, wishbone clock domain (= clk). One-cycle
-	// strobe from socctl; 12-bit RGB444 into entry pal_idx.
+	// strobe from socctl; 12-bit RGB444 into entry pal_idx (its bits
+	// above GAME_PLANES are ignored).
 	input pal_we,
-	input [3:0] pal_idx,
+	input [7:0] pal_idx,
 	input [11:0] pal_rgb,
 
 	// Composite only: 1 = no colour on the composite output -- the
@@ -400,11 +451,29 @@ module gpu_video #(
 	// same depth -- so this costs nothing in the 25.2MHz pixel domain
 	// this line sits in.
 	// The word each plane is showing -- see the plane read side at
-	// the bottom of this file.
-	reg [31:0] cur0, cur1, cur2, cur3;
+	// the bottom of this file. Planes 4..7 exist only with GAME_PLANES
+	// 6 or 8; in a smaller build nothing loads them, plane_mask below
+	// keeps them out of the index, and synthesis removes them.
+	reg [31:0] cur0, cur1, cur2, cur3, cur4, cur5, cur6, cur7;
+
+	// How many planes this build fetches and shows: GAME_PLANES with
+	// colour, and 4 without -- the plane fetch and read side then run
+	// exactly as they always have (planes 1..3 read and dropped).
+	localparam integer NP = (COLOR_AVAIL == 0) ? 4 :
+		(GAME_PLANES >= 8) ? 8 : (GAME_PLANES >= 6) ? 6 : 4;
+
+	// The cursor's pixel, from the read side at the bottom of this
+	// file: 1 = invert, the XOR described above, which is all the
+	// pointer ever does. `pixel` adds an invert of its own (the
+	// benches'). Opaque pixels (ink, background) were measured and
+	// left out: in context they cost about 200 LUTs and 3 MHz on this
+	// clock more than invert alone, which costs less than the old
+	// cursor did (docs/cursor.md, "Cost").
+	reg c_d;
+	wire c_inv = pixel | c_d;
 
 	wire p0 = cur0[x[4:0]];
-	wire pix = p0 ^ pixel;
+	wire pix = p0 ^ c_inv;
 
 	// is_visible gates the result, and it MUST: in GPU_PAPER the
 	// inactive state is 1, so an ungated invert would drive the VGA
@@ -428,6 +497,9 @@ module gpu_video #(
 	// word per plane (cur1..cur3), indexed by the same x[4:0] -- which is
 	// valid for every plane because a plane offset of 320 columns is
 	// exactly ten words, so all planes cross word boundaries together.
+	// With GAME_PLANES 6 or 8, planes 4..7 are the same again in the
+	// second VRAM sheet (cur4..cur7), which holds them where the first
+	// holds planes 0..3.
 	//
 	// COLOUR REPLACES THE PHOSPHOR MODE while it is on. The virtual
 	// phosphor (white/amber/green/paper) is a choice of ONE ink for a
@@ -440,7 +512,7 @@ module gpu_video #(
 	// mode the desktop was in. Monochrome game mode (colour off)
 	// keeps honouring the phosphor exactly as it always has.
 	reg col_active;
-	reg [1:0] np_active;
+	reg [2:0] np_active;
 	reg [5:0] off_active;
 
 	// vp_on rather than game_active: on a composite board the
@@ -450,47 +522,63 @@ module gpu_video #(
 	// will want, so it is written that way now.
 	wire color_on = (COLOR_AVAIL != 0) && col_active && vp_on;
 
-	// Which planes take part. Unused planes read as 0, so a 4-colour
-	// picture uses palette entries 0..3, an 8-colour one 0..7.
-	wire [3:0] plane_mask = { (np_active == 2'd3), np_active[1],
-		(np_active != 2'd0), 1'b1 };
+	// Which planes take part: those below np_active + 1 that this build
+	// has. Unused planes read as 0, so a 4-colour picture uses palette
+	// entries 0..3, a 64-colour one 0..63.
+	wire [7:0] plane_mask = {
+		(NP > 7) && (np_active >= 3'd7), (NP > 6) && (np_active >= 3'd6),
+		(NP > 5) && (np_active >= 3'd5), (NP > 4) && (np_active >= 3'd4),
+		(np_active >= 3'd3), (np_active >= 3'd2), (np_active >= 3'd1), 1'b1 };
 
 	// The cursor inverts the ACTIVE planes only, i.e. index ^ (2^n-1):
 	// the same XOR the monochrome path does, generalised. Over entry 0
 	// it shows the highest entry in use, and it can never land on an
 	// entry the game is not using.
-	wire [3:0] cidx = ({ cur3[x[4:0]], cur2[x[4:0]], cur1[x[4:0]], p0 } ^
-		{ pixel, pixel, pixel, pixel }) & plane_mask;
+	wire [7:0] cidx = ({ cur7[x[4:0]], cur6[x[4:0]], cur5[x[4:0]], cur4[x[4:0]],
+		cur3[x[4:0]], cur2[x[4:0]], cur1[x[4:0]], p0 } ^ {8{c_inv}}) & plane_mask;
 
-	// 16 x RGB444, in distributed RAM: written in the wishbone domain,
-	// read asynchronously in this one. A write landing mid-frame can
-	// show as one wrong pixel; write the palette in vblank (software
-	// does -- docs/color.md) and it cannot.
+	// -- the palette: 2^NP entries in the cursor's block RAM --
 	//
-	// The power-on contents are the EGA/CGA default 16, which makes
-	// the 4-colour mode the familiar black/blue/green/cyan until a
-	// game sets its own. Reset does not reload them (distributed RAM
-	// has no reset); software that cares sets the palette it wants.
-	(* ram_style = "distributed" *)
-	reg [11:0] pal [0:15];
+	// 16, 64 or 256 x RGB444 (on composite, x Y/U/V), in words
+	// 256..511 of cbuf, the block RAM the cursor shapes live in
+	// (bottom of this file): the cursor uses 64 of its 512 words, so a
+	// palette of any size costs no block of its own, and no LUT RAM --
+	// the 16-entry palette used to be distributed RAM and a 16:1 mux
+	// in this clock's path. Written in the wishbone domain through
+	// cbuf's write port; read here through its registered read port,
+	// addressed by cidx. A write landing mid-frame can show as one
+	// wrong pixel; write the palette in vblank (software does --
+	// docs/color.md) and it cannot.
+	//
+	// THE READ IS REGISTERED, so the colour of a pixel arrives one
+	// pixel clock after its index. On VGA/DDMI that clock is taken back
+	// at the other end: while colour is on, x starts one clock early
+	// (x_lead, below), so the index runs one clock ahead of the raster
+	// and the palette's output lands exactly on it -- blanking, sync
+	// and the picture keep the timing they always had, and nothing else
+	// moves. Colour is only ever on in game mode, where every source
+	// pixel lasts two clocks, so starting a clock early is just the
+	// first half of the first pixel. On composite the read is the first
+	// of the two pipeline stages that path already has.
+	//
+	// cb_q is cbuf's registered read port, assigned at the bottom of
+	// this file and declared here, ahead of its first use. Once a line,
+	// in horizontal blanking, it carries the cursor's row instead.
+	//
+	// The power-on contents are the EGA/CGA default 16, repeated
+	// through every entry (entry i is EGA colour i mod 16), so a 64- or
+	// 256-colour picture shows as its low four planes until a game
+	// sets its own palette. Reset does not reload them; software that
+	// cares sets the palette it wants.
+	reg [31:0] cb_q;
+	wire [11:0] rgb = cb_q[11:0];
 
-	initial begin
-		pal[0]  = 12'h000;  pal[1]  = 12'h00a;
-		pal[2]  = 12'h0a0;  pal[3]  = 12'h0aa;
-		pal[4]  = 12'ha00;  pal[5]  = 12'ha0a;
-		pal[6]  = 12'ha50;  pal[7]  = 12'haaa;
-		pal[8]  = 12'h555;  pal[9]  = 12'h55f;
-		pal[10] = 12'h5f5;  pal[11] = 12'h5ff;
-		pal[12] = 12'hf55;  pal[13] = 12'hf5f;
-		pal[14] = 12'hff5;  pal[15] = 12'hfff;
-	end
-
-	always @(posedge clk) begin
-		if (pal_we)
-			pal[pal_idx] <= pal_rgb;
-	end
-
-	wire [11:0] rgb = pal[cidx];
+`ifdef GPU_COMPOSITE
+	localparam PAL_LEAD = 1'b0;
+`else
+	localparam PAL_LEAD = 1'b1;
+`endif
+	wire x_lead = PAL_LEAD && color_on;
 
 	// blanking gated here for the same reason pset gates it above
 	wire [3:0] c_r = is_visible ? rgb[11:8] : 4'd0;
@@ -825,7 +913,7 @@ module gpu_video #(
 	//
 	// Y, U and V for each palette entry are worked out when the entry
 	// is WRITTEN (wishbone domain, a handful of shift-adds, rare), and
-	// kept in distributed RAM beside the RGB palette. The pixel path
+	// kept in the palette instead of its RGB. The pixel path
 	// then needs only two small multiplies, against a 32-entry sine
 	// table.
 	//
@@ -870,11 +958,6 @@ module gpu_video #(
 		(hc >= h_front_porch + BURST_DLY) &&
 		(hc < h_front_porch + BURST_DLY + BURST_LEN);
 
-	// Y/U/V per palette entry, written with the RGB palette
-	(* ram_style = "distributed" *) reg [7:0] pal_y [0:15];
-	(* ram_style = "distributed" *) reg signed [8:0] pal_u [0:15];
-	(* ram_style = "distributed" *) reg signed [8:0] pal_v [0:15];
-
 	// round(16 sin(2 pi k / 32))
 	reg signed [5:0] sin_tab [0:31];
 
@@ -911,22 +994,6 @@ module gpu_video #(
 		sin_tab[29] = -6'sd9;
 		sin_tab[30] = -6'sd6;
 		sin_tab[31] = -6'sd3;
-		pal_y[0] = 8'd0; pal_u[0] = 9'sd0; pal_v[0] = 9'sd0;
-		pal_y[1] = 8'd11; pal_u[1] = 9'sd47; pal_v[1] = -9'sd10;
-		pal_y[2] = 8'd62; pal_u[2] = -9'sd31; pal_v[2] = -9'sd55;
-		pal_y[3] = 8'd74; pal_u[3] = 9'sd15; pal_v[3] = -9'sd65;
-		pal_y[4] = 8'd31; pal_u[4] = -9'sd16; pal_v[4] = 9'sd66;
-		pal_y[5] = 8'd43; pal_u[5] = 9'sd31; pal_v[5] = 9'sd56;
-		pal_y[6] = 8'd63; pal_u[6] = -9'sd32; pal_v[6] = 9'sd38;
-		pal_y[7] = 8'd106; pal_u[7] = -9'sd1; pal_v[7] = 9'sd1;
-		pal_y[8] = 8'd53; pal_u[8] = -9'sd1; pal_v[8] = 9'sd0;
-		pal_y[9] = 8'd65; pal_u[9] = 9'sd46; pal_v[9] = -9'sd10;
-		pal_y[10] = 8'd115; pal_u[10] = -9'sd32; pal_v[10] = -9'sd54;
-		pal_y[11] = 8'd127; pal_u[11] = 9'sd15; pal_v[11] = -9'sd65;
-		pal_y[12] = 8'd85; pal_u[12] = -9'sd17; pal_v[12] = 9'sd66;
-		pal_y[13] = 8'd96; pal_u[13] = 9'sd30; pal_v[13] = 9'sd56;
-		pal_y[14] = 8'd147; pal_u[14] = -9'sd48; pal_v[14] = 9'sd12;
-		pal_y[15] = 8'd159; pal_u[15] = -9'sd1; pal_v[15] = 9'sd1;
 	end
 
 	// RGB444 -> Y/U/V at write time. Shift-adds, not `*`: a constant
@@ -946,13 +1013,9 @@ module gpu_video #(
 	wire signed [13:0] cu = cu_sum >>> 4;
 	wire signed [13:0] cv = cv_sum >>> 4;
 
-	always @(posedge clk) begin
-		if (pal_we && COLOR_AVAIL != 0) begin
-			pal_y[pal_idx] <= cy[7:0];
-			pal_u[pal_idx] <= cu[8:0];
-			pal_v[pal_idx] <= cv[8:0];
-		end
-	end
+	// What a PALETTE write puts in cbuf on a composite build: the
+	// entry's Y/U/V, not its RGB (composite has no other use for it).
+	wire [31:0] pal_wword = { 6'd0, cy[7:0], cu[8:0], cv[8:0] };
 
 	// -- the pipeline: two registers, the same for every signal --
 	//
@@ -961,8 +1024,12 @@ module gpu_video #(
 	// onto the pins. Sync, blanking, burst and picture all go through
 	// both stages, so the whole signal is two pixel clocks (80ns) late
 	// and nothing moves relative to anything else.
-	reg [7:0] s1_y;
-	reg signed [8:0] s1_u, s1_v;
+	// Stage 1's Y/U/V is the palette read itself: cbuf's registered
+	// read port, addressed by cidx on the same edge as the rest of
+	// stage 1 is registered.
+	wire [7:0] s1_y = cb_q[25:18];
+	wire signed [8:0] s1_u = cb_q[17:9];
+	wire signed [8:0] s1_v = cb_q[8:0];
 	reg [4:0] s1_p;
 	reg s1_vis, s1_sync, s1_burst, s1_pset, s1_alt;
 	reg [3:0] dac_r;
@@ -988,9 +1055,6 @@ module gpu_video #(
 	wire [3:0] b_code = b_val[7:4];
 
 	always @(posedge pclk) begin
-		s1_y <= pal_y[cidx];
-		s1_u <= pal_u[cidx];
-		s1_v <= pal_v[cidx];
 		s1_p <= sc_acc[31:27];
 		s1_vis <= is_visible;
 		s1_sync <= csync_low;
@@ -1027,6 +1091,9 @@ module gpu_video #(
 	// than leaving it floating. Costs nothing; a board without the
 	// pins never routes it anywhere.
 	assign dac = 4'd0;
+
+	// What a PALETTE write puts in cbuf: the entry's RGB444.
+	wire [31:0] pal_wword = { 20'd0, pal_rgb };
 
 `endif
 
@@ -1116,7 +1183,7 @@ module gpu_video #(
 	// colour rides the same capture and the same adoption -- see the
 	// color_en port. *_active are declared with the pixel path above.
 	reg col_cap;
-	reg [1:0] np_cap;
+	reg [2:0] np_cap;
 	reg [5:0] off_cap;
 
 	// The clamp that keeps the viewport on screen, applied once per
@@ -1181,10 +1248,10 @@ module gpu_video #(
 			vx_active <= 10'd0;
 			vy_active <= 10'd0;
 			col_cap <= 1'b0;
-			np_cap <= 2'd0;
+			np_cap <= 3'd0;
 			off_cap <= 6'd0;
 			col_active <= 1'b0;
-			np_active <= 2'd0;
+			np_active <= 3'd0;
 			off_active <= 6'd0;
 		end else begin
 			if (view_edge) begin
@@ -1345,6 +1412,34 @@ module gpu_video #(
 	wire [14:0] alt_base_next = ({ 5'd0, fb_alt } << 4) + ({ 5'd0, fb_alt } << 2);
 	reg [14:0] alt_refill;
 
+	// -- colour: the second sheet's two row bases (GAME_PLANES 6/8) --
+	//
+	// Planes 4..7 sit in the second sheet, VRAM words 9600 up, where
+	// planes 0..3 sit in the first: plane 4+j on the same row as plane
+	// j, 480 rows further on. With 6 planes the second sheet is only
+	// 240 rows high and its row is taken mod 240 -- the same row for a
+	// plane with dy and one without, so a 6-plane layout keeps planes
+	// 0 and 1 apart by dx (docs/color.md).
+	//
+	// Worked out from y_refill and alt_refill, the registers above,
+	// every pixel clock: those change only at the end of a line, so
+	// these follow one clock later and are then stable for the whole
+	// line, and the fetch does not sample them until the row refill is
+	// over (21 wishbone clocks after the crossing) -- the same margin
+	// alt_refill's own crossing has, less one pixel clock. The adds
+	// stay in this domain, as alt_refill's do.
+	wire [9:0] s1_row = ((NP == 6) && (y_refill >= 10'd240)) ?
+		(y_refill - 10'd240) : y_refill;
+	wire [14:0] s1r_next = ({ 5'd0, s1_row } << 4) + ({ 5'd0, s1_row } << 2) +
+		15'd9600;
+	wire [14:0] s1a_next = (NP == 6) ? s1r_next : (alt_refill + 15'd9600);
+	reg [14:0] s1r_refill, s1a_refill;
+
+	always @(posedge pclk) begin
+		s1r_refill <= s1r_next;
+		s1a_refill <= s1a_next;
+	end
+
 	// -- horizontal: the loadable pixel index --
 	//
 	// x is the framebuffer COLUMN: x[9:5] the word, x[4:0] the bit in
@@ -1366,6 +1461,12 @@ module gpu_video #(
 	// true on the last clock of a source pixel
 	wire x_step = (x_phase == (h_div - 3'd1));
 
+	// x runs from the first visible clock -- or, while colour is on
+	// (VGA/DDMI), from the clock before it, so the palette's registered
+	// read lands on the raster: see x_lead with the palette above.
+	wire x_run = (hc >= h_disp_start) ||
+		(x_lead && (hc == h_disp_start - 11'd1));
+
 	always @(posedge pclk) begin
 
 		// The pixel index runs on its own, outside the hc/vc chain
@@ -1381,7 +1482,7 @@ module gpu_video #(
 		if (!resetn) begin
 			x <= 10'd0;
 			x_phase <= 2'd0;
-		end else if (hc >= h_disp_start) begin
+		end else if (x_run) begin
 			if (x_step) begin
 				x_phase <= 2'd0;
 				x <= x_next;
@@ -1437,22 +1538,24 @@ module gpu_video #(
 	// to avoid inferring an actual multiplier for what's just y*20.
 	// Uses y_refill_sync1 (see above), not y directly -- the CDC fix.
 	//
-	// The row goes into the line buffer (pbuf, below) at words 96..115,
-	// row 3 -- planes 1..3 are rows 0..2 -- not into a 640-bit
-	// register: see this file's header.
+	// The row goes into the line buffer (pbuf, below) at words 0..19,
+	// row 0 -- plane p is row p -- not into a 640-bit register: see
+	// this file's header.
 	wire [14:0] row_base = (y_refill_sync1 << 4) + (y_refill_sync1 << 2);   // y*20
 
 	// -- colour: the plane fetch --
 	//
-	// After the row's 20 words, three more rows of 20 -- planes 1, 2
-	// and 3 for the SAME physical line -- go into the line buffer too.
-	// Same port, same two-cycle latency, same "issue now, store two
-	// edges later" shape as the row refill directly above it, and the same timing: fetched in the horizontal blanking
-	// interval of the line before, so nothing ever reads a word that
-	// is being written. 60 words at 48MHz is 1.25us; with the row
-	// refill and the crossing it is done about 45 pixel clocks into a
-	// 160-clock blanking interval. The read side does not touch the
-	// buffer until 16 clocks before the line starts.
+	// After the row's 20 words, NP-1 more rows of 20 -- planes 1..3,
+	// and 4..7 with GAME_PLANES 6 or 8, for the SAME physical line -- go
+	// into the line buffer too. Same port, same two-cycle latency, same
+	// "issue now, store two edges later" shape as the row refill
+	// directly above it, and the same timing: fetched in the horizontal
+	// blanking interval of the line before, so nothing ever reads a
+	// word that is being written. 60 words at 48MHz is 1.25us; with the
+	// row refill and the crossing it is done about 45 pixel clocks into
+	// a 160-clock blanking interval. Eight planes, 140 words, take about
+	// 90, and the read side does not touch the buffer until 24 clocks
+	// before the line starts (136).
 	//
 	// Every plane is always fetched in full, whatever color_np says:
 	// the VRAM port is dedicated to scanout and otherwise idle in
@@ -1468,31 +1571,192 @@ module gpu_video #(
 	// for the first blanking line of the next frame, which nothing
 	// displays.
 	//
-	// The buffer itself is 4 x 20 words, addressed { row, word }: rows
-	// 0..2 planes 1..3, row 3 the framebuffer row (plane 0). One DP16KD
-	// on ECP5, one RAMB18 on 7-series, colour or not. Written here, in
-	// the wishbone domain; read in the pixel domain below.
+	// The buffer itself is up to 8 x 20 words, addressed { row, word }:
+	// row p is plane p, row 0 the framebuffer row. 256 words of a
+	// 512-word block: one DP16KD on ECP5, one RAMB18 on 7-series,
+	// colour or not, at any plane count. Written here, in the wishbone
+	// domain; read in the pixel domain below.
 	(* ram_style = "block" *)
-	reg [31:0] pbuf [0:127];
+	reg [31:0] pbuf [0:255];
+
+	// The hardware cursor's shapes (docs/cursor.md): a block RAM of
+	// its own, one 32-bit word a row (bits 15:0, bit c = column c, 1 =
+	// invert; bits 31:16 are not used yet), written by
+	// socctl in this (wishbone) domain and read in the pixel domain
+	// below. Slots of 16 rows: 0 and 1 are today's X and Z from
+	// configuration on -- the pointer shows before any software runs
+	// -- and 2 and 3 a 9x9 X and Z until wm loads the user's. Its own
+	// block rather than the spare words of pbuf above (sharing pbuf
+	// would need its write port for the CPU too, a 32-bit mux in front
+	// of it, which measured 15 MHz off the wishbone clock, or its read
+	// port to write, true dual port, which is two blocks for a 32-bit
+	// width). Words 0..63 are the four slots; words 256..511 are the
+	// game-mode palette (with the pixel path, above): one block for
+	// both, written through one port by socctl, read through the other
+	// here -- by the cursor for two clocks a line in horizontal
+	// blanking, by the palette at every other clock.
+	// The palette's power-on entries: EGA's sixteen (z_color_palette_ega
+	// in sw/common/zcolor.c, KEEP IN SYNC), as RGB444 -- or, on a
+	// composite build, as the Y/U/V words a write of that RGB stores.
+	function [31:0] pal_init;
+		input [3:0] i;
+		begin
+			case (i)
+`ifdef GPU_COMPOSITE
+				4'd0: pal_init = 32'h00000000;	// Y 0, U 0, V 0
+				4'd1: pal_init = 32'h002c5ff6;	// Y 11, U 47, V -10
+				4'd2: pal_init = 32'h00fbc3c9;	// Y 62, U -31, V -55
+				4'd3: pal_init = 32'h01281fbf;	// Y 74, U 15, V -65
+				4'd4: pal_init = 32'h007fe042;	// Y 31, U -16, V 66
+				4'd5: pal_init = 32'h00ac3e38;	// Y 43, U 31, V 56
+				4'd6: pal_init = 32'h00ffc026;	// Y 63, U -32, V 38
+				4'd7: pal_init = 32'h01abfe01;	// Y 106, U -1, V 1
+				4'd8: pal_init = 32'h00d7fe00;	// Y 53, U -1, V 0
+				4'd9: pal_init = 32'h01045df6;	// Y 65, U 46, V -10
+				4'd10: pal_init = 32'h01cfc1ca;	// Y 115, U -32, V -54
+				4'd11: pal_init = 32'h01fc1fbf;	// Y 127, U 15, V -65
+				4'd12: pal_init = 32'h0157de42;	// Y 85, U -17, V 66
+				4'd13: pal_init = 32'h01803c38;	// Y 96, U 30, V 56
+				4'd14: pal_init = 32'h024fa00c;	// Y 147, U -48, V 12
+				4'd15: pal_init = 32'h027ffe01;	// Y 159, U -1, V 1
+`else
+				4'd0: pal_init = 32'h00000000;
+				4'd1: pal_init = 32'h0000000a;
+				4'd2: pal_init = 32'h000000a0;
+				4'd3: pal_init = 32'h000000aa;
+				4'd4: pal_init = 32'h00000a00;
+				4'd5: pal_init = 32'h00000a0a;
+				4'd6: pal_init = 32'h00000a50;
+				4'd7: pal_init = 32'h00000aaa;
+				4'd8: pal_init = 32'h00000555;
+				4'd9: pal_init = 32'h0000055f;
+				4'd10: pal_init = 32'h000005f5;
+				4'd11: pal_init = 32'h000005ff;
+				4'd12: pal_init = 32'h00000f55;
+				4'd13: pal_init = 32'h00000f5f;
+				4'd14: pal_init = 32'h00000ff5;
+				4'd15: pal_init = 32'h00000fff;
+`endif
+				default: pal_init = 32'd0;
+			endcase
+		end
+	endfunction
+
+	(* ram_style = "block" *)
+	reg [31:0] cbuf [0:511];
+
+	// -- the same, in distributed RAM (CBUF_LUTRAM) --
+	//
+	// curl is the four slots (64 rows of 16 bits), pall the palette:
+	// 2^NP entries of RGB444, or of Y/U/V on composite. Read
+	// asynchronously and registered into cb_q, so everything after it
+	// sees exactly what the block RAM gives. Without CBUF_LUTRAM nothing
+	// writes or reads them and synthesis removes them; with it, cbuf
+	// goes instead.
+	localparam integer PAL_N = (NP == 8) ? 256 : (NP == 6) ? 64 : 16;
+`ifdef GPU_COMPOSITE
+	localparam integer PALW = 26;
+`else
+	localparam integer PALW = 12;
+`endif
+	(* ram_style = "distributed" *)
+	reg [15:0] curl [0:63];
+	(* ram_style = "distributed" *)
+	reg [PALW-1:0] pall [0:PAL_N-1];
+
+	integer cb_i;
+	initial begin
+		for (cb_i = 0; cb_i < 512; cb_i = cb_i + 1)
+			cbuf[cb_i] = 32'd0;
+		for (cb_i = 0; cb_i < 64; cb_i = cb_i + 1)
+			curl[cb_i] = 16'd0;
+		// -- cursor shapes, generated --
+		// slot 0: 5x5 X (normal)
+		cbuf[6] = 32'h00000440; curl[6] = 16'h0440;	// ......#...#.....
+		cbuf[7] = 32'h00000280; curl[7] = 16'h0280;	// .......#.#......
+		cbuf[8] = 32'h00000100; curl[8] = 16'h0100;	// ........#.......
+		cbuf[9] = 32'h00000280; curl[9] = 16'h0280;	// .......#.#......
+		cbuf[10] = 32'h00000440; curl[10] = 16'h0440;	// ......#...#.....
+		// slot 1: 5x5 Z (busy)
+		cbuf[22] = 32'h000007c0; curl[22] = 16'h07c0;	// ......#####.....
+		cbuf[23] = 32'h00000200; curl[23] = 16'h0200;	// .........#......
+		cbuf[24] = 32'h00000100; curl[24] = 16'h0100;	// ........#.......
+		cbuf[25] = 32'h00000080; curl[25] = 16'h0080;	// .......#........
+		cbuf[26] = 32'h000007c0; curl[26] = 16'h07c0;	// ......#####.....
+		// slot 2: 9x9 X
+		cbuf[36] = 32'h00001010; curl[36] = 16'h1010;	// ....#.......#...
+		cbuf[37] = 32'h00000820; curl[37] = 16'h0820;	// .....#.....#....
+		cbuf[38] = 32'h00000440; curl[38] = 16'h0440;	// ......#...#.....
+		cbuf[39] = 32'h00000280; curl[39] = 16'h0280;	// .......#.#......
+		cbuf[40] = 32'h00000100; curl[40] = 16'h0100;	// ........#.......
+		cbuf[41] = 32'h00000280; curl[41] = 16'h0280;	// .......#.#......
+		cbuf[42] = 32'h00000440; curl[42] = 16'h0440;	// ......#...#.....
+		cbuf[43] = 32'h00000820; curl[43] = 16'h0820;	// .....#.....#....
+		cbuf[44] = 32'h00001010; curl[44] = 16'h1010;	// ....#.......#...
+		// slot 3: 9x9 Z
+		cbuf[52] = 32'h00001ff0; curl[52] = 16'h1ff0;	// ....#########...
+		cbuf[53] = 32'h00000800; curl[53] = 16'h0800;	// ...........#....
+		cbuf[54] = 32'h00000400; curl[54] = 16'h0400;	// ..........#.....
+		cbuf[55] = 32'h00000200; curl[55] = 16'h0200;	// .........#......
+		cbuf[56] = 32'h00000100; curl[56] = 16'h0100;	// ........#.......
+		cbuf[57] = 32'h00000080; curl[57] = 16'h0080;	// .......#........
+		cbuf[58] = 32'h00000040; curl[58] = 16'h0040;	// ......#.........
+		cbuf[59] = 32'h00000020; curl[59] = 16'h0020;	// .....#..........
+		cbuf[60] = 32'h00001ff0; curl[60] = 16'h1ff0;	// ....#########...
+		// -- end of cursor shapes --
+		// the palette: EGA's sixteen, repeated through all 256 entries
+		for (cb_i = 0; cb_i < 256; cb_i = cb_i + 1)
+			cbuf[256 + cb_i] = pal_init(cb_i % 16);
+		for (cb_i = 0; cb_i < PAL_N; cb_i = cb_i + 1)
+			pall[cb_i] = pal_init(cb_i % 16);
+	end
 
 	reg [14:0] alt_sync0, alt_sync1;
+	reg [14:0] s1r_sync0, s1r_sync1, s1a_sync0, s1a_sync1;
 	reg [2:0] dy_sync0, dy_sync1;
 
+	// The fetch walks planes 1..NP-1: pf_k is the plane, pf_w its word.
+	// Every plane's row base is latched when the row refill ends --
+	// pf_base for plane 1, pf_b2..pf_b7 for the rest -- and pf_base
+	// takes the next one, registered, as each plane ends, so the issue
+	// path is register -> adder for any number of planes, and the
+	// choice of the next base is a mux between registers, off it.
 	reg pf_run;
-	reg [1:0] pf_k;
+	reg [2:0] pf_k;
 	reg [4:0] pf_w;
-	reg [14:0] pf_b0, pf_b1, pf_b2;
+	reg [14:0] pf_base;
+	reg [14:0] pf_b2, pf_b3, pf_b4, pf_b5, pf_b6, pf_b7;
 	reg pf_v1, pf_v2;
-	reg [6:0] pf_a1, pf_a2;
+	reg [7:0] pf_a1, pf_a2;
 
-	wire [14:0] pf_base = (pf_k == 2'd0) ? pf_b0 :
-		(pf_k == 2'd1) ? pf_b1 : pf_b2;
-	wire pf_issue = (COLOR_AVAIL != 0) && pf_run && !refill &&
-		(refill_words == 6'd0);
+	reg pf_ld;
+
+	// Planes this build does not have select pf_b3, so a 4-plane build
+	// keeps the 2:1 choice it needs and no more.
+	reg [14:0] pf_bnext;
+	always @(*) begin
+		case (pf_k)
+			3'd1: pf_bnext = pf_b2;
+			3'd2: pf_bnext = pf_b3;
+			3'd3: pf_bnext = (NP > 4) ? pf_b4 : pf_b3;
+			3'd4: pf_bnext = (NP > 4) ? pf_b5 : pf_b3;
+			3'd5: pf_bnext = (NP > 6) ? pf_b6 : pf_b3;
+			default: pf_bnext = (NP > 6) ? pf_b7 : pf_b3;
+		endcase
+	end
+
+	// pf_run is only ever set as the row refill ends and is cleared
+	// when the next one starts, so refill_words is 0 whenever it is
+	// set: no compare on the counter here.
+	wire pf_issue = (COLOR_AVAIL != 0) && pf_run && !refill;
 
 	always @(posedge clk) begin
 		alt_sync0 <= alt_refill;
 		alt_sync1 <= alt_sync0;
+		s1r_sync0 <= s1r_refill;
+		s1r_sync1 <= s1r_sync0;
+		s1a_sync0 <= s1a_refill;
+		s1a_sync1 <= s1a_sync0;
 		dy_sync0 <= { off_active[5], off_active[3], off_active[1] };
 		dy_sync1 <= dy_sync0;
 	end
@@ -1506,25 +1770,24 @@ module gpu_video #(
 			if (refill_words > 2)
 				gb_adr_o <= row_base + (refill_words - 3);
 			refill_words <= refill_words - 1;
-			// row done: latch the three plane row bases and start.
-			// Latched rather than recomputed per word so the issue
-			// path below is register -> 3:1 mux -> adder.
+			// row done: plane 1's row base, and start (the other
+			// planes' bases are latched on the same edge, below)
 			if (refill_words == 6'd1 && COLOR_AVAIL != 0) begin
 				pf_run <= 1'b1;
-				pf_k <= 2'd0;
+				pf_k <= 3'd1;
 				pf_w <= 5'd0;
-				pf_b0 <= dy_sync1[0] ? alt_sync1 : row_base;
-				pf_b1 <= dy_sync1[1] ? alt_sync1 : row_base;
-				pf_b2 <= dy_sync1[2] ? alt_sync1 : row_base;
+				pf_base <= dy_sync1[0] ? alt_sync1 : row_base;
 			end
 		end else if (pf_issue) begin
 			gb_adr_o <= pf_base + { 10'd0, pf_w };
 			if (pf_w == 5'd19) begin
 				pf_w <= 5'd0;
-				if (pf_k == 2'd2)
+				if (pf_k == NP - 1) begin
 					pf_run <= 1'b0;
-				else
-					pf_k <= pf_k + 2'd1;
+				end else begin
+					pf_k <= pf_k + 3'd1;
+					pf_base <= pf_bnext;
+				end
 			end else begin
 				pf_w <= pf_w + 5'd1;
 			end
@@ -1544,6 +1807,28 @@ module gpu_video #(
 		end
 	end
 
+	// Planes 2..NP-1's row bases, latched on the edge the row refill
+	// ends (refill_words 1, as pf_base above), with a registered strobe
+	// of their own: a simple enable on these registers, rather than a
+	// branch of the sequencer above fanning out to all of them. A row
+	// refill starting on that same edge only means they are latched
+	// for a fetch that will not run, which is harmless.
+	always @(posedge clk) begin
+		pf_ld <= (COLOR_AVAIL != 0) && !refill && (refill_words == 6'd2);
+		if (pf_ld) begin
+			pf_b2 <= dy_sync1[1] ? alt_sync1 : row_base;
+			pf_b3 <= dy_sync1[2] ? alt_sync1 : row_base;
+			if (NP > 4) begin
+				pf_b4 <= s1r_sync1;
+				pf_b5 <= dy_sync1[0] ? s1a_sync1 : s1r_sync1;
+			end
+			if (NP > 6) begin
+				pf_b6 <= dy_sync1[1] ? s1a_sync1 : s1r_sync1;
+				pf_b7 <= dy_sync1[2] ? s1a_sync1 : s1r_sync1;
+			end
+		end
+	end
+
 	// The row's words arrive while refill_words counts 20..1, word
 	// 19 first: the word on gb_dat_i is word refill_words - 1 (issued
 	// two edges earlier, at refill_words + 1). The plane stores start
@@ -1555,41 +1840,67 @@ module gpu_video #(
 		if (pf_v2)
 			pbuf[pf_a2] <= gb_dat_i;
 		else if (row_we)
-			pbuf[{ 2'd3, row_w }] <= gb_dat_i;
+			pbuf[{ 3'd0, row_w }] <= gb_dat_i;
+	end
+
+	// cbuf's write port: a cursor row from socctl's CURDATA, or a
+	// palette entry from its PALETTE -- one-clock strobes from separate
+	// stores, so never on the same clock; the palette wins if they
+	// were. An entry's bits above the palette's size are ignored.
+	localparam [7:0] PAL_MASK = (NP == 8) ? 8'hff : (NP == 6) ? 8'h3f : 8'h0f;
+	wire cb_pal = (COLOR_AVAIL != 0) && pal_we;
+	wire cb_we = cb_pal || ((CURSOR_AVAIL != 0) && curs_we);
+	wire [8:0] cb_wa = cb_pal ? { 1'b1, pal_idx & PAL_MASK } : { 3'd0, curs_waddr };
+	wire [31:0] cb_wd = cb_pal ? pal_wword : curs_wdata;
+
+	always @(posedge clk) begin
+		if (cb_we && CBUF_LUTRAM == 0)
+			cbuf[cb_wa] <= cb_wd;
+		if (cb_we && CBUF_LUTRAM != 0 && cb_pal)
+			pall[pal_idx & PAL_MASK] <= cb_wd[PALW-1:0];
+		if (cb_we && CBUF_LUTRAM != 0 && !cb_pal)
+			curl[curs_waddr] <= cb_wd[15:0];
 	end
 
 	// -- colour: the plane read side, pixel domain --
 	//
-	// cur0..cur3 hold the word each plane is showing; nxt0..nxt3 the
+	// cur0..cur7 hold the word each plane is showing; nxt0..nxt7 the
 	// word after it. At a word crossing (the edge on which x moves
 	// from bit 31 of a word to bit 0 of the next) cur takes nxt, and a
-	// short pass refills nxt from the buffer. A pass is four reads,
-	// one per plane, through a registered read port, so it takes seven
-	// clocks; the next crossing is at least 64 clocks away in game
-	// mode (32 source pixels, each doubled) and 32 in desktop mode.
-	// Plane 0 is the framebuffer row, so this runs on every board and
-	// in every mode; without colour, planes 1..3 are read and dropped
-	// (nothing uses nxt1..nxt3, and synthesis removes them).
+	// short pass refills nxt from the buffer. A pass is one read per
+	// plane through a registered read port: NP + 3 clocks, seven for
+	// four planes and eleven for eight; the next crossing is at least
+	// 64 clocks away in game mode (32 source pixels, each doubled) and
+	// 32 in desktop mode. Plane 0 is the framebuffer row, so this runs
+	// on every board and in every mode; without colour, planes 1..3
+	// are read and dropped (nothing uses nxt1..nxt3, and synthesis
+	// removes them).
 	//
 	// The line start is a preload: at 24 clocks before the first
-	// visible pixel (two passes take 15) -- long after the fetch above has finished --
-	// one pass loads the viewport's first word into nxt, nxt moves to
-	// cur, and a second pass loads the word after it. x already holds
-	// the viewport origin at that point (it is loaded throughout
-	// blanking), so the origin needs no separate path, and a non-word-
-	// aligned origin is just a different x[4:0] into cur.
+	// visible pixel (two passes take 22 at eight planes) -- long after
+	// the fetch above has finished -- one pass loads the viewport's
+	// first word into nxt, nxt moves to cur, and a second pass loads
+	// the word after it. x already holds the viewport origin at that
+	// point (it is loaded throughout blanking), so the origin needs no
+	// separate path, and a non-word-aligned origin is just a different
+	// x[4:0] into cur. The first pass is over by 12 clocks in, before
+	// x starts, a clock early or not.
 	//
 	// Word arithmetic is modulo 20 throughout -- the framebuffer row
 	// is a 20-word torus -- and a plane with dx set reads word
 	// (w + 10) mod 20 where plane 0 reads w, which is the 320-column
-	// offset. In clamp mode the "next" word after the last visible one
-	// is never shown, so the wrap there is harmless rather than wrong.
-	reg [31:0] nxt0, nxt1, nxt2, nxt3;
+	// offset. Plane 4+j takes plane j's dx. In clamp mode the "next"
+	// word after the last visible one is never shown, so the wrap there
+	// is harmless rather than wrong.
+	reg [31:0] nxt0, nxt1, nxt2, nxt3, nxt4, nxt5, nxt6, nxt7;
 	reg [31:0] pq;
-	reg [6:0] pra;
-	reg [2:0] ps;
+	reg [7:0] pra;
+	reg [3:0] ps;
 	reg [4:0] pw;
 	reg pre;
+
+	// the pass's last step, on which cur takes nxt during a preload
+	localparam [3:0] PS_END = NP + 3;
 
 	wire [4:0] xw = x[9:5];
 	wire [5:0] xw2_sum = { 1'b0, xw } + 6'd2;
@@ -1597,24 +1908,92 @@ module gpu_video #(
 	wire [5:0] pw1_sum = { 1'b0, pw } + 6'd1;
 	wire [4:0] pw1 = (pw1_sum >= 6'd20) ? (pw1_sum[4:0] - 5'd20) : pw1_sum[4:0];
 	wire [4:0] pw_dx = (pw >= 5'd10) ? (pw - 5'd10) : (pw + 5'd10);
-	wire [4:0] pw_k0 = off_active[0] ? pw_dx : pw;
-	wire [4:0] pw_k1 = off_active[2] ? pw_dx : pw;
-	wire [4:0] pw_k2 = off_active[4] ? pw_dx : pw;
+	wire [4:0] pw_k1 = off_active[0] ? pw_dx : pw;
+	wire [4:0] pw_k2 = off_active[2] ? pw_dx : pw;
+	wire [4:0] pw_k3 = off_active[4] ? pw_dx : pw;
 
-	wire x_cross = (hc >= h_disp_start) && x_step && (x[4:0] == 5'd31);
+	wire x_cross = x_run && x_step && (x[4:0] == 5'd31);
 	wire pre_go = (hc == h_disp_start - 11'd24);
+
+	// -- the hardware cursor: read side, pixel domain (docs/cursor.md) --
+	//
+	// Once a line, in horizontal blanking (CF_HC), the shape row this
+	// line shows is chosen: the slot (normal or busy) and the row,
+	// from dy = y - curs_y: the cell's centre (8, 8) is drawn at the
+	// pointer, so the line shows a row if -8 <= dy <= 7 (dy[10:3] all
+	// zeros or all ones), and that row is dy + 8, which is dy[3:0]
+	// with bit 3 flipped -- no adder for the 8.
+	//
+	// The row is read through cbuf's read port on the clock after
+	// CF_HC (c_rd) and held in c_row from the clock after that (c_lat)
+	// for the rest of the line: every other clock the port is the
+	// palette's. A build without colour has no palette, so there the
+	// port's address stays on the row and its registered read is the
+	// row, as it always was.
+	//
+	// Per pixel the same with dx = x - curs_x (curs_x latched with the
+	// row): the row's bit at column dx + 8, registered -- one clock
+	// behind x, exactly as gpu_cursor.v's `pixel` was. A column
+	// or row outside 0..15 draws nothing, so the pointer never wraps
+	// to the opposite edge, as before.
+	localparam [10:0] CF_HC = 11'd64;
+
+	reg [5:0] c_a;
+	reg [9:0] c_px;
+	reg c_rv;
+	reg c_rd, c_lat;
+	reg [15:0] c_row;
+
+	wire c_on = (CURSOR_AVAIL != 0);
+	wire [10:0] c_dy = { 1'b0, y } - { 1'b0, curs_y };
+	wire [10:0] c_dx = { 1'b0, x } - { 1'b0, c_px };
+	wire c_cin = c_rv && ((c_dx[10:3] == 8'h00) || (c_dx[10:3] == 8'hff));
+	wire [15:0] c_rowv = (COLOR_AVAIL != 0) ? c_row : cb_q[15:0];
+
+	// cbuf's read address: the cursor's row on its one clock, the
+	// pixel's palette entry (words 256 up) on every other
+	wire [8:0] cb_ra = ((COLOR_AVAIL == 0) || c_rd) ? { 3'd0, c_a } :
+		{ 1'b1, cidx };
+
+	// The index whose colour cb_q holds -- the pixel on screen, while
+	// colour is on. For the benches only; nothing reads it, and
+	// synthesis removes it.
+	reg [7:0] cidx_o;
+
+	// CBUF_LUTRAM's read: the same address, the same register
+	wire [31:0] cb_lq = cb_ra[8] ? { {(32 - PALW){1'b0}}, pall[cb_ra[7:0] & PAL_MASK] } :
+		{ 16'd0, curl[cb_ra[5:0]] };
+
+	always @(posedge pclk) begin
+		if (CBUF_LUTRAM == 0)
+			cb_q <= cbuf[cb_ra];
+		else
+			cb_q <= cb_lq;
+		cidx_o <= cidx;
+		c_d <= c_on && c_cin && c_rowv[{ ~c_dx[3], c_dx[2:0] }];
+		c_rd <= c_on && (hc == CF_HC);
+		c_lat <= c_rd;
+		if (c_lat)
+			c_row <= cb_q[15:0];
+		if (hc == CF_HC) begin
+			c_a <= { (curs_alt ? curs_slots[3:2] : curs_slots[1:0]), ~c_dy[3], c_dy[2:0] };
+			c_rv <= c_on && !curs_hide &&
+				((c_dy[10:3] == 8'h00) || (c_dy[10:3] == 8'hff));
+			c_px <= curs_x;
+		end
+	end
 
 	always @(posedge pclk) begin
 		pq <= pbuf[pra];
 
 		if (!resetn) begin
-			ps <= 3'd0;
+			ps <= 4'd0;
 			pre <= 1'b0;
 			pw <= 5'd0;
-			pra <= 7'd0;
+			pra <= 8'd0;
 		end else begin
 			if (pre_go) begin
-				ps <= 3'd1;
+				ps <= 4'd1;
 				pw <= xw;
 				pre <= 1'b1;
 			end else if (x_cross) begin
@@ -1622,32 +2001,50 @@ module gpu_video #(
 				cur1 <= nxt1;
 				cur2 <= nxt2;
 				cur3 <= nxt3;
-				ps <= 3'd1;
+				cur4 <= nxt4;
+				cur5 <= nxt5;
+				cur6 <= nxt6;
+				cur7 <= nxt7;
+				ps <= 4'd1;
 				pw <= xw2;
-			end else begin
+			end else if (ps == PS_END) begin
+				if (pre) begin
+					cur0 <= nxt0;
+					cur1 <= nxt1;
+					cur2 <= nxt2;
+					cur3 <= nxt3;
+					cur4 <= nxt4;
+					cur5 <= nxt5;
+					cur6 <= nxt6;
+					cur7 <= nxt7;
+					pw <= pw1;
+					pre <= 1'b0;
+					ps <= 4'd1;
+				end else begin
+					ps <= 4'd0;
+				end
+			end else if (ps != 4'd0) begin
 				// pra is registered and so is pq: the word for the
 				// address set on one edge is in pq two edges later.
+				// Plane p is addressed on step p + 1 and taken on
+				// step p + 3; steps past this build's planes read
+				// rows nothing uses.
+				// Addresses for planes this build does not have are
+				// never set (NP > p), so the address mux is only as
+				// wide as the planes.
+				ps <= ps + 4'd1;
 				case (ps)
-					3'd1: begin pra <= { 2'd3, pw }; ps <= 3'd2; end
-					3'd2: begin pra <= { 2'd0, pw_k0 }; ps <= 3'd3; end
-					3'd3: begin pra <= { 2'd1, pw_k1 }; nxt0 <= pq; ps <= 3'd4; end
-					3'd4: begin pra <= { 2'd2, pw_k2 }; nxt1 <= pq; ps <= 3'd5; end
-					3'd5: begin nxt2 <= pq; ps <= 3'd6; end
-					3'd6: begin nxt3 <= pq; ps <= 3'd7; end
-					3'd7: begin
-						if (pre) begin
-							cur0 <= nxt0;
-							cur1 <= nxt1;
-							cur2 <= nxt2;
-							cur3 <= nxt3;
-							pw <= pw1;
-							pre <= 1'b0;
-							ps <= 3'd1;
-						end else begin
-							ps <= 3'd0;
-						end
-					end
-					default: ps <= 3'd0;
+					4'd1: pra <= { 3'd0, pw };
+					4'd2: pra <= { 3'd1, pw_k1 };
+					4'd3: begin pra <= { 3'd2, pw_k2 }; nxt0 <= pq; end
+					4'd4: begin pra <= { 3'd3, pw_k3 }; nxt1 <= pq; end
+					4'd5: begin if (NP > 4) pra <= { 3'd4, pw };    nxt2 <= pq; end
+					4'd6: begin if (NP > 5) pra <= { 3'd5, pw_k1 }; nxt3 <= pq; end
+					4'd7: begin if (NP > 6) pra <= { 3'd6, pw_k2 }; nxt4 <= pq; end
+					4'd8: begin if (NP > 7) pra <= { 3'd7, pw_k3 }; nxt5 <= pq; end
+					4'd9: nxt6 <= pq;
+					4'd10: nxt7 <= pq;
+					default: ;
 				endcase
 			end
 		end

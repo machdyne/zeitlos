@@ -43,7 +43,6 @@ RTL_PICO = \
 	rtl/gpu/gpu_raster.v \
 	rtl/gpu/gpu_blit.v \
 	rtl/gpu/gpu_video.v \
-	rtl/gpu/gpu_cursor.v \
 	rtl/gpu/gpu_ddmi.v \
 	rtl/gpu/tmds_encoder.v \
 	rtl/gpu/ddmi_island.v \
@@ -894,8 +893,8 @@ ZAR_APPS = $(filter-out $(CORE_APPS_OMIT),$(CORE_APPS))
 #
 # A budget is raised by taking from another, from the reserve, or by
 # making something smaller. Every core app must have one.
-CORE_BUDGETS = fs=36K/75K usb=35K/55K wm=104K/136K net=148K/284K term=62K/152K \
-	console=10K/13K cron=18K/48K text=60K/157K files=57K/120K repl=140K/304K
+CORE_BUDGETS = fs=36K/75K usb=35K/55K wm=104K/137K net=148K/284K term=62K/152K \
+	console=10K/13K cron=18K/48K text=60K/156K files=57K/120K repl=140K/304K
 CORE_RESERVE = 60K
 # Core apps stored as they are, not compressed: their budget is then
 # their .bin. wm and net, the two largest started at boot: unpacked they

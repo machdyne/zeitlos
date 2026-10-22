@@ -957,6 +957,7 @@ not take the keys away from the window they are for.
 | Super+L | lock the screen ([security.md](security.md)); also `lock` in the repl or at the console. Acted on in the main loop, after any drag is released |
 | Ctrl+Alt+Esc | the rescue console ([rescue_console.md](rescue_console.md)): every window hidden as for the lock, the kernel's shell on the screen; again, or the shell's `exit` (`Z_WM_RESCUE`), repaints them. Not while locked |
 | Super+K | start the on-screen keyboard ([keyboard_app.md](keyboard_app.md)); it is single-instance, so a second press does nothing |
+| Super+M | the pointer's other pair of shapes: the small X and Z, or the large ones -- a 9x9 X and Z, or `/data/wm/cursor.zsp` from the card ([cursor.md](cursor.md)). Until the next reload; `system.cursor.large` says which pair shows at start. "Large pointer" / "Small pointer" with speech |
 | Super+P | next phosphor -- white, amber, green, paper, round again, in `settings`' order. Writes the video register only: `system.video.mode` (the default) is untouched, so a reboot, or a config reload (which re-applies it, `sw/os/cfg.c`), brings the default back |
 | Ctrl+Super+Minus / Ctrl+Super+Equal | monochrome brightness down / up on HDMI/DVI (and with the keypad - / +), by key like the volume; a caption shows "Brightness N/16" and speech says it. 16 levels, 8 at boot unless `system.video.brightness` says otherwise; like Super+P it does not change that setting. Colour mode is unaffected. "No brightness control on this display" on VGA, composite, or an older bitstream ([socctl.md](socctl.md#brightness)) |
 
@@ -2172,7 +2173,7 @@ directly as bits, without round-tripping through an image editor and
 a generator script for something this small. The one currently
 defined, `Z_ICON_CLOSE` (`zicon.h`), is a hollow box -- deliberately
 NOT an X, since the mouse cursor itself is drawn as an X
-(`rtl/gpu/gpu_cursor.v`) and a same-shaped close icon under the
+([cursor.md](cursor.md)) and a same-shaped close icon under the
 pointer would be genuinely hard to read, not just an aesthetic
 mismatch. Adding a new window icon (minimize, open file, save file,
 ...) is: append an id to `z_icon_id_t` (`zicon.h`, before

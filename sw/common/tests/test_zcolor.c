@@ -13,6 +13,12 @@
  * across the bottom seam and across both; negative and >640 origins;
  * fill, transparent mono blit, opaque plane blit (with a NULL plane)
  * and masked sprite; and that nothing outside the rectangle changes.
+ * All of it on a 4-plane machine, then on 6- and 8-plane ones
+ * (GAME_PLANES): there the framebuffer model has a second sheet below
+ * the first, 240 or 480 rows, holding planes 4..7, and the 32-, 64- and
+ * 256-colour layouts are drawn too -- and the 256-colour one on a
+ * 6-plane machine, which must draw six planes and nothing past row
+ * 719.
  *
  *   make -f Makefile.zcolor
  */
@@ -25,14 +31,15 @@
 #include "../zgfx.h"
 
 #define FB_W 640
-#define FB_H 480
+#define FB_H 960	/* both sheets; fb_rows of them exist */
 
+static int fb_rows = 480;
 static uint8_t fb[FB_H][FB_W];
 static int errors;
 static int calls_out_of_range;
 
 static void check_rect(const char *what, int x, int y, int w, int h) {
-	if (x < 0 || y < 0 || w <= 0 || h <= 0 || x + w > FB_W || y + h > FB_H) {
+	if (x < 0 || y < 0 || w <= 0 || h <= 0 || x + w > FB_W || y + h > fb_rows) {
 		if (calls_out_of_range < 5)
 			printf("FAIL: %s out of range: %d,%d %dx%d\n", what, x, y, w, h);
 		calls_out_of_range++;
@@ -78,13 +85,21 @@ bool z_fb_hw_blit_mem_rop(const void *src, int src_stride,
 
 bool z_fb_hw_rop_available(void) { return true; }
 
+void z_fb_set_rows(int rows) { (void)rows; }
+
 /* -- the scanout, in software -- */
 
 static int fold(int v, int m) { v %= m; return v < 0 ? v + m : v; }
 
+/* the planes zcolor draws: the layout's, cut to the machine's */
+static int nplanes(const z_color_layout_t *l) {
+	int hw = z_color_hw_planes();
+	return l->planes < hw ? l->planes : hw;
+}
+
 static int index_at(const z_color_layout_t *l, int x, int y) {
 	int k, c = 0;
-	for (k = 0; k < l->planes; k++) {
+	for (k = 0; k < nplanes(l); k++) {
 		int px, py;
 		z_color_plane_xy(l, k, x, y, &px, &py);
 		c |= fb[py][px] << k;
@@ -98,7 +113,7 @@ static int index_at(const z_color_layout_t *l, int x, int y) {
 #define SH 40
 #define SSTRIDE (SW / 8 + 4)
 
-static uint32_t srcbuf[4][SH * SSTRIDE / 4];
+static uint32_t srcbuf[8][SH * SSTRIDE / 4];
 static uint32_t maskbuf[SH * SSTRIDE / 4];
 
 static void set_src(uint32_t *buf, int x, int y, int v) {
@@ -130,7 +145,7 @@ static uint8_t touched[FB_H][FB_W];
 static void mark(const z_color_layout_t *l, int x, int y, int w, int h) {
 	int k, i, j;
 	memset(touched, 0, sizeof(touched));
-	for (k = 0; k < l->planes; k++)
+	for (k = 0; k < nplanes(l); k++)
 		for (j = 0; j < h; j++)
 			for (i = 0; i < w; i++) {
 				int px, py;
@@ -151,9 +166,14 @@ static void check_untouched(const char *what) {
 }
 
 static const z_color_layout_t *layouts[] = {
-	&z_color_16, &z_color_8, &z_color_4_right, &z_color_4_below, &z_color_mono
+	&z_color_16, &z_color_8, &z_color_4_right, &z_color_4_below, &z_color_mono,
+	&z_color_32, &z_color_64, &z_color_256
 };
-static const char *layout_names[] = { "16", "8", "4-right", "4-below", "mono" };
+static const char *layout_names[] = {
+	"16", "8", "4-right", "4-below", "mono", "32", "64", "256"
+};
+/* the layouts each machine draws: the first n */
+static const int nlayouts[3] = { 5, 7, 8 };
 
 /* origins: inside, across the right seam, across the bottom seam,
  * across both, negative, beyond 640/480 */
@@ -162,10 +182,13 @@ static const int origins[][2] = {
 	{ 1300, 1000 }, { 317, 237 }, { 0, 0 }
 };
 
+static void run(int hw);
+
 int main(void) {
 
-	unsigned li, oi;
-	int x, y, k, c;
+	int x, y, k;
+
+	z_color_assume_planes(4);
 
 	/* the plane offsets */
 	{
@@ -184,7 +207,7 @@ int main(void) {
 
 	/* source bitmaps */
 	srand(7);
-	for (k = 0; k < 4; k++)
+	for (k = 0; k < 8; k++)
 		for (y = 0; y < SH; y++)
 			for (x = 0; x < SW; x++)
 				set_src(srcbuf[k], x, y, rand() & 1);
@@ -192,109 +215,29 @@ int main(void) {
 		for (x = 0; x < SW; x++) {
 			int m = (rand() % 3) != 0;
 			set_src(maskbuf, x, y, m);
-			if (!m) for (k = 0; k < 4; k++) set_src(srcbuf[k], x, y, 0);
+			if (!m) for (k = 0; k < 8; k++) set_src(srcbuf[k], x, y, 0);
 		}
 
-	for (li = 0; li < sizeof(layouts) / sizeof(layouts[0]); li++) {
-		const z_color_layout_t *l = layouts[li];
-		int maskc = (1 << l->planes) - 1;
-
-		for (oi = 0; oi < sizeof(origins) / sizeof(origins[0]); oi++) {
-			int ox = origins[oi][0], oy = origins[oi][1];
-			int w = 70, h = 33, bad;
-			char what[96];
-
-			/* fill */
-			for (c = 0; c < 16; c += 5) {
-				noise(li * 100 + oi * 10 + (unsigned)c);
-				mark(l, ox, oy, w, h);
-				z_color_fill_rect(l, ox, oy, w, h, c);
-				bad = 0;
-				for (y = 0; y < h; y++)
-					for (x = 0; x < w; x++)
-						if (index_at(l, ox + x, oy + y) != (c & maskc)) bad++;
-				snprintf(what, sizeof(what), "fill %s at (%d,%d) colour %d",
-					layout_names[li], ox, oy, c);
-				if (bad) { printf("FAIL: %s: %d pixels\n", what, bad); errors++; }
-				check_untouched(what);
-			}
-
-			/* transparent mono blit, odd source offset */
-			noise(li * 7 + oi);
-			mark(l, ox, oy, w, h);
-			z_color_blit_mono(l, srcbuf[0], SSTRIDE, 5, 3, ox, oy, w, h, 9);
-			bad = 0;
-			for (y = 0; y < h; y++)
-				for (x = 0; x < w; x++) {
-					int got = index_at(l, ox + x, oy + y);
-					int exp;
-					if (get_src(srcbuf[0], 5 + x, 3 + y)) exp = 9 & maskc;
-					else {
-						int kk; exp = 0;
-						for (kk = 0; kk < l->planes; kk++) {
-							int px, py;
-							z_color_plane_xy(l, kk, ox + x, oy + y, &px, &py);
-							exp |= before[py][px] << kk;
-						}
-					}
-					if (got != exp) bad++;
-				}
-			snprintf(what, sizeof(what), "mono blit %s at (%d,%d)",
-				layout_names[li], ox, oy);
-			if (bad) { printf("FAIL: %s: %d pixels\n", what, bad); errors++; }
-			check_untouched(what);
-
-			/* opaque planes, plane 1 NULL */
-			{
-				const void *src[4] = { srcbuf[0], NULL, srcbuf[2], srcbuf[3] };
-				noise(li * 13 + oi);
-				mark(l, ox, oy, w, h);
-				z_color_blit_planes(l, src, SSTRIDE, 11, 2, ox, oy, w, h);
-				bad = 0;
-				for (y = 0; y < h; y++)
-					for (x = 0; x < w; x++) {
-						int exp = 0;
-						for (k = 0; k < l->planes; k++)
-							if (src[k]) exp |= get_src(src[k], 11 + x, 2 + y) << k;
-						if (index_at(l, ox + x, oy + y) != exp) bad++;
-					}
-				snprintf(what, sizeof(what), "plane blit %s at (%d,%d)",
-					layout_names[li], ox, oy);
-				if (bad) { printf("FAIL: %s: %d pixels\n", what, bad); errors++; }
-				check_untouched(what);
-			}
-
-			/* masked sprite */
-			{
-				const void *src[4] = { srcbuf[0], srcbuf[1], srcbuf[2], srcbuf[3] };
-				noise(li * 17 + oi);
-				mark(l, ox, oy, w, h);
-				z_color_blit_sprite(l, src, maskbuf, SSTRIDE, 1, 1, ox, oy, w, h);
-				bad = 0;
-				for (y = 0; y < h; y++)
-					for (x = 0; x < w; x++) {
-						int exp = 0;
-						if (get_src(maskbuf, 1 + x, 1 + y)) {
-							for (k = 0; k < l->planes; k++)
-								exp |= get_src(srcbuf[k], 1 + x, 1 + y) << k;
-						} else {
-							for (k = 0; k < l->planes; k++) {
-								int px, py;
-								z_color_plane_xy(l, k, ox + x, oy + y, &px, &py);
-								exp |= before[py][px] << k;
-							}
-						}
-						if (index_at(l, ox + x, oy + y) != exp) bad++;
-					}
-				snprintf(what, sizeof(what), "sprite %s at (%d,%d)",
-					layout_names[li], ox, oy);
-				if (bad) { printf("FAIL: %s: %d pixels\n", what, bad); errors++; }
-				check_untouched(what);
-			}
+	/* where planes 4..7 go */
+	{
+		int px, py;
+		z_color_assume_planes(8);
+		z_color_plane_xy(&z_color_256, 7, 400, 300, &px, &py);
+		if (px != 80 || py != 480 + 60) {
+			printf("FAIL: 8 planes: plane 7 of (400,300): (%d,%d)\n", px, py);
+			errors++;
+		}
+		z_color_assume_planes(6);
+		z_color_plane_xy(&z_color_64, 5, 100, 300, &px, &py);
+		if (px != 420 || py != 480 + 60) {
+			printf("FAIL: 6 planes: plane 5 of (100,300): (%d,%d)\n", px, py);
+			errors++;
 		}
 	}
 
-	(void)fold;
+	run(4);
+	run(6);
+	run(8);
 
 	if (calls_out_of_range) {
 		printf("FAIL: %d blitter calls outside the framebuffer\n", calls_out_of_range);
@@ -307,4 +250,120 @@ int main(void) {
 	}
 	printf("all zcolor tests passed\n");
 	return 0;
+}
+
+static void run(int hw) {
+
+	unsigned li, oi;
+	int x, y, k, c;
+	int nl = nlayouts[hw == 8 ? 2 : hw == 6 ? 1 : 0];
+
+	z_color_assume_planes(hw);
+	fb_rows = hw == 8 ? 960 : hw == 6 ? 720 : 480;
+	/* and the 256-colour layout on a 6-plane machine: six planes */
+	if (hw == 6) nl = 8;
+
+	for (li = 0; li < (unsigned)nl; li++) {
+		const z_color_layout_t *l = layouts[li];
+		int maskc = (1 << nplanes(l)) - 1;
+
+		for (oi = 0; oi < sizeof(origins) / sizeof(origins[0]); oi++) {
+			int ox = origins[oi][0], oy = origins[oi][1];
+			int w = 70, h = 33, bad;
+			char what[96];
+
+			/* fill */
+			for (c = 0; c < 256; c += (nplanes(l) > 4 ? 37 : 5)) {
+				if (nplanes(l) <= 4 && c >= 16) break;
+				noise(li * 100 + oi * 10 + (unsigned)c);
+				mark(l, ox, oy, w, h);
+				z_color_fill_rect(l, ox, oy, w, h, c);
+				bad = 0;
+				for (y = 0; y < h; y++)
+					for (x = 0; x < w; x++)
+						if (index_at(l, ox + x, oy + y) != (c & maskc)) bad++;
+				snprintf(what, sizeof(what), "fill %s/%d at (%d,%d) colour %d",
+					layout_names[li], hw, ox, oy, c);
+				if (bad) { printf("FAIL: %s: %d pixels\n", what, bad); errors++; }
+				check_untouched(what);
+			}
+
+			/* transparent mono blit, odd source offset */
+			noise(li * 7 + oi);
+			mark(l, ox, oy, w, h);
+			z_color_blit_mono(l, srcbuf[0], SSTRIDE, 5, 3, ox, oy, w, h, 0xa9);
+			bad = 0;
+			for (y = 0; y < h; y++)
+				for (x = 0; x < w; x++) {
+					int got = index_at(l, ox + x, oy + y);
+					int exp;
+					if (get_src(srcbuf[0], 5 + x, 3 + y)) exp = 0xa9 & maskc;
+					else {
+						int kk; exp = 0;
+						for (kk = 0; kk < nplanes(l); kk++) {
+							int px, py;
+							z_color_plane_xy(l, kk, ox + x, oy + y, &px, &py);
+							exp |= before[py][px] << kk;
+						}
+					}
+					if (got != exp) bad++;
+				}
+			snprintf(what, sizeof(what), "mono blit %s/%d at (%d,%d)",
+				layout_names[li], hw, ox, oy);
+			if (bad) { printf("FAIL: %s: %d pixels\n", what, bad); errors++; }
+			check_untouched(what);
+
+			/* opaque planes, plane 1 NULL */
+			{
+				const void *src[8] = { srcbuf[0], NULL, srcbuf[2], srcbuf[3],
+					srcbuf[4], srcbuf[5], NULL, srcbuf[7] };
+				noise(li * 13 + oi);
+				mark(l, ox, oy, w, h);
+				z_color_blit_planes(l, src, SSTRIDE, 11, 2, ox, oy, w, h);
+				bad = 0;
+				for (y = 0; y < h; y++)
+					for (x = 0; x < w; x++) {
+						int exp = 0;
+						for (k = 0; k < nplanes(l); k++)
+							if (src[k]) exp |= get_src(src[k], 11 + x, 2 + y) << k;
+						if (index_at(l, ox + x, oy + y) != exp) bad++;
+					}
+				snprintf(what, sizeof(what), "plane blit %s/%d at (%d,%d)",
+					layout_names[li], hw, ox, oy);
+				if (bad) { printf("FAIL: %s: %d pixels\n", what, bad); errors++; }
+				check_untouched(what);
+			}
+
+			/* masked sprite */
+			{
+				const void *src[8] = { srcbuf[0], srcbuf[1], srcbuf[2], srcbuf[3],
+					srcbuf[4], srcbuf[5], srcbuf[6], srcbuf[7] };
+				noise(li * 17 + oi);
+				mark(l, ox, oy, w, h);
+				z_color_blit_sprite(l, src, maskbuf, SSTRIDE, 1, 1, ox, oy, w, h);
+				bad = 0;
+				for (y = 0; y < h; y++)
+					for (x = 0; x < w; x++) {
+						int exp = 0;
+						if (get_src(maskbuf, 1 + x, 1 + y)) {
+							for (k = 0; k < nplanes(l); k++)
+								exp |= get_src(srcbuf[k], 1 + x, 1 + y) << k;
+						} else {
+							for (k = 0; k < nplanes(l); k++) {
+								int px, py;
+								z_color_plane_xy(l, k, ox + x, oy + y, &px, &py);
+								exp |= before[py][px] << k;
+							}
+						}
+						if (index_at(l, ox + x, oy + y) != exp) bad++;
+					}
+				snprintf(what, sizeof(what), "sprite %s/%d at (%d,%d)",
+					layout_names[li], hw, ox, oy);
+				if (bad) { printf("FAIL: %s: %d pixels\n", what, bad); errors++; }
+				check_untouched(what);
+			}
+		}
+	}
+
+	(void)fold;
 }

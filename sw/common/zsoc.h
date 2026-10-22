@@ -772,9 +772,10 @@ static inline bool z_soc_feature_confirmed_absent(uint32_t feature) {
 #define Z_SOCCTL_MAGIC 0x5A435452u	// "ZCTR" -- see rtl/socctl.v
 
 // Mouse cursor shape: 0 = normal pointer (X), 1 = busy pointer (Z).
-// The sprite is drawn in hardware (rtl/gpu/gpu_cursor.v) and
-// composited at scanout, so this is the only way to change it --
-// software cannot draw over it.
+// The sprite is drawn in hardware (rtl/gpu/gpu_video.v, docs/cursor.md)
+// and composited at scanout, so this is the only way to change it --
+// software cannot draw over it. Which shapes "normal" and "busy" are
+// is z_cursor_slots() below, where the bitstream has them.
 #define Z_SOCCTL_CURSOR_BUSY (1u << 0)
 
 // No cursor at all (rtl/socctl.v CTRL bit 1). wm sets it while a game
@@ -805,6 +806,46 @@ static inline void z_cursor_set_busy(bool busy) {
 static inline void z_cursor_set(bool busy, bool hidden) {
 	reg_socctl_ctrl = (busy ? Z_SOCCTL_CURSOR_BUSY : 0) |
 		(hidden ? Z_SOCCTL_CURSOR_HIDE : 0);
+}
+
+// -- the cursor's shapes (rtl/socctl.v CURSOR and CURDATA; docs/cursor.md) --
+//
+// Four slots of 16x16, kept in a block RAM of the video output. Slots
+// 0 and 1 hold today's X and Z from configuration on, slots 2 and 3 a
+// 9x9 X and Z until something loads others. A row is 16 bits, bit c =
+// column c, 1 = invert the pixel under it; the cell's centre, (8, 8),
+// is drawn at the pointer. Every reset selects slots 0 and 1 again.
+//
+// Words 8 and 15 alias CTRL and DIRTY on older bitstreams, so nothing
+// here writes them until z_cursor_shapes_available() has read word
+// 8's signature.
+#define reg_socctl_cursor  (*(volatile uint32_t*)0x70000220)
+#define reg_socctl_curdata (*(volatile uint32_t*)0x7000023c)
+#define Z_CURSOR_SIG       0x5A4Bu	// "ZK" -- KEEP IN SYNC with socctl.v
+#define Z_CURSOR_SLOTS     4
+#define Z_CURSOR_ROWS      16
+
+static inline bool z_cursor_shapes_available(void) {
+	if (!z_socctl_present()) return false;
+	return ((reg_socctl_cursor >> 16) & 0xffffu) == Z_CURSOR_SIG;
+}
+
+// The slots drawn as the normal and the busy pointer (CTRL bit 0
+// picks between them). False on a bitstream with fixed shapes.
+static inline bool z_cursor_slots(uint32_t normal, uint32_t busy) {
+	if (!z_cursor_shapes_available()) return false;
+	reg_socctl_cursor = (normal & 3u) | ((busy & 3u) << 4);
+	return true;
+}
+
+// Writes one slot's 16 rows. The slots in use are kept.
+static inline bool z_cursor_load(uint32_t slot, const uint16_t *rows) {
+	if (!z_cursor_shapes_available()) return false;
+	uint32_t cur = reg_socctl_cursor & 0x33u;
+	reg_socctl_cursor = cur | ((slot & 3u) << 20);	// address { slot, row 0 }
+	for (int r = 0; r < Z_CURSOR_ROWS; r++)
+		reg_socctl_curdata = rows[r];
+	return true;
 }
 
 // -- virtual phosphor modes (rtl/gpu/gpu_video.v) --
@@ -1181,9 +1222,10 @@ static inline void z_game_wait_frame(void) {
 //
 // In game mode only, up to three more 320x240 regions of the 640x480
 // framebuffer can be read as extra BITPLANES of the picture, through a
-// 16-entry RGB444 palette. Plane 0 is the viewport itself; plane k
-// (1..3) is the viewport moved by its own {dy, dx}: dx adds 320
-// columns, dy 240 rows, modulo 640x480.
+// 16-entry RGB444 palette -- 64 or 256 entries, and 6 or 8 planes, on
+// a GAME_PLANES bitstream (z_color_planes_max()). Plane 0 is the
+// viewport itself; plane k (1..3) is the viewport moved by its own
+// {dy, dx}: dx adds 320 columns, dy 240 rows, modulo 640x480.
 //
 // These are the register interface and no more -- see docs/color.md
 // for the layouts that make sense and how to draw into them.
@@ -1199,7 +1241,9 @@ static inline void z_game_wait_frame(void) {
 #define reg_socctl_palette (*(volatile uint32_t*)0x70000234)
 
 #define Z_COLOR_ENABLE      (1u << 0)
-#define Z_COLOR_NP_SHIFT    1          // bits 2:1 = planes - 1
+#define Z_COLOR_NP_SHIFT    1          // bits 3:1 = planes - 1
+#define Z_COLOR_NP_MASK     7u         // bit 3 reads 0 on older bitstreams
+#define Z_COLOR_XP_SHIFT    4          // bits 5:4, read-only: 0/1/2 = 4/6/8 planes
 #define Z_COLOR_OFF_SHIFT   8          // bits 13:8 = plane 1..3 {dy,dx}
 #define Z_COLOR_AVAIL       (1u << 15) // read-only
 
@@ -1226,8 +1270,36 @@ static inline bool z_color_available(void) {
 	return (reg_socctl_color & Z_COLOR_AVAIL) != 0;
 }
 
-// Set colour on or off, the plane count (1..4 = 2..16 colours) and the
-// offsets of planes 1..3 (Z_COLOR_OFFSETS). Adopted at the next frame
+// The most planes this bitstream shows: 4, 6 or 8 (rtl/boards.vh's
+// `GAME_PLANES), and 0 without colour. Planes 4..7 are planes 0..3 of
+// the second VRAM sheet, framebuffer rows 480 up (docs/color.md, "More
+// than four planes").
+static inline uint32_t z_color_planes_max(void) {
+	uint32_t xp;
+	if (!z_color_available()) return 0;
+	xp = (reg_socctl_color >> Z_COLOR_XP_SHIFT) & 3u;
+	return xp == 2u ? 8u : xp == 1u ? 6u : 4u;
+}
+
+// Palette entries: 2^planes_max -- 16, 64 or 256 (0 without colour).
+static inline uint32_t z_color_palette_size(void) {
+	uint32_t n = z_color_planes_max();
+	return n ? (1u << n) : 0u;
+}
+
+// Framebuffer rows there are VRAM for: 480, 720 (6 planes: the second
+// sheet is half height) or 960.
+static inline uint32_t z_color_rows(void) {
+	uint32_t n = z_color_planes_max();
+	return n == 8u ? 960u : n == 6u ? 720u : 480u;
+}
+
+// Set colour on or off, the plane count (1..8 = 2..256 colours) and the
+// offsets of planes 1..3 (Z_COLOR_OFFSETS; planes 4..7 take plane
+// 0..3's in the second sheet). A count above the bitstream's is stored
+// as its maximum -- but a bitstream from before GAME_PLANES reads only
+// the low two bits of it, so ask for at most z_color_planes_max()
+// (zcolor.c's z_color_begin() does). Adopted at the next frame
 // boundary, together with any GAME/VIEW write made in the same frame.
 //
 // Colour only shows while game mode is on, and TURNING GAME MODE OFF
@@ -1238,7 +1310,7 @@ static inline bool z_color_set(bool on, uint32_t planes, uint32_t offsets) {
 	uint32_t np;
 	if (!z_color_available()) return false;
 	if (planes < 1) planes = 1;
-	if (planes > 4) planes = 4;
+	if (planes > 8) planes = 8;	// socctl stores its own maximum
 	np = planes - 1u;
 	reg_socctl_color = (on ? Z_COLOR_ENABLE : 0u) |
 		(np << Z_COLOR_NP_SHIFT) |
@@ -1253,7 +1325,7 @@ static inline bool z_color_enabled(void) {
 
 static inline uint32_t z_color_planes(void) {
 	if (!z_color_present()) return 1;
-	return ((reg_socctl_color >> Z_COLOR_NP_SHIFT) & 3u) + 1u;
+	return ((reg_socctl_color >> Z_COLOR_NP_SHIFT) & Z_COLOR_NP_MASK) + 1u;
 }
 
 // the plane 1..3 offsets last written, as Z_COLOR_OFFSETS() packs them
@@ -1351,14 +1423,15 @@ static inline bool z_ddmi_sound_available(void) {
 		(reg_socctl_ddmi & Z_DDMI_SOUND_AVAIL) != 0;
 }
 
-// One palette entry, RGB444 (0xRGB). Takes effect immediately, not at
-// a frame boundary -- write in vblank (z_game_in_vblank(), or straight
-// after z_game_wait_frame()) to avoid a one-pixel glitch mid-picture.
-// On DDMI each nibble is doubled to 8 bits (0xa -> 0xaa); on VGA only
-// the top bit of each channel exists.
+// One palette entry, RGB444 (0xRGB), index 0..z_color_palette_size()-1
+// (higher bits are ignored). Takes effect immediately, not at a frame
+// boundary -- write in vblank (z_game_in_vblank(), or straight after
+// z_game_wait_frame()) to avoid a one-pixel glitch mid-picture. On DDMI
+// each nibble is doubled to 8 bits (0xa -> 0xaa); on VGA only the top
+// bit of each channel exists.
 static inline void z_color_set_palette(uint32_t index, uint32_t rgb444) {
 	if (!z_color_available()) return;
-	reg_socctl_palette = ((index & 0xfu) << 24) | (rgb444 & 0xfffu);
+	reg_socctl_palette = ((index & 0xffu) << 24) | (rgb444 & 0xfffu);
 }
 
 // -- instruction cache (rtl/cache.v) --

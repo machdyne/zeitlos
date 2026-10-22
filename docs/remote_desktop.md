@@ -354,7 +354,7 @@ register on its own, so the physical USB mouse is never left latched
 out.
 
 Note the pointer you see is the browser's own. Zeitlos composes its
-cursor in the scanout, not in VRAM (`rtl/gpu/gpu_cursor.v`), so it is
+cursor in the scanout, not in VRAM ([cursor.md](cursor.md)), so it is
 on HDMI and not in the stream.
 
 **Reconnecting.** A closed socket is retried every 1.5 s, and the

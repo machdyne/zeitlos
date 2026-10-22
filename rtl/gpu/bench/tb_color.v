@@ -98,7 +98,7 @@ module tb_color;
 	wire in_vblank;
 
 	// cursor: a checkerboard over part of the screen, driven from the
-	// DUT's own framebuffer coordinates exactly as gpu_cursor.v is
+	// DUT's own framebuffer coordinates, as the old comparator cursor was
 	reg cursor_test = 0;
 	wire cursor_pix = cursor_test && x[3] && !y[2];
 
@@ -197,10 +197,10 @@ module tb_color;
 			cur_exp = cursor_test && c0[3] && !r0[2];
 			expect_idx = (raw ^ {4{cur_exp}}) & mask;
 
-			if (dut.cidx !== expect_idx || dut.color_on !== 1'b1) begin
+			if (dut.cidx_o !== expect_idx || dut.color_on !== 1'b1) begin
 				if (mism < 8)
 					$display("FAIL: pixel (%0d,%0d) fb(%0d,%0d): index %0h, expected %0h (color_on %0b)",
-						px, py, c0, r0, dut.cidx, expect_idx, dut.color_on);
+						px, py, c0, r0, dut.cidx_o, expect_idx, dut.color_on);
 				mism = mism + 1;
 			end
 

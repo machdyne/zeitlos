@@ -32,7 +32,7 @@
  * -- Why a whole block for one bit --
  *
  * Because the alternative was worse. The mouse cursor sprite
- * (rtl/gpu/gpu_cursor.v) takes its position straight from
+ * (then rtl/gpu/gpu_cursor.v, now in gpu_video.v) takes its position straight from
  * rtl/usb_hid.v and has no wishbone connection at all, so changing its
  * SHAPE had no register to live in. Giving the cursor its own
  * peripheral, with its own decode and its own ack mux entry, would be
@@ -43,7 +43,8 @@
  * wbm_adr_sel_word, matching every other simple slave in this
  * codebase, e.g. rtl/gpio.v, rtl/csrs.v):
  *
- *   0  CTRL   bit 0: cursor shape. 0 = normal (X), 1 = busy (Z).
+ *   0  CTRL   bit 0: cursor shape. 0 = normal (X), 1 = busy (Z) --
+ *             or the slots CURSOR (word 8) names for the two.
  *             bit 1: cursor hidden. 1 = the hardware cursor is not
  *             drawn at all -- for a game that has taken the screen
  *             (sw/apps/wm hides it while a game holds the grab).
@@ -226,8 +227,17 @@
  *             and see PALETTE for why that matters.
  *               bit 0       EN: colour on. Only has an effect while
  *                           game mode is on; see below.
- *               bits 2:1    NP: number of bitplanes minus one
- *                           (0..3 = 2, 4, 8, 16 colours).
+ *               bits 3:1    NP: number of bitplanes minus one
+ *                           (0..7 = 2 .. 256 colours). Bit 3 is new
+ *                           with GAME_PLANES; it reads 0 and is
+ *                           ignored on older bitstreams. A count
+ *                           above what this bitstream has is stored
+ *                           as its maximum (reads back so).
+ *               bits 5:4    XP (read-only): the most planes this
+ *                           bitstream shows: 0 = 4, 1 = 6, 2 = 8.
+ *                           Planes 4..7 are planes 0..3 of the
+ *                           second VRAM sheet (rows 480..959;
+ *                           docs/color.md, "More than four planes").
  *               bits 9:8    plane 1 offset {dy, dx}
  *               bits 11:10  plane 2 offset {dy, dx}
  *               bits 13:12  plane 3 offset {dy, dx}
@@ -236,8 +246,8 @@
  *               bit 15      AVAIL (read-only): COLOR_AVAIL.
  *             Lane 0 carries EN/NP, lane 1 the offsets.
  *
- *             Reads back as { 16'h5A50, avail, 1'b0, offsets, 5'b0,
- *             np, en }, "ZP". Same signature reason as GAME.
+ *             Reads back as { 16'h5A50, avail, 1'b0, offsets, 2'b0,
+ *             xp, np, en }, "ZP". Same signature reason as GAME.
  *
  *             Part of the GAME/VIEW payload: a write here flips
  *             view_load too, so colour, mode and origin are captured
@@ -256,8 +266,10 @@
  *             is clear, exactly as GAME's enable is.
  *
  *  13  PALETTE  write-only, whole-word stores only:
- *             bits 27:24 entry, bits 11:0 RGB444 (R 11:8, G 7:4,
- *             B 3:0). Reads as 0.
+ *             bits 31:24 entry, bits 11:0 RGB444 (R 11:8, G 7:4,
+ *             B 3:0). Reads as 0. 2^planes entries: 16, 64 or 256
+ *             (GAME_PLANES); the entry's bits above that are ignored.
+ *             Older bitstreams decode bits 27:24 only.
  *
  *             -- Why words 9 and 13, and not 8 and 9 --
  *
@@ -272,8 +284,8 @@
  *             turned the cursor into a Z; 15 would have cleared DIRTY
  *             bits under the screen streamer.
  *
- *             The decode is four bits wide now (rtl/sysctl.v), so 8
- *             and 15 are free and read as zero (10..12 are DDMI audio).
+ *             The decode is four bits wide now (rtl/sysctl.v); 8 and 15
+ *             are the cursor's (below) and 10..12 DDMI audio.
  *
  *  10  DDMI   DDMI audio (docs/ddmi_audio.md): data islands, the video
  *             preamble and guard band, and the InfoFrames on the DDMI
@@ -329,6 +341,28 @@
  *             nothing there, and RECONFIG's signature (0x5A52) is not
  *             this one.
  *
+ *   8  CURSOR the hardware cursor's shapes (docs/cursor.md).
+ *             bits 1:0 the slot drawn as "normal", bits 5:4 the slot
+ *             drawn as "busy" -- CTRL bit 0 picks between the two.
+ *             Resets to 0 and 1: today's X and Z, kept in the scanout
+ *             line buffer's block RAM from configuration on.
+ *             bits 21:16 (lane 2) the address of the next CURDATA
+ *             row: { slot, row }.
+ *             Reads back as { 16'h5A4B ("ZK"), 10'b0, busy slot, 2'b0,
+ *             normal slot } (the address is not read back).
+ *  15  CURDATA write-only, whole words: one shape row, { data[15:0],
+ *             mask[15:0] }, bit c = column c, to the address in
+ *             CURSOR, which then moves on by one. The cursor's block
+ *             RAM is gpu_video's, written in this clock domain, so a
+ *             row lands on the next clock and the next store may
+ *             follow at once.
+ *
+ *             8 and 15 alias CTRL and DIRTY on a 3-bit-decode
+ *             bitstream, and read as zero on a 4-bit one without the
+ *             cursor: software writes them only after word 8's
+ *             signature says this is the block it thinks
+ *             (z_cursor_available(), sw/common/zsoc.h).
+ *
  * Reset state is BUSY (cursor = Z), not idle.
  *
  * That is deliberate and is the honest default: from power-on until
@@ -381,7 +415,15 @@ module socctl_wb #(
     // 1 if this bitstream has game-mode colour: rtl/boards.vh's
     // `COLOR, with `GAME and `GPU, and not composite. Set by
     // rtl/sysctl.v, like GAME_AVAIL. See COLOR above.
-    parameter COLOR_AVAIL = 1'b0
+    parameter COLOR_AVAIL = 1'b0,
+    // The most bitplanes game-mode colour shows: 4, 6 or 8
+    // (rtl/boards.vh's `GAME_PLANES, 4 without it). Set by
+    // rtl/sysctl.v, which sizes VRAM and gpu_video to match.
+    parameter integer GAME_PLANES = 4,
+    // 1 if this bitstream draws the pointer from loadable shapes:
+    // rtl/boards.vh's `GPU_CURSOR, with `GPU. Set by rtl/sysctl.v. See
+    // CURSOR (word 8) and CURDATA (word 15) above.
+    parameter CURSOR_AVAIL = 1'b0
 )
 (
     input wb_clk_i,
@@ -395,7 +437,7 @@ module socctl_wb #(
     output reg wb_ack_o,
     input wb_cyc_i,
 
-    // 1 = draw the busy cursor. Feeds rtl/gpu/gpu_cursor.v's curs_alt
+    // 1 = draw the busy cursor. Feeds rtl/gpu/gpu_video.v's curs_alt
     // directly -- see that module. Crosses into the pixel clock domain
     // there, which is safe without synchronisation because it is a
     // single bit changed by a human-paced event (a window manager
@@ -403,10 +445,21 @@ module socctl_wb #(
     // is one frame drawn with the old shape.
     output wire cursor_busy,
 
-    // 1 = draw no cursor at all. Feeds rtl/gpu/gpu_cursor.v's
+    // 1 = draw no cursor at all. Feeds rtl/gpu/gpu_video.v's
     // curs_hide; crosses into the pixel clock domain the same way, and
     // for the same reason it is safe, as cursor_busy above.
     output wire cursor_hide,
+
+    // -- the cursor's shapes -> rtl/gpu/gpu_video.v (docs/cursor.md) --
+    //
+    // cursor_slots: { busy slot, normal slot }, from CURSOR.
+    // cursor_we: a one-clock strobe writing cursor_wdata to row
+    // cursor_waddr ({ slot, row }) of the cursor's block RAM in
+    // gpu_video, which is written in this clock domain.
+    output wire [3:0]  cursor_slots,
+    output wire        cursor_we,
+    output wire [5:0]  cursor_waddr,
+    output wire [31:0] cursor_wdata,
 
     // Virtual phosphor mode -> rtl/gpu/gpu_video.v's own video_mode
     // input. Crosses into the pixel clock domain there rather than
@@ -471,10 +524,10 @@ module socctl_wb #(
     // strobe in THIS clock domain, which is also gpu_video's clk, and
     // the palette RAM is written there directly.
     output wire        color_en,
-    output wire [1:0]  color_np,
+    output wire [2:0]  color_np,
     output wire [5:0]  color_off,
     output wire        pal_we,
-    output wire [3:0]  pal_idx,
+    output wire [7:0]  pal_idx,
     output wire [11:0] pal_rgb,
     output wire        cvbs_mono,
 
@@ -516,10 +569,17 @@ module socctl_wb #(
     localparam RECONFIG_SIG = 16'h5A52;
     // top half of the COLOR register -- "ZP", for planes
     localparam COLOR_SIG = 16'h5A50;
+    // GAME_PLANES as COLOR reports it (bits 5:4), and the largest NP
+    localparam [1:0] XP_CODE = (GAME_PLANES >= 8) ? 2'd2 :
+                               (GAME_PLANES >= 6) ? 2'd1 : 2'd0;
+    localparam [2:0] NP_MAX  = (GAME_PLANES >= 8) ? 3'd7 :
+                               (GAME_PLANES >= 6) ? 3'd5 : 3'd3;
     // top half of CVBS -- "ZV"
     localparam CVBS_SIG = 16'h5A56;
     // top half of DDMI -- "ZD"
     localparam DDMI_SIG = 16'h5A44;
+    // top half of CURSOR -- "ZK"
+    localparam CURSOR_SIG = 16'h5A4B;
 
     reg [31:0] ctrl;
     reg [1:0] video;
@@ -533,10 +593,10 @@ module socctl_wb #(
     reg recfg;
 
     reg col;
-    reg [1:0] np;
+    reg [2:0] np;
     reg [5:0] coff;
     reg pwe;
-    reg [3:0] pidx;
+    reg [7:0] pidx;
     reg [11:0] prgb;
     reg cvbs;
     reg ddmi;
@@ -545,6 +605,11 @@ module socctl_wb #(
     reg [1:0] drep;
     reg [19:0] dn;
     reg [19:0] dcts;
+    reg [3:0] cslots;
+    reg [5:0] caddr;
+    reg [5:0] cwaddr;
+    reg [31:0] cwdata;
+    reg cwe;
 
     // power-on values for the sound half: the board's power-on rate,
     // as rtl/audio.v computes it (rtl/audio_rates.vh)
@@ -566,6 +631,10 @@ module socctl_wb #(
 
     assign cursor_busy = ctrl[0];
     assign cursor_hide = ctrl[1];
+    assign cursor_slots = cslots;
+    assign cursor_we = cwe;
+    assign cursor_waddr = cwaddr;
+    assign cursor_wdata = cwdata;
     assign reconfig = recfg && (RECONFIG_AVAIL != 0);
     assign video_mode = video;
     assign video_bright = bright;
@@ -684,10 +753,10 @@ module socctl_wb #(
 
             // colour off at reset, like game mode itself
             col <= 1'b0;
-            np <= 2'd0;
+            np <= 3'd0;
             coff <= 6'd0;
             pwe <= 1'b0;
-            pidx <= 4'd0;
+            pidx <= 8'd0;
             prgb <= 12'd0;
             cvbs <= CVBS_MONO_RESET;
             ddmi <= 1'b0;
@@ -696,6 +765,14 @@ module socctl_wb #(
             drep <= AR_REP;
             dn <= AR_N;
             dcts <= AR_CTS;
+            // X and Z: the power-on shapes in slots 0 and 1, so a
+            // reset (a warm reboot included) always comes back to
+            // them, whatever wm loaded into slots 2 and 3
+            cslots <= 4'b0100;
+            caddr <= 6'd0;
+            cwaddr <= 6'd0;
+            cwdata <= 32'd0;
+            cwe <= 1'b0;
 
             wb_ack_o <= 1'b0;
             wb_dat_o <= 32'h0000_0000;
@@ -704,6 +781,7 @@ module socctl_wb #(
 
             wb_ack_o <= 1'b0;
             pwe <= 1'b0;
+            cwe <= 1'b0;
 
             if (wb_cyc_i && wb_stb_i && !wb_ack_o) begin
 
@@ -771,7 +849,8 @@ module socctl_wb #(
                     if (wb_adr_i == 32'd9) begin
                         if (wb_sel_i[0]) begin
                             col <= wb_dat_i[0];
-                            np <= wb_dat_i[2:1];
+                            np <= (wb_dat_i[3:1] > NP_MAX) ? NP_MAX :
+                                wb_dat_i[3:1];
                         end
                         if (wb_sel_i[1])
                             coff <= wb_dat_i[13:8];
@@ -805,9 +884,24 @@ module socctl_wb #(
                         if (wb_sel_i[2]) dcts[19:16] <= wb_dat_i[19:16];
                     end
 
+                    // CURSOR: the slots (lane 0), the load address
+                    // (lane 2). CURDATA: one shape row, whole words
+                    // only, written to the block RAM on the next clock.
+                    if (wb_adr_i == 32'd8 && CURSOR_AVAIL != 0) begin
+                        if (wb_sel_i[0]) cslots <= { wb_dat_i[5:4], wb_dat_i[1:0] };
+                        if (wb_sel_i[2]) caddr <= wb_dat_i[21:16];
+                    end
+                    if (wb_adr_i == 32'd15 && wb_sel_i == 4'b1111 &&
+                        CURSOR_AVAIL != 0) begin
+                        cwaddr <= caddr;
+                        cwdata <= wb_dat_i;
+                        caddr <= caddr + 6'd1;
+                        cwe <= 1'b1;
+                    end
+
                     if (wb_adr_i == 32'd13 && wb_sel_i == 4'b1111) begin
                         pwe <= 1'b1;
-                        pidx <= wb_dat_i[27:24];
+                        pidx <= wb_dat_i[31:24];
                         prgb <= wb_dat_i[11:0];
                     end
 
@@ -860,8 +954,13 @@ module socctl_wb #(
                         32'd11: wb_dat_o <= { 12'b0, (DDMI_SOUND_AVAIL != 0) ? dn : 20'd0 };
                         32'd12: wb_dat_o <= { 12'b0, (DDMI_SOUND_AVAIL != 0) ? dcts : 20'd0 };
                         32'd9: wb_dat_o <= { COLOR_SIG, (COLOR_AVAIL != 0), 1'b0,
-                                             ((COLOR_AVAIL != 0) ? coff : 6'd0), 5'b0,
-                                             ((COLOR_AVAIL != 0) ? np : 2'd0), color_en };
+                                             ((COLOR_AVAIL != 0) ? coff : 6'd0), 2'b0,
+                                             ((COLOR_AVAIL != 0) ? XP_CODE : 2'd0),
+                                             ((COLOR_AVAIL != 0) ? np : 3'd0), color_en };
+                        32'd8: wb_dat_o <= (CURSOR_AVAIL != 0) ?
+                                             { CURSOR_SIG, 10'b0, cslots[3:2],
+                                               2'b0, cslots[1:0] } :
+                                             32'h0000_0000;
                         default: wb_dat_o <= 32'h0000_0000;
                     endcase
 

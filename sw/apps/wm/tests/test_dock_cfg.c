@@ -810,6 +810,55 @@ static void test_shipped(const char *cfg_path, const char *zic_path) {
 
 }
 
+// A cursor file (docs/cursor.md): two 16x16 sprites in a .zsp sheet.
+static void test_cursor(void) {
+
+	uint16_t n[16], b[16];
+	int line;
+	char f[2048];
+	int k = 0;
+
+	printf("cursor files\n");
+	k += sprintf(f + k, "zsp 1\r\ncolours 2\n# a comment\nsprite other 4 4\n....\n");
+	k += sprintf(f + k, "sprite normal 16 16\n");
+	for (int r = 0; r < 16; r++) {
+		char row[17];
+		for (int c = 0; c < 16; c++) row[c] = (c == r) ? '1' : (c == 15 - r ? '#' : '.');
+		row[16] = 0;
+		k += sprintf(f + k, "\t%s\r\n", row);		// indented, CRLF
+	}
+	k += sprintf(f + k, "anim spin 80 normal busy\nsprite busy 16 16 hot 8 8\n");
+	for (int r = 0; r < 16; r++)
+		k += sprintf(f + k, "%s\n", r == 8 ? "0000000011111111" : "................");
+	CHECK(dk_cursor_parse(f, (uint32_t)k, n, b, &line));
+	bool diag = true;
+	for (int r = 0; r < 16; r++)
+		if (n[r] != (uint16_t)((1u << r) | (1u << (15 - r)))) diag = false;
+	CHECK(diag);					// any mark but '.' and '0' inverts
+	CHECK(b[8] == 0xff00 && b[0] == 0 && b[15] == 0);	// '0' leaves it alone
+	CHECK(line == 0);
+
+	// a row of 15
+	char g[2048];
+	memcpy(g, f, (size_t)k);
+	char *row7 = strstr(g, "sprite busy");
+	for (int i = 0; i < 8; i++) row7 = strchr(row7, '\n') + 1;	// busy's row 7
+	row7[15] = '\n';
+	row7[16] = '.';
+	CHECK(!dk_cursor_parse(g, (uint32_t)k, n, b, &line) && line > 0);
+
+	// no busy at all
+	char *cut = strstr(f, "anim spin");
+	CHECK(!dk_cursor_parse(f, (uint32_t)(cut - f), n, b, &line) && line == 0);
+
+	// cut short in the middle of busy's rows
+	CHECK(!dk_cursor_parse(f, (uint32_t)k - 40, n, b, &line) && line > 0);
+
+	// nothing
+	CHECK(!dk_cursor_parse("", 0, n, b, &line) && line == 0);
+
+}
+
 int main(int argc, char **argv) {
 
 	test_zic();
@@ -817,6 +866,7 @@ int main(int argc, char **argv) {
 	test_list();
 	test_groups();
 	test_running();
+	test_cursor();
 	if (argc >= 3) test_shipped(argv[1], argv[2]);
 
 	printf("test_dock_cfg: %d checks, %d failed\n", checks, failures);

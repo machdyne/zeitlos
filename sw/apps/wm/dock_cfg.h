@@ -205,6 +205,19 @@ void dk_cfg_text(dk_cfg_t *c, const char *text, uint32_t len);
 // The row a dock on `side` uses.
 int dk_side_row(int side);
 
+// -- a cursor file (docs/cursor.md) ----------------------------------
+//
+// A .zsp sheet (pix's sprite format) holding two 16x16 sprites named
+// `normal` and `busy`: a `sprite normal 16 16` line, then its 16 rows
+// of 16 characters (indented or not), where '.' and '0' leave the
+// pixel alone and anything else inverts it. Bit c of a row is column
+// c; the cell's centre, (8, 8), is the pointer. Every other line --
+// the header, colours, other sprites, comments -- is ignored. True if
+// both were found whole; `*line` is the line that was not a row of 16
+// otherwise (0: one of the two is missing).
+bool dk_cursor_parse(const char *text, uint32_t len, uint16_t normal[16], uint16_t busy[16],
+	int *line);
+
 // The group called `id` (without the '@'), or -1.
 int dk_group_find(const dk_cfg_t *c, const char *id);
 

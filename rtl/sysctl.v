@@ -33,6 +33,7 @@
 
 localparam SYSCLK = 48_000_000;
 
+
 // Instruction cache geometry defaults, if a board enabled `ICACHE
 // without pinning them (rtl/boards.vh). 8KB with 4-word lines suits
 // the SDRAM boards: rtl/mem/sdram.v has no burst path, so a fill costs
@@ -700,7 +701,7 @@ module sysctl #()
 	);
 `else
 	// No scanout, no video clocks. pll1 makes only the pixel clock and
-	// the TMDS bit clock, and only gpu_video and gpu_cursor use them
+	// the TMDS bit clock, and only gpu_video uses them
 	// (both `GPU). A headless board -- Klinge -- has its rasterizer and
 	// blitter (`GPU_RASTER/`GPU_BLIT, which run on sys_clk) but not
 	// those, and it needs the PLL: a 25F has two, and a DDR3 board
@@ -2692,12 +2693,40 @@ module sysctl #()
 
 `endif
 
+	// Game-mode colour's bitplanes (rtl/boards.vh's `GAME_PLANES): 4, 6
+	// or 8. Only with `COLOR, `GAME and `GPU -- the same conditions as
+	// COLOR_AVAILABLE below -- and 4 otherwise. VRAM, socctl and gpu_video
+	// are all sized from it; here, ahead of the VRAM instance, the
+	// first of them in this file. docs/color.md, "More than four
+	// planes".
+`ifdef COLOR
+`ifdef GAME
+`ifdef GPU
+`ifdef GAME_PLANES
+	localparam integer GAME_PLANES_N = (`GAME_PLANES >= 8) ? 8 :
+		(`GAME_PLANES >= 6) ? 6 : 4;
+`else
+	localparam integer GAME_PLANES_N = 4;
+`endif
+`else
+	localparam integer GAME_PLANES_N = 4;
+`endif
+`else
+	localparam integer GAME_PLANES_N = 4;
+`endif
+`else
+	localparam integer GAME_PLANES_N = 4;
+`endif
+	// one 640x480x1bpp sheet, plus half (6 planes) or all (8) of another
+	localparam integer VRAM_WORDS = (GAME_PLANES_N == 8) ? 19200 :
+		(GAME_PLANES_N == 6) ? 14400 : 9600;
+
 	// WISHBONE SLAVE: DUAL-PORT VRAM (FRAMEBUFFER) [DEDICATED BUS]
 `ifdef MEM_VRAM
 	reg [15:0] gb_adr;
 	reg [31:0] gb_dat;
 
-	vram_wb #() wbs_vram_i
+	vram_wb #(.WORDS(VRAM_WORDS)) wbs_vram_i
 	(
 		.wb_clk_i(wbm_clk),
 		.wb_rst_i(wbm_rst),
@@ -3398,11 +3427,17 @@ module sysctl #()
 	// WISHBONE SLAVE: SOC CONTROL (writable global config)
 	//
 	// Always instantiated, no `ifdef -- same reasoning as csrs.v below.
-	// cursor_busy goes straight to rtl/gpu/gpu_cursor.v; it is declared
-	// unconditionally so the wire exists even on boards built without
-	// GPU_CURSOR, where it simply goes nowhere.
+	// cursor_busy and cursor_hide go to rtl/gpu/gpu_video.v's hardware
+	// cursor; they are declared unconditionally so the wires exist even
+	// on boards built without GPU_CURSOR, where they simply go nowhere.
+	// So are the cursor's shape slots and its row-loading strobe
+	// (docs/cursor.md).
 	wire socctl_cursor_busy;
 	wire socctl_cursor_hide;
+	wire [3:0] socctl_cursor_slots;
+	wire socctl_cursor_we;
+	wire [5:0] socctl_cursor_waddr;
+	wire [31:0] socctl_cursor_wdata;
 
 	// Virtual phosphor mode -- socctl.v holds it, rtl/gpu/gpu_video.v
 	// consumes it. Declared unconditionally for the same reason
@@ -3474,6 +3509,25 @@ module sysctl #()
 `else
 	localparam COLOR_AVAILABLE = 1'b0;
 `endif
+	// GAME_PLANES_N and VRAM_WORDS: with the VRAM instance, above.
+	// The cursor's shapes and the palette in LUT RAM instead of their
+	// block RAM, on a board one block short (rtl/boards.vh).
+`ifdef GPU_CURSOR_LUTRAM
+	localparam CBUF_LUTRAM_ON = 1'b1;
+`else
+	localparam CBUF_LUTRAM_ON = 1'b0;
+`endif
+	// The pointer drawn from loadable shapes in gpu_video.v
+	// (docs/cursor.md): every board with a GPU and `GPU_CURSOR.
+`ifdef GPU
+`ifdef GPU_CURSOR
+	localparam CURSOR_AVAILABLE = 1'b1;
+`else
+	localparam CURSOR_AVAILABLE = 1'b0;
+`endif
+`else
+	localparam CURSOR_AVAILABLE = 1'b0;
+`endif
 `ifdef GPU_COMPOSITE
 	localparam CVBS_AVAILABLE = COLOR_AVAILABLE;
 `else
@@ -3522,10 +3576,10 @@ module sysctl #()
 	wire ddmi_aud_we;
 	wire [31:0] ddmi_aud_wdata;
 	wire socctl_color_en;
-	wire [1:0] socctl_color_np;
+	wire [2:0] socctl_color_np;
 	wire [5:0] socctl_color_off;
 	wire socctl_pal_we;
-	wire [3:0] socctl_pal_idx;
+	wire [7:0] socctl_pal_idx;
 	wire [11:0] socctl_pal_rgb;
 
 	// Scanout status coming back the other way. Zero on a board with
@@ -3578,6 +3632,8 @@ module sysctl #()
 		.VIDEO_MODE_RESET(VIDEO_MODE_DEFAULT),
 		.GAME_AVAIL(GAME_AVAILABLE),
 		.COLOR_AVAIL(COLOR_AVAILABLE),
+		.GAME_PLANES(GAME_PLANES_N),
+		.CURSOR_AVAIL(CURSOR_AVAILABLE),
 		.CVBS_AVAIL(CVBS_AVAILABLE),
 		.CVBS_MONO_RESET(CVBS_MONO_DEFAULT),
 		.BRIGHT_AVAIL(BRIGHT_AVAILABLE),
@@ -3632,6 +3688,10 @@ module sysctl #()
 		.wb_cyc_i(wbm_cyc_socctl),
 		.cursor_busy(socctl_cursor_busy),
 		.cursor_hide(socctl_cursor_hide),
+		.cursor_slots(socctl_cursor_slots),
+		.cursor_we(socctl_cursor_we),
+		.cursor_waddr(socctl_cursor_waddr),
+		.cursor_wdata(socctl_cursor_wdata),
 		.reconfig(socctl_reconfig),
 		.video_mode(socctl_video_mode),
 		.video_bright(socctl_video_bright),
@@ -4124,13 +4184,49 @@ module sysctl #()
 `ifdef GPU
 	wire [9:0] gpu_x;
 	wire [9:0] gpu_y;
-	wire gpu_pixel;
+	wire gpu_pixel = 1'b0;
 
-	assign gpu_pixel =
+	// GPU: Hardware Cursor -- its position. gpu_video.v draws it
+	// (docs/cursor.md); this is only where it is.
+	//
+	// The sprite has one position to render, but there are two
+	// independent USB HID ports, either of which might currently be
+	// the mouse (see the usb_hid_wb instances above, and sw/os/hid.c/
+	// sw/apps/wm/wm.c on the software side, which make the same
+	// decision for click hit-testing) -- so pick whichever instance's
+	// own `typ` currently says "mouse" (2), preferring port 0 if
+	// (unusually) both do. An instance that isn't currently a mouse
+	// never updates its own curs_x/curs_y (usb_hid_wb only moves them
+	// on a report while typ==2 -- see rtl/usb_hid.v), so if neither
+	// port is a mouse this just holds whatever port 0 last had
+	// (0,0 after reset), same as the single-port behavior before this.
+	wire [9:0] gpu_curs_x;
+	wire [9:0] gpu_curs_y;
 `ifdef GPU_CURSOR
-		gpu_curs_pixel;
+`ifdef USB_HOST
+`define USB_CURSOR_SRC
+`endif
+`ifdef USB_HID
+`define USB_CURSOR_SRC
+`endif
+`endif
+`ifdef USB_CURSOR_SRC
+`ifdef VMOUSE
+	assign gpu_curs_x = vmouse_present ? vmouse_x :
+		(wbs_usb0_typ == 2'd2) ? wbs_usb0_curs_x :
+		(wbs_usb1_typ == 2'd2) ? wbs_usb1_curs_x : wbs_usb0_curs_x;
+	assign gpu_curs_y = vmouse_present ? vmouse_y :
+		(wbs_usb0_typ == 2'd2) ? wbs_usb0_curs_y :
+		(wbs_usb1_typ == 2'd2) ? wbs_usb1_curs_y : wbs_usb0_curs_y;
 `else
-		0;
+	assign gpu_curs_x = (wbs_usb0_typ == 2'd2) ? wbs_usb0_curs_x :
+		(wbs_usb1_typ == 2'd2) ? wbs_usb1_curs_x : wbs_usb0_curs_x;
+	assign gpu_curs_y = (wbs_usb0_typ == 2'd2) ? wbs_usb0_curs_y :
+		(wbs_usb1_typ == 2'd2) ? wbs_usb1_curs_y : wbs_usb0_curs_y;
+`endif
+`else
+	assign gpu_curs_x = 10'd0;
+	assign gpu_curs_y = 10'd0;
 `endif
 
 	// -- scanout timing --
@@ -4185,7 +4281,10 @@ module sysctl #()
 		.v_frame(VID_V_FP + VID_V_PW + VID_V_BP + VID_V_DISP),
 		.H_DIV_BASE(VID_H_DIV),
 		.FIXED_VIEWPORT(VID_FIXED_VP),
-		.COLOR_AVAIL(COLOR_AVAILABLE)
+		.COLOR_AVAIL(COLOR_AVAILABLE),
+		.GAME_PLANES(GAME_PLANES_N),
+		.CBUF_LUTRAM(CBUF_LUTRAM_ON),
+		.CURSOR_AVAIL(CURSOR_AVAILABLE)
 	) gpu_video_i
 	(
 		.clk(wbm_clk),
@@ -4193,6 +4292,14 @@ module sysctl #()
 		.bclk(clk126mhz),
 		.resetn(~wbm_rst),
 		.pixel(gpu_pixel),
+		.curs_x(gpu_curs_x),
+		.curs_y(gpu_curs_y),
+		.curs_alt(socctl_cursor_busy),
+		.curs_hide(socctl_cursor_hide),
+		.curs_slots(socctl_cursor_slots),
+		.curs_we(socctl_cursor_we),
+		.curs_waddr(socctl_cursor_waddr),
+		.curs_wdata(socctl_cursor_wdata),
 		.video_mode(socctl_video_mode),
 		.video_bright(socctl_video_bright),
 		.ddmi_en(socctl_ddmi_en),
@@ -4231,8 +4338,8 @@ module sysctl #()
 		// see gpu_video.v's header. In desktop mode that is the same
 		// thing as the screen coordinate they used to be, so nothing
 		// downstream changed; in game mode it is what lets
-		// gpu_cursor.v below stay completely unmodified and still
-		// draw the pointer in the right place, pixel-doubled.
+		// the hardware cursor compare against them unmodified and
+		// still draw the pointer in the right place, pixel-doubled.
 		.x(gpu_x),
 		.y(gpu_y),
 		.gb_adr_o(gb_adr),
@@ -4265,56 +4372,5 @@ module sysctl #()
 
 `endif
 
-	// GPU: Hardware Cursor
-`ifdef GPU_CURSOR
-	wire [9:0] gpu_curs_x;
-	wire [9:0] gpu_curs_y;
-	wire gpu_curs_pixel;
-
-	// the sprite has one position to render, but there are now two
-	// independent USB HID ports, either of which might currently be
-	// the mouse (see the usb_hid_wb instances above, and sw/os/hid.c/
-	// sw/apps/wm/wm.c on the software side, which make the same
-	// decision for click hit-testing) -- so pick whichever instance's
-	// own `typ` currently says "mouse" (2), preferring port 0 if
-	// (unusually) both do. An instance that isn't currently a mouse
-	// never updates its own curs_x/curs_y (usb_hid_wb only moves them
-	// on a report while typ==2 -- see rtl/usb_hid.v), so if neither
-	// port is a mouse this just holds whatever port 0 last had
-	// (0,0 after reset), same as the single-port behavior before this.
-`ifdef USB_HOST
-`define USB_CURSOR_SRC
-`endif
-`ifdef USB_HID
-`define USB_CURSOR_SRC
-`endif
-`ifdef USB_CURSOR_SRC
-`ifdef VMOUSE
-	assign gpu_curs_x = vmouse_present ? vmouse_x :
-		(wbs_usb0_typ == 2'd2) ? wbs_usb0_curs_x :
-		(wbs_usb1_typ == 2'd2) ? wbs_usb1_curs_x : wbs_usb0_curs_x;
-	assign gpu_curs_y = vmouse_present ? vmouse_y :
-		(wbs_usb0_typ == 2'd2) ? wbs_usb0_curs_y :
-		(wbs_usb1_typ == 2'd2) ? wbs_usb1_curs_y : wbs_usb0_curs_y;
-`else
-	assign gpu_curs_x = (wbs_usb0_typ == 2'd2) ? wbs_usb0_curs_x :
-		(wbs_usb1_typ == 2'd2) ? wbs_usb1_curs_x : wbs_usb0_curs_x;
-	assign gpu_curs_y = (wbs_usb0_typ == 2'd2) ? wbs_usb0_curs_y :
-		(wbs_usb1_typ == 2'd2) ? wbs_usb1_curs_y : wbs_usb0_curs_y;
-`endif
-`endif
-
-	gpu_cursor #() gpu_cursor_i
-	(
-		.pclk(clk25_2mhz),
-		.pixel(gpu_curs_pixel),
-		.gpu_x(gpu_x),
-		.gpu_y(gpu_y),
-		.curs_x(gpu_curs_x),
-		.curs_y(gpu_curs_y),
-		.curs_alt(socctl_cursor_busy),
-		.curs_hide(socctl_cursor_hide),
-	);
-`endif
 
 endmodule

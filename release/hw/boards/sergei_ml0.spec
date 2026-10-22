@@ -54,6 +54,8 @@ defines =
     GPU_CURSOR
     GPU_DDMI
     COLOR
+    GAME_PLANES=6
+    GPU_CURSOR_LUTRAM
     UART0
     USB_HOST
     SPI_SDCARD

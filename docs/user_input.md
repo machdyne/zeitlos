@@ -135,7 +135,8 @@ wakeups" below.
 
 ### Hardware cursor sprite
 
-`rtl/gpu/gpu_cursor.v` (`GPU_CURSOR`) renders the on-screen mouse
+The hardware cursor in `rtl/gpu/gpu_video.v` (`GPU_CURSOR`,
+[cursor.md](cursor.md)) renders the on-screen mouse
 pointer from a single `(x,y)` position, but there are now two possible
 mouse sources. `rtl/sysctl.v` muxes `gpu_curs_x`/`gpu_curs_y` between
 the two ports' own `curs_x`/`curs_y` outputs, picking whichever port's

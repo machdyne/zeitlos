@@ -413,6 +413,47 @@ void dk_cfg_text(dk_cfg_t *c, const char *text, uint32_t len) {
 
 }
 
+// -- a cursor file --------------------------------------------------
+
+// The line from `l` to `end` starts with `p`.
+static bool starts(const char *l, const char *end, const char *p) {
+	while (*p) if (l >= end || *l++ != *p++) return false;
+	return true;
+}
+
+bool dk_cursor_parse(const char *t, uint32_t len, uint16_t normal[16], uint16_t busy[16],
+	int *line) {
+
+	const char *e = t + len;
+	uint16_t *into = NULL;		// the sprite whose rows come next
+	int rows = 0, ln = 0, got = 0;
+
+	*line = 0;
+	while (t < e) {
+		const char *l = t, *end;
+		while (t < e && *t != '\n') t++;
+		end = t++;
+		ln++;
+		if (end > l && end[-1] == '\r') end--;
+		while (l < end && (*l == ' ' || *l == '\t')) l++;
+		if (into) {
+			uint16_t bits = 0;
+			if (end - l != 16) { *line = ln; return false; }
+			for (int c = 0; c < 16; c++)
+				if (l[c] != '.' && l[c] != '0') bits |= (uint16_t)(1u << c);
+			into[rows] = bits;
+			if (++rows == 16) into = NULL;
+		} else if (starts(l, end, "sprite normal ")) {
+			into = normal; got |= 1; rows = 0;
+		} else if (starts(l, end, "sprite busy ")) {
+			into = busy; got |= 2; rows = 0;
+		}
+	}
+	if (into) *line = ln;			// cut short
+	return !into && got == 3;
+
+}
+
 int dk_side_row(int side) {
 	return (side == DK_SIDE_LEFT || side == DK_SIDE_RIGHT) ? DK_ROW_TALL : DK_ROW_WIDE;
 }

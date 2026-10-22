@@ -64,6 +64,7 @@ defines =
     GPU_VGA
     GPU_DDMI
     COLOR
+    GAME_PLANES=8
     UART0
     USB_CDC
     USB_HOST

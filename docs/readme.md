@@ -55,7 +55,7 @@ with [welcome](welcome.md); to program it, [kernel](kernel.md) and
 | [gpu\_blitter](gpu_blitter.md) | Blitter developer guide |
 | [gpu\_raster](gpu_raster.md) | Line rasterizer developer guide |
 | [game\_mode](game_mode.md) | 320x240 viewport |
-| [color](color.md) | Game-mode colour: bitplanes and a 16-entry palette |
+| [color](color.md) | Game-mode colour: bitplanes and a palette (16 colours; 64 or 256 with `GAME_PLANES`) |
 | [composite](composite.md) | Composite NTSC/PAL output |
 | [audio](audio.md) | Hardware mixer and outputs |
 | [ddmi_audio](ddmi_audio.md) | Sound and display info over the DDMI connector (in progress) |
@@ -118,6 +118,7 @@ with [welcome](welcome.md); to program it, [kernel](kernel.md) and
 |---|---|
 | [window\_manager](window_manager.md) | `wm` developer guide |
 | [dock](dock.md) | the dock's files: `wm.cfg` (what it shows) and `dock.zic` (its icons) |
+| [cursor](cursor.md) | the hardware pointer: its four shapes, the large pair, Super+M, a cursor file of your own |
 | [responsive](responsive.md) | Staying responsive: long work in slices, progress, instant stop; `zco` coroutines, `zimgjob` |
 | [widgets](widgets.md) | Widgets and dialogs |
 | [libz](libz.md) | Runtime for zcc-compiled programs |

@@ -2,7 +2,10 @@
  * Zeitlos SOC GPU
  * Copyright (c) 2021 Lone Dynamics Corporation. All rights reserved.
  *
- * Cursor.
+ * Cursor -- the comparator cursor rtl/gpu/gpu_video.v's hardware
+ * cursor replaced (docs/cursor.md), kept here, renamed, as the
+ * reference rtl/gpu/bench/tb_cursor.v compares the new one against
+ * pixel for pixel. Not part of any build.
  *
  * Two hard-wired shapes from comparators. A smaller version (a lookup
  * by offset from the cursor) and a software-loaded sprite in the
@@ -11,7 +14,7 @@
  *
  */
 
-module gpu_cursor #()
+module gpu_cursor_ref
 (
 
 	input pclk,
@@ -30,7 +33,7 @@ module gpu_cursor #()
 
 	// 1 = no cursor: rtl/socctl.v's cursor_hide (CTRL bit 1), set by
 	// sw/apps/wm while a game holds the screen.
-	input curs_hide,
+	input curs_hide
 
 );
 

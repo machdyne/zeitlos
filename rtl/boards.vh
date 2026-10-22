@@ -153,6 +153,22 @@
 // opt in in their own block below: Lakritz, and every 45F board
 // (Mozart ML1/ML2, Sergei ML1/ML2, Noir, Schoko).
 //
+// `GAME_PLANES 6 or 8 -- with `COLOR, more than four bitplanes: 64 or
+// 256 colours through a 64- or 256-entry palette. VRAM grows by half a
+// sheet (640x240, +12 DP16KD) or a whole one (640x480, +20 DP16KD), and
+// planes 4..7 are planes 0..3 of that second sheet. The palette moves
+// into the cursor's block RAM on every colour board, so it costs no
+// block of its own. Without it a `COLOR board has four planes, as
+// before. Release boards: 6 on the 25F parts, 8 on the 45F ones.
+// docs/color.md, "More than four planes".
+//
+// `GPU_CURSOR_LUTRAM -- the cursor's four shapes and the game-mode
+// palette in distributed (LUT) RAM instead of their own DP16KD: one
+// block fewer for a few dozen LUTs (64 x 16 for the shapes, 64 x 12 for
+// a 6-plane palette). For a board one block short with six planes:
+// Mozart and Sergei ML0 (57 of 56 without it), and the lakritz_katze
+// release target. Same behaviour and timing as the block RAM.
+//
 // Without `GAME and `GPU it does nothing (rtl/sysctl.v ands them). On a
 // composite build it is NTSC/PAL colour, with black and white kept as
 // a setting -- see the COMPOSITE VIDEO section below. Software asks
@@ -584,6 +600,8 @@
 // Game-mode colour (docs/color.md). Paid for by MONTMUL_REGS and
 // SHA256 above.
 `define COLOR
+// 64 colours: +12 DP16KD of VRAM (docs/color.md, "More than four planes")
+`define GAME_PLANES 6
 `define UART0
 `define USB_HOST
 `define SPI_SDCARD
@@ -717,6 +735,12 @@
 `define GPU_CURSOR
 `define GPU_DDMI
 `define COLOR
+// 64 colours: +12 DP16KD of VRAM (docs/color.md, "More than four planes").
+// That is 57 of 56 here (yosys 0.70) -- the RMII MAC's four receive
+// slots are the difference from Lakritz -- so the cursor's shapes and
+// the palette go into LUT RAM to give one back.
+`define GAME_PLANES 6
+`define GPU_CURSOR_LUTRAM
 `define UART0
 `define USB_HOST
 `define SPI_SDCARD
@@ -768,6 +792,8 @@
 // Game-mode colour (docs/color.md): one block RAM and a few hundred
 // LUT4 on a 45F, which has plenty of both.
 `define COLOR
+// 256 colours: +20 DP16KD of VRAM (docs/color.md, "More than four planes")
+`define GAME_PLANES 8
 `define UART0
 // USB host controller (rtl/usb/, docs/usb_host.md) instead of the
 // low-speed HID-only rtl/ext/usb_hid_host. Both cores remain
@@ -853,6 +879,8 @@
 // Game-mode colour (docs/color.md): one block RAM and a few hundred
 // LUT4 on a 45F, which has plenty of both.
 `define COLOR
+// 256 colours: +20 DP16KD of VRAM (docs/color.md, "More than four planes")
+`define GAME_PLANES 8
 `define UART0
 // USB host controller (rtl/usb/, docs/usb_host.md) instead of the
 // low-speed HID-only rtl/ext/usb_hid_host. Both cores remain
@@ -924,6 +952,8 @@
 // Game-mode colour (docs/color.md): one block RAM and a few hundred
 // LUT4 on a 45F, which has plenty of both.
 `define COLOR
+// 256 colours: +20 DP16KD of VRAM (docs/color.md, "More than four planes")
+`define GAME_PLANES 8
 `define UART0
 // The console is the USB-C socket (`undef at the bottom drops
 // `UART0): Noir has no PMOD, so this is the console that needs no
@@ -1030,6 +1060,12 @@
 `define GPU_CURSOR
 `define GPU_DDMI
 `define COLOR
+// 64 colours: +12 DP16KD of VRAM (docs/color.md, "More than four planes").
+// That is 57 of 56 here (yosys 0.70) -- the RMII MAC's four receive
+// slots are the difference from Lakritz -- so the cursor's shapes and
+// the palette go into LUT RAM to give one back.
+`define GAME_PLANES 6
+`define GPU_CURSOR_LUTRAM
 `define UART0
 `define USB_HOST
 `define SPI_SDCARD
@@ -1078,6 +1114,8 @@
 // Game-mode colour (docs/color.md): one block RAM and a few hundred
 // LUT4 on a 45F, which has plenty of both.
 `define COLOR
+// 256 colours: +20 DP16KD of VRAM (docs/color.md, "More than four planes")
+`define GAME_PLANES 8
 `define UART0
 `define USB_HOST
 `define SPI_SDCARD
@@ -1311,6 +1349,8 @@
 // Game-mode colour (docs/color.md): one block RAM and a few hundred
 // LUT4 on a 45F, which has plenty of both.
 `define COLOR
+// 256 colours: +20 DP16KD of VRAM (docs/color.md, "More than four planes")
+`define GAME_PLANES 8
 `define UART0
 `define USB_HOST
 `define SPI_SDCARD
@@ -1609,6 +1649,8 @@
 // Game-mode colour (docs/color.md): one block RAM and a few hundred
 // LUT4 on a 45F, which has plenty of both.
 `define COLOR
+// 256 colours: +20 DP16KD of VRAM (docs/color.md, "More than four planes")
+`define GAME_PLANES 8
 `define UART0
 `define USB_CDC
 `define USB_HOST

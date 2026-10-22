@@ -45,6 +45,7 @@ Info: Device utilisation:
 Info:           TRELLIS_COMB: 18211/24288    74%
 Info:            TRELLIS_FF:   4102/24288    16%
 Info:          TRELLIS_RAMW:    204/ 3036     6%
+Info:                DP16KD:     37/   56    66%
 Info: Max frequency for clock '$glbnet$clk_48': 63.41 MHz (PASS at 48.00 MHz)
 Info: Max frequency for clock '$glbnet$vid_clk': 138.02 MHz (PASS at 125.00 MHz)
 """
@@ -311,7 +312,7 @@ def main():
               % len(reloaded["targets"]))
 
         for must in ("openFPGALoader", "## Flashing", "## Flash layout",
-                     "0x128000"):
+                     "0x128000", "Block RAM", "DP16KD 37/56"):
             if must not in text:
                 failures.append("NOTES.md is missing %r" % must)
         print("   NOTES.md contains the flash commands and the layout")

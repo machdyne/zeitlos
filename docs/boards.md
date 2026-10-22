@@ -70,6 +70,12 @@ becomes seed-sensitive. The percentage in the table is nextpnr's own.
 | Sergei ML1 | 45k | 18937 / 43848 (43%) | 8672 / 43848 (19%) | 42 / 108 | 11 / 72 | 2 / 4 |
 | ULX3S | 85k | 18771 / 83640 (22%) | 8722 / 83640 (10%) | 39 / 208 | 11 / 156 | 2 / 4 |
 
+These are from before the hardware cursor (+1 DP16KD on every board
+with a GPU, [cursor.md](cursor.md)) and `GAME_PLANES` (+12 DP16KD of VRAM
+on the 25F colour boards, +20 on the 45F ones, and on a 25F about as
+many LUTs saved in VRAM as `gpu_video` adds: [color.md](color.md#more-planes-game_planes)).
+The release NOTES.md lists each build's block RAMs as used/total.
+
 Three of those are the same design on two densities, or the same
 density with a different board:
 

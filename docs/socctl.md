@@ -43,8 +43,10 @@ Word-addressed, matching every other simple slave in this codebase.
 | `0x7000_0208` | VIDEO | bits 1:0: virtual phosphor mode. Bits 11:8: monochrome brightness on DDMI, written only with bit 15 set (see [Brightness](#brightness)). Reads back as `{0x5643, avail, 3'b0, level, 6'b0, mode}`. Mode reset value comes from the board's `GPU_*` defines; level resets to 7. |
 | `0x7000_0218` | RECONFIG | write the key `0x5A52_4254` (`"ZRBT"`), as one whole-word store, to pull PROGRAMN and reconfigure the FPGA -- reboot. Any other value or a partial store is ignored. Reads back as `{0x5A52, 15'b0, avail}`; `avail` is set only on boards defining `PROGRAMN_PIN`, and the request is forced off in hardware elsewhere. Software uses `z_reboot()`, which syncs open files first -- see `docs/zboot.md` section 6. |
 | `0x7000_021c` | DIRTY | bits 29:0: framebuffer stripes written since last cleared, one bit per 16 rows. **Write 1s to clear**; reading has no side effect. Resets to all ones. Present when `FEATURES2` bit 14 (`Z_FEATURE2_VRAM_DIRTY`) is set -- see [Framebuffer dirty stripes](#framebuffer-dirty-stripes). |
-| `0x7000_0224` | COLOR | game-mode colour: bit 0 enable, bits 2:1 planes−1, bits 13:8 plane 1..3 `{dy,dx}` offsets, bit 15 avail (R/O). Reads back as `{0x5A50, avail, …}`. Adopted with GAME/VIEW at a frame boundary; **a GAME write with bit 0 clear also clears the enable.** See [color.md](color.md). |
-| `0x7000_0234` | PALETTE | write-only, whole-word stores: bits 27:24 entry, bits 11:0 RGB444. Reads 0. See [color.md](color.md). |
+| `0x7000_0220` | CURSOR | the pointer's shapes ([cursor.md](cursor.md)): bits 1:0 the slot drawn as "normal", bits 5:4 the slot drawn as "busy" (CTRL bit 0 picks between them; **reset 0 and 1**, today's X and Z), bits 21:16 (lane 2) the address `{slot, row}` the next CURDATA row goes to. Reads back as `{0x5A4B, 10'b0, busy, 2'b0, normal}` on a bitstream with the shapes, 0 otherwise. |
+| `0x7000_023c` | CURDATA | write-only, whole words: one 16-pixel row of a shape, bit c = column c, 1 = invert; written to the address in CURSOR on the next clock, which then moves on by one. |
+| `0x7000_0224` | COLOR | game-mode colour: bit 0 enable, bits 3:1 planes−1 (stored as at most the bitstream's maximum), bits 5:4 XP (R/O: 0/1/2 = 4/6/8 planes, `GAME_PLANES`), bits 13:8 plane 1..3 `{dy,dx}` offsets, bit 15 avail (R/O). Reads back as `{0x5A50, avail, …}`. Adopted with GAME/VIEW at a frame boundary; **a GAME write with bit 0 clear also clears the enable.** See [color.md](color.md). |
+| `0x7000_0234` | PALETTE | write-only, whole-word stores: bits 31:24 entry (16, 64 or 256 entries; higher bits ignored), bits 11:0 RGB444. Reads 0. See [color.md](color.md). |
 | `0x7000_0238` | CVBS | composite colour: bit 0 MONO (black and white: no burst, the palette's brightness), bit 1 avail (R/O). Reads back as `{0x5A56, ..., avail, mono}`. See [composite.md](composite.md#colour). |
 | `0x7000_0228` | DDMI | DDMI audio: bit 0 EN (data islands, InfoFrames and sound on the DDMI output, from the next frame; resets to 0), bit 1 SOUND (with EN, the audio too; resets to 1), bits 7:4 FS (channel-status rate code), bit 8 avail and bit 9 sound avail (R/O), bits 13:12 REP (each frame sent 2^REP times). Reads back as `{0x5A44, ...}`. EN is set by the kernel from `system.video.ddmi_audio`; FS and REP by `zaudio.h` with the rate. See [ddmi_audio.md](ddmi_audio.md). |
 | `0x7000_022c` | ACRN | DDMI audio clock regeneration N, `[19:0]`; set by `zaudio.h`, resets to the power-on rate's. |
@@ -128,9 +130,11 @@ other had not seen yet. A second one needs its own bank.
 
 ## The busy cursor
 
-The mouse pointer is a hardware sprite (`rtl/gpu/gpu_cursor.v`)
+The mouse pointer is a hardware sprite ([cursor.md](cursor.md))
 composited at scanout, so software **cannot draw over it** -- CTRL bit
-0 is the only way to change its shape.
+0 is the only way to change its shape: between "normal" and "busy",
+which CURSOR maps to two of its four slots (X and Z unless wm loads
+other shapes).
 
 - **X** -- normal, the system is ready.
 - **Z** -- busy, wait.
@@ -162,7 +166,7 @@ the register.
 
 ### No cursor while a game has the screen
 
-CTRL bit 1 hides the cursor altogether (`gpu_cursor.v`'s `curs_hide`).
+CTRL bit 1 hides the cursor altogether (`gpu_video.v`'s `curs_hide`).
 `wm` sets it whenever an app holds the screen (`Z_WM_GAME_GRAB`, which
 `z_game_set_enabled()` sends): the picture is the game's, and the
 pointer is the game's business -- bricks moves its paddle with it, but

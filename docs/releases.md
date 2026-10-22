@@ -487,7 +487,10 @@ yellow ones:
 
 The Fmax column gives each clock's target in brackets; the utilisation
 column shows the logic cells, and any other resource only when it is
-marked. Thresholds: `WARN_MHZ` and `WARN_PCT` in `release/lib/notes.py`.
+marked; the block RAM column always shows the blocks used of what the
+part has (`DP16KD 37/56` on ECP5, `RAMB18E1`/`RAMB36E1` on 7-series,
+`CC_BRAM_*` on GateMate), from the same place-and-route report.
+Thresholds: `WARN_MHZ` and `WARN_PCT` in `release/lib/notes.py`.
 
 **Only the final report counts.** nextpnr prints Fmax twice — once from
 a placement estimate and again after routing with real delays. Reading

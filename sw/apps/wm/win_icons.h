@@ -29,7 +29,7 @@
  */
 
 // Z_ICON_CLOSE: an 8x8 hollow box -- deliberately NOT an X. The mouse
-// cursor itself is drawn as an X (rtl/gpu/gpu_cursor.v), so a close
+// cursor itself is drawn as an X (docs/cursor.md), so a close
 // icon shaped the same way as the pointer sitting on top of it would
 // be genuinely hard to read at a glance, not just an aesthetic
 // mismatch.

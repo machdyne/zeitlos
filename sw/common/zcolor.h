@@ -22,6 +22,14 @@
  * by 320 columns, 240 rows or both, modulo 640x480. A pixel's colour
  * is bit k from plane k, through a 16-entry palette.
  *
+ * On a GAME_PLANES bitstream (z_color_planes_max() 6 or 8) there are
+ * planes 4..7 too, in a second sheet of VRAM below the screen
+ * (framebuffer rows 480 up): plane 4+j sits there where plane j sits
+ * in the first, and the palette has 64 or 256 entries. On a 6-plane
+ * bitstream that sheet is 240 rows, folded the same way. zcolor draws
+ * there through the same blitter calls (z_color_begin() lets them past
+ * row 479: z_fb_set_rows()).
+ *
  * Every function here takes coordinates IN PLANE 0 -- the same
  * framebuffer coordinates a monochrome game draws at -- and works out
  * the other planes itself. Plane 0 coordinates may run past 639 or 479
@@ -43,8 +51,10 @@
 
 #include "zsoc.h"
 
-/* Where the planes are. `planes` is 1..4; `offsets` is
- * Z_COLOR_OFFSETS(p1, p2, p3) from zsoc.h. */
+/* Where the planes are. `planes` is 1..8; `offsets` is
+ * Z_COLOR_OFFSETS(p1, p2, p3) from zsoc.h, and planes 4..7 take plane
+ * 0..3's in the second sheet. More planes than the machine shows are
+ * not drawn (z_color_hw_planes()). */
 typedef struct {
 	uint8_t planes;
 	uint8_t offsets;
@@ -71,12 +81,27 @@ typedef struct {
  *
  *   z_color_mono      one plane: monochrome game mode, through the
  *                     palette (entries 0 and 1).
+ *
+ *   z_color_32        z_color_16, plus plane 4 in the second sheet.
+ *   z_color_64        ... plus planes 4 and 5 side by side (+320):
+ *                     the most a 6-plane bitstream shows.
+ *   z_color_256       z_color_16 in both sheets: eight planes.
+ *                     Viewport fixed at (0,0), as z_color_16.
  */
 extern const z_color_layout_t z_color_16;
 extern const z_color_layout_t z_color_8;
 extern const z_color_layout_t z_color_4_right;
 extern const z_color_layout_t z_color_4_below;
 extern const z_color_layout_t z_color_mono;
+extern const z_color_layout_t z_color_32;
+extern const z_color_layout_t z_color_64;
+extern const z_color_layout_t z_color_256;
+
+/* The planes this machine shows, z_color_planes_max() read once: 4, 6
+ * or 8, or 0 without colour. z_color_assume_planes() sets it instead --
+ * for a host test, or a program that wants to draw as if it had fewer. */
+int z_color_hw_planes(void);
+void z_color_assume_planes(int n);
 
 /* The power-on hardware palette (EGA order), and the Commodore 64's
  * (black, white, red, cyan, ... -- 0 black and 1 white, so a
@@ -84,16 +109,20 @@ extern const z_color_layout_t z_color_mono;
 extern const uint16_t z_color_palette_ega[16];
 extern const uint16_t z_color_palette_c64[16];
 
-/* Colour on, with this layout. Adopted at the next frame boundary,
- * together with any GAME/VIEW write in the same frame. False on a
- * machine without colour (z_color_available()). Game mode must be on
- * for it to show; turning game mode off turns colour off. */
+/* Colour on, with this layout (its planes cut to what the machine
+ * shows). Adopted at the next frame boundary, together with any
+ * GAME/VIEW write in the same frame. False on a machine without colour
+ * (z_color_available()). Game mode must be on for it to show; turning
+ * game mode off turns colour off. With more than four planes it also
+ * lets zgfx's fills and blits reach the second sheet (z_fb_set_rows());
+ * z_color_end() puts that back. */
 bool z_color_begin(const z_color_layout_t *l);
 
 /* Colour off; game mode is left as it is. */
 void z_color_end(void);
 
-/* Load n palette entries starting at 0, at a frame boundary: waits for
+/* Load n palette entries starting at 0 (up to 256; entries past the
+ * palette's size land on lower ones), at a frame boundary: waits for
  * the next one (z_game_wait_frame()) first, so the change cannot land
  * mid-picture. Up to 16.7ms. */
 void z_color_palette_load(const uint16_t *rgb444, int n);
@@ -141,7 +170,7 @@ bool z_color_blit_sprite(const z_color_layout_t *l,
  * The building blocks of everything above, for drawing that does not
  * fit them: a two-colour tile (one colour where the bitmap is set,
  * another where it is clear), a sprite with an outline in a second
- * colour. Same coordinates, same torus split. `plane` is 0..3. */
+ * colour. Same coordinates, same torus split. `plane` is 0..7. */
 void z_color_plane_fill(const z_color_layout_t *l, int plane,
 	int x, int y, int w, int h, int bit);
 bool z_color_plane_blit(const z_color_layout_t *l, int plane,

@@ -101,7 +101,7 @@ module usb_hid_compat #(
     output wire [31:0] reg_cursor,
     output wire [31:0] reg_pad,
 
-    // -- into gpu_cursor.v --
+    // -- into the hardware cursor (rtl/gpu/gpu_video.v) --
     output reg [9:0] curs_x,
     output reg [9:0] curs_y,
     output wire [1:0] typ,

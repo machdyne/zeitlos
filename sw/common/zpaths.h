@@ -182,6 +182,10 @@
 #define Z_DIR_WM_DATA             "/data/wm"
 #define Z_PATH_WM_CONFIG          "/data/wm/wm.cfg"
 #define Z_PATH_WM_ICONS           "/data/wm/dock.zic"
+// The large pair of pointer shapes, when the card has it: a .zsp with
+// two 16x16 sprites, `normal` and `busy` (docs/cursor.md). Not in
+// flash: without it the large pair is the built-in 9x9 X and Z.
+#define Z_PATH_WM_CURSOR          "/data/wm/cursor.zsp"
 
 /* vi, nextvi in a term window (docs/posix.md) */
 #define Z_PATH_VI_ARGS            "/tmp/vi.args"

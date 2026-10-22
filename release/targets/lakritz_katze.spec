@@ -45,6 +45,15 @@
 # every Lakritz build, so Katze taking all eight PMOD pins costs nothing
 # there.
 
+# -- Six bitplanes, the cursor and palette in LUT RAM --
+#
+# Lakritz has `GAME_PLANES 6 (docs/color.md, "More than four planes"),
+# which is 12 more DP16KD of VRAM. With the RMII MAC's four receive
+# slots this target would need 57 of the 25F's 56 (yosys 0.70, before
+# placement), so GPU_CURSOR_LUTRAM moves the cursor's shapes and the
+# palette out of their block RAM into LUT RAM: 56 of 56, for a few
+# dozen LUTs. Not yet placed: this is the target to check first.
+
 description = Lakritz + Katze RMII Ethernet PMOD
 
 base  = lakritz
@@ -53,3 +62,4 @@ pmods = katze@a
 defines =
 	-SPI_ETH
 	ETH_RX_SLOTS=4
+	GPU_CURSOR_LUTRAM

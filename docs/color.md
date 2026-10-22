@@ -1,7 +1,10 @@
 # Colour
 
 Game-mode colour: up to 16 colours in the 320x240 game-mode viewport,
-from the unchanged 640x480x1bpp framebuffer, for one block RAM.
+from the unchanged 640x480x1bpp framebuffer, for one block RAM -- and
+64 or 256 colours on boards built with `GAME_PLANES` 6 or 8, from a
+second sheet of VRAM below the screen ([More than four
+planes](#more-than-four-planes)).
 
 The desktop stays monochrome. Nothing about the 640x480 mode, the
 framebuffer, the blitter, the rasterizer or any existing program
@@ -25,7 +28,8 @@ as extra **bitplanes** of the same picture:
 ```
 
 Each pixel's colour index is one bit from each plane at the same
-position, and a 16-entry palette turns the index into a colour.
+position, and a 16-entry palette turns the index into a colour (64 or
+256 entries with [more planes](#more-than-four-planes)).
 
 That framing is what keeps it cheap and compatible:
 
@@ -82,6 +86,84 @@ arithmetic, not a special case: a layout whose planes are side by side
 has no horizontal scroll room, and the hardware does not pretend
 otherwise.
 
+## More than four planes
+
+A board built with `GAME_PLANES 6` or `GAME_PLANES 8` (`rtl/boards.vh`,
+with `COLOR`) shows up to six or eight planes: 64 or 256 colours
+through a palette of 64 or 256 entries. A board without it has four,
+as before, and software asks `z_color_planes_max()`.
+
+```
+  sheet 0: VRAM words 0..9599          sheet 1: words 9600 up
+  (framebuffer rows 0..479)            (rows 480..959, or 480..719)
+  +-----------+-----------+            +-----------+-----------+
+  |  plane 0  |  plane 1  |            |  plane 4  |  plane 5  |
+  +-----------+-----------+            +-----------+-----------+
+  |  plane 2  |  plane 3  |            |  plane 6  |  plane 7  |   (8 only)
+  +-----------+-----------+            +-----------+-----------+
+```
+
+- **Planes 4..7 are planes 0..3 of a second sheet.** VRAM grows from
+  one 640x480 sheet to one and a half (6 planes, 14,400 words) or two
+  (8 planes, 19,200 words). Plane 4+j sits in the second sheet exactly
+  where plane j sits in the first, 480 rows further on, with plane j's
+  offsets: no new offset bits, and every layout above works in both
+  sheets at once.
+- **Six planes: the second sheet is 240 rows**, and plane 4/5's row is
+  taken mod 240. So a 6-plane layout keeps planes 0 and 1 apart by dx,
+  as `z_color_16` (and `z_color_64`) do; planes 4 and 5 then sit side by
+  side. A plane 1 at dy would put plane 5 on top of plane 4.
+- **The desktop never sees it.** Rows 480 up are below the screen and
+  outside DIRTY (the screen streamer); only game-mode colour reads them.
+- **Drawing is unchanged.** The blitter and rasterizer address rows up
+  to 959 already (17-bit VRAM byte addresses, an 11-bit scissor).
+  zcolor.h draws there through the same `zgfx` calls, which a game lets
+  past row 479 with `z_fb_set_rows()` -- `z_color_begin()` does it.
+- **Cost:** +12 DP16KD (6 planes) or +20 (8) of VRAM, and on the 25F
+  boards about the same number of LUTs as before (below). The palette
+  moved into the cursor's block RAM on every colour board, so a bigger
+  one costs no block of its own. See [Cost](#cost).
+
+| `GAME_PLANES` | Colours | VRAM words | VRAM DP16KD | Boards |
+|---|---|---|---|---|
+| (none) | up to 16 | 9,600 | 20, and a read mux (about 220 LUT4) | 12F, ULX3S, 7-series |
+| 6 | up to 64 | 14,400 | 32, no read mux | Lakritz, Mozart ML0, Sergei ML0 (25F) |
+| 8 | up to 256 | 19,200 | 40, and the same mux as 9,600 | Mozart ML1/ML2, Sergei ML1/ML2, Noir, Schoko (45F) |
+
+DP16KD here are true dual port (the CPU and the scanout each have a
+port), so at most 18 bits wide. Yosys (0.70, and 0.33 the same) builds
+9,600 words from 20 blocks several deep, with a read multiplexer on each
+port. For 14,400 it uses the 16,384 x 1 shape, 32 blocks side by side
+and no multiplexer at all: two blocks more than the tightest packing
+(15 pairs of 1,024 x 18 would be 30) and about 210 LUT4 fewer than the
+9,600-word VRAM it replaces. The 25F boards are as short of LUTs as of
+block RAM (Lakritz runs at 96–98% of its LUTs), so that is the better
+trade. Packings of 30 were built and measured -- fifteen 1,024-word
+banks, and a 14,336 + 64 split -- and yosys gives both 15:1 read
+multiplexers, 1,000 LUT4 and more. 19,200 is 40 blocks with the
+multiplexer again; splitting it at 16,384 to reach 38 came out larger
+too.
+
+### One game, any number of planes
+
+The same game should run on every board: in 256 colours where there
+are eight planes, in 64 or 16 where there are fewer, as fast either
+way. The hardware side is above; the rest is how art is stored and
+loaded, and it comes with pix, the pixel editor (planned):
+
+- Art keeps up to 8 bits a pixel and a 256-entry palette whose first 16
+  (and first 64) entries are the smaller palettes, plus, for each
+  entry, which entry stands in for it at 64, 16, 4 and 2 colours.
+- A game asks `z_color_planes_max()` and loads its art reduced to
+  that once, at load time, into that many planes. Drawing is then the
+  same code over fewer planes, so a 16-colour board draws exactly as
+  fast as it does today.
+
+Until then, `zcolor.h` draws as many of a layout's planes as the
+machine shows and drops the rest: a 256-colour picture on a 16-colour
+machine shows its low four planes (the power-on palette is built for
+that, below).
+
 ## Registers
 
 In `socctl` (`rtl/socctl.v`), alongside GAME and VIEW
@@ -89,8 +171,16 @@ In `socctl` (`rtl/socctl.v`), alongside GAME and VIEW
 
 | Address | Name | Contents |
 |---|---|---|
-| `0x7000_0224` | COLOR | W: bit 0 EN, bits 2:1 planes−1, bits 9:8 / 11:10 / 13:12 plane 1/2/3 `{dy,dx}`. R: `{ 0x5A50, avail, 0, offsets, 0, np, en }` |
-| `0x7000_0234` | PALETTE | W only, whole-word store: bits 27:24 entry, bits 11:0 RGB444. Reads 0 |
+| `0x7000_0224` | COLOR | W: bit 0 EN, bits 3:1 planes−1, bits 9:8 / 11:10 / 13:12 plane 1/2/3 `{dy,dx}`. R: `{ 0x5A50, avail, 0, offsets, 00, xp, np, en }` |
+| `0x7000_0234` | PALETTE | W only, whole-word store: bits 31:24 entry, bits 11:0 RGB444. Reads 0 |
+
+- **XP** (bits 5:4, read-only) is the most planes the bitstream
+  shows: 0 = 4, 1 = 6, 2 = 8. An older bitstream reads 0 there.
+- **NP** is three bits now. A count above XP's is stored as the
+  maximum, and reads back so. A bitstream from before `GAME_PLANES`
+  ignores bit 3, so software asks for at most `z_color_planes_max()`.
+- **PALETTE's entry** is eight bits; those above the palette's size
+  (16, 64 or 256 entries) are ignored. Older bitstreams decode 27:24.
 
 COLOR is part of the GAME/VIEW payload: a write to any of the three
 flips the same load toggle, and the whole payload is adopted at one
@@ -149,9 +239,12 @@ if (z_color_available()) {
 
 | Function | Does |
 |---|---|
-| `z_color_set(on, planes, offsets)` | enable, plane count 1..4, plane 1..3 offsets |
+| `z_color_set(on, planes, offsets)` | enable, plane count 1..8, plane 1..3 offsets |
 | `z_color_enabled()`, `z_color_planes()` | read back |
-| `z_color_set_palette(index, rgb444)` | one palette entry |
+| `z_color_planes_max()` | 4, 6 or 8 (0 without colour) |
+| `z_color_palette_size()` | 16, 64 or 256 |
+| `z_color_rows()` | framebuffer rows there is VRAM for: 480, 720 or 960 |
+| `z_color_set_palette(index, rgb444)` | one palette entry, index 0..255 |
 
 This is the register layer only; the drawing layer is
 [`zcolor.h`](#the-colour-runtime-swcommonzcolorh).
@@ -174,13 +267,20 @@ hang on one that does).
 | `z_color_4_right` | 2, plane 1 at +320 | left half | flip y 0/240, or zgame's vertical scroll |
 | `z_color_4_below` | 2, plane 1 at +240 | top half | flip x 0/320, or zgame's horizontal scroll |
 | `z_color_mono` | 1 | anywhere | monochrome through the palette |
+| `z_color_32` | 5: `z_color_16` + plane 4 | (0,0) | 32 colours, 6- or 8-plane boards |
+| `z_color_64` | 6: + planes 4, 5 side by side | (0,0) | 64 colours, the most a 6-plane board shows |
+| `z_color_256` | 8: `z_color_16` in both sheets | (0,0) | 256 colours, 8-plane boards |
+
+A layout with more planes than the machine shows draws only the
+planes it has (`z_color_hw_planes()`; `z_color_assume_planes(n)`
+pretends to have n, for host tests).
 
 | Function | Does |
 |---|---|
 | `z_color_begin(&layout)`, `z_color_end()` | colour on with a layout, or off |
 | `z_color_palette_load(pal, n)` | n entries, after the next frame boundary |
 | `z_color_palette_load_now(pal, n)` | the same, for a caller that has just waited |
-| `z_color_plane_xy(&l, k, x, y, &px, &py)` | where plane k of (x,y) is |
+| `z_color_plane_xy(&l, k, x, y, &px, &py)` | where plane k of (x,y) is (planes 4..7 in rows 480 up) |
 | `z_color_fill_rect(&l, x, y, w, h, c)` | a rectangle in colour c |
 | `z_color_blit_mono(&l, src, ..., c)` | a 1bpp bitmap in colour c, transparent elsewhere |
 | `z_color_blit_planes(&l, src[], ...)` | an opaque n-plane image (a NULL plane clears) |
@@ -193,8 +293,10 @@ same through it) are ready-made palettes.
 Tested on a host by `sw/common/tests/test_zcolor.c` (`make -f
 Makefile.zcolor`): a software blitter and scanout, every layout,
 rectangles inside and across both seams and from negative and folded
-origins, every drawing call, and nothing outside the rectangle touched.
-It fails when the seam split is broken.
+origins, every drawing call, and nothing outside the rectangle touched,
+on 4-, 6- and 8-plane machines (the 256-colour layout on a 6-plane one
+too). It fails when the seam split is broken, and when the second
+sheet's height is.
 
 ## Programs
 
@@ -258,16 +360,20 @@ brick colours rotate through the letters. C toggles colour.
 
 ## The palette
 
-Sixteen entries of RGB444, written through PALETTE. Power-on contents
-are the EGA/CGA 16 colours:
+Sixteen entries of RGB444 -- 64 or 256 with `GAME_PLANES` -- written
+through PALETTE. Power-on contents are the EGA/CGA 16 colours:
 
 | | | | | | | | |
 |---|---|---|---|---|---|---|---|
 | 0 `000` black | 1 `00a` blue | 2 `0a0` green | 3 `0aa` cyan | 4 `a00` red | 5 `a0a` magenta | 6 `a50` brown | 7 `aaa` light grey |
 | 8 `555` dark grey | 9 `55f` light blue | 10 `5f5` light green | 11 `5ff` light cyan | 12 `f55` light red | 13 `f5f` light magenta | 14 `ff5` yellow | 15 `fff` white |
 
-Reset does not reload these: the palette is distributed RAM, which has
-no reset. A game sets the palette it wants.
+With more entries, entry *i* powers on as EGA colour *i* mod 16, so a
+64- or 256-colour picture shows as its low four planes until a game
+sets its own palette.
+
+Reset does not reload these: the palette is block RAM, which has no
+reset. A game sets the palette it wants.
 
 A palette write takes effect immediately, not at a frame boundary. A
 write that lands mid-picture can show as one wrong pixel. Write the
@@ -279,7 +385,7 @@ are a handful of stores per frame.
 
 | Output | What the palette becomes |
 |---|---|
-| DDMI (HDMI/DVI) | each 4-bit channel doubled to 8 bits: any 16 of 4096 colours |
+| DDMI (HDMI/DVI) | each 4-bit channel doubled to 8 bits: any 16 (64, 256) of 4096 colours |
 | VGA | the **top bit** of each channel: at most the 8 RGB primaries and secondaries |
 | Composite | NTSC or PAL colour from a synthesised subcarrier; black and white available as a setting ([composite.md](composite.md#colour)) |
 
@@ -328,11 +434,13 @@ plane. So:
   game mode.
 
 Every coloured draw costs one blitter pass per plane. 4 colours is
-twice the monochrome cost, 16 colours four times.
+twice the monochrome cost, 16 colours four times, 256 colours eight.
 
 To find plane *k* of a point (x,y) in viewport coordinates: start from
 the viewport origin, add 320 to x if plane *k* has dx, add 240 to y if
-it has dy, wrap modulo 640x480.
+it has dy, wrap modulo 640x480. For plane 4..7, take plane 0..3's
+point and add 480 rows -- after taking the row mod 240 on a 6-plane
+board.
 
 ## How it works
 
@@ -341,7 +449,7 @@ All in `rtl/gpu/gpu_video.v`, behind its `COLOR_AVAIL` parameter.
 ### Plane 0
 
 The framebuffer row every mode uses, refilled once per physical line
-into row 3 of the line buffer below and read exactly like planes 1..3:
+into row 0 of the line buffer below and read exactly like planes 1..7:
 a held word `cur0`, indexed by the loadable column counter `x`. (It
 used to be `hline`, a 640-bit register read through a 640:1 mux; see
 "The line buffer in block RAM" below.)
@@ -349,41 +457,48 @@ used to be `hline`, a 640-bit register read through a 640:1 mux; see
 ### The plane fetch (48 MHz, `clk`)
 
 After the row's 20 words, the same refill fetches three more rows of 20
-words — planes 1, 2 and 3 for the same line — into the same line buffer.
+words — planes 1, 2 and 3 for the same line, and 4..7 with `GAME_PLANES`
+— into the same line buffer.
 It uses the VRAM graphics port, which is dedicated to scanout and
 otherwise idle in blanking, so it costs the CPU, blitter and rasterizer
 nothing.
 
 - **Timing.** 60 words at 48 MHz is 1.25 µs. With the row refill
   and the clock crossing, it finishes about 45 pixel clocks into a
-  160-clock horizontal blanking interval. Nothing reads the buffer until
-  24 clocks before the line starts.
+  160-clock horizontal blanking interval; eight planes (140 words)
+  about 90 in. Nothing reads the buffer until 24 clocks before the line
+  starts (136).
 - **Rows.** Every plane's row is either the viewport's row or that row
   plus 240 (mod 480). The second is computed in the pixel domain,
   already multiplied by 20, and crosses with the same toggle and margin
-  the plane 0 row has always used. The 48 MHz side adds a word index to
-  a latched base, the same depth as the existing refill address.
+  the plane 0 row has always used. The second sheet's two rows (or one,
+  mod 240, at six planes) are worked out in the pixel domain too, one
+  clock later, already as VRAM word addresses. Every plane's base is
+  latched when the row refill ends, and the 48 MHz side adds a word
+  index to the current one; the next plane's base is chosen between
+  registers, off that path.
 - **Whole rows, natural order.** The horizontal offset is not applied
   here. Whole rows are fetched and the read side picks the word.
 - **Every plane, always.** The port is idle anyway, and skipping words
   would cost a comparison in the clock domain with no slack.
 
-The buffer is 4 x 20 words, rows 0..2 the planes and row 3 plane 0: one
-DP16KD on ECP5, one RAMB18 on 7-series.
+The buffer is up to 8 x 20 words, row *p* plane *p*: 256 words of one
+DP16KD on ECP5, one RAMB18 on 7-series, at any plane count.
 
 ### The read side (25.2 MHz, `pclk`)
 
-Each plane holds its current 32-bit word (`cur0..cur3`) and the next one
-(`nxt0..nxt3`). The pixel's bit is `cur[x[4:0]]`.
+Each plane holds its current 32-bit word (`cur0..cur7`) and the next one
+(`nxt0..nxt7`). The pixel's bit is `cur[x[4:0]]`.
 
 That one index serves every plane because a 320-column offset is
 exactly ten words. All planes cross word boundaries on the same pixel,
 and dx becomes "read word (w+10) mod 20" rather than an arithmetic
 shift.
 
-- **At a word crossing**, `cur` takes `nxt`, and a seven-clock pass
-  refills `nxt` from the buffer (four registered reads). The next
-  crossing is at least 64 clocks away in game mode, 32 on the desktop.
+- **At a word crossing**, `cur` takes `nxt`, and a pass of planes + 3
+  clocks (seven at four planes, eleven at eight) refills `nxt` from the
+  buffer, one registered read per plane. The next crossing is at least
+  64 clocks away in game mode, 32 on the desktop.
 - **At the start of a line**, a preload pass loads the viewport's first
   word, moves it to `cur`, and loads the word after it. `x` already
   holds the origin through blanking, so a non-word-aligned origin is
@@ -391,10 +506,26 @@ shift.
 
 ### Index, palette, output
 
-The colour index is `{p3,p2,p1,p0}` masked to the active planes and
-XORed with the cursor. It reads the palette, a 16 x 12 distributed RAM
-written in the wishbone domain and read asynchronously here. Blanking
-is forced black.
+The colour index is `{p7..p0}` masked to the active planes and XORed
+with the cursor. It addresses the palette: words 256..511 of the
+cursor's block RAM ([cursor.md](cursor.md)), written through its write
+port in the wishbone domain, read through its registered read port
+here. The cursor reads its row through the same port on one clock a
+line, in horizontal blanking, and holds it in a register.
+
+The read is registered, so a pixel's colour arrives one clock after its
+index. On VGA and DDMI that clock is taken back by starting `x` one
+clock early while colour is on: the index runs a clock ahead and the
+palette lands on the raster, so blanking, sync and the picture keep
+their timing. Colour is only on in game mode, where a source pixel
+lasts two clocks, so the early clock is the first half of the first
+pixel. On composite the read is the first of the two stages that path
+already had. Blanking is forced black.
+
+The 16-entry palette used to be distributed RAM read through a 16:1
+mux in the pixel path; at 64 or 256 entries that would have been
+hundreds of LUTs. In the block RAM, a palette of any size costs neither
+LUTs nor a block, and the pixel path ends in a register.
 
 ### Where the logic is
 
@@ -439,24 +570,20 @@ port (48 MHz) is busy only during horizontal blanking and its read port
 (pixel clock) only for a few clocks every 32 or 64 pixels. Options
 noted for later, none implemented:
 
-- **A cursor sprite.** The pointer is now drawn by `rtl/gpu/gpu_cursor.v`
-  as two hard-wired 5x5 shapes (X and Z) built from comparators, about
-  255 LUTs. A software-loaded 16x16 or 32x32 image plus mask here, one
-  row read per line in blanking (alongside the preload pass) into a
-  shift register, would give a real arrow, I-beam or busy pointer of
-  any shape for roughly the same logic. CPU writes would share the
-  write port with the refill (the refill wins; a write waits for the
-  end of the burst).
-- **The cursor without block RAM.** Short of that, the same two shapes
-  as a lookup indexed by the pixel's offset from the cursor (two
-  subtractors and a 25-bit table) measured 129 LUTs against 255, and
-  matched the current module on 3.4 million sampled positions (every
-  cursor position along all four edges, plus random ones).
+- **A cursor sprite.** Done, though not in this buffer: the pointer is
+  now drawn from four loadable 16x16 shapes in a block RAM of its own
+  ([cursor.md](cursor.md)). Sharing this one would have needed its
+  write port for the CPU as well (a 32-bit multiplexer in front of it)
+  or its read port to write (true dual port, two blocks at this width),
+  and a block RAM is what the design has to spare, not logic. It
+  replaced `gpu_cursor.v`'s comparators for fewer LUTs than they took.
 - **A few hardware sprites for games.** The cursor sprite generalised:
   three or four more 32x32 1bpp sprites with masks would fit in the
   free space, each costing a position compare and a shift register.
-- **Not the palette.** It is read every pixel, and the read port is
-  shared with the plane passes, so it stays in distributed RAM.
+- **Not the palette, here.** It is read every pixel, and this read
+  port is shared with the plane passes. It went into the cursor's
+  block RAM instead, whose read port the cursor needs only once a line
+  (above).
 
 ## Cost
 
@@ -493,24 +620,94 @@ figure -- Lakritz measured at 98% with colour, all clocks passing
 Other costs: no VRAM (the planes are framebuffer that already exists),
 and 60 more words per line on the scanout-only VRAM port.
 
+### More planes (`GAME_PLANES`)
+
+Measured on the pieces, as for the cursor ([cursor.md](cursor.md),
+"Cost"): `gpu_video` with DDMI, colour and the cursor, synthesised with
+yosys 0.33 (`synth_ecp5 -abc9`) and placed out of context with
+nextpnr-ecp5 0.6 on an LFE5U-25F, five seeds each. "Before" is the
+cursor round (the 16-entry palette in distributed RAM).
+
+| | Before | 4 planes | 6 planes | 8 planes |
+|---|---|---|---|---|
+| LUTs (TRELLIS_COMB, placed) | 1,651 | 1,699 | 1,870 | 2,076 |
+| flip-flops | 724 | 747 | 938 | 1,150 |
+| DP16KD (line buffer, cursor + palette) | 2 | 2 | 2 | 2 |
+| pixel clock Fmax, five seeds (needs 25.2) | 46.7–47.9 (mean 47.4) | 48.1–50.2 (49.3) | 44.7–46.5 (45.5) | 47.3–49.3 (48.6) |
+| wishbone clock Fmax (needs 48) | 109.8–129.9 (124.8) | 135.6–143.9 (140.3) | 134.2–140.1 (136.8) | 114.6–133.6 (126.7) |
+
+And VRAM (yosys 0.70 and 0.33 agree), the other half of the bill:
+
+| | 4 planes (9,600 words) | 6 planes (14,400) | 8 planes (19,200) |
+|---|---|---|---|
+| DP16KD | 20 | 32 (+12) | 40 (+20) |
+| LUT4 (the read multiplexers) | about 220 | about 10 (−210) | about 220 |
+
+- **On a 25F with six planes the LUTs come out about even**: about +220
+  in `gpu_video` (two more plane words and their muxes, the second
+  sheet's row arithmetic and its crossing) and about −210 in VRAM. The
+  bill is 12 block RAMs.
+- **Both clocks keep their margin.** The wishbone clock is the one that
+  matters (r6 of the cursor lost 15 MHz of it): every plane count is at
+  or above the cursor round's mean. That took one change: the first
+  version latched all eight row bases from one branch of the fetch
+  sequencer, which fanned out to 105 flip-flops and cost 22 MHz at eight
+  planes (mean 102). The bases are now latched by a registered strobe of
+  their own, and the next plane's base is chosen between registers,
+  off the address adder's path.
+- **Four planes** (a `COLOR` board without `GAME_PLANES`): +48 LUTs, a
+  little more than the 16-entry LUT RAM palette it replaces, and both
+  clocks faster than before.
+- The pixel clock's critical path is still the framebuffer word's 32:1
+  mux into the palette's address; at 6 planes 45 MHz against 25.2.
+- `socctl`: +2 LUT4 and +5 flip-flops (the wider plane count and
+  palette index).
+
 ## Boards
 
 `COLOR` is a per-board define in `rtl/boards.vh`, not universal like
 `GAME`: it needs no pins, but it costs a block RAM and logic.
 
-| Board | `COLOR` | Notes |
-|---|---|---|
-| Lakritz | on | With `USB_HOST`, `USB_CDC` and `AUDIO_MIXER`; paid for by dropping `MONTMUL`, `MONTMUL_REGS` and `SHA256`. 98% full, all clocks pass. TLS and SSH fall back to software: slower, same answers. See [boards.md](boards.md#lakritz-with-game-mode-colour). |
-| Mozart ML1, ML2 | on | 45F: plenty of block RAM and logic |
-| Sergei ML1, ML2 | on | 45F |
-| Noir | on | 45F |
-| Schoko | on | 45F, VGA and DDMI: VGA shows the top bit of each channel |
-| everything else | off | 12F and 25F boards other than Lakritz, iCE40, GateMate, 7-series, composite |
+| Board | `COLOR` | `GAME_PLANES` | Notes |
+|---|---|---|---|
+| Lakritz | on | 6 | With `USB_HOST`, `USB_CDC` and `AUDIO_MIXER`; paid for by dropping `MONTMUL`, `MONTMUL_REGS` and `SHA256`. 98% full, all clocks pass (before `GAME_PLANES`). TLS and SSH fall back to software: slower, same answers. See [boards.md](boards.md#lakritz-with-game-mode-colour). |
+| Mozart ML0, Sergei ML0 | on | 6 | 25F, with `GPU_CURSOR_LUTRAM` (below) |
+| Mozart ML1, ML2 | on | 8 | 45F: plenty of block RAM and logic |
+| Sergei ML1, ML2 | on | 8 | 45F |
+| Noir | on | 8 | 45F |
+| Schoko | on | 8 | 45F, VGA and DDMI: VGA shows the top bit of each channel |
+| everything else | off | — | 12F and 25F boards other than these, iCE40, GateMate, 7-series, composite |
 
 On a composite build of a board with `COLOR`, colour goes out as a
 real NTSC or PAL colour signal -- see
 [composite.md](composite.md#colour), which also covers keeping black and
 white for TVs that do not cope.
+
+### Block RAM per release target
+
+Counted with yosys 0.70 (`synth_ecp5` up to LUT mapping, where block
+RAMs are final), every colour target, with the cursor and `GAME_PLANES`:
+
+| Target | Planes | DP16KD |
+|---|---|---|
+| lakritz_gpio, lakritz_langkatze, lakritz_ddmi_audio | 6 | 52 / 56 |
+| lakritz_kabellos | 6 | 56 / 56 (the ESP32 receive FIFO's four) |
+| lakritz_katze | 6 | 57 / 56 with the cursor's block; 56 / 56 with `GPU_CURSOR_LUTRAM` |
+| mozart_ml0, sergei_ml0 | 6 | the same: 57, and 56 with `GPU_CURSOR_LUTRAM` |
+| mozart_ml1, mozart_ml2, sergei_ml2 | 8 | 67 / 108 |
+| sergei_ml1 | 8 | 68 / 108 |
+| noir | 8 | 64 / 108 |
+| schoko_langkatze_gpio | 8 | 63 / 108 |
+
+The three at 57 all have the RMII MAC with four receive slots (5
+DP16KD; `rtl/ethmac_rmii.v`). They build with `GPU_CURSOR_LUTRAM`
+(`rtl/boards.vh`): the cursor's four shapes (64 x 16) and the palette
+(64 x 12) go into LUT RAM, read the same way and registered the same
+way, and the block they shared is given back. A few dozen LUTs,
+estimated, not yet measured or placed: lakritz_katze is the target to
+check first. (`ETH_RX_SLOTS 2`, 3 DP16KD, would have been the other way
+to find room, at the cost of two buffered frames.) The release NOTES'
+Block RAM column will show the placed counts.
 
 ## Testing
 
@@ -556,6 +753,18 @@ DDMI, whose 126 MHz serialiser dominates the simulation. Prints
 still pass: with `COLOR_AVAIL` at its default of 0 nothing they see
 changed. `tools/hwmap/hwmap --check` reports no new findings.
 
+`rtl/gpu/bench/tb_planes.v` is the same method at six and eight planes
+(`-DNPLANES=6` or `8`): a VRAM of one and a half or two sheets, a model
+that puts planes 4..7 in the second sheet (rows mod 240 at six), and
+every visible pixel of a frame checked, index and colour, for: every
+plane on the quadrants with the power-on palette; wrap from odd origins
+with shuffled offsets; clamp; five planes and four on the same build;
+the cursor; every palette entry rewritten, and an entry above the
+palette's size; the desktop untouched. With `-DGPU_DDMI -DTB_STUBS` it
+checks the TMDS inputs as `tb_color.v` does. `tb_color.v` itself checks
+the index on screen (`cidx_o`, the index whose colour is out of the
+palette) rather than the index a clock ahead of it.
+
 ## The window manager
 
 Needs no change. Every way out of game mode -- Super+Esc, wm revoking
@@ -565,6 +774,13 @@ Super+Esc over the desktop therefore always enters monochrome game
 mode, whatever the last game left behind.
 
 ## Not done yet
+
+- The art side of [one game, any number of
+  planes](#one-game-any-number-of-planes): pix (the pixel editor,
+  planned) writes 256-colour art with its smaller palettes, and the
+  loader reduces it.
+- `GAME_PLANES` measured on the pieces only (gpu_video placed out of
+  context, [Cost](#cost)); not yet on a board.
 
 - `COLOR` on the remaining 25F boards (ULX3S 25k, Klinge) and the
   ULX3S 85k. Each needs its own fit and `make timing`; the 25F ones are

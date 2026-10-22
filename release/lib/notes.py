@@ -20,6 +20,7 @@
 #
 
 import json
+import re
 import textwrap
 
 
@@ -187,8 +188,28 @@ def _cell(mark, text):
     return "%s **%s**" % (mark, text) if mark else "%s %s" % (GREEN, text)
 
 
+# Block RAM, by the names place-and-route reports it under: DP16KD
+# (ECP5), RAMB18E1/RAMB36E1 (7-series), CC_BRAM_20K/40K (GateMate),
+# ICESTORM_RAM (iCE40).
+_BRAM = re.compile(r"DP16KD|RAMB|BRAM|ICESTORM_RAM")
+
+
+def bram_cell(u):
+    """Block RAM used of what the part has, every kind the log lists."""
+    cells = []
+    worst = None
+    for name in sorted(u):
+        if not _BRAM.search(name):
+            continue
+        m = _util_mark(u[name]["percent"])
+        worst = _worst(worst, m)
+        cells.append(_cell(m, "%s %d/%d" % (name, u[name]["used"], u[name]["total"])))
+    return worst, "; ".join(cells) or "-"
+
+
 def build_row(t):
-    """(mark, fmax cell, utilisation cell) for one target's timing."""
+    """(mark, fmax cell, utilisation cell, block RAM cell) for one
+    target's timing."""
     tm = t.get("timing") or {}
     advisory = tm.get("advisory", [])
     worst = None
@@ -212,22 +233,24 @@ def build_row(t):
     for name in sorted(u):
         pct = u[name]["percent"]
         m = _util_mark(pct)
-        if name != key and not m:
+        if name != key and (not m or _BRAM.search(name)):
             continue
         worst = _worst(worst, m)
         text = "%s %d%%" % (name, pct)
         cells.insert(0 if name == key else len(cells), _cell(m, text))
     util = "; ".join(cells) or "-"
-    return worst, fmax, util
+    bmark, bram = bram_cell(u)
+    worst = _worst(worst, bmark)
+    return worst, fmax, util, bram
 
 
 def build_table(targets):
     """The Build section's table, and a line on what is marked, if any."""
-    rows = ["| Target | Fmax (target) | Utilisation |",
-            "| --- | --- | --- |"]
+    rows = ["| Target | Fmax (target) | Utilisation | Block RAM (used/total) |",
+            "| --- | --- | --- | --- |"]
     red = yellow = 0
     for t in targets:
-        mark, fmax, util = build_row(t)
+        mark, fmax, util, bram = build_row(t)
         red += mark == RED
         yellow += mark == YELLOW
         name = "`%s`" % t["target"]
@@ -237,7 +260,7 @@ def build_table(targets):
             name = "%s %s" % (mark, name)
         else:
             name = "%s %s" % (GREEN, name)
-        rows.append("| %s | %s | %s |" % (name, fmax, util))
+        rows.append("| %s | %s | %s | %s |" % (name, fmax, util, bram))
     summary = []
     if red:
         summary.append("%s **%d target%s missed timing or utilisation.**"

@@ -38,10 +38,11 @@ static uint32_t cfg_gen = 1;
 
 // The files, by path. NULL data: not there. `chunk` caps every
 // READ_CHUNK, so wm.cfg arrives in pieces as it may on the board.
-#define NFILES 2
+#define NFILES 3
 static struct { const char *path; const uint8_t *data; uint32_t len; } files[NFILES] = {
 	{ Z_PATH_WM_CONFIG, NULL, 0 },
 	{ Z_PATH_WM_ICONS, NULL, 0 },
+	{ Z_PATH_WM_CURSOR, NULL, 0 },
 };
 static uint32_t chunk_cap = 7;
 static int fs_calls;
@@ -851,6 +852,53 @@ int main(int argc, char **argv) {
 		expect(!dock_hidden && (int)w->y == WM_SCREEN_H - DOCK_MARGIN - DOCK_THICK &&
 			(int)w->x == DOCK_MARGIN && (int)w->w == dock_frame_len, "back, along the bottom");
 		destroy_window((uint32_t)wi);
+	}
+
+	// -- 26. the pointer's large pair (docs/cursor.md) --
+	printf("26. the pointer's shapes\n");
+	{
+		// a bitstream with fixed shapes: nothing written
+		reg_socctl_magic = Z_SOCCTL_MAGIC;
+		reg_socctl_cursor = 0;
+		reg_socctl_curdata = 0x5555;
+		cfg_gen++;
+		dock_reload();
+		expect(!wm_cursor_hw && reg_socctl_cursor == 0 && reg_socctl_curdata == 0x5555,
+			"fixed shapes: nothing written");
+
+		// with them, and no file: the built-in 9x9 pair, the small pair shown
+		reg_socctl_cursor = (uint32_t)Z_CURSOR_SIG << 16;
+		cfg_gen++;
+		dock_reload();
+		expect(wm_cursor_hw && reg_socctl_cursor == 0x10, "slots 0 and 1 shown");
+		expect(reg_socctl_curdata == 0, "the built-in Z's last row written last (empty)");
+
+		// a file of the user's: its rows go to slots 2 and 3
+		static char zsp[1024];
+		int k = sprintf(zsp, "zsp 1\nsprite normal 16 16\n");
+		for (int r = 0; r < 16; r++) k += sprintf(zsp + k, "1...............\n");
+		k += sprintf(zsp + k, "sprite busy 16 16\n");
+		for (int r = 0; r < 16; r++) k += sprintf(zsp + k, r == 15 ? "1.1.1.1.1.1.1.1.\n" : "................\n");
+		set_file(2, zsp, (uint32_t)k);
+		reg_socctl_cursor = (uint32_t)Z_CURSOR_SIG << 16;
+		cfg_gen++;
+		dock_reload();
+		expect(reg_socctl_curdata == 0x5555, "the file's busy, last row, written last");
+		expect(reg_socctl_cursor == 0x10, "and the small pair still shown");
+
+		// Super+M's half: the other pair
+		wm_cursor_large = true;
+		wm_cursor_slots();
+		expect(reg_socctl_cursor == 0x32, "the large pair: slots 2 and 3");
+
+		// a broken file: reported, and the built-in pair instead
+		set_file(2, "sprite normal 16 16\n....\n", 25);
+		reg_socctl_cursor = (uint32_t)Z_CURSOR_SIG << 16;
+		reg_socctl_curdata = 0x1234;
+		cfg_gen++;
+		dock_reload();
+		expect(reg_socctl_curdata == 0, "a broken file: the built-in pair");
+		set_file(2, NULL, 0);
 	}
 
 	printf("  %d file calls in all\n", fs_calls);

@@ -92,6 +92,15 @@ design makes that pattern land correctly). `tb_line.v` and
   mid-frame adoption). Fails on two deliberately broken read-side
   variants, so it is proven sensitive. With `-DGPU_DDMI -DTB_STUBS`
   it also checks the 8-bit TMDS channel inputs. See `docs/color.md`.
+- `tb_cursor.v` -- the hardware cursor in `rtl/gpu/gpu_video.v`
+  (`docs/cursor.md`). Against the comparator cursor it replaced, kept
+  as `gpu_cursor_ref.v`: a second `gpu_video` gets that cursor's pixel
+  through `pixel`, as `sysctl.v` used to wire it, and the two outputs
+  (monochrome and colour index) must agree at every visible pixel --
+  X and Z at the centre, the corners and edges, half off each side,
+  hidden, paper, game mode across the wrap seam, 16 colours. Then the
+  shapes against a model of the cell, including rows written through
+  the load port while the screen draws.
 - `tb_brightness.v` -- monochrome brightness on DDMI (VIDEO bits
   11:8): the 8-bit channel values for a lit pixel in every phosphor
   mode at levels 0, 7, 11 and 15; level 7 is exactly the old inks; a
@@ -214,6 +223,11 @@ vvp /tmp/tb_game.out          # several minutes
 iverilog -g2005 -o /tmp/tb_color.out \
     rtl/gpu/bench/tb_color.v /tmp/gpu_video_fix.v
 vvp /tmp/tb_color.out         # several minutes
+
+# tb_cursor.v -- the same patched gpu_video.v, and the old cursor
+iverilog -g2005 -o /tmp/tb_cursor.out rtl/gpu/bench/tb_cursor.v \
+    rtl/gpu/bench/gpu_cursor_ref.v /tmp/gpu_video_fix.v
+vvp /tmp/tb_cursor.out        # about ten minutes
 
 # tb_gamepad.v -- usb_hid.v alone, with its own stub usb_hid_host
 # built into the testbench. usb_hid.v needs three of the same kind of

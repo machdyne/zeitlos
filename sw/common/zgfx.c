@@ -251,6 +251,31 @@ void z_gfx_blit_scissor_reset(void) {
 	gpu_blit_clip_y1 = Z_SCREEN_H;
 }
 
+// -- framebuffer rows below the screen (game-mode colour) --
+//
+// With GAME_PLANES 6 or 8 VRAM goes on past row 479: a second sheet,
+// rows 480..719 or 480..959, holding bitplanes 4..7 (docs/color.md,
+// "More than four planes"). Nothing on the desktop is there. A
+// full-screen game that draws those planes says so here, and the two
+// primitives zcolor.c draws through -- z_fb_hw_fill_rect() and
+// z_fb_hw_blit_mem_rop() -- then clamp to that many rows instead of
+// 480, and with no visible region set (a game's case) put the
+// blitter's scissor bottom there too, inside the acquired section like
+// every scissor write. Everything else still clamps to the screen.
+// Kept to a variable and one store: wm links these two primitives and
+// has bytes, not kilobytes, to spare.
+static int gfx_fb_rows = Z_SCREEN_H;
+
+void z_fb_set_rows(int rows) {
+	if (rows < Z_SCREEN_H) rows = Z_SCREEN_H;
+	if (rows > 2 * Z_SCREEN_H) rows = 2 * Z_SCREEN_H;
+	gfx_fb_rows = rows;
+}
+
+int z_fb_rows(void) {
+	return gfx_fb_rows;
+}
+
 void z_gfx_paint_begin(void)
 {
 	gfx_paint_open = 1;
@@ -1342,7 +1367,7 @@ static void hw_fill_rect_one(int x, int y, int w, int h, int color,
 	if (x < 0) { w += x; x = 0; }
 	if (y < 0) { h += y; y = 0; }
 	if (x + w > Z_SCREEN_W) w = Z_SCREEN_W - x;
-	if (y + h > Z_SCREEN_H) h = Z_SCREEN_H - y;
+	if (y + h > gfx_fb_rows) h = gfx_fb_rows - y;
 	if (w <= 0 || h <= 0) return;	// nothing left to draw
 
 	// waits for any prior blitter operation to finish AND masks IRQs
@@ -1361,9 +1386,13 @@ static void hw_fill_rect_one(int x, int y, int w, int h, int color,
 	// in flight, re-clipping the rest of it. Same order as
 	// z_fb_draw_char2(): acquire, scissor, skip an empty rectangle
 	// with the mask released.
-	if (ri >= 0 && !z_gfx_blit_scissor(ri, NULL)) {
-		maskirq(old_mask);
-		return;
+	if (ri >= 0) {
+		if (!z_gfx_blit_scissor(ri, NULL)) {
+			maskirq(old_mask);
+			return;
+		}
+	} else {
+		gpu_blit_clip_y1 = (uint32_t)gfx_fb_rows;
 	}
 
 	gpu_blit_dst_x = (uint32_t)x;
@@ -1675,7 +1704,7 @@ static bool hw_blit_mem_one(const void *src, int src_stride,
 	if (dst_x < 0) { w += dst_x; src_x -= dst_x; dst_x = 0; }
 	if (dst_y < 0) { h += dst_y; src_y -= dst_y; dst_y = 0; }
 	if (dst_x + w > Z_SCREEN_W) w = Z_SCREEN_W - dst_x;
-	if (dst_y + h > Z_SCREEN_H) h = Z_SCREEN_H - dst_y;
+	if (dst_y + h > gfx_fb_rows) h = gfx_fb_rows - dst_y;
 	if (w <= 0 || h <= 0) return true;	// nothing to draw is not a failure
 
 	uint32_t old_mask = gpu_blit_acquire();
@@ -1683,9 +1712,13 @@ static bool hw_blit_mem_one(const void *src, int src_stride,
 	// scissor after the acquire, not before -- see hw_fill_rect_one().
 	// An empty/non-intersecting rect is skipped, not a failure: the
 	// same as a fully occluded window's one empty rectangle.
-	if (ri >= 0 && !z_gfx_blit_scissor(ri, NULL)) {
-		maskirq(old_mask);
-		return true;
+	if (ri >= 0) {
+		if (!z_gfx_blit_scissor(ri, NULL)) {
+			maskirq(old_mask);
+			return true;
+		}
+	} else {
+		gpu_blit_clip_y1 = (uint32_t)gfx_fb_rows;
 	}
 
 	gpu_blit_dst_x = (uint32_t)dst_x;

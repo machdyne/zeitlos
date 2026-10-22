@@ -378,9 +378,10 @@ shares):
 The whole of `dock.zic` is no longer in `wm`: the 8KB buffer it was
 read into is gone, and an icon the dock does not show costs nothing.
 With groups, `wm`'s image was 138,192 bytes with xPack GCC 15.2; the
-sides took it to 139,020 (budget 136K, 139,264, `CORE_BUDGETS` in the
-top `Makefile`, one kilobyte from `net`'s: [flash_apps.md](flash_apps.md)),
-104,528 in flash.
+sides took it to 139,020, and the pointer's shapes ([cursor.md](cursor.md))
+to 140,240, and game-mode colour's reach below row 479 in `zgfx` to
+140,276 (budget 137K, 140,288, `CORE_BUDGETS` in the top `Makefile`:
+[flash_apps.md](flash_apps.md)), 105,780 in flash.
 
 The two files take 8KB of the flash archive's file reserve, which went
 from 56K to 60K; `wm`'s flash budget went from 110K to 104K to pay for
@@ -411,7 +412,7 @@ it ([flash_apps.md](flash_apps.md)).
     across, 12 down, paging, NEXT, hit testing at every edge, every app
     on exactly one page at one position on either axis, with and without
     BACK.
-  - `tests/test_dock_cfg.c` (384 checks): the parser line by line,
+  - `tests/test_dock_cfg.c` (392 checks, the cursor file reader's among them, [cursor.md](cursor.md)): the parser line by line,
     continuation lines, comments, CRLF, every reported problem, `@rest`
     in a row and in a group, groups (given before or after their row, a
     group in a group, an unknown `@id`, too many, an empty group
@@ -424,7 +425,7 @@ it ([flash_apps.md](flash_apps.md)).
     file, the wide row's 14 apps and Sound, Tools and Games, the tall
     row's 12, every app and group with its icon, the hardware each
     needs; `dots`; which process names are which app.
-  - `tests/test_dock_files.c` (145 checks): the real `wm.c` with a
+  - `tests/test_dock_files.c` (152 checks, section 26 the pointer's shapes): the real `wm.c` with a
     scripted kernel serving the two files (7 bytes a read), installed
     apps and bitstream features, and a software framebuffer: the
     shipped files give 17 icons, each slot drawn from its icon; a group

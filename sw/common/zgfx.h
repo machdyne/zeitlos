@@ -342,6 +342,15 @@ bool z_fb_hw_blit_mem_rop(const void *src, int src_stride,
 
 void z_fb_hw_fill_rect_rop(int x, int y, int w, int h, int color, int rop);
 
+// Rows the two drawing calls above (and z_fb_hw_fill_rect()) may reach:
+// 480 (the screen) unless a full-screen game draws into the second
+// VRAM sheet of a GAME_PLANES 6 or 8 bitstream, rows 480..719 or
+// 480..959 (docs/color.md, "More than four planes"). zcolor.c sets it
+// from z_color_begin() and puts it back in z_color_end(). Clamped to
+// 480..960; the caller says how much VRAM there is (z_color_rows()).
+void z_fb_set_rows(int rows);
+int z_fb_rows(void);
+
 // -- masked sprite, in hardware --
 //
 // The thing raster ops exist for. Two passes over the same rectangle:
