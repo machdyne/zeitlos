@@ -20,6 +20,8 @@
  *                            full screen
  *   render_pix DIR import    a PNG opened as a colour picture, another
  *                            brought into it (Ctrl+I), full screen
+ *   render_pix DIR cost      what each frame writes while drawing, in
+ *                            256 colours full screen
  *   render_pix DIR anim      mausrun's sprites: onion skin, an
  *                            animation made (Shift+F5) and played (F5),
  *                            the next frame (Ctrl+D)
@@ -234,9 +236,36 @@ static const ar_host_step_t anim[] = {
 	END(80)
 };
 
+/* What a frame costs while drawing, full screen in 256 colours: a pen
+ * stroke, a line dragged, a box dragged, a selection drawn and moved.
+ * The hook prints, a frame at a time, the blitter operations and the
+ * framebuffer pixels (a plane each) the frame wrote. */
+static const ar_host_step_t cost[] = {
+	MODE(4, ARH_FULL_COLOR),
+	T(8, '5'), T(9, 'p'),
+	M(10, 100, 80, 1), M(11, 104, 80, 1), M(12, 108, 82, 1), M(13, 112, 84, 1), M(14, 112, 84, 0),
+	T(16, 'l'),
+	M(18, 60, 60, 1), M(19, 70, 66, 1), M(20, 80, 72, 1), M(21, 90, 78, 1), M(22, 90, 78, 0),
+	T(24, 'r'),
+	M(26, 60, 100, 1), M(27, 70, 106, 1), M(28, 80, 112, 1), M(29, 80, 112, 0),
+	T(31, 's'),
+	M(33, 40, 40, 1), M(34, 60, 50, 1), M(35, 80, 60, 1), M(36, 80, 60, 0),
+	M(38, 50, 45, 1), M(39, 60, 50, 1), M(40, 70, 55, 1), M(41, 70, 55, 0),
+	SHOT(44, "91_cost"),
+	MODE(46, ARH_WINDOW),
+	END(50)
+};
+
 static const char *scene = "icons";
 
 void ar_host_hook(uint32_t frame) {
+	if (!strcmp(scene, "cost")) {
+		static uint64_t ops, px;
+		if (frame >= 8)
+			printf("cost: frame %2u: %4lu ops, %7lu pixels\n", (unsigned)frame,
+				(unsigned long)(arh_ops - ops), (unsigned long)(arh_pixels - px));
+		ops = arh_ops; px = arh_pixels;
+	}
 	if (!strcmp(scene, "font") && frame == 11) pix_host_answer = "g";
 	if (!strcmp(scene, "import") && frame == 11) pix_host_answer = "out/import/rgba.png";
 	if (!strcmp(scene, "anim")) {
@@ -274,6 +303,9 @@ int main(int argc, char **argv) {
 	} else if (!strcmp(scene, "anim")) {
 		setenv("PIX_OPEN", "../../../data/mausrun/sprites.zsp", 1);
 		s = anim;
+	} else if (!strcmp(scene, "cost")) {
+		setenv("PIX_OPEN", "c256.zsp", 1);
+		s = cost;
 	} else if (!strcmp(scene, "mausrun")) {
 		setenv("PIX_OPEN", "../../../data/mausrun/sprites.zsp", 1);
 		s = mausrun;

@@ -278,6 +278,11 @@ ok = z_dialog_open(&ctx, ...);
 ar_dialog_end();            /* sound back, every key released, repainted */
 ```
 
+Opened from full screen, the box shows in the window and full screen
+comes back at the next `ar_frame()` -- not at once, so that a second
+box straight after the first (save first? then the file's name) does
+not flick the screen to full and back between them.
+
 `ar_dialog_begin()` fills `ctx` so the box keeps the window painted
 while it waits, as the F1 box does. On a build host both are no-ops
 (`ar_host.c`); a script answers the program's questions itself.

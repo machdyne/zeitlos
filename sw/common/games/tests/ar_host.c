@@ -48,8 +48,10 @@ static int host_planes(void) {
 static uint8_t fb[FB_H][FB_W];       /* one byte a pixel: simple */
 
 uint64_t arh_ops;                    /* blitter operations issued */
+uint64_t arh_pixels;                 /* framebuffer pixels written */
 
 static void put(int x, int y, int v) {
+	arh_pixels++;
 	if (x < 0 || y < 0 || x >= FB_W || y >= FB_H) {
 		fprintf(stderr, "ar_host: draw outside the framebuffer at %d,%d\n",
 			x, y);

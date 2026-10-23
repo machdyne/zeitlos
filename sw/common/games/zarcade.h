@@ -329,6 +329,12 @@ void ar_fill2(int x, int y, int w, int h, int c0, int c1, const ar_ink_t *pat);
  * transparent elsewhere. */
 void ar_bitmap(const void *bits, int stride, int sx, int sy,
 	int x, int y, int w, int h, int c);
+/* Monochrome (the window, mono full screen): the bitmap as it is, lit
+ * where it has a bit and dark elsewhere, in one blitter pass -- a
+ * picture made of patterns already, put down without clearing first.
+ * In colour it is index 1 over index 0. */
+void ar_bitmap_opaque(const void *bits, int stride, int sx, int sy,
+	int x, int y, int w, int h);
 
 /* One bitplane of a rectangle, opaque: plane k (0..7) of each pixel
  * becomes its bit in `bits` (zgfx's layout, as ar_bitmap). Colour full

@@ -400,8 +400,17 @@ static void show_help(void) {
 	ar__invalidate();
 }
 
+/* A box opened from full screen: the system's boxes are wm's windows,
+ * and game mode is not the desktop, so the box is shown in the window
+ * and full screen comes back after it -- at the next frame, so that a
+ * second box straight after the first (a question, then a file) does
+ * not flick the screen to full and back between them. */
+static bool dlg_was_full, dlg_back_full;
+
 void ar_dialog_begin(void *out) {
 	z_dialog_ctx_t *ctx = out;
+	if (dlg_back_full) dlg_back_full = false, dlg_was_full = true;
+	else dlg_was_full = ar__s.mode != AR_MODE_WINDOW;
 	if (ar__s.mode != AR_MODE_WINDOW) ar_set_fullscreen(false);
 	render_now();
 	zsfx_suspend(true);
@@ -414,6 +423,8 @@ void ar_dialog_end(void) {
 	zsfx_suspend(false);
 	release_all();
 	ar__invalidate();
+	dlg_back_full = dlg_was_full;
+	dlg_was_full = false;
 }
 
 /* ===================================================================
@@ -648,7 +659,14 @@ static uint32_t wait_frame(void) {
 
 uint32_t ar_frame(void) {
 
-	uint32_t dt = wait_frame();
+	uint32_t dt;
+
+	/* full screen again after a box (ar_dialog_begin()) */
+	if (dlg_back_full) {
+		dlg_back_full = false;
+		ar_set_fullscreen(true);
+	}
+	dt = wait_frame();
 	int i;
 
 	/* Straight after the boundary: palette first (it changes every

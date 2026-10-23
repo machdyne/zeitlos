@@ -163,6 +163,7 @@ static int vx, vy;              /* the view's top left, in cell pixels */
 static int cx, cy;              /* the keyboard cursor */
 static int tool = T_PEN;
 static bool rect_filled;
+static bool kbd_cursor = true;  /* the keyboard cursor shown: a key moved it last, not the mouse */
 static int fg = 1;              /* the first colour (left button, Space) */
 static int bg2 = 0;             /* the second (right button): ZSP_T, often */
 static int page;                /* the 16 colours the chips and 0-F show */
@@ -232,6 +233,14 @@ static void dirty_canvas(void) {
 	ar_dirty(PV_X, BT_Y + 1, PV_W, ST_H);
 }
 static void dirty_side(void) { ar_dirty(SD_X - 2, 0, SD_W + 2, BT_Y); }
+/* Parts of it: the tools; the colours (with the first and second, and
+ * the page's line at the foot) */
+static void dirty_zoom(void) { ar_dirty(SD_X - 2, 2 + 6 * 10 + 3 + 48 + 2 + 10, SD_W + 2, 9); }
+static void dirty_tools(void) { ar_dirty(SD_X - 2, 0, SD_W + 2, 2 + 6 * 10 + 2); }
+static void dirty_chips(void) {
+	ar_dirty(SD_X - 2, 2 + 6 * 10, SD_W + 2, 48 + 16);
+	ar_dirty(SD_X - 2, BT_Y - 20, SD_W + 2, 9);
+}
 static void dirty_bottom(void) { ar_dirty(0, BT_Y, AR_W, AR_H - BT_Y); }
 
 static const char *kind_name(int k) {
@@ -294,7 +303,11 @@ static void set_cell(int i) {
 	}
 	zoom = fit_zoom();
 	clamp_view();
-	ar_dirty_all();
+	/* the canvas, the preview, the strip, the status, the zoom: not
+	 * the tools and the colours */
+	dirty_canvas();
+	dirty_bottom();
+	dirty_zoom();
 	if (have_cell()) {
 		char b[64];
 		snprintf(b, sizeof(b), "%s, %d by %d",
@@ -337,11 +350,14 @@ static void want_colours(void) {
 
 /* The palette and the controls' indices for the mode and the sheet:
  * after a mode change, a load, a palette edit or F7. */
+static void luts_setup(void);
+
 static void colours_setup(void) {
 	int i, a, d = 0, l = 0;
 	shown_n = ar_colours();
 	planes_n = shown_n == 256 ? 8 : shown_n == 64 ? 6 : 4;
 	art_tier = tier() < shown_n ? tier() : shown_n;
+	luts_setup();
 	ar_dirty_all();
 	if (!ar_color()) {
 		for (i = 0; i < R_COUNT; i++) ui_c[i] = i;
@@ -420,12 +436,40 @@ static const ar_ink_t *mono_pat(int v, bool real) {
  * what a pixel shows: the cell, with what is being drawn over it
  * =================================================================== */
 
+/* The line being drawn, a row at a time: on row y it covers x from
+ * lrun0[y - ly0] to lrun1[...] (a Bresenham line is one run a row) --
+ * worked out once a move, not by walking the line for every pixel the
+ * canvas shows. */
+#define LRUN_MAX 1024
+static int16_t lrun0[LRUN_MAX], lrun1[LRUN_MAX];
+static int ly0 = 0, ly1 = -1;
+
+static void line_prep(int x0, int y0, int x1, int y1) {
+	int dx = x1 > x0 ? x1 - x0 : x0 - x1, sx = x0 < x1 ? 1 : -1;
+	int dy = -(y1 > y0 ? y1 - y0 : y0 - y1), sy = y0 < y1 ? 1 : -1;
+	int err = dx + dy, e2, i;
+	ly0 = y0 < y1 ? y0 : y1;
+	ly1 = y0 < y1 ? y1 : y0;
+	if (ly1 - ly0 >= LRUN_MAX) { ly1 = ly0 - 1; return; }
+	for (i = 0; i <= ly1 - ly0; i++) { lrun0[i] = 32767; lrun1[i] = -32768; }
+	for (;;) {
+		i = y0 - ly0;
+		if (x0 < lrun0[i]) lrun0[i] = (int16_t)x0;
+		if (x0 > lrun1[i]) lrun1[i] = (int16_t)x0;
+		if (x0 == x1 && y0 == y1) break;
+		e2 = 2 * err;
+		if (e2 >= dy) { err += dy; x0 += sx; }
+		if (e2 <= dx) { err += dx; y0 += sy; }
+	}
+}
+
 static int shown(int x, int y) {
 	if (floating && x >= fltx && y >= flty && x < fltx + flt.w && y < flty + flt.h) {
 		int v = px_piece_get(&flt, x - fltx, y - flty);
 		return v;
 	}
-	if (stroking && tool == T_LINE && px_on_line(sx0, sy0, sx1, sy1, x, y))
+	if (stroking && tool == T_LINE && y >= ly0 && y <= ly1 &&
+	    x >= lrun0[y - ly0] && x <= lrun1[y - ly0])
 		return stroke_v;
 	if (stroking && tool == T_RECT && px_on_rect(sx0, sy0, sx1, sy1, x, y, rect_filled))
 		return stroke_v;
@@ -435,6 +479,11 @@ static int shown(int x, int y) {
 /* ===================================================================
  * painting
  * =================================================================== */
+
+/* A value in vbuf that is a control's colour (UI_V | its index), not
+ * the art's: the canvas is put together whole -- art, grid, frames --
+ * and drawn in one pass, so nothing on it is cleared and drawn again. */
+#define UI_V 0x8000u
 
 /* Art values to be drawn (an index or ZSP_T), and the bitmap each
  * plane -- or the monochrome picture -- is made in. */
@@ -447,38 +496,82 @@ static int clampi(int v, int lo, int hi) { return v < lo ? lo : v > hi ? hi : v;
 /* vbuf's top left w x h at (x, y): in colour a plane at a time; in
  * monochrome as patterns (`real`: the inks). Transparent is a checker,
  * anchored to the picture like every pattern. */
+/* What each art value is drawn as, worked out once a palette, tier or
+ * mode (colours_setup()) rather than a pixel at a time: its display
+ * index in colour, its pattern in the window (editing and real). */
+static uint8_t disp_lut[256];
+static const ar_ink_t *pat_lut[2][257];
+
+static void luts_setup(void) {
+	int v;
+	for (v = 0; v < 256; v++) disp_lut[v] = (uint8_t)disp(v);
+	for (v = 0; v <= 256; v++) {
+		int val = v == 256 ? ZSP_T : v;
+		pat_lut[0][v] = mono_pat(val, false);
+		pat_lut[1][v] = mono_pat(val, true);
+	}
+}
+
+/* The planes of a picture row, eight pixels at a time: their eight
+ * bytes are a matrix of bits, and its transpose is a byte a plane
+ * (bit i is pixel i's, as the blitter wants: LSB leftmost). Three
+ * swaps of blocks of bits, not a test of each bit of each plane. */
+static uint32_t planebuf[8][CV_H][CV_W / 32];
+
+static inline void c2p8(uint32_t x, uint32_t y, uint8_t *o) {
+	uint32_t t;
+	t = (x ^ (x >> 7)) & 0x00AA00AAu; x ^= t ^ (t << 7);
+	t = (y ^ (y >> 7)) & 0x00AA00AAu; y ^= t ^ (t << 7);
+	t = (x ^ (x >> 14)) & 0x0000CCCCu; x ^= t ^ (t << 14);
+	t = (y ^ (y >> 14)) & 0x0000CCCCu; y ^= t ^ (t << 14);
+	t = (x & 0x0F0F0F0Fu) | ((y & 0x0F0F0F0Fu) << 4);
+	y = ((x >> 4) & 0x0F0F0F0Fu) | (y & 0xF0F0F0F0u);
+	x = t;
+	o[0] = (uint8_t)x; o[1] = (uint8_t)(x >> 8); o[2] = (uint8_t)(x >> 16); o[3] = (uint8_t)(x >> 24);
+	o[4] = (uint8_t)y; o[5] = (uint8_t)(y >> 8); o[6] = (uint8_t)(y >> 16); o[7] = (uint8_t)(y >> 24);
+}
+
 static void put_art(int x, int y, int w, int h, bool real) {
 	int a, b, k;
 	if (w <= 0 || h <= 0) return;
 	if (ar_color()) {
-		for (b = 0; b < h; b++)
+		int w8 = (w + 7) & ~7;
+		uint8_t cg = (uint8_t)C_GRID, co = (uint8_t)C_OUT;
+		for (b = 0; b < h; b++) {
+			const uint16_t *vr = vbuf[b];
+			uint8_t *ir = ibuf[b], *pb[8];
 			for (a = 0; a < w; a++) {
-				int v = vbuf[b][a];
-				ibuf[b][a] = (uint8_t)(v == ZSP_T ?
-					((((x + a) >> 2) ^ ((y + b) >> 2)) & 1 ? C_GRID : C_OUT) : disp(v));
+				unsigned v = vr[a];
+				ir[a] = v & UI_V ? (uint8_t)v : v == ZSP_T ?
+					((((x + a) >> 2) ^ ((y + b) >> 2)) & 1 ? cg : co) : disp_lut[v & 255];
 			}
-		for (k = 0; k < planes_n; k++) {
-			for (b = 0; b < h; b++) {
-				uint32_t *row = cvbm[b];
-				memset(row, 0, sizeof(cvbm[0]));
-				for (a = 0; a < w; a++)
-					if ((ibuf[b][a] >> k) & 1) row[a >> 5] |= 1u << (a & 31);
+			for (; a < w8; a++) ir[a] = 0;
+			for (k = 0; k < 8; k++) pb[k] = (uint8_t *)planebuf[k][b];
+			for (a = 0; a < w8; a += 8) {
+				uint8_t o[8];
+				const uint8_t *q = ir + a;
+				c2p8((uint32_t)q[0] | (uint32_t)q[1] << 8 | (uint32_t)q[2] << 16 | (uint32_t)q[3] << 24,
+					(uint32_t)q[4] | (uint32_t)q[5] << 8 | (uint32_t)q[6] << 16 | (uint32_t)q[7] << 24, o);
+				for (k = 0; k < planes_n; k++) pb[k][a >> 3] = o[k];
 			}
-			ar_plane(k, cvbm, CV_W / 8, 0, 0, x, y, w, h);
 		}
+		for (k = 0; k < planes_n; k++)
+			ar_plane(k, planebuf[k], CV_W / 8, 0, 0, x, y, w, h);
 		return;
 	}
 	for (b = 0; b < h; b++) {
 		uint32_t *row = cvbm[b];
+		const uint16_t *vr = vbuf[b];
 		int yy = (y + b) & 7;
 		memset(row, 0, sizeof(cvbm[0]));
 		for (a = 0; a < w; a++) {
-			const ar_ink_t *p = mono_pat(vbuf[b][a], real);
+			unsigned v = vr[a];
+			const ar_ink_t *p = v & UI_V ? &desc.ink[v & 15] : pat_lut[real][v > 256 ? 256 : v];
 			if (p->row[yy] & (0x80u >> ((x + a) & 7))) row[a >> 5] |= 1u << (a & 31);
 		}
 	}
-	ar_fill(x, y, w, h, C_BG);
-	ar_bitmap(cvbm, CV_W / 8, 0, 0, x, y, w, h, C_INK);
+	/* (the bitmap in R_INK over R_BG: the patterns are the picture) */
+	ar_bitmap_opaque(cvbm, CV_W / 8, 0, 0, x, y, w, h);
 }
 
 /* One colour as a swatch: its index in colour, its pattern in mono. */
@@ -523,45 +616,64 @@ static bool onion_dot(int cx_, int cy_, int sx_, int sy_, int which) {
 	return sx_ == 0 && sy_ == 0 && (cx_ & 1) == which && (cy_ & 1) == which;
 }
 
-static void onion_skin(int ax, int ay, int aw, int ah, int ox, int oy) {
+static void onion_skin(int ax, int ay, int aw, int ah, int ox, int oy, int bx, int by) {
 	int prev, next, b, a, clear = px_clear(&doc);
 	px_anim_neighbours(&doc, cur, &prev, &next);
 	if (onion < 2) next = -1;
 	if (prev < 0 && next < 0) return;
 	for (b = 0; b < ah; b++) {
 		int cy_ = (ay + b - oy) / zoom, sy_ = (ay + b - oy) % zoom;
+		uint16_t *row = vbuf[by + b] + bx;
 		for (a = 0; a < aw; a++) {
 			int cx_ = (ax + a - ox) / zoom, sx_ = (ax + a - ox) % zoom, v;
-			if (vbuf[b][a] != clear) continue;
+			if (row[a] != clear) continue;
 			if (prev >= 0 && onion_dot(cx_, cy_, sx_, sy_, 0) && (v = px_get(&doc, prev, cx_, cy_)) != clear)
-				vbuf[b][a] = (uint16_t)v;
+				row[a] = (uint16_t)v;
 			else if (next >= 0 && onion_dot(cx_, cy_, sx_, sy_, 1) && (v = px_get(&doc, next, cx_, cy_)) != clear)
-				vbuf[b][a] = (uint16_t)v;
+				row[a] = (uint16_t)v;
 		}
 	}
 }
 
+/* Into vbuf (whose 0,0 is the screen's x0,y0, w x h): a rectangle of
+ * screen pixels in control colour c, clipped. */
+static void vb_rect(int x0, int y0, int w, int h, int rx, int ry, int rw, int rh, int c) {
+	int a, b;
+	int ax = rx > x0 ? rx : x0, ay = ry > y0 ? ry : y0;
+	int ax1 = rx + rw < x0 + w ? rx + rw : x0 + w, ay1 = ry + rh < y0 + h ? ry + rh : y0 + h;
+	for (b = ay; b < ay1; b++)
+		for (a = ax; a < ax1; a++) vbuf[b - y0][a - x0] = (uint16_t)(UI_V | (unsigned)c);
+}
+
+static void vb_frame(int x0, int y0, int w, int h, int fx, int fy, int fw, int fh, int c) {
+	vb_rect(x0, y0, w, h, fx, fy, fw, 1, c);
+	vb_rect(x0, y0, w, h, fx, fy + fh - 1, fw, 1, c);
+	vb_rect(x0, y0, w, h, fx, fy, 1, fh, c);
+	vb_rect(x0, y0, w, h, fx + fw - 1, fy, 1, fh, c);
+}
+
+/* The canvas's part of r, put together in vbuf -- the space round the
+ * cell, its edge, the art (with the onion skin), the grid, the guides,
+ * the selection and the cursor -- and drawn once (put_art()). Drawn a
+ * layer at a time, each pixel was cleared and drawn again, and in 256
+ * colours that is eight planes of each; the screen showed it. */
 static void paint_canvas(const ar_rect_t *r) {
-	int ox, oy, x, y, w, h, px0, px1, py0, py1, py, px;
+	int ox, oy, x, y, w, h, px0, px1, py0, py1, py, px, b;
 
 	x = CV_X; y = CV_Y; w = CV_W; h = CV_H;
 	if (!clip_to(r, &x, &y, &w, &h)) return;
-	ar_fill(x, y, w, h, C_OUT);
-	if (!have_cell()) return;
+	for (b = 0; b < h; b++) {
+		uint16_t *row = vbuf[b];
+		int a;
+		for (a = 0; a < w; a++) row[a] = (uint16_t)(UI_V | (unsigned)C_OUT);
+	}
+	if (!have_cell()) { put_art(x, y, w, h, false); return; }
 
 	ox = org_x();
 	oy = org_y();
 
-	/* the cell's edge, just outside it, where the canvas shows */
-	{
-		int ex0 = ox - 1, ey0 = oy - 1, ex1 = ox + cw() * zoom, ey1 = oy + ch() * zoom;
-		int lx0 = ex0 < CV_X ? CV_X : ex0, lx1 = ex1 >= CV_X + CV_W ? CV_X + CV_W - 1 : ex1;
-		int ly0 = ey0 < CV_Y ? CV_Y : ey0, ly1 = ey1 >= CV_Y + CV_H ? CV_Y + CV_H - 1 : ey1;
-		if (ex0 >= CV_X) ar_fill(ex0, ly0, 1, ly1 - ly0 + 1, C_FRAME);
-		if (ex1 < CV_X + CV_W) ar_fill(ex1, ly0, 1, ly1 - ly0 + 1, C_FRAME);
-		if (ey0 >= CV_Y) ar_fill(lx0, ey0, lx1 - lx0 + 1, 1, C_FRAME);
-		if (ey1 < CV_Y + CV_H) ar_fill(lx0, ey1, lx1 - lx0 + 1, 1, C_FRAME);
-	}
+	/* the cell's edge, just outside it */
+	vb_frame(x, y, w, h, ox - 1, oy - 1, cw() * zoom + 2, ch() * zoom + 2, C_FRAME);
 
 	/* the cell's part of this rectangle, in cell pixels */
 	px0 = clampi((x - ox) / zoom, 0, cw() - 1);
@@ -572,64 +684,63 @@ static void paint_canvas(const ar_rect_t *r) {
 	{
 		int ax = ox + px0 * zoom, ay = oy + py0 * zoom;
 		int aw = (px1 - px0 + 1) * zoom, ah = (py1 - py0 + 1) * zoom;
-		int s, b;
-		if (!clip_to(r, &ax, &ay, &aw, &ah)) return;
-		if (ax < CV_X) { aw -= CV_X - ax; ax = CV_X; }
-		if (ay < CV_Y) { ah -= CV_Y - ay; ay = CV_Y; }
-		if (ax + aw > CV_X + CV_W) aw = CV_X + CV_W - ax;
-		if (ay + ah > CV_Y + CV_H) ah = CV_Y + CV_H - ay;
-		if (aw <= 0 || ah <= 0) return;
-
-		/* the art, a row of cell pixels worked out once and copied
-		 * down `zoom` screen rows */
-		for (b = 0; b < ah; b++) {
-			int cy_ = (ay + b - oy) / zoom;
-			if (b > 0 && (ay + b - oy) % zoom != 0) {
-				memcpy(vbuf[b], vbuf[b - 1], sizeof(uint16_t) * (size_t)aw);
-				continue;
+		int s, bx, by;
+		if (clip_to(r, &ax, &ay, &aw, &ah)) {
+			if (ax < x) { aw -= x - ax; ax = x; }
+			if (ay < y) { ah -= y - ay; ay = y; }
+			if (ax + aw > x + w) aw = x + w - ax;
+			if (ay + ah > y + h) ah = y + h - ay;
+		} else aw = 0;
+		bx = ax - x; by = ay - y;
+		if (aw > 0 && ah > 0) {
+			/* the art, a row of cell pixels worked out once and
+			 * copied down `zoom` screen rows */
+			for (b = 0; b < ah; b++) {
+				uint16_t *row = vbuf[by + b] + bx;
+				int cy_ = (ay + b - oy) / zoom;
+				if (b > 0 && (ay + b - oy) % zoom != 0) {
+					memcpy(row, vbuf[by + b - 1] + bx, sizeof(uint16_t) * (size_t)aw);
+					continue;
+				}
+				for (s = 0; s < aw; s++) {
+					int cx_ = (ax + s - ox) / zoom;
+					if (s > 0 && (ax + s - ox) % zoom != 0) row[s] = row[s - 1];
+					else row[s] = (uint16_t)shown(cx_, cy_);
+				}
 			}
-			for (s = 0; s < aw; s++) {
-				int cx_ = (ax + s - ox) / zoom;
-				if (s > 0 && (ax + s - ox) % zoom != 0) vbuf[b][s] = vbuf[b][s - 1];
-				else vbuf[b][s] = (uint16_t)shown(cx_, cy_);
+			if (onion) onion_skin(ax, ay, aw, ah, ox, oy, bx, by);
+
+			/* the grid, from 6x */
+			if (zoom >= 6) {
+				for (px = px0; px <= px1 + 1; px++) {
+					int gx = ox + px * zoom;
+					if (gx >= ax && gx < ax + aw) vb_rect(x, y, w, h, gx, ay, 1, ah, C_GRID);
+				}
+				for (py = py0; py <= py1 + 1; py++) {
+					int gy = oy + py * zoom;
+					if (gy >= ay && gy < ay + ah) vb_rect(x, y, w, h, ax, gy, aw, 1, C_GRID);
+				}
 			}
 		}
-		if (onion) onion_skin(ax, ay, aw, ah, ox, oy);
-		put_art(ax, ay, aw, ah, false);
-
-		/* the grid, from 6x */
-		if (zoom >= 6) {
-			for (px = px0; px <= px1 + 1; px++) {
-				int gx = ox + px * zoom;
-				if (gx >= ax && gx < ax + aw) ar_fill(gx, ay, 1, ah, C_GRID);
-			}
-			for (py = py0; py <= py1 + 1; py++) {
-				int gy = oy + py * zoom;
-				if (gy >= ay && gy < ay + ah) ar_fill(ax, gy, aw, 1, C_GRID);
-			}
-		}
-
-		/* guides: a font's baseline (the ascent), the pointer's centre */
-		if (doc.kind == PX_ZFN && doc.ascent > 0 && doc.ascent < ch()) {
-			int gy = oy + doc.ascent * zoom;
-			if (gy >= ay && gy < ay + ah) ar_fill(ax, gy, aw, 1, C_GUIDE);
-		}
-		if (doc.cursor) {
-			int gx = ox + 8 * zoom + zoom / 2, gy = oy + 8 * zoom + zoom / 2;
-			int a = zoom / 2 + 1;
-			ar_fill(gx - a, gy, 2 * a + 1, 1, C_GUIDE);
-			ar_fill(gx, gy - a, 1, 2 * a + 1, C_GUIDE);
-		}
-
-		/* the selection, and the keyboard cursor */
-		if (sel) {
-			int fx = floating ? fltx : selx, fy = floating ? flty : sely;
-			frame_rect(ox + fx * zoom - 1, oy + fy * zoom - 1,
-				selw * zoom + 2, selh * zoom + 2, C_HI);
-		}
-		if (zoom >= 3)
-			frame_rect(ox + cx * zoom, oy + cy * zoom, zoom + 1, zoom + 1, C_HI);
 	}
+	/* guides: a font's baseline (the ascent), the pointer's centre */
+	if (doc.kind == PX_ZFN && doc.ascent > 0 && doc.ascent < ch())
+		vb_rect(x, y, w, h, ox, oy + doc.ascent * zoom, cw() * zoom, 1, C_GUIDE);
+	if (doc.cursor) {
+		int gx = ox + 8 * zoom + zoom / 2, gy = oy + 8 * zoom + zoom / 2;
+		int a = zoom / 2 + 1;
+		vb_rect(x, y, w, h, gx - a, gy, 2 * a + 1, 1, C_GUIDE);
+		vb_rect(x, y, w, h, gx, gy - a, 1, 2 * a + 1, C_GUIDE);
+	}
+	/* the selection, and the keyboard cursor */
+	if (sel) {
+		int fx = floating ? fltx : selx, fy = floating ? flty : sely;
+		vb_frame(x, y, w, h, ox + fx * zoom - 1, oy + fy * zoom - 1, selw * zoom + 2, selh * zoom + 2, C_HI);
+	}
+	if (zoom >= 3 && kbd_cursor)
+		vb_frame(x, y, w, h, ox + cx * zoom, oy + cy * zoom, zoom + 1, zoom + 1, C_HI);
+
+	put_art(x, y, w, h, false);
 }
 
 static void button(int x, int y, int w, const char *label, bool on) {
@@ -642,8 +753,9 @@ static void button(int x, int y, int w, const char *label, bool on) {
 #define SD_ROW 10
 #define SD_COL_Y (SD_TOOLS_Y + T_COUNT * SD_ROW + 3)   /* 4 x 4 colour chips */
 #define CHIP_W 14
-#define CHIP_H 9
-#define SD_FGBG_Y (SD_COL_Y + 41)
+#define CHIP_H 11
+#define SD_COL_H 48             /* the chips, or every colour (chips_grid()) */
+#define SD_FGBG_Y (SD_COL_Y + SD_COL_H + 2)
 #define SD_ZOOM_Y (SD_FGBG_Y + 10)
 #define SD_FILE_Y (SD_ZOOM_Y + 12)
 
@@ -654,17 +766,42 @@ static void colour_word(char *b, int n, int v) {
 	else snprintf(b, (size_t)n, "%x", v);
 }
 
+/* More than 16 colours, full screen in colour: every colour shown at
+ * once, as small squares (8 x 8 of 7 x 6, or 16 x 16 of 3 x 3), rather
+ * than a page of 16 chips. In the window the chips are patterns, and
+ * stay a page at a time. */
+static bool chips_grid(void) { return ar_color() && sheet_n() > 16; }
+
+static void grid_geom(int *cols, int *gw, int *gh, int *gx) {
+	if (sheet_n() == 64) { *cols = 8; *gw = 7; *gh = 6; }
+	else { *cols = 16; *gw = 3; *gh = 3; }
+	*gx = SD_X + 1 + (SD_W - 2 - *cols * *gw) / 2;
+}
+
 /* How many chips this page has. */
 static int page_chips(void) {
 	int n = sheet_n() - page * 16;
 	return n > 16 ? 16 : n < 0 ? 0 : n;
 }
 
+static bool hits(const ar_rect_t *r, int x, int y, int w, int h);
+
 static void paint_side(const ar_rect_t *r) {
 	int x = SD_X - 2, y = 0, w = SD_W + 2, h = BT_Y, i;
 	char b[48], f1[4], f2[4];
+	int gcols = 0, ggw = 0, ggh = 0, ggx = 0, gx0 = 0, gy0 = 0, gw0 = 0, gh0 = 0;
 	if (!clip_to(r, &x, &y, &w, &h)) return;
-	ar_fill(SD_X - 2, 0, SD_W + 2, BT_Y, C_BG);
+	if (chips_grid()) {
+		/* the colours' square: put together, not drawn over the
+		 * background (below) */
+		grid_geom(&gcols, &ggw, &ggh, &ggx);
+		gx0 = ggx - 3; gy0 = SD_COL_Y - 1;
+		gw0 = gcols * ggw + 4; gh0 = sheet_n() / gcols * ggh + 2;
+		ar_fill(SD_X - 2, 0, SD_W + 2, gy0, C_BG);
+		ar_fill(SD_X - 2, gy0 + gh0, SD_W + 2, BT_Y - gy0 - gh0, C_BG);
+		ar_fill(SD_X - 2, gy0, gx0 - (SD_X - 2), gh0, C_BG);
+		ar_fill(gx0 + gw0, gy0, SD_X + SD_W - gx0 - gw0, gh0, C_BG);
+	} else ar_fill(SD_X - 2, 0, SD_W + 2, BT_Y, C_BG);
 	ar_fill(SD_X - 2, 0, 1, BT_Y, C_FRAME);
 
 	for (i = 0; i < T_COUNT; i++) {
@@ -674,8 +811,26 @@ static void paint_side(const ar_rect_t *r) {
 		button(SD_X, SD_TOOLS_Y + i * SD_ROW, SD_W - 2, l, tool == i);
 	}
 
-	/* this page's colours; the first colour framed, the second marked */
-	for (i = 0; i < page_chips(); i++) {
+	if (chips_grid() && hits(r, gx0, gy0, gw0, gh0)) {
+		/* every colour, a small square each; this page (what 0-9 A-F
+		 * pick from) marked at the left, the first colour framed, the
+		 * second marked -- put together and drawn in one pass */
+		int a, b2, rows = sheet_n() / gcols;
+		for (b2 = 0; b2 < gh0; b2++)
+			for (a = 0; a < gw0; a++) {
+				int gxx = a - 3, gyy = b2 - 1;
+				vbuf[b2][a] = (uint16_t)(gxx >= 0 && gyy >= 0 && gxx < gcols * ggw && gyy < rows * ggh ?
+					(unsigned)((gyy / ggh) * gcols + gxx / ggw) : UI_V | (unsigned)C_BG);
+			}
+		vb_rect(gx0, gy0, gw0, gh0, gx0, SD_COL_Y + page * 16 / gcols * ggh, 2, 16 / gcols * ggh, C_HI);
+		if (bg2 != ZSP_T && bg2 < sheet_n())
+			vb_frame(gx0, gy0, gw0, gh0, ggx + (bg2 % gcols) * ggw - 1, SD_COL_Y + (bg2 / gcols) * ggh - 1, ggw + 2, ggh + 2, C_GUIDE);
+		if (fg != ZSP_T && fg < sheet_n())
+			vb_frame(gx0, gy0, gw0, gh0, ggx + (fg % gcols) * ggw - 1, SD_COL_Y + (fg / gcols) * ggh - 1, ggw + 2, ggh + 2, C_HI);
+		put_art(gx0, gy0, gw0, gh0, false);
+	} else if (!chips_grid()) for (i = 0; i < page_chips(); i++) {
+		/* this page's colours; the first colour framed, the second
+		 * marked */
 		int v = page * 16 + i;
 		int bx = SD_X + (i & 3) * (CHIP_W + 1), by = SD_COL_Y + (i >> 2) * (CHIP_H + 1);
 		chip(bx + 1, by + 1, CHIP_W - 2, CHIP_H - 2, v);
@@ -965,6 +1120,56 @@ static void dirty_px(int x0, int y0, int x1, int y1) {
 		(x1 - x0 + 1) * zoom + 4, (y1 - y0 + 1) * zoom + 4);
 }
 
+/* Cell pixels x0..x1, y0..y1 in the preview (1:1, the view's corner
+ * when the cell is bigger than it). */
+static void dirty_prev(int x0, int y0, int x1, int y1) {
+	int pw = cw() < PV_W - 4 ? cw() : PV_W - 4, ph = ch() < ST_H - 4 ? ch() : ST_H - 4;
+	int bx = PV_X + (PV_W - pw) / 2 - (cw() > pw ? vx : 0);
+	int by = BT_Y + 1 + (ST_H - ph) / 2 - (ch() > ph ? vy : 0);
+	int t;
+	if (playing) return;            /* it shows the animation */
+	if (x0 > x1) { t = x0; x0 = x1; x1 = t; }
+	if (y0 > y1) { t = y0; y0 = y1; y1 = t; }
+	ar_dirty(bx + x0, by + y0, x1 - x0 + 1, y1 - y0 + 1);
+}
+
+/* Both: the canvas and the preview. */
+static void dirty_cells(int x0, int y0, int x1, int y1) {
+	dirty_px(x0, y0, x1, y1);
+	dirty_prev(x0, y0, x1, y1);
+}
+
+/* What a line or a rectangle being drawn covers, on the canvas and
+ * the preview: the line's pixels, the outline's four edges, a filled
+ * one's box -- not the whole canvas, at every move of the mouse. */
+static void dirty_shape(int t, int x0, int y0, int x1, int y1) {
+	if (t == T_LINE) {
+		int dx = x1 > x0 ? x1 - x0 : x0 - x1, sx = x0 < x1 ? 1 : -1;
+		int dy = -(y1 > y0 ? y1 - y0 : y0 - y1), sy = y0 < y1 ? 1 : -1;
+		int err = dx + dy, e2;
+		for (;;) {
+			dirty_cells(x0, y0, x0, y0);
+			if (x0 == x1 && y0 == y1) break;
+			e2 = 2 * err;
+			if (e2 >= dy) { err += dy; x0 += sx; }
+			if (e2 <= dx) { err += dx; y0 += sy; }
+		}
+	} else if (t == T_RECT && !rect_filled) {
+		dirty_cells(x0, y0, x1, y0);
+		dirty_cells(x0, y1, x1, y1);
+		dirty_cells(x0, y0, x0, y1);
+		dirty_cells(x1, y0, x1, y1);
+	} else dirty_cells(x0, y0, x1, y1);
+}
+
+/* A selection's frame: its four edges. */
+static void dirty_frame(int x, int y, int w, int h) {
+	dirty_px(x, y, x + w - 1, y);
+	dirty_px(x, y + h - 1, x + w - 1, y + h - 1);
+	dirty_px(x, y, x, y + h - 1);
+	dirty_px(x + w - 1, y, x + w - 1, y + h - 1);
+}
+
 /* The current cell's slot in the strip. */
 static void dirty_slot(void) {
 	int sw = strip_slot_w(), f = strip_first();
@@ -979,11 +1184,12 @@ static void changed_px(int x0, int y0, int x1, int y1) {
 	bool was = doc.dirty;
 	if (!have_cell()) return;
 	px_touch(&doc, cur);
-	dirty_px(x0, y0, x1, y1);
-	ar_dirty(PV_X, BT_Y + 1, PV_W, ST_H);
+	dirty_cells(x0, y0, x1, y1);
 	dirty_slot();
-	dirty_status();
-	if (!was) dirty_side();             /* "Save *" */
+	/* the status line shows the colour under the cursor */
+	if (cx >= (x0 < x1 ? x0 : x1) && cx <= (x0 < x1 ? x1 : x0) &&
+	    cy >= (y0 < y1 ? y0 : y1) && cy <= (y0 < y1 ? y1 : y0)) dirty_status();
+	if (!was) ar_dirty(SD_X - 2, SD_FILE_Y + 2 * SD_ROW, SD_W + 2, 9);   /* "Save *" */
 }
 
 /* Put a floating selection down where it is. */
@@ -1006,7 +1212,8 @@ static bool lift(void) {
 	fltx = selx;
 	flty = sely;
 	floating = true;
-	dirty_bottom();                 /* the strip shows the cell without it */
+	dirty_slot();                   /* the strip shows the cell without it */
+	dirty_prev(selx, sely, selx + selw - 1, sely + selh - 1);
 	return true;
 }
 
@@ -1182,7 +1389,8 @@ static void stroke_begin(int x, int y, int v) {
 		sx0 = sx1 = x; sy0 = sy1 = y;
 		stroking = true;
 		stroke_v = v;
-		dirty_canvas();
+		line_prep(sx0, sy0, sx1, sy1);
+		dirty_cells(x, y, x, y);
 		break;
 	case T_FILL:
 		begin_change();
@@ -1202,12 +1410,13 @@ static void stroke_begin(int x, int y, int v) {
 			}
 		} else {
 			drop_float();
+			if (sel) dirty_frame(selx, sely, selw, selh);
 			sx0 = sx1 = x; sy0 = sy1 = y;
 			sel = true;
 			selx = x; sely = y; selw = selh = 1;
 			stroking = true;
+			dirty_frame(selx, sely, selw, selh);
 		}
-		dirty_canvas();
 		break;
 	}
 }
@@ -1215,9 +1424,10 @@ static void stroke_begin(int x, int y, int v) {
 static void stroke_move(int x, int y) {
 	if (dragging_sel) {
 		if (x - drag_dx != fltx || y - drag_dy != flty) {
+			dirty_cells(fltx, flty, fltx + selw - 1, flty + selh - 1);
 			fltx = x - drag_dx;
 			flty = y - drag_dy;
-			dirty_canvas();
+			dirty_cells(fltx, flty, fltx + selw - 1, flty + selh - 1);
 		}
 		return;
 	}
@@ -1233,8 +1443,10 @@ static void stroke_move(int x, int y) {
 	case T_LINE:
 	case T_RECT:
 		if (x != sx1 || y != sy1) {
+			dirty_shape(tool, sx0, sy0, sx1, sy1);     /* where it was */
 			sx1 = x; sy1 = y;
-			dirty_canvas();
+			line_prep(sx0, sy0, sx1, sy1);
+			dirty_shape(tool, sx0, sy0, sx1, sy1);     /* and is */
 		}
 		break;
 	case T_SEL: {
@@ -1242,8 +1454,11 @@ static void stroke_move(int x, int y) {
 		int x1 = sx0 < x ? x : sx0, y1 = sy0 < y ? y : sy0;
 		x0 = clampi(x0, 0, cw() - 1); x1 = clampi(x1, 0, cw() - 1);
 		y0 = clampi(y0, 0, ch() - 1); y1 = clampi(y1, 0, ch() - 1);
-		selx = x0; sely = y0; selw = x1 - x0 + 1; selh = y1 - y0 + 1;
-		dirty_canvas();
+		if (x0 != selx || y0 != sely || x1 - x0 + 1 != selw || y1 - y0 + 1 != selh) {
+			dirty_frame(selx, sely, selw, selh);
+			selx = x0; sely = y0; selw = x1 - x0 + 1; selh = y1 - y0 + 1;
+			dirty_frame(selx, sely, selw, selh);
+		}
 		break;
 	}
 	default:
@@ -1261,11 +1476,11 @@ static void stroke_end(void) {
 	if (tool == T_LINE) {
 		begin_change();
 		px_line(&doc, cur, sx0, sy0, sx1, sy1, stroke_v);
-		changed();
+		changed_px(sx0, sy0, sx1, sy1);
 	} else if (tool == T_RECT) {
 		begin_change();
 		px_rect(&doc, cur, sx0, sy0, sx1, sy1, stroke_v, rect_filled);
-		changed();
+		changed_px(sx0, sy0, sx1, sy1);
 	} else if (tool == T_SEL) {
 		char b[40];
 		snprintf(b, sizeof(b), "Selected %d by %d", selw, selh);
@@ -1807,7 +2022,7 @@ static void set_tool(int t) {
 	if (t != T_SEL) select_none();
 	tool = t;
 	stroking = false;
-	dirty_side();
+	dirty_tools();
 	say(t == T_RECT && rect_filled ? "Filled rectangle" : tool_name[t]);
 }
 
@@ -1841,7 +2056,7 @@ static void set_colour(int c) {
 	if (c != ZSP_T && c >= sheet_n()) return;
 	fg = c;
 	if (c != ZSP_T) page = c / 16;
-	dirty_side();
+	dirty_chips();
 	if (editor) dirty_canvas();
 	colour_say(b, sizeof(b), c);
 	say(b);
@@ -2165,11 +2380,12 @@ static void set_zoom(int z) {
 	vy = ccy - CV_H / zoom / 2;
 	clamp_view();
 	dirty_canvas();
-	dirty_side();
+	dirty_zoom();
 }
 
 static void move_cursor(int dx, int dy) {
 	if (!have_cell()) return;
+	kbd_cursor = true;
 	cx = clampi(cx + dx, 0, cw() - 1);
 	cy = clampi(cy + dy, 0, ch() - 1);
 	if (floating && tool == T_SEL) {
@@ -2356,10 +2572,21 @@ static bool click_ui(int x, int y, bool right) {
 		int i;
 		for (i = 0; i < T_COUNT; i++)
 			if (y >= SD_TOOLS_Y + i * SD_ROW && y < SD_TOOLS_Y + i * SD_ROW + 9) { set_tool(i); return true; }
+		if (y >= SD_COL_Y && y < SD_COL_Y + SD_COL_H && chips_grid()) {
+			int cols, gw, gh, gx, c, r, v;
+			grid_geom(&cols, &gw, &gh, &gx);
+			c = (x - gx) / gw; r = (y - SD_COL_Y) / gh;
+			v = r * cols + c;
+			if (x >= gx && c < cols && v < sheet_n()) {
+				if (right) { bg2 = v; dirty_chips(); }
+				else set_colour(v);
+			}
+			return true;
+		}
 		if (y >= SD_COL_Y && y < SD_COL_Y + 4 * (CHIP_H + 1)) {
 			int c = (x - SD_X) / (CHIP_W + 1), r = (y - SD_COL_Y) / (CHIP_H + 1);
 			if (c >= 0 && c < 4 && r * 4 + c < page_chips()) {
-				if (right) { bg2 = page * 16 + r * 4 + c; dirty_side(); }
+				if (right) { bg2 = page * 16 + r * 4 + c; dirty_chips(); }
 				else set_colour(page * 16 + r * 4 + c);
 			}
 			return true;
@@ -2403,10 +2630,12 @@ static void mouse(const ar_event_t *e) {
 			if (tool == T_SEL) select_none();
 			return;
 		}
-		/* the keyboard cursor comes here: its old place repainted */
-		dirty_px(cx, cy, cx, cy);
+		/* the keyboard cursor comes here, and is not shown until a
+		 * key moves it (a frame where the mouse went down looked like
+		 * a pixel selected) */
+		if (kbd_cursor) dirty_px(cx, cy, cx, cy);
+		kbd_cursor = false;
 		cx = px; cy = py;
-		dirty_px(cx, cy, cx, cy);
 		stroke_begin(px, py, (now & 2) ? bg2 : fg);
 		return;
 	}
@@ -2418,7 +2647,7 @@ static void mouse(const ar_event_t *e) {
 	}
 	if (up) {
 		stroke_end();
-		dirty_bottom();
+		dirty_status();
 	}
 }
 

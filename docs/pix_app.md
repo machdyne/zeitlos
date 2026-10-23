@@ -48,6 +48,23 @@ the editor, colour sprite sheets with the tiered palette
 +-----------------------------------------------------+
 ```
 
+**What is drawn when.** Only what changed is drawn again: a pencil
+stroke the pixels it touched (on the canvas and in the preview), a line
+or a box being dragged the pixels where it was and where it is now, a
+selection its frame, a selection being moved where it was and is. The
+canvas's part of a change is put together whole -- the art, the grid,
+the frames -- and drawn in one pass, so nothing on it is cleared and
+drawn again (in 256 colours, eight planes of each). A colour is
+looked up once per palette (`luts_setup()`), not per pixel, and the
+planes are made eight pixels at a time by transposing their bits
+(`c2p8()`), not a pixel and a plane at a time. A line being dragged is
+worked out once a move, a run a row (`line_prep()`). `render_pix out
+cost` prints what each frame of a drawing session writes.
+
+The keyboard's cursor (a frame round one pixel, from 3x) is shown once
+a key moves it, and hidden when the mouse draws: where the mouse went
+down it looked like a pixel selected.
+
 A new cell opens at the zoom that shows all of it (at most 16x). A cell
 larger than the canvas scrolls (Shift+arrows); the preview shows the
 part in view at 1:1.
@@ -77,8 +94,11 @@ as each would:
   is: only the display changes, never the art.
 - **See-through** pixels (`.`) are a checker in both.
 
-**The colours**: the side column shows a page of 16 chips (Shift+PgUp
-and PgDn page through more), the first colour and the second. Left
+**The colours**: in the window the side column shows a page of 16 chips
+(Shift+PgUp and PgDn page through more); full screen, a sheet of 64 or
+256 colours shows them all at once, as small squares (8 x 8, or 16 x
+16), the page of 16 that the keys pick from marked at the left. Then
+the first colour and the second. Left
 click on a chip picks the first, right the second; 0-9 and A-F pick in
 the page, `.` see-through, X swaps the two. The left button draws the
 first colour, the right the second -- see-through, in a new sheet, so
@@ -349,7 +369,9 @@ Open, save and the prompts are the system's boxes (`zdialog.h`). A box
 is a window and wm shows none over game mode, so pix brackets each one
 with `ar_dialog_begin()` / `ar_dialog_end()` ([arcade.md](arcade.md),
 "Dialogs"): full screen is left first, the picture stays painted while
-the box waits, the sound is held, and every key is released afterwards.
+the box waits, the sound is held, every key is released afterwards,
+and full screen comes back once the box (or the boxes, one after the
+other) are done.
 
 ## On a build host
 

@@ -364,6 +364,31 @@ void ar_plane_line_rows(int k, int x0, int y0, int x1, int y1, int op, int y0cli
 	arh_line(x0 + px, y0 + py, x1 + px, y1 + py, op, cx0, cy0, cx1, cy1);
 }
 
+static void opaque_piece(int x, int y, int w, int h, int dsx, int dsy,
+	const void *ctx) {
+	const blit_ctx_t *b = (const blit_ctx_t *)ctx;
+	if (arh_copy_ok()) {
+		arh_blit(b->bits, b->stride, b->sx + dsx, b->sy + dsy, x, y, w, h, ARH_COPY);
+		return;
+	}
+	arh_fill(x, y, w, h, 0);
+	arh_blit(b->bits, b->stride, b->sx + dsx, b->sy + dsy, x, y, w, h, ARH_OR);
+}
+
+void ar_bitmap_opaque(const void *bits, int stride, int sx, int sy,
+	int x, int y, int w, int h) {
+	blit_ctx_t b;
+	if (ar__s.mode == AR_MODE_FULL_COLOR) {
+		ar_fill(x, y, w, h, 0);
+		ar_bitmap(bits, stride, sx, sy, x, y, w, h, 1);
+		return;
+	}
+	if (!clip_logical(&x, &y, &w, &h, &sx, &sy)) return;
+	b.bits = bits; b.stride = stride; b.sx = sx; b.sy = sy; b.c = 0;
+	b.spr = NULL;
+	for_pieces(x, y, w, h, opaque_piece, &b);
+}
+
 void ar_bitmap(const void *bits, int stride, int sx, int sy,
 	int x, int y, int w, int h, int c) {
 	blit_ctx_t b;

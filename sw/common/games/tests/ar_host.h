@@ -55,6 +55,9 @@ extern char ar_host_said[64];
 extern int ar_host_says;
 
 extern uint64_t arh_ops;
+/* Framebuffer pixels written, one plane each: what a frame costs the
+ * blitter, more or less. */
+extern uint64_t arh_pixels;
 extern uint32_t zsfxh_notes, zsfxh_updates, zsfxh_offs;
 extern uint8_t zsfxh_peak[8];
 
