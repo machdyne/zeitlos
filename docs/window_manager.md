@@ -801,19 +801,10 @@ from the dock) has a keyboard equivalent, all handled directly in
   the dock -- mouse click or keyboard Enter -- its icon is drawn
   *inverted* (`dock_launching[]`, `draw_icon_bitmap_inverted()`: a
   solid-filled slot with the icon's own shape cut out of it, rather
-  than lit up against a dark slot) starting BEFORE `z_proc_run()` is
-  even called, not after it returns -- `z_proc_run()`
-  (`sw/os/kernel.c`'s `k_proc_run()`) blocks wm's own process for as
-  long as it takes to load the app's entire binary off the
-  filesystem, which is the actual slow part of "launching" -- drawing
-  the inverted icon only after that call returns would mean the
-  invert only ever covered the (usually imperceptibly fast)
-  remainder: the newly-started process's own C runtime init plus its
-  first `z_win_create()` call, with no disk I/O left in it by that
-  point. `dock_launch()`'s own framebuffer write lands in VRAM and
-  stays there, visible on screen, even while wm sits blocked inside
-  `z_proc_run()` right after -- the display scans out from VRAM
-  independently of whichever process the CPU happens to be running.
+  than lit up against a dark slot) as `z_proc_run()` is called. That
+  call returns at once: the new process loads its program itself, in
+  the background (kernel.md, "Launching in the background"); before,
+  it held wm -- the whole desktop -- for the length of the load.
   The inverted state is cleared either when the launched pid creates
   its first window (`handle_message()`'s `Z_WM_CREATE_WINDOW` case,
   matched by pid, not by which icon was clicked -- an app could in
@@ -826,11 +817,12 @@ from the dock) has a keyboard equivalent, all handled directly in
   -- `dock_launch()`'s own `dock_launching[slot]` check -- so an
   impatient double-click or a held-down Enter can't spawn a
   slow-loading app twice before its first window ever shows up. A
-  generous iteration-count timeout (`DOCK_LAUNCH_TIMEOUT_ITERS`,
-  checked once per main-loop iteration) clears the inverted state
+  timeout (`DOCK_LAUNCH_TIMEOUT_TICKS`, 3 s) clears the inverted state
   anyway if a launched process starts but never creates a window at
-  all (crashes early, isn't a GUI app, etc) -- otherwise a single bad
-  launch would permanently strand that icon.
+  all (crashes early, isn't a GUI app, its load failed) -- otherwise a
+  single bad launch would permanently strand that icon. It waits for
+  as long as the process is still loading (`Z_PROC_FLAG_LOADING`,
+  `dock_pid_loading()`), a second at a time.
 
 ### Speech keys
 

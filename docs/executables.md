@@ -191,6 +191,10 @@ truncated, or with a length or offset that points outside the image --
 is refused, and the process is not started. LZ4 carries no checksum: a
 changed literal byte is not caught (nor was it before compression).
 
+The kernel's loaders run in the process being started, which loads its
+own program, in the background (kernel.md, "Launching in the
+background"); at boot, `init` loads the core apps itself.
+
 **The decoder** is `sw/common/zexec_lz4.c`, about 1.5KB of code
 (compiled `-O2` in a `-Os` kernel) and 280 bytes of state (one copy in
 the kernel, taken in turn, since a load can wait on `fs` mid-stream

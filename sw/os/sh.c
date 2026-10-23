@@ -1178,6 +1178,12 @@ void sh(void) {
 				continue;
 			}
 			uint32_t size = xi.total;
+			// (before the argument goes to wm: a refusal must not leave it
+			// there for the next program)
+			if (strlen(arg) >= Z_PROC_RUN_NAME_MAX) {
+				printf("run: name too long (%d characters at most)\n", Z_PROC_RUN_NAME_MAX - 1);
+				continue;
+			}
 			// The stack size is in the header just parsed. See
 			// k_proc_create_exec() in kernel.c.
 			// Anything after the name is the program's launch
@@ -1204,29 +1210,17 @@ void sh(void) {
 					printf("no wm: launch argument ignored\n");
 				}
 			}
-			// One line: what runs, from where, as which process, and how
-			// long the load took -- `text: pid 6, 155520 bytes from flash
-			// (compressed) at 404e7000, 210 ms`. (k_proc_create_exec() says
-			// why, when it cannot.)
+			// The program loads itself, in the background
+			// (k_proc_launch(), kernel.c): the console is free at once.
+			// One line now -- what runs, from where, as which process --
+			// and one when it is in, from the new process: `text: pid 6,
+			// 155520 bytes from flash (compressed) at 404e7000, 210 ms`.
+			// (k_proc_create_exec() says why, when it cannot start.)
 			static char where[FS_PATH_MAX];
 			if (fs_exec_where(arg, where, sizeof(where))) strcpy(where, "?");
-			uint32_t pid = k_proc_create_exec(arg, &xi);
+			uint32_t pid = k_proc_launch(arg, &xi, true);
 			if (!pid) continue;
-			uint32_t base = k_proc_base(pid), t0 = z_uptime_ticks();
-			if (fs_load_exec_any(base, arg, &xi)) {
-				printf("%s: loading from %s failed -- not started\n", arg, where);
-				k_proc_kill(pid);
-				continue;
-			}
-			printf("%s: pid %ld, %ld bytes%s from %s at %08lx, %ld ms", arg,
-				(long)pid, (long)size, xi.is_zexe ? "" : " (raw)", where,
-				(unsigned long)base, (long)((z_uptime_ticks() - t0) * 1000u / Z_TICK_HZ));
-			if (xi.compressed)
-				printf(" (%ld ms unpacking, %ld on the CPU)",
-					(long)(k_exec_unpack_ticks * 1000u / Z_TICK_HZ),
-					(long)(k_exec_unpack_cpu * 1000u / Z_TICK_HZ));
-			printf("\n");
-			k_proc_start(pid);
+			printf("%s: pid %ld, loading %ld bytes from %s\n", arg, (long)pid, (long)size, where);
 
 		}
 

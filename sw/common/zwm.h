@@ -579,8 +579,18 @@ typedef struct {
 //
 //   launcher -> wm   Z_WM_SET_ARG   Z_STR, the argument
 //   launcher         z_proc_run(app)
+//   (kernel)  -> wm  Z_WM_ARG_CHILD Z_UINT32, the new pid, as the launcher
 //   new app  -> wm   Z_WM_GET_ARG   (no payload)
 //   wm       -> app  Z_WM_ARG       Z_STR, empty if there is none
+//
+// Since launches load in the background (docs/kernel.md), two can be
+// under way at once -- a file opened in view from files while the dock
+// starts text -- so "one app mid-launch" no longer holds: wm keeps a
+// few arguments, each its launcher's, and Z_WM_ARG_CHILD -- sent by the
+// kernel at every launch, as the launcher (k_proc_launch(), sw/os/
+// kernel.c) -- says whose it is. An app asking gets the argument meant for it, or
+// else the oldest that is meant for nobody yet (a launcher from before
+// Z_WM_ARG_CHILD; a child faster than its launcher's message).
 //
 // Claiming is destructive: wm marks the slot empty as soon as it
 // answers, so a second app starting later gets nothing rather than
@@ -861,6 +871,11 @@ typedef struct {
 // kernel shell's `exit`: Z_UINT32 0, put the windows back. (Ctrl+Alt+Esc
 // is wm's own hotkey, both ways.) No reply.
 #define Z_WM_RESCUE              (Z_SUBJ_WM + 34)
+
+// Z_WM_ARG_CHILD -- the launch argument this process last set is for
+// this pid (Z_UINT32); sent by the kernel at a launch, as the launcher.
+// See "launch arguments" above. No reply.
+#define Z_WM_ARG_CHILD           (Z_SUBJ_WM + 35)
 
 #define Z_WM_PACK_PLACE(x, y) \
 	((((uint32_t)(y) & 0x3FF) << 10) | ((uint32_t)(x) & 0x3FF))

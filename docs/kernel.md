@@ -113,6 +113,81 @@ bug in `docs/app_runtime.md` -- and two things now lean on it
 deliberately: a 4MB request on a small board, and any future dynamic
 per-process allocation.
 
+### Launching in the background
+
+A launch -- `run` in the kernel shell, `z_proc_run()` from any app (the
+dock's, most often) -- makes the process (`k_proc_create_exec()`, in
+the caller, so a refusal is immediate) and then returns: **the new
+process loads its program itself**, in its own turns
+(`k_proc_launch()`, `sw/os/kernel.c`). Before, the caller loaded it:
+the shell, and so the serial console, or wm, and so the desktop, did
+nothing else until the program was in -- 15 seconds for planedemo's
+3 MB (October 2026; 8KB card reads have since cut that, see
+executables.md).
+
+How, without another process or any more memory:
+
+- `k_proc_launch()` copies a stub of eight instructions to the start of
+  the new block, where the program will go, and a **ticket** -- the
+  name, the parsed header, the launch tick -- 256 bytes below the top,
+  just under where the stack starts. It sets `Z_PROC_FLAG_LOADING`
+  (`zproc.h`) and starts the process.
+- The stub moves its stack below the ticket and calls the gate
+  (`reg_kernel`) with `K_LOAD_SELF` -- not a syscall in
+  `syscalls.def`; it is honoured only for a process that is LOADING.
+- `k_load_self()` loads the program over the stub
+  (`fs_load_exec_any()`, the same loader as before: it waits on `fs`,
+  unpacks, and is preempted like any process), clears the flag and
+  jumps to `0x8000_0000` with the stack `k_proc_create()` set up --
+  `[sp]` = 0, no arguments. The program starts exactly as one started
+  after its load did. Once the fetch is in the app window the code is
+  unprivileged again (mpu.md).
+- A load that fails (a file cut short, an image that does not unpack)
+  is printed -- `planedemo: loading from /apps/planedemo failed -- not
+  started` -- and the process ends with the crash status.
+
+`run` prints `planedemo: pid 6, loading 3177924 bytes from
+/apps/planedemo` at once, and when the program is in, from the new
+process, the line it used to print: `planedemo: pid 6, 3177924 bytes
+from /apps/planedemo at 404eb000, 2100 ms (1900 ms unpacking, ...)`.
+Other output can come in between. `init` still loads the core apps
+itself, one after another, as before.
+
+The dock keeps a launched icon inverted until the app makes its first
+window, as before; its timeout (3 s) now waits as long as the process
+is still LOADING. The posix shell's `ps` shows such a process as
+`load`.
+
+What a caller gets back is the pid, at once: a load that fails later
+is not a failed `z_proc_run()`. Callers that fall back when a start
+fails (zlink: posix, else repl) fall back on what fails at once -- no
+memory, no slot, no file -- which is what they meant.
+
+Launches can now overlap -- a file opened in view from files while the
+dock starts text -- so a **launch argument** (`Z_WM_SET_ARG`, zwm.h)
+is no longer "the one pending": wm keeps two, each its launcher's, and
+`k_proc_launch()` tells wm, as the launcher, which pid the launcher's
+argument is for (`Z_WM_ARG_CHILD`). An app gets the argument meant for
+it, else the oldest meant for nobody yet. `Z_WM_WIN_NEXT_PLACE` with
+tag 0 ("the next process to make a window") has the same race and is
+not fixed. wm's Super+S does not start a second `tts` while the first
+is still loading.
+
+One loader state is shared (the LZ4 decoder, `k_exec_unpack()`): loads
+unpack one at a time. A process killed in the middle of its load
+releases it (`kfs.c`, `unpack_held()`). The resolver's half-second
+cache is read and written with interrupts masked, since two loads can
+resolve at once.
+
+Known limits: the program is looked up by name again when the load
+starts (the launch's lookup is reused if it is under half a second
+old), so a file replaced in between is loaded into a block sized for
+the old one. The loader checks what it reads against the old sizes, so
+that is a failed load -- except an uncompressed file replaced by a
+bigger one, which would be cut short. The kernel's fs client keeps its late-reply list in one place
+for every process, so a reply to a load that timed out can stay in the
+new app's mailbox.
+
 ## The scheduler
 
 Round-robin over runnable processes, driven by the KTIMER interrupt at

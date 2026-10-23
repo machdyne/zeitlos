@@ -434,6 +434,9 @@ static void dock_view_apply(void);
 static bool dock_launching[DOCK_APPS_MAX];
 static uint8_t dock_launching_pid[DOCK_APPS_MAX];
 static uint16_t dock_launching_deadline[DOCK_APPS_MAX];
+// the launch's program was still loading at the last look (its load is
+// in the background: the timeout starts again once it is in)
+static uint8_t dock_launch_loading[(DOCK_APPS_MAX + 7) / 8];   // a bit an icon
 
 static wm_window_t windows[WM_MAX_WINDOWS];
 
@@ -451,17 +454,22 @@ static uint32_t my_pid;
 static void speak_focus(int idx);
 static void speak_dock_selection(void);
 
-// -- pending launch argument -- see Z_WM_SET_ARG in zwm.h --
+// -- pending launch arguments -- see Z_WM_SET_ARG in zwm.h --
 //
-// One slot, because only one app is ever mid-launch at a time. The
-// bytes are deliberately NOT cleared when the argument is claimed,
-// only the valid flag is: the reply is a Z_STR pointing straight at
-// this buffer, and the payload is borrowed until the recipient reads
-// it (docs/messaging.md). Zeroing it here would hand the claiming app
-// an empty string.
-static char pending_arg[Z_WM_ARG_MAX];
-static bool pending_arg_valid;
-static uint32_t pending_arg_tick;
+// A few slots: launches load in the background, so more than one can be
+// under way (zwm.h, "launch arguments"). Each is its launcher's, and,
+// once Z_WM_ARG_CHILD says so, its child's. The bytes are deliberately
+// NOT cleared when an argument is claimed, only the valid flag is: the
+// reply is a Z_STR pointing straight at the slot, and the payload is
+// borrowed until the recipient reads it (docs/messaging.md). Zeroing it
+// here would hand the claiming app an empty string.
+#define WM_ARG_SLOTS 2
+static struct {
+	char		arg[Z_WM_ARG_MAX];
+	bool		valid;
+	uint32_t	setter, child;  // child 0: not said yet
+	uint32_t	tick;
+} pending_args[WM_ARG_SLOTS];
 // what an app gets when there is nothing pending. A real, static,
 // NUL-terminated string rather than NULL, so the reply is always a
 // well-formed Z_STR the receiver can read without a special case.
@@ -1648,6 +1656,17 @@ static bool dock_dots_shown(void) {
 	return false;
 }
 
+// Process `pid`'s flags (zproc.h), or 0 if there is none (or it is
+// dying).
+static uint32_t wm_proc_flags(uint32_t pid) {
+	uint32_t trunc = 0;
+	uint32_t np = z_proc_list(dock_scratch.procs, DOCK_PROCS_MAX, &trunc);
+	for (uint32_t i = 0; i < np; i++)
+		if (dock_scratch.procs[i].pid == pid)
+			return dock_scratch.procs[i].flags & Z_PROC_FLAG_DIE ? 0 : dock_scratch.procs[i].flags;
+	return 0;
+}
+
 // How many copies of each dock app are running, from the kernel's
 // process table: a process counts for an app when the name the kernel
 // reports for it is the app's (dk_proc_is()). Repaints the dock when a
@@ -2723,21 +2742,14 @@ static void dock_launch(int slot) {
 	// one even gets as far as creating its window.
 	if (dock_launching[slot]) return;
 
-	// mark this icon "launching" and repaint it inverted BEFORE
-	// calling z_proc_run() below -- NOT after, which is where this
-	// used to happen and was the reason the invert was never actually
-	// visible. z_proc_run() (-> k_proc_run(), sw/os/kernel.c) blocks
-	// THIS process -- wm itself -- for as long as it takes to load
-	// the app's entire binary off the filesystem, which is the actual
-	// slow part of "launching" an app; drawing the inverted icon only
-	// after that call returns means the invert only ever covered the
-	// (usually imperceptibly fast) remainder -- the newly-started
-	// process's own C runtime init plus its first z_win_create() call,
-	// no disk I/O involved at that point. The framebuffer write below
-	// lands in VRAM immediately and stays there, visible on screen,
-	// even while wm's own process sits blocked inside z_proc_run()
-	// right after -- the display scans out from VRAM independently of
-	// whichever process the CPU happens to be running at the time.
+	// mark this icon "launching" and repaint it inverted. z_proc_run()
+	// (-> k_proc_run(), sw/os/kernel.c) returns at once: the new
+	// process loads its program itself, in the background (docs/
+	// kernel.md, "Launching in the background"), and the icon stays
+	// inverted until it makes its first window -- or takes the screen
+	// -- or the timeout, which waits for as long as it is still
+	// loading (Z_PROC_FLAG_LOADING). Before, z_proc_run() held wm --
+	// the whole desktop -- for the length of the load.
 	dock_launching[slot] = true;
 	dock_launching_pid[slot] = 0;	// not known yet -- see below
 	dock_launching_deadline[slot] = (uint16_t)(z_uptime_ticks() + DOCK_LAUNCH_TIMEOUT_TICKS);
@@ -4275,6 +4287,10 @@ static void speak_dock_selection(void) {
 
 }
 
+// The tts wm started last: a second Super+S while it loads must not
+// start another (speech_toggle()).
+static uint32_t tts_starting;
+
 static void speech_toggle(void) {
 
 	uint32_t pid;
@@ -4286,13 +4302,17 @@ static void speech_toggle(void) {
 	if (z_speak_service_pid(&pid)) {
 		printf("wm: speech off\n");
 		z_msg_new_send(pid, Z_TTS_QUIT, 0, z_obj_none());
+		tts_starting = 0;
+	} else if (tts_starting && (wm_proc_flags(tts_starting) & Z_PROC_FLAG_LOADING)) {
+		// Started, and still loading (launches load in the
+		// background, docs/kernel.md): not a second one.
 	} else {
-		// Blocks wm while tts loads, as a dock launch does. tts says
-		// "Speech on" itself once it is up; if it is not installed
-		// there is nothing that CAN say so, which is why the log line
-		// is the only report.
+		// tts says "Speech on" itself once it is up; if it is not
+		// installed there is nothing that CAN say so, which is why
+		// the log line is the only report.
 		printf("wm: speech on -- starting tts\n");
-		if (!z_proc_run("tts"))
+		tts_starting = z_proc_run("tts");
+		if (!tts_starting)
 			printf("wm: speech: could not start tts (is it installed?)\n");
 	}
 
@@ -6933,28 +6953,57 @@ static void handle_message(z_msg_t *msg) {
 
 		}
 
-		case Z_WM_SET_ARG:
+		case Z_WM_SET_ARG: {
 
 			if (msg->obj.type != Z_STR || !msg->obj.val.str) break;
 
-			strncpy(pending_arg, msg->obj.val.str, Z_WM_ARG_MAX - 1);
-			pending_arg[Z_WM_ARG_MAX - 1] = 0;
+			// this launcher's that is for nobody yet, else a free or
+			// expired slot, else the older
+			uint32_t now = z_uptime_ticks();
+			int si = (int32_t)(pending_args[1].tick - pending_args[0].tick) < 0;
+			for (int i = WM_ARG_SLOTS - 1; i >= 0; i--) {
+				if (!pending_args[i].valid || now - pending_args[i].tick > Z_WM_ARG_TIMEOUT) si = i;
+			}
+			for (int i = 0; i < WM_ARG_SLOTS; i++)
+				if (pending_args[i].valid && pending_args[i].setter == msg->from && !pending_args[i].child) si = i;
+			strncpy(pending_args[si].arg, msg->obj.val.str, Z_WM_ARG_MAX - 1);
+			pending_args[si].arg[Z_WM_ARG_MAX - 1] = 0;
+			pending_args[si].valid = true;
+			pending_args[si].setter = msg->from;
+			pending_args[si].child = 0;
+			pending_args[si].tick = now;
+			printf("wm: launch arg set: '%s'\n", pending_args[si].arg);
+			break;
 
-			pending_arg_valid = true;
-			pending_arg_tick = z_uptime_ticks();
+		}
 
-			printf("wm: launch arg set: '%s'\n", pending_arg);
+		case Z_WM_ARG_CHILD:
 
+			// this launcher's that is for nobody yet
+			if (msg->obj.type == Z_UINT32)
+				for (int i = 0; i < WM_ARG_SLOTS; i++)
+					if (pending_args[i].valid && pending_args[i].setter == msg->from && !pending_args[i].child)
+						pending_args[i].child = msg->obj.val.uint32;
 			break;
 
 		case Z_WM_GET_ARG: {
 
-			// Expired arguments read as absent -- see Z_WM_ARG_TIMEOUT
-			// in zwm.h for why an unclaimed one must not linger.
-			if (pending_arg_valid &&
-				z_uptime_ticks() - pending_arg_tick > Z_WM_ARG_TIMEOUT) {
-				printf("wm: launch arg expired unclaimed\n");
-				pending_arg_valid = false;
+			// The one for this process, else the older one for nobody
+			// yet. Expired arguments read as absent -- see
+			// Z_WM_ARG_TIMEOUT in zwm.h for why an unclaimed one must
+			// not linger.
+			uint32_t now = z_uptime_ticks();
+			int si = -1;
+			for (int i = 0; i < WM_ARG_SLOTS; i++) {
+				if (!pending_args[i].valid) continue;
+				if (now - pending_args[i].tick > Z_WM_ARG_TIMEOUT) {
+					printf("wm: launch arg expired unclaimed\n");
+					pending_args[i].valid = false;
+				} else if (pending_args[i].child == msg->from) {
+					si = i;
+					break;
+				} else if (!pending_args[i].child &&
+					(si < 0 || (int32_t)(pending_args[i].tick - pending_args[si].tick) < 0)) si = i;
 			}
 
 			// Built by hand rather than with z_obj_str(), which
@@ -6966,11 +7015,11 @@ static void handle_message(z_msg_t *msg) {
 			// send_win_rect() and docs/messaging.md.
 			z_obj_t reply;
 			reply.type = Z_STR;
-			reply.val.str = pending_arg_valid ? pending_arg : arg_empty;
+			reply.val.str = si >= 0 ? pending_args[si].arg : arg_empty;
 
 			// Claimed exactly once. Only the flag is cleared, not the
-			// bytes -- see pending_arg's own comment.
-			pending_arg_valid = false;
+			// bytes -- see pending_args' own comment.
+			if (si >= 0) pending_args[si].valid = false;
 
 			z_msg_new_send(msg->from, Z_WM_ARG, msg->tag, reply);
 
@@ -7795,6 +7844,22 @@ int main(void) {
 			if (!dock_launching[di]) continue;
 			if ((int16_t)((uint16_t)z_uptime_ticks() - dock_launching_deadline[di]) < 0)
 				continue;
+			// Still loading (the program loads itself in the
+			// background, docs/kernel.md): a big one takes longer
+			// than the timeout. Look again in a second.
+			if (dock_launching_pid[di] &&
+			    (wm_proc_flags(dock_launching_pid[di]) & Z_PROC_FLAG_LOADING)) {
+				dock_launching_deadline[di] = (uint16_t)(z_uptime_ticks() + Z_TICK_HZ);
+				dock_launch_loading[di >> 3] |= (uint8_t)(1u << (di & 7));
+				continue;
+			}
+			// ...and once it is in, the whole timeout again for it to
+			// make its window, as a launch had before
+			if (dock_launch_loading[di >> 3] & (1u << (di & 7))) {
+				dock_launch_loading[di >> 3] &= (uint8_t)~(1u << (di & 7));
+				dock_launching_deadline[di] = (uint16_t)(z_uptime_ticks() + DOCK_LAUNCH_TIMEOUT_TICKS);
+				continue;
+			}
 			printf("wm: dock: '%s' (pid %ld) made no window\n",
 				dock_apps[di].name, (long)dock_launching_pid[di]);
 			dock_launching[di] = false;

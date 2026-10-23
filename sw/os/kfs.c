@@ -348,16 +348,26 @@ static struct {
 	bool			valid;
 } last_res;
 
+// Read and written with interrupts masked: a launch's load runs in the
+// process being started (k_proc_launch(), kernel.c), so two can be
+// resolving at once, and a copy cut in half by a switch would be a
+// path that is neither.
 static exec_src_t exec_resolve_kept(const char *name, char *resolved, z_exec_info_t *info) {
 	z_exec_info_t tmp;
+	uint32_t m;
 	if (!info) info = &tmp;
+	m = maskirq(0xffffffffu);
 	if (name && last_res.valid && !strcmp(name, last_res.name) &&
 		z_uptime_ticks() - last_res.tick < RESOLVE_KEEP) {
+		exec_src_t src = last_res.src;
 		strcpy(resolved, last_res.resolved);
 		*info = last_res.info;
-		return last_res.src;
+		maskirq(m);
+		return src;
 	}
+	maskirq(m);
 	exec_src_t src = exec_resolve(name, resolved, info);
+	m = maskirq(0xffffffffu);
 	last_res.valid = false;
 	if (name && strlen(name) < RESOLVED_MAX && src != SRC_NONE) {
 		strcpy(last_res.name, name);
@@ -367,6 +377,7 @@ static exec_src_t exec_resolve_kept(const char *name, char *resolved, z_exec_inf
 		last_res.tick = z_uptime_ticks();
 		last_res.valid = true;
 	}
+	maskirq(m);
 	return src;
 }
 #define exec_resolve exec_resolve_kept
@@ -395,17 +406,31 @@ int fs_exec_is_flash(char *path) {
 // -- compressed executables (docs/executables.md) --
 //
 // One decoder for every load (3.3KB of tables and buffer), kept here
-// rather than on a stack: a load runs on the stack of whoever asked,
-// which may be wm's 8KB. A load from a file waits on fs mid-stream, so
-// another can start meanwhile; it waits its turn.
+// rather than on a stack: a load runs on the stack of the process
+// being loaded (k_proc_launch(), kernel.c; at boot, init's), which may
+// be 8KB. A load from a file waits on fs mid-stream, so another can
+// start meanwhile; it waits its turn.
 static z_exec_lz4_t k_unpack;
 static volatile bool k_unpack_busy;
+// Who has it: a load runs in the process being loaded now
+// (k_proc_launch(), kernel.c), and that process can be killed mid-load
+// (`kill` in the shell). Its decoder is then free again.
+static volatile uint32_t k_unpack_pid, k_unpack_serial;
 
 uint32_t k_exec_unpack_ticks, k_exec_unpack_cpu;
 
+static bool unpack_held(void) {
+	if (!k_unpack_busy) return false;
+	uint32_t p = k_unpack_pid;
+	return p < Z_PROCS_MAX && z_procs[p].base && z_procs[p].serial == k_unpack_serial &&
+		!(z_procs[p].flags & Z_PROC_FLAG_DIE);
+}
+
 int k_exec_unpack(uint8_t *out, uint32_t len, z_exec_fill_t fill, void *ctx) {
-	while (k_unpack_busy) k_proc_wait_ticks(1);
+	while (unpack_held()) k_proc_wait_ticks(1);
 	k_unpack_busy = true;
+	k_unpack_pid = z_pid;
+	k_unpack_serial = z_procs[z_pid].serial;
 	uint32_t me = z_pid, t0 = z_uptime_ticks(), c0 = z_procs[me].cpu_ticks;
 	int r = z_exec_lz4(&k_unpack, out, len, fill, ctx);
 	k_exec_unpack_ticks = z_uptime_ticks() - t0;

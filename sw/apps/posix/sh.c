@@ -1196,6 +1196,7 @@ static void bi_ps(px_shell_t *sh, int argc, char **argv) {
     for (uint32_t i = 0; i < n; i++) {
         const z_proc_info_t *p = &procs[i];
         const char *state = (p->flags & Z_PROC_FLAG_DIE) ? "dying" :
+            (p->flags & Z_PROC_FLAG_LOADING) ? "load" :
             (p->flags & Z_PROC_FLAG_BLOCKED) ? "wait" : "run";
         px_printf(sh, "%5lu %-24s %-5s %9lu %8lu\n", (unsigned long)p->pid,
             p->name[0] ? p->name : "-", state, (unsigned long)(p->size / 1024),

@@ -367,6 +367,14 @@ extern volatile uint32_t z_kernel_ticks;
 
 uint32_t k_proc_create(uint32_t size, uint32_t stack_size);
 uint32_t k_proc_create_exec(const char *name, const z_exec_info_t *xi);
+// k_proc_create_exec(), then the program loaded by the new process
+// itself, in the background: returns the pid at once, or 0 if no
+// process could be made. `report` prints the load's line when it is in
+// (sh.c's `run`); a load that fails is always printed, and the process
+// ends. docs/kernel.md, "Launching in the background".
+uint32_t k_proc_launch(const char *name, const z_exec_info_t *xi, bool report);
+// The longest program name or path a launch takes, with its 0.
+#define Z_PROC_RUN_NAME_MAX 64
 uint32_t k_proc_base(uint32_t pid);
 z_rv k_proc_start(uint32_t pid);
 z_rv k_proc_stop(uint32_t pid);

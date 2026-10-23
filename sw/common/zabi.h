@@ -19,6 +19,6 @@
  * `make abi` and commit the result with the change.
  */
 
-#define Z_ABI_ID "81c0a586e7d78442"
+#define Z_ABI_ID "528faafd6f1b417e"
 
 #endif

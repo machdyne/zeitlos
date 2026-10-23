@@ -107,6 +107,12 @@
 // the MPU's full protection.
 #define Z_PROC_FLAG_DRV_WRITE	0x000000020
 
+// Its program is still being loaded: the process loads itself, in its
+// own turns, and runs it once it is in (sw/os/kernel.c, k_proc_launch();
+// docs/kernel.md, "Launching in the background"). Who launched it went
+// on at once; wm's dock keeps the icon inverted while this is set.
+#define Z_PROC_FLAG_LOADING	0x000000040
+
 // Longest process name reported below. Matches Z_PIDREG_NAME_MAX
 // (sw/os/pidreg.h), which is where the names come from -- declared
 // separately rather than including that header, which is kernel-side

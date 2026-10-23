@@ -27,6 +27,7 @@
 #include "zar.h"	// the launch reserve for arenas (k_arena_reserve())
 #include "../common/zpaths.h"
 #include "../common/zabi.h"	// Z_ABI_ID, for k_abi()
+#include "../common/zwm.h"	// Z_WM_ARG_CHILD, for k_proc_launch()
 #include "fsapi.h"
 #include "procapi.h"
 #include "flashapi.h"	// k_flash, referenced by the syscall table
@@ -284,6 +285,13 @@ static __attribute__((section(".bss"))) uint32_t k_proc_serial_last;
 
 void sh(void);
 uint32_t *z_kernel_entry(uint32_t cmd, uint32_t *args, uint32_t val);
+
+// A process loading its own program (k_proc_launch(), below). Not a
+// syscall in syscalls.def -- the stub is the only caller, and an app
+// calling it is refused (the process is not LOADING). Far past
+// Z_SYSCALL_COUNT, so nothing there can ever take its number.
+#define K_LOAD_SELF 0x4C4Fu
+static void __attribute__((noinline, noreturn)) k_load_self(void);
 // memory protection (docs/mpu.md); defined with k_fault() below
 static bool k_mpu;
 static void k_mpu_init(void);
@@ -503,7 +511,6 @@ z_obj_t *k_video_set_mode(z_obj_t *args) {
 // file" rather than an error about length. 64 matches
 // Z_FLIST_PATH_MAX (sw/common/zflist.h), which is what the browser
 // can produce.
-#define Z_PROC_RUN_NAME_MAX 64
 z_obj_t *k_proc_run(z_obj_t *args) {
 
 	if (!args) return (&z_fail);
@@ -529,21 +536,10 @@ z_obj_t *k_proc_run(z_obj_t *args) {
 
 	// The stack size is in the header just parsed; a refusal is
 	// printed by k_proc_create_exec().
-	if (size) {
-		pid = k_proc_create_exec(name, &xi);
-		if (pid) {
-			uint32_t base = k_proc_base(pid);
-			// Not started on a failed load: a file cut short, or a
-			// compressed image that does not unpack.
-			if (fs_load_exec_any(base, name, &xi)) {
-				printf("%s: loading failed -- not started\n", name);
-				k_proc_kill(pid);
-				pid = 0;
-			} else {
-				k_proc_start(pid);
-			}
-		}
-	}
+	// Loaded in the background, by the new process itself
+	// (k_proc_launch()): the caller -- wm's dock, most often -- goes on
+	// at once. A load that fails is printed there, and the process ends.
+	if (size) pid = k_proc_launch(name, &xi, false);
 
 	args->type = Z_UINT32;
 	args->val.uint32 = pid;
@@ -1918,6 +1914,12 @@ uint32_t *z_kernel_entry(uint32_t syscall_id, uint32_t *regs, uint32_t irqs) {
 
 	if (syscall_id != Z_SYSCALL_NONE) {
 
+		// a process loading its own program (k_proc_launch()): does
+		// not come back here
+		if (syscall_id == K_LOAD_SELF && z_pid < Z_PROCS_MAX &&
+			(z_procs[z_pid].flags & Z_PROC_FLAG_LOADING))
+			k_load_self();
+
 		if (syscall_id >= Z_SYSCALL_COUNT || !z_syscall_table[syscall_id]) {
 			ret = (uint32_t *)&z_fail;
 		} else {
@@ -2605,6 +2607,141 @@ uint32_t k_proc_create(uint32_t size, uint32_t stack_size) {
 	}
 
 	return(0);
+}
+
+// -- launching in the background (docs/kernel.md) --
+//
+// A launch used to load the program in the process that asked for it:
+// `run` in the shell, the dock in wm, any app's z_proc_run(). For as
+// long as the load took -- 15 seconds for planedemo's 3 MB, before the
+// loader read the card 8KB at a time -- the shell, and so the serial
+// console, or wm, and so the desktop, did nothing else.
+//
+// So the new process loads itself. k_proc_launch() makes it as before
+// (one block, its image and its stack), writes a few instructions where
+// its program will go and a ticket below where its stack will start,
+// and starts it -- and returns. The process's first turn runs the
+// stub, which calls into the kernel (z_kernel_entry(), K_LOAD_SELF);
+// the kernel loads the program over the stub, in the new process's own
+// turns, and then jumps to the program's start with the stack where
+// k_proc_create() put it: exactly the state a process started after
+// its load began with. A load that fails is printed and the process
+// ends. No other process, no other memory, nothing to set up: the work
+// is what it was, done by whoever is waiting for it.
+
+// The stub, copied to the start of the new process's block. Position
+// independent: reg_kernel (0x0c) holds the gate's address, as for every
+// syscall (zeitlos.c). It first moves its stack below the ticket.
+#define K_TICKET_SPACE 256
+__asm__(
+	".section .rodata\n"
+	".balign 4\n"
+	".globl k_load_stub\n"
+	"k_load_stub:\n"
+	"	addi sp, sp, -256\n"
+	"	li a0, 0x4C4F\n"
+	"	li a1, 0\n"
+	"	li a2, 0\n"
+	"	lw t0, 12(zero)\n"
+	"	jalr ra, 0(t0)\n"
+	"1:	j 1b\n"
+	".globl k_load_stub_end\n"
+	"k_load_stub_end:\n"
+	".text\n");
+extern const uint32_t k_load_stub[], k_load_stub_end[];
+
+#define K_TICKET_MAGIC 0x4B544C5Au	// "ZLTK"
+
+// What the new process needs to load itself, written below its stack:
+// between the 16 bytes at the top (the initial sp) and where the stub
+// moves its stack to.
+typedef struct {
+	uint32_t		magic;
+	uint32_t		t0;			// uptime tick of the launch
+	uint32_t		report;
+	z_exec_info_t	xi;
+	char			name[Z_PROC_RUN_NAME_MAX];
+} k_ticket_t;
+
+_Static_assert(sizeof(k_ticket_t) <= K_TICKET_SPACE - 16, "launch ticket too big");
+
+static k_ticket_t *k_ticket_of(uint32_t pid) {
+	return (k_ticket_t *)(uintptr_t)(z_procs[pid].base + z_procs[pid].size - K_TICKET_SPACE);
+}
+
+uint32_t k_proc_launch(const char *name, const z_exec_info_t *xi, bool report) {
+	uint32_t pid = k_proc_create_exec(name, xi);
+	if (!pid) return 0;
+	uint32_t base = z_procs[pid].base, n = (uint32_t)(k_load_stub_end - k_load_stub);
+	k_ticket_t *t = k_ticket_of(pid);
+	t->magic = K_TICKET_MAGIC;
+	t->t0 = z_uptime_ticks();
+	t->report = report;
+	t->xi = *xi;
+	strncpy(t->name, name, sizeof(t->name) - 1);
+	t->name[sizeof(t->name) - 1] = 0;
+	for (uint32_t i = 0; i < n; i++) ((uint32_t *)(uintptr_t)base)[i] = k_load_stub[i];
+	// the block's previous occupant may still be in the instruction cache
+	z_icache_flush();
+	k_proc_flags(pid, Z_PROC_FLAG_LOADING, 0);
+	k_proc_start(pid);
+	// Whose the launch argument the caller set is (Z_WM_ARG_CHILD,
+	// zwm.h): launches overlap now. Sent as the caller; wm ignores it
+	// when the caller set none.
+	{
+		uint32_t wmp;
+		if (k_pid_find("wm0", &wmp) && wmp != pid)
+			z_msg_new_send(wmp, Z_WM_ARG_CHILD, 0, z_obj_uint32(pid));
+	}
+	return pid;
+}
+
+// The new process, in its first turn, from the stub. Does not return:
+// it jumps into the program, or the process ends.
+static void __attribute__((noinline, noreturn)) k_load_self(void) {
+	uint32_t pid = z_pid;
+	k_ticket_t t = *k_ticket_of(pid);
+	uint32_t base = z_procs[pid].base, size = z_procs[pid].size;
+	char where[FS_PATH_MAX];       /* (on this process's own stack) */
+	if (!(z_procs[pid].flags & Z_PROC_FLAG_LOADING) || t.magic != K_TICKET_MAGIC) {
+		// (only the stub calls this; anything else is a bug: end it)
+		printf("pid %lu: not loading -- ended\n", (unsigned long)pid);
+		k_proc_exit_record(pid, K_EXIT_CRASHED);
+		k_proc_kill(pid);
+		for (;;) k_proc_wait_ticks(1);	// until the scheduler reaps it
+	}
+	if (fs_load_exec_any(base, t.name, &t.xi)) {
+		if (fs_exec_where(t.name, where, sizeof(where))) strcpy(where, "?");
+		printf("%s: loading from %s failed -- not started\n", t.name, where);
+		k_proc_flags(pid, 0, Z_PROC_FLAG_LOADING);
+		k_proc_exit_record(pid, K_EXIT_CRASHED);
+		k_proc_kill(pid);
+		for (;;) k_proc_wait_ticks(1);	// until the scheduler reaps it
+	}
+	if (t.report) {
+		// `text: pid 6, 155520 bytes from flash (compressed) at
+		// 404e7000, 210 ms` -- what `run` printed when it loaded
+		if (fs_exec_where(t.name, where, sizeof(where))) strcpy(where, "?");
+		printf("%s: pid %lu, %lu bytes%s from %s at %08lx, %lu ms", t.name,
+			(unsigned long)pid, (unsigned long)t.xi.total, t.xi.is_zexe ? "" : " (raw)", where,
+			(unsigned long)base, (unsigned long)((z_uptime_ticks() - t.t0) * 1000u / Z_TICK_HZ));
+		if (t.xi.compressed)
+			printf(" (%lu ms unpacking, %lu on the CPU)",
+				(unsigned long)(k_exec_unpack_ticks * 1000u / Z_TICK_HZ),
+				(unsigned long)(k_exec_unpack_cpu * 1000u / Z_TICK_HZ));
+		printf("\n");
+	}
+	k_proc_flags(pid, 0, Z_PROC_FLAG_LOADING);
+	// The program's start, with the stack k_proc_create() set up
+	// ([sp] = 0: no arguments). Once the fetch is in the app window the
+	// code is unprivileged again (docs/mpu.md); the program's own start
+	// sets gp.
+	__asm__ volatile (
+		"mv sp, %0\n"
+		"li ra, 0\n"
+		"jr %1\n"
+		:: "r"(0x80000000u + size - 16), "r"(0x80000000u) : "ra", "memory");
+	__builtin_unreachable();
 }
 
 // k_proc_create() for an executable: the stack size comes from its
