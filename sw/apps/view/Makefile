@@ -32,7 +32,7 @@ VIEW_SVG       ?= 1
 VIEW_SVG_MAX   ?= 65536
 VIEW_SVG_EDGES ?= 2048
 
-IMG_DEFS = -DZ_IMG_HAVE_PNG=$(VIEW_PNG) \
+IMG_DEFS = -DZ_IMG_HAVE_PNG=$(VIEW_PNG) -DZ_IMG_HAVE_RGB=1 \
 	-DVIEW_SVG=$(VIEW_SVG) \
 	-DVIEW_SVG_MAX=$(VIEW_SVG_MAX) \
 	-DVIEW_SVG_EDGES=$(VIEW_SVG_EDGES)
@@ -113,11 +113,42 @@ APP_CFLAGS = $(IMG_DEFS) $(INSTR_DEFS) $(PROF_DEFS)
 #   zimgjob.o, zco.o: a picture decoded a slice at a time from the
 #   main loop, so the window answers and Esc stops it
 #   (docs/responsive.md).
-OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o zwidget.o zspeak.o \
+#
+#   the screen face (vscreen.c, docs/view_app.md "In colour"): the
+#   arcade runtime (zarcade, zarcade_sys; zsfx and zcfg are its), the
+#   screen toolkit for F1 there (sui), colour (zcolor), the colours
+#   chosen (zquant); zimg's colour rows (Z_IMG_HAVE_RGB above).
+SRC_DIRS = $(COMMON_DIR)/games $(COMMON_DIR)/games/ui
+OBJS = zeitlos.o zobj.o zgfx.o zcolor.o zfont_data.o zwin.o zwidget.o zspeak.o \
 	zfsapp.o zflist.o zdialog.o zedit.o zimg.o zinflate.o zsvg.o \
-	zprof.o zco.o zimgjob.o view.o
+	zprof.o zco.o zimgjob.o zquant.o zarcade.o zarcade_sys.o zsfx.o zcfg.o sui.o \
+	vscreen.o view.o
 
 zimg.o:
 	$(CC) $(CFLAGS) $(ZIMG_OPT) -c ../../common/zimg.c -o zimg.o
+
+# the screen face on a build host (tests/render.c): a picture through
+# vscreen.c on the arcade runtime's software framebuffer
+HOSTCC ?= cc
+GAMES = ../../common/games
+RENDER_SRC = vscreen.c ../../common/zquant.c ../../common/zimg.c ../../common/zinflate.c \
+	$(GAMES)/zarcade.c $(GAMES)/zsfx.c $(GAMES)/tests/ar_host.c $(GAMES)/ui/sui.c \
+	../../common/zfont_data.c
+
+tests/render_view: tests/render.c $(RENDER_SRC) vscreen.h
+	$(HOSTCC) -std=gnu99 -Wall -Wextra -O1 -g -fsanitize=address,undefined \
+		-DZSFX_HOSTED -DAR_HOST_TESTS -DZ_IMG_HAVE_PNG=1 -DZ_IMG_HAVE_RGB=1 \
+		-Wno-unused-parameter -I../../common -o $@ tests/render.c $(RENDER_SRC)
+
+render: tests/render_view
+	mkdir -p tests/out tests/out/p6
+	python3 tests/gen.py tests/out/pic.png
+	AR_HOST_VERIFY=1 tests/render_view tests/out/pic.png tests/out
+	AR_HOST_VERIFY=1 AR_HOST_PLANES=6 tests/render_view tests/out/pic.png tests/out/p6
+	-python3 ../pix/tests/ppm2png.py tests/out
+	-python3 ../pix/tests/ppm2png.py tests/out/p6
+
+.PHONY: render
+CLEAN_EXTRA = tests/render_view tests/out
 
 include ../../common/app.mk

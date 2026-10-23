@@ -1,5 +1,8 @@
 # poker: the table
 
+Kind: a **dual app** ([app_kinds.md](app_kinds.md)): a resizable
+desktop window, and the table on a 320x240 screen in colour.
+
 The part of `sw/apps/poker` that draws. `docs/poker_engine.md` covers
 the rules, the opponents and the tests behind them.
 
@@ -8,18 +11,51 @@ mode and the difficulty ladder all work, and the host test suite is
 green: 588 checks across five binaries. Four variants, three betting
 structures, eight difficulty levels.
 
+## In colour
+
+**F10**, or the colour icon on the titlebar (a rainbow), turns the
+window into poker's **screen face**: the same table on a 320x240 screen,
+through the arcade runtime ([arcade.md](arcade.md), "A dual app"), in
+colour where the window has the colour window ([color.md](color.md)) --
+green felt, white cards with red hearts and diamonds, blue backs, the
+seat to act framed in gold, dark green buttons. **F11** (or `game`) is
+the screen face full screen, from either face; Esc there comes back to
+the window. F10, the icon or resizing the window go back to the desktop
+table at the size it had. On the screen face F1 is the help on the
+screen (the screen toolkit), and the keys, the command line and the
+mouse work as on the desktop.
+
+The table asks for every colour by **role** (`PT_C_*` in `table_ui.h`):
+the felt, text, a card's border and its suits, a back, the seat to act,
+a button and a disabled one, the draw's mark, the top and bottom lines,
+frames. The desktop draws the roles in one bit -- the felt and the
+dark ones black, the rest white, exactly the old table -- and the
+screen face in `pt_palette`. A card on the screen is its one-bit tile
+in white over its suit's colour, inside a black border with the corners
+cut. `pt_screen(true)` sends every primitive to the runtime
+(`ar_fill()`, `ar_fill2()`, `ar_text()`, `ar_bitmap()`); the layout is
+`pt_layout(L, v, 0, 0, 320, 240)`. The runtime repaints the whole table
+through `paint()` wherever it has to; the message line is still drawn
+on its own while an opponent thinks, and the runtime's frames go on
+meanwhile (`ar_frame_due()` in the AI's poll).
+
+`make render` draws five states on the screen face too
+(`tests/out/scr-*.png`: the window in black and white, its colour
+window, full screen), every frame checked against a full repaint.
+
 ## One renderer, two rectangles
 
-The app has to work inside a window and full screen in game mode
-(`docs/game_mode.md`), and those look nothing alike from the inside. A
-window sits somewhere on a 640x480 desktop, is inset by the titlebar,
-may be partly covered and may be resized at any moment. A game-mode
-page is a fixed 320x240 at a known offset with nothing in front of it.
+The app has to work inside a window and on its 320x240 screen, and
+those look nothing alike from the inside. A window sits somewhere on a
+640x480 desktop, is inset by the titlebar, may be partly covered and
+may be resized at any moment. The screen is a fixed 320x240 with the
+runtime in front of it.
 
 Everything in `table_ui.c` is therefore written against an **origin and
-a clip rectangle in absolute screen coordinates**. Windowed passes the
-window's content rectangle; game mode passes the back page. That is the
-entire difference between the two modes.
+a clip rectangle**. The desktop face passes the window's content
+rectangle, in absolute screen coordinates; the screen face passes the
+runtime's logical screen. That is the entire difference between the
+two.
 
 This is `sw/apps/chess/board_ui.h`'s arrangement, deliberately rather
 than coincidentally. The alternative — window-relative helpers for one
@@ -264,11 +300,12 @@ that folding by click and folding by command leave the game identical.
 | `seats 2-8` | |
 | `limit nl\|fl\|pl` | no limit, fixed limit, pot limit |
 | `odds` | your equity from here, as a percentage |
-| `game` | full screen; Escape comes back |
+| `game` | full screen (the screen face); Escape comes back |
 | `help`, `quit` | |
 
-`F1` shows the help box in the window (in game mode, nothing). `F11`
-toggles full screen ([keys.md](keys.md)). `Escape` clears the command line, and stops an opponent
+`F1` shows the help box in the window, or on the screen face its help
+on the screen. `F10` is the screen face in colour and back, `F11` full
+screen ([keys.md](keys.md)). `Escape` clears the command line, and stops an opponent
 thinking. `-` and `+` step the bet amount by half the pot, the same as
 the two small buttons.
 

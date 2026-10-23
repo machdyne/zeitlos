@@ -251,9 +251,9 @@ static void test_held(void)
 
 int main(void)
 {
-	if (!z_render_open((z_win_t *)kg_window(), KG_WIN_W, KG_WIN_H)) {
-		puts("test_pad: skipped (cannot map the VRAM address)");
-		return 77;
+	if (!kg_host_open("/tmp")) {
+		puts("test_pad: kg_init() failed");
+		return 1;
 	}
 
 	test_geometry(KG_CS_ALPHA, "alpha");

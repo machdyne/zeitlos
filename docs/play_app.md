@@ -1,5 +1,7 @@
 # play
 
+Kind: a **desktop app** ([app_kinds.md](app_kinds.md)).
+
 A streaming audio player. Reads WAV, `.au` and raw PCM off the SD card
 and plays it without ever holding more than a fraction of the file in
 memory.

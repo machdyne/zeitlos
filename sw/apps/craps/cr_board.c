@@ -7,6 +7,7 @@
 #include "cr_board.h"
 #include "../../common/zfont.h"
 #include "../../common/zshape.h"
+#include "../../common/games/zarcade.h"
 
 #define FONT (&z_font_5x8)
 #define FW 5
@@ -14,9 +15,66 @@
 
 static bool use_hw_blit;
 
+/* -- the screen face (docs/craps.md, "In colour") --
+ *
+ * The same table, drawn through the arcade runtime on craps's 320x240
+ * screen: every primitive below goes to ar_*() instead of zgfx, and
+ * every colour the table asks for is a ROLE (CR_C_*), which the desktop
+ * draws in one bit and the screen in cr_palette. The dice are red with
+ * white pips, the bets riding on a spot gold chips. */
+static bool scr;
+static uint32_t pips[Z_DICE_FACES][Z_DICE_BIG];   /* a face's pips */
+
+void cr_screen(bool on) { scr = on; }
+
+const uint16_t cr_palette[16] = {
+    0x063,      /* CR_C_BG      the felt */
+    0xfff,      /* CR_C_INK     text, the table's lines */
+    0x000,      /* CR_C_BLACK   ink on a chip, on the puck */
+    0xdec,      /* CR_C_FRAME   a spot's frame */
+    0x042,      /* CR_C_DIM     a spot that cannot be bet */
+    0xc12,      /* CR_C_DIE     a die */
+    0xfff,      /* CR_C_PIP     its pips */
+    0xfff,      /* CR_C_PUCK    the puck, on */
+    0x111,      /* CR_C_PUCKOFF the puck, off */
+    0xfc2,      /* CR_C_CHIP    what is riding on a spot */
+    0xfd3,      /* CR_C_FIELD   the field's numbers */
+    0x000, 0x000, 0x000, 0x000, 0x000
+};
+
+/* In one bit: the felt and everything dark is black, the rest white --
+ * exactly the desktop table. */
+static int mono_of(int role)
+{
+    switch (role) {
+    case CR_C_INK: case CR_C_FRAME: case CR_C_PIP: case CR_C_PUCK:
+    case CR_C_CHIP: case CR_C_FIELD:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+void cr_mono_inks(ar_ink_t ink[16])
+{
+    int i;
+    for (i = 0; i < 16; i++) ink[i] = mono_of(i) ? ar_ink_white : ar_ink_black;
+}
+
 void cr_board_init(void)
 {
+    int f, y;
+
     use_hw_blit = z_fb_hw_blit_mem_available();
+
+    /* A face's pips: the dark pixels inside the body (the tile is a
+     * lit rim, a dark ring, then the lit body). */
+    for (f = 0; f < Z_DICE_FACES; f++) {
+        const uint32_t *t = z_dice_tile(Z_DICE_BIG, f + 1);
+        for (y = 0; y < Z_DICE_BIG; y++)
+            pips[f][y] = (t && y >= 2 && y < Z_DICE_BIG - 2) ?
+                (~t[y] & 0x3ffffffcu) : 0;
+    }
 }
 
 /* -- text ------------------------------------------------------------------ */
@@ -65,13 +123,15 @@ static void fill(const cr_layout_t *L, int x, int y, int w, int h, int c)
 {
     int x1 = x + w - 1, y1 = y + h - 1;
 
+    if (scr) { ar_fill(x, y, w, h, c); return; }
+
     if (x < L->clip.x0) x = L->clip.x0;
     if (y < L->clip.y0) y = L->clip.y0;
     if (x1 > L->clip.x1) x1 = L->clip.x1;
     if (y1 > L->clip.y1) y1 = L->clip.y1;
     if (x1 < x || y1 < y) return;
 
-    z_fb_hw_fill_rect(x, y, x1 - x + 1, y1 - y + 1, c);
+    z_fb_hw_fill_rect(x, y, x1 - x + 1, y1 - y + 1, mono_of(c));
 }
 
 static void frame(const cr_layout_t *L, int x, int y, int w, int h, int c)
@@ -84,6 +144,14 @@ static void shade(const cr_layout_t *L, int x, int y, int w, int h, int lvl)
 {
     int x1 = x + w - 1, y1 = y + h - 1;
 
+    if (scr) {
+        /* a spot that cannot be bet: the felt, darkened (in black and
+         * white, as the desktop: a light dither) */
+        if (ar_color()) ar_fill(x, y, w, h, CR_C_DIM);
+        else ar_fill2(x, y, w, h, CR_C_BG, CR_C_FRAME, &ar_ink_grey25);
+        return;
+    }
+
     if (x < L->clip.x0) x = L->clip.x0;
     if (y < L->clip.y0) y = L->clip.y0;
     if (x1 > L->clip.x1) x1 = L->clip.x1;
@@ -95,7 +163,10 @@ static void shade(const cr_layout_t *L, int x, int y, int w, int h, int lvl)
 
 static void text(const cr_layout_t *L, int x, int y, const char *s, int c)
 {
-    z_fb_draw_text(x, y, s, c, FONT, &L->clip);
+    /* On the screen, text is drawn over a strip already filled (every
+     * caller fills first), so its transparency changes nothing. */
+    if (scr) { ar_text(x, y, s, c, FONT, 1); return; }
+    z_fb_draw_text(x, y, s, mono_of(c), FONT, &L->clip);
 }
 
 /* Ink on a SOLID cell, both colours in one call.
@@ -113,7 +184,12 @@ static void text(const cr_layout_t *L, int x, int y, const char *s, int c)
 static void text2(const cr_layout_t *L, int x, int y, const char *s,
     int fg, int bg)
 {
-    z_fb_draw_text2(x, y, s, fg, bg, FONT, &L->clip);
+    if (scr) {
+        ar_fill(x, y, slen(s) * FW, FH, bg);
+        ar_text(x, y, s, fg, FONT, 1);
+        return;
+    }
+    z_fb_draw_text2(x, y, s, mono_of(fg), mono_of(bg), FONT, &L->clip);
 }
 
 static void text_mid(const cr_layout_t *L, const cr_rect_t *r, const char *s,
@@ -132,6 +208,23 @@ static void blit_die(const cr_layout_t *L, int face, int dx, int dy)
     int i, passes;
 
     if (!tile) return;
+
+    if (scr && !ar_color()) {
+        /* in black and white, the desktop's own die */
+        ar_bitmap_opaque(tile, Z_DICE_STRIDE, 0, 0, dx, dy, w, h);
+        return;
+    }
+    if (scr) {
+        /* in colour: a red die, its corners cut, white pips */
+        ar_fill(dx, dy, w, h, CR_C_BG);
+        ar_fill(dx + 2, dy, w - 4, h, CR_C_DIE);
+        ar_fill(dx, dy + 2, w, h - 4, CR_C_DIE);
+        ar_fill(dx + 1, dy + 1, w - 2, h - 2, CR_C_DIE);
+        if (face >= 1 && face <= Z_DICE_FACES)
+            ar_bitmap(pips[face - 1], Z_DICE_STRIDE, 0, 0, dx, dy, w, h,
+                CR_C_PIP);
+        return;
+    }
 
     /* Clamp the destination to the clip and move the SOURCE origin in
      * step. Clamping only the destination slides the wrong part of the
@@ -324,29 +417,67 @@ int cr_board_spot_at(const cr_layout_t *L, int x, int y)
 
 /* -- drawing --------------------------------------------------------------- */
 
+/* Circles: zshape's on the desktop; on the screen a disc or a ring of
+ * runtime fills, a row at a time. */
+static int isqrt(int n)
+{
+    int r = 0;
+    while ((r + 1) * (r + 1) <= n) r++;
+    return r;
+}
+
+static void scr_disc(int cx, int cy, int r, int ring, int c)
+{
+    int dy;
+    for (dy = -r; dy <= r; dy++) {
+        int a = isqrt(r * r + r - dy * dy);
+        int ri = r - ring, b;
+        if (!ring || dy * dy > ri * ri + ri) {
+            ar_fill(cx - a, cy + dy, 2 * a + 1, 1, c);
+            continue;
+        }
+        b = isqrt(ri * ri + ri - dy * dy);
+        ar_fill(cx - a, cy + dy, a - b, 1, c);
+        ar_fill(cx + b + 1, cy + dy, a - b, 1, c);
+    }
+}
+
+static void circle(const cr_layout_t *L, int cx, int cy, int r, int c)
+{
+    if (scr) { scr_disc(cx, cy, r, 1, c); return; }
+    z_fb_circle(cx, cy, r, mono_of(c), &L->clip);
+}
+
+static void disc(const cr_layout_t *L, int cx, int cy, int r, int c)
+{
+    if (scr) { scr_disc(cx, cy, r, 0, c); return; }
+    z_fb_fill_circle(cx, cy, r, mono_of(c), &L->clip);
+}
+
 static void draw_puck(const cr_layout_t *L, const cr_view_t *v)
 {
     char buf[8];
     int cx = L->puck_x + 12, cy = L->puck_y + 12;
 
-    fill(L, L->puck_x, L->puck_y, 26, 26, 0);
-
-    z_fb_circle(cx, cy, 12, 1, &L->clip);
+    fill(L, L->puck_x, L->puck_y, 26, 26, CR_C_BG);
 
     if (v->g->point == 0) {
         /* OFF, and said so rather than left blank. "No point" and "the
          * display has not drawn yet" look identical otherwise, and one
          * of them means a pass line bet is about to be very different. */
-        z_fb_circle(cx, cy, 10, 1, &L->clip);
-        text(L, cx - 3 * FW / 2, cy - 4, "OFF", 1);
+        disc(L, cx, cy, 12, CR_C_PUCKOFF);
+        circle(L, cx, cy, 12, CR_C_INK);
+        circle(L, cx, cy, 10, CR_C_INK);
+        text(L, cx - 3 * FW / 2, cy - 4, "OFF", CR_C_INK);
         return;
     }
 
     /* On, and filled, because a point being on changes what every bet
      * on the table is doing. */
-    z_fb_fill_circle(cx, cy, 10, 1, &L->clip);
+    circle(L, cx, cy, 12, CR_C_INK);
+    disc(L, cx, cy, 10, CR_C_PUCK);
     cr_num(v->g->point, buf);
-    text2(L, cx - slen(buf) * FW / 2, cy - 4, buf, 0, 1);
+    text2(L, cx - slen(buf) * FW / 2, cy - 4, buf, CR_C_BLACK, CR_C_PUCK);
 }
 
 /* The odds spots have no number of their own -- the POINT is their
@@ -370,7 +501,7 @@ static void draw_spot(const cr_layout_t *L, const cr_view_t *v, int i)
     int32_t on = cr_bet_on(v->g, s->type, sel);
     bool live = cr_can_place(v->g, s->type, sel, v->bet);
 
-    char lab[20];
+    char lab[28];
 
     /* THE LABEL IS BUILT FIRST, because the hole cut out of the dither
      * has to be the size of what is actually drawn. The odds boxes name
@@ -384,8 +515,8 @@ static void draw_spot(const cr_layout_t *L, const cr_view_t *v, int i)
         cat_num(lab, sizeof lab, sel);
     }
 
-    fill(L, s->r.x, s->r.y, s->r.w, s->r.h, 0);
-    frame(L, s->r.x, s->r.y, s->r.w, s->r.h, 1);
+    fill(L, s->r.x, s->r.y, s->r.w, s->r.h, CR_C_BG);
+    frame(L, s->r.x, s->r.y, s->r.w, s->r.h, CR_C_FRAME);
 
     /* A spot that cannot be bet right now is shaded, with a solid hole
      * cut back out for its label. THERE IS NO GREY HERE: a dither is
@@ -396,10 +527,10 @@ static void draw_spot(const cr_layout_t *L, const cr_view_t *v, int i)
         int tx = s->r.x + (s->r.w - tw) / 2;
         int ty = s->r.y + (s->r.h - FH) / 2;
         shade(L, s->r.x + 1, s->r.y + 1, s->r.w - 2, s->r.h - 2, 6);
-        fill(L, tx - 1, ty, tw + 2, FH, 0);
+        fill(L, tx - 1, ty, tw + 2, FH, CR_C_BG);
     }
 
-    text_mid(L, &s->r, lab, 1);
+    text_mid(L, &s->r, lab, s->type == CR_FIELD ? CR_C_FIELD : CR_C_INK);
 
     /* What is riding on it, in the corner. A craps table's whole state
      * is where the chips are, so this is not decoration. */
@@ -408,7 +539,7 @@ static void draw_spot(const cr_layout_t *L, const cr_view_t *v, int i)
         cr_num(on, buf);
         /* A dark number on a light chip, in one call. The two-step
          * version left it invisible -- see text2(). */
-        text2(L, s->r.x + 2, s->r.y + 1, buf, 0, 1);
+        text2(L, s->r.x + 2, s->r.y + 1, buf, CR_C_BLACK, CR_C_CHIP);
     }
 }
 
@@ -416,15 +547,15 @@ void cr_board_draw_status(const cr_layout_t *L, const cr_view_t *v)
 {
     char line[CR_CMD_LEN + 4];
 
-    fill(L, L->ox, L->msg_y, L->w, FH, 0);
-    text(L, L->ox + 2, L->msg_y, v->message, 1);
+    fill(L, L->ox, L->msg_y, L->w, FH, CR_C_BG);
+    text(L, L->ox + 2, L->msg_y, v->message, CR_C_INK);
 
-    fill(L, L->ox, L->cmd_y, L->w, FH, 0);
+    fill(L, L->ox, L->cmd_y, L->w, FH, CR_C_BG);
     line[0] = '\0';
     cat(line, sizeof line, "> ");
     cat(line, sizeof line, v->cmd);
     cat(line, sizeof line, "_");
-    text(L, L->ox + 2, L->cmd_y, line, 1);
+    text(L, L->ox + 2, L->cmd_y, line, CR_C_INK);
 }
 
 void cr_board_draw(const cr_layout_t *L, const cr_view_t *v)
@@ -433,23 +564,23 @@ void cr_board_draw(const cr_layout_t *L, const cr_view_t *v)
     int i;
 
     if (!L->ok) {
-        fill(L, L->ox, L->oy, L->w, L->h, 0);
-        text(L, L->ox + 2, L->oy + 2, "window too small", 1);
-        text(L, L->ox + 2, L->oy + 2 + CR_LINE_H, "for a craps table", 1);
+        fill(L, L->ox, L->oy, L->w, L->h, CR_C_BG);
+        text(L, L->ox + 2, L->oy + 2, "window too small", CR_C_INK);
+        text(L, L->ox + 2, L->oy + 2 + CR_LINE_H, "for a craps table", CR_C_INK);
         return;
     }
 
-    fill(L, L->ox, L->oy, L->w, L->h, 0);
+    fill(L, L->ox, L->oy, L->w, L->h, CR_C_BG);
 
     line[0] = '\0';
     cat(line, sizeof line, "Craps  bet ");
     cat_num(line, sizeof line, v->bet);
-    text(L, L->ox + 2, L->status_y, line, 1);
+    text(L, L->ox + 2, L->status_y, line, CR_C_INK);
 
     line[0] = '\0';
     cat_num(line, sizeof line, v->chips);
     cat(line, sizeof line, " chips");
-    text(L, L->ox + L->w - 2 - slen(line) * FW, L->status_y, line, 1);
+    text(L, L->ox + L->w - 2 - slen(line) * FW, L->status_y, line, CR_C_INK);
 
     cr_board_draw_dice(L, v);
     draw_puck(L, v);
@@ -460,14 +591,14 @@ void cr_board_draw(const cr_layout_t *L, const cr_view_t *v)
     line[0] = '\0';
     cat(line, sizeof line, "at risk ");
     cat_num(line, sizeof line, cr_at_risk(v->g));
-    text(L, L->info_x, L->dice_y + 4, line, 1);
+    text(L, L->info_x, L->dice_y + 4, line, CR_C_INK);
 
     line[0] = '\0';
     cat(line, sizeof line, "roll ");
     if (v->rolling) cat(line, sizeof line, "...");
     else if (v->g->rolls == 0) cat(line, sizeof line, "-");
     else cat_num(line, sizeof line, v->g->d1 + v->g->d2);
-    text(L, L->info_x, L->dice_y + 4 + CR_LINE_H, line, 1);
+    text(L, L->info_x, L->dice_y + 4 + CR_LINE_H, line, CR_C_INK);
 
     if (!v->rolling && v->g->rolls > 0) {
         line[0] = '\0';
@@ -477,7 +608,7 @@ void cr_board_draw(const cr_layout_t *L, const cr_view_t *v)
             cat(line, sizeof line, "won ");
             cat_num(line, sizeof line, v->g->last_won);
         }
-        text(L, L->info_x, L->dice_y + 4 + CR_LINE_H * 2, line, 1);
+        text(L, L->info_x, L->dice_y + 4 + CR_LINE_H * 2, line, CR_C_INK);
     }
 
     for (i = 0; i < L->nspots; i++) draw_spot(L, v, i);

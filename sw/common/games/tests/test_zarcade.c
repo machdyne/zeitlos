@@ -68,8 +68,11 @@ static void one_mode(const char *name, int mode, bool covered) {
 	mover_t m[24];
 	int f, i, worst = 0;
 
-	if (mode == 0) ar_set_fullscreen(false);
-	else {
+	if (mode == 0 || mode == 3) {
+		ar_set_fullscreen(false);
+		/* 3: the window in colour (docs/color.md, "The colour window") */
+		ar__wcolor(mode == 3, 4, 480);
+	} else {
 		ar__s.want_color = (mode == 2);
 		ar_set_fullscreen(true);
 		ar_set_color(mode == 2);
@@ -536,6 +539,197 @@ static void test_planes(void) {
 	ar_set_fullscreen(false);
 }
 
+/* -- lines in black and white: the window, covered or not, against
+ * mono full screen -- the same pixels, less what is covered. XOR, so
+ * the line's pixels are the ones that changed. */
+static void lit_map(uint8_t *m) {
+	int x, y;
+	for (y = 0; y < AR_H; y++)
+		for (x = 0; x < AR_W; x++) m[y * AR_W + x] = (uint8_t)ar_host_lit(x, y, 1, 1);
+}
+
+static void test_mono_lines(void) {
+	static uint8_t a0[AR_W * AR_H], a1[AR_W * AR_H], b0[AR_W * AR_H], b1[AR_W * AR_H];
+	int i, j, bad;
+	for (i = 0; i < 12; i++) {
+		int x0 = (int)(ar_rand() % 400) - 40, y0 = (int)(ar_rand() % 320) - 40;
+		int x1 = (int)(ar_rand() % 400) - 40, y1 = (int)(ar_rand() % 320) - 40;
+		ar__s.want_color = false;
+		ar_set_fullscreen(true);
+		ar_host_render_only();
+		lit_map(a0);
+		ar_plane_line(0, x0, y0, x1, y1, 2);
+		lit_map(a1);
+		ar_set_fullscreen(false);
+		ar_host_cover(i & 1 ? 100 : 0, 50, i & 1 ? 120 : 0, 100);
+		ar_host_render_only();
+		lit_map(b0);
+		ar_plane_line(0, x0, y0, x1, y1, 2);
+		lit_map(b1);
+		bad = 0;
+		for (j = 0; j < AR_W * AR_H; j++) {
+			int x = j % AR_W, y = j / AR_W;
+			bool hid = (i & 1) && x >= 100 && x < 220 && y >= 50 && y < 150;
+			bool want = !hid && a0[j] != a1[j];
+			bad += want != (b0[j] != b1[j]);
+		}
+		CHECK(bad == 0, "a line in the window%s, black and white: %d pixels wrong",
+			i & 1 ? ", covered" : "", bad);
+		ar_host_cover(0, 0, 0, 0);
+	}
+	ar_plane_line(1, 0, 0, 100, 100, 1);    /* no plane 1 in black and white */
+}
+
+/* -- colour in the window (docs/color.md, "The colour window") --
+ *
+ * The same picture drawn full screen in colour and in a colour window
+ * must be the same indices pixel for pixel: full screen read through
+ * the quadrants, the window through its own pixels (bit 0) and the
+ * folded planes in the second sheet. The host's window sits at
+ * (40, 60), so the fold wraps inside it both ways -- columns at
+ * logical x 280 (screen 320 + 320 = 640), rows at logical y 180
+ * (screen 240 + 240 = 480) -- and fills, sprites and text are cut
+ * there. No patterns: they are anchored to the screen, and the window
+ * is not where full screen is. */
+static uint8_t wc_cell[AR_H / 8][AR_W / 8];
+
+static void paint_wc(void *user, const ar_rect_t *r) {
+	int cx, cy;
+	(void)user;
+	for (cy = r->y / 8; cy < (r->y + r->h + 7) / 8 && cy < AR_H / 8; cy++)
+		for (cx = r->x / 8; cx < (r->x + r->w + 7) / 8 && cx < AR_W / 8; cx++)
+			ar_fill(cx * 8, cy * 8, 8, 8, wc_cell[cy][cx]);
+	ar_fill(270, 170, 23, 19, 13);             /* across both folds */
+	ar_sprite(&spr[0], 276, 176);
+	ar_sprite(&spr[1], 100, 177);
+	ar_text(240, 100, "ACROSS THE FOLD", 9, &z_font_8x8, 1);
+}
+
+/* The same with the plane-at-a-time calls on top, across the folds:
+ * a plane opaque, a plane filled, ORed and cleared through a mask, and
+ * lines in each plane (some a band at a time). */
+static uint32_t wc_bits[AR_H * (AR_W / 32)];
+
+static void paint_wcp(void *user, const ar_rect_t *r) {
+	int k;
+	paint_wc(user, r);
+	ar_plane(1, wc_bits, AR_W / 8, 3, 5, 230, 150, 81, 63);
+	ar_plane_fill(2, 260, 20, 40, 200, 1);
+	ar_plane_fill(0, 10, 172, 300, 12, 0);
+	ar_plane_or(3, wc_bits, AR_W / 8, 0, 0, 200, 160, 110, 70);
+	ar_plane_andn(2, wc_bits, AR_W / 8, 7, 1, 250, 100, 60, 120);
+	for (k = 0; k < 4; k++) {
+		ar_plane_line(k, 5 + k * 9, 230, 315, 10 + k * 13, 2);
+		ar_plane_line(k, 279 - k, 0, 281 + k, 239, 1);
+		ar_plane_line_rows(k, 0, 179 + k, 319, 181 - k, 1, 175, 185);
+		ar_plane_line_rows(k, 0, 179 + k, 319, 181 - k, 1, 186, 239);
+	}
+}
+
+static void decode(const uint8_t *fb, bool window, uint8_t *out) {
+	int x, y, k;
+	for (y = 0; y < AR_H; y++)
+		for (x = 0; x < AR_W; x++) {
+			int idx = 0;
+			if (!window) {
+				for (k = 0; k < 4; k++) {
+					int dx, dy;
+					ar__plane_off(k, &dx, &dy);
+					idx |= fb[(y + dy) * 640 + x + dx] << k;
+				}
+			} else {
+				int px = 40 + x, py = 60 + y;
+				idx = fb[py * 640 + px];
+				for (k = 1; k < ar__s.wl; k++) {
+					int j = k - 1;
+					int fx = (px + ((j & 1) ? 320 : 0)) % 640;
+					int fy = 480 + ((py + ((j & 2) ? 240 : 0)) % 480) % ar__s.rows1;
+					idx |= fb[fy * 640 + fx] << k;
+				}
+			}
+			out[y * AR_W + x] = (uint8_t)idx;
+		}
+}
+
+static void test_window_colour(void) {
+	static uint8_t fb[AR_HOST_FB_BYTES], a[AR_W * AR_H], b[AR_W * AR_H];
+	ar_desc_t d = desc;
+	const ar_desc_t *was = ar__s.d;
+	int i, diff = 0, x, y;
+
+	for (y = 0; y < AR_H / 8; y++)
+		for (x = 0; x < AR_W / 8; x++)
+			wc_cell[y][x] = (uint8_t)ar_rand_below(16);
+	d.paint = paint_wc;
+	ar__s.d = &d;
+
+	ar__s.want_color = true;
+	ar_set_fullscreen(true);
+	ar_set_color(true);
+	ar__invalidate();
+	ar_host_render_only();
+	ar_host_fb_copy(fb);
+	decode(fb, false, a);
+
+	ar_set_fullscreen(false);
+	ar__wcolor(true, 4, 480);
+	CHECK(ar_color() && ar_mode() == AR_MODE_WINDOW && ar_colours() == 16,
+		"window colour: ar_color() %d, mode %d, %d colours",
+		ar_color(), ar_mode(), ar_colours());
+	ar_host_render_only();
+	ar_host_fb_copy(fb);
+	decode(fb, true, b);
+	for (i = 0; i < AR_W * AR_H; i++) diff += a[i] != b[i];
+	CHECK(diff == 0, "window colour: %d pixels differ from full screen", diff);
+
+	/* six planes: two window planes, 8 colours: the low three bits */
+	ar__wcolor(true, 2, 240);
+	CHECK(ar_colours() == 8, "six planes: %d colours", ar_colours());
+	ar_host_render_only();
+	ar_host_fb_copy(fb);
+	decode(fb, true, b);
+	diff = 0;
+	for (i = 0; i < AR_W * AR_H; i++) diff += (a[i] & 7) != b[i];
+	CHECK(diff == 0, "window colour, six planes: %d pixels differ", diff);
+
+	/* the plane-at-a-time calls */
+	for (i = 0; i < (int)(sizeof(wc_bits) / 4); i++)
+		wc_bits[i] = 0x6b3c5a91u * (uint32_t)(i + 7);
+	d.paint = paint_wcp;
+	ar__wcolor(false, 0, 0);
+	ar_set_fullscreen(true);
+	ar__invalidate();
+	ar_host_render_only();
+	ar_host_fb_copy(fb);
+	decode(fb, false, a);
+	ar_set_fullscreen(false);
+	ar__wcolor(true, 4, 480);
+	ar_host_render_only();
+	ar_host_fb_copy(fb);
+	decode(fb, true, b);
+	diff = 0;
+	for (i = 0; i < AR_W * AR_H; i++) diff += a[i] != b[i];
+	CHECK(diff == 0, "window colour, planes and lines: %d pixels differ", diff);
+	ar__wcolor(true, 2, 240);
+	ar_host_render_only();
+	ar_host_fb_copy(fb);
+	decode(fb, true, b);
+	diff = 0;
+	for (i = 0; i < AR_W * AR_H; i++) diff += (a[i] & 7) != b[i];
+	CHECK(diff == 0, "six planes, planes and lines: %d pixels differ", diff);
+	ar_plane_fill(3, 0, 0, 10, 10, 1);       /* no plane 3 there: nothing */
+	{
+		static uint8_t fb2[AR_HOST_FB_BYTES];
+		ar_host_fb_copy(fb2);
+		CHECK(!memcmp(fb2, fb, sizeof(fb)), "six planes: plane 3 draws nothing");
+	}
+
+	ar__wcolor(false, 0, 0);
+	CHECK(!ar_color(), "window colour off");
+	ar__s.d = was;
+	ar__invalidate();
+}
+
 int main(void) {
 
 	ar_init(&desc);
@@ -546,6 +740,8 @@ int main(void) {
 	one_mode("window, covered", 0, true);
 	one_mode("full screen mono", 1, false);
 	one_mode("full screen colour", 2, false);
+	one_mode("window colour", 3, false);
+	ar__wcolor(false, 0, 0);
 
 	test_sprites();
 	test_colours();
@@ -554,6 +750,8 @@ int main(void) {
 	test_skill();
 	test_helpers();
 	test_copy();
+	test_mono_lines();
+	test_window_colour();
 	test_input();
 	test_sfx();
 

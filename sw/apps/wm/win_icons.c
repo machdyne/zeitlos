@@ -71,6 +71,18 @@ const uint8_t z_icon_font_data[Z_ICON_H] = {
 	0b00000000,
 };
 
+// A rainbow, three arcs: colour on or off (Z_WIN_FLAG_COLOUR_ICON).
+const uint8_t z_icon_colour_data[Z_ICON_H] = {
+	0b00000000,
+	0b00111100,
+	0b01000010,
+	0b10011001,
+	0b10100101,
+	0b10100101,
+	0b00000000,
+	0b00000000,
+};
+
 // A closed folder, for a directory row in a file list. The notch at
 // the top left is the tab.
 const uint8_t z_icon_folder_data[Z_ICON_H] = {
@@ -119,4 +131,5 @@ void z_win_icons_load(void) {
 	z_gfx_hw_icon_load(Z_ICON_FOLDER, z_icon_folder_data);
 	z_gfx_hw_icon_load(Z_ICON_FILE,   z_icon_file_data);
 	z_gfx_hw_icon_load(Z_ICON_UPDIR,  z_icon_updir_data);
+	z_gfx_hw_icon_load(Z_ICON_COLOUR, z_icon_colour_data);
 }

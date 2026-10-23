@@ -19,7 +19,13 @@ APP = chess
 #   and sw/data/icons. Re-run the generator by hand after editing the
 #   art; it is deliberately NOT a make rule, because a build that
 #   silently regenerates committed source hides what changed.
+#
+#   zarcade*.o, zsfx.o, zcfg.o, sui.o, zcolor.o, zflist.o, zedit.o: the
+#   screen face -- the board on the arcade runtime's 320x240 screen in
+#   colour, its help on that screen (docs/chess_app.md, "In colour").
+SRC_DIRS = $(COMMON_DIR)/games $(COMMON_DIR)/games/ui
 OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o zrng.o zwidget.o zspeak.o zfsapp.o zdialog.o \
+	zcolor.o zflist.o zedit.o zarcade.o zarcade_sys.o zsfx.o zcfg.o sui.o \
 	ce_core.o ce_psq.o ce_eval.o ce_search.o ce_book.o \
 	pieces.o game.o board_ui.o input.o chess.o
 
@@ -52,7 +58,9 @@ ENGINESRC = ce_core.c ce_psq.c ce_eval.c ce_search.c ce_book.c
 # plotting is stubbed and the layout is not.
 PANELSRC = $(ENGINESRC) pieces.c game.c board_ui.c input.c \
 	../../common/zwin.c ../../common/zfont_data.c \
-	../../common/zobj.c ../../common/zeitlos.c
+	../../common/zobj.c ../../common/zeitlos.c \
+	../../common/games/zarcade.c ../../common/games/zsfx.c \
+	../../common/games/tests/ar_host.c
 
 # -I ../../common is here and NOT in CFLAGS above, deliberately.
 #
@@ -70,6 +78,10 @@ PANELSRC = $(ENGINESRC) pieces.c game.c board_ui.c input.c \
 # sw/apps/cal/Makefile carries the same flag.
 HOSTFLAGS = -std=gnu99 -Wall -no-pie -O2 -I ../../common
 
+# The panel targets also link the arcade runtime's host side (the
+# screen face draws through it).
+PANELFLAGS = $(HOSTFLAGS) -DAR_HOST_TESTS -DZSFX_HOSTED -Wno-unused-parameter
+
 # LOOK at the output before changing the art or the layout.
 #
 # Five states, because four of them are a nuisance to reach on
@@ -81,11 +93,21 @@ HOSTFLAGS = -std=gnu99 -Wall -no-pie -O2 -I ../../common
 #   make render WHAT=mate        checkmate, with the check frame
 #   make render WHAT=narrow      too narrow for the panel
 #   make render WHAT=game        the 320x240 full-screen page
+#
+# and every time, four states on the screen face (the board through
+# the arcade runtime in colour: the window in black and white, its
+# colour window, full screen), tests/out/scr-*.png, every frame checked
+# against a full repaint.
 WHAT ?= start
 
 render:
-	$(HOSTCC) $(HOSTFLAGS) -o /tmp/chess_render tests/render.c $(PANELSRC)
+	$(HOSTCC) $(PANELFLAGS) -o /tmp/chess_render tests/render.c $(PANELSRC)
 	/tmp/chess_render /tmp/chess.pbm $(WHAT)
+	mkdir -p tests/out
+	@for w in start midgame thinking mate; do \
+		AR_HOST_VERIFY=1 /tmp/chess_render tests/out scr-$$w || exit 1; \
+	done
+	-python3 ../pix/tests/ppm2png.py tests/out
 	@echo "wrote /tmp/chess.pbm ($(WHAT)) -- other states: make render \
 WHAT=midgame|thinking|mate|narrow|game"
 
@@ -126,7 +148,7 @@ test: includecheck
 	$(HOSTCC) $(HOSTFLAGS) -o /tmp/chess_perft tests/perft_test.c $(ENGINESRC)
 	$(HOSTCC) $(HOSTFLAGS) -o /tmp/chess_core tests/core_test.c $(ENGINESRC)
 	$(HOSTCC) $(HOSTFLAGS) -o /tmp/chess_search tests/search_test.c $(ENGINESRC)
-	$(HOSTCC) $(HOSTFLAGS) -o /tmp/chess_layout tests/test_layout.c $(PANELSRC)
+	$(HOSTCC) $(PANELFLAGS) -o /tmp/chess_layout tests/test_layout.c $(PANELSRC)
 	/tmp/chess_perft
 	/tmp/chess_core
 	/tmp/chess_search

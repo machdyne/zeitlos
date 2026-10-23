@@ -1,5 +1,7 @@
 # Zeitlos gpu3d
 
+Kind: a **desktop app** ([app_kinds.md](app_kinds.md)).
+
 Wireframe 3D viewer. Spins a cube by default and opens STL files from
 the SD card.
 

@@ -195,6 +195,15 @@ module gpu_video #(
 	// timing: the reads are registered just as the block RAM's are.
 	parameter CBUF_LUTRAM = 1'b0,
 
+	// 1 builds the colour window (docs/color.md, "The colour window"):
+	// in desktop mode, one rectangle of the 640x480 desktop shows in
+	// colour, its pixel's index the desktop's own bit plus the second
+	// sheet's planes (4..7) -- 8 colours with GAME_PLANES 6, 32 with 8.
+	// Needs COLOR_AVAIL and more than four planes; ignored otherwise,
+	// and on composite (FIXED_VIEWPORT). 0 -- the default, so every
+	// existing bench is unchanged -- builds none of it.
+	parameter WIN_AVAIL = 1'b0,
+
 	// -- the hardware cursor (docs/cursor.md) --
 	//
 	// 1 draws the pointer from four 16x16 shapes kept in the spare
@@ -304,6 +313,19 @@ module gpu_video #(
 	input color_en,
 	input [2:0] color_np,
 	input [5:0] color_off,
+
+	// -- the colour window, from rtl/socctl.v's COLWIN/COLWINEND --
+	//
+	// Part of the same payload again: captured on view_load and adopted
+	// at the frame boundary. The rectangle is x0 <= x < x1, y0 <= y < y1
+	// in framebuffer (= desktop) pixels; software keeps it within
+	// 320x240, the most the second sheet's fold can tell apart. Ignored
+	// in game mode.
+	input win_en,
+	input [9:0] win_x0,
+	input [9:0] win_y0,
+	input [9:0] win_x1,
+	input [9:0] win_y1,
 
 	// Palette write port, wishbone clock domain (= clk). One-cycle
 	// strobe from socctl; 12-bit RGB444 into entry pal_idx (its bits
@@ -468,6 +490,34 @@ module gpu_video #(
 	localparam integer NP = (COLOR_AVAIL == 0) ? 4 :
 		(GAME_PLANES >= 8) ? 8 : (GAME_PLANES >= 6) ? 6 : 4;
 
+	// -- the colour window (WIN_AVAIL; docs/color.md) --
+	//
+	// In desktop mode, inside one rectangle, the pixel is shown through
+	// the palette rather than the phosphor's ink, its index the
+	// desktop's bit (plane 0, bit 0) and the second sheet's planes
+	// (bits 4..7) -- planes 1..3 are the desktop's other quarters and
+	// are masked out. The planes are read exactly as game mode reads
+	// them with the 16-colour layout's offsets (plane 1 dx, 2 dy, 3 dx
+	// and dy) and the view at (0, 0): plane 4 at the pixel's own
+	// position in the second sheet (its row mod 240 with six planes),
+	// plane 5 320 columns on, planes 6 and 7 the same 240 rows on, all
+	// modulo the sheet. So a window up to 320x240 has a place of its own
+	// for each of its pixels in every plane wherever it sits on the
+	// desktop, and the fetch and the read side needed no change -- they
+	// already run in desktop mode, every line.
+	//
+	// What it adds: the rectangle, a registered test of it in this
+	// domain, the mask, and the output choosing palette or ink per pixel
+	// instead of per frame. The palette's read is registered, so while
+	// the window is on x leads the raster by a clock, as it does for
+	// game-mode colour (x_lead), and the monochrome pixel is delayed by
+	// one register to meet it (pixm).
+	localparam WIN_ON = (WIN_AVAIL != 0) && (COLOR_AVAIL != 0) &&
+		(NP > 4) && (FIXED_VIEWPORT == 0);
+	reg win_active;
+	reg [9:0] wx0_active, wy0_active, wx1_active, wy1_active;
+	wire x_lead;
+
 	// The cursor's pixel, from the read side at the bottom of this
 	// file: 1 = invert, the XOR described above, which is all the
 	// pointer ever does. `pixel` adds an invert of its own (the
@@ -481,6 +531,16 @@ module gpu_video #(
 	wire p0 = cur0[x[4:0]];
 	wire pix = p0 ^ c_inv;
 
+	// With x a clock ahead (x_lead), the monochrome pixel is the one
+	// worked out a clock ago. Only ever so in desktop mode with the
+	// colour window on; in game-mode colour the monochrome path is not
+	// shown. The cursor comes out where it always did: it is registered
+	// from x too, so both moved by the same clock.
+	reg pix_q;
+	always @(posedge pclk)
+		pix_q <= pix;
+	wire pixm = x_lead ? pix_q : pix;
+
 	// is_visible gates the result, and it MUST: in GPU_PAPER the
 	// inactive state is 1, so an ungated invert would drive the VGA
 	// DAC high right through the front porch, sync pulse and back
@@ -490,7 +550,7 @@ module gpu_video #(
 	// modes would tolerate the sloppiness; this one does not, which
 	// is exactly why the gate belongs here rather than per-mode.
 	wire pset = is_visible &&
-		((video_mode_active == GPU_MODE_PAPER) ? ~pix : pix);
+		((video_mode_active == GPU_MODE_PAPER) ? ~pixm : pixm);
 
 	// -- game-mode colour: index, palette, output --
 	//
@@ -531,10 +591,18 @@ module gpu_video #(
 	// Which planes take part: those below np_active + 1 that this build
 	// has. Unused planes read as 0, so a 4-colour picture uses palette
 	// entries 0..3, a 64-colour one 0..63.
-	wire [7:0] plane_mask = {
+	// In the colour window: the desktop's bit and every plane of the
+	// second sheet this build has, whatever np_active says.
+	localparam [7:0] WIN_MASK = { (NP > 7), (NP > 6), (NP > 5), (NP > 4),
+		4'b0001 };
+	wire [7:0] plane_mask = win_active ? WIN_MASK : {
 		(NP > 7) && (np_active >= 3'd7), (NP > 6) && (np_active >= 3'd6),
 		(NP > 5) && (np_active >= 3'd5), (NP > 4) && (np_active >= 3'd4),
 		(np_active >= 3'd3), (np_active >= 3'd2), (np_active >= 3'd1), 1'b1 };
+
+	// The plane offsets in use: the 16-colour layout's in the window.
+	localparam [5:0] WIN_OFF = 6'b11_10_01;
+	wire [5:0] off_use = win_active ? WIN_OFF : off_active;
 
 	// The cursor inverts the ACTIVE planes only, i.e. index ^ (2^n-1):
 	// the same XOR the monochrome path does, generalised. Over entry 0
@@ -562,10 +630,12 @@ module gpu_video #(
 	// (x_lead, below), so the index runs one clock ahead of the raster
 	// and the palette's output lands exactly on it -- blanking, sync
 	// and the picture keep the timing they always had, and nothing else
-	// moves. Colour is only ever on in game mode, where every source
-	// pixel lasts two clocks, so starting a clock early is just the
-	// first half of the first pixel. On composite the read is the first
-	// of the two pipeline stages that path already has.
+	// moves. In game mode every source pixel lasts two clocks, so
+	// starting a clock early is just the first half of the first pixel.
+	// In desktop mode with the colour window on, a pixel is one clock,
+	// so the monochrome pixel outside the window is taken a clock late
+	// to match (pixm, above). On composite the read is the first of the
+	// two pipeline stages that path already has.
 	//
 	// cb_q is cbuf's registered read port, assigned at the bottom of
 	// this file and declared here, ahead of its first use. Once a line,
@@ -584,7 +654,19 @@ module gpu_video #(
 `else
 	localparam PAL_LEAD = 1'b1;
 `endif
-	wire x_lead = PAL_LEAD && color_on;
+	assign x_lead = PAL_LEAD && (color_on || win_active);
+
+	// Inside the colour window: x against the rectangle, registered on
+	// the same edge as the palette's read of the same pixel, so win_px
+	// says which of cb_q and the ink is the pixel on screen. The row
+	// test changes only at the end of a line.
+	reg win_row, win_px;
+	wire win_col = (x >= wx0_active) && (x < wx1_active);
+	always @(posedge pclk) begin
+		win_row <= win_active && (y >= wy0_active) && (y < wy1_active);
+		win_px <= win_row && win_col;
+	end
+	wire pal_out = color_on || win_px;
 
 	// blanking gated here for the same reason pset gates it above
 	wire [3:0] c_r = is_visible ? rgb[11:8] : 4'd0;
@@ -596,10 +678,10 @@ module gpu_video #(
 	// eight RGB primaries and secondaries. The EGA default palette
 	// degrades to the obvious eight (its 0xa levels read as on, its
 	// 0x5 levels as off).
-	assign red   = color_on ? c_r[3] :
+	assign red   = pal_out ? c_r[3] :
 		(video_mode_active == GPU_MODE_GREEN) ? 1'b0 : pset;
-	assign green = color_on ? c_g[3] : pset;
-	assign blue  = color_on ? c_b[3] :
+	assign green = pal_out ? c_g[3] : pset;
+	assign blue  = pal_out ? c_b[3] :
 		(video_mode_active == GPU_MODE_AMBER ||
 		 video_mode_active == GPU_MODE_GREEN) ? 1'b0 : pset;
 
@@ -723,9 +805,9 @@ module gpu_video #(
 			video_mode_active == GPU_MODE_GREEN) ? 8'd0 : bw;
 	end
 
-	wire [7:0] ddmi_red   = color_on ? { c_r, c_r } : (pset ? ddmi_ink_r : 8'd0);
-	wire [7:0] ddmi_green = color_on ? { c_g, c_g } : (pset ? ddmi_ink_g : 8'd0);
-	wire [7:0] ddmi_blue  = color_on ? { c_b, c_b } : (pset ? ddmi_ink_b : 8'd0);
+	wire [7:0] ddmi_red   = pal_out ? { c_r, c_r } : (pset ? ddmi_ink_r : 8'd0);
+	wire [7:0] ddmi_green = pal_out ? { c_g, c_g } : (pset ? ddmi_ink_g : 8'd0);
+	wire [7:0] ddmi_blue  = pal_out ? { c_b, c_b } : (pset ? ddmi_ink_b : 8'd0);
 
 	// -- Serialiser output stage --
 	//
@@ -1191,6 +1273,8 @@ module gpu_video #(
 	reg col_cap;
 	reg [2:0] np_cap;
 	reg [5:0] off_cap;
+	reg win_cap;
+	reg [9:0] wx0_cap, wy0_cap, wx1_cap, wy1_cap;
 
 	// The clamp that keeps the viewport on screen, applied once per
 	// frame at adoption rather than continuously. Deliberately NOT in
@@ -1259,6 +1343,8 @@ module gpu_video #(
 			col_active <= 1'b0;
 			np_active <= 3'd0;
 			off_active <= 6'd0;
+			win_cap <= 1'b0;
+			win_active <= 1'b0;
 		end else begin
 			if (view_edge) begin
 				game_cap <= game_en;
@@ -1268,6 +1354,11 @@ module gpu_video #(
 				col_cap <= color_en;
 				np_cap <= color_np;
 				off_cap <= color_off;
+				win_cap <= win_en;
+				wx0_cap <= win_x0;
+				wy0_cap <= win_y0;
+				wx1_cap <= win_x1;
+				wy1_cap <= win_y1;
 			end
 			if (hc == h_disp_stop - 1 && vc == v_disp_stop - 1) begin
 				video_mode_active <= video_mode_sync1;
@@ -1284,6 +1375,12 @@ module gpu_video #(
 				col_active <= col_cap && (COLOR_AVAIL != 0);
 				np_active <= np_cap;
 				off_active <= off_cap;
+				// the window only in desktop mode: game mode wins
+				win_active <= WIN_ON && win_cap && !vp_cap;
+				wx0_active <= wx0_cap;
+				wy0_active <= wy0_cap;
+				wx1_active <= wx1_cap;
+				wy1_active <= wy1_cap;
 			end
 		end
 	end
@@ -1763,7 +1860,7 @@ module gpu_video #(
 		s1r_sync1 <= s1r_sync0;
 		s1a_sync0 <= s1a_refill;
 		s1a_sync1 <= s1a_sync0;
-		dy_sync0 <= { off_active[5], off_active[3], off_active[1] };
+		dy_sync0 <= { off_use[5], off_use[3], off_use[1] };
 		dy_sync1 <= dy_sync0;
 	end
 
@@ -1914,9 +2011,9 @@ module gpu_video #(
 	wire [5:0] pw1_sum = { 1'b0, pw } + 6'd1;
 	wire [4:0] pw1 = (pw1_sum >= 6'd20) ? (pw1_sum[4:0] - 5'd20) : pw1_sum[4:0];
 	wire [4:0] pw_dx = (pw >= 5'd10) ? (pw - 5'd10) : (pw + 5'd10);
-	wire [4:0] pw_k1 = off_active[0] ? pw_dx : pw;
-	wire [4:0] pw_k2 = off_active[2] ? pw_dx : pw;
-	wire [4:0] pw_k3 = off_active[4] ? pw_dx : pw;
+	wire [4:0] pw_k1 = off_use[0] ? pw_dx : pw;
+	wire [4:0] pw_k2 = off_use[2] ? pw_dx : pw;
+	wire [4:0] pw_k3 = off_use[4] ? pw_dx : pw;
 
 	wire x_cross = x_run && x_step && (x[4:0] == 5'd31);
 	wire pre_go = (hc == h_disp_start - 11'd24);

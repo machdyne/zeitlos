@@ -39,6 +39,7 @@ static const char help_text[] =
 	"P\tPause (Start on a pad)\n"
 	"F11\tFull screen, or back to the window\n"
 	"C\tFull screen: colour on or off\n"
+	"F10\tColour on or off, in the window too\n"
 	"M\tMusic on or off\n\n"
 	"Skill: on EASY the ball is slow, the paddle long, there are five "
 	"paddles and a glowing floor under the paddle that sends the ball "
@@ -521,6 +522,9 @@ int main(void) {
 
 	printf("bricks: break them all, in a window or full screen (F11)\n");
 
+	/* in colour in its window too, while it is focused and uncovered,
+	 * on a board with the colour window (docs/color.md) */
+	ar_window_colour(true);
 	if (!ar_init(&desc)) return 1;
 	if (!br_draw_init()) printf("bricks: out of sprite memory\n");
 

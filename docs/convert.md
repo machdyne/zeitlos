@@ -1,5 +1,7 @@
 # convert
 
+Kind: a **desktop app** ([app_kinds.md](app_kinds.md)).
+
 `convert` turns documents, tables and archives from one format into
 another: a Word file into something `text` can edit, a sheet into an
 `.xlsx` someone else can open, a `.tar.gz` into a folder. It is a

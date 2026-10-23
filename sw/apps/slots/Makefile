@@ -15,7 +15,13 @@ include $(COMMON)/arch.mk
 #   host render linked it explicitly and the target link did not, so this
 #   only surfaced as an undefined reference at the very end -- which is
 #   what a target link is for.
+#
+# zarcade*.o, zsfx.o, zcfg.o, sui.o, zcolor.o, zflist.o, zedit.o: the
+# screen face -- the machine on the arcade runtime's 320x240 screen in
+# colour, its help on that screen (docs/slots.md, "In colour").
+SRC_DIRS = $(COMMON_DIR)/games $(COMMON_DIR)/games/ui
 OBJS = zeitlos.o zobj.o zgfx.o zwidget.o zspeak.o zdialog.o zshape.o zfont_data.o zwin.o zrng.o zfsapp.o \
+	zcolor.o zflist.o zedit.o zarcade.o zarcade_sys.o zsfx.o zcfg.o sui.o \
 	zrand.o zrand_sys.o zbank.o \
 	sl_reels.o sl_game.o sl_art.o sl_board.o sl_input.o slots.o
 
@@ -56,8 +62,9 @@ TARGETSRC = sl_reels.c sl_game.c sl_board.c sl_input.c slots.c
 # The software pixel primitives, so a test can actually DRAW the reels
 # rather than only compute where they are.
 PANELSRC = $(COMMON)/zwin.c $(COMMON)/zwidget.c $(COMMON)/tests/zspeak_stub.c $(COMMON)/zfont_data.c \
-	$(COMMON)/zobj.c $(COMMON)/zeitlos.c
-PANELFLAGS = $(HOSTFLAGS) -I $(COMMON)
+	$(COMMON)/zobj.c $(COMMON)/zeitlos.c \
+	$(GAMES)/zarcade.c $(GAMES)/zsfx.c $(GAMES)/tests/ar_host.c
+PANELFLAGS = $(HOSTFLAGS) -I $(COMMON) -DAR_HOST_TESTS -DZSFX_HOSTED -Wno-unused-parameter
 
 includecheck:
 	@for f in $(TARGETSRC) *.h; do \
@@ -97,12 +104,22 @@ test: includecheck nofloat
 # Two things a render caught here and no assertion would have: the
 # cherry symbol read as a face, and the reels hung under the status line
 # left a band of nothing taller than the reels themselves.
+#
+# And every time, those three on the screen face (the machine through
+# the arcade runtime in colour: the window in black and white, its
+# colour window, full screen), tests/out/scr-*.png, every frame checked
+# against a full repaint.
 WHAT ?= idle
 
 render:
 	$(HOSTCC) $(PANELFLAGS) -o /tmp/slots_render tests/render.c \
 		sl_board.c $(ENGINESRC) sl_art.c $(COMMON)/zshape.c $(PANELSRC)
 	/tmp/slots_render /tmp/slots.pbm $(WHAT)
+	mkdir -p tests/out
+	@for w in idle spin win; do \
+		AR_HOST_VERIFY=1 /tmp/slots_render tests/out scr-$$w || exit 1; \
+	done
+	-python3 ../pix/tests/ppm2png.py tests/out
 
 # The symbol tiles are generated and COMMITTED, so this must reproduce
 # them byte for byte. sw/common/games/gen_cards.py drifted from its own

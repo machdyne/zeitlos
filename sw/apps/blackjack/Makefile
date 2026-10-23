@@ -9,7 +9,13 @@ GAMES = $(COMMON)/games
 
 include $(COMMON)/arch.mk
 
+#
+# zarcade*.o, zsfx.o, zcfg.o, sui.o, zcolor.o, zflist.o, zedit.o: the
+# screen face -- the table on the arcade runtime's 320x240 screen in
+# colour, its help on that screen (docs/blackjack.md, "In colour").
+SRC_DIRS = $(COMMON_DIR)/games $(COMMON_DIR)/games/ui
 OBJS = zeitlos.o zobj.o zgfx.o zwidget.o zspeak.o zdialog.o zfont_data.o zwin.o zrng.o zfsapp.o \
+	zcolor.o zflist.o zedit.o zarcade.o zarcade_sys.o zsfx.o zcfg.o sui.o \
 	zcard.o zdeck.o zrand.o zrand_sys.o zbank.o zcardart.o \
 	bj_game.o bj_hint.o bj_board.o bj_input.o blackjack.o
 
@@ -66,8 +72,9 @@ nofloat:
 # its shoe with poker, so a change there that breaks them should fail
 # here rather than on the device.
 PANELSRC = $(COMMON)/zwin.c $(COMMON)/zwidget.c $(COMMON)/tests/zspeak_stub.c $(COMMON)/zfont_data.c \
-	$(COMMON)/zobj.c $(COMMON)/zeitlos.c
-PANELFLAGS = $(HOSTFLAGS) -I $(COMMON)
+	$(COMMON)/zobj.c $(COMMON)/zeitlos.c \
+	$(GAMES)/zarcade.c $(GAMES)/zsfx.c $(GAMES)/tests/ar_host.c
+PANELFLAGS = $(HOSTFLAGS) -I $(COMMON) -DAR_HOST_TESTS -DZSFX_HOSTED -Wno-unused-parameter
 
 test: includecheck nofloat
 	$(MAKE) -C $(GAMES) test
@@ -87,7 +94,7 @@ test: includecheck nofloat
 # Separate from `test` because the sanitizers make it slow. Worth
 # running after any change to the drawing or the parsing.
 stress:
-	$(HOSTCC) --std=gnu99 -g -O1 -no-pie -I $(COMMON) \
+	$(HOSTCC) --std=gnu99 -g -O1 -no-pie -I $(COMMON) -DAR_HOST_TESTS -DZSFX_HOSTED \
 		-fsanitize=address,undefined -fno-omit-frame-pointer \
 		-o /tmp/blackjack_stress tests/stress.c bj_input.c bj_board.c \
 		$(ENGINESRC) $(GAMES)/zcardart.c $(PANELSRC)
@@ -113,12 +120,22 @@ nmcheck:
 #   make render              a hand in play
 #   make render WHAT=split   four hands, small cards
 #   make render WHAT=done    the showdown, hole card up
+#
+# and every time, those three on the screen face (the table through the
+# arcade runtime in colour: the window in black and white, its colour
+# window, full screen), tests/out/scr-*.png, every frame checked
+# against a full repaint.
 WHAT ?= play
 
 render:
 	$(HOSTCC) $(PANELFLAGS) -o /tmp/blackjack_render tests/render.c \
 		bj_board.c $(ENGINESRC) $(GAMES)/zcardart.c $(PANELSRC)
 	/tmp/blackjack_render /tmp/blackjack.pbm $(WHAT)
+	mkdir -p tests/out
+	@for w in play split done; do \
+		AR_HOST_VERIFY=1 /tmp/blackjack_render tests/out scr-$$w || exit 1; \
+	done
+	-python3 ../pix/tests/ppm2png.py tests/out
 
 .PHONY: test includecheck nofloat nmcheck render stress
 

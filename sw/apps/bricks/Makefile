@@ -7,7 +7,7 @@
 APP = bricks
 APP_LISTING = 0
 
-SRC_DIRS = $(COMMON_DIR)/games
+SRC_DIRS = $(COMMON_DIR)/games $(COMMON_DIR)/games/ui
 
 # Objects, and why each is linked:
 #
@@ -20,7 +20,7 @@ SRC_DIRS = $(COMMON_DIR)/games
 #   zsfx                   effects and music on the hardware mixer
 OBJS = zeitlos.o zobj.o zgfx.o zcolor.o zfont_data.o zwin.o zwidget.o \
 	zspeak.o zdialog.o zfsapp.o \
-	zarcade.o zarcade_sys.o zsfx.o zcfg.o \
+	zarcade.o zarcade_sys.o zsfx.o zcfg.o sui.o \
 	br_game.o br_draw.o br_sound.o bricks.o
 
 # -- host-side tests: the rules, and pictures of every screen --

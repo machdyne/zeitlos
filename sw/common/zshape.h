@@ -64,6 +64,17 @@ int32_t z_cos(int32_t a);
  * instead of leaning one pixel toward the origin. */
 void z_polar(int cx, int cy, int radius, int32_t a, int *x, int *y);
 
+/* -- drawing somewhere else --
+ *
+ * Every shape below ends in a span, a pixel or a line. With a target
+ * set they go to it instead of the framebuffer -- each as a rectangle
+ * (a line as its pixels), clipped as before, the colour passed through
+ * untouched -- which is how a program on the arcade runtime draws the
+ * same shapes on its screen in colour (sw/apps/roulette's wheel:
+ * ar_fill()). NULL is the framebuffer again. */
+typedef void (*z_shape_fill_t)(int x, int y, int w, int h, int color);
+void z_shape_target(z_shape_fill_t fn);
+
 /* -- circles ---------------------------------------------------------- */
 
 /* A one-pixel outline. Midpoint algorithm, eight-way symmetric. */

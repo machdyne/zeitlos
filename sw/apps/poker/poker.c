@@ -33,14 +33,19 @@
  *      That is worth stating because chess's equivalent comment says
  *      the opposite, for a genuinely different reason.
  *
- * -- windowed and full screen --
+ * -- two faces (a dual app, docs/app_kinds.md) --
  *
- * Both, from one renderer. table_ui.c draws against an origin and a
- * clip rectangle; windowed passes the window's content rectangle and
- * game mode passes a 320x240 page. See table_ui.h.
+ * Both from one renderer. table_ui.c draws against an origin and a
+ * clip rectangle. The desktop face passes the window's content
+ * rectangle and draws in one bit; the screen face -- F10, the colour
+ * icon, or F11 for full screen -- lends the window to the arcade
+ * runtime (ar_attach(), sw/common/games/zarcade.h) and the same table
+ * is drawn on its 320x240 screen in colour (pt_screen()). F10, the
+ * icon or a resize give the window back.
  */
 
 #include <stdio.h>
+#include <string.h>
 
 #include "../../common/zeitlos.h"
 #include "../../common/zwin.h"
@@ -52,6 +57,8 @@
 #include "../../common/zrng.h"
 #include "../../common/games/zrand.h"
 #include "../../common/games/zbank.h"
+
+#include "../../common/games/zarcade.h"
 
 #include "table_ui.h"
 #include "input.h"
@@ -71,9 +78,8 @@ static pk_ai_t     ai[PK_MAX_SEATS];
 
 static bool running = true;
 static uint32_t bank_seen;
-static bool game_mode;
-static int  game_front;
-static bool exit_armed;
+static bool scr;            /* the screen face: the runtime has the window */
+static bool want_desktop;   /* it asked for the desktop face (AR_EV_DESKTOP) */
 static bool thinking;
 static bool cancel_think;
 
@@ -181,12 +187,31 @@ static void tag_action(int seat, int action, int32_t before_bet)
 
 /* -- drawing ----------------------------------------------------------- */
 
+/* The screen face's picture, for the runtime: the whole table, cut to
+ * what it repaints. */
+static void scr_paint(void *user, const ar_rect_t *r)
+{
+    pt_layout_t t;
+    (void)user; (void)r;
+    pt_layout(&t, &view, 0, 0, AR_W, AR_H);
+    pt_draw_all(&t, &view);
+}
+
+static char help_text[768];
+
+static ar_desc_t desc = {
+    .name = "poker",
+    .help_title = "Poker help",
+    .help_text = help_text,
+    .help_doc = "poker_app",
+    .paint = scr_paint,
+    .pointer = true,
+};
+
 static void relayout(void)
 {
-    if (game_mode) {
-        int px = (game_front ^ 1) * Z_GAME_VIEW_W;    /* the back page */
-        pt_layout(&layout_rect, &view, px, 0,
-            Z_GAME_VIEW_W, Z_GAME_VIEW_H);
+    if (scr) {
+        pt_layout(&layout_rect, &view, 0, 0, AR_W, AR_H);
     } else {
         z_clip_t c;
         /* Loads this window's visible region as a side effect, which
@@ -201,22 +226,9 @@ static void relayout(void)
 
 static void repaint(void)
 {
-    if (game_mode) {
-
-        /* Nothing is in front of a game-mode page, so the window
-         * manager's clip region has to be OUT of the way -- left in
-         * place it would clip drawing to wherever this app's window
-         * happens to sit on the desktop behind. */
-        z_gfx_clear_visible();
-        z_gfx_blit_scissor_reset();
-
-        relayout();
-        pt_draw_all(&layout_rect, &view);
-
-        z_game_set_view((uint32_t)((game_front ^ 1) * Z_GAME_VIEW_W), 0);
-        z_game_wait_frame();
-        game_front ^= 1;
-
+    /* The screen face: the runtime repaints at its next frame. */
+    if (scr) {
+        ar_dirty_all();
         return;
     }
 
@@ -224,73 +236,41 @@ static void repaint(void)
     pt_draw_all(&layout_rect, &view);
 }
 
-/* The message line alone, drawn into the page that is ALREADY visible.
- *
- * For the thinking indicator. A full repaint would flip pages, and
- * flipping sixty times during one decision to update a line of text is
- * a lot of blitting for a word. Text on a cleared strip cannot tear in
- * any way a person would see. */
+/* The message line alone, for the thinking indicator: a full repaint
+ * sixty times during one decision is a lot of drawing for a word. Text
+ * on a cleared strip. On the screen face drawn straight away too. */
 static void repaint_message(void)
 {
-    pt_layout_t t;
-
-    if (game_mode) {
-        z_gfx_clear_visible();
-        z_gfx_blit_scissor_reset();
-        pt_layout(&t, &view, game_front * Z_GAME_VIEW_W, 0,
-            Z_GAME_VIEW_W, Z_GAME_VIEW_H);
-    } else {
-        z_clip_t c;
-        z_win_content_rect(&win, &c);
-        pt_layout(&t, &view, c.x0, c.y0, c.x1 - c.x0 + 1, c.y1 - c.y0 + 1);
-    }
-
-    if (t.ok) pt_draw_status(&t, &view);
+    relayout();
+    if (layout_rect.ok) pt_draw_status(&layout_rect, &view);
 }
 
-/* -- game mode --------------------------------------------------------- */
+/* -- the screen face ---------------------------------------------------- */
 
-static void enter_game_mode(void)
+static void screen_on(bool full)
 {
-    if (!z_game_available()) {
+    if (!scr) {
+        scr = true;
+        pt_screen(true);
+        ar_attach(&win, &desc);
+        /* typed commands: C and M are letters here, not the runtime's
+         * colour and music keys */
+        ar_text_input(true);
+    }
+    if (full && !ar_set_fullscreen(true))
         set_str(view.message, PT_MSG_LEN, "this bitstream has no game mode");
-        puts("poker: no game mode -- rebuild the gateware with `GAME "
-            "in rtl/boards.vh");
-        return;
-    }
-
-    game_mode = true;
-    game_front = 0;
-    exit_armed = false;
-
-    /* Both pages, before the mode change, so the first frame scanned
-     * out is already this app's background rather than whatever the
-     * desktop left behind. */
-    z_gfx_clear_visible();
-    z_gfx_blit_scissor_reset();
-    z_fb_hw_fill_rect(0, 0, 640, 480, 0);
-
-    z_game_set_enabled(true, false);
-
-    repaint();
-    repaint();       /* both pages, so a flip never shows a blank one */
+    relayout();
+    ar_dirty_all();
 }
 
-static void leave_game_mode(void)
+static void screen_off(void)
 {
-    uint32_t wm_pid;
-
-    z_game_set_enabled(false, false);
-    game_mode = false;
-
-    /* Every window is still alive and still where it was, and this app
-     * just drew over all of their pixels without any of them knowing.
-     * wm repairs damage it caused itself; this came from outside it,
-     * so it has to be told. See Z_WM_REPAINT in zwm.h. */
-    if (z_pid_lookup("wm0", &wm_pid))
-        z_msg_new_send(wm_pid, Z_WM_REPAINT, 0, z_obj_uint32(0));
-
-    repaint();
+    want_desktop = false;
+    if (!scr) return;
+    ar_detach();
+    pt_screen(false);
+    scr = false;
+    /* wm's REDRAW, at the desktop size again, repaints the table */
 }
 
 /* -- the opponents' turn ------------------------------------------------ */
@@ -315,7 +295,10 @@ static bool ai_poll(void *user)
      * nothing and change nothing until the thaw, and a draw attempted
      * meanwhile only earns a redundant redraw when the region comes
      * back. The opponent keeps thinking either way. */
-    if ((++poll_count & 7) == 0 && !z_win_frozen(&win)) repaint_message();
+    if ((++poll_count & 7) == 0 && (scr || !z_win_frozen(&win))) repaint_message();
+
+    /* the screen face: its frames go on while an opponent thinks */
+    if (scr && ar_frame_due()) ar_frame();
 
     return !cancel_think && running;
 }
@@ -617,8 +600,9 @@ static void do_action(pi_action_t a)
         break;
 
     case PI_GAME_MODE:
-        if (game_mode) leave_game_mode();
-        else enter_game_mode();
+        /* full screen is the screen face's */
+        if (!scr) screen_on(true);
+        else ar_set_fullscreen(!ar_fullscreen());
         break;
 
     case PI_NEWGAME:
@@ -670,47 +654,32 @@ static void help_on_msg(z_msg_t *msg, void *user)
     }
 }
 
-/* F1: the help box (docs/app_help.md), built from the same lines the
- * message bar shows for an unknown command, so the two never differ. */
-static void show_help(void)
+/* F1's text (docs/app_help.md), built from the same lines the message
+ * bar shows for an unknown command, so the two never differ: the
+ * desktop's help box, or the screen's (the runtime's, on its screen). */
+static void build_help(void)
 {
-    static char text[768];
     size_t n = 0;
     int i;
     const char *line;
-    n = (size_t)snprintf(text, sizeof(text), "%s\n\n", "Poker against the table. Type a command and press Enter.");
-    for (i = 0; (line = input_help_line(i)) != 0 && n < sizeof(text); i++)
-        n += (size_t)snprintf(text + n, sizeof(text) - n, "%s\n", line);
-    if (n < sizeof(text))
-        snprintf(text + n, sizeof(text) - n,
-            "\nF11 (or `game`): full screen; Esc comes back.");
-    {
-        z_dialog_ctx_t ctx = { &win, help_on_msg, NULL };
-        z_dialog_help(&ctx, "Poker help", text, "poker_app");
-    }
+    n = (size_t)snprintf(help_text, sizeof(help_text), "%s\n\n", "Poker against the table. Type a command and press Enter.");
+    for (i = 0; (line = input_help_line(i)) != 0 && n < sizeof(help_text); i++)
+        n += (size_t)snprintf(help_text + n, sizeof(help_text) - n, "%s\n", line);
+    if (n < sizeof(help_text))
+        snprintf(help_text + n, sizeof(help_text) - n,
+            "\nF10: the table in colour, and back.\n"
+            "F11 (or `game`): full screen; Esc comes back.");
+}
+
+static void show_help(void)
+{
+    z_dialog_ctx_t ctx = { &win, help_on_msg, NULL };
+    z_dialog_help(&ctx, "Poker help", help_text, "poker_app");
     repaint();
 }
 
-static void handle_key(uint32_t packed, bool allow_input)
+static void handle_key(uint32_t sym, bool pressed, bool allow_input)
 {
-    uint32_t sym = Z_WM_UNPACK_KEY_KEYSYM(packed);
-    bool pressed = Z_WM_UNPACK_KEY_PRESSED(packed) != 0;
-
-    if (game_mode) {
-        /* Escape leaves full screen -- but only once it has been
-         * RELEASED. Entering game mode with the `game` command and
-         * then pressing Escape is fine, but entering it by any route
-         * that leaves a key still held would otherwise see the key-up
-         * for a key that was already down and leave immediately. Same
-         * technique, and the same reason, as sw/apps/chip8 and
-         * sw/apps/chess. */
-        if (sym == 0x1b) {
-            if (!pressed) exit_armed = true;
-            else if (exit_armed) leave_game_mode();
-            return;
-        }
-    }
-
     if (!pressed) return;
 
     if (thinking) {
@@ -725,23 +694,18 @@ static void handle_key(uint32_t packed, bool allow_input)
 
     if (!allow_input) return;
 
-    if (sym == Z_KEY_FULL_SCREEN) { do_action(PI_GAME_MODE); return; }
-
-    /* The help box in a window; in game mode nothing (docs/keys.md). */
-    if (sym == Z_KEY_HELP) {
-        if (!game_mode) show_help();
-        return;
-    }
+    /* The desktop face's: on the screen face these are the runtime's
+     * (F10, F11, F1 there). */
+    if (sym == Z_KEY_FULL_SCREEN) { screen_on(true); return; }
+    if (sym == Z_KEY_COLOUR) { screen_on(false); return; }
+    if (sym == Z_KEY_HELP) { show_help(); return; }
 
     do_action(input_key(&view, sym));
 }
 
-static void handle_mouse(uint32_t packed)
+static void handle_mouse(int x, int y, bool down)
 {
     static bool was_down;
-    bool down = (Z_WM_UNPACK_MOUSE_BUTTONS(packed) & Z_MOUSE_BTN_LEFT) != 0;
-    int x = (int)Z_WM_UNPACK_MOUSE_X(packed);
-    int y = (int)Z_WM_UNPACK_MOUSE_Y(packed);
 
     /* On the press edge only. Mouse messages are coalesced and repeat
      * while a button is held, so acting on the level would fold, deal
@@ -758,21 +722,49 @@ static void pump(bool allow_input)
 {
     z_msg_t msg;
 
+    /* The screen face: the runtime reads the window's messages. */
+    if (scr) {
+        ar_event_t e;
+        while (ar_poll(&e)) {
+            if (e.type == AR_EV_KEY)
+                handle_key(e.key, e.pressed, allow_input);
+            else if (e.type == AR_EV_MOUSE && allow_input && !thinking)
+                handle_mouse(e.x, e.y, (e.buttons & 1) != 0);
+            else if (e.type == AR_EV_QUIT)
+                running = false;
+            else if (e.type == AR_EV_DESKTOP)
+                want_desktop = true;
+        }
+        return;
+    }
+
     while (z_msg_read(&msg) == Z_OK) {
 
         switch (msg.subject) {
 
         case Z_WM_KEY:
             if (msg.obj.type == Z_UINT32)
-                handle_key(msg.obj.val.uint32, allow_input);
+                handle_key(Z_WM_UNPACK_KEY_KEYSYM(msg.obj.val.uint32),
+                    Z_WM_UNPACK_KEY_PRESSED(msg.obj.val.uint32) != 0,
+                    allow_input);
             break;
 
         case Z_WM_MOUSE:
             /* Ignored entirely while an opponent is thinking: a click
              * can fold or deal, and the estimate running is computed
              * from the state a click would change. */
-            if (allow_input && !game_mode && msg.obj.type == Z_UINT32)
-                handle_mouse(msg.obj.val.uint32);
+            if (allow_input && !thinking && msg.obj.type == Z_UINT32) {
+                uint32_t u = msg.obj.val.uint32;
+                handle_mouse((int)Z_WM_UNPACK_MOUSE_X(u), (int)Z_WM_UNPACK_MOUSE_Y(u),
+                    (Z_WM_UNPACK_MOUSE_BUTTONS(u) & Z_MOUSE_BTN_LEFT) != 0);
+            }
+            break;
+
+        /* The colour icon: the screen face. */
+        case Z_WM_TITLEBAR_ICON:
+            if (msg.obj.type == Z_UINT32 && allow_input && !thinking &&
+                Z_WM_UNPACK_TBICON_KIND(msg.obj.val.uint32) == Z_WM_TBICON_COLOUR)
+                screen_on(false);
             break;
 
         /* The part of this window not covered by the windows in front
@@ -787,11 +779,9 @@ static void pump(bool allow_input)
             if (msg.obj.type != Z_UINT32) break;
             if (z_win_redraw_id(msg.obj.val.uint32) != win.id) break;
             z_win_apply_redraw(&win, msg.obj.val.uint32);
-            /* Answered even in game mode, and answered even while an
-             * opponent is thinking. The window is still a window as
-             * far as wm is concerned, and an unanswered redraw is what
-             * stalls the desktop. */
-            if (!game_mode) repaint();
+            /* Answered even while an opponent is thinking: an
+             * unanswered redraw is what stalls the desktop. */
+            repaint();
             z_win_redraw_done(&win);
             break;
 
@@ -801,7 +791,7 @@ static void pump(bool allow_input)
             break;
 
         case Z_WM_WINDOW_RESIZED:
-            if (z_win_apply_resized(&win, &msg.obj) && !game_mode) {
+            if (z_win_apply_resized(&win, &msg.obj)) {
                 relayout();
                 repaint();
             }
@@ -860,9 +850,16 @@ int main(void)
 
     apply_launch_arg();
 
+    /* The screen face's palette and inks, and its flags on the window:
+     * game mode (F11 is poker's), the colour window and its icon. */
+    build_help();
+    memcpy(desc.palette, pt_palette, sizeof(desc.palette));
+    pt_mono_inks(desc.ink);
+    ar_window_colour(true);
+
     if (z_win_create_flags(&win, "poker", WIN_W, WIN_H, -1, -1,
         Z_WIN_FLAG_CLOSE_ICON | Z_WIN_FLAG_CLOSE_KILLS_OWNER |
-        Z_WIN_FLAG_RESIZABLE | Z_WIN_FLAG_GAME_MODE) != Z_OK) {
+        Z_WIN_FLAG_RESIZABLE | ar_window_flags(&desc)) != Z_OK) {
         puts("poker: failed to create window -- is wm running?");
         return 1;
     }
@@ -877,6 +874,11 @@ int main(void)
         pump(true);
 
         if (!running) break;
+
+        if (want_desktop && !thinking) {
+            screen_off();
+            continue;
+        }
 
         if (game.phase == PK_PHASE_BETTING && game.actor != view.hero) {
             ai_turn();
@@ -916,10 +918,13 @@ int main(void)
             }
         }
 
-        z_proc_wait(Z_TICK_HZ);
+        /* The screen face draws and waits a frame at a time; the
+         * desktop face sleeps until something arrives. */
+        if (scr) ar_frame();
+        else z_proc_wait(Z_TICK_HZ);
     }
 
-    if (game_mode) leave_game_mode();
+    screen_off();
 
     /* Cash out on the way out, so closing the window banks the table
      * rather than discarding it. */

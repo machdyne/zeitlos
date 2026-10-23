@@ -1,5 +1,7 @@
 # bricks
 
+Kind: a **screen app** -- a 320x240 screen in a window or full screen ([app_kinds.md](app_kinds.md)).
+
 A brick-breaking game: a wall of bricks at the top, a paddle at the
 bottom, a ball between them. Keep the ball in play with the paddle and
 break every brick that can be broken. It runs in a 320x240 window or
@@ -95,10 +97,15 @@ The best ten scores are kept, with initials, in
 | Space, Up | launch the ball, fire the laser |
 | P | pause (Start on a pad) |
 | Esc | in the window: pause; again for the menu |
-| F1 | help, in the window |
+| F1 | help, on the game's own screen -- in the window and full screen alike ([screen_ui.md](screen_ui.md)); the game is paused when it closes |
 | F11 | full screen, or back to the window ([keys.md](keys.md)) |
 | C | full screen: colour on or off |
 | M | music on or off |
+
+In the window it is in colour too while it is the focused window and
+nothing covers it, on a board with the colour window -- the 45F boards
+([color.md](color.md), "The colour window"); otherwise in black and
+white, as before.
 
 A gamepad: the d-pad moves, A, B, X or Y launch and fire, Start
 pauses. The menu, the table and the initials take the usual arrows and

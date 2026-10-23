@@ -1,5 +1,7 @@
 # midi
 
+Kind: a **desktop app** ([app_kinds.md](app_kinds.md)).
+
 A General MIDI file player. Reads `.MID` off the SD card and plays it
 through `rtl/audio_mixer.v` using generated waveforms.
 

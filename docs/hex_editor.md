@@ -1,5 +1,7 @@
 # hex
 
+Kind: a **desktop app** ([app_kinds.md](app_kinds.md)).
+
 A hex editor for files of unlimited size. `sw/apps/hex`.
 
 ```

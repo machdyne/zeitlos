@@ -7,7 +7,10 @@
  * rocks and weave from side to side.
  *
  * Everything is drawn with the GPU line rasterizer (rtl/gpu/gpu_raster.v)
- * through z_win_hw_line(), so the whole game is a wireframe.
+ * through the arcade runtime's ar_plane_line() (sw/common/games/zarcade.h,
+ * docs/arcade.md), so the whole game is a wireframe. The runtime keeps
+ * the window, full screen, colour and the colour window; this file
+ * keeps its lines.
  *
  *   > run wm
  *   > run space3d
@@ -49,8 +52,8 @@
  * out of view. A 3D scene has lines going off-window constantly, so
  * this file does proper Cohen-Sutherland clipping (emit_line()) plus
  * a near-plane clip in view space (emit_edge()) before submitting
- * anything. Everything handed to z_win_hw_line() is already inside
- * the content rect, so the library's clamp and the hardware's own
+ * anything. Everything handed to ar_plane_line() is already inside
+ * the picture, so the library's clamp and the hardware's own
  * clip registers both end up as redundant backstops -- which is what
  * you want them to be.
  *
@@ -72,15 +75,8 @@
 #include <stdbool.h>
 #include <string.h>
 
-#include "../../common/zeitlos.h"
-#include "../../common/zsoc.h"	// Z_TICK_HZ, for the idle wait in main()
-#include "../../common/zwm.h"
-#include "../../common/zwin.h"
 #include "../../common/zfont.h"
-#include "../../common/zgfx.h"
-#include "../../common/zcolor.h"
-#include "../../common/zkbd.h"
-#include "../../common/zdialog.h"
+#include "../../common/games/zarcade.h"
 
 // ===========================================================================
 // CONFIGURATION
@@ -180,11 +176,9 @@
 #define STREAK_Z         700
 #define STREAK_LEN       260
 
-// ~732Hz kernel tick (see z_uptime_ticks(), sw/os/kernel.c), so 24
-// ticks is a hair over 30fps. The frame is fixed-timestep: if a frame
-// overruns we fall behind in wall-clock time rather than taking a
-// bigger simulation step, which keeps collision detection honest.
-#define FRAME_TICKS      24
+// A step of the game is two display frames, 30 a second (main()). The
+// step is fixed: a frame that overruns runs more steps after it, each
+// the same size, which keeps collision detection honest.
 
 // -- background galaxies --
 //
@@ -448,24 +442,9 @@ static int32_t star_z[NUM_STARS];
 // GAME STATE
 // ===========================================================================
 
-static z_win_t win;
-
-// Content rect in absolute screen coordinates, and the projection
-// centre derived from it. Both are refreshed from
-// z_win_content_rect() whenever the window moves -- see
-// update_geometry(). Nothing here keeps its own copy of the content
-// rect formula; zwin.c owns it, for the reasons set out in that
-// function's own comment.
-// -- full screen (F11) --
-//
-// The window is already 320x240, which is exactly a game-mode page, so
-// full screen is not a different renderer -- it is the same one drawing
-// into a different rectangle. update_geometry() is the only place that
-// rectangle is established.
-static bool game_mode;
-
-static int32_t clip_x0, clip_y0, clip_x1, clip_y1;
-static int32_t view_cx, view_cy;
+// The picture: the runtime's 320x240, the projection centred on it.
+static int32_t clip_x0 = 0, clip_y0 = 0, clip_x1 = AR_W - 1, clip_y1 = AR_H - 1;
+static int32_t view_cx = (AR_W - 1) / 2, view_cy = (AR_H - 1) / 2;
 
 static bool     key_left, key_right, key_up, key_down;
 static int32_t  ship_vx, ship_vy;
@@ -491,17 +470,18 @@ static int    cur_buf;
 static bool overflowed;   // display list filled up; reported once
 
 // ===========================================================================
-// COLOUR (game mode: docs/space3d_app.md, docs/color.md)
+// COLOUR (docs/space3d_app.md, docs/color.md)
 // ===========================================================================
 //
-// Full screen on a board with game-mode colour is sixteen colours, laid
-// out the way the Amiga called DUAL PLAYFIELD:
+// In colour -- full screen on a board with game-mode colour, or the
+// colour window -- there are sixteen colours (or more), laid out the
+// way the Amiga called DUAL PLAYFIELD:
 //
 //   planes 0-2   the wireframe: seven line colours (1-7), drawn and
 //                erased by the rasterizer exactly as before, one
 //                plane at a time
-//   plane 3      a nebula, drawn ONCE when full screen starts and
-//                never touched again
+//   plane 3      a nebula: the runtime's picture (paint()), which the
+//                lines never touch
 //
 // The erase pass clears planes 0-2 only, so the nebula is never
 // damaged by a line passing over it and never has to be repaired --
@@ -512,8 +492,8 @@ static bool overflowed;   // display list filled up; reported once
 // line colours again, so a line in front of the nebula looks the same
 // as one in front of empty space.
 //
-// z_color_16, viewport at (0,0): plane 0 is the top-left quadrant,
-// plane 1 top-right, plane 2 bottom-left, plane 3 bottom-right.
+// The colour window on six planes has eight colours: planes 0-2, the
+// wireframe, and no nebula.
 //
 // Then the palette does the rest, for sixteen register writes a frame
 // and no drawing at all:
@@ -529,7 +509,7 @@ static bool overflowed;   // display list filled up; reported once
 // the planes its colour has bits in (one to three). Where two lines of
 // different colours cross, the shared pixel takes both colours' bits --
 // a mixed point at a crossing, invisible in motion. C switches colour
-// on and off in full screen, for comparison.
+// on and off in full screen, and F10 in the window too, for comparison.
 
 #define C_WHITE   1     // near stars and their streaks; the score text
 #define C_HUD     2     // reticle and brackets, and UFOs
@@ -542,15 +522,19 @@ static bool overflowed;   // display list filled up; reported once
 // Stars farther than this twinkle; nearer ones are steady white.
 #define TWINKLE_Z 2600
 
-static bool    col_on;                  // full screen, in colour
 static uint8_t cur_color = C_WHITE;     // colour of lines being emitted
-static int32_t col_ox[4], col_oy[4];    // where each plane's (0,0) is
 static uint32_t col_anim;               // frames, for the palette
 
 static const uint16_t twinkle[6] = { 0x334, 0x557, 0x99b, 0xccf, 0x99b, 0x557 };
 static const uint16_t fire[6]    = { 0xff8, 0xfd4, 0xfa2, 0xf73, 0xfa2, 0xfd4 };
 static const uint16_t nebula[8]  = { 0x315, 0x316, 0x326, 0x226,
                                      0x236, 0x226, 0x326, 0x316 };
+
+// Drawing in colour now: full screen, or the colour window. The nebula
+// needs plane 3: sixteen colours or more (the colour window on six
+// planes has eight, and no nebula).
+static bool colour(void) { return ar_color(); }
+static bool nebula_on(void) { return ar_color() && ar_colours() >= 16; }
 
 static void col_palette(void) {
 	uint16_t p[16];
@@ -567,29 +551,19 @@ static void col_palette(void) {
 	p[8] = flash_timer > 0 ? ((flash_timer & 1) ? 0x934 : 0x512)
 	                       : nebula[(col_anim / 40) % 8];
 	for (k = 1; k < 8; k++) p[8 + k] = p[k];
-	z_color_palette_load_now(p, 16);
-}
-
-// One line in colour, or erased (color 0). See the block comment for
-// why erasing clears three planes and drawing sets only some.
-static void col_line(int32_t x0, int32_t y0, int32_t x1, int32_t y1,
-	int color) {
-	int k;
-	for (k = 0; k < 3; k++) {
-		if (color && !((color >> k) & 1)) continue;
-		z_fb_hw_line(x0 + col_ox[k], y0 + col_oy[k],
-			x1 + col_ox[k], y1 + col_oy[k], color ? 1 : 0, NULL);
-	}
+	ar_pal_load(p, 16);
 }
 
 // -- the nebula: plane 3, made once --
 //
 // A few soft blobs summed into a density field, thresholded through a
 // 4x4 ordered dither, so its edges feather out into specks rather than
-// stopping at a line. Built into a 320x240 bitmap in memory and blitted
-// into plane 3's quadrant in one operation.
+// stopping at a line. Built into a 320x240 bitmap in memory the first
+// time it is shown, and drawn into plane 3 by paint() -- the runtime's
+// picture under the lines, repainted wherever the runtime repaints.
 #define NEB_STRIDE 44                   // 10 words + 1 the blitter may read
 static uint32_t neb_bits[240 * (NEB_STRIDE / 4) + 1];
+static bool neb_built;
 
 static const uint8_t neb_bayer[4][4] = {
 	{  0,  8,  2, 10 }, { 12,  4, 14,  6 }, {  3, 11,  1,  9 }, { 15,  7, 13,  5 }
@@ -625,37 +599,20 @@ static void build_nebula(void) {
 			if (d * 10 / 16 > neb_bayer[y & 3][x & 3])
 				neb_bits[y * (NEB_STRIDE / 4) + (x >> 5)] |= 1u << (x & 31);
 		}
+	neb_built = true;
 }
 
-static void draw_nebula(void) {
-	z_color_plane_blit(&z_color_16, 3, neb_bits, NEB_STRIDE, 0, 0,
-		0, 0, 320, 240, Z_ROP_COPY);
-}
-
-// Colour on or off, in full screen. Either way the screen is cleared
-// and the erase list dropped: the other mode's pixels mean something
-// else here.
-static void col_set(bool on) {
-	static bool built;
-	int k;
-	z_fb_hw_sync();
-	z_fb_hw_fill_rect(0, 0, 640, 480, 0);
-	line_count[cur_buf ^ 1] = 0;
-	if (on && z_color_available()) {
-		for (k = 0; k < 4; k++) {
-			int px, py;
-			z_color_plane_xy(&z_color_16, k, 0, 0, &px, &py);
-			col_ox[k] = px;
-			col_oy[k] = py;
-		}
-		if (!built) { build_nebula(); built = true; }
-		z_color_begin(&z_color_16);
-		draw_nebula();
-		col_palette();
-		col_on = true;
-	} else {
-		if (col_on) z_color_end();
-		col_on = false;
+// The runtime's picture under the lines, inside r: black, and in
+// colour the nebula in plane 3. The lines are drawn over it every
+// frame (blit_frame()'s draw pass is unconditional), so a part the
+// runtime repaints -- uncovered, after a box, a mode change -- has its
+// lines back a frame later.
+static void paint(void *user, const ar_rect_t *r) {
+	(void)user;
+	ar_fill(r->x, r->y, r->w, r->h, 0);
+	if (nebula_on()) {
+		if (!neb_built) build_nebula();
+		ar_plane(3, neb_bits, NEB_STRIDE, r->x, r->y, r->x, r->y, r->w, r->h);
 	}
 }
 
@@ -1132,25 +1089,19 @@ static void build_hud(void) {
 // erased, and every new line is drawn, whatever the indices happen to
 // line up as. Emitting in a stable order (HUD first, it is always the
 // same twelve lines) just makes the heuristic hit more often.
-// IN GAME MODE THE z_win_* LAYER IS WRONG TWICE OVER.
-//
-// It clips to where the window sits on the desktop -- which is exactly
-// why the screen outside the window stayed black in full screen, and
-// the top-left of it most visibly -- and for text it takes
-// window-relative coordinates, which in game mode are not the ones the
-// caller has.
-//
-// Everything handed to this is already inside clip_x0..clip_y1: see the
-// note at the top of the file about why this game does its own
-// Cohen-Sutherland rather than leaning on the library's clamp. So
-// drawing straight to the framebuffer loses nothing, and the clip the
-// z_win_* layer would have applied was a backstop either way.
+// One line drawn, or erased (color 0). In colour, planes 0-2: an erase
+// clears all three, a draw sets only the planes its colour has bits in
+// (see the colour block); plane 3, the nebula, is never touched. In
+// black and white, plane 0. Everything handed to this is already
+// inside the picture (emit_line()'s clipping); the runtime cuts it to
+// what of the window shows.
 static void draw_line(int32_t x0, int32_t y0, int32_t x1, int32_t y1,
 	int color) {
-
-	if (game_mode && col_on) col_line(x0, y0, x1, y1, color);
-	else if (game_mode) z_fb_hw_line(x0, y0, x1, y1, color ? 1 : 0, NULL);
-	else z_win_hw_line(&win, x0, y0, x1, y1, color ? 1 : 0);
+	int k, n = colour() ? 3 : 1;
+	for (k = 0; k < n; k++) {
+		if (color && n > 1 && !((color >> k) & 1)) continue;
+		ar_plane_line(k, x0, y0, x1, y1, color ? 1 : 0);
+	}
 }
 
 static void blit_frame(void) {
@@ -1183,36 +1134,20 @@ static void blit_frame(void) {
 static void draw_hud_text(void) {
 
 	char buf[24];
+	int k, w;
 
-	// Zero-padded to a fixed width on purpose. The glyph blitter
-	// clears the background of every cell it writes (z_fb_draw_char(),
-	// zgfx.c), so redrawing text in place is self-erasing -- but only
-	// over the cells it actually touches. A shorter string leaves the
-	// tail of the previous, longer one on screen, so "SCORE 10"
-	// followed by "SCORE 0" after a restart would read "SCORE 00".
-	// This is the same bug that stranded the old game-over banner:
-	// text that stops being drawn is not text that gets erased.
+	// Zero-padded to a fixed width on purpose: the box under it is
+	// cleared first (planes 0-2 in colour, the nebula left), so a
+	// shorter string after a restart cannot leave a longer one's tail.
 	snprintf(buf, sizeof(buf), "SCORE %03lu", (unsigned long)score);
-	// Window-relative in a window; absolute in game mode, where there
-	// is no window to be relative to.
-	if (game_mode)
-		z_fb_draw_text(clip_x0 + 4, clip_y0 + 2, buf, 1, &z_font_5x8, NULL);
+	w = ar_text_width(buf, &z_font_5x8, 1);
+	if (colour())
+		for (k = 0; k < 3; k++) ar_plane_fill(k, 3, 1, w + 2, 10, 0);
 	else
-		z_win_draw_text(&win, 4, 2, buf, 1, &z_font_5x8);
+		ar_fill(3, 1, w + 2, 10, 0);
+	ar_text(4, 2, buf, C_WHITE, &z_font_5x8, 1);
 }
 
-// Fills or clears the whole content area through the blitter.
-//
-// Deliberately z_fb_hw_fill_rect() and not z_win_fill_rect(): the
-// latter routes to z_fb_fill_rect(), which is a software per-pixel
-// loop, and at this window size that's over seventy thousand
-// read-modify-write cycles on the framebuffer -- fine for the
-// once-per-lifetime clear it was written for, hopeless for something
-// that has to happen eight frames running. The blitter does the same
-// area in a fraction of the time. Reaching past the z_win_* layer is
-// safe here only because the rectangle passed is exactly this
-// window's own content rect, which is the thing that layer would
-// otherwise be clipping to.
 // defined further down, next to the rest of the setup code; the crash
 // strobe needs it a good deal earlier
 static void reset_game(void);
@@ -1221,14 +1156,12 @@ static void fill_content(int color) {
 	int k;
 	// In colour, planes 0-2 only: plane 3 is the nebula, which nothing
 	// clears (see the colour block above).
-	if (game_mode && col_on) {
+	if (colour()) {
 		for (k = 0; k < 3; k++)
-			z_color_plane_fill(&z_color_16, k, clip_x0, clip_y0,
-				clip_x1 - clip_x0 + 1, clip_y1 - clip_y0 + 1, (color >> k) & 1);
+			ar_plane_fill(k, 0, 0, AR_W, AR_H, (color >> k) & 1);
 		return;
 	}
-	z_fb_hw_fill_rect(clip_x0, clip_y0,
-	                  clip_x1 - clip_x0 + 1, clip_y1 - clip_y0 + 1, color ? 1 : 0);
+	ar_fill(0, 0, AR_W, AR_H, color ? 1 : 0);
 }
 
 // One frame of the crash strobe. Alternates filled and cleared, and
@@ -1259,7 +1192,7 @@ static void render(void) {
 
 	line_count[cur_buf] = 0;
 
-	if (game_mode && col_on) {
+	if (colour()) {
 		col_anim++;
 		col_palette();
 	}
@@ -1279,10 +1212,8 @@ static void render(void) {
 
 	blit_frame();
 
-	// Text goes on last so it wins over any line crossing it. The
-	// glyph blitter writes both foreground and background of every
-	// cell it touches (z_fb_draw_char(), zgfx.c), so this also erases
-	// the previous frame's text without a separate clear.
+	// Text goes on last so it wins over any line crossing it; its box
+	// is cleared first, which also erases the previous frame's text.
 	draw_hud_text();
 }
 
@@ -1777,317 +1708,95 @@ static void reset_game(void) {
 	key_left = key_right = key_up = key_down = false;
 }
 
-// Escape leaves game mode, but only once RELEASED first. Entering by
-// any route that leaves a key still held would otherwise see the key-up
-// for a key that was already down and leave immediately -- the same
-// guard sw/apps/chess and the casino games carry.
-static bool exit_armed;
+// ===========================================================================
+// THE LOOP: ON THE ARCADE RUNTIME
+// ===========================================================================
 
-static void update_geometry(void) {
+static const char help_text[] =
+	"A wireframe space game: fly through an asteroid field and "
+	"shoot rocks and UFOs.\n\n"
+	"Arrows\tSteer\n"
+	"Space\tFire\n"
+	"F11\tFull screen, or back to the window\n"
+	"C\tFull screen: colour on or off\n"
+	"F10\tColour on or off, in the window too\n"
+	"Esc\tLeave full screen\n\n"
+	"A crash strobes the screen and starts a new run.";
 
-	z_clip_t clip;
+static ar_desc_t desc = {
+	.name = "space3d",
+	.help_title = "Space3d help",
+	.help_text = help_text,
+	.help_doc = "space3d_app",
+	.paint = paint,
+};
 
-	if (game_mode) {
-		// The whole page, at its origin. No window chrome, and no
-		// content rect to ask for -- in game mode there is no window
-		// in front of anything.
-		clip_x0 = 0;
-		clip_y0 = 0;
-		clip_x1 = Z_GAME_VIEW_W - 1;
-		clip_y1 = Z_GAME_VIEW_H - 1;
-
-		view_cx = (clip_x0 + clip_x1) / 2;
-		view_cy = (clip_y0 + clip_y1) / 2;
-		return;
-	}
-
-	z_win_content_rect(&win, &clip);
-
-	clip_x0 = clip.x0;
-	clip_y0 = clip.y0;
-	clip_x1 = clip.x1;
-	clip_y1 = clip.y1;
-
-	view_cx = (clip_x0 + clip_x1) / 2;
-	view_cy = (clip_y0 + clip_y1) / 2;
-}
-
-// Dropping the erase list is not optional on a mode change: it holds
-// lines in the OLD rectangle's coordinates, and replaying it would rub
-// out pixels somewhere else entirely. Same reason drain_messages()
-// drops it on a redraw.
-static void geometry_changed(void) {
-	update_geometry();
-	line_count[cur_buf ^ 1] = 0;
-}
-
-static void enter_game_mode(void) {
-
-	if (!z_game_available()) {
-		printf("space3d: no game mode -- rebuild the gateware with "
-			"`GAME in rtl/boards.vh\n");
-		return;
-	}
-
-	game_mode = true;
-	exit_armed = false;
-
-	// wm's clip region would otherwise confine drawing to wherever
-	// this window sits on the desktop behind.
-	z_gfx_clear_visible();
-	z_gfx_blit_scissor_reset();
-	z_fb_hw_fill_rect(0, 0, 640, 480, 0);
-
-	// The app-facing call, so wm is told to stop managing windows for
-	// as long as this lasts -- see sw/common/zeitlos.h. It is also
-	// what routes the keyboard here rather than to whatever has focus.
-	z_game_set_enabled(true, false);
-	z_game_set_view(0, 0);
-
-	geometry_changed();
-
-	// Sixteen colours where the board has them; see the colour block.
-	col_set(true);
-}
-
-static void leave_game_mode(void) {
-
-	// Releases the grab as well as the register, and wm repaints the
-	// desktop on the release -- so unlike the older apps there is no
-	// Z_WM_REPAINT to send by hand here.
-	z_game_set_enabled(false, false);       // colour goes off with it
-
-	game_mode = false;
-	col_on = false;
-	geometry_changed();
-}
-
-// What drain_messages() does for this window, while the help box has
-// the message queue. The game is paused meanwhile, so a redraw just
-// repaints the current frame.
-static void help_on_msg(z_msg_t *m, void *user) {
-	(void)user;
-	if (m->subject == Z_WM_SET_CLIP) {
-		z_win_apply_clip(&win, &m->obj);
-	} else if (m->subject == Z_WM_REDRAW) {
-		z_win_apply_redraw(&win, m->obj.val.uint32);
-		z_win_damage_ignore(&win);
-		update_geometry();
-		line_count[cur_buf ^ 1] = 0;
-		fill_content(0);
-		render();
-		z_win_redraw_done(&win);
-	} else if (m->subject == Z_WM_WINDOW_MOVED) {
-		z_win_parse_rect(&win, &m->obj);
-		update_geometry();
-		line_count[cur_buf ^ 1] = 0;
-	}
-}
-
-// F1, in the window only: full screen has no desktop to show it on.
-static void show_help(void) {	// docs/app_help.md
-	static const char help[] =
-		"A wireframe space game: fly through an asteroid field and "
-		"shoot rocks and UFOs.\n\n"
-		"Arrows\tSteer\n"
-		"Space\tFire\n"
-		"F11\tFull screen, or back to the window\n"
-		"C\tFull screen: colour on or off\n"
-		"Esc\tLeave full screen\n\n"
-		"A crash strobes the screen and starts a new run.";
-	z_dialog_ctx_t ctx = { &win, help_on_msg, NULL };
-	z_dialog_help(&ctx, "Space3d help", help, "space3d_app");
-	// Releases went to the box: don't leave the ship steering.
-	key_left = key_right = key_up = key_down = false;
-}
-
-static void handle_key(uint32_t packed) {
-
-	uint32_t keysym = Z_WM_UNPACK_KEY_KEYSYM(packed);
-	bool pressed = Z_WM_UNPACK_KEY_PRESSED(packed) != 0;
-
-	if (keysym == Z_KEY_HELP) {
-		if (pressed && !game_mode) show_help();
-		return;
-	}
-
-	if (game_mode && keysym == 0x1b) {
-		if (!pressed) exit_armed = true;
-		else if (exit_armed) leave_game_mode();
-		return;
-	}
-
-	// C: colour on or off in full screen, for comparison
-	if (game_mode && (keysym == 'c' || keysym == 'C')) {
-		if (pressed && z_color_available()) col_set(!col_on);
-		return;
-	}
-
-	if (keysym == Z_KEY_FULL_SCREEN) {
-		if (pressed) {
-			if (game_mode) leave_game_mode();
-			else enter_game_mode();
-		}
-		return;
-	}
-
-	// Arrows are tracked as held state rather than acted on per event:
-	// Z_WM_KEY delivers real press and release edges (sw/os/hid.c
-	// diffs the HID report itself), so there's no auto-repeat to fight
-	// and holding a key gives smooth continuous thrust.
-	switch (keysym) {
-		case Z_KEY_LEFT:  key_left  = pressed; return;
-		case Z_KEY_RIGHT: key_right = pressed; return;
-		case Z_KEY_UP:    key_up    = pressed; return;
-		case Z_KEY_DOWN:  key_down  = pressed; return;
-	}
-
-	if (!pressed) return;
-
-	// No restart key any more -- a crash strobes the window and starts
-	// a fresh run by itself (see run_flash_frame()). The old "PRESS R"
-	// banner is gone with it: nothing here ever cleared that text, so
-	// it stayed on screen through the next run.
-	if (keysym == ' ') {
-		if (!game_over) fire_missile();
-	}
-}
-
-// Non-blocking message drain. Z_WM_REDRAW means the wm has just
-// cleared the whole screen, so the erase list is stale -- dropping it
-// rather than replaying it is both faster and necessary: those lines
-// are gone, and drawing them in colour 0 over a freshly drawn window
-// would punch holes in the wm's own chrome. Z_WM_WINDOW_MOVED updates
-// geometry but is deliberately not its own redraw trigger, for the
-// reason set out in hello_win's drain_messages().
-static bool drain_messages(void) {
-
-	bool got_redraw = false;
-	z_msg_t msg;
-
-	while (z_msg_read(&msg) == Z_OK) {
-		// The part of this window not covered by the windows in
-		// front of it -- see z_win_apply_clip() in zwin.c. The ack
-		// it sends is not optional: wm waits for it when a region
-		// narrows.
-		if (msg.subject == Z_WM_SET_CLIP) {
-			z_win_apply_clip(&win, &msg.obj);
-			continue;
-		}
-
-		if (msg.subject == Z_WM_REDRAW) {
-			z_win_apply_redraw(&win, msg.obj.val.uint32);
-			// Animated content cannot repaint by damage alone (zwin.h): the
-			// erase list is dropped below, so a frame confined to the
-			// newly exposed strip would leave the previous frame's
-			// lines standing everywhere else with nothing left to
-			// rub them out. Same opt-out gpu3d takes.
-			z_win_damage_ignore(&win);
-			update_geometry();
-			line_count[cur_buf ^ 1] = 0;
-			got_redraw = true;
-		} else if (msg.subject == Z_WM_WINDOW_MOVED) {
-			z_win_parse_rect(&win, &msg.obj);
-			update_geometry();
-			line_count[cur_buf ^ 1] = 0;
-		} else if (msg.subject == Z_WM_KEY) {
-			handle_key(msg.obj.val.uint32);
-		}
-	}
-
-	return got_redraw;
+// One step of the game -- two display frames, 30 a second: the crash
+// strobe, or the world moved on.
+static void step(void) {
+	uint32_t held = ar_held(0);
+	key_left = (held & AR_BTN_LEFT) != 0;
+	key_right = (held & AR_BTN_RIGHT) != 0;
+	key_up = (held & AR_BTN_UP) != 0;
+	key_down = (held & AR_BTN_DOWN) != 0;
+	if (flash_timer > 0) run_flash_frame();
+	else update();
 }
 
 int main(void) {
 
-	uint32_t next_frame;
+	bool quit = false;
+	uint32_t dt = 2, frames = 0;
+	int k;
 
 	printf("space3d: wireframe space game\n");
 
-	if (z_win_create_flags(&win, "space3d", WIN_W, WIN_H, -1, -1,
-	    Z_WIN_FLAG_CLOSE_ICON | Z_WIN_FLAG_CLOSE_KILLS_OWNER |
-	    Z_WIN_FLAG_GAME_MODE) != Z_OK) {
+	ar_window_colour(true);
+	if (!ar_init(&desc)) {
 		printf("space3d: failed to create window\n");
 		return 1;
 	}
+	desc.ink[1] = ar_ink_white;
+	for (k = 2; k < 16; k++) desc.ink[k] = ar_ink_white;
 
-	update_geometry();
-	fill_content(0);
-
-	// Seeded from the tick counter so two runs in a session differ.
-	// Nonzero is required -- xorshift is stuck at zero -- and the
-	// counter could plausibly be zero if the window came up on the
-	// very first tick after boot.
-	rng_state = z_uptime_ticks() * 2654435761u;
-	if (rng_state == 0) rng_state = 0x2545f491u;
+	// Seeded by the runtime (ar_init()) so two runs in a session
+	// differ. Nonzero is required -- xorshift is stuck at zero.
+	rng_state = ar_rand() | 1u;
 
 	reset_game();
 
-	printf("space3d: window %ld at (%ld,%ld) %ldx%ld, content %ldx%ld\n",
-	       (long)win.id, (long)win.x, (long)win.y, (long)win.w, (long)win.h,
-	       (long)(clip_x1 - clip_x0 + 1), (long)(clip_y1 - clip_y0 + 1));
+	while (!quit) {
+		ar_event_t e;
+		bool stepped = false;
 
-	next_frame = z_uptime_ticks();
-
-	while (1) {
-
-		bool redrew = drain_messages();
-		uint32_t now = z_uptime_ticks();
-
-		// Signed comparison of the difference, so this stays correct
-		// across the tick counter's own 32-bit wrap (~68 days at
-		// 732Hz) instead of stalling for the rest of the session.
-		if (!redrew && (int32_t)(now - next_frame) < 0) continue;
-
-		next_frame += FRAME_TICKS;
-		// If a frame overran badly (or the app was descheduled for a
-		// while), don't try to catch up by running a burst of frames
-		// back to back -- resync instead. Catching up would make the
-		// game briefly unplayable at exactly the moment it's already
-		// struggling.
-		if ((int32_t)(now - next_frame) > 0) next_frame = now + FRAME_TICKS;
-
-		if (flash_timer > 0) {
-			run_flash_frame();
-		} else {
-			update();
-			// A wm REDRAW means we just gained pixels (a window in
-			// front moved away or was closed). Clear the visible
-			// region first: this game only ever draws its wireframe
-			// incrementally and never clears what it gains, so a
-			// window dragged off it used to leave its image stuck in
-			// the newly exposed area until a line happened to cross
-			// it. fill_content() clips to our visible region (via the
-			// content rect loaded here), so it erases exactly the
-			// gained strip; render() then draws the frame over it.
-			// The display lists were already dropped on the redraw
-			// (line_count reset in drain_messages()), so there is no
-			// stale erase pass to replay through the cleared pixels.
-			// In game mode the window is not on screen, so there
-			// is nothing to repair -- and asking for the content
-			// rect would reload wm's clip and confine the next
-			// frame to wherever the window happens to sit.
-			if (redrew && !game_mode) {
-				z_clip_t rc;
-				z_win_content_rect(&win, &rc);
-				fill_content(0);
-			}
-			render();
+		while (ar_poll(&e)) {
+			if (e.type == AR_EV_QUIT) quit = true;
+			// the picture is repainted: last frame's lines are gone
+			// with it, and its erase list would rub out the new one
+			if (e.type == AR_EV_MODE) line_count[cur_buf ^ 1] = 0;
+			// Space (or the pad's A) fires, a press at a time
+			if (e.type == AR_EV_BUTTON && e.pressed && e.key == AR_BTN_A &&
+			    !game_over && flash_timer == 0)
+				fire_missile();
 		}
+		if (quit) break;
 
-		if (redrew) z_win_redraw_done(&win);
+		// the game runs 30 steps a second -- every second display frame
+		for (frames += dt; frames >= 2; frames -= 2) {
+			step();
+			stepped = true;
+		}
+		if (stepped && flash_timer == 0) render();
 
 		if (overflowed) {
 			printf("space3d: display list full (%d lines) -- "
 			       "raise MAX_LINES\n", MAX_LINES);
 			overflowed = false;
 		}
-	
-		/* Yield. This loop used to spin, so the app was RUNNABLE
-		 * forever and took a full scheduler share from whatever was
-		 * in the foreground -- see docs/app_runtime.md. renders continuously, so it caps at one tick rather than blocking. */
-		z_proc_wait(1);
+
+		dt = ar_frame();
 	}
 
+	ar_shutdown();
 	return 0;
 }

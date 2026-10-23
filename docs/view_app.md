@@ -1,5 +1,8 @@
 # view -- the image viewer
 
+Kind: a **dual app** ([app_kinds.md](app_kinds.md)): a resizable
+desktop window, and the picture on a 320x240 screen in colour.
+
 `sw/apps/view`, with the decoders in `sw/common/zimg.c` / `zimg.h`.
 
 ```
@@ -19,6 +22,43 @@ window with scrollbars. The open icon in the titlebar
 from the keyboard.
 
 **F1** shows a short help box ([app_help.md](app_help.md)).
+
+## In colour
+
+**F10**, or the colour icon on the titlebar (a rainbow), shows the
+picture on a 320x240 screen in the same window, in colour where the
+board has it; **F11** shows it full screen. F10, the icon, Esc or
+resizing the window go back to the black-and-white window, at the size
+it had (`sw/apps/view/vscreen.c`, on the arcade runtime: view's window
+is lent to it, [arcade.md](arcade.md), "A dual app").
+
+| Where | Colours |
+|---|---|
+| the window, focused and uncovered, eight-plane board | 32 (the colour window, [color.md](color.md)) |
+| the window, six-plane board | 8 |
+| full screen | as many as the board has: 256, 64 or 16 |
+| the window covered, unfocused, or a board without colour | black and white, dithered |
+
+The picture is decoded again, in colour (zimg's RGBA rows: BMP, GIF,
+PNG, PNM; JPEG and a one-bit ZBM come in grey), and fitted into
+320x240: whole, scaled down to the larger of the two fits by nearest
+sampling, centred on black. Its colours are chosen by median cut
+(`sw/common/zquant.c`) for what is shown -- again when that changes --
+and a picture with more colours than that is spread by Floyd-Steinberg
+diffusion. An SVG is taken from the black-and-white document. F1 there
+is the screen's help (the screen toolkit); the open icon goes back to
+the window and its file box.
+
+It costs about 270 KB of memory beside the window's two documents: the
+fitted picture as RGB444 (150 KB), its eight planes (84 KB), the
+dithered picture and the tables.
+
+`make render` in `sw/apps/view` runs the screen face on the build
+host (`tests/render.c`, a picture from `tests/gen.py`): the window in
+black and white, its colour window, full screen in colour and mono,
+the window again, F10 back to the desktop face -- on eight and six
+planes (`tests/out`, `tests/out/p6`), every frame checked against a
+full repaint.
 
 ## Loading without stopping
 
@@ -586,15 +626,11 @@ but is a change to shared code and belongs on its own.
 
 ## Not implemented
 
-- **Full-screen mode.** ESC (when no picture is loading) is swallowed
-  by `handle_key()` so the binding is not claimed by anything else in
-  the meantime. It
-  needs wm support that does not exist: a `Z_WIN_FLAG_UNDECORATED` to
-  expose wm's existing internal `no_titlebar` (currently set only for
-  the dock, `wm.c:2181`), a `Z_WM_SET_FULLSCREEN` that stashes and
-  restores the window rect, and a way to suppress the dock — which is
-  a real window in wm's list, so it must leave the clip stack rather
-  than merely be drawn over.
+- **Full screen in black and white at 640x480.** F11 is the picture
+  full screen in colour at 320x240 (above). ESC (when no picture is
+  loading) is still swallowed in the window.
+- **Panning in the screen face.** A picture bigger than 320x240 is
+  fitted, not panned.
 - **Zoom.** Would mean re-decoding, per the streaming design above.
 - **Animation.** Later GIF frames need the previous frame kept as
   8-bit indices to composite against — a 640×480 index plane, 300KB.

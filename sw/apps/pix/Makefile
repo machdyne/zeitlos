@@ -13,14 +13,17 @@ APP_LISTING = 0
 # what changed, and the steps hold up to 512 KB).
 APP_STACK = 2M
 
-SRC_DIRS = $(COMMON_DIR)/games
+SRC_DIRS = $(COMMON_DIR)/games $(COMMON_DIR)/games/ui
 
 # Objects, and why each is linked:
 #
 #   zgfx, zcolor           the blitter and game-mode colour
+#   sui                    pix's boxes (open, save, prompts) and F1 help,
+#                          on its own screen (the screen toolkit,
+#                          docs/screen_ui.md)
 #   zwin, zwidget, zspeak,
-#   zdialog, zflist, zedit the window, its boxes (open, save, prompts)
-#                          and F1 help
+#   zdialog, zflist, zedit the window, and the runtime's desktop help box
+#                          (zarcade_sys.c; unused while sui is linked)
 #   zfsapp                 reading and writing files
 #   zcfg                   apps.arcade.skill, which the runtime reads
 #   zarcade, zarcade_sys   the arcade runtime: window or full screen
@@ -30,7 +33,7 @@ SRC_DIRS = $(COMMON_DIR)/games
 #                          PNG on, and the colour rows (zimg.h)
 OBJS = zeitlos.o zobj.o zgfx.o zcolor.o zfont_data.o zwin.o zwidget.o \
 	zspeak.o zdialog.o zflist.o zedit.o zfsapp.o \
-	zarcade.o zarcade_sys.o zsfx.o zcfg.o \
+	zarcade.o zarcade_sys.o zsfx.o zcfg.o sui.o \
 	zsprite.o zimg.o zinflate.o \
 	px_doc.o px_io.o px_edit.o px_anim.o px_import.o pix.o
 

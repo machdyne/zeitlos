@@ -1,5 +1,7 @@
 # mausrun
 
+Kind: a **full-screen app** ([app_kinds.md](app_kinds.md)).
+
 **Maus Run**: a side-scrolling run-and-jump game for game mode. You are
 a mouse; you run to the cheese wheel at the end of each level, collect
 the cheese, jump the boxes and pits, bounce on the cats (it makes them
@@ -207,13 +209,17 @@ with one still responds to the keyboard.
 | Back: pause in play, then the menu; on the menu, quit | Esc | Select |
 | Volume down / up | - / = | |
 | Music on or off | M | |
-| Colour on or off | C | |
+| Colour on or off | C or F10 | |
+| Help: the keys, the game paused | F1 (F1 or P goes on) | |
 
 The old diagnostic keys are gone: A (the ambient layer off) and T (a
 quarter of a day later), and `[ ]` (the music against the effects --
 the balance is fixed now). So are R (restart; GAME OVER asks) and Esc
 quitting at once from the middle of a level. mausrun is always in game
-mode ([keys.md](keys.md)).
+mode ([keys.md](keys.md)): it draws a whole picture into a back page
+every frame and flips, for its smooth parallax, so it stays off the
+arcade runtime and out of a window (decided 2026-10-23); F1 and F10
+mean what they mean on the runtime.
 
 Unplugging a pad mid-jump releases every button rather than leaving the
 mouse running forever — that falls out of the hardware clearing pad

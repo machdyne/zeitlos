@@ -225,6 +225,21 @@ uint32_t arh_seed(void) { return 12345u; }
 
 static ar_rect_t cover;   /* a window in front of ours, or w = 0 */
 
+/* The colour window (zarcade_sys.c's window_colour_check()): wm said
+ * this window may have it; it takes it while wholly uncovered. */
+static bool wc_wanted, wc_focus;
+void ar_window_colour(bool on) { wc_wanted = on; }
+
+static void window_colour_check(void) {
+	int planes = host_planes();
+	bool want = wc_wanted && wc_focus && !ar__s.wc_off && planes > 4 &&
+		ar__s.mode == AR_MODE_WINDOW && ar__s.vis_whole;
+	if (want && !ar__s.wcolor)
+		ar__wcolor(true, planes - 4, planes == 8 ? 480 : 240);
+	else if (!want && ar__s.wcolor)
+		ar__wcolor(false, 0, 0);
+}
+
 static void clear_fb(void) {
 	memset(fb, 0, sizeof(fb));
 }
@@ -242,6 +257,7 @@ static void mode_event(void) {
 bool ar_set_fullscreen(bool on) {
 	if (on == (ar__s.mode != AR_MODE_WINDOW)) return true;
 	clear_fb();
+	if (on) ar__s.wcolor = false;   /* game mode clears COLWIN */
 	if (on) ar__s.mode = ar__s.want_color ? AR_MODE_FULL_COLOR : AR_MODE_FULL_MONO;
 	else ar__s.mode = AR_MODE_WINDOW;
 	ar__choose_planes(host_planes());
@@ -387,6 +403,23 @@ void ar_host_snapshot(const char *name) {
 					px < cover.x + cover.w && py >= cover.y &&
 					py < cover.y + cover.h;
 				if (covered) { r = 90; g = 90; b = 160; }
+				else if (ar__s.wcolor) {
+					/* bit 0 the window's own pixel, the rest its
+					 * planes at their folded places (zsoc.h's
+					 * z_color_window_plane_xy()) */
+					int k, idx = fb[py][px];
+					uint16_t c;
+					for (k = 1; k < ar__s.wl; k++) {
+						int j = k - 1;
+						int fx = (px + ((j & 1) ? 320 : 0)) % 640;
+						int fy = 480 + ((py + ((j & 2) ? 240 : 0)) % 480) % ar__s.rows1;
+						idx |= fb[fy][fx] << k;
+					}
+					c = ar__s.pal[idx];
+					r = ((c >> 8) & 15) * 17;
+					g = ((c >> 4) & 15) * 17;
+					b = (c & 15) * 17;
+				}
 				else r = g = b = fb[py][px] ? 255 : 0;
 			}
 			fputc(r, f); fputc(g, f); fputc(b, f);
@@ -402,6 +435,41 @@ void ar_host_snapshot(const char *name) {
 }
 
 static bool quit_sent;
+
+/* F1 as zarcade_sys.c has it: the screen toolkit's help on the
+ * program's screen, when the program links ui/sui.c (a weak reference),
+ * opened from inside ar_poll() as on the board; the game hears
+ * AR_EV_SUSPEND after. While a box is up F1 is the box's. */
+extern void sui_help(const char *title, const char *text) __attribute__((weak));
+
+static bool host_attached;
+static void host_key(uint32_t k, bool pressed, uint8_t mods) {
+	/* F10, as zarcade_sys.c: colour on or off */
+	if (k == 0x110019u && !ar__s.modal) {
+		if (pressed) {
+			if (host_attached) {
+				ar_event_t e;
+				memset(&e, 0, sizeof(e));
+				e.type = AR_EV_DESKTOP;
+				ar__queue(&e);
+			} else if (ar__s.mode != AR_MODE_WINDOW) ar_set_color(!ar__s.want_color);
+			else ar__s.wc_off = !ar__s.wc_off;
+		}
+		return;
+	}
+	if (k == 0x110010u && !ar__s.modal && sui_help) {
+		const ar_desc_t *d = ar__s.d;
+		if (pressed && d->help_text) {
+			ar_event_t e;
+			sui_help(d->help_title ? d->help_title : d->name, d->help_text);
+			memset(&e, 0, sizeof(e));
+			e.type = AR_EV_SUSPEND;
+			ar__queue(&e);
+		}
+		return;
+	}
+	ar__key(k, pressed, mods);
+}
 
 bool ar_poll(ar_event_t *e) {
 
@@ -425,9 +493,9 @@ bool ar_poll(ar_event_t *e) {
 
 		switch (s->kind) {
 		/* b: the modifiers held (Z_KBD_MOD_*), 0 for none */
-		case ARH_KEY_DOWN: ar__key(s->a, true, (uint8_t)s->b); break;
-		case ARH_KEY_UP:   ar__key(s->a, false, (uint8_t)s->b); break;
-		case ARH_TAP:      ar__key(s->a, true, (uint8_t)s->b); ar__key(s->a, false, (uint8_t)s->b); break;
+		case ARH_KEY_DOWN: host_key(s->a, true, (uint8_t)s->b); break;
+		case ARH_KEY_UP:   host_key(s->a, false, (uint8_t)s->b); break;
+		case ARH_TAP:      host_key(s->a, true, (uint8_t)s->b); host_key(s->a, false, (uint8_t)s->b); break;
 		case ARH_PAD:      pads[s->b] = s->a; pad_in[s->b] = true; break;
 		case ARH_WINDOW:   ar_set_fullscreen(false); break;
 		case ARH_FULL_COLOR: ar__s.want_color = true; ar_set_fullscreen(true);
@@ -435,6 +503,7 @@ bool ar_poll(ar_event_t *e) {
 		case ARH_FULL_MONO: ar__s.want_color = false; ar_set_fullscreen(true);
 			ar_set_color(false); break;
 		case ARH_COVER:    ar_host_cover(s->x, s->y, s->w, s->h); break;
+		case ARH_WCOLOR:   wc_focus = s->a != 0; break;
 		case ARH_SHOT:     break;   /* handled in ar_frame */
 		case ARH_MOUSE: {
 			ar_event_t m;
@@ -464,6 +533,12 @@ uint32_t ar_host_verify_bad(void) { return verify_bad; }
 uint32_t ar_host_verified(void) { return verify_frames; }
 
 static void (*frame_hook)(void);
+/* On the host every ar_frame() is a frame: always due; no messages;
+ * no Escape logic to keep (the host never leaves full screen itself). */
+bool ar_frame_due(void) { return true; }
+void ar_msg_hook(void (*fn)(void *msg)) { (void)fn; }
+void ar_msg(void *msg) { (void)msg; }
+void ar_escape_leaves(bool on) { (void)on; }
 void ar_vsync_exact(bool on) { (void)on; }
 void ar_frame_hook(void (*fn)(void)) { frame_hook = fn; }
 
@@ -473,7 +548,9 @@ uint32_t ar_frame(void) {
 	ar__shake_step();
 	memset(ar__s.pal_dirty, 0, sizeof(ar__s.pal_dirty));
 	arh_targets();
-	if (frame_hook) frame_hook();
+	window_colour_check();
+	/* not while a box is up (ar_top): its drawing would land on the box */
+	if (frame_hook && !ar__s.modal) frame_hook();
 	ar__render();
 #ifdef AR_HOST_TESTS
 	/* AR_HOST_VERIFY=1: after every frame, repaint everything from
@@ -565,6 +642,24 @@ void ar_shutdown(void) {
 	zsfx_shutdown();
 }
 
+/* A dual app on the host: no window to take; the screen face is the
+ * host's window, as for ar_init(). */
+uint32_t ar_window_flags(const ar_desc_t *d) { (void)d; return 0; }
+bool ar_attach(void *win, const ar_desc_t *d) {
+	static bool up;
+	(void)win;
+	if (!up) { up = true; ar_init(d); }
+	else { ar__s.d = d; ar__s.mode = AR_MODE_WINDOW; ar__invalidate(); }
+	host_attached = true;
+	return true;
+}
+void ar_detach(void) {
+	if (ar__s.mode != AR_MODE_WINDOW) ar_set_fullscreen(false);
+	if (ar__s.wcolor) ar__wcolor(false, 0, 0);
+	host_attached = false;
+}
+bool ar_attached(void) { return host_attached; }
+
 /* Count lit pixels of the current picture in a logical rectangle, in
  * plane 0 -- for tests that want to check something was drawn. */
 int ar_host_lit(int x, int y, int w, int h) {
@@ -602,6 +697,44 @@ void zsfxh_gain(int ch, uint32_t step, uint8_t gl, uint8_t gr) {
 }
 void zsfxh_off(int ch) { (void)ch; zsfxh_offs++; }
 void zsfxh_release(void) { }
+
+/* -- folders: a directory of the build host stands in for the card --
+ *
+ * AR_HOST_FS names it ("/" is that directory); without it every folder
+ * is empty. */
+
+#include <dirent.h>
+#include <sys/stat.h>
+
+int ar_dir_list(const char *path, char *names, int cap, uint8_t *isdir,
+	int max, bool *truncated) {
+	const char *root = getenv("AR_HOST_FS");
+	char full[1024];
+	DIR *d;
+	struct dirent *de;
+	int n = 0, w = 0;
+	if (truncated) *truncated = false;
+	if (!root) return 0;
+	snprintf(full, sizeof full, "%s%s", root, path);
+	d = opendir(full);
+	if (!d) return -1;
+	while ((de = readdir(d)) != NULL) {
+		struct stat st;
+		char p[2048];
+		int l = (int)strlen(de->d_name);
+		if (!strcmp(de->d_name, ".") || !strcmp(de->d_name, "..")) continue;
+		if (n >= max || w + l + 1 > cap) {
+			if (truncated) *truncated = true;
+			break;
+		}
+		snprintf(p, sizeof p, "%s/%s", full, de->d_name);
+		memcpy(names + w, de->d_name, (size_t)l + 1);
+		isdir[n++] = stat(p, &st) == 0 && S_ISDIR(st.st_mode);
+		w += l + 1;
+	}
+	closedir(d);
+	return n;
+}
 
 /* -- for the runtime's own tests -- */
 

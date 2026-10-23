@@ -1,5 +1,7 @@
 # info
 
+Kind: a **desktop app** ([app_kinds.md](app_kinds.md)).
+
 A system monitor. `sw/apps/info`.
 
 ```

@@ -1,5 +1,7 @@
 # print: the print service
 
+Kind: a **desktop app** ([app_kinds.md](app_kinds.md)).
+
 `sw/apps/print`. Prints what an app hands it -- to a printer on the
 network, or to a PDF or PostScript file. `slide` is the first app that
 prints ([slide_app](slide_app.md#printing)); the API is open to any

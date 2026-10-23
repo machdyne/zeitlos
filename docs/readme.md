@@ -180,6 +180,7 @@ with [welcome](welcome.md); to program it, [kernel](kernel.md) and
 | [slide\_scripting](slide_scripting.md) | `slide`'s controls run Scheme: scripts, timers, the message box, example decks |
 | [print](print.md) | `print`: printing over IPP or to port 9100, PDF and PostScript files |
 | [convert](convert.md) | `convert`: documents, tables, archives |
+| [app\_kinds](app_kinds.md) | desktop, screen and full-screen apps: what each kind is and which apps are which |
 | [app\_help](app_help.md) | F1: a help box in every app, with a button to these docs |
 | [keys](keys.md) | Function keys: the same meaning in every app (F1 help ... F11 full screen, F12 app home) |
 | [web\_app](web_app.md) | `web` |
@@ -215,6 +216,7 @@ with [welcome](welcome.md); to program it, [kernel](kernel.md) and
 | [blocks\_app](blocks_app.md) | `blocks`: falling blocks; endless, 40 lines, 3 minutes; the stack drops by VRAM copies |
 | [bricks\_app](bricks_app.md) | `bricks`: paddle, ball and a wall of bricks; twelve rounds, capsules, mouse or keys |
 | [arcade](arcade.md) | The arcade runtime: one 320x240 game screen in a window or full screen, colour or mono |
+| [screen\_ui](screen_ui.md) | The screen toolkit: boxes (messages, questions, a line to type into) on a screen app's own 320x240 screen |
 | [sfx](sfx.md) | Game sound: effects and music on the hardware mixer |
 | [chess\_app](chess_app.md) | `chess` |
 | [chess\_engine](chess_engine.md) | The chess engine |

@@ -125,6 +125,10 @@ void z_polar(int cx, int cy, int radius, int32_t a, int *x, int *y)
  * z_fb_hw_fill_rect() clamps to the SCREEN and to the window manager's
  * visible region but knows nothing about a caller's own rectangle.
  */
+static z_shape_fill_t target;
+
+void z_shape_target(z_shape_fill_t fn) { target = fn; }
+
 static void span(int x0, int x1, int y, int color, const z_clip_t *clip)
 {
     if (clip) {
@@ -135,7 +139,41 @@ static void span(int x0, int x1, int y, int color, const z_clip_t *clip)
 
     if (x1 < x0) return;
 
+    if (target) { target(x0, y, x1 - x0 + 1, 1, color); return; }
+
     z_fb_hw_fill_rect(x0, y, x1 - x0 + 1, 1, color);
+}
+
+/* One pixel: z_fb_set_pixel(), or the target's 1x1. */
+static void pixel(int x, int y, int color, const z_clip_t *clip)
+{
+    if (!target) { z_fb_set_pixel(x, y, color, clip); return; }
+    if (clip && (x < clip->x0 || x > clip->x1 || y < clip->y0 || y > clip->y1))
+        return;
+    target(x, y, 1, 1, color);
+}
+
+/* A line: the blitter's, or Bresenham's to the target. */
+static void line(int x0, int y0, int x1, int y1, int color,
+    const z_clip_t *clip)
+{
+    int dx, dy, sx, sy, err;
+
+    if (!target) { z_fb_hw_line(x0, y0, x1, y1, color, clip); return; }
+
+    dx = x1 > x0 ? x1 - x0 : x0 - x1;
+    dy = y1 > y0 ? y0 - y1 : y1 - y0;
+    sx = x0 < x1 ? 1 : -1;
+    sy = y0 < y1 ? 1 : -1;
+    err = dx + dy;
+    for (;;) {
+        int e2;
+        pixel(x0, y0, color, clip);
+        if (x0 == x1 && y0 == y1) break;
+        e2 = 2 * err;
+        if (e2 >= dy) { err += dy; x0 += sx; }
+        if (e2 <= dx) { err += dx; y0 += sy; }
+    }
 }
 
 /* -- circles ------------------------------------------------------------ */
@@ -148,21 +186,21 @@ void z_fb_circle(int cx, int cy, int r, int color, const z_clip_t *clip)
     if (r < 0) return;
 
     if (r == 0) {
-        z_fb_set_pixel(cx, cy, color, clip);
+        pixel(cx, cy, color, clip);
         return;
     }
 
     /* Midpoint circle. The decision variable stays an integer and the
      * eight-way symmetry means only an octant is stepped. */
     while (x <= y) {
-        z_fb_set_pixel(cx + x, cy + y, color, clip);
-        z_fb_set_pixel(cx - x, cy + y, color, clip);
-        z_fb_set_pixel(cx + x, cy - y, color, clip);
-        z_fb_set_pixel(cx - x, cy - y, color, clip);
-        z_fb_set_pixel(cx + y, cy + x, color, clip);
-        z_fb_set_pixel(cx - y, cy + x, color, clip);
-        z_fb_set_pixel(cx + y, cy - x, color, clip);
-        z_fb_set_pixel(cx - y, cy - x, color, clip);
+        pixel(cx + x, cy + y, color, clip);
+        pixel(cx - x, cy + y, color, clip);
+        pixel(cx + x, cy - y, color, clip);
+        pixel(cx - x, cy - y, color, clip);
+        pixel(cx + y, cy + x, color, clip);
+        pixel(cx - y, cy + x, color, clip);
+        pixel(cx + y, cy - x, color, clip);
+        pixel(cx - y, cy - x, color, clip);
 
         if (d < 0) {
             d += 2 * x + 3;
@@ -311,5 +349,5 @@ void z_fb_spoke(int cx, int cy, int r0, int r1, int32_t a, int color,
     z_polar(cx, cy, r0, a, &x0, &y0);
     z_polar(cx, cy, r1, a, &x1, &y1);
 
-    z_fb_hw_line(x0, y0, x1, y1, color, clip);
+    line(x0, y0, x1, y1, color, clip);
 }

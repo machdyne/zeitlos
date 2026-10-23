@@ -1,8 +1,45 @@
 # chess
 
-A chessboard for Zeitlos. Runs in a window or full screen, plays
-against you at eight difficulty levels, and is fully playable with a
-keyboard alone or a mouse alone.
+Kind: dual -- a resizable desktop window, and a 320x240 screen in colour in the same window ([app_kinds.md](app_kinds.md)).
+
+A chessboard for Zeitlos. Runs in a window, in colour on a 320x240
+screen or full screen, plays against you at eight difficulty levels,
+and is fully playable with a keyboard alone or a mouse alone.
+
+## In colour
+
+**F10**, or the colour icon on the titlebar (a rainbow), turns the
+window into chess's **screen face**: the same board on a 320x240
+screen, through the arcade runtime ([arcade.md](arcade.md), "A dual
+app"), in colour where the window has the colour window
+([color.md](color.md)) -- cream and walnut squares, ivory pieces
+outlined in black and black ones, the last move's squares framed in
+blue, the piece picked up in gold, where it can go in green, a king in
+check in red. **F11** (or `game`) is the screen face full screen, from
+either face; Esc there comes back to the window. F10, the icon or
+resizing the window go back to the desktop board at the size it had.
+On the screen face F1 is the help on the screen (the screen toolkit),
+and typing, the command line and the mouse work as on the desktop --
+`c` and `m` are letters there, not the runtime's colour and music keys.
+
+The board asks for every colour by **role** (`CB_C_*` in `board_ui.h`):
+around the board, text, the two squares, the two sides' pieces, the
+last move, the selection, the destinations, check, rules, a black
+piece's details. The desktop draws the roles in one bit -- exactly the
+old board -- and the screen face in `cb_palette`. A piece on a colour
+square is not the one-bit tile: its outline (the tile's lit pixels on a
+light square) in black, and inside the outline ivory for a white piece,
+grey details for a black one. The inside is found once, at
+`cb_init()`, by a flood fill from the tile's edge between walls grown
+by a pixel, which closes the gaps an outline has (the hollow of the
+king's cross), then grown back to the outline. In black and white (the
+window without the colour window) a square is the desktop's own tile.
+`cb_screen(true)` sends every primitive to the runtime (`ar_fill()`,
+`ar_text()`, `ar_bitmap()`, `ar_bitmap_opaque()`); the layout is
+`cb_layout(L, 0, 0, 320, 240, flipped)`. The runtime repaints the whole
+board through `paint()` wherever it has to; the panel is still drawn on
+its own while the engine thinks, and the runtime's frames go on
+meanwhile (`ar_frame_due()` in the search's poll).
 
 **Status: complete.** Engine, board, panel, command line, mouse input,
 game mode and the difficulty ladder all work. The host test suite is
@@ -50,8 +87,9 @@ and `e2E4` work.
 | `bench` | Time this board -- see below. |
 | `help`, `quit` | |
 
-`F1` shows a short help box ([app_help.md](app_help.md)) in the window;
-in game mode it does nothing. `F11` toggles full screen ([keys.md](keys.md)). `Escape` clears the command line and puts down any piece
+`F1` shows a short help box ([app_help.md](app_help.md)) in the window,
+and on the screen face its help on the screen. `F10` is the board in
+colour, and back; `F11` is full screen ([keys.md](keys.md)). `Escape` clears the command line and puts down any piece
 you have picked up, and stops the engine thinking.
 
 A command is only looked up after the line has failed to parse as a
@@ -137,14 +175,14 @@ and file labels, the panel on the right shows whose move it is, the
 level, the material balance and the move list, and the two lines at the
 bottom are a message line and the command line.
 
-Full screen goes through game mode (`docs/game_mode.md`): a 320x240
-viewport the video hardware pixel-doubles, with two pages to flip
-between.
+Full screen is the screen face's: the arcade runtime puts its 320x240
+screen in game mode (`docs/game_mode.md`), pixel-doubled, in colour
+where the board has it.
 
 **There is one renderer, not two.** `board_ui.c` draws against an
-origin and a clip rectangle in absolute screen coordinates; windowed
-passes the window's content rectangle and game mode passes a page.
-That is the entire difference between the two modes. The alternative --
+origin and a clip rectangle; the desktop passes the window's content
+rectangle, the screen face 0,0 320x240 with `cb_screen(true)`. That is
+the entire difference between the two faces. The alternative --
 window-relative helpers for one and raw framebuffer writes for the
 other -- is two renderers that drift, and the drift is invisible until
 somebody switches modes mid-game and finds the board laid out
@@ -243,6 +281,11 @@ obvious in one look.
     make render WHAT=mate       checkmate, with the check frame
     make render WHAT=narrow     too narrow for the panel
     make render WHAT=game       the full-screen page
+
+and every time, four states on the screen face (start, midgame,
+thinking, mate), `tests/out/scr-*.png`: the window in black and white,
+its colour window and full screen, every frame checked against a full
+repaint (`AR_HOST_VERIFY`).
 
 ## Memory
 

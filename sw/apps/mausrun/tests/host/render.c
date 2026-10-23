@@ -43,6 +43,12 @@ static const mrh_step_t script[] = {
 	TAP(705, K_C_U),                    /* colour off */
 	SHOT(720, "09_mono"),
 	TAP(725, K_C_U),                    /* and on */
+	TAP(740, 0x3A),                     /* F1: the help, paused */
+	SHOT(750, "09b_help"),
+	TAP(760, 0x3A),                     /* and on */
+	TAP(780, 0x43),                     /* F10: colour off, as C */
+	SHOT(790, "09c_f10_mono"),
+	TAP(795, 0x43),
 	{ 20000, MRH_END, 0, 0, NULL },
 };
 

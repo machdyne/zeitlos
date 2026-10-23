@@ -9,7 +9,13 @@ GAMES = $(COMMON)/games
 
 include $(COMMON)/arch.mk
 
+#
+# zarcade*.o, zsfx.o, zcfg.o, sui.o, zcolor.o, zflist.o, zedit.o: the
+# screen face -- the table on the arcade runtime's 320x240 screen in
+# colour, its help on that screen (docs/craps.md, "In colour").
+SRC_DIRS = $(COMMON_DIR)/games $(COMMON_DIR)/games/ui
 OBJS = zeitlos.o zobj.o zgfx.o zwidget.o zspeak.o zdialog.o zshape.o zfont_data.o zwin.o zrng.o zfsapp.o \
+	zcolor.o zflist.o zedit.o zarcade.o zarcade_sys.o zsfx.o zcfg.o sui.o \
 	zrand.o zrand_sys.o zbank.o zdice.o \
 	cr_table.o cr_game.o cr_board.o cr_input.o craps.o
 
@@ -49,8 +55,9 @@ TARGETSRC = cr_table.c cr_game.c cr_board.c cr_input.c craps.c
 
 # The software pixel primitives, so a test can actually DRAW the felt.
 PANELSRC = $(COMMON)/zwin.c $(COMMON)/zwidget.c $(COMMON)/tests/zspeak_stub.c $(COMMON)/zfont_data.c \
-	$(COMMON)/zobj.c $(COMMON)/zeitlos.c
-PANELFLAGS = $(HOSTFLAGS) -I $(COMMON)
+	$(COMMON)/zobj.c $(COMMON)/zeitlos.c \
+	$(GAMES)/zarcade.c $(GAMES)/zsfx.c $(GAMES)/tests/ar_host.c
+PANELFLAGS = $(HOSTFLAGS) -I $(COMMON) -DAR_HOST_TESTS -DZSFX_HOSTED -Wno-unused-parameter
 
 includecheck:
 	@for f in $(TARGETSRC) *.h; do \
@@ -97,6 +104,11 @@ render:
 		cr_board.c $(ENGINESRC) $(GAMES)/zdice.c $(COMMON)/zshape.c \
 		$(PANELSRC)
 	/tmp/craps_render /tmp/craps.pbm $(WHAT)
+	mkdir -p tests/out
+	@for w in comeout point rolling; do \
+		AR_HOST_VERIFY=1 /tmp/craps_render tests/out scr-$$w || exit 1; \
+	done
+	-python3 ../pix/tests/ppm2png.py tests/out
 
 .PHONY: test includecheck nofloat nmcheck render
 

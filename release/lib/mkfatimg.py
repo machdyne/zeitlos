@@ -130,6 +130,7 @@ APP_SET = {
     "mesh": "net", "bbs": "net", "fed": "net",
     "zcc": "dev", "zfpga": "dev", "hex": "dev", "cryptobench": "dev",
     "hello_win": "dev", "portdemo": "dev", "ttytest": "dev",
+    "colwin": "dev",
     "basic": "embedded", "i2c": "embedded", "ls99": "embedded",
     "bench": "embedded", "logic": "embedded", "sechs": "embedded",
     "serial": "embedded", "zlink": "embedded",
@@ -343,6 +344,7 @@ MISC = [
     (zcard("Z_DIR_APPS", "portdemo"), "sw/apps/portdemo/portdemo.bin"),
     (zcard("Z_DIR_APPS", "hello_win"), "sw/apps/hello_win/hello_win.bin"),
     (zcard("Z_DIR_APPS", "audiotest"), "sw/apps/audiotest/audiotest.bin"),
+    (zcard("Z_DIR_APPS", "colwin"), "sw/apps/colwin/colwin.bin"),
 ]
 
 # The shell a term window connects to that lives on the card: posix

@@ -1,5 +1,7 @@
 # kidgames
 
+Kind: a **screen app** -- a 320x240 screen in a window or full screen ([app_kinds.md](app_kinds.md)).
+
 A compilation of educational games for kids (roughly ages 5-10),
 ported from [kidgames](https://github.com/machdyne/kidgames), which
 targets ncurses on Kakao Linux.
@@ -42,78 +44,43 @@ reflows, and for a screen of hand-placed big letters, a keyboard and a
 row of stars that is a great deal of arithmetic to get wrong --
 `sw/apps/logic` is the standing reminder of how that ends.
 
-So the window is created at exactly the size that yields a 320x240
-content area and is **not resizable**. `KG_WIN_W`/`KG_WIN_H` are
-derived from `Z_WM_TITLEBAR_H` and zwin.c's 2px inset rather than
-written down as 324/255, because the inset is zwin.c's to change and a
-hardcoded number would not follow it. `tests/test_layout.c` asserts
-the result is 320x240, which is the only thing keeping the two copies
-of that formula in step -- exactly the duplication
-`z_win_content_rect()` warns about in its own comment.
+So the playfield is the **arcade runtime's screen** ([arcade.md](arcade.md)):
+one 320x240 picture, in a window or full screen, which the runtime
+puts where it belongs and cuts to what shows. `tests/test_layout.c`
+asserts `KG_W` and `KG_H` are the runtime's. There is no reflow path
+because there is nothing to reflow, and a bug visible in a window is
+the same bug full screen.
 
-Both modes then draw identical pixels to a different origin. There is
-no reflow path because there is nothing to reflow, and a bug visible
-in a window is the same bug in game mode.
-
-### Game mode is the default, and does not page-flip
+### Full screen is the default
 
 At 1:1 a 5x8 glyph is unreadable across a room by someone who is still
 learning to read at all. Pixel-doubled it is comfortable. So the app
-enters game mode at startup where the bitstream has it, and **F11**
-drops to a window (and back) ([keys.md](keys.md)). **Esc** goes up a level: from a game
-to the menu, and from the menu out.
+goes full screen at startup where the bitstream has game mode, and
+**F11** drops to a window (and back) ([keys.md](keys.md)). **Esc** goes up a level: from a game
+to the menu, and from the menu out -- full screen too
+(`ar_escape_leaves(false)`); C and M are letters (`ar_text_input()`).
 
-**F1** shows a short help box ([app_help.md](app_help.md)).
+**F1** shows a short help on the playfield itself ([screen_ui.md](screen_ui.md)),
+full screen too.
 
-It does **not** page-flip, unlike every other full-screen app here.
-`z_game_flip()` exists for things that redraw the world every frame; a
-quiz screen redraws one field when a letter is typed. Flipping would
-put that incremental draw on the page nobody is looking at, so every
-partial update would have to become a full repaint -- slower, and a
-rewrite of ten games' worth of drawing, to avoid a tearing risk a
-static screen does not have.
+The app is **black and white** in both modes, full screen too
+(`prefer_mono`): it was designed in one bit, with dither and patterns
+for its greys (below), and asks for no colour window.
 
-### The camera points at the window
+### Drawing, and drawing again
 
-Game mode draws to **the window's content rect**, exactly as windowed
-mode does, and the viewport is aimed at that rectangle. There is no
-second coordinate system and no branch in any drawing primitive.
+Games draw as they always did, straight away, through `kgui.c`'s
+primitives -- fills, dither, patterns, text in a solid cell, 1bpp art
+-- which are the runtime's `ar_fill()`, `ar_fill2()`, `ar_text()` and
+`ar_bitmap_opaque()`. Nothing is page-flipped: a quiz screen redraws one
+field when a letter is typed.
 
-This is the second design, and the first one broke the mouse. Game
-mode originally drew at framebuffer (0,0) and cleared the whole
-640x480 on entry -- which looks reasonable until you notice that
-**game mode is a camera, not a mode change**. Every window is still
-alive and still exactly where it was, and `dispatch_mouse()` in wm.c
-delivers `Z_WM_MOUSE` to the focused window *only while the cursor is
-over it*, hit-testing in framebuffer coordinates. A playfield drawn at
-(0,0) while the window sat elsewhere on the desktop therefore received
-almost no clicks at all.
-
-Aiming the camera at the window fixes it at the root rather than
-patching the arithmetic: drawing, hit testing and wm's own hit test
-all share one coordinate system, in both modes.
-
-The range works out without luck. The window is 324x255 and wm keeps
-it on a 640x480 desktop, so its content origin is at most (318, 238);
-the viewport's clamp with wrap off tops out at (320, 240), exactly
-where a 320x240 camera would start running off the framebuffer. A
-fixed-size, unresizable window is what makes that hold -- a resizable
-one would need the clamp checked.
-
-Two consequences worth knowing. The viewport is re-aimed on
-`Z_WM_WINDOW_MOVED`, or the camera would keep looking at where the
-window used to be. And wm's own `Ctrl+Alt+Arrow` pan can move the
-camera off the playfield; that is left alone rather than fought, and
-costs only visibility -- input stays correct throughout, because none
-of it depends on where the camera is pointing.
-
-Nothing outside the window's clip is written in either mode, so
-leaving game mode needs no `Z_WM_REPAINT` to wm. The desktop
-underneath is exactly as it was.
-
-Pages 1-3 of the framebuffer stay free. That is where staged sprite
-art would go if the blitter turned out to have no one-pass masked
-sprite.
+When the runtime has to repaint part of the picture -- uncovered, after
+the help, entering or leaving full screen -- it asks `paint()` for that
+part, and `paint()` runs the screen's repaint callback
+(`kg_set_repaint()`), every draw cut to the part. `tests/play.c` checks
+every frame of a session against a full repaint: what the callbacks
+draw must be what the screens drew as they went.
 
 ## The pump
 
@@ -121,16 +88,15 @@ sprite.
 the ten games port with their control flow intact: it blocks until a
 key arrives, exactly as `ui_getkey()` did.
 
-What it does while blocking is the Zeitlos part. It drains the
-mailbox, applies `Z_WM_SET_CLIP`, answers `Z_WM_REDRAW` through a
-registered repaint callback and acks it, turns pointer presses into
-keys where the on-screen keyboard caught them, and sleeps with
-`z_proc_wait()` rather than spinning.
+What it does while blocking is the runtime's loop: it reads the
+runtime's events (`ar_poll()`), turns pointer presses into keys where
+the on-screen keyboard caught them, and waits for the next frame
+(`ar_frame()`), which sleeps rather than spins and repaints whatever
+the runtime has to. Closing the window is `KG_KEY_QUIT`, and stays so,
+so every screen on the way out hears it.
 
-**The callback is not optional**, for the same reason `zdialog.c`'s is
-not. A window that misses a `Z_WM_SET_CLIP` keeps drawing against a
-region that is no longer true, and a window that has never had one
-draws nothing at all, with nothing on the console to say why. Every
+**The callback is not optional**: it is the only way the runtime can
+put back a part of the picture it had to repaint. Every
 screen that can be on display while `kg_getkey()` blocks registers how
 to redraw itself, and anything that takes over the screen
 (`kg_message()`, `levelup_celebrate()`) saves and restores the
@@ -213,15 +179,10 @@ same table, so `tests/test_pad.c` asserts they land on the same index.
 If they disagree, pressing C lights some other key, and the pad exists
 to show a kid where C is.
 
-### Pointer coordinates in game mode
+### Pointer coordinates
 
-In game mode the pointer is over the **desktop**, not over the
-pixel-doubled viewport, and wm's coordinates are desktop coordinates.
-The viewport shows framebuffer (0,0)-(319,239) doubled, so a screen
-pixel maps to playfield `(sx/2, sy/2)` and the window's own position is
-irrelevant. Using the windowed translation there put every click at an
-offset that depended on where the window had been left before the mode
-switch, which looks exactly like a miscalibrated pointer.
+The runtime gives the pointer in playfield coordinates in both modes:
+the window's content, or full screen's desktop coordinates halved.
 
 ## Big letters
 
@@ -341,7 +302,7 @@ forty is a test people learn to re-run.
 ## Files
 
     kg.h          geometry, key and charset enums, the monochrome rules
-    kgui.h/.c     window, mode switching, the pump, drawing primitives
+    kgui.h/.c     the arcade runtime's side, the pump, drawing primitives
     kgwidget.c    menu, message box, text field
     kgpad.h/.c    the on-screen keyboard
     kgfont.h/.c   5x7 big block letters
@@ -364,9 +325,10 @@ forty is a test people learn to re-run.
     games.c       the registry
     kidgames.c    main
 
-    tests/kg_shim.h        host stubs zrender.h does not supply
+    tests/kg_shim.h        the app on the runtime's build-host framebuffer
     tests/kg_rand_host.c   deterministic generator for the tests
-    tests/render.c         every screen, as an image
+    tests/render.c         every screen, as an image (make render)
+    tests/play.c           the app itself, driven by a script
     tests/test_layout.c    bands, font runs, containment, labels
     tests/test_pad.c       the keyboard
     tests/test_data.c      the save file and the word lists
@@ -734,11 +696,15 @@ two lists that disagree is one list.
 
     make test      unattended: headers, the link, no floats, no printf,
                    and the three suites
-    make render    draw a screen and LOOK AT IT
+    make render    draw every screen and LOOK AT THEM
 
-`make render WHAT=` takes `menu`, `pad`, `digits`, `field`, `msg`,
+`make render` draws `menu`, `pad`, `digits`, `field`, `msg`,
 `font`, `result`, `counting`, `math`, `numguess`, `wordguess`,
-`letterhunt`, `missing`, `memory`, `memory1` and `animal`. Every game screen has
+`letterhunt`, `missing`, `memory`, `memory1` and `animal` into
+`tests/out/` (`/tmp/kg_render DIR WHAT` draws one), then runs the app
+itself through a script (`tests/play.c`: full screen, the menu, a game
+with keys and a click on the pad, F1, the window, covered and
+uncovered), every frame checked against a full repaint. Every game screen has
 one -- `memory` and `memory1` are the largest and smallest grids,
 since a centring bug shows at the extremes and nowhere else. And
 `tests/render.c` `#include`s the game sources so it can call their
@@ -781,13 +747,12 @@ Checking the framebuffer numerically rather than squinting at a render
 settled it in one command, which is worth doing before changing
 anything.
 
-`make render` writes a PBM at 2x, which is pixel for pixel what game
-mode puts on the glass.
+Each picture is the 320x240 playfield, which game mode doubles on the
+way to the glass.
 
-The containment test is the one that earns its keep: it fills the
-framebuffer, draws deliberately oversized things off all four edges,
-and requires every pixel outside the playfield to be untouched. On
-hardware `z_fb_hw_fill_rect()` clamps to the **screen**, not to a
-window, so a rectangle that runs past our own edge lands on whatever
-app is next to us -- and in game mode it lands in the off-screen pages
-where the sprite art will live. Both are silent.
+The containment test is the one that earns its keep: it draws
+deliberately oversized things off all four edges, and requires every
+pixel outside the playfield to be untouched -- a rectangle that runs
+past our own edge would land on whatever app is next to us. The runtime
+does the clipping now; this holds it to it. The tests run on the
+runtime's build-host framebuffer (`sw/common/games/tests/ar_host.c`).

@@ -1,5 +1,7 @@
 # draw -- painting in black and white
 
+Kind: a **desktop app** ([app_kinds.md](app_kinds.md)).
+
 `sw/apps/draw`. A monochrome painting program in the manner of early
 MacPaint: a 640x480 1bpp page, seven tools down the left, sixteen
 patterns along the bottom.
@@ -10,6 +12,14 @@ patterns along the bottom.
 ```
 
 or double-click a `.zbm` in `files`, which launches it with the file.
+
+draw asks wm for the file it was launched with *before* it makes its
+window. Asked after, as it once was, the wait for wm's answer
+took the new window's first region and redraw request out of the
+mailbox unanswered, and draw came up with an empty frame -- no tools,
+no patterns -- until it was dragged. Any app that paints before it
+takes its launch argument has the same trap; the others take it first,
+or paint after.
 
 ## Drawing
 

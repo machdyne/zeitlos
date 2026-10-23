@@ -71,7 +71,7 @@ static int fill_rop = Z_ROP_COPY;
 static void hw_fill_shade_one(int x, int y, int w, int h, int level,
 	bool wait, int ri);
 static void hw_fill_pattern_one(int x, int y, int w, int h,
-	const uint8_t *pat);
+	const uint8_t *pat, bool all_rows);
 static void z_fb_hw_box_one(int x0, int y0, int x1, int y1, int color,
 	const z_clip_t *clip);
 
@@ -1452,13 +1452,13 @@ void z_fb_hw_fill_pattern(int x, int y, int w, int h, const uint8_t *pat) {
 	int n = z_gfx_visible_count();
 
 	if (n == 0) {
-		hw_fill_pattern_one(x, y, w, h, pat);
+		hw_fill_pattern_one(x, y, w, h, pat, true);
 		return;
 	}
 
 	for (int i = 0; i < n; i++) {
 		if (!z_gfx_blit_scissor(i, NULL)) continue;
-		hw_fill_pattern_one(x, y, w, h, pat);
+		hw_fill_pattern_one(x, y, w, h, pat, false);
 	}
 
 	z_gfx_blit_scissor_reset();
@@ -1466,17 +1466,20 @@ void z_fb_hw_fill_pattern(int x, int y, int w, int h, const uint8_t *pat) {
 }
 
 static void hw_fill_pattern_one(int x, int y, int w, int h,
-	const uint8_t *pat) {
+	const uint8_t *pat, bool all_rows) {
 
 	if (!pat) return;
 
 	// same unconditional clamp z_fb_hw_fill_rect() applies, for the
 	// same reason -- see its own comment. Done here, once, before the
 	// row loop, so the per-run fills below are all known in-bounds.
+	// Rows as z_fb_hw_fill_rect(): the second sheet too where
+	// z_fb_set_rows() says so (a colour window's planes, a game's
+	// planes 4..7), and with no region the scissor's bottom with it.
 	if (x < 0) { w += x; x = 0; }
 	if (y < 0) { h += y; y = 0; }
 	if (x + w > Z_SCREEN_W) w = Z_SCREEN_W - x;
-	if (y + h > Z_SCREEN_H) h = Z_SCREEN_H - y;
+	if (y + h > gfx_fb_rows) h = gfx_fb_rows - y;
 	if (w <= 0 || h <= 0) return;
 
 	int row = 0;
@@ -1494,6 +1497,7 @@ static void hw_fill_pattern_one(int x, int y, int w, int h,
 
 		uint32_t old_mask = gpu_blit_acquire();
 
+		if (all_rows) gpu_blit_clip_y1 = (uint32_t)gfx_fb_rows;
 		gpu_blit_dst_x = (uint32_t)x;
 		gpu_blit_dst_y = (uint32_t)(y + row);
 		gpu_blit_width = (uint32_t)w;
@@ -1867,11 +1871,19 @@ static bool hw_blit_sprite_core(const void *data, const void *mask,
 		if (dst_x < 0) { w += dst_x; src_x -= dst_x; dst_x = 0; }
 		if (dst_y < 0) { h += dst_y; src_y -= dst_y; dst_y = 0; }
 		if (dst_x + w > Z_SCREEN_W) w = Z_SCREEN_W - dst_x;
-		if (dst_y + h > Z_SCREEN_H) h = Z_SCREEN_H - dst_y;
+		// the second sheet too, as the two-pass path below (through
+		// hw_blit_mem_core()): a colour window's planes, a game's
+		// planes 4..7 (z_fb_set_rows())
+		if (dst_y + h > gfx_fb_rows) h = gfx_fb_rows - dst_y;
 		if (w <= 0 || h <= 0) return true;
 
 		{
 			uint32_t old_mask = gpu_blit_acquire();
+
+			// no region of its own: the scissor's bottom reaches the
+			// rows, as in hw_blit_mem_one() unrestricted
+			if (gfx_fb_rows > Z_SCREEN_H && z_gfx_visible_count() == 0)
+				gpu_blit_clip_y1 = (uint32_t)gfx_fb_rows;
 
 			gpu_blit_dst_x = (uint32_t)dst_x;
 			gpu_blit_dst_y = (uint32_t)dst_y;

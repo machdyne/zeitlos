@@ -1,5 +1,7 @@
 # ask
 
+Kind: a **desktop app** ([app_kinds.md](app_kinds.md)).
+
 `sw/apps/ask` — answers a question from the datasets shipped with the
 machine.
 

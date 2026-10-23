@@ -1,5 +1,7 @@
 # MMOD
 
+Kind: a **desktop app** ([app_kinds.md](app_kinds.md)).
+
 `sw/apps/mmod` — read, write, verify and erase an SPI memory module in
 an MMOD socket, and back the boot ROM up to one.
 

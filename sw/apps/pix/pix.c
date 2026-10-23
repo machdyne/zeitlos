@@ -38,12 +38,12 @@
 #include <ctype.h>
 
 #include "../../common/games/zarcade.h"
+#include "../../common/games/ui/sui.h"
 #include "../../common/zkbd.h"
 #include "../../common/zpaths.h"
 #ifndef AR_HOST_TESTS
 #include "../../common/zeitlos.h"
 #include "../../common/zwin.h"
-#include "../../common/zdialog.h"
 #include "../../common/zfsapp.h"
 #endif
 
@@ -123,6 +123,7 @@ static const char help_text[] =
 	"F3\tgo to a cell by name or character\n"
 	"Ctrl+N O S\tnew, open, save; Ctrl+Shift+S save as\n"
 	"Ctrl+I\ta picture (PNG, GIF, BMP, JPEG) into this cell, in its colours\n"
+	"F10\tcolour on or off, in the window too\n"
 	"F11\tfull screen\n\n"
 	"Ctrl+N asks what to make: icon, cursor, sprite 16 16 (and how many "
 	"colours: sprite 16 16 64), font 6 12, picture 320 240 (in colour: "
@@ -168,7 +169,8 @@ static int fg = 1;              /* the first colour (left button, Space) */
 static int bg2 = 0;             /* the second (right button): ZSP_T, often */
 static int page;                /* the 16 colours the chips and 0-F show */
 static int view_tier;           /* F7: 0 as the sheet is; or 64, 16, 4, 2 */
-static int shown_n = 16;        /* colours full screen shows */
+static int shown_n = 16;        /* colours shown: full screen's, or the
+                                   colour window's (32 or 8) */
 static int art_tier = 16;       /* what art is drawn at, in colour */
 static int planes_n = 4;
 
@@ -225,6 +227,15 @@ static void message(const char *s) {
 	msg_frames = 60 * 4;
 	ar_dirty(0, SL_Y, AR_W, AR_H - SL_Y);
 	say(s);
+}
+
+/* The file's name for the status line: its last part, or "untitled",
+ * and a "*" while there are changes not saved. */
+static char shown_name[48];
+static void file_label(char *out, int cap) {
+	const char *base = path[0] ? strrchr(path, '/') : NULL;
+	base = path[0] ? (base ? base + 1 : path) : "untitled";
+	snprintf(out, (size_t)cap, "%.40s%s", base, doc.dirty ? "*" : "");
 }
 
 /* The canvas, and the preview, which shows what it shows. */
@@ -352,11 +363,19 @@ static void want_colours(void) {
  * after a mode change, a load, a palette edit or F7. */
 static void luts_setup(void);
 
+static void boxes_colours(bool dim);
+
 static void colours_setup(void) {
 	int i, a, d = 0, l = 0;
+	static const int tiers[] = { 256, 64, 16, 4, 2 };
 	shown_n = ar_colours();
-	planes_n = shown_n == 256 ? 8 : shown_n == 64 ? 6 : 4;
-	art_tier = tier() < shown_n ? tier() : shown_n;
+	for (planes_n = 1; (1 << planes_n) < shown_n; planes_n++) ;
+	/* the most of the sheet's tiers that fits: in the colour window 32
+	 * colours show the art at 16 (the controls in the eight above), 8
+	 * at 4 */
+	a = tier() < shown_n ? tier() : shown_n;
+	for (i = 0; tiers[i] > a; i++) ;
+	art_tier = tiers[i];
 	luts_setup();
 	ar_dirty_all();
 	if (!ar_color()) {
@@ -370,6 +389,7 @@ static void colours_setup(void) {
 			ui_c[i] = shown_n - R_COUNT + i;
 			ar_pal(ui_c[i], ui_rgb[i]);
 		}
+		boxes_colours(true);
 		return;
 	}
 	/* every entry is the art's: the controls in its darkest and its
@@ -380,6 +400,25 @@ static void colours_setup(void) {
 	}
 	ui_c[R_BG] = ui_c[R_OUT] = ui_c[R_GRID] = d;
 	ui_c[R_INK] = ui_c[R_FRAME] = ui_c[R_HI] = ui_c[R_GUIDE] = ui_c[R_WARN] = l;
+	boxes_colours(false);
+}
+
+/* The screen toolkit's boxes (ui/sui.h) in pix's own controls'
+ * colours: the panels' black, the text's white, the frame's grey, the
+ * cursor's yellow for the focused button. Behind a box the art is
+ * dimmed while those are pix's own entries; when they are the art's
+ * darkest and lightest, nothing is. */
+static void boxes_colours(bool dim) {
+	uint8_t m[SUI_NC];
+	m[SUI_C_FACE] = (uint8_t)C_BG;
+	m[SUI_C_TEXT] = (uint8_t)C_INK;
+	m[SUI_C_FRAME] = (uint8_t)C_FRAME;
+	m[SUI_C_SEL] = (uint8_t)C_HI;
+	m[SUI_C_SEL_TEXT] = (uint8_t)C_BG;
+	m[SUI_C_WARN] = (uint8_t)C_WARN;
+	m[SUI_C_TROUGH] = (uint8_t)C_GRID;
+	m[SUI_C_THUMB] = (uint8_t)C_FRAME;
+	sui_palette(m, dim);
 }
 
 /* -- monochrome --
@@ -853,7 +892,10 @@ static void paint_side(const ar_rect_t *r) {
 	if (sheet_n() > 16) snprintf(b, sizeof(b), "%d: p%d/%d", sheet_n(), page + 1, sheet_n() / 16);
 	else snprintf(b, sizeof(b), "%d colours", sheet_n());
 	ar_text(SD_X + 2, BT_Y - 20, b, C_GRID == C_BG ? C_INK : C_GRID, &z_font_5x8, 1);
-	if (view_tier) snprintf(b, sizeof(b), "shown as %d", view_tier);   /* 12 letters fit */
+	/* F7's choice, or fewer where the colour shown has no more (a colour
+	 * window, a smaller board) */
+	i = ar_color() && art_tier < tier() ? art_tier : view_tier;
+	if (i) snprintf(b, sizeof(b), "shown as %d", i);   /* 12 letters fit */
 	else snprintf(b, sizeof(b), "%s", kind_name(doc.kind));
 	ar_text(SD_X + 2, BT_Y - 10, b, C_GRID == C_BG ? C_INK : C_GRID, &z_font_5x8, 1);
 }
@@ -954,6 +996,26 @@ static void paint_bottom(const ar_rect_t *r) {
 		snprintf(b, sizeof(b), "No cells: Ins adds one");
 	}
 	ar_text(2, SL_Y, b, msg_frames > 0 ? C_HI : C_INK, &z_font_5x8, 1);
+
+	/* the file, at the right: full screen has no titlebar, and the
+	 * window's title is just "pix" (docs/app_kinds.md) */
+	{
+		int used = (int)strlen(b) * 5 + 2 + 10;
+		int room = (AR_W - 2 - used) / 5, n;
+		const char *nm;
+		file_label(shown_name, sizeof(shown_name));
+		n = (int)strlen(shown_name);
+		nm = shown_name;
+		if (room >= 6) {
+			char cut[64];
+			if (n > room) {
+				snprintf(cut, sizeof(cut), "..%s", shown_name + n - (room - 2));
+				nm = cut;
+				n = room;
+			}
+			ar_text(AR_W - 2 - n * 5, SL_Y, nm, C_INK, &z_font_5x8, 1);
+		}
+	}
 }
 
 /* ===================================================================
@@ -1032,7 +1094,10 @@ static void paint_editor(const ar_rect_t *r) {
 		v = ed_value(i, &g);
 		snprintf(b, sizeof(b), "%-7s %3d%c", ed_name[i], v, g);
 		if (i == ed_field) ar_fill(ED_X0 - 2, fy - 1, CV_W - ED_X0, 10, C_FRAME);
-		ar_text(ED_X0, fy, b, C_INK, &z_font_5x8, 1);
+		/* (where the controls are the art's lightest and darkest, the
+		 * bar is the text's colour: the field in the dark one) */
+		ar_text(ED_X0, fy, b, i == ed_field && C_FRAME == C_INK ? C_BG : C_INK,
+			&z_font_5x8, 1);
 		row++;
 	}
 
@@ -1654,47 +1719,32 @@ static bool save_to(const char *p) {
 /* -- the boxes (dialogs) -- */
 
 #ifndef AR_HOST_TESTS
+/* On pix's own screen, in the window and full screen alike: the screen
+ * toolkit's boxes (ui/sui.h, docs/screen_ui.md). F11 stays where it
+ * is. Same answers as zdialog's: Cancel 0, Yes 1, No 2. */
 static bool ask(const char *title, const char *q, const char *initial, char *out, int len) {
-	z_dialog_ctx_t ctx;
-	bool ok;
-	ar_dialog_begin(&ctx);
-	ok = z_dialog_prompt(&ctx, title, q, initial, out, len);
-	ar_dialog_end();
-	return ok;
+	return sui_prompt(title, q, initial, out, len);
 }
 
 static int confirm(const char *title, const char *q, int buttons) {
-	z_dialog_ctx_t ctx;
-	int r;
-	ar_dialog_begin(&ctx);
-	r = z_dialog_confirm(&ctx, title, q, buttons);
-	ar_dialog_end();
-	return r;
+	return sui_confirm(title, q, buttons);
 }
 
 static bool pick_open(char *out, int len) {
-	z_dialog_ctx_t ctx;
-	bool ok;
-	ar_dialog_begin(&ctx);
-	ok = z_dialog_open(&ctx, NULL, out, len);
-	ar_dialog_end();
-	return ok;
+	return sui_open(NULL, out, len);
 }
 
 static bool pick_save(const char *suggest, char *out, int len) {
-	z_dialog_ctx_t ctx;
-	bool ok;
-	ar_dialog_begin(&ctx);
-	ok = z_dialog_save(&ctx, NULL, suggest, out, len);
-	ar_dialog_end();
-	return ok;
+	return sui_save(NULL, suggest, out, len);
 }
 #else
-/* The host tests run without boxes: what a box would have answered
- * comes from ar_host_answer (tests/render.c). */
+/* The host tests answer the boxes from pix_host_answer (tests/render.c)
+ * -- or, with PIX_BOXES set, run the screen toolkit's real boxes, which
+ * the script answers with keys ("boxes" scene). */
 const char *pix_host_answer;
+static bool real_boxes(void) { return getenv("PIX_BOXES") != NULL; }
 static bool ask(const char *title, const char *q, const char *initial, char *out, int len) {
-	(void)title; (void)q;
+	if (real_boxes()) return sui_prompt(title, q, initial, out, len);
 	if (!pix_host_answer) return false;
 	/* "=": OK on what the box was opened with */
 	strncpy(out, !strcmp(pix_host_answer, "=") && initial ? initial : pix_host_answer, (size_t)len - 1);
@@ -1702,11 +1752,17 @@ static bool ask(const char *title, const char *q, const char *initial, char *out
 	return true;
 }
 static int confirm(const char *title, const char *q, int buttons) {
-	(void)title; (void)q; (void)buttons;
+	if (real_boxes()) return sui_confirm(title, q, buttons);
 	return 2;           /* "no": a script never saves over its inputs */
 }
-static bool pick_open(char *out, int len) { return ask(NULL, NULL, NULL, out, len); }
-static bool pick_save(const char *s, char *out, int len) { (void)s; return ask(NULL, NULL, NULL, out, len); }
+static bool pick_open(char *out, int len) {
+	if (real_boxes()) return sui_open(NULL, out, len);
+	return ask(NULL, NULL, NULL, out, len);
+}
+static bool pick_save(const char *s, char *out, int len) {
+	if (real_boxes()) return sui_save(NULL, s, out, len);
+	return ask(NULL, NULL, NULL, out, len);
+}
 #endif
 
 /* Unsaved work: ask before it goes. True to go on. */
@@ -2699,6 +2755,9 @@ int main(void) {
 	if (getenv("PIX_OPEN")) snprintf(arg, sizeof(arg), "%s", getenv("PIX_OPEN"));
 #endif
 
+	/* colour in the window, where the board has it and wm gives it
+	 * (docs/color.md, "The colour window") */
+	ar_window_colour(true);
 	if (!ar_init(&desc)) return 1;
 	board_colours = ar_set_colours(256);
 	/* every key is the program's: C and M are letters here */
@@ -2718,6 +2777,17 @@ int main(void) {
 		/* the last edit's undo step cut down to what it changed, once
 		 * it is over (not mid-stroke, nor with a selection lifted) */
 		if (!stroking && !floating && !(mouse_buttons & 3)) px_undo_settle(&doc);
+		/* a new file, a save, the first change by any route (a
+		 * rename too): the name at the right of the status line, and
+		 * the side's "Save *" */
+		{
+			char nm[sizeof(shown_name)];
+			file_label(nm, sizeof(nm));
+			if (strcmp(nm, shown_name)) {
+				dirty_status();
+				ar_dirty(SD_X - 2, SD_FILE_Y + 2 * SD_ROW, SD_W + 2, 9);
+			}
+		}
 		{
 			uint32_t n = ar_frame();
 			if (playing && (play_left -= (int)n) <= 0) play_step(true);

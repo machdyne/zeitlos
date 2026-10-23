@@ -1,5 +1,7 @@
 # clock app
 
+Kind: a **desktop app** ([app_kinds.md](app_kinds.md)).
+
 An analog and digital wall clock. `sw/apps/clock/clock.c`.
 
 ```

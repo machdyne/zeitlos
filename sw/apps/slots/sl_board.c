@@ -6,6 +6,7 @@
 #include "sl_board.h"
 #include "../../common/zfont.h"
 #include "../../common/zshape.h"
+#include "../../common/games/zarcade.h"
 
 #define FONT (&z_font_5x8)
 #define FW 5
@@ -14,6 +15,64 @@
 #define REEL_GAP 6
 
 static bool use_hw_blit;
+
+/* -- the screen face (docs/slots.md, "In colour") --
+ *
+ * The same machine, drawn through the arcade runtime on slots's
+ * 320x240 screen: every primitive below goes to ar_*() instead of zgfx,
+ * and every colour the machine asks for is a ROLE (SL_C_*), which the
+ * desktop draws in one bit and the screen in sl_palette. Ivory reels
+ * with red cherries and sevens, black bars and a gold bell, in a navy
+ * cabinet with a brass frame, a chrome lever with a red knob. */
+static bool scr;
+
+void sl_screen(bool on) { scr = on; }
+
+const uint16_t sl_palette[16] = {
+    0x112,      /* SL_C_BG       the cabinet */
+    0xfff,      /* SL_C_INK      text */
+    0x000,      /* SL_C_BLACK    a winning line's number */
+    0xffe,      /* SL_C_REEL     a reel */
+    0xdb5,      /* SL_C_FRAME    the reels' frame, the markers */
+    0xfc2,      /* SL_C_WIN      what won */
+    0x223,      /* SL_C_DIM      a line not played, a button not live */
+    0x335,      /* SL_C_BTN      a button */
+    0xccd,      /* SL_C_ROD      the lever */
+    0xd22,      /* SL_C_KNOB     its knob */
+    0x811,      /* SL_C_KNOBHOLE */
+    0xd12,      /* SL_C_RED      cherries, sevens */
+    0x111,      /* SL_C_BAR      bars */
+    0xeb2,      /* SL_C_GOLD     the bell */
+    0x000, 0x000
+};
+
+/* In one bit: exactly the desktop machine. */
+static int mono_of(int role)
+{
+    switch (role) {
+    case SL_C_INK: case SL_C_FRAME: case SL_C_WIN: case SL_C_ROD:
+    case SL_C_KNOB: case SL_C_RED: case SL_C_BAR: case SL_C_GOLD:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+void sl_mono_inks(ar_ink_t ink[16])
+{
+    int i;
+    for (i = 0; i < 16; i++) ink[i] = mono_of(i) ? ar_ink_white : ar_ink_black;
+}
+
+/* What colour a symbol is drawn in on the screen. */
+static int sym_role(int sym)
+{
+    switch (sym) {
+    case SL_CHERRY: case SL_SEVEN: return SL_C_RED;
+    case SL_BELL: return SL_C_GOLD;
+    default: return SL_C_BAR;
+    }
+}
 
 void sl_board_init(void)
 {
@@ -69,13 +128,15 @@ static void fill(const sl_layout_t *L, int x, int y, int w, int h, int c)
 {
     int x1 = x + w - 1, y1 = y + h - 1;
 
+    if (scr) { ar_fill(x, y, w, h, c); return; }
+
     if (x < L->clip.x0) x = L->clip.x0;
     if (y < L->clip.y0) y = L->clip.y0;
     if (x1 > L->clip.x1) x1 = L->clip.x1;
     if (y1 > L->clip.y1) y1 = L->clip.y1;
     if (x1 < x || y1 < y) return;
 
-    z_fb_hw_fill_rect(x, y, x1 - x + 1, y1 - y + 1, c);
+    z_fb_hw_fill_rect(x, y, x1 - x + 1, y1 - y + 1, mono_of(c));
 }
 
 static void frame(const sl_layout_t *L, int x, int y, int w, int h, int c)
@@ -90,6 +151,14 @@ static void shade(const sl_layout_t *L, int x, int y, int w, int h, int lvl)
 {
     int x1 = x + w - 1, y1 = y + h - 1;
 
+    if (scr) {
+        /* in colour dimmed, in black and white the desktop's dither */
+        if (ar_color()) ar_fill2(x, y, w, h, SL_C_BTN, SL_C_DIM, &ar_ink_grey50);
+        else ar_fill2(x, y, w, h, SL_C_BG, SL_C_INK,
+            lvl > 7 ? &ar_ink_grey50 : &ar_ink_grey25);
+        return;
+    }
+
     if (x < L->clip.x0) x = L->clip.x0;
     if (y < L->clip.y0) y = L->clip.y0;
     if (x1 > L->clip.x1) x1 = L->clip.x1;
@@ -101,7 +170,10 @@ static void shade(const sl_layout_t *L, int x, int y, int w, int h, int lvl)
 
 static void text(const sl_layout_t *L, int x, int y, const char *s, int c)
 {
-    z_fb_draw_text(x, y, s, c, FONT, &L->clip);
+    /* On the screen, text is drawn over a strip already filled (every
+     * caller fills first), so its transparency changes nothing. */
+    if (scr) { ar_text(x, y, s, c, FONT, 1); return; }
+    z_fb_draw_text(x, y, s, mono_of(c), FONT, &L->clip);
 }
 
 /* Ink on a SOLID cell, both colours in one call.
@@ -119,13 +191,18 @@ static void text(const sl_layout_t *L, int x, int y, const char *s, int c)
 static void text2(const sl_layout_t *L, int x, int y, const char *s,
     int fg, int bg)
 {
-    z_fb_draw_text2(x, y, s, fg, bg, FONT, &L->clip);
+    if (scr) {
+        ar_fill(x, y, slen(s) * FW, FH, bg);
+        ar_text(x, y, s, fg, FONT, 1);
+        return;
+    }
+    z_fb_draw_text2(x, y, s, mono_of(fg), mono_of(bg), FONT, &L->clip);
 }
 
 /* -- tiles ---------------------------------------------------------------- */
 
 static void blit_tile(const z_clip_t *clip, const uint32_t *tile,
-    int dx, int dy)
+    int dx, int dy, int sym)
 {
     int sx = 0, sy = 0, w = SL_ART_W, h = SL_ART_H;
     int i, passes;
@@ -140,6 +217,18 @@ static void blit_tile(const z_clip_t *clip, const uint32_t *tile,
     if (dx + w - 1 > clip->x1) w = clip->x1 - dx + 1;
     if (dy + h - 1 > clip->y1) h = clip->y1 - dy + 1;
     if (w <= 0 || h <= 0) return;
+
+    if (scr) {
+        /* in colour the symbol in its colour on the reel; in black and
+         * white the desktop's tile */
+        if (!ar_color()) {
+            ar_bitmap_opaque(tile, SL_ART_STRIDE, sx, sy, dx, dy, w, h);
+            return;
+        }
+        ar_fill(dx, dy, w, h, SL_C_REEL);
+        ar_bitmap(tile, SL_ART_STRIDE, sx, sy, dx, dy, w, h, sym_role(sym));
+        return;
+    }
 
     if (!use_hw_blit) {
         int px, py;
@@ -329,7 +418,7 @@ void sl_board_draw_reels(const sl_layout_t *L, const sl_view_t *v)
             uint8_t sym = sl_reel_symbol(v->spin, r, row);
             int y = L->reel_y + row * SL_CELL - sub;
             blit_tile(&win, &sl_sym_tile[(int)sym * SL_ART_H],
-                L->reel_x + r * L->reel_pitch, y);
+                L->reel_x + r * L->reel_pitch, y, sym);
         }
     }
 }
@@ -362,19 +451,19 @@ static void draw_marks(const sl_layout_t *L, const sl_view_t *v)
 
             sl_mark_pos(L, i, side != 0, &x, &y);
 
-            fill(L, x, y, SL_MARK_W, SL_MARK_W, 0);
-            frame(L, x, y, SL_MARK_W, SL_MARK_W, 1);
+            fill(L, x, y, SL_MARK_W, SL_MARK_W, SL_C_BG);
+            frame(L, x, y, SL_MARK_W, SL_MARK_W, SL_C_FRAME);
 
             /* A winning line is filled and its number knocked out, so
              * it reads at a glance without needing a second colour. */
-            if (won) fill(L, x + 1, y + 1, SL_MARK_W - 2, SL_MARK_W - 2, 1);
+            if (won) fill(L, x + 1, y + 1, SL_MARK_W - 2, SL_MARK_W - 2, SL_C_WIN);
             else if (!played)
                 shade(L, x + 1, y + 1, SL_MARK_W - 2, SL_MARK_W - 2, 6);
 
             d[0] = (char)('1' + i);
             d[1] = '\0';
-            if (won) text2(L, x + 2, y + 1, d, 0, 1);
-            else text(L, x + 2, y + 1, d, 1);
+            if (won) text2(L, x + 2, y + 1, d, SL_C_BLACK, SL_C_WIN);
+            else text(L, x + 2, y + 1, d, SL_C_INK);
         }
     }
 }
@@ -392,13 +481,21 @@ static void draw_lever(const sl_layout_t *L, const sl_view_t *v)
     int bot = L->reel_y + L->reel_h;
     int cx = L->lever_x + 4;
 
-    fill(L, L->lever_x, L->reel_y - 8, 12, L->reel_h + 10, 0);
+    fill(L, L->lever_x, L->reel_y - 8, 12, L->reel_h + 10, SL_C_BG);
 
-    fill(L, cx, top + 6, 3, bot - top - 6, 1);      /* the rod */
-    fill(L, cx - 4, bot, 11, 3, 1);                 /* its mounting */
+    fill(L, cx, top + 6, 3, bot - top - 6, SL_C_ROD);      /* the rod */
+    fill(L, cx - 4, bot, 11, 3, SL_C_ROD);                 /* its mounting */
 
-    z_fb_fill_circle(cx + 1, top + 4, 5, 1, &L->clip);
-    z_fb_fill_circle(cx + 1, top + 4, 2, 0, &L->clip);
+    if (scr) {
+        /* zshape's circles, to the runtime */
+        z_shape_target(ar_fill);
+        z_fb_fill_circle(cx + 1, top + 4, 5, SL_C_KNOB, &L->clip);
+        z_fb_fill_circle(cx + 1, top + 4, 2, SL_C_KNOBHOLE, &L->clip);
+        z_shape_target(0);
+        return;
+    }
+    z_fb_fill_circle(cx + 1, top + 4, 5, mono_of(SL_C_KNOB), &L->clip);
+    z_fb_fill_circle(cx + 1, top + 4, 2, mono_of(SL_C_KNOBHOLE), &L->clip);
 }
 
 /* -- the paytable ---------------------------------------------------------- */
@@ -412,20 +509,20 @@ static void draw_paytable(const sl_layout_t *L, const sl_view_t *v)
     char line[32];
 
     fill(L, L->pay_x, L->pay_y - 1, (L->ox + L->w) - L->pay_x - 2,
-        L->reel_h + 2, 0);
+        L->reel_h + 2, SL_C_BG);
 
-    text(L, L->pay_x, y, "3 of a kind", 1);
+    text(L, L->pay_x, y, "3 of a kind", SL_C_INK);
     y += FH + 2;
 
     for (i = 0; i < (int)(sizeof order / sizeof order[0]); i++) {
         int s = order[i];
         line[0] = '\0';
         cat(line, sizeof line, sl_sym_name(s));
-        text(L, L->pay_x, y, line, 1);
+        text(L, L->pay_x, y, line, SL_C_INK);
 
         line[0] = '\0';
         cat_num(line, sizeof line, sl_pay_three(s) * v->bet);
-        text(L, L->ox + L->w - 3 - slen(line) * FW, y, line, 1);
+        text(L, L->ox + L->w - 3 - slen(line) * FW, y, line, SL_C_INK);
 
         y += FH + 1;
     }
@@ -436,12 +533,12 @@ static void draw_paytable(const sl_layout_t *L, const sl_view_t *v)
     line[0] = '\0';
     cat(line, sizeof line, "any 3 bars  ");
     cat_num(line, sizeof line, 2 * v->bet);
-    text(L, L->pay_x, y, line, 1);
+    text(L, L->pay_x, y, line, SL_C_INK);
     y += FH + 1;
 
     line[0] = '\0';
     cat(line, sizeof line, "cherries from the left");
-    text(L, L->pay_x, y, line, 1);
+    text(L, L->pay_x, y, line, SL_C_INK);
 }
 
 /* -- the rest -------------------------------------------------------------- */
@@ -453,33 +550,33 @@ static void button(const sl_layout_t *L, const sl_rect_t *r,
     int tx = r->x + (r->w - tw) / 2;
     int ty = r->y + (r->h - FH) / 2;
 
-    fill(L, r->x, r->y, r->w, r->h, 0);
-    frame(L, r->x, r->y, r->w, r->h, 1);
+    fill(L, r->x, r->y, r->w, r->h, SL_C_BTN);
+    frame(L, r->x, r->y, r->w, r->h, SL_C_FRAME);
 
     if (!enabled) {
         /* Shaded, with a solid hole cut back out for the label. THERE
          * IS NO GREY HERE: a dither is black pixels and white pixels,
          * so a glyph drawn over one loses half of itself. */
         shade(L, r->x + 1, r->y + 1, r->w - 2, r->h - 2, 8);
-        fill(L, tx - 1, ty, tw + 2, FH, 0);
+        fill(L, tx - 1, ty, tw + 2, FH, SL_C_BTN);
     }
 
-    text(L, tx, ty, label, 1);
+    text(L, tx, ty, label, SL_C_INK);
 }
 
 void sl_board_draw_status(const sl_layout_t *L, const sl_view_t *v)
 {
     char line[SL_MSG_LEN + 4];
 
-    fill(L, L->ox, L->msg_y, L->w, FH, 0);
-    text(L, L->ox + 2, L->msg_y, v->message, 1);
+    fill(L, L->ox, L->msg_y, L->w, FH, SL_C_BG);
+    text(L, L->ox + 2, L->msg_y, v->message, SL_C_INK);
 
-    fill(L, L->ox, L->cmd_y, L->w, FH, 0);
+    fill(L, L->ox, L->cmd_y, L->w, FH, SL_C_BG);
     line[0] = '\0';
     cat(line, sizeof line, "> ");
     cat(line, sizeof line, v->cmd);
     cat(line, sizeof line, "_");
-    text(L, L->ox + 2, L->cmd_y, line, 1);
+    text(L, L->ox + 2, L->cmd_y, line, SL_C_INK);
 }
 
 void sl_board_draw(const sl_layout_t *L, const sl_view_t *v)
@@ -488,25 +585,25 @@ void sl_board_draw(const sl_layout_t *L, const sl_view_t *v)
     bool idle = !v->spin->spinning;
 
     if (!L->ok) {
-        fill(L, L->ox, L->oy, L->w, L->h, 0);
-        text(L, L->ox + 2, L->oy + 2, "window too small", 1);
-        text(L, L->ox + 2, L->oy + 2 + SL_LINE_H, "for a machine", 1);
+        fill(L, L->ox, L->oy, L->w, L->h, SL_C_BG);
+        text(L, L->ox + 2, L->oy + 2, "window too small", SL_C_INK);
+        text(L, L->ox + 2, L->oy + 2 + SL_LINE_H, "for a machine", SL_C_INK);
         return;
     }
 
-    fill(L, L->ox, L->oy, L->w, L->h, 0);
+    fill(L, L->ox, L->oy, L->w, L->h, SL_C_BG);
 
     line[0] = '\0';
     cat(line, sizeof line, "Slots  ");
     cat_num(line, sizeof line, v->lines);
     cat(line, sizeof line, " lines x ");
     cat_num(line, sizeof line, v->bet);
-    text(L, L->ox + 2, L->status_y, line, 1);
+    text(L, L->ox + 2, L->status_y, line, SL_C_INK);
 
     line[0] = '\0';
     cat_num(line, sizeof line, v->chips);
     cat(line, sizeof line, " chips");
-    text(L, L->ox + L->w - 2 - slen(line) * FW, L->status_y, line, 1);
+    text(L, L->ox + L->w - 2 - slen(line) * FW, L->status_y, line, SL_C_INK);
 
     sl_board_draw_reels(L, v);
 
@@ -514,7 +611,7 @@ void sl_board_draw(const sl_layout_t *L, const sl_view_t *v)
      * and reach the edge of the window, so a frame drawn first would be
      * blitted over. */
     frame(L, L->reel_x - 2, L->reel_y - 2,
-        SL_REELS * L->reel_pitch - REEL_GAP + 4, L->reel_h + 4, 1);
+        SL_REELS * L->reel_pitch - REEL_GAP + 4, L->reel_h + 4, SL_C_FRAME);
 
     /* THE SYMBOLS THAT PAID, boxed.
      *
@@ -530,7 +627,7 @@ void sl_board_draw(const sl_layout_t *L, const sl_view_t *v)
             for (r = 0; r < SL_REELS; r++)
                 frame(L, L->reel_x + r * L->reel_pitch - 1,
                     L->reel_y + rows[r] * SL_CELL,
-                    SL_ART_W + 2, SL_CELL, 1);
+                    SL_ART_W + 2, SL_CELL, SL_C_WIN);
         }
     }
 
@@ -547,12 +644,12 @@ void sl_board_draw(const sl_layout_t *L, const sl_view_t *v)
             cat(line, sizeof line, "no win");
         }
     }
-    text(L, L->ox + 2, L->info_y, line, 1);
+    text(L, L->ox + 2, L->info_y, line, SL_C_INK);
 
     line[0] = '\0';
     cat(line, sizeof line, "stake ");
     cat_num(line, sizeof line, v->bet * v->lines);
-    text(L, L->ox + L->w - 2 - slen(line) * FW, L->info_y, line, 1);
+    text(L, L->ox + L->w - 2 - slen(line) * FW, L->info_y, line, SL_C_INK);
 
     button(L, &L->btn[SL_BTN_SPIN], idle ? "SPIN" : "...", idle);
     button(L, &L->btn[SL_BTN_BET], "bet", idle);

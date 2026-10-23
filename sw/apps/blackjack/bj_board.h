@@ -8,9 +8,9 @@
  *
  * Same origin-and-clip contract as sw/apps/poker/table_ui.h and
  * sw/apps/roulette/rl_board.h: everything is drawn against an ORIGIN
- * and a CLIP RECTANGLE in absolute screen coordinates, so a window's
- * content rect and a game-mode page are the same code with different
- * arguments. Two renderers drift, and the drift stays invisible until
+ * and a CLIP RECTANGLE, so the desktop window's content rect and the
+ * screen face's 320x240 (a dual app, docs/app_kinds.md) are the same
+ * code with different arguments. Two renderers drift, and the drift stays invisible until
  * somebody switches modes mid-hand.
  *
  * -- one hand gets full cards, several get small ones --
@@ -36,6 +36,7 @@
 
 #include "../../common/zgfx.h"
 #include "../../common/games/zcardart.h"
+#include "../../common/games/zarcade.h"
 #include "bj_game.h"
 #include "bj_hint.h"
 
@@ -116,5 +117,21 @@ void bj_board_draw(const bj_layout_t *L, const bj_view_t *v);
 void bj_board_draw_status(const bj_layout_t *L, const bj_view_t *v);
 
 char *bj_num(int32_t n, char *buf);
+
+/* -- colour (docs/blackjack.md, "In colour") --
+ *
+ * Every colour the table asks for is a ROLE: the desktop draws INK,
+ * ACT, FRAME and SHOE lit and the rest dark (exactly the one-bit
+ * table), the screen face -- the table on the arcade runtime's 320x240
+ * screen -- in bj_palette. bj_screen(true) sends every primitive to
+ * ar_*(); the layout is then bj_board_layout(L, v, 0, 0, 320, 240). */
+enum {
+    BJ_C_BG = 0, BJ_C_INK, BJ_C_BLACK, BJ_C_RED, BJ_C_BACK, BJ_C_ACT,
+    BJ_C_BTN, BJ_C_DIM, BJ_C_FRAME, BJ_C_SHOE,
+    BJ_C_CHIP5, BJ_C_CHIP25, BJ_C_CHIP100, BJ_C_CHIP500
+};
+extern const uint16_t bj_palette[16];
+void bj_screen(bool on);
+void bj_mono_inks(ar_ink_t ink[16]);
 
 #endif

@@ -1,5 +1,7 @@
 # cal app
 
+Kind: a **desktop app** ([app_kinds.md](app_kinds.md)).
+
 A month calendar. `sw/apps/cal/cal.c`.
 
 ```

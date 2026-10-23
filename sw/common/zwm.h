@@ -144,6 +144,13 @@
 // the app's own handler. See docs/window_manager.md, "Second font".
 #define Z_WIN_FLAG_FONT_ICON          (1u << 7)
 
+// Colour: a screen app's colour window off and on, or a dual app's
+// 320x240 colour screen and back (docs/app_kinds.md) -- what F10 does
+// (docs/keys.md). wm draws it and reports the click
+// (Z_WM_TBICON_COLOUR); the arcade runtime asks for it where the board
+// has the colour window.
+#define Z_WIN_FLAG_COLOUR_ICON        (1u << 14)
+
 // this window is MODAL with respect to its owner's other windows.
 //
 // While it exists, wm will not focus, raise, drag, resize or deliver
@@ -186,6 +193,19 @@
 // full screen -- the whole screen, no titlebar, no dock -- and F11 or
 // Esc again restores it. A fixed-size window gets F11 either way.
 #define Z_WIN_FLAG_GAME_MODE          (1u << 11)
+
+// The window can show colour (docs/color.md, "The colour window"): a
+// screen app's 320x240 window. While it is focused and nothing covers
+// its content, wm gives it the second VRAM sheet's planes (socctl's
+// COLWIN) and says so with Z_WM_COLOR; set only on a board with the
+// colour window (z_color_window_available()).
+#define Z_WIN_FLAG_COLOR              (1u << 12)
+
+// No pointer over the window's content: a game that takes no mouse (a
+// screen app on the arcade runtime that does not ask for the pointer,
+// docs/arcade.md). wm hides the cursor while it is over the content of
+// such a window, the topmost there, and shows it again past its edge.
+#define Z_WIN_FLAG_NO_POINTER         (1u << 13)
 
 // In wm's window rect messages (the "h" of the map z_win_parse_rect()
 // reads): set while the window is full screen and has no titlebar, so
@@ -411,6 +431,7 @@
 #define Z_WM_TBICON_SAVE   2
 #define Z_WM_TBICON_OPEN   3
 #define Z_WM_TBICON_FONT   4
+#define Z_WM_TBICON_COLOUR 5
 
 #define Z_WM_PACK_TBICON(id, kind) \
 	((((uint32_t)(kind) & 0xFF) << 8) | ((uint32_t)(id) & 0xFF))
@@ -876,6 +897,13 @@ typedef struct {
 // this pid (Z_UINT32); sent by the kernel at a launch, as the launcher.
 // See "launch arguments" above. No reply.
 #define Z_WM_ARG_CHILD           (Z_SUBJ_WM + 35)
+
+// Z_WM_COLOR -- wm -> the owner of a Z_WIN_FLAG_COLOR window (tag: the
+// window's index): Z_UINT32 1, the colour window is yours, from the
+// next frame -- draw your planes and palette (again: also after the
+// window moved, or a game took them); 0, it is gone -- draw in black
+// and white. No reply. docs/color.md, "The colour window".
+#define Z_WM_COLOR               (Z_SUBJ_WM + 36)
 
 #define Z_WM_PACK_PLACE(x, y) \
 	((((uint32_t)(y) & 0x3FF) << 10) | ((uint32_t)(x) & 0x3FF))

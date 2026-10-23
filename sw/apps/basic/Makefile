@@ -15,11 +15,24 @@ APP_MAIN_RULE = 0
 
 BASIC_DEFS = -DBASIC_EXT -DMAX_PROG=32768
 
+SRC_DIRS = $(COMMON_DIR)/games $(COMMON_DIR)/games/ui
+
 # Objects, and why each is linked:
-#   zfont_data.o: the 8x8 font the screen draws with, and zgfx's fonts.
-#   zcolor.o: full screen in colour (docs/color.md).
-#   zfsapp.o: the files in /data/basic.
-OBJS = zeitlos.o zobj.o zport.o zgfx.o zcolor.o zfont_data.o zwin.o zwidget.o zspeak.o zfsapp.o zdialog.o zgpio.o zi2c.o zi2cx.o \
+#   zarcade, zarcade_sys   the arcade runtime: the window, full screen,
+#                          colour and the colour window (docs/arcade.md)
+#   zsfx, zcfg             linked by the runtime; BASIC makes no sound
+#   sui                    F1: the help on BASIC's own screen
+#   zwin, zwidget, zspeak,
+#   zdialog, zflist, zedit the window, and the runtime's desktop help box
+#                          (unused while sui is linked)
+#   zfont_data             the 8x8 font the screen draws with
+#   zgfx, zcolor           the blitter and colour
+#   zfsapp                 the files in /data/basic
+#   zport                  basic0, for a terminal
+#   zgpio, zi2c, zi2cx     I2C on pins 3 and 4, through bench
+OBJS = zeitlos.o zobj.o zport.o zgfx.o zcolor.o zfont_data.o zwin.o zwidget.o \
+	zspeak.o zfsapp.o zdialog.o zflist.o zedit.o zgpio.o zi2c.o zi2cx.o \
+	zarcade.o zarcade_sys.o zsfx.o zcfg.o sui.o \
 	basic_interp.o bscreen.o bedit.o bterm.o bext.o basic_app.o
 
 basic_interp.o: ../../ext/basic/basic.c ../../ext/basic/basic.h
@@ -37,7 +50,8 @@ bterm.o: bterm.c bterm.h
 bext.o: bext.c bplat.h bscreen.h ../../ext/basic/basic.h
 	$(CC) $(CFLAGS) $(BASIC_DEFS) -c bext.c -o bext.o
 
-basic_app.o: basic_app.c bplat.h bscreen.h bedit.h bterm.h ../../ext/basic/basic.h
+basic_app.o: basic_app.c bplat.h bscreen.h bedit.h bterm.h ../../ext/basic/basic.h \
+		../../common/games/zarcade.h
 	$(CC) $(CFLAGS) $(BASIC_DEFS) -c basic_app.c -o basic_app.o
 
 # -- host tests ------------------------------------------------------
@@ -66,8 +80,25 @@ test: $(BIN_TEST_SCREEN) $(BIN_TEST_BASIC) $(BIN_TEST_TERM)
 	@$(BIN_TEST_BASIC)
 	@$(BIN_TEST_TERM)
 
-.PHONY: test
+# the app itself on the runtime's software framebuffer, driven by a
+# script (tests/render.c): every frame against a full repaint
+GAMES = ../../common/games
+RENDER_SRC = basic_app.c bscreen.c bedit.c bext.c ../../ext/basic/basic.c \
+	$(GAMES)/zarcade.c $(GAMES)/zsfx.c $(GAMES)/tests/ar_host.c $(GAMES)/ui/sui.c \
+	../../common/zfont_data.c
 
-CLEAN_EXTRA = $(BIN_TEST_SCREEN) $(BIN_TEST_BASIC) $(BIN_TEST_TERM)
+tests/render_basic: tests/render.c $(RENDER_SRC) bplat.h bscreen.h bedit.h \
+		$(GAMES)/zarcade.h $(GAMES)/zarcade_int.h
+	$(HOSTCC) $(HOSTFLAGS) -fsanitize=address,undefined -DZSFX_HOSTED -DAR_HOST_TESTS \
+		-Dmain=game_main -Wno-unused-parameter -o $@ tests/render.c $(RENDER_SRC)
+
+render: tests/render_basic
+	mkdir -p tests/out
+	AR_HOST_VERIFY=1 tests/render_basic tests/out
+	-python3 ../pix/tests/ppm2png.py tests/out
+
+.PHONY: test render
+
+CLEAN_EXTRA = $(BIN_TEST_SCREEN) $(BIN_TEST_BASIC) $(BIN_TEST_TERM) tests/render_basic tests/out
 
 include ../../common/app.mk

@@ -56,22 +56,13 @@ static void test_bands(void)
 }
 
 /*
- * The window is created at KG_WIN_W x KG_WIN_H specifically so its
- * CONTENT is 320x240. That arithmetic lives in kg.h and the truth
- * lives in zwin.c, and the two have no reason to stay in step except
- * this test -- which is precisely the duplication z_win_content_rect()
- * warns about in its own comment, where two copies of an inset formula
- * drifted apart and caused a real shipped bug.
+ * The playfield is the arcade runtime's screen: kg.h's 320x240 and the
+ * runtime's have no reason to stay in step except this test.
  */
 static void test_window_size(void)
 {
-	z_win_t *w = (z_win_t *)kg_window();
-	z_clip_t c;
-
-	z_win_content_rect(w, &c);
-
-	CHECK(c.x1 - c.x0 + 1 == KG_W, "content width is not KG_W");
-	CHECK(c.y1 - c.y0 + 1 == KG_H, "content height is not KG_H");
+	CHECK(KG_W == AR_W, "the playfield's width is not the runtime's");
+	CHECK(KG_H == AR_H, "the playfield's height is not the runtime's");
 }
 
 /* -- the big font ---------------------------------------------------- */
@@ -92,12 +83,7 @@ static void test_font_runs(void)
 {
 	static const char *ALL =
 		"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-	z_win_t *w = (z_win_t *)kg_window();
-	z_clip_t c;
-	volatile uint32_t *vram = Z_RENDER_VRAM;
 	int i;
-
-	z_win_content_rect(w, &c);
 
 	for (i = 0; ALL[i]; i++) {
 
@@ -115,9 +101,7 @@ static void test_font_runs(void)
 			for (col = 0; col < KG_BIG_COLS; col++) {
 
 				int want = (rows[r] >> (KG_BIG_COLS - 1 - col)) & 1;
-				uint32_t bit = (uint32_t)(c.y0 + 2 + r) * Z_SCREEN_W
-					+ (uint32_t)(c.x0 + 2 + col);
-				int got = (vram[bit / 32] >> (bit % 32)) & 1;
+				int got = kg_host_pixel(2 + col, 2 + r);
 
 				if (want != got) {
 					snprintf(msg, sizeof(msg),
@@ -164,28 +148,17 @@ static void test_font_widths(void)
 /* -- containment ----------------------------------------------------- */
 
 /*
- * Fill the whole framebuffer with a sentinel, draw deliberately
- * oversized things, and require every pixel outside the content
- * rectangle to be untouched.
+ * Draw deliberately oversized things, and require every pixel outside
+ * the playfield to be untouched.
  *
  * Oversized on purpose: a test that only draws things that fit proves
- * nothing about the clamp, and the clamp is the entire defence. On
- * hardware z_fb_hw_fill_rect() clamps to the SCREEN and not to a
- * window, so a rectangle that runs past our own edge lands on whatever
- * app is next to us.
+ * nothing about the clamp, and the clamp is the entire defence -- a
+ * rectangle that runs past our own edge would land on whatever app is
+ * next to us. The runtime does the clipping now; this holds it to it.
  */
 static void test_containment(void)
 {
-	z_win_t *w = (z_win_t *)kg_window();
-	z_clip_t c;
-	volatile uint32_t *vram = Z_RENDER_VRAM;
-	long x, y;
-	int escaped = 0;
-
-	z_win_content_rect(w, &c);
-
-	for (x = 0; x < ((long)Z_SCREEN_W * Z_SCREEN_H) / 32; x++)
-		vram[x] = 0;
+	int escaped;
 
 	/* Each of these runs off a different edge, including negatively. */
 	kg_fill(-50, -50, KG_W + 200, KG_H + 200, 1);
@@ -197,18 +170,7 @@ static void test_containment(void)
 	kg_big_puts(KG_W - 20, KG_H - 20, "ZZZZ", 8, KG_BIG_SOLID);
 	kg_tries_left(KG_H - 4, 6, 20);
 
-	for (y = 0; y < Z_SCREEN_H; y++)
-		for (x = 0; x < Z_SCREEN_W; x++) {
-
-			uint32_t bit = (uint32_t)y * Z_SCREEN_W + (uint32_t)x;
-			int on = (vram[bit / 32] >> (bit % 32)) & 1;
-
-			if (!on) continue;
-			if (x >= c.x0 && x <= c.x1 && y >= c.y0 && y <= c.y1) continue;
-
-			escaped++;
-
-		}
+	escaped = kg_host_outside();
 
 	if (escaped) {
 		char msg[80];
@@ -251,9 +213,9 @@ static void test_labels(void)
 
 int main(void)
 {
-	if (!z_render_open((z_win_t *)kg_window(), KG_WIN_W, KG_WIN_H)) {
-		puts("test_layout: skipped (cannot map the VRAM address)");
-		return 77;
+	if (!kg_host_open("/tmp")) {
+		puts("test_layout: kg_init() failed");
+		return 1;
 	}
 
 	test_bands();

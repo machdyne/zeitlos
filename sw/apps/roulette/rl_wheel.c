@@ -4,6 +4,37 @@
  */
 
 #include "rl_wheel.h"
+#include "../../common/games/zarcade.h"
+
+/* -- the screen face (docs/roulette.md, "In colour") -- */
+static bool scr;
+
+static void scr_fill(int x, int y, int w, int h, int c) { ar_fill(x, y, w, h, c); }
+
+void rl_screen(bool on)
+{
+    scr = on;
+    z_shape_target(on ? scr_fill : 0);
+}
+
+bool rl_screen_on(void) { return scr; }
+
+/* In one bit: exactly the one-bit table. */
+int rl_ink_mono(int role)
+{
+    switch (role) {
+    case RL_C_INK: case RL_C_POCKET: case RL_C_ZERO: case RL_C_FRET:
+    case RL_C_BALL: case RL_C_CHIPINK:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+int rl_ink(int role)
+{
+    return scr ? role : rl_ink_mono(role);
+}
 
 /* -- the rim -----------------------------------------------------------
  *
@@ -434,13 +465,15 @@ void rl_wheel_rim(const rl_wheel_t *w, const z_clip_t *clip)
         z_polar(w->cx, w->cy, ro, a1, &xs[2], &ys[2]);
         z_polar(w->cx, w->cy, ri, a1, &xs[3], &ys[3]);
 
-        z_fb_fill_quad(xs, ys, rl_is_red(p) ? 0 : 1, clip);
+        z_fb_fill_quad(xs, ys, rl_ink(rl_is_red(p) ? RL_C_RED :
+            (p == RL_ZERO || p == RL_DOUBLE_ZERO) ? RL_C_ZERO : RL_C_POCKET),
+            clip);
     }
 
     /* The separators, over the top, so every cell is bounded. */
     for (i = 0; i < n; i++) {
         int32_t a = w->rim_a + ((int32_t)i * Z_TRIG_TURN) / n;
-        z_fb_spoke(w->cx, w->cy, ri, ro, a, 1, clip);
+        z_fb_spoke(w->cx, w->cy, ri, ro, a, rl_ink(RL_C_FRET), clip);
     }
 
     /* THE ZEROS GET A SLASH. They are lit like the black pockets, so
@@ -452,22 +485,22 @@ void rl_wheel_rim(const rl_wheel_t *w, const z_clip_t *clip)
         int32_t am;
         if (p != RL_ZERO && p != RL_DOUBLE_ZERO) continue;
         am = w->rim_a + (((int32_t)i * 2 + 1) * Z_TRIG_TURN) / (2 * n);
-        z_fb_spoke(w->cx, w->cy, ri + 1, ro - 1, am, 0, clip);
+        z_fb_spoke(w->cx, w->cy, ri + 1, ro - 1, am, rl_ink(RL_C_SLASH), clip);
     }
 
-    z_fb_circle(w->cx, w->cy, ro, 1, clip);
-    z_fb_circle(w->cx, w->cy, ri, 1, clip);
+    z_fb_circle(w->cx, w->cy, ro, rl_ink(RL_C_FRET), clip);
+    z_fb_circle(w->cx, w->cy, ri, rl_ink(RL_C_FRET), clip);
 
     /* The hub, which is part of the head and turns with it. */
-    z_fb_fill_circle(w->cx, w->cy, r_hub(w), 0, clip);
-    z_fb_circle(w->cx, w->cy, r_hub(w), 1, clip);
+    z_fb_fill_circle(w->cx, w->cy, r_hub(w), rl_ink(RL_C_WOOD), clip);
+    z_fb_circle(w->cx, w->cy, r_hub(w), rl_ink(RL_C_FRET), clip);
 
     for (i = 0; i < 3; i++) {
         int32_t a = w->hub_a + (int32_t)i * (Z_TRIG_TURN / 3);
-        z_fb_spoke(w->cx, w->cy, 1, r_hub(w) - 1, a, 1, clip);
+        z_fb_spoke(w->cx, w->cy, 1, r_hub(w) - 1, a, rl_ink(RL_C_FRET), clip);
     }
 
-    z_fb_fill_circle(w->cx, w->cy, 1, 1, clip);
+    z_fb_fill_circle(w->cx, w->cy, 1, rl_ink(RL_C_FRET), clip);
 }
 
 /* Restores a patch of the wheel from scratch -- used to erase the
@@ -475,9 +508,9 @@ void rl_wheel_rim(const rl_wheel_t *w, const z_clip_t *clip)
  * clear. Small, so the clear is invisible. */
 void rl_wheel_patch(const rl_wheel_t *w, const z_clip_t *clip)
 {
-    z_fb_fill_circle(w->cx, w->cy, w->r + r_ball(w) + 2, 0, clip);
+    z_fb_fill_circle(w->cx, w->cy, w->r + r_ball(w) + 2, rl_ink(RL_C_WOOD), clip);
     rl_wheel_rim(w, clip);
-    z_fb_circle(w->cx, w->cy, w->r, 1, clip);
+    z_fb_circle(w->cx, w->cy, w->r, rl_ink(RL_C_FRET), clip);
 }
 
 /* Clears the ball's track -- the annulus between the rim and the outer
@@ -543,14 +576,14 @@ void rl_wheel_ball_bbox(const rl_wheel_t *w, z_clip_t *out)
 void rl_wheel_track_clear(const rl_wheel_t *w, const z_clip_t *clip)
 {
     z_fb_fill_ring(w->cx, w->cy, r_rim_out(w) + 1,
-        w->r + r_ball(w) + 2, 0, clip);
+        w->r + r_ball(w) + 2, rl_ink(RL_C_WOOD), clip);
 
     /* The wall lives in the band being cleared, so it goes with it. Put
      * it back. The first version did not, and the wheel lost its outer
      * ring the moment a spin started -- which the render showed and no
      * assertion would have, because the wall is not something any test
      * had a reason to count. */
-    z_fb_circle(w->cx, w->cy, w->r, 1, clip);
+    z_fb_circle(w->cx, w->cy, w->r, rl_ink(RL_C_FRET), clip);
 }
 
 /* The ball, drawn as the distance it travelled this frame rather than
@@ -594,8 +627,8 @@ void rl_wheel_ball(const rl_wheel_t *w, const z_clip_t *clip)
         int sz = 1 + ((rb - 1) * i) / steps;
 
         z_polar(w->cx, w->cy, r, a, &x, &y);
-        if (i == steps) z_fb_fill_circle(x, y, sz + 2, 0, clip);
-        z_fb_fill_circle(x, y, sz, 1, clip);
+        if (i == steps) z_fb_fill_circle(x, y, sz + 2, rl_ink(RL_C_WOOD), clip);
+        z_fb_fill_circle(x, y, sz, rl_ink(RL_C_BALL), clip);
     }
 }
 

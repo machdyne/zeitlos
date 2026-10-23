@@ -1,7 +1,8 @@
 /*
  * Render kidgames' screens to an image, on the build machine.
  *
- *   make render WHAT=menu|pad|digits|field|msg|font
+ *   make render              every scene, tests/out/<scene>.ppm
+ *   /tmp/kg_render DIR WHAT  one: menu|pad|digits|field|msg|font|...
  *
  * LOOK AT THE OUTPUT before changing any layout. sw/apps/logic's panel
  * shipped wrong three times against a passing arithmetic test, and the
@@ -267,12 +268,12 @@ static void scene_animal(void)
 
 int main(int argc, char **argv)
 {
-	const char *out = argc > 1 ? argv[1] : "/tmp/kidgames.pbm";
+	const char *out = argc > 1 ? argv[1] : "/tmp";
 	const char *what = argc > 2 ? argv[2] : "menu";
 
-	if (!z_render_open((z_win_t *)kg_window(), KG_WIN_W, KG_WIN_H)) {
-		puts("render: skipped (cannot map the VRAM address)");
-		return 77;
+	if (!kg_host_open(out)) {
+		puts("render: kg_init() failed");
+		return 1;
 	}
 
 	if (!strcmp(what, "menu")) scene_menu();
@@ -293,9 +294,9 @@ int main(int argc, char **argv)
 	else if (!strcmp(what, "animal")) scene_animal();
 	else { puts("render: unknown scene"); return 2; }
 
-	/* 2x, which is also what game mode does on the way to the glass --
-	 * so this image is, pixel for pixel, the full-screen picture. */
-	z_render_write(out, (z_win_t *)kg_window(), 2);
+	/* The playfield, 320x240 -- what game mode doubles on the way to
+	 * the glass, so this is the full-screen picture. */
+	ar_host_snapshot(what);
 
 	return 0;
 }

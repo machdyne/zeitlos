@@ -26,8 +26,11 @@ APP_CFLAGS = $(EXTRA_CFLAGS)
 # zwidget/zspeak/zedit/zflist are what zdialog.c references. Section GC
 # drops the open/save dialogs' half (zedit, zflist) from the image, but
 # `linkcheck` works on whole objects, so they are listed all the same.
-COMMONOBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o zrng.o zfsapp.o \
-	zwidget.o zspeak.o zedit.o zflist.o zdialog.o
+COMMONOBJS = zeitlos.o zobj.o zgfx.o zcolor.o zfont_data.o zwin.o zrng.o zfsapp.o \
+	zwidget.o zspeak.o zedit.o zflist.o zdialog.o \
+	zarcade.o zarcade_sys.o zsfx.o zcfg.o sui.o
+
+SRC_DIRS = $(COMMON_DIR)/games $(COMMON_DIR)/games/ui
 
 APPOBJS = kgui.o kgwidget.o kgpad.o kgfont.o kgfmt.o \
 	kgsave.o kgrand.o wordlist.o levelup.o kground.o \
@@ -63,33 +66,36 @@ HOSTFLAGS = -std=gnu99 -Wall -Wextra -no-pie -O2
 # Makefile records: with the flag in a shared variable a bare
 # #include "zgfx.h" in an app source compiles in every host target and
 # then fails on the first line of the TARGET build, which has no such
-# -I. The flag exists purely for sw/common/tests/zrender.h's own sake.
+# -I. The flag exists for the runtime's and the host tests' own sake.
 # -DKG_SAVE_HOSTED for the same reason the data tests use it: the panel
 # targets link kground.c, which saves progress, and there is no
 # filesystem on a build machine. The parser and serialiser are still
 # the shipped ones -- only the two functions that call fs_* are
 # compiled out. See kgsave.h.
-PANELFLAGS = $(HOSTFLAGS) -I ../../common -DKG_SAVE_HOSTED -DKG_SOUND_HOSTED
+PANELFLAGS = $(HOSTFLAGS) -I ../../common -DKG_SAVE_HOSTED -DKG_SOUND_HOSTED \
+	-DAR_HOST_TESTS -DZSFX_HOSTED -Wno-unused-parameter
 
-# Everything the panel targets need: this app's drawing, plus the real
-# zwin/zfont/zobj/zeitlos. zgfx.c is deliberately absent -- zrender.h
-# supplies software pixel plotting instead, because the real one
-# programs GPU registers that are unmapped MMIO on a build machine.
+# Everything the panel targets need: this app's drawing, plus the
+# arcade runtime with its build-host machine half
+# (sw/common/games/tests/ar_host.c: a software framebuffer with the
+# blitter's own fills, patterns, dither and blits) and the screen
+# toolkit, for F1. zgfx.c is deliberately absent: it programs GPU
+# registers that are unmapped MMIO on a build machine.
 # kgwidget.c is NOT here. tests/render.c #includes it, so that it can
 # call its static draw functions and show a menu or a message box
-# WITHOUT running the input loop inside them -- which would block on a
-# message queue that does not exist on a build machine. Linking it as
-# well would be a duplicate definition of every one of them.
+# WITHOUT running the input loop inside them. Linking it as well would
+# be a duplicate definition of every one of them.
+GAMES = ../../common/games
 PANELSRC = kgui.c kgpad.c kgfont.c kgfmt.c \
-	../../common/zwin.c ../../common/zfont_data.c \
-	../../common/zobj.c ../../common/zeitlos.c
+	$(GAMES)/zarcade.c $(GAMES)/zsfx.c $(GAMES)/tests/ar_host.c \
+	$(GAMES)/ui/sui.c ../../common/zfont_data.c
 
 # The unattended tests link the widgets and the registry normally --
 # they call the public entry points, not the statics.
 TESTSRC = $(PANELSRC) kgwidget.c games.c levelup.c wordlist.c \
 	kground.c kgsave.c games_word.c games_number.c games_guess.c \
 	games_memory.c games_animal.c animals.c kgart.c kgsound.c \
-	tests/kg_rand_host.c tests/kg_dialog_stub.c
+	tests/kg_rand_host.c
 
 # The pure half: a parser, a serialiser and some word tables, with no
 # Zeitlos headers and no framebuffer anywhere in them. Built with
@@ -142,13 +148,14 @@ includecheck:
 # asm (`rdcycle`) and cannot be assembled on an x86 build machine. Its
 # exports are allow-listed by prefix instead -- one narrow hole, named
 # rather than papered over.
-COMMON_HOSTABLE = zeitlos zobj zgfx zfont_data zwin zfsapp zwidget zspeak \
-	zedit zflist zdialog
+COMMON_HOSTABLE = zeitlos zobj zgfx zcolor zfont_data zwin zfsapp zwidget zspeak \
+	zedit zflist zdialog games/zarcade games/zarcade_sys games/zsfx zcfg \
+	games/ui/sui
 
 # Only symbols with one of these prefixes are ours; anything else
 # undefined is libc (memcpy, strlen, puts) and resolves at the real
 # link. z_rng_ is the zrng.c hole above.
-OURS = '^(kg_|z_|fs_|game_|games_|wordlist_|animals_|levelup_)'
+OURS = '^(kg_|z_|fs_|game_|games_|wordlist_|animals_|levelup_|ar_|ar__|arh_|zsfx_|sui_)'
 ALLOWED = '^z_rng_'
 
 linkcheck:
@@ -158,7 +165,7 @@ linkcheck:
 			|| exit 1; \
 	done
 	@for f in $(COMMON_HOSTABLE); do \
-		$(HOSTCC) -std=gnu99 -w -c ../../common/$$f.c -o /tmp/kg_link/$$f.o \
+		$(HOSTCC) -std=gnu99 -w -DZ_APP_NAME=\"kidgames\" -c ../../common/$$f.c -o /tmp/kg_link/$$(basename $$f).o \
 			|| exit 1; \
 	done
 	@nm --defined-only /tmp/kg_link/*.o 2>/dev/null \
@@ -285,15 +292,22 @@ test: includecheck linkcheck nofloat noprintf
 #   make render WHAT=field      a question with a text field
 #   make render WHAT=msg        a message box
 #   make render WHAT=font       the big font, every glyph
-WHAT ?= menu
-
+#   make render                 every scene below, and the app itself
+#                               driven by a script, in tests/out/
+#                               (PPM, PNG and sheet.png with PIL)
 render:
 	$(HOSTCC) $(PANELFLAGS) -o /tmp/kg_render tests/render.c $(PANELSRC) \
 		kgsave.c wordlist.c levelup.c animals.c kgart.c kgsound.c \
-		tests/kg_rand_host.c tests/kg_dialog_stub.c
-	/tmp/kg_render /tmp/kidgames.pbm $(WHAT)
-	@echo "wrote /tmp/kidgames.pbm ($(WHAT)) -- others: make render \
-WHAT=pad|digits|field|msg|font"
+		tests/kg_rand_host.c
+	$(HOSTCC) $(PANELFLAGS) -fsanitize=address,undefined -Dmain=game_main \
+		-o /tmp/kg_play tests/play.c kidgames.c $(TESTSRC)
+	mkdir -p tests/out
+	@for w in menu pad digits field msg font result counting math numguess \
+		wordguess letterhunt missing memory memory1 animal; do \
+		/tmp/kg_render tests/out $$w || exit 1; \
+	done
+	/tmp/kg_play tests/out
+	-python3 ../pix/tests/ppm2png.py tests/out
 
 .PHONY: test includecheck linkcheck nofloat noprintf nmcheck render
 

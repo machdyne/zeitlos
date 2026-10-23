@@ -1,5 +1,7 @@
 # bench -- virtual parts on I2C buses
 
+Kind: a **desktop app** ([app_kinds.md](app_kinds.md)).
+
 The bench is where virtual parts live: I/O expanders, LEDs, buttons,
 switches, lamps. A netlist (a short text file, `NAME.net`) says which
 parts there are and how they are connected; bench shows them live, and

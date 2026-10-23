@@ -6,12 +6,50 @@
 #include "rl_board.h"
 #include "../../common/zfont.h"
 #include "../../common/zshape.h"
+#include "../../common/games/zarcade.h"
 
 #define FONT (&z_font_5x8)
 #define FW 5
 #define FH 8
 
 const int32_t rl_chip_values[RL_NCHIPS] = { 1, 5, 25, 100 };
+
+/* -- the screen face (docs/roulette.md, "In colour") --
+ *
+ * The same table, drawn through the arcade runtime on roulette's
+ * 320x240 screen: every primitive here and every shape of the wheel
+ * goes to ar_*() (rl_screen(), rl_wheel.c), and every colour asked for
+ * is a ROLE (RL_C_*, rl_wheel.h) -- one bit on the desktop (rl_ink()),
+ * rl_palette on the screen. Green felt, a layout of red and black
+ * numbers with white lines, a wheel of red, black and green pockets
+ * with brass frets in a wooden bowl, gold chips. */
+#define scr (rl_screen_on())
+
+const uint16_t rl_palette[16] = {
+    0x063,      /* RL_C_BG       the felt */
+    0xfff,      /* RL_C_INK      text, lines */
+    0xc12,      /* RL_C_RED      red */
+    0x111,      /* RL_C_POCKET   a black pocket */
+    0x111,      /* RL_C_CELL     a black number */
+    0x0a3,      /* RL_C_ZERO     a zero */
+    0x0a3,      /* RL_C_SLASH    (a zero's slash: the same green) */
+    0xdb5,      /* RL_C_FRET     brass */
+    0x631,      /* RL_C_WOOD     the bowl and the hub */
+    0xfff,      /* RL_C_BALL     the ball */
+    0xfc2,      /* RL_C_CHIP     a chip */
+    0x000,      /* RL_C_CHIPINK  its value */
+    0x031,      /* RL_C_BTN      a button */
+    0xfc2,      /* RL_C_ACT      the chip chosen */
+    0x364,      /* RL_C_DIM      a button pressed */
+    0x000
+};
+
+void rl_mono_inks(ar_ink_t ink[16])
+{
+    int i;
+    for (i = 0; i < 16; i++)
+        ink[i] = rl_ink_mono(i) ? ar_ink_white : ar_ink_black;
+}
 
 /* -- text --------------------------------------------------------------
  *
@@ -66,13 +104,15 @@ static void fill(const rl_layout_t *L, int x, int y, int w, int h, int color)
 {
     int x1 = x + w - 1, y1 = y + h - 1;
 
+    if (scr) { ar_fill(x, y, w, h, color); return; }
+
     if (x < L->clip.x0) x = L->clip.x0;
     if (y < L->clip.y0) y = L->clip.y0;
     if (x1 > L->clip.x1) x1 = L->clip.x1;
     if (y1 > L->clip.y1) y1 = L->clip.y1;
     if (x1 < x || y1 < y) return;
 
-    z_fb_hw_fill_rect(x, y, x1 - x + 1, y1 - y + 1, color);
+    z_fb_hw_fill_rect(x, y, x1 - x + 1, y1 - y + 1, rl_ink(color));
 }
 
 static void frame(const rl_layout_t *L, int x, int y, int w, int h, int c)
@@ -85,7 +125,10 @@ static void frame(const rl_layout_t *L, int x, int y, int w, int h, int c)
 
 static void text(const rl_layout_t *L, int x, int y, const char *s, int c)
 {
-    z_fb_draw_text(x, y, s, c, FONT, &L->clip);
+    /* On the screen, text is drawn over a strip already filled (every
+     * caller fills first), so its transparency changes nothing. */
+    if (scr) { ar_text(x, y, s, c, FONT, 1); return; }
+    z_fb_draw_text(x, y, s, rl_ink(c), FONT, &L->clip);
 }
 
 static void text_center(const rl_layout_t *L, int cx, int y, const char *s,
@@ -117,7 +160,7 @@ static void big_glyph(const rl_layout_t *L, int x, int y, char ch, int s)
     for (row = 0; row < f->h; row++)
         for (col = 0; col < f->w; col++)
             if (g[row] & (0x80 >> col))
-                fill(L, x + col * s, y + row * s, s, s, 1);
+                fill(L, x + col * s, y + row * s, s, s, RL_C_INK);
 }
 
 static void big_text(const rl_layout_t *L, int x, int y, const char *t, int s)
@@ -126,9 +169,19 @@ static void big_text(const rl_layout_t *L, int x, int y, const char *t, int s)
     for (i = 0; t[i]; i++) big_glyph(L, x + i * (FW + 1) * s, y, t[i], s);
 }
 
-static void shade(const rl_layout_t *L, int x, int y, int w, int h, int lvl)
+/* A dither on the desktop; on the screen in colour the role's colour,
+ * in black and white the dither again. */
+static void shade(const rl_layout_t *L, int x, int y, int w, int h, int lvl,
+    int role)
 {
     int x1 = x + w - 1, y1 = y + h - 1;
+
+    if (scr) {
+        if (ar_color()) ar_fill(x, y, w, h, role);
+        else ar_fill2(x, y, w, h, RL_C_BG, RL_C_INK,
+            lvl > 7 ? &ar_ink_grey50 : &ar_ink_grey25);
+        return;
+    }
 
     if (x < L->clip.x0) x = L->clip.x0;
     if (y < L->clip.y0) y = L->clip.y0;
@@ -449,9 +502,16 @@ static void draw_chip(const rl_layout_t *L, int x, int y, int32_t amount)
     tw = slen(buf) * FW;
     w = tw + 4;
 
-    fill(L, x - w / 2, y - h / 2, w, h, 0);
-    frame(L, x - w / 2, y - h / 2, w, h, 1);
-    text(L, x - tw / 2, y - h / 2 + 1, buf, 1);
+    if (scr && ar_color()) {
+        /* in colour a gold chip, its value in black */
+        fill(L, x - w / 2, y - h / 2, w, h, RL_C_CHIP);
+        frame(L, x - w / 2, y - h / 2, w, h, RL_C_CELL);
+        text(L, x - tw / 2, y - h / 2 + 1, buf, RL_C_CHIPINK);
+        return;
+    }
+    fill(L, x - w / 2, y - h / 2, w, h, RL_C_BG);
+    frame(L, x - w / 2, y - h / 2, w, h, RL_C_INK);
+    text(L, x - tw / 2, y - h / 2 + 1, buf, RL_C_INK);
 }
 
 static void draw_bets(const rl_layout_t *L, const rl_view_t *v)
@@ -539,18 +599,20 @@ static void draw_grid(const rl_layout_t *L, const rl_view_t *v)
 
     /* The zero. On an American table it is two cells; on a European one,
      * a single tall one. */
+    if (scr && ar_color())
+        fill(L, L->zero_x, L->grid_y, RL_ZERO_W, 3 * RL_CELL_H, RL_C_ZERO);
     if (v->round->wheel == RL_AMERICAN) {
         int hh = (3 * RL_CELL_H) / 2;
-        frame(L, L->zero_x, L->grid_y, RL_ZERO_W, hh, 1);
+        frame(L, L->zero_x, L->grid_y, RL_ZERO_W, hh, RL_C_INK);
         text_center(L, L->zero_x + RL_ZERO_W / 2, L->grid_y + hh / 2 - 4,
-            "0", 1);
-        frame(L, L->zero_x, L->grid_y + hh, RL_ZERO_W, 3 * RL_CELL_H - hh, 1);
+            "0", RL_C_INK);
+        frame(L, L->zero_x, L->grid_y + hh, RL_ZERO_W, 3 * RL_CELL_H - hh, RL_C_INK);
         text_center(L, L->zero_x + RL_ZERO_W / 2,
-            L->grid_y + hh + (3 * RL_CELL_H - hh) / 2 - 4, "00", 1);
+            L->grid_y + hh + (3 * RL_CELL_H - hh) / 2 - 4, "00", RL_C_INK);
     } else {
-        frame(L, L->zero_x, L->grid_y, RL_ZERO_W, 3 * RL_CELL_H, 1);
+        frame(L, L->zero_x, L->grid_y, RL_ZERO_W, 3 * RL_CELL_H, RL_C_INK);
         text_center(L, L->zero_x + RL_ZERO_W / 2,
-            L->grid_y + (3 * RL_CELL_H) / 2 - 4, "0", 1);
+            L->grid_y + (3 * RL_CELL_H) / 2 - 4, "0", RL_C_INK);
     }
 
     for (col = 0; col < 12; col++) {
@@ -565,9 +627,13 @@ static void draw_grid(const rl_layout_t *L, const rl_view_t *v)
              * point of the cell. The dither reads as colour and leaves
              * the glyph legible. */
             if (rl_is_red(n))
-                shade(L, cx + 1, cy + 1, RL_CELL_W - 2, RL_CELL_H - 2, 6);
+                shade(L, cx + 1, cy + 1, RL_CELL_W - 2, RL_CELL_H - 2, 6,
+                    RL_C_RED);
+            else if (scr && ar_color())
+                fill(L, cx + 1, cy + 1, RL_CELL_W - 2, RL_CELL_H - 2,
+                    RL_C_CELL);
 
-            frame(L, cx, cy, RL_CELL_W, RL_CELL_H, 1);
+            frame(L, cx, cy, RL_CELL_W, RL_CELL_H, RL_C_INK);
 
             rl_num(n, buf);
             /* On a solid strip, so the dither never eats the digits --
@@ -577,8 +643,10 @@ static void draw_grid(const rl_layout_t *L, const rl_view_t *v)
                 int tw = slen(buf) * FW;
                 int tx = cx + (RL_CELL_W - tw) / 2;
                 int ty = cy + (RL_CELL_H - FH) / 2;
-                fill(L, tx - 1, ty, tw + 2, FH, 0);
-                text(L, tx, ty, buf, 1);
+                /* (in colour the strip is the cell's own colour) */
+                fill(L, tx - 1, ty, tw + 2, FH, rl_is_red(n) ? RL_C_RED :
+                    RL_C_CELL);
+                text(L, tx, ty, buf, RL_C_INK);
             }
         }
     }
@@ -586,26 +654,26 @@ static void draw_grid(const rl_layout_t *L, const rl_view_t *v)
     /* The column bets. */
     for (row = 0; row < 3; row++) {
         int cy = L->grid_y + row * RL_CELL_H;
-        frame(L, L->colbet_x, cy, RL_ZERO_W, RL_CELL_H, 1);
+        frame(L, L->colbet_x, cy, RL_ZERO_W, RL_CELL_H, RL_C_INK);
         text_center(L, L->colbet_x + RL_ZERO_W / 2, cy + (RL_CELL_H - FH) / 2,
-            "2:1", 1);
+            "2:1", RL_C_INK);
     }
 
     /* The street strip. Thin, and unlabelled: it is a line to place a
      * chip on, and a label would not fit in five pixels. */
-    fill(L, L->grid_x, L->street_y, grid_w, 5, 0);
-    frame(L, L->grid_x, L->street_y, grid_w, 5, 1);
+    fill(L, L->grid_x, L->street_y, grid_w, 5, RL_C_BG);
+    frame(L, L->grid_x, L->street_y, grid_w, 5, RL_C_INK);
     for (col = 1; col < 12; col++)
-        fill(L, L->grid_x + col * RL_CELL_W, L->street_y, 1, 5, 1);
+        fill(L, L->grid_x + col * RL_CELL_W, L->street_y, 1, 5, RL_C_INK);
 
     /* The dozens. */
     for (i = 0; i < 3; i++) {
         static const char *const nm[3] = { "1st 12", "2nd 12", "3rd 12" };
         int cw = grid_w / 3;
         int cx = L->grid_x + i * cw;
-        frame(L, cx, L->dozen_y, cw, RL_OUTER_H, 1);
+        frame(L, cx, L->dozen_y, cw, RL_OUTER_H, RL_C_INK);
         text_center(L, cx + cw / 2, L->dozen_y + (RL_OUTER_H - FH) / 2,
-            nm[i], 1);
+            nm[i], RL_C_INK);
     }
 
     /* And the even-money bets. */
@@ -614,16 +682,20 @@ static void draw_grid(const rl_layout_t *L, const rl_view_t *v)
             "1-18", "EVEN", "RED", "BLACK", "ODD", "19-36" };
         int cw = grid_w / 6;
         int cx = L->grid_x + i * cw;
-        frame(L, cx, L->even_y, cw, RL_OUTER_H, 1);
+        frame(L, cx, L->even_y, cw, RL_OUTER_H, RL_C_INK);
         /* RED gets the same dither its cells do, so the word and the
          * numbers agree about what red looks like. */
-        if (i == 2) shade(L, cx + 1, L->even_y + 1, cw - 2, RL_OUTER_H - 2, 6);
+        if (i == 2) shade(L, cx + 1, L->even_y + 1, cw - 2, RL_OUTER_H - 2, 6,
+            RL_C_RED);
+        if (i == 3 && scr && ar_color())
+            fill(L, cx + 1, L->even_y + 1, cw - 2, RL_OUTER_H - 2, RL_C_CELL);
         {
             int tw = slen(nm[i]) * FW;
             int tx = cx + (cw - tw) / 2;
             int ty = L->even_y + (RL_OUTER_H - FH) / 2;
-            fill(L, tx - 1, ty, tw + 2, FH, 0);
-            text(L, tx, ty, nm[i], 1);
+            fill(L, tx - 1, ty, tw + 2, FH, i == 2 ? RL_C_RED :
+                i == 3 ? RL_C_CELL : RL_C_BG);
+            text(L, tx, ty, nm[i], RL_C_INK);
         }
     }
 }
@@ -641,15 +713,24 @@ static void button(const rl_layout_t *L, const rl_rect_t *r,
     int tx = r->x + (r->w - tw) / 2;
     int ty = r->y + (r->h - FH) / 2;
 
-    fill(L, r->x, r->y, r->w, r->h, 0);
-    frame(L, r->x, r->y, r->w, r->h, 1);
+    fill(L, r->x, r->y, r->w, r->h, RL_C_BTN);
 
-    if (on) {
-        shade(L, r->x + 1, r->y + 1, r->w - 2, r->h - 2, 9);
-        fill(L, tx - 1, ty, tw + 2, FH, 0);
+    if (scr && ar_color()) {
+        /* in colour the one chosen is ringed in gold */
+        frame(L, r->x, r->y, r->w, r->h, on ? RL_C_ACT : RL_C_INK);
+        if (on) frame(L, r->x + 1, r->y + 1, r->w - 2, r->h - 2, RL_C_ACT);
+        text(L, tx, ty, label, RL_C_INK);
+        return;
     }
 
-    text(L, tx, ty, label, 1);
+    frame(L, r->x, r->y, r->w, r->h, RL_C_INK);
+
+    if (on) {
+        shade(L, r->x + 1, r->y + 1, r->w - 2, r->h - 2, 9, RL_C_DIM);
+        fill(L, tx - 1, ty, tw + 2, FH, RL_C_BTN);
+    }
+
+    text(L, tx, ty, label, RL_C_INK);
 }
 
 static void draw_panel(const rl_layout_t *L, const rl_view_t *v)
@@ -658,18 +739,18 @@ static void draw_panel(const rl_layout_t *L, const rl_view_t *v)
     int i, y = L->panel_y;
 
     fill(L, L->panel_x, L->panel_y, L->panel_w,
-        L->grid_y - 2 - L->panel_y, 0);
+        L->grid_y - 2 - L->panel_y, RL_C_BG);
 
     line[0] = '\0';
     cat(line, sizeof line, "chips ");
     cat_num(line, sizeof line, v->chips);
-    text(L, L->panel_x, y, line, 1);
+    text(L, L->panel_x, y, line, RL_C_INK);
     y += RL_LINE_H;
 
     line[0] = '\0';
     cat(line, sizeof line, "staked ");
     cat_num(line, sizeof line, v->round->staked);
-    text(L, L->panel_x, y, line, 1);
+    text(L, L->panel_x, y, line, RL_C_INK);
     y += RL_LINE_H;
 
     if (v->result >= 0) {
@@ -691,12 +772,12 @@ static void draw_panel(const rl_layout_t *L, const rl_view_t *v)
         if (v->result == RL_ZERO || v->result == RL_DOUBLE_ZERO)
             cat(line, sizeof line, "zero");
         else cat(line, sizeof line, rl_is_red(v->result) ? "red" : "black");
-        text(L, L->panel_x + bw + 4, y, line, 1);
+        text(L, L->panel_x + bw + 4, y, line, RL_C_INK);
 
         line[0] = '\0';
         cat(line, sizeof line, net >= 0 ? "+" : "");
         cat_num(line, sizeof line, net);
-        text(L, L->panel_x + bw + 4, y + FH + 2, line, 1);
+        text(L, L->panel_x + bw + 4, y + FH + 2, line, RL_C_INK);
     }
     y += 3 * FH;
 
@@ -711,7 +792,7 @@ static void draw_panel(const rl_layout_t *L, const rl_view_t *v)
             cat(line, sizeof line, rl_pocket_str(v->history[i], p));
             cat(line, sizeof line, " ");
         }
-        text(L, L->panel_x, y, line, 1);
+        text(L, L->panel_x, y, line, RL_C_INK);
     }
 
     /* Whether the wheel is hardware-seeded. Shown rather than acted on:
@@ -719,7 +800,7 @@ static void draw_panel(const rl_layout_t *L, const rl_view_t *v)
      * whatever its provenance and that only keys should refuse. This is
      * the useful thing to do with that bit. */
     text(L, L->panel_x, L->chip[0].y - RL_LINE_H,
-        v->trng ? "wheel: TRNG seeded" : "wheel: no TRNG", 1);
+        v->trng ? "wheel: TRNG seeded" : "wheel: no TRNG", RL_C_INK);
 
     for (i = 0; i < RL_NCHIPS; i++) {
         char b[8];
@@ -735,15 +816,15 @@ void rl_board_draw_status(const rl_layout_t *L, const rl_view_t *v)
 {
     char line[RL_MSG_LEN + 4];
 
-    fill(L, L->ox, L->msg_y, L->w, FH, 0);
-    text(L, L->ox + 2, L->msg_y, v->message, 1);
+    fill(L, L->ox, L->msg_y, L->w, FH, RL_C_BG);
+    text(L, L->ox + 2, L->msg_y, v->message, RL_C_INK);
 
-    fill(L, L->ox, L->cmd_y, L->w, FH, 0);
+    fill(L, L->ox, L->cmd_y, L->w, FH, RL_C_BG);
     line[0] = '\0';
     cat(line, sizeof line, "> ");
     cat(line, sizeof line, v->cmd);
     cat(line, sizeof line, "_");
-    text(L, L->ox + 2, L->cmd_y, line, 1);
+    text(L, L->ox + 2, L->cmd_y, line, RL_C_INK);
 }
 
 void rl_board_draw(const rl_layout_t *L, const rl_view_t *v)
@@ -751,23 +832,23 @@ void rl_board_draw(const rl_layout_t *L, const rl_view_t *v)
     char line[48];
 
     if (!L->ok) {
-        fill(L, L->ox, L->oy, L->w, L->h, 0);
-        text(L, L->ox + 2, L->oy + 2, "window too small", 1);
-        text(L, L->ox + 2, L->oy + 2 + RL_LINE_H, "for a table", 1);
+        fill(L, L->ox, L->oy, L->w, L->h, RL_C_BG);
+        text(L, L->ox + 2, L->oy + 2, "window too small", RL_C_INK);
+        text(L, L->ox + 2, L->oy + 2 + RL_LINE_H, "for a table", RL_C_INK);
         return;
     }
 
-    fill(L, L->ox, L->oy, L->w, L->h, 0);
+    fill(L, L->ox, L->oy, L->w, L->h, RL_C_BG);
 
     line[0] = '\0';
     cat(line, sizeof line, v->round->wheel == RL_AMERICAN ?
         "Roulette - american" : "Roulette - european");
-    text(L, L->ox + 2, L->status_y, line, 1);
+    text(L, L->ox + 2, L->status_y, line, RL_C_INK);
 
     line[0] = '\0';
     cat(line, sizeof line, "chip ");
     cat_num(line, sizeof line, rl_chip_values[v->chip_sel]);
-    text(L, L->ox + L->w - 2 - slen(line) * FW, L->status_y, line, 1);
+    text(L, L->ox + L->w - 2 - slen(line) * FW, L->status_y, line, RL_C_INK);
 
     rl_board_draw_wheel(L, v, &L->clip);
     draw_panel(L, v);

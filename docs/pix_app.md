@@ -1,5 +1,7 @@
 # pix
 
+Kind: a **screen app** -- a 320x240 screen in a window or full screen ([app_kinds.md](app_kinds.md)).
+
 A pixel editor for the system's own small pictures: sprite sheets in
 up to 256 colours (game art, mausrun's tiles and sprites, the mouse
 pointer), the dock's icons, bitmap fonts, and pictures of one bit or up
@@ -86,10 +88,18 @@ as each would:
   has (16, 64 or 256), a bigger sheet through its stand-ins. pix's own
   controls use the entries the art leaves free at the top of the
   palette, or the art's darkest and lightest when it uses all of them.
-- **The window** is monochrome: each colour has a pattern of its own
-  while it is edited (its 16-colour stand-in's, with more), so two
-  colours are never confused; the **preview and the strip** show the
-  real result, each colour in its grey.
+- **The window** is in colour while wm gives it the colour, on a board
+  built with the colour window ([color.md](color.md), "The colour
+  window": focused and wholly uncovered): 32 colours on an eight-plane
+  board show the art at **16** (a bigger sheet through its stand-ins)
+  with the controls in the eight above it; 8 on a six-plane board show
+  it at **4**, its slots, the controls in the art's darkest and
+  lightest. The side column says `shown as 16` (or 4) while the sheet
+  has more. Full screen still shows as many as the board has.
+- Otherwise **the window** is monochrome: each colour has a pattern of
+  its own while it is edited (its 16-colour stand-in's, with more), so
+  two colours are never confused; the **preview and the strip** show
+  the real result, each colour in its grey.
 - **F7** shows the sheet as 64, 16, 4 and 2 colours in turn, then as it
   is: only the display changes, never the art.
 - **See-through** pixels (`.`) are a checker in both.
@@ -363,15 +373,20 @@ text and goes into the tree as it is (mausrun's: `sw/data/mausrun`).
 | importing | 640 x 480 (bigger is halved until it fits) |
 | memory | pix runs with a 2 MB heap (`APP_STACK = 2M`): a sprite sheet takes 2 bytes a pixel, a colour picture 1, the rest 1 bit; an edit's undo step is taken whole, then cut down |
 
-## Dialogs from an arcade program
+## Boxes, help and the file's name
 
-Open, save and the prompts are the system's boxes (`zdialog.h`). A box
-is a window and wm shows none over game mode, so pix brackets each one
-with `ar_dialog_begin()` / `ar_dialog_end()` ([arcade.md](arcade.md),
-"Dialogs"): full screen is left first, the picture stays painted while
-the box waits, the sound is held, every key is released afterwards,
-and full screen comes back once the box (or the boxes, one after the
-other) are done.
+Open, save, the prompts and the questions are the screen toolkit's
+boxes ([screen_ui.md](screen_ui.md)), drawn on pix's own screen: in the
+window and full screen alike, so F11 stays where it is when one opens.
+They draw in pix's controls' colours (the panels' black, the text's
+white, the frame's grey, the cursor's yellow for the focused button);
+behind a box the art is dimmed while those are pix's own palette
+entries, and left as it is when they are the art's darkest and
+lightest. F1 shows pix's help the same way, full screen too.
+
+The window's title is just `pix`. The file's name is at the right end
+of the status line -- its last part, or `untitled`, with a `*` while
+there are changes not saved -- since full screen has no titlebar.
 
 ## On a build host
 
@@ -402,5 +417,9 @@ and again on 6- and 4-plane boards, `AR_HOST_PLANES`) and `mausrun`
 (its sprites, full screen, as 2), `anim` (mausrun's sprites: onion
 skin, an animation made and played, the next frame), `cpic` (a new
 picture in 64 colours: shapes, undo, full screen), `import` (a PNG
-opened as a colour picture, another brought in with Ctrl+I). The boxes are answered by the script; a "save first?"
+opened as a colour picture, another brought in with Ctrl+I), `wcolour`
+(a 16-colour sheet in its colour window: drawn in, as 4, help, covered
+and uncovered, full screen and back, the colour taken away) and
+`wc256` (`c256.zsp` in its colour window, the palette), each on eight
+and six planes (`out/wc8`, `out/wc6`). The boxes are answered by the script; a "save first?"
 always answers no, so a script never writes over its inputs.

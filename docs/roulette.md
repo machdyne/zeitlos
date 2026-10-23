@@ -1,5 +1,7 @@
 # roulette
 
+Kind: dual -- a resizable desktop window, and a 320x240 screen in colour in the same window ([app_kinds.md](app_kinds.md)).
+
 **Status: complete.** European and American wheels, the full betting
 layout by keyboard or mouse, an animated spin, and chips that persist
 in `/data/casino/bank.dat`.
@@ -10,7 +12,36 @@ in `/data/casino/bank.dat`.
 
 Built for rv32i with section GC: 37,810 text, 52 data, 3,284 bss —
 41,146 bytes, against `sw/apps/poker`'s 68,844. No soft-float reaches
-any of this app's own objects.
+any of this app's own objects. `make render` also draws the table on
+the screen face, European and American (`tests/out/scr-*.png`: the
+window in black and white, its colour window, full screen), every frame
+checked against a full repaint.
+
+## In colour
+
+**F10**, or the colour icon on the titlebar (a rainbow), turns the
+window into roulette's **screen face**: the same table on a 320x240
+screen, through the arcade runtime ([arcade.md](arcade.md), "A dual
+app"), in colour where the window has the colour window
+([color.md](color.md)) -- green felt, a layout of red and black numbers
+with white lines and a green zero, a wheel of red, black and green
+pockets with brass frets and hub in a wooden bowl, gold chips with
+their value in black, the chip chosen ringed in gold. **F11** (or
+`game`) is the screen face full screen, from either face; Esc there
+comes back to the window. F10, the icon or resizing the window go back
+to the desktop table, between spins. On the screen face F1 is the help
+on the screen, and the keys, the command line and the mouse work as on
+the desktop (typed `c` and `m` are letters). The spin draws straight to
+the runtime's screen as on the desktop, two runtime frames a frame (30
+a second).
+
+Every colour is a **role** (`RL_C_*` in `rl_wheel.h`): `rl_ink()` gives
+the one bit the desktop draws -- a black pocket lit, a red one dark,
+exactly the old table -- and the screen face draws `rl_palette`. The
+wheel's shapes are zshape's (`z_fb_fill_quad()`, `z_fb_spoke()`, the
+circles), sent to `ar_fill()` while `rl_screen(true)` has set
+`z_shape_target()`: zshape's spans, pixels and lines go to a target
+instead of the framebuffer, with the same geometry.
 
 Chips come from the shared bank, `/data/casino/bank.dat` — see
 `docs/casino_bank.md`.
@@ -447,8 +478,9 @@ identical.
 | `bank`, `buyin`, `game`, `quit` | |
 
 Left-click places a chip, right-click takes one back. `F1` shows the
-help box in the window (nothing in game mode), `F11` toggles full screen
-([keys.md](keys.md)), `Escape` clears the command line.
+help (a box in the window, the screen's help on the screen face), `F10`
+the table in colour, `F11` full screen ([keys.md](keys.md)), `Escape`
+clears the command line.
 
 **Splits and corners are typed by their members** because they have no
 names — the command looks up which selector covers exactly those
@@ -495,13 +527,12 @@ few hundred pixels.
 **It does not double buffer, and that is deliberate.** A page flip
 would require the whole table redrawn into the back page every frame:
 the wheel, the 37 pockets, the grid, every chip. Orders of magnitude
-more work for an animation that has nothing to tear. So game mode is
-used for the full-screen page and not for the flip — the view stays on
-page 0 and the drawing goes there, which is also exactly what happens
-in a window, where there is no second page at all.
+more work for an animation that has nothing to tear. So the spin draws
+straight to the visible screen -- the window's, or the screen face's
+through the runtime (full screen included) -- touching only what moved.
 
-Paced by the clock at 30 frames a second in a window, or by
-`z_game_wait_frame()` full screen. The loop pumps messages every frame,
+Paced by the clock at 30 frames a second in a window, or by two
+runtime frames on the screen face. The loop pumps messages every frame,
 because an app that stops servicing its queue stalls the window
 manager, not just itself.
 

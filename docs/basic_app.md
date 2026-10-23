@@ -1,5 +1,7 @@
 # basic -- the BASIC computer
 
+Kind: a **screen app** -- a 320x240 screen in a window or full screen ([app_kinds.md](app_kinds.md)).
+
 A small computer inside Zeitlos, the way home computers worked: one
 320x240 screen where you type, `PRINT` and draw, in a window or full
 screen. Full screen works on a TV through the composite output too.
@@ -29,9 +31,11 @@ RUN
 | Up | recalls the last line entered |
 | Escape | erases the line being typed; stops a running program |
 | Ctrl+C | stops a running program |
+| F10 | colour on or off: the colour window ([color.md](color.md)), or full screen's colour |
 | F11 | full screen, or back to the window (Escape stays BASIC's there) |
 
-**F1** shows a short help box ([app_help.md](app_help.md)).
+**F1** shows a short help on BASIC's own screen ([screen_ui.md](screen_ui.md)),
+in the window and full screen alike.
 
 Typing goes through the keyboard layout, so `PRINT "Grüße"` shows what was
 typed: the screen and BASIC's strings are Latin-9 (ISO 8859-15), as in
@@ -121,11 +125,15 @@ partner colour, and drawing twice still erases). Text is printed in the
 ink colour on the paper colour and replaces its cell, as before.
 
 **Where the colours show.** Full screen (`SCREEN 1`, F11) on a machine
-with game-mode colour ([color.md](color.md)) shows them as colours. The
-window cannot -- the desktop is black and white -- so there the paper
-colour is black and every other colour white: text stays readable
-against its paper, and a drawing stands out against the screen. Full
-screen on a machine without colour shows the same.
+with game-mode colour ([color.md](color.md)) shows them as colours. So
+does the window, on a board with the colour window and eight planes
+(32 colours: all sixteen of BASIC's), while it is focused and
+uncovered; F10 turns that off and on. (On six planes the window would
+have 8 colours, half of BASIC's shown wrong, so BASIC does not ask
+there.) Otherwise the window is black and white, the desktop's: the
+paper colour is black and every other colour white, so text stays
+readable against its paper and a drawing stands out against the
+screen. Full screen on a machine without colour shows the same.
 
 That is a choice, not a limitation of the hardware. Showing each colour
 as a dithered grey of its brightness was tried first, and a program
@@ -138,15 +146,16 @@ One thing follows from "the paper is black": an area cleared with an
 earlier `PAPER` shows white after the paper changes, until the next
 `CLS`.
 
-**Full screen in colour is single-buffered.** Sixteen colours need the
-whole framebuffer, so there is no second page to draw into: the changed
-rows are copied just after a frame boundary, and a big change can show
-half drawn for one frame. `SYNC` still paces a program to the display.
+**Full screen is single-buffered**, as everything on the arcade
+runtime ([arcade.md](arcade.md), "Single-buffered, on purpose"): the
+rows that changed are drawn just after a frame boundary, and a big
+change can show half drawn for one frame. `SYNC` paces a program to the
+display.
 
 **A program that never asks for colour is not changed by it.** Until
 something other than `INK 1` or `PAPER 0`, or any `PALETTE`, the screen
-is the one plane it always was, drawn by the same code, and full screen
-is the double-buffered monochrome it always was.
+is the one plane it always was, drawn by the same code: in colour it is
+colours 0 and 1, black and white.
 
 ## Files
 
@@ -195,25 +204,31 @@ as BASIC 1 everywhere.
 | `bedit.c` | typing a line, Unicode to Latin-9 |
 | `bext.c` | the statements above, through the interpreter's extension interface (`BASIC_EXT`) |
 | `bterm.c` | a terminal's bytes (`basic0`): UTF-8 and VT100 arrows in, as wm's keysyms; Latin-9 out, as UTF-8 |
-| `basic_app.c` | the window, full screen, the `basic0` port, keys, showing the screen, and what the interpreter asks of the system (files, time, stopping) |
+| `basic_app.c` | the screen on the arcade runtime, the `basic0` port, keys, and what the interpreter asks of the system (files, time, stopping) |
+
+The window, full screen, colour and the colour window are the arcade
+runtime's ([arcade.md](arcade.md)), as for the games. Its `paint()`
+draws the rows `bscreen` says changed: in black and white the bitmap
+(or `bs_mono()`'s picture of the colours), in colour the four planes a
+plane at a time (`ar_plane()`), any further plane blank.
 
 A program runs inside the interpreter's `basic_yield()`. The interpreter
 asks `hw_break()` at every program line and `hw_delay_ms()` while it
-waits; both read wm's messages (redraws, keys) and show the screen at
-most once per video frame, so the window stays alive while a program
-runs. `WAIT` and `SLEEP` give the CPU back (`z_proc_wait()`).
+waits; both read the runtime's events (`ar_poll()`) and draw a frame
+when one is due (`ar_frame_due()`) -- never waiting for one in between
+-- so the window stays alive while a program runs. `WAIT` and `SLEEP`
+give the CPU back (`ar_frame()` and `z_proc_wait()`).
 
 Keys from wm and from a terminal wait in one inbox and are acted on after
-the messages are read: the message handler never prints. Output to the
-terminal is batched, and making room in a full port means reading
-messages for their acknowledgements, so a handler that printed would be
-called from inside its own printing.
+the events are read: reading them never prints. Output to the terminal is
+batched, and making room in a full port means reading messages for their
+acknowledgements, so a reader that printed would be called from inside
+its own printing. The port's messages come through the runtime
+(`ar_msg_hook()`); while zi2cx waits for bench, the messages it reads go
+back to the runtime (`ar_msg()`).
 
-Full screen is game mode with the game grab (`Z_WM_GAME_GRAB`): wm sends
-the keys here, through the keyboard layout as in the window, and stops
-managing windows until BASIC gives the screen back or wm takes it
-(`Z_WM_GAME_REVOKED`, Alt+Esc). BASIC does not read the raw keyboard
-queue, which wm drains too (see `sw/apps/mausrun/mausrun.c`).
+Escape is BASIC's in full screen too (`ar_escape_leaves(false)`): F11
+goes back to the window, and so does wm's Super+Esc.
 
 ## Machdyne BASIC in Zeitlos
 
@@ -236,6 +251,14 @@ and commit the new submodule pointer. BASIC's own `make test`, run in
 builds.
 
 ## Tests
+
+`make render` in `sw/apps/basic` runs `basic_app.c` itself on the
+runtime's software framebuffer (`tests/render.c`), typed into by a
+script, every frame checked against a full repaint (`AR_HOST_VERIFY`):
+circles; sixteen colours in the window in black and white, in its
+colour window, covered, off and on with F10, full screen in colour and
+in mono; a moving circle stopped with Escape full screen; F1's help.
+`tests/out/*.png` and `sheet.png`.
 
 `make test` in `sw/apps/basic`, on a host, with no toolchain or board:
 the screen's exact pixels (text, scrolling, the cursor, every shape drawn

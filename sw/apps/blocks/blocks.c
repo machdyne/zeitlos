@@ -38,6 +38,7 @@ static const char help_text[] =
 	"P\tPause (Start on a pad)\n"
 	"F11\tFull screen, or back to the window\n"
 	"C\tFull screen: colour on or off\n"
+	"F10\tColour on or off, in the window too\n"
 	"M\tMusic on or off\n\n"
 	"On a pad: the d-pad moves, Up drops, A and B turn, X holds.\n\n"
 	"Skill: EASY falls slowly and forgives a full well three times "
@@ -643,6 +644,9 @@ int main(void) {
 
 	printf("blocks: rows of shapes, in a window or full screen (F11)\n");
 
+	/* in colour in its window too, while it is focused and uncovered,
+	 * on a board with the colour window (docs/color.md) */
+	ar_window_colour(true);
 	if (!ar_init(&desc)) return 1;
 	if (!bk_draw_init()) printf("blocks: out of sprite memory\n");
 

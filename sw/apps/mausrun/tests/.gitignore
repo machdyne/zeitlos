@@ -4,3 +4,5 @@ levelcheck
 levelstrip
 render_mausrun
 test_sound
+gen/
+test_art

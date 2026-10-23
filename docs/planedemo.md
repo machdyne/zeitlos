@@ -1,5 +1,7 @@
 # planedemo
 
+Kind: a **full-screen app** ([app_kinds.md](app_kinds.md)).
+
 **planedemo**: a one-minute demoscene film about Zeitlos, in 256
 colours and eight voices, made for the Sergei ML2 (eight bitplanes,
 the 16-bit hardware mixer). A clock whose hands fall off; the name
@@ -16,7 +18,10 @@ Lives in `sw/apps/planedemo/`. It is in the **Games** group of the dock
 
 Start it from the dock, or `planedemo` in a terminal. It goes full
 screen (game mode) by itself and plays once; **Esc** or **F11** (back
-to the window) ends it, and so does the end of the film.
+to the window) ends it, and so does the end of the film. **F1** shows a
+line of help on the film's own screen ([screen_ui.md](screen_ui.md));
+the scene's picture starts again when it closes. (The film's own 16-bit
+mixer is not held while it is up.)
 
 It is made for eight planes. On a board with six or four it plays in
 64 or 16 colours, each scene choosing what to give up ("On fewer

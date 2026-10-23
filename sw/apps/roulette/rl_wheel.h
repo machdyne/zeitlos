@@ -178,6 +178,36 @@ void rl_wheel_ball_rect(const rl_wheel_t *w, int32_t a, int r,
     z_clip_t *out);
 void rl_wheel_hub_rect(const rl_wheel_t *w, z_clip_t *out);
 
+/* -- colour (docs/roulette.md, "In colour") --
+ *
+ * Every colour the wheel and the table ask for is a ROLE. The desktop
+ * draws each in one bit (rl_ink(): exactly the one-bit table, a black
+ * pocket lit and a red one dark); the screen face -- the table on the
+ * arcade runtime's 320x240 screen -- in rl_palette (rl_board.c), the
+ * wheel's shapes sent to ar_fill() through z_shape_target().
+ * rl_screen(true) switches both. */
+enum {
+    RL_C_BG = 0,     /* the felt */
+    RL_C_INK,        /* text, the layout's lines */
+    RL_C_RED,        /* a red pocket, a red number */
+    RL_C_POCKET,     /* a black pocket (lit in one bit) */
+    RL_C_CELL,       /* a black number on the layout (dark in one bit) */
+    RL_C_ZERO,       /* a zero's pocket and cell */
+    RL_C_SLASH,      /* the slash across a zero's pocket */
+    RL_C_FRET,       /* the wheel's frets, rings, hub spokes */
+    RL_C_WOOD,       /* the wheel's bowl and hub */
+    RL_C_BALL,       /* the ball */
+    RL_C_CHIP,       /* a chip */
+    RL_C_CHIPINK,    /* its value */
+    RL_C_BTN,        /* a button */
+    RL_C_ACT,        /* the chip chosen */
+    RL_C_DIM         /* a button pressed */
+};
+void rl_screen(bool on);
+bool rl_screen_on(void);
+int  rl_ink(int role);       /* what to draw a role in: one bit, or on the screen the role */
+int  rl_ink_mono(int role);  /* the role in one bit */
+
 /* The smallest radius the wheel can be drawn at and still read. */
 #define RL_WHEEL_MIN_R 24
 

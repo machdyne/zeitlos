@@ -61,6 +61,14 @@ static const ar_host_step_t script[] = {
 	SHOT(2600, "13_versus_covered"),
 	COVER(2610, 0, 0, 0, 0),
 	SHOT(2620, "14_versus_window"),
+	/* wm gives the window the colour: in colour while uncovered, in
+	 * black and white again while covered (docs/color.md) */
+	{ 2621, ARH_WCOLOR, 1, 0, NULL, 0, 0, 0, 0 },
+	SHOT(2624, "14b_versus_window_colour"),
+	COVER(2625, 180, 120, 200, 160),
+	SHOT(2627, "14c_versus_window_covered"),
+	COVER(2628, 0, 0, 0, 0),
+	SHOT(2629, "14d_versus_window_colour_again"),
 	MODE(2630, ARH_FULL_COLOR),
 	SHOT(2800, "15_versus_color"),
 	T(2810, 'K'),

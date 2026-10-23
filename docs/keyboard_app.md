@@ -1,5 +1,7 @@
 # keyboard -- the on-screen keyboard
 
+Kind: a **desktop app** ([app_kinds.md](app_kinds.md)).
+
 `sw/apps/keyboard`. A keyboard drawn on the screen, labelled for
 whichever layout is active, and typed with the pointer.
 

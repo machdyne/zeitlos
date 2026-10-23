@@ -1,5 +1,7 @@
 # chip8
 
+Kind: not settled -- a desktop window and a game-mode screen ([app_kinds.md](app_kinds.md)).
+
 A CHIP-8, SUPER-CHIP and XO-CHIP emulator for Zeitlos.
 
 One interpreter covers all three. They are not three machines but one

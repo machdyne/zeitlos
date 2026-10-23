@@ -1,5 +1,7 @@
 # sheet
 
+Kind: a **desktop app** ([app_kinds.md](app_kinds.md)).
+
 A spreadsheet. `sw/apps/sheet`.
 
 ```

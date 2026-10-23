@@ -403,6 +403,13 @@ budgets plus the 60K reserve is 731KB of 848KB).
 In flash, `wm` (stored, so its flash is its `.bin`) passed its 104K by
 28 bytes, at 106,524: the flash budget went to 105K, from the region's
 unassigned part, which the flash rule still has room for.
+The colour window, the hidden pointer over games and the colour
+titlebar icon ([color.md](color.md), [app_kinds.md](app_kinds.md)) took
+it to 106,792 with xPack GCC 15.2 and about 600 more with the
+riscv32-unknown-elf toolchain: its flash budget went to 108K, again
+from the unassigned part (now 734KB of budgets and reserve of 848KB).
+Its RAM budget stays 138K: the boot set's RAM is still 1,024 of
+1,024 KB.
 The next byte for the boot set comes out of another budget, or out of
 something made smaller. `mkzar.py --max` checks the archive itself
 against the region (`CORE_ZAR_MAX`, 848K), so a budget that turns out
@@ -414,7 +421,7 @@ code, data and `.bss`, not its stack). They are `CORE_BUDGETS` in the
 top-level `Makefile`, next to `CORE_APPS`:
 
 ```
-CORE_BUDGETS = fs=36K/75K usb=35K/54K wm=105K/138K net=148K/284K term=62K/152K \
+CORE_BUDGETS = fs=36K/75K usb=35K/54K wm=108K/138K net=148K/284K term=62K/152K \
 	console=10K/13K cron=18K/48K text=60K/156K files=57K/120K repl=140K/304K
 CORE_RESERVE = 60K
 CORE_STORE = wm net

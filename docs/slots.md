@@ -1,5 +1,7 @@
 # slots
 
+Kind: dual -- a resizable desktop window, and a 320x240 screen in colour in the same window ([app_kinds.md](app_kinds.md)).
+
 **Status: complete.** Three reels, five paylines, an exact 5.359% house
 edge, and chips that persist in `/data/casino/bank.dat`.
 
@@ -10,6 +12,34 @@ Built for rv32i with section GC: 45,964 text, 64 data, 3,536 bss —
     make test                         # 55 checks, plus the shared library's 169
     make art                         # regenerates the symbol tiles
     make render WHAT=idle|spin|win   # draws it, for looking at
+
+`make render` also draws the three states on the screen face
+(`tests/out/scr-*.png`: the window in black and white, its colour
+window, full screen), every frame checked against a full repaint.
+
+## In colour
+
+**F10**, or the colour icon on the titlebar (a rainbow), turns the
+window into the machine's **screen face**: the same machine on a
+320x240 screen, through the arcade runtime ([arcade.md](arcade.md), "A
+dual app"), in colour where the window has the colour window
+([color.md](color.md)) -- ivory reels with red cherries and sevens,
+black bars and a gold bell, a brass frame and markers, the winning
+lines and symbols in gold, a chrome lever with a red knob, in a navy
+cabinet. **F11** (or `game`) is the screen face full screen, from
+either face; Esc there comes back to the window. F10, the icon or
+resizing the window go back to the desktop machine, between spins. On
+the screen face F1 is the help on the screen, the reels turn a runtime
+frame at a time (two a frame, 30 a second), and the keys, the command
+line and the mouse work as on the desktop (typed `c` and `m` are
+letters).
+
+Every colour is a **role** (`SL_C_*` in `sl_board.h`); the desktop
+draws the roles in one bit -- exactly the old machine -- and the screen
+face in `sl_palette`. A symbol on a colour reel is its tile in the
+symbol's colour over the reel's ivory; in black and white, the
+desktop's tile. The knob's circles are zshape's, sent to `ar_fill()`
+through `z_shape_target()`.
 
 Three reels, 32 virtual stops each, a 3×3 window and five paylines —
 the three rows and the two diagonals. Symbols: cherry, BAR, BARBAR,
@@ -247,9 +277,9 @@ over is a digit with nothing left.
 | `max` | the biggest stake you can actually afford, not the biggest there is |
 | `bank`, `buyin`, `game`, `quit` | |
 
-`F1` shows the help box in the window -- these lines, and `F11` (or
-`game`) for full screen; in game mode F1 does nothing. `F11` toggles
-full screen ([keys.md](keys.md)).
+`F1` shows the help -- these lines, `F10` for the machine in colour
+and `F11` (or `game`) for full screen ([keys.md](keys.md)): a box in
+the window, the screen's help on the screen face.
 
 The `bet` and `lines` buttons **cycle** rather than opening anything — a
 slot machine has no keyboard, and somebody clicking `bet` wants the next

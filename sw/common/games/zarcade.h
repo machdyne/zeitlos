@@ -170,9 +170,11 @@ typedef struct {
 	 * included: keep overlays out of what you copy. */
 	void (*before_paint)(void *user);
 
-	/* Keep the mouse pointer shown full screen. wm hides it while a
-	 * game holds the screen; a program drawn with the mouse (pix)
-	 * wants it. False for a game. */
+	/* The program takes the mouse: keep the pointer shown, full
+	 * screen and over its window. False for a game: wm hides it while
+	 * the game holds the screen, and while it is over the game's
+	 * picture in the window (Z_WIN_FLAG_NO_POINTER). pix and kidgames
+	 * want it. */
 	bool pointer;
 } ar_desc_t;
 
@@ -185,7 +187,9 @@ enum {
 	AR_EV_WHEEL,        /* notches */
 	AR_EV_MODE,         /* the mode changed: ar_mode() says to what */
 	AR_EV_SUSPEND,      /* the game should pause: help box, focus... */
-	AR_EV_QUIT          /* the window was closed */
+	AR_EV_QUIT,         /* the window was closed */
+	AR_EV_DESKTOP       /* a dual app (ar_attach()): F10, the colour icon
+	                     * or a resize ask for the desktop face */
 };
 
 #define AR_BTN_LEFT   (1u << 0)
@@ -260,6 +264,49 @@ bool ar_set_fullscreen(bool on);  /* what F11 does; false if impossible */
  * are letters, not the colour and music keys. */
 void ar_text_input(bool on);
 
+/* -- a program with a loop of its own (basic: an interpreter running a
+ * line at a time) --
+ *
+ * ar_frame_due(): a display frame has passed since the last ar_frame(),
+ * so calling it now draws at once rather than waiting for the next
+ * boundary. A program that does its work between frames calls ar_poll()
+ * as often as it likes and ar_frame() when this says so.
+ *
+ * ar_msg_hook(fn): messages the runtime does not know (a port's, say:
+ * zport.h) go to fn, a z_msg_t *, as they are read in ar_poll(). fn
+ * must not draw or wait. NULL: they are dropped, as by default.
+ *
+ * ar_msg(m): a message someone else read (a library waiting for its own
+ * answer, zi2cx's `other`) handled as ar_poll() would: events queued,
+ * the window kept, the rest to the hook.
+ *
+ * ar_escape_leaves(false): Escape is the program's full screen too --
+ * F11 (and wm's Super+Esc) still leave. By default the first Escape
+ * released and pressed there goes back to the window. */
+bool ar_frame_due(void);
+
+/* -- a dual app: a desktop window and a 320x240 screen (docs/app_kinds.md) --
+ *
+ * The app creates its own (resizable) window, with ar_window_flags()
+ * among its flags, and draws it with the desktop toolkit. ar_attach()
+ * makes it the runtime's screen face: the window resized to 320x240,
+ * its messages read by ar_poll() from then on (the ones the runtime
+ * does not know to ar_msg_hook()), F11 game mode, colour in the window.
+ * F10, the colour titlebar icon, or the user resizing the window then
+ * send AR_EV_DESKTOP, and the app calls ar_detach(): out of game mode,
+ * the colour window given back, the window its desktop size again
+ * (the user's, after a resize), its messages the app's again -- it
+ * redraws on wm's REDRAW. `win` is the app's z_win_t; the first
+ * ar_attach() sets the runtime up as ar_init() would, without a window
+ * of its own. ar_shutdown() while attached detaches. */
+uint32_t ar_window_flags(const ar_desc_t *d);
+bool ar_attach(void *win, const ar_desc_t *d);
+void ar_detach(void);
+bool ar_attached(void);
+void ar_msg_hook(void (*fn)(void *msg));
+void ar_msg(void *msg);
+void ar_escape_leaves(bool on);
+
 /* -- dialogs (zdialog.h) from an arcade program --
  *
  * A file dialog or a prompt is a window, and wm shows no windows over
@@ -271,6 +318,69 @@ void ar_text_input(bool on);
 void ar_dialog_begin(void *ctx);
 void ar_dialog_end(void);
 void ar_set_color(bool on);       /* what C does, in full screen */
+
+/* -- a box on top: the screen toolkit's layer (ui/sui.h) --
+ *
+ * A box drawn over the picture by the screen toolkit, kept on top of
+ * it by the runtime: every dirty rectangle the program's paint() draws
+ * is followed, where it meets `area`, by the box's own paint, clipped
+ * to it. While a box is up:
+ *
+ *   - the program's overlays are not drawn (it is not running its
+ *     frames anyway; what it last submitted is repainted away);
+ *   - before_paint() and the frame hook (ar_frame_hook()) are not
+ *     called;
+ *   - Esc, F1, C and M reach the program (the box) as keys; F11 still
+ *     goes between the window and full screen;
+ *   - in monochrome the box's indices 0..15 are drawn in `ink` (16
+ *     inks), not the program's inks: the box looks the same in every
+ *     program. In colour they are palette entries as usual;
+ *   - `opaque`: the box covers its area entirely, so a dirty rectangle
+ *     wholly inside it is not painted by the program first.
+ *
+ * ar_top(NULL) takes the box away; its area is repainted. */
+typedef struct {
+	void (*paint)(void *user, const ar_rect_t *r);
+	void *user;
+	ar_rect_t area;
+	const ar_ink_t *ink;
+	bool opaque;
+} ar_top_t;
+
+void ar_top(const ar_top_t *t);
+bool ar_top_on(void);
+
+/* An event put on the queue, after any already there: a box hands the
+ * program what it took and was not its own (a mode change, the window
+ * closing). */
+void ar_push(const ar_event_t *e);
+
+/* -- a folder's names, for the screen toolkit's file boxes --
+ *
+ * The entries of the folder `path` (an absolute path), names only --
+ * no "." or ".." -- packed NUL-terminated into `names` (cap bytes),
+ * isdir[i] 1 for a folder. At most `max` of them; *truncated (may be
+ * NULL) says if cap or max cut the listing short. Returns how many, 0
+ * for an empty folder, or -1 if the folder could not be listed. In the
+ * filesystem's order: the caller sorts. */
+int ar_dir_list(const char *path, char *names, int cap, uint8_t *isdir,
+	int max, bool *truncated);
+
+/* -- colour in the window (docs/color.md, "The colour window") --
+ *
+ * Called before ar_init(): the program can draw in colour in its
+ * window, on a board built with the colour window. wm then gives the
+ * window the colour while it is focused and wholly uncovered: 32
+ * colours on an eight-plane board (8 on six), the program's indices
+ * 0..ar_colours()-1, through its palette as full screen is. ar_color()
+ * is true then, ar_mode() still AR_MODE_WINDOW, and AR_EV_MODE comes
+ * when it goes on or off; the picture is repainted either way.
+ *
+ * Drawing is as full screen in colour, ar_plane() and the other
+ * plane-at-a-time calls too (planes 0..log2(ar_colours())-1; plane 0
+ * is the desktop's own pixels), except ar_copy(), which says no
+ * (repaint instead). */
+void ar_window_colour(bool on);
 
 /* -- more than 16 colours --
  *
@@ -337,8 +447,9 @@ void ar_bitmap_opaque(const void *bits, int stride, int sx, int sy,
 	int x, int y, int w, int h);
 
 /* One bitplane of a rectangle, opaque: plane k (0..7) of each pixel
- * becomes its bit in `bits` (zgfx's layout, as ar_bitmap). Colour full
- * screen only -- elsewhere it draws nothing. One pass (the blitter's
+ * becomes its bit in `bits` (zgfx's layout, as ar_bitmap). In colour
+ * only (full screen, or the colour window), and only planes that
+ * colour has -- elsewhere it draws nothing. One pass (the blitter's
  * COPY), so the plane is never blank in between; a bitstream without
  * the blitter's ROPs clears and ORs. With a call per plane a
  * program draws a picture of any indices without a fill per colour:
@@ -348,7 +459,8 @@ void ar_plane(int k, const void *bits, int stride, int sx, int sy,
 
 /* -- one plane at a time: planes as layers --
  *
- * Colour full screen only (elsewhere these draw nothing), in logical
+ * In colour only, full screen or the colour window, and only the
+ * planes it has (elsewhere these draw nothing), in logical
  * coordinates, clipped to the picture. A program that gives groups of
  * planes to separate things -- a sky, a city, the rain -- draws and
  * scrolls each group without touching the others, and the palette
@@ -361,7 +473,11 @@ void ar_plane_or(int k, const void *bits, int stride, int sx, int sy,
 	int x, int y, int w, int h);
 void ar_plane_andn(int k, const void *bits, int stride, int sx, int sy,
 	int x, int y, int w, int h);
-/* A line in plane k, by the line rasterizer: op 0 clear, 1 set, 2 XOR. */
+/* A line in plane k, by the line rasterizer: op 0 clear, 1 set, 2 XOR.
+ * Unlike the calls above, also in black and white -- the window, mono
+ * full screen -- where plane 0 is the picture (a covered window's
+ * line cut to what shows): a wireframe game (space3d) draws the same
+ * lines in every mode. */
 void ar_plane_line(int k, int x0, int y0, int x1, int y1, int op);
 /* The same line, only its pixels in rows y0clip..y1clip (inclusive):
  * the same pixels a whole line would set there, so a line drawn a band

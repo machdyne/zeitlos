@@ -51,12 +51,16 @@ Word-addressed, matching every other simple slave in this codebase.
 | `0x7000_0228` | DDMI | DDMI audio: bit 0 EN (data islands, InfoFrames and sound on the DDMI output, from the next frame; resets to 0), bit 1 SOUND (with EN, the audio too; resets to 1), bits 7:4 FS (channel-status rate code), bit 8 avail and bit 9 sound avail (R/O), bits 13:12 REP (each frame sent 2^REP times). Reads back as `{0x5A44, ...}`. EN is set by the kernel from `system.video.ddmi_audio`; FS and REP by `zaudio.h` with the rate. See [ddmi_audio.md](ddmi_audio.md). |
 | `0x7000_022c` | ACRN | DDMI audio clock regeneration N, `[19:0]`; set by `zaudio.h`, resets to the power-on rate's. |
 | `0x7000_0230` | ACRCTS | ... and CTS, `[19:0]`. The display rebuilds 128 fs as 25.2 MHz × N / CTS. |
+| `0x7000_0240` | COLWIN | the colour window: bits 9:0 x0, bits 25:16 y0, bit 31 EN; adopted at the next frame boundary with GAME/VIEW/COLOR. Reads back as `{0x5A57, avail, 14'b0, en}`. **Entering game mode clears EN.** See [color.md](color.md#the-colour-window). |
+| `0x7000_0244` | COLWINEND | its other corner, exclusive: bits 9:0 x1, bits 25:16 y1. Written first; adopted with the next COLWIN. Reads back as written (0 without the window). |
 
-The decode is four address bits wide (sixteen words). It was three
-before COLOR and PALETTE, and those two sit at words 9 and 13 so that
-on an older bitstream they alias MAGIC and FRAME -- both read-only --
-and probing for colour there cannot disturb anything. See
-[color.md](color.md), "Why words 9 and 13".
+The decode is five address bits wide (thirty-two words), for the
+colour window's words 16 and 17; on a four-bit bitstream those alias
+CTRL and MAGIC, so software reads COLWIN's signature before writing
+either. It was three before COLOR and PALETTE, and those two sit at
+words 9 and 13 so that on an older bitstream they alias MAGIC and FRAME
+-- both read-only -- and probing for colour there cannot disturb
+anything. See [color.md](color.md), "Why words 9 and 13".
 
 MAGIC exists for the same reason `csrs.v` has one: reading an address
 nothing decodes does **not** fault on this bus, so a known constant is

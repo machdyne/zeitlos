@@ -4,22 +4,25 @@ The function keys mean the same thing in every app.
 
 | Key | Means | |
 |---|---|---|
-| **F1** | **Help** | the app's help box ([app_help.md](app_help.md)), in a window and in a full-screen window; **in game mode, nothing** |
+| **F1** | **Help** | the app's help box ([app_help.md](app_help.md)), in a window and in a full-screen window; a screen or full-screen app on the screen toolkit shows its help inside itself, in game mode too ([screen_ui.md](screen_ui.md)); others: **in game mode, nothing** |
 | **F2** | **Rename / edit in place** | `files`: rename; `sheet`: edit the cell |
 | **F3** | **Search / next** | no search yet: ask what to find (as Ctrl+F); then the next match -- `text`, `sheet`, `web`, `files` |
 | **F4** | **The app's prompt** | gives the command or input box the focus -- `sheet`'s command line (and its `/` menu), `slide`'s command line, `web`'s address field; in apps whose prompt always has the focus (`chess`, the casino tables, `basic`, `ask`, `mesh`, `irc`) typing goes there anyway |
 | **F5-F8** | **The app's own** | listed in its F1 box -- `web` F5 reload, `files` F5 read the folder again, `sheet` F5 chart, `bench` F5/F6, `midi` F5-F7, `mesh` F5/F6, `chip8` F5-F8, `slide` F5 show, F6 all cards, F7 the deck as an app, `backup` F5 look at the drive again, `pix` F5 play (Shift: the animation), F6 onion skin, F7 fewer colours, F8 the palette |
-| **F9, F10** | **Reserved** | bound by nothing, for later |
-| **F11** | **Full screen** | a resizable window: full screen -- the whole screen, no titlebar, no dock (wm does it); an app with a game mode: game mode |
+| **F9** | **Reserved** | bound by nothing, for later |
+| **F10** | **Colour** | a screen app on the arcade runtime: colour on or off -- in the window the colour window ([color.md](color.md)), full screen game mode's colour (as C); a dual app ([app_kinds.md](app_kinds.md)): its 320x240 colour screen and back to its desktop window; `mausrun` as a screen app (it is always full screen); the colour titlebar icon (a rainbow) does the same; bound by nothing else |
+| **F11** | **Full screen** | a resizable window (a desktop app): full screen -- the whole screen, no titlebar, no dock (wm does it); a screen app: the window or game mode ([app_kinds.md](app_kinds.md)) |
 | **F12** | **App home / reserved** | back to where the app starts -- `term` (disconnect, the welcome panel), `web` (the page it started with, or the bookmarks), `files` (the folder it started in); elsewhere reserved |
 
 A key with a meaning is that meaning or nothing: an app that has no
 use for it leaves it unbound rather than giving it another job.
 
 In code the meanings have names (`sw/common/zkbd.h`): `Z_KEY_HELP`,
-`Z_KEY_RENAME`, `Z_KEY_FIND`, `Z_KEY_PROMPT`, `Z_KEY_FULL_SCREEN`,
-`Z_KEY_APP_HOME`. `tools/check_fkeys.py` runs with every apps build and
-fails it for a meaning key bound by number, anything on F9 or F10,
+`Z_KEY_RENAME`, `Z_KEY_FIND`, `Z_KEY_PROMPT`, `Z_KEY_COLOUR`,
+`Z_KEY_FULL_SCREEN`, `Z_KEY_APP_HOME`. `tools/check_fkeys.py` runs with
+every apps build and fails it for a meaning key bound by number,
+anything on F9, F10 outside the runtime (or listed as anything but
+colour),
 F12 outside the apps with a home, or a help text that puts full screen
 on another key.
 
@@ -79,7 +82,7 @@ type -- a cell, a text box -- and there F4 still works.
 | `space3d`, `chess`, `blackjack`, `craps`, `poker`, `roulette`, `slots`, `kidgames`, `snake`, `blocks`, `bricks` | full screen on F2 | F11 |
 | `basic`, `chip8` | full screen on F6 | F11 |
 | every resizable window | Alt+= maximize only | F11 full screen (Alt+= still maximizes) |
-| `chess`, the casino tables | F1 in game mode: a rolling help line | nothing; the tables' F1 in a window is now a help box |
+| `chess`, the casino tables | F1 in game mode: a rolling help line | a help box on the desktop face, the screen's help on the screen face (they are dual apps) |
 | `chip8` | F1-F3 scale, F4 profile, F6 game mode, F7/F8 speed, F9 screenshot, F10 debugger, F11 step, F12 run/pause | F1 help, F5 reset (Shift: profile), F6 scale (Shift: greys), F7 debugger (Shift: screenshot), F8 run/pause (Shift: step), - = speed, F11 game mode |
 | `term` | F1 help box on the panel, F11 the Open bar | F1-F10 to the program; F11 full screen; Open bar by typing on the panel |
 | `midi` | F2 drums, F3 mono, F4 panic | F5, F6, F7 |

@@ -2,15 +2,19 @@
  * basic -- the BASIC computer: Machdyne BASIC (sw/ext/basic) on a
  * 320x240 screen of its own, in a window or full screen. docs/basic_app.md.
  *
- * The screen (bscreen.c) is an image in this process's memory; this file
- * copies it to the window, or full screen to a game-mode page. Keys come
- * from wm as Z_WM_KEY in both modes: full screen, the game grab sends
- * them here, already through the keyboard layout.
+ * The screen (bscreen.c) is an image in this process's memory, shown
+ * through the arcade runtime (sw/common/games/zarcade.h, docs/arcade.md):
+ * the runtime keeps the window and full screen, in black and white or in
+ * colour, and its colour window on a board that has one (docs/color.md);
+ * paint() draws the rows bscreen says changed, a plane at a time in
+ * colour. F1 is the runtime's: the help on BASIC's own screen (the
+ * screen toolkit, ui/sui.h), in the window and full screen alike.
  *
  * A program runs inside basic_yield(). The interpreter asks hw_break() at
  * every program line and hw_delay_ms() while it waits; both keep this app
- * alive: they read wm's messages (redraws, keys, Escape to stop) and show
- * the screen at most once per video frame.
+ * alive: they read the runtime's events (keys, Escape to stop, the window
+ * closed) and draw a frame when one is due (ar_frame_due()), never
+ * waiting for one in between.
  *
  * BASIC is kept apart from the rest of the system: its files are in
  * /data/basic and nowhere else, FORMAT is not available, and it has no pins.
@@ -18,12 +22,17 @@
  * It is also the port provider basic0: a terminal (term: F11, port
  * basic0) can connect and type into the same BASIC, text only. Keys from
  * there are decoded (bterm.c) into the keysyms wm sends, so both go the
- * same way; everything printed goes to the screen and the terminal.
+ * same way; everything printed goes to the screen and the terminal. The
+ * port's messages come through the runtime (ar_msg_hook()).
  *
- * The message handler never prints: keys from either side wait in an
- * inbox and are acted on after the messages are read. Printing to the
- * port may have to read messages (acks) to make room, and a handler that
- * printed would be called from inside its own printing.
+ * Reading events never prints: keys from either side wait in an inbox
+ * and are acted on after the events are read. Printing to the port may
+ * have to read messages (acks) to make room, and a handler that printed
+ * would be called from inside its own printing.
+ *
+ * On a build host (-DAR_HOST_TESTS, tests/render.c) the same file runs
+ * on the runtime's software framebuffer, without the port, the pins or
+ * files.
  */
 
 #include <stdio.h>
@@ -32,18 +41,19 @@
 #include <string.h>
 
 #include "../../common/zpaths.h"
+#include "../../common/zkbd.h"
+#include "../../common/games/zarcade.h"
+#include "../../ext/basic/basic.h"
+
+#ifndef AR_HOST_TESTS
 #include "../../common/zeitlos.h"
 #include "../../common/zsoc.h"
 #include "../../common/zwm.h"
-#include "../../common/zwin.h"
 #include "../../common/zgfx.h"
-#include "../../common/zkbd.h"
 #include "../../common/zfsapp.h"
-#include "../../common/zdialog.h"
-#include "../../common/zcolor.h"
 #include "../../common/zport.h"
 #include "../../common/zi2cx.h"
-#include "../../ext/basic/basic.h"
+#endif
 
 #include "bscreen.h"
 #include "bedit.h"
@@ -56,30 +66,25 @@
 
 static bscreen_t scr;
 static bedit_t ed;
-static z_win_t win;
 
-static bool full;                   /* full screen (game mode) */
-static int page;                    /* the game-mode page drawn next */
-static bool full_colour;            /* full screen, in hardware colour */
 static uint32_t grey[BS_PLANE_WORDS];   /* bs_mono(): colour in black and white */
 static bool quit;
 static bool stop;                   /* Escape or Ctrl-C while running */
 static bool line_ready;
-static uint32_t last_shown;
 static uint8_t keys[32];            /* KEY: pressed while running */
 static int nkeys;
 
 static uint32_t inbox[64];          /* keysyms, from wm and the terminal */
 static int in_head, in_tail;
 
+#ifndef AR_HOST_TESTS
 static z_port_t tport;              /* a terminal on basic0 */
 static bterm_t tdec;
 static bool greet;                  /* a terminal has just connected */
 static char name[24] = "basic";
+#endif
 
 static void pump(void);
-
-static void on_msg(z_msg_t *msg, void *user);
 
 bscreen_t *bp_screen(void) {
     return &scr;
@@ -87,121 +92,85 @@ bscreen_t *bp_screen(void) {
 
 /* ---- showing the screen ---- */
 
-/* The picture a monochrome display shows: plane 0 itself, or -- once a
- * program has used colour -- paper black, the rest white (bs_mono()), rows
- * y0..y1-1 brought up to date. */
-static const uint32_t *mono_rows(int y0, int y1) {
-    if (!scr.colour) return scr.px;
-    bs_mono(&scr, y0, y1, grey);
-    return grey;
-}
-
-static void show_window(bool all) {
-    z_clip_t cc;
-    int y0 = 0, y1 = BS_H, n;
-    const uint32_t *img;
-    if (!all && !bs_dirty(&scr, &y0, &y1)) return;
-    img = mono_rows(y0, y1);
-    z_win_content_rect(&win, &cc);
-    n = z_gfx_visible_count();
-    if (n == 0) n = 1;
-    for (int i = 0; i < n; i++) {
-        if (!z_gfx_blit_scissor(i, &cc)) continue;
-        z_fb_hw_blit_mem(img, BS_STRIDE, 0, y0, cc.x0, cc.y0 + y0, BS_W, y1 - y0);
-    }
-    z_gfx_blit_scissor_reset();
-}
-
-/* Full screen in colour (docs/color.md): the four planes into the four
- * quadrants, the viewport at (0,0), through the palette.
+/* The runtime asks for the picture inside r (logical, 8-pixel tiles).
  *
- * SINGLE-BUFFERED. Sixteen colours use all four quadrants, so there is
- * no page left to draw into while another is shown. The rows that
- * changed are copied straight after a frame boundary, which keeps a
- * small change clear of the picture being scanned; a whole-screen
- * change can show half drawn for one frame. SYNC still paces a
- * program to the display.
+ * In black and white (the window, mono full screen): plane 0 itself, or
+ * -- once a program has used colour -- bs_mono()'s picture, paper black
+ * and the rest white.
  *
- * Entered the first time a picture with colour is shown full screen --
- * which may be in the middle of a program, the moment it first says
- * INK -- so it starts with the whole image. */
-static void show_full_colour(bool all) {
-    int y0 = 0, y1 = BS_H;
-    const void *planes[4] = { scr.px, scr.pl[0], scr.pl[1], scr.pl[2] };
-    if (!full_colour) {
-        z_color_begin(&z_color_16);
-        z_game_set_view(0, 0);
-        full_colour = true;
-        all = true;
-        scr.pal_dirty = true;
-    }
-    if (!all && !bs_dirty(&scr, &y0, &y1)) y1 = y0;
-    z_game_wait_frame();
-    if (scr.pal_dirty) {
-        z_color_palette_load_now(scr.pal, 16);
-        bs_pal_clean(&scr);
-    }
-    z_gfx_blit_scissor_reset();
-    if (y1 > y0)
-        z_color_blit_planes(&z_color_16, planes, BS_STRIDE, 0, y0,
-            0, y0, BS_W, y1 - y0);
-}
-
-/* Full screen: the whole image into the page not on screen, then that
- * page is shown at the next frame boundary. Both pages are drawn in
- * turn, so each gets the whole image. With colour but no colour
- * hardware, the image is bs_mono()'s black and white. */
-static void show_full(bool all) {
-    int px = page * Z_GAME_VIEW_W;
-    if (scr.colour && z_color_available()) {
-        show_full_colour(all);
+ * In colour (full screen, or the colour window): the four planes as
+ * they are, through BASIC's palette; planes 1..3 are blank until a
+ * program uses colour, and any plane past them (the colour window's
+ * fifth) is blank. */
+static void paint(void *user, const ar_rect_t *r) {
+    int k, n;
+    (void)user;
+    if (!ar_color()) {
+        const uint32_t *img = scr.px;
+        if (scr.colour) {
+            bs_mono(&scr, r->y, r->y + r->h, grey);
+            img = grey;
+        }
+        ar_bitmap_opaque(img, BS_STRIDE, r->x, r->y, r->x, r->y, r->w, r->h);
         return;
     }
-    z_gfx_blit_scissor_reset();
-    z_fb_hw_blit_mem(mono_rows(0, BS_H), BS_STRIDE, 0, 0, px, 0, BS_W, BS_H);
-    z_game_set_view((uint32_t)px, 0);
-    z_game_wait_frame();
-    page ^= 1;
+    for (n = 1; (1 << n) < ar_colours(); n++) ;
+    ar_plane(0, scr.px, BS_STRIDE, r->x, r->y, r->x, r->y, r->w, r->h);
+    for (k = 1; k < n; k++) {
+        if (k <= 3 && scr.colour)
+            ar_plane(k, scr.pl[k - 1], BS_STRIDE, r->x, r->y, r->x, r->y, r->w, r->h);
+        else
+            ar_plane_fill(k, r->x, r->y, r->w, r->h, 0);
+    }
 }
 
-static void show(bool all) {
-    if (full) show_full(all);
-    else show_window(all);
-    bs_clean(&scr);
-    last_shown = z_uptime_ticks();
-}
+static const char help_text[] =
+    "A small home computer: type BASIC, PRINT and draw on a "
+    "320x240 screen of its own.\n\n"
+    "Enter\tRun the line, or store a numbered one\n"
+    "Backspace\tErase the last character\n"
+    "Up\tRecall the last line entered\n"
+    "Esc\tErase the line; stop a running program\n"
+    "Ctrl+C\tStop a running program\n"
+    "F10\tColour on or off\n"
+    "F11\tFull screen, or back to the window\n\n"
+    "Number each line (10 PRINT \"HELLO\"), then RUN. LIST, "
+    "SAVE name, LOAD name and DIR work on " Z_DIR_BASIC_PROGRAMS "; HELP "
+    "lists every command.";
 
-/* if anything changed, and a frame has passed since the last time */
-static void show_now_and_then(void) {
+static ar_desc_t desc = {
+    .name = "BASIC",
+    .help_title = "BASIC help",
+    .help_text = help_text,
+    .help_doc = "basic_app",
+    .paint = paint,
+};
+
+/* What changed since the last frame, to the runtime: the palette, and
+ * the rows bscreen marked. */
+static void mark(void) {
     int y0, y1;
-    if (bs_dirty(&scr, &y0, &y1) && z_uptime_ticks() - last_shown >= FRAME_TICKS)
-        show(false);
+    if (scr.pal_dirty) {
+        ar_pal_load(scr.pal, 16);
+        bs_pal_clean(&scr);
+    }
+    if (bs_dirty(&scr, &y0, &y1)) {
+        ar_dirty(0, y0, BS_W, y1 - y0);
+        bs_clean(&scr);
+    }
+}
+
+/* A frame: what changed is drawn at the next boundary (at once when one
+ * is due). */
+static void frame(void) {
+    mark();
+    ar_frame();
 }
 
 /* ---- full screen ---- */
 
 bool bp_full_screen(bool on) {
-    uint32_t wm_pid;
-    if (on == full) return true;
-    if (on) {
-        if (!z_game_available()) return false;
-        z_gfx_clear_visible();
-        z_gfx_blit_scissor_reset();
-        z_fb_hw_fill_rect(0, 0, 640, 480, 0);
-        z_game_set_enabled(true, false);        /* and the game grab */
-        full = true;
-        full_colour = false;
-        page = 0;
-        show(true);
-        return true;
-    }
-    z_game_set_enabled(false, false);       /* colour goes off with it */
-    full = false;
-    full_colour = false;
-    /* every window is where it was, but this app drew over them */
-    if (z_pid_lookup("wm0", &wm_pid))
-        z_msg_new_send(wm_pid, Z_WM_REPAINT, 0, z_obj_uint32(0));
-    return true;
+    return ar_set_fullscreen(on);
 }
 
 /* ---- keys ---- */
@@ -214,31 +183,9 @@ static void inbox_add(uint32_t k) {
     }
 }
 
+/* F1 and F11 are the runtime's (help on this screen; full screen, or
+ * back); Escape is BASIC's in full screen too (ar_escape_leaves()). */
 static void key(uint32_t k) {
-    if (k == Z_KEY_HELP && !full) {             /* docs/app_help.md */
-        /* in the window only: full screen, a box on the desktop
-         * underneath would take the keys without being seen */
-        static const char help[] =
-            "A small home computer: type BASIC, PRINT and draw on a "
-            "320x240 screen of its own.\n\n"
-            "Enter\tRun the line, or store a numbered one\n"
-            "Backspace\tErase the last character\n"
-            "Up\tRecall the last line entered\n"
-            "Esc\tErase the line; stop a running program\n"
-            "Ctrl+C\tStop a running program\n"
-            "F11\tFull screen, or back to the window\n\n"
-            "Number each line (10 PRINT \"HELLO\"), then RUN. LIST, "
-            "SAVE name, LOAD name and DIR work on " Z_DIR_BASIC_PROGRAMS "; HELP "
-            "lists every command.";
-        z_dialog_ctx_t ctx = { &win, on_msg, NULL };
-        z_dialog_help(&ctx, "BASIC help", help, "basic_app");
-        show(true);
-        return;
-    }
-    if (k == Z_KEY_FULL_SCREEN) {               /* full screen, or back */
-        bp_full_screen(!full);
-        return;
-    }
     if (basic_running) {
         if (k == 0x1B || k == 0x03) {           /* Escape, Ctrl-C */
             stop = true;
@@ -262,6 +209,7 @@ uint8_t bp_key(void) {
 
 /* ---- the terminal on basic0: output batched, as UTF-8 ---- */
 
+#ifndef AR_HOST_TESTS
 #define TOUT 512
 static char tout[TOUT];
 static int tout_len;
@@ -295,37 +243,10 @@ static void tput(uint8_t c) {
     if (c == '\n') tflush();
 }
 
-/* everything BASIC and the editor print: the screen and the terminal */
-static void emit(uint8_t c) {
-    bs_putc(&scr, c);
-    tput(c);
-}
-
-/* ---- messages ---- */
-
-static void on_msg(z_msg_t *msg, void *user) {
-    (void)user;
+/* The port's messages, as the runtime reads them (ar_msg_hook()) */
+static void port_msg(void *mp) {
+    z_msg_t *msg = (z_msg_t *)mp;
     switch (msg->subject) {
-    case Z_WM_SET_CLIP:
-        z_win_apply_clip(&win, &msg->obj);
-        break;
-    case Z_WM_REDRAW:
-        z_win_apply_redraw(&win, msg->obj.val.uint32);
-        if (!full) show_window(true);
-        /* acked full screen too: wm waits for it before the next
-         * window's redraw */
-        z_win_redraw_done(&win);
-        break;
-    case Z_WM_WINDOW_MOVED:
-        z_win_parse_rect(&win, &msg->obj);
-        break;
-    case Z_WM_WINDOW_RESIZED:                   /* open_window()'s resize */
-        z_win_apply_resized(&win, &msg->obj);
-        break;
-    case Z_WM_KEY:
-        if (Z_WM_UNPACK_KEY_PRESSED(msg->obj.val.uint32))
-            inbox_add(Z_WM_UNPACK_KEY_KEYSYM(msg->obj.val.uint32));
-        break;
     case Z_PORT_CONNECT:
         if (tport.connected) {
             z_port_refuse(msg, "basic: a terminal is already connected");
@@ -352,25 +273,33 @@ static void on_msg(z_msg_t *msg, void *user) {
     case Z_PORT_CLOSE:
         if (tport.connected && msg->from == tport.peer_pid) z_port_close(&tport);
         break;
-    case Z_WM_GAME_REVOKED:                     /* wm took the screen back */
-        full = false;
-        full_colour = false;                    /* and colour with it */
-        break;
-    case Z_WM_CLOSE:
-        quit = stop = true;
-        break;
     default:
         break;
     }
 }
+#else
+static void tflush(void) { }
+static void tput(uint8_t c) { (void)c; }
+#endif
 
-/* read the messages; nothing is printed */
-static void pump(void) {
-    z_msg_t msg;
-    while (z_msg_read(&msg) == Z_OK) on_msg(&msg, NULL);
+/* everything BASIC and the editor print: the screen and the terminal */
+static void emit(uint8_t c) {
+    bs_putc(&scr, c);
+    tput(c);
 }
 
-/* read the messages, then act on the keys and a new terminal */
+/* ---- events ---- */
+
+/* read the events; nothing is printed */
+static void pump(void) {
+    ar_event_t e;
+    while (ar_poll(&e)) {
+        if (e.type == AR_EV_KEY && e.pressed) inbox_add(e.key);
+        else if (e.type == AR_EV_QUIT) quit = stop = true;
+    }
+}
+
+/* read the events, then act on the keys and a new terminal */
 static void messages(void) {
     pump();
     while (in_head != in_tail) {
@@ -378,6 +307,7 @@ static void messages(void) {
         in_head = (in_head + 1) % (int)(sizeof(inbox) / sizeof(inbox[0]));
         key(k);
     }
+#ifndef AR_HOST_TESTS
     if (greet) {
         static const char hello[] =
             "MACHDYNE BASIC 1 -- text here; graphics in the BASIC window\r\n";
@@ -388,22 +318,8 @@ static void messages(void) {
             for (int i = 0; i < ed.len; i++) tput((uint8_t)ed.line[i]);
         }
     }
+#endif
     tflush();
-}
-
-static bool open_window(void) {
-    /* The size that gives the screen its own 320x240 pixels, asked for
-     * once. It used to be measured from a first window, which was then
-     * closed and opened again at the right size (as chip8 still does);
-     * in that moment term, underneath, got the area back, was asked to
-     * repaint it and lost it again, and its text and scrollbar were left
-     * inside the BASIC window. Resizing the first window instead hung
-     * the demo. The frame is a constant (zwin.h), so neither is needed:
-     * one window, the right size, where the script asked for it. */
-    return z_win_create_cb(&win, "BASIC", (uint32_t)(BS_W + Z_WIN_CHROME_W),
-            (uint32_t)(BS_H + Z_WIN_CHROME_H), -1, -1,
-            Z_WIN_FLAG_CLOSE_ICON | Z_WIN_FLAG_GAME_MODE,
-            on_msg, NULL) == Z_OK;
 }
 
 /* ---- what the interpreter asks of the system (basic.h) ---- */
@@ -412,35 +328,48 @@ void hw_putc(char c) {
     emit((uint8_t)c);
 }
 
+/* Every program line: the events, and a frame if one is due -- never a
+ * wait. */
 int hw_break(void) {
     messages();
-    show_now_and_then();
+    if (ar_frame_due()) frame();
     return stop;
 }
 
+/* The time, in ticks of TICK_HZ: on a build host it moves a frame at a
+ * time, with ar_frame(). */
+#ifndef AR_HOST_TESTS
+static uint32_t now(void) { return z_uptime_ticks(); }
+#else
+static uint32_t now(void) { return ar_ticks() * TICK_HZ / 60u; }
+#endif
+
+/* Frames while there is a frame or more to wait, then the rest asleep. */
 void hw_delay_ms(uint16_t ms) {
-    uint32_t start = z_uptime_ticks(), span = (uint32_t)ms * TICK_HZ / 1000;
-    while (!stop && z_uptime_ticks() - start < span) {
-        uint32_t left = span - (z_uptime_ticks() - start);
+    uint32_t start = now(), span = (uint32_t)ms * TICK_HZ / 1000;
+    while (!stop && now() - start < span) {
+        uint32_t left = span - (now() - start);
         messages();
-        show_now_and_then();
-        z_proc_wait(left < FRAME_TICKS ? left : FRAME_TICKS);
+#ifndef AR_HOST_TESTS
+        if (left < FRAME_TICKS) {
+            if (ar_frame_due()) frame();
+            z_proc_wait(left);
+            continue;
+        }
+#else
+        (void)left;
+#endif
+        frame();
     }
 }
 
+/* SYNC: what was drawn, shown at the next frame boundary. */
 void bp_sync(void) {
-    uint32_t f;
-    show(true);                                 /* full screen: waits a frame */
-    if (full) return;
-    f = z_game_present() ? z_game_frame() : 0;
-    for (int i = 0; i < 4 && !stop; i++) {      /* at most about 4 frames */
-        messages();
-        if (z_game_present() && z_game_frame() != f) return;
-        z_proc_wait(FRAME_TICKS / 4);
-        if (!z_game_present()) return;
-    }
+    messages();
+    frame();
 }
 
+#ifndef AR_HOST_TESTS
 /* Pins 3 and 4 (C, D) as I2C, on the bench bus a netlist gives the
  * BASIC computer (`basic BUS`, docs/bench.md), through zi2cx: opened
  * again at every PINS, so a netlist reloaded in bench is used by the
@@ -450,10 +379,11 @@ void bp_sync(void) {
 static z_i2cx_t i2c_bus;
 static bool i2c_open;
 
-/* while zi2cx waits for bench: wm's messages and the terminal's, into
- * the app's own handler (it never prints: keys wait in the inbox) */
+/* while zi2cx waits for bench: wm's messages and the terminal's, to the
+ * runtime as ar_poll() would have read them (nothing is printed: keys
+ * wait in the runtime's queue and the inbox) */
 static void i2c_other(z_msg_t *m) {
-    on_msg(m, NULL);
+    ar_msg(m);
 }
 
 int hw_pin_mode(uint8_t pin, uint8_t mode) {
@@ -561,6 +491,8 @@ int hw_fformat(void) {
     return HW_ERR_UNSUPPORTED;      /* a learning machine: no FORMAT */
 }
 
+#endif /* !AR_HOST_TESTS: the pins and the files */
+
 /* ---- the BASIC computer ---- */
 
 static void say(const char *s) {
@@ -587,33 +519,45 @@ static void enter(void) {
 }
 
 int main(void) {
+#ifndef AR_HOST_TESTS
     if (!z_fb_hw_blit_mem_available()) {
         printf("basic: this bitstream's blitter has no memory copy mode\n");
         return 1;
     }
     fs_mkdir(DIR);                  /* (already there is fine) */
+#endif
     bs_init(&scr);
     be_init(&ed, &scr);
     ed.out = emit;
+    memcpy(desc.palette, scr.pal, sizeof(desc.palette));
+    desc.ink[1] = ar_ink_white;
+#ifndef AR_HOST_TESTS
     z_pid_register("basic", name, sizeof(name));    /* basic0, for term */
-    if (!open_window()) {
+    /* colour in the window where it is all sixteen colours: 32 on an
+     * eight-plane board (8, on six, would show half of them wrong) */
+    ar_window_colour(z_color_window_planes() >= 4);
+    ar_msg_hook(port_msg);
+#else
+    ar_window_colour(true);
+#endif
+    if (!ar_init(&desc)) {
         printf("basic: no window (is wm running?)\n");
         return 1;
     }
+    ar_text_input(true);            /* C and M are letters */
+    ar_escape_leaves(false);        /* Escape stops a program, full screen too */
     say("MACHDYNE BASIC 1\r\n\r\n");
     if (basic_boot()) {             /* /data/basic/BOOT.BAS */
         static char run[] = "RUN";
         basic_yield((uint8_t *)run);
     }
     ready();
-    show(true);
     while (!quit) {
         messages();
         if (line_ready) enter();
-        show_now_and_then();
-        if (!line_ready && !quit) z_proc_wait(bs_dirty(&scr, &(int){0}, &(int){0}) ? 1 : 100);
+        if (!quit) frame();
     }
-    if (full) bp_full_screen(false);
+#ifndef AR_HOST_TESTS
     if (tport.connected) {
         static const char bye[] = "\r\nBASIC has closed\r\n";
         tout_len = 0;
@@ -621,6 +565,7 @@ int main(void) {
         tflush();
         z_port_close(&tport);
     }
-    z_win_destroy(&win);
+#endif
+    ar_shutdown();
     return 0;
 }

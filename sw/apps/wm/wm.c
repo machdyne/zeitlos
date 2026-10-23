@@ -947,6 +947,7 @@ static const titlebar_icon_t titlebar_icon_table[] = {
 	{ Z_WIN_FLAG_OPEN_ICON,  Z_ICON_OPEN,  Z_WM_TBICON_OPEN  },
 	{ Z_WIN_FLAG_NEW_ICON,   Z_ICON_NEW,   Z_WM_TBICON_NEW   },
 	{ Z_WIN_FLAG_FONT_ICON,  Z_ICON_FONT,  Z_WM_TBICON_FONT  },
+	{ Z_WIN_FLAG_COLOUR_ICON, Z_ICON_COLOUR, Z_WM_TBICON_COLOUR },
 };
 #define TITLEBAR_ICON_TABLE_COUNT \
 	(int)(sizeof(titlebar_icon_table) / sizeof(titlebar_icon_table[0]))
@@ -3179,9 +3180,15 @@ static bool thaw_pending[WM_MAX_WINDOWS];  // thawed with no REDRAW: honour DREW
 static bool clip_acked[WM_MAX_WINDOWS];    // acks seen since the last freeze round
 #define FREEZE_ACK_TIMEOUT_MS   300
 
+// The window told it has the colour window, or -1 (colour_window_update(),
+// below): frozen or covered, its COLWIN is cleared before anything is
+// drawn over it.
+static int8_t cw_idx = -1;
+
 static bool send_clip_freeze(int idx) {
 	z_wm_cliprect_t ctl = { Z_WM_CLIP_CTL, Z_WM_CLIP_FREEZE, 0, 0 };
 	if (idx < 0 || idx >= WM_MAX_WINDOWS || !windows[idx].used) return false;
+	if (idx == cw_idx) reg_socctl_colwin = 0;
 	if (windows[idx].owner_pid == my_pid) return false;   // wm draws its own
 	if (z_msg_new_send(windows[idx].owner_pid, Z_WM_SET_CLIP, 0,
 			clip_payload(idx, &ctl, 1)) != Z_OK)
@@ -3334,6 +3341,38 @@ static int window_visible_region(int idx, z_clip_t *out, int max) {
 }
 
 // Returns true if a REDRAW was sent (the visible region gained pixels).
+// -- the colour window (docs/color.md, "The colour window") --
+//
+// The focused window, when it can show colour (Z_WIN_FLAG_COLOR: a
+// screen app on the arcade runtime, set only on a board with the
+// colour window), hears Z_WM_COLOR 1: it may take the second VRAM
+// sheet's planes. It then sets socctl's COLWIN itself while nothing
+// covers it and clears it when something does (the runtime, which
+// knows its region and its frame). wm's part is only who: on a focus
+// change it clears COLWIN and tells the old window 0 and the new one
+// 1; and the moment that window's region narrows or freezes (something
+// about to be drawn over it) it clears COLWIN, before drawing.
+//
+// No probe for the register: nothing writes it unless a window with
+// the flag exists, and the flag means the bitstream has it (on one
+// that decodes four address bits, word 16 is CTRL). The decision is the
+// app's, not wm's, for wm's RAM budget.
+static void __attribute__((noinline)) cw_tell(int idx, uint32_t on) {
+	z_msg_new_send(windows[idx].owner_pid, Z_WM_COLOR, (uint32_t)idx,
+		z_obj_uint32(on));
+}
+
+static void colour_window_update(void) {
+	int f = WM_HIDDEN() ? -1 : focused;
+	if (f >= 0 && !(windows[f].used && (windows[f].flags & Z_WIN_FLAG_COLOR)))
+		f = -1;
+	if (f == cw_idx) return;
+	reg_socctl_colwin = 0;
+	if (cw_idx >= 0 && windows[cw_idx].used) cw_tell(cw_idx, 0);
+	if (f >= 0) cw_tell(f, 1);
+	cw_idx = (int8_t)f;
+}
+
 static bool send_clip_ex(int idx, bool do_redraw) {
 
 	if (idx < 0 || idx >= WM_MAX_WINDOWS) return false;
@@ -3448,6 +3487,9 @@ static bool send_clip_ex(int idx, bool do_redraw) {
 	frozen_sent[idx] = false;
 	clip_acked[idx] = false;
 	thaw_pending[idx] = thaw_same;
+	// covered: the colour off before anything is drawn over it (the
+	// app sets it again when it is whole)
+	if (idx == cw_idx && narrowing) reg_socctl_colwin = 0;
 	if (thaw_same) return false;
 
 	// NO WAIT. Neither for the region ack nor for the widening
@@ -4908,7 +4950,23 @@ static uint32_t kbd_dead;
 // released in another would release a different character -- both
 // harmless to an app that acts on presses, and a stuck key to one that
 // tracks what is held.
-static uint32_t kbd_sent[256];
+//
+// Sixteen bits a key, not 32 (512 bytes of wm's RAM budget, which the
+// colour window's code took): a keysym in the Basic Multilingual Plane
+// as it is, 0xFFFF (not a character) for "dropped". A named key (the
+// arrows, F1.., zkbd.h) or a character above the BMP is not recorded,
+// so its release is translated from the key itself, as for a key with
+// no record -- no layout changes what a named key is.
+#define KBD_SENT_DROP16 0xFFFFu
+static uint16_t kbd_sent[256];
+
+static uint16_t kbd_pack(uint32_t k) {
+	return k < 0xFFFFu ? (uint16_t)k : 0;
+}
+
+static uint32_t kbd_unpack(uint16_t v) {
+	return v == KBD_SENT_DROP16 ? KBD_SENT_DROP : v;
+}
 
 // The layout label shown briefly over the right end of the dock after
 // a switch -- see draw_dock().
@@ -5421,7 +5479,7 @@ static void dispatch_keys(void) {
 			// comment). A key with no record -- a dead key, or one
 			// pressed before wm started -- falls back to translating
 			// the release itself, as before layouts.
-			uint32_t sent = kbd_sent[usage];
+			uint32_t sent = kbd_unpack(kbd_sent[usage]);
 			kbd_sent[usage] = 0;
 			if (sent == KBD_SENT_DROP) continue;
 			if (sent) keysym = sent;
@@ -5548,7 +5606,7 @@ static void dispatch_keys(void) {
 			if (plain && keysym < 0x80 && z_kbd_ime_takes(keysym)) {
 				n = z_kbd_ime_feed(&kbd_ime, keysym, out);
 				for (int i = 0; i < n; i++) forward_tap(out[i], 0);
-				kbd_sent[usage] = KBD_SENT_DROP;
+				kbd_sent[usage] = KBD_SENT_DROP16;
 				kbd_ime_show(before);
 				continue;
 			}
@@ -5556,7 +5614,7 @@ static void dispatch_keys(void) {
 				if (keysym == 0x7f || keysym == 0x1b) {
 					if (keysym == 0x7f) z_kbd_ime_backspace(&kbd_ime);
 					else { kbd_ime.n = 0; kbd_ime.pend[0] = 0; }
-					kbd_sent[usage] = KBD_SENT_DROP;
+					kbd_sent[usage] = KBD_SENT_DROP16;
 					kbd_ime_show(before);
 					continue;
 				}
@@ -5566,7 +5624,7 @@ static void dispatch_keys(void) {
 			}
 		}
 
-		if (pressed) kbd_sent[usage] = keysym;
+		if (pressed) kbd_sent[usage] = kbd_pack(keysym);
 
 		// Super+K -- the on-screen keyboard (docs/keyboard_app.md). By
 		// character, like the speech keys: the key marked K on this
@@ -6382,8 +6440,9 @@ static void handle_titlebar_icon_click(int idx, int kind) {
 
 	uint32_t owner = windows[idx].owner_pid;
 
-	printf("wm: titlebar icon %d clicked for window %d (owner=%ld)\n",
-		kind, idx, (long)owner);
+	if (wm_clip_debug)	/* per event: the debug switch only */
+		printf("wm: titlebar icon %d clicked for window %d (owner=%ld)\n",
+			kind, idx, (long)owner);
 
 	// same self-inflicted-damage guard every other notify path here
 	// has -- wm messaging itself would be a confusing way to wedge.
@@ -7891,6 +7950,9 @@ int main(void) {
 		// -- windows left behind by a process that has ended --
 		reap_orphans();
 
+		// -- the colour window: to the focused screen app, or nobody --
+		colour_window_update();
+
 		// -- a grab left behind by a process that has ended -- a game
 		// with no window (mausrun) that crashes would otherwise keep
 		// the screen, and every key, forever. Once a second.
@@ -7913,25 +7975,31 @@ int main(void) {
 		// -- keyboard (interrupt-captured, drained here) --
 		dispatch_keys();
 
+		// -- mouse --
+		vmouse_yield_to_usb();
+		int cx = get_cursor_x();
+		int cy = get_cursor_y();
+
 		// -- the cursor: none while a game holds the screen, unless
-		// it asked to keep it --
+		// it asked to keep it; none over the picture of a window that
+		// asked for none (Z_WIN_FLAG_NO_POINTER), unless a window is
+		// being dragged --
 		{
 			// kept only where the bitstream can draw it in the right
 			// place (socctl CTRL bit 2; bit 31 says it is there)
 			bool keep = game_grab_ptr && z_socctl_present() &&
 				(reg_socctl_ctrl & Z_SOCCTL_HAS_SCREEN);
-			if ((game_grab_pid != 0 && !keep) != wm_cursor_hidden ||
+			int over = game_grab_pid || dragging >= 0 ? -1 : hit_test(cx, cy);
+			bool hide = (game_grab_pid != 0 && !keep) || (over >= 0 &&
+				(windows[over].flags & Z_WIN_FLAG_NO_POINTER) &&
+				point_in_content(over, cx, cy));
+			if (hide != wm_cursor_hidden ||
 				(game_grab_pid != 0 && keep) != wm_cursor_screen) {
-				wm_cursor_hidden = game_grab_pid != 0 && !keep;
+				wm_cursor_hidden = hide;
 				wm_cursor_screen = game_grab_pid != 0 && keep;
 				wm_busy_apply();
 			}
 		}
-
-		// -- mouse --
-		vmouse_yield_to_usb();
-		int cx = get_cursor_x();
-		int cy = get_cursor_y();
 		uint8_t btn = get_mouse_btn();
 		if (cx != last_cx || cy != last_cy || btn != last_btn) {
 			lock_last_input = z_uptime_ticks();
@@ -7966,15 +8034,20 @@ int main(void) {
 				dbg_click_tick = z_uptime_ticks();
 			}
 
-			printf("wm: click port=%d raw=0x%08lx cx=%d cy=%d", mp,
-				(unsigned long)(mp == 0 ? reg_usb0_cursor : reg_usb1_cursor), cx, cy);
-			if (hit >= 0) {
-				printf(" -> hit win %d (x=%ld y=%ld w=%ld h=%ld) titlebar=%d\n",
-					hit, (long)windows[hit].x, (long)windows[hit].y,
-					(long)windows[hit].w, (long)windows[hit].h,
-					hit_titlebar(hit, cy));
-			} else {
-				printf(" -> no hit\n");
+			// Every click on the console, with wm_clip_debug only
+			// (it was always on: about 200 bytes of wm's flash budget,
+			// which the colour window needed).
+			if (wm_clip_debug) {
+				printf("wm: click port=%d raw=0x%08lx cx=%d cy=%d", mp,
+					(unsigned long)(mp == 0 ? reg_usb0_cursor : reg_usb1_cursor), cx, cy);
+				if (hit >= 0) {
+					printf(" -> hit win %d (x=%ld y=%ld w=%ld h=%ld) titlebar=%d\n",
+						hit, (long)windows[hit].x, (long)windows[hit].y,
+						(long)windows[hit].w, (long)windows[hit].h,
+						hit_titlebar(hit, cy));
+				} else {
+					printf(" -> no hit\n");
+				}
 			}
 
 			if (dock_idx >= 0 && hit == dock_idx) {
@@ -8370,9 +8443,10 @@ int main(void) {
 
 			int idx = resizing;
 
-			printf("wm: resize release win %d %ldx%ld -> %dx%d\n",
-				idx, (long)windows[idx].w, (long)windows[idx].h,
-				resize_w, resize_h);
+			if (wm_clip_debug)	/* per event: the debug switch only */
+				printf("wm: resize release win %d %ldx%ld -> %dx%d\n",
+					idx, (long)windows[idx].w, (long)windows[idx].h,
+					resize_w, resize_h);
 
 			// No preview to erase: the frame on screen IS the
 			// window's frame, already at the final size, and w/h

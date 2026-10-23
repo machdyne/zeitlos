@@ -1,5 +1,7 @@
 # term
 
+Kind: a **desktop app** ([app_kinds.md](app_kinds.md)).
+
 A VT100 terminal window. `sw/apps/term`.
 
 `term` is a dumb terminal: it relays keys to a **port**

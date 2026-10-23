@@ -1,5 +1,7 @@
 # calc
 
+Kind: a **desktop app** ([app_kinds.md](app_kinds.md)).
+
 A four-function calculator. `sw/apps/calc`.
 
 ```

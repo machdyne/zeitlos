@@ -1,5 +1,7 @@
 # read
 
+Kind: a **desktop app** ([app_kinds.md](app_kinds.md)).
+
 A Markdown document viewer. `sw/apps/read`.
 
 ```

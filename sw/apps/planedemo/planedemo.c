@@ -274,6 +274,9 @@ int main(void) {
 				if (!ar_fullscreen()) quit = true;
 				cur = -1;
 			}
+			/* after the help box (F1, on the screen): the picture under
+			 * it is gone, start the scene again */
+			if (e.type == AR_EV_SUSPEND) cur = -1;
 		}
 		if (quit) break;
 

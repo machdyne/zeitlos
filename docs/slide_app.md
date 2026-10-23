@@ -1,5 +1,7 @@
 # slide
 
+Kind: a **desktop app** ([app_kinds.md](app_kinds.md)).
+
 Cards, slides and pages. `sw/apps/slide`.
 
 ```

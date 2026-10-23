@@ -61,10 +61,20 @@
 #include "zarcade_int.h"
 #include "zsfx.h"
 
-static z_win_t win;
+static z_win_t own_win;
+static z_win_t *wp = &own_win;  /* the window: its own, or the app's (ar_attach()) */
 static bool have_win;
+/* ar_attach(): the window is the app's, its desktop size kept here, and
+ * the resize the runtime asked for not yet answered */
+static bool attached;
+static bool core_up;             /* ar__core_init() has run */
+static uint32_t desk_w, desk_h;
+static bool resize_ours;
+static void desktop_event(void);
 static bool redraw_ack;          /* a Z_WM_REDRAW is waiting for its ack */
 static bool exit_armed;          /* Esc released since full screen began */
+static bool esc_kept;            /* ar_escape_leaves(false) */
+static void (*msg_hook)(void *msg);
 static uint32_t last_frame;      /* the display frame counter, last seen */
 static uint32_t last_tick;       /* uptime ticks, without a frame counter */
 static bool have_counter;
@@ -161,6 +171,39 @@ bool arh_pad_present(int player) {
 	return z_pad_present(player);
 }
 
+int ar_dir_list(const char *path, char *names, int cap, uint8_t *isdir,
+	int max, bool *truncated) {
+	uint32_t count = 0, trunc = 0, i;
+	int n = 0, w = 0;
+	const char *p = names;
+	if (truncated) *truncated = false;
+	if (cap <= 0 || max <= 0) return -1;
+	if (!fs_list_into(path, names, (uint32_t)cap, isdir, (uint32_t)max,
+		&count, &trunc)) {
+		/* an empty folder and a failure look the same here
+		 * (zflist.c): an empty listing either way */
+		return 0;
+	}
+	/* full paths, cut down to their names in place (never longer) */
+	for (i = 0; i < count; i++) {
+		size_t l = strlen(p);
+		const char *base = strrchr(p, '/');
+		size_t bl;
+		base = base ? base + 1 : p;
+		bl = l - (size_t)(base - p);
+		if (bl && !(base[0] == '.' && (base[1] == 0 ||
+			(base[1] == '.' && base[2] == 0)))) {
+			memmove(names + w, base, bl + 1);
+			isdir[n] = isdir[i] == Z_FS_TYPE_DIR;
+			n++;
+			w += (int)bl + 1;
+		}
+		p += l + 1;
+	}
+	if (truncated) *truncated = trunc != 0;
+	return n;
+}
+
 int arh_read_scores(char *buf, int cap) {
 	char path[64];
 	if (!z_data_file(path, sizeof path, "scores.txt")) return -1;
@@ -222,14 +265,14 @@ void arh_targets(void) {
 
 	ar__s.nvis = 0;
 	ar__s.vis_whole = false;
-	ar__s.can_draw = have_win && !z_win_frozen(&win);
+	ar__s.can_draw = have_win && !z_win_frozen(wp);
 	if (!ar__s.can_draw) return;
 
 	{
 		z_clip_t cr;
 		int n, i;
 
-		z_win_content_rect(&win, &cr);    /* loads the region */
+		z_win_content_rect(wp, &cr);    /* loads the region */
 		ar__s.ox = cr.x0;
 		ar__s.oy = cr.y0;
 
@@ -309,9 +352,55 @@ int ar_set_colours(int n) {
 	return 1 << ar__s.planes;
 }
 
+/* -- colour in the window (docs/color.md, "The colour window") --
+ *
+ * A program that asks (ar_window_colour(), before ar_init()) creates
+ * its window with Z_WIN_FLAG_COLOR. wm tells the focused one it may
+ * have the colour (Z_WM_COLOR 1) and clears it on a focus change, a
+ * freeze or a narrowing; the window takes it itself, at a frame, while
+ * it is wholly uncovered and the desktop is showing: COLWIN set to its
+ * content, the picture drawn in colour. Covered, or on another frame
+ * without it, the window clears it and draws in black and white. */
+static bool wc_wanted;      /* the program asked */
+static bool wc_focus;       /* wm said this window may have it */
+static int16_t wc_x, wc_y;  /* where COLWIN was set */
+
+void ar_window_colour(bool on) { wc_wanted = on; }
+
+/* Once a frame, after the region is known (arh_targets()). */
+static void window_colour_check(void) {
+	bool want = wc_focus && !ar__s.wc_off && ar__s.mode == AR_MODE_WINDOW &&
+		ar__s.can_draw && ar__s.vis_whole && !z_game_enabled();
+	if (want) {
+		/* again when the window moved, or the hardware dropped it --
+		 * a game took the planes and the palette meanwhile */
+		if (!ar__s.wcolor || wc_x != ar__s.ox || wc_y != ar__s.oy ||
+		    !z_color_window_on()) {
+			wc_x = (int16_t)ar__s.ox;
+			wc_y = (int16_t)ar__s.oy;
+			z_fb_set_rows((int)z_color_rows());
+			z_color_window_set(ar__s.ox, ar__s.oy, ar__s.ox + AR_W,
+				ar__s.oy + AR_H);
+			ar__wcolor(true, (int)z_color_window_planes(),
+				(int)z_color_rows() - 480);
+		}
+	} else if (ar__s.wcolor) {
+		if (wc_focus) z_color_window_off();
+		z_fb_set_rows(480);
+		ar__wcolor(false, 0, 0);
+	}
+}
+
 bool ar_set_fullscreen(bool on) {
 
 	if (on == (ar__s.mode != AR_MODE_WINDOW)) return true;
+
+	/* full screen is game mode's colour: entering it clears the
+	 * window's (COLWIN), which comes back at a frame in the window */
+	if (on && ar__s.wcolor) {
+		ar__s.wcolor = false;
+		z_fb_set_rows(480);
+	}
 
 	if (on) {
 		if (!z_game_available()) return false;
@@ -361,16 +450,16 @@ static void render_now(void) {
 static void help_on_msg(z_msg_t *m, void *user) {
 	(void)user;
 	if (m->subject == Z_WM_SET_CLIP) {
-		z_win_apply_clip(&win, &m->obj);
+		z_win_apply_clip(wp, &m->obj);
 		ar__s.targets_stale = true;
 	} else if (m->subject == Z_WM_REDRAW) {
-		z_win_apply_redraw(&win, m->obj.val.uint32);
-		z_win_damage_ignore(&win);
+		z_win_apply_redraw(wp, m->obj.val.uint32);
+		z_win_damage_ignore(wp);
 		ar__invalidate();
 		render_now();
-		z_win_redraw_done(&win);
+		z_win_redraw_done(wp);
 	} else if (m->subject == Z_WM_WINDOW_MOVED) {
-		z_win_parse_rect(&win, &m->obj);
+		z_win_parse_rect(wp, &m->obj);
 		ar__invalidate();
 	}
 }
@@ -378,7 +467,7 @@ static void help_on_msg(z_msg_t *m, void *user) {
 static void release_all(void);
 
 static void show_help(void) {
-	z_dialog_ctx_t ctx = { &win, help_on_msg, NULL };
+	z_dialog_ctx_t ctx = { wp, help_on_msg, NULL };
 	ar_event_t e;
 	const ar_desc_t *d = ar__s.d;
 
@@ -400,6 +489,28 @@ static void show_help(void) {
 	ar__invalidate();
 }
 
+/* The screen toolkit's help (ui/sui.h), when the program links it: on
+ * its own screen, in the window and full screen alike. A weak
+ * reference, so a program without the toolkit keeps the desktop's box
+ * (show_help(), the window only) and pays nothing. The pause goes to
+ * the game after the box -- the box reads the queue while it is up --
+ * so the game is paused when it comes back. */
+extern void sui_help(const char *title, const char *text) __attribute__((weak));
+
+static void show_screen_help(void) {
+	ar_event_t e;
+	const ar_desc_t *d = ar__s.d;
+	if (!d->help_text) return;
+	release_all();
+	zsfx_suspend(true);
+	sui_help(d->help_title ? d->help_title : d->name, d->help_text);
+	zsfx_suspend(false);
+	release_all();
+	memset(&e, 0, sizeof(e));
+	e.type = AR_EV_SUSPEND;
+	ar__queue(&e);
+}
+
 /* A box opened from full screen: the system's boxes are wm's windows,
  * and game mode is not the desktop, so the box is shown in the window
  * and full screen comes back after it -- at the next frame, so that a
@@ -414,7 +525,7 @@ void ar_dialog_begin(void *out) {
 	if (ar__s.mode != AR_MODE_WINDOW) ar_set_fullscreen(false);
 	render_now();
 	zsfx_suspend(true);
-	ctx->parent = &win;
+	ctx->parent = wp;
 	ctx->on_msg = help_on_msg;
 	ctx->user = NULL;
 }
@@ -450,8 +561,17 @@ static void handle_key(uint32_t packed) {
 	uint8_t mods = (uint8_t)Z_WM_UNPACK_KEY_MODIFIERS(packed);
 	bool full = ar__s.mode != AR_MODE_WINDOW;
 
+	/* A box is up (ar_top): every key but F11 is the box's -- Esc
+	 * answers it rather than leaving full screen, F1 opens no other
+	 * box, and C and M are letters. */
+	if (ar__s.modal && k != Z_KEY_FULL_SCREEN) {
+		ar__key(k, pressed, mods);
+		return;
+	}
+
 	if (k == Z_KEY_HELP) {
-		if (pressed && !full) show_help();
+		if (pressed && sui_help) show_screen_help();
+		else if (pressed && !full) show_help();
 		return;
 	}
 
@@ -463,10 +583,28 @@ static void handle_key(uint32_t packed) {
 		return;
 	}
 
+	/* F10: colour on or off -- full screen as C does, in the window
+	 * the colour window (where the program asked for it and the board
+	 * has it); the next frame takes it or gives it back */
+	if (k == Z_KEY_COLOUR) {
+		if (pressed) {
+			if (attached) {
+				/* a dual app: back to its desktop face */
+				release_all();
+				desktop_event();
+			} else if (full) {
+				if (z_color_available()) ar_set_color(!ar__s.want_color);
+			} else if (wc_wanted && z_color_window_available()) {
+				ar__s.wc_off = !ar__s.wc_off;
+			}
+		}
+		return;
+	}
+
 	/* Escape leaves full screen once it has been RELEASED there:
 	 * entering by any route that leaves a key down would otherwise see
 	 * a release at once and leave again (space3d, chess). */
-	if (full && k == 0x1b) {
+	if (full && k == 0x1b && !esc_kept) {
 		if (!pressed) exit_armed = true;
 		else if (exit_armed) {
 			release_all();
@@ -500,7 +638,7 @@ static void handle_msg(z_msg_t *m) {
 	switch (m->subject) {
 
 	case Z_WM_SET_CLIP:
-		z_win_apply_clip(&win, &m->obj);
+		z_win_apply_clip(wp, &m->obj);
 		/* Anything drawn before the next frame must use the new
 		 * region: a copy into a part now covered would land on the
 		 * window in front. */
@@ -513,14 +651,14 @@ static void handle_msg(z_msg_t *m) {
 		 * after the frame that does it. In full screen the window is
 		 * not on the glass, so there is nothing to paint -- but wm
 		 * still waits for the ack. */
-		z_win_apply_redraw(&win, m->obj.val.uint32);
-		z_win_damage_ignore(&win);
+		z_win_apply_redraw(wp, m->obj.val.uint32);
+		z_win_damage_ignore(wp);
 		if (ar__s.mode == AR_MODE_WINDOW) ar__invalidate();
 		redraw_ack = true;
 		break;
 
 	case Z_WM_WINDOW_MOVED:
-		z_win_parse_rect(&win, &m->obj);
+		z_win_parse_rect(wp, &m->obj);
 		if (ar__s.mode == AR_MODE_WINDOW) ar__invalidate();
 		ar__s.targets_stale = true;
 		break;
@@ -536,7 +674,15 @@ static void handle_msg(z_msg_t *m) {
 			uint32_t u = m->obj.val.uint32;
 			int cx, cy;
 			if (ar__s.mode == AR_MODE_WINDOW) {
-				e.inside = z_win_mouse_content_xy(&win, u, &cx, &cy);
+				e.inside = z_win_mouse_content_xy(wp, u, &cx, &cy);
+				/* That loaded the window's visible region into zgfx
+				 * (z_win_content_rect()'s side effect). The runtime
+				 * cuts its drawing to the region itself and draws
+				 * the colour window's planes below row 480, outside
+				 * any region: a draw made before the next frame --
+				 * space3d's lines -- would lose its planes to it. */
+				z_gfx_clear_visible();
+				z_gfx_blit_scissor_reset();
 			} else {
 				/* Full screen: the pointer in desktop coordinates,
 				 * halved -- the picture is pixel-doubled. */
@@ -558,15 +704,55 @@ static void handle_msg(z_msg_t *m) {
 		ar__queue(&e);
 		break;
 
+	case Z_WM_COLOR:
+		/* wm cleared COLWIN when it said no: the next frame draws in
+		 * black and white without touching it */
+		wc_focus = m->obj.val.uint32 != 0;
+		break;
+
 	case Z_WM_CLOSE:
 		memset(&e, 0, sizeof(e));
 		e.type = AR_EV_QUIT;
 		ar__queue(&e);
 		break;
 
+	case Z_WM_TITLEBAR_ICON:
+		/* the colour icon: as F10 */
+		if (Z_WM_UNPACK_TBICON_KIND(m->obj.val.uint32) == Z_WM_TBICON_COLOUR) {
+			if (attached) desktop_event();
+			else if (wc_wanted) ar__s.wc_off = !ar__s.wc_off;
+		} else if (msg_hook) {
+			msg_hook(m);
+		}
+		break;
+
+	case Z_WM_WINDOW_RESIZED:
+		/* the size the runtime asked for (ar_attach()), or the user's
+		 * drag of a resizable window's grip: a dual app goes back to
+		 * its desktop face at that size */
+		z_win_apply_resized(wp, &m->obj);
+		ar__s.targets_stale = true;
+		if (ar__s.mode == AR_MODE_WINDOW) ar__invalidate();
+		if (resize_ours) resize_ours = false;
+		else if (attached) {
+			desk_w = 0;          /* keep the user's size */
+			desktop_event();
+		}
+		break;
+
 	default:
+		if (msg_hook) msg_hook(m);
 		break;
 	}
+}
+
+void ar_msg_hook(void (*fn)(void *msg)) { msg_hook = fn; }
+void ar_msg(void *msg) { handle_msg((z_msg_t *)msg); }
+void ar_escape_leaves(bool on) { esc_kept = !on; }
+
+bool ar_frame_due(void) {
+	if (have_counter) return ((z_game_frame() - last_frame) & 0xffffu) != 0;
+	return z_uptime_ticks() - last_tick >= (Z_TICK_HZ / 60u ? Z_TICK_HZ / 60u : 1u);
 }
 
 bool ar_poll(ar_event_t *e) {
@@ -671,11 +857,24 @@ uint32_t ar_frame(void) {
 
 	/* Straight after the boundary: palette first (it changes every
 	 * pixel at once), then the viewport, then the drawing. */
-	if (ar__s.mode == AR_MODE_FULL_COLOR) {
-		int n = 1 << ar__s.planes;
+	if (ar__s.mode == AR_MODE_FULL_COLOR || ar__s.wcolor) {
+		int n = 1 << (ar__s.wcolor ? ar__s.wl : ar__s.planes);
 		for (i = 0; i < n; i++)
 			if (ar__s.pal_dirty[i >> 5] & (1u << (i & 31))) {
-				z_color_set_palette((uint32_t)i, ar__s.pal[i]);
+				if (ar__s.wcolor) {
+					/* in the window, colour i is entry bit 0 | the
+					 * rest from bit 4 (zsoc.h); and every index the
+					 * window's planes can show with the same low
+					 * bits is colour i too, so a plane this program
+					 * does not draw -- the fifth, for 16 colours,
+					 * holding what pix left there -- shows nothing */
+					int j;
+					for (j = i; j < (1 << ar__s.wl_hw); j += n)
+						z_color_set_palette(
+							z_color_window_entry((uint32_t)j), ar__s.pal[i]);
+				} else {
+					z_color_set_palette((uint32_t)i, ar__s.pal[i]);
+				}
 				ar__s.pal_dirty[i >> 5] &= ~(1u << (i & 31));
 			}
 	}
@@ -689,12 +888,14 @@ uint32_t ar_frame(void) {
 	}
 
 	arh_targets();
-	if (frame_hook) frame_hook();
+	if (wc_wanted) window_colour_check();
+	/* not while a box is up (ar_top): its drawing would land on the box */
+	if (frame_hook && !ar__s.modal) frame_hook();
 	ar__render();
 	z_fb_hw_sync();
 
 	if (redraw_ack && have_win) {
-		z_win_redraw_done(&win);
+		z_win_redraw_done(wp);
 		redraw_ack = false;
 	}
 
@@ -709,8 +910,10 @@ uint32_t ar_frame(void) {
  * setup
  * =================================================================== */
 
-bool ar_init(const ar_desc_t *d) {
-
+/* Everything but the window, once. */
+static void core_up_once(const ar_desc_t *d) {
+	if (core_up) { ar__s.d = d; return; }
+	core_up = true;
 	ar__core_init(d);
 	ar_seed(arh_seed());
 
@@ -718,24 +921,91 @@ bool ar_init(const ar_desc_t *d) {
 	last_frame = z_game_frame();
 	last_tick = z_uptime_ticks();
 
-	if (z_win_create_flags(&win, d->name, WIN_W, WIN_H, -1, -1,
-	    Z_WIN_FLAG_CLOSE_ICON | Z_WIN_FLAG_GAME_MODE) != Z_OK) {
+	if (!zsfx_init())
+		printf("%s: no audio mixer on this board -- playing silently\n",
+			d->name);
+}
+
+uint32_t ar_window_flags(const ar_desc_t *d) {
+	bool cw = wc_wanted && z_color_window_available();
+	return Z_WIN_FLAG_GAME_MODE |
+		(cw ? Z_WIN_FLAG_COLOR | Z_WIN_FLAG_COLOUR_ICON : 0) |
+		/* a game takes no mouse: no pointer over its picture */
+		(d->pointer ? 0 : Z_WIN_FLAG_NO_POINTER);
+}
+
+bool ar_init(const ar_desc_t *d) {
+
+	core_up_once(d);
+
+	if (z_win_create_flags(wp, d->name, WIN_W, WIN_H, -1, -1,
+	    Z_WIN_FLAG_CLOSE_ICON | ar_window_flags(d)) != Z_OK) {
 		printf("%s: could not create a window\n", d->name);
 		return false;
 	}
 	have_win = true;
 
-	if (!zsfx_init())
-		printf("%s: no audio mixer on this board -- playing silently\n",
-			d->name);
-
 	ar__invalidate();
 	return true;
 }
 
-void ar_shutdown(void) {
+/* A dual app's switch (docs/app_kinds.md): the runtime takes the app's
+ * window -- its 320x240 screen face -- and gives it back. */
+static void desktop_event(void) {
+	ar_event_t e;
+	memset(&e, 0, sizeof(e));
+	e.type = AR_EV_DESKTOP;
+	ar__queue(&e);
+}
+
+bool ar_attach(void *win, const ar_desc_t *d) {
+	if (attached) return true;
+	core_up_once(d);
+	wp = (z_win_t *)win;
+	desk_w = wp->w;
+	desk_h = wp->h;
+	attached = have_win = true;
+	/* the window was focused to be switched: it may have the colour */
+	wc_focus = true;
+	ar__s.mode = AR_MODE_WINDOW;
+	if (wp->w != WIN_W || wp->h != WIN_H) {
+		resize_ours = true;
+		z_win_resize(wp, WIN_W, WIN_H);
+	}
+	ar__invalidate();
+	ar__s.targets_stale = true;
+	return true;
+}
+
+void ar_detach(void) {
+	ar_event_t e;
+	if (!attached) return;
 	if (ar__s.mode != AR_MODE_WINDOW) ar_set_fullscreen(false);
+	if (ar__s.wcolor) {
+		if (wc_focus) z_color_window_off();
+		z_fb_set_rows(480);
+		ar__s.wcolor = false;
+	}
+	if (redraw_ack) {
+		z_win_redraw_done(wp);
+		redraw_ack = false;
+	}
+	if (desk_w && (desk_w != WIN_W || desk_h != WIN_H))
+		z_win_resize(wp, desk_w, desk_h);
+	resize_ours = false;
+	attached = have_win = false;
+	/* what is queued was the screen face's */
+	while (ar__dequeue(&e)) ;
+	wp = &own_win;
+}
+
+bool ar_attached(void) { return attached; }
+
+void ar_shutdown(void) {
+	if (attached) { ar_detach(); return; }
+	if (ar__s.mode != AR_MODE_WINDOW) ar_set_fullscreen(false);
+	if (ar__s.wcolor && wc_focus) z_color_window_off();
 	zsfx_shutdown();
-	if (have_win) z_win_destroy(&win);
+	if (have_win) z_win_destroy(wp);
 	have_win = false;
 }

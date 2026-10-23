@@ -8,7 +8,8 @@
  *
  * Same origin-and-clip contract as the other three: everything is drawn
  * against an ORIGIN and a CLIP RECTANGLE in absolute screen
- * coordinates, so a window's content rect and a game-mode page are one
+ * coordinates, so a window's content rect and the screen face's 320x240
+ * (a dual app, docs/app_kinds.md) are one
  * renderer with different arguments.
  *
  * -- the reels do not need the hardware scroll, and that is worth
@@ -37,6 +38,7 @@
 #include "../../common/zgfx.h"
 #include "sl_game.h"
 #include "sl_art.h"
+#include "../../common/games/zarcade.h"
 
 #define SL_MSG_LEN   48
 #define SL_CMD_LEN   40
@@ -122,6 +124,23 @@ void sl_mark_pos(const sl_layout_t *L, int line, bool right, int *x, int *y);
 /* Just the reels -- what a spin frame calls. Five opaque blits each,
  * covering every pixel exactly once. */
 void sl_board_draw_reels(const sl_layout_t *L, const sl_view_t *v);
+
+/* -- colour (docs/slots.md, "In colour") --
+ *
+ * Every colour the machine asks for is a ROLE: the desktop draws INK,
+ * FRAME, WIN, ROD, KNOB and the symbols lit and the rest dark (exactly
+ * the one-bit machine), the screen face -- the machine on the arcade
+ * runtime's 320x240 screen -- in sl_palette. sl_screen(true) sends
+ * every primitive to ar_*(); the layout is then sl_board_layout(L, v,
+ * 0, 0, 320, 240). */
+enum {
+    SL_C_BG = 0, SL_C_INK, SL_C_BLACK, SL_C_REEL, SL_C_FRAME, SL_C_WIN,
+    SL_C_DIM, SL_C_BTN, SL_C_ROD, SL_C_KNOB, SL_C_KNOBHOLE, SL_C_RED,
+    SL_C_BAR, SL_C_GOLD
+};
+extern const uint16_t sl_palette[16];
+void sl_screen(bool on);
+void sl_mono_inks(ar_ink_t ink[16]);
 
 char *sl_num(int32_t n, char *buf);
 

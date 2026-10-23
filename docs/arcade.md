@@ -2,10 +2,11 @@
 
 `sw/common/games/zarcade.[ch]`: one 320x240 game screen, in a window or
 full screen, in colour or monochrome, for `snake` and the arcade games
-that follow it (`blocks`, `bricks`). Sound is its companion,
-[zsfx](sfx.md).
+that follow it (`blocks`, `bricks`), `pix`, `planedemo`, `basic`,
+`space3d` and `kidgames` -- the runtime for screen and full-screen apps
+([app_kinds.md](app_kinds.md)). Sound is its companion, [zsfx](sfx.md).
 
-space3d, chip8 and mausrun each carry their own answers to the same
+chip8 and mausrun each still carry their own answers to the same
 questions -- how to draw into a window other windows overlap, how to go
 full screen and come back, which keys do that, how colour becomes
 bitplanes, how a keyboard and a gamepad become one set of buttons, how
@@ -140,6 +141,11 @@ Two more things help:
   only a line's pixels in some rows, the same pixels the whole line
   sets there (the rasterizer clips pixel by pixel), so a line can be
   drawn a band at a time. `test-arcade` checks both.
+- `ar_plane_line()` draws in black and white too -- the window, mono
+  full screen -- where plane 0 is the picture, a covered window's line
+  cut to each rectangle that shows: space3d draws the same lines in
+  every mode, a plane at a time in colour. `test-arcade` checks the
+  window's pixels, covered and not, against mono full screen's.
 
 ### Overlays behind things, and inside an area
 
@@ -195,16 +201,24 @@ of a second.
 
 | Key | Does |
 |---|---|
-| F1 | help box, in the window only ([app_help.md](app_help.md)); nothing in game mode |
+| F1 | help: on the program's own screen, window and full screen alike, when it links the screen toolkit ([screen_ui.md](screen_ui.md)); otherwise the desktop's box, in the window only ([app_help.md](app_help.md)) |
+| F10 | colour on or off: full screen as C; in the window, the colour window, for a program that asked for it (`ar_window_colour()`) on a board with one -- until F10 again |
 | F11 | full screen, or back to the window |
-| Esc | in full screen: back to the window, once released (as space3d) |
+| Esc | in full screen: back to the window, once released (as space3d); a program that keeps it (`ar_escape_leaves(false)`: basic) gets it instead |
 | C | in full screen: colour on or off |
 | M | music on or off ([sfx.md](sfx.md)) |
 
-These follow [keys.md](keys.md): F1 is help (and nothing in game mode), F11
+These follow [keys.md](keys.md): F1 is help, F10 colour, F11
 is full screen. The runtime creates its window with
 `Z_WIN_FLAG_GAME_MODE`, so wm passes F11 on to the game rather than
 making the window full screen itself.
+
+A program with a loop of its own -- basic's interpreter, a line at a
+time -- calls `ar_poll()` as often as it likes and `ar_frame()` when
+`ar_frame_due()` says a frame has passed, so it draws without waiting.
+Messages the runtime does not know (a port's) go to `ar_msg_hook()`;
+one another library read (zi2cx waiting for bench) is handed back with
+`ar_msg()`.
 
 Everything else reaches the game as `AR_EV_KEY` -- and the player
 controls also as `AR_EV_BUTTON`. While a game takes typed letters
@@ -235,7 +249,7 @@ wants better reduces its art itself, once, as it loads it
 | `ar_set_colours(n)`, `ar_colours()` | 16, 64 or 256; what is shown |
 | `ar_mono_map(to16)` | in monochrome, index c in `ink[to16[c]]` instead of `ink[c & 15]` |
 | `ar_sprite_from_indices(s, px, opaque, w, h)` | a sprite where every index, 255 too, is a colour; `opaque` says which pixels are drawn |
-| `ar_plane(k, bits, ...)` | one plane of a picture, as it is (colour full screen only): a picture of any indices without a fill per colour, a call per plane -- pix's canvas |
+| `ar_plane(k, bits, ...)` | one plane of a picture, as it is (in colour only: full screen or the colour window): a picture of any indices without a fill per colour, a call per plane -- pix's canvas |
 | `ar_plane_or(k, bits, ...)`, `ar_plane_andn(k, bits, ...)` | plane k's bits set, or cleared, where the bitmap has a bit: a shape in one plane, the rest left alone |
 | `ar_plane_fill(k, x, y, w, h, bit)` | a rectangle of plane k to 0 or 1 |
 | `ar_plane_line(k, x0, y0, x1, y1, op)` | a line in plane k by the line rasterizer: op 0 clear, 1 set, 2 xor |
@@ -255,14 +269,55 @@ repaint frame for frame. On the host, `AR_HOST_PLANES=4` or `6` makes
 `ar_host.c` a board with fewer planes (8 by default); its framebuffer
 has both sheets.
 
-### The pointer, full screen
+### The pointer
 
-wm hides the mouse pointer while a game holds the screen. A program
-drawn with the mouse sets `pointer` in its `ar_desc_t` (the last field;
-a game leaves it false) and the pointer stays: the runtime calls
+wm hides the mouse pointer while a game holds the screen, and -- in the
+window -- while it is over the game's picture: the runtime creates the
+window with `Z_WIN_FLAG_NO_POINTER`, and wm hides the cursor while it
+is over that window's content and the window is the topmost there
+(not while a window is being dragged). Past the picture's edge, on the
+titlebar or another window, it is back.
+
+A program drawn with the mouse sets `pointer` in its `ar_desc_t` (the
+last field; a game leaves it false) and the pointer stays, in both: the
+window has no `Z_WIN_FLAG_NO_POINTER`, and the runtime calls
 `z_game_set_pointer()` before game mode, which puts
-`Z_WM_GAME_GRAB_POINTER` in the grab it sends wm. pix does. An older wm
-ignores the bit, and the pointer hides as before.
+`Z_WM_GAME_GRAB_POINTER` in the grab it sends wm. pix and kidgames do.
+An older wm ignores both, and the pointer shows over the window and
+hides full screen as before.
+
+### The colour icon
+
+Where the board has the colour window, the runtime's window has the
+colour titlebar icon (`Z_WIN_FLAG_COLOUR_ICON`, a rainbow): a click does
+what F10 does.
+
+### A dual app
+
+A dual app ([app_kinds.md](app_kinds.md)) has a desktop window of its
+own and lends it to the runtime for its 320x240 screen face. It creates
+the window resizable with `ar_window_flags(&desc)` among the flags (game
+mode, so F11 is the app's; colour, the colour icon, no pointer for a
+game). `ar_attach(&win, &desc)` takes it: the first time it sets the
+runtime up as `ar_init()` would, without a window of its own; it
+resizes the window to 320x240 and reads its messages from then on
+(`ar_poll()`; the ones it does not know go to `ar_msg_hook()`). The app
+then runs as a screen app: `ar_poll()`, its drawing, `ar_frame()`. An
+app that is typed at (chess's moves, poker's commands) calls
+`ar_text_input(true)` after attaching, so C and M reach it as letters
+rather than the colour and music keys.
+
+While attached, F10, the colour icon and a resize by the user (the
+grip) send `AR_EV_DESKTOP`, and the app calls `ar_detach()`: out of
+game mode, the colour window given back, the window its desktop size
+again -- the size it had, or the user's new one -- and its messages
+the app's again; wm's REDRAW at the new size follows. Events still
+queued are dropped. The window's minimum size must let it be 320x240 inside
+(no `Z_WIN_FLAG_MIN_IS_CREATE` above 324x255): wm clamps a resize to it. F11 from the desktop face is the app's to send to
+`ar_attach()` and `ar_set_fullscreen(true)`.
+
+On a build host `ar_attach()` stands the host window up as `ar_init()`
+does, and F10 sends `AR_EV_DESKTOP` while attached.
 
 ### Dialogs
 
@@ -286,6 +341,29 @@ not flick the screen to full and back between them.
 `ar_dialog_begin()` fills `ctx` so the box keeps the window painted
 while it waits, as the F1 box does. On a build host both are no-ops
 (`ar_host.c`); a script answers the program's questions itself.
+
+### A box on top
+
+The [screen toolkit](screen_ui.md) draws its boxes on the program's own
+screen rather than as windows. The runtime keeps such a box on top:
+
+```c
+ar_top_t t = { paint_box, box, { x, y, w, h }, inks, true };
+ar_top(&t);        /* the box is up */
+...
+ar_top(NULL);      /* gone; its area is repainted */
+```
+
+Every dirty rectangle the program's `paint()` repaints is followed,
+where it meets `area`, by the box's `paint`, clipped to it; with
+`opaque`, a dirty rectangle wholly inside the box is not painted by the
+program at all. In monochrome the box's indices 0..15 are drawn in its
+own `ink` table, not the program's, so a box looks the same in every
+program. While a box is up the program's overlays are not drawn, its
+`before_paint()` is not called, and Esc, F1, C and M reach the program
+(the box) as keys -- F11 still goes between the window and full screen.
+`ar_push()` puts an event on the queue: what a box took that was the
+program's (a mode change, the window closing) is handed back that way.
 
 ## Players
 
@@ -383,6 +461,40 @@ for this). Nothing is redrawn. What slides in at an edge comes from the
 neighbouring quadrant, which in colour is another bitplane: keep the
 outer `amp` pixels of the picture in colour 0, as snake does with its
 walls, and the edges stay black.
+
+## Colour in the window
+
+On a board with the colour window ([color.md](color.md), "The colour
+window"), a program that asks -- `ar_window_colour(true)` before
+`ar_init()`; snake, blocks and bricks do -- is drawn in colour in its
+window too, while it is the focused window and nothing covers it: 16
+colours (its own palette) on an eight-plane board, 8 on six. wm says
+which window may have it (`Z_WM_COLOR`); the runtime takes it at a frame
+when its window is wholly uncovered and gives it up when it is not.
+
+Then `ar_color()` is true and `ar_mode()` is still `AR_MODE_WINDOW`;
+`AR_EV_MODE` comes when it goes on or off, and the picture is repainted
+either way. Index c is drawn with bit 0 in the window's own pixels (so
+the desktop's picture of it is a black-and-white one of sorts) and its
+other bits in the window's planes, folded into the second sheet
+(`plane_pieces()` in `zarcade.c` cuts a rectangle where the fold
+wraps). Everything is drawn as full screen in colour -- the
+plane-at-a-time calls too (`ar_plane()` and the rest, planes
+0..log2(`ar_colours()`)-1, plane 0 the window's own pixels; a line is
+drawn once per piece of the fold, the piece its clip) -- except
+`ar_copy()`, which says no (the program repaints instead).
+
+The palette: colour i is written to every entry the window's planes
+can show with i's low bits (`z_color_window_entry()`), so a plane the
+program does not draw -- the fifth, for a 16-colour game on eight
+planes, still holding what pix or space3d left there -- changes
+nothing on the glass.
+
+On a build host `ARH_WCOLOR` (`a` 1 or 0) stands for wm's message; the
+host's window sits where the fold wraps inside it both ways, and
+`test-arcade` checks the window's indices against full screen's, pixel
+for pixel, on eight and six planes, and its frames against full
+repaints.
 
 ## Inside the window
 

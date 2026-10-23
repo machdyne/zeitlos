@@ -8,8 +8,9 @@
  *
  * Same origin-and-clip contract as the other five: everything is drawn
  * against an ORIGIN and a CLIP RECTANGLE in absolute screen
- * coordinates, so a window's content rect and a game-mode page are one
- * renderer with different arguments.
+ * coordinates, so a window's content rect and the screen face's
+ * 320x240 (a dual app, docs/app_kinds.md) are one renderer with
+ * different arguments.
  *
  * -- the layout is the real one, squeezed --
  *
@@ -41,6 +42,7 @@
 
 #include "../../common/zgfx.h"
 #include "../../common/games/zdice.h"
+#include "../../common/games/zarcade.h"
 #include "cr_game.h"
 
 #define CR_MSG_LEN  56
@@ -124,6 +126,22 @@ void cr_board_draw_status(const cr_layout_t *L, const cr_view_t *v);
 /* Just the two dice -- what a roll frame calls. Two opaque blits, no
  * clear. */
 void cr_board_draw_dice(const cr_layout_t *L, const cr_view_t *v);
+
+/* -- colour (docs/craps.md, "In colour") --
+ *
+ * Every colour the table asks for is a ROLE: the desktop draws INK,
+ * FRAME, PIP, PUCK, CHIP and FIELD lit and the rest dark (exactly the
+ * one-bit table), the screen face -- the table on the arcade runtime's
+ * 320x240 screen -- in cr_palette. cr_screen(true) sends every
+ * primitive to ar_*(); the layout is then cr_board_layout(L, v, 0, 0,
+ * 320, 240). */
+enum {
+    CR_C_BG = 0, CR_C_INK, CR_C_BLACK, CR_C_FRAME, CR_C_DIM, CR_C_DIE,
+    CR_C_PIP, CR_C_PUCK, CR_C_PUCKOFF, CR_C_CHIP, CR_C_FIELD
+};
+extern const uint16_t cr_palette[16];
+void cr_screen(bool on);
+void cr_mono_inks(ar_ink_t ink[16]);
 
 char *cr_num(int32_t n, char *buf);
 

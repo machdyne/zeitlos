@@ -5,6 +5,7 @@
 
 #include "bj_board.h"
 #include "../../common/zfont.h"
+#include "../../common/games/zarcade.h"
 
 #define FONT (&z_font_5x8)
 #define FW 5
@@ -13,6 +14,54 @@
 const int32_t bj_chip_values[BJ_NCHIPS] = { 5, 25, 100, 500 };
 
 static bool use_hw_blit;
+
+/* -- the screen face (docs/blackjack.md, "In colour") --
+ *
+ * The same table, drawn through the arcade runtime on blackjack's
+ * 320x240 screen: every primitive below goes to ar_*() instead of zgfx,
+ * and every colour the table asks for is a ROLE (BJ_C_*), which the
+ * desktop draws in one bit and the screen in bj_palette. Cards as
+ * sw/apps/poker draws them: white, red hearts and diamonds, blue backs;
+ * the chips in casino colours. */
+static bool scr;
+
+void bj_screen(bool on) { scr = on; }
+
+const uint16_t bj_palette[16] = {
+    0x063,      /* BJ_C_BG     the felt */
+    0xfff,      /* BJ_C_INK    text, a card's body */
+    0x000,      /* BJ_C_BLACK  a card's border, clubs and spades */
+    0xc12,      /* BJ_C_RED    hearts and diamonds */
+    0x23a,      /* BJ_C_BACK   a card's back */
+    0xfc2,      /* BJ_C_ACT    the hand being played, the chip chosen */
+    0x031,      /* BJ_C_BTN    a button */
+    0x364,      /* BJ_C_DIM    a button that cannot be pressed */
+    0xbdb,      /* BJ_C_FRAME  frames */
+    0xd8a,      /* BJ_C_SHOE   what is left in the shoe */
+    0xc22,      /* BJ_C_CHIP5   a 5 chip */
+    0x194,      /* BJ_C_CHIP25  a 25 */
+    0x222,      /* BJ_C_CHIP100 a 100 */
+    0x739,      /* BJ_C_CHIP500 a 500 */
+    0x000, 0x000
+};
+
+/* In one bit: the felt and everything dark is black, the rest white --
+ * exactly the desktop table. */
+static int mono_of(int role)
+{
+    switch (role) {
+    case BJ_C_INK: case BJ_C_ACT: case BJ_C_FRAME: case BJ_C_SHOE:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+void bj_mono_inks(ar_ink_t ink[16])
+{
+    int i;
+    for (i = 0; i < 16; i++) ink[i] = mono_of(i) ? ar_ink_white : ar_ink_black;
+}
 
 void bj_board_init(void)
 {
@@ -70,13 +119,15 @@ static void fill(const bj_layout_t *L, int x, int y, int w, int h, int c)
 {
     int x1 = x + w - 1, y1 = y + h - 1;
 
+    if (scr) { ar_fill(x, y, w, h, c); return; }
+
     if (x < L->clip.x0) x = L->clip.x0;
     if (y < L->clip.y0) y = L->clip.y0;
     if (x1 > L->clip.x1) x1 = L->clip.x1;
     if (y1 > L->clip.y1) y1 = L->clip.y1;
     if (x1 < x || y1 < y) return;
 
-    z_fb_hw_fill_rect(x, y, x1 - x + 1, y1 - y + 1, c);
+    z_fb_hw_fill_rect(x, y, x1 - x + 1, y1 - y + 1, mono_of(c));
 }
 
 static void frame(const bj_layout_t *L, int x, int y, int w, int h, int c)
@@ -91,6 +142,14 @@ static void shade(const bj_layout_t *L, int x, int y, int w, int h, int lvl)
 {
     int x1 = x + w - 1, y1 = y + h - 1;
 
+    if (scr) {
+        /* a button that cannot be pressed: its face, half dim */
+        /* (in black and white, as the desktop: half lit) */
+        ar_fill2(x, y, w, h, BJ_C_BTN, ar_color() ? BJ_C_DIM : BJ_C_FRAME,
+            &ar_ink_grey50);
+        return;
+    }
+
     if (x < L->clip.x0) x = L->clip.x0;
     if (y < L->clip.y0) y = L->clip.y0;
     if (x1 > L->clip.x1) x1 = L->clip.x1;
@@ -102,7 +161,10 @@ static void shade(const bj_layout_t *L, int x, int y, int w, int h, int lvl)
 
 static void text(const bj_layout_t *L, int x, int y, const char *s, int c)
 {
-    z_fb_draw_text(x, y, s, c, FONT, &L->clip);
+    /* On the screen, text is drawn over a strip already filled (every
+     * caller fills first), so its transparency changes nothing. */
+    if (scr) { ar_text(x, y, s, c, FONT, 1); return; }
+    z_fb_draw_text(x, y, s, mono_of(c), FONT, &L->clip);
 }
 
 static void text_center(const bj_layout_t *L, int cx, int y, const char *s,
@@ -156,20 +218,37 @@ static void blit_card(const bj_layout_t *L, const uint32_t *tile,
     z_gfx_blit_scissor_reset();
 }
 
+/* A card on the screen: its body white, its pips and rank in its suit's
+ * colour -- red for hearts and diamonds -- or a back in blue, the
+ * corners and border black. The one-bit tile is the white; under it the
+ * suit's colour, inside the border with its corners cut. */
+static void scr_card(const uint32_t *tile, int tw, int th, int dx, int dy,
+    uint8_t card)
+{
+    int ink = card >= Z_NCARDS ? BJ_C_BACK :
+        (Z_SUIT(card) == 1 || Z_SUIT(card) == 2) ? BJ_C_RED : BJ_C_BLACK;
+    ar_fill(dx, dy, tw, th, BJ_C_BLACK);
+    ar_fill(dx + 2, dy + 1, tw - 4, th - 2, ink);
+    ar_fill(dx + 1, dy + 2, tw - 2, th - 4, ink);
+    ar_bitmap(tile, Z_ART_STRIDE, 0, 0, dx, dy, tw, th, BJ_C_INK);
+}
+
 static void draw_card(const bj_layout_t *L, uint8_t card, int x, int y,
     bool mini)
 {
     const uint32_t *t;
+    int tw = mini ? Z_ART_MINI_W : Z_ART_FULL_W;
+    int th = mini ? Z_ART_MINI_H : Z_ART_FULL_H;
 
-    if (mini) {
+    if (mini)
         t = (card < Z_NCARDS) ? &z_card_mini[(int)card * Z_ART_MINI_H]
                               : z_back_mini;
-        blit_card(L, t, Z_ART_MINI_W, Z_ART_MINI_H, x, y);
-    } else {
+    else
         t = (card < Z_NCARDS) ? &z_card_full[(int)card * Z_ART_FULL_H]
                               : z_back_full;
-        blit_card(L, t, Z_ART_FULL_W, Z_ART_FULL_H, x, y);
-    }
+
+    if (scr) scr_card(t, tw, th, x, y, card);
+    else blit_card(L, t, tw, th, x, y);
 }
 
 /* -- layout ---------------------------------------------------------------- */
@@ -324,8 +403,8 @@ static void button(const bj_layout_t *L, const bj_rect_t *r,
     int tx = r->x + (r->w - tw) / 2;
     int ty = r->y + (r->h - FH) / 2;
 
-    fill(L, r->x, r->y, r->w, r->h, 0);
-    frame(L, r->x, r->y, r->w, r->h, 1);
+    fill(L, r->x, r->y, r->w, r->h, BJ_C_BTN);
+    frame(L, r->x, r->y, r->w, r->h, BJ_C_FRAME);
 
     if (!enabled) {
         /* Shaded, with a solid hole cut back out for the label.
@@ -335,10 +414,10 @@ static void button(const bj_layout_t *L, const bj_rect_t *r,
          * itself to the background. sw/apps/poker shipped its disabled
          * buttons unreadable twice before this was settled. */
         shade(L, r->x + 1, r->y + 1, r->w - 2, r->h - 2, 8);
-        fill(L, tx - 1, ty, tw + 2, FH, 0);
+        fill(L, tx - 1, ty, tw + 2, FH, BJ_C_BTN);
     }
 
-    text(L, tx, ty, label, 1);
+    text(L, tx, ty, label, BJ_C_INK);
 }
 
 static void draw_total(const bj_layout_t *L, int x, int y, int cx,
@@ -364,8 +443,8 @@ static void draw_total(const bj_layout_t *L, int x, int y, int cx,
         cat_num(line, sizeof line, t);
     }
 
-    if (center) text_center(L, cx, y, line, 1);
-    else text(L, x, y, line, 1);
+    if (center) text_center(L, cx, y, line, BJ_C_INK);
+    else text(L, x, y, line, BJ_C_INK);
 }
 
 static void draw_dealer(const bj_layout_t *L, const bj_view_t *v)
@@ -376,9 +455,9 @@ static void draw_dealer(const bj_layout_t *L, const bj_view_t *v)
     uint8_t seen[BJ_MAX_CARDS];
     int nseen = 0;
 
-    fill(L, L->ox, L->dealer_y, L->w, Z_ART_FULL_H + 2 + FH, 0);
+    fill(L, L->ox, L->dealer_y, L->w, Z_ART_FULL_H + 2 + FH, BJ_C_BG);
 
-    text(L, L->ox + 2, L->dealer_info_y - 0, "", 1);
+    text(L, L->ox + 2, L->dealer_info_y - 0, "", BJ_C_INK);
 
     for (i = 0; i < g->ndealer; i++) {
         /* The hole card stays face down until the showdown. Drawing it
@@ -394,7 +473,7 @@ static void draw_dealer(const bj_layout_t *L, const bj_view_t *v)
         char line[32];
         line[0] = '\0';
         cat(line, sizeof line, "dealer");
-        text(L, L->ox + 2, L->dealer_info_y, line, 1);
+        text(L, L->ox + 2, L->dealer_info_y, line, BJ_C_INK);
     }
 
     /* Only what is VISIBLE is totalled. Showing the true total while
@@ -408,7 +487,7 @@ static void draw_hands(const bj_layout_t *L, const bj_view_t *v)
     const bj_game_t *g = v->g;
     int i, k;
 
-    fill(L, L->ox, L->hands_y, L->w, Z_ART_FULL_H + 2 + FH, 0);
+    fill(L, L->ox, L->hands_y, L->w, Z_ART_FULL_H + 2 + FH, BJ_C_BG);
 
     for (i = 0; i < g->nhands; i++) {
         const bj_hand_t *h = &g->hand[i];
@@ -425,7 +504,7 @@ static void draw_hands(const bj_layout_t *L, const bj_view_t *v)
          * cards. */
         if (g->phase == BJ_PHASE_PLAYER && i == g->active)
             frame(L, L->ox + i * L->hand_w, y - 2, L->hand_w - 2,
-                Z_ART_FULL_H + 4, 1);
+                Z_ART_FULL_H + 4, BJ_C_ACT);
 
         for (k = 0; k < h->n; k++)
             draw_card(L, h->card[k], x + k * stride, y, mini);
@@ -434,7 +513,7 @@ static void draw_hands(const bj_layout_t *L, const bj_view_t *v)
         cat_num(line, sizeof line, h->bet);
         if (h->doubled) cat(line, sizeof line, "x2");
         if (h->surrendered) cat(line, sizeof line, "s");
-        text(L, L->ox + i * L->hand_w + 3, L->hand_info_y, line, 1);
+        text(L, L->ox + i * L->hand_w + 3, L->hand_info_y, line, BJ_C_INK);
 
         /* The total is right-aligned in the cell and the bet is
          * left-aligned, so the two cannot run into each other however
@@ -450,7 +529,7 @@ static void draw_hands(const bj_layout_t *L, const bj_view_t *v)
             else if (bj_is_natural(h->card, h->n)) cat(tl, sizeof tl, "BJ");
             else { if (soft) cat(tl, sizeof tl, "s"); cat_num(tl, sizeof tl, t); }
             text(L, L->ox + (i + 1) * L->hand_w - 4 - slen(tl) * FW,
-                L->hand_info_y, tl, 1);
+                L->hand_info_y, tl, BJ_C_INK);
         }
         (void)cx;
     }
@@ -467,32 +546,32 @@ static void draw_shoe(const bj_layout_t *L, const bj_view_t *v)
     int filled = (L->shoe_w - 2) * left / total;
     char line[24];
 
-    fill(L, L->shoe_x, L->shoe_y - FH - 2, L->shoe_w, FH + 2 + 8, 0);
+    fill(L, L->shoe_x, L->shoe_y - FH - 2, L->shoe_w, FH + 2 + 8, BJ_C_BG);
 
     line[0] = '\0';
     cat(line, sizeof line, "shoe ");
     cat_num(line, sizeof line, left);
     cat(line, sizeof line, " of ");
     cat_num(line, sizeof line, total);
-    text(L, L->shoe_x, L->shoe_y - FH - 1, line, 1);
+    text(L, L->shoe_x, L->shoe_y - FH - 1, line, BJ_C_INK);
 
-    frame(L, L->shoe_x, L->shoe_y, L->shoe_w, 6, 1);
-    if (filled > 0) fill(L, L->shoe_x + 1, L->shoe_y + 1, filled, 4, 1);
+    frame(L, L->shoe_x, L->shoe_y, L->shoe_w, 6, BJ_C_FRAME);
+    if (filled > 0) fill(L, L->shoe_x + 1, L->shoe_y + 1, filled, 4, BJ_C_SHOE);
 }
 
 void bj_board_draw_status(const bj_layout_t *L, const bj_view_t *v)
 {
     char line[BJ_MSG_LEN + 4];
 
-    fill(L, L->ox, L->msg_y, L->w, FH, 0);
-    text(L, L->ox + 2, L->msg_y, v->message, 1);
+    fill(L, L->ox, L->msg_y, L->w, FH, BJ_C_BG);
+    text(L, L->ox + 2, L->msg_y, v->message, BJ_C_INK);
 
-    fill(L, L->ox, L->cmd_y, L->w, FH, 0);
+    fill(L, L->ox, L->cmd_y, L->w, FH, BJ_C_BG);
     line[0] = '\0';
     cat(line, sizeof line, "> ");
     cat(line, sizeof line, v->cmd);
     cat(line, sizeof line, "_");
-    text(L, L->ox + 2, L->cmd_y, line, 1);
+    text(L, L->ox + 2, L->cmd_y, line, BJ_C_INK);
 
     /* The correct play, when asked for.
      *
@@ -518,8 +597,8 @@ void bj_board_draw_status(const bj_layout_t *L, const bj_view_t *v)
              * worse than one that says so. */
             if (!bj_hint_exact(&v->g->rules)) cat(hl, sizeof hl, "?");
             fill(L, L->ox + L->w - 2 - slen(hl) * FW - 2, L->msg_y,
-                slen(hl) * FW + 4, FH, 0);
-            text(L, L->ox + L->w - 2 - slen(hl) * FW, L->msg_y, hl, 1);
+                slen(hl) * FW + 4, FH, BJ_C_BG);
+            text(L, L->ox + L->w - 2 - slen(hl) * FW, L->msg_y, hl, BJ_C_INK);
         }
     }
 }
@@ -533,13 +612,13 @@ void bj_board_draw(const bj_layout_t *L, const bj_view_t *v)
         g->phase == BJ_PHASE_BETTING);
 
     if (!L->ok) {
-        fill(L, L->ox, L->oy, L->w, L->h, 0);
-        text(L, L->ox + 2, L->oy + 2, "window too small", 1);
-        text(L, L->ox + 2, L->oy + 2 + BJ_LINE_H, "for a table", 1);
+        fill(L, L->ox, L->oy, L->w, L->h, BJ_C_BG);
+        text(L, L->ox + 2, L->oy + 2, "window too small", BJ_C_INK);
+        text(L, L->ox + 2, L->oy + 2 + BJ_LINE_H, "for a table", BJ_C_INK);
         return;
     }
 
-    fill(L, L->ox, L->oy, L->w, L->h, 0);
+    fill(L, L->ox, L->oy, L->w, L->h, BJ_C_BG);
 
     /* The rules are on the table, because every one of them moves the
      * house edge and a person should not have to read the source to
@@ -552,12 +631,12 @@ void bj_board_draw(const bj_layout_t *L, const bj_view_t *v)
     cat_num(line, sizeof line, g->rules.bj_pay_num);
     cat(line, sizeof line, ":");
     cat_num(line, sizeof line, g->rules.bj_pay_den);
-    text(L, L->ox + 2, L->status_y, line, 1);
+    text(L, L->ox + 2, L->status_y, line, BJ_C_INK);
 
     line[0] = '\0';
     cat_num(line, sizeof line, v->chips);
     cat(line, sizeof line, " chips");
-    text(L, L->ox + L->w - 2 - slen(line) * FW, L->status_y, line, 1);
+    text(L, L->ox + L->w - 2 - slen(line) * FW, L->status_y, line, BJ_C_INK);
 
     draw_dealer(L, v);
     draw_hands(L, v);
@@ -584,7 +663,21 @@ void bj_board_draw(const bj_layout_t *L, const bj_view_t *v)
              * above. Two meanings for one treatment would be confusing
              * if they were adjacent; they are not, and the row of chips
              * reads as a group. */
-            button(L, &L->chip[i], b, i != v->chip_sel);
+            if (scr && ar_color()) {
+                /* In colour a chip is its casino colour, the one
+                 * chosen ringed in gold. */
+                const bj_rect_t *r = &L->chip[i];
+                int tw = slen(b) * FW;
+                fill(L, r->x, r->y, r->w, r->h, BJ_C_CHIP5 + i);
+                frame(L, r->x, r->y, r->w, r->h,
+                    i == v->chip_sel ? BJ_C_ACT : BJ_C_FRAME);
+                if (i == v->chip_sel)
+                    frame(L, r->x + 1, r->y + 1, r->w - 2, r->h - 2, BJ_C_ACT);
+                text(L, r->x + (r->w - tw) / 2, r->y + (r->h - FH) / 2, b,
+                    BJ_C_INK);
+            } else {
+                button(L, &L->chip[i], b, i != v->chip_sel);
+            }
         }
     }
 

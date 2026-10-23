@@ -394,7 +394,13 @@ to 140,240, and game-mode colour's reach below row 479 in `zgfx` to
 140,276, and pix's icons laid over the release's (`icons.zic`, below)
 and keeping the pointer for a game that asks to 140,848 (budget 138K,
 141,312, `CORE_BUDGETS` in the top `Makefile`:
-[flash_apps.md](flash_apps.md)), about 106KB in flash (budget 105K).
+[flash_apps.md](flash_apps.md)), about 107KB in flash (budget 108K).
+The colour window's part ([color.md](color.md), "Who has it") was paid
+for by its key table (`kbd_sent`) going from 32 to 16 bits a key (512
+bytes of RAM) and by the per-click, per-resize and titlebar-icon lines
+on the console moving behind `wm_clip_debug` (about 480 bytes of flash):
+140,880 bytes with xPack GCC 15.2, 106,760 in flash (with the
+pointer hidden over a game's picture, `Z_WIN_FLAG_NO_POINTER`, 64 bytes).
 
 The two files take 8KB of the flash archive's file reserve, which went
 from 56K to 60K; `wm`'s flash budget went from 110K to 104K to pay for

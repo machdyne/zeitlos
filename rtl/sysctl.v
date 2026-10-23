@@ -3529,6 +3529,19 @@ module sysctl #()
 `else
 	localparam CURSOR_AVAILABLE = 1'b0;
 `endif
+	// The colour window (docs/color.md, "The colour window"): in
+	// desktop mode, the focused screen app's window in colour from the
+	// second VRAM sheet. `COLOR_WINDOW, with colour and more than four
+	// planes, and not on composite (whose viewport is permanent).
+`ifdef COLOR_WINDOW
+`ifdef GPU_COMPOSITE
+	localparam WIN_AVAILABLE = 1'b0;
+`else
+	localparam WIN_AVAILABLE = COLOR_AVAILABLE && (GAME_PLANES_N > 4);
+`endif
+`else
+	localparam WIN_AVAILABLE = 1'b0;
+`endif
 `ifdef GPU_COMPOSITE
 	localparam CVBS_AVAILABLE = COLOR_AVAILABLE;
 `else
@@ -3582,6 +3595,8 @@ module sysctl #()
 	wire socctl_pal_we;
 	wire [7:0] socctl_pal_idx;
 	wire [11:0] socctl_pal_rgb;
+	wire socctl_win_en;
+	wire [9:0] socctl_win_x0, socctl_win_y0, socctl_win_x1, socctl_win_y1;
 
 	// Scanout status coming back the other way. Zero on a board with
 	// no `GPU, which is the honest answer -- there is no scanout, so
@@ -3634,6 +3649,7 @@ module sysctl #()
 		.GAME_AVAIL(GAME_AVAILABLE),
 		.COLOR_AVAIL(COLOR_AVAILABLE),
 		.GAME_PLANES(GAME_PLANES_N),
+		.WIN_AVAIL(WIN_AVAILABLE),
 		.CURSOR_AVAIL(CURSOR_AVAILABLE),
 		.CVBS_AVAIL(CVBS_AVAILABLE),
 		.CVBS_MONO_RESET(CVBS_MONO_DEFAULT),
@@ -3679,7 +3695,12 @@ module sysctl #()
 		// this is still three bits, they alias MAGIC and FRAME --
 		// both read-only -- and software probing for colour there
 		// cannot disturb anything. See socctl.v's header.
-		.wb_adr_i({ 28'b0, wbm_adr_sel_word[3:0] }),
+		//
+		// FIVE now, for the colour window (words 16 and 17). On a
+		// four-bit bitstream they alias CTRL and MAGIC; software reads
+		// word 16's signature before writing either. Still well inside
+		// the 256-byte window.
+		.wb_adr_i({ 27'b0, wbm_adr_sel_word[4:0] }),
 		.wb_dat_i(wbm_dat_o),
 		.wb_dat_o(wbs_socctl_dat_o),
 		.wb_we_i(wbm_we),
@@ -3715,6 +3736,11 @@ module sysctl #()
 		.pal_idx(socctl_pal_idx),
 		.pal_rgb(socctl_pal_rgb),
 		.cvbs_mono(socctl_cvbs_mono),
+		.win_en(socctl_win_en),
+		.win_x0(socctl_win_x0),
+		.win_y0(socctl_win_y0),
+		.win_x1(socctl_win_x1),
+		.win_y1(socctl_win_y1),
 		.frame_ctr(gpu_frame_ctr),
 		.in_vblank(gpu_in_vblank),
 		.vram_we(socctl_vram_we),
@@ -4286,6 +4312,7 @@ module sysctl #()
 		.COLOR_AVAIL(COLOR_AVAILABLE),
 		.GAME_PLANES(GAME_PLANES_N),
 		.CBUF_LUTRAM(CBUF_LUTRAM_ON),
+		.WIN_AVAIL(WIN_AVAILABLE),
 		.CURSOR_AVAIL(CURSOR_AVAILABLE)
 	) gpu_video_i
 	(
@@ -4335,6 +4362,11 @@ module sysctl #()
 		.pal_idx(socctl_pal_idx),
 		.pal_rgb(socctl_pal_rgb),
 		.cvbs_mono(socctl_cvbs_mono),
+		.win_en(socctl_win_en),
+		.win_x0(socctl_win_x0),
+		.win_y0(socctl_win_y0),
+		.win_x1(socctl_win_x1),
+		.win_y1(socctl_win_y1),
 		.frame_ctr(gpu_frame_ctr),
 		.in_vblank(gpu_in_vblank),
 		// x and y are FRAMEBUFFER coordinates now, in both modes --

@@ -1,5 +1,7 @@
 # web -- an experimental web browser
 
+Kind: a **desktop app** ([app_kinds.md](app_kinds.md)).
+
 `sw/apps/web` is a text-mode web browser for Zeitlos. It renders
 documents, follows links, and acts as a **fetch service** so that
 other apps can make HTTP and HTTPS requests without containing any

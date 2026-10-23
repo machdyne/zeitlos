@@ -1,5 +1,7 @@
 # Backup
 
+Kind: a **desktop app** ([app_kinds.md](app_kinds.md)).
+
 Dated backups of your files on a second drive -- a USB stick, or an SD
 card in a USB reader -- and getting any file back, as it was at any of
 those times. It is not a mirror: a file you delete or spoil on the card

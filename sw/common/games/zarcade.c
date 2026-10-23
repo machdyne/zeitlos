@@ -90,7 +90,13 @@ static int ink_weight(const uint8_t *p) {
 static ar_rect_t clip_r = { 0, 0, AR_W, AR_H };
 
 static int plane_count(void) {
+	if (ar__s.wcolor) return ar__s.wl;
 	return ar__s.mode == AR_MODE_FULL_COLOR ? ar__s.planes : 1;
+}
+
+/* Drawing in colour: full screen, or in the window wm gave colour. */
+static bool colour_now(void) {
+	return ar__s.mode == AR_MODE_FULL_COLOR || ar__s.wcolor;
 }
 
 /* Plane k's framebuffer offset from plane 0: z_color_16's quadrants,
@@ -101,6 +107,45 @@ void ar__plane_off(int k, int *dx, int *dy) {
 	*dy = ((k & 2) ? 240 : 0) + ((k & 4) ? 480 : 0);
 }
 #define plane_off ar__plane_off
+
+/* Where plane k of the plane-0 rectangle (x, y, w, h) -- framebuffer
+ * coordinates -- is drawn: fn once per piece, with the piece's offset
+ * into the rectangle (for a source that moves with it). Full screen,
+ * one piece at the plane's place (plane_off()). In the colour window,
+ * plane 0 is the rectangle itself and plane k >= 1 is window plane
+ * k-1 at its folded place in the second sheet (zsoc.h's
+ * z_color_window_plane_xy()), split where the fold wraps: at most
+ * four pieces. Every offset is a multiple of 8, so screen-anchored
+ * patterns stay in phase. */
+typedef void (*plane_fn)(int x, int y, int w, int h, int ox, int oy,
+	const void *ctx);
+
+static void plane_pieces(int k, int x, int y, int w, int h, plane_fn fn,
+	const void *ctx) {
+	int j, X, Y, w1, h1, rows1;
+	if (!ar__s.wcolor) {
+		int px, py;
+		plane_off(k, &px, &py);
+		fn(x + px, y + py, w, h, 0, 0, ctx);
+		return;
+	}
+	if (k == 0) {
+		fn(x, y, w, h, 0, 0, ctx);
+		return;
+	}
+	j = k - 1;
+	rows1 = ar__s.rows1;
+	X = (x + ((j & 1) ? 320 : 0)) % 640;
+	Y = ((y + ((j & 2) ? 240 : 0)) % 480) % rows1;
+	w1 = w < 640 - X ? w : 640 - X;
+	h1 = h < rows1 - Y ? h : rows1 - Y;
+	fn(X, 480 + Y, w1, h1, 0, 0, ctx);
+	if (w > w1) fn(0, 480 + Y, w - w1, h1, w1, 0, ctx);
+	if (h > h1) {
+		fn(X, 480, w1, h - h1, 0, h1, ctx);
+		if (w > w1) fn(0, 480, w - w1, h - h1, w1, h1, ctx);
+	}
+}
 
 int ar__choose_planes(int hw_max) {
 	int n = ar__s.colours_want >= 256 ? 8 : ar__s.colours_want >= 64 ? 6 : 4;
@@ -114,9 +159,16 @@ void ar__pal_all_dirty(void) {
 	memset(ar__s.pal_dirty, 0xff, sizeof(ar__s.pal_dirty));
 }
 
+/* The box on top (ar_top), and its inks while it draws. */
+static ar_top_t top;
+static bool top_on;
+static const ar_ink_t *top_ink;
+
 /* The monochrome ink of index c. */
 static const uint8_t *ink_of(int c) {
-	int i = ar__s.mono_map ? ar__s.mono_map[c & 255] : c;
+	int i;
+	if (top_ink) return top_ink[c & 15].row;
+	i = ar__s.mono_map ? ar__s.mono_map[c & 255] : c;
 	return ar__s.d->ink[i & 15].row;
 }
 
@@ -126,7 +178,7 @@ void ar_mono_map(const uint8_t *to16) {
 }
 
 int ar_colours(void) {
-	return 1 << ar__s.planes;
+	return 1 << (ar__s.wcolor ? ar__s.wl : ar__s.planes);
 }
 
 /* Clip a logical rectangle to the current clip. Returns false if empty;
@@ -186,16 +238,19 @@ static void pattern_or_fill(int x, int y, int w, int h, const uint8_t *p) {
 	else arh_pattern(x, y, w, h, p);
 }
 
+static void fill_plane(int x, int y, int w, int h, int ox, int oy,
+	const void *ctx) {
+	(void)ox; (void)oy;
+	pattern_or_fill(x, y, w, h, (const uint8_t *)ctx);
+}
+
 static void fill_piece(int x, int y, int w, int h, int dsx, int dsy,
 	const void *ctx) {
 	const fill_ctx_t *f = (const fill_ctx_t *)ctx;
 	int k, n = plane_count();
 	(void)dsx; (void)dsy;
-	for (k = 0; k < n; k++) {
-		int px, py;
-		plane_off(k, &px, &py);
-		pattern_or_fill(x + px, y + py, w, h, f->pat[k]);
-	}
+	for (k = 0; k < n; k++)
+		plane_pieces(k, x, y, w, h, fill_plane, f->pat[k]);
 }
 
 /* Per-plane patterns for "c1 where pat is set, c0 elsewhere". In mono
@@ -204,8 +259,8 @@ static void fill_piece(int x, int y, int w, int h, int dsx, int dsy,
  * result is exact, not an approximation. */
 static void make_fill2(fill_ctx_t *f, int c0, int c1, const uint8_t *pat) {
 	int k, r;
-	if (ar__s.mode == AR_MODE_FULL_COLOR) {
-		for (k = 0; k < ar__s.planes; k++) {
+	if (colour_now()) {
+		for (k = 0; k < plane_count(); k++) {
 			uint8_t m0 = ((c0 >> k) & 1) ? 0xff : 0x00;
 			uint8_t m1 = ((c1 >> k) & 1) ? 0xff : 0x00;
 			for (r = 0; r < 8; r++)
@@ -242,7 +297,27 @@ typedef struct {
 	const void *bits;
 	int stride, sx, sy, c;
 	const ar_sprite_t *spr;
+	int k, rop;                 /* the plane being drawn, its ROP */
 } blit_ctx_t;
+
+/* One plane's piece of a blit: its source moved with the piece. */
+static void blit_plane(int x, int y, int w, int h, int ox, int oy,
+	const void *ctx) {
+	const blit_ctx_t *b = (const blit_ctx_t *)ctx;
+	arh_blit(b->bits, b->stride, b->sx + ox, b->sy + oy, x, y, w, h, b->rop);
+}
+
+static void sprite_plane(int x, int y, int w, int h, int ox, int oy,
+	const void *ctx) {
+	const blit_ctx_t *b = (const blit_ctx_t *)ctx;
+	const ar_sprite_t *s = b->spr;
+	if (s->plane[b->k])
+		arh_sprite(s->plane[b->k], s->mask, s->stride, b->sx + ox,
+			b->sy + oy, x, y, w, h);
+	else
+		arh_blit(s->mask, s->stride, b->sx + ox, b->sy + oy, x, y, w, h,
+			ARH_ANDN);
+}
 
 static void bitmap_piece(int x, int y, int w, int h, int dsx, int dsy,
 	const void *ctx) {
@@ -250,13 +325,13 @@ static void bitmap_piece(int x, int y, int w, int h, int dsx, int dsy,
 	const blit_ctx_t *b = (const blit_ctx_t *)ctx;
 	int sx = b->sx + dsx, sy = b->sy + dsy;
 
-	if (ar__s.mode == AR_MODE_FULL_COLOR) {
+	if (colour_now()) {
+		blit_ctx_t p = *b;
 		int k;
-		for (k = 0; k < ar__s.planes; k++) {
-			int px, py;
-			plane_off(k, &px, &py);
-			arh_blit(b->bits, b->stride, sx, sy, x + px, y + py, w, h,
-				((b->c >> k) & 1) ? ARH_OR : ARH_ANDN);
+		p.sx = sx; p.sy = sy;
+		for (k = 0; k < plane_count(); k++) {
+			p.rop = ((b->c >> k) & 1) ? ARH_OR : ARH_ANDN;
+			plane_pieces(k, x, y, w, h, blit_plane, &p);
 		}
 	} else {
 		const uint8_t *ink = ink_of(b->c);
@@ -267,25 +342,38 @@ static void bitmap_piece(int x, int y, int w, int h, int dsx, int dsy,
 	}
 }
 
+/* One plane's piece of ar_plane(): one pass where the blitter can --
+ * cleared then ORed, the plane is blank in between, and the beam may
+ * see it. */
+static void plane_copy(int x, int y, int w, int h, int ox, int oy,
+	const void *ctx) {
+	const blit_ctx_t *b = (const blit_ctx_t *)ctx;
+	if (arh_copy_ok()) {
+		arh_blit(b->bits, b->stride, b->sx + ox, b->sy + oy, x, y, w, h, ARH_COPY);
+		return;
+	}
+	arh_fill(x, y, w, h, 0);
+	arh_blit(b->bits, b->stride, b->sx + ox, b->sy + oy, x, y, w, h, ARH_OR);
+}
+
 static void plane_piece(int x, int y, int w, int h, int dsx, int dsy,
 	const void *ctx) {
 	const blit_ctx_t *b = (const blit_ctx_t *)ctx;
-	int px, py;
-	plane_off(b->c, &px, &py);
-	/* one pass where the blitter can: cleared then ORed, the plane is
-	 * blank in between, and the beam may see it */
-	if (arh_copy_ok()) {
-		arh_blit(b->bits, b->stride, b->sx + dsx, b->sy + dsy, x + px, y + py, w, h, ARH_COPY);
-		return;
-	}
-	arh_fill(x + px, y + py, w, h, 0);
-	arh_blit(b->bits, b->stride, b->sx + dsx, b->sy + dsy, x + px, y + py, w, h, ARH_OR);
+	blit_ctx_t p = *b;
+	p.sx += dsx; p.sy += dsy;
+	plane_pieces(b->c, x, y, w, h, plane_copy, &p);
+}
+
+/* The planes the ar_plane*() calls draw: full colour's, or the colour
+ * window's (plane 0 the desktop's). */
+static bool plane_ok(int k) {
+	return colour_now() && k >= 0 && k < plane_count();
 }
 
 void ar_plane(int k, const void *bits, int stride, int sx, int sy,
 	int x, int y, int w, int h) {
 	blit_ctx_t b;
-	if (ar__s.mode != AR_MODE_FULL_COLOR || k < 0 || k >= ar__s.planes) return;
+	if (!plane_ok(k)) return;
 	if (!clip_logical(&x, &y, &w, &h, &sx, &sy)) return;
 	b.bits = bits; b.stride = stride; b.sx = sx; b.sy = sy; b.c = k;
 	b.spr = NULL;
@@ -299,23 +387,29 @@ typedef struct {
 	int stride, sx, sy, k, rop, bit;
 } pl_ctx_t;
 
-static bool plane_ok(int k) {
-	return ar__s.mode == AR_MODE_FULL_COLOR && k >= 0 && k < ar__s.planes;
+static void pl_fill_one(int x, int y, int w, int h, int ox, int oy,
+	const void *ctx) {
+	(void)ox; (void)oy;
+	arh_fill(x, y, w, h, ((const pl_ctx_t *)ctx)->bit);
 }
 
 static void pl_fill_piece(int x, int y, int w, int h, int dsx, int dsy, const void *ctx) {
 	const pl_ctx_t *p = (const pl_ctx_t *)ctx;
-	int px, py;
 	(void)dsx; (void)dsy;
-	plane_off(p->k, &px, &py);
-	arh_fill(x + px, y + py, w, h, p->bit);
+	plane_pieces(p->k, x, y, w, h, pl_fill_one, p);
+}
+
+static void pl_blit_one(int x, int y, int w, int h, int ox, int oy,
+	const void *ctx) {
+	const pl_ctx_t *p = (const pl_ctx_t *)ctx;
+	arh_blit(p->bits, p->stride, p->sx + ox, p->sy + oy, x, y, w, h, p->rop);
 }
 
 static void pl_blit_piece(int x, int y, int w, int h, int dsx, int dsy, const void *ctx) {
 	const pl_ctx_t *p = (const pl_ctx_t *)ctx;
-	int px, py;
-	plane_off(p->k, &px, &py);
-	arh_blit(p->bits, p->stride, p->sx + dsx, p->sy + dsy, x + px, y + py, w, h, p->rop);
+	pl_ctx_t q = *p;
+	q.sx += dsx; q.sy += dsy;
+	plane_pieces(p->k, x, y, w, h, pl_blit_one, &q);
 }
 
 void ar_plane_fill(int k, int x, int y, int w, int h, int bit) {
@@ -347,21 +441,52 @@ void ar_plane_line(int k, int x0, int y0, int x1, int y1, int op) {
 	ar_plane_line_rows(k, x0, y0, x1, y1, op, -32768, 32767);
 }
 
+/* A line on one piece of a plane: the piece is the clip, the line
+ * moved with it. */
+typedef struct { int x0, y0, x1, y1, op, bx, by; } line_ctx_t;
+
+static void line_one(int x, int y, int w, int h, int ox, int oy,
+	const void *ctx) {
+	const line_ctx_t *l = (const line_ctx_t *)ctx;
+	int dx = x - (l->bx + ox), dy = y - (l->by + oy);
+	arh_line(l->x0 + dx, l->y0 + dy, l->x1 + dx, l->y1 + dy, l->op,
+		x, y, x + w - 1, y + h - 1);
+}
+
 void ar_plane_line_rows(int k, int x0, int y0, int x1, int y1, int op, int y0clip, int y1clip) {
-	int px, py, cx0, cy0, cx1, cy1;
-	if (!plane_ok(k)) return;
+	int cx0, cy0, cx1, cy1, i;
+	line_ctx_t l;
+	/* lines in black and white too: plane 0 is the picture there */
+	if (k < 0 || k >= plane_count()) return;
 	if (ar__s.targets_stale) arh_targets();
 	if (!ar__s.can_draw) return;
-	plane_off(k, &px, &py);
-	px += ar__s.ox; py += ar__s.oy;
-	/* the clip in framebuffer coordinates; in full screen the one
+	/* the clip in plane-0 framebuffer coordinates; in full screen and in
+	 * the colour window (wholly visible, or it has no colour) the one
 	 * visible rectangle is the whole picture */
-	cx0 = px + clip_r.x; cy0 = py + clip_r.y;
-	cx1 = px + clip_r.x + clip_r.w - 1; cy1 = py + clip_r.y + clip_r.h - 1;
-	if (y0clip > -32768 && py + y0clip > cy0) cy0 = py + y0clip;
-	if (y1clip < 32767 && py + y1clip < cy1) cy1 = py + y1clip;
-	if (cy1 < cy0) return;
-	arh_line(x0 + px, y0 + py, x1 + px, y1 + py, op, cx0, cy0, cx1, cy1);
+	cx0 = clip_r.x; cy0 = clip_r.y;
+	cx1 = clip_r.x + clip_r.w; cy1 = clip_r.y + clip_r.h;
+	if (y0clip > -32768 && y0clip > cy0) cy0 = y0clip;
+	if (y1clip < 32767 && y1clip + 1 < cy1) cy1 = y1clip + 1;
+	if (cy1 <= cy0 || cx1 <= cx0) return;
+	l.x0 = x0 + ar__s.ox; l.y0 = y0 + ar__s.oy;
+	l.x1 = x1 + ar__s.ox; l.y1 = y1 + ar__s.oy;
+	l.op = op;
+	l.bx = cx0 + ar__s.ox; l.by = cy0 + ar__s.oy;
+	if (ar__s.mode == AR_MODE_WINDOW && !ar__s.wcolor) {
+		/* the window in black and white, perhaps covered: each
+		 * visible rectangle a clip of its own */
+		for (i = 0; i < ar__s.nvis; i++) {
+			const ar_rect_t *v = &ar__s.vis[i];
+			int a0 = v->x > l.bx ? v->x : l.bx;
+			int b0 = v->y > l.by ? v->y : l.by;
+			int a1 = v->x + v->w < l.bx + cx1 - cx0 ? v->x + v->w : l.bx + cx1 - cx0;
+			int b1 = v->y + v->h < l.by + cy1 - cy0 ? v->y + v->h : l.by + cy1 - cy0;
+			if (a1 > a0 && b1 > b0)
+				arh_line(l.x0, l.y0, l.x1, l.y1, op, a0, b0, a1 - 1, b1 - 1);
+		}
+		return;
+	}
+	plane_pieces(k, l.bx, l.by, cx1 - cx0, cy1 - cy0, line_one, &l);
 }
 
 static void opaque_piece(int x, int y, int w, int h, int dsx, int dsy,
@@ -378,7 +503,7 @@ static void opaque_piece(int x, int y, int w, int h, int dsx, int dsy,
 void ar_bitmap_opaque(const void *bits, int stride, int sx, int sy,
 	int x, int y, int w, int h) {
 	blit_ctx_t b;
-	if (ar__s.mode == AR_MODE_FULL_COLOR) {
+	if (colour_now()) {
 		ar_fill(x, y, w, h, 0);
 		ar_bitmap(bits, stride, sx, sy, x, y, w, h, 1);
 		return;
@@ -405,17 +530,13 @@ static void sprite_piece(int x, int y, int w, int h, int dsx, int dsy,
 	const ar_sprite_t *s = b->spr;
 	int sx = b->sx + dsx, sy = b->sy + dsy;
 
-	if (ar__s.mode == AR_MODE_FULL_COLOR) {
+	if (colour_now()) {
+		blit_ctx_t p = *b;
 		int k;
-		for (k = 0; k < ar__s.planes; k++) {
-			int px, py;
-			plane_off(k, &px, &py);
-			if (s->plane[k])
-				arh_sprite(s->plane[k], s->mask, s->stride, sx, sy,
-					x + px, y + py, w, h);
-			else
-				arh_blit(s->mask, s->stride, sx, sy, x + px, y + py,
-					w, h, ARH_ANDN);
+		p.sx = sx; p.sy = sy;
+		for (k = 0; k < plane_count(); k++) {
+			p.k = k;
+			plane_pieces(k, x, y, w, h, sprite_plane, &p);
 		}
 	} else {
 		arh_sprite(s->mono, s->mask, s->stride, sx, sy, x, y, w, h);
@@ -810,12 +931,46 @@ uint64_t ar__gap_max, ar__gap_sum, ar__gap_n;
 static uint64_t run_ops[320];
 #endif
 
-/* One dirty run, painted by the game with every draw clipped to it. */
+/* One dirty run, painted by the game with every draw clipped to it,
+ * and the box on top over it where they meet. */
 static void paint_rect(const ar_rect_t *r) {
+	bool hidden = top_on && top.opaque &&
+		r->x >= top.area.x && r->y >= top.area.y &&
+		r->x + r->w <= top.area.x + top.area.w &&
+		r->y + r->h <= top.area.y + top.area.h;
 	clip_r = *r;
-	if (ar__s.d && ar__s.d->paint)
+	if (ar__s.d && ar__s.d->paint && !hidden)
 		ar__s.d->paint(ar__s.d->user, r);
+	if (top_on && top.paint) {
+		int x0 = r->x > top.area.x ? r->x : top.area.x;
+		int y0 = r->y > top.area.y ? r->y : top.area.y;
+		int x1 = r->x + r->w < top.area.x + top.area.w ?
+			r->x + r->w : top.area.x + top.area.w;
+		int y1 = r->y + r->h < top.area.y + top.area.h ?
+			r->y + r->h : top.area.y + top.area.h;
+		if (x1 > x0 && y1 > y0) {
+			clip_r.x = (int16_t)x0; clip_r.y = (int16_t)y0;
+			clip_r.w = (int16_t)(x1 - x0); clip_r.h = (int16_t)(y1 - y0);
+			top_ink = top.ink;
+			top.paint(top.user, &clip_r);
+			top_ink = NULL;
+		}
+	}
 }
+
+void ar_top(const ar_top_t *t) {
+	if (top_on) ar_dirty(top.area.x, top.area.y, top.area.w, top.area.h);
+	top_on = t != NULL;
+	if (t) {
+		top = *t;
+		ar_dirty(top.area.x, top.area.y, top.area.w, top.area.h);
+	}
+	ar__s.modal = top_on;
+}
+
+bool ar_top_on(void) { return top_on; }
+
+void ar_push(const ar_event_t *e) { ar__queue(e); }
 
 #define MAX_RUNS 320
 static struct { ar_rect_t r; bool done; } runs[MAX_RUNS];
@@ -852,6 +1007,9 @@ void ar__render(void) {
 		return;
 	}
 
+	/* A box is up: the program's overlays are not drawn (ar_top). */
+	if (top_on) n_cur = 0;
+
 	/* 1. Overlays that moved, changed or went away: where they WERE
 	 *    is dirty. Compared in order; see the note at the top. */
 	if (!ov_forget) {
@@ -865,7 +1023,7 @@ void ar__render(void) {
 	reg_all = false;
 
 	/* The game's copies, before anything is painted over them. */
-	if (ar__s.d && ar__s.d->before_paint && !ar__s.verifying) {
+	if (ar__s.d && ar__s.d->before_paint && !ar__s.verifying && !top_on) {
 		clip_r.x = 0; clip_r.y = 0; clip_r.w = AR_W; clip_r.h = AR_H;
 		ar__s.d->before_paint(ar__s.d->user);
 	}
@@ -1009,6 +1167,8 @@ bool ar_copy(int sx, int sy, int dx, int dy, int w, int h) {
 	if (ar__s.targets_stale) arh_targets();
 	if (!ar__s.can_draw) return false;
 	if (ar__s.mode == AR_MODE_WINDOW && !ar__s.vis_whole) return false;
+	/* the window's colour planes are folded: a copy may wrap there */
+	if (ar__s.wcolor) return false;
 
 	/* Both rectangles inside the play area: a copy is never clipped,
 	 * because a clipped copy is the case the blitter gets wrong
@@ -1659,7 +1819,28 @@ uint32_t ar_ticks(void) { return ar__s.ticks; }
 void ar_text_input(bool on) { ar__s.text_input = on; }
 ar_mode_t ar_mode(void) { return ar__s.mode; }
 bool ar_fullscreen(void) { return ar__s.mode != AR_MODE_WINDOW; }
-bool ar_color(void) { return ar__s.mode == AR_MODE_FULL_COLOR; }
+bool ar_color(void) { return colour_now(); }
+
+void ar__wcolor(bool on, int extra, int rows1) {
+	bool was = ar__s.wcolor;
+	ar_event_t e;
+	if (on) {
+		/* the bits a colour takes: 4 for 16 colours, 6 for more; the
+		 * window has 1 + extra */
+		int want = ar__s.colours_want >= 64 ? 6 : 4;
+		ar__s.wl = 1 + extra < want ? 1 + extra : want;
+		ar__s.wl_hw = 1 + extra;
+		ar__s.rows1 = rows1 == 480 ? 480 : 240;
+		ar__pal_all_dirty();
+	}
+	ar__s.wcolor = on;
+	ar__invalidate();
+	if (on != was) {
+		memset(&e, 0, sizeof(e));
+		e.type = AR_EV_MODE;
+		ar__queue(&e);
+	}
+}
 
 #ifdef AR_HOST_TESTS
 /* tests/test_zarcade.c: submit again exactly the overlays of the frame

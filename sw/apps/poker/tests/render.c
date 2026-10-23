@@ -27,9 +27,62 @@
 #include "poker_shim.h"
 
 #include "../table_ui.h"
+#include "../../../common/games/tests/ar_host.h"
 
+/* -- the screen face: the same table through the arcade runtime, in
+ * colour (`render DIR scr-flop` and the other states with scr-) -- */
 static pk_game_t game;
 static pt_view_t view;
+
+static void scr_paint(void *user, const ar_rect_t *r)
+{
+    pt_layout_t t;
+    (void)user; (void)r;
+    pt_layout(&t, &view, 0, 0, AR_W, AR_H);
+    pt_draw_all(&t, &view);
+}
+
+#define SHOT(f, n)      { (f), ARH_SHOT, 0, 0, (n), 0, 0, 0, 0 }
+#define MODE(f, m)      { (f), (m), 0, 0, NULL, 0, 0, 0, 0 }
+#define WCOLOR(f, on)   { (f), ARH_WCOLOR, (on), 0, NULL, 0, 0, 0, 0 }
+#define END(f)          { (f), ARH_END, 0, 0, NULL, 0, 0, 0, 0 }
+
+static int screen_face(const char *dir, const char *what)
+{
+    static ar_desc_t desc;
+    static char n1[48], n2[48], n3[48];
+    ar_host_step_t script[8];
+    ar_event_t e;
+    int k = 0;
+
+    snprintf(n1, sizeof n1, "%s_window", what);
+    snprintf(n2, sizeof n2, "%s_colour_window", what);
+    snprintf(n3, sizeof n3, "%s_full", what);
+    script[k++] = (ar_host_step_t)SHOT(3, n1);
+    script[k++] = (ar_host_step_t)WCOLOR(4, 1);
+    script[k++] = (ar_host_step_t)SHOT(7, n2);
+    script[k++] = (ar_host_step_t)MODE(8, ARH_FULL_COLOR);
+    script[k++] = (ar_host_step_t)SHOT(11, n3);
+    script[k++] = (ar_host_step_t)END(14);
+
+    desc.name = "poker";
+    desc.paint = scr_paint;
+    memcpy(desc.palette, pt_palette, sizeof desc.palette);
+    pt_mono_inks(desc.ink);
+    pt_screen(true);
+    ar_window_colour(true);
+    ar_host_run(script, dir);
+    if (!ar_init(&desc)) return 1;
+    for (;;) {
+        bool quit = false;
+        while (ar_poll(&e)) if (e.type == AR_EV_QUIT) quit = true;
+        if (quit) break;
+        ar_frame();
+    }
+    printf("render: %s, %d pictures in %s, %u frames verified, %u differ\n",
+        what, ar_host_shots(), dir, ar_host_verified(), ar_host_verify_bad());
+    return ar_host_verify_bad() ? 1 : 0;
+}
 
 static uint8_t C(const char *s)
 {
@@ -87,6 +140,7 @@ int main(int argc, char **argv)
 {
     const char *path = argc > 1 ? argv[1] : "/tmp/poker.pbm";
     const char *what = argc > 2 ? argv[2] : "flop";
+    const char *scr = NULL;
     z_win_t win;
     pt_layout_t L;
     int w = 320, h = 240;
@@ -97,6 +151,10 @@ int main(int argc, char **argv)
     static const char *const river[] = { "Ah", "Kd", "7c", "2s", "Qh" };
 
     if (!strcmp(what, "narrow")) { w = 220; h = 200; }
+
+    /* scr-<state>: that state on the screen face, pictures into the
+     * directory `path` */
+    if (!strncmp(what, "scr-", 4)) { scr = what; what += 4; }
 
     zg_rng_seed(20260915);
 
@@ -213,6 +271,8 @@ int main(int argc, char **argv)
         game.pot = 60;
         say("pick cards to throw away, then Return");
     }
+
+    if (scr) return screen_face(path, scr);
 
     if (!z_render_open(&win, w, h)) {
         fprintf(stderr, "render: cannot map the framebuffer here "

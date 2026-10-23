@@ -1,5 +1,7 @@
 # craps
 
+Kind: dual -- a resizable desktop window, and a 320x240 screen in colour in the same window ([app_kinds.md](app_kinds.md)).
+
 **Status: complete.** The whole felt, the come-out and point phases,
 free odds, and chips that persist in `/data/casino/bank.dat`.
 
@@ -7,7 +9,34 @@ free odds, and chips that persist in `/data/casino/bank.dat`.
     make test                                  # 131 checks, plus 196 shared
     make render WHAT=comeout|point|rolling     # draws it, for looking at
 
-53,088 bytes for rv32i, no soft-float in the app's own objects.
+No soft-float in the app's own objects. `make render` also draws the
+three states on the screen face (`tests/out/scr-*.png`: the window in
+black and white, its colour window, full screen), every frame checked
+against a full repaint.
+
+## In colour
+
+**F10**, or the colour icon on the titlebar (a rainbow), turns the
+window into craps's **screen face**: the same table on a 320x240
+screen, through the arcade runtime ([arcade.md](arcade.md), "A dual
+app"), in colour where the window has the colour window
+([color.md](color.md)) -- green felt with pale lines, red dice with
+white pips, the puck white when a point is on and black when off, the
+field's numbers in yellow, what is riding on a spot as a gold chip, a
+spot that cannot be bet darker felt. **F11** (or `game`) is the screen
+face full screen, from either face; Esc there comes back to the window.
+F10, the icon or resizing the window go back to the desktop table, once
+the dice have landed. On the screen face F1 is the help on the screen,
+the tumble goes a runtime frame at a time, and the keys, the command
+line and the mouse work as on the desktop (typed `c` and `m` are
+letters).
+
+The table asks for every colour by **role** (`CR_C_*` in `cr_board.h`);
+the desktop draws the roles in one bit -- exactly the old table -- and
+the screen face in `cr_palette`. In black and white the screen face is
+the desktop's table (its dice the desktop's tiles, its circles the
+runtime's fills). A colour die is the tile's pips (its dark pixels
+inside the body) in white on red, the corners cut.
 
 ## The edge is derived, not declared
 
@@ -221,9 +250,9 @@ stack down twice.
 | `down 6` | takes a place bet back; the line is contract and stays |
 | `bank`, `buyin`, `game`, `quit` | |
 
-`F1` shows the help box in the window -- these lines, and `F11` (or
-`game`) for full screen; in game mode F1 does nothing. `F11` toggles
-full screen ([keys.md](keys.md)).
+`F1` shows the help -- these lines, `F10` for the table in colour and
+`F11` (or `game`) for full screen ([keys.md](keys.md)): a box in the
+window, the screen's help on the screen face.
 
 Refusals say **why** where the reason is a phase rather than a typo —
 "the line is closed once a point is on, use come" rather than "no". On a

@@ -216,6 +216,7 @@ typedef struct {
 	bool up, down, lpress, rpress, ok, back, pause;
 	bool vol_down, vol_up;
 	bool tog_col, tog_music;
+	bool help;                 /* F1 */
 } mr_input_t;
 
 /* -- reading the keyboard as LEVELS, not events --
@@ -300,12 +301,15 @@ static bool kbd_held(uint8_t usage) {
 #define HID_C      0x06    /* c -- colour on or off */
 #define HID_M      0x10    /* m -- music on or off */
 #define HID_P      0x13    /* p -- pause */
+#define HID_F1     0x3A    /* help (docs/keys.md) */
+#define HID_F10    0x43    /* colour on or off, as C (docs/keys.md) */
 
 /* Levels this frame and last, as bits, so a press is an edge. */
 enum {
 	K_LEFT = 1 << 0, K_RIGHT = 1 << 1, K_UP = 1 << 2, K_DOWN = 1 << 3,
 	K_JUMP = 1 << 4, K_OK = 1 << 5, K_BACK = 1 << 6, K_PAUSE = 1 << 7,
-	K_VDOWN = 1 << 8, K_VUP = 1 << 9, K_COL = 1 << 10, K_MUS = 1 << 11
+	K_VDOWN = 1 << 8, K_VUP = 1 << 9, K_COL = 1 << 10, K_MUS = 1 << 11,
+	K_HELP = 1 << 12
 };
 static uint32_t keys_prev;
 
@@ -323,7 +327,8 @@ static void input_read(mr_input_t *in) {
 	if (kbd_held(HID_P)) k |= K_PAUSE;
 	if (kbd_held(HID_MINUS)) k |= K_VDOWN;
 	if (kbd_held(HID_EQUAL)) k |= K_VUP;
-	if (kbd_held(HID_C)) k |= K_COL;
+	if (kbd_held(HID_C) || kbd_held(HID_F10)) k |= K_COL;
+	if (kbd_held(HID_F1)) k |= K_HELP;
 	if (kbd_held(HID_M)) k |= K_MUS;
 
 	/* Pad 0, whichever port it is in. Reads 0 when absent, which is
@@ -358,6 +363,7 @@ static void input_read(mr_input_t *in) {
 	in->vol_up = (e & K_VUP) != 0;
 	in->tog_col = (e & K_COL) != 0;
 	in->tog_music = (e & K_MUS) != 0;
+	in->help = (e & K_HELP) != 0;
 }
 
 /* -- drawing --------------------------------------------------------
@@ -3122,7 +3128,24 @@ static void draw_intro(void) {
 	label_centre(&ui[2], 132, MR_C_GREEN);
 }
 
+/* F1: the keys, on the game's own screen, the game paused under them
+ * (docs/keys.md: F1 is help in every app). */
+static bool pause_help;
+
+static void draw_help(void) {
+	panel(32, 40, 256, 160);
+	ui_line(0, "HELP", 2, 50);
+	ui_line(1, "ARROWS: RUN   UP, SPACE: JUMP", 1, 78);
+	ui_line(2, "ENTER, SPACE: CHOOSE", 1, 94);
+	ui_line(3, "P: PAUSE   ESC: BACK", 1, 110);
+	ui_line(4, "C OR F10: COLOUR   M: MUSIC", 1, 126);
+	ui_line(5, "- AND =: VOLUME", 1, 142);
+	label_make(&ui[6], "F1 OR P: GO ON", 1);
+	label_centre(&ui[6], 176, MR_C_GREEN);
+}
+
 static void draw_pause(void) {
+	if (pause_help) { draw_help(); return; }
 	panel(64, 88, 192, 56);
 	ui_line(0, "PAUSED", 2, 98);
 	label_make(&ui[1], "P: GO ON   ESC: MENU", 1);
@@ -3372,7 +3395,8 @@ static bool screens(const mr_input_t *in, uint32_t steps) {
 		break;
 
 	case ST_PLAY:
-		if (in->pause || in->back) {
+		if (in->pause || in->back || in->help) {
+			pause_help = in->help;
 			set_state(ST_PAUSE);
 			zsfx_suspend(true);
 			break;
@@ -3401,7 +3425,12 @@ static bool screens(const mr_input_t *in, uint32_t steps) {
 		break;
 
 	case ST_PAUSE:
-		if (in->pause || in->ok) { set_state(ST_PLAY); zsfx_suspend(false); }
+		if (in->help && !pause_help) pause_help = true;
+		else if (in->pause || in->ok || in->help) {
+			pause_help = false;
+			set_state(ST_PLAY);
+			zsfx_suspend(false);
+		}
 		else if (in->back) { zsfx_suspend(false); title(); }
 		break;
 

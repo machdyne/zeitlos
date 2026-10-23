@@ -1,5 +1,7 @@
 # settings
 
+Kind: a **desktop app** ([app_kinds.md](app_kinds.md)).
+
 System preferences, and the editor for `/sys/zeitlos.cfg`. `sw/apps/settings`.
 
 ```

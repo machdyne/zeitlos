@@ -14,6 +14,7 @@ APPS = casino poker roulette blackjack slots craps \
 	gpu3d \
 	wm \
 	hello_win \
+	colwin \
 	draw \
 	pix \
 	view \

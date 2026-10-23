@@ -1,5 +1,7 @@
 # track
 
+Kind: a **desktop app** ([app_kinds.md](app_kinds.md)).
+
 A ProTracker MOD player. `sw/apps/track`.
 
 ```

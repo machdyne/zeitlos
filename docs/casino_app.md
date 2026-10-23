@@ -1,5 +1,7 @@
 # sw/apps/casino -- Zeitlos Casino
 
+Kind: a **desktop app** ([app_kinds.md](app_kinds.md)).
+
 The front desk. One window that shows what you are worth, lends you
 money when you are not worth anything, and starts the five games — so
 the dock needs **one** icon instead of six.

@@ -1,5 +1,7 @@
 # mesh
 
+Kind: a **desktop app** ([app_kinds.md](app_kinds.md)).
+
 A Meshtastic client for Zeitlos. `sw/apps/mesh` talks to a LoRa node
 running Meshtastic firmware -- first target a Heltec WiFi LoRa 32 V3 --
 over USB, using Meshtastic's streaming client API, and gives you the

@@ -162,6 +162,15 @@
 // before. Release boards: 6 on the 25F parts, 8 on the 45F ones.
 // docs/color.md, "More than four planes".
 //
+// `COLOR_WINDOW -- with `COLOR and `GAME_PLANES 6 or 8, the colour
+// window: in desktop mode, one rectangle (the focused screen app's
+// window, up to 320x240) shown through the palette, its index the
+// desktop's bit and the second sheet's planes -- 8 colours with six
+// planes, 32 with eight. A rectangle register in socctl and a few
+// comparators and muxes in the pixel domain; no block RAM, no extra
+// VRAM reads. On by default on the 45F boards (`GAME_PLANES 8); the
+// 25F boards may get it if it fits. docs/color.md, "The colour window".
+//
 // `GPU_CURSOR_LUTRAM -- the cursor's four shapes and the game-mode
 // palette in distributed (LUT) RAM instead of their own DP16KD: one
 // block fewer for a few dozen LUTs (64 x 16 for the shapes, 64 x 12 for
@@ -794,6 +803,8 @@
 `define COLOR
 // 256 colours: +20 DP16KD of VRAM (docs/color.md, "More than four planes")
 `define GAME_PLANES 8
+// the focused screen app's window in 32 colours (docs/color.md)
+`define COLOR_WINDOW
 `define UART0
 // USB host controller (rtl/usb/, docs/usb_host.md) instead of the
 // low-speed HID-only rtl/ext/usb_hid_host. Both cores remain
@@ -881,6 +892,8 @@
 `define COLOR
 // 256 colours: +20 DP16KD of VRAM (docs/color.md, "More than four planes")
 `define GAME_PLANES 8
+// the focused screen app's window in 32 colours (docs/color.md)
+`define COLOR_WINDOW
 `define UART0
 // USB host controller (rtl/usb/, docs/usb_host.md) instead of the
 // low-speed HID-only rtl/ext/usb_hid_host. Both cores remain
@@ -954,6 +967,8 @@
 `define COLOR
 // 256 colours: +20 DP16KD of VRAM (docs/color.md, "More than four planes")
 `define GAME_PLANES 8
+// the focused screen app's window in 32 colours (docs/color.md)
+`define COLOR_WINDOW
 `define UART0
 // The console is the USB-C socket (`undef at the bottom drops
 // `UART0): Noir has no PMOD, so this is the console that needs no
@@ -1116,6 +1131,8 @@
 `define COLOR
 // 256 colours: +20 DP16KD of VRAM (docs/color.md, "More than four planes")
 `define GAME_PLANES 8
+// the focused screen app's window in 32 colours (docs/color.md)
+`define COLOR_WINDOW
 `define UART0
 `define USB_HOST
 `define SPI_SDCARD
@@ -1351,6 +1368,8 @@
 `define COLOR
 // 256 colours: +20 DP16KD of VRAM (docs/color.md, "More than four planes")
 `define GAME_PLANES 8
+// the focused screen app's window in 32 colours (docs/color.md)
+`define COLOR_WINDOW
 `define UART0
 `define USB_HOST
 `define SPI_SDCARD
@@ -1651,6 +1670,8 @@
 `define COLOR
 // 256 colours: +20 DP16KD of VRAM (docs/color.md, "More than four planes")
 `define GAME_PLANES 8
+// the focused screen app's window in 32 colours (docs/color.md)
+`define COLOR_WINDOW
 `define UART0
 `define USB_CDC
 `define USB_HOST

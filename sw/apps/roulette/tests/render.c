@@ -18,6 +18,94 @@
 
 #include "roulette_shim.h"
 #include "../rl_board.h"
+#include "../../../common/games/tests/ar_host.h"
+
+/* -- the screen face: the table through the arcade runtime, in colour
+ * (`render DIR scr-board`, `scr-amer`): the window in black and white,
+ * its colour window, full screen, every frame checked against a full
+ * repaint -- */
+static rl_round_t s_round;
+static rl_wheel_t s_wheel;
+static rl_view_t s_view;
+
+static void scr_paint(void *user, const ar_rect_t *r)
+{
+    rl_layout_t t;
+    (void)user; (void)r;
+    rl_board_layout(&t, &s_view, 0, 0, AR_W, AR_H);
+    s_wheel.cx = t.wheel_cx; s_wheel.cy = t.wheel_cy; s_wheel.r = t.wheel_r;
+    s_wheel.ball_r = (t.wheel_r * 74) / 100;
+    s_wheel.prev_ball_r = s_wheel.ball_r;
+    rl_board_draw(&t, &s_view);
+}
+
+#define SHOT(f, n)      { (f), ARH_SHOT, 0, 0, (n), 0, 0, 0, 0 }
+#define MODE(f, m)      { (f), (m), 0, 0, NULL, 0, 0, 0, 0 }
+#define WCOLOR(f, on)   { (f), ARH_WCOLOR, (on), 0, NULL, 0, 0, 0, 0 }
+#define END(f)          { (f), ARH_END, 0, 0, NULL, 0, 0, 0, 0 }
+
+static int screen_face(const char *dir, const char *what)
+{
+    static ar_desc_t desc;
+    static char n1[48], n2[48], n3[48];
+    ar_host_step_t script[8];
+    ar_event_t e;
+    int k = 0, wl = strcmp(what, "scr-amer") ? RL_EURO : RL_AMERICAN;
+
+    rl_round_clear(&s_round, wl);
+    rl_wheel_init(&s_wheel, wl, 0, 0, 40);
+    s_view.round = &s_round;
+    s_view.wheel = &s_wheel;
+    s_view.chips = 864;
+    s_view.chip_sel = 2;
+    s_view.trng = true;
+    s_view.result = wl == RL_AMERICAN ? RL_DOUBLE_ZERO : 17;
+    s_view.last_staked = 40;
+    s_view.last_return = 75;
+    s_view.nhistory = 5;
+    s_view.history[0] = 17; s_view.history[1] = 0; s_view.history[2] = 33;
+    s_view.history[3] = 26; s_view.history[4] = 5;
+    strcpy(s_view.message, "click a number, a line or a corner");
+    strcpy(s_view.cmd, "red 25");
+    s_view.cmd_len = 6;
+    rl_bet_place(&s_round, RL_STRAIGHT, 17, 25);
+    rl_bet_place(&s_round, RL_RED, 0, 5);
+    rl_bet_place(&s_round, RL_BLACK, 0, 1);
+    rl_bet_place(&s_round, RL_CORNER, 4, 1);
+    rl_bet_place(&s_round, RL_SPLIT, 3, 5);
+    rl_bet_place(&s_round, RL_DOZEN, 1, 100);
+    rl_bet_place(&s_round, RL_COLUMN, 0, 5);
+    s_wheel.ball_a = rl_wheel_angle(wl, 17);
+    s_wheel.prev_ball_a = s_wheel.ball_a;
+
+    snprintf(n1, sizeof n1, "%s_window", what);
+    snprintf(n2, sizeof n2, "%s_colour_window", what);
+    snprintf(n3, sizeof n3, "%s_full", what);
+    script[k++] = (ar_host_step_t)SHOT(3, n1);
+    script[k++] = (ar_host_step_t)WCOLOR(4, 1);
+    script[k++] = (ar_host_step_t)SHOT(7, n2);
+    script[k++] = (ar_host_step_t)MODE(8, ARH_FULL_COLOR);
+    script[k++] = (ar_host_step_t)SHOT(11, n3);
+    script[k++] = (ar_host_step_t)END(14);
+
+    desc.name = "roulette";
+    desc.paint = scr_paint;
+    memcpy(desc.palette, rl_palette, sizeof desc.palette);
+    rl_mono_inks(desc.ink);
+    rl_screen(true);
+    ar_window_colour(true);
+    ar_host_run(script, dir);
+    if (!ar_init(&desc)) return 1;
+    for (;;) {
+        bool quit = false;
+        while (ar_poll(&e)) if (e.type == AR_EV_QUIT) quit = true;
+        if (quit) break;
+        ar_frame();
+    }
+    printf("render: %s, %d pictures in %s, %u frames verified, %u differ\n",
+        what, ar_host_shots(), dir, ar_host_verified(), ar_host_verify_bad());
+    return ar_host_verify_bad() ? 1 : 0;
+}
 
 static z_win_t win;
 
@@ -53,6 +141,8 @@ int main(int argc, char **argv)
     const char *what = argc > 2 ? argv[2] : "wheel";
     z_clip_t clip;
     rl_wheel_t w;
+
+    if (!strncmp(what, "scr-", 4)) return screen_face(path, what);
 
     if (!z_render_open(&win, 320, 240)) {
         fprintf(stderr, "render: cannot map the framebuffer here "

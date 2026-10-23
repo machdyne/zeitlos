@@ -1,7 +1,7 @@
 /*
  * Zeitlos chess.
  *
- * A chessboard that runs in a window or full screen, plays against
+ * A chessboard that runs in a window, in colour or full screen, plays against
  * you at eight difficulty levels, and can be driven entirely from the
  * keyboard or entirely with a mouse.
  *
@@ -37,11 +37,16 @@
  *      Running a command mid-search would mutate the game under the
  *      search's feet.
  *
- * -- windowed and full screen --
+ * -- two faces: the desktop and the screen (a dual app) --
  *
- * Both, from one renderer. board_ui.c draws against an origin and a
- * clip rectangle; windowed passes the window's content rectangle and
- * game mode passes a 320x240 page. See board_ui.h.
+ * Both from one renderer. board_ui.c draws against an origin and a
+ * clip rectangle; the desktop face passes the window's content
+ * rectangle and draws in one bit. F10, the colour icon or F11 lend the
+ * window to the arcade runtime (ar_attach(), sw/common/games/zarcade.h)
+ * and the same board is drawn on its 320x240 screen in colour
+ * (cb_screen()), full screen with F11. F10, the icon or a resize ask
+ * for the desktop face back (AR_EV_DESKTOP), taken once no search is
+ * running. docs/chess_app.md, "In colour"; docs/app_kinds.md.
  */
 
 #include <stdio.h>
@@ -64,6 +69,7 @@
 #include "game.h"
 #include "board_ui.h"
 #include "input.h"
+#include "../../common/games/zarcade.h"
 
 /* Content needs CB_LABEL_W + CB_BOARD + CB_GAP for the board block
  * and a panel wide enough for a move list; the height is the board,
@@ -76,9 +82,8 @@ static chess_game_t game;
 static cb_layout_t layout_rect;
 
 static bool running = true;
-static bool game_mode;
-static int  game_front;          /* the page currently being scanned out */
-static bool exit_armed;
+static bool scr;            /* the screen face: the runtime has the window */
+static bool want_desktop;   /* it asked for the desktop face (AR_EV_DESKTOP) */
 static bool in_search;
 
 static void repaint(void);
@@ -137,12 +142,41 @@ static uint32_t now_ms(void) {
 
 /* -- drawing -------------------------------------------------------- */
 
+/* The screen face's picture, for the runtime: the whole board, cut to
+ * what it repaints (docs/chess_app.md, "In colour"). */
+static void scr_paint(void *user, const ar_rect_t *r) {
+	cb_layout_t t;
+	(void)user; (void)r;
+	cb_layout(&t, 0, 0, AR_W, AR_H, game.flipped);
+	cb_draw_all(&t, &game);
+}
+
+static char help_text[] =
+	"Chess against the computer, at eight levels, by keyboard "
+	"or mouse.\n\n"
+	"Typing\tA move: e4, Nf3, e2e4, O-O; Enter plays it\n"
+	"Click\tA piece, then the square to move it to\n"
+	"Esc\tClear the line, put the piece down, stop "
+	"the engine thinking\n"
+	"F10\tColour: the board on a 320x240 colour screen\n"
+	"F11\tFull screen (Esc comes back)\n\n"
+	"Commands, typed the same way: new [white|black|two|demo], "
+	"level 1-8, undo, flip, hint, hints, moves, fen, bench, "
+	"game, quit.";
+
+static ar_desc_t desc = {
+	.name = "chess",
+	.help_title = "Chess help",
+	.help_text = help_text,
+	.help_doc = "chess_app",
+	.paint = scr_paint,
+	.pointer = true,
+};
+
 static void relayout(void) {
 
-	if (game_mode) {
-		int px = (game_front ^ 1) * Z_GAME_VIEW_W;    /* the back page */
-		cb_layout(&layout_rect, px, 0, Z_GAME_VIEW_W, Z_GAME_VIEW_H,
-			game.flipped);
+	if (scr) {
+		cb_layout(&layout_rect, 0, 0, AR_W, AR_H, game.flipped);
 	} else {
 		z_clip_t c;
 		/* Loads this window's visible region as a side effect, which
@@ -158,22 +192,9 @@ static void relayout(void) {
 
 static void repaint(void) {
 
-	if (game_mode) {
-
-		/* Nothing is in front of a game-mode page, so the window
-		 * manager's clip region has to be OUT of the way -- left in
-		 * place it would clip drawing to wherever this app's window
-		 * happens to sit on the desktop behind. */
-		z_gfx_clear_visible();
-		z_gfx_blit_scissor_reset();
-
-		relayout();
-		cb_draw_all(&layout_rect, &game);
-
-		z_game_set_view((uint32_t)((game_front ^ 1) * Z_GAME_VIEW_W), 0);
-		z_game_wait_frame();
-		game_front ^= 1;
-
+	/* The screen face: the runtime repaints at its next frame. */
+	if (scr) {
+		ar_dirty_all();
 		return;
 	}
 
@@ -182,77 +203,44 @@ static void repaint(void) {
 
 }
 
-/* The panel alone, drawn into the page that is ALREADY visible.
- *
- * Used only by the thinking indicator. A full repaint would flip
- * pages, and flipping sixty times during one search to update a node
- * count is a lot of blitting for a number. The panel is text on a
- * cleared rectangle, so drawing it straight into the visible page
- * cannot tear in any way a person would see. */
+/* The panel alone, for the thinking indicator. A full repaint sixty
+ * times during one search to update a node count is a lot of drawing
+ * for a number; the panel is text on a cleared rectangle. On the
+ * screen face drawn straight away too. */
 static void repaint_thinking(void) {
 
-	cb_layout_t t;
-
-	if (game_mode) {
-		z_gfx_clear_visible();
-		z_gfx_blit_scissor_reset();
-		cb_layout(&t, game_front * Z_GAME_VIEW_W, 0,
-			Z_GAME_VIEW_W, Z_GAME_VIEW_H, game.flipped);
-	} else {
-		z_clip_t c;
-		z_win_content_rect(&win, &c);
-		cb_layout(&t, c.x0, c.y0, c.x1 - c.x0 + 1, c.y1 - c.y0 + 1,
-			game.flipped);
-	}
-
-	cb_draw_panel(&t, &game);
+	relayout();
+	cb_draw_panel(&layout_rect, &game);
 
 }
 
-/* -- game mode ------------------------------------------------------ */
+/* -- the screen face (a dual app, docs/app_kinds.md) ----------------- */
 
-static void enter_game_mode(void) {
+static void screen_on(bool full) {
 
-	if (!z_game_available()) {
+	if (!scr) {
+		scr = true;
+		cb_screen(true);
+		ar_attach(&win, &desc);
+		/* moves and commands are typed: C and M are letters here,
+		 * not the runtime's colour and music keys */
+		ar_text_input(true);
+	}
+	if (full && !ar_set_fullscreen(true))
 		game_set_message(&game, "this bitstream has no game mode");
-		printf("chess: no game mode -- rebuild the gateware with "
-			"`GAME in rtl/boards.vh\n");
-		return;
-	}
-
-	game_mode = true;
-	game_front = 0;
-	exit_armed = false;
-
-	/* Both pages, before the mode change, so the first frame scanned
-	 * out is already this app's background rather than whatever the
-	 * desktop left behind. */
-	z_gfx_clear_visible();
-	z_gfx_blit_scissor_reset();
-	z_fb_hw_fill_rect(0, 0, 640, 480, 0);
-
-	z_game_set_enabled(true, false);
-
-	repaint();
-	repaint();       /* both pages, so a flip never shows a blank one */
+	relayout();
+	ar_dirty_all();
 
 }
 
-static void leave_game_mode(void) {
+static void screen_off(void) {
 
-	uint32_t wm_pid;
-
-	z_game_set_enabled(false, false);
-	game_mode = false;
-
-	/* Every window is still alive and still where it was, and this
-	 * app just drew over all of their pixels without any of them
-	 * knowing. wm repairs damage it caused itself; this came from
-	 * outside it, so it has to be told. See Z_WM_REPAINT in zwm.h. */
-	if (z_pid_lookup("wm0", &wm_pid))
-		z_msg_new_send(wm_pid, Z_WM_REPAINT, 0, z_obj_uint32(0));
-
-	repaint();
+	want_desktop = false;
+	if (!scr) return;
+	ar_detach();
+	cb_screen(false);
+	scr = false;
+	/* wm's REDRAW, at the desktop size again, repaints the board */
 
 }
 
@@ -275,7 +263,11 @@ static bool search_poll(void *user) {
 	 * thousand nodes -- often enough that the number visibly moves,
 	 * rare enough that redrawing it is not what the time is going
 	 * on. */
-	if ((++poll_count & 7) == 0) repaint_thinking();
+	if ((++poll_count & 7) == 0 && (scr || !z_win_frozen(&win)))
+		repaint_thinking();
+
+	/* the screen face: its frames go on while the engine thinks */
+	if (scr && ar_frame_due()) ar_frame();
 
 	return game.cancel_search || !running;
 
@@ -412,8 +404,9 @@ static void do_action(ci_action_t a) {
 		break;
 
 	case CI_GAME_MODE:
-		if (game_mode) leave_game_mode();
-		else enter_game_mode();
+		/* full screen is the screen face's */
+		if (!scr) screen_on(true);
+		else ar_set_fullscreen(!ar_fullscreen());
 		break;
 
 	case CI_BENCH:
@@ -484,25 +477,13 @@ static void help_on_msg(z_msg_t *msg, void *user) {
 
 }
 
-static void handle_key(uint32_t packed, bool allow_input) {
+static void show_help(void) {
+	z_dialog_ctx_t ctx = { &win, help_on_msg, NULL };
+	z_dialog_help(&ctx, "Chess help", help_text, "chess_app");
+	repaint();
+}
 
-	uint32_t sym = Z_WM_UNPACK_KEY_KEYSYM(packed);
-	bool pressed = Z_WM_UNPACK_KEY_PRESSED(packed) != 0;
-
-	if (game_mode) {
-
-		/* Escape leaves full screen -- but only once it has been
-		 * RELEASED. Entering game mode with the `game` command and
-		 * then pressing Escape is fine, but entering it by any route
-		 * that leaves a key still held would otherwise see the key-up
-		 * for a key that was already down and leave immediately.
-		 * Same technique, and the same reason, as sw/apps/chip8. */
-		if (sym == 0x1b) {
-			if (!pressed) exit_armed = true;
-			else if (exit_armed) leave_game_mode();
-			return;
-		}
-	}
+static void handle_key(uint32_t sym, bool pressed, bool allow_input) {
 
 	if (!pressed) return;
 
@@ -517,39 +498,19 @@ static void handle_key(uint32_t packed, bool allow_input) {
 
 	if (!allow_input) return;
 
-	if (sym == Z_KEY_FULL_SCREEN) { do_action(CI_GAME_MODE); return; }
-
-	if (sym == Z_KEY_HELP && !game_mode) {	/* docs/app_help.md */
-		static const char help[] =
-			"Chess against the computer, at eight levels, by keyboard "
-			"or mouse.\n\n"
-			"Typing\tA move: e4, Nf3, e2e4, O-O; Enter plays it\n"
-			"Click\tA piece, then the square to move it to\n"
-			"Esc\tClear the line, put the piece down, stop "
-			"the engine thinking\n"
-			"F11\tFull screen (Esc comes back)\n\n"
-			"Commands, typed the same way: new [white|black|two|demo], "
-			"level 1-8, undo, flip, hint, hints, moves, fen, bench, "
-			"quit.";
-		z_dialog_ctx_t ctx = { &win, help_on_msg, NULL };
-		z_dialog_help(&ctx, "Chess help", help, "chess_app");
-		repaint();
-		return;
-	}
-
-	/* Game mode: F1 does nothing (docs/keys.md). */
-	if (sym == Z_KEY_HELP) return;
+	/* The desktop face's: on the screen face these are the runtime's
+	 * (F10, F11, F1 there; Esc leaves its full screen). */
+	if (sym == Z_KEY_FULL_SCREEN) { screen_on(true); return; }
+	if (sym == Z_KEY_COLOUR) { screen_on(false); return; }
+	if (sym == Z_KEY_HELP) { show_help(); return; }
 
 	do_action(input_key(&game, sym));
 
 }
 
-static void handle_mouse(uint32_t packed) {
+static void handle_mouse(int x, int y, bool down) {
 
 	static bool was_down;
-	bool down = (Z_WM_UNPACK_MOUSE_BUTTONS(packed) & Z_MOUSE_BTN_LEFT) != 0;
-	int x = (int)Z_WM_UNPACK_MOUSE_X(packed);
-	int y = (int)Z_WM_UNPACK_MOUSE_Y(packed);
 
 	/* On the press edge only. Mouse messages are coalesced and
 	 * repeat while a button is held, so acting on the level would
@@ -568,21 +529,50 @@ static void pump(bool allow_input) {
 
 	z_msg_t msg;
 
+	/* The screen face: the runtime reads the window's messages. */
+	if (scr) {
+		ar_event_t e;
+		while (ar_poll(&e)) {
+			if (e.type == AR_EV_KEY)
+				handle_key(e.key, e.pressed, allow_input);
+			else if (e.type == AR_EV_MOUSE && allow_input)
+				handle_mouse(e.x, e.y, (e.buttons & 1) != 0);
+			else if (e.type == AR_EV_QUIT)
+				running = false;
+			else if (e.type == AR_EV_DESKTOP)
+				want_desktop = true;
+		}
+		return;
+	}
+
 	while (z_msg_read(&msg) == Z_OK) {
 
 		switch (msg.subject) {
 
 		case Z_WM_KEY:
 			if (msg.obj.type == Z_UINT32)
-				handle_key(msg.obj.val.uint32, allow_input);
+				handle_key(Z_WM_UNPACK_KEY_KEYSYM(msg.obj.val.uint32),
+					Z_WM_UNPACK_KEY_PRESSED(msg.obj.val.uint32) != 0,
+					allow_input);
 			break;
 
 		case Z_WM_MOUSE:
 			/* Ignored entirely during a search: a click changes the
 			 * selection and can play a move, and the search is
 			 * holding a copy of the position it started from. */
-			if (allow_input && !game_mode && msg.obj.type == Z_UINT32)
-				handle_mouse(msg.obj.val.uint32);
+			if (allow_input && msg.obj.type == Z_UINT32) {
+				uint32_t u = msg.obj.val.uint32;
+				handle_mouse((int)Z_WM_UNPACK_MOUSE_X(u),
+					(int)Z_WM_UNPACK_MOUSE_Y(u),
+					(Z_WM_UNPACK_MOUSE_BUTTONS(u) & Z_MOUSE_BTN_LEFT) != 0);
+			}
+			break;
+
+		/* The colour icon: the screen face. */
+		case Z_WM_TITLEBAR_ICON:
+			if (msg.obj.type == Z_UINT32 && allow_input &&
+			    Z_WM_UNPACK_TBICON_KIND(msg.obj.val.uint32) == Z_WM_TBICON_COLOUR)
+				screen_on(false);
 			break;
 
 		/* The part of this window not covered by the windows in front
@@ -597,11 +587,9 @@ static void pump(bool allow_input) {
 			if (msg.obj.type != Z_UINT32) break;
 			if (z_win_redraw_id(msg.obj.val.uint32) != win.id) break;
 			z_win_apply_redraw(&win, msg.obj.val.uint32);
-			/* Answered even in game mode, and answered even
-			 * mid-search. The window is still a window as far as wm
-			 * is concerned, and an unanswered redraw is what stalls
-			 * the desktop. */
-			if (!game_mode) repaint();
+			/* Answered even mid-search: an unanswered redraw is what
+			 * stalls the desktop. */
+			repaint();
 			z_win_redraw_done(&win);
 			break;
 
@@ -611,7 +599,7 @@ static void pump(bool allow_input) {
 			break;
 
 		case Z_WM_WINDOW_RESIZED:
-			if (z_win_apply_resized(&win, &msg.obj) && !game_mode) {
+			if (z_win_apply_resized(&win, &msg.obj)) {
 				relayout();
 				repaint();
 			}
@@ -686,9 +674,15 @@ int main(void) {
 	game_new(&game, NULL);
 	game_set_message(&game, "type a move, or F1 for help");
 
+	/* The screen face's palette and inks, and its flags on the window:
+	 * game mode (F11 is chess's), the colour window and its icon. */
+	memcpy(desc.palette, cb_palette, sizeof(desc.palette));
+	cb_mono_inks(desc.ink);
+	ar_window_colour(true);
+
 	if (z_win_create_flags(&win, "chess", WIN_W, WIN_H, -1, -1,
 		Z_WIN_FLAG_CLOSE_ICON | Z_WIN_FLAG_CLOSE_KILLS_OWNER |
-		Z_WIN_FLAG_RESIZABLE | Z_WIN_FLAG_GAME_MODE) != Z_OK) {
+		Z_WIN_FLAG_RESIZABLE | ar_window_flags(&desc)) != Z_OK) {
 		printf("chess: failed to create window -- is wm running?\n");
 		return 1;
 	}
@@ -708,6 +702,11 @@ int main(void) {
 
 		if (!running) break;
 
+		if (want_desktop && !in_search) {
+			screen_off();
+			continue;
+		}
+
 		/* Demo mode keeps going without any input at all. */
 		if (game_engine_to_move(&game)) {
 			engine_move();
@@ -718,11 +717,12 @@ int main(void) {
 		 * only so a stuck message never wedges the app entirely; it
 		 * is not a polling interval, because there is nothing here
 		 * that changes on its own. */
-		z_proc_wait(Z_TICK_HZ);
+		if (scr) ar_frame();
+		else z_proc_wait(Z_TICK_HZ);
 
 	}
 
-	if (game_mode) leave_game_mode();
+	screen_off();
 
 	z_win_destroy(&win);
 	printf("chess: bye\n");

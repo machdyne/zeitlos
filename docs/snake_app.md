@@ -1,5 +1,7 @@
 # snake
 
+Kind: a **screen app** -- a 320x240 screen in a window or full screen ([app_kinds.md](app_kinds.md)).
+
 The classic: steer a snake to the food, grow with every bite, and do not
 run into anything. One player or two, in a 320x240 window or full screen
 -- in sixteen colours where the board has them -- with sound effects and
@@ -71,10 +73,15 @@ or just type the letters.
 | Enter / Start | choose, start, go on |
 | P (Start on a pad) | pause |
 | Esc | in the window: pause; again for the menu (between rounds or levels: the menu at once) |
-| F1 | help, in the window |
+| F1 | help, on the game's own screen -- in the window and full screen alike ([screen_ui.md](screen_ui.md)); the game is paused when it closes |
 | F11 | full screen, or back to the window ([keys.md](keys.md)) |
 | C | in full screen: colour on or off |
 | M | music on or off |
+
+In the window it is in colour too while it is the focused window and
+nothing covers it, on a board with the colour window -- the 45F boards
+([color.md](color.md), "The colour window"); otherwise in black and
+white, as before.
 
 Turns are queued two deep and taken one cell at a time, so a quick
 up-then-left makes both turns; turning back into the body is ignored.

@@ -209,7 +209,7 @@ file has one, and a card has the sets someone chose -- all of them on
 | work | sheet, slide, print, convert, draw, view, automate | slide's tour and examples, `/media/images`, the demo scripts |
 | audio | play, midi, mmod, track, tts, audiotest | the speech pack, the `.mod` files, `/media/audio` |
 | net | web, irc, netserve, zerdesk, mesh, bbs, fed | `roots.der`, zerdesk's page, the BBS's and fed's data |
-| dev | zcc, zfpga, hex, cryptobench, hello_win, portdemo, ttytest | libz, zcc's headers and examples, zfpga's databases and examples |
+| dev | zcc, zfpga, hex, cryptobench, hello_win, portdemo, ttytest, colwin | libz, zcc's headers and examples, zfpga's databases and examples |
 | embedded | basic, i2c, ls99, bench, logic, sechs, serial, zlink | bench's examples, the BASIC programs |
 | games | casino and its games, snake, blocks, bricks, mausrun, planedemo, chess, kidgames, chip8, space3d, gpu3d, gpudemo | mausrun's levels, chip8's ROMs |
 | arklite | -- | the Ark Lite pack (about 18 MB) |

@@ -23,7 +23,7 @@ F1 is the first key of a map every app follows ([keys.md](keys.md)).
 
 Apps with it: `text`, `files`, `read`, `sheet`, `hex`, `calc`, `cal`, `clock`, `settings`, `ask`, `bench`, `view`, `draw`, `play`, `mmod`, `track`, `web`, `irc`, `basic`, `logic`, `chess`, `casino`, `blackjack`, `craps`, `poker`, `roulette`, `slots`, `kidgames`, `space3d`, `gpu3d`, `chip8`, `info`, `snake`, `blocks`, `bricks`, `slide`, `backup`.
 
-**In game mode F1 does nothing.** A box would open on the desktop
+**In game mode F1 does nothing** -- for now. A box would open on the desktop
 underneath, where nobody can see it, so the box is for the window
 only in `basic`, `chess`, the casino tables, `space3d`, `chip8` and the
 arcade games (`snake`, `blocks`, `bricks`, [arcade.md](arcade.md)).
@@ -33,6 +33,15 @@ too); that is gone -- the tables' box is built from the same lines
 their message bar shows for an unknown command, so the two cannot
 differ. A window in full screen (F11) is still a window: F1 shows the
 box there as anywhere.
+
+**Screen and full-screen apps** ([app_kinds.md](app_kinds.md)) show
+their help inside themselves, on their own screen, in the window and
+full screen alike: an app on the arcade runtime that links the screen
+toolkit ([screen_ui.md](screen_ui.md), `sui.o`) gets `sui_help()` for
+F1, with the same text, the same `'\t'` columns, a scrollbar, and F1,
+Esc or Enter to close it. One that does not link it keeps the desktop's
+box, in the window only. No "Read docs" button there: the reader is a
+desktop app.
 
 `midi` and `mesh` keep help of their own on F1, a key panel in the
 window: both have to keep servicing something while it is up -- the

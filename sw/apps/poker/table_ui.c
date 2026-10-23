@@ -5,6 +5,7 @@
 
 #include "table_ui.h"
 #include "../../common/zfont.h"
+#include "../../common/games/zarcade.h"
 
 #define FONT (&z_font_5x8)
 #define FW 5
@@ -15,6 +16,50 @@
  * sw/apps/chess, draw and view do. Probed here rather than per call
  * because the answer cannot change while the app is running. */
 static bool use_hw_blit;
+
+/* -- the screen face (docs/poker_app.md, "In colour") --
+ *
+ * The same table, drawn through the arcade runtime on poker's 320x240
+ * screen: every primitive below goes to ar_*() instead of zgfx, the
+ * layout's rectangle is the runtime's logical screen, and every colour
+ * the table asks for is a ROLE (PT_C_*), which the desktop draws in one
+ * bit and the screen in its palette. */
+static bool scr;
+
+void pt_screen(bool on) { scr = on; }
+
+const uint16_t pt_palette[16] = {
+    0x063,      /* PT_C_BG     the felt */
+    0xfff,      /* PT_C_INK    text, a card's body */
+    0x000,      /* PT_C_BLACK  a card's border, clubs and spades */
+    0xc12,      /* PT_C_RED    hearts and diamonds */
+    0x23a,      /* PT_C_BACK   a card's back */
+    0xfc2,      /* PT_C_ACT    the seat to act */
+    0x031,      /* PT_C_BTN    a button */
+    0x364,      /* PT_C_DIM    a button that cannot be pressed */
+    0xfd3,      /* PT_C_MARK   a card marked for the draw */
+    0x041,      /* PT_C_PANEL  the top and bottom lines */
+    0xbdb,      /* PT_C_FRAME  frames, an empty slot */
+    0x000, 0x000, 0x000, 0x000, 0x000
+};
+
+/* In one bit: the felt and everything dark is black, the rest white --
+ * exactly the desktop table. */
+static int mono_of(int role)
+{
+    switch (role) {
+    case PT_C_INK: case PT_C_ACT: case PT_C_MARK: case PT_C_FRAME:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+void pt_mono_inks(ar_ink_t ink[16])
+{
+    int i;
+    for (i = 0; i < 16; i++) ink[i] = mono_of(i) ? ar_ink_white : ar_ink_black;
+}
 
 void pt_init(void)
 {
@@ -75,13 +120,15 @@ static void fill(const pt_layout_t *L, int x, int y, int w, int h, int color)
 {
     int x1 = x + w - 1, y1 = y + h - 1;
 
+    if (scr) { ar_fill(x, y, w, h, color); return; }
+
     if (x < L->clip.x0) x = L->clip.x0;
     if (y < L->clip.y0) y = L->clip.y0;
     if (x1 > L->clip.x1) x1 = L->clip.x1;
     if (y1 > L->clip.y1) y1 = L->clip.y1;
     if (x1 < x || y1 < y) return;
 
-    z_fb_hw_fill_rect(x, y, x1 - x + 1, y1 - y + 1, color);
+    z_fb_hw_fill_rect(x, y, x1 - x + 1, y1 - y + 1, mono_of(color));
 }
 
 /* z_fb_hw_fill_shade() clamps to the screen and knows nothing about
@@ -92,6 +139,14 @@ static void fill(const pt_layout_t *L, int x, int y, int w, int h, int color)
 static void shade(const pt_layout_t *L, int x, int y, int w, int h, int level)
 {
     int x1 = x + w - 1, y1 = y + h - 1;
+
+    if (scr) {
+        /* a button that cannot be pressed: its face, half dim */
+        /* (in black and white, as the desktop: half lit) */
+        ar_fill2(x, y, w, h, PT_C_BTN, ar_color() ? PT_C_DIM : PT_C_FRAME,
+            &ar_ink_grey50);
+        return;
+    }
 
     if (x < L->clip.x0) x = L->clip.x0;
     if (y < L->clip.y0) y = L->clip.y0;
@@ -112,7 +167,10 @@ static void frame(const pt_layout_t *L, int x, int y, int w, int h, int color)
 
 static void text(const pt_layout_t *L, int x, int y, const char *s, int color)
 {
-    z_fb_draw_text(x, y, s, color, FONT, &L->clip);
+    /* On the screen, text is drawn over a strip already filled (every
+     * caller fills first), so its transparency changes nothing. */
+    if (scr) { ar_text(x, y, s, color, FONT, 1); return; }
+    z_fb_draw_text(x, y, s, mono_of(color), FONT, &L->clip);
 }
 
 static void text_right(const pt_layout_t *L, int x1, int y, const char *s,
@@ -176,10 +234,26 @@ static void blit_card(const pt_layout_t *L, const uint32_t *tile,
     z_gfx_blit_scissor_reset();
 }
 
+/* A card on the screen: its body white, its pips and rank in its suit's
+ * colour -- red for hearts and diamonds -- or a back in blue, the
+ * corners and border black. The one-bit tile is the white; under it the
+ * suit's colour, inside the border with its corners cut. */
+static void scr_card(const uint32_t *tile, int tw, int th, int dx, int dy,
+    uint8_t card)
+{
+    int ink = card >= Z_NCARDS ? PT_C_BACK :
+        (Z_SUIT(card) == 1 || Z_SUIT(card) == 2) ? PT_C_RED : PT_C_BLACK;
+    ar_fill(dx, dy, tw, th, PT_C_BLACK);
+    ar_fill(dx + 2, dy + 1, tw - 4, th - 2, ink);
+    ar_fill(dx + 1, dy + 2, tw - 2, th - 4, ink);
+    ar_bitmap(tile, Z_ART_STRIDE, 0, 0, dx, dy, tw, th, PT_C_INK);
+}
+
 static void draw_full(const pt_layout_t *L, uint8_t card, int x, int y)
 {
     const uint32_t *t = (card < Z_NCARDS)
         ? &z_card_full[(int)card * Z_ART_FULL_H] : z_back_full;
+    if (scr) { scr_card(t, Z_ART_FULL_W, Z_ART_FULL_H, x, y, card); return; }
     blit_card(L, t, Z_ART_FULL_W, Z_ART_FULL_H, x, y);
 }
 
@@ -187,6 +261,7 @@ static void draw_mini(const pt_layout_t *L, uint8_t card, int x, int y)
 {
     const uint32_t *t = (card < Z_NCARDS)
         ? &z_card_mini[(int)card * Z_ART_MINI_H] : z_back_mini;
+    if (scr) { scr_card(t, Z_ART_MINI_W, Z_ART_MINI_H, x, y, card); return; }
     blit_card(L, t, Z_ART_MINI_W, Z_ART_MINI_H, x, y);
 }
 
@@ -376,12 +451,12 @@ static void draw_seat(const pt_layout_t *L, const pt_view_t *v, int seat,
     int n, i, cx;
     bool acting = (v->g->phase != PK_PHASE_COMPLETE && v->g->actor == seat);
 
-    fill(L, x, y, cw - 2, PT_SEAT_H, 0);
+    fill(L, x, y, cw - 2, PT_SEAT_H, PT_C_BG);
 
     /* The seat to act is framed rather than highlighted, because on a
      * display with two colours an inverted seat would be the loudest
      * thing on the table and the loudest thing should be the cards. */
-    if (acting) frame(L, x, y, cw - 2, PT_SEAT_H, 1);
+    if (acting) frame(L, x, y, cw - 2, PT_SEAT_H, PT_C_ACT);
 
     line[0] = '\0';
     cat(line, sizeof line, v->name[seat]);
@@ -389,11 +464,11 @@ static void draw_seat(const pt_layout_t *L, const pt_view_t *v, int seat,
      * so in full, and the render showed the two together reading as
      * two different pieces of information rather than one. */
     if (s->state == PK_SEAT_ALLIN) cat(line, sizeof line, " ALL IN");
-    text(L, x + 2, y + 1, line, 1);
+    text(L, x + 2, y + 1, line, PT_C_INK);
 
     line[0] = '\0';
     cat_num(line, sizeof line, s->stack);
-    text_right(L, x + cw - 4, y + 1, line, 1);
+    text_right(L, x + cw - 4, y + 1, line, PT_C_INK);
 
     /* Cards. Overlapped at Z_ART_MINI_STRIDE, which keeps a
      * seven-card stud hand inside a six-handed seat -- see cards.h. */
@@ -401,7 +476,7 @@ static void draw_seat(const pt_layout_t *L, const pt_view_t *v, int seat,
     cx = x + 2;
 
     if (s->state == PK_SEAT_FOLDED) {
-        text(L, x + 2, y + PT_LINE_H + 4, "-- folded --", 1);
+        text(L, x + 2, y + PT_LINE_H + 4, "-- folded --", PT_C_INK);
     } else {
         int down = s->nhole - n;
         for (i = 0; i < n; i++, cx += Z_ART_MINI_STRIDE)
@@ -420,14 +495,14 @@ static void draw_seat(const pt_layout_t *L, const pt_view_t *v, int seat,
     } else {
         cat(line, sizeof line, v->tag[seat]);
     }
-    text(L, x + 2, y + PT_LINE_H + Z_ART_MINI_H + 1, line, 1);
+    text(L, x + 2, y + PT_LINE_H + Z_ART_MINI_H + 1, line, PT_C_INK);
 
     if (s->won > 0) {
         char w[20];
         w[0] = '\0';
         cat(w, sizeof w, "+");
         cat_num(w, sizeof w, s->won);
-        text_right(L, x + cw - 4, y + PT_LINE_H + Z_ART_MINI_H + 1, w, 1);
+        text_right(L, x + cw - 4, y + PT_LINE_H + Z_ART_MINI_H + 1, w, PT_C_INK);
     }
 }
 
@@ -473,12 +548,12 @@ static void draw_board(const pt_layout_t *L, const pt_view_t *v)
         cat(line, sizeof line, " pots)");
     }
 
-    fill(L, L->ox, L->pot_y, L->w, FH, 0);
-    text_center(L, L->ox + L->w / 2, L->pot_y, line, 1);
+    fill(L, L->ox, L->pot_y, L->w, FH, PT_C_BG);
+    text_center(L, L->ox + L->w / 2, L->pot_y, line, PT_C_INK);
 
     if (!L->has_board) return;
 
-    fill(L, L->ox, L->board_y, L->w, Z_ART_FULL_H, 0);
+    fill(L, L->ox, L->board_y, L->w, Z_ART_FULL_H, PT_C_BG);
 
     for (i = 0; i < L->board_slots; i++) {
         int x = L->board_x + i * board_stride();
@@ -489,7 +564,7 @@ static void draw_board(const pt_layout_t *L, const pt_view_t *v)
              * card that has not been dealt is a different thing from
              * one that has been dealt and hidden, and on this table
              * both appear at once in stud. */
-            frame(L, x, L->board_y, Z_ART_FULL_W, Z_ART_FULL_H, 1);
+            frame(L, x, L->board_y, Z_ART_FULL_W, Z_ART_FULL_H, PT_C_FRAME);
         }
     }
 }
@@ -500,7 +575,7 @@ static void draw_hero(const pt_layout_t *L, const pt_view_t *v)
     char line[48];
     int i;
 
-    fill(L, L->ox, L->hero_y, L->w, Z_ART_FULL_H + 2 + FH, 0);
+    fill(L, L->ox, L->hero_y, L->w, Z_ART_FULL_H + 2 + FH, PT_C_BG);
 
     for (i = 0; i < s->nhole; i++) {
         int x, y;
@@ -512,7 +587,7 @@ static void draw_hero(const pt_layout_t *L, const pt_view_t *v)
          * to throw away is being able to see the ones you are
          * keeping. */
         if (v->discard[i])
-            fill(L, x, y + Z_ART_FULL_H, Z_ART_FULL_W, 2, 1);
+            fill(L, x, y + Z_ART_FULL_H, Z_ART_FULL_W, 2, PT_C_MARK);
     }
 
     line[0] = '\0';
@@ -523,7 +598,7 @@ static void draw_hero(const pt_layout_t *L, const pt_view_t *v)
         cat(line, sizeof line, "  bet ");
         cat_num(line, sizeof line, s->bet);
     }
-    text(L, L->ox + 2, L->hero_info_y, line, 1);
+    text(L, L->ox + 2, L->hero_info_y, line, PT_C_INK);
 
     /* What the hero actually holds, named. The single most useful
      * thing on the table for somebody who is still learning which
@@ -534,7 +609,7 @@ static void draw_hero(const pt_layout_t *L, const pt_view_t *v)
         if (val != PK_EVAL_NONE) {
             char nm[40];
             pk_eval_name(val, nm, sizeof nm);
-            text_right(L, L->ox + L->w - 2, L->hero_info_y, nm, 1);
+            text_right(L, L->ox + L->w - 2, L->hero_info_y, nm, PT_C_INK);
         }
     }
 }
@@ -546,8 +621,8 @@ static void button(const pt_layout_t *L, const pt_rect_t *r,
     int tx = r->x + (r->w - tw) / 2;
     int ty = r->y + (r->h - FH) / 2;
 
-    fill(L, r->x, r->y, r->w, r->h, 0);
-    frame(L, r->x, r->y, r->w, r->h, 1);
+    fill(L, r->x, r->y, r->w, r->h, PT_C_BTN);
+    frame(L, r->x, r->y, r->w, r->h, PT_C_FRAME);
 
     if (!enabled) {
         /* Shaded rather than hidden or blank: a control that vanishes
@@ -579,10 +654,10 @@ static void button(const pt_layout_t *L, const pt_rect_t *r,
          * tests/test_layout.c asserts the disabled label is drawn with
          * the same pixels as the enabled one. */
         shade(L, r->x + 1, r->y + 1, r->w - 2, r->h - 2, 8);
-        fill(L, tx - 1, ty, tw + 2, FH, 0);
+        fill(L, tx - 1, ty, tw + 2, FH, PT_C_BTN);
     }
 
-    text(L, tx, ty, label, 1);
+    text(L, tx, ty, label, PT_C_INK);
 }
 
 void pt_draw_actions(const pt_layout_t *L, const pt_view_t *v)
@@ -598,7 +673,7 @@ void pt_draw_actions(const pt_layout_t *L, const pt_view_t *v)
         o.can_bet = o.can_raise = false;
     }
 
-    fill(L, L->ox, L->btn[0].y, L->w, PT_BTN_H, 0);
+    fill(L, L->ox, L->btn[0].y, L->w, PT_BTN_H, PT_C_BG);
 
     if (draw_phase) {
         /* The draw needs one button, not four, and re-labelling the
@@ -625,29 +700,29 @@ void pt_draw_actions(const pt_layout_t *L, const pt_view_t *v)
     if (o.can_bet || o.can_raise) cat_num(amt, sizeof amt, v->bet_to);
     else if (o.can_call) { cat(amt, sizeof amt, "-"); cat_num(amt, sizeof amt, o.call_cost); }
     text_center(L, L->amount_x + L->amount_w / 2,
-        L->btn[0].y + (PT_BTN_H - FH) / 2, amt, 1);
+        L->btn[0].y + (PT_BTN_H - FH) / 2, amt, PT_C_INK);
 }
 
 void pt_draw_status(const pt_layout_t *L, const pt_view_t *v)
 {
     char line[PT_MSG_LEN + 4];
 
-    fill(L, L->ox, L->msg_y, L->w, FH, 0);
-    text(L, L->ox + 2, L->msg_y, v->message, 1);
+    fill(L, L->ox, L->msg_y, L->w, FH, PT_C_PANEL);
+    text(L, L->ox + 2, L->msg_y, v->message, PT_C_INK);
 
-    fill(L, L->ox, L->cmd_y, L->w, FH, 0);
+    fill(L, L->ox, L->cmd_y, L->w, FH, PT_C_PANEL);
     line[0] = '\0';
     cat(line, sizeof line, "> ");
     cat(line, sizeof line, v->cmd);
     cat(line, sizeof line, "_");
-    text(L, L->ox + 2, L->cmd_y, line, 1);
+    text(L, L->ox + 2, L->cmd_y, line, PT_C_INK);
 }
 
 static void draw_titlebar(const pt_layout_t *L, const pt_view_t *v)
 {
     char line[48];
 
-    fill(L, L->ox, L->status_y, L->w, FH, 0);
+    fill(L, L->ox, L->status_y, L->w, FH, PT_C_PANEL);
 
     line[0] = '\0';
     cat(line, sizeof line, v->g->v->label);
@@ -655,7 +730,7 @@ static void draw_titlebar(const pt_layout_t *L, const pt_view_t *v)
         cat(line, sizeof line, " - ");
         cat(line, sizeof line, pk_street_name(v->g, v->g->street));
     }
-    text(L, L->ox + 2, L->status_y, line, 1);
+    text(L, L->ox + 2, L->status_y, line, PT_C_INK);
 
     line[0] = '\0';
     cat(line, sizeof line, "hand ");
@@ -671,7 +746,7 @@ static void draw_titlebar(const pt_layout_t *L, const pt_view_t *v)
         cat_num(line, sizeof line, v->bank);
     }
 
-    text_right(L, L->ox + L->w - 2, L->status_y, line, 1);
+    text_right(L, L->ox + L->w - 2, L->status_y, line, PT_C_INK);
 }
 
 void pt_draw_all(const pt_layout_t *L, const pt_view_t *v)
@@ -681,13 +756,13 @@ void pt_draw_all(const pt_layout_t *L, const pt_view_t *v)
          * there is nothing here that can be dropped and still leave a
          * table somebody can act on, so it says so instead of drawing
          * something misleading. */
-        fill(L, L->ox, L->oy, L->w, L->h, 0);
-        text(L, L->ox + 2, L->oy + 2, "window too small", 1);
-        text(L, L->ox + 2, L->oy + 2 + PT_LINE_H, "for a table", 1);
+        fill(L, L->ox, L->oy, L->w, L->h, PT_C_BG);
+        text(L, L->ox + 2, L->oy + 2, "window too small", PT_C_INK);
+        text(L, L->ox + 2, L->oy + 2 + PT_LINE_H, "for a table", PT_C_INK);
         return;
     }
 
-    fill(L, L->ox, L->oy, L->w, L->h, 0);
+    fill(L, L->ox, L->oy, L->w, L->h, PT_C_BG);
 
     draw_titlebar(L, v);
     draw_opponents(L, v);
@@ -701,7 +776,7 @@ void pt_draw_all(const pt_layout_t *L, const pt_view_t *v)
         line[0] = '\0';
         cat(line, sizeof line, v->name[v->thinking_seat]);
         cat(line, sizeof line, " is thinking");
-        fill(L, L->ox, L->msg_y, L->w, FH, 0);
-        text(L, L->ox + 2, L->msg_y, line, 1);
+        fill(L, L->ox, L->msg_y, L->w, FH, PT_C_PANEL);
+        text(L, L->ox + 2, L->msg_y, line, PT_C_INK);
     }
 }

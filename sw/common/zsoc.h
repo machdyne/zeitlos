@@ -1447,6 +1447,97 @@ static inline void z_color_set_palette(uint32_t index, uint32_t rgb444) {
 	reg_socctl_palette = ((index & 0xffu) << 24) | (rgb444 & 0xfffu);
 }
 
+// -- the colour window (socctl COLWIN/COLWINEND, docs/color.md) --
+//
+// In desktop mode, one rectangle of the desktop -- the focused screen
+// app's window, up to 320x240 -- shown in colour: a pixel's palette
+// index is the desktop's own bit (bit 0) and the second VRAM sheet's
+// planes (bits 4..7). 8 colours on a GAME_PLANES 6 bitstream, 32 on 8,
+// where it was built (`COLOR_WINDOW, rtl/boards.vh).
+//
+// The window's extra planes live in the second sheet at the pixel's
+// own screen position, folded: window plane k (0..planes-1) of the
+// desktop pixel (x, y) is at z_color_window_plane_xy(). Entering game
+// mode turns the window off (socctl clears EN), since a game takes the
+// second sheet and the palette for its own.
+//
+// Words 16 and 17: on a bitstream that decodes four address bits they
+// alias CTRL and MAGIC, so z_color_window_available() reads word 16's
+// signature before anything writes either.
+#define reg_socctl_colwin    (*(volatile uint32_t*)0x70000240)
+#define reg_socctl_colwinend (*(volatile uint32_t*)0x70000244)
+#define Z_COLWIN_EN    (1u << 31)
+#define Z_COLWIN_AVAIL (1u << 15)    // read-only
+#define Z_COLWIN_SIG   0x5A57u       // "ZW" -- KEEP IN SYNC with socctl.v
+
+static inline bool z_color_window_available(void) {
+	if (!z_color_available()) return false;
+	if (((reg_socctl_colwin >> 16) & 0xffffu) != Z_COLWIN_SIG) return false;
+	return (reg_socctl_colwin & Z_COLWIN_AVAIL) != 0;
+}
+
+// The window's planes besides the desktop's own: 2 or 4 (0 without).
+// Colours: 2 << planes, i.e. 8 or 32.
+static inline uint32_t z_color_window_planes(void) {
+	if (!z_color_window_available()) return 0;
+	return z_color_planes_max() - 4u;
+}
+
+// The palette entry that colour c (0 .. (2 << planes) - 1) of the
+// window shows through: c's bit 0 is the desktop's bit, its higher
+// bits the window's planes -- entries 0, 1, 16, 17, 32, ...
+static inline uint32_t z_color_window_entry(uint32_t c) {
+	return (c & 1u) | ((c >> 1) << 4);
+}
+
+// Where window plane k (0..3) of the desktop pixel (x, y) is kept in
+// VRAM, as framebuffer coordinates (rows 480 up). Plane k is the
+// scanout's plane 4 + k, read with the 16-colour layout's offsets:
+// odd planes 320 columns on, planes 2 and 3 240 rows on, all modulo
+// the second sheet (640 x 240 on six planes, 640 x 480 on eight).
+static inline void z_color_window_plane_xy(uint32_t k, int x, int y,
+	int *px, int *py) {
+	int rows1 = (int)z_color_rows() - 480;
+	if (rows1 <= 0) rows1 = 240;
+	x += (k & 1u) ? 320 : 0;
+	y += (k & 2u) ? 240 : 0;
+	*px = x % 640;
+	*py = 480 + (y % 480) % rows1;
+}
+
+// Colour from the next frame inside x0 <= x < x1, y0 <= y < y1
+// (desktop pixels), clipped to the screen and to 320 x 240 from its
+// top left. False if the bitstream has no colour window.
+static inline bool z_color_window_set(int x0, int y0, int x1, int y1) {
+	if (!z_color_window_available()) return false;
+	if (x0 < 0) x0 = 0;
+	if (y0 < 0) y0 = 0;
+	if (x1 > 640) x1 = 640;
+	if (y1 > 480) y1 = 480;
+	if (x1 > x0 + 320) x1 = x0 + 320;
+	if (y1 > y0 + 240) y1 = y0 + 240;
+	if (x1 <= x0 || y1 <= y0) {
+		reg_socctl_colwin = 0;
+		return true;
+	}
+	// the corner first: only COLWIN hands the pair to the scanout
+	reg_socctl_colwinend = ((uint32_t)y1 << 16) | (uint32_t)x1;
+	reg_socctl_colwin = Z_COLWIN_EN | ((uint32_t)y0 << 16) | (uint32_t)x0;
+	return true;
+}
+
+// No colour window, from the next frame.
+static inline void z_color_window_off(void) {
+	if (!z_color_window_available()) return;
+	reg_socctl_colwin = 0;
+}
+
+// true if the window is on (or will be from the next frame)
+static inline bool z_color_window_on(void) {
+	if (!z_color_window_available()) return false;
+	return (reg_socctl_colwin & 1u) != 0;
+}
+
 // -- instruction cache (rtl/cache.v) --
 //
 // Registers live at 0x7000_01xx, sharing nibble 0x7 with the CSRs

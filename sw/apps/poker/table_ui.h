@@ -62,6 +62,7 @@
 #include "pk_game.h"
 #include "pk_ai.h"
 #include "../../common/games/zcardart.h"
+#include "../../common/games/zarcade.h"
 
 #define PT_LINE_H     10      /* an 8-pixel font line plus breathing room */
 #define PT_BTN_H      12
@@ -208,6 +209,23 @@ int  pt_button_at(const pt_layout_t *L, int x, int y);
 /* One-time probe of what this bitstream's blitter can do. Call before
  * any drawing; safe to call more than once. */
 void pt_init(void);
+
+/* -- colour roles, and the screen face (docs/poker_app.md, "In colour") --
+ *
+ * Every colour the table asks for is a role. The desktop table draws
+ * them in one bit (the felt and the dark ones black, the rest white);
+ * the screen face -- the same table on poker's 320x240 screen, through
+ * the arcade runtime -- in pt_palette. pt_screen(true) sends every
+ * primitive to the runtime; the layout's rectangle is then its logical
+ * screen, pt_layout(L, v, 0, 0, 320, 240). */
+enum {
+    PT_C_BG = 0, PT_C_INK, PT_C_BLACK, PT_C_RED, PT_C_BACK, PT_C_ACT,
+    PT_C_BTN, PT_C_DIM, PT_C_MARK, PT_C_PANEL, PT_C_FRAME
+};
+extern const uint16_t pt_palette[16];
+void pt_screen(bool on);
+/* The runtime's inks for the roles, for a screen in black and white. */
+void pt_mono_inks(ar_ink_t ink[16]);
 
 /* -- drawing --------------------------------------------------------- */
 

@@ -292,8 +292,9 @@
  *             turned the cursor into a Z; 15 would have cleared DIRTY
  *             bits under the screen streamer.
  *
- *             The decode is four bits wide now (rtl/sysctl.v); 8 and 15
- *             are the cursor's (below) and 10..12 DDMI audio.
+ *             The decode is five bits wide now (rtl/sysctl.v); 8 and 15
+ *             are the cursor's (below), 10..12 DDMI audio and 16..17
+ *             the colour window.
  *
  *  10  DDMI   DDMI audio (docs/ddmi_audio.md): data islands, the video
  *             preamble and guard band, and the InfoFrames on the DDMI
@@ -371,6 +372,41 @@
  *             signature says this is the block it thinks
  *             (z_cursor_available(), sw/common/zsoc.h).
  *
+ *  16  COLWIN the colour window (docs/color.md, "The colour window"):
+ *             in desktop mode, one rectangle of the desktop shown in
+ *             colour, its pixels' index the desktop's bit (bit 0) and
+ *             the second VRAM sheet's planes (bits 4..7): 8 colours
+ *             with GAME_PLANES 6, 32 with 8.
+ *               bits 9:0    x0, the left column
+ *               bits 25:16  y0, the top row
+ *               bit 31      EN
+ *             Lanes 0/1 carry x0, lanes 2/3 y0 and EN; software writes
+ *             whole words. Flips view_load: the rectangle (with
+ *             COLWINEND as it stands) is adopted at the next frame
+ *             boundary, with GAME, VIEW and COLOR.
+ *             Reads back as { 16'h5A57 ("ZW"), avail, 14'b0, en }.
+ *             avail = WIN_AVAIL (`COLOR_WINDOW, with COLOR and more
+ *             than four planes); EN is forced low without it.
+ *  17  COLWINEND  the rectangle's other corner, exclusive:
+ *               bits 9:0 x1, bits 25:16 y1
+ *             so the window is x0 <= x < x1, y0 <= y < y1. Does NOT
+ *             flip view_load: write it first, then COLWIN. Reads back
+ *             { 6'b0, y1, 6'b0, x1 } (0 without avail).
+ *             Software keeps the rectangle within 320x240: the second
+ *             sheet tells no more pixels apart.
+ *
+ *             ENTERING GAME MODE CLEARS EN (a GAME write with bit 0
+ *             set). A full-screen game takes the second sheet and the
+ *             palette for its own, so whoever owns the window sets it
+ *             again, with its planes and palette redrawn, afterwards.
+ *             The scanout ignores the window in game mode anyway.
+ *
+ *             Words 16 and 17 alias CTRL and MAGIC on a bitstream that
+ *             decodes four address bits: software reads word 16's
+ *             signature before it writes either (CTRL reads back with
+ *             bit 31 set, never 0x5A57; z_color_window_available(),
+ *             sw/common/zsoc.h).
+ *
  * Reset state is BUSY (cursor = Z), not idle.
  *
  * That is deliberate and is the honest default: from power-on until
@@ -428,6 +464,10 @@ module socctl_wb #(
     // (rtl/boards.vh's `GAME_PLANES, 4 without it). Set by
     // rtl/sysctl.v, which sizes VRAM and gpu_video to match.
     parameter integer GAME_PLANES = 4,
+
+    // The colour window (COLWIN): `COLOR_WINDOW, with COLOR_AVAIL and
+    // more than four planes. Set by rtl/sysctl.v.
+    parameter WIN_AVAIL = 1'b0,
     // 1 if this bitstream draws the pointer from loadable shapes:
     // rtl/boards.vh's `GPU_CURSOR, with `GPU. Set by rtl/sysctl.v. See
     // CURSOR (word 8) and CURDATA (word 15) above.
@@ -543,6 +583,12 @@ module socctl_wb #(
     output wire [7:0]  pal_idx,
     output wire [11:0] pal_rgb,
     output wire        cvbs_mono,
+    // the colour window, part of the view_load payload too
+    output wire        win_en,
+    output wire [9:0]  win_x0,
+    output wire [9:0]  win_y0,
+    output wire [9:0]  win_x1,
+    output wire [9:0]  win_y1,
 
     // -- scanout status, from rtl/gpu/gpu_video.v --
     //
@@ -593,6 +639,8 @@ module socctl_wb #(
     localparam DDMI_SIG = 16'h5A44;
     // top half of CURSOR -- "ZK"
     localparam CURSOR_SIG = 16'h5A4B;
+    // top half of COLWIN -- "ZW"
+    localparam COLWIN_SIG = 16'h5A57;
 
     reg [31:0] ctrl;
     reg [1:0] video;
@@ -623,6 +671,8 @@ module socctl_wb #(
     reg [5:0] cwaddr;
     reg [31:0] cwdata;
     reg cwe;
+    reg wen;
+    reg [9:0] wx0, wy0, wx1, wy1;
 
     // power-on values for the sound half: the board's power-on rate,
     // as rtl/audio.v computes it (rtl/audio_rates.vh)
@@ -680,6 +730,11 @@ module socctl_wb #(
     assign pal_idx   = pidx;
     assign pal_rgb   = prgb;
     assign cvbs_mono = cvbs;
+    assign win_en    = wen && (WIN_AVAIL != 0);
+    assign win_x0    = wx0;
+    assign win_y0    = wy0;
+    assign win_x1    = wx1;
+    assign win_y1    = wy1;
 
     // Range limit on the VIEW write path. This is NOT the clamp that
     // keeps the viewport on screen -- that one depends on the wrap
@@ -787,6 +842,12 @@ module socctl_wb #(
             cwaddr <= 6'd0;
             cwdata <= 32'd0;
             cwe <= 1'b0;
+            // the colour window off at reset
+            wen <= 1'b0;
+            wx0 <= 10'd0;
+            wy0 <= 10'd0;
+            wx1 <= 10'd0;
+            wy1 <= 10'd0;
 
             wb_ack_o <= 1'b0;
             wb_dat_o <= 32'h0000_0000;
@@ -855,6 +916,10 @@ module socctl_wb #(
                             // COLOR in this file's header
                             if (!wb_dat_i[0])
                                 col <= 1'b0;
+                            // entering game mode leaves the colour
+                            // window -- see COLWIN in the header
+                            if (wb_dat_i[0])
+                                wen <= 1'b0;
                         end
                     end
 
@@ -930,6 +995,23 @@ module socctl_wb #(
                         if (wb_sel_i[2] || wb_sel_i[3]) vy <= vy_wr;
                         vload <= ~vload;
                     end
+                    // COLWIN and COLWINEND: x on lanes 0/1, y (and
+                    // EN) on lanes 2/3, as VIEW. Only COLWIN flips the
+                    // toggle, so the corner is staged and the pair is
+                    // adopted together.
+                    if (wb_adr_i == 32'd16 && WIN_AVAIL != 0) begin
+                        if (wb_sel_i[0] || wb_sel_i[1]) wx0 <= wb_dat_i[9:0];
+                        if (wb_sel_i[2] || wb_sel_i[3]) begin
+                            wy0 <= wb_dat_i[25:16];
+                            wen <= wb_dat_i[31];
+                        end
+                        vload <= ~vload;
+                    end
+                    if (wb_adr_i == 32'd17 && WIN_AVAIL != 0) begin
+                        if (wb_sel_i[0] || wb_sel_i[1]) wx1 <= wb_dat_i[9:0];
+                        if (wb_sel_i[2] || wb_sel_i[3]) wy1 <= wb_dat_i[25:16];
+                    end
+
                     // The whole key, in one whole-word store, or nothing.
                     if (wb_adr_i == 32'd6 && wb_sel_i == 4'b1111 && wb_dat_i == RECONFIG_KEY)
                         recfg <= 1'b1;
@@ -977,6 +1059,9 @@ module socctl_wb #(
                                              { CURSOR_SIG, 10'b0, cslots[3:2],
                                                2'b0, cslots[1:0] } :
                                              32'h0000_0000;
+                        32'd16: wb_dat_o <= { COLWIN_SIG, (WIN_AVAIL != 0), 14'b0, win_en };
+                        32'd17: wb_dat_o <= (WIN_AVAIL != 0) ?
+                                             { 6'b0, wy1, 6'b0, wx1 } : 32'h0000_0000;
                         default: wb_dat_o <= 32'h0000_0000;
                     endcase
 

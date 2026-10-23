@@ -20,7 +20,9 @@ enum {
 	ARH_FULL_MONO,
 	ARH_COVER,         /* x, y, w, h: another window over ours; w 0 = gone */
 	ARH_SHOT,          /* name: write <dir>/<name>.ppm after this frame */
-	ARH_MOUSE          /* x, y logical, a = buttons: the pointer moved */
+	ARH_MOUSE,         /* x, y logical, a = buttons: the pointer moved */
+	ARH_WCOLOR         /* a = 1: wm says the window may have the colour
+	                    * window (Z_WM_COLOR), 0: it may not */
 };
 
 typedef struct {
@@ -39,6 +41,7 @@ typedef struct {
 #define ARH_K_RIGHT  0x110003u
 #define ARH_K_F1     0x110010u
 #define ARH_K_F2     0x110011u
+#define ARH_K_F10    0x110019u
 
 void ar_host_run(const ar_host_step_t *script, const char *dir);
 uint32_t ar_host_frame(void);

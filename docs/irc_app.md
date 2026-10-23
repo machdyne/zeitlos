@@ -1,5 +1,7 @@
 # irc
 
+Kind: a **desktop app** ([app_kinds.md](app_kinds.md)).
+
 An IRC client. `sw/apps/irc`.
 
 ```

@@ -1,5 +1,7 @@
 # blocks
 
+Kind: a **screen app** -- a 320x240 screen in a window or full screen ([app_kinds.md](app_kinds.md)).
+
 A falling-blocks game: shapes of four blocks fall into a well; turn and
 steer them so they fill rows, and a full row clears. Don't let the stack
 reach the top. It runs in a 320x240 window or full screen -- in sixteen
@@ -76,10 +78,15 @@ first.
 | H | hold the shape for later (once per shape) |
 | P | pause (Start on a pad) |
 | Esc | in the window: pause; again for the menu |
-| F1 | help, in the window |
+| F1 | help, on the game's own screen -- in the window and full screen alike ([screen_ui.md](screen_ui.md)); the game is paused when it closes |
 | F11 | full screen, or back to the window ([keys.md](keys.md)) |
 | C | in full screen: colour on or off |
 | M | music on or off |
+
+In the window it is in colour too while it is the focused window and
+nothing covers it, on a board with the colour window -- the 45F boards
+([color.md](color.md), "The colour window"); otherwise in black and
+white, as before.
 
 W A S D work as the arrows, Q drops and E holds.
 

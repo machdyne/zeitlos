@@ -1,5 +1,7 @@
 # logic
 
+Kind: a **desktop app** ([app_kinds.md](app_kinds.md)).
+
 A logic analyser, pin driver, burst generator and I2C decoder for the
 GPIO ports, on the same machine as the pins.
 

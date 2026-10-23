@@ -1,7 +1,8 @@
 # Game mode
 
 A 320x240 viewport over the unchanged 640x480 framebuffer,
-pixel-doubled on scanout.
+pixel-doubled on scanout. It is where screen apps go full screen and
+where full-screen apps live ([app_kinds.md](app_kinds.md)).
 
 The display timing does not change. The monitor sees the same
 640x480@60Hz signal in both modes -- which is the entire point on a TV

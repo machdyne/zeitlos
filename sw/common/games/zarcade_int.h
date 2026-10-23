@@ -37,6 +37,20 @@ typedef struct {
 	bool targets_stale;            /* the region changed: reload vis[] */
 	bool want_color;               /* the C key's state */
 	bool text_input;               /* C and M are the game's */
+	bool wc_off;                   /* F10: no colour window, for now */
+	bool modal;                    /* a box is up (ar_top): Esc, F1, C, M
+	                                * are the program's keys */
+
+	/* Colour in the window (docs/color.md, "The colour window"): wm
+	 * gave this window the second VRAM sheet's planes. Logical plane 0
+	 * is the window's own pixels (the desktop's bit), planes 1..wl-1
+	 * the window's planes, at their folded places in rows 480 up
+	 * (rows1: the second sheet's height, 240 or 480). */
+	bool wcolor;
+	int wl;
+	int wl_hw;                     /* the window's bits in hardware:
+	                                  1 + its planes (5 or 3) */
+	int rows1;
 	bool verifying;                /* host check: a repaint, not a frame */
 
 	uint16_t pal[256];
@@ -75,6 +89,11 @@ void ar__key(uint32_t keysym, bool pressed, uint8_t mods);
 /* Once a frame: read the pads, make their edges into events, start a
  * new frame of "pressed". */
 void ar__frame_input(void);
+/* Colour in the window on or off (docs/color.md, "The colour
+ * window"): `extra` window planes (2 or 4) in a second sheet `rows1`
+ * high. Repaints, and AR_EV_MODE when it changes. */
+void ar__wcolor(bool on, int extra, int rows1);
+
 /* Advance the shake: sets view_dx/view_dy. */
 void ar__shake_step(void);
 void ar__queue(const ar_event_t *e);

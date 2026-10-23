@@ -22,6 +22,11 @@
  *                            brought into it (Ctrl+I), full screen
  *   render_pix DIR cost      what each frame writes while drawing, in
  *                            256 colours full screen
+ *   render_pix DIR wcolour   a 16-colour sheet in its colour window
+ *                            (32 colours: the art at 16, the controls
+ *                            above; 8 on six planes: the art at 4):
+ *                            drawing, F7, a box, covered, full screen
+ *   render_pix DIR wc256     the 256-colour sheet in its colour window
  *   render_pix DIR anim      mausrun's sprites: onion skin, an
  *                            animation made (Shift+F5) and played (F5),
  *                            the next frame (Ctrl+D)
@@ -52,6 +57,8 @@ extern const char *pix_host_answer;
 #define M(f, x, y, b)   { (f), ARH_MOUSE, (b), 0, NULL, (x), (y), 0, 0 }
 #define TM(f, k, m)     { (f), ARH_TAP, (k), (m), NULL, 0, 0, 0, 0 }
 #define END(f)          { (f), ARH_END, 0, 0, NULL, 0, 0, 0, 0 }
+#define WCOLOR(f, on)   { (f), ARH_WCOLOR, (on), 0, NULL, 0, 0, 0, 0 }
+#define COVER(f, x, y, w, h) { (f), ARH_COVER, 0, 0, NULL, (x), (y), (w), (h) }
 
 #define K_HOME     0x110004u
 #define K_PGDN     0x110007u
@@ -256,6 +263,89 @@ static const ar_host_step_t cost[] = {
 	END(50)
 };
 
+/* The real boxes (PIX_BOXES: the screen toolkit, ui/sui.h) on pix's
+ * screen, answered by keys: rename, delete, help, "save first?", open,
+ * in the window, then full screen in colour, and save. */
+#define K_F1 0x110010u
+#define K_F2 0x110011u
+#define K_DEL 0x110009u
+static const ar_host_step_t boxes[] = {
+	T(8, K_F2),                         /* rename */
+	SHOT(10, "81_box_rename"),
+	T(12, '_'), T(13, 'b'),
+	SHOT(15, "82_box_rename_typed"),
+	T(16, '\r'),
+	TM(20, K_DEL, Z_KBD_MOD_SHIFT),     /* delete: Yes / No */
+	SHOT(23, "83_box_delete"),
+	T(25, 0x1b),                        /* no */
+	T(30, K_F1),                        /* help, on pix's screen */
+	SHOT(33, "84_box_help"),
+	T(35, K_PGDN),
+	SHOT(37, "85_box_help_pgdn"),
+	T(39, K_F1),
+	TM(44, 0x0f, Z_KBD_MOD_CTRL),       /* open: changed, so "save first?" */
+	SHOT(47, "86_box_save_first"),
+	T(49, 'n'),
+	SHOT(52, "87_box_open"),
+	T(54, 0x1b),
+	MODE(58, ARH_FULL_COLOR),
+	T(62, K_F2),
+	SHOT(65, "88_box_rename_full"),
+	T(67, 0x1b),
+	T(70, K_F1),
+	SHOT(73, "89_box_help_full"),
+	T(75, 0x1b),
+	TM(78, 0x13, Z_KBD_MOD_CTRL),       /* save: untitled, so the box */
+	SHOT(81, "90_box_save_full"),
+	T(83, 0x1b),
+	MODE(86, ARH_WINDOW),
+	TM(88, 0x11, Z_KBD_MOD_CTRL),       /* quit: "save first?" -- no */
+	SHOT(91, "91_box_quit"),
+	T(93, 'n'),
+	END(96)
+};
+
+/* The colour window (docs/color.md): wm gives pix's window the colour,
+ * takes it while another window covers it, gives it back. */
+#define K_F1W 0x110010u
+static const ar_host_step_t wcolour[] = {
+	T(10, '2'), T(11, 'r'),
+	M(12, 40, 30, 1), M(13, 200, 160, 1), M(14, 200, 160, 0),
+	T(16, '7'), T(17, 'g'), M(18, 120, 100, 1), M(19, 120, 100, 0),
+	SHOT(22, "a1_mono_window"),
+	WCOLOR(24, 1),
+	SHOT(28, "a2_colour_window"),
+	/* drawing in it: a line in blue (6), a pixel in 13 */
+	T(30, '6'), T(31, 'l'), M(32, 50, 150, 1), M(33, 190, 40, 1), M(34, 190, 40, 0),
+	T(35, 'p'), T(36, 'd'), M(37, 128, 90, 1), M(38, 140, 90, 1), M(39, 140, 90, 0),
+	SHOT(42, "a3_colour_window_drawn"),
+	T(44, K_F7), SHOT(48, "a4_colour_window_as4"),
+	T(50, K_F7), T(51, K_F7),
+	SHOT(54, "a5_colour_window_back"),
+	T(56, K_F1W), SHOT(60, "a6_colour_window_help"), T(62, 0x1b),
+	COVER(64, 150, 100, 200, 160),
+	SHOT(68, "a7_covered"),
+	COVER(70, 0, 0, 0, 0),
+	SHOT(74, "a8_uncovered"),
+	MODE(76, ARH_FULL_COLOR),
+	SHOT(80, "a9_full"),
+	MODE(82, ARH_WINDOW),
+	SHOT(86, "aa_window_again"),
+	WCOLOR(88, 0),
+	SHOT(92, "ab_focus_elsewhere"),
+	TM(93, 0x11, Z_KBD_MOD_CTRL),       /* quit: "save first?" -- no */
+	T(95, 'n'),
+	END(98)
+};
+
+static const ar_host_step_t wc256[] = {
+	SHOT(8, "b1_c256_window"),
+	WCOLOR(10, 1),
+	SHOT(14, "b2_c256_colour_window"),
+	T(16, K_F8), SHOT(20, "b3_c256_colour_window_palette"), T(22, K_F8),
+	END(30)
+};
+
 static const char *scene = "icons";
 
 void ar_host_hook(uint32_t frame) {
@@ -277,6 +367,7 @@ void ar_host_hook(uint32_t frame) {
 
 int main(int argc, char **argv) {
 	const char *dir = argc > 1 ? argv[1] : "out";
+	setvbuf(stdout, NULL, _IOLBF, 0);
 	const ar_host_step_t *s = icons;
 	if (argc > 2) scene = argv[2];
 	if (!strcmp(scene, "font")) {
@@ -306,6 +397,17 @@ int main(int argc, char **argv) {
 	} else if (!strcmp(scene, "cost")) {
 		setenv("PIX_OPEN", "c256.zsp", 1);
 		s = cost;
+	} else if (!strcmp(scene, "wcolour")) {
+		setenv("PIX_NEW", "sprite 24 20 16", 1);
+		setenv("PIX_BOXES", "1", 1);
+		s = wcolour;
+	} else if (!strcmp(scene, "wc256")) {
+		setenv("PIX_OPEN", "c256.zsp", 1);
+		s = wc256;
+	} else if (!strcmp(scene, "boxes")) {
+		setenv("PIX_NEW", "sprite 24 20 16", 1);
+		setenv("PIX_BOXES", "1", 1);
+		s = boxes;
 	} else if (!strcmp(scene, "mausrun")) {
 		setenv("PIX_OPEN", "../../../data/mausrun/sprites.zsp", 1);
 		s = mausrun;

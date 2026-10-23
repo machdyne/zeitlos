@@ -1,5 +1,7 @@
 # blackjack
 
+Kind: dual -- a resizable desktop window, and a 320x240 screen in colour in the same window ([app_kinds.md](app_kinds.md)).
+
 **Status: complete.** Six decks, splits, doubles, insurance and
 surrender, by keyboard or mouse, with chips that persist in
 `/data/casino/bank.dat`.
@@ -7,6 +9,33 @@ surrender, by keyboard or mouse, with chips that persist in
     cd sw/apps/blackjack && make          # the target binary
     make test                             # 351 checks, four binaries
     make render WHAT=play|split|done      # draws it, for looking at
+
+and `make render` also draws the three states on the screen face
+(`tests/out/scr-*.png`: the window in black and white, its colour
+window, full screen), every frame checked against a full repaint.
+
+## In colour
+
+**F10**, or the colour icon on the titlebar (a rainbow), turns the
+window into blackjack's **screen face**: the same table on a 320x240
+screen, through the arcade runtime ([arcade.md](arcade.md), "A dual
+app"), in colour where the window has the colour window
+([color.md](color.md)) -- green felt, cards as poker draws them (white,
+red hearts and diamonds, blue backs), the hand being played framed in
+gold, dark green buttons, the shoe's bar in rose, and the chips in
+casino colours (5 red, 25 green, 100 black, 500 purple), the one chosen
+ringed in gold. **F11** (or `game`) is the screen face full screen,
+from either face; Esc there comes back to the window. F10, the icon or
+resizing the window go back to the desktop table at the size it had.
+On the screen face F1 is the help on the screen, and the keys, the
+command line and the mouse work as on the desktop (typed `c` and `m`
+are letters).
+
+The table asks for every colour by **role** (`BJ_C_*` in `bj_board.h`);
+the desktop draws the roles in one bit -- exactly the old table -- and
+the screen face in `bj_palette`. In black and white the screen face is
+the desktop's table. `bj_screen(true)` sends every primitive to the
+runtime; the layout is `bj_board_layout(L, v, 0, 0, 320, 240)`.
 
 Cards, the shoe and the shuffle come from `sw/common/games` — promoted
 out of `sw/apps/poker` when this app became their second caller. Chips
@@ -99,8 +128,8 @@ the first assertion to fail.
 ## The table
 
 Same origin-and-clip contract as the rest, so a window's content
-rectangle and a game-mode page are one renderer with different
-arguments.
+rectangle and the screen face's 320x240 are one renderer with
+different arguments.
 
 **The card stride is computed, not constant.** A blackjack hand has no
 fixed length — twelve cards is reachable (four aces, four twos, four
@@ -155,9 +184,9 @@ four-figure bet was the case that showed it.
 | `decks 1-8`, `h17`, `s17`, `pays 3:2\|6:5`, `das`, `surr` | |
 | `bank`, `buyin`, `game`, `quit` | |
 
-`F1` shows the help box in the window -- these lines, and `F11` (or
-`game`) for full screen; in game mode F1 does nothing. `F11` toggles
-full screen ([keys.md](keys.md)).
+`F1` shows the help -- these lines, `F10` for the table in colour and
+`F11` (or `game`) for full screen ([keys.md](keys.md)): a box in the
+window, the screen's help on the screen face.
 
 Return on an empty line deals. It commits the bet that is already set
 rather than choosing one, so it cannot cost anything unintended — the

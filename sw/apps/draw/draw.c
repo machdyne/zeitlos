@@ -1658,6 +1658,18 @@ int main(void) {
 	canvas_clear();
 	widgets_init();
 
+	// A file to open, if something launched us with one (the file
+	// browser does -- see Z_WM_SET_ARG in zwm.h). Asked for BEFORE the
+	// window exists, as view, text and sheet do: waiting for wm's
+	// answer reads the mailbox, and zwin_absorb() (zwin.c) takes the
+	// window's first SET_CLIP and REDRAW out of it on the way. The
+	// REDRAW was then never answered -- draw had painted once already,
+	// into a window with no region yet, which draws nothing -- so it
+	// came up without its tools and patterns until it was dragged.
+	// Loaded by the main loop like any other open, after the dialog
+	// context is set up, since a failure is reported through a dialog.
+	bool have_launch = z_launch_path_take(launch_path, sizeof(launch_path));
+
 	// Z_WIN_FLAG_RESIZABLE gives us the corner grip;
 	// Z_WIN_FLAG_MIN_IS_CREATE pins the minimum size to WIN_W/WIN_H so
 	// the tool column and pattern palette can never be shrunk out of
@@ -1694,12 +1706,7 @@ int main(void) {
 	update_title();
 	repaint();
 
-	// A file to open, if something launched us with one (the file
-	// browser does -- see Z_WM_SET_ARG in zwm.h). Loaded by the main
-	// loop like any other open, AFTER the dialog context is set up,
-	// since a failure is reported through a dialog.
-	if (z_launch_path_take(launch_path, sizeof(launch_path)))
-		start_load(launch_path);
+	if (have_launch) start_load(launch_path);
 
 	for (;;) {
 

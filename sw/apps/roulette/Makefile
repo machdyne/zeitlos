@@ -7,7 +7,13 @@ APP_LISTING = 0
 # Objects, and why each is linked:
 #
 #   zfsapp.o: The bank lives in a file, so this app links the filesystem wrappers.
+#
+# zarcade*.o, zsfx.o, zcfg.o, sui.o, zcolor.o, zflist.o, zedit.o: the
+# screen face -- the table on the arcade runtime's 320x240 screen in
+# colour, its help on that screen (docs/roulette.md, "In colour").
+SRC_DIRS = $(COMMON_DIR)/games $(COMMON_DIR)/games/ui
 OBJS = zeitlos.o zobj.o zgfx.o zwidget.o zspeak.o zdialog.o zshape.o zfont_data.o zwin.o zrng.o zfsapp.o \
+	zcolor.o zflist.o zedit.o zarcade.o zarcade_sys.o zsfx.o zcfg.o sui.o \
 	zrand.o zrand_sys.o zbank.o \
 	rl_table.o rl_wheel.o rl_board.o rl_input.o roulette.o
 
@@ -35,8 +41,9 @@ GAMES = $(COMMON)/games
 # computed. zgfx.c cannot be linked here -- it is register writes from
 # top to bottom -- which is exactly why zshape.c is its own object.
 PANELSRC = $(COMMON)/zwin.c $(COMMON)/zwidget.c $(COMMON)/tests/zspeak_stub.c $(COMMON)/zfont_data.c \
-	$(COMMON)/zobj.c $(COMMON)/zeitlos.c
-PANELFLAGS = $(HOSTFLAGS) -I $(COMMON)
+	$(COMMON)/zobj.c $(COMMON)/zeitlos.c \
+	$(GAMES)/zarcade.c $(GAMES)/zsfx.c $(GAMES)/tests/ar_host.c
+PANELFLAGS = $(HOSTFLAGS) -I $(COMMON) -DAR_HOST_TESTS -DZSFX_HOSTED -Wno-unused-parameter
 
 # The table has no I/O in it at all, so the tests link the SHIPPED
 # source with nothing else. -I is deliberately absent: it is the header
@@ -103,7 +110,7 @@ test: includecheck nofloat
 # running after any change to the drawing or the parsing: a one-byte
 # overrun is invisible on the host without it.
 stress:
-	$(HOSTCC) --std=gnu99 -g -O1 -no-pie -I $(COMMON) \
+	$(HOSTCC) --std=gnu99 -g -O1 -no-pie -I $(COMMON) -DAR_HOST_TESTS -DZSFX_HOSTED \
 		-fsanitize=address,undefined -fno-omit-frame-pointer \
 		-o /tmp/roulette_stress tests/stress.c rl_input.c rl_board.c \
 		rl_wheel.c rl_table.c $(COMMON)/zshape.c $(GAMES)/zrand.c $(PANELSRC)
@@ -152,6 +159,11 @@ render:
 		tests/render.c rl_board.c rl_wheel.c rl_table.c \
 		$(COMMON)/zshape.c $(PANELSRC)
 	/tmp/roulette_render /tmp/roulette.pbm $(WHAT)
+	mkdir -p tests/out
+	@for w in board amer; do \
+		AR_HOST_VERIFY=1 /tmp/roulette_render tests/out scr-$$w || exit 1; \
+	done
+	-python3 ../pix/tests/ppm2png.py tests/out
 
 .PHONY: test includecheck nofloat nmcheck render stress
 

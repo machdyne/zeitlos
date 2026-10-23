@@ -2,6 +2,7 @@
  * Zeitlos blackjack -- draw the table on the build machine.
  *
  *   cd sw/apps/blackjack && make render WHAT=play|split|done
+ *   render DIR scr-<state>   that state on the screen face, in colour
  *
  * See sw/common/tests/zrender.h for why. Here the questions a geometry
  * assertion cannot answer are: whether a hand of six cards is readable
@@ -15,11 +16,65 @@
 
 #include "blackjack_shim.h"
 #include "../bj_board.h"
+#include "../../../common/games/tests/ar_host.h"
 
 static bj_game_t g;
 static bj_view_t view;
 static bj_layout_t L;
 static z_win_t win;
+
+/* -- the screen face: the same table through the arcade runtime, in
+ * colour: the window in black and white, its colour window, full
+ * screen, every frame checked against a full repaint -- */
+static void scr_paint(void *user, const ar_rect_t *r)
+{
+    bj_layout_t t;
+    (void)user; (void)r;
+    bj_board_layout(&t, &view, 0, 0, AR_W, AR_H);
+    bj_board_draw(&t, &view);
+}
+
+#define SHOT(f, n)      { (f), ARH_SHOT, 0, 0, (n), 0, 0, 0, 0 }
+#define MODE(f, m)      { (f), (m), 0, 0, NULL, 0, 0, 0, 0 }
+#define WCOLOR(f, on)   { (f), ARH_WCOLOR, (on), 0, NULL, 0, 0, 0, 0 }
+#define END(f)          { (f), ARH_END, 0, 0, NULL, 0, 0, 0, 0 }
+
+static int screen_face(const char *dir, const char *what)
+{
+    static ar_desc_t desc;
+    static char n1[48], n2[48], n3[48];
+    ar_host_step_t script[8];
+    ar_event_t e;
+    int k = 0;
+
+    snprintf(n1, sizeof n1, "%s_window", what);
+    snprintf(n2, sizeof n2, "%s_colour_window", what);
+    snprintf(n3, sizeof n3, "%s_full", what);
+    script[k++] = (ar_host_step_t)SHOT(3, n1);
+    script[k++] = (ar_host_step_t)WCOLOR(4, 1);
+    script[k++] = (ar_host_step_t)SHOT(7, n2);
+    script[k++] = (ar_host_step_t)MODE(8, ARH_FULL_COLOR);
+    script[k++] = (ar_host_step_t)SHOT(11, n3);
+    script[k++] = (ar_host_step_t)END(14);
+
+    desc.name = "blackjack";
+    desc.paint = scr_paint;
+    memcpy(desc.palette, bj_palette, sizeof desc.palette);
+    bj_mono_inks(desc.ink);
+    bj_screen(true);
+    ar_window_colour(true);
+    ar_host_run(script, dir);
+    if (!ar_init(&desc)) return 1;
+    for (;;) {
+        bool quit = false;
+        while (ar_poll(&e)) if (e.type == AR_EV_QUIT) quit = true;
+        if (quit) break;
+        ar_frame();
+    }
+    printf("render: %s, %d pictures in %s, %u frames verified, %u differ\n",
+        what, ar_host_shots(), dir, ar_host_verified(), ar_host_verify_bad());
+    return ar_host_verify_bad() ? 1 : 0;
+}
 
 static uint8_t C(const char *s) { return zcard_parse(s); }
 
@@ -35,11 +90,16 @@ int main(int argc, char **argv)
 {
     const char *path = argc > 1 ? argv[1] : "/tmp/blackjack.pbm";
     const char *what = argc > 2 ? argv[2] : "play";
+    const char *scr = NULL;
     bj_rules_t r;
     int x, y, sx, sy;
     FILE *f;
 
-    if (!z_render_open(&win, 320, 240)) {
+    /* scr-<state>: that state on the screen face, pictures into the
+     * directory `path` */
+    if (!strncmp(what, "scr-", 4)) { scr = what; what += 4; }
+
+    if (!scr && !z_render_open(&win, 320, 240)) {
         fprintf(stderr, "render: cannot map the framebuffer here\n");
         return 77;
     }
@@ -87,6 +147,8 @@ int main(int argc, char **argv)
         strcpy(view.cmd, "h");
         view.cmd_len = 1;
     }
+
+    if (scr) return screen_face(path, scr);
 
     bj_board_layout(&L, &view, 2, 13, 316, 225);
     bj_board_draw(&L, &view);

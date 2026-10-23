@@ -10,8 +10,9 @@
  *
  * Same contract as sw/apps/poker/table_ui.h and for the same reason:
  * everything is drawn against an ORIGIN and a CLIP RECTANGLE in
- * absolute screen coordinates, so a window's content rect and a
- * game-mode page are the same code with different arguments. Two
+ * absolute screen coordinates, so a window's content rect and the
+ * screen face's 320x240 (a dual app, docs/app_kinds.md) are the same
+ * code with different arguments. Two
  * renderers drift, and the drift is invisible until somebody switches
  * modes mid-round.
  *
@@ -53,6 +54,7 @@
 #include "../../common/zgfx.h"
 #include "rl_table.h"
 #include "rl_wheel.h"
+#include "../../common/games/zarcade.h"
 
 #define RL_MSG_LEN     48
 #define RL_CMD_LEN     40
@@ -151,5 +153,10 @@ void rl_board_draw_wheel(const rl_layout_t *L, const rl_view_t *v,
 void rl_board_draw_status(const rl_layout_t *L, const rl_view_t *v);
 
 char *rl_num(int32_t n, char *buf);
+
+/* The screen face's palette and its inks in black and white (the roles
+ * are in rl_wheel.h; rl_screen() switches the drawing). */
+extern const uint16_t rl_palette[16];
+void rl_mono_inks(ar_ink_t ink[16]);
 
 #endif

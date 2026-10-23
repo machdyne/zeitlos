@@ -37,6 +37,7 @@ static const char help_text[] =
 	"Esc\tPause; again for the menu\n"
 	"F11\tFull screen, or back to the window\n"
 	"C\tFull screen: colour on or off\n"
+	"F10\tColour on or off, in the window too\n"
 	"M\tMusic on or off\n\n"
 	"Skill: on EASY the snake starts slowly and a crash only costs a "
 	"heart -- it stops and waits for you to steer it somewhere free. "
@@ -517,6 +518,9 @@ int main(void) {
 
 	printf("snake: the classic, in a window or full screen (F11)\n");
 
+	/* in colour in its window too, while it is focused and uncovered,
+	 * on a board with the colour window (docs/color.md) */
+	ar_window_colour(true);
 	if (!ar_init(&desc)) return 1;
 
 	if (!sn_draw_init())

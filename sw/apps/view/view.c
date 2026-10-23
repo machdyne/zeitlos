@@ -76,6 +76,9 @@
 #include "../../common/zsvg.h"
 #endif
 #include "../../common/zprof.h"
+#include "../../common/games/zarcade.h"
+
+#include "vscreen.h"
 
 #define VRAM        ((volatile uint32_t *)0x20000000)
 #define VRAM_WPL    (Z_SCREEN_W / 32)
@@ -87,8 +90,9 @@
 #define DOC_WPL     (DOC_W / 32)
 
 // Initial window size. Small enough to fit alongside the dock on a
-// 640x480 screen, large enough to be useful; the window is resizable
-// and this becomes its minimum via Z_WIN_FLAG_MIN_IS_CREATE.
+// 640x480 screen, large enough to be useful; the window is resizable.
+// Not its minimum (no Z_WIN_FLAG_MIN_IS_CREATE): the screen face makes
+// the window 320x240 inside, smaller than this.
 #define WIN_W       420
 #define WIN_H       300
 
@@ -161,6 +165,17 @@ static int view_x, view_y, view_w, view_h;
 static int scroll_x, scroll_y;
 
 static bool use_hw_blit;
+
+// -- the screen face (vscreen.h; view is a dual app, docs/app_kinds.md) --
+//
+// F10, the colour icon or F11 lend the window to the arcade runtime for
+// the picture on a 320x240 screen in colour; F10, the icon, a resize or
+// Esc give it back. The screen's picture is made from the file again,
+// in colour, once per picture (an SVG's from the one-bit document).
+static char screen_for[Z_FS_PATH_MAX];
+static int screen_w, screen_h;
+static bool quit_now;
+static void do_open(void);
 
 // -- diagnostics --
 //
@@ -902,6 +917,42 @@ static void scroll_to(int nx, int ny) {
 
 }
 
+static bool file_rewind(void *ctx) {
+	return z_img_file_rewind((z_img_file_t *)ctx) == Z_IMG_OK;
+}
+
+static void screen(bool full) {
+
+	int r;
+
+	if (loading) return;
+
+	if (strcmp(screen_for, filename) || screen_w != img_w || screen_h != img_h) {
+		bool ok = false;
+		if (img_w && img_fmt != Z_IMG_FMT_NONE &&
+		    z_img_file_open(&src, filename) == Z_IMG_OK) {
+			vs_src_t s;
+			s.read = z_img_file_read;
+			s.rewind = file_rewind;
+			s.ctx = &src;
+			ok = vs_load(&s);
+			z_img_file_close(&src);
+		}
+		if (!ok) {
+			if (img_w) vs_from_bits(&doc[0][0], DOC_WPL, img_w, img_h);
+			else vs_clear();
+		}
+		str_copy(screen_for, sizeof(screen_for), filename);
+		screen_w = img_w;
+		screen_h = img_h;
+	}
+
+	r = vs_run(&win, full, filename);
+	if (r == VS_QUIT) quit_now = true;
+	else if (r == VS_OPEN) do_open();
+
+}
+
 static void handle_key(uint32_t keysym) {
 
 	if (keysym == Z_KEY_HELP) {	// docs/app_help.md
@@ -909,6 +960,8 @@ static void handle_key(uint32_t keysym) {
 			"An image viewer: BMP, PNM, GIF, JPEG, PNG, ZBM and SVG, "
 			"shown in black and white.\n\n"
 			"o\tOpen an image\n"
+			"F10\tColour: the picture on a 320x240 colour screen\n"
+			"F11\tThe same, full screen\n"
 			"Esc\tStop loading one\n"
 			"Arrows\tScroll\n"
 			"PgUp/PgDn\tScroll a page\n"
@@ -935,6 +988,14 @@ static void handle_key(uint32_t keysym) {
 		case 'o':
 		case 'O':
 			do_open();
+			break;
+
+		case Z_KEY_COLOUR:		// the screen face, in the window
+			screen(false);
+			break;
+
+		case Z_KEY_FULL_SCREEN:	// the screen face, full screen
+			screen(true);
 			break;
 
 		case KEY_ESCAPE:
@@ -1077,9 +1138,13 @@ int main(void) {
 	// owns more than one window at a time as soon as a dialog opens,
 	// and the killing form takes every window of a pid down the
 	// instant any one of them is closed (zwm.h).
+	// The screen face's flags too: game mode (F11 is view's: the
+	// picture full screen), the colour window and its icon.
+	ar_window_colour(true);
 	if (z_win_create_flags(&win, "view", WIN_W, WIN_H, -1, -1,
 		Z_WIN_FLAG_CLOSE_ICON | Z_WIN_FLAG_RESIZABLE |
-		Z_WIN_FLAG_MIN_IS_CREATE | Z_WIN_FLAG_OPEN_ICON) != Z_OK) {
+		Z_WIN_FLAG_OPEN_ICON |
+		vs_window_flags()) != Z_OK) {
 		dbg("view: failed to create window -- is wm running?\n");
 		return 1;
 	}
@@ -1151,6 +1216,8 @@ int main(void) {
 
 					if (Z_WM_UNPACK_TBICON_KIND(v) == Z_WM_TBICON_OPEN)
 						do_open();
+					else if (Z_WM_UNPACK_TBICON_KIND(v) == Z_WM_TBICON_COLOUR)
+						screen(false);
 
 					break;
 
@@ -1177,6 +1244,12 @@ int main(void) {
 
 			}
 
+		}
+
+		if (quit_now) {
+			z_win_destroy(&win);
+			dbg("view: exiting\n");
+			return 0;
 		}
 
 		// A picture loading: a slice of it, then back for messages.

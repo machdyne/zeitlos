@@ -101,6 +101,15 @@ design makes that pattern land correctly). `tb_line.v` and
   hidden, paper, game mode across the wrap seam, 16 colours. Then the
   shapes against a model of the cell, including rows written through
   the load port while the screen draws.
+- `tb_colwin.v` -- the colour window in `rtl/gpu/gpu_video.v`
+  (`WIN_AVAIL`; `docs/color.md`, "The colour window"), `tb_planes.v`'s
+  method at six or eight planes (`-DNPLANES=6` or `8`): every visible
+  pixel of a frame, inside the rectangle the index (the desktop's bit
+  and the second sheet's folded planes) and its colour, outside the
+  desktop's pixel delayed to meet x running a clock early. Odd
+  positions, across the fold, the cursor, paper, off, game mode
+  ignoring it. `-DGPU_DDMI -DTB_STUBS` with the DDMI files for the TMDS
+  inputs. About a dozen frames.
 - `tb_brightness.v` -- monochrome brightness on DDMI (VIDEO bits
   11:8): the 8-bit channel values for a lit pixel in every phosphor
   mode at levels 0, 7, 11 and 15; level 7 is exactly the old inks; a
@@ -223,6 +232,11 @@ vvp /tmp/tb_game.out          # several minutes
 iverilog -g2005 -o /tmp/tb_color.out \
     rtl/gpu/bench/tb_color.v /tmp/gpu_video_fix.v
 vvp /tmp/tb_color.out         # several minutes
+
+# tb_colwin.v -- the same patched gpu_video.v; -DNPLANES=6 for six
+iverilog -g2005 -DNPLANES=8 -o /tmp/tb_colwin.out \
+    rtl/gpu/bench/tb_colwin.v /tmp/gpu_video_fix.v
+vvp /tmp/tb_colwin.out        # a few minutes
 
 # tb_cursor.v -- the same patched gpu_video.v, and the old cursor
 iverilog -g2005 -o /tmp/tb_cursor.out rtl/gpu/bench/tb_cursor.v \

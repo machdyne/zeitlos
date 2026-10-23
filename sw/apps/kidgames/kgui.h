@@ -26,46 +26,34 @@
  * with their control flow intact: it BLOCKS until a key arrives,
  * exactly as ui_getkey() did.
  *
- * What it does while blocking is the Zeitlos part. It drains the
- * mailbox, applies Z_WM_SET_CLIP, answers Z_WM_REDRAW through the
- * repaint callback, acks it, turns pointer presses into keys where the
- * on-screen keyboard caught them, and sleeps with z_proc_wait() rather
- * than spinning -- an app that spins takes a full scheduler share from
- * whatever is in the foreground (docs/app_runtime.md, "Idling").
+ * What it does while blocking is the arcade runtime's loop
+ * (sw/common/games/zarcade.h, docs/arcade.md): it reads the runtime's
+ * events, turns pointer presses into keys where the on-screen keyboard
+ * caught them, and waits a frame at a time -- sleeping, not spinning
+ * (docs/app_runtime.md, "Idling") -- while the runtime puts back
+ * whatever it had to repaint.
  *
- * The callback is not optional, for the same reason zdialog.c's is
- * not: a window that misses a Z_WM_SET_CLIP keeps drawing against a
- * region that is no longer true, and a window that has never had one
- * draws nothing at all, silently. Every screen that can be on display
+ * The repaint callback is not optional: when the runtime repaints part
+ * of the picture (uncovered, after the help, a mode change), it is the
+ * only way to draw that part again. Every screen that can be on display
  * while kg_getkey() blocks must register how to redraw itself.
  *
  * -- TWO MODES, ONE PICTURE --
  *
- * Game mode is a 320x240 camera over the 640x480 framebuffer
- * (docs/game_mode.md) and is the default, because pixel-doubled text
- * is readable from a sofa and 1:1 5x8 text is not. F2 drops to a
- * window of exactly the same content size (kg.h).
- *
- * Game mode here does NOT page-flip, which is worth saying out loud
- * because every other full-screen app in this tree does.
- * z_game_flip() exists for things that redraw the world every frame; a
- * quiz screen redraws one field when a letter is typed. Flipping would
- * mean the incremental draw landed on the page nobody is looking at,
- * so every partial update would have to become a full repaint --
- * slower, and a rewrite of ten games' worth of drawing for a tearing
- * risk that a static screen does not have. So this app draws straight
- * into page 0 in both modes, and the drawing code is genuinely
- * identical between them.
- *
- * Pages 1-3 stay free, which is where staged sprite art goes when the
- * blitter has no one-pass masked sprite -- see kgart.h.
+ * The playfield is the runtime's 320x240, in a window or full screen
+ * (pixel-doubled, readable from a sofa: the default). The runtime puts
+ * it where it belongs and cuts every draw to what shows, so the
+ * drawing code is identical between the modes. Nothing page-flips: a
+ * quiz screen redraws one field when a letter is typed. Black and
+ * white in both.
  */
 
 #include "kg.h"
 
 /* -- lifecycle ------------------------------------------------------ */
 
-/* Creates the window, probes for game mode and enters it if present.
+/* Starts the runtime (its window), and goes full screen where there
+ * is game mode.
  * Returns false if the window could not be created, which is fatal --
  * there is nowhere to draw. */
 bool kg_init(void);
@@ -74,30 +62,19 @@ void kg_shutdown(void);
 /* True while the 320x240 pixel-doubled viewport is in use. */
 bool kg_in_game_mode(void);
 
-/*
- * This app's one window.
- *
- * Exposed for the host harness, which has to stand a window up itself
- * (z_render_open, sw/common/tests/zrender.h) because kg_init() would
- * try to talk to a window manager that is not there. Nothing in the
- * app proper should need it -- if a game does, the drawing it wants is
- * missing from this header.
- *
- * void *, not z_win_t *, because z_win_t is a typedef of an anonymous
- * struct and cannot be forward declared -- and this header deliberately
- * does not include zwin.h, since a game that can see zwin.h can draw
- * with the wrong coordinate convention.
- */
+/* The window is the runtime's now: NULL. Kept for the callers that
+ * still name it. */
 void *kg_window(void);
 
-/* F2. Silently does nothing if the bitstream has no game mode, having
- * already said so once on the console at startup. */
+/* Full screen, or back (what F11 does, in the runtime). Silently does
+ * nothing if the bitstream has no game mode, having already said so
+ * once on the console at startup. */
 void kg_toggle_mode(void);
 
 /* -- repaint callback -----------------------------------------------
  *
  * Set by whatever owns the screen right now, cleared by passing NULL.
- * The pump calls it on Z_WM_REDRAW and after leaving game mode.
+ * The runtime's paint() calls it for whatever it repaints, cut to it.
  *
  * Save and restore it around anything that takes over the screen --
  * kg_message() does, so a message box does not leave the game beneath

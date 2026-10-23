@@ -6,9 +6,12 @@ from the unchanged 640x480x1bpp framebuffer, for one block RAM -- and
 second sheet of VRAM below the screen ([More than four
 planes](#more-than-four-planes)).
 
-The desktop stays monochrome. Nothing about the 640x480 mode, the
-framebuffer, the blitter, the rasterizer or any existing program
-changes. Colour is off at reset and off whenever game mode is off.
+The desktop stays monochrome -- except, on boards built with
+`COLOR_WINDOW`, one window of it: the [colour
+window](#the-colour-window), 8 or 32 colours for the focused screen
+app. Nothing about the 640x480 mode, the framebuffer, the blitter, the
+rasterizer or any existing program changes. Colour is off at reset and
+off whenever game mode is off (the colour window aside).
 
 ## The idea
 
@@ -166,6 +169,184 @@ layout's planes as the machine shows and drops the rest: a 256-colour picture on
 machine shows its low four planes (the power-on palette is built for
 that, below).
 
+## The colour window
+
+On a board built with `COLOR_WINDOW` (with `GAME_PLANES` 6 or 8), the
+desktop -- still 640x480, one bit a pixel -- can show **one rectangle in
+colour**: the focused screen app's window ([app_kinds.md](app_kinds.md)),
+up to 320x240. Its colours come from the second VRAM sheet, which only
+game mode reads otherwise:
+
+| `GAME_PLANES` | The window's planes | Colours | Palette entries |
+|---|---|---|---|
+| 6 | 2 | 8 | 0, 1, 16, 17, 32, 33, 48, 49 |
+| 8 | 4 | 32 | 0, 1, 16, 17, ... 240, 241 |
+
+A pixel's index is the **desktop's own bit** (bit 0) and the window's
+planes (bits 4..7): the desktop pixel is part of the colour, so what
+the window shows with the colour off is still a picture. Planes 1..3
+are the desktop's other quarters and take no part.
+
+### Where the window's planes are
+
+At the pixel's own screen position, folded into the second sheet --
+which is exactly how game mode reads planes 4..7 with the 16-colour
+layout's offsets and the view at (0, 0), so the scanout's fetch and
+read side needed no change:
+
+| Window plane (index bit) | Desktop pixel (x, y) is kept at |
+|---|---|
+| 0 (bit 4) | sheet 1, (x, y) |
+| 1 (bit 5) | sheet 1, (x + 320, y) |
+| 2 (bit 6) | sheet 1, (x, y + 240) -- eight planes only |
+| 3 (bit 7) | sheet 1, (x + 320, y + 240) -- eight planes only |
+
+Columns are taken mod 640 and rows mod the sheet's height (240 with six
+planes, 480 with eight); sheet 1's row r is framebuffer row 480 + r.
+`z_color_window_plane_xy()` works it out. A window up to 320x240 has a
+place of its own for every pixel in every plane, **wherever it sits on
+the desktop** -- no alignment. When it moves, its planes are drawn
+again at the new position (or copied there by the blitter).
+
+### Rules
+
+- **Desktop mode only.** The scanout ignores the window in game mode,
+  and **entering game mode turns it off** (socctl clears EN on a GAME
+  write with bit 0 set): a full-screen game takes the second sheet and
+  the palette for its own. Whoever owns the window sets it again, with
+  its planes and palette redrawn, afterwards.
+- **One window at a time**, and at most 320x240: the fold tells no more
+  pixels apart. `z_color_window_set()` clips to that.
+- **Only while wholly uncovered.** The hardware knows nothing of
+  windows: anything drawn over the rectangle is shown through the
+  window's palette. So the window is set only while nothing covers it,
+  and turned off before anything does (before the SET_CLIP ack that
+  lets wm draw over it).
+- **The palette is shared** with game mode. Entries 0 and 1 are the
+  desktop's black and white for the window's own pixels with bit 0
+  only; set them to the desktop's ink (0x888 is the DDMI white at the
+  default brightness) so the window's edge matches the desktop.
+- **The cursor** inverts every plane in use inside the window, as in
+  game-mode colour.
+- VGA shows the top bit of each channel (8 colours at most); there is
+  no window on composite (its viewport is permanent).
+
+### Who has it
+
+**The focused screen app.** A program on the arcade runtime that asks
+(`ar_window_colour(true)` before `ar_init()`: snake, blocks, bricks, pix)
+creates its window with `Z_WIN_FLAG_COLOR` -- only on a board with the
+colour window. Then:
+
+- **wm decides who.** On a focus change wm clears COLWIN and tells the
+  window losing focus `Z_WM_COLOR` 0 and the window gaining it 1 (only
+  windows with the flag hear either). The lock screen, the rescue
+  console and the reboot box count as no focus. And the moment the
+  window with the colour has its region narrowed or frozen -- a window
+  dragged or raised over it, a drag of its own -- wm clears COLWIN
+  before drawing anything over it.
+- **The window decides when.** Told 1, the runtime takes the colour at
+  a frame while its window is wholly uncovered, the desktop is showing
+  (not game mode) and it is not frozen: COLWIN set to its content, the
+  picture drawn again in colour. Covered, or told 0, it draws in black
+  and white again (and clears COLWIN itself when it set it). It sets it
+  again when the window has moved, and when the hardware dropped it --
+  a full-screen game cleared it, and took the planes and the palette
+  meanwhile -- drawing everything again.
+- **F10 -- or the colour titlebar icon, a rainbow -- turns it off** in that program, and on again
+  ([keys.md](keys.md)): off, the window draws in black and white and
+  gives COLWIN back as when covered, whatever wm says, until F10 again.
+  Full screen, F10 is game mode's colour key (as C).
+
+That split is for wm's budgets: wm's part is about 300 bytes (paid
+for in [dock.md](dock.md)'s account of wm's size), the decision about
+the window's region is the runtime's, which knows it anyway.
+
+So with two screen apps on the desktop, the focused one is in colour
+and the other in black and white; click the other and the colour moves.
+A full-screen game takes the planes; back on the desktop the focused
+screen app has them again.
+
+`colwin`, below, sets COLWIN itself, without the flag: a test of the
+hardware.
+
+### Registers
+
+| Address | Name | Contents |
+|---|---|---|
+| `0x7000_0240` | COLWIN | W: bits 9:0 x0, bits 25:16 y0, bit 31 EN (lanes 0/1 x0, 2/3 y0 and EN). R: `{ 0x5A57 ("ZW"), avail, 14'b0, en }`. Flips the load toggle: adopted at the next frame boundary with GAME, VIEW and COLOR |
+| `0x7000_0244` | COLWINEND | W: bits 9:0 x1, bits 25:16 y1, exclusive. R: `{ 6'b0, y1, 6'b0, x1 }`. Does not flip the toggle: written first, adopted with the next COLWIN |
+
+The window is x0 <= x < x1, y0 <= y < y1. EN is forced low, and avail
+reads 0, without `COLOR_WINDOW`. socctl's decode is five bits wide for
+these two; on a four-bit bitstream words 16 and 17 alias CTRL and
+MAGIC, so software reads COLWIN's signature before it writes either
+(CTRL reads back with bit 31 set, never `0x5A57`).
+
+### Software (`sw/common/zsoc.h`)
+
+| Function | Does |
+|---|---|
+| `z_color_window_available()` | this bitstream has the colour window |
+| `z_color_window_planes()` | the window's planes: 2 or 4 (0 without); colours `2 << planes` |
+| `z_color_window_entry(c)` | the palette entry colour c shows through: `(c & 1) \| (c >> 1) << 4` |
+| `z_color_window_plane_xy(k, x, y, &px, &py)` | where window plane k of desktop pixel (x, y) is kept |
+| `z_color_window_set(x0, y0, x1, y1)` | on, over that rectangle, from the next frame (clipped to the screen and 320x240) |
+| `z_color_window_off()`, `z_color_window_on()` | off from the next frame; read back |
+
+Drawing the window's planes is drawing past row 479 with the visible
+region cleared: `z_gfx_clear_visible()`, `z_fb_set_rows(z_color_rows())`,
+blitter fills and blits, then `z_fb_set_rows(480)`; the next `z_win_*`
+call puts the window's region back.
+
+**`colwin`** (`sw/apps/colwin`, in the dev pack) is the test: a 320x240
+window of 8 or 32 numbered swatches, the palette's window entries in
+dark (bit 0 clear) and light (bit 0 set) pairs, so it still reads in
+black and white with the colour off. It sets the window while it is
+wholly uncovered and draws its planes again after every move. Esc or
+the close box ends it with the colour off.
+
+### How it works
+
+In `gpu_video.v` (`WIN_AVAIL`), all in the pixel domain:
+
+- the rectangle, captured with the GAME/VIEW/COLOR payload and adopted
+  at the frame boundary; not in game mode;
+- a registered test of x and y against it (`win_px`), on the same edge
+  as the palette's read of the same pixel;
+- in the window, the 16-colour layout's offsets in place of COLOR's and
+  a plane mask of bit 0 and the second sheet's planes;
+- the outputs (VGA, DDMI) choosing the palette or the phosphor's ink
+  per pixel instead of per frame;
+- the palette's read is registered, so while the window is on x runs a
+  clock ahead of the raster (`x_lead`, as for game-mode colour), and
+  the monochrome pixel outside the window is taken from a register to
+  meet it. Inside and outside line up to the pixel; the cursor too.
+
+### Cost
+
+`gpu_video` synthesised on its own (yosys `synth_ecp5`, DDMI, colour,
+the cursor, eight planes), `WIN_AVAIL` 1 against 0: **+156 LUT4, +20
+CCU2C, +85 flip-flops, no block RAM**. `socctl`: +22 LUT4, +41
+flip-flops. No more VRAM reads: every plane is already fetched every
+line, in desktop mode too. Pre-placement numbers, and noisy as the ones
+under [Cost](#cost) are; not yet placed or timed. On by default only
+on the 45F boards (`GAME_PLANES 8`: Mozart ML1/ML2, Sergei ML1/ML2,
+Noir, Schoko); the 25F boards are as full as they are, and may get it
+if it fits.
+
+### Testing
+
+`rtl/gpu/bench/tb_colwin.v` (`-DNPLANES=6` or `8`, and with
+`-DGPU_DDMI -DTB_STUBS` the TMDS inputs): every visible pixel of a whole
+frame per case, inside the window the index and its colour, outside the
+desktop's own pixel -- a 320x240 window at an odd position, one across
+the fold to the corner, the lower-right quarter, the cursor, paper mode
+outside, the window off (x not leading), game mode with the window
+still asked for (ignored), and back. `rtl/tests/tb_socctl_colwin.v`:
+the registers -- staging, the toggle, lanes, read-back, game mode
+clearing EN, and a build without the window.
+
 ## Registers
 
 In `socctl` (`rtl/socctl.v`), alongside GAME and VIEW
@@ -211,7 +392,9 @@ probe for colour without disturbing an old board:
   15 would have cleared DIRTY bits under the screen streamer.
 
 The decode is four bits wide now, so words 8, 10..12, 14 and 15 are
-free and read as zero.
+free and read as zero. (Since taken: 8 and 15 by the cursor, 10..12 by
+DDMI audio, 14 by CVBS; and the decode is five bits wide for the colour
+window's 16 and 17.)
 
 ### Presence
 
@@ -776,6 +959,11 @@ Super+Esc over the desktop therefore always enters monochrome game
 mode, whatever the last game left behind.
 
 ## Not done yet
+
+- A brief tint: COLWIN changes at a frame boundary and the window's
+  planes are drawn at the frame after wm's message, so a window taking
+  or losing the colour can show its old planes or its black-and-white
+  picture through the palette for a frame or two.
 
 - The art side of [one game, any number of
   planes](#one-game-any-number-of-planes): pix (the pixel editor,

@@ -39,7 +39,7 @@ test_import: test_import.c ../px_doc.c ../px_io.c ../px_edit.c ../px_import.c ..
 COMMON = ../../../common
 GAMES = $(COMMON)/games
 RT_SRC = $(GAMES)/zarcade.c $(GAMES)/zsfx.c $(GAMES)/tests/ar_host.c \
-	$(COMMON)/zfont_data.c
+	$(GAMES)/ui/sui.c $(COMMON)/zfont_data.c
 PIX_SRC = ../pix.c ../px_doc.c ../px_io.c ../px_edit.c ../px_anim.c ../px_import.c $(ZSP) $(IMG)
 
 render_pix: render.c $(PIX_SRC) $(RT_SRC)
@@ -62,6 +62,17 @@ render: render_pix
 	AR_HOST_VERIFY=1 ./render_pix out import
 	AR_HOST_VERIFY=1 AR_HOST_PLANES=6 ./render_pix out/p6 c256
 	AR_HOST_VERIFY=1 AR_HOST_PLANES=4 ./render_pix out/p4 c256
+	mkdir -p out/boxes out/fs/home/pictures
+	touch out/fs/home/pictures/cat.zbm out/fs/home/walk.zsp out/fs/home/icons.zic
+	AR_HOST_VERIFY=1 AR_HOST_FS=out/fs ./render_pix out/boxes boxes
+	-python3 ppm2png.py out/boxes
+	mkdir -p out/wc8 out/wc6
+	AR_HOST_VERIFY=1 ./render_pix out/wc8 wcolour
+	AR_HOST_VERIFY=1 ./render_pix out/wc8 wc256
+	AR_HOST_VERIFY=1 AR_HOST_PLANES=6 ./render_pix out/wc6 wcolour
+	AR_HOST_VERIFY=1 AR_HOST_PLANES=6 ./render_pix out/wc6 wc256
+	-python3 ppm2png.py out/wc8
+	-python3 ppm2png.py out/wc6
 	-python3 ppm2png.py out
 
 clean:
