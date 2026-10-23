@@ -40,6 +40,8 @@ kidgames    "Kid games"
 mausrun     "Maus Run"
 midi        "MIDI player"   audio
 mmod                        gpio
+pix         "Pix"
+planedemo   "Plane demo"
 play        "Audio player"  audio
 poker                           hidden
 read        "Reader"

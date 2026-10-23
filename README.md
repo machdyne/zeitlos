@@ -22,7 +22,7 @@ Zeitlos is the successor to [Zucker](https://github.com/machdyne/zucker).
 | Bus | 32-bit Wishbone |
 | Main Memory | SDRAM, [DDR3](docs/ddr3.md), PSRAM or SRAM (1MB minimum; 512MB maximum) |
 | Framebuffer | 640x480x1bpp (monochrome; white, amber, green or paper -- [socctl](docs/socctl.md)) |
-| Game Mode | Optional 320x240 pixel-doubled [viewport](docs/game_mode.md) with up to [16 colors](docs/color.md) |
+| Game Mode | Optional 320x240 pixel-doubled [viewport](docs/game_mode.md) with up to [256 colors](docs/color.md): 16 with 4 bitplanes, 64 with 6, 256 with 8 (a per-board option) |
 | Video | VGA, DVI, DVI over HDMI, [composite](docs/composite.md) NTSC and PAL |
 | Audio | 8 channel 16-bit [hardware mixer](docs/audio.md) with stereo output |
 | Storage | MicroSD |
@@ -118,6 +118,7 @@ board boots to a desktop with no sdcard ([core apps in flash](#core-apps-in-flas
 | [bench](docs/bench.md) | Virtual parts -- I/O expanders, LEDs, buttons, lamps -- on I2C buses, from a netlist, shown live; with [ls99](docs/ls99.md) virtual Zwölf modules |
 | [hex](docs/hex_editor.md) | Hex editor for files of unlimited size |
 | draw | MacPaint-inspired drawing app |
+| [pix](docs/pix_app.md) | Pixel editor: sprite sheets and pictures in up to 256 colours, animation, dock icons, fonts, the mouse pointer; brings in PNG, GIF, BMP and JPEG |
 | [view](docs/view_app.md) | Image viewer: BMP, PNM, GIF, JPEG, [PNG](docs/png.md) and [SVG](docs/svg.md) |
 | [calc](docs/calc_app.md) | Calculator |
 | [info](docs/info_app.md) | System info |
@@ -144,6 +145,7 @@ board boots to a desktop with no sdcard ([core apps in flash](#core-apps-in-flas
 | [chess](docs/chess_app.md) | Chess, with a [built-in engine](docs/chess_engine.md) |
 | [chip8](docs/chip8_app.md) | CHIP-8 game emulator |
 | [mausrun](docs/mausrun.md) | Maus Run: a side-scrolling platformer for children -- eight levels in four themes, cheese, stars, cats |
+| [planedemo](docs/planedemo.md) | A one-minute demoscene film about Zeitlos: 256 colours, eight voices, a clock, a storm, a donut, a tunnel, a mouse |
 | space3d | First-person 3D space shooter game |
 | [snake](docs/snake_app.md) | The classic snake game: four ways to play, two players, 16 colours full screen |
 | [blocks](docs/blocks_app.md) | Falling blocks: endless, 40 lines against the clock, 3 minutes for points |

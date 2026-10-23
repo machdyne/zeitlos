@@ -301,6 +301,8 @@ A few graphical demo apps are included, launchable from the dock:
 - **gpu3d** -- a small hardware-accelerated 3D demo.
 - **gpudemo** -- a graphics demo exercising the GPU's drawing
   hardware directly.
+- **planedemo** -- a one-minute demoscene film about Zeitlos, in 256
+  colours with music (made for the Sergei ML2; in the Games group).
 
 More apps will appear here as they're added.
 

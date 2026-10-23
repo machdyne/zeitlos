@@ -39,8 +39,11 @@ typedef struct {
 	bool text_input;               /* C and M are the game's */
 	bool verifying;                /* host check: a repaint, not a frame */
 
-	uint16_t pal[16];
-	uint16_t pal_dirty;            /* one bit per entry */
+	uint16_t pal[256];
+	uint32_t pal_dirty[8];         /* one bit per entry */
+	int colours_want;              /* ar_set_colours(): 16, 64, 256 */
+	int planes;                    /* in colour: 4, 6 or 8 */
+	const uint8_t *mono_map;       /* ar_mono_map() */
 
 	int shake_amp, shake_left, shake_total;
 	int view_dx, view_dy;          /* this frame's shake offset */
@@ -51,6 +54,15 @@ typedef struct {
 extern ar_state_t ar__s;
 
 /* -- core, called by the system half -- */
+
+/* Planes for colour on a board that shows at most `hw_max` (4, 6, 8),
+ * from what the program asked: sets ar__s.planes and returns it. */
+int ar__choose_planes(int hw_max);
+/* Plane k's framebuffer offset from plane 0 (the z_color_16, _64 and
+ * _256 layouts: quadrants, and planes 4.. 480 rows down). */
+void ar__plane_off(int k, int *dx, int *dy);
+/* Every palette entry to be written again. */
+void ar__pal_all_dirty(void);
 
 void ar__core_init(const ar_desc_t *d);
 /* Repaint what is dirty and draw what changed. vis/ox/oy set first. */
@@ -73,8 +85,12 @@ bool ar__dequeue(ar_event_t *e);
  * Framebuffer coordinates. Rectangles handed to these are already
  * clipped to the framebuffer and to one visible rectangle. */
 
+#define ARH_COPY 0
 #define ARH_OR   1
 #define ARH_ANDN 3
+
+/* arh_blit() can do ARH_COPY (the blitter has its ROPs) */
+bool arh_copy_ok(void);
 
 void arh_fill(int x, int y, int w, int h, int bit);
 void arh_pattern(int x, int y, int w, int h, const uint8_t *pat8);
@@ -83,6 +99,10 @@ void arh_blit(const void *src, int stride, int sx, int sy,
 void arh_sprite(const void *data, const void *mask, int stride,
 	int sx, int sy, int x, int y, int w, int h);
 void arh_vcopy(int sx, int sy, int dx, int dy, int w, int h);
+/* A line, framebuffer coordinates, clipped to the inclusive rectangle
+ * cx0..cx1, cy0..cy1: op 0 clear, 1 set, 2 XOR. */
+void arh_line(int x0, int y0, int x1, int y1, int op,
+	int cx0, int cy0, int cx1, int cy1);
 
 /* Reload vis/ox/oy/can_draw for the current mode and window region.
  * Called by the system half at every frame, and by zarcade.c before

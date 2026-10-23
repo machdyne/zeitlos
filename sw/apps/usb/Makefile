@@ -6,6 +6,11 @@ APP = usb
 # A core app in the flash archive: integer-only printf.
 ZFMT = 1
 
+# ...with no 64-bit division (docs/build.md, ZFMT_NO64): usb prints no
+# 64-bit number, and libgcc's __udivdi3/__umoddi3 (about 2.3KB) stay
+# out. That paid for wm's icons.zic (docs/flash_apps.md, "Budgets").
+ZFMT_NO64 = 1
+
 # A driver (ZEXE flags bit 15, docs/userspace_drivers.md "Drivers"): it
 # drives the USB host controller and takes IRQ 9 with z_irq_bind().
 APP_DRIVER = 1

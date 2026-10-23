@@ -3434,6 +3434,7 @@ module sysctl #()
 	// (docs/cursor.md).
 	wire socctl_cursor_busy;
 	wire socctl_cursor_hide;
+	wire socctl_cursor_scr;
 	wire [3:0] socctl_cursor_slots;
 	wire socctl_cursor_we;
 	wire [5:0] socctl_cursor_waddr;
@@ -3688,6 +3689,7 @@ module sysctl #()
 		.wb_cyc_i(wbm_cyc_socctl),
 		.cursor_busy(socctl_cursor_busy),
 		.cursor_hide(socctl_cursor_hide),
+		.cursor_scr(socctl_cursor_scr),
 		.cursor_slots(socctl_cursor_slots),
 		.cursor_we(socctl_cursor_we),
 		.cursor_waddr(socctl_cursor_waddr),
@@ -4296,6 +4298,7 @@ module sysctl #()
 		.curs_y(gpu_curs_y),
 		.curs_alt(socctl_cursor_busy),
 		.curs_hide(socctl_cursor_hide),
+		.curs_scr(socctl_cursor_scr),
 		.curs_slots(socctl_cursor_slots),
 		.curs_we(socctl_cursor_we),
 		.curs_waddr(socctl_cursor_waddr),

@@ -11,7 +11,7 @@
 
 enum {
 	ARH_END = 0,
-	ARH_KEY_DOWN,      /* a = keysym */
+	ARH_KEY_DOWN,      /* a = keysym, b = modifiers (Z_KBD_MOD_*) */
 	ARH_KEY_UP,
 	ARH_TAP,           /* down and up in the same frame */
 	ARH_PAD,           /* a = AR_BTN_* bits held, b = player */
@@ -62,7 +62,7 @@ extern uint8_t zsfxh_peak[8];
 
 /* The runtime's own tests (test_zarcade.c): the framebuffer, and one
  * render pass without the rest of a frame. */
-#define AR_HOST_FB_BYTES (640 * 480)
+#define AR_HOST_FB_BYTES (640 * 960)    /* two sheets */
 void ar_host_fb_copy(uint8_t *out);
 int ar_host_fb_diff(const uint8_t *a, const uint8_t *b);
 void ar_host_render_only(void);

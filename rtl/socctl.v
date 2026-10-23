@@ -48,9 +48,17 @@
  *             bit 1: cursor hidden. 1 = the hardware cursor is not
  *             drawn at all -- for a game that has taken the screen
  *             (sw/apps/wm hides it while a game holds the grab).
- *             Resets to 1 (busy, shown). bits 31:2 reserved, must be
- *             written 0. Software that predates bit 1 writes it as 0
- *             and so always shows the cursor, as before.
+ *             bit 2: cursor in screen coordinates while game mode is
+ *             on: drawn at half the pointer, so with the view at
+ *             (0, 0) it sits where the pointer is on the doubled screen
+ *             -- for a full-screen program drawn with the mouse
+ *             (sw/apps/pix; wm sets it while such a program holds the
+ *             grab, Z_WM_GAME_GRAB_POINTER). 0: framebuffer
+ *             coordinates, as before (wm's own zoomed desktop).
+ *             Resets to 1 (busy, shown). bits 31:3 reserved, must be
+ *             written 0; bit 31 READS 1 on a socctl that has bit 2
+ *             (one from before it reads back what was written: 0). Software that predates bits 1 and 2 writes
+ *             them as 0 and so always shows the cursor, as before.
  *   1  MAGIC  fixed 32'h5A43_5452 ("ZCTR"). Same purpose as csrs.v's
  *             own MAGIC: reading an address nothing decodes does not
  *             fault on this bus, so a known constant is the only way
@@ -450,6 +458,11 @@ module socctl_wb #(
     // for the same reason it is safe, as cursor_busy above.
     output wire cursor_hide,
 
+    // 1 = the cursor in screen coordinates while game mode is on (CTRL
+    // bit 2). Feeds rtl/gpu/gpu_video.v's curs_scr; crosses into the
+    // pixel clock domain as cursor_hide does, for the same reason.
+    output wire cursor_scr,
+
     // -- the cursor's shapes -> rtl/gpu/gpu_video.v (docs/cursor.md) --
     //
     // cursor_slots: { busy slot, normal slot }, from CURSOR.
@@ -631,6 +644,7 @@ module socctl_wb #(
 
     assign cursor_busy = ctrl[0];
     assign cursor_hide = ctrl[1];
+    assign cursor_scr = ctrl[2];
     assign cursor_slots = cslots;
     assign cursor_we = cwe;
     assign cursor_waddr = cwaddr;
@@ -923,7 +937,9 @@ module socctl_wb #(
                 end else begin
 
                     case (wb_adr_i)
-                        32'd0: wb_dat_o <= ctrl;
+                        // bit 31 reads 1: this socctl has CTRL bit 2
+                        // (an older one reads back what was written, 0)
+                        32'd0: wb_dat_o <= { 1'b1, ctrl[30:0] };
                         32'd1: wb_dat_o <= MAGIC;
                         32'd2: wb_dat_o <= { VIDEO_SIG, (BRIGHT_AVAIL != 0), 3'b0,
                                              ((BRIGHT_AVAIL != 0) ? bright : 4'd0),

@@ -542,6 +542,10 @@ typedef struct {
 // wm's own hotkeys keep working too -- it is the only process that sees
 // every keystroke, and that has to stay true whoever owns the screen.
 #define Z_WM_GAME_GRAB           (Z_SUBJ_WM_GAME + 8)
+// Z_WM_GAME_GRAB's payload (uint32), bits. POINTER: keep the pointer
+// shown -- for a program drawn with the mouse (pix); without it wm hides
+// the pointer for as long as the grab is held. 0 from an older program.
+#define Z_WM_GAME_GRAB_POINTER   0x1u
 #define Z_WM_GAME_RELEASE        (Z_SUBJ_WM_GAME + 9)
 
 // Sent to the owner when wm takes the screen back -- Alt+Esc, or the

@@ -92,6 +92,14 @@ typedef union {
 		uint8_t		pal[256 * 4];
 	} bmp;
 
+	// a colour ZBM's palette (as shown: RGB, and the grey of its ink)
+	// and a row of its planes, as much of each as the document shows
+	struct {
+		uint8_t		rgb[256 * 3];
+		uint8_t		y[256];
+		uint32_t	row[8][Z_IMG_MAX_WPL];
+	} zbm;
+
 	struct {
 		uint16_t	prefix[4096];
 		uint8_t		suffix[4096];
@@ -129,6 +137,9 @@ typedef union {
 		uint8_t		prev[Z_IMG_PNG_ROW_MAX];
 		uint8_t		pal[256 * 3];
 		uint8_t		pal_y[256];
+#if Z_IMG_HAVE_RGB
+		uint8_t		trns[256];		// a palette entry's alpha (tRNS)
+#endif
 		uint8_t		zin[512];		// compressed bytes in flight
 	} png;
 #endif
@@ -440,10 +451,46 @@ static void *gray_user;
 static z_img_row_fn row_done;
 static void *row_done_user;
 
+#if Z_IMG_HAVE_RGB
+// z_img_decode_rgba(): the row in colour. A decoder that knows its
+// colours writes them with rgb_put() as it writes the grey; a row it
+// did not (a grey format) is made from the grey in emit_row().
+static uint8_t rgbarow[Z_IMG_MAX_W * 4];
+static z_img_rgba_fn rgba_out;
+static void *rgba_user;
+static bool rgba_filled;
+
+static inline void rgb_put(int ox, int r, int g, int b, int a) {
+	if (rgba_out && ox >= 0 && ox < Z_IMG_MAX_W) {
+		uint8_t *q = rgbarow + ox * 4;
+		q[0] = (uint8_t)r; q[1] = (uint8_t)g; q[2] = (uint8_t)b; q[3] = (uint8_t)a;
+		rgba_filled = true;
+	}
+}
+#else
+#define rgb_put(ox, r, g, b, a) ((void)0)
+#endif
+
 // One decoded row into the document, whichever quantiser is in force.
 static void emit_row(z_img_t *im, const uint8_t *gray, int y) {
 
 	if (y < 0 || y >= im->out_h) return;
+
+#if Z_IMG_HAVE_RGB
+	if (rgba_out) {
+		if (!rgba_filled) {
+			int x;
+			for (x = 0; x < im->out_w; x++) {
+				uint8_t *q = rgbarow + x * 4;
+				q[0] = q[1] = q[2] = gray[x];
+				q[3] = 255;
+			}
+		}
+		rgba_filled = false;
+		rgba_out(rgba_user, rgbarow, y, im->out_w);
+		return;
+	}
+#endif
 
 	if (gray_out) {
 		gray_out(gray_user, gray, y, im->out_w);
@@ -605,19 +652,81 @@ void z_img_file_close(z_img_file_t *f) {
 // opens drawings as readily as photographs, which is the whole reason
 // the two apps share a document format.
 
+// A colour ZBM (zbm.h, "colour pictures"): the palette, then each row
+// a plane at a time. Shown through each entry's ink -- the grey pix and
+// the arcade runtime give that colour on a monochrome screen -- with an
+// ordered dither, the inks' own kind; or in colour (z_img_decode_rgba).
+static int decode_zbm_colour(z_img_t *im, uint32_t w, uint32_t h, int planes) {
+
+	uint8_t head[12], e[8];
+	uint32_t colours, nd, pal, used, i;
+	int src_wpl = (int)((w + 31) / 32), words, y, x, k, rv;
+
+	if (im->read(im->ctx, head, 12) != 12) return Z_IMG_E_IO;
+	colours = rd16le(head);
+	nd = rd16le(head + 2);
+	if ((colours != 2 && colours != 4 && colours != 16 && colours != 64 && colours != 256) ||
+		colours > (1u << planes))
+		return Z_IMG_E_FORMAT;
+	pal = (12u + 8u * colours + 2u * nd + 3u) & ~3u;
+	for (i = 0; i < colours; i++) {
+		uint32_t rgb;
+		if (im->read(im->ctx, e, 8) != 8) return Z_IMG_E_IO;
+		rgb = rd16le(e);
+		S.zbm.rgb[i * 3] = (uint8_t)(((rgb >> 8) & 15) * 17);
+		S.zbm.rgb[i * 3 + 1] = (uint8_t)(((rgb >> 4) & 15) * 17);
+		S.zbm.rgb[i * 3 + 2] = (uint8_t)((rgb & 15) * 17);
+		S.zbm.y[i] = (uint8_t)((e[5] > 16 ? 16 : e[5]) * 255 / 16);
+	}
+	used = 12 + 8 * colours;
+	rv = skip_bytes(im, pal - used);
+	if (rv != Z_IMG_OK) return rv;
+
+	dither_reset();
+	dither_mode = DM_ORDERED;
+	im->was_ordered = true;
+	words = src_wpl > Z_IMG_MAX_WPL ? Z_IMG_MAX_WPL : src_wpl;
+
+	for (y = 0; y < (int)h && y < im->out_h; y++) {
+		for (k = 0; k < planes; k++) {
+			if (im->read(im->ctx, (uint8_t *)S.zbm.row[k], words * 4) != words * 4)
+				return Z_IMG_E_IO;
+			if (src_wpl > words) {
+				rv = skip_bytes(im, (uint32_t)(src_wpl - words) * 4);
+				if (rv != Z_IMG_OK) return rv;
+			}
+		}
+		for (x = 0; x < im->out_w; x++) {
+			uint32_t v = 0;
+			for (k = 0; k < planes; k++)
+				v |= ((S.zbm.row[k][x >> 5] >> (x & 31)) & 1u) << k;
+			if (v >= colours) v = 0;
+			rgb_put(x, S.zbm.rgb[v * 3], S.zbm.rgb[v * 3 + 1], S.zbm.rgb[v * 3 + 2], 255);
+			grayrow[x] = S.zbm.y[v];
+		}
+		emit_row(im, grayrow, y);
+	}
+	return Z_IMG_OK;
+
+}
+
 static int decode_zbm(z_img_t *im) {
 
 	uint8_t hdr[16];
-	uint32_t w, h;
-	int src_wpl, y, rv;
+	uint32_t w, h, flags;
+	int src_wpl, y, rv, planes;
 
 	if (im->read(im->ctx, hdr, 16) != 16) return Z_IMG_E_IO;
 
 	w = rd32le(hdr + 4);
 	h = rd32le(hdr + 8);
+	flags = rd32le(hdr + 12);
+	planes = (int)(flags & 0x0fu);
 
 	if (w == 0 || h == 0 || w > Z_IMG_SRC_MAX_W || h > Z_IMG_SRC_MAX_H)
 		return Z_IMG_E_FORMAT;
+	if ((flags & ~0x0fu) || planes == 1 || planes > 8)
+		return Z_IMG_E_UNSUPPORTED;
 
 	// No downscaling: a ZBM is already 1bpp, and point-sampling a
 	// dithered bitmap produces aliasing far worse than simply
@@ -628,17 +737,25 @@ static int decode_zbm(z_img_t *im) {
 	im->out_w = (int)w > im->doc_w ? im->doc_w : (int)w;
 	im->out_h = (int)h > im->doc_h ? im->doc_h : (int)h;
 
+	if (planes) return decode_zbm_colour(im, w, h, planes);
+
 	src_wpl = (int)((w + 31) / 32);
 
 	for (y = 0; y < (int)h; y++) {
 
+		bool rows_out = gray_out != NULL;
+#if Z_IMG_HAVE_RGB
+		rows_out = rows_out || rgba_out != NULL;
+#endif
+
 		if (y >= im->out_h) break;
 
-		// grey output: through one row of words, expanded to bytes
+		// grey (or colour) output: through one row of words,
+		// expanded to bytes
 		static uint32_t zrow[Z_IMG_MAX_WPL];
-		uint32_t *dst = gray_out ? zrow :
+		uint32_t *dst = rows_out ? zrow :
 			im->doc + (uint32_t)y * (uint32_t)im->doc_wpl;
-		int cap = gray_out ? Z_IMG_MAX_WPL : im->doc_wpl;
+		int cap = rows_out ? Z_IMG_MAX_WPL : im->doc_wpl;
 		int words = src_wpl > cap ? cap : src_wpl;
 
 		if (im->read(im->ctx, (uint8_t *)dst, words * 4) != words * 4)
@@ -650,11 +767,11 @@ static int decode_zbm(z_img_t *im) {
 			if (rv != Z_IMG_OK) return rv;
 		}
 
-		if (gray_out) {
+		if (rows_out) {
 			int x;
 			for (x = 0; x < im->out_w; x++)
 				grayrow[x] = ((zrow[x >> 5] >> (x & 31)) & 1u) ? 255 : 0;
-			gray_out(gray_user, grayrow, y, im->out_w);
+			emit_row(im, grayrow, y);
 		} else if (row_done) {
 			row_done(row_done_user, y);
 		}
@@ -774,6 +891,7 @@ static int decode_bmp(z_img_t *im) {
 						for (k = 0; k < 8 && px < w; k++, px++) {
 							if ((px & (step - 1)) == 0 && ox < im->out_w) {
 								int idx = (chunk[i] >> (7 - k)) & 1;
+								rgb_put(ox, S.bmp.pal[idx * 4 + 2], S.bmp.pal[idx * 4 + 1], S.bmp.pal[idx * 4], 255);
 								grayrow[ox++] = luma(S.bmp.pal[idx * 4 + 2],
 									S.bmp.pal[idx * 4 + 1], S.bmp.pal[idx * 4]);
 							}
@@ -787,6 +905,7 @@ static int decode_bmp(z_img_t *im) {
 						for (k = 0; k < 2 && px < w; k++, px++) {
 							if ((px & (step - 1)) == 0 && ox < im->out_w) {
 								int idx = k ? (chunk[i] & 15) : (chunk[i] >> 4);
+								rgb_put(ox, S.bmp.pal[idx * 4 + 2], S.bmp.pal[idx * 4 + 1], S.bmp.pal[idx * 4], 255);
 								grayrow[ox++] = luma(S.bmp.pal[idx * 4 + 2],
 									S.bmp.pal[idx * 4 + 1], S.bmp.pal[idx * 4]);
 							}
@@ -814,8 +933,10 @@ static int decode_bmp(z_img_t *im) {
 
 				}
 
-				if ((px & (step - 1)) == 0 && ox < im->out_w)
+				if ((px & (step - 1)) == 0 && ox < im->out_w) {
+					rgb_put(ox, r, g, b, 255);
 					grayrow[ox++] = luma(r, g, b);
+				}
 
 				px++;
 				i += take;
@@ -991,6 +1112,8 @@ static int decode_pnm(z_img_t *im) {
 					for (i = 0; i + bypp <= n && px < w; i += bypp, px++) {
 						if ((px & (step - 1)) != 0 || ox >= im->out_w) continue;
 						if (bypp == 3) {
+							if (maxv == 255) rgb_put(ox, chunk[i], chunk[i+1], chunk[i+2], 255);
+							else rgb_put(ox, chunk[i] * 255 / maxv, chunk[i+1] * 255 / maxv, chunk[i+2] * 255 / maxv, 255);
 							grayrow[ox++] = (maxv == 255)
 								? luma(chunk[i], chunk[i+1], chunk[i+2])
 								: luma(chunk[i] * 255 / maxv,
@@ -1247,8 +1370,10 @@ static int decode_gif(z_img_t *im) {
 
 			uint8_t pix = S.gif.stack[--sp];
 
-			if ((x & (step - 1)) == 0 && ox < im->out_w)
+			if ((x & (step - 1)) == 0 && ox < im->out_w) {
+				rgb_put(ox, S.gif.pal[pix * 3], S.gif.pal[pix * 3 + 1], S.gif.pal[pix * 3 + 2], 255);
 				grayrow[ox++] = S.gif.pal_y[pix];
+			}
 
 			if (++x >= w) {
 
@@ -1836,6 +1961,10 @@ static int png_sample(const uint8_t *row, int idx, int depth) {
 	}
 }
 
+#if Z_IMG_HAVE_RGB
+static inline int png_alpha(int idx) { return S.png.trns[idx]; }
+#endif
+
 static int decode_png(z_img_t *im) {
 
 	uint8_t sig[8];
@@ -1919,10 +2048,20 @@ static int decode_png(z_img_t *im) {
 			if (im->read(im->ctx, S.png.pal, (int)len) != (int)len)
 				return Z_IMG_E_IO;
 			npal = (int)len / 3;
+#if Z_IMG_HAVE_RGB
+			memset(S.png.trns, 255, sizeof(S.png.trns));
+#endif
 			for (int i = 0; i < npal; i++)
 				S.png.pal_y[i] = luma(S.png.pal[i * 3],
 					S.png.pal[i * 3 + 1], S.png.pal[i * 3 + 2]);
 
+#if Z_IMG_HAVE_RGB
+		} else if (type == 0x74524e53u && ctype == 3 && len <= 256) {	// tRNS, palette
+
+			if (im->read(im->ctx, S.png.trns, (int)len) != (int)len)
+				return Z_IMG_E_IO;
+
+#endif
 		} else if (type == 0x49444154u) {	// IDAT
 
 			idat_left = len;
@@ -2069,22 +2208,30 @@ static int decode_png(z_img_t *im) {
 								g = png_sample(px, sx, depth);
 								if (depth < 8)
 									g = g * 255 / ((1 << depth) - 1);
+								rgb_put(ox, g, g, g, 255);
 								break;
 							case 3: {		// palette
 								int idx = png_sample(px, sx, depth);
 								g = (idx < npal) ? S.png.pal_y[idx] : 0;
+								if (idx < npal)
+									rgb_put(ox, S.png.pal[idx * 3], S.png.pal[idx * 3 + 1],
+										S.png.pal[idx * 3 + 2], png_alpha(idx));
+								else rgb_put(ox, 0, 0, 0, 255);
 								break;
 							}
 							case 2:			// RGB
 								g = luma(px[sx * 3], px[sx * 3 + 1],
 									px[sx * 3 + 2]);
+								rgb_put(ox, px[sx * 3], px[sx * 3 + 1], px[sx * 3 + 2], 255);
 								break;
 							case 4:			// gray + alpha
 								g = px[sx * 2];
+								rgb_put(ox, g, g, g, px[sx * 2 + 1]);
 								break;
 							default:		// RGBA
 								g = luma(px[sx * 4], px[sx * 4 + 1],
 									px[sx * 4 + 2]);
+								rgb_put(ox, px[sx * 4], px[sx * 4 + 1], px[sx * 4 + 2], px[sx * 4 + 3]);
 								break;
 							}
 
@@ -2477,6 +2624,28 @@ int z_img_decode_gray(z_img_t *im, z_img_fmt_t fmt, z_img_gray_fn row,
 	return rv;
 
 }
+
+#if Z_IMG_HAVE_RGB
+int z_img_decode_rgba(z_img_t *im, z_img_fmt_t fmt, z_img_rgba_fn row,
+	void *user) {
+
+	int rv;
+
+	if (!row || im->doc_w <= 0 || im->doc_h <= 0 ||
+		im->doc_w > Z_IMG_MAX_W || im->doc_h > Z_IMG_MAX_H)
+		return Z_IMG_E_FORMAT;
+	gray_out = NULL;
+	row_done = NULL;
+	rgba_out = row;
+	rgba_user = user;
+	rgba_filled = false;
+	rv = decode_any(im, fmt);
+	rgba_out = NULL;
+	rgba_user = NULL;
+	return rv;
+
+}
+#endif
 
 static int decode_any(z_img_t *im, z_img_fmt_t fmt) {
 

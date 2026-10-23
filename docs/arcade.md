@@ -101,6 +101,46 @@ same scripts and nothing else changed
 worst case is a frame that repaints everything -- entering full screen
 -- where nothing can help.
 
+### Racing the beam
+
+A game that redraws a lot of the screen every frame -- whole planes
+scrolled, a layer cleared and drawn again -- can't rely on "straight
+after the boundary" as above, for two reasons:
+
+- the wait sleeps in scheduler ticks (1.4 ms at 732 Hz), so it notices
+  the boundary up to a tick late, and the palette is written then;
+- the program does its drawing as it works the frame out, so the
+  blitter's operations are spread across the frame, wherever the beam
+  is.
+
+On the board that showed as a sprite flashing, a 3D object with
+horizontal bands of half-new planes, and a scroller with columns
+missing (planedemo r3). Two calls let a program do better:
+
+| Call | Does |
+|---|---|
+| `ar_vsync_exact(true)` | `ar_frame()` sleeps until two ticks before the boundary it expects, then watches the frame counter (FRAME, [game_mode.md](game_mode.md)) without yielding: it returns within microseconds of the start of blanking. It learns where the boundaries fall from each one it sees while watching. Costs the last two ticks of each frame in a spin. |
+| `ar_frame_hook(fn)` | `fn` runs in `ar_frame()` straight after the boundary and the palette (and viewport), before the runtime's own drawing. A program that queued its frame's drawing runs it there. |
+
+The timing to race: the frame counter ticks at the end of the last
+visible line; then 45 blank lines (about 69,000 cycles of the 48 MHz
+CPU, a line being 1,525), then in game mode a picture row every two
+lines (about 3,050 cycles a row). Drawing that starts at the boundary
+and goes from the top down, a band of rows at a time, stays ahead of
+the beam with most of the frame to spare. planedemo does this
+([planedemo.md](planedemo.md), "Racing the beam").
+
+Two more things help:
+
+- `ar_plane()` is **one** blitter pass (the COPY ROP) where the
+  bitstream has the ROPs (`z_fb_hw_rop_available()`): before, it
+  cleared the rectangle and then ORed, and the plane was blank in
+  between. Without the ROPs it still clears and ORs.
+- `ar_plane_line_rows(k, x0, y0, x1, y1, op, y0clip, y1clip)` draws
+  only a line's pixels in some rows, the same pixels the whole line
+  sets there (the rasterizer clips pixel by pixel), so a line can be
+  drawn a band at a time. `test-arcade` checks both.
+
 ### Overlays behind things, and inside an area
 
 An overlay is drawn after the paint, so it is always in front. Two
@@ -174,6 +214,73 @@ letters too.
 While the help box is up the game gets `AR_EV_SUSPEND` first (and
 pauses), the sound is held, and every button is released afterwards:
 the releases went to the box.
+
+### More than 16 colours
+
+A program draws in 16 colours unless it asks for more:
+`ar_set_colours(64)` or `(256)` says how many it draws in, and returns
+how many full-screen colour will show on this board -- 16, 64 or 256,
+at most what was asked (`z_color_planes_max()`, [color.md](color.md)).
+The runtime then uses `z_color_64` or `z_color_256` instead of
+`z_color_16`: six or eight planes, the first four in the quadrants as
+before and the rest in the second sheet, 480 rows down. Every drawing
+call takes indices up to 255, `ar_pal()` has 256 entries (16 and up
+start as entry `i & 15`), and sprites keep up to eight planes. An index
+past what the board shows is drawn through its low bits; a program that
+wants better reduces its art itself, once, as it loads it
+([zsp.md](zsp.md)).
+
+| Call | Does |
+|---|---|
+| `ar_set_colours(n)`, `ar_colours()` | 16, 64 or 256; what is shown |
+| `ar_mono_map(to16)` | in monochrome, index c in `ink[to16[c]]` instead of `ink[c & 15]` |
+| `ar_sprite_from_indices(s, px, opaque, w, h)` | a sprite where every index, 255 too, is a colour; `opaque` says which pixels are drawn |
+| `ar_plane(k, bits, ...)` | one plane of a picture, as it is (colour full screen only): a picture of any indices without a fill per colour, a call per plane -- pix's canvas |
+| `ar_plane_or(k, bits, ...)`, `ar_plane_andn(k, bits, ...)` | plane k's bits set, or cleared, where the bitmap has a bit: a shape in one plane, the rest left alone |
+| `ar_plane_fill(k, x, y, w, h, bit)` | a rectangle of plane k to 0 or 1 |
+| `ar_plane_line(k, x0, y0, x1, y1, op)` | a line in plane k by the line rasterizer: op 0 clear, 1 set, 2 xor |
+| `ar_plane_line_rows(k, ..., y0clip, y1clip)` | the same line's pixels in rows y0clip..y1clip only |
+
+With these a program can treat groups of planes as **layers** --
+draw each into its own planes, and let the palette decide, for every
+index, which layer is in front -- and animate mostly by rewriting the
+palette. planedemo is built that way ([planedemo.md](planedemo.md),
+"Planes as layers"). The runtime keeps the blitter and the rasterizer
+in order: a line after a blit waits for the blit, and a blit after
+lines waits for the lines.
+
+The window and mono full screen are unchanged. snake, blocks and bricks
+ask for nothing and run as before, and their renders still match a full
+repaint frame for frame. On the host, `AR_HOST_PLANES=4` or `6` makes
+`ar_host.c` a board with fewer planes (8 by default); its framebuffer
+has both sheets.
+
+### The pointer, full screen
+
+wm hides the mouse pointer while a game holds the screen. A program
+drawn with the mouse sets `pointer` in its `ar_desc_t` (the last field;
+a game leaves it false) and the pointer stays: the runtime calls
+`z_game_set_pointer()` before game mode, which puts
+`Z_WM_GAME_GRAB_POINTER` in the grab it sends wm. pix does. An older wm
+ignores the bit, and the pointer hides as before.
+
+### Dialogs
+
+A program on the runtime may open the system's boxes (`zdialog.h`:
+open, save, a prompt, a question) -- pix does, for its files. A box is
+a window, and wm shows no windows over game mode, so the call is
+bracketed:
+
+```c
+z_dialog_ctx_t ctx;
+ar_dialog_begin(&ctx);      /* leaves full screen, paints, holds the sound */
+ok = z_dialog_open(&ctx, ...);
+ar_dialog_end();            /* sound back, every key released, repainted */
+```
+
+`ar_dialog_begin()` fills `ctx` so the box keeps the window painted
+while it waits, as the F1 box does. On a build host both are no-ops
+(`ar_host.c`); a script answers the program's questions itself.
 
 ## Players
 
@@ -417,3 +524,6 @@ flashing, the stack mid-fall and the curtain this way.
 `ARH_MOUSE` in a script is the pointer moving to a logical (x, y) with
 the buttons in `a`, delivered as `AR_EV_MOUSE`; bricks' render starts
 its game with a click and moves the paddle with it.
+
+A key step's `b` is the modifiers held (`Z_KBD_MOD_*`), 0 for none:
+pix's render undoes with `{ f, ARH_TAP, 0x1a, Z_KBD_MOD_CTRL, ... }`.

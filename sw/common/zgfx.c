@@ -521,10 +521,13 @@ static void z_fb_hw_line_one(int x0, int y0, int x1, int y1, int color, const z_
 	if (x0 >= Z_SCREEN_W) x0 = Z_SCREEN_W - 1;
 	if (x1 < 0) x1 = 0;
 	if (x1 >= Z_SCREEN_W) x1 = Z_SCREEN_W - 1;
+	// Rows: the screen's 480, or as many as z_fb_set_rows() lets the
+	// blitter reach -- the second VRAM sheet of an 8-plane colour
+	// layout is VRAM the bus acks (docs/color.md); past it is not.
 	if (y0 < 0) y0 = 0;
-	if (y0 >= Z_SCREEN_H) y0 = Z_SCREEN_H - 1;
+	if (y0 >= gfx_fb_rows) y0 = gfx_fb_rows - 1;
 	if (y1 < 0) y1 = 0;
-	if (y1 >= Z_SCREEN_H) y1 = Z_SCREEN_H - 1;
+	if (y1 >= gfx_fb_rows) y1 = gfx_fb_rows - 1;
 
 	// A pass whose line cannot touch `clip` queues nothing: no copy,
 	// so no scissor change and none of the drain below. z_fb_hw_line()

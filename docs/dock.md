@@ -136,7 +136,7 @@ widest view from the start, a group's counting its BACK.
 
 ```
  row:    [term] [files] ... [cal] [Sound] [Tools] [Games] 
- Games:  [BACK] [casino] [chess] [kidgames] ... [mausrun]
+ Games:  [BACK] [casino] [chess] [kidgames] ... [mausrun] [planedemo]
 ```
 
 - **Open**: click the group's icon, or Enter on it.
@@ -273,8 +273,19 @@ works: every icon is drawn as its app's name, NEXT as `>`, BACK as `<`;
 a file cut short keeps the icons read before the cut.
 
 A `/data/wm/dock.zic` on the card replaces the icons in flash, all of
-them. Overriding single icons, and an icon editor, are a possible later
-phase (proposal in the project notes).
+them. Single icons are changed in `pix` ([pix_app.md](pix_app.md)),
+which saves only the changed and added ones to `/data/wm/icons.zic`.
+wm reads that file after dock.zic, at start and on `cfg reload`: an icon
+there replaces the icon and spoken name of the dock entry of the same
+name -- an app, a group, or one named in wm.cfg that had no icon --
+and keeps dock.zic's hardware needs. An icon for an app that is in
+neither file nor wm.cfg is not added by `@rest`; name it in a row.
+Its table is read into the parser's memory, which is free by then, so
+it costs wm no buffer; its icons go into the same store as dock.zic's.
+
+```
+wm: dock: /data/wm/icons.zic: 2 of 2 shown
+```
 
 ## What `wm` says at start
 
@@ -380,8 +391,10 @@ read into is gone, and an icon the dock does not show costs nothing.
 With groups, `wm`'s image was 138,192 bytes with xPack GCC 15.2; the
 sides took it to 139,020, and the pointer's shapes ([cursor.md](cursor.md))
 to 140,240, and game-mode colour's reach below row 479 in `zgfx` to
-140,276 (budget 137K, 140,288, `CORE_BUDGETS` in the top `Makefile`:
-[flash_apps.md](flash_apps.md)), 105,780 in flash.
+140,276, and pix's icons laid over the release's (`icons.zic`, below)
+and keeping the pointer for a game that asks to 140,848 (budget 138K,
+141,312, `CORE_BUDGETS` in the top `Makefile`:
+[flash_apps.md](flash_apps.md)), about 106KB in flash (budget 105K).
 
 The two files take 8KB of the flash archive's file reserve, which went
 from 56K to 60K; `wm`'s flash budget went from 110K to 104K to pay for

@@ -30,7 +30,9 @@ no undo.
 
 Pictures are ZBM files (`sw/common/zbm.h`): a 16-byte header and the
 page's pixels. Files from before the header (exactly 38,400 bytes) still
-open.
+open. A colour picture (pix's, [pix_app.md](pix_app.md)) is a
+ZBM too, and draw refuses it: "That is a colour picture: open it in
+pix".
 
 Opening and saving never stop the app ([responsive.md](responsive.md)):
 the file is read or written a chunk at a time between messages, the

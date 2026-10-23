@@ -670,9 +670,43 @@ art. The hardware path cannot, so the sheet carries both facings.
 
 ## Art
 
-`gen_sprites.py` generates `sprites.c` / `sprites.h` from ASCII art in
-the script. Placeholder art; replacing it means editing the strings and
-re-running, not touching any C.
+The art is two sprite sheets ([zsp.md](zsp.md)):
+`sw/data/mausrun/tiles.zsp` (29 tiles, 2 colours: 1 the tile, 0 its
+background) and `sprites.zsp` (25 sprites, 4 colours: 1 the sprite, 2
+its outline -- drawn in the outline colour, black in monochrome -- and
+`.` see-through). The colours come from the level's theme, as before.
+A tile's id is its place in `tiles.zsp` -- level maps store ids -- so a
+new tile goes at the end. pix edits both ([pix_app.md](pix_app.md)).
+
+`gen_sprites.py` makes `sprites.c` / `sprites.h` from the sheets: run
+it after editing one. The art moved out of the script into the sheets
+without changing a byte -- `gen_sprites.py --legacy` writes the
+`sprites.c` and `sprites.h` of before, byte for byte. Without it the
+arrays are not `const` and a table, `mr_art[]`, names each one, which
+is what the card's sheets are laid over:
+
+**At start, mausrun reads `/data/mausrun/tiles.zsp` and
+`sprites.zsp`** if the card has them (`art.c`): a tile or sprite there
+replaces the built-in one of the same name -- its software and
+hardware forms, mirrored too -- before anything copies the art. So art
+drawn in pix shows the next time mausrun starts, with no host
+computer. A sheet that does not parse is reported and the built-in art
+used; a name the game has no art for, or a size other than 16x16, is
+skipped and said:
+
+```
+mausrun: /data/mausrun/sprites.zsp: 25 of 25 sprites from the card
+```
+
+A sheet with more colours is seen through its 4-colour form (its
+slots): 0 and 2 mask only, the others the sprite.
+
+The release card carries the two sheets in `/data/mausrun/art`, where
+the game does not look: open one in pix, change it, and **save it as
+`/data/mausrun/sprites.zsp`** (or `tiles.zsp`). A copy there is yours
+and wins; the release's own art changes still arrive, except for the
+tiles and sprites your copy has. Delete it to have the built-in art
+back.
 
 The generated files are **committed**, so a normal build needs no
 Python. There is deliberately no make rule regenerating them: a
@@ -944,7 +978,7 @@ the process.
 ## Testing
 
 ```
-make -C sw/apps/mausrun test      # the parser, progress.txt, levelcheck
+make -C sw/apps/mausrun test      # the parser, progress.txt, the art, levelcheck
 make -C sw/apps/mausrun render    # every level as a picture, and the game played
 ```
 
@@ -952,7 +986,13 @@ make -C sw/apps/mausrun render    # every level as a picture, and the game playe
 names, the time, CR LF lines, too few rows, too narrow, no start, a
 character that means nothing, 512 columns and 513, more cats than there
 is room for -- and writes and reads `progress.txt`, keeping lines it
-does not know. `levelcheck` (above) proves every level can be finished.
+does not know. `tests/test_art.c` reads the two sheets, writes them back
+byte for byte, lays them over the art (which must change nothing), then
+a changed pixel and an outline over the mouse -- in all six forms, the
+mirrored ones too -- and a name the game has no art for. `make sheets`
+(part of `test`) regenerates `sprites.c` and `sprites.h` from the sheets
+and fails if they differ from the committed ones. `levelcheck` (above)
+proves every level can be finished.
 
 `make render` also plays the game itself on the build host
 (`tests/host/`): `mausrun.c` unchanged, compiled with its frame waits

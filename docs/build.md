@@ -183,7 +183,7 @@ for its newline.
 **`ZFMT_NO64 = 1`** (with `ZFMT = 1`), for a program that prints no
 64-bit number: `zfmt.c` then formats every integer in 32 bits, a `%lld`
 prints its low 32 bits, and libgcc's 64-bit division (`__udivdi3`,
-`__umoddi3`, about 2.3KB) is not linked. `text`, `update` and `wm` set it.
+`__umoddi3`, about 2.3KB) is not linked. `text`, `update`, `wm` and `usb` set it.
 
 | | before | after |
 |---|---:|---:|

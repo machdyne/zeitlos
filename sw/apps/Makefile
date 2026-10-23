@@ -15,6 +15,7 @@ APPS = casino poker roulette blackjack slots craps \
 	wm \
 	hello_win \
 	draw \
+	pix \
 	view \
 	text \
 	sheet \
@@ -72,6 +73,7 @@ APPS = casino poker roulette blackjack slots craps \
 	track \
 	midi \
 	mausrun \
+	planedemo \
 	chip8 \
 	basic \
 	chess \

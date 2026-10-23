@@ -203,6 +203,8 @@ with [welcome](welcome.md); to program it, [kernel](kernel.md) and
 | [mesh\_app](mesh_app.md) | `mesh` |
 | [logic\_app](logic_app.md) | `logic` |
 | [gpu3d\_app](gpu3d_app.md) | `gpu3d` |
+| [pix\_app](pix_app.md) | `pix`: pixel editor for sprite sheets and pictures in up to 256 colours, animation, dock icons, fonts, the pointer; image import |
+| [zsp](zsp.md) | Sprite sheets (`.zsp`): text, up to 256 colours, each with what stands in for it on boards with fewer |
 
 ## Games
 
@@ -218,6 +220,7 @@ with [welcome](welcome.md); to program it, [kernel](kernel.md) and
 | [chess\_engine](chess_engine.md) | The chess engine |
 | [chip8\_app](chip8_app.md) | `chip8` |
 | [mausrun](mausrun.md) | `mausrun` |
+| [planedemo](planedemo.md) | `planedemo`: a one-minute demo in 256 colours and eight voices; planes as layers |
 | [kidgames\_app](kidgames_app.md) | `kidgames` |
 | [casino](casino.md) | The casino apps, overview |
 | [casino\_app](casino_app.md) | `casino`, the front desk |

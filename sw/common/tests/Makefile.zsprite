@@ -1,0 +1,5 @@
+# sw/common/zsprite.c on the host: sprite sheets read and written back,
+# the palette's defaults and reduction tables, and broken sheets.
+all:
+	cc -std=gnu99 -g -Wall -Wextra -fsanitize=address,undefined -o /tmp/test_zsprite test_zsprite.c ../zsprite.c
+	/tmp/test_zsprite

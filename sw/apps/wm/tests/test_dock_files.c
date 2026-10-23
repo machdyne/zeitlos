@@ -38,11 +38,12 @@ static uint32_t cfg_gen = 1;
 
 // The files, by path. NULL data: not there. `chunk` caps every
 // READ_CHUNK, so wm.cfg arrives in pieces as it may on the board.
-#define NFILES 3
+#define NFILES 4
 static struct { const char *path; const uint8_t *data; uint32_t len; } files[NFILES] = {
 	{ Z_PATH_WM_CONFIG, NULL, 0 },
 	{ Z_PATH_WM_ICONS, NULL, 0 },
 	{ Z_PATH_WM_CURSOR, NULL, 0 },
+	{ Z_PATH_WM_ICON_OVERRIDES, NULL, 0 },
 };
 static uint32_t chunk_cap = 7;
 static int fs_calls;
@@ -56,7 +57,7 @@ static int file_of(const char *path) {
 }
 
 // What is installed: everything but these.
-static const char *missing[8];
+static const char *missing[12];
 static int nmissing;
 static bool installed(const char *name) {
 	for (int i = 0; i < nmissing; i++) if (strcmp(missing[i], name) == 0) return false;
@@ -331,13 +332,13 @@ int main(int argc, char **argv) {
 	expect(dock_nviews == 3, "three groups: Sound, Tools, Games (More apps is empty)");
 	int sound = find_app("sound"), tools = find_app("tools"), games = find_app("games");
 	expect(sound == 14 && tools == 15 && games == 16, "their icons at the end of the row");
-	expect(dock_apps[games].view >= 0 && dock_views[dock_apps[games].view].count == 10, "Games: ten");
+	expect(dock_apps[games].view >= 0 && dock_views[dock_apps[games].view].count == 11, "Games: eleven");
 	int apps = 0, all_icons = 1;
 	for (int i = 0; i < dock_app_count; i++) {
 		if (dock_apps[i].view < 0) apps++;
 		if (!icon_of(i)) all_icons = 0;
 	}
-	expect(apps == 34, "34 apps: the 33 before groups, and backup");
+	expect(apps == 36, "36 apps: the 34 before groups, backup and planedemo");
 	expect(all_icons, "every one, and every group, with its icon");
 	expect(bits_of(dock_next_icon, dock_next_len) && bits_of(dock_back_icon, dock_back_len),
 		"NEXT and BACK");
@@ -357,12 +358,12 @@ int main(int argc, char **argv) {
 	dock_launch(games);			// a group's icon: opens it, starts nothing
 	expect(dock_view == dock_apps[games].view && runs == 0, "the group is shown, nothing run");
 	expect(dock_selected == casino, "the selection on its first app");
-	expect(!dock_paged, "ten fit, no NEXT");
+	expect(!dock_paged, "eleven fit, no NEXT");
 	expect((int)windows[dock_idx].w == dock_frame_len, "the frame did not move");
 	draw_all();
 	expect(slot_shows(0, bits_of(dock_back_icon, dock_back_len)), "BACK in slot 0");
 	expect(shows_item(1, casino), "casino in slot 1");
-	expect(slot_ink(11) == 0, "and nothing after the tenth");
+	expect(slot_ink(12) == 0, "and nothing after the eleventh");
 	dump("2-games");
 	dock_handle_key(0x1b, true);		// Esc
 	expect(dock_view == -1 && dock_selected == games, "Esc: back to the row, on the Games icon");
@@ -371,7 +372,7 @@ int main(int argc, char **argv) {
 	dock_handle_key(Z_KEY_LEFT, true);
 	expect(dock_selected == DOCK_SEL_BACK, "Left from the first app: BACK");
 	dock_handle_key(Z_KEY_LEFT, true);
-	expect(dock_selected == casino + 9, "Left from BACK: around to the last");
+	expect(dock_selected == casino + 10, "Left from BACK: around to the last");
 	dock_handle_key(Z_KEY_RIGHT, true);
 	expect(dock_selected == DOCK_SEL_BACK, "Right from the last: BACK");
 	dock_handle_key(CH_CR, true);
@@ -447,16 +448,16 @@ int main(int argc, char **argv) {
 	set_cfg(cfg_shipped);
 	dock_build();
 	expect(find_app("sound") < 0 && dock_nmain == 16, "Sound left with nothing: gone from the row");
-	expect(dock_views[dock_apps[find_app("tools")].view].count == 6, "Tools without mmod");
+	expect(dock_views[dock_apps[find_app("tools")].view].count == 7, "Tools without mmod");
 	expect(find_app("track") < 0 && find_app("mmod") < 0, "the apps gone");
 	hardware(true, true);
 
 	// -- 7. a card with only some of the apps --
 	printf("7. a card without the games\n");
 	static const char *const nogames[] = { "casino", "chess", "kidgames", "chip8", "space3d",
-		"snake", "blocks", "bricks", "gpu3d", "mausrun" };
+		"snake", "blocks", "bricks", "gpu3d", "mausrun", "planedemo" };
 	nmissing = 0;
-	for (int i = 0; i < 10; i++)		// all but chess and kidgames
+	for (int i = 0; i < 11; i++)		// all but chess and kidgames
 		if (strcmp(nogames[i], "chess") && strcmp(nogames[i], "kidgames")) missing[nmissing++] = nogames[i];
 	dock_build();
 	expect(find_app("games") >= 0 && dock_views[dock_apps[find_app("games")].view].count == 2,
@@ -473,7 +474,7 @@ int main(int argc, char **argv) {
 	expect(find_app("ask") == 3, "then @rest, in name order");
 	expect(find_app("poker") < 0 && find_app("@next") < 0 && find_app("@games") < 0,
 		"@rest leaves out the hidden ones and the dock's own");
-	expect(dock_app_count == 3 + 34 - 2 && dock_nviews == 0, "@rest: every other app with an icon");
+	expect(dock_app_count == 3 + 36 - 2 && dock_nviews == 0, "@rest: every other app with an icon");
 	set_cfg(flat);
 	dock_build();
 	expect(dock_app_count == 33 && dock_paged && dock_pages == 3, "the old flat dock (it names its 33): three pages");
@@ -535,13 +536,13 @@ int main(int argc, char **argv) {
 	dock_build();
 	expect(strcmp(dock_apps[0].name, "term") == 0 && strcmp(dock_apps[1].name, "files") == 0 &&
 		strcmp(dock_apps[2].name, "text") == 0, "the core apps first");
-	expect(dock_app_count == 34, "then every app with an icon");
+	expect(dock_app_count == 36, "then every app with an icon");
 
 	// -- 13. a wm.cfg with no row wide, and one with problems --
 	printf("13. no row wide; problems\n");
 	set_cfg("row tall term\n");
 	dock_build();
-	expect(dock_app_count == 34, "no row wide: every app with an icon");
+	expect(dock_app_count == 36, "no row wide: every app with an icon");
 	set_cfg("side left\nfrobnicate\nrow wide term @nope\n");
 	dock_build();
 	expect(dock_app_count == 1 && dock_cfg_errors == 1, "the good lines apply");
@@ -673,7 +674,7 @@ int main(int argc, char **argv) {
 	{
 		char buf[128] = "";
 		dock_speech_app(buf, sizeof(buf), find_app("games"));
-		expect(strcmp(buf, "Games, 10 apps, 3 running") == 0, "said: Games, 10 apps, 3 running");
+		expect(strcmp(buf, "Games, 11 apps, 3 running") == 0, "said: Games, 11 apps, 3 running");
 	}
 
 	printf("20. a maximized window hides the dock: it comes back on the row\n");
@@ -899,6 +900,54 @@ int main(int argc, char **argv) {
 		dock_reload();
 		expect(reg_socctl_curdata == 0, "a broken file: the built-in pair");
 		set_file(2, NULL, 0);
+	}
+
+	// -- 27. icons.zic: pix's icons laid over the release's --
+	printf("27. icons.zic\n");
+	{
+		// A one-entry file, as pix writes it: `term`, with files's
+		// icon and the spoken name "Mine".
+		const uint8_t *z = (const uint8_t *)zic_shipped;
+		int cnt = z[4] | z[5] << 8, fi = -1;
+		uint32_t sp0 = 16 + (uint32_t)cnt * 32;
+		uint32_t ic0 = sp0 + (uint32_t)(z[8] | z[9] << 8 | z[10] << 16);
+		for (int i = 0; i < cnt; i++) if (!strcmp((const char *)z + 16 + i * 32, "files")) fi = i;
+		const uint8_t *fe = z + 16 + fi * 32;
+		uint16_t foff = (uint16_t)(fe[28] | fe[29] << 8), flen = (uint16_t)(fe[30] | fe[31] << 8);
+		static uint8_t ov[512];
+		memset(ov, 0, sizeof(ov));
+		memcpy(ov, "ZIC2", 4);
+		ov[4] = 1; ov[6] = 32;
+		ov[8] = 5;                                      // "Mine" and its NUL
+		ov[12] = (uint8_t)flen;
+		memcpy(ov + 16, "term", 4);
+		ov[16 + 30] = (uint8_t)flen;                    // spoken 0, icon 0
+		memcpy(ov + 48, "Mine", 5);
+		memcpy(ov + 53, z + ic0 + foff, flen);
+		uint32_t ovlen = 53u + flen;
+
+		set_cfg(cfg_shipped);
+		dock_build();
+		int t = find_app("term"), f = find_app("files");
+		const uint8_t *before = icon_of(t);
+		uint8_t was[DK_ICON_BYTES];
+		memcpy(was, before, sizeof(was));
+		expect(memcmp(was, icon_of(f), DK_ICON_BYTES) != 0, "term and files differ");
+
+		set_file(3, ov, ovlen);
+		dock_build();
+		t = find_app("term"); f = find_app("files");
+		expect(t >= 0 && !memcmp(icon_of(t), icon_of(f), DK_ICON_BYTES), "term shows the file's icon");
+		expect(!strcmp((const char *)dock_store + dock_apps[t].spoken_off, "Mine"), "and says its name");
+		expect(dock_app_count >= 30 && icon_of(find_app("text")), "the others as they were");
+
+		ov[6] = 52;                                     // damaged: refused
+		dock_build();
+		t = find_app("term");
+		expect(!memcmp(icon_of(t), was, DK_ICON_BYTES), "a damaged icons.zic: the release's icon");
+		set_file(3, NULL, 0);
+		dock_build();
+		expect(!memcmp(icon_of(find_app("term")), was, DK_ICON_BYTES), "gone: the release's icon");
 	}
 
 	printf("  %d file calls in all\n", fs_calls);

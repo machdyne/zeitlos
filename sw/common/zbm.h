@@ -13,10 +13,37 @@
  *   0       4     magic "ZBM1"
  *   4       4     width in pixels
  *   8       4     height in pixels
- *   12      4     flags (0)
+ *   12      4     flags: 0, or a colour picture (below)
  *   16      ...   height * ((width + 31) / 32) * 4 bytes of pixels
  *
  * All integers little-endian, matching the CPU.
+ *
+ * -- colour pictures --
+ *
+ * Bits 0-3 of flags are the number of bitplanes, 2 to 8 (0 is the
+ * one-bit picture above; every other bit stays 0). Such a file is pix's
+ * colour picture (docs/pix_app.md) and carries its tiered palette
+ * (docs/zsp.md) between the header and the pixels:
+ *
+ *   16      2     colours: 2, 4, 16, 64 or 256 (at most 1 << planes)
+ *   18      2     ndiffer: "must differ" pairs
+ *   20      8     the 4-colour form's slots, 4 x RGB444
+ *   28      8 x colours entries: RGB444 (2 bytes), to64, to16, slot,
+ *                 ink (0..16), given (the fields set by hand: zsprite.h
+ *                 ZSP_GIVEN_*), 0
+ *   ..      2 x ndiffer the pairs, two indices each
+ *           0-3   zeros to a multiple of 4 (z_bm_pal_size())
+ *
+ * then the pixels, a row at a time and in each row a plane at a time:
+ * row y is planes 0 .. planes-1, each (width + 31) / 32 words in the
+ * one-bit order above. So plane k of the whole picture is a bitmap
+ * with a stride of planes rows, and a game blits it straight from the
+ * file into its plane k (ar_plane(), z_fb_hw_blit_mem()), while a
+ * reader that goes row by row (zimg.c, for view) never seeks.
+ *
+ * Bit k of a pixel's index is in plane k. zsprite.c reads and writes
+ * the palette (zsp_palette_to_bin()); readers that only show the
+ * picture need each entry's RGB444 or its ink.
  *
  * -- pixel format --
  *
@@ -66,9 +93,26 @@ typedef struct {
 	uint32_t	flags;		// 0 -- reserved, must be written as 0
 } z_bm_header_t;
 
+// a colour picture's planes (2..8), from the header's flags; 0 for a
+// one-bit picture
+#define Z_BM_FLAG_PLANES 0x0fu
+static inline int z_bm_planes(uint32_t flags) {
+	return (int)(flags & Z_BM_FLAG_PLANES);
+}
+
+// bytes of a colour picture's palette block, padded to 4
+static inline uint32_t z_bm_pal_size(uint32_t colours, uint32_t ndiffer) {
+	return (12u + 8u * colours + 2u * ndiffer + 3u) & ~3u;
+}
+
 // bytes of pixel data a width x height image occupies
 static inline uint32_t z_bm_data_size(uint32_t w, uint32_t h) {
 	return h * (((w + 31) / 32) * 4);
+}
+
+// bytes of pixel data a planes-deep colour picture occupies
+static inline uint32_t z_bm_colour_data_size(uint32_t w, uint32_t h, int planes) {
+	return z_bm_data_size(w, h) * (uint32_t)planes;
 }
 
 // total file size for a width x height image

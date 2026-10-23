@@ -48,7 +48,7 @@ static ar_desc_t desc = {
 	{ 0x000, 0x111, 0x222, 0x333, 0x444, 0x555, 0x666, 0x777,
 	  0x888, 0x999, 0xaaa, 0xbbb, 0xccc, 0xddd, 0xeee, 0xfff },
 	{ { { 0 } } },
-	paint, NULL, false, NULL
+	paint, NULL, false, NULL, false
 };
 
 static ar_sprite_t spr[3];
@@ -438,6 +438,104 @@ static void test_sfx(void) {
 	zsfx_shutdown();
 }
 
+/* 64 and 256 colours: an index's bits land in planes 4..7, in the
+ * second sheet, and a 6-plane board shows 64 of 256. */
+static int index_at(const uint8_t *fbuf, int x, int y, int planes) {
+	int k, idx = 0;
+	for (k = 0; k < planes; k++) {
+		int dx, dy;
+		ar__plane_off(k, &dx, &dy);
+		idx |= fbuf[(y + dy) * 640 + x + dx] << k;
+	}
+	return idx;
+}
+
+static void test_colours(void) {
+	static uint8_t f[AR_HOST_FB_BYTES];
+	static uint8_t to16[256];
+	int i;
+
+	ar_set_fullscreen(true);
+	ar_set_color(true);
+	CHECK(ar_set_colours(256) == 256, "256 colours on an 8-plane host");
+	ar_host_render_only();
+	ar_fill(8, 8, 4, 4, 0xa5);
+	ar_fill(20, 8, 4, 4, 0xff);
+	ar_host_fb_copy(f);
+	CHECK(index_at(f, 9, 9, 8) == 0xa5, "index 0xa5 in eight planes (%#x)", index_at(f, 9, 9, 8));
+	CHECK(index_at(f, 21, 9, 8) == 0xff, "and 255");
+	ar_pal(200, 0x123);
+	CHECK(ar_pal_get(200) == 0x123 && ar_pal_get(216) == desc.palette[216 & 15],
+		"256 palette entries, the rest from the first 16");
+
+	setenv("AR_HOST_PLANES", "6", 1);
+	CHECK(ar_set_colours(256) == 64, "a 6-plane board shows 64");
+	ar_host_render_only();
+	ar_fill(8, 8, 4, 4, 0x2a);
+	ar_host_fb_copy(f);
+	CHECK(index_at(f, 9, 9, 6) == 0x2a, "index 0x2a in six planes (%#x)", index_at(f, 9, 9, 6));
+	unsetenv("AR_HOST_PLANES");
+	one_mode("full screen, 256 colours", 2, false);
+	CHECK(ar_set_colours(16) == 16, "back to 16");
+
+	/* monochrome: index 40's ink through the map */
+	for (i = 0; i < 256; i++) to16[i] = (uint8_t)(i & 15);
+	to16[40] = 15;
+	desc.ink[15] = ar_ink_white;                    /* 40 & 15 = 8 stays black */
+	ar_mono_map(to16);
+	ar_set_color(false);
+	ar_host_render_only();
+	ar_fill(8, 8, 8, 8, 40);
+	ar_host_fb_copy(f);
+	CHECK(f[8 * 640 + 8] == 1, "index 40 drawn in ink 15, white");
+	ar_mono_map(NULL);
+	ar_host_render_only();
+	ar_fill(8, 8, 8, 8, 40);
+	ar_host_fb_copy(f);
+	CHECK(f[8 * 640 + 8] == 0, "and without the map in ink 8, black");
+	desc.ink[15] = desc.ink[0];
+	ar_set_fullscreen(false);
+}
+
+/* Planes as layers: ar_plane() is one pass where the blitter can
+ * (never blank in between); a line drawn a band of rows at a time
+ * (ar_plane_line_rows()) is the same pixels as the whole line. */
+static void test_planes(void) {
+	static uint8_t a[AR_HOST_FB_BYTES], b[AR_HOST_FB_BYTES];
+	static uint32_t bits[AR_H * (AR_W / 32)];
+	int i, y;
+	uint64_t ops;
+	ar_set_fullscreen(true);
+	ar_set_color(true);
+	CHECK(ar_set_colours(256) == 256, "256 colours");
+	ar_host_render_only();
+	for (i = 0; i < (int)(sizeof(bits) / 4); i++) bits[i] = 0x9a3c5af0u * (uint32_t)(i + 1);
+	ar_plane_fill(3, 0, 0, AR_W, AR_H, 1);
+	ops = arh_ops;
+	ar_plane(3, bits, AR_W / 8, 5, 3, 17, 11, 101, 77);
+	CHECK(arh_ops - ops == 1, "a plane, opaque, in one pass (%d)", (int)(arh_ops - ops));
+	ar_host_fb_copy(a);
+	ar_plane_fill(3, 0, 0, AR_W, AR_H, 1);
+	ar_plane_fill(3, 17, 11, 101, 77, 0);
+	ar_plane_or(3, bits, AR_W / 8, 5, 3, 17, 11, 101, 77);
+	ar_host_fb_copy(b);
+	CHECK(!ar_host_fb_diff(a, b), "and the same as cleared, then ORed");
+
+	for (i = 0; i < 40; i++) {
+		int x0 = (int)(ar_rand() % 400) - 40, y0 = (int)(ar_rand() % 320) - 40;
+		int x1 = (int)(ar_rand() % 400) - 40, y1 = (int)(ar_rand() % 320) - 40;
+		ar_plane_fill(5, 0, 0, AR_W, AR_H, 0);
+		ar_plane_line(5, x0, y0, x1, y1, 1);
+		ar_host_fb_copy(a);
+		ar_plane_fill(5, 0, 0, AR_W, AR_H, 0);
+		for (y = 0; y < AR_H; y += 30) ar_plane_line_rows(5, x0, y0, x1, y1, 1, y, y + 29);
+		ar_host_fb_copy(b);
+		CHECK(!ar_host_fb_diff(a, b), "a line a band at a time (%d,%d)-(%d,%d)", x0, y0, x1, y1);
+	}
+	ar_set_colours(16);
+	ar_set_fullscreen(false);
+}
+
 int main(void) {
 
 	ar_init(&desc);
@@ -450,6 +548,8 @@ int main(void) {
 	one_mode("full screen colour", 2, false);
 
 	test_sprites();
+	test_colours();
+	test_planes();
 	test_scores();
 	test_skill();
 	test_helpers();

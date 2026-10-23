@@ -64,7 +64,7 @@ picture fails cleanly.
 | PNM | P1–P6 | 8-bit samples; 16-bit refused |
 | GIF | 87a/89a, LZW, interlaced | first frame only |
 | JPEG | baseline sequential, 4:4:4 / 4:2:2 / 4:2:0 | progressive refused |
-| ZBM | `zbm.h` | draw's own format, no dithering needed |
+| ZBM | `zbm.h` | draw's own format, no dithering needed; a colour picture (pix's: planes and a palette) through each colour's ink, ordered-dithered |
 | PNG | 8-bit gray/RGB/palette/alpha, depths 1-8 | interlaced and 16-bit refused |
 | SVG | paths, shapes, groups, transforms, both fill rules | rendered, not decoded -- see [svg.md](svg.md) |
 

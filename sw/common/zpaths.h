@@ -172,6 +172,10 @@
 /* mausrun's levels, 01.txt 02.txt ... (docs/mausrun.md, "Levels");
  * its progress.txt is in /data/mausrun, z_data_file()'s folder */
 #define Z_DIR_MAUSRUN_LEVELS      "/data/mausrun/levels"
+/* mausrun's art as the release has it, tiles.zsp and sprites.zsp, to
+ * open in pix: a copy saved in /data/mausrun replaces the built-in art
+ * at the next start (docs/mausrun.md, "Art"). Not read by the game. */
+#define Z_DIR_MAUSRUN_ART         "/data/mausrun/art"
 
 /* tts (docs/tts.md, docs/tts_data.md) */
 #define Z_PATH_TTS_PACK           "/data/tts/speech/en.spk"
@@ -186,6 +190,10 @@
 // two 16x16 sprites, `normal` and `busy` (docs/cursor.md). Not in
 // flash: without it the large pair is the built-in 9x9 X and Z.
 #define Z_PATH_WM_CURSOR          "/data/wm/cursor.zsp"
+// Icons changed or added in pix (docs/pix_app.md): a .zic holding only
+// those, laid over dock.zic by name. pix writes it; wm does not read it
+// yet.
+#define Z_PATH_WM_ICON_OVERRIDES  "/data/wm/icons.zic"
 
 /* vi, nextvi in a term window (docs/posix.md) */
 #define Z_PATH_VI_ARGS            "/tmp/vi.args"

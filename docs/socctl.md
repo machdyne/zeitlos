@@ -38,7 +38,7 @@ Word-addressed, matching every other simple slave in this codebase.
 
 | Address | Register | Description |
 |---|---|---|
-| `0x7000_0200` | CTRL | bit 0: cursor shape. 0 = normal (X), 1 = busy (Z). bit 1: cursor hidden. **Resets to 1** (busy, shown). Bits 31:2 reserved, write 0. |
+| `0x7000_0200` | CTRL | bit 0: cursor shape. 0 = normal (X), 1 = busy (Z). bit 1: cursor hidden. bit 2: cursor in screen coordinates while game mode is on. **Resets to 1** (busy, shown). Bits 31:3 reserved, write 0; bit 31 reads 1 where bit 2 exists. |
 | `0x7000_0204` | MAGIC | fixed `0x5A43_5452` (`"ZCTR"`) |
 | `0x7000_0208` | VIDEO | bits 1:0: virtual phosphor mode. Bits 11:8: monochrome brightness on DDMI, written only with bit 15 set (see [Brightness](#brightness)). Reads back as `{0x5643, avail, 3'b0, level, 6'b0, mode}`. Mode reset value comes from the board's `GPU_*` defines; level resets to 7. |
 | `0x7000_0218` | RECONFIG | write the key `0x5A52_4254` (`"ZRBT"`), as one whole-word store, to pull PROGRAMN and reconfigure the FPGA -- reboot. Any other value or a partial store is ignored. Reads back as `{0x5A52, 15'b0, avail}`; `avail` is set only on boards defining `PROGRAMN_PIN`, and the request is forced off in hardware elsewhere. Software uses `z_reboot()`, which syncs open files first -- see `docs/zboot.md` section 6. |
@@ -164,6 +164,35 @@ Defaulting to X would additionally hide the indicator entirely on the
 fast path, where the core apps finish loading before `wm` first writes
 the register.
 
+### The cursor in game mode: screen coordinates
+
+The pointer's position comes from the USB HID block (or the virtual
+mouse) straight to `gpu_video.v`, which draws the cursor at it in
+**framebuffer** coordinates. On the desktop those are the screen's; in
+game mode the screen shows a 320x240 view of the framebuffer, doubled,
+so a pointer at (400, 300) on the screen's scale would be drawn at
+framebuffer (400, 300) -- off the view, and moving twice as fast as
+the hand -- while a program reads it as (200, 150) of its picture.
+That is right for wm's own zoomed desktop (game mode as a camera over
+the desktop, where the pointer IS in desktop coordinates) and wrong for
+an app's picture.
+
+CTRL bit 2 (`curs_scr`) says the pointer is in screen coordinates:
+while it is set and game mode is on, the cursor is drawn at **half**
+the pointer, `(x/2, y/2)` -- exactly where it is on the doubled screen
+with the view at (0, 0), which is where the arcade runtime keeps it,
+pixel-doubled with the picture. The halving is wiring, so the cost is
+two 10-bit 2:1 multiplexers and an AND: no adder, no register, nothing
+in the per-pixel compare. With the view elsewhere the cursor would be
+off by the origin; nothing uses that. wm sets the bit while an app holds
+the screen with `Z_WM_GAME_GRAB_POINTER` (pix, through
+`ar_desc_t.pointer`); without it the cursor is hidden as below.
+`rtl/gpu/bench/tb_cursor.v` checks it against the old comparator cursor
+at the halved position. CTRL's bit 31 reads 1 on a bitstream that has
+bit 2 (an older one reads back the 0 written there), so on an older
+bitstream wm keeps the pointer hidden rather than draw it in the wrong
+place.
+
 ### No cursor while a game has the screen
 
 CTRL bit 1 hides the cursor altogether (`gpu_video.v`'s `curs_hide`).
@@ -175,8 +204,8 @@ ends, however it ends (release, Alt+Esc, the window closing): `wm`
 compares "is there a grab" with "is the cursor hidden" once per loop,
 so there is no path that forgets.
 
-`wm` owns CTRL, so it writes both bits together (`z_cursor_set(busy,
-hidden)` in zsoc.h); `z_cursor_set_busy()`, which gpu3d also calls,
+`wm` owns CTRL, so it writes the three bits together (`z_cursor_set(busy,
+hidden, screen)` in zsoc.h); `z_cursor_set_busy()`, which gpu3d also calls,
 writes bit 1 as 0 and so shows the cursor again. A bitstream from
 before bit 1 stores it and ignores it: the cursor simply stays.
 

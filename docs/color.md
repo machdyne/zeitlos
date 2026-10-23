@@ -149,7 +149,9 @@ too.
 The same game should run on every board: in 256 colours where there
 are eight planes, in 64 or 16 where there are fewer, as fast either
 way. The hardware side is above; the rest is how art is stored and
-loaded, and it comes with pix, the pixel editor (planned):
+loaded -- sprite sheets ([zsp.md](zsp.md)), drawn in pix
+([pix_app.md](pix_app.md)), and the arcade runtime's 64 and 256
+colours ([arcade.md](arcade.md)):
 
 - Art keeps up to 8 bits a pixel and a 256-entry palette whose first 16
   (and first 64) entries are the smaller palettes, plus, for each
@@ -159,8 +161,8 @@ loaded, and it comes with pix, the pixel editor (planned):
   same code over fewer planes, so a 16-colour board draws exactly as
   fast as it does today.
 
-Until then, `zcolor.h` draws as many of a layout's planes as the
-machine shows and drops the rest: a 256-colour picture on a 16-colour
+For a program that does not reduce its art, `zcolor.h` draws as many of a
+layout's planes as the machine shows and drops the rest: a 256-colour picture on a 16-colour
 machine shows its low four planes (the power-on palette is built for
 that, below).
 

@@ -18,8 +18,9 @@ CORE = ../level.c ../levels_builtin.c ../sprites.c
 
 all: test
 
-test: test_level test_sound levelcheck
+test: test_level test_sound test_art levelcheck sheets
 	./test_level
+	./test_art
 	./test_sound
 	./levelcheck $(LEVELS)
 	@# and it must say no to a level that cannot be finished
@@ -29,6 +30,18 @@ test: test_level test_sound levelcheck
 
 test_level: test_level.c ../level.c ../progress.c ../level.h ../progress.h
 	$(HOSTCC) $(HOSTFLAGS) -o $@ test_level.c ../level.c ../levels_builtin.c ../progress.c ../sprites.c
+
+# the card's sheets over the art (../art.c, sw/common/zsprite.c)
+test_art: test_art.c ../art.c ../art.h ../sprites.c ../../../common/zsprite.c
+	$(HOSTCC) $(HOSTFLAGS) -DART_HOST -o $@ test_art.c ../art.c ../sprites.c ../../../common/zsprite.c
+
+# sprites.c and sprites.h are what gen_sprites.py makes of the sheets
+# in sw/data/mausrun: run it after editing a sheet, and commit the two
+sheets:
+	mkdir -p gen
+	python3 ../gen_sprites.py --out gen
+	cmp gen/sprites.c ../sprites.c && cmp gen/sprites.h ../sprites.h
+	@echo "sheets: sprites.c and sprites.h are up to date with the sheets"
 
 test_sound: test_sound.c ../sound.c ../sound.h ../../../common/games/zsfx.c
 	$(HOSTCC) $(HOSTFLAGS) -DZSFX_HOSTED -o $@ test_sound.c ../sound.c ../../../common/games/zsfx.c
@@ -42,7 +55,7 @@ levelstrip: levelstrip.c $(CORE) ../level.h
 
 # the game itself on a software machine (host/): every screen
 GAME_SRC = host/render.c host/mr_host.c host/mr_wrap_game.c host/mr_wrap_lib.c \
-	../level.c ../levels_builtin.c ../phys.c ../progress.c ../sprites.c ../sound.c ../../../common/zfont_data.c
+	../art.c ../../../common/zsprite.c ../level.c ../levels_builtin.c ../phys.c ../progress.c ../sprites.c ../sound.c ../../../common/zfont_data.c
 render_mausrun: $(GAME_SRC) ../mausrun.c host/mr_host.h
 	$(HOSTCC) -std=gnu99 -O1 -g $(UBSAN) -Wall -Wno-unused-function -DMAUSRUN_PROF \
 		-DZ_APP_NAME='"mausrun"' -o $@ $(GAME_SRC)
@@ -59,6 +72,6 @@ check: levelcheck
 	./levelcheck -v $(LEVELS)
 
 clean:
-	rm -rf test_level test_sound levelcheck levelstrip render_mausrun out
+	rm -rf test_level test_sound test_art levelcheck levelstrip render_mausrun out gen
 
 .PHONY: all test render check clean

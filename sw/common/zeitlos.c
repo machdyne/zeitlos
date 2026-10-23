@@ -578,6 +578,12 @@ bool z_pid_lookup(const char *name, uint32_t *pid) {
  *
  * wm calls z_game_view_set_enabled() directly and is not affected.
  */
+static bool game_pointer;
+
+void z_game_set_pointer(bool keep) {
+	game_pointer = keep;
+}
+
 bool z_game_set_enabled(bool on, bool wrap) {
 
 	uint32_t wm_pid;
@@ -595,7 +601,7 @@ bool z_game_set_enabled(bool on, bool wrap) {
 	if (wm_pid == z_getpid()) return true;
 
 	z_msg_new_send(wm_pid, on ? Z_WM_GAME_GRAB : Z_WM_GAME_RELEASE,
-		0, z_obj_uint32(0));
+		0, z_obj_uint32(game_pointer ? Z_WM_GAME_GRAB_POINTER : 0));
 
 	return true;
 
@@ -608,7 +614,7 @@ bool z_screen_grab(bool on) {
 	if (!z_pid_lookup("wm0", &wm_pid)) return false;
 	if (wm_pid == z_getpid()) return false;
 	z_msg_new_send(wm_pid, on ? Z_WM_GAME_GRAB : Z_WM_GAME_RELEASE,
-		0, z_obj_uint32(0));
+		0, z_obj_uint32(game_pointer ? Z_WM_GAME_GRAB_POINTER : 0));
 	return true;
 
 }

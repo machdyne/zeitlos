@@ -76,27 +76,67 @@ static bool have_counter;
  * the machine (zarcade_int.h)
  * =================================================================== */
 
+/* The blitter has work queued that a line must not overtake: set by
+ * every blitter call, cleared by the wait before a line. */
+static bool blit_pending;
+/* ...and the other way: lines queued that a blit must not overtake */
+static bool line_pending;
+
+static void after_lines(void) {
+	if (line_pending) {
+		z_fb_hw_sync();
+		line_pending = false;
+	}
+	blit_pending = true;
+}
+
 void arh_fill(int x, int y, int w, int h, int bit) {
+	after_lines();
 	z_fb_hw_fill_rect(x, y, w, h, bit);
 }
 
 void arh_pattern(int x, int y, int w, int h, const uint8_t *pat8) {
+	after_lines();
 	z_fb_hw_fill_pattern(x, y, w, h, pat8);
 }
 
 void arh_blit(const void *src, int stride, int sx, int sy,
 	int x, int y, int w, int h, int rop) {
+	after_lines();
 	z_fb_hw_blit_mem_rop(src, stride, sx, sy, x, y, w, h,
-		rop == ARH_OR ? Z_ROP_OR : Z_ROP_ANDN);
+		rop == ARH_COPY ? Z_ROP_COPY : rop == ARH_OR ? Z_ROP_OR : Z_ROP_ANDN);
+}
+
+bool arh_copy_ok(void) {
+	static int ok = -1;
+	if (ok < 0) ok = z_fb_hw_rop_available() ? 1 : 0;
+	return ok == 1;
 }
 
 void arh_sprite(const void *data, const void *mask, int stride,
 	int sx, int sy, int x, int y, int w, int h) {
+	after_lines();
 	z_fb_hw_blit_sprite(data, mask, stride, sx, sy, x, y, w, h);
 }
 
 void arh_vcopy(int sx, int sy, int dx, int dy, int w, int h) {
+	after_lines();
 	z_fb_hw_blit_vram(sx, sy, dx, dy, w, h);
+}
+
+void arh_line(int x0, int y0, int x1, int y1, int op,
+	int cx0, int cy0, int cx1, int cy1) {
+	z_clip_t c;
+	c.x0 = cx0; c.y0 = cy0; c.x1 = cx1; c.y1 = cy1;
+	/* the blitter's writes land first: the rasterizer and the blitter
+	 * are two masters on VRAM. Once, not per line: a run of lines
+	 * queues behind one wait. */
+	if (blit_pending) {
+		z_fb_hw_sync();
+		blit_pending = false;
+	}
+	line_pending = true;
+	z_fb_hw_line(x0, y0, x1, y1, op, &c);
 }
 
 /* Pad buttons -> player buttons. X, Y and Select are their own buttons
@@ -247,13 +287,26 @@ static void clear_framebuffer(void) {
 
 static void apply_color(void) {
 	if (ar__s.want_color && z_color_available()) {
-		z_color_begin(&z_color_16);
+		int n = ar__choose_planes(z_color_planes_max());
+		z_color_begin(n == 8 ? &z_color_256 : n == 6 ? &z_color_64 : &z_color_16);
 		ar__s.mode = AR_MODE_FULL_COLOR;
-		ar__s.pal_dirty = 0xffff;
+		ar__pal_all_dirty();
 	} else {
 		if (z_color_available()) z_color_end();
 		ar__s.mode = AR_MODE_FULL_MONO;
 	}
+}
+
+int ar_set_colours(int n) {
+	ar__s.colours_want = n >= 256 ? 256 : n >= 64 ? 64 : 16;
+	if (ar__s.mode == AR_MODE_FULL_COLOR) {
+		apply_color();
+		ar__invalidate();
+		ar__s.targets_stale = true;
+	} else {
+		ar__choose_planes(z_color_available() ? z_color_planes_max() : 4);
+	}
+	return 1 << ar__s.planes;
 }
 
 bool ar_set_fullscreen(bool on) {
@@ -263,6 +316,7 @@ bool ar_set_fullscreen(bool on) {
 	if (on) {
 		if (!z_game_available()) return false;
 		clear_framebuffer();
+		z_game_set_pointer(ar__s.d && ar__s.d->pointer);
 		z_game_set_enabled(true, true);
 		z_game_set_view(0, 0);
 		exit_armed = false;
@@ -342,6 +396,22 @@ static void show_help(void) {
 	zsfx_suspend(false);
 
 	/* Releases went to the box: no button may stay held. */
+	release_all();
+	ar__invalidate();
+}
+
+void ar_dialog_begin(void *out) {
+	z_dialog_ctx_t *ctx = out;
+	if (ar__s.mode != AR_MODE_WINDOW) ar_set_fullscreen(false);
+	render_now();
+	zsfx_suspend(true);
+	ctx->parent = &win;
+	ctx->on_msg = help_on_msg;
+	ctx->user = NULL;
+}
+
+void ar_dialog_end(void) {
+	zsfx_suspend(false);
 	release_all();
 	ar__invalidate();
 }
@@ -502,19 +572,46 @@ bool ar_poll(ar_event_t *e) {
  * the frame
  * =================================================================== */
 
+/* ar_vsync_exact(): where the boundaries fall, in 16ths of a tick --
+ * one seen while watching for it, and the frame counter's value then --
+ * so the next is expected at edge + frames * (Z_TICK_HZ/60). Learned
+ * again at every boundary seen while watching; until one has been, the
+ * wait watches the whole time. */
+static bool vsync_exact;
+static bool edge_known;
+static uint32_t edge_fp, edge_frame;
+static void (*frame_hook)(void);
+
+#define FRAME_FP ((uint32_t)Z_TICK_HZ * 16u / 60u)
+/* start watching this long before the boundary is expected */
+#define EXACT_SPIN_FP (2u * 16u)
+
+void ar_vsync_exact(bool on) { vsync_exact = on; edge_known = false; }
+void ar_frame_hook(void (*fn)(void)) { frame_hook = fn; }
+
 /* Wait for the next display frame and say how many went by. Yields
  * while it waits (docs/app_runtime.md): a game that spins takes a full
- * scheduler share from everything else on the machine. */
+ * scheduler share from everything else on the machine -- except, with
+ * ar_vsync_exact(), for the last two ticks before the boundary. */
 static uint32_t wait_frame(void) {
 
 	uint32_t n;
 
 	if (have_counter) {
 		uint32_t start = z_uptime_ticks();
+		bool watching = false;
 		for (;;) {
 			uint32_t f = z_game_frame();
 			n = (f - last_frame) & 0xffffu;
-			if (n) { last_frame = f; break; }
+			if (n) {
+				last_frame = f;
+				if (watching) {
+					edge_fp = z_uptime_ticks() * 16u;
+					edge_frame = f;
+					edge_known = true;
+				}
+				break;
+			}
 			/* A counter that has not moved for a tenth of a second
 			 * is not counting (no scanout?): pace from the clock
 			 * from now on rather than wait forever. */
@@ -523,6 +620,13 @@ static uint32_t wait_frame(void) {
 				last_tick = z_uptime_ticks();
 				n = 1;
 				break;
+			}
+			if (vsync_exact) {
+				uint32_t next = edge_fp + ((last_frame + 1u - edge_frame) & 0xffffu) * FRAME_FP;
+				if (!edge_known || (int32_t)(z_uptime_ticks() * 16u + EXACT_SPIN_FP - next) >= 0) {
+					watching = true;
+					continue;
+				}
 			}
 			z_proc_wait(1);
 		}
@@ -549,11 +653,13 @@ uint32_t ar_frame(void) {
 
 	/* Straight after the boundary: palette first (it changes every
 	 * pixel at once), then the viewport, then the drawing. */
-	if (ar__s.mode == AR_MODE_FULL_COLOR && ar__s.pal_dirty) {
-		for (i = 0; i < 16; i++)
-			if (ar__s.pal_dirty & (1u << i))
+	if (ar__s.mode == AR_MODE_FULL_COLOR) {
+		int n = 1 << ar__s.planes;
+		for (i = 0; i < n; i++)
+			if (ar__s.pal_dirty[i >> 5] & (1u << (i & 31))) {
 				z_color_set_palette((uint32_t)i, ar__s.pal[i]);
-		ar__s.pal_dirty = 0;
+				ar__s.pal_dirty[i >> 5] &= ~(1u << (i & 31));
+			}
 	}
 
 	if (ar__s.mode != AR_MODE_WINDOW) {
@@ -565,6 +671,7 @@ uint32_t ar_frame(void) {
 	}
 
 	arh_targets();
+	if (frame_hook) frame_hook();
 	ar__render();
 	z_fb_hw_sync();
 

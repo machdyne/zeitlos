@@ -923,7 +923,10 @@ speech on, "full screen" and "window" are said.
 While an app holds the screen with a game grab, wm also **hides the
 hardware cursor** (socctl CTRL bit 1, `z_cursor_set()`;
 [socctl.md](socctl.md), "No cursor while a game has the screen") and
-shows it again when the grab ends, however it ends.
+shows it again when the grab ends, however it ends. A grab sent with
+`Z_WM_GAME_GRAB_POINTER` (`z_game_set_pointer(true)`; pix) keeps the
+cursor and puts it in screen coordinates instead (CTRL bit 2,
+[socctl.md](socctl.md), "The cursor in game mode").
 
 ### Resizing on request
 

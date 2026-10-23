@@ -768,8 +768,8 @@ static void test_shipped(const char *cfg_path, const char *zic_path) {
 	}
 	CHECK_EQ(dk.nviews, 4);
 	CHECK_EQ(dk.views[0].count, 3);			// play track midi
-	CHECK_EQ(dk.views[1].count, 7);			// settings backup info keyboard hex basic mmod
-	CHECK_EQ(dk.views[2].count, 10);
+	CHECK_EQ(dk.views[1].count, 8);			// settings backup info keyboard hex basic mmod pix
+	CHECK_EQ(dk.views[2].count, 11);			// the games, and planedemo
 	CHECK_EQ(dk.views[3].count, 0);			// @rest: nothing left
 	{
 		uint8_t keep[DK_ITEMS_MAX];
@@ -777,10 +777,10 @@ static void test_shipped(const char *cfg_path, const char *zic_path) {
 		n = dk_keep(it, keep, &dk);
 		CHECK_EQ(dk.nmain, 17);
 		CHECK_EQ(dk.nviews, 3);
-		CHECK_EQ(n, 17 + 3 + 7 + 10);
+		CHECK_EQ(n, 17 + 3 + 8 + 11);
 		int apps = 0;
 		for (int i = 0; i < n; i++) if (it[i].view < 0) apps++;
-		CHECK_EQ(apps, 34);			// every app the dock had before groups, and backup
+		CHECK_EQ(apps, 36);			// every app the dock had before groups, backup, pix and planedemo
 	}
 	CHECK(strcmp(c.groups[dk.views[1].group].name, "Tools") == 0);
 	CHECK(strcmp(c.groups[dk.views[0].group].name, "Sound") == 0);
@@ -795,7 +795,7 @@ static void test_shipped(const char *cfg_path, const char *zic_path) {
 		CHECK_EQ(dk.nmain, 12);
 		int apps = 0;
 		for (int i = 0; i < n; i++) if (it[i].view < 0) apps++;
-		CHECK_EQ(apps, 34);
+		CHECK_EQ(apps, 36);
 	}
 
 	// Every app the file names has an icon, and every group its own.

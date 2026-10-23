@@ -73,10 +73,34 @@ static int more(z_exec_lz4_t *s, uint32_t *len, uint32_t max) {
 	return 0;
 }
 
+// A word that may alias bytes (the image is written both ways).
+typedef uint32_t __attribute__((may_alias)) lz4_word_t;
+
 // A match: n bytes from dist back. In order, a byte at a time, unrolled:
 // with dist < 4 it overlaps what it is writing (dist 1 repeats a byte).
+// A longer one goes a word at a time where it can: a run of one byte
+// (dist 1: the zeros of a program's tables and pictures), or a copy whose
+// source is a whole number of words back (both ends then line up). On
+// memory that is slower than the CPU, a store is a store: a quarter of
+// them.
+static __attribute__((noinline)) void match_words(uint8_t *q, const uint8_t *f, uint32_t dist, uint32_t n) {
+	while ((uintptr_t)q & 3) { *q++ = *f++; n--; }
+	if (dist == 1) {
+		uint32_t v = (uint32_t)q[-1] * 0x01010101u;
+		while (n >= 4) { *(lz4_word_t *)q = v; q += 4; n -= 4; }
+		while (n--) *q++ = (uint8_t)v;
+		return;
+	}
+	while (n >= 4) {
+		*(lz4_word_t *)q = *(const lz4_word_t *)f;
+		q += 4; f += 4; n -= 4;
+	}
+	while (n--) *q++ = *f++;
+}
+
 static inline __attribute__((always_inline)) void match(uint8_t *q, uint32_t dist, uint32_t n) {
 	const uint8_t *f = q - dist;
+	if (n >= 8 && (dist == 1 || !(dist & 3))) { match_words(q, f, dist, n); return; }
 	while (n >= 4) {
 		q[0] = f[0]; q[1] = f[1]; q[2] = f[2]; q[3] = f[3];
 		q += 4; f += 4; n -= 4;

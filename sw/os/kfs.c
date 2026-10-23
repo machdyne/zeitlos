@@ -414,16 +414,40 @@ int k_exec_unpack(uint8_t *out, uint32_t len, z_exec_fill_t fill, void *ctx) {
 	return r ? 1 : 0;
 }
 
-typedef struct { int32_t fd; uint32_t left; } card_src_t;
+// The packed image from the card, CARD_STAGE bytes a read. The decoder
+// asks for its buffer's worth (256 bytes) at a time, and each zfs_read()
+// is a round trip to the fs process: a 1.2MB program was 4,800 of them,
+// 15 seconds to load (planedemo, October 2026). One stage, for the one
+// load k_unpack_busy lets unpack at a time.
+#define CARD_STAGE 8192
+static uint8_t card_stage[CARD_STAGE];
+
+typedef struct { int32_t fd; uint32_t left, pos, have; } card_src_t;
 
 static uint32_t card_fill(void *ctx, uint8_t *buf, uint32_t cap) {
 	card_src_t *c = (card_src_t *)ctx;
-	if (cap > c->left) cap = c->left;
-	if (!cap) return 0;
-	int32_t r = zfs_read(c->fd, buf, cap);
-	if (r <= 0) { c->left = 0; return 0; }
-	c->left -= (uint32_t)r;
-	return (uint32_t)r;
+	if (c->pos == c->have) {
+		uint32_t want = c->left < CARD_STAGE ? c->left : CARD_STAGE;
+		int32_t r;
+		if (!want) return 0;
+		// as big a request as the stage: straight to where it goes
+		if (cap >= CARD_STAGE) {
+			if (cap > c->left) cap = c->left;
+			r = zfs_read(c->fd, buf, cap);
+			if (r <= 0) { c->left = 0; return 0; }
+			c->left -= (uint32_t)r;
+			return (uint32_t)r;
+		}
+		r = zfs_read(c->fd, card_stage, want);
+		if (r <= 0) { c->left = 0; return 0; }
+		c->left -= (uint32_t)r;
+		c->pos = 0;
+		c->have = (uint32_t)r;
+	}
+	if (cap > c->have - c->pos) cap = c->have - c->pos;
+	memcpy(buf, card_stage + c->pos, cap);
+	c->pos += cap;
+	return cap;
 }
 
 // The data section to `dst` (physical: a new process's memory), the
@@ -439,7 +463,7 @@ static int load_card(uint32_t dst, const char *path, const z_exec_info_t *info) 
 		return 1;
 	}
 	if (info->compressed) {
-		card_src_t c = { fd, info->stored_size };
+		card_src_t c = { fd, info->stored_size, 0, 0 };
 		int r = k_exec_unpack(p, info->data_size, card_fill, &c);
 		zfs_close(fd);
 		if (r) return 1;

@@ -36,7 +36,14 @@
  * =================================================================== */
 
 #define FB_W 640
-#define FB_H 480
+#define FB_H 960          /* two sheets: planes 4..7 are rows 480 up */
+
+/* The board's most planes: 8 unless AR_HOST_PLANES says 4 or 6. */
+static int host_planes(void) {
+	const char *e = getenv("AR_HOST_PLANES");
+	int n = e ? atoi(e) : 8;
+	return n == 4 || n == 6 ? n : 8;
+}
 
 static uint8_t fb[FB_H][FB_W];       /* one byte a pixel: simple */
 
@@ -79,10 +86,13 @@ void arh_blit(const void *src, int stride, int sx, int sy,
 	for (j = 0; j < h; j++)
 		for (i = 0; i < w; i++) {
 			int b = src_bit(src, stride, sx + i, sy + j);
+			if (rop == ARH_COPY) { put(x + i, y + j, b); continue; }
 			if (!b) { put(x + i, y + j, fb[y + j][x + i]); continue; }
 			put(x + i, y + j, rop == ARH_OR ? 1 : 0);
 		}
 }
+
+bool arh_copy_ok(void) { return true; }
 
 void arh_sprite(const void *data, const void *mask, int stride,
 	int sx, int sy, int x, int y, int w, int h) {
@@ -99,6 +109,23 @@ void arh_sprite(const void *data, const void *mask, int stride,
 			if (m) put(x + i, y + j, d);
 			else put(x + i, y + j, fb[y + j][x + i]);
 		}
+}
+
+void arh_line(int x0, int y0, int x1, int y1, int op,
+	int cx0, int cy0, int cx1, int cy1) {
+	int dx = x1 > x0 ? x1 - x0 : x0 - x1, sx = x0 < x1 ? 1 : -1;
+	int dy = -(y1 > y0 ? y1 - y0 : y0 - y1), sy = y0 < y1 ? 1 : -1;
+	int err = dx + dy, e2;
+	arh_ops++;
+	for (;;) {
+		if (x0 >= cx0 && x0 <= cx1 && y0 >= cy0 && y0 <= cy1 &&
+		    x0 >= 0 && y0 >= 0 && x0 < FB_W && y0 < FB_H)
+			fb[y0][x0] = (uint8_t)(op == 2 ? !fb[y0][x0] : op ? 1 : 0);
+		if (x0 == x1 && y0 == y1) break;
+		e2 = 2 * err;
+		if (e2 >= dy) { err += dy; x0 += sx; }
+		if (e2 <= dx) { err += dx; y0 += sy; }
+	}
 }
 
 void arh_vcopy(int sx, int sy, int dx, int dy, int w, int h) {
@@ -202,14 +229,24 @@ static void clear_fb(void) {
 
 bool ar_color_available(void) { return true; }
 
+/* As zarcade_sys.c: the game hears of every mode change. */
+static void mode_event(void) {
+	ar_event_t e;
+	memset(&e, 0, sizeof(e));
+	e.type = AR_EV_MODE;
+	ar__queue(&e);
+}
+
 bool ar_set_fullscreen(bool on) {
 	if (on == (ar__s.mode != AR_MODE_WINDOW)) return true;
 	clear_fb();
 	if (on) ar__s.mode = ar__s.want_color ? AR_MODE_FULL_COLOR : AR_MODE_FULL_MONO;
 	else ar__s.mode = AR_MODE_WINDOW;
-	ar__s.pal_dirty = 0xffff;
+	ar__choose_planes(host_planes());
+	ar__pal_all_dirty();
 	ar__invalidate();
 	ar__s.targets_stale = true;
+	mode_event();
 	return true;
 }
 
@@ -219,7 +256,18 @@ void ar_set_color(bool on) {
 	clear_fb();
 	ar__s.mode = on ? AR_MODE_FULL_COLOR : AR_MODE_FULL_MONO;
 	ar__invalidate();
-	ar__s.targets_stale = true;
+	ar__s.targets_stale = true;	mode_event();
+}
+
+int ar_set_colours(int n) {
+	ar__s.colours_want = n >= 256 ? 256 : n >= 64 ? 64 : 16;
+	ar__choose_planes(host_planes());
+	if (ar__s.mode == AR_MODE_FULL_COLOR) {
+		clear_fb();
+		ar__invalidate();
+		ar__s.targets_stale = true;
+	}
+	return 1 << ar__s.planes;
 }
 
 static void add_vis(int x0, int y0, int x1, int y1) {
@@ -313,9 +361,14 @@ void ar_host_snapshot(const char *name) {
 				int vy = (y + ar__s.view_dy + 480) % 480;
 				int k, idx = 0;
 				uint16_t c;
-				for (k = 0; k < 4; k++) {
-					int px = (vx + ((k & 1) ? 320 : 0)) % 640;
-					int py = (vy + ((k & 2) ? 240 : 0)) % 480;
+				for (k = 0; k < ar__s.planes; k++) {
+					/* plane k%4's place in its sheet, then the sheet:
+					 * the second is 480 rows (8 planes) or 240 (6) */
+					int dx, dy, px, py;
+					ar__plane_off(k & 3, &dx, &dy);
+					px = (vx + dx) % 640;
+					py = (vy + dy) % 480;
+					if (k >= 4) py = 480 + py % (ar__s.planes == 6 ? 240 : 480);
 					idx |= fb[py][px] << k;
 				}
 				c = ar__s.pal[idx];
@@ -369,9 +422,10 @@ bool ar_poll(ar_event_t *e) {
 		script_pos++;
 
 		switch (s->kind) {
-		case ARH_KEY_DOWN: ar__key(s->a, true, 0); break;
-		case ARH_KEY_UP:   ar__key(s->a, false, 0); break;
-		case ARH_TAP:      ar__key(s->a, true, 0); ar__key(s->a, false, 0); break;
+		/* b: the modifiers held (Z_KBD_MOD_*), 0 for none */
+		case ARH_KEY_DOWN: ar__key(s->a, true, (uint8_t)s->b); break;
+		case ARH_KEY_UP:   ar__key(s->a, false, (uint8_t)s->b); break;
+		case ARH_TAP:      ar__key(s->a, true, (uint8_t)s->b); ar__key(s->a, false, (uint8_t)s->b); break;
 		case ARH_PAD:      pads[s->b] = s->a; pad_in[s->b] = true; break;
 		case ARH_WINDOW:   ar_set_fullscreen(false); break;
 		case ARH_FULL_COLOR: ar__s.want_color = true; ar_set_fullscreen(true);
@@ -407,12 +461,17 @@ uint32_t ar_host_verify_frames, verify_frames, verify_bad;
 uint32_t ar_host_verify_bad(void) { return verify_bad; }
 uint32_t ar_host_verified(void) { return verify_frames; }
 
+static void (*frame_hook)(void);
+void ar_vsync_exact(bool on) { (void)on; }
+void ar_frame_hook(void (*fn)(void)) { frame_hook = fn; }
+
 uint32_t ar_frame(void) {
 
 	frame_no++;
 	ar__shake_step();
-	ar__s.pal_dirty = 0;
+	memset(ar__s.pal_dirty, 0, sizeof(ar__s.pal_dirty));
 	arh_targets();
+	if (frame_hook) frame_hook();
 	ar__render();
 #ifdef AR_HOST_TESTS
 	/* AR_HOST_VERIFY=1: after every frame, repaint everything from
@@ -486,6 +545,10 @@ uint32_t ar_frame(void) {
 
 uint32_t ar_host_frame(void) { return frame_no; }
 int ar_host_shots(void) { return shots; }
+
+/* No boxes on the host: a program's dialogs are not run here. */
+void ar_dialog_begin(void *ctx) { memset(ctx, 0, sizeof(void *) * 3); }
+void ar_dialog_end(void) { }
 
 bool ar_init(const ar_desc_t *d) {
 	ar__core_init(d);

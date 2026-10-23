@@ -1125,9 +1125,12 @@ static bool ptr_wakeups;
 
 static uint32_t wm_busy_mask;
 
-// The cursor is hidden while a game holds the screen (game_grab_pid):
+// The cursor is hidden while a game holds the screen (game_grab_pid),
+// unless the game asked to keep it (game_grab_ptr):
 // main() notices a grab starting or ending and calls wm_busy_apply().
 static bool wm_cursor_hidden;
+// ...or, if it asked to keep it, in screen coordinates (pix)
+static bool wm_cursor_screen;
 
 // Reports what it wrote and whether the hardware is even there. This
 // is deliberately noisy: the cursor is the only visible effect, so a
@@ -1144,7 +1147,7 @@ static void wm_busy_apply(void) {
 	// cursor as an X.
 	bool busy = (wm_busy_mask != 0);
 
-	z_cursor_set(busy, wm_cursor_hidden);
+	z_cursor_set(busy, wm_cursor_hidden, wm_cursor_screen);
 
 	// Read it back. socctl's CTRL register is readable, so this
 	// distinguishes the three ways this can fail -- no socctl in the
@@ -1399,6 +1402,9 @@ static union {
 } dock_scratch;
 #define dock_cfg    dock_scratch.b.cfg
 #define dock_tab    dock_scratch.b.zic
+// icons.zic's table goes where the parser was, with room after it to
+// read through (dock_build()).
+typedef char dock_ov_fits[sizeof(dk_cfg_t) >= sizeof(dk_zic_t) + 128 ? 1 : -1];
 
 // Decides what the dock offers: wm.cfg for which apps and in what
 // order, dock.zic for the icons, and then the same two questions as
@@ -1564,6 +1570,37 @@ static void dock_build(void) {
 		printf("wm: dock: %s: %d/%d icons, %lu bytes, %d reads, %lu ms\n",
 			Z_PATH_WM_ICONS, icons, dock_zic_count, (unsigned long)dock_store_used,
 			zf.calls, (unsigned long)(dock_ms(t0) - ms_exists));
+
+	// -- icons drawn in pix: /data/wm/icons.zic holds only those, and
+	// each replaces the icon (and spoken name) of the app of its name.
+	// Read like dock.zic, its table where the parser was, and read
+	// through what is left of that.
+	dock_zf_t of;
+	if (dock_zf_open(&of, Z_PATH_WM_ICON_OVERRIDES)) {
+		dk_zic_t *o = (dk_zic_t *)(void *)&dock_cfg;
+		uint8_t *rb = (uint8_t *)(o + 1);
+		uint32_t rl = (uint32_t)(sizeof(dock_cfg) - sizeof(*o));
+		int on = dk_zic_read_table(dock_zf_read, &of, o, rb, rl, NULL), mine = 0;
+		if (on > 0) {
+			for (int i = 0; i < n; i++) {
+				int z = dk_zic_find(o, dock_apps[i].name);
+				if (z >= 0) o->e[z].flags |= DK_ZIC_WANT;
+			}
+			dk_zic_read_parts(dock_zf_read, &of, o, rb, rl, dock_store, sizeof(dock_store),
+				&dock_store_used);
+			for (int i = 0; i < n; i++) {
+				int z = dk_zic_find(o, dock_apps[i].name);
+				if (z < 0 || !o->e[z].icon_len) continue;
+				dock_apps[i].icon_off = o->e[z].icon;
+				dock_apps[i].icon_len = o->e[z].icon_len;
+				if (o->e[z].spoken != DK_NONE) dock_apps[i].spoken_off = o->e[z].spoken;
+				mine++;
+			}
+		}
+		dock_zf_close(&of);
+		if (on > 0) printf("wm: dock: %s: %d of %d shown\n", Z_PATH_WM_ICON_OVERRIDES, mine, on);
+		else printf("wm: dock: %s: damaged\n", Z_PATH_WM_ICON_OVERRIDES);
+	}
 
 	int apps = 0;
 	for (int i = 0; i < n; i++) {
@@ -3686,6 +3723,8 @@ static int32_t view_y = 0;
  * wm's own hotkeys keep working too. It is the only process that sees
  * every keystroke and that has to stay true whoever owns the screen. */
 static uint32_t game_grab_pid = 0;
+// The holder asked to keep the pointer (Z_WM_GAME_GRAB_POINTER).
+static bool game_grab_ptr;
 static uint32_t grab_check_at;     // next look at whether the holder lives
 
 static int window_of_pid(uint32_t pid) {
@@ -7076,6 +7115,8 @@ static void handle_message(z_msg_t *msg) {
 			 * if a caller sets it (zmsg.h), so a grab cannot be
 			 * claimed on another process's behalf. */
 			game_grab_pid = msg->from;
+			game_grab_ptr = msg->obj.type == Z_UINT32 &&
+				(msg->obj.val.uint32 & Z_WM_GAME_GRAB_POINTER);
 			/* A game launched from the dock that takes the screen
 			 * without opening a window has started: the icon need
 			 * not wait out DOCK_LAUNCH_TIMEOUT_TICKS. */
@@ -7807,10 +7848,19 @@ int main(void) {
 		// -- keyboard (interrupt-captured, drained here) --
 		dispatch_keys();
 
-		// -- the cursor: none while a game holds the screen --
-		if ((game_grab_pid != 0) != wm_cursor_hidden) {
-			wm_cursor_hidden = !wm_cursor_hidden;
-			wm_busy_apply();
+		// -- the cursor: none while a game holds the screen, unless
+		// it asked to keep it --
+		{
+			// kept only where the bitstream can draw it in the right
+			// place (socctl CTRL bit 2; bit 31 says it is there)
+			bool keep = game_grab_ptr && z_socctl_present() &&
+				(reg_socctl_ctrl & Z_SOCCTL_HAS_SCREEN);
+			if ((game_grab_pid != 0 && !keep) != wm_cursor_hidden ||
+				(game_grab_pid != 0 && keep) != wm_cursor_screen) {
+				wm_cursor_hidden = game_grab_pid != 0 && !keep;
+				wm_cursor_screen = game_grab_pid != 0 && keep;
+				wm_busy_apply();
+			}
 		}
 
 		// -- mouse --

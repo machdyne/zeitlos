@@ -8,7 +8,7 @@ The function keys mean the same thing in every app.
 | **F2** | **Rename / edit in place** | `files`: rename; `sheet`: edit the cell |
 | **F3** | **Search / next** | no search yet: ask what to find (as Ctrl+F); then the next match -- `text`, `sheet`, `web`, `files` |
 | **F4** | **The app's prompt** | gives the command or input box the focus -- `sheet`'s command line (and its `/` menu), `slide`'s command line, `web`'s address field; in apps whose prompt always has the focus (`chess`, the casino tables, `basic`, `ask`, `mesh`, `irc`) typing goes there anyway |
-| **F5-F8** | **The app's own** | listed in its F1 box -- `web` F5 reload, `files` F5 read the folder again, `sheet` F5 chart, `bench` F5/F6, `midi` F5-F7, `mesh` F5/F6, `chip8` F5-F8, `slide` F5 show, F6 all cards, F7 the deck as an app, `backup` F5 look at the drive again |
+| **F5-F8** | **The app's own** | listed in its F1 box -- `web` F5 reload, `files` F5 read the folder again, `sheet` F5 chart, `bench` F5/F6, `midi` F5-F7, `mesh` F5/F6, `chip8` F5-F8, `slide` F5 show, F6 all cards, F7 the deck as an app, `backup` F5 look at the drive again, `pix` F5 play (Shift: the animation), F6 onion skin, F7 fewer colours, F8 the palette |
 | **F9, F10** | **Reserved** | bound by nothing, for later |
 | **F11** | **Full screen** | a resizable window: full screen -- the whole screen, no titlebar, no dock (wm does it); an app with a game mode: game mode |
 | **F12** | **App home / reserved** | back to where the app starts -- `term` (disconnect, the welcome panel), `web` (the page it started with, or the bookmarks), `files` (the folder it started in); elsewhere reserved |

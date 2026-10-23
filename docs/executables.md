@@ -201,7 +201,18 @@ run is filled straight from the source into the image. Its cost is per
 bytes and a 7-byte match on average -- so nearly every one takes a fast
 path: no length bytes, the whole sequence already in the buffer, read
 with plain pointer steps and no refill checks. About 9 instructions a
-byte in `sim/` (from 12 without it).
+byte in `sim/` (from 12 without it). A match of 8 bytes or more that
+repeats one byte (offset 1: the zeros of tables and pictures) or copies
+from a whole number of words back is written a word at a time
+(`match_words()`): a quarter of the stores, and the stores are what
+memory slower than the CPU charges for.
+
+**Reading from a file** (`load_card()`): the decoder asks for its
+buffer's worth, 256 bytes, at a time, and every `zfs_read()` is a round
+trip to the `fs` process. So `card_fill()` reads 8KB at a time into a
+stage and hands it out from there (one stage, used by the one load that
+is unpacking). Before it, planedemo's 1.2MB on the card were 4,800 round
+trips: **15.3 seconds** to load (October 2026).
 
 **Why LZ4, and not DEFLATE.** DEFLATE came first: smaller (57% of the
 images, to LZ4's 68%), but measured on hardware `wm` took **1,251ms**

@@ -90,13 +90,43 @@ static int ink_weight(const uint8_t *p) {
 static ar_rect_t clip_r = { 0, 0, AR_W, AR_H };
 
 static int plane_count(void) {
-	return ar__s.mode == AR_MODE_FULL_COLOR ? 4 : 1;
+	return ar__s.mode == AR_MODE_FULL_COLOR ? ar__s.planes : 1;
 }
 
-/* Plane k's framebuffer offset from plane 0 (z_color_16: quadrants). */
-static void plane_off(int k, int *dx, int *dy) {
+/* Plane k's framebuffer offset from plane 0: z_color_16's quadrants,
+ * and planes 4.. the same in the second sheet, 480 rows down (z_color_64
+ * has planes 4 and 5 there side by side, z_color_256 all four). */
+void ar__plane_off(int k, int *dx, int *dy) {
 	*dx = (k & 1) ? 320 : 0;
-	*dy = (k & 2) ? 240 : 0;
+	*dy = ((k & 2) ? 240 : 0) + ((k & 4) ? 480 : 0);
+}
+#define plane_off ar__plane_off
+
+int ar__choose_planes(int hw_max) {
+	int n = ar__s.colours_want >= 256 ? 8 : ar__s.colours_want >= 64 ? 6 : 4;
+	if (hw_max < 4) hw_max = 4;
+	if (n > hw_max) n = hw_max;
+	ar__s.planes = n;
+	return n;
+}
+
+void ar__pal_all_dirty(void) {
+	memset(ar__s.pal_dirty, 0xff, sizeof(ar__s.pal_dirty));
+}
+
+/* The monochrome ink of index c. */
+static const uint8_t *ink_of(int c) {
+	int i = ar__s.mono_map ? ar__s.mono_map[c & 255] : c;
+	return ar__s.d->ink[i & 15].row;
+}
+
+void ar_mono_map(const uint8_t *to16) {
+	ar__s.mono_map = to16;
+	ar_dirty_all();
+}
+
+int ar_colours(void) {
+	return 1 << ar__s.planes;
 }
 
 /* Clip a logical rectangle to the current clip. Returns false if empty;
@@ -147,7 +177,7 @@ static void for_pieces(int x, int y, int w, int h, piece_fn fn,
  * =================================================================== */
 
 typedef struct {
-	uint8_t pat[4][8];     /* per plane (mono uses [0]) */
+	uint8_t pat[8][8];     /* per plane (mono uses [0]) */
 } fill_ctx_t;
 
 static void pattern_or_fill(int x, int y, int w, int h, const uint8_t *p) {
@@ -175,15 +205,15 @@ static void fill_piece(int x, int y, int w, int h, int dsx, int dsy,
 static void make_fill2(fill_ctx_t *f, int c0, int c1, const uint8_t *pat) {
 	int k, r;
 	if (ar__s.mode == AR_MODE_FULL_COLOR) {
-		for (k = 0; k < 4; k++) {
+		for (k = 0; k < ar__s.planes; k++) {
 			uint8_t m0 = ((c0 >> k) & 1) ? 0xff : 0x00;
 			uint8_t m1 = ((c1 >> k) & 1) ? 0xff : 0x00;
 			for (r = 0; r < 8; r++)
 				f->pat[k][r] = (uint8_t)((pat[r] & m1) | (~pat[r] & m0));
 		}
 	} else {
-		const uint8_t *i0 = ar__s.d->ink[c0 & 15].row;
-		const uint8_t *i1 = ar__s.d->ink[c1 & 15].row;
+		const uint8_t *i0 = ink_of(c0);
+		const uint8_t *i1 = ink_of(c1);
 		for (r = 0; r < 8; r++)
 			f->pat[0][r] = (uint8_t)((pat[r] & i1[r]) | (~pat[r] & i0[r]));
 	}
@@ -222,19 +252,116 @@ static void bitmap_piece(int x, int y, int w, int h, int dsx, int dsy,
 
 	if (ar__s.mode == AR_MODE_FULL_COLOR) {
 		int k;
-		for (k = 0; k < 4; k++) {
+		for (k = 0; k < ar__s.planes; k++) {
 			int px, py;
 			plane_off(k, &px, &py);
 			arh_blit(b->bits, b->stride, sx, sy, x + px, y + py, w, h,
 				((b->c >> k) & 1) ? ARH_OR : ARH_ANDN);
 		}
 	} else {
-		const uint8_t *ink = ar__s.d->ink[b->c & 15].row;
+		const uint8_t *ink = ink_of(b->c);
 		int bit;
 		if (!ink_solid(ink, &bit)) bit = ink_weight(ink) >= 32;
 		arh_blit(b->bits, b->stride, sx, sy, x, y, w, h,
 			bit ? ARH_OR : ARH_ANDN);
 	}
+}
+
+static void plane_piece(int x, int y, int w, int h, int dsx, int dsy,
+	const void *ctx) {
+	const blit_ctx_t *b = (const blit_ctx_t *)ctx;
+	int px, py;
+	plane_off(b->c, &px, &py);
+	/* one pass where the blitter can: cleared then ORed, the plane is
+	 * blank in between, and the beam may see it */
+	if (arh_copy_ok()) {
+		arh_blit(b->bits, b->stride, b->sx + dsx, b->sy + dsy, x + px, y + py, w, h, ARH_COPY);
+		return;
+	}
+	arh_fill(x + px, y + py, w, h, 0);
+	arh_blit(b->bits, b->stride, b->sx + dsx, b->sy + dsy, x + px, y + py, w, h, ARH_OR);
+}
+
+void ar_plane(int k, const void *bits, int stride, int sx, int sy,
+	int x, int y, int w, int h) {
+	blit_ctx_t b;
+	if (ar__s.mode != AR_MODE_FULL_COLOR || k < 0 || k >= ar__s.planes) return;
+	if (!clip_logical(&x, &y, &w, &h, &sx, &sy)) return;
+	b.bits = bits; b.stride = stride; b.sx = sx; b.sy = sy; b.c = k;
+	b.spr = NULL;
+	for_pieces(x, y, w, h, plane_piece, &b);
+}
+
+/* -- planes as layers -- */
+
+typedef struct {
+	const void *bits;
+	int stride, sx, sy, k, rop, bit;
+} pl_ctx_t;
+
+static bool plane_ok(int k) {
+	return ar__s.mode == AR_MODE_FULL_COLOR && k >= 0 && k < ar__s.planes;
+}
+
+static void pl_fill_piece(int x, int y, int w, int h, int dsx, int dsy, const void *ctx) {
+	const pl_ctx_t *p = (const pl_ctx_t *)ctx;
+	int px, py;
+	(void)dsx; (void)dsy;
+	plane_off(p->k, &px, &py);
+	arh_fill(x + px, y + py, w, h, p->bit);
+}
+
+static void pl_blit_piece(int x, int y, int w, int h, int dsx, int dsy, const void *ctx) {
+	const pl_ctx_t *p = (const pl_ctx_t *)ctx;
+	int px, py;
+	plane_off(p->k, &px, &py);
+	arh_blit(p->bits, p->stride, p->sx + dsx, p->sy + dsy, x + px, y + py, w, h, p->rop);
+}
+
+void ar_plane_fill(int k, int x, int y, int w, int h, int bit) {
+	pl_ctx_t p;
+	if (!plane_ok(k) || !clip_logical(&x, &y, &w, &h, NULL, NULL)) return;
+	p.k = k; p.bit = bit ? 1 : 0;
+	for_pieces(x, y, w, h, pl_fill_piece, &p);
+}
+
+static void pl_blit(int k, const void *bits, int stride, int sx, int sy,
+	int x, int y, int w, int h, int rop) {
+	pl_ctx_t p;
+	if (!plane_ok(k) || !clip_logical(&x, &y, &w, &h, &sx, &sy)) return;
+	p.bits = bits; p.stride = stride; p.sx = sx; p.sy = sy; p.k = k; p.rop = rop;
+	for_pieces(x, y, w, h, pl_blit_piece, &p);
+}
+
+void ar_plane_or(int k, const void *bits, int stride, int sx, int sy,
+	int x, int y, int w, int h) {
+	pl_blit(k, bits, stride, sx, sy, x, y, w, h, ARH_OR);
+}
+
+void ar_plane_andn(int k, const void *bits, int stride, int sx, int sy,
+	int x, int y, int w, int h) {
+	pl_blit(k, bits, stride, sx, sy, x, y, w, h, ARH_ANDN);
+}
+
+void ar_plane_line(int k, int x0, int y0, int x1, int y1, int op) {
+	ar_plane_line_rows(k, x0, y0, x1, y1, op, -32768, 32767);
+}
+
+void ar_plane_line_rows(int k, int x0, int y0, int x1, int y1, int op, int y0clip, int y1clip) {
+	int px, py, cx0, cy0, cx1, cy1;
+	if (!plane_ok(k)) return;
+	if (ar__s.targets_stale) arh_targets();
+	if (!ar__s.can_draw) return;
+	plane_off(k, &px, &py);
+	px += ar__s.ox; py += ar__s.oy;
+	/* the clip in framebuffer coordinates; in full screen the one
+	 * visible rectangle is the whole picture */
+	cx0 = px + clip_r.x; cy0 = py + clip_r.y;
+	cx1 = px + clip_r.x + clip_r.w - 1; cy1 = py + clip_r.y + clip_r.h - 1;
+	if (y0clip > -32768 && py + y0clip > cy0) cy0 = py + y0clip;
+	if (y1clip < 32767 && py + y1clip < cy1) cy1 = py + y1clip;
+	if (cy1 < cy0) return;
+	arh_line(x0 + px, y0 + py, x1 + px, y1 + py, op, cx0, cy0, cx1, cy1);
 }
 
 void ar_bitmap(const void *bits, int stride, int sx, int sy,
@@ -255,7 +382,7 @@ static void sprite_piece(int x, int y, int w, int h, int dsx, int dsy,
 
 	if (ar__s.mode == AR_MODE_FULL_COLOR) {
 		int k;
-		for (k = 0; k < 4; k++) {
+		for (k = 0; k < ar__s.planes; k++) {
 			int px, py;
 			plane_off(k, &px, &py);
 			if (s->plane[k])
@@ -317,7 +444,7 @@ static int hexval(char ch) {
 	return -1;
 }
 
-static bool sprite_alloc(ar_sprite_t *s, int w, int h, const bool used[4]) {
+static bool sprite_alloc(ar_sprite_t *s, int w, int h, const bool used[8]) {
 	int words, k;
 	s->w = (int16_t)w;
 	s->h = (int16_t)h;
@@ -328,7 +455,7 @@ static bool sprite_alloc(ar_sprite_t *s, int w, int h, const bool used[4]) {
 	s->mask = pool_take(words);
 	s->mono = pool_take(words);
 	if (!s->mask || !s->mono) return false;
-	for (k = 0; k < 4; k++) {
+	for (k = 0; k < 8; k++) {
 		s->plane[k] = NULL;
 		if (used[k]) {
 			s->plane[k] = pool_take(words);
@@ -343,8 +470,13 @@ static void setbit(uint32_t *b, int stride, int x, int y) {
 }
 
 bool ar_sprite_from_pixels(ar_sprite_t *s, const uint8_t *px, int w, int h) {
+	return ar_sprite_from_indices(s, px, NULL, w, h);
+}
 
-	bool used[4] = { false, false, false, false };
+bool ar_sprite_from_indices(ar_sprite_t *s, const uint8_t *px,
+	const uint8_t *opaque, int w, int h) {
+
+	bool used[8] = { false, false, false, false, false, false, false, false };
 	int x, y, k;
 
 	memset(s, 0, sizeof(*s));
@@ -352,8 +484,8 @@ bool ar_sprite_from_pixels(ar_sprite_t *s, const uint8_t *px, int w, int h) {
 	for (y = 0; y < h; y++)
 		for (x = 0; x < w; x++) {
 			uint8_t c = px[y * w + x];
-			if (c == 0xff) continue;
-			for (k = 0; k < 4; k++) if ((c >> k) & 1) used[k] = true;
+			if (opaque ? !opaque[y * w + x] : c == 0xff) continue;
+			for (k = 0; k < 8; k++) if ((c >> k) & 1) used[k] = true;
 		}
 
 	if (!sprite_alloc(s, w, h, used)) return false;
@@ -362,12 +494,11 @@ bool ar_sprite_from_pixels(ar_sprite_t *s, const uint8_t *px, int w, int h) {
 		for (x = 0; x < w; x++) {
 			uint8_t c = px[y * w + x];
 			const uint8_t *ink;
-			if (c == 0xff) continue;
-			c &= 15;
+			if (opaque ? !opaque[y * w + x] : c == 0xff) continue;
 			setbit(s->mask, s->stride, x, y);
-			for (k = 0; k < 4; k++)
+			for (k = 0; k < 8; k++)
 				if ((c >> k) & 1) setbit(s->plane[k], s->stride, x, y);
-			ink = ar__s.d ? ar__s.d->ink[c].row : ar_ink_white.row;
+			ink = ar__s.d ? ink_of(c) : ar_ink_white.row;
 			if (ink[y & 7] & (0x80u >> (x & 7)))
 				setbit(s->mono, s->stride, x, y);
 		}
@@ -979,20 +1110,20 @@ int ar_parts_live(void) {
  * =================================================================== */
 
 void ar_pal(int i, uint16_t rgb) {
-	i &= 15;
+	i &= 255;
 	rgb &= 0xfff;
 	if (ar__s.pal[i] == rgb) return;
 	ar__s.pal[i] = rgb;
-	ar__s.pal_dirty |= (uint16_t)(1u << i);
+	ar__s.pal_dirty[i >> 5] |= 1u << (i & 31);
 }
 
 uint16_t ar_pal_get(int i) {
-	return ar__s.pal[i & 15];
+	return ar__s.pal[i & 255];
 }
 
 void ar_pal_load(const uint16_t *rgb, int n) {
 	int i;
-	for (i = 0; i < n && i < 16; i++) ar_pal(i, rgb[i]);
+	for (i = 0; i < n && i < 256; i++) ar_pal(i, rgb[i]);
 }
 
 uint16_t ar_rgb_mix(uint16_t a, uint16_t b, int t) {
@@ -1486,8 +1617,10 @@ void ar__core_init(const ar_desc_t *d) {
 	ar__s.d = d;
 	ar__s.mode = AR_MODE_WINDOW;
 	ar__s.want_color = !d->prefer_mono;
-	for (i = 0; i < 16; i++) ar__s.pal[i] = d->palette[i] & 0xfff;
-	ar__s.pal_dirty = 0xffff;
+	for (i = 0; i < 256; i++) ar__s.pal[i] = d->palette[i & 15] & 0xfff;
+	ar__pal_all_dirty();
+	ar__s.colours_want = 16;
+	ar__s.planes = 4;
 	n_cur = n_prev = 0;
 	ov_forget = true;
 	pool_used = 0;

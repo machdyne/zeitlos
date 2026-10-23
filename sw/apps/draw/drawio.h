@@ -55,6 +55,7 @@ enum {
 	DRAW_IO_E_WRITE,	// a write (or the close that flushes it) failed
 	DRAW_IO_E_RENAME,	// written, but the .part could not become the file
 	DRAW_IO_E_KEPT,		// the old file is gone and the new one is still NAME.part
+	DRAW_IO_E_COLOUR,	// a colour picture (planes in the flags, zbm.h): pix's
 };
 
 #define DRAW_IO_CHUNK	2048		// bytes a read or write

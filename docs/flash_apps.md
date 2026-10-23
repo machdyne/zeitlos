@@ -390,6 +390,19 @@ would not have done: it is in neither.
 Game-mode colour's second VRAM sheet ([color.md](color.md), "More than
 four planes") took it to 140,276 -- `zgfx`'s fills and blits can be told
 to reach below row 479, a variable and one store -- 12 bytes inside.
+pix's icons in the dock (`icons.zic`, [dock.md](dock.md)) and the
+pointer kept for a game that asks took `wm` to 140,848: its budget went
+to 138K, paid from `usb`'s, 55K to 54K -- `usb` now builds with
+`ZFMT_NO64` (it prints no 64-bit number), which took libgcc's 64-bit
+division out of it, 55,396 to 52,580. The boot set's RAM stays 1,024
+of 1,024 KB.
+The same change took `wm` (stored, so its flash is its `.bin`) to
+106,524 bytes with the release toolchain, 28 over its 104K of flash:
+that budget went to 105K, from the region's unassigned room (671KB of
+budgets plus the 60K reserve is 731KB of 848KB).
+In flash, `wm` (stored, so its flash is its `.bin`) passed its 104K by
+28 bytes, at 106,524: the flash budget went to 105K, from the region's
+unassigned part, which the flash rule still has room for.
 The next byte for the boot set comes out of another budget, or out of
 something made smaller. `mkzar.py --max` checks the archive itself
 against the region (`CORE_ZAR_MAX`, 848K), so a budget that turns out
@@ -401,7 +414,7 @@ code, data and `.bss`, not its stack). They are `CORE_BUDGETS` in the
 top-level `Makefile`, next to `CORE_APPS`:
 
 ```
-CORE_BUDGETS = fs=36K/75K usb=35K/55K wm=104K/137K net=148K/284K term=62K/152K \
+CORE_BUDGETS = fs=36K/75K usb=35K/54K wm=105K/138K net=148K/284K term=62K/152K \
 	console=10K/13K cron=18K/48K text=60K/156K files=57K/120K repl=140K/304K
 CORE_RESERVE = 60K
 CORE_STORE = wm net

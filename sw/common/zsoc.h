@@ -784,6 +784,17 @@ static inline bool z_soc_feature_confirmed_absent(uint32_t feature) {
 // that predates the bit stores it and ignores it: the cursor stays.
 #define Z_SOCCTL_CURSOR_HIDE (1u << 1)
 
+// The pointer in screen coordinates while game mode is on (rtl/socctl.v
+// CTRL bit 2): drawn at the view's origin plus half the pointer, where
+// it is on the doubled screen. wm sets it while a program that asked to
+// keep the pointer holds the grab (Z_WM_GAME_GRAB_POINTER: pix). An
+// older bitstream stores it and ignores it.
+#define Z_SOCCTL_CURSOR_SCREEN (1u << 2)
+// Reads 1 in CTRL on a bitstream that has CURSOR_SCREEN (written as 0):
+// on one without, the pointer stays hidden instead of drawn in the wrong
+// place.
+#define Z_SOCCTL_HAS_SCREEN  (1u << 31)
+
 // true only if this bitstream actually has rtl/socctl.v. Same magic
 // check, and the same reason for it, as z_soc_csrs_present().
 static inline bool z_socctl_present(void) {
@@ -800,12 +811,14 @@ static inline void z_cursor_set_busy(bool busy) {
 	reg_socctl_ctrl = busy ? Z_SOCCTL_CURSOR_BUSY : 0;
 }
 
-// Both cursor bits at once: the shape, and whether it is drawn. CTRL is
-// written whole, so the caller owns both (wm does; z_cursor_set_busy()
-// above shows the cursor again as a side effect).
-static inline void z_cursor_set(bool busy, bool hidden) {
+// The cursor bits at once: the shape, whether it is drawn, and whether
+// it is in screen coordinates in game mode. CTRL is written whole, so the
+// caller owns all of them (wm does; z_cursor_set_busy() above shows the
+// cursor again as a side effect).
+static inline void z_cursor_set(bool busy, bool hidden, bool screen) {
 	reg_socctl_ctrl = (busy ? Z_SOCCTL_CURSOR_BUSY : 0) |
-		(hidden ? Z_SOCCTL_CURSOR_HIDE : 0);
+		(hidden ? Z_SOCCTL_CURSOR_HIDE : 0) |
+		(screen ? Z_SOCCTL_CURSOR_SCREEN : 0);
 }
 
 // -- the cursor's shapes (rtl/socctl.v CURSOR and CURDATA; docs/cursor.md) --

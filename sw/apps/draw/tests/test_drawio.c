@@ -216,6 +216,11 @@ static void test_load_bad(void) {
 	file_put(path, &h, Z_BM_HEADER_SIZE, old_img, 320 / 32 * 4 * 240);
 	CHECK(load_like_draw(path, 0) == -DRAW_IO_E_SIZE);
 
+	z_bm_header_init(&h, 640, 480);					// a colour picture (pix's)
+	h.flags = 4;
+	file_put(path, &h, Z_BM_HEADER_SIZE, old_img, 20000);
+	CHECK(load_like_draw(path, 0) == -DRAW_IO_E_COLOUR);
+
 	put_zbm(path, old_img, BYTES);					// a read fails
 	hostfs_fault.read_at = 5;
 	CHECK(load_like_draw(path, 0) == -DRAW_IO_E_READ);

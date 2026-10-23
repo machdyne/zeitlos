@@ -227,6 +227,12 @@ module gpu_video #(
 	input [9:0] curs_y,
 	input curs_alt,
 	input curs_hide,
+	// curs_scr: in game mode, curs_x/y are SCREEN coordinates (0..639,
+	// 0..479 on the doubled picture) rather than framebuffer ones: the
+	// cursor is drawn at half of them, where the pointer is on screen
+	// with the view at (0, 0) -- the arcade runtime's (socctl CTRL bit
+	// 2, docs/socctl.md). A shift is wiring: two 10-bit 2:1 muxes.
+	input curs_scr,
 	input [3:0] curs_slots,
 	input curs_we,
 	input [5:0] curs_waddr,
@@ -1940,12 +1946,17 @@ module gpu_video #(
 
 	reg [5:0] c_a;
 	reg [9:0] c_px;
+	// The pointer in framebuffer coordinates: curs_x/y as they are, or,
+	// with curs_scr in game mode, half of them (the view at (0, 0)).
+	wire c_half = curs_scr && game_active;
+	wire [9:0] c_fx = c_half ? { 1'b0, curs_x[9:1] } : curs_x;
+	wire [9:0] c_fy = c_half ? { 1'b0, curs_y[9:1] } : curs_y;
 	reg c_rv;
 	reg c_rd, c_lat;
 	reg [15:0] c_row;
 
 	wire c_on = (CURSOR_AVAIL != 0);
-	wire [10:0] c_dy = { 1'b0, y } - { 1'b0, curs_y };
+	wire [10:0] c_dy = { 1'b0, y } - { 1'b0, c_fy };
 	wire [10:0] c_dx = { 1'b0, x } - { 1'b0, c_px };
 	wire c_cin = c_rv && ((c_dx[10:3] == 8'h00) || (c_dx[10:3] == 8'hff));
 	wire [15:0] c_rowv = (COLOR_AVAIL != 0) ? c_row : cb_q[15:0];
@@ -1979,7 +1990,7 @@ module gpu_video #(
 			c_a <= { (curs_alt ? curs_slots[3:2] : curs_slots[1:0]), ~c_dy[3], c_dy[2:0] };
 			c_rv <= c_on && !curs_hide &&
 				((c_dy[10:3] == 8'h00) || (c_dy[10:3] == 8'hff));
-			c_px <= curs_x;
+			c_px <= c_fx;
 		end
 	end
 

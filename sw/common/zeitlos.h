@@ -714,6 +714,11 @@ bool z_pid_lookup(const char *name, uint32_t *pid);
 // latency it sits inside.
 bool z_game_set_enabled(bool on, bool wrap);
 
+// Whether the pointer stays shown in this program's next game mode
+// (Z_WM_GAME_GRAB_POINTER): for one drawn with the mouse. Off unless
+// set; z_game_set_enabled() and z_screen_grab() send it.
+void z_game_set_pointer(bool keep);
+
 // Take the whole 640x480 screen, or give it back, WITHOUT game mode's
 // 320x240 view: the app draws the desktop's own framebuffer, wm stops
 // managing windows and sends every key and click to the app (the same

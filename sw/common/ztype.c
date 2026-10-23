@@ -102,6 +102,13 @@ const z_ftype_t z_ftypes[] = {
 	// still opens a .MD.
 	{ "ZBM", "draw", "Bitmap image"  },
 
+	// The system's own small one-bit pictures -- icon sets, fonts and
+	// sprite sheets -- all open in pix (docs/pix_app.md). A ZBM stays
+	// with draw above; pix opens one when asked directly.
+	{ "ZIC", "pix",  "Icon set"      },
+	{ "ZFN", "pix",  "Font"          },
+	{ "ZSP", "pix",  "Sprite sheet"  },
+
 	// Images -- sw/apps/view, decoders in sw/common/zimg.c.
 	//
 	// PNG is listed even though its decoder is compiled out by

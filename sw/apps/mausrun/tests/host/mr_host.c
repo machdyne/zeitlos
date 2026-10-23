@@ -190,6 +190,9 @@ bool z_fb_hw_blit_mem_available(void) { return true; }
 bool z_fb_hw_rop_available(void) { return true; }
 bool z_fb_hw_dither_available(void) { return true; }
 void z_fb_hw_sync(void) { hold_bits(); }
+/* zcolor.c lets a layout of more than four planes reach rows 480 up;
+ * mausrun uses four, inside the 640x480 this host keeps */
+void z_fb_set_rows(int rows) { (void)rows; }
 
 /* ===================================================================
  * the system: files, speech, sound, wm

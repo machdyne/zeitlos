@@ -7,7 +7,7 @@ SRC_DIRS = $(COMMON_DIR)/games
 
 OBJS = zeitlos.o zobj.o zgfx.o zcolor.o zfont_data.o zwin.o zgame.o \
 	zspeak.o zcfg.o zfsapp.o zsfx.o \
-	sprites.o level.o levels_builtin.o phys.o progress.o sound.o mausrun.o
+	zsprite.o sprites.o art.o level.o levels_builtin.o phys.o progress.o sound.o mausrun.o
 
 # zgfx.c references the font tables (z_font_5x8 and friends) whenever
 # anything draws text, and they live in their own translation unit --
@@ -24,6 +24,11 @@ OBJS = zeitlos.o zobj.o zgfx.o zcolor.o zfont_data.o zwin.o zgame.o \
 # anyone noticing.
 sprites.o: sprites.c sprites.h
 	$(CC) $(CFLAGS) -c sprites.c -o sprites.o
+
+# art.c: the card's /data/mausrun/tiles.zsp and sprites.zsp laid over
+# the compiled-in art at start, read with sw/common/zsprite.c
+art.o: art.c art.h sprites.h
+	$(CC) $(CFLAGS) -c art.c -o art.o
 
 sound.o: sound.c sound.h
 	$(CC) $(CFLAGS) -c sound.c -o sound.o

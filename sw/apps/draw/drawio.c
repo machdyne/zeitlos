@@ -104,6 +104,9 @@ static int do_header(draw_io_t *io) {
 			return fail(io, DRAW_IO_E_NOTZBM);
 		if (!fs_seek(io->fh, 0)) return fail(io, DRAW_IO_E_READ);
 		io->legacy = true;
+	} else if (hdr.flags != 0) {
+		// a colour picture: draw is one bit a pixel
+		return fail(io, DRAW_IO_E_COLOUR);
 	} else if (hdr.width != io->w || hdr.height != io->h) {
 		return fail(io, DRAW_IO_E_SIZE);
 	}
@@ -201,6 +204,7 @@ const char *draw_io_error(int err) {
 	case DRAW_IO_E_WRITE:	return "The image could not be\nwritten completely.";
 	case DRAW_IO_E_RENAME:	return "The image was written\nbut could not replace\nthe old file.";
 	case DRAW_IO_E_KEPT:	return "The old file is gone;\nthe image is in the\n.part file beside it.";
+	case DRAW_IO_E_COLOUR:	return "That is a colour\npicture: open it\nin pix.";
 	default:				return "Something went wrong.";
 	}
 }

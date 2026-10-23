@@ -66,7 +66,8 @@ to the pixel path's timing, and lets software load shapes of its own.
   3; without it, they hold the built-in 9x9 X and Z. Nothing in flash
   or on a release card changes the pointer: only a file of yours does.
 
-`/data/wm/cursor.zsp` is a sprite sheet in pix's text format, with two
+`/data/wm/cursor.zsp` is a sprite sheet in pix's text format
+([pix_app.md](pix_app.md): Ctrl+N, `cursor` draws one), with two
 16x16 sprites named `normal` and `busy`:
 
 ```
@@ -112,7 +113,7 @@ they are written in `text`.
 
 | Address | Register | |
 |---|---|---|
-| `0x7000_0200` | CTRL | bit 0 busy (CURSOR's busy slot instead of its normal one), bit 1 hidden; unchanged |
+| `0x7000_0200` | CTRL | bit 0 busy (CURSOR's busy slot instead of its normal one), bit 1 hidden, bit 2 screen coordinates in game mode ([socctl.md](socctl.md)) |
 | `0x7000_0220` | CURSOR | bits 1:0 normal slot, bits 5:4 busy slot (reset 0, 1); bits 21:16 (lane 2) the address `{slot, row}` of the next CURDATA row. Reads `{0x5A4B "ZK", 10'b0, busy, 2'b0, normal}` |
 | `0x7000_023c` | CURDATA | write-only, whole words: a row, bit c = column c, 1 = invert. Lands on the next clock; the address moves on by one |
 
@@ -248,3 +249,5 @@ it could be placed out of context; that is the same in both.
 - Reboot (Ctrl+Alt+Del) with the large pair showing: the small X and Z
   until wm starts.
 - A game holding the screen: no pointer, as before.
+- pix full screen (F11): the pointer stays, where the mouse is on the
+  doubled picture, and draws where it points (CTRL bit 2, socctl.md).

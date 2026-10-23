@@ -1,0 +1,6 @@
+out/
+render_pix
+test_io
+test_edit
+test_anim
+test_import

@@ -199,6 +199,21 @@ typedef void (*z_img_gray_fn)(void *user, const uint8_t *gray, int y, int w);
 int z_img_decode_gray(z_img_t *im, z_img_fmt_t fmt, z_img_gray_fn row,
 	void *user);
 
+// Decodes to COLOUR rows: each output row, out_w pixels of R, G, B and
+// alpha (0 see-through .. 255), to `row`, as z_img_decode_gray() does
+// grey. Built with Z_IMG_HAVE_RGB (pix, which brings pictures in and
+// reduces them to its palette); a format whose decoder gives only grey
+// (JPEG, PNM's grey kinds, a one-bit ZBM) comes as grey. Alpha is the
+// PNG's (RGBA, grey + alpha, a palette's tRNS); 255 elsewhere.
+#ifndef Z_IMG_HAVE_RGB
+#define Z_IMG_HAVE_RGB 0
+#endif
+#if Z_IMG_HAVE_RGB
+typedef void (*z_img_rgba_fn)(void *user, const uint8_t *rgba, int y, int w);
+int z_img_decode_rgba(z_img_t *im, z_img_fmt_t fmt, z_img_rgba_fn row,
+	void *user);
+#endif
+
 // z_img_decode(), and `done(user, y)` once row y is in the document --
 // so a caller can show the rows decoded so far, or hand control back
 // every few rows (sw/common/zimgjob.h runs it in a coroutine). Rows

@@ -122,7 +122,7 @@ APP_SET = {
     "keyboard": "base", "jfont": "base", "read": "base", "ask": "base",
     "update": "base", "backup": "base",
     "sheet": "work", "slide": "work", "print": "work",
-    "convert": "work", "draw": "work", "view": "work",
+    "convert": "work", "draw": "work", "view": "work", "pix": "work",
     "automate": "work",
     "play": "audio", "midi": "audio", "mmod": "audio", "track": "audio",
     "tts": "audio", "audiotest": "audio",
@@ -136,7 +136,7 @@ APP_SET = {
     "casino": "games", "poker": "games", "roulette": "games",
     "blackjack": "games", "slots": "games", "craps": "games",
     "snake": "games", "blocks": "games", "bricks": "games",
-    "mausrun": "games", "chess": "games", "kidgames": "games",
+    "mausrun": "games", "planedemo": "games", "chess": "games", "kidgames": "games",
     "chip8": "games", "space3d": "games", "gpu3d": "games",
     "gpudemo": "games",
 }
@@ -267,6 +267,7 @@ SUPPLEMENTAL = [
     (zcard("Z_DIR_APPS", "read"), "sw/apps/read/read.bin"),
     (zcard("Z_DIR_APPS", "ask"), "sw/apps/ask/ask.bin"),
     (zcard("Z_DIR_APPS", "draw"), "sw/apps/draw/draw.bin"),
+    (zcard("Z_DIR_APPS", "pix"), "sw/apps/pix/pix.bin"),
     (zcard("Z_DIR_APPS", "info"), "sw/apps/info/info.bin"),
     (zcard("Z_DIR_APPS", "calc"), "sw/apps/calc/calc.bin"),
     (zcard("Z_DIR_APPS", "clock"), "sw/apps/clock/clock.bin"),
@@ -328,6 +329,7 @@ GAMES_DEMOS = [
     (zcard("Z_DIR_APPS", "blocks"), "sw/apps/blocks/blocks.bin"),
     (zcard("Z_DIR_APPS", "bricks"), "sw/apps/bricks/bricks.bin"),
     (zcard("Z_DIR_APPS", "mausrun"), "sw/apps/mausrun/mausrun.bin"),
+    (zcard("Z_DIR_APPS", "planedemo"), "sw/apps/planedemo/planedemo.bin"),
     (zcard("Z_DIR_APPS", "gpu3d"), "sw/apps/gpu3d/gpu3d.bin"),
     (zcard("Z_DIR_APPS", "gpudemo"), "sw/apps/gpudemo/gpudemo.bin"),
     (zcard("Z_DIR_APPS", "chip8"), "sw/apps/chip8/chip8.bin"),
@@ -641,6 +643,11 @@ _MAUSRUN_LV = os.path.join(_FONT_ROOT, "sw", "data", "mausrun", "levels")
 for _n in sorted(os.listdir(_MAUSRUN_LV)) if os.path.isdir(_MAUSRUN_LV) else []:
     if _n.endswith(".txt"):
         MAUSRUN_FILES.append((zcard("Z_DIR_MAUSRUN_LEVELS", _n), "sw/data/mausrun/levels/" + _n))
+# ...and its art, to open in pix (docs/mausrun.md, "Art"): the game reads
+# a copy saved one folder up, never these, so a release's own changes to
+# the art still arrive.
+for _n in ("tiles.zsp", "sprites.zsp"):
+    MAUSRUN_FILES.append((zcard("Z_DIR_MAUSRUN_ART", _n), "sw/data/mausrun/" + _n))
 
 # chip8's own ROMs, where its open dialog starts (docs/chip8_app.md).
 # An XO-CHIP demo; at 65,000 bytes it picks its own profile, so the

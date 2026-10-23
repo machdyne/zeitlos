@@ -19,15 +19,18 @@
  * -- the model --
  *
  * A game draws one 320x240 picture in LOGICAL coordinates (0,0 is the
- * top-left of the play area) and in colour INDICES 0..15. Where it ends
- * up is the runtime's business:
+ * top-left of the play area) and in colour INDICES 0..15 -- or up to 63
+ * or 255 after ar_set_colours(). Where it ends up is the runtime's
+ * business:
  *
  *   AR_MODE_WINDOW      a 320x240 content area in a fixed-size window,
  *                       monochrome, clipped to the part no other window
  *                       covers
  *   AR_MODE_FULL_MONO   game mode, the picture pixel-doubled, mono
  *   AR_MODE_FULL_COLOR  game mode with 16 colours: four bitplanes in
- *                       the four quadrants (docs/color.md, z_color_16)
+ *                       the four quadrants (docs/color.md, z_color_16);
+ *                       64 or 256 (z_color_64, z_color_256) where the
+ *                       program asked and the board has the planes
  *
  * In colour an index is a palette entry. In monochrome each index has
  * an INK -- an 8x8 pattern, anchored to the screen -- so the game says
@@ -166,6 +169,11 @@ typedef struct {
 	 * May be NULL. A copy moves whatever is in its rectangle, overlays
 	 * included: keep overlays out of what you copy. */
 	void (*before_paint)(void *user);
+
+	/* Keep the mouse pointer shown full screen. wm hides it while a
+	 * game holds the screen; a program drawn with the mouse (pix)
+	 * wants it. False for a game. */
+	bool pointer;
 } ar_desc_t;
 
 /* -- events -- */
@@ -226,6 +234,23 @@ uint32_t ar_frame(void);
 /* Frames since ar_init(), counted as ar_frame() returned them. */
 uint32_t ar_ticks(void);
 
+/* -- drawing on the frame boundary (docs/arcade.md, "Racing the beam") --
+ *
+ * ar_vsync_exact(true): ar_frame() sleeps only until just before the
+ * boundary it expects, then watches the frame counter without yielding,
+ * so it returns within microseconds of the start of vertical blanking
+ * rather than up to a scheduler tick (1.4 ms) late. It costs the last
+ * tick or two of each frame in a spin; a full-screen game that draws
+ * a lot straight into what is shown wants it.
+ *
+ * ar_frame_hook(fn): fn is called in ar_frame() straight after the
+ * boundary and the palette (and viewport) written there, before the
+ * runtime's own drawing: a program that queued its frame's drawing
+ * runs it there, from the top of the picture down, ahead of the beam.
+ * NULL removes it. */
+void ar_vsync_exact(bool on);
+void ar_frame_hook(void (*fn)(void));
+
 ar_mode_t ar_mode(void);
 bool ar_fullscreen(void);
 bool ar_color(void);              /* drawing in colour right now */
@@ -234,7 +259,35 @@ bool ar_set_fullscreen(bool on);  /* what F11 does; false if impossible */
 /* While a game takes typed letters (initials for a high score), C and M
  * are letters, not the colour and music keys. */
 void ar_text_input(bool on);
+
+/* -- dialogs (zdialog.h) from an arcade program --
+ *
+ * A file dialog or a prompt is a window, and wm shows no windows over
+ * game mode, so ar_dialog_begin() leaves full screen first, draws the
+ * picture once more and fills `ctx` (a z_dialog_ctx_t *) so the box
+ * keeps the window painted while it waits, as the F1 box does. Sound
+ * pauses. ar_dialog_end() after the box returns: every held key and
+ * button is released (the box had them) and the picture repainted. */
+void ar_dialog_begin(void *ctx);
+void ar_dialog_end(void);
 void ar_set_color(bool on);       /* what C does, in full screen */
+
+/* -- more than 16 colours --
+ *
+ * 16 (the default), 64 or 256: how many colours the program draws in.
+ * Returns how many full-screen colour shows on this board -- 16, 64 or
+ * 256, at most what was asked; an index above that is shown through its
+ * low bits, so a program that wants better reduces its art itself
+ * (zsprite.h). Takes effect at once, repainting, if colour is showing.
+ * The window and mono full screen are not affected. */
+int ar_set_colours(int n);
+/* What colour full screen shows now, or would: 16, 64 or 256. */
+int ar_colours(void);
+
+/* In monochrome, index c is drawn in ink[to16[c] & 15] instead of
+ * ink[c & 15]: for indices past 15, which ink stands in for each.
+ * `to16` has 256 entries and is kept by pointer; NULL is the default. */
+void ar_mono_map(const uint8_t *to16);
 
 /* -- players -- */
 
@@ -277,6 +330,38 @@ void ar_fill2(int x, int y, int w, int h, int c0, int c1, const ar_ink_t *pat);
 void ar_bitmap(const void *bits, int stride, int sx, int sy,
 	int x, int y, int w, int h, int c);
 
+/* One bitplane of a rectangle, opaque: plane k (0..7) of each pixel
+ * becomes its bit in `bits` (zgfx's layout, as ar_bitmap). Colour full
+ * screen only -- elsewhere it draws nothing. One pass (the blitter's
+ * COPY), so the plane is never blank in between; a bitstream without
+ * the blitter's ROPs clears and ORs. With a call per plane a
+ * program draws a picture of any indices without a fill per colour:
+ * what pix's canvas does. */
+void ar_plane(int k, const void *bits, int stride, int sx, int sy,
+	int x, int y, int w, int h);
+
+/* -- one plane at a time: planes as layers --
+ *
+ * Colour full screen only (elsewhere these draw nothing), in logical
+ * coordinates, clipped to the picture. A program that gives groups of
+ * planes to separate things -- a sky, a city, the rain -- draws and
+ * scrolls each group without touching the others, and the palette
+ * decides which shows in front (docs/arcade.md, "Planes as layers";
+ * planedemo is built this way). */
+void ar_plane_fill(int k, int x, int y, int w, int h, int bit);
+/* Plane k's bits set where `bits` has a bit (ar_plane_or), or cleared
+ * there (ar_plane_andn): a masked shape in one plane, in two calls. */
+void ar_plane_or(int k, const void *bits, int stride, int sx, int sy,
+	int x, int y, int w, int h);
+void ar_plane_andn(int k, const void *bits, int stride, int sx, int sy,
+	int x, int y, int w, int h);
+/* A line in plane k, by the line rasterizer: op 0 clear, 1 set, 2 XOR. */
+void ar_plane_line(int k, int x0, int y0, int x1, int y1, int op);
+/* The same line, only its pixels in rows y0clip..y1clip (inclusive):
+ * the same pixels a whole line would set there, so a line drawn a band
+ * at a time is the whole line. */
+void ar_plane_line_rows(int k, int x0, int y0, int x1, int y1, int op, int y0clip, int y1clip);
+
 /* Text in colour c, transparent elsewhere, scaled by 1..4 (each pixel
  * becomes scale x scale). Returns the width drawn. */
 int ar_text(int x, int y, const char *s, int c, const z_font_t *f, int scale);
@@ -291,7 +376,7 @@ int ar_text_width(const char *s, const z_font_t *f, int scale);
 typedef struct {
 	int16_t w, h, stride;
 	uint32_t *mask;
-	uint32_t *plane[4];   /* NULL where the plane has no bits */
+	uint32_t *plane[8];   /* NULL where the plane has no bits */
 	uint32_t *mono;       /* inks applied at sprite-local coordinates */
 } ar_sprite_t;
 
@@ -303,6 +388,11 @@ bool ar_sprite_make(ar_sprite_t *s, const char *const *rows, int w, int h,
 
 /* From an index array, w*h bytes, 0xff = transparent. */
 bool ar_sprite_from_pixels(ar_sprite_t *s, const uint8_t *px, int w, int h);
+
+/* The same with every index usable, 255 too: `opaque` (w*h bytes, or
+ * NULL for "0xff is transparent") says which pixels are drawn. */
+bool ar_sprite_from_indices(ar_sprite_t *s, const uint8_t *px,
+	const uint8_t *opaque, int w, int h);
 
 void ar_sprite(const ar_sprite_t *s, int x, int y);
 
@@ -369,8 +459,9 @@ bool ar_copy(int sx, int sy, int dx, int dy, int w, int h);
  * must stay clean while it shakes. */
 void ar_shake(int amp, int frames);
 
-/* Palette entries, written at the next frame boundary. Colour only;
- * kept and reloaded when colour comes back on. */
+/* Palette entries (0..255), written at the next frame boundary. Colour
+ * only; kept and reloaded when colour comes back on. Entries 16 and up
+ * start as entry (i & 15). */
 void ar_pal(int i, uint16_t rgb444);
 uint16_t ar_pal_get(int i);
 void ar_pal_load(const uint16_t *rgb, int n);

@@ -70,6 +70,7 @@
 #include "../../common/zdata.h"
 #include "../../common/zpaths.h"
 
+#include "art.h"
 #include "sprites.h"
 #include "sound.h"
 #include "level.h"
@@ -3559,6 +3560,7 @@ int main(void) {
 	}
 
 	progress_load();
+	art_load();                 /* the card's sheets, before the art is copied */
 	level_count = level_count_files();
 	stars_init();
 	strips_init();

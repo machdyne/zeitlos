@@ -57,6 +57,7 @@ module tb_cursor;
 	reg [9:0] curs_y = 240;
 	reg curs_alt = 0;
 	reg curs_hide = 0;
+	reg curs_scr = 0;
 	reg [3:0] curs_slots = 4'b0100;
 	reg curs_we = 0;
 	reg [5:0] curs_waddr = 0;
@@ -76,7 +77,7 @@ module tb_cursor;
 	gpu_video #(.COLOR_AVAIL(1'b1), .CURSOR_AVAIL(1'b1)) dut (
 		.pixel(1'b0),
 		.curs_x(curs_x), .curs_y(curs_y),
-		.curs_alt(curs_alt), .curs_hide(curs_hide),
+		.curs_alt(curs_alt), .curs_hide(curs_hide), .curs_scr(curs_scr),
 		.curs_slots(curs_slots),
 		.curs_we(curs_we), .curs_waddr(curs_waddr), .curs_wdata(curs_wdata),
 		.clk(clk), .pclk(pclk), .bclk(bclk), .resetn(resetn),
@@ -101,16 +102,21 @@ module tb_cursor;
 	wire [15:0] r_frame_ctr;
 	wire ref_pix;
 
+	// Where the pointer is in the framebuffer: as it is, or with
+	// curs_scr in game mode half of it.
+	wire [9:0] f_x = (curs_scr && game_en) ? { 1'b0, curs_x[9:1] } : curs_x;
+	wire [9:0] f_y = (curs_scr && game_en) ? { 1'b0, curs_y[9:1] } : curs_y;
+
 	gpu_cursor_ref rc (
 		.pclk(pclk), .pixel(ref_pix),
 		.gpu_x(rx), .gpu_y(ry),
-		.curs_x(curs_x), .curs_y(curs_y),
+		.curs_x(f_x), .curs_y(f_y),
 		.curs_alt(curs_alt), .curs_hide(curs_hide)
 	);
 
 	gpu_video #(.COLOR_AVAIL(1'b1)) rv (
 		.pixel(ref_pix),
-		.curs_x(10'd0), .curs_y(10'd0), .curs_alt(1'b0), .curs_hide(1'b0),
+		.curs_x(10'd0), .curs_y(10'd0), .curs_alt(1'b0), .curs_hide(1'b0), .curs_scr(1'b0),
 		.curs_slots(4'd0), .curs_we(1'b0), .curs_waddr(6'd0), .curs_wdata(32'd0),
 		.clk(clk), .pclk(pclk), .bclk(bclk), .resetn(resetn),
 		.video_mode(video_mode),
@@ -162,8 +168,8 @@ module tb_cursor;
 		if (is_visible && (check_ref || check_shape) && dut.c_d)
 			seen = seen + 1;
 		if (is_visible && check_shape) begin
-			dx = px1 - curs_x + 8;
-			dy = py1 - curs_y + 8;
+			dx = px1 - f_x + 8;
+			dy = py1 - f_y + 8;
 			sl = curs_alt ? curs_slots[3:2] : curs_slots[1:0];
 			want = !curs_hide && dx >= 0 && dx < 16 && dy >= 0 && dy < 16 &&
 				shape[sl * 16 + dy][dx];
@@ -300,6 +306,17 @@ module tb_cursor;
 		mode(1, 1, 600, 0, 0);
 		frame(1, 120, 0, 0, "wrap, just past the seam");
 		frame(638, 120, 1, 0, "wrap, just before it");
+
+		$display("game mode, the pointer in screen coordinates (pix):");
+		curs_scr = 1;
+		mode(1, 1, 0, 0, 0);
+		frame(320, 240, 0, 0, "screen, the centre");
+		frame(0, 0, 1, 0, "screen, top left");
+		frame(639, 479, 0, 0, "screen, bottom right");
+		frame(401, 123, 0, 0, "screen, odd");
+		mode(1, 0, 0, 0, 1);
+		frame(260, 180, 1, 0, "screen, in colour");
+		curs_scr = 0;
 
 		$display("16 colours:");
 		mode(1, 0, 0, 0, 1);
