@@ -938,6 +938,22 @@ module sysctl #()
 `endif
 
 
+	// HID interrupts, cpu_irq[5]/[6], with no HID source at all --
+	// neither `USB_HID nor `USB_HOST (Klinge, headless). They used to be
+	// declared only inside those two blocks, so here the always block
+	// below read an UNDECLARED name: Verilog made it an implicit,
+	// undriven wire, and an undriven LUT input on the ECP5 reads as 1.
+	// cpu_irq[5] stuck high, and bit 5 is latched in LATCHED_IRQ, so
+	// the HID interrupt re-fired the instant its handler returned: the
+	// crawl described above for ethernet -- console output line by
+	// line, everything else in step. Tied low, declared, explicit.
+`ifndef USB_HID
+`ifndef USB_HOST
+	wire wbs_usb0_int = 1'b0;
+	wire wbs_usb1_int = 1'b0;
+`endif
+`endif
+
 	// Memory protection fault (rtl/mpu.v, docs/mpu.md). Declared here,
 	// ahead of the block below that reads it; driven by mpu_i, or 0
 	// without `MPU.
