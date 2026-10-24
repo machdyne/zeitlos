@@ -1002,8 +1002,8 @@ typedef struct {
 // Fetches object `obj` into card file `upd`, checking it. UPD_OK, or
 // UPD_ERR with a reason said; stopped: -10.
 //
-// Checked by CRC-32 and size; by SHA-256 too with -v (`strong`) or for
-// an entry with no CRC. Software SHA-256 here is ~70 KB/s on a Lakritz,
+// Checked by CRC-32 and size; by SHA-256 too with -v or for a signed
+// release (`strong`), or for an entry with no CRC. Software SHA-256 here is ~70 KB/s on a Lakritz,
 // slower than TFTP delivers, so it would set the update's speed.
 //
 // `lz`: the object is LZ4 blocks (manifest format 3, release/lib/
@@ -1314,7 +1314,7 @@ static int sig_start(const upd_opts_t *o, const char *dir, const char *name) {
 	if (o->nkeys <= 0) {
 		say("update: no key to check %s's signature with: this update was "
 			"built without one,\n"
-			"        and /sys/zeitlos.cfg sets no system.update.key "
+			"        and " Z_PATH_SYS_CONFIG " sets no system.update.key "
 			"(docs/distribution.md)\n", name);
 		return UPD_ERR;
 	}
@@ -1353,7 +1353,7 @@ static int sig_start(const upd_opts_t *o, const char *dir, const char *name) {
 	say("update: %s is signed%s%s, but not by a key this machine trusts.\n"
 		"        If the distribution changed its key, set system.update.key "
 		"in\n"
-		"        /sys/zeitlos.cfg or flash a newer kernel and core apps "
+		"        " Z_PATH_SYS_CONFIG " or flash a newer kernel and core apps "
 		"(docs/distribution.md).\n",
 		name, fp[0] ? " by key " : "", fp);
 	return UPD_ERR;

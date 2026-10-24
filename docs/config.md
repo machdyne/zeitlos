@@ -38,7 +38,7 @@ travel with the card. `settings` edits them; see
 | --- | --- | --- | --- |
 | `apps.arcade.skill` | `easy` | `snake`, `blocks`, `bricks`, `mausrun` | how hard the arcade games start: `easy`, `normal` (the games as they were) or `hard`; a choice made in a game's menu is remembered there and wins ([arcade.md](arcade.md#skill)) |
 | `apps.backup.to` | `/usb/backup` | `backup` | the folder on the backup drive that backups go to ([backup.md](backup.md#settings)) |
-| `apps.backup.from` | `/home /data /sys/zeitlos.cfg /sys/net.cfg` | `backup` | folders and files backed up, separated by spaces (quotes around a path with spaces) |
+| `apps.backup.from` | `/home /data /sys/zeitlos.cfg` | `backup` | folders and files backed up, separated by spaces (quotes around a path with spaces) |
 | `apps.backup.skip` | `/data/ask *.tmp` | `backup` | left out: a path starting with `/`, or a name pattern (`*`, `?`); `none` for nothing beyond the fixed rules |
 | `apps.backup.keep` | `10` | `backup` | the newest backups never thinned to make room |
 | `apps.backup.verify` | `yes` | `backup` | read every copy back before its backup is complete |

@@ -269,7 +269,7 @@ store's on-board test (`kv test`) is now left out by default; `make
 KV_TEST=1` builds it back in for a hardware check. The kernel then had
 3,488 bytes of headroom, with netserve's config keys in (704 with `kv
 test`); the current figure is in
-[kernel.md](kernel.md#the-256kb-image-budget).
+[kernel.md](kernel.md#the-kernel-image-budget).
 
 ## Open: encryption
 

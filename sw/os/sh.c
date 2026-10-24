@@ -202,8 +202,8 @@ static int core_load_exec(uint32_t dst, const char *name,
 	if (info->compressed)
 		printf("init: %s loaded in %ld ms (%ld ms unpacking, %ld ms of it on the CPU)\n",
 			name, (long)(t0 * 1000u / Z_TICK_HZ),
-			(long)(k_exec_unpack_ticks * 1000u / Z_TICK_HZ),
-			(long)(k_exec_unpack_cpu * 1000u / Z_TICK_HZ));
+			(long)(k_exec_unpack_ticks[z_pid] * 1000u / Z_TICK_HZ),
+			(long)(k_exec_unpack_cpu[z_pid] * 1000u / Z_TICK_HZ));
 	else
 		printf("init: %s loaded in %ld ms\n", name, (long)(t0 * 1000u / Z_TICK_HZ));
 	return r;

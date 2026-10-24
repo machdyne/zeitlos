@@ -939,6 +939,17 @@ zapi:
 abi:
 	python3 tools/gen_abi.py
 
+# Every host test in the tree, one line a suite, logs in output/tests/
+# (docs/build.md, "Tests"). Needs no BOARD and no FPGA toolchain.
+# `make test-rtl` adds the RTL simulations (iverilog).
+test:
+	python3 tools/run_tests.py
+
+test-rtl:
+	python3 tools/run_tests.py --rtl
+
+.PHONY: test test-rtl
+
 $(CORE_FILES_OUT)/docs/%.txt: docs/%.md tools/md2txt.py
 	python3 tools/md2txt.py $< $@
 

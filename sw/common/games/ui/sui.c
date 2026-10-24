@@ -18,6 +18,7 @@
 
 #include "sui.h"
 #include "../zarcade.h"
+#include "../../zpaths.h"
 
 extern const z_font_t z_font_5x8;
 
@@ -1272,7 +1273,7 @@ static bool file_box(int kind, const char *start_dir, const char *suggested,
 	box.esc_value = SUI_CANCEL;
 
 	n = start_dir ? (int)strlen(start_dir) : 0;
-	if (n <= 0 || n >= PATH_MAX || start_dir[0] != '/') strcpy(path, "/home");
+	if (n <= 0 || n >= PATH_MAX || start_dir[0] != '/') strcpy(path, Z_DIR_HOME);
 	else {
 		strcpy(path, start_dir);
 		while (n > 1 && path[n - 1] == '/') path[--n] = 0;

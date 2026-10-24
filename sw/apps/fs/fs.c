@@ -627,6 +627,8 @@ static void usb_poll(bool force) {
 
 static bool gone(uint32_t pid);
 static void sweep_before(void);
+static void sweep_dead(void);
+static bool owner_gone(uint32_t pid, uint32_t serial);
 
 // A slot can be given to another client once its own has copied its
 // last reply: it has sent something since (a client copies before it
@@ -1324,11 +1326,14 @@ static int32_t op_syncall(void) {
 
 // Tell the watchers that have something to hear and may hear it. A
 // full mailbox: later (the next change, or the idle loop).
+static void watch_end(uint32_t i);
 static void watch_kick(void) {
 	for (uint32_t i = 0; i < Z_FS_WATCHES; i++) {
 		fs_watch_t *w = watches[i];
-		if (w && w->pid && w->armed && w->pending &&
-			z_msg_new_send(w->pid, Z_FS_CHANGED, i, z_obj_none()) == Z_OK)
+		if (!w || !w->pid || !w->armed || !w->pending) continue;
+		// not to whoever has the pid now, if the watcher is gone
+		if (owner_gone(w->pid, w->serial)) { watch_end(i); continue; }
+		if (z_msg_new_send(w->pid, Z_FS_CHANGED, i, z_obj_none()) == Z_OK)
 			w->armed = false;
 	}
 }
@@ -1371,7 +1376,12 @@ static int32_t op_watch(const z_fsreq_t *rq, uint32_t pid) {
 	if (!real) return -Z_ENAMETOOLONG;
 	if (!real[0] || nfs_path(rq->path)) return -Z_EINVAL;
 	for (i = 0; i < Z_FS_WATCHES && watches[i] && watches[i]->pid; i++) ;
-	if (i == Z_FS_WATCHES) return -Z_EMFILE;
+	if (i == Z_FS_WATCHES) {
+		// a watcher that died may hold one until the idle sweep
+		sweep_dead();
+		for (i = 0; i < Z_FS_WATCHES && watches[i] && watches[i]->pid; i++) ;
+		if (i == Z_FS_WATCHES) return -Z_EMFILE;
+	}
 	fs_watch_t *w = watches[i] ? watches[i] : malloc(sizeof *w);
 	if (!w) return -Z_ENOSPC;
 	memset(w, 0, sizeof *w);
@@ -1387,7 +1397,8 @@ static int32_t op_watch(const z_fsreq_t *rq, uint32_t pid) {
 }
 
 static fs_watch_t *watch_of(int32_t wd, uint32_t pid) {
-	if (wd < 0 || wd >= Z_FS_WATCHES || !watches[wd] || !pid || watches[wd]->pid != pid)
+	if (wd < 0 || wd >= Z_FS_WATCHES || !watches[wd] || !pid || watches[wd]->pid != pid ||
+		owner_gone(pid, watches[wd]->serial))	// the pid's, but another process's now
 		return NULL;
 	return watches[wd];
 }

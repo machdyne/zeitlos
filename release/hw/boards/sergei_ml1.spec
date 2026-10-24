@@ -55,8 +55,9 @@ defines =
     GPU_DDMI
     COLOR
     GAME_PLANES=8
+    COLOR_WINDOW
     UART0
-    USB_HID
+    USB_HOST
     SPI_SDCARD
     ETH_RMII
     ETH_RMII_DRIVE_REFCLK

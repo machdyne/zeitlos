@@ -1432,6 +1432,33 @@ static void test_watch(void) {
 	int32_t all[Z_FS_WATCHES];
 	for (int i = 0; i < Z_FS_WATCHES; i++) CHECK((all[i] = zfs_watch("/home/w")) >= 0);
 	for (int i = 0; i < Z_FS_WATCHES; i++) CHECK(zfs_unwatch(all[i]) == 0);
+	// A watcher that dies holding all four, its pid given to a new
+	// program before any sweep: the new one cannot read or end the old
+	// watches, and the next watch, anyone's, sweeps first rather than
+	// being refused until the idle sweep.
+	for (int i = 0; i < Z_FS_WATCHES; i++) CHECK((all[i] = zfs_watch("/home/w")) >= 0);
+	generation[W]++;
+	CHECK(heard(W, all[0], &h, paths, sizeof paths) == -Z_EBADF);
+	client = W;
+	CHECK(zfs_unwatch(all[1]) == -Z_EBADF);
+	client = OTHER;
+	int32_t wo = zfs_watch("/home");
+	CHECK(wo >= 0);
+	CHECK(zfs_unwatch(wo) == 0);
+	// ... and a change is not told to whoever has a dead watcher's pid:
+	// the watch ends instead
+	client = W;
+	int32_t wk = zfs_watch("/home/w");
+	CHECK(wk >= 0);
+	generation[W]++;
+	changed_n = 0;
+	client = OTHER;
+	wput("/home/w/after2.txt", "a");
+	CHECK(changed_n == 0);
+	client = W;
+	CHECK(zfs_unwatch(wk) == -Z_EBADF);
+	for (int i = 0; i < Z_FS_WATCHES; i++) CHECK((all[i] = zfs_watch("/home/w")) >= 0);
+	for (int i = 0; i < Z_FS_WATCHES; i++) CHECK(zfs_unwatch(all[i]) == 0);
 	// paths fs cannot watch
 	CHECK(zfs_watch("/nfs/x") == -Z_EINVAL);
 	client = OTHER;

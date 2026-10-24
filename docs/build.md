@@ -143,7 +143,7 @@ path's table of resident fonts reached the link and failed it.
 `ZFMT = 1` in an app's Makefile replaces newlib's `printf` family with
 `sw/common/zfmt.c`. It is **off by default** and set by the three core
 apps in the flash archive whose size was the problem (`wm`, `net`,
-`term`, and `text` since it became one) and by the kernel ([kernel.md](kernel.md#the-256kb-image-budget)).
+`term`, and `text` since it became one) and by the kernel ([kernel.md](kernel.md#the-kernel-image-budget)).
 
 ### Why
 
@@ -379,6 +379,47 @@ message subject in `sw/` is not defined through a block in
 cannot see; [messaging.md](messaging.md#subjects-and-tags) has why. It
 takes about a second and needs only `python3`, which the build already
 does for `mkexec.py`.
+
+## Tests
+
+```
+$ make test                       # every host test, one line a suite
+$ tools/run_tests.py sheet net    # only suites whose name has one of these
+$ tools/run_tests.py --list       # what would run, and how
+$ make test-rtl                   # and the RTL simulations (iverilog)
+```
+
+`tools/run_tests.py` needs no `BOARD`, no RISC-V compiler and no FPGA
+toolchain: every suite builds for the host with `cc`. It runs, each as
+one suite:
+
+- every Makefile under `sw/` with a `test:` target, except `sw/ext`
+  (other projects, with their own tests) and a `tests/` folder its
+  parent's `make test` already runs;
+- the test Makefiles nothing else reaches: `sw/apps/{backup,update,fs,usb,zlink}/tests`,
+  and each `sw/common/tests/Makefile.<name>`;
+- `sw/os/tests` (the kernel's) and `sw/common/tests` (the shared code's
+  tests no app builds), whose Makefiles hold the recipe each test's
+  header comment gives;
+- the release tool's tests (`release/lib/selftest.py`,
+  `test_incremental.py`, `test_store.py`, `test_mkfatimg.py`) and
+  `tools/test_gen_abi.py`.
+
+Each suite's output is in `output/tests/<suite>.log`. A suite that
+fails because a program or a Python module is not installed
+(`mkfs.fat`, `verilator`, Pillow, `ebooklib`...) is reported as SKIP
+with what it needs, not FAIL; `--strict` makes that a failure. A part
+of a suite that skips itself (exit 77, "skipped") is noted on its line.
+The exit code is 1 when any suite failed.
+
+A new test goes where its code is: in the app's `make test`, or, for
+`sw/common` or `sw/os`, as a rule in that `tests/Makefile` with the
+command in the test's header comment. The runner finds it there.
+
+The release selftests fake `make` and write stand-in binaries for every
+core app and the kernel. They move the ones already built aside first
+and put them back afterwards, so running them leaves a working tree's
+builds as they were.
 
 ## Verifying a change to the build
 

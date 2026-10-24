@@ -540,7 +540,7 @@ with every open write handle. The same entry is the same file, so a
 long name and its 8.3 alias are caught alike. The probe borrows a free
 slot of the kernel's handle table rather than keeping a `FIL` of its
 own (a `FIL` carries a 512-byte buffer, and static storage counts
-against the [kernel's 256KB image](kernel.md#the-256kb-image-budget));
+against the [kernel's 256KB image](kernel.md#the-kernel-image-budget));
 with every slot in use it answers "busy".
 
 Read handles are never a problem (they write nothing back), and nor is

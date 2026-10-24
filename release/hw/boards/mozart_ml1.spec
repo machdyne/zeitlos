@@ -40,6 +40,7 @@ defines =
     GPU_DDMI
     COLOR
     GAME_PLANES=8
+    COLOR_WINDOW
     UART0
     USB_HOST
     SPI_SDCARD

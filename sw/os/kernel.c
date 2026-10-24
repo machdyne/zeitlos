@@ -511,6 +511,8 @@ z_obj_t *k_video_set_mode(z_obj_t *args) {
 // file" rather than an error about length. 64 matches
 // Z_FLIST_PATH_MAX (sw/common/zflist.h), which is what the browser
 // can produce.
+static void k_arg_child(uint32_t pid);	// below, by k_proc_launch()
+
 z_obj_t *k_proc_run(z_obj_t *args) {
 
 	if (!args) return (&z_fail);
@@ -540,6 +542,7 @@ z_obj_t *k_proc_run(z_obj_t *args) {
 	// (k_proc_launch()): the caller -- wm's dock, most often -- goes on
 	// at once. A load that fails is printed there, and the process ends.
 	if (size) pid = k_proc_launch(name, &xi, false);
+	else k_arg_child(0);	// not found: nobody will claim its argument
 
 	args->type = Z_UINT32;
 	args->val.uint32 = pid;
@@ -2669,9 +2672,19 @@ static k_ticket_t *k_ticket_of(uint32_t pid) {
 	return (k_ticket_t *)(uintptr_t)(z_procs[pid].base + z_procs[pid].size - K_TICKET_SPACE);
 }
 
+// Whose the launch argument the caller set is (Z_WM_ARG_CHILD, zwm.h):
+// launches overlap now. Sent as the caller; wm ignores it when the
+// caller set none. pid 0: the launch failed, and wm drops the argument
+// rather than keep it for whichever program asks next.
+static void k_arg_child(uint32_t pid) {
+	uint32_t wmp;
+	if (k_pid_find("wm0", &wmp) && wmp != pid)
+		z_msg_new_send(wmp, Z_WM_ARG_CHILD, 0, z_obj_uint32(pid));
+}
+
 uint32_t k_proc_launch(const char *name, const z_exec_info_t *xi, bool report) {
 	uint32_t pid = k_proc_create_exec(name, xi);
-	if (!pid) return 0;
+	if (!pid) { k_arg_child(0); return 0; }
 	uint32_t base = z_procs[pid].base, n = (uint32_t)(k_load_stub_end - k_load_stub);
 	k_ticket_t *t = k_ticket_of(pid);
 	t->magic = K_TICKET_MAGIC;
@@ -2685,14 +2698,7 @@ uint32_t k_proc_launch(const char *name, const z_exec_info_t *xi, bool report) {
 	z_icache_flush();
 	k_proc_flags(pid, Z_PROC_FLAG_LOADING, 0);
 	k_proc_start(pid);
-	// Whose the launch argument the caller set is (Z_WM_ARG_CHILD,
-	// zwm.h): launches overlap now. Sent as the caller; wm ignores it
-	// when the caller set none.
-	{
-		uint32_t wmp;
-		if (k_pid_find("wm0", &wmp) && wmp != pid)
-			z_msg_new_send(wmp, Z_WM_ARG_CHILD, 0, z_obj_uint32(pid));
-	}
+	k_arg_child(pid);
 	return pid;
 }
 
@@ -2727,8 +2733,8 @@ static void __attribute__((noinline, noreturn)) k_load_self(void) {
 			(unsigned long)base, (unsigned long)((z_uptime_ticks() - t.t0) * 1000u / Z_TICK_HZ));
 		if (t.xi.compressed)
 			printf(" (%lu ms unpacking, %lu on the CPU)",
-				(unsigned long)(k_exec_unpack_ticks * 1000u / Z_TICK_HZ),
-				(unsigned long)(k_exec_unpack_cpu * 1000u / Z_TICK_HZ));
+				(unsigned long)(k_exec_unpack_ticks[pid] * 1000u / Z_TICK_HZ),
+				(unsigned long)(k_exec_unpack_cpu[pid] * 1000u / Z_TICK_HZ));
 		printf("\n");
 	}
 	k_proc_flags(pid, 0, Z_PROC_FLAG_LOADING);
@@ -2889,6 +2895,7 @@ z_rv k_proc_dump(void) {
 		// bitmask at a serial console is needless work.
 		const char *state = "run";
 		if (z_procs[i].flags & Z_PROC_FLAG_DIE) state = "die";
+		else if (z_procs[i].flags & Z_PROC_FLAG_LOADING) state = "load";
 		else if (z_procs[i].flags & Z_PROC_FLAG_BLOCKED) state = "blk";
 		else if (!(z_procs[i].flags & Z_PROC_FLAG_ACTIVE)) state = "---";
 

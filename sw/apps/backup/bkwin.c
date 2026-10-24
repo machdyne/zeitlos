@@ -695,8 +695,20 @@ static bool cfg_save(const char *key, const char *val) {
 	return true;
 }
 
+// Not while anything is being backed up -- a watch backup included,
+// which busy_backup() leaves out: the job reads its folders from the
+// settings (cfg_from, the watch's paths), and saving them, or starting
+// the watch again, frees and rewrites what it is reading.
+static bool settings_busy(void) {
+	if (!bkjob_running()) return false;
+	snprintf(note, sizeof note, "Not yet: a backup is running");
+	repaint();
+	return true;
+}
+
 static void change_setting(int i) {
 	char cur[200], out[Z_CFG_VAL_MAX];
+	if (settings_busy()) return;
 	setting_value(i, cur, sizeof cur);
 	bool got;
 	if (i == S_WATCH) {
@@ -711,6 +723,8 @@ static void change_setting(int i) {
 			"Folders and files, separated by spaces\n"
 			"(quotes around one with a space in it):", cur, out, sizeof out);
 	}
+	// (a watch backup may have started while the prompt was up)
+	if (got && settings_busy()) got = false;
 	if (got) {
 		cfg_save(i == S_WATCH ? "apps.backup.watch" : "apps.backup.from", out);
 		watch_restart();        // From decides what may be watched, too
@@ -799,7 +813,7 @@ static const char HELP[] =
 	"Getting a file back: Show backups opens the drive in files. Each "
 	"folder is one backup, named by its date, and holds only the files "
 	"that had changed: the newest copy of a file is in the newest folder "
-	"that has it. Copy it back. A whole folder: `backup restore /home` "
+	"that has it. Copy it back. A whole folder: `backup restore " Z_DIR_HOME "` "
 	"in a shell.\n\n"
 	"Back up each save (Settings): while this window is open, each file "
 	"saved in those folders is backed up on its own 10 s later.\n\n"

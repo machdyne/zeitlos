@@ -147,22 +147,18 @@ time during a handshake.
 ## Testing
 
 Three host test suites, all clean under
-`-fsanitize=address,undefined`:
+`-fsanitize=address,undefined`, run by `make -C sw/test test-ssh` (and
+by `make test` at the top, with the rest):
 
-    cd sw/test
-    gcc -O2 -I../apps/net/ssh -I../ext/monocypher -o t_sha \
-        test_ssh_sha256.c ../apps/net/ssh/ssh_sha256.c && ./t_sha
+- `test_ssh_sha256.c` -- `ssh_sha256.c` over `sw/common/zsha256.c`;
+- `test_ssh_crypto.c` -- the wire encoding (mpint above all, strings,
+  name lists), the chacha20-poly1305 packet seal and open against a
+  reference, and host key fingerprints;
+- `test_ssh_session.c` -- whole sessions against a test server: a failed
+  negotiation, a tampered packet, an oversize one, a rekey mid-session
+  (`sw/common/z25519.c` for the key exchange and host key).
 
-    gcc -O2 -I../apps/net/ssh -I../ext/monocypher -o t_ssh \
-        test_ssh_crypto.c ../apps/net/ssh/ssh_wire.c \
-        ../apps/net/ssh/ssh_crypto.c ../apps/net/ssh/ssh_sha256.c \
-        ../ext/monocypher/monocypher.c && ./t_ssh
-
-    gcc -O2 -I../apps/net/ssh -I../ext/monocypher -o t_session \
-        test_ssh_session.c ../apps/net/ssh/ssh_proto.c \
-        ../apps/net/ssh/ssh_wire.c ../apps/net/ssh/ssh_crypto.c \
-        ../apps/net/ssh/ssh_sha256.c ../ext/monocypher/monocypher.c \
-        ../ext/monocypher/monocypher-ed25519.c && ./t_session
+The commands are in `sw/test/Makefile`.
 
 The test server interleaves a window adjust and stderr output before
 its reply to the shell request — placed there deliberately, because an

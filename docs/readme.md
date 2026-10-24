@@ -2,7 +2,8 @@
 
 The book is **[Timeless Computing](tc.md)**: an introduction to
 computing, FPGAs and the idea of a timeless computer, and the frame for
-everything below.
+everything below. [Philosophy](philosophy.md) says what that means for
+Zeitlos: the values decisions about the system are weighed against.
 
 The rest of this directory documents the implementation, one file per
 subsystem or app, grouped below by subject. To use the system, start
@@ -18,7 +19,10 @@ with [welcome](welcome.md); to program it, [kernel](kernel.md) and
 | [build](build.md) | How apps are built: `sw/common/app.mk` |
 | [boards](boards.md) | Utilisation and timing per board |
 | [ulx3s](ulx3s.md) | Radiona ULX3S notes |
+| [lebkuchen](lebkuchen.md) | Machdyne Lebkuchen (GateMate, RP2040 supervisor): port in progress |
 | [releases](releases.md) | Prebuilt images and `release/zrelease` |
+| [update](update.md) | Bringing a card up to date over the network: sets, signed releases, the ABI check |
+| [distribution](distribution.md) | Publishing releases of your own: name, URL, signing keys |
 | [dfu\_upgrade](dfu_upgrade.md) | Upgrading the DFU bootloader |
 | [config](config.md) | `/sys/zeitlos.cfg` |
 
@@ -101,6 +105,7 @@ with [welcome](welcome.md); to program it, [kernel](kernel.md) and
 | [kvstore](kvstore.md) | Flash key/value store |
 | [security](security.md) | Password and screen lock |
 | [console](console.md) | The console service |
+| [rescue\_console](rescue_console.md) | The kernel shell on the monitor and USB keyboard, when the desktop is gone |
 | [cron](cron.md) | Scheduled programs |
 | [backup](backup.md) | Dated backups of your files on a second drive, and getting any version back: a command, a window, and watch (each save backed up on its own while the window is open) |
 | [user\_input](user_input.md) | Keyboard and mouse |
@@ -133,6 +138,7 @@ with [welcome](welcome.md); to program it, [kernel](kernel.md) and
 | Document | Subject |
 |---|---|
 | [networking](networking.md) | The `net` service: IP, TCP, drivers |
+| [nfs](nfs.md) | A PC directory, read-only, at `/nfs` |
 | [netserve](netserve.md) | SSH, telnet and HTTP servers |
 | [bbs](bbs.md) | The BBS and `fed` federation: plan, progress, running it |
 | [fed](fed.md) | zfed, federation between BBS nodes: the protocol spec |
@@ -143,6 +149,7 @@ with [welcome](welcome.md); to program it, [kernel](kernel.md) and
 | [sha256\_hw](sha256_hw.md) | The SHA-256 block, and how software shares it |
 | [cryptobench](cryptobench.md) | What the cryptography costs on this machine |
 | [bbs\_linux](bbs_linux.md) | The BBS as a Linux server: telnet, SSH via OpenSSH, systemd |
+| [bbs\_deploy](bbs_deploy.md) | A BBS and its fed node on a Linux cloud server |
 | [ssh](ssh.md) | SSH client and server |
 | [tls](tls.md) | TLS 1.3 |
 | [tls\_resumption](tls_resumption.md) | Keep-alive and session resumption |
@@ -157,11 +164,13 @@ with [welcome](welcome.md); to program it, [kernel](kernel.md) and
 |---|---|
 | [terminal](terminal.md) | `term` |
 | [posix](posix.md) | POSIX userland |
+| [repl](repl.md) | Programming in Scheme: `repl`, its apps and examples |
 | [scheme](scheme.md) | Scheme in `repl` |
 | [scheme\_api](scheme_api.md) | The Scheme API: adding procedures |
 | [zapi](zapi.md) | Every Scheme procedure in `repl` (generated) |
 | [basic\_app](basic_app.md) | `basic`: the BASIC computer |
 | [editor](editor.md) | `te` in `repl` |
+| [zetta](zetta.md) | `zetta`: full-screen editor for prose in a terminal |
 | [zcc](zcc.md) | The C compiler |
 | [zcc\_bringup](zcc_bringup.md) | Testing zcc on hardware |
 | [zfpga](zfpga.md) | FPGA toolchain on the machine itself |
@@ -205,6 +214,7 @@ with [welcome](welcome.md); to program it, [kernel](kernel.md) and
 | [logic\_app](logic_app.md) | `logic` |
 | [gpu3d\_app](gpu3d_app.md) | `gpu3d` |
 | [pix\_app](pix_app.md) | `pix`: pixel editor for sprite sheets and pictures in up to 256 colours, animation, dock icons, fonts, the pointer; image import |
+| [draw\_app](draw_app.md) | `draw`: painting in black and white |
 | [zsp](zsp.md) | Sprite sheets (`.zsp`): text, up to 256 colours, each with what stands in for it on boards with fewer |
 
 ## Games

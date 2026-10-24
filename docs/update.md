@@ -28,7 +28,7 @@ Where releases come from, and why plain HTTP is safe, is
 | **Done** (round 2) | objects as LZ4 blocks (manifest format 3, "Compression"); host-tested, including a format-2 store read by the new `update` |
 | **Done** (round 3) | the ABI check ("ABI"): `tools/gen_abi.py`, `sw/common/zabi.h`, `Z_SYS_ABI`, the manifest's `abi` line, `update -f`; host-tested |
 | **Done** (round 4a) | sets ("Sets", manifest format 4, `-s`); signed releases over plain HTTP from the distribution's server as the default ([distribution.md](distribution.md)); the images `zeitlos`, `-serious`, `-base`, `-arkmedium`; zdocs and arklite as files an update knows; `zrelease http`, `keygen`, `ship` to the server; host-tested, including Monocypher checking signatures made by `release/lib/ed25519.py`. Then, after "out of memory writing the manifest" on a board with every set: the manifests are read from the card a line at a time instead of held in memory ("Inside") |
-| Next (round 4b) | `update` as a core app in flash, with a window: the installer for a board with no card |
+| After 0.0.7 (round 4b) | `update` as a core app in flash, with a window: the installer for a board with no card |
 | Later | NFS was dropped; core apps on the card on request |
 
 What an update **does not touch**: the kernel and the core apps in
@@ -294,8 +294,10 @@ Comparing the store's manifest with the card's `/sys/manifest`:
   and drops out of the manifest.
 - **In no manifest**: never touched. `/home`, files you made, an app put
   at `/apps/wm` by hand to shadow flash, the arkmed pack.
-- **Of a set the card does not have**: not written, unless the card has
-  that file already ("Sets").
+- **Of a set the card does not have**: not written, unless the card's
+  manifest lists that file already ("Sets"). On a card with no
+  manifest, run with `-s`, a file of a set not chosen stays as it is
+  and is not managed from then on.
 - **A card without `/sys/manifest`** (written before this): each shipped
   file of the shipped size is read and its CRC-32 compared (sizes that
   differ need no reading); `r` files are replaced if different, `k`
@@ -331,8 +333,9 @@ answer.
 
 Each file:
 
-1. fetched to `<path>.upd`, its CRC-32 taken as it arrives (SHA-256
-   too with `-v`); a wrong size or CRC
+1. fetched to `<path>.upd`, its CRC-32 taken as it arrives, and its
+   SHA-256 too when the release is signed (the default, over HTTP) or
+   with `-v`; a wrong size or hash
    is fetched once more, then the run stops (the server or the link is
    the problem, and every other file would fail the same way);
 2. `<path>` renamed to `<path>.old`;
@@ -369,8 +372,11 @@ chunk is copied into its queue slot at once, since its bytes are lent
 by `net` only until this process reads its next message.
 
 **Two hashes.** Each file has a SHA-256 and a CRC-32 in the manifest.
-The board checks with the CRC: whether the card's copy is the shipped
-one, and whether a download arrived whole. SHA-256 in software costs a
+Whether the card's copy is the shipped one is checked with the CRC (or
+SHA-256 with `-v`). What is downloaded is checked by SHA-256 when the
+release is signed -- the default, over HTTP: a CRC keeps out
+accidents, not people, and only the SHA-256 is what the signature
+vouches for -- and by the CRC alone over TFTP, which is unsigned. SHA-256 in software costs a
 Lakritz -- which leaves the SHA-256 block out to fit colour --
 about 690 cycles a byte, ~70 KB/s ([sha256_hw.md](sha256_hw.md)):
 slower than TFTP delivers, and on a card from before manifests, where
@@ -379,8 +385,10 @@ every file has to be looked at, minutes of checking. The CRC
 instructions a byte, so the check goes at the speed the card can be
 read. The CRC guards against accident, which is all a plain TFTP
 transfer can be protected against anyway; SHA-256 names the objects,
-makes the snapshot id, is what `-v` checks, and is what will make a
-signed HTTPS update trustworthy.
+makes the snapshot id, is what `-v` checks, and is what makes a signed
+update trustworthy. So a signed update over HTTP is paced by hashing on
+a board without the SHA-256 block (about 70 KB/s on a Lakritz), and a
+TFTP one by the link.
 
 About 92 KB on the card (integer-only printf, no FILE layer, no 64-bit
 division; Monocypher's Ed25519 check and the HTTP client since round

@@ -315,7 +315,7 @@ free). About 5 KB is the log itself; 1.7 KB is its work area, which is
 budget"). With the password on top ([security.md](security.md)) the
 kernel had 3,488 bytes of headroom, with the password and netserve's
 boot start and config keys in; 704 with `kv test`. The current figure
-is kept in one place, [kernel.md](kernel.md#the-256kb-image-budget).
+is kept in one place, [kernel.md](kernel.md#the-kernel-image-budget).
 
 ## Wear
 

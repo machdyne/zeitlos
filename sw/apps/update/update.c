@@ -56,6 +56,7 @@
 #include "upd.h"
 #include "upd_net.h"
 #include "zdist.h"                      /* the built-in distribution */
+#include "../../common/zpaths.h"
 
 void uart_putc(char c);
 
@@ -333,7 +334,7 @@ static int run(int argc, char **argv) {
 			from_cfg = true;
 			int r = upd_keys_parse(k1, keys, 1);
 			if (r < 0) {
-				io_out(NULL, "update: system.update.key in /sys/zeitlos.cfg is not "
+				io_out(NULL, "update: system.update.key in " Z_PATH_SYS_CONFIG " is not "
 					"a key (64 hex digits)\n");
 				return UPD_USAGE;
 			}

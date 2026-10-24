@@ -290,6 +290,49 @@ int main(int argc, char **argv) {
 	ticks += 10 * SEC; deliver(&w);
 	T(watch_backup(&w, &copied) == BK_DONE && copied == 0, "a file saved and deleted:\n%s", said);
 
+	// fs no longer has the watches (it restarted, or swept them): the
+	// next poll watches again, and backs the folders up whole, since
+	// what was saved meanwhile is not known
+	generation[ME]++;                   // to fs, the watcher is gone
+	fs_test_sweep();
+	put_as(WRITER, "/home/book/unseen.txt", "u");
+	client = ME;
+	ticks += 31 * SEC;
+	bkw_poll(&w, ticks);
+	T(w.n == 2 && w.npend == 2, "watched again, the folders whole: %d, %d", w.n, w.npend);
+	notices_seen = changed_n;
+	put_as(WRITER, "/home/book/ch4.txt", "v1");
+	T(changed_n == notices_seen + 1, "notices again");
+	deliver(&w);
+	ticks += 10 * SEC; deliver(&w);
+	// the unseen save and the new one -- and ch2 and ch3, whose saves
+	// were let go with the drive above: the folder copies what changed
+	said[0] = 0;
+	T(watch_backup(&w, &copied) == BK_DONE && copied == 4 &&
+		strstr(said, "/home/book/unseen.txt") && strstr(said, "/home/book/ch4.txt"),
+		"the folder, whole:\n%s", said);
+
+	// ... and when another program takes a watch first, fs hands out
+	// numbers a read still has to look at: each is watched again after
+	// the reads, and both are still watched
+	generation[ME]++;
+	fs_test_sweep();
+	client = 13;
+	int32_t ow = zfs_watch("/home");
+	T(ow >= 0, "another watch first: %d", (int)ow);
+	client = ME;
+	ticks += 31 * SEC;
+	bkw_poll(&w, ticks);
+	T(w.n == 2 && w.wd[0] != w.wd[1] && w.wd[0] != ow && w.wd[1] != ow,
+		"two watches of its own: %d %d (the other's %d)", (int)w.wd[0], (int)w.wd[1], (int)ow);
+	uint32_t heard0 = changed_n;
+	put_as(WRITER, "/home/notes.txt", "n2");
+	T(changed_n == heard0 + 2, "the other and the file's watch both heard: %u", (unsigned)(changed_n - heard0));
+	notices_seen = changed_n;
+	client = 13; zfs_unwatch(ow);
+	client = ME;
+	bkw_drop(&w);
+
 	// restore what a watch backup had
 	client = ME;
 	said[0] = 0;

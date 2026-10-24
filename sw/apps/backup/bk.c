@@ -32,6 +32,7 @@
 #include <string.h>
 
 #include "bk.h"
+#include "../../common/zpaths.h"
 
 #define INDEX_NAME  "INDEX.TXT"
 #define PIN_NAME    "PINNED"
@@ -933,7 +934,7 @@ static int card_cmp(const void *a, const void *b) {
 	return strcmp(((const card_t *)a)->path, ((const card_t *)b)->path);
 }
 
-static const char *const never[] = { "/tmp", "/ram", "/usb", "/nfs" };
+static const char *const never[] = { Z_DIR_TMP, Z_DIR_RAM, Z_DIR_USB, "/nfs" };
 
 static bool skipped_path(const char *path, bool dir) {
 	const char *name = base_name(path);
@@ -1217,7 +1218,7 @@ static const char README[] =
 	"PATH` does it (the newest copy, put beside the file on the card).\r\n"
 	"To get everything back as it was at one time: copy the backup folders up\r\n"
 	"to that time over each other, oldest first. (Files deleted later come\r\n"
-	"back too.) `backup restore /home` on Zeitlos, or tools/backup_read.py in\r\n"
+	"back too.) `backup restore " Z_DIR_HOME "` on Zeitlos, or tools/backup_read.py in\r\n"
 	"the Zeitlos sources on a PC, does it exactly.\r\n"
 	"\r\n"
 	"A folder with no INDEX.TXT, or one whose INDEX.TXT does not end with an\r\n"
@@ -1272,7 +1273,7 @@ static bool dest_there(void) {
 		// fs does not mount a drive it cannot read (exFAT, NTFS), and only
 		// says so on the console: name both. (Asking usb itself would make
 		// this program the drive's client, and take fs's events from it.)
-		say("backup: %s is not there%s\n", top, inside(top, "/usb") ?
+		say("backup: %s is not there%s\n", top, inside(top, Z_DIR_USB) ?
 			": is the backup drive plugged in? (One that is not FAT -- exFAT, NTFS --"
 			" is not mounted; the console then says \"usb storage: mount failed\".)" : "");
 		return false;
@@ -1878,7 +1879,7 @@ int bk_restore(const bk_io_t *io, const bk_opts_t *o, const char *backup,
 	memset(r, 0, sizeof *r);
 	if (!path || path[0] != '/') {
 		IO = io;
-		say("backup: restore what? a path like /home/book.txt\n");
+		say("backup: restore what? a path like " Z_DIR_HOME "/book.txt\n");
 		return BK_USAGE;
 	}
 	int rc = open_drive(io, o);

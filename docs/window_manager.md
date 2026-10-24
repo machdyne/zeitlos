@@ -480,15 +480,30 @@ Two changes fix it:
 
 ## Launch arguments
 
-wm holds one pending launch argument (`Z_WM_SET_ARG` / `Z_WM_GET_ARG` /
+wm holds pending launch arguments (`Z_WM_SET_ARG` / `Z_WM_GET_ARG` /
 `Z_WM_ARG`), because there is no `argv` and `z_proc_run()` carries only
-a program name. The launcher sets it, starts the process, and the new
+a program name. The launcher sets one, starts the process, and the new
 process claims it on startup.
 
-One slot, not one per process: only one app is ever mid-launch at a
-time, and reserving `Z_WM_ARG_MAX` bytes in all sixteen `z_proc`
-entries for something used once would be waste that also has to grow
-every time the path limit does.
+Two slots, not one per process: reserving `Z_WM_ARG_MAX` bytes in all
+32 `z_proc` entries for something used once would be waste that also
+has to grow every time the path limit does. Two rather than one because
+programs load themselves in the background
+([kernel.md](kernel.md#launching-in-the-background)), so launches
+overlap -- a file opened in view from files while the dock starts
+text:
+
+- An argument is its launcher's, and then its child's: the kernel sends
+  `Z_WM_ARG_CHILD` (the new pid, as the launcher) at every launch, and
+  wm notes the child's serial. An app asking gets the argument meant
+  for it -- that process, not one given the pid after the child's load
+  failed -- else the oldest meant for nobody yet.
+- A launch that fails sends `Z_WM_ARG_CHILD` 0, and the launcher's
+  argument is dropped rather than left for whichever program asks
+  next.
+- While its child is still loading, an argument does not expire; with
+  both slots taken, a third argument replaces the one whose child is
+  not loading, and the older only when both are.
 
 Claiming is destructive and time-limited — see `Z_WM_ARG_TIMEOUT` and
 `docs/widgets.md` for why an unclaimed argument must not linger. The
@@ -969,8 +984,10 @@ every one of these except Super+S is a `z_speak*()` call that returns
 in a few instructions, but they are consumed regardless. Full
 description: [tts.md](tts.md).
 
-`z_proc_run("tts")` blocks wm while the service loads, the same as a
-dock launch; it is small and loads quickly.
+`z_proc_run("tts")` returns at once, as a dock launch does: tts loads
+itself in the background ([kernel.md](kernel.md#launching-in-the-background)),
+and Super+S does not start a second one while the first is still
+loading.
 
 ## App protocol
 

@@ -468,8 +468,22 @@ static struct {
 	char		arg[Z_WM_ARG_MAX];
 	bool		valid;
 	uint32_t	setter, child;  // child 0: not said yet
+	uint32_t	child_serial;   // the child's, not whoever has its pid next
 	uint32_t	tick;
 } pending_args[WM_ARG_SLOTS];
+// A slot's child that is still loading its program (it asks once it
+// is in), and so whose argument must neither be given up for a newer
+// one nor expire. Only for a slot that is bound: no process list read
+// otherwise.
+static uint32_t wm_proc_flags(uint32_t pid);
+static bool arg_loading(int i) {
+	return pending_args[i].valid && pending_args[i].child &&
+		(wm_proc_flags(pending_args[i].child) & Z_PROC_FLAG_LOADING);
+}
+static bool arg_expired(int i, uint32_t now) {
+	return now - pending_args[i].tick > Z_WM_ARG_TIMEOUT && !arg_loading(i);
+}
+
 // what an app gets when there is nothing pending. A real, static,
 // NUL-terminated string rather than NULL, so the reply is always a
 // well-formed Z_STR the receiver can read without a special case.
@@ -7017,11 +7031,13 @@ static void handle_message(z_msg_t *msg) {
 			if (msg->obj.type != Z_STR || !msg->obj.val.str) break;
 
 			// this launcher's that is for nobody yet, else a free or
-			// expired slot, else the older
+			// expired slot, else the older -- but not one whose child
+			// is still loading, which would start with nothing
 			uint32_t now = z_uptime_ticks();
 			int si = (int32_t)(pending_args[1].tick - pending_args[0].tick) < 0;
+			if (arg_loading(si) && !arg_loading(si ^ 1)) si ^= 1;
 			for (int i = WM_ARG_SLOTS - 1; i >= 0; i--) {
-				if (!pending_args[i].valid || now - pending_args[i].tick > Z_WM_ARG_TIMEOUT) si = i;
+				if (!pending_args[i].valid || arg_expired(i, now)) si = i;
 			}
 			for (int i = 0; i < WM_ARG_SLOTS; i++)
 				if (pending_args[i].valid && pending_args[i].setter == msg->from && !pending_args[i].child) si = i;
@@ -7038,11 +7054,18 @@ static void handle_message(z_msg_t *msg) {
 
 		case Z_WM_ARG_CHILD:
 
-			// this launcher's that is for nobody yet
+			// this launcher's that is for nobody yet. Its time starts
+			// again: from here the child is loading (and while it is,
+			// the argument does not expire). pid 0: the launch failed,
+			// and the argument goes rather than wait for the next app.
 			if (msg->obj.type == Z_UINT32)
 				for (int i = 0; i < WM_ARG_SLOTS; i++)
-					if (pending_args[i].valid && pending_args[i].setter == msg->from && !pending_args[i].child)
+					if (pending_args[i].valid && pending_args[i].setter == msg->from && !pending_args[i].child) {
 						pending_args[i].child = msg->obj.val.uint32;
+						pending_args[i].child_serial = z_proc_serial(msg->obj.val.uint32);
+						pending_args[i].valid = msg->obj.val.uint32 != 0;
+						pending_args[i].tick = z_uptime_ticks();
+					}
 			break;
 
 		case Z_WM_GET_ARG: {
@@ -7055,12 +7078,17 @@ static void handle_message(z_msg_t *msg) {
 			int si = -1;
 			for (int i = 0; i < WM_ARG_SLOTS; i++) {
 				if (!pending_args[i].valid) continue;
-				if (now - pending_args[i].tick > Z_WM_ARG_TIMEOUT) {
+				if (arg_expired(i, now)) {
 					printf("wm: launch arg expired unclaimed\n");
 					pending_args[i].valid = false;
 				} else if (pending_args[i].child == msg->from) {
-					si = i;
-					break;
+					// a load that failed leaves its argument bound to its
+					// pid; the program given that pid next is not its child
+					if (pending_args[i].child_serial == z_proc_serial(msg->from)) {
+						si = i;
+						break;
+					}
+					pending_args[i].valid = false;
 				} else if (!pending_args[i].child &&
 					(si < 0 || (int32_t)(pending_args[i].tick - pending_args[si].tick) < 0)) si = i;
 			}
@@ -7914,10 +7942,13 @@ int main(void) {
 			}
 			// ...and once it is in, the whole timeout again for it to
 			// make its window, as a launch had before
+			// (not when the load failed: the process is gone)
 			if (dock_launch_loading[di >> 3] & (1u << (di & 7))) {
 				dock_launch_loading[di >> 3] &= (uint8_t)~(1u << (di & 7));
-				dock_launching_deadline[di] = (uint16_t)(z_uptime_ticks() + DOCK_LAUNCH_TIMEOUT_TICKS);
-				continue;
+				if (wm_proc_flags(dock_launching_pid[di])) {
+					dock_launching_deadline[di] = (uint16_t)(z_uptime_ticks() + DOCK_LAUNCH_TIMEOUT_TICKS);
+					continue;
+				}
 			}
 			printf("wm: dock: '%s' (pid %ld) made no window\n",
 				dock_apps[di].name, (long)dock_launching_pid[di]);

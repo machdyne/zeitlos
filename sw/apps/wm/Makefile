@@ -72,6 +72,13 @@ test:
 	@# kbd_accent.h: a dead key with Ctrl, Super or Alt is not an accent
 	@$(HOSTCC) $(HOSTFLAGS) -o /tmp/wm_test_kbd_accent tests/test_kbd_accent.c
 	@/tmp/wm_test_kbd_accent
+	@# locking: freeze, empty region, then the lock screen (tests/test_lock.c)
+	@$(HOSTCC) -std=gnu99 -w -no-pie -I../../common -o /tmp/wm_test_lock tests/test_lock.c \
+		../../common/zwin.c ../../common/zwidget.c ../../common/zfont_data.c \
+		../../common/zobj.c ../../common/zeitlos.c ../../common/zkbd.c \
+		../../common/zspeak.c ../../common/zcaption.c ../../common/zcfg.c \
+		dock_cfg.c win_icons.c workspace.c
+	@/tmp/wm_test_lock /tmp/wm_test_lock; r=$$?; [ $$r -eq 0 ] || [ $$r -eq 77 ]
 
 .PHONY: test
 

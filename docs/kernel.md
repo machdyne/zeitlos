@@ -155,7 +155,8 @@ itself, one after another, as before.
 
 The dock keeps a launched icon inverted until the app makes its first
 window, as before; its timeout (3 s) now waits as long as the process
-is still LOADING. The posix shell's `ps` shows such a process as
+is still LOADING, and ends at once when the load failed. Both `ps`
+commands -- the kernel shell's and posix's -- show such a process as
 `load`.
 
 What a caller gets back is the pid, at once: a load that fails later
@@ -163,19 +164,36 @@ is not a failed `z_proc_run()`. Callers that fall back when a start
 fails (zlink: posix, else repl) fall back on what fails at once -- no
 memory, no slot, no file -- which is what they meant.
 
+A caller that waits for what the program then does -- registers a
+service, makes a window -- starts its clock once the program is in:
+`z_proc_loading(pid)` (`zeitlos.h`) is true while it is LOADING.
+automate (tts, and each app's first window), ttstest, `zlink start`
+and netserve's backends wait that way; their timeouts are what they
+were before launches loaded in the background, and a load holds them
+back a minute at most.
+
 Launches can now overlap -- a file opened in view from files while the
 dock starts text -- so a **launch argument** (`Z_WM_SET_ARG`, zwm.h)
 is no longer "the one pending": wm keeps two, each its launcher's, and
 `k_proc_launch()` tells wm, as the launcher, which pid the launcher's
-argument is for (`Z_WM_ARG_CHILD`). An app gets the argument meant for
-it, else the oldest meant for nobody yet. `Z_WM_WIN_NEXT_PLACE` with
+argument is for (`Z_WM_ARG_CHILD`) -- or 0 when the launch failed, and
+wm drops the argument rather than keep it for the next program to
+ask. An app gets the argument meant for it -- that process, by its
+serial, not a later one given the pid of a child whose load failed --
+else the oldest meant for nobody yet. An argument whose child is still
+loading does not expire, and gives way to a newer one only when both
+slots' children are loading. `Z_WM_WIN_NEXT_PLACE` with
 tag 0 ("the next process to make a window") has the same race and is
 not fixed. wm's Super+S does not start a second `tts` while the first
 is still loading.
 
-One loader state is shared (the LZ4 decoder, `k_exec_unpack()`): loads
-unpack one at a time. A process killed in the middle of its load
-releases it (`kfs.c`, `unpack_held()`). The resolver's half-second
+One loader state is shared (the LZ4 decoder and the card's 8KB stage,
+`k_exec_unpack()`): loads unpack one at a time. The decoder is taken
+with interrupts masked -- a second load could otherwise be switched in
+between seeing it free and taking it, and both would decode through
+it -- and a process killed in the middle of its load releases it
+(`kfs.c`, `unpack_held()`). Each load's unpacking time is kept by pid,
+so the line each prints is its own. The resolver's half-second
 cache is read and written with interrupts masked, since two loads can
 resolve at once.
 
@@ -184,9 +202,20 @@ starts (the launch's lookup is reused if it is under half a second
 old), so a file replaced in between is loaded into a block sized for
 the old one. The loader checks what it reads against the old sizes, so
 that is a failed load -- except an uncompressed file replaced by a
-bigger one, which would be cut short. The kernel's fs client keeps its late-reply list in one place
-for every process, so a reply to a load that timed out can stay in the
-new app's mailbox.
+bigger one, which would be cut short.
+
+The kernel's fs client (`zfsc.c` built with `ZFSC_KERNEL`) runs inside
+whichever process is loading, so its state is per process: a long
+timeout one call asked for is that process's, a reply that came after
+its call gave up is looked for only in the mailbox it went to, and the
+kernel's request tags have their top bit set. A late reply that stays
+in a mailbox whose process is by then the program can therefore never
+be taken for the answer to one of the program's own requests (whose
+tags count up from 1); at worst it takes up a slot in that mailbox.
+
+A process killed while it loads leaves no exit status, as a killed
+process never does: `z_proc_status()` says UNKNOWN, which posix and
+cron take as finished.
 
 ## The scheduler
 

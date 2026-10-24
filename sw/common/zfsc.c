@@ -39,6 +39,51 @@ static bool opted_in;
 static uint32_t seq;
 static uint32_t next_timeout;	// for one call, when it may take long
 
+// In the kernel this file runs inside whichever process made the
+// syscall, and since launches load in the background (docs/kernel.md)
+// several can be in it at once. So there the one-call timeout belongs
+// to the process that set it, a timed-out reply is looked for only in
+// the mailbox it will arrive in (its process's), and the kernel's tags
+// have the top bit set: a reply that comes after its load gave up, to
+// a process that is by then the program, can never be taken for the
+// answer to one of that program's own requests (whose tags count up
+// from 1). In an app all of this is one process, as before.
+#ifdef ZFSC_KERNEL
+extern volatile uint32_t z_pid;
+#define ZFSC_SELF()	(z_pid)
+#define ZFSC_TAG_BIT	0x80000000u
+#define ZFSC_MASK()	maskirq(0xffffffffu)
+#define ZFSC_UNMASK(m)	maskirq(m)
+static uint32_t next_timeout_pid;
+#else
+#define ZFSC_SELF()	0u
+#define ZFSC_TAG_BIT	0u
+#define ZFSC_MASK()	0u
+#define ZFSC_UNMASK(m)	((void)(m))
+#endif
+
+static void timeout_once(uint32_t ticks) {
+	uint32_t irq = ZFSC_MASK();
+#ifdef ZFSC_KERNEL
+	next_timeout_pid = ZFSC_SELF();
+#endif
+	next_timeout = ticks;
+	ZFSC_UNMASK(irq);
+}
+
+// The timeout set for this process's next call, once; 0 for none.
+static uint32_t timeout_take(void) {
+	uint32_t irq = ZFSC_MASK();
+	uint32_t t = next_timeout;
+#ifdef ZFSC_KERNEL
+	if (next_timeout_pid != ZFSC_SELF()) t = 0;
+	else
+#endif
+	next_timeout = 0;
+	ZFSC_UNMASK(irq);
+	return t;
+}
+
 static bool find_fs(bool again) {
 	if (fs_known && !again) return true;
 	fs_known = z_pid_lookup(Z_FS_SERVICE, &fs_pid);
@@ -53,30 +98,44 @@ static bool find_fs(bool again) {
 #define STALE_MAX	4
 #define STALE_LOOKS	32
 static uint32_t stale_tag[STALE_MAX];		// 0: none
+static uint32_t stale_pid[STALE_MAX];		// whose mailbox it will be in
 static uint8_t stale_looks[STALE_MAX];
 static uint8_t stale_n;
 
+// (In the kernel these run with interrupts masked: two processes may
+// be noting or draining at once.)
 static void stale_note(uint32_t tag) {
 	int i, k = 0;
+	uint32_t irq = ZFSC_MASK();
 	for (i = 0; i < STALE_MAX; i++) {
 		if (!stale_tag[i]) { k = i; break; }
 		if (stale_looks[i] > stale_looks[k]) k = i;
 	}
 	if (!stale_tag[k]) stale_n++;
 	stale_tag[k] = tag;
+	stale_pid[k] = ZFSC_SELF();
 	stale_looks[k] = 0;
+	ZFSC_UNMASK(irq);
 }
 
 static void stale_drain(void) {
 	z_msg_t m;
 	int i;
 	for (i = 0; i < STALE_MAX; i++) {
-		if (!stale_tag[i]) continue;
-		if (z_msg_take_match(&m, Z_FS_REPLY, stale_tag[i]) == Z_OK ||
-			++stale_looks[i] >= STALE_LOOKS) {
+		uint32_t irq = ZFSC_MASK();
+		uint32_t tag = stale_tag[i];
+		bool mine = tag && stale_pid[i] == ZFSC_SELF();
+		ZFSC_UNMASK(irq);
+		if (!tag) continue;
+		// another process's: it ages here all the same, so that one
+		// which became a program, or ended, is forgotten in the end
+		bool found = mine && z_msg_take_match(&m, Z_FS_REPLY, tag) == Z_OK;
+		irq = ZFSC_MASK();
+		if (stale_tag[i] == tag && (found || ++stale_looks[i] >= STALE_LOOKS)) {
 			stale_tag[i] = 0;
 			stale_n--;
 		}
+		ZFSC_UNMASK(irq);
 	}
 }
 
@@ -84,7 +143,7 @@ static void stale_drain(void) {
 // write, or where a read should land). Whatever data the reply carries
 // is copied to `out` (at most `outcap` bytes; *outlen says how many).
 static int32_t call_once(z_fsreq_t *rq, void *buf, uint32_t blen,
-	void *out, uint32_t outcap, uint32_t *outlen, uint32_t *flags);
+	void *out, uint32_t outcap, uint32_t *outlen, uint32_t *flags, uint32_t wait);
 
 #ifdef ZFSC_KERNEL
 void k_proc_wait_ticks(uint32_t ticks);		// sw/os/kernel.c
@@ -186,17 +245,16 @@ static int32_t call_f(z_fsreq_t *rq, void *buf, uint32_t blen,
 	int tries = 0;
 	uint32_t keep;
 	wb_flush();			// before anything else: this process sees its writes
-	keep = next_timeout;
+	keep = timeout_take();
 	for (;;) {
-		next_timeout = keep;
-		r = call_once(rq, buf, blen, out, outcap, outlen, flags);
+		r = call_once(rq, buf, blen, out, outcap, outlen, flags, keep);
 		if (r != -Z_EAGAIN || ++tries > 2000) return r;
 		zfsc_pause();
 	}
 }
 
 static int32_t call_once(z_fsreq_t *rq, void *buf, uint32_t blen,
-	void *out, uint32_t outcap, uint32_t *outlen, uint32_t *flags) {
+	void *out, uint32_t outcap, uint32_t *outlen, uint32_t *flags, uint32_t wait) {
 
 	z_blob_t b[2];
 	z_obj_t items[2];
@@ -225,8 +283,12 @@ static int32_t call_once(z_fsreq_t *rq, void *buf, uint32_t blen,
 	o.type = Z_LIST; o.val.ptr = &t;
 
 	if (stale_n) stale_drain();
-	tag = ++seq;
-	if (!tag) tag = ++seq;			// 0 means "none" to stale_note()
+	{
+		uint32_t irq = ZFSC_MASK();
+		tag = (++seq & ~ZFSC_TAG_BIT) | ZFSC_TAG_BIT;
+		if (!tag) tag = ++seq;		// 0 means "none" to stale_note()
+		ZFSC_UNMASK(irq);
+	}
 	if (z_msg_new_send(fs_pid, Z_FS_REQ, tag, o) != Z_OK) {
 		// A cached pid that has gone stale: `fs` restarted, say.
 		if (!find_fs(true) ||
@@ -234,8 +296,7 @@ static int32_t call_once(z_fsreq_t *rq, void *buf, uint32_t blen,
 			return -Z_ENODEV;
 	}
 
-	uint32_t wait = next_timeout ? next_timeout : ZFS_TIMEOUT_TICKS;
-	next_timeout = 0;
+	if (!wait) wait = ZFS_TIMEOUT_TICKS;
 	if (z_msg_recv_match(&m, Z_FS_REPLY, tag, wait) != Z_OK) {
 		stale_note(tag);
 		fs_known = false;		// look it up again: it may have restarted
@@ -421,7 +482,7 @@ static int32_t path_op(uint32_t op, const char *path, const char *path2) {
 
 int32_t zfs_unlink(const char *path) { return path_op(Z_FSOP_UNLINK, path, NULL); }
 int32_t zfs_mkfs(const char *path) {
-	next_timeout = ZFS_SLOW_TICKS;		// formatting a big card
+	timeout_once(ZFS_SLOW_TICKS);		// formatting a big card
 	return path_op(Z_FSOP_MKFS, path, NULL);
 }
 int32_t zfs_mount(const char *path) { return path_op(Z_FSOP_MOUNT, path, NULL); }
@@ -499,7 +560,7 @@ int32_t zfs_statvfs(const char *path, z_fs_vfs_t *out) {
 	z_fsreq_t rq;
 	uint32_t got;
 	req_init(&rq, Z_FSOP_STATVFS);
-	next_timeout = ZFS_SLOW_TICKS;		// the first count of FAT32's free clusters
+	timeout_once(ZFS_SLOW_TICKS);		// the first count of FAT32's free clusters
 	if (!req_path(rq.path, path)) return -Z_ENAMETOOLONG;
 	int32_t r = call(&rq, NULL, 0, out, sizeof(*out), &got);
 	return (r == 0 && got != sizeof(*out)) ? -Z_EIO : r;

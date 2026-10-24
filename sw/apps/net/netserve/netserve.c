@@ -339,6 +339,11 @@ static z_obj_t identity(sess_t *s) {
 	return o;
 }
 
+// The backend app_connect() last started: its pid, the program, and
+// when -- a load may hold a session's deadline back, a minute at most.
+static uint32_t launch_pid, launch_tick;
+static const char *launch_prog;
+
 static void app_connect(sess_t *s) {
 	uint32_t pid;
 	if (!z_pid_lookup(s->target, &pid)) {
@@ -354,7 +359,11 @@ static void app_connect(sess_t *s) {
 		// z_proc_run() while it loads would start a second copy.
 		bool starting = false;
 		for (int i = 0; i < MAX_SESS; i++) if (sess[i].state == S_LAUNCH) starting = true;
-		if (!starting && !z_proc_run(prog)) {
+		if (!starting) {
+			launch_prog = prog;
+			launch_tick = z_uptime_ticks();
+		}
+		if (!starting && !(launch_pid = z_proc_run(prog))) {
 			net_str(s, "\r\nnetserve: could not start ");
 			net_str(s, prog);
 			net_str(s, "\r\n");
@@ -1277,8 +1286,15 @@ static void poll_session(sess_t *s) {
 		uint32_t pid;
 		if (z_pid_lookup(s->target, &pid)) app_connect(s);
 		else if ((int32_t)(now - s->deadline) >= 0) {
-			net_str(s, "netserve: the port did not start\r\n");
-			close_after_flush(s);
+			// still loading (in the background): LAUNCH_TICKS from
+			// when it is in
+			if (launch_pid && program_for(s->target) == launch_prog &&
+				now - launch_tick < 60u * Z_TICK_HZ && z_proc_loading(launch_pid))
+				s->deadline = now + LAUNCH_TICKS;
+			else {
+				net_str(s, "netserve: the port did not start\r\n");
+				close_after_flush(s);
+			}
 		}
 	}
 	if (s->state == S_AWAY && (int32_t)(now - s->deadline) >= 0) {

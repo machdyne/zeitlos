@@ -1,4 +1,6 @@
 # Host test for the filesystem driver: see test_fs.c.
+#
+#   make -C sw/apps/fs/tests run      build and run
 
 default: test_fs test_fs_kernel test_fsvol
 CC ?= cc
@@ -19,6 +21,14 @@ test_fsvol: test_fsvol.c ../fsvol.h ../fatfs/ff.c ../fatfs/ffunicode.c
 	$(CC) -std=gnu99 -Wall -I$(COMMON) -o $@ test_fsvol.c ../fatfs/ff.c ../fatfs/ffunicode.c
 
 all: test_fs test_fs_kernel test_fsvol
+
+# build and run all three (tools/run_tests.py runs this)
+run: test_fs test_fs_kernel test_fsvol
+	./test_fs
+	./test_fs_kernel
+	./test_fsvol
+
+.PHONY: default all run clean
 
 clean:
 	rm -f test_fs test_fs_kernel test_fsvol

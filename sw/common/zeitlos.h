@@ -816,6 +816,13 @@ z_rv z_proc_kill(uint32_t pid);
 uint32_t z_proc_list(z_proc_info_t *out, uint32_t max, uint32_t *truncated);
 bool z_mem_stats(z_mem_stats_args_t *out);
 
+// true while `pid` is still loading its program (Z_PROC_FLAG_LOADING):
+// z_proc_run() returns before the program is in (docs/kernel.md,
+// "Launching in the background"), so a caller that waits for what the
+// program does -- registers, makes a window -- starts its clock once
+// this is false.
+bool z_proc_loading(uint32_t pid);
+
 // Optional redirect for stdout (fd 1 -- printf(), putchar(), anything
 // through the FILE* stdout). NULL by default: every byte goes to the
 // UART via _write(), exactly as it always has, and an app that never

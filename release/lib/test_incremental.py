@@ -107,7 +107,7 @@ def run_build(targets, extra=()):
     build_mod.read_version = lambda root: VERSION
     buf = io.StringIO()
     try:
-        with contextlib.redirect_stdout(buf):
+        with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
             code = ZR.cmd_build(args)
     except SystemExit as e:
         code = e.code or 1
@@ -118,35 +118,10 @@ def run_build(targets, extra=()):
 
 
 def _mirror_parser():
-    """The build subcommand's flags.
-
-    Mirrors the CLI's own parser, which is local to its main(). If a new
-    flag is added there without a default, cmd_build will raise
-    AttributeError here rather than this test quietly exercising a
-    stale path.
-    """
-    import argparse
-    p = argparse.ArgumentParser()
-    sub = p.add_subparsers(dest="cmd", required=True)
-    b = sub.add_parser("build")
-    b.add_argument("version")
-    b.add_argument("--targets", nargs="+")
-    b.add_argument("--jobs", "-j", type=int)
-    b.add_argument("--ark")
-    b.add_argument("--no-sdcard", action="store_true")
-    b.add_argument("--rebuild-sdcard", action="store_true")
-    b.add_argument("--sdcards", default=None)
-    b.add_argument("--resume", action="store_true")
-    b.add_argument("--allow-mixed-commits", action="store_true")
-    b.add_argument("--full-image", action="store_true")
-    b.add_argument("--bump", action="store_true")
-    b.add_argument("--allow-dirty", action="store_true")
-    b.add_argument("--allow-drift", action="store_true")
-    b.add_argument("--allow-timing-fail", action="store_true")
-    b.add_argument("--strict-io-timing", action="store_true")
-    b.add_argument("--keep-generated", action="store_true")
-    b.add_argument("--dry-run", action="store_true")
-    return p
+    """The CLI's own parser (zrelease's make_parser()), so a flag added
+    there is a flag this test passes through -- with its default --
+    rather than an AttributeError in cmd_build or a stale path."""
+    return ZR.make_parser()
 
 
 def manifest():
@@ -158,9 +133,12 @@ def main():
     os.chdir(ROOT)
     failures = []
     created = [OUT, os.path.join(ROOT, "output", "releases")]
-    for app in ("wm", "net", "term"):
-        created.append(os.path.join(ROOT, "sw/apps", app, app + ".bin"))
-    created.append(os.path.join(ROOT, "sw/os/kernel.bin"))
+    # the fakes overwrite every core app and the kernel: the developer's
+    # own builds are kept aside and put back (selftest.py does the same)
+    bins = [os.path.join(ROOT, "sw/apps", a, a + ".bin") for a in selftest.fake_apps()]
+    bins.append(os.path.join(ROOT, "sw/os/kernel.bin"))
+    created.extend(bins)
+    saved = selftest.keep_aside(bins)
 
     if os.path.exists(OUT):
         print("%s already exists -- this test would overwrite it.\n"
@@ -331,8 +309,19 @@ def main():
                 f.write(b"REBUILT-CARD" * 64)
             return [("docs/ask.md", 10)]
 
+        # The update store is made from the same card's files with the
+        # ask packs, which a fresh checkout has not built; this test is
+        # about which images a card-only run rebuilds, so the store is
+        # only recorded. (test_store.py tests the store itself.)
+        published = []
+
+        def _fake_store(st_dir, name, **kw):
+            published.append(name)
+
         real_fat, real_zr_fat = _fat.build, ZR.mkfatimg.build
+        real_store = ZR._publish_store
         _fat.build = ZR.mkfatimg.build = _fake_card
+        ZR._publish_store = _fake_store
         try:
             gz = os.path.join(OUT, "zeitlos.img.gz")
             with open(gz, "wb") as f:
@@ -350,7 +339,8 @@ def main():
             # The three built above, so --resume finds nothing left.
             r = run_build(before, extra=["--resume", "--rebuild-sdcard"])
             if r.returncode != 0:
-                failures.append("--resume --rebuild-sdcard did not run")
+                failures.append("--resume --rebuild-sdcard did not run:\n      "
+                                + "\n      ".join(r.stdout.strip().splitlines()[-6:]))
             if "nothing left to build" in r.stdout:
                 failures.append(
                     "--resume --rebuild-sdcard bailed out instead of "
@@ -370,6 +360,12 @@ def main():
                 else:
                     print("   kernel and ZAR assets untouched")
 
+            if published != ["v" + VERSION]:
+                failures.append("a card-only run did not publish the update "
+                                "store once (%s)" % published)
+            else:
+                print("   update store published")
+
             after = sorted(t["target"] for t in manifest()["targets"])
             if after != before:
                 failures.append("a card-only run changed the target list: "
@@ -378,6 +374,7 @@ def main():
                 print("   all %d targets still described" % len(after))
         finally:
             _fat.build, ZR.mkfatimg.build = real_fat, real_zr_fat
+            ZR._publish_store = real_store
 
     finally:
         for p in created:
@@ -385,6 +382,7 @@ def main():
                 shutil.rmtree(p, ignore_errors=True)
             elif os.path.exists(p):
                 os.unlink(p)
+        selftest.put_back(saved)
 
     print("\n==================")
     if failures:

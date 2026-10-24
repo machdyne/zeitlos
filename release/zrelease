@@ -1146,7 +1146,10 @@ def cmd_ship(args):
 
 # ---------------------------------------------------------------------
 
-def main(argv):
+def make_parser():
+    """The CLI's parser, every subcommand and flag. Separate from main()
+    so release/lib/test_incremental.py parses with exactly this one
+    rather than a copy that drifts."""
     p = argparse.ArgumentParser(
         prog="zrelease", description="Zeitlos release builder")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -1287,8 +1290,11 @@ def main(argv):
     k.add_argument("--force", action="store_true",
                    help="replace an existing key")
     k.set_defaults(func=cmd_keygen)
+    return p
 
-    args = p.parse_args(argv)
+
+def main(argv):
+    args = make_parser().parse_args(argv)
 
     # Sweep first, always. A previous run that died hard leaves files in
     # the tree, and the most likely next command is the one that wants

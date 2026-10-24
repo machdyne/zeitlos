@@ -154,7 +154,9 @@ stress, is not).
 **Settings** (S) has two lines: **What to back up**
 (`apps.backup.from`) and **Back up each save** (`apps.backup.watch`,
 empty for off). The rest -- the folder on the drive, Skip, Keep, eject
-after each backup -- is in `zeitlos.cfg` ("Settings").
+after each backup -- is in `zeitlos.cfg` ("Settings"). Neither changes
+while a backup runs, a watch backup included ("Not yet: a backup is
+running"): the backup reads its folders from them.
 
 **The Aa icon** in the titlebar (or M) makes the window a strip for a
 corner of the screen -- the headline, the watch's line, Back up -- and
@@ -185,7 +187,7 @@ shown, and the shipped file has them commented out:
 
 ```
 apps.backup.to:     /usb/backup
-apps.backup.from:   /home /data /sys/zeitlos.cfg /sys/net.cfg
+apps.backup.from:   /home /data /sys/zeitlos.cfg
 apps.backup.skip:   /data/ask *.tmp
 apps.backup.keep:   10
 apps.backup.verify: yes
@@ -269,7 +271,7 @@ kind full
 time 2026-10-21 11:30:48
 clock set
 dates utc
-from /home /data /sys/zeitlos.cfg /sys/net.cfg
+from /home /data /sys/zeitlos.cfg
 skip /data/ask *.tmp
 copied 3 812345
 f 3a1b9c0e 1834 2026-10-21_09-29-50 2026-10-21_11-30-48 /home/book.txt
@@ -469,6 +471,9 @@ never slowed and a busy folder cannot fill backup's mailbox; it keeps
 four paths a watch between reads and says when there were more, and
 backup then looks at the whole folder (copying only what changed in
 it). backup also reads every 30 seconds, should a notice ever be lost.
+If fs no longer has the watch -- fs restarted, and its watches are in
+its memory -- backup watches again at that read and backs the watched
+folders up whole, since what was saved meanwhile is not known.
 
 ## Running alongside everything
 
@@ -539,12 +544,12 @@ test_bk: 849 checks, 0 failed
 test_fat: 640 checks, 0 failed
 test_cli: 39 checks, 0 failed
 test_job: 3462 checks, 0 failed
-test_watch: 150 checks, 0 failed
+test_watch: 155 checks, 0 failed
 test_read: 17 checks, 0 failed
 $ sudo sysctl -w vm.mmap_min_addr=0; make -C sw/apps/backup/tests render
 render: 43 checks, 0 failed (pictures in render)
-$ make -C sw/apps/fs/tests && sw/apps/fs/tests/test_fs | tail -1
-test_fs: 10036 checks, 0 failed
+$ make -C sw/apps/fs/tests run | grep checks
+test_fs: 10142 checks, 0 failed
 ```
 
 `test_fat`, `test_cli` and `test_watch` need `mkfs.fat` and `fsck.fat`
@@ -557,8 +562,9 @@ open for writing waited for (and a log after 60 s), a rename-save, a
 watched file and a file beside it, nine saves at once (more than fs
 keeps: the folder, copying only what changed), more than 32 heard one
 by one, a lost notice (read anyway at 30 s), the drive gone (dropped),
-a saved-and-deleted file, restoring from a watch backup, and fs's four
-watches given back and refused when taken. `test_fs` has fs's side
+a saved-and-deleted file, fs losing the watches (watched again at the
+next read, the folders backed up whole), restoring from a watch backup,
+and fs's four watches given back and refused when taken. `test_fs` has fs's side
 ("Watching" in [fs_driver.md](fs_driver.md#watching)); `test_cli` runs
 `backup watch` with a save in its third second.
 

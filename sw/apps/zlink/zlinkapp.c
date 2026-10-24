@@ -1998,15 +1998,20 @@ static int start(int argc, char **argv) {
 		o += k;
 	}
 	z_launch_arg_set(line);
-	if (!z_proc_run("zlink")) {
+	uint32_t sp = z_proc_run("zlink");
+	if (!sp) {
 		print("zlink: could not start the service\n");
 		return 1;
 	}
+	// three seconds from when it is in (it loads in the background; a
+	// minute at most for that)
+	uint32_t t0 = z_uptime_ticks();
 	for (int i = 0; i < 3 * 60; i++) {
 		if (z_pid_lookup("zlink0", &pid)) {
 			print("zlink: started; zlink status shows the link\n");
 			return 0;
 		}
+		if (z_uptime_ticks() - t0 < 60u * Z_TICK_HZ && z_proc_loading(sp)) i = 0;
 		z_proc_wait(Z_TICK_HZ / 60);
 	}
 	print("zlink: the service did not start (see the console)\n");

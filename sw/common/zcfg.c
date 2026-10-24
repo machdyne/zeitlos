@@ -60,7 +60,7 @@ const z_cfg_known_t z_cfg_known[] = {
 	{ "system.keyboard.layouts", "us",
 	  "keyboard layouts, comma-separated, first at start (us gb de fr es it br ch se no dk fi pt be jp, ja for Japanese input ... see docs/keyboard_layouts.md) -- Super+Space cycles" },
 	{ "system.cursor.large", "no",
-	  "the pointer: start with the large pair (9x9, or /data/wm/cursor.zsp) (yes/no) -- Super+M switches" },
+	  "the pointer: start with the large pair (9x9, or " Z_PATH_WM_CURSOR ") (yes/no) -- Super+M switches" },
 	{ "system.font.japanese", "no",
 	  "start jfont at boot: Japanese in text at 6x12 (yes/no) -- about 190KB of RAM" },
 	{ "system.rtc.timezone", "UTC",

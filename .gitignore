@@ -92,6 +92,17 @@ sw/apps/read/md_test
 sw/apps/ask/test/hosttest
 sw/apps/gpu3d/test/stl_test
 sw/apps/gpu3d/test/teapot*.stl
+sw/apps/calc/calc_test
+sw/apps/midi/midi_test
+sw/apps/play/play_test
+sw/apps/repl/zline_test
+sw/apps/track/modplay_test
+sw/apps/slide/tests/patterns.c
+sw/test/build/
+sw/apps/fs/tests/test_fs
+sw/apps/fs/tests/test_fs_kernel
+sw/apps/fs/tests/test_fsvol
+sw/apps/usb/tests/test_usb
 
 # python bytecode (esp32/flash.py imports nic_selftest)
 __pycache__/

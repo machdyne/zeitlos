@@ -62,7 +62,7 @@ void uart_putc(char c);
 // -- settings (docs/backup.md, "Settings") -----------------------------------
 
 #define DEF_TO      Z_DIR_USB "/backup"
-#define DEF_FROM    Z_DIR_HOME " " Z_DIR_DATA " " Z_PATH_SYS_CONFIG " /sys/net.cfg"
+#define DEF_FROM    Z_DIR_HOME " " Z_DIR_DATA " " Z_PATH_SYS_CONFIG
 #define DEF_SKIP    Z_DIR_ASK_PACKS " *.tmp"
 #define DEF_NAME    "zeitlos"
 #define MAX_LIST    16
@@ -278,7 +278,7 @@ static void usage(void) {
 	    "       backup eject                      release the drive\n"
 	    "       backup watch [PATH...]            back up each save there, 10 s after, until stopped\n"
 	    "BACKUP: a name or its start (2026-10-21); the newest if left out\n"
-	    "settings: apps.backup.* in /sys/zeitlos.cfg; see docs/backup.md\n");
+	    "settings: apps.backup.* in " Z_PATH_SYS_CONFIG "; see docs/backup.md\n");
 }
 
 static void kb_text(uint64_t kb, char *b, size_t n) {
@@ -421,7 +421,7 @@ static int cmd_watch(bk_opts_t *o, int argc, char **argv) {
 	} else if (!z_cfg_get("apps.backup.watch", spec, sizeof spec)) spec[0] = 0;
 	if (!bkw_start(&cli_w, o, spec)) {
 		if (bkw_why(&cli_w)[0]) say("backup: not watching: %s\n", bkw_why(&cli_w));
-		else say("backup: nothing to watch: name folders, `backup watch /home/book`, or set apps.backup.watch\n");
+		else say("backup: nothing to watch: name folders, `backup watch " Z_DIR_HOME "/book`, or set apps.backup.watch\n");
 		return BK_USAGE;
 	}
 	if (bkw_why(&cli_w)[0]) say("backup: not watched: %s\n", bkw_why(&cli_w));

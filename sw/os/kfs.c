@@ -417,7 +417,8 @@ static volatile bool k_unpack_busy;
 // (`kill` in the shell). Its decoder is then free again.
 static volatile uint32_t k_unpack_pid, k_unpack_serial;
 
-uint32_t k_exec_unpack_ticks, k_exec_unpack_cpu;
+// Each load's own: loads overlap, and each prints its own numbers.
+uint32_t k_exec_unpack_ticks[Z_PROCS_MAX], k_exec_unpack_cpu[Z_PROCS_MAX];
 
 static bool unpack_held(void) {
 	if (!k_unpack_busy) return false;
@@ -427,14 +428,27 @@ static bool unpack_held(void) {
 }
 
 int k_exec_unpack(uint8_t *out, uint32_t len, z_exec_fill_t fill, void *ctx) {
-	while (unpack_held()) k_proc_wait_ticks(1);
-	k_unpack_busy = true;
-	k_unpack_pid = z_pid;
-	k_unpack_serial = z_procs[z_pid].serial;
-	uint32_t me = z_pid, t0 = z_uptime_ticks(), c0 = z_procs[me].cpu_ticks;
+	uint32_t me = z_pid;
+	// Taken with interrupts masked: loads run in their own processes,
+	// so a second can be switched in between seeing the decoder free
+	// and taking it -- and two loads through one k_unpack and one
+	// card_stage would each come out wrong.
+	for (;;) {
+		uint32_t m = maskirq(0xffffffffu);
+		if (!unpack_held()) {
+			k_unpack_pid = me;
+			k_unpack_serial = z_procs[me].serial;
+			k_unpack_busy = true;
+			maskirq(m);
+			break;
+		}
+		maskirq(m);
+		k_proc_wait_ticks(1);
+	}
+	uint32_t t0 = z_uptime_ticks(), c0 = z_procs[me].cpu_ticks;
 	int r = z_exec_lz4(&k_unpack, out, len, fill, ctx);
-	k_exec_unpack_ticks = z_uptime_ticks() - t0;
-	k_exec_unpack_cpu = z_procs[me].cpu_ticks - c0;
+	k_exec_unpack_ticks[me] = z_uptime_ticks() - t0;
+	k_exec_unpack_cpu[me] = z_procs[me].cpu_ticks - c0;
 	k_unpack_busy = false;
 	return r ? 1 : 0;
 }

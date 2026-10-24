@@ -5,7 +5,9 @@
 ZOBJ_DIR = ../common
 CC = gcc
 CFLAGS = -Wall -Wextra -std=c99 -g -O0 $(ARCH_DEFS) $(LIBC_FLAGS)
-LDFLAGS = -march=$(ARCH) -mabi=$(ABI)  $(LIBC_FLAGS)
+# Host binaries: no -march/-mabi (with arch.mk not included they were
+# empty, `-march= -mabi=`, which host gcc rejects).
+LDFLAGS = $(LIBC_FLAGS)
 INCLUDES = -I$(ZOBJ_DIR)
 
 # Directories
@@ -53,10 +55,25 @@ $(TEST_EXE): $(TEST_OBJ) $(ZOBJ_OBJ) | $(BUILD_DIR)
 $(BUILD_DIR)/test_%: $(BUILD_DIR)/test_%.o $(ZOBJ_OBJ) | $(BUILD_DIR)
 	$(CC) $(CFLAGS) $^ -o $@ $(LDFLAGS)
 
-# Test targets
-test: $(TEST_EXE)
+# Test targets: zobj, zvt100 and the three ssh suites (docs/ssh.md, "Testing")
+test: $(TEST_EXE) test-zvt100 test-ssh
 	@echo "Running main test suite..."
 	./$(TEST_EXE)
+
+SSH_DIR = ../apps/net/ssh
+MONO = ../ext/monocypher
+SSH_CFLAGS = -O2 -I$(SSH_DIR) -I$(MONO) -I../common
+SSH_CORE = $(SSH_DIR)/ssh_wire.c $(SSH_DIR)/ssh_crypto.c $(SSH_DIR)/ssh_sha256.c \
+	../common/zsha256.c $(MONO)/monocypher.c
+
+test-ssh: | $(BUILD_DIR)
+	$(CC) $(SSH_CFLAGS) -o $(BUILD_DIR)/t_sha test_ssh_sha256.c $(SSH_DIR)/ssh_sha256.c ../common/zsha256.c
+	./$(BUILD_DIR)/t_sha
+	$(CC) $(SSH_CFLAGS) -o $(BUILD_DIR)/t_ssh test_ssh_crypto.c $(SSH_CORE)
+	./$(BUILD_DIR)/t_ssh
+	$(CC) $(SSH_CFLAGS) -o $(BUILD_DIR)/t_session test_ssh_session.c $(SSH_DIR)/ssh_proto.c \
+		$(SSH_CORE) ../common/z25519.c $(MONO)/monocypher-ed25519.c
+	./$(BUILD_DIR)/t_session
 
 test-all: $(TEST_EXE) $(ADDITIONAL_TEST_EXE)
 	@echo "Running main test suite..."
@@ -176,4 +193,4 @@ test-zvt100: $(TEST_ZVT100_EXE)
 	./$(TEST_ZVT100_EXE)
 
 # Phony targets
-.PHONY: all test test-all test-zvt100 memtest quick debug release coverage coverage-report analyze format clean help setup install-deps
+.PHONY: all test test-all test-zvt100 test-ssh memtest quick debug release coverage coverage-report analyze format clean help setup install-deps

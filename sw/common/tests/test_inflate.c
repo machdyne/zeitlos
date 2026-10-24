@@ -1,8 +1,9 @@
 /*
  * Zeitlos -- host test for sw/common/zinflate.c.
  *
+ *   python3 sw/common/tests/gen_inflate_corpus.py /tmp/gzc
  *   cc -std=gnu99 -I sw/common -o /tmp/t sw/common/tests/test_inflate.c \
- *      sw/common/zinflate.c && /tmp/t
+ *      sw/common/zinflate.c && /tmp/t /tmp/gzc
  *
  * Data compressed by real gzip/zlib, decompressed here and compared
  * byte for byte.

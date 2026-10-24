@@ -206,8 +206,18 @@ number. backup's watch is the first user ([backup.md](backup.md#watch)).
   request or at the next idle second.
 - **Four watches** (`Z_FS_WATCHES`) for everyone together; a fifth is
   `-Z_EMFILE`. A watch ends with `zfs_unwatch()` or its program (the
-  sweep). A file already open for writing when a watch begins is not
-  counted in `writers`.
+  sweep). With all four taken, a `WATCH` sweeps first, so a watcher
+  that died does not hold its watches until the idle sweep. A file
+  already open for writing when a watch begins is not counted in
+  `writers`.
+- **A watch is its process's, not its pid's.** fs records the
+  watcher's serial (kernel.md, "Process serials"). A new program given
+  a dead watcher's pid cannot read or end that watch (`-Z_EBADF`), and
+  a change is not told to it: the watch ends instead.
+- **fs's watches are in its memory.** When fs restarts, every watch is
+  gone and its number reads as `-Z_EBADF`; a watcher watches again
+  (backup does, and backs those folders up whole, since what changed
+  in between is not known).
 - `/nfs` cannot be watched (`-Z_EINVAL`); `/tmp` is `/ram`, so a watch
   of either sees both. The kernel's client has no watch calls.
 
@@ -230,8 +240,8 @@ over four empty slots.
   with FatFs's 512-byte sector buffer and a 128-byte cluster map
   (11KB), and the three volumes. Since backup's Phase 3 the rename probe
   and f_mkfs()'s work area are on the stack, and watches on the heap
-  ("Watching"): with xPack GCC 15.2, fs is 76,648 bytes in RAM (152 under
-  its budget) and 34,593 bytes stored.
+  ("Watching"): with xPack GCC 15.2, fs is 76,792 bytes in RAM (8 under
+  its budget) since the watch checks above (0.0.7), 76,648 before.
 - **No printf in fs.** The few lines `fs` prints go through `say()`.
   The printf family, with the 64-bit division it brings, was 12KB of
   `fs`, in an archive with no room for it.

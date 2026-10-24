@@ -60,6 +60,13 @@ bool ip_send(uint32_t ip, uint8_t proto, const uint8_t *p, uint16_t len) {
 	(void)be16;
 	return true;
 }
+// tcp.c builds a segment in the outgoing frame and sends it in place
+// (ip.h, ip_tx_payload() / ip_send_built()): here the frame is ours.
+static uint8_t tx_frame[1600];
+uint8_t *ip_tx_payload(void) { return tx_frame; }
+bool ip_send_built(uint32_t ip, uint8_t proto, uint16_t len) {
+	return ip_send(ip, proto, tx_frame, len);
+}
 
 // -- the kernel: one mailbox per pid --
 typedef struct { z_msg_t m[512]; int n; } box_t;

@@ -328,7 +328,7 @@ This book is released under the Creative Commons CC0 1.0 Universal Public Domain
 - [Connector Pinouts](#connector-pinouts)
   - [Pmod](#pmod)
   - [Sechs](#sechs)
-  - [Zwoelf](#zwlf)
+  - [Zwoelf](#zwoelf)
   - [Werkzeug](#werkzeug)
   - [Raspberry Pi GPIO](#raspberry-pi-gpio)
   - [Serial Connectors](#serial-connectors)

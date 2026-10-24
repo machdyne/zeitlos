@@ -117,8 +117,9 @@ board boots to a desktop with no sdcard ([core apps in flash](#core-apps-in-flas
 | [read](docs/read_app.md) | Text reader for files of unlimited size (with rendered Markdown) |
 | [bench](docs/bench.md) | Virtual parts -- I/O expanders, LEDs, buttons, lamps -- on I2C buses, from a netlist, shown live; with [ls99](docs/ls99.md) virtual Zwölf modules |
 | [hex](docs/hex_editor.md) | Hex editor for files of unlimited size |
-| draw | MacPaint-inspired drawing app |
+| [draw](docs/draw_app.md) | MacPaint-inspired drawing app |
 | [pix](docs/pix_app.md) | Pixel editor: sprite sheets and pictures in up to 256 colours, animation, dock icons, fonts, the mouse pointer; brings in PNG, GIF, BMP and JPEG |
+| [convert](docs/convert.md) | Documents (Word, OpenDocument, RTF, HTML; EPUB read) and tables (Excel, OpenDocument, CSV) to and from what text and sheet use, and zip, tar and gz archives unpacked; double-click such a file in files |
 | [view](docs/view_app.md) | Image viewer: BMP, PNM, GIF, JPEG, [PNG](docs/png.md) and [SVG](docs/svg.md) |
 | [calc](docs/calc_app.md) | Calculator |
 | [info](docs/info_app.md) | System info |
@@ -146,7 +147,7 @@ board boots to a desktop with no sdcard ([core apps in flash](#core-apps-in-flas
 | [chip8](docs/chip8_app.md) | CHIP-8 game emulator |
 | [mausrun](docs/mausrun.md) | Maus Run: a side-scrolling platformer for children -- eight levels in four themes, cheese, stars, cats |
 | [planedemo](docs/planedemo.md) | A one-minute demoscene film about Zeitlos: 256 colours, eight voices, a clock, a storm, a donut, a tunnel, a mouse |
-| space3d | First-person 3D space shooter game |
+| [space3d](docs/space3d_app.md) | First-person 3D space shooter game |
 | [snake](docs/snake_app.md) | The classic snake game: four ways to play, two players, 16 colours full screen |
 | [blocks](docs/blocks_app.md) | Falling blocks: endless, 40 lines against the clock, 3 minutes for points |
 | [bricks](docs/bricks_app.md) | Break the wall with a paddle and a ball: twelve rounds, capsules, mouse or keys |

@@ -128,8 +128,8 @@ static const char help_text[] =
 	"Ctrl+N asks what to make: icon, cursor, sprite 16 16 (and how many "
 	"colours: sprite 16 16 64), font 6 12, picture 320 240 (in colour: "
 	"picture 320 240 256).\n\n"
-	"The dock's icons: open /data/wm/dock.zic. Saving writes only the "
-	"icons you changed or added, to /data/wm/icons.zic.";
+	"The dock's icons: open " Z_PATH_WM_ICONS ". Saving writes only the "
+	"icons you changed or added, to " Z_PATH_WM_ICON_OVERRIDES ".";
 
 static void pix_paint(void *user, const ar_rect_t *r);
 
@@ -1901,7 +1901,7 @@ static bool make_new(const char *what) {
 	path[0] = 0;
 	overrides = false;
 	after_load();
-	message(doc.cursor ? "New pointer: save as /data/wm/cursor.zsp" : "New");
+	message(doc.cursor ? "New pointer: save as " Z_PATH_WM_CURSOR : "New");
 	return true;
 }
 
@@ -1944,7 +1944,7 @@ static void new_cell(void) {
 		doc.cell[i].code = (uint32_t)code;
 		px_glyph_name(doc.cell[i].name, (uint32_t)code);
 	} else if (doc.kind == PX_ZIC) {
-		if (!ask("New icon", "The app's name, as in /apps", NULL, a, sizeof(a))) return;
+		if (!ask("New icon", "The app's name, as in " Z_DIR_APPS, NULL, a, sizeof(a))) return;
 		if (strlen(a) > 15) { message("At most 15 letters"); return; }
 		if (px_find(&doc, a) >= 0) { set_cell(px_find(&doc, a)); message("There is one"); return; }
 		i = 0;

@@ -69,6 +69,14 @@ static uint32_t run_pid = 20;
 static int runs;
 static char last_run[32];
 
+// Z_SYS_PROC_SERIAL: a process's serial; serial_gen[pid]++ is another
+// program at that pid.
+static uint32_t serial_gen[64];
+
+// The last message wm sent: its subject, and its string if it had one.
+static uint32_t sent_subject;
+static char sent_str[Z_WM_ARG_MAX];
+
 // The process table Z_SYS_PROC_LIST reports.
 static z_proc_info_t ptab[40];
 static int nptab;
@@ -155,6 +163,20 @@ static uint32_t *k_syscall(uint32_t id, uint32_t *args, uint32_t b) {
 		proc_lists++;
 		return (uint32_t *)&k_ok;
 	}
+	case Z_SYS_PROC_SERIAL: {
+		z_proc_serial_args_t *a = (z_proc_serial_args_t *)args;
+		a->serial = a->pid < 64 ? a->pid * 1000u + serial_gen[a->pid] + 1u : 0;
+		return (uint32_t *)&k_ok;
+	}
+	case Z_SYS_MSG_SEND: {
+		// what wm says, for the launch-argument checks
+		z_msg_t *m = (z_msg_t *)args;
+		sent_subject = m->subject;
+		sent_str[0] = 0;
+		if (m->obj.type == Z_STR && m->obj.val.str)
+			strncpy(sent_str, m->obj.val.str, sizeof(sent_str) - 1);
+		return (uint32_t *)&k_ok;
+	}
 	case Z_SYS_EXEC_EXISTS_MANY: {
 		z_exec_many_args_t *a = (z_exec_many_args_t *)args;
 		for (uint32_t i = 0; i < a->count; i++) a->found[i] = installed(a->names[i]);
@@ -184,6 +206,29 @@ static void hardware(bool audio, bool gpio) {
 	reg_csr_magic = Z_CSR_MAGIC;
 	reg_csr_features = audio ? Z_FEATURE_AUDIO : 0;
 	reg_csr_features2 = (gpio ? Z_FEATURE2_GPIO : 0) | ((uint32_t)Z_CSR_FEATURES2_SIG << 16);
+}
+
+// -- messages to wm, as handle_message() gets them --
+
+static void wm_msg(uint32_t from, uint32_t subject, z_obj_t o) {
+	z_msg_t m;
+	memset(&m, 0, sizeof(m));
+	m.from = from;
+	m.subject = subject;
+	m.obj = o;
+	handle_message(&m);
+}
+static void set_arg(uint32_t from, const char *a) {
+	z_obj_t o;
+	o.type = Z_STR;
+	o.val.str = (char *)a;
+	wm_msg(from, Z_WM_SET_ARG, o);
+}
+static void child(uint32_t from, uint32_t pid) { wm_msg(from, Z_WM_ARG_CHILD, z_obj_uint32(pid)); }
+static const char *ask_arg(uint32_t pid) {
+	sent_str[0] = 0;
+	wm_msg(pid, Z_WM_GET_ARG, z_obj_none());
+	return sent_str;
 }
 
 // -- checking --
@@ -948,6 +993,53 @@ int main(int argc, char **argv) {
 		set_file(3, NULL, 0);
 		dock_build();
 		expect(!memcmp(icon_of(find_app("term")), was, DK_ICON_BYTES), "gone: the release's icon");
+	}
+
+	// -- launch arguments (zwm.h): loads overlap, so an argument is
+	// its launcher's and then its child's --
+	printf("launch arguments\n");
+	{
+		memset(pending_args, 0, sizeof(pending_args));
+		proc("view", Z_PROC_FLAG_ACTIVE | Z_PROC_FLAG_LOADING);
+		uint32_t view = ptab[nptab - 1].pid;
+		proc("view", Z_PROC_FLAG_ACTIVE | Z_PROC_FLAG_LOADING);
+		uint32_t view2 = ptab[nptab - 1].pid;
+		const uint32_t files = 7, dock = 9, shell = 10, text = 33, gone = 34;
+
+		// a launch that failed: its argument goes, not to the next app
+		set_arg(files, "/home/a.txt");
+		child(files, 0);
+		expect(!strcmp(ask_arg(30), ""), "a failed launch's argument is dropped");
+
+		// a third argument while one child loads: the slot of the one
+		// that is not loading is the one given up
+		set_arg(files, "/home/a.jpg");
+		child(files, view);
+		set_arg(dock, "x");
+		child(dock, text);
+		set_arg(shell, "y");
+		expect(!strcmp(ask_arg(view), "/home/a.jpg"), "a loading child's argument is kept");
+		expect(sent_subject == Z_WM_ARG, "answered with Z_WM_ARG");
+		expect(!strcmp(ask_arg(31), "y"), "the newest is there for nobody yet");
+		expect(!strcmp(ask_arg(text), ""), "the older, not loading, gave way");
+
+		// expiry: not while the child is loading, as before otherwise
+		set_arg(files, "/home/b.jpg");
+		child(files, view2);
+		set_arg(dock, "c");
+		child(dock, gone);
+		ticks += Z_WM_ARG_TIMEOUT + 100;
+		// (gone asks first: any ask expires every slot past its time)
+		expect(!strcmp(ask_arg(gone), ""), "a child that never asked: expired");
+		expect(!strcmp(ask_arg(view2), "/home/b.jpg"), "no expiry while loading");
+
+		// a child whose load failed, its pid given to another program
+		// before the argument expired: that one is not its child
+		set_arg(files, "/home/d.jpg");
+		child(files, 36);
+		serial_gen[36]++;
+		expect(!strcmp(ask_arg(36), ""), "not to the next program at a dead child's pid");
+		expect(!strcmp(ask_arg(37), ""), "and dropped, not left for anyone");
 	}
 
 	printf("  %d file calls in all\n", fs_calls);

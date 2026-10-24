@@ -467,13 +467,23 @@ that predates the registry).
 running process launch another one -- before it existed, only
 kernel-space code (`sh.c`, compiled directly into `kernel.bin`, not a
 syscall caller at all) could call `k_proc_create()`/`fs_load()`/
-`k_proc_start()`. It's the same three-call sequence sh.c's `run`
-command and `init()` use, just wrapped as a syscall so e.g.
-`sw/apps/wm`'s dock (see `docs/window_manager.md`, "The dock") can
-call it too. Takes a bare filename (`z_proc_run("term")`, no path or
-extension -- same name you'd type after `run` at the shell prompt),
-returns the new pid or 0 on failure (file not found, or no free
-process slot).
+`k_proc_start()`. It is the same launch sh.c's `run` command makes,
+wrapped as a syscall so e.g. `sw/apps/wm`'s dock (see
+`docs/window_manager.md`, "The dock") can call it too. Takes a bare
+filename (`z_proc_run("term")`, no path or extension -- same name you'd
+type after `run` at the shell prompt), and returns the new pid, or 0
+when it cannot start (file not found, no memory, no free process
+slot).
+
+It returns **before the program is loaded**: the new process loads
+its program itself, in the background (`k_proc_launch()`;
+[kernel.md](kernel.md#launching-in-the-background)). So a pid is not a
+running program yet, and a load that fails later -- a damaged file --
+ends that process with the crash status rather than failing the call.
+A caller that waits for something the program does (registers a
+service, makes a window) starts its timeout once
+`z_proc_loading(pid)` is false. `init` still loads the core apps
+itself, one after another.
 
 The kernel (`sw/os/*`) doesn't link `zeitlos.c` itself -- it *is* the
 privileged side these wrappers are calling into, so it has its own,

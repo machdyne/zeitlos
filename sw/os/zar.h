@@ -196,7 +196,7 @@ int k_exec_unpack(uint8_t *out, uint32_t len, z_exec_fill_t fill, void *ctx);
 // How long the last one took, in ticks, and how many of them the loading
 // process had the CPU for (the rest went to the others): the shell
 // prints both beside the whole load (init, run).
-extern uint32_t k_exec_unpack_ticks, k_exec_unpack_cpu;
+extern uint32_t k_exec_unpack_ticks[], k_exec_unpack_cpu[];	// by pid (kfs.c)
 
 int z_zar_load_exec(uint32_t dst, const char *name,
 	const z_exec_info_t *info);

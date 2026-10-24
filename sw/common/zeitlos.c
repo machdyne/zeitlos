@@ -777,6 +777,18 @@ uint32_t z_proc_list(z_proc_info_t *out, uint32_t max, uint32_t *truncated) {
 
 }
 
+bool z_proc_loading(uint32_t pid) {
+	// the whole table (Z_PROCS_MAX, sw/os/kernel.h, is 32): 1.8KB that
+	// only a program calling this links
+	static z_proc_info_t procs[32];
+	uint32_t n = z_proc_list(procs, sizeof(procs) / sizeof(procs[0]), NULL);
+	for (uint32_t i = 0; i < n; i++)
+		if (procs[i].pid == pid)
+			return (procs[i].flags & (Z_PROC_FLAG_LOADING | Z_PROC_FLAG_DIE)) ==
+				Z_PROC_FLAG_LOADING;
+	return false;
+}
+
 // fills `out` with the kernel memory pool's current state -- the same
 // numbers sh.c's `free` prints, in bytes. true on success.
 //

@@ -229,14 +229,18 @@ int main(void) {
 	} else {
 		measure_absent();
 		printf("ttstest: starting tts\n");
-		if (!z_proc_run("tts")) {
+		uint32_t tp = z_proc_run("tts");
+		if (!tp) {
 			printf("ttstest: FAIL could not start tts -- is it installed?\n");
 			return 1;
 		}
 		started = true;
 		// Wait for it to register (it has to load first).
-		uint32_t deadline = z_uptime_ticks() + 3 * Z_TICK_HZ;
+		uint32_t t0 = z_uptime_ticks(), deadline = t0 + 3 * Z_TICK_HZ;
 		while (!z_pid_lookup(Z_TTS_SERVICE, &pid)) {
+			// three seconds from when it is in (a minute at most to load)
+			if (z_uptime_ticks() - t0 < 60u * Z_TICK_HZ && z_proc_loading(tp))
+				deadline = z_uptime_ticks() + 3 * Z_TICK_HZ;
 			if ((int32_t)(z_uptime_ticks() - deadline) > 0) {
 				printf("ttstest: FAIL tts started but never registered\n");
 				return 1;

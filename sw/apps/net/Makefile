@@ -491,6 +491,8 @@ test:
 	$(HOSTCC) --std=gnu99 -Wall -DTFTP_HOST_TEST -I. -I../../common -o /tmp/test_tftp_get \
 		tests/test_tftp_get.c
 	/tmp/test_tftp_get
+	$(HOSTCC) -O2 -o /tmp/test_rxfifo_status tests/test_rxfifo_status.c
+	/tmp/test_rxfifo_status
 
 CLEAN_EXTRA = .net_phy_selected .net_config_selected
 

@@ -14,6 +14,7 @@
 #include "../../common/zfsc.h"
 #include "../../common/zargs.h"
 #include "bkwatch.h"
+#include "../../common/zpaths.h"
 
 // Is `inner` the folder `outer`, or inside it? Case-insensitive, as FAT.
 static bool within(const char *outer, const char *inner) {
@@ -47,7 +48,7 @@ bool bkw_start(bkw_t *w, const bk_opts_t *o, const char *spec) {
 		while (l > 1 && p[l - 1] == '/') p[--l] = 0;
 		bool in_from = false;
 		for (int k = 0; k < o->nfrom && !in_from; k++) in_from = o->from[k] && within(o->from[k], p);
-		if (p[0] != '/') { why_add(w, p, "is not a path (/home/book)"); continue; }
+		if (p[0] != '/') { why_add(w, p, "is not a path (" Z_DIR_HOME "/book)"); continue; }
 		if (o->dest && (within(o->dest, p) || within(p, o->dest))) { why_add(w, p, "is the backup drive's"); continue; }
 		if (!in_from) { why_add(w, p, "is not in From, so not backed up"); continue; }
 		if (w->n == BKW_WATCHES) { why_add(w, p, "is one too many (4 at most)"); continue; }
@@ -118,9 +119,11 @@ void bkw_poll(bkw_t *w, uint32_t now) {
 	uint32_t writers = 0;
 	int had = w->npend;
 	bool changed = false;
+	uint32_t lost = 0;      // watches fs no longer has
 	for (int i = 0; i < w->n; i++) {
 		z_fs_watch_t h;
 		int32_t k = zfs_watch_read(w->wd[i], &h, paths, sizeof paths);
+		if (k == -Z_EBADF) { lost |= 1u << i; continue; }
 		if (k < 0) continue;
 		writers += h.writers;
 		const char *p = paths;
@@ -131,6 +134,20 @@ void bkw_poll(bkw_t *w, uint32_t now) {
 			changed = true;
 		}
 		if (h.flags & Z_FS_WATCH_MORE) { add(w, w->what[i], true); changed = true; w->seen++; }
+	}
+	// fs no longer has these: fs restarted (its watches are in its
+	// memory), or swept them. Watched again only now, after every read:
+	// a number fs gives out again here could be one still to be read
+	// above, and two watches would become one. What was saved in
+	// between is not known, so the folder is backed up (which copies
+	// only what changed).
+	for (int i = 0; i < w->n; i++) {
+		if (!(lost >> i & 1u)) continue;
+		int32_t r = zfs_watch(w->what[i]);
+		if (r < 0) continue;
+		w->wd[i] = r;
+		add(w, w->what[i], true);
+		changed = true;
 	}
 	// a file closed after writing is a change too: it came with a notice
 	if (writers != w->writers) changed = true;

@@ -28,6 +28,7 @@ _sys.dont_write_bytecode = True
 import json
 import os
 import shutil
+import struct
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -89,32 +90,62 @@ def fake_run(pnr_text):
             os.makedirs(out, exist_ok=True)
             with open(os.path.join(out, "soc.bit"), "wb") as f:
                 f.write(os.urandom(412 * 1024))
+            with open(os.path.join(out, "pnr.log"), "w") as f:
+                f.write(pnr_text)
         # `make jumploader` makes one only on a board whose Makefile block
-        # sets JUMP -- asked of the real Makefile, as build.py asks it --
-        # unless the test is checking that a missing one is refused
+        # sets JUMP -- asked of the real Makefile, as build.py asks it
         board_arg = next((c.split("=", 1)[1] for c in cmd if c.startswith("BOARD=")), "")
-        if "jumploader" in cmd and not NO_JUMPLOADER and build_mod.board_jumps(ROOT, board_arg.lower()):
+        if "jumploader" in cmd and build_mod.board_jumps(ROOT, board_arg.lower()):
             os.makedirs(out, exist_ok=True)
             with open(os.path.join(out, "jump.bit"), "wb") as f:
                 f.write(os.urandom(162 * 1024))
-            with open(os.path.join(out, "pnr.log"), "w") as f:
-                f.write(pnr_text)
         if "os" in cmd:
             os.makedirs(os.path.join(ROOT, "sw/os"), exist_ok=True)
             with open(os.path.join(ROOT, "sw/os/kernel.bin"), "wb") as f:
                 f.write(os.urandom(118 * 1024))
         if "apps" in cmd:
-            for app in ("wm", "net", "term"):
+            # every core app, each a third of its flash budget so the
+            # real mkzar.py accepts it (random bytes do not compress,
+            # so they are stored as they are)
+            budgets = spec.core_budgets(ROOT)["budgets"]
+            for app in fake_apps():
                 p = os.path.join(ROOT, "sw/apps", app, app + ".bin")
                 os.makedirs(os.path.dirname(p), exist_ok=True)
+                size = budgets.get(app, (60 * 1024, 0))[0] // 3
                 with open(p, "wb") as f:
-                    f.write(b"ZEXE" + os.urandom(60 * 1024))
+                    f.write(struct.pack("<4sHHII", b"ZEXE", 1, 0, 0, 0)
+                            + os.urandom(size))
+        if "core-files" in cmd:
+            # the files in flash (docs as text, wm's dock, repl's
+            # examples): made for real -- python and cp, no toolchain
+            return build_mod.__dict__["_real_run"](cmd, cwd, env, dry, False)
         return ""
     return _run
 
 
-# set by the test of a jumploader board whose `make jumploader` made nothing
-NO_JUMPLOADER = False
+def fake_apps():
+    """Every core app, as the Makefile lists them (CORE_APPS)."""
+    return spec.core_apps(ROOT)[0]
+
+
+def keep_aside(paths):
+    """Move the developer's own builds out of the way of the fakes, so
+    the test can put them back afterwards instead of deleting them.
+    Returns {path: saved copy}."""
+    saved = {}
+    for p in paths:
+        if os.path.isfile(p):
+            q = p + ".selftest-saved"
+            shutil.move(p, q)
+            saved[p] = q
+    return saved
+
+
+def put_back(saved):
+    for p, q in saved.items():
+        if os.path.exists(p):
+            os.unlink(p)
+        shutil.move(q, p)
 
 
 def cleanup(created):
@@ -135,11 +166,13 @@ def main():
     # whole tree afterwards would delete a developer's working
     # bitstreams as the price of running the test suite.
     created = [out, os.path.join(ROOT, "output", "releases")]
-    for app in ("wm", "net", "term"):
-        created.append(os.path.join(ROOT, "sw/apps", app, app + ".bin"))
-    created.append(os.path.join(ROOT, "sw/os/kernel.bin"))
+    bins = [os.path.join(ROOT, "sw/apps", a, a + ".bin") for a in fake_apps()]
+    bins.append(os.path.join(ROOT, "sw/os/kernel.bin"))
+    created.extend(bins)
+    saved = keep_aside(bins)
 
     build_mod._real_run = build_mod.run
+    real_jumps = build_mod.board_jumps
     failures = []
 
     try:
@@ -202,21 +235,26 @@ def main():
             results.append(build_mod.build_target(ROOT, t, version, out,
                                                   soft))
 
-        # --- 2b. a jumploader board with no jumploader is refused -----
-        print("\n== a jumploader board without its jumploader is refused ==")
-        global NO_JUMPLOADER
-        NO_JUMPLOADER = True
+        # --- 2b. a board built with JUMP=1 is refused -----------------
+        #
+        # JUMP is opt-in (`make BOARD=x JUMP=1`, docs/zboot.md sec. 5) and
+        # a release image never carries a jumploader: the gateware would
+        # reload from past the first 2 MB, outside the image. build.py
+        # refuses before place and route; here mozart_ml1 is made to look
+        # like a board whose Makefile block sets JUMP.
+        print("\n== a board built with JUMP=1 is refused ==")
+        build_mod.board_jumps = lambda root, board: board == "mozart_ml1"
         try:
             build_mod.build_target(ROOT, spec.load_target(ROOT, "mozart_ml1"),
-                                   version, os.path.join(out, "nojump"), soft)
-            failures.append("an image was built for mozart_ml1 without its jumploader")
+                                   version, os.path.join(out, "jump"), soft)
+            failures.append("an image was built for mozart_ml1 with JUMP=1")
         except build_mod.BuildError as e:
-            if "jumploader" not in str(e):
-                failures.append("refused, but not for the jumploader: %s" % e)
+            if "JUMP=1" not in str(e):
+                failures.append("refused, but not for JUMP: %s" % e)
             else:
-                print("   refused: %s" % str(e).split(". ")[0])
+                print("   refused: %s" % str(e).split(" -- ")[0])
         finally:
-            NO_JUMPLOADER = False
+            build_mod.board_jumps = real_jumps
 
         # --- 3. the images really do contain what they claim ----------
         print("\n== image contents ==")
@@ -296,9 +334,7 @@ def main():
         notes_mod.write(os.path.join(out, "README.txt"), rt)
         for must in ("zeitlos-mozart_ml1.img", "RMII", "FLASH LAYOUT",
                      "zeitlos.img.gz", "zeitlos-arkmedium.img.gz",
-                     "fits a 4 GB card", "Ark Medium",
-                     "zeitlos-mozart_ml1-jump.bin",
-                     "jumploader"):
+                     "fits a 4 GB card", "Ark Medium"):
             if must not in rt:
                 failures.append("README.txt is missing %r" % must)
         print("   README.txt describes every asset")
@@ -322,7 +358,9 @@ def main():
 
     finally:
         build_mod.run = build_mod._real_run
+        build_mod.board_jumps = real_jumps
         cleanup(created)
+        put_back(saved)
 
     print("\n==================")
     if failures:

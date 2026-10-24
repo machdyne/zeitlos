@@ -187,11 +187,15 @@ static bool ensure_tts(void) {
 	if (z_pid_lookup(Z_TTS_SERVICE, &tts_pid)) { narrator_lease(); return true; }
 	if (!z_exec_exists("tts")) return false;
 	printf("automate: starting tts\n");
-	z_proc_run("tts");
-	uint32_t end = now() + ms_ticks(5000);
+	uint32_t tp = z_proc_run("tts");
+	uint32_t t0 = now(), end = t0 + ms_ticks(5000);
 	while ((int32_t)(now() - end) < 0) {
 		z_proc_wait(ms_ticks(50));
 		pump();
+		// the 5 s are from when it is in (it loads in the background;
+		// a minute at most for that)
+		if (tp && now() - t0 < ms_ticks(60000) && z_proc_loading(tp))
+			end = now() + ms_ticks(5000);
 		if (z_pid_lookup(Z_TTS_SERVICE, &tts_pid)) {
 			narrator_lease();
 			// "Speech on" is not part of the demo. A STOP from the
@@ -510,8 +514,12 @@ static uint32_t app_pid(const char *name) {
 static bool await_app(const char *name, uint32_t ms) {
 	uint32_t pid = app_pid(name);
 	if (!pid) return true;
-	uint32_t end = now() + ms_ticks(ms);
+	uint32_t t0 = now(), end = t0 + ms_ticks(ms);
 	while ((int32_t)(now() - end) < 0) {
+		// the time is from when it is in (it loads in the background;
+		// a minute at most for that)
+		if (now() - t0 < ms_ticks(60000) && z_proc_loading(pid))
+			end = now() + ms_ticks(ms);
 		if (query(pid) && info.found) {
 			// Its first paint.
 			return wait_ms(120);

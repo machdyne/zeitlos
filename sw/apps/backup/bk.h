@@ -147,7 +147,7 @@ typedef struct {
 	// saved. nonly == 0: a full backup.
 	const char *const *only; int nonly;
 	// A source that is not there is not mentioned (the defaults name
-	// /sys/net.cfg, which many cards have not got).
+	// /sys/zeitlos.cfg, which a card may not have).
 	bool quiet_missing;
 } bk_opts_t;
 

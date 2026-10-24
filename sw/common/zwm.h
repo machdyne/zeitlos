@@ -611,7 +611,12 @@ typedef struct {
 // kernel at every launch, as the launcher (k_proc_launch(), sw/os/
 // kernel.c) -- says whose it is. An app asking gets the argument meant for it, or
 // else the oldest that is meant for nobody yet (a launcher from before
-// Z_WM_ARG_CHILD; a child faster than its launcher's message).
+// Z_WM_ARG_CHILD; a child faster than its launcher's message), and
+// only by that process -- not a later one given the same pid. While a
+// child is still loading (Z_PROC_FLAG_LOADING), its argument does not
+// expire, and is not given up for a newer one while the other slot can
+// be (with both children loading, the older goes). A Z_WM_ARG_CHILD
+// of 0 says the launch failed, and the launcher's argument is dropped.
 //
 // Claiming is destructive: wm marks the slot empty as soon as it
 // answers, so a second app starting later gets nothing rather than
@@ -895,7 +900,8 @@ typedef struct {
 
 // Z_WM_ARG_CHILD -- the launch argument this process last set is for
 // this pid (Z_UINT32); sent by the kernel at a launch, as the launcher.
-// See "launch arguments" above. No reply.
+// 0: the launch failed (no such program, no memory), and the argument
+// is dropped. See "launch arguments" above. No reply.
 #define Z_WM_ARG_CHILD           (Z_SUBJ_WM + 35)
 
 // Z_WM_COLOR -- wm -> the owner of a Z_WIN_FLAG_COLOR window (tag: the

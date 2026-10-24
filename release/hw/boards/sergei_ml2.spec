@@ -43,6 +43,9 @@ defines =
     MEM_GLYPH
     ICACHE
     MONTMUL
+    MONTMUL_REGS
+    SHA256
+    KECCAK
     ICACHE_KB=8
     ICACHE_LINE_WORDS=4
     DCACHE
@@ -56,6 +59,7 @@ defines =
     GPU_DDMI
     COLOR
     GAME_PLANES=8
+    COLOR_WINDOW
     UART0
     USB_HOST
     SPI_SDCARD

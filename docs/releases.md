@@ -16,12 +16,12 @@ for five small hooks, listed under [Changes outside
 
 ```
 $ release/zrelease check                 # before anything else
-$ release/zrelease build v0.0.3          # into release/dist/0.0.3/
+$ release/zrelease build v0.0.7          # into release/dist/0.0.7/
   ... flash one, boot it, look at it ...
-$ release/zrelease ship v0.0.3           # create or update on GitHub
+$ release/zrelease ship v0.0.7           # create or update on GitHub
 ```
 
-`make -C release build VERSION=v0.0.3` does the same if that fits the
+`make -C release build VERSION=v0.0.7` does the same if that fits the
 hand better. `release/zrelease --help` lists everything.
 
 Build and ship are separate commands and neither implies the other.
@@ -36,15 +36,17 @@ helpfully rebuilding something nobody has looked at.
 ## What comes out
 
 ```
-release/dist/0.0.3/
-  zeitlos-lakritz_ddmi_audio.img    sound over HDMI (docs/ddmi_audio.md)
-  zeitlos-lakritz_gpio.img          gateware + kernel + core apps
-  zeitlos-lakritz_kabellos.img
-  zeitlos-lakritz_katze.img
-  zeitlos-lakritz_langkatze.img
-  zeitlos-mozart_ml1.img
-  zeitlos-sergei_ml1.img
-  zeitlos-<target>-gateware.bit     per board
+release/dist/0.0.7/
+  zeitlos-<target>.img              gateware + kernel + core apps, one
+                                    per release/targets/*.spec
+                                    (`zrelease list`; all of them unless
+                                    --targets): zeitlos-lakritz_gpio.img,
+                                    zeitlos-mozart_ml1.img, ...
+  zeitlos-<target>-dfu.bin          the same for dfu-util, for a board
+                                    whose spec sets dfu_base (Klinge,
+                                    Konfekt, Lakritz, Minze, Noir, Obst,
+                                    Schoko); see dfu_upgrade.md
+  zeitlos-<target>-gateware.bit     per target
   zeitlos-kernel.bin                identical for every target
   zeitlos-apps.zar                  every core app (Makefile CORE_APPS);
                                     identical for every target
@@ -452,7 +454,7 @@ Then once per release: the sdcard images, `README.txt`, `NOTES.md`,
 
 | Guard | Why | Override |
 | --- | --- | --- |
-| Version mismatch | `sw/common/zversion.h` says 0.0.2 and you asked for 0.0.3. The version is compiled into the kernel and shown by `info`; shipping these mismatched means the release page and the running system disagree about what it is, discovered from a screenshot months later. | `--bump` (edits the header — commit it) |
+| Version mismatch | `sw/common/zversion.h` says 0.0.6 and you asked for 0.0.7. The version is compiled into the kernel and shown by `info`; shipping these mismatched means the release page and the running system disagree about what it is, discovered from a screenshot months later. | `--bump` (edits the header — commit it) |
 | Dirty tree | `MANIFEST.json` would record a commit the artifacts did not come from. The message lists the files; anything `.gitignore` covers is already excluded, so nothing listed is build output. | `--allow-dirty` |
 | Spec drift | A board spec no longer matches `rtl/boards.vh`, so a release would build something other than what `make BOARD=x flash` builds. | `--allow-drift` |
 | Timing failure | A named clock domain missed its target in the **final** report, on every seed tried (three by default). IO domains are advisory; see below. | `--allow-timing-fail` |
@@ -687,8 +689,8 @@ packs are built by `tools/ask` beforehand; a missing one stops the
 build with the command that makes it.
 
 ```
-$ release/zrelease build v0.0.4                              # all four
-$ release/zrelease build v0.0.4 --sdcards full,serious,base  # without arkmed
+$ release/zrelease build v0.0.7                              # all four
+$ release/zrelease build v0.0.7 --sdcards full,serious,base  # without arkmed
 $ release/zrelease sdcard --variant serious                  # just one, no release
 $ release/zrelease sdcard --sets base,dev,embedded           # any choice of sets
 ```
@@ -906,18 +908,18 @@ Building is **incremental** into `dist/<version>/`. Build two targets
 today, publish, add a third next week under the same version:
 
 ```
-$ release/zrelease build v0.0.2 --targets lakritz_gpio lakritz_langkatze
-$ release/zrelease ship  v0.0.2
+$ release/zrelease build v0.0.7 --targets lakritz_gpio lakritz_langkatze
+$ release/zrelease ship  v0.0.7
   ...later...
-$ release/zrelease build v0.0.2 --targets sergei_ml1
-$ release/zrelease ship  v0.0.2
+$ release/zrelease build v0.0.7 --targets sergei_ml1
+$ release/zrelease ship  v0.0.7
 ```
 
 The second `build` adds to the directory rather than replacing it, and
 says what it found:
 
 ```
-already in release/dist/0.0.2:
+already in release/dist/0.0.7:
   lakritz_gpio         keep
   lakritz_langkatze    keep
 ```
@@ -939,11 +941,11 @@ directory. Come back, fix the target that failed, and build only that
 one:
 
 ```
-$ release/zrelease build v0.0.4 --targets lakritz_gpio lakritz_langkatze mozart_ml1
+$ release/zrelease build v0.0.7 --targets lakritz_gpio lakritz_langkatze mozart_ml1
   ...lakritz_gpio builds, lakritz_langkatze misses timing, the run stops...
 
-$ release/zrelease build v0.0.4 --targets lakritz_langkatze mozart_ml1
-already in release/dist/0.0.4:
+$ release/zrelease build v0.0.7 --targets lakritz_langkatze mozart_ml1
+already in release/dist/0.0.7:
   lakritz_gpio         keep
 ```
 
@@ -955,7 +957,7 @@ Naming the remaining targets is one way. `--resume` is the other, and
 does not need you to work out which they were:
 
 ```
-$ release/zrelease build v0.0.4 --resume
+$ release/zrelease build v0.0.7 --resume
 --resume: skipping 5 already built (lakritz_gpio, lakritz_langkatze, ...)
 ```
 
@@ -972,7 +974,7 @@ Noticing a stale file on the card after shipping is normal, and redoing
 eight place-and-routes to fix it is not:
 
 ```
-$ release/zrelease build v0.0.4 --resume --rebuild-sdcard
+$ release/zrelease build v0.0.7 --resume --rebuild-sdcard
 --resume: skipping 8 already built (lakritz_gpio, ...)
 
 no targets left; rebuilding the sdcard image only.
@@ -1025,11 +1027,11 @@ every syscall past the point they diverge. So a build that would mix
 commits stops:
 
 ```
-release/dist/0.0.2 was built from 0123456789ab; you are now on ef243b7dfd47.
+release/dist/0.0.7 was built from 0123456789ab; you are now on ef243b7dfd47.
   ...
   Either check out 0123456789ab and build there, or rebuild every target
   from the current commit:
-    rm -rf release/dist/0.0.2 && release/zrelease build 0.0.2
+    rm -rf release/dist/0.0.7 && release/zrelease build 0.0.7
 ```
 
 Coming back later and building the rest **from the same commit** is
@@ -1061,7 +1063,7 @@ is in [update.md](update.md).
 ## Publishing and updating
 
 ```
-$ release/zrelease ship v0.0.3
+$ release/zrelease ship v0.0.7
 ```
 
 Creates the release if the tag is new, updates it if not. `--draft`,
@@ -1076,8 +1078,8 @@ Updating is the common case: a release goes out and one target needs a
 fix.
 
 ```
-$ release/zrelease build v0.0.2 --targets lakritz_gpio
-$ release/zrelease ship v0.0.2
+$ release/zrelease build v0.0.7 --targets lakritz_gpio
+$ release/zrelease ship v0.0.7
 ```
 
 `ship` on an existing tag uploads with `--clobber`, replacing assets by
@@ -1104,8 +1106,11 @@ $ python3 release/lib/selftest.py
 Runs the whole pipeline with the `make` calls stubbed out and plausible
 artifacts written in their place. Everything from the generated
 `zspec.vh` through image assembly, the manifest, the notes and the
-checksums is real code on real data. It checks, among other things, that
+checksums is real code on real data, and so are mkzar.py, with every
+core app's budget, and `make core-files` (the docs and dock files in
+flash). It checks, among other things, that
 a timing failure stops a build, that `--allow-timing-fail` overrides it,
+that a board built with `JUMP=1` is refused ("No jumploader", above),
 that the ZAR magic and the kernel land at the right offsets, that gaps
 are left erased, and that `net` is in the archive exactly when the
 target has a MAC.
@@ -1116,8 +1121,12 @@ $ python3 release/lib/test_incremental.py
 
 covers the multi-sitting workflow above: that a second build adds to
 `dist/` instead of replacing it, that the notes and manifest describe
-every target rather than the last command's, and that rebuilding one
-target in place leaves the others alone.
+every target rather than the last command's, that rebuilding one
+target in place leaves the others alone, and that `--resume
+--rebuild-sdcard` remakes only the cards and the update store (the
+store's own publishing is test_store.py's). It parses its arguments
+with `zrelease`'s own parser (`make_parser()`), so a new flag cannot
+leave it on a stale path.
 
 ```
 $ python3 release/lib/test_store.py
@@ -1134,7 +1143,10 @@ updates, `sw/apps/update`, is tested against stores these write:
 `make -C sw/apps/update/tests` ([update.md](update.md#testing)).
 
 All of them clean up after themselves. `git status` is unchanged
-afterwards.
+afterwards, and the stand-in binaries the first two write for every
+core app and the kernel do not replace a tree's own builds: those are
+moved aside first and put back. `make test` at the top runs them with
+every other host test ([build.md](build.md#tests)).
 
 ---
 
