@@ -492,6 +492,9 @@ column shows the logic cells, and any other resource only when it is
 marked; the block RAM column always shows the blocks used of what the
 part has (`DP16KD 37/56` on ECP5, `RAMB18E1`/`RAMB36E1` on 7-series,
 `CC_BRAM_*` on GateMate), from the same place-and-route report.
+Single hard blocks a design either uses or does not -- the PLL
+(`EHXPLLL`), the configuration clock to the flash (`USRMCLK`) and the
+like -- are expected at 100%: shown, and green (`FULL_OK`).
 Thresholds: `WARN_MHZ` and `WARN_PCT` in `release/lib/notes.py`.
 
 **Only the final report counts.** nextpnr prints Fmax twice — once from
@@ -1068,6 +1071,10 @@ $ release/zrelease ship v0.0.7
 
 Creates the release if the tag is new, updates it if not. `--draft`,
 `--prerelease`, `--title` and `--notes-only` do what they sound like.
+After a change to how the notes are written (`release/lib/notes.py`),
+`release/zrelease notes v0.0.7` rewrites `NOTES.md` and `README.txt`
+from `dist/<version>/MANIFEST.json` without building anything, and
+`ship v0.0.7 --notes-only` puts the new text on GitHub.
 Then it signs the update store and uploads it, with every image but
 arkmedium, to the distribution's server (`--no-server` skips that,
 `--server-only` does only that). The key and the server are the release

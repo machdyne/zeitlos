@@ -153,6 +153,11 @@ def _clock(name):
 #
 # An advisory miss (an IO pseudo-domain, build.is_pseudo_domain()) does
 # not block a release and is shown yellow, not red.
+#
+# Some resources are single hard blocks a design either uses or does
+# not: the PLL, the configuration clock pin that reaches the SPI flash.
+# At 100% they are where they are meant to be, so green; over 100%
+# (which place-and-route would refuse anyway) is still red.
 GREEN = "\U0001F7E2"		# green circle
 RED = "\U0001F534"			# red circle
 YELLOW = "\U0001F7E1"		# yellow circle
@@ -175,9 +180,16 @@ def _clock_mark(c, advisory):
     return None
 
 
-def _util_mark(pct):
+# Resources whose 100% is expected (ECP5 names; others as they come).
+FULL_OK = re.compile(r"^(EHXPLLL|USRMCLK|JTAGG|GSR|SGSR|OSCG|DCCA|DCSC|"
+                     r"EXTREFB|DTR|START|SEDGA|PLLE2_ADV|MMCME2_ADV|STARTUPE2)$")
+
+
+def _util_mark(pct, name=None):
     if pct > 100:
         return RED
+    if name and FULL_OK.match(name):
+        return None
     if pct >= WARN_PCT:
         return YELLOW
     return None
@@ -232,8 +244,9 @@ def build_row(t):
     cells = []
     for name in sorted(u):
         pct = u[name]["percent"]
-        m = _util_mark(pct)
-        if name != key and (not m or _BRAM.search(name)):
+        m = _util_mark(pct, name)
+        full = pct >= WARN_PCT and FULL_OK.match(name)   # shown, but green
+        if name != key and ((not m and not full) or _BRAM.search(name)):
             continue
         worst = _worst(worst, m)
         text = "%s %d%%" % (name, pct)

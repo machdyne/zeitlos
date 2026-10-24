@@ -1128,6 +1128,40 @@ def cmd_verify(args):
     return 0
 
 
+def cmd_notes(args):
+    """NOTES.md (the GitHub release's text) and README.txt again, from
+    dist/<version>/MANIFEST.json, without building anything: after a
+    change to release/lib/notes.py. `ship --notes-only` then puts the
+    text on GitHub."""
+    version = build_mod.normalise_version(args.version)
+    out = distdir(version)
+    previous = _load_manifest(out)
+    if not previous.get("targets"):
+        die("%s: no MANIFEST.json with targets -- build first" % out)
+    lay = layout_mod.load(ROOT)
+    targets = sorted(previous["targets"], key=lambda t: t["target"])
+    sdcards = previous.get("sdcards") or (
+        [previous["sdcard"]] if previous.get("sdcard") else [])
+    commit = previous.get("commit", "unknown")
+    for name, text in (
+            ("NOTES.md", notes_mod.notes(version, commit, targets, sdcards, lay)),
+            ("README.txt", notes_mod.asset_readme(version, commit, targets,
+                                                  sdcards, lay))):
+        p = os.path.join(out, name)
+        old = open(p).read() if os.path.exists(p) else None
+        if old == text:
+            print("  %s unchanged" % name)
+            continue
+        notes_mod.write(p, text)
+        print("  %s rewritten" % name)
+        if name == "README.txt":
+            _write_sums(out)
+            print("  SHA256SUMS rewritten: README.txt is an asset; `ship` "
+                  "(not --notes-only) uploads it")
+    print("\nnow: release/zrelease ship %s --notes-only" % version)
+    return 0
+
+
 def cmd_ship(args):
     version = build_mod.normalise_version(args.version)
     if not args.server_only:
@@ -1254,6 +1288,11 @@ def make_parser():
     v = sub.add_parser("verify", help="re-check a built release")
     v.add_argument("version")
     v.set_defaults(func=cmd_verify)
+
+    nt = sub.add_parser("notes", help="rewrite NOTES.md and README.txt from "
+                        "dist/<version>/MANIFEST.json, building nothing")
+    nt.add_argument("version")
+    nt.set_defaults(func=cmd_notes)
 
     s = sub.add_parser("ship", help="create or update the GitHub release")
     s.add_argument("version")

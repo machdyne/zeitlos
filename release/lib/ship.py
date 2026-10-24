@@ -113,6 +113,12 @@ def ship(root, version, distdir, dry=False, draft=False, prerelease=False,
         # "which of these did I just overwrite" is the question you ask
         # immediately afterwards.
         have = set(existing_assets(tag, root))
+        if notes_only:
+            # Nothing is uploaded: saying "replace" for every asset would
+            # be the opposite of what happens.
+            print("      --notes-only: the release text only; no asset is "
+                  "uploaded (%d stay as they are)" % len(have))
+            have, assets = set(), []
         replaced = [a for a in assets if a in have]
         added = [a for a in assets if a not in have]
         untouched = sorted(have - set(assets))
