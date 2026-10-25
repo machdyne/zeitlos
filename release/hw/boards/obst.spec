@@ -91,6 +91,7 @@ defines =
     GPU_BLIT
     GPU_CURSOR
     GPU_VGA
+    GPU_VGA_DAC3
     UART0
     USB_CDC
     USB_HID

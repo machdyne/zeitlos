@@ -379,14 +379,24 @@
  *             with GAME_PLANES 6, 32 with 8.
  *               bits 9:0    x0, the left column
  *               bits 25:16  y0, the top row
+ *               bit 30      DESK, desktop colour's exact path (below)
  *               bit 31      EN
- *             Lanes 0/1 carry x0, lanes 2/3 y0 and EN; software writes
- *             whole words. Flips view_load: the rectangle (with
+ *             Lanes 0/1 carry x0, lanes 2/3 y0, DESK and EN; software
+ *             writes whole words. Flips view_load: the rectangle (with
  *             COLWINEND as it stands) is adopted at the next frame
  *             boundary, with GAME, VIEW and COLOR.
- *             Reads back as { 16'h5A57 ("ZW"), avail, 14'b0, en }.
+ *             Reads back as { 16'h5A57 ("ZW"), avail, davail, 12'b0,
+ *             desk, en }.
  *             avail = WIN_AVAIL (`COLOR_WINDOW, with COLOR and more
  *             than four planes); EN is forced low without it.
+ *             davail = DESK_AVAIL (`COLOR_DESKTOP, with the window and
+ *             eight planes); DESK is forced low without it.
+ *             DESK (docs/color.md, "Desktop colour"): inside the
+ *             window only pixels whose accent bit (plane 4) is set and
+ *             that the pointer is not on go through the palette, as
+ *             index { accent, desktop bit }; the rest are the
+ *             monochrome pixel, the phosphor's ink exactly. wm sets it
+ *             with the window over the whole screen.
  *  17  COLWINEND  the rectangle's other corner, exclusive:
  *               bits 9:0 x1, bits 25:16 y1
  *             so the window is x0 <= x < x1, y0 <= y < y1. Does NOT
@@ -468,6 +478,9 @@ module socctl_wb #(
     // The colour window (COLWIN): `COLOR_WINDOW, with COLOR_AVAIL and
     // more than four planes. Set by rtl/sysctl.v.
     parameter WIN_AVAIL = 1'b0,
+    // Desktop colour's exact path (COLWIN's DESK): `COLOR_DESKTOP, with
+    // WIN_AVAIL and eight planes. Set by rtl/sysctl.v.
+    parameter DESK_AVAIL = 1'b0,
     // 1 if this bitstream draws the pointer from loadable shapes:
     // rtl/boards.vh's `GPU_CURSOR, with `GPU. Set by rtl/sysctl.v. See
     // CURSOR (word 8) and CURDATA (word 15) above.
@@ -589,6 +602,7 @@ module socctl_wb #(
     output wire [9:0]  win_y0,
     output wire [9:0]  win_x1,
     output wire [9:0]  win_y1,
+    output wire        win_desk,
 
     // -- scanout status, from rtl/gpu/gpu_video.v --
     //
@@ -671,7 +685,7 @@ module socctl_wb #(
     reg [5:0] cwaddr;
     reg [31:0] cwdata;
     reg cwe;
-    reg wen;
+    reg wen, wdesk;
     reg [9:0] wx0, wy0, wx1, wy1;
 
     // power-on values for the sound half: the board's power-on rate,
@@ -735,6 +749,7 @@ module socctl_wb #(
     assign win_y0    = wy0;
     assign win_x1    = wx1;
     assign win_y1    = wy1;
+    assign win_desk  = wdesk && (DESK_AVAIL != 0);
 
     // Range limit on the VIEW write path. This is NOT the clamp that
     // keeps the viewport on screen -- that one depends on the wrap
@@ -844,6 +859,7 @@ module socctl_wb #(
             cwe <= 1'b0;
             // the colour window off at reset
             wen <= 1'b0;
+            wdesk <= 1'b0;
             wx0 <= 10'd0;
             wy0 <= 10'd0;
             wx1 <= 10'd0;
@@ -1004,6 +1020,7 @@ module socctl_wb #(
                         if (wb_sel_i[2] || wb_sel_i[3]) begin
                             wy0 <= wb_dat_i[25:16];
                             wen <= wb_dat_i[31];
+                            wdesk <= wb_dat_i[30];
                         end
                         vload <= ~vload;
                     end
@@ -1059,7 +1076,8 @@ module socctl_wb #(
                                              { CURSOR_SIG, 10'b0, cslots[3:2],
                                                2'b0, cslots[1:0] } :
                                              32'h0000_0000;
-                        32'd16: wb_dat_o <= { COLWIN_SIG, (WIN_AVAIL != 0), 14'b0, win_en };
+                        32'd16: wb_dat_o <= { COLWIN_SIG, (WIN_AVAIL != 0),
+                                              (DESK_AVAIL != 0), 12'b0, win_desk, win_en };
                         32'd17: wb_dat_o <= (WIN_AVAIL != 0) ?
                                              { 6'b0, wy1, 6'b0, wx1 } : 32'h0000_0000;
                         default: wb_dat_o <= 32'h0000_0000;

@@ -274,11 +274,12 @@ hardware.
 
 | Address | Name | Contents |
 |---|---|---|
-| `0x7000_0240` | COLWIN | W: bits 9:0 x0, bits 25:16 y0, bit 31 EN (lanes 0/1 x0, 2/3 y0 and EN). R: `{ 0x5A57 ("ZW"), avail, 14'b0, en }`. Flips the load toggle: adopted at the next frame boundary with GAME, VIEW and COLOR |
+| `0x7000_0240` | COLWIN | W: bits 9:0 x0, bits 25:16 y0, bit 30 DESK, bit 31 EN (lanes 0/1 x0, 2/3 y0, DESK and EN). R: `{ 0x5A57 ("ZW"), avail, davail, 12'b0, desk, en }`. Flips the load toggle: adopted at the next frame boundary with GAME, VIEW and COLOR. DESK: [desktop colour's exact path](#the-exact-path-color_desktop) |
 | `0x7000_0244` | COLWINEND | W: bits 9:0 x1, bits 25:16 y1, exclusive. R: `{ 6'b0, y1, 6'b0, x1 }`. Does not flip the toggle: written first, adopted with the next COLWIN |
 
 The window is x0 <= x < x1, y0 <= y < y1. EN is forced low, and avail
-reads 0, without `COLOR_WINDOW`. socctl's decode is five bits wide for
+reads 0, without `COLOR_WINDOW`; DESK likewise, and davail, without
+`COLOR_DESKTOP`. socctl's decode is five bits wide for
 these two; on a four-bit bitstream words 16 and 17 alias CTRL and
 MAGIC, so software reads COLWIN's signature before it writes either
 (CTRL reads back with bit 31 set, never `0x5A57`).
@@ -346,6 +347,139 @@ outside, the window off (x not leading), game mode with the window
 still asked for (ignored), and back. `rtl/tests/tb_socctl_colwin.v`:
 the registers -- staging, the toggle, lanes, read-back, game mode
 clearing EN, and a build without the window.
+
+## Desktop colour
+
+On a board with the colour window and **eight** planes (the 45F boards:
+Mozart ML1/ML2, Sergei ML1/ML2, Noir, Schoko), wm shows the whole
+desktop in four colours. No new hardware: it is the colour window
+stretched over the screen.
+
+- **COLWIN over 0,0..640,480** (`z_color_desktop_on()`, zsoc.h; the
+  hardware does not limit the rectangle -- only `z_color_window_set()`
+  cuts it to 320x240). With eight planes the second sheet is 640x480, so
+  window plane 0 is every desktop pixel's own **accent bit**, at sheet 1
+  (x, y), unfolded.
+- **The palette makes bits 5..7 irrelevant.** Those read sheet 1 320
+  columns and 240 rows on -- other pixels' accent bits -- so every one of
+  the 256 entries is set from its bits 0 and 4 alone
+  (`sw/common/zaccent.c`):
+
+| Entry | Bit 4 | Bit 0 | Colour |
+|---|---|---|---|
+| 0 | 0 | 0 | black (the phosphor's background) |
+| 1 | 0 | 1 | ink (the phosphor) |
+| 16 | 1 | 0 | A0, tinted black -- dark |
+| 17 | 1 | 1 | A1, tinted ink -- light |
+
+An accent bit **tints** a pixel rather than adding a colour: black
+shows as A0, ink as A1, so tinted text is still text. The colours follow
+the phosphor and the brightness (`system.video.mode`, Super+P,
+Ctrl+Super+Minus/Equal: wm rereads the VIDEO register every pass):
+
+| Phosphor | black | ink | A0 | A1 |
+|---|---|---|---|---|
+| white -- slate and sand | 000 | 888 | 123 | CA8 |
+| amber -- umber and gold | 000 | C90 | 210 | EC6 |
+| green -- pine and mint | 000 | 080 | 021 | 3B5 |
+| paper -- blue-grey and navy | 888 | 000 | 9AB | 235 |
+
+(at the default brightness; the accents scale with it the same way.)
+Two rules hold at every level (`sw/common/tests/test_accent.c`): A0 is
+dark and A1 light, so a pointer that inverts the accent bit too (the
+palette-only path, below) still lands on a contrasting colour
+(black/A1, ink/A0); and on a board with a 1-bit VGA output too
+(Schoko), every channel stays on its side of 8, so there the accents
+fold onto black and the ink and the desktop looks as it always has.
+
+### The exact path (`COLOR_DESKTOP`)
+
+On the 45F boards the gateware has one more bit for this: COLWIN's
+**DESK** (bit 30; `z_color_desktop_exact()`, and `z_color_desktop_on()`
+sets it). With DESK, inside the window:
+
+| Pixel | Shown as |
+|---|---|
+| accent bit set, the pointer not on it | the palette, index `0x10 | desktop bit` -- A0 or A1 |
+| anything else | the **monochrome pixel**: the phosphor's ink at its brightness, paper's inversion, the pointer's XOR |
+
+So the black and the ink are bit for bit what a monochrome desktop
+shows (entries 0 and 1 are never read), nothing shifts when desktop
+colour turns on or off or a colour window takes the sheet, and the
+pointer is the plain monochrome pointer everywhere -- ink over A0, black
+over A1. The index is masked to bits 0 and 4.
+
+It costs one flop of state, one register and a gate into the palette
+select in the pixel domain (`desk_active`, `desk_px` in
+`rtl/gpu/gpu_video.v`), and a bit in socctl. It needs eight planes: on
+a 25F build (`GAME_PLANES 6`) it is a constant 0 and none of it is
+built, and `COLOR_DESKTOP` is defined only on the 45F boards. Without it
+(older gateware) wm's desktop colour works the same through the palette
+alone: the black and the ink rounded to four bits a channel (the
+default white 0x88 rather than 0x80), and the pointer's XOR flipping
+the accent bit too.
+
+**More colours, one day.** The rule generalises: a pixel with any
+per-pixel accent plane set goes through the palette, the rest through
+the ink. Each further VRAM sheet holding one more plane at the pixel's
+own position would add a bit to the mask (`DESK_MASK`) and double the
+desktop's colours, up to 256 with eight per-pixel planes -- 300 KB of
+VRAM, which no board has. With today's two sheets there is one accent
+bit, and four colours.
+
+**What is tinted** (wm, `acc_*` in `sw/apps/wm/wm.c`):
+
+- the desktop's background (`system.video.desktop_background`);
+- the focused window's titlebar, separator and frame -- the bar shows
+  A1 with A0 text; the one-pixel margin inside the frame never;
+- the dock's outline, its running dots, a launching slot and the
+  selection ring;
+- wm's lock screen and reboot box;
+- inside windows, through the widgets: the keyboard-focused button (a
+  dialog's default) and a list's selected row (`zwidget.c`, `zflist.c`,
+  `z_win_accent_rect()`, zwin.h).
+
+Unfocused windows, icons and everything an app draws itself stay as
+they are. wm writes each tint in place, so nothing blinks; it clears a
+window's content tints wherever it asks the window to repaint, and the
+window draws its own again.
+
+**Who has the second sheet:**
+
+| | |
+|---|---|
+| desktop colour | wm, while it is on (`system.video.desktop_colour`, Super+F10) and nothing below wants the sheet |
+| a colour window | the focused screen app (`Z_WIN_FLAG_COLOR`) -- **it takes precedence**. wm turns COLWIN off, tells every app it may not tint (the WINDOW rectangle of its region, `Z_WM_CLIP_ACCENT`, zwm.h), and hands the colour window over (`Z_WM_COLOR` 1) once they have acked. A dual app on its desktop face does not want it (`Z_WIN_FLAG_COLOUR_LATER`) until it attaches (`Z_WM_COLOR_WANT`), and a screen app whose colour is off (F10) gives it up the same way |
+| game mode | the game: the GAME write clears EN, and wm keeps off while a grab is held |
+
+Taking it back, `ACC_RETAKE_MS` after the colour window loses the focus
+(the old owner's last plane writes): the whole sheet cleared, the tints
+painted, the 256 entries written, COLWIN over the screen, and the apps
+allowed to tint again -- those that had (`Z_WM_ACCENT_USED`) are asked to
+repaint. About 1-2 ms; a frame or two without tints.
+
+**Cost:** no block RAM or VRAM; the exact path's few gates (above), on
+the 45F boards only. wm: about 5.6 KB of code;
+apps with widgets about 0.8 KB (`z_win_accent_rect()` and its calls).
+Monochrome boards, and the 6-plane ones (their second sheet is 240
+rows, so two rows would share an accent bit): `z_color_desktop_available()`
+is false and nothing is drawn. Screenshots and the screen streamer read
+sheet 0 only, so they show the desktop without tints.
+
+Schoko's VGA has one resistor per channel (its schematic and PCB, in
+github.com/machdyne/schoko), so the accents fold away there as above;
+DDMI shows them.
+
+`sw/apps/wm/tests/test_accent.c` runs the real wm.c on the build host:
+nothing on a monochrome board; COLWIN, the tints and the apps' flag on
+an eight-plane one; content tints cleared on a repaint request; focus
+moving the tint; the background option; the hand-over to a colour
+window and back; a dual app; off and a game's grab; DESK on exact
+gateware. `rtl/gpu/bench/tb_deskcol.v` checks the exact path pixel by
+pixel (palette for accent pixels, the exact ink for the rest, at two
+phosphors and levels, paper, the pointer, a smaller window, DESK off,
+game mode), and that a build without it, or with six planes, ignores
+DESK.
 
 ## Registers
 
@@ -578,9 +712,18 @@ On DDMI the palette spans the full range. The monochrome inks keep
 their historical 0x80 ceiling for compatibility; a game wanting the
 desktop's exact white sets `0x888`.
 
-Every VGA board in the tree has one resistor per channel, so VGA colour
-is 8 colours whatever the palette says. The EGA default degrades
+Most VGA boards in the tree have one resistor per channel, so VGA
+colour is 8 colours whatever the palette says. The EGA default degrades
 sensibly: its 0xa levels read as on and its 0x5 levels as off.
+
+Obst has a 3-bit resistor DAC per channel (270R, 536R, 1K), driven with
+`GPU_VGA_DAC3`: VGA_R/G/B stay the top bit and VGA_R1/R2, G1/G2, B1/B2
+are the two below (`boards/obst_v0.lpf`). There the palette shows its
+top three bits a channel (512 colours) and, more usefully on a board
+without `COLOR`, the monochrome ink shows the phosphor's colour and
+brightness as DDMI does: amber is amber rather than red and green, and
+the brightness levels show in eight steps. The default white, 0x80, is
+the top resistor alone -- what a 1-bit build drives on the same board.
 
 ## Phosphor modes
 
@@ -861,6 +1004,9 @@ And VRAM (yosys 0.70 and 0.33 agree), the other half of the bill:
 | Sergei ML1, ML2 | on | 8 | 45F |
 | Noir | on | 8 | 45F |
 | Schoko | on | 8 | 45F, VGA and DDMI: VGA shows the top bit of each channel |
+
+The 45F boards also define `COLOR_WINDOW` and `COLOR_DESKTOP`
+([desktop colour](#desktop-colour)).
 | everything else | off | — | 12F and 25F boards other than these, iCE40, GateMate, 7-series, composite |
 
 On a composite build of a board with `COLOR`, colour goes out as a

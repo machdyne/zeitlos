@@ -78,6 +78,8 @@ travel with the card. `settings` edits them; see
 | `system.tts.volume` | `200` | `tts` | speech: volume, 0-255 |
 | `system.video.mode` | `white` | kernel | display colour, applied at boot and on reload |
 | `system.video.brightness` | `8` | kernel | HDMI/DVI monochrome brightness, 1-16, applied at boot and on reload |
+| `system.video.desktop_colour` | `yes` | `wm` | eight-plane colour boards: the desktop in four colours, accents on window frames and the dock ([color.md](color.md#desktop-colour)); Super+F10 switches until the next reload |
+| `system.video.desktop_background` | `yes` | `wm` | desktop colour: the desktop's background tinted too |
 | `system.video.composite` | `color` | kernel | composite colour boards: `color`, or `mono` for black and white |
 | `system.video.ddmi_audio` | `no` | kernel | DDMI boards built with it: `yes` sends sound and display info over the HDMI connector |
 | `system.update.url` | *(the built-in distribution's)* | `update` | where releases come from, `http://host/.../release/`: a mirror, or another distribution ([distribution.md](distribution.md#following-another-distribution)) |
@@ -205,6 +207,17 @@ colour mode, VGA and composite are unaffected
 reload; absent leaves the display as it is; ignored on boards without
 HDMI/DVI.
 
+### `system.video.desktop_colour`, `system.video.desktop_background`
+
+`yes` or `no`. On a board with eight colour planes and the colour
+window (the 45F boards), wm shows the desktop in four colours: the
+focused window's titlebar and frame, the dock's outline and running
+dots, and with `desktop_background` the desktop itself, tinted in
+colours that follow `system.video.mode` and the brightness. A focused
+screen app's colour window takes precedence, and the tints come back
+when it loses the focus. Super+F10 switches desktop colour until the
+next reload. Ignored elsewhere ([color.md](color.md#desktop-colour)).
+
 ### `system.video.ddmi_audio`
 
 `yes` or `no` (also `on`/`off`, `1`/`0`), on a board whose bitstream
@@ -294,6 +307,8 @@ What picks up a reload:
 - `system.rtc.timezone` -- on the next second in `clock`, the next check in `cal`.
 - `apps.term.auto_connect` -- the next term window opened.
 - `system.keyboard.layouts` -- the next key pressed (`wm`).
+- `system.video.desktop_colour`, `system.video.desktop_background` --
+  wm's next pass (the next key, click or pointer movement).
 - the dock's arrangement, `/data/wm/wm.cfg` (not a key here, a file of
   its own: [dock.md](dock.md)) -- within a second of the next key,
   click or pointer movement (`wm`).

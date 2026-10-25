@@ -535,6 +535,15 @@ module sysctl #()
 	output VGA_R,
 	output VGA_G,
 	output VGA_B,
+`ifdef GPU_VGA_DAC3
+	// the DAC's lower bits (536R and 1K; VGA_R/G/B are the 270R MSBs)
+	output VGA_R1,
+	output VGA_R2,
+	output VGA_G1,
+	output VGA_G2,
+	output VGA_B1,
+	output VGA_B2,
+`endif
 	output VGA_HS,
 	output VGA_VS,
 `endif
@@ -3558,6 +3567,24 @@ module sysctl #()
 `else
 	localparam WIN_AVAILABLE = 1'b0;
 `endif
+	// Desktop colour's exact path (docs/color.md, "Desktop colour"):
+	// COLWIN's DESK bit sends only accent pixels through the palette and
+	// keeps every other pixel, and the pointer, on the phosphor's ink.
+	// `COLOR_DESKTOP, with the colour window and eight planes: with six
+	// the second sheet is half height and there is no accent bit per
+	// pixel, so a 25F build never has it, and pays nothing.
+`ifdef COLOR_DESKTOP
+	localparam DESK_AVAILABLE = WIN_AVAILABLE && (GAME_PLANES_N >= 8);
+`else
+	localparam DESK_AVAILABLE = 1'b0;
+`endif
+	// A 3-bit resistor DAC per VGA channel (Obst): the ink's colour and
+	// brightness on VGA, and the palette's top three bits.
+`ifdef GPU_VGA_DAC3
+	localparam VGA_DAC3_ON = 1'b1;
+`else
+	localparam VGA_DAC3_ON = 1'b0;
+`endif
 `ifdef GPU_COMPOSITE
 	localparam CVBS_AVAILABLE = COLOR_AVAILABLE;
 `else
@@ -3611,7 +3638,7 @@ module sysctl #()
 	wire socctl_pal_we;
 	wire [7:0] socctl_pal_idx;
 	wire [11:0] socctl_pal_rgb;
-	wire socctl_win_en;
+	wire socctl_win_en, socctl_win_desk;
 	wire [9:0] socctl_win_x0, socctl_win_y0, socctl_win_x1, socctl_win_y1;
 
 	// Scanout status coming back the other way. Zero on a board with
@@ -3666,6 +3693,7 @@ module sysctl #()
 		.COLOR_AVAIL(COLOR_AVAILABLE),
 		.GAME_PLANES(GAME_PLANES_N),
 		.WIN_AVAIL(WIN_AVAILABLE),
+		.DESK_AVAIL(DESK_AVAILABLE),
 		.CURSOR_AVAIL(CURSOR_AVAILABLE),
 		.CVBS_AVAIL(CVBS_AVAILABLE),
 		.CVBS_MONO_RESET(CVBS_MONO_DEFAULT),
@@ -3757,6 +3785,7 @@ module sysctl #()
 		.win_y0(socctl_win_y0),
 		.win_x1(socctl_win_x1),
 		.win_y1(socctl_win_y1),
+		.win_desk(socctl_win_desk),
 		.frame_ctr(gpu_frame_ctr),
 		.in_vblank(gpu_in_vblank),
 		.vram_we(socctl_vram_we),
@@ -4329,6 +4358,8 @@ module sysctl #()
 		.GAME_PLANES(GAME_PLANES_N),
 		.CBUF_LUTRAM(CBUF_LUTRAM_ON),
 		.WIN_AVAIL(WIN_AVAILABLE),
+		.DESK_AVAIL(DESK_AVAILABLE),
+		.VGA_DAC3(VGA_DAC3_ON),
 		.CURSOR_AVAIL(CURSOR_AVAILABLE)
 	) gpu_video_i
 	(
@@ -4383,6 +4414,7 @@ module sysctl #()
 		.win_y0(socctl_win_y0),
 		.win_x1(socctl_win_x1),
 		.win_y1(socctl_win_y1),
+		.win_desk(socctl_win_desk),
 		.frame_ctr(gpu_frame_ctr),
 		.in_vblank(gpu_in_vblank),
 		// x and y are FRAMEBUFFER coordinates now, in both modes --
@@ -4409,6 +4441,11 @@ module sysctl #()
 		.red(VGA_R),
 		.green(VGA_G),
 		.blue(VGA_B),
+`ifdef GPU_VGA_DAC3
+		.red_lo({ VGA_R1, VGA_R2 }),
+		.green_lo({ VGA_G1, VGA_G2 }),
+		.blue_lo({ VGA_B1, VGA_B2 }),
+`endif
 		.hsync(VGA_HS),
 		.vsync(VGA_VS),
 `endif

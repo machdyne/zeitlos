@@ -224,6 +224,13 @@ void z_fb_fill_rect(int x, int y, int w, int h, int color,
 			z_fb_set_pixel(x + i, y + j, color, c);
 }
 
+// The rows zgfx lets a fill reach (z_fb_set_rows()). Recorded only:
+// this VRAM is the 480-row desktop, and z_fb_set_pixel() drops the
+// rest -- an accent fill (zwin.c), 480 rows down, draws nothing here.
+static int zr_rows = Z_SCREEN_H;
+void z_fb_set_rows(int rows) { zr_rows = rows; }
+int z_fb_rows(void) { return zr_rows; }
+
 void z_fb_hw_fill_rect(int x, int y, int w, int h, int color) {
 	z_fb_fill_rect(x, y, w, h, color, NULL);
 }

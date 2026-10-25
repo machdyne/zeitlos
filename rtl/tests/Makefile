@@ -7,6 +7,7 @@
 #   make cycles   report engine cycles per multiply
 #   make vram_dirty  socctl.v's DIRTY: the stripe of every VRAM word, and the
 #                    clear racing a write
+#   make colwin   socctl.v's COLWIN/COLWINEND, DESK included
 #   make 8b10b    the 8b/10b of gpio_stream.v and zfast.v, every symbol (zlink)
 #   make spiflash_netlist  tb_spiflash against spiflash.v as yosys builds
 #                 it for ECP5 -- the page buffer is a block RAM (needs yosys)
@@ -17,9 +18,9 @@
 IVERILOG ?= iverilog
 VVP      ?= vvp
 
-.PHONY: all classic rf sha256 cycles spiflash spiflash_netlist vram_dirty 8b10b clean
+.PHONY: all classic rf sha256 cycles spiflash spiflash_netlist vram_dirty colwin 8b10b clean
 
-all: classic rf sha256 keccak vram_dirty 8b10b
+all: classic rf sha256 keccak vram_dirty colwin 8b10b
 
 classic:
 	$(IVERILOG) -g2012 -o /tmp/tb_montmul tb_montmul.v ../montmul.v
@@ -49,8 +50,13 @@ spiflash:
 
 # rtl/socctl.v's DIRTY register (word 7); its header has the contract.
 vram_dirty:
-	$(IVERILOG) -g2012 -o /tmp/tb_vram_dirty tb_vram_dirty.v ../socctl.v
+	$(IVERILOG) -g2012 -I.. -o /tmp/tb_vram_dirty tb_vram_dirty.v ../socctl.v
 	$(VVP) /tmp/tb_vram_dirty
+
+# rtl/socctl.v's colour window registers (words 16, 17), DESK included.
+colwin:
+	$(IVERILOG) -g2012 -I.. -o /tmp/tb_socctl_colwin tb_socctl_colwin.v ../socctl.v
+	$(VVP) /tmp/tb_socctl_colwin
 
 # The same test against the ECP5 netlist. yosys's cells_sim_ecp5.v
 # declares DP16KD as an empty black box -- outputs undriven, so the RAM

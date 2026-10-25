@@ -362,6 +362,57 @@ static int zwin_region_and(const z_clip_t *a, int na,
 
 static void win_use_clip(const z_win_t *win);
 
+// -- desktop colour (docs/color.md, "Desktop colour") --
+//
+// The accent plane is the second VRAM sheet, 480 rows below the
+// desktop, a pixel's accent bit at its own position. Drawing there is
+// drawing past row 479 with zgfx's region escaped -- so the clipping
+// to the window's region and content is done here, rectangle by
+// rectangle, and the region is put back afterwards.
+static bool zwin_accent;
+static uint32_t zwin_accent_told;	// window ids wm has heard Z_WM_ACCENT_USED for
+
+bool z_win_accent_ok(void) {
+	return zwin_accent;
+}
+
+void z_win_accent_rect(const z_win_t *win, int x0, int y0, int x1, int y1, bool on) {
+	int rows, cy0;
+
+	if (!zwin_accent || !win || win->frozen || win->clip_n <= 0) return;
+	// Not inside a paint walk (z_win_paint_begin()): the walk owns the
+	// blitter's scissor, and escaping the region would undo it.
+	if (z_gfx_paint_active()) return;
+
+	// the content area (z_win_content_rect(), without loading the region)
+	cy0 = (int)win->y + (win->bare ? 0 : Z_WM_TITLEBAR_H) + 2;
+	if (x0 < (int)win->x + 2) x0 = (int)win->x + 2;
+	if (y0 < cy0) y0 = cy0;
+	if (x1 > (int)(win->x + win->w) - 3) x1 = (int)(win->x + win->w) - 3;
+	if (y1 > (int)(win->y + win->h) - 3) y1 = (int)(win->y + win->h) - 3;
+
+	if ((uint32_t)win->id < 32u && !(zwin_accent_told & (1u << win->id))) {
+		uint32_t wmpid = resolve_wm_pid();
+		if (wmpid)
+			z_msg_new_send(wmpid, Z_WM_ACCENT_USED, 0,
+				z_obj_uint32((uint32_t)win->id));
+		zwin_accent_told |= 1u << win->id;
+	}
+
+	rows = z_fb_rows();
+	z_gfx_clear_visible();
+	z_fb_set_rows(2 * Z_SCREEN_H);
+	for (int i = 0; i < win->clip_n; i++) {
+		const z_clip_t *c = &win->clip[i];
+		int a0 = x0 > c->x0 ? x0 : c->x0, b0 = y0 > c->y0 ? y0 : c->y0;
+		int a1 = x1 < c->x1 ? x1 : c->x1, b1 = y1 < c->y1 ? y1 : c->y1;
+		if (a1 >= a0 && b1 >= b0)
+			z_fb_hw_fill_rect(a0, b0 + Z_SCREEN_H, a1 - a0 + 1, b1 - b0 + 1, on);
+	}
+	z_fb_set_rows(rows);
+	win_use_clip(win);
+}
+
 void z_win_select(const z_win_t *win) {
 	win_use_clip(win);
 }
@@ -448,6 +499,10 @@ bool z_win_apply_clip(z_win_t *win, z_obj_t *obj) {
 	 * single-window app is the case that cannot be ambiguous. */
 	if (n > 0 && r[0].x0 == Z_WM_CLIP_CTL && r[0].y0 == Z_WM_CLIP_WINDOW) {
 		if (win && (int)r[0].y1 != win->id) return false;
+		// Accents allowed? (Z_WM_CLIP_ACCENT, zwm.h.) One flag for the
+		// process: it is the desktop's state, the same for every
+		// window, and the newest region says it.
+		zwin_accent = (r[0].x1 == Z_WM_CLIP_ACCENT);
 		r++;
 		n--;
 	}

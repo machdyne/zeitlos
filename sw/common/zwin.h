@@ -445,6 +445,23 @@ void z_win_hw_fill_shade(const z_win_t *win, int x, int y, int w, int h,
 	int level);
 void z_win_hw_box(const z_win_t *win, int x0, int y0, int x1, int y1, int color);
 
+// -- desktop colour's accents (docs/color.md, "Desktop colour") --
+//
+// On a board where wm shows the desktop in four colours, a pixel can be
+// TINTED: black shows as the accent's dark colour, ink as its light
+// one. z_win_accent_rect() tints (on) or untints a rectangle of this
+// window, in absolute screen coordinates like z_win_hw_box(), clipped
+// to the content area and the window's region. It does nothing at all
+// unless wm's latest region allowed it (z_win_accent_ok()) -- not on a
+// monochrome board, not while a screen app holds the colour window.
+//
+// The widgets use it (zwidget.c, zflist.c): the keyboard-focused
+// button, a list's selected row. Whatever draws a tint draws its
+// untint too, on every repaint of the same rectangle: wm clears a
+// window's tints only where it asks for a repaint.
+bool z_win_accent_ok(void);
+void z_win_accent_rect(const z_win_t *win, int x0, int y0, int x1, int y1, bool on);
+
 // changes this window's titlebar text (fire-and-forget, no reply --
 // see Z_WM_SET_TITLE in zwm.h). Safe to call on a window that failed
 // to be created (id < 0), same as z_win_destroy().

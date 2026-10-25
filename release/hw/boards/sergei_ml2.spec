@@ -60,6 +60,7 @@ defines =
     COLOR
     GAME_PLANES=8
     COLOR_WINDOW
+    COLOR_DESKTOP
     UART0
     USB_HOST
     SPI_SDCARD

@@ -171,6 +171,25 @@
 // VRAM reads. On by default on the 45F boards (`GAME_PLANES 8); the
 // 25F boards may get it if it fits. docs/color.md, "The colour window".
 //
+// `COLOR_DESKTOP -- with `COLOR_WINDOW and `GAME_PLANES 8, desktop
+// colour's exact path (docs/color.md, "Desktop colour"): COLWIN's DESK
+// bit, with which only the pixels whose accent bit is set go through
+// the palette and every other pixel, and the pointer, keeps the
+// phosphor's ink exactly. One flop of state and a few gates in the pixel
+// domain. Without it wm's desktop colour still works, through the
+// palette alone (ink to RGB444, pointer tinted). Needs eight planes:
+// on a 25F board it does nothing and costs nothing. On by default on
+// the 45F boards.
+//
+// `GPU_VGA_DAC3 -- with `GPU_VGA, the board has a 3-bit resistor DAC
+// per channel (Obst: 270R, 536R, 1K) and drives all of it: VGA_R/G/B
+// stay the top bit, VGA_R1/R2, G1/G2, B1/B2 the two below. The ink then
+// shows the phosphor's colour and brightness on VGA (eight steps), and
+// the palette its top three bits per channel. The default white, 0x80,
+// is the top resistor alone -- what a 1-bit build drives on the same
+// board -- so nothing gets brighter unless asked. The ink's tables and
+// a few dozen LUTs.
+//
 // `GPU_CURSOR_LUTRAM -- the cursor's four shapes and the game-mode
 // palette in distributed (LUT) RAM instead of their own DP16KD: one
 // block fewer for a few dozen LUTs (64 x 16 for the shapes, 64 x 12 for
@@ -456,6 +475,8 @@
 `define GPU_BLIT
 `define GPU_CURSOR
 `define GPU_VGA
+// all three bits of each channel's resistor DAC (boards/obst_v0.lpf)
+`define GPU_VGA_DAC3
 `define UART0
 `define USB_HID
 `define SPI_SDCARD
@@ -805,6 +826,8 @@
 `define GAME_PLANES 8
 // the focused screen app's window in 32 colours (docs/color.md)
 `define COLOR_WINDOW
+// desktop colour, exact ink and an untinted pointer (docs/color.md)
+`define COLOR_DESKTOP
 `define UART0
 // USB host controller (rtl/usb/, docs/usb_host.md) instead of the
 // low-speed HID-only rtl/ext/usb_hid_host. Both cores remain
@@ -894,6 +917,8 @@
 `define GAME_PLANES 8
 // the focused screen app's window in 32 colours (docs/color.md)
 `define COLOR_WINDOW
+// desktop colour, exact ink and an untinted pointer (docs/color.md)
+`define COLOR_DESKTOP
 `define UART0
 // USB host controller (rtl/usb/, docs/usb_host.md) instead of the
 // low-speed HID-only rtl/ext/usb_hid_host. Both cores remain
@@ -969,6 +994,8 @@
 `define GAME_PLANES 8
 // the focused screen app's window in 32 colours (docs/color.md)
 `define COLOR_WINDOW
+// desktop colour, exact ink and an untinted pointer (docs/color.md)
+`define COLOR_DESKTOP
 `define UART0
 // The console is the USB-C socket (`undef at the bottom drops
 // `UART0): Noir has no PMOD, so this is the console that needs no
@@ -1133,6 +1160,8 @@
 `define GAME_PLANES 8
 // the focused screen app's window in 32 colours (docs/color.md)
 `define COLOR_WINDOW
+// desktop colour, exact ink and an untinted pointer (docs/color.md)
+`define COLOR_DESKTOP
 `define UART0
 `define USB_HOST
 `define SPI_SDCARD
@@ -1370,6 +1399,8 @@
 `define GAME_PLANES 8
 // the focused screen app's window in 32 colours (docs/color.md)
 `define COLOR_WINDOW
+// desktop colour, exact ink and an untinted pointer (docs/color.md)
+`define COLOR_DESKTOP
 `define UART0
 `define USB_HOST
 `define SPI_SDCARD
@@ -1672,6 +1703,8 @@
 `define GAME_PLANES 8
 // the focused screen app's window in 32 colours (docs/color.md)
 `define COLOR_WINDOW
+// desktop colour, exact ink and an untinted pointer (docs/color.md)
+`define COLOR_DESKTOP
 `define UART0
 `define USB_CDC
 `define USB_HOST

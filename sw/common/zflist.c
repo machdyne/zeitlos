@@ -505,6 +505,11 @@ void z_flist_draw(z_flist_t *fl, bool force) {
 
 	z_win_hw_box(fl->win, x0, y0, x1, y1, 1);
 
+	// Desktop colour: the rows untinted, then the selected one tinted
+	// as it is drawn (below; zwin.h, z_win_accent_rect()).
+	if (clip.x1 >= clip.x0 && clip.y1 >= clip.y0 && z_win_accent_ok())
+		z_win_accent_rect(fl->win, clip.x0, clip.y0, clip.x1, clip.y1, false);
+
 	int rows = visible_rows(fl);
 	int total = total_rows(fl);
 	int selrow = sel_row(fl);
@@ -530,6 +535,9 @@ void z_flist_draw(z_flist_t *fl, bool force) {
 				z_fb_hw_fill_rect(clip.x0, ry,
 					sx1 - clip.x0 + 1,
 					ry + ROW_H - 1 <= clip.y1 ? ROW_H : (clip.y1 - ry + 1), 1);
+			if (sx1 >= clip.x0 && z_win_accent_ok())
+				z_win_accent_rect(fl->win, clip.x0, ry, sx1,
+					ry + ROW_H - 1 <= clip.y1 ? ry + ROW_H - 1 : clip.y1, true);
 		}
 
 		int icon = updir ? Z_ICON_UPDIR

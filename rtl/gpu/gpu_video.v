@@ -204,6 +204,26 @@ module gpu_video #(
 	// existing bench is unchanged -- builds none of it.
 	parameter WIN_AVAIL = 1'b0,
 
+	// 1 builds DESKTOP COLOUR's exact path (docs/color.md, "Desktop
+	// colour"): with the colour window's DESK bit set, only pixels whose
+	// accent bit (plane 4, the second sheet at the pixel's own position)
+	// is set go through the palette, as index { accent, desktop bit };
+	// every other pixel, and every pixel under the pointer, goes through
+	// the phosphor's ink exactly as monochrome does. Needs WIN_AVAIL and
+	// eight planes -- with six, the second sheet is half height and
+	// rows y and y + 240 would share an accent bit -- so on a 25F build
+	// it is a constant 0 and none of it exists. 0 -- the default, so
+	// every existing bench is unchanged.
+	parameter DESK_AVAIL = 1'b0,
+
+	// 1: the VGA output has a 3-bit resistor DAC per channel (Obst:
+	// 270R, 536R, 1K), red/green/blue its top bit as on every 1-bit
+	// board and red_lo/green_lo/blue_lo the two below it. The ink then
+	// carries the phosphor's colour and brightness on VGA as it does on
+	// DDMI, and palette colours their top three bits. 0 -- the default
+	// -- leaves the _lo outputs at 0 and builds nothing for them.
+	parameter VGA_DAC3 = 1'b0,
+
 	// -- the hardware cursor (docs/cursor.md) --
 	//
 	// 1 draws the pointer from four 16x16 shapes kept in the spare
@@ -326,6 +346,9 @@ module gpu_video #(
 	input [9:0] win_y0,
 	input [9:0] win_x1,
 	input [9:0] win_y1,
+	// DESK: desktop colour's exact path (DESK_AVAIL). Captured and
+	// adopted with the rectangle.
+	input win_desk,
 
 	// Palette write port, wishbone clock domain (= clk). One-cycle
 	// strobe from socctl; 12-bit RGB444 into entry pal_idx (its bits
@@ -353,6 +376,10 @@ module gpu_video #(
 	output red,
 	output green,
 	output blue,
+	// the two lower bits of a 3-bit VGA DAC (VGA_DAC3), MSB first
+	output [1:0] red_lo,
+	output [1:0] green_lo,
+	output [1:0] blue_lo,
 	output hsync,
 	output vsync,
 
@@ -516,6 +543,37 @@ module gpu_video #(
 		(NP > 4) && (FIXED_VIEWPORT == 0);
 	reg win_active;
 	reg [9:0] wx0_active, wy0_active, wx1_active, wy1_active;
+
+	// -- desktop colour, exact (DESK_AVAIL; docs/color.md) --
+	//
+	// wm's desktop colour is the colour window over the whole screen
+	// with a palette that looks at two bits only: the desktop's (bit 0)
+	// and the ACCENT bit (bit 4, plane 4 -- with eight planes, the
+	// second sheet at the pixel's own position). Through the palette
+	// alone the untinted pixels are close to the ink but not it (RGB444
+	// against the ink's eight bits, and brightness rounded), and the
+	// pointer's XOR flips the accent bit with the rest.
+	//
+	// desk_active fixes both with a per-pixel choice the window already
+	// makes per rectangle: inside the window, the palette shows a pixel
+	// only if its accent bit is set and the pointer is not on it. Every
+	// other pixel is the monochrome pixel -- the phosphor's ink at its
+	// brightness, paper's inversion, the pointer's XOR, bit for bit what
+	// a monochrome desktop shows. The index is masked to the two bits
+	// that matter, so only entries 16 and 17 (A0, A1) are ever read.
+	//
+	// What it costs: one flop of state, one register (desk_px) and a
+	// gate into pal_out, in this domain; on a build without eight planes
+	// DESK_ON is a constant 0 and all of it folds away.
+	//
+	// The rule generalises: a pixel with any per-pixel accent plane set
+	// goes through the palette, the rest through the ink. A machine with
+	// more VRAM sheets, each holding one more plane at the pixel's own
+	// position, would widen DESK_MASK and get 8, 16 ... 256 desktop
+	// colours the same way; with today's two sheets there is one.
+	localparam DESK_ON = WIN_ON && (DESK_AVAIL != 0) && (NP >= 8);
+	localparam [7:0] DESK_MASK = 8'h11;
+	reg desk_active;
 	wire x_lead;
 
 	// The cursor's pixel, from the read side at the bottom of this
@@ -595,7 +653,7 @@ module gpu_video #(
 	// second sheet this build has, whatever np_active says.
 	localparam [7:0] WIN_MASK = { (NP > 7), (NP > 6), (NP > 5), (NP > 4),
 		4'b0001 };
-	wire [7:0] plane_mask = win_active ? WIN_MASK : {
+	wire [7:0] plane_mask = desk_active ? DESK_MASK : win_active ? WIN_MASK : {
 		(NP > 7) && (np_active >= 3'd7), (NP > 6) && (np_active >= 3'd6),
 		(NP > 5) && (np_active >= 3'd5), (NP > 4) && (np_active >= 3'd4),
 		(np_active >= 3'd3), (np_active >= 3'd2), (np_active >= 3'd1), 1'b1 };
@@ -660,53 +718,23 @@ module gpu_video #(
 	// the same edge as the palette's read of the same pixel, so win_px
 	// says which of cb_q and the ink is the pixel on screen. The row
 	// test changes only at the end of a line.
-	reg win_row, win_px;
+	//
+	// With desk_active, desk_px says on the same edge whether the pixel
+	// is an accent pixel the pointer is not on: only those take cb_q.
+	reg win_row, win_px, desk_px;
 	wire win_col = (x >= wx0_active) && (x < wx1_active);
 	always @(posedge pclk) begin
 		win_row <= win_active && (y >= wy0_active) && (y < wy1_active);
 		win_px <= win_row && win_col;
+		desk_px <= cur4[x[4:0]] && !c_inv;
 	end
-	wire pal_out = color_on || win_px;
+	wire pal_out = color_on || (win_px && (!desk_active || desk_px));
 
 	// blanking gated here for the same reason pset gates it above
 	wire [3:0] c_r = is_visible ? rgb[11:8] : 4'd0;
 	wire [3:0] c_g = is_visible ? rgb[7:4]  : 4'd0;
 	wire [3:0] c_b = is_visible ? rgb[3:0]  : 4'd0;
 
-	// VGA has ONE bit per channel on every board that has VGA at all,
-	// so colour there is the top bit of each channel: at most the
-	// eight RGB primaries and secondaries. The EGA default palette
-	// degrades to the obvious eight (its 0xa levels read as on, its
-	// 0x5 levels as off).
-	assign red   = pal_out ? c_r[3] :
-		(video_mode_active == GPU_MODE_GREEN) ? 1'b0 : pset;
-	assign green = pal_out ? c_g[3] : pset;
-	assign blue  = pal_out ? c_b[3] :
-		(video_mode_active == GPU_MODE_AMBER ||
-		 video_mode_active == GPU_MODE_GREEN) ? 1'b0 : pset;
-
-`ifdef GPU_DDMI
-
-	wire [1:0] out_tmds_red;
-	wire [1:0] out_tmds_green;
-	wire [1:0] out_tmds_blue;
-	wire [1:0] out_tmds_clk;
-
-	// Same three colours the `ifdefs above used to select between,
-	// bit-for-bit -- the amber weightings in particular are the
-	// original ones and are deliberately not "tidied up" into
-	// something rounder. White/green stay at 0x80 rather than 0xff for
-	// the same reason: that is what this path has always driven, and
-	// changing it would silently alter the look of every existing
-	// board while nominally only adding a feature.
-	//
-	// GPU_PAPER needs no entry of its own: pset is already inverted
-	// for it above, so the white arms below produce black glyphs on a
-	// 0x80 field, which is precisely the same white, swapped.
-	// In colour each 4-bit channel is replicated to 8 bits (0xa ->
-	// 0xaa, 0xf -> 0xff), so the palette spans the full range rather
-	// than the 0x80 ceiling the monochrome inks keep for
-	// compatibility. A game wanting the desktop's white sets 0x888.
 	// -- monochrome brightness (VIDEO bits 11:8) --
 	//
 	// The ink a lit pixel gets, per channel, worked out ONCE per frame
@@ -804,6 +832,60 @@ module gpu_video #(
 		ddmi_ink_b <= (video_mode_active == GPU_MODE_AMBER ||
 			video_mode_active == GPU_MODE_GREEN) ? 8'd0 : bw;
 	end
+
+	// Not only DDMI's: a 3-bit VGA DAC (VGA_DAC3) shows the same ink.
+	// Without either, nothing reads these and synthesis removes them.
+
+	// VGA has ONE bit per channel on every board that has VGA at all,
+	// so colour there is the top bit of each channel: at most the
+	// eight RGB primaries and secondaries. The EGA default palette
+	// degrades to the obvious eight (its 0xa levels read as on, its
+	// 0x5 levels as off).
+	//
+	// A 3-bit DAC (VGA_DAC3) takes the ink's top three bits instead, so
+	// amber is amber and the brightness levels show (eight steps). The
+	// default ink, 0x80, is 100: the top resistor alone, which is what
+	// a 1-bit build drives on the same board today. A non-zero channel
+	// never rounds to black: the dimmest levels keep the lowest step.
+	wire [2:0] vga_ink_r = (ddmi_ink_r[7:5] == 3'd0 && ddmi_ink_r != 8'd0) ? 3'd1 : ddmi_ink_r[7:5];
+	wire [2:0] vga_ink_g = (ddmi_ink_g[7:5] == 3'd0 && ddmi_ink_g != 8'd0) ? 3'd1 : ddmi_ink_g[7:5];
+	wire [2:0] vga_ink_b = (ddmi_ink_b[7:5] == 3'd0 && ddmi_ink_b != 8'd0) ? 3'd1 : ddmi_ink_b[7:5];
+	wire [2:0] vga3_r = pal_out ? c_r[3:1] : (pset ? vga_ink_r : 3'd0);
+	wire [2:0] vga3_g = pal_out ? c_g[3:1] : (pset ? vga_ink_g : 3'd0);
+	wire [2:0] vga3_b = pal_out ? c_b[3:1] : (pset ? vga_ink_b : 3'd0);
+
+	assign red   = (VGA_DAC3 != 0) ? vga3_r[2] : pal_out ? c_r[3] :
+		(video_mode_active == GPU_MODE_GREEN) ? 1'b0 : pset;
+	assign green = (VGA_DAC3 != 0) ? vga3_g[2] : pal_out ? c_g[3] : pset;
+	assign blue  = (VGA_DAC3 != 0) ? vga3_b[2] : pal_out ? c_b[3] :
+		(video_mode_active == GPU_MODE_AMBER ||
+		 video_mode_active == GPU_MODE_GREEN) ? 1'b0 : pset;
+	assign red_lo   = (VGA_DAC3 != 0) ? vga3_r[1:0] : 2'b00;
+	assign green_lo = (VGA_DAC3 != 0) ? vga3_g[1:0] : 2'b00;
+	assign blue_lo  = (VGA_DAC3 != 0) ? vga3_b[1:0] : 2'b00;
+
+`ifdef GPU_DDMI
+
+	wire [1:0] out_tmds_red;
+	wire [1:0] out_tmds_green;
+	wire [1:0] out_tmds_blue;
+	wire [1:0] out_tmds_clk;
+
+	// Same three colours the `ifdefs above used to select between,
+	// bit-for-bit -- the amber weightings in particular are the
+	// original ones and are deliberately not "tidied up" into
+	// something rounder. White/green stay at 0x80 rather than 0xff for
+	// the same reason: that is what this path has always driven, and
+	// changing it would silently alter the look of every existing
+	// board while nominally only adding a feature.
+	//
+	// GPU_PAPER needs no entry of its own: pset is already inverted
+	// for it above, so the white arms below produce black glyphs on a
+	// 0x80 field, which is precisely the same white, swapped.
+	// In colour each 4-bit channel is replicated to 8 bits (0xa ->
+	// 0xaa, 0xf -> 0xff), so the palette spans the full range rather
+	// than the 0x80 ceiling the monochrome inks keep for
+	// compatibility. A game wanting the desktop's white sets 0x888.
 
 	wire [7:0] ddmi_red   = pal_out ? { c_r, c_r } : (pset ? ddmi_ink_r : 8'd0);
 	wire [7:0] ddmi_green = pal_out ? { c_g, c_g } : (pset ? ddmi_ink_g : 8'd0);
@@ -1273,7 +1355,7 @@ module gpu_video #(
 	reg col_cap;
 	reg [2:0] np_cap;
 	reg [5:0] off_cap;
-	reg win_cap;
+	reg win_cap, desk_cap;
 	reg [9:0] wx0_cap, wy0_cap, wx1_cap, wy1_cap;
 
 	// The clamp that keeps the viewport on screen, applied once per
@@ -1345,6 +1427,8 @@ module gpu_video #(
 			off_active <= 6'd0;
 			win_cap <= 1'b0;
 			win_active <= 1'b0;
+			desk_cap <= 1'b0;
+			desk_active <= 1'b0;
 		end else begin
 			if (view_edge) begin
 				game_cap <= game_en;
@@ -1355,6 +1439,7 @@ module gpu_video #(
 				np_cap <= color_np;
 				off_cap <= color_off;
 				win_cap <= win_en;
+				desk_cap <= win_desk;
 				wx0_cap <= win_x0;
 				wy0_cap <= win_y0;
 				wx1_cap <= win_x1;
@@ -1377,6 +1462,7 @@ module gpu_video #(
 				off_active <= off_cap;
 				// the window only in desktop mode: game mode wins
 				win_active <= WIN_ON && win_cap && !vp_cap;
+				desk_active <= DESK_ON && win_cap && desk_cap && !vp_cap;
 				wx0_active <= wx0_cap;
 				wy0_active <= wy0_cap;
 				wx1_active <= wx1_cap;

@@ -15,7 +15,7 @@ HOSTCC ?= cc
 CC_ = cd $(R) && $(HOSTCC) -std=gnu99
 SKIP77 = r=$$?; [ $$r -eq 0 ] || { [ $$r -eq 77 ] && echo "  (skipped)"; }
 
-TESTS = args bitbang dialog flist gfx_region gz inflate png text undo vt \
+TESTS = accent args bitbang dialog flist gfx_region gz inflate png text undo vt \
 	zcaption zcfg zexec zexec_inflate zexec_lz4 zfmt zinput zkbd zscreen \
 	zsha1 ztype zwalk zws
 
@@ -25,6 +25,10 @@ test: $(TESTS)
 
 $(OUT):
 	mkdir -p $(OUT)
+
+accent: | $(OUT)
+	$(CC_) -Wall -I sw/common -o $(OUT)/test_accent sw/common/tests/test_accent.c \
+		sw/common/zaccent.c && $(OUT)/test_accent
 
 args: | $(OUT)
 	$(CC_) -Wall -I sw/common -o $(OUT)/test_args sw/common/tests/test_args.c && $(OUT)/test_args

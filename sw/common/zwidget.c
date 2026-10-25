@@ -277,6 +277,13 @@ void z_widget_draw(z_widget_set_t *set, int idx) {
 				z_win_hw_box(set->win, x0 - 1, y0 - 1, x1 + 1, y1 + 1,
 					set->focused == idx ? 1 : 0);
 
+			// Desktop colour: the focused widget, ring and all, is
+			// tinted -- a dialog's default button reads at a glance.
+			// Untinted on every other redraw, as the ring is.
+			if (set->focus_used && z_win_accent_ok())
+				z_win_accent_rect(set->win, x0 - 1, y0 - 1, x1 + 1, y1 + 1,
+					set->focused == idx);
+
 			int ink = lit ? 0 : 1;
 
 			// An empty frame is the disabled appearance.
@@ -1181,6 +1188,11 @@ void z_listbox_draw(z_listbox_t *lb, bool force) {
 		z_fb_hw_fill_rect(clip.x0, clip.y0,
 			clip.x1 - clip.x0 + 1, clip.y1 - clip.y0 + 1, 0);
 
+	// Desktop colour: the rows untinted, then the selected one tinted
+	// as it is drawn (below).
+	if (clip.x1 >= clip.x0 && clip.y1 >= clip.y0 && z_win_accent_ok())
+		z_win_accent_rect(lb->win, clip.x0, clip.y0, clip.x1, clip.y1, false);
+
 	z_win_hw_box(lb->win, x0, y0, x1, y1, 1);
 
 	// The focus ring: drawn in ink when focused, in background once
@@ -1204,6 +1216,10 @@ void z_listbox_draw(z_listbox_t *lb, bool force) {
 		if (selected && clip.x1 >= clip.x0)
 			z_fb_hw_fill_rect(clip.x0, ry, clip.x1 - clip.x0 + 1,
 				ry + LB_ROW_H - 1 <= clip.y1 ? LB_ROW_H : (clip.y1 - ry + 1), 1);
+
+		if (selected && clip.x1 >= clip.x0 && z_win_accent_ok())
+			z_win_accent_rect(lb->win, clip.x0, ry, clip.x1,
+				ry + LB_ROW_H - 1 <= clip.y1 ? ry + LB_ROW_H - 1 : clip.y1, true);
 
 		const char *text = lb->label(lb->user, row);
 		if (text)

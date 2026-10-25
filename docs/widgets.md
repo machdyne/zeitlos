@@ -768,6 +768,27 @@ opens on the epoch and has nowhere earlier to go.
 returns -1 for a disabled widget, so leaving focus there means Enter
 appears to do nothing at all.
 
+### Tints (desktop colour)
+
+On a board where wm shows the desktop in four colours
+([color.md](color.md#desktop-colour)), a widget can be **tinted**: its
+black shows as the accent's dark colour and its ink as the light one.
+The keyboard-focused button -- a dialog's default -- is tinted, ring and
+all, and so is a list's selected row (`z_listbox`, `z_flist`). The
+widgets do it themselves on every redraw, tint and untint alike, so an
+app needs nothing. Its own drawing can use the same call:
+
+```c
+if (z_win_accent_ok())
+	z_win_accent_rect(&win, x0, y0, x1, y1, true);   /* absolute, inclusive */
+```
+
+clipped to the content area and the window's region; it does nothing at
+all on a monochrome board or while a screen app holds the colour
+window. Whatever tints a rectangle untints it on the next redraw of the
+same rectangle: wm clears a window's tints only where it asks it to
+repaint. Not inside a paint walk (`z_win_paint_begin()`).
+
 ## Clipboard
 
 System-wide, hosted by wm for the same reason the launch argument is:

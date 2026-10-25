@@ -16,8 +16,9 @@ when:
   - an app binds F1-F4, F10, F11 or F12 by number (Z_KEY_F1 ...)
     instead of by meaning;
   - anything binds F9 (reserved);
-  - Z_KEY_COLOUR is used outside the arcade runtime (zarcade_sys.c)
-    and the dual apps (view, poker): the colour key is theirs, the same in
+  - Z_KEY_COLOUR is used outside the arcade runtime (zarcade_sys.c),
+    the dual apps (view, poker, chess, the casino tables) and wm (its
+    Super+F10, desktop colour): the colour key is theirs, the same in
     every one;
   - Z_KEY_APP_HOME is used outside the apps with a home (term, web,
     files);
@@ -47,7 +48,7 @@ HOME_OK = ('apps/term/', 'apps/web/', 'apps/files/')
 # switch to the colour screen
 COLOUR_OK = ('common/games/zarcade_sys.c', 'apps/view/', 'apps/poker/',
              'apps/chess/', 'apps/blackjack/', 'apps/craps/', 'apps/roulette/',
-             'apps/slots/')
+             'apps/slots/', 'apps/wm/')
 
 NUMBERED = re.compile(r'\bZ_KEY_F(1|2|3|4|9|10|11|12)\b')
 HOME = re.compile(r'\bZ_KEY_APP_HOME\b')

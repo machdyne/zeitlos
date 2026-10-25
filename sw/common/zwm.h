@@ -207,6 +207,13 @@
 // such a window, the topmost there, and shows it again past its edge.
 #define Z_WIN_FLAG_NO_POINTER         (1u << 13)
 
+// With Z_WIN_FLAG_COLOR: the window does not want the colour window
+// until it says so (Z_WM_COLOR_WANT 1) -- a dual app on its desktop
+// face (docs/app_kinds.md). Without it a colour window wants it from
+// the start, as a screen app's does. Desktop colour keeps the second
+// sheet for as long as the focused window does not want it.
+#define Z_WIN_FLAG_COLOUR_LATER       (1u << 15)
+
 // In wm's window rect messages (the "h" of the map z_win_parse_rect()
 // reads): set while the window is full screen and has no titlebar, so
 // the content starts at the top edge. A window is never 2^31 tall.
@@ -578,6 +585,14 @@ typedef struct {
 #define Z_WM_CLIP_FREEZE         1
 #define Z_WM_CLIP_WINDOW         2
 
+// Z_WM_CLIP_ACCENT: the WINDOW rectangle's x1 when the desktop has its
+// accent plane and the window may tint its content through it
+// (z_win_accent_rect(), zwin.h; docs/color.md, "Desktop colour").
+// Otherwise x1 is Z_WM_CLIP_CTL, as it always was -- and a receiver
+// that predates this reads neither. wm revokes it, and waits for the
+// acks, before it gives the second sheet to a colour window.
+#define Z_WM_CLIP_ACCENT         (Z_WM_CLIP_CTL + 1)
+
 // Z_WM_CLIP_DONE payload: window id in the low 16 bits, flags above.
 #define Z_WM_CLIP_DONE_ID(v)     ((v) & 0xffffu)
 #define Z_WM_CLIP_DONE_DREW      0x10000u
@@ -910,6 +925,20 @@ typedef struct {
 // window moved, or a game took them); 0, it is gone -- draw in black
 // and white. No reply. docs/color.md, "The colour window".
 #define Z_WM_COLOR               (Z_SUBJ_WM + 36)
+
+// Z_WM_ACCENT_USED -- app -> wm (Z_UINT32 window id): this window has
+// tinted some of its content (z_win_accent_rect()). Sent once per
+// window. When wm takes the accent plane back from a colour window it
+// clears it, and asks only these windows to repaint. No reply.
+#define Z_WM_ACCENT_USED         (Z_SUBJ_WM + 37)
+
+// Z_WM_COLOR_WANT -- app -> wm (tag: the window's index; Z_UINT32 1 or
+// 0): the window wants the colour window when it is focused, or no
+// longer does -- a screen app's colour switched off with F10, a dual
+// app going back to its desktop face. Only for a Z_WIN_FLAG_COLOR
+// window. wm answers with Z_WM_COLOR as the focus allows. Desktop
+// colour (docs/color.md) keeps the second sheet meanwhile.
+#define Z_WM_COLOR_WANT          (Z_SUBJ_WM + 38)
 
 #define Z_WM_PACK_PLACE(x, y) \
 	((((uint32_t)(y) & 0x3FF) << 10) | ((uint32_t)(x) & 0x3FF))

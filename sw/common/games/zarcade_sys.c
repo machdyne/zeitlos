@@ -362,6 +362,7 @@ int ar_set_colours(int n) {
  * content, the picture drawn in colour. Covered, or on another frame
  * without it, the window clears it and draws in black and white. */
 static bool wc_wanted;      /* the program asked */
+static void colour_want(bool on);
 static bool wc_focus;       /* wm said this window may have it */
 static int16_t wc_x, wc_y;  /* where COLWIN was set */
 
@@ -596,6 +597,7 @@ static void handle_key(uint32_t packed) {
 				if (z_color_available()) ar_set_color(!ar__s.want_color);
 			} else if (wc_wanted && z_color_window_available()) {
 				ar__s.wc_off = !ar__s.wc_off;
+				colour_want(!ar__s.wc_off);
 			}
 		}
 		return;
@@ -720,7 +722,10 @@ static void handle_msg(z_msg_t *m) {
 		/* the colour icon: as F10 */
 		if (Z_WM_UNPACK_TBICON_KIND(m->obj.val.uint32) == Z_WM_TBICON_COLOUR) {
 			if (attached) desktop_event();
-			else if (wc_wanted) ar__s.wc_off = !ar__s.wc_off;
+			else if (wc_wanted) {
+				ar__s.wc_off = !ar__s.wc_off;
+				colour_want(!ar__s.wc_off);
+			}
 		} else if (msg_hook) {
 			msg_hook(m);
 		}
@@ -926,7 +931,7 @@ static void core_up_once(const ar_desc_t *d) {
 			d->name);
 }
 
-uint32_t ar_window_flags(const ar_desc_t *d) {
+static uint32_t window_flags(const ar_desc_t *d) {
 	bool cw = wc_wanted && z_color_window_available();
 	return Z_WIN_FLAG_GAME_MODE |
 		(cw ? Z_WIN_FLAG_COLOR | Z_WIN_FLAG_COLOUR_ICON : 0) |
@@ -934,12 +939,29 @@ uint32_t ar_window_flags(const ar_desc_t *d) {
 		(d->pointer ? 0 : Z_WIN_FLAG_NO_POINTER);
 }
 
+/* A dual app's window: the colour window only once it is attached
+ * (Z_WIN_FLAG_COLOUR_LATER) -- on its desktop face desktop colour
+ * keeps the second sheet. */
+uint32_t ar_window_flags(const ar_desc_t *d) {
+	uint32_t f = window_flags(d);
+	return (f & Z_WIN_FLAG_COLOR) ? f | Z_WIN_FLAG_COLOUR_LATER : f;
+}
+
+/* Whether this window wants the colour window when focused (wm,
+ * Z_WM_COLOR_WANT): a screen app's F10, a dual app attaching and
+ * detaching. */
+static void colour_want(bool on) {
+	uint32_t wm;
+	if (!wc_wanted || wp->id < 0 || !z_pid_lookup("wm0", &wm)) return;
+	z_msg_new_send(wm, Z_WM_COLOR_WANT, (uint32_t)wp->id, z_obj_uint32(on ? 1u : 0u));
+}
+
 bool ar_init(const ar_desc_t *d) {
 
 	core_up_once(d);
 
 	if (z_win_create_flags(wp, d->name, WIN_W, WIN_H, -1, -1,
-	    Z_WIN_FLAG_CLOSE_ICON | ar_window_flags(d)) != Z_OK) {
+	    Z_WIN_FLAG_CLOSE_ICON | window_flags(d)) != Z_OK) {
 		printf("%s: could not create a window\n", d->name);
 		return false;
 	}
@@ -965,8 +987,10 @@ bool ar_attach(void *win, const ar_desc_t *d) {
 	desk_w = wp->w;
 	desk_h = wp->h;
 	attached = have_win = true;
-	/* the window was focused to be switched: it may have the colour */
-	wc_focus = true;
+	/* wm hands the colour window over (Z_WM_COLOR 1) once it has taken
+	 * desktop colour's tints back from the apps */
+	wc_focus = false;
+	colour_want(true);
 	ar__s.mode = AR_MODE_WINDOW;
 	if (wp->w != WIN_W || wp->h != WIN_H) {
 		resize_ours = true;
@@ -993,6 +1017,7 @@ void ar_detach(void) {
 	if (desk_w && (desk_w != WIN_W || desk_h != WIN_H))
 		z_win_resize(wp, desk_w, desk_h);
 	resize_ours = false;
+	colour_want(false);
 	attached = have_win = false;
 	/* what is queued was the screen face's */
 	while (ar__dequeue(&e)) ;

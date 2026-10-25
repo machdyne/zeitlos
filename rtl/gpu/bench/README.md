@@ -110,6 +110,10 @@ design makes that pattern land correctly). `tb_line.v` and
   positions, across the fold, the cursor, paper, off, game mode
   ignoring it. `-DGPU_DDMI -DTB_STUBS` with the DDMI files for the TMDS
   inputs. About a dozen frames.
+- `tb_deskcol.v` -- desktop colour's exact path in `rtl/gpu/gpu_video.v`
+  (COLWIN's DESK): accent pixels through the palette, every other pixel
+  and the pointer through the exact ink, checked pixel by pixel; and
+  the 3-bit VGA DAC (`VGA_DAC3`). See `docs/color.md`, "The exact path".
 - `tb_brightness.v` -- monochrome brightness on DDMI (VIDEO bits
   11:8): the 8-bit channel values for a lit pixel in every phosphor
   mode at levels 0, 7, 11 and 15; level 7 is exactly the old inks; a
@@ -237,6 +241,14 @@ vvp /tmp/tb_color.out         # several minutes
 iverilog -g2005 -DNPLANES=8 -o /tmp/tb_colwin.out \
     rtl/gpu/bench/tb_colwin.v /tmp/gpu_video_fix.v
 vvp /tmp/tb_colwin.out        # a few minutes
+
+# tb_deskcol.v -- desktop colour's exact path (DESK) and the 3-bit VGA
+# DAC; -DNODESK, -DNPLANES=6 (DESK must do nothing), -DDAC3, and the
+# DDMI sources with -DGPU_DDMI -DTB_STUBS
+iverilog -g2005 -DGPU_DDMI -DTB_STUBS -o /tmp/tb_desk.out \
+    rtl/gpu/bench/tb_deskcol.v /tmp/gpu_video_fix.v \
+    rtl/gpu/gpu_ddmi.v rtl/gpu/tmds_encoder.v rtl/gpu/ddmi_island.v
+vvp /tmp/tb_desk.out          # a few minutes
 
 # tb_cursor.v -- the same patched gpu_video.v, and the old cursor
 iverilog -g2005 -o /tmp/tb_cursor.out rtl/gpu/bench/tb_cursor.v \

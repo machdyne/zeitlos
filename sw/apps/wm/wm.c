@@ -43,6 +43,7 @@
 #include "../../common/zcaption.h"	// docs/captions.md
 #include "../../common/zfs.h"		// the dock's two files: docs/dock.md
 #include "../../common/zpaths.h"
+#include "../../common/zaccent.h"	// desktop colour: docs/color.md
 #include "../../common/zutf8.h"		// titles are UTF-8		// system.keyboard.layouts
 #include "workspace.h"		// workspaces: the decisions (tested on the host)
 #include "kbd_accent.h"		// a dead key with Ctrl/Super/Alt is not an accent
@@ -596,6 +597,17 @@ static void repair_drag(int dragged_idx);
 // hit-testing code they otherwise belong next to.
 static int blocked_by_modal(int idx);
 
+// -- desktop colour (docs/color.md, "Desktop colour"): see acc_service() --
+static bool acc_live;		// COLWIN over the desktop, the accent palette, the plane kept
+static bool acc_dirty;		// the desktop's, chrome's and dock's tints want repainting
+static void acc_clear_content(int idx);
+static bool cw_want[WM_MAX_WINDOWS];	// a Z_WIN_FLAG_COLOR window wants it (Z_WM_COLOR_WANT)
+static int8_t cw_pending = -1;		// a colour window, told 1 once every app has acked
+static uint32_t cw_pending_until;
+static bool acc_retake_wait;		// wm takes the sheet back at acc_retake_at
+static uint32_t acc_retake_at;
+static uint32_t game_grab_pid;		// defined with the grab, below
+
 // lightweight redraw notification -- no heap allocation (see
 // Z_WM_REDRAW in zwm.h for why this matters). safe to call as often
 // as repair_region() below does.
@@ -605,6 +617,10 @@ static uint32_t dbg_t0;
 
 static void send_redraw(uint32_t to, int idx) {
 	uint32_t packed = Z_WM_PACK_XY(idx, windows[idx].x, windows[idx].y);
+	// Desktop colour: what the window repaints, it tints again itself
+	// (z_win_accent_rect()) -- and whatever was tinted there before is
+	// somebody else's.
+	if (acc_live) acc_clear_content(idx);
 	z_msg_new_send(to, Z_WM_REDRAW, 0, z_obj_uint32(packed));
 	dbg_n_redraw++;
 }
@@ -621,6 +637,7 @@ static void send_redraw(uint32_t to, int idx) {
 // and those all mean the plain "repaint everything" above.
 static void send_redraw_damage(uint32_t to, int idx) {
 	uint32_t packed = Z_WM_PACK_XY(idx, windows[idx].x, windows[idx].y);
+	if (acc_live) acc_clear_content(idx);
 	z_msg_new_send(to, Z_WM_REDRAW, 0,
 		z_obj_uint32(packed | Z_WM_REDRAW_DAMAGE));
 	dbg_n_redraw++;
@@ -2290,6 +2307,7 @@ static void paint_window_chrome(int idx)
 		wn = 1;
 	}
 
+	acc_dirty = true;
 	chrome_region = wreg;
 	chrome_region_n = wn;
 	draw_window_chrome_bg(w);
@@ -2338,6 +2356,7 @@ static void repair_region(int rx, int ry, int rw, int rh, int exclude_idx) {
 	if (game_grab_pid) return;
 
 	dbg_repairs++;
+	acc_dirty = true;
 
 	// See draw_window_box(): wm's own drawing must not inherit a
 	// region left over from the dock.
@@ -2601,6 +2620,17 @@ static uint32_t wm_idle_ticks(void) {
 
 	if (wm_busy_mask & WM_BUSY_STARTUP)
 		return 1;
+
+	// Desktop colour: tints to repaint, acks to wait for, the second
+	// sheet to take back (acc_service()).
+	if ((acc_live && acc_dirty && !WM_HIDDEN() && dragging < 0 && resizing < 0 &&
+	     xor_band_idx < 0) || cw_pending >= 0)
+		return 1;
+	if (acc_retake_wait) {
+		int32_t left = (int32_t)(acc_retake_at - now);
+		if (left <= 0) return 1;
+		if (!soon || (uint32_t)left < soon) soon = (uint32_t)left;
+	}
 
 	// The caption's timeout and its two refreshes (caption_tick()).
 	if (cap_vis) {
@@ -3148,6 +3178,12 @@ static uint8_t clip_side[WM_MAX_WINDOWS];
 
 // Fills idx's next slot with `n` rectangles and returns the Z_BLOB
 // object to send. Allocates nothing.
+// Desktop colour: what the regions last told apps -- may they tint?
+// (Z_WM_CLIP_ACCENT, zwm.h; acc_apps_set().) And a region resent even
+// though it has not changed, to carry a change of this.
+static bool acc_apps;
+static bool clip_force;
+
 static z_obj_t clip_payload(int idx, const z_wm_cliprect_t *rects, int n) {
 	int side = clip_side[idx] ^ 1;
 	clip_side[idx] = (uint8_t)side;
@@ -3158,7 +3194,7 @@ static z_obj_t clip_payload(int idx, const z_wm_cliprect_t *rects, int n) {
 	// apart.
 	clip_wire[idx][side][0].x0 = Z_WM_CLIP_CTL;
 	clip_wire[idx][side][0].y0 = Z_WM_CLIP_WINDOW;
-	clip_wire[idx][side][0].x1 = Z_WM_CLIP_CTL;
+	clip_wire[idx][side][0].x1 = acc_apps ? Z_WM_CLIP_ACCENT : Z_WM_CLIP_CTL;
 	clip_wire[idx][side][0].y1 = (int16_t)idx;
 	for (int i = 0; i < n; i++) clip_wire[idx][side][i + 1] = rects[i];
 	clip_blob[idx][side].len = (uint32_t)((n + 1) * sizeof(z_wm_cliprect_t));
@@ -3376,15 +3412,357 @@ static void __attribute__((noinline)) cw_tell(int idx, uint32_t on) {
 		z_obj_uint32(on));
 }
 
+// Desktop colour's side of the hand-over (acc_* below): a colour
+// window waiting for the apps to stop tinting, and when wm may take
+// the second sheet back after one.
+static void acc_apps_set(bool on);
+static bool send_clip_ex(int idx, bool do_redraw);
+
+#define ACC_ACK_MS       300	// apps acking "no more tints", at most
+#define ACC_RETAKE_MS    150	// the old owner's last plane writes
+
 static void colour_window_update(void) {
 	int f = WM_HIDDEN() ? -1 : focused;
-	if (f >= 0 && !(windows[f].used && (windows[f].flags & Z_WIN_FLAG_COLOR)))
+	if (f >= 0 && !(windows[f].used && (windows[f].flags & Z_WIN_FLAG_COLOR) && cw_want[f]))
 		f = -1;
 	if (f == cw_idx) return;
+	// The colour window -- or desktop colour, which is the same
+	// register over the whole screen -- off from the next frame.
 	reg_socctl_colwin = 0;
+	acc_live = false;
 	if (cw_idx >= 0 && windows[cw_idx].used) cw_tell(cw_idx, 0);
-	if (f >= 0) cw_tell(f, 1);
+	// Back to the desktop: wm takes the second sheet again once the
+	// screen app has had time to read its 0 and stop drawing planes.
+	if (cw_idx >= 0 && f < 0) {
+		acc_retake_wait = true;
+		acc_retake_at = z_uptime_ticks() + ACC_RETAKE_MS * Z_TICK_HZ / 1000u;
+	}
+	cw_pending = -1;
+	if (f >= 0) {
+		// A FOCUSED COLOUR WINDOW TAKES PRECEDENCE over desktop colour.
+		// Apps that may tint are told they may not, and the screen app
+		// hears its 1 only when they have acked (or ACC_ACK_MS): a tint
+		// drawn after it owns the sheet would land in its planes.
+		if (acc_apps) {
+			acc_apps_set(false);
+			cw_pending = (int8_t)f;
+			cw_pending_until = z_uptime_ticks() + ACC_ACK_MS * Z_TICK_HZ / 1000u;
+		} else {
+			cw_tell(f, 1);
+		}
+	}
 	cw_idx = (int8_t)f;
+}
+
+// -- desktop colour (docs/color.md, "Desktop colour") --
+//
+// On a bitstream with the colour window and eight planes, the whole
+// desktop in four colours: COLWIN over the screen, every palette entry
+// a function of bits 0 and 4 only (zaccent.h), and the second VRAM
+// sheet -- 480 rows below the desktop -- an ACCENT bit per pixel, which
+// tints it: black shows as A0, ink as A1.
+//
+// wm keeps that plane. What it tints: the desktop's background
+// (system.video.desktop_background), the focused window's titlebar and
+// frame, the dock's outline, its running dots and a launching slot,
+// and its own boxes (lock, confirm). Everything else it keeps
+// untinted. Apps may tint inside their own windows (z_win_accent_rect(),
+// the widgets) while their region says so (acc_apps); wm clears a
+// window's content tints wherever it asks it to repaint (send_redraw()).
+//
+// Who has the second sheet:
+//
+//   desktop colour   wm (acc_live), when on and nothing below holds it
+//   a colour window  the focused screen app (cw_idx): desktop colour is
+//                    dropped -- precedence -- and taken back
+//                    ACC_RETAKE_MS after it loses focus, from scratch
+//   game mode        the game; the hardware clears EN on the GAME write,
+//                    and wm takes it back once the game has let go
+//
+// Taking it back is a clear of the whole sheet, the tints repainted,
+// the palette, COLWIN; then the apps may tint again, and those that
+// had (Z_WM_ACCENT_USED) are asked to repaint. About 1-2 ms.
+//
+// Monochrome boards: acc_hw is false, and nothing here does anything.
+static bool acc_hw;		// probed once: z_color_desktop_available()
+static bool acc_vga;		// a 1-bit VGA output shares the palette
+static bool acc_cfg = true;	// system.video.desktop_colour, Super+F10
+static bool acc_bg = true;	// system.video.desktop_background
+static uint32_t acc_cfg_gen = 0xffffffffu;
+static uint32_t acc_cfg_check_at;
+static uint32_t acc_video = 0xffffffffu;	// mode | level << 8, as written
+static bool acc_used[WM_MAX_WINDOWS];	// Z_WM_ACCENT_USED heard
+static bool acc_want_ack[WM_MAX_WINDOWS];
+
+// Fills of the accent plane: the region escaped, rows past 479 let in.
+static void acc_begin(void) {
+	z_gfx_clear_visible();
+	z_fb_set_rows(2 * WM_SCREEN_H);
+}
+
+static void acc_end(void) {
+	z_fb_set_rows(WM_SCREEN_H);
+	wm_unclip();
+}
+
+// (x, y, w, h) of the desktop tinted (v) or not, cut to the rects
+// given (n == 0: the whole screen).
+static void acc_rect(int x, int y, int w, int h, int v, const z_clip_t *reg, int n) {
+	if (w <= 0 || h <= 0) return;
+	if (n == 0) {
+		z_fb_hw_fill_rect(x, y + WM_SCREEN_H, w, h, v);
+		return;
+	}
+	for (int i = 0; i < n; i++) {
+		int x0 = x > reg[i].x0 ? x : reg[i].x0;
+		int y0 = y > reg[i].y0 ? y : reg[i].y0;
+		int x1 = x + w - 1 < reg[i].x1 ? x + w - 1 : reg[i].x1;
+		int y1 = y + h - 1 < reg[i].y1 ? y + h - 1 : reg[i].y1;
+		if (x1 >= x0 && y1 >= y0)
+			z_fb_hw_fill_rect(x0, y0 + WM_SCREEN_H, x1 - x0 + 1, y1 - y0 + 1, v);
+	}
+}
+
+static void acc_box(int x, int y, int w, int h, int v, const z_clip_t *reg, int n) {
+	acc_rect(x, y, w, 1, v, reg, n);
+	acc_rect(x, y + h - 1, w, 1, v, reg, n);
+	acc_rect(x, y + 1, 1, h - 2, v, reg, n);
+	acc_rect(x + w - 1, y + 1, 1, h - 2, v, reg, n);
+}
+
+// A window's content, untinted, where it is visible: called just
+// before it is asked to repaint.
+static void acc_clear_content(int idx) {
+	wm_window_t *w = &windows[idx];
+	z_clip_t reg[WM_MAX_CLIP];
+	int n, top;
+	if (idx < 0 || idx >= WM_MAX_WINDOWS || !w->used) return;
+	if (game_grab_pid || z_game_enabled()) return;
+	n = window_visible_region(idx, reg, WM_MAX_CLIP);
+	if (n == 0) return;
+	top = w->no_titlebar ? 2 : Z_WM_TITLEBAR_H + 2;
+	acc_begin();
+	acc_rect((int)w->x + 2, (int)w->y + top, (int)w->w - 4, (int)w->h - top - 2, 0, reg, n);
+	acc_end();
+}
+
+// One window's chrome tints, cut to its visible region: the titlebar,
+// separator and frame tinted when it has the focus and not otherwise,
+// the one-pixel margin inside the frame never. The dock: its outline,
+// its running dots, a launching slot, the selection ring.
+static void acc_window(int idx) {
+	wm_window_t *w = &windows[idx];
+	z_clip_t reg[WM_MAX_CLIP];
+	int x = (int)w->x, y = (int)w->y, ww = (int)w->w, hh = (int)w->h;
+	int n = window_visible_region(idx, reg, WM_MAX_CLIP);
+
+	if (n == 0) return;
+
+	if (idx == dock_idx) {
+		bool dock_focused = (focused == dock_idx);
+		acc_rect(x + 1, y + 1, ww - 2, hh - 2, 0, reg, n);
+		acc_box(x, y, ww, hh, 1, reg, n);
+		for (int slot = 0; slot < dock_slots(); slot++) {
+			bool is_next = dock_slot_is_next(slot), is_back = dock_slot_is_back(slot);
+			int app = dock_app_at(slot), ix, iy;
+			if (app < 0 && !is_next && !is_back) continue;
+			dock_slot_xy(slot, &ix, &iy);
+			ix += x;
+			iy += y;
+			bool selected = is_next ? (dock_selected == DOCK_SEL_NEXT)
+			              : is_back ? (dock_selected == DOCK_SEL_BACK)
+			                        : (dock_selected == app);
+			if (dock_focused && selected)
+				acc_box(ix - 1, iy - 1, DOCK_ICON_SIZE + 2, DOCK_ICON_SIZE + 2, 1, reg, n);
+			if (app >= 0 && dock_launching[app])
+				acc_rect(ix, iy, DOCK_ICON_SIZE, DOCK_ICON_SIZE, 1, reg, n);
+			if (app >= 0 && dock_dots && dock_running[app]) {
+				int k = dock_running[app] < DK_DOTS_MAX ? dock_running[app] : DK_DOTS_MAX;
+				int along = (DOCK_ICON_SIZE - (k * DOCK_DOT_STEP - DOCK_DOT_GAP)) / 2;
+				int across = dock_dots_near() ? -1 - DOCK_DOT_SIZE : DOCK_ICON_SIZE + 1;
+				for (int d = 0; d < k; d++) {
+					int a = along + d * DOCK_DOT_STEP;
+					if (dock_vert())
+						acc_rect(ix + across, iy + a, DOCK_DOT_SIZE, DOCK_DOT_SIZE, 1, reg, n);
+					else
+						acc_rect(ix + a, iy + across, DOCK_DOT_SIZE, DOCK_DOT_SIZE, 1, reg, n);
+				}
+			}
+		}
+		return;
+	}
+
+	int foc = (idx == focused) ? 1 : 0;
+	int th = w->no_titlebar ? 1 : Z_WM_TITLEBAR_H + 1;	// border, bar, separator
+	if (th > hh) th = hh;
+	acc_rect(x, y, ww, th, foc, reg, n);
+	acc_rect(x, y + th, 1, hh - th, foc, reg, n);
+	acc_rect(x + ww - 1, y + th, 1, hh - th, foc, reg, n);
+	acc_rect(x + 1, y + hh - 1, ww - 2, 1, foc, reg, n);
+	// the margin inside the frame: always untinted
+	acc_rect(x + 1, y + th, ww - 2, 1, 0, reg, n);
+	acc_rect(x + 1, y + hh - 2, ww - 2, 1, 0, reg, n);
+	acc_rect(x + 1, y + th + 1, 1, hh - th - 3, 0, reg, n);
+	acc_rect(x + ww - 2, y + th + 1, 1, hh - th - 3, 0, reg, n);
+}
+
+// The desktop: what no window covers, as many rectangles as that takes
+// (a region of WM_MAX_CLIP would drop pieces), tinted or not.
+#define ACC_HOLES 48
+static void acc_desktop(void) {
+	z_clip_t cur[ACC_HOLES], nxt[ACC_HOLES];	// on the stack: 1.5 KB of wm's 8
+
+	int ncur = 1, nnxt;
+	cur[0].x0 = 0; cur[0].y0 = 0;
+	cur[0].x1 = WM_SCREEN_W - 1; cur[0].y1 = WM_SCREEN_H - 1;
+	for (int i = 0; i <= WM_MAX_WINDOWS && ncur > 0; i++) {
+		z_clip_t o;
+		if (i == WM_MAX_WINDOWS) {
+			if (!cap_vis) break;
+			o = cap_rect;
+		} else {
+			if (!windows[i].used) continue;
+			o.x0 = (int)windows[i].x;
+			o.y0 = (int)windows[i].y;
+			o.x1 = (int)(windows[i].x + windows[i].w - 1);
+			o.y1 = (int)(windows[i].y + windows[i].h - 1);
+		}
+		nnxt = 0;
+		for (int j = 0; j < ncur; j++)
+			if (!rect_subtract(&cur[j], &o, nxt, &nnxt, ACC_HOLES)) break;
+		for (int j = 0; j < nnxt; j++) cur[j] = nxt[j];
+		ncur = nnxt;
+	}
+	for (int j = 0; j < ncur; j++)
+		acc_rect(cur[j].x0, cur[j].y0, cur[j].x1 - cur[j].x0 + 1,
+			cur[j].y1 - cur[j].y0 + 1, acc_bg ? 1 : 0, NULL, 0);
+	if (cap_vis)
+		acc_rect(cap_rect.x0, cap_rect.y0, cap_rect.x1 - cap_rect.x0 + 1,
+			cap_rect.y1 - cap_rect.y0 + 1, 0, NULL, 0);
+}
+
+// Every tint wm owns, written in place: each pixel gets its final value
+// once, so nothing on screen blinks. Content tints are not touched.
+static void acc_paint_all(void) {
+	acc_begin();
+	acc_desktop();
+	for (int i = 0; i < WM_MAX_WINDOWS; i++)
+		if (windows[i].used) acc_window(i);
+	acc_end();
+	acc_dirty = false;
+}
+
+// The palette for the phosphor and brightness now in force.
+static void acc_palette(void) {
+	uint16_t c[4];
+	uint32_t m = z_video_get_mode(), l = z_video_get_brightness();
+	acc_video = m | (l << 8);
+	z_accent_palette(m, l, acc_vga, c);
+	z_accent_write_palette(c);
+}
+
+// Apps may tint, or not: every window's region resent with the flag
+// (frozen windows keep their freeze -- they cannot draw anyway). When
+// revoking, which windows' acks to wait for.
+static void acc_apps_set(bool on) {
+	acc_apps = on;
+	clip_force = true;
+	for (int i = 0; i < WM_MAX_WINDOWS; i++) {
+		acc_want_ack[i] = false;
+		if (!windows[i].used || windows[i].owner_pid == my_pid) continue;
+		if (frozen_sent[i] || !sent_region_valid[i]) continue;
+		send_clip_ex(i, false);
+		acc_want_ack[i] = !on && !clip_acked[i];
+	}
+	clip_force = false;
+}
+
+static bool acc_acked(void) {
+	for (int i = 0; i < WM_MAX_WINDOWS; i++)
+		if (acc_want_ack[i] && windows[i].used && !clip_acked[i]) return false;
+	return true;
+}
+
+static void acc_off(void) {
+	if (acc_live) reg_socctl_colwin = 0;
+	acc_live = false;
+	if (acc_apps) acc_apps_set(false);
+}
+
+// Taking the second sheet: from scratch, while COLWIN is still off.
+static void acc_on(void) {
+	acc_begin();
+	z_fb_hw_fill_rect(0, WM_SCREEN_H, WM_SCREEN_W, WM_SCREEN_H, 0);
+	acc_end();
+	acc_paint_all();
+	acc_palette();
+	z_color_desktop_on();
+	acc_live = true;
+	if (!acc_apps) {
+		acc_apps_set(true);
+		for (int i = 0; i < WM_MAX_WINDOWS; i++)
+			if (acc_used[i] && windows[i].used && windows[i].owner_pid != my_pid)
+				send_redraw(windows[i].owner_pid, i);
+	}
+}
+
+static void acc_config(void) {
+	acc_cfg_gen = z_cfg_generation();
+	acc_cfg = z_cfg_get_bool("system.video.desktop_colour", true);
+	acc_bg = z_cfg_get_bool("system.video.desktop_background", true);
+	acc_dirty = true;
+}
+
+// Once per pass of the main loop, after colour_window_update().
+static void acc_service(void) {
+	if (!acc_hw) return;
+
+	// A colour window waiting for the apps' acks.
+	if (cw_pending >= 0) {
+		if (cw_pending != cw_idx || !windows[cw_pending].used) cw_pending = -1;
+		else if (acc_acked() ||
+		         (int32_t)(z_uptime_ticks() - cw_pending_until) >= 0) {
+			cw_tell(cw_pending, 1);
+			cw_pending = -1;
+		}
+	}
+
+	// a reload: looked at no more than once a second (as the dock's)
+	if ((int32_t)(z_uptime_ticks() - acc_cfg_check_at) >= 0) {
+		acc_cfg_check_at = z_uptime_ticks() + Z_TICK_HZ;
+		if (z_cfg_generation() != acc_cfg_gen) acc_config();
+	}
+
+	bool want = acc_cfg && cw_idx < 0 && !game_grab_pid && !z_game_enabled();
+	if (!want) {
+		// (a colour window's own COLWIN is not wm's to clear here)
+		if (acc_live || (acc_apps && cw_idx < 0)) acc_off();
+		return;
+	}
+	if (WM_HIDDEN()) return;		// lock_draw() and confirm_draw() tint their own
+	if (dragging >= 0 || resizing >= 0 || xor_band_idx >= 0) return;	// after the release
+
+	if (!acc_live) {
+		if (acc_retake_wait && (int32_t)(z_uptime_ticks() - acc_retake_at) < 0) return;
+		acc_retake_wait = false;
+		acc_on();
+		return;
+	}
+
+	if ((z_video_get_mode() | (z_video_get_brightness() << 8)) != acc_video)
+		acc_palette();
+	if (acc_dirty) acc_paint_all();
+}
+
+static void acc_init(void) {
+	acc_hw = z_color_desktop_available();
+	if (!acc_hw) return;
+	acc_vga = z_soc_has_feature(Z_FEATURE_GPU_VGA);
+	acc_config();
+	// exact: the gateware keeps untinted pixels and the pointer on the
+	// phosphor's ink (COLWIN's DESK); otherwise all through the palette
+	printf("wm: desktop colour: %s%s\n", acc_cfg ? "on" : "off",
+		z_color_desktop_exact() ? " (exact)" : "");
 }
 
 static bool send_clip_ex(int idx, bool do_redraw) {
@@ -3418,8 +3796,8 @@ static bool send_clip_ex(int idx, bool do_redraw) {
 			    sent_region[idx][i].x1 != reg[i].x1 ||
 			    sent_region[idx][i].y1 != reg[i].y1) { same = false; break; }
 		if (same) {
-			if (!frozen_sent[idx]) return false;
-			thaw_same = true;
+			if (!frozen_sent[idx] && !clip_force) return false;
+			thaw_same = frozen_sent[idx];
 		}
 	}
 
@@ -5172,6 +5550,15 @@ static void lock_draw(void) {
 		(lock_st.flags & Z_AUTH_HAS_PASSWORD) ? "Type the password, then Enter" :
 		"No password is set: press Enter");
 
+	// desktop colour: the background, and the box's frame tinted
+	if (acc_live) {
+		acc_begin();
+		acc_rect(0, 0, WM_SCREEN_W, WM_SCREEN_H, acc_bg ? 1 : 0, NULL, 0);
+		acc_box(bx, by, LOCK_BOX_W, LOCK_BOX_H, 1, NULL, 0);
+		acc_rect(bx + 1, by + 1, LOCK_BOX_W - 2, LOCK_BOX_H - 2, 0, NULL, 0);
+		acc_end();
+	}
+
 	wm_unclip();
 }
 
@@ -5323,6 +5710,15 @@ static void confirm_draw(void) {
 		z_fb_draw_text2(bx + (CONFIRM_BW - (int)strlen(label[i]) * z_font_5x8.w) / 2,
 			by + (CONFIRM_BH - z_font_5x8.h) / 2, label[i], on ? 0 : 1, on ? 1 : 0,
 			&z_font_5x8, NULL);
+	}
+	// desktop colour: the frame tinted, the inside not (the box sits on
+	// windows' content, whose tints it hides; their repaint after it
+	// goes clears them)
+	if (acc_live) {
+		acc_begin();
+		acc_rect(confirm_x, confirm_y, CONFIRM_W, CONFIRM_H, 1, NULL, 0);
+		acc_rect(confirm_x + 2, confirm_y + 2, CONFIRM_W - 4, CONFIRM_H - 4, 0, NULL, 0);
+		acc_end();
 	}
 	wm_unclip();
 }
@@ -5668,6 +6064,23 @@ static void dispatch_keys(void) {
 			continue;
 		}
 
+		// Super+F10 -- desktop colour on or off (docs/color.md, "Desktop
+		// colour"), until the next reload: system.video.desktop_colour
+		// says which at start. F10 is the colour key (docs/keys.md).
+		if ((modifiers & Z_KBD_MOD_GUI) && keysym == Z_KEY_COLOUR &&
+		    !(modifiers & Z_KBD_MOD_CTRL) && !alt) {
+			if (pressed) {
+				if (acc_hw) {
+					acc_cfg = !acc_cfg;
+					z_speak_static(acc_cfg ? "Desktop colour on" : "Desktop colour off",
+						Z_TTS_F_INTERRUPT);
+				} else {
+					printf("wm: Super+F10: no desktop colour on this bitstream\n");
+				}
+			}
+			continue;
+		}
+
 		// Super+M -- the pointer's other pair of shapes: the small X
 		// and Z, or the large ones (docs/cursor.md). Until the next
 		// reload; system.cursor.large says which shows at start.
@@ -5874,6 +6287,7 @@ static int create_window(uint32_t owner_pid, const char *title,
 		if (windows[i].used) continue;
 
 		windows[i].used = true;
+		acc_used[i] = false;
 		windows[i].owner_pid = owner_pid;
 		windows[i].w = w;
 		windows[i].h = h;
@@ -5883,6 +6297,7 @@ static int create_window(uint32_t owner_pid, const char *title,
 		// default.
 		windows[i].no_titlebar = false;
 		windows[i].flags = flags;
+		cw_want[i] = !(flags & Z_WIN_FLAG_COLOUR_LATER);
 
 		// A slot is reused, and everything below belongs to the window
 		// that had it before: without this, a new window inherited the
@@ -6203,6 +6618,7 @@ static void destroy_window(uint32_t id) {
 	uint32_t owner = windows[id].owner_pid;
 
 	windows[id].used = false;
+	acc_used[id] = false;
 	sent_region_valid[id] = false;	// slot reuse must not inherit send_clip's last-sent memory
 
 	int found = -1;
@@ -6691,6 +7107,26 @@ static void handle_message(z_msg_t *msg) {
 		// Apps still ack regions (z_win_apply_clip() sends one), and
 		// nothing waits for them any more -- see send_clip(). Consumed
 		// here so they are not reported as unknown.
+		case Z_WM_COLOR_WANT:
+			// A colour window wanting the colour window, or no longer
+			// (a dual app attaching, a screen app's F10): the next
+			// colour_window_update() acts on it.
+			if (msg->obj.type == Z_UINT32 && msg->tag < WM_MAX_WINDOWS &&
+			    windows[msg->tag].used && windows[msg->tag].owner_pid == msg->from)
+				cw_want[msg->tag] = msg->obj.val.uint32 != 0;
+			break;
+
+		case Z_WM_ACCENT_USED:
+			// A window that tints its content (z_win_accent_rect()):
+			// asked to repaint when wm takes the accent plane back.
+			if (msg->obj.type == Z_UINT32) {
+				uint32_t id = msg->obj.val.uint32;
+				if (id < WM_MAX_WINDOWS && windows[id].used &&
+				    windows[id].owner_pid == msg->from)
+					acc_used[id] = true;
+			}
+			break;
+
 		case Z_WM_CLIP_DONE:
 			// Counted for freeze_all()'s wait; and a window thawed
 			// without a REDRAW that says it drew while frozen gets
@@ -7863,6 +8299,7 @@ int main(void) {
 	// Keyboard layouts (system.keyboard.layouts) -- before the first
 	// key can arrive. docs/keyboard_layouts.md.
 	kbd_load_config();
+	acc_init();			// desktop colour: docs/color.md
 
 	// The Japanese font service, if asked for (docs/text_encoding.md,
 	// "Japanese"). Only on request: it holds about 190KB for as long as
@@ -7983,6 +8420,9 @@ int main(void) {
 
 		// -- the colour window: to the focused screen app, or nobody --
 		colour_window_update();
+
+		// -- desktop colour: the second sheet back, the tints kept --
+		acc_service();
 
 		// -- a grab left behind by a process that has ended -- a game
 		// with no window (mausrun) that crashes would otherwise keep

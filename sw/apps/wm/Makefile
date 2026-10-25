@@ -22,7 +22,7 @@ ZFMT_NO64 = 1
 #
 #   dock_cfg.o: reads wm.cfg and dock.zic, the dock's arrangement and
 #   icons -- docs/dock.md
-OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zkbd.o zspeak.o zcaption.o zcfg.o dock_cfg.o win_icons.o workspace.o wm.o
+OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zkbd.o zspeak.o zcaption.o zcfg.o zaccent.o dock_cfg.o win_icons.o workspace.o wm.o
 
 # The dock's icons are not compiled in: they are /data/wm/dock.zic, made
 # by sw/data/icons/gen_dock_icon_data.py and put in the flash archive by
@@ -65,7 +65,7 @@ test:
 		tests/test_dock_files.c ../../common/zwin.c ../../common/zwidget.c \
 		../../common/zfont_data.c ../../common/zobj.c ../../common/zeitlos.c \
 		../../common/zkbd.c ../../common/zspeak.c ../../common/zcaption.c \
-		../../common/zcfg.c dock_cfg.c win_icons.c workspace.c
+		../../common/zcfg.c ../../common/zaccent.c dock_cfg.c win_icons.c workspace.c
 	@/tmp/wm_test_dock_files ../../data/wm.cfg ../../data/icons/dock.zic /tmp/wm_test_dock \
 		> /tmp/wm_test_dock.log; r=$$?; tail -1 /tmp/wm_test_dock.log; \
 		[ $$r -eq 0 ] || [ $$r -eq 77 ]
@@ -77,8 +77,16 @@ test:
 		../../common/zwin.c ../../common/zwidget.c ../../common/zfont_data.c \
 		../../common/zobj.c ../../common/zeitlos.c ../../common/zkbd.c \
 		../../common/zspeak.c ../../common/zcaption.c ../../common/zcfg.c \
-		dock_cfg.c win_icons.c workspace.c
+		../../common/zaccent.c dock_cfg.c win_icons.c workspace.c
 	@/tmp/wm_test_lock /tmp/wm_test_lock; r=$$?; [ $$r -eq 0 ] || [ $$r -eq 77 ]
+	@# desktop colour: the accent plane, the hand-over (tests/test_accent.c)
+	@$(HOSTCC) -std=gnu99 -w -no-pie -I../../common -o /tmp/wm_test_accent tests/test_accent.c \
+		../../common/zwin.c ../../common/zwidget.c ../../common/zfont_data.c \
+		../../common/zobj.c ../../common/zeitlos.c ../../common/zkbd.c \
+		../../common/zspeak.c ../../common/zcaption.c ../../common/zcfg.c \
+		../../common/zaccent.c dock_cfg.c win_icons.c workspace.c
+	@/tmp/wm_test_accent /tmp/wm_test_accent > /tmp/wm_test_accent.log; r=$$?; \
+		tail -1 /tmp/wm_test_accent.log; [ $$r -eq 0 ] || [ $$r -eq 77 ]
 
 .PHONY: test
 

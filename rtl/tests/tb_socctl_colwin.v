@@ -13,7 +13,9 @@
  *   - a GAME write entering game mode clears EN; leaving it does not;
  *   - without WIN_AVAIL: EN forced low, nothing stored, avail clear,
  *     the corner reads 0;
- *   - words 0..15 unchanged: MAGIC still at 1, CTRL still at 0.
+ *   - words 0..15 unchanged: MAGIC still at 1, CTRL still at 0;
+ *   - DESK (bit 30, with DESK_AVAIL): stored and read back as bit 1,
+ *     davail as bit 14; forced low and reading 0 without it.
  *
  *   iverilog -g2012 -I.. -o /tmp/tb tb_socctl_colwin.v ../socctl.v && vvp /tmp/tb
  */
@@ -28,7 +30,7 @@ module tb;
 	wire [31:0] dat_r, dat_r0;
 	wire ack, ack0;
 	wire vload, vload0;
-	wire wen, wen0;
+	wire wen, wen0, wdesk, wdesk0;
 	wire [9:0] wx0, wy0, wx1, wy1;
 	wire [9:0] nx0, ny0, nx1, ny1;
 
@@ -38,13 +40,13 @@ module tb;
 	reg which = 1;     // 1: the build with the window, 0: without
 
 	socctl_wb #(.GAME_AVAIL(1'b1), .COLOR_AVAIL(1'b1), .GAME_PLANES(8),
-		.WIN_AVAIL(1'b1)) dut (
+		.WIN_AVAIL(1'b1), .DESK_AVAIL(1'b1)) dut (
 		.wb_clk_i(clk), .wb_rst_i(rst),
 		.wb_adr_i(adr), .wb_dat_i(dat_w), .wb_dat_o(dat_r),
 		.wb_we_i(we), .wb_sel_i(sel), .wb_stb_i(stb && which),
 		.wb_ack_o(ack), .wb_cyc_i(cyc && which),
 		.view_load(vload),
-		.win_en(wen), .win_x0(wx0), .win_y0(wy0), .win_x1(wx1), .win_y1(wy1),
+		.win_en(wen), .win_desk(wdesk), .win_x0(wx0), .win_y0(wy0), .win_x1(wx1), .win_y1(wy1),
 		.frame_ctr(16'd0), .in_vblank(1'b0),
 		.vram_we(1'b0), .vram_adr(15'd0));
 
@@ -55,7 +57,7 @@ module tb;
 		.wb_we_i(we), .wb_sel_i(sel), .wb_stb_i(stb && !which),
 		.wb_ack_o(ack0), .wb_cyc_i(cyc && !which),
 		.view_load(vload0),
-		.win_en(wen0), .win_x0(nx0), .win_y0(ny0), .win_x1(nx1), .win_y1(ny1),
+		.win_en(wen0), .win_desk(wdesk0), .win_x0(nx0), .win_y0(ny0), .win_x1(nx1), .win_y1(ny1),
 		.frame_ctr(16'd0), .in_vblank(1'b0),
 		.vram_we(1'b0), .vram_adr(15'd0));
 
@@ -103,7 +105,7 @@ module tb;
 		tick; tick; rst = 0; tick;
 
 		// -- reset --
-		wbr(16); check("COLWIN after reset", rdata, 32'h5a57_8000);
+		wbr(16); check("COLWIN after reset", rdata, 32'h5a57_c000);
 		check("win_en after reset", wen, 0);
 		wbr(1);  check("MAGIC still word 1", rdata, 32'h5a43_5452);
 
@@ -122,7 +124,15 @@ module tb;
 		check("x0", wx0, 137);
 		check("y0", wy0, 61);
 		check("win_en", wen, 1);
-		wbr(16); check("COLWIN reads EN", rdata, 32'h5a57_8001);
+		wbr(16); check("COLWIN reads EN", rdata, 32'h5a57_c001);
+		check("DESK clear", wdesk, 0);
+
+		// -- DESK --
+		wbw(16, { 2'b11, 4'd0, 10'd0, 6'd0, 10'd0 }, 4'hf);
+		check("DESK set", wdesk, 1);
+		wbr(16); check("COLWIN reads DESK", rdata, 32'h5a57_c003);
+		wbw(16, { 1'b1, 5'd0, 10'd61, 6'd0, 10'd137 }, 4'hf);
+		check("DESK cleared by a write without it", wdesk, 0);
 
 		// -- lanes --
 		wbw(16, { 1'b0, 5'd0, 10'd99, 6'd0, 10'd200 }, 4'b0011);
@@ -150,6 +160,8 @@ module tb;
 		wbw(17, { 6'd0, 10'd301, 6'd0, 10'd457 }, 4'hf);
 		wbw(16, { 1'b1, 5'd0, 10'd61, 6'd0, 10'd137 }, 4'hf);
 		check("no window: win_en forced low", wen0, 0);
+		wbw(16, { 2'b11, 4'd0, 10'd61, 6'd0, 10'd137 }, 4'hf);
+		check("no window: win_desk forced low", wdesk0, 0);
 		wbr(16); check("no window: EN reads 0", rdata, 32'h5a57_0000);
 		wbr(17); check("no window: corner reads 0", rdata, 32'h0);
 
