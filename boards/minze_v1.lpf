@@ -12,10 +12,10 @@ BLOCK ASYNCPATHS;
 #     LiteX's usb_host), NOT the UART the board repo's file names
 #     them. The debug UART is on J1 (UART_RX) and J2 (UART_TX).
 #
-#   * VGA is a 3-bit-per-colour resistor DAC (RGB333, 512 colours).
-#     The SOC drives one bit per colour, so only the most significant
-#     resistor of each ladder is used -- VGA_R0/G0/B0, the 536R ones,
-#     on T2, N1 and R4. The other six are listed, commented, below.
+#   * VGA is a 3-bit-per-colour resistor DAC (RGB333, 512 colours),
+#     all of it driven (`GPU_VGA_DAC3): VGA_R/G/B are the most
+#     significant resistors (536R) on T2, N1 and R4, VGA_R1/G1/B1 and
+#     VGA_R2/G2/B2 the 1K and 2K2 ones below.
 #
 # The SDRAM's byte lanes are Minze's own: not Konfekt's, not Lakritz's
 # (dq[2]/dq[3], the whole upper byte, and UDQM differ). The block below
@@ -154,6 +154,19 @@ IOBUF PORT "VGA_VS" IO_TYPE=LVCMOS33;
 #   R1 R1 (1K)   R2 R2 (2K2)
 #   G1 P2 (1K)   G2 P1 (2K2)
 #   B1 T3 (1K)   B2 T4 (2K2)
+# Driven with `GPU_VGA_DAC3.
+LOCATE COMP "VGA_R1" SITE "R1";
+IOBUF PORT "VGA_R1" IO_TYPE=LVCMOS33;
+LOCATE COMP "VGA_R2" SITE "R2";
+IOBUF PORT "VGA_R2" IO_TYPE=LVCMOS33;
+LOCATE COMP "VGA_G1" SITE "P2";
+IOBUF PORT "VGA_G1" IO_TYPE=LVCMOS33;
+LOCATE COMP "VGA_G2" SITE "P1";
+IOBUF PORT "VGA_G2" IO_TYPE=LVCMOS33;
+LOCATE COMP "VGA_B1" SITE "T3";
+IOBUF PORT "VGA_B1" IO_TYPE=LVCMOS33;
+LOCATE COMP "VGA_B2" SITE "T4";
+IOBUF PORT "VGA_B2" IO_TYPE=LVCMOS33;
 
 # Configuration SPI flash (MMOD). MCLK is reached through USRMCLK.
 LOCATE COMP "CSPI_SS_FLASH" SITE "N8";

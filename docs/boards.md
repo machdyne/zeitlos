@@ -376,7 +376,10 @@ board's own block and `.lpf`, which is also the
 `schoko_langkatze_gpio` release target. `CLK_48` at 52.35 MHz is the
 lowest margin on any board here; it is one seed, and the 45F has half
 its fabric free, so a failing seed is a placement problem, not a
-capacity one.
+capacity one. Its VGA has one resistor per colour (the v1 schematic and
+the v2 KiCad files agree), so VGA shows the top bit of each channel;
+desktop colour's accents fold onto black and the ink there and show on
+DDMI ([color.md](color.md#desktop-colour)).
 
 Both boards have one USB host socket while `rtl/sysctl.v` always builds
 two ports. The second is constrained to C3/D3 (unconnected on both
@@ -438,12 +441,28 @@ USB CDC-ACM.
 | Minze | 12k | 21150 / 24288 (87%) | 9664 (39%) | 38 / 56 | 9 / 28 | 2 / 2 | 57.87 MHz | 501,327 B |
 
 Every clock passed: the pixel clock at 76.78 MHz against 25.2, the USB
-12 MHz at 74.10. VGA uses only the most significant resistor of each
-colour's ladder (8 colours of the board's 512), since the SOC drives
-one bit per colour; the other six balls are listed in the `.lpf`. The
+12 MHz at 74.10 (before `GPU_VGA_DAC3`). VGA drives all three
+resistors of each colour's ladder (`GPU_VGA_DAC3`; balls in the
+`.lpf`), so the phosphor's colour and the brightness show on VGA as on
+HDMI; the default white is the top resistor alone, as before. The
 BIOS is 1987 of 2048 words, the jumploader 99,628 bytes, and the
 bitstream fits the 256 KB DFU layout. At 87%, the same advice as
 Konfekt applies: re-check timing after any change.
+
+## VGA resistor ladders and desktop colour (0.0.8)
+
+- **Obst** (270R, 536R, 1K) and **Minze** (536R, 1K, 2K2) have a 3-bit
+  ladder per colour; `GPU_VGA_DAC3` now drives all of it (pins in their
+  `.lpf`s and release specs). The phosphor's colour and the brightness
+  show on VGA; the default white is the top resistor alone, as before.
+  About 70 LUT4 and 54 flip-flops (gpu_video out of context, on Obst);
+  not yet placed and routed on either board -- Minze was at 87%.
+- **Schoko** has one resistor per colour: nothing to drive.
+- **The 45F boards** (Mozart ML1/ML2, Sergei ML1/ML2, Noir, Schoko)
+  define `COLOR_DESKTOP`: desktop colour's exact ink path, three
+  flip-flops and a few gates in the pixel domain
+  ([color.md](color.md#the-exact-path-color_desktop)). The 25F boards
+  cannot use it (six planes) and build none of it.
 
 ## Mozart ML0 and Sergei ML0
 

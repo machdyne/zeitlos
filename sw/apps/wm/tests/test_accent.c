@@ -91,9 +91,23 @@ static void app_sees(const z_msg_t *m) {
 	}
 }
 
+// zeitlos.cfg, as the kernel would answer for it
+static const char *cfg_theme, *cfg_accents, *cfg_base;
+
 static uint32_t *k_syscall(uint32_t id, uint32_t *args, uint32_t b) {
 	(void)b;
 	switch (id) {
+	case Z_SYS_CFG_GET: {
+		z_cfg_get_args_t *a = (z_cfg_get_args_t *)args;
+		const char *v = !strcmp(a->key, "system.video.desktop_theme") ? cfg_theme :
+			!strcmp(a->key, "system.video.desktop_accents") ? cfg_accents :
+			!strcmp(a->key, "system.video.desktop_base") ? cfg_base : NULL;
+		if (v) {
+			snprintf(a->val, a->vallen, "%s", v);
+			a->found = 1;
+		}
+		return (uint32_t *)&k_ok;
+	}
 	case Z_SYS_UPTIME:
 		ticks += 1;
 		((z_obj_t *)args)->type = Z_UINT32;
@@ -365,6 +379,36 @@ int main(int argc, char **argv) {
 	service();
 	expect(acc_live && reg_socctl_colwin == (Z_COLWIN_EN | Z_COLWIN_DESK),
 		"COLWIN with EN and DESK");
+
+	// -- themes --
+	printf("10. themes\n");
+	cfg_theme = "nord";
+	acc_config();
+	service();
+	expect(!acc_exact && acc_live && reg_socctl_colwin == Z_COLWIN_EN,
+		"a full theme: COLWIN without DESK");
+	cfg_theme = "Slate";
+	acc_config();
+	expect(acc_exact && acc_spec.theme == z_accent_theme_find("slate"), "an accent theme, any case: exact");
+	acc_cfg = false; service();
+	// (the host's register reads back what was written: the gateware's bits again)
+	reg_socctl_colwin = ((uint32_t)Z_COLWIN_SIG << 16) | Z_COLWIN_AVAIL | Z_COLWIN_DESK_AVAIL;
+	acc_cfg = true; service();
+	expect(reg_socctl_colwin == (Z_COLWIN_EN | Z_COLWIN_DESK), "and DESK again");
+	cfg_theme = "no-such-theme";
+	cfg_accents = "112,EEF";
+	acc_config();
+	expect(acc_spec.theme == 0 && acc_spec.have_acc && acc_spec.acc[0] == 0x112 &&
+		acc_spec.acc[1] == 0xEEF && acc_exact, "unknown theme: phosphor; custom accents");
+	cfg_base = "223,DDE";
+	acc_config();
+	expect(acc_spec.have_base && !acc_exact, "custom base: not exact");
+	cfg_base = "nonsense";
+	acc_config();
+	expect(!acc_spec.have_base && acc_exact, "a bad base is ignored");
+	cfg_theme = cfg_accents = cfg_base = NULL;
+	acc_config();
+	expect(acc_spec.theme == 0 && !acc_spec.have_acc && acc_exact, "nothing set: the default");
 
 	printf("wm accent test: %d checks, %d failed\n", checks, failures);
 	return failures ? 1 : 0;

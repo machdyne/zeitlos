@@ -968,7 +968,7 @@ not take the keys away from the window they are for.
 | Ctrl+Alt+Esc | the rescue console ([rescue_console.md](rescue_console.md)): every window hidden as for the lock, the kernel's shell on the screen; again, or the shell's `exit` (`Z_WM_RESCUE`), repaints them. Not while locked |
 | Super+K | start the on-screen keyboard ([keyboard_app.md](keyboard_app.md)); it is single-instance, so a second press does nothing |
 | Super+M | the pointer's other pair of shapes: the small X and Z, or the large ones -- a 9x9 X and Z, or `/data/wm/cursor.zsp` from the card ([cursor.md](cursor.md)). Until the next reload; `system.cursor.large` says which pair shows at start. "Large pointer" / "Small pointer" with speech |
-| Super+F10 | desktop colour on or off, on a board that has it -- eight colour planes and the colour window ([color.md](color.md#desktop-colour)). Until the next reload; `system.video.desktop_colour` says which at start. "Desktop colour on" / "off" with speech |
+| Super+F10 | desktop colour on or off, on a board that has it -- eight colour planes and the colour window ([color.md](color.md#desktop-colour)). Until the next reload; `system.video.desktop_colour` says which at start, `system.video.desktop_theme` which colours ([themes](color.md#themes)). "Desktop colour on" / "off" with speech |
 | Super+P | next phosphor -- white, amber, green, paper, round again, in `settings`' order. Writes the video register only: `system.video.mode` (the default) is untouched, so a reboot, or a config reload (which re-applies it, `sw/os/cfg.c`), brings the default back |
 | Ctrl+Super+Minus / Ctrl+Super+Equal | monochrome brightness down / up on HDMI/DVI (and with the keypad - / +), by key like the volume; a caption shows "Brightness N/16" and speech says it. 16 levels, 8 at boot unless `system.video.brightness` says otherwise; like Super+P it does not change that setting. Colour mode is unaffected. "No brightness control on this display" on VGA, composite, or an older bitstream ([socctl.md](socctl.md#brightness)) |
 
@@ -2416,6 +2416,41 @@ first try on hardware ([widgets.md](widgets.md#labels-on-a-lit-widget)).
 rectangle, both labels legible (checked on their glyph cells), the app frozen with its region and thawed, Esc, Tab+Enter,
 a click, a kernel that cannot reboot, the rescue console off and on
 again, and the lock screen.
+
+## Desktop colour
+
+On a board with eight colour planes and the colour window (the 45F
+boards) wm shows the desktop in four colours: COLWIN over the whole
+screen, the second VRAM sheet as an accent plane, and a palette that
+looks at the desktop bit and the accent bit only ([color.md](color.md#desktop-colour)).
+All of it is the `acc_*` functions in `wm.c`:
+
+- **What is tinted:** the background (`system.video.desktop_background`),
+  the focused window's titlebar and frame, the dock's outline, dots,
+  launching slot and selection ring, and the lock and reboot boxes.
+  `acc_paint_all()` repaints the tints in place and never touches
+  window content; `send_redraw()` clears a window's content tints
+  before the window repaints, so an app's own tints
+  (`z_win_accent_rect()`, [widgets.md](widgets.md#tints-desktop-colour))
+  never outlive what they were drawn under.
+- **Colours:** `acc_palette()` from the theme and any custom colours
+  (`acc_config()` reads `system.video.desktop_theme`, `_accents`,
+  `_base`; `z_accent_palette_spec()`, `sw/common/zaccent.c`), the
+  phosphor and the brightness, rewritten whenever the VIDEO register
+  changes. A theme that keeps the phosphor's black and ink turns on
+  COLWIN's DESK (the exact ink path); a full theme leaves it off.
+- **Precedence:** a focused colour window takes the sheet. wm turns
+  COLWIN off, revokes the apps' permission to tint (`Z_WM_CLIP_ACCENT`
+  in the WINDOW rectangle of their SET_CLIP), waits for the acks (or
+  300 ms), then hands the window over. `ACC_RETAKE_MS` after it loses
+  the focus wm clears sheet 1, repaints, and asks windows that had
+  tinted (`Z_WM_ACCENT_USED`) to redraw. Dual apps want the colour
+  window only on their screen face (`Z_WIN_FLAG_COLOUR_LATER`,
+  `Z_WM_COLOR_WANT`). Game mode and a screen grab switch it off.
+- **Configuration** is checked once a second (the store's generation),
+  so settings' theme buttons and a hand edit both show within a second.
+
+`tests/test_accent.c` runs the real `wm.c` on the build host.
 
 ## Known limitations / future work
 

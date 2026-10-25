@@ -182,7 +182,8 @@
 // the 45F boards.
 //
 // `GPU_VGA_DAC3 -- with `GPU_VGA, the board has a 3-bit resistor DAC
-// per channel (Obst: 270R, 536R, 1K) and drives all of it: VGA_R/G/B
+// per channel (Obst: 270R, 536R, 1K; Minze: 536R, 1K, 2K2) and drives
+// all of it: VGA_R/G/B
 // stay the top bit, VGA_R1/R2, G1/G2, B1/B2 the two below. The ink then
 // shows the phosphor's colour and brightness on VGA (eight steps), and
 // the palette its top three bits per channel. The default white, 0x80,
@@ -1613,8 +1614,9 @@
 // USB-C socket, so the PMOD is free: this block -- like the .lpf --
 // describes the minze_gpio release target exactly.
 //
-// VGA here is one bit per colour on the MSB of each of the board's
-// 3-bit resistor ladders (8 of its 512 colours).
+// VGA here is the board's 3-bit resistor ladder per colour, all of it
+// (`GPU_VGA_DAC3, below), so the ink shows the phosphor's colour and
+// brightness on VGA.
 `define FPGA_ECP5
 // PROGRAMN on M8 (tinydfu-bootloader's resetn), as on Konfekt.
 `define PROGRAMN_PIN
@@ -1640,6 +1642,8 @@
 `define GPU_BLIT
 `define GPU_CURSOR
 `define GPU_VGA
+// all three bits of each ladder (boards/minze_v1.lpf)
+`define GPU_VGA_DAC3
 `define UART0
 `define USB_CDC
 `define USB_HID

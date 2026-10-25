@@ -59,7 +59,7 @@ with [welcome](welcome.md); to program it, [kernel](kernel.md) and
 | [gpu\_blitter](gpu_blitter.md) | Blitter developer guide |
 | [gpu\_raster](gpu_raster.md) | Line rasterizer developer guide |
 | [game\_mode](game_mode.md) | 320x240 viewport |
-| [color](color.md) | Game-mode colour: bitplanes and a palette (16 colours; 64 or 256 with `GAME_PLANES`) |
+| [color](color.md) | Colour: game-mode bitplanes and a palette (16 colours; 64 or 256 with `GAME_PLANES`), the colour window, desktop colour and its themes |
 | [composite](composite.md) | Composite NTSC/PAL output |
 | [audio](audio.md) | Hardware mixer and outputs |
 | [ddmi_audio](ddmi_audio.md) | Sound and display info over the DDMI connector (in progress) |

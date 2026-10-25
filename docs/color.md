@@ -9,7 +9,10 @@ planes](#more-than-four-planes)).
 The desktop stays monochrome -- except, on boards built with
 `COLOR_WINDOW`, one window of it: the [colour
 window](#the-colour-window), 8 or 32 colours for the focused screen
-app. Nothing about the 640x480 mode, the framebuffer, the blitter, the
+app; and on the eight-plane (45F) boards, [desktop
+colour](#desktop-colour): the whole desktop in four colours, as accents
+on window chrome, the dock and dialogs, in one of 21
+[themes](#themes). Nothing about the 640x480 mode, the framebuffer, the blitter, the
 rasterizer or any existing program changes. Colour is off at reset and
 off whenever game mode is off (the colour window aside).
 
@@ -392,6 +395,67 @@ palette-only path, below) still lands on a contrasting colour
 (Schoko), every channel stays on its side of 8, so there the accents
 fold onto black and the ink and the desktop looks as it always has.
 
+### Themes
+
+The colours are a matter of taste, so there are 21 built-in themes
+(`z_accent_themes`, `sw/common/zaccent.c`) and room for any others in
+`zeitlos.cfg`. **settings** steps through them with its *Desktop
+colours* `<` `>` buttons (Off, then the themes), saving each at once;
+wm picks a change up within a second.
+
+There are two kinds:
+
+- **Accent themes** change only A0 and A1, the dark and the light tint.
+  Black and the ink stay the display colour's own -- exact on gateware
+  with DESK (below) -- and follow the phosphor and the brightness. On
+  paper the pair swaps, so the paper takes the light tint and the ink
+  the dark one.
+- **Full themes** bring all four colours and do not consult the
+  phosphor. Black and the ink then have to go through the palette, so
+  wm leaves DESK off: the colours are the theme's own, the pointer's XOR
+  tints (black/A1, ink/A0), and each full theme keeps those pairs apart
+  in brightness (`sw/common/tests/test_accent.c` checks every theme at
+  every level). They dim with the brightness below the default but do
+  not go brighter.
+
+| Theme (`desktop_theme`) | Name in settings | Kind | Colours (black, ink, A0, A1 at level 7) |
+|---|---|---|---|
+| `phosphor` (default) | Phosphor (follows the display colour) | accents | each display colour's own pair (above) |
+| `slate` | Slate and sand | accents | the phosphor's, 123, CA8 |
+| `umber` | Umber and gold | accents | the phosphor's, 210, EC6 |
+| `pine` | Pine and mint | accents | the phosphor's, 021, 3B5 |
+| `navy` | Navy and ice | accents | the phosphor's, 013, 9CE |
+| `plum` | Plum and rose | accents | the phosphor's, 302, E9B |
+| `oxblood` | Oxblood and cream | accents | the phosphor's, 300, EDB |
+| `teal` | Teal and coral | accents | the phosphor's, 033, F87 |
+| `graphite` | Graphite and silver | accents | the phosphor's, 222, AAA |
+| `midnight` | Midnight and amber | accents | the phosphor's, 012, FB4 |
+| `aubergine` | Aubergine and lilac | accents | the phosphor's, 213, BAE |
+| `ocean` | Ocean and seafoam | accents | the phosphor's, 024, 7DC |
+| `cocoa` | Cocoa and peach | accents | the phosphor's, 321, FCA |
+| `moss` | Charcoal and lime | accents | the phosphor's, 121, BE5 |
+| `solarized-dark` | Solarized dark | full | 023, 899, 034, BA0 |
+| `solarized-light` | Solarized light | full | FFE, 678, EEC, 28D |
+| `nord` | Nord | full | 223, DDE, 445, 8BC |
+| `gruvbox` | Gruvbox | full | 222, EDB, 332, FB3 |
+| `dracula` | Dracula | full | 223, EEE, 446, B9F |
+| `workbench` | Workbench (blue, orange) | full | 05A, FFF, 037, F80 |
+| `cga` | CGA (cyan, magenta) | full | 000, FFF, 0AA, F5F |
+
+**Custom colours**, over any theme (`docs/config.md`):
+
+- `system.video.desktop_accents: 123,CA8` -- A0 and A1 (dark, light), in
+  RGB444 hex (`#` optional). Keeps the phosphor's exact black and ink.
+- `system.video.desktop_base: 223,DDE` -- black and the ink. Makes it a
+  full theme: the palette shows all four colours, and DESK is off.
+
+Choosing a theme in settings removes both lines, so what was chosen is
+what shows. What cannot be changed: there are four colours, and which
+parts of the desktop are tinted (the background can be left out with
+`system.video.desktop_background: no`). On a board with a 1-bit VGA
+output (Schoko), each accent channel is kept on the side of 8 of the
+colour it tints, so VGA keeps showing two colours whatever the theme.
+
 ### The exact path (`COLOR_DESKTOP`)
 
 On the 45F boards the gateware has one more bit for this: COLWIN's
@@ -705,7 +769,7 @@ are a handful of stores per frame.
 | Output | What the palette becomes |
 |---|---|
 | DDMI (HDMI/DVI) | each 4-bit channel doubled to 8 bits: any 16 (64, 256) of 4096 colours |
-| VGA | the **top bit** of each channel: at most the 8 RGB primaries and secondaries |
+| VGA | the **top bit** of each channel: at most the 8 RGB primaries and secondaries; the top **three** on a board with a 3-bit DAC (`GPU_VGA_DAC3`: Obst, Minze) |
 | Composite | NTSC or PAL colour from a synthesised subcarrier; black and white available as a setting ([composite.md](composite.md#colour)) |
 
 On DDMI the palette spans the full range. The monochrome inks keep
@@ -716,9 +780,11 @@ Most VGA boards in the tree have one resistor per channel, so VGA
 colour is 8 colours whatever the palette says. The EGA default degrades
 sensibly: its 0xa levels read as on and its 0x5 levels as off.
 
-Obst has a 3-bit resistor DAC per channel (270R, 536R, 1K), driven with
-`GPU_VGA_DAC3`: VGA_R/G/B stay the top bit and VGA_R1/R2, G1/G2, B1/B2
-are the two below (`boards/obst_v0.lpf`). There the palette shows its
+Obst (270R, 536R, 1K) and Minze (536R, 1K, 2K2) have a 3-bit resistor
+DAC per channel, driven with `GPU_VGA_DAC3`: VGA_R/G/B stay the top bit
+and VGA_R1/R2, G1/G2, B1/B2 are the two below (`boards/obst_v0.lpf`,
+`boards/minze_v1.lpf`). Neither has `COLOR`, so on both it is the ink
+that benefits. There the palette shows its
 top three bits a channel (512 colours) and, more usefully on a board
 without `COLOR`, the monochrome ink shows the phosphor's colour and
 brightness as DDMI does: amber is amber rather than red and green, and
@@ -1098,7 +1164,9 @@ palette) rather than the index a clock ahead of it.
 
 ## The window manager
 
-Needs no change. Every way out of game mode -- Super+Esc, wm revoking
+wm owns the colour window (it gives it to the focused screen app) and
+desktop colour ([window_manager.md](window_manager.md#desktop-colour)).
+Game mode itself needs nothing from it. Every way out of game mode -- Super+Esc, wm revoking
 the grab when the app that holds it goes away, the lock screen -- is a
 GAME write with the enable clear, and that clears colour in hardware.
 Super+Esc over the desktop therefore always enters monochrome game

@@ -22,8 +22,9 @@ Zeitlos is the successor to [Zucker](https://github.com/machdyne/zucker).
 | Bus | 32-bit Wishbone |
 | Main Memory | SDRAM, [DDR3](docs/ddr3.md), PSRAM or SRAM (1MB minimum; 512MB maximum) |
 | Framebuffer | 640x480x1bpp (monochrome; white, amber, green or paper -- [socctl](docs/socctl.md)) |
+| Desktop Colour | On the 45F boards: the desktop in [four colours](docs/color.md#desktop-colour) (window chrome, the dock, dialogs) with 21 [themes](docs/color.md#themes) or custom colours, and the focused game's [colour window](docs/color.md#the-colour-window) in 32 colours |
 | Game Mode | Optional 320x240 pixel-doubled [viewport](docs/game_mode.md) with up to [256 colors](docs/color.md): 16 with 4 bitplanes, 64 with 6, 256 with 8 (a per-board option) |
-| Video | VGA, DVI, DVI over HDMI, [composite](docs/composite.md) NTSC and PAL |
+| Video | VGA (1-bit, or a [3-bit DAC](docs/color.md#per-output) per colour on Obst and Minze), DVI, DVI over HDMI, [composite](docs/composite.md) NTSC and PAL |
 | Audio | 8 channel 16-bit [hardware mixer](docs/audio.md) with stereo output |
 | Storage | MicroSD |
 | Network | Ethernet (SPI/USB), Ethernet MAC (for RMII PHY) or [ESP32](docs/esp32link.md) (ULX3S on-board, or the [Kabellos](docs/kabellos.md) WiFi PMOD) |
@@ -71,7 +72,7 @@ With the MTU, there is no need for position independent code or complicated addr
 | App | Description |
 |-----|-------------|
 | kernel | Microkernel + kernel shell (serial console; on the monitor as the [rescue console](docs/rescue_console.md): hold ESC at boot) |
-| [wm](docs/window_manager.md) | Window manager + dock, with ten workspaces (Super+1 ... Super+0); the dock is arranged by a file ([dock](docs/dock.md)) |
+| [wm](docs/window_manager.md) | Window manager + dock, with ten workspaces (Super+1 ... Super+0); the dock is arranged by a file ([dock](docs/dock.md)); [desktop colour](docs/window_manager.md#desktop-colour) on the 45F boards (Super+F10) |
 | [term](docs/terminal.md) | Terminal emulator (VT100, UTF-8, [line drawing](docs/terminal.md#line-drawing); start panel, scrollback; connects to shells and services) |
 | [console](docs/console.md) | Console service |
 | [repl](docs/repl.md) | App service + [Lisp interpreter (subset of R4RS Scheme)](https://github.com/machdyne/ms) |
@@ -125,7 +126,7 @@ board boots to a desktop with no sdcard ([core apps in flash](#core-apps-in-flas
 | [info](docs/info_app.md) | System info |
 | [clock](docs/clock_app.md) | Analog and digital clock |
 | [cal](docs/cal_app.md) | Month calendar |
-| [settings](docs/settings_app.md) | System settings; editor for [`/sys/zeitlos.cfg`](docs/config.md) |
+| [settings](docs/settings_app.md) | System settings -- display colour, desktop colour themes, time zone, password; editor for [`/sys/zeitlos.cfg`](docs/config.md) |
 | [keyboard](docs/keyboard_app.md) | On-screen keyboard for any layout: for touchscreens and pointer-only use, and for trying layouts |
 | [automate](docs/automate.md) | Plays scripted, narrated, captioned [demos](docs/demo.md) -- short, long and in-store |
 | [ask](docs/ask_app.md) | Local dataset search |

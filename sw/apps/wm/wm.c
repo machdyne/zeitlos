@@ -3488,6 +3488,8 @@ static bool acc_hw;		// probed once: z_color_desktop_available()
 static bool acc_vga;		// a 1-bit VGA output shares the palette
 static bool acc_cfg = true;	// system.video.desktop_colour, Super+F10
 static bool acc_bg = true;	// system.video.desktop_background
+static z_accent_spec_t acc_spec;	// the theme and any custom colours (zaccent.h)
+static bool acc_exact = true;	// black and the ink the phosphor's: COLWIN's DESK
 static uint32_t acc_cfg_gen = 0xffffffffu;
 static uint32_t acc_cfg_check_at;
 static uint32_t acc_video = 0xffffffffu;	// mode | level << 8, as written
@@ -3657,7 +3659,7 @@ static void acc_palette(void) {
 	uint16_t c[4];
 	uint32_t m = z_video_get_mode(), l = z_video_get_brightness();
 	acc_video = m | (l << 8);
-	z_accent_palette(m, l, acc_vga, c);
+	z_accent_palette_spec(&acc_spec, m, l, acc_vga, c);
 	z_accent_write_palette(c);
 }
 
@@ -3696,7 +3698,7 @@ static void acc_on(void) {
 	acc_end();
 	acc_paint_all();
 	acc_palette();
-	z_color_desktop_on();
+	z_color_desktop_on(acc_exact);
 	acc_live = true;
 	if (!acc_apps) {
 		acc_apps_set(true);
@@ -3710,6 +3712,22 @@ static void acc_config(void) {
 	acc_cfg_gen = z_cfg_generation();
 	acc_cfg = z_cfg_get_bool("system.video.desktop_colour", true);
 	acc_bg = z_cfg_get_bool("system.video.desktop_background", true);
+
+	// the theme (unknown names: the default), then custom colours over it
+	char v[Z_CFG_VAL_MAX];
+	memset(&acc_spec, 0, sizeof(acc_spec));
+	if (z_cfg_get("system.video.desktop_theme", v, sizeof(v))) {
+		int t = z_accent_theme_find(v);
+		acc_spec.theme = t < 0 ? 0 : t;
+	}
+	if (z_cfg_get("system.video.desktop_accents", v, sizeof(v)))
+		acc_spec.have_acc = z_accent_parse_pair(v, acc_spec.acc);
+	if (z_cfg_get("system.video.desktop_base", v, sizeof(v)))
+		acc_spec.have_base = z_accent_parse_pair(v, acc_spec.base);
+	bool exact = z_accent_spec_exact(&acc_spec);
+	acc_video = 0xffffffffu;		// the palette again at the next pass
+	if (acc_live && exact != acc_exact) z_color_desktop_on(exact);	// DESK, next frame
+	acc_exact = exact;
 	acc_dirty = true;
 }
 
@@ -3761,8 +3779,9 @@ static void acc_init(void) {
 	acc_config();
 	// exact: the gateware keeps untinted pixels and the pointer on the
 	// phosphor's ink (COLWIN's DESK); otherwise all through the palette
-	printf("wm: desktop colour: %s%s\n", acc_cfg ? "on" : "off",
-		z_color_desktop_exact() ? " (exact)" : "");
+	printf("wm: desktop colour: %s, theme %s%s\n", acc_cfg ? "on" : "off",
+		z_accent_themes[acc_spec.theme].id,
+		(acc_exact && z_color_desktop_exact()) ? " (exact)" : "");
 }
 
 static bool send_clip_ex(int idx, bool do_redraw) {

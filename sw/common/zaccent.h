@@ -63,4 +63,64 @@ static inline int z_accent_entry_colour(uint32_t index) {
 /* All 256 entries from the four colours (zsoc.h's palette register). */
 void z_accent_write_palette(const uint16_t c[4]);
 
+/* -- themes (docs/color.md, "Themes") --
+ *
+ * A theme is a pair of accents, or a whole four-colour scheme:
+ *
+ *  - ACCENTS ONLY ("rides on the phosphor"): { a0, a1 } = { dark tint,
+ *    light tint }. Black and the ink stay the phosphor's own -- exact,
+ *    through the ink path on gateware with COLWIN's DESK -- and follow
+ *    the display colour and the brightness. On paper the pair swaps,
+ *    so the paper takes the light tint and the ink the dark one.
+ *  - FULL: black, ink, a0, a1 all the theme's own (`full`). The
+ *    phosphor is not consulted. Black and the ink then have to go
+ *    through the palette, so wm leaves DESK off: the pointer's XOR
+ *    tints (black <-> a1, ink <-> a0), and a full theme keeps those two
+ *    pairs apart in brightness.
+ *
+ * Theme 0 is "phosphor", the default: each display colour's own pair
+ * (z_accent_palette()). All colours are RGB444 at brightness 7 and
+ * scale with the level as the ink does -- a full theme dims below 7
+ * but does not go brighter than its own colours. */
+typedef struct {
+	const char *id;		/* zeitlos.cfg's system.video.desktop_theme */
+	uint16_t a0, a1;
+	uint16_t black, ink;	/* full themes only */
+	bool full;
+} z_accent_theme_t;
+
+extern const z_accent_theme_t z_accent_themes[];
+extern const int z_accent_theme_count;
+
+/* What settings shows for each theme, in the same order. In
+ * zaccent_names.c, so wm (which needs only the ids) does not carry
+ * them. */
+extern const char *const z_accent_theme_names[];
+
+/* The theme with this id (case-insensitive), or -1. */
+int z_accent_theme_find(const char *id);
+
+/* "123,CA8" -- two RGB444 colours in hex, '#' allowed, separated by a
+ * comma or spaces -- into out[0], out[1]. False if it is not that. */
+bool z_accent_parse_pair(const char *s, uint16_t out[2]);
+
+/* What wm shows: a theme, optionally overridden by custom accents
+ * (system.video.desktop_accents: dark,light) and/or custom black and
+ * ink (system.video.desktop_base: black,ink -- which makes it full). */
+typedef struct {
+	int theme;			/* index into z_accent_themes */
+	bool have_acc, have_base;
+	uint16_t acc[2], base[2];
+} z_accent_spec_t;
+
+/* The four colours for a spec, display colour and level (as
+ * z_accent_palette(), which is the phosphor theme's). */
+void z_accent_palette_spec(const z_accent_spec_t *sp, uint32_t mode,
+	uint32_t level, bool vga, uint16_t out[4]);
+
+/* True if the spec keeps the phosphor's black and ink, so the exact
+ * ink path (COLWIN's DESK) can show them; false for a full theme or a
+ * custom base. */
+bool z_accent_spec_exact(const z_accent_spec_t *sp);
+
 #endif

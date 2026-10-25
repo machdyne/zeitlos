@@ -13,6 +13,9 @@ System preferences, and the editor for `/sys/zeitlos.cfg`. `sw/apps/settings`.
 Display
 [ White ][ Amber ][ Green ][ Paper ]
 
+Desktop colours (Super+F10)          [<][>]
+  Nord
+
 Preferences                  /sys/zeitlos.cfg
 Terminal connects to               [Edit]
   port repl0
@@ -37,6 +40,7 @@ Berlin selected -- Set time zone to use it
 | control | setting (`docs/config.md`) | takes effect |
 | --- | --- | --- |
 | Display buttons | `system.video.mode` | immediately, and saved |
+| Desktop colours `<` `>` | `system.video.desktop_theme`, `_colour` (and removes `_accents`, `_base`) | within a second, and saved |
 | Terminal connects to | `apps.term.auto_connect` | the next term window |
 | Keyboard layouts | `system.keyboard.layouts` | the next key pressed |
 | Japanese font | `system.font.japanese` | at once -- `jfont` is started or stopped |
@@ -220,6 +224,20 @@ shipped before the video register existed, so a board can answer the
 If the register is absent, the title says so, and a click puts the
 selection back. Changing this needs `make flash`, not `make dev-flash`
 -- it's an RTL change.
+
+## Desktop colours: themes
+
+On a board with desktop colour (eight colour planes and the colour
+window: the 45F boards), `<` and `>` step through **Off** and the 21
+themes ([color.md](color.md#themes)), wrapping, and save each one at
+once -- a colour scheme is judged by looking at it. The phosphor theme
+is the default and is saved as no line at all; Off writes
+`system.video.desktop_colour: no` and keeps the theme for when it is
+turned back on. Choosing a theme also removes any custom
+`desktop_accents`/`desktop_base`, which would otherwise go on
+overriding it; while they are set the row says *custom colours, from
+the file*. Elsewhere the row says the board cannot, and the buttons are
+off.
 
 ## Not resizable
 

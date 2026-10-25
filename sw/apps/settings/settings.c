@@ -4,9 +4,11 @@
  *   > run wm
  *   > run settings
  *
- * Five settings (docs/config.md):
+ * Six settings (docs/config.md):
  *
  *   Display               system.video.mode        applied immediately
+ *   Desktop colours       system.video.desktop_theme (and _colour)
+ *                                                  applied immediately
  *   Terminal connects to  apps.term.auto_connect   new term windows
  *   Keyboard layouts      system.keyboard.layouts  the next key pressed
  *   Japanese font         system.font.japanese     at once: jfont started/stopped
@@ -74,13 +76,14 @@
 #include "../../common/zrtc.h"		// the city table, and z_tz_parse()
 #include "../../common/zauth.h"		// the password and screen lock: docs/security.md
 #include "../../common/zpaths.h"
+#include "../../common/zaccent.h"	// the desktop colour themes
 
 // Fixed size, not resizable: a preferences panel has no content to
 // reveal.
 #define WIN_W   284
 // one row per preference, plus the Security section (a heading and two
-// rows, 92 px): see layout()
-#define WIN_H   (214 + 2 * (2 * (8 + 2) + 6) + 92)
+// rows, 92 px) and the desktop colour row (30 px): see layout()
+#define WIN_H   (214 + 2 * (2 * (8 + 2) + 6) + 92 + 30)
 
 static z_win_t win;
 static z_dialog_ctx_t dlg;
@@ -106,7 +109,9 @@ static const char *video_labels[] = { "White", "Amber", "Green", "Paper" };
 // Array order is Tab order, with the time zone list (not a widget)
 // between Edit and Set -- see handle_key().
 enum {
-	W_EDIT_TERM = MODE_COUNT,
+	W_THEME_PREV = MODE_COUNT,
+	W_THEME_NEXT,
+	W_EDIT_TERM,
 	W_EDIT_KBD,
 	W_TOGGLE_JA,
 	W_SET_TZ,
@@ -118,6 +123,20 @@ enum {
 };
 
 #define PW_BTN_W  44
+#define THEME_BTN_W 18
+
+// -- desktop colour: off, or one of zaccent.h's themes --
+//
+// One row, "< >" stepping through Off and the themes and saving each at
+// once, as the display colours do: a colour scheme is judged by looking
+// at it. Choosing one writes system.video.desktop_theme (the default,
+// phosphor, as no line at all), turns desktop colour on, and removes any
+// custom desktop_accents/desktop_base -- otherwise they would go on
+// overriding what was chosen and the panel would seem to do nothing.
+static bool can_theme;			// an eight-plane board with the colour window
+static bool colour_on;			// system.video.desktop_colour
+static int theme_idx;			// z_accent_themes, 0 for an unknown name
+static bool theme_in_file, theme_custom;
 
 static z_widget_t widgets[W_COUNT];
 static z_widget_set_t wset;
@@ -155,7 +174,7 @@ static int other_keys;			// settings in the file this app does not show
 static char status[64];
 static bool status_is_hint;		// status holds the "selected -- Set" hint
 
-static int y_display, y_modes, y_prefs, y_rows, y_tz, y_list, y_reload, y_status;
+static int y_display, y_modes, y_theme, y_prefs, y_rows, y_tz, y_list, y_reload, y_status;
 static int y_sec, y_sec_rows;
 
 // -- security: the password and the screen lock (docs/security.md) --
@@ -250,6 +269,14 @@ static void read_values(void) {
 			sizeof(prefs[i].value));
 
 	tz_in_file = z_cfg_get("system.rtc.timezone", tz_value, sizeof(tz_value));
+
+	colour_on = z_cfg_get_bool("system.video.desktop_colour", true);
+	theme_in_file = z_cfg_get("system.video.desktop_theme", v, sizeof(v));
+	theme_idx = z_accent_theme_find(v);
+	if (theme_idx < 0) theme_idx = 0;
+	theme_custom = z_cfg_get("system.video.desktop_accents", v, sizeof(v)) ||
+		z_cfg_get("system.video.desktop_base", v, sizeof(v));
+	widgets[W_THEME_PREV].enabled = widgets[W_THEME_NEXT].enabled = can_theme;
 	set_japanese_label();
 	read_auth();
 	z_listbox_select(&tz_list, tz_row_for(tz_value));
@@ -261,7 +288,8 @@ static void read_values(void) {
 	other_keys = 0;
 	for (uint32_t i = 0; z_cfg_entry(i, k, sizeof(k), v, sizeof(v)); i++) {
 		bool shown = !strcmp(k, "system.video.mode") ||
-			!strcmp(k, "system.rtc.timezone");
+			!strcmp(k, "system.rtc.timezone") ||
+			!strncmp(k, "system.video.desktop_", 21);
 		for (int j = 0; j < PREF_COUNT; j++)
 			if (!strcmp(k, prefs[j].key)) shown = true;
 		if (!shown) other_keys++;
@@ -310,7 +338,14 @@ static void layout(void) {
 		widgets[i].h = BTN_H;
 	}
 
-	y_prefs = y_modes + BTN_H + 10;
+	y_theme = y_modes + BTN_H + 10;
+	widgets[W_THEME_PREV].x = (int16_t)(cw - MARGIN - 2 * THEME_BTN_W - GAP);
+	widgets[W_THEME_NEXT].x = (int16_t)(cw - MARGIN - THEME_BTN_W);
+	widgets[W_THEME_PREV].y = widgets[W_THEME_NEXT].y = (int16_t)(y_theme - 3);
+	widgets[W_THEME_PREV].w = widgets[W_THEME_NEXT].w = THEME_BTN_W;
+	widgets[W_THEME_PREV].h = widgets[W_THEME_NEXT].h = EDIT_H;
+
+	y_prefs = y_theme + 2 * LINE_H + 6 + 4;
 	y_rows = y_prefs + LINE_H + 4;
 
 	for (int i = 0; i < PREF_COUNT; i++) {
@@ -382,6 +417,18 @@ static void draw_text(int x, int y, const char *s) {
 	z_win_draw_text(&win, x, y, s, 1, &z_font_5x8);
 }
 
+static void describe_theme(char *out, size_t n) {
+	if (!can_theme)
+		snprintf(out, n, "needs eight colour planes (the 45F boards)");
+	else if (!colour_on)
+		snprintf(out, n, "off");
+	else if (theme_custom)
+		snprintf(out, n, "custom colours, from the file");
+	else
+		snprintf(out, n, "%s%s", z_accent_theme_names[theme_idx],
+			theme_in_file ? "" : "  (default)");
+}
+
 static void describe_password(char *out, size_t n) {
 	if (!auth_ok)
 		snprintf(out, n, "unavailable: this kernel has no password support");
@@ -435,6 +482,10 @@ static void repaint(void) {
 
 	draw_text(MARGIN, y_display,
 		can_set_video ? "Display" : "Display (unavailable)");
+
+	draw_text(MARGIN, y_theme, "Desktop colours (Super+F10)");
+	describe_theme(line, sizeof(line));
+	draw_text(MARGIN + 8, y_theme + LINE_H, line);
 
 	draw_text(MARGIN, y_prefs, "Preferences");
 	draw_text(cw - MARGIN - (int)strlen(Z_CFG_PATH) * z_font_5x8.w, y_prefs,
@@ -573,7 +624,78 @@ done:
 
 }
 
+// Several keys in one write and one reload (NULL removes a key).
+static bool save_many(const char *const *keys, const char *const *vals, int nkeys) {
+
+	int insize = fs_read_file(Z_CFG_PATH, cfg_in, Z_CFG_FILE_MAX);
+	bool ok = false;
+
+	if (insize < 0) {
+		set_status(fs_size(Z_CFG_PATH) > Z_CFG_FILE_MAX
+			? "zeitlos.cfg is too large to edit here"
+			: "could not read " Z_CFG_PATH);
+		goto done;
+	}
+
+	// z_cfg_text_set() one key at a time, ping-ponging between the
+	// two buffers; each step leaves every other line as it was
+	int n = insize;
+	for (int i = 0; i < nkeys; i++) {
+		n = z_cfg_text_set(cfg_in, (size_t)n, keys[i], vals[i], cfg_out,
+			Z_CFG_FILE_MAX);
+		if (n < 0) {
+			set_status("that value cannot be saved");
+			goto done;
+		}
+		memcpy(cfg_in, cfg_out, (size_t)n);
+	}
+	if (n == 0)
+		n = snprintf(cfg_in, Z_CFG_FILE_MAX, "# " Z_CFG_PATH " -- see docs/config.md\n");
+
+	if (fs_write_file(Z_CFG_PATH, cfg_in, n) != n) {
+		set_status("could not write " Z_CFG_PATH " -- no sdcard?");
+		goto done;
+	}
+
+	if (z_cfg_reload(NULL) < 0) set_status("saved, but this kernel cannot reload it");
+	else set_status("saved and reloaded");
+	ok = true;
+
+done:
+	read_values();
+	return ok;
+
+}
+
 // -- actions --
+
+// One step through Off, then the themes, wrapping. wm picks the change
+// up within a second (it rereads the file's generation).
+static void step_theme(int dir) {
+
+	int count = z_accent_theme_count + 1;		// Off first
+	int pos = colour_on ? 1 + theme_idx : 0;
+	static const char *const keys[4] = {
+		"system.video.desktop_colour", "system.video.desktop_theme",
+		"system.video.desktop_accents", "system.video.desktop_base",
+	};
+	const char *vals[4] = { NULL, NULL, NULL, NULL };
+
+	if (!can_theme) return;
+
+	pos = (pos + dir + count) % count;
+	if (pos == 0) {
+		// off keeps the theme for when it comes back on
+		vals[0] = "no";
+		save_many(keys, vals, 1);
+	} else {
+		// on is the default, phosphor the default theme: no lines
+		vals[1] = pos == 1 ? NULL : z_accent_themes[pos - 1].id;
+		save_many(keys, vals, 4);
+	}
+	repaint();
+
+}
 
 static void apply_video(int idx) {
 
@@ -890,6 +1012,8 @@ out:
 static void activate(int idx) {
 	if (idx < 0) return;
 	if (idx < MODE_COUNT) { apply_video(idx); return; }
+	if (idx == W_THEME_PREV) { step_theme(-1); return; }
+	if (idx == W_THEME_NEXT) { step_theme(1); return; }
 	if (idx == W_EDIT_TERM) { edit(&prefs[0]); return; }
 	if (idx == W_EDIT_KBD) { edit(&prefs[1]); return; }
 	if (idx == W_TOGGLE_JA) { toggle_japanese(); return; }
@@ -975,7 +1099,8 @@ static void handle_key(uint32_t keysym, uint8_t mods) {
 			"Enter/Space\tPress the focused button\n"
 			"A-Z, 0-9\tJump to a time zone\n"
 			"Enter\tIn the list: save the zone\n\n"
-			"Display colours apply at once. Pick a time zone, then "
+			"Display colours and desktop colour themes (< >) apply "
+			"at once. Pick a time zone, then "
 			"Set time zone. Edit changes a value; Reload file "
 			"re-reads the file after editing it elsewhere.";
 		z_dialog_help(&dlg, "Settings help", help, "settings_app");
@@ -1088,6 +1213,13 @@ static void widgets_init(void) {
 		widgets[i].enabled = true;
 	}
 
+	widgets[W_THEME_PREV].type = Z_WIDGET_BUTTON;
+	widgets[W_THEME_PREV].label = "<";
+	widgets[W_THEME_PREV].enabled = can_theme;
+	widgets[W_THEME_NEXT].type = Z_WIDGET_BUTTON;
+	widgets[W_THEME_NEXT].label = ">";
+	widgets[W_THEME_NEXT].enabled = can_theme;
+
 	widgets[W_EDIT_TERM].type = Z_WIDGET_BUTTON;
 	widgets[W_EDIT_TERM].label = "Edit";
 	widgets[W_EDIT_TERM].enabled = true;
@@ -1140,6 +1272,7 @@ int main(void) {
 	printf("settings: starting\n");
 
 	can_set_video = z_video_mode_present();
+	can_theme = z_color_desktop_available();
 
 	if (!can_set_video)
 		printf("settings: this bitstream has no video mode register "

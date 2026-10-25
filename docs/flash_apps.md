@@ -415,9 +415,12 @@ accent plane, the palette per phosphor, the hand-over with a colour
 window) took `wm` to 112,824 bytes in flash and 147,024 in RAM with
 xPack GCC 15.2: its budgets went to 112K (from the unassigned part) and
 145K. The widgets' tints (`z_win_accent_rect()`) took `text` to 160,448:
-157K. `usb` gave 2K (52,580 in 52K). **The boot set's RAM is now 1,030
-of 1,024 KB**: `zrelease check` reports it until 6K comes out of
-something, or the rule's 1M is raised -- not yet decided.
+157K. `usb` gave 2K (52,580 in 52K). The themes (the table, the
+custom-colour parser and three config keys) took `wm` to 115,364 and
+149,580 with xPack GCC 15.2 and 116,048 in flash with the
+riscv32-unknown-elf toolchain: 114K (from the unassigned part) and 147K. **The boot set's RAM is now 1,032 of 1,024 KB**:
+`zrelease check` reports it until 8K comes out of something, or the
+rule's 1M is raised -- not yet decided.
 The next byte for the boot set comes out of another budget, or out of
 something made smaller. `mkzar.py --max` checks the archive itself
 against the region (`CORE_ZAR_MAX`, 848K), so a budget that turns out
@@ -429,7 +432,7 @@ code, data and `.bss`, not its stack). They are `CORE_BUDGETS` in the
 top-level `Makefile`, next to `CORE_APPS`:
 
 ```
-CORE_BUDGETS = fs=36K/75K usb=35K/52K wm=112K/145K net=148K/284K term=62K/152K \
+CORE_BUDGETS = fs=36K/75K usb=35K/52K wm=114K/147K net=148K/284K term=62K/152K \
 	console=10K/13K cron=18K/48K text=60K/157K files=57K/120K repl=140K/304K
 CORE_RESERVE = 60K
 CORE_STORE = wm net

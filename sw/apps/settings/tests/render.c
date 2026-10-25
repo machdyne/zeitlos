@@ -8,7 +8,8 @@
  *      sw/apps/settings/tests/render.c sw/common/zwin.c \
  *      sw/common/zwidget.c sw/common/zfont_data.c sw/common/zobj.c \
  *      sw/common/zeitlos.c sw/common/zfsapp.c sw/common/zcfg.c \
- *      sw/common/zrtc.c sw/common/zkbd.c sw/common/zspeak.c
+ *      sw/common/zrtc.c sw/common/zkbd.c sw/common/zspeak.c sw/common/zaccent.c \
+ *      sw/common/zaccent_names.c
  *   /tmp/settings_render /tmp/settings
  *
  * Exit 0 pass, 1 fail, 77 skipped.
@@ -627,6 +628,44 @@ int main(int argc, char **argv) {
 	}
 	ka.nosys = false;
 	read_auth();
+
+	// -- 8. desktop colour themes --
+	printf("8. desktop colour themes\n");
+	{
+		char d[80];
+		describe_theme(d, sizeof(d));
+		expect(!can_theme && !widgets[W_THEME_NEXT].enabled && strstr(d, "eight colour planes"),
+			"a monochrome board: the row says why, the buttons are off");
+		can_theme = true;
+		widgets[W_THEME_PREV].enabled = widgets[W_THEME_NEXT].enabled = true;
+		read_values();
+		describe_theme(d, sizeof(d));
+		expect(colour_on && theme_idx == 0 && strstr(d, "Phosphor") && strstr(d, "(default)"),
+			"nothing in the file: phosphor, default");
+		activate(W_THEME_NEXT);
+		expect(strstr(file, "system.video.desktop_theme: slate\n") && theme_idx == 1 && theme_in_file,
+			"> : the next theme, saved");
+		activate(W_THEME_PREV);
+		expect(!strstr(file, "desktop_theme") && theme_idx == 0, "< : back to phosphor, no line");
+		activate(W_THEME_PREV);
+		expect(strstr(file, "system.video.desktop_colour: no\n") && !colour_on, "< again: off");
+		describe_theme(d, sizeof(d));
+		expect(!strcmp(d, "off"), "the row says off");
+		activate(W_THEME_PREV);
+		expect(colour_on && theme_idx == z_accent_theme_count - 1 && !strstr(file, "desktop_colour"),
+			"< from off: the last theme, on again");
+		render(prefix, "8-theme");
+		// custom colours in the file: shown, and cleared by a choice
+		save("system.video.desktop_accents", "112,EEF");
+		describe_theme(d, sizeof(d));
+		expect(theme_custom && strstr(d, "custom"), "custom accents shown as such");
+		activate(W_THEME_NEXT);
+		expect(!colour_on && theme_custom, "> after the last theme: off (the custom colours kept)");
+		activate(W_THEME_NEXT);
+		expect(!theme_custom && !strstr(file, "desktop_accents") && colour_on && theme_idx == 0,
+			"> again: phosphor, and the custom accents dropped");
+		expect(strstr(file, "system.rtc.timezone: UTC+5:30\n") != NULL, "the rest of the file kept");
+	}
 
 	printf("--- final /zeitlos.cfg ---\n%.*s--- end ---\n", file_len, file);
 	printf("settings render: %d checks, %d failed\n", checks, failures);

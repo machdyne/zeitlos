@@ -893,9 +893,9 @@ ZAR_APPS = $(filter-out $(CORE_APPS_OMIT),$(CORE_APPS))
 #
 # A budget is raised by taking from another, from the reserve, or by
 # making something smaller. Every core app must have one.
-# wm 108K/138K -> 112K/145K and text 156K -> 157K RAM for desktop colour
+# wm 108K/138K -> 114K/147K (desktop colour and its themes) and text 156K -> 157K RAM for desktop colour
 # (docs/color.md), usb 54K -> 52K RAM towards it.
-CORE_BUDGETS = fs=36K/75K usb=35K/52K wm=112K/145K net=148K/284K term=62K/152K \
+CORE_BUDGETS = fs=36K/75K usb=35K/52K wm=114K/147K net=148K/284K term=62K/152K \
 	console=10K/13K cron=18K/48K text=60K/157K files=57K/120K repl=140K/304K
 CORE_RESERVE = 60K
 # Core apps stored as they are, not compressed: their budget is then

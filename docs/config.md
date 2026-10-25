@@ -80,6 +80,9 @@ travel with the card. `settings` edits them; see
 | `system.video.brightness` | `8` | kernel | HDMI/DVI monochrome brightness, 1-16, applied at boot and on reload |
 | `system.video.desktop_colour` | `yes` | `wm` | eight-plane colour boards: the desktop in four colours, accents on window frames and the dock ([color.md](color.md#desktop-colour)); Super+F10 switches until the next reload |
 | `system.video.desktop_background` | `yes` | `wm` | desktop colour: the desktop's background tinted too |
+| `system.video.desktop_theme` | `phosphor` | `wm` | desktop colour: the theme -- `phosphor`, `slate`, `nord`, ... ([color.md](color.md#themes)); settings steps through them |
+| `system.video.desktop_accents` | -- | `wm` | desktop colour: custom accents over the theme, `dark,light` in RGB444 hex (`123,CA8`) |
+| `system.video.desktop_base` | -- | `wm` | desktop colour: custom black and ink, `black,ink` (`223,DDE`); the palette then shows all four and the pointer is tinted |
 | `system.video.composite` | `color` | kernel | composite colour boards: `color`, or `mono` for black and white |
 | `system.video.ddmi_audio` | `no` | kernel | DDMI boards built with it: `yes` sends sound and display info over the HDMI connector |
 | `system.update.url` | *(the built-in distribution's)* | `update` | where releases come from, `http://host/.../release/`: a mirror, or another distribution ([distribution.md](distribution.md#following-another-distribution)) |
@@ -218,6 +221,23 @@ screen app's colour window takes precedence, and the tints come back
 when it loses the focus. Super+F10 switches desktop colour until the
 next reload. Ignored elsewhere ([color.md](color.md#desktop-colour)).
 
+### `system.video.desktop_theme`, `system.video.desktop_accents`, `system.video.desktop_base`
+
+The desktop colour scheme. `desktop_theme` names one of the built-in
+themes ([color.md](color.md#themes)): `phosphor` (the default: each
+display colour's own accents), accent themes such as `slate`, `navy`,
+`plum` or `midnight` (new tints, the phosphor's exact black and ink),
+or full themes such as `nord`, `gruvbox`, `solarized-dark` or
+`workbench` (all four colours their own). An unknown name is the
+default. settings' *Desktop colours* `<` `>` buttons write it.
+
+`desktop_accents` (`dark,light`) and `desktop_base` (`black,ink`) are
+custom colours in RGB444 hex -- three digits each, `#` allowed --
+applied over the theme. A value that does not parse is ignored. With
+`desktop_base` the palette shows every pixel, so the pointer's XOR
+tints; keep black and the light accent, and the ink and the dark
+accent, well apart. Choosing a theme in settings removes both.
+
 ### `system.video.ddmi_audio`
 
 `yes` or `no` (also `on`/`off`, `1`/`0`), on a board whose bitstream
@@ -307,17 +327,20 @@ What picks up a reload:
 - `system.rtc.timezone` -- on the next second in `clock`, the next check in `cal`.
 - `apps.term.auto_connect` -- the next term window opened.
 - `system.keyboard.layouts` -- the next key pressed (`wm`).
-- `system.video.desktop_colour`, `system.video.desktop_background` --
-  wm's next pass (the next key, click or pointer movement).
+- `system.video.desktop_colour`, `system.video.desktop_background`,
+  `system.video.desktop_theme`, `_accents`, `_base` -- within a second
+  (wm checks the store's generation once a second).
 - the dock's arrangement, `/data/wm/wm.cfg` (not a key here, a file of
   its own: [dock.md](dock.md)) -- within a second of the next key,
   click or pointer movement (`wm`).
 
 ### The settings app
 
-`settings` edits four of the settings above:
+`settings` edits these of the settings above:
 
 - **Colour:** a row of buttons. Choosing one applies it and saves it.
+- **Desktop colours:** `<` `>` step through Off and the themes, saving
+  each at once.
 - **Time zone:** a scrolling list of cities and offsets. Select one
   (click, arrows, or a letter: B is Bangkok, B again Beijing), then
   **Set time zone** -- or Enter, or double-click.

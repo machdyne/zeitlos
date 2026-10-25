@@ -1563,13 +1563,15 @@ static inline bool z_color_desktop_exact(void) {
 }
 
 // On from the next frame, over 0,0..640,480 -- the rectangle
-// z_color_window_set() would cut to 320x240, written raw -- with DESK
-// where the bitstream has it. The caller has checked
+// z_color_window_set() would cut to 320x240, written raw. `exact`: with
+// DESK where the bitstream has it (black and the ink the phosphor's own,
+// zaccent.h); false for a theme with its own black and ink, which only
+// the palette can show. The caller has checked
 // z_color_desktop_available().
-static inline void z_color_desktop_on(void) {
+static inline void z_color_desktop_on(bool exact) {
 	reg_socctl_colwinend = (480u << 16) | 640u;
 	reg_socctl_colwin = Z_COLWIN_EN |
-		(z_color_desktop_exact() ? Z_COLWIN_DESK : 0u);
+		((exact && z_color_desktop_exact()) ? Z_COLWIN_DESK : 0u);
 }
 
 // -- instruction cache (rtl/cache.v) --

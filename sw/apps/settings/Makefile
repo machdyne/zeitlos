@@ -11,7 +11,8 @@ APP = settings
 # Objects, and why each is linked:
 #
 #   zkbd.o: the keyboard layout names, for checking system.keyboard.layouts
+#   zaccent.o: the desktop colour themes, for the Desktop colours row
 OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o zwidget.o zspeak.o \
-	zfsapp.o zdialog.o zflist.o zedit.o ztype.o zcfg.o zrtc.o zkbd.o settings.o
+	zfsapp.o zdialog.o zflist.o zedit.o ztype.o zcfg.o zrtc.o zkbd.o zaccent.o zaccent_names.o settings.o
 
 include ../../common/app.mk
