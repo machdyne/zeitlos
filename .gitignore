@@ -40,6 +40,11 @@ sw/apps/net/.net_config_selected
 sw/apps/web/.web_config_selected
 sw/apps/repl/ms_stdlib.h
 sw/apps/slide/ms_stdlib.h
+sw/apps/learn/ms_stdlib.h
+sw/apps/learn/figlib.h
+sw/apps/learn/tests/out/
+tools/learn/out/
+tools/learn/rvbench/out/
 sw/apps/info/feat_names.h
 
 # ESP-IDF (esp32/zeitlos-nic): build tree and the generated sdkconfig

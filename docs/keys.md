@@ -8,9 +8,9 @@ The function keys mean the same thing in every app.
 | **F2** | **Rename / edit in place** | `files`: rename; `sheet`: edit the cell |
 | **F3** | **Search / next** | no search yet: ask what to find (as Ctrl+F); then the next match -- `text`, `sheet`, `web`, `files` |
 | **F4** | **The app's prompt** | gives the command or input box the focus -- `sheet`'s command line (and its `/` menu), `slide`'s command line, `web`'s address field; in apps whose prompt always has the focus (`chess`, the casino tables, `basic`, `ask`, `mesh`, `irc`) typing goes there anyway |
-| **F5-F8** | **The app's own** | listed in its F1 box -- `web` F5 reload, `files` F5 read the folder again, `sheet` F5 chart, `bench` F5/F6, `midi` F5-F7, `mesh` F5/F6, `chip8` F5-F8, `slide` F5 show, F6 all cards, F7 the deck as an app, `backup` F5 look at the drive again, `pix` F5 play (Shift: the animation), F6 onion skin, F7 fewer colours, F8 the palette |
+| **F5-F8** | **The app's own** | listed in its F1 box -- `web` F5 reload, `files` F5 read the folder again, `sheet` F5 chart, `bench` F5/F6, `midi` F5-F7, `mesh` F5/F6, `chip8` F5-F8, `slide` F5 show, F6 all cards, F7 the deck as an app, `backup` F5 look at the drive again, `learn` F5 a hint, F6 read the step aloud, F7 report a mistake, F8 skip to the next step (in a lesson, the answer box too; L on the home screen changes learner, F3 finds a course), `pix` F5 play (Shift: the animation), F6 onion skin, F7 fewer colours, F8 the palette |
 | **F9** | **Reserved** | bound by nothing, for later |
-| **F10** | **Colour** | a screen app on the arcade runtime: colour on or off -- in the window the colour window ([color.md](color.md)), full screen game mode's colour (as C); a dual app ([app_kinds.md](app_kinds.md)): its 320x240 colour screen and back to its desktop window; `mausrun` as a screen app (it is always full screen); the colour titlebar icon (a rainbow) does the same; with Super, wm's desktop colour on or off ([color.md](color.md#desktop-colour)); bound by nothing else |
+| **F10** | **Colour** | a screen app on the arcade runtime: colour on or off -- in the window the colour window ([color.md](color.md)), full screen game mode's colour (as C); a dual app ([app_kinds.md](app_kinds.md)): its 320x240 colour screen and back to its desktop window; `mausrun` as a screen app (it is always full screen); the colour titlebar icon (a rainbow) does the same; `learn`: a lesson's figure in colour or not ([learn_figures.md](learn_figures.md#colour)); with Super, wm's desktop colour on or off ([color.md](color.md#desktop-colour)); bound by nothing else |
 | **F11** | **Full screen** | a resizable window (a desktop app): full screen -- the whole screen, no titlebar, no dock (wm does it); a screen app: the window or game mode ([app_kinds.md](app_kinds.md)) |
 | **F12** | **App home / reserved** | back to where the app starts -- `term` (disconnect, the welcome panel), `web` (the page it started with, or the bookmarks), `files` (the folder it started in); elsewhere reserved |
 
@@ -73,7 +73,9 @@ Where the line has to be opened first, `/` opens it too, so F4 and `/`
 mean the same thing from the app's main view: `sheet` (where the menu
 *is* the prompt), `slide` (the command line; `/` or F4 again on the
 empty line opens the menu). They differ only where `/` is something you
-type -- a cell, a text box -- and there F4 still works.
+type -- a text box -- and there F4 still works. (`sheet` is the
+exception: while a cell is being edited F4 does nothing; Enter or Esc
+first.)
 
 ## What changed (0.0.7)
 
@@ -90,4 +92,5 @@ type -- a cell, a text box -- and there F4 still works.
 | `sheet` | F10 chart | F5; F4 the command line |
 | `files` | -- | F3 find, F5 read again, F12 home |
 | `web` | -- | F4 address, F5 reload, F12 home |
+| `learn` (0.0.8) | H hint, S say, M mistake (letters, so not while typing an answer); F5 change learner | F5 hint, F6 say, F7 mistake (H, S, M still work outside an answer box), F8 skip; L change learner |
 | `info` | no help | F1 help box |

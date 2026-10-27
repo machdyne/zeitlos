@@ -8,7 +8,7 @@ window manager, and produces byte-identical output to the same program
 built with GCC against the same runtime -- down to a checksum of the
 framebuffer after drawing. Checked by the test suite on every run.
 
-97 table entries, 35KB blob, ABI 2.
+At first: 97 table entries, 35KB blob, ABI 2. As of 2026-10-26 the blob is about 73 KB (73,264 bytes) and zcc expects ABI 7.
 
 ```
 make -C sw/apps/zcc/libz          # needs the RISC-V toolchain

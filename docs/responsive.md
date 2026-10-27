@@ -263,6 +263,33 @@ over four watch slots and, for a watched one, a `z_msg_send()` that
 never blocks (zfsproto.h, "Watching"), so a save in `text` is not
 slowed by anyone watching.
 
+## learn
+
+Opening a course is a few dozen requests to fs: a listing of every
+folder, an `index.md` a unit, the course's figure library. learn made
+them in one call, and **drew** a course's lesson titles by reading each
+lesson's first line from the card. On the board both stalled for
+minutes, and the window could not be closed: the main loop read nothing
+meanwhile, wm's messages filled the mailbox (32), and fs's reply,
+finding no room, was dropped -- so each request waited out zfsc's 15 s
+timeout (`learn: a lesson's title: 15001 ms`).
+
+Now `la_work()` runs in a coroutine on a 48 KB stack in `main()`'s frame
+(`sw/apps/learn/learn.c`, "slow work"), and learn's fs calls hand back
+after every request (`fs_yield()`), so the main loop reads its messages
+between any two. Opening a course says `Opening the course ... (Esc
+stops)`; Esc abandons the coroutine, which holds nothing between
+requests (each file is opened and closed within one). Drawing never
+reads the card: a lesson's title is its file's name until `la_work()`
+has read its `#` line -- the chosen unit's, a lesson a turn. Host test:
+`make -C sw/apps/learn render` opens a course a request a turn, stops
+one with Esc, and checks the titles come after.
+
+**The general lesson:** a process that makes a run of fs requests
+without reading its mailbox can lose a reply to a full mailbox and wait
+15 s for it. Any app with slow work and a busy window is open to it;
+the cure is this document's main loop.
+
 ## Still to do
 
 | App | The long call | The way out |
@@ -270,3 +297,4 @@ slowed by anyone watching.
 | `view`, `web` | SVG, drawn in one call | a row or element callback in zsvg to yield from |
 | `draw` | a brush or eraser stroke across the whole page in one mouse sample (~50ms) | stamp a bounded number of points per step |
 | `sheet` | recalculating a 4,096-cell sheet (to be measured on the board) | a coroutine around the evaluator, or a generation-stepped recalc |
+| `learn` | opening a lesson: its file (up to 48 KB) read in one go | the same coroutine, or read in 4 KB turns |

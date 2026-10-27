@@ -940,6 +940,14 @@ typedef struct {
 // colour (docs/color.md) keeps the second sheet meanwhile.
 #define Z_WM_COLOR_WANT          (Z_SUBJ_WM + 38)
 
+// Z_WM_MAXIMIZE -- app -> wm (Z_UINT32 window id): maximize this window
+// if it is not maximized already, as a double-click on its titlebar
+// does (the dock hides while it is; docs/window_manager.md, "Maximize
+// and shade"). For an app that opens maximized (learn). Only the
+// owner's own resizable window; a shaded or full-screen one is left as
+// it is. The person can restore it at once. z_win_maximize() in zwin.h.
+#define Z_WM_MAXIMIZE            (Z_SUBJ_WM + 39)
+
 #define Z_WM_PACK_PLACE(x, y) \
 	((((uint32_t)(y) & 0x3FF) << 10) | ((uint32_t)(x) & 0x3FF))
 #define Z_WM_UNPACK_PLACE_X(v)   ((int)((v) & 0x3FF))

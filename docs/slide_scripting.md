@@ -126,6 +126,12 @@ memory, not the deck's arena) and a stack for its strings within slide's
 128 KB. That is room for a deck's script of several hundred lines and
 its data; a deck that keeps large lists should keep them in a file.
 
+slide also builds ms with its lookup tables on (`MS_HASH_SIZE=2048`,
+24 KB). These find a symbol by name, and a global by symbol, directly
+rather than by walking the lists of several hundred that the Zeitlos API
+makes. They are off by default in ms, so that the core apps (repl) stay
+inside their memory budgets.
+
 ## For the C side
 
 `sw/apps/slide/script.c`: the interpreter (sw/ext/ms, with its

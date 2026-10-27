@@ -1536,7 +1536,7 @@ static void handle_key(uint32_t keysym, uint8_t mods) {
 	// surprise from a key that means "undo my typing" everywhere else.
 	// Moving the caret is what the muscle memory of typing a wrong
 	// digit actually wants.
-	if (keysym == 0x08) { move_by(-1); return; }
+	if (keysym == 0x7f || keysym == 0x08) { move_by(-1); return; }
 
 	if (ctrl) {
 		switch (keysym) {

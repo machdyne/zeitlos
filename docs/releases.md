@@ -56,7 +56,7 @@ release/dist/0.0.7/
                                     ESP32-C3, when a Kabellos target
                                     is built (see "Network module
                                     firmware")
-  zeitlos.img.gz                    sdcard image: every set, zdocs, Ark Lite
+  zeitlos.img.gz                    sdcard image: every set, zdocs, Ark Lite, edu-zeitlos
   zeitlos-serious.img.gz            ...every set but games
   zeitlos-base.img.gz               ...the base set alone
   zeitlos-arkmedium.img.gz          every set and Ark Medium (~1.5GB and up)
@@ -676,12 +676,17 @@ A release ships **four card images**, which differ in the **sets** of
 apps on them ([update.md](update.md#sets)) and in the `ask` packs
 (`lib/mkfatimg.py`, `VARIANTS`):
 
-| image | key | sets | `ask` packs | size | where |
+| image | key | sets | packs | size | where |
 |---|---|---|---|---|---|
-| `zeitlos.img.gz` | `full` | all | `zdocs` + `arklite` | 64 MB | GitHub, the server |
-| `zeitlos-serious.img.gz` | `serious` | all but games | `zdocs` + `arklite` | 64 MB | GitHub, the server |
-| `zeitlos-base.img.gz` | `base` | base | `zdocs` | 64 MB | GitHub, the server |
-| `zeitlos-arkmedium.img.gz` | `arkmedium` | all but arklite | `zdocs` + `arkmed` | ~1.5 GB today, up to ~4 GB | GitHub only |
+| `zeitlos.img.gz` | `full` | all | `zdocs` + `arklite` + `edu-zeitlos` | 64 MB | GitHub, the server |
+| `zeitlos-serious.img.gz` | `serious` | all but games | `zdocs` + `arklite` + `edu-zeitlos` | 64 MB | GitHub, the server |
+| `zeitlos-base.img.gz` | `base` | base | `zdocs` + `edu-zeitlos` | 64 MB | GitHub, the server |
+| `zeitlos-arkmedium.img.gz` | `arkmedium` | all but arklite | `zdocs` + `arkmed` + `edu-zeitlos` | ~1.5 GB today, up to ~4 GB | GitHub only |
+
+`edu-zeitlos` is learn's course pack built from this tree
+(`./tools/learn/pack.py build tools/learn/packs/edu-zeitlos.cfg`, a
+second): courses only, in `/opt/ark/edu-zeitlos/`, no ask index yet
+([learn.md](learn.md#packs)).
 
 `serious` is for a machine without distractions. `arkmed` contains Ark
 Lite, so the medium image carries `arkmed` and not the arklite set
@@ -1142,8 +1147,9 @@ $ python3 tools/test_gen_abi.py
 ```
 
 check the manifest and update releases (no tools needed), and the card
-images themselves (needs dosfstools, mtools and the zdocs pack:
-`./tools/ask/ask build tools/ask/dist/zdocs.spec`), and the ABI id
+images themselves (needs dosfstools, mtools, the zdocs pack:
+`./tools/ask/ask build tools/ask/dist/zdocs.spec`, and the edu-zeitlos
+pack: `./tools/learn/pack.py build tools/learn/packs/edu-zeitlos.cfg`), and the ABI id
 (`sw/common/zabi.h`; `zrelease check` fails when it is stale, and
 `make abi` remakes it -- [update.md](update.md#abi)). The board's side of
 updates, `sw/apps/update`, is tested against stores these write:

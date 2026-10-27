@@ -120,7 +120,7 @@ APP_SET = {
     "posix": "base", "vi": "base", "zetta": "base", "settings": "base",
     "info": "base", "calc": "base", "clock": "base", "cal": "base",
     "keyboard": "base", "jfont": "base", "read": "base", "ask": "base",
-    "update": "base", "backup": "base",
+    "update": "base", "backup": "base", "learn": "base",
     "sheet": "work", "slide": "work", "print": "work",
     "convert": "work", "draw": "work", "view": "work", "pix": "work",
     "automate": "work",
@@ -154,7 +154,7 @@ PLACE_SET = [
 ]
 # The ask packs an update knows, by set. Others (arkmed) are only on an
 # image: not in its manifest, never touched by an update.
-PACK_SET = {"zdocs": "base", "arklite": "arklite"}
+PACK_SET = {"zdocs": "base", "arklite": "arklite", "edu-zeitlos": "base"}
 
 
 def set_of(dest):
@@ -182,12 +182,12 @@ def set_of(dest):
 # distribution's server (docs/distribution.md).
 _ALL = tuple(SET_NAMES)
 VARIANTS = [
-    ("base",      "zeitlos-base",      ("base",), ("zdocs",)),
+    ("base",      "zeitlos-base",      ("base",), ("zdocs", "edu-zeitlos")),
     ("serious",   "zeitlos-serious",
-     tuple(n for n in _ALL if n != "games"), ("zdocs", "arklite")),
-    ("full",      "zeitlos",           _ALL, ("zdocs", "arklite")),
+     tuple(n for n in _ALL if n != "games"), ("zdocs", "arklite", "edu-zeitlos")),
+    ("full",      "zeitlos",           _ALL, ("zdocs", "arklite", "edu-zeitlos")),
     ("arkmedium", "zeitlos-arkmedium",
-     tuple(n for n in _ALL if n != "arklite"), ("zdocs", "arkmed")),
+     tuple(n for n in _ALL if n != "arklite"), ("zdocs", "arkmed", "edu-zeitlos")),
 ]
 SERVER_VARIANTS = ("base", "serious", "full")
 
@@ -266,6 +266,7 @@ SUPPLEMENTAL = [
     (zcard("Z_DIR_APPS", "print"), "sw/apps/print/print.bin"),
     (zcard("Z_DIR_APPS", "convert"), "sw/apps/convert/convert.bin"),
     (zcard("Z_DIR_APPS", "read"), "sw/apps/read/read.bin"),
+    (zcard("Z_DIR_APPS", "learn"), "sw/apps/learn/learn.bin"),
     (zcard("Z_DIR_APPS", "ask"), "sw/apps/ask/ask.bin"),
     (zcard("Z_DIR_APPS", "draw"), "sw/apps/draw/draw.bin"),
     (zcard("Z_DIR_APPS", "pix"), "sw/apps/pix/pix.bin"),
@@ -409,10 +410,25 @@ ASK_OUT = "tools/ask/out"
 # ASK_OUT/<pack>/data/ask/<pack> -- taking both from the same registry,
 # so each half goes to the card at the path it already has.
 PACK_HALVES = (zcard("Z_DIR_ARK"), zcard("Z_DIR_ASK_PACKS"))
+
+# learn's course packs (docs/learn.md, "Packs"): /opt/ark/edu* only --
+# courses as they are, built by tools/learn/pack.py into EDU_OUT/<pack>,
+# laid out as the card is, like an ask pack's first half. (ask's index
+# of them, the second half, is a later step.) A pack named edu* is one.
+EDU_OUT = "tools/learn/out"
+
+
+def pack_layout(name):
+    """Where pack `name` is built and which halves it has."""
+    if name.startswith("edu"):
+        return EDU_OUT, PACK_HALVES[:1], ("./tools/learn/pack.py build "
+                                          "tools/learn/packs/%s.cfg" % name)
+    return ASK_OUT, PACK_HALVES, ("./tools/ask/ask build "
+                                  "tools/ask/dist/%s.spec" % name)
 # What `zrelease sdcard` (and so tools/mkfatimg.sh) puts on a card when
 # nothing says otherwise: the development card, unchanged from before
 # variants. A release builds VARIANTS instead.
-ASK_PACKS_DEFAULT = ("zdocs", "arklite")
+ASK_PACKS_DEFAULT = ("zdocs", "arklite", "edu-zeitlos")
 
 # -- the zcc runtime, in zcc's folder: /data/zcc/libz --
 #
@@ -723,15 +739,15 @@ def ask_pack_files(root, name):
     with an app and no data -- which boots to "no packs in /data/ask" and
     looks like the app is broken.
     """
-    base = os.path.join(root, ASK_OUT, name)
+    where, halves, how = pack_layout(name)
+    base = os.path.join(root, where, name)
     out = []
-    for half in PACK_HALVES:
+    for half in halves:
         d = os.path.join(base, half, name)
         if not os.path.isdir(d):
             raise FatError(
-                "ask pack '%s' was requested but %s does not exist.\n"
-                "  Build it first:  ./tools/ask/ask build "
-                "tools/ask/dist/%s.spec" % (name, d, name))
+                "pack '%s' was requested but %s does not exist.\n"
+                "  Build it first:  %s" % (name, d, how))
         for dp, _dn, fn in os.walk(d):
             for f in sorted(fn):
                 src = os.path.join(dp, f)
@@ -1219,16 +1235,17 @@ def build(root, out_path, ark_dir=None, verbose=True, packs=None,
     # FAT: fine for arklite's thousand files, hours for arkmed's tens of
     # thousands. Every name was checked against FatFs before mkfs.
     for packname, files in pl.packs:
-        base = os.path.join(root, ASK_OUT, packname)
+        where, halves, _how = pack_layout(packname)
+        base = os.path.join(root, where, packname)
         total = sum(os.path.getsize(src) for _c, src in files)
-        for half in PACK_HALVES:
+        for half in halves:
             mkdir_p("/" + half)
             _run(["mcopy", "-s", "-i", out_path,
                   os.path.join(base, half, packname), "::/%s/" % half])
             made_dirs.add("%s/%s" % (half, packname))
         shipped.append(("%s/" % zcard("Z_DIR_ARK", packname), total))
         if verbose:
-            print("  ask pack %-10s %6d files  %7.1f MB"
+            print("  pack %-12s %6d files  %7.1f MB"
                   % (packname, len(files), total / 1e6))
 
     for dest, src, _p in pl.files[pl.early:]:

@@ -155,9 +155,13 @@ widest view from the start, a group's counting its BACK.
 - **Running dots** under a group's icon are its apps' copies added up
   (six at most, like any icon).
 
-The built-in file has Sound, Tools, Games and "More apps" (the last,
-`@rest`, empty and so not shown today) in `row wide`, and those with
-Work, Desk and Network in `row tall`, for a dock on a side.
+The built-in file has Desk, Sound, Tools, Games and "More apps" (the
+last, `@rest`, empty and so not shown today) in `row wide` -- 12 apps
+and 4 groups, one slot short of the 17 that fit -- and Work, Desk,
+Sound, Tools, Games and Network in `row tall`, for a dock on a side.
+`learn` ([learn.md](learn.md)) is in the wide row itself and in Work on
+a side; that is why `calc`, `clock` and `cal` went into Desk in the wide
+row too.
 
 ## Sides
 
@@ -382,7 +386,7 @@ shares):
 
 | | bytes | |
 |---|---|---|
-| `dock_store` | 3,584 | the icons (compressed) and spoken names the dock shows, and the groups' names; the built-in files use 3,069 |
+| `dock_store` | 4,096 | the icons (compressed) and spoken names the dock shows, and the groups' names; the built-in files use 3,545 (with learn and the Desk group), leaving room for icons drawn in pix |
 | `dock_apps` | 1,152 | the row and its groups: 48 names, with where each one's icon and name are in the store |
 | `dock_scratch` | 2,144 | the parser, then `dock.zic`'s table (64 entries), then the process table for the dots -- one at a time, sharing the space; while the icons are read, the parser's space is the read buffer |
 
@@ -441,7 +445,7 @@ it ([flash_apps.md](flash_apps.md)).
     (magic, sizes, offsets out of order, a name with no end, cut
     short), a store too small, the icon coding both ways; and the
     shipped `wm.cfg` and `dock.zic` themselves -- no problem in the
-    file, the wide row's 14 apps and Sound, Tools and Games, the tall
+    file, the wide row's 12 apps and Desk, Sound, Tools and Games, the tall
     row's 12, every app and group with its icon, the hardware each
     needs; `dots`; which process names are which app.
   - `tests/test_dock_files.c` (152 checks, section 26 the pointer's shapes): the real `wm.c` with a
@@ -484,7 +488,7 @@ it ([flash_apps.md](flash_apps.md)).
 
 - The console shows the three lines above, with their times; `dock.zic`
   in a handful of reads.
-- The row: 14 apps, then Sound, Tools and Games. Click Games: its apps
+- The row: 12 apps, then Desk, Sound, Tools and Games. Click Games: its apps
   with BACK first, the frame the same size. Esc: the row, Games
   selected. Enter on Tools, Right to an app, Enter: it starts and the
   dock is back on the row.

@@ -1,0 +1,144 @@
+diff --git a/ms.c b/ms.c
+index 1adf88a..827ad0f 100644
+--- a/ms.c
++++ b/ms.c
+@@ -578,10 +578,14 @@ static ms_val *mk_promise(ms_val *thunk) {
+  * Both tables only point at cells that are never freed: every symbol is
+  * kept by ms_symbols, a GC root, and every global binding by the global
+  * frame. A table that fills up is dropped and the lists are walked
+- * instead; ms_init() clears both. */
++ * instead; ms_init() clears both. Off unless MS_HASH_SIZE is defined
++ * (a power of two): a small target keeps the lists and the memory. */
+ #ifndef MS_HASH_SIZE
+-#define MS_HASH_SIZE 2048		/* a power of two; 16 KB of pointers here */
++#define MS_HASH_SIZE 0		/* 0: off (the lists, no memory); or a power of two:
++							 * 2048 is three tables of 2048 pointers, 24 KB with
++							 * 32-bit pointers */
+ #endif
++#if MS_HASH_SIZE
+ static ms_val *sym_hash[MS_HASH_SIZE];
+ static int sym_hash_n;
+ static bool sym_hash_off;
+@@ -602,17 +606,22 @@ static unsigned ptr_hash(const ms_val *p) {
+ 	return (unsigned)(v * 2654435761u) & (MS_HASH_SIZE - 1);
+ }
+ 
++#endif /* MS_HASH_SIZE */
++
+ /* interned symbols: identical names share one cell, so `eq?` on symbols
+  * is a pointer comparison, and special forms can be recognized by
+  * comparing against the fixed sym_* pointers. */
+ static ms_val *mk_sym(const char *name) {
++#if MS_HASH_SIZE
+ 	unsigned i = name_hash(name);
+ 	if (!sym_hash_off) {
+ 		while (sym_hash[i]) {
+ 			if (strcmp(sym_hash[i]->u.str, name) == 0) return sym_hash[i];
+ 			i = (i + 1) & (MS_HASH_SIZE - 1);
+ 		}
+-	} else {
++	} else
++#endif
++	{
+ 		for (ms_val *p = ms_symbols; p != NULL && p->type == T_PAIR; p = p->u.pair.cdr) {
+ 			ms_val *s = p->u.pair.car;
+ 			if (strcmp(s->u.str, name) == 0) return s;
+@@ -625,13 +634,17 @@ static ms_val *mk_sym(const char *name) {
+ 	PUSH(v);
+ 	ms_symbols = mk_pair(v, ms_symbols);
+ 	POP();
++#if MS_HASH_SIZE
+ 	if (!sym_hash_off) {
+ 		if (sym_hash_n * 4 >= MS_HASH_SIZE * 3) sym_hash_off = true;	/* full: the list from now on */
+ 		else { sym_hash[i] = v; sym_hash_n++; }
+ 	}
++#endif
+ 	return v;
+ }
+ 
++#if MS_HASH_SIZE
++
+ /* the binding of sym in the hashed frame; *found false if it has none */
+ static ms_val *ghash_find(ms_val *sym) {
+ 	unsigned i = ptr_hash(sym);
+@@ -666,6 +679,7 @@ static bool ghash_ready(ms_val *env) {
+ 	}
+ 	return ghash_env == env;
+ }
++#endif /* MS_HASH_SIZE */
+ 
+ /* ----------------------------------------------------------------------
+  * ACCESSORS / PREDICATES
+@@ -753,10 +767,12 @@ static ms_val *ms_new_env(ms_val *parent) {
+ 
+ static ms_val *env_lookup(ms_val *env, ms_val *sym) {
+ 	while (env && env->type == T_PAIR) {
++#if MS_HASH_SIZE
+ 		if (env == ms_global_env && ms_global_env && ghash_ready(env)) {
+ 			ms_val *b = ghash_find(sym);
+ 			return b ? b->u.pair.cdr : NULL;
+ 		}
++#endif
+ 		ms_val *frame = env->u.pair.car;
+ 		while (frame && frame->type == T_PAIR) {
+ 			ms_val *binding = frame->u.pair.car;
+@@ -773,7 +789,9 @@ static void env_define(ms_val *env, ms_val *sym, ms_val *val) {
+ 	ms_val *binding = mk_pair(sym, val);
+ 	PUSH(binding);
+ 	env->u.pair.car = mk_pair(binding, env->u.pair.car);
++#if MS_HASH_SIZE
+ 	if (env == ghash_env) ghash_put(sym, binding);
++#endif
+ 	POPN(4);
+ }
+ 
+@@ -782,11 +800,13 @@ static void env_define(ms_val *env, ms_val *sym, ms_val *val) {
+ static bool env_set(ms_val *env, ms_val *sym, ms_val *val) {
+ 	ms_val *e = env;
+ 	while (e && e->type == T_PAIR) {
++#if MS_HASH_SIZE
+ 		if (e == ms_global_env && ghash_ready(e)) {
+ 			ms_val *b = ghash_find(sym);
+ 			if (b) { b->u.pair.cdr = val; return true; }
+ 			break;
+ 		}
++#endif
+ 		ms_val *frame = e->u.pair.car;
+ 		while (frame && frame->type == T_PAIR) {
+ 			ms_val *binding = frame->u.pair.car;
+@@ -2693,6 +2713,8 @@ static ms_val *ms_protect_stack_storage[MS_PROTECT_STACK_SIZE];
+ #endif
+ 
+ void ms_init(void) {
++	static bool inited;
++	bool fresh = ms_heap == NULL;		/* (ms_deinit() frees the heap) */
+ #ifdef MS_STATIC_HEAP
+ 	if (!ms_heap) ms_heap = ms_heap_storage;
+ 	if (!ms_protect_stack) ms_protect_stack = ms_protect_stack_storage;
+@@ -2700,6 +2722,12 @@ void ms_init(void) {
+ 	if (!ms_heap) ms_heap = malloc(MS_HEAP_SIZE * sizeof(ms_val));
+ 	if (!ms_protect_stack) ms_protect_stack = malloc(MS_PROTECT_STACK_SIZE * sizeof(ms_val *));
+ #endif
++	/* a second ms_init() (an embedder starting afresh): the strings and
++	 * symbol names of the cells in use are malloc'd -- free them first */
++	if (inited && !fresh)
++		for (long i = 0; i < MS_HEAP_SIZE; i++)
++			if (ms_heap[i].type == T_STR || ms_heap[i].type == T_SYM) free(ms_heap[i].u.str);
++	inited = true;
+ 	ms_heap_live = 0;
+ 	ms_freelist = NULL;
+ 	for (long i = MS_HEAP_SIZE - 1; i >= 0; i--) {
+@@ -2710,11 +2738,13 @@ void ms_init(void) {
+ 	ms_symbols = NULL;
+ 	ms_protect_top = 0;
+ 	ms_wind_top = 0;
++#if MS_HASH_SIZE
+ 	memset(sym_hash, 0, sizeof sym_hash);
+ 	sym_hash_n = 0;
+ 	sym_hash_off = false;
+ 	ghash_env = NULL;
+ 	ghash_full = false;
++#endif
+ 
+ 	/* g_nil/g_true/g_false/g_unassigned/g_eof are permanent singletons;
+ 	 * protect them forever by pushing them at the bottom of the protect

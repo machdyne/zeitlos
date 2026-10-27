@@ -24,7 +24,12 @@ MS_DIR = ../../ext/ms
 ZAPI_DIR = ../../common/zapi
 MS_HEAP_SIZE ?= 8000
 MS_PROTECT_STACK_SIZE ?= 384
-MS_SIZE_CFLAGS = -DMS_HEAP_SIZE=$(MS_HEAP_SIZE) -DMS_PROTECT_STACK_SIZE=$(MS_PROTECT_STACK_SIZE)
+# MS_HASH_SIZE: ms's lookup tables for symbols and globals (24 KB; off by
+# default in ms, for the core apps' budgets). On here: a deck's scripts
+# look up the Zeitlos API's hundreds of globals, and every one was a walk
+# along the list of them.
+MS_HASH_SIZE ?= 2048
+MS_SIZE_CFLAGS = -DMS_HEAP_SIZE=$(MS_HEAP_SIZE) -DMS_PROTECT_STACK_SIZE=$(MS_PROTECT_STACK_SIZE) -DMS_HASH_SIZE=$(MS_HASH_SIZE)
 MS_CFLAGS = -DLIX -DMS_STATIC_HEAP $(MS_SIZE_CFLAGS) -I../../common/ms_platform -I.
 
 OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o zwidget.o zspeak.o \
@@ -94,7 +99,7 @@ test: tests/patterns.c
 		$(COMMON)/zcfont.c $(COMMON)/zfont_data.c $(COMMON)/zimg.c $(COMMON)/zinflate.c -lm
 	/tmp/test_slide_svg
 	mkdir -p /tmp/slide_ms && python3 $(ZAPI_DIR)/gen_ms_stdlib.py $(MS_DIR)/ms_stdlib.l /tmp/slide_ms/ms_stdlib.h
-	$(HOSTCC) -std=gnu99 -g -w -DLIX -DMS_STATIC_HEAP -DMS_HEAP_SIZE=8000 -DMS_PROTECT_STACK_SIZE=384 \
+	$(HOSTCC) -std=gnu99 -g -w -DLIX -DMS_STATIC_HEAP -DMS_HEAP_SIZE=8000 -DMS_PROTECT_STACK_SIZE=384 -DMS_HASH_SIZE=2048 \
 		-I$(COMMON)/ms_platform -I/tmp/slide_ms -c $(MS_DIR)/ms.c -o /tmp/slide_ms/ms.o
 	$(HOSTCC) $(HOST_CFLAGS) -o /tmp/test_slide_script tests/test_script.c tests/zapi_stubs.c tests/hostfs.c tests/patterns.c \
 		$(COMMON)/zpool.c deck.c deckio.c render.c act.c script.c /tmp/slide_ms/ms.o $(COMMON)/zpage.c $(COMMON)/zpaper.c \
@@ -113,7 +118,7 @@ CLEAN_EXTRA = tests/patterns.c ms_stdlib.h
 # /tmp/slide_ui_*.pbm, to look at.
 render: tests/patterns.c
 	mkdir -p /tmp/slide_ms && python3 $(ZAPI_DIR)/gen_ms_stdlib.py $(MS_DIR)/ms_stdlib.l /tmp/slide_ms/ms_stdlib.h
-	$(HOSTCC) -std=gnu99 -g -w -no-pie -DLIX -DMS_STATIC_HEAP -DMS_HEAP_SIZE=8000 -DMS_PROTECT_STACK_SIZE=384 \
+	$(HOSTCC) -std=gnu99 -g -w -no-pie -DLIX -DMS_STATIC_HEAP -DMS_HEAP_SIZE=8000 -DMS_PROTECT_STACK_SIZE=384 -DMS_HASH_SIZE=2048 \
 		-I$(COMMON)/ms_platform -I/tmp/slide_ms -c $(MS_DIR)/ms.c -o /tmp/slide_ms/ms_render.o
 	$(HOSTCC) -std=gnu99 -g -Wall -no-pie -Wl,--wrap=z_uptime_ticks -Wl,--wrap=z_win_resize -Wl,--wrap=z_win_set_title -I. -I$(COMMON) -DZ_IMG_HAVE_PNG=1 -o /tmp/slide_render_ui \
 		tests/render_ui.c tests/zapi_stubs.c /tmp/slide_ms/ms_render.o $(COMMON)/zpool.c deck.c deckio.c render.c printjob.c edit.c act.c script.c show.c $(COMMON)/zsvg.c $(COMMON)/zpsvg.c \

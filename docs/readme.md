@@ -203,6 +203,12 @@ with [welcome](welcome.md); to program it, [kernel](kernel.md) and
 | [settings\_app](settings_app.md) | `settings` |
 | [keyboard\_app](keyboard_app.md) | `keyboard` |
 | [ask\_app](ask_app.md) | `ask` |
+| [learn](learn.md) | `learn`: a school on the machine (design) |
+| [learn\_ui](learn_ui.md) | learn's screens: the design, and what changed as built |
+| [learn\_format](learn_format.md) | The course format: course.cfg, lessons, data blocks, formulas, learncheck |
+| [learn\_figures](learn_figures.md) | learn's figures: Scheme in a sandbox, controls, time, colour roles, the figure library, how figures are checked |
+| [learn\_bringup](learn_bringup.md) | learn on the board: what went wrong in its first course, and the rules that came out of it |
+| [learn\_authoring](learn_authoring.md) | Writing courses: method, words, accuracy, review, prompts |
 | [irc\_app](irc_app.md) | `irc` |
 | [automate](automate.md) | `automate` |
 | [demo](demo.md) | The scripted demos |

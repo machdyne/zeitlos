@@ -31,6 +31,7 @@ APPS = casino poker roulette blackjack slots craps \
 	clock \
 	cal \
 	read \
+	learn \
 	web \
 	irc \
 	net \

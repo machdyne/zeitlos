@@ -1116,6 +1116,37 @@ TFTP_DIR ?= /srv/tftp
 tftp-dist:
 	@tools/tftp-dist.sh $(TFTP_DIR)
 
+# One app, for trying a change on a running machine: nothing cleaned,
+# nothing flashed, no other app built. The kernel and the other apps are
+# whatever the board has; the ABI check below says when that is not
+# good enough (an interface between flash and the card changed: then
+# `make dev-flash` as before).
+#
+#   $ make app APP=learn                built, as `make apps` builds it
+#   $ make app-tftp APP=learn           and put in the TFTP root
+#   > tget <host> release/dev/learn /apps/learn
+#   > run learn
+#
+# The copy goes under release/, which `zrelease tftp` already needs to
+# own (docs/update.md), so this needs no sudo. Data that changed with
+# the app (a course pack, docs) goes with `zrelease tftp` and `update`,
+# which write only the files that changed.
+APP ?=
+APP_TFTP_DIR ?= $(TFTP_DIR)/release/dev
+
+app:
+	@test -n "$(APP)" -a -d sw/apps/$(APP) || { echo "usage: make app APP=<name> (an app in sw/apps)"; exit 1; }
+	@python3 tools/gen_abi.py --check >/dev/null || { echo "app: the flash/card ABI changed: make dev-flash"; exit 1; }
+	@python3 tools/check_fkeys.py sw
+	$(MAKE) -C sw/apps/$(APP) PREFIX=$(PREFIX)
+
+app-tftp: app
+	@n=$(notdir $(APP)); install -d $(APP_TFTP_DIR) && \
+		cp sw/apps/$(APP)/$$n.bin $(APP_TFTP_DIR)/.$$n.part && mv $(APP_TFTP_DIR)/.$$n.part $(APP_TFTP_DIR)/$$n && \
+		echo "on the board:  tget $$(hostname -I 2>/dev/null | cut -d' ' -f1) release/dev/$$n /apps/$$n"
+
+.PHONY: app app-tftp
+
 # The same into an NFS export, as $(NFS_DIR)/apps/<name>: a machine with
 # the export mounted at /nfs runs the latest build of an app by its bare
 # name (docs/nfs.md). Each file is renamed into place, so a machine

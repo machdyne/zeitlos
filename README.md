@@ -116,6 +116,7 @@ board boots to a desktop with no sdcard ([core apps in flash](#core-apps-in-flas
 | [print](docs/print.md) | Printing: driverless IPP (PDF or PWG raster) or PostScript on port 9100, and PDF or PostScript files |
 | [web](docs/web_app.md) | Web browser: HTTP/1.1 and TLS 1.3, gzip, in-place images and SVG; [Gopher and Gemini](docs/gopher_gemini.md) |
 | [read](docs/read_app.md) | Text reader for files of unlimited size (with rendered Markdown) |
+| [learn](docs/learn.md) | Offline courses |
 | [bench](docs/bench.md) | Virtual parts -- I/O expanders, LEDs, buttons, lamps -- on I2C buses, from a netlist, shown live; with [ls99](docs/ls99.md) virtual Zwölf modules |
 | [hex](docs/hex_editor.md) | Hex editor for files of unlimited size |
 | [draw](docs/draw_app.md) | MacPaint-inspired drawing app |
@@ -400,6 +401,21 @@ $ make clean && make BOARD=obst dev-flash
 
 See [`docs/flash_apps.md`](docs/flash_apps.md) for the archive format
 and the design reasoning.
+
+For iterating on one app, nothing needs cleaning or flashing: build that
+app alone and fetch it over the network.
+
+```
+$ make app-tftp APP=learn                  # builds sw/apps/learn, copies it to the TFTP root
+> tget 192.168.1.100 release/dev/learn /apps/learn
+> run learn
+```
+
+`make app APP=<name>` only builds. Both refuse, and say to use
+`dev-flash`, when the interface between flash and the card has
+changed (docs/update.md, "ABI"). When the data that goes with an app
+changed too (a course pack, docs), `release/zrelease tftp` and then
+`update` on the board write only the files that changed.
 
 ## Developers
 

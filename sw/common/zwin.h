@@ -359,6 +359,12 @@ void z_win_draw_text2(const z_win_t *win, int x, int y, const char *s,
 // by a Z_WM_REDRAW at that size. Z_WM_RESIZE in zwm.h.
 void z_win_resize(const z_win_t *win, uint32_t w, uint32_t h);
 
+// Asks wm to maximize the window (Z_WM_MAXIMIZE in zwm.h): the dock hides
+// while it is maximized. Nothing happens if it already is, or is not
+// resizable. The new size arrives as a Z_WM_WINDOW_RESIZED, as for a
+// double-click on the titlebar.
+void z_win_maximize(const z_win_t *win);
+
 // Tells wm the largest size the window is any use at (outer size; 0 =
 // no limit in that direction). The resize grip and maximize respect it.
 // Z_WM_SET_LIMITS in zwm.h.

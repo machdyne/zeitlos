@@ -1133,6 +1133,17 @@ void z_win_resize(const z_win_t *win, uint32_t w, uint32_t h) {
 
 }
 
+void z_win_maximize(const z_win_t *win) {
+
+	if (win->id < 0) return;
+
+	uint32_t wmpid = resolve_wm_pid();
+	if (!wmpid) return;
+
+	z_msg_new_send(wmpid, Z_WM_MAXIMIZE, 0, z_obj_uint32((uint32_t)win->id));
+
+}
+
 void z_win_set_max_size(const z_win_t *win, uint32_t w, uint32_t h) {
 
 	if (win->id < 0) return;

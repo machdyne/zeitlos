@@ -1291,7 +1291,7 @@ static void handle_key(uint32_t keysym, uint8_t mods) {
 	if (results) {
 		int r;
 		if (keysym == 0x0d) { res_open(); return; }
-		if (keysym == 0x08) { res_goto(); return; }	// Backspace: its folder
+		if (keysym == 0x7f || keysym == 0x08) { res_goto(); return; }	// Backspace (0x7f; Ctrl+H 0x08): its folder
 		r = z_listbox_key(&rlist, keysym);
 		if (r != Z_LIST_NONE) z_listbox_draw(&rlist, false);
 		if (r == Z_LIST_ACTIVATED) res_open();

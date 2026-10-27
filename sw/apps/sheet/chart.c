@@ -209,7 +209,7 @@ void chart_draw(const z_win_t *win, sheet_t *s, const sheet_chart_t *g,
 	int cw = font->w, lh = font->h + 2;
 	rect(c, x, y, w, h, 0);
 
-	if (!g->set) { text(c, x + 4, y + 4, "No chart: select the data, then F10."); return; }
+	if (!g->set) { text(c, x + 4, y + 4, "No chart: select the data, then F5."); return; }
 
 	int r0 = g->r0, r1 = g->r1, c0 = g->c0, c1 = g->c1;
 

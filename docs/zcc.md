@@ -403,12 +403,12 @@ So a card that runs `zcc` needs both:
 
 ```
 /zcc              the compiler, ~80KB
-/data/zcc/libz/libz.bin   the runtime it embeds into what it builds, ~35KB
+/data/zcc/libz/libz.bin   the runtime it embeds into what it builds, ~70KB (73,264 bytes, 2026-10-26)
 /data/zcc/libz/libz.sym   the table it resolves names against
 ```
 
 Embedding the blob in `zcc.bin` as data would remove the second
-requirement at the cost of 35KB on the compiler and a rebuild of `zcc`
+requirement at the cost of about 70KB on the compiler and a rebuild of `zcc`
 whenever libz changes. Not done, because the files are also what makes
 the ABI check meaningful: a mismatched blob is caught and refused
 (`docs/libz.md`), and a blob welded into the compiler cannot mismatch

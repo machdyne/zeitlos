@@ -871,6 +871,13 @@ Maximizing is applied exactly as a resize: new rect, then
 `Z_WM_WINDOW_MOVED`/`_RESIZED` to the owner and a repair of everywhere
 it was and is (`set_rect()`).
 
+An app can open its window maximized: `z_win_maximize()` (`zwin.h`)
+sends `Z_WM_MAXIMIZE` with the window's id, and wm maximizes it as the
+double-click would -- only the window's owner may, and a window already
+maximized, shaded or full screen is left as it is. The person restores
+it the usual way. `learn` does this
+([learn.md](learn.md#windows-and-the-dock)).
+
 The dock hides by moving below the bottom of the screen, where repairs
 never reach it, nothing hits it and its visible region is empty; Alt+Tab
 passes it by and Ctrl+Super+[ / Ctrl+Super+] do nothing until it is back. Closing a
@@ -1734,7 +1741,7 @@ The dock can be on any edge of the screen -- `side bottom | top | left
 | right` in `wm.cfg`, a column of up to 12 on the left or the right --
 with the same groups, paging, keys and dots ([dock.md](dock.md#sides)).
 
-Some of the dock's icons are **groups** (Sound, Tools, Games): a click,
+Some of the dock's icons are **groups** (Desk, Sound, Tools, Games): a click,
 or Enter, shows the group's apps in place of the row, with BACK at its
 start; BACK, Esc or Backspace goes back, and so does launching an app
 from it, once its window shows ([dock.md](dock.md#groups)). Which apps

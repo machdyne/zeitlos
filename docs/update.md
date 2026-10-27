@@ -205,7 +205,7 @@ file has one, and a card has the sets someone chose -- all of them on
 
 | set | programs | and |
 |---|---|---|
-| base | posix, vi, zetta, settings, info, calc, clock, cal, keyboard, jfont, read, ask, update, backup | fonts, `/docs`, the ARK scroll, `zeitlos.cfg`, `net.cfg`, the zdocs pack |
+| base | posix, vi, zetta, settings, info, calc, clock, cal, keyboard, jfont, read, ask, update, backup, learn | fonts, `/docs`, the ARK scroll, `zeitlos.cfg`, `net.cfg`, the zdocs pack, the edu-zeitlos pack (learn's courses about Zeitlos) |
 | work | sheet, slide, print, convert, draw, view, automate | slide's tour and examples, `/media/images`, the demo scripts |
 | audio | play, midi, mmod, track, tts, audiotest | the speech pack, the `.mod` files, `/media/audio` |
 | net | web, irc, netserve, zerdesk, mesh, bbs, fed | `roots.der`, zerdesk's page, the BBS's and fed's data |
@@ -429,7 +429,7 @@ $ release/zrelease tftp --dry-run                 gather and hash, write nothing
 
 It gathers exactly what `zrelease sdcard` puts on a card, from the same
 list (`release/lib/mkfatimg.py`, `plan()`), so the two cannot differ:
-every set, and the zdocs and arklite packs when they are built (a pack
+every set, and the zdocs, arklite and edu-zeitlos packs when they are built (a pack
 not built leaves its files out, with a note; `build` requires them).
 It builds nothing: build the apps first, as for a card. It does not
 sign: TFTP is for development on a LAN.

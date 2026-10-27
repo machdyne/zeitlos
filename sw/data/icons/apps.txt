@@ -37,6 +37,7 @@ info        "System info"
 irc         "Chat"
 keyboard
 kidgames    "Kid games"
+learn       "Learn"
 mausrun     "Maus Run"
 midi        "MIDI player"   audio
 mmod                        gpio

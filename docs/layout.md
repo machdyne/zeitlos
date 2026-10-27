@@ -308,6 +308,8 @@ The complete mapping from the pre-v0.0.6 card. Destinations under
 | `/ask/<pack>/` (arklite, arkmed) | `/data/ask/<pack>/` | ask |
 | `/ark/<pack>/` | `/opt/ark/<pack>/` | |
 | `/ark/scrollr1.md` (the Ark scroll, `sw/data/ark`) | `/opt/ark/scrollr1.md` | |
+| (new) | `/opt/ark/edu-zeitlos/` (learn's courses about Zeitlos) | learn |
+| (new) | `/opt/ark/edu/`, `/opt/ark/edu-*/` (the Ark's course packs) | learn |
 | (new) | `/data/chip8/roms/redoct.ch8` | chip8 |
 | (new) | `/data/slide/tour.zsl` | slide |
 | (new) | `/data/mausrun/levels/01.txt`, … | mausrun |
@@ -364,6 +366,13 @@ removing it means deleting both.
 like any other pack's, and `/docs` stays separate: `/docs` is the plain
 release copy, and `/opt/ark/zdocs/` is the corpus as ask's pack builder
 prepared it (`tools/ask/dist/zdocs.spec`).
+
+**Course packs** (`/opt/ark/edu*/`) are learn's: folders of courses,
+each as its author wrote it (`course.cfg`, numbered folders, lessons),
+a `lib/` of Scheme for their figures, and `pack.cfg`, what was built.
+`edu-zeitlos` comes from this tree (`tools/learn/pack.py`), `edu` and
+its tiers from the Ark. They have no `/data/ask/` half yet
+([learn.md](learn.md#packs)).
 
 **A pack holds no card path.** Its index stores each document's path
 relative to the pack's own folder (`books/00000072.md`), and `ask` puts

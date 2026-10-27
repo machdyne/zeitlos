@@ -34,6 +34,14 @@ by the screen toolkit ([screen_ui.md](screen_ui.md)). (An app that does
 not link it yet still opens the desktop's help box in the window, and
 nothing full screen.)
 
+**A desktop app's figure in colour.** `learn` is a desktop app, but it
+asks for the colour window like a dual app's screen face
+(`Z_WIN_FLAG_COLOR | Z_WIN_FLAG_COLOUR_LATER`, then `Z_WM_COLOR_WANT`)
+while a lesson's figure, at most 320x240, shows whole. The colour
+window covers only the figure; the rest of the window stays the
+desktop's ([learn_figures.md](learn_figures.md#colour)). It is the one
+desktop window that shows colour of its own.
+
 **Full-screen app.** As a screen app full screen, always: started from
 the dock or a shell, it takes the screen and gives it back when it
 ends.
@@ -56,7 +64,7 @@ one bit a pixel, and colour is only ever a program's 320x240 screen.
 
 | Kind | Apps |
 |---|---|
-| Desktop | ask, backup, bench, cal, calc, casino (the lobby), clock, colwin (a test of the colour window), convert, draw, files, gpu3d, gpudemo, hello_win, hex, info, irc, keyboard, logic, mesh, midi, mmod, play, print, read, settings, sheet, slide, term, text, track, web |
+| Desktop | ask, backup, bench, cal, calc, casino (the lobby), clock, colwin (a test of the colour window), convert, draw, files, gpu3d, gpudemo, hello_win, hex, info, irc, keyboard, learn, logic, mesh, midi, mmod, play, print, read, settings, sheet, slide, term, text, track, web |
 | Screen | basic, blocks, bricks, kidgames, pix, snake, space3d |
 | Full-screen | mausrun, planedemo |
 | Dual | blackjack, chess, craps, poker, roulette, slots, view |

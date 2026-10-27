@@ -45,10 +45,11 @@ EXEMPT = ('common/zkbd.c', 'apps/term/term.c', 'common/zapi/zapi.c',
           'apps/hello_win/hello_win.c')
 HOME_OK = ('apps/term/', 'apps/web/', 'apps/files/')
 # the runtime, and the dual apps (docs/app_kinds.md): F10 is their
-# switch to the colour screen
+# switch to the colour screen; learn's lesson figures in the colour
+# window (docs/learn_figures.md, "Colour")
 COLOUR_OK = ('common/games/zarcade_sys.c', 'apps/view/', 'apps/poker/',
              'apps/chess/', 'apps/blackjack/', 'apps/craps/', 'apps/roulette/',
-             'apps/slots/', 'apps/wm/')
+             'apps/slots/', 'apps/wm/', 'apps/learn/')
 
 NUMBERED = re.compile(r'\bZ_KEY_F(1|2|3|4|9|10|11|12)\b')
 HOME = re.compile(r'\bZ_KEY_APP_HOME\b')

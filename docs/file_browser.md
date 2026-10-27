@@ -246,8 +246,10 @@ else that later asks "what opens this?", read the same table.
   "(partial list)", so a file that is on the card but not shown has an
   explanation. `ls` in the posix shell has the same bound and says
   "... (truncated)".
-- **No recursive copy.** Folders can be renamed and moved within a
-  volume (one `FS_RENAME`), but not copied, or moved between volumes.
+- **Folders copy as walks.** A folder copies, moves
+  and deletes with everything in it, as a walk (`zwalk.h`); within
+  a volume a move is one `FS_RENAME`. A folder is not copied over an
+  existing folder of the same name.
 
 ## Mounting
 

@@ -179,7 +179,7 @@ static uint8_t dock_side = DK_SIDE_BOTTOM;
 // names, and the groups' names -- nothing of an icon it does not show.
 // Also where wm.cfg is read to before it is parsed, which is why
 // wm.cfg may be at most this size.
-#define DOCK_STORE_MAX  3584
+#define DOCK_STORE_MAX  4096
 static uint8_t dock_store[DOCK_STORE_MAX];
 static uint32_t dock_store_used;
 static int dock_zic_count;		// entries read, 0 when there was no usable file
@@ -7134,6 +7134,18 @@ static void handle_message(z_msg_t *msg) {
 			    windows[msg->tag].used && windows[msg->tag].owner_pid == msg->from)
 				cw_want[msg->tag] = msg->obj.val.uint32 != 0;
 			break;
+
+		case Z_WM_MAXIMIZE: {
+			// An app that opens maximized (zwm.h): as a double-click on
+			// its titlebar would, if it is not maximized already.
+			if (msg->obj.type != Z_UINT32) break;
+			uint32_t id = msg->obj.val.uint32;
+			if (id >= WM_MAX_WINDOWS || !windows[id].used) break;
+			if (windows[id].owner_pid != msg->from) break;
+			if (windows[id].maxed || windows[id].shaded || windows[id].fulled) break;
+			toggle_maximize((int)id);
+			break;
+		}
 
 		case Z_WM_ACCENT_USED:
 			// A window that tints its content (z_win_accent_rect()):

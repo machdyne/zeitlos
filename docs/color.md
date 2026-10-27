@@ -513,7 +513,7 @@ window draws its own again.
 | | |
 |---|---|
 | desktop colour | wm, while it is on (`system.video.desktop_colour`, Super+F10) and nothing below wants the sheet |
-| a colour window | the focused screen app (`Z_WIN_FLAG_COLOR`) -- **it takes precedence**. wm turns COLWIN off, tells every app it may not tint (the WINDOW rectangle of its region, `Z_WM_CLIP_ACCENT`, zwm.h), and hands the colour window over (`Z_WM_COLOR` 1) once they have acked. A dual app on its desktop face does not want it (`Z_WIN_FLAG_COLOUR_LATER`) until it attaches (`Z_WM_COLOR_WANT`), and a screen app whose colour is off (F10) gives it up the same way |
+| a colour window | the focused screen app (`Z_WIN_FLAG_COLOR`) -- **it takes precedence**. wm turns COLWIN off, tells every app it may not tint (the WINDOW rectangle of its region, `Z_WM_CLIP_ACCENT`, zwm.h), and hands the colour window over (`Z_WM_COLOR` 1) once they have acked. A dual app on its desktop face does not want it (`Z_WIN_FLAG_COLOUR_LATER`) until it attaches (`Z_WM_COLOR_WANT`), and a screen app whose colour is off (F10) gives it up the same way. `learn` wants it the same way while a lesson's figure shows whole, and covers only the figure ([learn_figures.md](learn_figures.md#colour)) |
 | game mode | the game: the GAME write clears EN, and wm keeps off while a grab is held |
 
 Taking it back, `ACC_RETAKE_MS` after the colour window loses the focus

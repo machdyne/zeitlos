@@ -146,6 +146,17 @@
 #define Z_DIR_KIDGAMES_DATA       "/data/kidgames"
 #define Z_PATH_KIDGAMES_SAVE      "/data/kidgames/kidgames.sav"
 
+/* learn (docs/learn.md). Courses come in packs, /opt/ark/edu* -- edu
+ * and its tiers from the Ark library, edu-zeitlos from this tree -- or
+ * in a folder of courses on a stick; learners are learn's own data on
+ * the machine, or a folder on the learner's own stick ("Learners"). */
+#define Z_DIR_ARK_EDU             "/opt/ark/edu"
+#define Z_DIR_ARK_EDU_ZEITLOS     "/opt/ark/edu-zeitlos"
+#define Z_DIR_USB_EDU             "/usb/edu"
+#define Z_DIR_LEARN_DATA          "/data/learn"
+#define Z_DIR_LEARN_LEARNERS      "/data/learn/learners"
+#define Z_DIR_USB_LEARN           "/usb/learn"
+
 /* ls99: one folder per LS-99 placed on a bench (docs/ls99.md) */
 #define Z_DIR_LS99_MODULES        "/data/ls99"
 
