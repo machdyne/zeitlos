@@ -64,6 +64,9 @@
 #define AI_MAGIC_LEXICON    0x31584C5AUL    /* "ZLX1" */
 #define AI_MAGIC_POST       0x31504C5AUL    /* "ZLP1" */
 #define AI_MAGIC_ENCODER    0x31444D5AUL    /* "ZMD1" */
+/* lens.zln: u16 per chunk, BM25's length in tokens. Optional -- a pack
+ * built before it existed is read by scanning chunks.zct instead. */
+#define AI_MAGIC_LENS       0x314E4C5AUL    /* "ZLN1" */
 
 #define AI_HDR_SIZE         32
 
@@ -234,6 +237,33 @@ int  ai_listdirs(const char *path, char *names, int maxnames);
  * one. */
 int  ai_selftest(const char *path);
 
+/* Why the last failed ai_open/ai_read/ai_seek failed, as far as the
+ * shim can tell, so a load error can name the cause.
+ *
+ * The device's fs calls (zfsapp.h) report failure as a bare -1: the
+ * kernel turns fs's -Z_ETIMEDOUT into the same failure as a missing
+ * file. What does tell them apart is the clock: a request that failed
+ * after AI_IO_TIMEOUT_TICKS waited out zfsc's 15 s reply timeout
+ * (ZFS_TIMEOUT_TICKS) and was not refused. Host: always AI_IO_ERROR. */
+enum { AI_IO_OK = 0, AI_IO_ERROR, AI_IO_TIMEOUT };
+extern int ai_io_why;
+#define AI_IO_TIMEOUT_TICKS (732u * 10u)    /* ~10 s, under fs's 15 */
+
+#ifdef ASK_HOST
+/* Host only: the stdio shim counts what it is asked and can inject a
+ * fault, for test/loadtest.c. See aidx.c. */
+typedef struct {
+    uint32_t requests;          /* opens, reads, seeks, closes, stats, lists */
+    uint32_t bytes;             /* read */
+    int      open_now;          /* files open at this moment */
+    uint32_t fail_at;           /* 0: none; else this request fails, */
+    int      fail_how;          /* ...-1 as an error, 0 as end of file */
+    int      fail_how_timeout;  /* an error that is a timeout */
+} ai_host_stats_t;
+extern ai_host_stats_t ai_host;
+void ai_set_root(const char *r);
+#endif
+
 /* -- a loaded pack -- */
 typedef struct {
     char        name[16];       /* "arklite", from the directory name */
@@ -255,9 +285,11 @@ typedef struct {
 
     /* Token count per chunk, for BM25's length normalisation.
      *
-     * Built at load time from chunks.zct's byte lengths, which are
-     * already there for the preview -- so this needs no new file and
-     * no format change. Two bytes a chunk: 20KB for arklite. */
+     * Read from lens.zln, which tools/ask writes for this; for a pack
+     * built before that, computed from chunks.zct's byte lengths --
+     * the same values either way. Two bytes a chunk: 20KB for
+     * arklite. NULL if neither could be read: BM25 then runs without
+     * its length term, and ai_warning() says so. */
     uint16_t   *lens;
     uint32_t    avg_len;        /* mean of lens[], in tokens */
 
@@ -378,11 +410,60 @@ typedef struct {
     int         want;
 } ai_query_t;
 
+/* -- loading, a step at a time --
+ *
+ * docs/responsive.md: the app's main loop never makes a call that can
+ * take much longer than 20 ms. So loading is a state machine (see
+ * "Pack loading" in aidx.c): ai_load_step() does one piece -- normally
+ * one request to fs of at most AI_LOAD_BLOCK bytes -- and returns, and
+ * the app answers its messages in between. ai_load_stop() abandons it
+ * at any point: the packs already loaded stay loaded and usable, and
+ * the half-built one is freed, its file closed.
+ *
+ * A bulk read is one request of up to AI_LOAD_BLOCK, about 30-50 ms at
+ * a slow card's 300-600 KB/s. Smaller would be crisper and cost more
+ * requests; 1KB, which the chunks.zct scan used, was ~245 requests for
+ * a 4,000-chunk pack. */
+#define AI_LOAD_BLOCK       (16 * 1024)
+
+enum { AI_LOAD_RUNNING = 0, AI_LOAD_DONE, AI_LOAD_STOPPED };
+
+typedef struct {
+    int         step;           /* aidx.c's L_* */
+    char        root[32];
+    char        names[AI_PACKS_MAX * 13];
+    int         nnames, next;   /* listed packs, and the one in hand */
+    ai_pack_t  *p;              /* the pack being built, NULL between */
+    ai_file_t   f;              /* the one file open, handle < 0 if none */
+    uint8_t    *dst;            /* bulk read: into here, */
+    uint32_t    want, got;      /* ...this many bytes, this many done */
+    uint8_t    *scratch;        /* chunks.zct scan: one block */
+    uint32_t    have;           /* ...bytes of a record carried over */
+    uint32_t    rec_i;          /* ...next chunk */
+    uint64_t    sum;            /* sum of lens[] so far */
+    uint32_t    enc_n, enc_dim, enc_size;
+    uint32_t    done, total;    /* this pack's bytes, for progress */
+    int         last_pm;        /* progress never goes backwards */
+} ai_load_t;
+
+/* Starts loading every pack under `askroot`; frees what was loaded. */
+void ai_load_begin(ai_load_t *L, const char *askroot);
+/* One piece. AI_LOAD_RUNNING while there is more. */
+int  ai_load_step(ai_load_t *L);
+/* Abandons the load; safe at any point, and after it has ended. */
+void ai_load_stop(ai_load_t *L);
+bool ai_load_busy(const ai_load_t *L);
+/* The pack in hand ("" between packs) and how far it has got, 0..999
+ * -- per pack, from 0 again for each. */
+const char *ai_load_name(const ai_load_t *L);
+int  ai_load_permille(ai_load_t *L);
+
 /* -- API -- */
 
-/* Finds and loads every pack under /ask. Returns how many loaded.
- * `progress` may be NULL; it is called with (done, total) in bytes
- * while reading, which is what the app's startup bar tracks. */
+/* Finds and loads every pack under /ask, in one call -- the steps
+ * above, run to the end. Returns how many loaded. For the host tools;
+ * the app steps the load from its main loop. `progress` may be NULL;
+ * it is called after every step with that pack's (done, total) bytes. */
 int  ai_load_all(const char *askroot,
                  void (*progress)(uint32_t done, uint32_t total,
                                   const char *what));
@@ -391,6 +472,10 @@ int  ai_pack_count(void);
 /* Why the last load found nothing, or why it found fewer packs than
  * are installed. Never NULL. */
 const char *ai_error(void);
+/* Something that loaded but works less well than it should -- BM25
+ * without chunk lengths, a dense pack without its encoder -- as
+ * "<pack>: <what>". "" if nothing. */
+const char *ai_warning(void);
 /* Packs that were present but did not load. Non-zero after a partial
  * load, where ai_pack_count() alone looks healthy. */
 int  ai_failed_count(void);

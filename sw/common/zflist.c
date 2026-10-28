@@ -21,6 +21,8 @@
 #include "zwidget.h"
 #include "zfsapp.h"
 #include "zflist.h"
+#include "zutf8.h"
+#include "zsoc.h"		// Z_TICK_HZ, for type-to-find's timeout
 
 // -- row metrics --
 //
@@ -384,6 +386,8 @@ static bool load_dir(z_flist_t *fl, const char *path, const char *keep) {
 	z_scrollbar_set_value(&fl->sb, fl->top);
 
 	fl->dirty = true;
+	fl->rows_dirty = true;		// another listing: any row may differ
+	fl->find_len = 0;
 
 	return true;
 
@@ -429,6 +433,7 @@ void z_flist_set_geom(z_flist_t *fl, int x, int y, int w, int h) {
 	z_scrollbar_set_range(&fl->sb, total_rows(fl), visible_rows(fl));
 
 	fl->dirty = true;
+	fl->drawn = false;			// moved or resized: paint it whole
 
 }
 
@@ -458,10 +463,108 @@ bool z_flist_refresh(z_flist_t *fl) {
 
 void z_flist_invalidate(z_flist_t *fl) {
 	fl->dirty = true;
+	fl->drawn = false;
 	fl->sb.dirty = true;
 }
 
 // -- drawing --
+
+// Fills the inclusive rect clamped to `c`; nothing if it is empty.
+// z_fb_hw_fill_rect() clamps to the screen only.
+static void fill_clamped(const z_clip_t *c, int x0, int y0, int x1, int y1,
+	int color) {
+	if (x0 < c->x0) x0 = c->x0;
+	if (y0 < c->y0) y0 = c->y0;
+	if (x1 > c->x1) x1 = c->x1;
+	if (y1 > c->y1) y1 = c->y1;
+	if (x1 < x0 || y1 < y0) return;
+	z_fb_hw_fill_rect(x0, y0, x1 - x0 + 1, y1 - y0 + 1, color);
+}
+
+// Paints visible row `r` (0 = the top one shown) whole, in place:
+// icon, name and details as two-colour cells, and the background in
+// the gaps between them, so every pixel of the row is written once and
+// nothing is blanked first. A row past the end is painted background.
+// `untint`: also take the desktop colour off an unselected row -- a
+// whole draw has untinted the list already.
+static void paint_row(const z_flist_t *fl, int y0, const z_clip_t *clip,
+	int r, bool untint) {
+
+	if (clip->x1 < clip->x0) return;
+
+	int row = fl->top + r;
+	int ry = y0 + 1 + r * ROW_H;
+	int ry1 = ry + ROW_H - 1;
+	if (ry > clip->y1) return;
+	if (ry1 > clip->y1) ry1 = clip->y1;
+
+	if (row < 0 || row >= total_rows(fl)) {
+		fill_clamped(clip, clip->x0, ry, clip->x1, ry1, 0);
+		if (untint && z_win_accent_ok())
+			z_win_accent_rect(fl->win, clip->x0, ry, clip->x1, ry1, false);
+		return;
+	}
+
+	bool selected = (row == sel_row(fl));
+	bool updir = has_updir(fl) && row == 0;
+	int entry = row - (has_updir(fl) ? 1 : 0);
+	int fg = selected ? 0 : 1, bg = selected ? 1 : 0;
+	int ty0 = ry + 1, ty1 = ry + z_font_5x8.h;		// the glyph band
+
+	// Above and below the glyph band, the full width.
+	fill_clamped(clip, clip->x0, ry, clip->x1, ry, bg);
+	fill_clamped(clip, clip->x0, ty1 + 1, clip->x1, ry1, bg);
+
+	// The icon is 8px and the row is 10, so it sits one down, on the
+	// same optical line as the text rather than hugging the row's top.
+	int ix = clip->x0 + 1;
+	int nx = clip->x0 + 1 + TEXT_X;
+	fill_clamped(clip, clip->x0, ty0, ix - 1, ty1, bg);
+#ifdef Z_GFX_HW_BLIT
+	// The blit writes both colours, so the cell needs no fill -- unless
+	// it is clipped, which z_fb_draw_icon() answers by drawing nothing.
+	if (ix + Z_ICON_W - 1 > clip->x1 || ty0 + Z_ICON_H - 1 > clip->y1)
+		fill_clamped(clip, ix, ty0, ix + Z_ICON_W - 1, ty1, bg);
+#else
+	// No icon blitter (zgfx.h: a no-op): the cell is background.
+	fill_clamped(clip, ix, ty0, ix + Z_ICON_W - 1, ty1, bg);
+#endif
+	z_fb_draw_icon(ix, ty0, updir ? Z_ICON_UPDIR
+		: (fl->isdir[entry] ? Z_ICON_FOLDER : Z_ICON_FILE), fg, bg, clip);
+	fill_clamped(clip, ix + Z_ICON_W, ty0, nx - 1, ty1, bg);
+
+	const char *name = updir ? ".." : NAME(fl, entry);
+
+	// The details column, right-aligned, when there is one and the
+	// row is wide enough that the name keeps DETAIL_MIN_NAME
+	// characters in front of it. The name is then clipped short of
+	// the column rather than running underneath it.
+	z_clip_t nclip = *clip;
+	int rest = clip->x1;		// last pixel the name's background reaches
+	if (fl->info && !updir) {
+		char det[24];
+		int dw = details_text(&fl->info[entry], det);
+		int dx = clip->x1 - dw * z_font_5x8.w;
+		if (dx - nx >= DETAIL_MIN_NAME * z_font_5x8.w) {
+			z_fb_draw_text2(dx, ty0, det, fg, bg, &z_font_5x8, clip);
+			fill_clamped(clip, dx + dw * z_font_5x8.w, ty0, clip->x1, ty1, bg);
+			nclip.x1 = dx - z_font_5x8.w;
+			rest = dx - 1;
+		}
+	}
+
+	// UTF-8: a long file name can be anything (docs/sdcard.md).
+	int nend = nx + z_utf8_cols(name, strlen(name)) * z_font_5x8.w;
+	if (nend > nclip.x1 + 1) nend = nclip.x1 + 1;
+	z_fb_draw_utf8_2(nx, ty0, name, fg, bg, &z_font_5x8, &nclip);
+	fill_clamped(clip, nend, ty0, rest, ty1, bg);
+
+	// Desktop colour: the selected row tinted (zwin.h,
+	// z_win_accent_rect()), a row that just lost it untinted.
+	if ((selected || untint) && z_win_accent_ok())
+		z_win_accent_rect(fl->win, clip->x0, ry, clip->x1, ry1, selected);
+
+}
 
 void z_flist_draw(z_flist_t *fl, bool force) {
 
@@ -481,7 +584,10 @@ void z_flist_draw(z_flist_t *fl, bool force) {
 	int y1 = y0 + fl->h - 1;
 
 	if (x1 < content.x0 || x0 > content.x1 ||
-		y1 < content.y0 || y0 > content.y1) return;
+		y1 < content.y0 || y0 > content.y1) {
+		fl->drawn = false;
+		return;
+	}
 
 	// Clip rows to the list area MINUS the scrollbar, not to the
 	// whole widget: a long filename allowed to run under the
@@ -498,82 +604,60 @@ void z_flist_draw(z_flist_t *fl, bool force) {
 	if (clip.x1 > content.x1) clip.x1 = content.x1;
 	if (clip.y1 > content.y1) clip.y1 = content.y1;
 
-	// blank the list area, then frame the whole widget
-	if (clip.x1 >= clip.x0 && clip.y1 >= clip.y0)
-		z_fb_hw_fill_rect(clip.x0, clip.y0,
-			clip.x1 - clip.x0 + 1, clip.y1 - clip.y0 + 1, 0);
-
-	z_win_hw_box(fl->win, x0, y0, x1, y1, 1);
-
-	// Desktop colour: the rows untinted, then the selected one tinted
-	// as it is drawn (below; zwin.h, z_win_accent_rect()).
-	if (clip.x1 >= clip.x0 && clip.y1 >= clip.y0 && z_win_accent_ok())
-		z_win_accent_rect(fl->win, clip.x0, clip.y0, clip.x1, clip.y1, false);
-
 	int rows = visible_rows(fl);
 	int total = total_rows(fl);
 	int selrow = sel_row(fl);
 
-	for (int r = 0; r < rows; r++) {
+	if (!force && fl->drawn) {
 
-		int row = fl->top + r;
-		if (row >= total) break;
-
-		int ry = y0 + 1 + r * ROW_H;
-		bool selected = (row == selrow);
-
-		bool updir = has_updir(fl) && row == 0;
-		int entry = row - (has_updir(fl) ? 1 : 0);
-
-		if (selected) {
-			// Solid selection bar, then the text drawn in reverse on
-			// top of it -- see z_fb_draw_text2() (zgfx.h), which
-			// exists for exactly this and costs the same as an
-			// ordinary glyph blit.
-			int sx1 = clip.x1;
-			if (sx1 >= clip.x0)
-				z_fb_hw_fill_rect(clip.x0, ry,
-					sx1 - clip.x0 + 1,
-					ry + ROW_H - 1 <= clip.y1 ? ROW_H : (clip.y1 - ry + 1), 1);
-			if (sx1 >= clip.x0 && z_win_accent_ok())
-				z_win_accent_rect(fl->win, clip.x0, ry, sx1,
-					ry + ROW_H - 1 <= clip.y1 ? ry + ROW_H - 1 : clip.y1, true);
-		}
-
-		int icon = updir ? Z_ICON_UPDIR
-			: (fl->isdir[entry] ? Z_ICON_FOLDER : Z_ICON_FILE);
-
-		// The icon is 8px and the row is 10, so nudge it down one to
-		// sit on the same optical line as the text rather than
-		// hugging the row's top edge.
-		z_fb_draw_icon(clip.x0 + 1, ry + 1, icon,
-			selected ? 0 : 1, selected ? 1 : 0, &clip);
-
-		const char *name = updir ? ".." : NAME(fl, entry);
-
-		// The details column, right-aligned, when there is one and the
-		// row is wide enough that the name keeps DETAIL_MIN_NAME
-		// characters in front of it. The name is then clipped short
-		// of the column rather than running underneath it.
-		z_clip_t nclip = clip;
-		if (fl->info && !updir) {
-			char det[24];
-			int dw = details_text(&fl->info[entry], det);
-			int dx = clip.x1 - dw * z_font_5x8.w;
-			if (dx - (clip.x0 + 1 + TEXT_X) >= DETAIL_MIN_NAME * z_font_5x8.w) {
-				z_fb_draw_text2(dx, ry + 1, det, selected ? 0 : 1,
-					selected ? 1 : 0, &z_font_5x8, &clip);
-				nclip.x1 = dx - z_font_5x8.w;
+		// -- in place: only the rows that change, nothing blanked --
+		//
+		// Every draw used to blank the list and paint it again, and with
+		// no back buffer that showed as a flash on every arrow key and
+		// on every folder opened. A row is now painted whole, once, over
+		// what is there.
+		if (fl->rows_dirty || fl->top != fl->drawn_top) {
+			for (int r = 0; r < rows; r++) {
+				// empty now and empty before: background already
+				if (fl->top + r >= total && fl->drawn_top + r >= fl->drawn_total)
+					continue;
+				paint_row(fl, y0, &clip, r, true);
 			}
+		} else if (selrow != fl->drawn_sel) {
+			int s0 = fl->drawn_sel - fl->top, s1 = selrow - fl->top;
+			if (s0 >= 0 && s0 < rows) paint_row(fl, y0, &clip, s0, true);
+			if (s1 >= 0 && s1 < rows) paint_row(fl, y0, &clip, s1, true);
 		}
 
-		// UTF-8: a long file name can be anything (docs/sdcard.md).
-		z_fb_draw_utf8_2(clip.x0 + 1 + TEXT_X, ry + 1, name,
-			selected ? 0 : 1, selected ? 1 : 0, &z_font_5x8, &nclip);
+		z_scrollbar_draw(&fl->sb, false);
+
+	} else {
+
+		// -- whole: after the window was cleared, or the first time --
+
+		if (clip.x1 >= clip.x0 && clip.y1 >= clip.y0)
+			z_fb_hw_fill_rect(clip.x0, clip.y0,
+				clip.x1 - clip.x0 + 1, clip.y1 - clip.y0 + 1, 0);
+
+		z_win_hw_box(fl->win, x0, y0, x1, y1, 1);
+
+		// Desktop colour: the rows untinted, then the selected one
+		// tinted as it is drawn (paint_row()).
+		if (clip.x1 >= clip.x0 && clip.y1 >= clip.y0 && z_win_accent_ok())
+			z_win_accent_rect(fl->win, clip.x0, clip.y0, clip.x1, clip.y1, false);
+
+		for (int r = 0; r < rows && fl->top + r < total; r++)
+			paint_row(fl, y0, &clip, r, false);
+
+		z_scrollbar_draw(&fl->sb, true);
 
 	}
 
-	z_scrollbar_draw(&fl->sb, true);
+	fl->drawn = true;
+	fl->rows_dirty = false;
+	fl->drawn_top = fl->top;
+	fl->drawn_sel = selrow;
+	fl->drawn_total = total;
 
 }
 
@@ -712,9 +796,12 @@ int z_flist_mouse(z_flist_t *fl, int cx, int cy, uint8_t buttons) {
 	// in zflist.h and z_flist_activated_dir().
 	fl->last_act_dir = z_flist_selected_is_dir(fl);
 
+	// Painted once, in place (z_flist_draw()). This was a forced
+	// draw straight after the click's own one: the list blanked and
+	// was drawn again, a visible flash for every folder opened.
 	if (fl->last_act_dir) {
 		enter_selection(fl);
-		z_flist_draw(fl, true);
+		z_flist_draw(fl, false);
 		fl->last_press_row = -1;	// don't let a third click re-trigger
 	}
 
@@ -766,7 +853,7 @@ int z_flist_key(z_flist_t *fl, uint32_t keysym) {
 			fl->last_act_dir = z_flist_selected_is_dir(fl);
 			if (fl->last_act_dir) {
 				enter_selection(fl);
-				z_flist_draw(fl, true);
+				z_flist_draw(fl, false);	// in place; see z_flist_mouse()
 			}
 			return Z_FLIST_ACTIVATED;
 
@@ -775,7 +862,7 @@ int z_flist_key(z_flist_t *fl, uint32_t keysym) {
 				fl->sel_updir = true;
 				fl->sel = -1;
 				enter_selection(fl);
-				z_flist_draw(fl, true);
+				z_flist_draw(fl, false);
 				return Z_FLIST_SELECTED;
 			}
 			return Z_FLIST_NONE;
@@ -784,6 +871,65 @@ int z_flist_key(z_flist_t *fl, uint32_t keysym) {
 			return Z_FLIST_NONE;
 
 	}
+
+}
+
+// -- type-to-find --
+//
+// z_listbox_key()'s rules (zwidget.c, lb_find()), over the entries:
+// a letter alone goes to the FIRST entry starting with it, or to the
+// next one if the selection already starts with it; letters less than
+// a second apart build a prefix matched from the top. ASCII is folded,
+// other bytes compare as they are. The ".." row is never a match.
+
+#define FIND_TICKS  Z_TICK_HZ
+
+static char fold(char c) {
+	return (c >= 'A' && c <= 'Z') ? (char)(c - 'A' + 'a') : c;
+}
+
+static bool has_prefix(const char *t, const char *p, int n) {
+	for (int i = 0; i < n; i++)
+		if (!t[i] || fold(t[i]) != fold(p[i])) return false;
+	return true;
+}
+
+int z_flist_find_key(z_flist_t *fl, uint32_t keysym) {
+
+	if (!((keysym >= 'a' && keysym <= 'z') || (keysym >= 'A' && keysym <= 'Z') ||
+		(keysym >= '0' && keysym <= '9') || keysym == '_' || keysym == '-' ||
+		keysym == '.' || (keysym == ' ' && fl->find_len > 0)))
+		return Z_FLIST_NONE;
+	if (fl->count <= 0) return Z_FLIST_NONE;
+
+	char c = (char)keysym;
+	uint32_t now = z_uptime_ticks();
+	bool fresh = fl->find_len == 0 || (now - fl->find_tick) > FIND_TICKS;
+	bool same = fl->find_len == 1 && fold(fl->find[0]) == fold(c);
+	int to = -1;
+
+	fl->find_tick = now;
+
+	if (fresh || same) {
+		fl->find[0] = c;
+		fl->find_len = 1;
+		bool on_it = fl->sel >= 0 && has_prefix(NAME(fl, fl->sel), fl->find, 1);
+		int start = on_it ? fl->sel + 1 : 0;
+		for (int i = 0; i < fl->count && to < 0; i++) {
+			int e = (start + i) % fl->count;
+			if (has_prefix(NAME(fl, e), fl->find, 1)) to = e;
+		}
+	} else {
+		if (fl->find_len < sizeof(fl->find)) fl->find[fl->find_len++] = c;
+		for (int e = 0; e < fl->count && to < 0; e++)
+			if (has_prefix(NAME(fl, e), fl->find, fl->find_len)) to = e;
+	}
+
+	if (to < 0 || (to == fl->sel && !fl->sel_updir)) return Z_FLIST_NONE;
+
+	select_row(fl, to + (has_updir(fl) ? 1 : 0));
+	z_flist_draw(fl, false);
+	return Z_FLIST_SELECTED;
 
 }
 

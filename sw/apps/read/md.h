@@ -152,6 +152,20 @@ typedef struct {
 	bool	seen_any;		// any non-blank line yet (front matter must
 							// start at the very top of the file)
 
+	// Lines of front matter so far. Front matter ends at its closing
+	// ---, or after MD_FRONT_MAX lines whatever follows: a line-at-a-
+	// time parser cannot look ahead for the closing line, and a
+	// document that opens with a --- and never closes it would
+	// otherwise be skipped whole -- a blank page, every key scanning
+	// to the end of the file looking for something to draw.
+	uint8_t	front_lines;
+
+	// MD_SKIP lines in a row (see md_parse()). Every MD_SKIP_RUN-th of
+	// them is reported as MD_BLANK instead, so a run of lines that draw
+	// nothing cannot make the reader walk the whole file to fill one
+	// screen.
+	uint8_t	skip_run;
+
 	// The previous block was a list item.
 	//
 	// This exists to resolve one genuine ambiguity: four spaces of
@@ -168,6 +182,10 @@ typedef struct {
 	bool	in_list;
 } md_state_t;
 
+// See md_state_t.front_lines and .skip_run.
+#define MD_FRONT_MAX  64
+#define MD_SKIP_RUN   32
+
 void md_state_init(md_state_t *st);
 
 // Parses one source line.
@@ -177,6 +195,11 @@ void md_state_init(md_state_t *st);
 // ===== or ----- underneath it). A caller that cannot cheaply look
 // ahead may pass NULL and will simply see those as a paragraph
 // followed by a rule.
+//
+// `next` also decides front matter: a --- on the first line opens it
+// only when the line after it looks like `key:` (or is the closing
+// --- already). Anything else is a thematic break, as CommonMark has
+// it -- see md.c.
 //
 // Returns true if `next` was consumed as a setext underline, telling
 // the caller to skip it.

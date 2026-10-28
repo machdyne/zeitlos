@@ -299,7 +299,8 @@ def _size(text):
 def core_budgets(root):
     """The Makefile's CORE_BUDGETS and the rules' inputs:
     {"budgets": {app: (flash, ram)}, "budgets_text": "...",
-     "reserve": bytes, "at_boot": (...), "ram_max": bytes}."""
+     "reserve": bytes, "at_boot": (...), "ram_with": (...),
+     "ram_max": bytes}."""
     lines = _core_make(root)
     budgets = {}
     for item in lines.get("budgets", "").split():
@@ -311,6 +312,7 @@ def core_budgets(root):
             "budgets_text": lines.get("budgets", "").strip(),
             "reserve": _size(lines.get("reserve", "0") or "0"),
             "at_boot": tuple(lines.get("at-boot", "").split()),
+            "ram_with": tuple(lines.get("ram-with", "").split()),
             "ram_max": _size(lines.get("ram-max", "0") or "0"),
             "store": lines.get("store", "").strip()}
 
@@ -339,14 +341,20 @@ def check_core_budgets(root, zar_limit):
     for a in b["at_boot"]:
         if a not in every:
             problems.append("CORE_AT_BOOT has %s, which is not a core app" % a)
+    for a in b["ram_with"]:
+        if a not in every:
+            problems.append("CORE_RAM_WITH has %s, which is not a core app" % a)
+        elif a in b["at_boot"]:
+            problems.append("CORE_RAM_WITH has %s, which is in CORE_AT_BOOT" % a)
+    # The boot set, and the apps that must run beside it (CORE_RAM_WITH:
+    # a terminal and its REPL), on the smallest board.
     boot = sum(budgets[a][1] for a in b["at_boot"] if a in budgets)
-    rest = sorted((budgets[a][1] for a in every
-                   if a in budgets and a not in b["at_boot"]), reverse=True)[:2]
+    rest = [budgets[a][1] for a in b["ram_with"] if a in budgets]
     if b["ram_max"] and boot + sum(rest) > b["ram_max"]:
-        problems.append("the RAM budgets of %s (%d) and the two largest others "
-                        "(%d) are %d, over CORE_RAM_MAX (%d)"
-                        % (" ".join(b["at_boot"]), boot, sum(rest),
-                           boot + sum(rest), b["ram_max"]))
+        problems.append("the RAM budgets of %s (%d) and of %s (%d) are %d, "
+                        "over CORE_RAM_MAX (%d)"
+                        % (" ".join(b["at_boot"]), boot, " ".join(b["ram_with"]),
+                           sum(rest), boot + sum(rest), b["ram_max"]))
     return problems
 
 

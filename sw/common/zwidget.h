@@ -370,6 +370,8 @@ bool z_scrollbar_set_value(z_scrollbar_t *sb, int32_t v);
 
 // draws the scrollbar if it's dirty, or unconditionally with force --
 // same contract, and the same reasoning, as z_widget_draw_all().
+// Paints the trough around the thumb and the thumb, never the trough
+// under it first, so redrawing an unchanged bar changes no pixel.
 void z_scrollbar_draw(z_scrollbar_t *sb, bool force);
 
 // feeds one pointer sample in (content-relative, `buttons` from
@@ -478,6 +480,14 @@ typedef struct {
 	bool			dirty;
 	bool			ring_drawn;	// so a lost focus ring is erased once
 
+	// What the screen holds since the last draw, so a draw that is not
+	// forced repaints only the rows that changed, in place, instead of
+	// blanking the list first (z_listbox_draw()). `drawn` false means
+	// the screen cannot be trusted: the next draw is a full one.
+	bool			drawn;
+	bool			rows_dirty;	// every row's text may have changed
+	int				drawn_top, drawn_sel, drawn_count;
+
 } z_listbox_t;
 
 void z_listbox_init(z_listbox_t *lb, const z_win_t *win);
@@ -489,6 +499,13 @@ void z_listbox_set_geom(z_listbox_t *lb, int x, int y, int w, int h);
 // cleared; the view is scrolled to keep it visible.
 void z_listbox_set_items(z_listbox_t *lb, int count, z_list_label_fn label,
 	void *user);
+
+// The list grew to `count` rows and the rows it had are unchanged --
+// results streaming in (sw/apps/files' find). Same label function.
+// The next z_listbox_draw() paints only the new rows that are in view,
+// and the scrollbar only if its thumb moved. Marks dirty; does not
+// draw, so a caller adding many rows can draw a few times a second.
+void z_listbox_append(z_listbox_t *lb, int count);
 
 // Selects row `index` (-1 clears) and scrolls it into view. Marks dirty;
 // does not draw.
@@ -506,6 +523,15 @@ void z_listbox_set_focus(z_listbox_t *lb, bool focused);
 void z_listbox_invalidate(z_listbox_t *lb);
 
 // Draws if dirty, or always with `force`.
+//
+// `force` (and the first draw after z_listbox_invalidate()) blanks the
+// list and paints it whole: for after the window was cleared. Without
+// it, only what changed is painted, over what is there and without
+// blanking anything first -- the old and new selected rows when the
+// selection moves, new rows after z_listbox_append(), every row (each
+// painted whole, one at a time) when the view scrolled or the items
+// were replaced. There is no back buffer, so a blank-then-draw is
+// visible as a flash; this never shows one.
 void z_listbox_draw(z_listbox_t *lb, bool force);
 
 // True if the point is inside the list, or its scrollbar is mid-drag.

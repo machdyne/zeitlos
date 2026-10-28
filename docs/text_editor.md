@@ -183,6 +183,35 @@ A file is written back in the encoding it was read in, a piece at a
 time through `fs_open_write()` / `fs_write_chunk()` -- again, no second
 copy. New documents are UTF-8.
 
+**A save never puts the file on the card at risk** (October 2026). The
+document is written to `NAME.part`, and only once that is complete and
+closed does it take the file's name (`write_safely()`, the same as
+[draw](draw_app.md)). A full card, a failed write or a power cut during
+the save leaves the old file as it was; before, it left the only copy
+truncated. FAT will not rename onto a name that exists, so the old file
+is deleted just before the rename: if that rename then fails, the
+complete `.part` is kept and the save says so, naming it.
+
+### Opening and saving a large file
+
+Reading a megabyte from the card takes seconds, and writing one about
+the same. Both go a piece at a time (4KB), and every ~20 ms between
+pieces the window's mail is read (`io_pump()`): redraws are served, the
+title says `Opening NAME 40%  (Esc stops)` or `Saving NAME 40%`, and
+**Esc stops an open**. A stopped open leaves an empty, untitled
+document -- the one before was let go when you chose to open another,
+and a file half read is never given the file's name, so it cannot be
+saved over the whole one. Keys, clicks and the wheel are ignored
+meanwhile (the document is not there yet, or is being written); a close
+is kept for after. During an open the page is blank; during a save it
+stays drawn.
+
+CRLF is folded as each piece arrives, a CR that ends a piece waiting
+for the next one's first byte, so there is no second pass over the
+file for it. What is still one call at the end of an open: telling
+UTF-8 from the single-byte encodings (one pass), and converting a
+Latin-9 or Windows-1252 file (rare).
+
 A Latin-9 or Windows-1252 file that has gained a character its encoding
 cannot hold -- a Japanese character, a Polish letter, an em dash in a
 Latin-9 file -- asks before saving:
@@ -195,7 +224,8 @@ Latin-9 file -- asks before saving:
 ### Paste and speech
 
 The clipboard is UTF-8 (the rule in [text_encoding.md](text_encoding.md)),
-so a copy is the selected bytes and a paste inserts them. A paste that
+so a copy is the selected bytes and a paste inserts them. For copies
+over 4KB see "Copy and paste", below. A paste that
 does not all fit is cut at a character boundary, never half-way through
 one. The speech echo sends whole characters.
 
@@ -433,12 +463,24 @@ Moving the caret, or switching between typing and deleting, starts a new
 group. After an undo the caret is where it was before the edit.
 
 **Memory.** An app has 16KB for heap and stack together, so the document
-is never copied: what is kept is the edits -- the last 256, and 6KB of the
-text they inserted or deleted -- in fixed rings (`UNDO_RECORDS`,
-`UNDO_BYTES`). When they fill, the oldest edits are forgotten; undo goes
-back as far as they reach. A single edit larger than 6KB (a big paste)
-cannot be undone, and clears the history before it. Opening or starting
-a document clears it too.
+is never copied: what is kept is the edits, in two rings -- records and
+the text they inserted or deleted. They start in `.bss`, 256 edits and
+6KB (`UNDO_RECORDS`, `UNDO_BYTES`). The first time those would have to
+forget something, they move to the arena, at 2,048 edits and 64KB
+(`UNDO_AR_RECORDS`, `UNDO_AR_BYTES`), and after that they grow for any
+single change larger than they are -- a big cut, a paste, a Replace All
+-- so that it can be undone whole (`undo_room()`, `undo_fits()`). Small
+edits never grow them: when the rings fill, the oldest edits are
+forgotten, so history gets shorter rather than an edit being refused. A
+new or opened document puts them back in `.bss`. A 300KB delete undoes
+and redoes whole (tests/test_edit.c).
+
+On a board with no arena it is as it was: 256 edits and 6KB, and a single
+edit larger than 6KB clears the history before it.
+
+Applying an undo copies each record out of the ring before it calls the
+editor back (`zundo.h`): the rings can be in the arena, which the
+editor's own edits may move.
 
 **The modified mark follows it.** Saving marks the point; undoing or
 redoing back to exactly the saved text clears the `*` from the title,
@@ -467,6 +509,36 @@ text again. ASCII letters match either case, as the posix shell's
 wildcards do; everything else matches exactly, so accented and Japanese
 text is found as typed. A search with no match says so.
 
+A search through a megabyte is about half a second on the board. Every
+8KB it reads the window's mail (`find_from()`, `io_pump()`): redraws are
+served, the title says `Finding TEXT 40%  (Esc stops)` once it has taken
+longer than a moment, and **Esc** stops it, selecting nothing. Counting
+the matches for Replace does the same. Replace All's own pass, which
+changes the document as it goes, is still one call.
+
+## Copy and paste
+
+wm's clipboard holds a page, 4KB, and keeps the start of anything
+longer. A copy of 4KB or less goes there and nowhere else. A longer one
+is also **kept whole in `text`'s arena**, and wm is given its first page,
+cut at a character. A paste in `text` takes the whole copy when wm's
+clipboard still holds exactly that first page -- nothing has been copied
+since, here or in another app -- and wm's clipboard otherwise. Other
+apps get the first 4KB.
+
+**A cut deletes only what it can give back.** A selection over 4KB is cut
+only if the whole of it is kept for the paste and the delete can be
+undone; otherwise it is refused, with a reason, and nothing is deleted.
+Before October 2026 the cut went ahead, the system clipboard kept 4KB,
+the undo log could not hold the rest, and everything past the first 4KB
+was gone. On a board with no arena a copy over 4KB says that a paste
+will give its first 4KB, and a cut over 4KB is refused.
+
+The arena that holds the copy holds the document past 32KB and the undo
+rings too, and the kernel may move it whenever it is resized. A paste of
+the private copy therefore never inserts straight from it: it goes a
+page at a time through the paste's own stack buffer.
+
 ## Replace
 
 **Ctrl+H** asks two things: what to find (the selection, if it is a
@@ -491,9 +563,10 @@ output -- which grows -- never overtakes the text it is read from; the
 same trick as the Latin-9 conversion, the other way round. A Replace All
 that would not fit in 32KB is refused and changes nothing.
 
-The undo log holds 256 edits and 6KB of text (below), and a replacement
-is two edits. When a Replace All is bigger than that it **says so and
-asks first**, and if you go ahead the history is cleared rather than
+A replacement is two edits for the undo log (above), which grows in the
+arena to hold a Replace All whole. Where it cannot -- a board with no
+arena, or no memory left -- a Replace All bigger than the log **says so
+and asks first**, and if you go ahead the history is cleared rather than
 left holding the last part of the replace -- an undo that put back only
 some of the matches would be worse than none.
 
@@ -545,9 +618,10 @@ such a file asks where, every time, until it is saved elsewhere.
 
 ## Size
 
-`text` is a core app, in flash, and its RAM is the binding budget: the
-apps that start at boot plus the two largest others have to fit a 1MB
-board ([flash_apps.md](flash_apps.md), "Budgets"). Replace, Go to line,
+`text` is a core app, in flash, with a flash and a RAM budget of its
+own ([flash_apps.md](flash_apps.md), "Budgets"). Until October 2026 its
+RAM was the binding one: the RAM rule counted the two largest apps
+beside the boot set, and `text` was one; it now counts `term` and `repl`. Replace, Go to line,
 Save As and Windows-1252 were paid for by building with `ZFMT_LITE`
 (stdout without newlib's stdio, [build.md](build.md)): `text` prints
 only whole lines to the console log and never calls `fflush()`. Measured
@@ -574,16 +648,23 @@ only when complete, so a `.SAV` is always a whole document; `T<hash>.INF`
 beside it records which file it is a copy of and the encoding that file
 is saved in. The hash is of the file's path (an 8.3 name,
 `/ram/T1A2B3C4.SAV`), so finding the copy of a file is one open, not a
-search.
+search. A document never saved is filed under its window's process
+instead, `untitled <pid> <serial>` (`as_key()`), so each untitled window
+has a slot of its own.
 
 **Saving deletes the copy**, and so does answering No to "Save changes
 before continuing?". If `text` ends any other way -- a crash, a kill --
 the copy stays, and the next time that file is opened `text` says
 unsaved changes from a session that did not end were kept, and offers
 them back: Yes puts them in the document, still unsaved and still
-belonging to the file and its encoding; No deletes the copy. A document
-that was never saved has one slot of its own, offered when `text` starts
-with no file.
+belonging to the file and its encoding; No deletes the copy. When `text`
+starts with no file it offers the first untitled copy in `/ram` whose
+window is gone -- its process not running, or its pid used again by
+another (`as_orphan()`); a copy left by an older `text`, filed under the
+empty path, counts as gone. One whose window is still open is never
+offered. Before, every untitled document shared one slot: two untitled
+windows wrote over each other's copy, and a second one started offered
+the first one's live copy back -- and deleted it on No.
 
 What it does not cover is the power going off: the RAM disk does not
 survive a reboot, by design. It protects the work from `text` itself,
@@ -591,10 +672,9 @@ not from the machine.
 
 ## Not implemented
 
-Nothing planned for 0.0.7 is left out. Two things that are not done:
-the undo log is fixed at 256 edits and 6KB of text (above), and a
-document that was never saved has a single autosave slot, so two
-untitled windows share it.
+Not done: Replace All's own pass, and the encoding check at the end of an
+open, are each still one call over the whole document (above). Two
+windows editing the same named file still share its autosave slot.
 
 ## Tests
 
@@ -618,8 +698,28 @@ past it, beyond it, Replace All restarting it, undo; 18 is the megabyte
 measurement above, the background wrap counted, and random edits on it;
 19 is autosave: nothing before the pause, pieces after it, an edit
 abandoning a copy, the copy byte for byte with its note, saving deleting
-it, and a copy taken from the arena across the gap. `sw/common/tests/test_undo.c` covers the log on
-its own, including what happens when it fills.
+it, and a copy taken from the arena across the gap; 20 is saving through
+`NAME.part` -- a full card, a rename refused at once, and a rename that
+fails after the old file went; 21 is untitled windows' autosave slots
+and which copies count as orphans; 22 is opening in pieces (CRLF split
+across pieces, a CR ending a piece and one ending the file, Esc stopping
+a 400KB open after a few pieces, a click not stopping it), a save that
+reads its mail and does not take a key typed meanwhile, and Find and the
+match count in slices, stopped by Esc.
+
+`tests/test_edit.c` is the arena on its own, with an arena that **moves
+on every resize and leaves the old place unreadable**, so a pointer kept
+across a resize faults at once: random inserts, deletes, large pastes,
+undo and redo against a model with the line table checked against a full
+rewrap; a 300KB delete undone and redone whole; the same runs with no
+arena and with a 256KB one; many short documents grown past 32KB to make
+it move hundreds of times; and copy, cut and paste over 4KB, including a
+copy held while the document grows (the bug it found: the copy was moved
+after the undo rings, which had already been written over it).
+
+Both run from `make -C sw/apps/text test` (and the top-level `make
+test`). `sw/common/tests/test_undo.c` covers the log on its own,
+including what happens when it fills.
 
 ## Speech
 

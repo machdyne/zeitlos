@@ -251,9 +251,13 @@ driver and measures both: no slice made more than one request, and a
 backup cancelled at each of 431 points let go within 20 slices (the
 most is at the very start, before the first look at the flag).
 
-Still a stall: the first free-space count on a stick whose FSINFO is
-not valid (fs counts the whole FAT, answering nobody), and a dialog,
-during which the job waits.
+Plugging a drive in no longer starts that count: the window takes a
+glance (one listing, an index tail or two), checks the stop flag
+between requests, and gives up after 10 s with "Cannot read the drive"
+([backup.md](backup.md), "Looking at a new drive"). Still a stall: the
+first free-space count, now only when a backup needs the space, on a
+stick whose FSINFO is not valid (fs counts the whole FAT, answering
+nobody), and a dialog, during which the job waits.
 
 Watch adds nothing that waits: fs's notice is a message the loop reads
 with the others, the read of what changed is one small request when a
@@ -286,15 +290,78 @@ has read its `#` line -- the chosen unit's, a lesson a turn. Host test:
 one with Esc, and checks the titles come after.
 
 **The general lesson:** a process that makes a run of fs requests
-without reading its mailbox can lose a reply to a full mailbox and wait
-15 s for it. Any app with slow work and a busy window is open to it;
-the cure is this document's main loop.
+without reading its mailbox could lose a reply to a full mailbox and
+wait 15 s for it. Since October 2026 the kernel keeps room for the
+reply (pointer moves merge, and input cannot take the last 8 slots:
+[messaging.md](messaging.md), "A full mailbox"), so a busy app now
+recovers when its work ends instead of stalling 15 s a request. It
+still does not redraw and cannot be stopped while it is busy: the cure
+for that is this document's main loop.
+
+## read
+
+End, a link to a heading, a scrollbar drag or a launch offset into
+ground not read yet, and Backspace into another document are *finds*
+(`find_step()`, `sw/apps/read/read.c`): a state machine over the sparse
+index's frontier, one block a step, ~20 ms a turn. If one outlasts its
+first slice the title says `Finding... NN%  (Esc stops)`; Esc leaves the
+page, the scrollbar and the history as they were, keeping the index
+built so far. Any other key that moves the page stops the find first.
+
+A failed read is never taken for the end of the file: fs is resynced to
+the buffer's offset, nothing is indexed from it, and the title says
+`read error`. `Z_WM_REDRAW` is acknowledged before any seek is resolved;
+the seek is the main loop's next piece of work. Host test: `make -C
+sw/apps/read test` (`rfind_test.c` runs the real read.c on a fake clock
+that moves only when the file is read, and fails any slice of more than
+~20 ms of reads). See [read_app.md](read_app.md).
+
+## files
+
+A find was already a slice at a time (`zw_step()`, 20 ms a turn); what
+was wrong was the drawing. Each match cleared and redrew the whole
+result list, often dozens of times a slice, with no back buffer. Now a
+match is only recorded, and about five times a second the rows that
+became visible are painted in place (`z_listbox_append()`,
+`sw/common/zwidget.c`), with the scrollbar redrawn only when its thumb
+moves. Arrow keys repaint the two rows that changed, and the status line
+is drawn once, as padded text with both colours, only when its text
+changes. The host test plants a pixel in the list's empty area that any
+clear would erase, and checks every in-place draw against a full
+repaint. See [file_browser.md](file_browser.md).
+
+## ask
+
+Loading a pack is a step state machine (`ai_load_begin/step/stop`,
+`sw/apps/ask/aidx.c`): one fs request of at most 16 KB a step, ~20 ms of
+steps a turn. The status line says `Loading zdocs 40%  Esc stops`, a
+byte percentage per pack; typing works from the first frame and Enter
+queues the question until the packs are in. Between steps the loader
+holds at most one open file and one scratch block, which
+`ai_load_stop()` frees, so Esc keeps the packs already loaded. A pack
+now carries its chunk lengths prebuilt (`lens.zln`, one request), so
+zdocs starts in 13 requests instead of 89; an old pack without it is
+scanned in 16 KB blocks. Host test: `sw/apps/ask/test/loadtest.c` stops
+after every step and fails every request in turn, and checks nothing
+leaks. See [ask_app.md](ask_app.md).
+
+## text
+
+Opening and saving a file go 4KB at a time, and Find and the match
+count for Replace 8KB at a time; every ~20 ms between pieces the
+window's mail is read (`io_pump()`, `sw/apps/text/text.c`): redraws are
+served, the title says how far it has got, and Esc stops an open, a
+Find or a count. During an open the page is blank, and a stopped open
+leaves an empty, untitled document, never half a file under its name.
+Keys and clicks meanwhile are let go; a close is kept for after. Host
+tests: `make -C sw/apps/text test` (tests/utf8.c, section 22).
 
 ## Still to do
 
 | App | The long call | The way out |
 |---|---|---|
 | `view`, `web` | SVG, drawn in one call | a row or element callback in zsvg to yield from |
-| `draw` | a brush or eraser stroke across the whole page in one mouse sample (~50ms) | stamp a bounded number of points per step |
+| `draw` | a brush or eraser stroke across the whole page in one mouse sample (was ~50 ms; now stamped a word at a time, 6-9x fewer writes, to be measured on the board) | stamp a bounded number of points per step |
 | `sheet` | recalculating a 4,096-cell sheet (to be measured on the board) | a coroutine around the evaluator, or a generation-stepped recalc |
 | `learn` | opening a lesson: its file (up to 48 KB) read in one go | the same coroutine, or read in 4 KB turns |
+| `text` | Replace All's own pass, the Ctrl+L counts, and the encoding check at the end of an open: each one call over the document (opening, saving and Find are in pieces since October 2026: [text_editor.md](text_editor.md), "Opening and saving a large file") | Replace All as a two-buffer pass in slices, the counts kept as the document changes |

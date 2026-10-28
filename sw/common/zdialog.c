@@ -673,7 +673,10 @@ static void dlg_accept(char *out, int outlen) {
 		if (z_flist_selected_is_dir(&dlg_flist)) {
 			z_flist_key(&dlg_flist, 0x0d);		// Enter -- navigate
 			path_draw();
-			z_flist_draw(&dlg_flist, true);
+			// Navigating has already painted the new folder
+			// (zflist.c); a forced draw here painted it a second
+			// time, from black -- the flash on every Enter.
+			z_flist_draw(&dlg_flist, false);
 			return;
 		}
 
@@ -1012,7 +1015,9 @@ static void dlg_key(uint32_t keysym, uint8_t mods) {
 	if (dlg.kind == DLG_KIND_SAVE && keysym == '\t') {
 		dlg.field_focus = !dlg.field_focus;
 		field_draw();
-		z_flist_draw(&dlg_flist, true);
+		// The list looks the same with focus or without (only the
+		// field's caret shows it), so only what is dirty, if any.
+		z_flist_draw(&dlg_flist, false);
 		return;
 	}
 

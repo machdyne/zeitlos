@@ -68,6 +68,7 @@
 #include "../../common/zconvert.h"
 #include "../../common/zwalk.h"
 #include "../../common/zpaths.h"
+#include "../../common/zutf8.h"	// the path line measures names in columns
 
 // Sized so the list shows a useful number of rows and the eight
 // buttons fit across the bottom without crowding -- that second one
@@ -147,6 +148,14 @@ static uint32_t *res_off;
 static char *res_pool;
 static int res_n, res_max;
 static uint32_t res_used, res_cap;
+static bool res_full;				// the results filled: the find was stopped
+static int res_shown;				// rows the list has been told about
+static uint32_t res_drawn;			// tick they were last drawn
+
+// A copy of one file knows how much there is to copy, and the line
+// shows a bar and a percentage; a folder's total is not known until it
+// has been walked, so a folder copy counts files and bytes instead.
+static uint32_t copy_total;
 
 static void walk_release(void);
 
@@ -255,6 +264,72 @@ static void layout(void) {
 
 }
 
+// -- the line above the list --
+//
+// The path, or a walk's progress. Drawn in ONE pass: the text as two-
+// colour cells padded with spaces to the width of the line, so every
+// pixel is written once. It used to be a fill of the strip and then the
+// text over it, and with no back buffer that blinked -- five times a
+// second while a walk counted, and on every arrow key, because the path
+// was drawn again whether or not it had changed. Now it is drawn only
+// when the text differs from what is on the screen (line_shown), or
+// after the window was cleared (line_forget()).
+
+static int cat(char *d, int n, int cap, const char *s);
+
+static char line_shown[Z_FLIST_PATH_MAX + 64];
+static bool line_valid;
+
+static void line_forget(void) { line_valid = false; }
+
+// The strip's rect, absolute; false if the window is too narrow.
+static bool line_rect(z_clip_t *clip) {
+	z_clip_t content;
+	z_win_content_rect(&win, &content);
+	int cw = z_win_content_w(&win);
+	clip->x0 = content.x0 + MARGIN;
+	clip->y0 = content.y0 + MARGIN;
+	clip->x1 = content.x0 + cw - MARGIN - 1;
+	clip->y1 = clip->y0 + z_font_5x8.h - 1;
+	return clip->x1 >= clip->x0;
+}
+
+// The strip's width in characters, less `reserve` pixels at its right.
+static int line_cols(int reserve) {
+	int avail = z_win_content_w(&win) - 2 * MARGIN - reserve;
+	return avail > 0 ? avail / z_font_5x8.w : 0;
+}
+
+// `text` (UTF-8) on the line, padded; `reserve` pixels at the right are
+// left alone (a progress bar is drawn there).
+static void line_draw(const char *text, int reserve) {
+
+	z_clip_t clip;
+	if (!line_rect(&clip)) return;
+	if (line_valid && !strcmp(text, line_shown)) return;
+
+	int cols = line_cols(reserve);
+	char padded[sizeof(line_shown) + 160];
+	int n = cat(padded, 0, (int)sizeof(padded), text);
+	int used = z_utf8_cols(padded, (size_t)n);
+	while (used < cols && n < (int)sizeof(padded) - 1) { padded[n++] = ' '; used++; }
+	padded[n] = 0;
+
+	z_clip_t tclip = clip;
+	tclip.x1 = clip.x1 - reserve;
+	if (tclip.x1 < tclip.x0) return;
+	z_fb_draw_utf8_2(clip.x0, clip.y0, padded, 1, 0, &z_font_5x8, &tclip);
+
+	// the few pixels a whole character does not cover, at the right
+	int xe = clip.x0 + cols * z_font_5x8.w;
+	if (xe <= tclip.x1)
+		z_fb_hw_fill_rect(xe, clip.y0, tclip.x1 - xe + 1, z_font_5x8.h, 0);
+
+	cat(line_shown, 0, (int)sizeof(line_shown), text);
+	line_valid = true;
+
+}
+
 // The current directory, above the list. Elided from the LEFT when it
 // doesn't fit: the interesting end of a path is the last component.
 static void status_draw(void);
@@ -263,11 +338,7 @@ static void path_draw(void) {
 
 	if (walking || results) { status_draw(); return; }
 
-	z_clip_t content;
-	z_win_content_rect(&win, &content);
-
-	int cw = z_win_content_w(&win);
-	int avail = cw - 2 * MARGIN;
+	int avail = z_win_content_w(&win) - 2 * MARGIN;
 	if (avail <= 0) return;
 
 	// A directory with more than Z_FLIST_MAX entries (or longer names
@@ -283,28 +354,21 @@ static void path_draw(void) {
 
 	char shown[Z_FLIST_PATH_MAX + 24];
 
-	if (len <= maxch) {
+	if (z_utf8_cols(p, (size_t)len) <= maxch) {
 		memcpy(shown, p, (size_t)len + 1);
 	} else if (maxch > 3) {
+		// the end that fits, starting on a character, not inside one
+		const char *t = p + len;
+		while (t > p && z_utf8_cols(t - 1, (size_t)(p + len - t + 1)) <= maxch - 3) t--;
+		while (*t && ((uint8_t)*t & 0xC0) == 0x80) t++;
 		shown[0] = shown[1] = shown[2] = '.';
-		memcpy(shown + 3, p + len - (maxch - 3), (size_t)(maxch - 3) + 1);
+		memcpy(shown + 3, t, strlen(t) + 1);
 	} else {
 		shown[0] = 0;
 	}
 	strcat(shown, more);
 
-	z_clip_t clip;
-	clip.x0 = content.x0 + MARGIN;
-	clip.y0 = content.y0 + MARGIN;
-	clip.x1 = content.x0 + cw - MARGIN - 1;
-	clip.y1 = clip.y0 + z_font_5x8.h - 1;
-
-	if (clip.x1 < clip.x0) return;
-
-	z_fb_hw_fill_rect(clip.x0, clip.y0,
-		clip.x1 - clip.x0 + 1, z_font_5x8.h, 0);
-
-	z_fb_draw_text(clip.x0, clip.y0, shown, 1, &z_font_5x8, &clip);
+	line_draw(shown, 0);
 
 }
 
@@ -341,6 +405,7 @@ static void repaint(void) {
 				Z_WIN_GRIP_INSET, 0);
 	}
 
+	line_forget();
 	path_draw();
 
 	if (results) {
@@ -354,6 +419,37 @@ static void repaint(void) {
 	z_widget_draw_all(&wset, true);
 	draw_list_focus();
 
+}
+
+// The rest of this file draws only what changed, rather than calling
+// repaint(): with no back buffer, every clear-then-draw is a visible
+// flash, and repaint() clears the whole window. repaint() is for a
+// Z_WM_REDRAW, after which nothing on the window can be trusted.
+
+// The folder was read again, or another one opened: its rows (painted
+// in place, zflist.h), the path line if it says something else, and
+// the buttons whose state changed.
+static void list_shown(void) {
+	path_draw();
+	z_flist_draw(&flist, false);
+	z_widget_draw_all(&wset, false);
+	draw_list_focus();
+}
+
+// The results took the folder's place, or the folder theirs: that list
+// is painted whole -- what was there is another list -- and around it
+// only what changed.
+static void list_swapped(void) {
+	if (results) {
+		z_listbox_invalidate(&rlist);
+		z_listbox_draw(&rlist, false);
+	} else {
+		z_flist_invalidate(&flist);
+		z_flist_draw(&flist, false);
+	}
+	path_draw();
+	z_widget_draw_all(&wset, false);
+	draw_list_focus();
 }
 
 // ---------------------------------------------------------------
@@ -413,10 +509,11 @@ static void do_open(void) {
 
 	// A directory opens by descending into it, which is what the
 	// widget's own Enter handling already does.
+	// z_flist_key() has painted the new folder, in place; drawing it
+	// again here, forced, blanked it and painted it a second time.
 	if (z_flist_selected_is_dir(&flist)) {
 		z_flist_key(&flist, 0x0d);
 		path_draw();
-		z_flist_draw(&flist, true);
 		return;
 	}
 
@@ -464,7 +561,7 @@ static void do_mkdir(void) {
 	}
 
 	z_flist_refresh(&flist);
-	repaint();
+	list_shown();
 
 }
 
@@ -504,7 +601,7 @@ static void fail_dialog(const char *title, int err) {
 // if it is still here (a renamed file stays under the cursor).
 static void reload(const char *keep) {
 	z_flist_refresh_select(&flist, keep);
-	repaint();
+	list_shown();
 }
 
 // F2, or the Rename button. The new name stays in this directory --
@@ -603,6 +700,7 @@ static void do_copy_move(bool move) {
 	}
 
 	cat(walk_from, 0, (int)sizeof(walk_from), from);
+	copy_total = (!isdir && fs_stat(from, &fi)) ? fi.size : 0;
 	if (walk_begin(move ? WK_MOVE : WK_COPY, ZW_COPY, from, to)) {
 		const char *b = strrchr(to, '/');
 		// the copy's own name, when it lands in this folder
@@ -647,7 +745,7 @@ static void do_delete(void) {
 	}
 
 	z_flist_refresh(&flist);
-	repaint();
+	list_shown();
 
 }
 
@@ -818,12 +916,46 @@ static void walk_release(void) {
 
 // Buttons for the state we are in: while a walk runs only Find, as
 // Stop; with results up, Open and Find.
+//
+// Only a button whose state changed is marked for drawing: drawing one
+// fills its body and then writes its label, which blinks.
 static void buttons_update(void) {
-	for (int i = 0; i < BTN_COUNT; i++)
-		widgets[i].enabled = !walking && (!results || i == BTN_OPEN || i == BTN_FIND);
-	widgets[BTN_FIND].enabled = true;
-	widgets[BTN_FIND].label = walking ? "Stop" : "Find";
-	z_widget_invalidate(&wset);
+	for (int i = 0; i < BTN_COUNT; i++) {
+		bool en = i == BTN_FIND || (!walking && (!results || i == BTN_OPEN));
+		const char *label = i == BTN_FIND ? (walking ? "Stop" : "Find") : btn_labels[i];
+		if (widgets[i].enabled != en || widgets[i].label != label) {
+			widgets[i].enabled = en;
+			widgets[i].label = label;
+			widgets[i].dirty = true;
+		}
+	}
+}
+
+// A copy's progress bar, at the right of the line: a frame and the done
+// part in ink, the rest background. Fills only, not z_win_hw_box(): the
+// line rasterizer does not order against the blitter that draws the
+// text beside it (docs/widgets.md). Each pixel is written once a draw,
+// and the same colour as before except where the bar grew.
+#define PROG_W  60
+
+static int bar_kept;
+
+static void progress_draw(uint32_t pct) {
+	z_clip_t clip;
+	if (!line_rect(&clip)) return;
+	int x1 = clip.x1, x0 = x1 - PROG_W + 1, y0 = clip.y0 + 1, y1 = clip.y1 - 1;
+	if (x0 < clip.x0 + 2 * z_font_5x8.w) return;
+	int pad = 2 * z_font_5x8.w;
+	z_fb_hw_fill_rect(x0 - pad, clip.y0, pad, z_font_5x8.h, 0);		// the gap before it
+	z_fb_hw_fill_rect(x0, clip.y0, PROG_W, 1, 0);
+	z_fb_hw_fill_rect(x0, clip.y1, PROG_W, 1, 0);
+	z_fb_hw_fill_rect(x0, y0, PROG_W, 1, 1);			// frame
+	z_fb_hw_fill_rect(x0, y1, PROG_W, 1, 1);
+	z_fb_hw_fill_rect(x0, y0, 1, y1 - y0 + 1, 1);
+	z_fb_hw_fill_rect(x1, y0, 1, y1 - y0 + 1, 1);
+	int inner = PROG_W - 2, done = (int)((uint32_t)inner * pct / 100u);
+	if (done > 0) z_fb_hw_fill_rect(x0 + 1, y0 + 1, done, y1 - y0 - 1, 1);
+	if (done < inner) z_fb_hw_fill_rect(x0 + 1 + done, y0 + 1, inner - done, y1 - y0 - 1, 0);
 }
 
 // The line above the list, while a walk runs or results are up.
@@ -832,6 +964,8 @@ static void status_draw(void) {
 	char line[120];
 	int n = 0;
 	const int cap = (int)sizeof(line);
+
+	int bar = 0;		// pixels kept at the right for a progress bar
 
 	switch (walk_kind) {
 	case WK_FIND:
@@ -845,16 +979,36 @@ static void status_draw(void) {
 		} else {
 			n = cat(line, n, cap, " in ");
 			n = cat(line, n, cap, find_root);
-			if (walk.truncated || res_n >= res_max) n = cat(line, n, cap, " (not all)");
+			if (res_full) {
+				// said at once, and the find stopped there: going on
+				// would only look at files it had nowhere to put
+				n = cat(line, n, cap, " (first ");
+				n = cat_u(line, n, cap, (uint32_t)res_n);
+				n = cat(line, n, cap, " matches)");
+			} else if (walk.truncated) {
+				n = cat(line, n, cap, " (not all)");
+			}
 		}
 		break;
 	case WK_COPY:
 	case WK_MOVE:
 		n = cat(line, n, cap, walk.op == ZW_DELETE ? "Removing the source... " :
 			walk_kind == WK_MOVE ? "Moving... " : "Copying... ");
-		n = cat_u(line, n, cap, walk.files);
-		n = cat(line, n, cap, " files, ");
-		n = cat_size(line, n, cap, walk.bytes);
+		if (copy_total && walk.op != ZW_DELETE) {
+			uint32_t b = walk.bytes > copy_total ? copy_total : walk.bytes;
+			// in two steps: bytes * 100 overflows past 40MB
+			uint32_t pct = copy_total >= 100u ? b / (copy_total / 100u) : 100u * b / copy_total;
+			if (pct > 100) pct = 100;
+			n = cat_u(line, n, cap, pct);
+			n = cat(line, n, cap, "% of ");
+			n = cat_size(line, n, cap, copy_total);
+			bar = PROG_W + 2 * z_font_5x8.w;
+			progress_draw(pct);
+		} else {
+			n = cat_u(line, n, cap, walk.files);
+			n = cat(line, n, cap, " files, ");
+			n = cat_size(line, n, cap, walk.bytes);
+		}
 		break;
 	case WK_DELETE:
 		n = cat(line, n, cap, "Deleting... ");
@@ -866,16 +1020,11 @@ static void status_draw(void) {
 	}
 	n = cat(line, n, cap, walking ? "  (Esc stops)" : "  (Esc: back)");
 
-	z_clip_t content, clip;
-	z_win_content_rect(&win, &content);
-	int cw = z_win_content_w(&win);
-	clip.x0 = content.x0 + MARGIN;
-	clip.y0 = content.y0 + MARGIN;
-	clip.x1 = content.x0 + cw - MARGIN - 1;
-	clip.y1 = clip.y0 + z_font_5x8.h - 1;
-	if (clip.x1 < clip.x0) return;
-	z_fb_hw_fill_rect(clip.x0, clip.y0, clip.x1 - clip.x0 + 1, z_font_5x8.h, 0);
-	z_fb_draw_text(clip.x0, clip.y0, line, 1, &z_font_5x8, &clip);
+	// A bar that is gone (the copy finished, a move went on to delete)
+	// is not drawn over by the text, so the line forgets itself and is
+	// written whole, once.
+	if (bar != bar_kept) { line_forget(); bar_kept = bar; }
+	line_draw(line, bar);
 	walk_drawn = z_uptime_ticks();
 
 }
@@ -885,8 +1034,10 @@ static const char *res_label(void *user, int i) {
 	return (i >= 0 && i < res_n) ? res_pool + res_off[i] : "";
 }
 
-// A match: its path below find_root, into the results.
-static void res_add(const char *path) {
+// A match: its path below find_root, into the results. Recorded only:
+// the list hears of it in res_show(), a few times a second. False when
+// there is no room for it.
+static bool res_add(const char *path) {
 
 	int skip = (int)strlen(find_root);
 	if (skip > 1) skip++;			// and the '/'
@@ -894,21 +1045,36 @@ static void res_add(const char *path) {
 	const char *rel = path + skip;
 	uint32_t l = (uint32_t)strlen(rel) + 1;
 
-	if (res_n >= res_max || res_used + l > res_cap) return;
+	if (res_n >= res_max || res_used + l > res_cap) return false;
 	memcpy(res_pool + res_used, rel, l);
 	res_off[res_n++] = res_used;
 	res_used += l;
-	z_listbox_set_items(&rlist, res_n, res_label, NULL);
-	if (res_n == 1) z_listbox_select(&rlist, 0);
+	return true;
 
+}
+
+// The results found since the last time, into the list: only the new
+// rows that are in view are painted, in place (z_listbox_append()).
+// This used to set the list's items and draw it for every hit -- which
+// cleared the whole list, tinted it and drew every row and the
+// scrollbar again, dozens of times in one 20ms slice: the list
+// flashed for as long as results came in.
+static void res_show(void) {
+	if (res_shown == res_n) return;
+	z_listbox_append(&rlist, res_n);
+	if (res_shown == 0) z_listbox_select(&rlist, 0);
+	res_shown = res_n;
+	z_listbox_draw(&rlist, false);
+	res_drawn = z_uptime_ticks();
 }
 
 static void results_leave(void) {
 	results = false;
 	z_listbox_set_items(&rlist, 0, res_label, NULL);	// its names go with the memory
+	res_shown = 0;
 	if (!walking) { walk_kind = WK_NONE; walk_release(); }
 	buttons_update();
-	repaint();
+	list_swapped();
 }
 
 // The end of a walk, by itself or stopped.
@@ -921,9 +1087,13 @@ static void walk_finish(int r, bool stopped) {
 
 	walking = false;
 
+	// The list stays as it is: what is left is the rows found since it
+	// was last drawn, the line, and the Stop button going back to Find.
 	if (kind == WK_FIND) {
+		res_show();
 		buttons_update();
-		repaint();
+		z_widget_draw_all(&wset, false);
+		status_draw();
 		return;
 	}
 
@@ -934,7 +1104,7 @@ static void walk_finish(int r, bool stopped) {
 			walk.bytes = bytes;
 			walk.files = files;
 			walking = true;
-			path_draw();
+			status_draw();
 			return;
 		}
 		r = ZW_FAIL;
@@ -979,15 +1149,27 @@ static void walk_pump(void) {
 	while (walking && z_uptime_ticks() - t0 < Z_TICK_HZ / 50) {
 		int r = zw_step(&walk);
 		if (r == ZW_HIT) {
-			res_add(walk.hit);
-			z_listbox_draw(&rlist, false);
+			if (!res_add(walk.hit)) {
+				// No room for more. The walk stops here rather than
+				// going on looking at files it can only drop, and the
+				// line says so (status_draw()).
+				res_full = true;
+				zw_cancel(&walk);
+				walk_finish(ZW_DONE, false);
+				return;
+			}
 		} else if (r == ZW_DONE || r == ZW_FAIL) {
 			walk_finish(r, false);
 			return;
 		}
 	}
 
-	if (walking && z_uptime_ticks() - walk_drawn > Z_TICK_HZ / 5) status_draw();
+	// A few times a second, not per hit: new rows, and the line. The
+	// first rows show at once.
+	uint32_t now = z_uptime_ticks();
+	if (walking && (now - res_drawn >= Z_TICK_HZ / 5 || (res_shown == 0 && res_n)))
+		res_show();
+	if (walking && now - walk_drawn > Z_TICK_HZ / 5) status_draw();
 
 }
 
@@ -1017,6 +1199,7 @@ static bool walk_begin(int kind, int op, const char *src, const char *dst) {
 	walking = true;
 	walk_drawn = 0;
 	walk_sel[0] = 0;
+	if (kind != WK_COPY && kind != WK_MOVE) copy_total = 0;
 
 	if (kind == WK_FIND) {
 		uint8_t *r = walk_mem + wcap;
@@ -1026,16 +1209,28 @@ static bool walk_begin(int kind, int op, const char *src, const char *dst) {
 		res_pool = (char *)(r + (uint32_t)res_max * 4u);
 		res_cap = rcap - (uint32_t)res_max * 4u;
 		res_n = 0;
+		res_shown = 0;
+		res_full = false;
 		res_used = 0;
+		res_drawn = z_uptime_ticks();
 		z_listbox_set_items(&rlist, 0, res_label, NULL);
 		z_listbox_select(&rlist, -1);
+		bool was = results;
 		results = true;
 		focus = FOCUS_LIST;
 		z_widget_focus_set(&wset, -1);
+		buttons_update();
+		// The results take the folder's place (painted whole, once);
+		// a new find over old results empties the list in place.
+		if (was) { z_listbox_draw(&rlist, false); status_draw(); z_widget_draw_all(&wset, false); }
+		else list_swapped();
+		return true;
 	}
 
+	// A copy or delete: the folder stays, the line and buttons change.
 	buttons_update();
-	repaint();
+	z_widget_draw_all(&wset, false);
+	status_draw();
 	return true;
 
 }
@@ -1067,12 +1262,16 @@ static void do_find(void) {
 	name[nn] = 0;
 	text[tn] = 0;
 
-	// a new find replaces the results up now
-	if (walk_kind == WK_FIND) { walk_kind = WK_NONE; results = false; walk_release(); }
+	// A new find replaces the results up now -- in the same list, so
+	// `results` stays true and walk_begin() empties it in place rather
+	// than swapping the folder in and back out.
+	if (walk_kind == WK_FIND) { walk_kind = WK_NONE; walk_release(); }
 
 	cat(find_root, 0, (int)sizeof(find_root), flist.path);
 	if (walk_begin(WK_FIND, ZW_FIND, flist.path, NULL))
 		zw_find_set(&walk, name, text);
+	else if (results)
+		results_leave();		// the old results' memory is gone
 
 }
 
@@ -1111,9 +1310,11 @@ static void res_goto(void) {
 	if (slash == path) slash[1] = 0;
 	else *slash = 0;
 	walk_stop();
-	z_flist_chdir(&flist, path);
+	// Read once, with the file selected, then shown once. This was a
+	// chdir, the list painted, and a reload painting it again.
+	cat(flist.path, 0, (int)sizeof(flist.path), path);
+	z_flist_refresh_select(&flist, name);
 	results_leave();
-	reload(name);
 }
 
 // ---------------------------------------------------------------
@@ -1211,6 +1412,7 @@ static void handle_key(uint32_t keysym, uint8_t mods) {
 			"Browse, open and manage files.\n\n"
 			"Enter\tOpen the selection\n"
 			"Backspace\tUp a folder\n"
+			"Letters\tJump to a name\n"
 			"F2\tRename\n"
 			"Delete\tDelete (asks first)\n"
 			"F3, Ctrl+F\tFind by name, \"text\" inside, or both\n"
@@ -1241,16 +1443,16 @@ static void handle_key(uint32_t keysym, uint8_t mods) {
 	// find or results put away.
 	if (keysym == Z_KEY_APP_HOME) {
 		if (walking) walk_stop();
-		if (results) results_leave();
 		z_flist_chdir(&flist, start_dir);
-		repaint();
+		if (results) results_leave();
+		else list_shown();
 		return;
 	}
 
 	// F5: the folder read again, the selection kept where it can be.
 	if (keysym == Z_KEY_F5 && !results) {
 		z_flist_refresh(&flist);
-		repaint();
+		list_shown();
 		return;
 	}
 
@@ -1313,7 +1515,10 @@ static void handle_key(uint32_t keysym, uint8_t mods) {
 	if (keysym == Z_KEY_RENAME) { do_rename(); draw_list_focus(); return; }
 	if (keysym == Z_KEY_DELETE) { do_delete(); draw_list_focus(); return; }
 
+	// The widget paints only the rows that changed (zflist.h); the path
+	// line is drawn again only if it now says something else (line_draw()).
 	int r = z_flist_key(&flist, keysym);
+	if (r == Z_FLIST_NONE) r = z_flist_find_key(&flist, keysym);	// type a name
 
 	if (r != Z_FLIST_NONE) path_draw();
 
@@ -1503,9 +1708,6 @@ int main(void) {
 		// again -- and no waiting while it has work.
 		if (walking) { walk_pump(); continue; }
 
-		for (volatile int i = 0; i < 200; i++);	// light throttle
-
-	
 		/* Yield. This loop used to spin, so the app was RUNNABLE
 		 * forever and took a full scheduler share from whatever was
 		 * in the foreground -- see docs/app_runtime.md. a file browser only moves when you tell it to. */

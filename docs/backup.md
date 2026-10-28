@@ -132,6 +132,46 @@ one button that matters. Only the buttons that can be pressed are there:
 | after Remove drive | You can pull out the drive now | Settings |
 | it failed | Not backed up (and why, the engine's last line) | as backed up |
 | no clock | Last backup: no. 12 | as backed up |
+| a drive coming up | Starting the drive... ("A new drive can take a few seconds") | Settings |
+| a drive that is not FAT | Drive found but not readable ("Not FAT32? ...") | Settings |
+| no answer in 10 s | Cannot read the drive ("It did not answer: press F5 to try again") | Settings |
+
+### Looking at a new drive
+
+When a drive appears, the window takes a **glance** (`bk_glance()`,
+`bk.c`), not the full summary: one listing of backup's folder, then the
+last line of the newest index or two. That is enough for the headline.
+It does not ask for the drive's free space. On a stick whose free-space
+record (FSINFO) is not valid, fs counts the whole FAT to answer that --
+about 20 s on 32 GB, answering nobody meanwhile -- and that count on
+every plug-in was what kept "Looking at the drive..." on the screen.
+The free space is shown once a backup has counted it, because a backup
+needs it anyway; until then the line leaves it out.
+
+The glance checks the stop flag between every two requests and has a
+10 s deadline, after which the window says **Cannot read the drive**,
+with F5 to look again. F5 keeps a good summary on the screen while it
+looks; a second look that fails does not replace it.
+
+A plug or an unplug counts only when two looks in a row agree, so a
+drive that drops off for a moment while it starts does not flip the
+window back and forth. fs answers a stat of `/usb` with "being started"
+while `usb` is still bringing a drive up, and "cannot be used" for one
+that never became ready or is not FAT; the window says **Starting the
+drive...** or **Drive found but not readable** for those, rather than
+"Plug in the backup drive".
+
+### No flashing
+
+The window used to wipe its whole status area and redraw it eight times
+a second while any job ran, the glance included, and once a second
+during the watch countdown. Each status line and the bar are now drawn
+only when their text changes, in one pass with the background (no clear
+first); the 8 Hz repaint runs only during a backup; and the buttons are
+redrawn only when the set of buttons changes. Idle, the loop waits in
+`z_msg_recv()` (a quarter second); while a job runs it takes a one-tick
+receive every ~50 ms. The render test checks that nothing is redrawn
+when nothing changed.
 
 A watch backup does not take the window over: the watch's line says
 "Backing up ch3.txt now", and the rest stays as it was. Back up now
@@ -414,10 +454,11 @@ stored (3.3K over its 36K budget) and from 76,192 to 86,800 in RAM
 (10.6K over 75K), and `fs` is started at boot, where the RAM rule is at
 1,024 of 1,024 KB. exFAT is also Microsoft's, which needs a legal look
 before shipping. Left out for now. fs does not mount such a drive (its
-console line: `fs: usb storage: mount failed`), and backup, which
-cannot tell an unmounted drive from no drive without taking the drive's
-events from fs, says both: "is the backup drive plugged in? (One that
-is not FAT -- exFAT, NTFS -- is not mounted ...)".
+console line: `fs: usb storage: mount failed`). fs now tells backup so:
+a stat of `/usb` answers "cannot be used", and the window says **Drive
+found but not readable** ("Not FAT32? (exFAT and NTFS cannot be read
+here)") instead of asking for a drive. A failed mount is tried once
+more after 5 s, for a drive that was not quite ready the first time.
 
 ## Watch
 

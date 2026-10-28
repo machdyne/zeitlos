@@ -32,7 +32,7 @@
 #include "bk.h"
 
 #define BKJOB_BACKUP    1   // bk_backup()
-#define BKJOB_SUMMARY   2   // bk_summary()
+#define BKJOB_SUMMARY   2   // bk_glance(): the window's look at the drive
 #define BKJOB_LIST      3   // bk_list()
 #define BKJOB_FILES     4   // bk_files()
 #define BKJOB_HISTORY   5   // bk_history()

@@ -901,7 +901,8 @@ def cmd_build(args):
     # The same applies to the CARD -- see the note printed at the end
     # of a build.
     for stale in ("index.zak", "docs.zdt", "chunks.zct", "coarse.zcv",
-                  "fine.zfv", "lexicon.zlx", "post.zlp", "encoder.zmd"):
+                  "fine.zfv", "lexicon.zlx", "post.zlp", "encoder.zmd",
+                  "lens.zln"):
         p_ = os.path.join(askdir, stale)
         if os.path.exists(p_):
             os.remove(p_)
@@ -915,6 +916,9 @@ def cmd_build(args):
     sizes["docs.zdt"] = write("docs.zdt", pack.pack_docs(
         docs, [cardfs.pack_relative(p_, packname) for p_ in paths], dsid))
     sizes["chunks.zct"] = write("chunks.zct", pack.pack_chunks(chunks, dsid))
+    # BM25's chunk lengths, so the device reads 2 bytes a chunk at
+    # startup rather than scanning chunks.zct's 16 (pack.py, lens.zln).
+    sizes["lens.zln"] = write("lens.zln", pack.pack_lens(chunks, dsid))
 
     # `dense = no` ships a LEXICAL-ONLY pack: no vectors, no encoder.
     #

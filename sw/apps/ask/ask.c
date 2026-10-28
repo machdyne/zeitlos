@@ -38,6 +38,12 @@
  * AI_SCAN_SLICE vectors and returns, this loop drains the mailbox
  * between slices, the window redraws, the bar moves and Escape is
  * answered. Nothing here ever holds the CPU across a whole query.
+ *
+ * Loading the packs is the same: ai_load_step() is one request to fs,
+ * and the loop answers its messages between them (docs/responsive.md).
+ * The window is usable from its first frame -- typing works, Enter
+ * queues the question until the packs are in, Esc stops the loading
+ * and keeps whatever packs had already loaded, F1 and close work.
  */
 
 #include <stdint.h>
@@ -87,7 +93,19 @@ static bool     running;
 static int      sel;
 static bool     loaded;
 
-static char     status[48] = "loading...";
+/* Loading, a step at a time from the main loop (aidx.h). `pending` is
+ * a question asked with Enter before the packs were in: it runs when
+ * the load ends -- all of them, not the first, so its answer does not
+ * depend on how far the card had got when Enter was pressed. */
+static ai_load_t LD;
+static bool     loading;
+static bool     pending;
+static int      shown_pm = -1;          /* last progress on the line */
+static int      shown_packs;            /* packs the buttons show */
+
+/* Wide enough for the reason in full, for dbg(); the line shows what
+ * fits (fit()). */
+static char     status[96] = "loading...";
 
 /* ------------------------------------------------------------------ *
  * Tiny formatting -- see the no-printf note above
@@ -365,6 +383,13 @@ static void status_idle(void)
     n = putu(status, sizeof(status), n, (uint32_t)ai_pack_count());
     n = scat(status, sizeof(status), n, " pack");
     if (ai_pack_count() != 1) n = scat(status, sizeof(status), n, "s");
+    /* A pack that loaded without its chunk lengths ranks worse
+     * (aidx.h, ai_warning()). That is said here for as long as it is
+     * true, not once at startup where the first query overwrites it. */
+    if (ai_warning()[0]) {
+        scat(status, sizeof(status), n, ", ranking weaker");
+        return;
+    }
     /* The line-editing keys are not discoverable otherwise, and
      * backspacing through a whole question to ask the next one is
      * the first thing anybody hits. */
@@ -386,18 +411,28 @@ static void status_progress(void)
     scat(status, sizeof(status), n, "%  ESC cancels");
 }
 
-static void load_progress(uint32_t done, uint32_t total, const char *what)
+/* "Loading zdocs 40%  Esc stops", per pack and from 0 for each. Only
+ * redrawn when the figure (or the pack) changes. */
+static void load_progress(bool force)
 {
-    static uint32_t last_pct = 101;
-    uint32_t pct = total ? (100u * done) / total : 0;
+    int pm = ai_load_permille(&LD);
     int n;
-    if (pct == last_pct) return;
-    last_pct = pct;
-    n = scat(status, sizeof(status), 0, "loading ");
-    n = scat(status, sizeof(status), n, what);
+    const char *name = ai_load_name(&LD);
+    if (!name[0]) {                     /* listing, or between packs */
+        if (force) {
+            scat(status, sizeof(status), 0,
+                 pending ? "Loading..., then search" : "Loading...  Esc stops");
+            draw_status();
+        }
+        return;
+    }
+    if (!force && pm / 10 == shown_pm) return;
+    shown_pm = pm / 10;
+    n = scat(status, sizeof(status), 0, "Loading ");
+    n = scat(status, sizeof(status), n, name);
     n = scat(status, sizeof(status), n, " ");
-    n = putu(status, sizeof(status), n, pct);
-    scat(status, sizeof(status), n, "%");
+    n = putu(status, sizeof(status), n, (uint32_t)(pm / 10));
+    scat(status, sizeof(status), n, pending ? "%, then search" : "%  Esc stops");
     draw_status();
 }
 
@@ -407,7 +442,18 @@ static void load_progress(uint32_t done, uint32_t total, const char *what)
 
 static void start_query(void)
 {
-    if (!loaded || !qlen) return;
+    if (!qlen) return;
+    if (loading) {
+        /* Type-ahead: remembered, run when the packs are in. */
+        pending = true;
+        load_progress(true);
+        return;
+    }
+    if (!loaded) {
+        scat(status, sizeof(status), 0, "no packs loaded -- nothing to search");
+        draw_status();
+        return;
+    }
     if (!ai_query_begin(&Q, query, 8)) return;
     running = true;
     sel = 0;
@@ -437,13 +483,99 @@ static void open_selected(void)
 }
 
 /* ------------------------------------------------------------------ *
+ * Loading
+ * ------------------------------------------------------------------ */
+
+/* The load has ended -- finished, or stopped with Esc (`stopped`). */
+static void load_finished(bool stopped)
+{
+    loading = false;
+    loaded = ai_pack_count() > 0;
+
+    if (!loaded) {
+        /* Say WHY. The realistic causes -- nothing in /data/ask, an
+         * index this build cannot read, files from two distributions
+         * mixed, malloc refusing the coarse array, fs not answering --
+         * are not distinguishable from "no packs" otherwise. */
+        if (stopped) scat(status, sizeof(status), 0, "loading stopped -- no packs loaded");
+        else scat(status, sizeof(status), 0, ai_error());
+        dbg("ask: no packs loaded: ");
+        dbg(status);
+        dbg("\n");
+        pending = false;
+    } else {
+        status_idle();
+        if (stopped) {
+            /* The packs that were in stay in and answer; say that it
+             * is not all of them. */
+            int n = scat(status, sizeof(status), 0, "loading stopped, ");
+            n = putu(status, sizeof(status), n, (uint32_t)ai_pack_count());
+            scat(status, sizeof(status), n,
+                 ai_pack_count() == 1 ? " pack loaded" : " packs loaded");
+        } else if (ai_failed_count()) {
+            /* Loaded something, but not everything. Say so on the
+             * status line rather than showing a healthy-looking
+             * passage count over a corpus that quietly shrank. */
+            int n = scat(status, sizeof(status), 0, ai_error());
+            n = scat(status, sizeof(status), n, " (");
+            n = putu(status, sizeof(status), n,
+                     (uint32_t)ai_failed_count());
+            scat(status, sizeof(status), n, " pack failed)");
+        } else if (ai_warning()[0]) {
+            /* Loaded, but BM25 without lengths (or the like): the
+             * reason, once, until the first query. */
+            scat(status, sizeof(status), 0, ai_warning());
+        }
+        dbg("ask: loaded ");
+        dbg(status);
+        dbg("\n");
+    }
+    if (ai_warning()[0]) { dbg("ask: "); dbg(ai_warning()); dbg("\n"); }
+    draw_all();
+    shown_packs = ai_pack_count();
+
+    /* A question asked while loading: Esc meant stop, so a stop drops
+     * it too; otherwise it runs now. */
+    if (pending && !stopped && loaded) { pending = false; start_query(); }
+    pending = false;
+}
+
+static void load_stop(void)
+{
+    if (!loading) return;
+    ai_load_stop(&LD);
+    load_finished(true);
+}
+
+/* About 20 ms of loading -- at least one step, which is one request to
+ * fs of at most AI_LOAD_BLOCK bytes -- then back to the mailbox. */
+static void load_slice(void)
+{
+    uint32_t t0 = z_uptime_ticks();
+    do {
+        if (ai_load_step(&LD) != AI_LOAD_RUNNING) {
+            load_finished(false);
+            return;
+        }
+    } while (z_uptime_ticks() - t0 < Z_TICK_HZ / 50);
+
+    /* A pack just came in: its button appears now, not at the end. */
+    if (ai_pack_count() != shown_packs) {
+        shown_packs = ai_pack_count();
+        draw_buttons();
+    }
+    load_progress(false);
+}
+
+/* ------------------------------------------------------------------ *
  * Input
  * ------------------------------------------------------------------ */
 
 static void handle_service(z_msg_t *msg);
 
 /* The help box's view of this window while it is up: what drain()
- * does with these. A query in flight pauses until it closes. */
+ * does with these. A query or a load in flight pauses until it
+ * closes. */
 static void help_on_msg(z_msg_t *m, void *user)
 {
     (void)user;
@@ -474,12 +606,14 @@ static void handle_key(uint32_t packed)
             "Enter\tSearch; again: open the selection\n"
             "Up/Down\tSelect a result\n"
             "1-9\tOpen that result\n"
-            "Esc\tCancel a search, or clear\n"
+            "Esc\tStop loading, cancel a search, or clear\n"
             "Ctrl+U\tClear the line\n"
             "Ctrl+W\tDelete a word\n"
             "Ctrl+Q\tQuit\n\n"
             "Type a question and press Enter. Click a result to open "
-            "it, or a pack button to browse its index.";
+            "it, or a pack button to browse its index.\n\n"
+            "Typing works while the packs load; Enter then searches "
+            "once they are in.";
         z_dialog_ctx_t ctx = { &win, help_on_msg, NULL };
         z_dialog_help(&ctx, "Ask help", help, "ask_app");
         return;
@@ -492,6 +626,7 @@ static void handle_key(uint32_t packed)
              * k_fs_release_all), but an app should not rely on that
              * to tidy up after itself on a path it controls. */
             ai_query_cancel(&Q);
+            ai_load_stop(&LD);
             ai_free_all();
             z_win_destroy(&win);
             exit(0);
@@ -513,7 +648,11 @@ static void handle_key(uint32_t packed)
     switch (k) {
 
     case 0x1b:                                  /* Escape */
-        if (running) {
+        if (loading) {
+            /* Stop loading. Packs already in stay usable; the one in
+             * hand is freed and its file closed (aidx.h). */
+            load_stop();
+        } else if (running) {
             /* Cancellation is immediate: the scan holds no lock and
              * allocates nothing per slice, so this is one flag. */
             ai_query_cancel(&Q);
@@ -733,47 +872,23 @@ int main(void)
     /* Registered by name, not by a fixed pid -- zweb.h's reasoning. */
     z_pid_register("ask", regname, sizeof(regname));
 
+    /* Loading starts here and is stepped from the loop below: a lexical
+     * pack is a dozen requests, a dense one a megabyte or more off the
+     * card, which at 300-600 KB/s is seconds -- during which the
+     * window redraws, takes keys and can be closed. */
+    ai_load_begin(&LD, Z_DIR_ASK_PACKS);
+    loading = true;
+    scat(status, sizeof(status), 0, "Loading...  Esc stops");
     draw_all();
-
-    /* Loading is 1-2.5MB off the card at a realistic 300-600 KB/s, so
-     * it is seconds and the bar is not decoration. load_progress()
-     * redraws the status line as it goes; the window is already up, so
-     * the app looks alive from the first frame rather than after. */
-    loaded = ai_load_all(Z_DIR_ASK_PACKS, load_progress) > 0;
-
-    if (!loaded) {
-        /* Say WHY. The four realistic causes -- nothing in /data/ask, an
-         * index this build cannot read, files from two distributions
-         * mixed, and malloc refusing the coarse array because the
-         * executable did not ask for enough heap -- are not
-         * distinguishable from "no packs", and the last one is by far
-         * the most likely on a first run. */
-        scat(status, sizeof(status), 0, ai_error());
-        dbg("ask: no packs loaded: ");
-        dbg(ai_error());
-        dbg("\n");
-        draw_all();
-    } else {
-        status_idle();
-        if (ai_failed_count()) {
-            /* Loaded something, but not everything. Say so on the
-             * status line rather than showing a healthy-looking
-             * passage count over a corpus that quietly shrank. */
-            int n = scat(status, sizeof(status), 0, ai_error());
-            n = scat(status, sizeof(status), n, " (");
-            n = putu(status, sizeof(status), n,
-                     (uint32_t)ai_failed_count());
-            scat(status, sizeof(status), n, " pack failed)");
-        }
-        dbg("ask: loaded ");
-        dbg(status);
-        dbg("\n");
-        draw_all();
-    }
 
     for (;;) {
 
         drain();
+
+        if (loading) {
+            load_slice();
+            continue;       /* no wait while working */
+        }
 
         if (running) {
             /* One slice, then straight back to the mailbox. This is

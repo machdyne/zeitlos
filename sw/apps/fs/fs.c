@@ -173,8 +173,12 @@ static uint32_t card_tried;
 static bool ram_ok;
 static uint32_t ram_sectors;
 static bool usb_ok, usb_held;	// held: `usbunmount`, until that drive goes
-static uint32_t usb_gen, usb_failed_gen;
+static uint32_t usb_gen;
 static uint32_t usb_sectors;
+// The drive plugged in, mounted or not (usb_poll()): its generation + 1
+// (0: none), when it was first seen, and the mounts tried on it.
+static uint32_t usb_seen_gen, usb_seen_at, usb_retry_at;
+static uint8_t usb_tries;
 
 static FILINFO fno;
 static bool grants;				// the grant window works here
@@ -581,6 +585,17 @@ static void usb_release(void) {
 	usb_ok = false;
 }
 
+// A mount that failed is tried once more this much later: a stick's
+// first sectors can fail to read while it is still settling. After the
+// second, that drive is left alone until it is plugged in again, or
+// `usbmount`.
+#define FS_USB_RETRY_TICKS	(5u * FS_TICK_HZ)
+#define FS_USB_TRIES		2
+// A drive that has not become ready in this long will not: `usb` gives
+// a bring-up ~15 s, waits 5 s, and tries once more (usb.c). Until then
+// it is "starting"; after, "cannot be used" (usb_absent()).
+#define FS_USB_GIVE_UP_TICKS	(45u * FS_TICK_HZ)
+
 // Bring /usb in line with what is plugged in: released when its drive
 // goes (or is replaced), mounted when one arrives ready. Cheap when
 // nothing changed. `usb` brings a new drive to ready itself; only
@@ -596,11 +611,17 @@ static void usb_poll(bool force) {
 	}
 	if (!present) {
 		usb_held = false;
-		usb_failed_gen = 0;
+		usb_seen_gen = 0;
 		return;
 	}
+	if (usb_seen_gen != a.gen + 1) {	// a drive fs has not seen before
+		usb_seen_gen = a.gen + 1;
+		usb_seen_at = now_ticks();
+		usb_tries = 0;
+	}
 	if (usb_ok || usb_held) return;
-	if (!force && usb_failed_gen == a.gen + 1) return;	// tried this one
+	if (!force && usb_tries >= FS_USB_TRIES) return;	// tried this one
+	if (!force && usb_tries && (int32_t)(now_ticks() - usb_retry_at) < 0) return;
 	// Not ready yet: `usb` is bringing it up, a TEST UNIT READY at a
 	// time, and says so (Z_USB_EVENT) once it is. Waiting here instead
 	// would hold up every client of fs for as long as a slow drive
@@ -610,8 +631,10 @@ static void usb_poll(bool force) {
 	s.op = Z_BLK_OP_START;
 	s.dev = Z_BLK_USB;
 	if (!blk(&s) || f_mount(&vol_usb, "2:", 1) != FR_OK) {
-		usb_failed_gen = a.gen + 1;
-		say("fs: usb storage: mount failed\n");
+		if (usb_tries < 255) usb_tries++;
+		usb_retry_at = now_ticks() + FS_USB_RETRY_TICKS;
+		say(usb_tries < FS_USB_TRIES ? "fs: usb storage: mount failed, trying again in 5 s\n"
+			: "fs: usb storage: mount failed\n");
 		return;
 	}
 	blk_info(Z_BLK_USB, &a);
@@ -621,6 +644,21 @@ static void usb_poll(bool force) {
 	say("fs: usb storage: ");
 	say_num(usb_sectors / 2);
 	say(" KB at " Z_DIR_USB "\n");
+}
+
+// What a stat of /usb says while nothing is mounted there, so a caller
+// can tell "plug one in" from "wait" from "this one will not do":
+// -Z_ENOENT nothing plugged in (or `usbunmount`ed: it may be pulled);
+// -Z_EBUSY a drive being brought up, or about to be tried again;
+// -Z_ENODEV a drive that cannot be used here -- not FAT (exFAT, NTFS),
+// or one that never became ready. As of the last usb_poll(): fs hears
+// of a drive coming or going at once (Z_USB_EVENT), and looks each
+// idle second besides.
+static int32_t usb_absent(void) {
+	if (!usb_seen_gen || usb_held) return -Z_ENOENT;
+	if (usb_tries >= FS_USB_TRIES ||
+		now_ticks() - usb_seen_at > FS_USB_GIVE_UP_TICKS) return -Z_ENODEV;
+	return -Z_EBUSY;
 }
 
 // -- clients -----------------------------------------------------------
@@ -959,6 +997,7 @@ static int32_t op_stat(const z_fsreq_t *rq, fs_client_t *c) {
 		return 0;
 	}
 	if (fs_is_root(real)) {		// a volume root, or a synthetic one
+		if (real != rq->path && fs_vol_of(real) == 2 && !usb_ok) return usb_absent();
 		if (real != rq->path && !(fs_vol_of(real) == 1 ? ram_ok : usb_ok))
 			return -Z_ENOENT;
 		fi.attr = Z_FS_ATTR_DIR;

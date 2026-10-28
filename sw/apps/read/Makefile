@@ -39,11 +39,29 @@ md.o: md.c md.h
 # constructs nobody thinks to write a case for -- hard-wrapped link
 # syntax, nested lists indented like code blocks -- and both of those
 # were found exactly this way.
+#
+# cases/ holds documents found by fuzzing, cut down: each once made the
+# parser or the reader misbehave (front_unterminated.md: a blank page;
+# skiprows.md: every key read to the end; fence_info_backtick.md: the
+# rest of the document became code). They run with the real ones.
+#
+# rfind_test builds the REAL read.c against stubbed system calls and
+# checks its long work: End, links to headings, scrollbar drags and
+# launch offsets are finds stepped ~20 ms at a time; Esc leaves the page
+# as it was; a failed read is not the end of the file; a redraw is
+# acknowledged before any scan; a resize keeps the position valid.
+#
+# fence_unterminated.md is left out of md_test, whose real-document
+# pass fails a document that ends inside a fence: that one does, on
+# purpose. rfind_test reads it like the others.
 DOCS ?= ../../../docs/*.md
+CASES = $(filter-out cases/fence_unterminated.md,$(wildcard cases/*.md))
 
 test:
 	cc --std=gnu99 -Wall -Wextra -o md_test md_test.c md.c
-	./md_test $(DOCS)
+	./md_test $(DOCS) $(CASES)
+	cc --std=gnu99 -Wall -o rfind_test rfind_test.c md.c
+	./rfind_test $(DOCS) cases/fence_unterminated.md
 
 # Renders a document to ASCII using the same parser, wrapping and
 # block logic the app uses, and checks that scrolling is REVERSIBLE --
@@ -68,6 +86,6 @@ render:
 
 .PHONY: test render
 
-CLEAN_EXTRA = md_test render_test
+CLEAN_EXTRA = md_test render_test rfind_test
 
 include ../../common/app.mk

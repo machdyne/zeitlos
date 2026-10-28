@@ -26,7 +26,11 @@ something means.
 
 Double-click a folder to enter it, or the `..` row to go up. Arrow
 keys, PageUp/PageDown, Home/End move the selection; Enter opens;
-Backspace goes up a level. The mouse wheel scrolls the list three rows
+Backspace goes up a level. **Typing a name** selects it: a letter goes
+to the first entry starting with it, the same letter again to the next
+one, and letters typed less than a second apart build a prefix (`rea`
+is `readme.md`) -- the same rules as every list box
+([widgets.md](widgets.md#list-boxes)). The mouse wheel scrolls the list three rows
 a notch without moving the selection, here and in every app's Open and
 Save dialogs ([user_input.md](user_input.md#scroll-wheel)).
 
@@ -75,8 +79,10 @@ removed only once the copy has succeeded.
 **Folders** copy, move and delete with everything in them. A copy (of
 a file or a folder), a move between volumes, and deleting a folder run
 a step at a time ([zwalk.md](zwalk.md)) while the window stays usable:
-the line above the list counts files and bytes, the list can still be
-browsed, and **Esc** or **Stop** ends it before the next step. Stopped
+the line above the list counts files and bytes -- for a single file,
+whose size is known, it says how far as a percentage, with a bar at
+the right -- the list can still be browsed, and **Esc** or **Stop**
+ends it before the next step. Stopped
 part-way:
 
 - a **copy** keeps what it had finished and says so -- never half a
@@ -128,8 +134,10 @@ find reads every file, 2KB a step, so it goes at the card's speed --
 the window answers throughout either way. A find keeps over a thousand
 results in its arena (64KB, only while a find, copy or delete runs or
 results are up), about eighty without one (a board with too little
-memory); the line says "(not all)" when results or a
-very large folder were cut short. Folders more than 16 deep are not
+memory). When the results are **full** the find stops there, at once,
+and the line says "(first N matches)": going on would only look at
+files it had nowhere to put. It says "(not all)" when a very large
+folder was walked only in part. Folders more than 16 deep are not
 entered.
 
 ### Convert
@@ -149,6 +157,44 @@ and **Cancel**, which stops it at once and leaves nothing behind. The
 browser does not wait for it -- it stays usable meanwhile -- and
 re-reads the folder, selecting the new file, when it is done. One
 conversion at a time from here.
+
+## Drawing without flashing
+
+There is no back buffer: whatever is drawn shows at once, so blanking
+something and drawing it again shows as a flash
+([window_manager.md](window_manager.md#redraw-strategy)). The window is
+cleared and drawn whole only for wm's `Z_WM_REDRAW`, after which
+nothing on it can be trusted; everything else draws what changed, over
+what is there:
+
+- **Arrow keys** paint the row that lost the selection and the one
+  that gained it; the rest of the list only when it scrolled. Both
+  lists do this themselves (`z_flist_draw()`, `z_listbox_draw()`,
+  [widgets.md](widgets.md#drawing-in-place)).
+- **Opening a folder** paints its rows once, each row whole. It used to
+  be painted twice, the second time after blanking the list.
+- **Find** records each hit and puts the new ones in the list a few
+  times a second (`z_listbox_append()`), painting only the new rows
+  that are in view; the scrollbar is drawn when its thumb moves. It
+  used to clear and draw the whole list and its scrollbar once per hit,
+  dozens of times in each 20ms slice. Starting a find, a new find over
+  the results, and a find ending no longer repaint the window: the
+  results take the folder's place, the old rows are written over, and
+  the line and the Find/Stop button change.
+- **The line above the list** (path or progress) is written in one
+  pass, its text padded with spaces as two-colour cells, and only when
+  what it says changed. It used to be a fill and then the text, on
+  every key. A copy's progress bar is drawn with fills only, beside the
+  text: the line rasterizer does not order against the blitter that
+  draws text ([widgets.md](widgets.md#the-blitter-and-the-rasterizer-do-not-order-against-each-other)).
+- **Buttons** are drawn when their state changes, not all eight.
+
+`sw/apps/files/tests/test_walk.c` checks it: it plants an ink pixel in
+the list's empty area, which anything that blanks the list takes away,
+and compares what was drawn in place with what a whole repaint draws,
+pixel for pixel -- after arrow keys, typing a name, opening a folder and
+going back up, a find streaming in, a new find over the results, and
+Esc.
 
 ## Opening a file
 
@@ -246,6 +292,13 @@ else that later asks "what opens this?", read the same table.
   "(partial list)", so a file that is on the card but not shown has an
   explanation. `ls` in the posix shell has the same bound and says
   "... (truncated)".
+- **A folder is read in one call.** `FS_LIST_EX` lists a whole
+  directory into the caller's buffer and has no offset to resume from
+  (`z_fs_list_args_t`, `zfs.h`), so opening a folder cannot be cut into
+  20ms steps with a "Reading... N" count, the way a walk is. Within the
+  256-entry bound it is one listing of the card, a few milliseconds per
+  directory sector; a paged listing (a start index or a cookie on the
+  call) is what it would take.
 - **Folders copy as walks.** A folder copies, moves
   and deletes with everything in it, as a walk (`zwalk.h`); within
   a volume a move is one `FS_RENAME`. A folder is not copied over an

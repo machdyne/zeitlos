@@ -35,4 +35,28 @@ ZFMT_NO64 = 1
 OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o zwidget.o \
 	zfsapp.o zflist.o zdialog.o zedit.o zspeak.o zsayall.o text.o
 
+# -- host tests: `make test` here, or `make test` at the top --
+#
+# Both build the REAL text.c over real zwin/zwidget/zdialog and a
+# scripted kernel (needs -no-pie and vm.mmap_min_addr=0; each exits 77
+# to skip without them):
+#   tests/utf8.c       encodings, loading and saving (via NAME.part),
+#                      wrapping, autosave and its untitled copies
+#   tests/test_edit.c  the arena, undo and redo, and the clipboard, with
+#                      an arena that moves on every resize
+HOSTCC ?= cc
+HOSTSRC = ../../common/zwin.c ../../common/zwidget.c ../../common/zflist.c \
+	../../common/zedit.c ../../common/zfsapp.c ../../common/zfont_data.c \
+	../../common/zobj.c ../../common/zeitlos.c ../../common/zspeak.c \
+	../../common/zsayall.c ../../common/zdialog.c
+HOSTFLAGS = -std=gnu99 -Wall -Wno-comment -no-pie -g -fsanitize=address,undefined -I ../../common
+
+test:
+	$(HOSTCC) $(HOSTFLAGS) -o /tmp/text_test_utf8 tests/utf8.c $(HOSTSRC)
+	$(HOSTCC) $(HOSTFLAGS) -o /tmp/text_test_edit tests/test_edit.c $(HOSTSRC)
+	/tmp/text_test_utf8
+	/tmp/text_test_edit
+
+.PHONY: test
+
 include ../../common/app.mk

@@ -83,6 +83,7 @@ static long read_block(long ln, md_state_t *st, md_line_t *out) {
     int n=0; for(int i=0;line[i]&&n<MD_LINE_MAX-1;i++) joined[n++]=line[i];
     long used=1; md_kind_t kind=first.kind;
     for (;;) {
+        if (n>=MD_LINE_MAX-1) break;    // read.c: a full block ends
         getline_at(ln+used,peek,MD_LINE_MAX);
         const char *nx=(ln+used<nlines)?peek:NULL;
         if (!md_continues(st,kind,nx)) break;

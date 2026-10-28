@@ -384,8 +384,9 @@ boot set's RAM stays 1,024 of 1,024 KB.
 The pointer's shapes ([cursor.md](cursor.md): the large pair read
 from the card, Super+M) took `wm` to 140,240 bytes: its budget went to
 137K, paid from `text`'s, 157K to 156K (`text` is 159,588 bytes) --
-`text` is one of the two largest apps the RAM rule counts beside the
-boot set, so the rule stays 1,024 of 1,024 KB. `term`'s 16K of room
+`text` was then one of the two largest apps the RAM rule counted beside
+the boot set (the rule names `term` and `repl` now), so the rule stayed
+1,024 of 1,024 KB. `term`'s 16K of room
 would not have done: it is in neither.
 Game-mode colour's second VRAM sheet ([color.md](color.md), "More than
 four planes") took it to 140,276 -- `zgfx`'s fills and blits can be told
@@ -421,6 +422,27 @@ custom-colour parser and three config keys) took `wm` to 115,364 and
 riscv32-unknown-elf toolchain: 114K (from the unassigned part) and 147K. **The boot set's RAM is now 1,032 of 1,024 KB**:
 `zrelease check` reports it until 8K comes out of something, or the
 rule's 1M is raised -- not yet decided.
+The responsiveness round ([responsive.md](responsive.md), October
+2026) took `fs` to 77,040 bytes of RAM (its drive states for `backup`:
+starting, not usable, tried again) and `usb` to 53,316 (bringing a drive
+up without resetting it at every step): 77,056 and 53,504, both paid
+from `console` (12,488 in 13K, now 12,544), so the boot set went *down*
+256 bytes. The file list drawing in place instead of flashing, with
+type-to-find and copy progress, took `files` to 61,006 in flash and
+127,168 in RAM (60K/125K, outside the RAM rule) and `text`, which links
+the list for its dialogs, to 61,526 and 162,352 (61K/159K).
+**The RAM rule changed then**: it counted the two largest apps beside
+the boot set, which made every byte of `text` (one of them) a byte the
+boot set could not have, though no board needs `text` beside the boot
+set more than any other app. It now counts the apps named in
+`CORE_RAM_WITH`, the ones that must be able to run beside the boot set
+on the smallest board: `term` and `repl`. `term`'s RAM budget came down
+to what it uses (137,504 bytes in 140K, from 152K) and `repl`'s went to
+307K: xPack GCC 15.2 puts it at 313,296, which was 2,000 over 304K and
+failed `make BOARD=lakritz output/lakritz/apps.zar` on its own. The rule
+is 1,018.25 of 1,024 KB. `text` -- its large copy kept whole, undo in
+the arena, saving through a `.part` -- went to 64K/165K, which is now
+its own business.
 The next byte for the boot set comes out of another budget, or out of
 something made smaller. `mkzar.py --max` checks the archive itself
 against the region (`CORE_ZAR_MAX`, 848K), so a budget that turns out
@@ -432,12 +454,13 @@ code, data and `.bss`, not its stack). They are `CORE_BUDGETS` in the
 top-level `Makefile`, next to `CORE_APPS`:
 
 ```
-CORE_BUDGETS = fs=36K/75K usb=35K/52K wm=114K/147K net=148K/284K term=62K/152K \
-	console=10K/13K cron=18K/48K text=60K/157K files=57K/120K repl=140K/304K
+CORE_BUDGETS = fs=36K/77056 usb=35K/53504 wm=114K/147K net=148K/284K term=62K/140K \
+	console=10K/12544 cron=18K/48K text=64K/165K files=60K/125K repl=140K/307K
 CORE_RESERVE = 60K
 CORE_STORE = wm net
 CORE_ZAR_MAX = 848K
 CORE_AT_BOOT = fs usb wm net console
+CORE_RAM_WITH = term repl
 CORE_RAM_MAX = 1M
 ```
 
@@ -451,9 +474,10 @@ budgets themselves to two rules:
 
 - **Flash:** all of them, plus `CORE_RESERVE` (room kept for what is
   not an app yet, such as files in flash), fit the archive's region.
-- **RAM:** the apps that start at boot (`CORE_AT_BOOT`) plus the two
-  largest of the rest fit in `CORE_RAM_MAX` -- one or two apps on
-  demand beside the boot set, on the smallest board.
+- **RAM:** the apps that start at boot (`CORE_AT_BOOT`) plus those
+  that must be able to run beside them (`CORE_RAM_WITH`: `term` and
+  `repl`) fit in `CORE_RAM_MAX`, the smallest board. Every other core
+  app's RAM budget counts only for that app: it says when the app grew.
 
 `make flash_apps` prints each app against its budget, and `(stored)`
 by one kept uncompressed. `zrelease check` also refuses a `CORE_STORE`

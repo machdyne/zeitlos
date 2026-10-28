@@ -27,6 +27,7 @@
 
 #include "kernel.h"
 #include "msg.h"
+#include "../common/zwm.h"	// Z_WM_MOUSE/KEY/WHEEL: input, below
 
 // -- mailboxes --
 
@@ -57,13 +58,70 @@ z_rv z_mailbox_is_full(uint32_t pid) {
 	return (z_mailboxes[pid].count >= Z_MAILBOX_DEPTH) ? Z_OK : Z_FAIL;
 }
 
+// Pointer moves that were merged into the move already queued, and
+// input events refused because only the reserve was left (below).
+// sh.c's `ic` prints both beside msg_full_drops.
+static volatile uint32_t msg_coalesced, msg_input_refused;
+
+uint32_t k_msg_coalesced(void) { return msg_coalesced; }
+uint32_t k_msg_input_refused(void) { return msg_input_refused; }
+
+// Input: what wm sends at the rate a hand moves. Everything else -- a
+// reply from fs, usb or net, a REDRAW wm then waits on -- is bounded by
+// the receiver's own requests.
+static inline bool is_input(uint32_t subject) {
+	return subject == Z_WM_MOUSE || subject == Z_WM_KEY ||
+		subject == Z_WM_WHEEL;
+}
+
+// The newest queued message, if it is a pointer move from the same
+// sender to the same window with the same buttons and inside bit: the
+// move about to be queued replaces it (docs/messaging.md, "A full
+// mailbox"). Only the newest, so a move never overtakes a key or a
+// click; only equal buttons, so no press or release is ever merged
+// away. Zwm.h already tells apps to act on the last sample.
+static bool coalesce_move(volatile z_mailbox_t *mb, const z_msg_envelope_t *msg) {
+	if (msg->subject != Z_WM_MOUSE || msg->obj.type != Z_UINT32 || mb->count == 0)
+		return false;
+	uint32_t last = (mb->tail + Z_MAILBOX_DEPTH - 1) % Z_MAILBOX_DEPTH;
+	volatile z_msg_envelope_t *q = &mb->msgs[last];
+	if (q->subject != Z_WM_MOUSE || q->from != msg->from || q->tag != msg->tag ||
+	    q->obj.type != Z_UINT32)
+		return false;
+	uint32_t keep = 0x1F00000u;	// buttons (23:20) and inside (24)
+	if ((q->obj.val.uint32 & keep) != (msg->obj.val.uint32 & keep))
+		return false;
+	q->obj.val.uint32 = msg->obj.val.uint32;
+	return true;
+}
+
 z_rv z_mailbox_push(uint32_t pid, z_msg_envelope_t *msg) {
 
 	// mask irqs so a scheduler swap can't interleave with another
 	// process pushing/popping the same mailbox mid-update
 	uint32_t old_mask = maskirq(0xFFFFFFFF);
+	volatile z_mailbox_t *mb = &z_mailboxes[pid];
 
-	if (z_mailboxes[pid].count >= Z_MAILBOX_DEPTH) {
+	if (coalesce_move(mb, msg)) {
+		msg_coalesced++;
+		maskirq(old_mask);
+		return Z_OK;
+	}
+
+	// The last Z_MAILBOX_RESERVE slots are not for input. An app in a
+	// long call (a file read waiting on fs) used to have its mailbox
+	// filled by keys and moves, and then fs's reply had nowhere to go:
+	// dropped, and the app waited out zfsc's 15 s timeout, once per
+	// call that followed. Refusing a key here loses that key, as a
+	// full mailbox always did; it no longer takes the reply with it.
+	if (is_input(msg->subject) &&
+	    mb->count >= Z_MAILBOX_DEPTH - Z_MAILBOX_RESERVE) {
+		msg_input_refused++;
+		maskirq(old_mask);
+		return Z_FAIL;
+	}
+
+	if (mb->count >= Z_MAILBOX_DEPTH) {
 		msg_full_drops++;
 		maskirq(old_mask);
 		return Z_FAIL;

@@ -30,11 +30,67 @@ or paint after.
 | Drag | draw with the tool |
 | Scrollbars, wheel | pan the page |
 | Title icons | new, open, save |
+| **Ctrl+N**, **Ctrl+O**, **Ctrl+S** | new, open, save (**Ctrl+Shift+S**: save as) |
+| **Ctrl+Z** | undo the last stroke or shape |
+| **Ctrl+Y**, Ctrl+Shift+Z | redo |
 | **Esc**, Ctrl+C | stop loading or saving |
 | **F1** | help ([app_help.md](app_help.md)) |
 
-The pencil draws white when the stroke starts on a black pixel. There is
-no undo.
+The keys are text's and sheet's. Ctrl+N, Ctrl+O and Ctrl+S go the way
+the title icons do: "Save changes first?" still comes up, and they are
+ignored while a file loads or saves.
+
+The pencil draws white when the stroke starts on a black pixel.
+
+The brush and eraser are drawn a word (32 pixels) at a time, a row of
+the stamp being at most two words: a brush point is at most 16 word
+writes and an eraser point 24, where they were 64 and 144 pixel writes.
+The rectangle's top and bottom edges likewise. The pixels are exactly
+the ones the per-pixel code drew -- the tests compare the two. This is
+`drawstamp.c`.
+
+## Undo
+
+One level is one stroke or shape: from the button going down to it
+coming up. **Ctrl+Z** puts the page back as it was before it, **Ctrl+Y**
+(or Ctrl+Shift+Z) puts it back again, and a new stroke forgets what
+could have been redone. Only the part of the page that changes is
+redrawn. Undoing back to the picture as last saved takes the `*` off
+the title; a stroke that changed nothing is not a level and leaves no
+`*`. New and Open start with no history. Undo and redo are ignored
+mid-stroke and while a file loads or saves.
+
+A level is a rectangle of the page as it was: whole words across, and
+only the rows and words the stroke actually changed -- found by
+comparing the page with a copy of it from before the stroke. A pencil
+dot keeps 4 bytes, a stroke across the page up to 37.5KB. Undoing swaps
+the rectangle with the page, so the level then holds the page as it
+was *after* the stroke, which is what redo needs: no second copy.
+
+How many levels depends on the board (`drawundo.c`):
+
+| Board | Memory | Levels |
+|---|---|---|
+| with an arena to give ([kernel.md](kernel.md#arenas)) | 256KB of arena, or 64KB if that is not there | up to 64; about six page-sized strokes in 256KB (one in 64KB), many more small ones |
+| 1MB (no arenas) | nothing more | one |
+
+With the arena, levels are kept in it as a ring and the oldest go when a
+new one does not fit or there are 64. A stroke larger than the whole
+ring (a page-sized one, with 64KB) cannot be undone, and nothing before
+it can either. The copy of the page from before the stroke is the
+second page (below), kept equal to the page as strokes end.
+
+With no arena the second page *is* the level: it holds the page as it
+was before the last stroke, and undo and redo swap the changed
+rectangle between the two. The next stroke copies that rectangle
+across, so the level is gone once a new stroke starts, even one that
+changes nothing. Opening a file reads into the second page, so it takes
+that level too; with the arena, levels survive a stopped or failed open.
+
+The arena is taken once, at start, and never resized: undo holds a
+pointer into it, and it never moves. On a board short of memory the
+256KB is not taken and draw asks for 64KB; refused that too, it has one
+level. `draw: undo: ...` on the console says which.
 
 ## Files
 
@@ -80,9 +136,17 @@ During a load or a save:
 The second page costs 37.5KB of memory for as long as draw runs. It is
 the cheapest way that is right: reading into the page on screen loses
 the old drawing when a load is stopped, and an arena (or a copy in
-`/tmp`) is not there on a 1MB board.
+`/tmp`) is not there on a 1MB board. Between loads it is undo's (above).
 
 Tests (host, AddressSanitizer): `make -C sw/apps/draw test` -- saves and
 loads in slices, stops at every step of each (the old file and the old
 page kept, no `.part`, nothing left open), damaged and foreign files,
-and every write, close, unlink and rename failure.
+and every write, close, unlink and rename failure. Then the stamps and
+undo (`tests/test_draw.c`): the brush, eraser, fill and outline against
+the per-pixel ones they replaced, on 300 pages of random strokes and at
+every alignment along the page's edges; and undo and redo putting the
+page back byte for byte after every one of many strokes and shapes,
+with a roomy ring, rings that page-sized strokes fill, a ring too small
+for most strokes, and one level -- the 64-level limit, a stroke too
+large for the ring, a new stroke dropping redo, an open taking the
+second page, and the `*` coming off when undo reaches the save.

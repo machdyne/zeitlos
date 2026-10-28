@@ -125,6 +125,7 @@ with [welcome](welcome.md); to program it, [kernel](kernel.md) and
 | [dock](dock.md) | the dock's files: `wm.cfg` (what it shows) and `dock.zic` (its icons) |
 | [cursor](cursor.md) | the hardware pointer: its four shapes, the large pair, Super+M, a cursor file of your own |
 | [responsive](responsive.md) | Staying responsive: long work in slices, progress, instant stop; `zco` coroutines, `zimgjob` |
+| [everyday](everyday.md) | Everyday use: the plan for the apps people use daily, and each round's fixes |
 | [widgets](widgets.md) | Widgets and dialogs |
 | [libz](libz.md) | Runtime for zcc-compiled programs |
 | [png](png.md) | PNG decoding |

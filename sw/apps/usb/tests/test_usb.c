@@ -161,13 +161,19 @@ uint32_t z_usbh_msc_sectors(void) { return DRIVE_SECTORS; }
 uint32_t z_usbh_msc_generation(void) { return msc_gen; }
 int z_usbh_msc_start(void) { if (!msc_bound) return Z_USBH_MSC_ERR; msc_started = 1; return Z_USBH_MSC_OK; }
 static int msc_busy_steps, msc_steps;		// a drive slow to be ready
+static int msc_never_steps;			// ...steps that end "never ready"
 int z_usbh_msc_start_step(void) {
 	msc_steps++;
 	if (!msc_bound) return Z_USBH_MSC_ERR;
+	if (msc_never_steps > 0) { msc_never_steps--; return Z_USBH_MSC_ERR; }
 	if (msc_busy_steps > 0) { msc_busy_steps--; return Z_USBH_MSC_BUSY; }
 	msc_started = 1;
 	return Z_USBH_MSC_OK;
 }
+// The driver's pacing: 8, 16, 32 ... (usbh_msc.c). Faked by the steps
+// this bring-up has taken.
+static int msc_pace_k;
+uint32_t z_usbh_msc_start_pace(void) { int k = msc_pace_k++; return k >= 5 ? 256u : 8u << k; }
 int z_usbh_msc_read(uint32_t lba, uint8_t *dst, uint32_t count) {
 	msc_reads++;
 	if (irq_on) msc_irq_was_on = true;	// a transfer outside a poll is quiet
@@ -266,7 +272,9 @@ static void test_msc(void) {
 	CHECK(msc_steps == 1);
 	ticks += 8; usb_test_service();
 	CHECK(msc_steps == 2 && !(boxes[FS_PID].events & Z_USBEV_MSC));
-	ticks += 8; usb_test_service();
+	ticks += 15; usb_test_service();		// backing off: 16 ticks now
+	CHECK(msc_steps == 2);
+	ticks += 1; usb_test_service();
 	CHECK(msc_steps == 3 && (boxes[FS_PID].events & Z_USBEV_MSC));
 	CHECK(zusb_msc_info(&mi) && mi.ready && mi.sectors == DRIVE_SECTORS);
 	CHECK(zusb_msc_start() == 0);			// already: nothing to wait for
@@ -285,6 +293,38 @@ static void test_msc(void) {
 	CHECK(!memcmp(drive + 50 * 512, back, sizeof back));
 	CHECK(zusb_msc_read(60, 9, buf) == -Z_EIO);		// past the end
 
+	// A drive that never becomes ready in its first bring-up gets one
+	// more, 5 s later, before fs is told; then fs is told either way.
+	msc_bound = 0; msc_started = 0; msc_gen++;
+	usbh_notify(Z_USBH_NOTE_MSC);
+	usb_test_service();
+	msc_bound = 1; msc_gen++; msc_steps = 0; msc_pace_k = 0;
+	msc_never_steps = 1;			// the first bring-up gives up
+	msc_busy_steps = 1;			// the second is ready after one more step
+	boxes[FS_PID].events = 0;
+	usbh_notify(Z_USBH_NOTE_MSC);
+	usb_test_service();
+	CHECK(msc_steps == 1 && !(boxes[FS_PID].events & Z_USBEV_MSC));	// not told yet
+	ticks += 5 * 732 - 1; usb_test_service();
+	CHECK(msc_steps == 1);			// the pause
+	ticks += 1; usb_test_service();
+	CHECK(msc_steps == 2 && !(boxes[FS_PID].events & Z_USBEV_MSC));
+	ticks += 300; usb_test_service();
+	CHECK(msc_steps == 3 && (boxes[FS_PID].events & Z_USBEV_MSC) && msc_started);
+	// And one that never does, twice: told after the second.
+	msc_bound = 0; msc_started = 0; msc_gen++;
+	usbh_notify(Z_USBH_NOTE_MSC);
+	usb_test_service();
+	msc_bound = 1; msc_gen++; msc_steps = 0;
+	msc_never_steps = 2;
+	boxes[FS_PID].events = 0;
+	usbh_notify(Z_USBH_NOTE_MSC);
+	usb_test_service();
+	ticks += 5 * 732; usb_test_service();
+	CHECK(msc_steps == 2 && (boxes[FS_PID].events & Z_USBEV_MSC) && !msc_started);
+	ticks += 5 * 732; usb_test_service();
+	CHECK(msc_steps == 2);			// and left alone
+	msc_started = 1;			// as it was, for the tests after
 }
 
 static void put_frame(int len, uint8_t fill, const uint8_t dst[6]) {

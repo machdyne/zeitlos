@@ -63,8 +63,14 @@ void z_usbh_msc_unbind(void);
 // after bind, NOT inside a filesystem lock.
 int z_usbh_msc_start(void);
 // One step of z_usbh_msc_start(): OK once ready, BUSY to ask again
-// later, ERR to give up (usb.c paces it).
+// later, ERR to give up (usb.c paces it). A bring-up gives up after
+// ~15 s (MSC_START_TICKS); the next step after that begins another.
 int z_usbh_msc_start_step(void);
+// Ticks to wait before the next step: backs off as a bring-up goes on.
+uint32_t z_usbh_msc_start_pace(void);
+// Sleeps between the steps z_usbh_msc_start() runs itself. The
+// process's (usb.c); co-simulation has its own.
+void usbh_msc_pause(uint32_t ticks);
 
 // Claimed: endpoints known, but the geometry may not be read yet.
 int z_usbh_msc_present(void);

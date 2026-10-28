@@ -17,6 +17,8 @@
  * above its definition. */
 static void ai_note(const char *s);
 
+int ai_io_why;
+
 /* ------------------------------------------------------------------ *
  * The file shim
  * ------------------------------------------------------------------ */
@@ -29,6 +31,18 @@ static void ai_note(const char *s);
 
 static const char *ai_root = "";
 void ai_set_root(const char *r) { ai_root = r; }
+
+/* What the loader asked of the "card", for test/loadtest.c: requests
+ * (each call is one request to fs on the device), bytes, files open
+ * now. And a fault to inject: request number `fail_at` (1-based)
+ * fails as `fail_how` says -- -1 an error, 0 an early end of file. */
+ai_host_stats_t ai_host;
+
+static bool host_fault(void)
+{
+    ai_host.requests++;
+    return ai_host.fail_at && ai_host.requests == ai_host.fail_at;
+}
 
 static void joinroot(char *out, int cap, const char *path)
 {
@@ -43,21 +57,49 @@ static void joinroot(char *out, int cap, const char *path)
 int ai_open(ai_file_t *f, const char *path)
 {
     char full[512];
+    FILE *fp;
     joinroot(full, sizeof(full), path);
-    FILE *fp = fopen(full, "rb");
+    fp = host_fault() ? NULL : fopen(full, "rb");
     f->fp = fp;
     f->handle = fp ? 1 : -1;
-    return fp ? 0 : -1;
+    if (!fp) { ai_io_why = ai_host.fail_how_timeout ? AI_IO_TIMEOUT : AI_IO_ERROR; return -1; }
+    ai_host.open_now++;
+    return 0;
 }
 int ai_read(ai_file_t *f, void *buf, int len)
-{ return (int)fread(buf, 1, (size_t)len, (FILE *)f->fp); }
+{
+    size_t n;
+    if (host_fault()) {
+        if (ai_host.fail_how < 0) {
+            ai_io_why = ai_host.fail_how_timeout ? AI_IO_TIMEOUT : AI_IO_ERROR;
+            return -1;
+        }
+        return 0;
+    }
+    n = fread(buf, 1, (size_t)len, (FILE *)f->fp);
+    if (!n && ferror((FILE *)f->fp)) { ai_io_why = AI_IO_ERROR; return -1; }
+    ai_host.bytes += (uint32_t)n;
+    return (int)n;
+}
 int ai_seek(ai_file_t *f, uint32_t off)
-{ return fseek((FILE *)f->fp, (long)off, SEEK_SET) == 0 ? 0 : -1; }
+{
+    if (!host_fault() && fseek((FILE *)f->fp, (long)off, SEEK_SET) == 0) return 0;
+    ai_io_why = ai_host.fail_how_timeout ? AI_IO_TIMEOUT : AI_IO_ERROR;
+    return -1;
+}
 void ai_close(ai_file_t *f)
-{ if (f->handle >= 0 && f->fp) fclose((FILE *)f->fp); f->handle = -1; f->fp = 0; }
+{
+    if (f->handle >= 0 && f->fp) {
+        ai_host.requests++;     /* a close is a request too */
+        ai_host.open_now--;
+        fclose((FILE *)f->fp);
+    }
+    f->handle = -1; f->fp = 0;
+}
 int ai_size(const char *path)
 {
     char full[512]; struct stat st;
+    ai_host.requests++;
     joinroot(full, sizeof(full), path);
     if (stat(full, &st) != 0) return -1;
     return (int)st.st_size;
@@ -65,6 +107,7 @@ int ai_size(const char *path)
 int ai_listdirs(const char *path, char *names, int maxnames)
 {
     char full[512];
+    ai_host.requests++;
     joinroot(full, sizeof(full), path);
     DIR *d = opendir(full);
     if (!d) { ai_note(Z_DIR_ASK_PACKS " is empty or unreadable"); return 0; }
@@ -96,22 +139,42 @@ int ai_listdirs(const char *path, char *names, int maxnames)
 #include "../../common/zfsapp.h"
 #include "../../common/zfs.h"    /* Z_FS_TYPE_DIR */
 
+#include "../../common/zeitlos.h"  /* z_uptime_ticks() */
+
+/* A failure that took longer than AI_IO_TIMEOUT_TICKS was fs not
+ * answering, not fs saying no (aidx.h, ai_io_why). */
+static void io_failed(uint32_t t0)
+{
+    ai_io_why = (z_uptime_ticks() - t0 >= AI_IO_TIMEOUT_TICKS)
+              ? AI_IO_TIMEOUT : AI_IO_ERROR;
+}
+
 int ai_open(ai_file_t *f, const char *path)
 {
+    uint32_t t0 = z_uptime_ticks();
     f->fp = 0;
     f->handle = fs_open_read(path);
-    return f->handle < 0 ? -1 : 0;
+    if (f->handle < 0) { io_failed(t0); return -1; }
+    return 0;
 }
 int ai_read(ai_file_t *f, void *buf, int len)
-{ return fs_read_chunk(f->handle, buf, len); }
+{
+    uint32_t t0 = z_uptime_ticks();
+    int n = fs_read_chunk(f->handle, buf, len);
+    if (n < 0) io_failed(t0);
+    return n;
+}
 int ai_seek(ai_file_t *f, uint32_t off)
 {
+    uint32_t t0 = z_uptime_ticks();
     /* fs_seek() is 1 for success, 0 for failure (zfsapp.h). This shim
      * is 0 for success. Returning fs_seek()'s value verbatim made
      * every seek on the device look like a failure while the host's
      * fseek() -- 0 for success -- looked fine, which is why the host
      * test passed and the board returned nothing for every query. */
-    return fs_seek(f->handle, off) ? 0 : -1;
+    if (fs_seek(f->handle, off)) return 0;
+    io_failed(t0);
+    return -1;
 }
 void ai_close(ai_file_t *f)
 { if (f->handle >= 0) fs_close_handle(f->handle); f->handle = -1; }
@@ -265,71 +328,12 @@ static bool hdr_ok(const uint8_t *h, uint32_t magic, uint32_t dsid,
     return true;
 }
 
-/* Reads a whole file into a fresh allocation, past its header.
- * Returns NULL on any failure. */
-static void *load_body(const char *path, uint32_t magic, uint32_t dsid,
-                       uint32_t *count, uint32_t *a, uint32_t *b,
-                       uint32_t *nbytes,
-                       void (*progress)(uint32_t, uint32_t, const char *),
-                       const char *what)
-{
-    ai_file_t f;
-    uint8_t hdr[AI_HDR_SIZE];
-    int total, got;
-    uint8_t *buf;
-
-    if (ai_open(&f, path) != 0) { ai_note("missing file in pack"); return NULL; }
-    if (ai_read(&f, hdr, AI_HDR_SIZE) != AI_HDR_SIZE) {
-        ai_close(&f); ai_note("truncated index file"); return NULL;
-    }
-    if (!hdr_ok(hdr, magic, dsid, count, a, b, NULL)) {
-        ai_close(&f);
-        /* Magic and version are a format mismatch; a good header with
-         * the wrong dsid means two distributions got mixed on the
-         * card, which is the failure worth naming separately because
-         * it otherwise produces confident wrong answers. */
-        if (rd32(hdr) != magic) ai_note("not an ask index file");
-        else if (rd32(hdr + 4) != AI_FORMAT_VERSION)
-            ai_note("index built by another version of tools/ask -- rebuild the pack");
-        else ai_note("pack files are from different builds");
-        return NULL;
-    }
-
-    total = ai_size(path);
-    if (total <= AI_HDR_SIZE) { ai_close(&f); ai_note("empty index file"); return NULL; }
-    total -= AI_HDR_SIZE;
-
-    buf = (uint8_t *)malloc((size_t)total);
-    if (!buf) {
-        ai_close(&f);
-        /* The overwhelmingly likely first-run failure: an app's heap
-         * and stack share one allocation, and without the kernel.h
-         * entry `ask` gets Z_PROC_STACK_SIZE_DEFAULT's 16KB against a
-         * coarse array of several hundred KB. See
-         * sw/apps/ask/INTEGRATION.md. */
-        ai_note("out of memory -- needs APP_STACK = 4M");
-        return NULL;
-    }
-
-    got = 0;
-    while (got < total) {
-        /* 8KB at a time so progress moves and the caller's bar is not
-         * a single jump from 0 to done on a 500KB file. */
-        int want = total - got;
-        int n;
-        if (want > 8192) want = 8192;
-        n = ai_read(&f, buf + got, want);
-        if (n <= 0) break;
-        got += n;
-        if (progress) progress((uint32_t)got, (uint32_t)total, what);
-    }
-    ai_close(&f);
-    if (got != total) { free(buf); ai_note("short read from card"); return NULL; }
-    if (nbytes) *nbytes = (uint32_t)total;
-    return buf;
-}
-
-/* Proves the shim on whatever this is running on. See aidx.h. */
+/* Proves the shim on whatever this is running on. See aidx.h.
+ *
+ * The loader no longer calls this: it does the same check on the
+ * index.zak handle it already has open (L_INDEX below), which saves
+ * the five requests a separate open costs. Kept for anything that
+ * wants to check a shim against a file of its own. */
 int ai_selftest(const char *path)
 {
     ai_file_t f;
@@ -349,12 +353,65 @@ int ai_selftest(const char *path)
 }
 
 /* ------------------------------------------------------------------ *
- * Pack loading
+ * Pack loading -- a state machine, one card request a step
+ *
+ * This was one call, ai_load_all(), made before the main loop ever
+ * ran: the window was drawn once and then nothing -- no redraw, no
+ * keys, no Esc, no close -- until every pack was in. docs/responsive.md
+ * is the rule it broke. Loading is already a loop over pieces (packs,
+ * then files, then blocks of a file), so it is the first of that
+ * document's two kinds: what were locals are the fields of ai_load_t,
+ * and ai_load_step() does one piece -- normally ONE request to fs,
+ * at most AI_LOAD_BLOCK bytes -- and returns. No coroutine: nothing
+ * here is deep in a call chain, and a coroutine that mallocs needs its
+ * stack above the heap (zco.h).
+ *
+ * -- who owns what, which is what makes stopping safe --
+ *
+ * Between steps the loader holds at most: one open file (L->f), one
+ * scratch block (L->scratch, the chunks.zct fallback only), and the
+ * allocations of the ONE pack being built, which sit in
+ * g_packs[g_npacks] but are not counted in g_npacks until the pack is
+ * whole. ai_load_stop() closes and frees exactly those, so Esc at any
+ * point leaves the packs already loaded usable and nothing else held.
+ * test/loadtest.c stops a load after every possible step, under
+ * AddressSanitizer, and counts allocations and open files.
+ *
+ * -- what it reads, per pack --
+ *
+ *   index.zak    once: header, body and the seek self-test on one
+ *                handle (it was opened three times: self-test, body,
+ *                and again to re-read the header)
+ *   coarse.zcv   dense packs only, decided by the index's flags
+ *                rather than by asking fs for its size
+ *   encoder.zmd  dense packs only
+ *   lens.zln     BM25 chunk lengths, 2 bytes a chunk, in one or a
+ *                few requests; a pack built before lens.zln existed
+ *                falls back to scanning chunks.zct -- 16 bytes a
+ *                chunk -- in AI_LOAD_BLOCK blocks (it was 1KB ones)
+ *   lexicon.zlx  its header
+ *
+ * For zdocs (4,289 chunks, dense = no) that is 13 requests and about
+ * 9KB, against 89 requests and 69KB before; 18 requests for an old
+ * pack without lens.zln. test/loadtest.c measures both.
  * ------------------------------------------------------------------ */
 
 static ai_pack_t g_packs[AI_PACKS_MAX];
 static int g_npacks;
 static int g_failed;
+static char g_failwhy[64];      /* the first failed pack's reason */
+static char g_warn[96];
+
+static void ai_warn(const char *pack, const char *what)
+{
+    int n = 0;
+    if (g_warn[0]) return;      /* the first one; the rest are alike */
+    n = scat(g_warn, sizeof(g_warn), n, pack);
+    n = scat(g_warn, sizeof(g_warn), n, ": ");
+    scat(g_warn, sizeof(g_warn), n, what);
+}
+
+const char *ai_warning(void) { return g_warn; }
 
 static void path_join(char *out, int cap, const char *dir, const char *name)
 {
@@ -363,108 +420,403 @@ static void path_join(char *out, int cap, const char *dir, const char *name)
     scat(out, cap, n, name);
 }
 
-static bool load_pack(ai_pack_t *p, const char *askroot, const char *name,
-                      void (*progress)(uint32_t, uint32_t, const char *))
+/* Why the last request failed, as words, for "<file>: <why>".
+ *
+ * A read that returns an error and a read that returns end-of-file
+ * early are different faults -- fs not answering, against a file
+ * shorter than its own header says -- and the first version reported
+ * both as "short read from card". `got`/`want` are for the second. */
+static void note_io(const char *file, int rv, uint32_t got, uint32_t want)
+{
+    char m[64];
+    int n = scat(m, sizeof(m), 0, file);
+    n = scat(m, sizeof(m), n, ": ");
+    if (rv < 0 && ai_io_why == AI_IO_TIMEOUT) {
+        scat(m, sizeof(m), n, "fs did not answer (timeout)");
+    } else if (rv < 0) {
+        scat(m, sizeof(m), n, "card read failed");
+    } else {
+        n = scat(m, sizeof(m), n, "ends early (");
+        n = ucat(m, sizeof(m), n, got);
+        n = scat(m, sizeof(m), n, " of ");
+        n = ucat(m, sizeof(m), n, want);
+        scat(m, sizeof(m), n, " bytes)");
+    }
+    ai_note(m);
+}
+
+static void note_open(const char *file)
+{
+    char m[64];
+    int n = scat(m, sizeof(m), 0, file);
+    if (ai_io_why == AI_IO_TIMEOUT)
+        scat(m, sizeof(m), n, ": fs did not answer (timeout)");
+    else
+        /* Missing, or the kernel's handle table (Z_FS_MAX_OPEN, 8 for
+         * the whole board) is full -- indistinguishable from here. */
+        scat(m, sizeof(m), n, ": cannot open (missing? out of handles?)");
+    ai_note(m);
+}
+
+/* Header problems, named as before: magic and version are a format
+ * mismatch; a good header with the wrong dsid means two distributions
+ * got mixed on the card, the failure worth naming separately because
+ * it otherwise produces confident wrong answers. */
+static void note_hdr(const uint8_t *hdr, uint32_t magic)
+{
+    if (rd32(hdr) != magic) ai_note("not an ask index file");
+    else if (rd32(hdr + 4) != AI_FORMAT_VERSION)
+        ai_note("index built by another version of tools/ask -- rebuild the pack");
+    else if (!hdr_ok(hdr, magic, 0, NULL, NULL, NULL, NULL))
+        ai_note("damaged index file header");
+    else ai_note("pack files are from different builds");
+}
+
+enum {
+    L_LIST = 0, L_PACK, L_INDEX,
+    L_COARSE_OPEN, L_COARSE_READ,
+    L_ENC_OPEN, L_ENC_READ,
+    L_LENS_OPEN, L_LENS_READ,
+    L_ZCT_OPEN, L_ZCT_READ,
+    L_LEX, L_DONE, L_STOPPED,
+};
+
+static void free_pack(ai_pack_t *p)
+{
+    if (p->coarse)  free(p->coarse);
+    if (p->enc_vec) free(p->enc_vec);
+    if (p->lens)    free(p->lens);
+    memset(p, 0, sizeof(*p));
+}
+
+static void close_file(ai_load_t *L)
+{
+    if (L->f.handle >= 0) ai_close(&L->f);
+    L->f.handle = -1;
+}
+
+/* Opens `name` in the pack being loaded and reads and checks its
+ * header. On failure the reason is noted and nothing is left open. */
+static bool open_hdr(ai_load_t *L, const char *name, uint32_t magic,
+                     uint32_t *count, uint32_t *a, uint32_t *b)
 {
     char path[64];
-    uint8_t *idx;
-    uint32_t n, a, b, nb;
+    uint8_t hdr[AI_HDR_SIZE];
+    int rv;
 
-    memset(p, 0, sizeof(*p));
-    scopy(p->name, sizeof(p->name), name);
-    path_join(p->dir, sizeof(p->dir), askroot, name);
-    scat(p->cardroot, sizeof(p->cardroot), 0, Z_DIR_ARK "/");
-    scat(p->cardroot, sizeof(p->cardroot), sizeof(Z_DIR_ARK "/") - 1, name);
+    path_join(path, sizeof(path), L->p->dir, name);
+    if (ai_open(&L->f, path) != 0) { L->f.handle = -1; note_open(name); return false; }
+    rv = ai_read(&L->f, hdr, AI_HDR_SIZE);
+    if (rv != AI_HDR_SIZE) {
+        note_io(name, rv, rv > 0 ? (uint32_t)rv : 0, AI_HDR_SIZE);
+        close_file(L);
+        return false;
+    }
+    L->done += AI_HDR_SIZE;
+    if (!hdr_ok(hdr, magic, L->p->dsid, count, a, b, NULL)) {
+        note_hdr(hdr, magic);
+        close_file(L);
+        return false;
+    }
+    return true;
+}
 
-    /* index.zak first, and with dsid 0 -- it is the file that DEFINES
-     * the dataset id every other file is then checked against. */
+/* One request's worth of a bulk read into L->dst. Returns 1 when all
+ * L->want bytes are in, 0 for more, -1 on failure (noted, file closed).
+ * Loops on a short count rather than treating it as the end: zfs_read()
+ * may legitimately return less than asked mid-file (zfsc.c), and only
+ * a 0 is the end of the file. */
+static int bulk_step(ai_load_t *L, const char *name)
+{
+    uint32_t want = L->want - L->got;
+    int n;
+    if (want > AI_LOAD_BLOCK) want = AI_LOAD_BLOCK;
+    if (!want) return 1;
+    n = ai_read(&L->f, L->dst + L->got, (int)want);
+    if (n <= 0) {
+        note_io(name, n, L->got, L->want);
+        close_file(L);
+        return -1;
+    }
+    L->got += (uint32_t)n;
+    L->done += (uint32_t)n;
+    return L->got == L->want ? 1 : 0;
+}
+
+static void lens_finish(ai_load_t *L)
+{
+    ai_pack_t *p = L->p;
+    p->avg_len = (uint32_t)(L->sum / (p->nchunks ? p->nchunks : 1));
+    if (!p->avg_len) p->avg_len = 1;
+    p->resident += p->nchunks * (uint32_t)sizeof(uint16_t);
+}
+
+/* BM25 runs without its length term when this happens (see the lexical
+ * half below), which ranks measurably worse -- so it is not silent: the
+ * reason goes to ai_warning() and the app's status line. */
+static void lens_fail(ai_load_t *L)
+{
+    char m[64];
+    int n;
+    close_file(L);
+    if (L->scratch) { free(L->scratch); L->scratch = NULL; }
+    if (L->p->lens) { free(L->p->lens); L->p->lens = NULL; }
+    n = scat(m, sizeof(m), 0, "weaker ranking, ");
+    scat(m, sizeof(m), n, ai_err[0] ? ai_err : "no chunk lengths");
+    ai_warn(L->p->name, m);
+    ai_err[0] = 0;
+    L->step = L_LEX;
+}
+
+/* The pack in hand is refused: free it and move on to the next. */
+static void pack_fail(ai_load_t *L)
+{
+    close_file(L);
+    if (L->scratch) { free(L->scratch); L->scratch = NULL; }
+    free_pack(L->p);
+    if (!ai_err[0]) ai_note("pack rejected");
+    if (!g_failwhy[0]) scopy(g_failwhy, sizeof(g_failwhy), ai_err);
+    g_failed++;
+    L->next++;
+    L->step = L_PACK;
+}
+
+void ai_load_begin(ai_load_t *L, const char *askroot)
+{
+    ai_free_all();
+    memset(L, 0, sizeof(*L));
+    L->f.handle = -1;
+    scopy(L->root, sizeof(L->root), askroot);
+    L->step = L_LIST;
+    g_failed = 0;
+    g_failwhy[0] = 0;
+    g_warn[0] = 0;
+    ai_err[0] = 0;
+}
+
+/* The index: header, the body's first words, and the seek self-test,
+ * all on one handle. index.zak is small (128 bytes for zdocs) and only
+ * its first AI_HDR_SIZE + 48 bytes are used, so one 256-byte read
+ * normally gets everything. */
+static bool load_index(ai_load_t *L)
+{
+    ai_pack_t *p = L->p;
+    char path[64];
+    uint8_t buf[256], again[8];
+    int got = 0, rv, i;
+
     path_join(path, sizeof(path), p->dir, "index.zak");
-
-    /* Before trusting anything, prove seek works here. Loading itself
-     * is purely sequential, so a broken seek loads a pack perfectly
-     * and then returns nothing for every query -- which looks like a
-     * retrieval problem rather than an I/O one. */
-    {
-        int rv = ai_selftest(path);
-        if (rv != 0) {
-            /* Say WHICH step failed. The first version reported
-             * "file seek is broken" for all of them, including a
-             * failure to OPEN -- which is what happens when the
-             * kernel's handle table is exhausted, and sent a real
-             * debugging session after the wrong thing entirely. */
-            if (rv == -1) ai_note("cannot open index -- out of file handles?");
-            else if (rv == -2 || rv == -4) ai_note("short read from card");
-            else if (rv == -3) ai_note("file seek failed");
-            else ai_note("seek returned the wrong bytes");
+    if (ai_open(&L->f, path) != 0) { L->f.handle = -1; note_open("index.zak"); return false; }
+    while (got < AI_HDR_SIZE + 48) {
+        rv = ai_read(&L->f, buf + got, (int)sizeof(buf) - got);
+        if (rv <= 0) {
+            note_io("index.zak", rv, (uint32_t)got, AI_HDR_SIZE + 48);
+            close_file(L);
             return false;
         }
+        got += rv;
     }
+    L->done += (uint32_t)got;
 
-    idx = (uint8_t *)load_body(path, AI_MAGIC_INDEX, 0, &n, &a, &b, &nb,
-                               NULL, NULL);
-    if (!idx) return false;
+    /* Before trusting anything, prove seek works here: read the first
+     * eight bytes again after seeking back. Loading is sequential, so
+     * a broken seek loads a pack perfectly and then returns nothing
+     * for every query -- which looks like a retrieval problem rather
+     * than an I/O one. Say WHICH step failed: an earlier version
+     * reported "file seek is broken" for every failure, including
+     * running out of handles, and sent a debugging session after the
+     * wrong thing entirely. */
+    if (ai_seek(&L->f, 0) != 0) {
+        if (ai_io_why == AI_IO_TIMEOUT) note_io("index.zak", -1, 0, 0);
+        else ai_note("file seek failed");
+        close_file(L);
+        return false;
+    }
+    rv = ai_read(&L->f, again, 8);
+    close_file(L);
+    if (rv != 8) { note_io("index.zak", rv, rv > 0 ? (uint32_t)rv : 0, 8); return false; }
+    for (i = 0; i < 8; i++)
+        if (again[i] != buf[i]) { ai_note("seek returned the wrong bytes"); return false; }
 
+    /* dsid 0: index.zak is the file that DEFINES the dataset id every
+     * other file is then checked against. */
+    if (!hdr_ok(buf, AI_MAGIC_INDEX, 0, NULL, NULL, NULL, NULL)) {
+        note_hdr(buf, AI_MAGIC_INDEX);
+        return false;
+    }
+    p->flags = rd32(buf + 8);
+    p->dsid  = rd32(buf + 24);
+    if (rd32(buf + 16) < 48) { ai_note("index.zak is too short"); return false; }
     {
-        ai_file_t f;
-        uint8_t hdr[AI_HDR_SIZE];
-        if (ai_open(&f, path) != 0) { free(idx); return false; }
-        if (ai_read(&f, hdr, AI_HDR_SIZE) != AI_HDR_SIZE) {
-            ai_close(&f); free(idx); return false;
-        }
-        ai_close(&f);
-        p->dsid  = rd32(hdr + 24);
-        p->flags = rd32(hdr + 8);
+        const uint8_t *idx = buf + AI_HDR_SIZE;
+        p->ndocs      = rd32(idx +  0);
+        p->nchunks    = rd32(idx +  4);
+        p->coarse_dim = rd32(idx +  8);
+        p->fine_dim   = rd32(idx + 12);
+        p->nterms     = rd32(idx + 16);
+        p->vocab      = rd32(idx + 20);
+        p->encoder_id = rd32(idx + 40);
     }
-
-    if (nb < 48) { free(idx); return false; }
-    p->ndocs      = rd32(idx +  0);
-    p->nchunks    = rd32(idx +  4);
-    p->coarse_dim = rd32(idx +  8);
-    p->fine_dim   = rd32(idx + 12);
-    p->nterms     = rd32(idx + 16);
-    p->vocab      = rd32(idx + 20);
-    p->encoder_id = rd32(idx + 40);
-    free(idx);
-
-    if (!p->nchunks || !p->coarse_dim || p->coarse_dim > 256) {
+    if (!p->nchunks || !p->coarse_dim || p->coarse_dim > 256
+        || p->fine_dim > 256) {
         ai_note("index.zak has impossible dimensions");
         return false;
     }
-    if (p->fine_dim > 256) {
-        ai_note("index.zak has impossible dimensions");
-        return false;
-    }
 
-    /* Coarse vectors. OPTIONAL: a pack built with `dense = no`
-     * (tools/ask) has none, and is answered by BM25 alone -- which
-     * measures BETTER than the fused result with an untrained encoder,
-     * and holds nothing resident at all. */
-    path_join(path, sizeof(path), p->dir, "coarse.zcv");
-    if (ai_size(path) > 0) {
-        p->coarse = (int8_t *)load_body(path, AI_MAGIC_COARSE, p->dsid,
-                                        &n, &a, &b, &nb, progress, name);
-        if (!p->coarse) return false;
-        if (n != p->nchunks || a != p->coarse_dim
-            || nb < (uint32_t)p->nchunks * p->coarse_dim) {
-            free(p->coarse); p->coarse = NULL;
-            ai_note("coarse.zcv disagrees with index.zak");
-            return false;
-        }
-        p->resident += nb;
-    }
-
-    /* encoder -- used on every query, so also resident */
+    /* This pack's bytes, for the progress figure. An estimate where a
+     * size is not known yet (the encoder's pool); corrected as files
+     * are opened. */
+    L->total = L->done + 2u * p->nchunks + AI_HDR_SIZE * 2;
+    if (p->flags & AI_FLAG_HAS_FINE)
+        L->total += AI_HDR_SIZE + p->nchunks * p->coarse_dim;
     if (p->flags & AI_FLAG_HAS_ENCODER) {
+        L->enc_size = p->vocab * (p->fine_dim + 6u);
+        L->total += AI_HDR_SIZE + L->enc_size;
+    }
+    return true;
+}
+
+int ai_load_step(ai_load_t *L)
+{
+    ai_pack_t *p = L->p;
+    uint32_t n, a, b;
+    int r;
+
+    switch (L->step) {
+
+    case L_LIST:
+        L->nnames = ai_listdirs(L->root, L->names, AI_PACKS_MAX);
+        L->next = 0;
+        L->step = L_PACK;
+        return AI_LOAD_RUNNING;
+
+    case L_PACK:
+        if (L->next >= L->nnames || g_npacks >= AI_PACKS_MAX) {
+            L->step = L_DONE;
+            L->p = NULL;
+            /* A PARTIAL load keeps its reason. Two packs where three
+             * were installed is a corpus that silently shrank, and the
+             * app has no other way to say so -- the status line would
+             * read "N passages" and look entirely healthy. Running out
+             * of memory on the second pack is the realistic case. */
+            if (g_failed) scopy(ai_err, sizeof(ai_err), g_failwhy);
+            else if (g_npacks) ai_err[0] = 0;
+            return AI_LOAD_DONE;
+        }
+        p = L->p = &g_packs[g_npacks];
+        memset(p, 0, sizeof(*p));
+        {
+            const char *name = &L->names[L->next * 13];
+            scopy(p->name, sizeof(p->name), name);
+            path_join(p->dir, sizeof(p->dir), L->root, name);
+            scat(p->cardroot, sizeof(p->cardroot), 0, Z_DIR_ARK "/");
+            scat(p->cardroot, sizeof(p->cardroot), sizeof(Z_DIR_ARK "/") - 1, name);
+        }
+        L->done = 0;
+        L->total = 0;
+        L->sum = 0;
+        L->enc_size = 0;
+        L->last_pm = 0;
+        ai_err[0] = 0;
+        L->step = L_INDEX;
+        return AI_LOAD_RUNNING;
+
+    case L_INDEX:
+        if (!load_index(L)) { pack_fail(L); return AI_LOAD_RUNNING; }
+        /* Coarse vectors only in a dense pack. A pack built with
+         * `dense = no` (tools/ask) has none and is answered by BM25
+         * alone -- which measures BETTER than the fused result with an
+         * untrained encoder, and holds nothing resident at all. The
+         * flag says which; asking fs for coarse.zcv's size was a
+         * request spent on every lexical pack to learn the same. */
+        L->step = (p->flags & AI_FLAG_HAS_FINE) ? L_COARSE_OPEN : L_ENC_OPEN;
+        return AI_LOAD_RUNNING;
+
+    case L_COARSE_OPEN:
+        if (!open_hdr(L, "coarse.zcv", AI_MAGIC_COARSE, &n, &a, NULL)) {
+            pack_fail(L); return AI_LOAD_RUNNING;
+        }
+        if (n != p->nchunks || a != p->coarse_dim) {
+            ai_note("coarse.zcv disagrees with index.zak");
+            pack_fail(L); return AI_LOAD_RUNNING;
+        }
+        p->coarse = (int8_t *)malloc((size_t)n * a);
+        if (!p->coarse) {
+            /* The overwhelmingly likely first-run failure: an app's
+             * heap and stack share one allocation, and a dense pack's
+             * coarse array is several hundred KB. */
+            ai_note("out of memory -- needs APP_STACK = 4M");
+            pack_fail(L); return AI_LOAD_RUNNING;
+        }
+        L->dst = (uint8_t *)p->coarse;
+        L->want = n * a;
+        L->got = 0;
+        L->step = L_COARSE_READ;
+        return AI_LOAD_RUNNING;
+
+    case L_COARSE_READ:
+        r = bulk_step(L, "coarse.zcv");
+        if (r < 0) { pack_fail(L); return AI_LOAD_RUNNING; }
+        if (r > 0) {
+            close_file(L);
+            p->resident += L->want;
+            L->step = L_ENC_OPEN;
+        }
+        return AI_LOAD_RUNNING;
+
+    case L_ENC_OPEN: {
+        /* The encoder -- used on every query, so also resident. Its
+         * pool's length is not in the header, so this one file still
+         * needs its size from fs. A pack whose encoder does not load
+         * still loads (as it always has), answered by BM25 -- with a
+         * warning, where it used to be silent. */
+        char path[64];
+        int size;
+        if (!(p->flags & AI_FLAG_HAS_ENCODER)) { L->step = L_LENS_OPEN; return AI_LOAD_RUNNING; }
         path_join(path, sizeof(path), p->dir, "encoder.zmd");
-        uint8_t *e = (uint8_t *)load_body(path, AI_MAGIC_ENCODER, p->dsid,
-                                          &n, &a, &b, &nb, progress, name);
-        if (e) {
-            uint32_t vecbytes = n * a;
-            uint32_t off = vecbytes;
-            off = (off + 3u) & ~3u;
+        size = ai_size(path);
+        if (size <= AI_HDR_SIZE || !open_hdr(L, "encoder.zmd", AI_MAGIC_ENCODER, &n, &a, NULL)) {
+            if (size <= AI_HDR_SIZE) note_open("encoder.zmd");
+            ai_warn(p->name, ai_err);
+            ai_err[0] = 0;
+            L->step = L_LENS_OPEN;
+            return AI_LOAD_RUNNING;
+        }
+        L->enc_n = n;
+        L->enc_dim = a;
+        L->want = (uint32_t)size - AI_HDR_SIZE;
+        /* the estimate made at the index, replaced by the real size */
+        L->total = L->total - L->enc_size + L->want;
+        p->enc_vec = (int8_t *)malloc(L->want);
+        if (!p->enc_vec) {
+            close_file(L);
+            ai_warn(p->name, "out of memory for encoder.zmd");
+            L->step = L_LENS_OPEN;
+            return AI_LOAD_RUNNING;
+        }
+        L->dst = (uint8_t *)p->enc_vec;
+        L->got = 0;
+        L->step = L_ENC_READ;
+        return AI_LOAD_RUNNING;
+    }
+
+    case L_ENC_READ:
+        r = bulk_step(L, "encoder.zmd");
+        if (r < 0) {
+            free(p->enc_vec); p->enc_vec = NULL;
+            ai_warn(p->name, ai_err);
+            ai_err[0] = 0;
+            L->step = L_LENS_OPEN;
+            return AI_LOAD_RUNNING;
+        }
+        if (r > 0) {
+            uint8_t *e = (uint8_t *)p->enc_vec;
+            uint32_t nb = L->want, off;
+            n = L->enc_n; a = L->enc_dim;
+            close_file(L);
+            off = (n * a + 3u) & ~3u;
             if (off + n * 2 + n * 4 <= nb) {
                 p->vocab   = n;
-                p->enc_vec = (int8_t *)e;
                 p->enc_idf = (uint16_t *)(void *)(e + off);
                 off += n * 2;
                 off = (off + 3u) & ~3u;
@@ -475,120 +827,198 @@ static bool load_pack(ai_pack_t *p, const char *askroot, const char *name,
                 if (a != p->fine_dim) p->fine_dim = a;
                 p->resident += nb;
             } else {
-                free(e);
+                free(p->enc_vec); p->enc_vec = NULL;
+                ai_warn(p->name, "encoder.zmd is malformed");
             }
+            L->step = L_LENS_OPEN;
         }
+        return AI_LOAD_RUNNING;
+
+    /* Per-chunk token counts, for BM25's length normalisation. Without
+     * them BM25 runs with b = 0, and a long chunk that happens to
+     * repeat one query term outscores a short one that is actually
+     * about the subject -- "how to start a fire" returned the I2C
+     * document, which is full of the I2C START condition, ahead of the
+     * survival manual. */
+    case L_LENS_OPEN:
+        if (!open_hdr(L, "lens.zln", AI_MAGIC_LENS, &n, &a, NULL)
+            || n != p->nchunks || a != 2) {
+            /* No lens.zln -- a pack built before it existed -- or one
+             * that does not match: chunks.zct is the authority either
+             * way, so scan that instead. */
+            close_file(L);
+            ai_err[0] = 0;
+            L->total += 14u * p->nchunks;   /* 16 bytes a chunk, not 2 */
+            L->step = L_ZCT_OPEN;
+            return AI_LOAD_RUNNING;
+        }
+        p->lens = (uint16_t *)malloc(n * sizeof(uint16_t));
+        if (!p->lens) { ai_note("out of memory"); lens_fail(L); return AI_LOAD_RUNNING; }
+        L->dst = (uint8_t *)p->lens;        /* little-endian, as the board */
+        L->want = n * (uint32_t)sizeof(uint16_t);
+        L->got = 0;
+        L->step = L_LENS_READ;
+        return AI_LOAD_RUNNING;
+
+    case L_LENS_READ:
+        r = bulk_step(L, "lens.zln");
+        if (r < 0) {
+            /* chunks.zct has the same numbers; try that before giving
+             * up on lengths. Whatever went wrong here is forgotten
+             * unless that fails too. */
+            free(p->lens); p->lens = NULL;
+            ai_err[0] = 0;
+            L->total += 14u * p->nchunks;
+            L->step = L_ZCT_OPEN;
+            return AI_LOAD_RUNNING;
+        }
+        if (r > 0) {
+            uint32_t i;
+            close_file(L);
+            for (i = 0; i < p->nchunks; i++) {
+                /* The packer clamps to 1..65535; a 0 here would divide
+                 * nothing, but is not what the scan would have made. */
+                if (!p->lens[i]) p->lens[i] = 1;
+                L->sum += p->lens[i];
+            }
+            lens_finish(L);
+            L->step = L_LEX;
+        }
+        return AI_LOAD_RUNNING;
+
+    case L_ZCT_OPEN:
+        if (!open_hdr(L, "chunks.zct", AI_MAGIC_CHUNKS, &n, NULL, NULL)) {
+            lens_fail(L); return AI_LOAD_RUNNING;
+        }
+        if (n != p->nchunks) {
+            ai_note("chunks.zct disagrees with index.zak");
+            lens_fail(L); return AI_LOAD_RUNNING;
+        }
+        p->lens = (uint16_t *)malloc(n * sizeof(uint16_t));
+        L->scratch = (uint8_t *)malloc(AI_LOAD_BLOCK);
+        if (!p->lens || !L->scratch) { ai_note("out of memory"); lens_fail(L); return AI_LOAD_RUNNING; }
+        L->rec_i = 0;
+        L->have = 0;
+        L->step = L_ZCT_READ;
+        return AI_LOAD_RUNNING;
+
+    case L_ZCT_READ: {
+        /* Records are 16 bytes and only the third word (the chunk's
+         * byte length) is wanted. A short count may end mid-record, so
+         * the tail is kept for the next step. */
+        uint32_t left = (p->nchunks - L->rec_i) * 16u - L->have;
+        uint32_t want = AI_LOAD_BLOCK - L->have;
+        uint32_t k, whole;
+        int got;
+        if (want > left) want = left;
+        got = ai_read(&L->f, L->scratch + L->have, (int)want);
+        if (got <= 0) {
+            note_io("chunks.zct", got, AI_HDR_SIZE + L->rec_i * 16u + L->have,
+                    AI_HDR_SIZE + p->nchunks * 16u);
+            lens_fail(L);
+            return AI_LOAD_RUNNING;
+        }
+        L->done += (uint32_t)got;
+        L->have += (uint32_t)got;
+        whole = L->have / 16u;
+        for (k = 0; k < whole; k++) {
+            uint32_t tok = rd32(L->scratch + k * 16u + 8) / AI_BYTES_PER_TOKEN;
+            if (tok > 65535) tok = 65535;
+            if (!tok) tok = 1;
+            p->lens[L->rec_i + k] = (uint16_t)tok;
+            L->sum += tok;
+        }
+        L->rec_i += whole;
+        L->have -= whole * 16u;
+        if (L->have) memmove(L->scratch, L->scratch + whole * 16u, L->have);
+        if (L->rec_i == p->nchunks) {
+            close_file(L);
+            free(L->scratch); L->scratch = NULL;
+            lens_finish(L);
+            L->step = L_LEX;
+        }
+        return AI_LOAD_RUNNING;
     }
 
-    /* Per-chunk token counts, for BM25's length normalisation.
-     *
-     * Streamed out of chunks.zct's byte-length column at load. Without
-     * it BM25 runs with b = 0, and a long chunk that happens to repeat
-     * one query term outscores a short one that is actually about the
-     * subject -- "how to start a fire" returned the I2C document,
-     * which is full of the I2C START condition, ahead of the survival
-     * manual. */
-    {
-        ai_file_t f;
-        uint8_t hdr[AI_HDR_SIZE];
-        uint32_t nrec = 0, i;
-        uint64_t sum = 0;
-
-        path_join(path, sizeof(path), p->dir, "chunks.zct");
-        if (ai_open(&f, path) == 0) {
-            if (ai_read(&f, hdr, AI_HDR_SIZE) == AI_HDR_SIZE
-                && hdr_ok(hdr, AI_MAGIC_CHUNKS, p->dsid, &nrec,
-                          NULL, NULL, NULL)
-                && nrec == p->nchunks) {
-                p->lens = (uint16_t *)malloc(nrec * sizeof(uint16_t));
-            }
-            if (p->lens) {
-                static uint8_t rec[16 * 64];
-                i = 0;
-                while (i < nrec) {
-                    uint32_t want = nrec - i;
-                    int got, k;
-                    if (want > 64) want = 64;
-                    got = ai_read(&f, rec, (int)(want * 16));
-                    if (got < (int)(want * 16)) break;
-                    for (k = 0; k < (int)want; k++) {
-                        uint32_t bytes = rd32(rec + k * 16 + 8);
-                        uint32_t tok = bytes / AI_BYTES_PER_TOKEN;
-                        if (tok > 65535) tok = 65535;
-                        if (!tok) tok = 1;
-                        p->lens[i + k] = (uint16_t)tok;
-                        sum += tok;
-                    }
-                    i += want;
-                }
-                if (i < nrec) { free(p->lens); p->lens = NULL; }
-                else {
-                    p->avg_len = (uint32_t)(sum / (nrec ? nrec : 1));
-                    if (!p->avg_len) p->avg_len = 1;
-                    p->resident += nrec * sizeof(uint16_t);
-                }
-            }
-            ai_close(&f);
+    case L_LEX:
+        /* lexicon.zlx's header: the term count and avg length (Q24.8).
+         * Optional, as it always was. */
+        if (open_hdr(L, "lexicon.zlx", AI_MAGIC_LEXICON, &n, &a, &b)) {
+            p->nterms = n;
+            p->avg_len_q8 = b;
+            close_file(L);
+        } else if (p->flags & AI_FLAG_HAS_LEXICON) {
+            /* The pack still loads (the dense half may answer), but a
+             * lexical query will find nothing, and that is said. */
+            ai_warn(p->name, ai_err);
         }
-    }
+        ai_err[0] = 0;
+        p->ok = true;
+        g_npacks++;
+        L->p = NULL;
+        L->next++;
+        L->step = L_PACK;
+        return AI_LOAD_RUNNING;
 
-    /* avg document length for BM25, from lexicon.zlx's header */
-    {
-        ai_file_t f;
-        uint8_t hdr[AI_HDR_SIZE];
-        path_join(path, sizeof(path), p->dir, "lexicon.zlx");
-        if (ai_open(&f, path) == 0) {
-            if (ai_read(&f, hdr, AI_HDR_SIZE) == AI_HDR_SIZE
-                && hdr_ok(hdr, AI_MAGIC_LEXICON, p->dsid, &n, &a, &b, NULL)) {
-                p->nterms = n;
-                p->avg_len_q8 = b;
-            }
-            ai_close(&f);
-        }
-    }
+    case L_DONE:
+        return AI_LOAD_DONE;
 
-    p->ok = true;
-    return true;
+    default:
+        return AI_LOAD_STOPPED;
+    }
 }
 
+void ai_load_stop(ai_load_t *L)
+{
+    if (L->step == L_DONE || L->step == L_STOPPED) return;
+    close_file(L);
+    if (L->scratch) { free(L->scratch); L->scratch = NULL; }
+    /* The pack being built is not counted in g_npacks yet; its
+     * allocations are the only ones the stop has to give back. */
+    if (L->p) { free_pack(L->p); L->p = NULL; }
+    L->step = L_STOPPED;
+}
+
+bool ai_load_busy(const ai_load_t *L)
+{
+    return L->step != L_DONE && L->step != L_STOPPED;
+}
+
+const char *ai_load_name(const ai_load_t *L)
+{
+    return L->p ? L->p->name : "";
+}
+
+/* The total is an estimate until the files that correct it are open
+ * (the encoder's size, a fallback to scanning chunks.zct), so the
+ * figure is held where it was rather than shown going backwards. */
+int ai_load_permille(ai_load_t *L)
+{
+    uint32_t pm;
+    if (!L->p || !L->total) return 0;
+    pm = (uint32_t)(((uint64_t)L->done * 1000u) / L->total);
+    if (pm > 999) pm = 999;             /* 100% is when it is done */
+    if ((int)pm < L->last_pm) pm = (uint32_t)L->last_pm;
+    L->last_pm = (int)pm;
+    return (int)pm;
+}
+
+/* The whole load in one call, for the host tools and tests. The app
+ * steps it from its main loop instead. */
 int ai_load_all(const char *askroot,
                 void (*progress)(uint32_t, uint32_t, const char *))
 {
-    char names[AI_PACKS_MAX * 13];
-    int n, i;
-
-    ai_free_all();
-    g_failed = 0;
-    n = ai_listdirs(askroot, names, AI_PACKS_MAX);
-    for (i = 0; i < n; i++) {
-        if (g_npacks >= AI_PACKS_MAX) break;
-        ai_err[0] = 0;
-        if (load_pack(&g_packs[g_npacks], askroot, &names[i * 13], progress)) {
-            g_npacks++;
-        } else {
-            if (!ai_err[0]) ai_note("pack rejected");
-            g_failed++;
-        }
-    }
-    /* A PARTIAL load keeps its reason. Two packs where three were
-     * installed is a corpus that silently shrank, and the app has no
-     * other way to say so -- the status line would read "N passages"
-     * and look entirely healthy. Running out of memory on the second
-     * pack is the realistic case, since each is a fresh allocation of
-     * several hundred KB into a first-fit pool. */
-    if (g_npacks && !g_failed) ai_err[0] = 0;
+    ai_load_t L;
+    ai_load_begin(&L, askroot);
+    while (ai_load_step(&L) == AI_LOAD_RUNNING)
+        if (progress && L.p) progress(L.done, L.total, L.p->name);
     return g_npacks;
 }
 
 void ai_free_all(void)
 {
     int i;
-    for (i = 0; i < g_npacks; i++) {
-        if (g_packs[i].coarse)  free(g_packs[i].coarse);
-        if (g_packs[i].enc_vec) free(g_packs[i].enc_vec);
-        if (g_packs[i].lens)    free(g_packs[i].lens);
-        memset(&g_packs[i], 0, sizeof(g_packs[i]));
-    }
+    for (i = 0; i < g_npacks; i++) free_pack(&g_packs[i]);
     g_npacks = 0;
 }
 
@@ -975,11 +1405,14 @@ static bool fine_open(ai_query_t *q, int pi, uint32_t *n, uint32_t *dim)
  * length term, a long chunk repeating one query term outscores a short
  * one that is actually about the subject.
  *
- * The per-chunk count did not need a new file after all. chunks.zct's
- * third word is the chunk's BYTE length, already there for the
- * preview, and bytes over AI_BYTES_PER_TOKEN is a good enough proxy.
- * load_pack() streams that column into p->lens at startup -- two bytes
- * a chunk, 20KB for arklite -- and b is 0.75 on both sides now.
+ * chunks.zct's third word is the chunk's BYTE length, already there
+ * for the preview, and bytes over AI_BYTES_PER_TOKEN is a good enough
+ * proxy -- two bytes a chunk, 20KB for arklite -- and b is 0.75 on both
+ * sides now. Reading it meant reading ALL of chunks.zct (16 bytes a
+ * chunk) at every start, so tools/ask now writes the same numbers as
+ * lens.zln and the loader reads that; packs without it still get the
+ * scan. If neither can be read, p->lens is NULL, this runs with b = 0,
+ * and ai_warning() says so.
  * ------------------------------------------------------------------ */
 
 /* log2(x) in Q8, for x in Q8. Enough for an idf weight and it costs

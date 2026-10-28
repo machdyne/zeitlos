@@ -1530,7 +1530,8 @@ int bk_backup(const bk_io_t *io, const bk_opts_t *o, bk_result_t *r) {
 	uint32_t need = (uint32_t)(ncard / 12 + 8) + o->reserve_kb;   // the index: ~80 bytes a file
 	for (int i = 0; i < ntodo; i++) need += kb_of(card[todo[i].ci].st.size);
 	uint32_t free_kb = 0;
-	if (IO->free_kb(IO->ctx, o->dest, &free_kb) != BK_OK) free_kb = 0;
+	bool counted = IO->free_kb(IO->ctx, o->dest, &free_kb) == BK_OK;
+	if (!counted) free_kb = 0;
 	if (free_kb < need) {
 		uint32_t want = need - free_kb;
 		say("backup: %u KB more room needed; making room\n", (unsigned)want);
@@ -1714,6 +1715,9 @@ int bk_backup(const bk_io_t *io, const bk_opts_t *o, bk_result_t *r) {
 		return BK_FAILED;
 	}
 	r->files = (uint32_t)nent;
+	// FatFs keeps the count it made above up to date, so this is one
+	// quick request -- and the window shows it without asking itself.
+	if (counted && !o->dry_run && IO->free_kb(IO->ctx, o->dest, &r->free_kb) != BK_OK) r->free_kb = 0;
 	kb_str(r->bytes, tb, sizeof tb);
 	say("backup: done: %s, %u file%s, %u copied (%s)\n", bname, (unsigned)r->files,
 		r->files == 1 ? "" : "s", (unsigned)r->copied, tb);
@@ -1783,6 +1787,63 @@ int bk_summary(const bk_io_t *io, const bk_opts_t *o, bk_summary_t *s) {
 	if (IO->free_kb(IO->ctx, o->dest, &fr) == BK_OK) s->free_kb = fr;
 	finish();
 	return BK_DONE;
+}
+
+// -- a glance (the window) --------------------------------------------------
+//
+// What bk_summary() reads costs about five requests a backup (a stat of
+// its folder, then its index's last line) and the free space -- which,
+// on a stick whose FSINFO is not valid, makes fs count the whole FAT,
+// answering nobody for some 20 s. The window looked that way every time
+// a drive came in, and said "Looking at the drive..." until it was done.
+// A glance is the folder's listing (a page a request), then the last
+// line of an index newest first until a complete full backup: two or
+// three requests more. And it stops when asked, between any two.
+
+static int glance_fn(void *arg, const char *name, const bk_stat_t *st) {
+	(void)arg;
+	if (stopped()) return 1;
+	if (!st->dir || !bk_name_parse(name, NULL, NULL, NULL)) return 0;
+	return name_id(name) < 0 ? -1 : 0;
+}
+
+static int glance_cmp(const void *a, const void *b) {
+	return bk_name_cmp(names[*(const int *)a], names[*(const int *)b]);
+}
+
+int bk_glance(const bk_io_t *io, const bk_opts_t *o, bk_summary_t *s) {
+	memset(s, 0, sizeof *s);
+	IO = io;
+	int rc = setup(io, o);
+	if (rc) return rc;
+	if (stopped() || !dest_there_quiet()) { finish(); return BK_FAILED; }
+	int r = IO->list(IO->ctx, root, glance_fn, NULL);
+	if (r == BK_ENOENT) { finish(); return BK_DONE; }      // no backups here yet
+	if (r != BK_OK || stopped()) { finish(); return BK_FAILED; }
+	int n = nnames;
+	int *ord = malloc((size_t)(n ? n : 1) * sizeof *ord);
+	if (!ord) { finish(); return BK_FAILED; }
+	for (int i = 0; i < n; i++) ord[i] = i;
+	qsort(ord, (size_t)n, sizeof *ord, glance_cmp);
+	s->backups = n;
+	bool watch_seen = false;
+	for (int i = n - 1; i >= 0; i--) {
+		const char *nm = names[ord[i]];
+		bool w = false;
+		uint32_t files = 0;
+		bk_name_parse(nm, NULL, NULL, &w);
+		if (w && watch_seen) continue;      // an older watch backup: not shown
+		if (stopped()) { free(ord); finish(); return BK_FAILED; }
+		if (!idx_tail(root, nm, &files)) continue;     // cut short, or being written
+		if (w) { snprintf(s->newest_watch, sizeof s->newest_watch, "%s", nm); watch_seen = true; continue; }
+		snprintf(s->newest, sizeof s->newest, "%s", nm);
+		s->newest_files = files;
+		break;
+	}
+	free(ord);
+	bool st = stopped();
+	finish();
+	return st ? BK_FAILED : BK_DONE;
 }
 
 static int pick(const char *backup) {

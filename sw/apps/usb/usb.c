@@ -573,6 +573,18 @@ static void serve(z_msg_t *m) {
 }
 
 #ifndef USB_HOST_TEST
+// Between the steps of `usbmount`'s bring-up (z_usbh_msc_start(), run
+// inside a request): asleep rather than asking the drive back to back,
+// which is what used to make a slow stick fail it. The wait ends early
+// when mail comes, so it is a loop on the clock; with mail waiting it
+// turns without sleeping, still pre-emptible, for at most the
+// driver's ~15 s.
+void usbh_msc_pause(uint32_t ticks) {
+	uint32_t until = now() + ticks;
+	int32_t left;
+	while ((left = (int32_t)(until - now())) > 0) z_proc_wait((uint32_t)left);
+}
+
 // -- the keyboards' lock LEDs --
 //
 // The kernel keeps Num/Caps/Scroll Lock (sw/os/hid.c) and wakes this
@@ -599,22 +611,37 @@ static uint32_t min_wait(uint32_t a, uint32_t b) {
 // -- a new drive, brought up in steps --
 //
 // A drive that has just bound may take seconds to report ready (a card
-// reader with no card, a disk spinning up). Asked once every MSC_PACE
-// ticks here, one TEST UNIT READY at a time, it holds up nobody; `fs`
-// hears about the drive once it is ready, and mounts it then. Until
-// Phase 3 polish, `fs` asked for the whole wait itself (MSC_START), and
-// answered nobody for its length.
-#define MSC_PACE	8
+// reader with no card, a disk spinning up). Asked one TEST UNIT READY
+// at a time here, further apart each time it is not ready (8 ticks,
+// then 16, 32 ... at most 256: z_usbh_msc_start_pace()), it holds up
+// nobody; `fs` hears about the drive once it is ready, and mounts it
+// then. The driver gives up after ~15 s, however often it was asked
+// (usbh_msc.c, "bringing a new drive up"). Until Phase 3 polish, `fs`
+// asked for the whole wait itself (MSC_START), and answered nobody for
+// its length.
+//
+// A drive that never became ready gets one more bring-up, 5 s later
+// (MSC_AGAIN_TICKS): some sticks need a pause, and with nothing more
+// the drive stayed unmounted until someone typed `usbmount`. Here
+// rather than in `fs`: fs's only way to ask is MSC_START, which would
+// hold up every one of its clients for the whole bring-up.
+#define MSC_AGAIN_TICKS	(5u * 732u)
 
 static bool msc_bring;		// a bound drive not yet ready
 static uint32_t msc_due;
+static uint8_t msc_again;	// bring-ups left after this one
 
 static void msc_service(void) {
 	if (!msc_bring || (int32_t)(now() - msc_due) < 0) return;
 	quiet_begin();
 	int r = z_usbh_msc_start_step();
 	quiet_end();
-	if (r == Z_USBH_MSC_BUSY) { msc_due = now() + MSC_PACE; return; }
+	if (r == Z_USBH_MSC_BUSY) { msc_due = now() + z_usbh_msc_start_pace(); return; }
+	if (r != Z_USBH_MSC_OK && msc_again && z_usbh_msc_present()) {
+		msc_again--;
+		msc_due = now() + MSC_AGAIN_TICKS;
+		return;
+	}
 	msc_bring = false;
 	// Ready, or given up on (`usbmount` tries again in full): either
 	// way the drive's client looks now.
@@ -641,6 +668,7 @@ static void send_notes(void) {
 		if (z_usbh_msc_present() && !z_usbh_msc_ready()) {
 			msc_bring = true;		// fs hears once it is ready
 			msc_due = now();
+			msc_again = 1;
 		} else {
 			msc_bring = false;
 			event(msc_client, Z_USBEV_MSC);

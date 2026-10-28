@@ -150,6 +150,7 @@ static int gs, gl = TEXT_MAX;	// the gap: [gs, gs + gl) physically
 static int len;
 static int cursor;			// offset into the text, 0..len
 static bool modified;
+static bool io_busy;		// a file coming in: repaint() shows none (io_pump())
 
 // The byte at text offset i, and a pointer to it that is good up to
 // the gap or the end of the storage, whichever comes first (PEND()).
@@ -369,8 +370,16 @@ static int top_line;		// first visible display line
 // Every change to the document goes through edit_insert() and
 // edit_delete(), which tell the undo log (sw/common/zundo.h) before
 // they touch the buffer. The log keeps the edits, not copies of the
-// document: 256 of them and 6KB of the text they inserted or deleted,
-// as far back as that reaches.
+// document, as far back as its two rings reach.
+//
+// The rings are in the arena (below) whenever the machine has one:
+// UNDO_AR_RECORDS edits and UNDO_AR_BYTES of their text to start with,
+// grown to fit any one change that is larger -- a big cut, a paste, a
+// Replace All -- so that it can be undone (undo_reserve()). Small edits
+// never grow them: when they fill, the oldest edits are forgotten, and
+// history gets shorter rather than an edit being refused. A new
+// document puts them back to the starting size. On a board with no
+// arena they are the fixed .bss rings below, as they always were.
 //
 // One Ctrl+Z undoes a group. A group is a run of the same kind of edit
 // at the place the last one left off -- typing a sentence, holding
@@ -380,6 +389,9 @@ static int top_line;		// first visible display line
 
 #define UNDO_RECORDS  256
 #define UNDO_BYTES    6144
+
+#define UNDO_AR_RECORDS  2048			// 40KB of records
+#define UNDO_AR_BYTES    (64 * 1024)
 
 static z_undo_rec_t undo_rec[UNDO_RECORDS];
 static char undo_bytes[UNDO_BYTES];
@@ -441,24 +453,129 @@ static int para_end(int off) {
 	return len;
 }
 
-// -- the arena: storage for a document past TEXT_MAX --
+// -- the arena: storage past what .bss holds --
 //
-// [ text: cap bytes ][ line table: lcap words ]. Grown by doubling,
-// when an edit would not fit -- see doc_room(). A resize may move the
-// arena (zeitlos.h, z_arena_set()), so everything in it is held as an
-// offset and the two pointers are set again after every call.
+//   [ text: cap ][ line table: lcap words ][ undo records ][ undo bytes ][ clipboard ]
+//
+// Each part is there only while it is needed: the text and the line
+// table while the document is past TEXT_MAX (`big`), the undo rings
+// once the .bss ones are outgrown (ar_rec, ar_bytes), the clipboard
+// while text holds a copy larger than wm's (clip_cap). Grown when
+// something would not fit -- the text by doubling, see doc_room(). A
+// resize may move the arena (zeitlos.h, z_arena_set()), so everything
+// in it is held as an offset and the pointers into it are set again
+// after every call (arena_point()).
+//
+// While a file is being opened its bytes are read into the top of the
+// text's free space (`stage_tail`, see "opening"), so the tail of the
+// storage that every resize keeps is that much longer.
 
 #define ARENA_TEXT_MIN	(2 * TEXT_MAX)
+#define UREC_SZ			((int)sizeof(z_undo_rec_t))
 
-static uint8_t *arena;			// base, while `big`
+static uint8_t *arena;			// base, or NULL with no arena
+static int ar_rec, ar_bytes;	// undo rings in the arena: their sizes, 0 while in .bss
+static int clip_cap, clip_len;	// the clipboard copy (see "the clipboard")
+static int stage_tail;			// bytes at the top of the text storage that are live in the gap
+
+static int round4k(long n) { return (int)((n + 4095) & ~4095L); }
+
+static uint32_t ar_clip_off(void) {
+	return (big ? (uint32_t)cap + (uint32_t)lcap * 4u : 0) +
+		(uint32_t)ar_rec * (uint32_t)UREC_SZ + (uint32_t)ar_bytes;
+}
 
 static void arena_point(void *base) {
 	arena = (uint8_t *)base;
-	doc = (char *)arena;
-	bline = (uint32_t *)(arena + cap);
+	if (big) {
+		doc = (char *)arena;
+		bline = (uint32_t *)(arena + cap);
+	}
+	if (ar_rec) {
+		uint32_t r = big ? (uint32_t)cap + (uint32_t)lcap * 4u : 0;
+		undo.rec = (z_undo_rec_t *)(arena + r);
+		undo.rec_cap = ar_rec;
+		undo.bytes = (char *)(arena + r + (uint32_t)ar_rec * (uint32_t)UREC_SZ);
+		undo.bytes_cap = (uint32_t)ar_bytes;
+	} else {
+		undo.rec = undo_rec;
+		undo.rec_cap = UNDO_RECORDS;
+		undo.bytes = undo_bytes;
+		undo.bytes_cap = UNDO_BYTES;
+	}
 }
 
-static int round4k(long n) { return (int)((n + 4095) & ~4095L); }
+// Moves pieces of the arena to where a new layout puts them. Each is
+// (from, to, length); the pieces are in address order and do not
+// overlap, before or after. Those moving down go first, lowest first,
+// then those moving up, highest first: so no piece is ever written
+// over one not yet moved.
+typedef struct { uint32_t o, n, len; } ar_move_t;
+
+static void ar_moves(uint8_t *a, const ar_move_t *m, int k) {
+	for (int i = 0; i < k; i++)
+		if (m[i].len && m[i].n < m[i].o) memmove(a + m[i].n, a + m[i].o, m[i].len);
+	for (int i = k - 1; i >= 0; i--)
+		if (m[i].len && m[i].n > m[i].o) memmove(a + m[i].n, a + m[i].o, m[i].len);
+}
+
+// Lays the arena out again with these sizes: the text `ntc` bytes and
+// the line table `nlc` lines (both 0 unless `big`), the undo rings and
+// the clipboard. What is in each part is kept -- the text's head and
+// tail, the table's two ends, the rings (which must be linear,
+// undo_linear(), when their size changes) and the clipboard -- unless
+// `keep_doc` is false, when the text and the table are not wanted.
+// False, changing nothing, if the machine has not got the memory.
+static bool ar_layout(int ntc, int nlc, int nrc, int nbc, int ncc, bool keep_doc) {
+
+	uint32_t otc = big ? (uint32_t)cap : 0, olc = big ? (uint32_t)lcap * 4u : 0;
+	uint32_t oR = otc + olc, oU = oR + (uint32_t)ar_rec * UREC_SZ;
+	uint32_t oC = oU + (uint32_t)ar_bytes, oT = oC + (uint32_t)clip_cap;
+	uint32_t nR = (uint32_t)ntc + (uint32_t)nlc * 4u, nU = nR + (uint32_t)nrc * UREC_SZ;
+	uint32_t nC = nU + (uint32_t)nbc, nT = nC + (uint32_t)ncc;
+
+	void *base = arena;
+	if (nT > oT || (!arena && nT)) {
+		uint32_t got;
+		if (z_arena_set(nT, &base, &got) != Z_ARENA_OK) return false;
+	}
+	uint8_t *a = (uint8_t *)base;
+
+	ar_move_t m[7];
+	int k = 0;
+	if (big && keep_doc) {
+		int tail = len - gs + stage_tail;
+		int after = lcap - lg - lgl;
+		m[k++] = (ar_move_t){ 0, 0, (uint32_t)gs };
+		m[k++] = (ar_move_t){ otc - (uint32_t)tail, (uint32_t)ntc - (uint32_t)tail, (uint32_t)tail };
+		m[k++] = (ar_move_t){ otc, (uint32_t)ntc, (uint32_t)lg * 4u };
+		m[k++] = (ar_move_t){ otc + (uint32_t)(lcap - after) * 4u,
+			(uint32_t)ntc + (uint32_t)(nlc - after) * 4u, (uint32_t)after * 4u };
+	}
+	m[k++] = (ar_move_t){ oR, nR, (uint32_t)(ar_rec < nrc ? ar_rec : nrc) * UREC_SZ };
+	m[k++] = (ar_move_t){ oU, nU, (uint32_t)(ar_bytes < nbc ? ar_bytes : nbc) };
+	// The clipboard with the rest, as the highest piece: moved apart,
+	// after them, the rings moving up wrote over it before it moved.
+	m[k++] = (ar_move_t){ oC, nC, (uint32_t)(clip_len < ncc ? clip_len : ncc) };
+	ar_moves(a, m, k);
+
+	if (big && keep_doc) {
+		gl = ntc - len;
+		cap = ntc;
+		lgl += nlc - lcap;
+		lcap = nlc;
+	}
+	ar_rec = nrc;
+	ar_bytes = nbc;
+	clip_cap = ncc;
+
+	if (nT < oT) {
+		if (nT == 0) { z_arena_set(0, NULL, NULL); base = NULL; }
+		else z_arena_set(nT, &base, NULL);		// smaller: in place, or moved whole
+	}
+	arena_point(base);
+	return true;
+}
 
 // Grows the arena so the text has room for `ncap` bytes and the line
 // table for `nlcap` lines. False, changing nothing, if the machine has
@@ -467,44 +584,21 @@ static bool arena_resize(int ncap, int nlcap) {
 	ncap = round4k(ncap);
 	if (ncap < cap) ncap = cap;
 	if (nlcap < lcap) nlcap = lcap;
-	void *base;
-	uint32_t got;
-	if (z_arena_set((uint32_t)ncap + (uint32_t)nlcap * 4u, &base, &got) != Z_ARENA_OK)
-		return false;
-	uint8_t *a = (uint8_t *)base;
-	// The line table moves up first -- it sits above the text, and the
-	// text's tail is about to move into where it was.
-	if (ncap != cap) {
-		memmove(a + ncap, a + cap, (size_t)lcap * 4u);
-		memmove(a + ncap - (len - gs), a + cap - (len - gs), (size_t)(len - gs));
-		gl = ncap - len;
-		cap = ncap;
-	}
-	arena_point(a);
-	// More lines: the entries after the table's gap move to its new
-	// end, and the gap takes the slots added.
-	if (nlcap != lcap) {
-		int after = lcap - lg - lgl;
-		memmove(&bline[nlcap - after], &bline[lcap - after], (size_t)after * 4u);
-		lgl += nlcap - lcap;
-		lcap = nlcap;
-	}
-	return true;
+	return ar_layout(ncap, nlcap, ar_rec, ar_bytes, clip_cap, true);
 }
 
-// Moves a document that has outgrown sbuf into a new arena, sized for
+// Moves a document that has outgrown sbuf into the arena, sized for
 // `need` bytes of text and twice that to grow into.
 static bool go_big(int need) {
 	int ncap = round4k((long)need * 2 > ARENA_TEXT_MIN ? (long)need * 2 : ARENA_TEXT_MIN);
 	int nlcap = MAX_LINES * 2;
 	if (nlcap < ncap / 16) nlcap = ncap / 16;
-	void *base;
-	uint32_t got;
-	if (z_arena_set((uint32_t)ncap + (uint32_t)nlcap * 4u, &base, &got) != Z_ARENA_OK)
-		return false;
-	uint8_t *a = (uint8_t *)base;
+	// Room made below the undo rings and the clipboard, which move up.
+	if (!ar_layout(ncap, nlcap, ar_rec, ar_bytes, clip_cap, false)) return false;
+	uint8_t *a = arena;
+	int tail = len - gs + stage_tail;
 	memcpy(a, sbuf, (size_t)gs);
-	memcpy(a + ncap - (len - gs), sbuf + gs + gl, (size_t)(len - gs));
+	memcpy(a + ncap - tail, sbuf + TEXT_MAX - tail, (size_t)tail);
 	// The line table, its gap kept where it is: the entries before it
 	// at the start, the ones after it at the new end.
 	uint32_t *nl = (uint32_t *)(a + ncap);
@@ -517,19 +611,22 @@ static bool go_big(int need) {
 	gl = cap - len;
 	big = true;
 	arena_point(a);
-	printf("text: %d bytes: moved to an arena of %lu KB\n", need,
-		(unsigned long)(got / 1024));
+	printf("text: %d bytes: moved to an arena of %d KB\n", need, ncap / 1024);
 	return true;
 }
 
-// Back to sbuf, and the arena freed, when a document small enough to
-// live there is opened or started. Only between documents: the text
-// is empty at that point.
-static void go_small(void) {
+// Back to sbuf, and the arena's text and table given back, when a
+// document small enough to live there is opened or started. The first
+// `keep` bytes of the text are copied down (a file just opened); the
+// rest of the text is not wanted. What else the arena holds stays.
+static void go_small(int keep) {
 	if (!big) return;
-	z_arena_set(0, NULL, NULL);
+	memcpy(sbuf, doc, (size_t)keep);
+	if (!ar_layout(0, 0, ar_rec, ar_bytes, clip_cap, false)) {
+		// Shrinking cannot fail; if the kernel says otherwise, keep the
+		// arena as it is and simply stop using its text.
+	}
 	big = false;
-	arena = NULL;
 	bline = NULL;
 	doc = sbuf;
 	cap = TEXT_MAX;
@@ -537,8 +634,9 @@ static void go_small(void) {
 	lg = 0;
 	lgl = lcap;
 	nlines = 0;
-	gs = 0;
+	gs = len;
 	gl = cap - len;
+	arena_point(arena);
 }
 
 // Room for `n` more bytes of text: true if there is, after growing the
@@ -566,6 +664,91 @@ static bool lines_room(int n) {
 	int nl = lcap * 2;
 	if (nl < n) nl = n;
 	return arena_resize(cap, nl) || arena_resize(cap, n + 256);
+}
+
+// -- the undo rings in the arena --
+
+// Reverses b[i..j).
+static void rev_bytes(uint8_t *b, uint32_t i, uint32_t j) {
+	while (i + 1 < j) { uint8_t t = b[i]; b[i++] = b[--j]; b[j] = t; }
+}
+
+// Rotates b[0..n) left by k, in place -- three reversals, because there
+// is no room for a second copy.
+static void rot_left(uint8_t *b, uint32_t n, uint32_t k) {
+	if (!n || !(k %= n)) return;
+	rev_bytes(b, 0, k);
+	rev_bytes(b, k, n);
+	rev_bytes(b, 0, n);
+}
+
+// Puts the log's oldest record and oldest byte at the start of their
+// rings and numbers everything from 0. A ring's contents are where
+// (counter % size) says, so this is what lets a ring change size: after
+// it, every counter is below the old size, and so below the new one.
+static void undo_linear(void) {
+	z_undo_t *u = &undo;
+	uint32_t f = u->first, b = u->bfirst;
+	rot_left((uint8_t *)u->rec, (uint32_t)u->rec_cap * UREC_SZ,
+		(f % (uint32_t)u->rec_cap) * UREC_SZ);
+	rot_left((uint8_t *)u->bytes, u->bytes_cap, b % u->bytes_cap);
+	for (uint32_t i = 0; i < u->end - f; i++) u->rec[i].log -= b;
+	u->top -= f;
+	u->end -= f;
+	if (u->saved != UINT32_MAX) u->saved -= f;
+	u->first = 0;
+	u->bfirst = 0;
+	u->bend -= b;
+}
+
+// The rings at `nrc` records and `nbc` bytes, in the arena, history
+// kept. False, changing nothing that matters, if there is no arena to
+// be had.
+static bool undo_grow(int nrc, int nbc) {
+	if (nrc < undo.rec_cap) nrc = undo.rec_cap;
+	if (nbc < (int)undo.bytes_cap) nbc = (int)undo.bytes_cap;
+	undo_linear();
+	bool from_bss = !ar_rec;
+	if (!ar_layout(big ? cap : 0, big ? lcap : 0, nrc, nbc, clip_cap, true)) return false;
+	if (from_bss) {
+		memcpy(undo.rec, undo_rec, sizeof(undo_rec));
+		memcpy(undo.bytes, undo_bytes, sizeof(undo_bytes));
+	}
+	return true;
+}
+
+// Before `nrec` edits of `nbytes` bytes are recorded. The rings move to
+// the arena, at their starting size, the first time the .bss ones would
+// have to forget something; and grow, once there, only for a change
+// larger than they are -- big enough for it and a starting size's worth
+// of history besides. Otherwise the oldest edits are forgotten, as they
+// always were: history gets shorter, an edit is never refused. Where
+// the arena cannot be had, nothing changes.
+static void undo_room(int nrec, long nbytes) {
+	z_undo_t *u = &undo;
+	bool full = u->top - u->first + (uint32_t)nrec > (uint32_t)u->rec_cap ||
+		u->bend - u->bfirst + (uint32_t)nbytes > u->bytes_cap;
+	if (!full || nbytes > 0x7FFFFFF) return;
+	if (ar_rec && nrec <= u->rec_cap && nbytes <= (long)u->bytes_cap) return;
+	int rc = ar_rec ? ar_rec : UNDO_AR_RECORDS;
+	long bc = ar_bytes ? ar_bytes : UNDO_AR_BYTES;
+	if (nrec > rc) rc = nrec + UNDO_AR_RECORDS;
+	if (nbytes > bc) bc = round4k(nbytes + UNDO_AR_BYTES);
+	undo_grow(rc, (int)bc);
+}
+
+// Can one change of `nrec` edits and `nbytes` bytes be kept whole, so
+// that one undo puts it all back? Grows the rings if it has to.
+static bool undo_fits(int nrec, long nbytes) {
+	undo_room(nrec, nbytes);
+	return nrec <= undo.rec_cap && nbytes <= (long)undo.bytes_cap;
+}
+
+// A new document: no history, and the rings back in .bss, so an idle
+// window holds no arena for them.
+static void undo_base(void) {
+	z_undo_reset(&undo);
+	if (ar_rec) ar_layout(big ? cap : 0, big ? lcap : 0, 0, 0, clip_cap, true);
 }
 
 // -- edits --
@@ -674,6 +857,7 @@ static char *raw_insert(int at, int n) {
 // Removes [a, b). `rec` records it for undo first, while the bytes are
 // still there to be kept.
 static void raw_delete(int a, int b, bool rec) {
+	if (rec) undo_room(1, b - a);		// before any pointer into the arena is taken
 	lines_at_edit(a, b);
 	gap_to(para_end(b));
 	if (rec) z_undo_record(&undo, Z_UNDO_DEL, a, &doc[a], b - a, cursor, undo_group);
@@ -688,8 +872,12 @@ static void raw_delete(int a, int b, bool rec) {
 	edit_tick = z_uptime_ticks();
 }
 
+// `s` must not point into the arena: a resize may move it. A paste from
+// text's own clipboard copy, which is there, has its own way in
+// (paste_private()).
 static void edit_insert(int at, const char *s, int n) {
 	if (n <= 0) return;
+	undo_room(1, n);
 	z_undo_record(&undo, Z_UNDO_INS, at, s, n, cursor, undo_group);
 	memcpy(raw_insert(at, n), s, (size_t)n);
 }
@@ -708,9 +896,10 @@ static void buf_delete_range(int a, int b) {
 
 static void buf_clear(void) {
 	len = 0;
-	wrap_bg = false;
-	go_small();
 	gs = 0;
+	stage_tail = 0;
+	wrap_bg = false;
+	go_small(0);
 	gl = cap;
 	dirty_lo = -1;
 	cursor = 0;
@@ -720,7 +909,7 @@ static void buf_clear(void) {
 	file_bom = false;
 	if (!undo.rec)					// the first document: set the log up
 		z_undo_init(&undo, undo_rec, UNDO_RECORDS, undo_bytes, UNDO_BYTES);
-	z_undo_reset(&undo);
+	undo_base();
 	undo_break();
 }
 
@@ -1490,6 +1679,15 @@ static void wheel_scroll(int notches) {
 // about what is currently on screen.
 static void repaint(void) {
 
+	// A file going in or out (load_file(), write_document()): the page
+	// is blank, and the title says how far it has got.
+	if (io_busy) {
+		int cw0 = z_win_content_w(&win), ch0 = z_win_content_h(&win);
+		z_win_fill_rect(&win, 0, 0, cw0, ch0 - Z_WIN_GRIP_INSET, 0);
+		z_win_fill_rect(&win, 0, ch0 - Z_WIN_GRIP_INSET, cw0 - Z_WIN_GRIP_INSET, Z_WIN_GRIP_INSET, 0);
+		return;
+	}
+
 	// The strip between the text and the scrollbar, plus any partial
 	// row at the bottom that draw_row() never covers. wm clears
 	// before most redraws but NOT after a move (see repair_drag() in
@@ -1757,6 +1955,87 @@ static int sb_unsavable(void) {
 
 }
 
+// -- opening and saving a large file: a piece at a time --
+// docs/text_editor.md, "Opening and saving" --
+//
+// Reading a megabyte from the card takes seconds, and so does writing
+// one. In one call the window could not redraw (wm waits for it) and
+// nothing could stop it. Both now go a piece at a time, and every
+// ~20 ms between pieces the window's mail is read: redraws are served
+// (forward_msg(), as while a dialog is up), the title says how far it
+// has got, and Esc stops an open. Keys, clicks and the wheel are let
+// go meanwhile: the document is not there yet, or is being written --
+// an edit in the middle of a save would be saved half. A close is put
+// back, for the main loop once the file is done.
+
+static bool io_stopped;
+static uint32_t io_t0;
+static int io_pct;
+static const char *io_verb, *io_name;
+
+static bool io_on;				// io_begin() .. io_end()
+
+// `blank`: the page shows nothing meanwhile (an open: the document is
+// not there yet). A save leaves it drawn.
+static void io_begin(const char *verb, const char *path, bool blank) {
+	const char *b = strrchr(path, '/');
+	io_name = b ? b + 1 : path;
+	io_verb = verb;
+	io_t0 = z_uptime_ticks();
+	io_pct = -1;
+	io_stopped = false;
+	io_busy = blank;
+	io_on = true;
+}
+
+static void io_end(void) {
+	io_busy = false;
+	if (!io_on) return;
+	io_on = false;
+	if (io_pct < 0) return;			// quick: the title was never changed
+	sent_title[0] = 0;				// what the title said meanwhile is not the cache's
+	update_title();
+}
+
+// Between two pieces: true once Esc has stopped it (only if `stoppable`).
+static bool io_pump(long done, long total, bool stoppable) {
+	if (z_uptime_ticks() - io_t0 < Z_TICK_HZ / 50) return io_stopped;
+	io_t0 = z_uptime_ticks();
+	z_msg_t m;
+	bool closing = false;
+	z_msg_t close_msg;
+	while (z_msg_read(&m) == Z_OK) {
+		switch (m.subject) {
+			case Z_WM_KEY:
+				if (stoppable && m.obj.type == Z_UINT32 &&
+				    Z_WM_UNPACK_KEY_PRESSED(m.obj.val.uint32) &&
+				    Z_WM_UNPACK_KEY_KEYSYM(m.obj.val.uint32) == 0x1b)
+					io_stopped = true;
+				break;
+			case Z_WM_MOUSE: case Z_WM_WHEEL: case Z_WM_TITLEBAR_ICON:
+				break;
+			case Z_WM_CLOSE:
+				if (stoppable) io_stopped = true;
+				close_msg = m;
+				closing = true;
+				break;
+			default:
+				forward_msg(&m, NULL);
+				break;
+		}
+	}
+	if (closing) z_msg_unread(&close_msg);
+	int pct = total > 0 ? (int)(done * 100 / total) : 0;
+	if (pct != io_pct) {
+		io_pct = pct;
+		char t[64];
+		snprintf(t, sizeof(t), stoppable ? "%s %.24s %d%%  (Esc stops)" : "%s %.24s %d%%",
+			io_verb, io_name, pct);
+		z_win_set_title(&win, t);
+	}
+	return io_stopped;
+}
+
 // Writes the document to `path` in the file's own encoding: the
 // buffer as it is for UTF-8 (after the byte order mark, if the file
 // had one), converted a small piece at a time for Latin-9, so that
@@ -1793,6 +2072,7 @@ static bool write_document(const char *path) {
 			}
 			if (fs_write_chunk(h, src, n) != n) ok = false;
 			i += n;
+			if (io_on) io_pump(i, len, false);
 		}
 
 	} else {
@@ -1807,6 +2087,7 @@ static bool write_document(const char *path) {
 			if (o == (int)sizeof(out) || p >= end) {
 				if (fs_write_chunk(h, out, o) != o) ok = false;
 				o = 0;
+				if (io_on) io_pump((long)(p - doc), len, false);
 			}
 		}
 
@@ -1817,6 +2098,44 @@ static bool write_document(const char *path) {
 
 }
 
+
+// Saving without risking the file that is there: the document is
+// written to NAME.part, and only once that is complete and closed does
+// it take the file's name (draw does the same, drawio.c). A full card
+// or a power cut mid-save used to leave the only copy truncated; now
+// it leaves the old file as it was, and a .part beside it at worst.
+//
+// FAT will not rename onto a name that exists, so the old file is
+// deleted first. Between that and the rename the .part is the only
+// copy -- complete, and kept under its own name if the rename fails.
+typedef enum { SAVE_OK, SAVE_FAILED, SAVE_KEPT_PART } save_rv_t;
+
+static save_rv_t write_safely_(const char *path, char *part, int part_size);
+
+static save_rv_t write_safely(const char *path, char *part, int part_size) {
+	io_begin("Saving", path, false);
+	save_rv_t r = write_safely_(path, part, part_size);
+	io_end();
+	return r;
+}
+
+static save_rv_t write_safely_(const char *path, char *part, int part_size) {
+	int n = (int)strlen(path);
+	if (n + 6 > part_size) return write_document(path) ? SAVE_OK : SAVE_FAILED;
+	memcpy(part, path, (size_t)n);
+	memcpy(part + n, ".part", 6);
+	if (!write_document(part)) {
+		fs_unlink(part);
+		return SAVE_FAILED;
+	}
+	int err = 0;
+	if (fs_rename(part, path, &err)) return SAVE_OK;
+	if (err != Z_FS_ERR_EXIST || !fs_unlink((char *)path)) {
+		fs_unlink(part);			// the old file is still there: no harm done
+		return SAVE_FAILED;
+	}
+	return fs_rename(part, path, &err) ? SAVE_OK : SAVE_KEPT_PART;
+}
 
 // -- autosave -- docs/text_editor.md, "Autosave" --
 //
@@ -1858,10 +2177,29 @@ static void as_name(char *out, int cap, const char *path, const char *ext) {
 	snprintf(out, (size_t)cap, Z_DIR_RAM "/T%07lX.%s", (unsigned long)(h & 0x0FFFFFFFu), ext);
 }
 
+// What a copy is filed under: the file's path, or, for a document never
+// saved, this window's own process -- "untitled <pid> <serial>". Every
+// untitled document was filed under "" once, so two untitled windows
+// wrote over each other's copy, and a second one started offered the
+// first one's live copy back as "a session that did not end" -- and
+// deleted it on No. The serial tells a window that is gone from a pid
+// used again (z_proc_serial()).
+static char as_untitled[40];
+
+static const char *as_key(void) {
+	if (filename[0]) return filename;
+	if (!as_untitled[0]) {
+		uint32_t pid = z_getpid();
+		snprintf(as_untitled, sizeof(as_untitled), "untitled %lu %lu",
+			(unsigned long)pid, (unsigned long)z_proc_serial(pid));
+	}
+	return as_untitled;
+}
+
 static void as_abort(void) {
 	char n[40];
 	if (as_h >= 0) { fs_close_handle(as_h); as_h = -1; }
-	as_name(n, sizeof(n), filename, "NEW");
+	as_name(n, sizeof(n), as_key(), "NEW");
 	fs_unlink(n);
 }
 
@@ -1872,9 +2210,9 @@ static void autosave_discard(void) {
 	as_done_gen = edit_gen;
 	if (!as_have_ram()) return;
 	as_abort();
-	as_name(n, sizeof(n), filename, "SAV");
+	as_name(n, sizeof(n), as_key(), "SAV");
 	fs_unlink(n);
-	as_name(n, sizeof(n), filename, "INF");
+	as_name(n, sizeof(n), as_key(), "INF");
 	fs_unlink(n);
 	as_done_gen = edit_gen;
 }
@@ -1892,7 +2230,7 @@ static bool autosave_step(void) {
 		if (!modified || edit_gen == as_done_gen ||
 			z_uptime_ticks() - edit_tick < AUTOSAVE_IDLE) return false;
 		if (!as_have_ram()) { as_done_gen = edit_gen; return false; }
-		as_name(n, sizeof(n), filename, "NEW");
+		as_name(n, sizeof(n), as_key(), "NEW");
 		if ((as_h = fs_open_write(n)) < 0) {
 			as_done_gen = edit_gen;			// cannot write it: not until the next edit
 			return false;
@@ -1922,14 +2260,14 @@ static bool autosave_step(void) {
 	// Complete: in place of the last copy, with its note.
 	fs_close_handle(as_h);
 	as_h = -1;
-	as_name(n, sizeof(n), filename, "SAV");
-	as_name(m, sizeof(m), filename, "NEW");
+	as_name(n, sizeof(n), as_key(), "SAV");
+	as_name(m, sizeof(m), as_key(), "NEW");
 	fs_unlink(n);
 	if (!fs_rename(m, n, NULL)) { fs_unlink(m); as_done_gen = edit_gen; return false; }
-	as_name(n, sizeof(n), filename, "INF");
+	as_name(n, sizeof(n), as_key(), "INF");
 	{
 		char inf[Z_FS_PATH_MAX + 16];
-		int k = snprintf(inf, sizeof(inf), "%s\n%d %d\n", filename, (int)file_enc, (int)file_bom);
+		int k = snprintf(inf, sizeof(inf), "%s\n%d %d\n", as_key(), (int)file_enc, (int)file_bom);
 		fs_write_file(n, inf, k);
 	}
 	as_done_gen = as_gen;
@@ -1941,27 +2279,16 @@ static bool autosave_step(void) {
 static bool load_file(const char *path);
 static void update_title(void);
 
-// After a file is opened: if a copy of it from a session that did not
-// end tidily is in /tmp, offer it. Yes puts it in the document, still
-// unsaved, still belonging to the file and its encoding; No deletes it.
-static void autosave_offer(void) {
+// The copy filed as `sav`, whose note `inf` holds `note` (its first
+// line, then "<enc> <bom>"): offered, and on Yes put in the document,
+// still unsaved, still belonging to the file and its encoding; on No,
+// or once it is in, its files are deleted.
+static void offer_copy(const char *sav, const char *inf, const char *rest, bool theirs) {
 
-	char sav[40], inf[40], note[Z_FS_PATH_MAX + 16];
-	if (!as_have_ram()) return;
-	as_name(sav, sizeof(sav), filename, "SAV");
-	as_name(inf, sizeof(inf), filename, "INF");
-
-	int n = fs_read_file(inf, note, (int)sizeof(note) - 1);
-	if (n <= 0) return;
-	note[n] = 0;
-	char *nl = strchr(note, '\n');
-	if (!nl) return;
-	*nl = 0;
-	if (strcmp(note, filename)) return;			// a hash that collided
 	// "<enc> <bom>": two digits, read without sscanf, which would bring
 	// newlib's scanf into the link.
-	int enc = (nl[1] >= '0' && nl[1] <= '2') ? nl[1] - '0' : 0;
-	int bom = nl[1] && nl[3] == '1';
+	int enc = (rest[0] >= '0' && rest[0] <= '2') ? rest[0] - '0' : 0;
+	int bom = rest[0] && rest[2] == '1';
 	{
 		int h = fs_open_read(sav);
 		if (h < 0) return;
@@ -1971,21 +2298,101 @@ static void autosave_offer(void) {
 	int r = z_dialog_confirm(&dlg_ctx, "Recover",
 		"Unsaved changes from a\nsession that did not end\nwere kept. Recover them?",
 		Z_DIALOG_YES_NO);
-	if (r != Z_DIALOG_YES) { autosave_discard(); return; }
+	if (r == Z_DIALOG_YES) {
+		char keep[Z_FS_PATH_MAX];
+		snprintf(keep, sizeof(keep), "%s", filename);
+		if (!load_file(sav)) return;
+		snprintf(filename, sizeof(filename), "%s", keep);
+		if (keep[0]) remember_dir(keep);
+		file_enc = (enc_t)enc;
+		file_bom = bom != 0;
+		z_undo_saved(&undo);
+		undo.saved = UINT32_MAX;				// not what is on disk
+		modified = false;
+		set_modified(true);
+		update_title();
+	}
+	if (r == Z_DIALOG_YES && !theirs) {
+		as_done_gen = edit_gen;				// in /ram already, under this key
+		return;
+	}
+	// Declined, or another window's: its files go. A recovered untitled
+	// copy is kept from here under this window's own key (as_key()),
+	// written at the next pause.
+	fs_unlink((char *)sav);
+	fs_unlink((char *)inf);
+	as_done_gen = r == Z_DIALOG_YES ? edit_gen - 1 : edit_gen;
 
-	char keep[Z_FS_PATH_MAX];
-	snprintf(keep, sizeof(keep), "%s", filename);
-	if (!load_file(sav)) return;
-	snprintf(filename, sizeof(filename), "%s", keep);
-	if (keep[0]) remember_dir(keep);
-	file_enc = (enc_t)enc;
-	file_bom = bom != 0;
-	z_undo_saved(&undo);
-	undo.saved = UINT32_MAX;				// not what is on disk
-	modified = false;
-	set_modified(true);
-	as_done_gen = edit_gen;					// it is in /tmp already
-	update_title();
+}
+
+// Is the untitled copy whose note starts `key` from a window that is
+// gone? "" is an older text's (it filed every untitled copy so), and
+// "untitled <pid> <serial>" one whose process is not running now.
+// A decimal number at *p, and *p past it and one separator. Not
+// strtoul(): that brings newlib's locale tables, 700 bytes, for this.
+static uint32_t as_num(const char **p) {
+	uint32_t v = 0;
+	while (**p >= '0' && **p <= '9') v = v * 10 + (uint32_t)(*(*p)++ - '0');
+	if (**p) (*p)++;
+	return v;
+}
+
+static bool as_orphan(const char *key) {
+	if (!key[0]) return true;
+	if (strncmp(key, "untitled ", 9)) return false;
+	const char *p = key + 9;
+	uint32_t pid = as_num(&p);
+	uint32_t ser = as_num(&p);
+	return z_proc_serial(pid) != ser;
+}
+
+// After a file is opened, or at the start with none: a copy of it left
+// by a session that did not end, offered back. With a file, the copy
+// filed under its path; with none, the first untitled copy in /ram
+// whose window is gone.
+static void autosave_offer(void) {
+
+	char sav[40], inf[40], note[Z_FS_PATH_MAX + 16];
+	if (!as_have_ram()) return;
+
+	if (filename[0]) {
+		as_name(sav, sizeof(sav), as_key(), "SAV");
+		as_name(inf, sizeof(inf), as_key(), "INF");
+		int n = fs_read_file(inf, note, (int)sizeof(note) - 1);
+		if (n <= 0) return;
+		note[n] = 0;
+		char *nl = strchr(note, '\n');
+		if (!nl) return;
+		*nl = 0;
+		if (strcmp(note, filename)) return;			// a hash that collided
+		offer_copy(sav, inf, nl + 1, false);
+		return;
+	}
+
+	char names[1024];
+	uint32_t count = 0;
+	if (!fs_list_into(Z_DIR_RAM, names, sizeof(names), NULL, 64, &count, NULL)) return;
+	const char *e = names;
+	for (uint32_t i = 0; i < count; i++, e += strlen(e) + 1) {
+		const char *base = strrchr(e, '/');
+		base = base ? base + 1 : e;
+		int bl = (int)strlen(base);
+		if (base[0] != 'T' || bl != 12 || strcmp(base + 8, ".INF")) continue;
+		// T<7 hex>.INF, twelve characters: as_name()'s, nothing else
+		memcpy(inf, Z_DIR_RAM "/", sizeof(Z_DIR_RAM));
+		memcpy(inf + sizeof(Z_DIR_RAM), base, 13);
+		int n = fs_read_file(inf, note, (int)sizeof(note) - 1);
+		if (n <= 0) continue;
+		note[n] = 0;
+		char *nl = strchr(note, '\n');
+		if (!nl) continue;
+		*nl = 0;
+		if (!as_orphan(note)) continue;
+		snprintf(sav, sizeof(sav), "%s", inf);
+		memcpy(sav + strlen(sav) - 3, "SAV", 3);
+		offer_copy(sav, inf, nl + 1, true);
+		return;
+	}
 
 }
 
@@ -2011,9 +2418,17 @@ static bool do_save_to(const char *path) {
 	// A short or failed write means the card filled up or failed
 	// mid-way, which must not be reported as success -- the file on
 	// disk is now a truncated version of the document.
-	if (!write_document(path)) {
+	char part[Z_FS_PATH_MAX];
+	save_rv_t sv = write_safely(path, part, (int)sizeof(part));
+	if (sv == SAVE_FAILED) {
 		z_dialog_confirm(&dlg_ctx, "Save failed",
-			"The file could not be\nwritten completely.", Z_DIALOG_OK_CANCEL);
+			"The file could not be\nwritten completely.\nThe one on the card is\nas it was.", Z_DIALOG_OK_CANCEL);
+		return false;
+	}
+	if (sv == SAVE_KEPT_PART) {
+		char msg[Z_FS_PATH_MAX + 80];
+		snprintf(msg, sizeof(msg), "Saved, but as\n%.60s:\nit could not be renamed.", part);
+		z_dialog_confirm(&dlg_ctx, "Save", msg, Z_DIALOG_OK_CANCEL);
 		return false;
 	}
 
@@ -2175,6 +2590,17 @@ static void do_new(void) {
 // main() loads a file exactly the same way the Open dialog does --
 // two loaders would be two places for the CRLF handling and the size
 // limit to drift apart.
+// A file that did not open: the window is an empty, untitled document,
+// its line table rebuilt for it (buf_clear() leaves the old one, and
+// the next draw read past its end), drawn as such.
+static void open_failed(void) {
+	buf_clear();
+	rewrap_all();
+	top_line = 0;
+	io_end();
+	repaint();
+}
+
 static bool load_file(const char *path) {
 
 	int size = fs_size((char *)path);
@@ -2199,46 +2625,70 @@ static bool load_file(const char *path) {
 	// always was: too large.
 	if (size > cap && !doc_room(size)) {
 		fs_close_handle(h);
+		open_failed();
 		z_dialog_confirm(&dlg_ctx, "Too large",
 			"That file is larger than\nthis editor can hold on\nthis machine.",
 			Z_DIALOG_OK_CANCEL);
 		return false;
 	}
 
-	// The gap stays at the end while the file comes in. Into the arena
-	// through a buffer of our own: fs writes into a client's block
-	// through the grant window, and the arena is not in it.
+	// The gap stays at the end while the file comes in, through a
+	// buffer of our own: into the arena because fs writes into a
+	// client's block through the grant window, and the arena is not in
+	// it; into sbuf too, so CRLF is folded as each piece arrives rather
+	// than in a pass over the whole file after. A CR that ends a piece
+	// waits for the next one's first byte.
+	//
+	// Normalize CRLF on the way in. A file written on another machine
+	// otherwise shows a stray glyph at the end of every line, and
+	// every one of them counts against the wrap width.
+	io_begin("Opening", path, true);
+	long read_total = 0;
+	bool cr_held = false, read_err = false, full = false;
 	for (;;) {
-		int n;
-		if (big) {
-			char stage[4096];
-			int want = cap - len < (int)sizeof(stage) ? cap - len : (int)sizeof(stage);
-			if (want <= 0 && !doc_room(4096)) break;
-			if (want <= 0) want = cap - len < (int)sizeof(stage) ? cap - len : (int)sizeof(stage);
-			n = fs_read_chunk(h, stage, want);
-			if (n > 0) memcpy(&doc[len], stage, (size_t)n);
-		} else {
-			if (len >= cap) break;
-			n = fs_read_chunk(h, &doc[len], cap - len);
+		char stage[4096];
+		int room = cap - len - (cr_held ? 1 : 0);
+		if (room <= 0) {
+			// The file is longer than it said: room for more, or it
+			// does not open -- never half of it under its name.
+			if (!doc_room(4096)) { full = true; break; }
+			room = cap - len - (cr_held ? 1 : 0);
 		}
-		if (n <= 0) break;
-		len += n;
+		int want = room < (int)sizeof(stage) ? room : (int)sizeof(stage);
+		int n = fs_read_chunk(h, stage, want);
+		if (n < 0) { read_err = true; break; }
+		if (n == 0) break;
+		read_total += n;
+		for (int r = 0; r < n; r++) {
+			char c = stage[r];
+			if (cr_held) {
+				cr_held = false;
+				if (c != '\n') doc[len++] = '\r';
+			}
+			if (c == '\r') { cr_held = true; continue; }
+			doc[len++] = c;
+		}
+		gs = len;
+		gl = cap - len;
+		if (io_pump(read_total, size, true)) break;
 	}
+	if (cr_held && !io_stopped) doc[len++] = '\r';
 	gs = len;
 	gl = cap - len;
 
 	fs_close_handle(h);
+	io_end();
 
-	// Normalize CRLF on the way in. A file written on another machine
-	// otherwise shows a stray glyph at the end of every line, and
-	// every one of them counts against the wrap width.
-	{
-		int w = 0;
-		for (int r = 0; r < len; r++) {
-			if (doc[r] == '\r' && r + 1 < len && doc[r + 1] == '\n') continue;
-			doc[w++] = doc[r];
-		}
-		len = w;
+	if (io_stopped || read_err || full) {
+		open_failed();
+		if (read_err)
+			z_dialog_confirm(&dlg_ctx, "Open failed",
+				"That file could not\nbe read.", Z_DIALOG_OK_CANCEL);
+		else if (full)
+			z_dialog_confirm(&dlg_ctx, "Too large",
+				"That file is larger than\nthis editor can hold on\nthis machine.",
+				Z_DIALOG_OK_CANCEL);
+		return false;
 	}
 
 	// The encoding (see detect_enc()). A UTF-8 byte order mark is
@@ -2256,7 +2706,7 @@ static bool load_file(const char *path) {
 	file_enc = file_bom ? ENC_UTF8 : detect_enc(doc, len);
 
 	if (file_enc != ENC_UTF8 && !sb_to_utf8_in_place()) {
-		buf_clear();
+		open_failed();
 		z_dialog_confirm(&dlg_ctx, "Too large",
 			"That file is too large for\nthis editor once its accented\nletters are converted.",
 			Z_DIALOG_OK_CANCEL);
@@ -2410,25 +2860,110 @@ static bool delete_selection(void) {
 
 }
 
-static void do_copy(void) {
+// -- the clipboard -- docs/text_editor.md, "Copy and paste" --
+//
+// wm's clipboard holds a page, Z_WM_CLIP_MAX - 1 bytes, and keeps the
+// start of anything longer. A copy that size or smaller goes there and
+// nowhere else. A longer one is also kept whole in text's own arena
+// (clip_len bytes at ar_clip_off()), and wm is given its first page
+// (clip_prefix bytes, cut at a character). A paste here takes the
+// whole copy when wm's clipboard still holds exactly that first page
+// -- nothing has been copied since, here or in another app -- and
+// wm's otherwise. Other apps get the first page, which the copy says
+// when it cannot do better.
+//
+// A cut deletes only what it can give back: a selection over a page is
+// cut only if the whole of it is kept for the paste and the delete can
+// be undone; otherwise it is refused, with a reason, and nothing is
+// deleted. Before October 2026 the cut went ahead and the text past the
+// first page was gone.
 
-	if (!has_sel()) return;
+#define CLIP_PAGE	(Z_WM_CLIP_MAX - 1)		// what wm keeps
 
-	// Pointed straight at the document -- z_clip_set() copies into
-	// its own staging buffer before sending, precisely so a caller
-	// can do this rather than needing a spare 4KB of its own.
+static int clip_prefix;		// bytes of the copy wm was given, while clip_len
+
+static char *clip_at(void) { return (char *)arena + ar_clip_off(); }
+
+// Room in the arena for a copy of `n` bytes; false if it cannot be had.
+static bool clip_hold(int n) {
+	if (clip_cap >= n) return true;
+	return ar_layout(big ? cap : 0, big ? lcap : 0, ar_rec, ar_bytes, round4k(n), true);
+}
+
+// The private copy given up, and its memory with it.
+static void clip_drop(void) {
+	clip_len = 0;
+	clip_prefix = 0;
+	if (clip_cap) ar_layout(big ? cap : 0, big ? lcap : 0, ar_rec, ar_bytes, 0, true);
+}
+
+// How much of `n` bytes from `s` fits a page, ending on a character.
+static int page_of(const char *s, int n) {
+	if (n <= CLIP_PAGE) return n;
+	int k = CLIP_PAGE;
+	while (k > 0 && ((uint8_t)s[k] & 0xC0) == 0x80) k--;
+	return k;
+}
+
+// Copies the selection. True if a paste will give all of it back.
+static bool do_copy(void) {
+
+	if (!has_sel()) return true;
+
+	int a = sel_start(), n = sel_end() - a;
 	// A selection across the gap is put in one run first; a copy is a
 	// one-off, and the next keystroke moves the gap back.
-	if (sel_start() < gs && sel_end() > gs) doc_flat();
-	z_clip_set(P(sel_start()), sel_end() - sel_start());
+	if (a < gs && a + n > gs) doc_flat();
 
+	if (n <= CLIP_PAGE) {
+		if (clip_len) clip_drop();
+		// Pointed straight at the document -- z_clip_set() copies into
+		// its own staging buffer before sending.
+		z_clip_set(P(a), n);
+		return true;
+	}
+
+	// The arena may move here: P(a) is taken after.
+	bool whole = clip_hold(n);
+	const char *src = P(a);
+	int k = page_of(src, n);
+	if (whole) {
+		memcpy(clip_at(), src, (size_t)n);
+		clip_len = n;
+		clip_prefix = k;
+	} else if (clip_len) {
+		clip_drop();
+		src = P(a);
+	}
+	z_clip_set(src, k);
+	return whole;
+
+}
+
+// Ctrl+C and the right button: a copy that other apps, and a paste
+// here, will get only the first page of says so.
+static void copy_cmd(void) {
+	if (do_copy()) return;
+	z_dialog_confirm(&dlg_ctx, "Copy",
+		"Copied, but there is no\nmemory to keep all of it:\na paste gives the first\n4 KB.", Z_DIALOG_OK_CANCEL);
+	repaint();
 }
 
 static void do_cut(void) {
 
 	if (!has_sel()) return;
 
-	do_copy();
+	int n = sel_end() - sel_start();
+	const char *why = NULL;
+	if (!do_copy())
+		why = "Too large to cut here:\nthere is no memory to\nkeep it for the paste.\nCut less than 4 KB.";
+	else if (n > CLIP_PAGE && !undo_fits(1, n))
+		why = "Too large to cut:\nit could not be undone.\nCut a smaller part.";
+	if (why) {
+		z_dialog_confirm(&dlg_ctx, "Cut", why, Z_DIALOG_OK_CANCEL);
+		repaint();
+		return;
+	}
 	undo_begin(UK_OTHER, sel_start());
 	delete_selection();
 	undo_break();
@@ -2441,12 +2976,16 @@ static void do_paste(void) {
 	// see Z_WM_CLIP_MAX in zwm.h. On the stack rather than in .bss
 	// because it is live only for the duration of this call, and 4KB
 	// of a 16KB stack is affordable for one call that makes no
-	// further nested calls of consequence.
+	// further nested calls of consequence. A paste of the private copy
+	// goes through it a page at a time too: the copy is in the arena,
+	// which the insert may move, so it is never inserted from there.
 	char clip[Z_WM_CLIP_MAX];
 
-	int avail = z_clip_get(clip, sizeof(clip));
-	if (avail <= 0) return;
+	int got = z_clip_get(clip, sizeof(clip));
+	if (got <= 0) return;
 
+	bool priv = clip_len && got == clip_prefix && !memcmp(clip, clip_at(), (size_t)got);
+	int avail = priv ? clip_len : got;
 	int n = avail;
 
 	// Replacing a selection is one edit, not two: delete then insert
@@ -2472,12 +3011,24 @@ static void do_paste(void) {
 		n = gl;
 		// Cut at a character boundary: half a UTF-8 sequence would be
 		// a malformed byte left in the document.
-		while (n > 0 && ((uint8_t)clip[n] & 0xC0) == 0x80) n--;
+		const char *s = priv ? clip_at() : clip;
+		while (n > 0 && ((uint8_t)s[n] & 0xC0) == 0x80) n--;
 	}
 
-	if (n > 0) {
+	if (n > 0 && !priv) {
 		edit_insert(cursor, clip, n);
 		cursor += n;
+	} else if (n > 0) {
+		// Room in the log for the whole paste first, so its pieces
+		// (which join into one record) do not push each other out.
+		undo_fits(1, n);
+		for (int done = 0; done < n; ) {
+			int k = n - done < (int)sizeof(clip) ? n - done : (int)sizeof(clip);
+			memcpy(clip, clip_at() + done, (size_t)k);
+			edit_insert(cursor, clip, k);
+			cursor += k;
+			done += k;
+		}
 	}
 	undo_break();
 
@@ -2898,26 +3449,42 @@ static bool match_at(int i, int n) {
 }
 
 // Selects the first match at or after `start`, wrapping round.
-static bool find_from(int start) {
+// The next match from `start`, round to the start again: 1 found (and
+// selected), 0 not found, -1 stopped. A megabyte is about half a second
+// on the board, so the window's mail is read every 8 KB meanwhile
+// (io_pump()), the title says how far it has got, and Esc stops it.
+#define FIND_SLICE	8192
+
+static int find_from(int start) {
 
 	int n = (int)strlen(find_text);
-	if (!n || n > len) return false;
+	if (!n || n > len) return 0;
 	if (start < 0 || start > len) start = 0;
 
+	io_begin("Finding", find_text, false);
+	io_name = find_text;				// the text, not a path's last part
+	long done = 0;
 	for (int pass = 0; pass < 2; pass++) {
 		int lo = pass ? 0 : start;
 		int hi = pass ? start : len - n;
 		for (int i = lo; i <= hi && i <= len - n; i++) {
+			if (++done % FIND_SLICE == 0 && io_pump(done, len, true)) {
+				io_end();
+				repaint();
+				return -1;
+			}
 			if (!match_at(i, n)) continue;
+			io_end();
 			sel_anchor = i;
 			cursor = i + n;
 			undo_break();
 			scroll_to_cursor();
 			repaint();
-			return true;
+			return 1;
 		}
 	}
-	return false;
+	io_end();
+	return 0;
 
 }
 
@@ -2940,14 +3507,14 @@ static void do_find(void) {
 	// From the start of any selection, so a word already selected is
 	// found where it is; from the caret otherwise.
 	int start = has_sel() ? sel_start() : cursor;
-	if (!find_from(start)) find_report();
+	if (find_from(start) == 0) find_report();
 
 }
 
 static void find_next(void) {
 	if (!find_text[0]) { do_find(); return; }
 	// After the current match (or the caret), so it moves on.
-	if (!find_from(has_sel() ? sel_end() : cursor)) find_report();
+	if (find_from(has_sel() ? sel_end() : cursor) == 0) find_report();
 }
 
 // -- replace -- docs/text_editor.md, "Replace" --
@@ -2960,24 +3527,30 @@ static char repl_text[128];
 
 // Matches of find_text, left to right and not overlapping -- the same
 // set Replace All replaces.
-static int count_matches(void) {
+// How many matches, the same way: -1 if Esc stopped it (`stoppable`).
+static int count_matches(bool stoppable) {
 	int nf = (int)strlen(find_text), n = 0;
 	if (!nf) return 0;
+	io_begin("Counting", find_text, false);
+	io_name = find_text;
+	long step = 0;
 	for (int i = 0; i + nf <= len; ) {
+		if (++step % FIND_SLICE == 0 && io_pump(i, len, stoppable)) { io_end(); return -1; }
 		if (match_at(i, nf)) { n++; i += nf; }
 		else i++;
 	}
+	io_end();
 	return n;
 }
 
 // Can Replace All of `n` matches be recorded for undo? Each match is a
 // delete and an insert, and the log forgets its oldest edits when it
 // fills -- which here would forget the start of the replace itself and
-// leave an undo that puts back only some of it.
+// leave an undo that puts back only some of it. Where there is an
+// arena, the log is grown to make it so (undo_fits()).
 static bool replace_all_undoable(int n) {
 	int nf = (int)strlen(find_text), nr = (int)strlen(repl_text);
-	return n * (nr ? 2 : 1) <= UNDO_RECORDS &&
-		(long)n * (nf + nr) <= UNDO_BYTES;
+	return undo_fits(n * (nr ? 2 : 1), (long)n * (nf + nr));
 }
 
 // Replaces every match in one pass over the buffer, however many there
@@ -2993,8 +3566,8 @@ static bool replace_all_undoable(int n) {
 static int replace_all_core(bool record) {
 
 	int nf = (int)strlen(find_text), nr = (int)strlen(repl_text);
-	int n = count_matches();
-	if (!n) return 0;
+	int n = count_matches(false);		// asked already: not stopped now
+	if (n <= 0) return 0;
 	if (nr > nf) {
 		long grow = (long)n * (nr - nf);
 		if ((long)len + grow > 0x7FFFFFF || (grow > gl && !doc_room((int)grow))) return -1;
@@ -3101,7 +3674,8 @@ static void do_replace(void) {
 	snprintf(find_text, sizeof(find_text), "%s", q);
 	snprintf(repl_text, sizeof(repl_text), "%s", r);
 
-	int n = count_matches();
+	int n = count_matches(true);
+	if (n < 0) { repaint(); return; }		// Esc
 	if (!n) { find_report(); return; }
 
 	char msg[160];
@@ -3132,7 +3706,7 @@ static void do_replace(void) {
 	// every one ends rather than going round for ever.
 	int start = has_sel() ? sel_start() : cursor;
 	for (int step = 0; step < n; step++) {
-		if (!find_from(start)) break;
+		if (find_from(start) <= 0) break;
 		int a = z_dialog_confirm(&dlg_ctx, "Replace", "Replace this one?",
 			Z_DIALOG_YES_NO_CANCEL);
 		if (a == Z_DIALOG_CANCEL) break;
@@ -3252,7 +3826,7 @@ static void handle_key(uint32_t keysym, uint8_t mods) {
 			case 0x08: do_replace(); return;	// Ctrl+H
 			case 0x0c: do_goto(); return;		// Ctrl+L
 			case 0x11: do_close(); return;		// Ctrl+Q
-			case 0x03: do_copy(); return;		// Ctrl+C
+			case 0x03: copy_cmd(); return;		// Ctrl+C
 			case 0x18: do_cut(); return;		// Ctrl+X
 			case 0x16: do_paste(); return;		// Ctrl+V
 			case 0x1a:							// Ctrl+Z; Ctrl+Shift+Z is redo
@@ -3391,7 +3965,7 @@ static void handle_mouse(uint32_t packed) {
 	// gesture on this button, so waiting adds nothing, and a copy
 	// that happens the instant you click feels more definite.
 	if ((buttons & Z_MOUSE_BTN_RIGHT) && !(last_buttons & Z_MOUSE_BTN_RIGHT))
-		do_copy();
+		copy_cmd();
 
 	last_buttons = buttons;
 
@@ -3691,8 +4265,6 @@ int main(void) {
 			}
 
 		}
-
-		for (volatile int i = 0; i < 200; i++);	// light throttle
 
 		// A read whose replies have stopped coming gives up.
 		z_sayall_poll(&reader);

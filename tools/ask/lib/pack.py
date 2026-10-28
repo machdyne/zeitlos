@@ -38,6 +38,7 @@
 #   ask/lexicon.zlx  term dictionary, resident
 #   ask/post.zlp     postings, on card, read per query term
 #   ask/encoder.zmd  the query encoder
+#   ask/lens.zln     chunk lengths for BM25, read whole at load
 #
 
 import struct
@@ -55,6 +56,7 @@ MAGIC_FINE = 0x3156465A       # "ZFV1"
 MAGIC_LEXICON = 0x31584C5A    # "ZLX1"
 MAGIC_POST = 0x31504C5A       # "ZLP1"
 MAGIC_ENCODER = 0x31444D5A    # "ZMD1"
+MAGIC_LENS = 0x314E4C5A       # "ZLN1"
 
 HEADER_SIZE = 32
 
@@ -142,6 +144,40 @@ def pack_chunks(chunks, dsid):
     body = pool.bytes()
     return (header(MAGIC_CHUNKS, len(chunks), a=16, b=len(recs), dsid=dsid)
             + bytes(recs) + body)
+
+
+# -- lens.zln ----------------------------------------------------------
+#
+# One u16 per chunk: its length in tokens for BM25's length
+# normalisation, in chunk order, padded to a word. Header count is the
+# chunk count, a = 2 (bytes an entry), b = BYTES_PER_TOKEN.
+#
+# The device used to build exactly this at load by reading ALL of
+# chunks.zct -- 16 bytes a chunk to keep 2 -- in 1KB requests: 68KB and
+# some seventy requests for zdocs, megabytes for arkmed, every start.
+# Written here it is an eighth of the bytes in a handful of requests.
+#
+# The values are the device's own rule, not a better one: the chunk's
+# BYTE length over BYTES_PER_TOKEN, clamped to 1..65535 -- what
+# sw/apps/ask/aidx.c computes from chunks.zct for a pack without this
+# file, so old and new packs rank identically. (Only the ratio to the
+# mean matters, so the estimate's constant cancels.) The file is
+# optional: a pack without it still loads, by the old scan.
+
+BYTES_PER_TOKEN = 6     # AI_BYTES_PER_TOKEN, sw/apps/ask/aidx.h
+
+
+def chunk_lens(chunks):
+    return [max(1, min(65535, c.length // BYTES_PER_TOKEN)) for c in chunks]
+
+
+def pack_lens(chunks, dsid):
+    lens = chunk_lens(chunks)
+    body = struct.pack("<%dH" % len(lens), *lens)
+    while len(body) % 4:
+        body += b"\0"
+    return (header(MAGIC_LENS, len(lens), a=2, b=BYTES_PER_TOKEN, dsid=dsid)
+            + body)
 
 
 # -- vectors -----------------------------------------------------------

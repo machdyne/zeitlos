@@ -163,6 +163,11 @@ typedef struct {
 	uint32_t shipped;       // left out: installed by update, unchanged
 	uint32_t bad;           // check: damaged or missing copies
 	uint32_t thinned;       // check: copies removed to make room (expected)
+	// backup: the drive's free space after it, when the run had the
+	// drive count it anyway (making room); else 0. Asking for it then
+	// costs nothing, where a first ask can cost the whole FAT
+	// (docs/backup.md, "Running alongside everything").
+	uint32_t free_kb;
 } bk_result_t;
 
 // Exit statuses, as update's.
@@ -199,6 +204,17 @@ typedef struct {
 } bk_summary_t;
 
 int bk_summary(const bk_io_t *io, const bk_opts_t *o, bk_summary_t *s);
+
+// A glance at the drive, for the window: the newest complete full
+// backup (newest, newest_files), and the newest complete watch backup
+// newer than it (newest_watch; or the newest of all when there is no
+// full one). backups counts the backup folders, complete or not; cut,
+// oldest and free_kb are not read. Lists the folder once and reads
+// the last line of an index or two, however many backups there are,
+// and never asks for the free space (a first ask can make fs count
+// the whole FAT). Checks io->stop between requests: BK_FAILED when
+// stopped, as with no drive.
+int bk_glance(const bk_io_t *io, const bk_opts_t *o, bk_summary_t *s);
 
 // One file as a backup has it.
 typedef struct {

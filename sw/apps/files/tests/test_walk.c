@@ -223,6 +223,72 @@ static void pbm(const char *name) {
 	z_render_write(p, &win, 2);
 }
 
+
+// -- drawing checks --
+//
+// There is no back buffer: anything blanked and drawn again shows as a
+// flash. Two ways to catch it here. A MARK is an ink pixel planted in
+// the list's empty area below its last row: anything that blanks the
+// list takes it away, and nothing else touches it. And SAME_AS_REPAINT:
+// whatever was drawn in place must leave exactly the pixels a whole
+// repaint() would -- a row painted short, or a selection left behind,
+// differs.
+
+static uint32_t snap[Z_RENDER_VRAM_LEN / 4];
+
+static void snapshot(void) {
+	memcpy(snap, (const void *)Z_RENDER_VRAM, sizeof(snap));
+}
+
+static bool marked;
+static void mark_xy(int *x, int *y);
+
+static bool same_as_repaint(void) {
+	static uint32_t now[Z_RENDER_VRAM_LEN / 4];
+	// the mark is not part of the picture: a repaint rightly clears it
+	if (marked) {
+		int x, y;
+		mark_xy(&x, &y);
+		z_fb_set_pixel(x, y, 0, NULL);
+		marked = false;
+	}
+	memcpy(now, (const void *)Z_RENDER_VRAM, sizeof(now));
+	repaint();
+	bool ok = !memcmp(now, (const void *)Z_RENDER_VRAM, sizeof(now));
+	if (!ok)
+		for (unsigned i = 0; i < sizeof(now) / 4; i++)
+			if (now[i] != ((const uint32_t *)Z_RENDER_VRAM)[i]) {
+				printf("  first difference at x=%u y=%u\n",
+					(i * 32) % Z_SCREEN_W, (i * 32) / Z_SCREEN_W);
+				break;
+			}
+	return ok;
+}
+
+// The pixel near the bottom-left of the list's row area, absolute.
+static void mark_xy(int *x, int *y) {
+	z_clip_t c;
+	z_win_content_rect(&win, &c);
+	*x = c.x0 + MARGIN + 4;
+	*y = c.y0 + list_y + list_h - 4;
+}
+static void mark_set(void) {
+	int x, y;
+	mark_xy(&x, &y);
+	z_fb_set_pixel(x, y, 1, NULL);
+	marked = true;
+}
+static bool mark_kept(void) {
+	int x, y;
+	mark_xy(&x, &y);
+	return z_render_get(x, y) == 1;
+}
+
+// The path/status line, as drawn.
+static bool line_says(const char *what) {
+	return line_valid && strstr(line_shown, what) != NULL;
+}
+
 static bool all_closed(void) {
 	for (int i = 0; i < MAXH; i++) if (hs[i]) return false;
 	return true;
@@ -369,6 +435,115 @@ int main(void) {
 	expect(exists("/home/a"), "nothing deleted");
 	pump();
 	expect(same("/home/a", "/home/d"), "and it finished");
+
+
+	printf("drawing: arrow keys repaint two rows, nothing blanked\n");
+	z_flist_chdir(&flist, "/home");
+	repaint();
+	mark_set();
+	handle_key(Z_KEY_DOWN, 0);
+	handle_key(Z_KEY_DOWN, 0);
+	handle_key(Z_KEY_UP, 0);
+	expect(mark_kept(), "the list was not blanked");
+	expect(same_as_repaint(), "and looks as a whole repaint would");
+
+	printf("drawing: type-to-find in the folder\n");
+	mark_set();
+	handle_key('t', 0);
+	expect(z_flist_selected(&flist) && !strcmp(z_flist_selected(&flist), "top.md"), "t: top.md");
+	flist.find_len = 0;		// a second later (the trampoline's clock stands still)
+	handle_key('a', 0);
+	expect(z_flist_selected(&flist) && !strcmp(z_flist_selected(&flist), "a"), "a: the folder a");
+	expect(mark_kept() && same_as_repaint(), "drawn in place");
+
+	printf("drawing: opening a folder paints it once, in place\n");
+	mark_set();
+	handle_key(0x0d, 0);
+	expect(!strcmp(flist.path, "/home/a"), "in /home/a");
+	expect(mark_kept(), "not blanked first");
+	expect(same_as_repaint(), "and complete");
+	expect(line_says("/home/a"), "the path line says where");
+	mark_set();
+	handle_key(0x7f, 0);
+	expect(!strcmp(flist.path, "/home") && mark_kept() && same_as_repaint(), "and back up");
+
+	printf("drawing: results stream in without blanking the list\n");
+	prompt_answer = "*.md";
+	handle_key(0x06, Z_KBD_MOD_CTRL);
+	mark_set();
+	pump();
+	expect(res_n >= 3 && rlist.count == res_n, "all of them in the list");
+	expect(mark_kept(), "the list was not blanked per hit");
+	{
+		char want[24];
+		snprintf(want, sizeof(want), "%d found", res_n);
+		expect(line_says(want), "the line says how many");
+	}
+	expect(same_as_repaint(), "and looks as a whole repaint would");
+	expect(!strcmp(widgets[BTN_FIND].label, "Find"), "Stop is Find again");
+
+	printf("drawing: Ctrl+F over the results empties them in place\n");
+	mark_set();
+	prompt_answer = "readme";
+	handle_key(0x06, Z_KBD_MOD_CTRL);
+	expect(walking && results && rlist.count == 0, "a new find, an empty list");
+	expect(mark_kept(), "not blanked: the rows went one by one");
+	pump();
+	expect(res_n >= 1 && same_as_repaint(), "found, and drawn right");
+	handle_key(Z_KEY_DOWN, 0);
+	expect(same_as_repaint(), "arrow keys in the results");
+	handle_key(0x1b, 0);
+	expect(!results && same_as_repaint(), "Esc: the folder back, whole");
+
+	printf("results full: the find stops and says so\n");
+	// in folders of twenty: one listing of two hundred would not fit
+	// the walk's own small block, and be walked only in part
+	mk("/home/many");
+	for (int i = 0; i < 200; i++) {
+		char p[64];
+		snprintf(p, sizeof(p), "/home/many/d%d", i / 20);
+		if (i % 20 == 0) mk(p);
+		snprintf(p, sizeof(p), "/home/many/d%d/f%03d.md", i / 20, i);
+		put(p, "x\n");
+	}
+	prompt_answer = "*.md";
+	handle_key(0x06, Z_KBD_MOD_CTRL);
+	pump();
+	expect(res_full && !walking, "stopped when full");
+	expect(res_n > 0 && res_n < 200, "with what fitted");
+	{
+		char want[40];
+		snprintf(want, sizeof(want), "(first %d matches)", res_n);
+		expect(line_says(want), "the line says \"(first N matches)\"");
+	}
+	expect(walk.files < 200, "and did not look at the rest");
+	expect(rlist.count == res_n && same_as_repaint(), "all shown, drawn right");
+	pbm("full.pbm");
+	handle_key(0x1b, 0);
+	sh("rm -rf %s/home/many", root);
+	z_flist_refresh(&flist);
+	repaint();
+
+	printf("copying one file shows a percentage\n");
+	select_name("a");
+	handle_key(0x0d, 0);
+	select_name("sub");
+	handle_key(0x0d, 0);
+	select_name("big.bin");
+	prompt_answer = "/home/big2.bin";
+	button(BTN_COPY);
+	expect(walking && copy_total == 20000, "the size is known");
+	expect(line_says("0% of 19 KB"), "0% at the start");
+	for (int i = 0; i < 6; i++) zw_step(&walk);
+	status_draw();
+	expect(line_says("% of 19 KB") && !line_says(" 0% "), "and moves on");
+	pbm("copy-progress.pbm");
+	pump();
+	expect(exists("/home/big2.bin"), "copied");
+	expect(same_as_repaint(), "the bar gone, the path line back, in place");
+	remove(hp("/home/big2.bin"));
+	z_flist_chdir(&flist, "/home");
+	repaint();
 
 	{
 		char cmd[600];

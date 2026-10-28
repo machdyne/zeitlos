@@ -52,6 +52,71 @@ have a maximum file size.
 Cost per frame is bounded by the stride plus a screenful, so it
 doesn't grow with the document.
 
+## Long finds: a slice at a time, Esc stops
+
+Some requests can only be answered by reading the document as far as
+they reach, which may be all of it: **End** (the end is not knowable
+otherwise), a **link to a heading** (`#anchor`, from a link or from a
+launch argument `read page.md#using-it`), a **scrollbar drag** or a
+launch **offset** (`read book.md#39006`, from `ask`) into a part not
+read yet, and **Backspace** back into another document. Each used to
+be one call from the main loop: on the 85KB book, seconds with the
+window dead -- no redraw, no Esc, the keys queued.
+
+Now each is a *find* (`find_start()`, `find_step()` in `read.c`), as
+[responsive.md](responsive.md) asks: a goal and a cursor, advanced a
+block at a time for about 20 ms a turn of the main loop, with every
+message answered between turns. The page stays as it was while it
+runs. One that takes longer than its first slice puts
+`Finding... 40%  (Esc stops)` in the title, in steps of ten. When it
+gets there it paints once, at the place found.
+
+- **Esc** stops it: the page, the thumb and the history are as they
+  were, and the reader's buffers are dropped (`rd_forget()`), since
+  they belong to wherever the last slice stopped. What it read of the
+  index is kept -- the frontier only moves forward -- so the next find
+  starts where it left off.
+- Any other key that moves the page (arrows, Space, Home, a link,
+  Backspace, Ctrl+O) asks for somewhere else, and stops it first. End
+  pressed again is the same request and changes nothing. Tab, copying
+  and help leave it running.
+- A link to a heading that does not exist says so when the search has
+  reached the end, and its history entry goes again.
+
+On the host, `rfind_test.c` builds the real `read.c` against a fake
+file and a fake clock that moves only when the file is read, and
+checks that no slice reads more than its share, over every document in
+`docs/`.
+
+## Read errors
+
+A read that fails is **not the end of the document**. It used to be
+taken for one: the index recorded an end wherever the failure was, for
+good -- End and the scrollbar believed in a document that stopped
+there -- and the reader's idea of its file position moved on by a
+buffer while fs's did not, so every read after it was off by that
+much.
+
+Now `rd_raw()` treats a negative `fs_read_chunk()` as an error: it
+puts fs back where the reader says the next byte is (`fs_seek()`), and
+reads nothing more until the next seek. Nothing is recorded from a
+failed read -- no end, no checkpoint, no cached position, no layout
+cache. A find stops there with the page as it was. The title says
+`NAME  read error` until the next request; once the card reads again,
+End finds the real end.
+
+## Asked to redraw
+
+A Z_WM_REDRAW is answered from what is already known: it repaints the
+position the reader is at and acknowledges at once. A scrollbar drag
+whose position has not been resolved yet is left for the main loop,
+which resolves it there -- as a find, if it is far -- rather than
+before the acknowledgement wm is waiting for.
+
+A resize forgets what was laid out at the old width (the blit's step
+table and the layout cache), and keeps the position inside its block:
+a paragraph that wrapped to six lines may wrap to three when wider.
+
 ## Positions are blocks, not lines
 
 A position is (block start, display line within it). Two reasons:
@@ -495,6 +560,35 @@ docs — they served exactly one generated file — and each is a rule
 that can silently eat ordinary content. A line of colons in a document
 about C++ scope resolution would have vanished.
 
+### Front matter, fences, and lines that draw nothing
+
+**Front matter** is a `---` on the very first line *followed by a
+`key:` line* (or straight by its closing `---`), and it ends at its
+closing `---` or after 64 lines, whichever is first. Anything else is
+a rule. A document that simply opened with a `---` and never closed it
+was otherwise one long front matter block: a blank page, and every key
+read to the end of the file looking for something to draw.
+
+**A backtick fence's info string cannot contain a backtick**
+(CommonMark). ```` ```figure ```` at the start of a paragraph is
+inline code naming a fence, not a fence; reading it as one
+put the rest of [learn_format.md](learn_format.md) inside a code block.
+Inline code follows the same rule: a run of backticks is closed by a
+run of the same length, so ``` `` a`b `` ``` is code containing a
+backtick.
+
+**Lines that draw nothing** -- a fence line, a table's `|---|`
+separator -- take no space, so a screen is filled by reading on until
+something does. Thousands of them in a row made every key read to the
+end. Every 32nd one in a row now draws as a blank line, so a screen is
+filled within 32 lines of anything. Lazy continuation stops once the
+joined block is full (1024 characters): a file of thousands of lines
+with no blank line between them was one paragraph, read whole for
+every screen.
+
+All three were found by fuzzing; the cut-down cases are in
+`sw/apps/read/cases/` and run with `make test`.
+
 Two things that came out of that exercise stayed, because neither is
 Pandoc-specific:
 
@@ -515,9 +609,10 @@ rather than underlined, since underline already means "link".
 
 `#anchor` targets are resolved by slugifying every heading in the
 document GitHub-style and scanning for a match. That's a full pass,
-but it only happens on a click; an anchor table built at open time
-would cost memory proportional to the heading count, which is what
-this design avoids.
+but it only happens on a click, and it is a find (above): the window
+answers throughout and Esc stops it. An anchor table built at open
+time would cost memory proportional to the heading count, which is
+what this design avoids.
 
 A link to a non-Markdown file hands off through `ztype` exactly as the
 file browser does. External `http://` links say so rather than
@@ -545,7 +640,7 @@ in a `read` of its own.
 | Enter | follow the selected link |
 | Backspace | back |
 | Ctrl+C, right-click | copy the selection |
-| Escape | clear the selection |
+| Escape | stop a long find (End, a link, a jump); otherwise clear the selection |
 | Ctrl+O | open |
 
 ## Opening draws the document once
@@ -667,7 +762,9 @@ as shown and never the Markdown around it; a numbered item keeps its
 number, a bullet is not read. The page follows the voice: each block is
 scrolled to the top of the screen as it is spoken. Any key or click
 stops it, leaving the page where the voice was, and Super+A again reads
-on from there; the wheel scrolls without stopping it.
+on from there; the wheel scrolls without stopping it. While it reads,
+the main loop wakes at least once a second even with nothing arriving,
+so a speech service that has gone quiet is given up on in time.
 
 **Super+C** says the highlighted text, once, leaving the clipboard as it
 was ("Nothing selected" if there is none); **Super+V** says the
@@ -680,9 +777,15 @@ Two host suites, both run with the cross-compiler bypassed:
 
 ```
 cd sw/apps/read
-make test DOCS="../../../docs/*.md"    # parser
+make test DOCS="../../../docs/*.md"    # parser, fuzz cases, and finds
 make render DOC=file.md MODE=scroll    # layout and scroll reversibility
 ```
+
+`make test` also runs `rfind_test.c` (see "Long finds" and "Read
+errors" above): End, links, drags and launch offsets over every
+document as finds of bounded slices, Esc, a read that fails halfway
+and then recovers, a redraw acknowledged before any scan, and a
+resize.
 
 `make test` is 14,747 checks over the book, its chapter sources and
 all 28 project docs — asserting no overruns, no spans past end of

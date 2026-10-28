@@ -90,7 +90,51 @@
 #define MSC_OFF_SETUP       0x260u          // 8, the driver's own requests
 
 static z_usbh_msc_t msc;
-static int start_tries;             // z_usbh_msc_start_step() since bind
+
+/*
+ * -- bringing a new drive up --
+ *
+ * A stick that has just been plugged in can take seconds to report
+ * ready, and while it gets there it may NAK a command's status for
+ * longer than MSC_NAK_TICKS. Treated as a broken transport, that cost a
+ * Reset Recovery on every step -- up to 400 of them, 8 ticks apart --
+ * and a reset restarts many sticks' own start-up, so they never got
+ * there, and some dropped off the bus. During bring-up, then:
+ *
+ *   - a NAK that outlasts MSC_BRING_NAK_TICKS is "not ready yet", not
+ *     an error: the step returns BUSY, and if the device had taken the
+ *     command, what it owes (data, then its CSW) is collected at the
+ *     start of the next step (drain_owed()) rather than reset away;
+ *   - any other transport error still gets Reset Recovery, but once a
+ *     bring-up at most (MSC_BRING_RESETS);
+ *   - it gives up after MSC_START_TICKS, not after a count of steps,
+ *     so the pace usb.c chooses does not change how long a drive gets.
+ *
+ * After bring-up nothing here changes: every error is recovered as
+ * before.
+ */
+#define MSC_START_TICKS      (15u * 732u)   // ~15 s for a drive to become ready
+#define MSC_BRING_NAK_TICKS  (732u / 4)     // ~250 ms of NAKs: not ready yet
+#define MSC_BRING_RESETS     1
+// A backstop for when no clock runs (co-simulation without emulated
+// ticks): this many steps end a bring-up too. 400 is the old count.
+#define MSC_START_STEPS      400
+
+static struct {
+    uint8_t active;     // a bring-up is under way
+    uint8_t resets;     // Reset Recoveries it has used
+    uint8_t owe_csw;    // a command was taken; its CSW is not read yet
+    uint16_t owe_data;  // ...and this much of its data-in before it
+    uint32_t t0;        // usbh_ticks() when it began
+    int steps;          // z_usbh_msc_start_step() calls in it
+} bring;
+
+// Between the steps of a bring-up z_usbh_msc_start() runs itself
+// (`usbmount`), the process sleeps (usb.c). Co-simulation has no clock
+// to sleep on; the step count ends a bring-up there.
+#ifdef Z_USBH_COSIM
+void usbh_msc_pause(uint32_t ticks) { (void)ticks; }
+#endif
 
 // Bumped by every bind and every unbind, and deliberately OUTSIDE msc
 // so bind's memset does not reset it. A public entry point records it
@@ -193,7 +237,12 @@ static int bulk_xfer(int in, uint32_t off, uint16_t len)
             s = z_usbh_rd(Z_USBH_XACT_S);
             if (!(s & Z_USBH_XS_PENDING)) break;
         }
-        if (s & Z_USBH_XS_PENDING) return Z_USBH_MSC_ERR;
+        if (s & Z_USBH_XS_PENDING) {
+            // Not a NAK, whatever the last transaction was: bring-up
+            // tells "busy" from "broken" by last_status.
+            msc.last_status = Z_USBH_ST_TIMEOUT;
+            return Z_USBH_MSC_ERR;
+        }
 
         // Every NAK the device gave this request, the hardware's own
         // retries included -- a device slow to supply data shows up here.
@@ -227,7 +276,8 @@ static int bulk_xfer(int in, uint32_t off, uint16_t len)
                 msc.last_len = done;
                 since = usbh_ticks();   // progress, so not a stuck device
             }
-            if ((uint32_t)(usbh_ticks() - since) > MSC_NAK_TICKS) {
+            if ((uint32_t)(usbh_ticks() - since) >
+                (bring.active ? MSC_BRING_NAK_TICKS : MSC_NAK_TICKS)) {
                 msc.last_len = done;
                 return Z_USBH_MSC_ERR;
             }
@@ -437,6 +487,27 @@ static void recover(void)
     if (alive()) reset_recovery();
 }
 
+// The transport is out of step. After bring-up: Reset Recovery, as
+// always. During it, once at most (see "bringing a new drive up"): a
+// stick that has not finished starting can take a reset as a reason to
+// start again, and one every step kept some from ever getting there.
+// Past that one, the next step's command finds out whether the device
+// is back in step, and the bring-up's deadline ends it if not.
+static void broken(void)
+{
+    if (!bring.active) { recover(); return; }
+    if (bring.resets >= MSC_BRING_RESETS) return;
+    bring.resets++;
+    recover();
+}
+
+// The transfer that just failed ran out of time on NAKs: the device is
+// there and busy, not broken.
+static int naked(void)
+{
+    return msc.last_status == Z_USBH_ST_NAK;
+}
+
 /*
  * Run one SCSI command: CBW out, optional data, CSW in.
  *
@@ -476,7 +547,11 @@ static int scsi_cmd_body(const uint8_t *cmd, int cmd_len, int dir,
         if (msc_verbose)
             printf("usb msc: cmd %02x: CBW failed (%d, status %d)\n",
                    cmd[0], r, msc.last_status);
-        recover();
+        // Bring-up: a device NAKing the whole CBW has taken none of it
+        // and owes nothing; it is sent again next step.
+        if (bring.active && naked() && msc.last_len == 0)
+            return Z_USBH_MSC_ERR;
+        broken();
         return Z_USBH_MSC_ERR;
     }
 
@@ -499,15 +574,23 @@ static int scsi_cmd_body(const uint8_t *cmd, int cmd_len, int dir,
             // follows says why.
             if (clear_halt(dir == CBW_IN ? (uint8_t)(0x80 | msc.ep_in)
                                          : msc.ep_out) != Z_USBH_MSC_OK) {
-                recover();
+                broken();
                 return Z_USBH_MSC_ERR;
             }
         } else if (r != Z_USBH_MSC_OK) {
+            // Bring-up: still fetching. What it owes -- the rest of
+            // the data, then the CSW -- is collected next step
+            // (drain_owed()), not reset away.
+            if (bring.active && naked() && dir == CBW_IN) {
+                bring.owe_data = (uint16_t)(data_len - msc.last_len);
+                bring.owe_csw = 1;
+                return Z_USBH_MSC_ERR;
+            }
             // Failed part-way through the data phase. The device is
             // still in it, so a CSW read now would take data as status
             // -- which is how one bad packet used to put every later
             // command out of step. Reset instead.
-            recover();
+            broken();
             return Z_USBH_MSC_ERR;
         }
     }
@@ -525,7 +608,14 @@ static int scsi_cmd_body(const uint8_t *cmd, int cmd_len, int dir,
             printf("usb msc: cmd %02x: CSW failed (%d, status %d, "
                    "%u bytes)\n", cmd[0], r, msc.last_status,
                    msc.last_len);
-        recover();
+        // Bring-up: the command was taken and its status is not ready
+        // yet -- the usual way a stick that is still starting says so.
+        // Read next step.
+        if (bring.active && naked() && msc.last_len == 0) {
+            bring.owe_csw = 1;
+            return Z_USBH_MSC_ERR;
+        }
+        broken();
         return Z_USBH_MSC_ERR;
     }
 
@@ -540,7 +630,7 @@ static int scsi_cmd_body(const uint8_t *cmd, int cmd_len, int dir,
                    (unsigned long)get32le(MSC_OFF_CSW + 0),
                    (unsigned long)get32le(MSC_OFF_CSW + 4),
                    (unsigned long)msc.tag);
-        recover();
+        broken();
         return Z_USBH_MSC_ERR;
     }
 
@@ -553,7 +643,7 @@ static int scsi_cmd_body(const uint8_t *cmd, int cmd_len, int dir,
     // bCSWStatus: 0 passed, 1 failed, 2 phase error. A phase error is
     // the device saying it lost track; BOT 6.7 requires a reset.
     if (status == 2) {
-        recover();
+        broken();
         return Z_USBH_MSC_ERR;
     }
     if (status != 0) return Z_USBH_MSC_FAIL;
@@ -646,7 +736,7 @@ int z_usbh_msc_bind(uint8_t addr, uint8_t xa_flags, uint8_t port,
     if (msc.ready) return 0;          // one drive for now
 
     memset(&msc, 0, sizeof(msc));
-    start_tries = 0;
+    memset(&bring, 0, sizeof(bring));
 
     while (i + 1 < cfg_len) {
         int len = cfg[i];
@@ -702,16 +792,18 @@ int z_usbh_msc_bind(uint8_t addr, uint8_t xa_flags, uint8_t port,
  *
  * In steps, one TEST UNIT READY per call (z_usbh_msc_start_step()), so
  * that nothing waits for a slow drive: usb.c calls it from its loop
- * every few ticks after a drive binds, and serves everyone else in
- * between, and tells `fs` only once the drive is ready. A card reader
- * with no card, or a drive still spinning up, answers "not ready" for
- * a while; that is the normal startup handshake, not an error.
- * z_usbh_msc_start() is the same, run to the end, for `usbmount` on a
- * drive the steps gave up on.
+ * after a drive binds, further apart each time it is not ready
+ * (z_usbh_msc_start_pace()), and serves everyone else in between, and
+ * tells `fs` only once the drive is ready. A card reader with no card,
+ * or a drive still spinning up, answers "not ready" for a while; that
+ * is the normal startup handshake, not an error. Nor is a status phase
+ * that NAKs for a while ("bringing a new drive up", at the top).
+ * z_usbh_msc_start() is the same, run to the end, for `usbmount`.
  */
-#define MSC_START_TRIES 400         // ~4.5 s at usb.c's 8-tick pace
 
-// The geometry, once the unit is ready.
+// The geometry, once the unit is ready. OK; BUSY to ask again (the
+// device was not ready to answer after all); ERR when it never can be
+// used here.
 static int start_capacity(void)
 {
     uint8_t cmd[16];
@@ -719,8 +811,10 @@ static int start_capacity(void)
     memset(cmd, 0, sizeof(cmd));
     cmd[0] = SCSI_READ_CAPACITY10;
     if (scsi_cmd(cmd, 10, CBW_IN, MSC_OFF_DATA, 8) != Z_USBH_MSC_OK) {
-        printf("usb msc: READ CAPACITY failed\n");
-        return Z_USBH_MSC_ERR;
+        // Some sticks pass TEST UNIT READY a moment before they can
+        // answer this; the next step asks again.
+        if (msc_verbose) printf("usb msc: READ CAPACITY failed\n");
+        return alive() ? Z_USBH_MSC_BUSY : Z_USBH_MSC_ERR;
     }
 
     // Both fields are BIG endian, unlike everything in the CBW.
@@ -744,48 +838,143 @@ static int start_capacity(void)
     return Z_USBH_MSC_OK;
 }
 
-int z_usbh_msc_start_step(void)
+/*
+ * Collect what a command taken in an earlier step still owes: the rest
+ * of its data, then its CSW. OK once it has (or once the transport was
+ * put back in step another way), BUSY while the device still NAKs.
+ * Holds the bus like scsi_cmd().
+ */
+static int drain_owed_body(void)
+{
+    int r;
+
+    if (bring.owe_data) {
+        r = bulk_xfer(1, MSC_OFF_DATA, bring.owe_data);
+        if (r == Z_USBH_MSC_ERR && naked()) {
+            bring.owe_data = (uint16_t)(bring.owe_data - msc.last_len);
+            return Z_USBH_MSC_BUSY;
+        }
+        bring.owe_data = 0;
+        if (r == Z_USBH_MSC_STALL)
+            r = clear_halt((uint8_t)(0x80 | msc.ep_in));
+        if (r != Z_USBH_MSC_OK) {
+            bring.owe_csw = 0;
+            broken();
+            return Z_USBH_MSC_OK;
+        }
+    }
+
+    r = bulk_xfer(1, MSC_OFF_CSW, CSW_LEN);
+    if (r == Z_USBH_MSC_STALL &&
+        clear_halt((uint8_t)(0x80 | msc.ep_in)) == Z_USBH_MSC_OK)
+        r = bulk_xfer(1, MSC_OFF_CSW, CSW_LEN);
+    if (r == Z_USBH_MSC_ERR && naked() && msc.last_len == 0)
+        return Z_USBH_MSC_BUSY;
+    bring.owe_csw = 0;
+    if (r != Z_USBH_MSC_OK || msc.last_len != CSW_LEN ||
+        get32le(MSC_OFF_CSW + 0) != CSW_SIG ||
+        get32le(MSC_OFF_CSW + 4) != msc.tag ||
+        z_usbh_rb(Z_USBH_BUF + MSC_OFF_CSW + 12) == 2)
+        broken();
+    // Its status is of no interest: the TEST UNIT READY that follows
+    // asks again.
+    return Z_USBH_MSC_OK;
+}
+
+static int drain_owed(void)
+{
+    int r;
+
+    if (!alive()) return Z_USBH_MSC_ERR;
+    if (!z_usbh_bus_reserve()) return Z_USBH_MSC_BUSY;
+    r = alive() ? drain_owed_body() : Z_USBH_MSC_ERR;
+    z_usbh_bus_release();
+    return r;
+}
+
+// One step, the bring-up's bookkeeping aside.
+static int start_once(void)
 {
     uint8_t cmd[16];
+    int r;
+
+    if (bring.owe_csw) {
+        r = drain_owed();
+        if (r != Z_USBH_MSC_OK) return r;
+    }
+
+    memset(cmd, 0, sizeof(cmd));
+    cmd[0] = SCSI_TEST_UNIT_READY;
+    r = scsi_cmd(cmd, 6, 0, 0, 0);
+    if (r == Z_USBH_MSC_OK) return start_capacity();
+    if (!alive()) return Z_USBH_MSC_ERR;
+    // Taken, and still busy with it: nothing more until it has
+    // answered, or the two ends lose step.
+    if (bring.owe_csw) return Z_USBH_MSC_BUSY;
+
+    // REQUEST SENSE clears the check condition the failure just
+    // raised; without it many devices keep failing forever. Only for a
+    // command the device failed: after a transport error, the next
+    // step's TEST UNIT READY finds out where things stand first.
+    if (r == Z_USBH_MSC_FAIL) {
+        memset(cmd, 0, sizeof(cmd));
+        cmd[0] = SCSI_REQUEST_SENSE;
+        cmd[4] = 18;
+        scsi_cmd(cmd, 6, CBW_IN, MSC_OFF_DATA, 18);
+        if (!alive()) return Z_USBH_MSC_ERR;
+    }
+    return Z_USBH_MSC_BUSY;
+}
+
+int z_usbh_msc_start_step(void)
+{
+    int r;
 
     if (!msc.ready) return Z_USBH_MSC_ERR;
     if (msc.started) return Z_USBH_MSC_OK;
     op_gen = msc_gen;
 
-    memset(cmd, 0, sizeof(cmd));
-    cmd[0] = SCSI_TEST_UNIT_READY;
-    if (scsi_cmd(cmd, 6, 0, 0, 0) == Z_USBH_MSC_OK) {
-        start_tries = 0;
-        return start_capacity();
+    if (!bring.active) {
+        bring.active = 1;
+        bring.resets = 0;
+        bring.steps = 0;
+        bring.t0 = usbh_ticks();
     }
-    if (!alive()) return Z_USBH_MSC_ERR;
+    bring.steps++;
 
-    // REQUEST SENSE clears the check condition the failure just
-    // raised; without it many devices keep failing forever.
-    memset(cmd, 0, sizeof(cmd));
-    cmd[0] = SCSI_REQUEST_SENSE;
-    cmd[4] = 18;
-    scsi_cmd(cmd, 6, CBW_IN, MSC_OFF_DATA, 18);
-
-    if (++start_tries >= MSC_START_TRIES) {
-        start_tries = 0;
+    r = start_once();
+    if (r == Z_USBH_MSC_BUSY &&
+        ((uint32_t)(usbh_ticks() - bring.t0) >= MSC_START_TICKS ||
+         bring.steps >= MSC_START_STEPS)) {
         printf("usb msc: unit never became ready\n");
-        return Z_USBH_MSC_ERR;
+        r = Z_USBH_MSC_ERR;
     }
-    return Z_USBH_MSC_BUSY;
+    if (r != Z_USBH_MSC_BUSY) bring.active = 0;
+    return r;
+}
+
+// Ticks until the next step: 8, 16, 32 ... at most 256 (~0.35 s). A
+// drive that answers at once is up in a few ticks; one that takes its
+// time is asked a few dozen times over MSC_START_TICKS, not 400.
+uint32_t z_usbh_msc_start_pace(void)
+{
+    int k = bring.steps > 0 ? bring.steps - 1 : 0;
+
+    return k >= 5 ? 256u : 8u << k;
 }
 
 int z_usbh_msc_start(void)
 {
-    int r, tries;
+    int r;
 
-    // Twenty in a row, as this always did; the steps above are paced.
-    for (tries = 0; tries < 20; tries++) {
+    // The steps above, paced the same way, to the end -- `usbmount`.
+    // A bring-up usb.c already has going is carried on, not begun
+    // again: its deadline and its one reset stand.
+    for (;;) {
         r = z_usbh_msc_start_step();
         if (r != Z_USBH_MSC_BUSY) return r;
+        usbh_msc_pause(z_usbh_msc_start_pace());
     }
-    printf("usb msc: unit never became ready\n");
-    return Z_USBH_MSC_ERR;
 }
 
 int z_usbh_msc_read(uint32_t lba, uint8_t *dst, uint32_t count)

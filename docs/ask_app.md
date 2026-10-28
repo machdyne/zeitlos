@@ -167,6 +167,63 @@ user has already given up on never costs another cycle.
 **Progress is honest.** The bar tracks vectors scanned, which is a real
 fraction of a known total, not a guess.
 
+### Loading
+
+**Loading is incremental too** ([responsive.md](responsive.md)). The
+window comes up at once and the packs load from the main loop, one
+request to `fs` at a time (`ai_load_step()`, at most 16KB each, about
+20ms of them per pass), so between requests the window redraws, keys
+are answered and the close icon works. Loading used to be one call
+made before the loop started, which drew the window once and then
+answered nothing -- not a redraw, not Esc, not close -- until every
+pack was in.
+
+The status line says which pack and how far: `Loading zdocs 40%  Esc
+stops`, from 0 again for each pack. A pack's button appears as soon as
+that pack is in.
+
+**Typing works while loading.** The question line takes keys from the
+first frame. **Enter** before the packs are in queues the question
+(`Loading zdocs 40%, then search`), and it runs when loading ends --
+over all the packs, not the ones that happened to be in when Enter was
+pressed, so the answer does not depend on how quick the card was.
+**F1** shows help as usual.
+
+**Esc stops loading.** The packs already in stay loaded and answer
+questions (`loading stopped, 1 pack loaded`); the one being loaded is
+freed and its file closed. With none in, the line says `loading
+stopped -- no packs loaded`. A queued question is dropped with it --
+Esc meant stop. Run `ask` again to load everything.
+
+**What a load reads**, per pack: `index.zak` once (header, body and the
+seek self-test on one handle -- it used to be opened three times), the
+coarse vectors and encoder if the pack is dense, `lens.zln`, and
+`lexicon.zlx`'s header. For `zdocs` (4,289 chunks, lexical only) that
+is 13 requests and 9KB, against 89 requests and 69KB before. A pack
+built before `lens.zln` existed is read the old way, through
+`chunks.zct` -- now in 16KB blocks rather than 1KB: 18 requests,
+69KB.
+
+**When something is wrong, it says what.** A pack that cannot load
+names the file and the cause: `index.zak: fs did not answer
+(timeout)`, `lens.zln: ends early (2048 of 8620 bytes)`, `chunks.zct:
+cannot open (missing? out of handles?)`, and the header failures as
+before (another version, different builds). A timeout and a short read
+used to be the same "short read from card". A pack that loads but
+works less well -- BM25 without its chunk lengths, a dense pack without
+its encoder, a lexicon whose header cannot be read -- says so: the
+reason after loading, then `, ranking weaker` on the idle line for as
+long as it is true. Losing the lengths used to be silent.
+
+`make -C sw/apps/ask/test loadtest` checks all of this on the host,
+under AddressSanitizer: the stepped load gives the same packs and
+lengths as reading `chunks.zct` directly; a copy of the pack without
+`lens.zln` gives the same again; a load stopped after each of its
+steps holds no file and no memory beyond the packs it reports; and
+with each request failing in turn (an error, a timeout, an early end of
+file) nothing leaks and every outcome is a whole pack, a warning, or a
+named refusal.
+
 ---
 
 ## Packs, and what is in them
@@ -400,6 +457,7 @@ ship on separate schedules.
       lexicon.zlx            "            term dictionary, resident
       post.zlp               "            postings, read per query term
       encoder.zmd            "            the query encoder
+      lens.zln               "            chunk lengths for BM25
     medium/
       ...
 ```
@@ -417,6 +475,17 @@ layout puts packs, and a layout change does not invalidate packs
 already built. Format version 1 stored the whole card path; version 2
 is the first that does not, and `ask` refuses a version-1 pack with
 `index built by another version of tools/ask -- rebuild the pack`.
+
+**`lens.zln`** is one `u16` a chunk, in chunk order, after the usual
+32-byte header (magic `ZLN1`, count = chunks, `a` = 2, `b` =
+`BYTES_PER_TOKEN`): each chunk's length in tokens for BM25's length
+normalisation, as `chunks.zct`'s byte length over 6, clamped to
+1..65535. It holds nothing `chunks.zct` does not; it exists so that
+loading reads two bytes a chunk instead of sixteen (8.6KB against 69KB
+for `zdocs`, megabytes for `arkmed`). It is optional and needs no
+format version bump: `ask` scans `chunks.zct` for a pack without it,
+and gets the same numbers -- `tools/ask/tests/test_lens.py` checks a
+built pack's file against its chunk table.
 
 Measured across a co-installed `arklite` + `arkmed` card: 1,948 paths,
 no collisions, longest path 32 characters — 43 of `Z_WM_ARG_MAX`'s 96
@@ -1674,6 +1743,9 @@ third word is the chunk's *byte* length, already there for the preview,
 and bytes over six is a good enough proxy for tokens. `load_pack()`
 streams that column into a resident array at startup — two bytes a
 chunk, 20KB for `arklite` — and both sides are at `b = 0.75` now.
+(Later the same numbers went into a file of their own, `lens.zln`, so
+that a start reads two bytes a chunk rather than sixteen; see "Where
+things live on the card".)
 
 Neither the dictionary nor the postings are resident. The dictionary is
 binary-searched in place — about fifteen probes over twenty thousand
@@ -1829,7 +1901,10 @@ happen:
 | `/data/ask has no subdirectories` | the pack was copied to `/data/ask/` rather than `/data/ask/<name>/`, or only `/opt/ark/` was copied |
 | `index built by another version of tools/ask -- rebuild the pack` | a pack built before format version 2, when indexes stored whole card paths |
 | `pack files are from different builds` | two distributions mixed in one directory. Every file carries the `dsid`; this is the check that stops confidently wrong answers |
-| `missing file in pack` | an incomplete copy — a pack is eight files in `/data/ask/<name>/` |
+| `<file>: cannot open (missing? out of handles?)` | an incomplete copy (a pack is up to nine files in `/data/ask/<name>/`), or the board's eight file handles are all in use |
+| `<file>: fs did not answer (timeout)` | the filesystem service did not reply within its 15 s; the card or `fs` is in trouble, not the pack |
+| `<file>: ends early (N of M bytes)` | the file is shorter than its header says: a copy cut short |
+| `<pack>: weaker ranking, ...` | the pack loaded but BM25 runs without chunk lengths (both `lens.zln` and `chunks.zct` unreadable); answers still come, ranked less well. The idle line keeps saying `ranking weaker` |
 
 `hosttest` prints the same string, so pointing it at the mounted card
 tells you what the device will say before you eject it.
@@ -1839,7 +1914,7 @@ tells you what the device will say before you eject it.
 ```
 $ ls /media/<card>/ask/arklite/
 chunks.zct  coarse.zcv  docs.zdt  encoder.zmd
-fine.zfv    index.zak   lexicon.zlx  post.zlp
+fine.zfv    index.zak   lens.zln     lexicon.zlx  post.zlp
 
 $ ./sw/apps/ask/test/hosttest /media/<card> "how do I purify water"
 ```

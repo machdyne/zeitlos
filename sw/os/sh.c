@@ -1309,6 +1309,9 @@ void sh(void) {
 				(unsigned long)hp, (unsigned long)hd, HID_FIFO_SIZE);
 			printf("ic: mailboxes: %lu send(s) refused (full, depth %d)\n",
 				(unsigned long)k_msg_full_drops(), Z_MAILBOX_DEPTH);
+			printf("ic: input: %lu move(s) merged, %lu refused (reserve %d)\n",
+				(unsigned long)k_msg_coalesced(),
+				(unsigned long)k_msg_input_refused(), Z_MAILBOX_RESERVE);
 			uint32_t np = resolve_net_pid();
 			if (np) {
 				z_msg_new_send(np, Z_NET_DEBUG_DUMP, 0, z_obj_none());

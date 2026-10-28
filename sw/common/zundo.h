@@ -202,7 +202,10 @@ static inline bool z_undo_undo_ops(z_undo_t *u, const z_undo_ops_t *o,
 		// document can always be brought back to what is on disk.
 		if (done && u->top == u->saved) break;
 		done = true;
-		z_undo_rec_t *r = z_undo_at(u, u->top - 1);
+		// A copy, not a pointer: the ops may move the rings (text
+		// keeps them in its arena, which growing the document can
+		// move), and the record is read after they return.
+		const z_undo_rec_t rec = *z_undo_at(u, u->top - 1), *r = &rec;
 		if (r->op == Z_UNDO_INS) o->del(o->user, r->pos, r->n);
 		else if (!o->ins(o->user, u, r->pos, r->log, r->n)) break;	// cannot happen: it was there
 		if (r->pos < lo) lo = r->pos;
@@ -228,7 +231,7 @@ static inline bool z_undo_redo_ops(z_undo_t *u, const z_undo_ops_t *o,
 	while (u->top < u->end && z_undo_at(u, u->top)->group == g) {
 		if (done && u->top == u->saved) break;	// as in z_undo_undo_ops()
 		done = true;
-		z_undo_rec_t *r = z_undo_at(u, u->top);
+		const z_undo_rec_t rec = *z_undo_at(u, u->top), *r = &rec;	// as above
 		if (r->op == Z_UNDO_INS) {
 			if (!o->ins(o->user, u, r->pos, r->log, r->n)) break;
 			*cursor = r->pos + r->n;

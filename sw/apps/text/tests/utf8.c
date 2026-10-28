@@ -115,6 +115,21 @@ static int32_t k_arena_stub(z_arena_args_t *a) {
 	return Z_ARENA_OK;
 }
 
+// Processes, for autosave's untitled copies (section 21): this one is
+// my_pid with serial my_serial; live[] says which other pids run, with
+// what serial.
+static uint32_t my_pid = 7, my_serial = 100;
+static uint32_t live_serial[16];
+
+// Messages for the mailbox, and after how many reads they arrive.
+static struct { uint32_t subject, v; } mq[8];
+static int mq_n;
+static int reads_until_mail = -1;	// FS reads before mq is let in; -1: at once
+static long chunk_reads;			// fs_read_chunk() calls, all told
+
+static int card_left = -1;		// bytes the card can still take; -1: no limit
+static int rename_fail_at;		// the Nth rename from now fails (0: none)
+
 static uint32_t *k_syscall(uint32_t id, uint32_t *args, uint32_t b) {
 
 	(void)b;
@@ -126,8 +141,46 @@ static uint32_t *k_syscall(uint32_t id, uint32_t *args, uint32_t b) {
 		((z_obj_t *)args)->val.uint32 = ticks++;
 		return (uint32_t *)&k_ok;
 
-	case Z_SYS_MSG_READ:
-		return (uint32_t *)&k_fail;		// mailbox always empty
+	// Empty, unless a test queued something (section 22: a key pressed
+	// while a file opens).
+	case Z_SYS_MSG_READ: {
+		if (!mq_n || reads_until_mail > 0) return (uint32_t *)&k_fail;
+		z_msg_t *m = (z_msg_t *)args;
+		memset(m, 0, sizeof(*m));
+		m->subject = mq[0].subject;
+		m->obj.type = Z_UINT32;
+		m->obj.val.uint32 = mq[0].v;
+		memmove(mq, mq + 1, sizeof(mq[0]) * (size_t)--mq_n);
+		return (uint32_t *)&k_ok;
+	}
+
+	case Z_SYS_GETPID:
+		((z_obj_t *)args)->type = Z_UINT32;
+		((z_obj_t *)args)->val.uint32 = my_pid;
+		return (uint32_t *)&k_ok;
+
+	case Z_SYS_PROC_SERIAL: {
+		z_proc_serial_args_t *a = (z_proc_serial_args_t *)args;
+		a->serial = a->pid == my_pid ? my_serial : (a->pid < 16 ? live_serial[a->pid] : 0);
+		return (uint32_t *)&k_ok;
+	}
+
+	// A directory's files: every name under `path` + "/".
+	case Z_SYS_FS_LIST: {
+		z_fs_list_args_t *a = (z_fs_list_args_t *)args;
+		size_t pl = strlen(a->path), o = 0;
+		a->count = 0;
+		a->truncated = 0;
+		for (int i = 0; i < NFILES; i++) {
+			if (!files[i].used || strncmp(files[i].name, a->path, pl) || files[i].name[pl] != '/') continue;
+			size_t k = strlen(files[i].name) + 1;
+			if (o + k > a->out_cap || a->count >= a->max_entries) { a->truncated = 1; break; }
+			memcpy(a->out + o, files[i].name, k);
+			o += k;
+			a->count++;
+		}
+		return (uint32_t *)&k_ok;
+	}
 
 	case Z_SYS_FS_SIZE: {
 		z_fs_size_args_t *a = (z_fs_size_args_t *)args;
@@ -153,6 +206,8 @@ static uint32_t *k_syscall(uint32_t id, uint32_t *args, uint32_t b) {
 
 	case Z_SYS_FS_READ_CHUNK: {
 		z_fs_read_chunk_args_t *a = (z_fs_read_chunk_args_t *)args;
+		if (reads_until_mail > 0) reads_until_mail--;
+		chunk_reads++;
 		if (!open_file || open_writing) return (uint32_t *)&k_fail;
 		int n = open_file->size - open_pos;
 		if (n > (int)a->maxlen) n = (int)a->maxlen;
@@ -167,6 +222,9 @@ static uint32_t *k_syscall(uint32_t id, uint32_t *args, uint32_t b) {
 	case Z_SYS_FS_WRITE_CHUNK: {
 		z_fs_write_chunk_args_t *a = (z_fs_write_chunk_args_t *)args;
 		if (!open_file || !open_writing) return (uint32_t *)&k_fail;
+		// A card that fills up (section 20): writes past card_left fail.
+		if (card_left >= 0 && (int)a->len > card_left) return (uint32_t *)&k_fail;
+		if (card_left >= 0) card_left -= (int)a->len;
 		if (open_file->size + (int)a->len > FILEMAX) return (uint32_t *)&k_fail;
 		memcpy(&open_file->data[open_file->size], a->buf, a->len);
 		open_file->size += (int)a->len;
@@ -213,6 +271,7 @@ static uint32_t *k_syscall(uint32_t id, uint32_t *args, uint32_t b) {
 	case Z_SYS_FS_RENAME: {
 		z_fs_rename_args_t *a = (z_fs_rename_args_t *)args;
 		mfile_t *f = find(a->from, false);
+		if (rename_fail_at && --rename_fail_at == 0) { a->err = 0; return (uint32_t *)&k_fail; }
 		if (!f || find(a->to, false)) { a->err = Z_FS_ERR_EXIST; return (uint32_t *)&k_fail; }
 		snprintf(f->name, sizeof(f->name), "%s", a->to);
 		a->err = 0;
@@ -613,7 +672,7 @@ int main(int argc, char **argv) {
 	type("one two One three one");
 	snprintf(find_text, sizeof(find_text), "one");
 	snprintf(repl_text, sizeof(repl_text), "1");
-	expect(count_matches() == 3, "three matches, either case");
+	expect(count_matches(true) == 3, "three matches, either case");
 	cursor = 22;
 	expect(replace_all_undoable(3), "three replacements can be undone");
 	expect(replace_all_core(true) == 3, "replace all: three");
@@ -647,7 +706,7 @@ int main(int argc, char **argv) {
 	type("aaaa");
 	snprintf(find_text, sizeof(find_text), "aa");
 	snprintf(repl_text, sizeof(repl_text), "b");
-	expect(count_matches() == 2 && replace_all_core(true) == 2 && doc_is("bb"),
+	expect(count_matches(true) == 2 && replace_all_core(true) == 2 && doc_is("bb"),
 		"matches do not overlap");
 
 	// Too many to undo: the history is cleared rather than left half.
@@ -907,7 +966,7 @@ int main(int argc, char **argv) {
 		// replace all across the whole thing
 		snprintf(find_text, sizeof(find_text), "Paragraph");
 		snprintf(repl_text, sizeof(repl_text), "Absatz");
-		int m = count_matches();
+		int m = count_matches(true);
 		expect(m > 3000 && replace_all_core(false) == m, "replace all in the arena");
 		expect(layout_check(), "line table after replace all");
 
@@ -1090,6 +1149,187 @@ int main(int argc, char **argv) {
 		expect(nfiles_after == nfiles_before, "not a file anywhere");
 		no_ramdisk = false;
 		as_ram = -1;
+		fresh();
+	}
+
+	printf("20. saving: written to NAME.part, then renamed\n");
+	{
+		// A file on the card, then an edited document saved over it.
+		fresh();
+		put_file("/home/S.TXT", "the old file\n", 13);
+		expect(load_file("/home/S.TXT"), "loads");
+		type("new words ");
+		expect(do_save_to("/home/S.TXT"), "saves");
+		mfile_t *f = find("/home/S.TXT", false);
+		expect(f && f->size == 23 && !memcmp(f->data, "new words the old file\n", 23),
+			"the file is the document");
+		expect(!find("/home/S.TXT.part", false), "and no .part is left");
+
+		// The card fills up mid-save: the old file is as it was.
+		type("more ");
+		char part[Z_FS_PATH_MAX];
+		card_left = 10;
+		expect(write_safely("/home/S.TXT", part, (int)sizeof(part)) == SAVE_FAILED,
+			"a full card fails the save");
+		card_left = -1;
+		f = find("/home/S.TXT", false);
+		expect(f && f->size == 23 && !memcmp(f->data, "new words the old file\n", 23),
+			"and the file on the card is untouched");
+		expect(!find("/home/S.TXT.part", false), "and the half-written .part is gone");
+
+		// A rename that fails at once (not for EXIST): the old file is
+		// still there, so the .part goes and nothing has changed.
+		rename_fail_at = 1;
+		expect(write_safely("/home/S.TXT", part, (int)sizeof(part)) == SAVE_FAILED,
+			"a rename refused at once fails the save");
+		f = find("/home/S.TXT", false);
+		expect(f && f->size == 23, "and leaves the old file");
+		expect(!find("/home/S.TXT.part", false), "and no .part");
+
+		// The old file deleted, then the rename fails: the .part is the
+		// only copy, complete, and kept.
+		rename_fail_at = 2;
+		expect(write_safely("/home/S.TXT", part, (int)sizeof(part)) == SAVE_KEPT_PART,
+			"a rename that fails after the delete keeps the .part");
+		rename_fail_at = 0;
+		mfile_t *pf = find("/home/S.TXT.part", false);
+		expect(pf && pf->size == len, "and the .part is the whole document");
+		expect(!find("/home/S.TXT", false), "under its own name (the old file went)");
+		if (pf) pf->used = false;
+
+		// A file not there yet: written, renamed, no delete needed.
+		expect(do_save_to("/home/NEW.TXT"), "a new file saves");
+		f = find("/home/NEW.TXT", false);
+		expect(f && f->size == len, "whole");
+		expect(!find("/home/NEW.TXT.part", false), "no .part");
+		fresh();
+	}
+
+	printf("21. autosave of untitled documents: a copy each, offered only once its window is gone\n");
+	{
+		fresh();
+		for (int i = 0; i < NFILES; i++)
+			if (files[i].used && !strncmp(files[i].name, "/ram/", 5)) files[i].used = false;
+
+		// Window A (pid 7): an untitled document, autosaved.
+		my_pid = 7; my_serial = 100; as_untitled[0] = 0;
+		filename[0] = 0;
+		type("window A's words");
+		ticks += AUTOSAVE_IDLE + 1;
+		while (autosave_step()) ;
+		char a_sav[40];
+		as_name(a_sav, sizeof(a_sav), as_key(), "SAV");
+		expect(find(a_sav, false) != NULL, "A's copy is in /ram");
+
+		// Window B (pid 8) starts while A runs: A's copy is not offered
+		// (a dialog would be: this harness has no wm, so a dialog here
+		// would never return -- reaching the end of the call is the check)
+		live_serial[7] = 100;
+		my_pid = 8; my_serial = 200; as_untitled[0] = 0;
+		fresh();
+		autosave_offer();
+		expect(find(a_sav, false) != NULL, "a second window leaves A's copy alone");
+		type("window B's words");
+		ticks += AUTOSAVE_IDLE + 1;
+		while (autosave_step()) ;
+		char b_sav[40];
+		as_name(b_sav, sizeof(b_sav), as_key(), "SAV");
+		expect(strcmp(a_sav, b_sav) != 0, "B's copy has a slot of its own");
+		mfile_t *af = find(a_sav, false);
+		expect(af && af->size == 16 && !memcmp(af->data, "window A's words", 16),
+			"and A's copy is still A's");
+
+		// A is gone (crashed): B saving does not delete it, and its key
+		// is now an orphan's.
+		live_serial[7] = 0;
+		expect(as_orphan("untitled 7 100"), "A's copy is an orphan once A is gone");
+		expect(!as_orphan("untitled 8 200"), "B's own is not");
+		live_serial[7] = 300;
+		expect(as_orphan("untitled 7 100"), "nor is pid 7 used again by another process");
+		expect(as_orphan(""), "an older text's copy is an orphan");
+		live_serial[7] = 0;
+		my_pid = 7; my_serial = 100;
+		fresh();
+	}
+
+	printf("22. opening in pieces: CRLF across them, Esc stops\n");
+	{
+		// Pieces are 1000 bytes here: a CRLF split across a piece, a
+		// lone CR at the end of one, a CR at the end of the file.
+		static char big2[6000], want2[6000];
+		int bn = 5200, wn = 0;
+		for (int i = 0; i < bn; i++) big2[i] = (char)('a' + i % 26);
+		for (int i = 96; i < bn; i += 97) { big2[i] = '\r'; big2[i + 1] = '\n'; }
+		big2[999] = '\r'; big2[1000] = '\n';		// split across the first two pieces
+		big2[1999] = '\r'; big2[2000] = 'q';		// a lone CR ending a piece
+		big2[bn++] = '\r';							// a CR that ends the file
+		// the reference: CRLF folded, every other CR kept
+		for (int i = 0; i < bn; i++) {
+			if (big2[i] == '\r' && i + 1 < bn && big2[i + 1] == '\n') continue;
+			want2[wn++] = big2[i];
+		}
+		expect(big2[999] == '\r' && big2[1000] == '\n', "a CRLF straddles the first piece's end");
+		put_file("/home/P.TXT", big2, bn);
+		expect(load_file("/home/P.TXT"), "loads");
+		bool same = len == wn;
+		for (int i = 0; same && i < wn; i++) if (B(i) != want2[i]) same = false;
+		expect(same, "CRLF folded across pieces; lone and final CR kept");
+
+		// Esc after the first few pieces: nothing opened, nothing named.
+		static char big3[400000];
+		for (int i = 0; i < (int)sizeof(big3); i++) big3[i] = (char)(i % 61 == 60 ? '\n' : 'a' + i % 26);
+		put_file("/home/E.TXT", big3, (int)sizeof(big3));
+		arena_on = true;				// 400 KB: the arena's
+		fresh();
+		filename[0] = 0;
+		mq[0].subject = Z_WM_KEY; mq[0].v = Z_WM_PACK_KEY(0x1b, 0, 1); mq_n = 1;
+		reads_until_mail = 5;
+		long r0 = chunk_reads;
+		expect(!load_file("/home/E.TXT"), "Esc stops the open");
+		expect(chunk_reads - r0 > 5 && chunk_reads - r0 < 60,
+			"after a few of its 400 pieces, not at the end");
+		expect(len == 0 && !filename[0], "and leaves an empty, untitled document");
+		expect(!io_busy, "with the window drawing again");
+		reads_until_mail = -1;
+		mq_n = 0;
+
+		// a click meanwhile is let go, the open completes
+		mq[0].subject = Z_WM_MOUSE; mq[0].v = Z_WM_PACK_MOUSE(10, 10, 1, 1); mq_n = 1;
+		reads_until_mail = 5;
+		bool ok2 = load_file("/home/E.TXT");
+		if (!ok2 || len != (int)sizeof(big3)) printf("    load %d len %d stopped %d\n", ok2, len, io_stopped);
+		expect(ok2 && len == (int)sizeof(big3), "a click does not stop it");
+		reads_until_mail = -1;
+		mq_n = 0;
+
+		// Saving it: the mailbox is read meanwhile (wm's redraws are
+		// served), and a key pressed then is not typed into what is
+		// being written.
+		mq[0].subject = Z_WM_KEY; mq[0].v = Z_WM_PACK_KEY('z', 0, 1); mq_n = 1;
+		expect(do_save_to("/home/E2.TXT"), "a 400 KB save");
+		expect(mq_n == 0, "the mailbox was read during it");
+		mfile_t *ef = find("/home/E2.TXT", false);
+		expect(ef && ef->size == (int)sizeof(big3) && !memcmp(ef->data, big3, sizeof(big3)),
+			"and the file is the document, without the key");
+		mq_n = 0;
+
+		// Find through it: the same answer as before, in slices, and
+		// Esc stops a search that has not found anything yet.
+		snprintf(find_text, sizeof(find_text), "%s", "nomatchanywhere");
+		uint32_t t0 = ticks;
+		expect(find_from(0) == 0, "a find through 400 KB that finds nothing");
+		expect(ticks - t0 > 20, "read its mail on the way (the clock was asked)");
+		mq[0].subject = Z_WM_KEY; mq[0].v = Z_WM_PACK_KEY(0x1b, 0, 1); mq_n = 1;
+		expect(find_from(0) == -1, "Esc stops it");
+		expect(!has_sel(), "selecting nothing");
+		mq_n = 0;
+		snprintf(find_text, sizeof(find_text), "%s", "nopqr");
+		expect(find_from(200000) == 1 && sel_start() >= 200000, "a real match past the middle");
+		mq[0].subject = Z_WM_KEY; mq[0].v = Z_WM_PACK_KEY(0x1b, 0, 1); mq_n = 1;
+		snprintf(find_text, sizeof(find_text), "%s", "nomatchanywhere");
+		expect(count_matches(true) == -1, "Esc stops a count too");
+		mq_n = 0;
+		arena_on = false;
 		fresh();
 	}
 

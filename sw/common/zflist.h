@@ -144,6 +144,19 @@ typedef struct {
 	// i's details are info[i], kept in step with the sort.
 	z_fs_info_t	*info;
 
+	// What the screen holds since the last draw, so a draw that is not
+	// forced repaints only the rows that changed, in place, never
+	// blanking the list first (z_flist_draw()). `drawn` false: the next
+	// draw is a whole one.
+	bool		drawn;
+	bool		rows_dirty;		// the listing changed: every row may differ
+	int			drawn_top, drawn_sel, drawn_total;
+
+	// type-to-find (z_flist_find_key())
+	char		find[16];
+	uint8_t		find_len;
+	uint32_t	find_tick;
+
 } z_flist_t;
 
 // binds the widget to a window. Does not read the filesystem -- call
@@ -169,6 +182,13 @@ bool z_flist_refresh(z_flist_t *fl);
 // one (NULL: the first row). For a file that was just renamed.
 bool z_flist_refresh_select(z_flist_t *fl, const char *name);
 
+// Draws if dirty, or always with `force`. `force` (and the first draw
+// after z_flist_invalidate() or a resize) blanks the list and paints it
+// whole -- for after the window was cleared. Without it only what
+// changed is painted, each row whole and over what is there: the old
+// and new selected rows when the selection moves within the view, every
+// row when the view scrolled or a new folder was read. With no back
+// buffer a blank-then-draw shows as a flash; this never shows one.
 void z_flist_draw(z_flist_t *fl, bool force);
 
 // marks everything dirty -- after a resize, or any time the window's
@@ -190,6 +210,15 @@ void z_flist_wheel(z_flist_t *fl, int notches);
 // one of Z_FLIST_*; Z_FLIST_NONE for a key this widget doesn't use,
 // so the caller can go on to handle it itself.
 int z_flist_key(z_flist_t *fl, uint32_t keysym);
+
+// Type-to-find, for a key z_flist_key() did not use: a letter or digit
+// selects the first entry starting with it, the same letter again the
+// next one, and keys less than a second apart build a prefix -- exactly
+// z_listbox_key()'s rules (zwidget.h). Returns Z_FLIST_SELECTED if the
+// selection moved (and draws it), else Z_FLIST_NONE. Separate from
+// z_flist_key() so a dialog whose letters belong to a name field does
+// not get it by surprise; sw/apps/files calls it.
+int z_flist_find_key(z_flist_t *fl, uint32_t keysym);
 
 // the selected entry's bare NAME, or NULL if nothing is selected or
 // the ".." row is. Points into the widget -- valid until the next

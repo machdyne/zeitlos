@@ -66,6 +66,13 @@ const char *ai_error(void) { return "no packs found"; }
 int ai_load_all(const char *r, void (*p)(uint32_t, uint32_t, const char *))
 { (void)r; (void)p; return fake_npacks; }
 void ai_free_all(void) {}
+const char *ai_warning(void) { return ""; }
+void ai_load_begin(ai_load_t *L, const char *r) { (void)L; (void)r; }
+int ai_load_step(ai_load_t *L) { (void)L; return AI_LOAD_DONE; }
+void ai_load_stop(ai_load_t *L) { (void)L; }
+bool ai_load_busy(const ai_load_t *L) { (void)L; return false; }
+const char *ai_load_name(const ai_load_t *L) { (void)L; return ""; }
+int ai_load_permille(ai_load_t *L) { (void)L; return 0; }
 bool ai_query_begin(ai_query_t *q, const char *t, int w)
 { (void)q; (void)t; (void)w; return false; }
 bool ai_query_step(ai_query_t *q) { (void)q; return true; }

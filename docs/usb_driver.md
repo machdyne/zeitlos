@@ -128,6 +128,32 @@ and the kernel (`-DZUSBC_KERNEL`, `zusb_cmd()` only) link.
   A stick that NAKs while fetching is retried by the USB engine 15 times
   a round with a short spin between rounds, and given up on after 3
   seconds without progress ([usb_host.md](usb_host.md), "NAK pacing").
+- **Bringing a drive up no longer resets it over and over**
+  (October 2026, `usbh_msc.c`, "bringing a new drive up"). A stick that
+  has just been plugged in can NAK a command's status for longer than
+  the 3 s above while it starts. That used to count as a broken
+  transport and cost a Reset Recovery on every step -- up to 400 of
+  them -- and a reset restarts many sticks' own start-up, so some never
+  became ready and some dropped off the bus: backup's "it makes the
+  drive disconnect". During bring-up now:
+  - ~250 ms of NAKs (`MSC_BRING_NAK_TICKS`) means "not ready yet": the
+    step returns busy, and whatever the stick still owes for a command
+    it took (data, then its status) is collected at the start of the
+    next step (`drain_owed()`) instead of being reset away;
+  - any other transport error still gets Reset Recovery, but at most
+    once a bring-up (`MSC_BRING_RESETS`);
+  - steps back off, 8, 16, 32 ... 256 ticks apart;
+  - it gives up after ~15 s by the clock (`MSC_START_TICKS`), with 400
+    steps as a backstop where no clock runs (co-simulation);
+  - a drive that never became ready gets one more bring-up 5 s later,
+    run by `usb` (fs asking would hold up all of fs's clients);
+  - `usbmount` sleeps between its steps instead of firing them back to
+    back.
+
+  After bring-up nothing changed: every error is recovered as before.
+  **To confirm on a board:** at most one `usb msc: reset recovery` line
+  per plug-in, slow sticks coming up, and an exFAT stick shown as "not
+  readable" by backup.
 - **A new drive is brought up by `usb`, in steps.** A stick can take
   seconds to answer TEST UNIT READY. `usb` asks once every 8 ticks
   (`MSC_PACE`), between its other work, up to 400 times, then reads the

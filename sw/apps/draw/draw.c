@@ -75,9 +75,15 @@
  * Before this the bottom and right of the document were simply
  * unreachable.
  *
+ * -- undo --
+ *
+ * drawundo.h: a level per stroke or shape, the page as it was inside
+ * the box the edit changed, in a ring taken from the arena -- or, with
+ * no arena (a 1MB board), one level kept in `spare` at no cost. Ctrl+Z
+ * and Ctrl+Y (or Ctrl+Shift+Z), the same keys as text and sheet.
+ *
  * -- not implemented yet --
  *
- * No undo.
  * No flood fill -- see the note above tool_icons[] for why the one
  * that was here got removed and what bringing it back would need.
  */
@@ -104,6 +110,8 @@
 #include "../../common/ztype.h"
 #include "draw_icons.h"
 #include "drawio.h"
+#include "drawstamp.h"
+#include "drawundo.h"
 
 #define VRAM        ((volatile uint32_t *)0x20000000)
 #define VRAM_WPL    (Z_SCREEN_W / 32)	// framebuffer words per line
@@ -150,12 +158,22 @@
 // ways out are not correct (reading into the canvas loses the old
 // drawing on a stop) or not cheaper (keeping the old drawing in a /tmp
 // file is the same 37.5K in the RAM disk, plus the time to write it).
+//
+// Between loads `spare` is undo's (drawundo.h): the page before the last
+// edit, or a copy of the page kept for the levels in the arena.
 static uint32_t canvas_a[CANVAS_H][CANVAS_WORDS];
 static uint32_t canvas_b[CANVAS_H][CANVAS_WORDS];
 static uint32_t (*canvas)[CANVAS_WORDS] = canvas_a;
 static uint32_t (*spare)[CANVAS_WORDS] = canvas_b;
 
 #define CANVAS_BYTES  ((int)sizeof(canvas_a))
+
+// The page as drawstamp.c and drawundo.c take it: DRAW_PAGE_* words.
+#define PAGE(c)  (&(c)[0][0])
+
+#if CANVAS_W != DRAW_PAGE_W || CANVAS_H != DRAW_PAGE_H
+#error "drawstamp.h's page is not the canvas"
+#endif
 
 // Whether this bitstream's blitter can read main memory. Probed once at
 // startup (z_fb_hw_blit_mem_available(), zgfx.h) rather than per call,
@@ -328,13 +346,26 @@ static int prev_x0, prev_y0, prev_x1, prev_y1;
 // it crosses existing artwork.
 static int pencil_ink = 1;
 
-// -- brush shapes, MSB-first rows --
+// What the stroke may have touched, in document coordinates, for undo
+// (stroke_end()). Grown by every stamp, padded for the brush.
+static int touch_x0, touch_y0, touch_x1, touch_y1;
 
-static const uint8_t brush_mask[8] = {
-	0x3C, 0x7E, 0xFF, 0xFF, 0xFF, 0xFF, 0x7E, 0x3C
-};
-#define BRUSH_SIZE  8
-#define ERASER_SIZE 12
+// -- brush shapes: drawstamp.c --
+
+#define BRUSH_SIZE  DRAW_BRUSH_SIZE
+#define ERASER_SIZE DRAW_ERASER_SIZE
+
+// -- undo: drawundo.h --
+//
+// Its levels come from the arena (docs/kernel.md, "Arenas"), asked for
+// once at start and never resized, so the base never moves. 256KB holds
+// at least six page-sized strokes and DRAW_UNDO_LEVELS small ones; 64KB
+// if that much is not there; none on a 1MB board, which refuses arenas,
+// and then there is one level, in `spare`.
+#define UNDO_WANT  (256u * 1024u)
+#define UNDO_LESS  (64u * 1024u)
+
+static draw_undo_t undo;
 
 // ---------------------------------------------------------------
 // canvas primitives -- document coordinates, all software
@@ -352,75 +383,27 @@ static inline int canvas_pget(int x, int y) {
 	return (int)((canvas[y][x >> 5] >> (x & 31)) & 1u);
 }
 
-// Pattern bit for a document pixel, anchored to the DOCUMENT's 8x8
-// grid rather than to the shape being drawn. That means two shapes
-// filled with the same pattern line up seamlessly where they meet, and
-// a shape doesn't change appearance depending on where it was drawn --
-// the same anchoring rule z_fb_hw_fill_pattern() follows on the screen
-// side, for the same reason.
-static inline int pat_bit(const uint8_t *pat, int x, int y) {
-	return (pat[y & 7] >> (7 - (x & 7))) & 1;
-}
-
-static inline void canvas_pset_pat(int x, int y, const uint8_t *pat) {
-	canvas_pset(x, y, pat_bit(pat, x, y));
-}
+// Patterns are anchored to the DOCUMENT's 8x8 grid rather than to the
+// shape being drawn (drawstamp.c does the filling). That means two
+// shapes filled with the same pattern line up seamlessly where they
+// meet, and a shape doesn't change appearance depending on where it
+// was drawn -- the same anchoring rule z_fb_hw_fill_pattern() follows
+// on the screen side, for the same reason.
 
 static void canvas_clear(void) {
 	memset(canvas, 0, CANVAS_BYTES);
 }
 
-// A word at a time: pixel by pixel, a page-sized fill took a few
-// hundred ms -- longer than the main loop may stop (docs/responsive.md).
-// Same pixels as canvas_pset_pat() over the rect, clipped to the page.
+// A word at a time (drawstamp.c): pixel by pixel, a page-sized fill
+// took a few hundred ms -- longer than the main loop may stop
+// (docs/responsive.md).
 static void canvas_fill_rect(int x, int y, int w, int h, const uint8_t *pat) {
-
-	int x0 = x, y0 = y, x1 = x + w - 1, y1 = y + h - 1;
-
-	if (x0 < 0) x0 = 0;
-	if (y0 < 0) y0 = 0;
-	if (x1 >= CANVAS_W) x1 = CANVAS_W - 1;
-	if (y1 >= CANVAS_H) y1 = CANVAS_H - 1;
-	if (x1 < x0 || y1 < y0) return;
-
-	int wa = x0 >> 5, wb = x1 >> 5;
-	uint32_t ma = 0xFFFFFFFFu << (x0 & 31);
-	uint32_t mb = (x1 & 31) == 31 ? 0xFFFFFFFFu : ~(0xFFFFFFFFu << ((x1 & 31) + 1));
-
-	for (int j = y0; j <= y1; j++) {
-
-		// the pattern row is MSB-leftmost, the canvas LSB-leftmost:
-		// reverse it, then repeat it across the word
-		uint32_t rev = 0;
-		for (int i = 0; i < 8; i++)
-			if ((pat[j & 7] >> (7 - i)) & 1) rev |= 1u << i;
-		uint32_t pw = rev * 0x01010101u;
-
-		for (int wi = wa; wi <= wb; wi++) {
-			uint32_t m = 0xFFFFFFFFu;
-			if (wi == wa) m &= ma;
-			if (wi == wb) m &= mb;
-			canvas[j][wi] = (canvas[j][wi] & ~m) | (pw & m);
-		}
-
-	}
-
+	draw_fill_rect(PAGE(canvas), x, y, w, h, pat);
 }
 
+// Outline: the top and bottom edges a word at a time too.
 static void canvas_rect(int x0, int y0, int x1, int y1, int color) {
-
-	if (x1 < x0) { int t = x0; x0 = x1; x1 = t; }
-	if (y1 < y0) { int t = y0; y0 = y1; y1 = t; }
-
-	for (int x = x0; x <= x1; x++) {
-		canvas_pset(x, y0, color);
-		canvas_pset(x, y1, color);
-	}
-	for (int y = y0; y <= y1; y++) {
-		canvas_pset(x0, y, color);
-		canvas_pset(x1, y, color);
-	}
-
+	draw_rect(PAGE(canvas), x0, y0, x1, y1, color);
 }
 
 // Bresenham. `stamp` is called per point rather than setting a pixel
@@ -876,20 +859,15 @@ static void stamp_pencil(int x, int y) {
 	canvas_pset(x, y, pencil_ink);
 }
 
+// The brush and eraser a word at a time (drawstamp.c): per pixel they
+// were 64 and 144 sets a point, a point per pixel along the line, and
+// a quick eraser drag fell visibly behind the pointer.
 static void stamp_brush(int x, int y) {
-	const uint8_t *pat = pattern();
-	for (int j = 0; j < BRUSH_SIZE; j++)
-		for (int i = 0; i < BRUSH_SIZE; i++)
-			if (brush_mask[j] & (0x80u >> i))
-				canvas_pset_pat(x - BRUSH_SIZE / 2 + i,
-					y - BRUSH_SIZE / 2 + j, pat);
+	draw_stamp_brush(PAGE(canvas), x, y, pattern());
 }
 
 static void stamp_eraser(int x, int y) {
-	for (int j = 0; j < ERASER_SIZE; j++)
-		for (int i = 0; i < ERASER_SIZE; i++)
-			canvas_pset(x - ERASER_SIZE / 2 + i,
-				y - ERASER_SIZE / 2 + j, 0);
+	draw_stamp_eraser(PAGE(canvas), x, y);
 }
 
 static bool tool_is_freehand(tool_t t) {
@@ -1038,6 +1016,52 @@ static void canvas_refresh(int dx0, int dy0, int dx1, int dy1) {
 }
 
 // ---------------------------------------------------------------
+// undo
+// ---------------------------------------------------------------
+
+// Grows the box the stroke may have touched.
+static void touch(int x0, int y0, int x1, int y1) {
+	if (x0 > x1) { int t = x0; x0 = x1; x1 = t; }
+	if (y0 > y1) { int t = y0; y0 = y1; y1 = t; }
+	if (x0 < touch_x0) touch_x0 = x0;
+	if (y0 < touch_y0) touch_y0 = y0;
+	if (x1 > touch_x1) touch_x1 = x1;
+	if (y1 > touch_y1) touch_y1 = y1;
+}
+
+// A stroke or shape starts: undo takes note of the page as it is.
+static void stroke_begin(int dx, int dy) {
+	draw_undo_begin(&undo);
+	touch_x0 = touch_x1 = dx;
+	touch_y0 = touch_y1 = dy;
+}
+
+// It has ended (button up, or a save or load cuts it short): the level,
+// and the title's '*' from what undo now says -- a stroke that changed
+// nothing, or undoing back to the save, leaves the page unmodified.
+static void stroke_end(void) {
+	draw_undo_end(&undo, touch_x0, touch_y0, touch_x1, touch_y1);
+	set_modified(!draw_undo_at_saved(&undo));
+}
+
+// Ctrl+Z, and Ctrl+Y / Ctrl+Shift+Z. Not mid-stroke (the stroke is not
+// a level yet), and not while a file job runs: a save is reading the
+// page, and a load is writing `spare`, which one-level undo keeps its
+// level in. Only the box the level covers is re-blitted.
+static void do_undo(bool redo) {
+
+	if (drawing || busy()) return;
+
+	int box[4];
+	if (!(redo ? draw_undo_redo(&undo, box) : draw_undo_undo(&undo, box)))
+		return;
+
+	canvas_refresh(box[0], box[1], box[2], box[3]);
+	set_modified(!draw_undo_at_saved(&undo));
+
+}
+
+// ---------------------------------------------------------------
 // input
 // ---------------------------------------------------------------
 
@@ -1118,6 +1142,7 @@ static void handle_mouse(uint32_t packed) {
 		drawing = true;
 		stroke_x0 = dx; stroke_y0 = dy;
 		stroke_px = dx; stroke_py = dy;
+		stroke_begin(dx, dy);
 
 		switch (cur_tool) {
 
@@ -1129,12 +1154,16 @@ static void handle_mouse(uint32_t packed) {
 
 			case TOOL_BRUSH:
 				stamp_brush(dx, dy);
+				touch(dx - BRUSH_SIZE, dy - BRUSH_SIZE,
+					dx + BRUSH_SIZE, dy + BRUSH_SIZE);
 				canvas_refresh(dx - BRUSH_SIZE, dy - BRUSH_SIZE,
 					dx + BRUSH_SIZE, dy + BRUSH_SIZE);
 				break;
 
 			case TOOL_ERASER:
 				stamp_eraser(dx, dy);
+				touch(dx - ERASER_SIZE, dy - ERASER_SIZE,
+					dx + ERASER_SIZE, dy + ERASER_SIZE);
 				canvas_refresh(dx - ERASER_SIZE, dy - ERASER_SIZE,
 					dx + ERASER_SIZE, dy + ERASER_SIZE);
 				break;
@@ -1168,9 +1197,18 @@ static void handle_mouse(uint32_t packed) {
 			else
 				canvas_walk_line(stroke_px, stroke_py, dx, dy, stamp_eraser);
 
+			// Padded on both sides of the segment. This was
+			// (px - pad, py - pad) to (dx + pad, dy + pad), which
+			// canvas_refresh() reorders -- so dragging left or up by more
+			// than twice the pad put the padding on the wrong side, and
+			// part of the stroke stayed off screen until the next redraw.
 			int pad = (cur_tool == TOOL_ERASER) ? ERASER_SIZE : BRUSH_SIZE;
-			canvas_refresh(stroke_px - pad, stroke_py - pad,
-				dx + pad, dy + pad);
+			int sx0 = (stroke_px < dx ? stroke_px : dx) - pad;
+			int sy0 = (stroke_py < dy ? stroke_py : dy) - pad;
+			int sx1 = (stroke_px < dx ? dx : stroke_px) + pad;
+			int sy1 = (stroke_py < dy ? dy : stroke_py) + pad;
+			touch(sx0, sy0, sx1, sy1);
+			canvas_refresh(sx0, sy0, sx1, sy1);
 
 			stroke_px = dx; stroke_py = dy;
 
@@ -1194,8 +1232,11 @@ static void handle_mouse(uint32_t packed) {
 		if (tool_is_shape(cur_tool)) {
 			preview_erase();
 			shape_commit(stroke_x0, stroke_y0, dx, dy);
+			touch(stroke_x0, stroke_y0, dx, dy);
 			canvas_refresh(stroke_x0, stroke_y0, dx, dy);
 		}
+
+		stroke_end();
 
 	}
 
@@ -1333,12 +1374,25 @@ static void report_failure(const char *title) {
 
 }
 
+// A stroke still in progress when a save or load starts. A shape that
+// is still being dragged out is not part of the canvas yet, and goes; a
+// freehand stroke is already in the canvas, so it becomes an undo level
+// as if the button had come up.
+static void stroke_cut(void) {
+
+	if (!drawing) return;
+
+	drawing = false;
+	if (tool_is_shape(cur_tool)) preview_erase();
+	stroke_end();
+
+}
+
 // Starts a save of the canvas to `path`; `after` runs when it is done.
 static void start_save_to(const char *path, int after) {
 
-	// a shape being dragged out is not part of the canvas yet, and the
-	// canvas is read-only from here on
-	if (drawing) { preview_erase(); drawing = false; }
+	// the canvas is read-only from here on
+	stroke_cut();
 
 	if (!draw_io_save_start(&io, path, canvas, CANVAS_W, CANVAS_H)) {
 		report_failure("Save failed");
@@ -1376,7 +1430,10 @@ static void start_save(int after, bool ask) {
 
 static void start_load(const char *path) {
 
-	if (drawing) { preview_erase(); drawing = false; }
+	stroke_cut();
+
+	// the load goes into spare, which undo uses meanwhile
+	draw_undo_spare_lost(&undo);
 
 	if (!draw_io_load_start(&io, path, spare, CANVAS_W, CANVAS_H)) {
 		report_failure("Open failed");
@@ -1415,6 +1472,7 @@ static void reset_view(void) {
 static void new_now(void) {
 
 	canvas_clear();
+	draw_undo_clear(&undo, PAGE(canvas), PAGE(spare));
 
 	filename[0] = 0;
 	reset_view();
@@ -1510,6 +1568,9 @@ static void io_step(void) {
 		remember_dir(filename);
 		reset_view();
 
+		// another picture: nothing of the old one to undo into
+		draw_undo_clear(&undo, PAGE(canvas), PAGE(spare));
+
 		modified = false;
 		update_title();
 		repaint();
@@ -1529,6 +1590,7 @@ static void io_step(void) {
 	copy_path(filename, (int)sizeof(filename), io.path);
 	remember_dir(filename);
 	modified = false;
+	draw_undo_mark_saved(&undo);	// undoing back to here is unmodified
 	update_title();
 
 	switch (after) {
@@ -1537,6 +1599,28 @@ static void io_step(void) {
 		case AFTER_CLOSE: close_now(); break;
 		default: break;
 	}
+
+}
+
+// Undo's memory, once at start (see UNDO_WANT). Never resized after, so
+// the arena never moves and its base can be held as a pointer.
+static void undo_init(void) {
+
+	static const uint32_t want[] = { UNDO_WANT, UNDO_LESS };
+	void *base = NULL;
+	uint32_t got = 0;
+
+	for (unsigned i = 0; i < sizeof want / sizeof want[0]; i++) {
+		if (z_arena_set(want[i], &base, &got) == Z_ARENA_OK && base && got)
+			break;
+		base = NULL;
+		got = 0;
+	}
+
+	draw_undo_init(&undo, PAGE(canvas), PAGE(spare), base, got);
+
+	if (base) printf("draw: undo: %lu KB of arena\n", (unsigned long)(got / 1024));
+	else printf("draw: undo: no arena, one level\n");
 
 }
 
@@ -1630,6 +1714,34 @@ static void forward_msg(z_msg_t *msg, void *user) {
 
 }
 
+// Ctrl+letter. True if it was one of ours.
+//
+// Ctrl+letter arrives as its control code, 0x01..0x1a (zkbd.h), with
+// the modifier set -- hence checking the modifier rather than the code
+// alone, which Enter and Tab also produce. The letter itself is taken
+// too, as sheet does, in case a keymap delivers that. Same keys as text
+// and sheet. New, Open and Save go the way the title icons do, so the
+// unsaved-changes question and the one-file-job-at-a-time rule apply
+// the same.
+static bool ctrl_key(uint32_t k, uint32_t mods) {
+
+	if (!(mods & Z_KBD_MOD_CTRL)) return false;
+
+	bool shift = (mods & Z_KBD_MOD_SHIFT) != 0;
+	if (k >= 'a' && k <= 'z') k -= 'a' - 1;
+	else if (k >= 'A' && k <= 'Z') k -= 'A' - 1;
+
+	switch (k) {
+		case 0x0e: do_new(); return true;						// Ctrl+N
+		case 0x0f: do_open(); return true;						// Ctrl+O
+		case 0x13: start_save(AFTER_NONE, shift); return true;	// Ctrl+S, +Shift: save as
+		case 0x1a: do_undo(shift); return true;					// Ctrl+Z, +Shift: redo
+		case 0x19: do_undo(true); return true;					// Ctrl+Y
+		default: return false;
+	}
+
+}
+
 // F1 (docs/app_help.md). The manual is docs/draw_app.md.
 static void show_help(void) {
 	static const char help[] =
@@ -1640,10 +1752,12 @@ static void show_help(void) {
 		"Drag\tDraw with the tool\n"
 		"Scrollbars\tPan the page (or the wheel)\n"
 		"Title icons\tNew, open, save\n"
+		"Ctrl+N/O/S\tNew, open, save (Ctrl+Shift+S: save as)\n"
+		"Ctrl+Z\tUndo the last stroke or shape\n"
+		"Ctrl+Y\tRedo (also Ctrl+Shift+Z)\n"
 		"Esc\tStop loading or saving: the drawing and the file "
 		"stay as they were (also Ctrl+C)\n\n"
-		"The pencil draws white when you start on black. "
-		"There is no undo.";
+		"The pencil draws white when you start on black.";
 	z_dialog_help(&dlg_ctx, "Draw help", help, "draw_app");
 }
 
@@ -1657,6 +1771,7 @@ int main(void) {
 
 	canvas_clear();
 	widgets_init();
+	undo_init();
 
 	// A file to open, if something launched us with one (the file
 	// browser does -- see Z_WM_SET_ARG in zwm.h). Asked for BEFORE the
@@ -1734,8 +1849,9 @@ int main(void) {
 					break;
 
 				case Z_WM_KEY: {
-					// F1, and Esc / Ctrl+C to stop a load or save:
-					// everything else is the mouse.
+					// F1, Esc / Ctrl+C to stop a load or save, and the
+					// Ctrl shortcuts (ctrl_key()): everything else is
+					// the mouse.
 					if (msg.obj.type != Z_UINT32 ||
 					    !Z_WM_UNPACK_KEY_PRESSED(msg.obj.val.uint32)) break;
 					uint32_t k = Z_WM_UNPACK_KEY_KEYSYM(msg.obj.val.uint32);
@@ -1743,6 +1859,7 @@ int main(void) {
 					if (k == Z_KEY_HELP) show_help();
 					else if (k == 0x1b || (k == 0x03 && (mods & Z_KBD_MOD_CTRL)))
 						stop_io();
+					else ctrl_key(k, mods);
 					break;
 				}
 

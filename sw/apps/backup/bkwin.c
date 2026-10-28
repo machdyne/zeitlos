@@ -95,8 +95,18 @@ static bk_io_t base;
 // -- what the window knows ---------------------------------------------------
 
 static bool drive_there;        // the volume of apps.backup.to is mounted
+// Not mounted, but fs knows of a drive there (usb_absent(), fs.c):
+enum { D_NONE, D_STARTING, D_BAD };
+static int drive_why = D_NONE;
 static bool have_sum;           // sum is from the drive as it is
 static bool sum_failed;         // ... it could not be read
+static bool sum_late;           // ... in SUM_DEADLINE: given up on
+static uint32_t sum_started;    // ticks: when the look at the drive began
+static uint32_t free_kb_known;  // the drive's free space, once a backup counted it (0: not known)
+// A look at the drive that takes longer than this is given up on: a
+// stick that answers nothing, or fs busy counting a FAT for someone
+// else. It says so, and F5 tries again, instead of "Looking..." for good.
+#define SUM_DEADLINE    (10 * Z_TICK_HZ)
 static bk_summary_t sum;
 static char last_line[BKJOB_LINE_MAX];  // what the engine said last
 static int last_rc = -1;        // the last backup this window ran (not the watch's): its rc
@@ -199,14 +209,55 @@ static void clear(int x, int y, int w, int h) { z_win_fill_rect(&win, x, y, w, h
 
 // A frame and a bar, both with the blitter (docs/widgets.md: rasterizer
 // lines and blitter glyphs do not order against each other).
+// Every pixel drawn once, in its final colour: nothing is cleared
+// first, so redrawing it does not flash.
 static void bar(int x, int y, int w, int h, int permille) {
-	clear(x, y, w, h);
 	z_win_fill_rect(&win, x, y, w, 1, 1);
 	z_win_fill_rect(&win, x, y + h - 1, w, 1, 1);
-	z_win_fill_rect(&win, x, y, 1, h, 1);
-	z_win_fill_rect(&win, x + w - 1, y, 1, h, 1);
+	z_win_fill_rect(&win, x, y + 1, 1, h - 2, 1);
+	z_win_fill_rect(&win, x + w - 1, y + 1, 1, h - 2, 1);
+	z_win_fill_rect(&win, x + 1, y + 1, w - 2, 1, 0);
+	z_win_fill_rect(&win, x + 1, y + h - 2, w - 2, 1, 0);
+	z_win_fill_rect(&win, x + 1, y + 2, 1, h - 4, 0);
 	int fw = (w - 4) * (permille < 0 ? 0 : permille > 1000 ? 1000 : permille) / 1000;
 	if (fw > 0) z_win_fill_rect(&win, x + 2, y + 2, fw, h - 4, 1);
+	if (fw < w - 4) z_win_fill_rect(&win, x + 2 + fw, y + 2, w - 4 - fw, h - 4, 0);
+	z_win_fill_rect(&win, x + w - 2, y + 2, 1, h - 4, 0);
+}
+
+// -- lines drawn only when they change -------------------------------------
+//
+// The window used to clear its whole status area and draw it again on
+// every repaint -- 8 times a second while anything ran, and each second
+// the watch's countdown moved -- and it flashed. Now each line remembers
+// what it shows, and one that changed is drawn over the old one in a
+// single pass: the text with its background, padded with spaces to the
+// width, so nothing is cleared first. Anything that draws over the area
+// (a redraw from wm, a change of view) forgets them (lines_forget()).
+
+enum { LN_HEAD, LN_L1, LN_L2, LN_BAR, LN_COUNT };
+static char shown[LN_COUNT][200];
+static bool shown_ok[LN_COUNT];
+
+static void lines_forget(void) { memset(shown_ok, 0, sizeof shown_ok); }
+
+static int draws;                // lines drawn (tests/render.c counts them)
+
+static void line_at(int i, int x, int y, int w, const char *s, const z_font_t *f) {
+	if (shown_ok[i] && !strcmp(shown[i], s)) return;
+	draws++;
+	snprintf(shown[i], sizeof shown[i], "%s", s);
+	shown_ok[i] = true;
+	int max = w / f->w;
+	char b[200];
+	if (max <= 0) return;
+	if (max > (int)sizeof b - 1) max = (int)sizeof b - 1;
+	if ((int)strlen(s) <= max) snprintf(b, sizeof b, "%-*s", max, s);
+	else snprintf(b, sizeof b, "%.*s...", max > 3 ? max - 3 : 0, s);
+	z_win_draw_text2(&win, x, y, b, 1, 0, f);
+	// the pixels right of the last whole cell, which no cell covers
+	int rest = w - max * f->w;
+	if (rest > 0) z_win_fill_rect(&win, x + max * f->w, y, rest, f->h, 0);
 }
 
 // -- widgets ---------------------------------------------------------------
@@ -365,6 +416,16 @@ static void headline(char *h, size_t hn, char *l1, size_t ln) {
 		if (!strncmp(note, "You can pull", 12)) snprintf(l1, ln, "Plug it in again to back up");
 		return;
 	}
+	if (!drive_there && drive_why == D_STARTING) {
+		snprintf(h, hn, "Starting the drive...");
+		snprintf(l1, ln, "A new drive can take a few seconds");
+		return;
+	}
+	if (!drive_there && drive_why == D_BAD) {
+		snprintf(h, hn, "Drive found but not readable");
+		snprintf(l1, ln, "Not FAT32? (exFAT and NTFS cannot be read here)");
+		return;
+	}
 	if (!drive_there) {
 		snprintf(h, hn, "Plug in the backup drive");
 		snprintf(l1, ln, "A USB stick, or an SD card in a reader, formatted FAT32");
@@ -376,12 +437,16 @@ static void headline(char *h, size_t hn, char *l1, size_t ln) {
 		return;
 	}
 	if (!have_sum) {
-		snprintf(h, hn, "%s", sum_failed ? "Cannot read the drive" : "Looking at the drive...");
-		if (sum_failed) snprintf(l1, ln, "%s", plain(last_line));
+		snprintf(h, hn, "%s", sum_failed || sum_late ? "Cannot read the drive" : "Looking at the drive...");
+		if (sum_late) snprintf(l1, ln, "It did not answer: press F5 to try again");
+		else if (sum_failed) snprintf(l1, ln, "%s: press F5 to try again", last_line[0] ? plain(last_line) : "It could not be read");
 		return;
 	}
+	// The free space only once a backup has counted it: asking for it
+	// on its own can make fs count the whole FAT ("Running alongside
+	// everything" in docs/backup.md), answering nobody meanwhile.
 	f[0] = 0;
-	if (sum.free_kb) kb_text(sum.free_kb, f, sizeof f);
+	if (free_kb_known) kb_text(free_kb_known, f, sizeof f);
 	if (!sum.newest[0]) {
 		snprintf(h, hn, "No backups yet");
 		if (f[0]) snprintf(l1, ln, "%s, %s free: Back up now makes the first", vol, f);
@@ -463,6 +528,7 @@ static void buttons_for_state(void) {
 			bid[i] = ids[i];
 		}
 		bset.count = n;
+		z_widget_invalidate(&bset);
 		bset.focused = -1;
 		bset.pressed = -1;
 		int f = had >= 0 ? had : wanted;
@@ -476,7 +542,12 @@ static void buttons_for_state(void) {
 	tset.count = want[B_BACKUP] ? 1 : 0;
 	const char *tl = busy ? "Stop" : "Back up";
 	if (tw[T_BACKUP].label != tl) { tw[T_BACKUP].label = tl; tw[T_BACKUP].dirty = true; }
-	if (!tset.count && view == V_STRIP) clear(tw[T_BACKUP].x, tw[T_BACKUP].y, tw[T_BACKUP].w + 1, BTN_H + 1);
+	static int had_t = -1;
+	if (had_t != tset.count) {
+		if (!tset.count && view == V_STRIP) clear(tw[T_BACKUP].x - 1, tw[T_BACKUP].y - 1, tw[T_BACKUP].w + 2, BTN_H + 2);
+		tw[T_BACKUP].dirty = true;
+		had_t = tset.count;
+	}
 	if (tset.count && tset.focused < 0) z_widget_focus_set(&tset, T_BACKUP);
 }
 
@@ -491,36 +562,51 @@ static int permille(void) {
 }
 
 static void draw_main(void) {
-	char h[80], l1[200], l2[200];
+	char h[80], l1[200], l2[200], pm[16];
 	headline(h, sizeof h, l1, sizeof l1);
-	clear(0, 0, cw, Y_BTN - 2);
-	text_fit_f(M, Y_HEAD, cw - 2 * M, h, BIG);
-	text_fit(M, Y_L1, cw - 2 * M, l1);
+	line_at(LN_HEAD, M, Y_HEAD, cw - 2 * M, h, BIG);
+	line_at(LN_L1, M, Y_L1, cw - 2 * M, l1, F);
 	if (copying_bar()) {
-		bar(M, Y_L2 + 1, cw - 2 * M - 96, 8, permille());
-		text(cw - M - 88, Y_L2, "Keep the power on");
+		int p = permille();
+		snprintf(pm, sizeof pm, "bar %d", p / 4);    // a pixel of bar is ~4 permille
+		if (!shown_ok[LN_BAR] || strcmp(shown[LN_BAR], pm)) {
+			if (!shown_ok[LN_BAR] || strncmp(shown[LN_BAR], "bar ", 4)) {
+				// the line was text: once, its space
+				clear(M, Y_L2, cw - 2 * M, LH);
+				text(cw - M - 88, Y_L2, "Keep the power on");
+				shown_ok[LN_L2] = false;
+			}
+			bar(M, Y_L2 + 1, cw - 2 * M - 96, 8, p);
+			snprintf(shown[LN_BAR], sizeof shown[LN_BAR], "%s", pm);
+			shown_ok[LN_BAR] = true;
+		}
 		snprintf(watch_shown, sizeof watch_shown, "-");
 		return;
 	}
 	watch_text(l2, sizeof l2, false);
 	snprintf(watch_shown, sizeof watch_shown, "%s", l2);
-	text_fit(M, Y_L2, cw - 2 * M, l2);
+	if (shown_ok[LN_BAR]) {     // the bar's space, once (it reaches a row below the text)
+		clear(M, Y_L2, cw - 2 * M, LH);
+		shown_ok[LN_BAR] = false;
+		shown_ok[LN_L2] = false;
+	}
+	line_at(LN_L2, M, Y_L2, cw - 2 * M, l2, F);
 }
 
 static void draw_strip(void) {
 	char h[80], l1[200], l2[200];
 	int w = tw[T_BACKUP].x - 4 - 4;
-	clear(0, 0, tw[T_BACKUP].x - 2, ch);
 	headline(h, sizeof h, l1, sizeof l1);
-	text_fit(4, 4, w, h);
+	line_at(LN_HEAD, 4, 4, w, h, F);
 	if (copying_bar()) {
+		shown_ok[LN_L2] = false;
 		bar(4, 4 + LH, w, 8, permille());
 		snprintf(watch_shown, sizeof watch_shown, "-");
 		return;
 	}
 	watch_text(l2, sizeof l2, true);
 	snprintf(watch_shown, sizeof watch_shown, "%s", l2);
-	text_fit(4, 4 + LH, w, l2[0] ? l2 : l1);
+	line_at(LN_L2, 4, 4 + LH, w, l2[0] ? l2 : l1, F);
 }
 
 static void setting_value(int i, char *b, size_t n) {
@@ -553,11 +639,22 @@ static void draw_settings(void) {
 	text_fit(M + 64, sw[S_BACK].y + 5, cw - M - 64 - M, note[0] ? note : "The rest: apps.backup.* in zeitlos.cfg");
 }
 
-static void repaint(void) {
+// Everything, as after a clear: the lines drawn afresh, every button.
+static void repaint_all(void) {
+	lines_forget();
 	enable_for_job();
 	if (view == V_MAIN) { draw_main(); z_widget_draw_all(&bset, true); }
 	else if (view == V_SETTINGS) { draw_settings(); z_widget_draw_all(&sset, true); }
 	else { draw_strip(); z_widget_draw_all(&tset, true); }
+	title_update();
+}
+
+// What changed: the lines that read differently, the buttons that did.
+static void repaint(void) {
+	enable_for_job();
+	if (view == V_MAIN) { draw_main(); z_widget_draw_all(&bset, false); }
+	else if (view == V_SETTINGS) { draw_settings(); z_widget_draw_all(&sset, true); }
+	else { draw_strip(); z_widget_draw_all(&tset, false); }
 	title_update();
 }
 
@@ -579,6 +676,7 @@ static bool start(int kind) {
 	j.o = opts;
 	if (kind == BKJOB_BACKUP) { note[0] = 0; last_rc = -1; }
 	if (!bkjob_start(&j)) return false;
+	if (kind == BKJOB_SUMMARY) { sum_started = z_uptime_ticks(); sum_late = false; }
 	repaint();
 	return true;
 }
@@ -609,12 +707,13 @@ static void job_done(void) {
 	snprintf(last_line, sizeof last_line, "%s", bkjob_last_line());
 	switch (j->kind) {
 	case BKJOB_SUMMARY:
-		have_sum = j->rc == BK_DONE;
-		sum_failed = !have_sum && drive_there;
-		if (have_sum) sum = j->sum;
+		if (sum_late) break;            // given up on: it says so already
+		if (j->rc == BK_DONE) { have_sum = true; sum_failed = false; sum = j->sum; }
+		else if (!have_sum) sum_failed = drive_there;   // F5 on a good one keeps it
 		break;
 	case BKJOB_BACKUP:
 		pending_sum = true;
+		if (j->r.free_kb) free_kb_known = j->r.free_kb;
 		if (watch_job) {
 			// never ejected after: that would end the watch
 			z_tm_t t;
@@ -641,23 +740,58 @@ static void job_done(void) {
 // -- the drive ------------------------------------------------------------------
 
 static uint32_t last_poll;
+static int seen_once = -1;      // the last read, waiting for a second to agree
 
+// What fs says of the drive's volume: 1 there; else why not (fs.c,
+// usb_absent(): -Z_EBUSY being started, -Z_ENODEV found but not usable).
+static int drive_look(int *why) {
+	char vol[16];
+	volume_of(opts.dest, vol, sizeof vol);
+	z_fs_info_t f;
+	int32_t r = zfs_stat(vol, &f);
+	*why = r == -Z_EBUSY ? D_STARTING : r == -Z_ENODEV ? D_BAD : D_NONE;
+	return r >= 0;
+}
+
+// Once a second while idle: is the drive there? A change counts when
+// two reads in a row agree, so a stick that is still settling -- or a
+// read that met fs at a bad moment -- does not start a look at the
+// drive only to throw it away. force (F5, a setting changed): now, and
+// a fresh look even if nothing changed -- but what the window knows is
+// kept on screen meanwhile, not replaced by "Looking...".
 static void poll_drive(bool force) {
 	uint32_t now = z_uptime_ticks();
 	if (!force && now - last_poll < Z_TICK_HZ) return;
 	last_poll = now;
-	char vol[16];
-	volume_of(opts.dest, vol, sizeof vol);
-	z_fs_info_t f;
-	bool there = zfs_stat(vol, &f) >= 0;
-	if (there != drive_there || force) {
-		if (there && !drive_there) { note[0] = 0; last_rc = -1; }  // plugged in: a fresh start
-		drive_there = there;
-		have_sum = false;
-		sum_failed = false;
-		if (there) { if (!bkjob_running()) start(BKJOB_SUMMARY); else pending_sum = true; }
-		repaint();
+	int why;
+	bool there = drive_look(&why);
+	int code = there ? 3 : why;
+	if (!force && there != drive_there) {
+		if (seen_once != code) { seen_once = code; return; }    // once more first
 	}
+	seen_once = -1;
+	bool changed = there != drive_there || (!there && why != drive_why);
+	if (!changed && !force) return;
+	if (there && !drive_there) { note[0] = 0; last_rc = -1; free_kb_known = 0; }  // plugged in: a fresh start
+	if (!there) { have_sum = false; free_kb_known = 0; }
+	if (there != drive_there) have_sum = false;
+	drive_there = there;
+	drive_why = there ? D_NONE : why;
+	sum_failed = false;
+	sum_late = false;
+	if (there) { if (!bkjob_running()) start(BKJOB_SUMMARY); else pending_sum = true; }
+	repaint();
+}
+
+// The look at the drive past SUM_DEADLINE: stopped, and said so. The
+// job lets go at its next check (between two requests to fs).
+static void sum_deadline(void) {
+	if (!bkjob_running() || bkjob_current()->kind != BKJOB_SUMMARY || sum_late) return;
+	if (z_uptime_ticks() - sum_started < SUM_DEADLINE) return;
+	sum_late = true;
+	if (!have_sum) sum_failed = true;
+	bkjob_cancel();
+	repaint();
 }
 
 // -- settings: one line of zeitlos.cfg, everything else kept -------------------
@@ -732,7 +866,8 @@ static void change_setting(int i) {
 		poll_drive(true);
 	}
 	layout();
-	repaint();
+	z_win_clear(&win);
+	repaint_all();
 }
 
 // -- actions ----------------------------------------------------------------------
@@ -746,7 +881,7 @@ static void go_view(int v) {
 	if (was == V_SETTINGS || v == V_SETTINGS) note[0] = 0;
 	layout();
 	z_win_clear(&win);
-	repaint();
+	repaint_all();
 }
 
 static void toggle_size(void) {
@@ -823,7 +958,7 @@ static const char HELP[] =
 static void handle_key(uint32_t k, uint8_t mods) {
 	bool shift = (mods & Z_KBD_MOD_SHIFT) != 0;
 	enable_for_job();       // what may be pressed now decides what a key does
-	if (k == Z_KEY_HELP) { z_dialog_help(&dlg, "Backup help", HELP, "backup"); repaint(); return; }
+	if (k == Z_KEY_HELP) { z_dialog_help(&dlg, "Backup help", HELP, "backup"); repaint_all(); return; }
 	if (k == 0x1b) {
 		if (bkjob_running()) { bkjob_cancel(); want_full = false; repaint_progress(); return; }
 		if (view == V_SETTINGS) go_view(V_MAIN);
@@ -871,7 +1006,7 @@ static void on_msg(z_msg_t *m, void *user) {
 		z_win_apply_redraw(&win, m->obj.val.uint32);
 		z_widget_invalidate(cur_set());
 		z_win_clear(&win);
-		repaint();
+		repaint_all();
 		z_win_redraw_done(&win);
 		break;
 	case Z_WM_WINDOW_MOVED:
@@ -925,6 +1060,7 @@ static void watch_turn(void) {
 	char b[200];
 	watch_text(b, sizeof b, view == V_STRIP);
 	if (strcmp(b, watch_shown) && !bkjob_running()) {
+		// only the watch's line differs: draw_main() redraws just that
 		if (view == V_MAIN) draw_main();
 		else if (view == V_STRIP) draw_strip();
 		title_update();
@@ -956,18 +1092,34 @@ int bkwin_run(void) {
 	z_win_clear(&win);
 	poll_drive(true);
 	watch_restart();
-	repaint();
+	repaint_all();
 
-	uint32_t last_ui = 0;
+	uint32_t last_ui = 0, last_rest = 0;
+	z_msg_t m;
 	for (;;) {
-		z_msg_t m;
 		while (z_msg_read(&m) == Z_OK) handle(&m);
 		if (quit && !bkjob_running()) break;
 		if (bkjob_running()) {
 			bool more = bkjob_step();
 			if (!more) { job_done(); continue; }
 			uint32_t now = z_uptime_ticks();
-			if (now - last_ui > Z_TICK_HZ / 8) { last_ui = now; repaint_progress(); bkw_poll(&watch, now); }
+			sum_deadline();
+			if (now - last_ui > Z_TICK_HZ / 8) {
+				last_ui = now;
+				// a look at the drive changes nothing on screen until
+				// it ends; a backup, its progress
+				if (bkjob_current()->kind == BKJOB_BACKUP) repaint_progress();
+				bkw_poll(&watch, now);
+			}
+			// Each slice is one request to fs, which blocks in the
+			// kernel anyway; but a job that never sleeps keeps every
+			// process of its own priority waiting for the slice's end.
+			// A tick's sleep every ~50 ms, woken at once by mail, costs
+			// a backup ~3% and lets them all run (docs/responsive.md).
+			if (now - last_rest >= Z_TICK_HZ / 20) {
+				last_rest = now;
+				if (z_msg_recv(&m, 1) == Z_OK) handle(&m);
+			}
 			continue;
 		}
 		if (want_full) {
@@ -982,7 +1134,9 @@ int bkwin_run(void) {
 		}
 		poll_drive(false);
 		watch_turn();
-		z_proc_wait(Z_TICK_HZ / 4);
+		// idle: asleep until mail comes, or the next look (a quarter
+		// second: the watch's countdown, the drive)
+		if (z_msg_recv(&m, Z_TICK_HZ / 4) == Z_OK) handle(&m);
 	}
 	bkw_stop(&watch);
 	z_win_destroy(&win);

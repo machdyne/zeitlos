@@ -93,7 +93,7 @@ static void run(void *arg) {
 	const char *b = j->backup[0] ? j->backup : NULL;
 	switch (j->kind) {
 	case BKJOB_BACKUP:  j->rc = bk_backup(&io, &j->o, &j->r); break;
-	case BKJOB_SUMMARY: j->rc = bk_summary(&io, &j->o, &j->sum); break;
+	case BKJOB_SUMMARY: j->rc = bk_glance(&io, &j->o, &j->sum); break;
 	case BKJOB_LIST:    j->rc = bk_list(&io, &j->o, j->list_fn, j->arg); break;
 	case BKJOB_FILES:   j->rc = bk_files(&io, &j->o, b, j->path[0] ? j->path : "/", j->file_fn, j->arg); break;
 	case BKJOB_HISTORY: j->rc = bk_history(&io, &j->o, j->path, j->hist_fn, j->arg); break;

@@ -94,7 +94,9 @@ sw/apps/sheet/sheet_layout
 sw/apps/sheet/sheet_files
 sw/apps/sheet/sheet_render
 sw/apps/read/md_test
+sw/apps/read/rfind_test
 sw/apps/ask/test/hosttest
+sw/apps/ask/test/loadtest
 sw/apps/gpu3d/test/stl_test
 sw/apps/gpu3d/test/teapot*.stl
 sw/apps/calc/calc_test

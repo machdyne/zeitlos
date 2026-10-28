@@ -33,6 +33,13 @@
  * 7. edges         pid 0 (the kernel) and out-of-range pids: no-op
  * 8. pop_match     z_mailbox_pop_match() takes one message from any
  *                  position, across the wrap, and keeps the rest in order
+ * 9. coalesce      a pointer move merges into the newest queued move
+ *                  from the same sender and window with the same
+ *                  buttons -- never into an older one, a press or a
+ *                  release, and never past a key
+ * 10. reserve      input cannot take the last Z_MAILBOX_RESERVE slots;
+ *                  a reply still fits there (the ask/read/backup 15 s
+ *                  stalls: keys filled the mailbox, fs's reply was lost)
  *
  * Checked against broken versions of k_msg_release_pid(): scanning
  * from slot 0 instead of the ring's head fails 25 checks, not emptying
@@ -167,6 +174,67 @@ static void test_pop_match(void) {
 	CHECK(z_mailboxes[2].count == 1, "a miss takes nothing");
 }
 
+
+static uint32_t mv(uint32_t x, uint32_t y, uint32_t btn) {
+	return Z_WM_PACK_MOUSE(x, y, btn, 1);
+}
+
+static z_rv put_u(uint32_t to, uint32_t from, uint32_t subject, uint32_t tag, uint32_t v) {
+	z_msg_envelope_t e;
+	memset(&e, 0, sizeof(e));
+	e.to = to; e.from = from; e.subject = subject; e.tag = tag;
+	e.obj.type = Z_UINT32;
+	e.obj.val.uint32 = v;
+	return z_mailbox_push(to, &e);
+}
+
+static void test_coalesce(void) {
+	reset();
+	// a run of moves while the app is busy: one slot, the last position
+	for (uint32_t i = 0; i < 100; i++)
+		CHECK(put_u(4, 1, Z_WM_MOUSE, 3, mv(i, i, 0)) == Z_OK, "move %u refused", (unsigned)i);
+	CHECK(z_mailboxes[4].count == 1, "100 moves took %u slots", (unsigned)z_mailboxes[4].count);
+	CHECK(at(4, 0).obj.val.uint32 == mv(99, 99, 0), "the merged move is not the last one");
+
+	// a press is never merged into a move, nor a release into a drag
+	put_u(4, 1, Z_WM_MOUSE, 3, mv(5, 5, 1));
+	put_u(4, 1, Z_WM_MOUSE, 3, mv(6, 6, 1));	// drag: merges into the press's slot...
+	CHECK(z_mailboxes[4].count == 2, "press+drag: %u slots", (unsigned)z_mailboxes[4].count);
+	CHECK(Z_WM_UNPACK_MOUSE_BUTTONS(at(4, 1).obj.val.uint32) == 1, "the press was lost");
+	put_u(4, 1, Z_WM_MOUSE, 3, mv(7, 7, 0));	// ...the release does not
+	CHECK(z_mailboxes[4].count == 3, "release merged away");
+
+	// a key in between stops merging, so no move overtakes it
+	put_u(4, 1, Z_WM_KEY, 3, 0x1234);
+	put_u(4, 1, Z_WM_MOUSE, 3, mv(8, 8, 0));
+	CHECK(z_mailboxes[4].count == 5, "a move merged across a key");
+
+	// another window, another sender: separate
+	put_u(4, 1, Z_WM_MOUSE, 9, mv(1, 1, 0));
+	put_u(4, 2, Z_WM_MOUSE, 9, mv(1, 1, 0));
+	CHECK(z_mailboxes[4].count == 7, "moves to another window or from another sender merged");
+	reset();
+}
+
+static void test_reserve(void) {
+	reset();
+	uint32_t limit = Z_MAILBOX_DEPTH - Z_MAILBOX_RESERVE, n = 0;
+	for (uint32_t i = 0; i < Z_MAILBOX_DEPTH + 10; i++)
+		if (put_u(4, 1, Z_WM_KEY, 3, i) == Z_OK) n++;
+	CHECK(n == limit, "keys took %u slots, reserve leaves %u", (unsigned)n, (unsigned)limit);
+	CHECK(put_u(4, 1, Z_WM_WHEEL, 3, 1) == Z_FAIL, "a wheel notch took the reserve");
+	// the reply the app is blocked on still arrives
+	CHECK(put_u(4, 2, 1000, 77, 0) == Z_OK, "fs's reply was refused with keys queued");
+	// other mail fills the rest, then the mailbox is full
+	for (uint32_t i = 1; i < Z_MAILBOX_RESERVE; i++)
+		CHECK(put_u(4, 2, 1000, 77 + i, 0) == Z_OK, "reply %u refused", (unsigned)i);
+	CHECK(put_u(4, 2, 1000, 99, 0) == Z_FAIL, "pushed past the depth");
+	// and the keys are all there, in order
+	for (uint32_t i = 0; i < limit; i++)
+		CHECK(at(4, i).obj.val.uint32 == i, "key %u out of order", (unsigned)i);
+	reset();
+}
+
 int main(void) {
 
 	setvbuf(stdout, NULL, _IONBF, 0);	// a crash in 6 must not eat the output
@@ -239,6 +307,9 @@ int main(void) {
 	z_procs[7].arena_size = 0;
 	z_procs[7].base = 0;
 	z_procs[7].size = 0;
+
+	test_coalesce();
+	test_reserve();
 
 	printf("test_msg: %d checks, %d failed\n", checks, fails);
 	return fails != 0;

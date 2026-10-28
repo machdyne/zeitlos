@@ -58,7 +58,7 @@ render:
 	cc -std=gnu99 -w -no-pie -I ../../common -o /tmp/askrender \
 		tests/render.c ../../common/zwin.c ../../common/zwidget.c \
 		../../common/zfont_data.c ../../common/zobj.c \
-		../../common/zeitlos.c
+		../../common/zeitlos.c ../../common/tests/zspeak_stub.c
 	/tmp/askrender /tmp/ask.pbm
 
 # `ask` MUST be here.

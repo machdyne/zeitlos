@@ -347,6 +347,22 @@ static void test_basic(void) {
 		!strcmp(sm.newest, bl.names[2]) && !strcmp(sm.oldest, bl.names[0]) &&
 		sm.newest_files == 5 && sm.free_kb > 0, "summary %d %s %u", sm.backups, sm.newest, sm.newest_files);
 
+	// the window's glance: the same newest, no free-space count, and it stops
+	bk_summary_t gl;
+	CHECK(bk_glance(&io, &o, &gl) == BK_DONE && !strcmp(gl.newest, sm.newest) &&
+		gl.newest_files == sm.newest_files && gl.free_kb == 0 && gl.backups == 3,
+		"glance %s %u", gl.newest, gl.newest_files);
+	// stopped at each of its checks in turn: BK_FAILED, nothing left held
+	int stops_ok = 0, n_ok = 0;
+	for (int k = 1; k < 40; k++) {
+		memfs_stop_after(m, k);
+		int r = bk_glance(&io, &o, &gl);
+		if (r == BK_FAILED) stops_ok++;
+		else if (r == BK_DONE && !strcmp(gl.newest, sm.newest)) { n_ok++; break; }
+	}
+	memfs_stop_after(m, 0);
+	CHECK(stops_ok >= 2 && n_ok == 1, "glance stops at each check (%d stops), then runs through", stops_ok);
+
 	// pins
 	CHECK(bk_pin(&io, &o, bl.names[0], true) == BK_DONE, "pin");
 	bl = blist(m);

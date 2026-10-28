@@ -3,6 +3,13 @@
 
 #include "kernel.h"
 
+// Of a mailbox's Z_MAILBOX_DEPTH slots, the last this many never take
+// input (Z_WM_MOUSE/KEY/WHEEL): they are kept for replies, so a busy
+// app's queued keys can never push out the fs reply it is waiting for
+// (msg.c, docs/messaging.md, "A full mailbox"). Kernel-private: no app
+// depends on it, so it is not part of the flash/card ABI.
+#define Z_MAILBOX_RESERVE 8
+
 // -- mailbox primitives -- only the kernel calls these --
 
 z_rv z_mailbox_is_empty(uint32_t pid);
@@ -16,6 +23,10 @@ z_obj_t *k_msg_read_match(z_msg_t *msg, uint32_t subject, uint32_t tag);
 bool z_mailbox_empty(uint32_t pid);
 // pushes that found a full mailbox, system-wide -- for sh.c's `ic`
 uint32_t k_msg_full_drops(void);
+// pointer moves merged into the queued one, and input refused because
+// only the reply reserve was left (msg.c, docs/messaging.md)
+uint32_t k_msg_coalesced(void);
+uint32_t k_msg_input_refused(void);
 // process exit (interrupt path): its messages still queued elsewhere
 // lose their pointers, and its own mailbox is emptied -- see msg.c
 void k_msg_release_pid(uint32_t pid);

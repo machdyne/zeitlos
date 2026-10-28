@@ -175,7 +175,7 @@ own `z_msg_t`. Current limits (`sw/common/zmsg.h`):
 
 | Constant | Default | Meaning |
 |---|---|---|
-| `Z_MAILBOX_DEPTH` | 32 | pending messages a process's mailbox can hold before `z_msg_send()` starts failing |
+| `Z_MAILBOX_DEPTH` | 32 | pending messages a process's mailbox can hold before `z_msg_send()` starts failing (input stops at 24: see "A full mailbox") |
 | `Z_MSG_MAX_TABLES` | 4 | `z_obj_table_t` nodes (list/map instances) a single message payload can reference |
 | `Z_MSG_MAX_ITEMS` | 16 | total `z_obj_t` slots across all of a payload's table arrays |
 
@@ -184,6 +184,52 @@ for messaging) -- raise them if you need to pass bigger argument
 maps. If a payload doesn't fit the budget, `z_msg_read()` still pops
 the message (so the mailbox doesn't get stuck) but resets `obj` to
 `Z_NONE`.
+
+### A full mailbox
+
+A mailbox only drains when its owner reads it. An app in a long call --
+waiting for a file read from fs, say -- reads nothing, and wm keeps
+sending it pointer moves, keys and wheel notches. Before October 2026
+that was enough to fill the 32 slots, and then **the reply the app was
+waiting for had nowhere to go**: fs's send failed, the reply was lost,
+and the app waited out zfsc's 15 s timeout -- once for every file call
+that followed, because the mailbox stayed full until the app got back
+to its loop. That was `ask`'s 60-second start, `read` stopping, and
+part of `backup`'s endless "Looking". It only happened if the user
+moved the mouse or typed during the call, which is why it was
+"sometimes".
+
+`z_mailbox_push()` (`sw/os/msg.c`) now treats input differently from
+everything else:
+
+- **Pointer moves merge.** A `Z_WM_MOUSE` replaces the newest queued
+  message if that is a move from the same sender to the same window
+  with the same buttons and inside bit. A busy app gets one move, at
+  the latest position, however long the mouse travels. Only the newest
+  message is checked, so a move never overtakes a key or a click, and
+  a press or release always gets its own slot. Apps were already told
+  to act on the last sample (`zwm.h`).
+- **Input cannot take the last `Z_MAILBOX_RESERVE` (8) slots.**
+  `Z_WM_MOUSE`, `Z_WM_KEY` and `Z_WM_WHEEL` are refused once 24 slots
+  are in use; replies, `REDRAW`s and everything else may still use
+  them. A key refused there is lost, as a key sent to a full mailbox
+  always was, but it can no longer take the reply with it.
+
+`Z_MAILBOX_RESERVE` is kernel-private (`sw/os/msg.h`); no app depends
+on it, so it is not part of the ABI. The console's `ic` prints how
+many moves were merged and how many input events were refused, beside
+the existing count of sends that found a mailbox full. A refused count
+that moves is an app breaking the rule in
+[responsive.md](responsive.md) -- it is busy for long enough that a
+person types 12 keys ahead of it.
+
+This is a floor, not the fix: an app that is busy for seconds still
+does not redraw and cannot be stopped. It now *recovers* when the work
+ends, instead of stalling for 15 s per call. The apps that did this are
+fixed as well ([responsive.md](responsive.md)).
+
+`sw/os/tests/test_msg.c` checks both rules (cases 9 and 10), including
+that a reply still fits with 24 keys queued.
 
 ### API
 

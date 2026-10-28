@@ -18,6 +18,8 @@ void md_state_init(md_state_t *st) {
 	st->in_front = false;
 	st->seen_any = false;
 	st->in_list = false;
+	st->front_lines = 0;
+	st->skip_run = 0;
 }
 
 
@@ -49,6 +51,48 @@ static bool all_of(const char *s, char c, int min) {
 	}
 
 	return n >= min;
+
+}
+
+// Does a fence open at s[i]? Three or more backticks or tildes; the
+// count goes in *n.
+//
+// A BACKTICK fence whose info string contains a backtick is not a
+// fence (CommonMark, 4.5) -- it is inline code at the start of a
+// paragraph. docs/learn_format.md opens a paragraph with exactly that,
+// ```` ```figure ```` naming the fence it describes, and reading it as
+// a fence put the whole rest of that document inside a code block.
+static bool fence_open(const char *s, int i, int *n) {
+
+	char c = s[i];
+
+	if (c != '`' && c != '~') return false;
+
+	int k = 0;
+	while (s[i + k] == c) k++;
+	if (k < 3) return false;
+
+	if (c == '`')
+		for (int j = i + k; s[j]; j++)
+			if (s[j] == '`') return false;
+
+	if (n) *n = k;
+	return true;
+
+}
+
+// Does this look like the first line of YAML front matter -- `key:`,
+// or the closing --- of an empty block? Decides whether a --- on the
+// first line opens front matter or is a rule; see md_parse().
+static bool looks_like_key(const char *s) {
+
+	if (!s) return false;
+	if (all_of(s, '-', 3)) return true;
+
+	int i = 0;
+	while (is_word(s[i]) || s[i] == '-') i++;
+
+	return i > 0 && s[i] == ':';
 
 }
 
@@ -121,22 +165,42 @@ static void inline_pass(md_line_t *o, const char *s) {
 		// `code` -- the most common inline construct in the corpus by
 		// an order of magnitude, and the one with a natural 1bpp
 		// rendering (inverse video).
+		//
+		// A run of N backticks is closed by the next run of exactly N
+		// (CommonMark), which is how code containing a backtick is
+		// written: `` a`b ``. Matching single backticks instead turned
+		// ```` ```figure ```` into an empty span and stray text.
 		if (c == '`') {
 
-			int j = i + 1;
-			while (s[j] && s[j] != '`') j++;
+			int run = 0;
+			while (s[i + run] == '`') run++;
 
-			if (s[j] == '`') {
+			int j = i + run;
+			int close = -1;
+
+			while (s[j]) {
+				if (s[j] != '`') { j++; continue; }
+				int r = 0;
+				while (s[j + r] == '`') r++;
+				if (r == run) { close = j; break; }
+				j += r;
+			}
+
+			if (close >= 0) {
+				int a = i + run, b = close;
+				// One space each side is padding, so the code can
+				// begin or end with a backtick.
+				if (b - a >= 2 && s[a] == ' ' && s[b - 1] == ' ') { a++; b--; }
 				span_open(o, MD_SPAN_CODE, 0);
-				put_str(o, s + i + 1, j - i - 1);
+				put_str(o, s + a, b - a);
 				span_close(o);
-				i = j + 1;
+				i = close + run;
 				continue;
 			}
 
-			// Unterminated -- a literal backtick, not a run.
-			put(o, c);
-			i++;
+			// Unterminated -- literal backticks, not a span.
+			put_str(o, s + i, run);
+			i += run;
 			continue;
 
 		}
@@ -288,7 +352,45 @@ static void inline_pass(md_line_t *o, const char *s) {
 
 // -- block pass --
 
+// A line that draws nothing (md.h, MD_SKIP) -- but every MD_SKIP_RUN-th
+// in a row is a blank line instead.
+//
+// The reader fills a screen by reading blocks until something takes
+// space, and a block that takes none costs a read and a parse and
+// moves nothing. A long run of them -- 5,000 table separator rows was
+// the fuzz case -- made every key walk the whole run, however far it
+// went. With this, a screen is filled within MD_SKIP_RUN lines of
+// anything; a real document never has that many in a row outside
+// front matter, which does not count (see md_parse()).
+static bool skip(md_state_t *st, md_line_t *out) {
+
+	if (++st->skip_run >= MD_SKIP_RUN) {
+		st->skip_run = 0;
+		out->kind = MD_BLANK;
+	} else {
+		out->kind = MD_SKIP;
+	}
+
+	return false;
+
+}
+
+static bool parse_line(md_state_t *st, const char *src, const char *next,
+	md_line_t *out);
+
 bool md_parse(md_state_t *st, const char *src, const char *next,
+	md_line_t *out) {
+
+	bool ate = parse_line(st, src, next, out);
+
+	// Anything that draws ends a run of lines that do not (skip()).
+	if (out->kind != MD_SKIP) st->skip_run = 0;
+
+	return ate;
+
+}
+
+static bool parse_line(md_state_t *st, const char *src, const char *next,
 	md_line_t *out) {
 
 	out->kind = MD_BLANK;
@@ -315,8 +417,7 @@ bool md_parse(md_state_t *st, const char *src, const char *next,
 			while (src[fi + n] == st->fence_char) n++;
 			if (n >= st->fence_len) {
 				st->in_fence = false;
-				out->kind = MD_SKIP;
-				return false;
+				return skip(st, out);
 			}
 		}
 
@@ -327,20 +428,15 @@ bool md_parse(md_state_t *st, const char *src, const char *next,
 
 	}
 
-	if (src[fi] == '`' || src[fi] == '~') {
-
-		int n = 0;
-		while (src[fi + n] == src[fi]) n++;
-
-		if (n >= 3) {
+	{
+		int n;
+		if (fence_open(src, fi, &n)) {
 			st->in_fence = true;
 			st->fence_char = src[fi];
-			st->fence_len = (uint8_t)n;
+			st->fence_len = (uint8_t)(n > 255 ? 255 : n);
 			st->seen_any = true;
-			out->kind = MD_SKIP;		// the fence line itself draws nothing
-			return false;
+			return skip(st, out);	// the fence line itself draws nothing
 		}
-
 	}
 
 	// -- front matter --
@@ -348,14 +444,25 @@ bool md_parse(md_state_t *st, const char *src, const char *next,
 	// Only at the very top of the file. A --- anywhere else is a rule
 	// or a setext underline, and treating it as front matter would
 	// silently swallow the rest of the document.
+	//
+	// And only when it looks like front matter: the --- must be
+	// followed by a `key:` line, and the block ends at its closing ---
+	// or after MD_FRONT_MAX lines, whichever comes first. A document
+	// that simply opens with a rule and never closes it -- found by
+	// fuzzing -- was otherwise one long front matter block: a blank
+	// page, and every key read to the end of the file looking for
+	// something to draw.
 	if (st->in_front) {
-		if (all_of(src, '-', 3)) st->in_front = false;
+		if (all_of(src, '-', 3) || ++st->front_lines >= MD_FRONT_MAX)
+			st->in_front = false;
 		out->kind = MD_SKIP;
 		return false;
 	}
 
-	if (!st->seen_any && all_of(src, '-', 3)) {
+	if (!st->seen_any && all_of(src, '-', 3) && looks_like_key(next)) {
 		st->in_front = true;
+		st->front_lines = 0;
+		st->seen_any = true;
 		out->kind = MD_SKIP;
 		return false;
 	}
@@ -465,7 +572,7 @@ bool md_parse(md_state_t *st, const char *src, const char *next,
 			}
 		}
 
-		if (sep) { out->kind = MD_SKIP; return false; }
+		if (sep) return skip(st, out);
 
 		out->kind = MD_TABLE;
 		st->in_list = false;
@@ -562,11 +669,7 @@ bool md_continues(const md_state_t *st, md_kind_t cur, const char *next) {
 	if (next[i] == '>') return false;
 	if (next[i] == '|') return false;
 
-	if (next[i] == '`' || next[i] == '~') {
-		int n = 0;
-		while (next[i + n] == next[i]) n++;
-		if (n >= 3) return false;
-	}
+	if (fence_open(next, i, NULL)) return false;
 
 	if (all_of(next, '-', 3) || all_of(next, '*', 3) || all_of(next, '_', 3))
 		return false;

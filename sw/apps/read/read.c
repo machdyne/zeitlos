@@ -134,6 +134,47 @@ static md_state_t frontier_st;
 static bool eof_seen;
 static uint32_t eof_line;
 
+// -- finding --
+//
+// The scans that may read the whole document -- End, a link to a
+// heading, a scrollbar drag or a launch offset into a part not read
+// yet, going back to a place in another document -- used to run in one
+// call, from the main loop. On the 85KB book that was seconds with the
+// window dead: no redraw (wm waits for the ack), no Esc, keys queued.
+// docs/responsive.md: the main loop never makes a call that can take
+// longer than about 20 ms.
+//
+// So each is a FIND: a goal and a cursor, advanced a block at a time
+// for about 20 ms a turn of the main loop (find_step()), with every
+// message read between turns. The title says how far it has got, and
+// Esc stops it, leaving the page where it was. A state machine rather
+// than a coroutine: the scan was already a loop over blocks, and
+// everything it keeps between blocks is the frontier (above) and, for
+// a heading, one cursor -- nothing to abandon but a few numbers.
+enum { FIND_NONE, FIND_END, FIND_OFF, FIND_LINE, FIND_ANCHOR };
+
+static struct {
+	int			kind;
+	uint32_t	want;		// FIND_OFF: a byte offset. FIND_LINE: a source line.
+	uint32_t	sub;		// FIND_LINE: the display line within it
+
+	// FIND_ANCHOR: the heading's slug, and the search's own cursor. A
+	// heading may lie behind the frontier, so the search walks from
+	// the top of the document; where it passes the frontier it moves
+	// the frontier with it, so a search that reads new ground builds
+	// the index as it goes, exactly as any other find.
+	char		slug[128];
+	uint32_t	a_line, a_off;
+	md_state_t	a_st;
+
+	bool		hist;		// history was pushed for it: popped if it comes to nothing
+	bool		say_missing;	// a link: say so if there is no such heading
+	int			pct;		// 0-99, what the title says
+} find;
+
+static void find_start(int kind, uint32_t want, uint32_t sub);
+static void find_end(bool landed);
+
 // -- position --
 
 // The source line beginning the block at or before byte `off`.
@@ -325,6 +366,24 @@ static uint32_t rbuf_len, rbuf_pos;
 static char peek_line[MD_LINE_MAX];
 static bool peek_valid;
 static uint32_t peek_off;
+
+// A read failed (fs_read_chunk() < 0) since the last rd_seek().
+//
+// A failed read is NOT the end of the file, and it used to be taken
+// for one: rd_raw() returned "no more lines", extend_index() then set
+// eof_seen and an eof_line wherever the failure happened -- for good,
+// so End and the scrollbar believed in a document that stopped there
+// -- and rbuf_base had moved on by the buffer's length while fs's
+// position had not, so every later read was off by that much. Now a
+// failure sets this, read_block() returns 0 with it set, and every
+// caller tells the two apart: nothing is recorded from a failed read
+// (no checkpoint, no EOF, no position cache), and fs is put back where
+// rbuf_base says.
+static bool rd_err;
+
+// Sticky: a read failed since the reader last asked for something. The
+// title says "read error" while it is set (update_title()).
+static bool io_err;
 
 /* -- where a repaint's time goes --
  *
@@ -561,6 +620,8 @@ static void rd_seek(uint32_t off) {
 
 	if (fh < 0) return;
 
+	rd_err = false;
+
 	/* Already inside the buffer -- just move the cursor.
 	 *
 	 * This used to discard unconditionally, which meant every seek
@@ -580,31 +641,6 @@ static void rd_seek(uint32_t off) {
 	rbuf_len = 0;
 	rbuf_pos = 0;
 	peek_valid = false;
-
-}
-
-static int rd_byte(void) {
-
-	if (rbuf_pos >= rbuf_len) {
-
-		rbuf_base += rbuf_len;
-		rbuf_pos = 0;
-
-#if READ_PROFILE
-		uint32_t io0 = rp_cyc();
-#endif
-		int n = fs_read_chunk(fh, rbuf, RBUF);
-#if READ_PROFILE
-		rp_io += rp_cyc() - io0;
-		rp_refills++;
-#endif
-		rbuf_len = (n > 0) ? (uint32_t)n : 0;
-
-		if (!rbuf_len) return -1;
-
-	}
-
-	return rbuf[rbuf_pos++];
 
 }
 
@@ -679,6 +715,11 @@ static bool rd_raw(char *out, int cap) {
 	int n = 0;
 	bool any = false;
 
+	// After a failure, nothing more until the next rd_seek(): a read
+	// that succeeded now would hand back the bytes AFTER a hole, and
+	// rd_tell() would no longer say where the failure was.
+	if (rd_err) { out[0] = 0; return false; }
+
 	for (;;) {
 
 		if (rbuf_pos >= rbuf_len) {
@@ -697,7 +738,21 @@ static bool rd_raw(char *out, int cap) {
 			rp_io += rp_cyc() - io0;
 			rp_refills++;
 #endif
-			rbuf_len = (r > 0) ? (uint32_t)r : 0;
+			if (r < 0) {
+				// An I/O error, not the end of the file -- see rd_err.
+				// Where fs left its position after a failure is not
+				// known, so put it back where rbuf_base says the next
+				// byte is, and drop the partial line: no caller uses
+				// a line read across a failure.
+				rbuf_len = 0;
+				rd_err = true;
+				io_err = true;
+				fs_seek(fh, rbuf_base);
+				out[0] = 0;
+				return false;
+			}
+
+			rbuf_len = (uint32_t)r;
 
 			if (!rbuf_len) break;    // end of file
 		}
@@ -742,6 +797,29 @@ static bool rd_line(char *out, int cap) {
 
 }
 
+// The cached position (seek_line()), declared here for rd_forget().
+static bool pos_valid;
+
+// Forgets everything buffered and puts fs where the reader says it is.
+// For a scan that was stopped or failed: whatever it left in rbuf,
+// peek_line and the position cache is trusted by nobody after it.
+static void rd_forget(void) {
+
+	if (fh < 0) return;
+
+	uint32_t at = rbuf_base + rbuf_pos;
+
+	rbuf_base = at;
+	rbuf_len = 0;
+	rbuf_pos = 0;
+	peek_valid = false;
+	pos_valid = false;
+	rd_err = false;
+
+	fs_seek(fh, at);
+
+}
+
 // The line after the one rd_line() would return, or NULL at EOF.
 static const char *rd_peek(void) {
 
@@ -773,7 +851,21 @@ static const char *rd_peek(void) {
 // scrolling reversible: a block always wraps the same way regardless
 // of where it was entered from, which would not be true if a position
 // could land in the middle of one.
+static uint32_t read_block_raw(md_state_t *st, md_line_t *out);
+
+// Returns 0 on a read error too, with rd_err set: a block read across a
+// failure may have been joined or parsed with a line missing, so none
+// of it is used -- the caller stops, and checks rd_err to tell an error
+// from the end of the file.
 static uint32_t read_block(md_state_t *st, md_line_t *out) {
+
+	uint32_t used = read_block_raw(st, out);
+
+	return rd_err ? 0 : used;
+
+}
+
+static uint32_t read_block_raw(md_state_t *st, md_line_t *out) {
 
 	static char line[MD_LINE_MAX];
 	static char joined[MD_LINE_MAX];
@@ -829,7 +921,15 @@ static uint32_t read_block(md_state_t *st, md_line_t *out) {
 
 	md_kind_t kind = out->kind;
 
-	while (md_continues(st, kind, rd_peek())) {
+	// Stops once `joined` is full, whatever md_continues() says. The
+	// text past MD_LINE_MAX was dropped anyway, but the lines were
+	// still READ: a document of thousands of lines with no blank
+	// between them is one paragraph, and every block read -- every
+	// paint, every scroll -- read the whole file to find its end
+	// (fuzz case front_unterminated.md). The next line then starts a
+	// block of its own. Positions stay block-aligned: where a block
+	// ends still depends only on where it starts.
+	while (n < MD_LINE_MAX - 1 && md_continues(st, kind, rd_peek())) {
 
 		if (!rd_line(line, MD_LINE_MAX)) break;
 
@@ -868,8 +968,6 @@ static void idx_compress(void) {
 
 }
 
-static bool pos_valid;
-
 // Starts the index. Reads nothing -- see the frontier comment above.
 static void index_init(void) {
 
@@ -895,60 +993,70 @@ static void index_init(void) {
 
 }
 
-// Extends the index until it covers source line `want_line` AND byte
-// offset `want_off`, or the end of the file. Either bound may be 0 to
-// mean "no requirement".
+// Reads the block at the frontier and moves the frontier past it,
+// recording a checkpoint at each stride boundary; `ml` gets the block.
+// Returns 1, or 0 at the end of the file (eof_seen set), or -1 on a
+// read error -- then nothing moves and nothing is recorded, so the
+// same block is simply tried again by whatever asks next.
 //
 // This is the only thing that reads unvisited parts of the document,
-// and it never re-reads: the frontier only moves forward.
-static void extend_index(uint32_t want_line, uint32_t want_off) {
+// and it never re-reads: the frontier only moves forward. One block a
+// call, so a long scan can be cut into slices (find_step()).
+static int frontier_block(md_line_t *ml) {
 
-	if (fh < 0 || eof_seen) {
-		if (eof_seen) return;
-	}
+	if (fh < 0 || eof_seen) return 0;
 
-	if (frontier_line >= want_line && frontier_off >= want_off) return;
-
-	rd_seek(frontier_off);
+	// Usually the reader is still where the last block left it, with
+	// the next line already peeked; seek only if something else moved
+	// it meanwhile (a repaint between two slices of a find).
+	if (rd_tell() != frontier_off) rd_seek(frontier_off);
+	rd_err = false;
 
 	md_state_t st = frontier_st;
-	static md_line_t ml;
+	uint32_t used = read_block(&st, ml);
 
-	uint32_t ln = frontier_line;
-	uint32_t off = frontier_off;
+	if (!used) {
+		if (rd_err) return -1;
+		eof_seen = true;
+		eof_line = frontier_line;
+		return 0;
+	}
 
-	while (ln < want_line || off < want_off) {
+	frontier_line += used;
+	frontier_off = rd_tell();
+	frontier_st = st;
 
-		uint32_t used = read_block(&st, &ml);
+	// Checkpoint at each stride boundary, on a block boundary.
+	if (idx_n && frontier_line >= idx[idx_n - 1].line + idx_stride) {
 
-		if (!used) {
-			eof_seen = true;
-			eof_line = ln;
-			break;
-		}
+		if (idx_n >= IDX_MAX) idx_compress();
 
-		ln += used;
-		off = rd_tell();
-
-		// Checkpoint at each stride boundary, on a block boundary.
-		if (idx_n && ln >= idx[idx_n - 1].line + idx_stride) {
-
-			if (idx_n >= IDX_MAX) idx_compress();
-
-			if (idx_n < IDX_MAX && ln >= idx[idx_n - 1].line + idx_stride) {
-				idx[idx_n].off = off;
-				idx[idx_n].line = ln;
-				idx[idx_n].st = st;
-				idx_n++;
-			}
-
+		if (idx_n < IDX_MAX && frontier_line >= idx[idx_n - 1].line + idx_stride) {
+			idx[idx_n].off = frontier_off;
+			idx[idx_n].line = frontier_line;
+			idx[idx_n].st = st;
+			idx_n++;
 		}
 
 	}
 
-	frontier_line = ln;
-	frontier_off = off;
-	frontier_st = st;
+	return 1;
+
+}
+
+// Extends the index until it covers source line `want_line` AND byte
+// offset `want_off`, or the end of the file, or a read error. Either
+// bound may be 0 to mean "no requirement".
+//
+// In one call -- so only for distances known to be short: a screen or
+// so past the frontier, which is as far as reading on ever asks.
+// Anything that may have to go far is a find (find_start()).
+static void extend_index(uint32_t want_line, uint32_t want_off) {
+
+	static md_line_t ml;
+
+	while (frontier_line < want_line || frontier_off < want_off)
+		if (frontier_block(&ml) <= 0) break;
 
 }
 
@@ -1043,6 +1151,10 @@ static void seek_line(uint32_t line, md_state_t *st) {
 		ln += used;
 	}
 
+	// A read failed on the way: this is not a position, and must not
+	// be remembered as one.
+	if (rd_err) { pos_valid = false; return; }
+
 	// Record where this ended up, EOF included: a short landing is
 	// still a valid position, and caching it stops the next call
 	// walking the same ground again.
@@ -1050,43 +1162,6 @@ static void seek_line(uint32_t line, md_state_t *st) {
 	pos_line  = ln;
 	pos_off   = rd_tell();
 	pos_st    = *st;
-
-}
-
-// The block start at or before `line`. Used by scroll_up(), which
-// cannot simply decrement -- a block may be several source lines
-// long, and stopping inside one would render it differently from
-// every other approach to the same place.
-//
-// Bounded by the index stride, so this does not get slower as the
-// document gets longer.
-static uint32_t prev_block(uint32_t line) {
-
-	if (!line) return 0;
-
-	extend_index(line, 0);
-
-	int e = 0;
-
-	for (int i = 0; i < idx_n; i++)
-		if (idx[i].line < line) e = i; else break;
-
-	rd_seek(idx[e].off);
-
-	md_state_t st = idx[e].st;
-	static md_line_t ml;
-
-	uint32_t ln = idx[e].line;
-	uint32_t prev = ln;
-
-	while (ln < line) {
-		uint32_t used = read_block(&st, &ml);
-		if (!used) break;
-		prev = ln;
-		ln += used;
-	}
-
-	return prev;
 
 }
 
@@ -1826,7 +1901,10 @@ static void layout_run(md_state_t *st, uint32_t line, int y,
 		cache_ns = nsteps;
 		cache_nl = nvlinks;
 	}
-	cache_valid = true;
+
+	// A layout cut short by a read error ends at the failure, not at a
+	// block: nothing to resume from.
+	cache_valid = !rd_err;
 
 }
 
@@ -2031,7 +2109,13 @@ static void update_scrollbar(void) {
 		if ((uint32_t)span > sd_span_max) sd_span_max = (uint32_t)span;
 	}
 #endif
-	z_scrollbar_set_value(&sbar, (int32_t)top_off);
+	// Not while a drag's position is still to be resolved (body_seek)
+	// or is being found (FIND_OFF): the thumb shows where the reader
+	// asked to go, and the value IS that request -- setting it back to
+	// the page still on the glass would lose it. A find that is stopped
+	// puts the thumb back by coming through here again.
+	if (!body_seek && find.kind != FIND_OFF)
+		z_scrollbar_set_value(&sbar, (int32_t)top_off);
 	z_scrollbar_draw(&sbar, true);
 
 
@@ -2045,18 +2129,35 @@ static void update_scrollbar(void) {
 // body_seek above. The selection goes with the position: it is
 // anchored to screen rows, which a new position redefines (see
 // scroll_down()).
-static void resolve_seek(void) {
+//
+// Returns true when the position lies past the frontier and has become
+// a find (find_start()) instead: the page on the glass stays as it is
+// until the find lands, so the caller has nothing to redraw.
+static bool resolve_seek(void) {
 
-	if (!body_seek) return;
+	if (!body_seek) return false;
 	body_seek = false;
 
 	SD(sd_seeks++);
 
+	// A newer position replaces whatever an earlier drag is still
+	// finding; the thumb is already where the hand left it.
+	find_end(false);
+
+	uint32_t off = (uint32_t)sbar.value;
+
+	// Into unread territory: reaching it is a scan, which builds the
+	// index as it goes (so the same jump is instant afterwards) -- and
+	// is a find, a slice per turn of the main loop, not one call.
+	if (!eof_seen && off > frontier_off) {
+		find_start(FIND_OFF, off, 0);
+		return true;
+	}
+
 	// The scrollbar is in bytes; find the block that starts at or
-	// before that offset. Extending the index to reach it is the one
-	// place a jump into unread territory pays for a scan -- and that
-	// scan builds the index, so the same jump is instant afterwards.
-	top_line = line_at_offset((uint32_t)sbar.value);
+	// before that offset. Inside the index, so a replay from the
+	// nearest checkpoint at most.
+	top_line = line_at_offset(off);
 	top_sub = 0;
 	sel_link = -1;
 	sel_clear();
@@ -2069,6 +2170,8 @@ static void resolve_seek(void) {
 	// drag started.
 	drawn_valid = false;
 
+	return false;
+
 }
 
 // A full repaint, including the window clear. Only for a Z_WM_REDRAW
@@ -2080,16 +2183,21 @@ static void draw_body(void) {
 
 }
 
+// Paints the position the reader is AT. A drag's position still to be
+// resolved is left for the main loop (repaint_body()): this answers
+// Z_WM_REDRAW, and wm waits for the acknowledgement that follows, so
+// it must not start what may be a scan of the file.
 static void repaint(void) {
-
-	resolve_seek();
 
 	z_win_clear(&win);
 
 	draw_body();
 	update_scrollbar();
 
-	body_dirty = false;
+	// A drag's position still to be resolved keeps its deadline: the
+	// main loop repaints there (and finds it, if it is far) when it
+	// comes.
+	if (!body_seek) body_dirty = false;
 
 }
 
@@ -2335,7 +2443,8 @@ static void repaint_body(void) {
 	uint32_t t0 = rp_cyc();
 #endif
 
-	resolve_seek();
+	// Became a find: the page stays, the find redraws when it lands.
+	if (resolve_seek()) { body_dirty = false; return; }
 
 	draw_body();
 	update_scrollbar();
@@ -2610,51 +2719,302 @@ static void slugify(const char *s, char *out, int cap) {
 
 }
 
-// Finds the heading whose slug matches `anchor` and moves there.
-// Returns false if there is no such heading.
+static bool open_path(const char *p);
+static void update_title(void);
+static bool io_err_titled;		// what the title last said -- see update_title()
+
+// ---------------------------------------------------------------
+// finding -- see `find` at the top
+// ---------------------------------------------------------------
+
+// The title says "Finding... NN%" in steps of ten, and only for a find
+// that outlasts its first slice: each retitle costs a repaint of the
+// windows below, and a find that lands at once needs no progress.
+static bool find_titled;
+
+static void find_title(void) {
+
+	uint32_t done = 0, of = 1;
+
+	switch (find.kind) {
+		case FIND_END:		done = frontier_off; of = fsize; break;
+		case FIND_OFF:		done = frontier_off; of = find.want; break;
+		case FIND_LINE:		done = frontier_line; of = find.want; break;
+		case FIND_ANCHOR:	done = find.a_off; of = fsize; break;
+	}
+
+	if (!of) of = 1;
+	if (done > of) done = of;
+
+	// done * 100 overflows past 42MB; a file that large divides first.
+	int pct = (of > 0x01000000u) ? (int)(done / (of / 100u + 1u))
+		: (int)(done * 100u / of);
+	if (pct > 99) pct = 99;
+	pct -= pct % 10;
+
+	if (find_titled && pct == find.pct) return;
+
+	find.pct = pct;
+	find_titled = true;
+	update_title();
+
+}
+
+// Ends the find, whether it landed, failed or was stopped. A find that
+// did not land leaves the page where it was: it never moved top_line.
+// What it read is forgotten (rd_forget()) -- the reader's buffer and
+// peek line belong to wherever the last slice stopped -- but the index
+// it built is kept: the frontier only moves forward, so a find stopped
+// halfway has still done half of the next one's work.
+static void find_end(bool landed) {
+
+	if (!find.kind) return;
+
+	if (!landed && find.hist && hist_n) hist_n--;	// nothing moved
+
+	find.kind = FIND_NONE;
+	rd_forget();
+
+	// The name back, or "read error" on, or off (find_start() clears
+	// the last error: it was news about an earlier request).
+	if (find_titled || io_err != io_err_titled) {
+		find_titled = false;
+		update_title();
+	}
+
+}
+
+// Esc, or something else the reader asked for: stop, page as it was.
+// The thumb goes back to the page from wherever a drag left it.
+static void find_stop(void) {
+
+	if (!find.kind) return;
+
+	bool off = (find.kind == FIND_OFF);
+
+	find_end(false);
+
+	// Directly, not update_scrollbar(): that also declares the step
+	// table to describe the glass, which a stop says nothing about.
+	if (off) {
+		z_scrollbar_set_value(&sbar, (int32_t)top_off);
+		z_scrollbar_draw(&sbar, true);
+	}
+
+}
+
+static void find_start(int kind, uint32_t want, uint32_t sub) {
+
+	// Replaced, not stopped: the new request decides where the thumb
+	// and the page go, so nothing is put back for the old one.
+	find_end(false);
+
+	if (fh < 0) return;
+
+	find.kind = kind;
+	find.want = want;
+	find.sub = sub;
+	find.hist = false;
+	find.say_missing = false;
+	find.pct = 0;
+	find_titled = false;
+
+	// A new request: the last one's read error is no longer news.
+	io_err = false;
+
+}
+
+// From the top of the document for the heading whose slug is `anchor`.
+// `hist`: history was pushed for the move, and is popped if there is no
+// such heading or the find is stopped. `say`: say so if there is none.
 //
-// A full scan of the document. It only happens on a click, and the
-// alternative -- an anchor table built at open time -- would cost
-// memory proportional to the number of headings, which is exactly
-// what this design is avoiding.
-static bool goto_anchor(const char *anchor) {
+// A scan, but not an anchor table built at open time: that would cost
+// memory in proportion to the number of headings, which is exactly what
+// this design avoids. It is a find, so it costs the window nothing.
+static void find_anchor(const char *anchor, bool hist, bool say) {
 
-	if (fh < 0) return false;
+	find_start(FIND_ANCHOR, 0, 0);
 
-	rd_seek(0);
+	if (!find.kind) {
+		if (hist && hist_n) hist_n--;
+		return;
+	}
 
-	md_state_t st;
-	md_state_init(&st);
+	int i = 0;
+	for (; anchor[i] && i < (int)sizeof(find.slug) - 1; i++)
+		find.slug[i] = anchor[i];
+	find.slug[i] = 0;
+
+	find.a_line = 0;
+	find.a_off = 0;
+	md_state_init(&find.a_st);
+	find.hist = hist;
+	find.say_missing = say;
+
+}
+
+// The find has reached its goal: move there and paint, once.
+static void find_land(uint32_t line, uint32_t sub) {
+
+	find_end(true);
+
+	top_line = line;
+	top_sub = sub;
+	sel_link = -1;
+	sel_clear();
+	drawn_valid = false;
+
+	repaint_body();
+
+}
+
+// A read failed: stop where it is, page as it was, and say so in the
+// title ("read error", update_title()). Nothing past the failure was
+// recorded -- frontier_block() returns before moving anything.
+static void find_fail(void) {
+
+	io_err = true;
+	find_stop();		// retitles: the name, and "read error"
+
+}
+
+// One block of a heading search. Returns 1 to go on, 0 when it ended
+// (landed, or not found), -1 on a read error.
+static int find_anchor_block(void) {
 
 	static md_line_t ml;
 	char slug[128];
 
-	uint32_t ln = 0;
+	uint32_t at = find.a_line;
 
-	for (;;) {
+	if (eof_seen && at >= eof_line) {
+		// Not found.
+		bool say = find.say_missing;
+		find_end(false);
+		if (say)
+			z_dialog_confirm(&dlg_ctx, "Not found",
+				"No heading matches\nthat link.", Z_DIALOG_OK_CANCEL);
+		return 0;
+	}
 
-		uint32_t at = ln;
+	if (at >= frontier_line) {
+
+		// At the frontier: read on through it, moving it -- the
+		// search builds the index exactly as End would. The two
+		// cursors meet on a block boundary, since both walk the same
+		// blocks from the top.
+		int r = frontier_block(&ml);
+		if (r < 0) return -1;
+		if (r == 0) return 1;		// eof_seen now: the test above ends it
+		find.a_line = frontier_line;
+		find.a_off = frontier_off;
+		find.a_st = frontier_st;
+
+	} else {
+
+		// Behind it: through ground the index has, on its own cursor.
+		if (rd_tell() != find.a_off) rd_seek(find.a_off);
+		rd_err = false;
+
+		md_state_t st = find.a_st;
 		uint32_t used = read_block(&st, &ml);
-		if (!used) break;
-
-		if (ml.kind == MD_HEADING) {
-			slugify(ml.text, slug, sizeof(slug));
-			if (!strcmp(slug, anchor)) {
-				top_line = at;
-				top_sub = 0;
-				return true;
-			}
+		if (!used) {
+			if (rd_err) return -1;
+			// The frontier said there was more; trust the file.
+			eof_seen = true;
+			eof_line = at;
+			return 1;
 		}
-
-		ln += used;
+		find.a_line = at + used;
+		find.a_off = rd_tell();
+		find.a_st = st;
 
 	}
 
-	return false;
+	if (ml.kind == MD_HEADING) {
+		slugify(ml.text, slug, sizeof(slug));
+		if (!strcmp(slug, find.slug)) {
+			find_land(at, 0);
+			return 0;
+		}
+	}
+
+	return 1;
 
 }
 
-static bool open_path(const char *p);
+// About `budget` ticks of the find, then back to the main loop. Each
+// step is one block -- a read from the buffer, a refill of RBUF at most
+// -- so a slice overruns its budget by one block's time at most.
+static void find_step(uint32_t budget) {
+
+	static md_line_t ml;
+	uint32_t t0 = z_uptime_ticks();
+
+	while (find.kind) {
+
+		int r = 1;
+
+		switch (find.kind) {
+
+			case FIND_END:
+				r = frontier_block(&ml);
+				if (r == 0) {
+					// The end, as End always did it: the last line at
+					// the top, then back a page less one.
+					int page = view_h / (BODY_FONT->h + 1);
+					if (page < 1) page = 1;
+					find_end(true);
+					if (eof_line > 1) {
+						top_line = eof_line - 1;
+						top_sub = 0;
+						scroll_up(page - 1);
+					}
+					sel_link = -1;
+					repaint_body();
+					return;
+				}
+				break;
+
+			case FIND_OFF:
+				if (eof_seen || frontier_off >= find.want) {
+					uint32_t want = find.want;
+					find_end(true);
+					find_land(line_at_offset(want), 0);
+					return;
+				}
+				r = frontier_block(&ml);
+				break;
+
+			case FIND_LINE:
+				if (eof_seen && find.want >= eof_line) {
+					// The document is shorter than it was: its end.
+					find_land(eof_line ? eof_line - 1 : 0, 0);
+					return;
+				}
+				if (frontier_line >= find.want) {
+					find_land(find.want, find.sub);
+					return;
+				}
+				r = frontier_block(&ml);
+				break;
+
+			case FIND_ANCHOR:
+				r = find_anchor_block();
+				if (r == 0) return;
+				break;
+
+		}
+
+		if (r < 0) { find_fail(); return; }
+
+		if (z_uptime_ticks() - t0 >= budget) break;
+
+	}
+
+	if (find.kind) find_title();
+
+}
 
 static void push_history(void) {
 
@@ -2743,6 +3103,7 @@ static void say_toggle(void) {
 		z_sayall_stop(&reader);
 		return;
 	}
+	find_stop();		// reading starts from the page on the glass
 	say_next = top_line;
 	printf("read: Super+A: reading from line %lu\n", (unsigned long)top_line + 1);
 	if (!z_sayall_start(&reader, 0)) {
@@ -2765,6 +3126,10 @@ static void say_selection(void) {
 
 static void go_back(void) {
 
+	// First: a find that pushed history pops its own entry when it
+	// stops, and the one to go back to is the one under it.
+	find_stop();
+
 	if (!hist_n) return;
 
 	hist_n--;
@@ -2777,17 +3142,31 @@ static void go_back(void) {
 
 	uint32_t l = hist[hist_n].line, s = hist[hist_n].sub;
 
-	// Same file: just move, don't reopen and re-index.
+	// Same file: just move, don't reopen and re-index. The index
+	// reached that line once already, so this is no scan. A drag's
+	// position not resolved yet is overruled by this one.
 	if (!strcmp(p, path)) {
+		body_seek = false;
 		top_line = l;
 		top_sub = s;
-	} else if (open_path(p)) {
-		top_line = l;
-		top_sub = s;
+		sel_link = -1;
+		repaint();
+		return;
 	}
 
+	if (!open_path(p)) {
+		sel_link = -1;
+		repaint();
+		return;
+	}
+
+	// Another document, opened afresh: its index reaches nothing yet,
+	// so the place is a find. Its top meanwhile, not the document just
+	// left -- its links would lead somewhere else entirely.
 	sel_link = -1;
+	if (!l) top_sub = s;
 	repaint();
+	if (l) find_start(FIND_LINE, l, s);
 
 }
 
@@ -2795,16 +3174,16 @@ static void follow(const char *target) {
 
 	if (!target || !target[0]) return;
 
-	// In-document anchor.
+	// Before push_history(): a find being replaced pops the entry IT
+	// pushed, which must not be this one.
+	find_stop();
+
+	// In-document anchor. A find: the page stays until it lands, and
+	// if there is no such heading the history entry goes again --
+	// nothing moved, so nothing to go back to.
 	if (target[0] == '#') {
 		push_history();
-		if (!goto_anchor(target + 1)) {
-			hist_n--;		// nothing moved, so nothing to go back to
-			z_dialog_confirm(&dlg_ctx, "Not found",
-				"No heading matches\nthat link.", Z_DIALOG_OK_CANCEL);
-		}
-		sel_link = -1;
-		repaint();
+		find_anchor(target + 1, true, true);
 		return;
 	}
 
@@ -2858,10 +3237,10 @@ static void follow(const char *target) {
 		return;
 	}
 
-	if (anchor[0]) goto_anchor(anchor);
-
 	sel_link = -1;
 	repaint();
+
+	if (anchor[0]) find_anchor(anchor, false, false);
 
 }
 
@@ -2869,12 +3248,42 @@ static void follow(const char *target) {
 // files
 // ---------------------------------------------------------------
 
+// The document's name -- or, while a find runs, how far it has got
+// (find_title()), and after a failed read, "read error": the page may
+// be cut short, and that should not look like the end of the document.
+
 static void update_title(void) {
 
 	char t[64];
-	z_win_doc_title(t, (int)sizeof(t), path, false, "read");
+
+	if (find.kind && find_titled) {
+		static const char pre[] = "Finding... ";
+		int n = 0;
+		for (int i = 0; pre[i]; i++) t[n++] = pre[i];
+		if (find.pct >= 10) t[n++] = (char)('0' + find.pct / 10);
+		t[n++] = (char)('0' + find.pct % 10);
+		static const char post[] = "%  (Esc stops)";
+		for (int i = 0; post[i]; i++) t[n++] = post[i];
+		t[n] = 0;
+	} else {
+		z_win_doc_title(t, (int)sizeof(t) - 14, path, false, "read");
+		if (io_err) {
+			int n = (int)strlen(t);
+			static const char e[] = "  read error";
+			for (int i = 0; e[i]; i++) t[n++] = e[i];
+			t[n] = 0;
+		}
+	}
+
+	io_err_titled = io_err;
 	z_win_set_title(&win, t);
 
+}
+
+// After anything that read the file: retitle if a read error came or
+// went since the title last said.
+static void note_io(void) {
+	if (io_err != io_err_titled && !(find.kind && find_titled)) update_title();
 }
 
 static bool open_path(const char *p) {
@@ -2902,6 +3311,10 @@ static bool open_path(const char *p) {
 	// case and one extra open in the rare one.
 	char prev[Z_FLIST_PATH_MAX];
 	bool had_prev = (fh >= 0);
+
+	// A find belongs to the document it was started in.
+	find_stop();
+	io_err = false;
 
 	if (had_prev) {
 		int q = 0;
@@ -2989,6 +3402,8 @@ static bool open_path(const char *p) {
 static void do_open(void) {
 
 	char p[Z_FLIST_PATH_MAX];
+
+	find_stop();
 
 	// Set across the dialog, so the redraw it triggers on the way out
 	// doesn't render a document that is about to be replaced. See
@@ -3079,9 +3494,19 @@ static void scroll_flush(void) {
 
 	if (!key_pend_lines) { key_pend_pages = false; return; }
 
+	// Scrolling is asking for somewhere else: a find still going would
+	// pull the page away from under it when it landed.
+	find_stop();
+
 	// A scrollbar drag's position is a scroll request too, and an
 	// earlier one: the impulses below move FROM where it landed.
-	resolve_seek();
+	if (resolve_seek()) {
+		// The drag's position became a find; these impulses were
+		// meant to move from it, which is not known yet. Drop them.
+		key_pend_lines = 0;
+		key_pend_pages = false;
+		return;
+	}
 
 	int n = key_pend_lines;
 	bool pages = key_pend_pages;
@@ -3090,6 +3515,8 @@ static void scroll_flush(void) {
 
 	SD(sd_flush++);
 	SD(sd_lines += (uint32_t)(n < 0 ? -n : n));
+
+	io_err = false;
 
 	if (n > 0) {
 		// Arrows alone stay on the blit path -- it is what they
@@ -3104,6 +3531,7 @@ static void scroll_flush(void) {
 	}
 
 	sd_report_flush();
+	note_io();
 
 }
 
@@ -3114,7 +3542,7 @@ static void handle_key(uint32_t keysym, uint8_t mods) {
 			"A reader for Markdown and text: manuals, notes, books.\n\n"
 			"Space, PgDn\tNext page (Shift+Space back)\n"
 			"Arrows\tA line\n"
-			"Home, End\tStart, end\n"
+			"Home, End\tStart, end (Esc stops a long find)\n"
 			"Tab\tNext link; Enter follows it\n"
 			"Backspace\tBack\n"
 			"Ctrl+O\tOpen\n"
@@ -3122,6 +3550,16 @@ static void handle_key(uint32_t keysym, uint8_t mods) {
 			"A .docx, .odt, .rtf or .epub is converted to read.";
 		z_dialog_help(&dlg_ctx, "Read help", help, "read_app");
 		return;
+	}
+
+	// While a find runs (End, a link to a heading, a jump into unread
+	// ground): Esc stops it and does nothing else, the page as it was.
+	// End again is the same request, still being answered. Any other
+	// key that moves the page asks for something else, and stops it
+	// first -- by scroll_flush(), or below.
+	if (find.kind) {
+		if (keysym == 0x1b) { find_stop(); return; }
+		if (keysym == Z_KEY_END && find.kind == FIND_END) return;
 	}
 
 	int page = view_h / (BODY_FONT->h + 1);
@@ -3161,23 +3599,25 @@ static void handle_key(uint32_t keysym, uint8_t mods) {
 
 	scroll_flush();
 
+	io_err = false;
+
 	switch (keysym) {
 
+		// Every key below that moves the page stops a find first, or
+		// the find would pull the page away when it landed: Home here,
+		// the others in what they call (follow(), go_back(),
+		// do_open()). Tab and copying leave it running.
 		case Z_KEY_HOME:
-			top_line = 0; top_sub = 0; sel_link = -1; repaint_body(); return;
+			find_stop();
+			top_line = 0; top_sub = 0; sel_link = -1; repaint_body(); note_io(); return;
 
 		case Z_KEY_END:
 			// The only operation that genuinely needs the whole
 			// document read, since the end is not knowable otherwise.
-			// The scan builds the index, so it is paid once.
-			extend_index(0xFFFFFFFFu, 0xFFFFFFFFu);
-			if (eof_seen && eof_line > 1) {
-				top_line = eof_line - 1;
-				top_sub = 0;
-				scroll_up(page - 1);
-			}
-			sel_link = -1;
-			repaint_body();
+			// A find (see `find`): the scan builds the index, so it is
+			// paid once, and the window answers throughout. Once the
+			// end is known it lands within the first slice.
+			find_start(FIND_END, 0, 0);
 			return;
 
 		case '\t':
@@ -3423,6 +3863,25 @@ static void forward_msg(z_msg_t *msg, void *user) {
 		case Z_WM_WINDOW_RESIZED:
 			z_win_apply_resized(&win, &msg->obj);
 			layout();
+
+			// What is on the glass, and the layout cache, were laid
+			// out at the old width: a blit trusting them now moves
+			// pixels that are not where the step table says, and a
+			// resume from the cache continues the old wrapping.
+			drawn_valid = false;
+			cache_valid = false;
+
+			// top_sub counts display lines of top_line's block at the
+			// OLD width. Narrower, the block wraps to more and it is
+			// still valid; wider, to fewer, and it may now point past
+			// the block's end -- layout_run() would skip all of it
+			// and the next one too. One seek, near a checkpoint.
+			if (top_sub && fh >= 0) {
+				uint32_t used;
+				int subs = block_subs(top_line, &used);
+				if (subs < 1) subs = 1;
+				if (top_sub >= (uint32_t)subs) top_sub = (uint32_t)subs - 1;
+			}
 			break;
 
 		default:
@@ -3465,8 +3924,13 @@ int main(void) {
 
 	layout();
 
+	// A place to go to, from the launch argument -- see below.
+	static char arg[Z_FLIST_PATH_MAX];
+	const char *launch_anchor = NULL;
+	uint32_t launch_off = 0;
+	bool launch_have_off = false;
+
 	{
-		char arg[Z_FLIST_PATH_MAX];
 		if (z_launch_path_take(arg, sizeof(arg))) {
 
 			/* Split off a "#<decimal>" byte-offset fragment, if
@@ -3519,32 +3983,37 @@ int main(void) {
 			}
 
 			bool opened = open_path(arg);
-			if (opened && heading) goto_anchor(heading);
+
+			/* Both are finds, started after the first paint below:
+			 * the window shows the top of the document at once and
+			 * answers throughout, and Esc leaves it there.
+			 *
+			 * An offset is the scrollbar's FIND_OFF: it extends
+			 * the sparse index as far as the offset and lands on
+			 * the block containing it, with that point's parser
+			 * state restored -- which is the whole reason a jump
+			 * into a document renders correctly instead of
+			 * resuming mid-block.
+			 *
+			 * COST: the index frontier only moves FORWARD, so this
+			 * streams from the top to want_off. At a realistic
+			 * 300-600 KB/s that is about a second for a 344KB
+			 * document, which is why tools/ask splits large works
+			 * at build time rather than leaving an 8MB Bible
+			 * whole. */
+			if (opened && heading) launch_anchor = heading;
 			if (opened && have_off) {
-
-				/* line_at_offset() extends the sparse index as
-				 * far as the offset and returns the source line
-				 * containing it, with that point's parser state
-				 * already restored -- which is the whole reason
-				 * a jump into a document renders correctly
-				 * instead of resuming mid-block. The scrollbar
-				 * drag already uses it.
-				 *
-				 * COST: the index frontier only moves FORWARD,
-				 * so this streams from wherever it is to
-				 * want_off. At a realistic 300-600 KB/s that is
-				 * about a second for a 344KB document, which is
-				 * why tools/ask splits large works at build time
-				 * rather than leaving an 8MB Bible whole. */
-				top_line = line_at_offset(want_off);
-				top_sub = 0;
-
+				launch_off = want_off;
+				launch_have_off = true;
 			}
 
 		}
 	}
 
 	repaint();
+
+	if (launch_anchor) find_anchor(launch_anchor, false, false);
+	else if (launch_have_off) find_start(FIND_OFF, launch_off, 0);
 
 	for (;;) {
 
@@ -3632,26 +4101,34 @@ int main(void) {
 		// A reader whose progress reports stopped coming gives up.
 		z_sayall_poll(&reader);
 
+		uint32_t now = z_uptime_ticks();
+
+		if (body_dirty && (int32_t)(now - body_deadline) >= 0) {
+			repaint_body();
+			sd_report_drag();
+			continue;
+		}
+
+		// A find: ~20 ms of it, then back to the messages, without
+		// waiting -- docs/responsive.md, "The shape of a main loop".
+		if (find.kind) {
+			find_step(Z_TICK_HZ / 50);
+			continue;
+		}
+
 		// Block until something arrives -- but no longer than the
 		// deferred body redraw's deadline, or a drag that ends by the
-		// pointer simply stopping would never repaint.
-		if (body_dirty) {
+		// pointer simply stopping would never repaint; and, while
+		// reading aloud, no longer than a second, or z_sayall_poll()'s
+		// give-up would only ever run when some other message came.
+		uint32_t wait = 0;
 
-			uint32_t now = z_uptime_ticks();
+		if (body_dirty) wait = body_deadline - now;
+		if (z_sayall_active(&reader) && (!wait || wait > Z_TICK_HZ)) wait = Z_TICK_HZ;
 
-			if ((int32_t)(now - body_deadline) >= 0) {
-				repaint_body();
-				sd_report_drag();
-				continue;
-			}
+		note_io();
 
-			z_proc_wait(body_deadline - now);
-
-		} else {
-
-			z_proc_wait(0);
-
-		}
+		z_proc_wait(wait);
 
 	}
 

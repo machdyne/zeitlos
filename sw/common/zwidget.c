@@ -849,6 +849,17 @@ bool z_scrollbar_set_value(z_scrollbar_t *sb, int32_t v) {
 // no arrows, no per-pixel work at all -- which also makes this cheap
 // enough to call on every scroll step without thinking about it.
 
+// Fills the inclusive rect clamped to `c`; nothing if it is empty.
+static void sb_fill(const z_clip_t *c, int x0, int y0, int x1, int y1,
+	int color) {
+	if (x0 < c->x0) x0 = c->x0;
+	if (y0 < c->y0) y0 = c->y0;
+	if (x1 > c->x1) x1 = c->x1;
+	if (y1 > c->y1) y1 = c->y1;
+	if (x1 < x0 || y1 < y0) return;
+	z_fb_hw_fill_rect(x0, y0, x1 - x0 + 1, y1 - y0 + 1, color);
+}
+
 void z_scrollbar_draw(z_scrollbar_t *sb, bool force) {
 
 	if (!force && !sb->dirty) return;
@@ -871,19 +882,13 @@ void z_scrollbar_draw(z_scrollbar_t *sb, bool force) {
 	if (x1 < clip.x0 || x0 > clip.x1 || y1 < clip.y0 || y0 > clip.y1)
 		return;
 
-	int fx0 = x0 < clip.x0 ? clip.x0 : x0;
-	int fy0 = y0 < clip.y0 ? clip.y0 : y0;
-	int fx1 = x1 > clip.x1 ? clip.x1 : x1;
-	int fy1 = y1 > clip.y1 ? clip.y1 : y1;
-
-	if (fx1 < fx0 || fy1 < fy0) return;
-
-	z_fb_hw_fill_rect(fx0, fy0, fx1 - fx0 + 1, fy1 - fy0 + 1, 0);
-
 	int off, size;
 	sb_thumb(sb, &off, &size);
 
-	if (size <= 0) return;		// nothing to scroll -- bar stays blank
+	if (size <= 0) {		// nothing to scroll -- bar stays blank
+		sb_fill(&clip, x0, y0, x1, y1, 0);
+		return;
+	}
 
 	int tx0, ty0, tx1, ty1;
 
@@ -899,15 +904,17 @@ void z_scrollbar_draw(z_scrollbar_t *sb, bool force) {
 		ty1 = y1 - SB_THUMB_INSET;
 	}
 
-	// clamp to the content area for the same reason as above --
-	// z_fb_hw_fill_rect() has no clip parameter.
-	if (tx0 < clip.x0) tx0 = clip.x0;
-	if (ty0 < clip.y0) ty0 = clip.y0;
-	if (tx1 > clip.x1) tx1 = clip.x1;
-	if (ty1 > clip.y1) ty1 = clip.y1;
-	if (tx1 < tx0 || ty1 < ty0) return;
-
-	z_fb_hw_fill_rect(tx0, ty0, tx1 - tx0 + 1, ty1 - ty0 + 1, 1);
+	// The trough around the thumb, then the thumb: every pixel written
+	// once. This used to blank the whole bar and then paint the thumb,
+	// and with no back buffer the thumb blinked on every draw -- once
+	// per hit while files' find streamed results into a list.
+	// sb_fill() clamps each to the content area: z_fb_hw_fill_rect()
+	// has no clip parameter.
+	sb_fill(&clip, x0, y0, x1, ty0 - 1, 0);			// before (vertical: above)
+	sb_fill(&clip, x0, ty1 + 1, x1, y1, 0);			// after
+	sb_fill(&clip, x0, ty0, tx0 - 1, ty1, 0);		// beside
+	sb_fill(&clip, tx1 + 1, ty0, x1, ty1, 0);
+	sb_fill(&clip, tx0, ty0, tx1, ty1, 1);
 
 }
 
@@ -1065,6 +1072,7 @@ void z_listbox_set_geom(z_listbox_t *lb, int x, int y, int w, int h) {
 	z_scrollbar_set_range(&lb->sb, lb->count, lb_rows(lb));
 	lb_scroll_to(lb, lb->sel);
 	lb->dirty = true;
+	lb->drawn = false;			// moved or resized: paint it whole
 
 }
 
@@ -1080,6 +1088,7 @@ void z_listbox_set_items(z_listbox_t *lb, int count, z_list_label_fn label,
 	z_scrollbar_set_range(&lb->sb, lb->count, lb_rows(lb));
 	lb_scroll_to(lb, lb->sel);
 	lb->dirty = true;
+	lb->rows_dirty = true;		// any row may say something else now
 
 }
 
@@ -1147,8 +1156,115 @@ void z_listbox_set_focus(z_listbox_t *lb, bool focused) {
 
 void z_listbox_invalidate(z_listbox_t *lb) {
 	lb->dirty = true;
+	lb->drawn = false;
 	lb->ring_drawn = false;
 	lb->sb.dirty = true;
+}
+
+// The list's frame and row clip, absolute. False if it is entirely
+// outside the content area.
+static bool lb_rects(const z_listbox_t *lb, int *x0, int *y0, int *x1,
+	int *y1, z_clip_t *clip) {
+
+	z_clip_t content;
+	z_win_content_rect(lb->win, &content);
+
+	*x0 = content.x0 + lb->x;
+	*y0 = content.y0 + lb->y;
+	*x1 = *x0 + lb->w - 1;
+	*y1 = *y0 + lb->h - 1;
+
+	if (*x1 < content.x0 || *x0 > content.x1 ||
+		*y1 < content.y0 || *y0 > content.y1) return false;
+
+	// Rows clip to the list area MINUS the scrollbar: a long label
+	// running under the thumb reads as a rendering bug.
+	clip->x0 = *x0 + 1;
+	clip->y0 = *y0 + 1;
+	clip->x1 = *x1 - Z_SB_THICK - 1;
+	clip->y1 = *y1 - 1;
+
+	if (clip->x0 < content.x0) clip->x0 = content.x0;
+	if (clip->y0 < content.y0) clip->y0 = content.y0;
+	if (clip->x1 > content.x1) clip->x1 = content.x1;
+	if (clip->y1 > content.y1) clip->y1 = content.y1;
+
+	return true;
+
+}
+
+// Fills the inclusive rect, clamped to `c`.
+static void lb_fill(const z_clip_t *c, int x0, int y0, int x1, int y1,
+	int color) {
+	sb_fill(c, x0, y0, x1, y1, color);
+}
+
+// Paints visible row `r` (0 = the top one shown) whole, in place: the
+// label as two-colour cells, and the background around it -- the 1px
+// above and below, the 2px before, the rest of the row after -- so
+// each pixel is written once and nothing is blanked first. A row past
+// the end of the list is painted as background.
+static void lb_paint_row(const z_listbox_t *lb, int y0, const z_clip_t *clip,
+	int r, bool untint) {
+
+	if (clip->x1 < clip->x0) return;
+
+	int row = lb->top + r;
+	int ry = y0 + 1 + r * LB_ROW_H;
+	int ry1 = ry + LB_ROW_H - 1;
+	if (ry > clip->y1) return;
+	if (ry1 > clip->y1) ry1 = clip->y1;
+
+	bool real = row >= 0 && row < lb->count && lb->label;
+	bool selected = real && row == lb->sel;
+	int bg = selected ? 1 : 0;
+	const char *text = real ? lb->label(lb->user, row) : NULL;
+	if (!text) text = "";
+
+	int tx = clip->x0 + 2;
+	int tend = tx + (int)strlen(text) * z_font_5x8.w;		// one past
+	if (tend > clip->x1 + 1) tend = clip->x1 + 1;
+
+	lb_fill(clip, clip->x0, ry, clip->x1, ry, bg);						// above
+	lb_fill(clip, clip->x0, ry + 1 + z_font_5x8.h, clip->x1, ry1, bg);	// below
+	lb_fill(clip, clip->x0, ry + 1, tx - 1, ry + z_font_5x8.h, bg);		// before
+	lb_fill(clip, tend, ry + 1, clip->x1, ry + z_font_5x8.h, bg);		// after
+
+	if (text[0])
+		z_fb_draw_text2(tx, ry + 1, text, selected ? 0 : 1, bg,
+			&z_font_5x8, clip);
+
+	// Desktop colour: the selected row tinted, any other row untinted
+	// -- a row that just lost the selection is one of those. A whole
+	// draw has untinted the list already (`untint` false).
+	if ((selected || untint) && z_win_accent_ok())
+		z_win_accent_rect(lb->win, clip->x0, ry, clip->x1, ry1, selected);
+
+}
+
+void z_listbox_append(z_listbox_t *lb, int count) {
+
+	if (count < lb->count) {		// not growth: treat as new items
+		z_listbox_set_items(lb, count, lb->label, lb->user);
+		return;
+	}
+	if (count == lb->count) return;
+
+	// The thumb is redrawn only if it would land on other pixels: a
+	// list growing by one row at a time mostly does not move it.
+	int off0, size0, off1, size1;
+	bool sbd = lb->sb.dirty;
+	sb_thumb(&lb->sb, &off0, &size0);
+
+	lb->count = count;
+	z_scrollbar_set_range(&lb->sb, lb->count, lb_rows(lb));
+	lb_scroll_to(lb, lb->sel);
+
+	sb_thumb(&lb->sb, &off1, &size1);
+	if (off0 == off1 && size0 == size1) lb->sb.dirty = sbd;
+
+	lb->dirty = true;
+
 }
 
 void z_listbox_draw(z_listbox_t *lb, bool force) {
@@ -1160,75 +1276,91 @@ void z_listbox_draw(z_listbox_t *lb, bool force) {
 
 	lb->dirty = false;
 
-	z_clip_t content;
-	z_win_content_rect(lb->win, &content);
-
-	int x0 = content.x0 + lb->x;
-	int y0 = content.y0 + lb->y;
-	int x1 = x0 + lb->w - 1;
-	int y1 = y0 + lb->h - 1;
-
-	if (x1 < content.x0 || x0 > content.x1 ||
-		y1 < content.y0 || y0 > content.y1) return;
-
-	// Rows clip to the list area MINUS the scrollbar: a long label
-	// running under the thumb reads as a rendering bug.
+	int x0, y0, x1, y1;
 	z_clip_t clip;
-	clip.x0 = x0 + 1;
-	clip.y0 = y0 + 1;
-	clip.x1 = x1 - Z_SB_THICK - 1;
-	clip.y1 = y1 - 1;
 
-	if (clip.x0 < content.x0) clip.x0 = content.x0;
-	if (clip.y0 < content.y0) clip.y0 = content.y0;
-	if (clip.x1 > content.x1) clip.x1 = content.x1;
-	if (clip.y1 > content.y1) clip.y1 = content.y1;
-
-	if (clip.x1 >= clip.x0 && clip.y1 >= clip.y0)
-		z_fb_hw_fill_rect(clip.x0, clip.y0,
-			clip.x1 - clip.x0 + 1, clip.y1 - clip.y0 + 1, 0);
-
-	// Desktop colour: the rows untinted, then the selected one tinted
-	// as it is drawn (below).
-	if (clip.x1 >= clip.x0 && clip.y1 >= clip.y0 && z_win_accent_ok())
-		z_win_accent_rect(lb->win, clip.x0, clip.y0, clip.x1, clip.y1, false);
-
-	z_win_hw_box(lb->win, x0, y0, x1, y1, 1);
-
-	// The focus ring: drawn in ink when focused, in background once
-	// when focus has left -- same reasoning as a widget's ring (see
-	// z_widget_draw()), and why a list needs 2px of space around it.
-	if (lb->focused || lb->ring_drawn) {
-		z_win_hw_box(lb->win, x0 - 1, y0 - 1, x1 + 1, y1 + 1, lb->focused ? 1 : 0);
-		lb->ring_drawn = lb->focused;
+	if (!lb_rects(lb, &x0, &y0, &x1, &y1, &clip)) {
+		lb->drawn = false;
+		return;
 	}
 
 	int rows = lb_rows(lb);
 
-	for (int r = 0; r < rows && lb->label; r++) {
+	// -- in place: only what changed, nothing blanked --
+	//
+	// Every draw used to blank the whole list and paint it again, and
+	// with no back buffer that is a visible flash: once per arrow key,
+	// and once per result while files' find streamed them in, dozens of
+	// times a second. Now a draw that is not forced paints only rows
+	// whose pixels change, each one whole, over what is there.
+	if (!force && lb->drawn) {
 
-		int row = lb->top + r;
-		if (row >= lb->count) break;
+		if (lb->focused != lb->ring_drawn) {
+			z_win_hw_box(lb->win, x0 - 1, y0 - 1, x1 + 1, y1 + 1, lb->focused ? 1 : 0);
+			lb->ring_drawn = lb->focused;
+		}
 
-		int ry = y0 + 1 + r * LB_ROW_H;
-		bool selected = (row == lb->sel);
+		if (lb->rows_dirty || lb->top != lb->drawn_top) {
+			for (int r = 0; r < rows; r++) {
+				// A row empty now and empty before is already background.
+				if (lb->top + r >= lb->count && lb->drawn_top + r >= lb->drawn_count)
+					continue;
+				lb_paint_row(lb, y0, &clip, r, true);
+			}
+		} else {
+			int s0 = lb->drawn_sel - lb->top, s1 = lb->sel - lb->top;
+			if (lb->sel != lb->drawn_sel) {
+				if (s0 >= 0 && s0 < rows) lb_paint_row(lb, y0, &clip, s0, true);
+				if (s1 >= 0 && s1 < rows) lb_paint_row(lb, y0, &clip, s1, true);
+			}
+			// Rows added at the end (z_listbox_append()), or taken away.
+			int a = lb->drawn_count < lb->count ? lb->drawn_count : lb->count;
+			int b = lb->drawn_count < lb->count ? lb->count : lb->drawn_count;
+			for (int row = a; row < b; row++) {
+				int r = row - lb->top;
+				if (r < 0) continue;
+				if (r >= rows) break;
+				lb_paint_row(lb, y0, &clip, r, true);
+			}
+		}
 
-		if (selected && clip.x1 >= clip.x0)
-			z_fb_hw_fill_rect(clip.x0, ry, clip.x1 - clip.x0 + 1,
-				ry + LB_ROW_H - 1 <= clip.y1 ? LB_ROW_H : (clip.y1 - ry + 1), 1);
+		z_scrollbar_draw(&lb->sb, false);
 
-		if (selected && clip.x1 >= clip.x0 && z_win_accent_ok())
-			z_win_accent_rect(lb->win, clip.x0, ry, clip.x1,
-				ry + LB_ROW_H - 1 <= clip.y1 ? ry + LB_ROW_H - 1 : clip.y1, true);
+	} else {
 
-		const char *text = lb->label(lb->user, row);
-		if (text)
-			z_fb_draw_text2(clip.x0 + 2, ry + 1, text,
-				selected ? 0 : 1, selected ? 1 : 0, &z_font_5x8, &clip);
+		// -- whole: after the window was cleared, or the first time --
+
+		if (clip.x1 >= clip.x0 && clip.y1 >= clip.y0)
+			z_fb_hw_fill_rect(clip.x0, clip.y0,
+				clip.x1 - clip.x0 + 1, clip.y1 - clip.y0 + 1, 0);
+
+		// Desktop colour: the rows untinted, then the selected one
+		// tinted as it is drawn (lb_paint_row()).
+		if (clip.x1 >= clip.x0 && clip.y1 >= clip.y0 && z_win_accent_ok())
+			z_win_accent_rect(lb->win, clip.x0, clip.y0, clip.x1, clip.y1, false);
+
+		z_win_hw_box(lb->win, x0, y0, x1, y1, 1);
+
+		// The focus ring: drawn in ink when focused, in background once
+		// when focus has left -- same reasoning as a widget's ring (see
+		// z_widget_draw()), and why a list needs 2px of space around it.
+		if (lb->focused || lb->ring_drawn) {
+			z_win_hw_box(lb->win, x0 - 1, y0 - 1, x1 + 1, y1 + 1, lb->focused ? 1 : 0);
+			lb->ring_drawn = lb->focused;
+		}
+
+		for (int r = 0; r < rows && lb->top + r < lb->count; r++)
+			lb_paint_row(lb, y0, &clip, r, false);
+
+		z_scrollbar_draw(&lb->sb, true);
 
 	}
 
-	z_scrollbar_draw(&lb->sb, true);
+	lb->drawn = true;
+	lb->rows_dirty = false;
+	lb->drawn_top = lb->top;
+	lb->drawn_sel = lb->sel;
+	lb->drawn_count = lb->count;
 
 }
 

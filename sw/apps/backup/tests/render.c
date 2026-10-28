@@ -50,7 +50,8 @@ bkjob_t *bkjob_current(void) { return &fake; }
 const char *bkjob_last_line(void) { return fake.nlines ? fake.lines[(fake.nlines - 1) % BKJOB_LINES] : ""; }
 
 static bool usb_there = true;
-int32_t zfs_stat(const char *p, z_fs_info_t *i) { (void)p; memset(i, 0, sizeof *i); i->type = Z_FS_TYPE_DIR; return usb_there ? 0 : -Z_ENOENT; }
+static int32_t usb_errno;          // with no drive: what fs says (0: -Z_ENOENT)
+int32_t zfs_stat(const char *p, z_fs_info_t *i) { (void)p; memset(i, 0, sizeof *i); i->type = Z_FS_TYPE_DIR; return usb_there ? 0 : usb_errno ? usb_errno : -Z_ENOENT; }
 int32_t zfs_umount(const char *p) { (void)p; usb_there = false; return 0; }
 int32_t zfs_open(const char *p, uint32_t f) { (void)p; (void)f; return -Z_ENOENT; }
 int32_t zfs_read(int32_t fd, void *b, uint32_t n) { (void)fd; (void)b; (void)n; return -Z_EBADF; }
@@ -114,7 +115,7 @@ static void shot(const char *name) {
 	z_render_clear();
 	z_widget_invalidate(cur_set());
 	z_win_clear(&win);
-	repaint();
+	repaint_all();          // as after wm's redraw: the lines drawn afresh
 	z_render_write(p, &win, 2);
 }
 
@@ -324,6 +325,55 @@ int main(int argc, char **argv) {
 	usb_there = true; poll_drive(true);
 	bkw_stop(&watch);
 	T(watches_made == 0, "fs's watches let go");
+
+	// 19.-21. looking at the drive: a deadline, F5 keeping what is known,
+	// a drive fs found but cannot read; and plugging in is believed on
+	// the second look only.
+	usb_there = false; poll_drive(true);
+	T(!drive_there, "no drive");
+	usb_there = true; usb_errno = 0;
+	last_poll -= Z_TICK_HZ; poll_drive(false);
+	T(!drive_there, "plugged in: one look is not enough");
+	last_poll -= Z_TICK_HZ; nstarted = 0; poll_drive(false);
+	T(drive_there && started_kind(BKJOB_SUMMARY), "the second agrees: the drive is read");
+	fake_running = true; fake.kind = BKJOB_SUMMARY; fake_cancel = false;
+	sum_started = z_uptime_ticks() - SUM_DEADLINE;
+	sum_deadline();
+	T(fake_cancel && sum_late, "past the deadline: stopped");
+	shot("19-cannot-read");
+	T(!strcmp(title_now, "Backup: Cannot read the drive"), "title: %s", title_now);
+	T(strstr(shown[LN_L1], "F5") != NULL, "says F5: %s", shown[LN_L1]);
+	fake_running = false; fake.rc = BK_FAILED; job_done();
+	T(sum_late && !have_sum, "the late job ending changes nothing");
+	// F5: a fresh look; it succeeds
+	nstarted = 0; key(Z_KEY_F5);
+	T(started_kind(BKJOB_SUMMARY) && !sum_late, "F5: a fresh look");
+	fake.rc = BK_DONE; fake.sum = sum; snprintf(fake.sum.newest, sizeof fake.sum.newest, "2026-10-21_11-30-48");
+	job_done();
+	T(have_sum, "read");
+	// F5 again: what is known stays on screen meanwhile
+	key(Z_KEY_F5);
+	shot("20-f5-keeps");
+	T(have_sum && !strncmp(title_now, "Backup: today", 13), "F5 keeps the summary: %s", title_now);
+	fake.rc = BK_FAILED; job_done();
+	T(have_sum, "a failed second look keeps the first");
+	// not FAT: fs says ENODEV
+	usb_there = false; usb_errno = -Z_ENODEV;
+	poll_drive(true);
+	shot("21-not-readable");
+	T(!strcmp(title_now, "Backup: Drive found but not readable"), "title: %s", title_now);
+	usb_errno = -Z_EBUSY; poll_drive(true);
+	T(!strcmp(title_now, "Backup: Starting the drive..."), "title: %s", title_now);
+	usb_errno = 0; usb_there = true; poll_drive(true);
+
+	// While a look at the drive runs, nothing is redrawn: the lines
+	// are drawn only when they read differently.
+	fake_running = true; fake.kind = BKJOB_SUMMARY;
+	repaint_all();
+	draws = 0;
+	for (int i = 0; i < 8; i++) repaint();
+	T(draws == 0, "repaint with nothing changed draws nothing (%d)", draws);
+	fake_running = false;
 
 	// F1
 	dialogs = 0;

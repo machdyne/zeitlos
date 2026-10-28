@@ -287,8 +287,10 @@ int32_t zusb_msc_start(void) {
 	usb_ready = true;
 	return 0;
 }
+static int usb_fail_reads;		// the next n reads fail (test_usb())
 int32_t zusb_msc_read(uint32_t lba, uint32_t count, void *buf) {
 	if (!usb_present || !usb_ready || lba + count > USB_SECTORS) return -Z_EIO;
+	if (usb_fail_reads > 0) { usb_fail_reads--; return -Z_EIO; }
 	usb_reads++;
 	memcpy(buf, usbd + lba * 512, count * 512);
 	return 0;
@@ -939,7 +941,7 @@ static void test_usb(void) {
 	// Not ready yet: `usb` brings it up itself and says so. fs waits
 	// rather than asking for the whole wait (MSC_START).
 	fs_test_usb_poll();
-	CHECK(usb_starts == 0 && zfs_stat("/usb", &fi) == -Z_ENOENT);
+	CHECK(usb_starts == 0 && zfs_stat("/usb", &fi) == -Z_EBUSY);	// being brought up: wait
 	usb_ready = true;				// usb: it is ready (Z_USB_EVENT)
 	fs_test_usb_poll();
 	CHECK(usb_starts == 1);
@@ -962,6 +964,52 @@ static void test_usb(void) {
 	usb_present = true; usb_gen++;
 	CHECK(zfs_mount("/usb") == 0);
 	CHECK(usb_starts == 2 && zfs_stat("/usb/hello.txt", &fi) == 0 && fi.size == 8);
+	usb_present = false; usb_ready = false; usb_gen++;
+	fs_test_usb_poll();
+
+	// Plugged in, still being brought up: a stat of /usb says "wait"
+	// (-Z_EBUSY), not "plug one in"; after 45 s of that, "cannot be
+	// used" (-Z_ENODEV).
+	usb_present = true; usb_ready = false; usb_gen++;
+	fs_test_usb_poll();
+	CHECK(zfs_stat("/usb", &fi) == -Z_EBUSY);
+	ticks += 46 * 732;
+	CHECK(zfs_stat("/usb", &fi) == -Z_ENODEV);
+	usb_present = false; usb_gen++;
+	fs_test_usb_poll();
+	CHECK(zfs_stat("/usb", &fi) == -Z_ENOENT);
+
+	// Ready, but not FAT (exFAT, say): the mount fails, is tried once
+	// more 5 s later, then left; /usb says "cannot be used".
+	memset(usbd, 0, 2 * 512);			// no boot sector
+	uint32_t starts = usb_starts;
+	usb_present = true; usb_ready = true; usb_gen++;
+	fs_test_usb_poll();
+	CHECK(usb_starts == starts + 1 && zfs_stat("/usb", &fi) == -Z_EBUSY);
+	fs_test_usb_poll();				// not yet
+	CHECK(usb_starts == starts + 1);
+	ticks += 5 * 732;
+	fs_test_usb_poll();
+	CHECK(usb_starts == starts + 2);
+	CHECK(zfs_stat("/usb", &fi) == -Z_ENODEV);
+	ticks += 60 * 732;
+	fs_test_usb_poll();
+	CHECK(usb_starts == starts + 2);		// left alone
+	// Formatted on a PC meanwhile, say, and `usbmount`: mounted.
+	CHECK(f_mkfs("2:", &opt, wk, sizeof wk) == FR_OK);
+	CHECK(zfs_mount("/usb") == 0 && zfs_stat("/usb", &fi) == 0);
+	usb_present = false; usb_ready = false; usb_gen++;
+	fs_test_usb_poll();
+
+	// A first sector that fails to read once (a stick still settling):
+	// mounted on the try 5 s later.
+	usb_present = true; usb_ready = true; usb_gen++;
+	usb_fail_reads = 1;
+	fs_test_usb_poll();
+	CHECK(zfs_stat("/usb", &fi) == -Z_EBUSY);
+	ticks += 5 * 732;
+	fs_test_usb_poll();
+	CHECK(zfs_stat("/usb", &fi) == 0);
 	usb_present = false; usb_ready = false; usb_gen++;
 	fs_test_usb_poll();
 	free(usbd);

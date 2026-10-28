@@ -262,6 +262,13 @@ Act on `Z_LIST_ACTIVATED`.
 `sw/apps/settings` puts one between two buttons in its Tab order. A
 focused list draws a ring one pixel outside its frame, so leave 2px.
 
+**Results that stream in** -- a find -- grow the list with
+`z_listbox_append(&list, new_count)` rather than
+`z_listbox_set_items()`: the rows already there are kept as they are,
+the next draw paints only the new rows in view, and the scrollbar only
+if its thumb moves. Append, then draw a few times a second -- not once
+per row (`sw/apps/files`, `res_show()`).
+
 **It behaves like the file list on purpose.** Row height, selection bar,
 double-click interval, scrollbar inset and keys all match `z_flist_t`,
 so every list in the system feels the same. The file list could be
@@ -311,6 +318,40 @@ directory with more entries than that comes back truncated, and
 `z_flist_truncated()` says so — worth surfacing somewhere in any UI
 built on this, since the alternative is a file that is definitely on the
 card and simply never appears.
+
+`z_flist_find_key(&fl, keysym)` is type-to-find for the file list --
+the list box's rules (a letter, the same letter again, a prefix). It is
+a separate call rather than part of `z_flist_key()` so a dialog whose
+letters belong to a name field does not get it by surprise;
+`sw/apps/files` calls it for keys `z_flist_key()` did not use.
+
+### Drawing in place
+
+There is no back buffer, so blanking a list and drawing it again shows
+as a flash. `z_listbox_draw()` and `z_flist_draw()` therefore have two
+modes:
+
+- **Forced** (`force` true), or the first draw after `_invalidate()`
+  or `_set_geom()`: blank the list and draw it whole. For a
+  `Z_WM_REDRAW`, when the window was cleared anyway.
+- **Not forced**: paint only what changed, each row whole and over
+  what is there -- its text as two-colour cells
+  (`z_fb_draw_text2()`), the background in the gaps around it.
+  Moving the selection within the view paints the two rows involved;
+  scrolling, new items or another folder paints every row in view,
+  one at a time; `z_listbox_append()` paints the new rows. Rows that
+  were empty and still are are left alone.
+
+Each list remembers what it last put on the screen (`drawn`,
+`drawn_top`, `drawn_sel`, ...) to know which. So call the forced form
+only after the window was cleared: forcing a draw "to be safe" is
+exactly the flash this avoids. Before this, every draw blanked the
+whole list, and arrow keys, opening a folder, and above all files' find
+(a draw per hit) flashed.
+
+`z_scrollbar_draw()` paints the trough around the thumb and then the
+thumb, each pixel once; it used to blank the bar and then paint the
+thumb, which blinked.
 
 ### Directory detection
 
