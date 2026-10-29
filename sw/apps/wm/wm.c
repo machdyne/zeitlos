@@ -7246,6 +7246,21 @@ static void handle_message(z_msg_t *msg) {
 
 			int idx = create_window(msg->from, title, w, h, fx, fy, flags);
 
+			// optional "min": (w << 16) | h, the smallest this window
+			// may be resized to when that is not its first size
+			// (z_win_min_size(), zwin.h). It replaces what
+			// Z_WIN_FLAG_MIN_IS_CREATE set -- an app sends both, so a
+			// wm that does not know this key keeps the old minimum --
+			// and the global floor still applies.
+			z_obj_t *mo = z_map_find(&msg->obj, "min");
+			if (idx >= 0 && mo && mo->type == Z_UINT32 && mo->val.uint32) {
+				uint32_t mw = mo->val.uint32 >> 16, mh = mo->val.uint32 & 0xFFFFu;
+				if (mw < Z_WM_MIN_WIDTH) mw = Z_WM_MIN_WIDTH;
+				if (mh < Z_WM_MIN_HEIGHT) mh = Z_WM_MIN_HEIGHT;
+				windows[idx].min_w = mw;
+				windows[idx].min_h = mh;
+			}
+
 			// A newly created window is left in front, dock
 			// included -- create_window() appends to the front of
 			// zorder and that is now allowed to stand. The dock

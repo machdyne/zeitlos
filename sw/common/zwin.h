@@ -142,6 +142,14 @@ z_rv z_win_create_ex(z_win_t *win, const char *title, uint32_t w, uint32_t h,
 // the one that actually sends "flags" on the wire; the other two
 // exist only for source compatibility with code written before this
 // parameter existed.
+// The smallest the NEXT window created may be resized to (outer size,
+// as z_win_create() takes), where that is not the size it is created
+// at -- text opens at 320x240 and can be made half that. Applies to one
+// window and is forgotten. wm still applies its own floor
+// (Z_WM_MIN_WIDTH/HEIGHT). A wm older than this ignores it: keep
+// Z_WIN_FLAG_MIN_IS_CREATE set too, and that wm keeps the old minimum.
+void z_win_min_size(uint32_t w, uint32_t h);
+
 z_rv z_win_create_flags(z_win_t *win, const char *title, uint32_t w, uint32_t h,
 	int32_t x, int32_t y, uint32_t flags);
 

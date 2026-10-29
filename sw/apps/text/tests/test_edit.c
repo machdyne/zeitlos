@@ -91,6 +91,8 @@ static int fake_confirm(const z_dialog_ctx_t *ctx, const char *title, const char
 #undef z_clip_get
 #undef z_dialog_confirm
 
+bool z_fb_hw_blit_mem_available(void) { return true; }
+
 // zgfx.c pieces zrender.h does not stand in for (as tests/utf8.c).
 int z_fb_scroll_debug, z_fb_scroll_dbg_armed, z_fb_scroll_align;
 void z_fb_draw_icon(int x, int y, int icon_id, int fg, int bg, const z_clip_t *clip) {

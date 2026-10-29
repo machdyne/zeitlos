@@ -270,8 +270,12 @@ bool z_fb_hw_blit_mem(const void *src, int src_stride,
 			uint32_t word = s[sy * stride_w + (sx >> 5)];
 			// LEAST significant bit leftmost, as zbm.h describes --
 			// the opposite of font and icon data.
+			// Both colours, as the hardware's COPY writes them: a zero
+			// in the source clears the pixel. Setting only the ones
+			// let a test pass that the board would fail -- a blit
+			// meant to replace a row left the old row's ink showing.
 			int bit = (int)((word >> (sx & 31)) & 1);
-			if (bit) z_fb_set_pixel(dst_x + x, dst_y + y, 1, NULL);
+			z_fb_set_pixel(dst_x + x, dst_y + y, bit, NULL);
 		}
 	}
 

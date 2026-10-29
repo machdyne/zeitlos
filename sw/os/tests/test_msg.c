@@ -37,6 +37,8 @@
  *                  from the same sender and window with the same
  *                  buttons -- never into an older one, a press or a
  *                  release, and never past a key
+ * 11. create map   zwin's 7-key Z_WM_CREATE_WINDOW map resolves whole
+ *                  (14 of 16 items); 9 pairs are refused, as Z_NONE
  * 10. reserve      input cannot take the last Z_MAILBOX_RESERVE slots;
  *                  a reply still fits there (the ask/read/backup 15 s
  *                  stalls: keys filled the mailbox, fs's reply was lost)
@@ -235,6 +237,39 @@ static void test_reserve(void) {
 	reset();
 }
 
+// 11. create map: wm's Z_WM_CREATE_WINDOW from zwin.c, at its seven
+// keys (title, w, h, x, y, flags, min), resolves whole within the
+// message's scratch -- and nine pairs, past Z_MSG_MAX_ITEMS, do not.
+// An over-budget map arrives as Z_NONE, and the window is not made.
+static void test_create_map(void) {
+	static const char *names[9] = { "title", "w", "h", "x", "y", "flags", "min", "k8", "k9" };
+	static z_obj_t keys[9], vals[9];
+	static z_obj_table_t tbl;
+	for (int n = 7; n <= 9; n += 2) {
+		for (int i = 0; i < n; i++) {
+			keys[i].type = Z_STR; keys[i].val.str = (char *)names[i];
+			vals[i].type = Z_UINT32; vals[i].val.uint32 = (uint32_t)(100 + i);
+		}
+		tbl.len = (uint32_t)n; tbl.a = keys; tbl.b = vals;
+		z_obj_t obj;
+		obj.type = Z_MAP; obj.val.ptr = &tbl;
+		z_obj_table_t tables[Z_MSG_MAX_TABLES];
+		z_obj_t items[Z_MSG_MAX_ITEMS];
+		z_blob_t blobs[Z_MSG_MAX_BLOBS];
+		uint32_t tc = 0, ic = 0, bc = 0;
+		z_rv rv = z_resolve_obj(0, &obj, tables, &tc, items, &ic, blobs, &bc);
+		if (n == 7) {
+			CHECK(rv == Z_OK && obj.type == Z_MAP, "a 7-key create map did not resolve");
+			z_obj_table_t *t = (z_obj_table_t *)obj.val.ptr;
+			CHECK(t && t->len == 7 && t->b[6].val.uint32 == 106 &&
+				!strcmp(t->a[6].val.str, "min"), "the min key did not arrive");
+			CHECK(ic == 14, "7 pairs took %u of %d items", (unsigned)ic, Z_MSG_MAX_ITEMS);
+		} else {
+			CHECK(rv != Z_OK && obj.type == Z_NONE, "a 9-key map past the budget resolved");
+		}
+	}
+}
+
 int main(void) {
 
 	setvbuf(stdout, NULL, _IONBF, 0);	// a crash in 6 must not eat the output
@@ -310,6 +345,7 @@ int main(void) {
 
 	test_coalesce();
 	test_reserve();
+	test_create_map();
 
 	printf("test_msg: %d checks, %d failed\n", checks, fails);
 	return fails != 0;

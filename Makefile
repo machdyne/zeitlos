@@ -897,6 +897,8 @@ ZAR_APPS = $(filter-out $(CORE_APPS_OMIT),$(CORE_APPS))
 # making something smaller. Every core app must have one.
 # wm 108K/138K -> 114K/147K (desktop colour and its themes) and text 156K -> 157K RAM for desktop colour
 # (docs/color.md), usb 54K -> 52K RAM towards it.
+# October 2026, text 64K/165K -> 70K/180K: big print, misc-fixed 10x20
+# compiled in (8.7K) and drawn a line at a time from memory (zbigline.c).
 # October 2026, the rule: CORE_RAM_WITH (term repl) in place of "the two
 # largest of the rest"; term 152K -> 140K RAM (it is 137,504) and repl
 # 304K -> 307K (313,296 with xPack GCC 15.2 -- over 304K, which failed
@@ -910,7 +912,7 @@ ZAR_APPS = $(filter-out $(CORE_APPS_OMIT),$(CORE_APPS))
 # one of the two largest of the rest, text is: its +2K adds to the RAM
 # rule, which was already over CORE_RAM_MAX before this change.
 CORE_BUDGETS = fs=36K/77056 usb=35K/53504 wm=114K/147K net=148K/284K term=62K/140K \
-	console=10K/12544 cron=18K/48K text=64K/165K files=60K/125K repl=140K/307K
+	console=10K/12544 cron=18K/48K text=70K/180K files=60K/125K repl=140K/307K
 CORE_RESERVE = 60K
 # Core apps stored as they are, not compressed: their budget is then
 # their .bin. wm and net, the two largest started at boot: unpacked they

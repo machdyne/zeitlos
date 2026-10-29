@@ -69,8 +69,14 @@ static uint32_t resolve_wm_pid(void) {
 // freed, and an app that creates windows repeatedly therefore leaks
 // until it dies.
 //
-// CREATE_WINDOW carries at most six keys (title, w, h, x, y, flags).
-#define Z_WIN_CREATE_KEYS   6
+// CREATE_WINDOW carries at most seven keys (title, w, h, x, y, flags,
+// min). Seven pairs are 14 of the 16 objects a message resolves into
+// (Z_MSG_MAX_ITEMS, zmsg.h); one more pair would be all 16, and a map
+// over the budget arrives as nothing at all -- the window not created.
+#define Z_WIN_CREATE_KEYS   7
+
+// z_win_min_size(): the next window's minimum, 0 for none.
+static uint32_t create_min;
 
 static z_obj_t create_keys[Z_WIN_CREATE_KEYS];
 static z_obj_t create_vals[Z_WIN_CREATE_KEYS];
@@ -228,6 +234,16 @@ z_rv z_win_create_cb(z_win_t *win, const char *title, uint32_t w, uint32_t h,
 		n++;
 	}
 
+	// z_win_min_size(): one key, (w << 16) | h, for this window only.
+	if (create_min) {
+		create_keys[n].type = Z_STR;
+		create_keys[n].val.str = (char *)"min";
+		create_vals[n].type = Z_UINT32;
+		create_vals[n].val.uint32 = create_min;
+		n++;
+		create_min = 0;
+	}
+
 	create_tbl.len = (uint32_t)n;
 	create_tbl.a = create_keys;
 	create_tbl.b = create_vals;
@@ -305,6 +321,10 @@ z_rv z_win_create_cb(z_win_t *win, const char *title, uint32_t w, uint32_t h,
 	zwin_live = win;
 	return Z_OK;
 
+}
+
+void z_win_min_size(uint32_t w, uint32_t h) {
+	create_min = ((w & 0xFFFFu) << 16) | (h & 0xFFFFu);
 }
 
 bool z_win_parse_rect(z_win_t *win, z_obj_t *obj) {

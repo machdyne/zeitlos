@@ -770,6 +770,18 @@ column and pattern palette are exactly that. The app knows that size
 floor still applies on top, so a window created at 20x20 is not
 resizable down to 20x20.
 
+A minimum that is not the size a window opens at is
+`z_win_min_size(w, h)` (`zwin.h`), called just before the create: it
+adds one optional key to `Z_WM_CREATE_WINDOW`, `min` = `(w << 16) | h`,
+outer size, which replaces what `Z_WIN_FLAG_MIN_IS_CREATE` set (the
+global floor still applies). `text` opens at 320x240 and can be made
+half that. An app sends the flag too, so a `wm` that does not know the
+key keeps the old minimum. The key is a string `wm` looks up by name, so
+nothing in `zwm.h` changed and the ABI is the same. With it the create
+map is seven pairs, 14 of the 16 objects a message resolves into
+(`Z_MSG_MAX_ITEMS`); `sw/os/tests/test_msg.c` checks that it arrives
+whole, and that a map past the budget does not.
+
 ## Keyboard-only operation
 
 Keyboard-only use is a first-class case, not an afterthought -- Zeitlos

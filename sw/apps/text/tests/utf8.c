@@ -128,6 +128,11 @@ static int reads_until_mail = -1;	// FS reads before mq is let in; -1: at once
 static long chunk_reads;			// fs_read_chunk() calls, all told
 
 static int card_left = -1;		// bytes the card can still take; -1: no limit
+
+// The blitter's memory-copy mode (zgfx.h): what big print needs. On by
+// default, as on every current bitstream; section 23 turns it off.
+static bool blit_mem_ok = true;
+bool z_fb_hw_blit_mem_available(void) { return blit_mem_ok; }
 static int rename_fail_at;		// the Nth rename from now fails (0: none)
 
 static uint32_t *k_syscall(uint32_t id, uint32_t *args, uint32_t b) {
@@ -1333,6 +1338,170 @@ int main(int argc, char **argv) {
 		fresh();
 	}
 
+	printf("23. big print: the third size, a line at a time from memory\n");
+	{
+		// The reference: m10x20.zfn read here, independently of
+		// tools/gen_bigfont.py and zbigline.c -- its rows MSB-first, as
+		// the file has them.
+		static uint8_t zf[16384];
+		FILE *ff = fopen("sw/data/font/zfn/m10x20.zfn", "rb");
+		if (!ff) ff = fopen("../../data/font/zfn/m10x20.zfn", "rb");
+		size_t zn = ff ? fread(zf, 1, sizeof(zf), ff) : 0;
+		if (ff) fclose(ff);
+		expect(zn > 12 && !memcmp(zf, "ZFN1", 4), "the reference font is readable");
+		int rw = zf[4], rh = zf[5], rs = zf[6];
+		uint32_t rcount = (uint32_t)zf[8] | (uint32_t)zf[9] << 8 | (uint32_t)zf[10] << 16 | (uint32_t)zf[11] << 24;
+		const uint8_t *rcps = zf + 12;
+		uint32_t roff = 12 + 2 * rcount;
+		roff += (4 - roff % 4) % 4;
+
+		// the cycle: 5x8, 6x12, big, 5x8
+		fresh();
+		cur_font = &z_font_5x8; big_font = NULL;
+		do_font();
+		expect(cur_font == &z_font_6x12 && !big_font, "Aa: 5x8 -> 6x12");
+		do_font();
+		expect(big_font == &z_bigfont_10x20, "Aa again: 6x12 -> big print");
+		expect(CHAR_W == 10 && LINE_H == 21, "big print's cell is 10x20, a line 21");
+		expect(cols == (text_w - TEXT_X0) / 10, "and the columns follow from it");
+
+		// a line on a screen full of ink: every pixel of the row is
+		// rewritten, so none of the old ink survives between letters
+		type("Gr\xC3\xBC\xC3\x9F" "e 15 \xE2\x82\xAC, ok");	// "Grüße 15 €, ok"
+		z_clip_t c;
+		z_win_content_rect(&win, &c);
+		for (int y = c.y0; y < c.y0 + LINE_H; y++)
+			for (int x = c.x0; x < c.x0 + text_w; x++)
+				z_fb_set_pixel(x, y, 1, NULL);
+		draw_row(0);
+		const char *line = "Gr\xC3\xBC\xC3\x9F" "e 15 \xE2\x82\xAC, ok";
+		int bad = 0, ch_i = 0;
+		const char *lp = line, *le = line + strlen(line);
+		while (lp < le) {
+			uint32_t cp = z_utf8_next(&lp, le);
+			int gi = -1;
+			for (uint32_t k = 0; k < rcount; k++)
+				if ((uint32_t)(rcps[2 * k] | rcps[2 * k + 1] << 8) == cp) { gi = (int)k; break; }
+			for (int y = 0; y < rh; y++)
+				for (int x = 0; x < rw; x++) {
+					int want = 0;
+					if (gi >= 0) {
+						const uint8_t *row = zf + roff + ((uint32_t)gi * rh + y) * rs;
+						int v = row[0] << 8 | (rs > 1 ? row[1] : 0);
+						want = (v >> (15 - x)) & 1;
+					}
+					if (z_render_get(c.x0 + TEXT_X0 + ch_i * rw + x, c.y0 + y) != want) bad++;
+				}
+			ch_i++;
+		}
+		expect(bad == 0, "the line is the font's own pixels, letter for letter");
+		int stray = 0;
+		for (int x = c.x0 + TEXT_X0 + ch_i * rw; x < c.x0 + text_w; x++)
+			for (int y = c.y0; y < c.y0 + LINE_H; y++) stray += z_render_get(x, y);
+		for (int x = c.x0; x < c.x0 + TEXT_X0; x++)
+			for (int y = c.y0; y < c.y0 + LINE_H; y++) stray += z_render_get(x, y);
+		for (int x = c.x0; x < c.x0 + text_w; x++) stray += z_render_get(x, c.y0 + rh);
+		expect(stray == 0, "and the rest of the row is background, the old ink gone");
+
+		// a selection: those cells, and only those, inverted
+		sel_anchor = 0; cursor = 2;			// "Gr"
+		draw_row(0);
+		int inv_ok = 1;
+		for (int x = 0; x < 2 * rw && inv_ok; x++)
+			for (int y = 0; y < rh; y++) {
+				int on = z_render_get(c.x0 + TEXT_X0 + x, c.y0 + y);
+				const uint8_t *row;
+				int gi = (x < rw) ? 'G' : 'r', k;
+				for (k = 0; k < (int)rcount; k++)
+					if ((rcps[2 * k] | rcps[2 * k + 1] << 8) == gi) break;
+				row = zf + roff + ((uint32_t)k * rh + y) * rs;
+				int want = !(((row[0] << 8 | row[1]) >> (15 - x % rw)) & 1);
+				if (on != want) { inv_ok = 0; break; }
+			}
+		expect(inv_ok, "a selection is the same letters, inverted");
+		expect(z_render_get(c.x0 + TEXT_X0 + 2 * rw + 1, c.y0 + 1) == 0, "and stops where it ends");
+		sel_anchor = -1;
+
+		// a wide character the font has not got: a box two cells wide;
+		// a long line stops at the scrollbar
+		fresh();
+		type("\xE6\x97\xA5x");				// 日x
+		draw_row(0);
+		int boxed = 0;
+		for (int x = 0; x < 2 * rw; x++) boxed += z_render_get(c.x0 + TEXT_X0 + x, c.y0 + rh / 2);
+		expect(boxed == 2, "a character it has not got is a box, two cells wide");
+		fresh();
+		for (int i = 0; i < 200; i++) type("w");
+		for (int y = c.y0; y < c.y0 + LINE_H; y++)
+			for (int x = c.x0 + text_w; x <= c.x1; x++) z_fb_set_pixel(x, y, 0, NULL);
+		draw_row(0);
+		int over = 0;
+		for (int y = c.y0; y < c.y0 + LINE_H; y++)
+			for (int x = c.x0 + text_w; x <= c.x1; x++) over += z_render_get(x, y);
+		expect(over == 0, "a full line stops short of the scrollbar");
+
+		// once more: back to 5x8
+		do_font();
+		expect(!big_font && cur_font == &z_font_5x8, "Aa a third time: back to 5x8");
+
+		// a bitstream without the memory copy: two sizes, as before
+		blit_mem_ok = false;
+		do_font(); do_font();
+		expect(!big_font && cur_font == &z_font_5x8, "without the memory copy, Aa keeps to two sizes");
+		blit_mem_ok = true;
+		fresh();
+	}
+
+	printf("24. rows drawn without clearing them first: nothing left behind\n");
+	{
+		// Each row drawn over a screen full of ink must come out the
+		// same as on a clean screen: draw_row() no longer blanks the
+		// row before drawing it (that blank was the flash on every
+		// keystroke), so whatever its characters do not paint, it must.
+		const z_font_t *fonts[2] = { &z_font_5x8, &z_font_6x12 };
+		z_clip_t c;
+		static uint8_t clean[Z_SCREEN_H][Z_SCREEN_W];
+		for (int fi = 0; fi < 2; fi++) {
+			big_font = NULL;
+			cur_font = fonts[fi];
+			layout();
+			fresh();
+			type("short\nGr\xC3\xBC\xC3\x9F" "e \xE6\x97\xA5\xE6\x9C\xAC x\n"
+				"a longer line that runs on\n\nlast");
+			z_win_content_rect(&win, &c);
+			for (int pass = 0; pass < 2; pass++) {
+				sel_anchor = pass ? 3 : -1;		// the second time, a selection
+				cursor = pass ? 12 : cursor;
+				for (int r = 0; r < 6; r++) {
+					int y0 = c.y0 + r * LINE_H;
+					for (int y = y0; y < y0 + LINE_H; y++)
+						for (int x = c.x0; x < c.x0 + text_w; x++)
+							z_fb_set_pixel(x, y, 0, NULL);
+					draw_row(r);
+					for (int y = y0; y < y0 + LINE_H; y++)
+						for (int x = c.x0; x < c.x0 + text_w; x++)
+							clean[y][x] = (uint8_t)z_render_get(x, y);
+					for (int y = y0; y < y0 + LINE_H; y++)
+						for (int x = c.x0; x < c.x0 + text_w; x++)
+							z_fb_set_pixel(x, y, 1, NULL);
+					draw_row(r);
+					int diff = 0;
+					for (int y = y0; y < y0 + LINE_H; y++)
+						for (int x = c.x0; x < c.x0 + text_w; x++)
+							diff += clean[y][x] != (uint8_t)z_render_get(x, y);
+					char what[96];
+					snprintf(what, sizeof(what), "%dx%d, row %d%s: drawn over ink, the same as on a clean screen",
+						cur_font->w, cur_font->h, r, pass ? ", with a selection" : "");
+					expect(diff == 0, what);
+				}
+			}
+			sel_anchor = -1;
+		}
+		cur_font = &z_font_5x8;
+		layout();
+		fresh();
+	}
+
 	// -- 10. a picture, for looking at: `utf8 /tmp/text` writes
 	// /tmp/text-utf8.pbm -- Latin-9 in hardware glyphs, and the box for
 	// what Latin-9 has not got (the half, the hiragana).
@@ -1361,6 +1530,22 @@ int main(int argc, char **argv) {
 		snprintf(path, sizeof(path), "%s-utf8.pbm", argv[1]);
 		z_render_write(path, &win, 2);
 		printf("wrote %s\n", path);
+
+		// big print, as the third Aa size draws it
+		z_jfont_use(NULL, 0);
+		cur_font = &z_font_5x8;
+		big_font = &z_bigfont_10x20;
+		layout();
+		fresh();
+		type("Dear Grandma,\n\ntoday we saw a fox in the forest. It was red and very "
+			"fast. Dad says it lives under the old oak by the stream.\n\n"
+			"Can we go again on Saturday?\n\nLove, Mia");
+		z_render_clear();
+		repaint();
+		snprintf(path, sizeof(path), "%s-big.pbm", argv[1]);
+		z_render_write(path, &win, 2);
+		printf("wrote %s\n", path);
+		big_font = NULL;
 	}
 
 	printf("text utf8: %d checks, %d failed\n", checks, failures);

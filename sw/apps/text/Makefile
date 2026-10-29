@@ -33,7 +33,8 @@ ZFMT_NO64 = 1
 #   second caller. Every app that links the dialog needs this too: a
 #   shared widget is only shared if the build says so.
 OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o zwidget.o \
-	zfsapp.o zflist.o zdialog.o zedit.o zspeak.o zsayall.o text.o
+	zfsapp.o zflist.o zdialog.o zedit.o zspeak.o zsayall.o \
+	zbigline.o zbigfont_10x20.o text.o
 
 # -- host tests: `make test` here, or `make test` at the top --
 #
@@ -48,7 +49,8 @@ HOSTCC ?= cc
 HOSTSRC = ../../common/zwin.c ../../common/zwidget.c ../../common/zflist.c \
 	../../common/zedit.c ../../common/zfsapp.c ../../common/zfont_data.c \
 	../../common/zobj.c ../../common/zeitlos.c ../../common/zspeak.c \
-	../../common/zsayall.c ../../common/zdialog.c
+	../../common/zsayall.c ../../common/zdialog.c ../../common/zbigline.c \
+	../../common/zbigfont_10x20.c
 HOSTFLAGS = -std=gnu99 -Wall -Wno-comment -no-pie -g -fsanitize=address,undefined -I ../../common
 
 test:

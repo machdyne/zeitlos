@@ -193,6 +193,51 @@ look-alike, or 0 for the box), `zc_font_strokes()` a stroke glyph's
 points in font units, `zc_font_rows()` a bitmap glyph's rows, and
 `zc_text_pen()` the pen a style is drawn with.
 
+## Big text
+
+The glyph blitter draws glyphs at most 8 pixels wide, from glyph memory,
+so the resident fonts stop at 6x12 ([window_manager.md](window_manager.md),
+"Fonts in glyph memory"). A wider font goes through
+`sw/common/zbigline.[ch]` instead: a line is put together in memory --
+each glyph row a shift and an OR into a buffer laid out like the
+framebuffer -- and copied to the screen with `z_fb_hw_blit_mem()`,
+background and all.
+
+```c
+z_bigline_begin(text_w, line_h);           // the line, all background
+x = z_bigline_text(x, s, n, &z_bigfont_10x20);
+z_bigline_invert(sel_x0, sel_x1);          // a selection
+z_win_select(&win);                        // the window's visible region
+z_bigline_put(screen_x, screen_y, &text_area);
+```
+
+- **Clipping.** The blitter's scissor clips the copy to the window's
+  visible region; `z_bigline_put()` clips it to the rectangle given (a
+  text area, short of the scrollbar).
+- **No flash.** The copy writes every pixel of the line, so the row is
+  not cleared first.
+- **Characters.** A character the font has not got is drawn as its
+  look-alike (`zutf8.h`), else as a box; a wide one takes two cells; a
+  control character is a space.
+- **Cost.** A 10x20 character is roughly 1,300-2,400 CPU cycles to put
+  together, against about 112 for a hardware glyph -- around 1 ms for a
+  line of big print, 6-11 ms for a full 320x240 window (estimated from
+  the measured blitter numbers in [gpu_blitter.md](gpu_blitter.md), not
+  yet measured on the board). Fine for big print, where a window holds a
+  few hundred characters; not a replacement for glyph memory in `term`.
+- **Memory.** One line buffer, 2 KB, in the module: a process draws one
+  line at a time.
+- **No memory copy, no big text.** `z_bigline_available()` is false on
+  a bitstream whose blitter has no memory-copy mode; an app then offers
+  no big size.
+
+**The fonts are compiled in**, by `tools/gen_bigfont.py`, from the
+`.zfn` files in `sw/data/font/zfn/` -- the same misc-fixed data as the
+card's. Glyph rows are stored in framebuffer order (bit k is column k),
+so drawing needs no bit reversal. `python3 tools/gen_bigfont.py --check`
+fails if a compiled font no longer matches its `.zfn`. Today there is one,
+`z_bigfont_10x20` (207 glyphs, 8.7 KB), used by `text`'s big print.
+
 ## Testing
 
 `make -C sw/common/tests -f Makefile.zcanvas fonts` runs

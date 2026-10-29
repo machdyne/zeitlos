@@ -105,6 +105,7 @@
 #include "../../common/zsayall.h"
 #include "../../common/zutf8.h"		// docs/text_encoding.md
 #include "../../common/zundo.h"		// undo and redo -- docs/text_editor.md, "Undo"
+#include "../../common/zbigline.h"	// big print -- docs/text_editor.md, "Font"
 
 // -- the document --
 
@@ -326,14 +327,17 @@ static char filename[Z_FS_PATH_MAX];	// "" when the document has never been save
 
 // -- window --
 
-// Minimum useful size, pinned as the floor by Z_WIN_FLAG_MIN_IS_CREATE
-// -- roughly 50 columns and two dozen lines, below which wrapping
-// stops producing anything readable. Also comfortably wide enough for
-// four titlebar icons (new/open/save/close) plus a filename beside
-// them; wm drops icons that don't fit rather than overlapping the
-// title, so a narrower floor would silently lose buttons.
+// The size a window opens at. It can be made as small as half that
+// (WIN_MIN_W x WIN_MIN_H, z_win_min_size()): about 23 columns of 5x8
+// and a dozen lines, or 14 columns of big print -- a note beside other
+// windows. All five titlebar buttons still fit at that width (wm drops
+// icons that don't, rather than overlapping the title, and the title
+// is shortened first). Z_WIN_FLAG_MIN_IS_CREATE stays set: a wm older
+// than z_win_min_size() keeps this size as the minimum, as before.
 #define WIN_W   320
 #define WIN_H   240
+#define WIN_MIN_W	(WIN_W / 2)
+#define WIN_MIN_H	(WIN_H / 2)
 
 static z_win_t win;
 
@@ -351,8 +355,15 @@ static z_win_t win;
 // just slow.
 static const z_font_t *cur_font = &z_font_5x8;
 
-#define CHAR_W      (cur_font->w)
-#define LINE_H      (cur_font->h + 1)
+// The third size, big print: misc-fixed 10x20, too wide for glyph
+// memory (8 pixels at most), so each line is drawn in memory and copied
+// to the screen (zbigline.h). Non-NULL while it is the size in use;
+// cur_font is then left as it was and not drawn with.
+static const z_bigfont_t *big_font;
+
+#define CHAR_W      (big_font ? big_font->w : cur_font->w)
+#define GLYPH_H     (big_font ? big_font->h : cur_font->h)
+#define LINE_H      (GLYPH_H + 1)
 #define TEXT_X0     2			// left margin, content-relative
 
 static int cols;			// characters per display line
@@ -1316,7 +1327,7 @@ static void draw_caret(void) {
 	// line otherwise lands on the scrollbar.
 	if (x > c.x0 + text_w - 1) x = c.x0 + text_w - 1;
 
-	z_fb_hw_line(x, y, x, y + cur_font->h - 1, 1, &c);
+	z_fb_hw_line(x, y, x, y + GLYPH_H - 1, 1, &c);
 
 	caret_drawn_row = l - top_line;
 
@@ -1378,13 +1389,31 @@ static void ins_report(void)
 #endif
 
 // Draws one visible row (0..rows-1), clearing it first.
+static void draw_row_big(int r);
+
+// What a row's characters leave uncovered, cleared: the left margin,
+// the rest of the row from `x` (content-relative), and the line's gap
+// row under the glyphs.
+static void row_tail(int cy, int x) {
+	fill_content(0, cy, TEXT_X0, GLYPH_H, 0);
+	if (x < text_w) fill_content(x, cy, text_w - x, GLYPH_H, 0);
+	fill_content(0, cy + GLYPH_H, text_w, LINE_H - GLYPH_H, 0);
+}
+
 static void draw_row(int r) {
+
+	if (big_font) { draw_row_big(r); return; }
 
 	if (r < 0 || r >= rows) return;
 
 	int cy = r * LINE_H;
 
-	fill_content(0, cy, text_w, LINE_H, 0);
+	// Not cleared first. Every character below is drawn as a SOLID
+	// cell, background included, so only what the characters do not
+	// cover is cleared, after them (row_tail()). Clearing the whole row
+	// and then drawing it showed the row blank for a moment on every
+	// keystroke -- the flash big print, which never cleared, did not
+	// have.
 
 #if TEXT_INSTRUMENT
 	/* Counters only. ins_report() is NOT called here: it reads the
@@ -1398,14 +1427,14 @@ static void draw_row(int r) {
 #endif
 
 	int l = top_line + r;
-	if (l >= nlines) return;
+	if (l >= nlines) { fill_content(0, cy, text_w, LINE_H, 0); return; }
 
 	// n is BYTES, clamped to the first `cols` characters; nc is how
 	// many characters that is. Columns are characters (see the header
 	// comment), so every x position below comes from a character count.
 	int off = LO(l);
 	int n = off_after(off, off + line_draw_len(l), cols) - off;
-	if (n <= 0) return;
+	if (n <= 0) { fill_content(0, cy, text_w, LINE_H, 0); return; }
 
 #if TEXT_INSTRUMENT
 	ins_chars += (uint32_t)n;
@@ -1434,7 +1463,8 @@ static void draw_row(int r) {
 	int nc = chars_between(off, off + n);
 
 	if (!has_sel()) {
-		z_win_draw_utf8(&win, TEXT_X0, cy, tmp, 1, cur_font);
+		z_win_draw_utf8_2(&win, TEXT_X0, cy, tmp, 1, 0, cur_font);
+		row_tail(cy, TEXT_X0 + nc * CHAR_W);
 		return;
 	}
 
@@ -1480,7 +1510,7 @@ static void draw_row(int r) {
 	if (a > 0) {
 		char save = tmp[a];
 		tmp[a] = 0;
-		z_fb_draw_utf8(px, py, tmp, 1, cur_font, &c);
+		z_fb_draw_utf8_2(px, py, tmp, 1, 0, cur_font, &c);
 		tmp[a] = save;
 	}
 
@@ -1492,7 +1522,7 @@ static void draw_row(int r) {
 	}
 
 	if (n > b)
-		z_fb_draw_utf8(px + bc * CHAR_W, py, tmp + b, 1, cur_font, &c);
+		z_fb_draw_utf8_2(px + bc * CHAR_W, py, tmp + b, 1, 0, cur_font, &c);
 
 	// A selection continuing onto the next line takes the rest of
 	// this row with it, past the end of the text. Without this a
@@ -1502,8 +1532,53 @@ static void draw_row(int r) {
 	if (sel_end() > line_end(l) - 1 && sel_start() <= off + n) {
 		int rx = TEXT_X0 + nc * CHAR_W;
 		if (rx < text_w)
-			fill_content(rx, cy, text_w - rx, cur_font->h, 1);
+			fill_content(rx, cy, text_w - rx, GLYPH_H, 1);
+		row_tail(cy, text_w);
+	} else {
+		row_tail(cy, TEXT_X0 + nc * CHAR_W);
 	}
+
+}
+
+// A row in big print: the line put together in memory, selection and
+// all, and copied to the screen in one blit (zbigline.h). The copy
+// writes every pixel of the row, so it is not cleared first.
+static void draw_row_big(int r) {
+
+	int cy = r * LINE_H;
+	int l = top_line + r;
+
+	z_bigline_begin(text_w, LINE_H);
+
+	if (l < nlines) {
+		int off = LO(l);
+		int n = off_after(off, off + line_draw_len(l), cols) - off;
+		if (n > 0) {
+			// A line never straddles the gap (draw_row()).
+			z_bigline_text(TEXT_X0, P(off), n, big_font);
+			if (has_sel()) {
+				int a = sel_start() - off, b = sel_end() - off;
+				if (a < 0) a = 0;
+				if (a > n) a = n;
+				if (b < 0) b = 0;
+				if (b > n) b = n;
+				int x0 = TEXT_X0 + chars_between(off, off + a) * CHAR_W;
+				int x1 = TEXT_X0 + chars_between(off, off + b) * CHAR_W;
+				// A selection that goes on to the next line takes the
+				// rest of this row, as draw_row() does.
+				if (sel_end() > line_end(l) - 1 && sel_start() <= off + n)
+					x1 = text_w;
+				if (x1 > x0) z_bigline_invert(x0, x1);
+			}
+		}
+	}
+
+	z_clip_t c;
+	z_win_content_rect(&win, &c);
+	z_clip_t t = c;
+	t.x1 = c.x0 + text_w - 1;
+	z_win_select(&win);
+	z_bigline_put(c.x0, c.y0 + cy, &t);
 
 }
 
@@ -2772,7 +2847,18 @@ static void do_open(void) {
 // are separate things.
 static void do_font(void) {
 
-	cur_font = (cur_font == &z_font_5x8) ? &z_font_6x12 : &z_font_5x8;
+	// 5x8 -> 6x12 -> big print (10x20) -> 5x8. Big print only where the
+	// blitter can copy from memory (zbigline.h); elsewhere the two sizes.
+	if (big_font) {
+		big_font = NULL;
+		cur_font = &z_font_5x8;
+	} else if (cur_font == &z_font_5x8) {
+		cur_font = &z_font_6x12;
+	} else if (z_bigline_available()) {
+		big_font = &z_bigfont_10x20;
+	} else {
+		cur_font = &z_font_5x8;
+	}
 
 	layout();
 	scroll_to_cursor();
@@ -4140,6 +4226,7 @@ int main(void) {
 	for (int i = 0; i < (int)sizeof(sent_title); i++)
 		sent_title[i] = initial_title[i];
 
+	z_win_min_size(WIN_MIN_W, WIN_MIN_H);
 	if (z_win_create_flags(&win, initial_title, WIN_W, WIN_H, -1, -1,
 		Z_WIN_FLAG_CLOSE_ICON | Z_WIN_FLAG_RESIZABLE |
 		Z_WIN_FLAG_MIN_IS_CREATE |

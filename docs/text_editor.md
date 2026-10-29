@@ -358,10 +358,24 @@ drawn as a single space so it at least occupies its one column.
 
 ## Font
 
-Two fonts, toggled by the titlebar font button: `z_font_5x8` and
-`z_font_6x12`. Both are resident in glyph memory at fixed offsets and
-loaded once by `wm`, so both draw through the hardware blitter — see
+Three sizes, in turn on the titlebar font button (**Aa**): `z_font_5x8`,
+`z_font_6x12`, and **big print**, misc-fixed 10x20, then back to 5x8.
+
+The first two are resident in glyph memory at fixed offsets and loaded
+once by `wm`, so they draw through the hardware blitter — see
 `docs/window_manager.md`, "Fonts in glyph memory".
+
+Big print is 10 pixels wide, and the glyph blitter draws 8 at most, so
+it cannot come from glyph memory. Each line is put together in memory
+instead and copied to the screen in one blit (`draw_row_big()`,
+[fonts.md](fonts.md), "Big text"): about 30 columns and 10 lines in the
+default window, for children and for tired eyes. The copy rewrites every
+pixel of the row, selection included, so a row is never cleared first
+and does not flash. Typing redraws one line, about a millisecond of
+work. The font is compiled into `text` (`sw/common/zbigfont_10x20.c`):
+`text` runs from flash on a machine with no card, and its big print must
+too. On a bitstream whose blitter cannot copy from memory, Aa keeps to
+the two small sizes.
 
 Switching changes the column count, so the document rewraps from the
 top. That is the same case a resize is, and the one place
@@ -372,6 +386,24 @@ The caret stays on the same **character**, not the same screen
 position: `cursor` is a buffer offset and survives the rewrap
 untouched. That is precisely why the buffer and the line table are
 separate things.
+
+## Window size
+
+A window opens at 320x240 and can be made as small as half that,
+160x120 (`z_win_min_size()`, [window_manager.md](window_manager.md),
+"Minimum size"): about 23 columns of 5x8, or 14 of big print -- a note
+beside other windows. All five titlebar buttons still fit at that width;
+the title is shortened. It used to be 320x240 at least, the size it
+opens at.
+
+**Rows are drawn without clearing them first.** Every character is drawn
+as a solid cell, background included (`z_win_draw_utf8_2()`), and only
+what the characters do not cover -- the margin, the rest of the row, the
+gap under it -- is cleared, after them (`row_tail()`). Clearing the row
+and then drawing it showed it blank for a moment on every keystroke,
+which is the flash the 5x8 and 6x12 sizes had and big print, which never
+cleared, did not. `tests/utf8.c` section 24 draws every row over a
+screen full of ink and checks it comes out as on a clean one.
 
 ## Launched with a file
 
@@ -705,7 +737,13 @@ and which copies count as orphans; 22 is opening in pieces (CRLF split
 across pieces, a CR ending a piece and one ending the file, Esc stopping
 a 400KB open after a few pieces, a click not stopping it), a save that
 reads its mail and does not take a key typed meanwhile, and Find and the
-match count in slices, stopped by Esc.
+match count in slices, stopped by Esc; 23 is big print: the Aa cycle, a
+line compared pixel for pixel with `m10x20.zfn` read by the test itself,
+the rest of the row rewritten over a screen full of ink, a selection
+inverted cell for cell, a character the font has not got drawn as a
+two-cell box, a full line stopping short of the scrollbar, and two sizes
+only when the blitter cannot copy from memory. `utf8 DIR` also writes
+`DIR-big.pbm`, a picture of big print as the real `text.c` draws it.
 
 `tests/test_edit.c` is the arena on its own, with an arena that **moves
 on every resize and leaves the old place unreadable**, so a pointer kept
