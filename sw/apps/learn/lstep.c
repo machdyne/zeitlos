@@ -880,9 +880,12 @@ static int question(ctx_t *c, int y, int ci) {
 			bool wrong = chosen && k->judged && !op->right;
 			char key[12];
 			snprintf(key, sizeof key, "%d", i + 1);
-			ctx_t m = *c;
-			m.p = NULL;
-			int th = words(&m, 0, op->text, &LDF.body, &LDF.body_b, 16, 2, 28) ;
+			// measured as it is drawn (the same width): measured 30 px wider,
+			// an answer of 23-34 letters fitted one line here and took two
+			// below, and its second line was cut off
+			LT.font = &LDF.body; LT.bold_font = &LDF.body_b; LT.size = 16; LT.lead = 2;
+			lt_layout(&LT, &A.scratch, op->text, c->w - 28 - 30);
+			int th = LT.height;
 			int h = th + 12 < 26 ? 26 : th + 12;
 			if (c->p && visible(c, y - 3, h + 6)) {		// (with the focus ring round it)
 				int w = c->w;
@@ -911,7 +914,13 @@ static int question(ctx_t *c, int y, int ci) {
 		}
 	} else if (q->kind == LQ_NUMBER || q->kind == LQ_FRACTION || q->kind == LQ_TEXT) {
 		ld_style_t fs = ld_st(&LDF.big, 0);
-		int fw = c->w < 260 ? c->w : 260, fh = 30;
+		// the field leaves room in the column for its unit and the tick
+		// after it: with a figure beside the words the column is narrow,
+		// and a unit drawn past it went under the figure
+		int uw = q->unit ? ld_widthz(&bb, q->unit) + 8 : 0;
+		int fw = c->w - uw - 24, fh = 30;
+		if (fw > 260) fw = 260;
+		if (fw < 80) fw = 80;
 		// where the field is, from the step's top: it may be drawn again
 		// after a scroll without its block being laid out (the kept layout)
 		k->fx = (int16_t)c->x; k->fy = (int16_t)(y - lc_top); k->fw = (int16_t)fw; k->fh = (int16_t)fh;
@@ -928,7 +937,7 @@ static int question(ctx_t *c, int y, int ci) {
 			}
 			(void)tx;
 			if (q->unit) ld_textz(c->p, &bb, c->x + fw + 8, y + 20, q->unit, LD_INK);
-			if (k->answered && k->last.verdict == LQ_RIGHT) ld_tick(c->p, c->x + fw + (q->unit ? 40 : 10), y + 10, LD_INK);
+			if (k->answered && k->last.verdict == LQ_RIGHT) ld_tick(c->p, c->x + fw + uw + 6, y + 10, LD_INK);
 			if (!k->answered) hot(c, c->x, y, fw, fh, A_FIELD, ci);
 		}
 		y += fh + 6;
