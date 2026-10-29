@@ -50,6 +50,46 @@ static void spans(const char *src, int nspans, int nlinks) {
     }
 }
 
+// a row laid out at `chars`: its display lines joined with '|'
+static void layout(const char *src, int chars, const char *want) {
+    md_state_t st; md_state_init(&st);
+    md_line_t o;
+    md_parse(&st, src, NULL, &o);
+    md_table_layout(&o, chars);
+    char got[MD_LINE_MAX * 2];
+    int L = md_table_line_len(&o), n = 0;
+    for (int i = 0; i < o.len; i++) {
+        if (i && i % L == 0) got[n++] = '|';
+        got[n++] = o.text[i];
+    }
+    got[n] = 0;
+    checks++;
+    if (strcmp(got, want) || o.len % L) {
+        printf("  FAIL  %-30s @%d got \"%s\"  want \"%s\"\n", src, chars, got, want);
+        fails++;
+    }
+}
+
+// a table row's cells, joined with '/'
+static void cells(const char *src, const char *want) {
+    md_state_t st; md_state_init(&st);
+    md_line_t o;
+    md_parse(&st, src, NULL, &o);
+    char got[MD_LINE_MAX * 2];
+    int n = 0;
+    for (int c = 0; c < o.ncells; c++) {
+        if (c) got[n++] = '/';
+        for (int i = o.cell[c]; i < o.cell[c + 1]; i++) got[n++] = o.text[i];
+    }
+    got[n] = 0;
+    checks++;
+    if (o.kind != MD_TABLE || strcmp(got, want)) {
+        printf("  FAIL  %-30s got %s \"%s\"  want \"%s\"\n",
+            src, kindname(o.kind), got, want);
+        fails++;
+    }
+}
+
 int main(int argc, char **argv) {
 
     printf("headings:\n");
@@ -80,7 +120,52 @@ int main(int argc, char **argv) {
     printf("quotes, tables, code:\n");
     one("> quoted", MD_QUOTE, "quoted");
     one(">quoted", MD_QUOTE, "quoted");
-    one("| a | b |", MD_TABLE, "| a | b |");
+    one("| a | b |", MD_TABLE, "ab");
+    cells("| a | b |", "a/b");
+    cells("|a|b", "a/b");                        // trailing pipe optional
+    cells("| `x \\| y` | z |", "x | y/z");     // escaped pipe, in code too
+    cells("| ls \\| wc |", "ls | wc");
+    cells("| **bold** | [l](u) |", "bold/l");   // inline syntax per cell
+    cells("| | b |", "/b");                      // an empty cell
+    cells("|", "");
+    cells("| 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 |",
+        "1/2/3/4/5/6/7/8/9/10 | 11");            // the rest in the last
+    spans("| `a` | [b](c) |", 2, 1);
+    {
+        // a table, with the reader's lookahead done by hand
+        md_state_t st; md_state_init(&st); md_line_t o;
+        md_parse(&st, "| h | head2 |", "|---|---|", &o);
+        checks++; if (o.tflags != (MD_TF_FIRST | MD_TF_HEAD) || o.tcols != 2 ||
+            o.colw[0] != 1 || o.colw[1] != 5) {
+            printf("  FAIL header row flags %x cols %d w %d %d\n", o.tflags,
+                o.tcols, o.colw[0], o.colw[1]); fails++; }
+        uint8_t w[MD_TBL_COLS], mw[MD_TBL_COLS];
+        int n = md_table_measure("| wider | x | extra |", w, mw);
+        checks++; if (n != 3 || w[0] != 5 || md_table_measure("|--|", w, mw) != -1 ||
+            md_table_measure("text", w, mw) != 0) {
+            printf("  FAIL md_table_measure\n"); fails++; }
+        n = md_table_measure("| two words | x | a longerword |", w, mw);
+        checks++; if (n != 3 || w[0] != 9 || mw[0] != 5 || mw[2] != 10) {
+            printf("  FAIL md_table_measure words %d %d\n", mw[0], mw[2]); fails++; }
+        n = md_table_measure("| wider | x | extra |", w, mw);
+        md_table_widen(&st, &o, w, mw, n);
+        checks++; if (o.tcols != 3 || o.colw[0] != 5 || o.colw[1] != 5 ||
+            st.tbl_w[2] != 5) { printf("  FAIL md_table_widen\n"); fails++; }
+        md_parse(&st, "|---|---|", "| a | b |", &o);
+        md_parse(&st, "| a | b |", "| c | d |", &o);
+        checks++; if (o.tflags != MD_TF_BODY1 || o.tcols != 3 || o.colw[0] != 5) {
+            printf("  FAIL first body row %x\n", o.tflags); fails++; }
+        md_parse(&st, "| c | d |", "after", &o);
+        checks++; if (o.tflags != MD_TF_LAST || st.tbl_cols) {
+            printf("  FAIL last row %x\n", o.tflags); fails++; }
+        md_parse(&st, "| new |", NULL, &o);
+        checks++; if (o.tflags != (MD_TF_FIRST | MD_TF_LAST) || o.colw[0] != 3) {
+            printf("  FAIL second table %x\n", o.tflags); fails++; }
+        // a table cut off by a paragraph the caller did not peek
+        md_parse(&st, "| a |", "| b |", &o);
+        md_parse(&st, "para", NULL, &o);
+        checks++; if (st.tbl_cols) { printf("  FAIL table not ended\n"); fails++; }
+    }
     one("|---|---|", MD_SKIP, "");
     one("    indented", MD_CODE, "indented");
 
@@ -208,6 +293,25 @@ int main(int argc, char **argv) {
         md_parse(&st, "| a |", NULL, &o);
         md_parse(&st, "|---|", NULL, &o);
         checks++; if (o.kind != MD_SKIP) { printf("  FAIL separator row drew\n"); fails++; }
+    }
+
+    printf("table layout:\n");
+    layout("| a | b |", 40, " a b ");
+    layout("| one two three | x |", 11, " one two x | three     ");
+    layout("| `code here` | y |", 9, " code  y | here    ");
+    layout("| a | b | c |", 6, " a b c ");    // too narrow: clipped, not shredded
+    // keys keep their width; the prose column takes what is left
+    layout("| key | some words of prose here |", 22, " key some words of    |     prose here       ");
+    layout("| a |", 40, " a ");
+    {
+        // spans follow their characters onto the next line
+        md_state_t st; md_state_init(&st); md_line_t o;
+        md_parse(&st, "| `ab cd` | y |", NULL, &o);
+        md_table_layout(&o, 7);
+        checks++; if (o.nspans != 2 || o.spans[0].start != 1 || o.spans[0].len != 2 ||
+            o.spans[1].start != 8 || o.spans[1].len != 2) {
+            printf("  FAIL layout spans %d [%d %d]\n", o.nspans,
+                o.spans[0].start, o.spans[0].len); fails++; }
     }
 
     printf("setext headings:\n");

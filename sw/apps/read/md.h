@@ -25,6 +25,13 @@
  * following line (see md_parse), because they are common enough in
  * real documents to be worth the one-line peek.
  *
+ * Tables are the other: a column is as wide as its widest cell, which
+ * may be rows ahead. The parser splits each row into cells and keeps
+ * the columns' widths in the state; the caller, which owns the file,
+ * measures the rows ahead once, at the first row (md_table_measure(),
+ * md_table_widen()). A table with no caller to do that still parses,
+ * its columns sized from the first row.
+ *
  * -- scope --
  *
  * Chosen by counting what actually appears in the corpus this is for
@@ -83,6 +90,21 @@
 #define MD_MAX_LINKS  8
 #define MD_LINK_MAX   96
 
+// Table columns kept apart. The corpus's widest table has 9; a row
+// with more puts everything past the last into the last cell.
+#define MD_TBL_COLS   10
+
+// A column is never made narrower than its longest word, up to this
+// many characters; a longer word (a URL, say) breaks.
+#define MD_TBL_WORD   16
+
+// md_line_t.tflags, for an MD_TABLE row.
+#define MD_TF_FIRST   0x01	// the table's first row
+#define MD_TF_HEAD    0x02	// a header row: the |---| separator follows
+#define MD_TF_BODY1   0x04	// the first row under a header
+#define MD_TF_LAST    0x08	// the table's last row
+#define MD_TF_LAID    0x10	// md_table_layout() has run: see there
+
 typedef enum {
 	MD_BLANK = 0,	// an empty source line -- a paragraph break
 	// A line that produces NO output and no spacing either: a fence
@@ -98,7 +120,7 @@ typedef enum {
 	MD_QUOTE,
 	MD_LIST,		// bullet or ordered; marker already in `marker`
 	MD_RULE,
-	MD_TABLE,		// a row of a pipe table -- see the note below
+	MD_TABLE,		// a row of a pipe table, split into cells -- md_line_t
 } md_kind_t;
 
 typedef enum {
@@ -135,6 +157,20 @@ typedef struct {
 
 	char		links[MD_MAX_LINKS][MD_LINK_MAX];
 	uint8_t		nlinks;
+
+	// MD_TABLE: the row split into cells. Cell i is
+	// text[cell[i] .. cell[i + 1]), its inline syntax already
+	// stripped like any other text (spans index into `text` as usual).
+	// `colw` is each column's natural width in characters -- the
+	// widest cell seen in it (md_state_t.tbl_w) -- `colmin` its
+	// longest word, and `tcols` how many columns the table has, which
+	// a short row may not reach.
+	uint8_t		ncells;
+	uint16_t	cell[MD_TBL_COLS + 1];
+	uint8_t		tcols;
+	uint8_t		colw[MD_TBL_COLS];
+	uint8_t		colmin[MD_TBL_COLS];
+	uint8_t		tflags;		// MD_TF_*
 
 } md_line_t;
 
@@ -180,6 +216,22 @@ typedef struct {
 	// That keeps a bullet inside a real code block safe, which
 	// indentation alone would not.
 	bool	in_list;
+
+	// Inside a pipe table: its column count (0 = not in one) and each
+	// column's width in characters.
+	//
+	// A table is laid out in columns, and a column is as wide as its
+	// widest cell -- which may be in a row not read yet. The parser
+	// starts from the first row's widths; the reader, which can look
+	// ahead in its file, widens them from the rows that follow
+	// (md_table_measure()) before laying out the first. Kept in the
+	// state so every row of the table, entered from anywhere through
+	// an index checkpoint, lays out in the same columns -- which is
+	// what keeps scrolling reversible.
+	uint8_t	tbl_cols;
+	bool	tbl_head;		// the previous row was a header
+	uint8_t	tbl_w[MD_TBL_COLS];		// widest cell
+	uint8_t	tbl_min[MD_TBL_COLS];	// longest word (at most MD_TBL_WORD)
 } md_state_t;
 
 // See md_state_t.front_lines and .skip_run.
@@ -227,5 +279,41 @@ bool md_parse(md_state_t *st, const char *src, const char *next,
 // interrupt a paragraph, which is exactly why this needs to know what
 // came before.
 bool md_continues(const md_state_t *st, md_kind_t cur, const char *next);
+
+// For a table row's source line: each cell's display width and its
+// longest word, in characters, into w[] and mw[] (MD_TBL_COLS each).
+// Returns the cells, 0 for a line that is not a table row, -1 for a
+// |---| separator row.
+int md_table_measure(const char *src, uint8_t *w, uint8_t *mw);
+
+// Widens a table's columns to cover w[0 .. n) and mw[0 .. n), in both
+// the state and the row being laid out (either may be NULL).
+void md_table_widen(md_state_t *st, md_line_t *row, const uint8_t *w,
+	const uint8_t *mw, int n);
+
+// Lays a table row out in columns for a view `chars` characters wide,
+// rewriting `row` in place as display lines of equal length.
+//
+// Columns get their natural widths (colw) if the table fits. If not,
+// each gets its longest word (colmin) and the room left over is shared
+// in proportion to how much wider each would like to be -- so a column
+// of short keys stays as it is and the column of prose takes the rest.
+// Too narrow even for that, the widest are narrowed in turn. A cell
+// too long for its column word-wraps inside it, so the row becomes
+// several lines. Each
+// line is: a border cell, column 0 padded to its width, a border cell,
+// column 1, ... a border cell -- plain spaces, where the renderer draws
+// the rules. Spans and links move with their characters.
+//
+// After it: `tflags` has MD_TF_LAID, `ncells` is the column count and
+// cell[0 .. ncells] the border cells' positions in a line, so a line
+// is cell[ncells] + 1 characters and the row is len / that many lines.
+// A row whose lines would not fit in `text` loses its last ones.
+void md_table_layout(md_line_t *row, int chars);
+
+// Characters per display line of a laid-out row (md_table_layout()).
+static inline int md_table_line_len(const md_line_t *row) {
+	return row->cell[row->ncells] + 1;
+}
 
 #endif

@@ -26,6 +26,10 @@ Backspace goes back. Ctrl+O opens another document -- a `.docx`,
 `.odt`, `.rtf` or `.epub` is converted first. Drag to select, Ctrl+C
 to copy. The full list is under [Keys](#keys).
 
+The text is 5x8. The **Aa** icon in the title bar switches it to 6x12,
+larger and easier at a distance, and back; read opens at 5x8 every
+time, like `text`.
+
 ## Files of any size
 
 The document is never held in memory. That constraint drives the whole
@@ -213,6 +217,36 @@ A selection highlight or a focused-link box forces the full path:
 both are overlays drawn on top of content, which the blit would
 translate with nothing erasing the original -- the same ghost class as
 the caret in `sw/apps/text`.
+
+### Scrolling back moves pixels too
+
+Scrolling back used to clear the body and draw it all again, a flash
+on every arrow or wheel notch up. `scroll_backward()` now does what
+`scroll_forward()` does, the other way:
+
+1. **Measure.** Where does the old top land below the new one? The
+   step table cannot say -- the lines coming in were not on the screen
+   -- so `layout_run()` runs from the new top with `meas_on` set: it
+   draws nothing and stops at the old top's step, having read only the
+   blocks scrolling in.
+2. **Blit** the body down by that much. zgfx.h copies downward in
+   strips, bottom first, so the copy does not overwrite rows it has
+   not read yet.
+3. **Draw** in one layout pass from the new top, but only in the strip
+   exposed at the top (`band_lim`) and from the last old step still
+   on the screen down -- the bottom, where a line that fitted before
+   may not fit now. The bottom band starts one row above that step:
+   the gap a table row's rules reach up into belongs to the row below
+   it, and changes if that row is now cut.
+
+The same VERIFY as scrolling forward then checks that every step the
+blit carried is the old one, moved down by exactly the shift.
+
+One line up draws about 42 glyphs and 2 rectangles where a full
+repaint drew about 800 and 6 (`./rpic_test DOC W H up 6 out 60`). The
+parse is the same as before, a screen's worth; what is gone is the
+clear and the redraw of everything. Page Up still repaints: a page
+moves the old screen almost entirely off.
 
 ### Switching documents
 
@@ -503,21 +537,55 @@ it doesn't get slower as the document grows.
 
 | construct | rendering |
 | --- | --- |
-| `# heading` | 6x12 font for h1/h2, 5x8 below; h1 gets a rule |
+| `# heading`, `## heading` | 6x12, with a rule under it: heavy for h1, light for h2 |
+| `### heading` and below | the body font, with a dotted line under the text |
 | `` `code` `` | inverse video |
 | `[text](target)` | underlined, focusable, clickable |
-| lists | marker in a hanging indent, wrapped text aligned under it |
+| `- item` | a drawn bullet in a hanging indent -- a dot, a ring one level down, a square below that -- wrapped text aligned under it |
+| `1. item` | the number in the hanging indent |
 | `> quote` | indented, with a rule down the left |
-| fenced/indented code | preformatted, never wrapped |
-| tables | verbatim |
+| fenced/indented code | preformatted, never wrapped, with a bar down the left |
+| tables | laid out in columns, with rules; long cells wrap in their column |
 | `---` | horizontal rule |
 | `**bold**`, `*italic*` | markers stripped, no styling |
 
-**Tables render verbatim, not laid out into columns.** The font is
-fixed width, so a Markdown table's own alignment already lines up on
-screen — and real column layout would need the whole table measured
-before drawing any of it, which a streaming reader can't do. The
-`|---|---|` separator row is dropped.
+Everything above is the two fonts resident in glyph memory (5x8 and
+6x12, docs/fonts.md) and rectangles -- no software font, nothing loaded.
+Rules, bars and bullets cost a blitter rectangle or a few each; the
+dotted underline is one pattern fill. Paging through docs/zfpga.md
+draws about 12 rectangles a page, against 1 before, and the same CPU
+time a page on the host model (`make pic`, below).
+
+### Tables
+
+**Tables are laid out in columns.** They used to be drawn verbatim,
+on the theory that a fixed-width font lines a Markdown table up by
+itself. The project's own docs disprove that: of their 1,023 tables
+only 7% are aligned in the source, and 85% are wider than 50
+characters -- wider than the window -- so verbatim meant clipped,
+ragged rows.
+
+Each row is split into cells on unescaped `|`; `\|` is a literal pipe,
+in code spans too (GitHub's rule, which [learn_format.md](learn_format.md)
+uses). Inline code and links work inside cells. A column is as wide
+as its widest cell if the table fits; if not, each column gets its
+longest word (up to 16 characters) and the room left is shared in
+proportion to how much wider each column would like to be -- so a
+column of short keys keeps its width and the column of prose takes
+the rest, wrapping inside it. Rules go between rows, a double one
+under the header, and down each column boundary.
+
+A column's width depends on rows not read yet, which a reader that
+streams its file cannot normally know. So at a table's FIRST row read
+looks ahead -- to the end of the table, or 64 rows / 4 KB -- measures,
+and comes back with its buffer exactly as it was, so the redraw
+budget is not spent reading the same chunk twice. The widths then
+ride in the parser state (`md_state_t.tbl_w`), which every index
+checkpoint keeps: a table entered from anywhere, by a scroll up, a
+jump or a find, lays out in the same columns, and scrolling stays
+reversible (`make render MODE=scroll`). Each table's widths are also
+remembered by where it starts, so a repaint with a table's top on
+screen measures nothing. The `|---|---|` row draws nothing.
 
 **There is no bold or italic face.** One weight per font, and
 underline already means "link". Markers are stripped so the text reads
@@ -642,6 +710,7 @@ in a `read` of its own.
 | Ctrl+C, right-click | copy the selection |
 | Escape | stop a long find (End, a link, a jump); otherwise clear the selection |
 | Ctrl+O | open |
+| Aa (title bar) | body text 5x8 / 6x12 |
 
 ## Opening draws the document once
 
@@ -779,7 +848,31 @@ Two host suites, both run with the cross-compiler bypassed:
 cd sw/apps/read
 make test DOCS="../../../docs/*.md"    # parser, fuzz cases, and finds
 make render DOC=file.md MODE=scroll    # layout and scroll reversibility
+make pic DOC=file.md                   # a picture of a page: read.pbm
 ```
+
+`make pic` builds the REAL read.c (`rpic_test.c`, stubbed like
+`rfind_test.c`) with the drawing calls painting a framebuffer in the
+real fonts, and prints what the page cost in text runs, glyphs and
+rectangles. `./rpic_test DOC W H SKIP FONT OUT.pbm` picks the page
+(`SKIP` display lines down, or `L120` for source line 120), the size
+and the font (6 or 5); `SKIP` `all` pages through the whole document
+and totals it, with host CPU time.
+
+`SKIP` `seam` is the pixel test `make test` runs: from each of the
+first N positions it scrolls forward 1, 2, 3, 5 and 8 lines the way a
+key does -- the blit, then the strip redrawn from the layout cache --
+and back by the same distances, and compares every pixel with a fresh
+repaint of the same position.
+It found the table rules breaking on a scroll: a line straddling the
+redraw strip is cleared and drawn whole, and its rules, bullet and
+code bar were being clipped to the strip after the clear. And an
+older one: an h1 whose two-pixel rule only half fitted at the bottom
+was cut, and after a scroll its first rule row never came back -- a
+block's last line now carries the rule under it (an h1's, an h2's, a
+table's bottom one), so the two fit and are redrawn together. Every
+doc, both fonts, two window heights, 400 positions each, scrolling
+both ways: 2.5 million scrolls, no difference.
 
 `make test` also runs `rfind_test.c` (see "Long finds" and "Read
 errors" above): End, links, drags and launch offsets over every

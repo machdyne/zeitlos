@@ -79,8 +79,13 @@ static z_win_t win;
 
 // Body font and heading font. Both are resident in glyph memory (see
 // docs/window_manager.md, "Fonts in glyph memory"), so both draw
-// through the hardware blitter.
-#define BODY_FONT   (&z_font_5x8)
+// through the hardware blitter at the same speed.
+//
+// The body is 5x8, which fits the most on the screen, unless the
+// titlebar's Aa asks for 6x12 (do_font()). Headings are 6x12 either way; at 6x12
+// body they are told apart by the rules under them (layout_run()).
+static const z_font_t *body_font = &z_font_5x8;
+#define BODY_FONT   (body_font)
 #define HEAD_FONT   (&z_font_6x12)
 
 // -- the file --
@@ -250,6 +255,11 @@ typedef struct {
 		uint8_t		k;		// md_span_kind_t
 	} sp[VIS_SPANS];
 
+	// A table row's vertical rules, in characters from x: the text
+	// under them is blank border cells, so redraw_row() puts them back.
+	uint8_t		nbar;
+	uint8_t		bar[MD_TBL_COLS + 1];
+
 } visline_t;
 
 static visline_t vlines[VIS_LINES];
@@ -340,6 +350,7 @@ static char last_dir[Z_FLIST_PATH_MAX] = Z_DIR_HOME;
 
 static void forward_msg(z_msg_t *msg, void *user);
 static void repaint(void);
+static void rewrapped(void);
 
 // ---------------------------------------------------------------
 // buffered line reader
@@ -865,6 +876,92 @@ static uint32_t read_block(md_state_t *st, md_line_t *out) {
 
 }
 
+// Widens a table's columns to fit its rows ahead, from its first row
+// (md.h): reads on to the end of the table, or TBL_LOOK_ROWS rows or
+// TBL_LOOK_BYTES bytes if sooner. A row past that which is wider still
+// wraps inside the columns it is given. The corpus's longest table has
+// 54 rows and its median 7.
+//
+// Once a table, at its first row -- the widths then ride in the
+// parser state, index checkpoints and all -- and once a DOCUMENT:
+// tbl_cache remembers the answer by where the table starts, so a
+// repaint with a table's top on screen does not read ahead again.
+//
+// And the reader is left exactly as it was, buffer included: seeking
+// back would throw away the buffer the lookahead refilled and read the
+// same chunk again, which is a card read in the middle of a redraw.
+#define TBL_LOOK_ROWS   64
+#define TBL_LOOK_BYTES  4096
+#define TBL_CACHE       24
+
+static struct {
+	uint32_t	off;		// the row after the table's first
+	uint8_t		n;
+	uint8_t		w[MD_TBL_COLS], mw[MD_TBL_COLS];
+} tbl_cache[TBL_CACHE];
+static int tbl_cache_n, tbl_cache_next;
+
+static void table_lookahead(md_state_t *st, md_line_t *row) {
+
+	static char la[MD_LINE_MAX];
+	static uint8_t saved[RBUF];
+	uint8_t w[MD_TBL_COLS], mw[MD_TBL_COLS];
+	int n;
+
+	// rd_peek() has the row after this one: md_parse() was given it.
+	uint32_t back = rd_tell();
+
+	for (int i = 0; i < tbl_cache_n; i++)
+		if (tbl_cache[i].off == back) {
+			md_table_widen(st, row, tbl_cache[i].w, tbl_cache[i].mw, tbl_cache[i].n);
+			return;
+		}
+
+	uint32_t s_base = rbuf_base, s_len = rbuf_len, s_pos = rbuf_pos;
+	bool s_peek = peek_valid;
+	memcpy(saved, rbuf, s_len);
+
+	uint8_t most[MD_TBL_COLS] = { 0 }, most_mw[MD_TBL_COLS] = { 0 };
+	int most_n = 0;
+
+	for (int r = 0; r < TBL_LOOK_ROWS && rd_tell() - back < TBL_LOOK_BYTES; r++) {
+		if (!rd_line(la, MD_LINE_MAX)) break;
+		if (!(n = md_table_measure(la, w, mw))) break;		// the table has ended
+		if (n < 0) continue;							// a |---| row
+		for (int i = 0; i < n; i++) {
+			if (w[i] > most[i]) most[i] = w[i];
+			if (mw[i] > most_mw[i]) most_mw[i] = mw[i];
+		}
+		if (n > most_n) most_n = n;
+	}
+
+	// A failed read leaves rd_err for the caller to see, and nothing
+	// cached: the widths may be short.
+	if (rd_err) return;
+
+	md_table_widen(st, row, most, most_mw, most_n);
+
+	tbl_cache[tbl_cache_next].off = back;
+	tbl_cache[tbl_cache_next].n = (uint8_t)most_n;
+	memcpy(tbl_cache[tbl_cache_next].w, most, sizeof(most));
+	memcpy(tbl_cache[tbl_cache_next].mw, most_mw, sizeof(most_mw));
+	tbl_cache_next = (tbl_cache_next + 1) % TBL_CACHE;
+	if (tbl_cache_n < TBL_CACHE) tbl_cache_n++;
+
+	// Back as it was. peek_line still holds the row after this one:
+	// rd_line() only copied it out.
+	if (rbuf_base != s_base) {
+		memcpy(rbuf, saved, s_len);
+		fs_seek(fh, s_base + s_len);
+	}
+	rbuf_base = s_base;
+	rbuf_len = s_len;
+	rbuf_pos = s_pos;
+	peek_valid = s_peek;
+	peek_off = back;
+
+}
+
 static uint32_t read_block_raw(md_state_t *st, md_line_t *out) {
 
 	static char line[MD_LINE_MAX];
@@ -906,6 +1003,16 @@ static uint32_t read_block_raw(md_state_t *st, md_line_t *out) {
 		rd_line(joined, MD_LINE_MAX);
 		*st = probe;
 		return 2;
+	}
+
+	// A table row: at a table's first row the rest is measured, then
+	// each row is laid out in columns (md_table_layout()).
+	if (out->kind == MD_TABLE) {
+		if ((out->tflags & (MD_TF_FIRST | MD_TF_LAST)) == MD_TF_FIRST)
+			table_lookahead(&probe, out);
+		*st = probe;
+		md_table_layout(out, view_w / BODY_FONT->w);
+		return used;
 	}
 
 	if (!md_continues(st, out->kind, rd_peek())) {
@@ -972,6 +1079,7 @@ static void idx_compress(void) {
 static void index_init(void) {
 
 	idx_n = 0;
+	tbl_cache_n = tbl_cache_next = 0;
 	idx_stride = 32;
 
 	// The cached position belongs to the previous document.
@@ -1204,8 +1312,7 @@ static void line_indent(const md_line_t *ml, int *first, int *rest) {
 			break;
 
 		case MD_CODE:
-		case MD_TABLE:
-			*first = *rest = cw;
+			*first = *rest = cw;	// room for the bar at its left
 			break;
 
 		default:
@@ -1219,13 +1326,24 @@ static void line_indent(const md_line_t *ml, int *first, int *rest) {
 // Splits `ml` into display lines, filling `starts`/`ends` with
 // character ranges. Returns how many.
 //
-// Code and table lines are NEVER wrapped: both depend on their own
-// horizontal layout, and folding them destroys the only thing they
-// were carrying. They are clipped instead.
+// Code lines are NEVER wrapped: they depend on their own horizontal
+// layout, and folding it destroys the only thing they were carrying.
+// They are clipped instead. Table rows arrive already in lines.
 #define MAX_SUB 64
 
 static int wrap_line(const md_line_t *ml, int width,
 	uint16_t *starts, uint16_t *ends) {
+
+	// A table row was laid out into display lines of equal length
+	// when it was read (md_table_layout()).
+	if (ml->kind == MD_TABLE && (ml->tflags & MD_TF_LAID) && ml->len) {
+		int L = md_table_line_len(ml), n = 0;
+		for (int i = 0; i + L <= ml->len && n < MAX_SUB; i += L, n++) {
+			starts[n] = (uint16_t)i;
+			ends[n] = (uint16_t)(i + L);
+		}
+		if (n) return n;
+	}
 
 	if (ml->kind == MD_CODE || ml->kind == MD_TABLE) {
 		starts[0] = 0;
@@ -1409,11 +1527,162 @@ static void draw_sub(const md_line_t *ml, int from, int to,
 
 }
 
+// -- decorations --
+//
+// Rules, bars and bullets are rectangles (fill()), one or a few each:
+// no glyphs, nothing to load, and next to a line of text they cost
+// nothing that shows.
+
+static bool meas_on;		// see "measuring" below: draw nothing
+
+// What a partial redraw owns: rows from `thr` down (layout_run()), and
+// after a scroll BACK also the rows above band_lim -- the strip the
+// blit exposed at the top (scroll_backward()). 0 the rest of the time.
+static int band_lim;
+
+// Fills `w` x rows [y0, y1] at x in ink, only in the rows the redraw
+// owns, and only inside the view.
+static void vfill(int x, int w, int y0, int y1, int thr) {
+
+	if (meas_on) return;
+	if (y1 >= view_h) y1 = view_h - 1;
+	if (x + w > MARGIN + view_w) w = MARGIN + view_w - x;
+	if (w <= 0) return;
+
+	// The top strip: drawn whole when the two bands meet, its part
+	// above band_lim when they do not.
+	if (band_lim > 0 && y0 < band_lim) {
+		if (thr <= band_lim) thr = y0;
+		else {
+			int top_end = y1 < band_lim ? y1 : band_lim - 1;
+			fill(x, y0, w, top_end - y0 + 1, 1);
+		}
+	}
+
+	if (y0 < thr) y0 = thr;
+	if (y1 < y0) return;
+
+	fill(x, y0, w, y1 - y0 + 1, 1);
+
+}
+
+// -- measuring, for scroll_backward() --
+//
+// layout_run() with meas_on set draws nothing (its thr is past the
+// bottom) and stops at the step (meas_ln, meas_sub), leaving where it
+// would have put it in meas_y. Only the blocks before it are read.
+static uint32_t meas_ln, meas_sub;
+static int      meas_y;
+
+static bool meas_hit(uint32_t ln, uint32_t sub, int y) {
+	if (!meas_on || ln != meas_ln || sub != meas_sub) return false;
+	meas_y = y;
+	return true;
+}
+
+// A dotted line, w wide at row y, in one blitter operation: a pattern
+// fill (zgfx.h), its dots on the screen's even columns.
+static void dots(int x, int w, int y, int thr) {
+
+	static const uint8_t pat[8] = { 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA };
+
+	if (meas_on || y < thr || y >= view_h) return;
+	if (x + w > MARGIN + view_w) w = MARGIN + view_w - x;
+	if (w <= 0) return;
+
+	z_clip_t c;
+	z_win_content_rect(&win, &c);
+	z_fb_hw_fill_pattern(c.x0 + x, c.y0 + y, w, 1, pat);
+
+}
+
+// The middle pixel of a laid-out table row's border cell `i`.
+static int tbl_bar_x(const md_line_t *ml, int i, int fw) {
+	return MARGIN + ml->cell[i] * fw + fw / 2;
+}
+
+// A rule across a table at row y.
+static void tbl_rule(const md_line_t *ml, int fw, int y, int thr) {
+	int x0 = tbl_bar_x(ml, 0, fw);
+	vfill(x0, tbl_bar_x(ml, ml->ncells, fw) - x0 + 1, y, y, thr);
+}
+
+// A table's vertical rules are drawn once for every row of it on the
+// screen, not once a row: layout_run() extends them row by row while
+// the table goes on, and draws them when it stops (or the screen does).
+static struct {
+	int			top, bot;		// rows; top < 0: none open
+	int			fw, n;
+	uint16_t	cell[MD_TBL_COLS + 1];
+} tbars = { -1, -1, 0, 0, { 0 } };
+
+// Not clipped to the redraw strip: the rows are only those of lines
+// drawn in this pass and the gaps just above them, which a line
+// straddling the strip has just cleared (layout_run()). Above the
+// strip they are the same table's rules, so drawing them again there
+// changes nothing.
+static void tbars_flush(int thr) {
+	(void)thr;
+	if (tbars.top >= 0)
+		for (int i = 0; i <= tbars.n; i++)
+			vfill(MARGIN + tbars.cell[i] * tbars.fw + tbars.fw / 2, 1,
+				tbars.top, tbars.bot, 0);
+	tbars.top = -1;
+}
+
+// Rows [top, bot] of the row `ml` have vertical rules.
+static void tbars_add(const md_line_t *ml, int fw, int top, int bot, int thr) {
+
+	// Not into the top margin, which a scroll's blit leaves alone.
+	if (top < MARGIN) top = MARGIN;
+
+	bool same = tbars.top >= 0 && tbars.n == ml->ncells && tbars.fw == fw &&
+		top <= tbars.bot + 1;
+	for (int i = 0; same && i <= ml->ncells; i++)
+		if (tbars.cell[i] != ml->cell[i]) same = false;
+
+	if (same) { tbars.bot = bot; return; }
+
+	tbars_flush(thr);
+	tbars.top = top;
+	tbars.bot = bot;
+	tbars.fw = fw;
+	tbars.n = ml->ncells;
+	for (int i = 0; i <= ml->ncells; i++) tbars.cell[i] = ml->cell[i];
+
+}
+
+// A list bullet in the character cell at (x, y): a round dot at the
+// top level, a ring one down, a small square below that.
+static void draw_bullet(int x, int y, const z_font_t *f, int level, int thr) {
+
+	int bx = x + (f->w - 4) / 2;
+	int by = y + (f->h - 4) / 2;
+
+	if (level == 0) {
+		vfill(bx + 1, 2, by, by, thr);
+		vfill(bx, 4, by + 1, by + 2, thr);
+		vfill(bx + 1, 2, by + 3, by + 3, thr);
+	} else if (level <= 2) {
+		vfill(bx + 1, 2, by, by, thr);
+		vfill(bx, 1, by + 1, by + 2, thr);
+		vfill(bx + 3, 1, by + 1, by + 2, thr);
+		vfill(bx + 1, 2, by + 3, by + 3, thr);
+	} else {
+		vfill(bx + 1, 2, by + 1, by + 2, thr);
+	}
+
+}
+
 // Extra vertical space around a block, in pixels.
 static int space_before(const md_line_t *ml) {
 
 	if (ml->kind == MD_HEADING) return ml->level <= 2 ? 5 : 3;
 	if (ml->kind == MD_RULE) return 3;
+
+	// A table row has a rule above it in this space -- two under the
+	// header -- drawn by layout_run().
+	if (ml->kind == MD_TABLE) return (ml->tflags & MD_TF_BODY1) ? 5 : 3;
 
 	return 0;
 
@@ -1545,7 +1814,9 @@ static void redraw_row(int r) {
 	if (clip.y1 > c.y1) clip.y1 = c.y1;
 	if (clip.x1 < clip.x0 || clip.y1 < clip.y0) return;
 
-	fill(MARGIN, v->y, view_w, v->h, 0);
+	// From the text's left edge only: a bullet, a quote or code bar
+	// left of it is not this row's to repaint.
+	fill(v->x, v->y, MARGIN + view_w - v->x, v->h, 0);
 
 	const z_font_t *f = (v->fw == HEAD_FONT->w) ? HEAD_FONT : BODY_FONT;
 
@@ -1588,6 +1859,10 @@ static void redraw_row(int r) {
 		i = end;
 
 	}
+
+	// a table row's vertical rules, which the blank cells covered
+	for (int b = 0; b < v->nbar; b++)
+		vfill(v->x + v->bar[b] * v->fw + v->fw / 2, 1, v->y, v->y + v->h - 1, 0);
 
 }
 
@@ -1730,8 +2005,12 @@ static void layout_run(md_state_t *st, uint32_t line, int y,
 		// Draws nothing and takes no space -- see MD_SKIP in md.h.
 		if (ml.kind == MD_SKIP) continue;
 
+		// The end of a table on the screen: its vertical rules.
+		if (ml.kind != MD_TABLE) tbars_flush(thr);
+
 		if (ml.kind == MD_BLANK) {
 			if (!sub_skip) {
+				if (meas_hit(blk_line, 0, y_blk)) break;
 				if (nsteps < VIS_STEPS) {
 					step_y[nsteps] = (int16_t)y_blk;
 					step_ln[nsteps] = blk_line;
@@ -1747,6 +2026,10 @@ static void layout_run(md_state_t *st, uint32_t line, int y,
 
 		if (ml.kind == MD_RULE) {
 			if (!sub_skip) {
+				// Its line must fit, like any block's: drawn off the
+				// bottom and called done, it never appears on a scroll.
+				if (y + space_before(&ml) + 2 > view_h) { cut = true; break; }
+				if (meas_hit(blk_line, 0, y_blk)) break;
 				if (nsteps < VIS_STEPS) {
 					step_y[nsteps] = (int16_t)y_blk;
 					step_ln[nsteps] = blk_line;
@@ -1755,7 +2038,7 @@ static void layout_run(md_state_t *st, uint32_t line, int y,
 					nsteps++;
 				}
 				y += space_before(&ml);
-				if (y + 1 >= thr) fill(MARGIN, y + 1, view_w, 1, 1);
+				vfill(MARGIN, view_w, y + 1, y + 1, thr);
 				y += 3;
 			} else sub_skip = 0;
 			continue;
@@ -1775,12 +2058,56 @@ static void layout_run(md_state_t *st, uint32_t line, int y,
 		int n = wrap_line(&ml, view_w, starts, ends);
 #endif
 
-		if (!sub_skip) y += space_before(&ml);
+		// Entered at its first line (not part way down, by a scroll):
+		// only then does a block get its space and rules above.
+		bool from_top = !sub_skip;
+		bool last_drawn = false;	// the block's last line, in this pass
+		bool table = (ml.kind == MD_TABLE && (ml.tflags & MD_TF_LAID));
+
+		if (from_top) y += space_before(&ml);
+
+		// A table row's vertical rules span the lines drawn: from
+		// bar_top to bar_bot, drawn once after them.
+		int bar_top = -1, bar_bot = -1;
+
+		// A table row's rule above it; two under the header.
+		if (table && from_top) {
+			tbl_rule(&ml, f->w, y - 2, thr);
+			if (ml.tflags & MD_TF_BODY1) tbl_rule(&ml, f->w, y - 4, thr);
+		}
 
 		for (int s = 0; s < n; s++) {
 
 			if (sub_skip) { sub_skip--; continue; }
-			if (y + f->h > view_h) { cut = true; break; }
+
+			// What the line needs below it: its glyphs, and the pixel
+			// under them for a code bar's join or an h3's dotted line.
+			// A line whose decoration does not fit has not fitted --
+			// drawn without it and called done, it would scroll up
+			// without it too.
+			int need = f->h + ((ml.kind == MD_CODE ||
+				(ml.kind == MD_HEADING && ml.level > 2)) ? 1 : 0);
+
+			// A block's last line carries the rule under it: an h1's
+			// or h2's, a table's bottom one. Line and rule fit, and
+			// are redrawn, together -- a rule that only half fitted,
+			// left out and called cut, kept its half out after a
+			// scroll too.
+			if (s == n - 1) {
+				if (ml.kind == MD_HEADING && ml.level <= 2)
+					need = lh + (ml.level == 1 ? 2 : 1);
+				else if (table && (ml.tflags & MD_TF_LAST))
+					need = lh + 1;
+			}
+
+			if (y + need > view_h) { cut = true; break; }
+
+			if (meas_hit(blk_line, (uint32_t)s, s ? y : y_blk)) { cut = true; break; }
+
+			// Drawn in this pass: reaching below thr, or in the strip
+			// at the top a scroll back exposed.
+			bool drawn = (y + need > thr) || (y < band_lim);
+			if (s == n - 1) last_drawn = drawn;
 
 			if (nsteps < VIS_STEPS) {
 				// Sub 0 carries the block's space_before with it;
@@ -1800,25 +2127,37 @@ static void layout_run(md_state_t *st, uint32_t line, int y,
 			// filled its band with whatever was above. Clearing it
 			// first makes every drawn row self-contained; a full pass
 			// (thr == 0) already cleared everything.
-			if (thr > 0 && y + f->h > thr && y < thr)
-				fill(MARGIN, y, view_w, f->h, 0);
+			if (thr > 0 && y + need > thr && y < thr)
+				fill(MARGIN, y, view_w, need, 0);
 
 			// The list marker sits in the hanging indent, on the
 			// first display line only.
-			if (ml.kind == MD_LIST && s == 0 && y + f->h > thr) {
-				z_clip_t c;
-				z_win_content_rect(&win, &c);
-				z_clip_t clip = { c.x0 + MARGIN, c.y0 + y,
-					c.x0 + MARGIN + view_w - 1, c.y0 + y + f->h - 1 };
-				if (clip.y1 > c.y1) clip.y1 = c.y1;
-				z_fb_draw_text(c.x0 + MARGIN + first_in, c.y0 + y,
-					ml.marker, 1, f, &clip);
+			if (ml.kind == MD_LIST && s == 0 && drawn) {
+				if (ml.marker[0] == '-' && !ml.marker[1]) {
+					// a bullet, drawn: the font's own is a dash. Not
+					// clipped to thr: a line drawn at all is drawn
+					// whole, its band cleared first (above).
+					draw_bullet(MARGIN + first_in, y, f, ml.level, 0);
+				} else {
+					z_clip_t c;
+					z_win_content_rect(&win, &c);
+					z_clip_t clip = { c.x0 + MARGIN, c.y0 + y,
+						c.x0 + MARGIN + view_w - 1, c.y0 + y + f->h - 1 };
+					if (clip.y1 > c.y1) clip.y1 = c.y1;
+					z_fb_draw_text(c.x0 + MARGIN + first_in, c.y0 + y,
+						ml.marker, 1, f, &clip);
+				}
 			}
+
+			// Code gets a bar down the left, through the gaps
+			// between its lines so a block reads as one.
+			if (ml.kind == MD_CODE && drawn)
+				vfill(MARGIN, 2, y, y + f->h, 0);
 
 			// Block quotes get a rule down the left, which is the
 			// only structural cue available without indentation
 			// alone doing all the work.
-			if (ml.kind == MD_QUOTE && y + f->h > thr)
+			if (ml.kind == MD_QUOTE && drawn)
 				fill(MARGIN, y, 1, f->h, 1);
 
 			int extra = (ml.kind == MD_LIST && s == 0)
@@ -1840,6 +2179,11 @@ static void layout_run(md_state_t *st, uint32_t line, int y,
 
 				// Clip each span to this display line's range and
 				// rebase it, so the row can be redrawn standalone.
+				v->nbar = 0;
+				if (table)
+					for (int b = 0; b <= ml.ncells; b++)
+						v->bar[v->nbar++] = (uint8_t)ml.cell[b];
+
 				v->nsp = 0;
 				for (int k = 0; k < ml.nspans && v->nsp < VIS_SPANS; k++) {
 					int a = ml.spans[k].start;
@@ -1856,7 +2200,7 @@ static void layout_run(md_state_t *st, uint32_t line, int y,
 				nvlines++;
 			}
 
-			if (y + f->h > thr) {
+			if (drawn) {
 #if READ_PROFILE
 				uint32_t d0 = rp_cyc();
 				draw_sub(&ml, starts[s], ends[s], MARGIN, y, indent + extra);
@@ -1866,16 +2210,60 @@ static void layout_run(md_state_t *st, uint32_t line, int y,
 #endif
 			}
 
+			// The vertical rules go from the rule above (or the gap
+			// above) to the bottom of the last line.
+			// From the gap under the line above: for a row's first
+			// line, from the previous row's last -- or from its own
+			// rule, at the top of a table.
+			if (table && (drawn || (band_lim > 0 && y - space_before(&ml) - 1 < band_lim))) {
+				if (bar_top < 0)
+					bar_top = !(s == 0 && from_top) ? y - 1 :
+						(ml.tflags & MD_TF_FIRST) ? y - 2 :
+						y - space_before(&ml) - 1;
+				bar_bot = y + f->h - 1;
+			}
+
+			// h3 and below: a dotted line under the text. Dotted, not
+			// solid, because solid under text is a link.
+			if (ml.kind == MD_HEADING && ml.level > 2 && drawn)
+				dots(MARGIN + indent + extra, (ends[s] - starts[s]) * f->w - 1,
+					y + f->h, 0);
+
 			y += lh;
 
 		}
 
-		// An h1 gets a rule under it -- at this size a font change
-		// alone is not enough to mark a chapter break.
-		if (ml.kind == MD_HEADING && ml.level == 1 && y + 2 < view_h) {
-			if (y >= thr) fill(MARGIN, y, view_w, 1, 1);
-			y += 3;    // never gated -- layout must not diverge
+		// An h1 gets a heavy rule under it and an h2 a light one -- a
+		// font change alone does not mark a chapter, and at the 6x12
+		// body there is none.
+		// As for a line's decoration above: a rule that does not fit
+		// cuts the block, which is laid out again once it can.
+		if (ml.kind == MD_HEADING && ml.level <= 2 && !cut) {
+			int rh = (ml.level == 1) ? 2 : 1;
+			if (y + rh > view_h) cut = true;
+			else {
+				vfill(MARGIN, view_w, y, y + rh - 1, last_drawn ? 0 : thr);
+				y += 2 + rh;    // never gated by thr -- layout must not diverge
+			}
 		}
+
+		// A table's last row: the rule under it.
+		if (table && (ml.tflags & MD_TF_LAST) && !cut) {
+			if (y + 1 > view_h) cut = true;
+			else {
+				tbl_rule(&ml, f->w, y, last_drawn ? 0 : thr);
+				// down to it from the last line
+				if (last_drawn || y >= thr || y < band_lim) {
+					if (bar_top < 0) bar_top = y - 1;
+					bar_bot = y;
+				}
+				y += 3;
+			}
+		}
+
+		// Drawn after the text, whose cells paint their background:
+		// when the table, or the screen, ends.
+		if (bar_top >= 0) tbars_add(&ml, f->w, bar_top, bar_bot, thr);
 
 		// Stop at the first block that did not fit. The loop used to
 		// carry on reading blocks that could not fit either -- y never
@@ -1890,6 +2278,8 @@ static void layout_run(md_state_t *st, uint32_t line, int y,
 		if (cut) break;
 
 	}
+
+	tbars_flush(thr);
 
 	// Where the next layout resumes. If a block was cut short, just
 	// before it -- it is re-laid-out then, since more of it may fit.
@@ -2218,6 +2608,7 @@ static void repaint(void) {
 // -- which at scroll rates is exactly the flash it looks like.
 
 static int scroll_down(int n);
+static void scroll_up(int n);
 static void repaint_body(void);
 
 // -- accelerated forward scroll --
@@ -2444,6 +2835,135 @@ static void scroll_forward(int n) {
 	rp_total += rp_cyc() - t_scroll0;
 	rp_pending = 1;
 #endif
+
+}
+
+// Scrolls back `n` display lines the way scroll_forward() scrolls on:
+// the pixels move and only what is new is drawn. It used to be a full
+// repaint -- the body cleared and every line drawn again, a visible
+// flash on every arrow or wheel notch up.
+//
+//   1. Where does the old top land? A layout from the new top that
+//      draws nothing and stops there (meas_*): it reads only the
+//      blocks scrolling in, which have to be read anyway.
+//   2. Blit the body DOWN by that much (zgfx.h does a downward copy
+//      in strips, bottom first).
+//   3. One layout pass from the new top, drawing only the strip
+//      exposed at the top (band_lim) and the rows below the last
+//      step the old screen showed whole -- the bottom, where a line
+//      that fitted before may not fit now.
+//
+// Every step in between came from the blit, and is checked against
+// the old step table like scroll_forward() checks its own; any doubt
+// is a full repaint.
+static void scroll_backward(int n) {
+
+	static int16_t  o_y[VIS_STEPS];
+	static uint32_t o_ln[VIS_STEPS];
+	static uint8_t  o_sub[VIS_STEPS];
+
+	bool fast = drawn_valid && !sel_on && sel_link < 0 && fh >= 0;
+	int on = nsteps > VIS_STEPS ? VIS_STEPS : nsteps;
+
+	for (int i = 0; i < on; i++) {
+		o_y[i] = step_y[i];
+		o_ln[i] = step_ln[i];
+		o_sub[i] = step_sub[i];
+	}
+
+	uint32_t ol = top_line, os = top_sub;
+
+	scroll_up(n);
+
+	if (top_line == ol && top_sub == os) return;	// at the top already
+
+	if (!fast || on < 1 || o_ln[0] != ol || o_sub[0] != os) {
+		repaint_body();
+		return;
+	}
+
+	// 1. measure
+	md_state_t st;
+	seek_line(top_line, &st);
+	meas_on = true;
+	meas_ln = ol;
+	meas_sub = os;
+	meas_y = -1;
+	{
+		md_state_t mst = st;
+		layout_run(&mst, top_line, MARGIN, top_sub, view_h + 1000);
+	}
+	meas_on = false;
+	cache_valid = false;	// that layout stopped early: nothing to resume
+
+	int shift = meas_y - MARGIN;
+
+	if (meas_y < 0 || shift <= 0 || shift >= view_h - MARGIN) {
+		repaint_body();
+		return;
+	}
+
+	// 2. blit
+	z_clip_t c;
+	z_win_content_rect(&win, &c);
+
+	if (!z_fb_hw_scroll_allowed((int)c.x0 + MARGIN, (int)c.y0 + MARGIN,
+		view_w, view_h - MARGIN)) {
+		SD(sd_noblit++);
+		repaint_body();
+		return;
+	}
+
+	z_fb_hw_scroll((int)c.x0 + MARGIN, (int)c.y0 + MARGIN,
+		view_w, view_h - MARGIN, shift);
+	SD(sd_blit++);
+
+	// 3. draw the top strip and the bottom. Everything above an old
+	// step's start was drawn whole, so the last old step still on the
+	// screen once moved is where the bottom redraw begins -- less the
+	// row just above it, the gap a table row's rules reach up into,
+	// which belongs to that step and may now be cut.
+	int lim = MARGIN + shift;
+	int thr = lim;
+	for (int i = 0; i < on; i++)
+		if (o_y[i] + shift <= view_h) thr = o_y[i] + shift - 1;
+	if (thr < lim) thr = lim;
+
+	fill(0, 0, view_w + MARGIN, lim, 0);
+	if (thr < view_h) fill(0, thr, view_w + MARGIN, view_h - thr, 0);
+
+	nvlinks = 0;
+	nvlines = 0;
+	nsteps = 0;
+
+	seek_line(top_line, &st);
+	top_off = rd_tell();
+
+	band_lim = lim;
+	layout_run(&st, top_line, MARGIN, top_sub, thr);
+	band_lim = 0;
+
+	bottom_off = rd_tell();
+	if (bottom_off < top_off) bottom_off = top_off;
+
+	// VERIFY: the steps the blit carried are the old ones, `shift`
+	// lower, in order.
+	int i0 = 0;
+	while (i0 < nsteps && step_y[i0] < lim) i0++;
+	for (int i = i0; i < nsteps; i++) {
+		int band_end = (i + 1 < nsteps) ? (int)step_y[i + 1] : view_h;
+		if (band_end > thr) break;
+		int k = i - i0;
+		if (k >= on || step_ln[i] != o_ln[k] || step_sub[i] != o_sub[k] ||
+			(int)step_y[i] != (int)o_y[k] + shift) {
+			draw_body_from(0);
+			break;
+		}
+	}
+
+	update_scrollbar();
+	body_dirty = false;
+	drawn_valid = true;
 
 }
 
@@ -3536,8 +4056,7 @@ static void scroll_flush(void) {
 		if (!pages) scroll_forward(n);
 		else { scroll_down(n); repaint_body(); }
 	} else {
-		scroll_up(-n);
-		repaint_body();
+		scroll_backward(-n);
 	}
 
 	sd_report_flush();
@@ -3878,26 +4397,48 @@ static void forward_msg(z_msg_t *msg, void *user) {
 			// out at the old width: a blit trusting them now moves
 			// pixels that are not where the step table says, and a
 			// resume from the cache continues the old wrapping.
-			drawn_valid = false;
-			cache_valid = false;
-
-			// top_sub counts display lines of top_line's block at the
-			// OLD width. Narrower, the block wraps to more and it is
-			// still valid; wider, to fewer, and it may now point past
-			// the block's end -- layout_run() would skip all of it
-			// and the next one too. One seek, near a checkpoint.
-			if (top_sub && fh >= 0) {
-				uint32_t used;
-				int subs = block_subs(top_line, &used);
-				if (subs < 1) subs = 1;
-				if (top_sub >= (uint32_t)subs) top_sub = (uint32_t)subs - 1;
-			}
+			rewrapped();
 			break;
 
 		default:
 			break;
 
 	}
+
+}
+
+// After the width or the font changed: everything laid out is laid out
+// at the old one.
+static void rewrapped(void) {
+
+	// What is on the glass, and the layout cache, were laid out at the
+	// old size: a blit trusting them now moves pixels that are not
+	// where the step table says, and a resume from the cache continues
+	// the old wrapping.
+	drawn_valid = false;
+	cache_valid = false;
+
+	// top_sub counts display lines of top_line's block at the OLD
+	// size. More lines now and it is still valid; fewer, and it may
+	// point past the block's end -- layout_run() would skip all of it
+	// and the next one too. One seek, near a checkpoint.
+	if (top_sub && fh >= 0) {
+		uint32_t used;
+		int subs = block_subs(top_line, &used);
+		if (subs < 1) subs = 1;
+		if (top_sub >= (uint32_t)subs) top_sub = (uint32_t)subs - 1;
+	}
+
+}
+
+// The titlebar's Aa: the body between 5x8 and 6x12. Not remembered --
+// read opens at 5x8 -- like text's.
+static void do_font(void) {
+
+	sel_clear();
+	body_font = (body_font == &z_font_6x12) ? &z_font_5x8 : &z_font_6x12;
+	rewrapped();
+	repaint();
 
 }
 
@@ -3921,7 +4462,8 @@ int main(void) {
 	if (z_win_create_flags(&win, "read", WIN_W, WIN_H, -1, -1,
 		Z_WIN_FLAG_CLOSE_ICON | Z_WIN_FLAG_CLOSE_KILLS_OWNER |
 		Z_WIN_FLAG_RESIZABLE | Z_WIN_FLAG_MIN_IS_CREATE |
-		Z_WIN_FLAG_OPEN_ICON | Z_WIN_FLAG_READABLE) != Z_OK) {
+		Z_WIN_FLAG_OPEN_ICON | Z_WIN_FLAG_FONT_ICON |
+		Z_WIN_FLAG_READABLE) != Z_OK) {
 		printf("read: failed to create window -- is wm running?\n");
 		return 1;
 	}
@@ -4092,6 +4634,8 @@ int main(void) {
 						break;
 					if (Z_WM_UNPACK_TBICON_KIND(msg.obj.val.uint32) ==
 						Z_WM_TBICON_OPEN) { scroll_flush(); do_open(); }
+					if (Z_WM_UNPACK_TBICON_KIND(msg.obj.val.uint32) ==
+						Z_WM_TBICON_FONT) { scroll_flush(); do_font(); }
 
 					break;
 

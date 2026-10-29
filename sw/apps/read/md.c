@@ -20,6 +20,9 @@ void md_state_init(md_state_t *st) {
 	st->in_list = false;
 	st->front_lines = 0;
 	st->skip_run = 0;
+	st->tbl_cols = 0;
+	st->tbl_head = false;
+	for (int i = 0; i < MD_TBL_COLS; i++) st->tbl_w[i] = st->tbl_min[i] = 0;
 }
 
 
@@ -350,6 +353,331 @@ static void inline_pass(md_line_t *o, const char *s) {
 
 }
 
+// -- tables --
+
+// A |---|:--:| separator row: nothing but pipes, dashes, colons and
+// spaces, with at least one dash.
+static bool is_sep_row(const char *s) {
+
+	bool dash = false;
+
+	for (int k = 0; s[k]; k++) {
+		char ch = s[k];
+		if (ch == '-') dash = true;
+		else if (ch != '|' && ch != ':' && !is_space(ch)) return false;
+	}
+
+	return dash;
+
+}
+
+// Out of a table. Everything cleared, not just tbl_cols: the state is
+// compared whole (index checkpoints, render_test's seekcache), and a
+// table's widths left behind would make two ways to the same line
+// look like two different states.
+static void table_end(md_state_t *st) {
+	st->tbl_cols = 0;
+	st->tbl_head = false;
+	for (int i = 0; i < MD_TBL_COLS; i++) st->tbl_w[i] = st->tbl_min[i] = 0;
+}
+
+// Cell `i` of a split row, in characters.
+static int cell_w(const md_line_t *o, int i) {
+	int n = o->cell[i + 1] - o->cell[i];
+	return n > 255 ? 255 : n;
+}
+
+// Its longest word, at most MD_TBL_WORD.
+static int cell_word(const md_line_t *o, int i) {
+	int most = 0, run = 0;
+	for (int k = o->cell[i]; k < o->cell[i + 1]; k++) {
+		if (o->text[k] == ' ') run = 0;
+		else if (++run > most) most = run;
+	}
+	return most > MD_TBL_WORD ? MD_TBL_WORD : most;
+}
+
+// Both, for each cell of a split row.
+static void cell_sizes(const md_line_t *o, uint8_t *w, uint8_t *mw) {
+	for (int i = 0; i < o->ncells; i++) {
+		w[i] = (uint8_t)cell_w(o, i);
+		mw[i] = (uint8_t)cell_word(o, i);
+	}
+}
+
+// Splits the row at s (its leading '|') into o's cells.
+//
+// A cell ends at the next '|' that is not escaped; `\|` is a literal
+// pipe, in code too (GitHub's rule -- docs/learn_format.md writes
+// tables of shell pipes that way). The trailing pipe is optional.
+// Each cell is trimmed and goes through inline_pass() like any text.
+static void table_row(md_line_t *o, const char *s) {
+
+	static char cbuf[MD_LINE_MAX];
+
+	int i = 1;
+
+	while (o->ncells < MD_TBL_COLS) {
+
+		int k = skip_spaces(s, i);
+		if (!s[k]) break;		// the trailing pipe, or nothing after it
+
+		bool last = (o->ncells == MD_TBL_COLS - 1);
+		int n = 0;
+
+		i = k;
+		while (s[i] && (last || s[i] != '|') && n < MD_LINE_MAX - 1) {
+			if (s[i] == '\\' && s[i + 1] == '|') { cbuf[n++] = '|'; i += 2; }
+			else cbuf[n++] = s[i++];
+		}
+
+		while (n && is_space(cbuf[n - 1])) n--;
+		if (last && n && cbuf[n - 1] == '|') {
+			n--;
+			while (n && is_space(cbuf[n - 1])) n--;
+		}
+		cbuf[n] = 0;
+
+		o->cell[o->ncells] = o->len;
+		inline_pass(o, cbuf);
+		o->ncells++;
+		o->cell[o->ncells] = o->len;
+
+		if (s[i] == '|') i++;
+		else break;
+
+	}
+
+	if (!o->ncells) {		// a lone '|': one empty cell
+		o->cell[0] = o->cell[1] = o->len;
+		o->ncells = 1;
+	}
+
+	o->text[o->len] = 0;
+
+}
+
+int md_table_measure(const char *src, uint8_t *w, uint8_t *mw) {
+
+	static md_line_t row;
+
+	int fi = skip_spaces(src, 0);
+	if (src[fi] != '|') return 0;
+	if (is_sep_row(src + fi)) return -1;
+
+	row.len = 0;
+	row.nspans = 0;
+	row.nlinks = 0;
+	row.ncells = 0;
+	table_row(&row, src + fi);
+
+	cell_sizes(&row, w, mw);
+
+	return row.ncells;
+
+}
+
+void md_table_widen(md_state_t *st, md_line_t *row, const uint8_t *w,
+	const uint8_t *mw, int n) {
+
+	if (n > MD_TBL_COLS) n = MD_TBL_COLS;
+
+	if (st && st->tbl_cols) {
+		if (n > st->tbl_cols) st->tbl_cols = (uint8_t)n;
+		for (int i = 0; i < n; i++) {
+			if (w[i] > st->tbl_w[i]) st->tbl_w[i] = w[i];
+			if (mw[i] > st->tbl_min[i]) st->tbl_min[i] = mw[i];
+		}
+	}
+
+	if (row && row->kind == MD_TABLE) {
+		if (n > row->tcols) row->tcols = (uint8_t)n;
+		for (int i = 0; i < n; i++) {
+			if (w[i] > row->colw[i]) row->colw[i] = w[i];
+			if (mw[i] > row->colmin[i]) row->colmin[i] = mw[i];
+		}
+	}
+
+}
+
+// -- table layout --
+
+#define TBL_MAX_LINES  32	// display lines in one cell, at most
+
+void md_table_layout(md_line_t *row, int chars) {
+
+	static md_line_t src;
+	static uint8_t sidx[MD_LINE_MAX];	// span covering each char, or 0xFF
+	static uint16_t ls[MD_TBL_COLS][TBL_MAX_LINES], le[MD_TBL_COLS][TBL_MAX_LINES];
+	int nl[MD_TBL_COLS];
+	int fw[MD_TBL_COLS];
+
+	int n = row->tcols > row->ncells ? row->tcols : row->ncells;
+	if (n < 1) n = 1;
+	if (n > MD_TBL_COLS) n = MD_TBL_COLS;
+
+	// -- column widths
+	int mn[MD_TBL_COLS];
+	int total = n + 1, tmin = n + 1;
+	for (int i = 0; i < n; i++) {
+		fw[i] = row->colw[i];
+		mn[i] = row->colmin[i];
+		if (i < row->ncells && row->cell[i + 1] - row->cell[i] > fw[i])
+			fw[i] = row->cell[i + 1] - row->cell[i];
+		if (fw[i] < 1) fw[i] = 1;
+		if (mn[i] < 1) mn[i] = 1;
+		if (mn[i] > fw[i]) mn[i] = fw[i];
+		total += fw[i];
+		tmin += mn[i];
+	}
+
+	if (total > chars && tmin <= chars) {
+
+		// Each its longest word, and the room left shared out by how
+		// much more each wants. Rounded down; the remainder a
+		// character at a time to the columns still furthest short.
+		int room = chars - tmin, want = total - tmin;
+		int given = 0;
+		for (int i = 0; i < n; i++) {
+			int extra = (fw[i] - mn[i]) * room / want;
+			fw[i] = mn[i] + extra;
+			given += extra;
+		}
+		for (; given < room; given++) {
+			int b = -1;
+			for (int i = 0; i < n; i++)
+				if (fw[i] < row->colw[i] && (b < 0 || row->colw[i] - fw[i] > row->colw[b] - fw[b]))
+					b = i;
+			if (b < 0) break;
+			fw[b]++;
+		}
+		total = chars;
+
+	} else if (total > chars) {
+
+		for (int i = 0; i < n; i++) fw[i] = mn[i];
+		total = tmin;
+
+		while (total > chars) {
+			int w = 0;
+			for (int i = 1; i < n; i++) if (fw[i] > fw[w]) w = i;
+			// Not below a few characters: past that a table is clipped
+			// at the right rather than shredded a letter a line.
+			if (fw[w] <= 4) break;
+			// Down to the next widest at once; a character at a time
+			// between columns tied for widest, so they share the cut.
+			int next = 4;
+			for (int i = 0; i < n; i++)
+				if (i != w && fw[i] > next) next = fw[i];
+			int cut = fw[w] - next;
+			if (cut > total - chars) cut = total - chars;
+			if (cut < 1) cut = 1;
+			fw[w] -= cut;
+			total -= cut;
+		}
+
+	}
+
+	// -- each cell wrapped into its column
+	src = *row;
+
+	for (int i = 0; i < src.len; i++) sidx[i] = 0xFF;
+	for (int k = 0; k < src.nspans; k++)
+		for (int i = src.spans[k].start;
+			i < src.spans[k].start + src.spans[k].len && i < src.len; i++)
+			sidx[i] = (uint8_t)k;
+
+	int lines = 1;
+
+	for (int c = 0; c < n; c++) {
+
+		nl[c] = 0;
+		if (c >= src.ncells) continue;
+
+		int i = src.cell[c], end = src.cell[c + 1];
+
+		while (i < end && nl[c] < TBL_MAX_LINES) {
+
+			int stop = i + fw[c];
+
+			if (stop >= end) stop = end;
+			else {
+				// the last space that ends a word in range
+				int brk = -1;
+				for (int k = stop; k > i; k--)
+					if (src.text[k] == ' ') { brk = k; break; }
+				if (brk > i) stop = brk;
+			}
+
+			ls[c][nl[c]] = (uint16_t)i;
+			le[c][nl[c]] = (uint16_t)stop;
+			nl[c]++;
+
+			i = stop;
+			while (i < end && src.text[i] == ' ') i++;
+
+		}
+
+		if (nl[c] > lines) lines = nl[c];
+
+	}
+
+	// -- the lines, with the spans carried across
+	int len = total;
+	if (lines * len > MD_LINE_MAX - 1) lines = (MD_LINE_MAX - 1) / len;
+	if (lines < 1) lines = 1;
+
+	row->len = 0;
+	row->nspans = 0;
+	int open = -1;		// row->spans index being extended, or -1
+	uint8_t open_src = 0xFF;
+
+	for (int l = 0; l < lines; l++) {
+		for (int c = 0; c <= n; c++) {
+
+			// the border cell
+			if (row->len < MD_LINE_MAX - 1) row->text[row->len++] = ' ';
+			open = -1;
+			if (c == n) break;
+
+			int a = 0, b = 0;
+			if (l < nl[c]) { a = ls[c][l]; b = le[c][l]; }
+
+			for (int k = 0; k < fw[c] && row->len < MD_LINE_MAX - 1; k++) {
+
+				int si = a + k;
+				char ch = (si < b) ? src.text[si] : ' ';
+				uint8_t sp = (si < b) ? sidx[si] : 0xFF;
+
+				if (sp == 0xFF) open = -1;
+				else if (open >= 0 && sp == open_src) row->spans[open].len++;
+				else if (row->nspans < MD_MAX_SPANS) {
+					open = row->nspans++;
+					open_src = sp;
+					row->spans[open].start = row->len;
+					row->spans[open].len = 1;
+					row->spans[open].kind = src.spans[sp].kind;
+					row->spans[open].link = src.spans[sp].link;
+				} else open = -1;
+
+				row->text[row->len++] = ch;
+
+			}
+
+		}
+	}
+
+	row->text[row->len] = 0;
+
+	// borders: where they fall in a line
+	row->ncells = (uint8_t)n;
+	row->cell[0] = 0;
+	for (int c = 0; c < n; c++)
+		row->cell[c + 1] = (uint16_t)(row->cell[c] + fw[c] + 1);
+	row->tflags |= MD_TF_LAID;
+
+}
+
 // -- block pass --
 
 // A line that draws nothing (md.h, MD_SKIP) -- but every MD_SKIP_RUN-th
@@ -386,6 +714,10 @@ bool md_parse(md_state_t *st, const char *src, const char *next,
 	// Anything that draws ends a run of lines that do not (skip()).
 	if (out->kind != MD_SKIP) st->skip_run = 0;
 
+	// And anything but a row ends a table -- one whose last row was
+	// not seen as last (a caller that passed no `next`).
+	if (out->kind != MD_TABLE && out->kind != MD_SKIP) table_end(st);
+
 	return ate;
 
 }
@@ -400,6 +732,9 @@ static bool parse_line(md_state_t *st, const char *src, const char *next,
 	out->text[0] = 0;
 	out->nspans = 0;
 	out->nlinks = 0;
+	out->ncells = 0;
+	out->tcols = 0;
+	out->tflags = 0;
 
 	if (!src) return false;
 
@@ -552,32 +887,54 @@ static bool parse_line(md_state_t *st, const char *src, const char *next,
 
 	// -- table row --
 	//
-	// Rendered VERBATIM rather than laid out into columns. The font is
-	// fixed width, so a markdown table's own alignment already lines
-	// up on screen -- and real column layout would need the whole
-	// table measured before drawing any of it, which a reader that
-	// streams a file cannot do.
-	//
-	// The |---|---| separator row is dropped: it carries no
-	// information a reader needs once the header is already above it.
+	// Split into cells (table_row()); laid out in columns by the
+	// reader, which knows the view width. The |---|---| separator
+	// row draws nothing: the reader rules the header off instead.
 	if (src[fi] == '|') {
 
-		bool sep = true;
-
-		for (int k = fi; src[k]; k++) {
-			char ch = src[k];
-			if (ch != '|' && ch != '-' && ch != ':' && !is_space(ch)) {
-				sep = false;
-				break;
-			}
+		if (is_sep_row(src + fi)) {
+			if (st->tbl_cols) st->tbl_head = true;
+			return skip(st, out);
 		}
-
-		if (sep) return skip(st, out);
 
 		out->kind = MD_TABLE;
 		st->in_list = false;
-		put_str(out, src + fi, MD_LINE_MAX - 1);
-		out->text[out->len] = 0;
+		table_row(out, src + fi);
+
+		uint8_t w[MD_TBL_COLS], mw[MD_TBL_COLS];
+		cell_sizes(out, w, mw);
+
+		if (!st->tbl_cols) {
+			// A new table: columns sized from this row for now.
+			out->tflags |= MD_TF_FIRST;
+			st->tbl_head = false;
+			table_end(st);
+			st->tbl_cols = out->ncells;
+		} else {
+			if (st->tbl_head) out->tflags |= MD_TF_BODY1;
+			st->tbl_head = false;
+		}
+
+		// A row wider than the ones before widens the table.
+		md_table_widen(st, NULL, w, mw, out->ncells);
+
+		int ni = next ? skip_spaces(next, 0) : 0;
+		bool next_row = next && next[ni] == '|';
+
+		if ((out->tflags & MD_TF_FIRST) && next_row && is_sep_row(next + ni))
+			out->tflags |= MD_TF_HEAD;
+
+		out->tcols = st->tbl_cols;
+		for (int i = 0; i < MD_TBL_COLS; i++) {
+			out->colw[i] = st->tbl_w[i];
+			out->colmin[i] = st->tbl_min[i];
+		}
+
+		if (!next_row) {
+			out->tflags |= MD_TF_LAST;
+			table_end(st);
+		}
+
 		return false;
 
 	}

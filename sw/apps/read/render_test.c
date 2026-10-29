@@ -19,7 +19,8 @@
 #include "md.h"
 
 #define MAX_SUB 64
-#define FW 5
+#define FW 5     // read.c's body font: 5x8 unless Aa asks for 6x12
+#define BFH 8
 static int view_w = 300;
 
 static char *doc; static long doclen;
@@ -48,11 +49,16 @@ static void line_indent(const md_line_t *ml, int *first, int *rest) {
         case MD_LIST: { int base=(ml->level+1)*2*cw; int mlen=(int)strlen(ml->marker)+1;
             *first=base; *rest=base+mlen*cw; break; }
         case MD_QUOTE: *first=*rest=3*cw; break;
-        case MD_CODE: case MD_TABLE: *first=*rest=cw; break;
+        case MD_CODE: *first=*rest=cw; break;
         default: *first=*rest=0; break;
     }
 }
 static int wrap_line(const md_line_t *ml,int width,uint16_t*st,uint16_t*en){
+    if (ml->kind==MD_TABLE&&(ml->tflags&MD_TF_LAID)&&ml->len){
+        int L=md_table_line_len(ml),n=0;
+        for(int i=0;i+L<=ml->len&&n<MAX_SUB;i+=L,n++){st[n]=i;en[n]=i+L;}
+        if(n)return n;
+    }
     if (ml->kind==MD_CODE||ml->kind==MD_TABLE){st[0]=0;en[0]=ml->len;return 1;}
     if (!ml->len){st[0]=0;en[0]=0;return 1;}
     int fi,ri; line_indent(ml,&fi,&ri);
@@ -79,6 +85,24 @@ static long read_block(long ln, md_state_t *st, md_line_t *out) {
     md_state_t probe=*st; md_line_t first;
     int ate = md_parse(&probe,line,pk,&first);
     if (ate) { *st=probe; *out=first; return 2; }
+    if (first.kind==MD_TABLE) {
+        // read.c's table_lookahead(): the rows ahead widen the columns
+        if ((first.tflags&(MD_TF_FIRST|MD_TF_LAST))==MD_TF_FIRST) {
+            uint8_t w[MD_TBL_COLS],mw[MD_TBL_COLS],most[MD_TBL_COLS]={0},mmw[MD_TBL_COLS]={0};
+            int mn=0; long bytes=0;
+            for (int r=0;r<64&&bytes<4096&&ln+1+r<nlines;r++) {
+                getline_at(ln+1+r,peek,MD_LINE_MAX);
+                bytes+=(long)strlen(peek)+1;
+                int n=md_table_measure(peek,w,mw);
+                if(!n)break;
+                if(n<0)continue;
+                for(int i=0;i<n;i++){ if(w[i]>most[i])most[i]=w[i]; if(mw[i]>mmw[i])mmw[i]=mw[i]; }
+                if(n>mn)mn=n;
+            }
+            md_table_widen(&probe,&first,most,mmw,mn);
+        }
+        *st=probe; *out=first; md_table_layout(out,view_w/FW); return 1;
+    }
     if (!md_continues(st,first.kind,pk)) { *st=probe; *out=first; return 1; }
     int n=0; for(int i=0;line[i]&&n<MD_LINE_MAX-1;i++) joined[n++]=line[i];
     long used=1; md_kind_t kind=first.kind;
@@ -298,32 +322,47 @@ int main(int argc,char**argv){
                 long blk=cur; cur+=used; int y_blk=y;
                 if(ml.kind==MD_SKIP)continue;
                 if(ml.kind==MD_BLANK){
-                    if(!sub_skip){ if(nstep<SMAX){st_y[nstep]=y_blk;st_ln[nstep]=blk;st_sub[nstep]=0;nstep++;} y+=5; }
+                    if(!sub_skip){ if(nstep<SMAX){st_y[nstep]=y_blk;st_ln[nstep]=blk;st_sub[nstep]=0;nstep++;} y+=BFH/2+1; }
                     else sub_skip=0; continue; }
                 if(ml.kind==MD_RULE){
+                    if(!sub_skip&&y+3+2>VH){ end_cut=1; end_st=snap_st; end_line=snap_line; end_y=snap_y; cache_ns=snap_ns; return; }
                     if(!sub_skip){ if(nstep<SMAX){st_y[nstep]=y_blk;st_ln[nstep]=blk;st_sub[nstep]=0;nstep++;}
                         y+=3; if(y+1>=thr) emit(ev,y+1,"R;"); y+=3; } else sub_skip=0;
                     continue; }
-                int fh=(ml.kind==MD_HEADING&&ml.level<=2)?12:8, lh=fh+1, fi,ri; line_indent(&ml,&fi,&ri);
+                int fh=(ml.kind==MD_HEADING&&ml.level<=2)?12:BFH, lh=fh+1, fi,ri; line_indent(&ml,&fi,&ri);
                 int n2=wrap_line(&ml,view_w,s_,e_);
-                if(!sub_skip){ if(ml.kind==MD_HEADING) y+=ml.level<=2?5:3; }
+                int last_drawn=0;
+                int from_top=!sub_skip, table=(ml.kind==MD_TABLE&&(ml.tflags&MD_TF_LAID));
+                int sb=ml.kind==MD_HEADING?(ml.level<=2?5:3):table?((ml.tflags&MD_TF_BODY1)?5:3):0;
+                if(from_top) y+=sb;
+                if(table&&from_top){ if(y-2>=thr) emit(ev,y-2,"H;"); if((ml.tflags&MD_TF_BODY1)&&y-4>=thr) emit(ev,y-4,"H;"); }
                 int s2;
                 for(s2=0;s2<n2;s2++){
                     if(sub_skip){sub_skip--;continue;}
-                    if(y+fh>VH){ end_cut=1; break; }
+                    int need=fh+((ml.kind==MD_CODE||(ml.kind==MD_HEADING&&ml.level>2))?1:0);
+                    if(s2==n2-1){ if(ml.kind==MD_HEADING&&ml.level<=2) need=lh+(ml.level==1?2:1);
+                                  else if(table&&(ml.tflags&MD_TF_LAST)) need=lh+1; }
+                    if(y+need>VH){ end_cut=1; break; }
                     if(nstep<SMAX){st_y[nstep]=s2?y:y_blk;st_ln[nstep]=blk;st_sub[nstep]=s2;nstep++;}
                     int indent=s2?ri:fi, extra=(ml.kind==MD_LIST&&s2==0)?((int)strlen(ml.marker)+1)*FW:0;
-                    if(y+fh>thr){
-                        if(thr>0&&y<thr) for(int yy=y;yy<y+fh;yy++) if(yy>=0&&yy<VH) ev[yy][0]=0;  // band fill
+                    if(s2==n2-1) last_drawn=(y+need>thr);
+                    if(y+need>thr){
+                        if(thr>0&&y<thr) for(int yy=y;yy<y+need;yy++) if(yy>=0&&yy<VH) ev[yy][0]=0;  // band fill
                         for(int yy=y;yy<y+fh;yy++){ char t[48];
                             if(ml.kind==MD_LIST&&s2==0){ sprintf(t,"M%ld;",blk); emit(ev,yy,t); }
                             if(ml.kind==MD_QUOTE) emit(ev,yy,"Q;");
+                            if(ml.kind==MD_CODE) emit(ev,yy,"C;");
+                            if(ml.kind==MD_HEADING&&ml.level>2&&yy==y+fh-1) emit(ev,yy+1,"D;");
+                            if(table) emit(ev,yy,"V;");
                             sprintf(t,"T%ld.%d@%dh%d;",blk,s2,MG+indent+extra,fh); emit(ev,yy,t); }
                     }
                     y+=lh;
                 }
+                if(ml.kind==MD_HEADING&&ml.level<=2&&!end_cut){ int rh=ml.level==1?2:1;
+                    if(y+rh>VH) end_cut=1; else { if(y>=thr||last_drawn) emit(ev,y,"U;"); y+=2+rh; } }
+                if(table&&(ml.tflags&MD_TF_LAST)&&!end_cut){
+                    if(y+1>VH) end_cut=1; else { if(y>=thr||last_drawn) emit(ev,y,"B;"); y+=3; } }
                 if(end_cut){ end_st=snap_st; end_line=snap_line; end_y=snap_y; cache_ns=snap_ns; }
-                if(ml.kind==MD_HEADING&&ml.level==1&&y+2<VH){ if(y>=thr) emit(ev,y,"U;"); y+=3; }
                 if(end_cut) return;
             }
             end_st=st; end_line=cur; end_y=y; cache_ns=nstep;

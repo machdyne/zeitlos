@@ -62,6 +62,15 @@ test:
 	./md_test $(DOCS) $(CASES)
 	cc --std=gnu99 -Wall -o rfind_test rfind_test.c md.c
 	./rfind_test $(DOCS) cases/fence_unterminated.md
+	cc --std=gnu99 -Wall -O2 -o rpic_test rpic_test.c md.c ../../common/zfont_data.c
+	@for f in 6 5; do for d in $(SEAM_DOCS); do \
+		./rpic_test $$d 316 280 seam $$f seam.pbm 300 || exit 1; done; done
+
+# Pixels: a scroll by blit plus the strip redrawn must equal a fresh
+# repaint of the same place (rpic_test.c, "seam"). A difference is
+# left in seam.pbm, the two screens side by side. Tables, lists, code
+# and headings, in both fonts.
+SEAM_DOCS ?= ../../../docs/learn_format.md ../../../docs/usb_host.md ../../../docs/read_app.md
 
 # Renders a document to ASCII using the same parser, wrapping and
 # block logic the app uses, and checks that scrolling is REVERSIBLE --
@@ -84,8 +93,20 @@ render:
 	cc --std=gnu99 -Wall -o render_test render_test.c md.c
 	./render_test $(DOC) 300 $(MODE)
 
-.PHONY: test render
+# A picture of the first page of DOC, drawn by the real read.c in the
+# real fonts, and what it cost -- see rpic_test.c:
+#
+#   make pic DOC=file.md                read.pbm, 5x8
+#   make pic DOC=file.md FONT=6         6x12
+PICW ?= 316
+PICH ?= 280
+FONT ?= 5
+pic:
+	cc --std=gnu99 -Wall -O2 -o rpic_test rpic_test.c md.c ../../common/zfont_data.c
+	./rpic_test $(DOC) $(PICW) $(PICH) 0 $(FONT) read.pbm
 
-CLEAN_EXTRA = md_test render_test rfind_test
+.PHONY: test render pic
+
+CLEAN_EXTRA = md_test render_test rfind_test rpic_test read.pbm seam.pbm
 
 include ../../common/app.mk

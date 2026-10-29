@@ -99,6 +99,7 @@ void z_fb_hw_box(int a, int b, int c, int d, int e, const z_clip_t *k) {
 void z_fb_hw_fill_rect(int x, int y, int w, int h, int c) { (void)x; (void)y; (void)w; (void)h; (void)c; }
 void z_fb_hw_line(int a, int b, int c, int d, int e, const z_clip_t *k) {
 	(void)a; (void)b; (void)c; (void)d; (void)e; (void)k; }
+void z_fb_hw_fill_pattern(int x, int y, int w, int h, const uint8_t *p) { (void)x; (void)y; (void)w; (void)h; (void)p; }
 void z_fb_hw_scroll(int x, int y, int w, int h, int dy) { (void)x; (void)y; (void)w; (void)h; (void)dy; }
 bool z_fb_hw_scroll_allowed(int x, int y, int w, int h) { (void)x; (void)y; (void)w; (void)h; return true; }
 static const uint8_t no_glyphs[1];
