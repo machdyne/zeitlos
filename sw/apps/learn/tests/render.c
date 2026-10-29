@@ -741,6 +741,37 @@ int main(int argc, char **argv) {
 		free(wstack);
 	}
 
+	// two worked examples on one step: shown one after the other, not
+	// both a step at a time (a learner on the board saw both move)
+	{
+		char d[600], f[700];
+		snprintf(d, sizeof d, "%s/opt/ark/edu/t-ex/01-u", hp_root);
+		char cmd[800];
+		snprintf(cmd, sizeof cmd, "mkdir -p %s", d);
+		CHECK(!system(cmd), "a course for two examples");
+		snprintf(f, sizeof f, "%s/opt/ark/edu/t-ex/course.cfg", hp_root);
+		FILE *o = fopen(f, "w");
+		fputs("id = t-ex\ntitle = Two examples\nlevel = 3\narea = school\nclass = A\nversion = 1\nauthor = test\n", o);
+		fclose(o);
+		snprintf(f, sizeof f, "%s/01-l.md", d);
+		o = fopen(f, "w");
+		fputs("# Two\n\n```example\n(example (problem \"One\") (step \"a\") (step \"b\") (answer \"1\"))\n```\n\n"
+			"```example\n(example (problem \"Two\") (step \"c\") (step \"d\") (step \"e\") (answer \"2\"))\n```\n", o);
+		fclose(o);
+		snprintf(f, sizeof f, "/opt/ark/edu/t-ex");
+		CHECK(la_open_course(f), "the course opens");
+		la_open_lesson(0);
+		draw();
+		int buttons = 0;
+		for (int i = 0; i < A.nhot; i++) if (A.hot[i].action == A_EXAMPLE) buttons++;
+		CHECK(A.example_shown == 0 && buttons == 1, "one \"next step\" button, the first example's (%d)", buttons);
+		for (int i = 0; i < 5; i++) key(' ');
+		CHECK(A.example_shown == 5 && A.step == 0, "Space showed 2 + 3 steps, in turn (%d)", A.example_shown);
+		buttons = 0;
+		for (int i = 0; i < A.nhot; i++) if (A.hot[i].action == A_EXAMPLE) buttons++;
+		CHECK(buttons == 0, "both shown: no button left (%d)", buttons);
+	}
+
 	printf("%s: %d pictures, %d failed\n", fails ? "render FAILED" : "render ok", shots, fails);
 	return fails != 0;
 }

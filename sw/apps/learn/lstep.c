@@ -655,6 +655,7 @@ typedef struct {
 	int			x, w;		// the column
 	int			check;		// the next check's index
 	int			view0, view1;	// the visible band, page y
+	int			ex_before;	// steps of the step's earlier worked examples
 } ctx_t;
 
 static bool visible(const ctx_t *c, int y, int h) { return y + h > c->view0 && y < c->view1; }
@@ -675,7 +676,7 @@ static struct {
 	uint32_t	key;
 	int			height;				// layout_step's
 	int			head;				// the title (or the review's heading) ends
-	int16_t		y0[LC_BLOCKS], y1[LC_BLOCKS], chk[LC_BLOCKS];	// from the top; the check after
+	int16_t		y0[LC_BLOCKS], y1[LC_BLOCKS], chk[LC_BLOCKS], exb[LC_BLOCKS];	// from the top; the check and example steps after
 	uint8_t		h0[LC_BLOCKS], hn[LC_BLOCKS];	// its targets in hot[]
 	lc_hot_t	hot[LC_HOTS];
 	int			nhot;
@@ -968,8 +969,8 @@ static int question(ctx_t *c, int y, int ci) {
 		// (its room is taken whether or not it shows: the layout must not
 		// depend on what is in view, or the measured step is not the drawn one)
 		if (c->p && visible(c, y, 14)) {
-			ld_textz(c->p, &s6, c->x, y + 11, "H  a hint", LD_INK);
-			hot(c, c->x, y, 70, 14, A_HINT, ci);
+			ld_textz(c->p, &s6, c->x, y + 11, "F5  a hint", LD_INK);
+			hot(c, c->x, y, 84, 14, A_HINT, ci);
 		}
 		y += 16;
 	}
@@ -984,7 +985,15 @@ static int example(ctx_t *c, int y, const lx_node_t *f) {
 	y += 14;
 	if (prob) { char t[400]; snprintf(t, sizeof t, "**%s**", prob); y = body(c, y, t, 0) + 6; say_add(prob); }
 	int nsteps = lx_count(f, "step");
-	for (int i = 0; i < nsteps && i < A.example_shown; i++) {
+	// A step's worked examples are shown one after another: Space (or the
+	// button) reveals the first one's steps, then the next one's. One
+	// count for the step; this example has what is past the ones before.
+	int before = c->ex_before;
+	c->ex_before += nsteps;
+	int shown = A.example_shown - before;
+	if (shown < 0) shown = 0;
+	if (shown > nsteps) shown = nsteps;
+	for (int i = 0; i < nsteps && i < shown; i++) {
 		lx_node_t *s = lx_find_nth(f, "step", i);
 		lx_node_t *in = lx_nth(s, 1);
 		char num[16];
@@ -992,7 +1001,8 @@ static int example(ctx_t *c, int y, const lx_node_t *f) {
 		if (c->p && visible(c, y, 14)) { ld_style_t sb = ld_st(&LDF.body_b, 0); ld_textz(c->p, &sb, c->x, y + 12, num, LD_INK); }
 		if (in && in->kind == LX_STR) { y = body(c, y, in->text, 24) + 4; say_add(in->text); }
 	}
-	if (A.example_shown < nsteps) {
+	if (shown < nsteps) {
+		if (A.example_shown < before) return y;		// a later one: its turn comes
 		if (c->p && visible(c, y, 22)) {
 			int idx = A.nhot;
 			hot(c, c->x, y, 150, 22, A_EXAMPLE, 0);
@@ -1203,6 +1213,7 @@ static int layout_step(ld_page_t *p, int top, bool *pane_beside) {
 			}
 			y = top + LC.y1[bi];
 			c.check = LC.chk[bi];
+			c.ex_before = LC.exb[bi];
 			continue;
 		}
 		int n0 = lc_nnew;
@@ -1214,6 +1225,7 @@ static int layout_step(ld_page_t *p, int top, bool *pane_beside) {
 			LC.y0[bi] = (int16_t)(y0 - top);
 			LC.y1[bi] = (int16_t)(y - top);
 			LC.chk[bi] = (int16_t)c.check;
+			LC.exb[bi] = (int16_t)c.ex_before;
 		}
 		if (p) { LC.h0[bi] = (uint8_t)n0; LC.hn[bi] = (uint8_t)(lc_nnew - n0); }
 	}
@@ -1490,15 +1502,18 @@ bool lv_key(uint32_t key, uint8_t mods) {
 		return true;
 	}
 	if (key == ' ' || key == K_ENTER) {
-		// an example's steps come before going on
+		// the step's examples' steps come before going on, one example after another
 		const lf_step_t *s = cur();
+		int total = 0;
 		for (int i = s->first; i < s->first + s->count; i++) {
 			const lf_block_t *b = &A.les->blocks[i];
-			if (b->kind == LB_DATA && !strcmp(b->name, "example") && b->forms->head &&
-				A.example_shown < lx_count(b->forms->head, "step")) {
-				A.example_shown++;
-				return true;
-			}
+			if (b->kind != LB_DATA || strcmp(b->name, "example")) continue;
+			for (lx_node_t *f = b->forms->head; f; f = f->next)
+				if (lx_is_form(f, "example")) total += lx_count(f, "step");
+		}
+		if (A.example_shown < total) {
+			A.example_shown++;
+			return true;
 		}
 		next_step();
 		return true;

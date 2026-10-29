@@ -241,7 +241,7 @@ the first pack in name order wins, then the stick.
 | Pack | Holds | Lives in | Built by | Ships |
 |---|---|---|---|---|
 | `edu-zeitlos` | the `zeit-` courses (14): Using learn; Getting started; Timeless Computing ([tc.md](tc.md), a unit a chapter); Writing; Records and numbers; Making things; Keeping your work; The network; Programming in BASIC, in Scheme, C on Zeitlos; Inside Zeitlos; Connecting things; The FPGA | this repo, `sw/data/learn/edu-zeitlos/` | `tools/learn/pack.py` | with the base set; updated with the system |
-| `edu`, `edu-k8`, `edu-life`, ... | everything else on the Ark's curriculum map ([`edu/curriculum.md`](https://github.com/machdyne/ark/blob/main/edu/curriculum.md)) | the Ark repo, `edu/<course-id>/` | `tools/learn/pack.py` from the ark clone (`repo = ark ...`, `source = @ark/edu`) | images and sdcard sets, like arklite |
+| `edu`, `edu-k8`, `edu-life`, ... | everything else on the Ark's curriculum map ([`edu/curriculum.md`](https://github.com/machdyne/ark/blob/main/edu/curriculum.md)) | the Ark repo, `edu/<course-id>/` | `tools/learn/pack.py` from the ark clone (`tools/learn/packs/edu.cfg`: `repo = ark ...`, `source = @ark/edu`) | the `edu` set, when asked for: `ZEITLOS_ASK_PACKS="... edu"` on the release, `update -s edu` on the board |
 
 **Why two places.** The Zeitlos courses describe the system: its keys,
 its apps, learn itself. So they have to change in the release that

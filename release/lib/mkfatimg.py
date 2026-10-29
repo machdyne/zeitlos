@@ -111,6 +111,8 @@ SETS = [
     ("games",        "Games",       "arcade, casino, chess, chip8 and more"),
     ("arklite",      "Ark Lite",
      "an offline library: the Ark Codex and selected texts"),
+    ("edu",          "Courses",
+     "learn's courses from the Ark: school, college, languages, life"),
 ]
 SET_NAMES = [n for n, _t, _d in SETS]
 
@@ -154,7 +156,10 @@ PLACE_SET = [
 ]
 # The ask packs an update knows, by set. Others (arkmed) are only on an
 # image: not in its manifest, never touched by an update.
-PACK_SET = {"zdocs": "base", "arklite": "arklite", "edu-zeitlos": "base"}
+PACK_SET = {"zdocs": "base", "arklite": "arklite", "edu-zeitlos": "base",
+            # the Ark's courses (tools/learn/packs/edu.cfg): only when
+            # asked for, ZEITLOS_ASK_PACKS="... edu" (they need the ark checkout)
+            "edu": "edu"}
 
 
 def set_of(dest):
