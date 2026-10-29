@@ -107,9 +107,13 @@ typedef struct {
 	// content starts at the top edge. From the top bit of the h in
 	// wm's rect messages (Z_WM_RECT_BARE); z_win_content_rect()
 	// follows it. (Bytes, these
-	// three: repl keeps several windows inside a RAM budget with no
-	// slack, docs/flash_apps.md.)
+	// four: repl keeps several windows inside a RAM budget with no
+	// slack, docs/flash_apps.md. The fourth fills the padding.)
 	uint8_t		bare;
+	// Created with Z_WIN_FLAG_RESIZABLE: wm draws the resize grip in
+	// the bottom-right corner, and a scrollbar stops short of it
+	// (zwidget.c, sb_abs_rect()).
+	uint8_t		resizable;
 } z_win_t;
 
 // sends Z_WM_CREATE_WINDOW and blocks for the reply. title may be

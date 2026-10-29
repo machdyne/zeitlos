@@ -141,6 +141,13 @@ most of it and leaves a half-drawn corner. Both `sw/apps/text`'s
 fill in two for this: full width above the grip's rows, then
 `content_w - Z_WIN_GRIP_INSET` wide across them.
 
+**`z_win_clear()` does this itself** on a resizable window (October
+2026): `read` cleared its whole window with it at every repaint, which
+erased the grip after every resize. 26 apps call it. A fill an app
+makes on its own -- `z_fb_hw_fill_rect()` -- still has to dodge the
+grip by hand; `read`'s `fill()` splits a rect that reaches the grip's
+square the same way.
+
 ### Leave room for the frame, too
 
 A scrollbar **blanks its whole rect** before painting the thumb. Placed
@@ -161,6 +168,19 @@ can no longer be resized at all.
 `Z_WIN_GRIP_INSET` (`zwm.h`) is how far the grip reaches in from the
 content area's bottom-right corner, so a vertical scrollbar wants
 `len = content_h - Z_WIN_GRIP_INSET`.
+
+**The scrollbar now does this itself** (October 2026, `sb_len()` in
+`zwidget.c`). On a window created with `Z_WIN_FLAG_RESIZABLE`
+(`z_win_t.resizable`), a bar whose rect would run into the grip's square
+is drawn, hit-tested and dragged as if it stopped `Z_WIN_GRIP_INSET`
+short of the corner, whatever length the app set. Not every app had
+remembered: `term`'s bar is as long as its rows, which reaches the
+corner at about three window heights in four, so after a resize its
+empty track -- drawn in the background colour -- erased the grip and
+left the six pixels of it that lie outside the content area. A fixed-size
+window has no grip, and its bars are as long as the app says.
+`sw/common/tests/test_scrollbar.c` plants the grip's pixels and checks
+that a bar leaves them, and that a click there is not the bar's.
 
 Keeping the scrollbar clear of the grip is only half of it: **anything
 that blanks the content area has to stay clear of it too.** The grip is

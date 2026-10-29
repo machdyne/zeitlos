@@ -301,6 +301,7 @@ z_rv z_win_create_cb(z_win_t *win, const char *title, uint32_t w, uint32_t h,
 	if (!z_win_parse_rect(win, &reply.obj) || win->id < 0)
 		return Z_FAIL;
 
+	win->resizable = (flags & Z_WIN_FLAG_RESIZABLE) ? 1 : 0;
 	zwin_live = win;
 	return Z_OK;
 
@@ -1076,7 +1077,22 @@ void z_win_clear(const z_win_t *win) {
 	// oversized on purpose -- z_win_content_rect() (via
 	// z_win_fill_rect's clip) cuts this down to the actual content
 	// area regardless.
-	z_win_fill_rect(win, 0, 0, win->w, win->h, 0);
+	if (!win->resizable) {
+		z_win_fill_rect(win, 0, 0, win->w, win->h, 0);
+		return;
+	}
+	// A resizable window's grip is wm's, drawn as part of the frame
+	// before the app redraws, and most of it lies inside the content
+	// area: clearing all of it erased the grip and left the six of its
+	// pixels outside (read, and every app that clears this way). So
+	// two rectangles: full width above the grip's rows, then short of
+	// it across them -- what text's repaint() always did by hand.
+	int cw = z_win_content_w(win), ch = z_win_content_h(win);
+	int top = ch - Z_WIN_GRIP_INSET;
+	if (top > 0) z_win_fill_rect(win, 0, 0, cw, top, 0);
+	if (cw > Z_WIN_GRIP_INSET)
+		z_win_fill_rect(win, 0, top > 0 ? top : 0, cw - Z_WIN_GRIP_INSET,
+			ch - (top > 0 ? top : 0), 0);
 }
 
 void z_win_draw_text(const z_win_t *win, int x, int y, const char *s, int color, const z_font_t *font) {

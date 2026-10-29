@@ -710,6 +710,29 @@ int z_widget_mouse(z_widget_set_t *set, int cx, int cy, uint8_t buttons) {
 // it is.
 
 // absolute screen rect of the whole scrollbar
+// The bar's length as drawn and hit-tested: what the app set, but on a
+// resizable window never into the resize grip's corner. wm draws the
+// grip as part of the frame and an app's redraw comes after it, so a
+// bar that reached the corner painted over the grip -- term's, whose
+// length is its rows' height, did so at most window heights, which is
+// why it showed after a resize and not always. The bar stops
+// Z_WIN_GRIP_INSET short of the corner whenever it would run into it,
+// so no app has to remember to (text, read and hex always did).
+static int sb_len(const z_scrollbar_t *sb) {
+	int len = sb->len;
+	if (!sb->win || !sb->win->resizable) return len;
+	int cw = z_win_content_w(sb->win), ch = z_win_content_h(sb->win);
+	if (sb->orient == Z_SB_VERT) {
+		// its column overlaps the grip's, and its end reaches the grip's rows
+		if (sb->x + Z_SB_THICK > cw - Z_WIN_GRIP_INSET && sb->y + len > ch - Z_WIN_GRIP_INSET)
+			len = ch - Z_WIN_GRIP_INSET - sb->y;
+	} else {
+		if (sb->y + Z_SB_THICK > ch - Z_WIN_GRIP_INSET && sb->x + len > cw - Z_WIN_GRIP_INSET)
+			len = cw - Z_WIN_GRIP_INSET - sb->x;
+	}
+	return len < 0 ? 0 : len;
+}
+
 static void sb_abs_rect(const z_scrollbar_t *sb, int *x0, int *y0,
 	int *x1, int *y1) {
 
@@ -721,9 +744,9 @@ static void sb_abs_rect(const z_scrollbar_t *sb, int *x0, int *y0,
 
 	if (sb->orient == Z_SB_VERT) {
 		*x1 = *x0 + Z_SB_THICK - 1;
-		*y1 = *y0 + sb->len - 1;
+		*y1 = *y0 + sb_len(sb) - 1;
 	} else {
-		*x1 = *x0 + sb->len - 1;
+		*x1 = *x0 + sb_len(sb) - 1;
 		*y1 = *y0 + Z_SB_THICK - 1;
 	}
 
@@ -749,15 +772,15 @@ static void sb_thumb(const z_scrollbar_t *sb, int *off, int *size) {
 	*off = 0;
 	*size = 0;
 
-	if (sb->len <= 0) return;
+	if (sb_len(sb) <= 0) return;
 	if (sb->total <= 0 || sb->page >= sb->total) return;
 
-	int size_px = (int)sb_muldiv(sb->page, sb->len, sb->total);
+	int size_px = (int)sb_muldiv(sb->page, sb_len(sb), sb->total);
 	if (size_px < SB_THUMB_MIN) size_px = SB_THUMB_MIN;
-	if (size_px > sb->len) size_px = sb->len;
+	if (size_px > sb_len(sb)) size_px = sb_len(sb);
 
 	int span = sb->total - sb->page;		// > 0, checked above
-	int travel = sb->len - size_px;
+	int travel = sb_len(sb) - size_px;
 	int off_px = travel > 0
 		? (int)sb_muldiv(sb->value < 0 ? 0 : sb->value, travel, span)
 		: 0;
@@ -866,7 +889,7 @@ void z_scrollbar_draw(z_scrollbar_t *sb, bool force) {
 
 	sb->dirty = false;
 
-	if (sb->len <= 0) return;
+	if (sb_len(sb) <= 0) return;
 
 	int x0, y0, x1, y1;
 	sb_abs_rect(sb, &x0, &y0, &x1, &y1);
@@ -923,10 +946,10 @@ void z_scrollbar_draw(z_scrollbar_t *sb, bool force) {
 bool z_scrollbar_has_pointer(const z_scrollbar_t *sb, int cx, int cy) {
 
 	if (sb->dragging) return true;
-	if (sb->len <= 0) return false;
+	if (sb_len(sb) <= 0) return false;
 
-	int w = (sb->orient == Z_SB_VERT) ? Z_SB_THICK : sb->len;
-	int h = (sb->orient == Z_SB_VERT) ? sb->len : Z_SB_THICK;
+	int w = (sb->orient == Z_SB_VERT) ? Z_SB_THICK : sb_len(sb);
+	int h = (sb->orient == Z_SB_VERT) ? sb_len(sb) : Z_SB_THICK;
 
 	return cx >= sb->x && cx < sb->x + w &&
 		cy >= sb->y && cy < sb->y + h;
@@ -960,7 +983,7 @@ bool z_scrollbar_mouse(z_scrollbar_t *sb, int cx, int cy, uint8_t buttons) {
 		int off, size;
 		sb_thumb(sb, &off, &size);
 
-		int travel = sb->len - size;
+		int travel = sb_len(sb) - size;
 		int span = sb->total - sb->page;
 
 		if (size > 0 && travel > 0 && span > 0) {

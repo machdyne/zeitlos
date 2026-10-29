@@ -15,7 +15,7 @@ HOSTCC ?= cc
 CC_ = cd $(R) && $(HOSTCC) -std=gnu99
 SKIP77 = r=$$?; [ $$r -eq 0 ] || { [ $$r -eq 77 ] && echo "  (skipped)"; }
 
-TESTS = accent args bitbang dialog flist gfx_region gz inflate png text undo vt \
+TESTS = accent args bitbang dialog flist gfx_region gz inflate png scrollbar text undo vt \
 	zcaption zcfg zexec zexec_inflate zexec_lz4 zfmt zinput zkbd zscreen \
 	zsha1 ztype zwalk zws
 
@@ -72,6 +72,13 @@ png: | $(OUT)
 	$(HOSTCC) -std=gnu99 -DZ_IMG_HAVE_PNG=1 -I sw/common -o $(OUT)/test_png \
 		sw/common/tests/test_png.c sw/common/zimg.c sw/common/zinflate.c && \
 	$(OUT)/test_png $(OUT)/pngc
+
+scrollbar: | $(OUT)
+	$(CC_) -Wall -no-pie -I sw/common -I sw/common/tests -o $(OUT)/test_scrollbar \
+		sw/common/tests/test_scrollbar.c sw/common/zwin.c sw/common/zwidget.c \
+		sw/common/zfont_data.c sw/common/zobj.c sw/common/zeitlos.c \
+		sw/common/tests/zspeak_stub.c
+	@$(OUT)/test_scrollbar; $(SKIP77)
 
 text: | $(OUT)
 	$(CC_) -Wall -no-pie -I sw/common -o $(OUT)/test_text \

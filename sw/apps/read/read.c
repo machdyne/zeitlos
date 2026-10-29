@@ -1298,6 +1298,16 @@ static void fill(int cx, int cy, int w, int h, int color) {
 	if (y1 > c.y1) y1 = c.y1;
 	if (x1 < x0 || y1 < y0) return;
 
+	// Not over the resize grip, which wm drew before this redraw: a
+	// rect that reaches its square is filled in two, above the grip's
+	// rows and short of it across them (z_win_clear() does the same).
+	int gx = c.x1 - Z_WIN_GRIP_INSET + 1, gy = c.y1 - Z_WIN_GRIP_INSET + 1;
+	if (win.resizable && x1 >= gx && y1 >= gy) {
+		if (y0 < gy) z_fb_hw_fill_rect(x0, y0, x1 - x0 + 1, gy - y0, color);
+		if (x0 < gx) z_fb_hw_fill_rect(x0, y0 > gy ? y0 : gy, gx - x0, y1 - (y0 > gy ? y0 : gy) + 1, color);
+		return;
+	}
+
 	z_fb_hw_fill_rect(x0, y0, x1 - x0 + 1, y1 - y0 + 1, color);
 
 }
