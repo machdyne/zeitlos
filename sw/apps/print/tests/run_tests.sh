@@ -29,6 +29,30 @@ make -s -C ../slide job JOBOUT="$OUT/nup.zpp" JOBOPTS="nup=4 cut=1 frame=1 paper
 make -s -C ../slide job JOBOUT="$OUT/page.zpp" JOBOPTS="paper=page" >/dev/null 2>&1
 ok "jobs: $(wc -c < "$OUT/tour.zpp") bytes for the tour"
 
+# -- a text job: the text named, no pages; print lays it out (textdoc.c) --
+python3 - "$OUT" <<'PY'
+import os, struct, sys
+out = sys.argv[1]
+text = ("Dear reader,\n\nA paragraph long enough to wrap: " + "words " * 60 + "\n"
+	"  - an indented item\n\tafter a tab\nprix: 89 \u20ac, fran\u00e7ais\n\fpage two\n" +
+	"".join("line %d\n" % i for i in range(80)))
+open(out + "/letter.txt", "w").write(text)
+def rec(op, d):
+	return struct.pack("<BBHI", op, 0, 0, len(d)) + d + b"\0" * (-len(d) % 4)
+job = b"ZPP1" + struct.pack("<I", 1) + rec(1, b"title=letter") + rec(1, b"text=" + (out + "/letter.txt").encode())
+open(out + "/letter.zpp", "wb").write(job)
+PY
+if $H --pdf "$OUT/letter.pdf" "$OUT/letter.zpp" > "$OUT/letter.log"; then
+	n=$(grep -o "[0-9]* sheets" "$OUT/letter.log" | cut -d" " -f1)
+	if [ "$n" = "3" ]; then ok "text job: 3 pages (a form feed, then a page and a bit)"
+	else bad "text job: $n pages, wanted 3"; fi
+	if have qpdf; then
+		qpdf --check "$OUT/letter.pdf" >/dev/null 2>&1 && ok "text job: qpdf --check" || bad "text job: qpdf --check"
+	fi
+else
+	bad "text job"; cat "$OUT/letter.log"
+fi
+
 # -- PWG raster --
 if $H --pwg "$OUT/tour.pwg" "$OUT/tour.zpp" >/dev/null &&
 	python3 tests/pwg_decode.py "$OUT/tour.pwg" "$OUT" > "$OUT/pwg.log"; then

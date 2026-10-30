@@ -43,6 +43,13 @@
 // listed straight into the widget's own pool -- see load_dir().
 static uint8_t stage_types[Z_FLIST_MAX];
 
+// One page of a listing read from a source (z_flist_load_step()), held
+// while it is merged in: at most LOAD_PAGE entries a step.
+#define LOAD_PAGE  64
+static uint16_t page_off[LOAD_PAGE];
+static uint8_t page_dir[LOAD_PAGE];
+static z_fs_info_t page_info[LOAD_PAGE];
+
 // -- the details column (fl->info) --
 
 // How many characters of name a row must keep before the details
@@ -156,11 +163,27 @@ static void copy_bounded(char *dst, const char *src, int cap) {
 // sort over a bounded array: Z_FLIST_MAX is 256, this runs once per
 // directory change, and anything cleverer would be more code than the
 // thing it replaces.
-static void sort_entries(z_flist_t *fl) {
+// Does entry (dir_a, a) sort after (dir_b, b)? Directories first, then
+// names with ASCII folded -- strcasecmp isn't available on every libc
+// this tree builds against. Other UTF-8 compares by byte, which keeps
+// each script's letters together, in Unicode order.
+static bool sorts_after(uint8_t dir_a, const char *a, uint8_t dir_b, const char *b) {
+	if (dir_a != dir_b) return dir_b && !dir_a;
+	while (*a || *b) {
+		unsigned char ca = (unsigned char)*a, cb = (unsigned char)*b;
+		if (ca >= 'a' && ca <= 'z') ca = (unsigned char)(ca - 32);
+		if (cb >= 'a' && cb <= 'z') cb = (unsigned char)(cb - 32);
+		if (ca != cb) return ca > cb;
+		a++; b++;
+	}
+	return false;
+}
 
-	// Entries are sorted by moving their 2-byte offsets; the names stay
-	// where they are in the pool.
-	for (int i = 1; i < fl->count; i++) {
+// Entries [from, to) sorted in place, by moving their 2-byte offsets
+// (and details); the names stay where they are in the pool.
+static void sort_range(z_flist_t *fl, int from, int to) {
+
+	for (int i = from + 1; i < to; i++) {
 
 		uint16_t off = fl->name_off[i];
 		uint8_t dir = fl->isdir[i];
@@ -170,41 +193,12 @@ static void sort_entries(z_flist_t *fl) {
 
 		int j = i - 1;
 
-		while (j >= 0) {
-
-			bool after;
-
-			if (fl->isdir[j] != dir) {
-				// a directory sorts before a file
-				after = (dir && !fl->isdir[j]);
-			} else {
-				// strcasecmp isn't available on every libc this tree
-				// builds against, so compare folded bytes directly.
-				// Only ASCII is folded; other UTF-8 compares by byte,
-				// which keeps each script's letters together, in
-				// Unicode order.
-				const char *a = NAME(fl, j), *b = name;
-				int cmp = 0;
-				while (*a || *b) {
-					unsigned char ca = (unsigned char)*a, cb = (unsigned char)*b;
-					if (ca >= 'a' && ca <= 'z') ca = (unsigned char)(ca - 32);
-					if (cb >= 'a' && cb <= 'z') cb = (unsigned char)(cb - 32);
-					if (ca != cb) { cmp = (ca < cb) ? -1 : 1; break; }
-					a++; b++;
-				}
-				// Move the earlier entry up while it sorts AFTER this one.
-				// This was `cmp < 0`, which moved it while it sorted
-				// before -- every list and dialog ran Z to A.
-				after = (cmp > 0);
-			}
-
-			if (!after) break;
-
+		// move each earlier entry up while it sorts AFTER this one
+		while (j >= from && sorts_after(fl->isdir[j], NAME(fl, j), dir, name)) {
 			fl->name_off[j + 1] = fl->name_off[j];
 			fl->isdir[j + 1] = fl->isdir[j];
 			if (fl->info) fl->info[j + 1] = fl->info[j];
 			j--;
-
 		}
 
 		fl->name_off[j + 1] = off;
@@ -213,6 +207,10 @@ static void sort_entries(z_flist_t *fl) {
 
 	}
 
+}
+
+static void sort_entries(z_flist_t *fl) {
+	sort_range(fl, 0, fl->count);
 }
 
 // how many rows fit in the widget's height
@@ -276,6 +274,192 @@ static void select_row(z_flist_t *fl, int row) {
 
 }
 
+// -- reading a listing from a source, a page at a time --
+
+static void set_path(z_flist_t *fl, const char *path) {
+	if (path && path[0]) copy_bounded(fl->path, path, Z_FLIST_PATH_MAX);
+	else copy_bounded(fl->path, "/", Z_FLIST_PATH_MAX);
+	int l = (int)strlen(fl->path);
+	while (l > 1 && fl->path[l - 1] == '/') fl->path[--l] = 0;
+}
+
+void z_flist_load_stop(z_flist_t *fl) {
+	if (!fl->loading) return;
+	fl->loading = false;
+	if (fl->src && fl->src->close) fl->src->close(fl->src->ctx);
+}
+
+// Merges the page at [from, count), sorted, into the sorted [0, from):
+// from the back, so each entry moves once. The selected entry stays
+// selected, at the same row on the screen.
+static void merge_page(z_flist_t *fl, int from) {
+
+	int k = fl->count - from;
+	if (k <= 0) return;
+
+	sort_range(fl, from, fl->count);
+
+	int sel_off = fl->sel >= 0 ? fl->name_off[fl->sel] : -1;
+	int old_sel = fl->sel;
+
+	for (int i = 0; i < k; i++) {
+		page_off[i] = fl->name_off[from + i];
+		page_dir[i] = fl->isdir[from + i];
+		if (fl->info) page_info[i] = fl->info[from + i];
+	}
+
+	int i = from - 1, j = k - 1, w = fl->count - 1;
+	while (j >= 0) {
+		if (i >= 0 && sorts_after(fl->isdir[i], NAME(fl, i), page_dir[j], fl->pool + page_off[j])) {
+			fl->name_off[w] = fl->name_off[i];
+			fl->isdir[w] = fl->isdir[i];
+			if (fl->info) fl->info[w] = fl->info[i];
+			i--;
+		} else {
+			fl->name_off[w] = page_off[j];
+			fl->isdir[w] = page_dir[j];
+			if (fl->info) fl->info[w] = page_info[j];
+			j--;
+		}
+		w--;
+	}
+
+	if (sel_off >= 0) {
+		for (int n = 0; n < fl->count; n++)
+			if (fl->name_off[n] == (uint16_t)sel_off) { fl->sel = n; break; }
+		// The first row is where a listing starts: it stays the first,
+		// whatever sorts in before it. Anything further down, the person
+		// has moved to: that entry stays selected, where it is on the
+		// screen.
+		if (old_sel == 0 && fl->top == 0) fl->sel = 0;
+		else fl->top += fl->sel - old_sel;
+	}
+
+}
+
+// Reads up to `entries` from the source into the store, sorted in.
+// False once the listing has ended (or the store is full and cannot
+// grow).
+static bool load_more(z_flist_t *fl, int entries) {
+
+	if (!fl->loading) return false;
+	if (entries > LOAD_PAGE) entries = LOAD_PAGE;
+
+	int from = fl->count;
+	bool more = true;
+
+	for (int n = 0; n < entries; n++) {
+
+		const char *name;
+		uint32_t nl;
+		z_fs_info_t inf;
+
+		if (!fl->src->next(fl->src->ctx, &name, &nl, &inf)) { more = false; break; }
+		if ((name[0] == '.' && (name[1] == 0 || (name[1] == '.' && name[2] == 0))))
+			continue;
+		if (nl >= Z_FLIST_NAME_MAX) nl = Z_FLIST_NAME_MAX - 1;
+
+		// room: the store, grown by the app if it can be
+		while (fl->count >= fl->cap || fl->pool_used + nl + 1 > fl->pool_cap) {
+			// the page so far into place first: grow() may move the store
+			merge_page(fl, from);
+			from = fl->count;
+			if (!fl->src->grow || !fl->src->grow(fl->src->ctx, fl)) {
+				fl->truncated = true;
+				more = false;
+				break;
+			}
+		}
+		if (!more) break;
+
+		memcpy(fl->pool + fl->pool_used, name, nl);
+		fl->pool[fl->pool_used + nl] = 0;
+		fl->name_off[fl->count] = (uint16_t)fl->pool_used;
+		fl->isdir[fl->count] = inf.type;
+		if (fl->info) fl->info[fl->count] = inf;
+		fl->pool_used += nl + 1;
+		fl->count++;
+
+	}
+
+	merge_page(fl, from);
+
+	// the name to select, once it is in
+	if (fl->want[0]) {
+		for (int i = 0; i < fl->count; i++)
+			if (!strcmp(NAME(fl, i), fl->want)) {
+				select_row(fl, i + (has_updir(fl) ? 1 : 0));
+				fl->want[0] = 0;
+				break;
+			}
+	}
+
+	if (fl->sel < 0 && !fl->sel_updir && total_rows(fl) > 0) select_row(fl, 0);
+
+	{
+		int rows = visible_rows(fl), total = total_rows(fl);
+		if (fl->top > total - rows) fl->top = total - rows;
+		if (fl->top < 0) fl->top = 0;
+	}
+	z_scrollbar_set_range(&fl->sb, total_rows(fl), visible_rows(fl));
+	z_scrollbar_set_value(&fl->sb, fl->top);
+	fl->dirty = true;
+	fl->rows_dirty = true;
+
+	if (!more) z_flist_load_stop(fl);
+	return more;
+
+}
+
+static bool load_begin(z_flist_t *fl, const char *path, const char *want) {
+
+	z_flist_load_stop(fl);
+
+	set_path(fl, path);
+	fl->count = 0;
+	fl->pool_used = 0;
+	fl->truncated = false;
+	fl->top = 0;
+	fl->sel = -1;
+	fl->sel_updir = false;
+	fl->find_len = 0;
+	copy_bounded(fl->want, want ? want : "", Z_FLIST_NAME_MAX);
+
+	// An empty or unreadable folder reads as empty, as with FS_LIST
+	fl->loading = fl->src->open(fl->src->ctx, fl->path);
+	if (fl->loading) load_more(fl, LOAD_PAGE);
+	else {
+		if (total_rows(fl) > 0) select_row(fl, 0);
+		z_scrollbar_set_range(&fl->sb, total_rows(fl), visible_rows(fl));
+		z_scrollbar_set_value(&fl->sb, 0);
+		fl->dirty = true;
+		fl->rows_dirty = true;
+	}
+	return true;
+
+}
+
+bool z_flist_load_step(z_flist_t *fl, int entries) {
+	return load_more(fl, entries);
+}
+
+void z_flist_set_source(z_flist_t *fl, const z_flist_source_t *src) {
+	z_flist_load_stop(fl);
+	fl->src = src;
+}
+
+void z_flist_set_store(z_flist_t *fl, char *pool, uint32_t pool_cap,
+	uint16_t *name_off, uint8_t *isdir, z_fs_info_t *info, int cap) {
+	if (pool_cap > 65535) pool_cap = 65535;
+	fl->pool = pool;
+	fl->pool_cap = pool_cap;
+	fl->name_off = name_off;
+	fl->isdir = isdir;
+	fl->info = info;
+	fl->cap = cap;
+	if (fl->count > cap) fl->count = cap;
+}
+
 // Reads a directory into the widget. `keep` (may be NULL) names an
 // entry to re-select afterwards if it still exists.
 static bool load_dir(z_flist_t *fl, const char *path, const char *keep) {
@@ -292,11 +476,16 @@ static bool load_dir(z_flist_t *fl, const char *path, const char *keep) {
 	// the path it came in -- so this needs no second buffer.
 	// With a details column the listing carries each entry's size and
 	// date as well (FS_LIST_EX); the type comes from that too.
+	// Through a source: the first page now, the rest from
+	// z_flist_load_step().
+	if (fl->src) return load_begin(fl, path, want);
+
+	int max = fl->info ? fl->cap : (fl->cap < Z_FLIST_MAX ? fl->cap : Z_FLIST_MAX);
 	int listed = fl->info
-		? fs_list_ex(path, fl->pool, Z_FLIST_POOL, fl->info,
-			Z_FLIST_MAX, &count, &truncated)
-		: fs_list_into(path, fl->pool, Z_FLIST_POOL, stage_types,
-			Z_FLIST_MAX, &count, &truncated);
+		? fs_list_ex(path, fl->pool, fl->pool_cap, fl->info,
+			(uint32_t)max, &count, &truncated)
+		: fs_list_into(path, fl->pool, fl->pool_cap, stage_types,
+			(uint32_t)max, &count, &truncated);
 
 	if (!listed) {
 
@@ -317,7 +506,7 @@ static bool load_dir(z_flist_t *fl, const char *path, const char *keep) {
 	const char *p = fl->pool;
 	size_t w = 0;
 
-	for (uint32_t i = 0; i < count && fl->count < Z_FLIST_MAX; i++) {
+	for (uint32_t i = 0; i < count && fl->count < max; i++) {
 
 		size_t l = strlen(p);
 
@@ -351,7 +540,7 @@ static bool load_dir(z_flist_t *fl, const char *path, const char *keep) {
 
 	}
 
-	fl->truncated = truncated || (count >= Z_FLIST_MAX);
+	fl->truncated = truncated || (count >= (uint32_t)max);
 
 	sort_entries(fl);
 
@@ -398,6 +587,12 @@ static bool load_dir(z_flist_t *fl, const char *path, const char *keep) {
 void z_flist_init(z_flist_t *fl, const z_win_t *win) {
 
 	memset(fl, 0, sizeof(*fl));
+
+	fl->pool = fl->pool_store;
+	fl->name_off = fl->name_off_store;
+	fl->isdir = fl->isdir_store;
+	fl->cap = Z_FLIST_MAX;
+	fl->pool_cap = Z_FLIST_POOL;
 
 	fl->win = win;
 	fl->sel = -1;

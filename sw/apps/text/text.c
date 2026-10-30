@@ -106,6 +106,7 @@
 #include "../../common/zutf8.h"		// docs/text_encoding.md
 #include "../../common/zundo.h"		// undo and redo -- docs/text_editor.md, "Undo"
 #include "../../common/zbigline.h"	// big print -- docs/text_editor.md, "Font"
+#include "../../common/zprint.h"	// printing -- docs/text_editor.md, "Printing"
 
 // -- the document --
 
@@ -2623,6 +2624,104 @@ static bool do_save(void) {
 
 }
 
+// -- printing (docs/text_editor.md, "Printing") --
+//
+// The print dialog (zdialog.h), then the text -- all of it, or the
+// selection -- written to a file in /tmp and handed to print, which
+// lays it out on pages itself (docs/print.md, "Printing text"). So text
+// carries the dialog and a few hundred bytes, not the page renderer:
+// it is in flash, and that would not fit.
+
+static z_print_t printing;
+
+// The document's characters [a, b) to `path`, as UTF-8 -- what print
+// reads, whatever the file's own encoding -- in pieces, with the title
+// showing how far it has got. False if it could not all be written.
+static bool write_text(const char *path, int a, int b) {
+
+	int h = fs_open_write(path);
+	if (h < 0) return false;
+
+	bool ok = true;
+	doc_flat();
+	io_begin("Getting ready to print", path, false);
+
+	for (int i = a; ok && i < b; ) {
+		int n = b - i > 4096 ? 4096 : b - i;
+		const char *src = &doc[i];
+		char stage[4096];
+		if (big) {		// from the arena: through a buffer of our own (write_document())
+			memcpy(stage, src, (size_t)n);
+			src = stage;
+		}
+		if (fs_write_chunk(h, src, n) != n) ok = false;
+		i += n;
+		io_pump(i - a, b - a, false);
+	}
+
+	if (!fs_close_handle(h)) ok = false;
+	io_end();
+	if (!ok) fs_unlink((char *)path);
+	return ok;
+
+}
+
+static void do_print(void) {
+
+	// the document's name, without folder or ending: the job's title,
+	// and the file a PDF is offered as
+	char base[64];
+	const char *name = filename[0] ? filename : "Untitled";
+	const char *slash = strrchr(name, '/');
+	if (slash) name = slash + 1;
+	snprintf(base, sizeof(base), "%s", name);
+	char *dot = strrchr(base, '.');
+	if (dot && dot != base) *dot = 0;
+
+	z_print_opts_t o;
+	z_print_opts_init(&o);
+	o.selection = has_sel();
+
+	char title[80];
+	snprintf(title, sizeof(title), "Print %.60s", base);
+	if (!z_dialog_print(&dlg_ctx, title, last_dir, base, &o)) return;
+
+	int a = 0, b = len;
+	if (o.pages == Z_PRINT_PAGES_SELECTION && has_sel()) {
+		a = sel_start();
+		b = sel_end();
+	}
+
+	char tpath[48];
+	snprintf(tpath, sizeof(tpath), Z_DIR_TMP "/prt%06lx.txt",
+		(unsigned long)(z_uptime_ticks() & 0xFFFFFF));
+
+	if (!write_text(tpath, a, b)) {
+		z_dialog_confirm(&dlg_ctx, "Print",
+			"There was no room in " Z_DIR_TMP "\nfor the text to print.", Z_DIALOG_OK_CANCEL);
+		return;
+	}
+
+	if (!z_print_begin(&printing, base)) {
+		fs_unlink(tpath);
+		z_dialog_confirm(&dlg_ctx, "Print",
+			"The print job could not\nbe made in " Z_DIR_TMP ".", Z_DIALOG_OK_CANCEL);
+		return;
+	}
+	z_print_opts_job(&o, &printing.w);
+	z_print_text_job(&printing, tpath);
+
+	// print shows its own window from here: what it is doing, Cancel,
+	// and how it ended
+	if (!z_print_end(&printing)) {
+		fs_unlink(tpath);
+		z_dialog_confirm(&dlg_ctx, "Print", printing.result == Z_PRINT_E_GONE ?
+			"print is not on the card." : "The print job could not\nbe written.",
+			Z_DIALOG_OK_CANCEL);
+	}
+
+}
+
 // Offers to save when the document has unsaved changes. Returns false
 // if the user cancelled, meaning whatever prompted this (new, open,
 // close) must not proceed.
@@ -3888,7 +3987,8 @@ static void handle_key(uint32_t keysym, uint8_t mods) {
 			"Ctrl+Z/Y\tUndo, redo\n"
 			"Ctrl+F, F3\tFind, find again\n"
 			"Ctrl+H\tReplace\n"
-			"Ctrl+L\tGo to line; counts words\n\n"
+			"Ctrl+L\tGo to line; counts words\n"
+			"Ctrl+P\tPrint, or print to a PDF\n\n"
 			"Shift with the arrows, or a drag, selects. "
 			"A .docx, .odt or .rtf opens converted, as Markdown in " Z_DIR_TMP
 			" (the RAM disk): Save puts it in " Z_DIR_HOME ".";
@@ -3905,6 +4005,7 @@ static void handle_key(uint32_t keysym, uint8_t mods) {
 		switch (keysym) {
 			case 0x0e: do_new(); return;		// Ctrl+N
 			case 0x0f: do_open(); return;		// Ctrl+O
+			case 0x10: do_print(); return;		// Ctrl+P
 			case 0x13:							// Ctrl+S; Ctrl+Shift+S is Save As
 				if (mods & Z_KBD_MOD_SHIFT) do_save_as();
 				else do_save();
@@ -4231,7 +4332,7 @@ int main(void) {
 		Z_WIN_FLAG_CLOSE_ICON | Z_WIN_FLAG_RESIZABLE |
 		Z_WIN_FLAG_MIN_IS_CREATE |
 		Z_WIN_FLAG_NEW_ICON | Z_WIN_FLAG_OPEN_ICON |
-		Z_WIN_FLAG_SAVE_ICON | Z_WIN_FLAG_FONT_ICON |
+		Z_WIN_FLAG_SAVE_ICON | Z_WIN_FLAG_PRINT_ICON | Z_WIN_FLAG_FONT_ICON |
 		Z_WIN_FLAG_READABLE) != Z_OK) {
 		printf("text: failed to create window -- is wm running?\n");
 		return 1;
@@ -4316,6 +4417,7 @@ int main(void) {
 						case Z_WM_TBICON_OPEN: do_open(); break;
 						case Z_WM_TBICON_SAVE: do_save(); break;
 						case Z_WM_TBICON_FONT: do_font(); break;
+						case Z_WM_TBICON_PRINT: do_print(); break;
 						default: break;
 					}
 

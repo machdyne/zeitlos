@@ -62,6 +62,7 @@
 #include "../../common/zkbd.h"
 #include "../../common/zwidget.h"
 #include "../../common/zflist.h"
+#include "../../common/zfsc.h"		// a folder read a page at a time
 #include "../../common/zdialog.h"
 #include "../../common/zfsapp.h"
 #include "../../common/ztype.h"
@@ -161,7 +162,117 @@ static void walk_release(void);
 
 // The details column in the list (size and date per row, zflist.h):
 // the widget lists through FS_LIST_EX when given somewhere to put it.
+// Used when there is no arena for the store below.
 static z_fs_info_t finfo[Z_FLIST_MAX];
+
+// -- the list's store: the bottom of the arena (zflist.h, "Big folders") --
+//
+// A folder of any size: the list reads it a page at a time from fs
+// (list_src), into a store at the start of the arena that doubles as
+// it fills, up to LIST_CAP_MAX entries. A walk's memory goes above it
+// (walk_acquire()). The arena moves when it is resized, so the list is
+// pointed at it again each time (list_point()); while a walk runs it
+// does not grow -- the walk holds pointers into the arena -- and a
+// folder that outgrows the store then is listed in part, as one that
+// outgrows LIST_CAP_MAX always is. No arena: the widget's own 256.
+
+#define LIST_CAP0		512
+#define LIST_POOL0		(16u * 1024u)
+#define LIST_CAP_MAX	4096
+#define LIST_POOL_MAX	65535u		// the widget's offsets are 16 bits
+
+static uint32_t list_bytes;		// the store's size; 0: none (the built-in one)
+static int list_cap;
+static uint32_t list_pool;
+
+// Its parts, in order: offsets, types, details (word aligned), names.
+static uint32_t list_isdir_at(int cap) { return 2u * (uint32_t)cap; }
+static uint32_t list_info_at(int cap) { return (3u * (uint32_t)cap + 3u) & ~3u; }
+static uint32_t list_pool_at(int cap) { return list_info_at(cap) + (uint32_t)cap * sizeof(z_fs_info_t); }
+static uint32_t list_size(int cap, uint32_t pool) { return list_pool_at(cap) + pool; }
+
+static void list_point(uint8_t *base) {
+	z_flist_set_store(&flist, (char *)(base + list_pool_at(list_cap)), list_pool,
+		(uint16_t *)base, base + list_isdir_at(list_cap),
+		(z_fs_info_t *)(base + list_info_at(list_cap)), list_cap);
+}
+
+static zfs_dir_t list_dir;
+static uint32_t list_page[512];		// one page of entries from fs, 2KB
+
+static bool list_open(void *ctx, const char *path) {
+	(void)ctx;
+	return zfs_opendir_at(&list_dir, path, list_page, sizeof(list_page)) == 0;
+}
+
+static bool list_next(void *ctx, const char **name, uint32_t *namelen, z_fs_info_t *info) {
+	(void)ctx;
+	const z_fs_dirent_t *e = zfs_readdir(&list_dir);
+	if (!e) return false;
+	*name = e->name;
+	*namelen = e->namelen;
+	*info = e->info;
+	return true;
+}
+
+static void list_close(void *ctx) {
+	(void)ctx;
+	zfs_closedir_at(&list_dir);
+}
+
+// Twice the room, moved up in the arena part by part, from the top
+// down so nothing is overwritten before it has moved.
+static bool list_grow(void *ctx, z_flist_t *fl) {
+
+	(void)ctx;
+	if (!list_bytes || walk_mem) return false;
+
+	int cap = list_cap * 2 > LIST_CAP_MAX ? LIST_CAP_MAX : list_cap * 2;
+	uint32_t pool = list_pool * 2 > LIST_POOL_MAX ? LIST_POOL_MAX : list_pool * 2;
+	if (cap == list_cap && pool == list_pool) return false;
+
+	void *base;
+	uint32_t got;
+	uint32_t want = list_size(cap, pool);
+	if (z_arena_set(want, &base, &got) != Z_ARENA_OK || !base || got < want) {
+		// no more: back to the size it was (a failed resize may still
+		// have moved it)
+		if (z_arena_set(list_bytes, &base, &got) == Z_ARENA_OK && base) list_point(base);
+		return false;
+	}
+
+	uint8_t *b = base;
+	memmove(b + list_pool_at(cap), b + list_pool_at(list_cap), fl->pool_used);
+	memmove(b + list_info_at(cap), b + list_info_at(list_cap),
+		(size_t)fl->count * sizeof(z_fs_info_t));
+	memmove(b + list_isdir_at(cap), b + list_isdir_at(list_cap), (size_t)fl->count);
+
+	list_cap = cap;
+	list_pool = pool;
+	list_bytes = want;
+	list_point(b);
+	return true;
+
+}
+
+static const z_flist_source_t list_src = { list_open, list_next, list_close, list_grow, NULL };
+
+// The store in the arena if there is one; the list reads through fs
+// from then on.
+static void list_setup(void) {
+	void *base;
+	uint32_t got;
+	uint32_t want = list_size(LIST_CAP0, LIST_POOL0);
+	if (z_arena_set(want, &base, &got) != Z_ARENA_OK || !base || got < want) {
+		if (base) z_arena_set(0, NULL, NULL);
+		return;
+	}
+	list_cap = LIST_CAP0;
+	list_pool = LIST_POOL0;
+	list_bytes = want;
+	list_point(base);
+	z_flist_set_source(&flist, &list_src);
+}
 
 // content-relative layout, recomputed on every resize
 static int list_y, list_h, btn_y;
@@ -345,7 +456,8 @@ static void path_draw(void) {
 	// than the list's pool holds) is listed only in part. Said here,
 	// on the path line, because otherwise a file that is on the card
 	// simply is not in the list and nothing hints why.
-	const char *more = z_flist_truncated(&flist) ? " (partial list)" : "";
+	const char *more = flist.loading ? " (reading)" :
+		z_flist_truncated(&flist) ? " (partial list)" : "";
 	int morelen = (int)strlen(more);
 
 	int maxch = avail / z_font_5x8.w - morelen;
@@ -893,13 +1005,23 @@ static void walk_acquire(void) {
 	uint32_t got;
 
 	if (walk_mem) return;
+	// Above the list's store, which may move with the arena: pointed at
+	// again where it now is. A listing still coming in stops first:
+	// the walk's memory must not move under it.
+	z_flist_load_stop(&flist);
 	for (int i = 0; i < 3; i++) {
-		if (z_arena_set(want[i], &base, &got) == Z_ARENA_OK && base && got) {
-			walk_mem = (uint8_t *)base;
-			walk_cap = got;
+		if (z_arena_set(list_bytes + want[i], &base, &got) == Z_ARENA_OK && base &&
+			got > list_bytes) {
+			if (list_bytes) list_point(base);
+			walk_mem = (uint8_t *)base + list_bytes;
+			walk_cap = got - list_bytes;
 			walk_arena = true;
 			return;
 		}
+	}
+	if (list_bytes) {
+		// the resizes that failed may have moved it all the same
+		if (z_arena_set(list_bytes, &base, &got) == Z_ARENA_OK && base) list_point(base);
 	}
 	walk_mem = walk_static;
 	walk_cap = WALK_STATIC;
@@ -908,7 +1030,12 @@ static void walk_acquire(void) {
 }
 
 static void walk_release(void) {
-	if (walk_arena) z_arena_set(0, NULL, NULL);
+	if (walk_arena) {
+		void *base;
+		uint32_t got;
+		if (!list_bytes) z_arena_set(0, NULL, NULL);
+		else if (z_arena_set(list_bytes, &base, &got) == Z_ARENA_OK && base) list_point(base);
+	}
 	walk_mem = NULL;
 	walk_cap = 0;
 	walk_arena = false;
@@ -1618,6 +1745,7 @@ int main(void) {
 
 	z_flist_init(&flist, &win);
 	flist.info = finfo;
+	list_setup();
 	z_listbox_init(&rlist, &win);
 
 	layout();
@@ -1707,6 +1835,17 @@ int main(void) {
 		// A walk runs in the gaps: a 20ms slice, then the messages
 		// again -- and no waiting while it has work.
 		if (walking) { walk_pump(); continue; }
+
+		// A folder still coming in: a page more, then the messages
+		// again. Only the rows that changed are drawn (zflist.h).
+		if (flist.loading) {
+			bool more = z_flist_load_step(&flist, 64);
+			if (!results) {
+				z_flist_draw(&flist, false);
+				if (!more) path_draw();
+			}
+			continue;
+		}
 
 		/* Yield. This loop used to spin, so the app was RUNNABLE
 		 * forever and took a full scheduler share from whatever was

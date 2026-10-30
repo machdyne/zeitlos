@@ -151,6 +151,10 @@
 // has the colour window.
 #define Z_WIN_FLAG_COLOUR_ICON        (1u << 14)
 
+// Print: the app's print dialog (zdialog.h, z_dialog_print()) -- what
+// Ctrl+P does. wm draws it and reports the click (Z_WM_TBICON_PRINT).
+#define Z_WIN_FLAG_PRINT_ICON         (1u << 16)
+
 // this window is MODAL with respect to its owner's other windows.
 //
 // While it exists, wm will not focus, raise, drag, resize or deliver
@@ -439,6 +443,7 @@
 #define Z_WM_TBICON_OPEN   3
 #define Z_WM_TBICON_FONT   4
 #define Z_WM_TBICON_COLOUR 5
+#define Z_WM_TBICON_PRINT  6
 
 #define Z_WM_PACK_TBICON(id, kind) \
 	((((uint32_t)(kind) & 0xFF) << 8) | ((uint32_t)(id) & 0xFF))

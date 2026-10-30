@@ -366,30 +366,34 @@ int main(int argc, char **argv) {
 		"\tcasino chess kidgames basic chip8 space3d\n"
 		"\tsnake blocks bricks gpu3d mausrun\n";
 
-	// -- 1. the shipped files: the row, with four groups --
+	// -- 1. the shipped files: the row, with five groups --
 	printf("1. the shipped wm.cfg and dock.zic\n");
 	hardware(true, true);
 	set_cfg(cfg_shipped);
 	set_file(1, zic_shipped, zic_len);
 	dock_build();
 	printf("  store: %lu of %d bytes\n", (unsigned long)dock_store_used, DOCK_STORE_MAX);
-	expect(dock_nmain == 16 && !dock_paged, "16 in the row, no NEXT");
-	expect(dock_nviews == 4, "four groups: Desk, Sound, Tools, Games (More apps is empty)");
-	int desk = find_app("desk"), sound = find_app("sound"), tools = find_app("tools"), games = find_app("games");
-	expect(desk == 12 && sound == 13 && tools == 14 && games == 15, "their icons at the end of the row");
+	expect(dock_nmain == 17 && !dock_paged, "17 in the row, no NEXT");
+	expect(dock_nviews == 5, "five groups: Network, Sound, Tools, Games, More apps (settings, view, colwin)");
+	int net = find_app("net"), sound = find_app("sound"), tools = find_app("tools"), games = find_app("games");
+	int misc = find_app("misc");
+	expect(net == 12 && sound == 13 && tools == 14 && games == 15 && misc == 16,
+		"their icons at the end of the row");
 	expect(dock_apps[games].view >= 0 && dock_views[dock_apps[games].view].count == 11, "Games: eleven");
 	int apps = 0, all_icons = 1;
 	for (int i = 0; i < dock_app_count; i++) {
 		if (dock_apps[i].view < 0) apps++;
-		if (!icon_of(i)) all_icons = 0;
+		// colwin has no icon in dock.zic: wm.cfg names it in More apps,
+		// and it is drawn as its name in a box.
+		if (!icon_of(i) && strcmp(dock_apps[i].name, "colwin")) all_icons = 0;
 	}
-	expect(apps == 37, "37 apps: the 34 before groups, backup, planedemo and learn");
-	expect(all_icons, "every one, and every group, with its icon");
+	expect(apps == 38, "38 apps: every one the dock places");
+	expect(all_icons, "every one but colwin, and every group, with its icon");
 	expect(bits_of(dock_next_icon, dock_next_len) && bits_of(dock_back_icon, dock_back_len),
 		"NEXT and BACK");
 	expect(strcmp(dock_spoken(0), "Terminal") == 0, "term is spoken as Terminal");
 	expect(strcmp(dock_spoken(games), "Games") == 0, "a group by its name");
-	expect(dock_frame_len == z_dock_width_for(16), "the frame: the row's width, the widest view");
+	expect(dock_frame_len == z_dock_width_for(17), "the frame: the row's width, the widest view");
 	dock_idx = create_dock();
 	expect(dock_idx >= 0 && (int)windows[dock_idx].w == dock_frame_len, "the dock window");
 	draw_all();
@@ -492,8 +496,8 @@ int main(int argc, char **argv) {
 	hardware(false, false);
 	set_cfg(cfg_shipped);
 	dock_build();
-	expect(find_app("sound") < 0 && dock_nmain == 15, "Sound left with nothing: gone from the row");
-	expect(dock_views[dock_apps[find_app("tools")].view].count == 7, "Tools without mmod");
+	expect(find_app("sound") < 0 && dock_nmain == 16, "Sound left with nothing: gone from the row");
+	expect(dock_views[dock_apps[find_app("tools")].view].count == 6, "Tools without mmod");
 	expect(find_app("track") < 0 && find_app("mmod") < 0, "the apps gone");
 	hardware(true, true);
 
@@ -546,7 +550,7 @@ int main(int argc, char **argv) {
 	set_cfg(cfg_shipped);
 	cfg_gen++;
 	dock_reload();
-	expect(dock_nmain == 16 && dock_zic_count == 0, "still every app and group");
+	expect(dock_nmain == 17 && dock_zic_count == 0, "still every app and group");
 	expect(!icon_of(0) && !dock_next_len && !dock_back_len, "no icons");
 	draw_all();
 	expect(slot_ink(0) > 20 && slot_ink(15) > 20, "names drawn, a group's too");
@@ -560,7 +564,7 @@ int main(int argc, char **argv) {
 	printf("11. a damaged dock.zic\n");
 	set_file(1, zic_shipped, zic_len - 40);
 	dock_build();
-	expect(dock_zic_count > 0 && icon_of(find_app("ask")) && dock_nmain == 16,
+	expect(dock_zic_count > 0 && icon_of(find_app("ask")) && dock_nmain == 17,
 		"cut short in its icons: the first are there");
 	int last_ok = 1;
 	for (int i = 0; i < dock_app_count; i++) if (strcmp(dock_apps[i].name, "work") && !icon_of(i)) last_ok = 0;
@@ -571,7 +575,7 @@ int main(int argc, char **argv) {
 		bad[6] = 52;					// another entry layout
 		set_file(1, bad, zic_len);
 		dock_build();
-		expect(dock_zic_count == 0 && dock_nmain == 16 && !icon_of(0), "a damaged table: no icons");
+		expect(dock_zic_count == 0 && dock_nmain == 17 && !icon_of(0), "a damaged table: no icons");
 	}
 	set_file(1, zic_shipped, zic_len);
 
@@ -745,15 +749,16 @@ int main(int argc, char **argv) {
 		dock_reload();
 		wm_window_t *w = &windows[dock_idx];
 		expect(dock_side == DK_SIDE_LEFT && DOCK_SLOTS_TALL == 12, "the left side; 12 fit down it");
-		expect(dock_nmain == 12 && !dock_paged, "row tall: 6 apps and 6 groups, no NEXT");
+		expect(dock_nmain == 12 && !dock_paged, "row tall: 5 apps and 7 groups, no NEXT");
 		expect(dock_frame_len == z_dock_len_for(12, WM_SCREEN_H - 2 * DOCK_MARGIN, 12),
 			"the frame: the column's height");
 		expect((int)w->x == DOCK_MARGIN && (int)w->y == DOCK_MARGIN &&
 			(int)w->w == DOCK_THICK && (int)w->h == dock_frame_len, "moved: top left, 41 wide");
 		draw_all();
 		dump("21-left");
-		int net = find_app("net");
-		expect(shows_item(0, 0) && shows_item(11, net), "term at the top, Network at the bottom");
+		int tnet = find_app("net"), tmisc = find_app("misc");
+		expect(shows_item(0, 0) && shows_item(10, tnet) && shows_item(11, tmisc),
+			"term at the top, Network and More apps at the bottom");
 		int x0, y0;
 		slot_at(0, &x0, &y0);
 		expect(x0 == (int)w->x + DOCK_PADDING + DOCK_DOT_ROOM, "the dots' room on the screen side");
@@ -843,8 +848,8 @@ int main(int argc, char **argv) {
 		cfg_gen++;
 		dock_reload();
 		wm_window_t *w = &windows[dock_idx];
-		expect(dock_nmain == 16 && (int)w->y == DOCK_MARGIN && (int)w->x == DOCK_MARGIN &&
-			(int)w->h == DOCK_THICK, "16 across the top");
+		expect(dock_nmain == 17 && (int)w->y == DOCK_MARGIN && (int)w->x == DOCK_MARGIN &&
+			(int)w->h == DOCK_THICK, "17 across the top");
 		dock_count();
 		draw_all();
 		dump("23-top");

@@ -753,13 +753,13 @@ static void test_shipped(const char *cfg_path, const char *zic_path) {
 	CHECK(c.has[DK_ROW_WIDE]);
 	CHECK(c.has[DK_ROW_TALL]);
 
-	// The wide row: 12 apps and the Desk, Sound, Tools and Games
-	// groups -- 16, one short of the dock's width -- and More apps, which
-	// is empty while the file places every app with an icon (dk_keep()
-	// drops it).
+	// The wide row: 12 apps and the Network, Sound, Tools, Games and
+	// More apps groups -- 17, the dock's width. More apps holds colwin
+	// and @rest: here settings, which no group names, and view, whose
+	// group (Work) the wide row does not show.
 	static const char *const row[] = {
-		"term", "files", "text", "read", "learn", "web", "irc", "ask", "sheet",
-		"slide", "draw", "view", "desk", "sound", "tools", "games", "misc",
+		"term", "files", "text", "read", "sheet", "slide", "draw", "learn",
+		"ask", "calc", "cal", "clock", "net", "sound", "tools", "games", "misc",
 	};
 	int n = dk_list(&c, DK_ROW_WIDE, &Z, it, DK_ITEMS_MAX, &dk);
 	CHECK_EQ(dk.nmain, 17);
@@ -768,27 +768,28 @@ static void test_shipped(const char *cfg_path, const char *zic_path) {
 		CHECK(it[i].zic >= 0);			// every one with an icon
 	}
 	CHECK_EQ(dk.nviews, 5);
-	CHECK_EQ(dk.views[0].count, 3);			// calc clock cal
+	CHECK_EQ(dk.views[0].count, 2);			// web irc
 	CHECK_EQ(dk.views[1].count, 3);			// play track midi
-	CHECK_EQ(dk.views[2].count, 8);			// settings backup info keyboard hex basic mmod pix
+	CHECK_EQ(dk.views[2].count, 7);			// backup info keyboard hex basic mmod pix
 	CHECK_EQ(dk.views[3].count, 11);			// the games, and planedemo
-	CHECK_EQ(dk.views[4].count, 0);			// @rest: nothing left
+	CHECK_EQ(dk.views[4].count, 3);			// colwin, and @rest: settings view
 	{
 		uint8_t keep[DK_ITEMS_MAX];
 		memset(keep, 1, sizeof(keep));
 		n = dk_keep(it, keep, &dk);
-		CHECK_EQ(dk.nmain, 16);
-		CHECK_EQ(dk.nviews, 4);
-		CHECK_EQ(n, 16 + 3 + 3 + 8 + 11);
+		CHECK_EQ(dk.nmain, 17);			// More apps has something: kept
+		CHECK_EQ(dk.nviews, 5);
+		CHECK_EQ(n, 17 + 2 + 3 + 7 + 11 + 3);
 		int apps = 0;
 		for (int i = 0; i < n; i++) if (it[i].view < 0) apps++;
-		CHECK_EQ(apps, 37);			// every app the dock had before groups, backup, pix and planedemo, and learn
+		CHECK_EQ(apps, 38);
 	}
-	CHECK(strcmp(c.groups[dk.views[0].group].name, "Desk") == 0);
+	CHECK(strcmp(c.groups[dk.views[0].group].name, "Network") == 0);
 	CHECK(strcmp(c.groups[dk.views[1].group].name, "Sound") == 0);
 	CHECK(strcmp(c.groups[dk.views[2].group].name, "Tools") == 0);
+	CHECK(strcmp(c.groups[dk.views[4].group].name, "More apps") == 0);
 
-	// The tall row: 6 apps and 6 groups, 12, the height of a dock on a
+	// The tall row: 5 apps and 7 groups, 12, the height of a dock on a
 	// side.
 	n = dk_list(&c, DK_ROW_TALL, &Z, it, DK_ITEMS_MAX, &dk);
 	{
@@ -798,7 +799,7 @@ static void test_shipped(const char *cfg_path, const char *zic_path) {
 		CHECK_EQ(dk.nmain, 12);
 		int apps = 0;
 		for (int i = 0; i < n; i++) if (it[i].view < 0) apps++;
-		CHECK_EQ(apps, 37);
+		CHECK_EQ(apps, 38);
 	}
 
 	// Every app the file names has an icon, and every group its own.

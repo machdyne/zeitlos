@@ -185,4 +185,55 @@ bool z_dialog_prompt_secret(const z_dialog_ctx_t *ctx, const char *title,
 void z_dialog_help(const z_dialog_ctx_t *ctx, const char *title,
 	const char *text, const char *doc);
 
+// -- print --
+//
+// The print dialog every app shares (docs/print.md, "The print
+// dialog"): where to (the printer, or a PDF or PostScript file), which
+// pages, copies, paper, tray, pages to a sheet and quality, then Print
+// or Cancel. For a file, a save dialog follows Print.
+//
+// The app fills in what it has -- how many pages, the one shown, a
+// selection -- and z_print_opts_init() (zprint.h) the defaults from
+// zeitlos.cfg; the dialog changes the rest. zprint.h's
+// z_print_opts_job() turns the answer into the job's options.
+
+#define Z_PRINT_TO_PRINTER   0
+#define Z_PRINT_TO_PDF       1
+#define Z_PRINT_TO_PS        2
+
+#define Z_PRINT_PAGES_ALL        0
+#define Z_PRINT_PAGES_CURRENT    1	// the page shown (current)
+#define Z_PRINT_PAGES_SELECTION  2	// what is selected: the app prints only that
+#define Z_PRINT_PAGES_RANGE      3	// first .. last
+
+typedef struct {
+
+	// -- what the app has --
+	int		npages;			// 0: not known until printed (text is paged by print)
+	int		current;		// the page shown, from 1; 0: none
+	bool	selection;		// something selected, to print alone
+
+	// -- shown, from zeitlos.cfg (z_print_opts_init()) --
+	char	printer[64];	// apps.print.printer, "" if none is set up
+	char	paper_default[12];	// apps.print.paper
+
+	// -- the answer --
+	int		dest;			// Z_PRINT_TO_*
+	int		pages;			// Z_PRINT_PAGES_*
+	int		first, last;	// RANGE, from 1
+	int		copies;			// 1 .. 99
+	char	paper[12];		// "" the default
+	char	tray[12];		// "" the printer's choice; "main", "rear", "manual"
+	int		nup;			// pages to a sheet: 1, 2, 4, 6, 9, 16
+	char	quality[8];		// "" normal; "draft", "high"
+	char	file[200];		// dest PDF or PS: the file chosen
+
+} z_print_opts_t;
+
+// Shows the dialog. `title` names what is printed ("Print \"Notes\"");
+// `start_dir` and `file_base` (a name without its ending) seed the save
+// dialog for a file. True if Print was chosen, with *o filled in.
+bool z_dialog_print(const z_dialog_ctx_t *ctx, const char *title,
+	const char *start_dir, const char *file_base, z_print_opts_t *o);
+
 #endif

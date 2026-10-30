@@ -192,6 +192,15 @@ spool is closed and removed. Pictures still load when their box is
 clicked, one at a time: loading every picture on a page by itself would
 need several pictures' memory and fetches at once.
 
+Loading a page no longer waits anywhere. The name is looked up with
+`z_dns_ask()` and the answer read as an ordinary message
+(`z_dns_reply()`, `sw/common/zdns.h`), so the window keeps answering
+while it waits, at most six seconds; `z_dns_resolve()`, which waits and
+throws other messages away, is for programs without a window. The page
+is drawn as it arrives, indexed a slice at a time between messages,
+and Escape or Stop ends the load at any point, keeping what came. See
+[web_app.md](web_app.md#while-a-page-loads).
+
 ## draw
 
 Opening and saving in [draw](draw_app.md) are state machines
@@ -330,6 +339,11 @@ changes. The host test plants a pixel in the list's empty area that any
 clear would erase, and checks every in-place draw against a full
 repaint. See [file_browser.md](file_browser.md).
 
+Opening a folder is in pieces too: the list reads it straight from fs
+64 entries a turn (`z_flist_load_step()`, `sw/common/zflist.c`),
+merging each page into the sorted list, so a folder of thousands shows
+its first rows at once and keys work while the rest come in.
+
 ## ask
 
 Loading a pack is a step state machine (`ai_load_begin/step/stop`,
@@ -361,6 +375,7 @@ tests: `make -C sw/apps/text test` (tests/utf8.c, section 22).
 | App | The long call | The way out |
 |---|---|---|
 | `view`, `web` | SVG, drawn in one call | a row or element callback in zsvg to yield from |
+| `web` | a TLS handshake's signature checks, done as the record that carries them is read: an RSA-4096 root is about 5.5 s (to be measured on the board as a gap in the message loop) | verify the chain in steps between messages |
 | `draw` | a brush or eraser stroke across the whole page in one mouse sample (was ~50 ms; now stamped a word at a time, 6-9x fewer writes, to be measured on the board) | stamp a bounded number of points per step |
 | `sheet` | recalculating a 4,096-cell sheet (to be measured on the board) | a coroutine around the evaluator, or a generation-stepped recalc |
 | `learn` | opening a lesson: its file (up to 48 KB) read in one go | the same coroutine, or read in 4 KB turns |

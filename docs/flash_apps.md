@@ -442,7 +442,11 @@ to what it uses (137,504 bytes in 140K, from 152K) and `repl`'s went to
 failed `make BOARD=lakritz output/lakritz/apps.zar` on its own. The rule
 is 1,018.25 of 1,024 KB. `text` -- its large copy kept whole, undo in
 the arena, saving through a `.part` -- went to 64K/165K, which is now
-its own business.
+its own business. Printing (the print dialog and zprint) then took
+`text` to 80K/200K, and reading folders of any size took `files` to
+64K/134K; neither is in the RAM rule, and both came from the slack
+under `CORE_ZAR_MAX` (the archive is 735,536 bytes of 848K). The
+`Makefile`'s comments above `CORE_BUDGETS` keep each change and why.
 The next byte for the boot set comes out of another budget, or out of
 something made smaller. `mkzar.py --max` checks the archive itself
 against the region (`CORE_ZAR_MAX`, 848K), so a budget that turns out
@@ -455,7 +459,7 @@ top-level `Makefile`, next to `CORE_APPS`:
 
 ```
 CORE_BUDGETS = fs=36K/77056 usb=35K/53504 wm=114K/147K net=148K/284K term=62K/140K \
-	console=10K/12544 cron=18K/48K text=64K/165K files=60K/125K repl=140K/307K
+	console=10K/12544 cron=18K/48K text=80K/200K files=64K/134K repl=140K/307K
 CORE_RESERVE = 60K
 CORE_STORE = wm net
 CORE_ZAR_MAX = 848K

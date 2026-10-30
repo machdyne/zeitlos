@@ -17,7 +17,7 @@ APP_CFLAGS = -DZ_IMG_HAVE_PNG=1
 OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o \
 	zfsapp.o zdns.o zport.o zcfg.o \
 	zimg.o zinflate.o zcanvas.o zcfont.o zpage.o zpaper.o zpool.o \
-	out.o pwg.o job.o raster.o vec.o ipp.o res.o run.o print.o
+	out.o pwg.o job.o raster.o vec.o ipp.o res.o run.o textdoc.o print.o
 
 include ../../common/app.mk
 
@@ -27,7 +27,7 @@ HOSTCC ?= cc
 COMMON = ../../common
 HOST_CFLAGS = -std=gnu99 -g -O1 -Wall -Wextra -fsanitize=address,undefined \
 	-fno-sanitize=shift -I. -DZ_IMG_HAVE_PNG=1
-HOST_SRC = out.c pwg.c job.c raster.c vec.c ipp.c res.c run.c \
+HOST_SRC = out.c pwg.c job.c raster.c vec.c ipp.c res.c run.c textdoc.c \
 	$(COMMON)/zpool.c $(COMMON)/zpaper.c $(COMMON)/zpage.c $(COMMON)/zcanvas.c \
 	$(COMMON)/zcfont.c $(COMMON)/zfont_data.c $(COMMON)/zimg.c $(COMMON)/zinflate.c
 

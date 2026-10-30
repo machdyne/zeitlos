@@ -42,6 +42,7 @@
 #include "zsubjects.h"
 #include "zmsg.h"
 #include "zpaper.h"
+#include "zdialog.h"
 
 #define Z_PRINT_PROGRESS	(Z_SUBJ_PRINT + 0)
 #define Z_PRINT_DONE		(Z_SUBJ_PRINT + 1)
@@ -81,5 +82,35 @@ bool z_print_msg(z_print_t *p, const z_msg_t *m);
 
 // Notices a print that has gone without saying DONE.
 void z_print_poll(z_print_t *p);
+
+// -- the print dialog's answer (zdialog.h, z_dialog_print()) --
+//
+//   z_print_opts_t o;
+//   z_print_opts_init(&o);
+//   o.selection = have_selection;          // what the app has
+//   if (z_dialog_print(&dlg, "Print", dir, "notes", &o) &&
+//       z_print_begin(&pr, "Notes")) {
+//       z_print_opts_job(&o, &pr.w);       // the options, before pages
+//       ... the pages, or z_print_text_job() ...
+//       z_print_end(&pr);
+//   }
+
+// Defaults, and the printer and paper zeitlos.cfg names (shown in the
+// dialog): to the printer if one is set up, else a PDF file; all pages,
+// one copy, one to a sheet.
+void z_print_opts_init(z_print_opts_t *o);
+
+// The answer as job options (docs/print.md, "Job options"): where to,
+// copies, paper, tray, pages to a sheet, quality -- and the pages for
+// CURRENT or RANGE ("pages=3", "pages=2-5"), which print takes from the
+// pages the app gives it. A SELECTION is the app's to print: only the
+// selection, as all the pages there are.
+void z_print_opts_job(const z_print_opts_t *o, zp_writer_t *w);
+
+// A job of plain text (docs/print.md, "Printing text"): the text in the
+// file at `path` (written by the app, in /tmp; print removes it), laid
+// out on pages by print itself. No pages are written -- the app needs
+// none of the page renderer.
+bool z_print_text_job(z_print_t *p, const char *path);
 
 #endif

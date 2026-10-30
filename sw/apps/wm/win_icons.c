@@ -83,6 +83,19 @@ const uint8_t z_icon_colour_data[Z_ICON_H] = {
 	0b00000000,
 };
 
+// A printer, a sheet going in at the top and coming out at the
+// bottom: the print dialog (Z_WIN_FLAG_PRINT_ICON).
+const uint8_t z_icon_print_data[Z_ICON_H] = {
+	0b00111100,
+	0b00100100,
+	0b11111111,
+	0b10000001,
+	0b10000101,
+	0b11111111,
+	0b00100100,
+	0b00111100,
+};
+
 // A closed folder, for a directory row in a file list. The notch at
 // the top left is the tab.
 const uint8_t z_icon_folder_data[Z_ICON_H] = {
@@ -132,4 +145,5 @@ void z_win_icons_load(void) {
 	z_gfx_hw_icon_load(Z_ICON_FILE,   z_icon_file_data);
 	z_gfx_hw_icon_load(Z_ICON_UPDIR,  z_icon_updir_data);
 	z_gfx_hw_icon_load(Z_ICON_COLOUR, z_icon_colour_data);
+	z_gfx_hw_icon_load(Z_ICON_PRINT,  z_icon_print_data);
 }

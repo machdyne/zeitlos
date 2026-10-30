@@ -19,6 +19,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <errno.h>
+#include <strings.h>
 
 #define main files_main_unused
 #include "../files.c"
@@ -69,6 +70,88 @@ int fs_stat(const char *p, z_fs_info_t *fi) {
 	fi->type = S_ISDIR(st.st_mode) ? Z_FS_TYPE_DIR : Z_FS_TYPE_FILE;
 	fi->size = S_ISDIR(st.st_mode) ? 0 : (uint32_t)st.st_size;
 	return 1;
+}
+
+// The list's page-at-a-time source (files.c, list_src), over a real
+// directory: used once the list has an arena (the big folder, below).
+static DIR *zd;
+static int zd_open;
+int32_t zfs_opendir_at(zfs_dir_t *d, const char *path, void *buf, uint32_t cap) {
+	(void)buf; (void)cap;
+	if (zd) closedir(zd);
+	zd = opendir(hp(path));
+	if (!zd) return -1;
+	zd_open++;
+	memset(d, 0, sizeof(*d));
+	return 0;
+}
+const z_fs_dirent_t *zfs_readdir(zfs_dir_t *d) {
+	static union { z_fs_dirent_t e; char b[sizeof(z_fs_dirent_t) + 256]; } u;
+	struct dirent *de;
+	(void)d;
+	if (!zd) return NULL;
+	if (!(de = readdir(zd))) return NULL;
+	memset(&u.e, 0, sizeof(u.e));
+	u.e.namelen = (uint16_t)strlen(de->d_name);
+	memcpy(u.e.name, de->d_name, (size_t)u.e.namelen + 1);
+	u.e.info.type = de->d_type == DT_DIR ? Z_FS_TYPE_DIR : Z_FS_TYPE_FILE;
+	return &u.e;
+}
+int32_t zfs_closedir_at(zfs_dir_t *d) {
+	(void)d;
+	if (zd) { closedir(zd); zd = NULL; zd_open--; }
+	return 0;
+}
+
+// An arena for the big-folder part: every resize MOVES it and leaves
+// the old place unreadable, so a pointer kept across a resize faults
+// at once instead of working by luck (as sw/apps/text/tests/test_edit.c).
+#define AR_A	((void *)0x10000000)
+#define AR_B	((void *)0x18000000)
+#define AR_LEN	(16u << 20)
+static uint8_t *ar_base;
+static uint32_t ar_size;
+static long ar_moves;
+static uint32_t *ar_tramp(uint32_t id, uint32_t *args, uint32_t b) {
+	if (id == Z_SYS_ARENA) {
+		z_arena_args_t *a = (z_arena_args_t *)args;
+		if (a->size == Z_ARENA_QUERY) {
+			a->base = (uint32_t)(uintptr_t)ar_base; a->size = ar_size; a->result = Z_ARENA_OK;
+		} else if (a->size == 0) {
+			if (ar_base) mprotect(ar_base, AR_LEN, PROT_NONE);
+			ar_base = NULL; ar_size = 0; a->base = 0; a->result = Z_ARENA_OK;
+		} else if (a->size > AR_LEN) {
+			a->base = (uint32_t)(uintptr_t)ar_base; a->size = ar_size; a->result = Z_ARENA_E_NOMEM;
+		} else {
+			uint8_t *to = (ar_base == (uint8_t *)AR_A) ? AR_B : AR_A;
+			mprotect(to, AR_LEN, PROT_READ | PROT_WRITE);
+			memset(to, 0x5A, a->size);
+			if (ar_base) {
+				memcpy(to, ar_base, ar_size < a->size ? ar_size : a->size);
+				mprotect(ar_base, AR_LEN, PROT_NONE);
+				ar_moves++;
+			}
+			ar_base = to; ar_size = a->size;
+			a->base = (uint32_t)(uintptr_t)ar_base; a->result = Z_ARENA_OK;
+		}
+		return (uint32_t *)&z_tramp_ok;
+	}
+	return z_tramp_syscall(id, args, b);
+}
+static bool ar_install(void) {
+	if (mmap(AR_A, AR_LEN, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0) == MAP_FAILED ||
+		mmap(AR_B, AR_LEN, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0) == MAP_FAILED)
+		return false;
+	*(volatile uint32_t *)0x0000000c = (uint32_t)(uintptr_t)ar_tramp;
+	return true;
+}
+
+static bool list_sorted(void) {
+	for (int i = 1; i < flist.count; i++)
+		if (flist.isdir[i - 1] == flist.isdir[i] &&
+			strcasecmp(flist.pool + flist.name_off[i - 1], flist.pool + flist.name_off[i]) > 0)
+			return false;
+	return true;
 }
 
 // /ram is "another volume": a rename across it is XDEV, as on the board.
@@ -544,6 +627,55 @@ int main(void) {
 	remove(hp("/home/big2.bin"));
 	z_flist_chdir(&flist, "/home");
 	repaint();
+
+	// -- a big folder, read a page at a time into the arena --
+	printf("a folder of 2500, with an arena that moves\n");
+	if (!ar_install()) {
+		printf("  (skipped: cannot map the arena's two places)\n");
+	} else {
+		mk("/home/big");
+		for (int i = 0; i < 2500; i++) {
+			char n[64];
+			snprintf(n, sizeof(n), "/home/big/n%04d.txt", (i * 7919) % 2500);
+			put(n, "x");
+		}
+		mk("/home/big/zz-folder");
+		list_setup();
+		expect(list_bytes > 0 && flist.src == &list_src, "the list's store in the arena, read through fs");
+		z_flist_chdir(&flist, "/home/big");
+		expect(flist.loading && flist.count <= 64, "the first page at once");
+		repaint();
+		int steps = 0;
+		while (flist.loading && steps < 1000) {
+			z_flist_load_step(&flist, 64);
+			z_flist_draw(&flist, false);
+			steps++;
+		}
+		expect(flist.count == 2501 && !z_flist_truncated(&flist), "all 2500 and the folder");
+		expect(list_cap == 4096 && ar_moves > 0, "the store grew, and the arena moved");
+		expect(list_sorted() && flist.isdir[0], "in order, the folder first");
+		expect(zd_open == 0, "the directory closed");
+
+		// a find above it: the arena grows, moves, and the list is
+		// pointed at it again
+		long m0 = ar_moves;
+		prompt_answer = "n00*.txt";
+		handle_key(0x06, Z_KBD_MOD_CTRL);
+		expect(walking && walk_arena, "the find's memory above the list's");
+		pump();
+		// as many as the walk's listing of the folder holds -- a walk
+		// takes a folder in one listing, as far as it fits (zwalk.h);
+		// this host's listing stops at 1024 entries
+		expect(!walking && res_n > 20 && res_n <= 100, "found them, as far as the walk's listing goes");
+		handle_key(0x1b, 0);
+		expect(!results && !walk_mem, "back to the folder, the find's memory given back");
+		expect(ar_moves > m0, "the arena moved under the list");
+		expect(flist.count == 2501 && list_sorted() &&
+			!strcmp(flist.pool + flist.name_off[1], "n0000.txt"), "and the list is whole");
+		repaint();
+		pbm("big-folder.pbm");
+		expect(same_as_repaint(), "drawn in place");
+	}
 
 	{
 		char cmd[600];

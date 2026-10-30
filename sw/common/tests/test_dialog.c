@@ -281,6 +281,124 @@ int main(void) {
 		z_render_write(getenv("HELP_PBM"), &dlg.win, 2);
 	}
 
+	// -- print (z_dialog_print()) --
+
+	printf("print: ranges\n");
+	{
+		int a = 0, b = 0;
+		expect(pr_range("3", &a, &b) && a == 3 && b == 3, "\"3\": page 3");
+		expect(pr_range(" 2 - 5 ", &a, &b) && a == 2 && b == 5, "\" 2 - 5 \": 2 to 5");
+		expect(pr_range("4-", &a, &b) && a == 4 && b == 0, "\"4-\": 4 to the end");
+		expect(!pr_range("5-2", &a, &b) && !pr_range("x", &a, &b) && !pr_range("", &a, &b) &&
+			!pr_range("0", &a, &b) && !pr_range("2,3", &a, &b), "nothing else");
+	}
+
+	printf("print: rows, values, a range typed, Print\n");
+	{
+		static z_print_opts_t o;
+		memset(&o, 0, sizeof(o));
+		memset(&dlg, 0, sizeof(dlg));
+		memset(&pr, 0, sizeof(pr));
+		strcpy(o.printer, "ipp://10.0.0.5/ipp/print");
+		strcpy(o.paper_default, "a4");
+		o.copies = 1;
+		o.nup = 1;
+		o.selection = true;
+		pr.o = &o;
+		pr.choices[pr.nchoices++] = Z_PRINT_PAGES_ALL;
+		pr.choices[pr.nchoices++] = Z_PRINT_PAGES_SELECTION;
+		pr.choices[pr.nchoices++] = Z_PRINT_PAGES_RANGE;
+		dlg.win.w = DLG_CONFIRM_W;
+		dlg.win.h = 160;
+		pr.val_x = DLG_MARGIN + PR_LABEL_W;
+		pr.val_w = z_win_content_w(&dlg.win) - DLG_MARGIN - pr.val_x;
+		dlg.btn_y = 130;
+		dlg_buttons_init(labels_print, 2);
+		z_widget_focus_set(&dlg.wset, -1);
+		z_edit_init(&dlg.edit, dlg.field, DLG_FIELD_MAX, "");
+		pr.row = PR_TO;
+
+		char v[64];
+		pr_value(PR_TO, v, sizeof(v));
+		expect(!strcmp(v, "Printer 10.0.0.5"), "the printer by its host");
+		pr_value(PR_PAPER, v, sizeof(v));
+		expect(!strcmp(v, "Default (A4)"), "the default paper, named");
+
+		pr_key(Z_KEY_RIGHT, 0);
+		expect(o.dest == Z_PRINT_TO_PDF, "Right: a PDF file");
+		pr_value(PR_TRAY, v, sizeof(v));
+		expect(!strcmp(v, "(the printer's)"), "a file has no tray");
+		pr_key(Z_KEY_LEFT, 0);
+		expect(o.dest == Z_PRINT_TO_PRINTER, "Left: back to the printer");
+
+		pr_key(Z_KEY_DOWN, 0);
+		expect(pr.row == PR_PAGES, "Down: Pages");
+		pr_key(Z_KEY_RIGHT, 0);
+		expect(pr.choices[pr.choice] == Z_PRINT_PAGES_SELECTION, "the selection is a choice");
+		pr_key('2', 0);
+		expect(pr_typing() && dlg.edit.len == 1, "a digit starts a range");
+		pr_key('-', 0);
+		pr_key('4', 0);
+		expect(dlg.edit.len == 3 && !strncmp(dlg.edit.buf, "2-4", 3), "and it is typed");
+
+		pr_key(Z_KEY_DOWN, 0);
+		pr_key(Z_KEY_RIGHT, 0);
+		pr_key(Z_KEY_RIGHT, 0);
+		expect(o.copies == 3, "Copies: Right twice is 3");
+		pr_key(Z_KEY_DOWN, 0);
+		pr_key(Z_KEY_LEFT, 0);
+		expect(pr.paper == PR_NPAPERS - 1, "Paper: Left from the default wraps to the last");
+		pr_key(Z_KEY_DOWN, 0);
+		pr_key(Z_KEY_RIGHT, 0);
+		pr_key(Z_KEY_DOWN, 0);
+		pr_key(Z_KEY_RIGHT, 0);
+		pr_key(Z_KEY_RIGHT, 0);
+		pr_key(0x0d, 0);
+		expect(dlg.done && dlg.result == Z_DIALOG_YES, "Enter prints");
+		expect(o.pages == Z_PRINT_PAGES_RANGE && o.first == 2 && o.last == 4, "pages 2 to 4");
+		expect(!strcmp(o.paper, "3x5") && !strcmp(o.tray, "main") && o.nup == 4,
+			"paper, tray, pages to a sheet as chosen");
+
+		// a range that is not one: Print stays, the focus on Pages
+		dlg.done = false;
+		pr.row = PR_PAGES;
+		z_edit_init(&dlg.edit, dlg.field, DLG_FIELD_MAX, "9-3");
+		pr_key(0x0d, 0);
+		expect(!dlg.done && pr.row == PR_PAGES, "a bad range is not printed");
+		pr_key(0x1b, 0);
+		expect(dlg.done && dlg.result == Z_DIALOG_CANCEL, "Escape cancels");
+	}
+
+	// A picture: PRINT_PBM=/path/print.pbm
+	if (getenv("PRINT_PBM")) {
+		static z_print_opts_t o;
+		memset(&o, 0, sizeof(o));
+		memset(&dlg, 0, sizeof(dlg));
+		memset(&pr, 0, sizeof(pr));
+		strcpy(o.printer, "ipp://10.0.0.5/ipp/print");
+		strcpy(o.paper_default, "a4");
+		o.copies = 1;
+		o.nup = 1;
+		pr.o = &o;
+		pr.choices[pr.nchoices++] = Z_PRINT_PAGES_ALL;
+		pr.choices[pr.nchoices++] = Z_PRINT_PAGES_RANGE;
+		dlg.win = scratch;
+		dlg.win.w = DLG_CONFIRM_W;
+		dlg.win.h = Z_WM_TITLEBAR_H + 4 + DLG_MARGIN + PR_ROWS * PR_ROW_H + DLG_MARGIN +
+			DLG_BTN_H + DLG_MARGIN;		// as z_dialog_print() makes it
+		dlg.win.clip[0].x1 = dlg.win.x + dlg.win.w - 1;
+		dlg.win.clip[0].y1 = dlg.win.y + dlg.win.h - 1;
+		pr.val_x = DLG_MARGIN + PR_LABEL_W;
+		pr.val_w = z_win_content_w(&dlg.win) - DLG_MARGIN - pr.val_x;
+		dlg.btn_y = z_win_content_h(&dlg.win) - DLG_MARGIN - DLG_BTN_H;
+		dlg_buttons_init(labels_print, 2);
+		z_widget_focus_set(&dlg.wset, -1);
+		z_edit_init(&dlg.edit, dlg.field, DLG_FIELD_MAX, "");
+		pr.row = PR_PAGES;
+		pr_repaint();
+		z_render_write(getenv("PRINT_PBM"), &dlg.win, 2);
+	}
+
 	printf("test_dialog: %d checks, %d failed\n", checks, failures);
 	return failures ? 1 : 0;
 

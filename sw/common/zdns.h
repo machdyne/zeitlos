@@ -41,6 +41,8 @@
 #include <stdint.h>
 #include <stdbool.h>
 
+#include "zmsg.h"		// z_msg_t, for z_dns_reply()
+
 // parses a dotted-quad IPv4 address ("a.b.c.d") into a packed
 // uint32_t, high octet first (the same layout every "ip" value in
 // this codebase already uses -- see e.g. ip.c's own header
@@ -74,6 +76,19 @@ bool z_parse_ipv4(const char *s, uint32_t *out);
 // a short reason either way -- safe to pass NULL if the caller
 // doesn't want to report it.
 bool z_dns_resolve(const char *hostname, uint32_t *out_ip,
+	char *err, uint32_t err_len);
+
+// The same question without waiting for the answer, for a caller that
+// must keep reading its messages (sw/apps/web: Stop works while a name
+// resolves, and the window keeps repainting). z_dns_ask() sends it and
+// returns its tag, or 0 with err filled if it could not be asked (net
+// not running). Then hand each message to z_dns_reply(): 1 the address
+// is in *out_ip, 0 the name did not resolve (err says why), -1 that
+// message is not the answer. The caller keeps its own deadline --
+// net may never answer -- and a late answer to a question the caller
+// gave up on is simply not matched (another tag, or 0).
+uint32_t z_dns_ask(const char *hostname, char *err, uint32_t err_len);
+int z_dns_reply(const z_msg_t *msg, uint32_t tag, uint32_t *out_ip,
 	char *err, uint32_t err_len);
 
 // tries z_parse_ipv4() first (fast, no messaging, no dependency on

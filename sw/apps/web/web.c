@@ -26,23 +26,21 @@
  *
  * -- how a page is fetched --
  *
- *   resolve the host        z_dns_resolve()   (blocks, bounded)
+ *   resolve the host        z_dns_ask(), answered in the main loop
  *   open a raw socket       Z_PORT_CONNECT {ip, port} to net
  *   send the request        http_build_request()
  *   feed the response       http_feed()
  *   spool the body          fs_write_chunk() to /tmp/web.spool
  *   index it                page_index_more(), a few blocks at a time
  *
- * The body is spooled to the card and only then indexed, rather than
- * being parsed as it arrives. That means no progressive rendering in
- * this drop: a slow page shows a byte count and then appears all at
- * once. It buys not needing a read handle and a write handle open on
- * the same file simultaneously, which is a question about the
- * filesystem this app should not be the first thing to ask.
- *
- * page.c is written for the streaming case regardless and its tests
- * cover it, so turning progressive rendering on later is a change
- * here, not there.
+ * The body is spooled to the card, and its first 64KB kept in memory
+ * as well: the page is indexed and drawn from that copy while the
+ * transfer runs, and from the spool once it is complete (prog_*,
+ * below). That shows a page as it arrives without needing a read
+ * handle and a write handle open on the same file at once, which is a
+ * question about the filesystem this app should not be the first
+ * thing to ask. page.c is written for the streaming case;
+ * tests/test_page.c covers the switch from the copy to the spool.
  *
  * -- https --
  *
@@ -186,6 +184,23 @@ static char cur_url_text[URL_MAX];
 static int spool_rd = -1;		// read handle, open while a page is live
 static int spool_wr = -1;
 
+// -- a page shown while it arrives (docs/web_app.md, "While a page loads") --
+//
+// The body still goes to the spool as before, and the first PROG_HEAD
+// bytes of it are kept in memory too: page.c reads those (spool_read())
+// while the transfer runs, so the page is indexed and drawn as it
+// comes, without a read handle on a file still being written. When the
+// body is complete the spool is opened for reading and page.c goes on
+// from where it got to, through the file -- the same bytes. A page
+// bigger than the head shows its first part at once and the rest when
+// it has all arrived. Stop keeps what came.
+#define PROG_HEAD  (64u * 1024u)
+static char *prog_head;			// allocated once, kept
+static uint32_t prog_len;		// bytes of the body in it
+static bool prog_on;			// this fetch is being shown as it arrives
+static uint32_t prog_drawn;		// ticks, the body last drawn
+static uint32_t prog_tried;		// prog_len when indexing last found nothing more
+
 // This fetch is an image for an in-place placeholder, not a page.
 //
 // Declared here rather than beside the image state below because the
@@ -319,6 +334,14 @@ static uint32_t spool_read(void *user, uint32_t off, char *buf, uint32_t len) {
 	int n;
 
 	(void)user;
+
+	// while it arrives: what is in memory
+	if (prog_on) {
+		if (off >= prog_len) return 0;
+		if (off + len > prog_len) len = prog_len - off;
+		memcpy(buf, prog_head + off, len);
+		return len;
+	}
 
 	if (spool_rd < 0) return 0;
 	if (off >= spool_len) return 0;
@@ -602,6 +625,12 @@ typedef enum {
 } web_state_t;
 
 static web_state_t state;
+
+// A name being resolved (z_dns_ask()): its tag, 0 when none, and when
+// to give up on an answer.
+static uint32_t dns_tag;
+static uint32_t dns_deadline;
+#define DNS_WAIT_TICKS  (6 * Z_TICK_HZ)
 
 // Sized to hold a whole URL and a sentence about it.
 //
@@ -1382,9 +1411,10 @@ static void go_to_text(const char *text);
 // is one way a load ends early, not two. Escape stops too, when the URL
 // field does not have the keyboard.
 //
-// Resolving a name blocks the whole app (zdns.h), so only a load that
-// has reached the network can be clicked away; indexing the page that
-// arrived is local work that finishes by itself.
+// Any of it can be stopped: resolving the name (asked of net without
+// waiting, z_dns_ask()), connecting, or receiving -- a page shown as
+// it arrived keeps what came. Indexing the page that arrived is local
+// work that finishes by itself.
 static bool net_busy(void) {
 	return state == W_RESOLVING || state == W_CONNECTING ||
 		state == W_RECEIVING || state == W_IMG;
@@ -1787,6 +1817,32 @@ static void on_headers(void *user, const http_response_t *r) {
 	snprintf(status, sizeof(status), "receiving %s...",
 		r->content_type[0] ? r->content_type : "response");
 
+	// A page for this window: shown as it arrives (prog_on, above).
+	// Not a picture, a save, a page another app asked for, or a HEAD.
+	if (!fetching_image && !dl_net && svc_active < 0 && !fetch_is_head && !sw_mode()) {
+		if (!prog_head) prog_head = malloc(PROG_HEAD);
+		if (prog_head) {
+			prog_on = true;
+			prog_len = 0;
+			prog_tried = 0;
+			prog_drawn = z_uptime_ticks();
+			page_reset(&pg);
+			page_set_charset(&pg,
+				(!strcmp(r->charset, "iso-8859-1") ||
+				 !strcmp(r->charset, "windows-1252") ||
+				 !strcmp(r->charset, "latin1"))
+					? HTML_CS_CP1252 : HTML_CS_UTF8);
+			page_set_size(&pg, 0, false);
+			top.block = 0;
+			top.sub = 0;
+			sel_link = -1;
+			hl_on = false;
+			// links on it resolve against it from now on
+			cur_url = fetch_url;
+			url_format(&cur_url, cur_url_text, sizeof(cur_url_text), true);
+		}
+	}
+
 }
 
 static void on_body(void *user, const char *data, uint32_t len) {
@@ -1828,6 +1884,13 @@ static void on_body(void *user, const char *data, uint32_t len) {
 	else spool_len += len;
 	tm.body_bytes += len;
 
+	if (prog_on && prog_len < PROG_HEAD) {
+		uint32_t k = len < PROG_HEAD - prog_len ? len : PROG_HEAD - prog_len;
+		memcpy(prog_head + prog_len, data, k);
+		prog_len += k;
+		page_set_size(&pg, prog_len, false);
+	}
+
 	// Repainting per chunk would be a repaint every 536 bytes. Once
 	// every 16KB is often enough to show progress and rare enough not
 	// to be the reason the transfer is slow.
@@ -1857,6 +1920,28 @@ static void sock_disconnect(void) {
 }
 
 static void fetch_failed(const char *why) {
+
+	dns_tag = 0;			// an answer still to come is not wanted
+
+	// A page shown as it arrived, stopped or cut off: what came stays,
+	// read from the spool from now on, and indexed to its end. The bar
+	// says why it ended.
+	if (prog_on && !fetching_image && prog_len > 0) {
+		sock_disconnect();
+		local_close();
+		prog_on = false;
+		spool_flush();
+		if (spool_wr >= 0) { fs_close_handle(spool_wr); spool_wr = -1; }
+		spool_rd = fs_open_read(spool_path);
+		spool_pos = 0;
+		page_set_size(&pg, spool_rd >= 0 ? spool_len : 0, true);
+		state = W_INDEXING;
+		snprintf(status, sizeof(status), "%s (the page so far)", why);
+		printf("web: fetch ended early: %s, %lu bytes shown\n", why, (unsigned long)spool_len);
+		repaint();
+		return;
+	}
+	prog_on = false;
 
 	sock_disconnect();
 	// Not for an image or a save: the page's spool is still open for
@@ -2249,17 +2334,25 @@ static void response_done(void) {
 
 	// -- our own page --
 
-	page_reset(&pg);
-	page_set_charset(&pg,
-		(!strcmp(last_res.charset, "iso-8859-1") ||
-		 !strcmp(last_res.charset, "windows-1252") ||
-		 !strcmp(last_res.charset, "latin1"))
-			? HTML_CS_CP1252 : HTML_CS_UTF8);
-	page_set_size(&pg, spool_len, true);
+	if (prog_on) {
+		// Shown as it arrived: the index goes on from where it got to,
+		// now through the spool -- whose start is the same bytes. Where
+		// the reader has scrolled to stays.
+		prog_on = false;
+		page_set_size(&pg, spool_len, true);
+	} else {
+		page_reset(&pg);
+		page_set_charset(&pg,
+			(!strcmp(last_res.charset, "iso-8859-1") ||
+			 !strcmp(last_res.charset, "windows-1252") ||
+			 !strcmp(last_res.charset, "latin1"))
+				? HTML_CS_CP1252 : HTML_CS_UTF8);
+		page_set_size(&pg, spool_len, true);
 
-	top.block = 0;
-	top.sub = 0;
-	sel_link = -1;
+		top.block = 0;
+		top.sub = 0;
+		sel_link = -1;
+	}
 
 	state = W_INDEXING;
 	snprintf(status, sizeof(status), "reading %lu bytes...",
@@ -2496,11 +2589,32 @@ static void local_pump(void) {
 
 }
 
+static void dns_resolved(uint32_t ip);
+
+// What a message is to the name being resolved, if one is.
+static void dns_answer(const z_msg_t *msg) {
+	uint32_t ip;
+	char err[64];
+	int r;
+	if (!dns_tag || state != W_RESOLVING) return;
+	r = z_dns_reply(msg, dns_tag, &ip, err, sizeof(err));
+	if (r < 0) return;
+	if (r == 1) { dns_resolved(ip); return; }
+	{
+		char why[96];
+		dns_tag = 0;
+		snprintf(why, sizeof(why), "could not resolve that host: %s", err);
+		fetch_failed(why);
+	}
+}
+
 static void start_fetch(const url_t *u, bool push_history) {
 
 	uint32_t ip;
-	z_obj_t arg;
 	bool bm_page = is_bm_url(u);	// about:bookmarks, made here
+
+	// A page still arriving is let go: this is another load.
+	prog_on = false;
 
 	if (!bm_page && !url_is_network(u) && u->scheme != URL_SCHEME_FILE) {
 		if (u->scheme == URL_SCHEME_OTHER) {
@@ -2744,18 +2858,31 @@ static void start_fetch(const url_t *u, bool push_history) {
 	snprintf(status, sizeof(status), "resolving %s...", fetch_url.host);
 	repaint();
 
-	// z_dns_resolve() BLOCKS. It is bounded (zdns.h) but this process
-	// does not read messages while it runs, so the status line above
-	// is drawn FIRST -- the window will not repaint again until this
-	// returns. Same constraint, and the same mitigation, as
-	// z_conn_prepare() documents for `term`.
+	// The name is asked for and the answer handled when it arrives
+	// (dispatch(), dns_answer()): the main loop keeps reading messages
+	// meanwhile, so Stop and Escape work and the window repaints. It
+	// used to be z_resolve_host(), which waited up to five seconds and
+	// threw away every message that came in while it did -- keys,
+	// clicks and wm's redraw requests among them.
 	tm.t_dns = web_ms();
 
-	if (!z_resolve_host(fetch_url.host, &ip, NULL, 0)) {
-		fetch_failed("could not resolve that host");
-		return;
+	if (z_parse_ipv4(fetch_url.host, &ip)) { dns_resolved(ip); return; }
+
+	{
+		char err[64];
+		dns_tag = z_dns_ask(fetch_url.host, err, sizeof(err));
+		if (!dns_tag) { fetch_failed(err); return; }
+		dns_deadline = z_uptime_ticks() + DNS_WAIT_TICKS;
 	}
 
+}
+
+// The host's address is known: on to the connection.
+static void dns_resolved(uint32_t ip) {
+
+	z_obj_t arg;
+
+	dns_tag = 0;
 	tm.t_dns = web_ms() - tm.t_dns;
 
 	if (!spool_begin()) return;
@@ -4034,6 +4161,10 @@ static void dispatch(z_msg_t *msg) {
 
 	switch (msg->subject) {
 
+	case Z_NET_DNS_RESOLVE_REPLY:
+		dns_answer(msg);
+		break;
+
 	case Z_WM_KEY:
 		if (msg->obj.type != Z_UINT32) break;
 		if (!Z_WM_UNPACK_KEY_PRESSED(msg->obj.val.uint32)) break;
@@ -4277,6 +4408,13 @@ int main(void) {
 
 		if (local_fd >= 0 && net_busy()) { local_pump(); continue; }
 
+		// A name that net has not answered for: given up on.
+		if (state == W_RESOLVING && dns_tag &&
+			(int32_t)(z_uptime_ticks() - dns_deadline) > 0) {
+			fetch_failed("could not resolve that host: no answer from net");
+			continue;
+		}
+
 		// A page being saved from the spool, and a search: a bounded
 		// step each, between messages, so Escape is seen at once.
 		if (dl_on && !dl_net) { save_copy_pump(); continue; }
@@ -4284,6 +4422,29 @@ int main(void) {
 
 		// A picture into its box, a slice at a time.
 		if (imgdec_busy(&idec)) { img_pump(); continue; }
+
+		// A page arriving: indexed as far as it has come, and drawn --
+		// at once while the screen is not yet full, then a few times a
+		// second (the bar and the scrollbar follow).
+		// Tried again only once more has come: a block cut off at the end
+		// of what has arrived cannot be finished yet.
+		if (state == W_RECEIVING && prog_on && prog_len > prog_tried && !page_indexed(&pg)) {
+			uint32_t before = page_blocks(&pg);
+			{
+				uint32_t t0 = web_ms();
+				page_index_more(&pg, INDEX_BUDGET);
+				tm.index_ms += web_ms() - t0;
+			}
+			if (page_blocks(&pg) == before) prog_tried = prog_len;
+			if (page_blocks(&pg) != before &&
+				(before < (uint32_t)lines_per_screen() ||
+				 z_uptime_ticks() - prog_drawn > Z_TICK_HZ / 3)) {
+				prog_drawn = z_uptime_ticks();
+				draw_body();
+				draw_scrollbar();
+			}
+			continue;
+		}
 
 		if (state == W_INDEXING) {
 
@@ -4362,6 +4523,13 @@ int main(void) {
 			continue;
 		}
 #endif
+
+		// Resolving: woken now and then for the deadline above, as no
+		// message comes if net never answers.
+		if (state == W_RESOLVING && dns_tag) {
+			z_proc_wait(Z_TICK_HZ / 4);
+			continue;
+		}
 
 		z_proc_wait(0);
 

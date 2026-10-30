@@ -62,6 +62,14 @@ The column is only drawn when the row is wide enough to keep twelve
 characters of the name in front of it, so a narrow window shows names
 alone rather than truncating them to nothing.
 
+**Big folders.** A folder shows everything in it -- thousands of
+files -- with nothing to click for more. The first rows appear at once
+and the rest arrive in the gaps, sorted into place as they come; the
+path line says "(reading)" until the last is in. The window answers
+keys and clicks throughout: you can scroll, type a name, or open
+something before the listing finishes, and the selection stays on what
+you chose as rows are added around it.
+
 ### Rename, copy and move
 
 **Copy** and **Move** start the prompt from the file's own full path,
@@ -158,44 +166,6 @@ browser does not wait for it -- it stays usable meanwhile -- and
 re-reads the folder, selecting the new file, when it is done. One
 conversion at a time from here.
 
-## Drawing without flashing
-
-There is no back buffer: whatever is drawn shows at once, so blanking
-something and drawing it again shows as a flash
-([window_manager.md](window_manager.md#redraw-strategy)). The window is
-cleared and drawn whole only for wm's `Z_WM_REDRAW`, after which
-nothing on it can be trusted; everything else draws what changed, over
-what is there:
-
-- **Arrow keys** paint the row that lost the selection and the one
-  that gained it; the rest of the list only when it scrolled. Both
-  lists do this themselves (`z_flist_draw()`, `z_listbox_draw()`,
-  [widgets.md](widgets.md#drawing-in-place)).
-- **Opening a folder** paints its rows once, each row whole. It used to
-  be painted twice, the second time after blanking the list.
-- **Find** records each hit and puts the new ones in the list a few
-  times a second (`z_listbox_append()`), painting only the new rows
-  that are in view; the scrollbar is drawn when its thumb moves. It
-  used to clear and draw the whole list and its scrollbar once per hit,
-  dozens of times in each 20ms slice. Starting a find, a new find over
-  the results, and a find ending no longer repaint the window: the
-  results take the folder's place, the old rows are written over, and
-  the line and the Find/Stop button change.
-- **The line above the list** (path or progress) is written in one
-  pass, its text padded with spaces as two-colour cells, and only when
-  what it says changed. It used to be a fill and then the text, on
-  every key. A copy's progress bar is drawn with fills only, beside the
-  text: the line rasterizer does not order against the blitter that
-  draws text ([widgets.md](widgets.md#the-blitter-and-the-rasterizer-do-not-order-against-each-other)).
-- **Buttons** are drawn when their state changes, not all eight.
-
-`sw/apps/files/tests/test_walk.c` checks it: it plants an ink pixel in
-the list's empty area, which anything that blanks the list takes away,
-and compares what was drawn in place with what a whole repaint draws,
-pixel for pixel -- after arrow keys, typing a name, opening a folder and
-going back up, a find streaming in, a new find over the results, and
-Esc.
-
 ## Opening a file
 
 By extension, through the shared table in `sw/common/ztype.h`:
@@ -265,45 +235,6 @@ cc -std=gnu99 -Wall -I sw/common -o /tmp/test_ztype \
    sw/common/tests/test_ztype.c sw/common/ztype.c && /tmp/test_ztype
 ```
 
-## Adding a file type
-
-One line in `z_ftypes[]` (`sw/common/ztype.c`):
-
-```c
-{ "WAV", "player", "Sound" },
-```
-
-`app` is what `z_proc_run()` expects — a bare program name, no path and
-no extension. Nothing else needs changing; the browser, and anything
-else that later asks "what opens this?", read the same table.
-
-## Known limits
-
-- **Each open starts a fresh process.** Double-clicking two `.TXT`
-  files gives two independent `text` instances, each roughly 50KB of
-  image plus 16KB of stack and heap. On a 1MB board that adds up.
-  Handing the file to an already-running instance would need a way to
-  find one and ask it, which the pid registry could support but nothing
-  does yet.
-- **The listing is bounded** at `Z_FLIST_MAX` (256) entries, or fewer
-  when the names are long (the list's 8KB name pool). It was 128,
-  which `/docs` on the card -- 150 files -- outgrew. A fuller
-  directory is listed in part, and the path line above the list says
-  "(partial list)", so a file that is on the card but not shown has an
-  explanation. `ls` in the posix shell has the same bound and says
-  "... (truncated)".
-- **A folder is read in one call.** `FS_LIST_EX` lists a whole
-  directory into the caller's buffer and has no offset to resume from
-  (`z_fs_list_args_t`, `zfs.h`), so opening a folder cannot be cut into
-  20ms steps with a "Reading... N" count, the way a walk is. Within the
-  256-entry bound it is one listing of the card, a few milliseconds per
-  directory sector; a paged listing (a start index or a cookie on the
-  call) is what it would take.
-- **Folders copy as walks.** A folder copies, moves
-  and deletes with everything in it, as a walk (`zwalk.h`); within
-  a volume a move is one `FS_RENAME`. A folder is not copied over an
-  existing folder of the same name.
-
 ## Mounting
 
 There is no card-detect line on this hardware (SPI only), so nothing
@@ -317,3 +248,110 @@ an open `FIL` leaves that handle describing cluster chains from the
 previous mount, and the next write through it corrupts the card —
 worse than making you close something first. `k_fs_open_count()`
 (`sw/os/fsapi.h`) is what it checks.
+
+## Known limits
+
+- **Each open starts a fresh process.** Double-clicking two `.TXT`
+  files gives two independent `text` instances, each roughly 50KB of
+  image plus 16KB of stack and heap. On a 1MB board that adds up.
+  Handing the file to an already-running instance would need a way to
+  find one and ask it, which the pid registry could support but nothing
+  does yet.
+- **A folder shows up to 4,096 entries** (or 64KB of names). Past
+  that it is listed in part and the path line says "(partial list)".
+  While a copy, move, delete or find is running the list does not
+  grow, so a folder opened then may also be listed in part; F5 reads
+  it in full afterwards. `ls` in the posix shell, and the Open and
+  Save dialogs in other apps, still stop at 256 and say so.
+- **Find and copy see what one listing of a folder holds.** A walk
+  lists each folder it goes into in one call, into its own block of
+  memory (`zwalk.h`); a folder whose listing does not fit is walked in
+  part, and the result says so. Delete lists again until the folder
+  is empty, so it is not affected.
+- **Folders copy as walks.** A folder copies, moves
+  and deletes with everything in it, as a walk (`zwalk.h`); within
+  a volume a move is one `FS_RENAME`. A folder is not copied over an
+  existing folder of the same name.
+
+---
+
+## For developers
+
+How it is built and how it is tested. Nothing here is needed to use it.
+
+### Adding a file type
+
+One line in `z_ftypes[]` (`sw/common/ztype.c`):
+
+```c
+{ "WAV", "player", "Sound" },
+```
+
+`app` is what `z_proc_run()` expects — a bare program name, no path and
+no extension. Nothing else needs changing; the browser, and anything
+else that later asks "what opens this?", read the same table.
+
+### Big folders
+
+`files` gives its list (`z_flist_t`, `sw/common/zflist.h`) a store and
+a source. The store is the bottom of the app's arena: 512 entries and
+16KB of names to begin with, doubled as it fills
+(`list_grow()`, to `LIST_CAP_MAX` 4,096 and `LIST_POOL_MAX` 64KB --
+the widget's name offsets are 16 bits). A walk's memory sits above
+it. `z_arena_set()` may move the arena when it is resized, so the list
+holds offsets and is re-pointed after each resize (`list_point()`); it
+does not grow while a walk runs, since the walk holds pointers into
+the arena.
+
+The source reads the folder straight from `fs` a page at a time
+(`zfs_opendir_at()`, `zfs_readdir()`, `zfs_closedir_at()`,
+`sw/common/zfsc.h`), so there is no whole-folder listing call and no
+ABI change. The main loop calls `z_flist_load_step(&flist, 64)` between
+messages; each step sorts its page and merges it into the sorted list
+(`merge_page()`), keeping the selection on the same name, and only the
+rows that changed are drawn. Without a source (any other app) the list
+is read in one call into its own 256 entries, as before.
+
+`sw/common/tests/test_flist.c` lists a 3,000-entry source, grows the
+store, truncates at a fixed cap, and checks that a refresh keeps the
+selection; `sw/apps/files/tests/test_walk.c` opens a 2,500-file folder
+through a moving arena (each move `mprotect`s the old one, so a stale
+pointer faults) and runs a find over it.
+
+### Drawing without flashing
+
+There is no back buffer: whatever is drawn shows at once, so blanking
+something and drawing it again shows as a flash
+([window_manager.md](window_manager.md#redraw-strategy)). The window is
+cleared and drawn whole only for wm's `Z_WM_REDRAW`, after which
+nothing on it can be trusted; everything else draws what changed, over
+what is there:
+
+- **Arrow keys** paint the row that lost the selection and the one
+  that gained it; the rest of the list only when it scrolled. Both
+  lists do this themselves (`z_flist_draw()`, `z_listbox_draw()`,
+  [widgets.md](widgets.md#drawing-in-place)).
+- **Opening a folder** paints its rows once, each row whole. It used to
+  be painted twice, the second time after blanking the list.
+- **Find** records each hit and puts the new ones in the list a few
+  times a second (`z_listbox_append()`), painting only the new rows
+  that are in view; the scrollbar is drawn when its thumb moves. It
+  used to clear and draw the whole list and its scrollbar once per hit,
+  dozens of times in each 20ms slice. Starting a find, a new find over
+  the results, and a find ending no longer repaint the window: the
+  results take the folder's place, the old rows are written over, and
+  the line and the Find/Stop button change.
+- **The line above the list** (path or progress) is written in one
+  pass, its text padded with spaces as two-colour cells, and only when
+  what it says changed. It used to be a fill and then the text, on
+  every key. A copy's progress bar is drawn with fills only, beside the
+  text: the line rasterizer does not order against the blitter that
+  draws text ([widgets.md](widgets.md#the-blitter-and-the-rasterizer-do-not-order-against-each-other)).
+- **Buttons** are drawn when their state changes, not all eight.
+
+`sw/apps/files/tests/test_walk.c` checks it: it plants an ink pixel in
+the list's empty area, which anything that blanks the list takes away,
+and compares what was drawn in place with what a whole repaint draws,
+pixel for pixel -- after arrow keys, typing a name, opening a folder and
+going back up, a find streaming in, a new find over the results, and
+Esc.

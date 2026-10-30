@@ -1566,6 +1566,28 @@ static void vfill(int x, int w, int y0, int y1, int thr) {
 
 }
 
+// -- clearing as it goes, for a full repaint --
+//
+// A full repaint used to clear the whole body and then draw it: for a
+// moment the window was blank, which on Page Up, Page Down or an open
+// was a flash. Now the clear runs just ahead of the drawing instead:
+// before anything is drawn on a row, every row down to it that has not
+// been cleared yet is (clear_upto()), and the old page stays on the
+// glass until the line that replaces it is drawn. clear_to is the first
+// row not yet cleared; -1 when not repainting this way.
+static int clear_to = -1;
+
+static void clear_upto(int y) {
+
+	if (clear_to < 0 || meas_on) return;
+	if (y > view_h) y = view_h;
+	if (y <= clear_to) return;
+
+	fill(0, clear_to, view_w + MARGIN, y - clear_to, 0);
+	clear_to = y;
+
+}
+
 // -- measuring, for scroll_backward() --
 //
 // layout_run() with meas_on set draws nothing (its thr is past the
@@ -2038,6 +2060,7 @@ static void layout_run(md_state_t *st, uint32_t line, int y,
 					nsteps++;
 				}
 				y += space_before(&ml);
+				clear_upto(y + 2);
 				vfill(MARGIN, view_w, y + 1, y + 1, thr);
 				y += 3;
 			} else sub_skip = 0;
@@ -2072,6 +2095,7 @@ static void layout_run(md_state_t *st, uint32_t line, int y,
 
 		// A table row's rule above it; two under the header.
 		if (table && from_top) {
+			clear_upto(y);
 			tbl_rule(&ml, f->w, y - 2, thr);
 			if (ml.tflags & MD_TF_BODY1) tbl_rule(&ml, f->w, y - 4, thr);
 		}
@@ -2108,6 +2132,7 @@ static void layout_run(md_state_t *st, uint32_t line, int y,
 			// at the top a scroll back exposed.
 			bool drawn = (y + need > thr) || (y < band_lim);
 			if (s == n - 1) last_drawn = drawn;
+			if (drawn) clear_upto(y + need);
 
 			if (nsteps < VIS_STEPS) {
 				// Sub 0 carries the block's space_before with it;
@@ -2281,6 +2306,9 @@ static void layout_run(md_state_t *st, uint32_t line, int y,
 
 	tbars_flush(thr);
 
+	// Below the last line: whatever the old page had there.
+	clear_upto(view_h);
+
 	// Where the next layout resumes. If a block was cut short, just
 	// before it -- it is re-laid-out then, since more of it may fit.
 	// Otherwise after the last block, which is where we are.
@@ -2310,12 +2338,16 @@ static void layout_run(md_state_t *st, uint32_t line, int y,
 
 static void draw_body_from(int thr) {
 
+	// A full repaint clears as it draws (clear_upto()); a strip, or no
+	// document at all, is cleared first.
+	bool progressive = (thr == 0 && fh >= 0);
+
 #if READ_PROFILE
 	{ uint32_t f0 = rp_cyc();
-	if (thr < view_h) fill(0, thr, view_w + MARGIN, view_h - thr, 0);
+	if (!progressive && thr < view_h) fill(0, thr, view_w + MARGIN, view_h - thr, 0);
 	rp_fill += rp_cyc() - f0; }
 #else
-	if (thr < view_h) fill(0, thr, view_w + MARGIN, view_h - thr, 0);
+	if (!progressive && thr < view_h) fill(0, thr, view_w + MARGIN, view_h - thr, 0);
 #endif
 
 	nvlinks = 0;
@@ -2336,7 +2368,9 @@ static void draw_body_from(int thr) {
 	top_off = rd_tell();
 
 	md_state_t st_top = st;
+	if (progressive) clear_to = 0;
 	layout_run(&st_top, top_line, MARGIN, top_sub, thr);
+	clear_to = -1;
 
 	bottom_off = rd_tell();
 	if (bottom_off < top_off) bottom_off = top_off;

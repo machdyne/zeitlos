@@ -92,6 +92,47 @@ static void expect(bool ok, const char *what) {
 static z_win_t win;
 static z_flist_t fl;
 
+// -- a source: a big folder, read an entry at a time --
+
+#define BIG_N 3000
+static char big_names[BIG_N][24];
+static int big_at, big_opens, big_closes, big_grows, big_grow_max;
+static bool big_open(void *ctx, const char *path) {
+	(void)ctx; (void)path; big_at = 0; big_opens++; return true;
+}
+static bool big_next(void *ctx, const char **name, uint32_t *nl, z_fs_info_t *info) {
+	(void)ctx;
+	if (big_at >= BIG_N) return false;
+	*name = big_names[big_at];
+	*nl = (uint32_t)strlen(big_names[big_at]);
+	memset(info, 0, sizeof(*info));
+	info->type = (big_at % 10 == 0) ? Z_FS_TYPE_DIR : Z_FS_TYPE_FILE;
+	info->size = (uint32_t)big_at;
+	big_at++;
+	return true;
+}
+static void big_close(void *ctx) { (void)ctx; big_closes++; }
+
+// The store, grown by doubling (as sw/apps/files does in its arena),
+// up to big_grow_max entries.
+static char *g_pool; static uint16_t *g_off; static uint8_t *g_dir; static z_fs_info_t *g_info;
+static int g_cap; static uint32_t g_pool_cap;
+static bool big_grow(void *ctx, z_flist_t *f) {
+	(void)ctx;
+	if (g_cap * 2 > big_grow_max) return false;
+	big_grows++;
+	g_cap *= 2;
+	g_pool_cap *= 2;
+	if (g_pool_cap > 65535) g_pool_cap = 65535;
+	g_pool = realloc(g_pool, g_pool_cap);
+	g_off = realloc(g_off, sizeof(*g_off) * (size_t)g_cap);
+	g_dir = realloc(g_dir, (size_t)g_cap);
+	g_info = realloc(g_info, sizeof(*g_info) * (size_t)g_cap);
+	z_flist_set_store(f, g_pool, g_pool_cap, g_off, g_dir, g_info, g_cap);
+	return true;
+}
+static const z_flist_source_t big_src = { big_open, big_next, big_close, big_grow, NULL };
+
 static const char *LONG_NAME =
 	"A very long file name that is far longer than the old twenty-four "
 	"byte slots and the old sixty-four byte paths could ever hold.txt";
@@ -271,6 +312,70 @@ int main(int argc, char **argv) {
 		char out[256];
 		snprintf(out, sizeof(out), "%s.pbm", argv[1]);
 		z_render_write(out, &win, 2);
+	}
+
+	// -- a big folder, a page at a time (z_flist_set_source()) --
+	printf("big folder: read in pages, sorted in as it comes\n");
+	{
+		static z_flist_t fb;
+		uint32_t r = 12345;
+		for (int i = 0; i < BIG_N; i++) {
+			r = r * 1103515245u + 12345u;
+			snprintf(big_names[i], sizeof(big_names[i]), "f%05u-%04d", (unsigned)(r >> 16) % 99999u, i);
+		}
+		g_cap = 256; g_pool_cap = 4096;
+		g_pool = malloc(g_pool_cap); g_off = malloc(sizeof(*g_off) * 256);
+		g_dir = malloc(256); g_info = malloc(sizeof(*g_info) * 256);
+		big_grow_max = 4096;
+		z_flist_init(&fb, &win);
+		z_flist_set_geom(&fb, 2, 2, 300, 180);
+		z_flist_set_store(&fb, g_pool, g_pool_cap, g_off, g_dir, g_info, g_cap);
+		z_flist_set_source(&fb, &big_src);
+		z_flist_chdir(&fb, "/big");
+		expect(fb.loading && fb.count > 0 && fb.count <= 64, "the first page at once, the rest to come");
+		int steps = 0;
+		while (z_flist_load_step(&fb, 64)) {
+			steps++;
+			if (steps == 5) {
+				// the person moves down meanwhile: that entry stays theirs
+				z_flist_key(&fb, Z_KEY_DOWN);
+				z_flist_key(&fb, Z_KEY_DOWN);
+			}
+			if (steps > 1000) break;
+		}
+		expect(!fb.loading && big_closes == 1, "read to the end, closed once");
+		expect(fb.count == BIG_N && !fb.truncated, "every entry, none dropped");
+		expect(big_grows >= 4, "the store grew as it filled");
+		int sorted = 1, dirs_first = 1;
+		for (int i = 1; i < fb.count; i++) {
+			if (fb.isdir[i - 1] == fb.isdir[i] &&
+				strcmp(fb.pool + fb.name_off[i - 1], fb.pool + fb.name_off[i]) > 0) sorted = 0;
+			if (!fb.isdir[i - 1] && fb.isdir[i]) dirs_first = 0;
+		}
+		expect(sorted && dirs_first, "in order: folders first, then by name");
+		int infos_ok = 1;
+		for (int i = 0; i < fb.count; i++) {
+			int n = atoi(fb.pool + fb.name_off[i] + 7);
+			if ((int)fb.info[i].size != n) infos_ok = 0;
+		}
+		expect(infos_ok, "each entry's details went with it");
+		expect(fb.sel >= 0, "a selection");
+
+		// a full store that cannot grow: a partial list, said so
+		big_grow_max = 512;
+		g_cap = 256; g_pool_cap = 4096;
+		z_flist_set_store(&fb, g_pool, g_pool_cap, g_off, g_dir, g_info, g_cap);
+		big_closes = 0;
+		z_flist_chdir(&fb, "/big");
+		while (z_flist_load_step(&fb, 64)) {}
+		expect(fb.count == 512 && z_flist_truncated(&fb) && big_closes == 1, "512 and no more: partial");
+
+		// a refresh keeps the selected name
+		big_grow_max = 4096;
+		z_flist_refresh_select(&fb, big_names[2999]);
+		while (z_flist_load_step(&fb, 64)) {}
+		expect(fb.sel >= 0 && !strcmp(fb.pool + fb.name_off[fb.sel], big_names[2999]),
+			"refresh: the name asked for, selected once it arrived");
 	}
 
 	printf("test_flist: %d checks, %d failed\n", checks, failures);

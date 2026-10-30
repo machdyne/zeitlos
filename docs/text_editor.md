@@ -23,7 +23,7 @@ widget, so it doubles as the worked example for `docs/widgets.md`.
 
 **F1** shows a short help box; its **Read docs** button opens this page ([app_help.md](app_help.md)).
 
-Titlebar buttons, left to right: **new**, **open**, **save**, **close**.
+Titlebar buttons, left to right: **new**, **open**, **save**, **print**, **close**.
 The title shows the current filename, prefixed with `*` when there are
 unsaved changes, and followed by `(Latin-9)` or `(Windows-1252)` for a
 file that will be saved in that encoding -- see "Encodings" below.
@@ -40,6 +40,7 @@ file that will be saved in that encoding -- see "Encodings" below.
 | mouse wheel | three lines a notch; the view moves, the caret stays |
 | Ctrl+N / Ctrl+O / Ctrl+S | new / open / save |
 | Ctrl+Shift+S | save as -- a new name, or a new place |
+| Ctrl+P | print -- the document, or the selection ([Printing](#printing)) |
 | Ctrl+Q | close |
 | Shift + any movement key | extend the selection |
 | click and drag | select |
@@ -69,51 +70,364 @@ scrolling it. The scrollbar stops short of the bottom-right corner so
 the resize grip stays clickable — see `Z_WIN_GRIP_INSET` in
 `docs/widgets.md`.
 
-## The document
+## Font
 
-A **gap buffer**: the text is `doc[0..gs)` followed by
-`doc[gs+gl..cap)`, with all the free space -- the gap -- between. Until
-0.0.7 it was one flat array, and every keystroke moved everything after
-the caret, which at 32KB was a few milliseconds and would have been a
-third of a second per key in a megabyte.
+Three sizes, in turn on the titlebar font button (**Aa**): `z_font_5x8`,
+`z_font_6x12`, and **big print**, misc-fixed 10x20, then back to 5x8.
 
-The gap is always at the **end of a paragraph**: just after a newline,
-or at the end of the document. So no display line, no word and no
-character ever straddles it, and anything that reads a line, a word or a
-character takes a plain pointer to it (`P()`, `B()`); only saving, Replace
-All and a copy of a selection that spans paragraphs put the text in one
-run first (`doc_flat()`). An edit moves the gap to the end of its own
-paragraph -- nothing, if the last edit was in the same paragraph -- and
-then moves only the rest of that paragraph. **Typing costs its own
-paragraph, wherever in the document it is.**
+The first two are resident in glyph memory at fixed offsets and loaded
+once by `wm`, so they draw through the hardware blitter — see
+`docs/window_manager.md`, "Fonts in glyph memory".
 
-**Where it lives.** A document of up to `TEXT_MAX` = 32KB is in `sbuf`,
-in `.bss`, as it always was: a small file never touches anything else,
-and a 1MB board is exactly as it was. Past 32KB the document moves to
-the app's **arena** ([kernel.md](kernel.md#arenas)), one block of memory
-beside the app sized while it runs, with the text at the bottom and the
-line table above it. The arena is grown by doubling when an edit would
-not fit, so a typed character almost never waits for it, and given back
-when a small document is opened or a new one started. A grow may move
-the arena, so the editor holds offsets into it, never pointers across a
-call. There is **no fixed document cap**: the limit is the memory the
-board can spare (the kernel keeps enough clear to start the largest core
-app). Where there is none -- a 1MB board -- a file past 32KB is "too
-large", as it always was.
+Big print is 10 pixels wide, and the glyph blitter draws 8 at most, so
+it cannot come from glyph memory. Each line is put together in memory
+instead and copied to the screen in one blit (`draw_row_big()`,
+[fonts.md](fonts.md), "Big text"): about 30 columns and 10 lines in the
+default window, for children and for tired eyes. The copy rewrites every
+pixel of the row, selection included, so a row is never cleared first
+and does not flash. Typing redraws one line, about a millisecond of
+work. The font is compiled into `text` (`sw/common/zbigfont_10x20.c`):
+`text` runs from flash on a machine with no card, and its big print must
+too. On a bitstream whose blitter cannot copy from memory, Aa keeps to
+the two small sizes.
 
-The buffer is not NUL-terminated as a rule; `len` is the length and the
-text may contain any byte. Anything handing a string to a drawing call
-copies out a bounded piece first.
+Switching changes the column count, so the document rewraps from the
+top. That is the same case a resize is, and the one place
+`wrap_from()`'s paragraph-local shortcut cannot help, since every line
+can move.
 
-Files are read with `fs_open_read()` and `fs_read_chunk()` straight into
-that buffer, **not** with `fs_mallocfile()`. The latter would allocate a
-second copy of the whole file out of a heap that is 16KB shared with the
-stack (`Z_PROC_STACK_SIZE_DEFAULT`, `sw/os/kernel.h`), so a 20KB
-document would fail to open for no reason the user could ever guess. In
-the arena, reads and writes go through a 4KB buffer of the app's own:
-`fs` writes into a client through the MPU's grant window, which covers
-the app's block and not its arena, and a message carries only memory in
-the sender's block. CRLF is normalized to LF on the way in.
+The caret stays on the same **character**, not the same screen
+position: `cursor` is a buffer offset and survives the rewrap
+untouched. That is precisely why the buffer and the line table are
+separate things.
+
+## Window size
+
+A window opens at 320x240 and can be made as small as half that,
+160x120 (`z_win_min_size()`, [window_manager.md](window_manager.md),
+"Minimum size"): about 23 columns of 5x8, or 14 of big print -- a note
+beside other windows. All five titlebar buttons still fit at that width;
+the title is shortened. It used to be 320x240 at least, the size it
+opens at.
+
+**Rows are drawn without clearing them first.** Every character is drawn
+as a solid cell, background included (`z_win_draw_utf8_2()`), and only
+what the characters do not cover -- the margin, the rest of the row, the
+gap under it -- is cleared, after them (`row_tail()`). Clearing the row
+and then drawing it showed it blank for a moment on every keystroke,
+which is the flash the 5x8 and 6x12 sizes had and big print, which never
+cleared, did not. `tests/utf8.c` section 24 draws every row over a
+screen full of ink and checks it comes out as on a clean one.
+
+## Selection
+
+An **anchor** plus the cursor. The selected range is whichever order
+they happen to be in, so extending backwards needs no special case and
+the caret stays the moving end — which is what makes shift+arrow and
+shift+drag feel right.
+
+`-1` means no selection, deliberately rather than `anchor == cursor`:
+a selection can collapse to zero width mid-drag without ceasing to
+exist, and treating that as "none" makes the next shift+arrow start
+from the wrong place.
+
+Selected text is drawn by splitting each line into up to three runs —
+before, inside, after — and drawing the middle one through
+`z_fb_draw_text2()` with the colours swapped. That's one hardware
+glyph blit per character, exactly like the normal path; inverting
+afterwards with a fill would be a second pass over the same pixels and
+would fight the no-flash rule. A selection continuing onto the next
+line also highlights the rest of the row past the text, or a
+multi-line selection reads as a stack of ragged fragments.
+
+Movement redraws the **union of the old and new selected ranges**, not
+just the two rows the caret touched — with a selection those ranges
+are what changed appearance. Repainting the whole text area on every
+shift+arrow would be hundreds of glyph blits per keystroke.
+
+`delete_selection()` is shared by every path that replaces a selection
+— typing over it, Backspace, Delete, Cut and Paste — so one place
+knows how a selection becomes an edit. Paste does the delete and the
+insert as a single edit rather than calling both, which would rewrap
+and repaint twice for one user action.
+
+Shift+click needs the modifier state, and `Z_WM_MOUSE` carries buttons
+but no modifiers, so the last-seen modifier byte from `Z_WM_KEY` is
+correlated with the click.
+
+## Undo
+
+**Ctrl+Z** undoes, **Ctrl+Y** (or Ctrl+Shift+Z) redoes. One undo takes
+back a *group* of edits:
+
+- a run of typing, up to and including an Enter -- so undo goes back a
+  line at a time, and a sentence typed without Enter is one step;
+- a run of Backspace, or of Delete;
+- anything that replaces a selection -- typing over it, Paste -- and
+  every Cut, with the selection coming back as it was.
+
+Moving the caret, or switching between typing and deleting, starts a new
+group. After an undo the caret is where it was before the edit.
+
+**Memory.** An app has 16KB for heap and stack together, so the document
+is never copied: what is kept is the edits, in two rings -- records and
+the text they inserted or deleted. They start in `.bss`, 256 edits and
+6KB (`UNDO_RECORDS`, `UNDO_BYTES`). The first time those would have to
+forget something, they move to the arena, at 2,048 edits and 64KB
+(`UNDO_AR_RECORDS`, `UNDO_AR_BYTES`), and after that they grow for any
+single change larger than they are -- a big cut, a paste, a Replace All
+-- so that it can be undone whole (`undo_room()`, `undo_fits()`). Small
+edits never grow them: when the rings fill, the oldest edits are
+forgotten, so history gets shorter rather than an edit being refused. A
+new or opened document puts them back in `.bss`. A 300KB delete undoes
+and redoes whole (tests/test_edit.c).
+
+On a board with no arena it is as it was: 256 edits and 6KB, and a single
+edit larger than 6KB clears the history before it.
+
+Applying an undo copies each record out of the ring before it calls the
+editor back (`zundo.h`): the rings can be in the arena, which the
+editor's own edits may move.
+
+**The modified mark follows it.** Saving marks the point; undoing or
+redoing back to exactly the saved text clears the `*` from the title,
+and undo stops at that point even in the middle of a group, so the saved
+text can always be reached.
+
+All of this is `sw/common/zundo.h` -- generic over any byte buffer, with
+no app types in it. `text.c` tells it every edit through `edit_insert()`
+and `edit_delete()`, the only two places the buffer changes (loading
+aside, which starts the history over), and decides the groups.
+
+**Undo goes through the gap.** The log puts its edits back through two
+operations the editor supplies (`z_undo_undo_ops()`, `z_undo_ops_t`),
+which `text` implements as the same gap edits typing uses, line table
+and all. So undoing a word costs its paragraph, as typing it did, and
+undoing a Replace All walks the document once rather than moving it once
+per match. The plain-buffer `z_undo_undo()` is the same loop over a
+`memmove` pair.
+
+## Find
+
+**Ctrl+F** asks for the text (the dialog's field takes any character,
+German and Japanese included) and selects the next match after the
+caret, wrapping round to the top; **Ctrl+G** or **F3** finds the same
+text again. ASCII letters match either case, as the posix shell's
+wildcards do; everything else matches exactly, so accented and Japanese
+text is found as typed. A search with no match says so.
+
+A search through a megabyte is about half a second on the board. Every
+8KB it reads the window's mail (`find_from()`, `io_pump()`): redraws are
+served, the title says `Finding TEXT 40%  (Esc stops)` once it has taken
+longer than a moment, and **Esc** stops it, selecting nothing. Counting
+the matches for Replace does the same. Replace All's own pass, which
+changes the document as it goes, is still one call.
+
+## Replace
+
+**Ctrl+H** asks two things: what to find (the selection, if it is a
+short piece of one line, else the last search), and what to put in its
+place -- which may be **nothing**, the way to delete every match
+(`z_dialog_prompt_empty_ok()`, `zdialog.h`). Matching is find's. Then it
+says how many matches there are and asks:
+
+- **Yes**: replace them all, at once;
+- **No**: one at a time -- each match is selected and shown, and asked
+  about: Yes replaces it, No leaves it, Cancel stops. It goes round the
+  document at most once, so saying No to every match ends;
+- **Cancel**: nothing.
+
+**Replace All is one step of undo**, however many matches: one Ctrl+Z
+puts every one back, case and all. It is also **one pass over the
+document**, not an edit per match, which would move the rest of the
+document once per match -- a thousand replacements in 32KB would be 32MB
+of copying, several seconds. When the replacement is longer than what it
+replaces, the document is first moved to the top of the buffer, so the
+output -- which grows -- never overtakes the text it is read from; the
+same trick as the Latin-9 conversion, the other way round. A Replace All
+that would not fit in 32KB is refused and changes nothing.
+
+A replacement is two edits for the undo log (above), which grows in the
+arena to hold a Replace All whole. Where it cannot -- a board with no
+arena, or no memory left -- a Replace All bigger than the log **says so
+and asks first**, and if you go ahead the history is cleared rather than
+left holding the last part of the replace -- an undo that put back only
+some of the matches would be worse than none.
+
+One-at-a-time replacements are an edit each, undone one by one.
+
+`replace_all_core()`, `replace_selection()` and `count_matches()` are
+the parts with no dialog in them, and what `tests/utf8.c` section 14
+drives.
+
+## Go to line
+
+**Ctrl+L** says where you are and how much there is -- line 12 of 340,
+1,204 words, 7,301 characters -- and asks for a line to go to, the
+current one filled in. Lines are the **file's** lines, what a compiler
+or another editor numbers, not the wrapped display lines; words are runs
+of anything but spaces, tabs and newlines, and characters are
+characters, not bytes. A number past the end goes to the last line. The
+line arrived at is spoken, like any other move.
+
+## Copy and paste
+
+wm's clipboard holds a page, 4KB, and keeps the start of anything
+longer. A copy of 4KB or less goes there and nowhere else. A longer one
+is also **kept whole in `text`'s arena**, and wm is given its first page,
+cut at a character. A paste in `text` takes the whole copy when wm's
+clipboard still holds exactly that first page -- nothing has been copied
+since, here or in another app -- and wm's clipboard otherwise. Other
+apps get the first 4KB.
+
+**A cut deletes only what it can give back.** A selection over 4KB is cut
+only if the whole of it is kept for the paste and the delete can be
+undone; otherwise it is refused, with a reason, and nothing is deleted.
+Before October 2026 the cut went ahead, the system clipboard kept 4KB,
+the undo log could not hold the rest, and everything past the first 4KB
+was gone. On a board with no arena a copy over 4KB says that a paste
+will give its first 4KB, and a cut over 4KB is refused.
+
+The arena that holds the copy holds the document past 32KB and the undo
+rings too, and the kernel may move it whenever it is resized. A paste of
+the private copy therefore never inserts straight from it: it goes a
+page at a time through the paste's own stack buffer.
+
+## Save As
+
+**Ctrl+Shift+S** is Save As: the save dialog, starting in the directory
+of the last dialog, with the file's own name filled in. Saving onto
+**another** file that already exists asks first ("Replace it?"); the
+save dialog leaves that to its caller (`zdialog.h`), and before 0.0.7 a
+new document's first save overwrote a file of the same name without a
+word. The document then belongs to the new name, in the same encoding.
+
+
+### Other systems' formats
+
+Saving as **`.docx`, `.odt`, `.rtf` or `.html`** exports: the document
+is written to `/tmp` as it is -- Markdown if it is a `.md`, plain text
+otherwise -- and handed to `convert` ([convert.md](convert.md)), whose
+own window shows the progress, **Cancel** and any error. An export is a
+copy: the document keeps its own name and its unsaved state. A `.md`
+exports with its headings, lists and emphasis as Word or LibreOffice
+headings, lists and bold/italic.
+
+Opening a `.docx`, `.odt`, `.rtf` or `.epub` (from the Open dialog, or
+by double-clicking one in `files`) hands it to `convert`, which turns
+it into Markdown in `/tmp` and opens that in a new `text` window -- or
+in `read`, when it is larger than `text` can take on this machine.
+
+**A file in `/tmp` saves with Save As**, starting in `/home`: `/tmp` is
+the RAM disk and is gone at the next boot, and the usual reason a
+document is there is that `convert` put it there. Plain **Ctrl+S** on
+such a file asks where, every time, until it is saved elsewhere.
+
+## Autosave
+
+Two seconds after the last edit, a copy of the document goes to the
+**RAM disk** (`/ram`) -- never to the card. Writing to the card at a
+moment the person did not choose is how a hard power-off corrupts it, so
+on a board with no RAM disk there is no autosave at all. The copy is
+written **4KB per pass of the main loop**, so typing is never held up by
+it, and an edit in the middle abandons it; it starts again at the next
+pause. It is written as `T<hash>.NEW` and renamed over `T<hash>.SAV`
+only when complete, so a `.SAV` is always a whole document; `T<hash>.INF`
+beside it records which file it is a copy of and the encoding that file
+is saved in. The hash is of the file's path (an 8.3 name,
+`/ram/T1A2B3C4.SAV`), so finding the copy of a file is one open, not a
+search. A document never saved is filed under its window's process
+instead, `untitled <pid> <serial>` (`as_key()`), so each untitled window
+has a slot of its own.
+
+**Saving deletes the copy**, and so does answering No to "Save changes
+before continuing?". If `text` ends any other way -- a crash, a kill --
+the copy stays, and the next time that file is opened `text` says
+unsaved changes from a session that did not end were kept, and offers
+them back: Yes puts them in the document, still unsaved and still
+belonging to the file and its encoding; No deletes the copy. When `text`
+starts with no file it offers the first untitled copy in `/ram` whose
+window is gone -- its process not running, or its pid used again by
+another (`as_orphan()`); a copy left by an older `text`, filed under the
+empty path, counts as gone. One whose window is still open is never
+offered. Before, every untitled document shared one slot: two untitled
+windows wrote over each other's copy, and a second one started offered
+the first one's live copy back -- and deleted it on No.
+
+What it does not cover is the power going off: the RAM disk does not
+survive a reboot, by design. It protects the work from `text` itself,
+not from the machine.
+
+## Printing
+
+**Ctrl+P**, or the printer icon in the title bar, opens the print
+dialog: the printer or a PDF or PostScript file, all of the text or
+just the selection (when something is selected, it is offered), copies,
+paper, tray, pages to a sheet and quality
+([print.md](print.md#the-print-dialog)). **Print** hands the text to
+`print`, which shows its own small window with progress and **Cancel**;
+`text` goes on working meanwhile.
+
+The text is set in a clean proportional face at 10 point with 2 cm
+margins, each line word-wrapped to the page, indents kept, a form feed
+starting a new page and the page number at the foot
+([print.md](print.md#printing-text)). What is printed is what is in
+the window, saved or not; the file on the card is not touched.
+
+## Speech
+
+### Echo while editing
+
+With speech on, the editor says what you are doing, which is what
+makes writing without the screen possible:
+
+| action | says |
+|---|---|
+| Left / Right | the character stepped over ("semicolon", "new line") |
+| Up / Down / PageUp / PageDown / Home / End | the whole line, or "blank" |
+| finishing a word (space or punctuation) | the word just typed |
+| Backspace / Delete | the character removed, said before it goes |
+
+Characters are not echoed as they are typed -- at typing speed that is
+noise -- but a word is, when the thing that ends it arrives. Everything
+interrupts, because an echo that queues arrives after you have moved
+on. A blank line says "blank" rather than nothing, since silence is
+indistinguishable from the key not working.
+
+### Reading aloud
+
+**Super+A** reads the document aloud, a display line at a time, with
+the caret following the voice ([tts.md](tts.md)). Super+A again, any
+key, a click or a Ctrl tap stops it, and the caret stays on the line
+you last heard -- so moving somewhere and pressing Super+A reads from
+there. With the caret at the very end of the document (where it is
+after typing), it reads from the top. An empty document says so.
+
+**Super+C** says the highlighted text, once -- "copy to audio" -- and
+leaves the clipboard as it was; with nothing highlighted it says
+"Nothing selected". **Super+V** says what is on the clipboard.
+
+The window is created with `Z_WIN_FLAG_READABLE`, and the pacing is
+`sw/common/zsayall.c`: `read_get()` hands it a line (flagged
+`Z_TTS_F_CONTINUES` when the line wrapped mid-paragraph rather than
+ended), `read_at()` moves the caret, and every key and click calls
+`z_sayall_stop()` before doing anything else.
+
+## Launched with a file
+
+If the file browser (or anything else) starts `text` with a pending
+launch argument, it is claimed at startup and opened — see "Launch
+arguments" in `docs/widgets.md`. The claim happens even when the
+editor doesn't want it, so a stale argument can't be left for whatever
+the user opens next.
+
+## Tabs
+
+Tab inserts four spaces rather than a tab character. `wrap_one()` counts
+columns, and a real tab has no fixed width in that count, so honouring
+one would mean teaching both the wrapper and the renderer about tab
+stops. A tab can therefore only appear in text loaded from disk, and is
+drawn as a single space so it at least occupies its one column.
 
 ## Encodings
 
@@ -251,7 +565,65 @@ cc -std=gnu99 -Wall -no-pie -I sw/common -o /tmp/text_utf8 \
 Needs `-no-pie` and `vm.mmap_min_addr=0`, like the other app-level host
 tests (`sw/common/tests/ztramp.h`); exits 77 without them.
 
-## Wrapping
+## Not implemented
+
+Not done: Replace All's own pass, and the encoding check at the end of an
+open, are each still one call over the whole document (above). Two
+windows editing the same named file still share its autosave slot.
+
+---
+
+## For developers
+
+How it is built and how it is tested. Nothing here is needed to use it.
+
+### The document
+
+A **gap buffer**: the text is `doc[0..gs)` followed by
+`doc[gs+gl..cap)`, with all the free space -- the gap -- between. Until
+0.0.7 it was one flat array, and every keystroke moved everything after
+the caret, which at 32KB was a few milliseconds and would have been a
+third of a second per key in a megabyte.
+
+The gap is always at the **end of a paragraph**: just after a newline,
+or at the end of the document. So no display line, no word and no
+character ever straddles it, and anything that reads a line, a word or a
+character takes a plain pointer to it (`P()`, `B()`); only saving, Replace
+All and a copy of a selection that spans paragraphs put the text in one
+run first (`doc_flat()`). An edit moves the gap to the end of its own
+paragraph -- nothing, if the last edit was in the same paragraph -- and
+then moves only the rest of that paragraph. **Typing costs its own
+paragraph, wherever in the document it is.**
+
+**Where it lives.** A document of up to `TEXT_MAX` = 32KB is in `sbuf`,
+in `.bss`, as it always was: a small file never touches anything else,
+and a 1MB board is exactly as it was. Past 32KB the document moves to
+the app's **arena** ([kernel.md](kernel.md#arenas)), one block of memory
+beside the app sized while it runs, with the text at the bottom and the
+line table above it. The arena is grown by doubling when an edit would
+not fit, so a typed character almost never waits for it, and given back
+when a small document is opened or a new one started. A grow may move
+the arena, so the editor holds offsets into it, never pointers across a
+call. There is **no fixed document cap**: the limit is the memory the
+board can spare (the kernel keeps enough clear to start the largest core
+app). Where there is none -- a 1MB board -- a file past 32KB is "too
+large", as it always was.
+
+The buffer is not NUL-terminated as a rule; `len` is the length and the
+text may contain any byte. Anything handing a string to a drawing call
+copies out a bounded piece first.
+
+Files are read with `fs_open_read()` and `fs_read_chunk()` straight into
+that buffer, **not** with `fs_mallocfile()`. The latter would allocate a
+second copy of the whole file out of a heap that is 16KB shared with the
+stack (`Z_PROC_STACK_SIZE_DEFAULT`, `sw/os/kernel.h`), so a 20KB
+document would fail to open for no reason the user could ever guess. In
+the arena, reads and writes go through a 4KB buffer of the app's own:
+`fs` writes into a client through the MPU's grant window, which covers
+the app's block and not its arena, and a message carries only memory in
+the sender's block. CRLF is normalized to LF on the way in.
+
+### Wrapping
 
 The line table holds where each display line starts. It is a **gap
 buffer too**: lines before its gap are stored as their offset, lines
@@ -312,23 +684,7 @@ A word longer than the whole line is broken mid-word. Letting it run off
 the edge would be prettier and less useful: a URL or a line of pasted
 code should still be readable.
 
-### What a keystroke costs, measured
-
-`tests/utf8.c` section 18 loads a 1.1MB file of 19,841 display lines and
-counts, per key typed, the bytes moved, the bytes wrapped and the line
-entries changed:
-
-| typing at | bytes moved | bytes wrapped | line entries changed |
-|---|---:|---:|---:|
-| the start | 108 | 162 | 1 |
-| the middle | 46 | 192 | 0 |
-| the end | 92 | 192 | 1 |
-
--- the size of one paragraph, wherever it is. With a flat buffer and a
-plain table the same keystroke at the start would have moved 1.1MB and
-rewrapped 1.1MB.
-
-## Drawing
+### Drawing
 
 Every glyph goes through the hardware glyph blitter, via
 `z_win_draw_text()` (`-DZ_GFX_HW_BLIT`). Text is drawn a display line at
@@ -348,367 +704,7 @@ over one. A block caret hides the character it sits on and is also just
 wrong about where the text will go, for something that lives *between*
 two characters.
 
-## Tabs
-
-Tab inserts four spaces rather than a tab character. `wrap_one()` counts
-columns, and a real tab has no fixed width in that count, so honouring
-one would mean teaching both the wrapper and the renderer about tab
-stops. A tab can therefore only appear in text loaded from disk, and is
-drawn as a single space so it at least occupies its one column.
-
-## Font
-
-Three sizes, in turn on the titlebar font button (**Aa**): `z_font_5x8`,
-`z_font_6x12`, and **big print**, misc-fixed 10x20, then back to 5x8.
-
-The first two are resident in glyph memory at fixed offsets and loaded
-once by `wm`, so they draw through the hardware blitter — see
-`docs/window_manager.md`, "Fonts in glyph memory".
-
-Big print is 10 pixels wide, and the glyph blitter draws 8 at most, so
-it cannot come from glyph memory. Each line is put together in memory
-instead and copied to the screen in one blit (`draw_row_big()`,
-[fonts.md](fonts.md), "Big text"): about 30 columns and 10 lines in the
-default window, for children and for tired eyes. The copy rewrites every
-pixel of the row, selection included, so a row is never cleared first
-and does not flash. Typing redraws one line, about a millisecond of
-work. The font is compiled into `text` (`sw/common/zbigfont_10x20.c`):
-`text` runs from flash on a machine with no card, and its big print must
-too. On a bitstream whose blitter cannot copy from memory, Aa keeps to
-the two small sizes.
-
-Switching changes the column count, so the document rewraps from the
-top. That is the same case a resize is, and the one place
-`wrap_from()`'s paragraph-local shortcut cannot help, since every line
-can move.
-
-The caret stays on the same **character**, not the same screen
-position: `cursor` is a buffer offset and survives the rewrap
-untouched. That is precisely why the buffer and the line table are
-separate things.
-
-## Window size
-
-A window opens at 320x240 and can be made as small as half that,
-160x120 (`z_win_min_size()`, [window_manager.md](window_manager.md),
-"Minimum size"): about 23 columns of 5x8, or 14 of big print -- a note
-beside other windows. All five titlebar buttons still fit at that width;
-the title is shortened. It used to be 320x240 at least, the size it
-opens at.
-
-**Rows are drawn without clearing them first.** Every character is drawn
-as a solid cell, background included (`z_win_draw_utf8_2()`), and only
-what the characters do not cover -- the margin, the rest of the row, the
-gap under it -- is cleared, after them (`row_tail()`). Clearing the row
-and then drawing it showed it blank for a moment on every keystroke,
-which is the flash the 5x8 and 6x12 sizes had and big print, which never
-cleared, did not. `tests/utf8.c` section 24 draws every row over a
-screen full of ink and checks it comes out as on a clean one.
-
-## Launched with a file
-
-If the file browser (or anything else) starts `text` with a pending
-launch argument, it is claimed at startup and opened — see "Launch
-arguments" in `docs/widgets.md`. The claim happens even when the
-editor doesn't want it, so a stale argument can't be left for whatever
-the user opens next.
-
-## Selection
-
-An **anchor** plus the cursor. The selected range is whichever order
-they happen to be in, so extending backwards needs no special case and
-the caret stays the moving end — which is what makes shift+arrow and
-shift+drag feel right.
-
-`-1` means no selection, deliberately rather than `anchor == cursor`:
-a selection can collapse to zero width mid-drag without ceasing to
-exist, and treating that as "none" makes the next shift+arrow start
-from the wrong place.
-
-Selected text is drawn by splitting each line into up to three runs —
-before, inside, after — and drawing the middle one through
-`z_fb_draw_text2()` with the colours swapped. That's one hardware
-glyph blit per character, exactly like the normal path; inverting
-afterwards with a fill would be a second pass over the same pixels and
-would fight the no-flash rule. A selection continuing onto the next
-line also highlights the rest of the row past the text, or a
-multi-line selection reads as a stack of ragged fragments.
-
-Movement redraws the **union of the old and new selected ranges**, not
-just the two rows the caret touched — with a selection those ranges
-are what changed appearance. Repainting the whole text area on every
-shift+arrow would be hundreds of glyph blits per keystroke.
-
-`delete_selection()` is shared by every path that replaces a selection
-— typing over it, Backspace, Delete, Cut and Paste — so one place
-knows how a selection becomes an edit. Paste does the delete and the
-insert as a single edit rather than calling both, which would rewrap
-and repaint twice for one user action.
-
-Shift+click needs the modifier state, and `Z_WM_MOUSE` carries buttons
-but no modifiers, so the last-seen modifier byte from `Z_WM_KEY` is
-correlated with the click.
-
-### Three bugs worth remembering
-
-All three presented as *"text isn't displayed"*, which is nowhere near
-where any of them lived.
-
-**Half-clamped range.** `draw_row()` clamped `a` only against 0 and
-`b` only against `n` — each end in the direction that matters for a
-selection *overlapping* the line. For a line entirely outside it, the
-other direction bites: a line past the selection's end gets a negative
-`b`, and the trailing run then draws `tmp + b`, reading before the
-buffer, at a negative x that clips away entirely. The line vanished.
-Which lines vanished depended on where the selection was, so it looked
-like an unrelated rendering fault.
-
-**Stale collapsed anchor.** A click sets `anchor == cursor`, which is
-not a selection. Nothing cleared it, so the moment an edit moved the
-cursor, `anchor != cursor` and a selection sprang into existence that
-the user never made — which, with the bug above, hid everything after
-it. `after_edit()` now clears the anchor, and a release that selected
-nothing drops it.
-
-**Titlebar clicks.** wm forwards pointer samples to the focused window
-whenever the cursor is over it, and its hit test is the whole window
-rect — titlebar included. A drag is suppressed while wm owns it, but a
-click on a titlebar *icon* is not: wm handles the icon and forwards
-the same press, with negative content y. Clamping that to row 0 meant
-clicking Save also placed the caret at the top and started a selection
-there. `handle_mouse()` now ignores samples outside the content area
-unless a drag is already in progress — that exemption matters, because
-a drag legitimately leaves the window and must keep extending.
-
-## Undo
-
-**Ctrl+Z** undoes, **Ctrl+Y** (or Ctrl+Shift+Z) redoes. One undo takes
-back a *group* of edits:
-
-- a run of typing, up to and including an Enter -- so undo goes back a
-  line at a time, and a sentence typed without Enter is one step;
-- a run of Backspace, or of Delete;
-- anything that replaces a selection -- typing over it, Paste -- and
-  every Cut, with the selection coming back as it was.
-
-Moving the caret, or switching between typing and deleting, starts a new
-group. After an undo the caret is where it was before the edit.
-
-**Memory.** An app has 16KB for heap and stack together, so the document
-is never copied: what is kept is the edits, in two rings -- records and
-the text they inserted or deleted. They start in `.bss`, 256 edits and
-6KB (`UNDO_RECORDS`, `UNDO_BYTES`). The first time those would have to
-forget something, they move to the arena, at 2,048 edits and 64KB
-(`UNDO_AR_RECORDS`, `UNDO_AR_BYTES`), and after that they grow for any
-single change larger than they are -- a big cut, a paste, a Replace All
--- so that it can be undone whole (`undo_room()`, `undo_fits()`). Small
-edits never grow them: when the rings fill, the oldest edits are
-forgotten, so history gets shorter rather than an edit being refused. A
-new or opened document puts them back in `.bss`. A 300KB delete undoes
-and redoes whole (tests/test_edit.c).
-
-On a board with no arena it is as it was: 256 edits and 6KB, and a single
-edit larger than 6KB clears the history before it.
-
-Applying an undo copies each record out of the ring before it calls the
-editor back (`zundo.h`): the rings can be in the arena, which the
-editor's own edits may move.
-
-**The modified mark follows it.** Saving marks the point; undoing or
-redoing back to exactly the saved text clears the `*` from the title,
-and undo stops at that point even in the middle of a group, so the saved
-text can always be reached.
-
-All of this is `sw/common/zundo.h` -- generic over any byte buffer, with
-no app types in it. `text.c` tells it every edit through `edit_insert()`
-and `edit_delete()`, the only two places the buffer changes (loading
-aside, which starts the history over), and decides the groups.
-
-**Undo goes through the gap.** The log puts its edits back through two
-operations the editor supplies (`z_undo_undo_ops()`, `z_undo_ops_t`),
-which `text` implements as the same gap edits typing uses, line table
-and all. So undoing a word costs its paragraph, as typing it did, and
-undoing a Replace All walks the document once rather than moving it once
-per match. The plain-buffer `z_undo_undo()` is the same loop over a
-`memmove` pair.
-
-## Find
-
-**Ctrl+F** asks for the text (the dialog's field takes any character,
-German and Japanese included) and selects the next match after the
-caret, wrapping round to the top; **Ctrl+G** or **F3** finds the same
-text again. ASCII letters match either case, as the posix shell's
-wildcards do; everything else matches exactly, so accented and Japanese
-text is found as typed. A search with no match says so.
-
-A search through a megabyte is about half a second on the board. Every
-8KB it reads the window's mail (`find_from()`, `io_pump()`): redraws are
-served, the title says `Finding TEXT 40%  (Esc stops)` once it has taken
-longer than a moment, and **Esc** stops it, selecting nothing. Counting
-the matches for Replace does the same. Replace All's own pass, which
-changes the document as it goes, is still one call.
-
-## Copy and paste
-
-wm's clipboard holds a page, 4KB, and keeps the start of anything
-longer. A copy of 4KB or less goes there and nowhere else. A longer one
-is also **kept whole in `text`'s arena**, and wm is given its first page,
-cut at a character. A paste in `text` takes the whole copy when wm's
-clipboard still holds exactly that first page -- nothing has been copied
-since, here or in another app -- and wm's clipboard otherwise. Other
-apps get the first 4KB.
-
-**A cut deletes only what it can give back.** A selection over 4KB is cut
-only if the whole of it is kept for the paste and the delete can be
-undone; otherwise it is refused, with a reason, and nothing is deleted.
-Before October 2026 the cut went ahead, the system clipboard kept 4KB,
-the undo log could not hold the rest, and everything past the first 4KB
-was gone. On a board with no arena a copy over 4KB says that a paste
-will give its first 4KB, and a cut over 4KB is refused.
-
-The arena that holds the copy holds the document past 32KB and the undo
-rings too, and the kernel may move it whenever it is resized. A paste of
-the private copy therefore never inserts straight from it: it goes a
-page at a time through the paste's own stack buffer.
-
-## Replace
-
-**Ctrl+H** asks two things: what to find (the selection, if it is a
-short piece of one line, else the last search), and what to put in its
-place -- which may be **nothing**, the way to delete every match
-(`z_dialog_prompt_empty_ok()`, `zdialog.h`). Matching is find's. Then it
-says how many matches there are and asks:
-
-- **Yes**: replace them all, at once;
-- **No**: one at a time -- each match is selected and shown, and asked
-  about: Yes replaces it, No leaves it, Cancel stops. It goes round the
-  document at most once, so saying No to every match ends;
-- **Cancel**: nothing.
-
-**Replace All is one step of undo**, however many matches: one Ctrl+Z
-puts every one back, case and all. It is also **one pass over the
-document**, not an edit per match, which would move the rest of the
-document once per match -- a thousand replacements in 32KB would be 32MB
-of copying, several seconds. When the replacement is longer than what it
-replaces, the document is first moved to the top of the buffer, so the
-output -- which grows -- never overtakes the text it is read from; the
-same trick as the Latin-9 conversion, the other way round. A Replace All
-that would not fit in 32KB is refused and changes nothing.
-
-A replacement is two edits for the undo log (above), which grows in the
-arena to hold a Replace All whole. Where it cannot -- a board with no
-arena, or no memory left -- a Replace All bigger than the log **says so
-and asks first**, and if you go ahead the history is cleared rather than
-left holding the last part of the replace -- an undo that put back only
-some of the matches would be worse than none.
-
-One-at-a-time replacements are an edit each, undone one by one.
-
-`replace_all_core()`, `replace_selection()` and `count_matches()` are
-the parts with no dialog in them, and what `tests/utf8.c` section 14
-drives.
-
-## Go to line
-
-**Ctrl+L** says where you are and how much there is -- line 12 of 340,
-1,204 words, 7,301 characters -- and asks for a line to go to, the
-current one filled in. Lines are the **file's** lines, what a compiler
-or another editor numbers, not the wrapped display lines; words are runs
-of anything but spaces, tabs and newlines, and characters are
-characters, not bytes. A number past the end goes to the last line. The
-line arrived at is spoken, like any other move.
-
-## Save As
-
-**Ctrl+Shift+S** is Save As: the save dialog, starting in the directory
-of the last dialog, with the file's own name filled in. Saving onto
-**another** file that already exists asks first ("Replace it?"); the
-save dialog leaves that to its caller (`zdialog.h`), and before 0.0.7 a
-new document's first save overwrote a file of the same name without a
-word. The document then belongs to the new name, in the same encoding.
-
-
-### Other systems' formats
-
-Saving as **`.docx`, `.odt`, `.rtf` or `.html`** exports: the document
-is written to `/tmp` as it is -- Markdown if it is a `.md`, plain text
-otherwise -- and handed to `convert` ([convert.md](convert.md)), whose
-own window shows the progress, **Cancel** and any error. An export is a
-copy: the document keeps its own name and its unsaved state. A `.md`
-exports with its headings, lists and emphasis as Word or LibreOffice
-headings, lists and bold/italic.
-
-Opening a `.docx`, `.odt`, `.rtf` or `.epub` (from the Open dialog, or
-by double-clicking one in `files`) hands it to `convert`, which turns
-it into Markdown in `/tmp` and opens that in a new `text` window -- or
-in `read`, when it is larger than `text` can take on this machine.
-
-**A file in `/tmp` saves with Save As**, starting in `/home`: `/tmp` is
-the RAM disk and is gone at the next boot, and the usual reason a
-document is there is that `convert` put it there. Plain **Ctrl+S** on
-such a file asks where, every time, until it is saved elsewhere.
-
-## Size
-
-`text` is a core app, in flash, with a flash and a RAM budget of its
-own ([flash_apps.md](flash_apps.md), "Budgets"). Until October 2026 its
-RAM was the binding one: the RAM rule counted the two largest apps
-beside the boot set, and `text` was one; it now counts `term` and `repl`. Replace, Go to line,
-Save As and Windows-1252 were paid for by building with `ZFMT_LITE`
-(stdout without newlib's stdio, [build.md](build.md)): `text` prints
-only whole lines to the console log and never calls `fflush()`. Measured
-with the same compiler before and after, `text` went from 57,544 to
-55,319 bytes in flash and from 156,976 to 152,808 in RAM -- smaller than
-before, with the features. The gap buffer, the line table's gap and the
-arena then took it to 57,620 and 156,812; background wrapping and
-autosave took 2.6KB more, which was paid back by `ZFMT_NO64` (no 64-bit
-division, 2.3KB -- `text` prints no 64-bit number) and by the scrollbar
-doing its arithmetic in 32 bits (`sb_muldiv()`, `zwidget.c`, 1.3KB in
-every app with a scrollbar). With everything in 0.0.7, `text` is 155,396
-bytes in RAM against 156,976 in 0.0.6.
-
-## Autosave
-
-Two seconds after the last edit, a copy of the document goes to the
-**RAM disk** (`/ram`) -- never to the card. Writing to the card at a
-moment the person did not choose is how a hard power-off corrupts it, so
-on a board with no RAM disk there is no autosave at all. The copy is
-written **4KB per pass of the main loop**, so typing is never held up by
-it, and an edit in the middle abandons it; it starts again at the next
-pause. It is written as `T<hash>.NEW` and renamed over `T<hash>.SAV`
-only when complete, so a `.SAV` is always a whole document; `T<hash>.INF`
-beside it records which file it is a copy of and the encoding that file
-is saved in. The hash is of the file's path (an 8.3 name,
-`/ram/T1A2B3C4.SAV`), so finding the copy of a file is one open, not a
-search. A document never saved is filed under its window's process
-instead, `untitled <pid> <serial>` (`as_key()`), so each untitled window
-has a slot of its own.
-
-**Saving deletes the copy**, and so does answering No to "Save changes
-before continuing?". If `text` ends any other way -- a crash, a kill --
-the copy stays, and the next time that file is opened `text` says
-unsaved changes from a session that did not end were kept, and offers
-them back: Yes puts them in the document, still unsaved and still
-belonging to the file and its encoding; No deletes the copy. When `text`
-starts with no file it offers the first untitled copy in `/ram` whose
-window is gone -- its process not running, or its pid used again by
-another (`as_orphan()`); a copy left by an older `text`, filed under the
-empty path, counts as gone. One whose window is still open is never
-offered. Before, every untitled document shared one slot: two untitled
-windows wrote over each other's copy, and a second one started offered
-the first one's live copy back -- and deleted it on No.
-
-What it does not cover is the power going off: the RAM disk does not
-survive a reboot, by design. It protects the work from `text` itself,
-not from the machine.
-
-## Not implemented
-
-Not done: Replace All's own pass, and the encoding check at the end of an
-open, are each still one call over the whole document (above). Two
-windows editing the same named file still share its autosave slot.
-
-## Tests
+### Tests
 
 Undo and find run through the real `text.c` in `tests/utf8.c` (sections
 11 and 12): typing, Enter, Backspace runs, typing over a selection,
@@ -759,42 +755,80 @@ Both run from `make -C sw/apps/text test` (and the top-level `make
 test`). `sw/common/tests/test_undo.c` covers the log on its own,
 including what happens when it fills.
 
-## Speech
+---
 
-### Echo while editing
+## Implementation notes
 
-With speech on, the editor says what you are doing, which is what
-makes writing without the screen possible:
+Measurements, bugs and decisions from its development, kept for whoever
+works on it next.
 
-| action | says |
-|---|---|
-| Left / Right | the character stepped over ("semicolon", "new line") |
-| Up / Down / PageUp / PageDown / Home / End | the whole line, or "blank" |
-| finishing a word (space or punctuation) | the word just typed |
-| Backspace / Delete | the character removed, said before it goes |
+### Size
 
-Characters are not echoed as they are typed -- at typing speed that is
-noise -- but a word is, when the thing that ends it arrives. Everything
-interrupts, because an echo that queues arrives after you have moved
-on. A blank line says "blank" rather than nothing, since silence is
-indistinguishable from the key not working.
+`text` is a core app, in flash, with a flash and a RAM budget of its
+own ([flash_apps.md](flash_apps.md), "Budgets"). Until October 2026 its
+RAM was the binding one: the RAM rule counted the two largest apps
+beside the boot set, and `text` was one; it now counts `term` and `repl`. Replace, Go to line,
+Save As and Windows-1252 were paid for by building with `ZFMT_LITE`
+(stdout without newlib's stdio, [build.md](build.md)): `text` prints
+only whole lines to the console log and never calls `fflush()`. Measured
+with the same compiler before and after, `text` went from 57,544 to
+55,319 bytes in flash and from 156,976 to 152,808 in RAM -- smaller than
+before, with the features. The gap buffer, the line table's gap and the
+arena then took it to 57,620 and 156,812; background wrapping and
+autosave took 2.6KB more, which was paid back by `ZFMT_NO64` (no 64-bit
+division, 2.3KB -- `text` prints no 64-bit number) and by the scrollbar
+doing its arithmetic in 32 bits (`sb_muldiv()`, `zwidget.c`, 1.3KB in
+every app with a scrollbar). With everything in 0.0.7, `text` is 155,396
+bytes in RAM against 156,976 in 0.0.6.
 
-### Reading aloud
+In this round printing, and the shared print dialog in `zdialog.c`
+that comes with it, took `text` past its 70K flash budget; the budget is now 80K flash,
+200K RAM ([flash_apps.md](flash_apps.md), "Budgets"). The
+page layout is in `print`, not here.
 
-**Super+A** reads the document aloud, a display line at a time, with
-the caret following the voice ([tts.md](tts.md)). Super+A again, any
-key, a click or a Ctrl tap stops it, and the caret stays on the line
-you last heard -- so moving somewhere and pressing Super+A reads from
-there. With the caret at the very end of the document (where it is
-after typing), it reads from the top. An empty document says so.
+### What a keystroke costs, measured
 
-**Super+C** says the highlighted text, once -- "copy to audio" -- and
-leaves the clipboard as it was; with nothing highlighted it says
-"Nothing selected". **Super+V** says what is on the clipboard.
+`tests/utf8.c` section 18 loads a 1.1MB file of 19,841 display lines and
+counts, per key typed, the bytes moved, the bytes wrapped and the line
+entries changed:
 
-The window is created with `Z_WIN_FLAG_READABLE`, and the pacing is
-`sw/common/zsayall.c`: `read_get()` hands it a line (flagged
-`Z_TTS_F_CONTINUES` when the line wrapped mid-paragraph rather than
-ended), `read_at()` moves the caret, and every key and click calls
-`z_sayall_stop()` before doing anything else.
+| typing at | bytes moved | bytes wrapped | line entries changed |
+|---|---:|---:|---:|
+| the start | 108 | 162 | 1 |
+| the middle | 46 | 192 | 0 |
+| the end | 92 | 192 | 1 |
 
+-- the size of one paragraph, wherever it is. With a flat buffer and a
+plain table the same keystroke at the start would have moved 1.1MB and
+rewrapped 1.1MB.
+
+### Three bugs worth remembering
+
+All three presented as *"text isn't displayed"*, which is nowhere near
+where any of them lived.
+
+**Half-clamped range.** `draw_row()` clamped `a` only against 0 and
+`b` only against `n` — each end in the direction that matters for a
+selection *overlapping* the line. For a line entirely outside it, the
+other direction bites: a line past the selection's end gets a negative
+`b`, and the trailing run then draws `tmp + b`, reading before the
+buffer, at a negative x that clips away entirely. The line vanished.
+Which lines vanished depended on where the selection was, so it looked
+like an unrelated rendering fault.
+
+**Stale collapsed anchor.** A click sets `anchor == cursor`, which is
+not a selection. Nothing cleared it, so the moment an edit moved the
+cursor, `anchor != cursor` and a selection sprang into existence that
+the user never made — which, with the bug above, hid everything after
+it. `after_edit()` now clears the anchor, and a release that selected
+nothing drops it.
+
+**Titlebar clicks.** wm forwards pointer samples to the focused window
+whenever the cursor is over it, and its hit test is the whole window
+rect — titlebar included. A drag is suppressed while wm owns it, but a
+click on a titlebar *icon* is not: wm handles the icon and forwards
+the same press, with negative content y. Clamping that to row 0 meant
+clicking Save also placed the caret at the top and started a selection
+there. `handle_mouse()` now ignores samples outside the content area
+unless a drag is already in progress — that exemption matters, because
+a drag legitimately leaves the window and must keep extending.

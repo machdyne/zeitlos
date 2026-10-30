@@ -1593,3 +1593,484 @@ void z_dialog_help(const z_dialog_ctx_t *ctx, const char *title,
 	dlg_run();
 
 }
+
+// -- print (z_dialog_print()) ---------------------------------------------
+//
+// Seven rows, a label and a value each -- where to, pages, copies,
+// paper, tray, pages to a sheet, quality -- then Print and Cancel. A
+// value is changed with the arrows drawn either side of it: a click on
+// its left half goes back, its right half on; Left and Right do the
+// same from the keyboard, Up and Down (or Tab) move between rows. A
+// range of pages is typed ("2-5") in the Pages row.
+//
+// Tray and quality are the printer's: for a file they say so and do
+// not change.
+
+enum { PR_TO, PR_PAGES, PR_COPIES, PR_PAPER, PR_TRAY, PR_NUP, PR_QUALITY, PR_ROWS };
+
+static const char *const pr_labels[PR_ROWS] = {
+	"Print to", "Pages", "Copies", "Paper", "Tray", "Per sheet", "Quality",
+};
+
+// zpage.c's names, and how they are shown; the first is the default
+static const char *const pr_papers[] = { "", "letter", "a4", "legal", "a5", "a6", "4x6", "5x7", "3x5" };
+static const char *const pr_paper_names[] = { "", "US Letter", "A4", "Legal", "A5", "A6",
+	"4 x 6 in", "5 x 7 in", "3 x 5 in" };
+#define PR_NPAPERS (int)(sizeof(pr_papers) / sizeof(pr_papers[0]))
+
+static const char *const pr_trays[] = { "", "main", "rear", "manual" };
+static const char *const pr_tray_names[] = { "Printer's choice", "Main", "Rear", "Manual" };
+#define PR_NTRAYS 4
+
+static const int pr_nups[] = { 1, 2, 4, 6, 9, 16 };
+#define PR_NNUPS 6
+
+static const char *const pr_quals[] = { "", "draft", "high" };
+static const char *const pr_qual_names[] = { "Normal", "Draft", "High" };
+#define PR_NQUALS 3
+
+#define PR_ROW_H    (DLG_FIELD_H + 2)
+#define PR_LABEL_W  (10 * 5 + 4)
+#define PR_ARROW_W  8
+
+static const char *const labels_print[2] = { "Print", "Cancel" };
+
+static struct {
+	z_print_opts_t	*o;
+	int		row;			// the row with the focus; -1: the buttons have it
+	int		paper, tray, nup, qual;
+	int		choices[4];		// the Pages row's choices, Z_PRINT_PAGES_*
+	int		nchoices, choice;
+	int		val_x, val_w;
+} pr;
+
+static int pr_row_y(int r) { return DLG_MARGIN + r * PR_ROW_H; }
+
+static bool pr_file(void) { return pr.o->dest != Z_PRINT_TO_PRINTER; }
+
+static void pr_cat(char *d, int n, const char *s) {
+	int k = (int)strlen(d);
+	while (*s && k < n - 1) d[k++] = *s++;
+	d[k] = 0;
+}
+
+static void pr_cat_int(char *d, int n, int v) {
+	char t[12];
+	int k = 0;
+	if (v < 0) v = 0;
+	do { t[k++] = (char)('0' + v % 10); v /= 10; } while (v && k < 11);
+	char r[12];
+	int j = 0;
+	while (k) r[j++] = t[--k];
+	r[j] = 0;
+	pr_cat(d, n, r);
+}
+
+// The printer's host, from its address: "ipp://10.0.0.5/ipp/print" ->
+// "10.0.0.5". Short enough for the row.
+static void pr_host(char *d, int n, const char *addr) {
+	const char *s = addr;
+	for (const char *p = addr; p[0] && p[1] && p[2]; p++)
+		if (p[0] == ':' && p[1] == '/' && p[2] == '/') { s = p + 3; break; }
+	int k = 0;
+	while (s[k] && s[k] != '/' && s[k] != ':' && k < n - 1) { d[k] = s[k]; k++; }
+	d[k] = 0;
+}
+
+static void pr_value(int row, char *v, int n) {
+	v[0] = 0;
+	switch (row) {
+		case PR_TO:
+			if (pr.o->dest == Z_PRINT_TO_PDF) pr_cat(v, n, "A PDF file");
+			else if (pr.o->dest == Z_PRINT_TO_PS) pr_cat(v, n, "A PostScript file");
+			else if (!pr.o->printer[0]) pr_cat(v, n, "Printer (not set up)");
+			else {
+				char h[40];
+				pr_host(h, sizeof(h), pr.o->printer);
+				pr_cat(v, n, "Printer ");
+				pr_cat(v, n, h);
+			}
+			break;
+		case PR_PAGES:
+			switch (pr.choices[pr.choice]) {
+				case Z_PRINT_PAGES_ALL:
+					pr_cat(v, n, "All");
+					if (pr.o->npages > 0) {
+						pr_cat(v, n, " (");
+						pr_cat_int(v, n, pr.o->npages);
+						pr_cat(v, n, ")");
+					}
+					break;
+				case Z_PRINT_PAGES_CURRENT:
+					pr_cat(v, n, "This page (");
+					pr_cat_int(v, n, pr.o->current);
+					pr_cat(v, n, ")");
+					break;
+				case Z_PRINT_PAGES_SELECTION:
+					pr_cat(v, n, "The selection");
+					break;
+				default:
+					break;		// the field
+			}
+			break;
+		case PR_COPIES:
+			pr_cat_int(v, n, pr.o->copies);
+			break;
+		case PR_PAPER:
+			if (pr.paper) pr_cat(v, n, pr_paper_names[pr.paper]);
+			else {
+				const char *d = "US Letter";
+				for (int i = 1; i < PR_NPAPERS; i++)
+					if (!strcmp(pr.o->paper_default, pr_papers[i])) d = pr_paper_names[i];
+				pr_cat(v, n, "Default (");
+				pr_cat(v, n, d);
+				pr_cat(v, n, ")");
+			}
+			break;
+		case PR_TRAY:
+			pr_cat(v, n, pr_file() ? "(the printer's)" : pr_tray_names[pr.tray]);
+			break;
+		case PR_NUP:
+			pr_cat_int(v, n, pr_nups[pr.nup]);
+			pr_cat(v, n, pr_nups[pr.nup] == 1 ? " page" : " pages");
+			break;
+		case PR_QUALITY:
+			pr_cat(v, n, pr_file() ? "(the printer's)" : pr_qual_names[pr.qual]);
+			break;
+	}
+}
+
+static bool pr_typing(void) {
+	return pr.row == PR_PAGES && pr.choices[pr.choice] == Z_PRINT_PAGES_RANGE;
+}
+
+static void pr_draw_row(int r) {
+
+	z_clip_t content;
+	z_win_content_rect(&dlg.win, &content);
+
+	int y = content.y0 + pr_row_y(r);
+	int x0 = content.x0 + DLG_MARGIN;
+	int vx = content.x0 + pr.val_x, vw = pr.val_w;
+	int ty = y + (DLG_FIELD_H - z_font_5x8.h) / 2;
+
+	z_clip_t clip = { x0, y, vx + vw - 1, y + DLG_FIELD_H - 1 };
+
+	z_fb_hw_fill_rect(x0, y, vx + vw - x0, DLG_FIELD_H, 0);
+
+	// the label; the focused row's inverted
+	bool focus = (pr.row == r);
+	if (focus)
+		z_fb_hw_fill_rect(x0 - 2, y + 1, (int)strlen(pr_labels[r]) * z_font_5x8.w + 4,
+			DLG_FIELD_H - 2, 1);
+	z_fb_draw_text2(x0, ty, pr_labels[r], focus ? 0 : 1, focus ? 1 : 0, &z_font_5x8, &clip);
+
+	// the value, in a box with its arrows -- four fills, not a box:
+	// z_fb_hw_box() would bring the line rasterizer into every app
+	// that prints
+	z_fb_hw_fill_rect(vx, y, vw, 1, 1);
+	z_fb_hw_fill_rect(vx, y + DLG_FIELD_H - 1, vw, 1, 1);
+	z_fb_hw_fill_rect(vx, y, 1, DLG_FIELD_H, 1);
+	z_fb_hw_fill_rect(vx + vw - 1, y, 1, DLG_FIELD_H, 1);
+	bool fixed = (r == PR_TRAY || r == PR_QUALITY) && pr_file();
+	if (!fixed) {
+		z_fb_draw_text(vx + 2, ty, "<", 1, &z_font_5x8, &clip);
+		z_fb_draw_text(vx + vw - 2 - z_font_5x8.w, ty, ">", 1, &z_font_5x8, &clip);
+	}
+
+	if (r == PR_PAGES && pr.choices[pr.choice] == Z_PRINT_PAGES_RANGE) {
+		dlg.edit.focus = focus;
+		z_edit_draw(&dlg.win, &dlg.edit, pr.val_x + PR_ARROW_W, pr_row_y(r) + 1,
+			pr.val_w - 2 * PR_ARROW_W, DLG_FIELD_H - 2, &z_font_5x8);
+		return;
+	}
+
+	char v[64];
+	pr_value(r, v, sizeof(v));
+	int tw = (int)strlen(v) * z_font_5x8.w;
+	z_fb_draw_text(vx + (vw - tw) / 2, ty, v, 1, &z_font_5x8, &clip);
+
+}
+
+static void pr_repaint(void) {
+	z_win_clear(&dlg.win);
+	for (int r = 0; r < PR_ROWS; r++) pr_draw_row(r);
+	z_widget_draw_all(&dlg.wset, true);
+}
+
+static void pr_say(int r) {
+	if (!z_speak_available() || r < 0) return;
+	char line[Z_SPEAK_SLOT_MAX], v[64];
+	line[0] = 0;
+	z_speak_cat(line, sizeof(line), pr_labels[r]);
+	z_speak_cat(line, sizeof(line), ": ");
+	if (r == PR_PAGES && pr.choices[pr.choice] == Z_PRINT_PAGES_RANGE) {
+		z_speak_cat(line, sizeof(line), "pages ");
+		z_speak_cat(line, sizeof(line), dlg.edit.len ? dlg.edit.buf : "to type");
+	} else {
+		pr_value(r, v, sizeof(v));
+		z_speak_cat(line, sizeof(line), v);
+	}
+	z_speak(line, Z_TTS_F_INTERRUPT);
+}
+
+static void pr_focus(int r) {
+	int old = pr.row;
+	pr.row = r;
+	if (r >= 0 && dlg.wset.focused >= 0) z_widget_focus_set(&dlg.wset, -1);
+	if (old >= 0 && old != r) pr_draw_row(old);
+	if (r >= 0) pr_draw_row(r);
+	z_widget_draw_all(&dlg.wset, false);
+	pr_say(r);
+}
+
+static int pr_wrap(int v, int d, int n) { v += d; while (v < 0) v += n; return v % n; }
+
+// Moves row r's value by d (-1 back, +1 on).
+static void pr_step(int r, int d) {
+	switch (r) {
+		case PR_TO:
+			pr.o->dest = pr_wrap(pr.o->dest, d, 3);
+			pr_draw_row(PR_TRAY);
+			pr_draw_row(PR_QUALITY);
+			break;
+		case PR_PAGES:
+			pr.choice = pr_wrap(pr.choice, d, pr.nchoices);
+			break;
+		case PR_COPIES:
+			pr.o->copies += d;
+			if (pr.o->copies < 1) pr.o->copies = 99;
+			if (pr.o->copies > 99) pr.o->copies = 1;
+			break;
+		case PR_PAPER:   pr.paper = pr_wrap(pr.paper, d, PR_NPAPERS); break;
+		case PR_TRAY:    if (!pr_file()) pr.tray = pr_wrap(pr.tray, d, PR_NTRAYS); break;
+		case PR_NUP:     pr.nup = pr_wrap(pr.nup, d, PR_NNUPS); break;
+		case PR_QUALITY: if (!pr_file()) pr.qual = pr_wrap(pr.qual, d, PR_NQUALS); break;
+	}
+	pr_draw_row(r);
+	pr_say(r);
+}
+
+// "3", "2-5", "2 - 5": into first and last. False for anything else.
+static bool pr_range(const char *s, int *first, int *last) {
+	int a = 0, b = 0;
+	bool any = false;
+	while (*s == ' ') s++;
+	while (*s >= '0' && *s <= '9') { a = a * 10 + (*s++ - '0'); any = true; if (a > 99999) return false; }
+	if (!any || a < 1) return false;
+	while (*s == ' ') s++;
+	if (*s == '-') {
+		s++;
+		while (*s == ' ') s++;
+		any = false;
+		while (*s >= '0' && *s <= '9') { b = b * 10 + (*s++ - '0'); any = true; if (b > 99999) return false; }
+		if (!any) b = 0;		// "3-": to the end
+	} else b = a;
+	while (*s == ' ') s++;
+	if (*s) return false;
+	if (b && b < a) return false;
+	*first = a;
+	*last = b;
+	return true;
+}
+
+static void pr_accept(void) {
+	z_print_opts_t *o = pr.o;
+	o->pages = pr.choices[pr.choice];
+	if (o->pages == Z_PRINT_PAGES_RANGE) {
+		if (!pr_range(dlg.edit.buf, &o->first, &o->last)) {
+			// not a range: back to it, to be put right
+			pr_focus(PR_PAGES);
+			return;
+		}
+	}
+	o->paper[0] = o->tray[0] = o->quality[0] = 0;
+	pr_cat(o->paper, sizeof(o->paper), pr_papers[pr.paper]);
+	pr_cat(o->tray, sizeof(o->tray), pr_trays[pr.tray]);
+	pr_cat(o->quality, sizeof(o->quality), pr_quals[pr.qual]);
+	o->nup = pr_nups[pr.nup];
+	dlg.result = Z_DIALOG_YES;
+	dlg.done = true;
+}
+
+static void pr_activate(int act) {
+	if (act == 0) pr_accept();
+	else if (act == 1) { dlg.result = Z_DIALOG_CANCEL; dlg.done = true; }
+}
+
+static void pr_key(uint32_t keysym, uint8_t mods) {
+
+	bool back = (mods & Z_KBD_MOD_SHIFT) != 0;
+
+	if (keysym == 0x1b) { dlg.result = Z_DIALOG_CANCEL; dlg.done = true; return; }
+
+	// Tab: the rows, then Print and Cancel, then round again
+	if (keysym == '\t') {
+		if (pr.row >= 0) {
+			int r = pr.row + (back ? -1 : 1);
+			if (r >= 0 && r < PR_ROWS) { pr_focus(r); return; }
+			int old = pr.row;
+			pr.row = -1;
+			pr_draw_row(old);
+			z_widget_focus_set(&dlg.wset, back ? dlg.widget_count - 1 : 0);
+			z_widget_draw_all(&dlg.wset, false);
+			return;
+		}
+		int next = dlg.wset.focused + (back ? -1 : 1);
+		if (next < 0 || next >= dlg.widget_count) { pr_focus(back ? PR_ROWS - 1 : 0); return; }
+		z_widget_focus_set(&dlg.wset, next);
+		z_widget_draw_all(&dlg.wset, false);
+		return;
+	}
+
+	// the buttons have the focus
+	if (pr.row < 0) {
+		if (keysym == ' ' || keysym == 0x0d) pr_activate(dlg.wset.focused);
+		else if (keysym == Z_KEY_UP) pr_focus(PR_ROWS - 1);
+		else if (keysym == Z_KEY_DOWN) pr_focus(0);
+		return;
+	}
+
+	if (keysym == 0x0d) { pr_accept(); return; }
+	if (keysym == Z_KEY_UP) { pr_focus(pr_wrap(pr.row, -1, PR_ROWS)); return; }
+	if (keysym == Z_KEY_DOWN) { pr_focus(pr_wrap(pr.row, 1, PR_ROWS)); return; }
+
+	if (pr_typing()) {
+		// the field has the keys; Left at its start and Right at its end
+		// leave the range for the other choices
+		if (keysym == Z_KEY_LEFT && dlg.edit.cur == 0) { pr_step(PR_PAGES, -1); return; }
+		if (keysym == Z_KEY_RIGHT && dlg.edit.cur >= dlg.edit.len) { pr_step(PR_PAGES, 1); return; }
+		if (z_edit_key(&dlg.edit, keysym)) pr_draw_row(PR_PAGES);
+		return;
+	}
+
+	if (keysym == Z_KEY_LEFT) { pr_step(pr.row, -1); return; }
+	if (keysym == Z_KEY_RIGHT || keysym == ' ') { pr_step(pr.row, 1); return; }
+
+	// a page number typed in the Pages row: a range, begun
+	if (pr.row == PR_PAGES && keysym >= '0' && keysym <= '9') {
+		for (int i = 0; i < pr.nchoices; i++)
+			if (pr.choices[i] == Z_PRINT_PAGES_RANGE) pr.choice = i;
+		z_edit_init(&dlg.edit, dlg.field, DLG_FIELD_MAX, "");
+		z_edit_key(&dlg.edit, keysym);
+		pr_draw_row(PR_PAGES);
+		return;
+	}
+
+	// a digit in Copies: that many
+	if (pr.row == PR_COPIES && keysym >= '1' && keysym <= '9') {
+		pr.o->copies = (int)(keysym - '0');
+		pr_draw_row(PR_COPIES);
+		pr_say(PR_COPIES);
+	}
+
+}
+
+static void pr_mouse(int cx, int cy, uint8_t buttons) {
+
+	int act = z_widget_mouse(&dlg.wset, cx, cy, buttons);
+	if (act >= 0) { pr_activate(act); return; }
+	if (dlg.wset.pressed >= 0 || !(buttons & Z_MOUSE_BTN_LEFT)) return;
+
+	// a press in a row's value: the left half back, the right half on
+	for (int r = 0; r < PR_ROWS; r++) {
+		int y = pr_row_y(r);
+		if (cy < y || cy >= y + DLG_FIELD_H || cx < DLG_MARGIN || cx >= pr.val_x + pr.val_w)
+			continue;
+		if (pr.row != r) pr_focus(r);
+		if (cx < pr.val_x) return;			// the label: the focus only
+		if (r == PR_PAGES && pr_typing() &&
+			cx >= pr.val_x + PR_ARROW_W && cx < pr.val_x + pr.val_w - PR_ARROW_W)
+			return;							// into the field
+		pr_step(r, cx < pr.val_x + pr.val_w / 2 ? -1 : 1);
+		return;
+	}
+
+}
+
+static void pr_wheel(int notches) {
+	if (pr.row >= 0 && !pr_typing()) pr_step(pr.row, notches > 0 ? -1 : 1);
+}
+
+static const dlg_ops_t print_ops = { pr_repaint, pr_key, pr_mouse, pr_wheel };
+
+static int pr_index(const char *const *list, int n, const char *v) {
+	for (int i = 0; i < n; i++) if (!strcmp(list[i], v)) return i;
+	return 0;
+}
+
+bool z_dialog_print(const z_dialog_ctx_t *ctx, const char *title,
+	const char *start_dir, const char *file_base, z_print_opts_t *o) {
+
+	memset(&pr, 0, sizeof(pr));
+	pr.o = o;
+	if (o->copies < 1 || o->copies > 99) o->copies = 1;
+	if (o->dest < 0 || o->dest > Z_PRINT_TO_PS) o->dest = Z_PRINT_TO_PRINTER;
+	if (!o->printer[0] && o->dest == Z_PRINT_TO_PRINTER) o->dest = Z_PRINT_TO_PDF;
+
+	pr.choices[pr.nchoices++] = Z_PRINT_PAGES_ALL;
+	if (o->current > 0) pr.choices[pr.nchoices++] = Z_PRINT_PAGES_CURRENT;
+	if (o->selection) pr.choices[pr.nchoices++] = Z_PRINT_PAGES_SELECTION;
+	pr.choices[pr.nchoices++] = Z_PRINT_PAGES_RANGE;
+	for (int i = 0; i < pr.nchoices; i++) if (pr.choices[i] == o->pages) pr.choice = i;
+
+	pr.paper = pr_index(pr_papers, PR_NPAPERS, o->paper);
+	pr.tray = pr_index(pr_trays, PR_NTRAYS, o->tray);
+	pr.qual = pr_index(pr_quals, PR_NQUALS, o->quality);
+	for (int i = 0; i < PR_NNUPS; i++) if (pr_nups[i] == o->nup) pr.nup = i;
+
+	speak_dialog(title ? title : "Print", "Choose how, then Print.");
+
+	int w = DLG_CONFIRM_W;
+	int h = Z_WM_TITLEBAR_H + 4 + DLG_MARGIN + PR_ROWS * PR_ROW_H +
+		DLG_MARGIN + DLG_BTN_H + DLG_MARGIN;
+
+	if (!dlg_create(ctx, DLG_KIND_CONFIRM, title ? title : "Print", w, h)) return false;
+	dlg.ops = &print_ops;
+
+	int cw = z_win_content_w(&dlg.win);
+	pr.val_x = DLG_MARGIN + PR_LABEL_W;
+	pr.val_w = cw - DLG_MARGIN - pr.val_x;
+
+	dlg.btn_y = z_win_content_h(&dlg.win) - DLG_MARGIN - DLG_BTN_H;
+	dlg_buttons_init(labels_print, 2);
+	z_widget_focus_set(&dlg.wset, -1);
+
+	{
+		// a range already chosen: shown in the field
+		char r[24];
+		r[0] = 0;
+		if (o->pages == Z_PRINT_PAGES_RANGE && o->first > 0) {
+			pr_cat_int(r, sizeof(r), o->first);
+			if (o->last != o->first) {
+				pr_cat(r, sizeof(r), "-");
+				if (o->last > 0) pr_cat_int(r, sizeof(r), o->last);
+			}
+		}
+		z_edit_init(&dlg.edit, dlg.field, DLG_FIELD_MAX, r);
+	}
+
+	pr.row = PR_TO;
+	pr_repaint();
+
+	if (dlg_run() != Z_DIALOG_YES) return false;
+
+	if (o->dest == Z_PRINT_TO_PRINTER) return true;
+
+	// -- a file: where --
+	const char *ext = o->dest == Z_PRINT_TO_PDF ? ".pdf" : ".ps";
+	char suggest[96];
+	suggest[0] = 0;
+	pr_cat(suggest, sizeof(suggest), file_base && file_base[0] ? file_base : "print");
+	pr_cat(suggest, sizeof(suggest), ext);
+	if (!z_dialog_save(ctx, start_dir, suggest, o->file, (int)sizeof(o->file))) return false;
+	size_t l = strlen(o->file), e = strlen(ext);
+	if ((l < e || strcmp(o->file + l - e, ext)) && l + e < sizeof(o->file))
+		pr_cat(o->file, (int)sizeof(o->file), ext);
+	if (fs_size(o->file) > 0 &&
+		z_dialog_confirm(ctx, "Print to a file", "That file exists. Replace it?",
+			Z_DIALOG_YES_NO) != Z_DIALOG_YES)
+		return false;
+	return true;
+
+}

@@ -33,6 +33,7 @@
 #include "../../common/zargs.h"
 
 #include "run.h"
+#include "textdoc.h"
 #include "res.h"
 
 // apps.print.format: auto, pwg, pdf or ps
@@ -429,6 +430,35 @@ static uint8_t *load(const char *path, uint32_t *len) {
 	return b;
 }
 
+// -- a text job ---------------------------------------------------------------------------------
+
+// A job that names a text file and has no pages (textdoc.h): the text,
+// laid out, becomes its pages. The text file is print's from here, as
+// the job file is: removed once read. False with a reason in err if it
+// cannot be laid out.
+static bool text_job(uint8_t **data, uint32_t *len, uint32_t *start, uint32_t *bytes,
+	char *err, int errn) {
+	char tpath[ZP_PATH_MAX], paper[16];
+	uint8_t *text, *out;
+	uint32_t tlen = 0, olen;
+	static char empty[1];
+	bool ok;
+	if (!zp_job_get(*data, *len, "text", tpath, sizeof(tpath)) || !tpath[0]) return true;
+	if (zp_pages(*data, *len, start, bytes, JOB_MAX_PAGES) > 0) return true;
+	text = fs_size(tpath) > 0 ? load(tpath, &tlen) : (uint8_t *)empty;
+	fs_unlink(tpath);
+	if (!text) { run_say(err, errn, "The text to print could not be read", NULL); return false; }
+	paper[0] = 0;
+	z_cfg_get("apps.print.paper", paper, sizeof(paper));
+	ok = textdoc_build(*data, *len, (const char *)text, tlen, paper, &out, &olen, err, errn);
+	if (text != (uint8_t *)empty) pool_free(text);
+	if (!ok) return false;
+	pool_free(*data);
+	*data = out;
+	*len = olen;
+	return true;
+}
+
 // -- memory ----------------------------------------------------------------------------------
 
 static bool mem_setup(void) {
@@ -600,6 +630,16 @@ int main(void) {
 	// -- the job --
 	data = load(jobf, &len);
 	fs_unlink((char *)jobf);
+	{
+		char terr[64];
+		terr[0] = 0;
+		if (data && !text_job(&data, &len, start, bytes, terr, sizeof(terr))) {
+			run_say(w_title, sizeof(w_title), "print", NULL);
+			status(terr, NULL);
+			win_open(WIN_H);
+			finish(false, Z_PRINT_E_FAILED);
+		}
+	}
 	if (!data || !job_open(&j, data, len, start, bytes)) {
 		run_say(w_title, sizeof(w_title), "print", NULL);
 		status(data ? "The job is damaged" : "The job could not be read", NULL);

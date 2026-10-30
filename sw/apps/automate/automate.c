@@ -912,7 +912,8 @@ static bool exec_line(char *line) {
 		if (!pid || !k) return true;
 		int kind = !strcmp(k, "close") ? 0 : !strcmp(k, "save") ? Z_WM_TBICON_SAVE :
 			!strcmp(k, "open") ? Z_WM_TBICON_OPEN : !strcmp(k, "new") ? Z_WM_TBICON_NEW :
-			!strcmp(k, "font") ? Z_WM_TBICON_FONT : -1;
+			!strcmp(k, "font") ? Z_WM_TBICON_FONT : !strcmp(k, "print") ? Z_WM_TBICON_PRINT :
+			!strcmp(k, "colour") ? Z_WM_TBICON_COLOUR : -1;
 		if (kind < 0 || !query(pid) || !info.found) return true;
 		for (int i = 0; i < info.n_icons; i++) {
 			if (info.icon_kind[i] != kind) continue;

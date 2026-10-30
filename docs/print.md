@@ -3,8 +3,9 @@
 Kind: a **desktop app** ([app_kinds.md](app_kinds.md)).
 
 `sw/apps/print`. Prints what an app hands it -- to a printer on the
-network, or to a PDF or PostScript file. `slide` is the first app that
-prints ([slide_app](slide_app.md#printing)); the API is open to any
+network, or to a PDF or PostScript file. `slide`
+([slide_app](slide_app.md#printing)) and `text`
+([text_editor](text_editor.md#printing)) print; the API is open to any
 app ([zprint](#printing-from-an-app)).
 
 ```
@@ -25,7 +26,9 @@ then run `print` alone: it asks the printer what it is and what it
 takes, and shows the answer until **OK** (or Esc, Enter, the close
 box). If that works, printing will.
 
-From `slide`, **Ctrl+P** prints the deck. A small window shows what
+In `text`, **Ctrl+P** or the printer icon in the title bar opens the
+[print dialog](#the-print-dialog); **Print** sends it. From `slide`,
+**Ctrl+P** prints the deck. A small window shows what
 print is doing -- the sheet it is on, waiting while the printer is
 busy -- with **Cancel**, and how it ended: *Printed: 7 sheets, sent as
 PDF*, or what went wrong. It closes by itself a few seconds after
@@ -33,6 +36,50 @@ success; after an error it waits for **OK**.
 
 Printing runs in its own process: the app goes on working meanwhile,
 and a print job finishes even if the app is closed.
+
+## The print dialog
+
+One dialog, the same in every app that uses it:
+
+| Row | Choices |
+|---|---|
+| Print to | the printer in `zeitlos.cfg`, a PDF file, a PostScript file |
+| Pages | all, this page, the selection (when there is one), or a range typed in: `3`, `2-5` |
+| Copies | 1 to 99 |
+| Paper | the default (`apps.print.paper`), or Letter, A4, Legal, A5, A6, 4x6, 5x7, 3x5 |
+| Tray | the printer's choice, Main, Rear, Manual ([Trays](#trays)) |
+| Per sheet | 1, 2, 4, 6, 9 or 16 pages to a sheet |
+| Quality | Normal, Draft, High |
+
+**Up** and **Down** (or **Tab**) move between rows; **Left** and
+**Right**, or a click on either half of a value, change it. Typing a
+digit in Pages starts a range; typing one in Copies sets the number.
+**Enter** prints, **Esc** cancels; Tab reaches the **Print** and
+**Cancel** buttons too. Tray and quality belong to a printer, so for a
+file they show "(the printer's)" and do not change.
+
+To a file, **Print** goes on to a save dialog for the file's name,
+offered in the document's folder with the document's name, and asks
+before replacing a file that is there.
+
+Rows an app has no use for show what it can do: `text` has no
+"this page", so Pages is All, the selection, or a range.
+
+## Printing text
+
+`text` does not draw its pages: it writes the text (or the selection)
+to a file in `/tmp`, and print lays it out --
+
+- a clean sans-serif face at **10 point**, 2 cm margins all round;
+- each line of the file is a paragraph, **word-wrapped** to the
+  width, and a line that starts indented keeps its indent on the lines
+  it wraps onto;
+- tabs every eight characters; a **form feed** starts a new page;
+- the **page number** at the foot of each page.
+
+The face is proportional, so columns lined up with spaces in the file
+do not line up on paper. A text with tables in it reads better printed
+from `read`, once `read` prints.
 
 ## Setting up
 
@@ -117,7 +164,27 @@ as patterns, at their size on the screen (one bit a card unit).
 the window says *Waiting: the printer is busy* and tries again every
 five seconds, for up to half an hour, or until **Cancel**.
 
-## Printing from an app
+## Not yet
+
+- **Discovery**: a printer's address is typed in; finding printers by
+  DNS-SD (Bonjour) needs multicast DNS in `net`.
+- **IPPS** (IPP over TLS): plain IPP only. The TLS in `web` could serve.
+- **URF** (AirPrint's raster), for a printer that takes neither PWG
+  nor PDF; **PCL**, for a laser without PostScript.
+- Colour, two-sided, and following a job once the printer has taken it.
+- Printing from `read` and `draw`: zprint and the print dialog are
+  ready for them. `slide` still prints straight away on Ctrl+P, with
+  its `/print` settings, rather than through the dialog.
+- Printing text in a fixed-width face, for columns lined up with
+  spaces.
+
+---
+
+## For developers
+
+How it is built and how it is tested. Nothing here is needed to use it.
+
+### Printing from an app
 
 `sw/common/zprint.h`. The app describes its pages through
 [zpaper](zpaper.md) -- with its own drawing code, onto a recording
@@ -148,7 +215,41 @@ subjects are block 472 (`zsubjects.h`).
 A picture from a file is best given by path (`zp_image_file()`): print
 decodes it at the size it prints, and the job stays small.
 
-## Job options
+**With the dialog.** `z_dialog_print()` (`zdialog.h`) shows
+[the print dialog](#the-print-dialog) and fills a `z_print_opts_t`;
+`z_print_opts_job()` turns it into the job's options. Set `npages` and
+`current` before showing it if the app knows them (Pages then offers
+"this page"), and `selection` if there is one:
+
+```c
+z_print_opts_t o;
+z_print_opts_init(&o);                      // printer and paper from zeitlos.cfg
+o.selection = has_selection;
+if (z_dialog_print(&dlg_ctx, "Print", folder, name, &o) &&
+    z_print_begin(&pr, name)) {
+    z_print_opts_job(&o, &pr.w);            // the options, before pages
+    ... the pages ...
+    z_print_end(&pr);
+}
+```
+
+`o.pages` is `Z_PRINT_PAGES_SELECTION` when the selection is to be
+printed: that is the app's to act on (it sends only those pages, or
+that text); the other choices are print's.
+
+**Text, without pages.** `z_print_text_job(&pr, path)` names a UTF-8
+file instead of drawing pages; print lays it out ([Printing
+text](#printing-text), `sw/apps/print/textdoc.c`) and deletes the file
+when the job is done. The options `text-font` (`sans`, `serif`) and
+`text-size` (6 to 24 points) apply. An app that prints this way links
+`zprint.o zpaper.o zcfg.o` and none of the page renderer, which is
+how `text` prints from flash.
+
+A window can show a printer icon in its title bar,
+`Z_WIN_FLAG_PRINT_ICON`; a click on it arrives as
+`Z_WM_TBICON_PRINT` ([window_manager.md](window_manager.md)).
+
+### Job options
 
 `key=value`, each a `JOB` record before the first page (`zp_job()`).
 
@@ -170,7 +271,7 @@ decodes it at the size it prints, and the job stays small.
 | `media-source` | `main`, `rear`, `manual` ... | the tray |
 | `format` | `auto`, `pwg`, `pdf`, `ps` | overrides `apps.print.format` |
 
-## Laying pages on sheets
+### Laying pages on sheets
 
 [zpage](zcanvas.md#pages) decides:
 - **fitted**, a page is as large as the printable area allows, and
@@ -190,56 +291,7 @@ A sheet goes to the printer portrait, as it feeds, named by its PWG
 media name (`na_letter_8.5x11in`, `iso_a4_210x297mm`,
 `na_index-4x6_4x6in`).
 
-## Speed
-
-Measured on the RISC-V CPU, under `sim/zsim-headless` (which counts
-instructions), for the seven-card slide tour on Letter
-(`sw/apps/print/bench`):
-
-| | instructions | at 48 MHz, ~12M instructions a second |
-|---|---|---|
-| the whole tour as **PDF** | 9.3M | under a second |
-| the whole tour as **PostScript** | 12.9M | about a second |
-| one sheet as **PWG raster**, 300 dpi: text and shapes | 42-80M | 4-7 s |
-| one sheet as PWG raster: a photograph on it | 132M | 11 s |
-
-A raster sheet is 2550 x 3300 grey dots, every one drawn here; a PDF
-page is a few KB of drawing instructions and the printer draws the
-dots. That is why `auto` prefers PDF. Either way a job goes out as it
-is made -- a sheet is sent while the next is drawn -- and is never
-held whole: the printer starts on the first sheet while the last is
-still being drawn.
-
-What made the raster path this fast (from 922M to 529M instructions
-for the tour; `sim` with a per-address profile found each):
-- a picture drawn turned is sampled bilinearly in 32 bits, with no
-  call a pixel (was 28% of the time);
-- the PWG coder compares lines a word at a time and holds the line it
-  repeats instead of copying it, and band rows are a whole number of
-  words apart so every line is word-aligned;
-- pattern fills step cell by cell along a row instead of dividing for
-  every pixel;
-- fills are written a word at a time;
-- glyphs come from the glyph cache on grey bands too.
-
-The transfer: the tour is 210KB as PDF and 1.9MB as PWG raster
-(blank lines and white margins cost nearly nothing).
-
-## Memory
-
-print asks the arena for 4MB, and makes do with 2MB or 1.5MB:
-- the job (the tour: 21.7KB);
-- a band of 64 lines of the widest sheet (160KB at 300 dpi);
-- the fonts the job names, loaded from `/sys/fonts` once;
-- pictures, decoded to grey at most once each (640x480 at most, as
-  zimg decodes them -- about 160 ppi across a 4 inch photo, which the
-  printer smooths), kept within a budget and decoded again if dropped;
-- the glyph cache (192KB), and the PDF writer's tables.
-
-The app that prints spends only the job file: a few KB of vectors
-written to `/tmp`.
-
-## Inside
+### Inside
 
 ```
 app ── zpaper job in /tmp ──> print ─┬─ run.c: probe, choose, send
@@ -293,7 +345,21 @@ take yet. A socket printer never answers, and closing a socket drops
 what net has not yet sent, so after the last byte print waits for net
 to have read everything and gives it two seconds more before closing.
 
-## Tests
+### Memory
+
+print asks the arena for 4MB, and makes do with 2MB or 1.5MB:
+- the job (the tour: 21.7KB);
+- a band of 64 lines of the widest sheet (160KB at 300 dpi);
+- the fonts the job names, loaded from `/sys/fonts` once;
+- pictures, decoded to grey at most once each (640x480 at most, as
+  zimg decodes them -- about 160 ppi across a 4 inch photo, which the
+  printer smooths), kept within a budget and decoded again if dropped;
+- the glyph cache (192KB), and the PDF writer's tables.
+
+The app that prints spends only the job file: a few KB of vectors
+written to `/tmp`.
+
+### Tests
 
 ```
 make -C sw/apps/print test       # 845 checks, then the whole path end to end
@@ -329,17 +395,49 @@ that is not this one:
   `dbus-daemon --system --fork; avahi-daemon -D` in a container.)
 - to a port-9100 socket: the PostScript arrives byte for byte.
 
-## Not yet
+---
 
-- **Discovery**: a printer's address is typed in; finding printers by
-  DNS-SD (Bonjour) needs multicast DNS in `net`.
-- **IPPS** (IPP over TLS): plain IPP only. The TLS in `web` could serve.
-- **URF** (AirPrint's raster), for a printer that takes neither PWG
-  nor PDF; **PCL**, for a laser without PostScript.
-- Colour, two-sided, and following a job once the printer has taken it.
-- Printing from `text`, `read` and `draw`: zprint is ready for them.
+## Implementation notes
 
-## On the board
+Measurements, bugs and decisions from its development, kept for whoever
+works on it next.
+
+### Speed
+
+Measured on the RISC-V CPU, under `sim/zsim-headless` (which counts
+instructions), for the seven-card slide tour on Letter
+(`sw/apps/print/bench`):
+
+| | instructions | at 48 MHz, ~12M instructions a second |
+|---|---|---|
+| the whole tour as **PDF** | 9.3M | under a second |
+| the whole tour as **PostScript** | 12.9M | about a second |
+| one sheet as **PWG raster**, 300 dpi: text and shapes | 42-80M | 4-7 s |
+| one sheet as PWG raster: a photograph on it | 132M | 11 s |
+
+A raster sheet is 2550 x 3300 grey dots, every one drawn here; a PDF
+page is a few KB of drawing instructions and the printer draws the
+dots. That is why `auto` prefers PDF. Either way a job goes out as it
+is made -- a sheet is sent while the next is drawn -- and is never
+held whole: the printer starts on the first sheet while the last is
+still being drawn.
+
+What made the raster path this fast (from 922M to 529M instructions
+for the tour; `sim` with a per-address profile found each):
+- a picture drawn turned is sampled bilinearly in 32 bits, with no
+  call a pixel (was 28% of the time);
+- the PWG coder compares lines a word at a time and holds the line it
+  repeats instead of copying it, and band rows are a whole number of
+  words apart so every line is word-aligned;
+- pattern fills step cell by cell along a row instead of dividing for
+  every pixel;
+- fills are written a word at a time;
+- glyphs come from the glyph cache on grey bands too.
+
+The transfer: the tour is 210KB as PDF and 1.9MB as PWG raster
+(blank lines and white margins cost nearly nothing).
+
+### On the board
 
 To check in the final hardware phase:
 - `print` alone, against the PIXMA: it answers, and says what it takes;

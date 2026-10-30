@@ -76,6 +76,7 @@ typedef enum {
 	Z_ICON_FILE,
 	Z_ICON_UPDIR,
 	Z_ICON_COLOUR,		// a rainbow: colour on or off (F10)
+	Z_ICON_PRINT,		// a printer: the print dialog (Ctrl+P)
 	Z_ICON_ID_COUNT		// keep last
 } z_icon_id_t;
 

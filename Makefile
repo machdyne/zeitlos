@@ -911,8 +911,20 @@ ZAR_APPS = $(filter-out $(CORE_APPS_OMIT),$(CORE_APPS))
 # 61K/159K (the file list it links draws in place too) -- files is not
 # one of the two largest of the rest, text is: its +2K adds to the RAM
 # rule, which was already over CORE_RAM_MAX before this change.
+# October 2026, printing (docs/print.md, "The print dialog"): text
+# 70K/180K -> 80K/200K -- the print dialog (zdialog.c), zprint and the
+# job writer, and a 2KB job buffer; the pages are laid out by print, so
+# not the page renderer. files 60K/125K -> 61K/126K: the dialog's text
+# is in zdialog.c's string section, which every app with a dialog
+# carries whole (260 bytes). Both from the slack under CORE_ZAR_MAX;
+# neither is in the RAM rule.
+# October 2026, folders of any size (docs/file_browser.md): files
+# 61K/126K -> 64K/134K -- the filesystem client (zfsc.c), to read a
+# folder a page at a time straight from fs, its 2KB page, and the list
+# reading in pages (zflist.c). The list's store is in the arena, not
+# here.
 CORE_BUDGETS = fs=36K/77056 usb=35K/53504 wm=114K/147K net=148K/284K term=62K/140K \
-	console=10K/12544 cron=18K/48K text=70K/180K files=60K/125K repl=140K/307K
+	console=10K/12544 cron=18K/48K text=80K/200K files=64K/134K repl=140K/307K
 CORE_RESERVE = 60K
 # Core apps stored as they are, not compressed: their budget is then
 # their .bin. wm and net, the two largest started at boot: unpacked they

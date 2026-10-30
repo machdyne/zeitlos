@@ -963,7 +963,7 @@ typedef struct {
 // Right-to-left. close is first, hence rightmost.
 //
 // The rest are ordered so that the common combination reads
-// left-to-right as new / open / save / close, which is the order a
+// left-to-right as new / open / save / print / close, which is the order a
 // File menu would list them in and the order they are normally
 // spoken. An app asking for a subset just gets that subset in the
 // same relative order, without specifying anything.
@@ -974,6 +974,7 @@ typedef struct {
 // handles Z_WM_CLOSE has to change. See Z_WM_TITLEBAR_ICON in zwm.h.
 static const titlebar_icon_t titlebar_icon_table[] = {
 	{ Z_WIN_FLAG_CLOSE_ICON, Z_ICON_CLOSE, 0                 },
+	{ Z_WIN_FLAG_PRINT_ICON, Z_ICON_PRINT, Z_WM_TBICON_PRINT },
 	{ Z_WIN_FLAG_SAVE_ICON,  Z_ICON_SAVE,  Z_WM_TBICON_SAVE  },
 	{ Z_WIN_FLAG_OPEN_ICON,  Z_ICON_OPEN,  Z_WM_TBICON_OPEN  },
 	{ Z_WIN_FLAG_NEW_ICON,   Z_ICON_NEW,   Z_WM_TBICON_NEW   },

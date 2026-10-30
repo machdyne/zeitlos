@@ -276,13 +276,14 @@ immediately. `resize_orig_w`/`_h` record the starting size, since
 
 A window can ask for extra titlebar icons alongside the close button by
 setting flags on `Z_WM_CREATE_WINDOW`: `Z_WIN_FLAG_NEW_ICON`,
-`_SAVE_ICON`, `_OPEN_ICON` and `_FONT_ICON` (`zwm.h`). `sw/apps/text`
-uses new + save + close.
+`_SAVE_ICON`, `_OPEN_ICON`, `_PRINT_ICON` (a printer), `_FONT_ICON` and
+`_COLOUR_ICON` (`zwm.h`). `sw/apps/text` uses new + open + save +
+print + close.
 
 They are laid out **right-to-left** from the right edge, in the fixed
-order close, save, open, new, font — so the common combination reads
-left to right as new / open / save / close, the order a File menu would
-list them in. That ordering is anchored at the
+order close, print, save, open, new, font, colour — so the common
+combination reads left to right as new / open / save / print / close,
+the order a File menu would list them in. That ordering is anchored at the
 right for two reasons: close keeps the exact position it always had, so
 every app that predates this feature draws identically; and an app
 asking for new+save+close gets them reading "new save close" left to
@@ -1024,7 +1025,7 @@ shapes. Summary:
 | wm → app | `Z_WM_MOUSE` | packed `Z_UINT32` (`Z_WM_PACK_MOUSE`) | pointer position and buttons, to the window that owns the pointer; coalesced -- act on the last one queued |
 | wm → app | `Z_WM_WHEEL` | `Z_UINT32`, signed notches (`Z_WM_WHEEL_NOTCHES`) | scroll wheel, positive = up; same target as `Z_WM_MOUSE`; not coalesced -- act on every one |
 | app → wm | `Z_WM_SET_TITLE` | `Z_MAP{id, title}` | retitle an existing window -- repairs the titlebar strip only |
-| wm → app | `Z_WM_TITLEBAR_ICON` | packed `Z_UINT32` (`Z_WM_PACK_TBICON`) | a new/save/open/font titlebar icon was clicked |
+| wm → app | `Z_WM_TITLEBAR_ICON` | packed `Z_UINT32` (`Z_WM_PACK_TBICON`) | a new/save/open/print/font/colour titlebar icon was clicked |
 | wm → app | `Z_WM_SET_CLIP` | `Z_BLOB` of `z_wm_cliprect_t[]`, led by a control rectangle naming the window | the part of this window not covered by the windows in front of it, or a command about its clip |
 | app → wm | `Z_WM_CLIP_DONE` | `Z_UINT32` (window id, plus `Z_WM_CLIP_DONE_DREW`) | acknowledges a `Z_WM_SET_CLIP` |
 | wm → app | `Z_WM_READ` | `Z_UINT32`: `Z_WM_READ_PACK(window id, what)` | Super+A (`Z_WM_READ_ALL`: start reading, or stop) or Super+C (`Z_WM_READ_SELECTION`: say the highlighted text) on a window created with `Z_WIN_FLAG_READABLE` |

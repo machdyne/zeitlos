@@ -1548,6 +1548,23 @@ int main(int argc, char **argv) {
 		big_font = NULL;
 	}
 
+	// -- printing: the text handed to print (do_print(), write_text()) --
+	printf("printing: the text as print reads it\n");
+	{
+		fresh();
+		type("Gr\xC3\xBC\xC3\x9F" "e\nzweite Zeile \xE2\x82\xAC" "5");
+		file_enc = ENC_LATIN9;		// a Latin-9 file still prints from UTF-8
+		expect(write_text("/PR1.TXT", 0, len), "the document written");
+		static const char all[] = "Gr\xC3\xBC\xC3\x9F" "e\nzweite Zeile \xE2\x82\xAC" "5";
+		expect(file_is("/PR1.TXT", all, (int)sizeof(all) - 1), "all of it, as UTF-8");
+		sel_anchor = 8;			// "zweite": bytes, after two 2-byte letters
+		cursor = 14;
+		expect(has_sel() && write_text("/PR1.TXT", sel_start(), sel_end()), "the selection written");
+		expect(file_is("/PR1.TXT", "zweite", 6), "only the selection");
+		file_enc = ENC_UTF8;
+		sel_anchor = -1;
+	}
+
 	printf("text utf8: %d checks, %d failed\n", checks, failures);
 	return failures ? 1 : 0;
 

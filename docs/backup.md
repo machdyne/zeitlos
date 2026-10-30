@@ -13,19 +13,6 @@ the book is on the stick, at every time you backed it up. With **watch**
 on, and the window open in a corner, every save of the book is on the
 stick 10 seconds later.
 
-## Status (October 2026)
-
-| | |
-|---|---|
-| **Done** (Phase 0) | the format on the drive, and `sw/apps/backup/bk.c`, the engine: backing up, making room, restoring, history, checking, pins. Tested on the host, including a power cut at every single write ("Testing"). `tools/backup_read.py` reads a backup drive on any PC. |
-| **Done** (Phase 1) | `backup` on the board (`sw/apps/backup`, in the `base` set): the commands below from posix and the kernel shell, the settings in `zeitlos.cfg`, eject. Its file layer (`bk_zfs.c`) tested on the host against the real fs driver and FatFs on a FAT32 image, with the power cut at every sector write ("Testing"). **Not yet run on hardware.** |
-| **Done** (Phase 2) | the window (since redone, below): one button, a restore browser, a small view, settings; the engine run a slice at a time in a coroutine, one request to fs a slice, stoppable at once (tested on the real fs driver). Listing and status read only each index's last line. **Not yet run on hardware.** |
-| **Done** (Phase 3) | watch ("Watch"): a file saved in a watched folder is backed up on its own 10 seconds later, while the window (or `backup watch`) is open, through change notices from fs to the programs that ask for them. A dock icon. Tested on the host against the real fs driver. **Not yet run on hardware.** |
-| **Done** (window, redone) | one small window: a headline, Back up now, Show backups (the drive in `files`), Settings (two lines), Remove drive; the Aa icon for a strip. No restore browser: files are copied back, or `backup restore` ("The window"). **Not yet run on hardware.** |
-
-The design and the decisions behind it are recorded at the end
-("Decisions").
-
 ## Using it
 
 From the desktop, the window ("The window"): its dock icon in the
@@ -331,92 +318,6 @@ end 3 5e2f8a10
   backup's index lists only the files it stored.
 - `clock not set, 3h05m after power-on` instead of `clock set`.
 
-## The rules that make a power cut harmless
-
-The danger is real: FAT has no journal, and a drive that loses power
-while it is being written can be left inconsistent. backup is built so
-that this cannot cost you anything that was already safe.
-
-1. **The card is only read.** A backup writes nothing on it -- FatFs
-   writes nothing on a read -- so whenever the power goes, the card is
-   as your programs left it. Only a restore writes the card, as
-   `NAME.part` and a rename.
-2. **On the backup drive nothing that exists is ever changed.** A
-   backup only adds files: copies, and one INDEX.TXT. Nothing is renamed
-   or moved there, ever. FatFs renames by writing the new directory
-   entry before removing the old one; a power cut between the two leaves
-   two entries on one cluster chain, and deleting either one later
-   destroys the other's data. A backup cannot meet that.
-3. **A backup exists only when its INDEX.TXT is complete.** One cut
-   short has none, or one without its `end` line; it is invisible, and
-   the next backup removes what it left. (A folder whose index lost its
-   end but whose copies a later backup uses is not that -- its index was
-   damaged -- and is kept and reported.)
-4. **Every copy is synced and read back** before the index names it.
-5. **Making room only deletes.** A cut there leaks space at worst.
-6. **The window is short.** A typical backup writes for a few seconds;
-   the drive is idle (and safe to unplug, after `eject`) otherwise.
-
-What remains: a cheap stick's controller can damage data it was not
-asked to write when the power fails mid-write (flash pages are larger
-than sectors). Several copies on one stick do not help with that, or
-with a dead stick -- they share one FAT and one directory tree. Two
-drives used in turn do ("Later").
-
-## How a backup runs
-
-1. Take `LOCK.TXT` (one backup at a time; a lock whose owner is no
-   longer running is taken over).
-2. Remove what a backup cut short left.
-3. Read the state the newest backups describe: the newest complete full
-   backup's index, with the watch backups after it laid over it.
-4. Look at the card. A file of the same size and date as before is
-   unchanged. One of the same size whose date cannot be trusted (or has
-   changed) is read and its CRC compared. Anything else is copied.
-5. Check the room; make room if needed ("Making room"). If there is
-   still not enough, **nothing is written**, and it says so.
-6. Name the backup, make its folder, copy each changed file 4 KB at a
-   time, sync it, read it back. A file that changed while it was being
-   copied is copied once more, then reported.
-7. Write INDEX.TXT, its `end` line last; sync; read it back.
-8. Remove `LOCK.TXT`.
-
-Nothing changed since the last backup: nothing is written.
-
-Stopping (Esc, Cancel, `kill`) is immediate and changes nothing
-visible: the backup has no index yet, and the next one removes its
-folder.
-
-### Fresh copies and repairs
-
-Backups only copy what changed, so a file that never changes has one
-copy, in an old backup. Two things keep that copy from being a weak
-point:
-
-- **A copy more than 10 full backups old is made again** (`refresh` in
-  `bk_opts_t`), so no file depends on one old copy for ever.
-- **`backup check -a`** reads every copy and checks it against its
-  index. A damaged one is listed in `check/`, and the next backup copies
-  that file again from the card, if it is unchanged there.
-
-## Making room
-
-When the drive is too full for the next backup:
-
-1. **The oldest copies go first**, backup by backup from the oldest, but
-   **a copy is removed only if a newer copy of that file exists** in a
-   later backup. The newest copy of every file is never removed, so the
-   oldest backup just shrinks to the files that never changed since.
-2. Only if that is not enough: the last copies of files no longer on the
-   card, oldest first.
-3. Never: the newest `keep` backups (10) and everything after the oldest
-   of them, and pinned backups. If nothing else can go, the backup is
-   refused rather than eat into those.
-
-A backup left with no copies at all is removed, index and folder. An
-older backup thinned this way still lists everything in its index;
-restoring from it says which versions were removed to make room.
-
 ## Getting files back on a PC
 
 Without Zeitlos, by hand (README.TXT on the drive says this too):
@@ -516,7 +417,99 @@ If fs no longer has the watch -- fs restarted, and its watches are in
 its memory -- backup watches again at that read and backs the watched
 folders up whole, since what was saved meanwhile is not known.
 
-## Running alongside everything
+## Making room
+
+When the drive is too full for the next backup:
+
+1. **The oldest copies go first**, backup by backup from the oldest, but
+   **a copy is removed only if a newer copy of that file exists** in a
+   later backup. The newest copy of every file is never removed, so the
+   oldest backup just shrinks to the files that never changed since.
+2. Only if that is not enough: the last copies of files no longer on the
+   card, oldest first.
+3. Never: the newest `keep` backups (10) and everything after the oldest
+   of them, and pinned backups. If nothing else can go, the backup is
+   refused rather than eat into those.
+
+A backup left with no copies at all is removed, index and folder. An
+older backup thinned this way still lists everything in its index;
+restoring from it says which versions were removed to make room.
+
+---
+
+## For developers
+
+How it is built and how it is tested. Nothing here is needed to use it.
+
+### The rules that make a power cut harmless
+
+The danger is real: FAT has no journal, and a drive that loses power
+while it is being written can be left inconsistent. backup is built so
+that this cannot cost you anything that was already safe.
+
+1. **The card is only read.** A backup writes nothing on it -- FatFs
+   writes nothing on a read -- so whenever the power goes, the card is
+   as your programs left it. Only a restore writes the card, as
+   `NAME.part` and a rename.
+2. **On the backup drive nothing that exists is ever changed.** A
+   backup only adds files: copies, and one INDEX.TXT. Nothing is renamed
+   or moved there, ever. FatFs renames by writing the new directory
+   entry before removing the old one; a power cut between the two leaves
+   two entries on one cluster chain, and deleting either one later
+   destroys the other's data. A backup cannot meet that.
+3. **A backup exists only when its INDEX.TXT is complete.** One cut
+   short has none, or one without its `end` line; it is invisible, and
+   the next backup removes what it left. (A folder whose index lost its
+   end but whose copies a later backup uses is not that -- its index was
+   damaged -- and is kept and reported.)
+4. **Every copy is synced and read back** before the index names it.
+5. **Making room only deletes.** A cut there leaks space at worst.
+6. **The window is short.** A typical backup writes for a few seconds;
+   the drive is idle (and safe to unplug, after `eject`) otherwise.
+
+What remains: a cheap stick's controller can damage data it was not
+asked to write when the power fails mid-write (flash pages are larger
+than sectors). Several copies on one stick do not help with that, or
+with a dead stick -- they share one FAT and one directory tree. Two
+drives used in turn do ("Later").
+
+### How a backup runs
+
+1. Take `LOCK.TXT` (one backup at a time; a lock whose owner is no
+   longer running is taken over).
+2. Remove what a backup cut short left.
+3. Read the state the newest backups describe: the newest complete full
+   backup's index, with the watch backups after it laid over it.
+4. Look at the card. A file of the same size and date as before is
+   unchanged. One of the same size whose date cannot be trusted (or has
+   changed) is read and its CRC compared. Anything else is copied.
+5. Check the room; make room if needed ("Making room"). If there is
+   still not enough, **nothing is written**, and it says so.
+6. Name the backup, make its folder, copy each changed file 4 KB at a
+   time, sync it, read it back. A file that changed while it was being
+   copied is copied once more, then reported.
+7. Write INDEX.TXT, its `end` line last; sync; read it back.
+8. Remove `LOCK.TXT`.
+
+Nothing changed since the last backup: nothing is written.
+
+Stopping (Esc, Cancel, `kill`) is immediate and changes nothing
+visible: the backup has no index yet, and the next one removes its
+folder.
+
+#### Fresh copies and repairs
+
+Backups only copy what changed, so a file that never changes has one
+copy, in an old backup. Two things keep that copy from being a weak
+point:
+
+- **A copy more than 10 full backups old is made again** (`refresh` in
+  `bk_opts_t`), so no file depends on one old copy for ever.
+- **`backup check -a`** reads every copy and checks it against its
+  index. A damaged one is listed in `check/`, and the next backup copies
+  that file again from the card, if it is unchanged there.
+
+### Running alongside everything
 
 `fs` serves one request at a time, in the order they come, so backup
 keeps one in flight and keeps each small: it reads and writes 4 KB at a
@@ -537,7 +530,7 @@ about 4 MB, some 20 s at the stick's speed. FatFs remembers the count
 after that. To be measured on hardware; if it matters, the count could
 be done a step at a time.
 
-## Inside
+### Inside
 
 ```
 sw/apps/backup/bk.h, bk.c      the engine, portable C over bk_io_t
@@ -577,7 +570,7 @@ output, progress and a stop flag. `bk.c` uses no `sscanf` and no 64-bit
 RV32IM (`-Os`), and keeps the newest index and the card's file list in
 memory: about 100 bytes a file.
 
-## Testing
+### Testing
 
 ```
 $ make -C sw/apps/backup/tests
@@ -641,7 +634,7 @@ was complete is complete and every copy it names is there and right;
 exactly what the card has. After a restore cut short, the file is the
 old one or the restored one (or only its `.part` is there).
 
-### A slice at a time
+#### A slice at a time
 
 `test_job` runs `bkjob.c` as the window runs it -- the engine in a
 coroutine, resumed one slice at a time -- on the real fs driver, with a
@@ -664,7 +657,7 @@ starts a backup (and does nothing without a drive), Back up now during
 a summary starts after it, Esc stops, a due watch backup starts with
 just the saved file and a save with no drive is let go, F1 help.
 
-### On FAT
+#### On FAT
 
 `test_fat` runs the engine and the board's own file layer (`bk_zfs.c`)
 through `zfsc.c` to the real fs driver (`sw/apps/fs/fs.c`) and the
@@ -716,7 +709,27 @@ total, a full drive not reported as full, an empty listing). Two of its
 mutants changed nothing and were left: EEXIST is mapped twice, and
 FatFs's close flushes as its sync does.
 
-## On the board
+---
+
+## Implementation notes
+
+Measurements, bugs and decisions from its development, kept for whoever
+works on it next.
+
+### Status (October 2026)
+
+| | |
+|---|---|
+| **Done** (Phase 0) | the format on the drive, and `sw/apps/backup/bk.c`, the engine: backing up, making room, restoring, history, checking, pins. Tested on the host, including a power cut at every single write ("Testing"). `tools/backup_read.py` reads a backup drive on any PC. |
+| **Done** (Phase 1) | `backup` on the board (`sw/apps/backup`, in the `base` set): the commands below from posix and the kernel shell, the settings in `zeitlos.cfg`, eject. Its file layer (`bk_zfs.c`) tested on the host against the real fs driver and FatFs on a FAT32 image, with the power cut at every sector write ("Testing"). **Not yet run on hardware.** |
+| **Done** (Phase 2) | the window (since redone, below): one button, a restore browser, a small view, settings; the engine run a slice at a time in a coroutine, one request to fs a slice, stoppable at once (tested on the real fs driver). Listing and status read only each index's last line. **Not yet run on hardware.** |
+| **Done** (Phase 3) | watch ("Watch"): a file saved in a watched folder is backed up on its own 10 seconds later, while the window (or `backup watch`) is open, through change notices from fs to the programs that ask for them. A dock icon. Tested on the host against the real fs driver. **Not yet run on hardware.** |
+| **Done** (window, redone) | one small window: a headline, Back up now, Show backups (the drive in `files`), Settings (two lines), Remove drive; the Aa icon for a strip. No restore browser: files are copied back, or `backup restore` ("The window"). **Not yet run on hardware.** |
+
+The design and the decisions behind it are recorded at the end
+("Decisions").
+
+### On the board
 
 Not run on hardware yet. To check there, collected for the final
 round:
@@ -763,7 +776,7 @@ round:
 - The drive read on a PC: folders open, README.TXT, and
   `tools/backup_read.py restore` gives the card's files.
 
-## Decisions
+### Decisions
 
 Made with the user, 2026-10-21 (design notes: `claude/backup-proposal.md`
 in the project).

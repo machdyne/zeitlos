@@ -104,12 +104,11 @@ static uint32_t next_dns_tag(void) {
 	return ++tag;
 }
 
-bool z_dns_resolve(const char *hostname, uint32_t *out_ip,
-	char *err, uint32_t err_len) {
+uint32_t z_dns_ask(const char *hostname, char *err, uint32_t err_len) {
 
 	if (!hostname || !hostname[0]) {
 		set_err(err, err_len, "dns: empty hostname");
-		return false;
+		return 0;
 	}
 
 	uint32_t net_pid = resolve_net_pid();
@@ -119,11 +118,48 @@ bool z_dns_resolve(const char *hostname, uint32_t *out_ip,
 		// failure: the kernel shell's `tget host ...` printed its
 		// uninitialised stack buffer.
 		set_err(err, err_len, "net is not running (run `init` or `run net`)");
-		return false;
+		return 0;
 	}
-	uint32_t tag = next_dns_tag();
 
+	uint32_t tag = next_dns_tag();
+	if (!tag) tag = next_dns_tag();		// 0 means "none" to the caller
 	z_msg_new_send(net_pid, Z_NET_DNS_RESOLVE, tag, z_obj_str(hostname));
+	return tag;
+
+}
+
+int z_dns_reply(const z_msg_t *msg, uint32_t tag, uint32_t *out_ip,
+	char *err, uint32_t err_len) {
+
+	if (!tag || msg->subject != Z_NET_DNS_RESOLVE_REPLY || msg->tag != tag) return -1;
+
+	z_obj_t *ok_obj = z_map_find((z_obj_t *)&msg->obj, "ok");
+
+	if (!ok_obj || ok_obj->type != Z_UINT32 || !ok_obj->val.uint32) {
+		z_obj_t *err_obj = z_map_find((z_obj_t *)&msg->obj, "error");
+		if (err_obj && err_obj->type == Z_STR && err_obj->val.str)
+			set_err(err, err_len, err_obj->val.str);
+		else
+			set_err(err, err_len, "dns: resolve failed");
+		return 0;
+	}
+
+	z_obj_t *ip_obj = z_map_find((z_obj_t *)&msg->obj, "ip");
+	if (!ip_obj || ip_obj->type != Z_UINT32) {
+		set_err(err, err_len, "dns: malformed reply from net");
+		return 0;
+	}
+
+	*out_ip = ip_obj->val.uint32;
+	return 1;
+
+}
+
+bool z_dns_resolve(const char *hostname, uint32_t *out_ip,
+	char *err, uint32_t err_len) {
+
+	uint32_t tag = z_dns_ask(hostname, err, err_len);
+	if (!tag) return false;
 
 	uint32_t start = z_uptime_ticks();
 
@@ -132,31 +168,12 @@ bool z_dns_resolve(const char *hostname, uint32_t *out_ip,
 		z_msg_t msg;
 		if (z_msg_read(&msg) != Z_OK) continue;
 
-		if (msg.subject != Z_NET_DNS_RESOLVE_REPLY || msg.tag != tag)
-			continue;	// not a reply to THIS request -- discard and
-						// keep waiting, same as zport.c's own
-						// connect-timeout loop does for anything that
-						// isn't the reply it's waiting for
-
-		z_obj_t *ok_obj = z_map_find(&msg.obj, "ok");
-
-		if (!ok_obj || ok_obj->type != Z_UINT32 || !ok_obj->val.uint32) {
-			z_obj_t *err_obj = z_map_find(&msg.obj, "error");
-			if (err_obj && err_obj->type == Z_STR && err_obj->val.str)
-				set_err(err, err_len, err_obj->val.str);
-			else
-				set_err(err, err_len, "dns: resolve failed");
-			return false;
-		}
-
-		z_obj_t *ip_obj = z_map_find(&msg.obj, "ip");
-		if (!ip_obj || ip_obj->type != Z_UINT32) {
-			set_err(err, err_len, "dns: malformed reply from net");
-			return false;
-		}
-
-		*out_ip = ip_obj->val.uint32;
-		return true;
+		// not a reply to THIS request -- discard and keep waiting, same
+		// as zport.c's own connect-timeout loop does for anything that
+		// isn't the reply it's waiting for (z_dns_ask() is for a caller
+		// that cannot afford that)
+		int r = z_dns_reply(&msg, tag, out_ip, err, err_len);
+		if (r >= 0) return r == 1;
 
 	}
 

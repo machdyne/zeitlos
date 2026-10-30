@@ -83,14 +83,31 @@ bool z_dialog_open(const z_dialog_ctx_t *c, const char *d, char *o, int n) {
 static uint8_t pic[PH_MAX][PW_MAX];
 static long ops_text, ops_glyph, ops_fill;
 
+// The flash: an ink pixel cleared and drawn again is blank in between.
+// `ops` counts drawing calls; a pixel's blank spell is how many passed
+// between its clear and its redraw (flash_* , "flash" below).
+static long ops;
+static int32_t blanked[PH_MAX][PW_MAX];	// ops when cleared, + 1; 0: not
+static long flash_max, flash_sum, flash_n;
+static bool flash_on;
+
 static void px(int x, int y, int c, const z_clip_t *k) {
 	if (x < 0 || y < 0 || x >= content_w || y >= content_h) return;
 	if (k && (x < k->x0 || x > k->x1 || y < k->y0 || y > k->y1)) return;
+	if (flash_on) {
+		if (pic[y][x] && !c && !blanked[y][x]) blanked[y][x] = (int32_t)ops + 1;
+		else if (c && blanked[y][x]) {
+			long gap = ops - (blanked[y][x] - 1);
+			if (gap > flash_max) flash_max = gap;
+			flash_sum += gap; flash_n++;
+			blanked[y][x] = 0;
+		}
+	}
 	pic[y][x] = (uint8_t)c;
 }
 // Glyph cells paint background too, as the blitter does.
 void z_fb_draw_text2(int x, int y, const char *s, int fg, int bg, const z_font_t *f, const z_clip_t *k) {
-	ops_text++;
+	ops_text++; ops++;
 	for (; *s; s++, x += f->w) {
 		ops_glyph++;
 		int g = z_font_index(f, (uint8_t)*s);
@@ -106,7 +123,7 @@ void z_fb_draw_text(int x, int y, const char *s, int c, const z_font_t *f, const
 	z_fb_draw_text2(x, y, s, c, !c, f, k);
 }
 void z_fb_hw_fill_rect(int x, int y, int w, int h, int c) {
-	ops_fill++;
+	ops_fill++; ops++;
 	for (int j = 0; j < h; j++) for (int i = 0; i < w; i++) px(x + i, y + j, c, NULL);
 }
 void z_fb_hw_box(int x0, int y0, int x1, int y1, int c, const z_clip_t *k) {
@@ -281,6 +298,37 @@ int main(int argc, char **argv) {
 		}
 		if (n) printf("%s: one line up, average of %ld: %ld text runs, %ld glyphs, %ld rectangles; "
 			"a full repaint: %ld, %ld, %ld\n", argv[1], n, tr / n, tg / n, tf / n, rr / n, rg / n, rf / n);
+		return 0;
+	}
+
+	// SKIP "flash": Page Down and Page Up from each of the first STARTS
+	// pages: the longest any pixel of the page stays blank between being
+	// cleared and drawn again, in drawing calls -- a full clear first is
+	// a whole page of them, clearing as it draws about a line's.
+	if (!strcmp(argv[4], "flash")) {
+		int pages = argc > 7 ? atoi(argv[7]) : 10;
+		int page = view_h / (BODY_FONT->h + 1);
+		long worst = 0, sum = 0, n = 0, calls = 0, repaints = 0;
+		for (int p = 1; p <= pages; p++) {
+			for (int up = 0; up < 2; up++) {
+				top_line = 0; top_sub = 0;
+				int from = up ? (p + 1) * page : (p - 1) * page;
+				if (scroll_down(from) < from) break;
+				cache_valid = false; drawn_valid = false;
+				memset(pic, 0, sizeof(pic));
+				repaint_body();
+				memset(blanked, 0, sizeof(blanked));
+				flash_max = flash_sum = flash_n = 0; ops = 0; flash_on = true;
+				// as scroll_flush() does for a page key
+				if (up) { scroll_backward(page); } else { scroll_down(page); repaint_body(); }
+				flash_on = false;
+				if (flash_max > worst) worst = flash_max;
+				sum += flash_sum; n += flash_n; calls += ops; repaints++;
+			}
+		}
+		printf("%s: %ld page moves, %ld drawing calls each; a pixel blank for at most %ld of them, "
+			"%.1f on average\n", argv[1], repaints, repaints ? calls / repaints : 0, worst,
+			n ? (double)sum / (double)n : 0.0);
 		return 0;
 	}
 

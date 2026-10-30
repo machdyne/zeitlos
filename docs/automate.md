@@ -92,7 +92,7 @@ so captions still stay up as long as the sentence would have taken.
 | `focus APP` | raise and focus, as a click would |
 | `place APP X Y` | move an open window's top-left corner there (prefer `run ... at`) |
 | `origin APP` / `origin screen` | pointer coordinates are relative to APP's content area from now on |
-| `tbicon APP close\|new\|open\|save\|font` | move the pointer to a titlebar icon and click it |
+| `tbicon APP close\|new\|open\|save\|print\|font\|colour` | move the pointer to a titlebar icon and click it |
 
 **Windows open where they belong.** `run ... at X Y` sends
 `Z_WM_WIN_NEXT_PLACE` (tag 0: the next new process's first window)

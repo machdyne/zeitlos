@@ -29,6 +29,91 @@ whole thing.
 
 ---
 
+## Putting it on a card
+
+What to copy, exactly, to test the app:
+
+**1. The app.** Build it and drop the binary at `apps/ask`:
+
+```
+make -C sw/apps/ask
+cp sw/apps/ask/ask.bin /media/<card>/apps/ask
+```
+
+No extension — that is how every other app on the card is named, and
+`fs_exec_resolve()` finds a bare name in `/apps` ([layout.md](layout.md)).
+
+**2. A pack.** At minimum one, and `arklite` is the one to start with
+because everything it needs is inside the ark repo, so it builds from a
+clone with no downloads:
+
+```
+pip install -r tools/ask/requirements.txt
+./tools/ask/ask build dist/arklite.spec
+cp -r tools/ask/out/arklite/* /media/<card>/
+```
+
+That writes exactly two directories and touches nothing else:
+
+```
+/opt/ark/arklite/     the corpus -- 24 MB, plus index.md in every directory
+/data/ask/arklite/    the index  -- 8 files, 2.1 MB
+```
+
+`MANIFEST.json` is deliberately *outside* the tree, at
+`tools/ask/out/arklite.manifest.json`, because a four-character
+extension cannot be written to a FatFs card here. Do not copy it.
+
+**3. Nothing else.** No kernel change is needed to *try* it — but
+without the `sw/os/kernel.h` tier edit in
+`sw/apps/ask/INTEGRATION.md`, `ask` gets the 16KB default allowance and
+will fail to allocate its index. That edit is the one thing that must
+be flashed, not copied.
+
+Then:
+
+```
+> run wm
+> run ask
+```
+
+Expect ~2.4 s of loading with a progress bar, then `10059 passages,
+1 pack` on the status line.
+
+### If it says something else
+
+The status line carries the reason, and so does UART0. The ones that
+happen:
+
+| message | cause |
+|---|---|
+| `out of memory -- needs APP_STACK = 4M` | the stack the executable asks for (`APP_STACK`, `docs/executables.md`) is too small for this pack. **By far the most likely first-run failure** — everything else can be correct and the app still finds nothing |
+| `/data/ask has no subdirectories` | the pack was copied to `/data/ask/` rather than `/data/ask/<name>/`, or only `/opt/ark/` was copied |
+| `index built by another version of tools/ask -- rebuild the pack` | a pack built before format version 2, when indexes stored whole card paths |
+| `pack files are from different builds` | two distributions mixed in one directory. Every file carries the `dsid`; this is the check that stops confidently wrong answers |
+| `<file>: cannot open (missing? out of handles?)` | an incomplete copy (a pack is up to nine files in `/data/ask/<name>/`), or the board's eight file handles are all in use |
+| `<file>: fs did not answer (timeout)` | the filesystem service did not reply within its 15 s; the card or `fs` is in trouble, not the pack |
+| `<file>: ends early (N of M bytes)` | the file is shorter than its header says: a copy cut short |
+| `<pack>: weaker ranking, ...` | the pack loaded but BM25 runs without chunk lengths (both `lens.zln` and `chunks.zct` unreadable); answers still come, ranked less well. The idle line keeps saying `ranking weaker` |
+
+`hosttest` prints the same string, so pointing it at the mounted card
+tells you what the device will say before you eject it.
+
+### Checking the card before you eject it
+
+```
+$ ls /media/<card>/ask/arklite/
+chunks.zct  coarse.zcv  docs.zdt  encoder.zmd
+fine.zfv    index.zak   lens.zln     lexicon.zlx  post.zlp
+
+$ ./sw/apps/ask/test/hosttest /media/<card> "how do I purify water"
+```
+
+`hosttest` takes a card root, so pointing it at the mounted card runs
+the device's own engine over the actual bytes you are about to boot.
+If it works there and not on hardware, the problem is the app or the
+kernel tier, not the data.
+
 ## The rule
 
 **`ask` finds text. It does not write text. Every word it shows is
@@ -106,123 +191,6 @@ put there. It answers from **the datasets in the installed
 distribution** and nothing else. A result always names its dataset, and
 "no passage in this corpus answers that" is a legitimate and common
 answer.
-
----
-
-## Architecture: a server with a client attached
-
-`ask` follows `web`'s shape (`sw/common/zweb.h`): the app that draws
-the window and the service other processes call are the same process,
-and the service is addressed by registered name rather than by a fixed
-pid.
-
-```
-    any app  --Z_ASK_QUERY-->  ask0  --> index, corpus
-             <--Z_ASK_RESULT--
-```
-
-Three reasons this is a service and not a library:
-
-- The resident index is **1.5MB at the smallest tier** and several
-  megabytes at the largest. Linking that into every caller is not an
-  option; there is one copy and one owner.
-- Loading it costs seconds off the card. A service pays that once at
-  startup, not per caller.
-- `read`, `files`, `repl` and the shell all have reasons to want an
-  answer, and none of them should contain a retrieval engine.
-
-The full protocol is in `sw/common/zask.h`. The short version:
-
-| | |
-|---|---|
-| `Z_ASK_QUERY` → `Z_ASK_RESULT` | ask a question, get ranked hits |
-| `Z_ASK_PREVIEW` → `Z_ASK_TEXT` | the bytes of one hit |
-| `Z_ASK_BROWSE` → `Z_ASK_LIST` | the dataset/title tree |
-| `Z_ASK_CANCEL` | abandon a query in flight |
-| `Z_ASK_INFO` → `Z_ASK_INFO_REPLY` | what distribution is installed |
-
----
-
-## Responsiveness
-
-Zeitlos is a responsive system and `ask` must not be the app that
-breaks that promise. A few seconds for an answer is fine. A frozen
-machine for a few seconds is not.
-
-**The scan is incremental and interruptible.** The coarse pass over the
-vector array is chunked into slices of `Z_ASK_SCAN_SLICE` vectors. The
-app returns to its message loop between slices, so the window redraws,
-the progress bar moves, `ESC` cancels, and `wm` keeps getting its
-messages. Nothing in `ask` ever holds the CPU across a whole query.
-
-This is the same discipline `docs/app_runtime.md` records for every
-other app in the tree under "Every app now yields", and for the same
-reason: a process that spins is a process that makes the whole desktop
-feel dead.
-
-**Cancellation is immediate and cheap.** The scan holds no lock and
-allocates nothing per slice, so `Z_ASK_CANCEL` just stops. A query the
-user has already given up on never costs another cycle.
-
-**Progress is honest.** The bar tracks vectors scanned, which is a real
-fraction of a known total, not a guess.
-
-### Loading
-
-**Loading is incremental too** ([responsive.md](responsive.md)). The
-window comes up at once and the packs load from the main loop, one
-request to `fs` at a time (`ai_load_step()`, at most 16KB each, about
-20ms of them per pass), so between requests the window redraws, keys
-are answered and the close icon works. Loading used to be one call
-made before the loop started, which drew the window once and then
-answered nothing -- not a redraw, not Esc, not close -- until every
-pack was in.
-
-The status line says which pack and how far: `Loading zdocs 40%  Esc
-stops`, from 0 again for each pack. A pack's button appears as soon as
-that pack is in.
-
-**Typing works while loading.** The question line takes keys from the
-first frame. **Enter** before the packs are in queues the question
-(`Loading zdocs 40%, then search`), and it runs when loading ends --
-over all the packs, not the ones that happened to be in when Enter was
-pressed, so the answer does not depend on how quick the card was.
-**F1** shows help as usual.
-
-**Esc stops loading.** The packs already in stay loaded and answer
-questions (`loading stopped, 1 pack loaded`); the one being loaded is
-freed and its file closed. With none in, the line says `loading
-stopped -- no packs loaded`. A queued question is dropped with it --
-Esc meant stop. Run `ask` again to load everything.
-
-**What a load reads**, per pack: `index.zak` once (header, body and the
-seek self-test on one handle -- it used to be opened three times), the
-coarse vectors and encoder if the pack is dense, `lens.zln`, and
-`lexicon.zlx`'s header. For `zdocs` (4,289 chunks, lexical only) that
-is 13 requests and 9KB, against 89 requests and 69KB before. A pack
-built before `lens.zln` existed is read the old way, through
-`chunks.zct` -- now in 16KB blocks rather than 1KB: 18 requests,
-69KB.
-
-**When something is wrong, it says what.** A pack that cannot load
-names the file and the cause: `index.zak: fs did not answer
-(timeout)`, `lens.zln: ends early (2048 of 8620 bytes)`, `chunks.zct:
-cannot open (missing? out of handles?)`, and the header failures as
-before (another version, different builds). A timeout and a short read
-used to be the same "short read from card". A pack that loads but
-works less well -- BM25 without its chunk lengths, a dense pack without
-its encoder, a lexicon whose header cannot be read -- says so: the
-reason after loading, then `, ranking weaker` on the idle line for as
-long as it is true. Losing the lengths used to be silent.
-
-`make -C sw/apps/ask/test loadtest` checks all of this on the host,
-under AddressSanitizer: the stepped load gives the same packs and
-lengths as reading `chunks.zct` directly; a copy of the pack without
-`lens.zln` gives the same again; a load stopped after each of its
-steps holds no file and no memory beyond the packs it reports; and
-with each request failing in turn (an error, a timeout, an early end of
-file) nothing leaks and every outcome is a whole pack, a warning, or a
-named refusal.
 
 ---
 
@@ -416,7 +384,138 @@ wrong paragraph. The shared `/docs` stays where it is for `read` and
 
 ---
 
-## Where things live on the card
+## Responsiveness
+
+Zeitlos is a responsive system and `ask` must not be the app that
+breaks that promise. A few seconds for an answer is fine. A frozen
+machine for a few seconds is not.
+
+**The scan is incremental and interruptible.** The coarse pass over the
+vector array is chunked into slices of `Z_ASK_SCAN_SLICE` vectors. The
+app returns to its message loop between slices, so the window redraws,
+the progress bar moves, `ESC` cancels, and `wm` keeps getting its
+messages. Nothing in `ask` ever holds the CPU across a whole query.
+
+This is the same discipline `docs/app_runtime.md` records for every
+other app in the tree under "Every app now yields", and for the same
+reason: a process that spins is a process that makes the whole desktop
+feel dead.
+
+**Cancellation is immediate and cheap.** The scan holds no lock and
+allocates nothing per slice, so `Z_ASK_CANCEL` just stops. A query the
+user has already given up on never costs another cycle.
+
+**Progress is honest.** The bar tracks vectors scanned, which is a real
+fraction of a known total, not a guess.
+
+### Loading
+
+**Loading is incremental too** ([responsive.md](responsive.md)). The
+window comes up at once and the packs load from the main loop, one
+request to `fs` at a time (`ai_load_step()`, at most 16KB each, about
+20ms of them per pass), so between requests the window redraws, keys
+are answered and the close icon works. Loading used to be one call
+made before the loop started, which drew the window once and then
+answered nothing -- not a redraw, not Esc, not close -- until every
+pack was in.
+
+The status line says which pack and how far: `Loading zdocs 40%  Esc
+stops`, from 0 again for each pack. A pack's button appears as soon as
+that pack is in.
+
+**Typing works while loading.** The question line takes keys from the
+first frame. **Enter** before the packs are in queues the question
+(`Loading zdocs 40%, then search`), and it runs when loading ends --
+over all the packs, not the ones that happened to be in when Enter was
+pressed, so the answer does not depend on how quick the card was.
+**F1** shows help as usual.
+
+**Esc stops loading.** The packs already in stay loaded and answer
+questions (`loading stopped, 1 pack loaded`); the one being loaded is
+freed and its file closed. With none in, the line says `loading
+stopped -- no packs loaded`. A queued question is dropped with it --
+Esc meant stop. Run `ask` again to load everything.
+
+**What a load reads**, per pack: `index.zak` once (header, body and the
+seek self-test on one handle -- it used to be opened three times), the
+coarse vectors and encoder if the pack is dense, `lens.zln`, and
+`lexicon.zlx`'s header. For `zdocs` (4,289 chunks, lexical only) that
+is 13 requests and 9KB, against 89 requests and 69KB before. A pack
+built before `lens.zln` existed is read the old way, through
+`chunks.zct` -- now in 16KB blocks rather than 1KB: 18 requests,
+69KB.
+
+**When something is wrong, it says what.** A pack that cannot load
+names the file and the cause: `index.zak: fs did not answer
+(timeout)`, `lens.zln: ends early (2048 of 8620 bytes)`, `chunks.zct:
+cannot open (missing? out of handles?)`, and the header failures as
+before (another version, different builds). A timeout and a short read
+used to be the same "short read from card". A pack that loads but
+works less well -- BM25 without its chunk lengths, a dense pack without
+its encoder, a lexicon whose header cannot be read -- says so: the
+reason after loading, then `, ranking weaker` on the idle line for as
+long as it is true. Losing the lengths used to be silent.
+
+`make -C sw/apps/ask/test loadtest` checks all of this on the host,
+under AddressSanitizer: the stepped load gives the same packs and
+lengths as reading `chunks.zct` directly; a copy of the pack without
+`lens.zln` gives the same again; a load stopped after each of its
+steps holds no file and no memory beyond the packs it reports; and
+with each request failing in turn (an error, a timeout, an early end of
+file) nothing leaks and every outcome is a whole pack, a warning, or a
+named refusal.
+
+---
+
+## See also
+
+- `sw/common/zask.h` — the service protocol
+- `docs/read_app.md` — the reader `ask` hands documents to
+- `docs/web_app.md` — the server/client shape this follows
+- `docs/montmul.md` — what an accelerator in this tree looks like
+- `docs/sdcard.md` — the 604 KB/s the preview path is budgeted against
+
+---
+
+## For developers
+
+How it is built and how it is tested. Nothing here is needed to use it.
+
+### Architecture: a server with a client attached
+
+`ask` follows `web`'s shape (`sw/common/zweb.h`): the app that draws
+the window and the service other processes call are the same process,
+and the service is addressed by registered name rather than by a fixed
+pid.
+
+```
+    any app  --Z_ASK_QUERY-->  ask0  --> index, corpus
+             <--Z_ASK_RESULT--
+```
+
+Three reasons this is a service and not a library:
+
+- The resident index is **1.5MB at the smallest tier** and several
+  megabytes at the largest. Linking that into every caller is not an
+  option; there is one copy and one owner.
+- Loading it costs seconds off the card. A service pays that once at
+  startup, not per caller.
+- `read`, `files`, `repl` and the shell all have reasons to want an
+  answer, and none of them should contain a retrieval engine.
+
+The full protocol is in `sw/common/zask.h`. The short version:
+
+| | |
+|---|---|
+| `Z_ASK_QUERY` → `Z_ASK_RESULT` | ask a question, get ranked hits |
+| `Z_ASK_PREVIEW` → `Z_ASK_TEXT` | the bytes of one hit |
+| `Z_ASK_BROWSE` → `Z_ASK_LIST` | the dataset/title tree |
+| `Z_ASK_CANCEL` | abandon a query in flight |
+| `Z_ASK_INFO` → `Z_ASK_INFO_REPLY` | what distribution is installed |
+
+---
+
+### Where things live on the card
 
 The whole card, with who owns each part. **Nothing `ask` writes
 overlaps anything the release writes**, which is what lets the two
@@ -491,7 +590,7 @@ Measured across a co-installed `arklite` + `arkmed` card: 1,948 paths,
 no collisions, longest path 32 characters — 43 of `Z_WM_ARG_MAX`'s 96
 bytes once a ten-digit `#offset` fragment is appended.
 
-### HTML sources become markdown at build time
+#### HTML sources become markdown at build time
 
 The 2008 Wikipedia selection in `arkmed` ships as HTML, and the first
 build of that pack indexed it as HTML. That is the worse half of the
@@ -534,7 +633,7 @@ alternative to this. As a separate feature it is still worth having:
 so local files would mostly be plumbing plus an open control, and
 `ztype.c` has no `HTM` entry to route them with yet.
 
-### A heading is a heading, not any line starting with "Act"
+#### A heading is a heading, not any line starting with "Act"
 
 `split=` prefers to cut at chapter headings, and the pattern it used
 read the number as `[A-Za-z0-9IVXLC]+` -- which is simply "any word",
@@ -572,7 +671,7 @@ Text with no headings is still bounded by size and labelled `part 2`,
 `tools/ask/tests/test_split.py` covers both halves: that real headings
 are found, and that prose is not mistaken for one.
 
-### Index pages group split parts
+#### Index pages group split parts
 
 `split=` turns a book into a document per chapter, which is right for
 retrieval and for `read`'s lazy index -- and made a dataset index that
@@ -593,7 +692,7 @@ rather than being `index.md` in an image directory, which meant
 nothing linked to them and the only way to reach them was to know they
 existed.
 
-### Everything is `.md`, including plain text
+#### Everything is `.md`, including plain text
 
 `sw/common/ztype.c` maps `MD` to `read` and `TXT` to **`text`** — the
 editor. A corpus emitted as `.txt` would have every link in a generated
@@ -608,7 +707,7 @@ are already markdown, MedlinePlus is clean prose, and a field manual's
 indented passages, which `md.c` reads as code blocks and draws in the
 body font anyway.
 
-### Generated indexes, so the card works without `ask`
+#### Generated indexes, so the card works without `ask`
 
 The numbered filenames are unreadable by design, and `ask` is the
 intended way around that. It should not be the *only* way around it: a
@@ -637,7 +736,7 @@ These are written after chunking and are never themselves indexed.
 They are navigation, not corpus; indexing a page of links would put a
 list of titles into the retrieval results.
 
-### Handing a document to `read`
+#### Handing a document to `read`
 
 **Yes — any byte offset, in any text file, of any size, rendered
 correctly.** The machinery already exists and is already exercised.
@@ -666,7 +765,7 @@ off the launch argument and call the function it already has. A `read`
 without that change still opens the file, just at the top, so the two
 can be flashed independently.
 
-#### The one real cost
+##### The one real cost
 
 `extend_index()` never moves backwards, so opening a document at byte N
 means streaming N bytes off the card first. `docs/sdcard.md` measures
@@ -691,7 +790,7 @@ into the embedding.
 
 ---
 
-## Shipping
+### Shipping
 
 **A distribution is not part of a release.** Zeitlos releases go out
 monthly; a corpus is rebuilt when the corpus changes and a model is
@@ -752,635 +851,7 @@ referenced.
 
 ---
 
-## Software first, hardware later
-
-`ask` is **software-only today and will always work software-only.**
-The accelerator is an optimisation, not a dependency, and a board that
-cannot fit it loses seconds rather than the feature.
-
-The costs, at the `arklite` tier:
-
-| Stage | Work | Software | With a MAC engine |
-|---|---|---|---|
-| Encode query (`bow`) | ~10K MACs | negligible | negligible |
-| Coarse scan, 4,698 × 32 | 150K MACs | ~0.08 s | ~0.01 s |
-| Lexical, ~5 terms | postings read | ~0.1 s | ~0.1 s |
-| Re-rank top 256 × 128 | 33K MACs | ~0.02 s | ~0.01 s |
-
-At this tier the whole thing is already fast enough in software and the
-hardware buys little. That changes with corpus size: the coarse scan is
-linear in chunk count, so at 250,000 chunks it is 8M MACs — about four
-seconds in software against roughly half a second accelerated.
-
-**The coarse scan is the accelerator's workload** and it is the easiest
-one imaginable: a contiguous `int8` array, read once, no branches, no
-random access, no dependency between rows. One descriptor, one
-streaming read. It needs less state than `rtl/montmul.v`, which is 983
-LUT4 with **no BRAM**, so it should fit an ECP5-25F (Lakritz) with
-nothing to spare and go faster on a 45F (Mozart ML1) with a wider array
-and a scratchpad. That is a `boards.vh` define, a `CSR_FEATURES2` bit
-and a self-test-then-fall-back check on the software side — `web`'s
-arrangement for montmul, for the same reason.
-
-None of that is built yet. See "Status".
-
----
-
-## Retrieval: measured, not assumed
-
-Both halves are real and both are necessary.
-
-**Lexical (BM25).** Wins where an exact token is the point: `lakritz`,
-`0x7000_0600`, `nextpnr-ecp5`, a drug name. Embeddings blur a rare
-string toward whatever it resembles; BM25 does not.
-
-**Dense.** Wins where the words differ from the text: "my water might
-be contaminated" finds the boiling passage that never says
-"contaminated".
-
-**They are fused with reciprocal rank fusion** — scale-free, one
-constant, and it does not require BM25 scores and `int32` dot products
-to be comparable, which they are not.
-
-### Three query styles, and the dense half loses all three
-
-The gold set is 127 questions in three tagged halves, because people do
-not type one way:
-
-- **`direct`** — a question using the words the answer uses.
-- **`paraphrase`** — a situation in the words somebody reaches for
-  *before* knowing the term. "my hands went white and numb out in the
-  cold" must find the frostbite passage without sharing a word.
-- **`keyword`** — two or three words, no grammar. `ask`'s input box is
-  forty columns; this is probably the commonest style in practice.
-
-Untrained `bow`, on arklite:
-
-| | lexical @1 | dense @1 | hybrid @1 |
-|---|---|---|---|
-| `keyword` (23) | **21/23 — 91%** | 10/23 | 16/23 |
-| `direct` (53) | 39/53 | 30/53 | 39/53 |
-| `paraphrase` (36) | 13/36 | 7/36 | 9/36 |
-| **all (112)** | **73/112** | 47/112 | 64/112 |
-
-**BM25 alone beats the fused result in every style.** Fusion costs nine
-questions at rank 1 overall and five of twenty-three on keywords, where
-BM25 is at 91% and has nothing to gain from a second opinion.
-
-The keyword result is structural rather than bad luck. A `bow` query
-vector is the idf-weighted mean of its term vectors, and averaging two
-or three is a far noisier estimate than averaging the ten or twelve a
-written question supplies. There is no syntax for the encoder to
-recover, because there was none.
-
-### More questions flipped the sign
-
-The same sweep at two levels of genq coverage, dense @1 against its own
-untrained baseline:
-
-| imported questions | baseline | trained | |
-|---|---|---|---|
-| 7,763 (~20% of the corpus) | 30/53 | 25/53 | **−5** |
-| 16,621 (~42%) | 37/89 | 42/89 | **+5** |
-
-Doubling the training questions turned training from actively harmful
-into a gain. Hybrid at rank 1 went 48/89 → 52/89 at two epochs, with a
-paired bootstrap of +4 [−2, +10], P=0.83.
-
-That does not clear the usual 0.95 bar and should not be reported as
-if it did. But one and two epochs BOTH improve (P=0.76 and 0.83) and
-four, eight and sixteen all get worse, monotonically — a fluke would
-not be ordered like that and then reverse cleanly. The 8-epoch row at
-P=0.05 is the same evidence read the other way: overtraining hurts, and
-it hurts reliably.
-
-The sweep now also breaks the change down **by question style**, which
-is the measurement that actually decides whether to keep the dense
-half. A gain concentrated on `direct` or `keyword` is the encoder
-getting better at a job BM25 already does better, and is not worth
-0.9MB resident. A gain on `paraphrase` is the encoder doing the one
-thing only it can do.
-
-### The decision, and how it came out
-
-**`dense = no`. `ask` ships BM25 only.**
-
-The pre-registered rule required a paraphrase gain of +4 or more. The
-full sweep, on 39,395 generated questions over the whole corpus,
-produced at best **+3**. The rule failed on its own terms.
-
-It then failed a second, more generous test. The dense half genuinely
-improved with full coverage — trained at one epoch it gained **+7 at
-rank 1** on its own, the largest effect measured anywhere in this
-work — but the fused output moved by one question. So the fusion weight
-was swept, with no retraining, to find out how much of that gain was
-recoverable:
-
-| w_dense | @1 | @3 | @10 | direct | keyword | paraphrase |
-|---|---|---|---|---|---|---|
-| **0** | **73/112** | 88/112 | **100/112** | 39/53 | **21/23** | **13/36** |
-| 0.25 | 69/112 | **89/112** | 98/112 | 41/53 | 19/23 | 9/36 |
-| 0.5 | 68/112 | 84/112 | 98/112 | **42/53** | 18/23 | 8/36 |
-| 1 | 67/112 | 80/112 | 93/112 | 40/53 | 17/23 | 10/36 |
-| 2 | 57/112 | 72/112 | 84/112 | 36/53 | 13/23 | 8/36 |
-| 4 | 55/112 | 67/112 | 84/112 | 35/53 | 12/23 | 8/36 |
-
-Monotone toward zero, and w = 0 is lexical alone. **No fusion weight
-beats not fusing.** Lexical wins overall at rank 1 and rank 10, and
-wins both styles that matter — keyword 21/23 against 19, and
-paraphrase 13/36 against 10.
-
-Paraphrase is the one that settles it. That is the case the dense half
-exists for, and BM25 is *better at it* than any hybrid configuration
-tried.
-
-### What that buys
-
-`coarse.zcv` and `encoder.zmd` are the only resident structures, so
-dropping them takes an `arklite` pack from 0.90MB resident to
-**nothing**. No `Z_PROC_STACK_SIZE_HUGE`, no 4MB allocation, no
-training step, and the app would fit a 1MB board. For better answers.
-
-### What was learned, and what is still there
-
-The negative result is worth as much as a positive one would have been,
-and it took a specific sequence to reach honestly: a gold set that had
-to be caught favouring BM25 by construction, a second half of questions
-written to test the case dense retrieval exists for, a third for the
-keyword style that turned out to be BM25's strongest, a significance
-test to stop noise being read as signal, and a decision rule written
-down before the data.
-
-Without any one of those, "hybrid 52/89, best at 2 epochs" would have
-shipped as a win.
-
-Nothing is deleted. `encoder = trained` and `dense = yes` still work,
-`ask genq`/`train`/`eval --fuse-sweep` still measure, and the device
-still reads a pack with vectors if one is installed. The bar for
-turning it back on is now precise and published: **beat 13/36 on
-paraphrase without losing keyword.** A better encoder — a trained
-transformer rather than a bag of embeddings, or an asymmetric setup
-with a real teacher on the document side — is a live option, and this
-is the harness to evaluate it with.
-
-### The decision, written down before the data
-
-Recorded in advance deliberately. Once a sweep is on the screen it is
-easy to find a reading that justifies whichever answer one already
-preferred, and the effects here are small enough that a reading can
-always be found.
-
-Re-run after genq completes:
-
-```
-./tools/ask/ask train dist/arklite.spec --sweep 1,2,4,8,16
-```
-
-with the full 127-question gold set. Then:
-
-**Keep the dense half** (`dense = yes`, `train_epochs` = whichever of 1
-or 2 wins) if BOTH hold:
-
-- `paraphrase` hybrid@1 improves by **+4 or more**, and
-- `keyword` hybrid@1 does not fall by more than **1**.
-
-The first is the only job the encoder has that BM25 cannot do. The
-second is the guard: keyword queries are BM25 at 91% and the commonest
-style in practice, so a paraphrase gain paid for by keyword losses is
-not a gain.
-
-**Ship `dense = no`** if the paraphrase gain is under +2, or if
-keywords regress by 2 or more. That is not a failure — it is a 0.9MB
-saving, no HUGE tier, no training step, and a pack that fits a 1MB
-board.
-
-**Anything between those** is undecided, and the answer is more gold
-questions rather than a judgement call. Paraphrase is 36 questions;
-doubling it costs an evening and would resolve a ±3 effect that
-currently cannot be resolved at all.
-
-One thing that is already settled regardless: **4 or more epochs is
-worse than not training**, consistently, at every coverage level
-measured. If the winner comes back as 8 or 16, something changed and
-that is the thing to look at first.
-
-### `dense = no`
-
-So a recipe can ship a pack with no vectors and no encoder:
-
-```
-  dense half OFF -- lexical only, nothing held resident
-  resident on device: 0.00 MB
-  fits kernel tier:   BIG (needs 0.10 MB incl. stack headroom)
-```
-
-against 0.90MB and a HUGE tier with the dense half on. `coarse.zcv` and
-`encoder.zmd` are the *only* things `ask` holds resident, so dropping
-them removes essentially all of it — the dictionary is binary-searched
-on the card and postings are read per term.
-
-**That is a different machine.** No 4MB allocation, no HUGE tier, no
-training step, and it would fit a 1MB board. For better answers.
-
-The argument for keeping the dense half is `paraphrase`, where
-everything is weak (36% at best) and there is real headroom. That is
-the case a trained encoder has to win, and until it does, `dense = no`
-is the honest default.
-
-### The gold set was rigged toward BM25, and I built it that way
-
-53 of the first 63 questions shared a literal term between the question
-and the regex defining a correct answer. That is exactly what BM25
-ranks on, so a passage could only count as relevant if it contained a
-word the query also contained — the metric rewarded term matching by
-construction.
-
-Not purely artificial: people really do type the right words most of
-the time. But it systematically under-samples the one case dense
-retrieval exists for, which is when they do not.
-
-So the set is now **99 questions in two tagged halves**, and `ask eval`
-reports them separately:
-
-| | lexical @1 | dense @1 | hybrid @1 |
-|---|---|---|---|
-| `direct` (53) | 39/53 | 30/53 | 39/53 |
-| `paraphrase` (36) | **13/36** | 7/36 | 9/36 |
-
-`paraphrase` questions describe a situation in the words somebody
-reaches for *before* knowing the technical term — "my hands went white
-and numb out in the cold" must find the frostbite passage without
-either sharing a word.
-
-**Everything collapses there.** Lexical drops from 74% to 36%, dense
-from 57% to 19%. This is the half of the problem the system does not
-solve, and it was invisible until the questions existed.
-
-It also changes what the dense half is for. On `direct` questions BM25
-is unbeatable and fusion is a net negative below rank 1. On
-`paraphrase` the whole field is weak, so there is somewhere to go —
-and that is where a trained encoder has to prove itself.
-
-### The numbers, and what they say
-
-`ask eval` against a hand-written **63-question** gold set, on
-`arklite` + `zdocs` (1,590 documents, 13,211 chunks). Rank of the first
-relevant hit:
-
-| | @1 | @3 | @10 |
-|---|---|---|---|
-| lexical | 42/63 | 55/63 | **62/63** |
-| dense (`bow`) | 40/63 | 52/63 | 55/63 |
-| coarse only (32-dim) | 16/63 | 25/63 | 44/63 |
-| hybrid | **43/63** | 51/63 | 59/63 |
-
-**Read that honestly. Hybrid wins by one at rank 1 and loses at ranks
-3 and 10.** BM25 alone puts the answer in the top ten for 62 of 63
-questions; fusing the untrained dense half *costs* three of them.
-
-The gold set was twelve questions before this and said hybrid 8/12
-against lexical 9/12 — the right shape, but the run-to-run variation
-from a chunking change was the same size as the effect. At 63 the
-statement is sharp enough to act on: **a trained encoder has to beat
-42/63 at rank 1 and 62/63 at rank 10, and today's untrained one does
-neither.**
-
-That is the whole reason the harness was built before the encoder.
-Anyone who skipped measuring would have shipped the dense half on the
-strength of it being the interesting part.
-
-### Shortlist depth, which is a sizing number
-
-The two-stage design only works if the coarse pass keeps the right
-chunk in the shortlist the fine pass re-ranks. If it does not, no
-fine-stage accuracy recovers it — the answer was thrown away before
-anything good looked at it.
-
-```
-  top 32     48/63  ##############################
-  top 64     52/63  #################################
-  top 128    54/63  ##################################
-  top 256    60/63  ######################################
-  top 512    62/63  #######################################
-  top 1024   63/63  ########################################
-```
-
-So the shortlist is **512**, not the 256 assumed earlier. That is
-512 × 128 bytes = 64KB of fine vectors read per query, about 110–220ms
-at a realistic 300–600 KB/s — and it is a floor set by measurement, not
-a knob.
-
-It also says something uncomfortable about the coarse stage: a 32-dim
-truncation of an untrained `bow` vector is a weak filter. Either
-`coarse_dim` grows, or the encoder is trained with Matryoshka losses so
-truncation degrades gracefully, or the shortlist stays deep. The third
-is free today and the second is the right answer.
-
-### Chunking earns its keep
-
-Every chunk is embedded with its heading path prepended:
-
-```
-Survival > First Aid > Bleeding: If you cannot remember the exact
-location of the pressure points...
-```
-
-The heading is **not** part of the stored byte range — it costs nothing
-on the card and nothing at query time. Without it, a mid-document
-paragraph is embedded with no idea what it is about, which measurably
-wrecks retrieval on long manuals.
-
----
-
-## Generating questions with a local LLM
-
-Training on Inverse Cloze pairs moved gold-set recall by **one
-question out of 53**, because ICT teaches the model to match
-declarative documentation prose to its own paragraph — which is not
-the task. Nobody types *"The blitter is its own bus master."* They type
-*"how do I delete a file"*.
-
-The bottleneck was never the optimiser. It was that there were no
-questions. `ask genq` produces them:
-
-```
-./tools/ask/ask genq  dist/arklite.spec --model qwen3.8:27b --limit 50
-./tools/ask/ask genq  dist/arklite.spec --model qwen3.8:27b
-./tools/ask/ask train dist/arklite.spec
-./tools/ask/ask eval  dist/arklite.spec
-```
-
-**Start with `--probe`.** It runs one passage and shows the raw reply,
-the token count, the tok/s and an estimate for the full corpus. A bad
-model choice otherwise costs hours before anything is visible.
-
-```
-$ ./tools/ask/ask genq dist/arklite.spec --probe -m qwen3.5:9b
-  passage: The Magna Carta (+0, 1863 chars)
-  12.4s wall, 400 output tokens, 32.2 tok/s
-  *** hit the 400-token cap -- the reply was CUT OFF. ***
-      Almost always a reasoning model emitting <think>.
-```
-
-### Reasoning models
-
-The qwen3 family, deepseek-r1 and openthinker emit a `<think>` block of
-thousands of tokens before answering. For a reply that is four short
-questions, that is minutes per passage instead of seconds — and the
-reply usually hits the output cap mid-thought, so nothing parses.
-
-`genq` sends `think: false`, caps output at 400 tokens, pins
-`num_ctx` to 4096 and sets `keep_alive` so the model is not reloaded
-between passages. Older ollama builds that reject `think` are retried
-without it. If failures still pile up, the run says so:
-
-```
-*** every failure hit the 400-token cap. This model is emitting a
-    reasoning block. Try a non-reasoning model (llama3.2, gemma) ***
-```
-
-The reply is also constrained to a JSON schema, which removes the
-fences and commentary entirely on any ollama new enough to support it.
-
-### Which model
-
-The task is comprehension and rephrasing, not reasoning: read a
-passage, say what it answers. Small non-reasoning models do it well,
-and against ~10,000 passages throughput dominates. `llama3.2:latest`
-at 2GB produces questions like these, from the Magna Carta:
-
-```
-How do I pay my barony's relief?
-What is a knight's fee?
-How do I inherit land directly from the Crown?
-```
-
-That is the thing Inverse Cloze cannot produce — situational phrasing
-somebody would type *before* reading anything.
-
-`--compare m1,m2,m3 --limit 20` benchmarks models against each other on
-the same passages and reports seconds per passage, projected hours for
-the full corpus, decline rate, and **`novel`**: the share of question
-words that do *not* appear in the passage. That last one is the metric
-that matters. A model echoing the passage's own vocabulary has
-reinvented ICT, which measured at plus one question out of 53. Prefer
-the fastest model whose novel rate matches the others.
-
-### Generated questions are not automatically grounded
-
-The first chunk of *The American Frugal Housewife* (1832) is a title
-page, a dedication and illustration captions listing cuts of mutton and
-pork. llama3.2 produced:
-
-```
-How do I purify water?
-What are water purification tablets?
-My water looks muddy
-What is soap made from?
-```
-
-None of that is in the passage. The model inferred what a book with
-that title probably contains — "purification tablets" in 1832 being
-the tell. Trained on, those pairs teach the encoder to point *"how do
-I purify water"* at a title page, which is worse than not training at
-all.
-
-So an imported question must share **at least one content term** with
-its passage. Weak on purpose: "my water looks muddy" against a passage
-about boiling still shares `water`, while a question sharing nothing is
-either about a different passage or about nothing. A stronger check —
-does the passage contain the *answer* — needs a model, and the point is
-to spend the model's time generating rather than verifying.
-
-Only `import` pairs are filtered; `ict`, `title` and `terms` are
-derived from the passage by construction. The drop rate is reported,
-and a high one means the corpus is full of front matter rather than
-that the model is bad.
-
-### Duplicate questions and false negatives
-
-Generated questions create a training hazard that ICT mostly avoids.
-
-One document yields many chunks, and their questions overlap by
-construction — two chunks of the Magna Carta both produce "What is the
-Magna Carta?". InfoNCE treats every other passage in a batch as a
-negative, so those two chunks in one batch trains the model to push a
-*correct* passage away from a *correct* query. The loss cannot tell
-that from a real negative.
-
-So batches now take **at most one pair per document**, and exact
-duplicate questions are dropped. Implemented as a round robin over
-document buckets: the obvious version — scan, defer collisions,
-rebuild — is quadratic, and at 18,517 pairs that is minutes per epoch
-rather than seconds.
-
-Two bugs found building it, both of the silent kind:
-
-- With fewer documents than the batch size (`zdocs` has 85 against a
-  default batch of 128) no batch could satisfy the constraint, so the
-  batcher yielded **nothing** and training silently did not run —
-  reporting a loss of exactly `0.0000`, which is a division by a batch
-  count of zero. The batch size is now reduced to fit and says so, and
-  a run that produces no batches raises instead of pretending.
-- The tail batch is dropped rather than padded: a partial batch has
-  fewer negatives, so its gradient is on a different scale from every
-  other batch.
-
-### Declined is not the same as failed
-
-A passage the model *looked at and declined* — boilerplate, a licence,
-a contents page — is recorded, so a resume does not ask again.
-
-A passage that **failed** — a truncated reply, a dropped connection, a
-reasoning block that never reached the answer — is **not** recorded, so
-a retry picks it up.
-
-The first version conflated them and wrote `skip: true` for both, which
-permanently blanked every passage a transient failure touched. If a
-`.jsonl` from that version has `skip` markers that should not be there,
-delete it and start again; a run against a working model produces no
-skips at all for ordinary prose.
-
-**It is resumable, and that is not optional.** 10,059 passages at a few
-seconds each is hours, and anything that long gets interrupted. Every
-line is flushed as written, and a re-run skips what is already there —
-including passages the model *declined*, which get a `skip` marker.
-Without that, the one-in-eight boilerplate passages would be retried on
-every resume.
-
-**Pairs are keyed by document and byte offset, not chunk index.** A
-chunk index shifts whenever the corpus or `chunk_chars` changes, and
-hours of generated questions silently re-attaching to the wrong
-passages after a tweak would be a bad trade. Anything that no longer
-resolves is reported, not ignored.
-
-Model output is messy no matter what the prompt says — fences,
-commentary, `<think>` blocks — so the parser finds the JSON array
-rather than trusting the whole reply. Verified against a mock server
-that reproduces all of those.
-
-## The corpus mattered more than the model
-
-`how to delete a file` returned **Alice in Wonderland**, then Sun Tzu,
-then Hamlet. Nothing in those books is relevant. All three carry the
-Project Gutenberg licence, which talks about disks, copying,
-distributing and *"if you either delete this file"* — so a corpus of
-600 books contained 600 near-copies of the same few thousand words
-about deleting files.
-
-Alice is **250 lines of licence before the first word of the story.**
-
-The `books` adapter now strips it. Two formats: modern texts mark the
-body with `*** START OF THE PROJECT GUTENBERG EBOOK ***`, and the
-2001-era etexts in Ark Lite predate that and end their header with
-`*END*THE SMALL PRINT!`. A file matching neither is left alone —
-guessing where a book starts is worse than shipping a licence.
-
-| | @1 | @3 | @10 |
-|---|---|---|---|
-| dense, before | 31/53 | 41/53 | 46/53 |
-| dense, after | 30/53 | **43/53** | 46/53 |
-| hybrid, before | 37/53 | 44/53 | 51/53 |
-| hybrid, after | **39/53** | 44/53 | 51/53 |
-
-Two questions on hybrid, and the qualitative change is larger than that
-suggests: Alice, Hamlet and Sun Tzu are gone from the results
-entirely, and the Unix article moved from rank 4 to rank 2. The
-remaining rank-1 hit is *Carpentry for Boys*, where a "file" is a
-genuine woodworking tool — a real ambiguity rather than a corpus
-defect.
-
-Worth remembering before reaching for the model again: this was a
-bigger win than training, and it was an hour of reading the corpus.
-
-**It came back with `arkmed`.** Only the `books` adapter strips
-licences by default. The Gutenberg CD and the Factbook come in through
-`listed` and `onefile`, which read mostly non-Gutenberg text and so do
-not -- and the first `arkmed` build indexed the small print of every
-book on the CD. The recipe now says `gutenberg=yes` on both lines
-(`onefile` learned the option for it). The same build also showed
-Ark's list files are HTML-escaped (`Happy Prince &amp; Other Tales`),
-so `listed` decodes titles now: a title is what every result line
-shows.
-
-## Training the encoder
-
-The device computes exactly one thing (`aidx.c`, `encode_query`):
-
-```
-v = normalise( sum over query terms t of  a[t] * W[t] )
-```
-
-`W` is a vocab × dim table of int8 vectors and `a` is a per-term weight
-in Q8.8. Untrained, both come from an SVD of the corpus.
-
-**So the thing to train is `W` and `a`.** That is a linear
-bag-of-embeddings dual encoder, and training it needs **no new C on the
-device, no format change, and no GPU** — 4096 × 128 is 524,288
-parameters and it converges in minutes of numpy.
-
-```
-./tools/ask/ask train dist/arklite.spec
-./tools/ask/ask eval  dist/arklite.spec
-./tools/ask/ask build dist/arklite.spec
-```
-
-Training pairs come from the corpus itself, no labels required:
-
-- **`ict`** — Inverse Cloze. A sentence is removed from a passage and
-  used as the query; the passage minus that sentence is the positive.
-  The removal matters: leave it in and the model learns "find the
-  passage containing these exact words", which BM25 already does
-  better. This is how ORQA and DPR pretrained.
-- **`title`** — the document title and heading path as the query.
-  Shorter and more noun-ish, so closer to what people type.
-- **`terms`** — the passage's most distinctive terms as a bag.
-- **`import`** — `(query, chunk)` pairs from JSONL. This is where
-  LLM-generated questions go.
-
-### What it is measured to do, which is not much
-
-`arklite` + `zdocs`, 53 gold questions with answers, 18,809 pairs:
-
-| | @1 | @3 | @10 |
-|---|---|---|---|
-| dense, untrained | 31/53 | 41/53 | 46/53 |
-| dense, trained (4 epochs) | **32/53** | 41/53 | **47/53** |
-| hybrid, untrained | 37/53 | 44/53 | 51/53 |
-| hybrid, trained | **38/53** | **45/53** | 51/53 |
-
-**One question.** On the smaller `zdocs` corpus it is no better than
-the baseline at all, and worse past about five epochs.
-
-That is a real result and worth stating plainly rather than tuning
-until a number moves. The framework is sound — `--epochs 0` reproduces
-the untrained encoder *exactly*, to the question, so anything that
-changes is training and nothing else. The training signal is what is
-weak: ICT sentences taken from documentation prose look almost nothing
-like "how do I stop bleeding from a leg wound", and a model trained to
-match declarative statements to their own paragraphs learns a task
-nobody is asking it to do.
-
-**The bottleneck is the questions, not the optimiser.** That is what
-the 16GB GPU is for, and what `pairs = import` exists for: run a 7B
-locally over the corpus, ask it for questions each passage answers,
-write JSONL, point `pairs_file` at it. Everything downstream is already
-built and measured, so the experiment is one file and one re-run.
-
-### Two bugs this exposed, both instructive
-
-**Training started from uniform term weights.** `s = 0` gives
-`softplus(0) = 0.693` for every term, discarding the idf. So epoch 0
-was already far below the baseline it was meant to refine, and recall
-fell monotonically with training — which reads exactly like
-overfitting and was not. Now `s = inv_softplus(idf)`, and epoch 0
-reproduces the baseline to the question.
-
-**`-e 0` was silently ignored**, because `if args.epochs:` treats zero
-as absent, so the "zero epochs" control ran 25. Both of these made
-training look actively harmful when it was merely useless.
-
-## The host framework
+### The host framework
 
 ```
 tools/ask/
@@ -1449,7 +920,7 @@ sequential in sorted order, and no timestamp reaches anything except
 the manifest's own `built` field, which is excluded from the build
 hash. Same recipe plus same inputs produces the same bytes.
 
-### The check that matters most
+#### The check that matters most
 
 After emitting the card tree, the builder **re-reads every file and
 verifies that every chunk's byte range still contains exactly the text
@@ -1466,32 +937,7 @@ is now *defined* as the slice the device will read.
 
 ---
 
-## Status
-
-| | |
-|---|---|
-| Host framework, recipes, formats, packing | **done**, runs on real data |
-| Eval harness and gold set | **done**, 63 questions |
-| Adapters: codex, books, scroll, mdtree, listed, onefile, medline, plain | **done** |
-| `arkmed` recipe | **done**; fetch and adapters exercised against fixtures and reachable hosts, **not** against gutenberg.org or the real 137MB Wikipedia object |
-| `ask fetch` — resumable, checksummed, git-lfs aware | **done** |
-| Image transcode + `maps.md` / `flags.md` | **done**; classification patterns are a guess until someone sees the real archive |
-| `bow` encoder (ships, no training needed) | **done**, and not yet good enough |
-| Pack layout, co-install verified | **done** |
-| On-demand repo cloning | **done** |
-| `naming = long`, for when LFN lands | **done**, untested (LFN is off) |
-| Generated `index.md` per directory | **done** |
-| `requirements.txt` | **done** |
-| `sw/apps/ask` — window, incremental scan, pack loading | **done**, not yet run on hardware |
-| `aidx.c` index engine, host-tested against a real pack | **done**, rankings match the Python reference exactly |
-| Device lexical (BM25) half | **done**; conforms to exact BM25 on 125/127 gold questions (`lexcheck`, below) |
-| `arkmed` at scale | device engine checked at 20× `arklite` (~200K chunks); the real corpus not yet built -- its downloads are not reachable from where this was written |
-| `read` `#offset` support | patch written, `sw/apps/ask/read-offset.patch.md` |
-| Trained encoder (`torch` backend) | after the app, against the 42/63 and 62/63 bars |
-| `rtl/zml.v` coarse-scan accelerator | **no workload** while packs are lexical-only: there is no coarse scan to accelerate |
-| `release/` integration | after the app |
-
-## The device build, and one honest gap
+### The device build, and one honest gap
 
 `sw/apps/ask` is a 208-wide window — `read` is 320, and the two are
 meant to be open together on a 640-wide screen. A result is two lines:
@@ -1517,7 +963,7 @@ scanned 10059 of 10059 chunks in 6 slices, 8 hits
    > 6-3. Snakebites a. Poisonous snakes DO NOT always inject venom...
 ```
 
-### `ask query` is not the reference. `ask refcheck` is.
+#### `ask query` is not the reference. `ask refcheck` is.
 
 `ask query -m dense` encodes from the **float** term vectors held in
 memory during the build. The device reads the **int8** ones the packer
@@ -1545,7 +991,7 @@ The earlier claim that the two matched was three queries where the
 difference happened not to change the order. That was luck, not
 validation.
 
-### The device's BM25 was not the BM25 we measured. `lexcheck` is.
+#### The device's BM25 was not the BM25 we measured. `lexcheck` is.
 
 `refcheck` covers the dense path. Nothing checked the lexical one --
 the half that ships -- and it turned out not to compute what `ask eval`
@@ -1613,7 +1059,7 @@ than a list of `(chunk, tf)` tuples, ~5 bytes a posting instead of ~64.
 The packed output is byte-identical, and `ask eval` reads 73/88/100 as
 before.
 
-### Residency, and the ceiling it runs into
+#### Residency, and the ceiling it runs into
 
 **All of this is about the DENSE half.** A lexical-only pack
 (`dense = no`, which every shipped pack now is) has no coarse array:
@@ -1668,7 +1114,7 @@ The levers, cheapest first:
 `ask ingest` reports the projection before any download, which is the
 cheap place to find out.
 
-### What is resident, and why so little
+#### What is resident, and why so little
 
 Only the coarse vector array and the query encoder: 0.90MB for
 `arklite`, 1.54MB with `zdocs` alongside it. The chunk table, document
@@ -1681,7 +1127,7 @@ vectors are read for the shortlist only. None of those justify holding
 megabytes — loading everything would be 2.5MB and about six seconds of
 card read instead of 2.4.
 
-### Two bugs the host test could not have caught
+#### Two bugs the host test could not have caught
 
 Both found on hardware, both invisible to `hosttest`, and both worth
 recording because they are the shape of bug this arrangement produces.
@@ -1711,7 +1157,7 @@ across slices, and `AI_RERANK_SLICE` is 64. Smaller than
 dot product against resident memory, a re-rank item is a seek and a
 read from the card.
 
-### Both halves now run on the device
+#### Both halves now run on the device
 
 `AI_Q_LEXICAL` was a passthrough in the first build, which meant the
 device ran dense-only — the half that measures *worse* (40/63 against
@@ -1751,7 +1197,7 @@ Neither the dictionary nor the postings are resident. The dictionary is
 binary-searched in place — about fifteen probes over twenty thousand
 terms — and a term's postings are read as one block.
 
-### Looking at the layout
+#### Looking at the layout
 
 `make -C sw/apps/ask render` draws the panel on the build machine and
 writes a PBM. `sw/common/tests/zrender.h` exists because sheet's and
@@ -1773,7 +1219,7 @@ query line, rule, status, eight two-line results, buttons — and comes
 out at **174**, which on a 480-tall screen gives `read` back a third of
 the column.
 
-### The kernel leaked a file handle per launch
+#### The kernel leaked a file handle per launch
 
 Symptom: after relaunching `ask` eight times without a reboot, it
 reported **`file seek is broken`** — and seeking was fine.
@@ -1816,7 +1262,7 @@ read, seek and mismatch, and the message named seek. It now
 distinguishes them, and an open failure says
 `cannot open index -- out of file handles?`.
 
-### Three things the host could not have shown
+#### Three things the host could not have shown
 
 **String reads were one byte at a time.** `read_str()` looped on
 one-byte reads, which on the host is a buffered `fread` costing
@@ -1839,95 +1285,662 @@ so drawing with colour 0 gave ink of 0 on a cell of 0 — the cell
 *erased* the highlight it was drawn over. `zwin.h` documents exactly
 this and points at `z_win_draw_text2()`, which takes both colours.
 
-## Putting it on a card
+---
 
-What to copy, exactly, to test the app:
+## Implementation notes
 
-**1. The app.** Build it and drop the binary at `apps/ask`:
+Measurements, bugs and decisions from its development, kept for whoever
+works on it next.
 
-```
-make -C sw/apps/ask
-cp sw/apps/ask/ask.bin /media/<card>/apps/ask
-```
+### Status
 
-No extension — that is how every other app on the card is named, and
-`fs_exec_resolve()` finds a bare name in `/apps` ([layout.md](layout.md)).
-
-**2. A pack.** At minimum one, and `arklite` is the one to start with
-because everything it needs is inside the ark repo, so it builds from a
-clone with no downloads:
-
-```
-pip install -r tools/ask/requirements.txt
-./tools/ask/ask build dist/arklite.spec
-cp -r tools/ask/out/arklite/* /media/<card>/
-```
-
-That writes exactly two directories and touches nothing else:
-
-```
-/opt/ark/arklite/     the corpus -- 24 MB, plus index.md in every directory
-/data/ask/arklite/    the index  -- 8 files, 2.1 MB
-```
-
-`MANIFEST.json` is deliberately *outside* the tree, at
-`tools/ask/out/arklite.manifest.json`, because a four-character
-extension cannot be written to a FatFs card here. Do not copy it.
-
-**3. Nothing else.** No kernel change is needed to *try* it — but
-without the `sw/os/kernel.h` tier edit in
-`sw/apps/ask/INTEGRATION.md`, `ask` gets the 16KB default allowance and
-will fail to allocate its index. That edit is the one thing that must
-be flashed, not copied.
-
-Then:
-
-```
-> run wm
-> run ask
-```
-
-Expect ~2.4 s of loading with a progress bar, then `10059 passages,
-1 pack` on the status line.
-
-### If it says something else
-
-The status line carries the reason, and so does UART0. The ones that
-happen:
-
-| message | cause |
+| | |
 |---|---|
-| `out of memory -- needs APP_STACK = 4M` | the stack the executable asks for (`APP_STACK`, `docs/executables.md`) is too small for this pack. **By far the most likely first-run failure** — everything else can be correct and the app still finds nothing |
-| `/data/ask has no subdirectories` | the pack was copied to `/data/ask/` rather than `/data/ask/<name>/`, or only `/opt/ark/` was copied |
-| `index built by another version of tools/ask -- rebuild the pack` | a pack built before format version 2, when indexes stored whole card paths |
-| `pack files are from different builds` | two distributions mixed in one directory. Every file carries the `dsid`; this is the check that stops confidently wrong answers |
-| `<file>: cannot open (missing? out of handles?)` | an incomplete copy (a pack is up to nine files in `/data/ask/<name>/`), or the board's eight file handles are all in use |
-| `<file>: fs did not answer (timeout)` | the filesystem service did not reply within its 15 s; the card or `fs` is in trouble, not the pack |
-| `<file>: ends early (N of M bytes)` | the file is shorter than its header says: a copy cut short |
-| `<pack>: weaker ranking, ...` | the pack loaded but BM25 runs without chunk lengths (both `lens.zln` and `chunks.zct` unreadable); answers still come, ranked less well. The idle line keeps saying `ranking weaker` |
+| Host framework, recipes, formats, packing | **done**, runs on real data |
+| Eval harness and gold set | **done**, 63 questions |
+| Adapters: codex, books, scroll, mdtree, listed, onefile, medline, plain | **done** |
+| `arkmed` recipe | **done**; fetch and adapters exercised against fixtures and reachable hosts, **not** against gutenberg.org or the real 137MB Wikipedia object |
+| `ask fetch` — resumable, checksummed, git-lfs aware | **done** |
+| Image transcode + `maps.md` / `flags.md` | **done**; classification patterns are a guess until someone sees the real archive |
+| `bow` encoder (ships, no training needed) | **done**, and not yet good enough |
+| Pack layout, co-install verified | **done** |
+| On-demand repo cloning | **done** |
+| `naming = long`, for when LFN lands | **done**, untested (LFN is off) |
+| Generated `index.md` per directory | **done** |
+| `requirements.txt` | **done** |
+| `sw/apps/ask` — window, incremental scan, pack loading | **done**, not yet run on hardware |
+| `aidx.c` index engine, host-tested against a real pack | **done**, rankings match the Python reference exactly |
+| Device lexical (BM25) half | **done**; conforms to exact BM25 on 125/127 gold questions (`lexcheck`, below) |
+| `arkmed` at scale | device engine checked at 20× `arklite` (~200K chunks); the real corpus not yet built -- its downloads are not reachable from where this was written |
+| `read` `#offset` support | patch written, `sw/apps/ask/read-offset.patch.md` |
+| Trained encoder (`torch` backend) | after the app, against the 42/63 and 62/63 bars |
+| `rtl/zml.v` coarse-scan accelerator | **no workload** while packs are lexical-only: there is no coarse scan to accelerate |
+| `release/` integration | after the app |
 
-`hosttest` prints the same string, so pointing it at the mounted card
-tells you what the device will say before you eject it.
+### Software first, hardware later
 
-### Checking the card before you eject it
+`ask` is **software-only today and will always work software-only.**
+The accelerator is an optimisation, not a dependency, and a board that
+cannot fit it loses seconds rather than the feature.
+
+The costs, at the `arklite` tier:
+
+| Stage | Work | Software | With a MAC engine |
+|---|---|---|---|
+| Encode query (`bow`) | ~10K MACs | negligible | negligible |
+| Coarse scan, 4,698 × 32 | 150K MACs | ~0.08 s | ~0.01 s |
+| Lexical, ~5 terms | postings read | ~0.1 s | ~0.1 s |
+| Re-rank top 256 × 128 | 33K MACs | ~0.02 s | ~0.01 s |
+
+At this tier the whole thing is already fast enough in software and the
+hardware buys little. That changes with corpus size: the coarse scan is
+linear in chunk count, so at 250,000 chunks it is 8M MACs — about four
+seconds in software against roughly half a second accelerated.
+
+**The coarse scan is the accelerator's workload** and it is the easiest
+one imaginable: a contiguous `int8` array, read once, no branches, no
+random access, no dependency between rows. One descriptor, one
+streaming read. It needs less state than `rtl/montmul.v`, which is 983
+LUT4 with **no BRAM**, so it should fit an ECP5-25F (Lakritz) with
+nothing to spare and go faster on a 45F (Mozart ML1) with a wider array
+and a scratchpad. That is a `boards.vh` define, a `CSR_FEATURES2` bit
+and a self-test-then-fall-back check on the software side — `web`'s
+arrangement for montmul, for the same reason.
+
+None of that is built yet. See "Status".
+
+---
+
+### Retrieval: measured, not assumed
+
+Both halves are real and both are necessary.
+
+**Lexical (BM25).** Wins where an exact token is the point: `lakritz`,
+`0x7000_0600`, `nextpnr-ecp5`, a drug name. Embeddings blur a rare
+string toward whatever it resembles; BM25 does not.
+
+**Dense.** Wins where the words differ from the text: "my water might
+be contaminated" finds the boiling passage that never says
+"contaminated".
+
+**They are fused with reciprocal rank fusion** — scale-free, one
+constant, and it does not require BM25 scores and `int32` dot products
+to be comparable, which they are not.
+
+#### Three query styles, and the dense half loses all three
+
+The gold set is 127 questions in three tagged halves, because people do
+not type one way:
+
+- **`direct`** — a question using the words the answer uses.
+- **`paraphrase`** — a situation in the words somebody reaches for
+  *before* knowing the term. "my hands went white and numb out in the
+  cold" must find the frostbite passage without sharing a word.
+- **`keyword`** — two or three words, no grammar. `ask`'s input box is
+  forty columns; this is probably the commonest style in practice.
+
+Untrained `bow`, on arklite:
+
+| | lexical @1 | dense @1 | hybrid @1 |
+|---|---|---|---|
+| `keyword` (23) | **21/23 — 91%** | 10/23 | 16/23 |
+| `direct` (53) | 39/53 | 30/53 | 39/53 |
+| `paraphrase` (36) | 13/36 | 7/36 | 9/36 |
+| **all (112)** | **73/112** | 47/112 | 64/112 |
+
+**BM25 alone beats the fused result in every style.** Fusion costs nine
+questions at rank 1 overall and five of twenty-three on keywords, where
+BM25 is at 91% and has nothing to gain from a second opinion.
+
+The keyword result is structural rather than bad luck. A `bow` query
+vector is the idf-weighted mean of its term vectors, and averaging two
+or three is a far noisier estimate than averaging the ten or twelve a
+written question supplies. There is no syntax for the encoder to
+recover, because there was none.
+
+#### More questions flipped the sign
+
+The same sweep at two levels of genq coverage, dense @1 against its own
+untrained baseline:
+
+| imported questions | baseline | trained | |
+|---|---|---|---|
+| 7,763 (~20% of the corpus) | 30/53 | 25/53 | **−5** |
+| 16,621 (~42%) | 37/89 | 42/89 | **+5** |
+
+Doubling the training questions turned training from actively harmful
+into a gain. Hybrid at rank 1 went 48/89 → 52/89 at two epochs, with a
+paired bootstrap of +4 [−2, +10], P=0.83.
+
+That does not clear the usual 0.95 bar and should not be reported as
+if it did. But one and two epochs BOTH improve (P=0.76 and 0.83) and
+four, eight and sixteen all get worse, monotonically — a fluke would
+not be ordered like that and then reverse cleanly. The 8-epoch row at
+P=0.05 is the same evidence read the other way: overtraining hurts, and
+it hurts reliably.
+
+The sweep now also breaks the change down **by question style**, which
+is the measurement that actually decides whether to keep the dense
+half. A gain concentrated on `direct` or `keyword` is the encoder
+getting better at a job BM25 already does better, and is not worth
+0.9MB resident. A gain on `paraphrase` is the encoder doing the one
+thing only it can do.
+
+#### The decision, and how it came out
+
+**`dense = no`. `ask` ships BM25 only.**
+
+The pre-registered rule required a paraphrase gain of +4 or more. The
+full sweep, on 39,395 generated questions over the whole corpus,
+produced at best **+3**. The rule failed on its own terms.
+
+It then failed a second, more generous test. The dense half genuinely
+improved with full coverage — trained at one epoch it gained **+7 at
+rank 1** on its own, the largest effect measured anywhere in this
+work — but the fused output moved by one question. So the fusion weight
+was swept, with no retraining, to find out how much of that gain was
+recoverable:
+
+| w_dense | @1 | @3 | @10 | direct | keyword | paraphrase |
+|---|---|---|---|---|---|---|
+| **0** | **73/112** | 88/112 | **100/112** | 39/53 | **21/23** | **13/36** |
+| 0.25 | 69/112 | **89/112** | 98/112 | 41/53 | 19/23 | 9/36 |
+| 0.5 | 68/112 | 84/112 | 98/112 | **42/53** | 18/23 | 8/36 |
+| 1 | 67/112 | 80/112 | 93/112 | 40/53 | 17/23 | 10/36 |
+| 2 | 57/112 | 72/112 | 84/112 | 36/53 | 13/23 | 8/36 |
+| 4 | 55/112 | 67/112 | 84/112 | 35/53 | 12/23 | 8/36 |
+
+Monotone toward zero, and w = 0 is lexical alone. **No fusion weight
+beats not fusing.** Lexical wins overall at rank 1 and rank 10, and
+wins both styles that matter — keyword 21/23 against 19, and
+paraphrase 13/36 against 10.
+
+Paraphrase is the one that settles it. That is the case the dense half
+exists for, and BM25 is *better at it* than any hybrid configuration
+tried.
+
+#### What that buys
+
+`coarse.zcv` and `encoder.zmd` are the only resident structures, so
+dropping them takes an `arklite` pack from 0.90MB resident to
+**nothing**. No `Z_PROC_STACK_SIZE_HUGE`, no 4MB allocation, no
+training step, and the app would fit a 1MB board. For better answers.
+
+#### What was learned, and what is still there
+
+The negative result is worth as much as a positive one would have been,
+and it took a specific sequence to reach honestly: a gold set that had
+to be caught favouring BM25 by construction, a second half of questions
+written to test the case dense retrieval exists for, a third for the
+keyword style that turned out to be BM25's strongest, a significance
+test to stop noise being read as signal, and a decision rule written
+down before the data.
+
+Without any one of those, "hybrid 52/89, best at 2 epochs" would have
+shipped as a win.
+
+Nothing is deleted. `encoder = trained` and `dense = yes` still work,
+`ask genq`/`train`/`eval --fuse-sweep` still measure, and the device
+still reads a pack with vectors if one is installed. The bar for
+turning it back on is now precise and published: **beat 13/36 on
+paraphrase without losing keyword.** A better encoder — a trained
+transformer rather than a bag of embeddings, or an asymmetric setup
+with a real teacher on the document side — is a live option, and this
+is the harness to evaluate it with.
+
+#### The decision, written down before the data
+
+Recorded in advance deliberately. Once a sweep is on the screen it is
+easy to find a reading that justifies whichever answer one already
+preferred, and the effects here are small enough that a reading can
+always be found.
+
+Re-run after genq completes:
 
 ```
-$ ls /media/<card>/ask/arklite/
-chunks.zct  coarse.zcv  docs.zdt  encoder.zmd
-fine.zfv    index.zak   lens.zln     lexicon.zlx  post.zlp
-
-$ ./sw/apps/ask/test/hosttest /media/<card> "how do I purify water"
+./tools/ask/ask train dist/arklite.spec --sweep 1,2,4,8,16
 ```
 
-`hosttest` takes a card root, so pointing it at the mounted card runs
-the device's own engine over the actual bytes you are about to boot.
-If it works there and not on hardware, the problem is the app or the
-kernel tier, not the data.
+with the full 127-question gold set. Then:
 
-## See also
+**Keep the dense half** (`dense = yes`, `train_epochs` = whichever of 1
+or 2 wins) if BOTH hold:
 
-- `sw/common/zask.h` — the service protocol
-- `docs/read_app.md` — the reader `ask` hands documents to
-- `docs/web_app.md` — the server/client shape this follows
-- `docs/montmul.md` — what an accelerator in this tree looks like
-- `docs/sdcard.md` — the 604 KB/s the preview path is budgeted against
+- `paraphrase` hybrid@1 improves by **+4 or more**, and
+- `keyword` hybrid@1 does not fall by more than **1**.
+
+The first is the only job the encoder has that BM25 cannot do. The
+second is the guard: keyword queries are BM25 at 91% and the commonest
+style in practice, so a paraphrase gain paid for by keyword losses is
+not a gain.
+
+**Ship `dense = no`** if the paraphrase gain is under +2, or if
+keywords regress by 2 or more. That is not a failure — it is a 0.9MB
+saving, no HUGE tier, no training step, and a pack that fits a 1MB
+board.
+
+**Anything between those** is undecided, and the answer is more gold
+questions rather than a judgement call. Paraphrase is 36 questions;
+doubling it costs an evening and would resolve a ±3 effect that
+currently cannot be resolved at all.
+
+One thing that is already settled regardless: **4 or more epochs is
+worse than not training**, consistently, at every coverage level
+measured. If the winner comes back as 8 or 16, something changed and
+that is the thing to look at first.
+
+#### `dense = no`
+
+So a recipe can ship a pack with no vectors and no encoder:
+
+```
+  dense half OFF -- lexical only, nothing held resident
+  resident on device: 0.00 MB
+  fits kernel tier:   BIG (needs 0.10 MB incl. stack headroom)
+```
+
+against 0.90MB and a HUGE tier with the dense half on. `coarse.zcv` and
+`encoder.zmd` are the *only* things `ask` holds resident, so dropping
+them removes essentially all of it — the dictionary is binary-searched
+on the card and postings are read per term.
+
+**That is a different machine.** No 4MB allocation, no HUGE tier, no
+training step, and it would fit a 1MB board. For better answers.
+
+The argument for keeping the dense half is `paraphrase`, where
+everything is weak (36% at best) and there is real headroom. That is
+the case a trained encoder has to win, and until it does, `dense = no`
+is the honest default.
+
+#### The gold set was rigged toward BM25, and I built it that way
+
+53 of the first 63 questions shared a literal term between the question
+and the regex defining a correct answer. That is exactly what BM25
+ranks on, so a passage could only count as relevant if it contained a
+word the query also contained — the metric rewarded term matching by
+construction.
+
+Not purely artificial: people really do type the right words most of
+the time. But it systematically under-samples the one case dense
+retrieval exists for, which is when they do not.
+
+So the set is now **99 questions in two tagged halves**, and `ask eval`
+reports them separately:
+
+| | lexical @1 | dense @1 | hybrid @1 |
+|---|---|---|---|
+| `direct` (53) | 39/53 | 30/53 | 39/53 |
+| `paraphrase` (36) | **13/36** | 7/36 | 9/36 |
+
+`paraphrase` questions describe a situation in the words somebody
+reaches for *before* knowing the technical term — "my hands went white
+and numb out in the cold" must find the frostbite passage without
+either sharing a word.
+
+**Everything collapses there.** Lexical drops from 74% to 36%, dense
+from 57% to 19%. This is the half of the problem the system does not
+solve, and it was invisible until the questions existed.
+
+It also changes what the dense half is for. On `direct` questions BM25
+is unbeatable and fusion is a net negative below rank 1. On
+`paraphrase` the whole field is weak, so there is somewhere to go —
+and that is where a trained encoder has to prove itself.
+
+#### The numbers, and what they say
+
+`ask eval` against a hand-written **63-question** gold set, on
+`arklite` + `zdocs` (1,590 documents, 13,211 chunks). Rank of the first
+relevant hit:
+
+| | @1 | @3 | @10 |
+|---|---|---|---|
+| lexical | 42/63 | 55/63 | **62/63** |
+| dense (`bow`) | 40/63 | 52/63 | 55/63 |
+| coarse only (32-dim) | 16/63 | 25/63 | 44/63 |
+| hybrid | **43/63** | 51/63 | 59/63 |
+
+**Read that honestly. Hybrid wins by one at rank 1 and loses at ranks
+3 and 10.** BM25 alone puts the answer in the top ten for 62 of 63
+questions; fusing the untrained dense half *costs* three of them.
+
+The gold set was twelve questions before this and said hybrid 8/12
+against lexical 9/12 — the right shape, but the run-to-run variation
+from a chunking change was the same size as the effect. At 63 the
+statement is sharp enough to act on: **a trained encoder has to beat
+42/63 at rank 1 and 62/63 at rank 10, and today's untrained one does
+neither.**
+
+That is the whole reason the harness was built before the encoder.
+Anyone who skipped measuring would have shipped the dense half on the
+strength of it being the interesting part.
+
+#### Shortlist depth, which is a sizing number
+
+The two-stage design only works if the coarse pass keeps the right
+chunk in the shortlist the fine pass re-ranks. If it does not, no
+fine-stage accuracy recovers it — the answer was thrown away before
+anything good looked at it.
+
+```
+  top 32     48/63  ##############################
+  top 64     52/63  #################################
+  top 128    54/63  ##################################
+  top 256    60/63  ######################################
+  top 512    62/63  #######################################
+  top 1024   63/63  ########################################
+```
+
+So the shortlist is **512**, not the 256 assumed earlier. That is
+512 × 128 bytes = 64KB of fine vectors read per query, about 110–220ms
+at a realistic 300–600 KB/s — and it is a floor set by measurement, not
+a knob.
+
+It also says something uncomfortable about the coarse stage: a 32-dim
+truncation of an untrained `bow` vector is a weak filter. Either
+`coarse_dim` grows, or the encoder is trained with Matryoshka losses so
+truncation degrades gracefully, or the shortlist stays deep. The third
+is free today and the second is the right answer.
+
+#### Chunking earns its keep
+
+Every chunk is embedded with its heading path prepended:
+
+```
+Survival > First Aid > Bleeding: If you cannot remember the exact
+location of the pressure points...
+```
+
+The heading is **not** part of the stored byte range — it costs nothing
+on the card and nothing at query time. Without it, a mid-document
+paragraph is embedded with no idea what it is about, which measurably
+wrecks retrieval on long manuals.
+
+---
+
+### Generating questions with a local LLM
+
+Training on Inverse Cloze pairs moved gold-set recall by **one
+question out of 53**, because ICT teaches the model to match
+declarative documentation prose to its own paragraph — which is not
+the task. Nobody types *"The blitter is its own bus master."* They type
+*"how do I delete a file"*.
+
+The bottleneck was never the optimiser. It was that there were no
+questions. `ask genq` produces them:
+
+```
+./tools/ask/ask genq  dist/arklite.spec --model qwen3.8:27b --limit 50
+./tools/ask/ask genq  dist/arklite.spec --model qwen3.8:27b
+./tools/ask/ask train dist/arklite.spec
+./tools/ask/ask eval  dist/arklite.spec
+```
+
+**Start with `--probe`.** It runs one passage and shows the raw reply,
+the token count, the tok/s and an estimate for the full corpus. A bad
+model choice otherwise costs hours before anything is visible.
+
+```
+$ ./tools/ask/ask genq dist/arklite.spec --probe -m qwen3.5:9b
+  passage: The Magna Carta (+0, 1863 chars)
+  12.4s wall, 400 output tokens, 32.2 tok/s
+  *** hit the 400-token cap -- the reply was CUT OFF. ***
+      Almost always a reasoning model emitting <think>.
+```
+
+#### Reasoning models
+
+The qwen3 family, deepseek-r1 and openthinker emit a `<think>` block of
+thousands of tokens before answering. For a reply that is four short
+questions, that is minutes per passage instead of seconds — and the
+reply usually hits the output cap mid-thought, so nothing parses.
+
+`genq` sends `think: false`, caps output at 400 tokens, pins
+`num_ctx` to 4096 and sets `keep_alive` so the model is not reloaded
+between passages. Older ollama builds that reject `think` are retried
+without it. If failures still pile up, the run says so:
+
+```
+*** every failure hit the 400-token cap. This model is emitting a
+    reasoning block. Try a non-reasoning model (llama3.2, gemma) ***
+```
+
+The reply is also constrained to a JSON schema, which removes the
+fences and commentary entirely on any ollama new enough to support it.
+
+#### Which model
+
+The task is comprehension and rephrasing, not reasoning: read a
+passage, say what it answers. Small non-reasoning models do it well,
+and against ~10,000 passages throughput dominates. `llama3.2:latest`
+at 2GB produces questions like these, from the Magna Carta:
+
+```
+How do I pay my barony's relief?
+What is a knight's fee?
+How do I inherit land directly from the Crown?
+```
+
+That is the thing Inverse Cloze cannot produce — situational phrasing
+somebody would type *before* reading anything.
+
+`--compare m1,m2,m3 --limit 20` benchmarks models against each other on
+the same passages and reports seconds per passage, projected hours for
+the full corpus, decline rate, and **`novel`**: the share of question
+words that do *not* appear in the passage. That last one is the metric
+that matters. A model echoing the passage's own vocabulary has
+reinvented ICT, which measured at plus one question out of 53. Prefer
+the fastest model whose novel rate matches the others.
+
+#### Generated questions are not automatically grounded
+
+The first chunk of *The American Frugal Housewife* (1832) is a title
+page, a dedication and illustration captions listing cuts of mutton and
+pork. llama3.2 produced:
+
+```
+How do I purify water?
+What are water purification tablets?
+My water looks muddy
+What is soap made from?
+```
+
+None of that is in the passage. The model inferred what a book with
+that title probably contains — "purification tablets" in 1832 being
+the tell. Trained on, those pairs teach the encoder to point *"how do
+I purify water"* at a title page, which is worse than not training at
+all.
+
+So an imported question must share **at least one content term** with
+its passage. Weak on purpose: "my water looks muddy" against a passage
+about boiling still shares `water`, while a question sharing nothing is
+either about a different passage or about nothing. A stronger check —
+does the passage contain the *answer* — needs a model, and the point is
+to spend the model's time generating rather than verifying.
+
+Only `import` pairs are filtered; `ict`, `title` and `terms` are
+derived from the passage by construction. The drop rate is reported,
+and a high one means the corpus is full of front matter rather than
+that the model is bad.
+
+#### Duplicate questions and false negatives
+
+Generated questions create a training hazard that ICT mostly avoids.
+
+One document yields many chunks, and their questions overlap by
+construction — two chunks of the Magna Carta both produce "What is the
+Magna Carta?". InfoNCE treats every other passage in a batch as a
+negative, so those two chunks in one batch trains the model to push a
+*correct* passage away from a *correct* query. The loss cannot tell
+that from a real negative.
+
+So batches now take **at most one pair per document**, and exact
+duplicate questions are dropped. Implemented as a round robin over
+document buckets: the obvious version — scan, defer collisions,
+rebuild — is quadratic, and at 18,517 pairs that is minutes per epoch
+rather than seconds.
+
+Two bugs found building it, both of the silent kind:
+
+- With fewer documents than the batch size (`zdocs` has 85 against a
+  default batch of 128) no batch could satisfy the constraint, so the
+  batcher yielded **nothing** and training silently did not run —
+  reporting a loss of exactly `0.0000`, which is a division by a batch
+  count of zero. The batch size is now reduced to fit and says so, and
+  a run that produces no batches raises instead of pretending.
+- The tail batch is dropped rather than padded: a partial batch has
+  fewer negatives, so its gradient is on a different scale from every
+  other batch.
+
+#### Declined is not the same as failed
+
+A passage the model *looked at and declined* — boilerplate, a licence,
+a contents page — is recorded, so a resume does not ask again.
+
+A passage that **failed** — a truncated reply, a dropped connection, a
+reasoning block that never reached the answer — is **not** recorded, so
+a retry picks it up.
+
+The first version conflated them and wrote `skip: true` for both, which
+permanently blanked every passage a transient failure touched. If a
+`.jsonl` from that version has `skip` markers that should not be there,
+delete it and start again; a run against a working model produces no
+skips at all for ordinary prose.
+
+**It is resumable, and that is not optional.** 10,059 passages at a few
+seconds each is hours, and anything that long gets interrupted. Every
+line is flushed as written, and a re-run skips what is already there —
+including passages the model *declined*, which get a `skip` marker.
+Without that, the one-in-eight boilerplate passages would be retried on
+every resume.
+
+**Pairs are keyed by document and byte offset, not chunk index.** A
+chunk index shifts whenever the corpus or `chunk_chars` changes, and
+hours of generated questions silently re-attaching to the wrong
+passages after a tweak would be a bad trade. Anything that no longer
+resolves is reported, not ignored.
+
+Model output is messy no matter what the prompt says — fences,
+commentary, `<think>` blocks — so the parser finds the JSON array
+rather than trusting the whole reply. Verified against a mock server
+that reproduces all of those.
+
+### The corpus mattered more than the model
+
+`how to delete a file` returned **Alice in Wonderland**, then Sun Tzu,
+then Hamlet. Nothing in those books is relevant. All three carry the
+Project Gutenberg licence, which talks about disks, copying,
+distributing and *"if you either delete this file"* — so a corpus of
+600 books contained 600 near-copies of the same few thousand words
+about deleting files.
+
+Alice is **250 lines of licence before the first word of the story.**
+
+The `books` adapter now strips it. Two formats: modern texts mark the
+body with `*** START OF THE PROJECT GUTENBERG EBOOK ***`, and the
+2001-era etexts in Ark Lite predate that and end their header with
+`*END*THE SMALL PRINT!`. A file matching neither is left alone —
+guessing where a book starts is worse than shipping a licence.
+
+| | @1 | @3 | @10 |
+|---|---|---|---|
+| dense, before | 31/53 | 41/53 | 46/53 |
+| dense, after | 30/53 | **43/53** | 46/53 |
+| hybrid, before | 37/53 | 44/53 | 51/53 |
+| hybrid, after | **39/53** | 44/53 | 51/53 |
+
+Two questions on hybrid, and the qualitative change is larger than that
+suggests: Alice, Hamlet and Sun Tzu are gone from the results
+entirely, and the Unix article moved from rank 4 to rank 2. The
+remaining rank-1 hit is *Carpentry for Boys*, where a "file" is a
+genuine woodworking tool — a real ambiguity rather than a corpus
+defect.
+
+Worth remembering before reaching for the model again: this was a
+bigger win than training, and it was an hour of reading the corpus.
+
+**It came back with `arkmed`.** Only the `books` adapter strips
+licences by default. The Gutenberg CD and the Factbook come in through
+`listed` and `onefile`, which read mostly non-Gutenberg text and so do
+not -- and the first `arkmed` build indexed the small print of every
+book on the CD. The recipe now says `gutenberg=yes` on both lines
+(`onefile` learned the option for it). The same build also showed
+Ark's list files are HTML-escaped (`Happy Prince &amp; Other Tales`),
+so `listed` decodes titles now: a title is what every result line
+shows.
+
+### Training the encoder
+
+The device computes exactly one thing (`aidx.c`, `encode_query`):
+
+```
+v = normalise( sum over query terms t of  a[t] * W[t] )
+```
+
+`W` is a vocab × dim table of int8 vectors and `a` is a per-term weight
+in Q8.8. Untrained, both come from an SVD of the corpus.
+
+**So the thing to train is `W` and `a`.** That is a linear
+bag-of-embeddings dual encoder, and training it needs **no new C on the
+device, no format change, and no GPU** — 4096 × 128 is 524,288
+parameters and it converges in minutes of numpy.
+
+```
+./tools/ask/ask train dist/arklite.spec
+./tools/ask/ask eval  dist/arklite.spec
+./tools/ask/ask build dist/arklite.spec
+```
+
+Training pairs come from the corpus itself, no labels required:
+
+- **`ict`** — Inverse Cloze. A sentence is removed from a passage and
+  used as the query; the passage minus that sentence is the positive.
+  The removal matters: leave it in and the model learns "find the
+  passage containing these exact words", which BM25 already does
+  better. This is how ORQA and DPR pretrained.
+- **`title`** — the document title and heading path as the query.
+  Shorter and more noun-ish, so closer to what people type.
+- **`terms`** — the passage's most distinctive terms as a bag.
+- **`import`** — `(query, chunk)` pairs from JSONL. This is where
+  LLM-generated questions go.
+
+#### What it is measured to do, which is not much
+
+`arklite` + `zdocs`, 53 gold questions with answers, 18,809 pairs:
+
+| | @1 | @3 | @10 |
+|---|---|---|---|
+| dense, untrained | 31/53 | 41/53 | 46/53 |
+| dense, trained (4 epochs) | **32/53** | 41/53 | **47/53** |
+| hybrid, untrained | 37/53 | 44/53 | 51/53 |
+| hybrid, trained | **38/53** | **45/53** | 51/53 |
+
+**One question.** On the smaller `zdocs` corpus it is no better than
+the baseline at all, and worse past about five epochs.
+
+That is a real result and worth stating plainly rather than tuning
+until a number moves. The framework is sound — `--epochs 0` reproduces
+the untrained encoder *exactly*, to the question, so anything that
+changes is training and nothing else. The training signal is what is
+weak: ICT sentences taken from documentation prose look almost nothing
+like "how do I stop bleeding from a leg wound", and a model trained to
+match declarative statements to their own paragraphs learns a task
+nobody is asking it to do.
+
+**The bottleneck is the questions, not the optimiser.** That is what
+the 16GB GPU is for, and what `pairs = import` exists for: run a 7B
+locally over the corpus, ask it for questions each passage answers,
+write JSONL, point `pairs_file` at it. Everything downstream is already
+built and measured, so the experiment is one file and one re-run.
+
+#### Two bugs this exposed, both instructive
+
+**Training started from uniform term weights.** `s = 0` gives
+`softplus(0) = 0.693` for every term, discarding the idf. So epoch 0
+was already far below the baseline it was meant to refine, and recall
+fell monotonically with training — which reads exactly like
+overfitting and was not. Now `s = inv_softplus(idf)`, and epoch 0
+reproduces the baseline to the question.
+
+**`-e 0` was silently ignored**, because `if args.epochs:` treats zero
+as absent, so the "zero epochs" control ran 25. Both of these made
+training look actively harmful when it was merely useless.

@@ -99,9 +99,16 @@ typedef struct {
 	// what a caller usually wants to show; z_flist_selected_path()
 	// rebuilds the full path on demand.
 	// Entry i's name is at pool + name_off[i]; see z_flist_selected().
-	char		pool[Z_FLIST_POOL];
-	uint16_t	name_off[Z_FLIST_MAX];
-	uint8_t		isdir[Z_FLIST_MAX];
+	//
+	// The store is the built-in one below unless the app gives a
+	// bigger one (z_flist_set_store()): `cap` entries, `pool_cap` bytes
+	// of names (at most 65535: the offsets are 16 bits).
+	char		*pool;
+	uint16_t	*name_off;
+	uint8_t		*isdir;
+	int			cap;
+	uint32_t	pool_cap;
+	uint32_t	pool_used;		// while loading from a source
 	int			count;
 
 	// true if the directory held more than Z_FLIST_MAX entries, or
@@ -157,7 +164,61 @@ typedef struct {
 	uint8_t		find_len;
 	uint32_t	find_tick;
 
+	// -- a listing read a page at a time (z_flist_set_source()) --
+	const struct z_flist_source	*src;
+	bool		loading;			// a listing is coming in: z_flist_load_step()
+	char		want[Z_FLIST_NAME_MAX];	// to select once it arrives
+
+	// the built-in store
+	char		pool_store[Z_FLIST_POOL];
+	uint16_t	name_off_store[Z_FLIST_MAX];
+	uint8_t		isdir_store[Z_FLIST_MAX];
+
 } z_flist_t;
+
+// -- big folders (sw/apps/files) --
+//
+// A folder of any size, shown as it is read and never all at once: the
+// app gives the widget a store as big as it likes and a source that
+// reads a directory an entry at a time (sw/apps/files reads straight
+// from fs, a page of entries per request; zfsc.h). z_flist_chdir()
+// then reads only the first page; z_flist_load_step(), from the app's
+// main loop, reads on, each page sorted into place as it arrives, so
+// the list fills in where it belongs and nothing already on the screen
+// jumps -- the selected entry stays the selected entry. The person
+// scrolls and picks meanwhile; there is no "more" to ask for.
+//
+// When the store is full the source's grow() is asked for more (the
+// app moves its store and calls z_flist_set_store() again); if it says
+// no, the listing stops there and z_flist_truncated() says so.
+
+typedef struct z_flist_source {
+	bool	(*open)(void *ctx, const char *path);
+	// the next entry, false at the end; *name is valid until the next call
+	bool	(*next)(void *ctx, const char **name, uint32_t *namelen, z_fs_info_t *info);
+	void	(*close)(void *ctx);
+	// room for more: false if there is none
+	bool	(*grow)(void *ctx, z_flist_t *fl);
+	void	*ctx;
+} z_flist_source_t;
+
+// Points the widget at a store the app owns; what is in it is kept
+// (the app moved it: an arena resize). `info` as z_flist_t.info, `cap`
+// entries of it, or NULL.
+void z_flist_set_store(z_flist_t *fl, char *pool, uint32_t pool_cap,
+	uint16_t *name_off, uint8_t *isdir, z_fs_info_t *info, int cap);
+
+// Lists through `src` from now on (NULL: FS_LIST, all at once, up to
+// the store's size -- what every dialog does).
+void z_flist_set_source(z_flist_t *fl, const z_flist_source_t *src);
+
+// Reads on: up to `entries` more, sorted in. True while there are more
+// to read. Draw afterwards (z_flist_draw(), not forced): only the rows
+// that changed are painted.
+bool z_flist_load_step(z_flist_t *fl, int entries);
+
+// Stops a listing being read; what has come in stays.
+void z_flist_load_stop(z_flist_t *fl);
 
 // binds the widget to a window. Does not read the filesystem -- call
 // z_flist_chdir() for that.

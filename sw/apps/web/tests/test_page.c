@@ -316,6 +316,35 @@ static void index_streaming(const char *doc, uint32_t len, uint32_t chunk,
 
 }
 
+// As sw/apps/web shows a page while it arrives (web.c, prog_*): only
+// the first `head` bytes are readable while it streams -- the copy in
+// memory -- and once it is complete, all of it, through the spool.
+// The index carries on across the switch.
+static void index_head(const char *doc, uint32_t len, uint32_t chunk,
+	uint32_t budget, uint32_t head) {
+
+	uint32_t have = 0;
+
+	src.data = doc;
+	src.len = len;
+	src.reads = 0;
+	page_init(&pg, mem_read, &src);
+
+	while (have < len) {
+		have += chunk;
+		if (have > len) have = len;
+		if (have >= len) break;			// complete: the spool, below
+		page_set_size(&pg, have < head ? have : head, false);
+		for (int i = 0; i < 400 && !page_indexed(&pg); i++)
+			if (page_index_more(&pg, budget) == 0) break;
+	}
+
+	page_set_size(&pg, len, true);
+	for (int i = 0; i < 40000 && !page_indexed(&pg); i++)
+		page_index_more(&pg, budget);
+
+}
+
 static const char *doc_small =
 	"<html><head><title>Test</title></head><body>"
 	"<h1>Heading</h1>"
@@ -383,6 +412,20 @@ static void run_doc(const char *doc, uint32_t len, const char *what) {
 			snprintf(label, sizeof(label), "%s streamed/%u",
 				what, (unsigned)chunks[c]);
 			ck(page_indexed(&pg), "streamed document reaches indexed");
+			ck_index_matches(&pg, label);
+			ck_ckpts_sane(&pg, label);
+		}
+	}
+
+	// -- shown while it arrives: 64KB in memory, then the spool --
+	{
+		static const uint32_t heads[] = { 64 * 1024, 1000 };
+
+		for (unsigned h = 0; h < sizeof(heads) / sizeof(heads[0]); h++) {
+			index_head(doc, len, 536, 8, heads[h]);
+			snprintf(label, sizeof(label), "%s head %u then spool",
+				what, (unsigned)heads[h]);
+			ck(page_indexed(&pg), "head then spool reaches indexed");
 			ck_index_matches(&pg, label);
 			ck_ckpts_sane(&pg, label);
 		}

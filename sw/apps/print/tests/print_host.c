@@ -23,6 +23,7 @@
 #include "../../../common/zpool.h"
 #include "../run.h"
 #include "../res.h"
+#include "../textdoc.h"
 #include "host_net.h"
 
 static const char *root = "../../..";
@@ -129,6 +130,23 @@ int main(int argc, char **argv) {
 	}
 	if (!jobf) { fprintf(stderr, "print_host: no job\n"); return 2; }
 	data = load(jobf, &len);
+	{
+		// a text job (textdoc.h), as print.c's text_job() makes one
+		char tpath[ZP_PATH_MAX], err[64];
+		if (data && zp_job_get(data, len, "text", tpath, sizeof(tpath)) && tpath[0] &&
+			zp_pages(data, len, start, bytes, JOB_MAX_PAGES) <= 0) {
+			uint32_t tlen = 0, olen;
+			uint8_t *text = load(tpath, &tlen), *out;
+			if (!text) { fprintf(stderr, "print_host: cannot read %s\n", tpath); return 1; }
+			if (!textdoc_build(data, len, (const char *)text, tlen, paper ? paper : "",
+				&out, &olen, err, sizeof(err))) {
+				fprintf(stderr, "print_host: %s\n", err);
+				return 1;
+			}
+			data = out;
+			len = olen;
+		}
+	}
 	if (!data || !job_open(&j, data, len, start, bytes)) {
 		fprintf(stderr, "print_host: %s is not a print job\n", jobf);
 		return 1;

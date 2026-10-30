@@ -13,6 +13,7 @@
 #include "zfsapp.h"
 #include "zwin.h"
 #include "zpaths.h"
+#include "zcfg.h"
 
 static int cat(char *d, int n, int cap, const char *s) {
 	while (*s && n < cap - 1) d[n++] = *s++;
@@ -130,4 +131,54 @@ void z_print_poll(z_print_t *p) {
 		p->running = false;
 		p->result = Z_PRINT_E_GONE;
 	}
+}
+
+// -- the print dialog's answer --
+
+void z_print_opts_init(z_print_opts_t *o) {
+	memset(o, 0, sizeof(*o));
+	z_cfg_get("apps.print.printer", o->printer, sizeof(o->printer));
+	z_cfg_get("apps.print.paper", o->paper_default, sizeof(o->paper_default));
+	o->dest = o->printer[0] ? Z_PRINT_TO_PRINTER : Z_PRINT_TO_PDF;
+	o->pages = Z_PRINT_PAGES_ALL;
+	o->copies = 1;
+	o->nup = 1;
+}
+
+void z_print_opts_job(const z_print_opts_t *o, zp_writer_t *w) {
+	char v[24 + sizeof(o->file)];
+	int n;
+	if (o->dest != Z_PRINT_TO_PRINTER && o->file[0]) {
+		n = cat(v, 0, sizeof(v), o->dest == Z_PRINT_TO_PDF ? "pdf:" : "ps:");
+		cat(v, n, sizeof(v), o->file);
+		zp_job(w, "dest", v);
+	}
+	if (o->pages == Z_PRINT_PAGES_CURRENT && o->current > 0) {
+		cat_dec(v, 0, sizeof(v), (uint32_t)o->current);
+		zp_job(w, "pages", v);
+	} else if (o->pages == Z_PRINT_PAGES_RANGE && o->first > 0) {
+		n = cat_dec(v, 0, sizeof(v), (uint32_t)o->first);
+		if (o->last != o->first) {
+			n = cat(v, n, sizeof(v), "-");
+			if (o->last > 0) cat_dec(v, n, sizeof(v), (uint32_t)o->last);
+		}
+		zp_job(w, "pages", v);
+	}
+	if (o->copies > 1) {
+		cat_dec(v, 0, sizeof(v), (uint32_t)o->copies);
+		zp_job(w, "copies", v);
+	}
+	if (o->paper[0]) zp_job(w, "paper", o->paper);
+	if (o->nup > 1) {
+		cat_dec(v, 0, sizeof(v), (uint32_t)o->nup);
+		zp_job(w, "nup", v);
+	}
+	if (o->dest == Z_PRINT_TO_PRINTER) {
+		if (o->tray[0]) zp_job(w, "media-source", o->tray);
+		if (o->quality[0]) zp_job(w, "quality", o->quality);
+	}
+}
+
+bool z_print_text_job(z_print_t *p, const char *path) {
+	return zp_job(&p->w, "text", path);
 }

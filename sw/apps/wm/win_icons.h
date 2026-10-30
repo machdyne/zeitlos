@@ -43,6 +43,7 @@ extern const uint8_t z_icon_save_data[Z_ICON_H];
 extern const uint8_t z_icon_open_data[Z_ICON_H];
 extern const uint8_t z_icon_font_data[Z_ICON_H];
 extern const uint8_t z_icon_colour_data[Z_ICON_H];
+extern const uint8_t z_icon_print_data[Z_ICON_H];
 
 // NOT titlebar icons -- these three are for the file-list widget's
 // own rows (sw/common/zflist.h). They live here anyway because this
