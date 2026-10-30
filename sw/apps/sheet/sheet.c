@@ -778,14 +778,20 @@ static void calc_visible(void) {
 	running = true;
 	zco_init(&calc_co, calc_fn, NULL, calc_stack, sizeof calc_stack);
 	calc_t0 = z_uptime_ticks();
-	bool more = zco_resume(&calc_co);
-	if (more) {
-		z_win_set_title(&win, "Calculating...");
-		while (more) {
-			calc_pump();
-			calc_t0 = z_uptime_ticks();
-			more = zco_resume(&calc_co);
+	uint32_t start = calc_t0;
+	bool more = zco_resume(&calc_co), said = false;
+	while (more) {
+		// said only when it is long enough to notice
+		if (!said && z_uptime_ticks() - start > Z_TICK_HZ / 4) {
+			z_win_set_title(&win, "Calculating...");
+			said = true;
 		}
+		calc_pump();
+		calc_t0 = z_uptime_ticks();
+		more = zco_resume(&calc_co);
+	}
+	if (said) {
+		sent_title[0] = 0;		// update_title() sends only a change: it must now
 		update_title();
 	}
 	running = false;
