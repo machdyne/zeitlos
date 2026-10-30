@@ -28,10 +28,27 @@ static void ck(int cond, const char *what) {
 	if (!cond) { fails++; printf("FAIL: %s\n", what); }
 }
 
+// for the slices, below
+#include "../../../common/zco.h"
+#include "../../../common/zslice.h"
+static bool sl_on, sl_bad, sl_ok;
+static int sl_yields;
+static void sl_yield(void) { if (sl_on && zco_current()) { sl_yields++; zco_yield(); } }
+static void sl_run(void *arg);
+
 #define V15(p) rsa_verify_pkcs1_sha256(p##n, sizeof p##n, p##e, sizeof p##e, \
 	p##sig15, sizeof p##sig15, p##h)
 #define VPSS(p) rsa_verify_pss_sha256(p##n, sizeof p##n, p##e, sizeof p##e, \
 	p##sigpss, sizeof p##sigpss, p##h)
+
+static void sl_run(void *arg) {
+	static uint8_t sig[sizeof k2048_sig15];
+	(void)arg;
+	memcpy(sig, k2048_sig15, sizeof sig);
+	if (sl_bad) sig[100] ^= 1;
+	sl_ok = rsa_verify_pkcs1_sha256(k2048_n, sizeof k2048_n, k2048_e, sizeof k2048_e,
+		sig, sizeof sig, k2048_h);
+}
 
 int main(void) {
 
@@ -143,6 +160,30 @@ int main(void) {
 		ck(!rsa_verify_pss_sha256(k2048_n, sizeof k2048_n, k2048_e,
 			sizeof k2048_e, z, sizeof(z), k2048_h),
 			"pss rejects an all-zero signature");
+	}
+
+	// -- in slices, as web runs it (zslice.h, docs/web_app.md "Nothing
+	// waits"): a coroutine that hands back at every checkpoint gets the
+	// same answers, a little at a time
+	{
+		static uint8_t stack[64 * 1024];
+		static zco_t co;
+		sl_on = true;
+		z_slice = sl_yield;
+		for (int round = 0; round < 2; round++) {
+			sl_bad = round == 1;
+			zco_init(&co, sl_run, NULL, stack, sizeof stack);
+			sl_yields = 0;
+			int resumes = 0;
+			while (zco_resume(&co)) resumes++;
+			ck(!co.overflow, "the verification fits its stack");
+			ck(sl_yields >= 17 && resumes == sl_yields, "it hands back at its checkpoints");
+			ck(sl_ok == !sl_bad, round ? "a bad signature fails in slices too" :
+				"a good signature verifies in slices");
+		}
+		z_slice = NULL;
+		printf("rsa: 2048-bit in %d slices, %lu bytes of stack\n", sl_yields,
+			(unsigned long)zco_stack_used(&co));
 	}
 
 	printf("%s: %d checks, %d failures\n",

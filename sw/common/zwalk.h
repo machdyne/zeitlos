@@ -23,28 +23,39 @@
  * The caller hands zw_start() one block (an arena, or a static
  * buffer). It holds the listing of the folder being walked, the chunk
  * buffer, and the types of the entries; the tree's depth is a fixed
- * stack in zwalk_t (ZW_DEPTH). Nothing is allocated. A folder whose
- * listing does not fit the block is walked as far as it fits, and
- * zwalk_t.truncated says so; delete lists it again until it is empty.
+ * stack in zwalk_t (ZW_DEPTH). Nothing is allocated.
  *
- * Folders are listed again when the walk comes back up to them,
- * rather than holding every level's listing: one more call per
- * folder, in exchange for memory that does not grow with depth.
- * find and copy pick up where they were (a folder being walked is not
- * changing under them -- copy refuses a destination inside its
- * source); delete starts its folder over, since everything before is
- * gone.
+ * -- folders of any size --
+ *
+ * A folder is read straight from fs a page at a time (zfsc.h,
+ * zfs_readdir()), into the block, as many entries as fit: a window of
+ * the folder. When the walk has been through the window, the next one
+ * is read, from where it ended. So a folder of any size is walked
+ * whole, whatever the block's size; the block only sets how often
+ * the folder is read again. The page fs writes into is in zwalk_t
+ * itself (`page`), since fs writes only into the app's own memory,
+ * never an arena.
+ *
+ * Folders are read again when the walk comes back up to them, from
+ * the entry it had reached, rather than holding every level's listing:
+ * memory that does not grow with depth. find and copy pick up where
+ * they were (a folder being walked is not changing under them -- copy
+ * refuses a destination inside its source); delete starts its folder
+ * over, since everything before is gone.
  */
 
 #include <stdint.h>
 #include <stdbool.h>
 
 #include "zfs.h"		// Z_FS_PATH_MAX
+#include "zfsc.h"		// a folder a page at a time
 
 #define ZW_DEPTH		16	// folders deep below the start
 #define ZW_TEXT_MAX		64	// longest text a find looks for
 #define ZW_NAME_MAX		64	// longest name pattern
 #define ZW_CHUNK		2048	// bytes per read/write step
+#define ZW_PAGE			1024	// a page of a folder's entries from fs
+#define ZW_LIST_STEP	64		// entries read in one step
 
 #define ZW_FIND		0
 #define ZW_COPY		1
@@ -68,7 +79,7 @@
 #define ZW_E_EXISTS		8	// copy: the destination is already there
 
 typedef struct {
-	uint16_t	idx;		// next entry of this folder's listing
+	uint32_t	idx;		// next entry of this folder, counted from its start
 	uint16_t	slen;		// src's length at this level
 	uint16_t	dlen;		// dst's length at this level
 } zw_frame_t;
@@ -90,16 +101,23 @@ typedef struct {
 	int			depth;
 	bool		root_file;			// the start is a file, not a folder
 
-	// -- the listing of st[depth]'s folder --
+	// -- a window of st[depth]'s folder: entries [base, base + count) --
 	char		*pool;
-	uint32_t	poolcap;
+	uint32_t	poolcap, poolused;
 	uint8_t		*types;
 	uint32_t	maxent;
+	uint32_t	base;
 	uint32_t	count;
-	uint32_t	cur;				// entry index `off` points at
+	uint32_t	cur;				// entry index `off` points at, in the window
 	uint32_t	off;				// byte offset of entry `cur` in pool
 	bool		listed;
-	bool		list_trunc;			// this listing was cut short
+	bool		list_trunc;			// the folder goes on past the window
+
+	// -- reading it --
+	zfs_dir_t	dir;
+	bool		reading;			// dir is open: the window is being filled
+	uint32_t	dpos;				// entries of the folder read so far
+	uint32_t	page[ZW_PAGE / 4];
 
 	// -- a file in progress (copy, or a text find) --
 	uint8_t		*buf;				// ZW_CHUNK + ZW_TEXT_MAX
@@ -113,7 +131,7 @@ typedef struct {
 	uint32_t	files, dirs;		// copied / deleted / looked at
 	uint32_t	bytes;				// copied, or read by a text find
 	uint32_t	skipped;			// too deep, or a name too long
-	bool		truncated;			// some listing did not fit the block
+	bool		truncated;			// a folder could not be read to its end
 	bool		partial;			// copy: something was written and is now left
 
 } zwalk_t;

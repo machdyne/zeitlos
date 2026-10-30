@@ -517,6 +517,13 @@ static void arena_point(void *base) {
 	}
 }
 
+// The Open and Save dialogs list a big folder after the arena's own
+// bytes, which can move it (zdialog.h, arena_moved).
+static void arena_dialog_moved(void *base, void *user) {
+	(void)user;
+	if (arena) arena_point(base);
+}
+
 // Moves pieces of the arena to where a new layout puts them. Each is
 // (from, to, length); the pieces are in address order and do not
 // overlap, before or after. Those moving down go first, lowest first,
@@ -1962,26 +1969,46 @@ static const char *enc_name(void) {
 // euro. In Latin-9 those bytes are control codes nobody writes into a
 // text file, so their presence is the tell; without them the two read
 // the same except for eight letters, and Latin-9 is kept.
-static enc_t detect_enc(const char *b, int n) {
+//
+// Counted as the file comes in (enc_scan(), a piece at a time from the
+// loader), so the end of an open is not a second pass over the whole
+// file: it was one call, a megabyte in about a third of a second.
+typedef struct {
+	int		at;			// doc[] up to here is counted
+	int		good, bad;
+	bool	c1;
+} enc_scan_t;
 
-	int good = 0, bad = 0;
-	bool c1 = false;
-	const char *p = b, *end = b + n;
+// Counts doc[s->at .. to). Unless `last`, a character that might go on
+// past `to` waits for the next piece.
+static void enc_scan(enc_scan_t *s, const char *b, int to, bool last) {
+
+	const char *p = b + s->at, *end = b + to;
 
 	while (p < end) {
 		uint8_t c = (uint8_t)*p;
 		if (c < 0x80) { p++; continue; }
-		if (c < 0xA0 && cp1252_hi[c - 0x80]) c1 = true;
+		if (!last && end - p < 4) break;
+		if (c < 0xA0 && cp1252_hi[c - 0x80]) s->c1 = true;
 		const char *q = p;
 		z_utf8_next(&p, end);
-		if (p - q == 1) bad++;
-		else good++;
+		if (p - q == 1) s->bad++;
+		else s->good++;
 	}
-
-	if (bad <= good) return ENC_UTF8;
-	return c1 ? ENC_CP1252 : ENC_LATIN9;
+	s->at = (int)(p - b);
 
 }
+
+static enc_t enc_result(const enc_scan_t *s) {
+	if (s->bad <= s->good) return ENC_UTF8;
+	return s->c1 ? ENC_CP1252 : ENC_LATIN9;
+}
+
+// A piece at a time, between the window's messages: below.
+static const char *io_name;
+static void io_begin(const char *verb, const char *path, bool blank);
+static void io_end(void);
+static bool io_pump(long done, long total, bool stoppable);
 
 // Converts the single-byte text in doc[0..len) (file_enc; the gap at
 // the end, as loading leaves it) to UTF-8 in place. Returns false,
@@ -1989,12 +2016,17 @@ static enc_t detect_enc(const char *b, int n) {
 // letter doubles, and past TEXT_MAX that needs an arena.
 static bool sb_to_utf8_in_place(void) {
 
+	// Two passes over the file: the window's mail is read between
+	// pieces (io_pump(), the page blank: it is an open), not stoppable --
+	// the second pass rewrites the text in place.
+	io_begin("Converting", io_name ? io_name : "the file", true);
 	int out = 0;
 	for (int i = 0; i < len; i++) {
 		char u[Z_UTF8_MAX];
 		out += z_utf8_put(sb_byte_to_cp((uint8_t)doc[i]), u);
+		if ((i & 0xFFFF) == 0xFFFF) io_pump(i, 2L * len, false);
 	}
-	if (out > cap && !doc_room(out - len)) return false;
+	if (out > cap && !doc_room(out - len)) { io_end(); return false; }
 
 	// Backwards, so the growing output never overtakes the input still
 	// to be read: the write position is always at or after the read
@@ -2005,7 +2037,9 @@ static bool sb_to_utf8_in_place(void) {
 		int k = z_utf8_put(sb_byte_to_cp((uint8_t)doc[i]), u);
 		j -= k;
 		memcpy(&doc[j], u, (size_t)k);
+		if ((i & 0xFFFF) == 0) io_pump(2L * len - i, 2L * len, false);
 	}
+	io_end();
 
 	len = out;
 	gs = len;
@@ -2819,6 +2853,7 @@ static bool load_file(const char *path) {
 	io_begin("Opening", path, true);
 	long read_total = 0;
 	bool cr_held = false, read_err = false, full = false;
+	enc_scan_t es = { 0, 0, 0, false };
 	for (;;) {
 		char stage[4096];
 		int room = cap - len - (cr_held ? 1 : 0);
@@ -2844,6 +2879,7 @@ static bool load_file(const char *path) {
 		}
 		gs = len;
 		gl = cap - len;
+		enc_scan(&es, doc, len, false);
 		if (io_pump(read_total, size, true)) break;
 	}
 	if (cr_held && !io_stopped) doc[len++] = '\r';
@@ -2865,7 +2901,7 @@ static bool load_file(const char *path) {
 		return false;
 	}
 
-	// The encoding (see detect_enc()). A UTF-8 byte order mark is
+	// The encoding (see enc_scan()). A UTF-8 byte order mark is
 	// taken off -- it is not text, and would sit in front of the first
 	// character as a box -- and put back on save.
 	if (len >= 3 && (uint8_t)doc[0] == 0xEF && (uint8_t)doc[1] == 0xBB &&
@@ -2877,7 +2913,10 @@ static bool load_file(const char *path) {
 	gs = len;
 	gl = cap - len;
 
-	file_enc = file_bom ? ENC_UTF8 : detect_enc(doc, len);
+	// the last few bytes, and the answer; the BOM's three moved the rest
+	// down, but it is UTF-8 then whatever the counts say
+	if (!file_bom) enc_scan(&es, doc, len, true);
+	file_enc = file_bom ? ENC_UTF8 : enc_result(&es);
 
 	if (file_enc != ENC_UTF8 && !sb_to_utf8_in_place()) {
 		open_failed();
@@ -3760,7 +3799,10 @@ static int replace_all_core(bool record) {
 
 	layout_sync();
 	int first = -1;
-	for (int i = 0; i + nf <= len; i++) if (match_at(i, nf)) { first = i; break; }
+	for (int i = 0; i + nf <= len; i++) {
+		if ((i & 0x3FFF) == 0x3FFF) io_pump(0, 1, false);
+		if (match_at(i, nf)) { first = i; break; }
+	}
 	int para = para_line_at(first);
 
 	// One run, with all the free space after it: the pass below reads
@@ -3777,7 +3819,21 @@ static int replace_all_core(bool record) {
 
 	if (record) undo_begin(UK_OTHER, first);
 
+	// A piece at a time: the window's mail between pieces (the page
+	// blank meanwhile -- the text is half rewritten), and Esc stops it:
+	// the rest is then copied as it is, so what is done is the matches
+	// before that point, one undo group still.
+	io_begin("Replacing", find_text, true);
+	io_name = find_text;
+	long piece = 0;
 	while (src < end) {
+		if (++piece % FIND_SLICE == 0 && io_pump(src - shift, end - shift, true)) {
+			if (newcur < 0) newcur = dst + (c0 - (src - shift) > 0 ? c0 - (src - shift) : 0);
+			memmove(&doc[dst], &doc[src], (size_t)(end - src));
+			dst += end - src;
+			src = end;
+			break;
+		}
 		if (newcur < 0 && src - shift >= c0) newcur = dst;
 		if (src + nf <= end && match_raw(src, nf)) {
 			if (record) {
@@ -3793,6 +3849,7 @@ static int replace_all_core(bool record) {
 		} else
 			doc[dst++] = doc[src++];
 	}
+	io_end();
 
 	len = dst;
 	gs = len;
@@ -3910,7 +3967,8 @@ static void do_replace(void) {
 // Lines here are the file's lines -- what a compiler or another editor
 // numbers -- not the wrapped display lines.
 
-static int doc_line_of(int off) {
+// (the tests' -- the dialog counts in one pass: doc_census())
+static __attribute__((unused)) int doc_line_of(int off) {
 	int n = 1;
 	for (int i = 0; i < off && i < len; i++) if (B(i) == '\n') n++;
 	return n;
@@ -3923,7 +3981,7 @@ static int doc_line_start(int line) {
 }
 
 // Words (runs of anything but spaces, tabs and newlines) and characters.
-static void doc_counts(int *words, int *chars) {
+static __attribute__((unused)) void doc_counts(int *words, int *chars) {
 	int w = 0;
 	bool in = false;
 	for (int i = 0; i < len; i++) {
@@ -3938,20 +3996,45 @@ static void doc_counts(int *words, int *chars) {
 		(int)z_utf8_count(&doc[gs + gl], (size_t)(len - gs));
 }
 
+// Past the last line is the last line: doc_line_start() stops at the
+// end of the text.
 static void goto_line(int line) {
-	int total = doc_line_of(len);
 	if (line < 1) line = 1;
-	if (line > total) line = total;
 	undo_break();
 	move_cursor(doc_line_start(line));
 	echo_line();
 }
 
+// The line the caret is on, how many there are, the words and the
+// characters: one pass, in pieces (the window's mail between them; the
+// page stays drawn), Esc stops it. False if stopped.
+static bool doc_census(int *here, int *total, int *words, int *chars) {
+	int n = 1, w = 0, ch = 0;
+	bool in = false;
+	*here = 1;
+	io_begin("Counting", "the document", false);
+	for (int i = 0; i < len; i++) {
+		if ((i & 0x7FFF) == 0x7FFF && io_pump(i, len, true)) { io_end(); return false; }
+		if (i == cursor) *here = n;
+		char c = B(i);
+		if (c == '\n') n++;
+		bool sp = c == ' ' || c == '\n' || c == '\t';
+		if (!sp && !in) w++;
+		in = !sp;
+		if (((uint8_t)c & 0xC0) != 0x80) ch++;
+	}
+	if (cursor >= len) *here = n;
+	io_end();
+	*total = n;
+	*words = w;
+	*chars = ch;
+	return true;
+}
+
 static void do_goto(void) {
 
-	int words, chars;
-	doc_counts(&words, &chars);
-	int here = doc_line_of(cursor), total = doc_line_of(len);
+	int words, chars, here, total;
+	if (!doc_census(&here, &total, &words, &chars)) { repaint(); return; }
 
 	char msg[160], cur[16], ans[16];
 	snprintf(msg, sizeof(msg), "Line %d of %d.\n%d word%s, %d character%s.\nGo to line:",
@@ -4343,6 +4426,7 @@ int main(void) {
 	dlg_ctx.parent = &win;
 	dlg_ctx.on_msg = forward_msg;
 	dlg_ctx.user = NULL;
+	dlg_ctx.arena_moved = arena_dialog_moved;
 
 	layout();
 

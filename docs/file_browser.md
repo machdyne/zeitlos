@@ -63,7 +63,8 @@ characters of the name in front of it, so a narrow window shows names
 alone rather than truncating them to nothing.
 
 **Big folders.** A folder shows everything in it -- thousands of
-files -- with nothing to click for more. The first rows appear at once
+files -- with nothing to click for more, and so do Find, Copy, Move and
+Delete: they go through every entry of every folder. The first rows appear at once
 and the rest arrive in the gaps, sorted into place as they come; the
 path line says "(reading)" until the last is in. The window answers
 keys and clicks throughout: you can scroll, type a name, or open
@@ -261,13 +262,9 @@ worse than making you close something first. `k_fs_open_count()`
   that it is listed in part and the path line says "(partial list)".
   While a copy, move, delete or find is running the list does not
   grow, so a folder opened then may also be listed in part; F5 reads
-  it in full afterwards. `ls` in the posix shell, and the Open and
-  Save dialogs in other apps, still stop at 256 and say so.
-- **Find and copy see what one listing of a folder holds.** A walk
-  lists each folder it goes into in one call, into its own block of
-  memory (`zwalk.h`); a folder whose listing does not fit is walked in
-  part, and the result says so. Delete lists again until the folder
-  is empty, so it is not affected.
+  it in full afterwards. The Open and Save dialogs in other apps show
+  the same 4,096 ([widgets.md](widgets.md#big-folders-in-the-open-and-save-dialogs));
+  `ls` in the posix shell still stops at 256 and says so.
 - **Folders copy as walks.** A folder copies, moves
   and deletes with everything in it, as a walk (`zwalk.h`); within
   a volume a move is one `FS_RENAME`. A folder is not copied over an

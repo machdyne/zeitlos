@@ -8,6 +8,7 @@
 #include <string.h>
 
 #include "bignum.h"
+#include "../../common/zslice.h"
 
 static void bn_zero(bn_t *a) { memset(a, 0, sizeof(*a)); }
 
@@ -146,6 +147,10 @@ static void mont_mul(uint32_t *out, const uint32_t *a, const uint32_t *b,
 	// extra bit the final conditional subtraction can need.
 	static uint32_t t[BN_MAX_LIMBS + 2];
 	uint16_t i, j;
+
+	// a checkpoint: an RSA-2048 verification is thousands of these and
+	// seconds in all, and web runs it a slice at a time (zslice.h)
+	z_slice_point();
 
 	memset(t, 0, (size_t)(n + 2) * sizeof(uint32_t));
 

@@ -17,7 +17,7 @@ SKIP77 = r=$$?; [ $$r -eq 0 ] || { [ $$r -eq 77 ] && echo "  (skipped)"; }
 
 TESTS = accent args bitbang dialog flist gfx_region gz inflate png scrollbar text undo vt \
 	zcaption zcfg zexec zexec_inflate zexec_lz4 zfmt zinput zkbd zscreen \
-	zsha1 ztype zwalk zws
+	zsha1 zslice ztype zwalk zws
 
 .PHONY: test $(TESTS) clean
 
@@ -138,6 +138,10 @@ zsha1: | $(OUT)
 ztype: | $(OUT)
 	$(CC_) -Wall -I sw/common -o $(OUT)/test_ztype sw/common/tests/test_ztype.c \
 		sw/common/ztype.c && $(OUT)/test_ztype
+
+zslice: | $(OUT)
+	$(CC_) -Wall -I sw/common -o $(OUT)/test_zslice sw/common/tests/test_zslice.c \
+		sw/common/zslice.c sw/common/zco.c sw/common/zsvg.c && $(OUT)/test_zslice
 
 zwalk: | $(OUT)
 	$(CC_) -Wall -I sw/common -o $(OUT)/test_zwalk sw/common/tests/test_zwalk.c \

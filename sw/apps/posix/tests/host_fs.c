@@ -28,6 +28,7 @@
 #include <dirent.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include "zfsc.h"
 #include <strings.h>
 
 #include "zfs.h"
@@ -122,6 +123,16 @@ bool fs_df(uint32_t *total, uint32_t *freek) {
     *freek = 512 * 1024;
     return true;
 }
+
+/* zwalk reads a folder a page at a time from fs (zfsc.h); with no fs
+ * driver it falls back on fs_list_into() below, which is what these
+ * tests have. */
+int32_t zfs_opendir_at(zfs_dir_t *d, const char *path, void *buf, uint32_t cap) {
+    (void)d; (void)path; (void)buf; (void)cap;
+    return -Z_ENODEV;
+}
+const z_fs_dirent_t *zfs_readdir(zfs_dir_t *d) { (void)d; return NULL; }
+int32_t zfs_closedir_at(zfs_dir_t *d) { (void)d; return 0; }
 
 int fs_list_into(const char *path, char *buf, uint32_t cap,
                  uint8_t *types, uint32_t max_entries, uint32_t *count,

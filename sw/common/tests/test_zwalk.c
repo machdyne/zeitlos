@@ -115,6 +115,73 @@ int fs_list_into(const char *path, char *buf, uint32_t cap, uint8_t *types,
 	return n > 0;		// the kernel: an empty folder is a failure
 }
 
+// The folder a page at a time, as zfsc.c: OPENDIR is one call and
+// brings the first page, each READDIR one call and the next. A page
+// here is PAGE_N entries, in sorted order (a stable order, like FAT's).
+// The entries are held as `at`/`len` counts in the page, `end` once
+// the last page is in -- the fields zwalk.c looks at.
+
+#define PAGE_N 16
+static char *dnames[4096];
+static uint8_t dtypes[4096];
+static int dn, dnext, dopen;
+
+static void dir_page(zfs_dir_t *d) {
+	int k = dn - dnext < PAGE_N ? dn - dnext : PAGE_N;
+	d->at = 0;
+	d->len = (uint32_t)k;
+	d->end = dnext + k >= dn;
+}
+
+int32_t zfs_opendir_at(zfs_dir_t *d, const char *path, void *buf, uint32_t cap) {
+	DIR *h = opendir(hp(path));
+	struct dirent *de;
+	calls++;
+	memset(d, 0, sizeof(*d));
+	d->buf = buf;
+	d->cap = cap;
+	for (int i = 0; i < dn; i++) free(dnames[i]);
+	dn = dnext = 0;
+	if (!h) return -2;
+	while ((de = readdir(h)) && dn < 4096)
+		if (strcmp(de->d_name, ".") && strcmp(de->d_name, ".."))
+			dnames[dn++] = strdup(de->d_name);
+	closedir(h);
+	qsort(dnames, (size_t)dn, sizeof(char *), cmpstr);
+	for (int i = 0; i < dn; i++) {
+		char full[1200];
+		struct stat st;
+		snprintf(full, sizeof(full), "%s/%s", hp(path), dnames[i]);
+		dtypes[i] = (stat(full, &st) == 0 && S_ISDIR(st.st_mode)) ? Z_FS_TYPE_DIR : Z_FS_TYPE_FILE;
+	}
+	dopen++;
+	dir_page(d);
+	return 0;
+}
+
+const z_fs_dirent_t *zfs_readdir(zfs_dir_t *d) {
+	static union { z_fs_dirent_t e; char b[sizeof(z_fs_dirent_t) + 256]; } u;
+	if (d->at >= d->len) {
+		if (d->end) return NULL;
+		calls++;
+		dir_page(d);
+		if (!d->len) return NULL;
+	}
+	int i = dnext++;
+	d->at++;
+	memset(&u.e, 0, sizeof(u.e));
+	u.e.namelen = (uint16_t)strlen(dnames[i]);
+	memcpy(u.e.name, dnames[i], (size_t)u.e.namelen + 1);
+	u.e.info.type = dtypes[i];
+	return &u.e;
+}
+
+int32_t zfs_closedir_at(zfs_dir_t *d) {
+	(void)d;
+	if (dopen) dopen--;
+	return 0;
+}
+
 // -- helpers --
 
 static int checks, failures;
@@ -314,7 +381,7 @@ int main(void) {
 		expect(!exists("/many") && w.files == 300, "all 300 and the folder");
 	}
 
-	printf("find with a small block says it was cut short\n");
+	printf("find with a small block still sees every file\n");
 	{
 		dir("/many");
 		for (int i = 0; i < 300; i++) {
@@ -326,7 +393,43 @@ int main(void) {
 		zw_start(&w, ZW_FIND, "/many", NULL, small, sizeof(small));
 		zw_find_set(&w, "", "");
 		run(&w, NULL, 0, &mc);
-		expect(w.truncated && w.files < 300, "truncated");
+		expect(!w.truncated && w.files == 300, "all 300, a window at a time");
+		expect(mc <= 1, "one call per step");
+		expect(dopen == 0, "no folder left open");
+	}
+
+	printf("a folder of 3000, copied with a small block, and stopped half way\n");
+	{
+		dir("/huge");
+		dir("/huge/sub");
+		put("/huge/sub/deep.txt", "needle");
+		for (int i = 0; i < 3000; i++) {
+			char p[64];
+			snprintf(p, sizeof(p), "/huge/f%04d.txt", i);
+			put(p, "x");
+		}
+		static uint8_t small[2112 + 1200];
+		zw_start(&w, ZW_FIND, "/huge", NULL, small, sizeof(small));
+		zw_find_set(&w, "", "needle");
+		char hits[200];
+		run(&w, hits, sizeof(hits), &mc);
+		expect(w.files == 3001 && strstr(hits, "/huge/sub/deep.txt"), "a find reads all 3001");
+		expect(mc <= 1, "one call per step");
+		expect(zw_start(&w, ZW_COPY, "/huge", "/huge2", small, sizeof(small)), "start a copy");
+		for (int k = 0; k < 2000; k++) zw_step(&w);
+		zw_cancel(&w);
+		expect(dopen == 0, "stopping leaves no folder open");
+		zw_start(&w, ZW_DELETE, "/huge2", NULL, small, sizeof(small));
+		run(&w, NULL, 0, &mc);
+		expect(!exists("/huge2"), "the half copy deleted");
+		zw_start(&w, ZW_COPY, "/huge", "/huge2", small, sizeof(small));
+		expect(run(&w, NULL, 0, &mc) == ZW_DONE && w.files == 3001, "a copy of all 3001");
+		expect(exists("/huge2/f2999.txt") && exists("/huge2/sub/deep.txt"), "the last and the deepest");
+		zw_start(&w, ZW_DELETE, "/huge", NULL, small, sizeof(small));
+		expect(run(&w, NULL, 0, &mc) == ZW_DONE && !exists("/huge"), "and deleted");
+		expect(mc <= 1, "one call per step");
+		zw_start(&w, ZW_DELETE, "/huge2", NULL, small, sizeof(small));
+		run(&w, NULL, 0, &mc);
 	}
 
 	printf("delete one file\n");

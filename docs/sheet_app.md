@@ -368,6 +368,14 @@ count wraps (once in 64 edits) are the cells walked. Before 0.0.7 every
 edit walked every cell, which made loading a file -- an edit per cell
 -- quadratic: 4,096 cells would have been 16 million steps.
 
+**Without stopping the window.** The values on screen are worked out
+before the grid is drawn, in a coroutine that hands back every ~10 ms
+at a checkpoint in each cell's evaluation (`calc_visible()`,
+[responsive.md](responsive.md#sheet)). A change that touches thousands
+of formulas shows `Calculating...` in the title meanwhile, and the
+window keeps answering wm; keys typed meanwhile are kept, in order.
+Usually it is done in the first slice and nothing shows.
+
 An **invariant worth knowing before changing anything in
 `sheet_core.c`**: evaluation never moves a cell. It writes the cached
 value, error and state, and nothing else. Both the range walker (which

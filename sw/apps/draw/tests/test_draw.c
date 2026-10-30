@@ -20,6 +20,7 @@
 
 #include "../drawstamp.h"
 #include "../drawundo.h"
+#include "../drawfill.h"
 
 #define W	DRAW_PAGE_W
 #define H	DRAW_PAGE_H
@@ -386,9 +387,124 @@ static void test_undo(void) {
 
 }
 
+// -- the paint bucket (drawfill.c) --
+//
+// Against a plain flood fill with a visited array and a queue as long as
+// the page: the region, and the pattern in it.
+
+static uint8_t seen[H][W];
+static int16_t qx[W * H], qy[W * H];
+
+static int px(const uint32_t *p, int x, int y) { return (int)((p[y * WPL + (x >> 5)] >> (x & 31)) & 1u); }
+
+static void ref_flood(uint32_t *out, const uint32_t *in, int x, int y, const uint8_t *pat) {
+	int t = px(in, x, y), head = 0, tail = 0;
+	memcpy(out, in, WORDS * 4);
+	memset(seen, 0, sizeof(seen));
+	seen[y][x] = 1; qx[tail] = (int16_t)x; qy[tail++] = (int16_t)y;
+	while (head < tail) {
+		int cx = qx[head], cy = qy[head++];
+		uint32_t m = 1u << (cx & 31);
+		if (pat_bit(pat, cx, cy)) out[cy * WPL + (cx >> 5)] |= m;
+		else out[cy * WPL + (cx >> 5)] &= ~m;
+		static const int dx[4] = { 1, -1, 0, 0 }, dy[4] = { 0, 0, 1, -1 };
+		for (int k = 0; k < 4; k++) {
+			int nx = cx + dx[k], ny = cy + dy[k];
+			if ((unsigned)nx >= W || (unsigned)ny >= H || seen[ny][nx]) continue;
+			if (px(in, nx, ny) != t) continue;
+			seen[ny][nx] = 1; qx[tail] = (int16_t)nx; qy[tail++] = (int16_t)ny;
+		}
+	}
+}
+
+static uint32_t f_in[WORDS], f_page[WORDS], f_want[WORDS];
+
+// Fills (x, y) in steps of `work`, as draw does between messages.
+static draw_fill_t fill;
+static int fill_run(int x, int y, const uint8_t *pat, int work) {
+	memcpy(f_page, f_in, WORDS * 4);
+	draw_fill_start(&fill, f_page, f_in, x, y, pat);
+	int steps = 0;
+	while (draw_fill_step(&fill, work) == DRAW_FILL_MORE) steps++;
+	return steps;
+}
+
+static void scene(int kind) {
+	memset(f_in, 0, sizeof(f_in));
+	ref = f_in;
+	if (kind == 0) {
+		// shapes: outlines, filled boxes, lines
+		for (int i = 0; i < 40; i++) {
+			int x0 = rr(0, W - 1), y0 = rr(0, H - 1), x1 = rr(0, W - 1), y1 = rr(0, H - 1);
+			switch (rr(0, 2)) {
+			case 0: ref_rect(x0, y0, x1, y1, 1); break;
+			case 1: ref_fill(x0 < x1 ? x0 : x1, y0 < y1 ? y0 : y1, abs(x1 - x0) / 4 + 1,
+				abs(y1 - y0) / 4 + 1, pats[rr(0, 2)]); break;
+			default: ref_pat = pats[0]; walk(x0, y0, x1, y1, ref_brush); break;
+			}
+		}
+	} else if (kind == 1) {
+		// noise: many tiny regions, and some long thin ones
+		for (int i = 0; i < WORDS; i++) f_in[i] = rnd() & rnd() & rnd();
+	} else {
+		// a comb: hundreds of slots, each a separate run to come back to,
+		// which a stack of DRAW_FILL_STACK cannot hold at once
+		for (int x = 0; x < W; x += 2)
+			for (int y = (x % 4 ? 0 : 1); y < H - 1; y++) ref_pset(x, y + (x % 4 ? 1 : 0), 1);
+		for (int y = 3; y < H; y += 6)
+			for (int x = 1; x < W; x += 2) if ((x / 2 + y) % 5 == 0) ref_pset(x, y, 1);
+	}
+}
+
+static void test_fill(void) {
+
+	int sweeps = 0, most_steps = 0;
+
+	for (int kind = 0; kind < 3; kind++) {
+		for (int trial = 0; trial < 12; trial++) {
+			scene(kind);
+			int x = rr(0, W - 1), y = rr(0, H - 1);
+			const uint8_t *pat = pats[rr(0, 3)];
+			ref_flood(f_want, f_in, x, y, pat);
+			int work = trial % 3 == 0 ? 1 : trial % 3 == 1 ? 16 : 1000;
+			int steps = fill_run(x, y, pat, work);
+			if (steps > most_steps) most_steps = steps;
+			sweeps += (int)fill.sweeps;
+			CHECK(!memcmp(f_page, f_want, sizeof(f_page)));
+			// everything it changed is inside its box
+			for (int yy = 0; yy < H; yy++) for (int xx = 0; xx < W; xx++)
+				if (px(f_page, xx, yy) != px(f_in, xx, yy))
+					CHECK(xx >= fill.x0 && xx <= fill.x1 && yy >= fill.y0 && yy <= fill.y1);
+		}
+	}
+	CHECK(sweeps > 0);		// the comb ran the stack out, and the sweep finished it
+
+	// the whole empty page, one step at a time: each step is short
+	memset(f_in, 0, sizeof(f_in));
+	ref_flood(f_want, f_in, 5, 5, pats[1]);
+	fill_run(5, 5, pats[1], 1);
+	CHECK(!memcmp(f_page, f_want, sizeof(f_page)));
+
+	// stopped part way: the page as it was
+	scene(2);
+	memcpy(f_page, f_in, WORDS * 4);
+	draw_fill_start(&fill, f_page, f_in, 3, 3, pats[2]);
+	for (int i = 0; i < 50; i++) draw_fill_step(&fill, 4);
+	draw_fill_stop(&fill);
+	CHECK(!memcmp(f_page, f_in, sizeof(f_page)));
+
+	// off the page: nothing
+	CHECK(!draw_fill_start(&fill, f_page, f_in, -1, 3, pats[0]));
+	CHECK(draw_fill_step(&fill, 10) == DRAW_FILL_DONE);
+
+	printf("fill: ok (%d sweeps after the stack ran out; at most %d steps)\n", sweeps, most_steps);
+
+}
+
 int main(void) {
 	test_stamps();
 	test_undo();
+	test_fill();
 	if (fails) { printf("draw stamps/undo: %d FAILED\n", fails); return 1; }
 	printf("draw stamps/undo: ok\n");
 	return 0;

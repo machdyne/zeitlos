@@ -132,7 +132,7 @@ move, Enter or a click picks one: one that needs nothing more runs
 | Delete / Backspace | delete the selection |
 | Tab / Shift+Tab | select the next / previous object |
 | Ctrl+N / Ctrl+O / Ctrl+S | new / open / save (also the titlebar icons) |
-| Ctrl+P | print the deck |
+| Ctrl+P | print: the print dialog (also the titlebar's printer) |
 | Esc, while a picture loads | stop loading pictures |
 | Enter on a stopped or failed picture | load it again |
 
@@ -250,12 +250,19 @@ drawn again.
 
 ### Printing
 
-**Ctrl+P** (or `/print`) prints the deck on the printer set up in
-`zeitlos.cfg` ([print](print.md#setting-up)). The print service takes
-it from there, in a window of its own: slide goes on working, and the
-status line says how it ended.
+**Ctrl+P**, or the printer in the title bar, opens the print dialog
+([print](print.md#the-print-dialog)): the printer in `zeitlos.cfg` or a
+PDF or PostScript file, all the cards, the one shown or a range
+(`2-5`), copies, paper, tray, cards to a sheet and quality. It starts
+from how the deck prints -- its `/print setup` words below -- and what
+is chosen in it is for this once; the deck's own words that the dialog
+has no row for (cut marks, frames, actual size, the paper's kind) still
+apply. **Print** hands the job to the print service, which takes it from
+there in a window of its own: slide goes on working, and the status
+line says how it ended.
 
-`/print` takes words, in any order:
+`/print` prints straight away, without the dialog, and takes words, in
+any order:
 
 | word | |
 |---|---|

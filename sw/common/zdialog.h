@@ -89,6 +89,14 @@ typedef struct {
 
 	void		*user;
 
+	// For an app with an arena (z_arena_set()): the Open and Save
+	// dialogs list a big folder in memory after the app's own, which
+	// may move the arena. Called with its base after every move, and
+	// once more when the dialog gives the memory back. NULL: an app
+	// that has an arena gets the 256-entry list; one without an arena
+	// needs nothing -- the dialog borrows the arena and frees it.
+	void (*arena_moved)(void *base, void *user);
+
 } z_dialog_ctx_t;
 
 // z_dialog_confirm() button sets

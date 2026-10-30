@@ -7,6 +7,7 @@
 
 #include <string.h>
 #include <stdlib.h>
+#include "zslice.h"
 #include "zsvg.h"
 
 /* -- float maths, without libm --------------------------------------
@@ -782,6 +783,8 @@ static void fill_edges(z_svg_t *s, int n, bool evenodd, int level) {
 		int nc = 0, i;
 		float sy = (float)y + 0.5f;
 
+		if (!(y & 15)) z_slice_point();		// a big shape: 16 rows at a time
+
 		for (i = 0; i < n && nc < MAX_CROSS; i++) {
 
 			const z_svg_edge_t *e = &s->edges[i];
@@ -1178,6 +1181,8 @@ int z_svg_render(z_svg_t *s) {
 		const char *tag, *tend, *aend;
 		int tlen;
 		bool selfclose = false, closing = false;
+
+		z_slice_point();		// an element at a time, for an app that slices (zslice.h)
 
 		while (p < end && *p != '<') p++;
 		if (p >= end) break;

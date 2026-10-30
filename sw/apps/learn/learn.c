@@ -161,6 +161,12 @@ static bool p_list(void *ctx, const char *dir, void (*fn)(void *, const char *, 
 	return true;
 }
 
+static void read_pump(void);
+
+// Read a 4 KB piece at a time. In the work's coroutine it hands back
+// after the file is closed (fs_yield()). Outside it -- opening a lesson,
+// up to LF_MAX_LESSON from a key -- wm is served between the pieces
+// (read_pump()): a 48 KB lesson was a few hundred ms with no redraw.
 static long p_read_at(const char *path, long off, char *buf, long cap) {
 	int h = fs_open_read(path);
 	if (h < 0) return -1;
@@ -172,6 +178,7 @@ static long p_read_at(const char *path, long off, char *buf, long cap) {
 		if (n <= 0) break;
 		got += n;
 		if (n < want) break;
+		if (!in_work) read_pump();
 	}
 	fs_close_handle(h);
 	fs_yield();
@@ -705,6 +712,42 @@ static void on_wm(z_msg_t *m) {
 
 static void forward_msg(z_msg_t *m, void *user) { (void)user; on_wm(m); }
 
+// While a lesson is read, between its pieces (p_read_at()): wm's
+// messages answered -- a redraw acknowledged and the page drawn after,
+// once the lesson is in (the page in the middle of being replaced is
+// not drawn) -- and everything else kept, in order, for the main loop.
+#define HELD_MAX 16
+static z_msg_t held[HELD_MAX];
+static int held_at, held_n;
+static bool redraw_owed;
+
+static void read_pump(void) {
+	z_msg_t m;
+	while (z_msg_read(&m) == Z_OK) {
+		switch (m.subject) {
+		case Z_WM_REDRAW:
+			if (m.obj.type == Z_UINT32 && z_win_redraw_id(m.obj.val.uint32) == win.id) {
+				z_win_apply_redraw(&win, m.obj.val.uint32);
+				z_win_redraw_done(&win);
+				redraw_owed = true;
+			}
+			break;
+		case Z_WM_SET_CLIP:
+		case Z_WM_WINDOW_MOVED:
+			on_wm(&m);
+			break;
+		default:
+			if (held_n < HELD_MAX) held[(held_at + held_n++) % HELD_MAX] = m;
+			break;
+		}
+	}
+}
+
+static bool next_msg(z_msg_t *m) {
+	if (held_n) { *m = held[held_at]; held_at = (held_at + 1) % HELD_MAX; held_n--; return true; }
+	return z_msg_read(m) == Z_OK;
+}
+
 static void help(void) {
 	z_dialog_help(&dlg, "learn help", la_help(), "learn");
 }
@@ -808,7 +851,8 @@ int main(void) {
 	for (;;) {
 		z_msg_t m;
 		bool redraw = false;
-		while (z_msg_read(&m) == Z_OK) if (handle(&m)) redraw = true;
+		while (next_msg(&m)) if (handle(&m)) redraw = true;
+		if (redraw_owed) { redraw_owed = false; missed = true; redraw = true; }
 		if (la_quit()) break;
 		if (la_busy() || work_on) {
 			// finding courses, opening one, a unit's titles: a request to fs

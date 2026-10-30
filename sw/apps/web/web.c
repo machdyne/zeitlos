@@ -84,6 +84,8 @@
 #include "../../common/zdns.h"
 #include "../../common/zfsapp.h"
 #include "../../common/zdialog.h"
+#include "../../common/zco.h"
+#include "../../common/zslice.h"
 
 #include "url.h"
 #include "../../common/zedit.h"
@@ -195,11 +197,44 @@ static int spool_wr = -1;
 // bigger than the head shows its first part at once and the rest when
 // it has all arrived. Stop keeps what came.
 #define PROG_HEAD  (64u * 1024u)
-static char *prog_head;			// allocated once, kept
+static char *prog_head;			// in the arena (arena_setup()); NULL: none
 static uint32_t prog_len;		// bytes of the body in it
 static bool prog_on;			// this fetch is being shown as it arrives
 static uint32_t prog_drawn;		// ticks, the body last drawn
 static uint32_t prog_tried;		// prog_len when indexing last found nothing more
+
+// -- the arena (docs/kernel.md, "Arenas") --
+//
+// Three things too big for the 64KB of stack and heap web starts with:
+// the head of a page shown as it arrives, the bytes of a TLS handshake
+// waiting to be processed, and the stack the handshake is processed
+// on. Taken once, at start, and never resized, so the base never moves
+// -- which a coroutine's stack must not. A board that has no arena to
+// give (1MB) shows a page when it is complete and runs a handshake in
+// one go, as web always did.
+//
+// It was malloc(64KB) for the head, out of a stack and heap of 64KB:
+// it never succeeded on the board, and pages appeared only when complete.
+#define HSQ_MAX		(32u * 1024u)
+#define HS_STACK	(32u * 1024u)
+#define AR_HSQ		PROG_HEAD
+#define AR_STACK	(PROG_HEAD + HSQ_MAX)
+#define AR_SIZE		(AR_STACK + HS_STACK)
+static uint8_t *arena;
+
+static void arena_setup(void) {
+	void *base = NULL;
+	uint32_t got = 0;
+	if (z_arena_set(AR_SIZE, &base, &got) == Z_ARENA_OK && base && got >= AR_SIZE) {
+		arena = base;
+		prog_head = (char *)arena;
+		printf("web: %lu KB of arena: pages shown as they arrive, handshakes in slices\n",
+			(unsigned long)(AR_SIZE / 1024u));
+	} else {
+		if (base) z_arena_set(0, NULL, NULL);
+		printf("web: no arena: pages shown when complete, handshakes in one go\n");
+	}
+}
 
 // This fetch is an image for an in-place placeholder, not a page.
 //
@@ -485,6 +520,51 @@ static void img_box_size(uint32_t block, int *w, int *h) {
 // compromise: there is no native pixel size to lose. A logo declared
 // 24x24 in the markup is drawn at 24x24 and looks right, where the
 // same logo as a PNG would have been a blurry thumbnail.
+// The drawing is one call into zsvg -- hundreds of ms for a busy one --
+// so it runs a slice at a time (z_slice_run(), zslice.h): between
+// slices wm is answered, Escape stops it, and anything else waits for
+// the main loop, in order (next_msg()).
+static void dispatch(z_msg_t *msg);
+
+#define HELD_MAX 32
+static z_msg_t held[HELD_MAX];
+static int held_at, held_n;
+
+static bool next_msg(z_msg_t *m) {
+	if (held_n) { *m = held[held_at]; held_at = (held_at + 1) % HELD_MAX; held_n--; return true; }
+	return z_msg_read(m) == Z_OK;
+}
+
+static uint8_t svg_stack[16 * 1024];
+typedef struct { z_svg_t *sv; int rv; } svg_job_t;
+
+static void svg_fn(void *arg) {
+	svg_job_t *j = arg;
+	j->rv = z_svg_render_bitmap(j->sv, img_bits, IMG_WPL);
+}
+
+static bool svg_pump(void *ctx) {
+	(void)ctx;
+	z_msg_t m;
+	bool go = true;
+	while (z_msg_read(&m) == Z_OK) {
+		switch (m.subject) {
+		case Z_WM_SET_CLIP: case Z_WM_REDRAW: case Z_WM_WINDOW_MOVED: case Z_WM_WINDOW_RESIZED:
+			dispatch(&m);
+			break;
+		case Z_WM_KEY:
+			if (m.obj.type == Z_UINT32 && Z_WM_UNPACK_KEY_PRESSED(m.obj.val.uint32) &&
+			    Z_WM_UNPACK_KEY_KEYSYM(m.obj.val.uint32) == 0x1b) { go = false; break; }
+			/* fall through */
+		default:
+			if (held_n < HELD_MAX) held[(held_at + held_n++) % HELD_MAX] = m;
+			else if (m.subject == Z_PORT_DATA) z_port_send_ack(&m);	// not left unanswered
+			break;
+		}
+	}
+	return go;
+}
+
 static bool img_render_svg(int box_w, int box_h) {
 
 	static char text[WEB_SVG_MAX];
@@ -519,7 +599,14 @@ static bool img_render_svg(int box_w, int box_h) {
 
 	memset(img_bits, 0, sizeof(img_bits));
 
-	rv = z_svg_render_bitmap(&sv, img_bits, IMG_WPL);
+	{
+		svg_job_t j = { &sv, Z_SVG_OK };
+		if (!z_slice_run(svg_fn, &j, svg_stack, sizeof svg_stack, svg_pump, NULL)) {
+			snprintf(img_status, sizeof(img_status), "stopped -- click to load");
+			return false;
+		}
+		rv = j.rv;
+	}
 
 	if (rv != Z_SVG_OK) {
 		snprintf(img_status, sizeof(img_status), "%s",
@@ -762,7 +849,13 @@ static bool sw_mode(void) {
 
 static void on_body(void *user, const char *data, uint32_t len);
 
+static void prog_begin(bool cp1252);
+static bool prog_wanted(void);
+
+// A Gopher menu or a Gemini page, as HTML: shown as it arrives too,
+// from the converter's first output (a redirect or a question has none).
 static void sw_out(void *user, const char *d, uint32_t n) {
+	if (!prog_on && prog_wanted()) prog_begin(false);
 	on_body(user, d, n);
 }
 
@@ -1195,6 +1288,94 @@ static uint32_t tls_t0;
 // on this CPU, short enough not to look like a lockup.
 #define TLS_HANDSHAKE_TIMEOUT_TICKS  (15u * 732u)
 
+// -- the handshake in slices (docs/web_app.md, "Nothing waits") --
+//
+// A handshake is seconds of arithmetic on this CPU: the key exchange,
+// and above all the certificate chain's signatures (an RSA-2048 one is
+// thousands of Montgomery multiplications). It used to run inside
+// tls_feed(), called from the message handler, and for that long web
+// read no messages: no repaint, no Escape, no Stop, and wm waiting on a
+// redraw.
+//
+// Now tls_start() and every tls_feed() before the connection is up run
+// in a coroutine (zco.h) on a stack in the arena. The arithmetic has
+// checkpoints (z_slice_point(), in bignum.c's and ecdsa.c's Montgomery
+// multiplications); web_slice() hands control back from one once about
+// 10 ms have gone, and the main loop reads its messages before resuming
+// it. The server's bytes that arrive meanwhile wait in a queue (hsq) in
+// the arena. Stopping abandons the coroutine where it stands: it holds
+// no file and sends nothing of its own between checkpoints, only
+// memory, which the next handshake starts over (tls_init()).
+//
+// Once the connection is up the coroutine finishes the queue and ends;
+// records after that are fed directly, as before -- decrypting one is
+// milliseconds.
+static zco_t hs_co;
+static bool hs_on;			// the coroutine has the TLS input
+static bool hs_busy;		// it handed back mid-computation, not for bytes
+static bool hs_start;		// its first act: tls_start()
+static bool hs_full;		// the queue overflowed: the handshake fails
+static uint32_t hsq_r, hsq_n;
+static uint32_t hs_t0;
+
+static void web_slice(void) {
+	if (zco_current() != &hs_co) return;
+	if (z_uptime_ticks() - hs_t0 < Z_TICK_HZ / 100) return;
+	hs_busy = true;
+	zco_yield();
+	hs_busy = false;
+}
+
+static void hs_main(void *arg) {
+	(void)arg;
+	if (hs_start) {
+		hs_start = false;
+		if (!tls_start(&tls)) return;
+	}
+	for (;;) {
+		// Up to the end of the handshake only: what follows is the
+		// page, whose callbacks (http, the spool, fetch_failed()) run
+		// in the main loop, never in here (hs_pump()).
+		while (hsq_n && !tls_failed(&tls) && !tls_established(&tls)) {
+			uint32_t at = hsq_r % HSQ_MAX;
+			uint32_t n = hsq_n < HSQ_MAX - at ? hsq_n : HSQ_MAX - at;
+			tls_feed(&tls, arena + AR_HSQ + at, n);
+			hsq_r += n;
+			hsq_n -= n;
+		}
+		if (tls_failed(&tls) || tls_established(&tls)) return;
+		zco_yield();		// for more of the server's bytes
+	}
+}
+
+static void hs_begin(void) {
+	zco_init(&hs_co, hs_main, NULL, arena + AR_STACK, HS_STACK);
+	hs_on = true;
+	hs_busy = false;
+	hs_full = false;
+	hs_start = true;
+	hsq_r = hsq_n = 0;
+}
+
+static void hs_stop(void) {
+	if (!hs_on) return;
+	zco_abandon(&hs_co);
+	hs_on = false;
+	hsq_n = 0;
+}
+
+static void hs_queue(const uint8_t *d, uint32_t n) {
+	if (n > HSQ_MAX - hsq_n) { hs_full = true; return; }
+	while (n) {
+		uint32_t at = (hsq_r + hsq_n) % HSQ_MAX;
+		uint32_t k = n < HSQ_MAX - at ? n : HSQ_MAX - at;
+		memcpy(arena + AR_HSQ + at, d, k);
+		hsq_n += k;
+		d += k;
+		n -= k;
+	}
+}
+
 #endif
 
 // Everything above the socket goes through these two, so that the
@@ -1213,6 +1394,7 @@ static void transport_recv(const uint8_t *d, uint32_t n) {
 	if (tls_in_use()) {
 		uint32_t t0 = web_ms();
 		if (!tls_established(&tls)) tls_rx_bytes += n;
+		if (hs_on) { hs_queue(d, n); return; }	// the coroutine's (above)
 		tls_feed(&tls, d, n);
 		tm.crypto_ms += web_ms() - t0;
 		return;
@@ -1819,30 +2001,38 @@ static void on_headers(void *user, const http_response_t *r) {
 
 	// A page for this window: shown as it arrives (prog_on, above).
 	// Not a picture, a save, a page another app asked for, or a HEAD.
-	if (!fetching_image && !dl_net && svc_active < 0 && !fetch_is_head && !sw_mode()) {
-		if (!prog_head) prog_head = malloc(PROG_HEAD);
-		if (prog_head) {
-			prog_on = true;
-			prog_len = 0;
-			prog_tried = 0;
-			prog_drawn = z_uptime_ticks();
-			page_reset(&pg);
-			page_set_charset(&pg,
-				(!strcmp(r->charset, "iso-8859-1") ||
-				 !strcmp(r->charset, "windows-1252") ||
-				 !strcmp(r->charset, "latin1"))
-					? HTML_CS_CP1252 : HTML_CS_UTF8);
-			page_set_size(&pg, 0, false);
-			top.block = 0;
-			top.sub = 0;
-			sel_link = -1;
-			hl_on = false;
-			// links on it resolve against it from now on
-			cur_url = fetch_url;
-			url_format(&cur_url, cur_url_text, sizeof(cur_url_text), true);
-		}
-	}
+	if (!fetching_image && !dl_net && svc_active < 0 && !fetch_is_head && !sw_mode())
+		prog_begin(!strcmp(r->charset, "iso-8859-1") ||
+			!strcmp(r->charset, "windows-1252") ||
+			!strcmp(r->charset, "latin1"));
 
+}
+
+// The page from here on is the one arriving, shown as it comes
+// (prog_on): the head buffer empty, the page reset to read it.
+// A fetch for this window's page: not a picture, a save, a page another
+// app asked for, or a HEAD.
+static bool prog_wanted(void) {
+	return !fetching_image && !dl_net && svc_active < 0 && !fetch_is_head &&
+		state == W_RECEIVING;
+}
+
+static void prog_begin(bool cp1252) {
+	if (!prog_head) return;
+	prog_on = true;
+	prog_len = 0;
+	prog_tried = 0;
+	prog_drawn = z_uptime_ticks();
+	page_reset(&pg);
+	page_set_charset(&pg, cp1252 ? HTML_CS_CP1252 : HTML_CS_UTF8);
+	page_set_size(&pg, 0, false);
+	top.block = 0;
+	top.sub = 0;
+	sel_link = -1;
+	hl_on = false;
+	// links on it resolve against it from now on
+	cur_url = fetch_url;
+	url_format(&cur_url, cur_url_text, sizeof(cur_url_text), true);
 }
 
 static void on_body(void *user, const char *data, uint32_t len) {
@@ -1909,6 +2099,7 @@ static void on_body(void *user, const char *data, uint32_t len) {
 
 static void sock_disconnect(void) {
 #if WEB_TLS
+	hs_stop();
 	if (tls_in_use() && sock_open && tls_established(&tls)) tls_close(&tls);
 	tls_req_sent = false;
 #endif
@@ -2794,65 +2985,11 @@ static void start_fetch(const url_t *u, bool push_history) {
 	sock_disconnect();
 	conn_forget();
 
-	// Drain anything left over from the connection just torn down,
-	// BEFORE starting a new one.
-	//
-	// z_dns_resolve() below blocks, and any Z_PORT_DATA still queued
-	// would sit unread across it -- in the same mailbox the NEXT
-	// connection's data has to arrive in. The new connection could
-	// then fail its very first delivery having never been slow at
-	// all, which is exactly what "relayed 0" looked like.
-	//
-	// Messages that are NOT from the old connection are HANDLED, not
-	// thrown away. The first version discarded everything it read,
-	// so it could swallow a Z_WM_REDRAW -- and wm blocks waiting for
-	// that acknowledgement, which re-introduced the very stall that
-	// acking redraws properly had just fixed.
-	{
-		z_msg_t stale;
-		int drained = 0;
-
-		while (drained < 64 && z_msg_read(&stale) == Z_OK) {
-
-			switch (stale.subject) {
-
-			case Z_PORT_DATA:
-				// From the connection that is gone: ack it so net can
-				// free the slot, and drop the payload.
-				z_port_send_ack(&stale);
-				break;
-
-			case Z_WM_SET_CLIP:
-				z_win_apply_clip(&win, &stale.obj);
-				break;
-
-			case Z_WM_REDRAW:
-				z_win_apply_redraw(&win, stale.obj.type == Z_UINT32
-					? stale.obj.val.uint32 : 0);
-				repaint_for_wm();
-				break;
-
-			case Z_WM_WINDOW_RESIZED:
-				if (z_win_apply_resized(&win, &stale.obj)) {
-					top.sub = 0;
-					sel_link = -1;
-					repaint();
-				}
-				break;
-
-			case Z_WM_WINDOW_MOVED:
-				z_win_parse_rect(&win, &stale.obj);
-				break;
-
-			default:
-				break;
-
-			}
-
-			drained++;
-
-		}
-	}
+	// Anything still coming from the connection just torn down is
+	// acked and dropped by the Z_PORT_DATA handler (its conn_id is not
+	// the new one's). This used to drain the mailbox here, because the
+	// name lookup below blocked; it no longer does, and the drain threw
+	// away keys and clicks -- Escape among them.
 
 	state = W_RESOLVING;
 	snprintf(status, sizeof(status), "resolving %s...", fetch_url.host);
@@ -3927,6 +4064,81 @@ static void handle_mouse(uint32_t packed) {
 
 // -- messages ------------------------------------------------------
 
+// What the bytes just taken in mean: the handshake failed or is done
+// (the request goes out), the response ended or failed. After every
+// Z_PORT_DATA, and after every slice of the handshake (hs_pump()).
+static void rx_after(void) {
+
+#if WEB_TLS
+	if (tls_in_use() && tls_failed(&tls)) {
+		fetch_failed(tls_error(&tls));
+		return;
+	}
+	if (tls_in_use() && !tls_req_sent && tls_established(&tls)) {
+		tls_req_sent = true;
+		tm.t_ready = web_ms() - tm.t_fetch - tm.t_dns - tm.t_connect;
+		printf("web: tls: up after %lu bytes, %lu ms\n",
+			(unsigned long)tls_rx_bytes, (unsigned long)tm.t_ready);
+		send_request();
+	}
+	// The server's close_notify ends the body, exactly as a TCP
+	// close does for plain HTTP.
+	// A Gopher or Gemini response that reached SW_MAX_BYTES ends
+	// here, where tearing the connection down is safe.
+	if (sw_mode() && sw_limit_hit && state == W_RECEIVING) {
+		printf("web: %s response passed %u MB -- stopped there\n",
+			fetch_url.scheme == URL_SCHEME_GEMINI ? "gemini" : "gopher",
+			(unsigned)(SW_MAX_BYTES >> 20));
+		response_done();
+		return;
+	}
+	if (tls_in_use() && tls_closed(&tls) && state == W_RECEIVING) {
+		if (sw_mode()) { response_done(); return; }
+		http_eof(&http);
+		if (http_error(&http)) fetch_failed(http_error(&http));
+		else response_done();
+		return;
+	}
+#endif
+
+	if (state == W_RECEIVING && http_done(&http)) response_done();
+	else if (state == W_RECEIVING && http_error(&http))
+		fetch_failed(http_error(&http));
+}
+
+#if WEB_TLS
+// A slice of the handshake, from the main loop: about 10 ms, then the
+// messages again (web_slice()). Then what it led to, as for bytes.
+static void hs_pump(void) {
+	if (!hs_on) return;
+	hs_t0 = z_uptime_ticks();
+	uint32_t t0 = web_ms();
+	bool more = zco_resume(&hs_co);
+	tm.crypto_ms += web_ms() - t0;
+	if (!more) {
+		hs_on = false;
+		if (hs_co.overflow) { fetch_failed("tls: the handshake ran out of stack"); return; }
+		printf("web: tls: handshake slices used %lu of %lu bytes of stack\n",
+			(unsigned long)zco_stack_used(&hs_co), (unsigned long)HS_STACK);
+		// what came after the handshake, fed as any later record is
+		while (hsq_n && tls_established(&tls) && !tls_failed(&tls)) {
+			uint32_t at = hsq_r % HSQ_MAX;
+			uint32_t n = hsq_n < HSQ_MAX - at ? hsq_n : HSQ_MAX - at;
+			hsq_r += n;
+			hsq_n -= n;
+			tls_feed(&tls, arena + AR_HSQ + at, n);
+		}
+		hsq_n = 0;
+	}
+	if (hs_full) { fetch_failed("tls: the server sent too much during the handshake"); return; }
+	if (tls_send_failed && !tls_established(&tls)) {
+		fetch_failed("could not send the TLS handshake to net");
+		return;
+	}
+	rx_after();
+}
+#endif
+
 static void handle_port_msg(z_msg_t *msg) {
 
 	switch (msg->subject) {
@@ -3981,13 +4193,20 @@ static void handle_port_msg(z_msg_t *msg) {
 			tls_rx_bytes = 0;
 			tls_start_ticks = z_uptime_ticks();
 			tls_t0 = z_uptime_ticks();
+			state = W_RECEIVING;
+			if (arena) {
+				// in slices, from here on (hs_main()): the key share is
+				// made in the first of them
+				hs_begin();
+				hs_pump();
+				break;
+			}
 			if (!tls_start(&tls)) { fetch_failed(tls_error(&tls)); return; }
 			if (tls_send_failed) {
 				fetch_failed("could not send the TLS handshake to net");
 				return;
 			}
 			printf("web: tls: ClientHello sent to %s\n", fetch_url.host);
-			state = W_RECEIVING;
 			break;
 		}
 #endif
@@ -4068,41 +4287,7 @@ static void handle_port_msg(z_msg_t *msg) {
 		if (data && len && state == W_RECEIVING)
 			transport_recv(port_rx, len);
 
-#if WEB_TLS
-		if (tls_in_use() && tls_failed(&tls)) {
-			fetch_failed(tls_error(&tls));
-			break;
-		}
-		if (tls_in_use() && !tls_req_sent && tls_established(&tls)) {
-			tls_req_sent = true;
-			tm.t_ready = web_ms() - tm.t_fetch - tm.t_dns - tm.t_connect;
-			printf("web: tls: up after %lu bytes, %lu ms\n",
-				(unsigned long)tls_rx_bytes, (unsigned long)tm.t_ready);
-			send_request();
-		}
-		// The server's close_notify ends the body, exactly as a TCP
-		// close does for plain HTTP.
-		// A Gopher or Gemini response that reached SW_MAX_BYTES ends
-		// here, where tearing the connection down is safe.
-		if (sw_mode() && sw_limit_hit && state == W_RECEIVING) {
-			printf("web: %s response passed %u MB -- stopped there\n",
-				fetch_url.scheme == URL_SCHEME_GEMINI ? "gemini" : "gopher",
-				(unsigned)(SW_MAX_BYTES >> 20));
-			response_done();
-			break;
-		}
-		if (tls_in_use() && tls_closed(&tls) && state == W_RECEIVING) {
-			if (sw_mode()) { response_done(); break; }
-			http_eof(&http);
-			if (http_error(&http)) fetch_failed(http_error(&http));
-			else response_done();
-			break;
-		}
-#endif
-
-		if (state == W_RECEIVING && http_done(&http)) response_done();
-		else if (state == W_RECEIVING && http_error(&http))
-			fetch_failed(http_error(&http));
+		rx_after();
 		break;
 	}
 
@@ -4327,7 +4512,10 @@ int main(void) {
 
 	page_init(&pg, spool_read, NULL);
 
+	arena_setup();
+
 #if WEB_TLS
+	z_slice = web_slice;
 	verify_set_clock(web_ms);
 #endif
 
@@ -4359,7 +4547,7 @@ int main(void) {
 
 		z_msg_t msg;
 
-		while (z_msg_read(&msg) == Z_OK) {
+		while (next_msg(&msg)) {
 
 			dispatch(&msg);
 
@@ -4404,6 +4592,12 @@ int main(void) {
 			fetch_failed(msg);
 			continue;
 		}
+#endif
+
+#if WEB_TLS
+		// The handshake, a slice at a time: when it handed back mid-sum,
+		// or there are bytes for it.
+		if (hs_on && (hs_busy || hsq_n)) { hs_pump(); continue; }
 #endif
 
 		if (local_fd >= 0 && net_busy()) { local_pump(); continue; }

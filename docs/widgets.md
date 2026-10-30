@@ -339,6 +339,37 @@ directory with more entries than that comes back truncated, and
 built on this, since the alternative is a file that is definitely on the
 card and simply never appears.
 
+An app may give it a bigger store and a source that reads a folder a
+page at a time (`z_flist_set_store()`, `z_flist_set_source()`,
+`z_flist_load_step()`; [file_browser.md](file_browser.md#big-folders)).
+
+### Big folders in the Open and Save dialogs
+
+The Open and Save dialogs (`zdialog.c`) show every entry of a folder,
+up to 4,096 (64KB of names), the way `files` does: the first page at
+once, the rest read from fs between messages while the dialog is up,
+sorted into place, the selection kept; the path line says "(reading)"
+until it is all in. The store is in the arena:
+
+- an app with **no arena** lends it for as long as the dialog is open,
+  and has none again after;
+- an app **with an arena** gets the store after its own bytes, if it
+  says how to follow a move: `z_dialog_ctx_t.arena_moved`, called with
+  the new base after every resize and once more when the dialog gives
+  the memory back. `text`, `draw` and `sheet` do. Without it -- `slide`
+  and `web`, whose arenas hold pointers or a coroutine's stack -- the
+  dialog keeps to the list's own 256 and says "(partial list)" past
+  that;
+- on a board that has no arenas, 256 as before.
+
+The page fs reads into is the list's own 8KB name pool, unused while
+the store is in the arena, so this costs no `.bss`. The filesystem
+client (`zfsc.o`) is linked into any app that links `zdialog.o`
+(`app.mk`). `sw/common/tests/test_dialog.c` reads a 3,000-entry folder
+through a fake arena that moves on every resize, with and without an
+app's own bytes in it, and checks the app's bytes, where it was told
+they went, and that the arena is as it was afterwards.
+
 `z_flist_find_key(&fl, keysym)` is type-to-find for the file list --
 the list box's rules (a letter, the same letter again, a prefix). It is
 a separate call rather than part of `z_flist_key()` so a dialog whose

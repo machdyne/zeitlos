@@ -25,5 +25,6 @@ extern const uint8_t draw_icon_rect[32];
 extern const uint8_t draw_icon_rectfill[32];
 extern const uint8_t draw_icon_oval[32];
 extern const uint8_t draw_icon_bucket[32];
+extern const uint8_t draw_icon_ovalfill[32];
 
 #endif

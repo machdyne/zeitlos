@@ -220,8 +220,11 @@ A search through a megabyte is about half a second on the board. Every
 8KB it reads the window's mail (`find_from()`, `io_pump()`): redraws are
 served, the title says `Finding TEXT 40%  (Esc stops)` once it has taken
 longer than a moment, and **Esc** stops it, selecting nothing. Counting
-the matches for Replace does the same. Replace All's own pass, which
-changes the document as it goes, is still one call.
+the matches for Replace does the same, and so does Replace All itself:
+the title says `Replacing TEXT 40%  (Esc stops)`, the page is blank
+meanwhile (the text is being rewritten), and **Esc** stops it with the
+matches before that point replaced -- one undo group, as a whole Replace
+All is.
 
 ## Replace
 
@@ -268,7 +271,9 @@ current one filled in. Lines are the **file's** lines, what a compiler
 or another editor numbers, not the wrapped display lines; words are runs
 of anything but spaces, tabs and newlines, and characters are
 characters, not bytes. A number past the end goes to the last line. The
-line arrived at is spoken, like any other move.
+line arrived at is spoken, like any other move. In a long document the
+counting is a moment: the title says how far it has got, and **Esc**
+stops it.
 
 ## Copy and paste
 
@@ -522,9 +527,9 @@ stays drawn.
 
 CRLF is folded as each piece arrives, a CR that ends a piece waiting
 for the next one's first byte, so there is no second pass over the
-file for it. What is still one call at the end of an open: telling
-UTF-8 from the single-byte encodings (one pass), and converting a
-Latin-9 or Windows-1252 file (rare).
+file for it. Telling UTF-8 from the single-byte encodings is counted as
+the pieces arrive too (`enc_scan()`), and converting a Latin-9 or
+Windows-1252 file reads the mail between pieces of its two passes.
 
 A Latin-9 or Windows-1252 file that has gained a character its encoding
 cannot hold -- a Japanese character, a Polish letter, an em dash in a
@@ -567,9 +572,7 @@ tests (`sw/common/tests/ztramp.h`); exits 77 without them.
 
 ## Not implemented
 
-Not done: Replace All's own pass, and the encoding check at the end of an
-open, are each still one call over the whole document (above). Two
-windows editing the same named file still share its autosave slot.
+Two windows editing the same named file still share its autosave slot.
 
 ---
 
@@ -782,8 +785,9 @@ every app with a scrollbar). With everything in 0.0.7, `text` is 155,396
 bytes in RAM against 156,976 in 0.0.6.
 
 In this round printing, and the shared print dialog in `zdialog.c`
-that comes with it, took `text` past its 70K flash budget; the budget is now 80K flash,
-200K RAM ([flash_apps.md](flash_apps.md), "Budgets"). The
+that comes with it, took `text` past its 70K flash budget, to 80K flash and 200K RAM; big
+folders in the Open and Save dialogs (the filesystem client) and Replace
+All in pieces then to 86K flash, 212K RAM ([flash_apps.md](flash_apps.md), "Budgets"). The
 page layout is in `print`, not here.
 
 ### What a keystroke costs, measured

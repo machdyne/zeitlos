@@ -137,6 +137,15 @@ endif
 # Links zposix.o and the filesystem client, and puts sw/common/posix
 # (dirent.h) on the include path ahead of the C library's. Off by
 # default: an app that never opens a file carries none of it.
+# The Open and Save dialogs read a big folder a page at a time straight
+# from fs (zdialog.c, "a big folder"): an app with them links the
+# filesystem client too. Section GC keeps only the directory calls.
+ifneq ($(filter zdialog.o,$(OBJS)),)
+ifeq ($(filter zfsc.o,$(OBJS)),)
+OBJS += zfsc.o
+endif
+endif
+
 POSIX_IO ?= 0
 ifeq ($(POSIX_IO),1)
 OBJS += zposix.o

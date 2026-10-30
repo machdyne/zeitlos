@@ -34,7 +34,7 @@ MS_CFLAGS = -DLIX -DMS_STATIC_HEAP $(MS_SIZE_CFLAGS) -I../../common/ms_platform 
 
 OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o zwidget.o zspeak.o \
 	zfsapp.o zflist.o zdialog.o zedit.o ztype.o zimg.o zinflate.o \
-	zcanvas.o zcfont.o zpage.o zpaper.o zprint.o zco.o zimgjob.o zsvg.o zpsvg.o \
+	zcanvas.o zcfont.o zpage.o zpaper.o zprint.o zcfg.o zco.o zimgjob.o zsvg.o zpsvg.o \
 	zport.o zdns.o zstream.o zcolor.o zrtc.o zrng.o zgpio.o zi2c.o zi2cx.o zspi.o zuart.o \
 	ms.o zapi.o zapi_doc.o \
 	zpool.o deck.o deckio.o render.o printjob.o edit.o act.o script.o show.o slide.o

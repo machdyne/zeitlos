@@ -17,6 +17,7 @@
 #include <stdio.h>
 
 #include "ecdsa.h"
+#include "../../common/zslice.h"
 
 // The hardware path is OPT-IN, enabled by -DEC_HW from the app
 // Makefile for target builds only.
@@ -180,6 +181,8 @@ static void mont_mul(uint32_t *out, const uint32_t *a, const uint32_t *b,
 	const mont_t *mc, uint16_t nl) {
 
 	uint32_t t[EC_MAX_LIMBS + 2];
+
+	z_slice_point();		// web runs a verification in slices (zslice.h)
 
 	memset(t, 0, (size_t)(nl + 2) * sizeof(uint32_t));
 

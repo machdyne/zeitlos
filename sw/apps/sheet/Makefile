@@ -16,7 +16,7 @@ APP = sheet
 #   second caller. Every app that links the dialog needs this too: a
 #   shared widget is only shared if the build says so.
 OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o zwidget.o zspeak.o \
-	zfsapp.o zflist.o zdialog.o zedit.o zfix.o ztype.o sheet_core.o chart.o sheet.o
+	zfsapp.o zflist.o zdialog.o zedit.o zfix.o ztype.o zco.o sheet_core.o chart.o sheet.o
 
 sheet_core.o: sheet_core.c sheet_core.h
 	$(CC) $(CFLAGS) -c sheet_core.c -o sheet_core.o
@@ -42,7 +42,7 @@ sheet_core.o: sheet_core.c sheet_core.h
 # that isn't available.
 HOSTSRC = ../../common/zwin.c ../../common/zwidget.c \
 	../../common/zfont_data.c ../../common/zobj.c ../../common/zeitlos.c \
-	../../common/zfix.c sheet_core.c chart.c \
+	../../common/zfix.c ../../common/zco.c sheet_core.c chart.c \
 	../../common/tests/zspeak_stub.c
 
 test:

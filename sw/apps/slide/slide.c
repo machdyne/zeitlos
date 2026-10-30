@@ -1182,6 +1182,89 @@ static void do_print(const char *line_in) {
 		"Printing: see the print window");
 }
 
+// Ctrl+P and the title bar's printer: the print dialog (zdialog.h),
+// started from how the deck prints (its /print setup words), which the
+// dialog's choices then override for this once. The deck's own words
+// that the dialog has no row for -- cut marks, frames, actual size, the
+// paper's kind -- still apply.
+static void do_print_dialog(void) {
+
+	pj_settings_t s;
+	char err[64], keep[DECK_PRINT_MAX], base[64];
+	z_print_opts_t o;
+
+	if (!printjob_parse(&s, ed.d->print, "", ed.cur, ed.d->ncard, keep, sizeof(keep), err, sizeof(err))) {
+		copy_str(ed.msg, sizeof(ed.msg), err);
+		return;
+	}
+
+	z_print_opts_init(&o);
+	o.npages = ed.d->ncard;
+	o.current = ed.cur + 1;
+	o.copies = s.copies > 0 ? s.copies : 1;
+	o.nup = s.nup > 0 ? s.nup : 1;
+	if (s.paper[0]) copy_str(o.paper_default, sizeof(o.paper_default), s.paper);
+	copy_str(o.tray, sizeof(o.tray), s.tray);
+	copy_str(o.quality, sizeof(o.quality), s.quality);
+
+	sibling(base, sizeof(base), "");
+	if (!z_dialog_print(&dlg, "Print", last_dir, base, &o)) return;
+
+	// the cards: all, the one shown, or a range
+	s.first = 0;
+	s.count = -1;
+	if (o.pages == Z_PRINT_PAGES_CURRENT) { s.first = ed.cur; s.count = 1; }
+	else if (o.pages == Z_PRINT_PAGES_RANGE && o.first > 0) {
+		int last = o.last > 0 && o.last <= ed.d->ncard ? o.last : ed.d->ncard;
+		s.first = o.first - 1;
+		s.count = last - o.first + 1;
+		if (s.first >= ed.d->ncard || s.count < 1) {
+			copy_str(ed.msg, sizeof(ed.msg), "Cannot print: no such cards");
+			return;
+		}
+	}
+	o.pages = Z_PRINT_PAGES_ALL;		// the cards sent are the ones chosen
+
+	s.dest = o.dest == Z_PRINT_TO_PDF ? PJ_PDF : o.dest == Z_PRINT_TO_PS ? PJ_PS : PJ_PRINTER;
+	s.nup = o.nup;
+	s.copies = o.copies;
+	if (o.paper[0]) copy_str(s.paper, sizeof(s.paper), o.paper);
+	// a tray the dialog does not name (the deck's own) stays when the
+	// dialog says "the printer's choice"
+	if (o.tray[0] || !s.tray[0] || !strcmp(s.tray, "main") || !strcmp(s.tray, "rear") ||
+		!strcmp(s.tray, "manual"))
+		copy_str(s.tray, sizeof(s.tray), o.tray);
+	copy_str(s.quality, sizeof(s.quality), o.quality);
+	if (s.dest != PJ_PRINTER) { s.tray[0] = 0; s.quality[0] = 0; }
+
+	if (!z_print_begin(&printing, ed.d->title[0] ? ed.d->title : (path[0] ? path : "slide"))) {
+		copy_str(ed.msg, sizeof(ed.msg), "Cannot print: no room in " Z_DIR_TMP);
+		return;
+	}
+	printjob_options(&s, &printing.w);
+	if (o.dest != Z_PRINT_TO_PRINTER) {
+		char d[208];
+		copy_str(d, sizeof(d), o.dest == Z_PRINT_TO_PDF ? "pdf:" : "ps:");
+		copy_str(d + strlen(d), (int)(sizeof(d) - strlen(d)), o.file);
+		zp_job(&printing.w, "dest", d);
+	}
+	copy_str(ed.msg, sizeof(ed.msg), "Getting the cards ready to print");
+	draw_status();
+	if (!printjob_pages(ed.d, s.first, s.count, &printing.w)) {
+		z_print_abort(&printing);
+		copy_str(ed.msg, sizeof(ed.msg), "Cannot print: no room in " Z_DIR_TMP " for the job");
+		return;
+	}
+	if (!z_print_end(&printing)) {
+		copy_str(ed.msg, sizeof(ed.msg), printing.result == Z_PRINT_E_GONE ?
+			"Cannot print: print is not on the card" : "Cannot print: the job could not be written");
+		return;
+	}
+	copy_str(ed.msg, sizeof(ed.msg), o.dest != Z_PRINT_TO_PRINTER ?
+		"Writing the file: see the print window" : "Printing: see the print window");
+
+}
+
 // -- /export svg (docs/slide_app.md, "Diagrams") -------------------------------
 //
 // A card as its print job would draw it (printjob_pages), the job kept
@@ -1364,7 +1447,8 @@ static void do_help(void) {
 		"Ctrl+D\tDuplicate\n"
 		"Ctrl+G\tGroup (Ctrl+Shift+G: ungroup)\n"
 		"Ctrl+N/O/S\tNew, open, save\n"
-		"Ctrl+P\tPrint (/print pdf: a PDF file)\n\n"
+		"Ctrl+P\tPrint: where, which cards, copies, paper\n"
+		"\t(/print pdf: straight to a PDF)\n\n"
 		"In a show: Space or a click goes on, Left goes back, "
 		"B blanks, T speaks the notes, Esc ends.";
 	z_dialog_help(&dlg, "Slide help", help, "slide_app");
@@ -2260,7 +2344,7 @@ static void handle_key(uint32_t k, uint8_t mods) {
 		case 'a': edit_select_all(&ed); break;
 		case 'm': edit_new_card(&ed, false); break;
 		case 's': do_save(); break;
-		case 'p': do_print(""); break;
+		case 'p': do_print_dialog(); break;
 		case 'o': do_open(); repaint(); break;
 		case 'n': do_new(); repaint(); break;
 		default: return;
@@ -2565,7 +2649,7 @@ int main(void) {
 	wanted_size(&cw, &ch);
 	if (z_win_create_flags(&win, "slide", (uint32_t)cw, (uint32_t)ch, -1, -1,
 		Z_WIN_FLAG_CLOSE_ICON | Z_WIN_FLAG_RESIZABLE | Z_WIN_FLAG_NEW_ICON |
-		Z_WIN_FLAG_OPEN_ICON | Z_WIN_FLAG_SAVE_ICON) != Z_OK)
+		Z_WIN_FLAG_OPEN_ICON | Z_WIN_FLAG_SAVE_ICON | Z_WIN_FLAG_PRINT_ICON) != Z_OK)
 		return 1;
 	dlg.parent = &win;
 	dlg.on_msg = forward_msg;
@@ -2636,6 +2720,7 @@ int main(void) {
 				case Z_WM_TBICON_NEW: do_new(); repaint(); break;
 				case Z_WM_TBICON_OPEN: do_open(); repaint(); break;
 				case Z_WM_TBICON_SAVE: do_save(); break;
+				case Z_WM_TBICON_PRINT: do_print_dialog(); repaint(); break;
 				default: break;
 				}
 				update_title();

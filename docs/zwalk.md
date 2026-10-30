@@ -13,7 +13,7 @@ returns:
 
 | step | the call |
 |---|---|
-| a folder is reached | list it (`fs_list_into()`) |
+| a folder is reached | open it (`zfs_opendir_at()`), then a page of its entries a step (`zfs_readdir()`) |
 | a file, for copy | open it and its copy; then each step reads a 2KB chunk and writes it |
 | a file, for a text find | open it; then each step reads a 2KB chunk and looks in it |
 | a folder, for copy | make it at the destination |
@@ -51,17 +51,25 @@ names and their types). The depth is a fixed stack in `zwalk_t`: 16
 folders below the start (`ZW_DEPTH`); deeper ones are counted in
 `skipped` and not entered.
 
-Only one listing is held at a time. When the walk comes back up from
-a folder it lists the folder above again -- one more call per folder,
-in exchange for memory that does not grow with depth. Find and copy
-pick up at the entry after the one they went into: the folder has not
-changed (copy refuses a destination inside its source). Delete starts
-the folder over, since everything before is gone.
+**Folders of any size.** A folder is read straight from fs a page at a
+time (`zfsc.h`), into the block, as many entries as fit -- a *window*
+of the folder. When the walk has been through the window it reads the
+next one, from where that ended. So a folder of any size is walked
+whole, whatever the block's size; a small block only means the folder
+is read in more windows. The page fs writes into is inside `zwalk_t`
+(`page`, 1KB), because fs writes only into the app's own memory and the
+block may be an arena. With no fs driver to ask (`-Z_ENODEV`: a
+simulator) it falls back on the kernel's one-call listing, as far as it
+fits the block, and `zwalk_t.truncated` says when it did not.
 
-A folder whose listing does not fit the block is walked as far as it
-fits, and `zwalk_t.truncated` says so; delete lists such a folder again
-until it is empty, so it always finishes. 4KB walks folders of about a
-hundred entries, 24KB any folder the file list shows.
+Only one window is held at a time, and at most one folder is open. When
+the walk comes back up from a folder it reads the folder above again,
+passing over the entries it has done -- more reading per folder, in
+exchange for memory that does not grow with depth. Find and copy pick up
+at the entry after the one they went into: the folder has not changed
+(copy refuses a destination inside its source). Delete starts the folder
+over, since everything before is gone, and reads it again until it is
+empty before deleting it.
 
 `files` takes a 64KB arena while a walk runs (and while find's results
 are up) and gives it back after: 24KB for the walk, the rest for
@@ -116,13 +124,15 @@ entry that will not go (a file open for writing elsewhere) ends it with
 
 `sw/common/tests/test_zwalk.c` runs all three over a real tree in
 `/tmp`, through a host version of the filesystem calls that answers as
-the kernel does (an empty folder lists as a failure, names come back
-as full paths, listings are cut short at the caller's limits). It
-checks that a step makes at most one call (two for a copy chunk), that
-a text match across a chunk boundary is found, that a delete with a
-tiny block still empties a 300-file folder, and it **stops a copy after
-every one of its steps** in turn: nothing left open, no half file, and
-`partial` true exactly when something is left.
+fs does (a folder in pages of 16 entries, each page one call). It checks
+that a step makes at most one call (two for a copy chunk), that a text
+match across a chunk boundary is found, that a delete with a tiny block
+still empties a 300-file folder, that a find with that block sees all
+300, that a folder of 3,000 is found through, copied whole (its last
+entry and its deepest), stopped half way with no folder left open, and
+deleted -- and it **stops a copy after every one of its steps** in turn:
+nothing left open, no half file, and `partial` true exactly when
+something is left.
 
 ```
 cc -std=gnu99 -Wall -I sw/common -o /tmp/test_zwalk \

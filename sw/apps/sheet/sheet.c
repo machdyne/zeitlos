@@ -75,6 +75,9 @@
 #include "../../common/zfsapp.h"
 #include "../../common/ztype.h"
 
+#include "../../common/zco.h"
+#include "../../common/zslice.h"
+
 #include "sheet_core.h"
 #include "chart.h"
 
@@ -704,9 +707,96 @@ static void chart_repaint(void) {
 
 }
 
+// -- the values on screen, worked out a slice at a time --
+// (docs/responsive.md, "sheet")
+//
+// A cell's value is worked out when it is drawn, and kept until the
+// next change (sheet_core.c: lazy, cached per recalculation). After a
+// change that touches thousands of formulas, drawing the screen was one
+// long call. So before the grid is drawn its values are worked out in a
+// coroutine (calc_fn()) that hands back every ~10 ms at a checkpoint in
+// eval_cell() (zslice.h). Usually it is done in the first slice and
+// nothing shows. When not, the title says so, wm is answered between
+// slices (a redraw acknowledged and done in full afterwards), and what
+// else comes -- keys, clicks -- waits, in order, for the main loop
+// (next_msg()). Drawing then finds every value cached.
+//
+// It holds nothing but the sheet's memory, and is never abandoned: it
+// runs to the end.
+
+static void forward_msg(z_msg_t *msg, void *user);
+
+static zco_t calc_co;
+static uint8_t calc_stack[16 * 1024];
+static uint32_t calc_t0;
+static bool calc_owed;			// wm asked for a redraw while it ran
+
+#define HELD_MAX 32
+static z_msg_t held[HELD_MAX];
+static int held_at, held_n;
+
+static bool next_msg(z_msg_t *m) {
+	if (held_n) { *m = held[held_at]; held_at = (held_at + 1) % HELD_MAX; held_n--; return true; }
+	return z_msg_read(m) == Z_OK;
+}
+
+static void calc_slice(void) {
+	if (zco_current() != &calc_co) return;
+	if (z_uptime_ticks() - calc_t0 >= Z_TICK_HZ / 100) zco_yield();
+}
+
+static void calc_fn(void *arg) {
+	(void)arg;
+	int nc = vis_cols();
+	z_fix_t v;
+	sheet_value(&sh, cur_row, cur_col, &v);
+	for (int i = 0; i < vis_rows && top_row + i < SHEET_ROWS; i++)
+		for (int j = 0; j < nc; j++)
+			sheet_value(&sh, top_row + i, left_col + j, &v);
+}
+
+static void calc_pump(void) {
+	z_msg_t m;
+	while (z_msg_read(&m) == Z_OK) {
+		if (m.subject == Z_WM_REDRAW) {
+			if (m.obj.type == Z_UINT32 && z_win_redraw_id(m.obj.val.uint32) == win.id) {
+				z_win_apply_redraw(&win, m.obj.val.uint32);
+				z_win_redraw_done(&win);
+				calc_owed = true;
+			}
+		} else if (m.subject == Z_WM_SET_CLIP || m.subject == Z_WM_WINDOW_MOVED) {
+			forward_msg(&m, NULL);
+		} else if (held_n < HELD_MAX) {
+			held[(held_at + held_n++) % HELD_MAX] = m;
+		}
+	}
+}
+
+static void calc_visible(void) {
+	static bool running;
+	if (running) return;		// a repaint from inside the pump: the values come after
+	running = true;
+	zco_init(&calc_co, calc_fn, NULL, calc_stack, sizeof calc_stack);
+	calc_t0 = z_uptime_ticks();
+	bool more = zco_resume(&calc_co);
+	if (more) {
+		z_win_set_title(&win, "Calculating...");
+		while (more) {
+			calc_pump();
+			calc_t0 = z_uptime_ticks();
+			more = zco_resume(&calc_co);
+		}
+		update_title();
+	}
+	running = false;
+}
+
 static void repaint_view(void) {
 
 	if (chart_mode) { chart_repaint(); return; }
+
+	calc_visible();
+	if (calc_owed) { calc_owed = false; repaint(); return; }
 
 	update_scroll_range();
 
@@ -728,6 +818,8 @@ static void repaint(void) {
 
 	if (chart_mode) { z_win_clear(&win); chart_repaint(); return; }
 
+	calc_visible();
+	calc_owed = false;
 	z_win_clear(&win);
 
 	update_scroll_range();
@@ -1170,6 +1262,19 @@ static void mem_init(void) {
 	scratch = mem + q * 7;  scratch_cap = (int)(mem_size - q * 7);
 	ust.used = rst.used = 0;
 
+}
+
+// The Open and Save dialogs list a big folder after this memory, which
+// can move it (zdialog.h, arena_moved): everything in it follows.
+static void mem_moved(void *base, void *user) {
+	(void)user;
+	uint8_t *n = base;
+	if (mem == mem_small || n == mem) return;
+	ust.b = n + (ust.b - mem);
+	rst.b = n + (rst.b - mem);
+	clip_mem = n + (clip_mem - mem);
+	scratch = n + (scratch - mem);
+	mem = n;
 }
 
 // Room for `need` bytes on top of `s`, dropping the oldest records.
@@ -2445,6 +2550,7 @@ static void forward_msg(z_msg_t *msg, void *user) {
 }
 
 int main(void) {
+	z_slice = calc_slice;		// eval_cell()'s checkpoints (calc_visible())
 
 	printf("sheet: starting\n");
 
@@ -2487,6 +2593,7 @@ int main(void) {
 	dlg_ctx.parent = &win;
 	dlg_ctx.on_msg = forward_msg;
 	dlg_ctx.user = NULL;
+	dlg_ctx.arena_moved = mem_moved;
 
 	layout();
 
@@ -2506,7 +2613,7 @@ int main(void) {
 		// iteration -- see Z_WM_MOUSE's own note in zwm.h on why
 		// handling one per loop makes an app fall progressively behind
 		// the real cursor.
-		while (z_msg_read(&msg) == Z_OK) {
+		while (next_msg(&msg)) {
 
 			switch (msg.subject) {
 

@@ -20,6 +20,7 @@
 #include <stdbool.h>
 #include <string.h>
 
+#include "../../common/zslice.h"
 #include "sheet_core.h"
 
 // -- evaluation state, private --
@@ -1276,6 +1277,7 @@ static void st_set(const sheet_t *s, sheet_cell_t *c, int st) {
 static sheet_err_t eval_cell(sheet_t *s, int row, int col, z_fix_t *out) {
 
 	*out = 0;
+	z_slice_point();		// sheet evaluates in slices (sheet.c, calc_visible())
 
 	if (!in_grid(row, col)) return SHEET_ERR_REF;
 

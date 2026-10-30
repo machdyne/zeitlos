@@ -4,9 +4,10 @@ Kind: a **desktop app** ([app_kinds.md](app_kinds.md)).
 
 `sw/apps/print`. Prints what an app hands it -- to a printer on the
 network, or to a PDF or PostScript file. `slide`
-([slide_app](slide_app.md#printing)) and `text`
-([text_editor](text_editor.md#printing)) print; the API is open to any
-app ([zprint](#printing-from-an-app)).
+([slide_app](slide_app.md#printing)), `text`
+([text_editor](text_editor.md#printing)) and `draw`
+([draw_app](draw_app.md#printing)) print; the API is open to any app
+([zprint](#printing-from-an-app)).
 
 ```
 print                    ask the printer in zeitlos.cfg what it takes
@@ -26,9 +27,9 @@ then run `print` alone: it asks the printer what it is and what it
 takes, and shows the answer until **OK** (or Esc, Enter, the close
 box). If that works, printing will.
 
-In `text`, **Ctrl+P** or the printer icon in the title bar opens the
-[print dialog](#the-print-dialog); **Print** sends it. From `slide`,
-**Ctrl+P** prints the deck. A small window shows what
+In `text`, `slide` and `draw`, **Ctrl+P** or the printer icon in the
+title bar opens the [print dialog](#the-print-dialog); **Print** sends
+it (slide's `/print` prints without it). A small window shows what
 print is doing -- the sheet it is on, waiting while the printer is
 busy -- with **Cancel**, and how it ended: *Printed: 7 sheets, sent as
 PDF*, or what went wrong. It closes by itself a few seconds after
@@ -63,7 +64,9 @@ offered in the document's folder with the document's name, and asks
 before replacing a file that is there.
 
 Rows an app has no use for show what it can do: `text` has no
-"this page", so Pages is All, the selection, or a range.
+"this page", so Pages is All, the selection, or a range; `slide`'s pages
+are its cards, and its default paper is the deck's own; `draw` has one
+page.
 
 ## Printing text
 
@@ -172,9 +175,7 @@ five seconds, for up to half an hour, or until **Cancel**.
 - **URF** (AirPrint's raster), for a printer that takes neither PWG
   nor PDF; **PCL**, for a laser without PostScript.
 - Colour, two-sided, and following a job once the printer has taken it.
-- Printing from `read` and `draw`: zprint and the print dialog are
-  ready for them. `slide` still prints straight away on Ctrl+P, with
-  its `/print` settings, rather than through the dialog.
+- Printing from `read`: zprint and the print dialog are ready for it.
 - Printing text in a fixed-width face, for columns lined up with
   spaces.
 

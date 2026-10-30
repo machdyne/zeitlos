@@ -74,32 +74,55 @@ int fs_stat(const char *p, z_fs_info_t *fi) {
 
 // The list's page-at-a-time source (files.c, list_src), over a real
 // directory: used once the list has an arena (the big folder, below).
-static DIR *zd;
-static int zd_open;
+static char *zd_names[4096];
+static uint8_t zd_types[4096];
+static int zd_n, zd_next, zd_open;
+static int zd_cmp(const void *a, const void *b) { return strcmp(*(char **)a, *(char **)b); }
 int32_t zfs_opendir_at(zfs_dir_t *d, const char *path, void *buf, uint32_t cap) {
+	DIR *h;
+	struct dirent *de;
 	(void)buf; (void)cap;
-	if (zd) closedir(zd);
-	zd = opendir(hp(path));
-	if (!zd) return -1;
+	for (int i = 0; i < zd_n; i++) free(zd_names[i]);
+	zd_n = zd_next = 0;
+	h = opendir(hp(path));
+	if (!h) return -1;
+	while ((de = readdir(h)) && zd_n < 4096) {
+		zd_types[zd_n] = de->d_type == DT_DIR ? Z_FS_TYPE_DIR : Z_FS_TYPE_FILE;
+		zd_names[zd_n++] = strdup(de->d_name);
+	}
+	closedir(h);
+	// a stable order, sorted, as the old listing stub gave (FAT's is
+	// the order of creation); types sorted along with the names
+	{
+		char *tmp[4096];
+		uint8_t tt[4096];
+		int idx[4096];
+		for (int i = 0; i < zd_n; i++) { tmp[i] = zd_names[i]; idx[i] = i; }
+		qsort(zd_names, (size_t)zd_n, sizeof(char *), zd_cmp);
+		for (int i = 0; i < zd_n; i++)
+			for (int j = 0; j < zd_n; j++)
+				if (tmp[j] == zd_names[i]) { tt[i] = zd_types[idx[j]]; break; }
+		memcpy(zd_types, tt, (size_t)zd_n);
+	}
 	zd_open++;
 	memset(d, 0, sizeof(*d));
+	d->end = true;		// all of it in hand: no request a step (zwalk.c)
 	return 0;
 }
 const z_fs_dirent_t *zfs_readdir(zfs_dir_t *d) {
 	static union { z_fs_dirent_t e; char b[sizeof(z_fs_dirent_t) + 256]; } u;
-	struct dirent *de;
 	(void)d;
-	if (!zd) return NULL;
-	if (!(de = readdir(zd))) return NULL;
+	if (zd_next >= zd_n) return NULL;
 	memset(&u.e, 0, sizeof(u.e));
-	u.e.namelen = (uint16_t)strlen(de->d_name);
-	memcpy(u.e.name, de->d_name, (size_t)u.e.namelen + 1);
-	u.e.info.type = de->d_type == DT_DIR ? Z_FS_TYPE_DIR : Z_FS_TYPE_FILE;
+	u.e.namelen = (uint16_t)strlen(zd_names[zd_next]);
+	memcpy(u.e.name, zd_names[zd_next], (size_t)u.e.namelen + 1);
+	u.e.info.type = zd_types[zd_next];
+	zd_next++;
 	return &u.e;
 }
 int32_t zfs_closedir_at(zfs_dir_t *d) {
 	(void)d;
-	if (zd) { closedir(zd); zd = NULL; zd_open--; }
+	if (zd_open) zd_open--;
 	return 0;
 }
 
@@ -663,10 +686,8 @@ int main(void) {
 		handle_key(0x06, Z_KBD_MOD_CTRL);
 		expect(walking && walk_arena, "the find's memory above the list's");
 		pump();
-		// as many as the walk's listing of the folder holds -- a walk
-		// takes a folder in one listing, as far as it fits (zwalk.h);
-		// this host's listing stops at 1024 entries
-		expect(!walking && res_n > 20 && res_n <= 100, "found them, as far as the walk's listing goes");
+		// every one: the walk reads the folder a window at a time (zwalk.h)
+		expect(!walking && res_n == 100, "found all 100, n0000 to n0099");
 		handle_key(0x1b, 0);
 		expect(!results && !walk_mem, "back to the folder, the find's memory given back");
 		expect(ar_moves > m0, "the arena moved under the list");

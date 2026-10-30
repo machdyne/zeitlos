@@ -91,6 +91,26 @@ make -C sw/common/tests/zco_sim
 sim/zsim-headless -n 0 sw/common/tests/zco_sim/zco_sim.bin    # zco: ok
 ```
 
+## zslice: checkpoints in a long computation (`sw/common/zslice.h`)
+
+Some long calls are arithmetic or rasterizing deep inside shared code:
+a certificate's RSA signature, an elliptic curve, an SVG. zco runs a
+call on its own stack, but the call must hand back from somewhere.
+`z_slice_point()` is that somewhere: a checkpoint, placed in the inner
+work -- each Montgomery multiplication in `web`'s `bignum.c` and
+`ecdsa.c`, each element and every 16 rows of a shape in `zsvg.c`, each
+cell in `sheet_core.c`'s evaluator. It calls `z_slice` if an app has set
+it, and costs a load and a branch otherwise (net's SSH, the host tests).
+
+An app that runs such work in a coroutine points `z_slice` at a
+function that yields once about 10 ms have gone. For a one-off call
+there is `z_slice_run(fn, arg, stack, bytes, pump, ctx)`: it runs the
+call a slice at a time, calls the app's `pump()` between slices --
+answer wm, look for Escape, keep the rest in order for the main loop --
+and abandons it if `pump()` says stop. `sw/common/tests/test_zslice.c`
+renders a busy SVG both ways and compares them bit for bit, stops one
+part way, and checks `z_slice` is put back.
+
 ## zimgjob: a picture without stopping (`sw/common/zimgjob.h`)
 
 ```c
@@ -178,8 +198,10 @@ Opening a picture shows the window at once; the rows appear as they are
 decoded, and the title says how far (`name 40%  Esc stops`). Scrolling
 and redraws work meanwhile. **Esc** stops it and the picture that was
 there comes back, at its scroll position: the new one decodes into a
-second document (38KB) and the two swap when it is done. SVG is still
-drawn in one call (zsvg has no row callback to hand back from).
+second document (38KB) and the two swap when it is done. An SVG is drawn
+a slice at a time too (`z_slice_run()`, above): the title says
+`Drawing  (Esc stops)`, the picture on screen is redrawn as it was
+meanwhile, and Esc keeps it.
 
 ## web
 
@@ -201,6 +223,14 @@ is drawn as it arrives, indexed a slice at a time between messages,
 and Escape or Stop ends the load at any point, keeping what came. See
 [web_app.md](web_app.md#while-a-page-loads).
 
+The secure handshake runs in a coroutine, its arithmetic handing back
+every ~10 ms at checkpoints in the Montgomery multiplications (`zslice`,
+above), so a certificate chain's seconds of signature checks no longer
+stop the window, and Escape ends a handshake at once. An SVG picture is
+drawn a slice at a time as in view. Both need the arena web takes at
+start ([web_app.md](web_app.md#the-arena)); a 1MB board runs them in
+one call, as before.
+
 ## draw
 
 Opening and saving in [draw](draw_app.md) are state machines
@@ -208,7 +238,10 @@ Opening and saving in [draw](draw_app.md) are state machines
 showing `Loading NAME 45%  (Esc stops)`. A load reads into a second page
 and swaps it in only when the whole file is in, so Esc or a damaged file
 leaves the drawing as it was (that page is 37.5KB of .bss: the cheapest
-way that is right on a 1MB board, where there is no arena). A save
+way that is right on a 1MB board, where there is no arena). The paint
+bucket is a span fill run a few spans a step (`drawfill.c`), Esc to
+stop it; the page is changed only when it is done
+([draw_app.md](draw_app.md#fill)). A save
 writes NAME.part and renames it when complete; Esc or a failure deletes
 the .part and the old file is untouched. During a save the page is
 read-only; during a load drawing is ignored; New/Open/Save are ignored
@@ -370,13 +403,36 @@ leaves an empty, untitled document, never half a file under its name.
 Keys and clicks meanwhile are let go; a close is kept for after. Host
 tests: `make -C sw/apps/text test` (tests/utf8.c, section 22).
 
+The encoding is worked out as the file comes in, a piece at a time
+(`enc_scan()`), rather than in a pass over the whole file at the end; a
+single-byte file's conversion to UTF-8 reads the mail between pieces.
+Replace All goes 8KB at a time with the page blank (the text is half
+rewritten), and Esc stops it: the rest is copied as it is, so the
+matches before that point are replaced, as one undo group. Ctrl+L's
+line, word and character counts are one pass, in pieces, Esc to stop.
+
+## sheet
+
+A cell's value is worked out when it is drawn and kept until the next
+change. Before the grid is drawn, its values are worked out in a
+coroutine that hands back every ~10 ms (a checkpoint in each cell's
+evaluation, `z_slice`): usually it is done in the first slice and
+nothing shows; when not, the title says `Calculating...`, wm is
+answered between slices -- a redraw acknowledged, and done in full
+after -- and keys and clicks wait, in order, for the main loop
+(`calc_visible()`, `sw/apps/sheet/sheet.c`). It is not stopped: it
+runs to the end, and drawing then finds every value cached.
+
+## learn, opening a lesson
+
+A lesson's file (up to 48 KB) is read 4 KB at a time; between pieces wm
+is answered -- a redraw acknowledged and the page drawn once the lesson
+is in -- and other messages are kept, in order, for the main loop
+(`read_pump()`, `sw/apps/learn/learn.c`).
+
 ## Still to do
 
 | App | The long call | The way out |
 |---|---|---|
-| `view`, `web` | SVG, drawn in one call | a row or element callback in zsvg to yield from |
-| `web` | a TLS handshake's signature checks, done as the record that carries them is read: an RSA-4096 root is about 5.5 s (to be measured on the board as a gap in the message loop) | verify the chain in steps between messages |
 | `draw` | a brush or eraser stroke across the whole page in one mouse sample (was ~50 ms; now stamped a word at a time, 6-9x fewer writes, to be measured on the board) | stamp a bounded number of points per step |
-| `sheet` | recalculating a 4,096-cell sheet (to be measured on the board) | a coroutine around the evaluator, or a generation-stepped recalc |
-| `learn` | opening a lesson: its file (up to 48 KB) read in one go | the same coroutine, or read in 4 KB turns |
-| `text` | Replace All's own pass, the Ctrl+L counts, and the encoding check at the end of an open: each one call over the document (opening, saving and Find are in pieces since October 2026: [text_editor.md](text_editor.md), "Opening and saving a large file") | Replace All as a two-buffer pass in slices, the counts kept as the document changes |
+| `web` | the X25519 key exchange when the board's multiplier is not there (software, one call); a 1MB board's handshake, which has no arena for the coroutine | checkpoints in monocypher's ladder |

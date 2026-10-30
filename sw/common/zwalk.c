@@ -122,7 +122,7 @@ bool zw_start(zwalk_t *w, int op, const char *src, const char *dst,
 	if (!mem || memcap < bufsz + 1024) { w->err = ZW_E_MEMORY; return false; }
 	w->buf = (uint8_t *)mem;
 	w->maxent = (memcap - bufsz) / 24;
-	if (w->maxent > 512) w->maxent = 512;
+	if (w->maxent > 4096) w->maxent = 4096;
 	w->types = w->buf + bufsz;
 	w->pool = (char *)w->types + w->maxent;
 	w->poolcap = memcap - bufsz - w->maxent;
@@ -270,6 +270,81 @@ static int file_step(zwalk_t *w) {
 
 }
 
+// -- a window of the folder --
+
+static void list_close(zwalk_t *w) {
+	if (w->reading) zfs_closedir_at(&w->dir);
+	w->reading = false;
+}
+
+// The window from entry f->idx: opened in one step, then up to
+// ZW_LIST_STEP entries a step (a page from fs now and then), the ones
+// before f->idx passed over, until the folder ends or the window is
+// full.
+static int list_step(zwalk_t *w, zw_frame_t *f) {
+
+	if (!w->reading) {
+		w->base = f->idx;
+		w->count = w->poolused = 0;
+		w->cur = w->off = 0;
+		w->dpos = 0;
+		w->list_trunc = false;
+		int32_t r = zfs_opendir_at(&w->dir, w->src, w->page, sizeof(w->page));
+		if (r == -Z_ENODEV) {
+			// No fs driver to ask (a simulator): the kernel's listing,
+			// all of it that fits the block, at once.
+			uint32_t t = 0;
+			w->base = 0;
+			if (!fs_list_into(w->src, w->pool, w->poolcap, w->types,
+				w->maxent, &w->count, &t))
+				w->count = 0;
+			if (t) w->truncated = true;
+			w->listed = true;
+			return ZW_MORE;
+		}
+		// A folder that cannot be read has nothing in it to walk.
+		if (r < 0) {
+			w->listed = true;
+			return ZW_MORE;
+		}
+		w->reading = true;
+		return ZW_MORE;
+	}
+
+	for (int n = 0; n < ZW_LIST_STEP; n++) {
+
+		// one request to fs a step: the page in hand, or the next one
+		if (n > 0 && w->dir.at >= w->dir.len && !w->dir.end) return ZW_MORE;
+		const z_fs_dirent_t *e = zfs_readdir(&w->dir);
+		if (!e) {
+			list_close(w);
+			w->listed = true;
+			return ZW_MORE;
+		}
+		const char *name = e->name;
+		uint32_t nl = e->namelen;
+		if (name[0] == '.' && (name[1] == 0 || (name[1] == '.' && name[2] == 0))) continue;
+		if (w->dpos++ < w->base) continue;
+
+		if (w->count >= w->maxent || w->poolused + nl + 1 > w->poolcap) {
+			// full: the rest is the next window
+			list_close(w);
+			w->list_trunc = true;
+			w->listed = true;
+			w->dpos--;
+			return ZW_MORE;
+		}
+		memcpy(w->pool + w->poolused, name, nl);
+		w->pool[w->poolused + nl] = 0;
+		w->types[w->count] = e->info.type;
+		w->poolused += nl + 1;
+		w->count++;
+
+	}
+	return ZW_MORE;
+
+}
+
 // -- the walk --
 
 int zw_step(zwalk_t *w) {
@@ -295,28 +370,25 @@ int zw_step(zwalk_t *w) {
 		return ZW_MORE;
 	}
 
-	if (!w->listed) {
-		uint32_t t = 0;
-		// An empty folder lists as a failure (zflist.c says why);
-		// either way there is nothing in it to walk.
-		if (!fs_list_into(w->src, w->pool, w->poolcap, w->types,
-			w->maxent, &w->count, &t))
-			w->count = 0;
-		w->list_trunc = t != 0;
-		if (t) w->truncated = true;
-		w->cur = w->off = 0;
-		w->listed = true;
+	if (!w->listed) return list_step(w, f);
+
+	// past the window, and the folder goes on: the next window
+	if (f->idx >= w->base + w->count && w->list_trunc) {
+		w->listed = false;
+		if (w->op == ZW_DELETE) f->idx = 0;	// what came before is gone
 		return ZW_MORE;
 	}
 
-	if (f->idx < w->count) {
+	if (f->idx < w->base + w->count) {
 
-		while (w->cur < f->idx) {
+		uint32_t k = f->idx - w->base;
+		if (w->cur > k) w->cur = w->off = 0;
+		while (w->cur < k) {
 			w->off += (uint32_t)slen(w->pool + w->off) + 1;
 			w->cur++;
 		}
 		const char *name = base_of(w->pool + w->off);
-		bool isdir = w->types[f->idx] == Z_FS_TYPE_DIR;
+		bool isdir = w->types[k] == Z_FS_TYPE_DIR;
 		f->idx++;
 
 		if (!name[0] || !path_add(w->src, name) ||
@@ -360,8 +432,8 @@ int zw_step(zwalk_t *w) {
 
 	// The folder is done.
 	if (w->op == ZW_DELETE) {
-		if (w->list_trunc) {			// there is more of it: again
-			w->listed = false;
+		if (w->base + w->count > 0) {	// it had something in it: again,
+			w->listed = false;			// until it reads empty
 			f->idx = 0;
 			return ZW_MORE;
 		}
@@ -381,6 +453,7 @@ int zw_step(zwalk_t *w) {
 
 void zw_cancel(zwalk_t *w) {
 	bool writing = w->infile && w->out >= 0;
+	list_close(w);
 	file_end(w);
 	// The file being written is not kept: half a file looks like a
 	// whole one. Folders and files already finished stay (partial).

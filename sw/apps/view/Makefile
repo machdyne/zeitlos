@@ -121,7 +121,7 @@ APP_CFLAGS = $(IMG_DEFS) $(INSTR_DEFS) $(PROF_DEFS)
 SRC_DIRS = $(COMMON_DIR)/games $(COMMON_DIR)/games/ui
 OBJS = zeitlos.o zobj.o zgfx.o zcolor.o zfont_data.o zwin.o zwidget.o zspeak.o \
 	zfsapp.o zflist.o zdialog.o zedit.o zimg.o zinflate.o zsvg.o \
-	zprof.o zco.o zimgjob.o zquant.o zarcade.o zarcade_sys.o zsfx.o zcfg.o sui.o \
+	zprof.o zco.o zslice.o zimgjob.o zquant.o zarcade.o zarcade_sys.o zsfx.o zcfg.o sui.o \
 	vscreen.o view.o
 
 zimg.o:

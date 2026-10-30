@@ -14,7 +14,7 @@ SRC_DIRS = ../.. ../../../../common/formats
 # the simulator has no FS_STAT: px_stack.c answers it from FS_LIST
 LDLIBS = -Wl,--wrap=fs_stat
 OBJS = zeitlos.o zobj.o zfsapp.o zfsutil.o zwin.o zgfx.o zfont_data.o zinflate.o zgz.o \
-	zf_core.o zf_xml.o zf_zip.o zf_arch.o zwalk.o zco.o \
+	zf_core.o zf_xml.o zf_zip.o zf_arch.o zwalk.o zfsc.o zco.o \
 	vfs.o sh.o tools.o tree.o job.o px_stack.o
 
 include ../../../../common/app.mk

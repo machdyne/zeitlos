@@ -97,7 +97,7 @@ endif
 # a time from the main loop (docs/responsive.md).
 OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o zwidget.o zspeak.o \
 	zfsapp.o zflist.o zdialog.o zedit.o zinflate.o zimg.o zsvg.o \
-	zco.o zimgjob.o \
+	zco.o zslice.o zimgjob.o \
 	zport.o zstream.o zdns.o \
 	url.o uni.o http.o html.o layout.o page.o toolbar.o smallweb.o bodyview.o find.o bookmark.o imgdec.o $(TLS_OBJ) web.o
 
@@ -391,7 +391,7 @@ $(BUILD)/test_tls_crypto: tests/test_tls_crypto.c tls_crypto.c \
 $(BUILD)/test_rsa: tests/test_rsa.c rsa.c bignum.c tests/rsa_vectors.h \
 		| $(BUILD)
 	$(HOSTCC) $(HOSTFLAGS) -o $@ tests/test_rsa.c rsa.c bignum.c \
-		../../common/zsha256.c
+		../../common/zsha256.c ../../common/zco.c
 
 MONO = ../../ext/monocypher/monocypher.c \
        ../../ext/monocypher/monocypher-ed25519.c ../../common/z25519.c
@@ -448,7 +448,7 @@ test-asan: | $(BUILD)
 	$(BUILD)/test_x509_asan
 	$(HOSTCC) --std=gnu99 -g -fsanitize=address,undefined -o \
 		$(BUILD)/test_rsa_asan tests/test_rsa.c rsa.c bignum.c \
-		../../common/zsha256.c
+		../../common/zsha256.c ../../common/zco.c
 	$(BUILD)/test_rsa_asan
 	$(HOSTCC) --std=gnu99 -g -fsanitize=address,undefined -o \
 		$(BUILD)/test_verify_asan tests/test_verify.c verify.c x509.c \

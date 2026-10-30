@@ -447,6 +447,9 @@ its own business. Printing (the print dialog and zprint) then took
 64K/134K; neither is in the RAM rule, and both came from the slack
 under `CORE_ZAR_MAX` (the archive is 735,536 bytes of 848K). The
 `Makefile`'s comments above `CORE_BUDGETS` keep each change and why.
+Big folders in the Open and Save dialogs (the filesystem client in every
+app with a dialog) and Replace All in pieces then took `text` to
+86K/212K, and paged folder walks `files` to 64K/138K.
 The next byte for the boot set comes out of another budget, or out of
 something made smaller. `mkzar.py --max` checks the archive itself
 against the region (`CORE_ZAR_MAX`, 848K), so a budget that turns out
@@ -459,7 +462,7 @@ top-level `Makefile`, next to `CORE_APPS`:
 
 ```
 CORE_BUDGETS = fs=36K/77056 usb=35K/53504 wm=114K/147K net=148K/284K term=62K/140K \
-	console=10K/12544 cron=18K/48K text=80K/200K files=64K/134K repl=140K/307K
+	console=10K/12544 cron=18K/48K text=86K/212K files=64K/138K repl=140K/307K
 CORE_RESERVE = 60K
 CORE_STORE = wm net
 CORE_ZAR_MAX = 848K

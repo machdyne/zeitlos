@@ -74,6 +74,7 @@
 #include "../../common/zimgjob.h"
 #if VIEW_SVG
 #include "../../common/zsvg.h"
+#include "../../common/zslice.h"
 #endif
 #include "../../common/zprof.h"
 #include "../../common/games/zarcade.h"
@@ -586,6 +587,51 @@ static void show_error(const char *what, int rv) {
 // That is affordable because SVG files are kilobytes. A file larger
 // than the buffer is refused rather than truncated -- half a drawing
 // is not a drawing.
+// Drawing it is one call into zsvg, which for a busy drawing is
+// hundreds of ms. It runs a slice at a time (z_slice_run(), zslice.h):
+// between slices wm is answered -- the picture on screen is drawn as it
+// was, since the new one goes into the other document -- Esc stops it,
+// and anything else waits for the main loop (next_msg()).
+static void forward_msg(z_msg_t *msg, void *user);
+
+#define HELD_MAX 32
+static z_msg_t held[HELD_MAX];
+static int held_at, held_n;
+
+static bool next_msg(z_msg_t *m) {
+	if (held_n) { *m = held[held_at]; held_at = (held_at + 1) % HELD_MAX; held_n--; return true; }
+	return z_msg_read(m) == Z_OK;
+}
+
+static uint8_t svg_stack[16 * 1024];
+typedef struct { z_svg_t *sv; uint32_t *bits; int rv; } svg_job_t;
+
+static void svg_fn(void *arg) {
+	svg_job_t *j = arg;
+	j->rv = z_svg_render_bitmap(j->sv, j->bits, DOC_WPL);
+}
+
+static bool svg_pump(void *ctx) {
+	(void)ctx;
+	z_msg_t m;
+	bool go = true;
+	while (z_msg_read(&m) == Z_OK) {
+		switch (m.subject) {
+		case Z_WM_SET_CLIP: case Z_WM_REDRAW: case Z_WM_WINDOW_MOVED: case Z_WM_WINDOW_RESIZED:
+			forward_msg(&m, NULL);
+			break;
+		case Z_WM_KEY:
+			if (m.obj.type == Z_UINT32 && Z_WM_UNPACK_KEY_PRESSED(m.obj.val.uint32) &&
+			    Z_WM_UNPACK_KEY_KEYSYM(m.obj.val.uint32) == 0x1b) { go = false; break; }
+			/* fall through */
+		default:
+			if (held_n < HELD_MAX) held[(held_at + held_n++) % HELD_MAX] = m;
+			break;
+		}
+	}
+	return go;
+}
+
 static void load_svg(z_img_file_t *src, const char *path) {
 
 	char *text = scratch.svg_text;	// no picture is loading (load_file())
@@ -632,7 +678,14 @@ static void load_svg(z_img_file_t *src, const char *path) {
 
 		memset(other, 0, sizeof(doc_mem[0]));
 
-		rv = z_svg_render_bitmap(&sv, &other[0][0], DOC_WPL);
+		{
+			svg_job_t j = { &sv, &other[0][0], Z_SVG_OK };
+			z_win_set_title(&win, "Drawing  (Esc stops)");
+			bool done = z_slice_run(svg_fn, &j, svg_stack, sizeof svg_stack, svg_pump, NULL);
+			update_title();
+			if (!done) return;		// stopped: the picture that was there stays
+			rv = j.rv;
+		}
 
 		if (rv != Z_SVG_OK) {
 			z_dialog_confirm(&dlg_ctx, "Cannot draw",
@@ -1179,7 +1232,7 @@ int main(void) {
 		// iteration -- see Z_WM_MOUSE's own note in zwm.h on why
 		// handling one per loop makes an app fall progressively
 		// behind the real cursor.
-		while (z_msg_read(&msg) == Z_OK) {
+		while (next_msg(&msg)) {
 
 			switch (msg.subject) {
 

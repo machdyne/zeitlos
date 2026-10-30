@@ -923,8 +923,15 @@ ZAR_APPS = $(filter-out $(CORE_APPS_OMIT),$(CORE_APPS))
 # folder a page at a time straight from fs, its 2KB page, and the list
 # reading in pages (zflist.c). The list's store is in the arena, not
 # here.
+# October 2026, big folders in the Open and Save dialogs and the encoding
+# check and Replace All in pieces (docs/widgets.md, docs/responsive.md):
+# text 80K/200K -> 86K/212K -- the filesystem client (zfsc.c) every app
+# with the dialogs now links, the dialogs' paged store, and the pieces
+# themselves. files 64K/134K -> 64K/138K: zwalk reads a folder a page at
+# a time, its 1KB page in zwalk_t. Neither is in the RAM rule; both from
+# the slack under CORE_ZAR_MAX.
 CORE_BUDGETS = fs=36K/77056 usb=35K/53504 wm=114K/147K net=148K/284K term=62K/140K \
-	console=10K/12544 cron=18K/48K text=80K/200K files=64K/134K repl=140K/307K
+	console=10K/12544 cron=18K/48K text=86K/212K files=64K/138K repl=140K/307K
 CORE_RESERVE = 60K
 # Core apps stored as they are, not compressed: their budget is then
 # their .bin. wm and net, the two largest started at boot: unpacked they

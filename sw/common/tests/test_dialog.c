@@ -32,7 +32,127 @@
 #include "zrender.h"
 #include "ztramp.h"
 
+// A big folder: the dialog's own fs and arena are stood in for below.
+#define ZDIALOG_PAGES
+#define z_arena_set  test_arena_set
+#define z_arena_get  test_arena_get
+#include <stdlib.h>
+#include "../zfsc.h"
+#include "../zeitlos.h"
+int32_t test_arena_set(uint32_t size, void **base, uint32_t *size_out);
+uint32_t test_arena_get(void **base);
+
 #include "../zdialog.c"
+
+// -- a fake fs: "/big" holds BIG_N files, listed a page at a time --
+
+#define BIG_N 3000
+static int big_at;
+
+int32_t zfs_opendir_at(zfs_dir_t *d, const char *path, void *buf, uint32_t cap) {
+	memset(d, 0, sizeof(*d));
+	d->buf = buf;
+	d->cap = cap;
+	big_at = strcmp(path, "/big") ? BIG_N : 0;
+	return 0;
+}
+
+const z_fs_dirent_t *zfs_readdir(zfs_dir_t *d) {
+	if (big_at >= BIG_N) return NULL;
+	z_fs_dirent_t *e = (z_fs_dirent_t *)d->buf;
+	// in no particular order, as a FAT directory is
+	int k = (big_at * 1777) % BIG_N;
+	memset(&e->info, 0, sizeof(e->info));
+	e->namelen = (uint16_t)snprintf(e->name, 32, "F%04d.TXT", k);
+	big_at++;
+	return e;
+}
+
+int32_t zfs_closedir_at(zfs_dir_t *d) { (void)d; return 0; }
+
+// -- a fake arena: every resize moves it, the old copy scribbled on --
+
+static uint8_t *ar_base;
+static uint32_t ar_size;
+static int ar_moves;
+
+int32_t test_arena_set(uint32_t size, void **base, uint32_t *size_out) {
+	if (size == Z_ARENA_QUERY) {
+		if (base) *base = ar_base;
+		if (size_out) *size_out = ar_size;
+		return Z_ARENA_OK;
+	}
+	uint8_t *n = size ? malloc(size) : NULL;
+	if (n && ar_base) memcpy(n, ar_base, size < ar_size ? size : ar_size);
+	if (ar_base) { memset(ar_base, 0xA5, ar_size); free(ar_base); ar_moves++; }
+	ar_base = n;
+	ar_size = size;
+	if (base) *base = n;
+	if (size_out) *size_out = size;
+	return Z_ARENA_OK;
+}
+
+uint32_t test_arena_get(void **base) {
+	if (base) *base = ar_base;
+	return ar_size;
+}
+
+static void *moved_to;
+static int moved_calls;
+static void on_moved(void *base, void *user) { (void)user; moved_to = base; moved_calls++; }
+
+static void expect(bool ok, const char *what);
+
+// The list through a whole folder: sorted, complete, and the app's
+// arena as it was afterwards.
+static void big_folder(z_win_t *scratch, bool app_arena) {
+
+	z_dialog_ctx_t ctx;
+	memset(&ctx, 0, sizeof(ctx));
+	if (app_arena) {
+		test_arena_set(100, NULL, NULL);
+		memset(ar_base, 0x5A, 100);
+		ctx.arena_moved = on_moved;
+	}
+	moved_calls = 0;
+
+	memset(&dlg, 0, sizeof(dlg));
+	dlg.kind = DLG_KIND_OPEN;
+	dlg.win = *scratch;
+	z_flist_init(&dlg_flist, &dlg.win);
+	z_flist_set_geom(&dlg_flist, DLG_MARGIN, 20, 180, 60);
+	ds_setup(&ctx);
+	z_flist_chdir(&dlg_flist, "/big");
+	expect(dlg_flist.loading, "a big folder is read in pages");
+	expect(dlg_flist.count > 0 && dlg_flist.count < BIG_N, "the first page is shown at once");
+	int steps = 0;
+	while (dlg_flist.loading && steps < 1000) { z_flist_load_step(&dlg_flist, 64); steps++; }
+	expect(dlg_flist.count == BIG_N, "every entry is listed");
+	expect(!z_flist_truncated(&dlg_flist), "not a partial list");
+	bool sorted = true;
+	for (int i = 1; i < dlg_flist.count; i++)
+		if (strcmp(dlg_flist.pool + dlg_flist.name_off[i - 1], dlg_flist.pool + dlg_flist.name_off[i]) >= 0)
+			sorted = false;
+	expect(sorted, "sorted as it came in");
+	expect(ar_moves > 0, "the store grew through moves");
+	if (app_arena) {
+		expect(moved_calls > 0 && moved_to == ar_base, "the app is told where its arena went");
+		expect(ar_base[0] == 0x5A && ar_base[99] == 0x5A, "the app's bytes are kept");
+	}
+
+	ds_release();
+	if (app_arena) {
+		expect(ar_size == 100, "the app's arena is its own size again");
+		expect(ar_base[0] == 0x5A && ar_base[99] == 0x5A && moved_to == ar_base,
+			"and where the app was told");
+		test_arena_set(0, NULL, NULL);
+	} else {
+		expect(ar_size == 0 && !ar_base, "a borrowed arena is given back");
+	}
+	expect(dlg_flist.pool == dlg_flist.pool_store && dlg_flist.count == 0,
+		"the list is back on its own store");
+
+}
 
 // The file list draws row icons through the hardware icon blitter,
 // which zrender.h does not emulate. A prompt draws no icons; this only
@@ -398,6 +518,10 @@ int main(void) {
 		pr_repaint();
 		z_render_write(getenv("PRINT_PBM"), &dlg.win, 2);
 	}
+
+	// -- a big folder, in an app with no arena and in one with --
+	big_folder(&scratch, false);
+	big_folder(&scratch, true);
 
 	printf("test_dialog: %d checks, %d failed\n", checks, failures);
 	return failures ? 1 : 0;

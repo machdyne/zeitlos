@@ -14,7 +14,8 @@ APP = draw
 #   shared widget is only shared if the build says so.
 OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o zwidget.o zspeak.o \
 	zfsapp.o zflist.o zdialog.o zedit.o draw_icons.o drawio.o \
-	drawstamp.o drawundo.o draw.o
+	drawstamp.o drawundo.o drawfill.o \
+	zprint.o zpaper.o zcfg.o zcanvas.o zcfont.o zpage.o draw.o
 
 # draw_icons.c/.h are hand-edited (binary literals with an ASCII
 # picture of each row in the comment), not generated -- see
@@ -40,5 +41,5 @@ HOST_CFLAGS = -std=gnu99 -g -Wall -Wextra -fsanitize=address,undefined \
 test:
 	$(HOSTCC) $(HOST_CFLAGS) -o /tmp/test_draw_io tests/test_drawio.c tests/hostfs.c drawio.c
 	/tmp/test_draw_io
-	$(HOSTCC) $(HOST_CFLAGS) -o /tmp/test_draw_undo tests/test_draw.c drawstamp.c drawundo.c
+	$(HOSTCC) $(HOST_CFLAGS) -o /tmp/test_draw_undo tests/test_draw.c drawstamp.c drawundo.c drawfill.c
 	/tmp/test_draw_undo

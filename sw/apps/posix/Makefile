@@ -44,13 +44,14 @@ OWN_CFLAGS = $(CFLAGS) -Werror
 #   extraction, the code convert uses. zf_xml.o only because zf_zip.c's
 #   entry reader refers to it; --gc-sections drops all of it but that.
 #
-#   zwalk.o: cp -r and rm -r (sw/common/zwalk.c, docs/zwalk.md).
+#   zwalk.o: cp -r and rm -r (sw/common/zwalk.c, docs/zwalk.md), and
+#   zfsc.o, which it reads a folder through a page at a time.
 #
 #   zco.o: a command runs in a coroutine (job.c, docs/posix.md "How a
 #   command runs"), so the main loop serves every session meanwhile.
 OBJS = zeitlos.o zobj.o zport.o zline.o zfsapp.o zfsutil.o zwin.o zgfx.o zfont_data.o \
 	zconnect.o zdns.o zinflate.o zgz.o \
-	zf_core.o zf_xml.o zf_zip.o zf_arch.o zwalk.o zco.o \
+	zf_core.o zf_xml.o zf_zip.o zf_arch.o zwalk.o zfsc.o zco.o \
 	vfs.o sh.o tools.o tree.o job.o main.o
 
 SRC_DIRS = ../../common/formats

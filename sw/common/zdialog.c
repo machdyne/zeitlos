@@ -26,6 +26,7 @@
 #include "zdialog.h"
 #include "zedit.h"
 #include "zfsapp.h"		// fs_stat(), for z_dialog_help()
+#include "zfsc.h"		// a big folder a page at a time
 
 // -- shared dialog state --
 //
@@ -102,6 +103,149 @@ static struct {
 // confirm and help boxes then does not carry it, since section GC
 // drops data nothing references as it drops code.
 static z_flist_t dlg_flist;
+
+// -- a big folder (zflist.h, "Big folders") --
+//
+// The dialogs show every entry of a folder, up to DS_CAP_MAX, the way
+// `files` does: read from fs a page at a time while the dialog runs,
+// into a store in the arena. An app with no arena lends it for as long
+// as the dialog is open; an app that has one gets the store after its
+// own bytes when it says how to follow a move (ctx->arena_moved).
+// Without either, the list's own 256.
+//
+// The page fs reads into must be in the app's own memory, not the
+// arena (docs/kernel.md, "Arenas"): it is the list's built-in name
+// pool, which nothing uses while the store is in the arena.
+
+// On the board, always; in a host test only when it brings its own fs
+// and arena (ZDIALOG_PAGES, tests/test_dialog.c).
+#if defined(__riscv) || defined(ZDIALOG_PAGES)
+
+#define DS_CAP0		512
+#define DS_POOL0	(16u * 1024u)
+#define DS_CAP_MAX	4096
+#define DS_POOL_MAX	65535u
+#define DS_PAGE		2048u
+
+static const z_dialog_ctx_t *ds_ctx;
+static uint32_t ds_app;			// the app's own arena bytes, before the store
+static uint32_t ds_at;			// the store's offset: ds_app, word aligned
+static uint32_t ds_bytes;		// the store's size; 0: none
+static int ds_cap;
+static uint32_t ds_pool;
+static zfs_dir_t ds_dir;
+
+static uint32_t ds_pool_at(int cap) { return (3u * (uint32_t)cap + 3u) & ~3u; }
+static uint32_t ds_size(int cap, uint32_t pool) { return ds_pool_at(cap) + pool; }
+
+static void ds_point(uint8_t *base) {
+	uint8_t *b = base + ds_at;
+	z_flist_set_store(&dlg_flist, (char *)(b + ds_pool_at(ds_cap)), ds_pool,
+		(uint16_t *)b, b + 2u * (uint32_t)ds_cap, NULL, ds_cap);
+	if (ds_app && ds_ctx->arena_moved) ds_ctx->arena_moved(base, ds_ctx->user);
+}
+
+static void *ds_page(void) {
+	return (void *)(((uintptr_t)dlg_flist.pool_store + 3u) & ~(uintptr_t)3u);
+}
+
+static bool ds_open(void *ctx, const char *path) {
+	(void)ctx;
+	return zfs_opendir_at(&ds_dir, path, ds_page(), DS_PAGE) == 0;
+}
+
+static bool ds_next(void *ctx, const char **name, uint32_t *namelen, z_fs_info_t *info) {
+	(void)ctx;
+	const z_fs_dirent_t *e = zfs_readdir(&ds_dir);
+	if (!e) return false;
+	*name = e->name;
+	*namelen = e->namelen;
+	*info = e->info;
+	return true;
+}
+
+static void ds_close(void *ctx) {
+	(void)ctx;
+	zfs_closedir_at(&ds_dir);
+}
+
+// Twice the room; the parts moved up from the top down.
+static bool ds_grow(void *ctx, z_flist_t *fl) {
+
+	(void)ctx;
+	int cap = ds_cap * 2 > DS_CAP_MAX ? DS_CAP_MAX : ds_cap * 2;
+	uint32_t pool = ds_pool * 2 > DS_POOL_MAX ? DS_POOL_MAX : ds_pool * 2;
+	if (cap == ds_cap && pool == ds_pool) return false;
+
+	void *base;
+	uint32_t got, want = ds_at + ds_size(cap, pool);
+	if (z_arena_set(want, &base, &got) != Z_ARENA_OK || !base || got < want) {
+		if (z_arena_set(ds_at + ds_bytes, &base, &got) == Z_ARENA_OK && base) ds_point(base);
+		return false;
+	}
+
+	uint8_t *b = (uint8_t *)base + ds_at;
+	memmove(b + ds_pool_at(cap), b + ds_pool_at(ds_cap), fl->pool_used);
+	memmove(b + 2u * (uint32_t)cap, b + 2u * (uint32_t)ds_cap, (size_t)fl->count);
+	ds_cap = cap;
+	ds_pool = pool;
+	ds_bytes = ds_size(cap, pool);
+	ds_point(base);
+	return true;
+
+}
+
+static const z_flist_source_t ds_src = { ds_open, ds_next, ds_close, ds_grow, NULL };
+
+// Before the first listing: a store, if there can be one.
+static void ds_setup(const z_dialog_ctx_t *ctx) {
+
+	void *base = NULL;
+	uint32_t got;
+
+	ds_bytes = 0;
+	ds_ctx = ctx;
+	ds_app = z_arena_get(&base);
+	if (ds_app && (!ctx || !ctx->arena_moved)) return;
+	ds_at = (ds_app + 3u) & ~3u;
+
+	uint32_t want = ds_at + ds_size(DS_CAP0, DS_POOL0);
+	if (z_arena_set(want, &base, &got) != Z_ARENA_OK || !base || got < want) {
+		// as it was (a failed call changes nothing, but be sure)
+		if (!ds_app) z_arena_set(0, NULL, NULL);
+		else if (z_arena_set(ds_app, &base, &got) == Z_ARENA_OK && base && ctx->arena_moved)
+			ctx->arena_moved(base, ctx->user);
+		return;
+	}
+	ds_cap = DS_CAP0;
+	ds_pool = DS_POOL0;
+	ds_bytes = ds_size(DS_CAP0, DS_POOL0);
+	ds_point(base);
+	z_flist_set_source(&dlg_flist, &ds_src);
+
+}
+
+// When the dialog closes: the memory given back, the app's arena as it was.
+static void ds_release(void) {
+
+	if (!ds_bytes) return;
+	z_flist_set_source(&dlg_flist, NULL);	// stops a listing still coming in
+	dlg_flist.count = 0;
+	z_flist_set_store(&dlg_flist, dlg_flist.pool_store, Z_FLIST_POOL,
+		dlg_flist.name_off_store, dlg_flist.isdir_store, NULL, Z_FLIST_MAX);
+	ds_bytes = 0;
+	if (!ds_app) { z_arena_set(0, NULL, NULL); return; }
+	void *base;
+	uint32_t got;
+	if (z_arena_set(ds_app, &base, &got) == Z_ARENA_OK && base && ds_ctx->arena_moved)
+		ds_ctx->arena_moved(base, ds_ctx->user);
+
+}
+
+#else
+static void ds_setup(const z_dialog_ctx_t *ctx) { (void)ctx; }
+static void ds_release(void) {}
+#endif
 
 // -- geometry --
 
@@ -307,6 +451,13 @@ static void dlg_dispatch(z_msg_t *msg) {
 // sw/apps/draw does: pointer events arrive faster than a redraw can
 // service them, and handling one per loop falls progressively further
 // behind the real cursor.
+// Work between messages while a dialog is up: the Open and Save
+// dialogs' folder still coming in (file_idle()). A pointer, set only by
+// file_dialog(), so an app that shows nothing but confirm and help boxes
+// does not link the file list at all (section GC drops what nothing
+// reaches). True while there is more to do.
+static bool (*dlg_idle)(void);
+
 static int dlg_run(void) {
 
 	while (!dlg.done) {
@@ -316,6 +467,9 @@ static int dlg_run(void) {
 			dlg_dispatch(&msg);
 			if (dlg.done) break;
 		}
+		if (dlg.done) break;
+
+		if (dlg_idle && dlg_idle()) continue;
 
 		for (volatile int i = 0; i < 200; i++);	// light throttle
 
@@ -549,10 +703,17 @@ static void path_draw(void) {
 	if (avail <= 0) return;
 
 	int maxch = avail / z_font_5x8.w;
-	const char *p = dlg_flist.path;
-	int len = (int)strlen(p);
+	const char *more = dlg_flist.loading ? " (reading)" :
+		z_flist_truncated(&dlg_flist) ? " (partial list)" : "";
+	char pm[Z_FLIST_PATH_MAX + 16];
+	int pl = 0;
+	for (const char *q = dlg_flist.path; *q && pl < Z_FLIST_PATH_MAX; q++) pm[pl++] = *q;
+	for (const char *q = more; *q; q++) pm[pl++] = *q;
+	pm[pl] = 0;
+	const char *p = pm;
+	int len = pl;
 
-	char shown[Z_FLIST_PATH_MAX + 4];
+	char shown[Z_FLIST_PATH_MAX + 20];
 
 	if (len <= maxch) {
 		memcpy(shown, p, (size_t)len + 1);
@@ -1063,6 +1224,16 @@ static const char *const labels_yes_no_cancel[3] = { "Yes", "No", "Cancel" };
 static const char *const labels_open[2]          = { "Open", "Cancel" };
 static const char *const labels_save[2]          = { "Save", "Cancel" };
 
+// A folder still coming in: a page more between messages, the rows
+// that changed drawn, the path line once it is all in.
+static bool file_idle(void) {
+	if (!dlg_flist.loading) return false;
+	bool more = z_flist_load_step(&dlg_flist, 64);
+	z_flist_draw(&dlg_flist, false);
+	if (!more) path_draw();
+	return true;
+}
+
 // Shared setup for the two file dialogs, which differ only in whether
 // there is a filename field taking up room above the buttons.
 static bool file_dialog(const z_dialog_ctx_t *ctx, dlg_kind_t kind,
@@ -1102,6 +1273,7 @@ static bool file_dialog(const z_dialog_ctx_t *ctx, dlg_kind_t kind,
 	z_flist_init(&dlg_flist, &dlg.win);
 	z_flist_set_geom(&dlg_flist, DLG_MARGIN, dlg.list_y,
 		cw - 2 * DLG_MARGIN, dlg.list_h);
+	ds_setup(ctx);
 	// No directory given: the person's own (docs/layout.md, rule 5).
 	z_flist_chdir(&dlg_flist, start_dir ? start_dir : Z_DIR_HOME);
 
@@ -1117,7 +1289,11 @@ static bool file_dialog(const z_dialog_ctx_t *ctx, dlg_kind_t kind,
 
 	dlg_repaint();
 
-	return dlg_run() == Z_DIALOG_YES;
+	dlg_idle = file_idle;
+	bool ok = dlg_run() == Z_DIALOG_YES;
+	dlg_idle = NULL;
+	ds_release();
+	return ok;
 
 }
 
@@ -1719,7 +1895,8 @@ static void pr_value(int row, char *v, int n) {
 		case PR_PAPER:
 			if (pr.paper) pr_cat(v, n, pr_paper_names[pr.paper]);
 			else {
-				const char *d = "US Letter";
+				// the app's own default, by its name if it is not one of these
+				const char *d = pr.o->paper_default[0] ? pr.o->paper_default : "US Letter";
 				for (int i = 1; i < PR_NPAPERS; i++)
 					if (!strcmp(pr.o->paper_default, pr_papers[i])) d = pr_paper_names[i];
 				pr_cat(v, n, "Default (");

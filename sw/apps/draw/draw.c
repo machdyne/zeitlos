@@ -82,10 +82,16 @@
  * no arena (a 1MB board), one level kept in `spare` at no cost. Ctrl+Z
  * and Ctrl+Y (or Ctrl+Shift+Z), the same keys as text and sheet.
  *
- * -- not implemented yet --
+ * -- the paint bucket --
  *
- * No flood fill -- see the note above tool_icons[] for why the one
- * that was here got removed and what bringing it back would need.
+ * drawfill.h: a span fill, a few spans a step between messages, so the
+ * window answers throughout and Esc stops it. See the note above
+ * tool_icons[] for the one that was here before and why it went.
+ *
+ * -- printing --
+ *
+ * Ctrl+P or the title bar's printer: the print dialog (zdialog.h), then
+ * the page as one picture, fitted to the paper (do_print()).
  */
 
 #include <stdio.h>
@@ -112,6 +118,9 @@
 #include "drawio.h"
 #include "drawstamp.h"
 #include "drawundo.h"
+#include "drawfill.h"
+#include "../../common/zprint.h"
+#include "../../common/zspeak.h"
 
 #define VRAM        ((volatile uint32_t *)0x20000000)
 #define VRAM_WPL    (Z_SCREEN_W / 32)	// framebuffer words per line
@@ -270,10 +279,9 @@ static inline int doc_screen_y(const z_clip_t *vc, int dy) {
 
 // -- widgets --
 
-// Seven, not eight: the 2-wide grid therefore has one empty slot in its
-// last row. See the flood-fill note above tool_icons[] for why the
-// bucket is gone.
-#define TOOL_COUNT   7
+// Nine, in a grid two wide: the freehand tools and the bucket, then the
+// shapes, an outline and a filled one of each.
+#define TOOL_COUNT   9
 #define GROUP_TOOL   1
 #define GROUP_PAT    2
 
@@ -289,18 +297,28 @@ typedef enum {
 	TOOL_PENCIL = 0,
 	TOOL_BRUSH,
 	TOOL_ERASER,
+	TOOL_FILL,
 	TOOL_LINE,
 	TOOL_RECT,
 	TOOL_RECTFILL,
 	TOOL_OVAL,
+	TOOL_OVALFILL,
 } tool_t;
+
+// Their names, for the help, speech and the title while one is chosen
+// by key; and the key that chooses each (also 1..9 in this order).
+static const char *const tool_names[TOOL_COUNT] = {
+	"Pencil", "Brush", "Eraser", "Fill", "Line", "Rectangle",
+	"Filled rectangle", "Oval", "Filled oval",
+};
+static const char tool_keys[TOOL_COUNT] = { 'p', 'b', 'e', 'f', 'l', 'r', 'R', 'o', 'O' };
 
 static z_widget_t widgets[WIDGET_COUNT];
 static z_widget_set_t wset;
 
-// No flood fill / paint bucket.
+// The paint bucket (drawfill.c).
 //
-// It was here and it was removed, because a pattern fill genuinely
+// One was here before and was removed, because a pattern fill genuinely
 // needs a visited mask -- the usual "filled pixels no longer match the
 // target colour" shortcut breaks when roughly half the pixels of a 50%
 // pattern get written WITH the target colour -- and a bounded seed
@@ -311,16 +329,21 @@ static z_widget_set_t wset;
 // A tool that regularly half-works and stalls the window manager is
 // worse than no tool.
 //
-// Bringing it back wants a different approach, not a bigger stack:
-// span-based filling that pushes runs rather than points, a fill
-// bounded to a computed region rather than sweeping the full document,
-// and yielding to the message loop mid-fill so the redraw ack isn't
-// blocked. draw_icon_bucket (draw_icons.h) is deliberately left in
-// place for that day; --gc-sections drops it meanwhile.
+// The one now is that different approach: it pushes runs rather than
+// points; the region is found in one colour (a pixel changed is a pixel
+// visited) and the pattern put in after, where the page differs from
+// `spare`, so no visited mask is needed; a run the stack had no room
+// for is found again by a sweep of the rows touched; and it runs a few
+// spans at a time between messages, with Esc to stop it.
 static const uint8_t *tool_icons[TOOL_COUNT] = {
-	draw_icon_pencil, draw_icon_brush, draw_icon_eraser, draw_icon_line,
-	draw_icon_rect, draw_icon_rectfill, draw_icon_oval,
+	draw_icon_pencil, draw_icon_brush, draw_icon_eraser, draw_icon_bucket,
+	draw_icon_line, draw_icon_rect, draw_icon_rectfill, draw_icon_oval,
+	draw_icon_ovalfill,
 };
+
+// -- a fill in progress --
+static draw_fill_t fill;
+static bool filling;
 
 static tool_t cur_tool = TOOL_PENCIL;
 static int cur_pattern = 1;	// index into z_pattern_table -- 1 is solid black
@@ -477,6 +500,29 @@ static void canvas_oval(int x0, int y0, int x1, int y1, int color) {
 		if (sigma >= 0) { sigma += 4 * b2 * (1 - x); x--; }
 		sigma += a2 * (4 * y + 6);
 		y++;
+	}
+
+}
+
+// The inside of the oval inscribed in the rect, in `pat`, a row at a
+// time (a span of draw_fill_rect() each). The outline goes over it.
+static void canvas_oval_fill(int x0, int y0, int x1, int y1, const uint8_t *pat) {
+
+	if (x1 < x0) { int t = x0; x0 = x1; x1 = t; }
+	if (y1 < y0) { int t = y0; y0 = y1; y1 = t; }
+
+	int a = (x1 - x0) / 2, b = (y1 - y0) / 2;
+	int cx = x0 + a, cy = y0 + b;
+	if (a <= 0 || b <= 0) return;
+
+	int64_t a2 = (int64_t)a * a, b2 = (int64_t)b * b;
+	int x = a;
+	// row by row from the middle out; the half width only shrinks, so
+	// it is found by stepping down from the last one
+	for (int y = 0; y <= b; y++) {
+		while (x > 0 && b2 * x * x + a2 * y * y > a2 * b2) x--;
+		draw_fill_rect(PAGE(canvas), cx - x, cy + y, 2 * x + 1, 1, pat);
+		if (y) draw_fill_rect(PAGE(canvas), cx - x, cy - y, 2 * x + 1, 1, pat);
 	}
 
 }
@@ -876,7 +922,31 @@ static bool tool_is_freehand(tool_t t) {
 
 static bool tool_is_shape(tool_t t) {
 	return t == TOOL_LINE || t == TOOL_RECT ||
-		t == TOOL_RECTFILL || t == TOOL_OVAL;
+		t == TOOL_RECTFILL || t == TOOL_OVAL || t == TOOL_OVALFILL;
+}
+
+// Modifiers from the last key event: Z_WM_MOUSE carries none (zwm.h),
+// so a Shift held while dragging is known from the key that said so.
+static uint32_t mods_now;
+
+// Shift: a line at 0, 45 or 90 degrees; a rectangle a square, an oval a
+// circle. Moves (x1, y1).
+static void constrain(int x0, int y0, int *x1, int *y1) {
+
+	if (!(mods_now & Z_KBD_MOD_SHIFT)) return;
+
+	int dx = *x1 - x0, dy = *y1 - y0;
+	int ax = dx < 0 ? -dx : dx, ay = dy < 0 ? -dy : dy;
+
+	if (cur_tool == TOOL_LINE) {
+		// nearer the axis than the diagonal: along it
+		if (ax > 2 * ay) { *y1 = y0; return; }
+		if (ay > 2 * ax) { *x1 = x0; return; }
+	}
+	int m = ax > ay ? ax : ay;
+	*x1 = x0 + (dx < 0 ? -m : m);
+	*y1 = y0 + (dy < 0 ? -m : m);
+
 }
 
 // -- rubber band preview --
@@ -945,6 +1015,7 @@ static void preview_draw(int dx0, int dy0, int dx1, int dy1) {
 			break;
 
 		case TOOL_OVAL:
+		case TOOL_OVALFILL:
 			// No hardware ellipse, so this previews as its bounding
 			// box -- which is also the affordance the original
 			// MacPaint's oval tool gave.
@@ -970,6 +1041,9 @@ static void shape_commit(int dx0, int dy0, int dx1, int dy1) {
 	switch (cur_tool) {
 
 		case TOOL_LINE:
+			// always black: the pencil's ink is the last pencil
+			// stroke's, white when that one started on black
+			pencil_ink = 1;
 			canvas_walk_line(dx0, dy0, dx1, dy1, stamp_pencil);
 			break;
 
@@ -989,6 +1063,11 @@ static void shape_commit(int dx0, int dy0, int dx1, int dy1) {
 		}
 
 		case TOOL_OVAL:
+			canvas_oval(dx0, dy0, dx1, dy1, 1);
+			break;
+
+		case TOOL_OVALFILL:
+			canvas_oval_fill(dx0, dy0, dx1, dy1, pattern());
 			canvas_oval(dx0, dy0, dx1, dy1, 1);
 			break;
 
@@ -1050,7 +1129,7 @@ static void stroke_end(void) {
 // level in. Only the box the level covers is re-blitted.
 static void do_undo(bool redo) {
 
-	if (drawing || busy()) return;
+	if (drawing || busy() || filling) return;
 
 	int box[4];
 	if (!(redo ? draw_undo_redo(&undo, box) : draw_undo_undo(&undo, box)))
@@ -1059,6 +1138,39 @@ static void do_undo(bool redo) {
 	canvas_refresh(box[0], box[1], box[2], box[3]);
 	set_modified(!draw_undo_at_saved(&undo));
 
+}
+
+// ---------------------------------------------------------------
+// the fill (drawfill.h)
+// ---------------------------------------------------------------
+
+static void update_title(void);
+
+// From the main loop, between messages: spans for about 10 ms, then
+// back. Done: the box it changed on screen, and an undo level.
+static void fill_step(void) {
+
+	uint32_t t0 = z_uptime_ticks();
+	int r;
+	do r = draw_fill_step(&fill, 32);
+	while (r == DRAW_FILL_MORE && z_uptime_ticks() - t0 < Z_TICK_HZ / 100);
+	if (r == DRAW_FILL_MORE) return;
+
+	filling = false;
+	touch(fill.x0, fill.y0, fill.x1, fill.y1);
+	stroke_end();
+	canvas_refresh(fill.x0, fill.y0, fill.x1, fill.y1);
+	update_title();
+
+}
+
+// Esc, or the window closing: the page as it was.
+static void fill_cancel(void) {
+	if (!filling) return;
+	draw_fill_stop(&fill);
+	filling = false;
+	stroke_end();
+	update_title();
 }
 
 // ---------------------------------------------------------------
@@ -1118,7 +1230,8 @@ static void handle_mouse(uint32_t packed) {
 
 	// While a file loads or saves the canvas takes no drawing: a load is
 	// about to replace it and a save is writing it (see "files" below).
-	if (busy()) return;
+	// Nor while a fill runs: it is reading the page.
+	if (busy() || filling) return;
 
 	int dx, dy;
 	to_doc(cx, cy, &dx, &dy);
@@ -1133,6 +1246,17 @@ static void handle_mouse(uint32_t packed) {
 		// invisible stroke that springs into life the moment the
 		// cursor wanders over the canvas.
 		if (!in_view(cx, cy)) return;
+
+		// The bucket: a fill, run by the main loop a few spans at a
+		// time (fill_step()). Not a drag: the button can come up.
+		if (cur_tool == TOOL_FILL) {
+			stroke_begin(dx, dy);
+			if (draw_fill_start(&fill, PAGE(canvas), PAGE(spare), dx, dy, pattern())) {
+				filling = true;
+				z_win_set_title(&win, "Filling  (Esc stops)");
+			} else stroke_end();
+			return;
+		}
 
 		// The press itself already stamps a pixel for every freehand
 		// tool, so the document is dirty from here on regardless of
@@ -1214,6 +1338,7 @@ static void handle_mouse(uint32_t packed) {
 
 		} else if (tool_is_shape(cur_tool)) {
 
+			constrain(stroke_x0, stroke_y0, &dx, &dy);
 			preview_erase();
 			preview_draw(stroke_x0, stroke_y0, dx, dy);
 
@@ -1230,6 +1355,7 @@ static void handle_mouse(uint32_t packed) {
 		drawing = false;
 
 		if (tool_is_shape(cur_tool)) {
+			constrain(stroke_x0, stroke_y0, &dx, &dy);
 			preview_erase();
 			shape_commit(stroke_x0, stroke_y0, dx, dy);
 			touch(stroke_x0, stroke_y0, dx, dy);
@@ -1406,7 +1532,7 @@ static void start_save_to(const char *path, int after) {
 
 static void start_save(int after, bool ask) {
 
-	if (busy()) return;
+	if (busy() || filling) return;
 
 	if (ask || !filename[0]) {
 
@@ -1503,16 +1629,18 @@ static void close_now(void) {
 }
 
 static void do_new(void) {
-	if (busy()) return;
+	if (busy() || filling) return;
 	if (confirm_discard(AFTER_NEW)) new_now();
 }
 
 static void do_open(void) {
-	if (busy()) return;
+	if (busy() || filling) return;
 	if (confirm_discard(AFTER_OPEN)) open_now();
 }
 
 static void do_close(void) {
+
+	fill_cancel();
 
 	if (busy() && io.kind == DRAW_IO_SAVE) {
 		// quit once it is saved; Esc stops the save and keeps the window
@@ -1602,8 +1730,15 @@ static void io_step(void) {
 
 }
 
-// Undo's memory, once at start (see UNDO_WANT). Never resized after, so
-// the arena never moves and its base can be held as a pointer.
+// The Open and Save dialogs list a big folder after undo's memory,
+// which can move it (zdialog.h, arena_moved). The levels are offsets.
+static void undo_moved(void *base, void *user) {
+	(void)user;
+	if (undo.mem) undo.mem = base;
+}
+
+// Undo's memory, once at start (see UNDO_WANT). draw itself never
+// resizes it; only a dialog does, and says so (undo_moved()).
 static void undo_init(void) {
 
 	static const uint32_t want[] = { UNDO_WANT, UNDO_LESS };
@@ -1714,6 +1849,111 @@ static void forward_msg(z_msg_t *msg, void *user) {
 
 }
 
+// ---------------------------------------------------------------
+// printing
+// ---------------------------------------------------------------
+
+static z_print_t printing;
+
+// The print dialog, then the page as one picture: a 4:3 page, fitted to
+// the paper and turned if it fits better (zpage.h). The picture is a
+// mask over black: white where the page is white (zc_blit_mask() paints
+// where its source is 0, and the page's ink is 1).
+static void do_print(void) {
+
+	if (busy() || filling || drawing) return;
+
+	char base[64];
+	const char *name = filename[0] ? filename : "untitled";
+	for (const char *p = name; *p; p++) if (*p == '/') name = p + 1;
+	int n = 0;
+	put(base, sizeof(base), &n, name, 60);
+	for (int i = n - 1; i > 0; i--) if (base[i] == '.') { base[i] = 0; break; }
+
+	z_print_opts_t o;
+	z_print_opts_init(&o);
+	o.npages = 1;
+	if (!z_dialog_print(&dlg_ctx, "Print", last_dir, base, &o)) return;
+
+	if (!z_print_begin(&printing, base)) {
+		z_dialog_confirm(&dlg_ctx, "Print", "The print job could not\nbe made in " Z_DIR_TMP ".",
+			Z_DIALOG_OK_CANCEL);
+		return;
+	}
+	z_print_opts_job(&o, &printing.w);
+
+	zpage_t pg;
+	zpage_custom(&pg, ZPAGE_RATIO, 4, 3, true);
+	zc_xf_t xf;
+	zc_target_t *t = zp_page_begin(&printing.w, &pg, &xf);
+	if (t) {
+		zc_fix x0, y0, x1, y1;
+		zc_xf_apply(&xf, 0, 0, &x0, &y0);
+		zc_xf_apply(&xf, (zc_fix)pg.gw << 8, (zc_fix)pg.gh << 8, &x1, &y1);
+		if (x1 < x0) { zc_fix k = x0; x0 = x1; x1 = k; }
+		if (y1 < y0) { zc_fix k = y0; y0 = y1; y1 = k; }
+		zc_paint_t black = zc_black(), white = zc_white();
+		zc_fill_rect_dev(t, x0 >> 8, y0 >> 8, (x1 - x0) >> 8, (y1 - y0) >> 8, &black);
+		zc_blit_mask(t, PAGE(canvas), CANVAS_WORDS, CANVAS_W, CANVAS_H,
+			x0, y0, x1 - x0, y1 - y0, &white);
+		zp_page_end(&printing.w);
+	}
+
+	// print shows its own window from here: progress, Cancel, how it ended
+	if (!z_print_end(&printing))
+		z_dialog_confirm(&dlg_ctx, "Print", printing.result == Z_PRINT_E_GONE ?
+			"print is not on the card." : "The print job could not\nbe written.",
+			Z_DIALOG_OK_CANCEL);
+
+}
+
+// A tool by its key, or by 1..9; [ and ] the pattern before and after.
+// True if it was one.
+static bool tool_key(uint32_t k, uint32_t mods) {
+
+	if (mods & (Z_KBD_MOD_CTRL | Z_KBD_MOD_ALT)) return false;
+	int t = -1;
+	if (k >= '1' && k <= '0' + TOOL_COUNT) t = (int)(k - '1');
+	for (int i = 0; i < TOOL_COUNT && t < 0; i++) if ((uint32_t)tool_keys[i] == k) t = i;
+	if (t >= 0) {
+		if (drawing || filling) return true;
+		cur_tool = (tool_t)t;
+		z_widget_select(&wset, W_TOOL0 + t);
+		z_widget_draw_all(&wset, false);
+		z_speak(tool_names[t], Z_TTS_F_INTERRUPT);
+		return true;
+	}
+	if (k == '[' || k == ']') {
+		cur_pattern = (cur_pattern + (k == ']' ? 1 : Z_PATTERN_COUNT - 1)) % Z_PATTERN_COUNT;
+		z_widget_select(&wset, W_PAT0 + cur_pattern);
+		z_widget_draw_all(&wset, false);
+		return true;
+	}
+	return false;
+
+}
+
+// Arrow keys, PageUp/PageDown, Home/End: pan the page. True if one.
+static bool pan_key(uint32_t k) {
+	int dx = 0, dy = 0;
+	switch (k) {
+		case Z_KEY_LEFT:  dx = -32; break;
+		case Z_KEY_RIGHT: dx = 32; break;
+		case Z_KEY_UP:    dy = -32; break;
+		case Z_KEY_DOWN:  dy = 32; break;
+		case Z_KEY_PAGEUP:  dy = -view_h; break;
+		case Z_KEY_PAGEDOWN:  dy = view_h; break;
+		case Z_KEY_HOME:  dx = -CANVAS_W; dy = -CANVAS_H; break;
+		case Z_KEY_END:   dx = CANVAS_W; dy = CANVAS_H; break;
+		default: return false;
+	}
+	bool moved = false;
+	if (dx && z_scrollbar_set_value(&hsb, scroll_x + dx)) { scroll_x = (int)hsb.value; moved = true; }
+	if (dy && z_scrollbar_set_value(&vsb, scroll_y + dy)) { scroll_y = (int)vsb.value; moved = true; }
+	if (moved) scroll_view();
+	return true;
+}
+
 // Ctrl+letter. True if it was one of ours.
 //
 // Ctrl+letter arrives as its control code, 0x01..0x1a (zkbd.h), with
@@ -1737,6 +1977,7 @@ static bool ctrl_key(uint32_t k, uint32_t mods) {
 		case 0x13: start_save(AFTER_NONE, shift); return true;	// Ctrl+S, +Shift: save as
 		case 0x1a: do_undo(shift); return true;					// Ctrl+Z, +Shift: redo
 		case 0x19: do_undo(true); return true;					// Ctrl+Y
+		case 0x10: do_print(); return true;						// Ctrl+P
 		default: return false;
 	}
 
@@ -1746,17 +1987,24 @@ static bool ctrl_key(uint32_t k, uint32_t mods) {
 static void show_help(void) {
 	static const char help[] =
 		"Paint in black and white on a 640x480 page.\n\n"
-		"Left column\tPick a tool: pencil, brush, eraser, line, "
-		"rectangle, filled rectangle, oval\n"
-		"Bottom row\tPick the pattern for brush and fill\n"
+		"Left column\tPick a tool: pencil, brush, eraser, fill, line, "
+		"rectangle, filled rectangle, oval, filled oval\n"
+		"Keys\tP B E F L R O pick them too; Shift+R and Shift+O the "
+		"filled shapes; or 1 to 9\n"
+		"Bottom row\tPick the pattern for the brush, the fill and the "
+		"filled shapes ([ and ] step through them)\n"
 		"Drag\tDraw with the tool\n"
-		"Scrollbars\tPan the page (or the wheel)\n"
-		"Title icons\tNew, open, save\n"
+		"Shift\tWhile dragging: lines straight or at 45 degrees, "
+		"squares, circles\n"
+		"Fill\tClick inside a shape: it fills with the pattern\n"
+		"Arrows\tPan the page (or the scrollbars, or the wheel)\n"
+		"Title icons\tNew, open, save, print\n"
 		"Ctrl+N/O/S\tNew, open, save (Ctrl+Shift+S: save as)\n"
-		"Ctrl+Z\tUndo the last stroke or shape\n"
+		"Ctrl+P\tPrint\n"
+		"Ctrl+Z\tUndo the last stroke, shape or fill\n"
 		"Ctrl+Y\tRedo (also Ctrl+Shift+Z)\n"
-		"Esc\tStop loading or saving: the drawing and the file "
-		"stay as they were (also Ctrl+C)\n\n"
+		"Esc\tStop a fill, a load or a save: the drawing and the "
+		"file stay as they were (also Ctrl+C)\n\n"
 		"The pencil draws white when you start on black.";
 	z_dialog_help(&dlg_ctx, "Draw help", help, "draw_app");
 }
@@ -1801,7 +2049,7 @@ int main(void) {
 		Z_WIN_FLAG_CLOSE_ICON | Z_WIN_FLAG_RESIZABLE |
 		Z_WIN_FLAG_MIN_IS_CREATE |
 		Z_WIN_FLAG_NEW_ICON | Z_WIN_FLAG_OPEN_ICON |
-		Z_WIN_FLAG_SAVE_ICON) != Z_OK) {
+		Z_WIN_FLAG_SAVE_ICON | Z_WIN_FLAG_PRINT_ICON) != Z_OK) {
 		printf("draw: failed to create window -- is wm running?\n");
 		return 1;
 	}
@@ -1815,6 +2063,7 @@ int main(void) {
 	dlg_ctx.parent = &win;
 	dlg_ctx.on_msg = forward_msg;
 	dlg_ctx.user = NULL;
+	dlg_ctx.arena_moved = undo_moved;
 
 	layout();
 
@@ -1852,14 +2101,17 @@ int main(void) {
 					// F1, Esc / Ctrl+C to stop a load or save, and the
 					// Ctrl shortcuts (ctrl_key()): everything else is
 					// the mouse.
-					if (msg.obj.type != Z_UINT32 ||
-					    !Z_WM_UNPACK_KEY_PRESSED(msg.obj.val.uint32)) break;
+					if (msg.obj.type != Z_UINT32) break;
+					// pressed or let go: what Shift is now (constrain())
+					mods_now = Z_WM_UNPACK_KEY_MODIFIERS(msg.obj.val.uint32);
+					if (!Z_WM_UNPACK_KEY_PRESSED(msg.obj.val.uint32)) break;
 					uint32_t k = Z_WM_UNPACK_KEY_KEYSYM(msg.obj.val.uint32);
-					uint32_t mods = Z_WM_UNPACK_KEY_MODIFIERS(msg.obj.val.uint32);
+					uint32_t mods = mods_now;
 					if (k == Z_KEY_HELP) show_help();
-					else if (k == 0x1b || (k == 0x03 && (mods & Z_KBD_MOD_CTRL)))
-						stop_io();
-					else ctrl_key(k, mods);
+					else if (k == 0x1b || (k == 0x03 && (mods & Z_KBD_MOD_CTRL))) {
+						if (filling) fill_cancel();
+						else stop_io();
+					} else if (!ctrl_key(k, mods) && !tool_key(k, mods)) pan_key(k);
 					break;
 				}
 
@@ -1879,6 +2131,7 @@ int main(void) {
 						case Z_WM_TBICON_NEW:  do_new(); break;
 						case Z_WM_TBICON_OPEN: do_open(); break;
 						case Z_WM_TBICON_SAVE: start_save(AFTER_NONE, false); break;
+						case Z_WM_TBICON_PRINT: do_print(); break;
 						default: break;
 					}
 
@@ -1907,6 +2160,10 @@ int main(void) {
 		// to the messages (docs/responsive.md).
 		if (busy()) {
 			io_step();
+			continue;
+		}
+		if (filling) {
+			fill_step();
 			continue;
 		}
 

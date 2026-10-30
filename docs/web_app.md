@@ -63,17 +63,23 @@ readable, and scrollable, well before the last of it is downloaded. The
 status line counts what has arrived.
 
 **Escape or Stop ends a load at any moment** -- while the name is being
-looked up, while connecting, or halfway through the page -- and the
-window answers keys and clicks throughout. A page stopped part way
-keeps what had arrived: the status line says "(the page so far)", and
-links, find and scrolling all work on it. The same is true of a
-connection that drops mid-page. **F5** fetches it again.
+looked up, while connecting, during the secure handshake, or halfway
+through the page -- and the window answers keys and clicks throughout.
+A page stopped part way keeps what had arrived: the status line says
+"(the page so far)", and links, find and scrolling all work on it. The
+same is true of a connection that drops mid-page. **F5** fetches it
+again.
 
 Looking up a name waits at most six seconds for an answer before
 saying it could not.
 
-Gopher and Gemini pages are small and still appear when they are
-complete.
+Gopher menus and Gemini pages appear as they arrive too. A picture
+drawn from SVG is drawn a little at a time, and **Escape** stops that
+as well (the box says `stopped -- click to load`).
+
+All of this needs memory the smallest boards do not have (below, "The
+arena"): on a 1MB board a page appears when it is complete, and the
+secure handshake runs in one go.
 
 ---
 
@@ -288,8 +294,8 @@ sizes), that stopping it at thirty-odd points, or starting the next
 picture over it, leaves no file open and no spool behind, and that a
 spool that is not a picture fails and is cleaned up.
 
-An SVG is still rendered in one call when it arrives: it is text,
-kilobytes, walked as a whole.
+An SVG is rendered a slice at a time when it arrives ("SVG pictures in
+slices", under For developers): Escape stops it.
 
 Things that are known-missing rather than broken:
 
@@ -608,6 +614,56 @@ depth was 32KB of `.bss` for something nobody reaches with two
 buttons and no menu. The oldest is dropped rather than refusing to
 record a new one.
 
+### The arena
+
+web takes one arena at start ([kernel.md](kernel.md#arenas)), 128KB,
+and never resizes it: the first 64KB of a page shown as it arrives
+(`prog_head`), a 32KB queue for the server's bytes during a handshake,
+and the handshake's 32KB stack. Not resizing it matters: a coroutine's
+stack must not move. For the same reason web gives the Open and Save
+dialogs no `arena_moved`, so they keep to 256 entries here
+([widgets.md](widgets.md#big-folders-in-the-open-and-save-dialogs)).
+Without an arena (1MB boards) there is no progressive display and the
+handshake runs in one call, as before.
+
+### Nothing waits: the handshake in slices
+
+A TLS handshake is seconds of arithmetic on this CPU -- the key
+exchange, and the certificate chain's signatures. It ran inside
+`tls_feed()`, in the message handler, and for that long web read no
+messages: no repaint, no Escape, and wm waiting on a redraw ack.
+
+Now `tls_start()` and every `tls_feed()` until the connection is up run
+in a coroutine (`zco.h`) on the arena's stack (`hs_main()`). The
+arithmetic has checkpoints -- `z_slice_point()` in the Montgomery
+multiplications of `bignum.c` and `ecdsa.c` (`sw/common/zslice.h`) --
+and `web_slice()` hands control back from one once about 10 ms have
+gone; the main loop reads its messages and resumes it (`hs_pump()`).
+The server's bytes that arrive meanwhile wait in the queue. Stopping
+abandons the coroutine where it stands: between checkpoints it holds no
+file and sends nothing of its own, and the next handshake starts over
+with `tls_init()`. Once the connection is up the coroutine ends; what
+came after the handshake is fed in the main loop, where the page's
+callbacks (http, the spool, `fetch_failed()`) always run. Each
+handshake logs how much of the stack it used.
+
+`tests/test_rsa.c` verifies a 2048-bit signature in a coroutine that
+hands back at every checkpoint, and checks the answers are the same.
+
+With the handshake and the name lookup both answered as messages, the
+drain of the mailbox before a new fetch went too: it threw away keys
+and clicks (Escape among them) while it emptied the queue of the old
+connection's data, which the `Z_PORT_DATA` handler drops by its
+`conn_id` anyway.
+
+### SVG pictures in slices
+
+`img_render_svg()` runs `z_svg_render_bitmap()` through `z_slice_run()`
+(`zslice.h`) on a 16KB stack: zsvg has checkpoints at each element and
+every 16 rows of a large shape, wm is answered between slices, Escape
+stops it, and other messages wait, in order, for the main loop
+(`next_msg()`).
+
 ### Progressive display and name lookup
 
 **Names.** `z_dns_resolve()` (`sw/common/zdns.c`) sends the question
@@ -629,7 +685,9 @@ loop indexes what is there (a stall guard stops it re-trying a slice
 that has not grown) and redraws on a throttle. When the transfer ends,
 reading switches to the spool file and the index continues from where
 it was. A page larger than 64KB is shown up to that much while loading
-and the rest once it completes.
+and the rest once it completes. A Gopher menu or Gemini page starts
+showing at the converter's first output (`sw_out()`, `prog_begin()`):
+a redirect or a question produces none.
 
 A failed or stopped transfer reopens the spool for reading and goes to
 `W_INDEXING` with what it has, rather than discarding it.
@@ -642,6 +700,13 @@ result is the same as indexing the whole at once.
 
 Measurements, bugs and decisions from its development, kept for whoever
 works on it next.
+
+### The head that never was
+
+The first version of the page head was `malloc(64KB)`, out of web's
+stack and heap of 64KB (`APP_STACK`). It could not succeed on the board,
+so pages appeared only when complete there, while the host tests -- with
+a host's heap -- showed them arriving. It is in the arena now.
 
 ### Phases
 

@@ -86,10 +86,11 @@ uses about 2KB on the board at most, PNG; JPEG about 0.5KB), its state
 and the chunk share their bytes with the SVG text buffer, which is only
 in use while a drawing is rendered, never while a picture loads.
 
-An SVG is still rendered in one call (it is text, kilobytes, and
-`zsvg` has no rows to hand back between); it is drawn into the other
-document too, so a drawing that cannot be drawn leaves the picture that
-was there.
+An SVG is drawn a slice at a time (`z_slice_run()`,
+[responsive.md](responsive.md#zslice-checkpoints-in-a-long-computation-swcommonzsliceh)):
+the title says `Drawing  (Esc stops)` and the window answers meanwhile.
+It is drawn into the other document too, so a drawing that cannot be
+drawn, or one stopped with Esc, leaves the picture that was there.
 
 The host test is `make -f sw/common/tests/Makefile.zcanvas imgjob`: a
 picture decoded in slices into a document equals the picture decoded by
