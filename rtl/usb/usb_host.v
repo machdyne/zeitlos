@@ -165,6 +165,10 @@ module usb_host #(
 
     reg [31:0] ctrl;
     reg [31:0] tune;
+    // Pointer speed, one per compat block: register 5 of its window
+    // (usb_hid_compat.v, docs/user_input.md "Pointer speed"), as in
+    // rtl/usb_hid.v. In sixteenths, 16 as built. Reset 16.
+    reg [5:0] hid_speed0, hid_speed1;
     reg [31:0] irqen;
     reg [5:0] irqstat;
 
@@ -824,7 +828,7 @@ module usb_host #(
         .in_len(cap_idx),
         .in_wheel(hid_in_wheel),
         .in_b4(cap4), .in_b5(cap5), .in_b6(cap6), .in_b7(cap7),
-        .typ_we(typ0_we), .typ_i(typ_wval),
+        .typ_we(typ0_we), .typ_i(typ_wval), .speed(hid_speed0),
         .reg_info(hid0_info), .reg_keys(hid0_keys),
         .reg_mouse(hid0_mouse), .reg_cursor(hid0_cursor),
         .reg_pad(hid0_pad),
@@ -839,7 +843,7 @@ module usb_host #(
         .in_len(cap_idx),
         .in_wheel(hid_in_wheel),
         .in_b4(cap4), .in_b5(cap5), .in_b6(cap6), .in_b7(cap7),
-        .typ_we(typ1_we), .typ_i(typ_wval),
+        .typ_we(typ1_we), .typ_i(typ_wval), .speed(hid_speed1),
         .reg_info(hid1_info), .reg_keys(hid1_keys),
         .reg_mouse(hid1_mouse), .reg_cursor(hid1_cursor),
         .reg_pad(hid1_pad),
@@ -1270,6 +1274,8 @@ module usb_host #(
             ws <= W_IDLE;
             ctrl <= 32'd0;
             tune <= TUNE_RESET;
+            hid_speed0 <= 6'd16;
+            hid_speed1 <= 6'd16;
             irqen <= 32'd0;
 
         end else begin
@@ -1338,6 +1344,11 @@ module usb_host #(
                             A_XACT_B: xact_b <= dat_q;
                             default: ;
                             endcase
+                            // pointer speed (register 5 of a compat window)
+                            if (wb_is_hid && hid_reg == 3'd5) begin
+                                if (hid_blk) hid_speed1 <= dat_q[5:0];
+                                else hid_speed0 <= dat_q[5:0];
+                            end
                         end
 
                         if (wb_is_hid) begin
@@ -1347,6 +1358,10 @@ module usb_host #(
                             3'd2: wb_dat_o <= hid_blk ? hid1_mouse : hid0_mouse;
                             3'd3: wb_dat_o <= hid_blk ? hid1_cursor : hid0_cursor;
                             3'd4: wb_dat_o <= hid_blk ? hid1_pad : hid0_pad;
+                            // pointer speed, with its signature ("SPE"):
+                            // read to find it (zpointer.h)
+                            3'd5: wb_dat_o <= {24'h535045, 2'b00,
+                                               hid_blk ? hid_speed1 : hid_speed0};
                             default: wb_dat_o <= 32'd0;
                             endcase
                         end else if (wb_is_poll) begin

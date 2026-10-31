@@ -16,6 +16,9 @@ Display
 Desktop colours (Super+F10)          [<][>]
   Nord
 
+Pointer speed                        [<][>]
+  +3 faster: x1.68
+
 Preferences                  /sys/zeitlos.cfg
 Terminal connects to               [Edit]
   port repl0
@@ -41,6 +44,7 @@ Berlin selected -- Set time zone to use it
 | --- | --- | --- |
 | Display buttons | `system.video.mode` | immediately, and saved |
 | Desktop colours `<` `>` | `system.video.desktop_theme`, `_colour` (and removes `_accents`, `_base`) | within a second, and saved |
+| Pointer speed `<` `>` | `system.mouse.speed` | immediately, and saved; the kernel applies it at boot |
 | Terminal connects to | `apps.term.auto_connect` | the next term window |
 | Keyboard layouts | `system.keyboard.layouts` | the next key pressed |
 | Japanese font | `system.font.japanese` | at once -- `jfont` is started or stopped |
@@ -238,6 +242,24 @@ turned back on. Choosing a theme also removes any custom
 overriding it; while they are set the row says *custom colours, from
 the file*. Elsewhere the row says the board cannot, and the buttons are
 off.
+
+## Pointer speed
+
+`<` and `>` step through 17 levels, from a quarter of the board's own
+speed to nearly four times it, each about a fifth faster than the last:
+the row says **Normal**, or how far from it and the factor -- *+3
+faster: x1.68*, *-8 slower: x0.25*. Each step applies at once, so the
+mouse can be tried straight away; the ends are the ends, without
+wrapping. The value saved is the speed in sixteenths
+(`system.mouse.speed: 27`); Normal, 16, is saved as no line at all, and a
+value typed into the file that is between two levels shows as the
+nearer. The kernel sets it again at boot and whenever the file is
+reloaded ([user_input.md](user_input.md#pointer-speed)).
+
+The speed is a register of each USB HID port, in both USB cores, so
+every board with a mouse port has it -- from bitstreams built after
+October 2026. On an older bitstream the row says *fixed on this
+bitstream* and the buttons are off: flash the gateware too.
 
 ## Not resizable
 

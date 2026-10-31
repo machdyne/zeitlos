@@ -1307,6 +1307,15 @@ test_usb:
 		rtl/usb/usb_port.v rtl/usb/usb_xact.v rtl/usb/usb_hid_compat.v
 	@vvp output/tb_usb_host
 
+# rtl/usb_hid.v's pointer speed register and arithmetic (the boards
+# without the USB host controller), with the HID engine's report forced.
+test_usb_hid:
+	@mkdir -p output
+	iverilog -g2005-sv -DUSB_HID -o output/tb_usb_hid rtl/tb/tb_usb_hid.v \
+		rtl/usb_hid.v rtl/ext/usb_hid_host/src/usb_hid_host.v \
+		rtl/ext/usb_hid_host/src/usb_hid_host_rom.v
+	@vvp output/tb_usb_hid | grep -v readmem
+
 # CO-SIMULATION: the real sw/apps/usb driver against the real rtl/usb
 # gateware, joined by a VPI bridge (rtl/tb/cosim/usbh_vpi.c).
 #

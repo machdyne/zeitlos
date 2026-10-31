@@ -94,6 +94,11 @@ module usb_hid_compat #(
     input wire typ_we,
     input wire [1:0] typ_i,
 
+    // -- pointer speed, written by software (usb_host.v, register 5) --
+    // In sixteenths: 16 as built (SENS_SHIFT), 8 half, 32 double, 1
+    // to 63. 0 reads as 16.
+    input wire [5:0] speed,
+
     // -- register images --
     output wire [31:0] reg_info,
     output wire [31:0] reg_keys,
@@ -136,8 +141,8 @@ module usb_hid_compat #(
     reg [9:0] game_state;
 
     reg mouse_move;
-    reg signed [11:0] sub_x;
-    reg signed [11:0] sub_y;
+    reg [9:0] sub_x;		// the remainder: below 2^(SENS_SHIFT + 4)
+    reg [9:0] sub_y;
 
     wire typ_changed = (typ_r != typ_prev);
 
@@ -196,15 +201,42 @@ module usb_hid_compat #(
     // single update can jump straight past a boundary -- testing the
     // current value against the boundary before applying the delta
     // only catches the case where it already sits exactly on it.
-    wire signed [11:0] acc_x = sub_x + dx_move;
-    wire signed [11:0] acc_y = sub_y + dy_move;
-    wire signed [11:0] step_x = acc_x >>> SENS_SHIFT;
-    wire signed [11:0] step_y = acc_y >>> SENS_SHIFT;
-    wire signed [11:0] rem_x = acc_x - (step_x <<< SENS_SHIFT);
-    wire signed [11:0] rem_y = acc_y - (step_y <<< SENS_SHIFT);
+    //
+    // -- pointer speed --
+    //
+    // Each axis moves by delta * m / 16, m from `speed` (16: the
+    // board's own speed, exactly as before), and further by
+    // SENS_SHIFT, the remainder carried so slow movement is not lost.
+    // The product is the one multiply in this block, ONE DSP slice
+    // (MULT18X18D), used for x and then for y a cycle apart: reports
+    // come at most once a millisecond, so the axes take turns rather
+    // than each having one. The divide is a constant shift (wiring),
+    // and the remainder the low SENS_SHIFT + 4 bits of the sum.
+    //
+    //   mouse_move   a report: the x product starts (ph 1)
+    //   ph 1         x moves; the y product starts (ph 2)
+    //   ph 2         y moves
+    //
+    // The product is registered before it is added, so the multiply
+    // has a cycle of its own and is not on the path into the cursor.
+    localparam DIV = SENS_SHIFT + 4;
 
-    wire signed [11:0] curs_x_sum = $signed({2'b00, curs_x}) + step_x;
-    wire signed [11:0] curs_y_sum = $signed({2'b00, curs_y}) + step_y;
+    wire [6:0] m = (speed == 6'd0) ? 7'd16 : {1'b0, speed};
+
+    reg [1:0] ph;
+    reg signed [17:0] prod;			// +-254 * 63, with room
+
+    wire signed [11:0] mul_in = (ph == 2'd1) ? dy_move : dx_move;
+    wire signed [17:0] mul_out = mul_in * $signed(m);
+
+    wire signed [17:0] sub_now = (ph == 2'd1) ? $signed({8'd0, sub_x}) : $signed({8'd0, sub_y});
+    wire signed [17:0] acc = sub_now + prod;
+    wire signed [17:0] step = acc >>> DIV;
+    wire [9:0] rem = acc[9:0] & ~(10'h3ff << DIV);
+
+    wire [9:0] curs_now = (ph == 2'd1) ? curs_x : curs_y;
+    wire [9:0] curs_max = (ph == 2'd1) ? 10'd639 : 10'd479;
+    wire signed [17:0] curs_sum = $signed({8'd0, curs_now}) + step;
 
     // ---------------------------------------------------------------
 
@@ -230,8 +262,10 @@ module usb_hid_compat #(
             game_state <= 10'd0;
             curs_x <= 10'd320;
             curs_y <= 10'd240;
-            sub_x <= 12'sd0;
-            sub_y <= 12'sd0;
+            sub_x <= 10'd0;
+            sub_y <= 10'd0;
+            ph <= 2'd0;
+            prod <= 18'sd0;
 
         end else begin
 
@@ -275,19 +309,26 @@ module usb_hid_compat #(
 
             end
 
+            // x's product on the report, y's a cycle later; each axis
+            // moves the cycle after its product (see "pointer speed")
             if (mouse_move) begin
-
-                sub_x <= rem_x;
-                sub_y <= rem_y;
-
-                if (curs_x_sum < 0) curs_x <= 10'd0;
-                else if (curs_x_sum > 639) curs_x <= 10'd639;
-                else curs_x <= curs_x_sum[9:0];
-
-                if (curs_y_sum < 0) curs_y <= 10'd0;
-                else if (curs_y_sum > 479) curs_y <= 10'd479;
-                else curs_y <= curs_y_sum[9:0];
-
+                prod <= mul_out;
+                ph <= 2'd1;
+            end else if (ph != 2'd0) begin
+                if (ph == 2'd1) begin
+                    sub_x <= rem;
+                    if (curs_sum < 0) curs_x <= 10'd0;
+                    else if (curs_sum > $signed({8'd0, curs_max})) curs_x <= curs_max;
+                    else curs_x <= curs_sum[9:0];
+                    prod <= mul_out;		// y's
+                    ph <= 2'd2;
+                end else begin
+                    sub_y <= rem;
+                    if (curs_sum < 0) curs_y <= 10'd0;
+                    else if (curs_sum > $signed({8'd0, curs_max})) curs_y <= curs_max;
+                    else curs_y <= curs_sum[9:0];
+                    ph <= 2'd0;
+                end
             end
 
         end

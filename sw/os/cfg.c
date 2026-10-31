@@ -11,6 +11,7 @@
 #include "../common/zeitlos.h"
 #include "../common/zsoc.h"
 #include "../common/zcfg.h"
+#include "../common/zpointer.h"	// system.mouse.speed
 #include "kernel.h"
 #include "cfg.h"
 #include "kfs.h"			// the file is read through fs (docs/fs_driver.md)
@@ -135,6 +136,30 @@ static void apply(bool verbose) {
 			else if (verbose)
 				printf("cfg: system.video.brightness: no brightness control "
 					"on this board\n");
+		}
+	}
+
+	// Pointer speed (zpointer.h, docs/user_input.md "Pointer speed"), in
+	// sixteenths of the board's own, 1-63. Unlike the video settings,
+	// absent puts the board's own speed back: `settings` saves Normal as
+	// no line, and the speed someone left it at should not outlive that.
+	// Accepted and ignored on a bitstream without the register.
+	{
+		const char *ms = k_cfg_find("system.mouse.speed");
+		int n = 16;
+		if (ms) {
+			const char *q = ms;
+			n = 0;
+			while (*q >= '0' && *q <= '9' && n < 100) n = n * 10 + (*q++ - '0');
+			if (*q || q == ms || n < 1 || n > 63) {
+				printf("cfg: system.mouse.speed: '%s' is not 1-63 -- ignored\n", ms);
+				n = 0;
+			}
+		}
+		if (n) {
+			if (z_pointer_speed_available()) z_pointer_speed_set(n);
+			else if (verbose && ms)
+				printf("cfg: system.mouse.speed: this bitstream has a fixed pointer speed\n");
 		}
 	}
 

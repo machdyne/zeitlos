@@ -346,6 +346,36 @@ int main(int argc, char **argv) {
 		expect(y_status + LINE_H <= ch, "status line inside the window");
 	}
 
+	// -- pointer speed: shown, saved, read back --
+	// (the register itself is not here: z_pointer_speed_set() finds no
+	// USB host on the build machine and writes nothing)
+	expect(!can_speed && !widgets[W_SPEED_NEXT].enabled, "no USB host here: speed fixed, buttons off");
+	can_speed = true;
+	read_values();
+	expect(speed_idx == Z_POINTER_LEVEL_NORMAL && !speed_in_file, "speed: normal, the default");
+	step_speed(1);
+	expect(speed_idx == Z_POINTER_LEVEL_NORMAL + 1 && speed_in_file, "speed: one faster, saved");
+	expect(strstr(file, "system.mouse.speed: 19") != NULL, "  as system.mouse.speed: 19");
+	for (int i = 0; i < 20; i++) step_speed(1);
+	expect(speed_idx == Z_POINTER_LEVELS - 1 && strstr(file, "system.mouse.speed: 63"),
+		"speed: the fastest is the end, 63");
+	for (int i = 0; i < 40; i++) step_speed(-1);
+	expect(speed_idx == 0 && strstr(file, "system.mouse.speed: 4"), "speed: the slowest, 4");
+	render(prefix, "1b-speed-slowest");
+	while (speed_idx < Z_POINTER_LEVEL_NORMAL) step_speed(1);
+	expect(speed_idx == Z_POINTER_LEVEL_NORMAL && !strstr(file, "system.mouse.speed"),
+		"speed: back to normal removes the line");
+	// a value typed into the file goes to the nearest level
+	file_len = snprintf(file, sizeof(file), "system.mouse.speed: 30\n");
+	store_load();
+	read_values();
+	expect(speed_idx == 12, "speed: 30 in the file shows as the level of 32");
+	file_len = 0;
+	file[0] = 0;
+	store_load();
+	can_speed = false;
+	read_values();
+
 	// -- 2. a file with things settings does not know about --
 	printf("2. editing preserves the rest of the file\n");
 	file_len = snprintf(file, sizeof(file),

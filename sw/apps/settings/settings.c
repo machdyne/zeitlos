@@ -4,11 +4,12 @@
  *   > run wm
  *   > run settings
  *
- * Six settings (docs/config.md):
+ * Seven settings (docs/config.md):
  *
  *   Display               system.video.mode        applied immediately
  *   Desktop colours       system.video.desktop_theme (and _colour)
  *                                                  applied immediately
+ *   Pointer speed         system.mouse.speed       applied immediately
  *   Terminal connects to  apps.term.auto_connect   new term windows
  *   Keyboard layouts      system.keyboard.layouts  the next key pressed
  *   Japanese font         system.font.japanese     at once: jfont started/stopped
@@ -77,13 +78,15 @@
 #include "../../common/zauth.h"		// the password and screen lock: docs/security.md
 #include "../../common/zpaths.h"
 #include "../../common/zaccent.h"	// the desktop colour themes
+#include "../../common/zpointer.h"	// pointer speed
 
 // Fixed size, not resizable: a preferences panel has no content to
 // reveal.
 #define WIN_W   284
 // one row per preference, plus the Security section (a heading and two
 // rows, 92 px) and the desktop colour row (30 px): see layout()
-#define WIN_H   (214 + 2 * (2 * (8 + 2) + 6) + 92 + 30)
+// and the pointer speed row (26 px)
+#define WIN_H   (214 + 2 * (2 * (8 + 2) + 6) + 92 + 30 + 26)
 
 static z_win_t win;
 static z_dialog_ctx_t dlg;
@@ -111,6 +114,8 @@ static const char *video_labels[] = { "White", "Amber", "Green", "Paper" };
 enum {
 	W_THEME_PREV = MODE_COUNT,
 	W_THEME_NEXT,
+	W_SPEED_PREV,
+	W_SPEED_NEXT,
 	W_EDIT_TERM,
 	W_EDIT_KBD,
 	W_TOGGLE_JA,
@@ -174,6 +179,15 @@ static int other_keys;			// settings in the file this app does not show
 static char status[64];
 static bool status_is_hint;		// status holds the "selected -- Set" hint
 
+// -- pointer speed (zpointer.h): "< >" through Z_POINTER_LEVELS, each
+// about a fifth faster than the last, applied and saved at once, as the
+// colours are: a speed is judged by moving the mouse. The kernel applies
+// the saved value at boot (sw/os/cfg.c).
+static bool can_speed;			// a HID port with the speed register (zpointer.h)
+static int speed_idx = Z_POINTER_LEVEL_NORMAL;
+static bool speed_in_file;
+
+static int y_speed;
 static int y_display, y_modes, y_theme, y_prefs, y_rows, y_tz, y_list, y_reload, y_status;
 static int y_sec, y_sec_rows;
 
@@ -277,6 +291,10 @@ static void read_values(void) {
 	theme_custom = z_cfg_get("system.video.desktop_accents", v, sizeof(v)) ||
 		z_cfg_get("system.video.desktop_base", v, sizeof(v));
 	widgets[W_THEME_PREV].enabled = widgets[W_THEME_NEXT].enabled = can_theme;
+	speed_in_file = z_cfg_get("system.mouse.speed", v, sizeof(v));
+	speed_idx = z_pointer_level_of(z_cfg_get_int("system.mouse.speed", 16));
+	widgets[W_SPEED_PREV].enabled = can_speed && speed_idx > 0;
+	widgets[W_SPEED_NEXT].enabled = can_speed && speed_idx < Z_POINTER_LEVELS - 1;
 	set_japanese_label();
 	read_auth();
 	z_listbox_select(&tz_list, tz_row_for(tz_value));
@@ -288,6 +306,7 @@ static void read_values(void) {
 	other_keys = 0;
 	for (uint32_t i = 0; z_cfg_entry(i, k, sizeof(k), v, sizeof(v)); i++) {
 		bool shown = !strcmp(k, "system.video.mode") ||
+			!strcmp(k, "system.mouse.speed") ||
 			!strcmp(k, "system.rtc.timezone") ||
 			!strncmp(k, "system.video.desktop_", 21);
 		for (int j = 0; j < PREF_COUNT; j++)
@@ -345,7 +364,14 @@ static void layout(void) {
 	widgets[W_THEME_PREV].w = widgets[W_THEME_NEXT].w = THEME_BTN_W;
 	widgets[W_THEME_PREV].h = widgets[W_THEME_NEXT].h = EDIT_H;
 
-	y_prefs = y_theme + 2 * LINE_H + 6 + 4;
+	y_speed = y_theme + 2 * LINE_H + 6;
+	widgets[W_SPEED_PREV].x = widgets[W_THEME_PREV].x;
+	widgets[W_SPEED_NEXT].x = widgets[W_THEME_NEXT].x;
+	widgets[W_SPEED_PREV].y = widgets[W_SPEED_NEXT].y = (int16_t)(y_speed - 3);
+	widgets[W_SPEED_PREV].w = widgets[W_SPEED_NEXT].w = THEME_BTN_W;
+	widgets[W_SPEED_PREV].h = widgets[W_SPEED_NEXT].h = EDIT_H;
+
+	y_prefs = y_speed + 2 * LINE_H + 6 + 4;
 	y_rows = y_prefs + LINE_H + 4;
 
 	for (int i = 0; i < PREF_COUNT; i++) {
@@ -486,6 +512,20 @@ static void repaint(void) {
 	draw_text(MARGIN, y_theme, "Desktop colours (Super+F10)");
 	describe_theme(line, sizeof(line));
 	draw_text(MARGIN + 8, y_theme + LINE_H, line);
+
+	draw_text(MARGIN, y_speed, "Pointer speed");
+	if (!can_speed)
+		snprintf(line, sizeof(line), "fixed on this bitstream");
+	else {
+		// "Normal", or "+3 faster: x1.68": the level and its factor
+		int d = speed_idx - Z_POINTER_LEVEL_NORMAL;
+		int m = z_pointer_levels[speed_idx];
+		int n = d ? snprintf(line, sizeof(line), "%+d %s: x%d.%02d", d, d > 0 ? "faster" : "slower",
+				m / 16, (m % 16) * 100 / 16) : snprintf(line, sizeof(line), "Normal");
+		if (!speed_in_file && n < (int)sizeof(line))
+			snprintf(line + n, sizeof(line) - (size_t)n, "  (default)");
+	}
+	draw_text(MARGIN + 8, y_speed + LINE_H, line);
 
 	draw_text(MARGIN, y_prefs, "Preferences");
 	draw_text(cw - MARGIN - (int)strlen(Z_CFG_PATH) * z_font_5x8.w, y_prefs,
@@ -695,6 +735,18 @@ static void step_theme(int dir) {
 	}
 	repaint();
 
+}
+
+// One level slower or faster, applied at once and saved; no wrap (the
+// ends are the ends). Normal (16) is saved as no line at all.
+static void step_speed(int dir) {
+	int i = speed_idx + dir;
+	char v[4];
+	if (!can_speed || i < 0 || i >= Z_POINTER_LEVELS) return;
+	z_pointer_speed_set(z_pointer_levels[i]);
+	snprintf(v, sizeof(v), "%d", z_pointer_levels[i]);
+	save("system.mouse.speed", i == Z_POINTER_LEVEL_NORMAL ? NULL : v);
+	repaint();
 }
 
 static void apply_video(int idx) {
@@ -1014,6 +1066,8 @@ static void activate(int idx) {
 	if (idx < MODE_COUNT) { apply_video(idx); return; }
 	if (idx == W_THEME_PREV) { step_theme(-1); return; }
 	if (idx == W_THEME_NEXT) { step_theme(1); return; }
+	if (idx == W_SPEED_PREV) { step_speed(-1); return; }
+	if (idx == W_SPEED_NEXT) { step_speed(1); return; }
 	if (idx == W_EDIT_TERM) { edit(&prefs[0]); return; }
 	if (idx == W_EDIT_KBD) { edit(&prefs[1]); return; }
 	if (idx == W_TOGGLE_JA) { toggle_japanese(); return; }
@@ -1099,8 +1153,8 @@ static void handle_key(uint32_t keysym, uint8_t mods) {
 			"Enter/Space\tPress the focused button\n"
 			"A-Z, 0-9\tJump to a time zone\n"
 			"Enter\tIn the list: save the zone\n\n"
-			"Display colours and desktop colour themes (< >) apply "
-			"at once. Pick a time zone, then "
+			"Display colours, desktop colour themes and the pointer "
+			"speed (< >) apply at once. Pick a time zone, then "
 			"Set time zone. Edit changes a value; Reload file "
 			"re-reads the file after editing it elsewhere.";
 		z_dialog_help(&dlg, "Settings help", help, "settings_app");
@@ -1220,6 +1274,13 @@ static void widgets_init(void) {
 	widgets[W_THEME_NEXT].label = ">";
 	widgets[W_THEME_NEXT].enabled = can_theme;
 
+	widgets[W_SPEED_PREV].type = Z_WIDGET_BUTTON;
+	widgets[W_SPEED_PREV].label = "<";
+	widgets[W_SPEED_NEXT].type = Z_WIDGET_BUTTON;
+	widgets[W_SPEED_NEXT].label = ">";
+	widgets[W_SPEED_PREV].enabled = can_speed && speed_idx > 0;
+	widgets[W_SPEED_NEXT].enabled = can_speed && speed_idx < Z_POINTER_LEVELS - 1;
+
 	widgets[W_EDIT_TERM].type = Z_WIDGET_BUTTON;
 	widgets[W_EDIT_TERM].label = "Edit";
 	widgets[W_EDIT_TERM].enabled = true;
@@ -1273,6 +1334,7 @@ int main(void) {
 
 	can_set_video = z_video_mode_present();
 	can_theme = z_color_desktop_available();
+	can_speed = z_pointer_speed_available();
 
 	if (!can_set_video)
 		printf("settings: this bitstream has no video mode register "

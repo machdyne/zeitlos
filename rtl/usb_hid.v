@@ -55,9 +55,9 @@ module usb_hid_wb #(
 	inout usb_dm,
 	inout usb_dp,
 	output int_o,
-	output [9:0] curs_x,
-	output [9:0] curs_y,
-	output [1:0] typ,
+	output reg [9:0] curs_x,
+	output reg [9:0] curs_y,
+	output [1:0] typ
 );
 
 `ifdef USB_HID
@@ -174,8 +174,6 @@ module usb_hid_wb #(
 	// mux, added alongside the second usb_hid_wb instance for port 1.
 	assign typ = uhh_usb_type;
 
-	reg [9:0] curs_x;
-	reg [9:0] curs_y;
 
 	reg signed [7:0] mouse_dx;
 	reg signed [7:0] mouse_dy;
@@ -261,17 +259,36 @@ module usb_hid_wb #(
 	// to sit exactly on the boundary, not the general overshoot case.
 	// sensitivity divide, with the remainder carried in sub_x/sub_y so
 	// that slow movement is not rounded away (see SENS_SHIFT above)
-	reg signed [11:0] sub_x;
-	reg signed [11:0] sub_y;
-	wire signed [11:0] acc_x = sub_x + dx_move;
-	wire signed [11:0] acc_y = sub_y + dy_move;
-	wire signed [11:0] step_x = acc_x >>> SENS_SHIFT;
-	wire signed [11:0] step_y = acc_y >>> SENS_SHIFT;
-	wire signed [11:0] rem_x = acc_x - (step_x <<< SENS_SHIFT);
-	wire signed [11:0] rem_y = acc_y - (step_y <<< SENS_SHIFT);
+	//
+	// -- pointer speed (register 5; docs/user_input.md "Pointer speed") --
+	//
+	// Each axis moves by delta * speed / 16 and then by SENS_SHIFT, the
+	// remainder carried. speed is in sixteenths, 1-63, 16 the board's
+	// own speed (bit for bit the arithmetic before it), 0 read as 16.
+	// One multiply, ONE DSP slice, used for x and then for y a cycle
+	// apart; the product is registered before the add, so the multiply
+	// is off the path into the cursor. The same as rtl/usb/usb_hid_compat.v.
+	localparam DIV = SENS_SHIFT + 4;
 
-	wire signed [11:0] curs_x_sum = $signed({2'b00, curs_x}) + step_x;
-	wire signed [11:0] curs_y_sum = $signed({2'b00, curs_y}) + step_y;
+	reg [5:0] speed = 6'd16;
+	wire [6:0] m = (speed == 6'd0) ? 7'd16 : {1'b0, speed};
+
+	reg [1:0] ph = 2'd0;
+	reg signed [17:0] prod;
+	reg [9:0] sub_x = 10'd0;		// the remainder: below 2^(SENS_SHIFT + 4)
+	reg [9:0] sub_y = 10'd0;
+
+	wire signed [11:0] mul_in = (ph == 2'd1) ? dy_move : dx_move;
+	wire signed [17:0] mul_out = mul_in * $signed(m);
+
+	wire signed [17:0] sub_now = (ph == 2'd1) ? $signed({8'd0, sub_x}) : $signed({8'd0, sub_y});
+	wire signed [17:0] acc = sub_now + prod;
+	wire signed [17:0] step = acc >>> DIV;
+	wire [9:0] rem = acc[9:0] & ~(10'h3ff << DIV);
+
+	wire [9:0] curs_now = (ph == 2'd1) ? curs_x : curs_y;
+	wire [9:0] curs_max = (ph == 2'd1) ? 10'd639 : 10'd479;
+	wire signed [17:0] curs_sum = $signed({8'd0, curs_now}) + step;
 
 	always @(posedge wb_clk_i) begin
 
@@ -310,20 +327,36 @@ module usb_hid_wb #(
 			mouse_move <= 1;
 		end
 
+		// x's product on the report, y's a cycle later; each axis moves
+		// the cycle after its product (see "pointer speed" above)
 		if (mouse_move) begin
-
-			sub_x <= rem_x;
-			sub_y <= rem_y;
-
-			if (curs_x_sum < 0) curs_x <= 0;
-			else if (curs_x_sum > 639) curs_x <= 639;
-			else curs_x <= curs_x_sum[9:0];
-
-			if (curs_y_sum < 0) curs_y <= 0;
-			else if (curs_y_sum > 479) curs_y <= 479;
-			else curs_y <= curs_y_sum[9:0];
-
+			prod <= mul_out;
+			ph <= 2'd1;
+		end else if (ph != 2'd0) begin
+			if (ph == 2'd1) begin
+				sub_x <= rem;
+				if (curs_sum < 0) curs_x <= 0;
+				else if (curs_sum > $signed({8'd0, curs_max})) curs_x <= curs_max;
+				else curs_x <= curs_sum[9:0];
+				prod <= mul_out;		// y's
+				ph <= 2'd2;
+			end else begin
+				sub_y <= rem;
+				if (curs_sum < 0) curs_y <= 0;
+				else if (curs_sum > $signed({8'd0, curs_max})) curs_y <= curs_max;
+				else curs_y <= curs_sum[9:0];
+				ph <= 2'd0;
+			end
 		end
+
+		// Writes: register 5, the pointer speed. Every write is acked
+		// now -- before this block had a writable register none was,
+		// and a write to it would have hung the bus.
+		if (wb_cyc_i && wb_stb_i && wb_we_i && !wb_ack_o) begin
+			if (wb_adr_i[2:0] == 3'h05) speed <= wb_dat_i[5:0];
+			wb_ack_o <= 1;
+		end
+		if (wb_rst_i) speed <= 6'd16;
 
 		if (wb_cyc_i && wb_stb_i && !wb_we_i) begin
 
@@ -356,6 +389,13 @@ module usb_hid_wb #(
 			if (wb_adr_i[2:0] == 3'h04) wb_dat_o <=
 				{ 20'd0, typ_s2, game_state };
 
+			// The pointer speed, with its signature ("SPE"): software
+			// finds the register by reading it (sw/common/zpointer.h).
+			// On a bitstream from before it, a read here returns
+			// whatever the last read did -- never the signature.
+			if (wb_adr_i[2:0] == 3'h05) wb_dat_o <=
+				{ 24'h535045, 2'b00, speed };
+
 			wb_ack_o <= 1;
 
 		end
@@ -374,7 +414,7 @@ module usb_hid_wb #(
 		.game_u(uhh_game_u), .game_d(uhh_game_d),
 		.game_a(uhh_game_a), .game_b(uhh_game_b),
 		.game_x(uhh_game_x), .game_y(uhh_game_y),
-		.game_sel(uhh_game_sel), .game_sta(uhh_game_sta),
+		.game_sel(uhh_game_sel), .game_sta(uhh_game_sta)
 	);
 
 `endif

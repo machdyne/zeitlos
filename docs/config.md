@@ -76,6 +76,7 @@ travel with the card. `settings` edits them; see
 | `system.tts.expression` | `100` | `tts` | speech: how much the pitch moves, % -- 0 is a monotone, 200 twice as lively. Many people turn this down at high speed |
 | `system.tts.rate` | `180` | `tts` | speech: words per minute, 80-450 |
 | `system.tts.volume` | `200` | `tts` | speech: volume, 0-255 |
+| `system.mouse.speed` | `16` | `wm` | USB host boards: pointer speed in sixteenths of the board's own, 1-63 -- 8 half, 32 double; set in `settings` (17 levels, 4 to 63), applied by the kernel at boot and on reload; absent is 16 ([user_input.md](user_input.md#pointer-speed)) |
 | `system.video.mode` | `white` | kernel | display colour, applied at boot and on reload |
 | `system.video.brightness` | `8` | kernel | HDMI/DVI monochrome brightness, 1-16, applied at boot and on reload |
 | `system.video.desktop_colour` | `yes` | `wm` | eight-plane colour boards: the desktop in four colours, accents on window frames and the dock ([color.md](color.md#desktop-colour)); Super+F10 switches until the next reload |

@@ -43,6 +43,7 @@ module tb_usb_host;
     localparam A_XACT_B   = 11'h045;
     localparam A_XACT_S   = 11'h046;
     localparam A_CONFIG   = 11'h047;
+    localparam A_HID_SPEED  = 11'h005;		// compat block 0's register 5
     localparam A_POLL     = 11'h080;
 
     // Compat block registers, word addresses. Block 1 is at +8.
@@ -595,6 +596,52 @@ module tb_usb_host;
         #3000000;
         check("small delta is 1:1", curs_x0 - cx0, 2);
 
+        // Pointer speed (compat register 5): x * m / 16, m 1-63, 16 as
+        // built -- with the remainder carried, so a slow pointer still
+        // gets there. Its signature is how software finds it.
+        wb_read(A_HID_SPEED);
+        check("speed signature", r[31:8], 24'h535045);
+        check("speed resets to 16", r[5:0], 16);
+        wb_read(A_HID_SPEED + 11'd8);
+        check("port 1 has its own", r[5:0], 16);
+        wb_write(A_HID_SPEED, 32'd32);
+        wb_read(A_HID_SPEED);
+        check("speed reads back", r[5:0], 32);
+        cx0 = curs_x0;
+        cy0 = curs_y0;
+        dev_fs.hid_r1 = 8'd2;
+        dev_fs.hid_r2 = 8'd3;
+        dev_fs.hid_have = 1'b1;
+        #3000000;
+        check("m 32: x doubled", curs_x0 - cx0, 4);
+        check("m 32: y doubled", curs_y0 - cy0, 6);
+        wb_write(A_HID_SPEED, 32'd8);
+        cx0 = curs_x0;
+        dev_fs.hid_r1 = 8'd3;
+        dev_fs.hid_r2 = 8'd0;
+        dev_fs.hid_have = 1'b1;
+        #3000000;
+        check("m 8: half of 3 is 1", curs_x0 - cx0, 1);
+        dev_fs.hid_r1 = 8'd3;
+        dev_fs.hid_have = 1'b1;
+        #3000000;
+        check("m 8: carried, 3+3 is 3", curs_x0 - cx0, 3);
+        wb_write(A_HID_SPEED, 32'd20);		// 1.25
+        cx0 = curs_x0;
+        for (i = 0; i < 4; i = i + 1) begin
+            dev_fs.hid_r1 = 8'd1;
+            dev_fs.hid_have = 1'b1;
+            #3000000;
+        end
+        check("m 20: four 1s are 5", curs_x0 - cx0, 5);
+        wb_write(A_HID_SPEED, 32'd0);			// reads as 16
+        cx0 = curs_x0;
+        dev_fs.hid_r1 = 8'd2;
+        dev_fs.hid_have = 1'b1;
+        #3000000;
+        check("m 0: as built", curs_x0 - cx0, 2);
+        wb_write(A_HID_SPEED, 32'd16);
+
         // Saturation: a long sweep left must stop at 0, not wrap.
         for (i = 0; i < 40; i = i + 1) begin
             dev_fs.hid_r1 = 8'hd8;      // -40
@@ -657,7 +704,7 @@ module tb_usb_host;
     end
 
     initial begin
-        #40000000;
+        #70000000;		// was 40 ms; case 9's pointer speeds added ~21
         $display("FAIL -- global timeout");
         $finish;
     end

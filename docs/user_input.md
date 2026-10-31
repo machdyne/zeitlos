@@ -523,10 +523,52 @@ screen stays quick. Undefine it for a strictly linear pointer, raise
 the threshold to make it engage later, or change the `<<< 1` in the
 module body to `<<< 2` for a steeper curve.
 
-There is no software-side sensitivity control, and no sub-pixel
-accumulator: 1:1 is already the finest the 10-bit cursor registers can
-express, so precision below that would need fractional position bits
-rather than a different curve.
+### Pointer speed
+
+`settings` has a **Pointer speed** row: 17 levels from a quarter of the
+board's own speed to nearly four times it, each about a fifth (2^(1/4))
+faster than the last ([settings_app.md](settings_app.md#pointer-speed)).
+It is saved as `system.mouse.speed`, the speed in sixteenths (16 the
+board's own), applied by `settings` at once and by the kernel at boot
+and on every reload (`sw/os/cfg.c`). Every board with a USB HID port has
+it, whichever USB core it was built with.
+
+**The register.** The cursor is moved in hardware, so the speed is too:
+**register 5 of each HID port** (`0xc000_0014` for port 0, `0xc000_0034`
+for port 1), in both cores -- `rtl/usb_hid.v`, and the USB host
+controller's compat blocks (`rtl/usb/usb_hid_compat.v`, the same window).
+
+| Bits | Meaning |
+|---|---|
+| 5:0 | the speed in sixteenths: 16 the board's own, 8 half, 32 double, 1-63; 0 reads as 16. Reset 16 |
+| 31:8 | `0x535045` ("SPE"), read-only: the signature |
+
+**Found by reading, never by writing.** Before this register the old
+HID block acked no write at all -- a write to it would have hung the
+bus -- and FEATURES2 has no bit left to announce it. So software reads
+register 0 and then register 5: with the register, 5 reads the
+signature; on an older bitstream the old block returns whatever the
+last read did (register 0, whose top half is never the signature) and
+the USB host controller returns 0. `z_pointer_port_has()` in
+`sw/common/zpointer.h` does it, for each port before writing it. The old
+block now acks every write.
+
+**The arithmetic.** Each axis moves by delta * m / 16, then by
+`USB_HID_SENS_SHIFT` as before, with the remainder carried, so a slow
+pointer loses no movement: at 1.25, four one-count reports are five
+pixels. 16 is bit for bit the old arithmetic. The multiply is the only
+one in the block, and x and y take turns at it a cycle apart (reports
+come at most once a millisecond), so each port has one MULT18X18D. The
+product is registered before it is added, so the multiply has a cycle
+of its own and stays off the path into the cursor. The divides are
+wiring and the remainder is the low bits of the sum; what is left in
+LUTs is a mux choosing the axis and a two-bit phase. The levels are
+software's: a different number of them, or a different spacing, never
+touches the gateware.
+
+`make test_usb` checks the signature, both ports' registers, double,
+half, 1.25, the carried remainder, 0 reading as 16, both axes and the
+read-back (case 9).
 
 ## Pointer wakeups, and why wm stopped polling
 
