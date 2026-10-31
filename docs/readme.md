@@ -236,6 +236,7 @@ with [welcome](welcome.md); to program it, [kernel](kernel.md) and
 | [sfx](sfx.md) | Game sound: effects and music on the hardware mixer |
 | [chess\_app](chess_app.md) | `chess` |
 | [chess\_engine](chess_engine.md) | The chess engine |
+| [mahjong\_app](mahjong_app.md) | `mahjong`: mahjong solitaire, a dual app; stacked tiles in depth, layouts of your own |
 | [chip8\_app](chip8_app.md) | `chip8` |
 | [mausrun](mausrun.md) | `mausrun` |
 | [planedemo](planedemo.md) | `planedemo`: a one-minute demo in 256 colours and eight voices; planes as layers |

@@ -49,7 +49,7 @@ HOME_OK = ('apps/term/', 'apps/web/', 'apps/files/')
 # window (docs/learn_figures.md, "Colour")
 COLOUR_OK = ('common/games/zarcade_sys.c', 'apps/view/', 'apps/poker/',
              'apps/chess/', 'apps/blackjack/', 'apps/craps/', 'apps/roulette/',
-             'apps/slots/', 'apps/wm/', 'apps/learn/')
+             'apps/slots/', 'apps/mahjong/', 'apps/wm/', 'apps/learn/')
 
 NUMBERED = re.compile(r'\bZ_KEY_F(1|2|3|4|9|10|11|12)\b')
 HOME = re.compile(r'\bZ_KEY_APP_HOME\b')

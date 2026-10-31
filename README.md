@@ -146,6 +146,7 @@ board boots to a desktop with no sdcard ([core apps in flash](#core-apps-in-flas
 | App | Description |
 |-----|-------------|
 | [chess](docs/chess_app.md) | Chess, with a [built-in engine](docs/chess_engine.md) |
+| [mahjong](docs/mahjong_app.md) | Mahjong solitaire: stacked tiles in depth, four layouts and your own, every deal winnable; 64 colours full screen |
 | [chip8](docs/chip8_app.md) | CHIP-8 game emulator |
 | [mausrun](docs/mausrun.md) | Maus Run: a side-scrolling platformer for children -- eight levels in four themes, cheese, stars, cats |
 | [planedemo](docs/planedemo.md) | A one-minute demoscene film about Zeitlos: 256 colours, eight voices, a clock, a storm, a donut, a tunnel, a mouse |

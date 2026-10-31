@@ -79,6 +79,7 @@ APPS = casino poker roulette blackjack slots craps \
 	chip8 \
 	basic \
 	chess \
+	mahjong \
 	kidgames \
 	ask \
 	jfont \

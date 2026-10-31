@@ -140,6 +140,7 @@ APP_SET = {
     "blackjack": "games", "slots": "games", "craps": "games",
     "snake": "games", "blocks": "games", "bricks": "games",
     "mausrun": "games", "planedemo": "games", "chess": "games", "kidgames": "games",
+    "mahjong": "games",
     "chip8": "games", "space3d": "games", "gpu3d": "games",
     "gpudemo": "games",
 }
@@ -341,6 +342,7 @@ GAMES_DEMOS = [
     (zcard("Z_DIR_APPS", "gpudemo"), "sw/apps/gpudemo/gpudemo.bin"),
     (zcard("Z_DIR_APPS", "chip8"), "sw/apps/chip8/chip8.bin"),
     (zcard("Z_DIR_APPS", "chess"), "sw/apps/chess/chess.bin"),
+    (zcard("Z_DIR_APPS", "mahjong"), "sw/apps/mahjong/mahjong.bin"),
     (zcard("Z_DIR_APPS", "kidgames"), "sw/apps/kidgames/kidgames.bin"),
     (zcard("Z_DIR_APPS", "basic"), "sw/apps/basic/basic.bin"),
 ]
