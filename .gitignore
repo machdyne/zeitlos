@@ -29,6 +29,11 @@
 !rtl/ext/usb_hid_host/src/usb_hid_host_rom.hex
 sw/bios/bios_seed.hex
 
+# Debug info the macOS compiler driver writes beside a host program
+# built with -g in one step (planedemo's mkfilm, during `make apps`).
+# Not ignored, it made the tree dirty and the bitstream's .prov -dirty.
+*.dSYM/
+
 # gcc -MD leftovers
 sw/apps/**/*.d
 sw/os/*.d
