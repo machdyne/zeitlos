@@ -626,9 +626,10 @@ static void znic_dispatch(void)
 						(sta_ip >> 8) & 0xff, sta_ip & 0xff);
 				else
 					n = snprintf(line, sizeof line, "down\n");
-				if (n > 0)
+				if (n > 0) {
 					fs_mkdir(Z_DIR_NET_DATA);
 					fs_write_file(Z_PATH_NET_IP, line, n);
+				}
 				ip_on_card = sta_ip;
 				up_on_card = link_up;
 			}
