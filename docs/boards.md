@@ -233,6 +233,39 @@ The 616e152 column was measured with a different Yosys and nextpnr, so
 a change of a few percent in fmax between the columns is not evidence
 about the design.
 
+## ULX3S 85k: cache tags in LUT RAM
+
+By 144cbe9 the 85k's 48 MHz clock had little margin: 51.02 MHz on the
+pinned seed 10, 46.68 (a failure) on seed 1, and 48.70 on seed 9 (Yosys
+and nextpnr-ecp5 0.11.1-78, `make BOARD=ulx3s DEVICE=85k`). Its
+critical path ran from the cache's tag block RAM through the hit
+compare to the CPU. ULX3S now defines `CACHE_TAG_LUTRAM`, which puts
+the tags in LUT RAM ([dcache.md](dcache.md#tags-in-lut-ram) has the
+path and the reasons):
+
+| | block RAM tags | LUT RAM tags |
+|---|---|---|
+| COMB | 21,827 / 83,640 (26%) | 23,172 / 83,640 (27%) |
+| DP16KD | 47 / 208 | 45 / 208 |
+| `clk48mhz`, seed 10 | 51.02 MHz | 55.20 MHz |
+| `clk48mhz`, seed 1 | 46.68 MHz (FAIL) | 56.95 MHz |
+| `clk48mhz`, seed 9 | 48.70 MHz | 54.82 MHz |
+
+The define is the board's, so every ULX3S build has it. The 25k
+(`make BOARD=ulx3s`, seed 10), measured the same way:
+
+| | block RAM tags | LUT RAM tags |
+|---|---|---|
+| COMB | 22,266 / 24,288 (91%) | 23,214 / 24,288 (**95%**) |
+| DP16KD | 47 / 56 | 45 / 56 |
+| `clk48mhz` | 51.73 MHz | 60.61 MHz |
+| pixel (`clk25_2mhz`) | 60.21 MHz | 60.92 MHz |
+
+The 48 MHz clock gains most on the small die, and 95% is below
+Lakritz's 98%, but it is full: anything added to ULX3S now needs `make
+timing` on the 25k too. The 12F target builds on the same 24,288-LUT
+die, with the features its spec leaves out.
+
 ## Artix-7 boards (Sechzig MX1)
 
 `sergei_mx1` and `mozart_mx1` are the Sechzig MX1 compute module --

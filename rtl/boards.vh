@@ -1499,6 +1499,10 @@
 `define DCACHE_LINE_WORDS 4
 `define DCACHE_WBUF 2
 `define SDRAM_BURST
+// Cache tags in LUT RAM: the 85F missed 48 MHz on some seeds with the
+// hit compare behind the tag block RAM's output (docs/dcache.md, "Tags
+// in LUT RAM"); about 1,350 LUTs, two DP16KD back.
+`define CACHE_TAG_LUTRAM
 `define GPU
 `define GPU_RASTER
 `define GPU_BLIT

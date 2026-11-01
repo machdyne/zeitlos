@@ -197,8 +197,20 @@ module wb_cache #(
     // -- storage ---------------------------------------------------
 
     reg [31:0] i_data [0:I_WORDS-1];
+    // CACHE_TAG_LUTRAM: the tag arrays in LUT RAM, not block RAM. The
+    // read stays synchronous (i_tag_q/d_tag_q below), but its register
+    // is then a fabric flip-flop, so the hit compare starts ~0.5 ns
+    // after the clock instead of after a DP16KD's ~5.8 ns unregistered
+    // output. The ULX3S 85F's 48 MHz critical path was exactly that
+    // compare (docs/dcache.md, "Tags in LUT RAM").
+`ifdef CACHE_TAG_LUTRAM
+    (* ram_style = "distributed" *)
+`endif
     reg [I_TAGB:0] i_tag [0:I_LINES-1];     // { valid, tag }
     reg [31:0] d_data [0:D_WORDS-1];
+`ifdef CACHE_TAG_LUTRAM
+    (* ram_style = "distributed" *)
+`endif
     reg [D_TAGB:0] d_tag [0:D_LINES-1];
 
     reg [31:0] i_data_q;

@@ -58,6 +58,7 @@ In `rtl/boards.vh`, per board:
 `define DCACHE_LINE_WORDS 4 // default 4
 `define DCACHE_WBUF 2       // posted-write entries: 0, 1, 2, 4 (default 2)
 `define SDRAM_BURST         // 4-word SDRAM bursts for line fills
+`define CACHE_TAG_LUTRAM    // tags in LUT RAM, not block RAM (ULX3S)
 ```
 
 `ICACHE_FAST_HIT` applies to both sides. `SDRAM_BURST` is independent
@@ -432,6 +433,74 @@ running on hardware. It is correct for the same reason as in
 
 `ICACHE_FAST_HIT 0` still removes the combinational hit path entirely
 if a future board needs it.
+
+### Tags in LUT RAM
+
+`CACHE_TAG_LUTRAM` puts both tag arrays in LUT RAM
+(`(* ram_style = "distributed" *)`) instead of block RAM. The ULX3S
+defines it; no other board does.
+
+**Why.** The ULX3S 85F's 48 MHz clock (`clk48mhz`, reported by nextpnr
+as `montmul_i.clk`) had about 3 MHz of margin on its pinned seed and
+missed on others. Its critical path started at the I tag DP16KD:
+
+| stage | ns |
+|---|---:|
+| `i_tag` DP16KD read, unregistered output (`DOB`) | 5.83 |
+| tag compare, then `flush`/`fill` state (9 LUT levels, long 85F routes) | 12.23 |
+| into `cfg_ack_o`, then the CE of the CPU's 32-bit `mem_rdata` | 1.54 |
+| **total** (51.02 MHz) | **19.60** |
+
+A DP16KD without its output register takes 5.8 ns from the clock to its
+data. The tags are small -- 256 lines x 17 bits each side on the
+ULX3S (4 KB, 4-word lines) -- so in LUT RAM the read register that
+already exists (`i_tag_q`, `d_tag_q`) is an ordinary flip-flop, and the
+compare starts about 0.5 ns after the clock. The read stays
+synchronous: the RTL is the same, only its mapping changes, and the
+cache's testbenches see no difference (`iverilog` ignores the
+attribute).
+
+**Measured** on the ULX3S 85F at 144cbe9 (Yosys and nextpnr-ecp5
+0.11.1-78 from the OSS CAD Suite of 2026-10-23, `make BOARD=ulx3s
+DEVICE=85k zeitlos_pico`, `clk48mhz` fmax in MHz):
+
+| seed | block RAM tags | LUT RAM tags |
+|---|---:|---:|
+| 1 | **46.68** (fails) | 56.95 |
+| 9 | 48.70 | 54.82 |
+| 10 (pinned) | 51.02 | 55.20 |
+
+With block RAM tags, seeds 1-10 ranged 46.68-54.51 and one in ten
+failed. The cost is 1,345 more COMB (21,827 -> 23,172 of 83,640: 26% ->
+27%) and 295 `TRELLIS_RAMW`; two DP16KD come back (47 -> 45).
+
+**What it moves the limit to.** At 55 MHz the critical path is no
+longer in the cache: it is a half cycle from the reset counter to the
+reset input of `sdram_kianv.v`'s falling-edge flip-flops (9.06 of
+10.4 ns). That is the next place to look if the 85F needs more.
+
+**Tried and not taken:**
+
+- `ICACHE_FAST_HIT 0` (seed 10): 44.65 MHz, worse. The registered ack
+  takes the tag path away, and the worst path becomes the shared bus
+  acknowledge -- from the blitter master's address through every
+  slave's ack (SDRAM, ROM, BRAM, CSRs, RTC, vmouse) into the fill logic:
+  3.85 ns of logic and 18.55 of routing. It also costs a cycle on every
+  hit.
+- nextpnr `--tmg-ripup`: on seeds 1-9 it turned the one failure
+  (seed 1) into 53.07 MHz and changed nothing on the seeds that already
+  passed. A safety net for a release's seed retries, not margin.
+- `--placer-heap-timingweight 25 --placer-heap-critexp 4`: 51.4-58.3
+  on seeds 1-3; seed-dependent, not a fix.
+
+**The ULX3S 25k** has it too (one board block): 51.73 -> 60.61 MHz at
+seed 10, for COMB 91% -> 95% ([boards.md](boards.md#ulx3s-85k-cache-tags-in-lut-ram)).
+
+**On other boards.** Not defined, and not measured. Lakritz is at 98%
+COMB, and 1,350 LUTs are what it does not have; where the tag path is
+not critical it buys nothing. A board whose critical path starts at
+`i_tag` or `d_tag` (`make timing`, then the report for the 48 MHz
+clock) is the case for it.
 
 ## Boards and releases
 
