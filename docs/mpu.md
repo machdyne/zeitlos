@@ -37,6 +37,13 @@ switches to logging only.
 - **Cost:** no extra cycles, roughly 450-700 logic cells, no block RAM,
   one register write per context switch. Every release target meets
   timing with it.
+- **zeitlos32p has its own.** This module takes a load's or store's
+  privilege from the most recent fetch: right for picorv32 and
+  zeitlos32, which have one instruction in flight, wrong for the
+  pipelined [zeitlos32p](zeitlos32p.md#the-mpu). A `CPU_ZEITLOS32P`
+  build gets `rtl/mpu_split.v` instead: the same rules, registers and
+  faults, with privilege tracked per instruction, and tested write for
+  write against this one. This module is unchanged.
 
 ## Where it sits
 
@@ -611,6 +618,7 @@ iverilog -g2005 -DCACHE=2 -DBURST=1 -DMPU [-DCPU_Z32] -o tb_soc \
     rtl/tb/tb_cache_soc.v rtl/mpu.v rtl/cache_id.v rtl/cache.v \
     rtl/mem/sdram_kianv.v rtl/tb/sdram_model.v rtl/cpu/picorv32/picorv32.v \
     rtl/cpu/zeitlos32/zeitlos32.v rtl/cpu/zeitlos32/zeitlos32_muldiv.v \
+    rtl/cpu/zeitlos32/zeitlos32_decode.v rtl/cpu/zeitlos32/zeitlos32_alu.v rtl/cpu/zeitlos32/zeitlos32_lsu.v \
     rtl/arbiter_main.v
 vvp tb_soc +prog=rtl/tb/cache_soc/prog.hex +expect=2cf1c77d
 ```

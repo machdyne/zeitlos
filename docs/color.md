@@ -172,6 +172,81 @@ layout's planes as the machine shows and drops the rest: a 256-colour picture on
 machine shows its low four planes (the power-on palette is built for
 that, below).
 
+## Chunky
+
+On boards built with `GAME_CHUNKY` -- every board with eight planes --
+game mode can show its 320x240 picture at **one byte a pixel**, through
+the 256-entry palette, instead of as eight bitplanes. A program that
+draws in bytes (a port, an emulator, a renderer) writes its pixels as
+they are, with no conversion to planes.
+
+It is one bit: COLOR bit 14, CHUNKY, with EN. `z_color_set_chunky(true)`
+sets it (with eight planes and the 256-colour offsets);
+`z_color_chunky_available()` says whether the bitstream has it (COLOR
+bit 7, read-only). Like the rest of COLOR it is adopted at a frame
+boundary, and leaving game mode turns it off.
+
+### Where the pixels are
+
+A 320x240 picture at a byte a pixel is 19,200 words -- all of an
+8-plane VRAM. Each line is four segments of 80 pixels, 20 words each,
+in a framebuffer row of its own:
+
+| Segment | Pixels | Framebuffer row (line r) |
+|---|---|---|
+| 0 | 0..79 | r (sheet 0) |
+| 1 | 80..159 | r + 240 (sheet 0) |
+| 2 | 160..239 | 480 + r (sheet 1) |
+| 3 | 240..319 | 720 + r (sheet 1) |
+
+Little-endian within a word: pixel 4i + b of a segment is byte b of
+its word i. `z_chunky_seg(row, seg)` gives the 20 words of a segment.
+
+Why this shape: those are exactly the four rows the 256-colour layout
+already fetches for line r (planes 0/1, 2/3, 4/5 and 6/7 read the same
+rows; their dx is applied on the read side). So chunky changed nothing
+in the fetch, nothing in the 48 MHz domain and no block RAM: the read
+side takes a word every four pixels from line-buffer rows 0, 2, 4 and
+6 instead of eight words every 32, and the palette index is a byte of
+it rather than a bit of each plane. See "How it works", below.
+
+While chunky is on, the hardware uses the 256-colour offsets and view
+x 0, whatever was written, so a stray pan (Super+Arrow) cannot
+scramble the picture. Leave view y at 0: a non-zero y moves each
+segment's rows by itself (it is defined, and `tb_chunky.v` checks it,
+but it is not a scroll).
+
+### No back buffer: copy from the frame boundary
+
+The picture fills VRAM, so there is nowhere to draw the next frame
+there. Draw it in main memory and copy it in with
+`z_chunky_put_rows()`, started straight after the frame boundary
+(`z_game_wait_frame()`), top to bottom: a game-mode line lasts two
+scanlines, about 6,100 cycles at 48 MHz, and the copy is estimated at
+2,000-3,000 cycles a line on picorv32, so it stays ahead of the beam
+and the picture never tears. `sw/apps/chunkytest` measures it on the
+board.
+
+### What it costs
+
+`gpu_video` alone (yosys `synth_ecp5 -abc9`, colour, eight planes,
+window, desktop colour, cursor; no DDMI): 757 LUT4 / 181 CCU2C / 1,090
+FF without, 819 / 184 / 1,099 with: **+62 LUT4, +3 CCU2C, +9 FF, no
+block RAM**. socctl: one flip-flop. `CHUNKY_AVAIL` 0 (no
+`GAME_CHUNKY`, or fewer than eight planes) removes all of it.
+
+### Bring-up
+
+1. Build and load the bitstream, then `make -C sw/apps/chunkytest`
+   and copy `chunkytest.bin` to the card (it is on no card by
+   default).
+2. `run chunkytest`: ten seconds full screen. The top shows all 256
+   entries as 16 x 16 swatches in index order; red|green lines mark
+   the segment seams at x 80, 160 and 240 (no gap, no doubled column);
+   the stripes at the bottom move smoothly with no tear.
+3. It prints the copy's cycles (average and worst, per line) and how
+   many frames were late. Under ~6,100 a line keeps ahead of the beam.
+
 ## The colour window
 
 On a board built with `COLOR_WINDOW` (with `GAME_PLANES` 6 or 8), the
@@ -552,7 +627,7 @@ In `socctl` (`rtl/socctl.v`), alongside GAME and VIEW
 
 | Address | Name | Contents |
 |---|---|---|
-| `0x7000_0224` | COLOR | W: bit 0 EN, bits 3:1 planes−1, bits 9:8 / 11:10 / 13:12 plane 1/2/3 `{dy,dx}`. R: `{ 0x5A50, avail, 0, offsets, 00, xp, np, en }` |
+| `0x7000_0224` | COLOR | W: bit 0 EN, bits 3:1 planes−1, bits 9:8 / 11:10 / 13:12 plane 1/2/3 `{dy,dx}`, bit 14 CHUNKY. R: `{ 0x5A50, avail, chunky, offsets, cavail, 0, xp, np, en }` |
 | `0x7000_0234` | PALETTE | W only, whole-word store: bits 31:24 entry, bits 11:0 RGB444. Reads 0 |
 
 - **XP** (bits 5:4, read-only) is the most planes the bitstream
@@ -560,6 +635,9 @@ In `socctl` (`rtl/socctl.v`), alongside GAME and VIEW
 - **NP** is three bits now. A count above XP's is stored as the
   maximum, and reads back so. A bitstream from before `GAME_PLANES`
   ignores bit 3, so software asks for at most `z_color_planes_max()`.
+- **CHUNKY** (bit 14) and **CAVAIL** (bit 7, read-only): see
+  [Chunky](#chunky). CHUNKY is forced low, and CAVAIL reads 0, on a
+  bitstream without `GAME_CHUNKY`; older bitstreams read both as 0.
 - **PALETTE's entry** is eight bits; those above the palette's size
   (16, 64 or 256 entries) are ignored. Older bitstreams decode 27:24.
 
@@ -1072,7 +1150,8 @@ And VRAM (yosys 0.70 and 0.33 agree), the other half of the bill:
 | Schoko | on | 8 | 45F, VGA and DDMI: VGA shows the top bit of each channel |
 
 The 45F boards also define `COLOR_WINDOW` and `COLOR_DESKTOP`
-([desktop colour](#desktop-colour)).
+([desktop colour](#desktop-colour)), and `GAME_CHUNKY`
+([chunky](#chunky)).
 | everything else | off | — | 12F and 25F boards other than these, iCE40, GateMate, 7-series, composite |
 
 On a composite build of a board with `COLOR`, colour goes out as a
@@ -1161,6 +1240,17 @@ palette's size; the desktop untouched. With `-DGPU_DDMI -DTB_STUBS` it
 checks the TMDS inputs as `tb_color.v` does. `tb_color.v` itself checks
 the index on screen (`cidx_o`, the index whose colour is out of the
 palette) rather than the index a clock ahead of it.
+
+`rtl/gpu/bench/tb_chunky.v` is the same method for
+[chunky](#chunky): a model of the four segments and their bytes, and
+every visible pixel of a frame, index and colour, for view (0,0); a
+view x and odd offsets written (both ignored); the cursor's XOR; a
+view y in wrap; every palette entry rewritten; chunky off (eight
+planes exactly as before); and chunky set without colour
+(monochrome). A deliberately swapped pair of bytes on the read side
+fails it at the first pixel. `tb_planes.v` (six and eight),
+`tb_color.v`, `tb_game_mode.v`, `tb_colwin.v` and `tb_deskcol.v` pass
+on the same `gpu_video.v`.
 
 ## The window manager
 

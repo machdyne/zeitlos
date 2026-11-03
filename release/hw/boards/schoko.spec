@@ -67,6 +67,7 @@ defines =
     GAME_PLANES=8
     COLOR_WINDOW
     COLOR_DESKTOP
+    GAME_CHUNKY
     UART0
     USB_CDC
     USB_HOST

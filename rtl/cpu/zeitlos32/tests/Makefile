@@ -46,7 +46,7 @@ FAST_MUL ?= 0
 SEEDS    ?= 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20
 COUNT    ?= 400
 
-RTL = ../zeitlos32.v ../zeitlos32_muldiv.v
+RTL = ../zeitlos32.v ../zeitlos32_decode.v ../zeitlos32_alu.v ../zeitlos32_lsu.v ../zeitlos32_muldiv.v
 
 ASFLAGS  = -march=rv32im -mabi=ilp32
 LDFLAGS  = -m elf32lriscv

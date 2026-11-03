@@ -139,7 +139,14 @@ localparam CSR_FEATURES =
 // there is otherwise NOTHING in a running system that says which one
 // you are on. Chasing a bug for an afternoon on the wrong assumption
 // about that is a specific and avoidable waste.
+//
+// Set for the pipelined rtl/cpu/zeitlos32p as well: it is the same
+// machine. Software that needs to know which of the two reads the
+// cache's FEAT register, whose bit 11 is set only by rtl/cache_split.v,
+// which is built only with zeitlos32p (z_soc_cpu_name()).
 `ifdef CPU_ZEITLOS32
+	(32'h1 << 23) |
+`elsif CPU_ZEITLOS32P
 	(32'h1 << 23) |
 `endif
 // rtl/rtc.v -- the wall clock. Mirrors `RTC in rtl/boards.vh like

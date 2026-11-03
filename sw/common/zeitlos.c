@@ -584,6 +584,12 @@ void z_game_set_pointer(bool keep) {
 	game_pointer = keep;
 }
 
+static bool game_mods;
+
+void z_game_set_modifiers(bool on) {
+	game_mods = on;
+}
+
 bool z_game_set_enabled(bool on, bool wrap) {
 
 	uint32_t wm_pid;
@@ -601,7 +607,8 @@ bool z_game_set_enabled(bool on, bool wrap) {
 	if (wm_pid == z_getpid()) return true;
 
 	z_msg_new_send(wm_pid, on ? Z_WM_GAME_GRAB : Z_WM_GAME_RELEASE,
-		0, z_obj_uint32(game_pointer ? Z_WM_GAME_GRAB_POINTER : 0));
+		0, z_obj_uint32((game_pointer ? Z_WM_GAME_GRAB_POINTER : 0) |
+			(game_mods ? Z_WM_GAME_GRAB_MODIFIERS : 0)));
 
 	return true;
 

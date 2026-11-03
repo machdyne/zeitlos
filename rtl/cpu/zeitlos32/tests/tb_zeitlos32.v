@@ -38,7 +38,8 @@
  * number of cycles as the last one. Varying it removes that cover.
  *
  * Run:
- *   iverilog -g2005 -o tb tb_zeitlos32.v ../zeitlos32.v ../zeitlos32_muldiv.v
+ *   iverilog -g2005 -o tb tb_zeitlos32.v ../zeitlos32.v ../zeitlos32_muldiv.v \
+ *       ../zeitlos32_decode.v ../zeitlos32_alu.v ../zeitlos32_lsu.v
  *   ./tb +hex=prog/t_alu.hex
  *
  * or just `make` in this directory.

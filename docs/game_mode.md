@@ -157,6 +157,11 @@ See [color.md](color.md).
 While colour is on, the virtual phosphor (VIDEO) is not consulted;
 monochrome game mode honours it exactly as before.
 
+Boards with eight planes also have **chunky** game mode
+(`GAME_CHUNKY`): the same 320x240 viewport at one byte a pixel through
+the 256-entry palette, filling the whole of VRAM. See
+[color.md](color.md#chunky).
+
 ## Sprites
 
 Use an off-screen page as sprite storage and blit from it.

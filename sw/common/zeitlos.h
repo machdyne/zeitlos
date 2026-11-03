@@ -719,6 +719,12 @@ bool z_game_set_enabled(bool on, bool wrap);
 // set; z_game_set_enabled() and z_screen_grab() send it.
 void z_game_set_pointer(bool keep);
 
+// Whether this program's next game mode also hears Ctrl, Shift, Alt and
+// Super pressed and released on their own (Z_WM_GAME_GRAB_MODIFIERS):
+// Z_WM_KEY with keysym Z_KEY_NONE. For a game that uses them as
+// buttons. Off unless set; z_game_set_enabled() sends it.
+void z_game_set_modifiers(bool on);
+
 // Take the whole 640x480 screen, or give it back, WITHOUT game mode's
 // 320x240 view: the app draws the desktop's own framebuffer, wm stops
 // managing windows and sends every key and click to the app (the same

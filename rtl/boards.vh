@@ -255,6 +255,10 @@
 // docs/zeitlos32.md.
 //
 //`define CPU_ZEITLOS32
+//
+// `CPU_ZEITLOS32P, the pipelined zeitlos32, is the third choice; it is
+// set up at the end of this file because it changes what else is
+// built.
 
 
 // AUDIO
@@ -829,6 +833,8 @@
 `define COLOR_WINDOW
 // desktop colour, exact ink and an untinted pointer (docs/color.md)
 `define COLOR_DESKTOP
+// chunky game mode: a byte a pixel, COLOR bit 14 (docs/color.md)
+`define GAME_CHUNKY
 `define UART0
 // USB host controller (rtl/usb/, docs/usb_host.md) instead of the
 // low-speed HID-only rtl/ext/usb_hid_host. Both cores remain
@@ -920,6 +926,8 @@
 `define COLOR_WINDOW
 // desktop colour, exact ink and an untinted pointer (docs/color.md)
 `define COLOR_DESKTOP
+// chunky game mode: a byte a pixel, COLOR bit 14 (docs/color.md)
+`define GAME_CHUNKY
 `define UART0
 // USB host controller (rtl/usb/, docs/usb_host.md) instead of the
 // low-speed HID-only rtl/ext/usb_hid_host. Both cores remain
@@ -997,6 +1005,8 @@
 `define COLOR_WINDOW
 // desktop colour, exact ink and an untinted pointer (docs/color.md)
 `define COLOR_DESKTOP
+// chunky game mode: a byte a pixel, COLOR bit 14 (docs/color.md)
+`define GAME_CHUNKY
 `define UART0
 // The console is the USB-C socket (`undef at the bottom drops
 // `UART0): Noir has no PMOD, so this is the console that needs no
@@ -1163,6 +1173,8 @@
 `define COLOR_WINDOW
 // desktop colour, exact ink and an untinted pointer (docs/color.md)
 `define COLOR_DESKTOP
+// chunky game mode: a byte a pixel, COLOR bit 14 (docs/color.md)
+`define GAME_CHUNKY
 `define UART0
 `define USB_HOST
 `define SPI_SDCARD
@@ -1402,6 +1414,8 @@
 `define COLOR_WINDOW
 // desktop colour, exact ink and an untinted pointer (docs/color.md)
 `define COLOR_DESKTOP
+// chunky game mode: a byte a pixel, COLOR bit 14 (docs/color.md)
+`define GAME_CHUNKY
 `define UART0
 `define USB_HOST
 `define SPI_SDCARD
@@ -1713,6 +1727,8 @@
 `define COLOR_WINDOW
 // desktop colour, exact ink and an untinted pointer (docs/color.md)
 `define COLOR_DESKTOP
+// chunky game mode: a byte a pixel, COLOR bit 14 (docs/color.md)
+`define GAME_CHUNKY
 `define UART0
 `define USB_CDC
 `define USB_HOST
@@ -1841,5 +1857,25 @@
 `ifdef NO_CPU_MUL_FAST
 `undef CPU_MUL_FAST
 `endif
+
+// -- NO_MPU: a build without the MPU, for bisecting --
+//   make BOARD=... EXTRA_DEFINES=-DNO_MPU
+// Nothing defines it; without it nothing here changes.
+`ifdef NO_MPU
+`undef MPU
+`endif
+
+// -- zeitlos32p (rtl/cpu/zeitlos32p, docs/zeitlos32p.md) --
+//
+// EXPERIMENTAL, and off on every board: the pipelined zeitlos32, with
+// rtl/cache_split.v in place of wb_cache. A build asks for it --
+//   make BOARD=sergei_ml2 EXTRA_DEFINES=-DCPU_ZEITLOS32P
+// -- or a board block defines it. It needs `DCACHE (so: the 45F/85F
+// boards and Mozart ML1/ML2, Sergei ML1/ML2, Noir, Schoko...) and
+// `ARBITER, and cannot be combined with `CPU_ZEITLOS32; rtl/sysctl.v
+// stops the build with a named error otherwise. With `MPU (on by
+// default) it gets rtl/mpu_split.v in place of rtl/mpu.v: the same
+// rules and registers, with privilege tracked per instruction, which a
+// pipeline needs.
 
 `endif

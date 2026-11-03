@@ -230,7 +230,13 @@ module gpu_video #(
 	// words of the plane line buffer (pbuf, below). 0 -- the default,
 	// so every testbench is unchanged -- draws none, and only `pixel`
 	// below can invert a pixel.
-	parameter CURSOR_AVAIL = 1'b0
+	parameter CURSOR_AVAIL = 1'b0,
+	// Chunky game mode (docs/color.md, "Chunky"): one byte a pixel
+	// instead of eight bitplanes, chosen by COLOR's CHUNKY bit. Needs
+	// eight planes (the 19,200-word VRAM a 320x240x8 picture fills);
+	// ignored otherwise, and 0 -- every testbench unchanged -- removes
+	// it.
+	parameter CHUNKY_AVAIL = 1'b0
 
 ) (
 
@@ -333,6 +339,7 @@ module gpu_video #(
 	input color_en,
 	input [2:0] color_np,
 	input [5:0] color_off,
+	input color_chunky,
 
 	// -- the colour window, from rtl/socctl.v's COLWIN/COLWINEND --
 	//
@@ -636,6 +643,7 @@ module gpu_video #(
 	// mode the desktop was in. Monochrome game mode (colour off)
 	// keeps honouring the phosphor exactly as it always has.
 	reg col_active;
+	reg ck_active;
 	reg [2:0] np_active;
 	reg [5:0] off_active;
 
@@ -645,6 +653,35 @@ module gpu_video #(
 	// this is a constant 0 there), but it is the term composite colour
 	// will want, so it is written that way now.
 	wire color_on = (COLOR_AVAIL != 0) && col_active && vp_on;
+
+	// -- chunky (CHUNKY_AVAIL; docs/color.md, "Chunky") --
+	//
+	// With the 256-colour layout's offsets the plane fetch below
+	// already reads, every line, four distinct framebuffer rows of 20
+	// words: the viewport's row and the row 240 below it, in each of
+	// the two sheets (planes 1, 3, 5 and 7 fetch the same rows as 0, 2,
+	// 4 and 6 -- their dx is applied on the read side). That is 80
+	// words, 320 bytes: exactly one line at a byte a pixel. So chunky
+	// changes nothing on the fetch side and nothing in the 48 MHz
+	// domain. A line is four segments of 80 pixels:
+	//
+	//   segment 0  pixels   0..79   sheet 0, row r         line buffer row 0
+	//   segment 1  pixels  80..159  sheet 0, row r + 240   line buffer row 2
+	//   segment 2  pixels 160..239  sheet 1, row r         line buffer row 4
+	//   segment 3  pixels 240..319  sheet 1, row r + 240   line buffer row 6
+	//
+	// little-endian within a word (pixel 4i + b is byte b of word i).
+	// The read side takes a word every four pixels instead of eight
+	// words every 32 (below, at the bottom of this file), and the index
+	// is a byte of cur0 rather than a bit of every plane.
+	//
+	// While it is on, the offsets are forced to the 256-colour layout's
+	// and the view's x to 0, so a stray pan (Super+Arrow) cannot
+	// scramble the picture; the view's y still moves it, in the
+	// segments' own rows, as tb_chunky.v case 4 pins down.
+	localparam CK_ON = (CHUNKY_AVAIL != 0) && (COLOR_AVAIL != 0) &&
+		(NP == 8) && (FIXED_VIEWPORT == 0);
+	wire ck_on = CK_ON && ck_active && color_on;
 
 	// Which planes take part: those below np_active + 1 that this build
 	// has. Unused planes read as 0, so a 4-colour picture uses palette
@@ -660,14 +697,19 @@ module gpu_video #(
 
 	// The plane offsets in use: the 16-colour layout's in the window.
 	localparam [5:0] WIN_OFF = 6'b11_10_01;
-	wire [5:0] off_use = win_active ? WIN_OFF : off_active;
+	wire [5:0] off_use = (win_active || (CK_ON && ck_active)) ? WIN_OFF : off_active;
 
 	// The cursor inverts the ACTIVE planes only, i.e. index ^ (2^n-1):
 	// the same XOR the monochrome path does, generalised. Over entry 0
 	// it shows the highest entry in use, and it can never land on an
 	// entry the game is not using.
-	wire [7:0] cidx = ({ cur7[x[4:0]], cur6[x[4:0]], cur5[x[4:0]], cur4[x[4:0]],
-		cur3[x[4:0]], cur2[x[4:0]], cur1[x[4:0]], p0 } ^ {8{c_inv}}) & plane_mask;
+	// In chunky, the index is byte x[1:0] of the word being shown, and
+	// the cursor inverts all eight bits, as it does at eight planes.
+	wire [7:0] ck_byte = x[1] ? (x[0] ? cur0[31:24] : cur0[23:16]) :
+		(x[0] ? cur0[15:8] : cur0[7:0]);
+	wire [7:0] cidx = ck_on ? (ck_byte ^ {8{c_inv}}) :
+		(({ cur7[x[4:0]], cur6[x[4:0]], cur5[x[4:0]], cur4[x[4:0]],
+		cur3[x[4:0]], cur2[x[4:0]], cur1[x[4:0]], p0 } ^ {8{c_inv}}) & plane_mask);
 
 	// -- the palette: 2^NP entries in the cursor's block RAM --
 	//
@@ -1353,6 +1395,7 @@ module gpu_video #(
 	// colour rides the same capture and the same adoption -- see the
 	// color_en port. *_active are declared with the pixel path above.
 	reg col_cap;
+	reg ck_cap;
 	reg [2:0] np_cap;
 	reg [5:0] off_cap;
 	reg win_cap, desk_cap;
@@ -1375,7 +1418,7 @@ module gpu_video #(
 	// 0..639/0..479, which is what bounds the arithmetic below.
 	wire vp_cap = FIXED_VIEWPORT ? 1'b1 : game_cap;
 
-	wire [9:0] vx_adopt = (!vp_cap) ? 10'd0 :
+	wire [9:0] vx_adopt = (!vp_cap || (CK_ON && ck_cap && col_cap)) ? 10'd0 :
 		(!wrap_cap && vx_cap > 10'd320) ? 10'd320 : vx_cap;
 	wire [9:0] vy_adopt = (!vp_cap) ? 10'd0 :
 		(!wrap_cap && vy_cap > 10'd240) ? 10'd240 : vy_cap;
@@ -1420,6 +1463,8 @@ module gpu_video #(
 			vx_active <= 10'd0;
 			vy_active <= 10'd0;
 			col_cap <= 1'b0;
+			ck_cap <= 1'b0;
+			ck_active <= 1'b0;
 			np_cap <= 3'd0;
 			off_cap <= 6'd0;
 			col_active <= 1'b0;
@@ -1436,6 +1481,7 @@ module gpu_video #(
 				vx_cap <= view_x;
 				vy_cap <= view_y;
 				col_cap <= color_en;
+				ck_cap <= color_chunky;
 				np_cap <= color_np;
 				off_cap <= color_off;
 				win_cap <= win_en;
@@ -1458,6 +1504,7 @@ module gpu_video #(
 				vx_active <= vx_adopt;
 				vy_active <= vy_adopt;
 				col_active <= col_cap && (COLOR_AVAIL != 0);
+				ck_active <= CK_ON && ck_cap && col_cap;
 				np_active <= np_cap;
 				off_active <= off_cap;
 				// the window only in desktop mode: game mode wins
@@ -2087,6 +2134,9 @@ module gpu_video #(
 	reg [3:0] ps;
 	reg [4:0] pw;
 	reg pre;
+	// chunky: the segment and word the next pass reads
+	reg [1:0] ck_s;
+	reg [4:0] ck_w;
 
 	// the pass's last step, on which cur takes nxt during a preload
 	localparam [3:0] PS_END = NP + 3;
@@ -2101,7 +2151,8 @@ module gpu_video #(
 	wire [4:0] pw_k2 = off_use[2] ? pw_dx : pw;
 	wire [4:0] pw_k3 = off_use[4] ? pw_dx : pw;
 
-	wire x_cross = x_run && x_step && (x[4:0] == 5'd31);
+	// A word lasts 32 pixels in planes, 4 in chunky.
+	wire x_cross = x_run && x_step && (ck_on ? (x[1:0] == 2'd3) : (x[4:0] == 5'd31));
 	wire pre_go = (hc == h_disp_start - 11'd24);
 
 	// -- the hardware cursor: read side, pixel domain (docs/cursor.md) --
@@ -2190,6 +2241,8 @@ module gpu_video #(
 				ps <= 4'd1;
 				pw <= xw;
 				pre <= 1'b1;
+				ck_s <= 2'd0;
+				ck_w <= 5'd0;
 			end else if (x_cross) begin
 				cur0 <= nxt0;
 				cur1 <= nxt1;
@@ -2201,6 +2254,36 @@ module gpu_video #(
 				cur7 <= nxt7;
 				ps <= 4'd1;
 				pw <= xw2;
+			end else if (ck_on && ps != 4'd0) begin
+				// Chunky: a pass is one word, from line-buffer row
+				// 2 x segment, into nxt0 -- four steps against a
+				// crossing every eight clocks (four pixels, each
+				// doubled). The line start runs two passes, as the
+				// plane path does: the first word moves to cur0 at
+				// the end of the second. ck_s/ck_w were reset with
+				// the preload; the word after the last of a segment
+				// is word 0 of the next.
+				ps <= ps + 4'd1;
+				case (ps)
+					4'd1: pra <= { ck_s, 1'b0, ck_w };
+					4'd3: begin
+						nxt0 <= pq;
+						if (ck_w == 5'd19) begin
+							ck_w <= 5'd0;
+							ck_s <= ck_s + 2'd1;
+						end else
+							ck_w <= ck_w + 5'd1;
+					end
+					4'd4: begin
+						if (pre) begin
+							cur0 <= nxt0;
+							pre <= 1'b0;
+							ps <= 4'd1;
+						end else
+							ps <= 4'd0;
+					end
+					default: ;
+				endcase
 			end else if (ps == PS_END) begin
 				if (pre) begin
 					cur0 <= nxt0;

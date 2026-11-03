@@ -579,6 +579,12 @@ typedef struct {
 // shown -- for a program drawn with the mouse (pix); without it wm hides
 // the pointer for as long as the grab is held. 0 from an older program.
 #define Z_WM_GAME_GRAB_POINTER   0x1u
+// MODIFIERS: also send Ctrl, Shift, Alt and Super pressed or released on
+// their own, as Z_WM_KEY with keysym Z_KEY_NONE and the modifiers as
+// they now are -- for a game that uses them as buttons (doom: fire, run,
+// strafe). Without it, as before, a modifier is seen only as the
+// modifiers of another key.
+#define Z_WM_GAME_GRAB_MODIFIERS 0x2u
 #define Z_WM_GAME_RELEASE        (Z_SUBJ_WM_GAME + 9)
 
 // Sent to the owner when wm takes the screen back -- Alt+Esc, or the

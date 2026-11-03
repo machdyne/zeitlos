@@ -110,6 +110,16 @@ design makes that pattern land correctly). `tb_line.v` and
   positions, across the fold, the cursor, paper, off, game mode
   ignoring it. `-DGPU_DDMI -DTB_STUBS` with the DDMI files for the TMDS
   inputs. About a dozen frames.
+- `tb_chunky.v` -- chunky game mode in `rtl/gpu/gpu_video.v`
+  (`CHUNKY_AVAIL`, COLOR bit 14; `docs/color.md`, "Chunky"),
+  `tb_planes.v`'s method at eight planes: a pseudo-random VRAM, a model
+  of the chunky layout (four 80-pixel segments in the rows the
+  256-colour fetch reads, little-endian bytes), and every visible pixel
+  of a frame per case, index and colour: view (0,0), a view x and odd
+  offsets written (ignored), the cursor's XOR, a view y in wrap, the
+  palette rewritten, then chunky off (planes exactly as before) and
+  chunky without colour (monochrome). Swapping two bytes on the read
+  side fails it at the first pixel. About eight frames.
 - `tb_deskcol.v` -- desktop colour's exact path in `rtl/gpu/gpu_video.v`
   (COLWIN's DESK): accent pixels through the palette, every other pixel
   and the pointer through the exact ink, checked pixel by pixel; and
@@ -241,6 +251,11 @@ vvp /tmp/tb_color.out         # several minutes
 iverilog -g2005 -DNPLANES=8 -o /tmp/tb_colwin.out \
     rtl/gpu/bench/tb_colwin.v /tmp/gpu_video_fix.v
 vvp /tmp/tb_colwin.out        # a few minutes
+
+# tb_chunky.v -- the same patched gpu_video.v
+iverilog -g2005 -o /tmp/tb_chunky.out \
+    rtl/gpu/bench/tb_chunky.v /tmp/gpu_video_fix.v
+vvp /tmp/tb_chunky.out        # a few minutes
 
 # tb_deskcol.v -- desktop colour's exact path (DESK) and the 3-bit VGA
 # DAC; -DNODESK, -DNPLANES=6 (DESK must do nothing), -DDAC3, and the

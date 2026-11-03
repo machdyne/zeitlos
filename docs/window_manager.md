@@ -955,6 +955,14 @@ shows it again when the grab ends, however it ends. A grab sent with
 cursor and puts it in screen coordinates instead (CTRL bit 2,
 [socctl.md](socctl.md), "The cursor in game mode").
 
+A grab sent with `Z_WM_GAME_GRAB_MODIFIERS` (`z_game_set_modifiers(true)`;
+doom) also hears Ctrl, Shift, Alt and Super pressed and released **on
+their own**: `Z_WM_KEY` with keysym `Z_KEY_NONE` and the modifiers as
+they now are. Otherwise a bare modifier has no keysym and is dropped,
+and a game sees modifiers only on another key's message -- fine for a
+shortcut, no use for a fire button. Off unless asked for, so nothing
+that already holds a grab sees a new kind of key message.
+
 ### Resizing on request
 
 An app can ask for a new size with `z_win_resize(win, w, h)` (`zwin.h`),

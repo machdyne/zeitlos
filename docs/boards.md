@@ -496,6 +496,11 @@ Konfekt applies: re-check timing after any change.
   flip-flops and a few gates in the pixel domain
   ([color.md](color.md#the-exact-path-color_desktop)). The 25F boards
   cannot use it (six planes) and build none of it.
+- **The same 45F boards** define `GAME_CHUNKY`: chunky game mode, one
+  byte a pixel through the 256-entry palette (COLOR bit 14,
+  [color.md](color.md#chunky)). About 60 LUT4 and 9 flip-flops in
+  gpu_video's pixel domain, no block RAM. Eight planes only; the 25F
+  boards build none of it.
 
 ## Mozart ML0 and Sergei ML0
 

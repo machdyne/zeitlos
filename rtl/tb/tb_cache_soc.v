@@ -15,6 +15,10 @@
  *
  * Defines:
  *   CPU_Z32        use zeitlos32 (default picorv32)
+ *   CPU_Z32P       use zeitlos32p with rtl/cache_split.v (CACHE is then
+ *                  ignored; add rtl/cache_split.v, rtl/cpu/zeitlos32p/
+ *                  zeitlos32p.v and zeitlos32's units to the file
+ *                  list; with MPU, rtl/mpu_split.v instead of mpu.v).
  *   CACHE=0|1|2    none | wb_icache | wb_cache      (default 2)
  *   BURST=0|1      sdram_kianv.v BURST and wb_cache BURST (default 0)
  *   WBUF=n         wb_cache write buffer depth       (default 2)
@@ -37,7 +41,9 @@
  *   iverilog -g2005 -DCACHE=2 -DBURST=1 -o tb_soc2 rtl/tb/tb_cache_soc.v \
  *     rtl/cache_id.v rtl/cache.v rtl/mem/sdram_kianv.v rtl/tb/sdram_model.v \
  *     rtl/cpu/picorv32/picorv32.v rtl/cpu/zeitlos32/zeitlos32.v \
- *     rtl/cpu/zeitlos32/zeitlos32_muldiv.v rtl/arbiter_main.v
+ *     rtl/cpu/zeitlos32/zeitlos32_muldiv.v rtl/cpu/zeitlos32/zeitlos32_decode.v \
+ *     rtl/cpu/zeitlos32/zeitlos32_alu.v rtl/cpu/zeitlos32/zeitlos32_lsu.v \
+ *     rtl/arbiter_main.v
  *   vvp tb_soc2 +prog=rtl/tb/cache_soc/prog.hex
  */
 
@@ -105,7 +111,85 @@ module tb_cache_soc;
     wire s_ack;
     wire snoop_stb;
 
-`ifdef CPU_Z32
+`ifdef CPU_Z32P
+    // zeitlos32p and its split-port cache: the core's two ports go
+    // straight to the cache, the cache's memory port is b_*, exactly
+    // where wb_cache's is below. cpu_* (the single Wishbone port the
+    // other cores have) is idle. With MPU, rtl/mpu_split.v judges both
+    // ports, as in rtl/sysctl.v.
+    wire zi_req, zi_rdy, zi_ack, zd_req, zd_we, zd_rdy, zd_ack;
+    wire [31:0] zi_adr, zi_dat, zd_adr, zd_wdat, zd_rdat;
+    wire [3:0] zd_sel;
+    wire zd_priv, zi_priv, z_chk_privreg, z_chk_gate, z_chk_own;
+    wire [31:0] zd_pc, z_chk_pc, z_fv_adr, z_fv_pc;
+    wire z_fv_ev;
+    wire [3:0] z_fv_why;
+    wire z_mpu_en, z_mpu_enforce;
+    wire zi_veto, zd_veto, zd_reg;
+    wire [31:0] zd_reg_dat;
+    wire z_mpu_irq;
+`ifdef MPU
+    localparam Z_MPU = 1;
+    wb_mpu_split zmpu (
+        .wb_clk_i(clk), .wb_rst_i(rst),
+        .d_req(zd_req), .d_adr(zd_adr), .d_we(zd_we), .d_sel(zd_sel),
+        .d_wdat(zd_wdat), .d_priv(zd_priv), .d_pc(zd_pc), .d_rdy(zd_rdy),
+        .d_veto(zd_veto), .d_reg(zd_reg), .d_reg_dat(zd_reg_dat),
+        .i_adr(zi_adr), .i_priv(zi_priv), .i_veto(zi_veto),
+        .chk_pc(z_chk_pc), .chk_privreg(z_chk_privreg), .chk_gate(z_chk_gate),
+        .chk_own(z_chk_own),
+        .fv_ev(z_fv_ev), .fv_adr(z_fv_adr), .fv_pc(z_fv_pc), .fv_why(z_fv_why),
+        .en_o(z_mpu_en), .enforce_o(z_mpu_enforce),
+        .mtu_base_i(32'h4000_8000), .irq_o(z_mpu_irq)
+    );
+`else
+    localparam Z_MPU = 0;
+    assign z_mpu_en = 1'b0; assign z_mpu_enforce = 1'b0;
+    assign z_chk_privreg = 1'b0; assign z_chk_gate = 1'b0; assign z_chk_own = 1'b0;
+    assign zi_veto = 1'b0; assign zd_veto = 1'b0; assign zd_reg = 1'b0;
+    assign zd_reg_dat = 32'h0; assign z_mpu_irq = 1'b0;
+`endif
+
+    zeitlos32p #(
+        .PROGADDR_RESET(32'h4000_0000),
+        .PROGADDR_IRQ(32'h4000_0010),
+        .STACKADDR(32'h4001_0000),
+        .ENABLE_MUL(1), .ENABLE_DIV(1), .FAST_MUL(1),
+        .ENABLE_MPU(Z_MPU)
+    ) cpu (
+        .clk(clk), .rst(cpu_rst),
+        .mpu_en(z_mpu_en), .mpu_enforce(z_mpu_enforce),
+        .chk_pc(z_chk_pc), .chk_privreg(z_chk_privreg), .chk_gate(z_chk_gate),
+        .chk_own(z_chk_own), .d_priv(zd_priv), .d_pc(zd_pc), .i_priv(zi_priv),
+        .fv_ev(z_fv_ev), .fv_adr(z_fv_adr), .fv_pc(z_fv_pc), .fv_why(z_fv_why),
+        .i_req(zi_req), .i_adr(zi_adr), .i_rdy(zi_rdy), .i_ack(zi_ack), .i_dat(zi_dat),
+        .d_req(zd_req), .d_adr(zd_adr), .d_we(zd_we), .d_sel(zd_sel), .d_wdat(zd_wdat),
+        .d_rdy(zd_rdy), .d_ack(zd_ack), .d_rdat(zd_rdat),
+        .mtu_base(32'h0), .irq(32'b0), .eoi(), .trap(cpu_trap)
+    );
+
+    wb_cache_split #(
+        .I_KB(`IKB), .I_LINE_WORDS(4), .D_KB(`DKB), .D_LINE_WORDS(4),
+        .WBUF_DEPTH(`WBUF), .BURST(`BURST), .SNOOP(`SNOOP)
+    ) zcache (
+        .wb_clk_i(clk), .wb_rst_i(rst),
+        .i_req(zi_req), .i_adr(zi_adr), .i_rdy(zi_rdy), .i_ack(zi_ack), .i_dat(zi_dat),
+        .d_req(zd_req), .d_adr(zd_adr), .d_we(zd_we), .d_sel(zd_sel), .d_wdat(zd_wdat),
+        .d_rdy(zd_rdy), .d_ack(zd_ack), .d_rdat(zd_rdat),
+        .i_mpu_veto(zi_veto), .d_mpu_veto(zd_veto), .d_mpu_reg(zd_reg),
+        .d_mpu_dat(zd_reg_dat),
+        .m_adr_o(b_adr), .m_dat_o(b_dat_o), .m_dat_i(b_dat_i),
+        .m_we_o(b_we), .m_sel_o(b_sel), .m_stb_o(b_stb),
+        .m_cyc_o(b_cyc), .m_cti_o(b_cti), .m_bte_o(), .m_ack_i(b_ack),
+        .m_instr_o(),
+        .snoop_stb_i(snoop_stb), .snoop_adr_i(s_adr),
+        .d_cfg_hit()
+    );
+
+    assign cpu_adr = 32'h0; assign cpu_dat_o = 32'h0; assign cpu_we = 1'b0;
+    assign cpu_sel = 4'h0; assign cpu_stb = 1'b0; assign cpu_cyc = 1'b0;
+    assign cpu_instr = 1'b0;
+`elsif CPU_Z32
     zeitlos32_wb #(
         .PROGADDR_RESET(32'h4000_0000),
         .PROGADDR_IRQ(32'h4000_0010),
@@ -147,7 +231,9 @@ module tb_cache_soc;
     wire cpu_ack_c;
     wire [31:0] cpu_dat_i_c;
     wire mpu_irq;
-`ifdef MPU
+`ifdef CPU_Z32P
+    assign mpu_irq = z_mpu_irq;
+`elsif MPU
     wb_mpu #(.XLATE_ON_BUS(0)) mpu (
         .wb_clk_i(clk), .wb_rst_i(rst),
         .c_adr_i(cpu_adr), .c_dat_i(cpu_dat_o), .c_we_i(cpu_we),
@@ -172,6 +258,7 @@ module tb_cache_soc;
     // and absorbs 0x7000_01xx (acks, reads 0), exactly as sysctl.v
     // does.
 
+`ifndef CPU_Z32P
     generate
         if (`CACHE == 2) begin : g_unified
             wb_cache #(
@@ -215,6 +302,7 @@ module tb_cache_soc;
             assign b_cti = 3'b000;
         end
     endgenerate
+`endif
 
     // -- main bus: direct, or through wb_arbiter_main ------------------
 
@@ -348,7 +436,21 @@ module tb_cache_soc;
 
     initial clk = 1'b0;
     always #10 clk = ~clk;
+    integer maxcyc;
     always @(posedge clk) cycles = cycles + 1;
+`ifdef CPU_Z32P
+    reg trap_seen = 1'b0;
+    always @(posedge clk)
+        if (cpu_trap && !trap_seen) begin
+            trap_seen <= 1'b1;
+            $display("  trap: pc in X %08x, instruction %08x", cpu.ex_pc, cpu.ex_instr);
+        end
+    // +progress: a line every 250k cycles, to tell a slow run from a stuck one
+    always @(posedge clk)
+        if ($test$plusargs("progress") && !cpu_rst && cycles % 250000 == 0)
+            $display("  progress: cycle %0d, %0d instructions, pc in X %08x",
+                cycles, cpu.count_instr[31:0], cpu.ex_pc);
+`endif
 
     // -- extra masters (ARB only) ---------------------------------------
     //
@@ -451,12 +553,15 @@ module tb_cache_soc;
         cycles = 0;
         cpu_rst = 1'b0;
 
-        while (!done && cycles < 6000000 && !cpu_trap) @(posedge clk);
+        if (!$value$plusargs("maxcyc=%d", maxcyc)) maxcyc = 6000000;
+        while (!done && cycles < maxcyc && !cpu_trap) @(posedge clk);
         repeat (20) @(posedge clk);
 
         $display("");
         $display("config: cpu=%0s cache=%0d burst=%0d wbuf=%0d I%0dK D%0dK",
-`ifdef CPU_Z32
+`ifdef CPU_Z32P
+            "zeitlos32p",
+`elsif CPU_Z32
             "zeitlos32",
 `else
             "picorv32",
@@ -475,7 +580,11 @@ module tb_cache_soc;
             n_fetch, n_load, n_store, n_wait);
         $display("       fetch wait %0d, load wait %0d, store wait %0d",
             w_fetch, w_load, w_store);
-`ifdef SHOW_STATS
+`ifdef CPU_Z32P
+        $display("  zeitlos32p: %0d instructions, I hits %0d misses %0d, D hits %0d misses %0d",
+            cpu.count_instr[31:0], zcache.stat_i_hits, zcache.stat_i_misses,
+            zcache.stat_d_hits, zcache.stat_d_misses);
+`elsif SHOW_STATS
         $display("  I hits %0d misses %0d  D hits %0d misses %0d  wbfull %0d",
             g_unified.cache.stat_i_hits, g_unified.cache.stat_i_misses,
             g_unified.cache.stat_d_hits, g_unified.cache.stat_d_misses,

@@ -39,6 +39,16 @@ latencies, everything runs three times with the wait-state count
 varying per access. Constant latency can hide an off-by-one that only
 bites when two consecutive accesses differ.
 
+### The IRQ timer: missing
+
+zeitlos32 leaves out picorv32's IRQ timer (the `timer` custom
+instruction), on the grounds that nothing used it. The kernel now
+does: `timer(1)` is how a blocking process yields (sw/os/kernel.c), and
+rtl/sysctl.v builds picorv32 with `ENABLE_IRQ_TIMER` for it. On
+zeitlos32 the instruction is illegal, so the current kernel panics as
+soon as fs starts. [zeitlos32p](zeitlos32p.md#the-timer) implements
+it; zeitlos32 does not yet.
+
 ## Why
 
 PicoRV32 works and is not the problem. The reasons to have our own:
@@ -83,6 +93,40 @@ the entire decode fabric into the core's own timing path. That costs
 a cycle of bus turnaround per access and is worth paying — see
 `docs/muldiv.md` for how little margin this design has historically
 had.
+
+### Shared units
+
+The parts of the core that do not depend on how instructions are
+sequenced are modules of their own, shared with the pipelined
+zeitlos32p:
+
+| File | Module(s) | What |
+| --- | --- | --- |
+| `zeitlos32_decode.v` | `zeitlos32_decode` | fields, immediates, one wire per instruction class, picorv32's notion of legal |
+| `zeitlos32_alu.v` | `zeitlos32_alu` | OP/OP-IMM result, a + b on its own (addresses), branch decision |
+| `zeitlos32_lsu.v` | `zeitlos32_store`, `zeitlos32_load` | store byte-lane steering, load extraction and extension |
+| `zeitlos32_muldiv.v` | `zeitlos32_muldiv` | RV32M, sequential or DSP |
+
+All but muldiv are purely combinational. Moving them out of
+`zeitlos32.v` changed nothing the core does: yosys proves the core
+before and after sequentially equivalent (`equiv_make -inames`,
+`equiv_simple -seq 2`, `equiv_induct -seq 2`: 5,820 equivalence points
+with `FAST_MUL=0`, 5,537 with `FAST_MUL=1`, none unproven), the test
+suite passes at both multiplier settings, and `tb_cache_soc.v -DCPU_Z32`
+gives the same checksum. With the project's flow (`synth_ecp5 -abc9`,
+yosys 0.33) the core maps to 2,569 LUT4 against 2,637 before -- the
+same logic, a different order into ABC.
+
+To re-run the proof after touching any of them, against a saved copy
+of the old core renamed `gold_wb` (and the new one `gate_wb`):
+
+```
+yosys -p "read_verilog gold.v zeitlos32_muldiv.v; \
+          read_verilog gate.v zeitlos32_decode.v zeitlos32_alu.v zeitlos32_lsu.v; \
+          hierarchy -check; proc; flatten; memory_map; opt -fast; \
+          equiv_make -inames gold_wb gate_wb equiv; hierarchy -top equiv; \
+          equiv_simple -seq 2; equiv_induct -seq 2; equiv_status -assert"
+```
 
 ### Performance
 
@@ -183,6 +227,11 @@ rather than conflicting. `z_soc_cpu_name()` returns `"unknown"` when
 `rtl/csrs.v` is absent entirely, because there the bit is not merely
 clear, it is unreadable, and answering "picorv32" would be a guess
 dressed as a fact.
+
+The bit is set for the pipelined [zeitlos32p](zeitlos32p.md) too: it
+is the same machine. `z_soc_cpu_name()` tells the two apart by the
+cache's FEAT register: bit 11 is set only by `rtl/cache_split.v`, which
+is built only with zeitlos32p. It returns `"zeitlos32p"` there.
 
 The core also appears in `k_soc_report()`'s feature list as `zeitlos32`
 in the CPU group.

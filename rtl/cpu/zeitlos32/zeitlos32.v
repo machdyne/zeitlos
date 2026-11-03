@@ -297,91 +297,45 @@ module zeitlos32_wb #(
 
 	// ------------------------------------------------------------
 	// decode (purely combinational, from the latched instruction)
+	//
+	// zeitlos32_decode.v, shared with zeitlos32p: fields, immediates,
+	// one wire per instruction class, and picorv32's notion of legal.
 	// ------------------------------------------------------------
 
-	wire [6:0] opcode = instr[6:0];
-	wire [4:0] rd_idx = instr[11:7];
-	wire [2:0] funct3 = instr[14:12];
-	wire [4:0] rs1_idx = instr[19:15];
-	wire [4:0] rs2_idx = instr[24:20];
-	wire [6:0] funct7 = instr[31:25];
+	wire [6:0] opcode;
+	wire [4:0] rd_idx;
+	wire [2:0] funct3;
+	wire [4:0] rs1_idx;
+	wire [4:0] rs2_idx;
+	wire [6:0] funct7;
 
-	wire [31:0] imm_i = {{20{instr[31]}}, instr[31:20]};
-	wire [31:0] imm_s = {{20{instr[31]}}, instr[31:25], instr[11:7]};
-	wire [31:0] imm_b =
-		{{19{instr[31]}}, instr[31], instr[7], instr[30:25], instr[11:8], 1'b0};
-	wire [31:0] imm_u = {instr[31:12], 12'b0};
-	wire [31:0] imm_j =
-		{{11{instr[31]}}, instr[31], instr[19:12], instr[20], instr[30:21], 1'b0};
+	wire [31:0] imm_i, imm_s, imm_b, imm_u, imm_j;
 
-	wire is_lui    = (opcode == 7'b0110111);
-	wire is_auipc  = (opcode == 7'b0010111);
-	wire is_jal    = (opcode == 7'b1101111);
-	wire is_jalr   = (opcode == 7'b1100111) && (funct3 == 3'b000);
-	wire is_branch = (opcode == 7'b1100011);
-	wire is_load   = (opcode == 7'b0000011);
-	wire is_store  = (opcode == 7'b0100011);
-	wire is_opimm  = (opcode == 7'b0010011);
-	wire is_op     = (opcode == 7'b0110011);
-	wire is_fence  = (opcode == 7'b0001111);
-	wire is_system = (opcode == 7'b1110011);
-	wire is_custom = (opcode == 7'b0001011);
+	wire is_lui, is_auipc, is_jal, is_jalr, is_branch, is_load, is_store;
+	wire is_opimm, is_op, is_fence, is_system, is_custom;
+	wire is_muldiv;
+	wire is_getq, is_setq, is_retirq, is_maskirq, is_waitirq;
+	wire is_ecall_ebreak, is_csr_ok, is_legal;
 
-	wire is_mul    = is_op && (funct7 == 7'b0000001) && !funct3[2];
-	wire is_div    = is_op && (funct7 == 7'b0000001) &&  funct3[2];
-	wire is_muldiv = (is_mul && ENABLE_MUL) || (is_div && ENABLE_DIV);
-
-	// picorv32's own encodings, see sw/bios/custom_ops.S
-	wire is_getq    = is_custom && (funct7 == 7'b0000000) && (funct3 == 3'b100);
-	wire is_setq    = is_custom && (funct7 == 7'b0000001) && (funct3 == 3'b010);
-	wire is_retirq  = is_custom && (funct7 == 7'b0000010) && (funct3 == 3'b000);
-	wire is_maskirq = is_custom && (funct7 == 7'b0000011) && (funct3 == 3'b110);
-	wire is_waitirq = is_custom && (funct7 == 7'b0000100) && (funct3 == 3'b100);
-
-	// ecall/ebreak: the whole instruction is zero apart from bit 20.
-	// Matching picorv32's decode exactly rather than testing the
-	// canonical encodings, so that anything it accepts, this accepts.
-	wire is_ecall_ebreak = is_system && (instr[31:21] == 11'b0) && (instr[19:7] == 13'b0);
-
-	// The only CSRs that exist. csrrs rd, <csr>, x0 with rs1 == x0 --
-	// which is what the rdcycle/rdinstret pseudo-instructions expand
-	// to. 0xc01 (time) aliases 0xc00 (cycle) because there is no
-	// separate wall-clock counter on this SOC.
-	wire is_csrread = is_system && (funct3 == 3'b010) && (rs1_idx == 5'd0) && ENABLE_COUNTERS;
-	wire csr_cycle   = is_csrread && ((instr[31:20] == 12'hc00) || (instr[31:20] == 12'hc01));
-	wire csr_cycleh  = is_csrread && ((instr[31:20] == 12'hc80) || (instr[31:20] == 12'hc81));
-	wire csr_instret = is_csrread && (instr[31:20] == 12'hc02);
-	wire csr_instreth = is_csrread && (instr[31:20] == 12'hc82);
-	wire is_csr_ok = csr_cycle || csr_cycleh || csr_instret || csr_instreth;
-
-	wire branch_legal = is_branch && (funct3 != 3'b010) && (funct3 != 3'b011);
-
-	wire load_legal = is_load &&
-		((funct3 == 3'b000) || (funct3 == 3'b001) || (funct3 == 3'b010) ||
-		 (funct3 == 3'b100) || (funct3 == 3'b101));
-
-	wire store_legal = is_store &&
-		((funct3 == 3'b000) || (funct3 == 3'b001) || (funct3 == 3'b010));
-
-	// The funct7 field is only meaningful for OP and for the two
-	// shift-immediates; decoding it strictly rather than ignoring it
-	// means a corrupted instruction word faults instead of quietly
-	// executing something adjacent.
-	wire op_legal = is_op &&
-		((funct7 == 7'b0000000) ||
-		 ((funct7 == 7'b0100000) && ((funct3 == 3'b000) || (funct3 == 3'b101))) ||
-		 ((funct7 == 7'b0000001) && is_muldiv));
-
-	wire opimm_legal = is_opimm &&
-		((funct3 != 3'b001 && funct3 != 3'b101) ||
-		 ((funct3 == 3'b001) && (funct7 == 7'b0000000)) ||
-		 ((funct3 == 3'b101) && ((funct7 == 7'b0000000) || (funct7 == 7'b0100000))));
-
-	wire is_legal =
-		is_lui || is_auipc || is_jal || is_jalr || branch_legal ||
-		load_legal || store_legal || opimm_legal || op_legal || is_fence ||
-		is_ecall_ebreak || is_csr_ok ||
-		is_getq || is_setq || is_retirq || is_maskirq || is_waitirq;
+	zeitlos32_decode #(
+		.ENABLE_MUL(ENABLE_MUL),
+		.ENABLE_DIV(ENABLE_DIV),
+		.ENABLE_COUNTERS(ENABLE_COUNTERS)
+	) decode_i (
+		.instr(instr),
+		.opcode(opcode), .rd_idx(rd_idx), .funct3(funct3),
+		.rs1_idx(rs1_idx), .rs2_idx(rs2_idx), .funct7(funct7),
+		.imm_i(imm_i), .imm_s(imm_s), .imm_b(imm_b), .imm_u(imm_u), .imm_j(imm_j),
+		.is_lui(is_lui), .is_auipc(is_auipc), .is_jal(is_jal), .is_jalr(is_jalr),
+		.is_branch(is_branch), .is_load(is_load), .is_store(is_store),
+		.is_opimm(is_opimm), .is_op(is_op), .is_fence(is_fence),
+		.is_system(is_system), .is_custom(is_custom),
+		.is_muldiv(is_muldiv),
+		.is_getq(is_getq), .is_setq(is_setq), .is_retirq(is_retirq),
+		.is_maskirq(is_maskirq), .is_waitirq(is_waitirq),
+		.is_ecall_ebreak(is_ecall_ebreak), .is_csr_ok(is_csr_ok),
+		.is_legal(is_legal)
+	);
 
 	// ------------------------------------------------------------
 	// register file reads
@@ -410,42 +364,22 @@ module zeitlos32_wb #(
 	wire        alu_sub = is_op && funct7[5];
 	wire        alu_sra = funct7[5];
 
-	wire [31:0] alu_add = alu_a + alu_b;
-	wire [31:0] alu_subr = alu_a - alu_b;
-	wire        alu_lt  = ($signed(alu_a) < $signed(alu_b));
-	wire        alu_ltu = (alu_a < alu_b);
-	wire        alu_eq  = (alu_a == alu_b);
-	wire [31:0] alu_shl = alu_a << shamt;
-	wire [32:0] alu_shr = $signed({alu_sra & alu_a[31], alu_a}) >>> shamt;
+	// zeitlos32_alu.v, shared with zeitlos32p
+	wire [31:0] alu_out;
+	wire [31:0] alu_add;
+	wire        branch_taken;
 
-	reg [31:0] alu_out;
-
-	always @* begin
-		case (funct3)
-			3'b000:  alu_out = alu_sub ? alu_subr : alu_add;
-			3'b001:  alu_out = alu_shl;
-			3'b010:  alu_out = {31'd0, alu_lt};
-			3'b011:  alu_out = {31'd0, alu_ltu};
-			3'b100:  alu_out = alu_a ^ alu_b;
-			3'b101:  alu_out = alu_shr[31:0];
-			3'b110:  alu_out = alu_a | alu_b;
-			default: alu_out = alu_a & alu_b;
-		endcase
-	end
-
-	reg branch_taken;
-
-	always @* begin
-		case (funct3)
-			3'b000:  branch_taken =  alu_eq;		// beq
-			3'b001:  branch_taken = !alu_eq;		// bne
-			3'b100:  branch_taken =  alu_lt;		// blt
-			3'b101:  branch_taken = !alu_lt;		// bge
-			3'b110:  branch_taken =  alu_ltu;		// bltu
-			3'b111:  branch_taken = !alu_ltu;		// bgeu
-			default: branch_taken = 1'b0;			// funct3 2/3 illegal
-		endcase
-	end
+	zeitlos32_alu alu_i (
+		.a(alu_a),
+		.b(alu_b),
+		.shamt(shamt),
+		.funct3(funct3),
+		.sub(alu_sub),
+		.sra(alu_sra),
+		.out(alu_out),
+		.add(alu_add),
+		.taken(branch_taken)
+	);
 
 	// ------------------------------------------------------------
 	// addresses
@@ -481,55 +415,31 @@ module zeitlos32_wb #(
 	// store lane steering
 	// ------------------------------------------------------------
 
-	reg [3:0]  st_sel;
-	reg [31:0] st_dat;
+	// zeitlos32_lsu.v, shared with zeitlos32p
+	wire [3:0]  st_sel;
+	wire [31:0] st_dat;
 
-	always @* begin
-		case (funct3[1:0])
-			2'b00: begin							// sb
-				st_dat = {4{rs2_q[7:0]}};
-				case (mem_adr[1:0])
-					2'b00: st_sel = 4'b0001;
-					2'b01: st_sel = 4'b0010;
-					2'b10: st_sel = 4'b0100;
-					default: st_sel = 4'b1000;
-				endcase
-			end
-			2'b01: begin							// sh
-				st_dat = {2{rs2_q[15:0]}};
-				st_sel = mem_adr[1] ? 4'b1100 : 4'b0011;
-			end
-			default: begin							// sw
-				st_dat = rs2_q;
-				st_sel = 4'b1111;
-			end
-		endcase
-	end
+	zeitlos32_store store_i (
+		.size(funct3[1:0]),
+		.adr_lo(mem_adr[1:0]),
+		.rs2(rs2_q),
+		.sel(st_sel),
+		.dat(st_dat)
+	);
 
 	// ------------------------------------------------------------
 	// load extraction
 	// ------------------------------------------------------------
 
-	reg [7:0]  ld_byte;
-	reg [15:0] ld_half;
-	reg [31:0] ld_out;
+	// zeitlos32_lsu.v, shared with zeitlos32p
+	wire [31:0] ld_out;
 
-	always @* begin
-		case (ld_lo)
-			2'b00:   ld_byte = wbm_dat_i[7:0];
-			2'b01:   ld_byte = wbm_dat_i[15:8];
-			2'b10:   ld_byte = wbm_dat_i[23:16];
-			default: ld_byte = wbm_dat_i[31:24];
-		endcase
-		ld_half = ld_lo[1] ? wbm_dat_i[31:16] : wbm_dat_i[15:0];
-		case (funct3)
-			3'b000:  ld_out = {{24{ld_byte[7]}}, ld_byte};		// lb
-			3'b001:  ld_out = {{16{ld_half[15]}}, ld_half};		// lh
-			3'b100:  ld_out = {24'd0, ld_byte};					// lbu
-			3'b101:  ld_out = {16'd0, ld_half};					// lhu
-			default: ld_out = wbm_dat_i;						// lw
-		endcase
-	end
+	zeitlos32_load load_i (
+		.funct3(funct3),
+		.adr_lo(ld_lo),
+		.word(wbm_dat_i),
+		.out(ld_out)
+	);
 
 	// ------------------------------------------------------------
 	// sequential multiplier / divider

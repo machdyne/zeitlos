@@ -710,12 +710,23 @@ static inline bool z_soc_has_feature2(uint32_t feature) {
 // is not merely clear, it is unreadable -- and "picorv32" would be a
 // guess dressed up as a fact.
 //
-// The two cores are drop-in compatible, so the same kernel binary runs
-// on either and nothing else in a running system distinguishes them.
+// The cores are drop-in compatible, so the same kernel binary runs on
+// any of them and nothing else in a running system distinguishes them.
+//
+// Z_FEATURE_CPU_ZEITLOS32 is set for zeitlos32 and for the pipelined
+// zeitlos32p. zeitlos32p is built only with rtl/cache_split.v, whose
+// FEAT register (0x7000_012C, see the data cache registers below) has
+// bit 11 set; rtl/cache_id.v's has it clear. The D_INFO magic is
+// checked first: 0x7000_01xx is always decoded once CSRs exist (by
+// wb_icache, wb_cache or the CSR block itself), and only wb_cache and
+// wb_cache_split answer 0x1DCA there.
 static inline const char *z_soc_cpu_name(void) {
 	if (!z_soc_csrs_present()) return "unknown";
-	return (reg_csr_features & Z_FEATURE_CPU_ZEITLOS32) ? "zeitlos32"
-	                                                    : "picorv32";
+	if (!(reg_csr_features & Z_FEATURE_CPU_ZEITLOS32)) return "picorv32";
+	if (((*(volatile uint32_t *)0x7000011cu >> 16) & 0xffffu) == 0x1DCAu &&
+	    (*(volatile uint32_t *)0x7000012cu & (1u << 11)))
+		return "zeitlos32p";
+	return "zeitlos32";
 }
 
 // true only if CSRs are present AND `feature` is confirmed ABSENT --
@@ -1347,6 +1358,97 @@ static inline uint32_t z_color_offsets(void) {
 	return (reg_socctl_color >> Z_COLOR_OFF_SHIFT) & 0x3fu;
 }
 
+// -- chunky game mode (socctl COLOR bit 14, docs/color.md "Chunky") --
+//
+// One byte a pixel, through the 256-entry palette, instead of eight
+// bitplanes: on bitstreams built with `GAME_CHUNKY (eight planes).
+// The picture is 320x240 and fills the whole of VRAM, so there is no
+// back buffer there: draw into main memory and copy a finished frame
+// in (z_chunky_put_rows()), from the frame boundary, ahead of the beam.
+//
+// A line is four segments of 80 pixels, 20 words each, each in a
+// framebuffer row of its own -- the rows the 256-colour fetch already
+// reads, which is why chunky cost the scanout almost nothing:
+//
+//   segment 0  pixels   0..79   framebuffer row r          (sheet 0)
+//   segment 1  pixels  80..159  framebuffer row r + 240    (sheet 0)
+//   segment 2  pixels 160..239  framebuffer row 480 + r    (sheet 1)
+//   segment 3  pixels 240..319  framebuffer row 720 + r    (sheet 1)
+//
+// little-endian: pixel 4i + b of a segment is byte b of its word i.
+// While chunky is on the hardware uses view x 0 and the 256-colour
+// offsets, whatever was written; leave view y at 0 too (a non-zero y
+// moves the segments' rows independently: tb_chunky.v case 4).
+#define Z_COLOR_CHUNKY       (1u << 14)
+#define Z_COLOR_CHUNKY_AVAIL (1u << 7)   // read-only
+
+#define Z_CHUNKY_W           320
+#define Z_CHUNKY_H           240
+#define Z_CHUNKY_SEG_PX      80
+#define Z_CHUNKY_SEG_WORDS   20
+#define Z_CHUNKY_VRAM        ((volatile uint32_t *)0x20000000u)
+
+static inline bool z_color_chunky_available(void) {
+	if (!z_color_available()) return false;
+	return (reg_socctl_color & Z_COLOR_CHUNKY_AVAIL) != 0;
+}
+
+// Chunky on (eight planes' worth of palette, the 256-colour offsets)
+// or off again (back to monochrome game mode; z_color_set() for
+// planes). Adopted at the next frame boundary. Game mode itself is
+// z_game_set_enabled()'s; leaving it turns chunky off as well.
+static inline bool z_color_set_chunky(bool on) {
+	if (!z_color_chunky_available()) return false;
+	if (on)
+		reg_socctl_color = Z_COLOR_ENABLE | (7u << Z_COLOR_NP_SHIFT) |
+			((Z_COLOR_OFFSETS(Z_COLOR_DX, Z_COLOR_DY,
+				Z_COLOR_DX | Z_COLOR_DY) & 0x3fu) << Z_COLOR_OFF_SHIFT) |
+			Z_COLOR_CHUNKY;
+	else
+		reg_socctl_color = 0u;
+	return true;
+}
+
+static inline bool z_color_chunky(void) {
+	if (!z_color_present()) return false;
+	return (reg_socctl_color & Z_COLOR_CHUNKY) != 0;
+}
+
+// Segment `seg` (0..3) of chunky line `row` (0..239), as 20 words of
+// VRAM. Word stores only for speed: a byte store costs the same bus
+// cycle as a word.
+static inline volatile uint32_t *z_chunky_seg(uint32_t row, uint32_t seg) {
+	uint32_t r = row + ((seg & 1u) ? 240u : 0u) + ((seg & 2u) ? 480u : 0u);
+	return Z_CHUNKY_VRAM + r * Z_CHUNKY_SEG_WORDS;
+}
+
+// Copy rows [y0, y0 + n) of a 320-byte-a-line chunky picture in main
+// memory (word aligned, `stride` bytes a line) into VRAM, at screen
+// rows y0 up. Top to bottom, so a copy started at the frame boundary
+// stays ahead of the beam: an estimated 2,000-3,000 cycles a line on
+// picorv32 (a VRAM store is ~7 cycles, plus the load and the loop)
+// against the beam's 6,100 a line (a game-mode line is two scanlines).
+// Unrolled by four: the loop's own instructions cost as much as the
+// stores otherwise.
+static inline void z_chunky_put_rows(const void *pic, uint32_t stride,
+	uint32_t y0, uint32_t n) {
+	uint32_t y, s, i;
+	for (y = y0; y < y0 + n && y < Z_CHUNKY_H; y++) {
+		const uint32_t *src = (const uint32_t *)
+			((const uint8_t *)pic + y * stride);
+		for (s = 0; s < 4; s++) {
+			volatile uint32_t *d = z_chunky_seg(y, s);
+			for (i = 0; i < Z_CHUNKY_SEG_WORDS; i += 4) {
+				d[i] = src[0];
+				d[i + 1] = src[1];
+				d[i + 2] = src[2];
+				d[i + 3] = src[3];
+				src += 4;
+			}
+		}
+	}
+}
+
 // -- composite colour (socctl CVBS, docs/composite.md "Colour") --
 //
 // On a composite board with game-mode colour, colour goes out as an
@@ -1753,6 +1855,10 @@ static inline uint32_t z_dcache_kb(void) {
 static inline uint32_t z_dcache_line_words(void) {
 	return (reg_dcache_info >> 8) & 0xffu;
 }
+
+// FEAT bit 11: the split-port cache (rtl/cache_split.v), which is
+// built only with zeitlos32p (docs/cache_split.md)
+#define Z_CACHE_FEAT_SPLIT (1u << 11)
 
 // write-buffer depth built into the bitstream (0 = none)
 static inline uint32_t z_dcache_wbuf_depth(void) {

@@ -12,11 +12,17 @@ Full write-up: [`docs/zeitlos32.md`](../../../docs/zeitlos32.md).
 
 ```
 zeitlos32.v            the core: a nine-state multicycle FSM
+zeitlos32_decode.v     instruction decode          } shared with
+zeitlos32_alu.v        ALU and branch compare      } zeitlos32p
+zeitlos32_lsu.v        load/store byte lanes       }
 zeitlos32_muldiv.v     RV32M, sequential or DSP-backed
 tests/                 make && go
 ```
 
-Both files are self-contained. The only thing outside this directory
+The four units are purely combinational apart from muldiv and know
+nothing about how instructions are sequenced; zeitlos32 and the
+pipelined zeitlos32p (`rtl/cpu/zeitlos32p/`) are built from the same
+ones. The files are self-contained. The only thing outside this directory
 that knows zeitlos32 exists is the `ifdef`'d instantiation in
 `rtl/sysctl.v`, the switch in `rtl/boards.vh`, and two lines in the
 top-level `Makefile`.
@@ -48,7 +54,8 @@ Simulation is not enough — three of the four bugs found in this core
 so far were invisible to it. Always also run:
 
 ```
-yosys -p "read_verilog zeitlos32.v zeitlos32_muldiv.v; \
+yosys -p "read_verilog zeitlos32.v zeitlos32_decode.v zeitlos32_alu.v \
+          zeitlos32_lsu.v zeitlos32_muldiv.v; \
           hierarchy -top zeitlos32_wb; synth_ecp5 -top zeitlos32_wb"
 ```
 

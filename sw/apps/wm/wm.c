@@ -4191,6 +4191,8 @@ static int32_t view_y = 0;
 static uint32_t game_grab_pid = 0;
 // The holder asked to keep the pointer (Z_WM_GAME_GRAB_POINTER).
 static bool game_grab_ptr;
+// ...and to hear bare modifier changes (Z_WM_GAME_GRAB_MODIFIERS).
+static bool game_grab_mods;
 static uint32_t grab_check_at;     // next look at whether the holder lives
 
 static int window_of_pid(uint32_t pid) {
@@ -5913,6 +5915,16 @@ static void dispatch_keys(void) {
 			kbd_sent[usage] = 0;
 			if (sent == KBD_SENT_DROP) continue;
 			if (sent) keysym = sent;
+		}
+
+		// A bare modifier change, to a game holding the screen that
+		// asked for them (Z_WM_GAME_GRAB_MODIFIERS): Ctrl, Shift and
+		// Alt are its buttons. The modifiers as they are now.
+		if (keysym == Z_KEY_NONE && game_grab_pid && game_grab_mods &&
+		    usage >= 0xE0 && usage <= 0xE7) {
+			z_msg_new_send(game_grab_pid, Z_WM_KEY, 0,
+				z_obj_uint32(Z_WM_PACK_KEY(Z_KEY_NONE, modifiers, pressed)));
+			continue;
 		}
 
 		if (keysym == Z_KEY_NONE) continue;   // bare modifier change, or
@@ -7736,6 +7748,8 @@ static void handle_message(z_msg_t *msg) {
 			game_grab_pid = msg->from;
 			game_grab_ptr = msg->obj.type == Z_UINT32 &&
 				(msg->obj.val.uint32 & Z_WM_GAME_GRAB_POINTER);
+			game_grab_mods = msg->obj.type == Z_UINT32 &&
+				(msg->obj.val.uint32 & Z_WM_GAME_GRAB_MODIFIERS);
 			/* A game launched from the dock that takes the screen
 			 * without opening a window has started: the icon need
 			 * not wait out DOCK_LAUNCH_TIMEOUT_TICKS. */

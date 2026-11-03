@@ -330,7 +330,8 @@ $ make -C rtl/tb/cache_soc PREFIX=riscv64-unknown-elf-   # real CPU, real
 $ iverilog -g2005 -DCACHE=1 -o tb_soc rtl/tb/tb_cache_soc.v \  # controller
       rtl/cache_id.v rtl/cache.v rtl/mem/sdram_kianv.v \
       rtl/tb/sdram_model.v rtl/cpu/picorv32/picorv32.v \
-      rtl/cpu/zeitlos32/zeitlos32.v rtl/cpu/zeitlos32/zeitlos32_muldiv.v
+      rtl/cpu/zeitlos32/zeitlos32.v rtl/cpu/zeitlos32/zeitlos32_muldiv.v \
+      rtl/cpu/zeitlos32/zeitlos32_decode.v rtl/cpu/zeitlos32/zeitlos32_alu.v rtl/cpu/zeitlos32/zeitlos32_lsu.v
 $ vvp tb_soc +prog=rtl/tb/cache_soc/prog.hex
 
 $ cd rtl/tb                       # cycle-accurate IPC, real picorv32

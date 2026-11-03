@@ -147,3 +147,8 @@ node.key
 sw/bios/.build-flags
 sw/bios/bios.hex.tmp
 sw/bios/*.synthbak
+
+# doom (docs/doom_app.md): the engine and the WAD are fetched, not part of the tree
+sw/ext/doomgeneric/
+sw/apps/doom/doom1.wad
+sw/apps/doom/wadpkg/

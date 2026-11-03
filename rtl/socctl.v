@@ -246,22 +246,35 @@
  *                           Planes 4..7 are planes 0..3 of the
  *                           second VRAM sheet (rows 480..959;
  *                           docs/color.md, "More than four planes").
+ *               bit 7       CAVAIL (read-only): CHUNKY_AVAIL -- this
+ *                           bitstream has chunky (bit 14). Reads 0 on
+ *                           older bitstreams.
  *               bits 9:8    plane 1 offset {dy, dx}
  *               bits 11:10  plane 2 offset {dy, dx}
  *               bits 13:12  plane 3 offset {dy, dx}
  *                           dx adds 320 columns and dy 240 rows to
  *                           the viewport origin, modulo 640x480.
+ *               bit 14      CHUNKY: one byte a pixel instead of
+ *                           bitplanes (docs/color.md, "Chunky"). Only
+ *                           with EN, and only on a bitstream built
+ *                           with CHUNKY_AVAIL (eight planes); forced
+ *                           low otherwise, and reads back so -- which
+ *                           is how software finds out. Older
+ *                           bitstreams read it as 0. While it is on
+ *                           the hardware uses the 256-colour offsets
+ *                           and view x 0, whatever is written.
  *               bit 15      AVAIL (read-only): COLOR_AVAIL.
- *             Lane 0 carries EN/NP, lane 1 the offsets.
+ *             Lane 0 carries EN/NP, lane 1 the offsets and CHUNKY.
  *
- *             Reads back as { 16'h5A50, avail, 1'b0, offsets, 2'b0,
- *             xp, np, en }, "ZP". Same signature reason as GAME.
+ *             Reads back as { 16'h5A50, avail, chunky, offsets, cavail,
+ *             1'b0, xp, np, en }, "ZP". Same signature reason as GAME.
  *
  *             Part of the GAME/VIEW payload: a write here flips
  *             view_load too, so colour, mode and origin are captured
  *             together and adopted at one frame boundary.
  *
- *             WRITING GAME WITH BIT 0 CLEAR ALSO CLEARS EN. Leaving
+ *             WRITING GAME WITH BIT 0 CLEAR ALSO CLEARS EN (and
+ *             CHUNKY). Leaving
  *             game mode always means leaving colour, so the next
  *             entry into game mode -- including the window manager's
  *             Super+Esc over an ordinary desktop -- is monochrome
@@ -474,6 +487,9 @@ module socctl_wb #(
     // (rtl/boards.vh's `GAME_PLANES, 4 without it). Set by
     // rtl/sysctl.v, which sizes VRAM and gpu_video to match.
     parameter integer GAME_PLANES = 4,
+    // Chunky game mode (COLOR bit 14): `GAME_CHUNKY, with COLOR_AVAIL
+    // and eight planes. Set by rtl/sysctl.v.
+    parameter CHUNKY_AVAIL = 1'b0,
 
     // The colour window (COLWIN): `COLOR_WINDOW, with COLOR_AVAIL and
     // more than four planes. Set by rtl/sysctl.v.
@@ -592,6 +608,7 @@ module socctl_wb #(
     output wire        color_en,
     output wire [2:0]  color_np,
     output wire [5:0]  color_off,
+    output wire        color_chunky,
     output wire        pal_we,
     output wire [7:0]  pal_idx,
     output wire [11:0] pal_rgb,
@@ -670,6 +687,7 @@ module socctl_wb #(
     reg col;
     reg [2:0] np;
     reg [5:0] coff;
+    reg cck;
     reg pwe;
     reg [7:0] pidx;
     reg [11:0] prgb;
@@ -740,6 +758,8 @@ module socctl_wb #(
     assign color_en  = col && (COLOR_AVAIL != 0);
     assign color_np  = np;
     assign color_off = coff;
+    // forced low without CHUNKY_AVAIL, so it reads back 0 there
+    assign color_chunky = cck && (CHUNKY_AVAIL != 0) && (COLOR_AVAIL != 0);
     assign pal_we    = pwe && (COLOR_AVAIL != 0);
     assign pal_idx   = pidx;
     assign pal_rgb   = prgb;
@@ -839,6 +859,7 @@ module socctl_wb #(
             col <= 1'b0;
             np <= 3'd0;
             coff <= 6'd0;
+            cck <= 1'b0;
             pwe <= 1'b0;
             pidx <= 8'd0;
             prgb <= 12'd0;
@@ -930,8 +951,10 @@ module socctl_wb #(
                             vload <= ~vload;
                             // leaving game mode leaves colour -- see
                             // COLOR in this file's header
-                            if (!wb_dat_i[0])
+                            if (!wb_dat_i[0]) begin
                                 col <= 1'b0;
+                                cck <= 1'b0;
+                            end
                             // entering game mode leaves the colour
                             // window -- see COLWIN in the header
                             if (wb_dat_i[0])
@@ -947,8 +970,10 @@ module socctl_wb #(
                             np <= (wb_dat_i[3:1] > NP_MAX) ? NP_MAX :
                                 wb_dat_i[3:1];
                         end
-                        if (wb_sel_i[1])
+                        if (wb_sel_i[1]) begin
                             coff <= wb_dat_i[13:8];
+                            cck <= wb_dat_i[14];
+                        end
                         if (wb_sel_i[0] || wb_sel_i[1])
                             vload <= ~vload;
                     end
@@ -1068,8 +1093,9 @@ module socctl_wb #(
                                               ddmi_sound, ddmi_en };
                         32'd11: wb_dat_o <= { 12'b0, (DDMI_SOUND_AVAIL != 0) ? dn : 20'd0 };
                         32'd12: wb_dat_o <= { 12'b0, (DDMI_SOUND_AVAIL != 0) ? dcts : 20'd0 };
-                        32'd9: wb_dat_o <= { COLOR_SIG, (COLOR_AVAIL != 0), 1'b0,
-                                             ((COLOR_AVAIL != 0) ? coff : 6'd0), 2'b0,
+                        32'd9: wb_dat_o <= { COLOR_SIG, (COLOR_AVAIL != 0), color_chunky,
+                                             ((COLOR_AVAIL != 0) ? coff : 6'd0),
+                                             ((CHUNKY_AVAIL != 0) && (COLOR_AVAIL != 0)), 1'b0,
                                              ((COLOR_AVAIL != 0) ? XP_CODE : 2'd0),
                                              ((COLOR_AVAIL != 0) ? np : 3'd0), color_en };
                         32'd8: wb_dat_o <= (CURSOR_AVAIL != 0) ?

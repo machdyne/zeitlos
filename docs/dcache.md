@@ -45,6 +45,16 @@ the boards other than mozart_ml1 have not run it on hardware yet.
   I-cache-only build reaches 55.5 MHz); the critical path is no longer
   in the cache.
 
+## Split ports
+
+The pipelined zeitlos32p needs a fetch and a load or store in flight
+at once, which one port cannot give it. `rtl/cache_split.v`
+(`wb_cache_split`) is this cache with a port for each side, and the
+same rules (write-through, update-on-hit, store snoop of the I side,
+drain before anything, the same registers): see
+[cache_split.md](cache_split.md). It is a separate module, so this one
+is unchanged on every board that builds it.
+
 ## Configuration
 
 In `rtl/boards.vh`, per board:
@@ -196,7 +206,7 @@ unchanged, so the BIOS, `fs.c` and `zar.c` work against either module.
 | 0x70000120 | LOADS | data loads from main memory (write clears) |
 | 0x70000124 | STORES | stores to main memory (write clears) |
 | 0x70000128 | STALL | cycles a CPU request waited, including the 1-cycle hit (write clears) |
-| 0x7000012C | FEAT | bits 7:0 write buffer depth, bit 8 FAST_HIT, bit 9 BURST, bit 10 SNOOP |
+| 0x7000012C | FEAT | bits 7:0 write buffer depth, bit 8 FAST_HIT, bit 9 BURST, bit 10 SNOOP, bit 11 split-port cache ([cache_split.md](cache_split.md); zeitlos32p) |
 | 0x70000130 | WBFULL | cycles a store waited on a full write buffer (write clears) |
 | 0x70000134 | I_SNOOPS | I lines invalidated by stores (write clears) |
 
@@ -619,7 +629,8 @@ make -C rtl/tb/cache_soc PREFIX=riscv64-unknown-elf-   # or your rv32 prefix
 iverilog -g2005 -DCACHE=2 -DBURST=1 [-DCPU_Z32] -o tb_soc \
     rtl/tb/tb_cache_soc.v rtl/cache_id.v rtl/cache.v \
     rtl/mem/sdram_kianv.v rtl/tb/sdram_model.v rtl/cpu/picorv32/picorv32.v \
-    rtl/cpu/zeitlos32/zeitlos32.v rtl/cpu/zeitlos32/zeitlos32_muldiv.v
+    rtl/cpu/zeitlos32/zeitlos32.v rtl/cpu/zeitlos32/zeitlos32_muldiv.v \
+    rtl/cpu/zeitlos32/zeitlos32_decode.v rtl/cpu/zeitlos32/zeitlos32_alu.v rtl/cpu/zeitlos32/zeitlos32_lsu.v
 vvp tb_soc +prog=rtl/tb/cache_soc/prog.hex +expect=2cf1c77d
 ```
 
