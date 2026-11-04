@@ -10,12 +10,12 @@ Zeitlos is the successor to [Zucker](https://github.com/machdyne/zucker).
 
 ## Profiles
 
-Because the hardware is an FPGA, the system can be easily customized for different purposes. Zeitlos has 3 [profiles](docs/profiles.md):
+Because the hardware is an FPGA, the system can be easily customized and optimized for different purposes. Zeitlos has 3 default [profiles](docs/profiles.md) that affect which hardware is included:
 
 | Profile | What it is for | Graphics |
 |---------|----------------|----------|
 | Desktop | Everyday work, learning, programming, and games | 640x480 monochrome (white, amber, green or paper), [desktop colour](docs/color.md#desktop-colour) on the 45F boards, and the 320x240 [game mode](docs/game_mode.md) in a window or full screen |
-| Console | Games, demos and 3D | Exclusively the 320x240 game mode in up to [256 colours](docs/color.md) with the [T2](docs/zgl_t2.md) geometry engine |
+| Console | Games, demos and 3D | Exclusively the 320x240 game mode in up to [256 colours](docs/color.md) with the [T2](docs/zgl_t2.md) geometry engine; an app [launcher](docs/launcher_app.md) instead of a windowed desktop |
 | Headless | Servers, BBSes and controllers | Optional [remote desktop](docs/remote_desktop.md) |
 
 ## Features
@@ -160,6 +160,7 @@ board boots to a desktop with no sdcard ([core apps in flash](#core-apps-in-flas
 | [mahjong](docs/mahjong_app.md) | Mahjong solitaire: stacked tiles in depth, four layouts and your own, every deal winnable; 64 colours full screen |
 | [chip8](docs/chip8_app.md) | CHIP-8 game emulator |
 | [mausrun](docs/mausrun.md) | Maus Run: a side-scrolling platformer for children -- eight levels in four themes, cheese, stars, cats |
+| [mausrun3d](docs/mausrun3d.md) | Port of Maus Run to the T2 3D engine |
 | [planedemo](docs/planedemo.md) | A one-minute demoscene film about Zeitlos: 256 colours, eight voices, a clock, a storm, a donut, a tunnel, a mouse |
 | [space3d](docs/space3d_app.md) | First-person 3D space shooter game |
 | [snake](docs/snake_app.md) | The classic snake game: four ways to play, two players, 16 colours full screen |

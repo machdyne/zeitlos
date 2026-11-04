@@ -422,6 +422,11 @@ custom-colour parser and three config keys) took `wm` to 115,364 and
 riscv32-unknown-elf toolchain: 114K (from the unassigned part) and 147K. **The boot set's RAM is now 1,032 of 1,024 KB**:
 `zrelease check` reports it until 8K comes out of something, or the
 rule's 1M is raised -- not yet decided.
+The profiles ([profiles.md](profiles.md), November 2026) took `wm` to
+117,200 bytes in flash and 151,232 in RAM: the console's mode (no dock,
+the launcher kept running) and zgfx's lines in software for a bitstream
+without the rasterizer. Its budgets went to 116K and 149K, from the
+unassigned part; the RAM rule's total to 1,020.25 of 1,024 KB.
 The responsiveness round ([responsive.md](responsive.md), October
 2026) took `fs` to 77,040 bytes of RAM (its drive states for `backup`:
 starting, not usable, tried again) and `usb` to 53,316 (bringing a drive
@@ -461,7 +466,7 @@ code, data and `.bss`, not its stack). They are `CORE_BUDGETS` in the
 top-level `Makefile`, next to `CORE_APPS`:
 
 ```
-CORE_BUDGETS = fs=36K/77056 usb=35K/53504 wm=114K/147K net=148K/284K term=62K/140K \
+CORE_BUDGETS = fs=36K/77056 usb=35K/53504 wm=116K/149K net=148K/284K term=62K/140K \
 	console=10K/12544 cron=18K/48K text=86K/212K files=64K/138K repl=140K/307K
 CORE_RESERVE = 60K
 CORE_STORE = wm net

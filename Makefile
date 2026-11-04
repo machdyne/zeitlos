@@ -914,6 +914,11 @@ ZAR_APPS = $(filter-out $(CORE_APPS_OMIT),$(CORE_APPS))
 #
 # A budget is raised by taking from another, from the reserve, or by
 # making something smaller. Every core app must have one.
+# November 2026, the profiles (docs/profiles.md): wm 114K/147K ->
+# 116K/149K -- the console's mode (no dock, the launcher kept running)
+# and zgfx's lines in software for a bitstream without the rasterizer
+# (117,200 and 151,232 with the user's toolchain). From the slack under
+# CORE_ZAR_MAX; the RAM rule goes to 1,020.25 of 1,024 KB.
 # wm 108K/138K -> 114K/147K (desktop colour and its themes) and text 156K -> 157K RAM for desktop colour
 # (docs/color.md), usb 54K -> 52K RAM towards it.
 # October 2026, text 64K/165K -> 70K/180K: big print, misc-fixed 10x20
@@ -949,7 +954,7 @@ ZAR_APPS = $(filter-out $(CORE_APPS_OMIT),$(CORE_APPS))
 # themselves. files 64K/134K -> 64K/138K: zwalk reads a folder a page at
 # a time, its 1KB page in zwalk_t. Neither is in the RAM rule; both from
 # the slack under CORE_ZAR_MAX.
-CORE_BUDGETS = fs=36K/77056 usb=35K/53504 wm=114K/147K net=148K/284K term=62K/140K \
+CORE_BUDGETS = fs=36K/77056 usb=35K/53504 wm=116K/149K net=148K/284K term=62K/140K \
 	console=10K/12544 cron=18K/48K text=86K/212K files=64K/138K repl=140K/307K
 CORE_RESERVE = 60K
 # Core apps stored as they are, not compressed: their budget is then
