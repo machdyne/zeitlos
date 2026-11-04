@@ -20,6 +20,15 @@ MUSIC = ../pd_music.c ../pd_synth.c ../pd_song.c
 RT = $(GAMES)/zarcade.c $(GAMES)/zsfx.c $(GAMES)/tests/ar_host.c $(COMMON)/zfont_data.c
 FILM = ../planedemo.c ../pd_scenes.c ../pd_gfx.c ../pd_blob.c $(wildcard ../pd_s_*.c) ../../mausrun/sprites.c $(MUSIC)
 
+# ar_host.c refers to ar_host_hook() and sui_help() weakly, and neither
+# program here defines them. An ELF linker resolves an undefined weak
+# reference to NULL; the macOS linker refuses to link instead, unless
+# told the symbol may stay undefined. Without this, film.pdd -- and so
+# `make apps` -- cannot be built on a Mac.
+ifeq ($(shell uname -s),Darwin)
+WEAK_UNDEF = -Wl,-U,_ar_host_hook -Wl,-U,_sui_help
+endif
+
 all: wav
 
 song_wav: song_wav.c $(MUSIC) ../pd_music.h
@@ -33,14 +42,14 @@ wav: song_wav
 FILMDATA = ../pd_scenes.c ../pd_gfx.c $(wildcard ../pd_s_*.c) ../../mausrun/sprites.c $(MUSIC)
 mkfilm: mkfilm.c $(FILMDATA) $(RT) $(wildcard ../*.h)
 	$(HOSTCC) $(HOSTFLAGS) -DPD_HOST -DZSFX_HOSTED -DAR_HOST_TESTS -Dmain=game_main \
-		-o $@ mkfilm.c ../planedemo.c $(FILMDATA) ../pd_blob.c $(RT)
+		-o $@ mkfilm.c ../planedemo.c $(FILMDATA) ../pd_blob.c $(RT) $(WEAK_UNDEF)
 
 film: mkfilm
 	./mkfilm ../film.pdd
 
 render_pd: render.c $(FILM) $(RT) $(wildcard ../*.h)
 	$(HOSTCC) $(HOSTFLAGS) -DPD_HOST -DZSFX_HOSTED -DAR_HOST_TESTS -Dmain=game_main \
-		-o $@ render.c $(FILM) $(RT)
+		-o $@ render.c $(FILM) $(RT) $(WEAK_UNDEF)
 
 frames: render_pd
 	rm -rf out/frames && mkdir -p out/frames
