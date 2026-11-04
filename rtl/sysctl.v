@@ -8,6 +8,22 @@
 
 `include "boards.vh"
 
+// Building without the Keccak block (docs/keccak_hw.md: about 6,000
+// LUT4 on sergei_ml2, where T2 needs the room): EXTRA_DEFINES=-DNO_KECCAK.
+// SHA-3 and ML-KEM take the software path, with the same answers.
+`ifdef NO_KECCAK
+`undef KECCAK
+`endif
+
+// T2, the triangle engine that runs the whole frame (rtl/gpu/gpu_t2.v,
+// docs/zgl_t2.md), takes today's engine's place: same address, same
+// VRAM port, the same plumbing below (`GPU_TRI's).
+`ifdef GPU_T2
+`ifndef GPU_TRI
+`define GPU_TRI
+`endif
+`endif
+
 // `USB_HOST and `USB_HID are mutually exclusive -- they are two cores
 // for the same two pins, and the new one carries the old one's
 // register map inside it. Defining USB_HOST WINS, so a board can be
@@ -1176,6 +1192,10 @@ module sysctl #()
 	wire [31:0] wbs_kec_dat_o;
 	wire wbs_kec_ack_o;
 `endif
+`ifdef GPU_TRI
+	wire [31:0] wbs_gtri_dat_o;
+	wire wbs_gtri_ack_o;
+`endif
 `ifdef ICACHE
 `endif
 
@@ -1421,6 +1441,13 @@ module sysctl #()
 	wire cs_kec = ((wbm_adr & 32'hff00_0000) == 32'h7d00_0000);
 	wire wbm_cyc_kec = cs_kec && wbm_cyc;
 `endif
+	// rtl/gpu/gpu_tri.v -- the triangle engine, docs/gpu_tri.md. Decoded
+	// as the Keccak block is, just below it. Without it, csrs.v answers
+	// here (its word 7 reads 0, where the engine's ID is).
+`ifdef GPU_TRI
+	wire cs_gtri = ((wbm_adr & 32'hff00_0000) == 32'h7c00_0000);
+	wire wbm_cyc_gtri = cs_gtri && wbm_cyc;
+`endif
 	wire cs_socctl = ((wbm_adr & 32'hf000_0700) == 32'h7000_0200);
 	wire wbm_cyc_socctl = cs_socctl && wbm_cyc;
 `ifdef ICACHE
@@ -1492,6 +1519,9 @@ module sysctl #()
 `endif
 `ifdef KECCAK
 		&& !cs_kec
+`endif
+`ifdef GPU_TRI
+		&& !cs_gtri
 `endif
 		;
 	// Unconditional, like cs_uart0 below and unlike the `ifdef-guarded
@@ -1610,6 +1640,9 @@ module sysctl #()
 `endif
 `ifdef KECCAK
 		({32{cs_kec}} & wbs_kec_dat_o) |
+`endif
+`ifdef GPU_TRI
+		({32{cs_gtri}} & wbs_gtri_dat_o) |
 `endif
 `ifdef GPU_RASTER
 		({32{cs_gpu}} & wbs_gpu_dat_o) |
@@ -1766,6 +1799,9 @@ module sysctl #()
 `endif
 `ifdef KECCAK
 		(cs_kec & wbs_kec_ack_o) |
+`endif
+`ifdef GPU_TRI
+		(cs_gtri & wbs_gtri_ack_o) |
 `endif
 `ifdef GPU_RASTER
 		(cs_gpu & wbs_gpu_ack_o) |
@@ -2550,6 +2586,19 @@ module sysctl #()
 
 	wire wbm_cyc_gpu = cs_gpu && wbm_cyc;
 
+`ifdef GPU_TRI
+	// The rasterizer and the triangle engine share the arbiter's
+	// master 1 (rtl/gpu/gpu_vmux.v): the rasterizer's own wires are
+	// these, and wbm_gpu_* the shared port.
+	wire [31:0] wbm_gras_adr, wbm_gras_dat_i, wbm_gras_dat_o;
+	wire [3:0]  wbm_gras_sel;
+	wire        wbm_gras_we, wbm_gras_stb, wbm_gras_ack, wbm_gras_cyc;
+	wire        gtri_vblank;      // gpu_in_vblank, declared further down
+	wire [31:0] wbm_gtri_adr, wbm_gtri_dat_i, wbm_gtri_dat_o;
+	wire [3:0]  wbm_gtri_sel;
+	wire        wbm_gtri_we, wbm_gtri_stb, wbm_gtri_ack, wbm_gtri_cyc;
+`endif
+
 	gpu_raster_wb #() wbm_gpu0_i
 	(
  		.clk(wbm_clk),
@@ -2566,6 +2615,16 @@ module sysctl #()
 		.wb_ack_o(wbs_gpu_ack_o),
 
 		// master interface to VRAM
+`ifdef GPU_TRI
+		.m_adr_o(wbm_gras_adr),
+		.m_dat_i(wbm_gras_dat_i),
+		.m_dat_o(wbm_gras_dat_o),
+		.m_cyc_o(wbm_gras_cyc),
+		.m_stb_o(wbm_gras_stb),
+		.m_we_o(wbm_gras_we),
+		.m_sel_o(wbm_gras_sel),
+		.m_ack_i(wbm_gras_ack),
+`else
 		.m_adr_o(wbm_gpu_adr),
 		.m_dat_i(wbm_gpu_dat_i),
 		.m_dat_o(wbm_gpu_dat_o),
@@ -2574,8 +2633,54 @@ module sysctl #()
 		.m_we_o(wbm_gpu_we),
 		.m_sel_o(wbm_gpu_sel),
 		.m_ack_i(wbm_gpu_ack),
+`endif
 //		.dbg(DBG)
 	);
+
+`ifdef GPU_TRI
+	// WISHBONE SLAVE + MASTER: the triangle engine (rtl/gpu/gpu_tri.v,
+	// docs/gpu_tri.md). Optional, `GPU_TRI in rtl/boards.vh, for the
+	// chunky boards (it writes chunky VRAM); needs `GPU_RASTER, whose
+	// port to VRAM it shares. beam_y is not wired yet (WAIT_BEAM never
+	// waits); vblank is, for VSYNC: a frame starts going out in
+	// vertical blanking and keeps ahead of the beam.
+`ifdef GPU_T2
+	gpu_t2_wb gtri0_i (
+`else
+	gpu_tri_wb gtri0_i (
+`endif
+		.clk(wbm_clk),
+		.rst(wbm_rst),
+		.wb_adr_i(wbm_adr_sel_word),
+		.wb_dat_i(wbm_dat_o),
+		.wb_dat_o(wbs_gtri_dat_o),
+		.wb_we_i(wbm_we),
+		.wb_sel_i(wbm_sel),
+		.wb_stb_i(wbm_stb),
+		.wb_cyc_i(wbm_cyc_gtri),
+		.wb_ack_o(wbs_gtri_ack_o),
+		.m_adr_o(wbm_gtri_adr),
+		.m_dat_i(wbm_gtri_dat_i),
+		.m_dat_o(wbm_gtri_dat_o),
+		.m_cyc_o(wbm_gtri_cyc),
+		.m_stb_o(wbm_gtri_stb),
+		.m_we_o(wbm_gtri_we),
+		.m_sel_o(wbm_gtri_sel),
+		.m_ack_i(wbm_gtri_ack),
+		.beam_y(9'h1ff),
+		.vblank(gtri_vblank)
+	);
+
+	gpu_vmux gvmux0_i (
+		.clk(wbm_clk), .rst(wbm_rst),
+		.a_cyc(wbm_gras_cyc), .a_stb(wbm_gras_stb), .a_we(wbm_gras_we), .a_sel(wbm_gras_sel),
+		.a_adr(wbm_gras_adr), .a_dat_o(wbm_gras_dat_o), .a_dat_i(wbm_gras_dat_i), .a_ack(wbm_gras_ack),
+		.b_cyc(wbm_gtri_cyc), .b_stb(wbm_gtri_stb), .b_we(wbm_gtri_we), .b_sel(wbm_gtri_sel),
+		.b_adr(wbm_gtri_adr), .b_dat_o(wbm_gtri_dat_o), .b_dat_i(wbm_gtri_dat_i), .b_ack(wbm_gtri_ack),
+		.m_cyc(wbm_gpu_cyc), .m_stb(wbm_gpu_stb), .m_we(wbm_gpu_we), .m_sel(wbm_gpu_sel),
+		.m_adr(wbm_gpu_adr), .m_dat_o(wbm_gpu_dat_o), .m_dat_i(wbm_gpu_dat_i), .m_ack(wbm_gpu_ack)
+	);
+`endif
 `endif
 
 	// glyph memory wires: always declared (even if MEM_GLYPH isn't
@@ -3911,6 +4016,9 @@ module sysctl #()
 	// twice can at least conclude nothing is happening.
 	wire [15:0] gpu_frame_ctr;
 	wire gpu_in_vblank;
+`ifdef GPU_TRI
+	assign gtri_vblank = gpu_in_vblank;
+`endif
 `ifndef GPU
 	assign gpu_frame_ctr = 16'd0;
 	assign gpu_in_vblank = 1'b0;

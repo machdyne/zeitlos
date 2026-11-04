@@ -8,6 +8,8 @@
 #include "machine.h"
 #include "../sw/common/zexec_lz4.h"
 #include "simos.h"
+#include "cost.h"
+#include "gtri.h"
 
 /* ------------------------------------------------------------------- */
 /* z_obj_t layout (sw/common/zobj.h): { int32 type; union { ... } val; }
@@ -457,6 +459,8 @@ uint32_t bus_read32(machine_t *m, uint32_t addr) {
 	if (addr >= ZS_GPIO_BASE && addr < ZS_GPIO_BASE + 0x2000) {
 		return gpio_read(m, addr);
 	}
+	if (addr >= ZS_GTRI_BASE && addr < ZS_GTRI_BASE + 0x40 && gtri_enabled())
+		return gtri_read((addr - ZS_GTRI_BASE) / 4);
 	/* MTU, SD card, anything else unmapped: open bus reads as 0 */
 	return 0;
 }
@@ -527,6 +531,10 @@ void bus_write32(machine_t *m, uint32_t addr, uint32_t val) {
 	if (addr >= ZS_USB_BASE && addr < ZS_USB_BASE + 0x10) return; /* read-only from app's POV */
 	if (addr >= ZS_GPIO_BASE && addr < ZS_GPIO_BASE + 0x2000) {
 		gpio_write(m, addr, val);
+		return;
+	}
+	if (addr >= ZS_GTRI_BASE && addr < ZS_GTRI_BASE + 0x40 && gtri_enabled()) {
+		gtri_write(m->vram, (addr - ZS_GTRI_BASE) / 4, val);
 		return;
 	}
 	/* MTU, SD card, anything else unmapped: open bus write, ignored */
@@ -713,6 +721,22 @@ int machine_load_bin(machine_t *m, const char *path) {
 	return 0;
 }
 
+/* ZSIM_PROF=<file>: instructions retired at each pc in app RAM, written
+ * out at exit as "pc count" lines (sim/README.md, "Profiling") */
+static uint32_t *prof;
+static uint32_t prof_n;
+static int prof_on = -1;              /* -1: ZSIM_PROF not looked at yet */
+
+static void prof_dump(void) {
+	const char *f = getenv("ZSIM_PROF");
+	FILE *o;
+	uint32_t i;
+	if (!prof || !f || !(o = fopen(f, "w"))) return;
+	for (i = 0; i < prof_n; i++)
+		if (prof[i]) fprintf(o, "%08x %u\n", ZS_RAM_BASE + i * 2, prof[i]);
+	fclose(o);
+}
+
 uint64_t machine_run(machine_t *m, uint64_t max_insns) {
 	uint64_t start = m->cpu.insn_count;
 
@@ -731,7 +755,22 @@ uint64_t machine_run(machine_t *m, uint64_t max_insns) {
 			break;
 		}
 
-		if (cpu_step(&m->cpu, m) != 0) {
+		if (prof_on) {
+			if (prof_on < 0) {
+				prof_n = 4u << 20;
+				prof = getenv("ZSIM_PROF") ? calloc(prof_n, sizeof(uint32_t)) : NULL;
+				prof_on = prof != NULL;
+				if (prof) atexit(prof_dump);
+			}
+		}
+		{
+		uint64_t c0 = cost_enabled() ? cost_cycles() : 0;
+		uint32_t po = (m->cpu.pc - ZS_RAM_BASE) >> 1;
+		int r = cpu_step(&m->cpu, m);
+		/* the profile counts instructions, or with the cycle model on
+		 * (ZSIM_COST) the cycles each one cost */
+		if (prof && po < prof_n) prof[po] += cost_enabled() ? (uint32_t)(cost_cycles() - c0) : 1u;
+		if (r != 0) {
 			if (m->cpu.trapped == 2) {
 				fprintf(stderr, "zeitlos-sim: ECALL/EBREAK at pc=0x%08x, halting\n",
 					m->cpu.trap_pc);
@@ -741,6 +780,7 @@ uint64_t machine_run(machine_t *m, uint64_t max_insns) {
 			}
 			m->running = 0;
 			break;
+		}
 		}
 	}
 

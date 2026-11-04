@@ -31,6 +31,7 @@ chip8       "Chip 8"
 clock
 draw
 files
+gldemo      "GL demo"
 gpu3d       "GPU 3D"
 hex         "Hex editor"
 info        "System info"

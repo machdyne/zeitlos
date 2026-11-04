@@ -40,6 +40,7 @@ typedef struct {
 	bool wc_off;                   /* F10: no colour window, for now */
 	bool modal;                    /* a box is up (ar_top): Esc, F1, C, M
 	                                * are the program's keys */
+	bool chunky_ok;                /* ar_chunky(): the program draws chunky */
 
 	/* Colour in the window (docs/color.md, "The colour window"): wm
 	 * gave this window the second VRAM sheet's planes. Logical plane 0
@@ -68,6 +69,11 @@ typedef struct {
 extern ar_state_t ar__s;
 
 /* -- core, called by the system half -- */
+
+/* -- the system half, called by the core -- */
+
+/* A box went up or away (ar_top): chunky gives way to the planes. */
+void ar__top_changed(void);
 
 /* Planes for colour on a board that shows at most `hw_max` (4, 6, 8),
  * from what the program asked: sets ar__s.planes and returns it. */

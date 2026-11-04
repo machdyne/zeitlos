@@ -491,6 +491,33 @@
 #define Z_KECCAK_W_XIN        5u
 #define Z_KECCAK_W_OUT        6u
 
+// The triangle engine (rtl/gpu/gpu_tri.v, `GPU_TRI): zgl's ZGL_FRAMES
+// strips in hardware, into chunky VRAM. docs/gpu_tri.md; zgl drives it
+// (sw/common/zgl/zgl_chunky.c). No FEATURES bit: its ID word answers
+// "ZTRI" when it is here, and 0 (from csrs.v) when not.
+#define Z_GTRI_BASE           0x7C000000u
+#define Z_GTRI_ID             0x5A545249u   // "ZTRI"
+#define Z_GTRI_W_CTRL         0u            // bit0 WAIT_BEAM, bit1 VSYNC
+#define Z_GTRI_CTRL_VSYNC     2u            // a frame's first strip waits for vblank
+#define Z_GTRI_CTRL_MONO      4u            // strips to the 1 bpp desktop (WIN, CLIPX, CLIPY, LUM)
+#define Z_GTRI_W_STATUS       1u            // bit0 busy, bit1 bad command, [25:16] FIFO free
+#define Z_GTRI_W_CMD          2u            // a command word (waits while the FIFO is full)
+#define Z_GTRI_W_VBASE        3u
+#define Z_GTRI_W_STRIPS       4u
+#define Z_GTRI_W_RESET        5u
+#define Z_GTRI_W_LUM          6u            // index | brightness (0..16) << 8
+#define Z_GTRI_W_ID           7u
+#define Z_GTRI_W_WIN          8u            // the picture's x | y << 16 on the screen
+#define Z_GTRI_W_CLIPX        9u            // visible picture columns x0 | x1 << 16
+#define Z_GTRI_W_CLIPY        10u           // visible picture rows y0 | y1 << 16
+
+static inline volatile uint32_t *z_gtri_reg(uint32_t w) {
+	return (volatile uint32_t *)(Z_GTRI_BASE + 4u * w);
+}
+static inline bool z_gtri_present(void) {
+	return *z_gtri_reg(Z_GTRI_W_ID) == Z_GTRI_ID;
+}
+
 // -- sharing a block between processes (montmul, sha256) --
 //
 // Both blocks have an OWNER register: write a nonzero id to claim the

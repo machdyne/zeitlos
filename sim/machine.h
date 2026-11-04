@@ -30,7 +30,7 @@
 #include "cpu.h"
 
 #define ZS_VRAM_BASE      0x20000000u
-#define ZS_VRAM_WORDS     6144            /* 512*384/32, GPU_PIXEL_DOUBLE mode */
+#define ZS_VRAM_WORDS     19200           /* two 640x480 sheets: chunky game mode needs both (docs/color.md) */
 #define ZS_SCREEN_W       512
 #define ZS_SCREEN_H       384
 

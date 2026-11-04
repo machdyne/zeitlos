@@ -219,6 +219,8 @@ with [welcome](welcome.md); to program it, [kernel](kernel.md) and
 | [mesh\_app](mesh_app.md) | `mesh` |
 | [logic\_app](logic_app.md) | `logic` |
 | [gpu3d\_app](gpu3d_app.md) | `gpu3d` |
+| [gpu\_tri](gpu_tri.md) | `rtl/gpu/gpu_tri.v`: the triangle engine, zgl's strips in hardware (module and bench) |
+| [gldemo\_app](gldemo_app.md) | `gldemo`: zgl's filled, lit, depth-tested demo scene (ZGL_FRAMES) |
 | [pix\_app](pix_app.md) | `pix`: pixel editor for sprite sheets and pictures in up to 256 colours, animation, dock icons, fonts, the pointer; image import |
 | [draw\_app](draw_app.md) | `draw`: painting in black and white |
 | [zsp](zsp.md) | Sprite sheets (`.zsp`): text, up to 256 colours, each with what stands in for it on boards with fewer |
@@ -227,11 +229,12 @@ with [welcome](welcome.md); to program it, [kernel](kernel.md) and
 
 | Document | Subject |
 |---|---|
-| [space3d\_app](space3d_app.md) | `space3d`: wireframe space game; 16-colour dual playfield in full screen |
+| [space3d\_app](space3d_app.md) | `space3d`: space game, wireframe (16-colour dual playfield) or solid (lit, depth-tested; V) |
 | [snake\_app](snake_app.md) | `snake`: the classic, one or two players, window or full screen, 16 colours |
 | [blocks\_app](blocks_app.md) | `blocks`: falling blocks; endless, 40 lines, 3 minutes; the stack drops by VRAM copies |
 | [bricks\_app](bricks_app.md) | `bricks`: paddle, ball and a wall of bricks; twelve rounds, capsules, mouse or keys |
 | [arcade](arcade.md) | The arcade runtime: one 320x240 game screen in a window or full screen, colour or mono |
+| [zgl](zgl.md) | A GL 1.0-style 3D API on the arcade runtime: wireframe on every board (Phase 0) |
 | [screen\_ui](screen_ui.md) | The screen toolkit: boxes (messages, questions, a line to type into) on a screen app's own 320x240 screen |
 | [sfx](sfx.md) | Game sound: effects and music on the hardware mixer |
 | [chess\_app](chess_app.md) | `chess` |

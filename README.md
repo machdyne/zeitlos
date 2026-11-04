@@ -140,6 +140,7 @@ board boots to a desktop with no sdcard ([core apps in flash](#core-apps-in-flas
 | [mesh](docs/mesh_app.md) | Meshtastic LoRa client |
 | [logic](docs/logic_app.md) | Logic analyzer (under development) |
 | [gpu3d](docs/gpu3d_app.md) | Spinning 3D cube demo + STL viewer |
+| [gldemo](docs/gldemo_app.md) | zgl's demo: a lit, shaded sphere and cube, depth-tested, in a window or full screen |
 
 #### Games
 

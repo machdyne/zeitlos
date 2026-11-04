@@ -246,6 +246,48 @@ static void clear_fb(void) {
 
 bool ar_color_available(void) { return true; }
 
+static void mode_event(void);
+
+/* Chunky game mode (AR_MODE_FULL_CHUNKY), when a script says the board
+ * has it (ar_host_chunky_avail): the program's own picture, a byte a
+ * pixel, in ar_host_chunky[] -- whatever the program's chunky driver
+ * writes there (zgl's, stood in for by the script) -- shown through
+ * the palette. Off, as by default, a program's ar_chunky() changes
+ * nothing. */
+bool ar_host_chunky_avail;
+uint8_t ar_host_chunky[AR_H][AR_W];
+
+static ar_mode_t full_mode(void) {
+	if (!ar__s.want_color) return AR_MODE_FULL_MONO;
+	if (ar_host_chunky_avail && ar__s.chunky_ok && !ar__s.modal) return AR_MODE_FULL_CHUNKY;
+	return AR_MODE_FULL_COLOR;
+}
+
+static void set_full_mode(void) {
+	ar_mode_t m = full_mode();
+	/* a box over a chunky program: the planes' 256 colours (zarcade_sys.c) */
+	if (m == AR_MODE_FULL_COLOR) {
+		int keep = ar__s.colours_want;
+		if (ar__s.chunky_ok && ar__s.modal) ar__s.colours_want = 256;
+		ar__choose_planes(host_planes());
+		ar__s.colours_want = keep;
+	}
+	if ((m == AR_MODE_FULL_CHUNKY) != (ar__s.mode == AR_MODE_FULL_CHUNKY))
+		memset(ar_host_chunky, 0, sizeof(ar_host_chunky));
+	ar__s.mode = m;
+}
+
+void ar__top_changed(void) {
+	if (ar__s.mode != AR_MODE_FULL_COLOR && ar__s.mode != AR_MODE_FULL_CHUNKY) return;
+	if (full_mode() == ar__s.mode) return;
+	clear_fb();
+	set_full_mode();
+	ar__pal_all_dirty();
+	ar__invalidate();
+	ar__s.targets_stale = true;
+	mode_event();
+}
+
 /* As zarcade_sys.c: the game hears of every mode change. */
 static void mode_event(void) {
 	ar_event_t e;
@@ -258,8 +300,11 @@ bool ar_set_fullscreen(bool on) {
 	if (on == (ar__s.mode != AR_MODE_WINDOW)) return true;
 	clear_fb();
 	if (on) ar__s.wcolor = false;   /* game mode clears COLWIN */
-	if (on) ar__s.mode = ar__s.want_color ? AR_MODE_FULL_COLOR : AR_MODE_FULL_MONO;
-	else ar__s.mode = AR_MODE_WINDOW;
+	if (on) set_full_mode();
+	else {
+		if (ar__s.mode == AR_MODE_FULL_CHUNKY) memset(ar_host_chunky, 0, sizeof(ar_host_chunky));
+		ar__s.mode = AR_MODE_WINDOW;
+	}
 	ar__choose_planes(host_planes());
 	ar__pal_all_dirty();
 	ar__invalidate();
@@ -272,7 +317,8 @@ void ar_set_color(bool on) {
 	ar__s.want_color = on;
 	if (ar__s.mode == AR_MODE_WINDOW) return;
 	clear_fb();
-	ar__s.mode = on ? AR_MODE_FULL_COLOR : AR_MODE_FULL_MONO;
+	set_full_mode();
+	ar__pal_all_dirty();
 	ar__invalidate();
 	ar__s.targets_stale = true;	mode_event();
 }
@@ -280,6 +326,7 @@ void ar_set_color(bool on) {
 int ar_set_colours(int n) {
 	ar__s.colours_want = n >= 256 ? 256 : n >= 64 ? 64 : 16;
 	ar__choose_planes(host_planes());
+	if (ar__s.mode == AR_MODE_FULL_CHUNKY) return 256;
 	if (ar__s.mode == AR_MODE_FULL_COLOR) {
 		clear_fb();
 		ar__invalidate();
@@ -298,8 +345,10 @@ static void add_vis(int x0, int y0, int x1, int y1) {
 
 void arh_targets(void) {
 	ar__s.targets_stale = false;
-	ar__s.can_draw = true;
 	ar__s.nvis = 0;
+	/* chunky: the program's picture, nothing of the runtime's on it */
+	ar__s.can_draw = ar__s.mode != AR_MODE_FULL_CHUNKY;
+	if (!ar__s.can_draw) { ar__s.vis_whole = false; return; }
 	if (ar__s.mode != AR_MODE_WINDOW) {
 		ar__s.ox = ar__s.oy = 0;
 		add_vis(0, 0, AR_W, AR_H);
@@ -374,7 +423,12 @@ void ar_host_snapshot(const char *name) {
 	for (y = 0; y < AR_H; y++)
 		for (x = 0; x < AR_W; x++) {
 			int r, g, b;
-			if (ar__s.mode == AR_MODE_FULL_COLOR) {
+			if (ar__s.mode == AR_MODE_FULL_CHUNKY) {
+				uint16_t c = ar__s.pal[ar_host_chunky[y][x]];
+				r = ((c >> 8) & 15) * 17;
+				g = ((c >> 4) & 15) * 17;
+				b = (c & 15) * 17;
+			} else if (ar__s.mode == AR_MODE_FULL_COLOR) {
 				int vx = (x + ar__s.view_dx + 640) % 640;
 				int vy = (y + ar__s.view_dy + 480) % 480;
 				int k, idx = 0;

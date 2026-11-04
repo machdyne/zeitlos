@@ -80,6 +80,9 @@ uint32_t ar_host_verified(void);
 /* A picture now (<dir>/<name>.ppm), and the hook a script may define to
  * take pictures when something happens: called after every frame. */
 void ar_host_snapshot(const char *name);
+/* chunky game mode on the "board" (false by default), and its picture */
+extern bool ar_host_chunky_avail;
+extern uint8_t ar_host_chunky[240][320];
 void ar_host_hook(uint32_t frame);
 uint32_t ar_host_verify_bad(void);
 #endif

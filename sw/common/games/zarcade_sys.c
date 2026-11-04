@@ -250,6 +250,15 @@ void arh_targets(void) {
 
 	ar__s.targets_stale = false;
 
+	/* chunky: the program's own picture, which nothing here draws on */
+	if (ar__s.mode == AR_MODE_FULL_CHUNKY) {
+		ar__s.ox = ar__s.oy = 0;
+		ar__s.nvis = 0;
+		ar__s.vis_whole = false;
+		ar__s.can_draw = false;
+		return;
+	}
+
 	if (ar__s.mode != AR_MODE_WINDOW) {
 		ar__s.ox = 0;
 		ar__s.oy = 0;
@@ -328,9 +337,52 @@ static void clear_framebuffer(void) {
 	z_fb_hw_fill_rect(0, 0, Z_SCREEN_W, Z_SCREEN_H, 0);
 }
 
+/* All of VRAM (both sheets: chunky's four segments a line), to zero:
+ * going into chunky, so the planes' picture is not read as bytes, and
+ * out of it, so its bytes are not read as planes -- the second sheet is
+ * the desktop's accent bits when it is in colour (docs/color.md). */
+/* zgl's chunky driver, where the program links it (a weak reference):
+ * waits until a triangle engine has written the last of its frames */
+extern void zglc_finish(void) __attribute__((weak));
+
+static void chunky_clear(void) {
+	volatile uint32_t *d = Z_CHUNKY_VRAM;
+	uint32_t i;
+	/* an engine still drawing would write over the clear */
+	if (zglc_finish) zglc_finish();
+	z_fb_hw_sync();
+	for (i = 0; i < 4u * Z_CHUNKY_H * Z_CHUNKY_SEG_WORDS; i += 4) {
+		d[i] = 0; d[i + 1] = 0; d[i + 2] = 0; d[i + 3] = 0;
+	}
+}
+
+static bool chunky_wanted(void) {
+	return ar__s.chunky_ok && ar__s.want_color && !ar__s.modal &&
+		z_color_chunky_available();
+}
+
 static void apply_color(void) {
+	if (chunky_wanted()) {
+		if (ar__s.mode != AR_MODE_FULL_CHUNKY) {
+			chunky_clear();
+			z_color_set_chunky(true);
+		}
+		ar__s.mode = AR_MODE_FULL_CHUNKY;
+		ar__s.view_dx = ar__s.view_dy = 0;
+		ar__pal_all_dirty();
+		return;
+	}
+	if (ar__s.mode == AR_MODE_FULL_CHUNKY) {
+		z_color_set_chunky(false);
+		chunky_clear();
+	}
 	if (ar__s.want_color && z_color_available()) {
-		int n = ar__choose_planes(z_color_planes_max());
+		/* a box over a chunky program: the planes' 256 colours, so its
+		 * indices (and the box's, ar_colours() 256) mean what they did */
+		int keep = ar__s.colours_want, n;
+		if (ar__s.chunky_ok && ar__s.modal) ar__s.colours_want = 256;
+		n = ar__choose_planes(z_color_planes_max());
+		ar__s.colours_want = keep;
 		z_color_begin(n == 8 ? &z_color_256 : n == 6 ? &z_color_64 : &z_color_16);
 		ar__s.mode = AR_MODE_FULL_COLOR;
 		ar__pal_all_dirty();
@@ -340,8 +392,21 @@ static void apply_color(void) {
 	}
 }
 
+/* A box on top over chunky: the planes' 256 colours while it is up */
+void ar__top_changed(void) {
+	bool want = chunky_wanted();
+	if (ar__s.mode == AR_MODE_WINDOW || ar__s.mode == AR_MODE_FULL_MONO) return;
+	if (want == (ar__s.mode == AR_MODE_FULL_CHUNKY)) return;
+	apply_color();
+	if (ar__s.mode != AR_MODE_FULL_CHUNKY) clear_framebuffer();
+	ar__invalidate();
+	ar__s.targets_stale = true;
+	mode_event();
+}
+
 int ar_set_colours(int n) {
 	ar__s.colours_want = n >= 256 ? 256 : n >= 64 ? 64 : 16;
+	if (ar__s.mode == AR_MODE_FULL_CHUNKY) return 256;
 	if (ar__s.mode == AR_MODE_FULL_COLOR) {
 		apply_color();
 		ar__invalidate();
@@ -414,7 +479,9 @@ bool ar_set_fullscreen(bool on) {
 	} else {
 		/* Releases wm's grab as well as the register; colour goes off
 		 * with game mode, in hardware. wm repaints the desktop on the
-		 * release and sends this window a REDRAW. */
+		 * release and sends this window a REDRAW. Chunky's bytes are
+		 * cleared first, while the screen is still ours. */
+		if (ar__s.mode == AR_MODE_FULL_CHUNKY) chunky_clear();
 		z_game_set_enabled(false, false);
 		ar__s.mode = AR_MODE_WINDOW;
 		ar__s.view_dx = ar__s.view_dy = 0;
@@ -862,8 +929,9 @@ uint32_t ar_frame(void) {
 
 	/* Straight after the boundary: palette first (it changes every
 	 * pixel at once), then the viewport, then the drawing. */
-	if (ar__s.mode == AR_MODE_FULL_COLOR || ar__s.wcolor) {
-		int n = 1 << (ar__s.wcolor ? ar__s.wl : ar__s.planes);
+	if (ar__s.mode == AR_MODE_FULL_COLOR || ar__s.mode == AR_MODE_FULL_CHUNKY || ar__s.wcolor) {
+		int n = ar__s.mode == AR_MODE_FULL_CHUNKY ? 256 :
+			1 << (ar__s.wcolor ? ar__s.wl : ar__s.planes);
 		for (i = 0; i < n; i++)
 			if (ar__s.pal_dirty[i >> 5] & (1u << (i & 31))) {
 				if (ar__s.wcolor) {
@@ -884,7 +952,11 @@ uint32_t ar_frame(void) {
 			}
 	}
 
-	if (ar__s.mode != AR_MODE_WINDOW) {
+	/* chunky's view stays at 0, 0 (zsoc.h): no shake there */
+	if (ar__s.mode == AR_MODE_FULL_CHUNKY) {
+		ar__shake_step();
+		ar__s.view_dx = ar__s.view_dy = 0;
+	} else if (ar__s.mode != AR_MODE_WINDOW) {
 		int vx, vy;
 		ar__shake_step();
 		vx = (ar__s.view_dx + 640) % 640;

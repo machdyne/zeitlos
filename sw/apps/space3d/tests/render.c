@@ -10,7 +10,9 @@
  *
  * The window in black and white, steering and firing; covered and
  * uncovered; its colour window (the nebula, sixteen colours), F10 off
- * and on; full screen in colour and in mono; the help (F1).
+ * and on; full screen in colour and in mono; the help (F1); then the
+ * solid look (V) in the window, full screen in colour and in mono, and
+ * back to the wireframe.
  */
 
 #undef main
@@ -60,7 +62,19 @@ static const ar_host_step_t script[] = {
 	SHOT(160, "13_after_help"),
 	WCOLOR(162, 0),
 	SHOT(170, "14_focus_elsewhere"),
-	END(180)
+	T(172, 'v'),
+	SHOT(180, "15_solid_window"),
+	MODE(182, ARH_FULL_COLOR),
+	DOWN(184, ARH_K_RIGHT), UP(200, ARH_K_RIGHT), T(202, ' '),
+	SHOT(210, "16_solid_full_colour"),
+	SHOT(420, "17_solid_later"),
+	SHOT(490, "18_solid_rock"),
+	MODE(502, ARH_FULL_MONO),
+	SHOT(520, "19_solid_full_mono"),
+	MODE(522, ARH_FULL_COLOR),
+	T(524, 'v'),
+	SHOT(532, "20_wireframe_again"),
+	END(536)
 };
 
 int main(int argc, char **argv) {
@@ -69,5 +83,5 @@ int main(int argc, char **argv) {
 	ar_host_run(script, dir);
 	game_main();
 	printf("render_space3d: %d pictures\n", ar_host_shots());
-	return ar_host_shots() == 14 ? 0 : 1;
+	return ar_host_shots() == 20 ? 0 : 1;
 }

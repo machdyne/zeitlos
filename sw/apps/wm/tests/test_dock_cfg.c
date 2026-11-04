@@ -771,7 +771,7 @@ static void test_shipped(const char *cfg_path, const char *zic_path) {
 	CHECK_EQ(dk.views[0].count, 2);			// web irc
 	CHECK_EQ(dk.views[1].count, 3);			// play track midi
 	CHECK_EQ(dk.views[2].count, 7);			// backup info keyboard hex basic mmod pix
-	CHECK_EQ(dk.views[3].count, 11);			// the games, and planedemo
+	CHECK_EQ(dk.views[3].count, 13);			// the games, gldemo, planedemo
 	CHECK_EQ(dk.views[4].count, 3);			// colwin, and @rest: settings view
 	{
 		uint8_t keep[DK_ITEMS_MAX];
@@ -779,10 +779,10 @@ static void test_shipped(const char *cfg_path, const char *zic_path) {
 		n = dk_keep(it, keep, &dk);
 		CHECK_EQ(dk.nmain, 17);			// More apps has something: kept
 		CHECK_EQ(dk.nviews, 5);
-		CHECK_EQ(n, 17 + 2 + 3 + 7 + 11 + 3);
+		CHECK_EQ(n, 17 + 2 + 3 + 7 + 13 + 3);
 		int apps = 0;
 		for (int i = 0; i < n; i++) if (it[i].view < 0) apps++;
-		CHECK_EQ(apps, 38);
+		CHECK_EQ(apps, 40);
 	}
 	CHECK(strcmp(c.groups[dk.views[0].group].name, "Network") == 0);
 	CHECK(strcmp(c.groups[dk.views[1].group].name, "Sound") == 0);
@@ -799,7 +799,7 @@ static void test_shipped(const char *cfg_path, const char *zic_path) {
 		CHECK_EQ(dk.nmain, 12);
 		int apps = 0;
 		for (int i = 0; i < n; i++) if (it[i].view < 0) apps++;
-		CHECK_EQ(apps, 38);
+		CHECK_EQ(apps, 40);
 	}
 
 	// Every app the file names has an icon, and every group its own.

@@ -96,7 +96,8 @@ static int plane_count(void) {
 
 /* Drawing in colour: full screen, or in the window wm gave colour. */
 static bool colour_now(void) {
-	return ar__s.mode == AR_MODE_FULL_COLOR || ar__s.wcolor;
+	return ar__s.mode == AR_MODE_FULL_COLOR || ar__s.mode == AR_MODE_FULL_CHUNKY ||
+		ar__s.wcolor;
 }
 
 /* Plane k's framebuffer offset from plane 0: z_color_16's quadrants,
@@ -178,8 +179,13 @@ void ar_mono_map(const uint8_t *to16) {
 }
 
 int ar_colours(void) {
+	if (ar__s.mode == AR_MODE_FULL_CHUNKY) return 256;
 	return 1 << (ar__s.wcolor ? ar__s.wl : ar__s.planes);
 }
+
+/* kept outside ar__s, which ar_init() clears: asked before it or after */
+static bool chunky_asked;
+void ar_chunky(bool on) { chunky_asked = ar__s.chunky_ok = on; }
 
 /* Clip a logical rectangle to the current clip. Returns false if empty;
  * sx and sy are moved by the same amount as the rectangle's origin. */
@@ -966,6 +972,7 @@ void ar_top(const ar_top_t *t) {
 		ar_dirty(top.area.x, top.area.y, top.area.w, top.area.h);
 	}
 	ar__s.modal = top_on;
+	ar__top_changed();
 }
 
 bool ar_top_on(void) { return top_on; }
@@ -1802,6 +1809,7 @@ void ar__core_init(const ar_desc_t *d) {
 	ar__s.d = d;
 	ar__s.mode = AR_MODE_WINDOW;
 	ar__s.want_color = !d->prefer_mono;
+	ar__s.chunky_ok = chunky_asked;
 	for (i = 0; i < 256; i++) ar__s.pal[i] = d->palette[i & 15] & 0xfff;
 	ar__pal_all_dirty();
 	ar__s.colours_want = 16;
@@ -1820,6 +1828,16 @@ void ar_text_input(bool on) { ar__s.text_input = on; }
 ar_mode_t ar_mode(void) { return ar__s.mode; }
 bool ar_fullscreen(void) { return ar__s.mode != AR_MODE_WINDOW; }
 bool ar_color(void) { return colour_now(); }
+
+bool ar_window_target(int *ox, int *oy, ar_rect_t *vis) {
+	if (ar__s.targets_stale) arh_targets();
+	if (ar__s.mode != AR_MODE_WINDOW || colour_now() || !ar__s.can_draw || ar__s.nvis != 1)
+		return false;
+	*ox = ar__s.ox;
+	*oy = ar__s.oy;
+	*vis = ar__s.vis[0];
+	return true;
+}
 
 void ar__wcolor(bool on, int extra, int rows1) {
 	bool was = ar__s.wcolor;

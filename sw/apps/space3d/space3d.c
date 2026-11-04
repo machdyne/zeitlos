@@ -6,11 +6,29 @@
  * reaches the cockpit ends the run. Occasional UFOs turn up among the
  * rocks and weave from side to side.
  *
- * Everything is drawn with the GPU line rasterizer (rtl/gpu/gpu_raster.v)
- * through the arcade runtime's ar_plane_line() (sw/common/games/zarcade.h,
- * docs/arcade.md), so the whole game is a wireframe. The runtime keeps
- * the window, full screen, colour and the colour window; this file
- * keeps its lines.
+ * Everything is drawn through zgl, the GL 1.0-style API
+ * (sw/common/zgl, docs/zgl.md), in one of two looks, V switching:
+ *
+ *   WIREFRAME  ZGL_LINES: GL_LINES and GL_POINTS, clipped and projected
+ *              by zgl and drawn by the GPU line rasterizer
+ *              (rtl/gpu/gpu_raster.v), erasing only what moved. The
+ *              classic look, and the fast one.
+ *   SOLID      ZGL_FRAMES: the rocks and UFOs as lit, flat-shaded
+ *              solids, hidden surfaces removed by the depth test, the
+ *              stars, shots and HUD as lines; each frame drawn whole in
+ *              software (zgl_frames.c).
+ *
+ * Which look is the machine's: in the window, the wireframe (V the
+ * solid one, in software). In game mode (F11) in colour, on a board
+ * with chunky game mode, the frames go to chunky VRAM (the arcade
+ * runtime's AR_MODE_FULL_CHUNKY, zgl's ZGL_CHUNKY), solid, a 256-colour
+ * palette, drawn by T2 where the bitstream has it (docs/zgl_t2.md), else
+ * by the triangle engine or in software; V there is the wireframe on
+ * the same frames.
+ *
+ * Both go through the arcade runtime (sw/common/games/zarcade.h,
+ * docs/arcade.md), which keeps the window, full screen, colour and the
+ * colour window.
  *
  *   > run wm
  *   > run space3d
@@ -31,42 +49,26 @@
  * x=+400 is 400 units to the right of wherever the player currently
  * is, with no bookkeeping.
  *
- * NO FLOATING POINT, AND NO 64-BIT EITHER. sw/apps/gpu3d uses a
- * 12-bit fixed-point type whose multiply goes through int64
- * (__muldi3), which is fine for one spinning cube and less fine for a
- * few hundred vertices a frame. Here, world coordinates are plain
- * int32 in "world units" and the projection is a single shift and
- * divide -- see project_x()/project_y(). Only the trig table is
- * fractional (1.0 == 4096), and it's only ever applied to model-space
- * vertices, which are int8. Every intermediate below is bounded well
- * inside int32; the specific bounds are argued at each site.
+ * NO FLOATING POINT. World coordinates are plain int32 in "world
+ * units", handed to zgl as glVertex3i(); zgl keeps them as 24.8 and its
+ * matrices as 16.16, multiplying in 64 bits (a mul and a mulh on
+ * RV32IM, no library call). The game's own trig table (1.0 == 4096) is
+ * for its own motion; a model's rotation is glRotatex().
  *
- * WHY THE APP CLIPS ITS OWN LINES. z_fb_hw_line() (zgfx.c) *clamps*
- * out-of-range coordinates to the screen rather than clipping them.
- * That's the right call there -- it exists to stop a bad coordinate
- * hanging the rasterizer's state machine, since gpu_x0/gpu_y0 are
- * 10-bit registers and the framebuffer is only 640x480. But clamping
- * moves an endpoint without preserving the line's slope, so a rock
- * passing just off the left edge would have its edges snap onto the
- * window border at visibly wrong angles instead of sliding cleanly
- * out of view. A 3D scene has lines going off-window constantly, so
- * this file does proper Cohen-Sutherland clipping (emit_line()) plus
- * a near-plane clip in view space (emit_edge()) before submitting
- * anything. Everything handed to ar_plane_line() is already inside
- * the picture, so the library's clamp and the hardware's own
- * clip registers both end up as redundant backstops -- which is what
- * you want them to be.
+ * PROJECTION AND CLIPPING ARE zgl's. view_3d() sets a frustum that is
+ * exactly the old projection (x * PROJ_SCALE / z from the centre) and
+ * mirrors z (GL looks down -Z). zgl clips in clip space -- the near
+ * plane first, so a segment through the camera never folds onto the
+ * far side of the screen -- and then to the picture, so a rock sliding
+ * off an edge keeps its slope. The HUD is drawn in picture
+ * coordinates through an orthographic projection (view_2d()).
  *
- * DOUBLE-BUFFERED DISPLAY LIST, NOT A DOUBLE-BUFFERED SCREEN. There
- * is one framebuffer and no page flipping, so the usual trick applies:
- * keep the list of lines drawn last frame, redraw them in colour 0 to
- * erase, then draw this frame's list in colour 1. Clearing the whole
- * content area with the blitter each frame would be simpler, but it
- * blanks every pixel in the window for the duration of a full redraw
- * rather than just the thin lines that actually changed, which reads
- * as a much heavier flicker. Overlapping lines do lose a shared pixel
- * when one of them is erased; on a wireframe this is invisible in
- * motion and it is what sw/apps/gpu3d does too.
+ * A DISPLAY LIST, NOT A SECOND SCREEN. There is one framebuffer and no
+ * page flipping, so zgl_frame() keeps last frame's lines and erases
+ * only those that changed, then draws this frame's. Clearing the whole
+ * picture each frame would blank every pixel for the length of a
+ * redraw, a much heavier flicker. Overlapping lines can lose a shared
+ * pixel when one is erased; the draw pass that follows repairs it.
  * ---------------------------------------------------------------------
  */
 
@@ -77,6 +79,7 @@
 
 #include "../../common/zfont.h"
 #include "../../common/games/zarcade.h"
+#include "../../common/zgl/zgl.h"
 
 // ===========================================================================
 // CONFIGURATION
@@ -97,17 +100,11 @@
 #define PROJ_SHIFT       8
 #define PROJ_SCALE       (1 << PROJ_SHIFT)
 
-// Near plane. Edges crossing it are clipped to it (emit_edge());
-// anything entirely behind it is dropped. Also the divisor floor for
-// the projection, which is why it can't be small: the projected extent
-// of a vertex scales as 1/z, and NEAR_Z together with WORLD_LIMIT is
-// what bounds every intermediate in the clipper below to int32.
+// Near plane: zgl's frustum's (view_3d()). Edges crossing it are
+// clipped to it; anything entirely behind it is dropped.
 #define NEAR_Z           64
 
-// Entities beyond this distance from the flight axis are culled. Along
-// with NEAR_Z this caps a projected coordinate at roughly
-// (WORLD_LIMIT + object radius) << PROJ_SHIFT / NEAR_Z, about 10k
-// pixels from the window centre -- see emit_line()'s overflow guard.
+// Entities beyond this distance from the flight axis are culled.
 #define WORLD_LIMIT      2200
 
 #define SPAWN_Z          3000    // where rocks and UFOs appear
@@ -244,6 +241,7 @@
 #define FLASH_FRAMES     8
 
 #define MAX_LINES        512
+#define MAX_PRIMS        640     // the solid look's triangles and lines, a frame
 
 // ===========================================================================
 // TRIG
@@ -378,6 +376,38 @@ static const model_t models[] = {
 
 #define MODEL_UFO  3
 
+// The solid look's faces: each a convex polygon of the model's
+// vertices. A rock is its octahedron's eight triangles, from the poles
+// to the equator ring (2, 4, 3, 5 round); the UFO is its rim, its dome
+// and six sides. Which way round each is listed does not matter: the
+// faces are turned to face outwards, and their normals found, once at
+// start (build_faces()).
+#define FACE_MAX   6
+typedef struct {
+	uint8_t n;
+	uint8_t v[FACE_MAX];
+} face_t;
+
+static const face_t rock_faces[] = {
+	{3,{0,2,4}}, {3,{0,4,3}}, {3,{0,3,5}}, {3,{0,5,2}},
+	{3,{1,4,2}}, {3,{1,3,4}}, {3,{1,5,3}}, {3,{1,2,5}}
+};
+static const face_t ufo_faces[] = {
+	{6,{0,1,2,3,4,5}}, {6,{6,7,8,9,10,11}},
+	{4,{0,1,7,6}}, {4,{1,2,8,7}}, {4,{2,3,9,8}},
+	{4,{3,4,10,9}}, {4,{4,5,11,10}}, {4,{5,0,6,11}}
+};
+
+#define NFACES_MAX 8
+typedef struct {
+	face_t  f[NFACES_MAX];     // turned to face outwards
+	int32_t n[NFACES_MAX][3];  // their normals, any length
+	uint8_t nf;
+} solid_t;
+
+static solid_t solids[4];
+static GLuint solid_list;      // the four models' faces, display lists
+
 // Directions an explosion throws its shards along. Deliberately not
 // axis-aligned and not symmetric -- a burst on the axes looks like a
 // snowflake, which is not the effect wanted.
@@ -455,19 +485,14 @@ static int      fire_cooldown;
 static int      spawn_timer;
 static int      muzzle_side;
 static int      flash_timer;   // >0 while the crash strobe is running
+static bool     solid;         // the solid look (V), not the wireframe
+static bool     chunky;        // the frames go to chunky VRAM (game mode)
+static bool     solid_window;  // V's choice in the window: the wireframe at first
+static bool     wire_chunky;   // V's choice in chunky: solid at first
 
-// Display list. Two buffers: one holding what's currently on screen
-// (to be erased) and one being built for this frame.
-typedef struct {
-	int16_t x0, y0, x1, y1;
-	uint8_t c;      // colour (game-mode colour); 1 for everything otherwise
-} line_t;
-
-static line_t line_buf[2][MAX_LINES];
-static int    line_count[2];
-static int    cur_buf;
-
-static bool overflowed;   // display list filled up; reported once
+// The display list -- what is on the glass, erased where it moved --
+// is zgl's (sw/common/zgl/zgl_lines.c, docs/zgl.md).
+static uint32_t reported_overflows;
 
 // ===========================================================================
 // COLOUR (docs/space3d_app.md, docs/color.md)
@@ -523,6 +548,19 @@ static bool overflowed;   // display list filled up; reported once
 #define TWINKLE_Z 2600
 
 static uint8_t cur_color = C_WHITE;     // colour of lines being emitted
+
+// The solid look's palette: the line colours, then a ramp for the rocks
+// to be lit along (docs/zgl.md, "Whole frames"). sol_map[] is where
+// each line colour is in it.
+static uint8_t sol_map[8] = { 0, 1, 2, 3, 4, 5, 6, 7 };
+static uint8_t sol_rock0, sol_rock1;    // the rocks' ramp, dark to light
+static uint8_t sol_ufo0, sol_ufo1;      // the UFO's, green to white
+
+// the colour of what is drawn next (zgl's colour index)
+static void set_color(uint8_t c) {
+	cur_color = c;
+	glIndexi((solid || chunky) ? sol_map[c & 7] : c);
+}
 static uint32_t col_anim;               // frames, for the palette
 
 static const uint16_t twinkle[6] = { 0x334, 0x557, 0x99b, 0xccf, 0x99b, 0x557 };
@@ -534,7 +572,7 @@ static const uint16_t nebula[8]  = { 0x315, 0x316, 0x326, 0x226,
 // needs plane 3: sixteen colours or more (the colour window on six
 // planes has eight, and no nebula).
 static bool colour(void) { return ar_color(); }
-static bool nebula_on(void) { return ar_color() && ar_colours() >= 16; }
+static bool nebula_on(void) { return !solid && ar_color() && ar_colours() >= 16; }
 
 static void col_palette(void) {
 	uint16_t p[16];
@@ -551,6 +589,60 @@ static void col_palette(void) {
 	p[8] = flash_timer > 0 ? ((flash_timer & 1) ? 0x934 : 0x512)
 	                       : nebula[(col_anim / 40) % 8];
 	for (k = 1; k < 8; k++) p[8 + k] = p[k];
+	ar_pal_load(p, 16);
+}
+
+// The solid look, each frame. Sixteen colours or more: the seven line
+// colours where they always are and the rocks' ramp in 8-15, eight
+// entries from dark to light. Eight colours (the colour window on six
+// planes): white, green, the stars, fire and a ramp of three. In
+// black and white only the brightness counts (zgl dithers it): the
+// lines white, so a one-pixel line is not dotted.
+static void sol_palette(void) {
+	static const uint16_t ramp8[8] = { 0x210, 0x420, 0x631, 0x841, 0xa52, 0xc73, 0xe95, 0xfc8 };
+	static const uint16_t ramp3[3] = { 0x420, 0x951, 0xfb6 };
+	uint16_t p[16];
+	int k, n = ar_color() ? ar_colours() : 16;
+	memset(p, 0, sizeof(p));
+	p[C_WHITE]   = 0xfff;
+	p[C_HUD]     = 0x2e6;
+	p[C_TWINK_A] = twinkle[(col_anim / 5) % 6];
+	p[C_TWINK_B] = twinkle[(col_anim / 5 + 3) % 6];
+	p[C_GALAXY]  = ((col_anim >> 5) & 1) ? 0xb6f : 0xc7f;
+	p[C_FIRE]    = fire[col_anim % 6];
+	sol_ufo0 = sol_map[C_HUD]; sol_ufo1 = sol_map[C_WHITE];
+	if (chunky) {
+		// 256 colours: the line colours, then 32 steps for the rocks
+		// (16-47) and 16 for the UFO (48-63), so that the light falls
+		// off smoothly rather than in eight bands
+		static uint16_t big[64];
+		for (k = 0; k < 8; k++) sol_map[k] = (uint8_t)k;
+		memcpy(big, p, 8 * sizeof(p[0]));
+		for (k = 0; k < 32; k++) {
+			int t = k * 7 * 256 / 31, i = t >> 8;
+			big[16 + k] = i >= 7 ? ramp8[7] : ar_rgb_mix(ramp8[i], ramp8[i + 1], t & 255);
+		}
+		for (k = 0; k < 16; k++) big[48 + k] = ar_rgb_mix(0x1a4, 0xfff, k * 256 / 15);
+		sol_rock0 = 16; sol_rock1 = 47;
+		sol_ufo0 = 48; sol_ufo1 = 63;
+		ar_pal_load(big, 64);
+		return;
+	}
+	if (n >= 16) {
+		for (k = 0; k < 8; k++) { sol_map[k] = (uint8_t)k; p[8 + k] = ramp8[k]; }
+		sol_rock0 = 8; sol_rock1 = 15;
+	} else {
+		static const uint8_t m8[8] = { 0, 1, 2, 3, 3, 4, 3, 4 };
+		uint16_t q[8];
+		memcpy(sol_map, m8, sizeof(m8));
+		q[0] = 0; q[1] = 0xfff; q[2] = 0x2e6; q[3] = p[C_TWINK_A]; q[4] = p[C_FIRE];
+		for (k = 0; k < 3; k++) q[5 + k] = ramp3[k];
+		memcpy(p, q, sizeof(q));
+		memset(&p[8], 0, sizeof(p) - sizeof(q));
+		sol_rock0 = 5; sol_rock1 = 7;
+	}
+	if (!ar_color())
+		for (k = 1; k < 8; k++) p[sol_map[k]] = 0xfff;
 	ar_pal_load(p, 16);
 }
 
@@ -620,152 +712,46 @@ static void paint(void *user, const ar_rect_t *r) {
 // GEOMETRY: CLIP AND EMIT
 // ===========================================================================
 
-#define OUT_LEFT    1
-#define OUT_RIGHT   2
-#define OUT_TOP     4
-#define OUT_BOTTOM  8
-
-static int outcode(int32_t x, int32_t y) {
-	int c = 0;
-	if (x < clip_x0) c |= OUT_LEFT;
-	else if (x > clip_x1) c |= OUT_RIGHT;
-	if (y < clip_y0) c |= OUT_TOP;
-	else if (y > clip_y1) c |= OUT_BOTTOM;
-	return c;
-}
-
-static void push_line(int32_t x0, int32_t y0, int32_t x1, int32_t y1) {
-	int n = line_count[cur_buf];
-	if (n >= MAX_LINES) { overflowed = true; return; }
-	line_buf[cur_buf][n].x0 = (int16_t)x0;
-	line_buf[cur_buf][n].y0 = (int16_t)y0;
-	line_buf[cur_buf][n].x1 = (int16_t)x1;
-	line_buf[cur_buf][n].y1 = (int16_t)y1;
-	line_buf[cur_buf][n].c = cur_color;
-	line_count[cur_buf] = n + 1;
-}
-
-// Bound on any coordinate reaching the clipper, in pixels from the
-// window centre. Derived, not guessed: a vertex is culled past
-// WORLD_LIMIT (2200) plus at most a body radius (~240), and the near
-// plane floors the divisor at NEAR_Z (64), so the projection can't
-// exceed 2440 * 256 / 64, about 9800. 16000 leaves generous headroom
-// while keeping the worst-case product inside the clipper --
-// (x1-x0) * (edge-y0), about 32000 * 16240 -- at 5.2e8, comfortably
-// within int32. Anything past this is a bug elsewhere rather than a
-// legitimately huge line, so dropping it is both safe and the right
-// diagnosis-preserving behaviour: one missing line, not silent
-// arithmetic wraparound producing a plausible-looking wrong one.
-#define COORD_BOUND  16000
-
-static void emit_line(int32_t x0, int32_t y0, int32_t x1, int32_t y1) {
-
-	int oc0, oc1, iter;
-
-	if (x0 < view_cx - COORD_BOUND || x0 > view_cx + COORD_BOUND ||
-	    x1 < view_cx - COORD_BOUND || x1 > view_cx + COORD_BOUND ||
-	    y0 < view_cy - COORD_BOUND || y0 > view_cy + COORD_BOUND ||
-	    y1 < view_cy - COORD_BOUND || y1 > view_cy + COORD_BOUND)
-		return;
-
-	oc0 = outcode(x0, y0);
-	oc1 = outcode(x1, y1);
-
-	// Cohen-Sutherland. Each iteration either accepts, rejects, or
-	// moves one endpoint onto a boundary, and an endpoint can be
-	// moved at most twice before it's inside, so four iterations is
-	// sufficient; six is the same argument with slack.
-	for (iter = 0; iter < 6; iter++) {
-
-		if (!(oc0 | oc1)) {           // both inside
-			push_line(x0, y0, x1, y1);
-			return;
-		}
-
-		if (oc0 & oc1) return;        // both outside the same edge
-
-		{
-			int oc = oc0 ? oc0 : oc1;
-			int32_t x, y;
-
-			// The divisors below can't be zero: a horizontal line
-			// (y1 == y0) that is off the top or bottom has that bit
-			// set in *both* outcodes and was rejected above, and
-			// likewise for a vertical line against left/right.
-			if (oc & OUT_BOTTOM) {
-				x = x0 + (x1 - x0) * (clip_y1 - y0) / (y1 - y0);
-				y = clip_y1;
-			} else if (oc & OUT_TOP) {
-				x = x0 + (x1 - x0) * (clip_y0 - y0) / (y1 - y0);
-				y = clip_y0;
-			} else if (oc & OUT_RIGHT) {
-				y = y0 + (y1 - y0) * (clip_x1 - x0) / (x1 - x0);
-				x = clip_x1;
-			} else {
-				y = y0 + (y1 - y0) * (clip_x0 - x0) / (x1 - x0);
-				x = clip_x0;
-			}
-
-			if (oc == oc0) {
-				x0 = x; y0 = y; oc0 = outcode(x0, y0);
-			} else {
-				x1 = x; y1 = y; oc1 = outcode(x1, y1);
-			}
-		}
-	}
-}
-
-// Project a view-space point. Callers must have ensured z >= NEAR_Z.
+// zgl does the projection and all the clipping: the near plane in clip
+// space (a segment through the camera never folds onto the far side of
+// the screen) and then the picture, so a rock sliding off an edge keeps
+// its slope.
 //
-// Multiplication by PROJ_SCALE rather than a left shift by
-// PROJ_SHIFT, even though the two are the same instruction on RISC-V:
-// x is routinely negative here (anything left of, or below, the
-// centre of the screen) and left-shifting a negative signed value is
-// undefined behaviour in C, not merely implementation-defined. GCC
-// happens to emit slli and get the intended answer, but this is
-// exactly the kind of construct that a future -O level, a different
-// toolchain version, or UBSan turns into a surprise -- and the
-// multiply costs nothing, since the compiler folds a constant power
-// of two back into the shift anyway.
-static inline int32_t project_x(int32_t x, int32_t z) {
-	return view_cx + ((x * PROJ_SCALE) / z);
+// The camera sits at the origin looking down +Z (the coordinate notes
+// at the top). GL looks down -Z, so the view is mirrored in z once, at
+// the bottom of the modelview stack; everything above it is the game's
+// own space. The frustum gives exactly the old projection: at depth z a
+// point x lands PROJ_SCALE * x / z pixels from the centre, so the
+// half-width at the near plane is NEAR_Z * (AR_W / 2) / PROJ_SCALE.
+// The far plane is beyond everything (galaxies are 40,000 out).
+
+#define FAR_Z  100000
+
+static void view_3d(void) {
+	glMatrixMode(GL_PROJECTION);
+	glLoadIdentity();
+	zglFrustumi(-NEAR_Z * (AR_W / 2) / PROJ_SCALE, NEAR_Z * (AR_W / 2) / PROJ_SCALE,
+	            -NEAR_Z * (AR_H / 2) / PROJ_SCALE, NEAR_Z * (AR_H / 2) / PROJ_SCALE,
+	            NEAR_Z, FAR_Z);
+	glMatrixMode(GL_MODELVIEW);
+	glLoadIdentity();
+	glScalex(65536, 65536, -65536);
 }
 
-static inline int32_t project_y(int32_t y, int32_t z) {
-	// screen Y grows downward, world Y grows up
-	return view_cy - ((y * PROJ_SCALE) / z);
+// Picture coordinates for the HUD: (0,0) the top-left, y down
+static void view_2d(void) {
+	glMatrixMode(GL_PROJECTION);
+	glLoadIdentity();
+	glOrthox(0, AR_W << 16, AR_H << 16, 0, -65536, 65536);
+	glMatrixMode(GL_MODELVIEW);
+	glLoadIdentity();
 }
 
-// A 3D segment: near-plane clip, project, then hand to the 2D clipper.
-static void emit_edge(int32_t ax, int32_t ay, int32_t az,
-                      int32_t bx, int32_t by, int32_t bz) {
-
-	if (az < NEAR_Z && bz < NEAR_Z) return;
-
-	// Interpolating onto the near plane must happen here, in view
-	// space, and not be left to the 2D clipper: a vertex behind the
-	// camera projects to a *mirrored* position on the far side of the
-	// screen, so a segment straddling the camera would be drawn as a
-	// line to entirely the wrong place rather than one running off
-	// the edge. The products are small -- the two endpoints belong to
-	// one object, so (bx - ax) is at most a body diameter, and the
-	// numerator is bounded by NEAR_Z - DESPAWN_Z.
-	if (az < NEAR_Z) {
-		int32_t num = NEAR_Z - az;
-		int32_t den = bz - az;
-		ax += (bx - ax) * num / den;
-		ay += (by - ay) * num / den;
-		az = NEAR_Z;
-	} else if (bz < NEAR_Z) {
-		int32_t num = NEAR_Z - bz;
-		int32_t den = az - bz;
-		bx += (ax - bx) * num / den;
-		by += (ay - by) * num / den;
-		bz = NEAR_Z;
-	}
-
-	emit_line(project_x(ax, az), project_y(ay, az),
-	          project_x(bx, bz), project_y(by, bz));
+// A 3D segment in view space (inside glBegin(GL_LINES))
+static void edge3(int32_t ax, int32_t ay, int32_t az,
+                  int32_t bx, int32_t by, int32_t bz) {
+	glVertex3i(ax, ay, az);
+	glVertex3i(bx, by, bz);
 }
 
 // ===========================================================================
@@ -780,38 +766,29 @@ static void emit_edge(int32_t ax, int32_t ay, int32_t az,
 static void draw_model(const model_t *m, int32_t ox, int32_t oy, int32_t oz,
                        int32_t radius, uint8_t rx, uint8_t ry) {
 
-	int32_t px[12], py[12], pz[12];
-	int32_t cy = COS(ry), sy = SIN(ry);
-	int32_t cx = COS(rx), sx = SIN(rx);
 	int i;
 
-	for (i = 0; i < m->nverts; i++) {
-
-		int32_t vx = m->verts[i * 3 + 0];
-		int32_t vy = m->verts[i * 3 + 1];
-		int32_t vz = m->verts[i * 3 + 2];
-		int32_t tx, ty, tz, tz2;
-
-		// yaw: at most 127 * 4096 * 2, nowhere near int32's limit
-		tx  = (vx * cy + vz * sy) >> 12;
-		tz  = (vz * cy - vx * sy) >> 12;
-
-		// pitch
-		ty  = (vy * cx - tz * sx) >> 12;
-		tz2 = (vy * sx + tz * cx) >> 12;
-
-		// scale to the instance's radius (128 == one radius) and
-		// translate into view space
-		px[i] = ox + ((tx * radius) >> 7);
-		py[i] = oy + ((ty * radius) >> 7);
-		pz[i] = oz + ((tz2 * radius) >> 7);
+	// a byte angle is 360/256 degrees: 92,160 in 16.16
+	glPushMatrix();
+	zglTranslatei(ox, oy, oz);
+	glRotatex((int32_t)rx * 92160, 65536, 0, 0);     // pitch
+	glRotatex((int32_t)ry * 92160, 0, 65536, 0);     // yaw
+	glScalex(radius * 512, radius * 512, radius * 512);   // 128 == one radius
+	if (solid) {
+		// its faces, made into a display list once (build_faces())
+		glCallList(solid_list + (GLuint)(m - models));
+		glPopMatrix();
+		return;
 	}
-
+	glBegin(GL_LINES);
 	for (i = 0; i < m->nedges; i++) {
-		int a = m->edges[i * 2 + 0];
-		int b = m->edges[i * 2 + 1];
-		emit_edge(px[a], py[a], pz[a], px[b], py[b], pz[b]);
+		const int8_t *a = &m->verts[m->edges[i * 2 + 0] * 3];
+		const int8_t *b = &m->verts[m->edges[i * 2 + 1] * 3];
+		glVertex3i(a[0], a[1], a[2]);
+		glVertex3i(b[0], b[1], b[2]);
 	}
+	glEnd();
+	glPopMatrix();
 }
 
 // ===========================================================================
@@ -855,13 +832,9 @@ static void draw_galaxy(const galaxy_t *g) {
 			int32_t wx = g->x + lx;
 			int32_t wy = g->y + ((ly * ct) >> 12);
 			int32_t wz = g->z + ((ly * st) >> 12);
-			int32_t sx, sy;
 
 			if (wz < NEAR_Z) continue;
-
-			sx = project_x(wx, wz);
-			sy = project_y(wy, wz);
-			emit_line(sx, sy, sx, sy);
+			glVertex3i(wx, wy, wz);
 		}
 	}
 
@@ -879,40 +852,36 @@ static void draw_galaxy(const galaxy_t *g) {
 			int32_t wx = g->x + off[i][0];
 			int32_t wy = g->y + ((off[i][1] * ct) >> 12);
 			int32_t wz = g->z + ((off[i][1] * st) >> 12);
-			int32_t sx, sy;
 			if (wz < NEAR_Z) continue;
-			sx = project_x(wx, wz);
-			sy = project_y(wy, wz);
-			emit_line(sx, sy, sx, sy);
+			glVertex3i(wx, wy, wz);
 		}
 	}
 }
 
 static void build_galaxies(void) {
 	int i;
-	cur_color = C_GALAXY;
+	set_color(C_GALAXY);
+	glBegin(GL_POINTS);
 	for (i = 0; i < MAX_GALAXIES; i++)
 		if (galaxies[i].active) draw_galaxy(&galaxies[i]);
+	glEnd();
 }
 
 static void build_stars(void) {
 
 	int i;
 
+	glBegin(GL_LINES);
 	for (i = 0; i < NUM_STARS; i++) {
 
 		int32_t z = star_z[i];
-		int32_t sx, sy;
 
 		if (z < NEAR_Z) continue;
 
-		sx = project_x(star_x[i], z);
-		sy = project_y(star_y[i], z);
-
 		// far stars twinkle, in two groups out of phase; near ones
 		// are steady white
-		cur_color = z > TWINKLE_Z ? ((i & 1) ? C_TWINK_B : C_TWINK_A)
-		                          : C_WHITE;
+		set_color(z > TWINKLE_Z ? ((i & 1) ? C_TWINK_B : C_TWINK_A)
+		                        : C_WHITE);
 
 		if (z < STREAK_Z) {
 			// Streak back toward where the star was a moment ago,
@@ -920,15 +889,16 @@ static void build_stars(void) {
 			// field appears to radiate outward from the centre. The
 			// tail shortens naturally with distance because it's a
 			// fixed length in world space, not screen space.
-			int32_t z2 = z + STREAK_LEN;
-			emit_line(sx, sy, project_x(star_x[i], z2),
-			          project_y(star_y[i], z2));
+			edge3(star_x[i], star_y[i], z,
+			      star_x[i], star_y[i], z + STREAK_LEN);
 		} else {
-			// a single pixel: the rasterizer draws a zero-length
-			// line as exactly one
-			emit_line(sx, sy, sx, sy);
+			// a single pixel: a line from the point to itself, which
+			// the rasterizer draws as exactly one (inside GL_LINES,
+			// rather than a glBegin(GL_POINTS) of its own per star)
+			edge3(star_x[i], star_y[i], z, star_x[i], star_y[i], z);
 		}
 	}
+	glEnd();
 }
 
 static void build_objects(void) {
@@ -938,7 +908,17 @@ static void build_objects(void) {
 	for (i = 0; i < MAX_OBJECTS; i++) {
 		object_t *o = &objects[i];
 		if (!o->active) continue;
-		cur_color = o->is_ufo ? C_HUD : C_ROCK;
+		set_color(o->is_ufo ? C_HUD : C_ROCK);
+		if (solid) {
+			// lit along a ramp: the rocks' dark to light; the UFO's from
+			// its green to white, which zgl dithers between (in black
+			// and white both are white, so it takes the rocks' ramp)
+			GLint mat[3];
+			bool green = o->is_ufo && ar_color();
+			mat[0] = green ? sol_ufo0 : sol_rock0;
+			mat[1] = mat[2] = green ? sol_ufo1 : sol_rock1;
+			glMaterialiv(GL_FRONT_AND_BACK, GL_COLOR_INDEXES, mat);
+		}
 		draw_model(&models[o->model], o->x, o->y, o->z,
 		           o->radius, o->rx, o->ry);
 	}
@@ -948,8 +928,8 @@ static void build_missiles(void) {
 
 	int i;
 
-	cur_color = C_FIRE;
-
+	set_color(C_FIRE);
+	glBegin(GL_LINES);
 	for (i = 0; i < MAX_MISSILES; i++) {
 
 		missile_t *m = &missiles[i];
@@ -976,24 +956,25 @@ static void build_missiles(void) {
 		// and the aiming mark stopped being findable among them. Two
 		// extra lines per missile buys a silhouette that can't be
 		// mistaken for the sight.
-		emit_edge(m->x, m->y + MISSILE_BOLT, m->z,
-		          m->x + MISSILE_BOLT, m->y, m->z);
-		emit_edge(m->x + MISSILE_BOLT, m->y, m->z,
-		          m->x, m->y - MISSILE_BOLT, m->z);
-		emit_edge(m->x, m->y - MISSILE_BOLT, m->z,
-		          m->x - MISSILE_BOLT, m->y, m->z);
-		emit_edge(m->x - MISSILE_BOLT, m->y, m->z,
-		          m->x, m->y + MISSILE_BOLT, m->z);
-		emit_edge(m->x, m->y, m->z, m->x, m->y, m->z - MISSILE_TAIL);
+		edge3(m->x, m->y + MISSILE_BOLT, m->z,
+		      m->x + MISSILE_BOLT, m->y, m->z);
+		edge3(m->x + MISSILE_BOLT, m->y, m->z,
+		      m->x, m->y - MISSILE_BOLT, m->z);
+		edge3(m->x, m->y - MISSILE_BOLT, m->z,
+		      m->x - MISSILE_BOLT, m->y, m->z);
+		edge3(m->x - MISSILE_BOLT, m->y, m->z,
+		      m->x, m->y + MISSILE_BOLT, m->z);
+		edge3(m->x, m->y, m->z, m->x, m->y, m->z - MISSILE_TAIL);
 	}
+	glEnd();
 }
 
 static void build_explosions(void) {
 
 	int i, j;
 
-	cur_color = C_FIRE;
-
+	set_color(C_FIRE);
+	glBegin(GL_LINES);
 	for (i = 0; i < MAX_EXPLOSIONS; i++) {
 
 		explosion_t *e = &explosions[i];
@@ -1011,125 +992,69 @@ static void build_explosions(void) {
 			int32_t dy = expl_dirs[j][1];
 			int32_t dz = expl_dirs[j][2];
 			int32_t inner = len / 2;
-			emit_edge(e->x + dx * inner / 128,
-			          e->y + dy * inner / 128,
-			          e->z + dz * inner / 128,
-			          e->x + dx * len / 128,
-			          e->y + dy * len / 128,
-			          e->z + dz * len / 128);
+			edge3(e->x + dx * inner / 128,
+			      e->y + dy * inner / 128,
+			      e->z + dz * inner / 128,
+			      e->x + dx * len / 128,
+			      e->y + dy * len / 128,
+			      e->z + dz * len / 128);
 		}
 	}
+	glEnd();
 }
 
-// Cockpit furniture, in screen space -- no projection, no clipping
-// needed beyond what emit_line() does anyway. Redrawn every frame
+// Cockpit furniture, in picture coordinates (view_2d()). Redrawn every frame
 // along with everything else: it could be drawn once and left alone,
 // but then a rock passing over it would punch permanent holes in it
 // when its own lines are erased next frame.
+static void hud_line(int32_t x0, int32_t y0, int32_t x1, int32_t y1) {
+	glVertex2i(x0, y0);
+	glVertex2i(x1, y1);
+}
+
 static void build_hud(void) {
 
 	int32_t cx = view_cx, cy = view_cy;
 	int32_t bx0 = clip_x0, by0 = clip_y0, bx1 = clip_x1, by1 = clip_y1;
 	const int32_t B = 14;   // corner bracket arm length
 
-	cur_color = C_HUD;
+	view_2d();
+	set_color(C_HUD);
+	glBegin(GL_LINES);
 
 	// centre reticle: four ticks with a gap in the middle, so the
 	// thing you're aiming at stays visible
-	emit_line(cx - 9, cy, cx - 3, cy);
-	emit_line(cx + 3, cy, cx + 9, cy);
-	emit_line(cx, cy - 9, cx, cy - 3);
-	emit_line(cx, cy + 3, cx, cy + 9);
+	hud_line(cx - 9, cy, cx - 3, cy);
+	hud_line(cx + 3, cy, cx + 9, cy);
+	hud_line(cx, cy - 9, cx, cy - 3);
+	hud_line(cx, cy + 3, cx, cy + 9);
 
 	// corner brackets
-	emit_line(bx0, by0, bx0 + B, by0);
-	emit_line(bx0, by0, bx0, by0 + B);
-	emit_line(bx1, by0, bx1 - B, by0);
-	emit_line(bx1, by0, bx1, by0 + B);
-	emit_line(bx0, by1, bx0 + B, by1);
-	emit_line(bx0, by1, bx0, by1 - B);
-	emit_line(bx1, by1, bx1 - B, by1);
-	emit_line(bx1, by1, bx1, by1 - B);
+	hud_line(bx0, by0, bx0 + B, by0);
+	hud_line(bx0, by0, bx0, by0 + B);
+	hud_line(bx1, by0, bx1 - B, by0);
+	hud_line(bx1, by0, bx1, by0 + B);
+	hud_line(bx0, by1, bx0 + B, by1);
+	hud_line(bx0, by1, bx0, by1 - B);
+	hud_line(bx1, by1, bx1 - B, by1);
+	hud_line(bx1, by1, bx1, by1 - B);
+	glEnd();
+	view_3d();
 }
 
 // ===========================================================================
 // FRAME OUTPUT
 // ===========================================================================
 
-// Reconcile what's on screen with what should be.
-//
-// The first version of this erased the entire previous frame and then
-// drew the entire new one -- two hardware line operations per line,
-// every frame, whether or not anything had changed. On a single-
-// buffered framebuffer that is not merely wasteful, it is visible:
-// every line on screen spends the gap between its erase and its
-// redraw switched off, so the whole scene strobes at the frame rate.
-// The static furniture suffered worst, because the corner brackets
-// and the reticle never move and so were being blanked and restored
-// hundreds of times for no reason at all.
-//
-// This version erases only lines that actually differ from last
-// frame, and draws all of them. Two things follow, and the second is
-// the one that matters:
-//
-//  - Anything that didn't move is never switched off. The corners and
-//    reticle now sit there continuously. Drawing a lit pixel again is
-//    a no-op on 1bpp, so redrawing them costs nothing visually.
-//
-//  - There is no hole-punching problem. Erasing a line that crosses a
-//    kept line does blank the shared pixel -- but the draw pass runs
-//    afterwards and covers every line, so the crossing is repaired
-//    within the same frame. That is precisely why the draw pass stays
-//    unconditional instead of also being skipped for unchanged lines,
-//    which would be faster still and would leave permanent scars
-//    across the HUD.
-//
-// Comparison is index-wise, which is a heuristic about efficiency and
-// never about correctness: every old line is either matched or
-// erased, and every new line is drawn, whatever the indices happen to
-// line up as. Emitting in a stable order (HUD first, it is always the
-// same twelve lines) just makes the heuristic hit more often.
-// One line drawn, or erased (color 0). In colour, planes 0-2: an erase
-// clears all three, a draw sets only the planes its colour has bits in
-// (see the colour block); plane 3, the nebula, is never touched. In
-// black and white, plane 0. Everything handed to this is already
-// inside the picture (emit_line()'s clipping); the runtime cuts it to
-// what of the window shows.
-static void draw_line(int32_t x0, int32_t y0, int32_t x1, int32_t y1,
-	int color) {
-	int k, n = colour() ? 3 : 1;
-	for (k = 0; k < n; k++) {
-		if (color && n > 1 && !((color >> k) & 1)) continue;
-		ar_plane_line(k, x0, y0, x1, y1, color ? 1 : 0);
-	}
-}
-
-static void blit_frame(void) {
-
-	int prev = cur_buf ^ 1;
-	int n_new = line_count[cur_buf];
-	int n_old = line_count[prev];
-	int i;
-
-	for (i = 0; i < n_old; i++) {
-		line_t *o = &line_buf[prev][i];
-		if (i < n_new) {
-			line_t *n = &line_buf[cur_buf][i];
-			if (o->x0 == n->x0 && o->y0 == n->y0 &&
-			    o->x1 == n->x1 && o->y1 == n->y1 && o->c == n->c)
-				continue;          // unchanged: leave it lit
-		}
-		draw_line(o->x0, o->y0, o->x1, o->y1, 0);
-	}
-
-	for (i = 0; i < n_new; i++) {
-		line_t *l = &line_buf[cur_buf][i];
-		draw_line(l->x0, l->y0, l->x1, l->y1, l->c);
-	}
-
-	line_count[prev] = 0;
-	cur_buf = prev;
-}
+// zgl_frame() (sw/common/zgl/zgl_lines.c) reconciles what is on the
+// glass with this frame's lines: it erases only the lines that differ
+// from last frame's and draws all of them. Anything that did not move
+// is never switched off, so the corners and the reticle sit there
+// continuously, and the draw pass repairs any pixel an erase shared
+// with a kept line. Lines go into planes 0-2 (zgl_desc_t.index_bits),
+// so the nebula in plane 3 is never touched: in colour an erase clears
+// three planes and a draw sets those its colour has bits in; in black
+// and white, plane 0.
 
 static void draw_hud_text(void) {
 
@@ -1148,12 +1073,54 @@ static void draw_hud_text(void) {
 	ar_text(4, 2, buf, C_WHITE, &z_font_5x8, 1);
 }
 
+// The score in chunky, where the runtime draws no text: seven-segment
+// figures of lines, in picture coordinates, where draw_hud_text() puts
+// its text. Segments a-g, as on a clock: bit 0 the top, then clockwise,
+// bit 6 the middle.
+static void hud_glyph(int32_t x, int32_t y, uint8_t seg) {
+	const int32_t w = 4, h = 8, m = 4;
+	if (seg & 0x01) hud_line(x, y, x + w, y);
+	if (seg & 0x02) hud_line(x + w, y, x + w, y + m);
+	if (seg & 0x04) hud_line(x + w, y + m, x + w, y + h);
+	if (seg & 0x08) hud_line(x, y + h, x + w, y + h);
+	if (seg & 0x10) hud_line(x, y + m, x, y + h);
+	if (seg & 0x20) hud_line(x, y, x, y + m);
+	if (seg & 0x40) hud_line(x, y + m, x + w, y + m);
+}
+
+static void build_score(void) {
+	static const uint8_t digit[10] = {
+		0x3f, 0x06, 0x5b, 0x4f, 0x66, 0x6d, 0x7d, 0x07, 0x7f, 0x6f
+	};
+	static const uint8_t word[5] = { 0x6d, 0x39, 0x3f, 0x50, 0x79 };  // S C O r E
+	char buf[12];
+	int k, x = 4;
+	snprintf(buf, sizeof(buf), "%03lu", (unsigned long)score);
+	view_2d();
+	set_color(C_WHITE);
+	glBegin(GL_LINES);
+	for (k = 0; k < 5; k++, x += 7) hud_glyph(x, 2, word[k]);
+	x += 5;
+	for (k = 0; buf[k]; k++, x += 7) hud_glyph(x, 2, digit[buf[k] - '0']);
+	glEnd();
+	view_3d();
+}
+
 // defined further down, next to the rest of the setup code; the crash
 // strobe needs it a good deal earlier
 static void reset_game(void);
 
 static void fill_content(int color) {
 	int k;
+	if (chunky) {                   // a frame of nothing but its clear
+		glClearIndex(color ? sol_map[color & 7] : 0);
+		zgl_frame();
+		return;
+	}
+	if (solid) {                    // every plane: there is no nebula
+		ar_fill(0, 0, AR_W, AR_H, color ? sol_map[color & 7] : 0);
+		return;
+	}
 	// In colour, planes 0-2 only: plane 3 is the nebula, which nothing
 	// clears (see the colour block above).
 	if (colour()) {
@@ -1179,8 +1146,7 @@ static void run_flash_frame(void) {
 	// which is indistinguishable from the game simply stopping.
 	fill_content((flash_timer & 1) ? 0 : C_FIRE);
 
-	line_count[0] = 0;
-	line_count[1] = 0;
+	zgl_invalidate();
 
 	if (--flash_timer <= 0) {
 		fill_content(0);
@@ -1190,14 +1156,42 @@ static void run_flash_frame(void) {
 
 static void render(void) {
 
-	line_count[cur_buf] = 0;
+	if (solid || chunky) {
+		// A whole frame (the solid look, or anything in chunky), drawn
+		// from nothing, so the order is the painter's -- the sky first,
+		// untested; then what has depth, tested against each other; the
+		// HUD last, on top. The wireframe in chunky: the same, unlit.
+		col_anim++;
+		if (solid) sol_palette(); else col_palette();
+		glClearIndex(0);
+		build_galaxies();
+		build_stars();
+		if (solid) {
+			glEnable(GL_DEPTH_TEST);
+			glEnable(GL_LIGHTING);      // the solids only: lines keep their colour
+		}
+		build_objects();
+		glDisable(GL_LIGHTING);
+		build_missiles();
+		build_explosions();
+		glDisable(GL_DEPTH_TEST);
+		build_hud();
+		if (chunky) {
+			build_score();
+			zgl_frame();
+			return;
+		}
+		zgl_frame();
+				draw_hud_text();
+		return;
+	}
 
 	if (colour()) {
 		col_anim++;
 		col_palette();
 	}
 
-	// Ordered most-static first, so blit_frame()'s index-wise
+	// Ordered most-static first, so zgl_frame()'s index-wise
 	// comparison lines up as often as possible. The HUD leads because
 	// it is always exactly the same twelve lines at the same indices
 	// and therefore always matches; galaxies follow because they are
@@ -1210,7 +1204,7 @@ static void render(void) {
 	build_missiles();
 	build_explosions();
 
-	blit_frame();
+	zgl_frame();
 
 	// Text goes on last so it wins over any line crossing it; its box
 	// is cleared first, which also erases the previous frame's text.
@@ -1713,10 +1707,11 @@ static void reset_game(void) {
 // ===========================================================================
 
 static const char help_text[] =
-	"A wireframe space game: fly through an asteroid field and "
+	"A space game: fly through an asteroid field and "
 	"shoot rocks and UFOs.\n\n"
 	"Arrows\tSteer\n"
 	"Space\tFire\n"
+	"V\tWireframe or solid\n"
 	"F11\tFull screen, or back to the window\n"
 	"C\tFull screen: colour on or off\n"
 	"F10\tColour on or off, in the window too\n"
@@ -1743,6 +1738,137 @@ static void step(void) {
 	else update();
 }
 
+// Turn each face outwards (its normal away from the model's middle, the
+// average of its vertices) and find the normal: Newell's method, which
+// for a flat polygon is its plane's normal.
+static void build_faces(void) {
+	int mi, i, k;
+	for (mi = 0; mi < 4; mi++) {
+		const model_t *m = &models[mi];
+		solid_t *so = &solids[mi];
+		const face_t *src = mi == MODEL_UFO ? ufo_faces : rock_faces;
+		int nf = mi == MODEL_UFO ? (int)(sizeof(ufo_faces) / sizeof(ufo_faces[0]))
+		                         : (int)(sizeof(rock_faces) / sizeof(rock_faces[0]));
+		int32_t cx = 0, cy = 0, cz = 0;
+		for (k = 0; k < m->nverts; k++) {
+			cx += m->verts[k * 3]; cy += m->verts[k * 3 + 1]; cz += m->verts[k * 3 + 2];
+		}
+		cx /= m->nverts; cy /= m->nverts; cz /= m->nverts;
+		so->nf = (uint8_t)nf;
+		for (i = 0; i < nf; i++) {
+			face_t f = src[i];
+			int32_t nx = 0, ny = 0, nz = 0, fx = 0, fy = 0, fz = 0;
+			for (k = 0; k < f.n; k++) {
+				const int8_t *a = &m->verts[f.v[k] * 3];
+				const int8_t *b = &m->verts[f.v[(k + 1) % f.n] * 3];
+				nx += (a[1] - b[1]) * (a[2] + b[2]);
+				ny += (a[2] - b[2]) * (a[0] + b[0]);
+				nz += (a[0] - b[0]) * (a[1] + b[1]);
+				fx += a[0]; fy += a[1]; fz += a[2];
+			}
+			fx = fx / f.n - cx; fy = fy / f.n - cy; fz = fz / f.n - cz;
+			if (nx * fx + ny * fy + nz * fz < 0) {
+				for (k = 0; k < f.n / 2; k++) {
+					uint8_t t = f.v[k];
+					f.v[k] = f.v[f.n - 1 - k];
+					f.v[f.n - 1 - k] = t;
+				}
+				nx = -nx; ny = -ny; nz = -nz;
+			}
+			so->f[i] = f;
+			so->n[i][0] = nx; so->n[i][1] = ny; so->n[i][2] = nz;
+		}
+	}
+
+	// Each model's faces as a display list (docs/zgl.md, "Display
+	// lists"), lit faces with one normal each (flat shading: the colour
+	// is the last vertex's, GL's provoking vertex). The material is set
+	// outside, per object.
+	solid_list = glGenLists(4);
+	for (mi = 0; mi < 4 && solid_list; mi++) {
+		const model_t *m = &models[mi];
+		const solid_t *so = &solids[mi];
+		glNewList(solid_list + (GLuint)mi, GL_COMPILE);
+		for (i = 0; i < so->nf; i++) {
+			const face_t *f = &so->f[i];
+			glBegin(GL_POLYGON);
+			glNormal3i(so->n[i][0], so->n[i][1], so->n[i][2]);
+			for (k = 0; k < f->n; k++) {
+				const int8_t *v = &m->verts[f->v[k] * 3];
+				glVertex3i(v[0], v[1], v[2]);
+			}
+			glEnd();
+		}
+		glEndList();
+	}
+}
+
+// zgl for the look the mode asks for: in chunky (game mode in colour,
+// where the board has it) ZGL_FRAMES into chunky VRAM, solid unless V
+// said the wireframe; elsewhere ZGL_LINES in planes 0-2 (plane 3 is the
+// nebula's), or ZGL_FRAMES in every plane shown if V said solid. The
+// picture is repainted either way: what the other look left on it is
+// not this one's.
+static bool open_look(void) {
+	bool want_chunky = ar_mode() == AR_MODE_FULL_CHUNKY;
+	bool want_solid = want_chunky ? !wire_chunky : solid_window;
+	zgl_desc_t zd = { ZGL_LINES, 3, MAX_LINES, 0, 0 };
+	if (want_chunky) {
+		zd.output = ZGL_FRAMES;
+		zd.index_bits = 0;
+		zd.max_prims = MAX_PRIMS;
+		zd.flags = ZGL_CHUNKY;
+	} else if (want_solid) {
+		zd.output = ZGL_FRAMES;
+		zd.index_bits = 0;
+		zd.max_prims = MAX_PRIMS;
+	}
+	if (!zgl_open(&zd)) {
+		if (!want_solid && !want_chunky) return false;
+		printf("space3d: no memory for the %s look\n", want_chunky ? "chunky" : "solid");
+		solid_window = wire_chunky = false;
+		if (want_chunky) {
+			// game mode in the planes' colours instead
+			ar_chunky(false);
+			ar_set_color(true);
+		}
+		return open_look();
+	}
+	solid = want_solid;
+	chunky = want_chunky;
+	if (chunky) {
+		static bool told;
+		if (!told)
+			printf("space3d: game mode, chunky: %s\n",
+				zgl_info()->backend == ZGL_BACKEND_T2 ? "T2" :
+				zgl_info()->backend == ZGL_BACKEND_ENGINE ? "the triangle engine" : "software");
+		told = true;
+	}
+	view_3d();
+	if (solid) {
+		// One light, from above and to the left, behind the ship, given
+		// in the game's own space (view_3d()'s mirror is on the stack).
+		// The model's faces are listed facing outwards in the game's
+		// left-handed space, which the mirror turns clockwise for GL.
+		static const GLfixed light[4] = { -30000, 45000, -38000, 0 };
+		static const GLfixed white[4] = { 65536, 65536, 65536, 65536 };
+		glLightxv(GL_LIGHT0, GL_POSITION, light);
+		glLightxv(GL_LIGHT0, GL_DIFFUSE, white);
+		glEnable(GL_LIGHT0);
+		glEnable(GL_NORMALIZE);
+		glEnable(GL_CULL_FACE);
+		glFrontFace(GL_CW);
+		glShadeModel(GL_FLAT);
+		sol_palette();
+	} else {
+		glDisable(GL_CULL_FACE);
+		if (colour()) col_palette();
+	}
+	ar_dirty_all();
+	zgl_invalidate();
+	return true;
+}
+
 int main(void) {
 
 	bool quit = false;
@@ -1752,8 +1878,15 @@ int main(void) {
 	printf("space3d: wireframe space game\n");
 
 	ar_window_colour(true);
+	ar_chunky(true);
 	if (!ar_init(&desc)) {
 		printf("space3d: failed to create window\n");
+		return 1;
+	}
+	build_faces();
+	if (!open_look()) {
+		printf("space3d: no memory for the display list\n");
+		ar_shutdown();
 		return 1;
 	}
 	desc.ink[1] = ar_ink_white;
@@ -1773,7 +1906,18 @@ int main(void) {
 			if (e.type == AR_EV_QUIT) quit = true;
 			// the picture is repainted: last frame's lines are gone
 			// with it, and its erase list would rub out the new one
-			if (e.type == AR_EV_MODE) line_count[cur_buf ^ 1] = 0;
+			// and into or out of chunky, the look follows
+			if (e.type == AR_EV_MODE) {
+				zgl_invalidate();
+				if ((ar_mode() == AR_MODE_FULL_CHUNKY) != chunky && !open_look())
+					quit = true;
+			}
+			// V: the other look
+			if (e.type == AR_EV_KEY && e.pressed && (e.key == 'v' || e.key == 'V')) {
+				if (chunky) wire_chunky = !wire_chunky;
+				else solid_window = !solid_window;
+				if (!open_look()) quit = true;
+			}
 			// Space (or the pad's A) fires, a press at a time
 			if (e.type == AR_EV_BUTTON && e.pressed && e.key == AR_BTN_A &&
 			    !game_over && flash_timer == 0)
@@ -1788,15 +1932,16 @@ int main(void) {
 		}
 		if (stepped && flash_timer == 0) render();
 
-		if (overflowed) {
+		if (zgl_info()->overflows != reported_overflows) {
 			printf("space3d: display list full (%d lines) -- "
 			       "raise MAX_LINES\n", MAX_LINES);
-			overflowed = false;
+			reported_overflows = zgl_info()->overflows;
 		}
 
 		dt = ar_frame();
 	}
 
+	zgl_close();
 	ar_shutdown();
 	return 0;
 }

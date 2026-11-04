@@ -269,6 +269,39 @@ repaint frame for frame. On the host, `AR_HOST_PLANES=4` or `6` makes
 `ar_host.c` a board with fewer planes (8 by default); its framebuffer
 has both sheets.
 
+### Chunky: the program draws the whole screen
+
+A program that draws whole frames itself -- through zgl's `ZGL_CHUNKY`
+([zgl.md](zgl.md)), which the triangle engines draw ([gpu_tri.md](gpu_tri.md),
+[zgl_t2.md](zgl_t2.md)) -- calls `ar_chunky(true)`. Full screen in
+colour is then `AR_MODE_FULL_CHUNKY` on a board with chunky game mode
+([color.md](color.md), "Chunky"): 320x240, a byte a pixel, through the
+256-entry palette. Everything else is as in colour, but the picture is
+the program's:
+
+- the runtime draws nothing there: `paint()`, overlays and every `ar_*`
+  drawing call are dropped (`arh_targets()` says it cannot draw);
+- `ar_pal()` works as in colour, all 256 entries, written at the frame
+  boundary; `ar_colours()` is 256; there is no shake (chunky's view
+  stays at 0, 0);
+- `AR_EV_MODE` says when it begins and ends. C (mono full screen), F11
+  and Esc (the window) leave it; on a board without chunky, or with
+  the program's `ar_chunky(false)`, full screen in colour is the planes'
+  mode as before;
+- a box on top (`ar_top()`: the screen toolkit's help, a question) is
+  drawn over the planes' 256-colour mode instead, which the box knows
+  how to draw on, and chunky comes back when it goes -- an
+  `AR_EV_MODE` each way;
+- VRAM is cleared going in and coming out, so the planes' picture is
+  not read as bytes nor the bytes as planes (the second sheet is the
+  desktop's accent bits when it is in colour).
+
+space3d does this: lines in the window, its solid look on chunky in
+game mode, drawn by T2 where the bitstream has it ([space3d_app.md](space3d_app.md)).
+On the host, `ar_host_chunky_avail = true` makes the board one with
+chunky, and the program's chunky driver writes `ar_host_chunky[][]`
+(space3d's `make render-chunky`).
+
 ### The pointer
 
 wm hides the mouse pointer while a game holds the screen, and -- in the

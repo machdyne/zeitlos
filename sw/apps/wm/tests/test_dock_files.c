@@ -379,7 +379,7 @@ int main(int argc, char **argv) {
 	int misc = find_app("misc");
 	expect(net == 12 && sound == 13 && tools == 14 && games == 15 && misc == 16,
 		"their icons at the end of the row");
-	expect(dock_apps[games].view >= 0 && dock_views[dock_apps[games].view].count == 11, "Games: eleven");
+	expect(dock_apps[games].view >= 0 && dock_views[dock_apps[games].view].count == 13, "Games: thirteen");
 	int apps = 0, all_icons = 1;
 	for (int i = 0; i < dock_app_count; i++) {
 		if (dock_apps[i].view < 0) apps++;
@@ -387,7 +387,7 @@ int main(int argc, char **argv) {
 		// and it is drawn as its name in a box.
 		if (!icon_of(i) && strcmp(dock_apps[i].name, "colwin")) all_icons = 0;
 	}
-	expect(apps == 38, "38 apps: every one the dock places");
+	expect(apps == 40, "40 apps: every one the dock places");
 	expect(all_icons, "every one but colwin, and every group, with its icon");
 	expect(bits_of(dock_next_icon, dock_next_len) && bits_of(dock_back_icon, dock_back_len),
 		"NEXT and BACK");
@@ -407,12 +407,12 @@ int main(int argc, char **argv) {
 	dock_launch(games);			// a group's icon: opens it, starts nothing
 	expect(dock_view == dock_apps[games].view && runs == 0, "the group is shown, nothing run");
 	expect(dock_selected == casino, "the selection on its first app");
-	expect(!dock_paged, "eleven fit, no NEXT");
+	expect(!dock_paged, "thirteen fit, no NEXT");
 	expect((int)windows[dock_idx].w == dock_frame_len, "the frame did not move");
 	draw_all();
 	expect(slot_shows(0, bits_of(dock_back_icon, dock_back_len)), "BACK in slot 0");
 	expect(shows_item(1, casino), "casino in slot 1");
-	expect(slot_ink(12) == 0, "and nothing after the eleventh");
+	expect(slot_ink(14) == 0, "and nothing after the thirteenth");
 	dump("2-games");
 	dock_handle_key(0x1b, true);		// Esc
 	expect(dock_view == -1 && dock_selected == games, "Esc: back to the row, on the Games icon");
@@ -421,7 +421,7 @@ int main(int argc, char **argv) {
 	dock_handle_key(Z_KEY_LEFT, true);
 	expect(dock_selected == DOCK_SEL_BACK, "Left from the first app: BACK");
 	dock_handle_key(Z_KEY_LEFT, true);
-	expect(dock_selected == casino + 10, "Left from BACK: around to the last");
+	expect(dock_selected == casino + 12, "Left from BACK: around to the last");
 	dock_handle_key(Z_KEY_RIGHT, true);
 	expect(dock_selected == DOCK_SEL_BACK, "Right from the last: BACK");
 	dock_handle_key(CH_CR, true);
@@ -440,7 +440,7 @@ int main(int argc, char **argv) {
 		dock_click(slot_x(0) + 10, cy);
 		expect(dock_view == -1, "a click on BACK closes it");
 		dock_click(slot_x(15) + 10, cy);
-		dock_click(slot_x(12) + 10, cy);
+		dock_click(slot_x(14) + 10, cy);
 		expect(dock_view >= 0 && runs == 0, "a click past the group's last app does nothing");
 		dock_close_view(true);
 	}
@@ -503,10 +503,10 @@ int main(int argc, char **argv) {
 
 	// -- 7. a card with only some of the apps --
 	printf("7. a card without the games\n");
-	static const char *const nogames[] = { "casino", "chess", "kidgames", "chip8", "space3d",
-		"snake", "blocks", "bricks", "gpu3d", "mausrun", "planedemo" };
+	static const char *const nogames[] = { "casino", "chess", "mahjong", "kidgames", "chip8",
+		"space3d", "snake", "blocks", "bricks", "gpu3d", "gldemo", "mausrun", "planedemo" };
 	nmissing = 0;
-	for (int i = 0; i < 11; i++)		// all but chess and kidgames
+	for (int i = 0; i < 13; i++)		// all but chess and kidgames
 		if (strcmp(nogames[i], "chess") && strcmp(nogames[i], "kidgames")) missing[nmissing++] = nogames[i];
 	dock_build();
 	expect(find_app("games") >= 0 && dock_views[dock_apps[find_app("games")].view].count == 2,
@@ -523,7 +523,7 @@ int main(int argc, char **argv) {
 	expect(find_app("ask") == 3, "then @rest, in name order");
 	expect(find_app("poker") < 0 && find_app("@next") < 0 && find_app("@games") < 0,
 		"@rest leaves out the hidden ones and the dock's own");
-	expect(dock_app_count == 3 + 37 - 2 && dock_nviews == 0, "@rest: every other app with an icon");
+	expect(dock_app_count == 3 + 39 - 2 && dock_nviews == 0, "@rest: every other app with an icon");
 	set_cfg(flat);
 	dock_build();
 	expect(dock_app_count == 33 && dock_paged && dock_pages == 3, "the old flat dock (it names its 33): three pages");
@@ -585,13 +585,13 @@ int main(int argc, char **argv) {
 	dock_build();
 	expect(strcmp(dock_apps[0].name, "term") == 0 && strcmp(dock_apps[1].name, "files") == 0 &&
 		strcmp(dock_apps[2].name, "text") == 0, "the core apps first");
-	expect(dock_app_count == 37, "then every app with an icon");
+	expect(dock_app_count == 39, "then every app with an icon");
 
 	// -- 13. a wm.cfg with no row wide, and one with problems --
 	printf("13. no row wide; problems\n");
 	set_cfg("row tall term\n");
 	dock_build();
-	expect(dock_app_count == 37, "no row wide: every app with an icon");
+	expect(dock_app_count == 39, "no row wide: every app with an icon");
 	set_cfg("side left\nfrobnicate\nrow wide term @nope\n");
 	dock_build();
 	expect(dock_app_count == 1 && dock_cfg_errors == 1, "the good lines apply");
@@ -723,7 +723,7 @@ int main(int argc, char **argv) {
 	{
 		char buf[128] = "";
 		dock_speech_app(buf, sizeof(buf), find_app("games"));
-		expect(strcmp(buf, "Games, 11 apps, 3 running") == 0, "said: Games, 11 apps, 3 running");
+		expect(strcmp(buf, "Games, 13 apps, 3 running") == 0, "said: Games, 13 apps, 3 running");
 	}
 
 	printf("20. a maximized window hides the dock: it comes back on the row\n");
@@ -750,7 +750,8 @@ int main(int argc, char **argv) {
 		wm_window_t *w = &windows[dock_idx];
 		expect(dock_side == DK_SIDE_LEFT && DOCK_SLOTS_TALL == 12, "the left side; 12 fit down it");
 		expect(dock_nmain == 12 && !dock_paged, "row tall: 5 apps and 7 groups, no NEXT");
-		expect(dock_frame_len == z_dock_len_for(12, WM_SCREEN_H - 2 * DOCK_MARGIN, 12),
+		/* the longest view: Games, 13 and its BACK */
+		expect(dock_frame_len == z_dock_len_for(12, WM_SCREEN_H - 2 * DOCK_MARGIN, 14),
 			"the frame: the column's height");
 		expect((int)w->x == DOCK_MARGIN && (int)w->y == DOCK_MARGIN &&
 			(int)w->w == DOCK_THICK && (int)w->h == dock_frame_len, "moved: top left, 41 wide");

@@ -47,6 +47,10 @@ RTL_PICO = \
 	rtl/audio_spdif.v \
 	rtl/spim.v \
 	rtl/gpu/gpu_raster.v \
+	rtl/gpu/gpu_tri.v \
+	rtl/gpu/gpu_t2.v \
+	rtl/gpu/zeitlos32g.v \
+	rtl/gpu/gpu_vmux.v \
 	rtl/gpu/gpu_blit.v \
 	rtl/gpu/gpu_video.v \
 	rtl/gpu/gpu_ddmi.v \
@@ -579,7 +583,7 @@ SOC_INPUTS_HASH  = $(OUTDIR)/soc.inputs.sha256
 # zeitlos_gatemate_pico (`soc` is a no-op).
 ifeq ($(FAMILY), ecp5)
 SOC_CONSTRAINT = boards/$(LPF)
-SOC_SYNTH_INPUTS = $(RTL_PICO) rtl/boards.vh rtl/csrs.vh $(SOC_CONSTRAINT)
+SOC_SYNTH_INPUTS = $(RTL_PICO) rtl/boards.vh rtl/csrs.vh $(SOC_CONSTRAINT) sw/t2fw/t2fw.hex
 endif
 # xc7: the same, plus the BIOS, which is part of the netlist on this
 # family (rtl/mem/bram.v reads it at synthesis).

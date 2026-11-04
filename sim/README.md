@@ -44,9 +44,12 @@ $ ./zeitlos-sim sw/apps/bounce/bounce.bin
   MTU address translation is skipped entirely, since we only ever run
   one app with no OS/scheduler underneath it.
 
-- **VRAM / framebuffer**: 512x384x1bpp at `0x20000000`, matching the
-  `GPU_PIXEL_DOUBLE` board configuration (all four current boards in
-  `rtl/boards.vh` use this mode).
+- **VRAM / framebuffer**: at `0x20000000`. The picture shown is
+  512x384x1bpp, from the old `GPU_PIXEL_DOUBLE` configuration. The
+  memory behind it is 19,200 words, two 640x480 sheets, as an
+  eight-plane board has. That is enough for chunky game mode's layout
+  (docs/color.md, "Chunky"): a program can write a chunky picture and
+  read it back. `make -C sw/common/zgl simtest` does.
 
 - **Line rasterizer** (`0xa0000000`): a direct translation of
   `rtl/gpu/gpu_raster.v`'s Bresenham FSM into a host function --
@@ -234,6 +237,57 @@ Produces:
 Requires SDL2 development headers (`libsdl2-dev` on Debian/Ubuntu) for
 the main tool; `zsim-headless` and `zsim-debug` have no dependencies
 beyond a C11 compiler.
+
+## Profiling
+
+With `ZSIM_PROF=<file>` in the environment, `zsim-headless` counts the
+instructions retired at each address in app RAM and writes them out at
+exit, one `address count` line each. `tools/simprof.py` adds them up
+per function, from the `.dasm` listing the app's build leaves beside its
+`.bin`:
+
+```
+ZSIM_PROF=prof.txt sim/zsim-headless -n 0 sw/common/zgl/tests/bench_frames/framebench.bin
+tools/simprof.py sw/common/zgl/tests/bench_frames/framebench.dasm prof.txt
+```
+
+Inlined functions count in their caller. These are instructions, not
+cycles: a cache miss or a divide costs nothing here -- unless the cycle
+model is on (below), when each address counts its modelled cycles
+instead.
+
+## Cycle model
+
+`ZSIM_COST=ddr3` (or `1`) or `ZSIM_COST=sdram` turns on a rough model
+of what each instruction costs on a board (`sim/cost.c`), for tuning
+code whose cost is in memory rather than in instructions:
+
+- an instruction is 1 cycle, a taken branch or jump 3;
+- the instruction cache (8 KB) and data cache (4 KB) are direct mapped
+  with 16-byte lines, as `rtl/cache_split.v` has them; a miss costs a
+  fill (DDR3 40 cycles, SDRAM 20);
+- stores are write-through into a buffer of two, each taking the memory
+  for 20 cycles (DDR3) or 6 (SDRAM); a store into a full buffer waits;
+- VRAM and registers are uncached.
+
+`rdcycle` then reads the modelled cycles, so a program's own timing
+reads them too, and at exit the simulator prints the misses, stores and
+stalls. The numbers are from Doom's `-membench` on sergei_ml2; the model
+is for comparing two versions of the code, not for predicting a frame
+rate to the percent.
+
+## The triangle engine
+
+With `ZSIM_GTRI=1`, the simulator has the triangle engine
+([docs/gpu_tri.md](../docs/gpu_tri.md)) at `0x7C00_0000`: its ID reads
+"ZTRI", so `ZGL_CHUNKY` frames go to it. Its commands are carried out by
+the engine's C model (`sw/common/zgl/tests/t_model.c`, the one the RTL
+bench is held to), a strip at a time, into chunky VRAM. It is never busy
+and its FIFO never fills, so with the cycle model on a program's cycles
+are the CPU's own -- what making the commands costs. The black-and-white
+desktop (`MONO`) is not modelled. `make -C sw/common/zgl simtest` runs
+its frames against the software's, and `framebench` times a chunky
+frame on it.
 
 ## Testing without the real toolchain
 

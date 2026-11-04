@@ -1,3 +1,4 @@
+#include "cost.h"
 #include <string.h>
 #include "cpu.h"
 #include "machine.h"
@@ -52,6 +53,8 @@ int cpu_step(cpu_t *cpu, struct machine *m) {
 
 	uint32_t pc = cpu->pc;
 	uint32_t insn = bus_read32(m, pc);
+	int costing = cost_on > 0 || (cost_on < 0 && cost_enabled());
+	if (costing) cost_fetch(pc);
 
 	unsigned opcode = insn & 0x7f;
 	unsigned rd     = (insn >> 7)  & 0x1f;
@@ -122,6 +125,7 @@ int cpu_step(cpu_t *cpu, struct machine *m) {
 	case 0x03: /* loads */
 		{
 			uint32_t addr = a + (uint32_t)imm_i;
+			if (costing) cost_load(addr);
 			switch (funct3) {
 			case 0: rset(cpu, rd, (uint32_t)sext(bus_read8(m, addr), 8)); break;   /* LB  */
 			case 1: rset(cpu, rd, (uint32_t)sext(bus_read16(m, addr), 16)); break; /* LH  */
@@ -136,6 +140,7 @@ int cpu_step(cpu_t *cpu, struct machine *m) {
 	case 0x23: /* stores */
 		{
 			uint32_t addr = a + (uint32_t)imm_s;
+			if (costing) cost_store(addr);
 			switch (funct3) {
 			case 0: bus_write8(m, addr, (uint8_t)b); break;   /* SB */
 			case 1: bus_write16(m, addr, (uint16_t)b); break; /* SH */
@@ -337,10 +342,14 @@ int cpu_step(cpu_t *cpu, struct machine *m) {
 
 			switch (csr) {
 			case 0xc00: /* cycle    */
+				v = costing ? (uint32_t)cost_cycles() : (uint32_t)cpu->insn_count;
+				break;
 			case 0xc02: /* instret  */
 				v = (uint32_t)cpu->insn_count;
 				break;
 			case 0xc80: /* cycleh   */
+				v = costing ? (uint32_t)(cost_cycles() >> 32) : (uint32_t)(cpu->insn_count >> 32);
+				break;
 			case 0xc82: /* instreth */
 				v = (uint32_t)(cpu->insn_count >> 32);
 				break;
@@ -359,6 +368,7 @@ int cpu_step(cpu_t *cpu, struct machine *m) {
 		return -1;
 	}
 
+	if (costing) cost_insn(next_pc != pc + 4);
 	cpu->pc = next_pc;
 	cpu->insn_count++;
 	return 0;

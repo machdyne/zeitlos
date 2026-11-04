@@ -31,6 +31,10 @@
  *                       the four quadrants (docs/color.md, z_color_16);
  *                       64 or 256 (z_color_64, z_color_256) where the
  *                       program asked and the board has the planes
+ *   AR_MODE_FULL_CHUNKY game mode in colour, one byte a pixel, for a
+ *                       program that draws whole frames itself (zgl's
+ *                       ZGL_CHUNKY) and asked with ar_chunky(), on a
+ *                       board with chunky (docs/color.md, "Chunky")
  *
  * In colour an index is a palette entry. In monochrome each index has
  * an INK -- an 8x8 pattern, anchored to the screen -- so the game says
@@ -111,7 +115,8 @@
 typedef enum {
 	AR_MODE_WINDOW = 0,
 	AR_MODE_FULL_MONO,
-	AR_MODE_FULL_COLOR
+	AR_MODE_FULL_COLOR,
+	AR_MODE_FULL_CHUNKY
 } ar_mode_t;
 
 typedef struct {
@@ -382,6 +387,17 @@ int ar_dir_list(const char *path, char *names, int cap, uint8_t *isdir,
  * (repaint instead). */
 void ar_window_colour(bool on);
 
+/* -- the window, for a renderer that writes it itself --
+ *
+ * zgl's triangle engine (docs/gpu_tri.md) writes a black-and-white
+ * window's pixels into the desktop framebuffer itself. True when the
+ * picture is a black-and-white window that can be drawn and exactly one
+ * rectangle of it is visible: *ox, *oy are the screen position of
+ * logical (0,0), *vis the visible rectangle in screen coordinates.
+ * Anything else (colour, full screen, a window covered in part by two
+ * others, a frozen window) is false, and the caller draws as usual. */
+bool ar_window_target(int *ox, int *oy, ar_rect_t *vis);
+
 /* -- more than 16 colours --
  *
  * 16 (the default), 64 or 256: how many colours the program draws in.
@@ -393,6 +409,21 @@ void ar_window_colour(bool on);
 int ar_set_colours(int n);
 /* What colour full screen shows now, or would: 16, 64 or 256. */
 int ar_colours(void);
+
+/* -- chunky: the program draws the whole screen (docs/arcade.md, "Chunky") --
+ *
+ * ar_chunky(true): full screen in colour is AR_MODE_FULL_CHUNKY where
+ * the board has chunky game mode -- 320x240, a byte a pixel, through the
+ * 256-entry palette -- and the program draws every frame itself, into
+ * chunky VRAM (zgl's ZGL_CHUNKY, which the triangle engines draw). The
+ * runtime draws nothing there: paint(), overlays and every ar_* drawing
+ * call are dropped. ar_pal() and the rest of the loop are as in colour;
+ * ar_colours() is 256. AR_EV_MODE says when it begins and ends: C (mono
+ * full screen), F11 and Esc (the window) leave it, and a box on top
+ * (ar_top(), the screen toolkit's help) is drawn over the planes'
+ * 256-colour mode instead, chunky coming back when the box goes. VRAM
+ * is cleared going in and out. */
+void ar_chunky(bool on);
 
 /* In monochrome, index c is drawn in ink[to16[c] & 15] instead of
  * ink[c & 15]: for indices past 15, which ink stands in for each.
