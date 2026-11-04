@@ -114,6 +114,7 @@ typedef struct {
 	bool listing;
 
 	uint32_t gen;            /* changes whenever a cached vertex would */
+	uint32_t lserial;        /* a matrix, a light or an enable changed: zgl_t2.c's light made again */
 	zgl_vcache_t vc[ZGL_VCACHE];
 } zgl_state_t;
 
@@ -199,6 +200,11 @@ void zglc_put(uint32_t w) __attribute__((weak));
 volatile uint32_t *zglc_cmd(void) __attribute__((weak));
 void zglc_strip(int32_t y0, int rows, int32_t cx0, int32_t cx1, const uint8_t *col) __attribute__((weak));
 void zglc_finish(void) __attribute__((weak));
+/* T2's VBASE kept on chunky's picture (z_chunky_phys(): VRAM, or with
+ * `VRAM_SDRAM the picture in main memory, which is allocated when
+ * chunky first comes on and may move with z_chunky_set_pic()): a store
+ * when it has changed, at a frame's start */
+void zglc_picture(void) __attribute__((weak));
 /* the engine is here (and not ZGL_NO_ENGINE): a black-and-white
  * window's frames can be its (zglc_mono() sets it up for one) */
 bool zglc_probe(uint8_t flags) __attribute__((weak));

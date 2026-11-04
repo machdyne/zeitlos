@@ -242,7 +242,8 @@
  *                           above what this bitstream has is stored
  *                           as its maximum (reads back so).
  *               bits 5:4    XP (read-only): the most planes this
- *                           bitstream shows: 0 = 4, 1 = 6, 2 = 8.
+ *                           bitstream shows: 0 = 4, 1 = 6, 2 = 8,
+ *                           3 = 2 (`VRAM_SDRAM: BRAM_PLANES).
  *                           Planes 4..7 are planes 0..3 of the
  *                           second VRAM sheet (rows 480..959;
  *                           docs/color.md, "More than four planes").
@@ -424,6 +425,16 @@
  *             again, with its planes and palette redrawn, afterwards.
  *             The scanout ignores the window in game mode anyway.
  *
+ *  18  CKBASE  `VRAM_SDRAM only (CKBASE_AVAIL): the physical byte
+ *             address in main memory of chunky game mode's picture,
+ *             320 bytes a line, 240 lines, 16-byte aligned (bits 3:0
+ *             are ignored). Whole-word stores only. The fetch
+ *             (rtl/gpu/gpu_ckfetch.v) takes it as it starts reading a
+ *             frame's line 0 -- during line 239 of the frame before --
+ *             so a write takes effect at the next frame: page flips
+ *             with no tearing. Reads back as written; 0 without avail.
+ *             docs/profiles.md, "Lakritz".
+ *
  *             Words 16 and 17 alias CTRL and MAGIC on a bitstream that
  *             decodes four address bits: software reads word 16's
  *             signature before it writes either (CTRL reads back with
@@ -487,6 +498,16 @@ module socctl_wb #(
     // (rtl/boards.vh's `GAME_PLANES, 4 without it). Set by
     // rtl/sysctl.v, which sizes VRAM and gpu_video to match.
     parameter integer GAME_PLANES = 4,
+    // The planes there is block RAM for, when that is fewer than
+    // GAME_PLANES: `VRAM_SDRAM (docs/profiles.md, "Lakritz"), where VRAM
+    // holds two 320x240 planes and chunky game mode's picture is in main
+    // memory. COLOR reports it (XP 3 = two planes) and clamps NP to it;
+    // a write with CHUNKY set is not clamped, so the chunky path still
+    // sees eight planes. 0: the same as GAME_PLANES.
+    parameter integer BRAM_PLANES = 0,
+    // CKBASE (word 18): chunky game mode's picture in main memory, with
+    // `VRAM_SDRAM. Set by rtl/sysctl.v.
+    parameter CKBASE_AVAIL = 1'b0,
     // Chunky game mode (COLOR bit 14): `GAME_CHUNKY, with COLOR_AVAIL
     // and eight planes. Set by rtl/sysctl.v.
     parameter CHUNKY_AVAIL = 1'b0,
@@ -609,6 +630,8 @@ module socctl_wb #(
     output wire [2:0]  color_np,
     output wire [5:0]  color_off,
     output wire        color_chunky,
+    // CKBASE (word 18, CKBASE_AVAIL): chunky's picture in main memory
+    output wire [31:0] ck_base,
     output wire        pal_we,
     output wire [7:0]  pal_idx,
     output wire [11:0] pal_rgb,
@@ -660,10 +683,12 @@ module socctl_wb #(
     // top half of the COLOR register -- "ZP", for planes
     localparam COLOR_SIG = 16'h5A50;
     // GAME_PLANES as COLOR reports it (bits 5:4), and the largest NP
-    localparam [1:0] XP_CODE = (GAME_PLANES >= 8) ? 2'd2 :
-                               (GAME_PLANES >= 6) ? 2'd1 : 2'd0;
-    localparam [2:0] NP_MAX  = (GAME_PLANES >= 8) ? 3'd7 :
-                               (GAME_PLANES >= 6) ? 3'd5 : 3'd3;
+    // (BRAM_PLANES where it is set: XP 3 is two planes)
+    localparam integer BP = (BRAM_PLANES != 0) ? BRAM_PLANES : GAME_PLANES;
+    localparam [1:0] XP_CODE = (BP >= 8) ? 2'd2 :
+                               (BP >= 6) ? 2'd1 : (BP >= 4) ? 2'd0 : 2'd3;
+    localparam [2:0] NP_MAX  = (BP >= 8) ? 3'd7 :
+                               (BP >= 6) ? 3'd5 : (BP >= 4) ? 3'd3 : 3'd1;
     // top half of CVBS -- "ZV"
     localparam CVBS_SIG = 16'h5A56;
     // top half of DDMI -- "ZD"
@@ -686,6 +711,7 @@ module socctl_wb #(
 
     reg col;
     reg [2:0] np;
+    reg [31:0] ckbase;
     reg [5:0] coff;
     reg cck;
     reg pwe;
@@ -757,6 +783,7 @@ module socctl_wb #(
     // forced low without COLOR_AVAIL, as game_en is without GAME_AVAIL
     assign color_en  = col && (COLOR_AVAIL != 0);
     assign color_np  = np;
+    assign ck_base   = (CKBASE_AVAIL != 0) ? ckbase : 32'h0;
     assign color_off = coff;
     // forced low without CHUNKY_AVAIL, so it reads back 0 there
     assign color_chunky = cck && (CHUNKY_AVAIL != 0) && (COLOR_AVAIL != 0);
@@ -858,6 +885,7 @@ module socctl_wb #(
             // colour off at reset, like game mode itself
             col <= 1'b0;
             np <= 3'd0;
+            ckbase <= 32'h0;
             coff <= 6'd0;
             cck <= 1'b0;
             pwe <= 1'b0;
@@ -967,8 +995,11 @@ module socctl_wb #(
                     if (wb_adr_i == 32'd9) begin
                         if (wb_sel_i[0]) begin
                             col <= wb_dat_i[0];
-                            np <= (wb_dat_i[3:1] > NP_MAX) ? NP_MAX :
-                                wb_dat_i[3:1];
+                            // chunky (bit 14, the same store) is not
+                            // clamped: see BRAM_PLANES
+                            np <= (wb_dat_i[3:1] > NP_MAX &&
+                                   !(CHUNKY_AVAIL != 0 && wb_sel_i[1] && wb_dat_i[14])) ?
+                                NP_MAX : wb_dat_i[3:1];
                         end
                         if (wb_sel_i[1]) begin
                             coff <= wb_dat_i[13:8];
@@ -977,6 +1008,13 @@ module socctl_wb #(
                         if (wb_sel_i[0] || wb_sel_i[1])
                             vload <= ~vload;
                     end
+
+                    // CKBASE: a whole word, 16-byte aligned (the
+                    // fetch reads four-word bursts); the low bits are
+                    // ignored. Taken by the fetch as it starts the
+                    // frame's line 0 (rtl/gpu/gpu_ckfetch.v).
+                    if (wb_adr_i == 32'd18 && wb_sel_i == 4'b1111 && CKBASE_AVAIL != 0)
+                        ckbase <= { wb_dat_i[31:4], 4'b0 };
 
                     // PALETTE: whole word or nothing, like RECONFIG --
                     // a byte store would otherwise write an entry with
@@ -1106,6 +1144,7 @@ module socctl_wb #(
                                               (DESK_AVAIL != 0), 12'b0, win_desk, win_en };
                         32'd17: wb_dat_o <= (WIN_AVAIL != 0) ?
                                              { 6'b0, wy1, 6'b0, wx1 } : 32'h0000_0000;
+                        32'd18: wb_dat_o <= ck_base;
                         default: wb_dat_o <= 32'h0000_0000;
                     endcase
 

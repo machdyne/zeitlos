@@ -732,6 +732,40 @@ static inline bool z_soc_has_feature2(uint32_t feature) {
 	return (reg_csr_features2 & feature) != 0;
 }
 
+// -- the profile (docs/profiles.md) --
+//
+// FEATURES3 (word 4), with its own signature in the top half ("Z3"); its
+// bits 1:0 say what the bitstream is for. A bitstream without FEATURES3
+// is a desktop: every one built before the profiles were.
+#define reg_csr_features3 (*(volatile uint32_t*)0x70000010)
+#define Z_CSR_FEATURES3_SIG 0x5A33u
+
+#define Z_PROFILE_DESKTOP  0
+#define Z_PROFILE_CONSOLE  1     /* games: a launcher in game mode, no desktop */
+#define Z_PROFILE_HEADLESS 2     /* servers and controllers: no screen */
+
+static inline bool z_soc_features3_present(void) {
+	if (!z_soc_csrs_present()) return false;
+	return ((reg_csr_features3 >> 16) & 0xffffu) == Z_CSR_FEATURES3_SIG;
+}
+
+static inline int z_profile(void) {
+	if (!z_soc_features3_present()) return Z_PROFILE_DESKTOP;
+	return (int)(reg_csr_features3 & 3u);
+}
+
+// FEATURES3 bit 2: `VRAM_SDRAM (docs/profiles.md, "Lakritz"). VRAM is two
+// 320x240 planes, framebuffer rows 0..239 (writes past them are
+// dropped); chunky game mode's picture is in main memory, LINEAR, at
+// socctl's CKBASE, and T2 writes it there. z_chunky_*() below take
+// care of it.
+#define Z_FEATURE3_VRAM_SDRAM (1u << 2)
+
+static inline bool z_vram_sdram(void) {
+	if (!z_soc_features3_present()) return false;
+	return (reg_csr_features3 & Z_FEATURE3_VRAM_SDRAM) != 0;
+}
+
 // Name of the CPU core in the running bitstream. Returns "unknown" if
 // this build predates rtl/csrs.v, because on such a bitstream the bit
 // is not merely clear, it is unreadable -- and "picorv32" would be a
@@ -1294,7 +1328,7 @@ static inline void z_game_wait_frame(void) {
 #define Z_COLOR_ENABLE      (1u << 0)
 #define Z_COLOR_NP_SHIFT    1          // bits 3:1 = planes - 1
 #define Z_COLOR_NP_MASK     7u         // bit 3 reads 0 on older bitstreams
-#define Z_COLOR_XP_SHIFT    4          // bits 5:4, read-only: 0/1/2 = 4/6/8 planes
+#define Z_COLOR_XP_SHIFT    4          // bits 5:4, read-only: 0/1/2/3 = 4/6/8/2 planes
 #define Z_COLOR_OFF_SHIFT   8          // bits 13:8 = plane 1..3 {dy,dx}
 #define Z_COLOR_AVAIL       (1u << 15) // read-only
 
@@ -1322,27 +1356,30 @@ static inline bool z_color_available(void) {
 }
 
 // The most planes this bitstream shows: 4, 6 or 8 (rtl/boards.vh's
-// `GAME_PLANES), and 0 without colour. Planes 4..7 are planes 0..3 of
-// the second VRAM sheet, framebuffer rows 480 up (docs/color.md, "More
-// than four planes").
+// `GAME_PLANES), 2 on a `VRAM_SDRAM bitstream (the console: two
+// 320x240 planes in block RAM, chunky's 256 colours in main memory;
+// docs/profiles.md, "Lakritz"), and 0 without colour. Planes 4..7 are
+// planes 0..3 of the second VRAM sheet, framebuffer rows 480 up
+// (docs/color.md, "More than four planes").
 static inline uint32_t z_color_planes_max(void) {
 	uint32_t xp;
 	if (!z_color_available()) return 0;
 	xp = (reg_socctl_color >> Z_COLOR_XP_SHIFT) & 3u;
-	return xp == 2u ? 8u : xp == 1u ? 6u : 4u;
+	return xp == 3u ? 2u : xp == 2u ? 8u : xp == 1u ? 6u : 4u;
 }
 
-// Palette entries: 2^planes_max -- 16, 64 or 256 (0 without colour).
+// Palette entries: 2^planes_max -- 4, 16, 64 or 256 (0 without colour).
+// Chunky game mode has 256 whatever this says.
 static inline uint32_t z_color_palette_size(void) {
 	uint32_t n = z_color_planes_max();
 	return n ? (1u << n) : 0u;
 }
 
 // Framebuffer rows there are VRAM for: 480, 720 (6 planes: the second
-// sheet is half height) or 960.
+// sheet is half height) or 960; 240 with two planes (`VRAM_SDRAM).
 static inline uint32_t z_color_rows(void) {
 	uint32_t n = z_color_planes_max();
-	return n == 8u ? 960u : n == 6u ? 720u : 480u;
+	return n == 8u ? 960u : n == 6u ? 720u : n == 2u ? 240u : 480u;
 }
 
 // Set colour on or off, the plane count (1..8 = 2..256 colours) and the
@@ -1414,6 +1451,39 @@ static inline uint32_t z_color_offsets(void) {
 #define Z_CHUNKY_SEG_PX      80
 #define Z_CHUNKY_SEG_WORDS   20
 #define Z_CHUNKY_VRAM        ((volatile uint32_t *)0x20000000u)
+#define Z_CHUNKY_WORDS       (Z_CHUNKY_W * Z_CHUNKY_H / 4)
+
+// -- `VRAM_SDRAM: the picture in main memory (z_vram_sdram()) --
+//
+// On a VRAM_SDRAM bitstream (the console, docs/profiles.md "Lakritz")
+// chunky's picture is not in VRAM but in main memory, LINEAR -- line y
+// at 320 y bytes, pixel x its byte x -- wherever socctl's CKBASE says.
+// The scanout reads it a line ahead of the beam, and takes CKBASE as it
+// starts a frame: a new one is a page flip at the next frame boundary.
+//
+// z_chunky_pic() is the picture drawn into: VRAM, or with VRAM_SDRAM
+// the one z_color_set_chunky(true) allocated (z_chunky_prepare(), in
+// zeitlos.c: 76,800 bytes, once) or z_chunky_set_pic() set. Code that
+// goes through z_chunky_seg() or z_chunky_put_rows() works on both.
+// z_chunky_phys() is its physical address, for T2's VBASE.
+#define reg_socctl_ckbase    (*(volatile uint32_t*)0x70000248)
+
+extern volatile uint32_t *z_chunky_mem;      // zeitlos.c; NULL until prepared
+extern uint32_t z_chunky_mem_phys;
+bool z_chunky_prepare(void);                 // zeitlos.c
+// Draw into `pic` (16-byte aligned, 76,800 bytes, the app's memory)
+// from now on; show it too, from the next frame, if `show`.
+void z_chunky_set_pic(void *pic, bool show); // zeitlos.c
+// Show `pic` from the next frame (a page flip); drawing is unchanged.
+void z_chunky_show(const void *pic);         // zeitlos.c
+
+static inline volatile uint32_t *z_chunky_pic(void) {
+	return z_chunky_mem ? z_chunky_mem : Z_CHUNKY_VRAM;
+}
+
+static inline uint32_t z_chunky_phys(void) {
+	return z_chunky_mem ? z_chunky_mem_phys : 0x20000000u;
+}
 
 static inline bool z_color_chunky_available(void) {
 	if (!z_color_available()) return false;
@@ -1426,6 +1496,7 @@ static inline bool z_color_chunky_available(void) {
 // z_game_set_enabled()'s; leaving it turns chunky off as well.
 static inline bool z_color_set_chunky(bool on) {
 	if (!z_color_chunky_available()) return false;
+	if (on && z_vram_sdram() && !z_chunky_prepare()) return false;
 	if (on)
 		reg_socctl_color = Z_COLOR_ENABLE | (7u << Z_COLOR_NP_SHIFT) |
 			((Z_COLOR_OFFSETS(Z_COLOR_DX, Z_COLOR_DY,
@@ -1442,10 +1513,14 @@ static inline bool z_color_chunky(void) {
 }
 
 // Segment `seg` (0..3) of chunky line `row` (0..239), as 20 words of
-// VRAM. Word stores only for speed: a byte store costs the same bus
-// cycle as a word.
+// VRAM (or, `VRAM_SDRAM, of the picture in main memory, where a line's
+// segments follow each other). Word stores only for speed: a byte store
+// costs the same bus cycle as a word.
 static inline volatile uint32_t *z_chunky_seg(uint32_t row, uint32_t seg) {
-	uint32_t r = row + ((seg & 1u) ? 240u : 0u) + ((seg & 2u) ? 480u : 0u);
+	uint32_t r;
+	if (z_chunky_mem)                        // only ever set with VRAM_SDRAM
+		return z_chunky_mem + row * (Z_CHUNKY_W / 4) + seg * Z_CHUNKY_SEG_WORDS;
+	r = row + ((seg & 1u) ? 240u : 0u) + ((seg & 2u) ? 480u : 0u);
 	return Z_CHUNKY_VRAM + r * Z_CHUNKY_SEG_WORDS;
 }
 

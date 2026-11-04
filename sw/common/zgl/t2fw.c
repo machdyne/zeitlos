@@ -320,12 +320,18 @@ static void to_s(const vtx_t *v, svtx_t *o, bool flat, int32_t ci) {
 
 #define CLIP_MAX 12
 
+/* a corner's place fits the record (28.4 in 16 bits), with a margin */
+static inline bool in_band(const vtx_t *v) {
+	return v->sx > -(32000 << 4) && v->sx < (32000 << 4) &&
+	       v->sy > -(32000 << 4) && v->sy < (32000 << 4);
+}
+
 static void geom_tri(vtx_t *a, vtx_t *b, vtx_t *c, int32_t flat_ci) {
 	int f;
 	bool front, flat = !smooth;
 	svtx_t s0, s1, s2;
 	ST.tris++;
-	if (a->out & b->out & c->out) { ST.culled++; return; }
+	if (a->out & b->out & c->out) { ST.culled++; ST.outside++; return; }
 	f = facing(a, b, c);
 	front = front_ccw ? (f >= 0) : (f <= 0);
 	if (cull == 3 || (cull == 1 && !front) || (cull == 2 && front)) { ST.culled++; return; }
@@ -336,6 +342,25 @@ static void geom_tri(vtx_t *a, vtx_t *b, vtx_t *c, int32_t flat_ci) {
 		to_s(a, &s0, flat, flat_ci); to_s(b, &s1, flat, flat_ci); to_s(c, &s2, flat, flat_ci);
 		rec_tri(&s0, &s1, &s2, depth);
 		return;
+	}
+	/* The guard band: outside only the picture's sides (not the near or
+	 * far plane), a triangle goes to the raster unclipped if its corners
+	 * fit the record's 16-bit 12.4 fields (+-2,048 pixels): the raster
+	 * draws only the bounding box clamped to the frame, and its edge
+	 * functions don't care where the corners are (rtl/gpu/gpu_t2.v, the
+	 * setup's widths). This is where T2 parts from zgl's arithmetic,
+	 * which clips to the sides: a merged world face off the side of the
+	 * picture costs a record, not a clip. */
+	if (!((a->out | b->out | c->out) & 48)) {
+		if (!a->sv) screen_of(a);
+		if (!b->sv) screen_of(b);
+		if (!c->sv) screen_of(c);
+		if (in_band(a) && in_band(b) && in_band(c)) {
+			ST.guard++;
+			to_s(a, &s0, flat, flat_ci); to_s(b, &s1, flat, flat_ci); to_s(c, &s2, flat, flat_ci);
+			rec_tri(&s0, &s1, &s2, depth);
+			return;
+		}
 	}
 	/* Sutherland-Hodgman, as zgl's clip_polygon() */
 	{
@@ -424,6 +449,7 @@ static int32_t lit(int32_t nx, int32_t ny, int32_t nz, int32_t ma, int32_t md) {
 static int draw(void) {
 	uint32_t nv, nt, nl, sh, fl, i, h0, h1;
 	int32_t didx, dn[3], ma, md;
+	int32_t lnx = 0, lny = 0, lnz = 0, lci = 0;      /* the last normal lit */
 	didx = (int32_t)t2io_in();
 	dn[0] = (int32_t)t2io_in(); dn[1] = (int32_t)t2io_in(); dn[2] = (int32_t)t2io_in();
 	h0 = t2io_in(); h1 = t2io_in();
@@ -454,7 +480,15 @@ static int draw(void) {
 #undef ROW
 		v->out = out_code(v);
 		v->sv = 0;
-		if (lighting) v->ci = lit(nx, ny, nz, ma, md);
+		/* a chunk's vertices often share their normal (a world's face
+		 * set has one): lit once */
+		if (lighting) {
+			if (i == 0 || nx != lnx || ny != lny || nz != lnz) {
+				lci = lit(nx, ny, nz, ma, md);
+				lnx = nx; lny = ny; lnz = nz;
+			}
+			v->ci = lci;
+		}
 		else v->ci = (fl & T2_C_INDEX) ? (int32_t)(p1 >> 16) : didx;
 		if (!v->out) screen_of(v);
 		ST.verts++;

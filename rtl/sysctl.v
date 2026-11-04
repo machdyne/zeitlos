@@ -23,6 +23,25 @@
 `define GPU_TRI
 `endif
 `endif
+// `VRAM_SDRAM without the rasterizer: its registers answer (writes are
+// dropped, reads 0 -- never busy, an empty FIFO), so software that
+// waits on it does not hang; zgfx draws lines itself where FEATURES
+// says there is no rasterizer.
+`ifdef VRAM_SDRAM
+`ifndef GPU_RASTER
+`define GPU_RASTER_STUB
+`endif
+`endif
+
+// Today's engine shares the rasterizer's VRAM port (gpu_vmux): it needs
+// it, except with `VRAM_SDRAM, where T2 writes main memory
+`ifdef GPU_TRI
+`ifndef GPU_RASTER
+`ifndef VRAM_SDRAM
+`GPU_TRI_NEEDS_GPU_RASTER
+`endif
+`endif
+`endif
 
 // `USB_HOST and `USB_HID are mutually exclusive -- they are two cores
 // for the same two pins, and the new one carries the old one's
@@ -44,6 +63,31 @@
 // working is better than the new one not building.
 `ifdef USB_HOST
 `undef USB_HID
+`endif
+
+// `VRAM_SDRAM (docs/profiles.md, "Lakritz"; the console profile): VRAM
+// holds two 320x240 bitplanes (4,800 words, 10 DP16KD rather than 40)
+// for the blitter, the line rasterizer and the CPU, unchanged; chunky
+// game mode's picture is in main memory, written by T2 (gpu_t2.v
+// LINEAR) and software, read out a line ahead of the beam by
+// rtl/gpu/gpu_ckfetch.v. It needs T2, SDRAM main memory and chunky.
+// The colour window and desktop colour read the second VRAM sheet,
+// which is not there.
+`ifdef VRAM_SDRAM
+`ifndef GPU_BLIT
+`VRAM_SDRAM_NEEDS_GPU_BLIT
+`endif
+`ifndef GPU_T2
+`VRAM_SDRAM_NEEDS_GPU_T2
+`endif
+`ifndef MEM_SDRAM
+`VRAM_SDRAM_NEEDS_MEM_SDRAM
+`endif
+`ifndef GAME_CHUNKY
+`VRAM_SDRAM_NEEDS_GAME_CHUNKY
+`endif
+`undef COLOR_WINDOW
+`undef COLOR_DESKTOP
 `endif
 `include "csrs.vh"
 
@@ -1314,6 +1358,10 @@ module sysctl #()
 `endif
 `ifdef GPU_RASTER
 	wire cs_gpu = ((wbm_adr & 32'hf000_0000) == 32'ha000_0000);
+`elsif GPU_RASTER_STUB
+	wire cs_gpu = ((wbm_adr & 32'hf000_0000) == 32'ha000_0000);
+	// (wbm_clk, wbm_cyc and wbm_stb are declared above)
+	reg gpu_stub_ack;
 `endif
 `ifdef GPU_BLIT
 	wire cs_gpu_blit = ((wbm_adr & 32'hf000_0000) == 32'hd000_0000);
@@ -1729,6 +1777,21 @@ module sysctl #()
 	wire wbs_audio_int;
 	// rtl/audio_mixer.v's sample fetches -- third master on the main
 	// bus, see the arbiter instantiation below.
+`ifdef VRAM_SDRAM
+	// `VRAM_SDRAM: the scanout's line fetch (rtl/gpu/gpu_ckfetch.v) and
+	// T2's output share wb_arbiter_main's third port with the audio
+	// mixer, through rtl/arbiter_gfx.v. These are that port's wires
+	// and the fetch's; the arbiter is with T2, below.
+	wire [31:0] wbm_ckf_adr, wbm_ckf_dat_i;
+	wire [3:0]  wbm_ckf_sel;
+	wire [2:0]  wbm_ckf_cti;
+	wire        wbm_ckf_we, wbm_ckf_stb, wbm_ckf_cyc, wbm_ckf_ack;
+	wire [31:0] wbm_gfx_adr, wbm_gfx_dat_o, wbm_gfx_dat_i;
+	wire [3:0]  wbm_gfx_sel;
+	wire [2:0]  wbm_gfx_cti;
+	wire        wbm_gfx_we, wbm_gfx_stb, wbm_gfx_cyc, wbm_gfx_ack;
+	wire [1:0]  gfx_master;
+`endif
 	wire [31:0] wbm_audio_adr;
 	wire [31:0] wbm_audio_dat_o;
 	wire [31:0] wbm_audio_dat_i;
@@ -1805,6 +1868,8 @@ module sysctl #()
 `endif
 `ifdef GPU_RASTER
 		(cs_gpu & wbs_gpu_ack_o) |
+`elsif GPU_RASTER_STUB
+		(cs_gpu & gpu_stub_ack) |
 `endif
 `ifdef GPU_BLIT
 		(cs_gpu_blit & wbs_gpu_blit_ack_o) |
@@ -2503,7 +2568,17 @@ module sysctl #()
 		// cyc/stb input would be x in simulation and whatever the
 		// synthesizer felt like in hardware, and this arbiter grants
 		// on cyc && stb.
-`ifdef AUDIO
+`ifdef VRAM_SDRAM
+		// the fetch, the mixer and T2's output (rtl/arbiter_gfx.v)
+		.m2_adr_i(wbm_gfx_adr),
+		.m2_dat_i(wbm_gfx_dat_o),
+		.m2_dat_o(wbm_gfx_dat_i),
+		.m2_we_i(wbm_gfx_we),
+		.m2_sel_i(wbm_gfx_sel),
+		.m2_stb_i(wbm_gfx_stb),
+		.m2_cyc_i(wbm_gfx_cyc),
+		.m2_ack_o(wbm_gfx_ack),
+`elsif AUDIO
 		.m2_adr_i(wbm_audio_adr),
 		.m2_dat_i(wbm_audio_dat_o),
 		.m2_dat_o(wbm_audio_dat_i),
@@ -2537,7 +2612,13 @@ module sysctl #()
 
 	// Only the CPU side (the cache) ever bursts; the arbiter holds a
 	// grant for a whole CYC, so this is constant across any burst.
+`ifdef VRAM_SDRAM
+	// and the scanout's fetch, which reads in four-word bursts
+	assign wbm_cti = (marb_master == 2'd0) ? wbc_cti :
+		(marb_master == 2'd2) ? wbm_gfx_cti : 3'b000;
+`else
 	assign wbm_cti = (marb_master == 2'd0) ? wbc_cti : 3'b000;
+`endif
 
 	// Another master's completed write to main memory. Both are read
 	// only today (gpu_blit.v s_we_o, audio_mixer.v m_we_o are tied 0),
@@ -2573,6 +2654,13 @@ module sysctl #()
 
 `endif
 
+`ifdef GPU_RASTER_STUB
+	// no rasterizer: its registers acked, the next cycle, and read 0
+	always @(posedge wbm_clk)
+		if (wbm_rst) gpu_stub_ack <= 1'b0;
+		else gpu_stub_ack <= cs_gpu && wbm_cyc && wbm_stb && !gpu_stub_ack;
+`endif
+
 	// WISHBONE MASTER: GPU Rasterizer
 `ifdef GPU_RASTER
 	wire [31:0] wbm_gpu_adr;
@@ -2585,6 +2673,7 @@ module sysctl #()
 	wire wbm_gpu_cyc;
 
 	wire wbm_cyc_gpu = cs_gpu && wbm_cyc;
+`endif
 
 `ifdef GPU_TRI
 	// The rasterizer and the triangle engine share the arbiter's
@@ -2599,6 +2688,10 @@ module sysctl #()
 	wire        wbm_gtri_we, wbm_gtri_stb, wbm_gtri_ack, wbm_gtri_cyc;
 `endif
 
+	// The rasterizer is optional with `VRAM_SDRAM (the console: T2 draws
+	// its lines and triangles; zgfx draws a line in software where the
+	// bitstream has no rasterizer, Z_FEATURE_GPU_RASTER)
+`ifdef GPU_RASTER
 	gpu_raster_wb #() wbm_gpu0_i
 	(
  		.clk(wbm_clk),
@@ -2636,6 +2729,7 @@ module sysctl #()
 `endif
 //		.dbg(DBG)
 	);
+`endif
 
 `ifdef GPU_TRI
 	// WISHBONE SLAVE + MASTER: the triangle engine (rtl/gpu/gpu_tri.v,
@@ -2645,7 +2739,20 @@ module sysctl #()
 	// waits); vblank is, for VSYNC: a frame starts going out in
 	// vertical blanking and keeps ahead of the beam.
 `ifdef GPU_T2
+`ifdef VRAM_SDRAM
+	// the picture is in main memory, linear (gpu_t2.v LINEAR), its
+	// writes posted (POST_LOG2); `T2_STRIP_H and `T2_POST_LOG2 trade
+	// block RAM for speed (docs/profiles.md, "Lakritz")
+`ifndef T2_STRIP_H
+`define T2_STRIP_H 12
+`endif
+`ifndef T2_POST_LOG2
+`define T2_POST_LOG2 10
+`endif
+	gpu_t2_wb #(.LINEAR(1), .POST_LOG2(`T2_POST_LOG2), .STRIP_H(`T2_STRIP_H)) gtri0_i (
+`else
 	gpu_t2_wb gtri0_i (
+`endif
 `else
 	gpu_tri_wb gtri0_i (
 `endif
@@ -2671,6 +2778,45 @@ module sysctl #()
 		.vblank(gtri_vblank)
 	);
 
+`ifdef VRAM_SDRAM
+	// T2's output goes to main memory, so the rasterizer has VRAM's
+	// port to itself again; T2 is the gfx port's last master, after the
+	// scanout's fetch and the audio mixer (rtl/arbiter_gfx.v)
+`ifdef GPU_RASTER
+	assign wbm_gpu_cyc = wbm_gras_cyc;
+	assign wbm_gpu_stb = wbm_gras_stb;
+	assign wbm_gpu_we = wbm_gras_we;
+	assign wbm_gpu_sel = wbm_gras_sel;
+	assign wbm_gpu_adr = wbm_gras_adr;
+	assign wbm_gpu_dat_o = wbm_gras_dat_o;
+	assign wbm_gras_dat_i = wbm_gpu_dat_i;
+	assign wbm_gras_ack = wbm_gpu_ack;
+`endif
+
+	wb_arbiter_gfx garb0_i (
+		.clk(wbm_clk),
+		.rst(wbm_rst),
+		.m0_adr_i(wbm_ckf_adr), .m0_dat_i(32'h0), .m0_dat_o(wbm_ckf_dat_i),
+		.m0_we_i(wbm_ckf_we), .m0_sel_i(wbm_ckf_sel), .m0_cti_i(wbm_ckf_cti),
+		.m0_stb_i(wbm_ckf_stb), .m0_cyc_i(wbm_ckf_cyc), .m0_ack_o(wbm_ckf_ack),
+`ifdef AUDIO
+		.m1_adr_i(wbm_audio_adr), .m1_dat_i(wbm_audio_dat_o), .m1_dat_o(wbm_audio_dat_i),
+		.m1_we_i(wbm_audio_we), .m1_sel_i(wbm_audio_sel), .m1_cti_i(3'b000),
+		.m1_stb_i(wbm_audio_stb), .m1_cyc_i(wbm_audio_cyc), .m1_ack_o(wbm_audio_ack),
+`else
+		.m1_adr_i(32'h0), .m1_dat_i(32'h0), .m1_dat_o(),
+		.m1_we_i(1'b0), .m1_sel_i(4'h0), .m1_cti_i(3'b000),
+		.m1_stb_i(1'b0), .m1_cyc_i(1'b0), .m1_ack_o(),
+`endif
+		.m2_adr_i(wbm_gtri_adr), .m2_dat_i(wbm_gtri_dat_o), .m2_dat_o(wbm_gtri_dat_i),
+		.m2_we_i(wbm_gtri_we), .m2_sel_i(wbm_gtri_sel), .m2_cti_i(3'b000),
+		.m2_stb_i(wbm_gtri_stb), .m2_cyc_i(wbm_gtri_cyc), .m2_ack_o(wbm_gtri_ack),
+		.s_adr_o(wbm_gfx_adr), .s_dat_o(wbm_gfx_dat_o), .s_dat_i(wbm_gfx_dat_i),
+		.s_we_o(wbm_gfx_we), .s_sel_o(wbm_gfx_sel), .s_cti_o(wbm_gfx_cti),
+		.s_stb_o(wbm_gfx_stb), .s_cyc_o(wbm_gfx_cyc), .s_ack_i(wbm_gfx_ack),
+		.master(gfx_master)
+	);
+`else
 	gpu_vmux gvmux0_i (
 		.clk(wbm_clk), .rst(wbm_rst),
 		.a_cyc(wbm_gras_cyc), .a_stb(wbm_gras_stb), .a_we(wbm_gras_we), .a_sel(wbm_gras_sel),
@@ -2803,7 +2949,14 @@ module sysctl #()
 	// 7 either way (rtl/tb/tb_vram_path.v, which runs both wirings), and
 	// less with the blitter busy -- the old wiring could claim the VRAM
 	// bus on a stale cs_vram, decoded from the PREVIOUS main-bus address.
+`ifdef VRAM_SDRAM
+	// and the gfx port's masters (rtl/arbiter_gfx.v): T2 left with
+	// VBASE at VRAM writes there, harmlessly, rather than waiting for
+	// an ack that would never come
+	wire wbm_cpu_arb0_cyc = cs_vram && wbm_cyc && (marb_master != 2'd1);
+`else
 	wire wbm_cpu_arb0_cyc = cs_vram && wbm_cyc && (marb_master == 2'd0);
+`endif
 
    wb_arbiter_vram #() varb0_i
    (
@@ -2830,6 +2983,17 @@ module sysctl #()
       .m1_stb_i(wbm_gpu_stb),
       .m1_cyc_i(wbm_gpu_cyc),
       .m1_ack_o(wbm_gpu_ack),
+`else
+      // no rasterizer (`VRAM_SDRAM may leave it out): tied off, as the
+      // main arbiter's unused audio port is
+      .m1_adr_i(32'h0),
+      .m1_dat_i(32'h0),
+      .m1_dat_o(),
+      .m1_we_i(1'b0),
+      .m1_sel_i(4'h0),
+      .m1_stb_i(1'b0),
+      .m1_cyc_i(1'b0),
+      .m1_ack_o(),
 `endif
 
 `ifdef GPU_BLIT
@@ -3075,7 +3239,12 @@ module sysctl #()
 	// are all sized from it; here, ahead of the VRAM instance, the
 	// first of them in this file. docs/color.md, "More than four
 	// planes".
-`ifdef COLOR
+`ifdef VRAM_SDRAM
+	// the scanout's fetch is the 8-plane one (chunky's line is the four
+	// rows it reads), whatever GAME_PLANES says; GAME_PLANES is what
+	// there is block RAM for, two (socctl's BRAM_PLANES)
+	localparam integer GAME_PLANES_N = 8;
+`elsif COLOR
 `ifdef GAME
 `ifdef GPU
 `ifdef GAME_PLANES
@@ -3094,15 +3263,30 @@ module sysctl #()
 	localparam integer GAME_PLANES_N = 4;
 `endif
 	// one 640x480x1bpp sheet, plus half (6 planes) or all (8) of another
+`ifdef VRAM_SDRAM
+	// two 320x240 planes: framebuffer rows 0..239 (plane 0 at x 0..319,
+	// plane 1 at 320..639, as z_color_16's planes 0 and 1)
+	localparam integer VRAM_WORDS = 4800;
+	localparam integer BRAM_PLANES_N = 2;
+	localparam VRAM_GUARD = 1;
+`else
 	localparam integer VRAM_WORDS = (GAME_PLANES_N == 8) ? 19200 :
 		(GAME_PLANES_N == 6) ? 14400 : 9600;
+	localparam integer BRAM_PLANES_N = 0;
+	localparam VRAM_GUARD = 0;
+`endif
 
 	// WISHBONE SLAVE: DUAL-PORT VRAM (FRAMEBUFFER) [DEDICATED BUS]
 `ifdef MEM_VRAM
 	reg [15:0] gb_adr;
 	reg [31:0] gb_dat;
+`ifdef VRAM_SDRAM
+	// VRAM's graphics port, through rtl/gpu/gpu_ckfetch.v to gpu_video
+	wire [31:0] gb_vram;
+	wire [9:0]  gb_row;
+`endif
 
-	vram_wb #(.WORDS(VRAM_WORDS)) wbs_vram_i
+	vram_wb #(.WORDS(VRAM_WORDS), .GUARD(VRAM_GUARD)) wbs_vram_i
 	(
 		.wb_clk_i(wbm_clk),
 		.wb_rst_i(wbm_rst),
@@ -3115,7 +3299,11 @@ module sysctl #()
 		.wb_ack_o(wbs_vram_ack_o),
 		.wb_cyc_i(wbm_vram_cyc),
 		.gb_adr_i(gb_adr),
+`ifdef VRAM_SDRAM
+		.gb_dat_o(gb_vram),
+`else
 		.gb_dat_o(gb_dat),
+`endif
 	);
 `endif
 
@@ -4002,6 +4190,7 @@ module sysctl #()
 	wire [2:0] socctl_color_np;
 	wire [5:0] socctl_color_off;
 	wire socctl_color_chunky;
+	wire [31:0] socctl_ck_base;
 	wire socctl_pal_we;
 	wire [7:0] socctl_pal_idx;
 	wire [11:0] socctl_pal_rgb;
@@ -4062,6 +4251,10 @@ module sysctl #()
 		.GAME_AVAIL(GAME_AVAILABLE),
 		.COLOR_AVAIL(COLOR_AVAILABLE),
 		.GAME_PLANES(GAME_PLANES_N),
+		.BRAM_PLANES(BRAM_PLANES_N),
+`ifdef VRAM_SDRAM
+		.CKBASE_AVAIL(1'b1),
+`endif
 		.WIN_AVAIL(WIN_AVAILABLE),
 		.DESK_AVAIL(DESK_AVAILABLE),
 		.CHUNKY_AVAIL(CHUNKY_AVAILABLE),
@@ -4148,6 +4341,7 @@ module sysctl #()
 		.color_np(socctl_color_np),
 		.color_off(socctl_color_off),
 		.color_chunky(socctl_color_chunky),
+		.ck_base(socctl_ck_base),
 		.pal_we(socctl_pal_we),
 		.pal_idx(socctl_pal_idx),
 		.pal_rgb(socctl_pal_rgb),
@@ -4167,6 +4361,7 @@ module sysctl #()
 	csrs_wb #(
 		.MEM_MB(`MEM),
 		.FEATURES(CSR_FEATURES),
+		.FEATURES3(CSR_FEATURES3),
 `ifdef FLASH_BASE
 		.FEATURES2(CSR_FEATURES2),
 		.FLASH_BASE(`FLASH_BASE)
@@ -4801,6 +4996,11 @@ module sysctl #()
 		.y(gpu_y),
 		.gb_adr_o(gb_adr),
 		.gb_dat_i(gb_dat),
+`ifdef VRAM_SDRAM
+		.gb_row_o(gb_row),
+`else
+		.gb_row_o(),
+`endif
 `ifdef GPU_COMPOSITE
 		// Composite REPLACES the VGA and DDMI connections rather than
 		// joining them -- see boards.vh's own note on why the two
@@ -4831,6 +5031,38 @@ module sysctl #()
 `endif
 `endif
 	);
+
+`ifdef VRAM_SDRAM
+	// chunky's picture from main memory, a line ahead of the beam, on
+	// VRAM's graphics port (rtl/gpu/gpu_ckfetch.v)
+	gpu_ckfetch #(
+`ifdef SDRAM_BURST
+		.BURST(1),
+`else
+		.BURST(0),
+`endif
+		.VRAM_WORDS(VRAM_WORDS)
+	) gckf0_i (
+		.clk(wbm_clk),
+		.rst(wbm_rst),
+		.en(socctl_color_chunky && socctl_color_en && socctl_game_en),
+		.base(socctl_ck_base),
+		.gb_row(gb_row),
+		.gb_adr(gb_adr[14:0]),
+		.gb_dat(gb_dat),
+		.vram_dat(gb_vram),
+		.m_adr_o(wbm_ckf_adr),
+		.m_cyc_o(wbm_ckf_cyc),
+		.m_stb_o(wbm_ckf_stb),
+		.m_cti_o(wbm_ckf_cti),
+		.m_sel_o(wbm_ckf_sel),
+		.m_we_o(wbm_ckf_we),
+		.m_dat_i(wbm_ckf_dat_i),
+		.m_ack_i(wbm_ckf_ack),
+		.misses(),
+		.lines()
+	);
+`endif
 
 `endif
 

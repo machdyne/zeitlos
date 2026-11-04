@@ -10,6 +10,7 @@
 
 #include <errno.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <stdbool.h>
 #include <sys/stat.h>
@@ -1125,6 +1126,49 @@ void _exit(int exit_status)
 // build uses, so behaviour is identical either way. One byte at a
 // time is not fast, but printf here ends up in a UART FIFO regardless
 // and correctness matters more than buffering.
+// -- chunky game mode's picture in main memory (`VRAM_SDRAM) --
+//
+// zsoc.h, "the picture in main memory", and docs/profiles.md "Lakritz".
+// The picture is allocated the first time chunky is turned on, and kept:
+// an app turns chunky on and off as boxes come and go, and 76,800 bytes
+// a time would fragment its heap for nothing.
+
+volatile uint32_t *z_chunky_mem;
+uint32_t z_chunky_mem_phys;
+
+// an app pointer as the hardware sees it (as zgfx.c's blit_phys_addr():
+// an app runs at 0x8000_0000 through the MTU, which a bus master is not)
+static uint32_t z_chunky_phys_of(const void *p) {
+	uint32_t v = (uint32_t)(uintptr_t)p;
+	uint32_t base = reg_mtu_base;
+	if (base == 0) return v;
+	if ((v & 0xF0000000u) != 0x80000000u) return v;
+	return base + (v & 0x0FFFFFFFu);
+}
+
+void z_chunky_show(const void *pic) {
+	reg_socctl_ckbase = z_chunky_phys_of(pic);
+}
+
+void z_chunky_set_pic(void *pic, bool show) {
+	z_chunky_mem = (volatile uint32_t *)pic;
+	z_chunky_mem_phys = z_chunky_phys_of(pic);
+	if (show) z_chunky_show(pic);
+}
+
+bool z_chunky_prepare(void) {
+	static void *raw;
+	uint8_t *pic;
+	if (!z_vram_sdram()) return true;     // the picture is VRAM
+	if (z_chunky_mem) return true;
+	if (!raw) raw = malloc(Z_CHUNKY_WORDS * 4u + 15u);
+	if (!raw) return false;
+	pic = (uint8_t *)(((uintptr_t)raw + 15u) & ~(uintptr_t)15u);
+	memset(pic, 0, Z_CHUNKY_WORDS * 4u);
+	z_chunky_set_pic(pic, true);
+	return true;
+}
+
 #ifdef __PICOLIBC__
 
 static int z_picolibc_putc(char c, FILE *f) {

@@ -1869,6 +1869,18 @@ static bool open_look(void) {
 	return true;
 }
 
+// the CPU's cycle counter, for the chunky report (none on the host)
+static inline uint32_t cycles_now(void) {
+#ifdef AR_HOST_TESTS
+	return 0;
+#else
+	uint32_t v;
+	__asm__ volatile ("rdcycle %0" : "=r"(v));
+	return v;
+#endif
+}
+static uint32_t perf_t0, perf_frames, perf_cycles;
+
 int main(void) {
 
 	bool quit = false;
@@ -1930,7 +1942,24 @@ int main(void) {
 			step();
 			stepped = true;
 		}
-		if (stepped && flash_timer == 0) render();
+		if (stepped && flash_timer == 0) {
+			uint32_t c0 = cycles_now();
+			render();
+			perf_cycles += cycles_now() - c0;
+			perf_frames++;
+		}
+		// in chunky, every two seconds: who draws, and what a frame costs
+		if (chunky && ar_ticks() - perf_t0 >= 120) {
+			if (perf_frames)
+				printf("space3d: chunky on %s, %lu frames a second drawn, %lu cycles a frame\n",
+					zgl_info()->backend == ZGL_BACKEND_T2 ? "T2" :
+					zgl_info()->backend == ZGL_BACKEND_ENGINE ? "the triangle engine" : "software",
+					(unsigned long)(perf_frames * 60 / (ar_ticks() - perf_t0)),
+					(unsigned long)(perf_cycles / perf_frames));
+			perf_t0 = ar_ticks();
+			perf_frames = 0;
+			perf_cycles = 0;
+		}
 
 		if (zgl_info()->overflows != reported_overflows) {
 			printf("space3d: display list full (%d lines) -- "

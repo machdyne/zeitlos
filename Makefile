@@ -19,6 +19,7 @@ RTL_PICO = \
 	rtl/mpu_split.v \
 	rtl/arbiter_vram.v \
 	rtl/arbiter_main.v \
+	rtl/arbiter_gfx.v \
 	rtl/mem/bram.v \
 	rtl/mem/sram.v \
 	rtl/mem/sdram_kianv.v \
@@ -49,6 +50,7 @@ RTL_PICO = \
 	rtl/gpu/gpu_raster.v \
 	rtl/gpu/gpu_tri.v \
 	rtl/gpu/gpu_t2.v \
+	rtl/gpu/gpu_ckfetch.v \
 	rtl/gpu/zeitlos32g.v \
 	rtl/gpu/gpu_vmux.v \
 	rtl/gpu/gpu_blit.v \
@@ -617,6 +619,13 @@ sw/bios/bios.hex: FORCE
 	$(MAKE) -C sw/bios BOARD=$(BOARD_UC) FAMILY=$(FAMILY_UC) PREFIX=$(PREFIX) BRAM_WORDS=$(BRAM_WORDS) BIOS_FLAGS="$(BIOS_FLAGS)" BIOS_MIN_STACK=$(BIOS_MIN_STACK)
 
 bios: sw/bios/bios.hex
+
+# T2's geometry firmware (docs/zgl_t2.md): rtl/gpu/gpu_t2.v reads it at
+# synthesis, so it is one of every ECP5 board's SOC_SYNTH_INPUTS. It is
+# not checked in; built here, a fresh clone could not synthesize. Like
+# the BIOS, the recursion leaves t2fw.hex untouched when nothing changed.
+sw/t2fw/t2fw.hex: FORCE
+	$(MAKE) -C sw/t2fw CROSS=$(PREFIX)
 
 ifeq ($(FAMILY), ice40)
 zeitlos_ice40_pico:

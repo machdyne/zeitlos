@@ -48,6 +48,8 @@ simtest:
 	../../../sim/zsim-headless -n 0 tests/sim_chunky/chunkytest.bin
 	ZSIM_GTRI=1 ../../../sim/zsim-headless -n 0 tests/sim_chunky/chunkytest.bin
 	ZSIM_GTRI=2 ../../../sim/zsim-headless -n 0 tests/sim_chunky/chunkytest.bin
+	ZSIM_CONSOLE=1 ../../../sim/zsim-headless -n 0 tests/sim_chunky/chunkytest.bin
+	ZSIM_CONSOLE=1 ZSIM_GTRI=2 ../../../sim/zsim-headless -n 0 tests/sim_chunky/chunkytest.bin
 
 clean:
 	rm -f tests/test_zgl tests/test_frames tests/test_t2 tests/t_vectors

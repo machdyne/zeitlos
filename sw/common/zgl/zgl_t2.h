@@ -132,6 +132,8 @@ int t2fw_step(void);
 typedef struct {
 	uint32_t draws, verts, tris, cpu_tris, lines;
 	uint32_t culled, clipped, drawn, pixels, overflows;
+	uint32_t outside;                    /* of culled: wholly outside a plane */
+	uint32_t guard;                      /* outside the sides, drawn unclipped */
 	uint32_t cyc_fetch, cyc_geom, cyc_raster, cyc_out;
 	int32_t rx0, rx1, ry0, ry1;          /* the frame's rectangle */
 } t2_stats_t;

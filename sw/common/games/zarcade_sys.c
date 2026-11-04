@@ -346,12 +346,12 @@ static void clear_framebuffer(void) {
 extern void zglc_finish(void) __attribute__((weak));
 
 static void chunky_clear(void) {
-	volatile uint32_t *d = Z_CHUNKY_VRAM;
+	volatile uint32_t *d = z_chunky_pic();     /* VRAM, or main memory */
 	uint32_t i;
 	/* an engine still drawing would write over the clear */
 	if (zglc_finish) zglc_finish();
 	z_fb_hw_sync();
-	for (i = 0; i < 4u * Z_CHUNKY_H * Z_CHUNKY_SEG_WORDS; i += 4) {
+	for (i = 0; i < Z_CHUNKY_WORDS; i += 4) {
 		d[i] = 0; d[i + 1] = 0; d[i + 2] = 0; d[i + 3] = 0;
 	}
 }
@@ -376,7 +376,9 @@ static void apply_color(void) {
 		z_color_set_chunky(false);
 		chunky_clear();
 	}
-	if (ar__s.want_color && z_color_available()) {
+	/* planes in colour: 16 colours or more (a `VRAM_SDRAM console has
+	 * two planes, which the runtime does not use: monochrome there) */
+	if (ar__s.want_color && z_color_available() && z_color_planes_max() >= 4) {
 		/* a box over a chunky program: the planes' 256 colours, so its
 		 * indices (and the box's, ar_colours() 256) mean what they did */
 		int keep = ar__s.colours_want, n;
@@ -644,7 +646,8 @@ static void handle_key(uint32_t packed) {
 	}
 
 	if (k == Z_KEY_FULL_SCREEN) {
-		if (pressed) {
+		/* a console has no window to go back to */
+		if (pressed && z_profile() != Z_PROFILE_CONSOLE) {
 			release_all();
 			ar_set_fullscreen(!full);
 		}
@@ -677,7 +680,15 @@ static void handle_key(uint32_t packed) {
 		if (!pressed) exit_armed = true;
 		else if (exit_armed) {
 			release_all();
-			ar_set_fullscreen(false);
+			if (z_profile() == Z_PROFILE_CONSOLE) {
+				/* a console: Escape ends the program, back to the
+				 * launcher (there is no window to leave to) */
+				ar_event_t q;
+				memset(&q, 0, sizeof(q));
+				q.type = AR_EV_QUIT;
+				ar__queue(&q);
+			} else
+				ar_set_fullscreen(false);
 		}
 		return;
 	}
@@ -1040,6 +1051,9 @@ bool ar_init(const ar_desc_t *d) {
 	have_win = true;
 
 	ar__invalidate();
+	/* a console (docs/profiles.md): no desktop to show a window on --
+	 * full screen from the start */
+	if (z_profile() == Z_PROFILE_CONSOLE) ar_set_fullscreen(true);
 	return true;
 }
 

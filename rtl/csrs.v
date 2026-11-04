@@ -85,7 +85,10 @@
  *                room for 64 of these words; the third one being the
  *                second feature register rather than something
  *                unrelated is what keeps the growth path obvious.
- *   4-62         reserved: FEATURES3 and onward grow UP from word 4;
+ *   4  FEATURES3 { 16'h5A33, features3[15:0] } -- the same again; its
+ *                bits 1:0 are the PROFILE (docs/profiles.md): 0 desktop,
+ *                1 console, 2 headless. rtl/csrs.vh's CSR_FEATURES3.
+ *   5-62         reserved: FEATURES4 and onward grow UP from word 5;
  *                board variables (whole-word values, like FLASH_BASE)
  *                grow DOWN from word 62. They meet only if both run out.
  *   63           FLASH_BASE: the byte offset in the SPI flash where the
@@ -102,6 +105,8 @@ module csrs_wb #(
 	// Only the low 16 bits are used -- the top half of the register
 	// is the signature. See the header.
 	parameter FEATURES2 = 32'h0,
+	// Word 4, FEATURES3: the low 16 bits; the profile in 1:0
+	parameter FEATURES3 = 32'h0,
 	// Word 63. See the header; only read when `FLASH_BASE is defined.
 	parameter FLASH_BASE = 32'h0
 )
@@ -123,6 +128,8 @@ module csrs_wb #(
 	// Top half of FEATURES2 -- "ZF", zeitlos features. See the header
 	// on why a second signature is needed when MAGIC already exists.
 	localparam FEATURES2_SIG = 16'h5A46;
+	// FEATURES3's: "Z3"
+	localparam FEATURES3_SIG = 16'h5A33;
 
 	// Registered, like every other slave on this bus. It was
 	// combinational (`assign wb_ack_o = cyc && stb`) -- the ONE slave
@@ -152,6 +159,8 @@ module csrs_wb #(
 				(wb_adr_i == 32'd2) ? FEATURES :
 				(wb_adr_i == 32'd3) ?
 					{ FEATURES2_SIG, FEATURES2[15:0] } :
+				(wb_adr_i == 32'd4) ?
+					{ FEATURES3_SIG, FEATURES3[15:0] } :
 				// Behind the PREPROCESSOR, not a parameter test: this arm
 				// is a full 32-bit compare against 63, and yosys does not
 				// fold it away when FLASH_BASE is 0 -- measured on Lakritz

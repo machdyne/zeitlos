@@ -68,6 +68,8 @@ APPS = casino poker roulette blackjack slots craps \
 	zetta \
 	space3d \
 	gldemo \
+	mausrun3d \
+	launcher \
 	snake \
 	blocks \
 	bricks \

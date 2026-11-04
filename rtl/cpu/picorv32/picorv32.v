@@ -200,6 +200,12 @@ module picorv32 #(
 	reg [31:0] timer;
 
 `ifndef PICORV32_REGS
+	// Zeitlos: `PICORV32_REGS_LUTRAM puts the register file in LUT RAM
+	// instead of two block RAMs -- for a board short of block RAM
+	// (the console's Lakritz, docs/profiles.md), at about 100 LUTs
+`ifdef PICORV32_REGS_LUTRAM
+	(* ram_style = "distributed" *)
+`endif
 	reg [31:0] cpuregs [0:regfile_size-1];
 
 	integer i;

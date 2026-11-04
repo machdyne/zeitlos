@@ -427,3 +427,31 @@ localparam CSR_FEATURES2 =
 	(32'h1 << 11) |
 `endif
 	32'h0;
+
+// -- CSR_FEATURES3: word 4, the same shape as FEATURES2 (rtl/csrs.v) --
+//
+// Bits 1:0, the PROFILE (docs/profiles.md): what this bitstream is for,
+// which the OS reads to decide how to come up.
+//
+//   0  desktop   the default: wm's desktop, 640x480
+//   1  console   games: wm boots to a launcher in game mode, no desktop
+//   2  headless  servers and controllers: no screen of its own
+//
+// Set by `ZEITLOS_CONSOLE or `ZEITLOS_HEADLESS in rtl/boards.vh (or a
+// release spec); neither is the desktop. KEEP IN SYNC with
+// sw/common/zsoc.h's Z_PROFILE_* and z_profile().
+//
+// Bit 2, VRAM_SDRAM: `VRAM_SDRAM (docs/profiles.md, "Lakritz"). VRAM is
+// two 320x240 planes (framebuffer rows 0..239); chunky game mode's
+// picture is in main memory, linear, at socctl's CKBASE, and T2 writes
+// it there. Z_FEATURE3_VRAM_SDRAM in sw/common/zsoc.h.
+localparam CSR_FEATURES3 =
+`ifdef ZEITLOS_CONSOLE
+	32'h1 |
+`elsif ZEITLOS_HEADLESS
+	32'h2 |
+`endif
+`ifdef VRAM_SDRAM
+	32'h4 |
+`endif
+	32'h0;

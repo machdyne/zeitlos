@@ -5,6 +5,8 @@
  * frames as the triangle engine's commands carried out by its C model
  * (tests/t_model.c, which test_frames holds to the software). A whole
  * frame, and a scissored one (the strip writer's byte ends).
+ * With ZSIM_CONSOLE=1 (a `VRAM_SDRAM console) the picture is in main
+ * memory, linear, where z_chunky_prepare() put it, and T2 writes there.
  * make -C sw/common/zgl simtest
  */
 #include <stdio.h>
@@ -62,6 +64,8 @@ int main(void) {
 	zgl_desc_t soft = { ZGL_FRAMES, 0, 0, 1024, ZGL_CHUNKY | ZGL_NO_ENGINE };
 	zgl_desc_t chunky = { ZGL_FRAMES, 0, 0, 1024, ZGL_CHUNKY };
 	int f, x, y, bad = 0, pass, engine = 0;
+	/* the console's picture in main memory (nothing elsewhere) */
+	if (!z_chunky_prepare()) { printf("chunkytest: no picture\n"); return 1; }
 	for (f = 0; f < 4; f++) {
 		/* frames 0, 1: the software strips; 2, 3: the triangle engine
 		 * where there is one (the simulator's, with ZSIM_GTRI) */
@@ -101,6 +105,7 @@ int main(void) {
 				bad++;
 			}
 	}
-	printf("chunkytest: %d pixels differ (software%s)\n", bad, engine == ZGL_BACKEND_T2 ? " and T2" : engine ? " and the engine" : "");
+	printf("chunkytest: %d pixels differ (software%s)%s\n", bad, engine == ZGL_BACKEND_T2 ? " and T2" : engine ? " and the engine" : "",
+		z_chunky_mem ? ", the picture in main memory" : "");
 	return 0;
 }

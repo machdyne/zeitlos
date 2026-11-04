@@ -1,0 +1,66 @@
+# Lakritz as a games console: the console profile (docs/profiles.md).
+#
+# It boots to a launcher in game mode -- no desktop, no dock -- and plays
+# what is in /apps in 320x240 game mode: in two bitplanes for the
+# arcade games -- the blitter as on every board, from block RAM at full
+# speed (monochrome for now: the runtime's colour starts at 16) -- or in chunky game
+# mode, 256 colours, with T2, the engine that runs the whole 3D frame
+# (docs/zgl_t2.md), for the 3D ones -- whichever the game asks for.
+#
+# -- what goes, for room --
+#
+#   -SPI_ETH     no network: a console is not a terminal
+#   -USB_HOST    the HID block instead (keyboards and gamepads), which
+#                is a fraction of the host controller's fabric
+#   -GPU_CURSOR  no desktop pointer
+#
+# -- what comes --
+#
+#   ZEITLOS_CONSOLE   the profile (FEATURES3 bits 1:0 = 1)
+#   GAME_PLANES=2     two planes of VRAM in block RAM (10 DP16KD)
+#   GAME_CHUNKY       chunky game mode, 256 colours
+#   GPU_T2            T2 in the triangle engine's place
+#   VRAM_SDRAM        chunky's picture in SDRAM: 256 colours take 40 of
+#                     the 25F's 56 block RAMs as VRAM, and T2 needs 30
+#                     of its own, so the planes stay in block RAM and
+#                     the chunky picture is in main memory, read out a
+#                     line ahead of the beam (docs/profiles.md,
+#                     "Lakritz"; rtl/gpu/gpu_ckfetch.v)
+#
+#   NO_MPU            one game at a time: no memory protection
+#   -GPU_RASTER       no line rasterizer: T2 draws the 3D lines, zgfx
+#                     the 2D ones in software (sysctl answers its
+#                     registers, so nothing waits on it for ever)
+#   NO_TRNG           randomness seeded in software
+#   PICORV32_REGS_LUTRAM, ICACHE_KB=2, DCACHE_KB=2, AUDIO_FIFO_LOG2=9,
+#   T2_STRIP_H=6, T2_POST_LOG2=9
+#                     block RAM: 56 of 56 (65 without)
+#
+# Fits in synthesis (yosys 0.33 synth_ecp5): about the same logic as the
+# lakritz board build, which is at 98% in nextpnr and meets 48 MHz --
+# tight. Not yet placed and routed (docs/profiles.md, "Lakritz").
+
+description = Lakritz as a games console (console profile, T2)
+
+base  = lakritz
+pmods =
+
+defines =
+	ZEITLOS_CONSOLE
+	-SPI_ETH
+	-USB_HOST
+	USB_HID
+	-GPU_CURSOR
+	GAME_PLANES=2
+	GAME_CHUNKY
+	GPU_T2
+	VRAM_SDRAM
+	NO_MPU
+	-GPU_RASTER
+	NO_TRNG
+	PICORV32_REGS_LUTRAM
+	ICACHE_KB=2
+	DCACHE_KB=2
+	AUDIO_FIFO_LOG2=9
+	T2_STRIP_H=6
+	T2_POST_LOG2=9

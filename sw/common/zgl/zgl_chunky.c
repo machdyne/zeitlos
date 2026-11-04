@@ -23,13 +23,15 @@
 #include "zgl_t2.h"
 
 static bool use_engine;
+static uint32_t vbase_now;
 static uint8_t lum_now[256];
 static bool lum_valid;
 
 bool zglc_probe(uint8_t flags) {
 	if ((flags & ZGL_NO_ENGINE) || !z_gtri_present()) return false;
 	*z_gtri_reg(Z_GTRI_W_RESET) = 1;
-	*z_gtri_reg(Z_GTRI_W_VBASE) = (uint32_t)(uintptr_t)Z_CHUNKY_VRAM;
+	vbase_now = z_chunky_phys();
+	*z_gtri_reg(Z_GTRI_W_VBASE) = vbase_now;
 	use_engine = true;
 	lum_valid = false;
 	return true;
@@ -62,11 +64,23 @@ int zglc_open(uint8_t flags) {
 	use_engine = kind != 0;
 	if (use_engine) {
 		*z_gtri_reg(Z_GTRI_W_RESET) = 1;
-		*z_gtri_reg(Z_GTRI_W_VBASE) = (uint32_t)(uintptr_t)Z_CHUNKY_VRAM;
+		vbase_now = z_chunky_phys();
+		*z_gtri_reg(Z_GTRI_W_VBASE) = vbase_now;
 		/* each frame starts going out in vertical blanking */
 		*z_gtri_reg(Z_GTRI_W_CTRL) = Z_GTRI_CTRL_VSYNC;
 	}
 	return kind;
+}
+
+/* T2's picture, where it moved (zgl_int.h) */
+void zglc_picture(void) {
+	uint32_t v;
+	if (!use_engine) return;
+	v = z_chunky_phys();
+	if (v != vbase_now) {
+		vbase_now = v;
+		*z_gtri_reg(Z_GTRI_W_VBASE) = v;
+	}
 }
 
 /* a command word: the store waits while the engine's FIFO is full */

@@ -23,7 +23,9 @@
 #include "zgl.h"
 #include "zgl_int.h"
 
-#define ZGLR_LISTS 256        /* list names 1..255 */
+/* List names 1..ZGLR_LISTS-1; the table grows as glGenLists() needs it
+ * (a world in cells, mausrun3d, has thousands) */
+#define ZGLR_LISTS 65536
 #define ZGLR_DEPTH 8          /* glCallList nesting */
 
 typedef struct {
@@ -35,7 +37,24 @@ typedef struct {
 	void *t2;
 } zglr_list_t;
 
-static zglr_list_t lists[ZGLR_LISTS];
+static zglr_list_t *lists;
+static GLuint nlists;         /* the table's size: names 1..nlists-1 */
+
+/* room for names up to `top` - 1 */
+static bool grow_to(GLuint top) {
+	zglr_list_t *n;
+	GLuint cap = nlists ? nlists : 256;
+	if (top <= nlists) return true;
+	if (top > ZGLR_LISTS) return false;
+	while (cap < top) cap *= 2;
+	if (cap > ZGLR_LISTS) cap = ZGLR_LISTS;
+	n = realloc(lists, cap * sizeof(*n));
+	if (!n) return false;
+	memset(&n[nlists], 0, (cap - nlists) * sizeof(*n));
+	lists = n;
+	nlists = cap;
+	return true;
+}
 static GLuint cur_list;       /* being made */
 static bool cur_exec;         /* GL_COMPILE_AND_EXECUTE */
 static int depth;
@@ -79,7 +98,12 @@ bool zglr_rec(int op, int32_t a, int32_t b, int32_t c, int32_t d) {
 GLuint glGenLists(GLsizei range) {
 	GLuint i, k;
 	if (range <= 0) { if (range < 0) error(GL_INVALID_VALUE); return 0; }
+	if (!grow_to(256)) { error(GL_OUT_OF_MEMORY); return 0; }
 	for (i = 1; i + (GLuint)range <= ZGLR_LISTS; i++) {
+		if (i + (GLuint)range > nlists && !grow_to(i + (GLuint)range)) {
+			error(GL_OUT_OF_MEMORY);
+			return 0;
+		}
 		for (k = 0; k < (GLuint)range; k++)
 			if (lists[i + k].used) break;
 		if (k == (GLuint)range) {
@@ -91,7 +115,7 @@ GLuint glGenLists(GLsizei range) {
 }
 
 void glNewList(GLuint list, GLenum mode) {
-	if (list == 0 || list >= ZGLR_LISTS) { error(GL_INVALID_VALUE); return; }
+	if (list == 0 || list >= ZGLR_LISTS || !grow_to(list + 1)) { error(GL_INVALID_VALUE); return; }
 	if (mode != GL_COMPILE && mode != GL_COMPILE_AND_EXECUTE) { error(GL_INVALID_ENUM); return; }
 	if (zgl_s.listing || zgl_s.in_begin) { error(GL_INVALID_OPERATION); return; }
 	free_list(&lists[list]);
@@ -108,13 +132,13 @@ void glEndList(void) {
 }
 
 GLboolean glIsList(GLuint list) {
-	return list > 0 && list < ZGLR_LISTS && lists[list].used ? GL_TRUE : GL_FALSE;
+	return list > 0 && list < nlists && lists[list].used ? GL_TRUE : GL_FALSE;
 }
 
 void glDeleteLists(GLuint list, GLsizei range) {
 	GLuint i;
 	if (range < 0) { error(GL_INVALID_VALUE); return; }
-	for (i = list; i < list + (GLuint)range && i < ZGLR_LISTS; i++) {
+	for (i = list; i < list + (GLuint)range && i < nlists; i++) {
 		if (i == 0 || (zgl_s.listing && i == cur_list)) continue;
 		free_list(&lists[i]);
 		lists[i].used = false;
@@ -130,7 +154,7 @@ ZGL_HOT void glCallList(GLuint list) {
 		 * changed later is called as it is then */
 		if (!zglr_rec(ZGLR_CALL, (int32_t)list, 0, 0, 0)) return;
 	}
-	if (list == 0 || list >= ZGLR_LISTS || depth >= ZGLR_DEPTH) return;
+	if (list == 0 || list >= nlists || depth >= ZGLR_DEPTH) return;
 	l = &lists[list];
 	/* T2: compiled once, and sent as it is */
 	if (zgl_t2_call && zgl_t2_call(l->ops, l->n, &lists[list].t2, &lists[list].t2_state)) return;

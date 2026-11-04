@@ -127,6 +127,7 @@ typedef struct machine {
 	size_t   ram_size;
 
 	uint32_t vram[ZS_VRAM_WORDS];
+	uint32_t ckbase;              /* ZSIM_CONSOLE: socctl's CKBASE */
 
 	raster_t raster;
 	blit_t   blit;
@@ -195,5 +196,7 @@ static inline int machine_get_pixel(machine_t *m, int x, int y) {
 	uint32_t bit = (uint32_t)(y * ZS_SCREEN_W + x);
 	return (m->vram[bit / 32] >> (bit % 32)) & 1;
 }
+
+int zs_console(void);
 
 #endif

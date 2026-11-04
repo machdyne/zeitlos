@@ -187,6 +187,9 @@
  * open in pix: a copy saved in /data/mausrun replaces the built-in art
  * at the next start (docs/mausrun.md, "Art"). Not read by the game. */
 #define Z_DIR_MAUSRUN_ART         "/data/mausrun/art"
+/* mausrun3d's first world, if a hand-edited one is on the card: played
+ * instead of the one built in (docs/mausrun3d.md, "Worlds") */
+#define Z_PATH_MAUSRUN3D_WORLD1   "/data/mausrun3d/world01.txt"
 
 /* tts (docs/tts.md, docs/tts_data.md) */
 #define Z_PATH_TTS_PACK           "/data/tts/speech/en.spk"

@@ -305,7 +305,9 @@ int main(void) {
 		{ "lists, flat, depth",          { false, true, true, true, false, false, 20000 }, 400 },
 		{ "lists, unlit, no cull",       { true, true, false, false, false, false, 33000 }, 400 },
 		{ "lists, no depth",             { true, false, true, true, false, false, 47000 }, 400 },
-		{ "lists, near clipping",        { true, true, true, false, false, true, 9000 }, 800 },
+		/* T2 draws a triangle outside only the sides unclipped (its
+		 * guard band): planes from other corners, an index's rounding */
+		{ "lists, near clipping",        { true, true, true, false, false, true, 9000 }, 2400 },
 		/* GL_NORMALIZE with a scale and a mirror */
 		{ "immediate, normalize",        { false, true, true, true, true, false, 14000, true }, 0 },
 		{ "lists, normalize",            { false, true, true, true, false, false, 14000, true }, 400 },

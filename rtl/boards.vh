@@ -431,6 +431,24 @@
 // assumption) rather than leaving it undefined -- see that file's own
 // `ifndef MEM guard.
 //
+// -- Profiles (docs/profiles.md) --
+//
+// What a bitstream is for, which the OS reads from rtl/csrs.v's
+// FEATURES3 (sw/common/zsoc.h's z_profile()) to decide how to come up:
+//
+//   (neither)          the desktop: wm's desktop, the dock, windows
+//   `ZEITLOS_CONSOLE   games: wm starts sw/apps/launcher, a menu in game
+//                      mode, and no desktop; the arcade runtime goes full
+//                      screen at once, Escape ends a game (release target
+//                      lakritz_console)
+//   `ZEITLOS_HEADLESS  servers, BBSes, controllers: no screen of its own
+//                      (remote desktop optional)
+//
+// A board block or a release spec (release/targets/*.spec) sets one;
+// the profile then decides what else the build needs, which the spec
+// says (lakritz_console: no network, the HID block for the USB host
+// controller, T2, 256 colours).
+
 // -- The ZSPEC escape hatch --
 //
 // Defining ZSPEC replaces this whole per-board chain with a generated

@@ -89,10 +89,12 @@ static int uart_stdin_getc(uart_t *u) {
 /* line rasterizer -- direct translation of rtl/gpu/gpu_raster.v's
  * Bresenham FSM into a single host-side function.                     */
 
-static void raster_set_pixel(machine_t *m, int x, int y, int color) {
+/* the raster op, as gpu_raster.v: 0 clear, 2 XOR, else set */
+static void raster_set_pixel(machine_t *m, int x, int y, int op) {
 	uint32_t bit = (uint32_t)(y * ZS_SCREEN_W + x);
 	uint32_t word = bit / 32, mask = 1u << (bit % 32);
-	if (color) m->vram[word] |= mask; else m->vram[word] &= ~mask;
+	if (op == 2) m->vram[word] ^= mask;
+	else if (op) m->vram[word] |= mask; else m->vram[word] &= ~mask;
 }
 
 static void raster_run(machine_t *m) {
@@ -119,7 +121,7 @@ static void raster_run(machine_t *m) {
 
 		if (in_clip && cur_x >= 0 && cur_x < ZS_SCREEN_W &&
 		                cur_y >= 0 && cur_y < ZS_SCREEN_H)
-			raster_set_pixel(m, cur_x, cur_y, (int)(r->color & 1));
+			raster_set_pixel(m, cur_x, cur_y, (int)(r->color & 3));
 
 		pixel_count++;
 		r->cur_x = (uint32_t)cur_x;
@@ -396,6 +398,16 @@ static void gpio_write(machine_t *m, uint32_t addr, uint32_t val)
 	}
 }
 
+/* ZSIM_CONSOLE set: the console profile, `VRAM_SDRAM (see bus_read32) */
+int zs_console(void) {
+	static int on = -1;
+	if (on < 0) {
+		const char *e = getenv("ZSIM_CONSOLE");
+		on = e != NULL && *e && *e != '0';
+	}
+	return on;
+}
+
 uint32_t bus_read32(machine_t *m, uint32_t addr) {
 	if (addr < ZS_LOWMEM_SIZE) {
 		uint32_t v;
@@ -461,6 +473,14 @@ uint32_t bus_read32(machine_t *m, uint32_t addr) {
 	}
 	if (addr >= ZS_GTRI_BASE && addr < ZS_GTRI_BASE + 0x40 && gtri_enabled())
 		return gtri_read((addr - ZS_GTRI_BASE) / 4);
+	/* ZSIM_CONSOLE: the console profile on a `VRAM_SDRAM bitstream
+	 * (docs/profiles.md): the CSRs' magic and FEATURES3 (console, the
+	 * picture in main memory), and socctl's CKBASE */
+	if (zs_console()) {
+		if (addr == 0x70000000u) return 0x5A454954u;                 /* Z_CSR_MAGIC */
+		if (addr == 0x70000010u) return 0x5A330000u | 1u | 4u;
+		if (addr == 0x70000248u) return m->ckbase;
+	}
 	/* MTU, SD card, anything else unmapped: open bus reads as 0 */
 	return 0;
 }
@@ -496,7 +516,7 @@ void bus_write32(machine_t *m, uint32_t addr, uint32_t val) {
 		case 1: r->y0 = val & 0x1ff; break;
 		case 2: r->x1 = val & 0x1ff; break;
 		case 3: r->y1 = val & 0x1ff; break;
-		case 4: r->color = val & 1; break;
+		case 4: r->color = val & 3; break;   /* the raster op: 0 clear, 1 set, 2 XOR */
 		case 5: if (val & 1) raster_run(m); break; /* start */
 		case 11: r->clip_x0 = val & 0x1ff; break;
 		case 12: r->clip_y0 = val & 0x1ff; break;
@@ -537,6 +557,7 @@ void bus_write32(machine_t *m, uint32_t addr, uint32_t val) {
 		gtri_write(m->vram, (addr - ZS_GTRI_BASE) / 4, val);
 		return;
 	}
+	if (addr == 0x70000248u && zs_console()) { m->ckbase = val & ~15u; return; }
 	/* MTU, SD card, anything else unmapped: open bus write, ignored */
 }
 
@@ -566,6 +587,9 @@ int machine_init(machine_t *m, size_t ram_size) {
 	m->raster.clip_x1 = 511;
 	m->raster.clip_y1 = 511;
 	m->blit.clip_enable = 1;
+
+	/* the console's chunky picture is in main memory (gtri.c) */
+	if (zs_console()) gtri_set_linear(m->ram, ZS_RAM_BASE, (uint32_t)m->ram_size);
 
 	/* install the syscall gate: reg_kernel (0x0c) points at our trap PC */
 	uint32_t trap = ZS_SYSCALL_TRAP_PC;

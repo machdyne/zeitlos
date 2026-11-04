@@ -62,9 +62,17 @@ CPU's whole share of a frame is the stream.
 small RV32IM core that exists only inside T2, running `sw/t2fw` from
 its own block RAMs. It reads the stream word by word (`IN`, which waits
 for the FIFO), transforms and lights each vertex of a chunk once into
-its vertex buffer, then culls, clips (near and far always; the sides,
-Sutherland-Hodgman, as zgl does) and sets up each triangle and line into
-a record in the **record list** (zgl_t2.h). At `END` it starts the
+its vertex buffer, then culls, clips (near and far, Sutherland-Hodgman,
+as zgl does) and sets up each triangle and line into a record in the
+**record list** (zgl_t2.h). A triangle outside only the picture's sides
+is not clipped: it goes to the raster as it is (a **guard band**), if
+its corners fit the record's 16-bit 12.4 fields (±2,048 pixels) --
+the raster draws only its bounding box clamped to the frame, and its
+edge functions don't mind where the corners are. A big merged face
+partly off the picture (mausrun3d's world) costs a record, not a clip;
+the pixels differ from zgl's clipped polygon by an index's rounding
+along its planes. A chunk's vertices that share their normal are lit
+once. At `END` it starts the
 raster (`GO`) and goes on with the next frame's stream; it waits only
 before overwriting the list.
 
@@ -162,6 +170,33 @@ CPU's share is writing the stream: with the 2,048-word FIFO the list
 frame's 2,168 words go in within 17 k cycles, and the CPU is free for
 the rest of the frame.
 
+## The picture in main memory (`VRAM_SDRAM`)
+
+On the console's Lakritz ([profiles.md](profiles.md)) chunky's picture
+is in SDRAM, not VRAM (docs/color.md, "In main memory"), and T2 is built
+for it:
+
+- **`LINEAR`**: the output writes line y's word 20 s + i (segment s) at
+  VBASE + 4 (80 y + 20 s + i): a line of 320 bytes after another, the
+  layout the scanout's fetch reads and software draws in.
+- **`POST_LOG2`**: a posted-write queue (2^10 words, three DP16KD): the
+  output side's words go into it and it to the bus, so the raster goes
+  on while SDRAM takes several cycles a write. STATUS stays busy until
+  it is empty.
+- **`FIFO_LOG2`**: the stream FIFO's size (11, 2,048 words, by default).
+- T2's master is on the main bus there (`rtl/arbiter_gfx.v`, after the
+  scanout's fetch and the audio mixer), not VRAM's.
+
+test_t2's frame 2 in `tb_gpu_t2` (one strip buffer), first word to last
+write:
+
+| | cycles |
+|---|---|
+| VRAM (acked the next cycle), as before | 689 k |
+| a write every 4-12 cycles, no queue | 843 k |
+| the same, with the 1,024-word queue | 717 k |
+| VRAM, with the queue | 651 k |
+
 ## Tests
 
 ```
@@ -184,6 +219,9 @@ iverilog -g2005 -DVEC=2 -o /tmp/tb_t2 tb_gpu_t2.v ../gpu_t2.v ../zeitlos32g.v &&
   records held to the model's: all pass.
 - `tb_gpu_t2`: T2 whole, each stream written into CMD, all of chunky
   VRAM held to the model's picture: all pass.
+  `-DLINEAR` builds T2 LINEAR (below) and holds the linear picture to
+  the same model; `-DSLOW` acks each write after 4-12 cycles, as main
+  memory behind the bus; `-DPOST=10` adds the posted-write queue.
 - space3d's `make render-chunky` plays the game in chunky game mode
   on the host twice, by the software strips and by T2's model, and
   holds the pictures to each other: 0 pixels differ.

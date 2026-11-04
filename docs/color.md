@@ -227,6 +227,32 @@ scanlines, about 6,100 cycles at 48 MHz, and the copy is estimated at
 and the picture never tears. `sw/apps/chunkytest` measures it on the
 board.
 
+### In main memory (`VRAM_SDRAM`)
+
+On a `VRAM_SDRAM` bitstream (the console, [profiles.md](profiles.md),
+"Lakritz") VRAM is only two 320x240 planes, and the chunky picture is in
+**main memory**: 76,800 bytes, **linear** (line y at 320 y, pixel x its
+byte x), wherever socctl's **CKBASE** (`0x7000_0248`) says.
+`rtl/gpu/gpu_ckfetch.v` sits on gpu_video's graphics port and answers
+the fetch above from two lines it keeps in a block RAM of its own: the
+one shown and the next, read from main memory in four-word bursts while
+the one before is shown. CKBASE is taken as a frame's line 0 is read
+(during line 239 of the frame before), so writing it is a **page flip**
+at the next frame, without tearing.
+
+Software does not need to know: `z_color_set_chunky(true)` allocates the
+picture the first time (`z_chunky_prepare()`, in `zeitlos.c`) and points
+CKBASE at it; `z_chunky_seg()` and `z_chunky_put_rows()` write into it;
+`z_chunky_pic()` and `z_chunky_phys()` are the picture and its physical
+address (T2's VBASE follows it, `zglc_picture()`). A program that wants
+its own pictures -- two, to draw one while the other is shown -- gives
+them with `z_chunky_set_pic()` and flips with `z_chunky_show()`.
+`z_vram_sdram()` (FEATURES3 bit 2) says which kind of machine it is.
+
+The planes, the blitter, the rasterizer and the CPU's VRAM stores are
+as before, in block RAM, for framebuffer rows 0..239: COLOR reports two
+planes (XP 3) and writes past row 239 are dropped.
+
 ### What it costs
 
 `gpu_video` alone (yosys `synth_ecp5 -abc9`, colour, eight planes,

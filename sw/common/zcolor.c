@@ -66,7 +66,7 @@ static int sheet1_rows(void) {
 static int planes_of(const z_color_layout_t *l) {
 	int n = l->planes;
 	int hw = z_color_hw_planes();
-	if (hw < 4) hw = 4;
+	if (hw < 2) hw = 4;            /* 0: no colour; 2: `VRAM_SDRAM's two */
 	if (n < 1) n = 1;
 	if (n > hw) n = hw;
 	return n;

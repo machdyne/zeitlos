@@ -21,7 +21,15 @@ module vram_wb
     // of 30 were tried (banks of 1,024 words, a 14,336 + 64 split):
     // yosys builds them with 15:1 multiplexers, 1,000 LUT4 and more.
     // 19200: 40 DP16KD and the same multiplexer as 9600.
-    parameter integer WORDS = 9600
+    parameter integer WORDS = 9600,
+    // 1: drop writes past WORDS. For a VRAM smaller than the
+    // framebuffer software addresses -- `VRAM_SDRAM's 4,800 words (two
+    // 320x240 planes, rows 0..239; docs/profiles.md, "Lakritz") --
+    // where a blit or a line past row 239 must not land on the planes
+    // by aliasing. Reads past WORDS on the graphics port are made 0 by
+    // rtl/gpu/gpu_ckfetch.v, outside, so this port's read stays the
+    // block RAM's own registered read.
+    parameter GUARD = 0
 )
 (
    input wb_clk_i,
@@ -95,7 +103,7 @@ module vram_wb
                 wb_dat_o <= vram[wb_adr_i];
                 
                 // Perform write if requested
-                if (wb_we_i) begin
+                if (wb_we_i && (GUARD == 0 || wb_adr_i < WORDS)) begin
                     if (wb_sel_i[0]) vram[wb_adr_i][7:0] <= wb_dat_i[7:0];
                     if (wb_sel_i[1]) vram[wb_adr_i][15:8] <= wb_dat_i[15:8];
                     if (wb_sel_i[2]) vram[wb_adr_i][23:16] <= wb_dat_i[23:16];

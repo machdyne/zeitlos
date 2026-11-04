@@ -6485,8 +6485,11 @@ static int create_dock(void) {
 // effect without a restart. The dock is resized to its new contents in
 // place; a launch still in progress loses its inverted icon (its window
 // still opens).
+static bool console_mode;     /* the console profile: no dock (main()) */
+
 static void dock_reload(void) {
 
+	if (console_mode) return;
 	printf("wm: dock: reloading\n");
 
 	memset(dock_launching, 0, sizeof(dock_launching));
@@ -8238,6 +8241,20 @@ static void repair_drag(int dragged_idx) {
 
 // -- main loop --
 
+// The console profile's front end: started at boot, and again whenever
+// it has stopped (a crash, or it was ended), no more than every two
+// seconds -- a launcher that cannot start is not retried in a loop.
+static void console_launcher(void) {
+	static uint32_t pid, serial, next;
+	uint32_t now = z_uptime_ticks();
+	if (pid && z_proc_serial(pid) == serial) return;
+	if (next && (int32_t)(now - next) < 0) return;
+	next = now + 2 * Z_TICK_HZ;
+	pid = z_proc_run("launcher");
+	serial = pid ? z_proc_serial(pid) : 0;
+	if (!pid) printf("wm: the console: could not start the launcher\n");
+}
+
 int main(void) {
 
 	my_pid = z_getpid();
@@ -8354,8 +8371,16 @@ int main(void) {
 	// dock_build() first: create_dock() sizes the window from
 	// DOCK_APP_COUNT, so the live set has to be known before the
 	// window exists, not after.
-	dock_build();
-	dock_idx = create_dock();
+	// The console profile (docs/profiles.md): no desktop, no dock. The
+	// launcher (sw/apps/launcher) is the front end, in game mode, and
+	// is started again whenever it stops (console_launcher() below).
+	console_mode = z_profile() == Z_PROFILE_CONSOLE;
+	if (console_mode)
+		printf("wm: the console profile: the launcher, no desktop\n");
+	else {
+		dock_build();
+		dock_idx = create_dock();
+	}
 
 	// Keyboard layouts (system.keyboard.layouts) -- before the first
 	// key can arrive. docs/keyboard_layouts.md.
@@ -8469,6 +8494,9 @@ int main(void) {
 		// -- launched from a group: back to the row once the launch is
 		// over (its window, or the timeout) --
 		dock_return_check();
+
+		// -- the console's launcher, kept running --
+		if (console_mode) console_launcher();
 
 		// -- the running dots: when something opened or closed, and
 		// every 2 s for programs without a window. Like the reload

@@ -18,9 +18,10 @@
  * -- Registers (word offsets), as today's engine's (gpu_tri.v) --
  *
  *   0 CTRL    rw  [0] WAIT_BEAM  [1] VSYNC
- *   1 STATUS  r   [0] busy  [27:16] FIFO words free (of 2,048)
+ *   1 STATUS  r   [0] busy  [27:16] FIFO words free (of 2,048; FIFO_LOG2)
  *   2 CMD     w   a stream word; the write waits while the FIFO is full
- *   3 VBASE   rw  chunky VRAM's byte address
+ *   3 VBASE   rw  chunky VRAM's byte address (LINEAR: the picture's,
+ *                 in main memory)
  *   4 STRIPS  r   strips written out since RESET
  *   5 RESET   w   the FIFO emptied, the core restarted, the raster and
  *                 output stopped
@@ -88,7 +89,24 @@ module gpu_t2_wb #(
 	parameter TWO_BUFS = 0,
 	// a strip's rows: 12 makes a buffer 960 words, which block RAM holds
 	// without the output multiplexers 1,280 words (16 rows) need
-	parameter STRIP_H = 12
+	parameter STRIP_H = 12,
+	// 1: the picture is LINEAR -- 320 bytes a line, line y at VBASE +
+	// 320y -- rather than chunky VRAM's four segments a line in rows of
+	// their own. `VRAM_SDRAM (docs/profiles.md, "Lakritz"): the picture
+	// is in main memory, which the scanout reads a line at a time
+	// (rtl/gpu/gpu_ckfetch.v), and software draws in it as it is.
+	parameter LINEAR = 0,
+	// Posted writes: the output side's words go into a queue of
+	// 2^POST_LOG2 (block RAM: 1,024 is three DP16KD) and the queue to
+	// the bus, so the raster goes on while main memory takes its time
+	// (`VRAM_SDRAM: a write to SDRAM is several cycles, and a strip is
+	// 960 words). STATUS's busy holds until the queue is empty, so a
+	// frame is out when it says so. 0: none, each word waits for its
+	// ack (VRAM answers the next cycle).
+	parameter POST_LOG2 = 0,
+	// the stream FIFO: 2^FIFO_LOG2 words (11: 2,048, four DP16KD; 9:
+	// 512, one -- the CPU then waits on a full FIFO sooner)
+	parameter FIFO_LOG2 = 11
 ) (
 	input             clk,
 	input             rst,
@@ -137,11 +155,12 @@ module gpu_t2_wb #(
 	// 2,048 words: a frame of lists (gldemo's is about 2,200) goes in
 	// while the geometry unit works through it, so the CPU waits on a
 	// full FIFO as little as it can
-	reg [31:0] fifo [0:2047];
-	reg [10:0] f_wr, f_rd;
+	localparam integer F_N = 1 << FIFO_LOG2;
+	reg [31:0] fifo [0:F_N-1];
+	reg [FIFO_LOG2-1:0] f_wr, f_rd;
 	reg [11:0] f_n;
 	reg [31:0] f_q;
-	wire       f_full  = (f_n == 12'd2048);
+	wire       f_full  = (f_n == F_N);
 	wire       f_empty = (f_n == 12'd0);
 	wire       wb_cmd  = wb_cyc_i && wb_stb_i && wb_we_i && !wb_ack_o && (wb_adr_i[3:0] == 4'd2);
 	wire       f_push  = wb_cmd && !f_full;
@@ -154,12 +173,12 @@ module gpu_t2_wb #(
 
 	always @(posedge clk) begin
 		if (rst || soft_rst) begin
-			f_wr <= 11'd0;
-			f_rd <= 11'd0;
+			f_wr <= 0;
+			f_rd <= 0;
 			f_n <= 12'd0;
 		end else begin
-			if (f_push) f_wr <= f_wr + 11'd1;
-			if (f_pop) f_rd <= f_rd + 11'd1;
+			if (f_push) f_wr <= f_wr + 1'b1;
+			if (f_pop) f_rd <= f_rd + 1'b1;
 			if (f_push && !f_pop) f_n <= f_n + 12'd1;
 			else if (!f_push && f_pop) f_n <= f_n - 12'd1;
 		end
@@ -753,8 +772,32 @@ module gpu_t2_wb #(
 	assign o_in[3] = (o_xb + 9'd3 >= o_cx0) && (o_xb + 9'd3 <= o_cx1);
 	wire [9:0]  o_fbrow = {2'd0, o_y0} + {6'd0, o_row} + (o_seg[0] ? 10'd240 : 10'd0) +
 	                      (o_seg[1] ? 10'd480 : 10'd0);
-	wire [14:0] o_vword = {o_fbrow, 4'd0} + {3'd0, o_fbrow, 2'd0} + {10'd0, o_i};
+	// LINEAR: line y's word 20 seg + i at 80 y + 20 seg + i
+	wire [9:0]  o_line = {2'd0, o_y0} + {6'd0, o_row};
+	wire [14:0] o_lword = {o_line[8:0], 6'd0} + {1'd0, o_line, 4'd0} +
+	                      {9'd0, o_seg, 4'd0} + {11'd0, o_seg, 2'd0} + {10'd0, o_i};
+	wire [14:0] o_vword = LINEAR ? o_lword :
+	                      ({o_fbrow, 4'd0} + {3'd0, o_fbrow, 2'd0} + {10'd0, o_i});
 	wire        o_beam_in = (beam_y >= {1'b0, o_y0}) && (beam_y <= {1'b0, o_y0} + {5'd0, o_rows1});
+
+	// -- the posted-write queue (POST_LOG2) --
+	localparam integer PQ_N = (POST_LOG2 != 0) ? (1 << POST_LOG2) : 2;
+	localparam integer PQ_B = (POST_LOG2 != 0) ? POST_LOG2 : 1;
+	reg  [50:0]     pq [0:PQ_N-1];        // { word, sel, data }
+	reg  [50:0]     pq_q;
+	reg  [PQ_B-1:0] pq_wp, pq_rp;
+	reg  [PQ_B:0]   pq_n;
+	reg  [1:0]      pq_st;                // 0 idle, 1 read, 2 on the bus
+	wire            pq_full = (pq_n == PQ_N);
+	wire            pq_push = (POST_LOG2 != 0) && (ost == O_WRITE) && !pq_full &&
+	                          (o_in_q != 4'd0) && o_rowin_q;
+	wire            pq_pop = (pq_st == 2'd2) && m_ack_i;
+	wire            pq_busy = (POST_LOG2 != 0) && ((pq_n != 0) || (pq_st != 2'd0));
+
+	always @(posedge clk) begin
+		if (pq_push) pq[pq_wp] <= {o_vword_q, o_in_q, ou_col_q};
+		pq_q <= pq[pq_rp];
+	end
 
 	always @(posedge clk) begin
 		if (rst || soft_rst) begin
@@ -770,7 +813,37 @@ module gpu_t2_wb #(
 			m_we_o <= 1'b0;
 			m_sel_o <= 4'd0;
 			strips <= 32'd0;
+			pq_wp <= 0;
+			pq_rp <= 0;
+			pq_n <= 0;
+			pq_st <= 2'd0;
 		end else begin
+			// the queue: its count, and its words to the bus
+			if (POST_LOG2 != 0) begin
+				if (pq_push) pq_wp <= pq_wp + 1'b1;
+				if (pq_push && !pq_pop) pq_n <= pq_n + 1'b1;
+				else if (pq_pop && !pq_push) pq_n <= pq_n - 1'b1;
+				case (pq_st)
+				2'd0: if (pq_n != 0) pq_st <= 2'd1;    // pq_q reads pq_rp
+				2'd1: begin
+					m_cyc_o <= 1'b1;
+					m_stb_o <= 1'b1;
+					m_we_o <= 1'b1;
+					m_sel_o <= pq_q[35:32];
+					m_adr_o <= vbase + {15'd0, pq_q[50:36], 2'd0};
+					m_dat_o <= pq_q[31:0];
+					pq_st <= 2'd2;
+				end
+				2'd2: if (m_ack_i) begin
+					m_cyc_o <= 1'b0;
+					m_stb_o <= 1'b0;
+					m_we_o <= 1'b0;
+					pq_rp <= pq_rp + 1'b1;
+					pq_st <= 2'd0;
+				end
+				default: pq_st <= 2'd0;
+				endcase
+			end
 			ou_col_we <= 4'd0;
 			ou_dep_we <= 4'd0;
 			o_clr_set <= 1'b0;
@@ -797,7 +870,18 @@ module gpu_t2_wb #(
 			end
 			O_DATA: ost <= O_WRITE;
 			O_WRITE: begin
-				if (!m_cyc_o) begin
+				if (POST_LOG2 != 0) begin
+					// into the queue (pq_push, above), the strip's word
+					// cleared behind, as below; a full queue waits
+					if (!pq_full) begin
+						ou_b_addr <= o_w;
+						ou_col_we <= 4'b1111;
+						ou_col_d <= {4{o_clear}};
+						ou_dep_we <= 4'b1111;
+						ou_dep_d <= {64{1'b1}};
+						ost <= O_NEXT;
+					end
+				end else if (!m_cyc_o) begin
 					ou_b_addr <= o_w;
 					ou_col_we <= 4'b1111;
 					ou_col_d <= {4{o_clear}};
@@ -850,7 +934,8 @@ module gpu_t2_wb #(
 
 	// the core is idle when it waits for a stream word that isn't there
 	wire geom_idle = g_inwait && f_empty;
-	wire busy = !f_empty || !geom_idle || r_busy || fr_go || h_go || (ready != 2'b00) || o_busy || o_clr_set;
+	wire busy = !f_empty || !geom_idle || r_busy || fr_go || h_go || (ready != 2'b00) || o_busy || o_clr_set ||
+	            pq_busy;
 
 	always @(posedge clk) begin
 		if (rst) begin
@@ -875,7 +960,7 @@ module gpu_t2_wb #(
 				end else begin
 					case (wb_adr_i[3:0])
 					4'd0: wb_dat_o <= {30'd0, vsync, wait_beam};
-					4'd1: wb_dat_o <= {4'd0, 12'd2048 - f_n, 15'd0, busy};
+					4'd1: wb_dat_o <= {4'd0, F_N[11:0] - f_n, 15'd0, busy};
 					4'd3: wb_dat_o <= vbase;
 					4'd4: wb_dat_o <= strips;
 					4'd7: wb_dat_o <= 32'h5A545232;

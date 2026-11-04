@@ -415,6 +415,9 @@ module gpu_video #(
 	output reg [9:0] y,
 	output is_visible,
 
+	// the row the next refill reads (this clock's domain): the line
+	// rtl/gpu/gpu_ckfetch.v must have ready, for `VRAM_SDRAM
+	output [9:0] gb_row_o,
 	output reg [14:0] gb_adr_o,
 	input [31:0] gb_dat_i,
 
@@ -1778,6 +1781,7 @@ module gpu_video #(
 	// row 0 -- plane p is row p -- not into a 640-bit register: see
 	// this file's header.
 	wire [14:0] row_base = (y_refill_sync1 << 4) + (y_refill_sync1 << 2);   // y*20
+	assign gb_row_o = y_refill_sync1;
 
 	// -- colour: the plane fetch --
 	//

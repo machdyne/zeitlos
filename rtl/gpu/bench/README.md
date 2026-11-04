@@ -120,6 +120,18 @@ design makes that pattern land correctly). `tb_line.v` and
   palette rewritten, then chunky off (planes exactly as before) and
   chunky without colour (monochrome). Swapping two bytes on the read
   side fails it at the first pixel. About eight frames.
+- `tb_ckfetch.v` -- `rtl/gpu/gpu_ckfetch.v`, chunky's picture from
+  main memory (`VRAM_SDRAM`; `docs/color.md`, "In main memory"):
+  gpu_video at eight planes, its graphics port through the fetch to a
+  4,800-word VRAM and, behind `rtl/arbiter_gfx.v`, a memory answering
+  each beat after 1-12 cycles and checking the burst rules, shared with
+  a master writing as fast as it is let. Every visible pixel against a
+  linear picture: a whole frame (no line late after the first, 240
+  lines fetched a frame), CKBASE moved mid-frame (the rest of that
+  frame the old picture, the next all the new), then the two planes
+  from VRAM and planes 2..7 (past it) reading 0. `-DCKF_BURST=0` for
+  single reads. Taking CKBASE on every line, not at line 0, fails it
+  (131,583 pixels). About seven frames, two minutes.
 - `tb_deskcol.v` -- desktop colour's exact path in `rtl/gpu/gpu_video.v`
   (COLWIN's DESK): accent pixels through the palette, every other pixel
   and the pointer through the exact ink, checked pixel by pixel; and
@@ -256,6 +268,12 @@ vvp /tmp/tb_colwin.out        # a few minutes
 iverilog -g2005 -o /tmp/tb_chunky.out \
     rtl/gpu/bench/tb_chunky.v /tmp/gpu_video_fix.v
 vvp /tmp/tb_chunky.out        # a few minutes
+
+# tb_ckfetch.v -- the same patched gpu_video.v; -DCKF_BURST=0 for
+# single reads
+iverilog -g2005 -o /tmp/tb_ckfetch.out rtl/gpu/bench/tb_ckfetch.v \
+    /tmp/gpu_video_fix.v rtl/gpu/gpu_ckfetch.v rtl/arbiter_gfx.v
+vvp /tmp/tb_ckfetch.out       # two minutes
 
 # tb_deskcol.v -- desktop colour's exact path (DESK) and the 3-bit VGA
 # DAC; -DNODESK, -DNPLANES=6 (DESK must do nothing), -DDAC3, and the

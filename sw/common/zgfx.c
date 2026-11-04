@@ -15,6 +15,7 @@
 #include "zfont.h"
 #include "zutf8.h"
 #include "zjfont.h"		// the Japanese font, docs/text_encoding.md
+#include "zsoc.h"		// Z_FEATURE_GPU_RASTER: lines in software without it
 
 #define VRAM ((volatile uint32_t *)0x20000000)
 
@@ -498,6 +499,45 @@ void z_fb_hw_line(int x0, int y0, int x1, int y1, int color,
 
 }
 
+// Whether the bitstream has the line rasterizer (Z_FEATURE_GPU_RASTER),
+// read once. A bitstream from before the CSRs cannot say, and every one
+// of those had it. Without it sysctl acks its registers and draws
+// nothing (busy and the FIFO count read 0), so code that waits on it
+// does not hang; lines come here instead.
+static bool raster_hw(void) {
+	static int8_t have = -1;
+	if (have < 0)
+		have = (!z_soc_csrs_present() || z_soc_has_feature(Z_FEATURE_GPU_RASTER)) ? 1 : 0;
+	return have != 0;
+}
+
+// A line by the CPU, as the rasterizer draws it: Bresenham from (x0, y0)
+// to (x1, y1) inclusive, op 0 clear, 1 set, 2 XOR, inside `clip` and the
+// rows the framebuffer has. The blitter is waited for first, as the
+// rasterizer's writes would have been ordered behind it on VRAM's bus.
+static void soft_line(int x0, int y0, int x1, int y1, int op, const z_clip_t *clip) {
+	int dx = x1 > x0 ? x1 - x0 : x0 - x1, sx = x0 < x1 ? 1 : -1;
+	int dy = y1 > y0 ? y0 - y1 : y1 - y0, sy = y0 < y1 ? 1 : -1;
+	int err = dx + dy, e2;
+	uint32_t waited = 0;
+	while ((gpu_blit_status & 1) && ++waited < 10000000) ;
+	for (;;) {
+		if (x0 >= 0 && x0 < Z_SCREEN_W && y0 >= 0 && y0 < gfx_fb_rows &&
+		    (!clip || (x0 >= clip->x0 && x0 <= clip->x1 && y0 >= clip->y0 && y0 <= clip->y1))) {
+			uint32_t bit = (uint32_t)y0 * Z_SCREEN_W + (uint32_t)x0;
+			uint32_t m = 1u << (bit % 32);
+			volatile uint32_t *w = &VRAM[bit / 32];
+			if (op == 2) *w ^= m;
+			else if (op == 0) *w &= ~m;
+			else *w |= m;
+		}
+		if (x0 == x1 && y0 == y1) break;
+		e2 = 2 * err;
+		if (e2 > dy) { err += dy; x0 += sx; }    /* strictly, as gpu_raster.v */
+		if (e2 < dx) { err += dx; y0 += sy; }
+	}
+}
+
 static void z_fb_hw_line_one(int x0, int y0, int x1, int y1, int color, const z_clip_t *clip) {
 
 	// unconditional, regardless of clip -- clip only ever narrows
@@ -547,6 +587,14 @@ static void z_fb_hw_line_one(int x0, int y0, int x1, int y1, int color, const z_
 		if (bx1 < clip->x0 || bx0 > clip->x1 ||
 		    by1 < clip->y0 || by0 > clip->y1)
 			return;
+	}
+
+	// No rasterizer in this bitstream (the console's Lakritz leaves it
+	// out: T2 draws its lines; docs/profiles.md): the same line, op and
+	// scissor by the CPU.
+	if (!raster_hw()) {
+		soft_line(x0, y0, x1, y1, color & 3, clip);
+		return;
 	}
 
 	// deliberately outside the masked section below -- this can

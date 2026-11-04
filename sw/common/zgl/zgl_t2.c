@@ -72,6 +72,7 @@ static void frame_start(void) {
 	int32_t x0, y0, x1, y1;
 	if (t2_framed) return;
 	zglf_rect(&x0, &y0, &x1, &y1);
+	if (zglc_picture) zglc_picture();
 	put(T2_FRAME << 24 | zgl_s.clear_index);
 	put((uint32_t)x0 | (uint32_t)x1 << 16);
 	put((uint32_t)y0 | (uint32_t)y1 << 16);
@@ -121,6 +122,28 @@ static void send_words(uint32_t op, const uint32_t *w, int n, uint32_t *sent, bo
 	*ok = true;
 }
 
+/* The light in the model's space costs a dozen 64-bit products a call,
+ * and a frame of a world in cells calls a hundred lists under the same
+ * matrix: kept, and used again until a matrix, a light or an enable
+ * changes (zgl_s.lserial). */
+static uint32_t lc_serial;
+static uint32_t lc_words[8];
+static bool lc_ok;
+
+static bool light_cached(uint32_t *w) {
+	int k;
+	if (!lc_ok || lc_serial != zgl_s.lserial) return false;
+	for (k = 0; k < 8; k++) w[k] = lc_words[k];
+	return true;
+}
+
+static void light_keep(const uint32_t *w) {
+	int k;
+	for (k = 0; k < 8; k++) lc_words[k] = w[k];
+	lc_serial = zgl_s.lserial;
+	lc_ok = true;
+}
+
 static void send_state(void) {
 	uint32_t w[18], op;
 	int k, l;
@@ -142,8 +165,12 @@ static void send_state(void) {
 	/* the light, in the model's space: n . (M^T L) is (M n) . L */
 	op = T2_LIGHT << 24 | (zgl_s.lighting ? 1u : 0u) |
 	     (zgl_s.light_on[0] ? 2u : 0u) | (zgl_s.light_on[1] ? 4u : 0u);
-	memset(w, 0, sizeof(w));
-	if (zgl_s.lighting) {
+	/* the lights' 8 words: zero but for those on (no memset: a store a
+	 * word is what it costs) */
+	for (k = 0; k < 8; k++) w[k] = 0;
+	if (zgl_s.lighting && light_cached(w)) {
+		/* the same matrix and lights as the last call: the same words */
+	} else if (zgl_s.lighting) {
 		const int32_t *m = zgl_s.mv[zgl_s.mv_top];
 		for (l = 0; l < 2; l++) {
 			if (!zgl_s.light_on[l]) continue;
@@ -162,6 +189,7 @@ static void send_state(void) {
 			}
 			w[l * 4 + 3] = (uint32_t)zgl_s.light_d[l];
 		}
+		light_keep(w);
 	}
 	w[8] = (uint32_t)zgl_s.mat_a;
 	w[9] = (uint32_t)zgl_s.mat_d;

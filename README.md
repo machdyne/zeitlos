@@ -8,6 +8,16 @@ The core applications allow Zeitlos to be used as an extensible multi-window net
 
 Zeitlos is the successor to [Zucker](https://github.com/machdyne/zucker).
 
+## Profiles
+
+Because the hardware is an FPGA, the system can be easily customized for different purposes. Zeitlos has 3 [profiles](docs/profiles.md):
+
+| Profile | What it is for | Graphics |
+|---------|----------------|----------|
+| Desktop | Everyday work, learning, programming, and games | 640x480 monochrome (white, amber, green or paper), [desktop colour](docs/color.md#desktop-colour) on the 45F boards, and the 320x240 [game mode](docs/game_mode.md) in a window or full screen |
+| Console | Games, demos and 3D | Exclusively the 320x240 game mode in up to [256 colours](docs/color.md) with the [T2](docs/zgl_t2.md) geometry engine |
+| Headless | Servers, BBSes and controllers | Optional [remote desktop](docs/remote_desktop.md) |
+
 ## Features
 
 ### SOC
@@ -15,7 +25,7 @@ Zeitlos is the successor to [Zucker](https://github.com/machdyne/zucker).
 | Component | Features/Notes |
 |-----------|----------|
 | CPU | 32-bit RISC-V (PicoRV32 or [Zeitlos32](docs/zeitlos32.md)) RV32IM @ 48MHz |
-| GPU | [Line rasterizer](docs/gpu_raster.md) and [blitter](docs/gpu_blitter.md) |
+| GPU | [Line rasterizer](docs/gpu_raster.md) and [blitter](docs/gpu_blitter.md); optional [triangle engine](docs/gpu_tri.md) and [T2](docs/zgl_t2.md) geometry engine |
 | MTU | Virtual addressing through Memory Translation Unit |
 | MPU | [Memory protection unit](docs/mpu.md) and crash reporting |
 | Cache | Optional [instruction cache](docs/icache.md), or unified instruction + [data cache](docs/dcache.md) with write buffer and SDRAM burst fills |

@@ -173,6 +173,7 @@ static int32_t *cur_mat(void) {
 static void mat_changed(void) {
 	zgl_s.mvp_dirty = true;
 	zgl_s.gen++;
+	zgl_s.lserial++;
 }
 
 static void mult_cur(const int32_t *m) {
@@ -474,6 +475,7 @@ void glEnable(GLenum c) {
 	ZGL_REC(ZGLR_ENABLE, (int32_t)c, 0, 0, 0);
 	if (!p) { set_error(GL_INVALID_ENUM); return; }
 	*p = true;
+	zgl_s.lserial++;
 	zgl_s.gen++;
 }
 
@@ -482,6 +484,7 @@ void glDisable(GLenum c) {
 	ZGL_REC(ZGLR_DISABLE, (int32_t)c, 0, 0, 0);
 	if (!p) { set_error(GL_INVALID_ENUM); return; }
 	*p = false;
+	zgl_s.lserial++;
 	zgl_s.gen++;
 }
 
@@ -594,6 +597,7 @@ void zgl_unit3(int32_t *v) {
 void glLightxv(GLenum light, GLenum pname, const GLfixed *p) {
 	int l = (int)light - GL_LIGHT0;
 	if (l < 0 || l > 1) { set_error(GL_INVALID_ENUM); return; }
+	zgl_s.lserial++;
 	switch (pname) {
 	case GL_POSITION:
 		/* as GL: through the modelview of the moment; a direction
@@ -674,17 +678,22 @@ static void make_mvp(void) {
 	int32_t *o = zgl_s.mvp;
 	int k, rr, c;
 	/* mat_mul(mvp, p, mv), over p's non-zero entries only: a frustum
-	 * has seven of sixteen, so this runs for every model a frame */
-	int64_t acc[16];
-	memset(acc, 0, sizeof(acc));
-	for (k = 0; k < 4; k++)
-		for (rr = 0; rr < 4; rr++) {
-			int64_t a = p[k * 4 + rr];
-			if (!a) continue;
-			if (k == 3) a *= MAT_ONE / POS_ONE;   /* column 3 is 24.8 */
-			for (c = 0; c < 4; c++) acc[c * 4 + rr] += a * b[c * 4 + k];
+	 * has seven of sixteen, so this runs for every model a frame. Each
+	 * entry summed in registers and stored once: on a board whose data
+	 * cache writes through, a store is the cost, not a multiply. */
+	for (rr = 0; rr < 4; rr++) {
+		int64_t a0 = p[rr], a1 = p[4 + rr], a2 = p[8 + rr], a3 = (int64_t)p[12 + rr] * (MAT_ONE / POS_ONE);
+		for (c = 0; c < 4; c++) {
+			const int32_t *bc = &b[c * 4];
+			int64_t acc = 0;
+			if (a0) acc += a0 * bc[0];
+			if (a1) acc += a1 * bc[1];
+			if (a2) acc += a2 * bc[2];
+			if (a3) acc += a3 * bc[3];
+			o[c * 4 + rr] = (int32_t)(acc >> MAT_SH);
 		}
-	for (k = 0; k < 16; k++) o[k] = (int32_t)(acc[k] >> MAT_SH);
+	}
+	(void)k;
 	zgl_s.persp = p[3] == 0 && p[7] == 0 && p[11] == -MAT_ONE && p[15] == 0;
 	if (zgl_s.persp && zgl_s.p_exact[zgl_s.proj_top]) {
 		zgl_s.near_w = zgl_s.p_near[zgl_s.proj_top];
