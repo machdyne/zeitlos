@@ -11,6 +11,9 @@
 // EVERY visible pixel of a frame is checked against a model of the
 // linear picture: line y at base + 320 y, pixel x its byte x.
 //
+//   0. chunky on with CKBASE still 0 (a program from before VRAM_SDRAM),
+//      then at an app's unmapped 0x8xxx_xxxx: no bus cycle at all --
+//      the bus would hang.
 //   1. chunky from main memory at base A, a whole frame; no line late
 //      after the first frame (misses) and 240 lines fetched a frame.
 //   2. CKBASE moved to B while a frame is shown: the rest of THAT frame
@@ -112,6 +115,8 @@ module tb_ckfetch;
 	wire [2:0]  f_cti;
 	wire        f_cyc, f_stb, f_we, f_ack;
 	wire [15:0] misses, lines;
+	integer f_cycles = 0;
+	always @(posedge clk) if (f_cyc) f_cycles = f_cycles + 1;
 
 	gpu_ckfetch #(.BURST(`CKF_BURST), .VRAM_WORDS(VWORDS)) ckf (
 		.clk(clk), .rst(rst),
@@ -366,10 +371,22 @@ module tb_ckfetch;
 		resetn = 1;
 		w_on = 1;
 
-		// ---- 1: chunky from main memory ----
-		ckbase = PIC_A;
+		// ---- 0: CKBASE 0: nothing fetched ----
+		ckbase = 32'h0;
 		color_chunky = 1;
 		set_cfg(1, 3'd7, 6'b11_10_01);
+		f_cycles = 0;
+		next_frame();
+		ckbase = 32'h8000_1000;
+		next_frame();
+		if (f_cycles != 0) begin
+			$display("FAIL: %0d bus cycles with CKBASE 0 or outside main memory", f_cycles);
+			errors = errors + 1;
+		end else
+			$display("ok:   CKBASE 0, then outside main memory: no bus cycle");
+
+		// ---- 1: chunky from main memory ----
+		ckbase = PIC_A;
 		next_frame();
 		mis0 = misses;
 		lin0 = lines;

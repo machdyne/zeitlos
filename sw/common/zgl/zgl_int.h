@@ -200,11 +200,16 @@ void zglc_put(uint32_t w) __attribute__((weak));
 volatile uint32_t *zglc_cmd(void) __attribute__((weak));
 void zglc_strip(int32_t y0, int rows, int32_t cx0, int32_t cx1, const uint8_t *col) __attribute__((weak));
 void zglc_finish(void) __attribute__((weak));
-/* T2's VBASE kept on chunky's picture (z_chunky_phys(): VRAM, or with
- * `VRAM_SDRAM the picture in main memory, which is allocated when
- * chunky first comes on and may move with z_chunky_set_pic()): a store
- * when it has changed, at a frame's start */
-void zglc_picture(void) __attribute__((weak));
+/* T2's VBASE for the frame starting, whose rect is x0..x1, y0..y1:
+ * chunky's picture (z_chunky_phys(): VRAM, or with `VRAM_SDRAM the
+ * picture in main memory, allocated when chunky first comes on, which
+ * may move with z_chunky_set_pic()) -- or, with `VRAM_SDRAM and a frame
+ * that is the whole picture, one of three pages, flipped in at
+ * zglc_finish() (zgl_chunky.c, "pages") */
+void zglc_picture(int32_t x0, int32_t y0, int32_t x1, int32_t y1) __attribute__((weak));
+/* a paged frame (above), finished, shown from the next video frame:
+ * ar_frame() calls it (common/games/zarcade_sys.c) */
+void zglc_present(void) __attribute__((weak));
 /* the engine is here (and not ZGL_NO_ENGINE): a black-and-white
  * window's frames can be its (zglc_mono() sets it up for one) */
 bool zglc_probe(uint8_t flags) __attribute__((weak));

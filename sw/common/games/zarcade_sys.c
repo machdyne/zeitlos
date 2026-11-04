@@ -862,6 +862,9 @@ static bool edge_known;
 static uint32_t edge_fp, edge_frame;
 static void (*frame_hook)(void);
 
+/* common/zgl/zgl_chunky.c, when the program has zgl */
+void zglc_present(void) __attribute__((weak));
+
 #define FRAME_FP ((uint32_t)Z_TICK_HZ * 16u / 60u)
 /* start watching this long before the boundary is expected */
 #define EXACT_SPIN_FP (2u * 16u)
@@ -935,6 +938,9 @@ uint32_t ar_frame(void) {
 		dlg_back_full = false;
 		ar_set_fullscreen(true);
 	}
+	/* zgl's paged T2 frame, HUD and all, shown from this boundary
+	 * (common/zgl/zgl_chunky.c, "pages"); weak: not every game has zgl */
+	if (zglc_present) zglc_present();
 	dt = wait_frame();
 	int i;
 

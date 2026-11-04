@@ -15,9 +15,12 @@ then everything else, the system's own programs left out.
 | Left, Right | a page at a time |
 | Space, Enter (the pad's A, START) | start it |
 
-Starting one gives it the screen (the launcher leaves game mode, and the
-program takes it); when it ends -- Escape, on a console -- the menu is
-back, `/apps` read again.
+Starting one gives it the screen. The launcher keeps game mode until
+the program takes it: an arcade program does as it opens (wm hands game
+mode's grab to the newest asker); for anything else wm takes it from
+the launcher and shows the program's window full screen. The launcher
+draws nothing meanwhile. When the program ends -- Escape, on a console
+-- the launcher takes the screen again and reads `/apps` again.
 
 On a desktop it is an ordinary arcade app (`run launcher`), which is how
 it is tried without a console bitstream.

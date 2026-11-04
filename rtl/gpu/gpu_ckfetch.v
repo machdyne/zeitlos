@@ -46,6 +46,15 @@
  * VRAM_WORDS (the planes' VRAM is smaller than the framebuffer software
  * knows about; rtl/mem/vram.v's GUARD drops the writes there).
  *
+ * Nothing is fetched unless CKBASE is in main memory (0x4xxx_xxxx, or
+ * 0x5xxx_xxxx too with MAIN_512): at
+ * its reset value, 0, which a program from before `VRAM_SDRAM leaves it
+ * at when it turns chunky on, a fetch from address 0 up reaches past
+ * the boot block RAM, where no slave answers -- the main bus would wait
+ * for ever, and the machine with it; and an app address not made
+ * physical (0x8xxx_xxxx) is no better. Such a program shows what VRAM
+ * holds instead.
+ *
  * The view's y must be 0 in chunky (as docs/color.md says already);
  * with any other a line's segments come from different lines and miss.
  *
@@ -57,7 +66,11 @@ module gpu_ckfetch #(
 	// 0: single reads
 	parameter BURST = 1,
 	// words of VRAM behind vram_dat; reads past it are 0
-	parameter integer VRAM_WORDS = 4800
+	parameter integer VRAM_WORDS = 4800,
+	// main memory's address nibble: a CKBASE elsewhere fetches nothing
+	parameter [3:0] MAIN_NIBBLE = 4'h4,
+	// 1: main memory is 512 MB, 0x4000_0000-0x5fff_ffff (`MAIN_512MB)
+	parameter MAIN_512 = 0
 ) (
 	input             clk,
 	input             rst,
@@ -87,6 +100,10 @@ module gpu_ckfetch #(
 
 	assign m_sel_o = 4'b1111;
 	assign m_we_o = 1'b0;
+
+	// on: chunky, with a picture in main memory to fetch (the header)
+	wire on = en && ((base[31:28] == MAIN_NIBBLE) ||
+	                 (MAIN_512 != 0 && base[31:28] == MAIN_NIBBLE + 4'h1));
 
 	// ------------------------------------------------------------------
 	// the two lines: { slot, segment, word }, 2 x 4 x 20 of 256
@@ -124,7 +141,7 @@ module gpu_ckfetch #(
 	reg        sel_q, hit_q, vin_q;
 	always @(posedge clk) begin
 		ck_q <= lb[ra];
-		sel_q <= en;
+		sel_q <= on;
 		hit_q <= hit;
 		vin_q <= (gb_adr < VRAM_WORDS);
 	end
@@ -145,8 +162,9 @@ module gpu_ckfetch #(
 	wire has0n = v0 && (ln0 == ln);
 	wire has1n = v1 && (ln1 == ln);
 
-	localparam [1:0] F_IDLE = 2'd0, F_START = 2'd1, F_REQ = 2'd2, F_GAP = 2'd3;
-	reg [1:0]  fs;
+	localparam [2:0] F_IDLE = 3'd0, F_START = 3'd1, F_REQ = 3'd2, F_GAP = 3'd3,
+	                 F_STB = 3'd4;
+	reg [2:0]  fs;
 	reg        f_slot;
 	reg [7:0]  f_line;
 	reg [1:0]  f_k;                 // segment
@@ -184,7 +202,7 @@ module gpu_ckfetch #(
 		end else begin
 			case (fs)
 			F_IDLE: begin
-				if (!en) begin
+				if (!on) begin
 					v0 <= 1'b0;
 					v1 <= 1'b0;
 					fb_ok <= 1'b0;
@@ -243,16 +261,33 @@ module gpu_ckfetch #(
 						if (f_slot) v1 <= 1'b1; else v0 <= 1'b1;
 						lines <= lines + 16'd1;
 						fs <= F_IDLE;
-					end else if (!BURST || f_beat == 2'd3) begin
-						// a burst (or a word) done: let the bus go
+					end else if (BURST ? (f_beat == 2'd3) : (f_w == 5'd19)) begin
+						// a burst done, or with single reads a
+						// segment (20 words): let the bus go
 						m_cyc_o <= 1'b0;
 						m_stb_o <= 1'b0;
 						m_cti_o <= 3'b000;
 						fs <= F_GAP;
+					end else if (!BURST) begin
+						// single reads: STB drops between the words,
+						// CYC does not -- the grant is kept for the
+						// segment, as the caches' classic line fills
+						// keep theirs (the DDR3 controller answers the
+						// rest of a 16-byte block from the one it
+						// holds, a cycle each). A word a grant was too
+						// slow on DDR3 for a line in time: 30 of 94
+						// lines wrong in tb_console_ddr3.v, none now.
+						m_stb_o <= 1'b0;
+						fs <= F_STB;
 					end else begin
 						m_cti_o <= (f_beat == 2'd2) ? 3'b111 : 3'b010;
 					end
 				end
+			end
+
+			F_STB: begin
+				m_stb_o <= 1'b1;
+				fs <= F_REQ;
 			end
 
 			F_GAP: begin

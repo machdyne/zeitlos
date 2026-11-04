@@ -385,6 +385,30 @@ one cycle each. Stores pay for read-modify-write -- a read and a write -- unless
 their block is held; the write buffer hides that from the CPU until it
 fills.
 
+### Write combining (`DDR3_WCOMBINE`)
+
+With `DDR3_WCOMBINE` (the controller's `WCOMBINE`; on in
+sergei_ml2_console) the block register takes stores instead: a store to
+the block it holds -- or to any block, when it holds nothing unwritten
+-- is merged into it and acknowledged the same cycle, including while
+the DRAM recovers from the last write. The block goes to the DRAM when
+something else needs the controller or after 8 idle cycles: one write,
+and no read when all sixteen bytes were stored. A read of a word the
+register holds whole is answered from it; any other access writes the
+block first. Training turns it off (`rdbuf_off`, `wr_noread`).
+
+`rtl/tb/tb_console_ddr3.v` (`-P tb_console_ddr3.WC=1`, and `.CPU=0` for
+the writer alone), 100 game-mode lines with the scanout's fetch running:
+
+| | without | with |
+|---|---|---|
+| a T2-like writer alone (8-word runs) | 15,536 writes | 37,376 |
+| the writer, with a CPU doing random reads, writes and line fills | 13,096 | 26,128 |
+| that CPU's operations | 2,055 | 3,684 |
+
+About 19 cycles a word becomes 8 for a picture going out. It costs about
+230 LUT4 and 21 flip-flops.
+
 ## Verification
 
 | | |

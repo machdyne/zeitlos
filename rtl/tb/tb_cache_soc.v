@@ -29,6 +29,12 @@
  *                  and finishes with a small app, at 0x4000_8000, that
  *                  must have its stray store blocked (add rtl/mpu.v
  *                  to the file list)
+ *   CKF            with ARB: the console's gfx port (`VRAM_SDRAM): the
+ *                  writer moves behind rtl/arbiter_gfx.v, with
+ *                  rtl/gpu/gpu_ckfetch.v in front of it reading a
+ *                  picture in four-word bursts a line at a time, its
+ *                  graphics port read as gpu_video reads it (add both
+ *                  files to the list)
  *   ARB            put the real rtl/arbiter_main.v between the cache
  *                  and memory, with sysctl.v's exact CTI and snoop
  *                  gating, plus two more masters: a blitter-like reader
@@ -319,6 +325,60 @@ module tb_cache_soc;
     wire w_ack;
     wire [1:0] marb_master;
 
+`ifdef CKF
+    wire [31:0] g_adr, g_dat_o, g_dat_i;
+    wire [3:0]  g_sel;
+    wire [2:0]  g_cti;
+    wire        g_we, g_stb, g_cyc, g_ack;
+    wire [31:0] f_adr, f_dat;
+    wire [3:0]  f_sel;
+    wire [2:0]  f_cti;
+    wire        f_cyc, f_stb, f_we, f_ack;
+    wire [15:0] ckf_misses, ckf_lines;
+    reg  [9:0]  ckf_row = 10'd0;
+    reg  [14:0] ckf_gadr = 15'd0;
+    wire [31:0] ckf_gdat;
+    reg         ckf_en = 1'b0;
+    gpu_ckfetch #(.BURST(`BURST), .VRAM_WORDS(4800)) ckf (
+        .clk(clk), .rst(rst), .en(ckf_en), .base(32'h4001_0000),
+        .gb_row(ckf_row), .gb_adr(ckf_gadr), .gb_dat(ckf_gdat), .vram_dat(32'h0),
+        .m_adr_o(f_adr), .m_cyc_o(f_cyc), .m_stb_o(f_stb), .m_cti_o(f_cti),
+        .m_sel_o(f_sel), .m_we_o(f_we), .m_dat_i(f_dat), .m_ack_i(f_ack),
+        .misses(ckf_misses), .lines(ckf_lines)
+    );
+    wb_arbiter_gfx garb (
+        .clk(clk), .rst(rst),
+        .m0_adr_i(f_adr), .m0_dat_i(32'h0), .m0_dat_o(f_dat),
+        .m0_we_i(f_we), .m0_sel_i(f_sel), .m0_cti_i(f_cti),
+        .m0_stb_i(f_stb), .m0_cyc_i(f_cyc), .m0_ack_o(f_ack),
+        .m1_adr_i(32'h0), .m1_dat_i(32'h0), .m1_dat_o(),
+        .m1_we_i(1'b0), .m1_sel_i(4'h0), .m1_cti_i(3'b000),
+        .m1_stb_i(1'b0), .m1_cyc_i(1'b0), .m1_ack_o(),
+        .m2_adr_i(w_adr), .m2_dat_i(w_dat), .m2_dat_o(),
+        .m2_we_i(1'b1), .m2_sel_i(4'b1111), .m2_cti_i(3'b000),
+        .m2_stb_i(w_stb), .m2_cyc_i(w_stb), .m2_ack_o(w_ack),
+        .s_adr_o(g_adr), .s_dat_o(g_dat_o), .s_dat_i(g_dat_i),
+        .s_we_o(g_we), .s_sel_o(g_sel), .s_cti_o(g_cti),
+        .s_stb_o(g_stb), .s_cyc_o(g_cyc), .s_ack_i(g_ack),
+        .master()
+    );
+    // gpu_video's reads: a line every 1,500 cycles, its 80 words
+    initial begin : ckf_scan
+        integer n, sg, wd;
+        wait (!rst);
+        repeat (2000) @(posedge clk);
+        ckf_en = 1'b1;
+        for (n = 0; n < 100000; n = n + 1) begin
+            @(posedge clk) ckf_row <= n % 240;
+            repeat (3) @(posedge clk);
+            for (sg = 0; sg < 4; sg = sg + 1)
+                for (wd = 0; wd < 20; wd = wd + 1)
+                    @(posedge clk) ckf_gadr <= ((n % 240) + 240 * sg) * 20 + wd;
+            repeat (1400) @(posedge clk);
+        end
+    end
+`endif
+
 `ifdef ARB
     wb_arbiter_main marb (
         .clk(clk), .rst(rst),
@@ -329,17 +389,28 @@ module tb_cache_soc;
         .m1_adr_i(r_adr), .m1_dat_i(32'h0), .m1_dat_o(r_dat),
         .m1_we_i(1'b0), .m1_sel_i(4'b1111), .m1_stb_i(r_stb),
         .m1_cyc_i(r_stb), .m1_ack_o(r_ack),
+`ifdef CKF
+        // the gfx port: the fetch, and the writer behind it
+        .m2_adr_i(g_adr), .m2_dat_i(g_dat_o), .m2_dat_o(g_dat_i),
+        .m2_we_i(g_we), .m2_sel_i(g_sel), .m2_stb_i(g_stb),
+        .m2_cyc_i(g_cyc), .m2_ack_o(g_ack),
+`else
         // a writing master, which nothing in the real SOC is yet
         .m2_adr_i(w_adr), .m2_dat_i(w_dat), .m2_dat_o(),
         .m2_we_i(1'b1), .m2_sel_i(4'b1111), .m2_stb_i(w_stb),
         .m2_cyc_i(w_stb), .m2_ack_o(w_ack),
+`endif
         .s_adr_o(s_adr), .s_dat_o(s_dat_o), .s_dat_i(s_dat_i),
         .s_we_o(s_we), .s_sel_o(s_sel), .s_stb_o(s_stb), .s_cyc_o(s_cyc),
         .s_ack_i(s_ack),
         .master(marb_master)
     );
     // exactly rtl/sysctl.v's wbm_cti and cache_snoop_stb
+`ifdef CKF
+    assign s_cti = (marb_master == 2'd0) ? b_cti : (marb_master == 2'd2) ? g_cti : 3'b000;
+`else
     assign s_cti = (marb_master == 2'd0) ? b_cti : 3'b000;
+`endif
     assign snoop_stb = (marb_master != 2'd0) && s_cyc && s_stb &&
         s_we && s_ack && ((s_adr & 32'hf000_0000) == 32'h4000_0000);
 `else
@@ -575,6 +646,9 @@ module tb_cache_soc;
         $display("  arbiter: reader %0d reads %0d errors, writer %0d writes, %0d snoops",
             r_reads, r_errors, w_writes, snoops);
         fails = fails + r_errors;
+`endif
+`ifdef CKF
+        $display("  chunky fetch: %0d lines, %0d late", ckf_lines, ckf_misses);
 `endif
         $display("  bus: %0d fetches, %0d loads, %0d stores, %0d cpu wait cycles",
             n_fetch, n_load, n_store, n_wait);

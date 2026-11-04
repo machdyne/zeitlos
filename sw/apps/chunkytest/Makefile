@@ -9,4 +9,8 @@ APP = chunkytest
 # 76,800 bytes of picture in .bss
 OBJS = zeitlos.o zobj.o chunkytest.o
 
+# the heap: on a `VRAM_SDRAM console the chunky picture itself is in
+# main memory, 76,800 bytes more (z_color_set_chunky() allocates it)
+APP_STACK = 256K
+
 include ../../common/app.mk

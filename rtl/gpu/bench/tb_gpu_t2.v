@@ -13,6 +13,8 @@
 // of 320 bytes after another, held to the same model's picture.
 // -DSLOW: every write acked after 4-12 cycles rather than the next, as
 // main memory behind the bus (SDRAM) does -- what that costs a frame.
+// -DWLAT=n: every write acked n cycles after it is offered (DDR3:
+// about 19 a word without write combining, 8 with; tb_console_ddr3.v).
 // -DPOST=10: the posted-write queue (POST_LOG2), as `VRAM_SDRAM builds it.
 // -DSTRIP=6, -DFIFO=9: the strip height and the stream FIFO's size.
 
@@ -69,7 +71,11 @@ module tb_gpu_t2;
 	always @(posedge clk) begin
 		m_ack <= 1'b0;
 		rnd = rnd * 32'd1103515245 + 32'd12345;
-`ifdef SLOW
+`ifdef WLAT
+		if (m_cyc && m_stb && !m_ack && wait_n == 0) wait_n = `WLAT;
+		if (wait_n > 0) wait_n = wait_n - 1;
+		if (m_cyc && m_stb && !m_ack && wait_n == 0) begin
+`elsif SLOW
 		if (m_cyc && m_stb && !m_ack && wait_n == 0) wait_n = 4 + (rnd[18:16] + rnd[20:19]);
 		if (wait_n > 0) wait_n = wait_n - 1;
 		if (m_cyc && m_stb && !m_ack && wait_n == 0) begin

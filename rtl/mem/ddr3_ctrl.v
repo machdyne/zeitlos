@@ -132,6 +132,14 @@ module ddr3_ctrl #(
 	// Controller clock in MHz. The DRAM runs at twice this.
 	parameter CLK_MHZ = 48,
 
+	// -- Write combining -------------------------------------------
+	// 1: stores are merged into the block register and acknowledged at
+	// once; the block goes to the DRAM when something else needs the
+	// controller, or after WC_IDLE idle cycles. See "write combining"
+	// below. 0: every store is a DRAM write, as it always was.
+	parameter WCOMBINE = 0,
+	parameter WC_IDLE = 8,
+
 	// -- Simulation ------------------------------------------------
 	// Divides the two multi-hundred-microsecond power-on waits so a
 	// testbench does not spend a million cycles reaching the first
@@ -412,6 +420,7 @@ module ddr3_ctrl #(
 	localparam [4:0] S_RMW_RD   = 5'd17;
 	localparam [4:0] S_RMW_WAIT = 5'd18;
 	localparam [4:0] S_RMW_ACT  = 5'd19;
+	localparam [4:0] S_WC_FLUSH = 5'd20;
 
 	reg [4:0] state;
 	reg [4:0] ret_state;
@@ -555,6 +564,77 @@ module ddr3_ctrl #(
 			merge_word[31:24] = sel[3] ? wdat[31:24] : old[31:24];
 		end
 	endfunction
+	// =============================================================
+	// Write combining (WCOMBINE)
+	//
+	// A store costs the DRAM an ACTIVATE, a WRITE and the write's
+	// recovery and precharge -- about thirteen cycles -- and the first
+	// store to a block a read before all that. A graphics engine
+	// writing a picture out stores every word of every block in order,
+	// so four stores cost four writes and a read, for sixteen bytes the
+	// DRAM could have taken in one write and no read.
+	//
+	// So the block register takes stores. A store to the block it holds
+	// -- or to any block, when it holds nothing unwritten -- is merged
+	// into it and acknowledged in the same cycle, and wc_bv records
+	// which bytes are newer than the DRAM. The block is written
+	// (S_WC_FLUSH) when the controller is needed for anything it
+	// cannot answer from the register, or when it has sat idle
+	// WC_IDLE cycles. All sixteen bytes written: no read. Fewer: the
+	// read-modify-write as before, merging under wc_bv.
+	//
+	// Coherent by construction: every access goes through here, and
+	// nothing reaches the DRAM while it holds unwritten bytes except
+	// the flush itself. A read of a word the register has whole is
+	// answered from it; any other read flushes first.
+	//
+	// Off while training (rdbuf_off_i, wr_noread_i): training is about
+	// the DRAM, not the register. Anything held is flushed first.
+	// =============================================================
+	reg wc_dirty;
+	reg [15:0] wc_bv;
+	reg wc_flushing;
+	reg [3:0] wc_idle;
+	wire wc_on = (WCOMBINE != 0) && !rdbuf_off_i && !wr_noread_i;
+
+	wire wc_req = wb_cyc_i && wb_stb_i && !req_busy && !wb_ack_o;
+	wire wc_tag_eq = (rdbuf_tag == req_tag);
+	wire [3:0] wc_word_bv = (wb_adr_i[1:0] == 2'd0) ? wc_bv[3:0] :
+	                        (wb_adr_i[1:0] == 2'd1) ? wc_bv[7:4] :
+	                        (wb_adr_i[1:0] == 2'd2) ? wc_bv[11:8] : wc_bv[15:12];
+	// a read the register can answer
+	wire wc_rd_hit = wc_tag_eq && !rdbuf_off_i &&
+		(rdbuf_valid || (wc_dirty && (&wc_word_bv)));
+	// a store the register can take: its own block, or any block
+	// when nothing in it is unwritten
+	wire wc_wr_take = wc_on && (!wc_dirty || wc_tag_eq);
+	wire wc_wr_same = wc_tag_eq && (rdbuf_valid || wc_dirty);
+	wire wc_conflict = wc_req && (wb_we_i ? !wc_wr_take : !wc_rd_hit);
+
+	// the store merged into what is held
+	wire [127:0] wc_merged = {
+		(wb_adr_i[1:0] == 2'd3) ? merge_word(rdbuf_data[127:96], wb_dat_i, wb_sel_i) : rdbuf_data[127:96],
+		(wb_adr_i[1:0] == 2'd2) ? merge_word(rdbuf_data[95:64], wb_dat_i, wb_sel_i)  : rdbuf_data[95:64],
+		(wb_adr_i[1:0] == 2'd1) ? merge_word(rdbuf_data[63:32], wb_dat_i, wb_sel_i)  : rdbuf_data[63:32],
+		(wb_adr_i[1:0] == 2'd0) ? merge_word(rdbuf_data[31:0], wb_dat_i, wb_sel_i)   : rdbuf_data[31:0]
+	};
+	wire [15:0] wc_sel_bv = {
+		(wb_adr_i[1:0] == 2'd3) ? wb_sel_i : 4'd0,
+		(wb_adr_i[1:0] == 2'd2) ? wb_sel_i : 4'd0,
+		(wb_adr_i[1:0] == 2'd1) ? wb_sel_i : 4'd0,
+		(wb_adr_i[1:0] == 2'd0) ? wb_sel_i : 4'd0
+	};
+	wire [15:0] wc_bv_next = (wc_wr_same ? wc_bv : 16'd0) | wc_sel_bv;
+
+	// the block as read, under the bytes the register has newer
+	reg [127:0] wc_fill;
+	integer wci;
+	always @(*) begin
+		for (wci = 0; wci < 16; wci = wci + 1)
+			wc_fill[wci*8 +: 8] = wc_bv[wci] ? rdbuf_data[wci*8 +: 8]
+			                                : phy_rdata_i[wci*8 +: 8];
+	end
+
 	assign map_bank = wb_adr_i[COL_BITS-1+BANK_BITS-1:COL_BITS-1];
 	assign map_row  = wb_adr_i[COL_BITS-1+BANK_BITS+ROW_BITS-1:
 	                           COL_BITS-1+BANK_BITS];
@@ -622,6 +702,10 @@ module ddr3_ctrl #(
 			phy_rden_o <= 1'b0;
 
 			rdbuf_valid <= 1'b0;
+			wc_dirty <= 1'b0;
+			wc_bv <= 16'd0;
+			wc_flushing <= 1'b0;
+			wc_idle <= 4'd0;
 			rd_timeout_o <= 1'b0;
 			rd_timer <= 11'd0;
 			wb_ack_o <= 1'b0;
@@ -745,14 +829,31 @@ module ddr3_ctrl #(
 				init_done_o <= 1'b1;
 				req_busy <= 1'b0;
 
+				if (wc_req || !wc_dirty) wc_idle <= 4'd0;
+				else if (wc_idle != 4'hf) wc_idle <= wc_idle + 4'd1;
+
 				// Refresh outranks new work. It has a hard deadline
 				// and an access does not; letting a busy bus defer
 				// refreshes indefinitely is how DRAM loses data.
+				// (Unwritten bytes in the register wait: a refresh
+				// does not touch it.)
 				if (refresh_req) begin
 					state <= S_REF;
-				end else if (wb_cyc_i && wb_stb_i && !req_busy
-				             && !wb_ack_o && !wb_we_i && rdbuf_hit
-				             && !rdbuf_off_i) begin
+				end else if (wc_dirty && (!wc_on || wc_conflict ||
+				             wc_idle >= WC_IDLE)) begin
+					// The register's unwritten bytes go first. A
+					// request waiting stays on the bus and is taken
+					// when this is back.
+					state <= S_WC_FLUSH;
+				end else if (wc_req && wb_we_i && wc_wr_take) begin
+					// Taken into the register; written later.
+					rdbuf_data <= wc_merged;
+					rdbuf_tag <= req_tag;
+					rdbuf_valid <= (wc_wr_same && rdbuf_valid) || (&wc_bv_next);
+					wc_bv <= wc_bv_next;
+					wc_dirty <= 1'b1;
+					wb_ack_o <= 1'b1;
+				end else if (wc_req && !wb_we_i && wc_rd_hit) begin
 					// Already have it. A four-word line fill costs
 					// one DRAM read and three of these.
 					case (wb_adr_i[1:0])
@@ -791,6 +892,17 @@ module ddr3_ctrl #(
 
 			end
 
+			// -- write combining: the register to the DRAM ---------
+			S_WC_FLUSH: begin
+				req_row <= rdbuf_tag[ROW_BITS+BANK_BITS+COL_BITS-4:BANK_BITS+COL_BITS-3];
+				req_bank <= rdbuf_tag[BANK_BITS+COL_BITS-4:COL_BITS-3];
+				req_col <= {rdbuf_tag[COL_BITS-4:0], 3'b000};
+				req_we <= 1'b1;
+				req_busy <= 1'b1;
+				wc_flushing <= 1'b1;
+				state <= S_ACT;
+			end
+
 			// -- Refresh ------------------------------------------
 			//
 			// No PRECHARGE ALL first: auto-precharge means no row is
@@ -815,8 +927,13 @@ module ddr3_ctrl #(
 				// one block therefore cost a write each, not a read
 				// and a write each, which is the common case for a
 				// write-through cache walking memory.
-				ret_state <= req_we ? ((rdbuf_hit || wr_noread_i) ? S_WR : S_RMW_RD)
-				                    : S_RD;
+				// A flush reads only when the register does not
+				// have the whole block.
+				if (wc_flushing)
+					ret_state <= rdbuf_valid ? S_WR : S_RMW_RD;
+				else
+					ret_state <= req_we ? ((rdbuf_hit || wr_noread_i) ? S_WR : S_RMW_RD)
+					                    : S_RD;
 				state <= S_WAIT;
 			end
 
@@ -838,7 +955,8 @@ module ddr3_ctrl #(
 					// Store the block as read. The merge happens in
 					// ONE place, S_WR, whether the block arrived here
 					// or was already held.
-					rdbuf_data <= phy_rdata_i;
+					// A flush keeps the bytes it holds newer.
+					rdbuf_data <= wc_flushing ? wc_fill : phy_rdata_i;
 					rdbuf_tag <= {req_row, req_bank,
 					              req_col[COL_BITS-1:3]};
 					rdbuf_valid <= 1'b1;
@@ -852,10 +970,16 @@ module ddr3_ctrl #(
 					// read-modify-write that cannot read has nothing
 					// safe to write, and guessing destroys the
 					// fifteen bytes it was not asked to change.
+					// A flush acknowledges nothing (no request is
+					// its own) and loses what it held: there was no
+					// safe way to write it.
 					rd_timeout_o <= 1'b1;
-					wb_ack_o <= 1'b1;
+					wb_ack_o <= !wc_flushing;
 					wb_dat_o <= 32'hdeadbe00;
 					rdbuf_valid <= 1'b0;
+					wc_dirty <= 1'b0;
+					wc_bv <= 16'd0;
+					wc_flushing <= 1'b0;
 					state <= S_IDLE;
 				end else begin
 					rd_timer <= rd_timer - 11'd1;
@@ -936,16 +1060,21 @@ module ddr3_ctrl #(
 				// the bytes memory already has. DM stays inactive:
 				// it is the one mechanism this design does not use,
 				// and therefore the one that cannot be misaligned.
-				phy_wdata_o <= rmw_merged;
+				// A flush writes the register as it is: no request
+				// of its own to merge, and none to acknowledge.
+				phy_wdata_o <= wc_flushing ? rdbuf_data : rmw_merged;
 				phy_wmask_o <= 16'd0;
 
 				// Keep the block. The next store to it needs no read,
 				// and the next load of it needs no access at all.
-				rdbuf_data <= rmw_merged;
+				rdbuf_data <= wc_flushing ? rdbuf_data : rmw_merged;
 				rdbuf_tag <= {req_row, req_bank, req_col[COL_BITS-1:3]};
 				rdbuf_valid <= 1'b1;
+				wc_dirty <= 1'b0;
+				wc_bv <= 16'd0;
+				wc_flushing <= 1'b0;
 
-				wb_ack_o <= 1'b1;
+				wb_ack_o <= !wc_flushing;
 				wait_ctr <= CYC_WR_BUSY[19:0];
 				ret_state <= S_IDLE;
 				state <= S_WAIT;
@@ -957,6 +1086,22 @@ module ddr3_ctrl #(
 					state <= ret_state;
 				end else begin
 					wait_ctr <= wait_ctr - 20'd1;
+				end
+				// Stores keep coming while the DRAM recovers from
+				// the last access: the register is free once a write
+				// has handed its block to the PHY, so a store it can
+				// take is taken now, not after the wait. Only on the
+				// way back to S_IDLE (never during power-on or a
+				// read-modify-write), and only one the register can
+				// take without a flush.
+				if (ret_state == S_IDLE && init_done_o && !wc_flushing &&
+				    wc_req && wb_we_i && wc_wr_take) begin
+					rdbuf_data <= wc_merged;
+					rdbuf_tag <= req_tag;
+					rdbuf_valid <= (wc_wr_same && rdbuf_valid) || (&wc_bv_next);
+					wc_bv <= wc_bv_next;
+					wc_dirty <= 1'b1;
+					wb_ack_o <= 1'b1;
 				end
 			end
 

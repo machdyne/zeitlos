@@ -72,7 +72,7 @@ static void frame_start(void) {
 	int32_t x0, y0, x1, y1;
 	if (t2_framed) return;
 	zglf_rect(&x0, &y0, &x1, &y1);
-	if (zglc_picture) zglc_picture();
+	if (zglc_picture) zglc_picture(x0, y0, x1, y1);
 	put(T2_FRAME << 24 | zgl_s.clear_index);
 	put((uint32_t)x0 | (uint32_t)x1 << 16);
 	put((uint32_t)y0 | (uint32_t)y1 << 16);

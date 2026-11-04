@@ -771,7 +771,12 @@ def check_equivalence(root, target, zspec_text):
     # thing it exists to catch -- the two paths producing different
     # macro sets -- without inventing differences from defines that
     # were never there to remove.
-    expected_extra = (set(target.defines) - set(base_defs)) & via_spec
+    #
+    # The same rule the other way: a define the target has that the
+    # board path ends up WITHOUT -- `UART0 on lakritz_console, which
+    # removes `USB_CDC and so keeps the `UART0 the board's own block
+    # lists and USB_CDC then takes away -- is expected too.
+    expected_extra = (set(target.defines) - (set(base_defs) & via_board)) & via_spec
     expected_gone = (set(base_defs) - set(target.defines)) & via_board
 
     got_extra = via_spec - via_board

@@ -91,11 +91,17 @@ int main(void) {
 	for (i = 0; i < 256; i++) z_color_set_palette(i, rgb332(i));
 	card();
 	stripes(0);
-	z_chunky_put_rows(pic, W, 0, H);
 
 	z_game_set_enabled(true, false);
 	z_game_set_view(0, 0);
-	z_color_set_chunky(true);
+	/* first: on a VRAM_SDRAM console it allocates the picture, which
+	 * z_chunky_put_rows() then writes (docs/color.md, "In main memory") */
+	if (!z_color_set_chunky(true)) {
+		z_game_set_enabled(false, false);
+		printf("chunkytest: no memory for the chunky picture\n");
+		return 1;
+	}
+	z_chunky_put_rows(pic, W, 0, H);
 	z_game_wait_frame();
 
 	fr = z_game_frame();

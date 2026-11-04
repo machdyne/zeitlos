@@ -165,14 +165,21 @@ static void start(void) {
 	}
 	serial = z_proc_serial(pid);
 	status[0] = 0;
-	ar_set_fullscreen(false);           /* the screen is the game's */
+	/* The screen stays ours until the program takes it: an arcade
+	 * program takes game mode from us as it opens (wm hands the grab
+	 * to the newest), anything else has wm revoke ours. Giving it up
+	 * here first raced the program for game mode's register -- and
+	 * turned off the game's game mode after it had turned it on.
+	 * Nothing of ours is drawn while it runs. */
 	for (;;) {
 		ar_event_t e;
-		while (ar_poll(&e)) { }         /* nothing of ours while it runs */
+		while (ar_poll(&e)) { }
 		if (z_proc_serial(pid) != serial) break;
-		ar_frame();
+		z_proc_wait(Z_TICK_HZ / 20);
 	}
 	scan();                             /* the card may have changed */
+	/* the program's end gave the screen back to wm: take it again */
+	ar_set_fullscreen(false);
 	ar_set_fullscreen(true);
 	ar_dirty_all();
 }

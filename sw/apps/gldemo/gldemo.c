@@ -348,7 +348,11 @@ static int chunky_main(bool soft) {
 	}
 	z_game_set_enabled(true, false);
 	z_game_set_view(0, 0);
-	z_color_set_chunky(true);
+	if (!z_color_set_chunky(true)) {
+		z_game_set_enabled(false, false);
+		printf("gldemo: no memory for the chunky picture\n");
+		return 1;
+	}
 	if (!zgl_open(&zd)) {
 		z_color_set_chunky(false);
 		z_game_set_enabled(false, false);

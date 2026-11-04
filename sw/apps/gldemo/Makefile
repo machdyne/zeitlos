@@ -12,8 +12,9 @@ OBJS = zeitlos.o zobj.o zgfx.o zcolor.o zfont_data.o zwin.o zwidget.o zspeak.o \
 	zgl.o zgl_lines.o zgl_frames.o zgl_lists.o zgl_chunky.o zgl_t2.o gldemo.o
 
 # stack and heap: zgl's frame (1,024 primitives, 72 bytes each), the
-# sphere's display list and the arcade runtime
-APP_STACK = 256K
+# sphere's display list and the arcade runtime; and on a `VRAM_SDRAM
+# console the chunky picture in main memory (76,800 bytes)
+APP_STACK = 512K
 
 HOSTCC ?= cc
 GAMES = ../../common/games

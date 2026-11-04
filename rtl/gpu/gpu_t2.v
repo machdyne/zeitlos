@@ -787,7 +787,8 @@ module gpu_t2_wb #(
 	reg  [50:0]     pq_q;
 	reg  [PQ_B-1:0] pq_wp, pq_rp;
 	reg  [PQ_B:0]   pq_n;
-	reg  [1:0]      pq_st;                // 0 idle, 1 read, 2 on the bus
+	reg  [1:0]      pq_st;                // 0 idle, 1 read, 2 on the bus, 3 the next word's read
+	reg  [3:0]      pq_run;               // words this grant
 	wire            pq_full = (pq_n == PQ_N);
 	wire            pq_push = (POST_LOG2 != 0) && (ost == O_WRITE) && !pq_full &&
 	                          (o_in_q != 4'd0) && o_rowin_q;
@@ -817,6 +818,7 @@ module gpu_t2_wb #(
 			pq_rp <= 0;
 			pq_n <= 0;
 			pq_st <= 2'd0;
+			pq_run <= 4'd0;
 		end else begin
 			// the queue: its count, and its words to the bus
 			if (POST_LOG2 != 0) begin
@@ -835,13 +837,27 @@ module gpu_t2_wb #(
 					pq_st <= 2'd2;
 				end
 				2'd2: if (m_ack_i) begin
-					m_cyc_o <= 1'b0;
-					m_stb_o <= 1'b0;
-					m_we_o <= 1'b0;
 					pq_rp <= pq_rp + 1'b1;
-					pq_st <= 2'd0;
+					if (pq_n > 1 && pq_run != 4'd7) begin
+						// more queued: STB drops, CYC does not -- up
+						// to 8 words a grant (main memory's
+						// controllers start on CYC and STB; the DDR3
+						// one keeps the 16-byte block a run of stores
+						// lands in). tb_console_ddr3.v, a busy CPU:
+						// 2.4 times the writes of a word a grant;
+						// 16 gave little more and starved the CPU.
+						m_stb_o <= 1'b0;
+						pq_run <= pq_run + 4'd1;
+						pq_st <= 2'd3;
+					end else begin
+						m_cyc_o <= 1'b0;
+						m_stb_o <= 1'b0;
+						m_we_o <= 1'b0;
+						pq_run <= 4'd0;
+						pq_st <= 2'd0;
+					end
 				end
-				default: pq_st <= 2'd0;
+				2'd3: pq_st <= 2'd1;                    // pq_q reads the new pq_rp
 				endcase
 			end
 			ou_col_we <= 4'd0;

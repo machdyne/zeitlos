@@ -27,23 +27,30 @@
 #                     line ahead of the beam (docs/profiles.md,
 #                     "Lakritz"; rtl/gpu/gpu_ckfetch.v)
 #
+#   -USB_CDC          the serial console on PMOD A instead (pmods =
+#                     uart@a: UART0, a USB-serial adapter on pins 2/3)
+#   NO_RTC            no wall clock: a console needs no date
 #   NO_MPU            one game at a time: no memory protection
 #   -GPU_RASTER       no line rasterizer: T2 draws the 3D lines, zgfx
 #                     the 2D ones in software (sysctl answers its
 #                     registers, so nothing waits on it for ever)
 #   NO_TRNG           randomness seeded in software
-#   PICORV32_REGS_LUTRAM, ICACHE_KB=2, DCACHE_KB=2, AUDIO_FIFO_LOG2=9,
-#   T2_STRIP_H=6, T2_POST_LOG2=9
+#   -DCACHE           no data cache (about 10% of CPU speed on
+#                     data-heavy code); the hardware audio mixer stays,
+#                     which saves the CPU about 15% while music plays
+#   PICORV32_REGS_LUTRAM, AUDIO_FIFO_LOG2=9, T2_STRIP_H=6
 #                     block RAM: 56 of 56 (65 without)
 #
-# Fits in synthesis (yosys 0.33 synth_ecp5): about the same logic as the
-# lakritz board build, which is at 98% in nextpnr and meets 48 MHz --
-# tight. Not yet placed and routed (docs/profiles.md, "Lakritz").
+# Measured (yowasp yosys 0.70 synth_ecp5 -abc9, nextpnr-ecp5 packing):
+# TRELLIS_COMB 22,359 of 24,288 (92%) here, where the same flow put the
+# previous spec at 24,738 against the 25,549 a release build reported --
+# so about 95% in a release build. The lakritz board build is at 98%.
+# docs/profiles.md, "Lakritz".
 
 description = Lakritz as a games console (console profile, T2)
 
 base  = lakritz
-pmods =
+pmods = uart@a
 
 defines =
 	ZEITLOS_CONSOLE
@@ -55,12 +62,12 @@ defines =
 	GAME_CHUNKY
 	GPU_T2
 	VRAM_SDRAM
+	-USB_CDC
+	NO_RTC
 	NO_MPU
 	-GPU_RASTER
 	NO_TRNG
 	PICORV32_REGS_LUTRAM
-	ICACHE_KB=2
-	DCACHE_KB=2
+	-DCACHE
 	AUDIO_FIFO_LOG2=9
 	T2_STRIP_H=6
-	T2_POST_LOG2=9

@@ -197,6 +197,34 @@ write:
 | the same, with the 1,024-word queue | 717 k |
 | VRAM, with the queue | 651 k |
 
+With `-DWLAT=n` every write is acked n cycles after it is offered, as
+DDR3 does a word: 19 cycles without the controller's write combining,
+about 8 with (docs/ddr3.md, "Write combining"). Frame 2, LINEAR with the
+queue:
+
+| write cost | geometry (to GO) | raster | frame |
+|---|---|---|---|
+| 1 cycle | 477 k | 170 k | 651 k |
+| 8 cycles | 477 k | 207 k | 705 k |
+| 19 cycles | 477 k | 382 k | 901 k |
+
+### Pages
+
+With one picture T2 writes the one being shown, so its output waits for
+vertical blanking (CTRL.VSYNC) to stay ahead of the beam, and with one
+strip buffer the raster waits with it: on average half a video frame
+(about 400 k cycles at 48 MHz) on every frame. In main memory a picture
+is only 76,800 bytes of the program's heap, so zgl keeps three when a
+frame is the whole picture (sw/common/zgl/zgl_chunky.c, "pages"): the
+one shown, one waiting for the next frame boundary (CKBASE is taken as a
+frame starts), and the one T2 draws into, with no VSYNC and no waiting.
+At glFinish() the finished page becomes `z_chunky_mem`, so what the
+program draws after it (a HUD) lands there too, and `ar_frame()` shows
+it, from the next boundary, before it waits; a program that never calls
+`ar_frame()` has it shown when its next frame starts. A smaller frame
+keeps the one picture and VSYNC, since what is outside it is meant to
+stay.
+
 ## Tests
 
 ```

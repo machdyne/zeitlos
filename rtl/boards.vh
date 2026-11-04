@@ -1876,6 +1876,14 @@
 `undef CPU_MUL_FAST
 `endif
 
+// -- NO_RTC: a build without the wall clock --
+// For a target that is genuinely tight (lakritz_console: a games
+// console needs no date). Software copes, as the RTC note at the top
+// says: the FEATURE bit is clear and everything that asks checks it.
+`ifdef NO_RTC
+`undef RTC
+`endif
+
 // -- NO_MPU: a build without the MPU, for bisecting --
 //   make BOARD=... EXTRA_DEFINES=-DNO_MPU
 // Nothing defines it; without it nothing here changes.

@@ -80,8 +80,12 @@
 `ifndef GPU_T2
 `VRAM_SDRAM_NEEDS_GPU_T2
 `endif
+// main memory: SDRAM (Lakritz) or DDR3 (Sergei ML2's console target,
+// for testing); the name says where the picture is, main memory
 `ifndef MEM_SDRAM
-`VRAM_SDRAM_NEEDS_MEM_SDRAM
+`ifndef MEM_DDR3
+`VRAM_SDRAM_NEEDS_SDRAM_OR_DDR3_MAIN_MEMORY
+`endif
 `endif
 `ifndef GAME_CHUNKY
 `VRAM_SDRAM_NEEDS_GAME_CHUNKY
@@ -3186,10 +3190,18 @@ module sysctl #()
 	wire [31:0] wbs_ddr3reg_dat_o;
 	wire wbs_ddr3reg_ack_o;
 
+`ifdef DDR3_WCOMBINE
+	localparam DDR3_WC = 1;
+`else
+	localparam DDR3_WC = 0;
+`endif
 	ddr3 #(
 		// Per part, from rtl/boards.vh.
 		.ROW_BITS(`DDR3_ROW_BITS),
-		.TRFC_NS(`DDR3_TRFC_NS)
+		.TRFC_NS(`DDR3_TRFC_NS),
+		// `DDR3_WCOMBINE: stores combined into whole blocks
+		// (rtl/mem/ddr3_ctrl.v, "write combining")
+		.WCOMBINE(DDR3_WC)
 	) ddr3_i (
 		.clk_i(wbm_clk),
 		.rst_i(wbm_rst),
@@ -5040,6 +5052,9 @@ module sysctl #()
 		.BURST(1),
 `else
 		.BURST(0),
+`endif
+`ifdef MAIN_512MB
+		.MAIN_512(1),
 `endif
 		.VRAM_WORDS(VRAM_WORDS)
 	) gckf0_i (

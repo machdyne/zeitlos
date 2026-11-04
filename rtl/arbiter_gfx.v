@@ -38,7 +38,7 @@ module wb_arbiter_gfx (
 	input  wire [2:0]  m0_cti_i,
 	input  wire        m0_stb_i,
 	input  wire        m0_cyc_i,
-	output reg         m0_ack_o,
+	output wire        m0_ack_o,
 
 	input  wire [31:0] m1_adr_i,
 	input  wire [31:0] m1_dat_i,
@@ -48,7 +48,7 @@ module wb_arbiter_gfx (
 	input  wire [2:0]  m1_cti_i,
 	input  wire        m1_stb_i,
 	input  wire        m1_cyc_i,
-	output reg         m1_ack_o,
+	output wire        m1_ack_o,
 
 	input  wire [31:0] m2_adr_i,
 	input  wire [31:0] m2_dat_i,
@@ -58,16 +58,16 @@ module wb_arbiter_gfx (
 	input  wire [2:0]  m2_cti_i,
 	input  wire        m2_stb_i,
 	input  wire        m2_cyc_i,
-	output reg         m2_ack_o,
+	output wire        m2_ack_o,
 
-	output reg  [31:0] s_adr_o,
-	output reg  [31:0] s_dat_o,
+	output wire [31:0] s_adr_o,
+	output wire [31:0] s_dat_o,
 	input  wire [31:0] s_dat_i,
-	output reg         s_we_o,
-	output reg  [3:0]  s_sel_o,
-	output reg  [2:0]  s_cti_o,
-	output reg         s_stb_o,
-	output reg         s_cyc_o,
+	output wire        s_we_o,
+	output wire [3:0]  s_sel_o,
+	output wire [2:0]  s_cti_o,
+	output wire        s_stb_o,
+	output wire        s_cyc_o,
 	input  wire        s_ack_i,
 
 	output reg  [1:0]  master
@@ -103,38 +103,23 @@ module wb_arbiter_gfx (
 		end
 	end
 
-	always @(*) begin
-		s_adr_o = 32'h0;
-		s_dat_o = 32'h0;
-		s_we_o  = 1'b0;
-		s_sel_o = 4'h0;
-		s_cti_o = 3'b000;
-		s_stb_o = 1'b0;
-		s_cyc_o = 1'b0;
-		m0_ack_o = 1'b0;
-		m1_ack_o = 1'b0;
-		m2_ack_o = 1'b0;
-		case (state)
-		A0: begin
-			s_adr_o = m0_adr_i; s_dat_o = m0_dat_i; s_we_o = m0_we_i;
-			s_sel_o = m0_sel_i; s_cti_o = m0_cti_i;
-			s_stb_o = m0_stb_i; s_cyc_o = m0_cyc_i;
-			m0_ack_o = s_ack_i;
-		end
-		A1: begin
-			s_adr_o = m1_adr_i; s_dat_o = m1_dat_i; s_we_o = m1_we_i;
-			s_sel_o = m1_sel_i; s_cti_o = m1_cti_i;
-			s_stb_o = m1_stb_i; s_cyc_o = m1_cyc_i;
-			m1_ack_o = s_ack_i;
-		end
-		A2: begin
-			s_adr_o = m2_adr_i; s_dat_o = m2_dat_i; s_we_o = m2_we_i;
-			s_sel_o = m2_sel_i; s_cti_o = m2_cti_i;
-			s_stb_o = m2_stb_i; s_cyc_o = m2_cyc_i;
-			m2_ack_o = s_ack_i;
-		end
-		default: ;
-		endcase
-	end
+	// Continuous assignments, not an always @(*) that sets everything
+	// to 0 and then the winner's: behind wb_arbiter_main, in front of a
+	// slave whose ack is combinational on CYC (rtl/mem/sdram_kianv.v),
+	// those transient zeros chase each other round the two arbiters in
+	// simulation without end. The logic is the same.
+	wire g0 = (state == A0), g1 = (state == A1), g2 = (state == A2);
+
+	assign s_adr_o = g0 ? m0_adr_i : g1 ? m1_adr_i : g2 ? m2_adr_i : 32'h0;
+	assign s_dat_o = g0 ? m0_dat_i : g1 ? m1_dat_i : g2 ? m2_dat_i : 32'h0;
+	assign s_we_o  = g0 ? m0_we_i  : g1 ? m1_we_i  : g2 ? m2_we_i  : 1'b0;
+	assign s_sel_o = g0 ? m0_sel_i : g1 ? m1_sel_i : g2 ? m2_sel_i : 4'h0;
+	assign s_cti_o = g0 ? m0_cti_i : g1 ? m1_cti_i : g2 ? m2_cti_i : 3'b000;
+	assign s_stb_o = g0 ? m0_stb_i : g1 ? m1_stb_i : g2 ? m2_stb_i : 1'b0;
+	assign s_cyc_o = g0 ? m0_cyc_i : g1 ? m1_cyc_i : g2 ? m2_cyc_i : 1'b0;
+
+	assign m0_ack_o = g0 && s_ack_i;
+	assign m1_ack_o = g1 && s_ack_i;
+	assign m2_ack_o = g2 && s_ack_i;
 
 endmodule

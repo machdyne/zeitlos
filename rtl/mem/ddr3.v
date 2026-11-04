@@ -52,7 +52,10 @@
 
 module ddr3 #(
 	parameter ROW_BITS = 15,
-	parameter TRFC_NS = 260
+	parameter TRFC_NS = 260,
+	// ddr3_ctrl.v, "write combining": stores into the block register,
+	// a block to the DRAM at a time
+	parameter WCOMBINE = 0
 ) (
 	input wire clk_i,
 	input wire rst_i,
@@ -148,7 +151,8 @@ module ddr3 #(
 
 	ddr3_ctrl #(
 		.ROW_BITS(ROW_BITS),
-		.TRFC_NS(TRFC_NS)
+		.TRFC_NS(TRFC_NS),
+		.WCOMBINE(WCOMBINE)
 	) ctrl (
 		.clk_i(clk_i), .rst_i(rst_i),
 		.wb_adr_i(wb_adr_i), .wb_dat_i(wb_dat_i), .wb_dat_o(wb_dat_o),

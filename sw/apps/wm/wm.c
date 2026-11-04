@@ -5097,6 +5097,30 @@ static bool toggle_fullscreen(int idx) {
 
 }
 
+// The console profile (docs/profiles.md): no dock, no desktop; set in
+// main().
+static bool console_mode;
+
+// A window opening on a console (docs/profiles.md): there is no
+// desktop, so wm draws no window -- every one is the whole screen, with
+// no titlebar or frame. One that will take game mode itself
+// (Z_WIN_FLAG_GAME_MODE: the arcade runtime's, which goes full screen
+// at once on a console) is left to: the launcher keeps game mode until
+// it does, so its window is never seen. Anything else has the
+// launcher's game mode revoked, so that it shows.
+static void console_window(int idx) {
+	wm_window_t *w = &windows[idx];
+	if (!(w->flags & Z_WIN_FLAG_GAME_MODE) &&
+	    game_grab_pid && game_grab_pid != w->owner_pid)
+		game_revoke();
+	if (w->shaded) toggle_shade(idx);
+	if (!w->maxed) { w->rx = w->x; w->ry = w->y; w->rw = w->w; w->rh = w->h; }
+	w->maxed = true;
+	w->fulled = true;
+	w->no_titlebar = true;
+	set_rect(idx, 0, 0, WM_SCREEN_W, WM_SCREEN_H);
+}
+
 static void toggle_shade(int idx) {
 
 	wm_window_t *w = &windows[idx];
@@ -5464,18 +5488,22 @@ static void kbd_cycle_next(void) {
 // the character that did not combine with it.
 static void forward_key(uint32_t keysym, uint8_t modifiers, bool pressed) {
 
-	if (focused < 0) return;
-	if (windows[focused].owner_pid == my_pid) return;
-
 	uint32_t packed = Z_WM_PACK_KEY(keysym, modifiers, pressed);
 	/* TO THE GRAB OWNER, not to whatever has focus. An app that
 	 * owns the screen is the only thing the user can see, so
 	 * focus is meaningless -- and every game here leaves game
-	 * mode with Escape, so this is also the way out. */
+	 * mode with Escape, so this is also the way out. Before the
+	 * focus checks below: a game with no window (mausrun), or one
+	 * whose window is not the focused one (on a console, where
+	 * windows open full screen and nothing is clicked), still gets
+	 * its keys -- they used to stop at "nothing focused". */
 	if (game_grab_pid) {
 		z_msg_new_send(game_grab_pid, Z_WM_KEY, 0, z_obj_uint32(packed));
 		return;
 	}
+
+	if (focused < 0) return;
+	if (windows[focused].owner_pid == my_pid) return;
 
 	// the tag says which window: for a process with several (repl's
 	// Scheme windows, docs/repl.md)
@@ -6149,7 +6177,11 @@ static void dispatch_keys(void) {
 		// the key. Both are spent when wm acts on them, release and
 		// all; otherwise they go to the app as usual. Not during a
 		// game grab: there every key is the game's.
-		if (!game_grab_pid && !(modifiers & (Z_KBD_MOD_CTRL | Z_KBD_MOD_GUI)) && !alt &&
+		// Not on a console either: every window is full screen there
+		// (console_window()), and Escape is the program's -- the arcade
+		// runtime's way back to the launcher.
+		if (!game_grab_pid && !console_mode &&
+		    !(modifiers & (Z_KBD_MOD_CTRL | Z_KBD_MOD_GUI)) && !alt &&
 		    (keysym == Z_KEY_FULL_SCREEN || keysym == 0x1b)) {
 			static bool f11_ate, esc_ate;
 			bool *ate = (keysym == 0x1b) ? &esc_ate : &f11_ate;
@@ -6423,6 +6455,8 @@ static int create_window(uint32_t owner_pid, const char *title,
 			(long)windows[i].x, (long)windows[i].y,
 			(long)windows[i].w, (long)windows[i].h);
 
+		if (console_mode) console_window(i);
+
 		return i;
 
 	}
@@ -6485,8 +6519,6 @@ static int create_dock(void) {
 // effect without a restart. The dock is resized to its new contents in
 // place; a launch still in progress loses its inverted icon (its window
 // still opens).
-static bool console_mode;     /* the console profile: no dock (main()) */
-
 static void dock_reload(void) {
 
 	if (console_mode) return;

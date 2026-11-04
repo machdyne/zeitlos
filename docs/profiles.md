@@ -30,7 +30,12 @@ desktop.
 
 What the OS does differently:
 
-- **wm** creates no dock and no desktop. It starts the **launcher**
+- **wm** creates no dock and no desktop, and draws no window: every
+  window is the whole screen, without titlebar or frame. One that will
+  take game mode itself (an arcade program's) is left to, with the
+  launcher keeping game mode until it does; for any other wm takes game
+  mode from the launcher so that it shows. F11 and Escape are the
+  program's, not wm's. It starts the **launcher**
   (`sw/apps/launcher`, [launcher_app.md](launcher_app.md)) -- a menu of
   `/apps` in game mode, the games and demos first -- and starts it
   again whenever it stops.
@@ -84,33 +89,53 @@ of test_t2's frames, and in the simulator chunkytest with
 memory): all pass.
 
 **What else goes.** The console runs one game at a time, so it does
-without the **MPU** (`NO_MPU`) and the hardware random generator
-(`NO_TRNG`: zrng seeds in software). It has **no line rasterizer**
-(`-GPU_RASTER`): T2 draws the 3D games' lines and triangles, and zgfx
-draws a 2D line itself where FEATURES says there is no rasterizer --
-the same pixels, as `sw/common/tests/sim_lines` checks against a model
-of `gpu_raster.v` -- while sysctl answers the rasterizer's registers
-(writes dropped, reads 0) so nothing waits on it for ever. The
-picorv32 register file goes into LUT RAM (`PICORV32_REGS_LUTRAM`),
-freeing two block RAMs for the data cache.
+without the **MPU** (`NO_MPU`), the hardware random generator
+(`NO_TRNG`: zrng seeds in software) and the wall clock (`NO_RTC`). Its
+serial console is UART0 on PMOD A (`pmods = uart@a`, a 3.3 V USB-serial
+adapter on pins 2 and 3) rather than the USB-C socket (`-USB_CDC`).
+It has **no line rasterizer** (`-GPU_RASTER`): T2 draws the 3D games'
+lines and triangles, and zgfx draws a 2D line itself where FEATURES
+says there is no rasterizer -- the same pixels, as
+`sw/common/tests/sim_lines` checks against a model of `gpu_raster.v` --
+while sysctl answers the rasterizer's registers (writes dropped, reads
+0) so nothing waits on it for ever. And **no data cache** (`-DCACHE`):
+of the two last big blocks, it and the hardware audio mixer, the mixer
+saves the CPU more (software mixing is about 15% of it while music
+plays; the D-cache about 10% on data-heavy code). The picorv32
+register file is in LUT RAM (`PICORV32_REGS_LUTRAM`), and the block
+RAM the data cache had goes to the instruction cache (4 KB) and T2's
+write queue (1,024 words).
 
-**The fit.** Synthesis (yosys 0.33 `synth_ecp5`, the board build
-synthesised the same way for comparison):
+**The fit.** Measured as a release build does it -- yosys 0.70
+`synth_ecp5 -abc9`, then nextpnr-ecp5's packer -- TRELLIS_COMB:
 
-| | DP16KD | LUT-equivalents (a carry cell two) |
+| | here | a release build |
 |---|---|---|
-| `lakritz` (the board build: 98% in nextpnr, meets 48 MHz) | 52 | 28,895 |
-| `lakritz_console`, T2 as on sergei_ml2, nothing else cut | 65 | 32,053 |
-| `lakritz_console` as specified | **56** | **28,864** |
+| everything but the MPU, rasterizer and TRNG | 24,738 (101%) | 25,549 (105%), did not place |
+| also `NO_RTC`, `-USB_CDC` | 23,471 (96%) | about 24,300 |
+| also `-AUDIO_EXACT` | 23,440 | |
+| also `-AUDIO_MIXER` instead | 22,119 (91%) | |
+| **as specified** (also `-DCACHE`; I-cache 4 KB, T2's queue 1,024) | **22,359 (92%)** | **about 23,200 (95%)** |
 
-As specified: `NO_MPU`, `-GPU_RASTER`, `NO_TRNG`,
-`PICORV32_REGS_LUTRAM`, both caches 2 KB, `AUDIO_FIFO_LOG2=9`, T2's
-strips 6 rows (`T2_STRIP_H=6`, +19 k cycles a frame) and its write
-queue 512 (`T2_POST_LOG2=9`, +7 k). T2 alone is 29 block RAMs then
-(record list 11, code 6, stream FIFO 4, strip buffers 3, write queue
-2, data 2, the rest 1). The serial console (`USB_CDC`) stays. Not yet
-placed and routed: the logic is where the board build is, which is
-tight.
+Block RAM 56 of 56: T2 30 (record list 11, code 6, stream FIFO 4,
+write queue 3, strip buffers 3 at 6 rows, data 2, the rest 1), VRAM
+10, BIOS 4, I-cache 3, glyphs 2, video 2, the two USB ports 1 each,
+audio 1, the fetch 1, the ROM 1. The lakritz board build sits at
+98% and meets 48 MHz, so 95% should place; timing is the open
+question.
+
+### Sergei ML2 (`sergei_ml2_console`)
+
+The same console on the board that is easier to test on: the launcher,
+two planes in block RAM, chunky's picture in main memory -- DDR3 here,
+read a word at a time (the DDR3 controller holds a 16-byte block, so a
+line's words after each block's first come in a cycle) -- T2 writing it
+there, no rasterizer, no MPU, no RTC; no pointer and no Keccak (room
+for T2, as on `sergei_ml2` with T2). It keeps the network (RMII), so
+software can be updated over the wire while it is being tested. On the 45F nothing
+else has to give: 73 of 108 block RAMs and 71% of TRELLIS_COMB at
+packing (yowasp yosys 0.70, `-abc9`). What works here should work on
+Lakritz, bar the memory controller.
 
 ## The headless profile
 
