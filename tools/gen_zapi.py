@@ -43,12 +43,14 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 
 ROOT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 ZAPI_C = "sw/common/zapi/zapi.c"
 ZAPI_SCHEME = "sw/common/zapi/zapi_scheme.txt"
 MS_C = "sw/ext/ms/ms.c"
 MS_STDLIB = "sw/ext/ms/ms_stdlib.l"
+GEN_MS_STDLIB = "sw/common/zapi/gen_ms_stdlib.py"
 VERSION_H = "sw/common/zversion.h"
 
 # Sections in the order they are printed. A section not here is an
@@ -198,15 +200,27 @@ def zapi_names():
 
 
 def ms_names(cpp):
-	cmd = cpp.split() + ["-E", "-P", "-DLIX", "-DMS_STATIC_HEAP",
-		"-DMS_HEAP_SIZE=1000", "-DMS_PROTECT_STACK_SIZE=100",
-		"-I" + os.path.join(ROOT, "sw/common/ms_platform"),
-		"-I" + os.path.join(ROOT, "sw/apps/repl"),
-		os.path.join(ROOT, MS_C)]
-	try:
-		out = subprocess.run(cmd, check=True, capture_output=True, text=True).stdout
-	except (OSError, subprocess.CalledProcessError) as e:
-		fail("could not preprocess %s with '%s': %s" % (MS_C, cpp, e))
+	# ms.c includes ms_stdlib.h, which repl's build generates in
+	# sw/apps/repl (its Makefile, from MS_STDLIB). Make one here instead,
+	# so that `zrelease check` works on a tree nothing has been built in
+	# yet, and never reads a header older than the stdlib it is from.
+	with tempfile.TemporaryDirectory() as tmp:
+		try:
+			subprocess.run([sys.executable, os.path.join(ROOT, GEN_MS_STDLIB),
+				os.path.join(ROOT, MS_STDLIB), os.path.join(tmp, "ms_stdlib.h")],
+				check=True, capture_output=True, text=True)
+		except (OSError, subprocess.CalledProcessError) as e:
+			fail("could not make ms_stdlib.h with %s: %s" % (GEN_MS_STDLIB, e))
+		cmd = cpp.split() + ["-E", "-P", "-DLIX", "-DMS_STATIC_HEAP",
+			"-DMS_HEAP_SIZE=1000", "-DMS_PROTECT_STACK_SIZE=100",
+			"-I" + tmp,
+			"-I" + os.path.join(ROOT, "sw/common/ms_platform"),
+			"-I" + os.path.join(ROOT, "sw/apps/repl"),
+			os.path.join(ROOT, MS_C)]
+		try:
+			out = subprocess.run(cmd, check=True, capture_output=True, text=True).stdout
+		except (OSError, subprocess.CalledProcessError) as e:
+			fail("could not preprocess %s with '%s': %s" % (MS_C, cpp, e))
 	builtins = re.findall(r'def_builtin\(env, "([^"]+)"', out)
 	if len(builtins) < 50:
 		fail("only %d builtins found in %s -- has the submodule moved on?" % (len(builtins), MS_C))
