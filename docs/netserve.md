@@ -371,6 +371,11 @@ Throughput is TCP's: up to five segments in flight at a time
 each -- its staging buffer (`RELAY_TX`) -- so ~5KB a round trip, where
 it was one 536-byte segment. A client that delays its ACKs (Windows,
 200 ms) costs much less now: it has several segments to acknowledge.
+The file is read into a 2KB buffer, so each pass through fs and net
+carries 2KB: at 512 bytes (the size until 0.0.9) every segment was a
+read from fs and a send to net, the CPU was the limit, and the segments
+on the wire were 512 bytes. Measured on a ULX3S 85F over the ENC28J60,
+a 403,492-byte file: 52.8KB/s at 512, 108KB/s at 2KB.
 
 ## Half-close
 
