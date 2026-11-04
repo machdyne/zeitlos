@@ -618,6 +618,13 @@ sw/bios/bios.hex: FORCE
 
 bios: sw/bios/bios.hex
 
+# T2's geometry firmware (docs/zgl_t2.md): rtl/gpu/gpu_t2.v reads it at
+# synthesis, so it is one of every ECP5 board's SOC_SYNTH_INPUTS. It is
+# not checked in; built here, a fresh clone could not synthesize. Like
+# the BIOS, the recursion leaves t2fw.hex untouched when nothing changed.
+sw/t2fw/t2fw.hex: FORCE
+	$(MAKE) -C sw/t2fw CROSS=$(PREFIX)
+
 ifeq ($(FAMILY), ice40)
 zeitlos_ice40_pico:
 	mkdir -p $(OUTDIR)
