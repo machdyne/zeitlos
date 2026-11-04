@@ -41,7 +41,12 @@
 #include "authkeys.h"			// SSH: the keys in /data/netserve/authkeys
 
 #define MAX_SESS        6           // net relays at most TCP_MAX_CONN - 2
-#define TO_NET_MAX      512
+// Toward the peer. HTTP reads the file into it, so each pass is one
+// fs_read_chunk() (a message to fs) and one z_port_send() (a message to
+// net); at 512 that was both for every 512 bytes, and the CPU ran out
+// before TCP did. 2048 fills net's 1KB relay segments (docs/netserve.md,
+// "HTTP"). Static: 6 sessions x 1.5KB more than at 512.
+#define TO_NET_MAX      2048
 #define TO_APP_MAX      256
 #define HOLD_MAX        Z_PORT_MAX_PENDING_SENDS
 #define LOGIN_TICKS     (60u * Z_TICK_HZ)
