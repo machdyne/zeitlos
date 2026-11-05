@@ -15,12 +15,22 @@ make config-report TARGET=lakritz_console   the estimate, block by block, no men
 
 ## The menus
 
+As Linux's menuconfig: a blue screen, a grey dialog with the menu's
+title on its frame, the list in a frame of its own, the estimate and
+the first problem under it, and buttons -- `<Select> < Exit > < Help >
+< Save > <Build> <Measure>` -- chosen with Left/Right or Tab, Enter
+doing what the button says. Submenus end in `--->`.
+
 - **Target name**, **Description**: the spec's file name and its line in
   the release notes.
 - **Start from a target**: a release target's board, PMODs and defines
   as the starting point.
 - **Board**, **PMODs**: from `release/hw/boards` and `release/hw/pmods`.
-  A PMOD goes in a named port (`langkatze@a`).
+  A PMOD goes in a named port (`langkatze@a`). A board made with more
+  than one FPGA is listed once for each: the ULX3S as 12F, 25F, 45F and
+  85F, saved as `make_vars = DEVICE=45k` (as the release's ulx3s
+  targets). The 12F counts as the 25F -- 24,288 LUTs, 56 block RAMs --
+  since it is the same die.
 - **Profile**: desktop, console or headless ([profiles.md](profiles.md)).
 - **CPU and caches, Graphics, 3D, Memory, Audio, USB and input,
   Network, Storage and I/O, Security and system**: the components.
@@ -41,8 +51,11 @@ Under it, the first problem: a component without what it needs (zeitlos32p
 without the data cache), one that conflicts with another, chunky without
 8 planes or `VRAM_SDRAM`, more than the FPGA has.
 
-Keys: arrows, Enter or Space to choose, Esc back, `s` save, `b` build,
-`m` measure, `r` the estimate block by block, `?` help, `q` quit.
+Keys: Up/Down (Page Up/Down, Home, End) move; Left/Right or Tab choose
+a button and Enter does it; Space toggles an option or steps a value;
+`y` and `n` set an option on or off; Esc goes back; and directly `s`
+save, `b` build, `m` measure, `r` the estimate block by block, `?` help,
+`q` quit.
 
 ## Save, build, measure
 

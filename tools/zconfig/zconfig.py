@@ -28,9 +28,33 @@ sys.path.insert(0, os.path.join(ROOT, "release", "lib"))
 import spec as zspec       # noqa: E402
 import mkfatimg            # noqa: E402
 
-DEVICES = {"12k": (12288, 56, 28), "25k": (24288, 56, 28),
+# LUT4, DP16KD, MULT18X18D. The 12F is the 25F's die (nextpnr places a
+# --12k design on it with the 25F's resources), so it counts as one.
+DEVICES = {"12k": (24288, 56, 28), "25k": (24288, 56, 28),
            "45k": (43848, 108, 72), "85k": (83640, 208, 156)}
 WARN_PERCENT = 95          # release/lib/build.py's UTIL_WARN_PERCENT
+
+# Boards made with more than one FPGA: one PCB and one .lpf, the device
+# a make variable (DEVICE) each target sets (release/hw/boards/ulx3s.spec).
+BOARD_DEVICES = {"ulx3s": ["12k", "25k", "45k", "85k"]}
+
+
+def device_label(dev):
+    """'45k' -> '45F', as the parts are named (LFE5U-45F)."""
+    return (dev[:-1] + "F") if dev and dev.endswith("k") else (dev or "")
+
+
+def wrap(text, width):
+    out, line = [], ""
+    for word in text.split():
+        if line and len(line) + 1 + len(word) > width:
+            out.append(line)
+            line = word
+        else:
+            line = (line + " " + word) if line else word
+    if line:
+        out.append(line)
+    return out or [""]
 
 # Defines a target cannot take: rtl/boards.vh sets them for every board,
 # and only an off flag (catalog `off`) removes them.
@@ -157,7 +181,7 @@ class Config:
 
     # -- loading ---------------------------------------------------------
 
-    def load_board(self, board, pmods=()):
+    def load_board(self, board, pmods=(), device=None):
         t, err = compose(board, list(pmods))
         if err:
             self.error = err
@@ -171,7 +195,17 @@ class Config:
         self.device = make_value(t, "DEVICE") or "25k"
         self.make_board = t.board
         self.error = None
+        if device:
+            self.set_device(device)
         return True
+
+    def set_device(self, dev):
+        """One of BOARD_DEVICES's: the target's make_vars say DEVICE=."""
+        self.device = dev
+        mv = [v for v in self.extra.get("make_vars", []) for v in v.split()
+              if not v.startswith("DEVICE=")]
+        mv.append("DEVICE=%s" % dev)
+        self.extra["make_vars"] = [" ".join(mv)]
 
     def load_target(self, name):
         tpath = os.path.join(ROOT, "release", "targets", name + ".spec")
@@ -466,82 +500,171 @@ def report(cfg, out=sys.stdout):
 # ----------------------------------------------------------------------
 
 class UI:
+    """menuconfig's look: a blue screen, a grey dialog with a frame, the
+    list in a frame of its own, buttons under it."""
+
+    BUTTONS = ["Select", "Exit", "Help", "Save", "Build", "Measure"]
+
     def __init__(self, scr, cfg):
         self.scr = scr
         self.cfg = cfg
         self.cat = cfg.cat
         self.msg = ""
         self.measured = None
+        self.btn = 0
         curses.curs_set(0)
+        self.colour = False
         try:
             curses.start_color()
-            curses.use_default_colors()
-            curses.init_pair(1, curses.COLOR_BLACK, curses.COLOR_CYAN)    # title, status
-            curses.init_pair(2, curses.COLOR_YELLOW, -1)                  # warnings
-            curses.init_pair(3, curses.COLOR_RED, -1)                     # over
-            curses.init_pair(4, curses.COLOR_GREEN, -1)                   # bar
+            curses.init_pair(1, curses.COLOR_WHITE, curses.COLOR_BLUE)    # the screen
+            curses.init_pair(2, curses.COLOR_BLACK, curses.COLOR_WHITE)   # the dialog
+            curses.init_pair(3, curses.COLOR_WHITE, curses.COLOR_BLUE)    # the item chosen
+            curses.init_pair(4, curses.COLOR_YELLOW, curses.COLOR_WHITE)  # titles
+            curses.init_pair(5, curses.COLOR_RED, curses.COLOR_WHITE)     # over, problems
+            curses.init_pair(6, curses.COLOR_BLUE, curses.COLOR_WHITE)    # the estimate
+            curses.init_pair(7, curses.COLOR_BLACK, curses.COLOR_WHITE)   # frames
+            self.colour = True
         except curses.error:
             pass
+        self.scr.bkgd(" ", self.c(1))
+
+    def c(self, n):
+        return curses.color_pair(n) if self.colour else 0
 
     # -- drawing ---------------------------------------------------------
 
-    def put(self, y, x, text, attr=0):
+    def put(self, y, x, text, attr=0, width=None):
         h, w = self.scr.getmaxyx()
-        if 0 <= y < h and x < w:
-            try:
-                self.scr.addnstr(y, x, text, max(0, w - x - 1), attr)
-            except curses.error:
-                pass
+        if not (0 <= y < h and 0 <= x < w):
+            return
+        n = max(0, (w - x - 1) if width is None else min(width, w - x - 1))
+        try:
+            self.scr.addnstr(y, x, text, n, attr)
+        except curses.error:
+            pass
 
-    def frame(self, title, items, sel, top, help_text):
+    def fill(self, y, x, hh, ww, attr):
+        for r in range(hh):
+            self.put(y + r, x, " " * ww, attr, ww)
+
+    def frame_box(self, y, x, hh, ww, attr, title=None, tattr=0):
+        h, w = self.scr.getmaxyx()
+        if hh < 2 or ww < 2 or y + hh > h or x + ww > w:
+            return
+        try:
+            self.scr.attron(attr)
+            self.scr.hline(y, x + 1, curses.ACS_HLINE, ww - 2)
+            self.scr.hline(y + hh - 1, x + 1, curses.ACS_HLINE, ww - 2)
+            self.scr.vline(y + 1, x, curses.ACS_VLINE, hh - 2)
+            self.scr.vline(y + 1, x + ww - 1, curses.ACS_VLINE, hh - 2)
+            self.scr.addch(y, x, curses.ACS_ULCORNER)
+            self.scr.addch(y, x + ww - 1, curses.ACS_URCORNER)
+            self.scr.addch(y + hh - 1, x, curses.ACS_LLCORNER)
+            if y + hh < h or x + ww < w:
+                self.scr.addch(y + hh - 1, x + ww - 1, curses.ACS_LRCORNER)
+            self.scr.attroff(attr)
+        except curses.error:
+            pass
+        if title:
+            t = " %s " % title
+            self.put(y, x + max(1, (ww - len(t)) // 2), t, tattr, ww - 2)
+
+    def screen(self):
+        """The blue screen and its title line; the dialog's place."""
         scr = self.scr
         scr.erase()
         h, w = scr.getmaxyx()
-        bar = " Zeitlos configuration -- %s (%s%s) " % (
-            self.cfg.name, self.cfg.board or "no board",
-            ", %s" % self.cfg.device if self.cfg.device else "")
-        self.put(0, 0, bar.ljust(w), curses.color_pair(1))
-        self.put(1, 1, title, curses.A_BOLD)
-        rows = h - 7
+        c = self.cfg
+        dev = (" " + device_label(c.device)) if c.device else ""
+        self.put(0, 1, "%s.spec - Zeitlos Configuration (%s%s)" % (
+            c.name, c.board or "no board", dev), self.c(1) | curses.A_BOLD)
+        try:
+            scr.attron(self.c(1))
+            scr.hline(1, 1, curses.ACS_HLINE, w - 2)
+            scr.attroff(self.c(1))
+        except curses.error:
+            pass
+        return 2, 2, h - 3, w - 4
+
+    def frame(self, title, items, sel, top, help_text, buttons=True):
+        y0, x0, dh, dw = self.screen()
+        d = self.c(2)
+        self.fill(y0, x0, dh, dw, d)
+        self.frame_box(y0, x0, dh, dw, self.c(7), title, self.c(4) | curses.A_BOLD)
+        # the help text, as menuconfig's: what the keys do
+        intro = ("Arrow keys move, <Enter> chooses (submenus --->), <Space> or y/n "
+                 "sets an option, <Esc> goes back, ? helps. [*] built in, [ ] left "
+                 "out, (*) the one of a group, (8) a value.")
+        lines = wrap(intro, dw - 4)[:2]
+        for i, l in enumerate(lines):
+            self.put(y0 + 1 + i, x0 + 2, l, d)
+        ly, lh = y0 + 3, dh - 8
+        self.frame_box(ly, x0 + 1, lh, dw - 2, self.c(7))
+        rows = max(1, lh - 2)
         for i in range(top, min(len(items), top + rows)):
             text, enabled = items[i][0], items[i][1]
-            attr = curses.A_REVERSE if i == sel else 0
-            if not enabled:
+            attr = self.c(3) | curses.A_BOLD if i == sel else d
+            if not enabled and i != sel:
                 attr |= curses.A_DIM
-            self.put(3 + i - top, 2, text, attr)
-        if len(items) > rows:
-            self.put(2, w - 12, "%d/%d" % (sel + 1, len(items)), curses.A_DIM)
-        self.status(h, w, help_text)
-        scr.refresh()
+            self.put(ly + 1 + i - top, x0 + 3, (" " + text).ljust(dw - 6), attr, dw - 6)
+        if top > 0:
+            self.put(ly, x0 + dw - 10, "(-)", d)
+        if top + rows < len(items):
+            self.put(ly + lh - 1, x0 + dw - 10, "(+)", d)
+        self.status(y0 + dh - 5, x0, dw, help_text)
+        if buttons:
+            self.buttons(y0 + dh - 2, x0, dw)
+        self.scr.refresh()
+        return rows
 
-    def status(self, h, w, help_text):
+    def status(self, y, x0, dw, help_text):
         cfg = self.cfg
+        d = self.c(2)
         _rows, (lut, bram, dsp) = cfg.costs()
         cl, cb, cd = cfg.capacity()
         probs = cfg.problems()
-        y = h - 4
-        self.put(y, 0, "-" * (w - 1), curses.A_DIM)
         if cfg.family == "ecp5" and cl:
             pct = 100 * lut // cl
-            colour = curses.color_pair(3) if pct > 100 else \
-                curses.color_pair(2) if pct >= WARN_PERCENT else curses.color_pair(4)
+            attr = (self.c(5) if pct >= WARN_PERCENT else self.c(6)) | curses.A_BOLD
             n = 20
             fill = min(n, n * lut // cl)
             line = "LUT ~%d / %d (%d%%) [%s%s]   BRAM %d / %d   DSP %d / %d" % (
                 lut, cl, pct, "#" * fill, "." * (n - fill), bram, cb, dsp, cd)
-            self.put(y + 1, 1, line, colour | curses.A_BOLD)
+            self.put(y, x0 + 2, line, attr, dw - 4)
         else:
-            self.put(y + 1, 1, "no estimates for %s (ECP5 only)" % cfg.family)
+            self.put(y, x0 + 2, "no estimates for %s (ECP5 only)" % cfg.family, d)
         if self.measured:
-            self.put(y + 1, w - len(self.measured) - 2, self.measured, curses.A_DIM)
+            self.put(y, x0 + dw - len(self.measured) - 2, self.measured, d)
         if probs:
-            self.put(y + 2, 1, "! " + probs[0] + (" (+%d more)" % (len(probs) - 1)
-                                                if len(probs) > 1 else ""),
-                     curses.color_pair(2))
+            self.put(y + 1, x0 + 2, "! " + probs[0] + (" (+%d more)" % (len(probs) - 1)
+                                                      if len(probs) > 1 else ""),
+                     self.c(5), dw - 4)
         else:
-            self.put(y + 2, 1, self.msg or help_text, curses.A_DIM)
-        self.put(h - 1, 1, "Up/Down move  Enter/Space choose  Esc back  "
-                 "s save  b build  m measure  r report  ? help  q quit", curses.A_DIM)
+            self.put(y + 1, x0 + 2, self.msg or help_text, d, dw - 4)
+        try:
+            self.scr.attron(self.c(7))
+            self.scr.addch(y + 2, x0, curses.ACS_LTEE)
+            self.scr.hline(y + 2, x0 + 1, curses.ACS_HLINE, dw - 2)
+            self.scr.addch(y + 2, x0 + dw - 1, curses.ACS_RTEE)
+            self.scr.attroff(self.c(7))
+        except curses.error:
+            pass
+
+    def buttons(self, y, x0, dw, names=None, active=None):
+        names = names or self.BUTTONS
+        active = self.btn if active is None else active
+        labels = ["<%s>" % n.center(max(len(n), 6)) for n in names]
+        total = sum(len(l) for l in labels) + 2 * (len(labels) - 1)
+        x = x0 + max(1, (dw - total) // 2)
+        for i, l in enumerate(labels):
+            if i == active:
+                self.put(y, x, l, self.c(3) | curses.A_BOLD)
+            else:
+                self.put(y, x, l, self.c(2))
+                # the first letter red, as menuconfig's hotkeys
+                self.put(y, x + 1 + (len(l) - 2 - len(names[i])) // 2, names[i][0],
+                         self.c(5) | curses.A_BOLD)
+            x += len(l) + 2
 
     # -- a generic list --------------------------------------------------
 
@@ -550,19 +673,20 @@ class UI:
         """build_items() -> [(text, enabled, payload)]; on_select(payload)
         returns True to leave the list."""
         sel = top = 0
+        self.btn = 0
         while True:
             items = build_items()
             if not items:
                 return
             sel = max(0, min(sel, len(items) - 1))
             h, _w = self.scr.getmaxyx()
-            rows = max(1, h - 7)
+            rows = max(1, h - 3 - 10)
             if sel < top:
                 top = sel
             if sel >= top + rows:
                 top = sel - rows + 1
             help_text = help_of(items[sel][2]) if help_of else ""
-            self.frame(title, items, sel, top, help_text)
+            rows = self.frame(title, items, sel, top, help_text)
             k = self.scr.getch()
             self.msg = ""
             if k in (curses.KEY_UP, ord("k")):
@@ -573,12 +697,45 @@ class UI:
                 sel = max(0, sel - rows)
             elif k == curses.KEY_NPAGE:
                 sel = min(len(items) - 1, sel + rows)
-            elif k in (27, curses.KEY_LEFT, curses.KEY_BACKSPACE, 127):
+            elif k == curses.KEY_HOME:
+                sel = 0
+            elif k == curses.KEY_END:
+                sel = len(items) - 1
+            elif k in (curses.KEY_RIGHT, 9):
+                self.btn = (self.btn + 1) % len(self.BUTTONS)
+            elif k in (curses.KEY_LEFT, curses.KEY_BTAB):
+                self.btn = (self.btn - 1) % len(self.BUTTONS)
+            elif k in (27, curses.KEY_BACKSPACE, 127):
                 if not top_level or self.confirm_quit():
                     return
-            elif k in (10, 13, ord(" "), curses.KEY_RIGHT):
+            elif k in (10, 13, curses.KEY_ENTER):
+                b = self.BUTTONS[self.btn]
+                if b == "Select":
+                    if items[sel][1] and on_select(items[sel][2]):
+                        return
+                elif b == "Exit":
+                    if not top_level or self.confirm_quit():
+                        return
+                elif b == "Help":
+                    self.show_text("Help", (help_of(items[sel][2]) if help_of else "") +
+                                   "\n\n" + HELP)
+                elif b == "Save":
+                    self.do_save()
+                elif b == "Build":
+                    self.do_build()
+                elif b == "Measure":
+                    self.do_measure()
+            elif k == ord(" "):
                 if items[sel][1] and on_select(items[sel][2]):
                     return
+            elif k in (ord("y"), ord("n")) and isinstance(items[sel][2], Entry):
+                e = items[sel][2]
+                want = k == ord("y")
+                if items[sel][1] and not e.values and not e.choice and \
+                        self.cfg.is_on(e) != want:
+                    on_select(e)
+                elif items[sel][1] and e.choice and want:
+                    on_select(e)
             elif k == ord("?"):
                 self.show_text("Help", (help_of(items[sel][2]) if help_of else "") +
                                "\n\n" + HELP)
@@ -601,17 +758,18 @@ class UI:
     def main(self):
         def items():
             c = self.cfg
-            out = [("Target name:  %s" % c.name, True, "name"),
-                   ("Description:  %s" % (c.description or "-"), True, "desc"),
-                   ("Start from a target ...", True, "from"),
-                   ("Board:        %s" % (c.board or "-"), True, "board"),
-                   ("PMODs:        %s" % (" ".join(c.pmods) or "none"), True, "pmods"),
+            dev = (" " + device_label(c.device)) if c.board in BOARD_DEVICES else ""
+            out = [("    Target name (%s)" % c.name, True, "name"),
+                   ("    Description (%s)" % (c.description or "-"), True, "desc"),
+                   ("    Start from a target  --->", True, "from"),
+                   ("    Board (%s%s)  --->" % (c.board or "-", dev), True, "board"),
+                   ("    PMODs (%s)  --->" % (" ".join(c.pmods) or "none"), True, "pmods"),
                    ("", False, None)]
             for m in self.cat.menus:
-                out.append(("%-26s >" % m, True, ("menu", m)))
-            out.append(("%-26s >" % "Card: app sets", True, "sets"))
-            out.append(("%-26s >" % "Card: packages", True, "packs"))
-            out.append(("%-26s >" % "Other defines (the board's)", True, "other"))
+                out.append(("    %s  --->" % m, True, ("menu", m)))
+            out.append(("    Card: app sets  --->", True, "sets"))
+            out.append(("    Card: packages  --->", True, "packs"))
+            out.append(("    Other defines (the board's)  --->", True, "other"))
             out.append(("", False, None))
             out.append(("Estimate, block by block", True, "report"))
             out.append(("Save as release/targets/%s.spec" % c.name, True, "save"))
@@ -686,7 +844,7 @@ class UI:
                     mark = "(*)" if on else "( )"
                 elif e.values:
                     v = eff.get(e.define)
-                    mark = "<%s>" % (v if v is not None else "-")
+                    mark = "(%s)" % (v if v is not None else "-")
                 else:
                     mark = "[*]" if on else "[ ]"
                 cost = self.cost_text(e, eff)
@@ -766,14 +924,24 @@ class UI:
     # -- board, target, PMODs ---------------------------------------------
 
     def pick_board(self):
+        """Each board; one with several FPGAs (the ULX3S) once for each."""
         def items():
-            return [("%s %s" % ("(*)" if b == self.cfg.board else "( )", b), True, b)
-                    for b in boards()]
+            out = []
+            for b in boards():
+                for dev in BOARD_DEVICES.get(b, [None]):
+                    on = b == self.cfg.board and (dev is None or dev == self.cfg.device)
+                    name = "%s %s" % (b, device_label(dev)) if dev else b
+                    cap = DEVICES.get(dev)
+                    note = ("  (%d LUT)" % cap[0]) if dev and cap else ""
+                    out.append(("%s %s%s" % ("(*)" if on else "( )", name, note), True, (b, dev)))
+            return out
 
-        def select(b):
-            if self.cfg.load_board(b, []):
+        def select(p):
+            b, dev = p
+            if self.cfg.load_board(b, [], dev):
                 self.cfg.from_target = None
-                self.msg = "board %s: its defaults" % b
+                self.cfg.description = ""       # the old target's no longer fits
+                self.msg = "board %s%s: its defaults" % (b, (" " + device_label(dev)) if dev else "")
             else:
                 self.msg = self.cfg.error
             return True
@@ -812,7 +980,9 @@ class UI:
         def select(e):
             new = [x for x in cfg.pmods if x != e] if e in cfg.pmods else cfg.pmods + [e]
             keep = {k: v for k, v in cfg.defines.items()}
+            extra, dev = dict(cfg.extra), cfg.device
             if cfg.load_board(cfg.board, new):
+                cfg.extra, cfg.device = extra, dev
                 # what was changed by hand stays changed
                 for k in list(keep):
                     cfg.defines.setdefault(k, keep[k])
@@ -873,7 +1043,7 @@ class UI:
         official = cfg.name in zspec.list_targets(ROOT) and cfg.from_target == cfg.name \
             and not _made_by_zconfig(path)
         if os.path.exists(path) and official:
-            if not self.yes("release/targets/%s.spec is a release target: overwrite it? (y/n) " % cfg.name):
+            if not self.yes("release/targets/%s.spec is a release target: overwrite it?" % cfg.name):
                 return False
         err = cfg.save()
         self.msg = ("saved, but: " + err) if err else \
@@ -895,7 +1065,7 @@ class UI:
 
     def do_build(self):
         cfg = self.cfg
-        if cfg.problems() and not self.yes("There are problems (status line): build anyway? (y/n) "):
+        if cfg.problems() and not self.yes("There are problems (the line under the list): build anyway?"):
             return
         if not self.do_save():
             return
@@ -946,14 +1116,33 @@ class UI:
 
     # -- small dialogs ---------------------------------------------------
 
-    def ask(self, prompt, default=""):
+    def dialog(self, title, lines, hh=None, ww=None):
+        """A small dialog in the middle of the screen: (y, x, hh, ww)."""
         h, w = self.scr.getmaxyx()
+        ww = min(w - 4, ww or max(40, max(len(l) for l in lines) + 6))
+        hh = min(h - 2, hh or len(lines) + 6)
+        y, x = (h - hh) // 2, (w - ww) // 2
+        self.fill(y, x, hh, ww, self.c(2))
+        self.frame_box(y, x, hh, ww, self.c(7), title, self.c(4) | curses.A_BOLD)
+        for i, l in enumerate(lines):
+            self.put(y + 1 + i, x + 2, l, self.c(2), ww - 4)
+        return y, x, hh, ww
+
+    def ask(self, prompt, default=""):
+        lines = wrap(prompt, 56)
+        y, x, hh, ww = self.dialog("Input", lines, len(lines) + 6, 62)
+        fy = y + len(lines) + 2
+        self.frame_box(fy - 1, x + 1, 3, ww - 2, self.c(7))
+        self.put(fy, x + 2, " " * (ww - 4), self.c(2), ww - 4)
+        self.buttons(y + hh - 2, x, ww, ["Ok", "Cancel"], 0)
+        self.put(fy, x + 2, default, self.c(2), ww - 4)
+        self.scr.refresh()
         curses.curs_set(1)
         curses.echo()
-        self.put(h - 2, 1, " " * (w - 2))
-        self.put(h - 2, 1, prompt + "[" + default + "] ")
         try:
-            raw = self.scr.getstr(h - 2, min(w - 2, len(prompt) + len(default) + 4), 60)
+            self.scr.attron(self.c(2))
+            raw = self.scr.getstr(fy, x + 2, min(60, ww - 5))
+            self.scr.attroff(self.c(2))
         except curses.error:
             raw = b""
         curses.noecho()
@@ -962,10 +1151,21 @@ class UI:
         return s if s else default
 
     def yes(self, prompt):
-        h, w = self.scr.getmaxyx()
-        self.put(h - 2, 1, " " * (w - 2))
-        self.put(h - 2, 1, prompt, curses.A_BOLD)
-        return self.scr.getch() in (ord("y"), ord("Y"))
+        lines = wrap(prompt, 56)
+        sel = 0
+        while True:
+            y, x, hh, ww = self.dialog("Question", lines, len(lines) + 4, 62)
+            self.buttons(y + hh - 2, x, ww, ["Yes", "No"], sel)
+            self.scr.refresh()
+            k = self.scr.getch()
+            if k in (ord("y"), ord("Y")):
+                return True
+            if k in (ord("n"), ord("N"), 27):
+                return False
+            if k in (curses.KEY_LEFT, curses.KEY_RIGHT, 9):
+                sel ^= 1
+            if k in (10, 13, curses.KEY_ENTER):
+                return sel == 0
 
     def choose(self, title, options):
         res = []
@@ -981,26 +1181,42 @@ class UI:
         return res[0] if res else None
 
     def show_text(self, title, text):
-        lines = text.splitlines() or [""]
+        lines = []
+        h, w = self.scr.getmaxyx()
+        for para in text.splitlines() or [""]:
+            lines += wrap(para, w - 12) if para.strip() else [""]
         top = 0
         while True:
-            self.scr.erase()
-            h, w = self.scr.getmaxyx()
-            self.put(0, 0, (" " + title + " ").ljust(w), curses.color_pair(1))
-            for i, l in enumerate(lines[top:top + h - 3]):
-                self.put(1 + i, 1, l)
-            self.put(h - 1, 1, "Up/Down scroll, any other key back", curses.A_DIM)
+            y0, x0, dh, dw = self.screen()
+            self.fill(y0, x0, dh, dw, self.c(2))
+            self.frame_box(y0, x0, dh, dw, self.c(7), title, self.c(4) | curses.A_BOLD)
+            body = dh - 4
+            for i, l in enumerate(lines[top:top + body]):
+                self.put(y0 + 1 + i, x0 + 2, l, self.c(2), dw - 4)
+            try:
+                self.scr.attron(self.c(7))
+                self.scr.addch(y0 + dh - 3, x0, curses.ACS_LTEE)
+                self.scr.hline(y0 + dh - 3, x0 + 1, curses.ACS_HLINE, dw - 2)
+                self.scr.addch(y0 + dh - 3, x0 + dw - 1, curses.ACS_RTEE)
+                self.scr.attroff(self.c(7))
+            except curses.error:
+                pass
+            self.buttons(y0 + dh - 2, x0, dw, ["Exit"], 0)
             self.scr.refresh()
             k = self.scr.getch()
-            if k == curses.KEY_DOWN and top + h - 3 < len(lines):
+            if k == curses.KEY_DOWN and top + body < len(lines):
                 top += 1
             elif k == curses.KEY_UP and top > 0:
                 top -= 1
+            elif k == curses.KEY_NPAGE:
+                top = min(max(0, len(lines) - body), top + body)
+            elif k == curses.KEY_PPAGE:
+                top = max(0, top - body)
             else:
                 return
 
     def confirm_quit(self):
-        return self.yes("Quit? Anything not saved is lost. (y/n) ")
+        return self.yes("Quit? Anything not saved is lost.")
 
 
 def _made_by_zconfig(path):
@@ -1016,8 +1232,10 @@ build packs them), block RAMs (DP16KD) and multipliers, against the
 board's FPGA, from tools/zconfig/catalog.cfg. A sum of parts is within
 about 10% of a real build; Measure synthesises it for the real numbers.
 
-[*] on, [ ] off, (*) the one chosen of a group, <8> a value (Enter cycles
-it). A dim entry needs pins this board does not have.
+[*] on, [ ] off, (*) the one chosen of a group, (8) a value (Enter or
+Space steps through them). y and n set an option on or off. A dim entry
+needs pins this board does not have. Left/Right or Tab choose a button
+under the list; Enter does what it says (Select goes into an entry).
 
 Save writes release/targets/<name>.spec: the board, the PMODs, and the
 define changes from them; `./release/zrelease check` checks it against

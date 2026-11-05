@@ -36,8 +36,9 @@ import spec as zspec   # noqa: E402
 import gen as zgen     # noqa: E402
 
 # device sizes: LUT4 (= TRELLIS_COMB slots) and DP16KD
+# (the 12F is the 25F's die, with its resources)
 DEVICES = {
-    "12k": (12288, 56), "25k": (24288, 56), "45k": (43848, 108),
+    "12k": (24288, 56), "25k": (24288, 56), "45k": (43848, 108),
     "85k": (83640, 208),
 }
 
