@@ -272,8 +272,7 @@ has both sheets.
 ### Chunky: the program draws the whole screen
 
 A program that draws whole frames itself -- through zgl's `ZGL_CHUNKY`
-([zgl.md](zgl.md)), which the triangle engines draw ([gpu_tri.md](gpu_tri.md),
-[zgl_t2.md](zgl_t2.md)) -- calls `ar_chunky(true)`. Full screen in
+([zgl.md](zgl.md)), which T2 draws ([zgl_t2.md](zgl_t2.md)) -- calls `ar_chunky(true)`. Full screen in
 colour is then `AR_MODE_FULL_CHUNKY` on a board with chunky game mode
 ([color.md](color.md), "Chunky"): 320x240, a byte a pixel, through the
 256-entry palette. Everything else is as in colour, but the picture is

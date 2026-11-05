@@ -120,7 +120,7 @@ static void palette(void) {
 
 /* -- state ------------------------------------------------------------------- */
 
-static bool wire, flat, nodepth, unlit, paused;
+static bool wire, flat, nodepth, unlit, paused, lamp;
 static uint32_t angle;                   /* 1/65536 turns */
 static uint32_t fps_frames, fps_ticks, fps10;
 static uint32_t prims;
@@ -243,6 +243,24 @@ static void render(void) {
 
 	glMatrixMode(GL_MODELVIEW);
 	glLoadIdentity();
+	/* O: a lamp going round the scene (a positional light, fading with
+	 * distance), else the light from above and behind the left */
+	if (lamp) {
+		uint32_t a = angle * 3u;
+		GLfixed pos[4];
+		pos[0] = zglCos(a) * 260;
+		pos[1] = 120 * 65536;
+		pos[2] = zglSin(a) * 260 - 640 * 65536;
+		pos[3] = 65536;
+		glLightxv(GL_LIGHT0, GL_POSITION, pos);
+		glLightx(GL_LIGHT0, GL_CONSTANT_ATTENUATION, 26214);      /* 0.4 */
+		glLightx(GL_LIGHT0, GL_LINEAR_ATTENUATION, 197);         /* 0.003 a unit */
+	} else {
+		static const GLfixed dir[4] = { -40000, 50000, 40000, 0 };
+		glLightxv(GL_LIGHT0, GL_POSITION, dir);
+		glLightx(GL_LIGHT0, GL_CONSTANT_ATTENUATION, 65536);
+		glLightx(GL_LIGHT0, GL_LINEAR_ATTENUATION, 0);
+	}
 	glTranslatex(0, 0, -640 * 65536);
 	glRotatex(25 << 16, 1 << 16, 0, 0);                  /* look down a little */
 
@@ -284,6 +302,7 @@ static const char help_text[] =
 	"S\tsmooth / flat shading\n"
 	"D\tdepth test on / off\n"
 	"L\tlighting on / off\n"
+	"O\ta lamp going round (a positional light)\n"
 	"P\t256, 64 or 16 colours\n"
 	"Space\tpause\n"
 	"F11\tfull screen\n"
@@ -301,7 +320,7 @@ static ar_desc_t desc = {
 /* -- chunky: the whole screen, no arcade runtime (as Doom) -------------- *
  *
  * zgl's ZGL_CHUNKY: frames go straight into chunky VRAM, drawn by the
- * triangle engine where the bitstream has one (docs/gpu_tri.md), else
+ * T2 where the bitstream has it (docs/zgl_t2.md), else
  * by the software strips. No text on the picture: the frame rate and
  * what a frame costs go to the console every two seconds. Esc ends it;
  * Super+Esc too (wm takes the screen back). */
@@ -360,8 +379,7 @@ static int chunky_main(bool soft) {
 		return 1;
 	}
 	printf("gldemo: chunky, %s\n",
-		zgl_info()->backend == ZGL_BACKEND_T2 ? "T2, the engine that runs the whole frame" :
-		zgl_info()->backend == ZGL_BACKEND_ENGINE ? "the triangle engine" : "software");
+		zgl_info()->backend == ZGL_BACKEND_T2 ? "T2, the engine that runs the whole frame" : "software");
 	ramp_len = 32; ramp_sph = 16; ramp_cube = 48; ramp_ring = 80;
 	z_color_set_palette(0, 0x000);
 	ch_ramp(ramp_sph, ramp_len, 0x013, 0x8cf);
@@ -396,6 +414,7 @@ static int chunky_main(bool soft) {
 				case 's': case 'S': flat = !flat; break;
 				case 'd': case 'D': nodepth = !nodepth; break;
 				case 'l': case 'L': unlit = !unlit; break;
+				case 'o': case 'O': lamp = !lamp; break;
 				case ' ': paused = !paused; break;
 				default: break;
 				}
@@ -499,6 +518,7 @@ int main(void) {
 				case 's': case 'S': flat = !flat; break;
 				case 'd': case 'D': nodepth = !nodepth; break;
 				case 'l': case 'L': unlit = !unlit; break;
+				case 'o': case 'O': lamp = !lamp; break;
 				case 'p': case 'P':
 					ar_set_colours(ar_colours() == 256 ? 64 : ar_colours() == 64 ? 16 : 256);
 					palette();

@@ -83,6 +83,7 @@ typedef int32_t        GLclampx;
 #define GL_LIGHTING             0x0B50
 #define GL_DEPTH_TEST           0x0B71
 #define GL_NORMALIZE            0x0BA1
+#define GL_TEXTURE_2D           0x0DE1
 #define GL_SCISSOR_TEST         0x0C11
 #define GL_LIGHT0               0x4000
 #define GL_LIGHT1               0x4001
@@ -104,6 +105,9 @@ typedef int32_t        GLclampx;
 #define GL_DIFFUSE              0x1201
 #define GL_SPECULAR             0x1202
 #define GL_POSITION             0x1203
+#define GL_CONSTANT_ATTENUATION 0x1207
+#define GL_LINEAR_ATTENUATION   0x1208
+#define GL_QUADRATIC_ATTENUATION 0x1209
 #define GL_AMBIENT_AND_DIFFUSE  0x1602
 #define GL_COLOR_INDEXES        0x1603
 
@@ -146,10 +150,15 @@ void glNormal3i(GLint nx, GLint ny, GLint nz);   /* any length: GL_NORMALIZE */
  * A lit vertex's index is the material's ambient index plus its
  * diffuse brightness (0..1) times the way to the diffuse index:
  * glMaterial(GL_COLOR_INDEXES) gives the two ends of a ramp (zglRamp()).
- * Lights are directional (GL_POSITION's w is 0); GL_DIFFUSE's
- * brightness is the luminance of its colour. No specular yet. */
+ * A light is directional (GL_POSITION's w 0) or positional (w not 0:
+ * where it is, through the modelview of the moment, each vertex lit from
+ * there), with GL's attenuation 1 / (kc + kl d + kq d^2) for distance d
+ * in eye units (GL_CONSTANT/LINEAR/QUADRATIC_ATTENUATION; 1, 0, 0).
+ * GL_DIFFUSE's brightness is the luminance of its colour. No specular yet. */
 void glLightxv(GLenum light, GLenum pname, const GLfixed *params);
 void glLightfv(GLenum light, GLenum pname, const GLfloat *params);
+void glLightx(GLenum light, GLenum pname, GLfixed param);
+void glLightf(GLenum light, GLenum pname, GLfloat param);
 void glMaterialiv(GLenum face, GLenum pname, const GLint *params);
 void glMaterialfv(GLenum face, GLenum pname, const GLfloat *params);
 
@@ -179,11 +188,21 @@ void glOrthox(GLfixed l, GLfixed r, GLfixed b, GLfixed t, GLfixed n, GLfixed f);
 void glViewport(GLint x, GLint y, GLsizei w, GLsizei h);
 void glScissor(GLint x, GLint y, GLsizei w, GLsizei h);
 
+/* -- textures (docs/zgl.md, "Textures") ------------------------------------ *
+ * On T2 only, in a display list: glEnable(GL_TEXTURE_2D) at the time a
+ * list is called draws its textured triangles with their textures; the
+ * software and immediate mode draw them in their colours. A texture is
+ * made with zglTexImage() (zgl.h); its name is bound while the list is
+ * made. Coordinates in texels. */
+void glTexCoord2i(GLint s, GLint t);
+void glTexCoord2x(GLfixed s, GLfixed t);
+void glBindTexture(GLenum target, GLuint name);
+
 /* -- display lists (zgl_lists.c; docs/zgl.md, "Display lists") ----------- *
  * Recorded: glBegin, glEnd, glVertex*, glNormal*, glIndexi, glColor*,
  * glMaterial*, glTranslate*, glRotate*, glScale*, glPushMatrix,
  * glPopMatrix, glLoadIdentity, glShadeModel, glEnable, glDisable,
- * glCallList. Anything else is carried out at once, also while a list
+ * glCallList, glTexCoord*, glBindTexture. Anything else is carried out at once, also while a list
  * is being made. */
 GLuint glGenLists(GLsizei range);
 void glNewList(GLuint list, GLenum mode);

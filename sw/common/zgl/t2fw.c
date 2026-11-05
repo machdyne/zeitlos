@@ -23,14 +23,23 @@
 
 #define POS_ONE 256
 
+/* What is rarely run -- clipping, lines, the CPU's own triangles,
+ * positional lights -- is built for size, apart from the hot paths:
+ * the code memory is 12 KB without textures (sw/t2fw/link.ld). */
+#define T2_COLD __attribute__((noinline, cold, optimize("Os")))
+
 typedef struct {
 	int32_t x, y, z, w;      /* clip, 20.12 */
 	int32_t ci;              /* 8.8 */
+#ifndef T2_NO_TEX
+	int32_t s, t;            /* texture, texels 12.4 (T2_C_TEX) */
+#endif
 	int32_t sx, sy, sz;      /* picture 24.8, depth 16.15 */
 	uint8_t out, sv;
 } vtx_t;
 
-typedef struct { int32_t x, y, z, ci; } svtx_t;   /* 28.4, as zgl_svtx_t */
+/* 28.4, as zgl_svtx_t; and for a textured triangle s, t and clip w */
+typedef struct { int32_t x, y, z, ci, s, t, w; } svtx_t;
 
 /* the state */
 static int32_t fx0, fx1, fy0, fy1;               /* the frame's rectangle */
@@ -38,23 +47,44 @@ static int32_t vp_x, vp_y, vp_w, vp_h;
 static int32_t m[16], near_w, far_w;
 static bool persp;
 static bool lighting, light_on[2], depth, smooth, front_ccw;
+/* textures (STATE bit 5) on, and the chunk being drawn's texture word
+ * (T2_C_TEX); tri_tex: the triangles being set up are textured. Built
+ * with T2_NO_TEX (sw/t2fw's t2fw.hex, for an engine without textures)
+ * a textured chunk is drawn in its colours. */
+static bool tex_on, tri_tex;
+/* positional lights (PLIGHT, zgl_t2.h): where each is (the model's
+ * space, 24.8), the model's scale (16.16), the attenuation */
+static bool pl_on[2], pl_unit[2], pl_any;
+static int32_t pl_p[2][3], pl_s[2], pl_kc[2], pl_kl[2];
+static uint32_t pl_kq[2];
+static uint32_t tex_word;
 static int cull;
 static int32_t light_dir[2][3], light_d[2], mat_a, mat_d;
 static vtx_t vb[T2_CHUNK_V];                     /* the vertex buffer */
 
 t2_stats_t t2fw_stats;
 #define ST t2fw_stats
+/* a frame's counts, for the model's reports (tests/t2_model.c); on the
+ * core nothing reads them, and each costs a load and a store */
+#ifdef T2_CORE
+#define STAT(f) do { } while (0)
+#else
+#define STAT(f) (ST.f++)
+#endif
 
 static void vcopy(vtx_t *d, const vtx_t *s) {
 	d->x = s->x; d->y = s->y; d->z = s->z; d->w = s->w; d->ci = s->ci;
 	d->sx = s->sx; d->sy = s->sy; d->sz = s->sz; d->out = s->out; d->sv = s->sv;
+#ifndef T2_NO_TEX
+	d->s = s->s; d->t = s->t;
+#endif
 }
 
 /* -- zgl's arithmetic ------------------------------------------------------- */
 
 /* n / d as C divides int64_t (toward zero), without libgcc's 2 KB: the
  * 32-bit divide when both fit (the common case), else bit by bit */
-static int64_t sdiv64(int64_t n, int64_t d) {
+static T2_COLD int64_t sdiv64(int64_t n, int64_t d) {
 	uint32_t nh, nl, dh, dl, rh = 0, rl = 0, qh = 0, ql = 0;
 	uint64_t un, ud;
 	int neg, i;
@@ -141,7 +171,7 @@ static void screen_of(vtx_t *v) {
 	v->sv = 1;
 }
 
-static int32_t plane_d1(const vtx_t *v, int p) {
+static T2_COLD int32_t plane_d1(const vtx_t *v, int p) {
 	switch (p) {
 	case 0: return v->w + v->x;
 	case 1: return v->w - v->x;
@@ -167,14 +197,27 @@ static uint8_t out_code(const vtx_t *v) {
 
 #define T_ONE ((int64_t)1 << 30)
 
-static void lerp(vtx_t *o, const vtx_t *a, const vtx_t *b, int64_t t) {
+static T2_COLD void lerp(vtx_t *o, const vtx_t *a, const vtx_t *b, int64_t t) {
 	o->x = a->x + (int32_t)(((int64_t)(b->x - a->x) * t) >> 30);
 	o->y = a->y + (int32_t)(((int64_t)(b->y - a->y) * t) >> 30);
 	o->z = a->z + (int32_t)(((int64_t)(b->z - a->z) * t) >> 30);
 	o->w = a->w + (int32_t)(((int64_t)(b->w - a->w) * t) >> 30);
 	o->ci = a->ci + (int32_t)(((int64_t)(b->ci - a->ci) * t) >> 30);
+#ifndef T2_NO_TEX
+	/* in clip space a texture coordinate is linear, as x, y, z and w */
+	o->s = a->s + (int32_t)(((int64_t)(b->s - a->s) * t) >> 30);
+	o->t = a->t + (int32_t)(((int64_t)(b->t - a->t) * t) >> 30);
+#endif
 	o->out = 0;
 	o->sv = 0;
+}
+
+/* a corner behind the eye: the clip-space determinant */
+static int64_t facing_clip(vtx_t *a, vtx_t *b, vtx_t *c) {
+	int64_t ax = a->x >> 12, ay = a->y >> 12, aw = a->w >> 12;
+	int64_t bx = b->x >> 12, by = b->y >> 12, bw = b->w >> 12;
+	int64_t cx = c->x >> 12, cy = c->y >> 12, cw = c->w >> 12;
+	return ax * (by * cw - bw * cy) - ay * (bx * cw - bw * cx) + aw * (bx * cy - by * cx);
 }
 
 static int facing(vtx_t *a, vtx_t *b, vtx_t *c) {
@@ -185,12 +228,7 @@ static int facing(vtx_t *a, vtx_t *b, vtx_t *c) {
 		if (b->sv) { bx = b->sx; by = b->sy; } else project(b, &bx, &by);
 		if (c->sv) { cx = c->sx; cy = c->sy; } else project(c, &cx, &cy);
 		d = -((int64_t)(bx - ax) * (cy - ay) - (int64_t)(by - ay) * (cx - ax));
-	} else {
-		int64_t ax = a->x >> 12, ay = a->y >> 12, aw = a->w >> 12;
-		int64_t bx = b->x >> 12, by = b->y >> 12, bw = b->w >> 12;
-		int64_t cx = c->x >> 12, cy = c->y >> 12, cw = c->w >> 12;
-		d = ax * (by * cw - bw * cy) - ay * (bx * cw - bw * cx) + aw * (bx * cy - by * cx);
-	}
+	} else d = facing_clip(a, b, c);
 	return d > 0 ? 1 : (d < 0 ? -1 : 0);
 }
 
@@ -222,6 +260,55 @@ static int32_t div_s64(int64_t num, int64_t den) {
 	if (q > INT32_MAX) q = INT32_MAX;
 	return (int32_t)(neg ? -q : q);
 }
+
+#ifndef T2_NO_TEX
+/* div_s64() by one denominator many times (a triangle's area, for all
+ * its planes): its reciprocal found once. The same steps in the same
+ * order, so the same quotients. */
+typedef struct {
+	int64_t den;
+	uint32_t inv;
+	int s;
+	bool fits;                     /* den fits 32 bits: the fast path may apply */
+	bool ready;                    /* inv and s found (on the first slow one) */
+} rdiv_t;
+
+static inline void rdiv_init(rdiv_t *r, int64_t den) {
+	r->den = den;
+	r->fits = den >= -0x7fffffffLL && den <= 0x7fffffffLL;
+	r->ready = false;
+}
+
+static __attribute__((noinline)) int32_t rdiv(rdiv_t *r, int64_t num) {
+	uint64_t un;
+	int s, neg;
+	int64_t q;
+	if (r->fits && num >= -0x7fffffffLL && num <= 0x7fffffffLL)
+		return (int32_t)num / (int32_t)r->den;
+	if (!r->ready) {
+		uint64_t ud = r->den < 0 ? (uint64_t)-r->den : (uint64_t)r->den;
+		int m = msb64(ud);
+		r->s = 0;
+		if (m > 15) { r->s = m - 15; ud >>= r->s; }
+		else if (m < 15) { r->s = m - 15; ud <<= 15 - m; }
+		r->inv = (uint32_t)((1u << 31) / (uint32_t)ud);
+		r->ready = true;
+	}
+	s = r->s;
+	neg = (num < 0) != (r->den < 0);
+	un = num < 0 ? (uint64_t)-num : (uint64_t)num;
+	if (un >> 46) {
+		int k = msb64(un) - 45;
+		un >>= k;
+		s -= k;
+	}
+	if (31 + s <= 0) q = INT32_MAX;
+	else if (31 + s >= 63) q = 0;
+	else q = (int64_t)((un * r->inv) >> (31 + s));
+	if (q > INT32_MAX) q = INT32_MAX;
+	return (int32_t)(neg ? -q : q);
+}
+#endif
 
 /* -- records for the raster ------------------------------------------------- */
 
@@ -255,9 +342,9 @@ static void rec_tri(const svtx_t *pa, const svtx_t *pb, const svtx_t *pc, bool d
 	if (v0->x < -32768 || v0->x > 32767 || v1->x < -32768 || v1->x > 32767 ||
 	    v2->x < -32768 || v2->x > 32767 || v0->y < -32768 || v2->y > 32767) return;
 	/* the record goes straight into the list (no copy on the way) */
-	w = t2io_rec(T2_REC_WORDS);
-	if (!w) { ST.overflows++; return; }
-	ST.drawn++;
+	w = t2io_rec(tri_tex ? T2_REC_TWORDS : T2_REC_WORDS);
+	if (!w) { STAT(overflows); return; }
+	STAT(drawn);
 	dy1 = v1->y - v0->y; dy2 = v2->y - v0->y;
 	dx1 = v1->x - v0->x; dx2 = v2->x - v0->x;
 	a1 = v1->z - v0->z; a2 = v2->z - v0->z;
@@ -269,7 +356,7 @@ static void rec_tri(const svtx_t *pa, const svtx_t *pb, const svtx_t *pc, bool d
 		dcdx = div_s64((a1 * dy2 - a2 * dy1) * 16, area);
 		dcdy = div_s64((a2 * dx1 - a1 * dx2) * 16, area);
 	}
-	w[0] = T2_REC_TRI | (dep ? 4u : 0u) | (area > 0 ? 8u : 0u) |
+	w[0] = (tri_tex ? T2_REC_TTRI : T2_REC_TRI) | (dep ? 4u : 0u) | (area > 0 ? 8u : 0u) |
 	       (uint32_t)ylo << 8 | (uint32_t)yhi << 16 | (uint32_t)ymid << 24;
 	w[1] = (uint32_t)bx0 | (uint32_t)bx1 << 16;
 	w[2] = (uint32_t)(uint16_t)v0->x | (uint32_t)(uint16_t)v0->y << 16;
@@ -282,10 +369,44 @@ static void rec_tri(const svtx_t *pa, const svtx_t *pb, const svtx_t *pc, bool d
 	k = -(int64_t)dcdx * v0->x + (int64_t)dcdy * (ylo * 16 - v0->y);
 	w[8] = (uint32_t)v0->ci + (uint32_t)(k >> 4) + (uint32_t)dcdx * (uint32_t)bx0;
 	w[9] = (uint32_t)dcdx; w[10] = (uint32_t)dcdy;
+#ifndef T2_NO_TEX
+	if (tri_tex) {
+		/* Perspective-correct: s/w, t/w and 1/w are linear on the
+		 * screen, so they are the planes, and the raster divides
+		 * (zgl_t2.h, "TTRI"). 1/w as q = 2^24 wmin / w, the nearest
+		 * corner 2^24; s q and t q >> 8 so a coordinate of up to
+		 * +-1,024 texels fits. */
+		int32_t q0, q1, q2, wm = v0->w, n0, n1, n2;
+		int j;
+		/* six planes by one area: its reciprocal once */
+		rdiv_t ra;
+		rdiv_init(&ra, area);
+		if (v1->w < wm) wm = v1->w;
+		if (v2->w < wm) wm = v2->w;
+		if (wm < 1) wm = 1;
+		q0 = div_s64((int64_t)wm << 24, v0->w < 1 ? 1 : v0->w);
+		q1 = div_s64((int64_t)wm << 24, v1->w < 1 ? 1 : v1->w);
+		q2 = div_s64((int64_t)wm << 24, v2->w < 1 ? 1 : v2->w);
+		w[11] = tex_word;
+		for (j = 0; j < 3; j++) {
+			int32_t pdx, pdy;
+			if (j == 0) { n0 = (int32_t)(((int64_t)v0->s * q0) >> 8); n1 = (int32_t)(((int64_t)v1->s * q1) >> 8); n2 = (int32_t)(((int64_t)v2->s * q2) >> 8); }
+			else if (j == 1) { n0 = (int32_t)(((int64_t)v0->t * q0) >> 8); n1 = (int32_t)(((int64_t)v1->t * q1) >> 8); n2 = (int32_t)(((int64_t)v2->t * q2) >> 8); }
+			else { n0 = q0; n1 = q1; n2 = q2; }
+			a1 = (int64_t)n1 - n0; a2 = (int64_t)n2 - n0;
+			pdx = rdiv(&ra, (a1 * dy2 - a2 * dy1) * 16);
+			pdy = rdiv(&ra, (a2 * dx1 - a1 * dx2) * 16);
+			k = -(int64_t)pdx * v0->x + (int64_t)pdy * (ylo * 16 - v0->y);
+			w[12 + j * 3] = (uint32_t)n0 + (uint32_t)(k >> 4) + (uint32_t)pdx * (uint32_t)bx0;
+			w[13 + j * 3] = (uint32_t)pdx;
+			w[14 + j * 3] = (uint32_t)pdy;
+		}
+	}
+#endif
 }
 
 /* zgl_frames.c's draw_line(), as a record: every step's numbers */
-static void rec_line(const svtx_t *a, const svtx_t *b, bool dep) {
+static T2_COLD void rec_line(const svtx_t *a, const svtx_t *b, bool dep) {
 	int32_t dx = b->x - a->x, dy = b->y - a->y;
 	int32_t adx = dx < 0 ? -dx : dx, ady = dy < 0 ? -dy : dy;
 	int32_t n = ((adx > ady ? adx : ady) + 15) >> 4;
@@ -295,8 +416,8 @@ static void rec_line(const svtx_t *a, const svtx_t *b, bool dep) {
 	if (ylo > yhi) return;
 	if (n == 0) n = 1;
 	w = t2io_rec(10);
-	if (!w) { ST.overflows++; return; }
-	ST.drawn++;
+	if (!w) { STAT(overflows); return; }
+	STAT(drawn);
 	w[0] = T2_REC_LINE | (dep ? 4u : 0u) | (uint32_t)ylo << 8 | (uint32_t)yhi << 16;
 	w[1] = (uint32_t)n;
 	w[2] = (uint32_t)a->x << 16;
@@ -314,6 +435,11 @@ static void to_s(const vtx_t *v, svtx_t *o, bool flat, int32_t ci) {
 	o->y = v->sy >> 4;
 	o->z = v->sz;
 	o->ci = flat ? ci : v->ci;
+#ifndef T2_NO_TEX
+	o->s = v->s;
+	o->t = v->t;
+	o->w = v->w;
+#endif
 }
 
 /* -- geometry --------------------------------------------------------------- */
@@ -326,15 +452,17 @@ static inline bool in_band(const vtx_t *v) {
 	       v->sy > -(32000 << 4) && v->sy < (32000 << 4);
 }
 
+static void clip_tri(vtx_t *a, vtx_t *b, vtx_t *c, bool flat, int32_t flat_ci);
+
 static void geom_tri(vtx_t *a, vtx_t *b, vtx_t *c, int32_t flat_ci) {
 	int f;
 	bool front, flat = !smooth;
 	svtx_t s0, s1, s2;
-	ST.tris++;
-	if (a->out & b->out & c->out) { ST.culled++; ST.outside++; return; }
+	STAT(tris);
+	if (a->out & b->out & c->out) { STAT(culled); STAT(outside); return; }
 	f = facing(a, b, c);
 	front = front_ccw ? (f >= 0) : (f <= 0);
-	if (cull == 3 || (cull == 1 && !front) || (cull == 2 && front)) { ST.culled++; return; }
+	if (cull == 3 || (cull == 1 && !front) || (cull == 2 && front)) { STAT(culled); return; }
 	if (!(a->out | b->out | c->out)) {
 		if (!a->sv) screen_of(a);
 		if (!b->sv) screen_of(b);
@@ -356,19 +484,24 @@ static void geom_tri(vtx_t *a, vtx_t *b, vtx_t *c, int32_t flat_ci) {
 		if (!b->sv) screen_of(b);
 		if (!c->sv) screen_of(c);
 		if (in_band(a) && in_band(b) && in_band(c)) {
-			ST.guard++;
+			STAT(guard);
 			to_s(a, &s0, flat, flat_ci); to_s(b, &s1, flat, flat_ci); to_s(c, &s2, flat, flat_ci);
 			rec_tri(&s0, &s1, &s2, depth);
 			return;
 		}
 	}
-	/* Sutherland-Hodgman, as zgl's clip_polygon() */
+	clip_tri(a, b, c, flat, flat_ci);
+}
+
+/* Sutherland-Hodgman, as zgl's clip_polygon() */
+static T2_COLD void clip_tri(vtx_t *a, vtx_t *b, vtx_t *c, bool flat, int32_t flat_ci) {
+	svtx_t s0, s1, s2;
 	{
 		static vtx_t buf[2][CLIP_MAX];
 		vtx_t *in = buf[1], *out;
 		uint8_t any = a->out | b->out | c->out;
 		int n = 3, i, p, mm, cur = 0;
-		ST.clipped++;
+		STAT(clipped);
 		vcopy(&in[0], a); vcopy(&in[1], b); vcopy(&in[2], c);
 		for (p = 0; p < 6 && any; p++) {
 			if (!(any & (1 << p))) continue;
@@ -397,16 +530,16 @@ static void geom_tri(vtx_t *a, vtx_t *b, vtx_t *c, int32_t flat_ci) {
 }
 
 /* zgl's zgl_line(): clipped (Liang-Barsky), the second end's colour if flat */
-static void geom_line(vtx_t *a, vtx_t *b) {
+static T2_COLD void geom_line(vtx_t *a, vtx_t *b) {
 	vtx_t p, q;
 	svtx_t sa, sb;
-	ST.lines++;
-	if (a->out & b->out) { ST.culled++; return; }
+	STAT(lines);
+	if (a->out & b->out) { STAT(culled); return; }
 	if (!(a->out | b->out)) { vcopy(&p, a); vcopy(&q, b); }
 	else {
 		int64_t t0 = 0, t1 = T_ONE;
 		int i;
-		ST.clipped++;
+		STAT(clipped);
 		for (i = 0; i < 6; i++) {
 			int32_t da = plane_d1(a, i), db = plane_d1(b, i);
 			if (da < 0 && db < 0) return;
@@ -431,6 +564,56 @@ static void geom_line(vtx_t *a, vtx_t *b) {
 }
 
 /* zgl's vertex_ci() with the light in the model's space */
+/* the square root of v, rounded down (zgl.c's zgl_isqrt64()) */
+static uint32_t isqrt64(uint64_t v) {
+	uint64_t r = 0, b = (uint64_t)1 << 62;
+	while (b > v) b >>= 2;
+	while (b) {
+		if (v >= r + b) { v -= r + b; r = (r >> 1) + b; }
+		else r >>= 1;
+		b >>= 2;
+	}
+	return (uint32_t)r;
+}
+
+/* positional light l's dot at model position x, y, z (24.8), normal
+ * n (16.16): zgl.c's point_dot() in the model's space */
+static T2_COLD int32_t point_dot(int l, int32_t nx, int32_t ny, int32_t nz,
+	int32_t x, int32_t y, int32_t z) {
+	int64_t L0 = (int64_t)pl_p[l][0] - x, L1 = (int64_t)pl_p[l][1] - y, L2 = (int64_t)pl_p[l][2] - z;
+	int64_t nl, de, den;
+	uint32_t d = isqrt64((uint64_t)(L0 * L0 + L1 * L1 + L2 * L2));
+	int32_t dot, att;
+	if (!d) return 65536;
+	nl = (int64_t)nx * L0 + (int64_t)ny * L1 + (int64_t)nz * L2;
+	dot = div_s64(nl, d);
+	if (!pl_unit[l]) dot = (int32_t)(((int64_t)dot * pl_s[l]) >> 16);
+	/* the attenuation, at the eye's distance */
+	de = ((int64_t)d * pl_s[l]) >> 8;                              /* 16.16 */
+	if (de > 0x7fffffff) de = 0x7fffffff;
+	den = (int64_t)pl_kc[l] + (((int64_t)pl_kl[l] * de) >> 24) +
+	      (int64_t)(((((uint64_t)de * (uint64_t)de) >> 32) * pl_kq[l]) >> 16);
+	att = den <= 65536 ? 65536 : div_s64((int64_t)1 << 32, den);
+	return (int32_t)(((int64_t)dot * att) >> 16);
+}
+
+/* a vertex lit with a positional light on: each light its own way */
+static T2_COLD int32_t lit_pt(int32_t nx, int32_t ny, int32_t nz, int32_t ma, int32_t md,
+	int32_t x, int32_t y, int32_t z) {
+	int32_t d = 0;
+	int l;
+	for (l = 0; l < 2; l++) {
+		int32_t dot;
+		if (!light_on[l]) continue;
+		if (pl_on[l]) dot = point_dot(l, nx, ny, nz, x, y, z);
+		else dot = (int32_t)(((int64_t)nx * light_dir[l][0] + (int64_t)ny * light_dir[l][1] +
+		                      (int64_t)nz * light_dir[l][2]) >> 16);
+		if (dot > 0) d += (int32_t)(((int64_t)dot * light_d[l]) >> 16);
+	}
+	if (d > 65536) d = 65536;
+	return ma + (int32_t)(((int64_t)(md - ma) * d) >> 16);
+}
+
 static int32_t lit(int32_t nx, int32_t ny, int32_t nz, int32_t ma, int32_t md) {
 	int32_t d = 0;
 	int l;
@@ -457,11 +640,25 @@ static int draw(void) {
 	sh = h1 & 0xff; fl = (h1 >> 8) & 0xff; nl = h1 >> 16;
 	ma = (int32_t)t2io_in(); md = (int32_t)t2io_in();
 	if (!(fl & T2_C_MAT)) { ma = mat_a; md = mat_d; }
+	/* a textured chunk: its texture's word, and s | t a vertex */
+	if (fl & T2_C_TEX) tex_word = t2io_in();
+#ifndef T2_NO_TEX
+	tri_tex = tex_on && (fl & T2_C_TEX);
+#endif
 	if (nv > T2_CHUNK_V) return -1;
-	ST.draws++;
+	STAT(draws);
 	for (i = 0; i < nv; i++) {
 		vtx_t *v = &vb[i];
 		uint32_t p0 = t2io_in(), p1 = t2io_in(), p2 = t2io_in(), p3 = t2io_in();
+		if (fl & T2_C_TEX) {
+			uint32_t p4 = t2io_in();
+#ifndef T2_NO_TEX
+			v->s = (int32_t)(int16_t)(p4 & 0xffff);
+			v->t = (int32_t)(int16_t)(p4 >> 16);
+#else
+			(void)p4;     /* an engine without textures: drawn in colours */
+#endif
+		}
 		int32_t x = (int32_t)(int16_t)(p0 & 0xffff) * (1 << sh);
 		int32_t y = (int32_t)(int16_t)(p0 >> 16) * (1 << sh);
 		int32_t z = (int32_t)(int16_t)(p1 & 0xffff) * (1 << sh);
@@ -483,7 +680,9 @@ static int draw(void) {
 		/* a chunk's vertices often share their normal (a world's face
 		 * set has one): lit once */
 		if (lighting) {
-			if (i == 0 || nx != lnx || ny != lny || nz != lnz) {
+			/* (a positional light: every vertex, it depends on where) */
+			if (pl_any) lci = lit_pt(nx, ny, nz, ma, md, x, y, z);
+			else if (i == 0 || nx != lnx || ny != lny || nz != lnz) {
 				lci = lit(nx, ny, nz, ma, md);
 				lnx = nx; lny = ny; lnz = nz;
 			}
@@ -491,7 +690,7 @@ static int draw(void) {
 		}
 		else v->ci = (fl & T2_C_INDEX) ? (int32_t)(p1 >> 16) : didx;
 		if (!v->out) screen_of(v);
-		ST.verts++;
+		STAT(verts);
 	}
 	for (i = 0; i < nt; i++) {
 		uint32_t p0 = t2io_in(), p1 = t2io_in();
@@ -545,22 +744,33 @@ int t2fw_step(void) {
 		}
 		mat_a = (int32_t)t2io_in(); mat_d = (int32_t)t2io_in();
 		return 0;
+	case T2_PLIGHT:
+		k = h & 1;
+		pl_on[k] = (h >> 1) & 1;
+		pl_unit[k] = (h >> 2) & 1;
+		pl_p[k][0] = (int32_t)t2io_in(); pl_p[k][1] = (int32_t)t2io_in(); pl_p[k][2] = (int32_t)t2io_in();
+		pl_s[k] = (int32_t)t2io_in();
+		pl_kc[k] = (int32_t)t2io_in(); pl_kl[k] = (int32_t)t2io_in(); pl_kq[k] = t2io_in();
+		pl_any = pl_on[0] || pl_on[1];
+		return 0;
 	case T2_STATE:
 		depth = h & 1; smooth = (h >> 1) & 1; cull = (int)((h >> 2) & 3); front_ccw = (h >> 4) & 1;
+		tex_on = (h >> 5) & 1;
 		return 0;
 	case T2_DRAW:
 		return draw();
 	case T2_TRI: {
 		svtx_t a, b, c;
 		get_s(&a); get_s(&b); get_s(&c);
-		ST.cpu_tris++;
+		STAT(cpu_tris);
+		tri_tex = false;
 		rec_tri(&a, &b, &c, h & 1);
 		return 0;
 	}
 	case T2_LINE: {
 		svtx_t a, b;
 		get_s(&a); get_s(&b);
-		ST.lines++;
+		STAT(lines);
 		rec_line(&a, &b, h & 1);
 		return 0;
 	}

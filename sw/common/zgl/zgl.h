@@ -39,7 +39,7 @@ extern "C" {
 /* Back ends (zgl_info_t.backend) */
 #define ZGL_BACKEND_LINE      1   /* the line rasterizer (gpu_raster) */
 #define ZGL_BACKEND_SOFTWARE  2
-#define ZGL_BACKEND_ENGINE    3   /* the triangle engine (new RTL) */
+/* 3 was gpu_tri, the first triangle engine (retired) */
 #define ZGL_BACKEND_T2        4   /* T2: the engine that runs the whole frame */
 
 typedef struct {
@@ -61,12 +61,12 @@ typedef struct {
 #define ZGL_CHUNKY     0x01  /* frames go to chunky VRAM, not through the
                               * arcade runtime: the program has chunky
                               * game mode on itself (docs/color.md,
-                              * "Chunky"), as Doom does. Drawn by the
-                              * triangle engine where the bitstream has
-                              * one (docs/gpu_tri.md), else in software.
+                              * "Chunky"), as Doom does. Drawn by T2
+                              * where the bitstream has it
+                              * (docs/zgl_t2.md), else in software.
                               * Link zgl_chunky.o. */
 #define ZGL_NO_ENGINE  0x02  /* ZGL_CHUNKY, in software even where there
-                              * is an engine (to compare) */
+                              * is T2 (to compare) */
 
 typedef struct {
 	uint8_t  output;
@@ -86,7 +86,7 @@ bool zgl_open(const zgl_desc_t *desc);
 void zgl_close(void);
 
 /* The end of a frame: what was submitted since the last one is the
- * picture now (with the triangle engine: is on its way there;
+ * picture now (with T2: is on its way there;
  * glFinish() waits for it). ZGL_LINES: last frame's lines that changed or went are
  * erased and this frame's drawn, in submission order. */
 void zgl_frame(void);
@@ -97,6 +97,23 @@ void zgl_frame(void);
 void zgl_invalidate(void);
 
 const zgl_info_t *zgl_info(void);
+
+/* -- textures, on T2 (docs/zgl.md, "Textures") --
+ *
+ * Texture `name` (1..63): 2^lw x 2^lh texels (each side 1 to 128), a
+ * byte each, row by row, into T2's texture memory; `mode` how a texel x
+ * and the triangle's own colour index c make the pixel (below); `key`:
+ * texel 0 is not drawn. Made again with
+ * the same name and size, it goes where it was. False: no T2 with
+ * textures, or no room. Bind the name before compiling a list that uses
+ * it; lists compiled before a texture is made again keep its place. */
+#define ZGL_TEX_DECAL 0   /* x */
+#define ZGL_TEX_ADD   1   /* x + c */
+#define ZGL_TEX_TONE  2   /* c's ramp (16 entries), x's tone (0..15) lit by c's */
+#define ZGL_TEX_RAMP  3   /* x's ramp and tone, lit by c's */
+bool zglTexImage(unsigned name, int lw, int lh, const uint8_t *texels, int mode, bool key);
+/* T2's texture memory in texels, 0 if it has none */
+uint32_t zglTexRoom(void);
 
 /* -- extensions (not GL) ------------------------------------------------- */
 

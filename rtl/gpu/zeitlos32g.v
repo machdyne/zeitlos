@@ -47,6 +47,9 @@ module zeitlos32g #(
 
 	reg [31:0] imem [0:IMEM_WORDS-1];
 	reg [31:0] dmem [0:DMEM_WORDS-1];
+	// the data memory's word address bits: 1,024 words (4 KB) or 2,048
+	// (8 KB, T2 with textures: sw/t2fw/link_tex.ld)
+	localparam DM_HI = (DMEM_WORDS > 1024) ? 12 : 11;
 	initial $readmemh(IMEM_HEX, imem);
 
 	reg  [31:0] f_do;             // the code memory's word for D
@@ -69,11 +72,11 @@ module zeitlos32g #(
 	end
 
 	always @(posedge clk) begin
-		if (e_mrd_d) m_rdata <= dmem[e_maddr[11:2]];
-		if (e_mwe[0]) dmem[e_maddr[11:2]][7:0]   <= e_mwdata[7:0];
-		if (e_mwe[1]) dmem[e_maddr[11:2]][15:8]  <= e_mwdata[15:8];
-		if (e_mwe[2]) dmem[e_maddr[11:2]][23:16] <= e_mwdata[23:16];
-		if (e_mwe[3]) dmem[e_maddr[11:2]][31:24] <= e_mwdata[31:24];
+		if (e_mrd_d) m_rdata <= dmem[e_maddr[DM_HI:2]];
+		if (e_mwe[0]) dmem[e_maddr[DM_HI:2]][7:0]   <= e_mwdata[7:0];
+		if (e_mwe[1]) dmem[e_maddr[DM_HI:2]][15:8]  <= e_mwdata[15:8];
+		if (e_mwe[2]) dmem[e_maddr[DM_HI:2]][23:16] <= e_mwdata[23:16];
+		if (e_mwe[3]) dmem[e_maddr[DM_HI:2]][31:24] <= e_mwdata[31:24];
 	end
 
 	// ------------------------------------------------------------------

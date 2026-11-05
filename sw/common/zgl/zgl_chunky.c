@@ -3,14 +3,10 @@
  * Copyright (c) 2026 Lone Dynamics Corporation. All rights reserved.
  *
  * zgl_chunky.c -- ZGL_FRAMES into chunky VRAM (zgl_desc_t.flags
- * ZGL_CHUNKY; docs/zgl.md, "Chunky"): by the triangle engine where the
- * bitstream has one (rtl/gpu/gpu_tri.v, docs/gpu_tri.md), else by the
- * software strips, a byte a pixel straight into VRAM -- no conversion
- * to planes. The program has chunky game mode on itself.
- *
- * And a black-and-white window's frames, when the engine is there:
- * its MONO output writes the 1 bpp desktop at the window's place,
- * inside its one visible rectangle (zglc_mono()).
+ * ZGL_CHUNKY; docs/zgl.md, "Chunky"): by T2 where the bitstream has it
+ * (rtl/gpu/gpu_t2.v, docs/zgl_t2.md), else by the software strips, a
+ * byte a pixel straight into VRAM -- no conversion to planes. The
+ * program has chunky game mode on itself.
  */
 
 #include <stdint.h>
@@ -27,43 +23,11 @@
 static bool use_engine;
 static uint32_t vbase_now;
 static uint32_t ctrl_now;
-static uint8_t lum_now[256];
-static bool lum_valid;
 
-bool zglc_probe(uint8_t flags) {
-	if ((flags & ZGL_NO_ENGINE) || !z_gtri_present()) return false;
-	*z_gtri_reg(Z_GTRI_W_RESET) = 1;
-	vbase_now = z_chunky_phys();
-	*z_gtri_reg(Z_GTRI_W_VBASE) = vbase_now;
-	use_engine = true;
-	lum_valid = false;
-	return true;
-}
-
-/* A black-and-white window's frame: the window at (ox, oy) on the
- * screen, the visible picture columns x0..x1 and rows y0..y1, each
- * index's brightness (0..16). Written to the engine only when changed
- * (and the brightnesses only when the palette changed). */
-void zglc_mono(int ox, int oy, int x0, int x1, int y0, int y1, const uint8_t *lum) {
-	int i;
-	if (!lum_valid || memcmp(lum, lum_now, sizeof(lum_now))) {
-		for (i = 0; i < 256; i++) *z_gtri_reg(Z_GTRI_W_LUM) = (uint32_t)i | (uint32_t)lum[i] << 8;
-		memcpy(lum_now, lum, sizeof(lum_now));
-		lum_valid = true;
-	}
-	*z_gtri_reg(Z_GTRI_W_CTRL) = Z_GTRI_CTRL_MONO;
-	*z_gtri_reg(Z_GTRI_W_WIN) = (uint32_t)ox | (uint32_t)oy << 16;
-	*z_gtri_reg(Z_GTRI_W_CLIPX) = (uint32_t)x0 | (uint32_t)x1 << 16;
-	*z_gtri_reg(Z_GTRI_W_CLIPY) = (uint32_t)y0 | (uint32_t)y1 << 16;
-}
-
+/* 2: T2 is here (its ID), and not ZGL_NO_ENGINE; 0: the software */
 int zglc_open(uint8_t flags) {
 	int kind = 0;
-	if (!(flags & ZGL_NO_ENGINE)) {
-		uint32_t id = *z_gtri_reg(Z_GTRI_W_ID);
-		if (id == Z_GTRI_ID) kind = 1;
-		if (id == T2_ID) kind = 2;
-	}
+	if (!(flags & ZGL_NO_ENGINE) && *z_gtri_reg(Z_GTRI_W_ID) == T2_ID) kind = 2;
 	use_engine = kind != 0;
 	if (use_engine) {
 		*z_gtri_reg(Z_GTRI_W_RESET) = 1;
@@ -191,6 +155,24 @@ void zglc_picture(int32_t x0, int32_t y0, int32_t x1, int32_t y1) {
 		return;
 	}
 	set_vbase(z_chunky_phys(), Z_GTRI_CTRL_VSYNC);
+}
+
+/* T2's texture memory (zgl_int.h): CAPS bit 0, its size in [12:8] */
+uint32_t zglc_tex_room(void) {
+	uint32_t c;
+	if (!use_engine) return 0;
+	if (*z_gtri_reg(Z_GTRI_W_ID) != T2_ID) return 0;
+	c = *z_gtri_reg(Z_GTRI_W_CAPS);
+	if (!(c & 1u)) return 0;
+	return 1u << ((c >> 8) & 31u);
+}
+
+void zglc_tex_put(uint32_t word, uint32_t v) {
+	if (!use_engine) return;
+	/* the raster may be drawing with the texture memory */
+	while (*z_gtri_reg(Z_GTRI_W_STATUS) & 1u) ;
+	*z_gtri_reg(Z_GTRI_W_TEXADDR) = word;
+	*z_gtri_reg(Z_GTRI_W_TEXDATA) = v;
 }
 
 /* a command word: the store waits while the engine's FIFO is full */

@@ -25,7 +25,7 @@ Because the hardware is an FPGA, the system can be easily customized and optimiz
 | Component | Features/Notes |
 |-----------|----------|
 | CPU | 32-bit RISC-V (PicoRV32 or [Zeitlos32](docs/zeitlos32.md)) RV32IM @ 48MHz |
-| GPU | [Line rasterizer](docs/gpu_raster.md) and [blitter](docs/gpu_blitter.md); optional [triangle engine](docs/gpu_tri.md) and [T2](docs/zgl_t2.md) geometry engine |
+| GPU | [Line rasterizer](docs/gpu_raster.md) and [blitter](docs/gpu_blitter.md); optional [T2](docs/zgl_t2.md) 3D engine |
 | MTU | Virtual addressing through Memory Translation Unit |
 | MPU | [Memory protection unit](docs/mpu.md) and crash reporting |
 | Cache | Optional [instruction cache](docs/icache.md), or unified instruction + [data cache](docs/dcache.md) with write buffer and SDRAM burst fills |

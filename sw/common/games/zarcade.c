@@ -1829,16 +1829,6 @@ ar_mode_t ar_mode(void) { return ar__s.mode; }
 bool ar_fullscreen(void) { return ar__s.mode != AR_MODE_WINDOW; }
 bool ar_color(void) { return colour_now(); }
 
-bool ar_window_target(int *ox, int *oy, ar_rect_t *vis) {
-	if (ar__s.targets_stale) arh_targets();
-	if (ar__s.mode != AR_MODE_WINDOW || colour_now() || !ar__s.can_draw || ar__s.nvis != 1)
-		return false;
-	*ox = ar__s.ox;
-	*oy = ar__s.oy;
-	*vis = ar__s.vis[0];
-	return true;
-}
-
 void ar__wcolor(bool on, int extra, int rows1) {
 	bool was = ar__s.wcolor;
 	ar_event_t e;

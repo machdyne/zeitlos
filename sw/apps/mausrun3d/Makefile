@@ -16,10 +16,11 @@ APP_CFLAGS = -I$(COMMON_DIR)/zgl
 #   world, world_builtin   the map, its cells as display lists; world 1
 #   models, vfont          everyone and everything; letters of lines
 #   sound                  mausrun's sounds and tunes (../mausrun/sound.c)
+#   sprites                mausrun's tile drawings: the world's textures
 OBJS = zeitlos.o zobj.o zgfx.o zcolor.o zfont_data.o zwin.o zwidget.o zspeak.o \
 	zdialog.o zflist.o zedit.o zfsapp.o zarcade.o zarcade_sys.o zsfx.o zcfg.o sui.o \
 	zgl.o zgl_lines.o zgl_frames.o zgl_lists.o zgl_chunky.o zgl_t2.o \
-	world.o world_builtin.o models.o vfont.o sound.o mausrun3d.o
+	world.o world_builtin.o models.o vfont.o sound.o sprites.o mausrun3d.o
 
 # the world (a 128x128 map is 256 KB of blocks), its cells' lists, zgl's
 # frame for the software fallback; 8M is the kernel's cap (a 512x512
@@ -35,7 +36,7 @@ APP_STACK = 8M
 HOSTCC ?= cc
 GAMES = ../../common/games
 ZGL = ../../common/zgl
-RENDER_SRC = mausrun3d.c world.c world_builtin.c models.c vfont.c ../mausrun/sound.c $(GAMES)/zarcade.c $(GAMES)/zsfx.c \
+RENDER_SRC = mausrun3d.c world.c world_builtin.c models.c vfont.c ../mausrun/sound.c ../mausrun/sprites.c $(GAMES)/zarcade.c $(GAMES)/zsfx.c \
 	$(GAMES)/tests/ar_host.c $(GAMES)/ui/sui.c ../../common/zfont_data.c \
 	$(ZGL)/zgl.c $(ZGL)/zgl_lines.c $(ZGL)/zgl_frames.c $(ZGL)/zgl_lists.c $(ZGL)/zgl_t2.c \
 	$(ZGL)/t2fw.c $(ZGL)/tests/t2_model.c $(ZGL)/tests/t2_raster.c $(ZGL)/tests/t2g_iss.c
@@ -47,10 +48,10 @@ tests/render_mausrun3d: tests/render.c $(RENDER_SRC) world.h models.h vfont.h $(
 		-o $@ tests/render.c $(RENDER_SRC)
 
 # the geometry core's program, for its cycles (sw/t2fw)
-../../t2fw/t2fw.bin:
+../../t2fw/t2fw_tex.bin:
 	$(MAKE) -C ../../t2fw
 
-render: tests/render_mausrun3d ../../t2fw/t2fw.bin
+render: tests/render_mausrun3d ../../t2fw/t2fw_tex.bin
 	rm -rf tests/out
 	mkdir -p tests/out
 	tests/render_mausrun3d t2 tests/out

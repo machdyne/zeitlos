@@ -100,6 +100,11 @@ enum {
 #define W3_C_WHITE  1
 #define W3_C_HUD    2
 
+/* the world's textures into T2 (zglTexImage(): a texture a material);
+ * false where T2 has no textures. Before a cell's lists are first
+ * drawn: a list keeps the texture places it was compiled with. */
+bool w3_textures(void);
+
 /* the ramps' colours, dark to light, by theme */
 void w3_palette(const w3_world_t *w, uint16_t pal[256]);
 

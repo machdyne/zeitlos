@@ -88,7 +88,9 @@ GLfixed zglCos(uint32_t t) {
 	return zglSin(t + 0x4000);
 }
 
-static uint32_t isqrt64(uint64_t v) {
+uint32_t zgl_isqrt64(uint64_t v);
+#define isqrt64 zgl_isqrt64
+uint32_t zgl_isqrt64(uint64_t v) {
 	uint64_t r = 0, b = (uint64_t)1 << 62;
 	while (b > v) b >>= 2;
 	while (b) {
@@ -466,6 +468,7 @@ static bool *cap(GLenum c) {
 	case GL_NORMALIZE: return &zgl_s.normalize;
 	case GL_LIGHT0: return &zgl_s.light_on[0];
 	case GL_LIGHT1: return &zgl_s.light_on[1];
+	case GL_TEXTURE_2D: return &zgl_s.texture;
 	default: return NULL;
 	}
 }
@@ -558,6 +561,29 @@ void glColor3f(GLfloat r, GLfloat g, GLfloat b) {
 	glColor3x(from_float(r), from_float(g), from_float(b));
 }
 
+/* -- textures (T2 only: zgl_t2.c, docs/zgl.md "Textures") ---------------- */
+
+/* texels, 12.4: a texture coordinate of up to +-1,024 texels */
+void glTexCoord2i(GLint s, GLint t) {
+	ZGL_REC(ZGLR_TEXCOORD, s * 16, t * 16, 0, 0);
+	zgl_s.tex_s = s * 16;
+	zgl_s.tex_t = t * 16;
+}
+
+/* texels, 16.16 */
+void glTexCoord2x(GLfixed s, GLfixed t) {
+	int32_t a = (s + 2048) >> 12, b = (t + 2048) >> 12;
+	ZGL_REC(ZGLR_TEXCOORD, a, b, 0, 0);
+	zgl_s.tex_s = a;
+	zgl_s.tex_t = b;
+}
+
+void glBindTexture(GLenum target, GLuint name) {
+	if (target != GL_TEXTURE_2D) { set_error(GL_INVALID_ENUM); return; }
+	ZGL_REC(ZGLR_BIND, (int32_t)name, 0, 0, 0);
+	zgl_s.tex_bound = name;
+}
+
 ZGL_HOT void glNormal3x(GLfixed nx, GLfixed ny, GLfixed nz) {
 	ZGL_REC(ZGLR_NORMAL, nx, ny, nz, 0);
 	zgl_s.normal[0] = nx; zgl_s.normal[1] = ny; zgl_s.normal[2] = nz;
@@ -600,10 +626,36 @@ void glLightxv(GLenum light, GLenum pname, const GLfixed *p) {
 	zgl_s.lserial++;
 	switch (pname) {
 	case GL_POSITION:
-		/* as GL: through the modelview of the moment; a direction
-		 * (w 0), and a position is taken as the direction to it */
+		/* as GL: through the modelview of the moment. A direction (w
+		 * 0); or a position, where the light is, which each vertex's
+		 * light then comes from */
 		mv_dir(p, zgl_s.light_dir[l]);
+		zgl_s.light_pt[l] = p[3] != 0;
+		if (zgl_s.light_pt[l]) {
+			const int32_t *m = zgl_s.mv[zgl_s.mv_top];
+			int32_t q[3];
+			int r;
+			/* x / w, as 24.8 */
+			for (r = 0; r < 3; r++) q[r] = (int32_t)(((int64_t)p[r] * POS_ONE) / p[3]);
+			for (r = 0; r < 3; r++)
+				zgl_s.light_pos[l][r] = (int32_t)(((int64_t)m[r] * q[0] + (int64_t)m[4 + r] * q[1] +
+				                                   (int64_t)m[8 + r] * q[2]) >> MAT_SH) + m[12 + r];
+		}
 		zgl_unit3(zgl_s.light_dir[l]);
+		zgl_s.gen++;
+		break;
+	case GL_CONSTANT_ATTENUATION:
+		zgl_s.light_kc[l] = p[0];
+		zgl_s.gen++;
+		break;
+	case GL_LINEAR_ATTENUATION:
+		/* 16.16 in, 8.24 kept */
+		zgl_s.light_kl[l] = p[0] > 0x7fffff ? INT32_MAX : p[0] < 0 ? 0 : p[0] << 8;
+		zgl_s.gen++;
+		break;
+	case GL_QUADRATIC_ATTENUATION:
+		/* 16.16 in, 0.32 kept (at most one per unit squared) */
+		zgl_s.light_kq[l] = p[0] >= 0x10000 ? 0xffffffffu : p[0] < 0 ? 0 : (uint32_t)p[0] << 16;
 		zgl_s.gen++;
 		break;
 	case GL_DIFFUSE:
@@ -622,8 +674,46 @@ void glLightxv(GLenum light, GLenum pname, const GLfixed *p) {
 void glLightfv(GLenum light, GLenum pname, const GLfloat *p) {
 	int32_t x[4];
 	int i;
-	for (i = 0; i < 4; i++) x[i] = from_float(p[i]);
+	int l = (int)light - GL_LIGHT0;
+	/* the attenuation's small factors, to more bits than 16.16 holds */
+	if (l >= 0 && l <= 1 && pname == GL_LINEAR_ATTENUATION) {
+		float v = p[0] * 16777216.0f;
+		zgl_s.light_kl[l] = v >= 2147483647.0f ? INT32_MAX : v <= 0.0f ? 0 : (int32_t)v;
+		zgl_s.gen++; zgl_s.lserial++;
+		return;
+	}
+	if (l >= 0 && l <= 1 && pname == GL_QUADRATIC_ATTENUATION) {
+		float v = p[0] * 4294967296.0f;
+		zgl_s.light_kq[l] = v >= 4294967295.0f ? 0xffffffffu : v <= 0.0f ? 0 : (uint32_t)v;
+		zgl_s.gen++; zgl_s.lserial++;
+		return;
+	}
+	for (i = 0; i < 4; i++) x[i] = pname == GL_POSITION || pname == GL_DIFFUSE || i == 0 ? from_float(p[i]) : 0;
 	glLightxv(light, pname, x);
+}
+
+/* the scalars: the three attenuation factors */
+void glLightx(GLenum light, GLenum pname, GLfixed v) {
+	GLfixed p[4];
+	p[0] = v; p[1] = p[2] = p[3] = 0;
+	glLightxv(light, pname, p);
+}
+
+void glLightf(GLenum light, GLenum pname, GLfloat v) {
+	GLfloat p[4];
+	p[0] = v; p[1] = p[2] = p[3] = 0;
+	glLightfv(light, pname, p);
+}
+
+/* 1 / (kc + kl d + kq d^2), 16.16, at most one; d 16.16 world units */
+int32_t zgl_atten(int l, int64_t d) {
+	int64_t den = (int64_t)zgl_s.light_kc[l];
+	if (d < 0) d = 0;
+	if (d > INT32_MAX) d = INT32_MAX;
+	den += ((int64_t)zgl_s.light_kl[l] * d) >> 24;
+	den += ((((uint64_t)d * (uint64_t)d) >> 32) * zgl_s.light_kq[l]) >> 16;
+	if (den <= FIX_ONE) return FIX_ONE;
+	return (int32_t)(((int64_t)1 << 32) / den);
 }
 
 void zgl_material(int32_t a, int32_t d) {
@@ -645,8 +735,27 @@ void glMaterialfv(GLenum face, GLenum pname, const GLfloat *p) {
 	zgl_material((int32_t)(p[0] * 256.0f), (int32_t)(p[1] * 256.0f));
 }
 
-/* the colour index of the vertex being made, 8.8: lit, or as set */
-ZGL_HOT static int32_t vertex_ci(void) {
+/* A positional light's 16.16 dot at the vertex at object (x, y, z),
+ * 24.8, whose eye normal is n: n . the unit vector to the light, times
+ * the attenuation. Kept apart from vertex_ci() (it is the rare case). */
+static int32_t point_dot(int l, const int32_t *n, int32_t x, int32_t y, int32_t z) {
+	const int32_t *m = zgl_s.mv[zgl_s.mv_top];
+	int64_t L[3], d2, nl;
+	uint32_t d;
+	int r;
+	for (r = 0; r < 3; r++)
+		L[r] = (int64_t)zgl_s.light_pos[l][r] -
+		       ((((int64_t)m[r] * x + (int64_t)m[4 + r] * y + (int64_t)m[8 + r] * z) >> MAT_SH) + m[12 + r]);
+	d2 = L[0] * L[0] + L[1] * L[1] + L[2] * L[2];
+	d = isqrt64((uint64_t)d2);                  /* 24.8 */
+	if (!d) return FIX_ONE;
+	nl = (int64_t)n[0] * L[0] + (int64_t)n[1] * L[1] + (int64_t)n[2] * L[2];   /* 16.16 x 24.8 */
+	return (int32_t)(((nl / (int64_t)d) * zgl_atten(l, (int64_t)d << 8)) >> 16);
+}
+
+/* the colour index of the vertex being made, 8.8: lit, or as set; at
+ * object (x, y, z), for a positional light */
+ZGL_HOT static int32_t vertex_ci(int32_t x, int32_t y, int32_t z) {
 	int32_t n[3], d = 0;
 	int l;
 	if (!zgl_s.lighting) return (int32_t)zgl_s.index << 8;
@@ -655,9 +764,10 @@ ZGL_HOT static int32_t vertex_ci(void) {
 	for (l = 0; l < 2; l++) {
 		int32_t dot;
 		if (!zgl_s.light_on[l]) continue;
-		dot = (int32_t)(((int64_t)n[0] * zgl_s.light_dir[l][0] +
-		                 (int64_t)n[1] * zgl_s.light_dir[l][1] +
-		                 (int64_t)n[2] * zgl_s.light_dir[l][2]) >> 16);
+		if (zgl_s.light_pt[l]) dot = point_dot(l, n, x, y, z);
+		else dot = (int32_t)(((int64_t)n[0] * zgl_s.light_dir[l][0] +
+		                      (int64_t)n[1] * zgl_s.light_dir[l][1] +
+		                      (int64_t)n[2] * zgl_s.light_dir[l][2]) >> 16);
 		if (dot > 0) d += fmul(dot, zgl_s.light_d[l]);
 	}
 	if (d > FIX_ONE) d = FIX_ONE;
@@ -780,7 +890,7 @@ ZGL_HOT __attribute__((noinline)) static void vc_fill(zgl_vcache_t *e, int32_t x
 
 /* the entry lit for the current normal and index */
 ZGL_HOT __attribute__((noinline)) static void vc_light(zgl_vcache_t *e) {
-	e->v.ci = vertex_ci();
+	e->v.ci = vertex_ci(e->ox, e->oy, e->oz);
 	e->v.c = (uint8_t)((e->v.ci + 128) >> 8);
 	e->nx = zgl_s.normal[0]; e->ny = zgl_s.normal[1]; e->nz = zgl_s.normal[2];
 	e->idx = zgl_s.index;
@@ -1329,6 +1439,10 @@ void zgl_reset_state(void) {
 		zgl_s.light_dir[i][0] = 0; zgl_s.light_dir[i][1] = 0;
 		zgl_s.light_dir[i][2] = FIX_ONE;
 		zgl_s.light_d[i] = i == 0 ? FIX_ONE : 0;
+		zgl_s.light_pt[i] = false;
+		zgl_s.light_kc[i] = FIX_ONE;
+		zgl_s.light_kl[i] = 0;
+		zgl_s.light_kq[i] = 0;
 	}
 	zgl_s.mat_a = 0;
 	zgl_s.mat_d = 256;

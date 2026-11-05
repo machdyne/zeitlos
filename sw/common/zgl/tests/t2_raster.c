@@ -27,6 +27,20 @@ static const uint8_t bayer4[4][4] = {
 };
 
 static uint32_t rec[T2_RECS * T2_REC_WORDS];
+
+/* the texture memory, as the CPU writes it a word (four texels) at a time */
+static uint8_t tex[1u << T2_TEX_LOG2];
+
+void t2_model_tex(uint32_t word, uint32_t v) {
+	uint32_t a = (word * 4u) & ((1u << T2_TEX_LOG2) - 1u);
+	tex[a] = (uint8_t)v; tex[a + 1] = (uint8_t)(v >> 8);
+	tex[a + 2] = (uint8_t)(v >> 16); tex[a + 3] = (uint8_t)(v >> 24);
+}
+
+uint32_t t2_model_tex_word(uint32_t word) {
+	uint32_t a = (word * 4u) & ((1u << T2_TEX_LOG2) - 1u);
+	return (uint32_t)tex[a] | (uint32_t)tex[a + 1] << 8 | (uint32_t)tex[a + 2] << 16 | (uint32_t)tex[a + 3] << 24;
+}
 static uint32_t nrec_w, nrec;
 static int32_t fx0, fx1, fy0, fy1;
 static uint8_t clear;
@@ -56,16 +70,22 @@ static int64_t edge(uint32_t a, uint32_t b, int32_t X, int32_t Y) {
 
 static void tri(const uint32_t *w, int32_t sy0, int32_t sy1, uint8_t (*col)[W], uint16_t (*zb)[W], t2_stats_t *st) {
 	uint32_t h = w[0];
-	bool dep = (h >> 2) & 1, sr = (h >> 3) & 1;
+	bool dep = (h >> 2) & 1, sr = (h >> 3) & 1, tx = (h & 3) == T2_REC_TTRI;
 	int32_t ylo = (int32_t)((h >> 8) & 0xff), yhi = (int32_t)((h >> 16) & 0xff), ymid = (int32_t)(h >> 24);
 	int32_t bx0 = (int32_t)(w[1] & 0xffff), bx1 = (int32_t)(w[1] >> 16);
 	int32_t r0 = ylo > sy0 ? ylo : sy0, r1 = yhi < sy1 ? yhi : sy1, y, x;
 	if (r0 > r1) return;
-	st->cyc_raster += 12;                                   /* the strip's setup */
+	st->cyc_raster += tx ? 30 : 12;                         /* the strip's setup (and the pipe) */
 	for (y = r0; y <= r1; y++) {
 		int32_t Y = y * 16;
 		uint32_t sa = y < ymid ? w[2] : w[3], sb = y < ymid ? w[3] : w[4];
 		uint32_t zr = w[5] + w[7] * (uint32_t)(y - ylo), cr = w[8] + w[10] * (uint32_t)(y - ylo);
+		uint32_t ar = 0, br = 0, qr = 0;
+		if (tx) {
+			ar = w[12] + w[14] * (uint32_t)(y - ylo);
+			br = w[15] + w[17] * (uint32_t)(y - ylo);
+			qr = w[18] + w[20] * (uint32_t)(y - ylo);
+		}
 		st->cyc_raster += (uint32_t)((bx1 >> 2) - (bx0 >> 2) + 1) + 2;
 		for (x = bx0; x <= bx1; x++) {
 			int32_t X = x * 16;
@@ -77,6 +97,14 @@ static void tri(const uint32_t *w, int32_t sy0, int32_t sy1, uint8_t (*col)[W], 
 			z = zr + w[6] * (uint32_t)(x - bx0);
 			c = cr + w[9] * (uint32_t)(x - bx0);
 			ci = (uint8_t)((c + bayer4[y & 3][x & 3]) >> 8);
+			if (tx) {
+				uint32_t ts, tt, k = (uint32_t)(x - bx0);
+				uint8_t xl;
+				t2_uv((int32_t)(ar + w[13] * k), (int32_t)(br + w[16] * k), (int32_t)(qr + w[19] * k), &ts, &tt);
+				xl = tex[t2_texel_at(w[11], ts, tt, T2_TEX_LOG2)];
+				if (T2_TEX_KEY(w[11]) && xl == 0) continue;
+				ci = t2_combine(T2_TEX_MODE(w[11]), xl, ci);
+			}
 			st->pixels++;
 			if (dep) {
 				uint32_t zv = (int32_t)z < 0 ? 0 : z >> 15;
@@ -124,10 +152,10 @@ void t2r_draw(uint8_t pic[240][320], t2_stats_t *st) {
 			int32_t ylo = (int32_t)((w[0] >> 8) & 0xff), yhi = (int32_t)((w[0] >> 16) & 0xff);
 			st->cyc_raster++;                               /* the scan */
 			if (!(yhi < sy0 || ylo > sy1)) {
-				if ((w[0] & 3) == T2_REC_TRI) tri(w, sy0, sy1, col, zb, st);
+				if ((w[0] & 3) == T2_REC_TRI || (w[0] & 3) == T2_REC_TTRI) tri(w, sy0, sy1, col, zb, st);
 				else line(w, sy0, sy1, col, zb, st);
 			}
-			k += (w[0] & 3) == T2_REC_TRI ? T2_REC_WORDS : 10;
+			k += (w[0] & 3) == T2_REC_TRI ? T2_REC_WORDS : (w[0] & 3) == T2_REC_TTRI ? T2_REC_TWORDS : 10;
 		}
 		for (y = sy0; y <= sy1; y++)
 			memcpy(&pic[y][fx0], &col[y - sy0][fx0], (size_t)(fx1 - fx0 + 1));

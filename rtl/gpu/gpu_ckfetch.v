@@ -153,9 +153,17 @@ module gpu_ckfetch #(
 	// ------------------------------------------------------------------
 
 	// the line about to be read, and the one after it
+	// Registered: gb_row moves once a line, and a value a clock old
+	// names lines already fetched, so the fetch only starts a clock later.
+	// (It was the slowest path of lakritz_console.)
 	wire [9:0] l_full = (gb_row >= 10'd240) ? (gb_row - 10'd240) : gb_row;
-	wire [7:0] lc = (l_full >= 10'd240) ? 8'd0 : l_full[7:0];
-	wire [7:0] ln = (lc == 8'd239) ? 8'd0 : (lc + 8'd1);
+	wire [7:0] lc_d = (l_full >= 10'd240) ? 8'd0 : l_full[7:0];
+	reg  [7:0] lc;
+	reg  [7:0] ln;
+	always @(posedge clk) begin
+		lc <= lc_d;
+		ln <= (lc_d == 8'd239) ? 8'd0 : (lc_d + 8'd1);
+	end
 
 	wire has0c = v0 && (ln0 == lc);
 	wire has1c = v1 && (ln1 == lc);

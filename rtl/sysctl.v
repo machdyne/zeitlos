@@ -15,14 +15,6 @@
 `undef KECCAK
 `endif
 
-// T2, the triangle engine that runs the whole frame (rtl/gpu/gpu_t2.v,
-// docs/zgl_t2.md), takes today's engine's place: same address, same
-// VRAM port, the same plumbing below (`GPU_TRI's).
-`ifdef GPU_T2
-`ifndef GPU_TRI
-`define GPU_TRI
-`endif
-`endif
 // `VRAM_SDRAM without the rasterizer: its registers answer (writes are
 // dropped, reads 0 -- never busy, an empty FIFO), so software that
 // waits on it does not hang; zgfx draws lines itself where FEATURES
@@ -33,12 +25,13 @@
 `endif
 `endif
 
-// Today's engine shares the rasterizer's VRAM port (gpu_vmux): it needs
-// it, except with `VRAM_SDRAM, where T2 writes main memory
-`ifdef GPU_TRI
+// T2, the triangle engine that runs the whole frame (rtl/gpu/gpu_t2.v,
+// docs/zgl_t2.md), shares the rasterizer's VRAM port (gpu_vmux): it
+// needs it, except with `VRAM_SDRAM, where it writes main memory
+`ifdef GPU_T2
 `ifndef GPU_RASTER
 `ifndef VRAM_SDRAM
-`GPU_TRI_NEEDS_GPU_RASTER
+`GPU_T2_NEEDS_GPU_RASTER
 `endif
 `endif
 `endif
@@ -1240,7 +1233,7 @@ module sysctl #()
 	wire [31:0] wbs_kec_dat_o;
 	wire wbs_kec_ack_o;
 `endif
-`ifdef GPU_TRI
+`ifdef GPU_T2
 	wire [31:0] wbs_gtri_dat_o;
 	wire wbs_gtri_ack_o;
 `endif
@@ -1493,10 +1486,10 @@ module sysctl #()
 	wire cs_kec = ((wbm_adr & 32'hff00_0000) == 32'h7d00_0000);
 	wire wbm_cyc_kec = cs_kec && wbm_cyc;
 `endif
-	// rtl/gpu/gpu_tri.v -- the triangle engine, docs/gpu_tri.md. Decoded
+	// rtl/gpu/gpu_t2.v -- T2, the triangle engine, docs/zgl_t2.md. Decoded
 	// as the Keccak block is, just below it. Without it, csrs.v answers
 	// here (its word 7 reads 0, where the engine's ID is).
-`ifdef GPU_TRI
+`ifdef GPU_T2
 	wire cs_gtri = ((wbm_adr & 32'hff00_0000) == 32'h7c00_0000);
 	wire wbm_cyc_gtri = cs_gtri && wbm_cyc;
 `endif
@@ -1572,7 +1565,7 @@ module sysctl #()
 `ifdef KECCAK
 		&& !cs_kec
 `endif
-`ifdef GPU_TRI
+`ifdef GPU_T2
 		&& !cs_gtri
 `endif
 		;
@@ -1693,7 +1686,7 @@ module sysctl #()
 `ifdef KECCAK
 		({32{cs_kec}} & wbs_kec_dat_o) |
 `endif
-`ifdef GPU_TRI
+`ifdef GPU_T2
 		({32{cs_gtri}} & wbs_gtri_dat_o) |
 `endif
 `ifdef GPU_RASTER
@@ -1867,7 +1860,7 @@ module sysctl #()
 `ifdef KECCAK
 		(cs_kec & wbs_kec_ack_o) |
 `endif
-`ifdef GPU_TRI
+`ifdef GPU_T2
 		(cs_gtri & wbs_gtri_ack_o) |
 `endif
 `ifdef GPU_RASTER
@@ -2679,7 +2672,7 @@ module sysctl #()
 	wire wbm_cyc_gpu = cs_gpu && wbm_cyc;
 `endif
 
-`ifdef GPU_TRI
+`ifdef GPU_T2
 	// The rasterizer and the triangle engine share the arbiter's
 	// master 1 (rtl/gpu/gpu_vmux.v): the rasterizer's own wires are
 	// these, and wbm_gpu_* the shared port.
@@ -2712,7 +2705,7 @@ module sysctl #()
 		.wb_ack_o(wbs_gpu_ack_o),
 
 		// master interface to VRAM
-`ifdef GPU_TRI
+`ifdef GPU_T2
 		.m_adr_o(wbm_gras_adr),
 		.m_dat_i(wbm_gras_dat_i),
 		.m_dat_o(wbm_gras_dat_o),
@@ -2735,14 +2728,19 @@ module sysctl #()
 	);
 `endif
 
-`ifdef GPU_TRI
-	// WISHBONE SLAVE + MASTER: the triangle engine (rtl/gpu/gpu_tri.v,
-	// docs/gpu_tri.md). Optional, `GPU_TRI in rtl/boards.vh, for the
-	// chunky boards (it writes chunky VRAM); needs `GPU_RASTER, whose
-	// port to VRAM it shares. beam_y is not wired yet (WAIT_BEAM never
-	// waits); vblank is, for VSYNC: a frame starts going out in
-	// vertical blanking and keeps ahead of the beam.
 `ifdef GPU_T2
+	// WISHBONE SLAVE + MASTER: T2, the triangle engine (rtl/gpu/gpu_t2.v,
+	// docs/zgl_t2.md). Optional, `GPU_T2, for the chunky boards (it
+	// writes chunky VRAM, or with `VRAM_SDRAM main memory); needs
+	// `GPU_RASTER otherwise, whose port to VRAM it shares. beam_y is not
+	// wired yet (WAIT_BEAM never waits); vblank is, for VSYNC: a frame
+	// starts going out in vertical blanking and keeps ahead of the beam.
+	// `T2_TEX_LOG2: textures (docs/zgl_t2.md, "Textures"), a texture
+	// memory of 2^n texels; 13 is 8 KB. Nine DP16KD in all with the
+	// geometry core's bigger program (sw/t2fw/t2fw_tex.hex). 0: none.
+`ifndef T2_TEX_LOG2
+`define T2_TEX_LOG2 0
+`endif
 `ifdef VRAM_SDRAM
 	// the picture is in main memory, linear (gpu_t2.v LINEAR), its
 	// writes posted (POST_LOG2); `T2_STRIP_H and `T2_POST_LOG2 trade
@@ -2753,12 +2751,10 @@ module sysctl #()
 `ifndef T2_POST_LOG2
 `define T2_POST_LOG2 10
 `endif
-	gpu_t2_wb #(.LINEAR(1), .POST_LOG2(`T2_POST_LOG2), .STRIP_H(`T2_STRIP_H)) gtri0_i (
+	gpu_t2_wb #(.LINEAR(1), .POST_LOG2(`T2_POST_LOG2), .STRIP_H(`T2_STRIP_H),
+		.TEX_LOG2(`T2_TEX_LOG2)) gtri0_i (
 `else
-	gpu_t2_wb gtri0_i (
-`endif
-`else
-	gpu_tri_wb gtri0_i (
+	gpu_t2_wb #(.TEX_LOG2(`T2_TEX_LOG2)) gtri0_i (
 `endif
 		.clk(wbm_clk),
 		.rst(wbm_rst),
@@ -4217,7 +4213,7 @@ module sysctl #()
 	// twice can at least conclude nothing is happening.
 	wire [15:0] gpu_frame_ctr;
 	wire gpu_in_vblank;
-`ifdef GPU_TRI
+`ifdef GPU_T2
 	assign gtri_vblank = gpu_in_vblank;
 `endif
 `ifndef GPU

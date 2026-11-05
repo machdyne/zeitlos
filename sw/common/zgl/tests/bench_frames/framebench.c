@@ -190,8 +190,7 @@ int main(void) {
 	glLightxv(GL_LIGHT0, GL_POSITION, light);
 	glLightxv(GL_LIGHT0, GL_DIFFUSE, white);
 	glEnable(GL_LIGHT0); glEnable(GL_LIGHTING); glEnable(GL_CULL_FACE);
-	run(zgl_info()->backend == ZGL_BACKEND_T2 ? "chunky, T2" :
-	    zgl_info()->backend == ZGL_BACKEND_ENGINE ? "chunky, engine" : "chunky, software", true, 256, true);
+	run(zgl_info()->backend == ZGL_BACKEND_T2 ? "chunky, T2" : "chunky, software", true, 256, true);
 	/* the models as display lists: T2's fast path */
 	l_sph = glGenLists(3);
 	l_cub = l_sph + 1;

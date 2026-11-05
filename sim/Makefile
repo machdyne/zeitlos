@@ -4,7 +4,7 @@ SDL_CFLAGS = $(shell pkg-config --cflags sdl2)
 SDL_LIBS = $(shell pkg-config --libs sdl2)
 
 # zexec_lz4.c: compressed ZEXE images, as the kernel loads them.
-CORE_SRCS = machine.c cpu.c cost.c gtri.c ../sw/common/zgl/tests/t_model.c ../sw/common/zgl/tests/t2_model.c ../sw/common/zgl/tests/t2_raster.c ../sw/common/zgl/t2fw.c simos.c ../sw/common/zexec_lz4.c
+CORE_SRCS = machine.c cpu.c cost.c gtri.c ../sw/common/zgl/tests/t2_model.c ../sw/common/zgl/tests/t2_raster.c ../sw/common/zgl/t2fw.c simos.c ../sw/common/zexec_lz4.c
 
 all: zeitlos-sim zsim-headless zsim-debug
 

@@ -14,8 +14,8 @@
  * are cleared, every primitive that touches the strip is drawn into
  * them, and the strip goes out to the picture at once. So there is no
  * frame-sized buffer anywhere -- the strip's 15 KB stay close in the
- * cache -- and the triangle engine (Phase 4) can draw the very same
- * strips on chip, this file being its pixel-exact reference.
+ * cache. T2 (zgl_t2.c, docs/zgl_t2.md) draws the same pictures from
+ * the same arithmetic, this file being its reference.
  *
  * -- Rasterization --
  *
@@ -74,11 +74,8 @@ static int16_t (*zf_yr)[2];
 static int zf_n, zf_max;
 static bool zf_open;
 static uint8_t zf_bits;
-static uint8_t zf_chunky;               /* 0, 1 software chunky, 2 the engine, 3 T2 */
-static bool zf_engine;                  /* the engine, for a window's frames */
+static uint8_t zf_chunky;               /* 0, 1 software chunky, 3 T2 */
 
-/* the runtime's, which a host test need not have */
-#pragma weak ar_window_target
 static zgl_info_t *zf_info;
 
 static uint8_t  zf_col[STRIP_H * ZGL_W] __attribute__((aligned(4)));
@@ -126,14 +123,11 @@ bool zglf_open(const zgl_desc_t *d, zgl_info_t *info) {
 	zf_bits = d->index_bits;
 	zf_info = info;
 	zf_chunky = 0;
-	zf_engine = false;
 	if ((d->flags & ZGL_CHUNKY) && zglc_open && zglc_strip) {
 		int e = zglc_open(d->flags);
-		zf_chunky = e == 2 && zgl_t2_open && zgl_t2_open(info) ? 3 : e ? 2 : 1;
-		if (zf_chunky == 2) info->backend = ZGL_BACKEND_ENGINE;
+		zf_chunky = e == 2 && zgl_t2_open && zgl_t2_open(info) ? 3 : 1;
 		if (zf_chunky == 3) info->backend = ZGL_BACKEND_T2;
-	} else if (zglc_probe && zglc_mono && zglc_put && zglc_finish)
-		zf_engine = zglc_probe(d->flags);
+	}
 	for (i = 0; i < STRIP_H; i++) { zf_rx0[i] = ZGL_W; zf_rx1[i] = -1; }
 	zf_clear = -1;
 	zf_open = true;
@@ -591,31 +585,11 @@ void zglf_frame(void) {
 	int np = planes_now(), y0, i;
 	int32_t vx0, vy0, vx1, vy1;
 	if (!zf_open) return;
-	if (zf_chunky == 2) { zglf_t_frame(zglc_put); return; }
 	if (zf_chunky == 3) { zgl_t2_frame(); return; }
 	zglf_rect(&vx0, &vy0, &vx1, &vy1);
 	if (zf_chunky) np = 8;
 	else if (!np) {
-		int ox, oy;
-		ar_rect_t v;
 		make_lum();
-		if (zf_engine && ar_window_target && ar_window_target(&ox, &oy, &v)) {
-			/* a black-and-white window, one rectangle of it showing:
-			 * the engine draws it there; done when this returns, so the
-			 * program's text goes on top as before */
-			int x0 = v.x - ox, y0 = v.y - oy, x1 = x0 + v.w - 1, y1 = y0 + v.h - 1;
-			if (x0 < 0) x0 = 0;
-			if (y0 < 0) y0 = 0;
-			if (x1 > ZGL_W - 1) x1 = ZGL_W - 1;
-			if (y1 > ZGL_H - 1) y1 = ZGL_H - 1;
-			if (x0 <= x1 && y0 <= y1) {
-				zglc_mono(ox, oy, x0, x1, y0, y1, zf_lum);
-				zf_info->backend = ZGL_BACKEND_ENGINE;
-				zglf_t_frame(zglc_put);
-				zglc_finish();
-				return;
-			}
-		}
 		zf_info->backend = ZGL_BACKEND_SOFTWARE;
 	}
 	st.cx0 = vx0; st.cx1 = vx1;
@@ -646,160 +620,6 @@ void zglf_frame(void) {
 			memset(&zf_z[i * ZGL_W + x0], 0xff, (size_t)(x1 - x0 + 1) * 2);
 			zf_rx0[i] = ZGL_W; zf_rx1[i] = -1;
 		}
-	}
-	zf_info->lines = 0;
-	zf_info->prims = (uint32_t)zf_n;
-	zf_info->frames++;
-	zf_n = 0;
-}
-
-/* -- the triangle engine's commands (rtl/gpu/gpu_tri.v, docs/gpu_tri.md) ---
- *
- * The engine draws the same strips as above, pixel for pixel, from
- * commands the CPU sets up for each strip: a triangle becomes one or
- * two trapezoids (its rows above and below the middle vertex), each
- * with its two edges already at its first row, and a line its steps
- * inside the strip. What is left to the engine is stepping and
- * pixels: no division, and one multiply a row (a plane at the span's
- * first pixel).
- *
- *   BEGIN  op 3 | first << 27 | y0 << 12 | clear << 4 | (rows - 1)
- *                      the strip, the frame's first or not, its
- *                      background index
- *          cx0 | cx1 << 16                        its columns
- *   TRAP   op 1 | depth << 27 | ya << 4 | yb      rows ya..yb of the strip
- *          left edge, right edge: 3 words each:
- *            q | qs << 16   r | rs << 16   D
- *          z at column 0 of row ya, dz/dx, dz/dy   (16.15, mod 2^32)
- *          ci at column 0 of row ya, dci/dx, dci/dy (8.8)
- *   LINE   op 2 | depth << 27 | (steps - 1)
- *          x, y (28.4 << 16, + 8 << 16), dx, dy a step,
- *          z, dz, ci, dci
- *   END    op 4                                   the strip is done
- *
- * A row's pixels run from the left edge's q to the right edge's q - 1,
- * inside cx0..cx1. The edges step as edge_step() does. A span's first
- * z is z0 + dz/dx * x (mod 2^32: the same low 32 bits as the 64-bit sum
- * above), and each row adds dz/dy; colour likewise. */
-
-#define ZT_TRAP  1u
-#define ZT_LINE  2u
-#define ZT_BEGIN 3u
-#define ZT_END   4u
-
-/* where the commands go: the engine's command register, or put() */
-static volatile uint32_t *zt_reg;
-static void (*zt_put)(uint32_t);
-#define ZT_PUT(w) do { uint32_t w_ = (w); if (zt_reg) *zt_reg = w_; else zt_put(w_); } while (0)
-
-static inline __attribute__((always_inline)) void t_edge(const zf_edge_t *e) {
-	ZT_PUT((uint32_t)(uint16_t)e->q | (uint32_t)(uint16_t)e->qs << 16);
-	ZT_PUT((uint32_t)(uint16_t)e->r | (uint32_t)(uint16_t)e->rs << 16);
-	ZT_PUT((uint32_t)e->D);
-}
-
-/* fits the engine's 16-bit edge fields (the front end clips to the
- * view, so a triangle's edges always do) */
-static inline bool t_edge_ok(const zf_edge_t *e) {
-	return e->q >= -32768 && e->q <= 32767 && e->qs >= -32768 && e->qs <= 32767 &&
-	       e->D > 0 && e->D <= 65535 && e->r >= 0 && e->rs >= 0;
-}
-
-/* the plane a at column 0 of picture row y */
-static uint32_t t_plane0(int32_t a0, int32_t dadx, int32_t dady, const zgl_svtx_t *v0, int32_t y) {
-	int64_t k = -(int64_t)dadx * v0->x + (int64_t)dady * (y * 16 - v0->y);
-	return (uint32_t)a0 + (uint32_t)(k >> 4);
-}
-
-static void t_trap(const zf_strip_t *st, const zf_prim_t *p,
-		int32_t ya, int32_t yb, const zgl_svtx_t *sa, const zgl_svtx_t *sb) {
-	const zgl_svtx_t *v0 = &p->v[0], *v2 = &p->v[2];
-	zf_edge_t el, es;
-	edge_init(&el, v0, v2, ya);
-	edge_init(&es, sa, sb, ya);
-	if (!t_edge_ok(&el) || !t_edge_ok(&es)) { zf_info->overflows++; return; }
-	ZT_PUT(ZT_TRAP << 28 | (uint32_t)p->depth << 27 |
-	    (uint32_t)(ya - st->sy0) << 4 | (uint32_t)(yb - st->sy0));
-	if (p->short_right) { t_edge(&el); t_edge(&es); }
-	else { t_edge(&es); t_edge(&el); }
-	ZT_PUT(t_plane0(v0->z, p->dzdx, p->dzdy, v0, ya));
-	ZT_PUT((uint32_t)p->dzdx);
-	ZT_PUT((uint32_t)p->dzdy);
-	ZT_PUT(t_plane0(v0->ci, p->dcdx, p->dcdy, v0, ya));
-	ZT_PUT((uint32_t)p->dcdx);
-	ZT_PUT((uint32_t)p->dcdy);
-}
-
-static void t_tri(const zf_strip_t *st, const zf_prim_t *p) {
-	const zgl_svtx_t *v0 = &p->v[0], *v1 = &p->v[1], *v2 = &p->v[2];
-	int32_t ylo = (v0->y + 15) >> 4, yhi = ((v2->y + 15) >> 4) - 1, ymid = (v1->y + 15) >> 4;
-	if (ylo < st->sy0) ylo = st->sy0;
-	if (yhi > st->sy1) yhi = st->sy1;
-	if (ylo > yhi) return;
-	if (ylo < ymid) t_trap(st, p, ylo, ymid - 1 < yhi ? ymid - 1 : yhi, v0, v1);
-	if ((ymid > ylo ? ymid : ylo) <= yhi) t_trap(st, p, ymid > ylo ? ymid : ylo, yhi, v1, v2);
-}
-
-static void t_line(const zf_strip_t *st, const zf_prim_t *p) {
-	/* draw_line()'s walk, as numbers */
-	const zgl_svtx_t *a = &p->v[0], *b = &p->v[1];
-	int32_t dx = b->x - a->x, dy = b->y - a->y;
-	int32_t adx = dx < 0 ? -dx : dx, ady = dy < 0 ? -dy : dy;
-	int32_t n = ((adx > ady ? adx : ady) + 15) >> 4;
-	int32_t i0 = 0, i1;
-	int64_t sx, sy, sz, sc;
-	if (n == 0) n = 1;
-	i1 = n;
-	if (ady > 16) {
-		int32_t ra = st->sy0 * 16 - 8 - a->y, rb = (st->sy1 + 1) * 16 - 8 - a->y;
-		int32_t ta = ra * n / dy, tb = rb * n / dy;
-		i0 = (ta < tb ? ta : tb) - 2;
-		i1 = (ta < tb ? tb : ta) + 2;
-		if (i0 < 0) i0 = 0;
-		if (i1 > n) i1 = n;
-	}
-	if (i1 < i0 || i1 - i0 > 65535) return;
-	sx = ((int64_t)dx * 65536) / n; sy = ((int64_t)dy * 65536) / n;
-	sz = ((int64_t)(b->z - a->z)) / n; sc = ((int64_t)(b->ci - a->ci)) / n;
-	ZT_PUT(ZT_LINE << 28 | (uint32_t)p->depth << 27 | (uint32_t)(i1 - i0));
-	ZT_PUT((uint32_t)((int64_t)a->x * 65536 + sx * i0 + (8 << 16)));
-	ZT_PUT((uint32_t)((int64_t)a->y * 65536 + sy * i0 + (8 << 16)));
-	ZT_PUT((uint32_t)sx);
-	ZT_PUT((uint32_t)sy);
-	ZT_PUT((uint32_t)(a->z + sz * i0));
-	ZT_PUT((uint32_t)sz);
-	ZT_PUT((uint32_t)(a->ci + sc * i0));
-	ZT_PUT((uint32_t)sc);
-}
-
-/* This frame as the engine's commands, strip by strip, to put(): what
- * zglf_frame() would draw. The submitted primitives are used up. */
-void zglf_t_frame(void (*put)(uint32_t w)) {
-	zf_strip_t st;
-	int32_t vx0, vy0, vx1, vy1, y0;
-	int i;
-	if (!zf_open) return;
-	/* to the engine: a store each, no call */
-	zt_reg = put == zglc_put && zglc_cmd ? zglc_cmd() : NULL;
-	zt_put = put;
-	zglf_rect(&vx0, &vy0, &vx1, &vy1);
-	st.cx0 = vx0; st.cx1 = vx1;
-	for (y0 = vy0; y0 <= vy1; y0 += STRIP_H) {
-		int rows = (vy1 - y0 + 1) < STRIP_H ? (vy1 - y0 + 1) : STRIP_H;
-		st.sy0 = y0;
-		st.sy1 = y0 + rows - 1;
-		ZT_PUT(ZT_BEGIN << 28 | (uint32_t)(y0 == vy0) << 27 | (uint32_t)y0 << 12 |
-		    (uint32_t)zgl_s.clear_index << 4 |
-		    (uint32_t)(rows - 1));
-		ZT_PUT((uint32_t)st.cx0 | (uint32_t)st.cx1 << 16);
-		for (i = 0; i < zf_n; i++) {
-			const zf_prim_t *p;
-			if (zf_yr[i][1] < st.sy0 || zf_yr[i][0] > st.sy1) continue;
-			p = &zf_prims[i];
-			if (p->kind == 0) t_tri(&st, p);
-			else t_line(&st, p);
-		}
-		ZT_PUT(ZT_END << 28);
 	}
 	zf_info->lines = 0;
 	zf_info->prims = (uint32_t)zf_n;

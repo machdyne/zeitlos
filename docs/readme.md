@@ -219,7 +219,6 @@ with [welcome](welcome.md); to program it, [kernel](kernel.md) and
 | [mesh\_app](mesh_app.md) | `mesh` |
 | [logic\_app](logic_app.md) | `logic` |
 | [gpu3d\_app](gpu3d_app.md) | `gpu3d` |
-| [gpu\_tri](gpu_tri.md) | `rtl/gpu/gpu_tri.v`: the triangle engine, zgl's strips in hardware (module and bench) |
 | [gldemo\_app](gldemo_app.md) | `gldemo`: zgl's filled, lit, depth-tested demo scene (ZGL_FRAMES) |
 | [pix\_app](pix_app.md) | `pix`: pixel editor for sprite sheets and pictures in up to 256 colours, animation, dock icons, fonts, the pointer; image import |
 | [draw\_app](draw_app.md) | `draw`: painting in black and white |

@@ -776,6 +776,10 @@ static void view_3d(void) {
  * shows does (docs/mausrun3d.md, "Frame budget"). */
 static GLuint l_sky, l_hud;
 
+/* textures (docs/mausrun3d.md, "Textures"): T2 has them (made at
+ * open_chunky()), and T turns them off and on */
+static bool tex_have, tex_want = true;
+
 /* the sky above the horizon, a gradient; the haze under it */
 static void sky_content(void) {
 	int hy = 120 - FOCAL * 29 / 100;   /* the horizon: tan 16 degrees */
@@ -998,6 +1002,7 @@ static void render(void) {
 	glEnable(GL_DEPTH_TEST);
 	glEnable(GL_CULL_FACE);
 	glEnable(GL_LIGHTING);
+	if (tex_have && tex_want) glEnable(GL_TEXTURE_2D); else glDisable(GL_TEXTURE_2D);
 	tris_sent = w3_draw(world, cam_x, cam_y, cam_z, cam_yaw, (uint32_t)PITCH_DEG * 65536u / 360u,
 		11 * 65536 / 16, 8 * 65536 / 16, far_now, 2);
 	calls_sum += w3_calls;
@@ -1036,10 +1041,11 @@ static bool open_chunky(void) {
 	}
 	w3_palette(world, pal);
 	ar_pal_load(pal, 256);
+	/* before any of the world's lists is first drawn: each keeps the
+	 * texture places it was compiled with */
+	tex_have = w3_textures();
 	printf("mausrun3d: game mode, chunky: %s\n",
-		zgl_info()->backend == ZGL_BACKEND_T2 ? "T2" :
-		zgl_info()->backend == ZGL_BACKEND_ENGINE ? "the triangle engine (slow: T2 wanted)" :
-		"software (slow: T2 wanted)");
+		zgl_info()->backend == ZGL_BACKEND_T2 ? "T2" : "software (slow: T2 wanted)");
 	if (!md_list) {
 		md_make();
 		l_sky = glGenLists(2);
@@ -1174,6 +1180,11 @@ int main(void) {
 			if (e.type == AR_EV_MODE) mode_changed();
 			if (e.type == AR_EV_BUTTON && e.pressed && e.player == 0 && e.key == AR_BTN_A) jump = true;
 			if (e.type == AR_EV_BUTTON && e.pressed && e.key == AR_BTN_START) recentre = true;
+			if (e.type == AR_EV_KEY && e.pressed && (e.key == 't' || e.key == 'T')) {
+				tex_want = !tex_want;
+				printf("mausrun3d: textures %s%s\n", tex_want ? "on" : "off",
+					tex_have ? "" : " (this T2 has none)");
+			}
 		}
 		if (quit) break;
 		for (k = 0; k < dt; k++) {
@@ -1216,10 +1227,11 @@ int main(void) {
 			perf_frames++;
 			perf_tris += tris_sent;
 			if (ar_ticks() - perf_t0 >= 120) {
-				printf("mausrun3d: %lu frames a second, %lu cycles a frame (CPU), %lu triangles sent, view %ld tiles\n",
+				printf("mausrun3d: %lu frames a second, %lu cycles a frame (CPU), %lu triangles sent, view %ld tiles, textures %s\n",
 					(unsigned long)(perf_frames * 60 / (ar_ticks() - perf_t0)),
 					(unsigned long)(perf_cycles / perf_frames),
-					(unsigned long)(perf_tris / perf_frames), (long)(far_now / W3_T));
+					(unsigned long)(perf_tris / perf_frames), (long)(far_now / W3_T),
+					!tex_have ? "none" : tex_want ? "on" : "off");
 				printf("mausrun3d:   a frame: sky %lu, world %lu (%lu lists), things %lu, HUD %lu, zgl_frame %lu; the game %lu\n",
 					(unsigned long)(tsum[T_SKY] / perf_frames), (unsigned long)(tsum[T_WORLD] / perf_frames),
 					(unsigned long)(calls_sum / perf_frames), (unsigned long)(tsum[T_THINGS] / perf_frames),

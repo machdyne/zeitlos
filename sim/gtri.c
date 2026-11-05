@@ -1,29 +1,20 @@
 /*
- * Zeitlos simulator: the triangle engine (rtl/gpu/gpu_tri.v,
- * docs/gpu_tri.md), with ZSIM_GTRI set in the environment. Its
- * commands are carried out by the engine's C model
- * (sw/common/zgl/tests/t_model.c, which the RTL bench is held to), a
- * strip at a time at END, into chunky VRAM. It is never busy and its
- * FIFO never fills, so a program's cycles are the CPU's own: what the
- * CPU spends making commands (with ZSIM_COST, each a store to an
- * uncached register). MONO (the black-and-white desktop) is not
- * modelled: such frames are not drawn.
+ * Zeitlos simulator: T2, the triangle engine (rtl/gpu/gpu_t2.v,
+ * docs/zgl_t2.md), with ZSIM_GTRI set in the environment. A frame's
+ * stream is carried out by T2's C model (sw/common/zgl/tests/t2_model.c,
+ * which the RTL bench is held to) at END, into chunky VRAM (or, with
+ * ZSIM_CONSOLE, main memory at VBASE). It is never busy and its FIFO
+ * never fills, so a program's cycles are the CPU's own: what the CPU
+ * spends sending the frame (with ZSIM_COST, each a store to an
+ * uncached register).
  */
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
 #include "gtri.h"
-#include "../sw/common/zgl/tests/t_model.h"
 #include "../sw/common/zgl/zgl_t2.h"
 
-#define GT_ID      0x5A545249u              /* "ZTRI" */
-#define GT_MAX     65536
-
 static int on = -1;
-static uint32_t buf[GT_MAX];
-static int n, bad, left;
-static uint32_t op;                 /* left: words still to come of a command */
-static uint32_t ctrl;
 static uint8_t pic[240][320];
 
 /* ZSIM_CONSOLE: VBASE, and the RAM a LINEAR picture is in */
@@ -50,12 +41,12 @@ static void put_px(uint32_t *vram, int x, int y, uint8_t v) {
 	}
 }
 
-/* ZSIM_GTRI=1: today's engine; 2: T2, the engine that runs the frame */
+/* ZSIM_GTRI set (and not 0): T2 is here. (It was 2; 1 was the first
+ * engine, gpu_tri, retired: both mean T2 now.) */
 int gtri_enabled(void) {
 	if (on < 0) {
 		const char *e = getenv("ZSIM_GTRI");
 		on = e != NULL && *e && *e != '0';
-		if (on && *e == '2') on = 2;
 	}
 	return on;
 }
@@ -63,7 +54,8 @@ int gtri_enabled(void) {
 /* T2: the frame's words, carried out by its model at END */
 #define T2_MAX (1u << 20)
 static uint32_t *t2buf;
-static uint32_t t2n, t2left, t2op, t2pos;
+static uint32_t t2n, t2left, t2op, t2pos, t2nv;
+static uint32_t t2texaddr;
 static int t2bad;
 
 static void t2_frame(uint32_t *vram) {
@@ -95,56 +87,39 @@ static void t2_word(uint32_t *vram, uint32_t val) {
 		case T2_DRAW: t2left = 9; t2pos = 0; break;   /* to the chunk's header; then its body */
 		case T2_TRI: t2left = 13; break;
 		case T2_LINE: t2left = 9; break;
+		case T2_PLIGHT: t2left = 8; break;
 		default: t2bad = 1; t2left = 1; break;
 		}
 	} else if (t2op == T2_DRAW) {
 		/* the chunk's header: nv | nt << 16, then nl in word 1's top */
 		t2pos++;
-		if (t2pos == 5) t2left += (val & 0xffff) * 4 + (val >> 16) * 2;
-		if (t2pos == 6) t2left += val >> 16;
+		if (t2pos == 5) { t2nv = val & 0xffff; t2left += t2nv * 4 + (val >> 16) * 2; }
+		if (t2pos == 6) {
+			t2left += val >> 16;
+			/* textured: the texture word, and s | t a vertex */
+			if ((val >> 8) & T2_C_TEX) t2left += 1 + t2nv;
+		}
 	}
 	if (--t2left == 0 && t2op == T2_END) { t2_frame(vram); t2n = 0; }
 }
 
 uint32_t gtri_read(uint32_t w) {
 	switch (w) {
-	case 1: return (uint32_t)(bad | t2bad) << 1 | 0x3ffu << 16;    /* STATUS: never busy */
+	case 1: return (uint32_t)t2bad << 1 | 0x3ffu << 16;   /* STATUS: never busy */
 	case 3: return vbase;
-	case 7: return on == 2 ? T2_ID : GT_ID;
+	case 7: return T2_ID;
+	case 11: return 1u | (uint32_t)T2_TEX_LOG2 << 8;      /* CAPS: textures */
 	default: return 0;
 	}
 }
 
-/* a strip (BEGIN .. END in buf) to chunky VRAM: rows of 4 segments of
- * 80 pixels, z_chunky_seg()'s layout (sw/common/zsoc.h) */
-static void strip(uint32_t *vram) {
-	uint32_t h = buf[0];
-	int y0 = (int)((h >> 12) & 0xff), rows = (int)(h & 15) + 1;
-	int cx0 = (int)(buf[1] & 0xffff), cx1 = (int)(buf[1] >> 16), y, x;
-	if (t_model_run(buf, n, pic) != 1) { bad = 1; fprintf(stderr, "gtri: bad strip %08x n %d\n", buf[0], n); return; }
-	if (ctrl & 4) return;                                /* MONO: not modelled */
-	for (y = y0; y < y0 + rows && y < 240; y++)
-		for (x = cx0; x <= cx1 && x < 320; x++)
-			put_px(vram, x, y, pic[y][x]);
-}
-
 void gtri_write(uint32_t *vram, uint32_t w, uint32_t val) {
 	switch (w) {
-	case 0: ctrl = val; break;
 	case 3: vbase = val; break;                          /* VBASE */
-	case 2:                                              /* CMD */
-		if (on == 2) { t2_word(vram, val); break; }
-		if (!left) {                                     /* a command's first word */
-			static const int len[8] = { 0, 13, 9, 2, 1, 0, 0, 0 };
-			op = val >> 28;
-			if (op == 3) n = 0;                          /* BEGIN */
-			left = op < 8 ? len[op] : 0;
-			if (!left) { bad = 1; break; }
-		}
-		if (n < GT_MAX) buf[n++] = val; else bad = 1;
-		if (--left == 0 && op == 4) { strip(vram); n = 0; }   /* END */
-		break;
-	case 5: n = 0; bad = 0; ctrl = 0; left = 0; t2n = 0; t2left = 0; t2bad = 0; break;             /* RESET */
+	case 12: t2texaddr = val; break;                     /* TEXADDR */
+	case 13: t2_model_tex(t2texaddr++, val); break;      /* TEXDATA */
+	case 2: t2_word(vram, val); break;                   /* CMD */
+	case 5: t2n = 0; t2left = 0; t2bad = 0; break;       /* RESET */
 	default: break;
 	}
 }

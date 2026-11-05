@@ -4,7 +4,7 @@
  *
  * gpu_vmux.v -- two GPU masters on one port of the VRAM arbiter: the
  * line rasterizer (a) and the triangle engine (b), on
- * rtl/arbiter_vram.v's master 1 (docs/gpu_tri.md, "In the SOC").
+ * rtl/arbiter_vram.v's master 1 (docs/zgl_t2.md).
  *
  * A master keeps the port from its cyc to the cycle it drops it. Then
  * the port stays idle for GAP cycles before either master may have it

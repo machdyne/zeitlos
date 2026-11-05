@@ -15,7 +15,7 @@ the camera, and mausrun's game in it -- one level, world 1.
 
 It goes to game mode at once. In colour on a board with chunky game
 mode it draws through zgl's `ZGL_CHUNKY`: by T2 where the bitstream has
-it, else by the triangle engine or in software -- which work, at a few
+it, else in software -- which works, at a few
 frames a second. Anywhere else it says what it needs.
 
 ## Keys
@@ -27,6 +27,7 @@ frames a second. Anywhere else it says what it needs.
 | Q, E | turn the camera |
 | Enter (START) | the camera behind the mouse |
 | M | music on or off |
+| T | textures off or on (on a T2 with textures) |
 | F11, Esc | game mode, or back to the window |
 | F1 | help |
 
@@ -132,6 +133,21 @@ light, lit along by zgl's colour-index lighting (one light, from above
 and behind the left). The sky is a gradient of four triangles above the
 horizon, the haze under it the sea's colour.
 
+## Textures
+
+On a T2 with textures (sergei_ml2_console; [zgl_t2.md](zgl_t2.md),
+"Textures") the world's faces are textured, a 16×16 texture of tones a
+material, a tile a repeat (texture coordinates are world units from the
+cell's corner): earth, boxes, ? boxes, biscuits, springs, thorns and
+water are mausrun's own tile drawings (`../mausrun/sprites.c`), ink and
+paper as two tones; grass and sand are specks, path bricks, shelves
+boards. ZGL_TEX_TONE: the material's ramp, the texel's tone lit, so the
+light falls on them as on the untextured faces. The models are not
+textured. T turns them off and on, and the report every two seconds
+says which: what textures cost is the difference. On the host, T2's
+geometry goes from 514 k to 619 k cycles a frame with them (the
+textured firmware on the ISS, `make render`).
+
 ## The game
 
 mausrun's, in three dimensions ([mausrun.md](mausrun.md), "Playing"):
@@ -219,5 +235,5 @@ in `tests/out/`.
 
 Moving planks (the generator makes their tracks shelves), weather, day
 and night, skill, saving progress, a title, its icon in the dock;
-textures (Phase 3); more worlds; a 512×512 world wants more than the
+textured models; more worlds; a 512×512 world wants more than the
 8 MB an app may have (an arena, docs/app_runtime.md).

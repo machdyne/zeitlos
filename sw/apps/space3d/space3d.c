@@ -1840,8 +1840,7 @@ static bool open_look(void) {
 		static bool told;
 		if (!told)
 			printf("space3d: game mode, chunky: %s\n",
-				zgl_info()->backend == ZGL_BACKEND_T2 ? "T2" :
-				zgl_info()->backend == ZGL_BACKEND_ENGINE ? "the triangle engine" : "software");
+				zgl_info()->backend == ZGL_BACKEND_T2 ? "T2" : "software");
 		told = true;
 	}
 	view_3d();
@@ -1952,8 +1951,7 @@ int main(void) {
 		if (chunky && ar_ticks() - perf_t0 >= 120) {
 			if (perf_frames)
 				printf("space3d: chunky on %s, %lu frames a second drawn, %lu cycles a frame\n",
-					zgl_info()->backend == ZGL_BACKEND_T2 ? "T2" :
-					zgl_info()->backend == ZGL_BACKEND_ENGINE ? "the triangle engine" : "software",
+					zgl_info()->backend == ZGL_BACKEND_T2 ? "T2" : "software",
 					(unsigned long)(perf_frames * 60 / (ar_ticks() - perf_t0)),
 					(unsigned long)(perf_cycles / perf_frames));
 			perf_t0 = ar_ticks();

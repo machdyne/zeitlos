@@ -1,10 +1,9 @@
 /*
- * ZGL_CHUNKY in software, in the simulator (whose VRAM holds both
- * sheets): frames drawn into chunky VRAM by zgl_chunky.c's strip
- * writer, read back through the chunky layout, against the same
- * frames as the triangle engine's commands carried out by its C model
- * (tests/t_model.c, which test_frames holds to the software). A whole
- * frame, and a scissored one (the strip writer's byte ends).
+ * ZGL_CHUNKY in the simulator (whose VRAM holds both sheets): frames
+ * drawn into chunky VRAM by zgl_chunky.c's strip writer, read back
+ * through the chunky layout, and the same frames by T2 (its model, with
+ * ZSIM_GTRI=2) held to them. A whole frame, and a scissored one (the
+ * strip writer's byte ends).
  * With ZSIM_CONSOLE=1 (a `VRAM_SDRAM console) the picture is in main
  * memory, linear, where z_chunky_prepare() put it, and T2 writes there.
  * make -C sw/common/zgl simtest
@@ -15,7 +14,6 @@
 #include <string.h>
 #include "zgl.h"
 #include "zgl_int.h"
-#include "../t_model.h"
 #include "../../../zsoc.h"
 
 /* the arcade runtime's calls zgl_frames.c names (unused in chunky) */
@@ -31,10 +29,7 @@ void ar_bitmap_opaque(const void *b, int st, int sx, int sy, int x, int y, int w
 	(void)b; (void)st; (void)sx; (void)sy; (void)x; (void)y; (void)w; (void)h;
 }
 
-static uint32_t cmd[60000];
-static int ncmd;
-static void put(uint32_t w) { cmd[ncmd++] = w; }
-static uint8_t want[240][320], got[240][320];
+static uint8_t want[2][240][320], got[240][320];
 
 static uint32_t seed = 1;
 static int rnd(int n) { seed = seed * 1103515245u + 12345u; return (int)((seed >> 16) % (uint32_t)n); }
@@ -60,38 +55,23 @@ static void scene(int f) {
 }
 
 int main(void) {
-	zgl_desc_t eng = { ZGL_FRAMES, 0, 0, 1024, 0 };
 	zgl_desc_t soft = { ZGL_FRAMES, 0, 0, 1024, ZGL_CHUNKY | ZGL_NO_ENGINE };
 	zgl_desc_t chunky = { ZGL_FRAMES, 0, 0, 1024, ZGL_CHUNKY };
 	int f, x, y, bad = 0, pass, engine = 0;
 	/* the console's picture in main memory (nothing elsewhere) */
 	if (!z_chunky_prepare()) { printf("chunkytest: no picture\n"); return 1; }
 	for (f = 0; f < 4; f++) {
-		/* frames 0, 1: the software strips; 2, 3: the triangle engine
-		 * where there is one (the simulator's, with ZSIM_GTRI) */
+		/* frames 0, 1: the software strips, kept; 2, 3: T2 where there
+		 * is one (the simulator's, with ZSIM_GTRI=2), held to them */
 		pass = f >> 1;
 		int32_t x0 = (f & 1) ? 37 : 0, x1 = (f & 1) ? 247 : 319, y0 = (f & 1) ? 69 : 0, y1 = (f & 1) ? 218 : 239;
-		/* the model's picture */
-		zgl_open(&eng);
-		scene(f & 1);
-		ncmd = 0;
-		zglf_t_frame(put);
-		memset(want, 0xa5, sizeof(want));
-		{
-			static uint8_t pic[240][320];
-			memset(pic, 0, sizeof(pic));
-			t_model_run(cmd, ncmd, pic);
-			for (y = y0; y <= y1; y++) for (x = x0; x <= x1; x++) want[y][x] = pic[y][x];
-		}
-		zgl_close();
-		/* the software's, through VRAM */
 		for (y = 0; y < 240; y++) for (x = 0; x < 4; x++) {
 			volatile uint32_t *d = z_chunky_seg((uint32_t)y, (uint32_t)x);
 			int i;
 			for (i = 0; i < Z_CHUNKY_SEG_WORDS; i++) d[i] = 0xa5a5a5a5u;
 		}
 		zgl_open(pass ? &chunky : &soft);
-		if (pass && (zgl_info()->backend == ZGL_BACKEND_ENGINE || zgl_info()->backend == ZGL_BACKEND_T2)) engine = zgl_info()->backend;
+		if (pass && zgl_info()->backend == ZGL_BACKEND_T2) engine = 1;
 		else if (zgl_info()->backend != ZGL_BACKEND_SOFTWARE) printf("chunkytest: backend %d\n", zgl_info()->backend);
 		scene(f & 1);
 		zgl_frame();
@@ -99,13 +79,22 @@ int main(void) {
 		zgl_close();
 		for (y = 0; y < 240; y++) for (x = 0; x < 320; x++)
 			got[y][x] = ((volatile uint8_t *)z_chunky_seg((uint32_t)y, (uint32_t)(x / 80)))[x % 80];
+		if (!pass) {
+			/* the software's: outside the frame the VRAM as it was */
+			int out = 0;
+			for (y = 0; y < 240; y++) for (x = 0; x < 320; x++)
+				if ((x < x0 || x > x1 || y < y0 || y > y1) && got[y][x] != 0xa5) out++;
+			if (out) { printf("  frame %d: %d pixels outside it written\n", f, out); bad += out; }
+			memcpy(want[f & 1], got, sizeof(got));
+			continue;
+		}
 		for (y = 0; y < 240; y++) for (x = 0; x < 320; x++)
-			if (got[y][x] != want[y][x]) {
-				if (bad < 5) printf("  frame %d (%d,%d): %02x, want %02x\n", f, x, y, got[y][x], want[y][x]);
+			if (got[y][x] != want[f & 1][y][x]) {
+				if (bad < 5) printf("  frame %d (%d,%d): %02x, the software's %02x\n", f, x, y, got[y][x], want[f & 1][y][x]);
 				bad++;
 			}
 	}
-	printf("chunkytest: %d pixels differ (software%s)%s\n", bad, engine == ZGL_BACKEND_T2 ? " and T2" : engine ? " and the engine" : "",
+	printf("chunkytest: %d pixels differ (software%s)%s\n", bad, engine ? " and T2" : "",
 		z_chunky_mem ? ", the picture in main memory" : "");
 	return 0;
 }

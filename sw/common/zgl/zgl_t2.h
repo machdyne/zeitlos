@@ -29,8 +29,18 @@
  *          n . L >> 16 is GL's n_eye . L_eye), brightness (16.16)
  *          light 1: the same
  *          material ambient, diffuse (colour indices 8.8)
+ *   PLIGHT op | light (0) | on (1) | unit (2)    light 0 or 1 positional
+ *          (on), or not: where it is in the model's space x, y, z
+ *          (24.8), the model's scale s (16.16: eye units a model unit),
+ *          the attenuation's kc (16.16), kl (8.24), kq (0.32), for eye
+ *          distance. A vertex's light: n . (P - v) / |P - v|, times s
+ *          unless the normals are unit (unit), times the attenuation
+ *          1 / (kc + kl d + kq d^2) at d = s |P - v|. Takes the place of
+ *          LIGHT's direction for that light until off.
  *   STATE  op | depth (0) | smooth (1) | cull (3:2: 0 none, 1 back,
- *          2 front, 3 both) | front_ccw (4)
+ *          2 front, 3 both) | front_ccw (4) | textures (5: a T2_C_TEX
+ *          chunk's triangles are textured; else they are drawn as if
+ *          it had no texture)
  *   DRAW   op                                 a compiled list's chunk
  *          index (8.8) for vertices without one
  *          normal x, y, z (16.16) for vertices without one
@@ -47,9 +57,11 @@
  *   word 1  shift | flags << 8 | nl << 16     position = x << shift (24.8)
  *   word 2  material ambient (8.8)            when T2_C_MAT
  *   word 3  material diffuse (8.8)
- *   nv vertices, 4 words each:
+ *   word 4  the texture (T2_TEX_*)             when T2_C_TEX
+ *   nv vertices, 4 words each (5 with T2_C_TEX):
  *           x | y << 16, z | ci << 16 (ci 8.8, unsigned),
- *           nx | ny << 16, nz (normals 2.14)
+ *           nx | ny << 16, nz (normals 2.14),
+ *           s | t << 16 (T2_C_TEX: texels 12.4, signed)
  *   nt triangles, 2 words each:
  *           a | b << 16, c | provoking << 16  (vertex numbers; the
  *           provoking one's colour is a flat triangle's)
@@ -69,6 +81,7 @@
 #define T2_DRAW   0x06u
 #define T2_TRI    0x07u
 #define T2_LINE   0x08u
+#define T2_PLIGHT 0x09u
 #define T2_END    0x0fu
 #define T2_OP(w)  ((w) >> 24)
 
@@ -78,6 +91,25 @@
 #define T2_C_MAT     0x01u    /* its own material (else the LIGHT's) */
 #define T2_C_NORMAL  0x02u    /* vertices have normals (else the DRAW's) */
 #define T2_C_INDEX   0x04u    /* vertices have indices (else the DRAW's) */
+#define T2_C_TEX     0x08u    /* a texture word, and s | t a vertex */
+
+/* A texture word: where the texture is in the engine's texture memory
+ * (texels, a byte each), its size (2^lw x 2^lh, each 1 to 128, repeated
+ * both ways), how its texel and the colour index make the pixel, and
+ * whether texel 0 is not drawn at all (a cut-out) */
+#define T2_TEX(base, lw, lh, mode, key) \
+	((uint32_t)(base) | (uint32_t)(lw) << 16 | (uint32_t)(lh) << 19 | \
+	 (uint32_t)(mode) << 22 | ((key) ? 1u << 24 : 0u))
+#define T2_TEX_BASE(w)  ((w) & 0xffffu)
+#define T2_TEX_LW(w)    (((w) >> 16) & 7u)
+#define T2_TEX_LH(w)    (((w) >> 19) & 7u)
+#define T2_TEX_MODE(w)  (((w) >> 22) & 3u)
+#define T2_TEX_KEY(w)   (((w) >> 24) & 1u)
+/* the modes: c the pixel's colour index as untextured, x the texel */
+#define T2_TM_DECAL  0u       /* x */
+#define T2_TM_ADD    1u       /* x + c */
+#define T2_TM_TONE   2u       /* c's ramp, x's tone lit: (c & 0xf0) | (x & 15) (c & 15 + 1) / 16 */
+#define T2_TM_RAMP   3u       /* x's ramp and tone, lit: (x & 0xf0) | (x & 15) (c & 15 + 1) / 16 */
 
 /* the engine's ID word (zsoc.h's Z_GTRI_W_ID): "ZTR2"; commands go to
  * Z_GTRI_W_CMD as today's engine's do */
@@ -106,11 +138,73 @@
  *   1  n
  *   2  x  3 y  4 dx  5 dy   (28.4 << 16)
  *   6  z  7 dz  8 ci  9 dci
+ *
+ * TTRI (21 words), a textured triangle: TRI's 11 (but 3 in bits 1:0),
+ * then
+ *   11 the texture word
+ *   12 A at (bx0, ylo)  13 dA/dx  14 dA/dy    s q >> 8   (mod 2^32)
+ *   15 B                16 dB/dx  17 dB/dy    t q >> 8
+ *   18 Q                19 dQ/dx  20 dQ/dy    q = 2^24 wmin / w
+ * where w is the corner's clip w and wmin the least of the three: the
+ * planes are s/w, t/w and 1/w (linear on the screen), so a pixel's
+ * texel is perspective-correct, s = A 256 / Q (t2_uv(), below). The
+ * pixel's index is then the texture mode's of the texel and the index
+ * TRI would draw, and with the key a texel 0 is not drawn.
  */
 #define T2_REC_TRI   1u
 #define T2_REC_LINE  2u
+#define T2_REC_TTRI  3u
 #define T2_REC_WORDS 11
+#define T2_REC_TWORDS 21
 #define T2_RECS      512      /* the record list's room */
+/* the texture memory: 2^T2_TEX_LOG2 texels (rtl/gpu/gpu_t2.v's TEX_LOG2;
+ * the engine says its own in CAPS, zsoc.h) */
+#define T2_TEX_LOG2  13
+
+/* -- a textured pixel, as the raster works it out (rtl/gpu/gpu_t2.v) --
+ *
+ * s = A 256 / Q in 12.4, by a reciprocal: Q (at least 32) is 2^e (1 + f),
+ * 1/Q from a 1,024-entry table of f's first ten bits, and A brought to 18
+ * bits for the multiplier first. Bit for bit what the RTL does. */
+static inline int t2_msb(uint32_t v) { int n = 0; while (v >>= 1) n++; return n; }
+
+static inline uint32_t t2_recip(uint32_t i) {        /* 2^28 / (2049 + 2i), rounded */
+	uint32_t d = 2049u + 2u * i;
+	return ((1u << 28) + d / 2u) / d;
+}
+
+static inline uint32_t t2_div(int32_t n, int e, uint32_t r) {
+	uint32_t a = n < 0 ? ~(uint32_t)n : (uint32_t)n;
+	int bl = a ? t2_msb(a) + 1 : 0, sa = bl > 17 ? bl - 17 : 0;
+	int64_t p = (int64_t)(n >> sa) * (int64_t)r;
+	return (uint32_t)(p >> (9 + e - sa));
+}
+
+static inline void t2_uv(int32_t A, int32_t B, int32_t Q, uint32_t *s, uint32_t *t) {
+	uint32_t q = Q < 32 ? 32u : (uint32_t)Q, r;
+	int e = t2_msb(q);
+	r = t2_recip(((q << (31 - e)) >> 21) & 1023u);
+	*s = t2_div(A, e, r);
+	*t = t2_div(B, e, r);
+}
+
+/* the pixel's index from the texel x and the untextured index c */
+static inline uint8_t t2_combine(uint32_t mode, uint8_t x, uint8_t c) {
+	uint8_t tone = (uint8_t)(((x & 15u) * ((c & 15u) + 1u)) >> 4);
+	switch (mode) {
+	case T2_TM_DECAL: return x;
+	case T2_TM_ADD:   return (uint8_t)(x + c);
+	case T2_TM_TONE:  return (uint8_t)((c & 0xf0u) | tone);
+	default:          return (uint8_t)((x & 0xf0u) | tone);
+	}
+}
+
+/* the texel's place in texture memory (2^log2 bytes) for s, t (12.4) */
+static inline uint32_t t2_texel_at(uint32_t tw, uint32_t s, uint32_t t, int log2) {
+	uint32_t lw = T2_TEX_LW(tw), lh = T2_TEX_LH(tw);
+	uint32_t u = (s >> 4) & ((1u << lw) - 1u), v = (t >> 4) & ((1u << lh) - 1u);
+	return (T2_TEX_BASE(tw) + (v << lw) + u) & ((1u << log2) - 1u);
+}
 
 /* the geometry unit's way out (t2fw.c calls these; the core's are
  * registers, the host's are the model's) */
@@ -141,6 +235,10 @@ typedef struct {
 /* the model: carries out a frame's stream of n words into pic
  * (chunky indices); 0, or -1 for a bad stream */
 int t2_model_run(const uint32_t *w, uint32_t n, uint8_t pic[240][320], t2_stats_t *st);
+/* the model's texture memory: a word (four texels, the first in bits
+ * 7:0) at word `word`, as the CPU writes T2's TEXDATA (tests/t2_raster.c) */
+void t2_model_tex(uint32_t word, uint32_t v);
+uint32_t t2_model_tex_word(uint32_t word);
 uint32_t t2_model_used(void);
 
 #include <stdbool.h>

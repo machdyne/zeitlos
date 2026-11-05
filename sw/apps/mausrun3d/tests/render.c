@@ -43,6 +43,9 @@ int zglc_open(uint8_t flags) { return (flags & ZGL_NO_ENGINE) ? 0 : engine; }
 volatile uint32_t *zglc_cmd(void) { return NULL; }
 void zglc_put(uint32_t w) { if (nwords < (1u << 22)) words[nwords++] = w; }
 void zglc_finish(void) { }
+/* T2's texture memory: the model's */
+uint32_t zglc_tex_room(void) { return engine == 2 ? 1u << T2_TEX_LOG2 : 0; }
+void zglc_tex_put(uint32_t word, uint32_t v) { t2_model_tex(word, v); }
 void zglc_strip(int32_t y0, int rows, int32_t cx0, int32_t cx1, const uint8_t *col) {
 	int r;
 	for (r = 0; r < rows; r++)
@@ -212,9 +215,9 @@ int main(int argc, char **argv) {
 	engine = argc > 1 && !strcmp(argv[1], "soft") ? 0 : 2;
 	words = malloc((1u << 22) * 4);
 	setvbuf(stdout, NULL, _IOLBF, 0);
-	have_fw = engine == 2 && t2g_load("../../t2fw/t2fw.bin") == 0;
+	have_fw = engine == 2 && t2g_load("../../t2fw/t2fw_tex.bin") == 0;
 	if (have_fw) t2g_reset();
-	else if (engine == 2) printf("render_mausrun3d: no sw/t2fw/t2fw.bin: the model's estimate for geometry\n");
+	else if (engine == 2) printf("render_mausrun3d: no sw/t2fw/t2fw_tex.bin: the model's estimate for geometry\n");
 	ar_host_chunky_avail = true;
 	ar_host_run(script, dir);
 	game_main();

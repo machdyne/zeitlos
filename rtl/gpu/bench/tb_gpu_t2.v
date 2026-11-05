@@ -17,6 +17,9 @@
 // about 19 a word without write combining, 8 with; tb_console_ddr3.v).
 // -DPOST=10: the posted-write queue (POST_LOG2), as `VRAM_SDRAM builds it.
 // -DSTRIP=6, -DFIFO=9: the strip height and the stream FIFO's size.
+// -DTEX: T2 with textures (TEX_LOG2 13, t2/t2fw_tex.hex), its texture
+// memory written through TEXADDR and TEXDATA from t2/tN.hex first; the
+// textured frames are 10 and 11 (test_t2's "lists, textured").
 
 `ifndef VEC
 `define VEC 2
@@ -52,8 +55,14 @@ module tb_gpu_t2;
 `ifndef FIFO
 `define FIFO 11
 `endif
+`ifdef TEX
+	localparam TEXL = 13;
+`else
+	localparam TEXL = 0;
+`endif
 	gpu_t2_wb #(.FW_HEX("t2/t2fw.hex"), .LINEAR(LIN), .POST_LOG2(`POST),
-		.STRIP_H(`STRIP), .FIFO_LOG2(`FIFO)) dut (
+		.STRIP_H(`STRIP), .FIFO_LOG2(`FIFO), .TEX_LOG2(TEXL),
+		.TEX_FW_HEX("t2/t2fw_tex.hex"), .RECIP_HEX("../t2_recip.hex")) dut (
 		.clk(clk), .rst(rst),
 		.wb_cyc_i(s_cyc), .wb_stb_i(s_stb), .wb_we_i(s_we), .wb_sel_i(4'hf),
 		.wb_adr_i(s_adr), .wb_dat_i(s_dat), .wb_ack_o(s_ack), .wb_dat_o(s_q),
@@ -120,6 +129,7 @@ module tb_gpu_t2;
 
 	reg [31:0] stream [0:262143];
 	reg [31:0] want [0:19199];
+	reg [31:0] texw [0:2047];
 	reg [31:0] hdr [0:1];
 	reg [8*64-1:0] fn;
 	reg [31:0] st, idv;
@@ -137,6 +147,13 @@ module tb_gpu_t2;
 		rst = 0;
 		wb_read(32'd7, idv);
 		if (idv != 32'h5A545232) $display("FAIL: ID %08x", idv);
+`ifdef TEX
+		wb_read(32'd11, idv);
+		if (idv != 32'h00000d01) $display("FAIL: CAPS %08x", idv);
+		$sformat(fn, "t2/t%0d.hex", `VEC); $readmemh(fn, texw);
+		wb_write(32'd12, 32'd0);
+		for (i = 0; i < 2048; i = i + 1) wb_write(32'd13, texw[i]);
+`endif
 		t0 = cyc;
 		for (i = 0; i < ns; i = i + 1) wb_write(32'd2, stream[i]);
 		t1 = cyc;

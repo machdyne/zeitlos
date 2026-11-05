@@ -387,16 +387,6 @@ int ar_dir_list(const char *path, char *names, int cap, uint8_t *isdir,
  * (repaint instead). */
 void ar_window_colour(bool on);
 
-/* -- the window, for a renderer that writes it itself --
- *
- * zgl's triangle engine (docs/gpu_tri.md) writes a black-and-white
- * window's pixels into the desktop framebuffer itself. True when the
- * picture is a black-and-white window that can be drawn and exactly one
- * rectangle of it is visible: *ox, *oy are the screen position of
- * logical (0,0), *vis the visible rectangle in screen coordinates.
- * Anything else (colour, full screen, a window covered in part by two
- * others, a frozen window) is false, and the caller draws as usual. */
-bool ar_window_target(int *ox, int *oy, ar_rect_t *vis);
 
 /* -- more than 16 colours --
  *

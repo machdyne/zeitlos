@@ -75,6 +75,11 @@ typedef struct {
 	int32_t sc_x0, sc_y0, sc_x1, sc_y1;
 
 	bool cull, depth_test, scissor, lighting, normalize;
+	/* GL_TEXTURE_2D (T2 only: zgl_t2.c); the texture coordinate (texels
+	 * 12.4) and the texture bound (glBindTexture()'s name, 0 none) */
+	bool texture;
+	int32_t tex_s, tex_t;
+	uint32_t tex_bound;
 	bool light_on[2];
 	GLenum cull_face;
 	bool front_ccw;
@@ -89,6 +94,13 @@ typedef struct {
 	 * and diffuse indices (8.8) */
 	int32_t light_dir[2][3];
 	int32_t light_d[2];
+	/* a positional light (GL_POSITION's w not 0): where it is, in eye
+	 * space (24.8), and its attenuation 1 / (kc + kl d + kq d^2), d in
+	 * world units: kc 16.16, kl 8.24, kq 0.32 */
+	bool light_pt[2];
+	int32_t light_pos[2][3];
+	int32_t light_kc[2], light_kl[2];
+	uint32_t light_kq[2];
 	int32_t mat_a, mat_d;
 
 	/* primitive assembly */
@@ -136,7 +148,7 @@ void zgl_back_line(int32_t x0, int32_t y0, int32_t x1, int32_t y1, uint8_t c);
 enum {
 	ZGLR_BEGIN = 1, ZGLR_END, ZGLR_VERTEX, ZGLR_NORMAL, ZGLR_INDEX, ZGLR_MATERIAL,
 	ZGLR_TRANSLATE, ZGLR_SCALE, ZGLR_ROTATE, ZGLR_PUSH, ZGLR_POP, ZGLR_IDENTITY,
-	ZGLR_SHADE, ZGLR_ENABLE, ZGLR_DISABLE, ZGLR_CALL
+	ZGLR_SHADE, ZGLR_ENABLE, ZGLR_DISABLE, ZGLR_CALL, ZGLR_TEXCOORD, ZGLR_BIND
 };
 bool zglr_rec(int op, int32_t a, int32_t b, int32_t c, int32_t d) __attribute__((weak));
 
@@ -158,6 +170,11 @@ void zgl_t2_free(void *p) __attribute__((weak));
 
 /* zgl.c: v made a unit vector (16.16), as GL_NORMALIZE does; zero stays zero */
 void zgl_unit3(int32_t *v);
+/* zgl.c: the square root of a 64-bit value, rounded down */
+uint32_t zgl_isqrt64(uint64_t v);
+/* zgl.c: a positional light's attenuation, 16.16 (at most one), at
+ * distance d (16.16 world units) */
+int32_t zgl_atten(int l, int64_t d);
 /* zgl.c: the matrix from object to clip, made if it is out of date */
 void zgl_sync_mvp(void);
 /* zgl_frames.c: the frame's rectangle (the viewport and scissor) */
@@ -186,17 +203,14 @@ void zglf_tri(const zgl_svtx_t *a, const zgl_svtx_t *b, const zgl_svtx_t *c) __a
 void zglf_tri_v(const zgl_vtx_t *a, const zgl_vtx_t *b, const zgl_vtx_t *c,
 	bool flat, int32_t ci) __attribute__((weak));
 void zglf_line(const zgl_svtx_t *a, const zgl_svtx_t *b) __attribute__((weak));
-/* the frame as the triangle engine's commands (zgl_frames.c, gpu_tri.v) */
-void zglf_t_frame(void (*put)(uint32_t w));
-
 /* ZGL_CHUNKY (zgl_chunky.c, target only: weak here). zglc_open()
- * says whether the engine will draw; zglc_put() hands it a command
- * word; zglc_strip() writes a software strip's rows; zglc_finish()
- * waits for the engine. */
-/* 0: none (the software writes strips), 1: the triangle engine, 2: T2 */
+ * says whether T2 will draw; zglc_put() hands it a command word;
+ * zglc_strip() writes a software strip's rows; zglc_finish() waits
+ * for T2. */
+/* 0: none (the software writes strips), 2: T2 */
 int zglc_open(uint8_t flags) __attribute__((weak));
 void zglc_put(uint32_t w) __attribute__((weak));
-/* the engine's command register, for zglf_t_frame() to store to */
+/* T2's command register, for zgl_t2.c to store to */
 volatile uint32_t *zglc_cmd(void) __attribute__((weak));
 void zglc_strip(int32_t y0, int rows, int32_t cx0, int32_t cx1, const uint8_t *col) __attribute__((weak));
 void zglc_finish(void) __attribute__((weak));
@@ -210,9 +224,12 @@ void zglc_picture(int32_t x0, int32_t y0, int32_t x1, int32_t y1) __attribute__(
 /* a paged frame (above), finished, shown from the next video frame:
  * ar_frame() calls it (common/games/zarcade_sys.c) */
 void zglc_present(void) __attribute__((weak));
-/* the engine is here (and not ZGL_NO_ENGINE): a black-and-white
- * window's frames can be its (zglc_mono() sets it up for one) */
-bool zglc_probe(uint8_t flags) __attribute__((weak));
-void zglc_mono(int ox, int oy, int x0, int x1, int y0, int y1, const uint8_t *lum) __attribute__((weak));
+/* T2's texture memory (zgl_chunky.c): its size in texels (0: none),
+ * and a word of four texels written at word `word` once the engine is
+ * idle */
+uint32_t zglc_tex_room(void) __attribute__((weak));
+void zglc_tex_put(uint32_t word, uint32_t v) __attribute__((weak));
+/* zgl_t2.c: a bound texture's word for a compiled chunk (0: none) */
+uint32_t zgl_t2_tex_word(uint32_t name) __attribute__((weak));
 
 #endif

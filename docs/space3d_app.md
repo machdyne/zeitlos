@@ -25,7 +25,7 @@ colours the screen has and on the best hardware there is.
 - **In game mode (F11) in colour**, on a board with chunky game mode,
   the solid look in chunky: 256 colours, each frame drawn into chunky
   VRAM by T2 where the bitstream has it ([zgl_t2.md](zgl_t2.md)), else
-  by the triangle engine or in software ("Chunky" below). V gives the
+  in software ("Chunky" below). V gives the
   wireframe on the same frames.
 - **In mono game mode, or on a board without chunky**, as in the window.
 

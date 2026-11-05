@@ -27,7 +27,10 @@ OBJS = zeitlos.o zobj.o zgfx.o zcolor.o zfont_data.o zwin.o zwidget.o zspeak.o \
 # stack and heap: the solid look's frame (zgl, MAX_PRIMS of 72 bytes) and
 # the wireframe's two display lists. The default 16K had room for the
 # lists only, and the solid look said "no memory" and stayed wireframe.
-APP_STACK = 128K
+# On a console (`VRAM_SDRAM) the chunky picture is in the heap too,
+# 76,800 bytes, and zgl's two more pages for T2 another 153,600
+# (zgl_chunky.c, "pages"): 128K left the solid look no room there.
+APP_STACK = 512K
 
 # the game itself on the runtime's software framebuffer (tests/render.c)
 HOSTCC ?= cc

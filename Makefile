@@ -48,7 +48,6 @@ RTL_PICO = \
 	rtl/audio_spdif.v \
 	rtl/spim.v \
 	rtl/gpu/gpu_raster.v \
-	rtl/gpu/gpu_tri.v \
 	rtl/gpu/gpu_t2.v \
 	rtl/gpu/gpu_ckfetch.v \
 	rtl/gpu/zeitlos32g.v \
@@ -585,7 +584,8 @@ SOC_INPUTS_HASH  = $(OUTDIR)/soc.inputs.sha256
 # zeitlos_gatemate_pico (`soc` is a no-op).
 ifeq ($(FAMILY), ecp5)
 SOC_CONSTRAINT = boards/$(LPF)
-SOC_SYNTH_INPUTS = $(RTL_PICO) rtl/boards.vh rtl/csrs.vh $(SOC_CONSTRAINT) sw/t2fw/t2fw.hex
+SOC_SYNTH_INPUTS = $(RTL_PICO) rtl/boards.vh rtl/csrs.vh $(SOC_CONSTRAINT) sw/t2fw/t2fw.hex \
+	sw/t2fw/t2fw_tex.hex rtl/gpu/t2_recip.hex
 endif
 # xc7: the same, plus the BIOS, which is part of the netlist on this
 # family (rtl/mem/bram.v reads it at synthesis).
@@ -624,8 +624,16 @@ bios: sw/bios/bios.hex
 # synthesis, so it is one of every ECP5 board's SOC_SYNTH_INPUTS. It is
 # not checked in; built here, a fresh clone could not synthesize. Like
 # the BIOS, the recursion leaves t2fw.hex untouched when nothing changed.
+# Two of them: t2fw.hex, and t2fw_tex.hex for T2 with textures
+# (`T2_TEX_LOG2); one recursion makes both.
 sw/t2fw/t2fw.hex: FORCE
 	$(MAKE) -C sw/t2fw CROSS=$(PREFIX)
+sw/t2fw/t2fw_tex.hex: sw/t2fw/t2fw.hex
+
+# T2's reciprocal table for textures (rtl/gpu/gpu_t2.v RECIP_HEX), made
+# by its script like the firmware is made (hex files are not checked in)
+rtl/gpu/t2_recip.hex: rtl/gpu/gen_t2_recip.py
+	python3 rtl/gpu/gen_t2_recip.py > $@
 
 ifeq ($(FAMILY), ice40)
 zeitlos_ice40_pico:

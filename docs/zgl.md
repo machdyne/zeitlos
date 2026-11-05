@@ -22,9 +22,9 @@ runtime's, as for every Zeitlos game.
 
 Display lists work in both.
 
-The triangle engine of Phase 4 is in the SOC behind `GPU_TRI`, and
-zgl drives it for chunky frames and for black-and-white windows
-([gpu_tri.md](gpu_tri.md)). It has not run on hardware yet.
+T2, the engine that runs the whole frame, is in the SOC behind
+`GPU_T2`, and zgl drives it for chunky frames ([zgl_t2.md](zgl_t2.md)).
+Phase 4's first engine, gpu_tri, drew only the pixels; it was retired.
 
 The phases to come are listed at the end.
 
@@ -105,14 +105,13 @@ chunky VRAM: `zgl_desc_t.flags = ZGL_CHUNKY`, and link `zgl_chunky.o`.
 zgl_desc_t zd = { ZGL_FRAMES, 0, 0, 1024, ZGL_CHUNKY };
 z_game_set_enabled(true, false);
 z_color_set_chunky(true);
-zgl_open(&zd);          /* zgl_info()->backend: ENGINE or SOFTWARE */
+zgl_open(&zd);          /* zgl_info()->backend: T2 or SOFTWARE */
 /* ... each frame: GL calls, zgl_frame(); glFinish() to wait for it */
 ```
 
-- **With the triangle engine** in the bitstream ([gpu_tri.md](gpu_tri.md)),
-  `zgl_frame()` hands the engine the frame's commands and returns. The
-  engine draws and writes the strips while the program goes on.
-  `glFinish()` waits for it.
+- **With T2** in the bitstream ([zgl_t2.md](zgl_t2.md)), the frame
+  streams to T2 as it is made, and `zgl_frame()` ends it and returns.
+  T2 draws while the program goes on. `glFinish()` waits for it.
 - **Without it**, or with `ZGL_NO_ENGINE`, the software strips go to
   VRAM a byte a pixel, whole words where they can. There is no
   conversion to planes.
@@ -138,12 +137,44 @@ itself.
 | Primitives | `glBegin`/`glEnd`: `GL_POINTS`, `GL_LINES`, `GL_LINE_STRIP`, `GL_LINE_LOOP`, `GL_TRIANGLES`, `GL_TRIANGLE_STRIP`, `GL_TRIANGLE_FAN`, `GL_QUADS`, `GL_QUAD_STRIP`, `GL_POLYGON` (convex, up to 32 corners) |
 | Vertices | `glVertex2/3` in `i`, `x` (16.16) and `f`; `glVertex3iv`, `glVertex3fv` |
 | Colour | `glIndexi` (the palette's index: the runtime's colours); `glColor3ub/x/f` take the nearest corner of the colour cube, index `r \| g << 1 \| b << 2` |
-| Lighting | `glNormal3x/f/i`, `glLightxv/fv` (`GL_POSITION` as a direction, `GL_DIFFUSE`; lights 0 and 1), `glMaterialiv/fv` (`GL_COLOR_INDEXES`), `GL_LIGHTING`, `GL_NORMALIZE`: GL's colour-index lighting, diffuse only |
+| Lighting | `glNormal3x/f/i`, `glLightxv/fv`, `glLightx/f` (`GL_POSITION`: a direction, w 0, or a position, w not 0; `GL_DIFFUSE`; `GL_CONSTANT/LINEAR/QUADRATIC_ATTENUATION` for a positional light; lights 0 and 1), `glMaterialiv/fv` (`GL_COLOR_INDEXES`), `GL_LIGHTING`, `GL_NORMALIZE`: GL's colour-index lighting, diffuse only. On T2 a positional light is lit in the model's space, which needs a modelview of rotation, translation and one scale (otherwise the list is played back) |
 | Matrices | `glMatrixMode`, `glLoadIdentity`, `glPush`/`PopMatrix` (16 modelview, 2 projection), `glLoadMatrix`/`glMultMatrix` (`x`, `f`), `glTranslate`, `glScale`, `glRotate` (`x`, `f`), `glFrustum`, `glOrtho` (double and `x`), `glViewport`, `glScissor` |
 | State | `glEnable`/`glDisable`/`glIsEnabled` (`GL_CULL_FACE`, `GL_SCISSOR_TEST`, `GL_DEPTH_TEST`, `GL_LIGHTING`, `GL_LIGHT0/1`, `GL_NORMALIZE`), `glPolygonMode`, `glCullFace`, `glFrontFace`, `glShadeModel` |
 | Other | `glClearIndex` (`ZGL_FRAMES`' background), `glClear` (a frame is drawn from nothing anyway), `glFlush`, `glFinish`, `glGetError`, `glGetString` |
 | Display lists | `glGenLists`, `glNewList` (`GL_COMPILE`, `GL_COMPILE_AND_EXECUTE`), `glEndList`, `glCallList`, `glDeleteLists`, `glIsList`: lists 1..255, called 8 deep |
+| Textures | On T2 with textures only (below): `glTexCoord2i` (texels), `glTexCoord2x` (16.16), `glBindTexture(GL_TEXTURE_2D, n)`, `GL_TEXTURE_2D`; `zglTexImage`, `zglTexRoom` |
 | Extensions | `zglTranslatei` and `zglFrustumi` (whole units, for worlds wider than GLfixed's ±32767), `zglRamp` (palette ramps for shading), `zglSin`/`zglCos` (1/65536 turns) |
+
+### Textures
+
+On a T2 with textures ([zgl_t2.md](zgl_t2.md), "Textures"), in
+`ZGL_CHUNKY` frames, a display list's triangles can be textured:
+
+```c
+zglTexImage(1, 4, 4, texels, ZGL_TEX_TONE, false);   /* 16x16, name 1 */
+glNewList(l, GL_COMPILE);
+glBindTexture(GL_TEXTURE_2D, 1);
+glBegin(GL_QUADS);
+glTexCoord2i(0, 0);   glVertex3i(...);              /* texels */
+glTexCoord2i(64, 0);  glVertex3i(...);              /* four times across */
+...
+glEndList();
+glEnable(GL_TEXTURE_2D);                            /* when it is called */
+glCallList(l);
+```
+
+A texture is 2^lw x 2^lh texels (1 to 128 a side), a byte each,
+repeated both ways, drawn perspective-correct. A texel is not a colour
+but combines with the colour index the triangle would have had: DECAL
+the texel itself, ADD the two added, TONE the triangle's ramp (16
+entries) with the texel's tone (0..15) lit by the triangle's own shade,
+RAMP the texel's ramp and tone lit; with `key`, texel 0 is not drawn.
+TONE lets one texture of tones serve any ramp and keeps the lighting.
+`GL_TEXTURE_2D` decides at the time a list is called, so a program can
+turn textures off without making its lists again. Lists keep the
+texture places they were compiled with: make the textures first.
+Without textures (no T2, a T2 without them, the software strips,
+immediate mode) the same triangles are drawn in their colours.
 
 `GL_DEPTH_TEST`, shading and lighting only show in `ZGL_FRAMES`. There,
 each triangle and line keeps the depth test as it was when it was
@@ -231,9 +262,8 @@ strip:
 2. Every triangle and line that touches the strip is drawn into them.
 3. The strip goes out to the picture.
 
-That is 15 KB, which stays in the cache. The triangle engine of Phase 4
-draws the same strips in hardware, and `zgl_frames.c` is its
-pixel-exact reference.
+That is 15 KB, which stays in the cache. T2 draws the same pictures in
+hardware, and `zgl_frames.c` is its reference.
 
 - **Coverage.** A pixel is drawn when its centre is inside, with the
   top-left rule, so triangles that share an edge draw each pixel once.
@@ -310,8 +340,8 @@ and `zgl_close`. gldemo's sphere and space3d's solids are lists.
   - black and white.
 - `make -C sw/common/zgl simtest` draws two frames with `ZGL_CHUNKY`
   in software into the simulator's VRAM, one of them scissored. It
-  reads them back through the chunky layout and compares them with the
-  triangle engine's C model: 0 pixels differ.
+  reads them back through the chunky layout, and holds T2's
+  (`ZSIM_GTRI=2`, its model) to them: 0 pixels differ.
 - `make -C sw/apps/gldemo render` renders gldemo in every mode
   ([gldemo_app.md](gldemo_app.md)).
 - `make -C sw/apps/space3d render` renders the game through the arcade
@@ -359,9 +389,6 @@ and `zgl_close`. gldemo's sphere and space3d's solids are lists.
     (`ZGL_HOT`, in `.text.hot`) sits together, about 7 KB, and does not
     evict itself; the rare paths (clipping, outlines, recording) are
     apart. Modelled: about 1.9 M cycles a frame, from 3.2 M.
-  - With the engine (`ZSIM_GTRI=1` in the simulator), the frame's own
-    part, the engine's commands, is about 0.26 M instructions and
-    0.83 M modelled cycles; the front end is most of the cost.
 
 ## Phases
 
@@ -371,7 +398,7 @@ and `zgl_close`. gldemo's sphere and space3d's solids are lists.
 | 1 | `ZGL_FRAMES` in software: strips with a 16-bit depth buffer each, flat and smooth shading, lighting, every target format; gldemo | **done** |
 | 2 | space3d improved (the solid look: lit rocks, depth; V); display lists | **done** |
 | 3 | measurements on hardware (ml1, ml2, Lakritz) | |
-| 4 | the triangle engine (new RTL, 45F/85F): the same strips on chip, out to chunky VRAM behind the beam or to a window as 1 bpp dither | **done off hardware** ([gpu_tri.md](gpu_tri.md)): module, bench, SOC (`GPU_TRI`), `ZGL_CHUNKY` with `VSYNC`, and black-and-white windows; on sergei_ml2 it works, but is less than 2× the software |
-| T2 | the engine that runs the whole frame: the CPU streams compiled display lists, the engine (a small RV32IM core, zeitlos32g, and a 4-pixel raster) transforms, lights, clips, sets up and draws | **built, checked in simulation** (`GPU_T2`): [zgl_t2.md](zgl_t2.md); not yet on hardware |
+| 4 | the triangle engine (new RTL, 45F/85F): the same strips on chip | gpu_tri drew only the pixels, the CPU still doing the geometry: less than 2× the software. **Retired** (November 2026) for T2 |
+| T2 | the engine that runs the whole frame: the CPU streams compiled display lists, the engine (a small RV32IM core, zeitlos32g, and a raster of a pixel a clock) transforms, lights, clips, sets up and draws | **done, on hardware** (`GPU_T2`, sergei_ml2): [zgl_t2.md](zgl_t2.md). Textures and positional lights checked in simulation |
 
 The plan, and why: `claude/gl-proposal.md` in the project.

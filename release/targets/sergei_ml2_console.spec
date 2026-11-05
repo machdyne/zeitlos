@@ -32,6 +32,9 @@
 #   DDR3_WCOMBINE  the DDR3 controller combines stores into whole
 #                  16-byte blocks (rtl/mem/ddr3_ctrl.v): T2's picture
 #                  goes out at about 8 cycles a word rather than 19
+#   T2_TEX_LOG2=13 T2 with textures (docs/zgl_t2.md, "Textures"): an
+#                  8 KB texture memory, perspective-correct; nine DP16KD
+#                  and about 1,600 COMB more
 
 description = Sergei ML2 as a games console (console profile, T2)
 
@@ -50,3 +53,4 @@ defines =
 	NO_MPU
 	NO_RTC
 	DDR3_WCOMBINE
+	T2_TEX_LOG2=13

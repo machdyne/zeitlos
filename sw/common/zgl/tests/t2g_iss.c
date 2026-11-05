@@ -14,9 +14,9 @@
 #include <string.h>
 #include "t2g_iss.h"
 
-#define IMEM_BYTES (12 * 1024)
+#define IMEM_BYTES (16 * 1024)   /* t2fw_tex: 16K and 8K; t2fw fits in them too */
 #define DMEM_BASE  0x10000u
-#define DMEM_BYTES (4 * 1024)
+#define DMEM_BYTES (8 * 1024)
 #define REG_BASE   0x20000u
 #define LIST_BASE  0x30000u
 #define LIST_WORDS (T2_RECS * T2_REC_WORDS)

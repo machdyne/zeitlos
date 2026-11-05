@@ -276,18 +276,18 @@ stalls. The numbers are from Doom's `-membench` on sergei_ml2; the model
 is for comparing two versions of the code, not for predicting a frame
 rate to the percent.
 
-## The triangle engine
+## T2, the triangle engine
 
-With `ZSIM_GTRI=1`, the simulator has the triangle engine
-([docs/gpu_tri.md](../docs/gpu_tri.md)) at `0x7C00_0000`: its ID reads
-"ZTRI", so `ZGL_CHUNKY` frames go to it. Its commands are carried out by
-the engine's C model (`sw/common/zgl/tests/t_model.c`, the one the RTL
-bench is held to), a strip at a time, into chunky VRAM. It is never busy
-and its FIFO never fills, so with the cycle model on a program's cycles
-are the CPU's own -- what making the commands costs. The black-and-white
-desktop (`MONO`) is not modelled. `make -C sw/common/zgl simtest` runs
-its frames against the software's, and `framebench` times a chunky
-frame on it.
+With `ZSIM_GTRI=2` (or any value but 0), the simulator has T2
+([docs/zgl_t2.md](../docs/zgl_t2.md)) at `0x7C00_0000`: its ID reads
+"ZTR2", so `ZGL_CHUNKY` frames go to it. A frame's stream is carried
+out by T2's C model (`sw/common/zgl/tests/t2_model.c`, the one the RTL
+bench is held to) at its END, into chunky VRAM, or with `ZSIM_CONSOLE=1`
+into main memory at VBASE; textures too. It is never busy and its FIFO
+never fills, so with the cycle model on a program's cycles are the
+CPU's own -- what sending the frame costs. `ZSIM_GTRI_STATS=1` prints
+each frame's counts. `make -C sw/common/zgl simtest` holds its frames
+to the software's, and `framebench` times a chunky frame on it.
 
 ## Testing without the real toolchain
 

@@ -43,8 +43,50 @@ static zgl_info_t *t2_info;
 static uint32_t t2_prims;            /* this frame's, so far */
 
 /* what the engine was last sent, so only changes are sent again */
-static uint32_t sent_view[2], sent_xform[19], sent_light[11], sent_state;
-static bool sent_view_ok, sent_xform_ok, sent_light_ok, sent_state_ok;
+static uint32_t sent_view[2], sent_xform[19], sent_light[11], sent_state, sent_pl[2][8];
+static bool sent_view_ok, sent_xform_ok, sent_light_ok, sent_state_ok, sent_pl_ok[2];
+
+/* -- textures: T2's texture memory, filled from the bottom ----------------- */
+
+#define TEX_NAMES 64
+static uint32_t tex_wd[TEX_NAMES];   /* each name's texture word; 0 none */
+static uint32_t tex_size[TEX_NAMES]; /* ...and its texels */
+static uint32_t tex_top;             /* texels used */
+static uint32_t tex_n;               /* textures made */
+
+uint32_t zglTexRoom(void) {
+	return zglc_tex_room ? zglc_tex_room() : 0;
+}
+
+bool zglTexImage(unsigned name, int lw, int lh, const uint8_t *texels, int mode, bool key) {
+	uint32_t room = zglTexRoom(), n, base, i;
+	if (!room || !zglc_tex_put || name == 0 || name >= TEX_NAMES) return false;
+	if (lw < 0 || lw > 7 || lh < 0 || lh > 7 || mode < 0 || mode > 3) return false;
+	n = 1u << (lw + lh);
+	if (tex_wd[name] && tex_size[name] == n)
+		base = T2_TEX_BASE(tex_wd[name]);    /* where it was */
+	else {
+		/* a word's four texels together: each texture whole words */
+		base = (tex_top + 3u) & ~3u;
+		if (base + n > room) return false;
+		tex_top = base + n;
+	}
+	for (i = 0; i < n; i += 4) {
+		uint32_t w = (uint32_t)texels[i];
+		if (i + 1 < n) w |= (uint32_t)texels[i + 1] << 8;
+		if (i + 2 < n) w |= (uint32_t)texels[i + 2] << 16;
+		if (i + 3 < n) w |= (uint32_t)texels[i + 3] << 24;
+		zglc_tex_put((base + i) / 4u, w);
+	}
+	if (!tex_wd[name]) tex_n++;
+	tex_wd[name] = T2_TEX(base, lw, lh, mode, key);
+	tex_size[name] = n;
+	return true;
+}
+
+uint32_t zgl_t2_tex_word(uint32_t name) {
+	return name < TEX_NAMES ? tex_wd[name] : 0;
+}
 
 static inline void put(uint32_t w) {
 	if (t2_reg) *t2_reg = w;
@@ -57,6 +99,7 @@ bool zgl_t2_open(zgl_info_t *info) {
 	t2_info = info;
 	t2_reg = zglc_cmd ? zglc_cmd() : NULL;
 	sent_view_ok = sent_xform_ok = sent_light_ok = sent_state_ok = false;
+	sent_pl_ok[0] = sent_pl_ok[1] = false;
 	return true;
 }
 
@@ -144,6 +187,27 @@ static void light_keep(const uint32_t *w) {
 	lc_ok = true;
 }
 
+/* A positional light in the model's space: the modelview M is s R plus
+ * t (zgl_t2_call() checks), so P_model = M3^T (P_eye - t) / s^2; and s,
+ * and the attenuation's factors (zgl_t2.h, PLIGHT) */
+static void point_words(int l, uint32_t *w) {
+	const int32_t *m = zgl_s.mv[zgl_s.mv_top];
+	int64_t s2 = 0, d[3], q;
+	int c, r;
+	for (r = 0; r < 3; r++) s2 += (int64_t)m[r] * m[r];          /* 24.40 */
+	q = s2 >> 20;                                                  /* s^2, 12.20 */
+	if (q < 1) q = 1;
+	for (r = 0; r < 3; r++) d[r] = (int64_t)zgl_s.light_pos[l][r] - m[12 + r];
+	for (c = 0; c < 3; c++) {
+		int64_t v = (m[c * 4] * d[0] + m[c * 4 + 1] * d[1] + m[c * 4 + 2] * d[2]) / q;
+		w[c] = (uint32_t)(int32_t)(v > INT32_MAX ? INT32_MAX : v < INT32_MIN ? INT32_MIN : v);
+	}
+	w[3] = zgl_isqrt64((uint64_t)s2) >> 4;                        /* s, 16.16 */
+	w[4] = (uint32_t)zgl_s.light_kc[l];
+	w[5] = (uint32_t)zgl_s.light_kl[l];
+	w[6] = zgl_s.light_kq[l];
+}
+
 static void send_state(void) {
 	uint32_t w[18], op;
 	int k, l;
@@ -194,11 +258,20 @@ static void send_state(void) {
 	w[8] = (uint32_t)zgl_s.mat_a;
 	w[9] = (uint32_t)zgl_s.mat_d;
 	send_words(op, w, 10, sent_light, &sent_light_ok);
+	/* positional lights: where each is in the model's space */
+	for (l = 0; l < 2; l++) {
+		bool on = zgl_s.lighting && zgl_s.light_on[l] && zgl_s.light_pt[l];
+		op = T2_PLIGHT << 24 | (uint32_t)l | (on ? 2u : 0u) | (on && zgl_s.normalize ? 4u : 0u);
+		for (k = 0; k < 7; k++) w[k] = 0;
+		if (on) point_words(l, w);
+		send_words(op, w, 7, sent_pl[l], &sent_pl_ok[l]);
+	}
 	/* depth, shading, culling */
 	if (zgl_s.cull)
 		cull = zgl_s.cull_face == GL_BACK ? 1 : zgl_s.cull_face == GL_FRONT ? 2 : 3;
 	op = T2_STATE << 24 | (zgl_s.depth_test ? 1u : 0u) | (zgl_s.smooth ? 2u : 0u) |
-	     (uint32_t)cull << 2 | (zgl_s.front_ccw ? 16u : 0u);
+	     (uint32_t)cull << 2 | (zgl_s.front_ccw ? 16u : 0u) |
+	     (zgl_s.texture && tex_n ? 32u : 0u);
 	if (!sent_state_ok || sent_state != op) {
 		put(op);
 		sent_state = op;
@@ -220,11 +293,11 @@ typedef struct {
 } t2_list_t;
 
 /* a vertex as the list made it */
-typedef struct { int32_t x, y, z, nx, ny, nz, ci; } cv_t;
+typedef struct { int32_t x, y, z, nx, ny, nz, ci, s, t; } cv_t;
 
 /* the compiler's state */
 #define CH_T 1024              /* triangles, lines a chunk at most */
-#define CH_ROOM (4 + T2_CHUNK_V * 4 + CH_T * 2 + CH_T)
+#define CH_ROOM (5 + T2_CHUNK_V * 5 + CH_T * 2 + CH_T)
 
 typedef struct {
 	t2_list_t *l;
@@ -233,6 +306,7 @@ typedef struct {
 	uint32_t nv, nt, nl;
 	int shift;
 	uint8_t flags;
+	uint32_t tex;              /* the open chunk's texture word; 0 none */
 	cv_t cv[T2_CHUNK_V];
 	int16_t hash[512];
 	bool fail;
@@ -252,17 +326,20 @@ static bool grow(comp_t *c, uint32_t n) {
 	return true;
 }
 
-/* chunk layout while open: 4 header words, then room for T2_CHUNK_V
- * vertices (4 words), CH_T triangles (2) and CH_T lines (1); closed,
- * the triangles and lines are moved down to follow what was used */
-#define T_ROOM (4 + T2_CHUNK_V * 4)
+/* chunk layout while open: 4 header words (5 textured), then room for
+ * T2_CHUNK_V vertices (4 words, 5 textured), CH_T triangles (2) and
+ * CH_T lines (1); closed, the triangles and lines are moved down to
+ * follow what was used */
+#define T_ROOM (5 + T2_CHUNK_V * 5)
 #define L_ROOM (T_ROOM + CH_T * 2)
+#define HW(c)  ((c)->tex ? 5u : 4u)        /* header words */
+#define VW(c)  ((c)->tex ? 5u : 4u)        /* words a vertex */
 
 static void chunk_finish(comp_t *c) {
 	uint32_t *h, vend;
 	if (c->fail || c->nv == 0) { if (!c->fail) c->l->nw = c->c0; return; }
 	h = &c->l->w[c->c0];
-	vend = 4 + c->nv * 4;
+	vend = HW(c) + c->nv * VW(c);
 	memmove(&h[vend], &h[T_ROOM], c->nt * 8);
 	memmove(&h[vend + c->nt * 2], &h[L_ROOM], c->nl * 4);
 	h[0] = c->nv | c->nt << 16;
@@ -277,9 +354,11 @@ static void chunk_open(comp_t *c, bool own_mat, int32_t ma, int32_t md) {
 	c->c0 = c->l->nw;
 	h = &c->l->w[c->c0];
 	h[0] = 0;
-	h[1] = (uint32_t)c->shift | (uint32_t)(c->flags | (own_mat ? T2_C_MAT : 0)) << 8;
+	h[1] = (uint32_t)c->shift | (uint32_t)(c->flags | (own_mat ? T2_C_MAT : 0) |
+	       (c->tex ? T2_C_TEX : 0)) << 8;
 	h[2] = (uint32_t)ma;
 	h[3] = (uint32_t)md;
+	h[4] = c->tex;
 	c->l->nw = c->c0 + CH_ROOM;
 	c->nv = c->nt = c->nl = 0;
 	memset(c->hash, -1, sizeof(c->hash));
@@ -289,7 +368,8 @@ static void chunk_open(comp_t *c, bool own_mat, int32_t ma, int32_t md) {
 static int chunk_vertex(comp_t *c, const cv_t *v) {
 	uint32_t hsh = ((uint32_t)v->x * 0x9E3779B1u ^ (uint32_t)v->y * 0x85EBCA77u ^
 	                (uint32_t)v->z * 0xC2B2AE3Du ^ (uint32_t)v->nx * 31u ^
-	                (uint32_t)v->ny * 131u ^ (uint32_t)v->nz * 1031u ^ (uint32_t)v->ci) >> 23;
+	                (uint32_t)v->ny * 131u ^ (uint32_t)v->nz * 1031u ^ (uint32_t)v->ci ^
+	                (uint32_t)v->s * 7919u ^ (uint32_t)v->t * 104729u) >> 23;
 	uint32_t *p;
 	int k;
 	for (k = 0; k < 512; k++) {
@@ -300,13 +380,14 @@ static int chunk_vertex(comp_t *c, const cv_t *v) {
 	if (c->nv >= T2_CHUNK_V) return -1;
 	c->hash[(hsh + (uint32_t)k) & 511] = (int16_t)c->nv;
 	c->cv[c->nv] = *v;
-	p = &c->l->w[c->c0 + 4 + c->nv * 4];
+	p = &c->l->w[c->c0 + HW(c) + c->nv * VW(c)];
 	{
 		int32_t r = c->shift ? 1 << (c->shift - 1) : 0;
 		p[0] = (uint32_t)(uint16_t)((v->x + r) >> c->shift) | (uint32_t)(uint16_t)((v->y + r) >> c->shift) << 16;
 		p[1] = (uint32_t)(uint16_t)((v->z + r) >> c->shift) | (uint32_t)(uint16_t)v->ci << 16;
 		p[2] = (uint32_t)(uint16_t)((v->nx + 2) >> 2) | (uint32_t)(uint16_t)((v->ny + 2) >> 2) << 16;
 		p[3] = (uint32_t)(uint16_t)((v->nz + 2) >> 2);
+		if (c->tex) p[4] = (uint32_t)(uint16_t)v->s | (uint32_t)(uint16_t)v->t << 16;
 	}
 	return (int)c->nv++;
 }
@@ -383,6 +464,11 @@ static t2_list_t *compile(const zglr_op_t *ops, uint32_t n, bool unit) {
 				return NULL;
 			break;
 		case ZGLR_INDEX: has_i_op = true; break;
+		case ZGLR_TEXCOORD: break;
+		case ZGLR_BIND:
+			/* a texture coordinate past what a vertex holds (12.4 in 16
+			 * bits) would wrap: played back, in colours */
+			break;
 		case ZGLR_VERTEX: {
 			int32_t a = o->a < 0 ? -o->a : o->a, b = o->b < 0 ? -o->b : o->b, d = o->c < 0 ? -o->c : o->c;
 			if (a > mx) mx = a;
@@ -410,6 +496,8 @@ static t2_list_t *compile(const zglr_op_t *ops, uint32_t n, bool unit) {
 	c.flags = (uint8_t)((has_n_op ? T2_C_NORMAL : 0) | (has_i_op ? T2_C_INDEX : 0));
 	cur_own_mat = false; cur_ma = 0; cur_md = 0;
 	memset(&cur, 0, sizeof(cur));
+	/* the texture bound when the list is made */
+	c.tex = zgl_s.tex_bound ? zgl_t2_tex_word(zgl_s.tex_bound) : 0;
 	chunk_open(&c, false, 0, 0);
 	for (i = 0; i < n && !c.fail; i++) {
 		const zglr_op_t *o = &ops[i];
@@ -437,6 +525,19 @@ static t2_list_t *compile(const zglr_op_t *ops, uint32_t n, bool unit) {
 			l->set_index = true;
 			l->index = (uint8_t)o->a;
 			break;
+		case ZGLR_TEXCOORD:
+			cur.s = o->a < -32768 ? -32768 : o->a > 32767 ? 32767 : o->a;
+			cur.t = o->b < -32768 ? -32768 : o->b > 32767 ? 32767 : o->b;
+			break;
+		case ZGLR_BIND: {
+			uint32_t tw = o->a ? zgl_t2_tex_word((uint32_t)o->a) : 0;
+			if (in_begin) { c.fail = true; break; }
+			if (tw == c.tex) break;
+			chunk_finish(&c);
+			c.tex = tw;
+			chunk_open(&c, cur_own_mat, cur_ma, cur_md);
+			break;
+		}
 		case ZGLR_MATERIAL:
 			if (in_begin) { c.fail = true; break; }
 			chunk_finish(&c);
@@ -543,6 +644,9 @@ bool zgl_t2_call(const zglr_op_t *ops, uint32_t n, void **cache, uint8_t *state)
 	if (!t2_on || zgl_s.in_begin || zgl_s.listing) return false;
 	if (zgl_s.poly_front != GL_FILL || zgl_s.poly_back != GL_FILL) return false;
 	if (unit && !similarity()) return false;
+	/* a positional light goes to the model's space the same way */
+	if (zgl_s.lighting && ((zgl_s.light_on[0] && zgl_s.light_pt[0]) ||
+	    (zgl_s.light_on[1] && zgl_s.light_pt[1])) && !unit && !similarity()) return false;
 	/* compiled the other way (normalizing then, not now): again */
 	if (*state == 1 && ((t2_list_t *)*cache)->unit != unit) {
 		zgl_t2_free(*cache);
@@ -561,7 +665,9 @@ bool zgl_t2_call(const zglr_op_t *ops, uint32_t n, void **cache, uint8_t *state)
 	send_state();
 	w = l->w;
 	for (ci = 0; ci < l->nchunks; ci++) {
-		uint32_t nv = w[0] & 0xffff, nt = w[0] >> 16, nl = w[1] >> 16, nw = 4 + nv * 4 + nt * 2 + nl;
+		uint32_t nv = w[0] & 0xffff, nt = w[0] >> 16, nl = w[1] >> 16;
+		uint32_t tx = (w[1] >> 8) & T2_C_TEX ? 1u : 0u;
+		uint32_t nw = 4 + tx + nv * (4 + tx) + nt * 2 + nl;
 		put(T2_DRAW << 24);
 		put((uint32_t)zgl_s.index << 8);
 		put((uint32_t)dn[0]); put((uint32_t)dn[1]); put((uint32_t)dn[2]);

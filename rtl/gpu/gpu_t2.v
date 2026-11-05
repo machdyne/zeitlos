@@ -15,7 +15,7 @@
  * functions, into two strip buffers; the output side writes each strip
  * into chunky VRAM behind the beam (CTRL.VSYNC) and clears it behind.
  *
- * -- Registers (word offsets), as today's engine's (gpu_tri.v) --
+ * -- Registers (word offsets) --
  *
  *   0 CTRL    rw  [0] WAIT_BEAM  [1] VSYNC
  *   1 STATUS  r   [0] busy  [27:16] FIFO words free (of 2,048; FIFO_LOG2)
@@ -106,7 +106,16 @@ module gpu_t2_wb #(
 	parameter POST_LOG2 = 0,
 	// the stream FIFO: 2^FIFO_LOG2 words (11: 2,048, four DP16KD; 9:
 	// 512, one -- the CPU then waits on a full FIFO sooner)
-	parameter FIFO_LOG2 = 11
+	parameter FIFO_LOG2 = 11,
+	// Textures (docs/zgl_t2.md, "Textures"): a texture memory of
+	// 2^TEX_LOG2 texels (13: 8 KB, four DP16KD), the raster's TTRI
+	// records drawn perspective-correct (a reciprocal table, one
+	// DP16KD, and two multipliers), and the geometry core's bigger
+	// program (TEX_FW_HEX: 16 KB of code, 8 KB of data, four DP16KD
+	// more). 0: none -- CAPS says so, and zgl draws in colours.
+	parameter TEX_LOG2 = 0,
+	parameter TEX_FW_HEX = "sw/t2fw/t2fw_tex.hex",
+	parameter RECIP_HEX = "rtl/gpu/t2_recip.hex"
 ) (
 	input             clk,
 	input             rst,
@@ -194,7 +203,10 @@ module gpu_t2_wb #(
 	reg  [31:0] g_rdata;
 	reg         g_ready;
 
-	zeitlos32g #(.IMEM_HEX(FW_HEX)) geom (
+	localparam TEX = (TEX_LOG2 != 0);
+
+	zeitlos32g #(.IMEM_HEX(TEX ? TEX_FW_HEX : FW_HEX),
+		.IMEM_WORDS(TEX ? 4096 : 3072), .DMEM_WORDS(TEX ? 2048 : 1024)) geom (
 		.clk(clk), .rst(rst || soft_rst),
 		.io_rd(g_rd), .io_wr(g_wr), .io_addr(g_addr), .io_wdata(g_wdata),
 		.io_rdata(g_rdata), .io_ready(g_ready)
@@ -342,9 +354,9 @@ module gpu_t2_wb #(
 	reg [7:0]  s_y0, s_y1;
 	reg        s_first;
 	reg [12:0] r_ptr;             // the record being looked at
-	reg [3:0]  r_wi;              // its word being loaded
-	reg [31:0] rw [0:10];         // its words
-	reg [3:0]  r_len;
+	reg [4:0]  r_wi;              // its word being loaded
+	reg [31:0] rw [0:20];         // its words (TRI 11, LINE 10, TTRI 21)
+	reg [4:0]  r_len;
 
 	// a triangle in the strip
 	reg [7:0]  t_y, t_y1;         // the row, the last row
@@ -389,7 +401,21 @@ module gpu_t2_wb #(
 	// an edge: the two products' difference; a plane: z0 (or c0) + the
 	// low 32 bits of dz/dy (or dc/dy) * rows, from its two 16-bit halves
 	wire [39:0] f_new  = {{4{t_acc[35]}}, t_acc} - {{4{mu_p[35]}}, mu_p};
-	wire [31:0] pl_new = (t_k == 5'd10 ? rw[5] : rw[8]) + t_acc[31:0] + {mu_p[15:0], 16'd0};
+	// the plane at the strip's first row: z (step 10), ci (12), and a
+	// textured triangle's A, B and Q (14, 16, 18)
+	// (without textures only z and ci: the tools cannot see that t_k
+	// never reaches 14)
+	reg  [31:0] pl_base;
+	always @(*) begin
+		case (t_k)
+		5'd10: pl_base = rw[5];
+		5'd12: pl_base = rw[8];
+		5'd14: pl_base = TEX ? rw[12] : rw[8];
+		5'd16: pl_base = TEX ? rw[15] : rw[8];
+		default: pl_base = TEX ? rw[18] : rw[8];
+		endcase
+	end
+	wire [31:0] pl_new = pl_base + t_acc[31:0] + {mu_p[15:0], 16'd0};
 
 	// a line in the strip
 	reg [31:0] ln_n, ln_i;
@@ -442,7 +468,144 @@ module gpu_t2_wb #(
 	assign pass[1] = p2_m[1] && (!p2_dep || (p2_le ? p2_zv[31:16] <= p2_old[31:16] : p2_zv[31:16] < p2_old[31:16]));
 	assign pass[2] = p2_m[2] && (!p2_dep || (p2_le ? p2_zv[47:32] <= p2_old[47:32] : p2_zv[47:32] < p2_old[47:32]));
 	assign pass[3] = p2_m[3] && (!p2_dep || (p2_le ? p2_zv[63:48] <= p2_old[63:48] : p2_zv[63:48] < p2_old[63:48]));
-	wire       pipe_busy = p0_v || p1_v || p2_v || (dr_col_we != 4'd0);
+	wire       tx_busy;               // the texture pipe (below)
+	wire       pipe_busy = p0_v || p1_v || p2_v || (dr_col_we != 4'd0) || tx_busy;
+
+	// ------------------------------------------------------------------
+	// textures (TEX_LOG2): a TTRI's planes, the texture memory and the
+	// texture pipe -- t2_uv(), t2_texel_at() and t2_combine() in
+	// sw/common/zgl/zgl_t2.h, bit for bit
+	// ------------------------------------------------------------------
+
+	reg        t_tx;                      // the triangle is textured
+	reg [31:0] t_tw;                      // ...its texture word
+	reg [31:0] t_dadx, t_dady, t_dbdx, t_dbdy, t_dqdx, t_dqdy;
+	reg [31:0] arow, brow, qrow;          // A, B, Q at the row's first pixel
+	reg [31:0] aw, bw, qw;                // ...at this pixel
+
+	localparam integer TX_LOG2 = TEX ? TEX_LOG2 : 4;
+	localparam integer TX_W = 1 << (TX_LOG2 - 2);
+	localparam [4:0]   TX_LOG2_5 = TEX ? TEX_LOG2 : 0;
+	reg  [31:0] texm [0:TX_W-1];          // four texels a word, the first in 7:0
+	reg  [31:0] tex_q;
+	reg  [TX_LOG2-3:0] tex_wa;            // TEXADDR
+	wire        tex_we = TEX && wb_cyc_i && wb_stb_i && wb_we_i && !wb_ack_o && (wb_adr_i[3:0] == 4'd13);
+
+	// 1 / (1 + f) for f's first ten bits (rtl/gpu/gen_t2_recip.py)
+	reg  [16:0] rcp [0:1023];
+	reg  [16:0] rcp_q;
+	initial $readmemh(RECIP_HEX, rcp);
+
+	// the stages: x1 the pixel as R_TWORD found it; x2 Q clamped, its
+	// leading bit, A's and B's shifts; x3 the table's index, A and B in
+	// 18 bits; x4 the table's word; x5 the products; x6 s and t (12.4,
+	// the low 12 bits); x7 the texel's place; x8 its word: the texel,
+	// the pixel's index, and into p0
+	reg        x1_v, x2_v, x3_v, x4_v, x5_v, x6_v, x7_v, x8_v;
+	reg [10:0] x1_addr, x2_addr, x3_addr, x4_addr, x5_addr, x6_addr, x7_addr, x8_addr;
+	reg [3:0]  x1_m, x2_m, x3_m, x4_m, x5_m, x6_m, x7_m, x8_m;
+	reg        x1_dep, x2_dep, x3_dep, x4_dep, x5_dep, x6_dep, x7_dep, x8_dep;
+	reg [15:0] x1_zv, x2_zv, x3_zv, x4_zv, x5_zv, x6_zv, x7_zv, x8_zv;
+	reg [7:0]  x1_ci, x2_ci, x3_ci, x4_ci, x5_ci, x6_ci, x7_ci, x8_ci;
+	reg [31:0] x1_a, x1_b, x1_q;
+	reg [31:0] x2_q, x2_a, x2_b;
+	reg [4:0]  x2_e;
+	reg [3:0]  x2_sa, x2_sb;
+	reg [9:0]  x3_idx;
+	reg [17:0] x3_an, x3_bn, x4_an, x4_bn;
+	reg [5:0]  x3_sha, x3_shb, x4_sha, x4_shb, x5_sha, x5_shb;
+	reg signed [35:0] x5_pa, x5_pb;
+	reg [11:0] x6_s, x6_t;
+	reg [TX_LOG2-1:0] x7_ta;
+	reg [1:0]  x8_bs;
+	wire       tx_busy_w = x1_v || x2_v || x3_v || x4_v || x5_v || x6_v || x7_v || x8_v;
+	assign     tx_busy = TEX && tx_busy_w;
+
+	// x1: Q at least 32; its leading bit; A's and B's significant bits
+	wire [31:0] x1_qc = ($signed(x1_q) < 32) ? 32'd32 : x1_q;
+	wire [31:0] x1_aa = x1_a[31] ? ~x1_a : x1_a;
+	wire [31:0] x1_ba = x1_b[31] ? ~x1_b : x1_b;
+	reg  [4:0]  xe_q, xm_a, xm_b;
+	reg  [5:0]  xl_a, xl_b;
+	reg  [3:0]  xs_a, xs_b;
+	integer     xi_q, xi_a, xi_b;
+	always @(*) begin
+		xe_q = 5'd0;
+		for (xi_q = 0; xi_q < 32; xi_q = xi_q + 1) if (x1_qc[xi_q]) xe_q = xi_q;
+	end
+	always @(*) begin
+		xm_a = 5'd0;
+		for (xi_a = 0; xi_a < 32; xi_a = xi_a + 1) if (x1_aa[xi_a]) xm_a = xi_a;
+		xl_a = (x1_aa == 32'd0) ? 6'd0 : {1'b0, xm_a} + 6'd1;
+		xs_a = (xl_a > 6'd17) ? xl_a[3:0] - 4'd1 : 4'd0;   // bl - 17 (bl 18..31)
+	end
+	always @(*) begin
+		xm_b = 5'd0;
+		for (xi_b = 0; xi_b < 32; xi_b = xi_b + 1) if (x1_ba[xi_b]) xm_b = xi_b;
+		xl_b = (x1_ba == 32'd0) ? 6'd0 : {1'b0, xm_b} + 6'd1;
+		xs_b = (xl_b > 6'd17) ? xl_b[3:0] - 4'd1 : 4'd0;
+	end
+
+	// x2: the table's index, A and B brought to 18 bits
+	wire [31:0] x2_qn  = x2_q << (5'd31 - x2_e);
+	wire [9:0]  x2_idx = x2_qn[30:21];
+	wire [31:0] x2_as  = $signed(x2_a) >>> x2_sa;
+	wire [31:0] x2_bs  = $signed(x2_b) >>> x2_sb;
+	wire [17:0] x2_an  = x2_as[17:0];
+	wire [17:0] x2_bn  = x2_bs[17:0];
+
+	// x4 -> x5: the table's word and the products (inputs and products
+	// registered)
+	always @(posedge clk) begin
+		rcp_q <= rcp[x3_idx];
+		x5_pa <= $signed(x4_an) * $signed({1'b0, rcp_q});
+		x5_pb <= $signed(x4_bn) * $signed({1'b0, rcp_q});
+	end
+
+	// x5: s and t, 12.4, their low 12 bits
+	wire [47:0] x5_pae = {{12{x5_pa[35]}}, x5_pa};
+	wire [47:0] x5_pbe = {{12{x5_pb[35]}}, x5_pb};
+	wire [47:0] x5_sx  = $signed(x5_pae) >>> x5_sha;
+	wire [47:0] x5_tx  = $signed(x5_pbe) >>> x5_shb;
+	wire [11:0] x5_s   = x5_sx[11:0];
+	wire [11:0] x5_t   = x5_tx[11:0];
+
+	// x6: the texel's place, (base + v << lw + u) mod the memory
+	wire [2:0]  tw_lw = t_tw[18:16], tw_lh = t_tw[21:19];
+	wire [6:0]  x6_u  = x6_s[10:4] & ((7'd1 << tw_lw) - 7'd1);
+	wire [6:0]  x6_vv = x6_t[10:4] & ((7'd1 << tw_lh) - 7'd1);
+	wire [15:0] x6_vo = {9'd0, x6_vv} << tw_lw;
+	wire [15:0] x6_tf = t_tw[15:0] + x6_vo + {9'd0, x6_u};
+	wire [TX_LOG2-1:0] x6_ta = x6_tf[TX_LOG2-1:0];
+
+	// x7 -> x8: the texel's word
+	always @(posedge clk) begin
+		if (tex_we) texm[tex_wa] <= wb_dat_i;
+		tex_q <= texm[x7_ta[TX_LOG2-1:2]];
+	end
+
+	// x8: the texel, the key, and the mode's index (T2_TM_*)
+	reg  [7:0]  x8_tx;
+	always @(*) begin
+		case (x8_bs)
+		2'd0: x8_tx = tex_q[7:0];
+		2'd1: x8_tx = tex_q[15:8];
+		2'd2: x8_tx = tex_q[23:16];
+		default: x8_tx = tex_q[31:24];
+		endcase
+	end
+	wire [8:0]  x8_tm   = {5'd0, x8_tx[3:0]} * ({5'd0, x8_ci[3:0]} + 9'd1);
+	wire [3:0]  x8_tone = x8_tm[7:4];
+	wire        x8_kill = t_tw[24] && (x8_tx == 8'd0);
+	reg  [7:0]  x8_px;
+	always @(*) begin
+		case (t_tw[23:22])
+		2'd0: x8_px = x8_tx;
+		2'd1: x8_px = x8_tx + x8_ci;
+		2'd2: x8_px = {x8_ci[7:4], x8_tone};
+		default: x8_px = {x8_tx[7:4], x8_tone};
+		endcase
+	end
 
 	// is the buffer to be drawn free, and clear to this frame's colour?
 	reg        o_busy;
@@ -461,7 +624,9 @@ module gpu_t2_wb #(
 
 	// the record's header (rw[0]): its rows, against the strip's
 	wire [7:0] rh_ylo = l_qr[15:8], rh_yhi = l_qr[23:16];
-	wire       rh_tri = (l_qr[1:0] == 2'd1);
+	wire       rh_ttri = TEX && (l_qr[1:0] == 2'd3);
+	wire       rh_tri = (l_qr[1:0] == 2'd1) || rh_ttri;
+	wire [4:0] rh_len = rh_ttri ? 5'd21 : rh_tri ? 5'd11 : 5'd10;
 
 	always @(posedge clk) begin
 		if (rst || soft_rst) begin
@@ -469,6 +634,8 @@ module gpu_t2_wb #(
 			r_busy <= 1'b0;
 			d_sel <= 1'b0;
 			p0_v <= 1'b0; p1_v <= 1'b0; p2_v <= 1'b0;
+			x1_v <= 1'b0; x2_v <= 1'b0; x3_v <= 1'b0; x4_v <= 1'b0;
+			x5_v <= 1'b0; x6_v <= 1'b0; x7_v <= 1'b0; x8_v <= 1'b0;
 			h_go <= 1'b0;
 			bclr0 <= 9'h100;
 			bclr1 <= 9'h100;
@@ -497,6 +664,43 @@ module gpu_t2_wb #(
 			p1_v <= p0_v; p1_addr <= p0_addr; p1_m <= p0_m; p1_dep <= p0_dep; p1_le <= p0_le;
 			p1_zv <= p0_zv; p1_ci <= p0_ci;
 			p0_v <= 1'b0;
+
+			// the texture pipe: a textured pixel's texel, eight stages,
+			// into p0 as an untextured pixel goes (t2_uv(), zgl_t2.h)
+			x1_v <= 1'b0;
+			x2_v <= x1_v && TEX;
+			x2_addr <= x1_addr; x2_m <= x1_m; x2_dep <= x1_dep; x2_zv <= x1_zv; x2_ci <= x1_ci;
+			x2_q <= x1_qc; x2_e <= xe_q; x2_a <= x1_a; x2_b <= x1_b; x2_sa <= xs_a; x2_sb <= xs_b;
+			x3_v <= x2_v;
+			x3_addr <= x2_addr; x3_m <= x2_m; x3_dep <= x2_dep; x3_zv <= x2_zv; x3_ci <= x2_ci;
+			x3_idx <= x2_idx; x3_an <= x2_an; x3_bn <= x2_bn;
+			x3_sha <= 6'd9 + {1'b0, x2_e} - {2'd0, x2_sa};
+			x3_shb <= 6'd9 + {1'b0, x2_e} - {2'd0, x2_sb};
+			x4_v <= x3_v;
+			x4_addr <= x3_addr; x4_m <= x3_m; x4_dep <= x3_dep; x4_zv <= x3_zv; x4_ci <= x3_ci;
+			x4_an <= x3_an; x4_bn <= x3_bn; x4_sha <= x3_sha; x4_shb <= x3_shb;
+			x5_v <= x4_v;
+			x5_addr <= x4_addr; x5_m <= x4_m; x5_dep <= x4_dep; x5_zv <= x4_zv; x5_ci <= x4_ci;
+			x5_sha <= x4_sha; x5_shb <= x4_shb;
+			x6_v <= x5_v;
+			x6_addr <= x5_addr; x6_m <= x5_m; x6_dep <= x5_dep; x6_zv <= x5_zv; x6_ci <= x5_ci;
+			x6_s <= x5_s; x6_t <= x5_t;
+			x7_v <= x6_v;
+			x7_addr <= x6_addr; x7_m <= x6_m; x7_dep <= x6_dep; x7_zv <= x6_zv; x7_ci <= x6_ci;
+			x7_ta <= x6_ta;
+			x8_v <= x7_v;
+			x8_addr <= x7_addr; x8_m <= x7_m; x8_dep <= x7_dep; x8_zv <= x7_zv; x8_ci <= x7_ci;
+			x8_bs <= x7_ta[1:0];
+			if (x8_v && !x8_kill) begin
+				dr_a_addr <= x8_addr;
+				p0_v <= 1'b1;
+				p0_addr <= x8_addr;
+				p0_m <= x8_m;
+				p0_dep <= x8_dep;
+				p0_le <= 1'b0;
+				p0_zv <= {4{x8_zv}};
+				p0_ci <= {4{x8_px}};
+			end
 
 			case (rs)
 			R_IDLE: begin
@@ -548,13 +752,13 @@ module gpu_t2_wb #(
 			R_W0: rs <= R_W1;                   // the address is in
 			R_W1: rs <= R_HDR;                  // the word is out
 			R_HDR: begin                        // l_qr: the header
-				r_len <= rh_tri ? 4'd11 : 4'd10;
+				r_len <= rh_len;
 				if (rh_yhi < s_y0 || rh_ylo > s_y1) begin
-					r_ptr <= r_ptr + (rh_tri ? 13'd11 : 13'd10);
+					r_ptr <= r_ptr + {8'd0, rh_len};
 					rs <= R_SCAN;
 				end else begin
 					rw[0] <= l_qr;
-					r_wi <= 4'd1;
+					r_wi <= 5'd1;
 					l_raddr <= r_ptr + 13'd1;
 					rs <= R_SKIP;
 				end
@@ -568,13 +772,14 @@ module gpu_t2_wb #(
 				rs <= R_LOAD;
 			end
 			R_LOAD: begin
-				rw[r_wi] <= l_qr;
+				// words 11..20 only a TTRI has: none without textures
+				if (TEX || r_wi < 5'd11) rw[r_wi] <= l_qr;
 				l_raddr <= l_raddr + 13'd1;
-				r_wi <= r_wi + 4'd1;
-				if (r_wi == r_len - 4'd1) begin
-					r_ptr <= r_ptr + {9'd0, r_len};
+				r_wi <= r_wi + 5'd1;
+				if (r_wi == r_len - 5'd1) begin
+					r_ptr <= r_ptr + {8'd0, r_len};
 					t_k <= 5'd0;
-					if (rw[0][1:0] == 2'd1) rs <= R_TSET;
+					if (rw[0][1:0] == 2'd1 || (TEX && rw[0][1:0] == 2'd3)) rs <= R_TSET;
 					else begin
 						ln_n <= rw[1]; ln_i <= 32'd0;
 						ln_x <= rw[2]; ln_y <= rw[3]; ln_dx <= rw[4]; ln_dy <= rw[5];
@@ -598,6 +803,11 @@ module gpu_t2_wb #(
 					t_bx1 <= rw[1][24:16];
 					t_dzdx <= rw[6]; t_dzdy <= rw[7];
 					t_dcdx <= rw[9]; t_dcdy <= rw[10];
+					t_tx <= TEX && (rw[0][1:0] == 2'd3);
+					t_tw <= rw[11];
+					t_dadx <= rw[13]; t_dady <= rw[14];
+					t_dbdx <= rw[16]; t_dbdy <= rw[17];
+					t_dqdx <= rw[19]; t_dqdy <= rw[20];
 					// 16 dy and 16 dx of each edge (v0 v2, v0 v1, v1 v2)
 					sdy_l <= ($signed(rw[4][31:16]) - $signed(rw[2][31:16])) * 16;
 					sdy_1 <= ($signed(rw[3][31:16]) - $signed(rw[2][31:16])) * 16;
@@ -621,9 +831,20 @@ module gpu_t2_wb #(
 				5'd8: begin mu_a <= {2'd0, rw[7][31:16]}; mu_b <= {10'd0, t_dyr}; f_2 <= f_new; end
 				5'd9: begin mu_a <= {2'd0, rw[10][15:0]}; mu_b <= {10'd0, t_dyr}; t_acc <= mu_p; end
 				5'd10: begin mu_a <= {2'd0, rw[10][31:16]}; mu_b <= {10'd0, t_dyr}; zrow <= pl_new; end
-				5'd11: t_acc <= mu_p;
+				5'd11: begin t_acc <= mu_p; mu_a <= {2'd0, rw[14][15:0]}; mu_b <= {10'd0, t_dyr}; end
 				5'd12: begin
 					crow <= pl_new;
+					mu_a <= {2'd0, rw[14][31:16]}; mu_b <= {10'd0, t_dyr};
+					if (!t_tx) rs <= R_TROW;
+				end
+				// a textured triangle: A, B and Q at the strip's first row
+				5'd13: begin t_acc <= mu_p; mu_a <= {2'd0, rw[17][15:0]}; mu_b <= {10'd0, t_dyr}; end
+				5'd14: begin arow <= pl_new; mu_a <= {2'd0, rw[17][31:16]}; mu_b <= {10'd0, t_dyr}; end
+				5'd15: begin t_acc <= mu_p; mu_a <= {2'd0, rw[20][15:0]}; mu_b <= {10'd0, t_dyr}; end
+				5'd16: begin brow <= pl_new; mu_a <= {2'd0, rw[20][31:16]}; mu_b <= {10'd0, t_dyr}; end
+				5'd17: t_acc <= mu_p;
+				5'd18: begin
+					qrow <= pl_new;
 					rs <= R_TROW;
 				end
 				default: ;
@@ -637,12 +858,22 @@ module gpu_t2_wb #(
 				fw_s <= (t_y < t_ymid) ? f_1 : f_2;
 				zw <= zrow;
 				cw <= crow;
+				aw <= arow; bw <= brow; qw <= qrow;
 				rs <= R_TWORD;
 			end
 
 			// a pixel into the pipe if covered, then the next
 			R_TWORD: begin
-				if (px_cover) begin
+				if (px_cover && t_tx) begin
+					// textured: through the texture pipe first (below)
+					x1_v <= 1'b1;
+					x1_addr <= px_addr;
+					x1_m <= 4'b0001 << t_x[1:0];
+					x1_dep <= t_dep;
+					x1_zv <= px_zv;
+					x1_ci <= px_ci[15:8];
+					x1_a <= aw; x1_b <= bw; x1_q <= qw;
+				end else if (px_cover) begin
 					dr_a_addr <= px_addr;
 					p0_v <= 1'b1;
 					p0_addr <= px_addr;
@@ -656,6 +887,7 @@ module gpu_t2_wb #(
 				fw_s <= fw_s + sds;
 				zw <= zw + t_dzdx;
 				cw <= cw + t_dcdx;
+				aw <= aw + t_dadx; bw <= bw + t_dbdx; qw <= qw + t_dqdx;
 				t_x <= t_x + 9'd1;
 				if (t_x == t_bx1) rs <= R_TNEXT;
 			end
@@ -666,6 +898,7 @@ module gpu_t2_wb #(
 				f_2 <= f_2 - sdx_2;
 				zrow <= zrow + t_dzdy;
 				crow <= crow + t_dcdy;
+				arow <= arow + t_dady; brow <= brow + t_dbdy; qrow <= qrow + t_dqdy;
 				t_y <= t_y + 8'd1;
 				if (t_y == t_y1) rs <= R_DRAIN;
 				else rs <= R_TROW;
@@ -733,7 +966,7 @@ module gpu_t2_wb #(
 
 	// ------------------------------------------------------------------
 	// the output side: a drawn strip to chunky VRAM, clearing behind
-	// (today's engine's, gpu_tri.v, without MONO)
+	// (chunky VRAM, or main memory when LINEAR)
 	// ------------------------------------------------------------------
 
 	localparam [2:0] O_IDLE = 3'd0, O_BEAM = 3'd1, O_READ = 3'd2, O_DATA = 3'd3,
@@ -971,6 +1204,9 @@ module gpu_t2_wb #(
 					4'd2: if (!f_full) wb_ack_o <= 1'b1;
 					4'd3: begin vbase <= wb_dat_i; wb_ack_o <= 1'b1; end
 					4'd5: begin soft_rst <= 1'b1; wb_ack_o <= 1'b1; end
+					// TEXADDR, TEXDATA (the texture memory is written above)
+					4'd12: begin tex_wa <= wb_dat_i[TX_LOG2-3:0]; wb_ack_o <= 1'b1; end
+					4'd13: begin tex_wa <= tex_wa + 1'b1; wb_ack_o <= 1'b1; end
 					default: wb_ack_o <= 1'b1;
 					endcase
 				end else begin
@@ -980,6 +1216,8 @@ module gpu_t2_wb #(
 					4'd3: wb_dat_o <= vbase;
 					4'd4: wb_dat_o <= strips;
 					4'd7: wb_dat_o <= 32'h5A545232;
+					// CAPS: textures, and the texture memory's size
+					4'd11: wb_dat_o <= {19'd0, TX_LOG2_5, 7'd0, TEX ? 1'b1 : 1'b0};
 					default: wb_dat_o <= 32'd0;
 					endcase
 					wb_ack_o <= 1'b1;

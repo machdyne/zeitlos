@@ -6519,6 +6519,8 @@ static int create_dock(void) {
 // effect without a restart. The dock is resized to its new contents in
 // place; a launch still in progress loses its inverted icon (its window
 // still opens).
+static bool console_mode;     /* the console profile: no dock (main()) */
+
 static void dock_reload(void) {
 
 	if (console_mode) return;

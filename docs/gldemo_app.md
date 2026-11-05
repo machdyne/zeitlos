@@ -13,12 +13,9 @@ colour window are the runtime's.
 > run gldemo
 ```
 
-It runs on every board, in software. `run gldemo soft` keeps the
-window in software even where there is an engine, to compare. On a bitstream with the triangle
-engine ([gpu_tri.md](gpu_tri.md)), the engine draws its black-and-white
-window whenever one rectangle of it is visible.
+It runs on every board, in software.
 
-## Chunky, and the triangle engine
+## Chunky, and T2
 
 ```
 > run gldemo chunky
@@ -29,15 +26,15 @@ On a board with chunky game mode, `chunky` runs the scene full screen
 at a byte a pixel, without the arcade runtime, as Doom does
 ([zgl.md](zgl.md), "Chunky").
 
-- **Who draws it.** The triangle engine draws it if the bitstream has
-  one ([gpu_tri.md](gpu_tri.md)); otherwise the software strips write
-  straight to VRAM. `soft` uses the software even where there is an
-  engine, to compare.
+- **Who draws it.** T2 draws it if the bitstream has it
+  ([zgl_t2.md](zgl_t2.md)); otherwise the software strips write
+  straight to VRAM. `soft` uses the software even where there is T2,
+  to compare.
 - **What it reports.** The first line on the console says which one is
   drawing. Every two seconds it prints:
   - the frame rate, and the cycles a frame takes to draw;
   - where those cycles go: the scene's GL calls (the front end), with
-    their instructions; `zgl_frame()` (the engine's commands, or the
+    their instructions; `zgl_frame()` (the end of T2's stream, or the
     software strips), with its instructions; and the wait in
     `glFinish()`.
 - **On the way out** it clears chunky VRAM. Its second sheet is the
@@ -54,6 +51,7 @@ at a byte a pixel, without the arcade runtime, as Doom does
 | S | smooth or flat shading (`glShadeModel`) |
 | D | depth test on or off |
 | L | lighting on or off |
+| O | a lamp going round the scene: a positional light, fading with distance |
 | P | 256, 64 or 16 colours in full screen (`ar_set_colours`) |
 | Space | pause |
 | F11 | full screen (game mode), or back to the window |

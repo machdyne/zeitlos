@@ -39,6 +39,9 @@ static int engine_kind;          /* what zglc_open() reports */
 int zglc_open(uint8_t flags) { return (flags & ZGL_NO_ENGINE) ? 0 : engine_kind; }
 void zglc_put(uint32_t w) { if (ncmd < (1u << 20)) cmd[ncmd++] = w; }
 void zglc_finish(void) {}
+/* T2's texture memory: the model's */
+uint32_t zglc_tex_room(void) { return engine_kind == 2 ? 1u << T2_TEX_LOG2 : 0; }
+void zglc_tex_put(uint32_t word, uint32_t v) { t2_model_tex(word, v); }
 void zglc_strip(int32_t y0, int rows, int32_t cx0, int32_t cx1, const uint8_t *col) {
 	int r;
 	for (r = 0; r < rows; r++)
@@ -52,6 +55,8 @@ static int have_fw;
 /* -- the scenes -------------------------------------------------------------- */
 
 static GLuint l_sphere, l_cube, l_mixed, l_ring;
+/* textured scenes: the cube's faces and the sphere textured */
+static bool tex_scene;
 
 /* a sphere of quad strips and fans, lit (normals = positions) */
 static void sphere(int r, int nlat, int nlon) {
@@ -64,8 +69,10 @@ static void sphere(int r, int nlat, int nlon) {
 			GLfixed x0 = (GLfixed)(((int64_t)zglCos(a0) * zglCos(b)) >> 16), y0 = zglSin(a0), z0 = (GLfixed)(((int64_t)zglCos(a0) * zglSin(b)) >> 16);
 			GLfixed x1 = (GLfixed)(((int64_t)zglCos(a1) * zglCos(b)) >> 16), y1 = zglSin(a1), z1 = (GLfixed)(((int64_t)zglCos(a1) * zglSin(b)) >> 16);
 			glNormal3x(x1, y1, z1);
+			if (tex_scene) glTexCoord2i(j * 4, (i + 1) * 4);
 			glVertex3x(x1 * r, y1 * r, z1 * r);
 			glNormal3x(x0, y0, z0);
+			if (tex_scene) glTexCoord2i(j * 4, i * 4);
 			glVertex3x(x0 * r, y0 * r, z0 * r);
 		}
 		glEnd();
@@ -91,7 +98,11 @@ static void cube(int s, bool materials) {
 		glBegin(GL_QUADS);
 		glNormal3x(n[f][0] * 65536 * nscale, n[f][1] * 65536 * nscale, n[f][2] * 65536 * nscale);
 		glIndexi(20 + f * 30);
-		for (k = 0; k < 4; k++) glVertex3i(q[f][k][0] * s, q[f][k][1] * s, q[f][k][2] * s);
+		for (k = 0; k < 4; k++) {
+			/* twice round a face, from a corner off the texture's */
+			if (tex_scene) glTexCoord2i(((k == 1 || k == 2) ? 32 : 0) + f, (k >= 2 ? 32 : 0) - f);
+			glVertex3i(q[f][k][0] * s, q[f][k][1] * s, q[f][k][2] * s);
+		}
 		glEnd();
 	}
 }
@@ -146,12 +157,30 @@ static void lists(void) {
 	glNewList(l_ring, GL_COMPILE); ring(); glEndList();
 	l_cube = l_sphere + 1;
 	l_mixed = l_sphere + 2;
-	glNewList(l_sphere, GL_COMPILE); sphere(100, 10, 16); glEndList();
-	glNewList(l_cube, GL_COMPILE); cube(30, true); glEndList();
+	glNewList(l_sphere, GL_COMPILE);
+	if (tex_scene) glBindTexture(GL_TEXTURE_2D, 2);
+	sphere(100, 10, 16);
+	glEndList();
+	glNewList(l_cube, GL_COMPILE);
+	if (tex_scene) glBindTexture(GL_TEXTURE_2D, 1);
+	cube(30, true);
+	glEndList();
 	glNewList(l_mixed, GL_COMPILE); mixed(); glEndList();
 }
 
-typedef struct { bool smooth, depth, lit, cull, immediate, near; uint32_t angle; bool norm; } smode_t;
+typedef struct { bool smooth, depth, lit, cull, immediate, near; uint32_t angle; bool norm, tex, point; } smode_t;
+
+/* the textures: a 16x16 checker of tones, and 8x8 stripes of ramps
+ * with holes (texel 0, keyed) */
+static void make_textures(void) {
+	static uint8_t chk[256], str[64];
+	int x, y;
+	for (y = 0; y < 16; y++) for (x = 0; x < 16; x++) chk[y * 16 + x] = ((x >> 2) ^ (y >> 2)) & 1 ? 15 : 6;
+	for (y = 0; y < 8; y++) for (x = 0; x < 8; x++)
+		str[y * 8 + x] = ((x + y) & 3) == 0 ? 0 : (uint8_t)(0x40 + ((x + y) & 3) * 0x20 + 9);
+	CHECK(zglTexImage(1, 4, 4, chk, ZGL_TEX_TONE, false), "zglTexImage 1");
+	CHECK(zglTexImage(2, 3, 3, str, ZGL_TEX_RAMP, true), "zglTexImage 2");
+}
 
 static void scene(const smode_t *m) {
 	GLfixed light[4] = { -40000, 50000, 40000, 0 }, white[4] = { 65536, 65536, 65536, 65536 };
@@ -163,7 +192,26 @@ static void scene(const smode_t *m) {
 	glLightxv(GL_LIGHT0, GL_POSITION, light);
 	glLightxv(GL_LIGHT0, GL_DIFFUSE, white);
 	glEnable(GL_LIGHT0);
+	/* a positional light: a lamp up and to the right of the sphere,
+	 * fading with distance; and light 1 directional from the left */
+	if (m->point) {
+		GLfixed lamp[4] = { 180 * 65536, 120 * 65536, -380 * 65536, 65536 }, left[4] = { -65536, 0, 0, 0 };
+		GLfixed dim[4] = { 30000, 30000, 30000, 65536 };
+		glLightxv(GL_LIGHT0, GL_POSITION, lamp);
+		glLightf(GL_LIGHT0, GL_CONSTANT_ATTENUATION, 0.5f);
+		glLightf(GL_LIGHT0, GL_LINEAR_ATTENUATION, 0.004f);
+		glLightf(GL_LIGHT0, GL_QUADRATIC_ATTENUATION, 0.00001f);
+		glLightxv(GL_LIGHT1, GL_POSITION, left);
+		glLightxv(GL_LIGHT1, GL_DIFFUSE, dim);
+		glEnable(GL_LIGHT1);
+	} else {
+		glLightf(GL_LIGHT0, GL_CONSTANT_ATTENUATION, 1.0f);
+		glLightf(GL_LIGHT0, GL_LINEAR_ATTENUATION, 0.0f);
+		glLightf(GL_LIGHT0, GL_QUADRATIC_ATTENUATION, 0.0f);
+		glDisable(GL_LIGHT1);
+	}
 	glClearIndex(3);
+	if (m->tex) glEnable(GL_TEXTURE_2D); else glDisable(GL_TEXTURE_2D);
 	glShadeModel(m->smooth ? GL_SMOOTH : GL_FLAT);
 	if (m->depth) glEnable(GL_DEPTH_TEST); else glDisable(GL_DEPTH_TEST);
 	if (m->cull) glEnable(GL_CULL_FACE); else glDisable(GL_CULL_FACE);
@@ -212,6 +260,7 @@ static int compare(const smode_t *m, const char *name) {
 	t2_stats_t st;
 	int x, y, diff = 0, rc;
 	nscale = m->norm ? 3 : 1;
+	tex_scene = m->tex;
 	/* software */
 	engine_kind = 0;
 	memset(soft, 0xa5, sizeof(soft));
@@ -228,12 +277,44 @@ static int compare(const smode_t *m, const char *name) {
 	d.flags = ZGL_CHUNKY;
 	zgl_open(&d);
 	CHECK(zgl_info()->backend == ZGL_BACKEND_T2, "%s: backend %d", name, zgl_info()->backend);
+	if (m->tex) make_textures();
 	lists();
 	scene(m);
 	zgl_frame();
 	zgl_close();
 	rc = t2_model_run(cmd, ncmd, eng, &st);
 	CHECK(rc == 0, "%s: the model refused the stream (%u words)", name, ncmd);
+	if (m->point && getenv("T2_PGM")) {
+		char fn[512];
+		FILE *f;
+		snprintf(fn, sizeof(fn), "%spoint.pgm", getenv("T2_PGM"));
+		f = fopen(fn, "wb");
+		fprintf(f, "P5\n320 240\n255\n");
+		fwrite(eng, 1, sizeof(eng), f);
+		fclose(f);
+	}
+	if (m->tex) {
+		/* textured records there are, and the picture to look at */
+		uint32_t nm, i, ntt = 0;
+		const uint32_t *ml = t2r_list(&nm);
+		for (i = 0; i < nm; ) {
+			uint32_t k = ml[i] & 3;
+			if (k == T2_REC_TTRI) ntt++;
+			i += k == T2_REC_TRI ? T2_REC_WORDS : k == T2_REC_TTRI ? T2_REC_TWORDS : 10;
+		}
+		CHECK(ntt > 20, "%s: %u textured triangles", name, ntt);
+		printf("test_t2: %-28s %u textured triangles\n", "", ntt);
+		if (getenv("T2_PGM")) {
+			static int npgm;
+			char fn[512];
+			FILE *f;
+			snprintf(fn, sizeof(fn), "%s%d.pgm", getenv("T2_PGM"), npgm++);
+			f = fopen(fn, "wb");
+			fprintf(f, "P5\n320 240\n255\n");
+			fwrite(eng, 1, sizeof(eng), f);
+			fclose(f);
+		}
+	}
 	/* the RTL bench's vectors (rtl/gpu/bench/tb_zeitlos32g.v): the
 	 * stream, and the records the model made of it */
 	if (getenv("T2_VEC")) {
@@ -261,6 +342,11 @@ static int compare(const smode_t *m, const char *name) {
 			for (i = 0; i < 19200; i++) fprintf(f, "%08x\n", vr[i]);
 			fclose(f);
 		}
+		/* the texture memory, as the bench writes it (TEXADDR, TEXDATA) */
+		snprintf(fn, sizeof(fn), "%s/t%d.hex", getenv("T2_VEC"), nvec);
+		f = fopen(fn, "w");
+		for (i = 0; i < (1u << T2_TEX_LOG2) / 4u; i++) fprintf(f, "%08x\n", t2_model_tex_word(i));
+		fclose(f);
 		snprintf(fn, sizeof(fn), "%s/r%d.hex", getenv("T2_VEC"), nvec);
 		f = fopen(fn, "w");
 		fprintf(f, "%08x\n%08x\n", ncmd, nm);
@@ -312,12 +398,22 @@ int main(void) {
 		{ "immediate, normalize",        { false, true, true, true, true, false, 14000, true }, 0 },
 		{ "lists, normalize",            { false, true, true, true, false, false, 14000, true }, 400 },
 		{ "lists, normalize, smooth",    { true, true, true, true, false, false, 29000, true }, 400 },
+		/* textures: the software draws the colours, T2 the textures --
+		 * the comparison is the firmware's against the model's records
+		 * (zeitlos32g) and the vectors; the pixels may differ anywhere */
+		{ "lists, textured",             { true, true, true, true, false, false, 12000, false, true }, 76800 },
+		{ "lists, textured, near",       { true, true, true, false, false, true, 21000, false, true }, 76800 },
+		/* a positional light with attenuation, and a directional one:
+		 * the software lights in the eye's space, T2 in the model's */
+		{ "immediate, point light",      { true, true, true, true, true, false, 7000, false, false, true }, 0 },
+		{ "lists, point light",          { true, true, true, true, false, false, 7000, false, false, true }, 600 },
+		{ "lists, point light, normalize", { true, true, true, true, false, false, 26000, true, false, true }, 600 },
 	};
 	unsigned i;
 	cmd = malloc((1u << 20) * 4);
-	have_fw = t2g_load("../../t2fw/t2fw.bin") == 0;
+	have_fw = t2g_load("../../t2fw/t2fw_tex.bin") == 0;
 	if (have_fw) t2g_reset();
-	else printf("test_t2: no sw/t2fw/t2fw.bin: zeitlos32g not run\n");
+	else printf("test_t2: no sw/t2fw/t2fw_tex.bin: zeitlos32g not run\n");
 	for (i = 0; i < sizeof(t) / sizeof(t[0]); i++) {
 		int d = compare(&t[i].m, t[i].name);
 		CHECK(d <= t[i].tol, "%s: %d pixels differ (allowed %d)", t[i].name, d, t[i].tol);

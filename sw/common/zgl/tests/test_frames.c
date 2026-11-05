@@ -11,7 +11,6 @@
 #include <stdbool.h>
 #include "../zgl.h"
 #include "../zgl_int.h"
-#include "t_model.h"
 
 static uint8_t pic[240][320];      /* indices (colour) or bits (mono) */
 static bool colour = true;
@@ -38,10 +37,6 @@ void ar_bitmap_opaque(const void *bits, int stride, int sx, int sy, int x, int y
 
 static int bad;
 
-/* the engine's commands, collected */
-static uint32_t *t_cmd;
-static int t_ncmd;
-static void t_put(uint32_t w) { t_cmd[t_ncmd++] = w; }
 #define CHECK(c, ...) do { if (!(c)) { bad++; printf("FAIL: " __VA_ARGS__); printf("\n"); } } while (0)
 
 static void ortho(void) {
@@ -280,66 +275,6 @@ int main(void) {
 		glDeleteLists(base, 2);
 		CHECK(!glIsList(base), "glDeleteLists");
 		CHECK(glGetError() == GL_NO_ERROR, "lists: an error");
-	}
-
-	/* 9. the triangle engine's commands, carried out by its model,
-	 * draw what the software strips draw: random scenes of smooth and
-	 * flat triangles and lines, with and without depth, through a
-	 * perspective and an orthographic view */
-	{
-		static uint32_t cmd[200000];
-		static uint8_t sw[240][320], tm[240][320];
-		int scene, diff = 0, total = 0, strips = 0;
-		for (scene = 0; scene < 12; scene++) {
-			int pass;
-			for (pass = 0; pass < 2; pass++) {
-				int k;
-				t_ncmd = 0;
-				t_cmd = cmd;
-				srand(100 + scene);
-				if (scene & 1) ortho();
-				else {
-					glMatrixMode(GL_PROJECTION); glLoadIdentity(); zglFrustumi(-40, 40, -30, 30, 64, 4000);
-					glMatrixMode(GL_MODELVIEW); glLoadIdentity();
-				}
-				glClearIndex((float)(scene & 3));
-				if (scene & 2) glEnable(GL_DEPTH_TEST); else glDisable(GL_DEPTH_TEST);
-				glShadeModel(scene & 4 ? GL_FLAT : GL_SMOOTH);
-				if (scene == 8) { glEnable(GL_SCISSOR_TEST); glScissor(37, 21, 211, 150); }
-				for (k = 0; k < 60; k++) {
-					int j;
-					glBegin(k % 5 == 4 ? GL_LINES : GL_TRIANGLES);
-					for (j = 0; j < (k % 5 == 4 ? 2 : 3); j++) {
-						glIndexi(16 + rand() % 200);
-						if (scene & 1) glVertex3i(rand() % 400 - 40, rand() % 320 - 40, rand() % 2 ? 0 : 0);
-						else glVertex3i(rand() % 1200 - 600, rand() % 900 - 450, -100 - rand() % 1500);
-					}
-					glEnd();
-				}
-				glDisable(GL_SCISSOR_TEST);
-				if (pass == 0) {
-					memset(pic, 0, sizeof pic);
-					zgl_frame();
-					memcpy(sw, pic, sizeof pic);
-				} else {
-					int r;
-					zglf_t_frame(t_put);
-					memset(tm, 0, sizeof tm);
-					r = t_model_run(cmd, t_ncmd, tm);
-					CHECK(r > 0, "model: scene %d, %d", scene, r);
-					strips += r;
-				}
-			}
-			for (y = 0; y < 240; y++) for (x = 0; x < 320; x++) {
-				total += sw[y][x] != (uint8_t)(scene & 3);
-				diff += sw[y][x] != tm[y][x];
-			}
-		}
-		CHECK(diff == 0 && total > 50000, "engine model: %d of %d drawn pixels differ", diff, total);
-		printf("  engine model: %d strips, %d pixels drawn, %d differ from the software\n", strips, total, diff);
-		glDisable(GL_DEPTH_TEST);
-		glShadeModel(GL_FLAT);
-		glClearIndex(0);
 	}
 
 	/* 10. monochrome: a white index lit, a black one dark */

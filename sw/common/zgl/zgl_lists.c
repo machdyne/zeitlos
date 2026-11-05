@@ -179,6 +179,8 @@ ZGL_HOT void glCallList(GLuint list) {
 		case ZGLR_ENABLE:    glEnable((GLenum)o->a); break;
 		case ZGLR_DISABLE:   glDisable((GLenum)o->a); break;
 		case ZGLR_CALL:      glCallList((GLuint)o->a); break;
+		case ZGLR_TEXCOORD:  zgl_s.tex_s = o->a; zgl_s.tex_t = o->b; break;
+		case ZGLR_BIND:      zgl_s.tex_bound = (uint32_t)o->a; break;
 		default: break;
 		}
 	}

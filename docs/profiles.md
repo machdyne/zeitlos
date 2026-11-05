@@ -120,9 +120,8 @@ write queue (1,024 words).
 Block RAM 56 of 56: T2 30 (record list 11, code 6, stream FIFO 4,
 write queue 3, strip buffers 3 at 6 rows, data 2, the rest 1), VRAM
 10, BIOS 4, I-cache 3, glyphs 2, video 2, the two USB ports 1 each,
-audio 1, the fetch 1, the ROM 1. The lakritz board build sits at
-98% and meets 48 MHz, so 95% should place; timing is the open
-question.
+audio 1, the fetch 1, the ROM 1. A release build places, and meets
+timing: 53.03 MHz against the 48 needed.
 
 ### Sergei ML2 (`sergei_ml2_console`)
 
@@ -132,10 +131,21 @@ read a word at a time (the DDR3 controller holds a 16-byte block, so a
 line's words after each block's first come in a cycle) -- T2 writing it
 there, no rasterizer, no MPU, no RTC; no pointer and no Keccak (room
 for T2, as on `sergei_ml2` with T2). It keeps the network (RMII), so
-software can be updated over the wire while it is being tested. On the 45F nothing
-else has to give: 73 of 108 block RAMs and 71% of TRELLIS_COMB at
-packing (yowasp yosys 0.70, `-abc9`). What works here should work on
-Lakritz, bar the memory controller.
+software can be updated over the wire while it is being tested. What
+works here should work on Lakritz, bar the memory controller.
+
+Two things only it has, the 45F having the room:
+
+- **Write combining in the DDR3 controller** (`DDR3_WCOMBINE`,
+  [ddr3.md](ddr3.md)): stores merge into whole 16-byte blocks, so T2's
+  picture goes out at about 8 cycles a word rather than 19.
+- **T2's textures** (`T2_TEX_LOG2=13`, [zgl_t2.md](zgl_t2.md),
+  "Textures"): an 8 KB texture memory, perspective-correct.
+
+82 of 108 block RAMs and 76% of TRELLIS_COMB at packing (yowasp yosys
+0.70, `-abc9`). On it gldemo's chunky scene runs at 65 frames a second
+(T2, the picture in main memory, three pages: zgl_t2.md, "Pages"), from
+37 before the pages.
 
 ## The headless profile
 

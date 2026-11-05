@@ -1,11 +1,14 @@
 # T2: the triangle engine that runs the whole frame
 
-Status: **built and checked in simulation (RTL bench, every VRAM word);
-in the SOC behind `GPU_T2`; not yet on hardware.** The plan and the
-decisions are in the project's `claude/zgl-t2-proposal.md`.
+Status: **in the SOC behind `GPU_T2`, running on hardware:** sergei_ml2
+(gldemo chunky at the display's 60 frames a second, chunky VRAM) and
+sergei_ml2_console (65 a second, the picture in main memory). Checked in
+simulation, every word of the picture against the model. Textures and
+positional lights are checked in simulation, not yet on hardware. The
+plan and the decisions are in the project's `claude/zgl-t2-proposal.md`.
 
-Today's triangle engine ([gpu_tri.md](gpu_tri.md)) draws the pixels;
-the CPU still does everything before them, and on sergei_ml2 that was
+The first triangle engine, gpu_tri (retired), drew only the pixels;
+the CPU still did everything before them, and on sergei_ml2 that was
 most of a frame (gldemo: 7.8 M of 9.9 M cycles). T2 takes the rest:
 transform, lighting, culling, clipping, triangle setup and binning.
 The CPU describes the frame.
@@ -102,12 +105,45 @@ from every record that touches the strip:
 - Four pixels a clock was the first design; it cost too much of the
   45F for no gain, since the geometry unit sets a frame's pace.
 
+## Textures
+
+Built with `T2_TEX_LOG2` (13 in sergei_ml2_console: 8 KB), T2 draws
+textured triangles ([zgl.md](zgl.md), "Textures", for the GL side):
+
+- **The stream.** A chunk with `T2_C_TEX` carries a texture word (where
+  the texture is, its size, mode and key) and `s | t` a vertex (texels,
+  12.4); STATE bit 5 turns texturing on for the frame. Off, or on a T2
+  without textures, such a chunk is drawn in its colours.
+- **The geometry unit** (`sw/t2fw/t2fw_tex.hex`, 16 KB of code and 8 KB
+  of data) clips s and t with the rest in clip space and writes a TTRI
+  record: TRI's words and three more planes, s/w, t/w and 1/w, which
+  are linear on the screen (`zgl_t2.h`, "TTRI").
+- **The raster** divides per pixel, a pixel a clock still: Q's leading
+  bit and a 1,024-entry reciprocal table (`rtl/gpu/t2_recip.hex`, from
+  `gen_t2_recip.py`), A and B brought to 18 bits, two multipliers,
+  shifts, the texel's place, the texture memory, the mode -- eight
+  stages before the depth test (`t2_uv()`, `t2_texel_at()`,
+  `t2_combine()` in `zgl_t2.h` are the same arithmetic, which the model
+  uses). Untextured pixels do not pass through them.
+- **The texture memory** is written by the CPU, a word of four texels
+  at a time (TEXADDR, TEXDATA), while T2 is idle.
+
+Cost: about 1,300 LUT4, 150 CCU2C, 1,700 FF, 9 DP16KD (texture memory
+4, reciprocals 1, the core's bigger memories 4) and 3 MULT18X18D. A
+textured triangle costs the geometry unit three more planes: test_t2's
+textured frame about 1.0 M cycles in the RTL bench against 660 k
+untextured; mausrun3d's frames 619 k a frame of geometry against 514 k
+(the ISS, the textured firmware).
+
 ## Registers
 
-As today's engine's ([gpu_tri.md](gpu_tri.md)), at the same address:
+At 0x7C00_0000 (the first engine's address; zsoc.h's Z_GTRI_*):
 CTRL (WAIT_BEAM, VSYNC), STATUS (busy: anything in the FIFO, the core
 working, a strip being drawn or going out), CMD, VBASE, STRIPS, RESET,
-ID = 0x5A545232 ("ZTR2"). No MONO.
+ID = 0x5A545232 ("ZTR2"). And for textures: CAPS (11, read: bit
+0 textures, bits 12:8 the texture memory's size as log2 texels; 0 on a
+T2 without), TEXADDR (12) and TEXDATA (13, four texels; TEXADDR moves
+on).
 
 The geometry unit's own registers (`sw/t2fw/io.c`): IN, STATUS (the
 raster has the list), RX, RY, CLEAR, GO, and the record list.
@@ -119,8 +155,8 @@ make BOARD=sergei_ml2 EXTRA_DEFINES="-DGPU_T2 -DNO_KECCAK"                    # 
 make BOARD=sergei_ml2 EXTRA_DEFINES="-DGPU_T2 -DNO_KECCAK -DCPU_ZEITLOS32P"
 ```
 
-`GPU_T2` takes `GPU_TRI`'s place (the same address, VRAM port and
-plumbing in sysctl.v). After changing `t2fw.c`, `make -C sw/t2fw`
+`GPU_T2` puts T2 into the SOC (it shares the rasterizer's VRAM port,
+rtl/gpu/gpu_vmux.v). After changing `t2fw.c`, `make -C sw/t2fw`
 rebuilds `t2fw.hex`.
 
 ## Size and speed
@@ -150,7 +186,7 @@ the same answers).
 
 | sergei_ml2, picorv32, nextpnr 0.11 (yowasp), default seed | COMB | DP16KD | sys_clk |
 |---|---|---|---|
-| today's engine (`GPU_TRI`), with the depth-test stage | 83% | 88 | 51.10 MHz |
+| the first engine (gpu_tri, retired), with the depth-test stage | 83% | 88 | 51.10 MHz |
 | T2 (`GPU_T2`) | 93% | 102 | not routed after 90 minutes |
 | T2 without Keccak (`GPU_T2 NO_KECCAK`) | **78%** (34,579) | 99 | **52.70 MHz** |
 
@@ -231,10 +267,12 @@ stay.
 make -C sw/common/zgl test       # test_t2: model vs software; firmware (ISS) vs model
 make -C sw/common/zgl simtest    # chunkytest, ZSIM_GTRI=2
 T2_VEC=../../../rtl/gpu/bench/t2 sw/common/zgl/tests/test_t2   # the RTL benches' vectors
-cp sw/t2fw/t2fw.hex rtl/gpu/bench/t2/
+cp sw/t2fw/t2fw.hex sw/t2fw/t2fw_tex.hex rtl/gpu/bench/t2/
+make rtl/gpu/t2_recip.hex       # the reciprocal table (gen_t2_recip.py), for -DTEX
 cd rtl/gpu/bench
 iverilog -g2005 -DVEC=2 -o /tmp/tb_z32g tb_zeitlos32g.v ../zeitlos32g.v && vvp /tmp/tb_z32g
 iverilog -g2005 -DVEC=2 -o /tmp/tb_t2 tb_gpu_t2.v ../gpu_t2.v ../zeitlos32g.v && vvp /tmp/tb_t2
+iverilog -g2005 -DVEC=10 -DTEX -DLINEAR -DPOST=10 -o /tmp/tb_t2t tb_gpu_t2.v ../gpu_t2.v ../zeitlos32g.v && vvp /tmp/tb_t2t
 ```
 
 - `test_t2`: the same scenes by the software strips and by T2's model:
@@ -250,6 +288,16 @@ iverilog -g2005 -DVEC=2 -o /tmp/tb_t2 tb_gpu_t2.v ../gpu_t2.v ../zeitlos32g.v &&
   `-DLINEAR` builds T2 LINEAR (below) and holds the linear picture to
   the same model; `-DSLOW` acks each write after 4-12 cycles, as main
   memory behind the bus; `-DPOST=10` adds the posted-write queue.
+- Positional lights: test_t2's "immediate, point light" (0 pixels
+  differ), "lists, point light" and "lists, point light, normalize"
+  (a few pixels by one index: the software lights in the eye's space,
+  T2 in the model's, PLIGHT).
+- Textures: test_t2's "lists, textured" and "lists, textured, near"
+  (frames 10 and 11) hold the firmware's TTRI records to the model's;
+  `tb_gpu_t2 -DTEX` writes the texture memory through TEXADDR and
+  TEXDATA and holds every word of the picture to the model's: frames 10
+  and 11 pass, and an untextured frame with and without textures built
+  in. `T2_PGM=prefix` writes the textured frames as pictures of indices.
 - space3d's `make render-chunky` plays the game in chunky game mode
   on the host twice, by the software strips and by T2's model, and
   holds the pictures to each other: 0 pixels differ.
@@ -258,11 +306,16 @@ iverilog -g2005 -DVEC=2 -o /tmp/tb_t2 tb_gpu_t2.v ../gpu_t2.v ../zeitlos32g.v &&
 
 ## Next
 
-- On hardware: `run gldemo chunky` against `chunky soft`.
-- Speed: the geometry unit is the longest part of a list frame. The
-  firmware has room (64-bit arithmetic where 32 bits would do; the
-  record copy), and so has the core (loads in 2 cycles if timing
-  allows, a 4-wide multiply-add instruction for transforms).
+- On hardware: textures (mausrun3d, T) and positional lights (gldemo, O).
+- Speed: the geometry unit is the longest part of a list frame (about
+  1,250 cycles a triangle; loads, at 3 cycles each, are a third of
+  it). The core could load in 2 cycles if timing allows; a frame's
+  geometry could overlap the last frame's raster with a second record
+  list (11 DP16KD).
+- Size: T2 does not fit the 25F desktop builds at all, and only just
+  fits the 45F ones. (RV32IMC for the geometry core was measured: 26%
+  less code, but its expander would cost more LUTs than the block RAM
+  it saves, and no speed.)
 - More triangles than the record list holds (512): zgl sends the frame
   again for each group of strips (not yet: extra records are dropped
   and counted).

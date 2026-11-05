@@ -285,6 +285,58 @@ static uint8_t face_mat(const w3_world_t *w, int x, int z, uint8_t k, bool top) 
 	}
 }
 
+/* -- textures (docs/mausrun3d.md, "Textures") --------------------------------
+ *
+ * A material's faces are drawn on T2 with a 16x16 texture of tones, one
+ * a tile, its ramp the material's own (ZGL_TEX_TONE: the texel's tone
+ * lit), mostly mausrun's own tile drawings. Texture name m is material
+ * m's. */
+#include "../mausrun/sprites.h"
+
+/* mausrun's 1-bit tile, ink and paper as tones */
+static void tex_tile(uint8_t *t, const uint32_t *rows, uint8_t ink, uint8_t paper) {
+	int x, y;
+	for (y = 0; y < 16; y++)
+		for (x = 0; x < 16; x++)
+			t[y * 16 + x] = (rows[y] >> x) & 1 ? ink : paper;
+}
+
+/* specks of two tones on a third, from a hash: grass, sand */
+static void tex_specks(uint8_t *t, uint32_t seed, uint8_t base, uint8_t a, uint8_t b, int pa, int pb) {
+	int i;
+	for (i = 0; i < 256; i++) {
+		uint32_t h = ((uint32_t)i + seed) * 0x9E3779B1u;
+		h ^= h >> 15; h *= 0x85EBCA77u; h ^= h >> 13;
+		t[i] = (int)(h % 100) < pa ? a : (int)(h % 100) < pa + pb ? b : base;
+	}
+}
+
+/* boards across: a shelf from above */
+static void tex_boards(uint8_t *t) {
+	int x, y;
+	for (y = 0; y < 16; y++)
+		for (x = 0; x < 16; x++)
+			t[y * 16 + x] = (y & 3) == 3 ? 9 : ((x + (y >> 2) * 5) % 16 == 0 ? 11 : 15);
+}
+
+bool w3_textures(void) {
+	static uint8_t t[256];
+	bool ok = true;
+	tex_specks(t, 11, 13, 15, 10, 14, 10);               ok &= zglTexImage(M_GRASS, 4, 4, t, ZGL_TEX_TONE, false);
+	tex_tile(t, mr_tile_ground, 14, 9);                  ok &= zglTexImage(M_EARTH, 4, 4, t, ZGL_TEX_TONE, false);
+	tex_tile(t, mr_tile_floor, 10, 15);                  ok &= zglTexImage(M_PATH, 4, 4, t, ZGL_TEX_TONE, false);
+	tex_specks(t, 77, 14, 15, 11, 18, 8);                ok &= zglTexImage(M_SAND, 4, 4, t, ZGL_TEX_TONE, false);
+	tex_tile(t, mr_tile_crumble, 10, 15);                ok &= zglTexImage(M_ROCK, 4, 4, t, ZGL_TEX_TONE, false);
+	tex_tile(t, mr_tile_box, 15, 10);                    ok &= zglTexImage(M_BOX, 4, 4, t, ZGL_TEX_TONE, false);
+	tex_tile(t, mr_tile_qbox, 15, 9);                    ok &= zglTexImage(M_QBOX, 4, 4, t, ZGL_TEX_TONE, false);
+	tex_boards(t);                                       ok &= zglTexImage(M_SHELF, 4, 4, t, ZGL_TEX_TONE, false);
+	tex_tile(t, mr_tile_spring, 15, 8);                  ok &= zglTexImage(M_SPRING, 4, 4, t, ZGL_TEX_TONE, false);
+	tex_tile(t, mr_tile_crumble, 9, 15);                 ok &= zglTexImage(M_BISCUIT, 4, 4, t, ZGL_TEX_TONE, false);
+	tex_tile(t, mr_tile_thorns, 15, 8);                  ok &= zglTexImage(M_THORNS, 4, 4, t, ZGL_TEX_TONE, false);
+	tex_tile(t, mr_tile_water, 15, 12);                  ok &= zglTexImage(M_WATER, 4, 4, t, ZGL_TEX_TONE, false);
+	return ok;
+}
+
 /* a merged face: a rectangle u0..u0+du, v0..v0+dv on layer l */
 typedef struct { uint8_t u, v, du, dv, l, m; } mq_t;
 
@@ -399,13 +451,27 @@ static void collect(const w3_world_t *w, int d, int x0, int z0, int ymax) {
 
 #define WATER_DIP 3      /* the water's surface this far under its block's top */
 
-static void vtx(int x, int y, int z) { glVertex3i(x, y, z); }
+/* the face set being emitted, and its cell's corner (world units): a
+ * texture coordinate is a world unit a texel, from the cell's corner
+ * (a tile a repeat, and well inside a coordinate's 16 bits) -- across
+ * a top, along a side and down it */
+static int tx_d, tx_x, tx_z;
+
+static void vtx(int x, int y, int z) {
+	switch (tx_d) {
+	case W3_FX: case W3_FNX: glTexCoord2i(z - tx_z, W3_H * W3_T - y); break;
+	case W3_FZ: case W3_FNZ: glTexCoord2i(x - tx_x, W3_H * W3_T - y); break;
+	default:                 glTexCoord2i(x - tx_x, z - tx_z); break;
+	}
+	glVertex3i(x, y, z);
+}
 
 /* a quad as world units, its corners counter-clockwise seen from where
  * it faces (GL's front) */
 static void emit(int d, const mq_t *q, int x0, int z0) {
 	const int T = W3_T;
 	int u0 = q->u, v0 = q->v, u1 = q->u + q->du, v1 = q->v + q->dv, l = q->l;
+	tx_d = d; tx_x = x0 * T; tx_z = z0 * T;
 	switch (d) {
 	case W3_FY: {
 		int Y = (l + 1) * T, xa = (x0 + u0) * T, xb = (x0 + u1) * T, za = (z0 + v0) * T, zb = (z0 + v1) * T;
@@ -492,6 +558,7 @@ void w3_cell_build(w3_world_t *w, int cx, int cz) {
 						mat[0] = mat_ramp[m] + 3;
 						mat[1] = mat[2] = mat_ramp[m] + 15;
 						glMaterialiv(GL_FRONT_AND_BACK, GL_COLOR_INDEXES, mat);
+						glBindTexture(GL_TEXTURE_2D, (GLuint)m);
 						glBegin(GL_QUADS);
 						any = true;
 					}
