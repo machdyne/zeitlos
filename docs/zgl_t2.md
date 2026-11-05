@@ -2,10 +2,12 @@
 
 Status: **in the SOC behind `GPU_T2`, running on hardware:** sergei_ml2
 (gldemo chunky at the display's 60 frames a second, chunky VRAM) and
-sergei_ml2_console (65 a second, the picture in main memory). Checked in
-simulation, every word of the picture against the model. Textures and
-positional lights are checked in simulation, not yet on hardware. The
-plan and the decisions are in the project's `claude/zgl-t2-proposal.md`.
+sergei_ml2_console (the picture in main memory; with textures since
+2026-11-05: gldemo 59-60 a second, mausrun3d textured 18-20, space3d 15;
+"On hardware" below). Checked in simulation, every word of the picture
+against the model. Positional lights are checked in simulation, not yet
+on hardware. The plan and the decisions are in the project's
+`claude/zgl-t2-proposal.md`.
 
 The first triangle engine, gpu_tri (retired), drew only the pixels;
 the CPU still did everything before them, and on sergei_ml2 that was
@@ -121,8 +123,10 @@ textured triangles ([zgl.md](zgl.md), "Textures", for the GL side):
 - **The raster** divides per pixel, a pixel a clock still: Q's leading
   bit and a 1,024-entry reciprocal table (`rtl/gpu/t2_recip.hex`, from
   `gen_t2_recip.py`), A and B brought to 18 bits, two multipliers,
-  shifts, the texel's place, the texture memory, the mode -- eight
-  stages before the depth test (`t2_uv()`, `t2_texel_at()`,
+  shifts, the texel's place, the texture memory, the mode -- nine
+  stages before the depth test (the mode has one of its own: the
+  memory's output, the byte and the combine in one clock made 44.9 MHz
+  on sergei_ml2_console; `t2_uv()`, `t2_texel_at()`,
   `t2_combine()` in `zgl_t2.h` are the same arithmetic, which the model
   uses). Untextured pixels do not pass through them.
 - **The texture memory** is written by the CPU, a word of four texels
@@ -304,9 +308,30 @@ iverilog -g2005 -DVEC=10 -DTEX -DLINEAR -DPOST=10 -o /tmp/tb_t2t tb_gpu_t2.v ../
 - `ZSIM_GTRI=2` in the simulator runs the host model at each `END`;
   `ZSIM_GTRI_STATS=1` prints each frame's counts.
 
+## On hardware
+
+sergei_ml2_console, 2026-11-05, with textures (`T2_TEX_LOG2=13`), the
+texture combine in its own stage (x9: 44.9 MHz without it), DDR3 write
+combining, three pages. From each program's console report:
+
+| program | frames a second | cycles a frame |
+|---|---|---|
+| gldemo chunky (380 primitives) | 59.0-59.5 (52.8 the first report) | about 0.90 M drawing: scene 0.50-0.61 M, glFinish 0.38 M |
+| mausrun3d, textures on | 18-20 | CPU 1.45-2.35 M (206-292 triangles sent) |
+| mausrun3d, textures off | 18-24 | CPU 1.13-1.66 M (166-251 sent) |
+| space3d, chunky | 15 | 2.8-3.1 M |
+
+**Textures cost no frame rate**: mausrun3d's frames a second with T on
+and off are the same within a view's variation. Its CPU part is 1.1-2.3
+M cycles a frame: the world's lists 0.5-1.5 M (the stream, including
+waits on a full FIFO, so T2's time is partly in it), the things
+0.33-0.52 M, the sky and the HUD about 0.13 M each.
+
 ## Next
 
-- On hardware: textures (mausrun3d, T) and positional lights (gldemo, O).
+- On hardware: positional lights (gldemo, O).
+- mausrun3d: its CPU part is most of a frame (above); the things, the
+  sky and the HUD are candidates for compiled lists.
 - Speed: the geometry unit is the longest part of a list frame (about
   1,250 cycles a triangle; loads, at 3 cycles each, are a third of
   it). The core could load in 2 cycles if timing allows; a frame's

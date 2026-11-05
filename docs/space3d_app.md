@@ -187,6 +187,9 @@ Each frame costs the CPU what a frame costs `ZGL_FRAMES` ([zgl.md](zgl.md),
 as rocks come near and fill the picture. The game steps by the clock
 either way: on a slow board, frames are dropped, not time.
 
+On sergei_ml2_console (T2, 2026-11-05) the chunky game runs at 15
+frames a second, 2.8-3.1 M cycles a frame.
+
 ## On a build host
 
 `make render` in `sw/apps/space3d` runs `space3d.c` itself on the

@@ -148,6 +148,24 @@ says which: what textures cost is the difference. On the host, T2's
 geometry goes from 514 k to 619 k cycles a frame with them (the
 textured firmware on the ISS, `make render`).
 
+On hardware (sergei_ml2_console, 2026-11-05) the frame rate is the same
+with and without them, 18-20 frames a second at 9-12 tiles' view, and
+up to 24 where the view holds fewer triangles. From the report:
+
+| a frame (CPU cycles) | textures on | textures off |
+|---|---|---|
+| total | 1.45-2.35 M | 1.13-1.66 M |
+| the world's lists | 0.84-1.46 M | 0.53-0.99 M |
+| the things | 0.34-0.52 M | 0.33-0.41 M |
+| the sky / the HUD | 0.13 M / 0.13-0.23 M | 0.12-0.14 M / 0.12-0.14 M |
+| the game | 0.11-0.17 M | 0.12-0.18 M |
+| triangles sent | 206-292 | 166-251 |
+
+The CPU's part alone is 1.1-2.3 M cycles, over the 800 k of 60 fps
+and 1.6 M of 30. Part of the world's share is the stream waiting on a
+full FIFO, so T2's own time is in it too; the things, the sky and the
+HUD (about 0.6 M together) are the CPU's.
+
 ## The game
 
 mausrun's, in three dimensions ([mausrun.md](mausrun.md), "Playing"):

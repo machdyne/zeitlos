@@ -501,7 +501,12 @@ module gpu_t2_wb #(
 	// 18 bits; x4 the table's word; x5 the products; x6 s and t (12.4,
 	// the low 12 bits); x7 the texel's place; x8 its word: the texel,
 	// the pixel's index, and into p0
-	reg        x1_v, x2_v, x3_v, x4_v, x5_v, x6_v, x7_v, x8_v;
+	reg        x1_v, x2_v, x3_v, x4_v, x5_v, x6_v, x7_v, x8_v, x9_v;
+	reg [10:0] x9_addr;
+	reg [3:0]  x9_m;
+	reg        x9_dep;
+	reg [15:0] x9_zv;
+	reg [7:0]  x9_ci, x9_tx;
 	reg [10:0] x1_addr, x2_addr, x3_addr, x4_addr, x5_addr, x6_addr, x7_addr, x8_addr;
 	reg [3:0]  x1_m, x2_m, x3_m, x4_m, x5_m, x6_m, x7_m, x8_m;
 	reg        x1_dep, x2_dep, x3_dep, x4_dep, x5_dep, x6_dep, x7_dep, x8_dep;
@@ -518,7 +523,7 @@ module gpu_t2_wb #(
 	reg [11:0] x6_s, x6_t;
 	reg [TX_LOG2-1:0] x7_ta;
 	reg [1:0]  x8_bs;
-	wire       tx_busy_w = x1_v || x2_v || x3_v || x4_v || x5_v || x6_v || x7_v || x8_v;
+	wire       tx_busy_w = x1_v || x2_v || x3_v || x4_v || x5_v || x6_v || x7_v || x8_v || x9_v;
 	assign     tx_busy = TEX && tx_busy_w;
 
 	// x1: Q at least 32; its leading bit; A's and B's significant bits
@@ -584,7 +589,8 @@ module gpu_t2_wb #(
 		tex_q <= texm[x7_ta[TX_LOG2-1:2]];
 	end
 
-	// x8: the texel, the key, and the mode's index (T2_TM_*)
+	// x8: the texel's byte (registered: the block RAM's output, the
+	// select and the combine together did not make 48 MHz)
 	reg  [7:0]  x8_tx;
 	always @(*) begin
 		case (x8_bs)
@@ -594,16 +600,17 @@ module gpu_t2_wb #(
 		default: x8_tx = tex_q[31:24];
 		endcase
 	end
-	wire [8:0]  x8_tm   = {5'd0, x8_tx[3:0]} * ({5'd0, x8_ci[3:0]} + 9'd1);
-	wire [3:0]  x8_tone = x8_tm[7:4];
-	wire        x8_kill = t_tw[24] && (x8_tx == 8'd0);
-	reg  [7:0]  x8_px;
+	// x9: the key, and the mode (T2_TM_*)
+	wire [8:0]  x9_tm   = {5'd0, x9_tx[3:0]} * ({5'd0, x9_ci[3:0]} + 9'd1);
+	wire [3:0]  x9_tone = x9_tm[7:4];
+	wire        x9_kill = t_tw[24] && (x9_tx == 8'd0);
+	reg  [7:0]  x9_px;
 	always @(*) begin
 		case (t_tw[23:22])
-		2'd0: x8_px = x8_tx;
-		2'd1: x8_px = x8_tx + x8_ci;
-		2'd2: x8_px = {x8_ci[7:4], x8_tone};
-		default: x8_px = {x8_tx[7:4], x8_tone};
+		2'd0: x9_px = x9_tx;
+		2'd1: x9_px = x9_tx + x9_ci;
+		2'd2: x9_px = {x9_ci[7:4], x9_tone};
+		default: x9_px = {x9_tx[7:4], x9_tone};
 		endcase
 	end
 
@@ -635,7 +642,7 @@ module gpu_t2_wb #(
 			d_sel <= 1'b0;
 			p0_v <= 1'b0; p1_v <= 1'b0; p2_v <= 1'b0;
 			x1_v <= 1'b0; x2_v <= 1'b0; x3_v <= 1'b0; x4_v <= 1'b0;
-			x5_v <= 1'b0; x6_v <= 1'b0; x7_v <= 1'b0; x8_v <= 1'b0;
+			x5_v <= 1'b0; x6_v <= 1'b0; x7_v <= 1'b0; x8_v <= 1'b0; x9_v <= 1'b0;
 			h_go <= 1'b0;
 			bclr0 <= 9'h100;
 			bclr1 <= 9'h100;
@@ -665,7 +672,7 @@ module gpu_t2_wb #(
 			p1_zv <= p0_zv; p1_ci <= p0_ci;
 			p0_v <= 1'b0;
 
-			// the texture pipe: a textured pixel's texel, eight stages,
+			// the texture pipe: a textured pixel's texel, nine stages,
 			// into p0 as an untextured pixel goes (t2_uv(), zgl_t2.h)
 			x1_v <= 1'b0;
 			x2_v <= x1_v && TEX;
@@ -691,15 +698,18 @@ module gpu_t2_wb #(
 			x8_v <= x7_v;
 			x8_addr <= x7_addr; x8_m <= x7_m; x8_dep <= x7_dep; x8_zv <= x7_zv; x8_ci <= x7_ci;
 			x8_bs <= x7_ta[1:0];
-			if (x8_v && !x8_kill) begin
-				dr_a_addr <= x8_addr;
+			x9_v <= x8_v;
+			x9_addr <= x8_addr; x9_m <= x8_m; x9_dep <= x8_dep; x9_zv <= x8_zv; x9_ci <= x8_ci;
+			x9_tx <= x8_tx;
+			if (x9_v && !x9_kill) begin
+				dr_a_addr <= x9_addr;
 				p0_v <= 1'b1;
-				p0_addr <= x8_addr;
-				p0_m <= x8_m;
-				p0_dep <= x8_dep;
+				p0_addr <= x9_addr;
+				p0_m <= x9_m;
+				p0_dep <= x9_dep;
 				p0_le <= 1'b0;
-				p0_zv <= {4{x8_zv}};
-				p0_ci <= {4{x8_px}};
+				p0_zv <= {4{x9_zv}};
+				p0_ci <= {4{x9_px}};
 			end
 
 			case (rs)

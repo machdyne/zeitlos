@@ -145,7 +145,10 @@ Two things only it has, the 45F having the room:
 82 of 108 block RAMs and 76% of TRELLIS_COMB at packing (yowasp yosys
 0.70, `-abc9`). On it gldemo's chunky scene runs at 65 frames a second
 (T2, the picture in main memory, three pages: zgl_t2.md, "Pages"), from
-37 before the pages.
+37 before the pages; with textures built in, 59-60. Textures in the
+bitstream needed the texture combine in a stage of its own to meet 48
+MHz (44.9 without). mausrun3d runs textured at 18-20 frames a second,
+the same as untextured, and space3d at 15 (zgl_t2.md, "On hardware").
 
 ## The headless profile
 
