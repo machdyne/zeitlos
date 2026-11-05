@@ -25,7 +25,11 @@
  *                 deep) and the next frame's first strip going out takes
  *                 it -- or keeps the last one if none was written -- so
  *                 the CPU can set the next frame's picture while this one
- *                 is still being written; reads give the last written;
+ *                 is still being written; reads give the last written.
+ *                 So: one write a frame, before its FRAME; to set it with
+ *                 no frame, write it and then RESET (which empties the
+ *                 queue and makes it current) -- a write with no frame
+ *                 of its own leaves every later frame a picture behind;
  *                 in main memory)
  *   4 STRIPS  r   strips written out since RESET
  *   5 RESET   w   the FIFO emptied, the core restarted, the raster and

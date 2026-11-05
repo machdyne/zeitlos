@@ -780,6 +780,19 @@ static GLuint l_sky, l_hud;
  * open_chunky()), and T turns them off and on */
 static bool tex_have, tex_want = true;
 
+/* W: wait for each frame at its end (glFinish), as zgl did before it
+ * stopped waiting for T2 -- to compare the two on the board */
+static bool frame_wait;
+
+/* L: every frame two refreshes (30 fps, even), with W's waiting: a
+ * frame rate that is not a whole fraction of the display's 60 shows
+ * frames for 1, 2, 1, 2 refreshes, and motion steps unevenly */
+static bool frame_lock;
+
+/* input in the report: presses and releases, and how often what is held
+ * changed -- a key held down should be one press, not a stream */
+static uint32_t in_down, in_up, in_flips, in_last;
+
 /* the sky above the horizon, a gradient; the haze under it */
 static void sky_content(void) {
 	int hy = 120 - FOCAL * 29 / 100;   /* the horizon: tan 16 degrees */
@@ -1194,8 +1207,21 @@ int main(void) {
 		while (ar_poll(&e)) {
 			if (e.type == AR_EV_QUIT) quit = true;
 			if (e.type == AR_EV_MODE) mode_changed();
+			if (e.type == AR_EV_BUTTON) {
+				if (e.pressed) in_down++; else in_up++;
+			}
 			if (e.type == AR_EV_BUTTON && e.pressed && e.player == 0 && e.key == AR_BTN_A) jump = true;
 			if (e.type == AR_EV_BUTTON && e.pressed && e.key == AR_BTN_START) recentre = true;
+			if (e.type == AR_EV_KEY && e.pressed && (e.key == 'w' || e.key == 'W')) {
+				frame_wait = !frame_wait;
+				printf("mausrun3d: %s\n", frame_wait ? "waiting for each frame (W)" :
+					"not waiting for frames");
+			}
+			if (e.type == AR_EV_KEY && e.pressed && (e.key == 'l' || e.key == 'L')) {
+				frame_lock = !frame_lock;
+				printf("mausrun3d: %s\n", frame_lock ? "locked to 30 frames a second (L)" :
+					"frame rate free");
+			}
 			if (e.type == AR_EV_KEY && e.pressed && (e.key == 't' || e.key == 'T')) {
 				tex_want = !tex_want;
 				printf("mausrun3d: textures %s%s\n", tex_want ? "on" : "off",
@@ -1203,6 +1229,11 @@ int main(void) {
 			}
 		}
 		if (quit) break;
+		{
+			uint32_t h = ar_held(0) | ar_held(1);
+			if (h != in_last) in_flips++;
+			in_last = h;
+		}
 		for (k = 0; k < dt; k++) {
 			uint32_t held = ar_held(0) | (ar_held(1) & AR_BTN_DIRS);
 			bool j = jump && k == 0;
@@ -1244,11 +1275,12 @@ int main(void) {
 			perf_frames++;
 			perf_tris += tris_sent;
 			if (ar_ticks() - perf_t0 >= 120) {
-				printf("mausrun3d: %lu frames a second, %lu cycles a frame (CPU), %lu triangles sent, view %ld tiles, textures %s\n",
+				printf("mausrun3d: %lu frames a second, %lu cycles a frame (CPU), %lu triangles sent, view %ld tiles, textures %s%s\n",
 					(unsigned long)(perf_frames * 60 / (ar_ticks() - perf_t0)),
 					(unsigned long)(perf_cycles / perf_frames),
 					(unsigned long)(perf_tris / perf_frames), (long)(far_now / W3_T),
-					!tex_have ? "none" : tex_want ? "on" : "off");
+					!tex_have ? "none" : tex_want ? "on" : "off",
+					frame_lock ? ", locked to 30" : frame_wait ? ", waiting for each frame" : "");
 				printf("mausrun3d:   a frame: sky %lu, world %lu (%lu lists), things %lu, HUD %lu, zgl_frame %lu; the game %lu\n",
 					(unsigned long)(tsum[T_SKY] / perf_frames), (unsigned long)(tsum[T_WORLD] / perf_frames),
 					(unsigned long)(calls_sum / perf_frames), (unsigned long)(tsum[T_THINGS] / perf_frames),
@@ -1262,6 +1294,10 @@ int main(void) {
 					(unsigned long)(isum[T_THINGS] / perf_frames), (unsigned long)(isum[T_HUD] / perf_frames),
 					(unsigned long)(isum[T_FRAME] / perf_frames), (unsigned long)(isum[T_GAME] / perf_frames),
 					(unsigned long)(tsum[T_WAIT] / perf_frames));
+				printf("mausrun3d:   input: %lu presses, %lu releases, what is held changed %lu times (%lu frames)\n",
+					(unsigned long)in_down, (unsigned long)in_up, (unsigned long)in_flips,
+					(unsigned long)perf_frames);
+				in_down = in_up = in_flips = 0;
 				memset(tsum, 0, sizeof(tsum));
 				memset(isum, 0, sizeof(isum));
 				calls_sum = 0;
@@ -1269,9 +1305,12 @@ int main(void) {
 				perf_frames = perf_cycles = perf_tris = 0;
 			}
 		}
+		if (chunky && (frame_wait || frame_lock)) glFinish();
 		{
 			uint32_t w0 = cycles_now();
 			dt = ar_frame();
+			/* L: a frame stays up for two refreshes, never one */
+			if (frame_lock && dt < 2) dt += ar_frame();
 			tsum[T_WAIT] += cycles_now() - w0;
 		}
 		if (chunky && gstate == G_PLAY) pace(dt);

@@ -161,6 +161,11 @@ module tb_gpu_t2;
 		t0 = cyc;
 `ifdef TWO
 		npic = 2;
+		// as zglc_open(): a VBASE, then RESET (which empties the queue
+		// and makes it the current one) -- no frame of its own
+		wb_write(32'd3, 32'h20000000 + 32'd153600);
+		wb_write(32'd5, 32'd1);
+		repeat (20) @(posedge clk);
 		wb_write(32'd3, 32'h20000000);
 		for (i = 0; i < ns; i = i + 1) wb_write(32'd2, stream[i]);
 		// the next frame's picture, the first still under way

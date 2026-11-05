@@ -270,7 +270,25 @@ finish: the frame is handed over and shown once T2's STRIPS register
 (strips written out since RESET) says its last strip is out, while the
 program steps its game and streams the next frame into the third
 picture. Every paged frame is the same number of strips, learned from
-the first two frames, which wait as before. On mausrun3d this takes
+the first two frames, which wait as before. A frame is shown as soon as its
+last strip is out: zgl looks (one register read, never waiting) at every
+list it sends and as a frame starts and ends. Showing it only at the next
+`ar_frame()` -- a frame later, as long or short as that frame was -- left
+frames up for a number of refreshes unrelated to the game's steps.
+
+**Never over a picture waiting for its boundary.** zglc_poll() first
+replaced a picture handed to CKBASE but, by the frame counter, not yet
+shown. The scanout takes CKBASE as it fetches line 0
+(rtl/gpu/gpu_ckfetch.v), before the counter moves at the end of the last
+visible line (gpu_video.v), so that picture could already be the next
+one on screen -- and T2 drew the next frame into it. That was the
+vibration on sergei_ml2_console (2026-11-05): gone once zglc_poll()
+left such a picture alone. The exact fix would be a register saying
+which picture the scanout took, so zgl need not judge it by the counter.
+
+An even frame rate looks smoother still: mausrun3d's L (each frame two
+refreshes, 30 a second) against 40 a second, whose frames are up for
+1, 2, 1, 2 refreshes. On mausrun3d this takes
 T2's tail after the last word (0.47-0.54 M cycles on
 sergei_ml2_console) off the CPU's frame. A frame is shown one frame
 later than before; `glFinish()` still waits for everything.
@@ -284,7 +302,13 @@ so a frame's tail drains to its own picture (CAPS bit 1;
 its write queue drained -- the last frame's late strips landed in the
 next frame's picture, and everything wobbled as the view moved. On a
 bitstream without CAPS bit 1, zgl waits for T2 to be idle before
-changing VBASE.
+changing VBASE. The rule that comes with it: one VBASE write a frame,
+before its FRAME; to set it with no frame (zgl_open()), write it and
+then RESET, which empties the queue. zgl_open() first wrote it after
+RESET: that write had no frame of its own, every later frame took the
+one meant for the frame before and was drawn into the picture just
+handed to the display, and everything moving vibrated (`tb_gpu_t2
+-DTWO` now starts as zgl_open() does).
 
 ## Tests
 
@@ -300,6 +324,13 @@ iverilog -g2005 -DVEC=2 -o /tmp/tb_t2 tb_gpu_t2.v ../gpu_t2.v ../zeitlos32g.v &&
 iverilog -g2005 -DVEC=10 -DTEX -DLINEAR -DPOST=10 -o /tmp/tb_t2t tb_gpu_t2.v ../gpu_t2.v ../zeitlos32g.v && vvp /tmp/tb_t2t
 ```
 
+- `make -C sw/common/zgl/tests/pages` (part of `make test`): zgl's
+  paging code (zgl_chunky.c, its register accesses turned into calls)
+  against a model of T2 -- frames, strips over time, the VBASE queue --
+  and of the scanout taking CKBASE at each boundary, with a game loop as
+  mausrun3d's: no picture written while shown, none shown unfinished,
+  frames in order, with and without glFinish() each frame. With
+  zgl_open()'s old order (RESET, then VBASE) it fails at once.
 - `test_t2`: the same scenes by the software strips and by T2's model:
   immediate mode 0 pixels differ; lists 0-10 (positions and normals
   rounded when compiled); near clipping about 560, all but two by one

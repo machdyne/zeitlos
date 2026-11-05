@@ -6,6 +6,7 @@ test: tests/test_zgl tests/test_frames tests/test_t2 t2fw
 	tests/test_zgl
 	tests/test_frames
 	tests/test_t2
+	$(MAKE) -C tests/pages
 
 tests/test_zgl: tests/test_zgl.c zgl.c zgl.h zgl_int.h GL/gl.h
 	$(HOSTCC) -std=gnu99 -Wall -Wextra -Wno-missing-field-initializers -O1 -g \

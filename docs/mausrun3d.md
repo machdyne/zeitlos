@@ -28,6 +28,8 @@ frames a second. Anywhere else it says what it needs.
 | Enter (START) | the camera behind the mouse |
 | M | music on or off |
 | T | textures off or on (on a T2 with textures) |
+| W | wait for each frame at its end, or not (to compare; the report says which) |
+| L | lock to an even 30 frames a second (each frame two refreshes), or not |
 | F11, Esc | game mode, or back to the window |
 | F1 | help |
 

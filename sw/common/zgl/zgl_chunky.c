@@ -31,9 +31,17 @@ int zglc_open(uint8_t flags) {
 	if (!(flags & ZGL_NO_ENGINE) && *z_gtri_reg(Z_GTRI_W_ID) == T2_ID) kind = 2;
 	use_engine = kind != 0;
 	if (use_engine) {
-		*z_gtri_reg(Z_GTRI_W_RESET) = 1;
+		/* VBASE first, then RESET. A T2 that takes VBASE frame by frame
+		 * (CAPS bit 1) queues each write for the next frame; RESET
+		 * empties the queue and makes the last written the current one.
+		 * Written after RESET it waited in the queue with no frame of
+		 * its own: the first frame took it, and from then on every
+		 * frame took the one meant for the frame before -- each drawn
+		 * into the picture just handed to the display, out of order,
+		 * and everything moving vibrated. */
 		vbase_now = z_chunky_phys();
 		*z_gtri_reg(Z_GTRI_W_VBASE) = vbase_now;
+		*z_gtri_reg(Z_GTRI_W_RESET) = 1;
 		/* each frame starts going out in vertical blanking */
 		ctrl_now = Z_GTRI_CTRL_VSYNC;
 		*z_gtri_reg(Z_GTRI_W_CTRL) = ctrl_now;
@@ -137,13 +145,37 @@ static void pg_show(int i) {
 	pg_pend_frame = pg_frame();
 }
 
+/* Shown as soon as it is out. zgl calls this at every list it sends and
+ * as a frame starts and ends: a frame handed over is shown within a few
+ * thousand cycles of T2 writing its last strip, not at the next
+ * ar_frame() -- which came a whole frame later, and as long or short as
+ * that frame was, so frames stayed up for a number of refreshes that
+ * had nothing to do with the game's steps: everything moving jittered.
+ * Never waits. */
+void zglc_poll(void) {
+	if (pg_q < 0 || (int32_t)(pg_strips() - pg_q_end) < 0) return;
+	pg_settle();
+	/* Not over a picture still waiting for its boundary: the scanout
+	 * takes CKBASE as it fetches line 0, a line or two before the frame
+	 * counter moves (rtl/gpu/gpu_ckfetch.v, gpu_video.v), so "not shown
+	 * yet" may already be wrong. It is shown at zglc_present(), as
+	 * before, or at the next look once the boundary has passed. */
+	if (pg_pend >= 0) return;
+	z_chunky_set_pic(pg_pic[pg_q], true);
+	pg_pend = pg_q;
+	pg_pend_frame = pg_frame();
+	pg_q = -1;
+}
+
 /* the frame handed over, if T2 has written it out (or, wait: until it has) */
 static void pg_retire(bool wait) {
 	if (pg_q < 0) return;
-	if (wait) while ((int32_t)(pg_strips() - pg_q_end) < 0) ;
-	else if ((int32_t)(pg_strips() - pg_q_end) < 0) return;
-	pg_show(pg_q);
-	pg_q = -1;
+	if (!wait) {
+		zglc_poll();
+		return;
+	}
+	while ((int32_t)(pg_strips() - pg_q_end) < 0) ;
+	zglc_poll();
 }
 
 /* T2 idle: everything handed over is out; STRIPS is a frame's end */

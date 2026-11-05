@@ -224,6 +224,8 @@ void zglc_picture(int32_t x0, int32_t y0, int32_t x1, int32_t y1) __attribute__(
 /* a paged frame (above), finished, shown from the next video frame:
  * ar_frame() calls it (common/games/zarcade_sys.c) */
 void zglc_present(void) __attribute__((weak));
+/* the frame handed over, shown if T2 has it out; never waits (zgl_chunky.c) */
+void zglc_poll(void) __attribute__((weak));
 /* T2's texture memory (zgl_chunky.c): its size in texels (0: none),
  * and a word of four texels written at word `word` once the engine is
  * idle */

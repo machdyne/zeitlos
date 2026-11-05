@@ -146,6 +146,7 @@ void zgl_t2_line(const zgl_svtx_t *a, const zgl_svtx_t *b) {
 
 void zgl_t2_frame(void) {
 	frame_start();
+	if (zglc_poll) zglc_poll();
 	put(T2_END << 24);
 	t2_framed = false;
 	t2_info->frames++;
@@ -662,6 +663,7 @@ bool zgl_t2_call(const zglr_op_t *ops, uint32_t n, void **cache, uint8_t *state)
 	dn[0] = zgl_s.normal[0]; dn[1] = zgl_s.normal[1]; dn[2] = zgl_s.normal[2];
 	if (unit) zgl_unit3(dn);
 	frame_start();
+	if (zglc_poll) zglc_poll();          /* the last frame shown as soon as it is out */
 	send_state();
 	w = l->w;
 	for (ci = 0; ci < l->nchunks; ci++) {
