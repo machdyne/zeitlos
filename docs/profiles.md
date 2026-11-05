@@ -134,7 +134,13 @@ for T2, as on `sergei_ml2` with T2). It keeps the network (RMII), so
 software can be updated over the wire while it is being tested. What
 works here should work on Lakritz, bar the memory controller.
 
-Two things only it has, the 45F having the room:
+Three things only it has, the 45F having the room:
+
+- **zeitlos32p** (`CPU_ZEITLOS32P`, [zeitlos32p.md](zeitlos32p.md)) in
+  picorv32's place: the 3D games' CPU part runs at about 15 cycles an
+  instruction on picorv32 here (mausrun3d.md, "Frame budget"), and
+  zeitlos32p ran Doom at 0.65 instructions a cycle against picorv32's
+  0.14. Without the MPU (`NO_MPU`), as on Lakritz.
 
 - **Write combining in the DDR3 controller** (`DDR3_WCOMBINE`,
   [ddr3.md](ddr3.md)): stores merge into whole 16-byte blocks, so T2's

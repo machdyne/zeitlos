@@ -894,10 +894,11 @@ static void draw_hud(void) {
 static uint32_t tris_sent;
 
 /* where a frame's CPU cycles go (the report every two seconds) */
-enum { T_SKY, T_WORLD, T_THINGS, T_HUD, T_FRAME, T_GAME, T_N };
-static uint32_t tsum[T_N];
+enum { T_SKY, T_WORLD, T_THINGS, T_HUD, T_FRAME, T_GAME, T_WAIT, T_N };
+static uint32_t tsum[T_N], isum[T_N];   /* cycles; instructions */
 static uint32_t calls_sum;
 static inline uint32_t cycles_now(void);
+static inline uint32_t instret_now(void);
 
 /* The draw distance follows what a frame costs (docs/mausrun3d.md,
  * "Frame budget"). T2 draws a frame's records only from the start of
@@ -986,7 +987,7 @@ static void render(void) {
 	static const GLfixed white[4] = { 65536, 65536, 65536, 65536 };
 	int32_t gy;
 
-	uint32_t t0 = cycles_now(), t1;
+	uint32_t t0 = cycles_now(), t1, i0 = instret_now(), i1;
 
 	glClearIndex(W3_R_SKY);
 	glDisable(GL_DEPTH_TEST);
@@ -994,6 +995,7 @@ static void render(void) {
 	glDisable(GL_CULL_FACE);
 	draw_sky();
 	t1 = cycles_now(); tsum[T_SKY] += t1 - t0; t0 = t1;
+	i1 = instret_now(); isum[T_SKY] += i1 - i0; i0 = i1;
 
 	view_3d();
 	glLightxv(GL_LIGHT0, GL_POSITION, light);
@@ -1007,6 +1009,7 @@ static void render(void) {
 		11 * 65536 / 16, 8 * 65536 / 16, far_now, 2);
 	calls_sum += w3_calls;
 	t1 = cycles_now(); tsum[T_WORLD] += t1 - t0; t0 = t1;
+	i1 = instret_now(); isum[T_WORLD] += i1 - i0; i0 = i1;
 
 	draw_actors();
 
@@ -1024,10 +1027,13 @@ static void render(void) {
 	if (tris_sent > TRIS_HIGH && far_now > FAR_MIN) far_now -= 16;
 
 	t1 = cycles_now(); tsum[T_THINGS] += t1 - t0; t0 = t1;
+	i1 = instret_now(); isum[T_THINGS] += i1 - i0; i0 = i1;
 	draw_hud();
 	t1 = cycles_now(); tsum[T_HUD] += t1 - t0; t0 = t1;
+	i1 = instret_now(); isum[T_HUD] += i1 - i0; i0 = i1;
 	zgl_frame();
 	t1 = cycles_now(); tsum[T_FRAME] += t1 - t0;
+	i1 = instret_now(); isum[T_FRAME] += i1 - i0;
 }
 
 /* -- game mode ----------------------------------------------------------------- */
@@ -1143,6 +1149,16 @@ static inline uint32_t cycles_now(void) {
 #endif
 }
 
+static inline uint32_t instret_now(void) {
+#ifdef AR_HOST_TESTS
+	return 0;
+#else
+	uint32_t v;
+	__asm__ volatile ("rdinstret %0" : "=r"(v));
+	return v;
+#endif
+}
+
 int main(void) {
 	bool quit = false;
 	uint32_t dt = 1, perf_t0 = 0, perf_frames = 0, perf_cycles = 0, perf_tris = 0;
@@ -1211,11 +1227,12 @@ int main(void) {
 				break;
 			}
 			if (gstate == G_PLAY || gstate == G_CARD) {
-				uint32_t g0 = cycles_now();
+				uint32_t g0 = cycles_now(), gi = instret_now();
 				step_mouse(held, j);
 				step_blocks();
 				step_actors();
 				tsum[T_GAME] += cycles_now() - g0;
+				isum[T_GAME] += instret_now() - gi;
 			}
 			step_camera(ar_held(1), recentre && k == 0, (held & AR_BTN_DIRS) != 0);
 			ticks++;
@@ -1237,13 +1254,26 @@ int main(void) {
 					(unsigned long)(calls_sum / perf_frames), (unsigned long)(tsum[T_THINGS] / perf_frames),
 					(unsigned long)(tsum[T_HUD] / perf_frames), (unsigned long)(tsum[T_FRAME] / perf_frames),
 					(unsigned long)(tsum[T_GAME] / perf_frames));
+				/* the same in instructions (cycles over instructions high:
+				 * waiting, on T2's FIFO or memory); then ar_frame(): the
+				 * wait for the frame boundary (and for T2, if it is behind) */
+				printf("mausrun3d:   instructions: sky %lu, world %lu, things %lu, HUD %lu, zgl_frame %lu; the game %lu; ar_frame %lu cycles\n",
+					(unsigned long)(isum[T_SKY] / perf_frames), (unsigned long)(isum[T_WORLD] / perf_frames),
+					(unsigned long)(isum[T_THINGS] / perf_frames), (unsigned long)(isum[T_HUD] / perf_frames),
+					(unsigned long)(isum[T_FRAME] / perf_frames), (unsigned long)(isum[T_GAME] / perf_frames),
+					(unsigned long)(tsum[T_WAIT] / perf_frames));
 				memset(tsum, 0, sizeof(tsum));
+				memset(isum, 0, sizeof(isum));
 				calls_sum = 0;
 				perf_t0 = ar_ticks();
 				perf_frames = perf_cycles = perf_tris = 0;
 			}
 		}
-		dt = ar_frame();
+		{
+			uint32_t w0 = cycles_now();
+			dt = ar_frame();
+			tsum[T_WAIT] += cycles_now() - w0;
+		}
 		if (chunky && gstate == G_PLAY) pace(dt);
 	}
 	if (chunky) zgl_close();

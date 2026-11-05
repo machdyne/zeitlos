@@ -35,6 +35,11 @@
 #   T2_TEX_LOG2=13 T2 with textures (docs/zgl_t2.md, "Textures"): an
 #                  8 KB texture memory, perspective-correct; nine DP16KD
 #                  and about 1,600 COMB more
+#   CPU_ZEITLOS32P the pipelined core (docs/zeitlos32p.md) in picorv32's
+#                  place: on picorv32 mausrun3d's frame is about 15
+#                  cycles an instruction (docs/mausrun3d.md); zeitlos32p
+#                  ran Doom at 0.65 instructions a cycle against 0.14.
+#                  No MPU here (NO_MPU), so no mpu_split
 
 description = Sergei ML2 as a games console (console profile, T2)
 
@@ -54,3 +59,4 @@ defines =
 	NO_RTC
 	DDR3_WCOMBINE
 	T2_TEX_LOG2=13
+	CPU_ZEITLOS32P

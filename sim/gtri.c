@@ -57,6 +57,7 @@ static uint32_t *t2buf;
 static uint32_t t2n, t2left, t2op, t2pos, t2nv;
 static uint32_t t2texaddr;
 static int t2bad;
+static uint32_t t2strips;              /* STRIPS: written out since RESET (12-row strips) */
 
 static void t2_frame(uint32_t *vram) {
 	t2_stats_t st;
@@ -70,6 +71,7 @@ static void t2_frame(uint32_t *vram) {
 	for (y = st.ry0; y <= st.ry1 && y < 240; y++)
 		for (x = st.rx0; x <= st.rx1 && x < 320; x++)
 			put_px(vram, x, y, pic[y][x]);
+	if (st.ry1 >= st.ry0) t2strips += (uint32_t)(st.ry1 - st.ry0) / 12u + 1u;
 }
 
 static void t2_word(uint32_t *vram, uint32_t val) {
@@ -107,6 +109,7 @@ uint32_t gtri_read(uint32_t w) {
 	switch (w) {
 	case 1: return (uint32_t)t2bad << 1 | 0x3ffu << 16;   /* STATUS: never busy */
 	case 3: return vbase;
+	case 4: return t2strips;                             /* STRIPS */
 	case 7: return T2_ID;
 	case 11: return 1u | (uint32_t)T2_TEX_LOG2 << 8;      /* CAPS: textures */
 	default: return 0;
@@ -119,7 +122,7 @@ void gtri_write(uint32_t *vram, uint32_t w, uint32_t val) {
 	case 12: t2texaddr = val; break;                     /* TEXADDR */
 	case 13: t2_model_tex(t2texaddr++, val); break;      /* TEXDATA */
 	case 2: t2_word(vram, val); break;                   /* CMD */
-	case 5: t2n = 0; t2left = 0; t2bad = 0; break;       /* RESET */
+	case 5: t2n = 0; t2left = 0; t2bad = 0; t2strips = 0; break;   /* RESET */
 	default: break;
 	}
 }

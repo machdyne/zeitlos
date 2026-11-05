@@ -162,9 +162,20 @@ up to 24 where the view holds fewer triangles. From the report:
 | triangles sent | 206-292 | 166-251 |
 
 The CPU's part alone is 1.1-2.3 M cycles, over the 800 k of 60 fps
-and 1.6 M of 30. Part of the world's share is the stream waiting on a
-full FIFO, so T2's own time is in it too; the things, the sky and the
-HUD (about 0.6 M together) are the CPU's.
+and 1.6 M of 30. The instructions (the report's second line, below)
+say why: every part runs at about 15 cycles an instruction, the game's
+steps too, which never touch T2 -- so it is the CPU (picorv32 on DDR3),
+not T2's FIFO. On top of it came T2's tail, 0.47-0.54 M cycles after
+the last word, which the frame waited for until zgl stopped waiting
+(zgl_t2.md, "Not waiting for T2"); and sergei_ml2_console moves to
+zeitlos32p (profiles.md).
+
+The report's second line gives the same parts in instructions, then
+`ar_frame()`'s time in cycles: the wait for the frame boundary (and for
+T2, if it is a frame behind; zgl_t2.md, "Not waiting for T2"). A part with many more cycles than
+instructions is waiting -- on T2's FIFO, or on memory. In the simulator
+(`make simbench`, its cycle model, T2 as its model) a frame is about
+70 k instructions and 0.35-0.4 M cycles.
 
 ## The game
 

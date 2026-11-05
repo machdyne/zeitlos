@@ -5,8 +5,8 @@ Status: **in the SOC behind `GPU_T2`, running on hardware:** sergei_ml2
 sergei_ml2_console (the picture in main memory; with textures since
 2026-11-05: gldemo 59-60 a second, mausrun3d textured 18-20, space3d 15;
 "On hardware" below). Checked in simulation, every word of the picture
-against the model. Positional lights are checked in simulation, not yet
-on hardware. The plan and the decisions are in the project's
+against the model, positional lights too (on hardware: gldemo's lamp,
+60 to 42 frames a second). The plan and the decisions are in the project's
 `claude/zgl-t2-proposal.md`.
 
 The first triangle engine, gpu_tri (retired), drew only the pixels;
@@ -265,6 +265,16 @@ it, from the next boundary, before it waits; a program that never calls
 keeps the one picture and VSYNC, since what is outside it is meant to
 stay.
 
+**Not waiting for T2.** `ar_frame()`'s present does not wait for T2 to
+finish: the frame is handed over and shown once T2's STRIPS register
+(strips written out since RESET) says its last strip is out, while the
+program steps its game and streams the next frame into the third
+picture. Every paged frame is the same number of strips, learned from
+the first two frames, which wait as before. On mausrun3d this takes
+T2's tail after the last word (0.47-0.54 M cycles on
+sergei_ml2_console) off the CPU's frame. A frame is shown one frame
+later than before; `glFinish()` still waits for everything.
+
 ## Tests
 
 ```
@@ -320,6 +330,12 @@ combining, three pages. From each program's console report:
 | mausrun3d, textures on | 18-20 | CPU 1.45-2.35 M (206-292 triangles sent) |
 | mausrun3d, textures off | 18-24 | CPU 1.13-1.66 M (166-251 sent) |
 | space3d, chunky | 15 | 2.8-3.1 M |
+| gldemo chunky, the lamp on (O) | 41.6-42.1 | 1.23 M: scene 0.56 M, glFinish 0.66 M |
+
+**A positional light** costs T2's geometry unit, not the CPU: with
+gldemo's lamp on, glFinish (T2 after the stream) goes from 0.38 M to
+0.66 M cycles, the scene's stream from 0.49 M to 0.56 M -- the light's
+distance and attenuation for every vertex, in the firmware's cold path.
 
 **Textures cost no frame rate**: mausrun3d's frames a second with T on
 and off are the same within a view's variation. Its CPU part is 1.1-2.3
@@ -329,9 +345,14 @@ waits on a full FIFO, so T2's time is partly in it), the things
 
 ## Next
 
-- On hardware: positional lights (gldemo, O).
-- mausrun3d: its CPU part is most of a frame (above); the things, the
-  sky and the HUD are candidates for compiled lists.
+- **mausrun3d at 30 frames a second with textures** (1.6 M cycles a
+  frame at 48 MHz), the goal before 3D work rests a while. Its frame is
+  about 70 k instructions of the CPU's (the simulator,
+  `make -C sw/apps/mausrun3d simbench`) but 1.5-2.3 M cycles on the
+  board, at about 15 cycles an instruction in every part (picorv32 on
+  DDR3), plus T2's 0.5 M tail after the last word. Done: zgl no longer
+  waits for the tail ("Not waiting for T2"), and sergei_ml2_console
+  moves to zeitlos32p. To measure on the board.
 - Speed: the geometry unit is the longest part of a list frame (about
   1,250 cycles a triangle; loads, at 3 cycles each, are a third of
   it). The core could load in 2 cycles if timing allows; a frame's
