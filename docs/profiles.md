@@ -129,8 +129,10 @@ The same console on the board that is easier to test on: the launcher,
 two planes in block RAM, chunky's picture in main memory -- DDR3 here,
 read a word at a time (the DDR3 controller holds a 16-byte block, so a
 line's words after each block's first come in a cycle) -- T2 writing it
-there, no rasterizer, no MPU, no RTC; no pointer and no Keccak (room
-for T2, as on `sergei_ml2` with T2). It keeps the network (RMII), so
+there, no rasterizer, no MPU, no RTC, no TRNG; no pointer, and none of
+the crypto blocks (Keccak, MONTMUL, SHA-256: software does without
+them); the HID-only USB (`USB_HID`, as on Lakritz) rather than the full
+host. It keeps the network (RMII), so
 software can be updated over the wire while it is being tested. What
 works here should work on Lakritz, bar the memory controller.
 
@@ -148,8 +150,9 @@ Three things only it has, the 45F having the room:
 - **T2's textures** (`T2_TEX_LOG2=13`, [zgl_t2.md](zgl_t2.md),
   "Textures"): an 8 KB texture memory, perspective-correct.
 
+With picorv32, MONTMUL, SHA-256, the TRNG and the full USB host:
 82 of 108 block RAMs and 76% of TRELLIS_COMB at packing (yowasp yosys
-0.70, `-abc9`). On it gldemo's chunky scene runs at 65 frames a second
+0.70, `-abc9`); as specified now, to be measured. On it gldemo's chunky scene runs at 65 frames a second
 (T2, the picture in main memory, three pages: zgl_t2.md, "Pages"), from
 37 before the pages; with textures built in, 59-60. Textures in the
 bitstream needed the texture combine in a stage of its own to meet 48

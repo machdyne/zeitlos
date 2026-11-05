@@ -170,6 +170,13 @@ the last word, which the frame waited for until zgl stopped waiting
 (zgl_t2.md, "Not waiting for T2"); and sergei_ml2_console moves to
 zeitlos32p (profiles.md).
 
+**On zeitlos32p** (sergei_ml2_console, 2026-11-05): **40 frames a
+second** with textures, 216 triangles at 9 tiles' view, 1.04-1.07 M
+CPU cycles a frame at about 2 cycles an instruction (the world 0.39-0.43 M
+for 37-39 k instructions, the things 0.19 M, the HUD 0.05 M, the game
+0.05 M); the sky's 0.39-0.43 M is the wait for a free picture, all
+three busy. From 18-20 on picorv32.
+
 The report's second line gives the same parts in instructions, then
 `ar_frame()`'s time in cycles: the wait for the frame boundary (and for
 T2, if it is a frame behind; zgl_t2.md, "Not waiting for T2"). A part with many more cycles than

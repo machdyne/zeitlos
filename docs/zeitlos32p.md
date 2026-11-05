@@ -83,7 +83,7 @@ store, is certain to.
 | Event | Cost |
 |---|---|
 | Taken branch or `jal`, predicted (in the BTB, counter taken) | 0 |
-| Branch or `jal` mispredicted, `jalr`, `retirq` | 3 (resolved in X; F, the queue and D refill) |
+| Branch or `jal` mispredicted, `jalr`, `retirq` | 4 (resolved in X, the redirect out a cycle later; F, the queue and D refill) |
 | Load, then an instruction using its result | 1 (forwarded from W) |
 | Instruction needing a result still in S | until S moves up (only behind a waiting load/store) |
 | Behind a waiting load/store | one more instruction moves into S; the next waits |
@@ -212,6 +212,27 @@ Found on the full SOC, in place and route on the project's nextpnr
    its own registered copy of the request, before the access has
    touched anything ([The MPU](#the-mpu)). Judged at the take, its
    comparators followed the core's address adder: 43-45 MHz.
+
+### The redirect a cycle after X (2026-11-05)
+
+On sergei_ml2_console (zeitlos32p beside T2, DDR3, the network) sys_clk's
+critical path was a jump's redirect: forwarding, the branch comparator's
+carry, the prediction checks (`ex_ptok`, `ex_pt`), the target mux, into
+`pc_f` and everything else a redirect touches -- 20.16 ns, 13.5 of it
+routing, 49.6 MHz on the third seed and short of 48 on the others. X
+now registers it (`jr_v`, `jr_pc`) and the redirect goes out the next
+cycle; in that cycle X takes nothing from D (all of it is the old path),
+so nothing wrong-path runs. A jump waiting in X (M busy) has its
+redirect out already (`ex_jdone`), as before. Interrupts and skipped
+instructions (`x_pfix`) still redirect at once.
+
+Cost: a cycle a redirecting jump. The core bench's programs +1.2%
+cycles (200,568 to 202,998), the SOC bench (`tb_cache_soc`, BURST) +0.2%
+(140,500 to 140,770). Out of context (core + cache, no MPU, yowasp
+nextpnr 0.11, three seeds) 52.73 / 54.24 / 53.65 MHz against
+53.25 / 52.80 / 53.10: there the cache's tag-to-hit path is the
+limit, as before; the jump's path is the one that grew in the full SOC.
+All of `make -C rtl/cpu/zeitlos32p/tests all` passes.
 
 ## Interrupts and faults
 

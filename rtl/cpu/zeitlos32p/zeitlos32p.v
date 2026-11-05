@@ -225,6 +225,8 @@ module zeitlos32p #(
 	reg        ex_bh;              // the BTB hit on its fetch...
 	reg  [1:0] ex_bc;              // ...with this counter
 	reg        ex_jdone;           // X has redirected for it already
+	reg        jr_v;               // a jump's redirect, from X last cycle
+	reg [31:0] jr_pc;              // ...and where to
 	reg        ex_pt;              // fetching went on at a predicted target
 	reg        ex_ptok;            // ...and D found that target right for a jal/branch
 	reg        ex_preg;            // the MPU's checks on its address (chk_*)
@@ -813,9 +815,19 @@ module zeitlos32p #(
 		is_retirq ? q0 :
 		            (ex_pc + imm_b);
 
-	wire redirect = x_irq || x_jump || x_pfix;
-	wire [31:0] redirect_pc = x_irq ? PROGADDR_IRQ :
-		(x_jump && x_tgo) ? x_target : pc_plus4;
+	// A jump's redirect goes out a cycle after X decides it (jr_v,
+	// jr_pc): the branch compare -- forwarding, the comparator's carry,
+	// the prediction checks -- then ends in two registers rather than
+	// in pc_f and everything a redirect touches, which was sys_clk's
+	// critical path at 48 MHz (49.6 MHz on the third seed, the others
+	// short). In that cycle X takes nothing from D (all of it is the
+	// old path), so nothing wrong-path runs. A jump that has to wait in
+	// X (M busy) has its redirect gone out already (ex_jdone), as
+	// before. It costs a cycle a redirecting jump: mispredicted
+	// branches, jalr, returns. Interrupts and skipped instructions
+	// (x_pfix) still redirect at once: neither waits on the compare.
+	wire redirect = x_irq || jr_v || x_pfix;
+	wire [31:0] redirect_pc = x_irq ? PROGADDR_IRQ : jr_v ? jr_pc : pc_plus4;
 
 	// ============================================================
 	// M: a load's word, picked out
@@ -867,6 +879,7 @@ module zeitlos32p #(
 			x_quiet <= 1'b0;
 			ex_started <= 1'b0;
 			ex_jdone <= 1'b0;
+			jr_v <= 1'b0;
 			ex_md_have <= 1'b0;
 			q_v <= 2'b00;
 			lx_valid <= 1'b0;
@@ -978,7 +991,10 @@ module zeitlos32p #(
 				ex_r2 <= xb;
 			end
 			if (x_free)
-				ex_valid <= d_go && !redirect;
+				ex_valid <= d_go && !redirect && !x_jump;
+			// a jump's redirect, out next cycle (above)
+			jr_v <= x_jump;
+			jr_pc <= x_tgo ? x_target : pc_plus4;
 
 			// -- X: an instruction under way -----------------------
 

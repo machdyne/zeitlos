@@ -235,6 +235,16 @@ void zglc_picture(int32_t x0, int32_t y0, int32_t x1, int32_t y1) {
 		pg_draw = i;
 		pg_drawn = true;
 		pg_draw_out = false;
+		/* VBASE is a register, not a command in the stream. A T2 that
+		 * takes it frame by frame (CAPS bit 1: written VBASEs queued,
+		 * each frame's first strip takes the next) needs nothing more.
+		 * An older one uses VBASE as it writes, its write queue too: the
+		 * frame handed over must be all out first, or its last strips
+		 * land in this one's picture -- and with nothing of this frame
+		 * sent yet, idle says so. (It is shown later, at
+		 * zglc_present(), either way.) */
+		if (pg_q >= 0 && !(*z_gtri_reg(Z_GTRI_W_CAPS) & Z_GTRI_CAPS_VBASEQ))
+			while (*z_gtri_reg(Z_GTRI_W_STATUS) & 1u) ;
 		set_vbase(pg_phys(pg_pic[i]), 0);
 		return;
 	}

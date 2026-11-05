@@ -21,6 +21,7 @@ with [welcome](welcome.md); to program it, [kernel](kernel.md) and
 | [ulx3s](ulx3s.md) | Radiona ULX3S notes |
 | [lebkuchen](lebkuchen.md) | Machdyne Lebkuchen (GateMate, RP2040 supervisor): port in progress |
 | [releases](releases.md) | Prebuilt images and `release/zrelease` |
+| [zconfig](zconfig.md) | `make config`: the system configurator, with LUT and block-RAM estimates |
 | [update](update.md) | Bringing a card up to date over the network: sets, signed releases, the ABI check |
 | [distribution](distribution.md) | Publishing releases of your own: name, URL, signing keys |
 | [dfu\_upgrade](dfu_upgrade.md) | Upgrading the DFU bootloader |

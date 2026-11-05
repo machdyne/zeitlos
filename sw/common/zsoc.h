@@ -507,7 +507,8 @@
 #define Z_GTRI_W_RESET        5u
 #define Z_GTRI_W_ID           7u
 // textures (docs/zgl_t2.md, "Textures"): CAPS reads 0 on a T2 without
-#define Z_GTRI_W_CAPS         11u           // r: bit0 textures, [12:8] texture memory log2 texels
+#define Z_GTRI_W_CAPS         11u           // r: bit0 textures, bit1 VBASE queued per frame, [12:8] texture memory log2 texels
+#define Z_GTRI_CAPS_VBASEQ    (1u << 1)     // VBASE writes are taken frame by frame, in order
 #define Z_GTRI_W_TEXADDR      12u           // w: the texture word TEXDATA writes next
 #define Z_GTRI_W_TEXDATA      13u           // w: four texels (the first in 7:0); TEXADDR moves on
 

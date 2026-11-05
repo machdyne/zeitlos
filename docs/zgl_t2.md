@@ -275,6 +275,17 @@ T2's tail after the last word (0.47-0.54 M cycles on
 sergei_ml2_console) off the CPU's frame. A frame is shown one frame
 later than before; `glFinish()` still waits for everything.
 
+That needs **VBASE taken frame by frame**: the next frame's picture is
+written to VBASE while T2 may still be writing the last one out. T2
+queues VBASE writes (four deep) and each frame's first strip going out
+takes the next; the posted-write queue's words carry their frame's bit,
+so a frame's tail drains to its own picture (CAPS bit 1;
+`tb_gpu_t2 -DTWO`). Without it -- T2 used VBASE as it wrote, and again as
+its write queue drained -- the last frame's late strips landed in the
+next frame's picture, and everything wobbled as the view moved. On a
+bitstream without CAPS bit 1, zgl waits for T2 to be idle before
+changing VBASE.
+
 ## Tests
 
 ```
@@ -330,6 +341,7 @@ combining, three pages. From each program's console report:
 | mausrun3d, textures on | 18-20 | CPU 1.45-2.35 M (206-292 triangles sent) |
 | mausrun3d, textures off | 18-24 | CPU 1.13-1.66 M (166-251 sent) |
 | space3d, chunky | 15 | 2.8-3.1 M |
+| mausrun3d, textures on, **zeitlos32p** (and zgl not waiting for T2) | 40 | CPU 1.04-1.07 M (216 sent) |
 | gldemo chunky, the lamp on (O) | 41.6-42.1 | 1.23 M: scene 0.56 M, glFinish 0.66 M |
 
 **A positional light** costs T2's geometry unit, not the CPU: with

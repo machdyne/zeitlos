@@ -5,8 +5,8 @@
 # desktop; two bitplanes of VRAM in block RAM, chunky's 256 colours in
 # main memory (`VRAM_SDRAM: here DDR3, read a word at a time), T2
 # writing them there; no line rasterizer (zgfx draws 2D lines itself),
-# no MPU, no TRNG, no RTC -- but on a 45F, so nothing else has to give,
-# and with the DDR3 board's own caches and peripherals. What works here
+# no MPU, no TRNG, no RTC, no crypto blocks, the HID-only USB -- but on
+# a 45F, and with the DDR3 board's caches. What works here
 # should work on Lakritz, bar the memory controller: SDRAM there, with
 # four-word bursts.
 #
@@ -23,12 +23,16 @@
 #                  route on this board)
 #   -COLOR_WINDOW, -COLOR_DESKTOP   the colour window and desktop colour
 #                  read the second VRAM sheet, which is not there
+#   -MONTMUL, -MONTMUL_REGS, -SHA256   the crypto blocks: a console has
+#                  no logins or keys to speed up, and zsha256.c and
+#                  z25519.c fall back to software where they are absent
+#   -USB_HOST, USB_HID   the keyboard and pads, as on lakritz_console:
+#                  the HID-only USB core, not the full host
 #
 # -- what comes --
 #
 #   ZEITLOS_CONSOLE, GAME_PLANES=2, GPU_T2, VRAM_SDRAM, -GPU_RASTER,
-#   NO_MPU, NO_RTC: as lakritz_console. The TRNG stays: this board's
-#   MONTMUL hangs off it (rtl/sysctl.v), and there is room.
+#   NO_MPU, NO_RTC, NO_TRNG (zrng seeds in software): as lakritz_console.
 #   DDR3_WCOMBINE  the DDR3 controller combines stores into whole
 #                  16-byte blocks (rtl/mem/ddr3_ctrl.v): T2's picture
 #                  goes out at about 8 cycles a word rather than 19
@@ -51,12 +55,18 @@ defines =
 	-KECCAK
 	-COLOR_WINDOW
 	-COLOR_DESKTOP
+	-MONTMUL
+	-MONTMUL_REGS
+	-SHA256
+	-USB_HOST
+	USB_HID
 	GAME_PLANES=2
 	GPU_T2
 	VRAM_SDRAM
 	-GPU_RASTER
 	NO_MPU
 	NO_RTC
+	NO_TRNG
 	DDR3_WCOMBINE
 	T2_TEX_LOG2=13
 	CPU_ZEITLOS32P

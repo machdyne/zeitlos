@@ -1716,4 +1716,17 @@ clean_bios:
 clean_apps:
 	cd sw/apps && make clean
 
+# The system configurator (docs/zconfig.md): menus to choose a board, a
+# profile, the components and the card, with LUT and block-RAM
+# estimates; saves a target spec (release/targets/) and can build it.
+#   make config [TARGET=name]     the menus, from a target if given
+#   make config-report TARGET=name   the estimate, block by block
+config menu-config menuconfig:
+	@python3 tools/zconfig/zconfig.py $(TARGET)
+
+config-report:
+	@test -n "$(TARGET)" || { echo "make config-report TARGET=<name>"; exit 1; }
+	@python3 tools/zconfig/zconfig.py --report $(TARGET)
+
+.PHONY: config menu-config menuconfig config-report
 .PHONY: clean_bios bios apps core-bins core-apps core-files zapi abi pnr_again tftp-dist nfs-dist timing path util test_audio test_ddmi test_blit test_uart hwmap FORCE soc

@@ -20,6 +20,10 @@
 // -DTEX: T2 with textures (TEX_LOG2 13, t2/t2fw_tex.hex), its texture
 // memory written through TEXADDR and TEXDATA from t2/tN.hex first; the
 // textured frames are 10 and 11 (test_t2's "lists, textured").
+// -DTWO: the frame twice, back to back, into two pictures: VBASE for
+// the second written as soon as the first's stream is in, while T2 is
+// still drawing and writing the first (as zgl's pages do), and both
+// pictures held to the model -- each frame takes its VBASE in order.
 
 `ifndef VEC
 `define VEC 2
@@ -72,7 +76,7 @@ module tb_gpu_t2;
 	);
 
 	// VRAM: acks the cycle after stb, as rtl/mem/vram.v
-	reg [31:0] vram [0:19199];
+	reg [31:0] vram [0:38399];        // two pictures (-DTWO)
 	integer    vwrites = 0, bad_addr = 0;
 	wire [31:0] vword = (m_adr - 32'h20000000) >> 2;
 	integer    wait_n = 0;
@@ -92,10 +96,10 @@ module tb_gpu_t2;
 		if (m_cyc && m_stb && !m_ack) begin
 `endif
 			m_ack <= 1'b1;
-			m_q <= (vword < 19200) ? vram[vword] : 32'd0;
+			m_q <= (vword < 38400) ? vram[vword] : 32'd0;
 			if (m_we) begin
 				vwrites = vwrites + 1;
-				if (vword >= 19200) bad_addr = bad_addr + 1;
+				if (vword >= 38400) bad_addr = bad_addr + 1;
 				else begin
 					if (m_sel[0]) vram[vword][7:0]   <= m_dat[7:0];
 					if (m_sel[1]) vram[vword][15:8]  <= m_dat[15:8];
@@ -133,7 +137,7 @@ module tb_gpu_t2;
 	reg [31:0] hdr [0:1];
 	reg [8*64-1:0] fn;
 	reg [31:0] st, idv;
-	integer i, ns, bad, t0, t1, cyc, fr, sg, li;
+	integer i, ns, bad, t0, t1, cyc, fr, sg, li, pic, npic;
 	always @(posedge clk) cyc = cyc + 1;
 
 	initial begin
@@ -142,20 +146,32 @@ module tb_gpu_t2;
 		$sformat(fn, "t2/p%0d.hex", `VEC); $readmemh(fn, want);
 		$sformat(fn, "t2/r%0d.hex", `VEC); $readmemh(fn, hdr);
 		ns = hdr[0];
-		for (i = 0; i < 19200; i = i + 1) vram[i] = 32'ha5a5a5a5;
+		for (i = 0; i < 38400; i = i + 1) vram[i] = 32'ha5a5a5a5;
 		repeat (5) @(posedge clk);
 		rst = 0;
 		wb_read(32'd7, idv);
 		if (idv != 32'h5A545232) $display("FAIL: ID %08x", idv);
 `ifdef TEX
 		wb_read(32'd11, idv);
-		if (idv != 32'h00000d01) $display("FAIL: CAPS %08x", idv);
+		if (idv != 32'h00000d03) $display("FAIL: CAPS %08x", idv);
 		$sformat(fn, "t2/t%0d.hex", `VEC); $readmemh(fn, texw);
 		wb_write(32'd12, 32'd0);
 		for (i = 0; i < 2048; i = i + 1) wb_write(32'd13, texw[i]);
 `endif
 		t0 = cyc;
+`ifdef TWO
+		npic = 2;
+		wb_write(32'd3, 32'h20000000);
 		for (i = 0; i < ns; i = i + 1) wb_write(32'd2, stream[i]);
+		// the next frame's picture, the first still under way
+		wb_read(32'd1, st);
+		if (!st[0]) $display("FAIL: -DTWO wants T2 still busy here");
+		wb_write(32'd3, 32'h20000000 + 32'd76800);
+		for (i = 0; i < ns; i = i + 1) wb_write(32'd2, stream[i]);
+`else
+		npic = 1;
+		for (i = 0; i < ns; i = i + 1) wb_write(32'd2, stream[i]);
+`endif
 		t1 = cyc;
 		// until it is all out
 		st = 1;
@@ -164,14 +180,15 @@ module tb_gpu_t2;
 			wb_read(32'd1, st);
 		end
 		bad = 0;
+		for (pic = 0; pic < npic; pic = pic + 1)
 		for (i = 0; i < 19200; i = i + 1) begin
 			// the model's word i is chunky VRAM's: row i / 20, its
 			// segment the row's quarter; LINEAR, line r's 80 words
 			fr = i / 20;
 			sg = fr / 240;
-			li = LIN ? ((fr - 240 * sg) * 80 + sg * 20 + i % 20) : i;
+			li = pic * 19200 + (LIN ? ((fr - 240 * sg) * 80 + sg * 20 + i % 20) : i);
 			if (vram[li] !== want[i]) begin
-				if (bad < 8) $display("FAIL: VRAM word %0d (row %0d): %08x, the model's %08x", li, i / 20, vram[li], want[i]);
+				if (bad < 8) $display("FAIL: picture %0d, VRAM word %0d (row %0d): %08x, the model's %08x", pic, li, i / 20, vram[li], want[i]);
 				bad = bad + 1;
 			end
 		end

@@ -21,6 +21,11 @@
  *   1 STATUS  r   [0] busy  [27:16] FIFO words free (of 2,048; FIFO_LOG2)
  *   2 CMD     w   a stream word; the write waits while the FIFO is full
  *   3 VBASE   rw  chunky VRAM's byte address (LINEAR: the picture's,
+ *                 taken by each frame in order: a write is queued (four
+ *                 deep) and the next frame's first strip going out takes
+ *                 it -- or keeps the last one if none was written -- so
+ *                 the CPU can set the next frame's picture while this one
+ *                 is still being written; reads give the last written;
  *                 in main memory)
  *   4 STRIPS  r   strips written out since RESET
  *   5 RESET   w   the FIFO emptied, the core restarted, the raster and
@@ -153,7 +158,11 @@ module gpu_t2_wb #(
 
 	reg        wait_beam;
 	reg        vsync;
-	reg [31:0] vbase;
+	reg [31:0] vbase;              // the last written (reads)
+	reg [31:0] vq0, vq1, vq2, vq3; // written, for the frames to come
+	reg  [2:0] vq_wp;              // the register side's
+	reg  [2:0] vq_rp;              // the output's
+	wire [2:0] vq_n = vq_wp - vq_rp;
 	reg [31:0] strips;
 	reg        soft_rst;
 
@@ -986,6 +995,18 @@ module gpu_t2_wb #(
 	assign o_act = (ost != O_IDLE);
 	reg [7:0]  o_y0;
 	reg        o_first;
+	reg        o_par;              // the frame going out: which of vb0/vb1
+	reg [31:0] vb0, vb1;           // the two frames' VBASE (the queue's words carry o_par)
+	wire [31:0] vb_now = o_par ? vb1 : vb0;
+	reg [31:0] vq_head;
+	always @(*) begin
+		case (vq_rp[1:0])
+		2'd0: vq_head = vq0;
+		2'd1: vq_head = vq1;
+		2'd2: vq_head = vq2;
+		default: vq_head = vq3;
+		endcase
+	end
 	reg [3:0]  o_rows1;
 	reg [8:0]  o_cx0, o_cx1;
 	reg [3:0]  o_row;
@@ -1026,8 +1047,8 @@ module gpu_t2_wb #(
 	// -- the posted-write queue (POST_LOG2) --
 	localparam integer PQ_N = (POST_LOG2 != 0) ? (1 << POST_LOG2) : 2;
 	localparam integer PQ_B = (POST_LOG2 != 0) ? POST_LOG2 : 1;
-	reg  [50:0]     pq [0:PQ_N-1];        // { word, sel, data }
-	reg  [50:0]     pq_q;
+	reg  [51:0]     pq [0:PQ_N-1];        // { frame, word, sel, data }
+	reg  [51:0]     pq_q;
 	reg  [PQ_B-1:0] pq_wp, pq_rp;
 	reg  [PQ_B:0]   pq_n;
 	reg  [1:0]      pq_st;                // 0 idle, 1 read, 2 on the bus, 3 the next word's read
@@ -1039,16 +1060,20 @@ module gpu_t2_wb #(
 	wire            pq_busy = (POST_LOG2 != 0) && ((pq_n != 0) || (pq_st != 2'd0));
 
 	always @(posedge clk) begin
-		if (pq_push) pq[pq_wp] <= {o_vword_q, o_in_q, ou_col_q};
+		if (pq_push) pq[pq_wp] <= {o_par, o_vword_q, o_in_q, ou_col_q};
 		pq_q <= pq[pq_rp];
 	end
 
 	always @(posedge clk) begin
+		if (rst) vq_rp <= 3'd0;
 		if (rst || soft_rst) begin
 			ost <= O_IDLE;
 			o_sel <= 1'b0;
 			o_busy <= 1'b0;
 			ready <= 2'b00;
+			o_par <= 1'b0;
+			vb0 <= rst ? 32'h20000000 : vbase;
+			vb1 <= rst ? 32'h20000000 : vbase;
 			o_clr_set <= 1'b0;
 			ou_col_we <= 4'd0;
 			ou_dep_we <= 4'd0;
@@ -1075,7 +1100,7 @@ module gpu_t2_wb #(
 					m_stb_o <= 1'b1;
 					m_we_o <= 1'b1;
 					m_sel_o <= pq_q[35:32];
-					m_adr_o <= vbase + {15'd0, pq_q[50:36], 2'd0};
+					m_adr_o <= (pq_q[51] ? vb1 : vb0) + {15'd0, pq_q[50:36], 2'd0};
 					m_dat_o <= pq_q[31:0];
 					pq_st <= 2'd2;
 				end
@@ -1115,6 +1140,13 @@ module gpu_t2_wb #(
 					o_y0 <= h_y0; o_rows1 <= h_rows1; o_cx0 <= h_cx0; o_cx1 <= h_cx1;
 					o_clear <= h_clear;
 					o_first <= h_first;
+					if (h_first) begin
+						// a new frame: its VBASE, the next written or the last
+						o_par <= ~o_par;
+						if (o_par) vb0 <= (vq_n != 3'd0) ? vq_head : vb_now;
+						else       vb1 <= (vq_n != 3'd0) ? vq_head : vb_now;
+						if (vq_n != 3'd0) vq_rp <= vq_rp + 3'd1;
+					end
 					o_row <= 4'd0; o_seg <= 2'd0; o_i <= 5'd0; o_w <= 11'd0;
 					ost <= O_BEAM;
 				end
@@ -1151,7 +1183,7 @@ module gpu_t2_wb #(
 						m_stb_o <= 1'b1;
 						m_we_o <= 1'b1;
 						m_sel_o <= o_in_q;
-						m_adr_o <= vbase + {15'd0, o_vword_q, 2'd0};
+						m_adr_o <= vb_now + {15'd0, o_vword_q, 2'd0};
 						m_dat_o <= ou_col_q;
 					end else ost <= O_NEXT;
 				end else if (m_ack_i) begin
@@ -1203,6 +1235,7 @@ module gpu_t2_wb #(
 			wait_beam <= 1'b0;
 			vsync <= 1'b0;
 			vbase <= 32'h20000000;
+			vq_wp <= 3'd0;
 			soft_rst <= 1'b0;
 		end else begin
 			wb_ack_o <= 1'b0;
@@ -1212,8 +1245,20 @@ module gpu_t2_wb #(
 					case (wb_adr_i[3:0])
 					4'd0: begin wait_beam <= wb_dat_i[0]; vsync <= wb_dat_i[1]; wb_ack_o <= 1'b1; end
 					4'd2: if (!f_full) wb_ack_o <= 1'b1;
-					4'd3: begin vbase <= wb_dat_i; wb_ack_o <= 1'b1; end
-					4'd5: begin soft_rst <= 1'b1; wb_ack_o <= 1'b1; end
+					4'd3: begin
+						vbase <= wb_dat_i;
+						// into the queue; full (four frames' worth not yet
+						// begun), the newest is replaced
+						case ((vq_n == 3'd4) ? vq_wp[1:0] - 2'd1 : vq_wp[1:0])
+						2'd0: vq0 <= wb_dat_i;
+						2'd1: vq1 <= wb_dat_i;
+						2'd2: vq2 <= wb_dat_i;
+						default: vq3 <= wb_dat_i;
+						endcase
+						if (vq_n != 3'd4) vq_wp <= vq_wp + 3'd1;
+						wb_ack_o <= 1'b1;
+					end
+					4'd5: begin soft_rst <= 1'b1; vq_wp <= vq_rp; wb_ack_o <= 1'b1; end
 					// TEXADDR, TEXDATA (the texture memory is written above)
 					4'd12: begin tex_wa <= wb_dat_i[TX_LOG2-3:0]; wb_ack_o <= 1'b1; end
 					4'd13: begin tex_wa <= tex_wa + 1'b1; wb_ack_o <= 1'b1; end
@@ -1227,7 +1272,9 @@ module gpu_t2_wb #(
 					4'd4: wb_dat_o <= strips;
 					4'd7: wb_dat_o <= 32'h5A545232;
 					// CAPS: textures, and the texture memory's size
-					4'd11: wb_dat_o <= {19'd0, TX_LOG2_5, 7'd0, TEX ? 1'b1 : 1'b0};
+					// CAPS: textures, VBASE taken in order (bit 1), and the
+					// texture memory's size
+					4'd11: wb_dat_o <= {19'd0, TX_LOG2_5, 6'd0, 1'b1, TEX ? 1'b1 : 1'b0};
 					default: wb_dat_o <= 32'd0;
 					endcase
 					wb_ack_o <= 1'b1;
