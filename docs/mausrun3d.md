@@ -126,6 +126,17 @@ band** (a triangle outside only the picture's sides goes to the raster
 unclipped, docs/zgl_t2.md) and a normal shared by a chunk's vertices
 lit once.
 
+## The map
+
+The world from above at the bottom right, 64 pixels a side: a 32x32
+texture made once (`map_make()`), each texel its ramp and tone
+(`ZGL_TEX_RAMP`) -- the surface's colour, boxes, thorns, water,
+lighter the higher -- with chasms keyed out, drawn as one textured
+quad (a list: textures go through lists), and the mouse a white pointer
+the way it faces. Three triangles, where the edges as lines would be
+dozens (a line costs T2 about what a triangle does). North is up.
+Without textures (a T2 without them), no map.
+
 ## Colours
 
 256 entries: white, the HUD's, the shadow's, then 16-entry ramps --

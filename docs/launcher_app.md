@@ -6,7 +6,7 @@ profile's front end ([profiles.md](profiles.md)).
 On a console bitstream wm starts it in place of the desktop, and starts
 it again if it stops. It is a menu of what is in `/apps`, in game mode,
 on the arcade runtime ([arcade.md](arcade.md)): the games and demos
-first (mausrun3d, mausrun, space3d, snake, blocks, bricks, chess, ...),
+first (mausrun3d, mauskart3d, mausrun, space3d, snake, blocks, bricks, chess, ...),
 then everything else, the system's own programs left out.
 
 | Key | Does |

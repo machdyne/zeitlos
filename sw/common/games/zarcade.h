@@ -240,6 +240,14 @@ bool ar_poll(ar_event_t *e);
  * the display frames elapsed since the last call (1..4). */
 uint32_t ar_frame(void);
 
+/* Even pacing (docs/arcade.md, "Even pacing"): with n > 1, ar_frame()
+ * returns only on every n-th display frame boundary of the ticks it
+ * counts -- dt is always a multiple of n -- so a game that cannot hold
+ * 60 shows each picture n frames (30, 20 fps), never 1, 2, 1, 2. 1 (the
+ * default) is off. */
+void ar_frame_lock(uint32_t n);
+uint32_t ar_frame_lock_get(void);
+
 /* Frames since ar_init(), counted as ar_frame() returned them. */
 uint32_t ar_ticks(void);
 

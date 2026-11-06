@@ -780,6 +780,79 @@ static GLuint l_sky, l_hud;
  * open_chunky()), and T turns them off and on */
 static bool tex_have, tex_want = true;
 
+/* -- the map: the world from above, a 32x32 texture (each texel its
+ * ramp and tone, ZGL_TEX_RAMP; chasms not drawn), one quad at the
+ * bottom right, the mouse a pointer on it. Two triangles and one more,
+ * where lines for the world's edges would be dozens. Without textures,
+ * no map. -- */
+
+#define MAP_TEX  60                  /* a texture name the world's do not use */
+#define MAP_X    250
+#define MAP_Y    170
+#define MAP_PX   64
+static bool map_ok;
+static GLuint l_map;                 /* the quad: textures go in lists */
+
+static void map_make(void) {
+	static uint8_t t[32 * 32];
+	int u, v;
+	for (v = 0; v < 32; v++)
+		for (u = 0; u < 32; u++) {
+			int x = (u * 2 + 1) * world->n / 64, z = (v * 2 + 1) * world->n / 64, y;
+			uint8_t g = world->ground[z * world->n + x], k = W3_AIR, c;
+			int top = g == W3_NONE ? -1 : g, tone;
+			char sf = (char)world->surf[z * world->n + x];
+			for (y = W3_H - 1; y > top; y--)
+				if ((k = w3_block(world, x, y, z)) != W3_AIR) break;
+			if (y > top) top = y;
+			tone = 7 + top * 8 / W3_H;
+			if (tone > 15) tone = 15;
+			if (w3_water(world, x, z) >= 0 && w3_water(world, x, z) >= top) c = W3_R_WATER | 11;
+			else if (g == W3_NONE && k == W3_AIR) c = 0;                 /* a chasm: not drawn */
+			else if (k == W3_THORNS) c = (uint8_t)(W3_R_RED | 12);
+			else if (k == W3_BOX || k == W3_QBOX || k == W3_SHELF) c = (uint8_t)(W3_R_BOX | tone);
+			else if (k != W3_AIR) c = (uint8_t)(W3_R_ROCK | tone);
+			else c = (uint8_t)((sf == 'p' ? W3_R_PATH : sf == 's' ? W3_R_SAND : sf == 'r' ? W3_R_ROCK :
+				sf == 'd' ? W3_R_EARTH : W3_R_GRASS) | tone);
+			t[v * 32 + u] = c;
+		}
+	map_ok = zglTexImage(MAP_TEX, 5, 5, t, ZGL_TEX_RAMP, true);
+	if (!map_ok) return;
+	if (!l_map) l_map = glGenLists(1);
+	glNewList(l_map, GL_COMPILE);
+	glBindTexture(GL_TEXTURE_2D, MAP_TEX);
+	glIndexi(15);                        /* a tone's full light */
+	glBegin(GL_TRIANGLES);
+	glTexCoord2i(0, 0); glVertex2i(MAP_X, MAP_Y);
+	glTexCoord2i(0, 32); glVertex2i(MAP_X, MAP_Y + MAP_PX);
+	glTexCoord2i(32, 32); glVertex2i(MAP_X + MAP_PX, MAP_Y + MAP_PX);
+	glTexCoord2i(0, 0); glVertex2i(MAP_X, MAP_Y);
+	glTexCoord2i(32, 32); glVertex2i(MAP_X + MAP_PX, MAP_Y + MAP_PX);
+	glTexCoord2i(32, 0); glVertex2i(MAP_X + MAP_PX, MAP_Y);
+	glEnd();
+	glBindTexture(GL_TEXTURE_2D, 0);
+	glEndList();
+}
+
+static void map_draw(void) {
+	int32_t px, pz, s, c;
+	if (!map_ok) return;
+	glEnable(GL_TEXTURE_2D);
+	glCallList(l_map);
+	glDisable(GL_TEXTURE_2D);
+	/* the mouse: a pointer the way it faces */
+	px = MAP_X + (mx / 256) * MAP_PX / (world->n * W3_T);
+	pz = MAP_Y + (mz / 256) * MAP_PX / (world->n * W3_T);
+	s = zglSin(heading) * 4 >> 16;
+	c = zglCos(heading) * 4 >> 16;
+	glIndexi(W3_C_WHITE);
+	glBegin(GL_TRIANGLES);
+	glVertex2i(px + s, pz - c);
+	glVertex2i(px - s / 2 - c / 2, pz + c / 2 - s / 2);
+	glVertex2i(px - s / 2 + c / 2, pz + c / 2 + s / 2);
+	glEnd();
+}
+
 /* W: wait for each frame at its end (glFinish), as zgl did before it
  * stopped waiting for T2 -- to compare the two on the board */
 static bool frame_wait;
@@ -902,6 +975,7 @@ static void draw_hud(void) {
 		glEndList();
 	}
 	glCallList(l_hud);
+	if (gstate != G_CARD) map_draw();
 }
 
 static uint32_t tris_sent;
@@ -1063,6 +1137,7 @@ static bool open_chunky(void) {
 	/* before any of the world's lists is first drawn: each keeps the
 	 * texture places it was compiled with */
 	tex_have = w3_textures();
+	map_make();
 	printf("mausrun3d: game mode, chunky: %s\n",
 		zgl_info()->backend == ZGL_BACKEND_T2 ? "T2" : "software (slow: T2 wanted)");
 	if (!md_list) {

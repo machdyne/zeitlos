@@ -53,6 +53,7 @@ module tb_console_ddr3;
 	parameter PIC_LINES = 24;       // lines of the picture written and shown
 	parameter WC = 0;               // the controller's write combining
 	parameter CPU = 1;              // 0: the CPU sits out (the writer's own rate)
+	parameter CKL = 2;              // the fetch's lines ahead (gpu_ckfetch.v LINES)
 
 	localparam [24:0] PIC = 25'h0_8000;     // the picture
 	localparam [24:0] CPU_LO = 25'h0_0000;  // the CPU's own 16 KB
@@ -168,7 +169,7 @@ module tb_console_ddr3;
 	wire [31:0] gb_dat;
 	reg         en = 0;
 
-	gpu_ckfetch #(.BURST(0), .VRAM_WORDS(4800)) ckf (
+	gpu_ckfetch #(.BURST(0), .VRAM_WORDS(4800), .LINES(CKL)) ckf (
 		.clk(clk), .rst(rst), .en(en), .base(32'h4000_0000 | {7'd0, PIC}),
 		.gb_row(gb_row), .gb_adr(gb_adr), .gb_dat(gb_dat), .vram_dat(32'h0),
 		.m_adr_o(f_adr), .m_cyc_o(f_cyc), .m_stb_o(f_stb), .m_cti_o(f_cti),

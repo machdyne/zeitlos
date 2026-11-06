@@ -23,8 +23,9 @@
  * edge and the word two edges later, with no wait. That timing is
  * block RAM's, and main memory cannot meet it, so this module sits on
  * the graphics port and answers it from a block RAM of its own holding
- * TWO LINES: the one being shown and the next. While line L is shown,
- * line L + 1 is read from main memory, 80 words in 20 four-word bursts
+ * TWO LINES: the one being shown and the next (LINES = 4: and two more).
+ * While line L is shown, the lines after it are read from main memory,
+ * each 80 words in 20 four-word bursts
  * (`SDRAM_BURST), in about 300-600 cycles with the bus shared, against
  * about 3,000 a game-mode line lasts (two scanlines at 48 MHz).
  *
@@ -70,7 +71,11 @@ module gpu_ckfetch #(
 	// main memory's address nibble: a CKBASE elsewhere fetches nothing
 	parameter [3:0] MAIN_NIBBLE = 4'h4,
 	// 1: main memory is 512 MB, 0x4000_0000-0x5fff_ffff (`MAIN_512MB)
-	parameter MAIN_512 = 0
+	parameter MAIN_512 = 0,
+	// lines held ahead of the beam: 2 (the one shown and the next), or
+	// 4 (and two more: a fetch late by up to two lines catches up; for a
+	// busy bus, `CKFETCH_LINES in rtl/sysctl.v)
+	parameter LINES = 2
 ) (
 	input             clk,
 	input             rst,
@@ -106,15 +111,21 @@ module gpu_ckfetch #(
 	                 (MAIN_512 != 0 && base[31:28] == MAIN_NIBBLE + 4'h1));
 
 	// ------------------------------------------------------------------
-	// the two lines: { slot, segment, word }, 2 x 4 x 20 of 256
+	// up to four lines: { slot, segment, word }, 4 x 4 x 20 of 512 (one
+	// DP16KD, as two lines' 256 were). With LINES = 4 the line shown and
+	// the three after it: a fetch can fall more than a line behind (the
+	// bus busy with T2 and the CPU) and catch up before its line is
+	// read. With two, a line late by a little reads as 0 at its start:
+	// short black lines on the left of sergei_ml2_console's picture with
+	// T2's overlap options (2026-11-06).
 	// ------------------------------------------------------------------
 
-	reg [31:0] lb [0:255];
+	reg [31:0] lb [0:511];
 
-	reg        v0, v1;              // slot holds its line
-	reg [7:0]  ln0, ln1;            // the line it holds (0..239)
+	reg        v0, v1, v2, v3;      // slot holds its line
+	reg [7:0]  ln0, ln1, ln2, ln3;  // the line it holds (0..239)
 	// a slot's line's segment 0 VRAM word address: 20 line
-	reg [14:0] c0, c1;
+	reg [14:0] c0, c1, c2, c3;
 
 	// ------------------------------------------------------------------
 	// the read side: which slot and segment holds gb_adr
@@ -130,12 +141,17 @@ module gpu_ckfetch #(
 	                           (sg == 2'd1) ? 15'd4800 : 15'd0);
 	wire [15:0] d0 = {1'b0, a0} - {1'b0, c0};
 	wire [15:0] d1 = {1'b0, a0} - {1'b0, c1};
+	wire [15:0] d2 = {1'b0, a0} - {1'b0, c2};
+	wire [15:0] d3 = {1'b0, a0} - {1'b0, c3};
 	// in [0, 20): a negative difference has bit 15 set and is not
 	wire h0 = v0 && (d0 < 16'd20);
 	wire h1 = v1 && (d1 < 16'd20);
-	wire hit = h0 | h1;
+	wire h2 = v2 && (d2 < 16'd20);
+	wire h3 = v3 && (d3 < 16'd20);
+	wire hit = h0 | h1 | h2 | h3;
 	// the slots hold different lines: at most one hits
-	wire [7:0] ra = h1 ? {1'b1, sg, d1[4:0]} : {1'b0, sg, d0[4:0]};
+	wire [8:0] ra = h3 ? {2'd3, sg, d3[4:0]} : h2 ? {2'd2, sg, d2[4:0]} :
+	                h1 ? {2'd1, sg, d1[4:0]} : {2'd0, sg, d0[4:0]};
 
 	reg [31:0] ck_q;
 	reg        sel_q, hit_q, vin_q;
@@ -152,28 +168,47 @@ module gpu_ckfetch #(
 	// the fetch
 	// ------------------------------------------------------------------
 
-	// the line about to be read, and the one after it
+	// the line about to be read, and the three after it
 	// Registered: gb_row moves once a line, and a value a clock old
 	// names lines already fetched, so the fetch only starts a clock later.
 	// (It was the slowest path of lakritz_console.)
 	wire [9:0] l_full = (gb_row >= 10'd240) ? (gb_row - 10'd240) : gb_row;
 	wire [7:0] lc_d = (l_full >= 10'd240) ? 8'd0 : l_full[7:0];
-	reg  [7:0] lc;
-	reg  [7:0] ln;
+	reg  [7:0] lc, lw1, lw2, lw3;
+	// the next frame's lines only once its last line is about to be
+	// read: line 0 takes CKBASE as it is fetched (a page flip), when
+	// line 239 is next, as with two lines -- zgl counts on that
+	// (zgl_t2.md, "Never over a picture waiting for its boundary")
+	reg        al2, al3;
 	always @(posedge clk) begin
 		lc <= lc_d;
-		ln <= (lc_d == 8'd239) ? 8'd0 : (lc_d + 8'd1);
+		lw1 <= (lc_d == 8'd239) ? 8'd0 : (lc_d + 8'd1);
+		lw2 <= (lc_d == 8'd239) ? 8'd1 : (lc_d + 8'd2);
+		lw3 <= (lc_d == 8'd239) ? 8'd2 : (lc_d + 8'd3);
+		al2 <= (LINES > 2) && ((lc_d == 8'd239) || (lc_d <= 8'd237));
+		al3 <= (LINES > 2) && ((lc_d == 8'd239) || (lc_d <= 8'd236));
 	end
 
-	wire has0c = v0 && (ln0 == lc);
-	wire has1c = v1 && (ln1 == lc);
-	wire has0n = v0 && (ln0 == ln);
-	wire has1n = v1 && (ln1 == ln);
+	// which slots hold the line shown and those after it
+	wire s0c = v0 && (ln0 == lc), s1c = v1 && (ln1 == lc), s2c = v2 && (ln2 == lc), s3c = v3 && (ln3 == lc);
+	wire s01 = v0 && (ln0 == lw1), s11 = v1 && (ln1 == lw1), s21 = v2 && (ln2 == lw1), s31 = v3 && (ln3 == lw1);
+	wire s02 = v0 && (ln0 == lw2) && al2, s12 = v1 && (ln1 == lw2) && al2,
+	     s22 = v2 && (ln2 == lw2) && al2, s32 = v3 && (ln3 == lw2) && al2;
+	wire s03 = v0 && (ln0 == lw3) && al3, s13 = v1 && (ln1 == lw3) && al3,
+	     s23 = v2 && (ln2 == lw3) && al3, s33 = v3 && (ln3 == lw3) && al3;
+	wire hasc = s0c | s1c | s2c | s3c;
+	wire has1 = s01 | s11 | s21 | s31;
+	wire has2 = s02 | s12 | s22 | s32;
+	wire has3 = s03 | s13 | s23 | s33;
+	// a slot the window does not need: the next fetch's
+	wire k0 = s0c | s01 | s02 | s03, k1 = s1c | s11 | s12 | s13,
+	     k2 = s2c | s21 | s22 | s23, k3 = s3c | s31 | s32 | s33;
+	wire [1:0] free = !k0 ? 2'd0 : !k1 ? 2'd1 : !k2 ? 2'd2 : 2'd3;
 
 	localparam [2:0] F_IDLE = 3'd0, F_START = 3'd1, F_REQ = 3'd2, F_GAP = 3'd3,
 	                 F_STB = 3'd4;
 	reg [2:0]  fs;
-	reg        f_slot;
+	reg [1:0]  f_slot;
 	reg [7:0]  f_line;
 	reg [1:0]  f_k;                 // segment
 	reg [4:0]  f_w;                 // its word
@@ -190,17 +225,15 @@ module gpu_ckfetch #(
 	always @(posedge clk) begin
 		if (rst) begin
 			fs <= F_IDLE;
-			v0 <= 1'b0;
-			v1 <= 1'b0;
-			ln0 <= 8'd0;
-			ln1 <= 8'd0;
+			v0 <= 1'b0; v1 <= 1'b0; v2 <= 1'b0; v3 <= 1'b0;
+			ln0 <= 8'd0; ln1 <= 8'd0; ln2 <= 8'd0; ln3 <= 8'd0;
 			fb_ok <= 1'b0;
 			fbase <= 32'd0;
 			m_cyc_o <= 1'b0;
 			m_stb_o <= 1'b0;
 			m_cti_o <= 3'b000;
 			m_adr_o <= 32'd0;
-			f_slot <= 1'b0;
+			f_slot <= 2'd0;
 			f_line <= 8'd0;
 			f_k <= 2'd0;
 			f_w <= 5'd0;
@@ -211,35 +244,32 @@ module gpu_ckfetch #(
 			case (fs)
 			F_IDLE: begin
 				if (!on) begin
-					v0 <= 1'b0;
-					v1 <= 1'b0;
+					v0 <= 1'b0; v1 <= 1'b0; v2 <= 1'b0; v3 <= 1'b0;
 					fb_ok <= 1'b0;
-				end else if (!has0c && !has1c) begin
-					// late (or the first line): this one, in the slot
-					// not holding the next
-					f_line <= lc;
-					f_slot <= has0n ? 1'b1 : 1'b0;
-					if (has0n) v1 <= 1'b0; else v0 <= 1'b0;
-					misses <= misses + 16'd1;
-					fs <= F_START;
-				end else if (!has0n && !has1n) begin
-					// the next, in the slot not holding this one
-					f_line <= ln;
-					f_slot <= has0c ? 1'b1 : 1'b0;
-					if (has0c) v1 <= 1'b0; else v0 <= 1'b0;
+				end else if (!hasc || !has1 || (al2 && !has2) || (al3 && !has3)) begin
+					// the first line the window lacks (the one shown:
+					// late, or the first), into a slot it does not need
+					f_line <= !hasc ? lc : !has1 ? lw1 : (al2 && !has2) ? lw2 : lw3;
+					f_slot <= free;
+					case (free)
+					2'd0: v0 <= 1'b0;
+					2'd1: v1 <= 1'b0;
+					2'd2: v2 <= 1'b0;
+					default: v3 <= 1'b0;
+					endcase
+					if (!hasc) misses <= misses + 16'd1;
 					fs <= F_START;
 				end
 			end
 
 			F_START: begin
 				// the slot's segment addresses, and the first burst
-				if (f_slot) begin
-					ln1 <= f_line;
-					c1 <= f_c;
-				end else begin
-					ln0 <= f_line;
-					c0 <= f_c;
-				end
+				case (f_slot)
+				2'd0: begin ln0 <= f_line; c0 <= f_c; end
+				2'd1: begin ln1 <= f_line; c1 <= f_c; end
+				2'd2: begin ln2 <= f_line; c2 <= f_c; end
+				default: begin ln3 <= f_line; c3 <= f_c; end
+				endcase
 				if (f_line == 8'd0 || !fb_ok) begin
 					fbase <= base;
 					fb_ok <= 1'b1;
@@ -266,7 +296,12 @@ module gpu_ckfetch #(
 						m_cyc_o <= 1'b0;
 						m_stb_o <= 1'b0;
 						m_cti_o <= 3'b000;
-						if (f_slot) v1 <= 1'b1; else v0 <= 1'b1;
+						case (f_slot)
+						2'd0: v0 <= 1'b1;
+						2'd1: v1 <= 1'b1;
+						2'd2: v2 <= 1'b1;
+						default: v3 <= 1'b1;
+						endcase
 						lines <= lines + 16'd1;
 						fs <= F_IDLE;
 					end else if (BURST ? (f_beat == 2'd3) : (f_w == 5'd19)) begin

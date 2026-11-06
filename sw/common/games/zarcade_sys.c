@@ -870,6 +870,10 @@ void zglc_present(void) __attribute__((weak));
 #define EXACT_SPIN_FP (2u * 16u)
 
 void ar_vsync_exact(bool on) { vsync_exact = on; edge_known = false; }
+
+static uint32_t frame_lock = 1;
+void ar_frame_lock(uint32_t n) { frame_lock = n < 1 ? 1 : n > 4 ? 4 : n; }
+uint32_t ar_frame_lock_get(void) { return frame_lock; }
 void ar_frame_hook(void (*fn)(void)) { frame_hook = fn; }
 
 /* Wait for the next display frame and say how many went by. Yields
@@ -942,6 +946,8 @@ uint32_t ar_frame(void) {
 	 * (common/zgl/zgl_chunky.c, "pages"); weak: not every game has zgl */
 	if (zglc_present) zglc_present();
 	dt = wait_frame();
+	/* even pacing: on to a boundary that is a multiple of the lock */
+	while ((ar__s.ticks + dt) % frame_lock) dt += wait_frame();
 	int i;
 
 	/* Straight after the boundary: palette first (it changes every

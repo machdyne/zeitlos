@@ -76,7 +76,13 @@ the raster draws only its bounding box clamped to the frame, and its
 edge functions don't mind where the corners are. A big merged face
 partly off the picture (mausrun3d's world) costs a record, not a clip;
 the pixels differ from zgl's clipped polygon by an index's rounding
-along its planes. A chunk's vertices that share their normal are lit
+along its planes. A triangle that must be clipped (through the near or far plane,
+or past the guard band) is clipped to the **guard band's** sides, eight
+times the view out, not the picture's: the corners clipping makes are
+then off the picture, so where it meets an unclipped neighbour no row
+of pixels is left between them (clipped to the picture's sides, their
+rounding left one-pixel cracks across mauskart3d's road, on the board
+and in the model alike, 2026-11-06). A chunk's vertices that share their normal are lit
 once. At `END` it starts the
 raster (`GO`) and goes on with the next frame's stream; it waits only
 before overwriting the list.
@@ -386,6 +392,64 @@ M cycles a frame: the world's lists 0.5-1.5 M (the stream, including
 waits on a full FIFO, so T2's time is partly in it), the things
 0.33-0.52 M, the sky and the HUD about 0.13 M each.
 
+## Never a store into a full FIFO
+
+CMD is behind wb_arbiter_main, whose grant stays with a master while
+its CYC does; a store into a full FIFO waits for room with the main
+bus held, and the scanout's line fetch (gpu_ckfetch.v) and T2's own
+output wait behind it. A line fetched too late reads as 0 where it is
+not yet in: short black lines on the left of the picture, flashing
+(sergei_ml2_console, 2026-11-06, the faster the program streamed the
+more). zgl_t2.c knows the room first: STATUS[27:16] read when what it
+knew is used up (one read for up to 2,048 words), a word written only
+into room.
+
+That alone did not end the lines (mausrun3d had them too, with T2's
+overlap options: T2's output keeps the bus busier). The line fetch
+can hold four lines ahead (`CKFETCH_LINES=4`, gpu_ckfetch.v `LINES`;
+sergei_ml2_console has it): a fetch late by up to two lines catches up
+before its line is shown. The next frame's lines are still fetched
+only once line 239 is next, so CKBASE is taken when it was. No more
+block RAM (four lines are 320 words, two were 160: one DP16KD either
+way); tb_ckfetch.v and tb_console_ddr3.v pass with both.
+
+## The host's model of a frame
+
+`tests/t2_raster.c` counts the raster at a pixel a clock across a
+triangle's bounding box (gpu_t2.v, R_TWORD), not four (2026-11-06: the
+first design's figure, kept by mistake), and the render tests add the
+geometry and the raster, which run one after the other on one record
+buffer. mausrun3d: 1.03 M cycles a frame on the model, 1.2 M on the
+board (40 fps); mauskart3d (docs/mauskart3d.md, "Frame budget").
+
+## Overlap (build options)
+
+Three options of `gpu_t2.v`, from sysctl's defines (0, as before, if
+not given), on in sergei_ml2_console:
+
+| define | what | cost |
+|---|---|---|
+| `T2_TWO_LISTS=1` (TWO_LISTS) | two record lists: the geometry unit makes frame N+1's records in one while the raster draws frame N's from the other -- a frame takes the **longer** of the two, not their sum | (all three, synthesised: |
+| `T2_TWO_BUFS=1` (TWO_BUFS) | two strip buffers: a strip is drawn while the last goes out | 16 DP16KD and |
+| `T2_ROW_END=1` (ROW_END) | a triangle's row ends at the first pixel past its span (a triangle is convex), not at its bounding box's edge | 232 LUT4 more) |
+
+**Two lists.** The core's GO hands the list it wrote to the raster
+(with the frame's columns, rows, clear colour and length, which the
+raster now keeps for itself) and the core writes the other one next.
+The core's STATUS[0] -- which `t2io_frame()` waits on before a frame --
+says the list it would write is still the raster's: a frame handed over
+and not yet taken, or the one being drawn. With one list that is the
+raster busy, as before, so the firmware is the same for both. The CPU's
+side is unchanged: STRIPS, VBASE's queue and STATUS's busy mean what
+they did.
+
+tb_gpu_t2.v takes `-DLISTS2 -DBUFS2 -DROWEND`; with `-DTWO` (two frames
+back to back) the second frame's stream is in 200 k cycles sooner with
+two lists, both pictures matching the model. On the host,
+`T2_TWO_LISTS=1` and `T2_ROW_END=1` in the environment make the render
+tests' model count the same (mauskart3d: 983 k a frame to 648 k, the
+geometry's; docs/mauskart3d.md).
+
 ## Next
 
 - **mausrun3d at 30 frames a second with textures** (1.6 M cycles a
@@ -398,9 +462,8 @@ waits on a full FIFO, so T2's time is partly in it), the things
   moves to zeitlos32p. To measure on the board.
 - Speed: the geometry unit is the longest part of a list frame (about
   1,250 cycles a triangle; loads, at 3 cycles each, are a third of
-  it). The core could load in 2 cycles if timing allows; a frame's
-  geometry could overlap the last frame's raster with a second record
-  list (11 DP16KD).
+  it). The core could load in 2 cycles if timing allows. (Overlapping a
+  frame's geometry with the last one's raster: done, "Overlap".)
 - Size: T2 does not fit the 25F desktop builds at all, and only just
   fits the 45F ones. (RV32IMC for the geometry core was measured: 26%
   less code, but its expander would cost more LUTs than the block RAM

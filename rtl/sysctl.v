@@ -2741,6 +2741,21 @@ module sysctl #()
 `ifndef T2_TEX_LOG2
 `define T2_TEX_LOG2 0
 `endif
+	// `T2_TWO_LISTS: two record lists, the geometry unit making the next
+	// frame's while the raster draws this one's;
+	// `T2_TWO_BUFS: two strip buffers, one drawn while the other goes
+	// out; `T2_ROW_END: a triangle's row ends past its span, not at its
+	// box. The three: 16 DP16KD, 232 LUT4 (docs/zgl_t2.md, "Overlap").
+	// 0: as before.
+`ifndef T2_TWO_LISTS
+`define T2_TWO_LISTS 0
+`endif
+`ifndef T2_TWO_BUFS
+`define T2_TWO_BUFS 0
+`endif
+`ifndef T2_ROW_END
+`define T2_ROW_END 0
+`endif
 `ifdef VRAM_SDRAM
 	// the picture is in main memory, linear (gpu_t2.v LINEAR), its
 	// writes posted (POST_LOG2); `T2_STRIP_H and `T2_POST_LOG2 trade
@@ -2752,9 +2767,11 @@ module sysctl #()
 `define T2_POST_LOG2 10
 `endif
 	gpu_t2_wb #(.LINEAR(1), .POST_LOG2(`T2_POST_LOG2), .STRIP_H(`T2_STRIP_H),
-		.TEX_LOG2(`T2_TEX_LOG2)) gtri0_i (
+		.TEX_LOG2(`T2_TEX_LOG2), .TWO_LISTS(`T2_TWO_LISTS), .TWO_BUFS(`T2_TWO_BUFS),
+		.ROW_END(`T2_ROW_END)) gtri0_i (
 `else
-	gpu_t2_wb #(.TEX_LOG2(`T2_TEX_LOG2)) gtri0_i (
+	gpu_t2_wb #(.TEX_LOG2(`T2_TEX_LOG2), .TWO_LISTS(`T2_TWO_LISTS), .TWO_BUFS(`T2_TWO_BUFS),
+		.ROW_END(`T2_ROW_END)) gtri0_i (
 `endif
 		.clk(wbm_clk),
 		.rst(wbm_rst),
@@ -5042,8 +5059,13 @@ module sysctl #()
 
 `ifdef VRAM_SDRAM
 	// chunky's picture from main memory, a line ahead of the beam, on
-	// VRAM's graphics port (rtl/gpu/gpu_ckfetch.v)
+	// VRAM's graphics port (rtl/gpu/gpu_ckfetch.v). `CKFETCH_LINES:
+	// lines held ahead, 2 or 4 (a busy bus: T2's overlap options)
+`ifndef CKFETCH_LINES
+`define CKFETCH_LINES 2
+`endif
 	gpu_ckfetch #(
+		.LINES(`CKFETCH_LINES),
 `ifdef SDRAM_BURST
 		.BURST(1),
 `else

@@ -171,16 +171,33 @@ static void screen_of(vtx_t *v) {
 	v->sv = 1;
 }
 
-static T2_COLD int32_t plane_d1(const vtx_t *v, int p) {
+#define GUARD_SH 3                /* the guard band: 8 times the view (below) */
+
+/* a corner's distance in to plane p; the sides' planes 2^sh times the
+ * view out (0: the picture's; GUARD_SH, below: the guard band's) */
+static T2_COLD int32_t plane_d1(const vtx_t *v, int p, int sh) {
+	/* past 2^28 a guard plane is as far as int32 goes (and w itself
+	 * for the picture's) */
+	int32_t gw = v->w >= (INT32_MAX >> GUARD_SH) ? (sh ? INT32_MAX >> 1 : v->w) : v->w << sh;
 	switch (p) {
-	case 0: return v->w + v->x;
-	case 1: return v->w - v->x;
-	case 2: return v->w + v->y;
-	case 3: return v->w - v->y;
+	case 0: return gw + v->x;
+	case 1: return gw - v->x;
+	case 2: return gw + v->y;
+	case 3: return gw - v->y;
 	case 4: return persp ? v->w - near_w : v->w + v->z;
 	default: return persp ? (far_w == INT32_MAX ? INT32_MAX / 2 : far_w - v->w) : v->w - v->z;
 	}
 }
+
+/* A triangle's clipping planes for the picture's sides are the guard
+ * band's, 8 times the view out (GUARD_SH; about +-1,280 pixels across, +-960
+ * down: inside the record's +-2,048): a corner made by clipping is then
+ * off the picture, so where a clipped triangle meets an unclipped one
+ * (the guard band's) no row of pixels between them is left undrawn.
+ * Clipped to the picture's own sides, the corners' rounding showed as
+ * one-pixel cracks across a road (mauskart3d on sergei_ml2_console,
+ * 2026-11-06). Lines keep the picture's sides. */
+
 
 static uint8_t out_code(const vtx_t *v) {
 	int32_t w = v->w;
@@ -499,9 +516,12 @@ static T2_COLD void clip_tri(vtx_t *a, vtx_t *b, vtx_t *c, bool flat, int32_t fl
 	{
 		static vtx_t buf[2][CLIP_MAX];
 		vtx_t *in = buf[1], *out;
-		uint8_t any = a->out | b->out | c->out;
+		uint8_t any = (a->out | b->out | c->out) & 48;
 		int n = 3, i, p, mm, cur = 0;
 		STAT(clipped);
+		/* the sides: the guard band's planes, those a corner is past */
+		for (p = 0; p < 4; p++)
+			if (plane_d1(a, p, GUARD_SH) < 0 || plane_d1(b, p, GUARD_SH) < 0 || plane_d1(c, p, GUARD_SH) < 0) any |= (uint8_t)(1 << p);
 		vcopy(&in[0], a); vcopy(&in[1], b); vcopy(&in[2], c);
 		for (p = 0; p < 6 && any; p++) {
 			if (!(any & (1 << p))) continue;
@@ -509,7 +529,7 @@ static T2_COLD void clip_tri(vtx_t *a, vtx_t *b, vtx_t *c, bool flat, int32_t fl
 			mm = 0;
 			for (i = 0; i < n; i++) {
 				vtx_t *va = &in[i], *vb2 = &in[i + 1 < n ? i + 1 : 0];
-				int32_t da = plane_d1(va, p), db = plane_d1(vb2, p);
+				int32_t da = plane_d1(va, p, GUARD_SH), db = plane_d1(vb2, p, GUARD_SH);
 				if (da >= 0 && mm < CLIP_MAX) vcopy(&out[mm++], va);
 				if ((da >= 0) != (db >= 0) && mm < CLIP_MAX) {
 					int64_t t = sdiv64((int64_t)da * T_ONE, (int64_t)da - db);
@@ -541,7 +561,7 @@ static T2_COLD void geom_line(vtx_t *a, vtx_t *b) {
 		int i;
 		STAT(clipped);
 		for (i = 0; i < 6; i++) {
-			int32_t da = plane_d1(a, i), db = plane_d1(b, i);
+			int32_t da = plane_d1(a, i, 0), db = plane_d1(b, i, 0);
 			if (da < 0 && db < 0) return;
 			if (da < 0) {
 				int64_t t = sdiv64((int64_t)da * T_ONE, (int64_t)da - db);

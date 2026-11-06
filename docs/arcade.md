@@ -197,6 +197,18 @@ everything else, [app_runtime.md](app_runtime.md)); on a board whose
 counter does not count it falls back to the tick clock after a tenth
 of a second.
 
+## Even pacing
+
+A game that cannot hold 60 frames a second on some machine shows its
+pictures for 1, 2, 1, 2 display frames -- jerkier than an even 30
+(mausrun3d's L showed it on the board). `ar_frame_lock(n)` makes
+`ar_frame()` return only on every n-th boundary of the frames it
+counts, so `dt` is always a multiple of n: 2 holds an even 30, 3 an
+even 20; 1 (the default) is off. A game with zgl calls `glFinish()`
+before `ar_frame()` when locked, so the picture is done when it is
+shown. mauskart3d locks to 2 for five seconds whenever three frames run
+long, and to 3 while frames run longer than two ([mauskart3d.md](mauskart3d.md)).
+
 ## Keys the runtime owns
 
 | Key | Does |

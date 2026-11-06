@@ -20,6 +20,8 @@
 // -DTEX: T2 with textures (TEX_LOG2 13, t2/t2fw_tex.hex), its texture
 // memory written through TEXADDR and TEXDATA from t2/tN.hex first; the
 // textured frames are 10 and 11 (test_t2's "lists, textured").
+// -DLISTS2, -DBUFS2, -DROWEND: TWO_LISTS, TWO_BUFS, ROW_END (with
+// -DTWO, two lists draw the first frame while the second is made).
 // -DTWO: the frame twice, back to back, into two pictures: VBASE for
 // the second written as soon as the first's stream is in, while T2 is
 // still drawing and writing the first (as zgl's pages do), and both
@@ -59,6 +61,21 @@ module tb_gpu_t2;
 `ifndef FIFO
 `define FIFO 11
 `endif
+`ifdef LISTS2
+	localparam LISTS = 1;
+`else
+	localparam LISTS = 0;
+`endif
+`ifdef BUFS2
+	localparam BUFS = 1;
+`else
+	localparam BUFS = 0;
+`endif
+`ifdef ROWEND
+	localparam REND = 1;
+`else
+	localparam REND = 0;
+`endif
 `ifdef TEX
 	localparam TEXL = 13;
 `else
@@ -66,6 +83,7 @@ module tb_gpu_t2;
 `endif
 	gpu_t2_wb #(.FW_HEX("t2/t2fw.hex"), .LINEAR(LIN), .POST_LOG2(`POST),
 		.STRIP_H(`STRIP), .FIFO_LOG2(`FIFO), .TEX_LOG2(TEXL),
+		.TWO_LISTS(LISTS), .TWO_BUFS(BUFS), .ROW_END(REND),
 		.TEX_FW_HEX("t2/t2fw_tex.hex"), .RECIP_HEX("../t2_recip.hex")) dut (
 		.clk(clk), .rst(rst),
 		.wb_cyc_i(s_cyc), .wb_stb_i(s_stb), .wb_we_i(s_we), .wb_sel_i(4'hf),

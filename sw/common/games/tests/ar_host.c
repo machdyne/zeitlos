@@ -594,6 +594,10 @@ void ar_msg_hook(void (*fn)(void *msg)) { (void)fn; }
 void ar_msg(void *msg) { (void)msg; }
 void ar_escape_leaves(bool on) { (void)on; }
 void ar_vsync_exact(bool on) { (void)on; }
+/* the host's frames are each a frame: the lock only counts them */
+static uint32_t frame_lock = 1;
+void ar_frame_lock(uint32_t n) { frame_lock = n < 1 ? 1 : n > 4 ? 4 : n; }
+uint32_t ar_frame_lock_get(void) { return frame_lock; }
 void ar_frame_hook(void (*fn)(void)) { frame_hook = fn; }
 
 uint32_t ar_frame(void) {

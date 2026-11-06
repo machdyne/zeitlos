@@ -118,7 +118,10 @@ module tb_ckfetch;
 	integer f_cycles = 0;
 	always @(posedge clk) if (f_cyc) f_cycles = f_cycles + 1;
 
-	gpu_ckfetch #(.BURST(`CKF_BURST), .VRAM_WORDS(VWORDS)) ckf (
+`ifndef CKF_LINES
+`define CKF_LINES 2
+`endif
+	gpu_ckfetch #(.BURST(`CKF_BURST), .VRAM_WORDS(VWORDS), .LINES(`CKF_LINES)) ckf (
 		.clk(clk), .rst(rst),
 		.en(color_chunky && color_en && game_en),
 		.base(ckbase),

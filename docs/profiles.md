@@ -51,6 +51,15 @@ What the OS does differently:
 What the hardware does differently is the target's business; the
 console's first is Lakritz.
 
+One thing the profile does itself: a console build with a DDMI output
+has **sound over HDMI** (`GPU_DDMI_AUDIO`, [ddmi_audio.md](ddmi_audio.md))
+by default -- a console goes to a television -- set in rtl/boards.vh's
+"The console's defaults". It is still off at power-on until the OS sets
+it (`system.video.ddmi_audio = yes`, or the shell's `ddmi on`).
+`NO_DDMI_AUDIO` in a target leaves it out: about 930 LUT4, no block
+RAM, which on lakritz_console (about 97% of the LUTs with it) may be
+what has to go.
+
 ### Lakritz (`lakritz_console`)
 
 Lakritz is an ECP5-25F: 24,288 LUT4 and 56 block RAMs. Its board build

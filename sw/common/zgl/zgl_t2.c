@@ -88,9 +88,25 @@ uint32_t zgl_t2_tex_word(uint32_t name) {
 	return name < TEX_NAMES ? tex_wd[name] : 0;
 }
 
+/* Never a store into a full FIFO: the store would wait for room with
+ * the main bus held (CMD is behind wb_arbiter_main, whose grant stays
+ * while CYC does), and the scanout's line fetch and T2's own output
+ * wait behind it -- lines shown late read as 0: short black lines
+ * (sergei_ml2_console, 2026-11-06). So the room is known first, from
+ * STATUS[27:16], read again only when what was known is used up. */
+static uint32_t t2_room;
+
+static inline void need(uint32_t n) {
+	/* STATUS is the word before CMD (zsoc.h Z_GTRI_W_STATUS, _CMD) */
+	while (t2_room < n) t2_room = (t2_reg[-1] >> 16) & 0xfffu;
+	t2_room -= n;
+}
+
 static inline void put(uint32_t w) {
-	if (t2_reg) *t2_reg = w;
-	else zglc_put(w);
+	if (t2_reg) {
+		need(1);
+		*t2_reg = w;
+	} else zglc_put(w);
 }
 
 bool zgl_t2_open(zgl_info_t *info) {
@@ -98,6 +114,7 @@ bool zgl_t2_open(zgl_info_t *info) {
 	t2_framed = false;
 	t2_info = info;
 	t2_reg = zglc_cmd ? zglc_cmd() : NULL;
+	t2_room = 0;
 	sent_view_ok = sent_xform_ok = sent_light_ok = sent_state_ok = false;
 	sent_pl_ok[0] = sent_pl_ok[1] = false;
 	return true;
@@ -678,9 +695,10 @@ bool zgl_t2_call(const zglr_op_t *ops, uint32_t n, void **cache, uint8_t *state)
 			volatile uint32_t *r = t2_reg;
 			for (i = 0; i + 4 <= nw; i += 4) {
 				uint32_t a = w[i], b = w[i + 1], c = w[i + 2], d = w[i + 3];
+				need(4);
 				*r = a; *r = b; *r = c; *r = d;
 			}
-			for (; i < nw; i++) *r = w[i];
+			for (; i < nw; i++) { need(1); *r = w[i]; }
 		} else
 			for (i = 0; i < nw; i++) zglc_put(w[i]);
 		t2_prims += nt + nl;

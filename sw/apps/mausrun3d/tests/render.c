@@ -55,6 +55,8 @@ void zglc_strip(int32_t y0, int rows, int32_t cx0, int32_t cx1, const uint8_t *c
 /* what the frames cost */
 static uint32_t frames, refused, over;
 static uint64_t sum_geom, sum_rast, sum_tris, sum_drawn, sum_words, sum_culled, sum_clipped, sum_verts, sum_outside;
+static uint64_t sum_t2;
+static uint32_t max_t2;
 static uint32_t max_geom, max_rast, max_tris, max_drawn, max_words, max_recs, overflows;
 
 #define BUDGET 800000u          /* 48 MHz / 60 */
@@ -92,7 +94,18 @@ static void t2_account(uint32_t frame) {
 		if (st.drawn + st.lines > max_recs) max_recs = st.drawn + st.lines;
 		overflows += st.overflows;
 		if (st.overflows && getenv("SHOW_OVER")) printf("  dropped: frame %u, %u records dropped, %u tris in, %u lines\n", frame, st.overflows, st.tris, st.lines);
-		if ((geom > rast ? geom : rast) > BUDGET) {
+		/* one record buffer: the raster starts when the geometry is done,
+		 * so a frame is the two together (docs/zgl_t2.md) */
+		{
+			/* T2_TWO_LISTS=1 in the environment: two record lists, the
+			 * longer of the two (gpu_t2.v TWO_LISTS) */
+			uint32_t t2 = getenv("T2_TWO_LISTS") ? (geom > rast ? geom : rast) : geom + rast;
+			sum_t2 += t2;
+			if (t2 > max_t2) max_t2 = t2;
+			rast = t2;          /* for the budget, below */
+			geom = 0;
+		}
+		if (geom + rast > BUDGET) {
 			over++;
 			if (getenv("SHOW_OVER")) printf("  over: frame %u, %u cycles, %u in, %u verts, %u drawn, %u clipped, %u outside\n", frame, geom, st.tris, st.verts, st.drawn, st.clipped, st.outside);
 		}
@@ -227,6 +240,8 @@ int main(int argc, char **argv) {
 		printf("  geometry core   %8llu %8u cycles%s\n", (unsigned long long)(sum_geom / frames), max_geom,
 			have_fw ? " (zeitlos32g's ISS, the real firmware)" : " (the model's estimate)");
 		printf("  raster, output  %8llu %8u cycles (the model's estimate)\n", (unsigned long long)(sum_rast / frames), max_rast);
+		printf("  T2, a frame     %8llu %8u cycles (%s)\n", (unsigned long long)(sum_t2 / frames), max_t2,
+			getenv("T2_TWO_LISTS") ? "two lists: the longer of the two" : "the two, one after the other");
 		printf("  triangles in    %8llu %8u\n", (unsigned long long)(sum_tris / frames), max_tris);
 		printf("  drawn           %8llu %8u (records at most %u of %d)\n", (unsigned long long)(sum_drawn / frames), max_drawn, max_recs, T2_RECS);
 		printf("  stream words    %8llu %8u\n", (unsigned long long)(sum_words / frames), max_words);

@@ -11,6 +11,7 @@
  */
 #include <stdint.h>
 #include <string.h>
+#include <stdlib.h>
 #include <stdbool.h>
 #include "../zgl_t2.h"
 #include "t2_raster.h"
@@ -86,7 +87,21 @@ static void tri(const uint32_t *w, int32_t sy0, int32_t sy1, uint8_t (*col)[W], 
 			br = w[15] + w[17] * (uint32_t)(y - ylo);
 			qr = w[18] + w[20] * (uint32_t)(y - ylo);
 		}
-		st->cyc_raster += (uint32_t)((bx1 >> 2) - (bx0 >> 2) + 1) + 2;
+		{
+			/* a pixel a clock across the box (gpu_t2.v R_TWORD); with
+			 * ROW_END (T2_ROW_END=1 in the environment) to one past the
+			 * span's last pixel */
+			static int row_end = -1;
+			int32_t last = -1, xx;
+			if (row_end < 0) row_end = getenv("T2_ROW_END") != NULL;
+			if (row_end) {
+				for (xx = bx0; xx <= bx1; xx++) {
+					int64_t gl = edge(w[2], w[4], xx * 16, Y), gs = edge(sa, sb, xx * 16, Y);
+					if (sr ? (gl >= 0 && gs < 0) : (gs >= 0 && gl < 0)) last = xx;
+				}
+			}
+			st->cyc_raster += (uint32_t)((row_end && last >= 0 && last < bx1 ? last + 1 : bx1) - bx0 + 1) + 2;
+		}
 		for (x = bx0; x <= bx1; x++) {
 			int32_t X = x * 16;
 			int64_t fl = edge(w[2], w[4], X, Y), fs = edge(sa, sb, X, Y);

@@ -96,6 +96,18 @@ module gpu_t2_wb #(
 	// (the raster waits while a strip goes out: about 100k cycles more
 	// a frame, for 9 DP16KD and about 400 LUT4 less)
 	parameter TWO_BUFS = 0,
+	// Two record lists: the geometry unit makes frame N+1's records in
+	// one while the raster draws frame N's from the other, so a frame
+	// takes the longer of the two rather than their sum (LIST_WORDS
+	// more; with TWO_BUFS and ROW_END, 16 DP16KD and 232 LUT4 in all). The core's GO hands its list over and it writes
+	// the other next; STATUS[0] says the list it would write is still
+	// the raster's (a frame handed over and not yet taken, or the one
+	// being drawn). 0: one list, the core waits for the raster.
+	parameter TWO_LISTS = 0,
+	// A row of a triangle ends at the first pixel past its span (a
+	// triangle is convex), not at its bounding box's edge: fewer
+	// clocks for long thin triangles, a few LUT4.
+	parameter ROW_END = 0,
 	// a strip's rows: 12 makes a buffer 960 words, which block RAM holds
 	// without the output multiplexers 1,280 words (16 rows) need
 	parameter STRIP_H = 12,
@@ -225,13 +237,19 @@ module gpu_t2_wb #(
 		.io_rdata(g_rdata), .io_ready(g_ready)
 	);
 
-	// the record list: the core writes it, the raster reads it
-	reg [31:0] list [0:LIST_WORDS-1];
+	// the record list (two with TWO_LISTS): the core writes one, the
+	// raster reads one
+	localparam LIST_N = TWO_LISTS ? 2 * LIST_WORDS : LIST_WORDS;
+	reg [31:0] list [0:LIST_N-1];
 	reg [12:0] l_raddr;
 	reg [31:0] l_q, l_qr;          // the RAM's word; registered before use
+	reg        g_bank;            // the list the core writes
+	reg        r_bank;            // the list the raster reads
+	wire [13:0] l_wi = {1'b0, g_addr[14:2]} + ((TWO_LISTS && g_bank) ? LIST_WORDS : 14'd0);
+	wire [13:0] l_ri = {1'b0, l_raddr} + ((TWO_LISTS && r_bank) ? LIST_WORDS : 14'd0);
 	always @(posedge clk) begin
-		if (g_wr && g_addr[17:16] == 2'b11) list[g_addr[14:2]] <= g_wdata;
-		l_q <= list[l_raddr];
+		if (g_wr && g_addr[17:16] == 2'b11) list[l_wi] <= g_wdata;
+		l_q <= list[l_ri];
 		l_qr <= l_q;
 	end
 
@@ -240,8 +258,18 @@ module gpu_t2_wb #(
 	reg [7:0]  fr_y0, fr_y1;
 	reg [7:0]  fr_clear;
 	reg [12:0] fr_nw;             // the list's words
-	reg        fr_go;             // a frame handed over (a cycle)
-	reg        r_busy;            // the raster has the list
+	reg        fr_go;             // a frame handed over, not yet taken
+	reg        fr_bank;           // ...in this list
+	reg        r_busy;            // the raster has a list
+	reg        r_take;            // the raster took the frame (a cycle)
+	// the frame the raster draws: the core's taken at GO, since with two
+	// lists it sets up the next frame's while this one is drawn
+	reg [8:0]  rf_x0, rf_x1;
+	reg [7:0]  rf_y0, rf_y1;
+	reg [7:0]  rf_clear;
+	reg [12:0] rf_nw;
+	// the list the core would write next is the raster's
+	wire       g_wait = fr_go || (r_busy && (!TWO_LISTS || r_bank == g_bank));
 
 	// the core's I/O cycles: IN waits for a word; the rest answer at once
 	reg        g_inwait;          // an IN is waiting for the FIFO
@@ -253,15 +281,17 @@ module gpu_t2_wb #(
 			g_inpop <= 1'b0;
 			f_pop <= 1'b0;
 			fr_go <= 1'b0;
+			fr_bank <= 1'b0;
+			g_bank <= 1'b0;
 		end else begin
 			g_ready <= 1'b0;
 			f_pop <= 1'b0;
-			fr_go <= 1'b0;
+			if (r_take) fr_go <= 1'b0;
 			g_inpop <= 1'b0;
 			if (g_rd) begin
 				if (g_addr == 18'h20000) g_inwait <= 1'b1;
 				else begin
-					g_rdata <= {31'd0, r_busy || fr_go};
+					g_rdata <= {31'd0, g_wait};
 					g_ready <= 1'b1;
 				end
 			end
@@ -282,7 +312,12 @@ module gpu_t2_wb #(
 				18'h20008: begin fr_x0 <= g_wdata[8:0]; fr_x1 <= g_wdata[24:16]; end
 				18'h2000c: begin fr_y0 <= g_wdata[7:0]; fr_y1 <= g_wdata[23:16]; end
 				18'h20010: fr_clear <= g_wdata[7:0];
-				18'h20014: begin fr_nw <= g_wdata[12:0]; fr_go <= 1'b1; end
+				18'h20014: begin
+					fr_nw <= g_wdata[12:0];
+					fr_go <= 1'b1;
+					fr_bank <= g_bank;
+					if (TWO_LISTS) g_bank <= ~g_bank;
+				end
 				default: ;
 				endcase
 			end
@@ -439,7 +474,7 @@ module gpu_t2_wb #(
 	wire signed [11:0] ln_pxs = ln_xr[31:20];
 	wire signed [11:0] ln_pys = ln_yr[31:20];
 	wire        ln_in = (ln_pys >= $signed({4'd0, s_y0})) && (ln_pys <= $signed({4'd0, s_y1})) &&
-	                    (ln_pxs >= $signed({3'd0, fr_x0})) && (ln_pxs <= $signed({3'd0, fr_x1}));
+	                    (ln_pxs >= $signed({3'd0, rf_x0})) && (ln_pxs <= $signed({3'd0, rf_x1}));
 	wire [3:0]  ln_row = ln_pys[3:0] - s_y0[3:0];
 	wire [10:0] ln_addr = {ln_row, 6'd0} + {2'd0, ln_row, 4'd0} + {4'd0, ln_pxs[8:2]};
 	wire [31:0] ln_cr = ln_c + 32'd128;
@@ -450,6 +485,7 @@ module gpu_t2_wb #(
 	// word would take a quarter of the cycles, and too much of a 45F.
 	wire signed [21:0] sdy_s = (t_y < t_ymid) ? sdy_1 : sdy_2;
 	wire signed [39:0] sdl = sdy_l, sds = sdy_s;
+	reg         t_in;              // the row has been inside (ROW_END)
 	wire        px_cover = t_sr ? (!fw_l[39] && fw_s[39]) : (!fw_s[39] && fw_l[39]);
 	reg  [7:0]  th;               // bayer4[y & 3][x & 3]
 	always @(*) begin
@@ -652,6 +688,8 @@ module gpu_t2_wb #(
 		if (rst || soft_rst) begin
 			rs <= R_IDLE;
 			r_busy <= 1'b0;
+			r_take <= 1'b0;
+			r_bank <= 1'b0;
 			d_sel <= 1'b0;
 			p0_v <= 1'b0; p1_v <= 1'b0; p2_v <= 1'b0;
 			x1_v <= 1'b0; x2_v <= 1'b0; x3_v <= 1'b0; x4_v <= 1'b0;
@@ -663,6 +701,7 @@ module gpu_t2_wb #(
 			dr_dep_we <= 4'd0;
 		end else begin
 			h_go <= 1'b0;
+			r_take <= 1'b0;
 			dr_col_we <= 4'd0;
 			dr_dep_we <= 4'd0;
 
@@ -727,8 +766,14 @@ module gpu_t2_wb #(
 
 			case (rs)
 			R_IDLE: begin
-				if (fr_go) begin
+				if (fr_go && !r_take) begin
 					r_busy <= 1'b1;
+					r_take <= 1'b1;
+					r_bank <= fr_bank;
+					rf_x0 <= fr_x0; rf_x1 <= fr_x1;
+					rf_y0 <= fr_y0; rf_y1 <= fr_y1;
+					rf_clear <= fr_clear;
+					rf_nw <= fr_nw;
 					s_y0 <= fr_y0;
 					s_first <= 1'b1;
 					rs <= R_BEGIN;
@@ -737,9 +782,9 @@ module gpu_t2_wb #(
 
 			// a strip: its buffer back from going out, clear to the colour
 			R_BEGIN: begin
-				s_y1 <= (fr_y1 < s_y0 + STRIP_H1) ? fr_y1 : s_y0 + STRIP_H1;
+				s_y1 <= (rf_y1 < s_y0 + STRIP_H1) ? rf_y1 : s_y0 + STRIP_H1;
 				if (!d_busy) begin
-					if (d_clr != {1'b0, fr_clear}) begin
+					if (d_clr != {1'b0, rf_clear}) begin
 						clr_w <= 11'd0;
 						rs <= R_CLR;
 					end else begin
@@ -752,13 +797,13 @@ module gpu_t2_wb #(
 			R_CLR: begin
 				dr_b_addr <= clr_w;
 				dr_col_we <= 4'b1111;
-				dr_col_d <= {4{fr_clear}};
+				dr_col_d <= {4{rf_clear}};
 				dr_dep_we <= 4'b1111;
 				dr_dep_d <= {64{1'b1}};
 				clr_w <= clr_w + 11'd1;
 				if (clr_w == BUF_LAST) begin
-					if (d_sel) bclr1 <= {1'b0, fr_clear};
-					else bclr0 <= {1'b0, fr_clear};
+					if (d_sel) bclr1 <= {1'b0, rf_clear};
+					else bclr0 <= {1'b0, rf_clear};
 					r_ptr <= 13'd0;
 					rs <= R_SCAN;
 				end
@@ -766,7 +811,7 @@ module gpu_t2_wb #(
 
 			// the next record's header: does it touch the strip?
 			R_SCAN: begin
-				if (r_ptr >= fr_nw) rs <= R_END;
+				if (r_ptr >= rf_nw) rs <= R_END;
 				else begin
 					l_raddr <= r_ptr;
 					rs <= R_W0;
@@ -877,6 +922,7 @@ module gpu_t2_wb #(
 			// a row: the edges and planes at its first pixel
 			R_TROW: begin
 				t_x <= t_bx0;
+				t_in <= 1'b0;
 				fw_l <= f_l;
 				fw_s <= (t_y < t_ymid) ? f_1 : f_2;
 				zw <= zrow;
@@ -912,7 +958,9 @@ module gpu_t2_wb #(
 				cw <= cw + t_dcdx;
 				aw <= aw + t_dadx; bw <= bw + t_dbdx; qw <= qw + t_dqdx;
 				t_x <= t_x + 9'd1;
-				if (t_x == t_bx1) rs <= R_TNEXT;
+				if (px_cover) t_in <= 1'b1;
+				// past the span: a triangle's row is one span (ROW_END)
+				if (t_x == t_bx1 || (ROW_END && t_in && !px_cover)) rs <= R_TNEXT;
 			end
 
 			R_TNEXT: begin
@@ -964,8 +1012,8 @@ module gpu_t2_wb #(
 			// the strip is drawn: out it goes; the next
 			R_END: if (!pipe_busy) begin
 				h_y0 <= s_y0; h_rows1 <= s_y1[3:0] - s_y0[3:0];
-				h_cx0 <= fr_x0; h_cx1 <= fr_x1;
-				h_clear <= fr_clear;
+				h_cx0 <= rf_x0; h_cx1 <= rf_x1;
+				h_clear <= rf_clear;
 				h_first <= s_first;
 				h_go <= 1'b1;
 				if (TWO_BUFS) d_sel <= ~d_sel;
@@ -973,7 +1021,7 @@ module gpu_t2_wb #(
 			end
 			R_NEXTS: begin
 				s_first <= 1'b0;
-				if (s_y1 >= fr_y1) begin
+				if (s_y1 >= rf_y1) begin
 					r_busy <= 1'b0;
 					rs <= R_IDLE;
 				end else begin

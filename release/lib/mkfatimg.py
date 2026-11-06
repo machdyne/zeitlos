@@ -142,7 +142,7 @@ APP_SET = {
     "mausrun": "games", "planedemo": "games", "chess": "games", "kidgames": "games",
     "mahjong": "games",
     "chip8": "games", "space3d": "games", "gpu3d": "games", "gldemo": "games",
-    "mausrun3d": "games", "launcher": "games",
+    "mausrun3d": "games", "mauskart3d": "games", "launcher": "games",
     "gpudemo": "games",
 }
 # /data/<name> folders that are not an app's: the core apps' (in flash,
@@ -339,6 +339,7 @@ GAMES_DEMOS = [
     (zcard("Z_DIR_APPS", "bricks"), "sw/apps/bricks/bricks.bin"),
     (zcard("Z_DIR_APPS", "mausrun"), "sw/apps/mausrun/mausrun.bin"),
     (zcard("Z_DIR_APPS", "mausrun3d"), "sw/apps/mausrun3d/mausrun3d.bin"),
+    (zcard("Z_DIR_APPS", "mauskart3d"), "sw/apps/mauskart3d/mauskart3d.bin"),
     (zcard("Z_DIR_APPS", "launcher"), "sw/apps/launcher/launcher.bin"),
     (zcard("Z_DIR_APPS", "planedemo"), "sw/apps/planedemo/planedemo.bin"),
     (zcard("Z_DIR_APPS", "gpu3d"), "sw/apps/gpu3d/gpu3d.bin"),

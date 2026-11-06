@@ -44,6 +44,15 @@
 #                  cycles an instruction (docs/mausrun3d.md); zeitlos32p
 #                  ran Doom at 0.65 instructions a cycle against 0.14.
 #                  No MPU here (NO_MPU), so no mpu_split
+#   T2_TWO_LISTS=1 T2's geometry makes the next frame's records while its
+#                  raster draws this one's: a frame the longer of the two,
+#                  not their sum (docs/zgl_t2.md, "Overlap")
+#   T2_TWO_BUFS=1  a strip drawn while the last goes out
+#   T2_ROW_END=1   a triangle's row ends past its span, not its box;
+#                  the three: 16 DP16KD and 232 LUT4 (synthesised)
+#   CKFETCH_LINES=4 the scanout's line fetch holds four lines ahead, not
+#                  two: with T2's output that busy a line was sometimes
+#                  late and its start read as black (2026-11-06)
 
 description = Sergei ML2 as a games console (console profile, T2)
 
@@ -70,3 +79,7 @@ defines =
 	DDR3_WCOMBINE
 	T2_TEX_LOG2=13
 	CPU_ZEITLOS32P
+	T2_TWO_LISTS=1
+	T2_TWO_BUFS=1
+	T2_ROW_END=1
+	CKFETCH_LINES=4

@@ -68,6 +68,10 @@ display that shows nothing with it on is recovered by editing
 
 ## Turning it on
 
+Built by `GPU_DDMI_AUDIO` in a target or board block, and by default in
+every console build with DDMI ([profiles.md](profiles.md), "The
+console"; `NO_DDMI_AUDIO` leaves it out).
+
 Three things have to be true:
 
 1. **The bitstream has it.** `GPU_DDMI_AUDIO` (with `GPU_DDMI`). No

@@ -42,7 +42,7 @@ static char status[48];
 
 /* what is shown first: the games and the demos */
 static const char *const games[] = {
-	"mausrun3d", "mausrun", "space3d", "snake", "blocks", "bricks", "chess",
+	"mausrun3d", "mauskart3d", "mausrun", "space3d", "snake", "blocks", "bricks", "chess",
 	"mahjong", "kidgames", "casino", "chip8", "planedemo", "gldemo", "gpu3d",
 	"gpudemo", "basic", NULL
 };

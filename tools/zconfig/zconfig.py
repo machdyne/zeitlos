@@ -237,6 +237,9 @@ class Config:
         d = dict(self.defines)
         for k, v in universal().items():
             d.setdefault(k, v)
+        # the console's defaults (rtl/boards.vh, "The console's defaults")
+        if "ZEITLOS_CONSOLE" in d and "GPU_DDMI" in d and "NO_DDMI_AUDIO" not in d:
+            d.setdefault("GPU_DDMI_AUDIO", None)
         for e in self.cat.entries:
             if e.off and e.off in d:
                 d.pop(e.define, None)
@@ -292,7 +295,11 @@ class Config:
         if e.off:
             if on:
                 self.defines.pop(e.off, None)
+                # not on by default here (a console's default): asked for
+                if e.define not in self.effective():
+                    self.defines[e.define] = None
             else:
+                self.defines.pop(e.define, None)
                 self.defines[e.off] = None
             return
         if on:

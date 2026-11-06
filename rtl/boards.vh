@@ -1904,4 +1904,21 @@
 // rules and registers, with privilege tracked per instruction, which a
 // pipeline needs.
 
+// -- The console's defaults (docs/profiles.md) --
+//
+// A console is plugged into a television: its sound goes out with the
+// picture, as HDMI data islands (`GPU_DDMI_AUDIO, docs/ddmi_audio.md),
+// wherever there is a DDMI output. Still off at power-on until the OS
+// sets socctl's DDMI EN (system.video.ddmi_audio). NO_DDMI_AUDIO leaves
+// it out (about 930 LUT4, no block RAM).
+`ifdef ZEITLOS_CONSOLE
+`ifdef GPU_DDMI
+`ifndef NO_DDMI_AUDIO
+`ifndef GPU_DDMI_AUDIO
+`define GPU_DDMI_AUDIO
+`endif
+`endif
+`endif
+`endif
+
 `endif
