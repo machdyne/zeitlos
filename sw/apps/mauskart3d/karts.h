@@ -20,7 +20,8 @@ extern const racer_t kt_racer[RACERS];
 #define KT_NEAR(r)  (r)
 #define KT_FAR(r)   (RACERS + (r))
 #define KT_SHADOW   (2 * RACERS)
-#define KT_LISTS    (2 * RACERS + 1)
+#define KT_GROUND(r) (2 * RACERS + 1 + (r))   /* near, its shadow under it: on the ground */
+#define KT_LISTS    (3 * RACERS + 1)
 
 extern uint32_t kt_list;
 extern uint16_t kt_tris[KT_LISTS];

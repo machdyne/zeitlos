@@ -319,7 +319,7 @@ bool tk_textures(void) {
 #define CHUNK 8                      /* segments a list */
 #define LOD_NEAR 224                 /* world units: nearer, the near list */
 #define MAX_CHUNKS (MAX_SEGS / CHUNK + 1)
-static GLuint ch_list[MAX_CHUNKS][2], ch_scen[MAX_CHUNKS][2];
+static GLuint ch_list[MAX_CHUNKS][2], ch_scen[MAX_CHUNKS][2], ch_both[MAX_CHUNKS][2];
 static uint16_t ch_stris[MAX_CHUNKS][2];
 bool tk_scenery = true;
 static uint16_t ch_tris[MAX_CHUNKS][2];
@@ -363,14 +363,13 @@ static void flat_quad(const int32_t *a, const int32_t *b, const int32_t *c, cons
 
 /* a chunk's list: near, the road a segment at a time and the posts;
  * far, the road two segments at a time, the boards on the bends alone */
-static void chunk(int c, int far) {
+static void chunk(int c, int far, GLuint into) {
 	int s0 = c * CHUNK, s1 = s0 + CHUNK, i;
 	int32_t ux = tk_seg[s0 % tk_n].x, uz = tk_seg[s0 % tk_n].z;
 	int step = far ? 2 : 1;
 	int32_t hw = ROAD_HW + KERB_W;
 	if (s1 > tk_n) s1 = tk_n;
-	ntri = 0;
-	glNewList(ch_list[c][far], GL_COMPILE);
+	if (into) { ntri = 0; glNewList(into, GL_COMPILE); }
 	/* the road and its kerbs: the left edge to the right one, a segment
 	 * to the next (two, far). Seen from above, x east and z south, going
 	 * along (dx, dz) with right (-dz, dx): l0 r0 r1 l1 is counter-
@@ -458,8 +457,7 @@ static void chunk(int c, int far) {
 	}
 	glEnd();
 	glBindTexture(GL_TEXTURE_2D, 0);
-	glEndList();
-	ch_tris[c][far] = (uint16_t)ntri;
+	if (into) { glEndList(); ch_tris[c][far] = (uint16_t)ntri; }
 }
 
 /* -- the scenery: trees and bushes beside the road, cards facing back
@@ -487,11 +485,10 @@ static void scen_card(const seg_t *g, int32_t x, int32_t z, int w, int h, int te
 	ntri += 2;
 }
 
-static void scenery(int c, int far) {
+static void scenery(int c, int far, GLuint into) {
 	int s0 = c * CHUNK, s1 = s0 + CHUNK, i;
 	if (s1 > tk_n) s1 = tk_n;
-	ntri = 0;
-	glNewList(ch_scen[c][far], GL_COMPILE);
+	if (into) { ntri = 0; glNewList(into, GL_COMPILE); }
 	mk_material(W3_R_GRASS);
 	for (i = s0; i < s1; i++) {
 		int k;
@@ -525,8 +522,7 @@ static void scenery(int c, int far) {
 		}
 	}
 	glBindTexture(GL_TEXTURE_2D, 0);
-	glEndList();
-	ch_stris[c][far] = (uint16_t)ntri;
+	if (into) { glEndList(); ch_stris[c][far] = (uint16_t)ntri; }
 }
 
 void tk_lists(void) {
@@ -535,6 +531,7 @@ void tk_lists(void) {
 	for (c = 0; c < nchunks; c++) {
 		glDeleteLists(ch_list[c][0], 2);
 		glDeleteLists(ch_scen[c][0], 2);
+		glDeleteLists(ch_both[c][0], 2);
 	}
 	nchunks = (tk_n + CHUNK - 1) / CHUNK;
 	for (c = 0; c < nchunks; c++) {
@@ -552,35 +549,32 @@ void tk_lists(void) {
 		ch_r[c] = ((x1 - x0) > (z1 - z0) ? (x1 - x0) : (z1 - z0)) / 2 + ROAD_HW + KERB_W + 24;
 		ch_list[c][0] = glGenLists(2);
 		ch_list[c][1] = ch_list[c][0] + 1;
-		chunk(c, 0);
-		chunk(c, 1);
+		chunk(c, 0, ch_list[c][0]);
+		chunk(c, 1, ch_list[c][1]);
 		ch_scen[c][0] = glGenLists(2);
 		ch_scen[c][1] = ch_scen[c][0] + 1;
-		scenery(c, 0);
-		scenery(c, 1);
+		scenery(c, 0, ch_scen[c][0]);
+		scenery(c, 1, ch_scen[c][1]);
+		/* the road and its scenery, one list: a chunk one call where
+		 * two when both are in view (on lakritz_console a call is a
+		 * few thousand cycles) */
+		ch_both[c][0] = glGenLists(2);
+		ch_both[c][1] = ch_both[c][0] + 1;
+		for (i = 0; i < 2; i++) {
+			glNewList(ch_both[c][i], GL_COMPILE);
+			chunk(c, i, 0);
+			scenery(c, i, 0);
+			glEndList();
+		}
 	}
 }
 
-static int32_t along(int32_t x, int32_t z, int32_t ex, int32_t ez, uint32_t yaw) {
-	return (int32_t)(((int64_t)(x - ex) * zglSin(yaw) - (int64_t)(z - ez) * zglCos(yaw)) >> 16);
-}
-
-/* is (x, z), r round it, ahead of the eye and within far? */
-static bool in_view(int32_t x, int32_t z, int32_t r, int32_t ex, int32_t ez, uint32_t yaw, int32_t far) {
-	int32_t dx = x - ex, dz = z - ez;
-	int32_t s = zglSin(yaw), co = zglCos(yaw);
-	/* along: (sin, -cos); across: (cos, sin) */
-	int32_t along = (int32_t)(((int64_t)dx * s - (int64_t)dz * co) >> 16);
-	int32_t across = (int32_t)(((int64_t)dx * co + (int64_t)dz * s) >> 16);
-	if (along < -r) return false;
-	if (along - r > far) return false;
-	/* the sides of a 100-degree view (|across| < 1.2 along) */
-	if (across < 0) across = -across;
-	if (across - r > along + (along / 5) + r) return false;
-	return true;
-}
-
 uint32_t tk_draw(int32_t ex, int32_t ez, uint32_t yaw, int32_t far, int seg_hint) {
+	/* each chunk's place in the view once, in 32 bits (a track is a few
+	 * thousand units across: x 65536 fits): along (sin, -cos), across
+	 * (cos, sin). The 64-bit sums twice a chunk were a Lakritz cost. */
+	int32_t s = zglSin(yaw), co = zglCos(yaw);
+	int32_t far_s = far * 3 / 4;
 	int c;
 	uint32_t tris = 0;
 	(void)seg_hint;
@@ -588,21 +582,24 @@ uint32_t tk_draw(int32_t ex, int32_t ez, uint32_t yaw, int32_t far, int seg_hint
 	/* the grass is the sky list's, below the horizon: the road on it */
 	glEnable(GL_DEPTH_TEST);
 	for (c = 0; c < nchunks; c++) {
-		int lod;
-		if (!in_view(ch_x[c], ch_z[c], ch_r[c], ex, ez, yaw, far)) continue;
-		lod = along(ch_x[c], ch_z[c], ex, ez, yaw) - ch_r[c] > LOD_NEAR;
-		glCallList(ch_list[c][lod]);
-		tris += ch_tris[c][lod];
-		tk_calls++;
-	}
-	if (!tk_scenery) return tris;
-	for (c = 0; c < nchunks; c++) {
-		int lod;
-		if (!ch_stris[c][0] || !in_view(ch_x[c], ch_z[c], ch_r[c] + 60, ex, ez, yaw, far * 3 / 4)) continue;
-		lod = along(ch_x[c], ch_z[c], ex, ez, yaw) - ch_r[c] > LOD_NEAR;
-		if (!ch_stris[c][lod]) continue;
-		glCallList(ch_scen[c][lod]);
-		tris += ch_stris[c][lod];
+		int32_t dx = ch_x[c] - ex, dz = ch_z[c] - ez, r = ch_r[c], rs = r + 60;
+		int32_t al = (dx * s - dz * co) >> 16, ac = (dx * co + dz * s) >> 16;
+		int lod = al - r > LOD_NEAR;
+		bool road, scen;
+		if (ac < 0) ac = -ac;
+		road = !(al < -r || al - r > far || ac - r > al + al / 5 + r);   /* a 100-degree view */
+		scen = tk_scenery && ch_stris[c][lod] &&
+		       !(al < -rs || al - rs > far_s || ac - rs > al + al / 5 + rs);
+		if (road && scen) {
+			glCallList(ch_both[c][lod]);
+			tris += ch_tris[c][lod] + ch_stris[c][lod];
+		} else if (road) {
+			glCallList(ch_list[c][lod]);
+			tris += ch_tris[c][lod];
+		} else if (scen) {
+			glCallList(ch_scen[c][lod]);
+			tris += ch_stris[c][lod];
+		} else continue;
 		tk_calls++;
 	}
 	return tris;

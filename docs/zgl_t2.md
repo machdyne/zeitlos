@@ -413,6 +413,51 @@ only once line 239 is next, so CKBASE is taken when it was. No more
 block RAM (four lines are 320 words, two were 160: one DP16KD either
 way); tb_ckfetch.v and tb_console_ddr3.v pass with both.
 
+Neither ended them on lakritz_console, and the cause was not the bus
+(2026-11-07). The fetch learns which line is next from gpu_video's
+refill row, which comes from the pixel clock's domain on two flops a
+bit. As the row changes its bits can arrive a clock apart, and for that
+clock the fetch saw a row that was neither: its window moved there, a
+fetch started for it into the first slot it did not need -- often one
+holding a line about to be shown -- and that line came back while it
+was being read, black where it was not yet in. Always at the same rows
+(those where many bits change), flashing as the timing at each crossing
+did, and different from one place-and-route to the next. gpu_ckfetch.v
+now takes a row only once two clocks see it the same. tb_console_bus.v
+`-P tb_console_bus.TEAR=1` gives the fetch such a row for a clock at
+every change: lines 16-36 words of 80 wrong before, none after (with
+`CKL=4 WRUN=8`, four lines ahead and T2's eight-word runs, as
+lakritz_console).
+
+## The CPU's side, cheaply
+
+On lakritz_console (picorv32, no data cache) every load and store the
+CPU makes, its stack's too, is a trip to the SDRAM: what zgl_t2.c does a
+call is counted in those. The simulator's cycle model for it
+(`ZSIM_COST=lakritz`, sim/README.md) and mauskart3d's simbench
+(sw/apps/mauskart3d/tests/simbench) found, 2026-11-06:
+
+- a list's words went four at a time through need(), not inlined, with
+  the four held on the stack across the call: three times the copy
+  itself. `put_n()` reads the room once for as many words as it holds
+  and copies with nothing between a load and its store.
+- each call put the 45 words of the matrix, the lights and the
+  positional lights together on the stack to compare them with those
+  sent. The matrix is sent again only when the mvp was made again
+  (`zgl_s.mvp_serial`), the lights when a matrix, a light or an enable
+  changed (`lserial`), a material alone as the words sent with the new
+  material, a positional light that is off and was sent off not at all.
+- a list compiled the first time it is called: a frame tens of
+  thousands of cycles over, a chunk of track at a time on the first lap.
+  `zglPrepareLists()` compiles them when the program asks (zgl.h).
+  A compiled list keeps only its words now; it kept the open chunk's
+  room, 16 KB or more a list, and a few hundred compiled at once ran out
+  of memory.
+
+mauskart3d's CPU, a frame on that model: 869 k cycles before, 350-430 k
+after (with its own share: one call for a chunk's road and scenery,
+for a kart and its shadow).
+
 ## The host's model of a frame
 
 `tests/t2_raster.c` counts the raster at a pixel a clock across a

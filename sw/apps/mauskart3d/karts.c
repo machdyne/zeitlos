@@ -200,4 +200,22 @@ void kt_make(void) {
 	glEnd();
 	glEndList();
 	kt_tris[KT_SHADOW] = (uint16_t)ntri;
+	/* a kart on the ground and its shadow, one list: one call, one
+	 * matrix where two (on lakritz_console a call and a matrix are
+	 * thousands of cycles each) */
+	for (r = 0; r < RACERS; r++) {
+		glNewList(kt_list + KT_GROUND(r), GL_COMPILE);
+		ntri = 0;
+		matchbox(kt_racer[r].box, false);
+		driver(r);
+		mk_flat(C_SHADOW);
+		glBegin(GL_TRIANGLES);
+		{
+			int a[3] = { -8, 1, 12 }, b[3] = { 8, 1, 12 }, c[3] = { 8, 1, -12 }, d[3] = { -8, 1, -12 };
+			quad(a, b, c, d);
+		}
+		glEnd();
+		glEndList();
+		kt_tris[KT_GROUND(r)] = (uint16_t)ntri;
+	}
 }

@@ -172,7 +172,23 @@ module gpu_ckfetch #(
 	// Registered: gb_row moves once a line, and a value a clock old
 	// names lines already fetched, so the fetch only starts a clock later.
 	// (It was the slowest path of lakritz_console.)
-	wire [9:0] l_full = (gb_row >= 10'd240) ? (gb_row - 10'd240) : gb_row;
+	//
+	// gb_row is gpu_video's y_refill crossed from the pixel clock on two
+	// flops a bit: as it changes, its bits may arrive a clock apart, and
+	// a clock's worth of a row that is neither the old nor the new one
+	// is seen. gpu_video reads it only once it has settled; read here
+	// every clock, such a row took the window elsewhere for a clock --
+	// a fetch started for it, into a slot holding a line about to be
+	// shown -- and that line came back late: short black dashes at
+	// lines where many bits change (lakritz_console, 2026-11-07). A row
+	// is taken only once two clocks see it the same.
+	reg  [9:0] gr0, gr1, g_row;
+	always @(posedge clk) begin
+		gr0 <= gb_row;
+		gr1 <= gr0;
+		if (gr0 == gr1) g_row <= gr1;
+	end
+	wire [9:0] l_full = (g_row >= 10'd240) ? (g_row - 10'd240) : g_row;
 	wire [7:0] lc_d = (l_full >= 10'd240) ? 8'd0 : l_full[7:0];
 	reg  [7:0] lc, lw1, lw2, lw3;
 	// the next frame's lines only once its last line is about to be

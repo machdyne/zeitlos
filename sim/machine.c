@@ -4,6 +4,7 @@
 #include <termios.h>
 #include <unistd.h>
 #include <sys/select.h>
+#include <signal.h>
 
 #include "machine.h"
 #include "../sw/common/zexec_lz4.h"
@@ -749,6 +750,8 @@ int machine_load_bin(machine_t *m, const char *path) {
  * out at exit as "pc count" lines (sim/README.md, "Profiling") */
 static uint32_t *prof;
 static uint32_t prof_n;
+static volatile sig_atomic_t prof_stop;     /* SIGINT/SIGTERM: stop, write it */
+static void prof_sig(int s) { (void)s; prof_stop = 1; }
 static int prof_on = -1;              /* -1: ZSIM_PROF not looked at yet */
 
 static void prof_dump(void) {
@@ -765,6 +768,7 @@ uint64_t machine_run(machine_t *m, uint64_t max_insns) {
 	uint64_t start = m->cpu.insn_count;
 
 	while (m->running && !m->exit_requested) {
+		if (prof_stop) { m->exit_requested = 1; break; }
 		if (max_insns && (m->cpu.insn_count - start) >= max_insns) break;
 
 		if (m->cpu.pc == ZS_SYSCALL_TRAP_PC) {
@@ -784,7 +788,7 @@ uint64_t machine_run(machine_t *m, uint64_t max_insns) {
 				prof_n = 4u << 20;
 				prof = getenv("ZSIM_PROF") ? calloc(prof_n, sizeof(uint32_t)) : NULL;
 				prof_on = prof != NULL;
-				if (prof) atexit(prof_dump);
+				if (prof) { atexit(prof_dump); signal(SIGINT, prof_sig); signal(SIGTERM, prof_sig); }
 			}
 		}
 		{

@@ -270,9 +270,18 @@ code whose cost is in memory rather than in instructions:
   for 20 cycles (DDR3) or 6 (SDRAM); a store into a full buffer waits;
 - VRAM and registers are uncached.
 
+`ZSIM_COST=lakritz` is lakritz_console's CPU: picorv32 (4 cycles an
+instruction, one more for a taken branch), a 4 KB instruction cache and
+no data cache -- every load waits 10 cycles for the SDRAM, every store 8,
+not posted. `ZSIM_COST=lakritz_dc` is the same with the 4 KB data cache.
+On the board the CPU shares the bus with the scanout and T2's output,
+and runs about two times slower than this model says: compare versions
+with it, not frame rates.
+
 `rdcycle` then reads the modelled cycles, so a program's own timing
 reads them too, and at exit the simulator prints the misses, stores and
-stalls. The numbers are from Doom's `-membench` on sergei_ml2; the model
+stalls. With `ZSIM_PROF`, SIGINT or SIGTERM (`timeout`) stops the
+program and the profile is still written. The numbers are from Doom's `-membench` on sergei_ml2; the model
 is for comparing two versions of the code, not for predicting a frame
 rate to the percent.
 
@@ -285,7 +294,8 @@ out by T2's C model (`sw/common/zgl/tests/t2_model.c`, the one the RTL
 bench is held to) at its END, into chunky VRAM, or with `ZSIM_CONSOLE=1`
 into main memory at VBASE; textures too. It is never busy and its FIFO
 never fills, so with the cycle model on a program's cycles are the
-CPU's own -- what sending the frame costs. `ZSIM_GTRI_STATS=1` prints
+CPU's own -- what sending the frame costs. `ZSIM_GTRI_NOTEX=1` makes it
+a T2 without textures (lakritz_console's). `ZSIM_GTRI_STATS=1` prints
 each frame's counts. `make -C sw/common/zgl simtest` holds its frames
 to the software's, and `framebench` times a chunky frame on it.
 

@@ -126,6 +126,7 @@ typedef struct {
 	bool listing;
 
 	uint32_t gen;            /* changes whenever a cached vertex would */
+	uint32_t mvp_serial;     /* the mvp made again (zgl_t2.c sends it only then) */
 	uint32_t lserial;        /* a matrix, a light or an enable changed: zgl_t2.c's light made again */
 	zgl_vcache_t vc[ZGL_VCACHE];
 } zgl_state_t;
@@ -166,6 +167,7 @@ void zgl_t2_tri(const zgl_svtx_t *a, const zgl_svtx_t *b, const zgl_svtx_t *c) _
 void zgl_t2_line(const zgl_svtx_t *a, const zgl_svtx_t *b) __attribute__((weak));
 void zgl_t2_frame(void) __attribute__((weak));
 bool zgl_t2_call(const zglr_op_t *ops, uint32_t n, void **cache, uint8_t *state) __attribute__((weak));
+void zgl_t2_compile(const zglr_op_t *ops, uint32_t n, void **cache, uint8_t *state) __attribute__((weak));
 void zgl_t2_free(void *p) __attribute__((weak));
 
 /* zgl.c: v made a unit vector (16.16), as GL_NORMALIZE does; zero stays zero */

@@ -43,8 +43,10 @@ static zgl_info_t *t2_info;
 static uint32_t t2_prims;            /* this frame's, so far */
 
 /* what the engine was last sent, so only changes are sent again */
-static uint32_t sent_view[2], sent_xform[19], sent_light[11], sent_state, sent_pl[2][8];
+static uint32_t sent_view[2], sent_light[11], sent_state, sent_pl[2][8];
 static bool sent_view_ok, sent_xform_ok, sent_light_ok, sent_state_ok, sent_pl_ok[2];
+static uint32_t sent_mvp_serial, sent_lserial;   /* what the matrix and the lights were made from */
+static int32_t sent_ma, sent_md;
 
 /* -- textures: T2's texture memory, filled from the bottom ----------------- */
 
@@ -96,17 +98,41 @@ uint32_t zgl_t2_tex_word(uint32_t name) {
  * STATUS[27:16], read again only when what was known is used up. */
 static uint32_t t2_room;
 
-static inline void need(uint32_t n) {
+static inline __attribute__((always_inline)) void need(uint32_t n) {
 	/* STATUS is the word before CMD (zsoc.h Z_GTRI_W_STATUS, _CMD) */
 	while (t2_room < n) t2_room = (t2_reg[-1] >> 16) & 0xfffu;
 	t2_room -= n;
 }
 
-static inline void put(uint32_t w) {
+static inline __attribute__((always_inline)) void put(uint32_t w) {
 	if (t2_reg) {
 		need(1);
 		*t2_reg = w;
 	} else zglc_put(w);
+}
+
+/* n words from w: the room read once for as many as it has, then a load
+ * and a store a word with nothing between -- no calls, nothing kept on
+ * the stack. On lakritz_console (no data cache: every load and store,
+ * the stack's too, a trip to the SDRAM) the call to need() a four words
+ * and its spills were three times the copy itself (the simulator's
+ * cycle model, 2026-11-06). */
+static void put_n(const uint32_t *w, uint32_t n) {
+	volatile uint32_t *r = t2_reg;
+	uint32_t room = t2_room, k;
+	if (!r) { while (n--) zglc_put(*w++); return; }
+	while (n) {
+		while (!room) room = (r[-1] >> 16) & 0xfffu;
+		k = n < room ? n : room;
+		n -= k;
+		room -= k;
+		for (; k >= 4; k -= 4, w += 4) {
+			uint32_t a = w[0], b = w[1], c = w[2], d = w[3];
+			*r = a; *r = b; *r = c; *r = d;
+		}
+		while (k--) *r = *w++;
+	}
+	t2_room = room;
 }
 
 bool zgl_t2_open(zgl_info_t *info) {
@@ -144,7 +170,7 @@ static void frame_start(void) {
 /* -- triangles and lines set up by the CPU ---------------------------------- */
 
 static void put_s(const zgl_svtx_t *v) {
-	put((uint32_t)v->x); put((uint32_t)v->y); put((uint32_t)v->z); put((uint32_t)v->ci);
+	put_n((const uint32_t *)v, 4);
 }
 
 void zgl_t2_tri(const zgl_svtx_t *a, const zgl_svtx_t *b, const zgl_svtx_t *c) {
@@ -174,10 +200,9 @@ void zgl_t2_frame(void) {
 /* -- the state a list's chunks need ---------------------------------------- */
 
 static void send_words(uint32_t op, const uint32_t *w, int n, uint32_t *sent, bool *ok) {
-	int i;
 	if (*ok && sent[0] == op && !memcmp(&sent[1], w, (size_t)n * 4)) return;
 	put(op);
-	for (i = 0; i < n; i++) put(w[i]);
+	put_n(w, (uint32_t)n);
 	sent[0] = op;
 	memcpy(&sent[1], w, (size_t)n * 4);
 	*ok = true;
@@ -238,12 +263,33 @@ static void send_state(void) {
 		sent_view[0] = w[0]; sent_view[1] = w[1];
 		sent_view_ok = true;
 	}
+	/* The state below is sent again only when what it is made from
+	 * changed: the matrix when the mvp was made again (mvp_serial), the
+	 * lights when a matrix, a light or an enable changed (lserial) or
+	 * the material did. A frame calls a list a chunk of track, and
+	 * putting each call's 45 words together to compare them with those
+	 * sent was 1,500 cycles a call on lakritz_console, its loads and
+	 * stores each a trip to the SDRAM (2026-11-06). */
 	/* the matrix: object to clip */
 	zgl_sync_mvp();
-	for (k = 0; k < 16; k++) w[k] = (uint32_t)zgl_s.mvp[k];
-	w[16] = (uint32_t)zgl_s.near_w;
-	w[17] = (uint32_t)zgl_s.far_w;
-	send_words(T2_XFORM << 24 | (zgl_s.persp ? 1u : 0u), w, 18, sent_xform, &sent_xform_ok);
+	if (!sent_xform_ok || sent_mvp_serial != zgl_s.mvp_serial) {
+		put(T2_XFORM << 24 | (zgl_s.persp ? 1u : 0u));
+		put_n((const uint32_t *)zgl_s.mvp, 16);
+		put((uint32_t)zgl_s.near_w);
+		put((uint32_t)zgl_s.far_w);
+		sent_mvp_serial = zgl_s.mvp_serial;
+		sent_xform_ok = true;
+	}
+	if (sent_light_ok && sent_pl_ok[0] && sent_pl_ok[1] && sent_lserial == zgl_s.lserial) {
+		if (sent_ma == zgl_s.mat_a && sent_md == zgl_s.mat_d) goto state;
+		/* the material alone (a list that set its own): the lights'
+		 * words as they were sent */
+		sent_light[9] = sent_ma = zgl_s.mat_a;
+		sent_light[10] = sent_md = zgl_s.mat_d;
+		put(sent_light[0]);
+		put_n(&sent_light[1], 10);
+		goto state;
+	}
 	/* the light, in the model's space: n . (M^T L) is (M n) . L */
 	op = T2_LIGHT << 24 | (zgl_s.lighting ? 1u : 0u) |
 	     (zgl_s.light_on[0] ? 2u : 0u) | (zgl_s.light_on[1] ? 4u : 0u);
@@ -280,10 +326,15 @@ static void send_state(void) {
 	for (l = 0; l < 2; l++) {
 		bool on = zgl_s.lighting && zgl_s.light_on[l] && zgl_s.light_pt[l];
 		op = T2_PLIGHT << 24 | (uint32_t)l | (on ? 2u : 0u) | (on && zgl_s.normalize ? 4u : 0u);
+		if (!on && sent_pl_ok[l] && sent_pl[l][0] == op) continue;  /* off, and sent off */
 		for (k = 0; k < 7; k++) w[k] = 0;
 		if (on) point_words(l, w);
 		send_words(op, w, 7, sent_pl[l], &sent_pl_ok[l]);
 	}
+	sent_lserial = zgl_s.lserial;
+	sent_ma = zgl_s.mat_a;
+	sent_md = zgl_s.mat_d;
+state:
 	/* depth, shading, culling */
 	if (zgl_s.cull)
 		cull = zgl_s.cull_face == GL_BACK ? 1 : zgl_s.cull_face == GL_FRONT ? 2 : 3;
@@ -617,6 +668,13 @@ static t2_list_t *compile(const zglr_op_t *ops, uint32_t n, bool unit) {
 	}
 	chunk_finish(&c);
 	if (c.fail) { free(l->w); free(l); return NULL; }
+	/* what was room for an open chunk (16 KB or more a list) given
+	 * back: a game compiling its few hundred lists at once ran out */
+	if (!l->nw) { free(l->w); l->w = NULL; }
+	else if (l->nw < c.cap) {
+		uint32_t *w = realloc(l->w, l->nw * 4);
+		if (w) l->w = w;
+	}
 	return l;
 }
 
@@ -651,11 +709,18 @@ static bool similarity(void) {
 	return true;
 }
 
+/* zglPrepareLists()'s: compiled now, as zgl_t2_call() would */
+void zgl_t2_compile(const zglr_op_t *ops, uint32_t n, void **cache, uint8_t *state) {
+	if (!t2_on || *state != 0) return;
+	*cache = compile(ops, n, zgl_s.lighting && zgl_s.normalize);
+	*state = *cache ? 1 : 2;
+}
+
 /* glCallList()'s way: true if the list went to the engine as chunks
  * (*cache: its compiled form; *state: 0 not tried, 1 compiled, 2 can't) */
 bool zgl_t2_call(const zglr_op_t *ops, uint32_t n, void **cache, uint8_t *state) {
 	t2_list_t *l;
-	uint32_t i, ci;
+	uint32_t ci;
 	const uint32_t *w;
 	int32_t dn[3];
 	bool unit = zgl_s.lighting && zgl_s.normalize;
@@ -687,20 +752,19 @@ bool zgl_t2_call(const zglr_op_t *ops, uint32_t n, void **cache, uint8_t *state)
 		uint32_t nv = w[0] & 0xffff, nt = w[0] >> 16, nl = w[1] >> 16;
 		uint32_t tx = (w[1] >> 8) & T2_C_TEX ? 1u : 0u;
 		uint32_t nw = 4 + tx + nv * (4 + tx) + nt * 2 + nl;
-		put(T2_DRAW << 24);
-		put((uint32_t)zgl_s.index << 8);
-		put((uint32_t)dn[0]); put((uint32_t)dn[1]); put((uint32_t)dn[2]);
-		/* the chunk, as it is: a load and a store a word */
 		if (t2_reg) {
 			volatile uint32_t *r = t2_reg;
-			for (i = 0; i + 4 <= nw; i += 4) {
-				uint32_t a = w[i], b = w[i + 1], c = w[i + 2], d = w[i + 3];
-				need(4);
-				*r = a; *r = b; *r = c; *r = d;
-			}
-			for (; i < nw; i++) { need(1); *r = w[i]; }
-		} else
-			for (i = 0; i < nw; i++) zglc_put(w[i]);
+			need(5);
+			*r = T2_DRAW << 24;
+			*r = (uint32_t)zgl_s.index << 8;
+			*r = (uint32_t)dn[0]; *r = (uint32_t)dn[1]; *r = (uint32_t)dn[2];
+		} else {
+			put(T2_DRAW << 24);
+			put((uint32_t)zgl_s.index << 8);
+			put((uint32_t)dn[0]); put((uint32_t)dn[1]); put((uint32_t)dn[2]);
+		}
+		/* the chunk, as it is: a load and a store a word */
+		put_n(w, nw);
 		t2_prims += nt + nl;
 		w += nw;
 	}

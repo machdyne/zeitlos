@@ -47,6 +47,11 @@
 # so about 95% in a release build. The lakritz board build is at 98%.
 # docs/profiles.md, "Lakritz".
 
+# CKFETCH_LINES=4: the scanout's line fetch four lines ahead -- without
+#   a data cache the CPU keeps SDRAM busy, and lines were fetched late
+#   (whole lines black, flashing; 2026-11-06). About 120 LUT4.
+# NO_DDMI_AUDIO: the console's sound over HDMI left out -- with it the
+#   build placed at 24,560 of 24,288 LUT4 (101%); it is about 930.
 description = Lakritz as a games console (console profile, T2)
 
 base  = lakritz
@@ -71,3 +76,5 @@ defines =
 	-DCACHE
 	AUDIO_FIFO_LOG2=9
 	T2_STRIP_H=6
+	CKFETCH_LINES=4
+	NO_DDMI_AUDIO

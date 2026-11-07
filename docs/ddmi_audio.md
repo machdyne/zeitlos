@@ -74,9 +74,9 @@ console"; `NO_DDMI_AUDIO` leaves it out).
 
 Three things have to be true:
 
-1. **The bitstream has it.** `GPU_DDMI_AUDIO` (with `GPU_DDMI`). No
-   board sets it by default yet. On Lakritz, use the release target
-   made for it:
+1. **The bitstream has it.** `GPU_DDMI_AUDIO` (with `GPU_DDMI`): every
+   console target has it by default. Otherwise, on Lakritz, the release
+   target made for it:
 
        ./release/zrelease build lakritz_ddmi_audio
 

@@ -208,6 +208,8 @@ static void palette(uint16_t pal[256]) {
 static GLuint l_sky;
 static void track_lists(void);
 
+static void things_index(void);
+
 /* -- the karts: driving -- */
 
 static void place_grid(void) {
@@ -420,29 +422,52 @@ static void bumps(void) {
 }
 
 /* ? boxes, cheese, springs */
+/* the things by segment (an index made with the track's lists), and
+ * when each is back: a kart looks only at its own segment's and the
+ * next's, and nothing counts down -- on Lakritz, without a data cache,
+ * every thing against every kart every tick was dear */
+static uint16_t th_first[MAX_SEGS + 1], th_order[MAX_THINGS];
+static uint32_t th_back[MAX_THINGS];
+
+static void things_index(void) {
+	int t, sg, n = 0;
+	for (sg = 0; sg < tk_n; sg++) {
+		th_first[sg] = (uint16_t)n;
+		for (t = 0; t < tk_nthings; t++)
+			if (tk_thing[t].seg == sg) th_order[n++] = (uint16_t)t;
+	}
+	th_first[tk_n] = (uint16_t)n;
+	memset(th_back, 0, sizeof(th_back));
+}
+
+static bool th_gone(int t) { return ticks < th_back[t]; }
+
 static void pickups(void) {
-	int i, t;
-	for (t = 0; t < tk_nthings; t++) {
-		thing_t *th = &tk_thing[t];
-		if (th->gone) { th->gone--; continue; }
-		for (i = 0; i < RACERS; i++) {
-			kart_t *k = &kart[i];
-			int32_t dx, dz, ds = th->seg - k->seg;
-			if (ds < -1) ds += tk_n;
-			if (ds > 1 && ds < tk_n - 1) continue;      /* not this segment or the next */
-			dx = k->x / Q - th->x; dz = k->z / Q - th->z;
-			if (dx * dx + dz * dz > 13 * 13 || k->y > 6 * Q) continue;
-			switch (th->kind) {
-			case TH_QBOX: give_item(k); th->gone = 180; break;
-			case TH_CHEESE:
-				k->boost = k->boost > 40 ? k->boost : 40;
-				th->gone = 240;
-				if (i == 0) { cheese_got++; sound(SND_COIN); }
-				break;
-			case TH_SPRING:
-				if (k->y == 0) { k->vy = 6 * Q; if (i == 0) sound(SND_SPRING); }
-				break;
-			default: break;
+	int i, j, s2;
+	for (i = 0; i < RACERS; i++) {
+		kart_t *k = &kart[i];
+		if (k->y > 6 * Q) continue;
+		for (s2 = 0; s2 < 2; s2++) {
+			int sg = (k->seg + s2) % tk_n;
+			for (j = th_first[sg]; j < th_first[sg + 1]; j++) {
+				int t = th_order[j];
+				thing_t *th = &tk_thing[t];
+				int32_t dx, dz;
+				if (th_gone(t)) continue;
+				dx = k->x / Q - th->x; dz = k->z / Q - th->z;
+				if (dx * dx + dz * dz > 13 * 13) continue;
+				switch (th->kind) {
+				case TH_QBOX: give_item(k); th_back[t] = ticks + 180; break;
+				case TH_CHEESE:
+					k->boost = k->boost > 40 ? k->boost : 40;
+					th_back[t] = ticks + 240;
+					if (i == 0) { cheese_got++; sound(SND_COIN); }
+					break;
+				case TH_SPRING:
+					if (k->y == 0) { k->vy = 6 * Q; if (i == 0) sound(SND_SPRING); }
+					break;
+				default: break;
+				}
 			}
 		}
 	}
@@ -512,9 +537,11 @@ static void engine(void) {
 static void change_track(int t) {
 	tk_select(t);
 	tk_build();
+	things_index();
 	if (l_sky) {
 		tk_lists();
 		track_lists();
+		zglPrepareLists(1, 32767);    /* compiled now, not a frame at a time on the first lap */
 	}
 	place_grid();
 	places();
@@ -544,6 +571,12 @@ static void step_camera(void) {
 #define MAP_TEX 20                    /* the minimap's texture (track.c's are 1-9) */
 static bool map_tex;
 static GLuint l_qbox, l_cheese, l_spring, l_dot, l_map, l_hud, l_hills, l_bubble, l_stars;
+/* the speed bar a list a length, the map's dashes a list a segment: no
+ * colour in them (the call's glIndexi is theirs). Drawn as they were,
+ * a vertex at a time, they were 3,000-4,000 cycles a vertex on
+ * lakritz_console, a list call a fraction of that. */
+#define BAR_W 60
+static GLuint l_bar, l_dash;
 static bool tex_have;
 static uint32_t tris_sent;
 
@@ -714,6 +747,28 @@ static void track_lists(void) {
 		glEnd();
 	}
 	glEndList();
+	{
+		int i;
+		if (!l_bar) {
+			l_bar = glGenLists(BAR_W + 1);
+			for (i = 0; l_bar && i <= BAR_W; i++) {
+				glNewList(l_bar + (GLuint)i, GL_COMPILE);
+				glBegin(GL_LINES);
+				glVertex2i(8, 228); glVertex2i(8 + i, 228);
+				glEnd();
+				glEndList();
+			}
+		}
+		if (!l_dash) l_dash = glGenLists(MAX_SEGS);
+		for (i = 0; l_dash && i < tk_n; i++) {
+			int x = 250 + tk_map_x[i], y = 168 + tk_map_y[i];
+			glNewList(l_dash + (GLuint)i, GL_COMPILE);
+			glBegin(GL_LINES);
+			glVertex2i(x - 2, y); glVertex2i(x + 2, y);
+			glEnd();
+			glEndList();
+		}
+	}
 }
 
 /* each thing a list of its own, its place and facing (back along the
@@ -723,6 +778,7 @@ static GLuint l_things;
 
 static void things_lists(void) {
 	int t;
+	things_index();
 	if (l_things) glDeleteLists(l_things, MAX_THINGS);
 	l_things = glGenLists(MAX_THINGS);
 	for (t = 0; t < tk_nthings; t++) {
@@ -745,7 +801,7 @@ static void draw_things(void) {
 		const thing_t *th = &tk_thing[t];
 		int ds = th->seg - base;
 		if (ds < -1) ds += tk_n;
-		if (th->gone || ds < 0 || ds > 10) continue;    /* a few segments ahead */
+		if (th_gone(t) || ds < 0 || ds > 10) continue;  /* a few segments ahead */
 		glCallList(l_things + (GLuint)t);
 		tris_sent += 2;
 	}
@@ -764,14 +820,18 @@ static void draw_karts(void) {
 		glPushMatrix();
 		zglTranslatei(x, k->y / Q, z);
 		glRotatex((GLfixed)((65536u - k->yaw) * 360u), 0, 65536, 0);
-		glCallList(kt_list + (near ? KT_NEAR(i) : KT_FAR(i)));
-		tris_sent += kt_tris[near ? KT_NEAR(i) : KT_FAR(i)];
+		{
+			/* on the ground and near: the kart and its shadow, one list */
+			int kl = !near ? KT_FAR(i) : k->y == 0 && along < 100 ? KT_GROUND(i) : KT_NEAR(i);
+			glCallList(kt_list + (GLuint)kl);
+			tris_sent += kt_tris[kl];
+		}
 		if (near && k->shield && (k->shield > 120 || (ticks & 4))) glCallList(l_bubble);
 		if (near && k->stun) {                           /* stars, turning */
 			glRotatex((GLfixed)((ticks * 6u % 360u) << 16), 0, 65536, 0);
 			glCallList(l_stars);
 		}
-		if (near && along < 100) {                       /* the shadow, under it */
+		if (near && along < 100 && k->y != 0) {          /* the shadow, under it, in the air */
 			zglTranslatei(0, -(k->y / Q), 0);
 			glCallList(kt_list + KT_SHADOW);
 			tris_sent += 2;
@@ -929,23 +989,19 @@ static void draw_hud(void) {
 		/* the speed, a bar: outside the HUD's list, which would
 		 * otherwise be made again every frame (on the board that was
 		 * 0.2-0.7 M cycles) */
-		int w = (me->v > 0 ? me->v : 0) * 60 / BOOST_TOP;
+		int w = (me->v > 0 ? me->v : 0) * BAR_W / BOOST_TOP;
+		if (w > BAR_W) w = BAR_W;
 		glIndexi(me->boost ? C_RED : C_WHITE);
-		glBegin(GL_LINES);
-		glVertex2i(8, 228); glVertex2i(8 + w, 228);
-		glEnd();
+		glCallList(l_bar + (GLuint)w);
 	}
 	if (gstate != G_TITLE && gstate != G_DONE) {
 		if (map_tex) glEnable(GL_TEXTURE_2D);
 		glCallList(l_map);
 		glDisable(GL_TEXTURE_2D);
-		glBegin(GL_LINES);                        /* the karts: dashes, no matrices */
-		for (i = RACERS - 1; i >= 0; i--) {
-			int sg = kart[i].seg, x = 250 + tk_map_x[sg], y = 168 + tk_map_y[sg];
+		for (i = RACERS - 1; i >= 0; i--) {   /* the karts: dashes, no matrices */
 			glIndexi(i == 0 ? C_HUD : kt_racer[i].box + 15);
-			glVertex2i(x - 2, y); glVertex2i(x + 2, y);
+			glCallList(l_dash + (GLuint)kart[i].seg);
 		}
-		glEnd();
 	}
 }
 
@@ -1050,10 +1106,30 @@ static bool open_chunky(void) {
 	printf("mauskart3d: game mode, chunky: %s%s\n",
 		zgl_info()->backend == ZGL_BACKEND_T2 ? "T2" : "software (slow: T2 wanted)",
 		tex_have ? ", textures" : "");
-	if (!l_sky) {
-		tk_lists();
-		kt_make();
-		make_lists();
+	{
+		uint32_t t0, t1, t2;
+		/* the lists take a few seconds on lakritz_console: say so */
+		glClearIndex(0);
+		glDisable(GL_DEPTH_TEST);
+		glDisable(GL_LIGHTING);
+		glDisable(GL_TEXTURE_2D);
+		view_2d();
+		vf_centred(110, 2, C_WHITE, l_sky ? "GETTING READY" : "LOADING", false);
+		zgl_frame();
+		t0 = cycles_now();
+		if (!l_sky) {
+			tk_lists();
+			kt_make();
+			make_lists();
+		}
+		t1 = cycles_now();
+		/* T2's form of every list now: compiled at its first call, a
+		 * chunk of track coming into view was a frame tens of
+		 * thousands of cycles over on the first lap */
+		zglPrepareLists(1, 32767);
+		t2 = cycles_now();
+		printf("mauskart3d: lists made in %luk cycles, compiled in %luk\n",
+			(unsigned long)((t1 - t0) / 1000u), (unsigned long)((t2 - t1) / 1000u));
 	}
 	return true;
 }
@@ -1097,6 +1173,7 @@ int main(void) {
 
 	printf("mauskart3d: Mauskart -- the Meadow Ring\n");
 	tk_build();
+	things_index();
 	printf("mauskart3d: %d segments, %u world units a lap\n", tk_n, (unsigned)tk_len);
 	place_grid();
 	places();

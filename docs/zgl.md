@@ -173,6 +173,9 @@ TONE lets one texture of tones serve any ramp and keeps the lighting.
 `GL_TEXTURE_2D` decides at the time a list is called, so a program can
 turn textures off without making its lists again. Lists keep the
 texture places they were compiled with: make the textures first.
+On T2 a list is compiled the first time it is called, and that frame
+pays for it; `zglPrepareLists(first, range)` compiles them at once,
+after they are made and before the frames.
 Without textures (no T2, a T2 without them, the software strips,
 immediate mode) the same triangles are drawn in their colours.
 

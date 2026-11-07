@@ -1,2 +1,6 @@
 render_mauskart3d
 out/
+simbench/*.o
+simbench/*.d
+simbench/simbench.*
+!simbench/simbench.c

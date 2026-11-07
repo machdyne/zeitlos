@@ -817,6 +817,7 @@ static void make_mvp(void) {
 		if (df <= 0 || zgl_s.far_w <= 0) zgl_s.far_w = INT32_MAX;
 	}
 	zgl_s.mvp_dirty = false;
+	zgl_s.mvp_serial++;
 }
 
 void zgl_sync_mvp(void) {

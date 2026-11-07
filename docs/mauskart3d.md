@@ -227,6 +227,38 @@ going forward, the kart turns a little with the road of its own (a
 twelfth of the difference a tick with the wheel straight, a
 twenty-fourth when steering, at most 240 turn16).
 
+**On Lakritz** (2026-11-06): 10-18 fps, the CPU 1.6-3.2 M cycles a
+frame: picorv32 with no data cache (lakritz_console leaves it out for
+room), so every load and store goes to SDRAM, at about 15 cycles an
+instruction; the game's four ticks a frame alone 0.46-0.83 M. Since:
+the things by segment, looked at only on a kart's own segment and the
+next, and no countdown over all of them each tick. 30 there wants the
+data cache (3 DP16KD, and lakritz_console's 56 are used) or a lighter
+game. Whole black lines, flashing: the line fetch late on a bus the
+uncached CPU keeps busy -- `CKFETCH_LINES=4` in lakritz_console too.
+
+**For 30 on Lakritz** (2026-11-06): the simulator's cycle model of
+lakritz_console's CPU (`ZSIM_COST=lakritz`, picorv32 without a data
+cache) and `tests/simbench` (the game on autopilot, its report on the
+console, T2 the simulator's model) put the CPU's frame at 869 k cycles,
+the board's 1.6-3.2 M -- the board about two times the model. Where it
+went: zgl's copying of list words through an un-inlined need() with
+the words kept on the stack, and each call putting the matrix and the
+lights together to compare them (zgl_t2.md, "The CPU's side, cheaply");
+a call for a chunk's road and another for its scenery; a kart and its
+shadow two calls and two matrices; the speed bar and the minimap's
+dashes a vertex at a time; lists compiled at their first call, on the
+first lap. Since: zgl's fixes; a list for a chunk's road and scenery
+together, and for a kart on the ground with its shadow; the bar a list
+a length and a dash a list a segment; every list compiled after it is
+made (`zglPrepareLists()`). The model now says 350-430 k a frame (a
+data cache would take it to about 300 k): at the board's two times, 30
+(1.6 M at 48 MHz) with room. A stunned kart's shadow no longer turns
+with its stars.
+
+    cd sw/apps/mauskart3d/tests/simbench && make
+    ZSIM_COST=lakritz ZSIM_GTRI=2 ZSIM_GTRI_NOTEX=1 ../../../../../sim/zsim-headless -n 0 simbench.bin
+
 **The pacing.** Frames that run long three times hold an even 30 (two
 refreshes a frame, `ar_frame_lock(2)`, docs/arcade.md "Even pacing")
 for five seconds and shorten the draw distance (to 384), rather than

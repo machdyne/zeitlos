@@ -145,6 +145,14 @@ void glDeleteLists(GLuint list, GLsizei range) {
 	}
 }
 
+void zglPrepareLists(GLuint list, GLsizei range) {
+	GLuint i;
+	if (!zgl_t2_compile || range < 0) return;
+	for (i = list; i < list + (GLuint)range && i < nlists; i++)
+		if (i && lists[i].used && lists[i].n && !(zgl_s.listing && i == cur_list))
+			zgl_t2_compile(lists[i].ops, lists[i].n, &lists[i].t2, &lists[i].t2_state);
+}
+
 ZGL_HOT void glCallList(GLuint list) {
 	const zglr_list_t *l;
 	bool listing = zgl_s.listing;

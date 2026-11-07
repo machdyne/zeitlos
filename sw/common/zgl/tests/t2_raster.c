@@ -158,8 +158,13 @@ void t2r_draw(uint8_t pic[240][320], t2_stats_t *st) {
 	static uint16_t zb[STRIP_H][W];
 	int32_t sy0, y;
 	uint32_t i, k;
-	for (sy0 = fy0; sy0 <= fy1; sy0 += STRIP_H) {
-		int32_t sy1 = sy0 + STRIP_H - 1 < fy1 ? sy0 + STRIP_H - 1 : fy1;
+	/* T2_STRIP_H in the environment: the strip's rows, as a bitstream's
+	 * (12 on the consoles, 6 on lakritz_console), for the raster's cost;
+	 * the picture is the same */
+	static int sh = 0;
+	if (!sh) { const char *e = getenv("T2_STRIP_H"); sh = e ? atoi(e) : STRIP_H; if (sh < 1 || sh > STRIP_H) sh = STRIP_H; }
+	for (sy0 = fy0; sy0 <= fy1; sy0 += sh) {
+		int32_t sy1 = sy0 + sh - 1 < fy1 ? sy0 + sh - 1 : fy1;
 		memset(col, clear, sizeof(col));
 		memset(zb, 0xff, sizeof(zb));
 		for (i = 0, k = 0; i < nrec; i++) {

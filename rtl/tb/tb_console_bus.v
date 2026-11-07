@@ -24,6 +24,11 @@
  *   iverilog -g2005 -o /tmp/tb_cb rtl/tb/tb_console_bus.v \
  *       rtl/mem/sdram_kianv.v rtl/tb/sdram_model.v rtl/arbiter_main.v \
  *       rtl/arbiter_gfx.v rtl/gpu/gpu_ckfetch.v && vvp /tmp/tb_cb
+ *
+ * -P tb_console_bus.CKL=4: the fetch four lines ahead; WRUN=8: the writer
+ * as T2's output queue, eight words a grant; LINE=3050: a game-mode
+ * line's real length; TEAR=1: gb_row a clock torn at each change, as
+ * gpu_video's crossing can show it (gpu_ckfetch.v).
  */
 
 `timescale 1ns / 1ps
@@ -32,6 +37,9 @@ module tb_console_bus;
 
 	parameter LINE = 1500;          // cycles a game-mode line (3,050 at 48 MHz)
 	parameter LINES = 500;          // two frames and a bit
+	parameter CKL = 2;              // the fetch's lines (gpu_ckfetch LINES)
+	parameter WRUN = 1;             // the writer's words a grant (T2's output: 8)
+	parameter TEAR = 0;             // 1: gb_row torn for a clock as it changes
 
 	localparam [24:0] PIC = 25'h0_8000;     // the picture, 76,800 bytes
 	localparam [24:0] CPU_LO = 25'h0_0000;  // the CPU's own 16 KB
@@ -116,7 +124,7 @@ module tb_console_bus;
 	wire [31:0] gb_dat;
 	reg         en = 0;
 
-	gpu_ckfetch #(.BURST(1), .VRAM_WORDS(4800)) ckf (
+	gpu_ckfetch #(.BURST(1), .VRAM_WORDS(4800), .LINES(CKL)) ckf (
 		.clk(clk), .rst(rst), .en(en), .base(32'h4000_0000 | {7'd0, PIC}),
 		.gb_row(gb_row), .gb_adr(gb_adr), .gb_dat(gb_dat), .vram_dat(32'h0),
 		.m_adr_o(f_adr), .m_cyc_o(f_cyc), .m_stb_o(f_stb), .m_cti_o(f_cti),
@@ -126,7 +134,9 @@ module tb_console_bus;
 
 	// the T2-like writer
 	reg  [31:0] w_adr = {7'd0, T2_LO}, w_dat = 32'h0;
-	reg         w_cyc = 0, w_on = 0;
+	reg         w_cyc = 0, w_stb = 0, w_on = 0;
+	reg  [1:0]  w_st = 0;
+	reg  [3:0]  w_run = 0;
 	wire        w_ack;
 	integer     w_count = 0;
 
@@ -140,24 +150,44 @@ module tb_console_bus;
 		.m1_stb_i(1'b0), .m1_cyc_i(1'b0), .m1_ack_o(),
 		.m2_adr_i(w_adr), .m2_dat_i(w_dat), .m2_dat_o(),
 		.m2_we_i(1'b1), .m2_sel_i(4'hf), .m2_cti_i(3'b000),
-		.m2_stb_i(w_cyc), .m2_cyc_i(w_cyc), .m2_ack_o(w_ack),
+		.m2_stb_i(w_stb), .m2_cyc_i(w_cyc), .m2_ack_o(w_ack),
 		.s_adr_o(g_adr), .s_dat_o(g_dat_o), .s_dat_i(g_dat_i),
 		.s_we_o(g_we), .s_sel_o(g_sel), .s_cti_o(gfx_cti),
 		.s_stb_o(g_stb), .s_cyc_o(g_cyc), .s_ack_i(g_ack),
 		.master(gm)
 	);
 
+	// as gpu_t2.v's output queue: up to WRUN words a grant, STB
+	// dropping between them and CYC not
 	always @(posedge clk) begin
-		if (!w_cyc) begin
-			if (w_on) begin
-				w_cyc <= 1'b1;
-				w_dat <= w_adr ^ 32'h5a5a_0000;
-			end
-		end else if (w_ack) begin
-			w_cyc <= 1'b0;
+		case (w_st)
+		2'd0: if (w_on) begin
+			w_cyc <= 1'b1; w_stb <= 1'b1;
+			w_dat <= w_adr ^ 32'h5a5a_0000;
+			w_st <= 2'd1;
+		end
+		2'd1: if (w_ack) begin
 			w_count = w_count + 1;
 			w_adr <= (w_adr[13:0] == 14'h3ffc) ? {7'd0, T2_LO} : (w_adr + 32'd4);
+			w_stb <= 1'b0;
+			if (w_run + 4'd1 < WRUN && w_on) begin
+				w_run <= w_run + 4'd1;
+				w_st <= 2'd2;
+			end else begin
+				w_cyc <= 1'b0;
+				w_run <= 4'd0;
+				w_st <= 2'd0;
+			end
 		end
+		2'd2: begin
+			w_dat <= w_adr ^ 32'h5a5a_0000;
+			w_st <= 2'd3;
+		end
+		2'd3: begin
+			w_stb <= 1'b1;
+			w_st <= 2'd1;
+		end
+		endcase
 	end
 
 	// ---------------------------------------------------------------
@@ -243,6 +273,11 @@ module tb_console_bus;
 		wait (scan_on);
 		for (n = 0; n < LINES; n = n + 1) begin
 			L = n % 240;
+			// TEAR: a row neither old nor new for a clock as it
+			// changes, as gpu_video's two-flop crossing can show
+			if (TEAR) begin
+				@(posedge clk) gb_row <= (L ^ (L - 1) ^ 10'h2a5) % 240;
+			end
 			@(posedge clk) gb_row <= L;
 			repeat (3) @(posedge clk);
 			line_bad = 0;

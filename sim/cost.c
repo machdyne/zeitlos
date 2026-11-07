@@ -18,6 +18,12 @@
  *
  * ZSIM_COST=ddr3 (or 1): fill 40, store 20, uncached 10.
  * ZSIM_COST=sdram: fill 20, store 6, uncached 8.
+ * ZSIM_COST=lakritz: lakritz_console -- picorv32 (4 cycles an
+ *   instruction, 1 more for a taken branch), a 4 KB instruction cache,
+ *   NO data cache: every load waits 10 for SDRAM, every store 8 (not
+ *   posted); fill 20.
+ * ZSIM_COST=lakritz_dc: the same with a 4 KB data cache (as the model's,
+ *   write-through, posted stores of 6).
  * rdcycle then reads the model's cycles, so a program's own timing
  * (gldemo's breakdown, zcycles.h) reads them too.
  */
@@ -32,6 +38,8 @@ static uint64_t t;                     /* cycles */
 static uint64_t wb[2];                 /* when each store buffer slot frees */
 static uint64_t wb_last;               /* when the last posted store completes */
 static uint32_t fill = 40, st = 20, unc = 10;
+static uint32_t insn = 1, taken_x = 2, imask = 511;
+static int dc_on = 1, st_wait = 0;          /* stores: posted (0) or waited on */
 static uint32_t itag[512], dtag[256];  /* 8 KB and 4 KB of 16-byte lines; tag+1, 0 empty */
 static uint64_t n_imiss, n_dmiss, n_store, n_stall, n_unc;
 
@@ -40,6 +48,11 @@ static void cost_init(void) {
 	cost_on = e != NULL && *e;
 	if (!cost_on) return;
 	if (!strcmp(e, "sdram")) { fill = 20; st = 6; unc = 8; }
+	if (!strncmp(e, "lakritz", 7)) {
+		insn = 4; taken_x = 1; imask = 255; fill = 20; unc = 10;
+		if (!strcmp(e, "lakritz_dc")) st = 6;
+		else { dc_on = 0; st = 8; st_wait = 1; }
+	}
 	memset(itag, 0, sizeof(itag));
 	memset(dtag, 0, sizeof(dtag));
 	atexit(cost_report);
@@ -54,17 +67,17 @@ static int cached(uint32_t a) { return a >= 0x80000000u; }   /* the app's RAM */
 
 static void drain(void) { if (t < wb_last) t = wb_last; }
 
-void cost_insn(int taken) { t += taken ? 3 : 1; }
+void cost_insn(int taken) { t += insn + (taken ? taken_x : 0); }
 
 void cost_fetch(uint32_t pc) {
-	uint32_t line = pc >> 4, i = line & 511;
+	uint32_t line = pc >> 4, i = line & imask;
 	if (!cached(pc)) { drain(); t += unc; return; }
 	if (itag[i] != line + 1) { itag[i] = line + 1; drain(); t += fill; n_imiss++; }
 }
 
 void cost_load(uint32_t a) {
 	uint32_t line = a >> 4, i = line & 255;
-	if (!cached(a)) { drain(); t += unc; n_unc++; return; }
+	if (!cached(a) || !dc_on) { drain(); t += unc; n_unc++; return; }
 	if (dtag[i] != line + 1) { dtag[i] = line + 1; drain(); t += fill; n_dmiss++; }
 }
 
@@ -73,6 +86,7 @@ void cost_store(uint32_t a) {
 	int k;
 	if (!cached(a)) { drain(); t += unc; n_unc++; return; }
 	n_store++;
+	if (st_wait) { t += st; return; }          /* not posted: picorv32 waits for the ack */
 	k = wb[0] <= wb[1] ? 0 : 1;            /* the slot that frees first */
 	if (wb[k] > t) { n_stall += wb[k] - t; t = wb[k]; }
 	start = t > wb_last ? t : wb_last;

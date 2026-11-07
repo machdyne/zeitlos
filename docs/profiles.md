@@ -57,8 +57,8 @@ by default -- a console goes to a television -- set in rtl/boards.vh's
 "The console's defaults". It is still off at power-on until the OS sets
 it (`system.video.ddmi_audio = yes`, or the shell's `ddmi on`).
 `NO_DDMI_AUDIO` in a target leaves it out: about 930 LUT4, no block
-RAM, which on lakritz_console (about 97% of the LUTs with it) may be
-what has to go.
+RAM -- lakritz_console leaves it out: with it, and the line fetch four
+lines ahead, the build came to 24,560 of 24,288 LUT4.
 
 ### Lakritz (`lakritz_console`)
 

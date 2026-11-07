@@ -115,6 +115,15 @@ bool zglTexImage(unsigned name, int lw, int lh, const uint8_t *texels, int mode,
 /* T2's texture memory in texels, 0 if it has none */
 uint32_t zglTexRoom(void);
 
+/* -- lists made ready for T2 now --
+ *
+ * On T2 a list is compiled into the engine's chunks the first time it is
+ * called, and that frame pays for it (tens of thousands of cycles a
+ * list). zglPrepareLists() compiles those of list..list+range-1 that are
+ * not yet, as a call with lighting and GL_NORMALIZE as they are now
+ * would: after making them, before the frames. Nothing without T2. */
+void zglPrepareLists(GLuint list, GLsizei range);
+
 /* -- extensions (not GL) ------------------------------------------------- */
 
 /* Translation by whole units, for worlds wider than GLfixed's +-32767

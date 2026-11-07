@@ -111,7 +111,8 @@ uint32_t gtri_read(uint32_t w) {
 	case 3: return vbase;
 	case 4: return t2strips;                             /* STRIPS */
 	case 7: return T2_ID;
-	case 11: return 3u | (uint32_t)T2_TEX_LOG2 << 8;      /* CAPS: textures; VBASE taken in order (never busy) */
+	case 11:                                             /* CAPS: textures (ZSIM_GTRI_NOTEX: none, as lakritz_console); VBASE taken in order (never busy) */
+		return getenv("ZSIM_GTRI_NOTEX") ? 2u : 3u | (uint32_t)T2_TEX_LOG2 << 8;
 	default: return 0;
 	}
 }
