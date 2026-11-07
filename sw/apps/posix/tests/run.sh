@@ -133,6 +133,20 @@ if [ -x "$here/px_case_test" ]; then
     PX_STACK_FILE="$work/stack.txt" "$here/px_case_test" "$work" "$work/gen_cases.txt" || exit 1
 fi
 
+# -- sed, tr, cut, tee, cmp, xxd, date, which, < (text.c) --
+#
+# text.txt asserts the answers; gen_text.py adds cases whose expected
+# output is GNU sed's, tr's and cut's on the same files. A fixed clock
+# and zone for date (host_fs.c's px_clock_now()).
+python3 "$here/gen_text.py" "$work" "$work/gen_text_cases.txt" || exit 1
+if [ -x "$here/px_case_test" ]; then
+    echo
+    PX_TEST_TIME=1794056709 PX_TEST_ZONE=Berlin PX_STACK_FILE="$work/stack.txt" \
+        "$here/px_case_test" "$work" "$here/text.txt" || exit 1
+    echo
+    PX_STACK_FILE="$work/stack.txt" "$here/px_case_test" "$work" "$work/gen_text_cases.txt" || exit 1
+fi
+
 # The stack each command used in the coroutine (run_cases.c), deepest
 # first: what PX_JOB_STACK is sized from (docs/posix.md, "The command's
 # stack"). Host frames -- wider than the machine's.

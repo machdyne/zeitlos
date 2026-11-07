@@ -87,6 +87,13 @@ static const char *const cmds[] = {
     "ps",
     "free",
     "help",
+    "sed -E 's/(a|b)+([0-9]*)/<\\2\\1>/g' dbig.txt",
+    "sed -n '/7/,/9/p' dbig.txt",
+    "cat dbig.txt | tr 0-9 a-j | cut -c1-3",
+    "cmp dbig.txt dbig2.txt",
+    "xxd -l 256 dbig.txt",
+    "date",
+    "which sed zcc",
 };
 
 int main(void) {

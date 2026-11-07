@@ -87,6 +87,7 @@ sw/apps/posix/posix.bin
 sw/apps/posix/posix.map
 sw/apps/posix/posix.dasm
 sw/apps/posix/tests/px_shell_test
+sw/apps/posix/tests/rx_fuzz
 sw/apps/posix/tests/px_case_test
 sw/apps/posix/tests/px_main_test
 

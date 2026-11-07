@@ -1854,7 +1854,11 @@ int main(void) {
 			net_replaced(now);
 		listen_if_due(now);
 
-		while (z_msg_read(&m) == Z_OK) on_msg(&m);
+		// Entropy for SSH's keys: when each message arrives -- a
+		// packet, a keystroke through a port -- is not this board's to
+		// predict. Each process has its own generator (zrng.c), so
+		// netserve's own events stir its own (docs/trng.md).
+		while (z_msg_read(&m) == Z_OK) { z_rng_stir_event(); on_msg(&m); }
 
 		bool busy = false;
 		for (int i = 0; i < MAX_SESS; i++)

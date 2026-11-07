@@ -164,6 +164,10 @@ void px_puts(px_shell_t *sh, const char *s) {
     sink(sh, s, (int)strlen(s));
 }
 
+void px_write(px_shell_t *sh, const char *s, int len) {
+    if (len > 0) sink(sh, s, len);
+}
+
 void px_printf(px_shell_t *sh, const char *fmt, ...) {
     /* One buffer, not per-call allocation. A shell that allocated to
      * print would fail exactly when reporting that memory ran out. */
@@ -758,6 +762,12 @@ static bool feed_lines(px_shell_t *sh, const char *path,
     return true;
 }
 
+bool px_feed_lines(px_shell_t *sh, const char *path, px_line_fn fn, void *ctx, bool *cut) {
+    bool ok = feed_lines(sh, path, fn, ctx);
+    if (cut) *cut = line_truncated;
+    return ok;
+}
+
 typedef struct { long lines, words, chars; bool in_word; } wc_acc_t;
 
 static void wc_bytes(wc_acc_t *a, const char *p, int n) {
@@ -1303,6 +1313,8 @@ typedef struct {
     const char *help;
 } builtin_t;
 
+static void bi_which(px_shell_t *sh, int argc, char **argv);
+
 static const builtin_t builtins[] = {
     { "cd",    bi_cd,    "change directory" },
     { "pwd",   bi_pwd,   "print the working directory" },
@@ -1329,6 +1341,14 @@ static const builtin_t builtins[] = {
     { "grep",  bi_grep,  "lines containing text  (fixed string)" },
     { "sort",  bi_sort,  "sort lines" },
     { "uniq",  bi_uniq,  "drop adjacent duplicate lines" },
+    { "sed",   px_bi_sed,  "edit lines  (sed 's/old/new/g' f, -n, -E, -i)" },
+    { "tr",    px_bi_tr,   "translate or delete characters  (tr a-z A-Z, -d, -s)" },
+    { "cut",   px_bi_cut,  "fields or characters of lines  (cut -d: -f1,3 f)" },
+    { "tee",   px_bi_tee,  "copy input to files and onward  (tee [-a] f)" },
+    { "cmp",   px_bi_cmp,  "first difference between two files (-s: status only)" },
+    { "xxd",   px_bi_xxd,  "hex dump  (xxd [-s OFF] [-l LEN] f)" },
+    { "date",  px_bi_date, "date and time  (date, date -u, date +%F)" },
+    { "which", bi_which, "what a name runs: a builtin or a program" },
     { "rmdir", bi_rmdir, "remove an empty directory" },
     { "df",    bi_df,    "filesystem usage" },
     { "run",   bi_run,   "run a Zeitlos program, passing arguments" },
@@ -1341,13 +1361,47 @@ static const builtin_t builtins[] = {
     { 0, 0, 0 }
 };
 
+/*
+ * What a name runs, found the way exec_simple() and bi_run() find it:
+ * a builtin first, then a program in the working directory, then an
+ * installed one (the card's /apps, or the flash archive).
+ */
+static void bi_which(px_shell_t *sh, int argc, char **argv) {
+    if (argc < 2) { px_puts(sh, "usage: which NAME ...\n"); sh->status = 1; return; }
+    for (int a = 1; a < argc; a++) {
+        const char *name = argv[a];
+        bool found = false;
+        for (int i = 0; builtins[i].name && !found; i++)
+            if (!strcmp(builtins[i].name, name)) {
+                px_printf(sh, "%s: shell builtin\n", name);
+                found = true;
+            }
+        char here[PX_PATH_MAX], apps[PX_PATH_MAX];
+        if (!found && !strchr(name, '/') && px_resolve(name, here, sizeof(here)) && z_exec_exists(here)) {
+            px_printf(sh, "%s\n", here);
+            found = true;
+        }
+        if (!found && strchr(name, '/') && px_resolve(name, here, sizeof(here)) && z_exec_exists(here)) {
+            px_printf(sh, "%s\n", here);
+            found = true;
+        }
+        if (!found && !strchr(name, '/') && z_exec_exists(name)) {
+            snprintf(apps, sizeof(apps), "/apps/%s", name);
+            if (fs_size(apps) > 0) px_printf(sh, "%s\n", apps);
+            else px_printf(sh, "%s: in flash\n", name);
+            found = true;
+        }
+        if (!found) { px_printf(sh, "which: %s: not found\n", name); sh->status = 1; }
+    }
+}
+
 static void bi_help(px_shell_t *sh, int argc, char **argv) {
     (void)argc; (void)argv;
     px_puts(sh, "posix -- see docs/posix.md\n");
     for (int i = 0; builtins[i].name; i++)
         px_printf(sh, "  %-8s %s\n", builtins[i].name, builtins[i].help);
     px_puts(sh, "\nanything else is run as a program: 'zcc hello.c -o hello'\n"
-                "redirection: > and >>   chaining: && and ||\n"
+                "redirection: > >> <   chaining: && and ||\n"
                 "quoting: 'a b' \"a b\" a\\ b   wildcards: * ? [abc]\n"
                 "Ctrl+C stops a command that is running or waiting its turn\n");
 }
@@ -1650,11 +1704,65 @@ too_many:
 
 }
 
+/*
+ * `< file`: the file as the command's input, exactly as if it were the
+ * previous stage of a pipe -- so `tr a-z A-Z < f` is `cat f | tr a-z
+ * A-Z`, held in full like a pipe's, at most CAP_MAX bytes. A larger
+ * file is refused rather than cut: a filter that sees half its input
+ * gives a wrong answer that looks right.
+ */
+static char in_buf[CAP_MAX];
+
+static bool take_input(px_shell_t *sh, int *argc, char **argv, uint8_t *fl) {
+    for (int i = 0; i < *argc; i++) {
+        if (fl[i] & Z_ARG_QUOTED) continue;
+        char *target;
+        int drop;
+        if (!strcmp(argv[i], "<")) {
+            if (i + 1 >= *argc) { px_puts(sh, "syntax error: expected a filename after <\n"); return false; }
+            target = argv[i + 1];
+            drop = 2;
+        } else if (argv[i][0] == '<' && argv[i][1]) {
+            target = argv[i] + 1;
+            drop = 1;
+        } else continue;
+        z_args_unmark(target);
+        char abs[PX_PATH_MAX];
+        int h = px_resolve(target, abs, sizeof(abs)) ? fs_open_read(abs) : -1;
+        if (h < 0) { px_printf(sh, "posix: %s: cannot open\n", target); return false; }
+        int n = 0;
+        for (;;) {
+            int got = fs_read_chunk(h, in_buf + n, CAP_MAX - n);
+            if (got <= 0) break;
+            n += got;
+            if (n == CAP_MAX) {
+                char extra;
+                if (fs_read_chunk(h, &extra, 1) > 0) {
+                    fs_close_handle(h);
+                    px_printf(sh, "posix: < %s: larger than %d bytes -- give the command the file instead\n",
+                        target, CAP_MAX);
+                    return false;
+                }
+                break;
+            }
+        }
+        fs_close_handle(h);
+        sh->in = in_buf;
+        sh->in_len = n;
+        for (int j = i; j + drop <= *argc; j++) { argv[j] = argv[j + drop]; fl[j] = fl[j + drop]; }
+        *argc -= drop;
+        return true;
+    }
+    return true;
+}
+
 static void exec_simple(px_shell_t *sh, char *cmd) {
 
     char *argv[PX_MAX_ARGS];
     uint8_t fl[PX_MAX_ARGS];
     int argc = split(cmd, argv, fl, PX_MAX_ARGS);
+    const char *saved_in = sh->in;
+    int saved_len = sh->in_len;
 
     if (!argc) return;
 
@@ -1662,8 +1770,9 @@ static void exec_simple(px_shell_t *sh, char *cmd) {
     sh->status = 0;
 
     if (!take_redirect(sh, &argc, argv, fl)) { sh->status = 1; return; }
-    if (!expand_globs(sh, &argc, argv, fl)) { sh->status = 1; px_close_all_files(); out_fd = 1; return; }
-    if (!argc) { px_close_all_files(); out_fd = 1; return; }
+    if (!take_input(sh, &argc, argv, fl)) { sh->status = 1; goto done; }
+    if (!expand_globs(sh, &argc, argv, fl)) { sh->status = 1; goto done; }
+    if (!argc) goto done;
 
     for (int i = 0; builtins[i].name; i++) {
         if (strcmp(argv[0], builtins[i].name)) continue;
@@ -1676,6 +1785,8 @@ static void exec_simple(px_shell_t *sh, char *cmd) {
             out_raw(sh, "^C\r\n", 4);
             sh->status = 130;
         }
+        sh->in = saved_in;
+        sh->in_len = saved_len;
         return;
     }
 
@@ -1692,8 +1803,11 @@ static void exec_simple(px_shell_t *sh, char *cmd) {
         bi_run(sh, argc + 1, runv);
     }
 
+done:
     px_close_all_files();
     out_fd = 1;
+    sh->in = saved_in;
+    sh->in_len = saved_len;
 }
 
 /*

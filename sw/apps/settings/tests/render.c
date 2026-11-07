@@ -290,12 +290,29 @@ static void click_widget(int idx) {
 	click(widgets[idx].x + widgets[idx].w / 2, widgets[idx].y + widgets[idx].h / 2);
 }
 
+// The focused control on the page shown, by its activate() name.
+static int focused(void) { return global_of(ws->focused); }
+
 static void render(const char *prefix, const char *name) {
 	char path[256];
 	z_render_clear();
 	repaint();
 	snprintf(path, sizeof(path), "%s-%s.pbm", prefix, name);
 	z_render_write(path, &win, 2);
+}
+
+// Every page, as it looks now: NAME-pN.pbm
+static void render_pages(const char *prefix, const char *name) {
+	int was = page;
+	bool sb = sidebar_focus;
+	for (int p = 0; p < P_COUNT; p++) {
+		char n[64];
+		show_page(p);
+		snprintf(n, sizeof(n), "%s-p%d-%s", name, p, pages[p].name);
+		render(prefix, n);
+	}
+	show_page(was);
+	sidebar_focus = sb;
 }
 
 int main(int argc, char **argv) {
@@ -312,6 +329,7 @@ int main(int argc, char **argv) {
 	z_listbox_init(&tz_list, &win);
 	z_listbox_set_items(&tz_list, TZ_ITEMS, tz_label, NULL);
 	startup();                      // exactly as main() starts
+	expect(page == P_DISPLAY && sidebar_focus, "it opens on Display, the keyboard on the categories");
 	// On the board the Security buttons came up disabled (drawn as empty
 	// boxes): widgets_init() had wiped what read_values() set. Checked
 	// here, right after startup, not after a later re-read that hides it.
@@ -333,6 +351,46 @@ int main(int argc, char **argv) {
 		expect(round, "every list row saves a value that selects the same row");
 	}
 	render(prefix, "1-defaults");
+	render_pages(prefix, "1");
+
+	// -- the categories: clicked, and from the keyboard --
+	{
+		z_clip_t c;
+		z_win_content_rect(&win, &c);
+		click(30, MARGIN + P_SECURITY * SB_ROW_H + 10);
+		expect(page == P_SECURITY && sidebar_focus, "clicking a category shows its page");
+		handle_key(Z_KEY_DOWN, 0);
+		expect(page == P_TERMINAL, "Down: the next category");
+		handle_key(Z_KEY_HOME, 0);
+		expect(page == P_DISPLAY, "Home: the first");
+		handle_key(Z_KEY_UP, 0);
+		expect(page == P_DISPLAY, "Up at the first stays");
+		handle_key(Z_KEY_END, 0);
+		expect(page == P_SYSTEM, "End: the last");
+		handle_key(Z_KEY_PAGEUP, Z_KBD_MOD_LCTRL);
+		expect(page == P_TERMINAL && sidebar_focus, "Ctrl+PgUp from the list: the page before, still on the list");
+		handle_key('\t', 0);
+		expect(!sidebar_focus && focused() == W_EDIT_TERM, "Tab: into the page, its first control");
+		handle_key(Z_KEY_PAGEUP, Z_KBD_MOD_LCTRL);
+		expect(page == P_SECURITY && !sidebar_focus && focused() == W_PW_SET,
+			"Ctrl+PgUp in a page: the page before, at its first control");
+		handle_key(0x1b, 0);
+		expect(sidebar_focus && ws->focused < 0, "Esc: back to the categories");
+		handle_key('\t', Z_KBD_MOD_LSHIFT);
+		expect(!sidebar_focus && focused() == W_LOCK_EDIT, "Shift+Tab: into the page from its end");
+		handle_key(Z_KEY_LEFT, 0);
+		expect(!sidebar_focus && focused() == W_PW_SET, "Left: the control before");
+		handle_key(Z_KEY_LEFT, 0);
+		expect(sidebar_focus, "Left from the first control: the categories");
+		click_widget(W_PW_SET);
+		click(30, MARGIN + P_DISPLAY * SB_ROW_H + 10);
+		expect(page == P_DISPLAY, "back to Display");
+		(void)c;
+	}
+
+	// the launch argument names a page
+	expect(page_named("time") == P_TIME && page_named("sec") == P_SECURITY &&
+		page_named("nope") < 0 && page_named("") < 0, "`run settings time`: pages by name");
 
 	// Widgets must stay inside the content area and clear of each other.
 	{
@@ -391,16 +449,19 @@ int main(int argc, char **argv) {
 	expect(other_keys == 1, "one other key counted");
 	render(prefix, "2-from-file");
 
-	// Tab order: each preference's button in turn, then the list, then
-	// Reload. (There was one preference row when this was first
-	// written; Tab from its Edit went straight to the list.)
-	z_widget_focus_set(&wset, W_EDIT_TERM);
+	// Tab order on Keyboard: layouts, the Japanese switch, then out to
+	// the categories; on Date & time the list comes first.
+	focus_sidebar(true);
+	show_page(P_KEYBOARD);
 	handle_key('\t', 0);
-	expect(wset.focused == W_EDIT_KBD, "Tab from the first Edit reaches the next row's");
+	expect(focused() == W_EDIT_KBD, "Keyboard: Tab reaches Edit");
 	handle_key('\t', 0);
-	expect(wset.focused == W_TOGGLE_JA, "then the Japanese font switch");
+	expect(focused() == W_TOGGLE_JA, "then the Japanese text switch");
 	handle_key('\t', 0);
-	expect(list_focus && wset.focused < 0, "Tab from the last preference enters the list");
+	expect(sidebar_focus, "Tab from the last control: back to the categories");
+	show_page(P_TIME);
+	handle_key('\t', 0);
+	expect(list_focus && ws->focused < 0, "Date & time: Tab enters the list first");
 
 	// type-to-find, then Enter saves
 	// "mu" is Mumbai (it sorts first); "mun" is Munich
@@ -473,7 +534,7 @@ int main(int argc, char **argv) {
 	handle_key(Z_KEY_END, 0);
 	expect(z_listbox_selected(&tz_list) == TZ_ITEMS - 1, "End reaches UTC+14");
 	handle_key('\t', 0);
-	expect(!list_focus && wset.focused == W_SET_TZ,
+	expect(!list_focus && focused() == W_SET_TZ,
 		"Tab leaves the list for Set while the selection is unsaved");
 
 	char before[sizeof(file)];
@@ -504,14 +565,22 @@ int main(int argc, char **argv) {
 	expect(confirms == 1 && !memcmp(before, file, sizeof(file)),
 		"a value that is not a connection is refused");
 
-	// with focus on a button, a letter still goes to the list
-	z_widget_focus_set(&wset, 1);
+	// with the keyboard on the categories, a letter on Date & time
+	// still goes to the list
+	focus_sidebar(true);
 	ticks_bump();
 	handle_key('b', 0);
-	expect(list_focus && !strcmp(SEL_CITY(), "Bangkok"),
-		"a letter while a button has focus moves focus to the list and jumps");
+	expect(list_focus && !sidebar_focus && !strcmp(SEL_CITY(), "Bangkok"),
+		"a letter on the categories moves focus to the list and jumps");
 	expect(!strstr(file, "Bangkok"), "jumping does not save");
 	handle_key('\t', 0);
+	// ... and on another page, a letter does nothing
+	focus_sidebar(true);
+	show_page(P_MOUSE);
+	z_listbox_select(&tz_list, 0);
+	handle_key('b', 0);
+	expect(z_listbox_selected(&tz_list) == 0 && sidebar_focus, "a letter on Mouse moves nothing");
+	show_page(P_TIME);
 
 	// -- the mouse path: single click selects, the button saves --
 	ticks_bump();
@@ -532,7 +601,7 @@ int main(int argc, char **argv) {
 	ticks_bump();
 	handle_key('t', 0);			// Taipei
 	handle_key('\t', 0);
-	expect(!list_focus && wset.focused == W_SET_TZ, "Tab from the list reaches Set");
+	expect(!list_focus && focused() == W_SET_TZ, "Tab from the list reaches Set");
 	handle_key(0x0d, 0);
 	expect(strstr(file, "system.rtc.timezone: Taipei\n") != NULL, "Enter on Set saves");
 	handle_key('\t', 0);
@@ -558,10 +627,13 @@ int main(int argc, char **argv) {
 	}
 	render(prefix, "6-security-none");
 
-	// Tab reaches the new buttons after Reload
-	z_widget_focus_set(&wset, W_RELOAD);
+	// Security's buttons, in order
+	focus_sidebar(true);
+	show_page(P_SECURITY);
 	handle_key('\t', 0);
-	expect(wset.focused == W_PW_SET, "Tab from Reload reaches the password button");
+	expect(focused() == W_PW_SET, "Security: Tab reaches the password button");
+	handle_key('\t', 0);
+	expect(focused() == W_LOCK_EDIT, "then the screen lock's (Remove is off: no password)");
 
 	secrets("correct horse", "correct horse", NULL);
 	activate(W_PW_SET);
@@ -696,6 +768,8 @@ int main(int argc, char **argv) {
 			"> again: phosphor, and the custom accents dropped");
 		expect(strstr(file, "system.rtc.timezone: UTC+5:30\n") != NULL, "the rest of the file kept");
 	}
+
+	render_pages(prefix, "9");
 
 	printf("--- final /zeitlos.cfg ---\n%.*s--- end ---\n", file_len, file);
 	printf("settings render: %d checks, %d failed\n", checks, failures);

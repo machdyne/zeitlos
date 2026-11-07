@@ -103,11 +103,12 @@ int fs_seek(int h, uint32_t off) {
     return fseek(handles[h], (long)off, SEEK_SET) == 0 ? 1 : 0;
 }
 
+/* 1 on success, 0 on failure, as zfsapp.h has it (and see below). */
 int fs_close_handle(int h) {
-    if (h < 0 || h >= MAXH || !handles[h]) return -1;
-    fclose(handles[h]);
+    if (h < 0 || h >= MAXH || !handles[h]) return 0;
+    int r = fclose(handles[h]);
     handles[h] = NULL;
-    return 0;
+    return r == 0 ? 1 : 0;
 }
 
 /* 1 on success, 0 on failure -- sw/common/zfsapp.h's convention, which
@@ -382,3 +383,20 @@ int fs_list_ex(const char *path, char *buf, uint32_t cap,
     return 1;
 }
 
+
+/* date's clock (posix.h): PX_TEST_TIME seconds and PX_TEST_ZONE from
+ * the environment, so the cases are the same on every run; no
+ * PX_TEST_TIME is a clock that has not been set. */
+bool px_clock_now(uint32_t *utc) {
+    const char *t = getenv("PX_TEST_TIME");
+    if (!t || !*t) return false;
+    *utc = (uint32_t)strtoul(t, NULL, 10);
+    return true;
+}
+
+bool px_clock_zone(char *out, int cap) {
+    const char *z = getenv("PX_TEST_ZONE");
+    if (!z || !*z) return false;
+    snprintf(out, (size_t)cap, "%s", z);
+    return true;
+}

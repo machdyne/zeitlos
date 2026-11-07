@@ -2,33 +2,20 @@
  * settings -- system preferences, and the editor for /sys/zeitlos.cfg
  *
  *   > run wm
- *   > run settings
+ *   > run settings            or: run settings time   (a page by name)
  *
- * Seven settings (docs/config.md):
+ * Categories down the left, each with an icon; the chosen one's settings
+ * on the right (docs/settings_app.md):
  *
- *   Display               system.video.mode        applied immediately
- *   Desktop colours       system.video.desktop_theme (and _colour)
- *                                                  applied immediately
- *   Pointer speed         system.mouse.speed       applied immediately
- *   Terminal connects to  apps.term.auto_connect   new term windows
- *   Keyboard layouts      system.keyboard.layouts  the next key pressed
- *   Japanese font         system.font.japanese     at once: jfont started/stopped
- *   Time zone             system.rtc.timezone      clock and cal
- *
- * The time zone is chosen from a list -- UTC, about sixty cities with
- * their daylight-saving rules (z_tz_cities, zrtc.h), and whole-hour
- * offsets -- in a z_listbox_t (zwidget.h). Moving through the list only
- * selects, so browsing does not write the sdcard once per row. The
- * "Set time zone" button saves the selection; it is enabled only while
- * the selection differs from the zone in use, and the status line says
- * so. Enter and double-click save too.
- *
- * The button was added after a person selected a city, saw nothing
- * happen, and reasonably concluded there was no way to save: Enter and
- * double-click were the only ways, and nothing on the panel said so.
- *
- * plus Reload, which re-reads the file into the kernel after it has
- * been edited some other way.
+ *   Display      display colour (system.video.mode), desktop colours
+ *                (system.video.desktop_theme)                applied at once
+ *   Mouse        pointer speed (system.mouse.speed)           applied at once
+ *   Keyboard     layouts (system.keyboard.layouts), Japanese text
+ *                (system.font.japanese)                       the next key / at once
+ *   Date & time  time zone (system.rtc.timezone)              clock, cal, date
+ *   Security     password and screen lock                     the flash store
+ *   Terminal     what new term windows connect to (apps.term.auto_connect)
+ *   System       the file itself: what else is in it, Reload
  *
  * -- it edits the FILE, one line at a time --
  *
@@ -43,10 +30,14 @@
  *
  * -- keyboard-only --
  *
- * Fully usable with no pointer: Tab and Shift+Tab (or the arrow keys)
- * move between controls, Enter or Space activates one. A settings app
- * you can only reach with a mouse is exactly the wrong thing to have on
- * a machine whose pointer might be the thing you are trying to fix.
+ * Fully usable with no pointer. The category list has focus at first:
+ * Up and Down choose a page, Tab (or Right, or Enter) goes into it. In
+ * a page, Tab and Shift+Tab move through its controls and out the far
+ * end back to the list; Esc goes back at once; Enter or Space presses
+ * a button. Ctrl+PgUp and Ctrl+PgDn change page from anywhere. A
+ * settings app you can only reach with a mouse is exactly the wrong
+ * thing to have on a machine whose pointer might be the thing you are
+ * trying to fix.
  *
  * -- applying immediately --
  *
@@ -74,7 +65,7 @@
 #include "../../common/zdialog.h"
 #include "../../common/zfsapp.h"
 #include "../../common/zcfg.h"
-#include "../../common/zrtc.h"		// the city table, and z_tz_parse()
+#include "../../common/zrtc.h"		// the city table, z_tz_parse(), the clock
 #include "../../common/zauth.h"		// the password and screen lock: docs/security.md
 #include "../../common/zpaths.h"
 #include "../../common/zaccent.h"	// the desktop colour themes
@@ -82,24 +73,84 @@
 
 // Fixed size, not resizable: a preferences panel has no content to
 // reveal.
-#define WIN_W   284
-// one row per preference, plus the Security section (a heading and two
-// rows, 92 px) and the desktop colour row (30 px): see layout()
-// and the pointer speed row (26 px)
-#define WIN_H   (214 + 2 * (2 * (8 + 2) + 6) + 92 + 30 + 26)
+#define WIN_W   420
+#define WIN_H   300
 
 static z_win_t win;
 static z_dialog_ctx_t dlg;
 
-#define MARGIN      6
+#define MARGIN      8
 #define LINE_H      (z_font_5x8.h + 2)
 #define BTN_H       16
-#define EDIT_W      40
+#define EDIT_W      44
 #define EDIT_H      14
 #define GAP         4	// at least 2px, for the focus ring
-#define TZ_ROWS     6	// visible rows in the time zone list
+#define STEP_W      18	// the < and > buttons
+#define PW_BTN_W    48
+
+// -- the categories --
+
+enum { P_DISPLAY, P_MOUSE, P_KEYBOARD, P_TIME, P_SECURITY, P_TERMINAL, P_SYSTEM, P_COUNT };
+
+#define SB_W        104		// the category list
+#define SB_ROW_H    24
+#define PX          (SB_W + MARGIN)	// where a page begins
+
+typedef struct {
+	const char	*label;
+	const char	*name;			// for `run settings NAME`
+	const char	*note;			// under the page's title: when and where it applies
+	const char	*art[16];		// the icon, '#' for ink
+} page_t;
+
+static const page_t pages[P_COUNT] = {
+	{ "Display", "display", "Applied at once, and saved", {
+		"................", ".##############.", ".#............#.", ".#.##########.#.",
+		".#.#........#.#.", ".#.#........#.#.", ".#.#........#.#.", ".#.#........#.#.",
+		".#.##########.#.", ".#............#.", ".##############.", ".......##.......",
+		".......##.......", "....########....", "................", "................" } },
+	{ "Mouse", "mouse", "Applied at once, and saved", {
+		".......#........", ".......#........", ".....######.....", "....#...#..#....",
+		"...#....#...#...", "...#....#...#...", "...#....#...#...", "...##########...",
+		"...#........#...", "...#........#...", "...#........#...", "...#........#...",
+		"...#........#...", "....#......#....", ".....######.....", "................" } },
+	{ "Keyboard", "keyboard", "Saved; used from the next key", {
+		"................", "................", "................", "################",
+		"#..............#", "#.##.##.##.##..#", "#..............#", "#.##.##.##.##..#",
+		"#..............#", "#.##.######.##.#", "#..............#", "################",
+		"................", "................", "................", "................" } },
+	{ "Date & time", "time", "Used by clock, cal and date", {
+		".....######.....", "...##......##...", "..#....#.....#..", ".#.....#......#.",
+		".#.....#......#.", "#......#.......#", "#......#.......#", "#......#####...#",
+		"#..............#", "#..............#", ".#............#.", ".#............#.",
+		"..#..........#..", "...##......##...", ".....######.....", "................" } },
+	{ "Security", "security", "Kept in the flash, not in the file", {
+		"................", ".....######.....", "....##....##....", "....#......#....",
+		"....#......#....", "....#......#....", "..############..", "..############..",
+		"..#####..#####..", "..####....####..", "..#####..#####..", "..######.#####..",
+		"..######.#####..", "..############..", "..############..", "................" } },
+	{ "Terminal", "terminal", "Used by new term windows", {
+		"################", "#..............#", "################", "#..............#",
+		"#.##...........#", "#..##..........#", "#...##.........#", "#..##..........#",
+		"#.##...######..#", "#..............#", "#..............#", "################",
+		"................", "................", "................", "................" } },
+	{ "System", "system", "The settings file itself", {
+		"................", "...##########...", "...#.......#.#..", "...#.......#..#.",
+		"...#.......####.", "...#..........#.", "...#.######...#.", "...#..........#.",
+		"...#.######...#.", "...#..........#.", "...#.######...#.", "...#..........#.",
+		"...#.####.....#.", "...#..........#.", "...############.", "................" } },
+};
+
+static uint8_t icons[P_COUNT][32];	// pages[].art, as 16x16 bitmaps
+
+static int page = P_DISPLAY;
+static bool sidebar_focus = true;	// keyboard focus: the category list, or the page
 
 // -- controls --
+//
+// One array, in page order, and a widget set over each page's slice of
+// it: a page's set draws and hit-tests only its own controls. A
+// control's index here is its name everywhere else (activate()).
 
 #define GROUP_VIDEO 1
 
@@ -109,26 +160,37 @@ static const uint32_t video_modes[] = {
 static const char *video_labels[] = { "White", "Amber", "Green", "Paper" };
 #define MODE_COUNT 4
 
-// Array order is Tab order, with the time zone list (not a widget)
-// between Edit and Set -- see handle_key().
 enum {
+	// Display: the four modes are 0..3
 	W_THEME_PREV = MODE_COUNT,
 	W_THEME_NEXT,
+	// Mouse
 	W_SPEED_PREV,
 	W_SPEED_NEXT,
-	W_EDIT_TERM,
+	// Keyboard
 	W_EDIT_KBD,
 	W_TOGGLE_JA,
+	// Date & time (and the list, which is not a widget)
 	W_SET_TZ,
-	W_RELOAD,
+	// Security
 	W_PW_SET,
 	W_PW_REMOVE,
 	W_LOCK_EDIT,
+	// Terminal
+	W_EDIT_TERM,
+	// System
+	W_RELOAD,
 	W_COUNT
 };
 
-#define PW_BTN_W  44
-#define THEME_BTN_W 18
+// Each page's first control; the next page's first ends it.
+static const int page_first[P_COUNT + 1] = {
+	0, W_SPEED_PREV, W_EDIT_KBD, W_SET_TZ, W_PW_SET, W_EDIT_TERM, W_RELOAD, W_COUNT,
+};
+
+static z_widget_t widgets[W_COUNT];
+static z_widget_set_t psets[P_COUNT];
+static z_widget_set_t *ws = &psets[P_DISPLAY];	// the shown page's
 
 // -- desktop colour: off, or one of zaccent.h's themes --
 //
@@ -142,9 +204,6 @@ static bool can_theme;			// an eight-plane board with the colour window
 static bool colour_on;			// system.video.desktop_colour
 static int theme_idx;			// z_accent_themes, 0 for an unknown name
 static bool theme_in_file, theme_custom;
-
-static z_widget_t widgets[W_COUNT];
-static z_widget_set_t wset;
 
 // True if this bitstream can change the display mode. Probed once --
 // see z_video_mode_present() in zsoc.h.
@@ -161,14 +220,10 @@ typedef struct {
 } pref_t;
 
 static pref_t prefs[] = {
-	{ "apps.term.auto_connect", "Terminal connects to", W_EDIT_TERM, "", false },
-	{ "system.keyboard.layouts", "Keyboard layouts (Super+Space)", W_EDIT_KBD, "", false },
-	{ "system.font.japanese", "Japanese font (text at 6x12)", W_TOGGLE_JA, "", false },
+	{ "apps.term.auto_connect", "New terminal windows connect to", W_EDIT_TERM, "", false },
+	{ "system.keyboard.layouts", "Keyboard layouts", W_EDIT_KBD, "", false },
+	{ "system.font.japanese", "Japanese text", W_TOGGLE_JA, "", false },
 };
-
-// The last preference's Edit button: the list comes after it in Tab
-// order.
-#define W_LAST_PREF W_TOGGLE_JA
 
 // The Japanese font switch -- defined with its button, further down.
 static bool japanese_on(void);
@@ -187,9 +242,8 @@ static bool can_speed;			// a HID port with the speed register (zpointer.h)
 static int speed_idx = Z_POINTER_LEVEL_NORMAL;
 static bool speed_in_file;
 
-static int y_speed;
-static int y_display, y_modes, y_theme, y_prefs, y_rows, y_tz, y_list, y_reload, y_status;
-static int y_sec, y_sec_rows;
+// where things are on the page shown (layout())
+static int y_page, y_status, tz_rows;
 
 // -- security: the password and the screen lock (docs/security.md) --
 //
@@ -213,7 +267,7 @@ static void read_auth(void);		// with read_values()
 #define TZ_ITEMS        (1 + z_tz_city_count + TZ_OFFSETS)
 
 static z_listbox_t tz_list;
-static bool list_focus;			// keyboard focus is on the list
+static bool list_focus;			// keyboard focus is on the list (Date & time)
 
 static char tz_value[Z_CFG_VAL_MAX];
 static bool tz_in_file;
@@ -283,6 +337,7 @@ static void read_values(void) {
 			sizeof(prefs[i].value));
 
 	tz_in_file = z_cfg_get("system.rtc.timezone", tz_value, sizeof(tz_value));
+	if (!tz_in_file) snprintf(tz_value, sizeof(tz_value), "UTC");
 
 	colour_on = z_cfg_get_bool("system.video.desktop_colour", true);
 	theme_in_file = z_cfg_get("system.video.desktop_theme", v, sizeof(v));
@@ -333,107 +388,98 @@ static void select_current_mode(void) {
 
 	for (int i = 0; i < MODE_COUNT; i++) {
 		if (video_modes[i] == now) {
-			z_widget_select(&wset, i);
+			z_widget_select(&psets[P_DISPLAY], i);
 			break;
 		}
 	}
 
 }
 
-// -- layout and drawing --
+// -- layout --
+//
+// Every page's controls are placed at once; a page draws and hit-tests
+// only its own (psets[]), so they may overlap from page to page.
+
+static int page_w(void) { return z_win_content_w(&win) - PX - MARGIN; }
+static int right_x(int w) { return PX + page_w() - w; }
+
+// A setting's row: its title at y, its value a line below, its
+// buttons at the right of the title line.
+#define ROW_H       (2 * LINE_H + 10)
+
+static void place(int idx, int x, int y, int w, int h) {
+	widgets[idx].x = (int16_t)x;
+	widgets[idx].y = (int16_t)y;
+	widgets[idx].w = (int16_t)w;
+	widgets[idx].h = (int16_t)h;
+}
 
 static void layout(void) {
 
-	int cw = z_win_content_w(&win);
-	int bw = (cw - 2 * MARGIN - (MODE_COUNT - 1) * GAP) / MODE_COUNT;
+	int cw = z_win_content_w(&win), ch = z_win_content_h(&win);
+	int pw = cw - PX - MARGIN;
 
-	y_display = MARGIN;
-	y_modes = y_display + LINE_H + 2;
+	(void)cw;
+	y_page = MARGIN + z_font_6x12.h + LINE_H + 10;		// below the title and its note
+	y_status = ch - LINE_H - 4;
 
-	for (int i = 0; i < MODE_COUNT; i++) {
-		widgets[i].x = (int16_t)(MARGIN + i * (bw + GAP));
-		widgets[i].y = (int16_t)y_modes;
-		widgets[i].w = (int16_t)bw;
-		widgets[i].h = BTN_H;
-	}
+	// Display: the four modes across, then the desktop colours row
+	int bw = (pw - (MODE_COUNT - 1) * GAP) / MODE_COUNT;
+	for (int i = 0; i < MODE_COUNT; i++)
+		place(i, PX + i * (bw + GAP), y_page + LINE_H + 2, bw, BTN_H);
+	int yt = y_page + LINE_H + 2 + BTN_H + 2 * LINE_H + 6;
+	place(W_THEME_PREV, right_x(2 * STEP_W + GAP), yt - 3, STEP_W, EDIT_H);
+	place(W_THEME_NEXT, right_x(STEP_W), yt - 3, STEP_W, EDIT_H);
 
-	y_theme = y_modes + BTN_H + 10;
-	widgets[W_THEME_PREV].x = (int16_t)(cw - MARGIN - 2 * THEME_BTN_W - GAP);
-	widgets[W_THEME_NEXT].x = (int16_t)(cw - MARGIN - THEME_BTN_W);
-	widgets[W_THEME_PREV].y = widgets[W_THEME_NEXT].y = (int16_t)(y_theme - 3);
-	widgets[W_THEME_PREV].w = widgets[W_THEME_NEXT].w = THEME_BTN_W;
-	widgets[W_THEME_PREV].h = widgets[W_THEME_NEXT].h = EDIT_H;
+	// Mouse
+	place(W_SPEED_PREV, right_x(2 * STEP_W + GAP), y_page - 3, STEP_W, EDIT_H);
+	place(W_SPEED_NEXT, right_x(STEP_W), y_page - 3, STEP_W, EDIT_H);
 
-	y_speed = y_theme + 2 * LINE_H + 6;
-	widgets[W_SPEED_PREV].x = widgets[W_THEME_PREV].x;
-	widgets[W_SPEED_NEXT].x = widgets[W_THEME_NEXT].x;
-	widgets[W_SPEED_PREV].y = widgets[W_SPEED_NEXT].y = (int16_t)(y_speed - 3);
-	widgets[W_SPEED_PREV].w = widgets[W_SPEED_NEXT].w = THEME_BTN_W;
-	widgets[W_SPEED_PREV].h = widgets[W_SPEED_NEXT].h = EDIT_H;
+	// Keyboard: layouts, then Japanese text
+	place(W_EDIT_KBD, right_x(EDIT_W), y_page - 3, EDIT_W, EDIT_H);
+	place(W_TOGGLE_JA, right_x(EDIT_W + 12), y_page + ROW_H + LINE_H + 4 - 3, EDIT_W + 12, EDIT_H);
 
-	y_prefs = y_speed + 2 * LINE_H + 6 + 4;
-	y_rows = y_prefs + LINE_H + 4;
+	// Date & time: the zone and the clock, the list, then Set
+	int yl = y_page + 2 * LINE_H + 6;
+	int ys = y_status - BTN_H - 6;
+	tz_rows = (ys - 6 - yl - 2) / (z_font_5x8.h + 2);
+	if (tz_rows < 3) tz_rows = 3;
+	z_listbox_set_geom(&tz_list, PX, yl, pw, tz_rows * (z_font_5x8.h + 2) + 2);
+	place(W_SET_TZ, right_x(110), ys, 110, BTN_H);
 
-	for (int i = 0; i < PREF_COUNT; i++) {
-		z_widget_t *w = &widgets[prefs[i].widget];
-		w->x = (int16_t)(cw - MARGIN - EDIT_W);
-		w->y = (int16_t)(y_rows + i * (2 * LINE_H + 6) - 3);
-		w->w = EDIT_W;
-		w->h = EDIT_H;
-	}
+	// Security: the password, then the screen lock
+	place(W_PW_SET, right_x(2 * PW_BTN_W + GAP), y_page - 3, PW_BTN_W, EDIT_H);
+	place(W_PW_REMOVE, right_x(PW_BTN_W), y_page - 3, PW_BTN_W, EDIT_H);
+	place(W_LOCK_EDIT, right_x(EDIT_W), y_page + ROW_H - 3, EDIT_W, EDIT_H);
 
-	y_tz = y_rows + PREF_COUNT * (2 * LINE_H + 6);
-	y_list = y_tz + LINE_H + 2;
+	// Terminal
+	place(W_EDIT_TERM, right_x(EDIT_W), y_page - 3, EDIT_W, EDIT_H);
 
-	// 2px left of the margin on each side for the list's focus ring.
-	z_listbox_set_geom(&tz_list, MARGIN, y_list, cw - 2 * MARGIN,
-		TZ_ROWS * (z_font_5x8.h + 2) + 2);
+	// System
+	place(W_RELOAD, PX, y_page + 3 * LINE_H + 8, 96, BTN_H);
 
-	y_reload = y_list + TZ_ROWS * (z_font_5x8.h + 2) + 2 + 6;
-	widgets[W_RELOAD].x = (int16_t)MARGIN;
-	widgets[W_RELOAD].y = (int16_t)y_reload;
-	widgets[W_RELOAD].w = 96;
-	widgets[W_RELOAD].h = BTN_H;
-
-	widgets[W_SET_TZ].w = 110;
-	widgets[W_SET_TZ].h = BTN_H;
-	widgets[W_SET_TZ].x = (int16_t)(cw - MARGIN - 110);
-	widgets[W_SET_TZ].y = (int16_t)y_reload;
-
-	y_sec = y_reload + BTN_H + 10;
-	y_sec_rows = y_sec + LINE_H + 4;
-	widgets[W_PW_SET].x = (int16_t)(cw - MARGIN - 2 * PW_BTN_W - GAP);
-	widgets[W_PW_REMOVE].x = (int16_t)(cw - MARGIN - PW_BTN_W);
-	widgets[W_PW_SET].y = widgets[W_PW_REMOVE].y = (int16_t)(y_sec_rows - 3);
-	widgets[W_PW_SET].w = widgets[W_PW_REMOVE].w = PW_BTN_W;
-	widgets[W_PW_SET].h = widgets[W_PW_REMOVE].h = EDIT_H;
-	widgets[W_LOCK_EDIT].x = (int16_t)(cw - MARGIN - EDIT_W);
-	widgets[W_LOCK_EDIT].y = (int16_t)(y_sec_rows + 2 * LINE_H + 6 - 3);
-	widgets[W_LOCK_EDIT].w = EDIT_W;
-	widgets[W_LOCK_EDIT].h = EDIT_H;
-
-	y_status = y_sec_rows + 2 * (2 * LINE_H + 6);
-
-	z_widget_invalidate(&wset);
+	for (int p = 0; p < P_COUNT; p++) z_widget_invalidate(&psets[p]);
 	z_listbox_invalidate(&tz_list);
 
 }
+
+// -- drawing --
 
 // The value line under a preference: what is in effect, and where it
 // came from.
 static void describe(const pref_t *p, char *out, size_t n) {
 
-	int max = (z_win_content_w(&win) - 2 * MARGIN - 8) / z_font_5x8.w;
+	int max = (page_w() - 8) / z_font_5x8.w;
 	const char *v = p->value;
 	const char *suffix = p->in_file ? "" : "  (default)";
 
 	if (!strcmp(p->key, "apps.term.auto_connect") &&
 		(!v[0] || !strcmp(v, "none")))
-		v = "start panel";
+		v = "the start panel";
 	if (!strcmp(p->key, "system.keyboard.layouts") && !v[0])
 		v = "us";
 	if (!strcmp(p->key, "system.font.japanese"))
-		v = japanese_on() ? "on -- jfont holds it, about 190KB" : "off";
+		v = japanese_on() ? "on -- jfont holds the font, about 190KB" : "off";
 
 	snprintf(out, n, "%.*s%s", max - (int)strlen(suffix), v, suffix);
 
@@ -441,6 +487,12 @@ static void describe(const pref_t *p, char *out, size_t n) {
 
 static void draw_text(int x, int y, const char *s) {
 	z_win_draw_text(&win, x, y, s, 1, &z_font_5x8);
+}
+
+// A title, and its value a line below, indented.
+static void draw_row(int y, const char *title, const char *value) {
+	draw_text(PX, y, title);
+	if (value) draw_text(PX + 8, y + LINE_H, value);
 }
 
 static void describe_theme(char *out, size_t n) {
@@ -484,81 +536,169 @@ static void describe_lock(char *out, size_t n) {
 
 static void draw_status(void) {
 
-	char line[80];
-	int cw = z_win_content_w(&win);
+	z_win_fill_rect(&win, PX, y_status, page_w(), LINE_H, 0);
+	if (status[0]) draw_text(PX, y_status, status);
 
-	z_win_fill_rect(&win, 0, y_status, cw, LINE_H, 0);
+}
 
-	if (status[0]) {
-		draw_text(MARGIN, y_status, status);
-	} else if (other_keys) {
-		snprintf(line, sizeof(line), "%d other setting%s in the file, kept as is",
-			other_keys, other_keys == 1 ? "" : "s");
-		draw_text(MARGIN, y_status, line);
+// One category: its icon and label, inverted when it is the page shown
+// -- and tinted too, on a board with desktop colour, while the list has
+// the keyboard; with the keyboard in the page, framed instead, so it is
+// plain where Tab has gone.
+static void draw_category(int p) {
+
+	z_clip_t c;
+	int y = MARGIN + p * SB_ROW_H, x0 = 4, w = SB_W - 8;
+	bool sel = p == page, solid = sel && sidebar_focus;
+
+	z_win_content_rect(&win, &c);
+	z_win_fill_rect(&win, x0, y, w, SB_ROW_H - 2, solid ? 1 : 0);
+	if (sel && !solid)
+		z_win_hw_box(&win, c.x0 + x0, c.y0 + y, c.x0 + x0 + w - 1, c.y0 + y + SB_ROW_H - 3, 1);
+
+	int ix = c.x0 + x0 + 4, iy = c.y0 + y + (SB_ROW_H - 2 - 16) / 2;
+	for (int r = 0; r < 16; r++)
+		for (int b = 0; b < 16; b++)
+			if (icons[p][r * 2 + (b >> 3)] & (0x80u >> (b & 7)))
+				z_fb_set_pixel(ix + b, iy + r, solid ? 0 : 1, &c);
+
+	z_win_draw_text2(&win, x0 + 24, y + (SB_ROW_H - 2 - z_font_5x8.h) / 2, pages[p].label,
+		solid ? 0 : 1, solid ? 1 : 0, &z_font_5x8);
+
+	if (z_win_accent_ok())
+		z_win_accent_rect(&win, c.x0 + x0, c.y0 + y, c.x0 + x0 + w - 1, c.y0 + y + SB_ROW_H - 3, solid);
+
+}
+
+static void draw_sidebar(void) {
+	int ch = z_win_content_h(&win);
+	for (int p = 0; p < P_COUNT; p++) draw_category(p);
+	z_win_fill_rect(&win, SB_W, 0, 1, ch, 1);		// the line between
+}
+
+// The pointer speed as a scale: a box per level, filled up to the one
+// in use, the normal one marked below.
+static void draw_speed_scale(int y) {
+	int bx = PX + 8, step = 9;
+	z_clip_t c;
+	z_win_content_rect(&win, &c);
+	draw_text(bx, y, "slower");
+	int sx = bx + 7 * z_font_5x8.w;
+	for (int i = 0; i < Z_POINTER_LEVELS; i++) {
+		int x = sx + i * step;
+		z_win_fill_rect(&win, x, y, 7, 7, 0);
+		z_win_hw_box(&win, c.x0 + x, c.y0 + y, c.x0 + x + 6, c.y0 + y + 6, 1);
+		if (can_speed && i <= speed_idx) z_win_fill_rect(&win, x + 1, y + 1, 5, 5, 1);
+		if (i == Z_POINTER_LEVEL_NORMAL) z_win_fill_rect(&win, x + 2, y + 9, 3, 3, 1);	// normal
 	}
+	draw_text(sx + Z_POINTER_LEVELS * step + 2, y, "faster");
+}
+
+static void draw_page(void) {
+
+	char line[96];
+	int y = y_page;
+
+	z_win_draw_text(&win, PX, MARGIN, pages[page].label, 1, &z_font_6x12);
+	draw_text(PX, MARGIN + z_font_6x12.h + 3, pages[page].note);
+
+	switch (page) {
+
+	case P_DISPLAY:
+		draw_row(y, can_set_video ? "Display colour" : "Display colour (not on this bitstream)", NULL);
+		y += LINE_H + 2 + BTN_H + 2 * LINE_H + 6;
+		describe_theme(line, sizeof(line));
+		draw_row(y, "Desktop colours (Super+F10)", line);
+		break;
+
+	case P_MOUSE:
+		if (!can_speed)
+			snprintf(line, sizeof(line), "fixed on this bitstream");
+		else {
+			// "Normal", or "+3 faster: x1.68": the level and its factor
+			int d = speed_idx - Z_POINTER_LEVEL_NORMAL;
+			int m = z_pointer_levels[speed_idx];
+			int n = d ? snprintf(line, sizeof(line), "%+d %s: x%d.%02d", d, d > 0 ? "faster" : "slower",
+					m / 16, (m % 16) * 100 / 16) : snprintf(line, sizeof(line), "Normal");
+			if (!speed_in_file && n < (int)sizeof(line))
+				snprintf(line + n, sizeof(line) - (size_t)n, "  (default)");
+		}
+		draw_row(y, "Pointer speed", line);
+		draw_speed_scale(y + 2 * LINE_H + 6);
+		break;
+
+	case P_KEYBOARD:
+		describe(&prefs[1], line, sizeof(line));
+		draw_row(y, prefs[1].title, line);
+		draw_text(PX + 8, y + 2 * LINE_H, "Super+Space changes between them");
+		y += ROW_H + LINE_H + 4;
+		describe(&prefs[2], line, sizeof(line));
+		draw_row(y, prefs[2].title, line);
+		draw_text(PX + 8, y + 2 * LINE_H, "drawn at 6x12; typed with romaji (Super+Space)");
+		break;
+
+	case P_TIME: {
+		// What is in effect and the time it makes, on two lines: the
+		// list below shows the choice, but a value with no row
+		// (UTC+5:30 typed into the file) still has to be visible.
+		snprintf(line, sizeof(line), "Time zone: %.32s%s", tz_value, tz_in_file ? "" : "  (default)");
+		draw_text(PX, y, line);
+		z_tz_t tz;
+		bool dst = false;
+		if (z_rtc_available() && z_rtc_valid()) {
+			z_tm_t tm;
+			z_tz_parse(tz_value, &tz);
+			z_time_to_tm(z_tz_local(&tz, z_rtc_seconds(), &dst), &tm);
+			snprintf(line, sizeof(line), "now %s %u %s %02u:%02u %s", z_wday_name(tm.wday),
+				(unsigned)tm.day, z_month_name(tm.month), (unsigned)tm.hour, (unsigned)tm.min,
+				z_tz_name(&tz, dst));
+		} else snprintf(line, sizeof(line), "the clock is not set (the network sets it)");
+		draw_text(PX + 8, y + LINE_H, line);
+		break;
+	}
+
+	case P_SECURITY:
+		describe_password(line, sizeof(line));
+		draw_row(y, "Password", line);
+		describe_lock(line, sizeof(line));
+		draw_row(y + ROW_H, "Screen lock", line);
+		y += 2 * ROW_H + 4;
+		draw_text(PX, y, "The password opens the screen lock (Super+L),");
+		draw_text(PX, y + LINE_H, "the console, and SSH and telnet logins.");
+		break;
+
+	case P_TERMINAL:
+		describe(&prefs[0], line, sizeof(line));
+		draw_row(y, prefs[0].title, line);
+		y += ROW_H + 4;
+		draw_text(PX, y, "port repl0, port posix0, telnet HOST,");
+		draw_text(PX, y + LINE_H, "ssh USER@HOST, serial [BAUD], or none --");
+		draw_text(PX, y + 2 * LINE_H, "the start panel lets you choose each time.");
+		break;
+
+	case P_SYSTEM:
+		draw_row(y, "Settings file", Z_CFG_PATH);
+		if (other_keys)
+			snprintf(line, sizeof(line), "%d other setting%s in it, kept as %s", other_keys,
+				other_keys == 1 ? "" : "s", other_keys == 1 ? "it is" : "they are");
+		else snprintf(line, sizeof(line), "nothing else in it");
+		draw_text(PX + 8, y + 2 * LINE_H, line);
+		y = widgets[W_RELOAD].y + BTN_H + 8;
+		draw_text(PX, y, "Reload reads the file again after it was");
+		draw_text(PX, y + LINE_H, "edited elsewhere -- in text or vi.");
+		break;
+	}
+
+	z_widget_draw_all(ws, true);
+	if (page == P_TIME) z_listbox_draw(&tz_list, true);
 
 }
 
 static void repaint(void) {
-
-	char line[80];
-	int cw = z_win_content_w(&win);
-
 	z_win_clear(&win);
-
-	draw_text(MARGIN, y_display,
-		can_set_video ? "Display" : "Display (unavailable)");
-
-	draw_text(MARGIN, y_theme, "Desktop colours (Super+F10)");
-	describe_theme(line, sizeof(line));
-	draw_text(MARGIN + 8, y_theme + LINE_H, line);
-
-	draw_text(MARGIN, y_speed, "Pointer speed");
-	if (!can_speed)
-		snprintf(line, sizeof(line), "fixed on this bitstream");
-	else {
-		// "Normal", or "+3 faster: x1.68": the level and its factor
-		int d = speed_idx - Z_POINTER_LEVEL_NORMAL;
-		int m = z_pointer_levels[speed_idx];
-		int n = d ? snprintf(line, sizeof(line), "%+d %s: x%d.%02d", d, d > 0 ? "faster" : "slower",
-				m / 16, (m % 16) * 100 / 16) : snprintf(line, sizeof(line), "Normal");
-		if (!speed_in_file && n < (int)sizeof(line))
-			snprintf(line + n, sizeof(line) - (size_t)n, "  (default)");
-	}
-	draw_text(MARGIN + 8, y_speed + LINE_H, line);
-
-	draw_text(MARGIN, y_prefs, "Preferences");
-	draw_text(cw - MARGIN - (int)strlen(Z_CFG_PATH) * z_font_5x8.w, y_prefs,
-		Z_CFG_PATH);
-
-	for (int i = 0; i < PREF_COUNT; i++) {
-		int y = y_rows + i * (2 * LINE_H + 6);
-		draw_text(MARGIN, y, prefs[i].title);
-		describe(&prefs[i], line, sizeof(line));
-		draw_text(MARGIN + 8, y + LINE_H, line);
-	}
-
-	// Title and what is in effect, on one line: the list below shows
-	// the choice, but a value with no row (UTC+5:30 typed into the
-	// file) still has to be visible somewhere.
-	snprintf(line, sizeof(line), "Time zone: %.32s%s", tz_value,
-		tz_in_file ? "" : "  (default)");
-	draw_text(MARGIN, y_tz, line);
-
-	draw_text(MARGIN, y_sec, "Security");
-	draw_text(cw - MARGIN - 5 * z_font_5x8.w, y_sec, "flash");
-	draw_text(MARGIN, y_sec_rows, "Password");
-	describe_password(line, sizeof(line));
-	draw_text(MARGIN + 8, y_sec_rows + LINE_H, line);
-	draw_text(MARGIN, y_sec_rows + 2 * LINE_H + 6, "Screen lock");
-	describe_lock(line, sizeof(line));
-	draw_text(MARGIN + 8, y_sec_rows + 3 * LINE_H + 6, line);
-
+	draw_sidebar();
+	draw_page();
 	draw_status();
-
-	z_widget_draw_all(&wset, true);
-	z_listbox_draw(&tz_list, true);
-
 }
 
 // -- writing --
@@ -595,8 +735,8 @@ static void zone_selection_changed(void) {
 		status_is_hint = false;
 	}
 
-	if (wset.count) {
-		z_widget_draw_all(&wset, false);
+	if (ws->count && page == P_TIME) {
+		z_widget_draw_all(ws, false);
 		draw_status();
 	}
 
@@ -758,7 +898,7 @@ static void apply_video(int idx) {
 		// not `make dev-flash`). Put the selection back where the
 		// display actually is.
 		select_current_mode();
-		z_widget_draw_all(&wset, false);
+		z_widget_draw_all(ws, false);
 		return;
 	}
 
@@ -1078,6 +1218,11 @@ static void activate(int idx) {
 	if (idx == W_LOCK_EDIT) { edit_lock(); return; }
 }
 
+// A page's control as activate() names it, from its set's index.
+static int global_of(int local) {
+	return local < 0 ? -1 : page_first[page] + local;
+}
+
 // Saves the time zone at the list's selection.
 static void choose_zone(void) {
 
@@ -1092,14 +1237,15 @@ static void choose_zone(void) {
 
 }
 
-// Moves keyboard focus onto or off the list. The list sits between the
-// Edit button and Set time zone in the Tab order; see handle_key().
+// Moves keyboard focus onto or off the list.
 static void focus_list(bool on) {
 	list_focus = on;
 	z_listbox_set_focus(&tz_list, on);
-	if (on) z_widget_focus_set(&wset, -1);
-	z_widget_draw_all(&wset, false);
-	z_listbox_draw(&tz_list, false);
+	if (on) z_widget_focus_set(ws, -1);
+	if (page == P_TIME) {
+		z_widget_draw_all(ws, false);
+		z_listbox_draw(&tz_list, false);
+	}
 }
 
 // The Set button, from a click or Enter on it. It disables itself once
@@ -1110,10 +1256,76 @@ static void choose_zone_and_return(void) {
 	focus_list(true);
 }
 
-// The control after the list in Tab order: Set while it is enabled,
-// otherwise Reload.
-static int after_list(void) {
-	return widgets[W_SET_TZ].enabled ? W_SET_TZ : W_RELOAD;
+// -- pages and focus --
+
+// Shows page p. The keyboard stays where it was: on the list of
+// categories, or -- from Ctrl+PgUp/PgDn in a page -- at the new page's
+// first control.
+static void show_page(int p) {
+	if (p < 0 || p >= P_COUNT || p == page) return;
+	focus_list(false);
+	z_widget_focus_set(ws, -1);
+	page = p;
+	ws = &psets[page];
+	if (status_is_hint && page != P_TIME) { status[0] = 0; status_is_hint = false; }
+	else if (!status_is_hint) status[0] = 0;
+	repaint();
+}
+
+// The places Tab stops in the page shown, in order: on Date & time the
+// list first, then every enabled control. STOP_LIST is the list.
+#define STOP_LIST   (-2)
+#define STOP_NONE   (-1)
+
+static int page_stops(int *out) {
+	int n = 0;
+	if (page == P_TIME) out[n++] = STOP_LIST;
+	for (int g = page_first[page]; g < page_first[page + 1]; g++)
+		if (widgets[g].enabled) out[n++] = g;
+	return n;
+}
+
+static int current_stop(void) {
+	if (list_focus) return STOP_LIST;
+	return global_of(ws->focused);
+}
+
+static void focus_stop(int s) {
+	if (s == STOP_LIST) { focus_list(true); return; }
+	focus_list(false);
+	z_widget_focus_set(ws, s - page_first[page]);
+	z_widget_draw_all(ws, false);
+}
+
+static void focus_sidebar(bool on) {
+	if (sidebar_focus == on) return;
+	sidebar_focus = on;
+	if (on) {
+		focus_list(false);
+		z_widget_focus_set(ws, -1);
+		z_widget_draw_all(ws, false);
+	}
+	draw_category(page);
+}
+
+// Into the page: its first stop (or its last, coming back with
+// Shift+Tab). A page with nothing to press keeps the keyboard on the
+// list.
+static void enter_page(bool from_end) {
+	int st[W_COUNT + 1], n = page_stops(st);
+	if (!n) return;
+	focus_sidebar(false);
+	focus_stop(st[from_end ? n - 1 : 0]);
+}
+
+// Tab, Shift+Tab: the next stop in the page, and out of either end to
+// the list of categories.
+static void step_focus(bool back) {
+	int st[W_COUNT + 1], n = page_stops(st), cur = current_stop(), i;
+	for (i = 0; i < n && st[i] != cur; i++) ;
+	int next = i == n ? (back ? n - 1 : 0) : i + (back ? -1 : 1);
+	if (next < 0 || next >= n) { focus_sidebar(true); return; }
+	focus_stop(st[next]);
 }
 
 // -- input --
@@ -1123,23 +1335,44 @@ static void handle_mouse(uint32_t packed) {
 	int cx, cy;
 	bool inside = z_win_mouse_content_xy(&win, packed, &cx, &cy);
 	uint8_t buttons = (uint8_t)Z_WM_UNPACK_MOUSE_BUTTONS(packed);
+	static uint8_t last;
+	bool down = (buttons & Z_MOUSE_BTN_LEFT) && !(last & Z_MOUSE_BTN_LEFT);
+	last = buttons;
 
 	// Samples over the titlebar reach us too. Same guard as text/term.
-	if (!inside && wset.pressed < 0 && !tz_list.sb.dragging) return;
+	if (!inside && ws->pressed < 0 && !tz_list.sb.dragging) return;
 
-	// The list first, and for the whole of a scrollbar drag it started.
-	if (wset.pressed < 0 && z_listbox_has_pointer(&tz_list, cx, cy)) {
-		if ((buttons & Z_MOUSE_BTN_LEFT) && !list_focus) focus_list(true);
-		int r = z_listbox_mouse(&tz_list, cx, cy, buttons);
-		if (r == Z_LIST_ACTIVATED) choose_zone();
-		else if (r == Z_LIST_SELECTED) zone_selection_changed();
+	// A category: that page, the keyboard on the list.
+	if (down && cx < SB_W && ws->pressed < 0 && !tz_list.sb.dragging) {
+		int p = (cy - MARGIN) / SB_ROW_H;
+		if (cy >= MARGIN && p >= 0 && p < P_COUNT) {
+			focus_sidebar(true);
+			show_page(p);
+		}
 		return;
 	}
-	z_listbox_mouse(&tz_list, cx, cy, buttons);		// keep its edges fed
 
-	int act = z_widget_mouse(&wset, cx, cy, buttons);
-	if (act >= 0 && list_focus) focus_list(false);
-	activate(act);
+	// The list first, and for the whole of a scrollbar drag it started.
+	if (page == P_TIME) {
+		if (ws->pressed < 0 && z_listbox_has_pointer(&tz_list, cx, cy)) {
+			if ((buttons & Z_MOUSE_BTN_LEFT) && !list_focus) {
+				focus_sidebar(false);
+				focus_list(true);
+			}
+			int r = z_listbox_mouse(&tz_list, cx, cy, buttons);
+			if (r == Z_LIST_ACTIVATED) choose_zone();
+			else if (r == Z_LIST_SELECTED) zone_selection_changed();
+			return;
+		}
+		z_listbox_mouse(&tz_list, cx, cy, buttons);		// keep its edges fed
+	}
+
+	int act = z_widget_mouse(ws, cx, cy, buttons);
+	if (act >= 0) {
+		if (list_focus) focus_list(false);
+		if (sidebar_focus) focus_sidebar(false);
+	}
+	activate(global_of(act));
 
 }
 
@@ -1148,44 +1381,70 @@ static void handle_key(uint32_t keysym, uint8_t mods) {
 	if (keysym == Z_KEY_HELP) {	// docs/app_help.md
 		static const char help[] =
 			"System preferences, saved to " Z_PATH_SYS_CONFIG ".\n\n"
-			"Tab\tNext control (Shift+Tab back)\n"
-			"Arrows\tMove focus; in the list: select\n"
+			"Up/Down\tChoose a category\n"
+			"Tab, Enter\tInto its page (Shift+Tab back)\n"
+			"Esc\tBack to the categories\n"
+			"Ctrl+PgUp/Dn\tThe category before or after\n"
 			"Enter/Space\tPress the focused button\n"
-			"A-Z, 0-9\tJump to a time zone\n"
-			"Enter\tIn the list: save the zone\n\n"
+			"A-Z, 0-9\tDate & time: jump to a zone\n\n"
 			"Display colours, desktop colour themes and the pointer "
 			"speed (< >) apply at once. Pick a time zone, then "
-			"Set time zone. Edit changes a value; Reload file "
-			"re-reads the file after editing it elsewhere.";
+			"Set time zone. System reloads the file after it was "
+			"edited elsewhere.";
 		z_dialog_help(&dlg, "Settings help", help, "settings_app");
 		return;
 	}
 
 	bool back = (mods & Z_KBD_MOD_SHIFT) != 0;
 
-	// -- the list has focus --
+	// Ctrl+PgUp/PgDn: the page before or after, from anywhere.
+	if ((mods & Z_KBD_MOD_CTRL) && (keysym == Z_KEY_PAGEUP || keysym == Z_KEY_PAGEDOWN)) {
+		int p = page + (keysym == Z_KEY_PAGEUP ? -1 : 1);
+		bool was = sidebar_focus;
+		show_page(p);
+		if (!was) enter_page(false);
+		return;
+	}
+
+	// -- the list of categories --
+	if (sidebar_focus) {
+		switch (keysym) {
+		case Z_KEY_UP:   show_page(page - 1); return;
+		case Z_KEY_DOWN: show_page(page + 1); return;
+		case Z_KEY_HOME: show_page(0); return;
+		case Z_KEY_END:  show_page(P_COUNT - 1); return;
+		case '\t': enter_page(back); return;
+		case Z_KEY_RIGHT: case 0x0d: case ' ': enter_page(false); return;
+		}
+		// a letter on Date & time finds a zone, as it does in its page
+		if (page == P_TIME && ((keysym >= 'a' && keysym <= 'z') ||
+				(keysym >= 'A' && keysym <= 'Z') || (keysym >= '0' && keysym <= '9'))) {
+			focus_sidebar(false);
+			focus_list(true);
+			if (z_listbox_key(&tz_list, keysym) == Z_LIST_SELECTED) zone_selection_changed();
+		}
+		return;
+	}
+
+	if (keysym == 0x1b) { focus_sidebar(true); return; }
+
+	// -- the list of zones has focus --
 	//
 	// Every key it uses goes to it -- arrows move the selection there,
-	// not the focus -- and Tab leaves it: forward to Set (or Reload
-	// while Set is disabled), back to Edit.
+	// not the focus -- and Tab leaves it.
 	if (list_focus) {
-		if (keysym == '\t') {
-			focus_list(false);
-			z_widget_focus_set(&wset, back ? W_LAST_PREF : after_list());
-			z_widget_draw_all(&wset, false);
-			return;
-		}
+		if (keysym == '\t') { step_focus(back); return; }
 		int r = z_listbox_key(&tz_list, keysym);
 		if (r == Z_LIST_ACTIVATED) choose_zone();
 		else if (r == Z_LIST_SELECTED) zone_selection_changed();
 		return;
 	}
 
-	// A letter or digit belongs to the list wherever focus is: nothing
-	// else on this panel uses one, and "open settings, press B, get
-	// Bangkok" should not first require finding the list with Tab.
-	if ((keysym >= 'a' && keysym <= 'z') || (keysym >= 'A' && keysym <= 'Z') ||
-		(keysym >= '0' && keysym <= '9')) {
+	// A letter or digit on Date & time belongs to the list wherever
+	// focus is: "press B, get Bangkok" should not first require finding
+	// the list with Tab.
+	if (page == P_TIME && ((keysym >= 'a' && keysym <= 'z') || (keysym >= 'A' && keysym <= 'Z') ||
+		(keysym >= '0' && keysym <= '9'))) {
 		focus_list(true);
 		if (z_listbox_key(&tz_list, keysym) == Z_LIST_SELECTED)
 			zone_selection_changed();
@@ -1195,31 +1454,30 @@ static void handle_key(uint32_t keysym, uint8_t mods) {
 	switch (keysym) {
 
 		case '\t':
-			// Into the list from either side of it.
-			if ((!back && wset.focused == W_LAST_PREF) ||
-				(back && wset.focused == after_list())) {
-				focus_list(true);
-				return;
-			}
-			z_widget_focus_next(&wset, back);
-			z_widget_draw_all(&wset, false);
+			step_focus(back);
 			return;
 
 		case Z_KEY_UP:
-		case Z_KEY_LEFT:
-			z_widget_focus_next(&wset, true);
-			z_widget_draw_all(&wset, false);
+		case Z_KEY_LEFT: {
+			// Left from the first control is back to the categories
+			int st[W_COUNT + 1], n = page_stops(st);
+			if (keysym == Z_KEY_LEFT && n && current_stop() == st[0]) { focus_sidebar(true); return; }
+			step_focus(true);
+			if (sidebar_focus && keysym == Z_KEY_UP) enter_page(false);	// Up stops at the top
 			return;
+		}
 
 		case Z_KEY_DOWN:
-		case Z_KEY_RIGHT:
-			z_widget_focus_next(&wset, false);
-			z_widget_draw_all(&wset, false);
+		case Z_KEY_RIGHT: {
+			int st[W_COUNT + 1], n = page_stops(st);
+			if (n && current_stop() == st[n - 1]) return;		// stops at the end
+			step_focus(false);
 			return;
+		}
 
 		case 0x0d:
 		case ' ':
-			activate(z_widget_key_activate(&wset));
+			activate(global_of(z_widget_key_activate(ws)));
 			return;
 
 		default:
@@ -1308,13 +1566,21 @@ static void widgets_init(void) {
 	widgets[W_LOCK_EDIT].type = Z_WIDGET_BUTTON;
 	widgets[W_LOCK_EDIT].label = "Edit";
 
-	z_widget_set_init(&wset, widgets, W_COUNT, &win);
+	for (int p = 0; p < P_COUNT; p++)
+		z_widget_set_init(&psets[p], &widgets[page_first[p]], page_first[p + 1] - page_first[p], &win);
+	ws = &psets[page];
 
 	select_current_mode();
-	z_widget_focus_set(&wset, 0);
-	for (int i = 0; i < MODE_COUNT; i++)
-		if (widgets[i].on) z_widget_focus_set(&wset, i);
 
+}
+
+// The icons, from their pictures in pages[].
+static void icons_init(void) {
+	memset(icons, 0, sizeof(icons));
+	for (int p = 0; p < P_COUNT; p++)
+		for (int r = 0; r < 16; r++)
+			for (int b = 0; b < 16; b++)
+				if (pages[p].art[r][b] == '#') icons[p][r * 2 + (b >> 3)] |= (uint8_t)(0x80u >> (b & 7));
 }
 
 // The values, then the widgets, then the values the widgets carry.
@@ -1323,9 +1589,19 @@ static void widgets_init(void) {
 // because widgets_init() zeroed what read_values() had set, and a test
 // that re-read the values later could not see it.
 static void startup(void) {
+	icons_init();
 	read_values();
 	widgets_init();
 	read_auth();
+}
+
+// `run settings time`: the page whose name the argument begins.
+static int page_named(const char *a) {
+	size_t n = strlen(a);
+	if (!n) return -1;
+	for (int p = 0; p < P_COUNT; p++)
+		if (!strncmp(pages[p].name, a, n)) return p;
+	return -1;
 }
 
 int main(void) {
@@ -1346,11 +1622,12 @@ int main(void) {
 		return 1;
 	}
 
-	// Claimed and discarded: this app takes no argument, but leaving
-	// one pending would hand it to whatever the user opens next.
+	// The page to open on, if one was named. Taken even when empty:
+	// leaving one pending would hand it to whatever opens next.
 	{
-		char ignored[8];
-		z_launch_arg_take(ignored, sizeof(ignored));
+		char arg[24];
+		if (z_launch_arg_take(arg, sizeof(arg)) && page_named(arg) >= 0)
+			page = page_named(arg);
 	}
 
 	dlg.parent = &win;

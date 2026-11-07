@@ -101,6 +101,7 @@
 #include "bodyview.h"		// the body, and scrolling it by blit		// gopher://, gemini:// -- docs/gopher_gemini.md
 #if WEB_TLS
 #include "tls.h"
+#include "../../common/zrng.h"
 #include "x509.h"
 #include "../../common/zrtc.h"
 #endif
@@ -532,7 +533,15 @@ static int held_at, held_n;
 
 static bool next_msg(z_msg_t *m) {
 	if (held_n) { *m = held[held_at]; held_at = (held_at + 1) % HELD_MAX; held_n--; return true; }
-	return z_msg_read(m) == Z_OK;
+	if (z_msg_read(m) != Z_OK) return false;
+#if WEB_TLS
+	// Entropy for TLS's keys: WHEN a key goes down or a packet arrives
+	// is the person's or the network's, not this board's to predict.
+	// Each process has its own generator (zrng.c), so it is this one's
+	// own events that must stir it. Never counts toward z_rng_secure().
+	z_rng_stir_event();
+#endif
+	return true;
 }
 
 static uint8_t svg_stack[16 * 1024];

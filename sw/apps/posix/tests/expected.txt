@@ -208,6 +208,14 @@ posix -- see docs/posix.md
   grep     lines containing text  (fixed string)
   sort     sort lines
   uniq     drop adjacent duplicate lines
+  sed      edit lines  (sed 's/old/new/g' f, -n, -E, -i)
+  tr       translate or delete characters  (tr a-z A-Z, -d, -s)
+  cut      fields or characters of lines  (cut -d: -f1,3 f)
+  tee      copy input to files and onward  (tee [-a] f)
+  cmp      first difference between two files (-s: status only)
+  xxd      hex dump  (xxd [-s OFF] [-l LEN] f)
+  date     date and time  (date, date -u, date +%F)
+  which    what a name runs: a builtin or a program
   rmdir    remove an empty directory
   df       filesystem usage
   run      run a Zeitlos program, passing arguments
@@ -219,7 +227,7 @@ posix -- see docs/posix.md
   exit     close this session
 
 anything else is run as a program: 'zcc hello.c -o hello'
-redirection: > and >>   chaining: && and ||
+redirection: > >> <   chaining: && and ||
 quoting: 'a b' "a b" a\ b   wildcards: * ? [abc]
 Ctrl+C stops a command that is running or waiting its turn
 $ exit

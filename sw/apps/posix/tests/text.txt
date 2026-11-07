@@ -1,0 +1,177 @@
+# sed, tr, cut, tee, cmp, xxd, date, which and `<` (text.c, sh.c).
+#
+# Fixtures from tests/gen_text.py (text/), run by run.sh, which also
+# compares sed, tr and cut with the GNU programs (gen_text_cases.txt).
+# These assert what that cannot: the output of commands GNU's differ
+# from or that have no GNU twin here, the errors, and the files written.
+# run.sh sets PX_TEST_TIME=1794056709 (2026-11-07 13:05:09 UTC) and
+# PX_TEST_ZONE=Berlin.
+
+# -- sed --
+$ echo hello world | sed s/o/0/g
+hell0 w0rld
+$ echo hello world | sed -E 's/(\w+)/<\1>/'
+<hello> world
+$ echo 'a1b' | sed 's/\(a\)\1/x/'
+sed: back-references in a pattern are not supported
+? 1
+$ echo 'a b' | sed -E 's/([a-z]) ([a-z])/\2 \1/'
+b a
+$ echo abc | sed 's/b*/x/g'
+xaxcx
+$ echo 'path/to/file' | sed 's|/|\\|g'
+path\to\file
+$ cat numbers.txt | sed -n '3,5p'
+3
+4
+5
+$ cat numbers.txt | sed '2,11d'
+1
+12
+$ cat numbers.txt | sed -n '$='
+12
+$ cat numbers.txt | sed '/1/!d'
+1
+10
+11
+12
+$ cat numbers.txt | sed 4q
+1
+2
+3
+4
+$ echo x | sed 'y/a/b/'
+sed: unknown command: `y'
+? 1
+$ echo x | sed 's/a'
+sed: unterminated `s' command
+? 1
+$ echo x | sed 's/[a/b/'
+sed: unterminated [
+? 1
+$ echo x | sed -E 's/a{2}/b/'
+sed: {m,n} is not supported
+? 1
+$ sed
+usage: sed [-n] [-E] [-i] SCRIPT [FILE]   (-e SCRIPT, more than once)
+? 1
+$ sed p missing.txt
+sed: missing.txt: cannot open
+? 1
+
+# -i: edited in place, through FILE.part
+$ cp notes.txt edit.txt && sed -i 's/file/FILE/' edit.txt && cat edit.txt
+hello from a FILE
+second line
+$ ls edit.txt.part
+ls: /edit.txt.part: cannot read
+? 1
+$ sed -i s/x/y/
+sed: -i needs a file
+? 1
+
+# -- tr --
+$ echo Hello | tr a-z A-Z
+HELLO
+$ echo 'a  b   c' | tr -s ' '
+a b c
+$ echo 'h3ll0 w0rld' | tr -d '[:digit:]'
+hll wrld
+$ echo 'a-b' | tr -cd 'a-z\n'
+ab
+$ tr a-z A-Z < notes.txt
+HELLO FROM A FILE
+SECOND LINE
+$ tr a b c
+usage: tr [-c] [-d] [-s] SET1 [SET2]   (reads a pipe, or < FILE)
+? 1
+
+# -- cut --
+$ echo 'a:b:c:d' | cut -d: -f2,4
+b:d
+$ echo 'a:b:c:d' | cut -d: -f3-
+c:d
+$ echo abcdef | cut -c2-4
+bcd
+$ echo 'no delimiter' | cut -d: -f2
+no delimiter
+$ echo 'no delimiter' | cut -d: -s -f2
+$ cut -f
+cut: -f needs a value
+? 1
+$ cut -d:: -f1 notes.txt
+cut: the delimiter must be one character
+? 1
+
+# -- tee --
+$ cat notes.txt | tee t1.txt t2.txt | wc
+2 6 30
+$ cat t2.txt
+hello from a file
+second line
+$ echo more | tee -a t1.txt
+more
+$ cat t1.txt
+hello from a file
+second line
+more
+
+# -- cmp --
+$ cmp notes.txt notes.txt
+$ cp notes.txt n2.txt && echo extra >> n2.txt && cmp notes.txt n2.txt
+cmp: EOF on notes.txt after byte 30, line 3
+? 1
+$ cmp notes.txt numbers.txt
+notes.txt numbers.txt differ: byte 1, line 1
+? 1
+$ cmp -s notes.txt numbers.txt
+? 1
+$ cmp notes.txt nothere.txt
+cmp: nothere.txt: cannot open
+? 2
+
+# -- xxd --
+$ xxd notes.txt
+00000000: 6865 6c6c 6f20 6672 6f6d 2061 2066 696c  hello from a fil
+00000010: 650a 7365 636f 6e64 206c 696e 650a       e.second line.
+$ xxd -s 6 -l 4 notes.txt
+00000006: 6672 6f6d                                from
+$ echo ab | xxd
+00000000: 6162 0a                                  ab.
+$ xxd -l x notes.txt
+xxd: x: not a number
+? 1
+
+# -- date -- (PX_TEST_TIME, PX_TEST_ZONE: run.sh)
+$ date
+Sat Nov  7 14:05:09 CET 2026
+$ date -u
+Sat Nov  7 13:05:09 UTC 2026
+$ date +%F_%T_%j_%s_%z
+2026-11-07_14:05:09_311_1794056709_+0100
+$ date +%%%Y
+%2026
+$ date -x
+usage: date [-u] [+FORMAT]   (%Y %m %d %e %H %M %S %a %b %j %s %Z %z %F %T %%)
+? 1
+
+# -- which --
+$ which sed cd
+sed: shell builtin
+cd: shell builtin
+$ which zcc
+/apps/zcc
+$ which nothing-by-this-name
+which: nothing-by-this-name: not found
+? 1
+
+# -- < --
+$ wc < notes.txt
+2 6 30
+$ sed -n 2p < notes.txt
+second line
+$ wc < missing.txt
+posix: missing.txt: cannot open
+? 1
+$ echo '<' | tr '<' '>'
+>

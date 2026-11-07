@@ -34,8 +34,8 @@ You get a `$` prompt.
 
 ## The shell
 
-Commands, redirection `>` and `>>`, pipes `|`, `&&` / `||`, quoting
-and wildcards.
+Commands, redirection `>`, `>>` and `<`, pipes `|`, `&&` / `||`,
+quoting and wildcards.
 
 ```
 $ ls
@@ -43,6 +43,7 @@ $ cat notes.txt
 $ cat 'My Notes.txt'
 $ wc *.c
 $ cat a.c | grep printf | wc
+$ sed -i 's/colour/color/g' notes.txt
 $ zcc hello.c -o hello && run hello
 ```
 
@@ -50,10 +51,10 @@ $ zcc hello.c -o hello && run hello
 |---|---|
 | files | `ls [-l]` `cat` `cp [-r]` `mv` `rm [-r]` `touch` `mkdir` `rmdir` `find` |
 | archives | `zcat` `gunzip` `unzip` `tar` |
-| text | `wc` `head` `tail` `grep` `sort` `uniq` `diff` |
+| text | `wc` `head` `tail` `grep` `sort` `uniq` `diff` `sed` `tr` `cut` `tee` `cmp` `xxd` |
 | places | `cd` `pwd` |
 | processes | `ps` `kill` `run` `free` |
-| other | `echo` `clear` `df` `port` `help` `exit` `reboot` `jump` |
+| other | `echo` `date` `which` `clear` `df` `port` `help` `exit` `reboot` `jump` |
 
 `ps` lists every process: its pid, the name it registered, whether it
 is running, waiting or being killed, its memory, and the CPU seconds it
@@ -69,8 +70,16 @@ plenty free can still refuse it when the free space is in pieces. Then
 the pool's block counts, and this shell's own static footprint and
 heap.
 
-`grep` matches a **fixed string**, not a regular expression. `vi` has
-regular expressions (`:g`, `:s`) if you need them.
+`grep` matches a **fixed string**, not a regular expression. `sed -n
+'/regex/p'` is the regular-expression search, and `vi` has them too
+(`:g`, `:s`).
+
+`< file` gives a command the file as its input, as a pipe would: `tr
+a-z A-Z < notes.txt` is `cat notes.txt | tr a-z A-Z`, and like a pipe's
+it is held in memory, at most 16 KB ("What streams and what does not").
+
+`which NAME` says what a name runs: `sed: shell builtin`, a program in
+the working directory, `/apps/zcc`, or `zcc: in flash`.
 
 Anything that is not a builtin is run as a program, so `zcc hello.c`
 and `run zcc hello.c` are the same thing.
@@ -176,6 +185,47 @@ only once the whole file is out and checked (`-k` keeps it), and
 removes a half-written output if anything fails. Decompressing runs at
 roughly 80 KB/s on the machine, the CRC included. There is no `gzip` to compress yet.
 
+### Text tools: sed, tr, cut, tee, cmp, xxd, date
+
+```
+$ sed 's/old/new/g' f              replace, every one on each line
+$ sed -n '/TODO/p' main.c           lines matching a regular expression
+$ sed -E 's/(\w+) (\w+)/\2 \1/' f    swap the first two words
+$ sed '1,10d' f                     all but the first ten lines
+$ sed -i 's/colour/color/g' f       edit f in place
+$ tr -d '\r' < dos.txt > unix.txt   CR LF to LF
+$ cut -d: -f1,3 f                   the first and third fields
+$ ls -l | tee list.txt              see it, and keep it
+$ cmp a.bin b.bin                   where two files first differ
+$ xxd -s 0x100 -l 64 boot.bin       64 bytes in hex
+$ date +%F                          2026-11-07
+```
+
+| | |
+|---|---|
+| `sed [-n] [-E] [-i] SCRIPT [FILE]` | commands `s/RE/NEW/[g][p][N]`, `d`, `p`, `q`, `=`, separated by `;` or given as several `-e`; each under an address: `N`, `$`, `/RE/`, a range `A,B`, and `!` for the other lines. `&` and `\1`..`\9` in the replacement. `-i` edits the file in place |
+| `tr [-c] [-d] [-s] SET1 [SET2]` | ranges `a-z`, `\n` `\t` `\NNN`, classes `[:digit:]` `[:upper:]` `[:space:]` and the rest; reads a pipe or `< file`, as tr does |
+| `cut -f LIST [-d C] [-s]` / `cut -c LIST` | fields (by a tab, or `-d`) or characters; LIST is `1,3-5,7-` |
+| `tee [-a] FILE...` | copies its input to the files and on; `-a` appends |
+| `cmp [-s] A B` | the first difference: `A B differ: byte 7, line 2`, status 1; `-s` just the status |
+| `xxd [-s OFF] [-l LEN] [FILE]` | a hex dump as xxd prints it; `0x` numbers too |
+| `date [-u] [+FORMAT]` | the clock in `system.rtc.timezone` ([config.md](config.md)), or UTC with `-u`; `%Y %m %d %e %H %M %S %a %b %j %s %Z %z %F %T %n %%` |
+
+**Regular expressions** (sed's): basic ones as POSIX and GNU sed take
+them -- `.` `[...]` `[^...]` `[[:class:]]` `^` `$` `*` and `\(` `\)`
+`\+` `\?` `\|` -- or extended with `-E` (or `-r`): `( ) + ? |`. `\w`
+`\W` `\s` `\S` as GNU's. Not taken, and said so: back-references in
+a pattern (`\(a\)\1`), `{m,n}`. A match is the leftmost, then the
+longest each `*` can take, as GNU sed's is for all but alternations like
+`a|ab`.
+
+**`sed -i`** writes `FILE.part` and puts it in place of FILE only once
+all of it is written: Ctrl+C, a full card or a line too long (sed holds
+lines of up to 511 characters) leaves FILE as it was.
+
+**`date`** needs a set clock: the network sets it (NTP), and without it
+`date` says so rather than printing 1970.
+
 ### Ctrl+C
 
 Ctrl+C stops a builtin that is still running -- `find /`, `cat` of a
@@ -279,6 +329,8 @@ frame, part of `APP_STACK`), with 2 KB of slack below it. Measured with
 | `rm -r`, `cp -r` | 2208, 1920 | 5944, 5656 |
 | `diff` of two 6000-line files | 2188 | 3928 |
 | `gunzip`, `zcat` | 1936, 1664 | 3960, 3688 |
+| `sed -n '/7/,/9/p'`, `sed -E 's/(a\|b)+...'` | 2548, 2436 | 5928 |
+| `which`, `xxd`, `cmp`, `tr \| cut`, `date` | 2256, 2224, 2048, 1668, 1308 | under 4.6 KB |
 | `sort`, `uniq`, `echo > f`, `ps`, `help` | under 2 KB | under 3.8 KB |
 
 The rv32 column is `tests/stack_sim/` -- the builtins themselves, built
@@ -391,17 +443,31 @@ Nth poll), and `tests/gen_tools.py` builds the fixtures and a second
 case file whose expected output comes from GNU `diff -u` on 21 pairs of
 files and from a sorted walk in Python for `find`.
 
+The text tools are `sw/apps/posix/text.c`, sed's regular expressions
+`rx.c` -- compiled to a small program and run by a backtracking machine
+with a stack of its own, since a command's 8 KB coroutine stack could
+not hold a recursive matcher's depth of one frame per character.
+Tests: `tests/text.txt` asserts their output, errors and files;
+`tests/gen_text.py` adds cases whose expected output is GNU sed's, tr's
+and cut's on the same random files (byte for byte through `cmp` for a
+file with no final newline); and `tests/rx_fuzz.py` runs 20,000 random
+extended expressions through `rx.c` and Python's `re`, every match and
+group compared.
+
 ### What streams and what does not
 
 `cat`, `cp`, `wc`, `grep`, `head`, `tail`, `uniq`, `zcat`, `gunzip`,
-`unzip` and `tar` read a file in chunks and have **no size limit**.
+`unzip`, `tar`, `sed`, `cut`, `cmp` and `xxd` read a file in chunks and
+have **no size limit**.
 `sort` has to hold every line and refuses above 512 lines or 16KB rather
 than dropping the rest; `diff` holds both files and refuses above 256 KB
 or 8192 lines each.
 
 **A pipe holds its intermediate in memory, capped at 16KB**, and says
 so when it truncates. So `wc big.c` is fine and `cat big.c | wc` may
-not be.
+not be. `< file` is held the same way and refuses a file over 16 KB
+rather than cutting it; `tr` and `tee`, which read only their input,
+have that limit too.
 
 Streaming pipes -- the left side handing back when the pipe buffer is
 full, the right side consuming -- would now fit the coroutine, and were

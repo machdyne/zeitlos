@@ -353,13 +353,30 @@ can settle it.
 None of this changed the entropy behaviour: same oscillators, same
 sampling instant, same debiasing, same health tests.
 
-## Future work
+## Event timing stirred in
 
-- **Feed real entropy in.** `z_rng_stir()` exists and nothing calls it
-  yet. The natural sources are keystroke timings in `term` and packet
-  arrival jitter in `net` — both are cheap, both are unmeasurable (so
-  neither counts toward `z_rng_secure()`), and both make two boards
-  with identical hardware diverge.
+Every process has its own generator (`zrng.c` is linked into each
+one), so an event stirs only the generator of the process that sees it.
+The processes that make keys therefore stir their own, with
+`z_rng_stir_event()` -- the cycle counter at that moment, folded into a
+pool and absorbed every 32nd call:
+
+| process | when | for |
+|---|---|---|
+| `net` | every TCP segment that arrives (`tcp_handle()`) | the SSH client's keys |
+| `netserve` | every message it receives: packets relayed by net, a port's output | the SSH server's ephemeral keys, padding |
+| `web` | every message it receives: keys, clicks, data from net | TLS's keys |
+
+None of it counts toward `z_rng_secure()`: nothing can tell how much
+of a timing is unpredictable. What it buys is a generator that keeps
+moving away from its seed with the person's and the network's timing,
+and two boards with identical hardware whose generators diverge.
+
+`wm` sees every key and mouse movement, but stirring its generator
+would help only `wm`, which makes no keys; there is no shared pool for
+it to feed.
+
+## Future work
 
 - **Seed persistence.** A 32-byte seed file rewritten each boot would
   make the fallback path meaningfully better on a board without `TRNG`.

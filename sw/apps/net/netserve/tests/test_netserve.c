@@ -38,7 +38,7 @@ extern int fake_fs_open, fake_fs_limit;
 
 typedef struct {
 	uint32_t to, subject, tag, type, u32;
-	uint8_t data[1200];
+	uint8_t data[TO_NET_MAX];      // a whole send toward net
 	uint32_t len;
 	char str[80];
 	// a Z_MAP payload: the identity map (zport.h, "Who is connecting")
@@ -55,7 +55,7 @@ static int nout;
 static z_msg_t q[64];
 static int qn;
 static z_blob_t qblob[64];
-static uint8_t qdata[64][1200];
+static uint8_t qdata[64][4096];  // posix sends up to 4 KB at once
 
 static void deliver(uint32_t from, uint32_t subject, uint32_t tag, z_obj_t obj) {
 	z_msg_t *m = &q[qn];
@@ -459,9 +459,9 @@ int main(void) {
 	n = collect(NET, conn, mark, buf, sizeof(buf));
 	CK(n == 7 && !memcmp(buf, "out\xff\xff\r\n", 7), "0xFF escaped toward the peer");
 
-	// backpressure: more output than to_net holds, net slow to ack
+	// backpressure: more output than to_net holds (TO_NET_MAX), net slow to ack
 	mark = nout;
-	uint8_t big[400];
+	uint8_t big[800];
 	memset(big, 'z', sizeof(big));
 	for (int i = 0; i < 4; i++) deliver_data(REPL, Z_PORT_DATA, 1, big, sizeof(big));
 	step();
@@ -481,7 +481,7 @@ int main(void) {
 		uint32_t all = 0;
 		for (int i = mark; i < nout; i++)
 			if (out[i].to == NET && out[i].subject == Z_PORT_DATA && out[i].tag == conn) all += out[i].len;
-		CK(acks == 4 && all == 1600, "all of it went out, every send acked (%d, %u bytes)", acks, all);
+		CK(acks == 4 && all == 3200, "all of it went out, every send acked (%d, %u bytes)", acks, all);
 	}
 
 	// One message far larger than any buffer here -- posix sends up to

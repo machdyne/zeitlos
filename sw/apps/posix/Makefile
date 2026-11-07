@@ -47,12 +47,17 @@ OWN_CFLAGS = $(CFLAGS) -Werror
 #   zwalk.o: cp -r and rm -r (sw/common/zwalk.c, docs/zwalk.md), and
 #   zfsc.o, which it reads a folder through a page at a time.
 #
+#   text.o, rx.o: sed, tr, cut, tee, cmp, xxd, date (docs/posix.md,
+#   "Text tools"), and sed's regular expressions; clock.o, zrtc.o and
+#   zcfg.o for date's clock and time zone.
+#
 #   zco.o: a command runs in a coroutine (job.c, docs/posix.md "How a
 #   command runs"), so the main loop serves every session meanwhile.
 OBJS = zeitlos.o zobj.o zport.o zline.o zfsapp.o zfsutil.o zwin.o zgfx.o zfont_data.o \
 	zconnect.o zdns.o zinflate.o zgz.o \
 	zf_core.o zf_xml.o zf_zip.o zf_arch.o zwalk.o zfsc.o zco.o \
-	vfs.o sh.o tools.o tree.o job.o main.o
+	zrtc.o zcfg.o \
+	vfs.o sh.o tools.o text.o rx.o clock.o tree.o job.o main.o
 
 SRC_DIRS = ../../common/formats
 
@@ -64,6 +69,12 @@ main.o: main.c posix.h
 	$(CC) $(OWN_CFLAGS) -c main.c -o main.o
 tools.o: tools.c posix.h
 	$(CC) $(OWN_CFLAGS) -c tools.c -o tools.o
+text.o: text.c posix.h rx.h
+	$(CC) $(OWN_CFLAGS) -c text.c -o text.o
+rx.o: rx.c rx.h
+	$(CC) $(OWN_CFLAGS) -c rx.c -o rx.o
+clock.o: clock.c posix.h
+	$(CC) $(OWN_CFLAGS) -c clock.c -o clock.o
 tree.o: tree.c posix.h
 	$(CC) $(OWN_CFLAGS) -c tree.c -o tree.o
 job.o: job.c posix.h

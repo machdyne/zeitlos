@@ -190,6 +190,32 @@ void px_bi_find(px_shell_t *sh, int argc, char **argv);
 void px_bi_diff(px_shell_t *sh, int argc, char **argv);
 void px_bi_unzip(px_shell_t *sh, int argc, char **argv);
 void px_bi_tar(px_shell_t *sh, int argc, char **argv);
+
+/* sed, tr, cut, tee, cmp, xxd and date: text.c (docs/posix.md, "Text
+ * tools"). sed's regular expressions: rx.c. */
+void px_bi_sed(px_shell_t *sh, int argc, char **argv);
+void px_bi_tr(px_shell_t *sh, int argc, char **argv);
+void px_bi_cut(px_shell_t *sh, int argc, char **argv);
+void px_bi_tee(px_shell_t *sh, int argc, char **argv);
+void px_bi_cmp(px_shell_t *sh, int argc, char **argv);
+void px_bi_xxd(px_shell_t *sh, int argc, char **argv);
+void px_bi_date(px_shell_t *sh, int argc, char **argv);
+
+/* Bytes to where the command's output goes, as px_puts() but with a
+ * length: a NUL is a byte like any other. */
+void px_write(px_shell_t *sh, const char *s, int len);
+
+/* A file's lines, or the previous stage's (path NULL), one call each
+ * with the newline gone. *cut is set if a line was longer than
+ * PX_LINE_MAX and was cut. False if the file cannot be opened. */
+typedef void (*px_line_fn)(px_shell_t *sh, const char *line, int len, void *ctx);
+bool px_feed_lines(px_shell_t *sh, const char *path, px_line_fn fn, void *ctx, bool *cut);
+
+/* The clock, for `date`: UTC seconds (false if it has not been set),
+ * and system.rtc.timezone (false if there is none). clock.c on the
+ * machine, tests/host_fs.c on the host. */
+bool px_clock_now(uint32_t *utc);
+bool px_clock_zone(char *out, int cap);
 /* cp -r SRC DST (dst NULL: rm -r SRC), on sw/common/zwalk.c */
 void px_tree_op(px_shell_t *sh, const char *what, const char *src, const char *dst);
 

@@ -7,51 +7,37 @@ System preferences, and the editor for `/sys/zeitlos.cfg`. `sw/apps/settings`.
 ```
 > run wm
 > run settings
+> run settings time          opens on a page: display, mouse, keyboard,
+                             time, security, terminal or system
 ```
 
+Categories down the left, each with an icon; the chosen one's settings
+on the right, as most systems lay out their preferences:
+
 ```
-Display
-[ White ][ Amber ][ Green ][ Paper ]
-
-Desktop colours (Super+F10)          [<][>]
-  Nord
-
-Pointer speed                        [<][>]
-  +3 faster: x1.68
-
-Preferences                  /sys/zeitlos.cfg
-Terminal connects to               [Edit]
-  port repl0
-Keyboard layouts (Super+Space)     [Edit]
-  us,de
-Time zone: Munich
-+----------------------------------+-+
-| Moscow         UTC+3             | |
-| Mumbai         UTC+5:30          |#|
-| Munich         UTC+1  summer +1  | |
-+----------------------------------+-+
-[ Reload file ]           [ Set time zone ]
-
-Security                                flash
-Password                      [Change][Remove]
-  set
-Screen lock                            [Edit]
-  at start, after 5 min idle
-Berlin selected -- Set time zone to use it
++--------------+-----------------------------------+
+| [] Display   | Mouse                             |
+|##Mouse#######| Applied at once, and saved        |
+| [] Keyboard  |                                   |
+| () Date&time | Pointer speed             [<][>]  |
+| [] Security  |   +3 faster: x1.68                |
+| [] Terminal  |   slower ############..... faster |
+| [] System    |                                   |
++--------------+-----------------------------------+
 ```
 
-| control | setting (`docs/config.md`) | takes effect |
-| --- | --- | --- |
-| Display buttons | `system.video.mode` | immediately, and saved |
-| Desktop colours `<` `>` | `system.video.desktop_theme`, `_colour` (and removes `_accents`, `_base`) | within a second, and saved |
-| Pointer speed `<` `>` | `system.mouse.speed` | immediately, and saved; the kernel applies it at boot |
-| Terminal connects to | `apps.term.auto_connect` | the next term window |
-| Keyboard layouts | `system.keyboard.layouts` | the next key pressed |
-| Japanese font | `system.font.japanese` | at once -- `jfont` is started or stopped |
-| Time zone list + Set time zone | `system.rtc.timezone` | clock and cal, within a second |
-| Reload file | -- | re-reads `/sys/zeitlos.cfg` after editing it elsewhere |
-| Password: Set / Change, Remove | the flash key/value store, not the file | at once |
-| Screen lock: Edit | the same | at once: `wm` is told to re-read it |
+| page | control | setting (`docs/config.md`) | takes effect |
+| --- | --- | --- | --- |
+| Display | White / Amber / Green / Paper | `system.video.mode` | immediately, and saved |
+| Display | Desktop colours `<` `>` | `system.video.desktop_theme`, `_colour` (and removes `_accents`, `_base`) | within a second, and saved |
+| Mouse | Pointer speed `<` `>`, and its scale | `system.mouse.speed` | immediately, and saved; the kernel applies it at boot |
+| Keyboard | Keyboard layouts: Edit | `system.keyboard.layouts` | the next key pressed |
+| Keyboard | Japanese text: Turn on / off | `system.font.japanese` | at once -- `jfont` is started or stopped |
+| Date & time | the list + Set time zone; the time now | `system.rtc.timezone` | clock, cal and `date`, within a second |
+| Security | Password: Set / Change, Remove | the flash key/value store, not the file | at once |
+| Security | Screen lock: Edit | the same | at once: `wm` is told to re-read it |
+| Terminal | New terminal windows connect to: Edit | `apps.term.auto_connect` | the next term window |
+| System | Reload file; what else is in the file | -- | re-reads `/sys/zeitlos.cfg` after editing it elsewhere |
 
 Each value line shows what is in effect, and `(default)` when the file
 does not set it.
@@ -77,13 +63,14 @@ A `z_tz_cities[]` city list (`zrtc.h`), in a list box (`z_listbox_t`,
 - **Type to jump.** A letter jumps to the first city starting with it
   (**B** is Bangkok), and the same letter again walks on (Beijing,
   Berlin, ...). Letters typed within a second build a prefix (`mun` is
-  Munich). This works wherever focus is on the panel -- nothing else
-  there uses letters -- and moves focus to the list.
+  Munich). On the Date & time page this works wherever the keyboard is
+  -- on the categories or on Set -- and moves it to the list.
 - **A value with no row** (`UTC+5:30` typed into the file) shows no
   selection, and the line above the list shows it.
-- **Tab order.** Edit, the list, Set time zone (skipped while disabled),
-  Reload. While the list has focus the arrow keys move its selection, and
-  Tab moves on. After Set, focus returns to the list.
+- **Tab order.** The list, then Set time zone (skipped while disabled),
+  then back to the categories. While the list has focus the arrow keys
+  move its selection, and Tab moves on. After Set, focus returns to the
+  list.
 
 ## Editing the terminal connection
 
@@ -195,10 +182,19 @@ cases -- and renders the section.
 
 Fully usable with no pointer.
 
-- **Tab and Shift+Tab** move between every control, including the list
-  and, after Reload, the Security buttons.
-  Outside the list, the arrow keys do too.
-- **Enter or Space** activates one.
+| | |
+|---|---|
+| **Up / Down**, Home / End | on the categories: choose a page (it shows at once) |
+| **Tab**, Enter, Right | into the page: its first control (Shift+Tab: its last) |
+| **Tab / Shift+Tab** | in a page: its controls in turn, and out of either end back to the categories |
+| Arrows | in a page: the control before or after; Left from the first goes back |
+| **Esc** | back to the categories |
+| **Ctrl+PgUp / Ctrl+PgDn** | the page before or after, from anywhere |
+| **Enter or Space** | presses the focused button |
+| A-Z, 0-9 | on Date & time: jump to a zone, wherever the keyboard is |
+
+The page shown is drawn inverted in the list while the keyboard is
+there, and framed while it is in the page.
 
 **F1** shows a short help box ([app_help.md](app_help.md)).
 
@@ -264,3 +260,35 @@ bitstream* and the buttons are off: flash the gateware too.
 ## Not resizable
 
 A preferences panel has no content to reveal.
+
+---
+
+## For developers
+
+`sw/apps/settings/settings.c`. The pages are a table (`pages[]`): a
+label, the name `run settings NAME` takes, the line under the title, and
+the icon as sixteen strings of `.` and `#`, made into bitmaps at start.
+The controls are one array in page order with a `z_widget_set_t` over
+each page's slice (`page_first[]`), so a page draws and hit-tests only
+its own; a control's index in the array is still its name everywhere
+(`activate()`). Tab's stops on a page are worked out each time
+(`page_stops()`): on Date & time the zone list first, then every enabled
+control -- so a disabled button is never a stop, and the ends lead back
+to the categories.
+
+`make -C sw/apps/settings test` runs `tests/render.c`: the real
+`settings.c` with a scripted kernel and file -- the categories by mouse
+and keyboard, the Tab order of each page, every setting saved and the
+rest of the file kept byte for byte -- and writes every page as a
+picture (`/tmp/settings-render/s-*.pbm`). It needs
+`sysctl vm.mmap_min_addr=0`, and skips without it.
+
+## Implementation notes
+
+### One long panel, before
+
+Until November 2026 every setting was on one fixed panel, 284 by 562
+pixels, top to bottom: display, desktop colours, pointer speed,
+"Preferences", the time zone list, Reload, Security. Each new setting
+made it taller, and the window was already most of the screen's height.
+Pages keep each category to what fits, and leave room for more.
