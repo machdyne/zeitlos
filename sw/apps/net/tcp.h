@@ -369,6 +369,16 @@ uint16_t tcp_mss(const tcp_conn_t *c);
 // later poll in that last case.
 bool tcp_send(tcp_conn_t *c, const uint8_t *data, uint16_t len);
 
+// The same, filled in place: the segment's buffer (tcp_mss() bytes) if
+// tcp_send() would take one now, else NULL; then tcp_send_commit() with
+// how much was written into it (1..mss). Nothing is queued until the
+// commit, and nothing else may be sent between the two. For a sender
+// whose bytes are in pieces -- the relay gathers a full-size segment
+// from what it has staged and the listener's messages, with no copy in
+// between (relay.c, "full-size segments").
+uint8_t *tcp_send_buf(tcp_conn_t *c);
+bool tcp_send_commit(tcp_conn_t *c, uint16_t len);
+
 // begins a graceful close (FIN). false if not established, or if the
 // previous segment isn't acked yet. TCP_EVENT_CLOSED follows.
 bool tcp_close(tcp_conn_t *c);

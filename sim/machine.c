@@ -399,6 +399,17 @@ static void gpio_write(machine_t *m, uint32_t addr, uint32_t val)
 	}
 }
 
+/* ZSIM_ROT set: a CPU with the rotate instructions, `CPU_ROT (cpu.c;
+ * FEATURES3 bit 3 says so, below). docs/chacha.md. */
+int zs_rot(void) {
+	static int on = -1;
+	if (on < 0) {
+		const char *e = getenv("ZSIM_ROT");
+		on = e != NULL && *e && *e != '0';
+	}
+	return on;
+}
+
 /* ZSIM_CONSOLE set: the console profile, `VRAM_SDRAM (see bus_read32) */
 int zs_console(void) {
 	static int on = -1;
@@ -479,8 +490,12 @@ uint32_t bus_read32(machine_t *m, uint32_t addr) {
 	 * picture in main memory), and socctl's CKBASE */
 	if (zs_console()) {
 		if (addr == 0x70000000u) return 0x5A454954u;                 /* Z_CSR_MAGIC */
-		if (addr == 0x70000010u) return 0x5A330000u | 1u | 4u;
+		if (addr == 0x70000010u) return 0x5A330000u | 1u | 4u | (zs_rot() ? 8u : 0u);
 		if (addr == 0x70000248u) return m->ckbase;
+	}
+	if (zs_rot()) {
+		if (addr == 0x70000000u) return 0x5A454954u;                 /* Z_CSR_MAGIC */
+		if (addr == 0x70000010u) return 0x5A330000u | 8u;            /* FEATURES3: CPU_ROT */
 	}
 	/* MTU, SD card, anything else unmapped: open bus reads as 0 */
 	return 0;

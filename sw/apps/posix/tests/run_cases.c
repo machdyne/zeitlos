@@ -153,6 +153,10 @@ int main(int argc, char **argv) {
 
     px_fd_init();
 
+    /* streaming pipes (sh.c): the stages' stacks and buffers */
+    static uint8_t pipes_mem[PX_PIPES_MEM] __attribute__((aligned(16)));
+    px_pipes_init(pipes_mem, sizeof(pipes_mem));
+
     static uint8_t co_mem[CO_STACK];
     px_job_init(co_mem, sizeof(co_mem), 0);
 

@@ -42,6 +42,7 @@
 #include "zsoc.h"            /* ps: Z_TICK_HZ, for CPU seconds */
 #include "zgz.h"            /* zcat, gunzip */
 #include "formats/zf_zip.h" /* zz_window_take(): one inflate window, shared with unzip/tar */
+#include "zco.h"            /* streaming pipes: a stage in a coroutine of its own */
 
 void *px_current_conn;
 
@@ -62,10 +63,12 @@ void px_shell_init(px_shell_t *sh, px_out_fn out, void *ctx) {
     sh->job_status = 0;
 }
 
+static bool stage_gone(void);
+
 bool px_intr(px_shell_t *sh) {
     px_job_tick();
     if (!sh->intr && sh->poll && sh->poll(sh->ctx)) sh->intr = true;
-    return sh->intr;
+    return sh->intr || stage_gone();
 }
 
 /*
@@ -130,7 +133,212 @@ static int cap_len;
 static bool cap_active;
 static bool cap_overflow;
 
+/*
+ * -- streaming pipes --
+ *
+ * The buffer above is the way a pipe ran until November 2026, and is
+ * still the way for a pipe this cannot stream (pipe_streams()). Now
+ * each stage but the last runs in a coroutine of its own (zco.h), and
+ * the stages hand over as the bytes go: the last stage, wanting input
+ * (px_in_next()), resumes the stage before it, which runs until it has
+ * filled its pipe (PX_PIPE_BUF), ended, or used its slice of time; that
+ * one in turn resumes the stage before it when it wants input. So
+ * nothing is held whole: `cat big | grep x | wc` has no size limit, and
+ * `cat big | head -n 3` stops cat after the first pipe-full.
+ *
+ * What the stages share is what made this hard (docs/posix.md, "What
+ * streams and what does not"). Two kinds:
+ *
+ *   - the shell's own per-command state -- out_fd, the status, `< file`
+ *     input, the line-cut flag -- is SWAPPED as stages hand over
+ *     (stage_resume()): each stage sees its own;
+ *   - buffers a stage may be in the middle of when it hands over --
+ *     its arguments (split, wildcards), px_printf()'s, the line and
+ *     chunk buffers of feed_lines() and text.c's feed_bytes() -- are
+ *     ONE PER STAGE (st_* below point at the running stage's).
+ *
+ * A builtin's own statics are its alone, so a pipe streams only if no
+ * builtin is in it twice, and at most one of zcat, gunzip, unzip and
+ * tar (the one inflate window); see pipe_streams() for the rest.
+ */
+struct px_stage {
+    zco_t       co;             /* a producer's coroutine */
+    px_shell_t *sh;
+    char       *cmd;
+    px_stage_t *prev;           /* the stage this one reads, or NULL */
+    int         idx;
+    bool        producer;       /* every stage but the last */
+    bool        done;           /* its command has returned */
+    bool        out_gone;       /* its reader has ended: stop */
+    bool        want_main;      /* handed back because its slice is used */
+    bool        overflow;       /* ran off its stack */
+    bool        in_had;         /* the reader holds a piece of prev's pipe */
+    char       *pipe;           /* what it has written, not yet read */
+    int         pipe_len;
+    /* the shell's state while another stage runs */
+    int         v_out_fd, v_status, v_in_len;
+    const char *v_in;
+    bool        v_in_taken, v_trunc, v_enough;
+    /* its buffers (NULL: the shell's own -- the last stage) */
+    char       *tok, *glob, *pbuf, *line, *rbuf, *bbuf;
+    uint8_t    *stack;
+};
+
+static px_stage_t stage_tab[PX_PIPE_STAGES];
+static px_stage_t *cur_stage;           /* the stage running, or NULL */
+static uint8_t *pipes_mem;              /* px_pipes_init() */
+static size_t pipes_bytes;
+
+static char tok_buf[2 * PX_LINE_MAX + 16];
+static char glob_buf[4096];
+static char pbuf0[PX_LINE_MAX];
+static char line0[PX_LINE_MAX];
+static char rbuf0[1024];
+static char bbuf0[1024];
+/* the running stage's (or the shell's own) */
+static char *st_tok = tok_buf, *st_glob = glob_buf, *st_pbuf = pbuf0,
+            *st_line = line0, *st_rbuf = rbuf0, *st_bbuf = bbuf0;
+static bool in_taken;                   /* sh->in has been handed out */
+static bool line_truncated;
+static bool feed_enough;                /* the line filter has what it wants: stop feeding */
+
+void px_feed_enough(void) { feed_enough = true; }
+bool px_feed_is_enough(void) { return feed_enough; }
+void px_feed_begin(void) { feed_enough = false; }
+
+char *px_stage_chunk_buf(void) { return st_bbuf; }
+
+void px_pipes_init(void *mem, size_t bytes) {
+    pipes_mem = mem;
+    pipes_bytes = bytes;
+}
+
+static bool stage_gone(void) { return cur_stage && cur_stage->out_gone; }
+
+static void stage_point(px_stage_t *st) {
+    cur_stage = st;
+    bool own = st && st->tok;
+    st_tok = own ? st->tok : tok_buf;
+    st_glob = own ? st->glob : glob_buf;
+    st_pbuf = own ? st->pbuf : pbuf0;
+    st_line = own ? st->line : line0;
+    st_rbuf = own ? st->rbuf : rbuf0;
+    st_bbuf = own ? st->bbuf : bbuf0;
+    px_fd_owner = st ? st->idx + 1 : 0;
+}
+
+static void stage_save(px_stage_t *st) {
+    if (!st) return;
+    st->v_out_fd = out_fd;
+    st->v_status = st->sh->status;
+    st->v_in = st->sh->in;
+    st->v_in_len = st->sh->in_len;
+    st->v_in_taken = in_taken;
+    st->v_trunc = line_truncated;
+    st->v_enough = feed_enough;
+}
+
+static void stage_load(px_stage_t *st) {
+    stage_point(st);
+    if (!st) return;
+    out_fd = st->v_out_fd;
+    st->sh->status = st->v_status;
+    st->sh->in = st->v_in;
+    st->sh->in_len = st->v_in_len;
+    in_taken = st->v_in_taken;
+    line_truncated = st->v_trunc;
+    feed_enough = st->v_enough;
+}
+
+/* Runs `pr` until it fills its pipe, ends, or hands back for the main
+ * loop; the running stage's state put away meanwhile. */
+static void stage_resume(px_stage_t *pr) {
+    px_stage_t *me = cur_stage;
+    stage_save(me);
+    stage_load(pr);
+    bool more = zco_resume(&pr->co);
+    stage_save(pr);
+    stage_load(me);
+    if (!more) {
+        pr->done = true;
+        if (pr->co.overflow) pr->overflow = true;
+    }
+}
+
+/* A stage handed back because its slice is used: hand back further,
+ * to the stage reading this one, or from the last stage to the main
+ * loop (job.c). */
+static void stage_up(void) {
+    px_stage_t *me = cur_stage;
+    if (me && me->producer) { me->want_main = true; zco_yield(); }
+    else px_job_yield();
+}
+
+/* From px_job_tick(): a producer's slice is used. */
+void px_stage_tick(void) {
+    px_stage_t *me = cur_stage;
+    if (!me || !me->producer || zco_current() != &me->co) return;
+    me->want_main = true;
+    zco_yield();
+}
+
+static void pipe_write(px_stage_t *st, const char *s, int len) {
+    while (len > 0 && !st->out_gone) {
+        int room = PX_PIPE_BUF - st->pipe_len;
+        if (!room) { zco_yield(); continue; }       /* to the reader, who empties it */
+        int k = len < room ? len : room;
+        memcpy(st->pipe + st->pipe_len, s, (size_t)k);
+        st->pipe_len += k;
+        s += k;
+        len -= k;
+    }
+}
+
+/* Its reader has ended (or never read): the stage stops at its next
+ * px_intr() and its output goes nowhere. Run to its end, so it closes
+ * its files and frees its memory. */
+static void stage_drain(px_stage_t *pr) {
+    if (!pr) return;
+    pr->out_gone = true;
+    while (!pr->done) {
+        stage_resume(pr);
+        if (pr->want_main) { pr->want_main = false; stage_up(); }
+    }
+}
+
+int px_in_next(px_shell_t *sh, const char **p) {
+    px_stage_t *st = cur_stage;
+    if (st && st->prev) {
+        px_stage_t *pr = st->prev;
+        if (st->in_had) pr->pipe_len = 0;           /* the last piece is done with */
+        st->in_had = false;
+        while (!pr->pipe_len) {
+            if (pr->done || sh->intr || st->out_gone) return 0;
+            stage_resume(pr);
+            if (pr->want_main) { pr->want_main = false; stage_up(); }
+        }
+        st->in_had = true;
+        *p = pr->pipe;
+        return pr->pipe_len;
+    }
+    if (!sh->in || in_taken || !sh->in_len) return 0;
+    in_taken = true;
+    *p = sh->in;
+    return sh->in_len;
+}
+
+bool px_has_input(px_shell_t *sh) {
+    return (cur_stage && cur_stage->prev) || sh->in;
+}
+
 static void sink(px_shell_t *sh, const char *s, int len) {
+
+    if (cur_stage) {
+        /* A streaming pipe: Ctrl+C stops every stage at once, as a
+         * signal would, so what they would say after it is not said. */
+        if (sh->intr) return;
+        if (cur_stage->producer) { pipe_write(cur_stage, s, len); return; }
+    }
 
     if (cap_active) {
         char *dst = cap_buf[cap_which];
@@ -170,11 +378,13 @@ void px_write(px_shell_t *sh, const char *s, int len) {
 
 void px_printf(px_shell_t *sh, const char *fmt, ...) {
     /* One buffer, not per-call allocation. A shell that allocated to
-     * print would fail exactly when reporting that memory ran out. */
-    static char buf[PX_LINE_MAX];
+     * print would fail exactly when reporting that memory ran out.
+     * One per stage of a streaming pipe: a stage can hand over in the
+     * middle of writing it (pipe_write()). */
+    char *buf = st_pbuf;
     va_list ap;
     va_start(ap, fmt);
-    vsnprintf(buf, sizeof(buf), fmt, ap);
+    vsnprintf(buf, PX_LINE_MAX, fmt, ap);
     va_end(ap);
     px_puts(sh, buf);
 }
@@ -701,36 +911,37 @@ typedef void (*line_fn)(px_shell_t *sh, const char *line, int len, void *ctx);
  * is exact on any line length. head/tail/grep still work a line at a
  * time and report when one was cut.
  */
-static bool line_truncated;
+/* line_truncated: with the stage state, above */
 
 static bool feed_lines(px_shell_t *sh, const char *path,
                        line_fn fn, void *ctx) {
 
     line_truncated = false;
+    feed_enough = false;
 
-    static char buf[1024];
-    static char line[PX_LINE_MAX];
+    /* the running stage's: a line can be handed over half-read */
+    char *buf = st_rbuf;
+    char *line = st_line;
     int n = 0;
 
     if (!path) {
-        /* From the pipeline. */
-        const char *p = sh->in;
-        int left = sh->in_len;
-        if (!p) return true;
-        while (left > 0) {
-            if (*p == '\n') {
-                line[n] = 0;
-                fn(sh, line, n, ctx);
-                n = 0;
-            } else if (n < PX_LINE_MAX - 1) {
-                line[n++] = *p;
-            } else {
-                line_truncated = true;
+        /* From the pipeline: a piece at a time as it comes. */
+        const char *p;
+        int left;
+        while (!feed_enough && !px_intr(sh) && (left = px_in_next(sh, &p)) > 0) {
+            for (; left > 0 && !feed_enough; p++, left--) {
+                if (*p == '\n') {
+                    line[n] = 0;
+                    fn(sh, line, n, ctx);
+                    n = 0;
+                } else if (n < PX_LINE_MAX - 1) {
+                    line[n++] = *p;
+                } else {
+                    line_truncated = true;
+                }
             }
-            p++;
-            left--;
         }
-        if (n) { line[n] = 0; fn(sh, line, n, ctx); }
+        if (n && !feed_enough) { line[n] = 0; fn(sh, line, n, ctx); }
         return true;
     }
 
@@ -741,9 +952,9 @@ static bool feed_lines(px_shell_t *sh, const char *path,
     if (h < 0) return false;
 
     for (;;) {
-        int got = fs_read_chunk(h, buf, (int)sizeof(buf));
-        if (got <= 0 || px_intr(sh)) break;
-        for (int i = 0; i < got; i++) {
+        int got = fs_read_chunk(h, buf, (int)sizeof(rbuf0));
+        if (got <= 0 || feed_enough || px_intr(sh)) break;
+        for (int i = 0; i < got && !feed_enough; i++) {
             if (buf[i] == '\n') {
                 line[n] = 0;
                 fn(sh, line, n, ctx);
@@ -758,7 +969,7 @@ static bool feed_lines(px_shell_t *sh, const char *path,
     fs_close_handle(h);
 
     /* A final line with no newline is still a line. */
-    if (n) { line[n] = 0; fn(sh, line, n, ctx); }
+    if (n && !feed_enough) { line[n] = 0; fn(sh, line, n, ctx); }
     return true;
 }
 
@@ -795,7 +1006,9 @@ static bool wc_count(px_shell_t *sh, const char *path, wc_acc_t *a) {
     static char buf[1024];
 
     if (!path) {
-        if (sh->in) wc_bytes(a, sh->in, sh->in_len);
+        const char *p;
+        int k;
+        while (!px_intr(sh) && (k = px_in_next(sh, &p)) > 0) wc_bytes(a, p, k);
         return true;
     }
 
@@ -840,6 +1053,7 @@ static void head_line(px_shell_t *sh, const char *line, int len, void *ctx) {
     (void)len;
     head_t *h = ctx;
     if (h->seen++ < h->want) px_printf(sh, "%s\n", line);
+    if (h->seen >= h->want) px_feed_enough();   /* the rest is not read: a pipe's writer stops */
 }
 
 /*
@@ -848,6 +1062,19 @@ static void head_line(px_shell_t *sh, const char *line, int len, void *ctx) {
  * getopt is better with one spelling than with two that disagree.
  */
 static int count_arg(int *argc, char **argv, int def) {
+    /* -n N and -nN, POSIX's spelling, as well as -N */
+    if (*argc > 2 && !strcmp(argv[1], "-n") && argv[2][0] >= '0' && argv[2][0] <= '9') {
+        int v = atoi(argv[2]);
+        for (int i = 1; i + 2 < *argc; i++) argv[i] = argv[i + 2];
+        *argc -= 2;
+        return v;
+    }
+    if (*argc > 1 && argv[1][0] == '-' && argv[1][1] == 'n' && argv[1][2] >= '0' && argv[1][2] <= '9') {
+        int v = atoi(argv[1] + 2);
+        for (int i = 1; i + 1 < *argc; i++) argv[i] = argv[i + 1];
+        (*argc)--;
+        return v;
+    }
     if (*argc > 1 && argv[1][0] == '-' && argv[1][1] >= '0' && argv[1][1] <= '9') {
         int v = 0;
         for (const char *p = argv[1] + 1; *p >= '0' && *p <= '9'; p++)
@@ -919,48 +1146,7 @@ static void bi_tail(px_shell_t *sh, int argc, char **argv) {
         px_printf(sh, "%s\n", t.lines[(start + i) % TAIL_MAX]);
 }
 
-typedef struct { const char *pat; int matched; } grep_t;
-
-static void grep_line(px_shell_t *sh, const char *line, int len, void *ctx) {
-    (void)len;
-    grep_t *g = ctx;
-    if (strstr(line, g->pat)) { px_printf(sh, "%s\n", line); g->matched++; }
-}
-
-/*
- * Fixed-string matching, not regular expressions.
- *
- * There IS a regex engine on this machine -- sw/ext/nextvi's, reached
- * through `vi`'s `:g` and `:s` -- and pulling it into the shell would
- * cost far more than it returns for a command whose common use is a
- * literal word. Said plainly here so the limit is a decision rather
- * than a surprise: `grep 'a.*b'` looks for those five characters.
- */
-static void bi_grep(px_shell_t *sh, int argc, char **argv) {
-
-    if (argc < 2) {
-        px_puts(sh, "usage: grep <text> [file]\n");
-        sh->status = 1;
-        return;
-    }
-
-    grep_t g = { argv[1], 0 };
-    const char *path = argc > 2 ? argv[2] : NULL;
-
-    if (!feed_lines(sh, path, grep_line, &g)) {
-        px_printf(sh, "grep: %s: cannot open\n", argv[2]);
-        sh->status = 1;
-        return;
-    }
-
-    if (line_truncated)
-        px_printf(sh, "grep: a line was longer than %d and was cut\n",
-                  PX_LINE_MAX - 1);
-
-    /* Nothing matched is status 1, as grep has always reported it --
-     * which is what makes `grep x f && ...` useful. */
-    if (!g.matched) sh->status = 1;
-}
+/* grep is text.c's: regular expressions, -E -F -i -v -n -c -l -q. */
 
 /*
  * -- sort and uniq --
@@ -996,15 +1182,112 @@ static void sort_line(px_shell_t *sh, const char *line, int len, void *ctx) {
     s->text[s->used++] = 0;
 }
 
+/* sort's options: -n, -r, -u, -f, -k N (a field, from 1), -t C (its
+ * separator; blanks if not given). */
+static struct { bool num, rev, uniq, fold; int key; char sep; } so;
+
+/* The key of a line: from field so.key on, or the whole line. */
+static const char *sort_key(const char *l) {
+    if (so.key <= 1) return l;
+    int f = 1;
+    const char *p = l;
+    while (*p && f < so.key) {
+        if (so.sep) {
+            if (*p++ == so.sep) f++;
+        } else {
+            while (*p == ' ' || *p == '\t') p++;           /* blanks, then a field */
+            while (*p && *p != ' ' && *p != '\t') p++;
+            f++;
+        }
+    }
+    if (!so.sep) while (*p == ' ' || *p == '\t') p++;
+    return p;
+}
+
+/* A leading number, as -n reads it: blanks, a sign, digits, a fraction. */
+static int num_cmp(const char *a, const char *b) {
+    while (*a == ' ' || *a == '\t') a++;
+    while (*b == ' ' || *b == '\t') b++;
+    int sa = *a == '-' ? -1 : 1, sb = *b == '-' ? -1 : 1;
+    if (*a == '-') a++;
+    if (*b == '-') b++;
+    const char *ia = a, *ib = b;
+    while (*ia >= '0' && *ia <= '9') ia++;
+    while (*ib >= '0' && *ib <= '9') ib++;
+    bool za = true, zb = true;                      /* is it zero? -0 is 0 */
+    for (const char *q = a; q < ia; q++) if (*q != '0') za = false;
+    for (const char *q = b; q < ib; q++) if (*q != '0') zb = false;
+    const char *fa = *ia == '.' ? ia + 1 : ia, *fb = *ib == '.' ? ib + 1 : ib;
+    for (const char *q = fa; *q >= '0' && *q <= '9'; q++) if (*q != '0') za = false;
+    for (const char *q = fb; *q >= '0' && *q <= '9'; q++) if (*q != '0') zb = false;
+    if (za) sa = 1;
+    if (zb) sb = 1;
+    if (sa != sb) return sa < sb ? -1 : 1;
+    /* the same sign: compare magnitudes, then flip for negatives */
+    while (*a == '0' && a < ia) a++;
+    while (*b == '0' && b < ib) b++;
+    int la = (int)(ia - a), lb = (int)(ib - b), c = 0;
+    if (la != lb) c = la < lb ? -1 : 1;
+    else {
+        c = strncmp(a, b, (size_t)la);
+        if (!c) {                                   /* the fractions, digit by digit */
+            while (!c && ((*fa >= '0' && *fa <= '9') || (*fb >= '0' && *fb <= '9'))) {
+                char x = (*fa >= '0' && *fa <= '9') ? *fa++ : '0';
+                char y = (*fb >= '0' && *fb <= '9') ? *fb++ : '0';
+                c = (x > y) - (x < y);
+            }
+        }
+    }
+    return sa * c;
+}
+
+static int str_cmp(const char *a, const char *b) {
+    if (!so.fold) return strcmp(a, b);
+    for (;; a++, b++) {
+        int x = (unsigned char)*a, y = (unsigned char)*b;
+        if (x >= 'a' && x <= 'z') x -= 32;
+        if (y >= 'a' && y <= 'z') y -= 32;
+        if (x != y || !x) return x - y;
+    }
+}
+
+static int line_cmp(const char *a, const char *b) {
+    const char *ka = sort_key(a), *kb = sort_key(b);
+    int c = so.num ? num_cmp(ka, kb) : str_cmp(ka, kb);
+    return so.rev ? -c : c;
+}
+
 static void bi_sort(px_shell_t *sh, int argc, char **argv) {
 
     static sort_t s;
     s.n = 0; s.used = 0; s.full = false;
+    memset(&so, 0, sizeof(so));
 
-    const char *path = argc > 1 ? argv[1] : NULL;
+    const char *path = NULL;
+    for (int i = 1; i < argc; i++) {
+        const char *a = argv[i];
+        if (a[0] == '-' && a[1]) {
+            if (a[1] == 'k' || a[1] == 't') {
+                const char *v = a[2] ? a + 2 : (i + 1 < argc ? argv[++i] : NULL);
+                if (!v) { px_printf(sh, "sort: -%c needs a value\n", a[1]); sh->status = 1; return; }
+                if (a[1] == 'k') so.key = atoi(v);
+                else so.sep = v[0];
+                continue;
+            }
+            for (const char *o = a + 1; *o; o++) {
+                if (*o == 'n') so.num = true;
+                else if (*o == 'r') so.rev = true;
+                else if (*o == 'u') so.uniq = true;
+                else if (*o == 'f') so.fold = true;
+                else { px_printf(sh, "sort: unknown option -%c\n", *o); sh->status = 1; return; }
+            }
+            continue;
+        }
+        path = a;
+    }
 
     if (!feed_lines(sh, path, sort_line, &s)) {
-        px_printf(sh, "sort: %s: cannot open\n", argv[1]);
+        px_printf(sh, "sort: %s: cannot open\n", path);
         sh->status = 1;
         return;
     }
@@ -1016,22 +1299,26 @@ static void bi_sort(px_shell_t *sh, int argc, char **argv) {
         return;
     }
 
-    /* Insertion sort on the offset array. O(n^2) on 512 lines is a few
-     * hundred thousand comparisons -- well under a frame on this
-     * machine, and it is thirty lines less code than anything faster.
-     * If sorting a big file ever matters, the LIMIT will hurt first. */
+    /* Insertion sort on the offset array -- stable, so equal keys keep
+     * their order. O(n^2) on 512 lines is a few hundred thousand
+     * comparisons -- well under a frame on this machine, and it is
+     * thirty lines less code than anything faster. If sorting a big
+     * file ever matters, the LIMIT will hurt first. */
     for (int i = 1; i < s.n; i++) {
         int v = s.off[i];
         int j = i;
-        while (j > 0 && strcmp(s.text + s.off[j - 1], s.text + v) > 0) {
+        while (j > 0 && line_cmp(s.text + s.off[j - 1], s.text + v) > 0) {
             s.off[j] = s.off[j - 1];
             j--;
         }
         s.off[j] = v;
     }
 
-    for (int i = 0; i < s.n; i++)
+    for (int i = 0; i < s.n; i++) {
+        /* -u: a line whose key equals the one before is left out */
+        if (so.uniq && i && !line_cmp(s.text + s.off[i - 1], s.text + s.off[i])) continue;
         px_printf(sh, "%s\n", s.text + s.off[i]);
+    }
 }
 
 typedef struct { char prev[PX_LINE_MAX]; bool have; } uniq_t;
@@ -1331,15 +1618,15 @@ static const builtin_t builtins[] = {
     { "reboot", bi_reboot, "reconfigure the FPGA, after syncing open files" },
     { "jump", bi_jump, "boot the gateware at a flash address (hex)" },
     { "mkdir", bi_mkdir, "make directories" },
-    { "find",  px_bi_find,  "list a tree  (find [DIR] -name '*.c' -type f|d)" },
+    { "find",  px_bi_find,  "list a tree  (find [DIR] -name '*.c' -type f|d [-exec CMD {} \\;])" },
     { "diff",  px_bi_diff,  "differences between two files, as diff -u" },
     { "unzip", px_bi_unzip, "unzip [-l] [-o] A.zip [-d DIR]" },
     { "tar",   px_bi_tar,   "tar -xf|-tf A.tar|.tgz|.tar.gz [-C DIR] [-o]" },
     { "wc",    bi_wc,    "count lines, words and characters" },
-    { "head",  bi_head,  "first lines of a file  (head -5 f)" },
-    { "tail",  bi_tail,  "last lines of a file   (tail -5 f)" },
-    { "grep",  bi_grep,  "lines containing text  (fixed string)" },
-    { "sort",  bi_sort,  "sort lines" },
+    { "head",  bi_head,  "first lines of a file  (head -5 f, head -n 5 f)" },
+    { "tail",  bi_tail,  "last lines of a file   (tail -5 f, tail -n 5 f)" },
+    { "grep",  px_bi_grep, "lines matching a pattern  (grep -i -n 'a.*b' f; -E -F -v -c -l -q)" },
+    { "sort",  bi_sort,  "sort lines  (-n numbers, -r reverse, -u once, -f any case, -k N, -t C)" },
     { "uniq",  bi_uniq,  "drop adjacent duplicate lines" },
     { "sed",   px_bi_sed,  "edit lines  (sed 's/old/new/g' f, -n, -E, -i)" },
     { "tr",    px_bi_tr,   "translate or delete characters  (tr a-z A-Z, -d, -s)" },
@@ -1349,6 +1636,10 @@ static const builtin_t builtins[] = {
     { "xxd",   px_bi_xxd,  "hex dump  (xxd [-s OFF] [-l LEN] f)" },
     { "date",  px_bi_date, "date and time  (date, date -u, date +%F)" },
     { "which", bi_which, "what a name runs: a builtin or a program" },
+    { "seq",   px_bi_seq,  "numbers in a row  (seq 5, seq 2 2 10, -s SEP)" },
+    { "rev",   px_bi_rev,  "each line backwards" },
+    { "basename", px_bi_basename, "the last part of a path  (basename /a/b.txt .txt)" },
+    { "dirname", px_bi_dirname, "a path less its last part" },
     { "rmdir", bi_rmdir, "remove an empty directory" },
     { "df",    bi_df,    "filesystem usage" },
     { "run",   bi_run,   "run a Zeitlos program, passing arguments" },
@@ -1395,6 +1686,30 @@ static void bi_which(px_shell_t *sh, int argc, char **argv) {
     }
 }
 
+/*
+ * One builtin, for find -exec: the words already split, no redirection,
+ * no wildcards, no programs, and where find's own output goes. A
+ * program cannot be one: the shell starts it and goes on, so there is
+ * nothing to wait on per file. Nor can find itself -- its walk's state
+ * is static.
+ */
+bool px_run_builtin(px_shell_t *sh, int argc, char **argv) {
+    if (!strcmp(argv[0], "find")) {
+        px_puts(sh, "find: -exec cannot run find\n");
+        return false;
+    }
+    for (int i = 0; builtins[i].name; i++) {
+        if (strcmp(argv[0], builtins[i].name)) continue;
+        int st = sh->status;
+        builtins[i].fn(sh, argc, argv);
+        int r = sh->status;
+        sh->status = st;
+        return r == 0;
+    }
+    px_printf(sh, "find: -exec %s: not a builtin -- -exec runs the shell's own commands\n", argv[0]);
+    return false;
+}
+
 static void bi_help(px_shell_t *sh, int argc, char **argv) {
     (void)argc; (void)argv;
     px_puts(sh, "posix -- see docs/posix.md\n");
@@ -1426,10 +1741,10 @@ static void bi_help(px_shell_t *sh, int argc, char **argv) {
  * (so it can never be an operator like `>`) and whether it has a
  * wildcard to expand.
  */
-static char tok_buf[2 * PX_LINE_MAX + 16];
+/* tok_buf: with the stage state, above (st_tok) */
 
 static int split(const char *line, char **argv, uint8_t *fl, int max) {
-    return z_args_split(line, tok_buf, sizeof(tok_buf), argv, fl, max);
+    return z_args_split(line, st_tok, sizeof(tok_buf), argv, fl, max);
 }
 
 /*
@@ -1504,6 +1819,120 @@ static bool take_redirect(px_shell_t *sh, int *argc, char **argv, uint8_t *fl) {
 /* Runs one command with no pipe in it. */
 static void exec_simple(px_shell_t *sh, char *cmd);
 
+/* The first word of a stage: its builtin's name, or "" if it is quoted. */
+static int stage_name(const char *c, char *out, int cap) {
+    int k = 0;
+    while (*c == ' ') c++;
+    if (*c == '\'' || *c == '"' || *c == '\\') { out[0] = 0; return 0; }
+    while (*c && *c != ' ' && k < cap - 1) out[k++] = *c++;
+    out[k] = 0;
+    return k;
+}
+
+/* An unquoted `ch` in the stage's text. */
+static bool stage_has(const char *c, char ch) {
+    while (*c) {
+        if (*c == '\'' || *c == '"' || *c == '\\') { c = z_args_skip(c); continue; }
+        if (*c == ch) return true;
+        c++;
+    }
+    return false;
+}
+
+/*
+ * Can these stages stream? Every one a builtin (a program writes to its
+ * own stdout relay, which the old path reports), none in it twice, at
+ * most one of the inflate window's users, no find -exec (it runs other
+ * builtins, whose statics it would share), `<` only on the first stage
+ * and `>` only on the last -- and the memory for it given (main.c).
+ */
+static bool pipe_streams(px_shell_t *sh, char **stages, int n) {
+    (void)sh;
+    if (!pipes_mem || n > PX_PIPE_STAGES ||
+        pipes_bytes < (size_t)(n - 1) * PX_STAGE_MEM) return false;
+    char names[PX_PIPE_STAGES][24];
+    int inflaters = 0;
+    for (int i = 0; i < n; i++) {
+        char *nm = names[i];
+        if (!stage_name(stages[i], nm, sizeof(names[i]))) return false;
+        bool found = false;
+        for (int b = 0; builtins[b].name; b++) if (!strcmp(builtins[b].name, nm)) found = true;
+        if (!found || !strcmp(nm, "run") || !strcmp(nm, "exit")) return false;
+        for (int j = 0; j < i; j++) if (!strcmp(names[j], nm)) return false;
+        if (!strcmp(nm, "zcat") || !strcmp(nm, "gunzip") || !strcmp(nm, "unzip") || !strcmp(nm, "tar"))
+            if (++inflaters > 1) return false;
+        if (strstr(stages[i], "-exec")) return false;
+        if (i > 0 && stage_has(stages[i], '<')) return false;
+        if (i < n - 1 && stage_has(stages[i], '>')) return false;
+    }
+    return true;
+}
+
+static size_t pipe_stack_last;          /* the deepest stage of the last pipe */
+size_t px_pipe_stack_last(void) { return pipe_stack_last; }
+
+static void stage_body(void *arg) {
+    px_stage_t *st = arg;
+    exec_simple(st->sh, st->cmd);
+    stage_drain(st->prev);      /* it read what it wanted: the rest stops */
+}
+
+/* Runs a pipe that streams: the stages before the last in coroutines of
+ * their own, on stacks and buffers from px_pipes_init()'s memory; the
+ * last here, in the command's own context, pulling. */
+static void pipe_run(px_shell_t *sh, char **cmd, int n) {
+    uint8_t *m = pipes_mem;
+    for (int i = 0; i < n; i++) {
+        px_stage_t *st = &stage_tab[i];
+        memset(st, 0, sizeof(*st));
+        st->sh = sh;
+        st->cmd = cmd[i];
+        st->idx = i;
+        st->prev = i ? &stage_tab[i - 1] : NULL;
+        st->producer = i < n - 1;
+        st->v_out_fd = 1;
+        if (!st->producer) continue;
+        st->stack = m;                       m += PX_STAGE_STACK;
+        st->pipe = (char *)m;                m += PX_PIPE_BUF;
+        st->tok = (char *)m;                 m += sizeof(tok_buf);
+        st->glob = (char *)m;                m += sizeof(glob_buf);
+        st->pbuf = (char *)m;                m += PX_LINE_MAX;
+        st->line = (char *)m;                m += PX_LINE_MAX;
+        st->rbuf = (char *)m;                m += sizeof(rbuf0);
+        st->bbuf = (char *)m;                m += sizeof(bbuf0);
+        zco_init(&st->co, stage_body, st, st->stack, PX_STAGE_STACK);
+    }
+
+    px_stage_t *last = &stage_tab[n - 1];
+    const char *in0 = sh->in;
+    int in0_len = sh->in_len;
+    stage_point(last);
+    exec_simple(sh, last->cmd);
+    stage_drain(last->prev);
+    int status = sh->status;
+
+    bool over = false;
+    pipe_stack_last = 0;
+    for (int i = 0; i < n - 1; i++) {
+        if (stage_tab[i].overflow) over = true;
+        size_t u = zco_stack_used(&stage_tab[i].co);
+        if (u > pipe_stack_last) pipe_stack_last = u;
+    }
+    stage_point(NULL);
+    sh->in = in0;
+    sh->in_len = in0_len;
+    if (over) {
+        /* A stage ran off its stack and was stopped where it stood:
+         * what it held is let go of, as job.c does for a command. */
+        px_job_release();
+        px_close_all_files();
+        px_printf(sh, "posix: a stage of the pipe ran out of stack (%d bytes) and was stopped\n",
+            PX_STAGE_STACK);
+        status = 1;
+    }
+    sh->status = status;
+}
+
 /*
  * Splits on `|` and runs the stages in sequence, each reading what the
  * last one wrote.
@@ -1532,6 +1961,8 @@ static void exec_one(px_shell_t *sh, char *cmd) {
     }
 
     if (n == 1) { exec_simple(sh, cmd); return; }
+
+    if (pipe_streams(sh, stages, n)) { pipe_run(sh, stages, n); return; }
 
     const char *feed = NULL;
     int feed_len = 0;
@@ -1592,7 +2023,7 @@ static void exec_one(px_shell_t *sh, char *cmd) {
  * The expanded names live in glob_buf, which lasts until the next
  * command; argv points into it.
  */
-static char glob_buf[4096];
+/* glob_buf: with the stage state, above (st_glob) */
 static char glob_list[4096];
 static uint8_t glob_types[128];
 
@@ -1659,7 +2090,7 @@ static bool expand_globs(px_shell_t *sh, int *argc, char **argv, uint8_t *fl) {
                     if (n >= PX_MAX_ARGS) goto too_many;
                     size_t need = (slash ? strlen(dir) + 1 : 0) + strlen(name) + 1;
                     if (used + need > sizeof(glob_buf)) goto too_many;
-                    char *w = glob_buf + used;
+                    char *w = st_glob + used;
                     if (slash) {
                         strcpy(w, dir);
                         strcat(w, "/");
@@ -1768,6 +2199,7 @@ static void exec_simple(px_shell_t *sh, char *cmd) {
 
     out_fd = 1;
     sh->status = 0;
+    in_taken = false;
 
     if (!take_redirect(sh, &argc, argv, fl)) { sh->status = 1; return; }
     if (!take_input(sh, &argc, argv, fl)) { sh->status = 1; goto done; }
@@ -1781,8 +2213,9 @@ static void exec_simple(px_shell_t *sh, char *cmd) {
         out_fd = 1;
         if (sh->intr) {
             /* To the terminal whatever the redirection: it is the
-             * person being told, not the file. */
-            out_raw(sh, "^C\r\n", 4);
+             * person being told, not the file. Once, by the last stage
+             * of a streaming pipe. */
+            if (!cur_stage || !cur_stage->producer) out_raw(sh, "^C\r\n", 4);
             sh->status = 130;
         }
         sh->in = saved_in;
@@ -1934,6 +2367,11 @@ void px_resume(px_shell_t *sh, int status) {
  * descriptor open, the inflate window free for the next zcat or unzip.
  */
 void px_shell_abandon(void) {
+    for (int i = 0; i < PX_PIPE_STAGES; i++)
+        if (stage_tab[i].producer && !stage_tab[i].done) zco_abandon(&stage_tab[i].co);
+    memset(stage_tab, 0, sizeof(stage_tab));
+    stage_point(NULL);
+    in_taken = false;
     cap_active = false;
     cap_len = 0;
     cap_overflow = false;

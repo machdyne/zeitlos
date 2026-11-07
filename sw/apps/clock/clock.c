@@ -128,7 +128,7 @@ static z_win_t win;
 // could disagree with what is drawn.
 #define GROUP_VIEW  1
 
-enum { W_ANALOG = 0, W_DIGITAL, W_COUNT };
+enum { W_ANALOG = 0, W_DIGITAL, W_ZONE, W_COUNT };
 
 static z_widget_t widgets[W_COUNT];
 static z_widget_set_t wset;
@@ -449,15 +449,16 @@ static void layout(void) {
 
 	int btn_y = ch - BTN_H - MARGIN;
 
-	// The two buttons split the row evenly. Widths derived rather
+	// The three buttons split the row evenly. Widths derived rather
 	// than fixed so the row fills the window exactly, with no ragged
 	// gap at one end.
-	int avail = cw - 2 * MARGIN - BTN_GAP;
-	int bw = avail / 2;
+	int avail = cw - 2 * MARGIN - 2 * BTN_GAP;
+	int bw = avail / 3;
 	if (bw < 8) bw = 8;
 
 	widgets[W_ANALOG].x = (int16_t)MARGIN;
 	widgets[W_DIGITAL].x = (int16_t)(MARGIN + bw + BTN_GAP);
+	widgets[W_ZONE].x = (int16_t)(MARGIN + 2 * (bw + BTN_GAP));
 
 	for (int i = 0; i < W_COUNT; i++) {
 		widgets[i].y = (int16_t)btn_y;
@@ -500,8 +501,16 @@ static void repaint(void) {
 	tick(true);
 }
 
+// Zone: settings, opened on its Date & time page (`run settings time`),
+// where the zone this clock shows is chosen.
+static void open_zone_settings(void) {
+	z_launch_arg_set("time");
+	if (!z_proc_run("settings")) z_launch_arg_set("");
+}
+
 static void activate(int idx) {
 
+	if (idx == W_ZONE) { open_zone_settings(); return; }
 	if (idx != W_ANALOG && idx != W_DIGITAL) return;
 
 	bool want = (idx == W_ANALOG);
@@ -514,6 +523,7 @@ static void activate(int idx) {
 }
 
 static void handle_mouse(uint32_t packed) {
+	// (W_ZONE: settings, on its Date & time page -- activate())
 
 	int mx, my;
 	bool inside = z_win_mouse_content_xy(&win, packed, &mx, &my);
@@ -552,12 +562,13 @@ static void handle_key(uint32_t keysym, uint8_t mods) {
 	if (keysym == Z_KEY_HELP) {	// docs/app_help.md
 		static const char help[] =
 			"A wall clock, analog or digital.\n\n"
-			"Tab, arrows\tChoose Analog or Digital\n"
-			"Enter/Space\tSwitch to it\n\n"
+			"Tab, arrows\tChoose Analog, Digital or Zone\n"
+			"Enter/Space\tPress it\n"
+			"z\tThe time zone: settings\n\n"
 			"Or click the buttons. The time comes from the RTC, "
 			"which net sets over NTP; until then it shows no time. "
-			"The time zone is set in settings, and shown under the "
-			"digital time.";
+			"The time zone is set in settings -- Zone opens it -- "
+			"and shown under the digital time.";
 		z_dialog_ctx_t ctx = { &win, help_on_msg, NULL };
 		z_dialog_help(&ctx, "Clock help", help, "clock_app");
 		return;
@@ -585,6 +596,11 @@ static void handle_key(uint32_t keysym, uint8_t mods) {
 			activate(z_widget_key_activate(&wset));
 			return;
 
+		case 'z':
+		case 'Z':
+			open_zone_settings();
+			return;
+
 		default:
 			return;
 
@@ -605,6 +621,10 @@ static void widgets_init(void) {
 	widgets[W_DIGITAL].group = GROUP_VIEW;
 	widgets[W_DIGITAL].label = "Digital";
 	widgets[W_DIGITAL].enabled = true;
+
+	widgets[W_ZONE].type = Z_WIDGET_BUTTON;
+	widgets[W_ZONE].label = "Zone";
+	widgets[W_ZONE].enabled = true;
 
 	z_widget_set_init(&wset, widgets, W_COUNT, &win);
 

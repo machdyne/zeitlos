@@ -158,12 +158,18 @@ int cpu_step(cpu_t *cpu, struct machine *m) {
 		case 4: rset(cpu, rd, a ^ (uint32_t)imm_i); break;                      /* XORI  */
 		case 6: rset(cpu, rd, a | (uint32_t)imm_i); break;                      /* ORI   */
 		case 7: rset(cpu, rd, a & (uint32_t)imm_i); break;                      /* ANDI  */
-		case 1: rset(cpu, rd, a << (rs2 & 0x1f)); break;                        /* SLLI  */
+		case 1:
+			if (funct7 != 0x00) { cpu->trapped = 1; cpu->trap_pc = pc; return -1; }
+			rset(cpu, rd, a << (rs2 & 0x1f));                                   /* SLLI  */
+			break;
 		case 5:
 			if (funct7 == 0x20)
 				rset(cpu, rd, (uint32_t)((int32_t)a >> (rs2 & 0x1f)));          /* SRAI */
-			else
+			else if (funct7 == 0x00)
 				rset(cpu, rd, a >> (rs2 & 0x1f));                               /* SRLI */
+			else if (funct7 == 0x30 && zs_rot())                                /* RORI (Zbb, `CPU_ROT) */
+				rset(cpu, rd, (a >> (rs2 & 0x1f)) | (a << ((32 - (rs2 & 0x1f)) & 0x1f)));
+			else { cpu->trapped = 1; cpu->trap_pc = pc; return -1; }
 			break;
 		}
 		break;
@@ -241,6 +247,10 @@ int cpu_step(cpu_t *cpu, struct machine *m) {
 			else { cpu->trapped = 1; cpu->trap_pc = pc; return -1; }
 			break;
 		case 1:
+			if (funct7 == 0x30 && zs_rot()) {               /* ROL (Zbb, `CPU_ROT) */
+				rset(cpu, rd, (a << (b & 0x1f)) | (a >> ((32 - (b & 0x1f)) & 0x1f)));
+				break;
+			}
 			if (funct7 != 0x00) { cpu->trapped = 1; cpu->trap_pc = pc; return -1; }
 			rset(cpu, rd, a << (b & 0x1f));                 /* SLL */
 			break;
@@ -259,6 +269,8 @@ int cpu_step(cpu_t *cpu, struct machine *m) {
 		case 5:
 			if (funct7 == 0x20) rset(cpu, rd, (uint32_t)((int32_t)a >> (b & 0x1f))); /* SRA */
 			else if (funct7 == 0x00) rset(cpu, rd, a >> (b & 0x1f));                 /* SRL */
+			else if (funct7 == 0x30 && zs_rot())                                     /* ROR (Zbb) */
+				rset(cpu, rd, (a >> (b & 0x1f)) | (a << ((32 - (b & 0x1f)) & 0x1f)));
 			else { cpu->trapped = 1; cpu->trap_pc = pc; return -1; }
 			break;
 		case 6:

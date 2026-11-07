@@ -431,9 +431,11 @@ Static files from one directory on the card, read-only.
 - **The subnet rule** (`apps.netserve.allow`) applies here too.
 
 Throughput is TCP's: up to five segments in flight at a time
-(networking.md, "Sending"). Through net's relay they are up to 1KB
-each -- its staging buffer (`RELAY_TX`) -- so ~5KB a round trip, where
-it was one 536-byte segment. A client that delays its ACKs (Windows,
+(networking.md, "Sending"). Through net's relay each is as full as the
+peer's MSS allows -- 1460 bytes from an Ethernet client -- gathered
+straight from netserve's messages (relay.c, "full-size segments"), so
+~7KB a round trip, where it was one 536-byte segment (and, before
+November 2026, at most 1KB a segment, cut from a staging buffer). A client that delays its ACKs (Windows,
 200 ms) costs much less now: it has several segments to acknowledge.
 The file is read into a 2KB buffer, so each pass through fs and net
 carries 2KB: at 512 bytes (the size until 0.0.9) every segment was a
@@ -591,7 +593,7 @@ moving for three seconds prints its whole state, once every three
 seconds while it lasts:
 
 ```
-net: relay 1 stalled: out 649 buffered + 0 msgs held; in 0 buffered, window 512;
+net: relay 1 stalled: out 2 msgs held; in 0 buffered, window 512;
      0 sends to the listener unacked; tcp segment unacked (512 bytes, 3 retries);
      segments in 1, dup 0, gap 0
 netserve: session 1 stalled (state 4): to peer 512 buffered, 1 msgs held;

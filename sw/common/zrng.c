@@ -30,6 +30,7 @@
 #include <stdbool.h>
 
 #include "zrng.h"
+#include "zsoc.h"		// z_cpu_has_rot(): the rotate instructions
 
 // -- ChaCha20 --
 
@@ -37,19 +38,66 @@ static uint32_t cc_state[16];
 static uint8_t cc_key[32];
 static uint64_t cc_nonce;			// never repeats within a boot; see below
 
-// Rotate left. Written as a shift pair rather than an intrinsic
-// because RV32IM has no rotate instruction -- this compiles to the
-// three instructions it has to compile to, and this is the hot loop
-// of the whole file. (An `rori` from the Zbb extension would cut
-// ChaCha20's cost here by roughly 40%; see docs/trng.md's performance
-// note.)
+// -- ChaCha20's rounds, with the CPU's rotates where it has them --
+//
+// The 20 rounds without the final addition: chacha_block() below, and
+// monocypher's chacha20_rounds() too when it is built with
+// -DZ_CHACHA_ROUNDS=z_chacha20_rounds (net, netserve, web: ssh's
+// chacha20-poly1305 and TLS's ChaCha20). docs/chacha.md.
+//
+// A quarter of ChaCha20's operations are rotates. RV32IM has none, so
+// each is a shift pair and an OR -- three instructions where Zbb's
+// rori is one. A bitstream with `CPU_ROT has ror/rol/rori in picorv32
+// (Z_FEATURE3_CPU_ROT); one without traps on them as illegal, so the
+// choice is made at run time, once, and a binary runs on both.
+
 #define ROTL32(v, n) (((v) << (n)) | ((v) >> (32 - (n))))
 
-#define QR(a, b, c, d) \
-	a += b; d ^= a; d = ROTL32(d, 16); \
-	c += d; b ^= c; b = ROTL32(b, 12); \
-	a += b; d ^= a; d = ROTL32(d, 8);  \
-	c += d; b ^= c; b = ROTL32(b, 7);
+#define QR(R, a, b, c, d) \
+	a += b; d ^= a; d = R(d, 16); \
+	c += d; b ^= c; b = R(b, 12); \
+	a += b; d ^= a; d = R(d, 8);  \
+	c += d; b ^= c; b = R(b, 7);
+
+// The state in sixteen locals, as monocypher has it -- kept in
+// registers, not reloaded from an array each quarter round. R is the
+// rotate: shifts, or the instruction.
+#define ROUNDS(R) { \
+	uint32_t t0 = in[0], t1 = in[1], t2 = in[2], t3 = in[3]; \
+	uint32_t t4 = in[4], t5 = in[5], t6 = in[6], t7 = in[7]; \
+	uint32_t t8 = in[8], t9 = in[9], t10 = in[10], t11 = in[11]; \
+	uint32_t t12 = in[12], t13 = in[13], t14 = in[14], t15 = in[15]; \
+	for (int i = 0; i < 10; i++) { \
+		QR(R, t0, t4, t8, t12)  QR(R, t1, t5, t9, t13) \
+		QR(R, t2, t6, t10, t14) QR(R, t3, t7, t11, t15) \
+		QR(R, t0, t5, t10, t15) QR(R, t1, t6, t11, t12) \
+		QR(R, t2, t7, t8, t13)  QR(R, t3, t4, t9, t14) \
+	} \
+	out[0] = t0; out[1] = t1; out[2] = t2; out[3] = t3; \
+	out[4] = t4; out[5] = t5; out[6] = t6; out[7] = t7; \
+	out[8] = t8; out[9] = t9; out[10] = t10; out[11] = t11; \
+	out[12] = t12; out[13] = t13; out[14] = t14; out[15] = t15; }
+
+static void rounds_c(uint32_t out[16], const uint32_t in[16]) ROUNDS(ROTL32)
+
+#if defined(__riscv)
+// rori rd, rs1, 32 - n: rotl by n. Written as .insn, Zbb's encoding
+// (funct7 0110000, funct3 101, OP-IMM), so the rest of the program is
+// still built for rv32im and nothing else in it can use Zbb by accident.
+#define ROTL32_HW(v, n) ({ uint32_t r_; \
+	__asm__ (".insn i 0x13, 5, %0, %1, %2" : "=r"(r_) : "r"(v), "i"(0x600 | (32 - (n)))); r_; })
+
+static void rounds_rot(uint32_t out[16], const uint32_t in[16]) ROUNDS(ROTL32_HW)
+#endif
+
+void z_chacha20_rounds(uint32_t out[16], const uint32_t in[16]) {
+#if defined(__riscv)
+	static int8_t rot = -1;		// asked once: a CSR read each block is not free
+	if (rot < 0) rot = z_cpu_has_rot() ? 1 : 0;
+	if (rot) { rounds_rot(out, in); return; }
+#endif
+	rounds_c(out, in);
+}
 
 static uint32_t rd32le(const uint8_t *p) {
 	return (uint32_t)p[0] | ((uint32_t)p[1] << 8) |
@@ -67,19 +115,7 @@ static void chacha_block(uint8_t *out) {
 	uint32_t x[16];
 	int i;
 
-	for (i = 0; i < 16; i++) x[i] = cc_state[i];
-
-	for (i = 0; i < 10; i++) {
-		QR(x[0], x[4], x[ 8], x[12])
-		QR(x[1], x[5], x[ 9], x[13])
-		QR(x[2], x[6], x[10], x[14])
-		QR(x[3], x[7], x[11], x[15])
-		QR(x[0], x[5], x[10], x[15])
-		QR(x[1], x[6], x[11], x[12])
-		QR(x[2], x[7], x[ 8], x[13])
-		QR(x[3], x[4], x[ 9], x[14])
-	}
-
+	z_chacha20_rounds(x, cc_state);
 	for (i = 0; i < 16; i++) wr32le(out + 4 * i, x[i] + cc_state[i]);
 
 }

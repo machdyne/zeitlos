@@ -175,6 +175,13 @@ void crypto_wipe(void *secret, size_t size)
 	a += b;  d = rotl32(d ^ a,  8); \
 	c += d;  b = rotl32(b ^ c,  7)
 
+#ifdef Z_CHACHA_ROUNDS
+// Zeitlos: the rounds from sw/common/zrng.c, which uses the CPU's rotate
+// instructions where the bitstream has them (docs/chacha.md). Same
+// arguments, same result.
+void Z_CHACHA_ROUNDS(u32 out[16], const u32 in[16]);
+#define chacha20_rounds Z_CHACHA_ROUNDS
+#else
 static void chacha20_rounds(u32 out[16], const u32 in[16])
 {
 	// The temporary variables make Chacha20 10% faster.
@@ -198,6 +205,7 @@ static void chacha20_rounds(u32 out[16], const u32 in[16])
 	out[ 8] = t8;   out[ 9] = t9;   out[10] = t10;  out[11] = t11;
 	out[12] = t12;  out[13] = t13;  out[14] = t14;  out[15] = t15;
 }
+#endif
 
 static const u8 *chacha20_constant = (const u8*)"expand 32-byte k"; // 16 bytes
 

@@ -73,6 +73,8 @@
 
 #include "zeitlos.h"
 #include "zwin.h"
+#include "znet.h"		// Z_NET_BROWSE_REPLY
+#include "zbrowse.h"	// z_browse_printer_t, for the print dialog's search
 
 // Everything a dialog needs to know about the app that opened it.
 typedef struct {
@@ -120,6 +122,13 @@ typedef struct {
 // `start_dir` is where browsing begins; NULL means /home, the
 // person's own files (docs/layout.md).
 bool z_dialog_open(const z_dialog_ctx_t *ctx, const char *start_dir,
+	char *out, int outlen);
+
+// The same, where a folder can be the answer too: Choose on a selected
+// folder (or, with nothing selected, on the folder shown) returns it,
+// while Enter and a double-click still go into it. For what takes
+// either -- convert's window, which packs a folder into a zip.
+bool z_dialog_open_any(const z_dialog_ctx_t *ctx, const char *start_dir,
 	char *out, int outlen);
 
 // File-save dialog. Same browser plus an editable filename field,
@@ -214,6 +223,15 @@ void z_dialog_help(const z_dialog_ctx_t *ctx, const char *title,
 #define Z_PRINT_PAGES_SELECTION  2	// what is selected: the app prints only that
 #define Z_PRINT_PAGES_RANGE      3	// first .. last
 
+// Finding printers on the network while the dialog is up (zbrowse.h).
+// z_print_opts_init() (zprint.c) sets z_print_opts_t's `finder` to
+// one, so only an app that prints links the search; NULL searches
+// nothing.
+typedef struct {
+	uint32_t (*ask)(void);		// starts a search: the tag to look for, or 0
+	int (*reply)(const z_msg_t *msg, uint32_t tag, z_browse_printer_t *out, int max);	// -1 not it
+} z_print_finder_t;
+
 typedef struct {
 
 	// -- what the app has --
@@ -224,9 +242,11 @@ typedef struct {
 	// -- shown, from zeitlos.cfg (z_print_opts_init()) --
 	char	printer[64];	// apps.print.printer, "" if none is set up
 	char	paper_default[12];	// apps.print.paper
+	const z_print_finder_t *finder;	// printers on the network, offered under Print to
 
 	// -- the answer --
 	int		dest;			// Z_PRINT_TO_*
+	char	address[Z_BROWSE_URI_MAX];	// dest PRINTER: a printer found on the network; "" the one in zeitlos.cfg
 	int		pages;			// Z_PRINT_PAGES_*
 	int		first, last;	// RANGE, from 1
 	int		copies;			// 1 .. 99

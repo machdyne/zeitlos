@@ -263,4 +263,10 @@ void z_rng_stir(const void *data, uint32_t len);
 // identical hardware diverge.
 void z_rng_stir_event(void);
 
+// ChaCha20's 20 rounds on `in` (no final addition), into `out` (may be
+// the same): with the CPU's rotate instructions where the bitstream has
+// them (Z_FEATURE3_CPU_ROT), in shifts otherwise. monocypher built with
+// -DZ_CHACHA_ROUNDS=z_chacha20_rounds uses it. docs/chacha.md.
+void z_chacha20_rounds(uint32_t out[16], const uint32_t in[16]);
+
 #endif

@@ -56,6 +56,7 @@ PYTHON = [
 RTL = [
     ("rtl/tests", "all"),
     ("rtl/cpu/zeitlos32/tests", "run"),
+    ("rtl/cpu/picorv32/tests", "all"),      # ror/rol/rori (`CPU_ROT, docs/chacha.md)
 ]
 
 # What a missing program or module looks like in a log.

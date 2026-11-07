@@ -63,7 +63,7 @@ memory the caller owns**: no open files, no messages half sent, no
 locks, no `malloc` of its own. So the coroutine computes and the main
 loop does the I/O -- it reads the file and hands the coroutine each
 chunk. The decoders in `zimg` allocate nothing, which is what makes them
-a good fit. One coroutine runs at a time and may not start another.
+a good fit. One coroutine runs at a time; one may resume another, whose `zco_yield()` then comes back to it rather than to the main loop -- the chain posix's streaming pipes are ([posix.md](posix.md#pipes)).
 
 **The stack is a fixed buffer, and it is guarded.** Nothing grows it,
 and nothing stops a call chain from running off its bottom into

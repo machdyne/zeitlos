@@ -198,5 +198,6 @@ static inline int machine_get_pixel(machine_t *m, int x, int y) {
 }
 
 int zs_console(void);
+int zs_rot(void);		/* ZSIM_ROT: the rotate instructions (docs/chacha.md) */
 
 #endif

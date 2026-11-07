@@ -52,6 +52,7 @@ dfu_base = 0x040000
 
 defines =
     FPGA_ECP5
+    CPU_ROT
     PROGRAMN_PIN
     OSC48
     MEM=32

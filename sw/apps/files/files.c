@@ -899,7 +899,8 @@ static const char *convert_default(const char *path, bool *strip_tar) {
 static void do_convert(void) {
 
 	const char *name = z_flist_selected(&flist);
-	if (!name || z_flist_selected_is_dir(&flist)) return;
+	if (!name) return;
+	bool folder = z_flist_selected_is_dir(&flist);	// packed into a zip (or tar)
 
 	if (conv.running) {
 		z_dialog_confirm(&dlg_ctx, "Convert",
@@ -910,8 +911,8 @@ static void do_convert(void) {
 	char from[Z_FLIST_PATH_MAX], to[Z_FLIST_PATH_MAX];
 	if (!z_flist_selected_path(&flist, from, sizeof(from))) return;
 
-	bool strip_tar;
-	const char *ext = convert_default(from, &strip_tar);
+	bool strip_tar = false;
+	const char *ext = folder ? "zip" : convert_default(from, &strip_tar);
 	if (!ext) {
 		z_dialog_confirm(&dlg_ctx, "Convert",
 			"convert does not read\nthis kind of file.", Z_DIALOG_OK_CANCEL);
@@ -923,7 +924,7 @@ static void do_convert(void) {
 	int n = (int)strlen(from);
 	memcpy(to, from, (size_t)n + 1);
 	char *dot = strrchr(to, '.');
-	if (dot && dot > strrchr(to, '/')) *dot = 0;
+	if (!folder && dot && dot > strrchr(to, '/')) *dot = 0;
 	if (strip_tar) { dot = strrchr(to, '.'); if (dot) *dot = 0; }
 	if (*ext) {
 		n = (int)strlen(to);
@@ -935,6 +936,7 @@ static void do_convert(void) {
 
 	char out[Z_FLIST_PATH_MAX];
 	if (!z_dialog_prompt(&dlg_ctx, "Convert",
+		folder ? "Pack into (.zip, .tar or .tar.gz):" :
 		*ext ? "To (the ending picks the format):" : "Extract into the folder:",
 		to, out, sizeof(out)) || !out[0])
 		return;
@@ -1553,7 +1555,8 @@ static void handle_key(uint32_t keysym, uint8_t mods) {
 			"file's own path: an existing folder means into it. "
 			"Folders copy, move and delete with everything in them. "
 			"Convert saves the file in another format, picked by the "
-			"ending you give it (.docx, .md, .xlsx, ...).\n\n"
+			"ending you give it (.docx, .md, .xlsx, ...); a folder "
+			"it packs into a .zip, .tar or .tar.gz.\n\n"
 			Z_DIR_HOME " is yours, " Z_DIR_TMP " is the RAM disk (gone at power-off).";
 		z_dialog_help(&dlg_ctx, "Files help", help, "file_browser");
 		return;

@@ -175,3 +175,118 @@ posix: missing.txt: cannot open
 ? 1
 $ echo '<' | tr '<' '>'
 >
+
+# -- grep: regular expressions and options --
+$ grep 'sec.nd' notes.txt
+second line
+$ grep -E '^(1|12)$' numbers.txt
+1
+12
+$ grep -c 1 numbers.txt
+4
+$ grep -v 1 numbers.txt | wc
+8 8 16
+$ grep -n line notes.txt
+2:second line
+$ grep -i HELLO notes.txt
+hello from a file
+$ grep -F 'a.b' notes.txt
+? 1
+$ grep -l hello notes.txt numbers.txt
+notes.txt
+$ grep -h 2 numbers.txt notes.txt
+2
+12
+$ grep 2 numbers.txt notes.txt
+numbers.txt:2
+numbers.txt:12
+$ grep -q second notes.txt && echo yes
+yes
+$ grep 'a\(b' notes.txt
+grep: unmatched (
+? 2
+$ grep x missing.txt
+grep: missing.txt: cannot open
+? 2
+$ echo 'Hello World' | sed 's/world/there/I'
+Hello there
+
+# -- sort --
+$ sort -n nums.txt
+-3
+0
+2
+10
+10.5
+100
+$ sort -rn nums.txt
+100
+10.5
+10
+2
+0
+-3
+$ sort -t: -k2 -n fields.txt
+c:1
+a:2
+b:3
+$ sort -u dup.txt
+a
+b
+$ sort -f mixed.txt
+apple
+Banana
+cherry
+
+# -- head -n, tail -n --
+$ head -n 2 numbers.txt
+1
+2
+$ tail -n2 numbers.txt
+11
+12
+
+# -- seq, basename, dirname, rev --
+$ seq 3
+1
+2
+3
+$ seq 10 -4 1
+10
+6
+2
+$ seq -s, 1 4
+1,2,3,4
+$ seq 1 0 3
+seq: a step of 0 never ends
+? 1
+$ basename /home/notes.txt .txt
+notes
+$ basename /a/b/
+b
+$ dirname /home/notes.txt
+/home
+$ dirname notes.txt
+.
+$ dirname /notes.txt
+/
+$ echo abc | rev
+cba
+
+# -- find -exec --
+$ find wild -name '*.c' -exec wc {} ;
+1 2 7 wild/a.c
+1 2 8 wild/b.c
+1 2 7 wild/c.c
+$ find wild -name a.h -exec grep -c hdr {} \;
+1
+$ find wild -exec zcc {} ;
+find: -exec zcc: not a builtin -- -exec runs the shell's own commands
+find: -exec zcc: not a builtin -- -exec runs the shell's own commands
+find: -exec zcc: not a builtin -- -exec runs the shell's own commands
+find: -exec zcc: not a builtin -- -exec runs the shell's own commands
+find: -exec zcc: not a builtin -- -exec runs the shell's own commands
+? 1
+$ find wild -exec wc {}
+find: -exec needs a command and a ; to end it -- find . -exec wc {} \;
+? 1

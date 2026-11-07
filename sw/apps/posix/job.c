@@ -191,8 +191,18 @@ bool px_job_pending(void) { return cur || queued; }
 /* Inside the command: hand back if the slice is used. Outside (the host
  * transcript test runs commands directly) nothing happens. */
 void px_job_tick(void) {
-    if (!cur || zco_current() != &co) return;
-    if (z_uptime_ticks() - slice_start >= slice) zco_yield();
+    if (!cur || z_uptime_ticks() - slice_start < slice) return;
+    if (zco_current() == &co) zco_yield();
+    else px_stage_tick();       /* a stage of a streaming pipe: up through its readers */
+}
+
+void px_job_yield(void) {
+    if (cur && zco_current() == &co) zco_yield();
+}
+
+void px_job_release(void) {
+    for (int h = 0; h < Z_FS_MAX_OPEN; h++) fs_close_handle(h);
+    free_all();
 }
 
 bool px_job_wait(void) {

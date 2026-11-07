@@ -13,6 +13,7 @@
 #include "../deckio.h"
 #include "../render.h"
 #include "../act.h"
+#include "../../../common/zkbd.h"
 
 static int fails, checks;
 #define ck(c, m) do { checks++; if (!(c)) { fails++; printf("FAIL %s:%d %s\n", __FILE__, __LINE__, m); } } while (0)
@@ -190,6 +191,75 @@ int main(void) {
 		player_press(&p, 210, 100 + 3 + rh + rh / 2, &took);
 		ck(act_find(D, 0, "pick")->value == 1 && !strcmp(spoke, "hi"), "a list: the row clicked, and its action");
 	}
+	// a list longer than its box: it scrolls
+	{
+		obj_t *l = act_find(D, 0, "pick");
+		int rh = render_list_row_h(D, l), rows, ty, th, x1 = l->x + l->w;
+		char items[400];
+		int k = 0;
+		for (int i = 0; i < 30; i++) k += snprintf(items + k, sizeof(items) - (size_t)k, "%s%s %02d", i ? "\n" : "",
+			i % 3 == 0 ? "apple" : i % 3 == 1 ? "berry" : "cherry", i);
+		obj_set_text(l, items, (uint32_t)k);
+		l->value = -1;
+		l->top = 0;
+		rows = render_list_rows(D, l);
+		ck(rows == (l->h - 2 * l->pad) / rh && rows < 30, "rows: as many as fit");
+		ck(render_list_hit(D, l, x1 - 2, l->y + 40) == -2, "the scroll bar down its right edge");
+		ck(render_list_hit(D, l, l->x + 10, l->y + l->pad + rh / 2) == 0, "the first row: item 0");
+		render_list_thumb(D, l, &ty, &th);
+		ck(ty == l->y + 1 && th >= 8 && th < l->h - 2, "the thumb at the top, a part of the track");
+		// the track below the thumb: a page down
+		player_press(&p, x1 - 3, ty + th + 4, &took);
+		ck(took && render_list_top(D, l) == rows && l->value == -1, "the track below the thumb: a page, nothing chosen");
+		ck(p.focus == l, "a click on a list gives it the keys");
+		player_release(&p, x1 - 3, ty + th + 4);
+		// a row now: the one shown there
+		player_press(&p, l->x + 10, l->y + l->pad + rh / 2, &took);
+		ck(l->value == rows, "a row of the scrolled list: its item");
+		// the wheel: three rows a notch, up for positive
+		ck(player_wheel(&p, l->x + 10, l->y + 10, -1, &redraw) && redraw && render_list_top(D, l) == rows + 3,
+			"the wheel down: three rows");
+		ck(player_wheel(&p, l->x + 10, l->y + 10, 50, &redraw) && render_list_top(D, l) == 0, "and up to the first");
+		ck(player_wheel(&p, l->x + 10, l->y + 10, 1, &redraw) && !redraw, "past the first: taken, nothing moves");
+		ck(!player_wheel(&p, 30, 30, -1, &redraw), "the wheel elsewhere is the app's");
+		// the thumb dragged to the bottom: the last rows
+		render_list_thumb(D, l, &ty, &th);
+		player_press(&p, x1 - 3, ty + 2, &took);
+		ck(p.scroll == l, "the thumb: held");
+		player_motion(&p, x1 - 3, l->y + l->h + 50);
+		ck(render_list_top(D, l) == 30 - rows, "dragged past the end: the last rows");
+		render_list_thumb(D, l, &ty, &th);
+		ck(ty + th == l->y + l->h - 1, "the thumb at the bottom");
+		player_motion(&p, x1 - 3, l->y + 2 + (l->h - th) / 2);
+		ck(render_list_top(D, l) > 3 && render_list_top(D, l) < 30 - rows - 3, "to the middle: the middle rows");
+		player_release(&p, x1 - 3, l->y + 2 + (l->h - th) / 2);
+		ck(!p.scroll, "let go");
+		// keys: Home, End, Down, a letter -- each chooses, and shows it
+		spoke[0] = 0;
+		ck(player_key(&p, Z_KEY_HOME, &redraw) && l->value == 0 && render_list_top(D, l) == 0, "Home: the first, shown");
+		ck(spoke[0], "a key that chooses runs the list's action");
+		player_key(&p, Z_KEY_END, &redraw);
+		ck(l->value == 29 && render_list_top(D, l) == 30 - rows, "End: the last, shown");
+		player_key(&p, Z_KEY_DOWN, &redraw);
+		ck(l->value == 29, "Down at the last: stays");
+		player_key(&p, 'b', &redraw);
+		ck(l->value == 1 && render_list_top(D, l) == 1, "a letter: the next starting with it, round to the top");
+		player_key(&p, 'B', &redraw);
+		ck(l->value == 4, "again: the one after, either case");
+		player_key(&p, Z_KEY_PAGEDOWN, &redraw);
+		ck(l->value == 4 + rows && l->value >= render_list_top(D, l) && l->value < render_list_top(D, l) + rows,
+			"Page Down: a page on, shown");
+		ck(!player_key(&p, Z_KEY_LEFT, &redraw), "keys a list has no use for are the app's");
+		// set-value from an action shows the item chosen
+		act_run(D, 0, "(set-value \"pick\" 27)");
+		ck(l->value == 27 && render_list_top(D, l) <= 27 && render_list_top(D, l) + rows > 27, "set-value: scrolled to it");
+		// fewer items than rows: no bar, no scrolling
+		obj_set_text(l, "red\ngreen\nblue", 14);
+		ck(render_list_top(D, l) == 0 && render_list_hit(D, l, x1 - 2, l->y + 10) != -2, "three items: no bar");
+		ck(!player_wheel(&p, l->x + 10, l->y + 10, -1, &redraw), "and the wheel is the app's");
+		l->value = 1;
+		player_key(&p, 0x1b, &redraw);
+	}
 	// a field: typing, UTF-8, Backspace, Tab to the next, Enter
 	obj_set_text(o, "", 0);
 	player_press(&p, 30, 210, &took);
@@ -205,6 +275,8 @@ int main(void) {
 	ck(p.focus && !strcmp(p.focus->name, "notes"), "Tab: the next field");
 	player_key(&p, 0x0d, &redraw);
 	ck(!strcmp(p.focus->text, "a\n"), "Enter in a tall field: a new line");
+	player_key(&p, '\t', &redraw);
+	ck(p.focus && !strcmp(p.focus->name, "pick"), "Tab: lists are stops too");
 	player_key(&p, '\t', &redraw);
 	at = 0;
 	player_key(&p, 0x0d, &redraw);

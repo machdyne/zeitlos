@@ -111,7 +111,7 @@ static z_msg_t msg(uint32_t from, uint32_t subject, uint32_t tag, z_obj_t o) {
 }
 
 static z_blob_t lblob[64];
-static uint8_t ldata[64][1200];
+static uint8_t ldata[64][4096];		// a listener's message, valid until acked (zport.h)
 static int nl;
 static z_msg_t data_msg(uint32_t from, uint32_t tag, const void *d, uint32_t n) {
 	int i = nl++ % 64;
@@ -137,6 +137,17 @@ static void rx(uint16_t sport, uint16_t dport, uint32_t seq, uint32_t ack, uint8
 	p[12] = 5 << 4; p[13] = flags; p[14] = 0x20;
 	if (n) memcpy(p + 20, d, n);
 	tcp_handle(PEER, p, (uint16_t)(20 + n));
+}
+
+/* A SYN saying the peer's MSS (an Ethernet peer's 1460). */
+static void rx_syn_mss(uint16_t sport, uint32_t seq, uint16_t mss) {
+	uint8_t p[24];
+	memset(p, 0, sizeof(p));
+	p[0] = (uint8_t)(sport >> 8); p[1] = (uint8_t)sport; p[2] = 0; p[3] = 23;
+	p[4] = (uint8_t)(seq >> 24); p[5] = (uint8_t)(seq >> 16); p[6] = (uint8_t)(seq >> 8); p[7] = (uint8_t)seq;
+	p[12] = 6 << 4; p[13] = TCP_FLAG_SYN; p[14] = 0x20;
+	p[20] = 2; p[21] = 4; p[22] = (uint8_t)(mss >> 8); p[23] = (uint8_t)mss;
+	tcp_handle(PEER, p, sizeof(p));
 }
 
 /* The listener acks everything the relay has sent it, as netserve does,
@@ -220,20 +231,21 @@ int main(void) {
 	mark = nmo;
 	m = data_msg(OWNER, 77, "login: ", 7);
 	CK(relay_msg(&m), "DATA from the listener handled");
-	CK(mfind(Z_PORT_DATA_ACK, mark) >= 0, "and acked");
+	CK(mfind(Z_PORT_DATA_ACK, mark) < 0, "held, not acked, until it is in a segment");
 	relay_poll();
 	CK(nseg >= 1 && segs[nseg - 1].len == 7 && !memcmp(segs[nseg - 1].data, "login: ", 7),
 		"sent to the peer");
+	CK(mfind(Z_PORT_DATA_ACK, mark) >= 0, "and acked then");
 	rx(4000, 23, 106, ours + 7, TCP_FLAG_ACK, NULL, 0);
 
-	/* -- backpressure: more than tx[] holds -- */
+	/* -- backpressure: messages held until TCP takes them -- */
 	mark = nmo;
 	uint8_t big[600];
 	memset(big, 'q', sizeof(big));
 	for (int i = 0; i < 3; i++) { m = data_msg(OWNER, 77, big, sizeof(big)); relay_msg(&m); }
 	int acks = 0;
 	for (int i = mark; i < nmo; i++) if (mo[i].subject == Z_PORT_DATA_ACK) acks++;
-	CK(acks == 1, "only what fits is acked; the rest held (%d)", acks);
+	CK(acks == 0, "held, none acked before they are sent (%d)", acks);
 	uint32_t sent = 0, seq = ours + 7;
 	/* Segments leave from relay_poll() and, as ACKs open the window,
 	 * from inside rx(): read them all with a cursor. */
@@ -272,7 +284,63 @@ int main(void) {
 		int a = 0;
 		for (int i = mark; i < nmo; i++) if (mo[i].subject == Z_PORT_DATA_ACK) a++;
 		CK(gl == sizeof(huge) && !memcmp(got, huge, sizeof(huge)) && a == 1,
-			"a 2600-byte message (tx[] is 1024) goes out whole, acked once (%u, %d)", gl, a);
+			"a 2600-byte message (five segments of 536) goes out whole, acked once (%u, %d)", gl, a);
+	}
+
+	/* -- full-size segments: a peer with an MSS of 1460, and messages
+	 *    larger and smaller than one -- gathered straight from them -- */
+	{
+		nseg = 0;
+		rx_syn_mss(4100, 5000, 1460);
+		uint32_t s2 = segs[nseg - 1].seq + 1;
+		int mk = nmo;
+		rx(4100, 23, 5001, s2, TCP_FLAG_ACK, NULL, 0);
+		int cc = mfind(Z_PORT_CONNECT, mk);
+		CK(cc >= 0, "a second connection offered");
+		uint32_t rid2 = mo[cc].tag;
+		z_msg_t mm = msg(OWNER, Z_PORT_CONNECTED, rid2, z_obj_uint32(88));
+		relay_msg(&mm);
+		relay_poll();
+		CK(tcp_mss(relays[rid2 - 1].tcp) == 1460, "the peer's MSS taken: 1460");
+
+		static uint8_t want[5100], got2[6000];
+		for (int i = 0; i < (int)sizeof(want); i++) want[i] = (uint8_t)(i * 13 + 5);
+		static const uint32_t sizes[] = { 3000, 100, 2000 };
+		uint32_t at = 0;
+		mk = nmo;
+		for (int i = 0; i < 3; i++) {
+			mm = data_msg(OWNER, 88, want + at, sizes[i]);
+			relay_msg(&mm);
+			at += sizes[i];
+		}
+		uint32_t gl = 0, sq = s2;
+		int full = 0, short_ = 0, cur2 = 0;
+		nseg = 0;
+		for (int round = 0; round < 30; round++) {
+			relay_poll();
+			for (int i = cur2; i < nseg; i++) if (segs[i].len) {
+				memcpy(got2 + gl, segs[i].data, segs[i].len);
+				gl += segs[i].len;
+				if (segs[i].len == 1460) full++; else short_++;
+				sq = segs[i].seq + segs[i].len;
+			}
+			cur2 = nseg;
+			rx(4100, 23, 5001, sq, TCP_FLAG_ACK, NULL, 0);
+		}
+		int a2 = 0;
+		for (int i = mk; i < nmo; i++) if (mo[i].subject == Z_PORT_DATA_ACK && mo[i].tag == 88) a2++;
+		{ int bad = -1; for (int i = 0; i < 5100 && i < (int)gl; i++) if (got2[i] != want[i]) { bad = i; break; }
+		CK(gl == 5100 && bad < 0, "5100 bytes in three messages, in order (%u, first wrong at %d)", gl, bad); }
+		CK(full == 3 && short_ == 1, "as three full segments and the rest: 1460 1460 1460 720 (%d full, %d short)",
+			full, short_);
+		CK(a2 == 3, "each message acked once (%d)", a2);
+		// gone again, so the counts below are as they were: the peer resets
+		int before = relay_count();
+		rx(4100, 23, 5001, sq, TCP_FLAG_RST, NULL, 0);
+		relay_poll();
+		listener_acks_all();
+		relay_poll();
+		CK(relay_count() == before - 1, "and gone again (%d)", relay_count());
 	}
 
 	/* -- peer -> listener, with the listener not acking: the window closes -- */

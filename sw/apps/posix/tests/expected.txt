@@ -198,15 +198,15 @@ posix -- see docs/posix.md
   reboot   reconfigure the FPGA, after syncing open files
   jump     boot the gateware at a flash address (hex)
   mkdir    make directories
-  find     list a tree  (find [DIR] -name '*.c' -type f|d)
+  find     list a tree  (find [DIR] -name '*.c' -type f|d [-exec CMD {} \;])
   diff     differences between two files, as diff -u
   unzip    unzip [-l] [-o] A.zip [-d DIR]
   tar      tar -xf|-tf A.tar|.tgz|.tar.gz [-C DIR] [-o]
   wc       count lines, words and characters
-  head     first lines of a file  (head -5 f)
-  tail     last lines of a file   (tail -5 f)
-  grep     lines containing text  (fixed string)
-  sort     sort lines
+  head     first lines of a file  (head -5 f, head -n 5 f)
+  tail     last lines of a file   (tail -5 f, tail -n 5 f)
+  grep     lines matching a pattern  (grep -i -n 'a.*b' f; -E -F -v -c -l -q)
+  sort     sort lines  (-n numbers, -r reverse, -u once, -f any case, -k N, -t C)
   uniq     drop adjacent duplicate lines
   sed      edit lines  (sed 's/old/new/g' f, -n, -E, -i)
   tr       translate or delete characters  (tr a-z A-Z, -d, -s)
@@ -216,6 +216,10 @@ posix -- see docs/posix.md
   xxd      hex dump  (xxd [-s OFF] [-l LEN] f)
   date     date and time  (date, date -u, date +%F)
   which    what a name runs: a builtin or a program
+  seq      numbers in a row  (seq 5, seq 2 2 10, -s SEP)
+  rev      each line backwards
+  basename the last part of a path  (basename /a/b.txt .txt)
+  dirname  a path less its last part
   rmdir    remove an empty directory
   df       filesystem usage
   run      run a Zeitlos program, passing arguments

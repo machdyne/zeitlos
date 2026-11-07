@@ -1,0 +1,4 @@
+# sw/common/zbrowse.c on the host: net's DNS-SD answer into printers.
+all:
+	cc -std=gnu99 -g -Wall -Wno-int-to-pointer-cast -fsanitize=address,undefined -o /tmp/test_zbrowse test_zbrowse.c
+	/tmp/test_zbrowse

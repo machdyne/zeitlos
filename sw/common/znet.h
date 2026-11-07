@@ -240,7 +240,26 @@ typedef struct {
 // time, but they no longer exclude each other -- tcp.c has a pool
 // (docs/networking.md, "Connections").
 
+// -- finding services: DNS-SD over multicast DNS (sw/apps/net/mdns.c) --
+//
+// NUMBERED 321/322: 318-320 are znfsproto.h's.
+//
+// requester -> net: Z_STR, one or more service types separated by
+// spaces ("_ipp._tcp _pdl-datastream._tcp"). One search at a time.
+//
+// net -> requester, about two seconds later (same tag): Z_MAP with
+// "ok" (Z_UINT32). If ok, "found" (Z_STR): a line per instance,
+//
+//   SERVICE \t NAME \t A.B.C.D \t PORT [\t TXT-STRING]... \n
+//
+// ("_ipp._tcp\tCanon MG3600 series\t10.0.0.5\t631\trp=ipp/print\tty=...")
+// -- possibly none. Only the TXT strings a list of printers uses are
+// kept: rp=, ty=, product=, note= (net's RAM, mdns.c). If not ok, "error" (Z_STR). sw/common/zbrowse.h
+// sends this and reads the answer.
+#define Z_NET_BROWSE             (Z_SUBJ_NET + 21)
+#define Z_NET_BROWSE_REPLY       (Z_SUBJ_NET + 22)
+
 // Still inside the block zsubjects.h gives this protocol:
-Z_SUBJECTS_IN(Z_SUBJ_NET, Z_NET_EOF);
+Z_SUBJECTS_IN(Z_SUBJ_NET, Z_NET_BROWSE_REPLY);
 
 #endif

@@ -177,6 +177,21 @@ bool ip_send_built(uint32_t dst_ip, uint8_t protocol, uint16_t len) {
 		return eth_send_built(bcast_mac, ETHERTYPE_IPV4, total_len);
 	}
 
+	// multicast (224.0.0.0/4): no ARP either -- the MAC address is the
+	// group's, 01:00:5e and the address's low 23 bits (RFC 1112). Only
+	// mdns.c sends any, to 224.0.0.251, which RFC 6762 wants with a TTL
+	// of 255 so a responder can tell it came from this link.
+	if ((dst_ip >> 28) == 0xE) {
+		uint8_t mc[6] = { 0x01, 0x00, 0x5E, (uint8_t)((dst_ip >> 16) & 0x7F),
+			(uint8_t)(dst_ip >> 8), (uint8_t)dst_ip };
+		pkt[8] = 255;
+		pkt[10] = 0; pkt[11] = 0;
+		csum = ip_checksum(pkt, IP_HDR_LEN);
+		pkt[10] = (csum >> 8) & 0xFF;
+		pkt[11] = csum & 0xFF;
+		return eth_send_built(mc, ETHERTYPE_IPV4, total_len);
+	}
+
 	uint32_t next_hop = ip_is_local(dst_ip) ? dst_ip : our_gateway;
 
 	uint8_t dst_mac[6];

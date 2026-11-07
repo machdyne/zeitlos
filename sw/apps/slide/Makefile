@@ -34,7 +34,7 @@ MS_CFLAGS = -DLIX -DMS_STATIC_HEAP $(MS_SIZE_CFLAGS) -I../../common/ms_platform 
 
 OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o zwidget.o zspeak.o \
 	zfsapp.o zflist.o zdialog.o zedit.o ztype.o zimg.o zinflate.o \
-	zcanvas.o zcfont.o zpage.o zpaper.o zprint.o zcfg.o zco.o zimgjob.o zsvg.o zpsvg.o \
+	zcanvas.o zcfont.o zpage.o zpaper.o zprint.o zbrowse.o zcfg.o zco.o zimgjob.o zsvg.o zpsvg.o \
 	zport.o zdns.o zstream.o zcolor.o zrtc.o zrng.o zgpio.o zi2c.o zi2cx.o zspi.o zuart.o \
 	ms.o zapi.o zapi_doc.o \
 	zpool.o deck.o deckio.o render.o printjob.o edit.o act.o script.o show.o slide.o
@@ -124,7 +124,7 @@ render: tests/patterns.c
 		tests/render_ui.c tests/zapi_stubs.c /tmp/slide_ms/ms_render.o $(COMMON)/zpool.c deck.c deckio.c render.c printjob.c edit.c act.c script.c show.c $(COMMON)/zsvg.c $(COMMON)/zpsvg.c \
 		$(COMMON)/zwin.c $(COMMON)/zwidget.c $(COMMON)/zfont_data.c $(COMMON)/zobj.c \
 		$(COMMON)/zeitlos.c $(COMMON)/zedit.c $(COMMON)/zpage.c $(COMMON)/zpaper.c $(COMMON)/zcanvas.c $(COMMON)/zco.c $(COMMON)/zimgjob.c \
-		$(COMMON)/zcfont.c $(COMMON)/zimg.c $(COMMON)/zinflate.c $(COMMON)/zspeak.c $(COMMON)/zprint.c -lm
+		$(COMMON)/zcfont.c $(COMMON)/zimg.c $(COMMON)/zinflate.c $(COMMON)/zspeak.c $(COMMON)/zprint.c $(COMMON)/zbrowse.c -lm
 	/tmp/slide_render_ui ../../..
 	/tmp/slide_render_ui ../../.. bench
 	/tmp/slide_render_ui ../../.. appstart

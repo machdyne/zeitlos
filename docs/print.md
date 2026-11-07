@@ -12,12 +12,19 @@ network, or to a PDF or PostScript file. `slide`
 ```
 print                    ask the printer in zeitlos.cfg what it takes
 print ipp://10.0.0.5/ipp/print    ... or that one
+print find               list the printers on this network
 print -j JOB -c PID:SERIAL        (how apps start it)
 ```
 
 ## Using it
 
-Set the printer once, in `zeitlos.cfg` (or `settings`):
+**Nothing set up?** Print anyway: the [print dialog](#the-print-dialog)
+looks for printers on the network while it is open, and the ones it
+finds join its **Print to** row a second or two later. `print find`
+lists them with their addresses.
+
+To have one printer offered first every time, set it once, in
+`zeitlos.cfg` (or `settings`):
 
 ```
 apps.print.printer: ipp://192.168.1.50/ipp/print
@@ -44,7 +51,7 @@ One dialog, the same in every app that uses it:
 
 | Row | Choices |
 |---|---|
-| Print to | the printer in `zeitlos.cfg`, a PDF file, a PostScript file |
+| Print to | the printer in `zeitlos.cfg`, the printers found on the network, a PDF file, a PostScript file |
 | Pages | all, this page, the selection (when there is one), or a range typed in: `3`, `2-5` |
 | Copies | 1 to 99 |
 | Paper | the default (`apps.print.paper`), or Letter, A4, Legal, A5, A6, 4x6, 5x7, 3x5 |
@@ -102,9 +109,11 @@ from `read`, once `read` prints.
 | `socket://ADDRESS` | a printer that takes **PostScript** on port 9100 ("raw", "JetDirect"): a PostScript laser such as a LaserJet |
 | `ADDRESS` alone | the same as `ipp://ADDRESS/ipp/print` |
 
-ADDRESS is an IP address or a name DNS can find. A printer shows its
-address on its own panel (a PIXMA: *Settings > LAN settings > Confirm
-LAN settings*), and the router lists it among its clients.
+ADDRESS is an IP address or a name DNS can find. `print find` lists
+the printers on the network with theirs ([Finding
+printers](#finding-printers)); a printer also shows its address on its
+own panel (a PIXMA: *Settings > LAN settings > Confirm LAN settings*),
+and the router lists it among its clients.
 
 **No drivers.** A driverless printer says what it takes when asked
 (*Get-Printer-Attributes*), and print makes that: there is nothing to
@@ -167,10 +176,37 @@ as patterns, at their size on the screen (one bit a card unit).
 the window says *Waiting: the printer is busy* and tries again every
 five seconds, for up to half an hour, or until **Cancel**.
 
+### Finding printers
+
+The dialog asks `net` for printers as it opens, by DNS-SD over
+multicast DNS -- what "Bonjour" and "AirPrint" printers announce
+themselves with ([networking.md](networking.md#finding-services)). It
+finds printers that speak IPP (`_ipp._tcp`) and PostScript printers on
+port 9100 (`_pdl-datastream._tcp`), each by the model name it gives
+(*Canon MG3600 series*), and a printer offered both ways once, by IPP.
+The printer in `zeitlos.cfg` is not listed a second time.
+
+`print find` shows the same list with each printer's address, the one
+to put in `apps.print.printer`:
+
+```
+Printers on this network
+Found 2 printers -- in the print dialog's Print to
+Canon MG3600 series
+  ipp://10.0.0.5/ipp/print
+HP LaserJet 400
+  socket://10.0.0.11
+```
+
+`print` alone does this when no printer is set up.
+
+What is not found: a printer on another network (mDNS does not cross a
+router -- type its address), one that offers only IPPS (IPP over TLS,
+which print does not speak), and one switched off or asleep past
+answering.
+
 ## Not yet
 
-- **Discovery**: a printer's address is typed in; finding printers by
-  DNS-SD (Bonjour) needs multicast DNS in `net`.
 - **IPPS** (IPP over TLS): plain IPP only. The TLS in `web` could serve.
 - **URF** (AirPrint's raster), for a printer that takes neither PWG
   nor PDF; **PCL**, for a laser without PostScript.
@@ -207,7 +243,7 @@ if (z_print_begin(&pr, "My document")) {
 }
 ```
 
-and `zprint.o zpaper.o` in the app's OBJS. That is all an app needs:
+and `zprint.o zbrowse.o zpaper.o` in the app's OBJS. That is all an app needs:
 print shows its own window, and its progress and outcome come back as
 `Z_PRINT_PROGRESS` (`tag` 0..1000) and `Z_PRINT_DONE` (`tag` 0 or a
 `Z_PRINT_E_*`), for an app that wants them (`z_print_msg()`). The
@@ -237,6 +273,15 @@ if (z_dialog_print(&dlg_ctx, "Print", folder, name, &o) &&
 `o.pages` is `Z_PRINT_PAGES_SELECTION` when the selection is to be
 printed: that is the app's to act on (it sends only those pages, or
 that text); the other choices are print's.
+
+**Finding printers** is the dialog's own doing: `z_print_opts_init()`
+sets `o.finder`, and the dialog asks `net` as it opens and reads the
+answer among its window's messages. A printer chosen from those lands
+in `o.address`, which `z_print_opts_job()` sends as `dest`; `o.dest`
+is `Z_PRINT_TO_PRINTER` either way. This is why an app that prints
+links `zbrowse.o` beside `zprint.o` (`sw/common/zbrowse.h`; the search
+itself is `sw/apps/net/mdns.c`). Leave `o.finder` NULL to offer only
+the printer in `zeitlos.cfg`.
 
 **Text, without pages.** `z_print_text_job(&pr, path)` names a UTF-8
 file instead of drawing pages; print lays it out ([Printing

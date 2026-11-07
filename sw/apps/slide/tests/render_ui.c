@@ -108,6 +108,9 @@ bool z_dialog_save(const z_dialog_ctx_t *c, const char *d, const char *s, char *
 	(void)c; (void)d; (void)s; (void)o; (void)n; return false; }
 void z_dialog_help(const z_dialog_ctx_t *c, const char *t, const char *x, const char *d) {
 	(void)c; (void)t; (void)x; (void)d; }
+bool z_dialog_print(const z_dialog_ctx_t *c, const char *t, const char *d, const char *b, z_print_opts_t *o) {
+	(void)c; (void)t; (void)d; (void)b; (void)o; return false; }
+bool z_cfg_get(const char *k, char *o, size_t n) { (void)k; if (n) o[0] = 0; return false; }
 static int confirm_answer;		// what the next question is answered (0: Cancel)
 int z_dialog_confirm(const z_dialog_ctx_t *c, const char *t, const char *m, int b) {
 	(void)c; (void)t; (void)m; (void)b; return confirm_answer; }
@@ -158,7 +161,7 @@ static const char *deck_text =
 	"  (radio \"tea\" (box 100 146 120 18) (font \"sans\" 14) (align left middle) (text \"Tea\") (value 1))\n"
 	"  (radio \"cof\" (box 100 168 120 18) (font \"sans\" 14) (align left middle) (text \"Coffee\") (value 0))\n"
 	"  (slider \"vol\" (box 100 200 200 18) (value 70) (range 0 100))\n"
-	"  (list \"col\" (box 330 84 140 100) (font \"sans\" 14) (pad 3) (text \"Red\\nGreen\\nBlue\\nYellow\") (value 1))\n"
+	"  (list \"col\" (box 330 84 140 100) (font \"sans\" 14) (pad 3) (text \"Red\\nGreen\\nBlue\\nYellow\\nOrange\\nPurple\\nBlack\\nWhite\") (value 1))\n"
 	"  (button \"ok\" (box 330 240 90 26) (radius 6) (font \"sans\" 15) (align center middle) (text \"OK\") (action \"(go 'first)\"))\n"
 	"  (button \"no\" (box 220 240 90 26) (radius 6) (font \"sans\" 15) (align center middle) (text \"Cancel\"))))\n";
 

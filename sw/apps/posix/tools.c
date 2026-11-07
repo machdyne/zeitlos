@@ -59,6 +59,9 @@ static char find_path[PX_PATH_MAX];
 typedef struct {
     const char *name;           /* -name pattern, or NULL */
     int type;                   /* 0 any, 'f' or 'd' */
+    char **exec;                /* -exec's words, {} where the path goes; NULL: print */
+    int nexec;
+    bool exec_failed;
     int depth;                  /* frames in use */
     int top;                    /* arena bytes in use */
 } find_t;
@@ -72,7 +75,17 @@ static void find_emit(px_shell_t *sh, find_t *f, const char *path, bool dir) {
     if (f->type == 'f' && dir) return;
     if (f->type == 'd' && !dir) return;
     if (f->name && !z_glob_match(f->name, base_of(path))) return;
-    px_printf(sh, "%s\n", path);
+    if (!f->exec) { px_printf(sh, "%s\n", path); return; }
+
+    /* -exec: the command once for this path, {} replaced by it. The
+     * path is copied: the command may not touch find_path, but it is
+     * find's, and a builtin that resolves a path writes its own. */
+    static char here[PX_PATH_MAX];
+    char *argv[PX_MAX_ARGS];
+    snprintf(here, sizeof(here), "%s", path);
+    for (int i = 0; i < f->nexec; i++)
+        argv[i] = !strcmp(f->exec[i], "{}") ? here : f->exec[i];
+    if (!px_run_builtin(sh, f->nexec, argv)) f->exec_failed = true;
 }
 
 /* Lists find_path into the arena, sorted, as a new frame. Each name is
@@ -214,13 +227,25 @@ void px_bi_find(px_shell_t *sh, int argc, char **argv) {
     while (first + ndirs < argc && argv[first + ndirs][0] != '-') ndirs++;
 
     for (int i = first + ndirs; i < argc; i++) {
-        if (!strcmp(argv[i], "-name") && i + 1 < argc) {
+        if (!strcmp(argv[i], "-exec") && i + 1 < argc) {
+            /* up to a ; (typed \; or ';' -- the shell has unquoted it) */
+            int j = i + 1;
+            while (j < argc && strcmp(argv[j], ";")) j++;
+            if (j == argc || j == i + 1) {
+                px_puts(sh, "find: -exec needs a command and a ; to end it -- find . -exec wc {} \\;\n");
+                sh->status = 1;
+                return;
+            }
+            f.exec = argv + i + 1;
+            f.nexec = j - i - 1;
+            i = j;
+        } else if (!strcmp(argv[i], "-name") && i + 1 < argc) {
             f.name = argv[++i];
         } else if (!strcmp(argv[i], "-type") && i + 1 < argc &&
                    (!strcmp(argv[i + 1], "f") || !strcmp(argv[i + 1], "d"))) {
             f.type = argv[++i][0];
         } else {
-            px_puts(sh, "usage: find [DIR...] [-name PATTERN] [-type f|d]\n");
+            px_puts(sh, "usage: find [DIR...] [-name PATTERN] [-type f|d] [-exec CMD {} \\;]\n");
             sh->status = 1;
             return;
         }
@@ -228,10 +253,11 @@ void px_bi_find(px_shell_t *sh, int argc, char **argv) {
 
     if (!ndirs) {
         if (!find_walk(sh, &f, ".")) sh->status = 1;
-        return;
+    } else {
+        for (int i = 0; i < ndirs && !px_intr(sh); i++)
+            if (!find_walk(sh, &f, argv[first + i])) sh->status = 1;
     }
-    for (int i = 0; i < ndirs && !px_intr(sh); i++)
-        if (!find_walk(sh, &f, argv[first + i])) sh->status = 1;
+    if (f.exec_failed) sh->status = 1;
 }
 
 /* ------------------------------------------------------------------ */

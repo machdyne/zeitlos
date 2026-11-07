@@ -237,6 +237,14 @@
 `define CPU_MUL_FAST
 `define CPU_DIV
 
+// `CPU_ROT: picorv32's rotate instructions, RISC-V Zbb's ror, rol and
+// rori -- a rotator beside the barrel shifter, about 100-200 LUT4.
+// ChaCha20 (ssh's chacha20-poly1305, TLS) is a quarter rotates: each
+// one is three instructions without them. Software asks
+// Z_FEATURE3_CPU_ROT before using them, so a binary runs on bitstreams
+// with and without. Per board (Lakritz, below); not on zeitlos32 yet.
+// docs/chacha.md.
+
 // CPU core selection. Undefined (the default) means picorv32, exactly
 // as before. Defining this selects rtl/cpu/zeitlos32 instead -- an
 // experimental in-house RV32IM core that implements the same
@@ -593,6 +601,8 @@
 `elsif BOARD_LAKRITZ
 
 `define FPGA_ECP5
+// ror, rol, rori for ChaCha20 (docs/chacha.md): the first board to have them
+`define CPU_ROT
 // PROGRAMN is wired to user pin M8 (boards/*.lpf): rtl/socctl.v's
 // RECONFIG, `reboot`, docs/zboot.md. Confirmed for Lakritz, Obst and
 // Mozart ML1 and ML2; boards whose site is not confirmed do not define it.

@@ -159,6 +159,7 @@ bool px_chdir(const char *path, char *err, int errlen) {
  * rather than teaching every command about files.
  */
 static px_fd_t fds[PX_MAX_FD];
+int px_fd_owner;
 
 void px_fd_init(void) {
     memset(fds, 0, sizeof(fds));
@@ -198,6 +199,7 @@ int px_open(const char *path, int write, char *err, int errlen) {
 
     fds[fd].kind = PX_FD_FILE;
     fds[fd].handle = h;
+    fds[fd].owner = px_fd_owner;
     return fd;
 }
 
@@ -244,6 +246,7 @@ int px_open_append(const char *path, int append, char *err, int errlen) {
 
     fds[fd].kind = PX_FD_FILE;
     fds[fd].handle = h;
+    fds[fd].owner = px_fd_owner;
     return fd;
 }
 
@@ -256,5 +259,6 @@ void px_close(int fd) {
 }
 
 void px_close_all_files(void) {
-    for (int fd = 3; fd < PX_MAX_FD; fd++) px_close(fd);
+    for (int fd = 3; fd < PX_MAX_FD; fd++)
+        if (fds[fd].owner == px_fd_owner) px_close(fd);
 }

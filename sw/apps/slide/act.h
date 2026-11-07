@@ -135,6 +135,8 @@ typedef struct {
 	obj_t	*pressed;		// a button or check held down
 	obj_t	*focus;			// the field being typed into
 	obj_t	*drag;			// a slider being dragged
+	obj_t	*scroll;		// a list whose scroll bar's thumb is being dragged
+	int		grab;			// ... held this far below the thumb's top, units
 	bool	inside;			// the pointer is still over `pressed`
 } player_t;
 
@@ -148,9 +150,17 @@ bool player_press(player_t *p, int x, int y, bool *took);
 bool player_motion(player_t *p, int x, int y);
 bool player_release(player_t *p, int x, int y);
 
-// A key for the field being typed into. False if no field has the
-// focus (the key is the app's); *redraw when the card needs drawing.
+// A key for the field being typed into, or the list a click gave the
+// keyboard to (Up, Down, Page Up/Down, Home, End, a letter: the next
+// item starting with it). False if neither has the focus, or the key
+// is not one of those (the key is the app's); *redraw when the card
+// needs drawing.
 bool player_key(player_t *p, uint32_t key, bool *redraw);
+
+// The wheel over (x, y) units: a list there that scrolls takes it,
+// three rows a notch (positive notches: up, as wm sends them). False if
+// nothing took it (the app's: another card); *redraw as above.
+bool player_wheel(player_t *p, int x, int y, int notches, bool *redraw);
 
 // Forgets the press and the focus (another card, leaving).
 void player_reset(player_t *p);

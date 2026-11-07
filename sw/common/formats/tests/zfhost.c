@@ -7,6 +7,7 @@
  *   zfhost -d IN               print the detected type
  *   zfhost -c N IN OUT         cancel after N polls (a test of cancelling)
  *   zfhost -m BYTES ...        zf_heap size (default 1MB)
+ *   zfhost -p DIR OUT          pack a folder: OUT.zip, .tar or .tar.gz/.tgz
  *
  * Built and driven by tests/run_tests.py, which makes fixtures with
  * python-docx, openpyxl, odfpy and ebooklib, converts them both ways,
@@ -18,6 +19,8 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <errno.h>
+#include <dirent.h>
+#include <time.h>
 
 #include "formats/zf.h"
 
@@ -72,17 +75,78 @@ static bool d_mkdir(zf_dir_t *d, const char *rel) {
 	return !mkdir(p, 0755) || errno == EEXIST;
 }
 
+// -- packing: the folder walked here, as convert walks it on the board --
+
+static zf_pack_t pk;
+static int pack_err;
+
+static int by_name(const struct dirent **a, const struct dirent **b) { return strcmp((*a)->d_name, (*b)->d_name); }
+
+static void fat_date(time_t t, uint16_t *d, uint16_t *tm) {
+	struct tm g;
+	gmtime_r(&t, &g);
+	*d = (uint16_t)(((g.tm_year - 80) << 9) | ((g.tm_mon + 1) << 5) | g.tm_mday);
+	*tm = (uint16_t)((g.tm_hour << 11) | (g.tm_min << 5) | (g.tm_sec / 2));
+}
+
+static uint32_t tree_size(const char *path) {
+	struct stat st;
+	if (stat(path, &st)) return 0;
+	if (!S_ISDIR(st.st_mode)) return (uint32_t)st.st_size;
+	struct dirent **e;
+	int n = scandir(path, &e, NULL, by_name);
+	uint32_t t = 0;
+	for (int i = 0; i < n; i++) {
+		char p[2048];
+		if (strcmp(e[i]->d_name, ".") && strcmp(e[i]->d_name, "..")) {
+			snprintf(p, sizeof p, "%s/%s", path, e[i]->d_name);
+			t += tree_size(p);
+		}
+		free(e[i]);
+	}
+	free(e);
+	return t;
+}
+
+static void pack_tree(const char *path, const char *rel) {
+	struct stat st;
+	uint16_t d, t;
+	if (pack_err || stat(path, &st)) return;
+	fat_date(st.st_mtime, &d, &t);
+	if (!S_ISDIR(st.st_mode)) {
+		zf_io_t in;
+		if (!io_open(&in, path, false)) { pack_err = ZF_E_IO; return; }
+		pack_err = zf_pack_add(&pk, rel, false, in.size, d, t, &in);
+		fclose((FILE *)in.h);
+		return;
+	}
+	pack_err = zf_pack_add(&pk, rel, true, 0, d, t, NULL);
+	struct dirent **e;
+	int n = scandir(path, &e, NULL, by_name);
+	for (int i = 0; i < n; i++) {
+		if (strcmp(e[i]->d_name, ".") && strcmp(e[i]->d_name, "..")) {
+			char p[2048], r[2048];
+			snprintf(p, sizeof p, "%s/%s", path, e[i]->d_name);
+			snprintf(r, sizeof r, "%s/%s", rel, e[i]->d_name);
+			pack_tree(p, r);
+		}
+		free(e[i]);
+	}
+	free(e);
+}
+
 static long cancel_after = -1, polls;
 static bool cancel_poll(void) { polls++; return cancel_after >= 0 && polls > cancel_after; }
 
 int main(int argc, char **argv) {
 	const char *to_name = NULL;
-	bool extract = false, detect = false;
+	bool extract = false, detect = false, pack = false;
 	uint32_t heap = 1024 * 1024;
 	int i = 1;
 	for (; i < argc && argv[i][0] == '-' && argv[i][1]; i++) {
 		if (!strcmp(argv[i], "-t") && i + 1 < argc) to_name = argv[++i];
 		else if (!strcmp(argv[i], "-x")) extract = true;
+		else if (!strcmp(argv[i], "-p")) pack = true;
 		else if (!strcmp(argv[i], "-d")) detect = true;
 		else if (!strcmp(argv[i], "-c") && i + 1 < argc) cancel_after = atol(argv[++i]);
 		else if (!strcmp(argv[i], "-m") && i + 1 < argc) heap = (uint32_t)atol(argv[++i]);
@@ -92,6 +156,24 @@ int main(int argc, char **argv) {
 	zf_heap = malloc(heap);
 	zf_heap_size = heap;
 	zf_cancel_poll = cancel_poll;
+
+	if (pack) {
+		if (i + 1 >= argc) { fprintf(stderr, "no output\n"); return 2; }
+		zf_type_t to = zf_detect(argv[i + 1], NULL);
+		zf_io_t out;
+		if (!io_open(&out, argv[i + 1], true)) { perror(argv[i + 1]); return 2; }
+		char top[1024];
+		snprintf(top, sizeof top, "%s", argv[i]);
+		size_t tl = strlen(top);
+		while (tl > 1 && top[tl - 1] == '/') top[--tl] = 0;
+		const char *base = strrchr(top, '/') ? strrchr(top, '/') + 1 : top;
+		int r = zf_pack_begin(&pk, &out, to, tree_size(top));
+		if (!r) { pack_tree(top, base); r = pack_err; }
+		if (!r) r = zf_pack_end(&pk);
+		fclose((FILE *)out.h);
+		if (r < 0) { fprintf(stderr, "zfhost: %s (%d)\n", zf_strerror(r), r); return 1; }
+		return 0;
+	}
 
 	zf_io_t in;
 	if (!io_open(&in, argv[i], false)) { perror(argv[i]); return 2; }

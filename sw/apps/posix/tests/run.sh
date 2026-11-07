@@ -138,6 +138,11 @@ fi
 # text.txt asserts the answers; gen_text.py adds cases whose expected
 # output is GNU sed's, tr's and cut's on the same files. A fixed clock
 # and zone for date (host_fs.c's px_clock_now()).
+# sort's fixtures
+printf '10\n2\n-3\n100\n0\n10.5\n' > "$work/nums.txt"
+printf 'a:2\nb:3\nc:1\n' > "$work/fields.txt"
+printf 'b\na\nb\na\n' > "$work/dup.txt"
+printf 'cherry\nBanana\napple\n' > "$work/mixed.txt"
 python3 "$here/gen_text.py" "$work" "$work/gen_text_cases.txt" || exit 1
 if [ -x "$here/px_case_test" ]; then
     echo
@@ -187,6 +192,12 @@ os.makedirs(os.path.join(w, "bigdir"), exist_ok=True)
 for k in range(4):
     open(os.path.join(w, "bigdir", "f%d.txt" % k), "w").write("\n".join(lines[:8000]) + "\n")
 PY
+# -- streaming pipes (sh.c) --
+if [ -x "$here/px_case_test" ]; then
+    echo
+    PX_STACK_FILE="$work/stack.txt" "$here/px_case_test" "$work" "$here/pipes.txt" || exit 1
+fi
+
 if [ -x "$here/px_main_test" ]; then
     echo
     "$here/px_main_test" "$work" || exit 1

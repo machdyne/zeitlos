@@ -31,9 +31,12 @@
 typedef void (*chunk_fn)(px_shell_t *sh, const char *p, int n, void *ctx);
 
 static bool feed_bytes(px_shell_t *sh, const char *path, chunk_fn fn, void *ctx) {
-	static char buf[1024];
+	char *buf = px_stage_chunk_buf();		// the running stage's (sh.c)
+	px_feed_begin();
 	if (!path) {
-		if (sh->in && sh->in_len) fn(sh, sh->in, sh->in_len, ctx);
+		const char *p;
+		int n;
+		while (!px_feed_is_enough() && !px_intr(sh) && (n = px_in_next(sh, &p)) > 0) fn(sh, p, n, ctx);
 		return true;
 	}
 	char abs[PX_PATH_MAX];
@@ -41,8 +44,8 @@ static bool feed_bytes(px_shell_t *sh, const char *path, chunk_fn fn, void *ctx)
 	int h = fs_open_read(abs);
 	if (h < 0) return false;
 	for (;;) {
-		int got = fs_read_chunk(h, buf, (int)sizeof(buf));
-		if (got <= 0 || px_intr(sh)) break;
+		int got = fs_read_chunk(h, buf, 1024);
+		if (got <= 0 || px_feed_is_enough() || px_intr(sh)) break;
 		fn(sh, buf, got, ctx);
 	}
 	fs_close_handle(h);
@@ -129,11 +132,12 @@ static const char *sed_part(const char *p, char delim, char *out, int cap, int *
 	return p + 1;
 }
 
-static bool sed_regex(const char *pat, int n, int *idx) {
+static bool sed_regex(const char *pat, int n, int *idx, bool icase) {
 	if (sed_nrx >= SED_RX) { snprintf(sed_err, sizeof(sed_err), "too many regular expressions"); return false; }
 	char e[80];
 	if (!n) { snprintf(sed_err, sizeof(sed_err), "an empty regular expression"); return false; }
-	if (!rx_compile(&sed_rx[sed_nrx], pat, n, sed_ext, e, sizeof(e))) {
+	if (!rx_compile_flags(&sed_rx[sed_nrx], pat, n, (sed_ext ? RX_EXTENDED : 0) | (icase ? RX_ICASE : 0),
+			e, sizeof(e))) {
 		snprintf(sed_err, sizeof(sed_err), "%s", e);
 		return false;
 	}
@@ -155,7 +159,9 @@ static const char *sed_address(const char *p, sed_addr_t *a) {
 	} else if (*p == '/') {
 		p = sed_part(p + 1, '/', pat, sizeof(pat), &len);
 		if (!p) { snprintf(sed_err, sizeof(sed_err), "unterminated address regex"); return NULL; }
-		if (!sed_regex(pat, len, &a->rx)) return NULL;
+		bool ic = *p == 'I';            // /re/I: either case
+		if (ic) p++;
+		if (!sed_regex(pat, len, &a->rx, ic)) return NULL;
 		a->kind = '/';
 	}
 	return p;
@@ -187,18 +193,20 @@ static bool sed_parse(const char *p) {
 			char delim = *p;
 			int len;
 			if (!delim || delim == '\\' || delim == '\n') { snprintf(sed_err, sizeof(sed_err), "s: bad delimiter"); return false; }
+			bool ic = false;
 			p = sed_part(p + 1, delim, pat, sizeof(pat), &len);
 			if (!p) { snprintf(sed_err, sizeof(sed_err), "unterminated `s' command"); return false; }
-			if (!sed_regex(pat, len, &c->rx)) return false;
 			p = sed_part(p, delim, c->repl, sizeof(c->repl), &c->repl_len);
 			if (!p) { snprintf(sed_err, sizeof(sed_err), "unterminated `s' command"); return false; }
 			for (;;) {
-				if (*p == 'g') c->global = true;
+				if (*p == 'I' || *p == 'i') ic = true;
+				else if (*p == 'g') c->global = true;
 				else if (*p == 'p') c->print = true;
 				else if (is_digit(*p)) { c->nth = 0; while (is_digit(*p)) c->nth = c->nth * 10 + (*p++ - '0'); continue; }
 				else break;
 				p++;
 			}
+			if (!sed_regex(pat, len, &c->rx, ic)) return false;
 			break;
 		}
 		default:
@@ -339,7 +347,7 @@ static void sed_cycle(px_shell_t *sh, const char *line, int len, bool last) {
 		case 'd': return;
 		case 'p': sed_put_line(sh, sed_ps, sed_ps_len, last); break;
 		case '=': snprintf(num, sizeof(num), "%ld", sed_lineno); sed_put_line(sh, num, (int)strlen(num), false); break;
-		case 'q': sed_quit = true; goto out;
+		case 'q': sed_quit = true; px_feed_enough(); goto out;
 		case 's':
 			if (sed_subst(sh, c) && c->print) sed_put_line(sh, sed_ps, sed_ps_len, last);
 			break;
@@ -581,7 +589,7 @@ void px_bi_tr(px_shell_t *sh, int argc, char **argv) {
 	} else {
 		for (int k = 0; k < 256; k++) if (in1[k]) tr.squeeze[k] = true;
 	}
-	if (!sh->in) return;            // nothing to read: tr reads only its input
+	if (!px_has_input(sh)) return;  // nothing to read: tr reads only its input
 	feed_bytes(sh, NULL, tr_bytes, NULL);
 }
 
@@ -903,4 +911,247 @@ void px_bi_date(px_shell_t *sh, int argc, char **argv) {
 	}
 	out[k++] = '\n';
 	px_write(sh, out, k);
+}
+
+// ================================================================
+// grep
+// ================================================================
+//
+//   grep TODO f        grep -n 'err.*fail' *.c      grep -E 'a|b' f
+//   grep -i hello f    grep -v '^#' f               grep -c x f     grep -l x *.c
+//   grep -F 'a.b' f    (a fixed string)             grep -q x f && ...
+//
+// Basic regular expressions by default, as grep has them; -E extended,
+// -F a fixed string. Several files: each line prefixed with its file's
+// name (-h: not). Status 0 if a line was selected, 1 if none, 2 on an
+// error.
+
+static struct {
+	rx_t rx;
+	const char *fixed;
+	int fixed_len;
+	bool icase, invert, number, count, list, quiet, names;
+	long lineno, matched;
+	const char *file;
+	bool done;                  // -l or -q: this file has said enough
+} gr;
+
+static bool gr_fixed_at(const char *line, int len) {
+	int n = gr.fixed_len;
+	for (int i = 0; i + n <= len; i++) {
+		int k = 0;
+		if (gr.icase) {
+			while (k < n) {
+				char a = line[i + k], b = gr.fixed[k];
+				if (a >= 'A' && a <= 'Z') a = (char)(a + 32);
+				if (b >= 'A' && b <= 'Z') b = (char)(b + 32);
+				if (a != b) break;
+				k++;
+			}
+		} else while (k < n && line[i + k] == gr.fixed[k]) k++;
+		if (k == n) return true;
+	}
+	return false;
+}
+
+static void grep_line(px_shell_t *sh, const char *line, int len, void *ctx) {
+	int cap[2 * RX_GROUPS];
+	bool tl;
+	(void)ctx;
+	gr.lineno++;
+	if (gr.done) return;
+	bool hit = gr.fixed ? gr_fixed_at(line, len) : rx_exec(&gr.rx, line, len, 0, cap, &tl);
+	if (hit == gr.invert) return;
+	gr.matched++;
+	if (gr.quiet || gr.list) { gr.done = true; px_feed_enough(); return; }
+	if (gr.count) return;
+	char pre[PX_PATH_MAX + 24];
+	int k = 0;
+	if (gr.names) k += snprintf(pre + k, sizeof(pre) - (size_t)k, "%s:", gr.file);
+	if (gr.number) k += snprintf(pre + k, sizeof(pre) - (size_t)k, "%ld:", gr.lineno);
+	if (k) px_write(sh, pre, k);
+	px_write(sh, line, len);
+	px_write(sh, "\n", 1);
+}
+
+void px_bi_grep(px_shell_t *sh, int argc, char **argv) {
+	const char *pat = NULL;
+	int flags = 0, i;
+	bool fixed = false, no_names = false, any_cut = false;
+	const char *files[PX_MAX_ARGS];
+	int nf = 0;
+
+	memset(&gr, 0, sizeof(gr));
+	for (i = 1; i < argc; i++) {
+		const char *a = argv[i];
+		if (a[0] == '-' && a[1] && !pat) {
+			if (!strcmp(a, "-e")) {
+				if (++i >= argc) break;
+				pat = argv[i];
+				continue;
+			}
+			for (const char *o = a + 1; *o; o++) {
+				switch (*o) {
+				case 'E': flags |= RX_EXTENDED; break;
+				case 'G': flags &= ~RX_EXTENDED; break;
+				case 'F': fixed = true; break;
+				case 'i': gr.icase = true; flags |= RX_ICASE; break;
+				case 'v': gr.invert = true; break;
+				case 'n': gr.number = true; break;
+				case 'c': gr.count = true; break;
+				case 'l': gr.list = true; break;
+				case 'q': gr.quiet = true; break;
+				case 'h': no_names = true; break;
+				default:
+					px_printf(sh, "grep: unknown option -%c\n", *o);
+					sh->status = 2;
+					return;
+				}
+			}
+			continue;
+		}
+		if (!pat) { pat = a; continue; }
+		files[nf++] = a;
+	}
+	if (!pat) {
+		px_puts(sh, "usage: grep [-E|-F] [-i] [-v] [-n] [-c] [-l] [-q] [-h] PATTERN [FILE...]\n");
+		sh->status = 2;
+		return;
+	}
+	if (fixed) {
+		gr.fixed = pat;
+		gr.fixed_len = (int)strlen(pat);
+	} else {
+		char e[80];
+		if (!rx_compile_flags(&gr.rx, pat, (int)strlen(pat), flags, e, sizeof(e))) {
+			px_printf(sh, "grep: %s\n", e);
+			sh->status = 2;
+			return;
+		}
+	}
+	gr.names = nf > 1 && !no_names;
+
+	long total = 0;
+	bool err = false;
+	for (int f = 0; f < (nf ? nf : 1) && !px_intr(sh); f++) {
+		bool cut;
+		gr.file = nf ? files[f] : "(standard input)";
+		gr.lineno = gr.matched = 0;
+		gr.done = false;
+		if (!px_feed_lines(sh, nf ? files[f] : NULL, grep_line, NULL, &cut)) {
+			px_printf(sh, "grep: %s: cannot open\n", files[f]);
+			err = true;
+			continue;
+		}
+		any_cut |= cut;
+		total += gr.matched;
+		if (gr.quiet && gr.matched) break;
+		if (gr.list && gr.matched) px_printf(sh, "%s\n", gr.file);
+		else if (gr.count && !gr.list) {
+			if (gr.names) px_printf(sh, "%s:%ld\n", gr.file, gr.matched);
+			else px_printf(sh, "%ld\n", gr.matched);
+		}
+	}
+	if (any_cut && !gr.quiet) px_printf(sh, "grep: a line was longer than %d and was cut\n", PX_LINE_MAX - 1);
+	// Nothing selected is status 1, as grep has always reported it --
+	// which is what makes `grep x f && ...` useful.
+	sh->status = err ? 2 : total ? 0 : 1;
+}
+
+// ================================================================
+// seq, basename, dirname, rev
+// ================================================================
+
+static bool int_arg(const char *s, long *v) {
+	char *e;
+	long x = strtol(s, &e, 10);
+	if (!*s || *e) return false;
+	*v = x;
+	return true;
+}
+
+//   seq 5      seq 2 8      seq 10 -2 0      seq -s, 3
+void px_bi_seq(px_shell_t *sh, int argc, char **argv) {
+	const char *sep = "\n";
+	long v[3];
+	int n = 0;
+	for (int i = 1; i < argc; i++) {
+		if (!strcmp(argv[i], "-s") && i + 1 < argc) { sep = argv[++i]; continue; }
+		if (!strncmp(argv[i], "-s", 2) && argv[i][2] && !is_digit(argv[i][2])) { sep = argv[i] + 2; continue; }
+		if (n == 3 || !int_arg(argv[i], &v[n])) {
+			px_puts(sh, "usage: seq [-s SEP] [FIRST [STEP]] LAST   (whole numbers)\n");
+			sh->status = 1;
+			return;
+		}
+		n++;
+	}
+	if (!n) { px_puts(sh, "usage: seq [-s SEP] [FIRST [STEP]] LAST   (whole numbers)\n"); sh->status = 1; return; }
+	long first = n > 1 ? v[0] : 1, step = n == 3 ? v[1] : 1, last = v[n - 1];
+	if (!step) { px_puts(sh, "seq: a step of 0 never ends\n"); sh->status = 1; return; }
+	long count = 0;
+	for (long x = first; step > 0 ? x <= last : x >= last; x += step) {
+		char b[24];
+		if (count++) px_puts(sh, sep);
+		snprintf(b, sizeof(b), "%ld", x);
+		px_puts(sh, b);
+		if (!(count & 255) && px_intr(sh)) return;
+	}
+	if (count) px_puts(sh, "\n");
+}
+
+//   basename /home/a.txt .txt  ->  a        dirname /home/a.txt  ->  /home
+void px_bi_basename(px_shell_t *sh, int argc, char **argv) {
+	char b[PX_PATH_MAX];
+	if (argc < 2 || argc > 3) { px_puts(sh, "usage: basename PATH [SUFFIX]\n"); sh->status = 1; return; }
+	snprintf(b, sizeof(b), "%s", argv[1]);
+	int n = (int)strlen(b);
+	while (n > 1 && b[n - 1] == '/') b[--n] = 0;
+	char *s = strrchr(b, '/');
+	char *base = (s && s[1]) ? s + 1 : b;
+	if (argc == 3) {
+		int bl = (int)strlen(base), sl = (int)strlen(argv[2]);
+		if (sl < bl && !strcmp(base + bl - sl, argv[2])) base[bl - sl] = 0;
+	}
+	px_printf(sh, "%s\n", base);
+}
+
+void px_bi_dirname(px_shell_t *sh, int argc, char **argv) {
+	char b[PX_PATH_MAX];
+	if (argc != 2) { px_puts(sh, "usage: dirname PATH\n"); sh->status = 1; return; }
+	snprintf(b, sizeof(b), "%s", argv[1]);
+	int n = (int)strlen(b);
+	while (n > 1 && b[n - 1] == '/') b[--n] = 0;
+	char *s = strrchr(b, '/');
+	if (!s) { px_puts(sh, ".\n"); return; }
+	while (s > b && s[-1] == '/') s--;
+	if (s == b) { px_puts(sh, "/\n"); return; }
+	*s = 0;
+	px_printf(sh, "%s\n", b);
+}
+
+// Each line backwards -- a character at a time, so UTF-8 stays whole.
+static void rev_line(px_shell_t *sh, const char *line, int len, void *ctx) {
+	static char out[PX_LINE_MAX];
+	int o = 0, i = len;
+	(void)ctx;
+	while (i > 0) {
+		int start = i - 1;
+		while (start > 0 && ((uint8_t)line[start] & 0xC0) == 0x80) start--;
+		memcpy(out + o, line + start, (size_t)(i - start));
+		o += i - start;
+		i = start;
+	}
+	px_write(sh, out, o);
+	px_write(sh, "\n", 1);
+}
+
+void px_bi_rev(px_shell_t *sh, int argc, char **argv) {
+	bool cut;
+	const char *file = argc > 1 ? argv[1] : NULL;
+	if (!px_feed_lines(sh, file, rev_line, NULL, &cut)) {
+		px_printf(sh, "rev: %s: cannot open\n", file);
+		sh->status = 1;
+		return;
+	}
+	if (cut) px_printf(sh, "rev: a line was longer than %d and was cut\n", PX_LINE_MAX - 1);
 }

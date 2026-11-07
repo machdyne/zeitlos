@@ -1,0 +1,81 @@
+# Streaming pipes (sh.c, docs/posix.md "Pipes"): every stage but the
+# last in a coroutine of its own, the bytes handed over a pipe-full at a
+# time -- so no 16 KB limit, and a reader that ends stops the writers.
+# Expected outputs computed by Python when this file was written.
+#
+# A pipe that cannot stream (a builtin twice, `<` after the first
+# stage) runs the old way: those cases are here too.
+
+$ seq 1 20000 | wc
+20000 20000 108894
+
+$ seq 1 20000 | tail -n 2
+19999
+20000
+
+$ seq 1 20000 | head -n 3
+1
+2
+3
+
+$ seq 1 20000 | grep 777 | wc
+38 38 208
+
+$ seq 1 20000 | grep 777 | head -n 2
+777
+1777
+
+$ seq 1 30 | rev | sort -n | head -n 4
+1
+01
+2
+02
+
+$ seq 3 | echo hi
+hi
+
+$ seq 1 5 | rev > piped.txt
+
+$ cat piped.txt
+1
+2
+3
+4
+5
+
+$ grep 1 numbers.txt | grep 0
+10
+
+$ tr a-z A-Z < notes.txt | rev
+ELIF A MORF OLLEH
+ENIL DNOCES
+
+$ seq 1 100000 | cut -c1-2 | uniq | wc
+370 370 1101
+
+$ seq 1 100000 | sed -n '$p'
+100000
+
+$ seq 1 5 | grep 9 | wc
+0 0 0
+
+$ seq 1 10 | grep -c 1
+2
+
+$ seq 1 10 | grep -q 5
+? 0
+
+$ seq 1 10 | grep -q 55
+? 1
+
+# A reader that ends stops the writer: without it each of these would
+# run fifty million lines.
+$ seq 1 50000000 | head -n 1
+1
+
+$ seq 1 50000000 | sed 2q
+1
+2
+
+$ seq 1 50000000 | grep -q 5 && echo found
+found

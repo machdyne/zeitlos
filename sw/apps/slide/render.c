@@ -904,6 +904,38 @@ int render_list_row_h(const deck_t *d, const obj_t *o) {
 	return (int)((lh + ZC_ONE - 1) >> ZC_FRAC) + 2;
 }
 
+int render_list_rows(const deck_t *d, const obj_t *o) {
+	int rh = render_list_row_h(d, o), n = (o->h - 2 * o->pad) / (rh > 0 ? rh : 1);
+	return n < 1 ? 1 : n;
+}
+
+int render_list_top(const deck_t *d, const obj_t *o) {
+	int over = render_list_items(o) - render_list_rows(d, o), t = o->top;
+	if (t > over) t = over;
+	return t < 0 ? 0 : t;
+}
+
+void render_list_thumb(const deck_t *d, const obj_t *o, int *ty, int *th) {
+	int x0, y0, x1, y1, n = render_list_items(o), rows = render_list_rows(d, o), track, h;
+	obj_bounds(o, &x0, &y0, &x1, &y1);
+	track = y1 - y0 - 2;
+	h = n > 0 ? track * rows / n : track;
+	if (h < 8) h = 8;
+	if (h > track) h = track;
+	*th = h;
+	*ty = y0 + 1 + (n > rows ? (track - h) * render_list_top(d, o) / (n - rows) : 0);
+}
+
+int render_list_hit(const deck_t *d, const obj_t *o, int x, int y) {
+	int x0, y0, x1, y1, rh = render_list_row_h(d, o), n = render_list_items(o), i;
+	obj_bounds(o, &x0, &y0, &x1, &y1);
+	if (x < x0 || x > x1 || y < y0 || y > y1) return -1;
+	if (n > render_list_rows(d, o) && x >= x1 - RENDER_LIST_SB_W) return -2;
+	if (y - y0 - o->pad < 0) return -1;
+	i = render_list_top(d, o) + (y - y0 - o->pad) / (rh > 0 ? rh : 1);
+	return i < n ? i : -1;
+}
+
 // Where a slider's knob is: its centre across, units.
 int render_slider_x(const obj_t *o) {
 	int x0, y0, x1, y1, kw, span, v = o->value, r = o->vmax - o->vmin;
@@ -1052,25 +1084,45 @@ static void draw_control(zc_target_t *t, const zc_xf_t *xf, const deck_t *d, con
 	}
 	case OB_LIST: {
 		int rh = render_list_row_h(d, o), n = render_list_items(o), i, save[4];
+		int top = render_list_top(d, o), sb = n > render_list_rows(d, o) ? RENDER_LIST_SB_W : 0;
+		zc_fix IW = W - ZC_I(sb);		// the items' width: less the scroll bar
 		zc_path_reset(&p_shape);
 		zc_path_rect(&p_shape, X, Y, W, H);
 		zc_fill(t, &p_shape, ZC_NONZERO, o->fill ? &fp : &white);
-		clip_units(t, xf, x0 + 1, y0 + 1, x1 - 1, y1 - 1, save);
-		for (i = 0; i < n; i++) {
+		clip_units(t, xf, x0 + 1, y0 + 1, x1 - 1 - sb, y1 - 1, save);
+		for (i = top; i < n; i++) {
 			const char *s;
 			uint32_t len;
-			int ry = y0 + o->pad + i * rh;
+			int ry = y0 + o->pad + (i - top) * rh;
 			if (ry >= y1) break;
 			if (!render_list_item(o, i, &s, &len)) break;
 			if (i == o->value) {
 				zc_path_reset(&p_shape);
-				zc_path_rect(&p_shape, X, ZC_I(ry), W, ZC_I(rh));
+				zc_path_rect(&p_shape, X, ZC_I(ry), IW, ZC_I(rh));
 				zc_fill(t, &p_shape, ZC_NONZERO, &black);
 			}
-			label(t, xf, d, o, s, len, X + ZC_I(o->pad + 2), W - ZC_I(2 * o->pad + 4), ZC_I(ry),
+			label(t, xf, d, o, s, len, X + ZC_I(o->pad + 2), IW - ZC_I(2 * o->pad + 4), ZC_I(ry),
 				ZC_I(rh), o->align, i == o->value ? &white : &ink);
 		}
 		unclip(t, save);
+		if (sb) {
+			// the scroll bar: a track down the right edge, the thumb where
+			// the shown rows are among them all
+			int ty, th;
+			zc_path_reset(&p_shape);
+			zc_path_rect(&p_shape, ZC_I(x1 - sb), Y, ZC_I(sb), H);
+			zc_fill(t, &p_shape, ZC_NONZERO, &white);
+			zc_frame_rect(t, &p_shape, ZC_I(x1 - sb), Y, ZC_I(sb), H, ZC_I(1), &ink);
+			render_list_thumb(d, o, &ty, &th);
+			zc_path_reset(&p_shape);
+			zc_path_rect(&p_shape, ZC_I(x1 - sb + 2), ZC_I(ty + 1), ZC_I(sb - 4), ZC_I(th - 2));
+			zc_fill(t, &p_shape, ZC_NONZERO, &black);
+		}
+		if (o == ui_focus) {
+			// the keyboard is on it: a second frame inside the first
+			zc_path_reset(&p_shape);
+			zc_frame_rect(t, &p_shape, X + ZC_I(2), Y + ZC_I(2), IW - ZC_I(4), H - ZC_I(4), ZC_I(1), &ink);
+		}
 		if (o->line_w) zc_frame_rect(t, &p_shape, X, Y, W, H, lw, &lp);
 		break;
 	}

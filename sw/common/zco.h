@@ -32,7 +32,10 @@
  * (ra, sp, s0-s11); an interrupt saves registers to the kernel's own
  * area and runs on its own stack, so a stack in the arena is as good
  * as the process's. On the build machine (the host tests) it is
- * ucontext. One coroutine runs at a time; it may not start another.
+ * ucontext. One coroutine runs at a time. A coroutine may resume
+ * another: that one's zco_yield() comes back to it, not to the main
+ * loop -- a chain, as posix's streaming pipes use (each stage of a
+ * pipe resumes the stage before it for more input).
  *
  * -- the stack is a fixed buffer --
  *
@@ -88,6 +91,7 @@ struct zco {
 	size_t		bytes;
 	bool		started, done, running;
 	bool		overflow;	// it ran off its stack (see above): done, failed
+	zco_t		*parent;	// the coroutine that resumed it, or NULL (the main loop)
 };
 
 #define ZCO_GUARD	128		// bytes at the stack's bottom that must stay untouched
@@ -97,7 +101,8 @@ struct zco {
 void zco_init(zco_t *co, zco_fn fn, void *arg, void *stack, size_t bytes);
 
 // Runs it until it yields or returns. Returns true while there is more
-// to do (it yielded), false once it has returned.
+// to do (it yielded), false once it has returned. From inside another
+// coroutine too; not one that is running already (then: nothing).
 bool zco_resume(zco_t *co);
 
 // From inside: back to whoever resumed it.

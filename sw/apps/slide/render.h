@@ -109,6 +109,16 @@ void render_ui_state(const obj_t *pressed, const obj_t *focus);
 int render_list_items(const obj_t *o);
 bool render_list_item(const obj_t *o, int i, const char **s, uint32_t *len);
 int render_list_row_h(const deck_t *d, const obj_t *o);
+// A list longer than its box scrolls: how many rows show, the first
+// shown (o->top, kept in range), and its scroll bar down the right
+// edge -- its width and the thumb's top and height, units. rows < items
+// is a list that scrolls.
+int render_list_rows(const deck_t *d, const obj_t *o);
+int render_list_top(const deck_t *d, const obj_t *o);
+#define RENDER_LIST_SB_W 8
+void render_list_thumb(const deck_t *d, const obj_t *o, int *ty, int *th);
+// What (x, y) is on: an item's index, -1 nothing, -2 the scroll bar.
+int render_list_hit(const deck_t *d, const obj_t *o, int x, int y);
 // A slider: its knob's centre across (units), and the value at x.
 int render_slider_x(const obj_t *o);
 int render_slider_value(const obj_t *o, int x);

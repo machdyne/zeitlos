@@ -764,6 +764,17 @@ static inline bool z_vram_sdram(void) {
 	return (reg_csr_features3 & Z_FEATURE3_VRAM_SDRAM) != 0;
 }
 
+// The CPU's rotate instructions: ror, rol, rori (RISC-V Zbb's
+// encodings, `CPU_ROT). Illegal instructions on a CPU without them, so
+// code that uses them asks this first -- once: sw/common/zrng.c's
+// z_chacha20_rounds(), docs/chacha.md. FEATURES2 is full (its low 16
+// bits all taken), so FEATURES3 bit 3.
+#define Z_FEATURE3_CPU_ROT    (1u << 3)
+static inline bool z_cpu_has_rot(void) {
+	if (!z_soc_features3_present()) return false;
+	return (reg_csr_features3 & Z_FEATURE3_CPU_ROT) != 0;
+}
+
 // Name of the CPU core in the running bitstream. Returns "unknown" if
 // this build predates rtl/csrs.v, because on such a bitstream the bit
 // is not merely clear, it is unreadable -- and "picorv32" would be a

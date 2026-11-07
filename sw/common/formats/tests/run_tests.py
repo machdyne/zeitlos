@@ -16,6 +16,8 @@ Builds tests/zfhost.c with AddressSanitizer and UBSan, then:
   tables      xlsx/ods/csv/tsv/zss fixtures to every table format, read
               back with openpyxl/odfpy and LibreOffice; formulas the
               sheet can evaluate survive, the rest arrive as values
+  packing     folders into zip, tar and tar.gz, checked by Python's zipfile,
+              tarfile and gzip, by unzip/tar/gzip, and extracted again here
   archives    zip, tar, tar.gz, gz extracted and compared byte for byte;
               archives with ../ and absolute paths refused, and nothing
               written outside the target
@@ -437,6 +439,104 @@ def test_archives():
     p = run(f('bomb.zip'), f('x_bomb'), ok=False)
     ck(p.returncode != 0 and 'too large' in p.stderr, 'bomb stopped: ' + p.stderr)
 
+# -- packing: folders into zip, tar, tar.gz --
+
+def test_pack():
+    rnd = random.Random(11)
+    top = f('packme')
+    shutil.rmtree(top, ignore_errors=True)
+    tree = {
+        'readme.txt': b'hello, packing\n' * 3,
+        'empty.txt': b'',
+        'docs/report.md': ('# Report\n\n' + 'All work and no play makes a dull report. ' * 4000).encode(),
+        'docs/\u00fcber/notes.txt': 'Gr\u00fc\u00dfe aus M\u00fcnchen\n'.encode() * 50,
+        'bin/random.bin': bytes(rnd.randrange(256) for _ in range(150000)),
+        'bin/zeros.bin': b'\0' * 300000,
+        'bin/photo.jpg': bytes(rnd.randrange(256) for _ in range(5000)),
+        'a/b/c/d/e/f/g/deep.txt': b'deep\n',
+        ('l' * 90) + '/' + ('m' * 90) + '/long.txt': b'long name\n',
+        ('x' * 150) + '.txt': b'one very long name\n',
+        'small.txt': b'abc',
+    }
+    for k, v in tree.items():
+        p = os.path.join(top, k)
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        with open(p, 'wb') as h:
+            h.write(v)
+    os.makedirs(os.path.join(top, 'emptydir'), exist_ok=True)
+    want = {'packme/' + k: v for k, v in tree.items()}
+
+    for ext in ['zip', 'tar', 'tar.gz', 'tgz']:
+        for heap in ['1048576', '8192']:
+            out = f('packed.' + ext)
+            p = run('-m', heap, '-p', top, out, ok=heap != '8192' or ext != 'zip')
+            if p.returncode:
+                continue
+            got = {}
+            dirs = set()
+            if ext == 'zip':
+                with zipfile.ZipFile(out) as z:
+                    ck(z.testzip() is None, 'zip CRCs (%s)' % heap)
+                    for i in z.infolist():
+                        if i.filename.endswith('/'):
+                            dirs.add(i.filename[:-1])
+                        else:
+                            got[i.filename] = z.read(i)
+                    if heap == '1048576':
+                        info = z.getinfo('packme/docs/report.md')
+                        ck(info.compress_type == zipfile.ZIP_DEFLATED and info.compress_size < info.file_size // 5,
+                           'text deflated: %d of %d' % (info.compress_size, info.file_size))
+                        ck(z.getinfo('packme/bin/photo.jpg').compress_type == zipfile.ZIP_STORED, 'a jpeg stored')
+                        ck(z.getinfo('packme/bin/zeros.bin').compress_size < 3000, 'zeros: tiny')
+                        r = z.getinfo('packme/bin/random.bin')
+                        ck(r.compress_size <= r.file_size * 9 // 8 + 64, 'random grows an eighth at most')
+                if shutil.which('unzip'):
+                    u = subprocess.run(['unzip', '-tq', out], capture_output=True, text=True)
+                    ck(u.returncode == 0, 'unzip -t: ' + u.stdout + u.stderr)
+            else:
+                if ext != 'tar':
+                    raw = gzip.open(out).read()        # gzip's CRC and length checked here
+                    ck(len(raw) % 512 == 0, 'tar in gzip: whole blocks')
+                with tarfile.open(out) as t:
+                    for m in t.getmembers():
+                        if m.isdir():
+                            dirs.add(m.name)
+                        else:
+                            got[m.name] = t.extractfile(m).read()
+                if shutil.which('tar'):
+                    u = subprocess.run(['tar', 'tf', out], capture_output=True, text=True)
+                    ck(u.returncode == 0, 'tar tf: ' + u.stderr)
+                if ext == 'tgz' and heap == '1048576' and shutil.which('gzip'):
+                    u = subprocess.run(['gzip', '-t', out], capture_output=True, text=True)
+                    ck(u.returncode == 0, 'gzip -t: ' + u.stderr)
+            ck(got == want, '%s (heap %s): the files, byte for byte; missing %s' %
+               (ext, heap, sorted(set(want) - set(got))[:3]))
+            ck('packme/emptydir' in dirs and 'packme/a/b/c' in dirs, '%s: folders listed' % ext)
+            # and back through this library's own reader
+            x = f('unpacked_' + ext.replace('.', '_'))
+            shutil.rmtree(x, ignore_errors=True)
+            run(out, x)
+            back = {}
+            for dp, dn, fn in os.walk(x):
+                for n in fn:
+                    pth = os.path.join(dp, n)
+                    back[os.path.relpath(pth, x)] = open(pth, 'rb').read()
+            ck(back == want, '%s (heap %s): extracted again here' % (ext, heap))
+    # the compressor on its own: every kind of input, through gzip
+    for name, data in [('rep', b'ab' * 100000), ('mix', bytes(rnd.randrange(4) for _ in range(200000))),
+                       ('one', b'q'), ('none', b''), ('win', bytes(range(256)) * 400 + b'tail' * 9000)]:
+        d = f('z_' + name)
+        shutil.rmtree(d, ignore_errors=True)
+        os.makedirs(d)
+        with open(os.path.join(d, 'x'), 'wb') as h:
+            h.write(data)
+        run('-p', d, f('z.tgz'))
+        with tarfile.open(f('z.tgz')) as t:
+            ck(t.extractfile('z_' + name + '/x').read() == data, 'deflate round trip: ' + name)
+    # cancelling a pack
+    p = run('-c', '5', '-p', top, f('c.zip'), ok=False)
+    ck(p.returncode == 1 and 'cancelled' in p.stderr, 'pack cancelled: ' + p.stderr)
+
 # -- hostile input --
 
 def test_hostile():
@@ -490,6 +590,7 @@ def main():
     test_docs()
     test_tabs()
     test_archives()
+    test_pack()
     test_hostile()
     test_cancel()
     print('%d checks, %d failed%s' % (checks, fails, '' if USE_LO else ' (LibreOffice checks skipped)'))

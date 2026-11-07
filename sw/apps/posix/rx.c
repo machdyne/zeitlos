@@ -4,7 +4,8 @@
  * The expression is parsed by recursive descent -- bounded by its own
  * nesting, which is short -- and compiled to instructions:
  *
- *   CHAR c   ANY   SET i   BOL   EOL      one character, or a position
+ *   CHAR c   CHARI c   ANY   SET i       one character (CHARI: either case)
+ *   BOL   EOL                             a position
  *   SPLIT x y                             try x; if that fails, y
  *   JMP x
  *   SAVE k                                group bound k := here
@@ -33,7 +34,7 @@
 
 #include "rx.h"
 
-enum { I_CHAR = 1, I_ANY, I_SET, I_BOL, I_EOL, I_SPLIT, I_JMP, I_SAVE, I_LSET, I_LCHK, I_MATCH };
+enum { I_CHAR = 1, I_CHARI, I_ANY, I_SET, I_BOL, I_EOL, I_SPLIT, I_JMP, I_SAVE, I_LSET, I_LCHK, I_MATCH };
 
 #define RX_LOOPS    32
 #define UNSET       0xFFFFu
@@ -45,7 +46,7 @@ enum { T_END, T_CHAR, T_ANY, T_SET, T_LP, T_RP, T_ALT, T_STAR, T_PLUS, T_QUES };
 typedef struct {
 	rx_t *r;
 	const char *p, *end;
-	bool ext;
+	bool ext, icase;
 	int depth;
 	const char *err;
 	// the token in hand
@@ -112,6 +113,12 @@ static bool parse_set(cp_t *c) {
 		}
 		set_add(s, ch);
 	}
+	if (c->icase)			// either case of every letter in it
+		for (int k = 'A'; k <= 'Z'; k++)
+			if ((s[k >> 3] & (1u << (k & 7))) || (s[(k + 32) >> 3] & (1u << ((k + 32) & 7)))) {
+				set_add(s, k);
+				set_add(s, k + 32);
+			}
 	if (neg) for (int i = 0; i < 32; i++) s[i] = (uint8_t)~s[i];
 	c->set = c->r->nsets++;
 	return true;
@@ -229,9 +236,13 @@ static bool parse_piece(cp_t *c) {
 	c->at_start = false;
 
 	switch (c->tok) {
-	case T_CHAR:
-		if (emit(c, I_CHAR, c->c, 0, 0) < 0) return false;
+	case T_CHAR: {
+		uint8_t ch = c->c;
+		bool letter = (ch | 32) >= 'a' && (ch | 32) <= 'z';
+		if (emit(c, c->icase && letter ? I_CHARI : I_CHAR, c->icase && letter ? (uint8_t)(ch | 32) : ch, 0, 0) < 0)
+			return false;
 		break;
+	}
 	case T_ANY:
 		if (emit(c, I_ANY, 0, 0, 0) < 0) return false;
 		break;
@@ -330,13 +341,18 @@ static bool parse_regex(cp_t *c) {
 }
 
 bool rx_compile(rx_t *r, const char *pat, int n, bool extended, char *err, int errcap) {
+	return rx_compile_flags(r, pat, n, extended ? RX_EXTENDED : 0, err, errcap);
+}
+
+bool rx_compile_flags(rx_t *r, const char *pat, int n, int flags, char *err, int errcap) {
 	cp_t c;
 	memset(r, 0, sizeof(*r));
 	memset(&c, 0, sizeof(c));
 	c.r = r;
 	c.p = pat;
 	c.end = pat + n;
-	c.ext = extended;
+	c.ext = (flags & RX_EXTENDED) != 0;
+	c.icase = (flags & RX_ICASE) != 0;
 	emit(&c, I_SAVE, 0, 0, 0);
 	if (!next(&c) || !parse_regex(&c) || (c.tok != T_END && !c.err)) {
 		if (!c.err) c.err = "unmatched )";
@@ -369,6 +385,7 @@ static bool run(const rx_t *r, const char *s, int len, int at, int *cap, bool *t
 		bool ok = true;
 		switch (in->op) {
 		case I_CHAR: ok = pos < len && (uint8_t)s[pos] == in->a; pos++; pc++; break;
+		case I_CHARI: ok = pos < len && ((uint8_t)s[pos] | 32) == in->a; pos++; pc++; break;
 		case I_ANY: ok = pos < len && s[pos] != '\n'; pos++; pc++; break;
 		case I_SET: ok = pos < len && (r->sets[in->a][(uint8_t)s[pos] >> 3] & (1u << ((uint8_t)s[pos] & 7))); pos++; pc++; break;
 		case I_BOL: ok = pos == 0; pc++; break;

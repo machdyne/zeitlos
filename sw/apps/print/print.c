@@ -27,6 +27,7 @@
 #include "../../common/zport.h"
 #include "../../common/znet.h"
 #include "../../common/zdns.h"
+#include "../../common/zbrowse.h"	// print find
 #include "../../common/zcfg.h"
 #include "../../common/zpool.h"
 #include "../../common/zprint.h"
@@ -583,6 +584,50 @@ static void probe(const char *addr) {
 	finish(true, 0);
 }
 
+// -- print find: the printers DNS-SD finds ------------------------------------
+
+static void find(void) {
+	z_browse_printer_t p[Z_BROWSE_MAX];
+	char err[64], b[64];
+	int n = 0;
+	uint32_t tag, start;
+	z_msg_t m;
+	run_say(w_title, sizeof(w_title), "Printers on this network", NULL);
+	hold_open = true;
+	win_open(INFO_H);
+	status("Looking...", NULL);
+	tag = z_browse_ask(Z_BROWSE_PRINTERS, err, sizeof(err));
+	if (!tag) { status("Cannot look: ", err); finish(false, Z_PRINT_E_FAILED); }
+	// the window goes on answering wm while net looks
+	start = z_uptime_ticks();
+	for (;;) {
+		if (z_uptime_ticks() - start > 5u * Z_TICK_HZ) {
+			status("No answer from net", NULL);
+			finish(false, Z_PRINT_E_FAILED);
+		}
+		if (z_msg_recv(&m, Z_TICK_HZ / 4) != Z_OK) continue;
+		n = z_browse_reply(&m, tag, p, Z_BROWSE_MAX, err, sizeof(err));
+		if (n >= 0) break;
+		on_msg(&m, NULL);
+		if (dismissed) finish(false, Z_PRINT_E_CANCELLED);
+	}
+	if (err[0]) { status("Could not look: ", err); finish(false, Z_PRINT_E_FAILED); }
+	if (!n) {
+		status("None found (IPP or port 9100, on this network)", NULL);
+		finish(true, 0);
+	}
+	for (int i = 0; i < n && w_ninfo + 2 <= INFO_LINES; i++) {
+		run_say(w_info[w_ninfo++], 64, p[i].name, NULL);
+		run_say(w_info[w_ninfo++], 64, "  ", p[i].uri);
+	}
+	fmt_int(b, n);
+	run_say(b + strlen(b), (int)(sizeof(b) - strlen(b)), n == 1 ? " printer" : " printers",
+		" -- in the print dialog's Print to");
+	status("Found ", b);
+	if (win_up) draw_all();
+	finish(true, 0);
+}
+
 // -- printing a job ------------------------------------------------------------------------------
 
 int main(void) {
@@ -618,12 +663,8 @@ int main(void) {
 	}
 	z_cfg_get("apps.print.printer", printer, sizeof(printer));
 	if (!jobf) {
-		if (!addr && !printer[0]) {
-			run_say(w_title, sizeof(w_title), "print", NULL);
-			status("No printer: set apps.print.printer (docs/print.md)", NULL);
-			win_open(WIN_H);
-			finish(false, Z_PRINT_E_FAILED);
-		}
+		// `print find`, or `print` with no printer set up: look for some
+		if ((addr && !strcmp(addr, "find")) || (!addr && !printer[0])) find();
 		probe(addr ? addr : printer);
 	}
 

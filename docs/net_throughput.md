@@ -18,6 +18,10 @@ was in the kernel -- keeping the drivers in userspace
   -- the reader no longer spins on a NAK in mid-frame and `net`'s copies
   run a word at a time. To the SD card, 88KB/s: the card write, 17.8ms
   a block, is now the limit.
+- **Round 6 built, awaiting hardware: full-size segments through the
+  relay** -- netserve's HTTP, ssh and sftp send 1460-byte segments to an
+  Ethernet peer instead of at most 1KB, copied once in `net` instead of
+  twice.
 - **Round 5 built, awaiting hardware: TCP sends with a window** --
   up to five full-size segments in flight instead of one of 536 bytes;
   the USB adapter receives 1460-byte segments. TCP, UDP and ICMP build
@@ -265,7 +269,38 @@ that delays its ACKs (Windows, 200ms) a few KB/s.
   `test_relay` 48 (reading segments sent from inside an ACK too).
 
 Expected: bulk TCP sends ~5-10x faster on a LAN. Through the relay
-segments are at most 1KB (`RELAY_TX`), so ~5KB a round trip. To
-measure: fetch a large file from Zeitlos's web server with
-`curl -o /dev/null -w '%{speed_download}' http://<board>/<file>`
+segments are at most 1KB (`RELAY_TX`), so ~5KB a round trip -- round 6
+lifts that. To measure: fetch a large file from Zeitlos's web server
+with `curl -o /dev/null -w '%{speed_download}' http://<board>/<file>`
 before and after, and an ssh session's `cat` of a big file.
+
+## Round 6: full-size segments through the relay
+
+Everything netserve sends -- HTTP bodies, ssh, sftp and scp -- goes
+through `net`'s relay (`relay.c`), which used to copy each message into
+a 1KB staging buffer (`RELAY_TX`), ack it, and cut TCP segments from
+that buffer. So no segment was larger than 1KB however much was
+waiting, and every byte was copied twice inside `net` before TCP's own
+copy into its send pool.
+
+- **Segments gathered in place.** `tcp_send_buf()` hands out the
+  segment's own buffer and `tcp_send_commit()` queues it (`tcp.h`). The
+  relay fills it from the listener's held messages in order, up to the
+  peer's MSS, straight from the listener's memory -- which zport keeps
+  valid until the message is acked (`zport.h`). A message is acked once
+  its last byte is in a segment.
+- **So:** five 1460-byte segments a round trip to an Ethernet peer
+  (7.3KB) where there were five of at most 1KB; one copy in `net`
+  instead of two.
+- **And 6KB of RAM back**: the six staging buffers are gone. It paid for
+  `mdns.c` ([networking.md](networking.md#finding-services)); `net`'s
+  RAM budget went 284K -> 287K for the rest (`Makefile`, CORE_BUDGETS).
+- **Backpressure** is unchanged in kind: a listener whose messages are
+  not yet sent has them unacked, and stops at zport's eight.
+- **Tests:** `test_relay` 55 checks: a peer with an MSS of 1460 and
+  messages of 3000, 100 and 2000 bytes come out as 1460, 1460, 1460 and
+  720, in order, each message acked once.
+
+To measure, as round 5: `curl` a large file from the web server, and
+`sftp` one, before and after. On the build machine, netserve's
+`make test` ends with its end-to-end test through the real `net`.

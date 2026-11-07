@@ -445,6 +445,8 @@ localparam CSR_FEATURES2 =
 // two 320x240 planes (framebuffer rows 0..239); chunky game mode's
 // picture is in main memory, linear, at socctl's CKBASE, and T2 writes
 // it there. Z_FEATURE3_VRAM_SDRAM in sw/common/zsoc.h.
+//
+// Bit 3, CPU_ROT: below.
 localparam CSR_FEATURES3 =
 `ifdef ZEITLOS_CONSOLE
 	32'h1 |
@@ -453,5 +455,17 @@ localparam CSR_FEATURES3 =
 `endif
 `ifdef VRAM_SDRAM
 	32'h4 |
+`endif
+// Bit 3, CPU_ROT: the CPU's rotate instructions, Zbb's ror, rol and
+// rori (`CPU_ROT, docs/chacha.md). Software uses them only when this
+// is set -- without them they are illegal instructions -- and shifts
+// and ORs otherwise (sw/common/zrng.c). picorv32 only, for now.
+// Z_FEATURE3_CPU_ROT in sw/common/zsoc.h.
+`ifdef CPU_ROT
+`ifndef CPU_ZEITLOS32
+`ifndef CPU_ZEITLOS32P
+	32'h8 |
+`endif
+`endif
 `endif
 	32'h0;

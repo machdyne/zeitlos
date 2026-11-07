@@ -386,7 +386,7 @@ shares):
 
 | | bytes | |
 |---|---|---|
-| `dock_store` | 4,096 | the icons (compressed) and spoken names the dock shows, and the groups' names; the built-in files use 3,545 (with learn and the Desk group), leaving room for icons drawn in pix |
+| `dock_store` | 4,096 | the icons (compressed) and spoken names the dock shows, and the groups' names; the built-in files use 3,909 (with learn, convert and the Desk group; the wm test prints it), leaving room for icons drawn in pix |
 | `dock_apps` | 1,152 | the row and its groups: 48 names, with where each one's icon and name are in the store |
 | `dock_scratch` | 2,144 | the parser, then `dock.zic`'s table (64 entries), then the process table for the dots -- one at a time, sharing the space; while the icons are read, the parser's space is the read buffer |
 

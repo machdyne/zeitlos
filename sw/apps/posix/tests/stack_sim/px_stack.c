@@ -94,6 +94,17 @@ static const char *const cmds[] = {
     "xxd -l 256 dbig.txt",
     "date",
     "which sed zcc",
+    "grep -n -E '(1|7)+' dbig.txt",
+    "sort -rn -t: -k1 dbig.txt",
+    "find tree -name *.c -exec grep -c a {} ;",
+    "find tree -exec sed -n 1p {} ;",
+    /* streaming pipes: the stages before the last on stacks of their own */
+    "cat dbig.txt | sed -n 1,500p | sort -r | uniq | wc",
+    "find / | grep c | head -5",
+    "zcat notes.gz | tr a-z A-Z | rev",
+    "tar -tf arch/t.tar | sort",
+    "grep -n -E '(1|7)+' dbig.txt | cut -c1-9 | tail -3",
+    "seq 1 20000 | sed -E 's/(1|7)+/x/g' | grep -c x",
 };
 
 int main(void) {
@@ -107,6 +118,9 @@ int main(void) {
     px_fd_init();
     px_chdir("/", err, sizeof(err));
     px_job_init(mem, sizeof(mem), 0);
+    uint8_t pipes[PX_PIPES_MEM] __attribute__((aligned(16)));
+    px_pipes_init(pipes, sizeof(pipes));
+    size_t pipe_peak = 0;
 
     printf("posix command stack on rv32 (bytes of the coroutine's %u):\n",
            (unsigned)px_job_stack_size());
@@ -125,8 +139,13 @@ int main(void) {
                r == PX_STEP_DONE ? "" : "  OVERFLOW");
         if (sh.status && sh.status != 1) printf("          %.100s\n", head);
         else if (sh.status == 1 || !bytes) printf("          %.100s\n", head);
+        if (strstr(cmds[i], " | "))
+            printf("          the stages before the last: %u bytes of %u\n",
+                (unsigned)px_pipe_stack_last(), (unsigned)PX_STAGE_STACK);
+        if (px_pipe_stack_last() > pipe_peak) pipe_peak = px_pipe_stack_last();
         if (px_job_stack_last() > peak) { peak = px_job_stack_last(); peak_cmd = cmds[i]; }
     }
     printf("deepest: %u bytes (%s)\n", (unsigned)peak, peak_cmd);
+    printf("deepest stage of a pipe: %u bytes of %u\n", (unsigned)pipe_peak, (unsigned)PX_STAGE_STACK);
     return 0;
 }

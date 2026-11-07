@@ -170,12 +170,24 @@ style (`/font`, `/fill`, `/line`).
 |---|---|
 | `button LABEL` | a button (`OK` by default) |
 | `check LABEL`, `radio LABEL` | a check box, a radio button; `/group NAME` makes radios that exclude each other (all on the card, without a group) |
-| `field` | a field: typed into in browse mode; Enter in a one-line field runs its action, in a taller one starts a line; Tab goes to the next field |
+| `field` | a field: typed into in browse mode; Enter in a one-line field runs its action, in a taller one starts a line; Tab goes to the next field or list |
 | `slider [MIN MAX]` | a slider, 0..100 unless given; `/range MIN MAX`, `/value N` |
-| `list A, B, C` | a list to choose one from; `/text A, B, C` changes its items |
+| `list A, B, C` | a list to choose one from; `/text A, B, C` changes its items. One longer than its box scrolls (below) |
 
 A button's label and a field's text are edited in place (F2, Enter or a
 double-click), like a text box; a check's or radio's label with `/text`.
+
+**A list longer than its box** shows what fits and a scroll bar down
+its right edge: a click on the bar above or below the thumb moves a
+page, the thumb drags, and the wheel over the list moves three rows a
+notch (elsewhere on the card it still turns cards). A click on a list
+also gives it the keys, shown by a second frame inside it: **Up** and
+**Down**, **Page Up** and **Page Down**, **Home** and **End** choose
+and scroll to what they choose, a letter chooses the next item starting
+with it, **Tab** goes on to the next field or list and **Esc** lets go.
+Each choice runs the list's action, as a click does; `set-value`
+scrolls to the item it sets. Where it is scrolled to is how it is being
+looked at, not part of the deck: it is not saved.
 
 **An action** is what a click does: `/action` on the selection, or, with
 nothing selected, what arriving at the card does. It is written in plain
@@ -445,8 +457,7 @@ make -C sw/apps/slide job        # the tour as a print job, /tmp/slide/deck.zpp
 
 - **Printing**: notes pages, and a print dialog (the words above are
   the way for now).
-- **Controls**: a list that scrolls (one longer than its box shows
-  what fits), a vertical slider, a kiosk mode that cannot be left;
+- **Controls**: a vertical slider, a kiosk mode that cannot be left;
   a debugger for scripts (errors say where; Esc stops).
 - **Diagrams**: resizing a group as one (it moves as one), connectors
   that avoid the shapes between theirs, text along a connector, line

@@ -112,6 +112,7 @@
 #include "ip.h"
 #include "dhcp.h"
 #include "dns.h"
+#include "mdns.h"		// DNS-SD browsing: Z_NET_BROWSE
 #if NTP_ENABLE
 #include "ntp.h"
 #endif
@@ -119,8 +120,8 @@
 #include "tcp.h"
 #if NET_NFS
 #include "nfs.h"
-#include "../../common/znfsproto.h"
 #endif
+#include "../../common/znfsproto.h"	// its subject numbers, for the check below
 #include "../../common/zrng.h"
 #include "telnet.h"
 #if NET_SOCK
@@ -417,7 +418,14 @@ typedef char net_subject_numbers_are_distinct[
 	 Z_SUBJ_DISTINCT2(Z_NET_DEBUG_DUMP, Z_NET_NTP_STATUS) &&
 	 Z_SUBJ_DISTINCT2(Z_NET_DEBUG_DUMP, Z_NET_DNS_RESOLVE) &&
 	 Z_SUBJ_DISTINCT2(Z_NET_DEBUG_DUMP, Z_NET_TFTP_PUT) &&
-	 Z_SUBJ_DISTINCT2(Z_NET_DEBUG_DUMP, Z_STREAM_OPEN)) ? 1 : -1];
+	 Z_SUBJ_DISTINCT2(Z_NET_DEBUG_DUMP, Z_STREAM_OPEN) &&
+	 Z_SUBJ_DISTINCT2(Z_NET_BROWSE, Z_NET_NTP_SYNC) &&
+	 Z_SUBJ_DISTINCT2(Z_NET_BROWSE, Z_NET_NTP_STATUS) &&
+	 Z_SUBJ_DISTINCT2(Z_NET_BROWSE, Z_NET_NFS_REQ) &&
+	 Z_SUBJ_DISTINCT2(Z_NET_BROWSE, Z_NET_NFS_EVENT) &&
+	 Z_SUBJ_DISTINCT2(Z_NET_BROWSE, Z_STREAM_OPEN) &&
+	 Z_SUBJ_DISTINCT2(Z_NET_BROWSE_REPLY, Z_NET_NFS_REPLY) &&
+	 Z_SUBJ_DISTINCT2(Z_NET_BROWSE_REPLY, Z_NET_NTP_STATUS)) ? 1 : -1];
 
 static void print_ip(uint32_t ip) {
 	printf("%ld.%ld.%ld.%ld",
@@ -1751,6 +1759,8 @@ int main(void) {
 			else if (msg.subject == Z_STREAM_OPEN) handle_stream_open(&msg);
 			else if (msg.subject == Z_NET_TFTP_PUT) handle_tftp_put_request(&msg);
 			else if (msg.subject == Z_NET_DNS_RESOLVE) handle_dns_resolve(&msg);
+			else if (msg.subject == Z_NET_BROWSE)
+				mdns_browse_start(msg.obj.type == Z_STR ? msg.obj.val.str : NULL, msg.from, msg.tag);
 #if NET_NFS
 			else if (msg.subject == Z_NET_NFS_REQ) nfs_handle_msg(&msg);
 #endif
@@ -1857,6 +1867,7 @@ int main(void) {
 		NP_PHASE(NP_SSH, ssh_poll());
 #endif
 		NP_PHASE(NP_DNS, dns_poll());
+		mdns_poll();
 #if NET_NFS
 		nfs_poll();
 #endif

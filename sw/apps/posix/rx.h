@@ -45,6 +45,12 @@ typedef struct {
 // one this engine takes.
 bool rx_compile(rx_t *r, const char *pat, int n, bool extended, char *err, int errcap);
 
+// The same, with flags: RX_EXTENDED, and RX_ICASE -- letters match
+// either case (ASCII; grep -i, sed's s///I).
+#define RX_EXTENDED 1
+#define RX_ICASE    2
+bool rx_compile_flags(rx_t *r, const char *pat, int n, int flags, char *err, int errcap);
+
 // The first match in s[from..len): true with cap[2k], cap[2k+1] the
 // start and end of group k (cap[0], cap[1] the whole match; -1 for a
 // group that took no part). `bol`: s[0] is the start of a line, for ^.

@@ -227,6 +227,7 @@ static int s_cur, s_cb, s_blank;
 static uint32_t s_shown_at;
 static bool s_speak_notes;
 static player_t s_pl;
+static int s_ptr_x = -1, s_ptr_y = -1;	// the pointer, units: what the wheel is over
 static char s_open[200];			// a deck an action asked for: the editor opens it
 static bool s_running;
 
@@ -556,6 +557,8 @@ int show_run(deck_t *d, int start, z_win_t *win) {
 				v = m.obj.val.uint32;
 				b = Z_WM_UNPACK_MOUSE_BUTTONS(v);
 				to_units((int)Z_WM_UNPACK_MOUSE_X(v), (int)Z_WM_UNPACK_MOUSE_Y(v), &ux, &uy);
+				s_ptr_x = ux;
+				s_ptr_y = uy;
 				if ((b & Z_MOUSE_BTN_LEFT) && !(last_btn & Z_MOUSE_BTN_LEFT)) {
 					// a control takes the click; elsewhere it is the next card
 					bool took;
@@ -570,10 +573,14 @@ int show_run(deck_t *d, int start, z_win_t *win) {
 				last_btn = b;
 				break;
 			}
-			case Z_WM_WHEEL:
-				if (m.obj.type == Z_UINT32)
-					go = Z_WM_WHEEL_NOTCHES(m.obj.val.uint32) > 0 ? s_cur - 1 : next_of(s_cur);
+			case Z_WM_WHEEL: {
+				bool r;
+				if (m.obj.type != Z_UINT32) break;
+				// a list under the pointer that scrolls takes it; else cards
+				if (player_wheel(&s_pl, s_ptr_x, s_ptr_y, Z_WM_WHEEL_NOTCHES(m.obj.val.uint32), &r)) break;
+				go = Z_WM_WHEEL_NOTCHES(m.obj.val.uint32) > 0 ? s_cur - 1 : next_of(s_cur);
 				break;
+			}
 			case Z_WM_GAME_REVOKED:
 				// Super+Esc: wm has the screen back already; draw nothing more
 				s_pl.focus = NULL;

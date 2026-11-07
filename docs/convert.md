@@ -4,17 +4,21 @@ Kind: a **desktop app** ([app_kinds.md](app_kinds.md)).
 
 `convert` turns documents, tables and archives from one format into
 another: a Word file into something `text` can edit, a sheet into an
-`.xlsx` someone else can open, a `.tar.gz` into a folder. It is a
-program of its own, run from the shell or by an app, and the formats
-themselves are a library, `sw/common/formats/`, that nothing else
-links.
+`.xlsx` someone else can open, a `.tar.gz` into a folder, a folder into
+a `.zip`. It is a program of its own -- with [a window](#the-convert-window)
+when it is started by itself, from the dock's Work group -- run from
+the shell or by an app, and the formats themselves are a library,
+`sw/common/formats/`, that nothing else links.
 
 ```
+convert                                  the window
 convert report.docx                      open it (as files does)
 convert report.docx /tmp/report.md       a document, by the names
 convert -t odt notes.txt /home/notes.odt the output type named
 convert budget.zss /home/budget.xlsx     a table
 convert photos.zip /home/photos          an archive, into a folder
+convert /home/photos /home/photos.zip    a folder, packed (.zip .tar .tar.gz)
+convert /home/photos                     ... into photos.zip beside it
 convert log.txt.gz /tmp/log.txt          one gzipped file
 convert -l                               the formats
 ```
@@ -29,13 +33,51 @@ or is stopped leaves nothing behind but what was there before.
 |---|---|---|
 | Documents | `txt` `md` `html` `rtf` `docx` `odt` `epub` | `txt` `md` `html` `rtf` `docx` `odt` |
 | Tables | `csv` `tsv` `zss` `xlsx` `ods` | the same |
-| Archives | `zip` `tar` `tar.gz`/`tgz` (to a folder), `gz` (to a file) | -- |
+| Archives | `zip` `tar` `tar.gz`/`tgz` (to a folder), `gz` (to a file) | `zip` `tar` `tar.gz`/`tgz`, from a folder ([Packing a folder](#packing-a-folder)) |
 
 A document becomes another document and a table another table; a
 document cannot become a table. The input's type comes from its name
 and is then checked against its first bytes, so a `.docx` renamed
 `.zip` is still read as a document, and a zip is told apart from the
 formats built on one (docx, xlsx, odt, ods, epub) by what is inside it.
+
+## The convert window
+
+`convert` with nothing to do -- its icon in the dock (Work, or More
+apps on the wide row), or `run convert` -- opens a window:
+
+| | |
+|---|---|
+| **From** | the file or folder, by **Choose...** (Ctrl+O): Choose on a folder takes the folder, Enter or a double-click goes into it |
+| **To** | what it can become, by **<** and **>** (or Left and Right): a document any document format, a table any table format, a folder `.zip`, `.tar` or `.tar.gz`, an archive a folder of its files |
+| **Convert** | asks where the result goes (a Save dialog, starting beside the original, with its name and the new ending), then does it, the progress bar in the window; **Cancel** (or Esc) stops it and leaves nothing |
+| **Open** | the result: a document in `text` or `read`, a sheet in `sheet`, a folder or a new archive in `files` |
+
+The ending typed into the Save dialog wins over the choice in **To**,
+as in `files`' Convert. Tab moves between the buttons, Enter presses
+the one with the focus, F1 is help, Esc closes the window.
+
+## Packing a folder
+
+A folder becomes a zip, a tar or a tar.gz, its own name the first part
+of every path inside (`photos/2024/a.jpg`), as `zip -r` and `tar` make
+them -- so anything unpacks it, and unpacking it here makes a folder
+holding `photos` ([Opening a file](#opening-a-file)). From `files`,
+**Convert** on a selected folder offers `<name>.zip` beside it; change
+the ending for `.tar` or `.tar.gz`.
+
+- **zip** deflates each file (stores it if it is a kind that is
+  compressed already: jpg, png, mp3, zip, docx ...); **tar.gz** deflates
+  the whole tar. The compressor is small: text comes out at about half
+  its size, a quarter to a third bigger than `gzip -9` would make it.
+- **Dates** are the files' own; **names** are UTF-8 (zip says so);
+  folders are entries of their own, so empty ones come back.
+- An archive being written inside the folder it packs is not packed
+  into itself.
+- **Limits:** 16 folders deep (deeper ones are left out, and convert
+  says how many), 65,535 entries in a zip, 256MB in all (`ZF_OUT_MAX`).
+  A zip's list of entries is kept in memory until the end, about 30
+  bytes and the name each.
 
 ### What a document keeps
 
@@ -142,7 +184,8 @@ in the same window, which stays until it is dismissed.
 ### Exporting from the apps
 
 `files`' **Convert** button ([file_browser.md](file_browser.md#convert))
-prompts for a name whose ending picks the format. `text`'s and
+prompts for a name whose ending picks the format -- for a folder, the
+archive to pack it into. `text`'s and
 `sheet`'s **Save As** onto another system's format (`.docx`, `.odt`,
 `.rtf`, `.html`; `.xlsx`, `.ods`, `.tsv`) writes the document to `/tmp`
 and converts it from there. All three use the window above and do not
@@ -250,8 +293,10 @@ read, so neither ever waits on a large piece of work.
 | `zf_rtf.c`, `zf_html.c`, `zf_epub.c`, `zf_text.c` | rtf, html, epub, md and txt readers |
 | `zf_tab.c` | tables: csv, tsv, zss, xlsx, ods, both ways; formula translation |
 | `zf_arch.c` | zip, tar, gzip extraction |
+| `zf_pack.c` | zip, tar, tar.gz writing: deflate (LZ77, fixed Huffman codes), gzip, ustar, zip's directory |
 | `zf_conv.c` | detection and `zf_convert()` |
-| `sw/apps/convert/convert.c` | the program: fs I/O, arena, progress, the shell |
+| `sw/apps/convert/convert.c` | the program: fs I/O, arena, progress, the shell, the window |
+| `sw/apps/convert/pack.c` | a folder walked (`zwalk`) into `zf_pack` |
 | `sw/common/zconvert.[ch]` | the caller's side |
 
 The existing format code elsewhere in `sw/common` (`zinflate.c`,
@@ -279,6 +324,15 @@ command-line converter over stdio) and checks, 437 checks in all:
 - **archives** -- zip, tar (with long names), tar.gz and gz extracted
   and compared byte for byte; hostile paths refused with nothing
   written; a zip bomb stopped;
+- **packing** -- a tree (long names, UTF-8, empty files and folders,
+  text, zeros, random bytes) packed into zip, tar, tar.gz and tgz, with
+  the compressor and without (a heap too small for it), read back by
+  Python's zipfile, tarfile and gzip, by `unzip -t`, `tar tf` and
+  `gzip -t`, and extracted again by this library; deflate round trips
+  of repeats, near-random and empty input; and `pack.c` itself over a
+  host directory (`sw/apps/convert/tests/test_pack.py`): a folder of
+  pages of entries, an archive written inside the folder it packs, too
+  deep, cancelled at many points with nothing left open;
 - **hostile input** -- every fixture truncated and corrupted at many
   points: a clean error or a result, never a crash;
 - **cancelling** -- stops at the first poll, from every kind of input.
@@ -288,9 +342,13 @@ LibreOffice checks are skipped when it is not installed (or with
 
 ## Not yet
 
-- Making a zip or tar from a folder.
+- Packing several files, or a selection: a folder at a time.
+- Dynamic Huffman codes in deflate, which would bring packing to
+  `gzip`'s sizes.
 - A cancelled or failed extraction keeps the files it had finished
   (the one being written is removed): the folder holds part of the
   archive, and says so by what is missing.
-- Compressed (deflate) output in written zips; images; tables inside
-  documents as tables; more than the first sheet of a workbook.
+- Compressed docx, xlsx, odt and ods: their zips are written stored
+  (zf_zip.c), though zf_pack.c's compressor could serve; images;
+  tables inside documents as tables; more than the first sheet of a
+  workbook.

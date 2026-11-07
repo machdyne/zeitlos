@@ -29,6 +29,7 @@ casino
 chess
 chip8       "Chip 8"
 clock
+convert     "Convert"
 draw
 files
 gldemo      "GL demo"

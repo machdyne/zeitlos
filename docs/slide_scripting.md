@@ -57,7 +57,7 @@ status line: `/(get-text "score")`, `/(go 3)`, `/(set-text "title"
 | `(get-text "name")` | an object's text: a field's, a label's, a list's items |
 | `(set-text "name" value)` | any value as its text: `(set-text "sum" (+ 1 2))` |
 | `(get-value "name")` | a check's or radio's `#t`/`#f`, a slider's number, a list's chosen item (`#f` for none) |
-| `(set-value "name" n)` | a check (1 or 0), a slider (kept in its range), a list (the item's number from 0; -1 none) |
+| `(set-value "name" n)` | a check (1 or 0), a slider (kept in its range), a list (the item's number from 0, scrolled to where it shows; -1 none) |
 | `(card-name)` `(card-number)` `(card-count)` `(deck-title)` | where you are |
 | `(speak "words")` `(speak-text "name")` | aloud, through the speech service |
 | `(take-text "name")` | an object's text, and the object emptied: a form's field read as its record is made |

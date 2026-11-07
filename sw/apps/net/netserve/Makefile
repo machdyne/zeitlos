@@ -32,7 +32,7 @@ ssh_wire.o: ../ssh/ssh_wire.c ../ssh/ssh_wire.h
 ssh_crypto.o: ../ssh/ssh_crypto.c ../ssh/ssh_crypto.h
 	$(CC) $(CFLAGS) -c ../ssh/ssh_crypto.c -o ssh_crypto.o
 monocypher.o: $(MONO)/monocypher.c $(MONO)/monocypher.h
-	$(CC) $(CFLAGS) -c $(MONO)/monocypher.c -o monocypher.o
+	$(CC) $(CFLAGS) -DZ_CHACHA_ROUNDS=z_chacha20_rounds -c $(MONO)/monocypher.c -o monocypher.o
 
 # X25519 and Ed25519 checks on montmul's register file (docs/z25519.md)
 z25519.o: ../../../common/z25519.c ../../../common/z25519.h

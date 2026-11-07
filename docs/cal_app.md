@@ -48,6 +48,7 @@ it. Nothing else is markable and nothing is selectable: see
 | Esc | abandon a half-typed year |
 | Backspace | delete a digit |
 | Tab / Shift+Tab | move between the arrows |
+| `z`, or a click on the date line | open Settings on Date & time |
 
 **F1** shows a short help box ([app_help.md](app_help.md)).
 
@@ -131,6 +132,9 @@ under them is not a feature. `user_navigated` is that one bit.
 `/sys/zeitlos.cfg` (`docs/config.md`), **UTC by default** -- the same
 conversion the clock uses (`z_tz_*()`, `zrtc.h`). Unconfigured, west of
 Greenwich the highlight moves several hours before local midnight.
+
+To change the zone, click the date line at the bottom or press `z`:
+Settings opens on its Date & time page (`run settings time`).
 
 The status line ends with the zone's abbreviation (`UTC`, `CEST`) for
 the same reason the clock's does: an unlabelled date that disagrees with

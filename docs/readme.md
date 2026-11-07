@@ -148,6 +148,7 @@ with [welcome](welcome.md); to program it, [kernel](kernel.md) and
 | [zjson](zjson.md) | A strict JSON parser: zfed's subset |
 | [z25519](z25519.md) | X25519 and Ed25519 checks on the montmul block |
 | [sha256\_hw](sha256_hw.md) | The SHA-256 block, and how software shares it |
+| [chacha](chacha.md) | ChaCha20, and the CPU's rotate instructions (`CPU_ROT`) |
 | [cryptobench](cryptobench.md) | What the cryptography costs on this machine |
 | [bbs\_linux](bbs_linux.md) | The BBS as a Linux server: telnet, SSH via OpenSSH, systemd |
 | [bbs\_deploy](bbs_deploy.md) | A BBS and its fed node on a Linux cloud server |
@@ -189,7 +190,7 @@ with [welcome](welcome.md); to program it, [kernel](kernel.md) and
 | [slide\_app](slide_app.md) | `slide`: cards, slides and pages |
 | [slide\_scripting](slide_scripting.md) | `slide`'s controls run Scheme: scripts, timers, the message box, example decks |
 | [print](print.md) | `print`: printing over IPP or to port 9100, PDF and PostScript files |
-| [convert](convert.md) | `convert`: documents, tables, archives |
+| [convert](convert.md) | `convert`: documents, tables, archives; folders into zip or tar |
 | [app\_kinds](app_kinds.md) | desktop, screen and full-screen apps: what each kind is and which apps are which |
 | [app\_help](app_help.md) | F1: a help box in every app, with a button to these docs |
 | [keys](keys.md) | Function keys: the same meaning in every app (F1 help ... F11 full screen, F12 app home) |

@@ -8,7 +8,8 @@
 #   make                 convert.bin
 #   make test            the formats library's host tests (Python,
 #                        python-docx, openpyxl, odfpy, ebooklib; and
-#                        LibreOffice when installed)
+#                        LibreOffice when installed), and packing a
+#                        folder (pack.c) over a host directory
 
 APP = convert
 
@@ -19,10 +20,11 @@ SRC_DIRS = ../../common/formats ../sheet
 APP_CFLAGS = -I../../common
 
 FORMATS = zf_core.o zf_xml.o zf_zip.o zf_em.o zf_docw.o zf_docx.o zf_rtf.o \
-	zf_html.o zf_epub.o zf_text.o zf_tab.o zf_arch.o zf_conv.o
+	zf_html.o zf_epub.o zf_text.o zf_tab.o zf_arch.o zf_pack.o zf_conv.o
 
 OBJS = zeitlos.o zobj.o zport.o zfsapp.o zwin.o zgfx.o zfont_data.o ztype.o \
-	zinflate.o zfix.o sheet_core.o $(FORMATS) convert.o
+	zwidget.o zdialog.o zflist.o zedit.o zspeak.o zfsc.o zwalk.o \
+	zinflate.o zfix.o sheet_core.o $(FORMATS) pack.o convert.o
 
 # 64KB of stack and heap: the formats keep their state in .bss, and
 # the largest frame is a few hundred bytes. The arena (zf_heap) is
@@ -31,6 +33,7 @@ APP_STACK = 64K
 
 test:
 	python3 ../../common/formats/tests/run_tests.py
+	python3 tests/test_pack.py
 
 .PHONY: test
 

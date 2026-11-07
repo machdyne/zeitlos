@@ -289,7 +289,7 @@ endif
 # zrtc.o rides with ntp.o rather than being listed separately: it is
 # the calendar arithmetic ntp.c uses to print the time it just set, and
 # nothing else in this app has any use for a date.
-OBJS = zeitlos.o zobj.o zstream.o zport.o zrng.o zfsapp.o zusbc.o netcfg.o screen.o zscreen.o zinput.o $(PHY_OBJ) eth.o arp.o ip.o udp.o $(DHCP_OBJ) dns.o $(NTP_OBJ) tcp.o relay.o telnet.o $(SOCK_OBJ) $(NFS_OBJ) $(SSH_OBJ) tftp.o $(PROF_OBJ) net.o
+OBJS = zeitlos.o zobj.o zstream.o zport.o zrng.o zfsapp.o zusbc.o netcfg.o screen.o zscreen.o zinput.o $(PHY_OBJ) eth.o arp.o ip.o udp.o $(DHCP_OBJ) dns.o mdns.o $(NTP_OBJ) tcp.o relay.o telnet.o $(SOCK_OBJ) $(NFS_OBJ) $(SSH_OBJ) tftp.o $(PROF_OBJ) net.o
 
 # each rule below lists its own .c file as a prerequisite -- without
 # this, `make` has no way to know a source file changed (it was only
@@ -368,6 +368,9 @@ dhcp.o: dhcp.c dhcp.h udp.h ip.h eth.h
 dns.o: dns.c dns.h udp.h ../../common/znet.h
 	$(CC) $(CFLAGS) -c dns.c -o dns.o
 
+mdns.o: mdns.c mdns.h udp.h ip.h ../../common/znet.h
+	$(CC) $(CFLAGS) -c mdns.c -o mdns.o
+
 ntp.o: ntp.c ntp.h udp.h dns.h ../../common/zrtc.h ../../common/znet.h .net_config_selected
 	$(CC) $(CFLAGS) -c ntp.c -o ntp.o
 
@@ -389,7 +392,7 @@ relay.o: relay.c relay.h tcp.h ip.h ../../common/znet.h ../../common/zport.h
 MONO = ../../ext/monocypher
 
 monocypher.o: $(MONO)/monocypher.c $(MONO)/monocypher.h
-	$(CC) $(CFLAGS) -c $(MONO)/monocypher.c -o monocypher.o
+	$(CC) $(CFLAGS) -DZ_CHACHA_ROUNDS=z_chacha20_rounds -c $(MONO)/monocypher.c -o monocypher.o
 
 # X25519 and Ed25519 checks on montmul's register file (docs/z25519.md)
 z25519.o: ../../common/z25519.c ../../common/z25519.h
@@ -491,6 +494,8 @@ test:
 	$(HOSTCC) --std=gnu99 -Wall -DTFTP_HOST_TEST -I. -I../../common -o /tmp/test_tftp_get \
 		tests/test_tftp_get.c
 	/tmp/test_tftp_get
+	$(HOSTCC) --std=gnu99 -Wall -Wno-int-to-pointer-cast -I. -I../../common -o /tmp/test_mdns tests/test_mdns.c
+	/tmp/test_mdns
 	$(HOSTCC) -O2 -o /tmp/test_rxfifo_status tests/test_rxfifo_status.c
 	/tmp/test_rxfifo_status
 

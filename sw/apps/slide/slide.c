@@ -2464,6 +2464,9 @@ static void bar_click(int cx, int cy) {
 	}
 }
 
+// Where the pointer last was, content pixels: what the wheel is over.
+static int ptr_cx = -1, ptr_cy = -1;
+
 static void handle_mouse(uint32_t packed) {
 	int cx, cy;
 	uint8_t b = (uint8_t)Z_WM_UNPACK_MOUSE_BUTTONS(packed);
@@ -2472,7 +2475,11 @@ static void handle_mouse(uint32_t packed) {
 	bool shift = (mods_now & Z_KBD_MOD_SHIFT) != 0;
 	btn_prev = b;
 	if (!z_win_mouse_content_xy(&win, packed, &cx, &cy)) {
+		ptr_cx = ptr_cy = -1;
 		if (!up) return;
+	} else {
+		ptr_cx = cx;
+		ptr_cy = cy;
 	}
 	if (menu_on) {
 		if (down) menu_click(cx, cy);
@@ -2555,7 +2562,7 @@ static void handle_mouse(uint32_t packed) {
 		}
 		return;
 	}
-	if (playing() && (pl.pressed || pl.drag)) {
+	if (playing() && (pl.pressed || pl.drag || pl.scroll)) {
 		int ux = to_units(cx - card_x + scroll_x), uy = to_units(cy - card_y + scroll_y);
 		if (up ? player_release(&pl, ux, uy) : player_motion(&pl, ux, uy)) card_changed();
 		return;
@@ -2694,6 +2701,16 @@ int main(void) {
 				break;
 			case Z_WM_WHEEL:
 				if (msg.obj.type != Z_UINT32) break;
+				if (playing() && ptr_cx >= 0) {
+					// a list under the pointer that scrolls takes it
+					bool r;
+					pl_sync();
+					if (player_wheel(&pl, to_units(ptr_cx - card_x + scroll_x), to_units(ptr_cy - card_y + scroll_y),
+						Z_WM_WHEEL_NOTCHES(msg.obj.val.uint32), &r)) {
+						if (r) card_changed();
+						break;
+					}
+				}
 				if (mode == MODE_SORTER) {
 					int rows = (ed.d->ncard + thumb_cols - 1) / thumb_cols;
 					sort_top -= Z_WM_WHEEL_NOTCHES(msg.obj.val.uint32);

@@ -14,6 +14,7 @@
 #include "zwin.h"
 #include "zpaths.h"
 #include "zcfg.h"
+#include "zbrowse.h"
 
 static int cat(char *d, int n, int cap, const char *s) {
 	while (*s && n < cap - 1) d[n++] = *s++;
@@ -135,11 +136,20 @@ void z_print_poll(z_print_t *p) {
 
 // -- the print dialog's answer --
 
+static uint32_t find_ask(void) { return z_browse_ask(Z_BROWSE_PRINTERS, NULL, 0); }
+
+static int find_reply(const z_msg_t *m, uint32_t tag, z_browse_printer_t *out, int max) {
+	return z_browse_reply(m, tag, out, max, NULL, 0);
+}
+
+static const z_print_finder_t finder = { find_ask, find_reply };
+
 void z_print_opts_init(z_print_opts_t *o) {
 	memset(o, 0, sizeof(*o));
 	z_cfg_get("apps.print.printer", o->printer, sizeof(o->printer));
 	z_cfg_get("apps.print.paper", o->paper_default, sizeof(o->paper_default));
 	o->dest = o->printer[0] ? Z_PRINT_TO_PRINTER : Z_PRINT_TO_PDF;
+	o->finder = &finder;
 	o->pages = Z_PRINT_PAGES_ALL;
 	o->copies = 1;
 	o->nup = 1;
@@ -153,6 +163,7 @@ void z_print_opts_job(const z_print_opts_t *o, zp_writer_t *w) {
 		cat(v, n, sizeof(v), o->file);
 		zp_job(w, "dest", v);
 	}
+	if (o->dest == Z_PRINT_TO_PRINTER && o->address[0]) zp_job(w, "dest", o->address);
 	if (o->pages == Z_PRINT_PAGES_CURRENT && o->current > 0) {
 		cat_dec(v, 0, sizeof(v), (uint32_t)o->current);
 		zp_job(w, "pages", v);

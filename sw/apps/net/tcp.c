@@ -777,26 +777,28 @@ uint16_t tcp_local_port(const tcp_conn_t *c) { return c->local_port; }
 bool tcp_is_inbound(const tcp_conn_t *c) { return c->inbound; }
 uint16_t tcp_mss(const tcp_conn_t *c) { return c->snd_mss; }
 
-bool tcp_send(tcp_conn_t *c, const uint8_t *data, uint16_t len) {
+// The pool slot a segment would go in now, or -1 (tcp_send()'s rules).
+static int send_slot(tcp_conn_t *c) {
 	int i;
-	if (!tcp_can_send(c) || c->close_pending) return false;
-	if (len == 0) return true;          // nothing to send: not an empty segment
-	if (c->tx_pending) return false;
-	if (len > c->snd_mss) return false;
-	if (c->qn >= TCP_TX_MAX) return false;
+	if (!tcp_can_send(c) || c->close_pending) return -1;
+	if (c->tx_pending) return -1;
+	if (c->qn >= TCP_TX_MAX) return -1;
 	{
 		// A connection that already has segments out may not take the
 		// last free one: that is kept for one that has none, so a bulk
 		// sender cannot shut an interactive session out.
 		int nfree = 0;
 		for (int k = 0; k < TCP_TX_SEGS; k++) if (!txpool[k].used) nfree++;
-		if (nfree == 0 || (c->qn && nfree < 2)) return false;
+		if (nfree == 0 || (c->qn && nfree < 2)) return -1;
 	}
 	for (i = 0; i < TCP_TX_SEGS && txpool[i].used; i++) { }
+	return i;
+}
+
+static void queue_slot(tcp_conn_t *c, int i, uint16_t len) {
 	txpool[i].used = true;
 	txpool[i].sent = false;
 	txpool[i].len = len;
-	memcpy(txpool[i].data, data, len);
 	// An empty queue starts the timer here: a NIC that never has room
 	// (an adapter unplugged) times the connection out like a lost peer.
 	if (!c->qn) {
@@ -805,6 +807,28 @@ bool tcp_send(tcp_conn_t *c, const uint8_t *data, uint16_t len) {
 	}
 	c->q[c->qn++] = (uint8_t)i;
 	tx_push(c);
+}
+
+bool tcp_send(tcp_conn_t *c, const uint8_t *data, uint16_t len) {
+	if (!tcp_can_send(c) || c->close_pending) return false;
+	if (len == 0) return true;          // nothing to send: not an empty segment
+	if (len > c->snd_mss) return false;
+	int i = send_slot(c);
+	if (i < 0) return false;
+	memcpy(txpool[i].data, data, len);
+	queue_slot(c, i, len);
+	return true;
+}
+
+uint8_t *tcp_send_buf(tcp_conn_t *c) {
+	int i = send_slot(c);
+	return i < 0 ? NULL : txpool[i].data;
+}
+
+bool tcp_send_commit(tcp_conn_t *c, uint16_t len) {
+	int i = send_slot(c);
+	if (i < 0 || len == 0 || len > c->snd_mss) return false;
+	queue_slot(c, i, len);
 	return true;
 }
 

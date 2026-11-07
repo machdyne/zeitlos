@@ -161,6 +161,10 @@ and an archive's own name without its ending, as the folder to extract
 into. Change the ending to pick another format: `report.odt`,
 `report.rtf`, `budget.ods`.
 
+On a **folder**, Convert packs it: the prompt offers `<name>.zip`
+beside it, and `.tar` or `.tar.gz` instead make those
+([convert.md](convert.md#packing-a-folder)).
+
 `convert` runs as its own process with a small window: a progress bar
 and **Cancel**, which stops it at once and leaves nothing behind. The
 browser does not wait for it -- it stays usable meanwhile -- and

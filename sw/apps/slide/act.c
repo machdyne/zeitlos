@@ -3,8 +3,12 @@
  */
 
 #include "act.h"
+
+// A list scrolled so its chosen item shows (the player's keys, set-value).
+static void act_list_reveal(const deck_t *d, obj_t *o);
 #include "render.h"
 #include "../../common/zpool.h"
+#include "../../common/zkbd.h"		// a list's keys
 
 #include <string.h>
 
@@ -251,12 +255,13 @@ static void run_forms(deck_t *d, int cur, const char *p) {
 			act_set_text(d, o, t);
 			if (host.changed) host.changed(host.u);
 		} else if (!strcmp(v, "set-value") && o && f.n == 2 && f.a[1].kind == A_NUM) {
+			act_touch(d, o);
 			o->value = (int16_t)f.a[1].num;
 			if (o->kind == OB_SLIDER) {
 				if (o->value < o->vmin) o->value = o->vmin;
 				if (o->value > o->vmax) o->value = o->vmax;
 			}
-			act_touch(d, o);
+			if (o->kind == OB_LIST) act_list_reveal(d, o);
 			if (host.changed) host.changed(host.u);
 		} else if (!strcmp(v, "speak") && f.n == 1) {
 			if (host.speak) host.speak(host.u, f.a[0].s);
@@ -502,7 +507,7 @@ obj_t *player_hit(player_t *p, int x, int y) {
 void player_reset(player_t *p) {
 	// (what showed pressed or focused is drawn again by whoever resets:
 	// another card, another deck, leaving -- all drawn whole)
-	p->pressed = p->focus = p->drag = NULL;
+	p->pressed = p->focus = p->drag = p->scroll = NULL;
 	p->inside = false;
 	render_ui_state(NULL, NULL);
 }
@@ -538,6 +543,28 @@ static void radio_set(player_t *p, obj_t *o) {
 	o->value = 1;
 }
 
+// -- a list that scrolls --
+
+static void act_list_reveal(const deck_t *d, obj_t *o) {
+	int rows = render_list_rows(d, o), top = render_list_top(d, o);
+	if (o->value >= 0 && o->value < top) top = o->value;
+	if (o->value >= top + rows) top = o->value - rows + 1;
+	o->top = (int16_t)top;
+	o->top = (int16_t)render_list_top(d, o);
+}
+
+// Moves o's first row shown by `by`: true if it moved.
+static bool list_scroll(player_t *p, obj_t *o, int by) {
+	int was = render_list_top(p->d, o), to;
+	o->top = (int16_t)(was + by);
+	to = render_list_top(p->d, o);
+	o->top = (int16_t)was;
+	if (to == was) return false;
+	act_touch_ui(p->d, o);			// how it is looked at, not what it holds
+	o->top = (int16_t)to;
+	return true;
+}
+
 static void fire(player_t *p, obj_t *o) {
 	if (host.clicked) host.clicked(host.u, p->d, p->cur, o);
 	if (o->action) act_run(p->d, p->cur, o->action);
@@ -567,9 +594,23 @@ bool player_press(player_t *p, int x, int y, bool *took) {
 		break;
 	}
 	case OB_LIST: {
-		int rh = render_list_row_h(p->d, o), i;
-		i = (y - o->y - o->pad) / (rh > 0 ? rh : 1);
-		if (y - o->y - o->pad >= 0 && i < render_list_items(o) && i != o->value) {
+		int i = render_list_hit(p->d, o, x, y);
+		// the keyboard goes to it: Up, Down ... (player_key())
+		if (p->focus != o) { set_focus(p, o); redraw = true; }
+		if (i == -2) {
+			// its scroll bar: the thumb is dragged, the track pages
+			int ty, th;
+			render_list_thumb(p->d, o, &ty, &th);
+			if (y >= ty && y < ty + th) {
+				p->scroll = o;
+				p->grab = y - ty;
+			} else {
+				list_scroll(p, o, (y < ty ? -1 : 1) * render_list_rows(p->d, o));
+			}
+			ui(p);
+			return true;
+		}
+		if (i >= 0 && i != o->value) {
 			act_touch(p->d, o);
 			o->value = (int16_t)i;
 			ui(p);
@@ -587,6 +628,18 @@ bool player_press(player_t *p, int x, int y, bool *took) {
 }
 
 bool player_motion(player_t *p, int x, int y) {
+	if (p->scroll) {
+		// the thumb follows the pointer; the rows follow the thumb
+		obj_t *o = p->scroll;
+		int x0, y0, x1, y1, ty, th, n = render_list_items(o), rows = render_list_rows(p->d, o), span, want;
+		(void)x;
+		obj_bounds(o, &x0, &y0, &x1, &y1);
+		render_list_thumb(p->d, o, &ty, &th);
+		span = y1 - y0 - 2 - th;
+		if (span <= 0 || n <= rows) return false;
+		want = ((y - p->grab - (y0 + 1)) * (n - rows) + span / 2) / span;
+		return list_scroll(p, o, want - render_list_top(p->d, o));
+	}
 	if (p->drag) {
 		int v = render_slider_value(p->drag, x);
 		if (v != p->drag->value) { act_touch(p->d, p->drag); p->drag->value = (int16_t)v; return true; }
@@ -601,6 +654,11 @@ bool player_motion(player_t *p, int x, int y) {
 
 bool player_release(player_t *p, int x, int y) {
 	obj_t *o = p->pressed;
+	if (p->scroll) {
+		bool moved = player_motion(p, x, y);
+		p->scroll = NULL;
+		return moved;
+	}
 	if (p->drag) {
 		obj_t *s = p->drag;
 		player_motion(p, x, y);
@@ -625,15 +683,53 @@ bool player_release(player_t *p, int x, int y) {
 	return true;
 }
 
-// The next field on the card after `o` (Tab), wrapping; NULL if none.
+// The next field or list on the card after `o` (Tab), wrapping; NULL
+// if none.
 static obj_t *next_field(player_t *p, obj_t *o) {
 	card_t *c = p->d->card[p->cur];
 	int i, at = card_index_of(c, o), n = c->nobj;
 	for (i = 1; i <= n; i++) {
 		obj_t *f = c->obj[(at + i + n) % n];
-		if (f->kind == OB_FIELD && !(f->flags & OBF_HIDDEN)) return f;
+		if ((f->kind == OB_FIELD || f->kind == OB_LIST) && !(f->flags & OBF_HIDDEN)) return f;
 	}
 	return NULL;
+}
+
+static char fold(char c) { return c >= 'A' && c <= 'Z' ? (char)(c + 32) : c; }
+
+// A key for a list with the focus: the item it chooses, or -2 if the
+// key is not a list's.
+static int list_key(player_t *p, obj_t *o, uint32_t k) {
+	int n = render_list_items(o), v = o->value, rows = render_list_rows(p->d, o);
+	if (!n) return -2;
+	if (k == Z_KEY_DOWN) v = v < 0 ? 0 : v + 1;
+	else if (k == Z_KEY_UP) v = v < 0 ? 0 : v - 1;
+	else if (k == Z_KEY_PAGEDOWN) v = v < 0 ? 0 : v + rows;
+	else if (k == Z_KEY_PAGEUP) v = v < 0 ? 0 : v - rows;
+	else if (k == Z_KEY_HOME) v = 0;
+	else if (k == Z_KEY_END) v = n - 1;
+	else if (k > ' ' && k < 0x7f) {
+		// the next item starting with that letter, round to the first
+		int i;
+		for (i = 1; i <= n; i++) {
+			int j = (v + i + n) % n;
+			const char *s;
+			uint32_t len;
+			if (render_list_item(o, j, &s, &len) && len && fold(s[0]) == fold((char)k)) return j;
+		}
+		return o->value;
+	} else return -2;
+	if (v < 0) v = 0;
+	if (v > n - 1) v = n - 1;
+	return v;
+}
+
+bool player_wheel(player_t *p, int x, int y, int notches, bool *redraw) {
+	obj_t *o = player_hit(p, x, y);
+	*redraw = false;
+	if (!o || o->kind != OB_LIST || render_list_items(o) <= render_list_rows(p->d, o)) return false;
+	*redraw = list_scroll(p, o, -3 * notches);
+	return true;
 }
 
 bool player_key(player_t *p, uint32_t k, bool *redraw) {
@@ -642,6 +738,21 @@ bool player_key(player_t *p, uint32_t k, bool *redraw) {
 	if (!f) return false;
 	if (k == 0x1b) { set_focus(p, NULL); ui(p); *redraw = true; return true; }
 	if (k == '\t') { set_focus(p, next_field(p, f)); ui(p); *redraw = true; return true; }
+	if (f->kind == OB_LIST) {
+		int v = list_key(p, f, k);
+		if (v == -2) return false;
+		if (v != f->value) {
+			act_touch(p->d, f);
+			f->value = (int16_t)v;
+			act_list_reveal(p->d, f);
+			fire(p, f);
+		} else {
+			act_touch_ui(p->d, f);
+			act_list_reveal(p->d, f);
+		}
+		*redraw = true;
+		return true;
+	}
 	act_touch(p->d, f);			// its words change (or its action runs)
 	{
 		const char *t = f->text ? f->text : "";

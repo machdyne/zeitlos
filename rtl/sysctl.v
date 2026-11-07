@@ -2177,6 +2177,9 @@ module sysctl #()
       .PROGADDR_RESET(32'h0000_0000),
       .PROGADDR_IRQ(32'h0000_0010),
       .BARREL_SHIFTER(1),
+`ifdef CPU_ROT
+      .ENABLE_ROT(1),               // ror, rol, rori: docs/chacha.md
+`endif
       .COMPRESSED_ISA(0),
       // rv32im -- see rtl/boards.vh's CPU_MUL/CPU_MUL_FAST/CPU_DIV.
       // ENABLE_MUL and ENABLE_FAST_MUL are mutually exclusive inside

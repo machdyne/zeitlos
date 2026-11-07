@@ -21,6 +21,7 @@ another, and `net` can accept connections as well as make them.
 | **Throughput** | why bulk transfer is slow, and what actually bounds it |
 | **Diagnostics** | the counters, and what each one rules out |
 | **NFS** | a read-only NFSv3 client in `net`, for `/nfs` -- [nfs.md](nfs.md) |
+| **Finding services** | printers on the network, by DNS-SD over multicast DNS |
 
 ## Three MACs and an adapter, chosen at runtime
 
@@ -545,6 +546,56 @@ retry, and `tget` failed with "arp not resolved yet" every time. Found
 on a board that had been up a while with telnet sessions from another
 machine. `tests/test_arp.c` (`make test`) holds it to both rules, and
 fails against the old code.
+
+## Finding services
+
+`mdns.c` asks the network what offers a service -- today, which
+printers are there ([print.md](print.md#finding-printers)) -- the way
+a Mac or a phone finds an AirPrint printer: DNS-SD (RFC 6763) over
+multicast DNS (RFC 6762). A process sends `Z_NET_BROWSE` with the
+service types; about two seconds later the answer lists each instance
+with its name, address, port and TXT strings (`znet.h`).
+`sw/common/zbrowse.h` sends it and turns the answer into printers.
+
+**Asking, never announcing.** `net` sends questions and reads answers.
+It does not answer anyone's questions or announce anything of its own,
+so this machine is not itself findable by name (`zeitlos.local`).
+
+**Legacy unicast.** The questions go to 224.0.0.251 port 5353 from an
+ordinary port, which RFC 6762 (section 6.7) calls a *legacy unicast*
+query: every responder must answer it by unicast, straight back to
+that port. So the answers arrive like any DNS reply, and no MAC has to
+take multicast frames: the ENC28J60's filter stays unicast and
+broadcast, and a busy network's mDNS chatter never reaches the CPU.
+Sending to the group needs no ARP -- the frame goes to the group's own
+MAC address, `01:00:5e:00:00:fb` (`ip.c`).
+
+**The schedule.** PTR questions for each service type at once and again
+at 300 ms. Most responders put the instance's SRV (host and port), TXT
+and the host's A record in the same answer; for one that does not,
+the questions at 300, 600 and 900 ms ask for exactly what is missing.
+The answer goes back at 1.2 s if every instance is complete, at 1.8 s
+regardless, with the complete ones -- an instance needs its address
+and port; TXT is optional. One search at a time; a second while one
+runs is answered "busy" at once.
+
+**Small.** Up to six instances a search, and of their TXT strings only
+`rp=`, `ty=`, `product=` and `note=` -- what a list of printers shows
+and an address needs; a printer's full TXT runs to hundreds of bytes.
+About 3KB of `net`'s RAM, paid for by the relay's staging buffers
+([net_throughput.md](net_throughput.md), round 6).
+
+**Names in wire form.** An instance name is "a label, then the service
+type": *HP LaserJet 400 (1.2.3)._pdl-datastream._tcp.local*, where the
+first label holds dots of its own. Read as dotted text, that name has
+no answer to where the instance ends, so `mdns.c` keeps names as DNS
+labels, and the name it reports is every label before the service
+type -- which also mends a responder that split such a name.
+
+Tested against hand-built answers -- compression, records in any
+order, the follow-ups, names with dots, truncated and looping packets
+(`tests/test_mdns.c`, `make test`) -- and against a real responder,
+Python's `zeroconf`, on Linux.
 
 ## Accepted connections
 

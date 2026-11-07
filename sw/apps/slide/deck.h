@@ -110,6 +110,8 @@ typedef struct obj {
 
 	// controls
 	int16_t		value;			// check/radio 0 1; slider; list index (-1 none)
+	int16_t		top;			// list: the first item shown, when they do not all fit
+								// (how it is being looked at: not saved)
 	int16_t		vmin, vmax;		// slider
 	char		group[12];		// radio: the others it excludes ("" all on the card)
 

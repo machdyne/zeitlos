@@ -15,7 +15,7 @@ APP = draw
 OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o zwidget.o zspeak.o \
 	zfsapp.o zflist.o zdialog.o zedit.o draw_icons.o drawio.o \
 	drawstamp.o drawundo.o drawfill.o \
-	zprint.o zpaper.o zcfg.o zcanvas.o zcfont.o zpage.o draw.o
+	zprint.o zbrowse.o zpaper.o zcfg.o zcanvas.o zcfont.o zpage.o draw.o
 
 # draw_icons.c/.h are hand-edited (binary literals with an ASCII
 # picture of each row in the comment), not generated -- see

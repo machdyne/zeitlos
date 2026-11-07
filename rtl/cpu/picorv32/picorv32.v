@@ -67,6 +67,9 @@ module picorv32 #(
 	parameter [ 0:0] LATCHED_MEM_RDATA = 0,
 	parameter [ 0:0] TWO_STAGE_SHIFT = 1,
 	parameter [ 0:0] BARREL_SHIFTER = 0,
+	// Zeitlos: ror, rol and rori (RISC-V Zbb's encodings), with
+	// BARREL_SHIFTER only -- rtl/boards.vh's `CPU_ROT, docs/chacha.md
+	parameter [ 0:0] ENABLE_ROT = 0,
 	parameter [ 0:0] TWO_CYCLE_COMPARE = 0,
 	parameter [ 0:0] TWO_CYCLE_ALU = 0,
 	parameter [ 0:0] COMPRESSED_ISA = 0,
@@ -654,6 +657,7 @@ module picorv32 #(
 	reg instr_lb, instr_lh, instr_lw, instr_lbu, instr_lhu, instr_sb, instr_sh, instr_sw;
 	reg instr_addi, instr_slti, instr_sltiu, instr_xori, instr_ori, instr_andi, instr_slli, instr_srli, instr_srai;
 	reg instr_add, instr_sub, instr_sll, instr_slt, instr_sltu, instr_xor, instr_srl, instr_sra, instr_or, instr_and;
+	reg instr_rol, instr_ror, instr_rori;	// ENABLE_ROT
 	reg instr_rdcycle, instr_rdcycleh, instr_rdinstr, instr_rdinstrh, instr_ecall_ebreak;
 	reg instr_getq, instr_setq, instr_retirq, instr_maskirq, instr_waitirq, instr_timer;
 	wire instr_trap;
@@ -686,6 +690,7 @@ module picorv32 #(
 			instr_lb, instr_lh, instr_lw, instr_lbu, instr_lhu, instr_sb, instr_sh, instr_sw,
 			instr_addi, instr_slti, instr_sltiu, instr_xori, instr_ori, instr_andi, instr_slli, instr_srli, instr_srai,
 			instr_add, instr_sub, instr_sll, instr_slt, instr_sltu, instr_xor, instr_srl, instr_sra, instr_or, instr_and,
+			instr_rol, instr_ror, instr_rori,
 			instr_rdcycle, instr_rdcycleh, instr_rdinstr, instr_rdinstrh,
 			instr_getq, instr_setq, instr_retirq, instr_maskirq, instr_waitirq, instr_timer};
 
@@ -740,6 +745,9 @@ module picorv32 #(
 		if (instr_add)      new_ascii_instr = "add";
 		if (instr_sub)      new_ascii_instr = "sub";
 		if (instr_sll)      new_ascii_instr = "sll";
+		if (instr_rol)      new_ascii_instr = "rol";
+		if (instr_ror)      new_ascii_instr = "ror";
+		if (instr_rori)     new_ascii_instr = "rori";
 		if (instr_slt)      new_ascii_instr = "slt";
 		if (instr_sltu)     new_ascii_instr = "sltu";
 		if (instr_xor)      new_ascii_instr = "xor";
@@ -1080,6 +1088,11 @@ module picorv32 #(
 			instr_or    <= is_alu_reg_reg && mem_rdata_q[14:12] == 3'b110 && mem_rdata_q[31:25] == 7'b0000000;
 			instr_and   <= is_alu_reg_reg && mem_rdata_q[14:12] == 3'b111 && mem_rdata_q[31:25] == 7'b0000000;
 
+			// Zbb's rotates: funct7 0110000; rol funct3 001, ror and rori 101
+			instr_rol   <= ENABLE_ROT && BARREL_SHIFTER && is_alu_reg_reg && mem_rdata_q[14:12] == 3'b001 && mem_rdata_q[31:25] == 7'b0110000;
+			instr_ror   <= ENABLE_ROT && BARREL_SHIFTER && is_alu_reg_reg && mem_rdata_q[14:12] == 3'b101 && mem_rdata_q[31:25] == 7'b0110000;
+			instr_rori  <= ENABLE_ROT && BARREL_SHIFTER && is_alu_reg_imm && mem_rdata_q[14:12] == 3'b101 && mem_rdata_q[31:25] == 7'b0110000;
+
 			instr_rdcycle  <= ((mem_rdata_q[6:0] == 7'b1110011 && mem_rdata_q[31:12] == 'b11000000000000000010) ||
 			                   (mem_rdata_q[6:0] == 7'b1110011 && mem_rdata_q[31:12] == 'b11000000000100000010)) && ENABLE_COUNTERS;
 			instr_rdcycleh <= ((mem_rdata_q[6:0] == 7'b1110011 && mem_rdata_q[31:12] == 'b11001000000000000010) ||
@@ -1098,7 +1111,9 @@ module picorv32 #(
 			is_slli_srli_srai <= is_alu_reg_imm && |{
 				mem_rdata_q[14:12] == 3'b001 && mem_rdata_q[31:25] == 7'b0000000,
 				mem_rdata_q[14:12] == 3'b101 && mem_rdata_q[31:25] == 7'b0000000,
-				mem_rdata_q[14:12] == 3'b101 && mem_rdata_q[31:25] == 7'b0100000
+				mem_rdata_q[14:12] == 3'b101 && mem_rdata_q[31:25] == 7'b0100000,
+				// rori takes its amount from the rs2 field, as slli does
+				ENABLE_ROT && BARREL_SHIFTER && mem_rdata_q[14:12] == 3'b101 && mem_rdata_q[31:25] == 7'b0110000
 			};
 
 			is_jalr_addi_slti_sltiu_xori_ori_andi <= instr_jalr || is_alu_reg_imm && |{
@@ -1164,6 +1179,10 @@ module picorv32 #(
 			instr_sra   <= 0;
 			instr_or    <= 0;
 			instr_and   <= 0;
+
+			instr_rol   <= 0;
+			instr_ror   <= 0;
+			instr_rori  <= 0;
 		end
 	end
 
@@ -1224,7 +1243,10 @@ module picorv32 #(
 	reg alu_wait, alu_wait_2;
 
 	reg [31:0] alu_add_sub;
-	reg [31:0] alu_shl, alu_shr;
+	reg [31:0] alu_shl, alu_shr, alu_rot;
+	// ror by n; rol by n is ror by 32 - n
+	wire [4:0] alu_rot_n = instr_rol ? 5'd0 - reg_op2[4:0] : reg_op2[4:0];
+	wire [63:0] alu_rot_w = {reg_op1, reg_op1} >> alu_rot_n;
 	reg alu_eq, alu_ltu, alu_lts;
 
 	generate if (TWO_CYCLE_ALU) begin
@@ -1235,6 +1257,7 @@ module picorv32 #(
 			alu_ltu <= reg_op1 < reg_op2;
 			alu_shl <= reg_op1 << reg_op2[4:0];
 			alu_shr <= $signed({instr_sra || instr_srai ? reg_op1[31] : 1'b0, reg_op1}) >>> reg_op2[4:0];
+			alu_rot <= ENABLE_ROT ? alu_rot_w[31:0] : 32'bx;
 		end
 	end else begin
 		always @* begin
@@ -1244,6 +1267,7 @@ module picorv32 #(
 			alu_ltu = reg_op1 < reg_op2;
 			alu_shl = reg_op1 << reg_op2[4:0];
 			alu_shr = $signed({instr_sra || instr_srai ? reg_op1[31] : 1'b0, reg_op1}) >>> reg_op2[4:0];
+			alu_rot = ENABLE_ROT ? alu_rot_w[31:0] : 32'bx;
 		end
 	end endgenerate
 
@@ -1282,6 +1306,8 @@ module picorv32 #(
 				alu_out = alu_shl;
 			BARREL_SHIFTER && (instr_srl || instr_srli || instr_sra || instr_srai):
 				alu_out = alu_shr;
+			ENABLE_ROT && BARREL_SHIFTER && (instr_rol || instr_ror || instr_rori):
+				alu_out = alu_rot;
 		endcase
 
 `ifdef RISCV_FORMAL_BLACKBOX_ALU
@@ -2522,6 +2548,9 @@ module picorv32_axi #(
 	parameter [ 0:0] ENABLE_REGS_DUALPORT = 1,
 	parameter [ 0:0] TWO_STAGE_SHIFT = 1,
 	parameter [ 0:0] BARREL_SHIFTER = 0,
+	// Zeitlos: ror, rol and rori (RISC-V Zbb's encodings), with
+	// BARREL_SHIFTER only -- rtl/boards.vh's `CPU_ROT, docs/chacha.md
+	parameter [ 0:0] ENABLE_ROT = 0,
 	parameter [ 0:0] TWO_CYCLE_COMPARE = 0,
 	parameter [ 0:0] TWO_CYCLE_ALU = 0,
 	parameter [ 0:0] COMPRESSED_ISA = 0,
@@ -2653,6 +2682,7 @@ module picorv32_axi #(
 		.ENABLE_REGS_DUALPORT(ENABLE_REGS_DUALPORT),
 		.TWO_STAGE_SHIFT     (TWO_STAGE_SHIFT     ),
 		.BARREL_SHIFTER      (BARREL_SHIFTER      ),
+		.ENABLE_ROT          (ENABLE_ROT          ),
 		.TWO_CYCLE_COMPARE   (TWO_CYCLE_COMPARE   ),
 		.TWO_CYCLE_ALU       (TWO_CYCLE_ALU       ),
 		.COMPRESSED_ISA      (COMPRESSED_ISA      ),
@@ -2820,6 +2850,9 @@ module picorv32_wb #(
 	parameter [ 0:0] ENABLE_REGS_DUALPORT = 1,
 	parameter [ 0:0] TWO_STAGE_SHIFT = 1,
 	parameter [ 0:0] BARREL_SHIFTER = 0,
+	// Zeitlos: ror, rol and rori (RISC-V Zbb's encodings), with
+	// BARREL_SHIFTER only -- rtl/boards.vh's `CPU_ROT, docs/chacha.md
+	parameter [ 0:0] ENABLE_ROT = 0,
 	parameter [ 0:0] TWO_CYCLE_COMPARE = 0,
 	parameter [ 0:0] TWO_CYCLE_ALU = 0,
 	parameter [ 0:0] COMPRESSED_ISA = 0,
@@ -2917,6 +2950,7 @@ module picorv32_wb #(
 		.ENABLE_REGS_DUALPORT(ENABLE_REGS_DUALPORT),
 		.TWO_STAGE_SHIFT     (TWO_STAGE_SHIFT     ),
 		.BARREL_SHIFTER      (BARREL_SHIFTER      ),
+		.ENABLE_ROT          (ENABLE_ROT          ),
 		.TWO_CYCLE_COMPARE   (TWO_CYCLE_COMPARE   ),
 		.TWO_CYCLE_ALU       (TWO_CYCLE_ALU       ),
 		.COMPRESSED_ISA      (COMPRESSED_ISA      ),

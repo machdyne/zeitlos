@@ -15,7 +15,7 @@ APP_STACK = 32K
 APP_CFLAGS = -DZ_IMG_HAVE_PNG=1
 
 OBJS = zeitlos.o zobj.o zgfx.o zfont_data.o zwin.o \
-	zfsapp.o zdns.o zport.o zcfg.o \
+	zfsapp.o zdns.o zbrowse.o zport.o zcfg.o \
 	zimg.o zinflate.o zcanvas.o zcfont.o zpage.o zpaper.o zpool.o \
 	out.o pwg.o job.o raster.o vec.o ipp.o res.o run.o textdoc.o print.o
 

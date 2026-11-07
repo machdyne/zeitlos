@@ -234,6 +234,7 @@ int zf_extract_tar(zf_src_t *in, zf_dir_t *out);
 int zf_extract_gz(zf_io_t *in, zf_io_t *out);		// one file
 int zf_extract_tgz(zf_io_t *in, zf_dir_t *out);
 
+
 // -- what a file is --
 
 typedef enum {
@@ -242,6 +243,47 @@ typedef enum {
 	ZF_T_CSV, ZF_T_TSV, ZF_T_ZSS, ZF_T_XLSX, ZF_T_ODS,
 	ZF_T_ZIP, ZF_T_GZ, ZF_T_TAR, ZF_T_TGZ,
 } zf_type_t;
+
+// -- packing: an archive made from files (zf_pack.c) --
+//
+// zip (each file deflated, unless its kind is compressed already),
+// tar, or tar.gz, from entries the caller hands over one at a time --
+// it walks the folder, this writes the archive:
+//
+//   zf_pack_begin(&p, out, ZF_T_ZIP, total_bytes);
+//   zf_pack_add(&p, "photos", true, 0, d, t, NULL);           a folder
+//   zf_pack_add(&p, "photos/a.jpg", false, size, d, t, in);   a file: `size` bytes read from in
+//   zf_pack_end(&p);
+//
+// Names are relative, '/' between folders, a folder before what is in
+// it. Dates are FAT's (zfs.h). `total` is the sum of the files' sizes,
+// for zf_progress; zf_cancel_poll is asked at every 4KB. zip needs
+// `out` to seek (each entry's sizes are written back into its header),
+// and keeps its directory in zf_heap until the end: about 30 bytes
+// and the name per entry, after the compressor's 72KB.
+
+typedef struct {
+	zf_io_t		*out;
+	zf_type_t	to;
+	uint32_t	total, done;
+	// deflate: zip's entries, and all of tar.gz
+	uint8_t		*win;			// NULL: stored blocks (no room in zf_heap)
+	uint16_t	*prev, *head;
+	uint32_t	pos, fill;
+	uint32_t	bitbuf;
+	int			bitcnt;
+	uint8_t		zbuf[256];
+	uint32_t	zlen, zcsize;
+	uint32_t	gcrc, gsize;	// gzip's trailer
+	// zip's central directory, in zf_heap
+	uint8_t		*cd;
+	uint32_t	cdcap, cdlen, n;
+} zf_pack_t;
+
+int zf_pack_begin(zf_pack_t *p, zf_io_t *out, zf_type_t to, uint32_t total);
+int zf_pack_add(zf_pack_t *p, const char *name, bool dir, uint32_t size,
+	uint16_t fdate, uint16_t ftime, zf_io_t *in);
+int zf_pack_end(zf_pack_t *p);
 
 // From the name, then -- for a zip, and to catch a misnamed file --
 // from the first bytes. `in` may be NULL (the name alone).

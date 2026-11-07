@@ -35,7 +35,12 @@ typedef enum {
 typedef struct {
     px_fd_kind_t kind;
     int handle;         /* zfsapp handle, for PX_FD_FILE */
+    int owner;          /* the stage of a streaming pipe that opened it (0: none) */
 } px_fd_t;
+
+/* Who opens now: the running stage of a streaming pipe, 1 up, or 0.
+ * px_close_all_files() closes only that one's (sh.c sets it). */
+extern int px_fd_owner;
 
 void px_fd_init(void);
 px_fd_t *px_fd(int fd);
@@ -168,6 +173,8 @@ bool px_job_pending(void);
 px_shell_t *px_job_current(void);
 int  px_job_step(px_shell_t **ended);
 void px_job_tick(void);                     /* from px_intr() */
+void px_job_yield(void);                    /* the command hands back to the main loop now */
+void px_job_release(void);                  /* lets go of every px_malloc() and open file */
 bool px_job_wait(void);                     /* from the output path: false outside a command */
 size_t px_job_stack_size(void);
 size_t px_job_stack_last(void);
@@ -200,6 +207,14 @@ void px_bi_tee(px_shell_t *sh, int argc, char **argv);
 void px_bi_cmp(px_shell_t *sh, int argc, char **argv);
 void px_bi_xxd(px_shell_t *sh, int argc, char **argv);
 void px_bi_date(px_shell_t *sh, int argc, char **argv);
+void px_bi_grep(px_shell_t *sh, int argc, char **argv);
+void px_bi_seq(px_shell_t *sh, int argc, char **argv);
+void px_bi_rev(px_shell_t *sh, int argc, char **argv);
+void px_bi_basename(px_shell_t *sh, int argc, char **argv);
+void px_bi_dirname(px_shell_t *sh, int argc, char **argv);
+
+/* A builtin, by its words, for find -exec (sh.c). True if it succeeded. */
+bool px_run_builtin(px_shell_t *sh, int argc, char **argv);
 
 /* Bytes to where the command's output goes, as px_puts() but with a
  * length: a NUL is a byte like any other. */
@@ -208,8 +223,49 @@ void px_write(px_shell_t *sh, const char *s, int len);
 /* A file's lines, or the previous stage's (path NULL), one call each
  * with the newline gone. *cut is set if a line was longer than
  * PX_LINE_MAX and was cut. False if the file cannot be opened. */
+/*
+ * -- streaming pipes (sh.c, docs/posix.md "Pipes") --
+ *
+ * A builtin's input -- the stage before it, or `< file` -- a piece at a
+ * time: px_in_next() gives the next piece (valid until the next call)
+ * and its length, 0 at the end. In a streaming pipe that runs the stage
+ * before until it has written something. px_has_input(): is there any
+ * (a stage of a pipe, or `<`), as opposed to none at all.
+ */
+int  px_in_next(px_shell_t *sh, const char **p);
+bool px_has_input(px_shell_t *sh);
+
+/* The running stage's 1 KB chunk buffer, for text.c's readers: a stage
+ * can hand over in the middle of one. */
+char *px_stage_chunk_buf(void);
+
+/* Each stage but the last runs in a coroutine of its own: its stack,
+ * its pipe and its buffers. main.c hands px_pipes_init() room for
+ * PX_PIPE_STAGES - 1 of them, on its own stack (the coroutines call
+ * malloc: zco.h, "where the stack lives"); without it a pipe is held
+ * whole between stages, as before (CAP_MAX). */
+#define PX_PIPE_STAGES  8
+#define PX_PIPE_BUF     4096
+#ifdef PX_HOST_TEST
+#define PX_STAGE_STACK  (128 * 1024)    /* the build machine's libc wants more */
+#else
+#define PX_STAGE_STACK  (8 * 1024)      /* as PX_JOB_STACK: the same builtins */
+#endif
+#define PX_STAGE_MEM    (PX_STAGE_STACK + PX_PIPE_BUF + (2 * PX_LINE_MAX + 16) + 4096 + \
+                         2 * PX_LINE_MAX + 2 * 1024)
+#define PX_PIPES_MEM    ((PX_PIPE_STAGES - 1) * PX_STAGE_MEM)
+typedef struct px_stage px_stage_t;
+void px_pipes_init(void *mem, size_t bytes);
+void px_stage_tick(void);       /* job.c: a stage's slice is used */
+size_t px_pipe_stack_last(void); /* the most of its stack a stage of the last pipe used */
+
 typedef void (*px_line_fn)(px_shell_t *sh, const char *line, int len, void *ctx);
 bool px_feed_lines(px_shell_t *sh, const char *path, px_line_fn fn, void *ctx, bool *cut);
+/* From a px_line_fn: it has what it wants (head's N lines, grep -q's
+ * match); feeding stops, and a pipe's writer with it. */
+void px_feed_enough(void);
+bool px_feed_is_enough(void);
+void px_feed_begin(void);       /* text.c's readers: a new feed */
 
 /* The clock, for `date`: UTC seconds (false if it has not been set),
  * and system.rtc.timezone (false if there is none). clock.c on the

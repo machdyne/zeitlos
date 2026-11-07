@@ -14,8 +14,9 @@ Or click its icon in the dock.
 
 ## What it shows
 
-Two buttons along the bottom, built with `sw/common/zwidget`: **Analog**
-and **Digital**, a radio group selecting the view.
+Three buttons along the bottom, built with `sw/common/zwidget`:
+**Analog** and **Digital**, a radio group selecting the view, and
+**Zone**, which opens Settings on its Date & time page (also `z`).
 
 A radio group rather than two independent toggles means the widget
 toolkit owns which view is current, and this file never keeps a second
@@ -35,6 +36,9 @@ offering the button. `Z_NET_NTP_SYNC` (`sw/common/zntp.h`) still exists
 for anything that genuinely needs to prod it.
 
 ## Time zone
+
+To change it, press **Zone** (or `z`): Settings opens on Date & time,
+the same as `run settings time`.
 
 The RTC counts UTC. The clock shows local time in the zone named by
 `system.rtc.timezone` in `/sys/zeitlos.cfg` (`docs/config.md`), **UTC by

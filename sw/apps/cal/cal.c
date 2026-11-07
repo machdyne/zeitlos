@@ -646,6 +646,12 @@ static void check_clock(void) {
 
 // -- input --
 
+// Settings, opened on its Date & time page (`run settings time`).
+static void open_zone_settings(void) {
+	z_launch_arg_set("time");
+	if (!z_proc_run("settings")) z_launch_arg_set("");
+}
+
 static void handle_mouse(uint32_t packed) {
 
 	int cx, cy;
@@ -663,6 +669,14 @@ static void handle_mouse(uint32_t packed) {
 
 	if (act == W_PREV) step_month(-1);
 	else if (act == W_NEXT) step_month(1);
+
+	// A click on the line with today's date and zone: settings, on
+	// its Date & time page, where the zone is chosen.
+	static uint8_t last;
+	bool down = (buttons & Z_MOUSE_BTN_LEFT) && !(last & Z_MOUSE_BTN_LEFT);
+	last = buttons;
+	if (down && act < 0 && inside && cy >= status_y && cy < status_y + STATUS_H)
+		open_zone_settings();
 
 }
 
@@ -694,10 +708,12 @@ static void handle_key(uint32_t keysym, uint8_t mods) {
 			"0-9\tType a year\n"
 			"Enter\tGo to it (or press the arrow)\n"
 			"Esc\tAbandon the typed year\n"
-			"Backspace\tDelete a digit\n\n"
+			"Backspace\tDelete a digit\n"
+			"z\tThe time zone: settings\n\n"
 			"Click < or > to change month. Type four digits and "
 			"Enter to jump to a year (1970-2105). Today needs the "
-			"clock set: run net.";
+			"clock set: run net. Click the date at the bottom, or "
+			"press z, to choose the time zone.";
 		z_dialog_ctx_t ctx = { &win, help_on_msg, NULL };
 		z_dialog_help(&ctx, "Cal help", help, "cal_app");
 		return;
@@ -794,6 +810,11 @@ static void handle_key(uint32_t keysym, uint8_t mods) {
 
 		case Z_KEY_DOWN:
 			step_year(1);
+			return;
+
+		case 'z':
+		case 'Z':
+			open_zone_settings();
 			return;
 
 		case Z_KEY_HOME:

@@ -316,7 +316,13 @@ static void dlg_parent(z_msg_t *msg) {
 // See zdialog.h for the full table of what gets routed how, and why
 // keys are unconditionally ours.
 
+// A message the dialog showing wants that is not the window's: the
+// print dialog's search answer. True if taken.
+static bool (*dlg_msg_hook)(const z_msg_t *msg);
+
 static void dlg_dispatch(z_msg_t *msg) {
+
+	if (dlg_msg_hook && dlg_msg_hook(msg)) return;
 
 	switch (msg->subject) {
 
@@ -882,6 +888,28 @@ static void dlg_accept(char *out, int outlen) {
 static char *dlg_out;
 static int dlg_outlen;
 
+// z_dialog_open_any(): the button takes a folder as the answer -- the
+// one selected, or with none selected the one shown -- where Enter and
+// a double-click still go into it.
+static bool dlg_folders;
+
+static bool folder_pick(void) {
+	const char *sel = z_flist_selected(&dlg_flist);
+	if (sel && !z_flist_selected_is_dir(&dlg_flist)) return false;	// a file: as Open
+	if (sel) {
+		if (!z_flist_selected_path(&dlg_flist, dlg_out, dlg_outlen)) return false;
+	} else {
+		int n = 0;
+		for (const char *s = dlg_flist.path; *s && n < dlg_outlen - 1; s++) dlg_out[n++] = *s;
+		dlg_out[n] = 0;
+		if (!n) return false;
+	}
+	dlg.result = Z_DIALOG_YES;
+	dlg.done = true;
+	return true;
+}
+
+
 // -- input --
 
 static bool prompt_empty_ok;	// z_dialog_prompt_empty_ok(): OK with nothing typed
@@ -933,6 +961,7 @@ static void dlg_activate_button(int act) {
 	}
 
 	// file dialogs
+	if (act == 0 && dlg_folders && folder_pick()) return;
 	if (act == 0) dlg_accept(dlg_out, dlg_outlen);
 	else { dlg.result = Z_DIALOG_CANCEL; dlg.done = true; }
 
@@ -1327,6 +1356,25 @@ bool z_dialog_open(const z_dialog_ctx_t *ctx, const char *start_dir,
 
 	return file_dialog(ctx, DLG_KIND_OPEN, "Open", start_dir, NULL,
 		labels_open, out, outlen);
+
+}
+
+static const char *const labels_choose[2] = { "Choose", "Cancel" };
+
+bool z_dialog_open_any(const z_dialog_ctx_t *ctx, const char *start_dir,
+	char *out, int outlen) {
+
+	if (!out || outlen < 2) return false;
+
+	out[0] = 0;
+
+	speak_dialog("Choose", "A file, or a folder.");
+
+	dlg_folders = true;
+	bool ok = file_dialog(ctx, DLG_KIND_OPEN, "Choose a file or folder", start_dir, NULL,
+		labels_choose, out, outlen);
+	dlg_folders = false;
+	return ok;
 
 }
 
@@ -1818,11 +1866,48 @@ static struct {
 	int		choices[4];		// the Pages row's choices, Z_PRINT_PAGES_*
 	int		nchoices, choice;
 	int		val_x, val_w;
+	// Print to: the printer in zeitlos.cfg (if there is one), the
+	// printers the search found, a PDF file, a PostScript file
+	int		to;
+	z_browse_printer_t found[Z_BROWSE_MAX];
+	int		nfound;
+	uint32_t	tag;		// the search, until it answers
 } pr;
 
 static int pr_row_y(int r) { return DLG_MARGIN + r * PR_ROW_H; }
 
 static bool pr_file(void) { return pr.o->dest != Z_PRINT_TO_PRINTER; }
+
+static int pr_to_count(void) { return (pr.o->printer[0] ? 1 : 0) + pr.nfound + 2; }
+
+// the found printer `to` names, or NULL
+static const z_browse_printer_t *pr_to_found(int to) {
+	int i = to - (pr.o->printer[0] ? 1 : 0);
+	return i >= 0 && i < pr.nfound ? &pr.found[i] : NULL;
+}
+
+// dest and address from pr.to
+static void pr_to_apply(void) {
+	int n = pr_to_count();
+	const z_browse_printer_t *f = pr_to_found(pr.to);
+	pr.o->address[0] = 0;
+	if (pr.to == n - 2) pr.o->dest = Z_PRINT_TO_PDF;
+	else if (pr.to == n - 1) pr.o->dest = Z_PRINT_TO_PS;
+	else {
+		pr.o->dest = Z_PRINT_TO_PRINTER;
+		if (f) memcpy(pr.o->address, f->uri, sizeof(pr.o->address));
+	}
+}
+
+// pr.to from dest and address
+static void pr_to_find(void) {
+	int n = pr_to_count();
+	pr.to = pr.o->dest == Z_PRINT_TO_PDF ? n - 2 : pr.o->dest == Z_PRINT_TO_PS ? n - 1 : 0;
+	for (int i = 0; pr.o->dest == Z_PRINT_TO_PRINTER && i < n - 2; i++) {
+		const z_browse_printer_t *f = pr_to_found(i);
+		if (f && pr.o->address[0] && !strcmp(f->uri, pr.o->address)) pr.to = i;
+	}
+}
 
 static void pr_cat(char *d, int n, const char *s) {
 	int k = (int)strlen(d);
@@ -1859,6 +1944,7 @@ static void pr_value(int row, char *v, int n) {
 		case PR_TO:
 			if (pr.o->dest == Z_PRINT_TO_PDF) pr_cat(v, n, "A PDF file");
 			else if (pr.o->dest == Z_PRINT_TO_PS) pr_cat(v, n, "A PostScript file");
+			else if (pr_to_found(pr.to)) pr_cat(v, n, pr_to_found(pr.to)->name);
 			else if (!pr.o->printer[0]) pr_cat(v, n, "Printer (not set up)");
 			else {
 				char h[40];
@@ -1964,6 +2050,8 @@ static void pr_draw_row(int r) {
 
 	char v[64];
 	pr_value(r, v, sizeof(v));
+	int fit = (vw - 2 * PR_ARROW_W - 4) / z_font_5x8.w;	// a long printer name
+	if (fit > 0 && fit < (int)sizeof(v) && (int)strlen(v) > fit) v[fit] = 0;
 	int tw = (int)strlen(v) * z_font_5x8.w;
 	z_fb_draw_text(vx + (vw - tw) / 2, ty, v, 1, &z_font_5x8, &clip);
 
@@ -2007,7 +2095,8 @@ static int pr_wrap(int v, int d, int n) { v += d; while (v < 0) v += n; return v
 static void pr_step(int r, int d) {
 	switch (r) {
 		case PR_TO:
-			pr.o->dest = pr_wrap(pr.o->dest, d, 3);
+			pr.to = pr_wrap(pr.to, d, pr_to_count());
+			pr_to_apply();
 			pr_draw_row(PR_TRAY);
 			pr_draw_row(PR_QUALITY);
 			break;
@@ -2171,6 +2260,27 @@ static void pr_wheel(int notches) {
 
 static const dlg_ops_t print_ops = { pr_repaint, pr_key, pr_mouse, pr_wheel };
 
+// The search's answer: its printers join Print to, after the one in
+// zeitlos.cfg -- less that one itself, found again by its host.
+static bool pr_hook(const z_msg_t *msg) {
+	z_browse_printer_t got[Z_BROWSE_MAX];
+	int n = pr.o->finder ? pr.o->finder->reply(msg, pr.tag, got, Z_BROWSE_MAX) : -1;
+	if (n < 0) return false;
+	pr.tag = 0;
+	char cfg[40];
+	pr_host(cfg, sizeof(cfg), pr.o->printer);
+	pr.nfound = 0;
+	for (int i = 0; i < n; i++) {
+		char h[40];
+		pr_host(h, sizeof(h), got[i].uri);
+		if (pr.o->printer[0] && !strcmp(h, cfg)) continue;
+		pr.found[pr.nfound++] = got[i];
+	}
+	pr_to_find();
+	pr_draw_row(PR_TO);
+	return true;
+}
+
 static int pr_index(const char *const *list, int n, const char *v) {
 	for (int i = 0; i < n; i++) if (!strcmp(list[i], v)) return i;
 	return 0;
@@ -2184,6 +2294,8 @@ bool z_dialog_print(const z_dialog_ctx_t *ctx, const char *title,
 	if (o->copies < 1 || o->copies > 99) o->copies = 1;
 	if (o->dest < 0 || o->dest > Z_PRINT_TO_PS) o->dest = Z_PRINT_TO_PRINTER;
 	if (!o->printer[0] && o->dest == Z_PRINT_TO_PRINTER) o->dest = Z_PRINT_TO_PDF;
+	o->address[0] = 0;
+	pr_to_find();
 
 	pr.choices[pr.nchoices++] = Z_PRINT_PAGES_ALL;
 	if (o->current > 0) pr.choices[pr.nchoices++] = Z_PRINT_PAGES_CURRENT;
@@ -2230,7 +2342,17 @@ bool z_dialog_print(const z_dialog_ctx_t *ctx, const char *title,
 	pr.row = PR_TO;
 	pr_repaint();
 
-	if (dlg_run() != Z_DIALOG_YES) return false;
+	// Printers on the network, while the rest is chosen: the answer
+	// comes in a second or two (pr_hook()).
+	pr.tag = o->finder ? o->finder->ask() : 0;
+	dlg_msg_hook = pr.tag ? pr_hook : NULL;
+	int res = dlg_run();
+	dlg_msg_hook = NULL;
+	if (pr.tag) {				// gone before the answer: do not leave it in the mailbox
+		z_msg_t m;
+		z_msg_take_match(&m, Z_NET_BROWSE_REPLY, pr.tag);
+	}
+	if (res != Z_DIALOG_YES) return false;
 
 	if (o->dest == Z_PRINT_TO_PRINTER) return true;
 

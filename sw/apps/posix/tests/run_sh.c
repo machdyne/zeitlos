@@ -30,6 +30,10 @@ int main(int argc, char **argv) {
 
     px_fd_init();
 
+    /* streaming pipes (sh.c): the stages' stacks and buffers */
+    static uint8_t pipes_mem[PX_PIPES_MEM] __attribute__((aligned(16)));
+    px_pipes_init(pipes_mem, sizeof(pipes_mem));
+
     /* The fixture tree stands in for a whole card and these tests are
      * written from its root. The shell itself starts in /home
      * (Z_DIR_HOME, docs/layout.md), which the fixture does not have. */

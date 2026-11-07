@@ -51,10 +51,10 @@ $ zcc hello.c -o hello && run hello
 |---|---|
 | files | `ls [-l]` `cat` `cp [-r]` `mv` `rm [-r]` `touch` `mkdir` `rmdir` `find` |
 | archives | `zcat` `gunzip` `unzip` `tar` |
-| text | `wc` `head` `tail` `grep` `sort` `uniq` `diff` `sed` `tr` `cut` `tee` `cmp` `xxd` |
+| text | `wc` `head` `tail` `grep` `sort` `uniq` `diff` `sed` `tr` `cut` `tee` `cmp` `xxd` `rev` `seq` |
 | places | `cd` `pwd` |
 | processes | `ps` `kill` `run` `free` |
-| other | `echo` `date` `which` `clear` `df` `port` `help` `exit` `reboot` `jump` |
+| other | `echo` `date` `which` `basename` `dirname` `clear` `df` `port` `help` `exit` `reboot` `jump` |
 
 `ps` lists every process: its pid, the name it registered, whether it
 is running, waiting or being killed, its memory, and the CPU seconds it
@@ -70,13 +70,27 @@ plenty free can still refuse it when the free space is in pieces. Then
 the pool's block counts, and this shell's own static footprint and
 heap.
 
-`grep` matches a **fixed string**, not a regular expression. `sed -n
-'/regex/p'` is the regular-expression search, and `vi` has them too
-(`:g`, `:s`).
+`grep PATTERN [FILE...]` takes a regular expression, as sed does
+("Text tools"): basic by default, `-E` extended, `-F` a fixed string.
+`-i` either case, `-v` the lines that do not match, `-n` line numbers,
+`-c` a count, `-l` the names of the files that match, `-q` only the
+status, `-h` no file names (given with several files). Status 0 when a
+line was selected, 1 when none, 2 on an error.
+
+`sort` takes `-n` (by the number each line begins with, signs and
+fractions too), `-r`, `-u` (each key once), `-f` (either case), `-k N`
+(from the Nth field) and `-t C` (fields separated by C, not blanks). It
+is stable: lines with equal keys stay in their order. `head` and `tail`
+take `-n N` as well as `-N`.
+
+**Pipes stream**: each stage hands the next what it has written a 4 KB
+pipe-full at a time, so `cat big.log | grep error | wc` has no size
+limit, and a stage that has what it wants stops the ones before it --
+`seq 1 50000000 | head -n 1` prints `1` at once ("Pipes", below).
 
 `< file` gives a command the file as its input, as a pipe would: `tr
-a-z A-Z < notes.txt` is `cat notes.txt | tr a-z A-Z`, and like a pipe's
-it is held in memory, at most 16 KB ("What streams and what does not").
+a-z A-Z < notes.txt` is `cat notes.txt | tr a-z A-Z`. Unlike a pipe it
+is held in memory, at most 16 KB ("What streams and what does not").
 
 `which NAME` says what a name runs: `sed: shell builtin`, a program in
 the working directory, `/apps/zcc`, or `zcc: in flash`.
@@ -203,12 +217,15 @@ $ date +%F                          2026-11-07
 
 | | |
 |---|---|
-| `sed [-n] [-E] [-i] SCRIPT [FILE]` | commands `s/RE/NEW/[g][p][N]`, `d`, `p`, `q`, `=`, separated by `;` or given as several `-e`; each under an address: `N`, `$`, `/RE/`, a range `A,B`, and `!` for the other lines. `&` and `\1`..`\9` in the replacement. `-i` edits the file in place |
+| `sed [-n] [-E] [-i] SCRIPT [FILE]` | commands `s/RE/NEW/[g][p][N][I]`, `d`, `p`, `q`, `=`, separated by `;` or given as several `-e`; each under an address: `N`, `$`, `/RE/` (`/RE/I`: either case), a range `A,B`, and `!` for the other lines. `&` and `\1`..`\9` in the replacement. `-i` edits the file in place |
 | `tr [-c] [-d] [-s] SET1 [SET2]` | ranges `a-z`, `\n` `\t` `\NNN`, classes `[:digit:]` `[:upper:]` `[:space:]` and the rest; reads a pipe or `< file`, as tr does |
 | `cut -f LIST [-d C] [-s]` / `cut -c LIST` | fields (by a tab, or `-d`) or characters; LIST is `1,3-5,7-` |
 | `tee [-a] FILE...` | copies its input to the files and on; `-a` appends |
 | `cmp [-s] A B` | the first difference: `A B differ: byte 7, line 2`, status 1; `-s` just the status |
 | `xxd [-s OFF] [-l LEN] [FILE]` | a hex dump as xxd prints it; `0x` numbers too |
+| `seq [-s SEP] [FIRST [STEP]] LAST` | whole numbers in a row, one a line (or SEP between) |
+| `rev [FILE]` | each line backwards, a character at a time (UTF-8 kept whole) |
+| `basename PATH [SUFFIX]`, `dirname PATH` | a path's last part (less SUFFIX), and the rest |
 | `date [-u] [+FORMAT]` | the clock in `system.rtc.timezone` ([config.md](config.md)), or UTC with `-u`; `%Y %m %d %e %H %M %S %a %b %j %s %Z %z %F %T %n %%` |
 
 **Regular expressions** (sed's): basic ones as POSIX and GNU sed take
@@ -373,6 +390,7 @@ window, the shell's pipe and redirection state. Then:
 $ find                          <- everything below here
 $ find src docs -name *.c       <- by name, in several trees
 $ find -type d                  <- directories only (f: files only)
+$ find -name *.c -exec wc {} \;  <- a command for each
 $ diff old.c new.c              <- as diff -u
 $ unzip -l pack.zip             <- list
 $ unzip pack.zip -d pack        <- extract into pack/ (made if need be)
@@ -382,7 +400,7 @@ $ cp -r proj proj.old           <- a tree
 $ rm -r proj.old
 ```
 
-**find** `[DIR...] [-name PATTERN] [-type f|d]` prints the starting
+**find** `[DIR...] [-name PATTERN] [-type f|d] [-exec CMD {} \;]` prints the starting
 point and everything below it, depth first, each directory's entries
 in the order `ls` sorts them -- so its output does not depend on the
 history of the card. `-name` matches the last part of each path with
@@ -395,6 +413,12 @@ visit kept in one 16 KB arena (`FIND_ARENA`). A directory deeper than
 that, one with more than 256 entries (as `ls`), or a tree whose waiting
 names do not fit is reported -- `find: ...: more than 32 levels deep,
 not entered` -- the rest is still walked, and the status is 1.
+
+`-exec CMD ... {} \;` runs CMD for each path found instead of printing
+it, `{}` replaced by the path: `find src -name *.c -exec grep -n TODO
+{} \;`. CMD is one of the shell's own commands -- a program cannot be,
+since the shell starts a program and goes on rather than waiting for it,
+and nor can `find` itself. The status is 1 if any run failed.
 
 **diff** `FILE1 FILE2` prints what `diff -u` prints -- `---`/`+++`
 (without timestamps), `@@` hunks, three lines of context, `\ No newline
@@ -463,20 +487,49 @@ have **no size limit**.
 than dropping the rest; `diff` holds both files and refuses above 256 KB
 or 8192 lines each.
 
-**A pipe holds its intermediate in memory, capped at 16KB**, and says
-so when it truncates. So `wc big.c` is fine and `cat big.c | wc` may
-not be. `< file` is held the same way and refuses a file over 16 KB
-rather than cutting it; `tr` and `tee`, which read only their input,
-have that limit too.
+**A pipe streams** (below), so `cat big.c | wc` is as unlimited as `wc
+big.c`. `< file` is still held whole and refuses a file over 16 KB
+rather than cutting it; give the command the file, or `cat` it in.
 
-Streaming pipes -- the left side handing back when the pipe buffer is
-full, the right side consuming -- would now fit the coroutine, and were
-not done. They need each stage in a coroutine of its own (a second
-stack each), the filters reading `sh->in` through a function that waits
-for more rather than a whole buffer, and the statics above made per
-stage: `out_fd`, the capture state, `px_printf()`'s buffer and the line
-filters' buffers at least, and `zcat`/`unzip`/`tar` could not both be
-in a pipeline because of the one inflate window.
+### Pipes
+
+Each stage of a pipe but the last runs in a coroutine of its own
+(`sw/common/zco.h`), on an 8 KB stack, with a 4 KB pipe to the next.
+The last stage runs as any command does; when it wants input
+(`px_in_next()`) it resumes the stage before it, which runs until it
+has filled its pipe, ended, or used its slice of time -- and that one,
+wanting input, resumes the stage before it. So bytes go a pipe-full at
+a time and nothing is held whole.
+
+- **A reader that ends stops the writers.** `head`, `grep -q`, `grep
+  -l` and `sed`'s `q` stop reading once they have what they want; the
+  stages before them are told their reader is gone and end at their
+  next check, closing their files. Ctrl+C stops every stage, and
+  nothing more is printed after `^C`.
+- **Slices still work.** A stage that runs long without filling its
+  pipe -- `grep rare big | wc` -- hands back through the stages after it
+  to the main loop when its slice is used, so the other sessions keep
+  typing.
+- **What each stage has of its own**: its arguments and wildcard names,
+  `px_printf()`'s buffer, the line and chunk buffers the filters read
+  through, and the shell's per-command state (the status, `>`, `<`,
+  "a line was cut") -- swapped as stages hand over.
+- **Some pipes run the old way**, each stage to the end into a 16 KB
+  buffer before the next starts: a builtin's own statics are its alone,
+  so a pipe that has the same builtin twice (`grep a f | grep b`), more
+  than one of `zcat`, `gunzip`, `unzip` and `tar` (the one inflate
+  window), `find -exec` (it runs other builtins), `<` after the first
+  stage or `>` before the last. A program in a pipe is refused as
+  before: its output goes to its own relay.
+- **Memory**: the stages' stacks, pipes and buffers, about 20 KB each,
+  140 KB for the seven a pipe of eight can need, are on `main()`'s
+  stack beside the command's own (`PX_PIPES_MEM`). The deepest stage
+  measured on the machine's CPU uses 3.1 KB of its 8 KB
+  (`tests/stack_sim`: `find / | grep c | head -5`).
+
+`tests/pipes.txt` holds the cases: 100,000 lines through three stages,
+the early stops, `>` on the last stage, `<` on the first, the pipes
+that run the old way.
 
 ### `mv` and `ls -l`
 
@@ -2694,9 +2747,10 @@ this migration stays possible, and ship copy-per-output first.
   "Quoting" and "Wildcards" at the top. (This entry used to read "no
   quoting, no globbing": a path could not contain a space until long
   file names.)
-- **A pipe is capped at 16KB** and holds its intermediate in memory.
-  Process-to-process pipes would lift that and are unbuilt: nothing
-  puts a compiler or an editor in a pipeline.
+- **A pipe streams only between builtins.** A program's output goes
+  to its own relay, so it cannot be a stage; nothing puts a compiler or
+  an editor in a pipeline. (Until November 2026 a pipe also held its
+  intermediate whole, capped at 16KB: "Pipes" above.)
 - **A spawned program's output only comes back if it asks** -- by
   opening a second connection tagged `stdout`. `zcc` does; a program
   you write does not unless you make it.

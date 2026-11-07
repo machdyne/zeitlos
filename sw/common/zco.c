@@ -95,7 +95,7 @@ static void entry(void) {
 	co->fn(co->arg);
 	co->done = true;
 	co->running = false;
-	cur = NULL;
+	cur = co->parent;
 	zco_switch(&co->co, &co->caller);
 	for (;;) ;				// never resumed once done
 }
@@ -119,7 +119,7 @@ static void entry(void) {
 	co->fn(co->arg);
 	co->done = true;
 	co->running = false;
-	cur = NULL;
+	cur = co->parent;
 	swapcontext(&co->co.uc, &co->caller.uc);
 }
 
@@ -143,14 +143,22 @@ static void zco_switch(zco_regs_t *save, zco_regs_t *load) {
 
 #endif
 
+// Is co the one running, or one waiting in a resume of its own further
+// up the chain? Entering it again would overwrite where it waits.
+static bool in_chain(const zco_t *co) {
+	for (const zco_t *c = cur; c; c = c->parent) if (c == co) return true;
+	return false;
+}
+
 bool zco_resume(zco_t *co) {
-	if (co->done || cur) return !co->done;
+	if (co->done || in_chain(co)) return !co->done;
 	co->started = true;
 	co->running = true;
+	co->parent = cur;
 	cur = co;
 	zco_switch(&co->caller, &co->co);
 	// back here when it yields or ends
-	cur = NULL;
+	cur = co->parent;
 	if (!guard_ok(co)) {
 		co->overflow = true;
 		co->done = true;
@@ -162,7 +170,7 @@ bool zco_resume(zco_t *co) {
 void zco_yield(void) {
 	zco_t *co = cur;
 	if (!co) return;
-	cur = NULL;
+	cur = co->parent;
 	zco_switch(&co->co, &co->caller);
 	cur = co;
 }
@@ -170,5 +178,5 @@ void zco_yield(void) {
 void zco_abandon(zco_t *co) {
 	co->done = true;
 	co->running = false;
-	if (cur == co) cur = NULL;
+	if (cur == co) cur = co->parent;
 }

@@ -1053,6 +1053,12 @@ int main(void) {
      */
     uint8_t job_mem[PX_JOB_STACK + PX_JOB_SLACK] __attribute__((aligned(16)));
 
+    /* The stages of a streaming pipe, for the same reason: each but the
+     * last runs on a stack of its own, and they call malloc() too
+     * (sh.c, "streaming pipes"). About 140 KB of the 4 MB stack. */
+    uint8_t pipes_mem[PX_PIPES_MEM] __attribute__((aligned(16)));
+    px_pipes_init(pipes_mem, sizeof(pipes_mem));
+
     serve_init(job_mem, sizeof(job_mem));
     for (;;) serve_pass();
     return 0;

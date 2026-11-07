@@ -71,6 +71,7 @@
 
 #include "../../common/zpaths.h"
 #include "../../common/zeitlos.h"
+#include "../../common/zsoc.h"		// Z_TICK_HZ (with TLS, zrtc.h brought it)
 #include "../../common/zwin.h"
 #include "../../common/zwidget.h"
 #include "../../common/zwm.h"

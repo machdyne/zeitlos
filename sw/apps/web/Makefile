@@ -252,7 +252,7 @@ zsha256.o:
 	$(CC) $(CFLAGS) $(CRYPTO_CFLAGS) -c ../../common/zsha256.c -o zsha256.o
 
 monocypher.o:
-	$(CC) $(CFLAGS) -c ../../ext/monocypher/monocypher.c -o monocypher.o
+	$(CC) $(CFLAGS) -DZ_CHACHA_ROUNDS=z_chacha20_rounds -c ../../ext/monocypher/monocypher.c -o monocypher.o
 
 zrng.o:
 	$(CC) $(CFLAGS) -c ../../common/zrng.c -o zrng.o

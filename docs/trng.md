@@ -383,8 +383,7 @@ it to feed.
   Deliberately not done yet: it needs a decision about where OS state
   lives on the filesystem, which is a bigger question than this.
 
-- **An `rori` instruction.** RV32IM has no rotate, so each of ChaCha20's
-  four rotates per quarter-round costs three instructions instead of
-  one. The Zbb subset would cut ChaCha20 by roughly 40% here — and by
-  the same margin in the SSH bulk cipher, where it matters much more.
-  Cheaper than a crypto accelerator and useful to SHA-256 as well.
+- **An `rori` instruction** -- built (November 2026): `CPU_ROT` gives
+  picorv32 Zbb's rotates, and the generator's ChaCha20 uses them where
+  the bitstream has them, as the SSH and TLS ciphers do: 38% fewer
+  instructions a block ([chacha.md](chacha.md)).

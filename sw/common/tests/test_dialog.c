@@ -161,6 +161,22 @@ void z_fb_draw_icon(int x, int y, int icon, int fg, int bg, const z_clip_t *clip
 	(void)x; (void)y; (void)icon; (void)fg; (void)bg; (void)clip;
 }
 
+// what the print dialog's search finds, for tag 9: the printer in
+// zeitlos.cfg among them
+static int fake_reply(const z_msg_t *m, uint32_t tag, z_browse_printer_t *out, int max) {
+	static const z_browse_printer_t found[3] = {
+		{ "Brother HL-L2350DW series", "ipp://10.0.0.10/ipp/print" },
+		{ "Canon MG3600 series", "ipp://10.0.0.5:631/ipp/print" },
+		{ "HP LaserJet 400", "socket://10.0.0.11" },
+	};
+	if (m->subject != Z_NET_BROWSE_REPLY || m->tag != tag) return -1;
+	int n = max < 3 ? max : 3;
+	memcpy(out, found, sizeof(found[0]) * (size_t)n);
+	return n;
+}
+static uint32_t fake_ask(void) { return 9; }
+static const z_print_finder_t fake_finder = { fake_ask, fake_reply };
+
 static int checks, failures;
 
 static void expect(bool ok, const char *what) {
@@ -487,6 +503,75 @@ int main(void) {
 		expect(!dlg.done && pr.row == PR_PAGES, "a bad range is not printed");
 		pr_key(0x1b, 0);
 		expect(dlg.done && dlg.result == Z_DIALOG_CANCEL, "Escape cancels");
+	}
+
+	// -- printers found on the network join Print to --
+	{
+		static z_print_opts_t o;
+		memset(&o, 0, sizeof(o));
+		memset(&dlg, 0, sizeof(dlg));
+		memset(&pr, 0, sizeof(pr));
+		strcpy(o.printer, "ipp://10.0.0.5/ipp/print");
+		o.copies = 1;
+		o.nup = 1;
+		o.finder = &fake_finder;
+		pr.o = &o;
+		pr.choices[pr.nchoices++] = Z_PRINT_PAGES_ALL;
+		dlg.win.w = DLG_CONFIRM_W;
+		dlg.win.h = 160;
+		pr.val_x = DLG_MARGIN + PR_LABEL_W;
+		pr.val_w = z_win_content_w(&dlg.win) - DLG_MARGIN - pr.val_x;
+		pr.row = PR_TO;
+		pr_to_find();
+		pr.tag = 9;
+
+		z_msg_t m;
+		memset(&m, 0, sizeof(m));
+		m.subject = Z_NET_BROWSE_REPLY;
+		m.tag = 8;
+		expect(!pr_hook(&m), "another search's answer is not ours");
+		m.tag = 9;
+		expect(pr_hook(&m) && !pr.tag, "the answer is taken");
+		expect(pr.nfound == 2, "the printer in zeitlos.cfg is not listed twice");
+		char v[64];
+		pr_value(PR_TO, v, sizeof(v));
+		expect(!strcmp(v, "Printer 10.0.0.5") && o.dest == Z_PRINT_TO_PRINTER && !o.address[0],
+			"still the printer in zeitlos.cfg");
+		pr_key(Z_KEY_RIGHT, 0);
+		pr_value(PR_TO, v, sizeof(v));
+		expect(!strcmp(v, "Brother HL-L2350DW series") && o.dest == Z_PRINT_TO_PRINTER &&
+			!strcmp(o.address, "ipp://10.0.0.10/ipp/print"), "Right: the first one found");
+		pr_value(PR_TRAY, v, sizeof(v));
+		expect(strcmp(v, "(the printer's)") != 0, "a found printer has trays");
+		pr_key(Z_KEY_RIGHT, 0);
+		expect(!strcmp(o.address, "socket://10.0.0.11"), "then the next");
+		pr_key(Z_KEY_RIGHT, 0);
+		expect(o.dest == Z_PRINT_TO_PDF && !o.address[0], "then a PDF file");
+		pr_key(Z_KEY_RIGHT, 0);
+		pr_key(Z_KEY_RIGHT, 0);
+		expect(o.dest == Z_PRINT_TO_PRINTER && !o.address[0], "and round to the printer in zeitlos.cfg");
+		pr_key(Z_KEY_LEFT, 0);
+		pr_key(Z_KEY_LEFT, 0);
+		pr_key(Z_KEY_LEFT, 0);
+		expect(!strcmp(o.address, "socket://10.0.0.11"), "Left goes back through them");
+
+		// nothing set up: a PDF until one is chosen, the answer moving nothing
+		memset(&o, 0, sizeof(o));
+		memset(&pr, 0, sizeof(pr));
+		o.dest = Z_PRINT_TO_PDF;
+		o.finder = &fake_finder;
+		pr.o = &o;
+		pr.choices[pr.nchoices++] = Z_PRINT_PAGES_ALL;
+		pr.val_x = DLG_MARGIN + PR_LABEL_W;
+		pr.val_w = z_win_content_w(&dlg.win) - DLG_MARGIN - pr.val_x;
+		pr.row = PR_TO;
+		pr_to_find();
+		pr.tag = 9;
+		expect(pr_hook(&m) && pr.nfound == 3, "all three, with no printer of its own");
+		expect(o.dest == Z_PRINT_TO_PDF, "the choice stays a PDF");
+		pr_key(Z_KEY_LEFT, 0);
+		expect(o.dest == Z_PRINT_TO_PRINTER && !strcmp(o.address, "socket://10.0.0.11"),
+			"Left from the PDF: the last printer found");
 	}
 
 	// A picture: PRINT_PBM=/path/print.pbm

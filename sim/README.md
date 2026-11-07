@@ -285,6 +285,15 @@ program and the profile is still written. The numbers are from Doom's `-membench
 is for comparing two versions of the code, not for predicting a frame
 rate to the percent.
 
+## The rotate instructions
+
+With `ZSIM_ROT=1` the CPU has Zbb's `ror`, `rol` and `rori`, as
+picorv32 has with `` `CPU_ROT `` ([docs/chacha.md](../docs/chacha.md)),
+and FEATURES3 bit 3 says so. Without it they are illegal instructions,
+as on a bitstream without them -- and so is any other value in a
+shift's funct7, which this simulator used to run as an ordinary shift.
+`make -C sw/common/tests/sim_chacha test` runs ChaCha20 both ways.
+
 ## T2, the triangle engine
 
 With `ZSIM_GTRI=2` (or any value but 0), the simulator has T2

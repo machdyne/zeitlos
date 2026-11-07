@@ -24,10 +24,21 @@
  * data. TCP has already acked what it delivered, so dropping is never
  * an option.
  *
- * Listener to peer: DATA goes into tx[] and is acked. When tx[] is full
- * the DATA is HELD, unacked -- its payload stays valid in the
- * listener's memory until acked (zport.h) -- and the listener, having 8
- * sends unacked, stops. Acks go out as held data moves into tx[].
+ * Listener to peer: DATA is HELD, unacked -- its payload stays valid
+ * in the listener's memory until acked (zport.h) -- and each TCP
+ * segment is gathered straight from the held messages, as full as they
+ * allow (relay_segment()). A message is acked once its last byte is in
+ * a segment; a listener with 8 sends unacked stops until then.
+ *
+ * -- full-size segments --
+ *
+ * There used to be a 1KB buffer here between the two: DATA was copied
+ * into it and acked, and segments were cut from it -- so no segment
+ * was larger than 1KB, and every byte was copied twice in this process.
+ * Now a segment is the peer's MSS (1460 on Ethernet) whenever that
+ * much is waiting, the bytes go from the listener's memory into TCP's
+ * segment in one copy, and the 6KB of buffers is gone (it paid for
+ * mdns.c). docs/net_throughput.md, round 6.
  */
 #include <stdio.h>
 #include <string.h>
@@ -43,7 +54,6 @@
 #include "../../common/zproc.h"		// Z_PROC_STATE_*: is a listener still running?
 
 #define RELAY_MAX   (TCP_MAX_CONN - TCP_MIN_OUTBOUND_FREE)
-#define RELAY_TX    1024        // listener -> peer, awaiting tcp_send()
 #define RELAY_RX    512         // peer -> listener, awaiting z_port_send()
 #define RELAY_HOLD  Z_PORT_MAX_PENDING_SENDS
 
@@ -65,15 +75,13 @@ typedef struct {
 	z_net_accept_t info;        // what CONNECT carries; lives as long as the relay
 	z_blob_t info_blob;
 
-	uint8_t tx[RELAY_TX];
-	uint16_t tx_len;
 	uint8_t rx[RELAY_RX];
 	uint16_t rx_len;
 	uint16_t win_last;          // the window last advertised
 	uint32_t active;            // tick anything last moved, either way (stall reports)
 
-	// DATA not yet wholly copied into tx[], unacked; `off` is how much
-	// has been. Consumed in pieces: one message may be larger than tx[]
+	// DATA not yet wholly sent, unacked; `off` is how much has been.
+	// Consumed in pieces: one message may be larger than a segment
 	// (netserve.c, held_t, has the hardware story).
 	struct { const uint8_t *data; uint32_t len, off, tag; } held[RELAY_HOLD];
 	uint8_t held_n;
@@ -429,20 +437,15 @@ bool relay_msg(const z_msg_t *msg) {
 			return true;
 		}
 		if (r->state == R_DRAIN) { z_port_send_ack(msg); return true; }   // nowhere to go
-		uint32_t len = z_blob_len(&msg->obj), used = 0;
+		uint32_t len = z_blob_len(&msg->obj);
 		const uint8_t *data = (const uint8_t *)z_blob_data(&msg->obj);
-		if (r->state == R_OPEN && !r->held_n) {
-			used = (uint32_t)(RELAY_TX - r->tx_len);
-			if (used > len) used = len;
-			memcpy(r->tx + r->tx_len, data, used);
-			r->tx_len = (uint16_t)(r->tx_len + used);
-		}
-		if (used == len) {
+		if (!len) {
 			z_port_send_ack(msg);
 		} else if (r->held_n < RELAY_HOLD) {
+			// sent from where it is, by relay_poll(), and acked then
 			r->held[r->held_n].data = data;
 			r->held[r->held_n].len = len;
-			r->held[r->held_n].off = used;
+			r->held[r->held_n].off = 0;
 			r->held[r->held_n].tag = msg->tag;
 			r->held_n++;
 		} else {
@@ -474,21 +477,35 @@ bool relay_msg(const z_msg_t *msg) {
 
 // -- moving bytes --
 
-// Moves held listener messages into the transmit buffer, as far as it
-// has room, acknowledging each to the listener once it is all in.
-static void relay_refill(relay_t *r) {
-	while (r->held_n) {
-		uint32_t left = r->held[0].len - r->held[0].off;
-		uint32_t n = (uint32_t)(RELAY_TX - r->tx_len);
-		if (n > left) n = left;
-		memcpy(r->tx + r->tx_len, r->held[0].data + r->held[0].off, n);
-		r->tx_len = (uint16_t)(r->tx_len + n);
-		r->held[0].off += n;
-		if (r->held[0].off < r->held[0].len) break;
-		ack_data(r->owner, r->held[0].tag);
-		memmove(&r->held[0], &r->held[1], sizeof(r->held[0]) * (size_t)(r->held_n - 1));
-		r->held_n--;
+// One segment for TCP, gathered in its own buffer from the held
+// messages in order, up to the peer's MSS: full size (1460 over
+// Ethernet) when that much is waiting, the bytes copied once, from the
+// listener's memory. A message used up is acknowledged to the
+// listener. False if TCP would take nothing now.
+static bool relay_segment(relay_t *r) {
+	uint8_t *seg = tcp_send_buf(r->tcp);
+	uint16_t mss = tcp_mss(r->tcp), n = 0;
+	if (!seg || !mss) return false;
+	// what goes in: messages wholly (`took` of them), then part of one
+	uint8_t took = 0;
+	uint32_t part = 0;			// bytes of held[took] used, if it is cut
+	for (uint8_t h = 0; h < r->held_n && n < mss; h++) {
+		uint32_t at = r->held[h].off, left = r->held[h].len - at, k = mss - n;
+		if (k > left) k = left;
+		memcpy(seg + n, r->held[h].data + at, k);
+		n = (uint16_t)(n + k);
+		if (k < left) { part = k; break; }
+		took++;
 	}
+	if (!tcp_send_commit(r->tcp, n)) return false;	// (nothing changed yet)
+	// committed: the messages used up are done with
+	for (uint8_t h = 0; h < took; h++) ack_data(r->owner, r->held[h].tag);
+	if (took) {
+		memmove(&r->held[0], &r->held[took], sizeof(r->held[0]) * (size_t)(r->held_n - took));
+		r->held_n = (uint8_t)(r->held_n - took);
+	}
+	if (part) r->held[0].off += part;
+	return true;
 }
 
 void relay_poll(void) {
@@ -504,27 +521,14 @@ void relay_poll(void) {
 		if (!r->state || !r->tcp) continue;
 
 		// listener -> peer: as many segments as TCP's send queue takes
-		// (tcp.h, "a send window"), refilling from the held messages
-		// between, until it refuses or there is nothing left.
-		for (;;) {
-			bool sent = false;
-			while (r->tx_len && tcp_can_send(r->tcp)) {
-				uint16_t mss = tcp_mss(r->tcp);
-				uint16_t n = r->tx_len > mss ? mss : r->tx_len;
-				if (!tcp_send(r->tcp, r->tx, n)) break;
-				memmove(r->tx, r->tx + n, (size_t)(r->tx_len - n));
-				r->tx_len = (uint16_t)(r->tx_len - n);
-				r->active = z_uptime_ticks();
-				sent = true;
-			}
-			if (!sent || !r->held_n) break;
-			relay_refill(r);
-		}
-		relay_refill(r);
+		// (tcp.h, "a send window"), each as full as the bytes waiting
+		// allow, until it refuses or there is nothing left
+		while (r->held_n && relay_segment(r))
+			r->active = z_uptime_ticks();
 
 		// the listener closed: once all it sent is in TCP's queue, close.
 		// The FIN follows that data once it is acknowledged (tcp_close()).
-		if (r->state == R_CLOSING && !r->tx_len && !r->held_n && tcp_can_send(r->tcp))
+		if (r->state == R_CLOSING && !r->held_n && tcp_can_send(r->tcp))
 			tcp_close(r->tcp);
 
 		// A stall report: something is waiting, in either direction,
@@ -535,15 +539,15 @@ void relay_poll(void) {
 			uint32_t now = z_uptime_ticks();
 			bool pend; uint8_t tries; uint16_t slen;
 			tcp_debug(r->tcp, &pend, &tries, &slen);
-			bool waiting = r->tx_len || r->held_n || r->rx_len || r->port.pending_count || pend;
+			bool waiting = r->held_n || r->rx_len || r->port.pending_count || pend;
 			if (!waiting || !r->active) r->active = now;
 			else if (now - r->active > 3u * Z_TICK_HZ) {
 				uint32_t io = 0, dup = 0, gap = 0;
 				tcp_stats(&io, &dup, &gap);
-				printf("net: relay %d stalled: out %u buffered + %u msgs held; in %u buffered, "
+				printf("net: relay %d stalled: out %u msgs held; in %u buffered, "
 					"window %u; %u sends to the listener unacked; tcp segment %s (%u bytes, "
 					"%u retries); segments in %lu, dup %lu, gap %lu\n", relay_id(r),
-					(unsigned)r->tx_len, (unsigned)r->held_n, (unsigned)r->rx_len,
+					(unsigned)r->held_n, (unsigned)r->rx_len,
 					(unsigned)r->win_last, (unsigned)r->port.pending_count,
 					pend ? "unacked" : "none", (unsigned)slen, (unsigned)tries,
 					(unsigned long)io, (unsigned long)dup, (unsigned long)gap);

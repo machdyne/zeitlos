@@ -922,6 +922,12 @@ ZAR_APPS = $(filter-out $(CORE_APPS_OMIT),$(CORE_APPS))
 #
 # A budget is raised by taking from another, from the reserve, or by
 # making something smaller. Every core app must have one.
+# November 2026, finding printers (docs/networking.md, "Finding
+# services"): net 148K/284K -> 148K/287K -- mdns.c, about 4.5KB of code
+# and 3KB of state. The relay's 1KB staging buffers went to pay for it
+# (6KB: segments are gathered from the listener's messages now,
+# relay.c), which left 2.5KB (293,388 bytes with xPack GCC 15.2). From
+# the RAM rule's slack: 1,023.25 of 1,024 KB.
 # November 2026, the profiles (docs/profiles.md): wm 114K/147K ->
 # 116K/149K -- the console's mode (no dock, the launcher kept running)
 # and zgfx's lines in software for a bitstream without the rasterizer
@@ -962,7 +968,7 @@ ZAR_APPS = $(filter-out $(CORE_APPS_OMIT),$(CORE_APPS))
 # themselves. files 64K/134K -> 64K/138K: zwalk reads a folder a page at
 # a time, its 1KB page in zwalk_t. Neither is in the RAM rule; both from
 # the slack under CORE_ZAR_MAX.
-CORE_BUDGETS = fs=36K/77056 usb=35K/53504 wm=116K/149K net=148K/284K term=62K/140K \
+CORE_BUDGETS = fs=36K/77056 usb=35K/53504 wm=116K/149K net=148K/287K term=62K/140K \
 	console=10K/12544 cron=18K/48K text=86K/212K files=64K/138K repl=140K/307K
 CORE_RESERVE = 60K
 # Core apps stored as they are, not compressed: their budget is then

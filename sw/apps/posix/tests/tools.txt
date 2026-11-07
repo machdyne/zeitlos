@@ -39,7 +39,7 @@ find: nothere: no such file or directory
 ? 1
 
 $ find tree -bogus
-usage: find [DIR...] [-name PATTERN] [-type f|d]
+usage: find [DIR...] [-name PATTERN] [-type f|d] [-exec CMD {} \;]
 ? 1
 
 # FIND_DEPTH: 32 levels below the start, then it says so

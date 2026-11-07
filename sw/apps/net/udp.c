@@ -14,7 +14,7 @@
 #include "../../common/zeitlos.h"
 #include <string.h>
 
-#define UDP_MAX_LISTENERS 4
+#define UDP_MAX_LISTENERS 6
 
 typedef struct {
 	bool used;
@@ -42,9 +42,9 @@ void udp_listen(uint16_t port, udp_handler_t handler) {
 		}
 	}
 
-	// no free slot -- silently ignored. UDP_MAX_LISTENERS (4) comfortably
-	// covers current usage (one TFTP transfer at a time); raise it if
-	// more concurrent listeners are ever needed.
+	// no free slot -- silently ignored. UDP_MAX_LISTENERS (6) covers
+	// what can run at once: DHCP, DNS, NTP, TFTP, NFS and an mDNS
+	// search (mdns.c); raise it if more are ever needed.
 
 }
 
