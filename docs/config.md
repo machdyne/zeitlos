@@ -59,6 +59,7 @@ travel with the card. `settings` edits them; see
 | `apps.netserve.ssh` | `off` | `netserve`, `init` | SSH: listeners, `;`-separated -- a port, a port name and flags (`noauth`, `any`, `subnet`): `22 posix0; 2222 bbs0 noauth any` ([netserve.md](netserve.md#listeners)); a seeded TRNG, and a 10+ character password for any listener that is not `noauth` |
 | `apps.netserve.ssh_auth` | `both` | `netserve` | SSH logins by `key` (`/data/netserve/authkeys`), `password`, or `both`; not for `noauth` listeners |
 | `apps.netserve.ssh_sessions` | `2` | `netserve` | SSH sessions at a time, 1-4, about 10KB of memory each |
+| `apps.netserve.sftp` | `on` | `netserve` | sftp and scp over SSH: `on`, `read` (copying from this machine only) or `off`; never on a `noauth` listener ([netserve.md](netserve.md#copying-files-sftp-and-scp)) |
 | `apps.netserve.telnet` | `off` | `netserve`, `init` | telnet: listeners, as for SSH: `23 repl0; 2323 bbs0 noauth`; a 10+ character password for any listener that is not `noauth` |
 | `apps.term.auto_connect` | *(none)* | `term` | what a new term window connects to by itself |
 | `apps.zerdesk.allow` | `subnet` | `zerdesk` | accept viewers from this subnet only, or `any` ([remote_desktop.md](remote_desktop.md)) |

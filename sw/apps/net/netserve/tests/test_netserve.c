@@ -87,6 +87,7 @@ static int proc_runs, auth_checks;
 static int auth_force;
 static const char *cfg_ssh_sessions = NULL;
 static const char *cfg_telnet = "23 repl0", *cfg_echo = "7", *cfg_allow = NULL, *cfg_http = NULL, *cfg_ssh = NULL, *cfg_ssh_auth = NULL;
+static const char *cfg_sftp = NULL;
 static bool has_pw = true, pw_long = true;
 
 static uint32_t *k_syscall(uint32_t id, uint32_t *args, uint32_t b) {
@@ -161,6 +162,7 @@ static uint32_t *k_syscall(uint32_t id, uint32_t *args, uint32_t b) {
 		if (a->key && !strcmp(a->key, "apps.netserve.ssh")) v = cfg_ssh;
 		if (a->key && !strcmp(a->key, "apps.netserve.ssh_auth")) v = cfg_ssh_auth;
 		if (a->key && !strcmp(a->key, "apps.netserve.ssh_sessions")) v = cfg_ssh_sessions;
+		if (a->key && !strcmp(a->key, "apps.netserve.sftp")) v = cfg_sftp;
 		a->found = v != NULL;
 		if (v) snprintf(a->val, a->vallen, "%s", v);
 		return (uint32_t *)&k_ok;
@@ -1630,6 +1632,48 @@ int main(void) {
 		connect_from(1, 0xC0A80121, 7, true);
 		step();
 		CK(slot_of(conn_since(mark, __LINE__))->state == S_OPEN, "a new session on the new net");
+		clean_slate();
+	}
+
+	// -- sftp and scp: offered where people log in, never on noauth
+	// (docs/netserve.md, "Copying files: sftp and scp"). The protocols
+	// themselves: tests/test_xfer.c and tests/test_openssh.sh.
+	{
+		clean_slate();
+		fake_rng_secure = true;
+		has_pw = true; pw_long = true;
+		cfg_telnet = NULL; cfg_echo = NULL;
+		cfg_ssh = "22 bbs0 noauth any; 2222 posix0";
+		cfg_sftp = NULL;
+		read_config();
+		CK(xfer_mode == XFER_ON, "sftp and scp on by default");
+		deliver(NET, Z_NET_LISTEN_REPLY, 22, z_obj_uint32(0));
+		deliver(NET, Z_NET_LISTEN_REPLY, 2222, z_obj_uint32(0));
+		step();
+		mark = nout;
+		connect_from(5, 0xC0A80131, 22, true);
+		step();
+		sess_t *s1 = slot_of(conn_since(mark, __LINE__));
+		CK(s1->ssh && s1->ssh->eng.services == 0, "noauth: neither sftp nor scp");
+		mark = nout;
+		connect_from(6, 0xC0A80132, 2222, true);
+		step();
+		sess_t *s2 = slot_of(conn_since(mark, __LINE__));
+		CK(s2->ssh && s2->ssh->eng.services == (SSHS_SVC_SFTP | SSHS_SVC_SCP), "a login listener: both");
+		clean_slate();          // two ssh sessions at a time, by default
+		cfg_sftp = "read";
+		read_config();
+		CK(xfer_mode == XFER_READ, "apps.netserve.sftp: read");
+		cfg_sftp = "off";
+		read_config();
+		CK(xfer_mode == XFER_OFF, "apps.netserve.sftp: off");
+		mark = nout;
+		connect_from(7, 0xC0A80133, 2222, true);
+		step();
+		sess_t *s3 = slot_of(conn_since(mark, __LINE__));
+		CK(s3->ssh && s3->ssh->eng.services == 0, "off: not offered");
+		cfg_sftp = NULL;
+		cfg_ssh = NULL;
 		clean_slate();
 	}
 

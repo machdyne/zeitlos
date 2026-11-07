@@ -62,7 +62,7 @@ Build the hardware map from RTL with `make hwmap` (see [docs/hwmap.md](docs/hwma
  - [Speech](docs/tts.md) for blind and headless use, and system-wide [captions](docs/captions.md)
  - Image decoding and [vector rendering](docs/svg.md) shared by every app (`sw/common`), and a [page rasterizer](docs/zcanvas.md) with [public-domain fonts](docs/fonts.md) (Hershey stroke fonts, misc-fixed) for drawing at any scale, on screen or for print
  - [Printing](docs/print.md) without drivers: to IPP Everywhere printers (as PDF or PWG raster) and PostScript lasers, or to PDF files, from any app through [one page description](docs/zpaper.md)
- - IP/ARP/ICMP/UDP/DHCP/NTP/DNS/TFTP/TCP/telnet/ssh [networking](docs/networking.md), and [servers](docs/netserve.md): SSH (password or keys), telnet, and a static web server
+ - IP/ARP/ICMP/UDP/DHCP/NTP/DNS/TFTP/TCP/telnet/ssh [networking](docs/networking.md), and [servers](docs/netserve.md): SSH (password or keys), sftp and scp, telnet, and a static web server
  - A [password and screen lock](docs/security.md) (Super+L), kept with other machine settings in a power-safe [key/value store in flash](docs/kvstore.md)
  - TLS 1.3 with X.509 certificate verification -- see [tls](docs/tls.md) and [x509](docs/x509.md)
  - [Remote desktop](docs/remote_desktop.md) in a browser, with keyboard and mouse back: served by the [ESP32 link](docs/esp32link.md), or by `zerdesk` over Ethernet
@@ -178,7 +178,7 @@ board boots to a desktop with no sdcard ([core apps in flash](#core-apps-in-flas
 
 | App | Description |
 |-----|-------------|
-| [netserve](docs/netserve.md) | Network servers: SSH (password or [keys](docs/netserve.md#ssh-keys)), telnet, HTTP (static files), echo; several ports per service, and [`noauth`](docs/netserve.md#noauth) ports for apps with their own logins |
+| [netserve](docs/netserve.md) | Network servers: SSH (password or [keys](docs/netserve.md#ssh-keys)), [sftp and scp](docs/netserve.md#copying-files-sftp-and-scp) to copy files to and from any PC, telnet, HTTP (static files), echo; several ports per service, and [`noauth`](docs/netserve.md#noauth) ports for apps with their own logins |
 | [zerdesk](docs/remote_desktop.md) | Remote desktop over Ethernet: the same page as the ESP32 path. Started by hand, `run zerdesk`; it does not start by itself |
 | [bbs](docs/bbs.md) | Bulletin board system over telnet, SSH and `port bbs0`: forums, private mail, a new-scan, bulletins, sysop tools; also runs on Linux ([bbs_linux](docs/bbs_linux.md)) |
 | [fed](docs/fed.md) | Zeitlos Federation Protocol service |

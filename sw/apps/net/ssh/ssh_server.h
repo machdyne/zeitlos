@@ -44,8 +44,10 @@
  * signatures; SHA-1 "ssh-rsa" signatures are refused. The owner decides
  * which keys are listed and checks the signature (the engine carries
  * no RSA). Anything else gets a FAILURE naming what is offered. One
- * `session` channel; `pty-req` and `shell` accepted, `exec`,
- * `subsystem` (sftp, scp) and forwarding refused.
+ * `session` channel; `pty-req` and `shell` accepted, and -- when the
+ * owner offers them (sshs_set_services()) -- the `sftp` subsystem and an
+ * `exec` of "scp ..." (sw/apps/net/netserve/xfer.h). Any other `exec`,
+ * other subsystems and forwarding of every kind are refused.
  *
  * -- Flow control, both ways --
  *
@@ -74,6 +76,8 @@
 typedef enum {
 	SSHS_EV_LOG,        // text: a line for the console
 	SSHS_EV_SHELL,      // the client wants a shell: connect the session to its port
+	SSHS_EV_SFTP,       // the client started the sftp subsystem (SSHS_SVC_SFTP)
+	SSHS_EV_EXEC,       // the client asked to run `text`, an "scp ..." (SSHS_SVC_SCP)
 	SSHS_EV_DATA,       // channel data from the client; borrowed, as tcp.h's DATA
 	SSHS_EV_EOF,        // the client will send no more channel data
 	SSHS_EV_CLOSED,     // over; text says why. The last event.
@@ -115,6 +119,11 @@ typedef bool (*sshs_pk_verify_fn)(void *user, const char *alg, const uint8_t *bl
 // "noauth"). Excludes the other two: the hooks are never called.
 #define SSHS_AUTH_ANY        4u
 
+// What a session may start besides a shell (sshs_set_services()).
+#define SSHS_SVC_SFTP        1u
+#define SSHS_SVC_SCP         2u
+#define SSHS_EXEC_MAX        512    // the longest command taken
+
 typedef struct {
 	// hooks
 	void *user;
@@ -125,6 +134,7 @@ typedef struct {
 	sshs_pk_check_fn pk_check;
 	sshs_pk_verify_fn pk_verify;
 	uint32_t methods;               // SSHS_AUTH_*
+	uint32_t services;              // SSHS_SVC_*
 	bool ext_info_c;                // the client takes SSH_MSG_EXT_INFO (RFC 8308)
 
 	// the host key
@@ -168,7 +178,8 @@ typedef struct {
 	bool authed;
 
 	// the channel
-	bool chan_open, chan_eof_sent, chan_close_sent, shell;
+	bool chan_open, chan_eof_sent, chan_close_sent;
+	bool shell;                     // started: a shell, sftp or an exec -- one per channel
 	uint32_t remote_chan;
 	uint32_t remote_window, remote_max;
 	uint32_t local_window;          // what the client may still send
@@ -184,6 +195,14 @@ void sshs_init(ssh_server_t *s, const uint8_t host_seed[32], void *user,
 // Before the first sshs_feed(). Password alone if never called.
 void sshs_set_auth(ssh_server_t *s, uint32_t methods,
 	sshs_pk_check_fn check, sshs_pk_verify_fn verify);
+
+// sftp and scp: SSHS_SVC_* the client may start in place of a shell.
+// None unless this is called.
+void sshs_set_services(ssh_server_t *s, uint32_t services);
+
+// Opens the client's window by `add` more bytes, for an owner that
+// holds more than SSHS_LOCAL_WINDOW for this channel (sftp, scp).
+void sshs_grow_window(ssh_server_t *s, uint32_t add);
 
 // Bytes from the client. Always consumes all of them.
 void sshs_feed(ssh_server_t *s, const uint8_t *data, uint32_t len);
@@ -202,6 +221,14 @@ void sshs_consumed(ssh_server_t *s, uint32_t n);
 // then SSHS_EV_CLOSED -- close the connection once they have gone out.
 // The client's own CLOSE is not waited for (ours sends none).
 void sshs_end(ssh_server_t *s, uint32_t exit_status);
+
+// sshs_end(), but the session stays open until the client's own CLOSE
+// (or DISCONNECT) comes back -- then SSHS_EV_CLOSED. For sftp and scp:
+// closing the connection the moment ours is sent cuts off what the
+// client still has to say (scp's last acknowledgement, its CLOSE), and
+// it reports "lost connection". The owner closes it anyway after a few
+// seconds (sshs_disconnect()): a client need not answer.
+void sshs_end_wait(ssh_server_t *s, uint32_t exit_status);
 
 // Ends it now, with a DISCONNECT the client will show.
 void sshs_disconnect(ssh_server_t *s, const char *why);

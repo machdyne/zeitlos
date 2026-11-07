@@ -618,9 +618,37 @@ static void handle_channel_request(ssh_server_t *s, const uint8_t *pl, uint32_t 
 		s->shell = true;
 		if (want) chan_reply(s, MSG_CHANNEL_SUCCESS);
 		s->event(s->user, SSHS_EV_SHELL, 0, 0, 0);
+	} else if (ssh_str_eq(type, type_n, "subsystem") && !s->shell && (s->services & SSHS_SVC_SFTP)) {
+		uint32_t n;
+		const uint8_t *name = ssh_rd_string(&r, &n);
+		if (r.bad || !ssh_str_eq(name, n, "sftp")) {
+			if (want) chan_reply(s, MSG_CHANNEL_FAILURE);
+			return;
+		}
+		s->shell = true;
+		if (want) chan_reply(s, MSG_CHANNEL_SUCCESS);
+		s->event(s->user, SSHS_EV_SFTP, 0, 0, "sftp");
+	} else if (ssh_str_eq(type, type_n, "exec") && !s->shell && (s->services & SSHS_SVC_SCP)) {
+		// Only scp's own protocol: there is no shell here to run anything
+		// else. The command is the client's: no NUL, no control bytes.
+		char cmd[SSHS_EXEC_MAX + 1];
+		uint32_t n;
+		const uint8_t *c = ssh_rd_string(&r, &n);
+		bool ok = !r.bad && n > 4 && n <= SSHS_EXEC_MAX && !memcmp(c, "scp ", 4);
+		for (uint32_t i = 0; ok && i < n; i++) if (c[i] < 0x20 && c[i] != '\t') ok = false;
+		if (!ok) {
+			log_line(s, "ssh: exec refused -- only scp runs here");
+			if (want) chan_reply(s, MSG_CHANNEL_FAILURE);
+			return;
+		}
+		memcpy(cmd, c, n);
+		cmd[n] = 0;
+		s->shell = true;
+		if (want) chan_reply(s, MSG_CHANNEL_SUCCESS);
+		s->event(s->user, SSHS_EV_EXEC, c, n, cmd);
 	} else {
-		// exec, subsystem (sftp, scp), env, x11-req, agent forwarding,
-		// window-change, keepalive@openssh.com: not taken.
+		// exec (but scp's), subsystems (but sftp), env, x11-req, agent
+		// forwarding, window-change, keepalive@openssh.com: not taken.
 		if (want) chan_reply(s, MSG_CHANNEL_FAILURE);
 	}
 }
@@ -782,7 +810,7 @@ static void handle_packet(ssh_server_t *s, const uint8_t *pl, uint32_t len, uint
 			s->chan_close_sent = true;
 		}
 		s->chan_open = false;
-		closed(s, "ssh: the client closed the session");
+		closed(s, s->chan_eof_sent ? "ssh: session ended" : "ssh: the client closed the session");
 		return;
 	case MSG_CHANNEL_SUCCESS:
 	case MSG_CHANNEL_FAILURE:
@@ -909,6 +937,21 @@ void sshs_init(ssh_server_t *s, const uint8_t host_seed[32], void *user,
 	send_kexinit(s);
 }
 
+void sshs_set_services(ssh_server_t *s, uint32_t services) {
+	s->services = services;
+}
+
+void sshs_grow_window(ssh_server_t *s, uint32_t add) {
+	uint8_t buf[12];
+	ssh_wr w;
+	if (s->state != ST_OPEN || !s->chan_open || s->kexing || !add) return;
+	ssh_wr_init(&w, buf, sizeof(buf));
+	ssh_wr_u8(&w, MSG_CHANNEL_WINDOW_ADJUST);
+	ssh_wr_u32(&w, s->remote_chan);
+	ssh_wr_u32(&w, add);
+	if (send_packet(s, buf, ssh_wr_len(&w))) s->local_window += add;
+}
+
 void sshs_set_auth(ssh_server_t *s, uint32_t methods,
 		sshs_pk_check_fn check, sshs_pk_verify_fn verify) {
 	s->methods = methods;
@@ -956,7 +999,7 @@ void sshs_consumed(ssh_server_t *s, uint32_t n) {
 	}
 }
 
-void sshs_end(ssh_server_t *s, uint32_t exit_status) {
+static void end_channel(ssh_server_t *s, uint32_t exit_status, bool wait) {
 	uint8_t buf[40];
 	ssh_wr w;
 	if (s->state == ST_CLOSED) return;
@@ -970,12 +1013,17 @@ void sshs_end(ssh_server_t *s, uint32_t exit_status) {
 	if (!send_packet(s, buf, ssh_wr_len(&w))) return;
 	if (!s->chan_eof_sent) { chan_reply(s, MSG_CHANNEL_EOF); s->chan_eof_sent = true; }
 	if (!s->chan_close_sent) { chan_reply(s, MSG_CHANNEL_CLOSE); s->chan_close_sent = true; }
+	// The client's CLOSE in answer ends it (handle_packet()).
+	if (wait) return;
 	// Over now, without waiting for the client's CLOSE in answer:
 	// OpenSSH sends one, our own client (ssh_proto.c) does not, and
 	// either way the owner closes the connection once these are out.
 	s->chan_open = false;
 	closed(s, "ssh: session ended");
 }
+
+void sshs_end(ssh_server_t *s, uint32_t exit_status) { end_channel(s, exit_status, false); }
+void sshs_end_wait(ssh_server_t *s, uint32_t exit_status) { end_channel(s, exit_status, true); }
 
 bool sshs_is_closed(const ssh_server_t *s) {
 	return s->state == ST_CLOSED;

@@ -18,7 +18,12 @@ MONO = ../../../ext/monocypher
 SSH_OBJS = ssh_server.o ssh_wire.o ssh_crypto.o zsha256.o monocypher.o monocypher-ed25519.o z25519.o zrng.o \
 	authkeys.o rsa.o bignum.o
 
-OBJS = zeitlos.o zobj.o zport.o zcfg.o zfsapp.o $(SSH_OBJS) netserve.o
+# sftp and scp (docs/netserve.md, "Copying files: sftp and scp"): the
+# protocols in xfer.c, sftp.c and scp.c, the files through the fs
+# driver's own client (zfsc.o) in nsfs_zfs.c.
+XFER_OBJS = xfer.o sftp.o scp.o nsfs_zfs.o zfsc.o
+
+OBJS = zeitlos.o zobj.o zport.o zcfg.o zfsapp.o $(SSH_OBJS) $(XFER_OBJS) netserve.o
 
 ssh_server.o: ../ssh/ssh_server.c ../ssh/ssh_server.h ../ssh/ssh_crypto.h ../ssh/ssh_wire.h
 	$(CC) $(CFLAGS) -c ../ssh/ssh_server.c -o ssh_server.o
@@ -43,13 +48,17 @@ bignum.o: ../../web/bignum.c ../../web/bignum.h
 	$(CC) $(CFLAGS) -c ../../web/bignum.c -o bignum.o
 
 # Host tests: tests/test_netserve.c runs the real netserve.c against a
-# scripted net, backend and kernel.
+# scripted net, backend and kernel; tests/test_xfer.c the sftp and scp
+# code by hand, and tests/test_openssh.sh the same code under the real
+# OpenSSH sftp, scp and scp -O (skipped where they are not installed).
 HOSTCC ?= cc
 # The SSH engine and its crypto, for the host tests. zrng.c is not among
 # them: it reads the TRNG's registers; the tests bring their own.
 TEST_SSH = ../ssh/ssh_server.c ../ssh/ssh_wire.c ../ssh/ssh_crypto.c ../../../common/zsha256.c \
 	$(MONO)/monocypher.c $(MONO)/monocypher-ed25519.c ../../../common/z25519.c \
 	authkeys.c ../../web/rsa.c ../../web/bignum.c
+# sftp and scp, with a host directory for the card (tests/nsfs_posix.c)
+TEST_XFER = xfer.c sftp.c scp.c tests/nsfs_posix.c
 .PHONY: test
 test:
 	$(HOSTCC) --std=gnu99 -Wall -Wextra -I../../../common -o /tmp/test_zlisten \
@@ -60,17 +69,23 @@ test:
 	$(HOSTCC) --std=gnu99 -O2 -w -I../ssh -o /tmp/test_ssh_server ../ssh/tests/test_ssh_server.c \
 		$(TEST_SSH)
 	/tmp/test_ssh_server
+	$(HOSTCC) --std=gnu99 -O1 -g -fsanitize=address,undefined -Wall -I../../../common -o /tmp/test_xfer \
+		tests/test_xfer.c $(TEST_XFER)
+	/tmp/test_xfer
+	sh tests/test_openssh.sh || [ $$? -eq 77 ]
 	$(HOSTCC) --std=gnu99 -Wall -no-pie -I../../../common -o /tmp/test_netserve \
-		tests/test_netserve.c tests/fake_fs.c $(TEST_SSH) ../ssh/ssh_proto.c ../../../common/zobj.c \
+		tests/test_netserve.c tests/fake_fs.c $(TEST_SSH) $(TEST_XFER) ../ssh/ssh_proto.c ../../../common/zobj.c \
 		../../../common/zport.c ../../../common/zeitlos.c ../../../common/zcfg.c
 	/tmp/test_netserve || [ $$? -eq 77 ]
 	$(HOSTCC) --std=gnu99 -w -no-pie -I../../../common -I.. -o /tmp/test_e2e \
-		tests/test_e2e.c tests/ns_harness.c tests/fake_fs.c $(TEST_SSH) ../tcp.c ../relay.c ../../../common/zobj.c \
+		tests/test_e2e.c tests/ns_harness.c tests/fake_fs.c $(TEST_SSH) $(TEST_XFER) ../tcp.c ../relay.c ../../../common/zobj.c \
 		../../../common/zport.c ../../../common/zeitlos.c ../../../common/zcfg.c
 	/tmp/test_e2e || [ $$? -eq 77 ]
 
-# 64KB. SSH engines on the heap, about 10KB each, two by default
-# and four at most, plus eight sends in flight per session each way.
-APP_STACK = 64K
+# 128KB. SSH engines on the heap, about 10KB each, two by default
+# and four at most, plus eight sends in flight per session each way;
+# a running sftp or scp about 10KB more each, its folders 2KB each
+# while listed, and zfsc's 8KB of collected writes, once.
+APP_STACK = 128K
 
 include ../../../common/app.mk

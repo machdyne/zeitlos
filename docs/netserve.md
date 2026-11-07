@@ -1,13 +1,16 @@
 # netserve: network servers
 
-SSH and telnet into Zeitlos, a web server for static files, and an
-echo service for testing the path.
+SSH and telnet into Zeitlos, copying files to and from it with sftp
+and scp, a web server for static files, and an echo service for
+testing the path.
 
 **Status: telnet, HTTP and echo run on a board (RMII), after the fixes
 in "Found on hardware". SSH -- password and keys -- is host-tested
 against the real client engine and not yet reported from a board.
 Listener lists and `noauth` ("noauth", below) are host-tested and not
-yet reported from a board.**
+yet reported from a board. sftp and scp are tested on the host against
+the real OpenSSH `sftp`, `scp` and `scp -O`, and not yet reported from a
+board.**
 
 ```
 peer --TCP-- net --port-- netserve --port-- repl0 / posix0 / console0 / serial0
@@ -19,6 +22,7 @@ peer --TCP-- net --port-- netserve --port-- repl0 / posix0 / console0 / serial0
 | `sw/apps/net/relay.c` | net's side: each accepted connection relayed to its listener |
 | `sw/apps/net/netserve/` | the servers; `authkeys.c` reads `/data/netserve/authkeys` |
 | `sw/apps/net/ssh/ssh_server.c` | the SSH protocol, the other half of the client's `ssh_proto.c` |
+| `sw/apps/net/netserve/sftp.c`, `scp.c`, `xfer.c` | copying files over SSH ("Copying files: sftp and scp") |
 | `sw/common/znet.h` | `Z_NET_LISTEN`, and what an accepted connection carries |
 
 **Ethernet boards only.** On a board networked through the ESP32 link
@@ -44,6 +48,7 @@ apps.netserve.allow: subnet
 | `apps.netserve.ssh` | `off` | one or more **listeners** (below); `22 posix0` by default. Needs the same password -- and a seeded TRNG |
 | `apps.netserve.ssh_auth` | `both` | `both`, `key` (only keys in `/data/netserve/authkeys`; no password needed at all) or `password`. Not for `noauth` listeners, which take anyone |
 | `apps.netserve.ssh_sessions` | `2` | SSH sessions at a time, 1 to 4; about 10 KB of netserve's memory each ("Cost", below) |
+| `apps.netserve.sftp` | `on` | sftp and scp on the SSH listeners that log people in: `on`, `read` (copying from this machine only) or `off`. Never on a `noauth` listener ("Copying files: sftp and scp") |
 | `apps.netserve.telnet` | `off` | one or more **listeners**: a port, then a port name to connect sessions to -- `repl0`, `posix0`, `console0`, `serial0`, `bbs0`, or any zport provider. The port defaults to 23, the name to `repl0` |
 | `apps.netserve.http` | `off` | a port, then the directory to serve: `80 /data/netserve/www`. No password: it serves files, read-only |
 | `apps.netserve.echo` | `off` | a port (7): everything sent comes back. No password; for testing |
@@ -243,9 +248,10 @@ netserve binds it to a session.
   and telnet. Any user name: this is a single-user system, and the
   name is logged. Three wrong passwords or bad signatures, or 60 s
   without logging in, and the connection is closed.
-- **One session channel** per connection: `pty-req` and `shell`.
-  `exec`, `subsystem` -- so sftp and scp -- and forwarding of any kind
-  are refused.
+- **One session channel** per connection: `pty-req` and `shell`, or
+  the `sftp` subsystem, or an `exec` of `scp` ("Copying files: sftp and
+  scp"). Any other `exec` (`ssh host ls`), other subsystems and
+  forwarding of any kind are refused.
 - **Flow control:** the window offered to the client is exactly the
   1 KB the session holds for it, re-opened only as bytes reach the port;
   what goes to the client never exceeds its window.
@@ -273,8 +279,9 @@ users to click through the warning).
 
 **Cost:** the key exchange is three curve25519 operations and an
 Ed25519 signature, about a second or two of this CPU, during which
-netserve's other sessions wait. netserve is about 155 KB of code with
-SSH and its key checking in (RSA verification comes from `web`).
+netserve's other sessions wait. netserve's image is about 191 KB with
+SSH and its key checking in (RSA verification comes from `web`), 29 KB
+of it sftp and scp with the fs driver's client.
 
 **SSH sessions** come from a pool allocated when netserve starts,
 `apps.netserve.ssh_sessions` of them -- 2 by default, 4 at most -- each
@@ -284,9 +291,10 @@ client may send before the port takes it. The pool is on the heap, not
 in `.bss`, so a machine with no SSH listener pays nothing for it. A
 session over the limit is refused (`netserve: too many ssh sessions`);
 if the memory is not there, netserve starts with as many as fit and
-says so. netserve's memory tier is LARGE (64 KB of stack and heap,
-`sw/os/kernel.h`): moving the default pool out of `.bss` shrank the
-image by 19 KB, so the default costs about 13 KB more than before.
+says so. netserve has 128 KB of stack and heap (64 KB before sftp and
+scp, which take about 10 KB more a session while they run): moving the
+default pool out of `.bss` shrank the image by 19 KB, so the default
+costs about 13 KB more than before.
 
 ## SSH keys
 
@@ -332,6 +340,62 @@ second -- the reason to prefer Ed25519 keys here.
 `apps.netserve.ssh_auth: key` makes the server take keys only: no
 password is offered, and none needs to be set. That is the setting to
 use if the machine is ever reachable from outside the local network.
+
+## Copying files: sftp and scp
+
+Any SFTP or SCP program copies files to and from the machine over the
+same SSH listeners, with the same password or key: OpenSSH's `sftp` and
+`scp`, WinSCP, FileZilla, Cyberduck, PuTTY's `psftp` and `pscp`, and
+`sshfs`, which mounts the machine as a folder on a PC.
+
+```
+$ sftp phil@192.168.178.154
+Connected to 192.168.178.154.
+sftp> put report.txt
+sftp> get -r /media/images
+sftp> df -h
+
+$ scp notes.txt phil@192.168.178.154:              # into /home
+$ scp -r phil@192.168.178.154:/home/letters .      # a folder, back
+$ sshfs phil@192.168.178.154:/home ~/zeitlos       # /home as a folder here
+```
+
+- **On by default** wherever SSH logs people in. `apps.netserve.sftp:
+  read` allows copying from this machine only -- every upload, removal,
+  rename and new folder is refused -- and `off` turns both off.
+- **Never on a `noauth` listener.** Nobody checked who is on the other
+  end ("noauth", above), so sftp and scp are refused there whatever
+  `apps.netserve.sftp` says.
+- **Where:** a session starts in `/home` (or `/` if there is none), and
+  reaches the whole card, `/ram`, `/usb`, and `/nfs` (read-only).
+- **A file sent here is written as `NAME.part` and renamed to `NAME`
+  once all of it has arrived** -- the rule every app here follows. A
+  transfer that stops part way (the connection drops, the program is
+  stopped, the card fills) leaves the old `NAME` exactly as it was, and
+  the `.part` is removed. Resuming a transfer (`reput`, `put -a`) writes
+  into the file itself, as it must.
+- **The console says what changed:** each file received, removed or
+  renamed, each folder made, and each transfer that stopped:
+  ```
+  netserve: session 7: sftp
+  netserve: session 7: sftp: received /home/report.txt (48213 bytes)
+  netserve: session 7: sftp: /home/big.iso not received in full -- the old file is as it was
+  ```
+- **Times and permissions are not kept.** FAT has a date, which this
+  machine's clock sets when a file is written, and one read-only flag.
+  `scp -p` and `put -p` are accepted and their times ignored. There are
+  no links.
+- **Old scp.** `scp -O`, older OpenSSH, and `pscp` when it falls back
+  use scp's original protocol, which is here too (`scp -t` and `scp -f`,
+  with `-r`, `-p` and `-d`). A source path may end in a pattern --
+  `scp -O 'phil@host:/home/*.txt' .` -- matched with `*` and `?`,
+  ignoring case as FAT does. No other command runs: there is no shell
+  behind `exec`.
+- **Limits:** four files open at once in a session, two folders being
+  listed, reads answered 2 KB at a time (`limits@openssh.com` tells the
+  client so). Each sftp or scp is one of `apps.netserve.ssh_sessions`.
+- **Speed** is not yet measured on a board. The network itself carries
+  about 148 KB/s ([net_throughput.md](net_throughput.md)).
 
 ## The web server
 
@@ -462,6 +526,63 @@ case the other side died and never will.
 
 The password check blocks netserve's loop for the half second it takes.
 The kernel runs one check at a time system-wide regardless.
+
+### sftp and scp
+
+`sw/apps/net/netserve`:
+
+| file | |
+|---|---|
+| `xfer.h`, `xfer.c` | one interface for both protocols; the input ring, paths, the `.part` rule, `ls -l` lines |
+| `sftp.c` | SFTP version 3, with `posix-rename`, `statvfs`, `fsync` and `limits@openssh.com` |
+| `scp.c` | scp's own protocol, both directions |
+| `nsfs.h`, `nsfs_zfs.c` | the file calls they make, through the fs driver's client (`sw/common/zfsc.c`) |
+
+No platform in the protocol code, as in the SSH engine: bytes from the
+client go in (`xfer_put()`), replies come out (`xfer_out()`), and the
+files are reached through `nsfs.h` -- on the host, a directory standing
+in for the card (`tests/nsfs_posix.c`). So the same code runs under the
+real OpenSSH programs in `tests/test_openssh.sh`.
+
+```
+sshs_feed --EV_DATA--> xfer_put   xfer_step   xfer_out --> sshs_send
+                       (4 KB)     (files)     (2.5 KB)
+```
+
+- **The engine** (`ssh_server.c`) accepts the `sftp` subsystem, and an
+  `exec` beginning `scp `, only when netserve offers them
+  (`sshs_set_services()`): on every listener that checks who logs in,
+  never on a `noauth` one. Each raises an event (`SSHS_EV_SFTP`,
+  `SSHS_EV_EXEC`); netserve starts the transfer and opens the channel's
+  window from 1 KB to the transfer's 4 KB of input
+  (`sshs_grow_window()`). The window is credited (`sshs_consumed()`)
+  with what each step used, so the client never sends more than there
+  is room for.
+- **A step** (`xfer_pump()`, every pass of netserve's loop) handles at
+  most eight requests, so the other sessions keep their turn. Each file
+  call is one request to `fs` and its reply; netserve's other messages
+  wait, queued, meanwhile (`z_msg_recv_match()`).
+- **WRITE is streamed.** Its header is assembled; its data goes to the
+  file as each piece arrives, never held whole -- a client that does not
+  ask the limits may send 256 KB in one request. zfsc collects small
+  writes into one request to `fs` of up to 8 KB.
+- **A request waits for room for its whole reply**: READ's data is read
+  straight from the file into the output.
+- **Over:** at the client's EOF with nothing left to do (sftp), or when
+  scp's protocol ends. netserve sends the exit status, EOF and CLOSE --
+  1 if anything failed, as scp reports -- and waits up to five seconds
+  for the client's own CLOSE before closing the connection
+  (`sshs_end_wait()`). Closing at once cut off what the client still
+  had to say, and `scp` reported "lost connection".
+- **Ended any other way** -- the client gone, the session ended --
+  `xfer_free()` closes every file and removes each unfinished `.part`.
+- **Memory:** about 10 KB a running transfer (its input, output, the
+  request being assembled, its handles), 2 KB for each folder being
+  listed, and zfsc's 8 KB of collected writes, once. From the heap, while
+  it runs.
+- **scp's folders** are read again from the start for each entry sent,
+  skipping those already sent: `fs` has four folder slots for the whole
+  machine, so one cannot be held open per level of a recursive copy.
 
 ## When it stops: stall reports
 
@@ -620,11 +741,30 @@ changed was then refused as `no service on that port`. A listener
 whose port survives the re-read now keeps the flag. It showed as a
 segfault in the test, several sections later -- see "Testing".
 
+## Found by the tests: scp's acknowledgements, and closing too soon
+
+`scp -O -p` from here failed now and then with `lost connection`.
+Two causes, both found by OpenSSH's `scp` under `tests/test_openssh.sh`:
+
+- With `-p` each file's times (`T...`) go first, and the client
+  acknowledges them **before** the file's `C` line, which it
+  acknowledges again. The first version sent `T` and `C` together and
+  waited for one acknowledgement, so every acknowledgement after it was
+  taken for the step before -- and the last file's was still on its way
+  when netserve thought it was over.
+- netserve then closed the connection the moment its own CLOSE was
+  sent, before the client had said its last words. Now it waits for the
+  client's CLOSE, five seconds at most (`sshs_end_wait()`). A shell
+  session still closes at once: Zeitlos's own client sends no CLOSE.
+
+The test copies a folder with `-rp` six times over.
+
 ## Testing
 
 On the host -- `make test` in `sw/apps/net` and in
 `sw/apps/net/netserve` (needs `sysctl vm.mmap_min_addr=0` for the
-tests with a scripted kernel; they skip otherwise):
+tests with a scripted kernel; they skip otherwise). In netserve, the
+sftp and scp tests run before `test_netserve.c`:
 
 | test | checks | what |
 |---|---|---|
@@ -632,8 +772,10 @@ tests with a scripted kernel; they skip otherwise):
 | `net/netserve/tests/test_e2e.c` | 7 | end to end: a TCP client, the real tcp.c, relay.c and netserve.c, a scripted posix: `help`'s 1.4 KB and two 4 KB messages reach the client under real flow control; the board's echo test, 3,000 bytes in and all back, with and without the client's FIN on the last segment |
 | `net/netserve/tests/test_authkeys.c` | 25 | the authkeys parser with OpenSSL-made keys and Python-computed expectations: every line form, every refusal, fingerprints as ssh-keygen prints them, Ed25519 agreeing with OpenSSL, RSA and Ed25519 signatures good and tampered |
 | `net/ssh/tests/test_ssh_server.c` | 56 | the server engine against the REAL client engine: the handshake, the fingerprint, a wrong password then the right one, 40 KB out within the client's window, the server's own window, three failures, the kernel's refusal, a flipped bit, strict KEX (offered, Terrapin's IGNORE-first refused, non-kex mid-exchange refused), no algorithms in common, HTTP on the SSH port, an absurd length, a client sending past the window, channel data before logging in; public keys: the PK_OK question, Ed25519 and RSA logins, an unlisted key (not counted), SHA-1 ssh-rsa refused (by the engine itself), bad signatures counted, keys only, passwords only, server-sig-algs; `noauth` (SSHS_AUTH_ANY): `none` in with no password asked, any password (the hook never called), keyboard-interactive, an unknown method (its name made printable for the log), a key asked about (PK_OK) and a key in no list signed |
-| `net/netserve/tests/test_netserve.c` | 247 | the real `netserve.c`: the policy, listening, echo, the subnet rule, option negotiation (and no loops), the password never echoed, a wrong one, three wrong, the kernel's delay, the login timeout, starting repl once for two sessions, CONNECT answers matched in order, Enter normalised, 0xFF both ways, backpressure, a 4 KB message and a 600-byte paste, a stranger's DATA, the terminal handoff and its call-back and fallback, a peer that vanishes; echo finishing a half-close; HTTP: files, indexes, types, %-decoding, every refusal (`..` in each disguise, `%00`, 404, 405, 408, 414/431, 400), HEAD, a 5 KB file streamed, a request in pieces, half-closes before and after the request, no file handle free, no handle or session left behind; SSH through netserve with the real client engine: host key made once and kept, off without a seeded TRNG, login, keystrokes to repl, 4 KB back, a 3 KB paste through the window, repl quitting, three wrong passwords, the login timeout, the engine wiped and released; SSH policy (keys only needs no password, the default needs one) and `/data/netserve/authkeys` (none, listed, unlisted, an edit taking effect, a refused line reported once); a backend dying silently under telnet (told, closed, its sends freed, nothing sent to it), under SSH (the message inside the channel), and during a handoff (waits for the call-back); a CONNECT answered after its session ended (the slot kept for the answer, a late CONNECTED closed, never given to the next session; a late REFUSED); listener lists (flags in any order, defaults, every refused entry, a port taken, four at most, the password rule per listener, noauth SSH without a password or with no TRNG, the old one-entry form); the subnet rule per listener both ways, and ports kept listened on across a re-read; a noauth telnet session (no banner or prompt, `bbs` started, its identity map, typeahead, its screen) beside a password one (`auth system`); a noauth SSH session from the internet with no password (never checked; identity with the user name; the BBS's screen through the channel); `z_port_ident()` and `z_port_refuse_unauthenticated()` on every kind of argument; `apps.netserve.ssh_sessions` (limits, the pool as the limit, not replaced while in use) |
+| `net/netserve/tests/test_netserve.c` | 256 | the real `netserve.c`: the policy, listening, echo, the subnet rule, option negotiation (and no loops), the password never echoed, a wrong one, three wrong, the kernel's delay, the login timeout, starting repl once for two sessions, CONNECT answers matched in order, Enter normalised, 0xFF both ways, backpressure, a 4 KB message and a 600-byte paste, a stranger's DATA, the terminal handoff and its call-back and fallback, a peer that vanishes; echo finishing a half-close; HTTP: files, indexes, types, %-decoding, every refusal (`..` in each disguise, `%00`, 404, 405, 408, 414/431, 400), HEAD, a 5 KB file streamed, a request in pieces, half-closes before and after the request, no file handle free, no handle or session left behind; SSH through netserve with the real client engine: host key made once and kept, off without a seeded TRNG, login, keystrokes to repl, 4 KB back, a 3 KB paste through the window, repl quitting, three wrong passwords, the login timeout, the engine wiped and released; SSH policy (keys only needs no password, the default needs one) and `/data/netserve/authkeys` (none, listed, unlisted, an edit taking effect, a refused line reported once); a backend dying silently under telnet (told, closed, its sends freed, nothing sent to it), under SSH (the message inside the channel), and during a handoff (waits for the call-back); a CONNECT answered after its session ended (the slot kept for the answer, a late CONNECTED closed, never given to the next session; a late REFUSED); listener lists (flags in any order, defaults, every refused entry, a port taken, four at most, the password rule per listener, noauth SSH without a password or with no TRNG, the old one-entry form); the subnet rule per listener both ways, and ports kept listened on across a re-read; a noauth telnet session (no banner or prompt, `bbs` started, its identity map, typeahead, its screen) beside a password one (`auth system`); a noauth SSH session from the internet with no password (never checked; identity with the user name; the BBS's screen through the channel); `z_port_ident()` and `z_port_refuse_unauthenticated()` on every kind of argument; `apps.netserve.ssh_sessions` (limits, the pool as the limit, not replaced while in use); sftp and scp offered on a login listener, not on a `noauth` one, and `apps.netserve.sftp` `read` and `off` |
 | `net/tests/test_tcp_pool.c` | 73 | networking.md, "Connections" |
+| `net/netserve/tests/test_xfer.c` | 77 | sftp and scp by hand, under AddressSanitizer: paths (`.`, `..`, `~`, too long, control bytes), a 50,000-byte WRITE split at every 1, 7 and 1,000 bytes (the old file kept until CLOSE), READ in 2 KB, at and past the end, a closed handle, RENAME refusing to replace and posix-rename replacing, EXCL, a missing file, SETSTAT's size, unknown requests and extensions, a request too long to assemble (and the next answered), the fifth open file, an upload not closed (old file, no `.part`), an impossible length, read-only; scp: commands refused, a folder and a file with a quoted path, `../` in a name, a transfer stopped part way, `-d` onto a file, read-only, a file fetched step by step |
+| `net/netserve/tests/test_openssh.sh` | 67 | the real OpenSSH `sftp`, `scp` and `scp -O` against the same code (`tests/xfer_host.c`): files of every awkward size both ways, byte for byte; a file replaced; folders both ways with every protocol; mkdir, rename, rm, rmdir, `ls -l`, `df`; resuming with `reput` and `reget`; several files into a folder, `-rp` repeatedly, a pattern, a missing file, a folder without `-r`, a missing target folder; `ssh host ls` and another subsystem refused; an sftp and an scp upload killed part way (the old file, no `.part`); read-only. Skipped without OpenSSH |
 
 A connection netserve should have accepted and did not is reported as
 a failure at the test's own line (`conn_since()`); the tests used to
@@ -695,6 +837,12 @@ guarantees it) and tcp.c's generation check after a DATA event.
    | `apps.netserve.ssh: 22 posix0; 2222 posix0 noauth`, `ssh -p 22` | still asks for the password |
    | `apps.netserve.telnet: 23 portdemo0 noauth`, `run portdemo` first | straight to portdemo's banner: no prompt |
    | the same over SSH (`ssh -p 2222 anyone@<ip>`) with OpenSSH, PuTTY, Dropbear's `dbclient`, SyncTERM, NetRunner | in with no password prompt -- or, for a client that insists on one, with any password |
+   | `sftp <ip>`: `put` a large file, `get` it back, `cmp` | the same bytes; the console logs both; note the time it took |
+   | `scp -r somefolder <ip>:` and `scp -O -r <ip>:/home/somefolder back` | `diff -r` finds nothing |
+   | an sftp `put` of a large file, stopped with Ctrl+C | the console says it was not received in full; no `.part` on the card; the old file unchanged |
+   | WinSCP or FileZilla (SFTP), browse and copy | works; folders list with sizes and dates |
+   | `sftp -P 2222 <ip>` to a `noauth` listener | refused: `subsystem request failed` |
+   | `apps.netserve.sftp: read`, then a `put` | `Permission denied` |
 
    Worth reporting: how the typing feels (each keystroke is a round
    trip through net and netserve), and any `net: relay` or `netserve:`
@@ -705,7 +853,7 @@ guarantees it) and tcp.c's generation check after a DATA event.
 - **Throughput:** full-size segments through the relay: sending from
   the listener's held messages directly, rather than through its 1KB
   staging buffer.
-- SSH `exec` (`ssh host command`), and scp/sftp.
+- SSH `exec` of anything but scp (`ssh host command`).
 - **Telnet BINARY** (RFC 856). Enter is normalised to one CR and
   nothing else is negotiated, which is right for typing and wrong for
   a file transfer (XMODEM) over telnet -- not needed while the BBS

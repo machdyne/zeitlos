@@ -39,6 +39,8 @@
 #include "../../../common/zrng.h"		// SSH: ephemeral keys, padding
 #include "../ssh/ssh_server.h"		// SSH: the protocol engine (docs/netserve.md, "SSH")
 #include "authkeys.h"			// SSH: the keys in /data/netserve/authkeys
+#include "xfer.h"			// SSH: sftp and scp (docs/netserve.md, "Copying files")
+#include "nsfs.h"
 
 #define MAX_SESS        6           // net relays at most TCP_MAX_CONN - 2
 // Toward the peer. HTTP reads the file into it, so each pass is one
@@ -85,7 +87,10 @@ typedef struct {
 	uint8_t in[SSHS_LOCAL_WINDOW];  // the client's channel data, for the port
 	uint16_t in_len;
 	uint16_t app_sent;          // bytes of to_app given to the port, to credit the window
+	xfer_t *xfer;               // sftp or scp in place of a shell: from the heap, while it runs
+	uint32_t linger;            // tick: the transfer is over, the client's CLOSE awaited until then
 } ssh_slot_t;
+#define LINGER_TICKS    (5u * Z_TICK_HZ)
 static ssh_slot_t *ssh_pool;
 static int ssh_pool_n;
 static uint8_t host_seed[32];
@@ -93,6 +98,11 @@ static uint8_t host_seed[32];
 #define AUTHKEYS_PATH Z_PATH_NETSERVE_AUTHKEYS
 #define AUTHKEYS_MAX 8192           // the file; RSA-4096 lines are ~740 bytes
 static uint32_t ssh_methods;        // SSHS_AUTH_*, from apps.netserve.ssh_auth (not noauth listeners)
+// apps.netserve.sftp: sftp and scp on the listeners that log people in
+// -- never on a noauth one, whose users nobody has checked.
+enum { XFER_OFF = 0, XFER_READ, XFER_ON };
+static int xfer_mode = XFER_ON;
+#define XFER_BUDGET 8               // requests a session's transfer handles a pass
 
 enum { H_REQ = 0, H_SEND };
 enum { S_FREE = 0, S_LOGIN, S_LAUNCH, S_CONNECT, S_OPEN, S_AWAY, S_CLOSING, S_DRAIN };
@@ -274,6 +284,7 @@ static void net_str(sess_t *s, const char *t) {
 static void end(sess_t *s, bool close_net) {
 	if (s->state == S_CONNECT) s->connect_orphan = true;    // its answer is still coming
 	if (s->fh >= 0) { fs_close_handle(s->fh); s->fh = -1; }
+	if (s->ssh && s->ssh->xfer) { xfer_free(s->ssh->xfer); s->ssh->xfer = NULL; }
 	for (int i = 0; i < s->held_net_n; i++) ack(net_pid, s->held_net[i].tag);
 	for (int i = 0; i < s->held_app_n; i++) ack(s->app_pid, s->held_app[i].tag);
 	s->held_net_n = s->held_app_n = 0;
@@ -743,6 +754,69 @@ static int ssh_auth(void *user, const char *username, const uint8_t *pw, uint32_
 	return SSHS_AUTH_REFUSE;
 }
 
+// -- sftp and scp (docs/netserve.md, "Copying files: sftp and scp") --
+
+static void xfer_log(void *user, const char *line) {
+	sess_t *s = user;
+	printf("netserve: session %lu: %s\n", (unsigned long)s->net.conn_id, line);
+}
+
+// The client asked for sftp (cmd NULL) or to run an scp command. The
+// engine has said yes; the transfer starts with its own input, the
+// channel's window grown to match.
+static void xfer_start(sess_t *s, const char *cmd) {
+	ssh_slot_t *x = s->ssh;
+	char why[96];
+	z_fs_info_t fi;
+	const char *home = (nsfs_stat(Z_DIR_HOME, &fi) >= 0 && fi.type == Z_FS_TYPE_DIR) ? Z_DIR_HOME : "/";
+	uint32_t flags = xfer_mode == XFER_READ ? XFER_READONLY : 0;
+
+	why[0] = 0;
+	x->xfer = cmd ? xfer_scp(cmd, home, flags, xfer_log, s, why, sizeof(why))
+	              : xfer_sftp(home, flags, xfer_log, s);
+	if (!x->xfer) {
+		char m[112];
+		int l = snprintf(m, sizeof(m), "\1%s\n", why[0] ? why : "netserve: out of memory");
+		printf("netserve: session %lu: %s", (unsigned long)s->net.conn_id, m + 1);
+		sshs_send(&x->eng, (const uint8_t *)m, (uint32_t)l, (uint32_t)(SSH_OUT_MAX - x->out_len));
+		sshs_end(&x->eng, 1);
+		return;
+	}
+	printf("netserve: session %lu: %s%s\n", (unsigned long)s->net.conn_id,
+		cmd ? cmd : "sftp", flags & XFER_READONLY ? " (read-only)" : "");
+	if (x->in_len) {        // anything sent before the request was answered
+		xfer_put(x->xfer, x->in, x->in_len);
+		x->in_len = 0;
+	}
+	sshs_grow_window(&x->eng, XFER_IN - SSHS_LOCAL_WINDOW);
+}
+
+// One pass: what has arrived handled, what it answered given to the
+// engine, and the session ended once the transfer is over.
+static void xfer_pump(sess_t *s) {
+	ssh_slot_t *x = s->ssh;
+	uint32_t n, st;
+	if (sshs_is_closed(&x->eng)) return;
+	uint32_t used = xfer_step(x->xfer, XFER_BUDGET);
+	if (used) sshs_consumed(&x->eng, used);
+	const uint8_t *p = xfer_out(x->xfer, &n);
+	while (n) {
+		uint32_t k = sshs_send(&x->eng, p, n, (uint32_t)(SSH_OUT_MAX - x->out_len));
+		if (!k) break;
+		xfer_sent(x->xfer, k);
+		p = xfer_out(x->xfer, &n);
+	}
+	if (xfer_done(x->xfer, &st)) {
+		xfer_free(x->xfer);
+		x->xfer = NULL;
+		// Its CLOSED closes the connection: when the client's own CLOSE
+		// comes back, or after LINGER_TICKS (poll_session()).
+		sshs_end_wait(&x->eng, st);
+		x->linger = z_uptime_ticks() + LINGER_TICKS;
+		if (!x->linger) x->linger = 1;
+	}
+}
+
 static void ssh_event(void *user, sshs_event_t ev, const uint8_t *d, uint32_t n, const char *text) {
 	sess_t *s = user;
 	switch (ev) {
@@ -752,7 +826,16 @@ static void ssh_event(void *user, sshs_event_t ev, const uint8_t *d, uint32_t n,
 	case SSHS_EV_SHELL:
 		app_connect(s);
 		break;
+	case SSHS_EV_SFTP:
+	case SSHS_EV_EXEC:
+		xfer_start(s, ev == SSHS_EV_EXEC ? text : NULL);
+		break;
 	case SSHS_EV_DATA:
+		if (s->ssh->xfer) {
+			// The window is the transfer's input, so this fits.
+			xfer_put(s->ssh->xfer, d, n);
+			break;
+		}
 		// Never more than the window, and the window is only re-opened
 		// as bytes reach the port -- so in[] cannot overflow.
 		if (n > (uint32_t)(SSHS_LOCAL_WINDOW - s->ssh->in_len)) n = (uint32_t)(SSHS_LOCAL_WINDOW - s->ssh->in_len);
@@ -762,6 +845,7 @@ static void ssh_event(void *user, sshs_event_t ev, const uint8_t *d, uint32_t n,
 		break;
 	case SSHS_EV_EOF:
 		s->peer_eof = true;
+		if (s->ssh->xfer) xfer_eof(s->ssh->xfer);
 		break;
 	case SSHS_EV_CLOSED:
 		printf("netserve: session %lu: %s\n", (unsigned long)s->net.conn_id,
@@ -832,6 +916,7 @@ static uint32_t ssh_in(sess_t *s, const uint8_t *d, uint32_t n) {
 static void ssh_pump(sess_t *s) {
 	ssh_slot_t *x = s->ssh;
 	if (!x) return;
+	if (x->xfer && s->state == S_OPEN) xfer_pump(s);
 	if (x->out_len) {
 		uint32_t room = (uint32_t)(TO_NET_MAX - s->to_net_len), k = x->out_len < room ? x->out_len : room;
 		memcpy(s->to_net + s->to_net_len, x->out, k);
@@ -850,6 +935,7 @@ static void ssh_pump(sess_t *s) {
 
 static void ssh_release(sess_t *s) {
 	if (!s->ssh) return;
+	if (s->ssh->xfer) xfer_free(s->ssh->xfer);
 	memset(s->ssh, 0, sizeof(*s->ssh));         // keys, buffers, all of it
 	s->ssh = NULL;
 }
@@ -1032,6 +1118,8 @@ static void on_connect(const z_msg_t *m) {
 	if (kind == K_SSH) {
 		sshs_init(&s->ssh->eng, host_seed, s, ssh_write, ssh_event, ssh_random, ssh_auth);
 		sshs_set_auth(&s->ssh->eng, s->noauth ? SSHS_AUTH_ANY : ssh_methods, ssh_pk_check, ssh_pk_verify);
+		if (!s->noauth && xfer_mode != XFER_OFF)
+			sshs_set_services(&s->ssh->eng, SSHS_SVC_SFTP | SSHS_SVC_SCP);
 	}
 
 	if (kind == K_HTTP) s->deadline = z_uptime_ticks() + HTTP_TICKS;
@@ -1317,6 +1405,9 @@ static void poll_session(sess_t *s) {
 		// 60 s to log in, as for telnet.
 		if (!s->ssh->eng.authed && s->state == S_OPEN && (int32_t)(now - s->deadline) >= 0)
 			sshs_disconnect(&s->ssh->eng, "login timed out");
+		// a transfer over, and the client never closed its side
+		if (s->ssh->linger && (int32_t)(now - s->ssh->linger) >= 0 && !sshs_is_closed(&s->ssh->eng))
+			sshs_disconnect(&s->ssh->eng, "session ended");
 	}
 	if (s->kind == K_HTTP && s->state == S_OPEN) {
 		if (s->http == H_REQ && (int32_t)(now - s->deadline) >= 0)
@@ -1331,8 +1422,8 @@ static void poll_session(sess_t *s) {
 	if (s->peer_eof && s->state != S_CLOSING && s->state != S_DRAIN && !s->held_net_n &&
 			(s->kind == K_ECHO || (s->kind == K_TELNET && !s->to_app_len)))
 		close_after_flush(s);
-	if (s->kind == K_SSH && s->peer_eof && s->ssh && !s->ssh->in_len && !s->to_app_len &&
-			s->state != S_CLOSING && s->state != S_DRAIN)
+	if (s->kind == K_SSH && s->peer_eof && s->ssh && !s->ssh->xfer && !s->ssh->linger && !s->ssh->in_len &&
+			!s->to_app_len && s->state != S_CLOSING && s->state != S_DRAIN)
 		sshs_end(&s->ssh->eng, 0);               // its CLOSED closes the connection
 	if (s->state == S_LOGIN && (int32_t)(now - s->deadline) >= 0) {
 		net_str(s, "\r\ntimed out\r\n");
@@ -1588,6 +1679,13 @@ static void read_config(void) {
 			if (!strcmp(v, "key") || !strcmp(v, "keys")) ssh_methods = SSHS_AUTH_PUBLICKEY;
 			else if (!strcmp(v, "password")) ssh_methods = SSHS_AUTH_PASSWORD;
 		}
+		// sftp and scp: "on" (the default), "read" (copying from here
+		// only) or "off".
+		xfer_mode = XFER_ON;
+		if (z_cfg_get("apps.netserve.sftp", v, sizeof(v))) {
+			if (!strcmp(v, "off") || !strcmp(v, "no")) xfer_mode = XFER_OFF;
+			else if (!strcmp(v, "read")) xfer_mode = XFER_READ;
+		}
 		bool host = ssh_host_ready();
 		int want = (int)z_cfg_get_int("apps.netserve.ssh_sessions", SSH_DEFAULT);
 		if (want < 1) want = 1;
@@ -1737,6 +1835,8 @@ int main(void) {
 			ssh_pool_n == 1 ? "" : "s",
 			ssh_methods == SSHS_AUTH_PUBLICKEY ? "key only" :
 			ssh_methods == SSHS_AUTH_PASSWORD ? "password only" : "key or password");
+		printf("netserve: ssh: sftp and scp %s\n", xfer_mode == XFER_OFF ? "off" :
+			xfer_mode == XFER_READ ? "read-only (copying from here)" : "on");
 		if (keys && (ssh_methods & SSHS_AUTH_PUBLICKEY)) ak_load();   // report on the file now
 	}
 
