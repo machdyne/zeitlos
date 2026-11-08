@@ -250,6 +250,9 @@ void upd_net_close(void) {
 // message is read -- but each piece is acknowledged only once the ring
 // has been read past it, so net holds back (and TCP's window closes)
 // while the card is being written, and the ring cannot overflow.
+// net itself sends only two ahead (SOCK_INFLIGHT, net.c: each is on its
+// heap until acked); the ring is sized for the port's limit all the
+// same, so it holds whatever a net allows.
 
 #define H_RING      (Z_PORT_MAX_PENDING_SENDS * 4096 + 4096)
 #define H_HDR_MAX   4096

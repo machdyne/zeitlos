@@ -662,6 +662,18 @@ static void sock_on_established(int k) {
 // Bytes per relayed message. See sock_rx_flush().
 #define SOCK_CHUNK 4096
 
+// Chunks a socket may have out with its client at once. Each is a heap
+// copy in net until the client acks it, and a client may hold its acks
+// until it has used the bytes (update does, as its flow control) -- so
+// the port's own limit, Z_PORT_MAX_PENDING_SENDS (8, 32KB), is more
+// than net's whole stack and heap (APP_STACK, Makefile), and a higher
+// slot's queue is on that heap too. Past what fits, every z_port_send()
+// failed to allocate and said so, on every pass of the main loop: the
+// bytes waited in the queue and nothing was lost, but the console
+// filled. Two keep the client busy; the rest waits in the queue, which
+// is what the queue is for (docs/networking.md, "Backpressure").
+#define SOCK_INFLIGHT 2
+
 static uint8_t sock_rx_queue0[SOCK_RX_QUEUE_LEN];	// slot 0's; see sock_sess_t
 
 // The window each socket advertises follows the room left in ITS
@@ -702,6 +714,9 @@ static void sock_rx_flush(int k) {
 		(x->state == SO_ACTIVE || x->state == SO_DRAIN)) {
 
 		uint32_t n = x->rx_len > SOCK_CHUNK ? SOCK_CHUNK : x->rx_len;
+
+		// The next ack lets more go (the Z_PORT_DATA_ACK handler).
+		if (x->port.pending_count >= SOCK_INFLIGHT) break;
 
 		if (z_port_send(&x->port, x->rxq, n) != Z_OK) return;
 

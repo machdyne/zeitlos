@@ -124,6 +124,9 @@ z_rv z_port_drain(z_port_t *port, uint32_t timeout_ticks) {
 	return port->pending_count ? Z_FAIL : Z_OK;
 }
 
+// z_port_send(): an allocation failure already said (below).
+static bool blob_failing;
+
 z_rv z_port_send(z_port_t *port, const void *data, uint32_t len) {
 
 	if (!port->connected) return Z_FAIL;
@@ -147,12 +150,19 @@ z_rv z_port_send(z_port_t *port, const void *data, uint32_t len) {
 	// Surface it here instead of leaving it invisible -- this is what
 	// caught a real Z_PROC_STACK_SIZE-too-small bug (sw/os/kernel.c)
 	// on real hardware, where even a 2-byte allocation failed.
+	//
+	// Said once per run of failures, not once per failure: a caller
+	// that keeps its data and tries again on every pass of its loop
+	// (net's sockets did) turned one fact into hundreds of lines.
 	if (obj.type != Z_BLOB) {
-		if (len > 0)
+		if (len > 0 && !blob_failing)
 			ZPORT_LOG("zport: z_obj_blob() failed to allocate %lu bytes -- "
-				"heap likely exhausted\n", (unsigned long)len);
+				"heap likely exhausted (not said again until a send "
+				"allocates)\n", (unsigned long)len);
+		if (len > 0) blob_failing = true;
 		return Z_FAIL;
 	}
+	blob_failing = false;
 
 	z_rv rv = z_msg_new_send(port->peer_pid, Z_PORT_DATA, port->conn_id, obj);
 

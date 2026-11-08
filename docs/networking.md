@@ -845,6 +845,18 @@ The advertisement now reserves a segment of headroom, and the queue is
 a flat 16KB — sized to absorb the app stalling for a hundred
 milliseconds on storage or a repaint, which is what it is for.
 
+Between the queue and the app, at most two 4KB chunks (`SOCK_INFLIGHT`,
+`net.c`) are out at once. Each is a copy on net's heap until the app
+acks it, and an app may hold its acks until it has used the bytes —
+`update` does, as its own flow control. The port allows eight
+(`Z_PORT_MAX_PENDING_SENDS`), but eight is 32KB, all of net's stack and
+heap, and a second socket's queue lives on that heap too. When net sent
+as many as the port allowed, the sends past what fit failed to allocate
+and printed `zport: z_obj_blob() failed to allocate 4096 bytes` on every
+pass of the main loop: nothing was lost, since the bytes stayed queued
+until an ack, but the console filled. `z_port_send()` now says that
+once per run of failures.
+
 ## Diagnostics
 
 Below-line-rate throughput has two causes that look identical from
