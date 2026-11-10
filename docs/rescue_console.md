@@ -26,6 +26,9 @@ It also comes up by itself:
 
 Starting `wm` by any route (`init`, `run wm`) hands the screen back.
 
+After an app has crashed, `report` writes the crash and the console log
+to `/ram/report.txt` ([report.md](report.md)).
+
 **Ctrl+Alt+Del** from the console asks to reboot, as on the desktop,
 and Cancel comes back here ([window_manager.md](window_manager.md#rebooting));
 with no `wm` behind the console, it says to type `reboot`.

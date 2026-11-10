@@ -43,6 +43,8 @@
 #include "../../common/zcaption.h"	// docs/captions.md
 #include "../../common/zfs.h"		// the dock's two files: docs/dock.md
 #include "../../common/zpaths.h"
+#include "../../common/zkv.h"		// the welcome, once: Z_WELCOME_KV_SEEN
+#include "../../common/zwelcome.h"
 #include "../../common/zaccent.h"	// desktop colour: docs/color.md
 #include "../../common/zutf8.h"		// titles are UTF-8		// system.keyboard.layouts
 #include "workspace.h"		// workspaces: the decisions (tested on the host)
@@ -1290,6 +1292,88 @@ static bool check_core_services(void) {
 	wm_busy_clear(WM_BUSY_STARTUP);
 
 	return true;
+
+}
+
+// -- the welcome, once (docs/welcome_app.md, zwelcome.h) --
+//
+// When boot has finished, `welcome` (a core app) is started if either:
+//
+//   - the card has /sys/firstrun: the release tool writes it on every
+//     card image and never in a manifest, so `update` never does;
+//   - there is no card, the flash store can be written, and it has no
+//     Z_WELCOME_KV_SEEN: a machine that has never shown the welcome.
+//
+// welcome removes the file and writes the key before it asks anything,
+// so this happens once. A card that is in and has no mark is never
+// interrupted -- not even after an image erased the store. Not in the
+// console profile, which has no desktop. Two or three calls per boot,
+// after the dock is live.
+static void first_run_check(void) {
+
+	z_kernel_ptr_t k = (z_kernel_ptr_t)(uintptr_t)(reg_kernel);
+	z_fs_size_args_t sa;
+	z_fs_df_args_t da;
+	z_kv_info_t ki;
+	uint32_t len;
+	char b[4];
+	const char *why = NULL;
+
+	sa.name = (char *)Z_PATH_SYS_FIRSTRUN;
+	sa.size = 0;
+	z_obj_t *rv = (z_obj_t *)k(Z_SYS_FS_SIZE, (uint32_t *)&sa, 0);
+	if (rv && rv->val.uint32 == Z_OK && sa.size > 0)
+		why = "a new card (" Z_PATH_SYS_FIRSTRUN ")";
+
+	if (!why) {
+		// A mounted volume, not a card-detect line: what matters is
+		// whether a card can be read and written.
+		da.total_kb = 0;
+		da.free_kb = 0;
+		rv = (z_obj_t *)k(Z_SYS_FS_DF, (uint32_t *)&da, 0);
+		if (!rv || rv->val.uint32 != Z_OK || da.total_kb > 0) return;
+		if (z_kv_info(&ki) != Z_KV_OK || !(ki.flags & Z_KV_INFO_WRITABLE)) return;
+		if (z_kv_get(Z_WELCOME_KV_SEEN, b, sizeof(b), &len) != Z_KV_E_NOENT) return;
+		why = "no card, and this machine has not shown the welcome";
+	}
+
+	printf("wm: %s -- starting welcome\n", why);
+	if (!z_proc_run("welcome"))
+		printf("wm: could not start welcome\n");
+
+}
+
+// -- system.start: what the machine opens with (docs/config.md) --
+//
+// "APP" or "APP ARGUMENT", started once when boot has finished, before
+// the welcome (so the welcome, on a new machine, is the window on top).
+// Absent, "none" or "desktop": the desktop alone. The argument is bound
+// to the child's launch-argument slot directly -- what Z_WM_SET_ARG and
+// Z_WM_ARG_CHILD do for any other launcher, which wm cannot send
+// itself. Nothing runs between the two (wm is one thread), so the
+// child cannot ask first.
+static void start_app(void) {
+
+	char v[Z_CFG_VAL_MAX], *arg;
+	uint32_t pid;
+
+	if (!z_cfg_get("system.start", v, sizeof(v))) return;
+	arg = strchr(v, ' ');
+	if (arg) { *arg++ = 0; while (*arg == ' ') arg++; }
+	if (!v[0] || !strcmp(v, "none") || !strcmp(v, "desktop")) return;
+
+	pid = z_proc_run(v);
+	printf("wm: system.start: %s%s\n", v, pid ? "" : " -- could not start it");
+	if (!pid || !arg || !*arg) return;
+
+	int si = pending_args[0].valid && !pending_args[1].valid;
+	strncpy(pending_args[si].arg, arg, Z_WM_ARG_MAX - 1);
+	pending_args[si].arg[Z_WM_ARG_MAX - 1] = 0;
+	pending_args[si].valid = true;
+	pending_args[si].setter = 0;
+	pending_args[si].child = pid;
+	pending_args[si].child_serial = z_proc_serial(pid);
+	pending_args[si].tick = z_uptime_ticks();
 
 }
 
@@ -9115,9 +9199,17 @@ int main(void) {
 
 		// clears WM_BUSY_STARTUP once init0 is registered; repaint
 		// the dock on the transition so it stops looking disabled
-		if (check_core_services() && dock_idx >= 0)
-			repair_region(windows[dock_idx].x, windows[dock_idx].y,
-				windows[dock_idx].w, windows[dock_idx].h, -1);
+		// -- and starts the welcome, once, and what the machine opens with
+		// (boot_finished())
+		if (check_core_services()) {
+			if (dock_idx >= 0)
+				repair_region(windows[dock_idx].x, windows[dock_idx].y,
+					windows[dock_idx].w, windows[dock_idx].h, -1);
+			if (!console_mode) {
+				start_app();
+				first_run_check();
+			}
+		}
 
 		/* Sleep until input or the next timer.
 		 *

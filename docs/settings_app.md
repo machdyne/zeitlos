@@ -4,6 +4,11 @@ Kind: a **desktop app** ([app_kinds.md](app_kinds.md)).
 
 System preferences, and the editor for `/sys/zeitlos.cfg`. `sw/apps/settings`.
 
+A new machine with a card offers three of these once, in
+[welcome](welcome_app.md): the keyboard layout, the time zone and the
+display colour. It writes the same lines this app does, so anything
+chosen there is changed here.
+
 ```
 > run wm
 > run settings
@@ -37,6 +42,7 @@ on the right, as most systems lay out their preferences:
 | Security | Password: Set / Change, Remove | the flash key/value store, not the file | at once |
 | Security | Screen lock: Edit | the same | at once: `wm` is told to re-read it |
 | Terminal | New terminal windows connect to: Edit | `apps.term.auto_connect` | the next term window |
+| System | Opens at start: Edit | `system.start` | the next boot: `wm` starts it when boot has finished |
 | System | Reload file; what else is in the file | -- | re-reads `/sys/zeitlos.cfg` after editing it elsewhere |
 
 Each value line shows what is in effect, and `(default)` when the file

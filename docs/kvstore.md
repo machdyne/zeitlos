@@ -16,6 +16,7 @@ so its timings are still to be measured.
 | `sys.lock.boot`, `sys.lock.idle`, `sys.lock.console` | `sw/os/auth.c` only | the screen-lock policy |
 | `apps.netserve.hostkey` | `netserve` | the SSH host key's 32-byte seed ([netserve.md](netserve.md), "SSH") |
 | `apps.cron.job.NAME`, `apps.cron.wait_for_ntp` | you (`kv set`) | scheduled jobs that need no card ([cron.md](cron.md)) |
+| `apps.welcome.seen` | `welcome` | `1` once this machine has shown the welcome; with no card and no such key, `wm` starts `welcome` ([welcome_app.md](welcome_app.md)) |
 
 | | |
 |---|---|

@@ -46,6 +46,9 @@ void k_uart_release_pid(uint32_t pid);
 void k_klog_panic_screen(void);
 
 uint32_t k_klog_end(void);
+// The log still held, oldest byte first, into out (at most max bytes;
+// K_KLOG_SIZE holds it all). Returns the bytes copied. For `report`.
+uint32_t k_klog_copy(char *out, uint32_t max);
 void k_uart_rx_put(uint8_t c, bool injected);
 
 #endif

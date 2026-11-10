@@ -17,6 +17,7 @@ with [welcome](welcome.md); to program it, [kernel](kernel.md) and
 | [welcome](welcome.md) | First steps on the desktop, hotkeys |
 | [toolchain](toolchain.md) | FPGA tools and the RISC-V compiler |
 | [build](build.md) | How apps are built: `sw/common/app.mk` |
+| [sim\_parity](sim_parity.md) | Plan: the whole system in the simulator, on a host and in a browser |
 | [boards](boards.md) | Utilisation and timing per board |
 | [ulx3s](ulx3s.md) | Radiona ULX3S notes |
 | [lebkuchen](lebkuchen.md) | Machdyne Lebkuchen (GateMate, RP2040 supervisor): port in progress |
@@ -200,9 +201,12 @@ with [welcome](welcome.md); to program it, [kernel](kernel.md) and
 | [view\_app](view_app.md) | `view` |
 | [calc\_app](calc_app.md) | `calc` |
 | [info\_app](info_app.md) | `info` |
+| [checkup](checkup.md) | `checkup`: tests this machine, and saves the report |
+| [report](report.md) | `report`, at the kernel shell: the last crash and the log, to the RAM disk |
 | [clock\_app](clock_app.md) | `clock` |
 | [cal\_app](cal_app.md) | `cal` |
 | [settings\_app](settings_app.md) | `settings` |
+| [welcome\_app](welcome_app.md) | `welcome`: what a new machine shows first, and its first questions |
 | [keyboard\_app](keyboard_app.md) | `keyboard` |
 | [ask\_app](ask_app.md) | `ask` |
 | [learn](learn.md) | `learn`: a school on the machine (design) |

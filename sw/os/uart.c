@@ -534,6 +534,17 @@ z_obj_t *z_uart_putc(z_obj_t *obj) {
 
 // Z_SYS_KLOG_READ. At most 128 bytes per call, copied with interrupts
 // masked so the ring cannot move underneath (~20us); callers loop.
+uint32_t k_klog_copy(char *out, uint32_t max) {
+	uint32_t old_mask = maskirq(0xFFFFFFFF);
+	uint32_t end = k_klog_pos;
+	uint32_t n = end < K_KLOG_SIZE ? end : K_KLOG_SIZE;
+	if (n > max) n = max;
+	for (uint32_t i = 0; i < n; i++)
+		out[i] = (char)k_klog[(end - n + i) & (K_KLOG_SIZE - 1)];
+	maskirq(old_mask);
+	return n;
+}
+
 z_obj_t *k_klog_read(z_obj_t *args) {
 	z_klog_args_t *a = (z_klog_args_t *)args;
 	if (!a || !a->buf) return &z_fail;

@@ -10,6 +10,10 @@ rasterizer, and shows the result in a window.
 $ ./zeitlos-sim sw/apps/bounce/bounce.bin
 ```
 
+**The whole system, BIOS to desktop, and a browser build, are planned
+in [docs/sim_parity.md](../docs/sim_parity.md).** What follows is the
+simulator as it is: one app, with host code in place of the kernel.
+
 ## What's emulated
 
 - **CPU**: a from-scratch **RV32IM** interpreter (`cpu.c`), plus the

@@ -900,7 +900,7 @@ flash_os: flash_sw
 # board does, headless ones included (wm is wanted there for remote
 # desktop). A name in CORE_APPS_OMIT that is not in CORE_APPS is an
 # error in the release tools, not a silent no-op.
-CORE_APPS = fs usb wm net term console cron text files repl
+CORE_APPS = fs usb wm net term console cron text files repl welcome
 ZAR_APPS = $(filter-out $(CORE_APPS_OMIT),$(CORE_APPS))
 
 # THE BUDGETS: the most each core app may take, as FLASH/RAM -- its
@@ -968,8 +968,21 @@ ZAR_APPS = $(filter-out $(CORE_APPS_OMIT),$(CORE_APPS))
 # themselves. files 64K/134K -> 64K/138K: zwalk reads a folder a page at
 # a time, its 1KB page in zwalk_t. Neither is in the RAM rule; both from
 # the slack under CORE_ZAR_MAX.
-CORE_BUDGETS = fs=36K/77056 usb=35K/53504 wm=116K/149K net=148K/287K term=62K/140K \
-	console=10K/12544 cron=18K/48K text=86K/212K files=64K/138K repl=140K/307K
+# November 2026, wm 116K/149K -> 116K/150K: starting the welcome once
+# and system.start when boot has finished (first_run_check(),
+# start_app(); docs/welcome_app.md, docs/config.md), about 1.1KB:
+# 118,356 in flash and 153,100 in RAM with xPack GCC 14.2. From the RAM
+# rule's slack: 1,022.75 -> 1,023.75 of 1,024 KB.
+# November 2026, welcome (docs/welcome_app.md): a new core app, 44K/76K --
+# the welcome a card-less machine shows once, and with a card the
+# keyboard, time zone and display questions. 40,745 bytes compressed
+# and 72,816 in RAM with xPack GCC 14.2: no dialogs, ZFMT_LITE, the
+# layouts' names generated instead of zkbd's key tables. From the slack
+# under CORE_ZAR_MAX (budgets and reserve: 775K -> 819K of 848K). Not in
+# the RAM rule: wm starts it after boot, at most once a card.
+CORE_BUDGETS = fs=36K/77056 usb=35K/53504 wm=116K/150K net=148K/287K term=62K/140K \
+	console=10K/12544 cron=18K/48K text=86K/212K files=64K/138K repl=140K/307K \
+	welcome=44K/76K
 CORE_RESERVE = 60K
 # Core apps stored as they are, not compressed: their budget is then
 # their .bin. wm and net, the two largest started at boot: unpacked they

@@ -177,6 +177,19 @@ def test_variant(root, key, tmp):
     loose = sorted(f for f in on_card if f.count("/") == 1)
     check(not loose, "%s: no files at the card root%s" % (
         key, "" if not loose else " (found %s)" % ", ".join(loose[:3])))
+    # A new card's mark (docs/welcome_app.md): on the card beside setup,
+    # and not in the manifest -- an update must never write it.
+    fr = "/" + zc("Z_PATH_SYS_FIRSTRUN")
+    check(fr in on_card, "%s: %s on the card" % (key, fr))
+    check(("/" + zc("Z_DIR_APPS", "welcome")) not in on_card,
+          "%s: welcome is not on the card: it is a core app, in flash" % key)
+    man = os.path.join(tmp, "manifest")
+    subprocess.run(["mcopy", "-n", "-i", img, "::/" + zc("Z_PATH_SYS_MANIFEST"), man],
+                   check=True, capture_output=True)
+    with open(man) as f:
+        mtext = f.read()
+    check(zc("Z_PATH_SYS_FIRSTRUN") not in mtext,
+          "%s: the manifest does not list %s" % (key, fr))
     # /sys/version says which release wrote it
     back = os.path.join(tmp, "version")
     subprocess.run(["mcopy", "-n", "-i", img, "::/" + zc("Z_PATH_SYS_VERSION"), back],
@@ -331,6 +344,34 @@ def main():
         finally:
             if os.path.exists(good):
                 os.unlink(good)
+            if os.path.exists(img):
+                os.unlink(img)
+
+        # A new card's mark (docs/welcome_app.md). Checked on a card of
+        # its own as well as in each variant, so it runs wherever zdocs
+        # is built.
+        print("a new card's mark")
+        fr = "/" + mkfatimg.zcard("Z_PATH_SYS_FIRSTRUN")
+        img = os.path.join(tmp, "first.img")
+        try:
+            mkfatimg.build(root, img, verbose=False, packs=("zdocs",))
+            on_card = card_files(img)
+            check(fr in on_card, "a card image has %s" % fr)
+            back = os.path.join(tmp, "manifest")
+            subprocess.run(["mcopy", "-n", "-i", img,
+                            "::" + mkfatimg.P["Z_PATH_SYS_MANIFEST"], back],
+                           check=True, capture_output=True)
+            with open(back) as f:
+                mtext = f.read()
+            check(mkfatimg.zcard("Z_PATH_SYS_FIRSTRUN") not in mtext,
+                  "the manifest does not list it: an update never writes it")
+            os.unlink(img)
+            mkfatimg.build(root, img, verbose=False, packs=("zdocs",), first_run=False)
+            check(fr not in card_files(img), "first_run=False leaves it off")
+            os.unlink(img)
+            mkfatimg.build(root, img, verbose=False, packs=("zdocs",), sets=["base", "work"])
+            check(fr in card_files(img), "a card of chosen sets has it too")
+        finally:
             if os.path.exists(img):
                 os.unlink(img)
 

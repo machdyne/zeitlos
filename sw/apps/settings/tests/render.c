@@ -772,6 +772,29 @@ int main(int argc, char **argv) {
 	render_pages(prefix, "9");
 
 	printf("--- final /zeitlos.cfg ---\n%.*s--- end ---\n", file_len, file);
+	// -- system.start: what the machine opens with (docs/config.md) --
+	{
+		printf("system.start\n");
+		show_page(P_SYSTEM);
+		read_values();
+		char d[96];
+		describe(&prefs[3], d, sizeof(d));
+		expect(!prefs[3].in_file && strstr(d, "the desktop") != NULL, "system.start: absent reads as the desktop");
+		int before = confirms;
+		prompt_answer = "text /home/book.txt";
+		activate(W_EDIT_START);
+		expect(strstr(file, "system.start: text /home/book.txt\n") != NULL, "  saved with its argument");
+		prompt_answer = "/apps/text";
+		activate(W_EDIT_START);
+		expect(confirms == before + 1 && strstr(file, "system.start: text /home/book.txt\n") != NULL,
+			"  a value that is not an app's name: refused, nothing written");
+		prompt_answer = "desktop";
+		activate(W_EDIT_START);
+		expect(strstr(file, "system.start") == NULL, "  'desktop' removes the line");
+		prompt_answer = NULL;
+		render(prefix, "10-system-start");
+	}
+
 	printf("settings render: %d checks, %d failed\n", checks, failures);
 	return failures ? 1 : 0;
 

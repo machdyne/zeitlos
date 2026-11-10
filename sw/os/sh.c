@@ -41,6 +41,8 @@ extern bool k_readline_from_uart;	// kruntime.c
 #include "pidreg.h"
 #include "cfg.h"		// /sys/zeitlos.cfg -- k_cfg_load() at boot, `cfg`
 #include "xmodem.h"
+#include "../common/zcrash.h"	// `report`: the last crash in the log (docs/report.md)
+#include "../common/zabi.h"	// Z_ABI_ID, for `report`
 
 // --
 
@@ -214,6 +216,7 @@ static const char *core_src_name(core_src_t src) {
 }
 
 static void init_start_optional(const char *name);
+static void sh_report(void);
 
 // Start `fs` from the flash archive and wait until it has registered
 // (it does once its volumes are up). True when it has, and the card
@@ -1792,6 +1795,14 @@ void sh(void) {
 			}
 		}
 
+		// REPORT: the last crash and the log, to the RAM disk
+		// (docs/report.md). Not to the card: writing a card while
+		// something is going wrong is how a card is lost. The owner
+		// decides whether to send it to anyone.
+		else if (sh_is(buffer, cmdlen, "report")) {
+			sh_report();
+		}
+
 		else if (sh_is(buffer, cmdlen, "df")) {
 			// One FAT scan, not two -- see fs_df_kb() in fs.c.
 			uint32_t total = 0, freek = 0;
@@ -1806,6 +1817,46 @@ void sh(void) {
 		}
 
 	}
+
+}
+
+// `report` (docs/report.md): what the console log still holds, with the
+// last crash report in it first. The log is 4 KB, so a crash that long
+// ago may already be gone; it says so.
+static void sh_report(void) {
+
+	// [ front: header, the crash, "The log:" -- built at its end ][ log ]
+	enum { FRONT = 1280, CRASH_MAX = 1024, LOG = 4096 };
+	char *buf = k_mem_alloc(FRONT + LOG);
+	char head[160];
+	uint32_t n, cs = 0, cl = 0;
+
+	if (!buf) { printf("report: out of memory\n"); return; }
+
+	char *log = buf + FRONT;
+	n = k_klog_copy(log, LOG);
+	bool crash = z_crash_find(log, n, &cs, &cl);
+	if (cl > CRASH_MAX) cl = CRASH_MAX;
+	int h = snprintf(head, sizeof(head), "Zeitlos %s, abi %s, up %lus\n\n%s\n",
+		Z_OS_VERSION, Z_ABI_ID, (unsigned long)(z_uptime_ticks() / Z_TICK_HZ),
+		crash ? "The last crash:" : "No crash in the log (it holds the last 4 KB).");
+	if (h < 0 || h >= (int)sizeof(head)) h = (int)sizeof(head) - 1;
+
+	static const char tail[] = "\nThe log:\n";
+	uint32_t pre = (uint32_t)h + cl + sizeof(tail) - 1;
+	char *out = log - pre;			// FRONT >= 160 + CRASH_MAX + 11
+	memcpy(out, head, (size_t)h);
+	memcpy(out + h, log + cs, cl);
+	memcpy(out + h + cl, tail, sizeof(tail) - 1);
+
+	uint32_t total = pre + n;
+	int w = fs_write_file((char *)Z_PATH_REPORT, out, total);
+	if (w == (int)total)
+		printf("report: %s, %lu bytes%s\n", Z_PATH_REPORT, (unsigned long)total,
+			crash ? "" : " (no crash in the log)");
+	else
+		printf("report: could not write %s -- no RAM disk on this machine?\n", Z_PATH_REPORT);
+	k_mem_free(buf);
 
 }
 
@@ -2424,6 +2475,7 @@ void sh_help(void) {
 	printf(" sched [late 0|1] [drvwake on|off]  scheduler switches\n");
 	printf(" ps                display a process snapshot\n");
 	printf(" df                display filesystem capacity\n");
+	printf(" report            the last crash and the log, to " Z_PATH_REPORT "\n");
 	printf(" sync              flush sdcard (before reprogramming)\n");
 	printf(" mount             (re)mount the sdcard -- no card-detect, so this is manual\n");
 	printf(" format            ERASE the entire sdcard\n");

@@ -1,7 +1,7 @@
 # Core Apps in Flash
 
 The core apps -- the drivers `fs` and `usb`, then `wm`, `net`, `term`,
-`console`, `cron`, `text`, `files` and `repl` -- are programmed into flash alongside the kernel and are
+`console`, `cron`, `text`, `files`, `repl` and `welcome` -- are programmed into flash alongside the kernel and are
 available with no sdcard attached. The list is `CORE_APPS` in the
 top-level `Makefile`. `console` is the kernel console as a port (`docs/console.md`):
 it is a core app because the machines that most need it, with no card
@@ -19,6 +19,15 @@ RAM.
 `cron` ([cron.md](cron.md)) is one because its jobs can live in the
 flash key/value store, so a board with no card can still run them; it
 is small, about 22KB.
+
+`welcome` ([welcome_app.md](welcome_app.md)) is one because the first
+boot of a machine with no card is exactly when there is nothing else to
+explain it: the welcome there, and with a card the first questions.
+It is kept small for it -- no dialogs, no colour themes, the layouts'
+names generated rather than zkbd's key tables linked, and `ZFMT_LITE`
+-- 60,516 bytes, 40,828 in flash compressed and 72,948 in RAM
+(November 2026, xPack GCC 14.2), against a budget of 44K/76K. `wm`
+starts it after boot, so it is not in the RAM rule.
 
 `repl` is a core app too: Scheme, and `te`, with no card at all. The
 other shell, `posix`, is **not**: it lives on the sdcard. `term` starts

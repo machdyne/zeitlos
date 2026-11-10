@@ -816,7 +816,7 @@ def cmd_sdcard(args):
                      if mkfatimg.PACK_SET.get(pk, "base") in sets]
     try:
         shipped = mkfatimg.build(ROOT, out, ark_dir=args.ark, packs=packs,
-                                 sets=sets)
+                                 sets=sets, first_run=not args.no_first_run)
     except mkfatimg.FatError as e:
         die("SD image: %s" % e)
 
@@ -1266,6 +1266,10 @@ def make_parser():
     sd.add_argument("--sets",
                     help="only these sets, e.g. base,work (base is "
                          "always there; docs/update.md, \"Sets\")")
+    sd.add_argument("--no-first-run", action="store_true",
+                    help="leave /sys/firstrun off the card, so it does "
+                         "not start welcome at its first boot "
+                         "(docs/welcome_app.md)")
     sd.set_defaults(func=cmd_sdcard)
 
     # The card as an update release (docs/update.md): objects named by

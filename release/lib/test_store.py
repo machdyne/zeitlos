@@ -530,7 +530,11 @@ def test_image(root):
         # card_files() lists folders too, ending in "/"
         files_on_card = set(p for p in on_card if not p.endswith("/"))
         unlisted = sorted(files_on_card - {"/" + x.lower() for x in listed}
-                          - {"/sys/manifest", "/sys/version"})
+                          - {"/sys/manifest", "/sys/version"}
+                          # a new card's mark: on a card image and never
+                          # in a manifest, so no update can write it
+                          # (docs/welcome_app.md)
+                          - {"/" + mkfatimg.zcard("Z_PATH_SYS_FIRSTRUN")})
         check(not unlisted, "every file on the card is listed%s"
               % ("" if not unlisted else " (not: %s)" % unlisted[:3]))
     finally:

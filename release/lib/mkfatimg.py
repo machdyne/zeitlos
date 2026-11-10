@@ -122,7 +122,7 @@ APP_SET = {
     "posix": "base", "vi": "base", "zetta": "base", "settings": "base",
     "info": "base", "calc": "base", "clock": "base", "cal": "base",
     "keyboard": "base", "jfont": "base", "read": "base", "ask": "base",
-    "update": "base", "backup": "base", "learn": "base",
+    "update": "base", "backup": "base", "learn": "base", "checkup": "base",
     "sheet": "work", "slide": "work", "print": "work",
     "convert": "work", "draw": "work", "view": "work", "pix": "work",
     "automate": "work",
@@ -282,6 +282,7 @@ SUPPLEMENTAL = [
     (zcard("Z_DIR_APPS", "clock"), "sw/apps/clock/clock.bin"),
     (zcard("Z_DIR_APPS", "cal"), "sw/apps/cal/cal.bin"),
     (zcard("Z_DIR_APPS", "settings"), "sw/apps/settings/settings.bin"),
+    (zcard("Z_DIR_APPS", "checkup"), "sw/apps/checkup/checkup.bin"),
     (zcard("Z_DIR_APPS", "track"), "sw/apps/track/track.bin"),
     (zcard("Z_DIR_APPS", "view"), "sw/apps/view/view.bin"),
     (zcard("Z_DIR_APPS", "web"), "sw/apps/web/web.bin"),
@@ -556,6 +557,11 @@ EXAMPLES = [
     (zcard("Z_DIR_ZCC_EXAMPLES", "hello_libz.c"), "sw/apps/zcc/examples/hello_libz.c"),
     (zcard("Z_DIR_ZCC_EXAMPLES", "hello_term.c"), "sw/apps/zcc/examples/hello_term.c"),
 ]
+
+# What /sys/firstrun says, for whoever opens it: the file's presence is
+# the mark, its text is for people (build(), docs/welcome_app.md).
+FIRSTRUN_TEXT = ("A new card. wm starts welcome once when this file is here, "
+                 "and welcome removes it.\nSee /docs/welcome_app.md.\n")
 
 # The configuration file, in /sys where the kernel reads it
 # (sw/os/cfg.c, docs/config.md). /sys/version is written beside it by
@@ -1174,7 +1180,7 @@ def plan(root, ark_dir=None, packs=None, verbose=True, sets=None):
 
 
 def build(root, out_path, ark_dir=None, verbose=True, packs=None,
-          name=None, sets=None):
+          name=None, sets=None, first_run=True):
     """Build the SD card image. Returns a list of (name, size) shipped.
 
     `packs` names the ask packs to ship; None means
@@ -1189,6 +1195,10 @@ def build(root, out_path, ark_dir=None, verbose=True, packs=None,
 
     `name` is the release name /sys/manifest records ("v" + the tree's
     version when not given), so an update knows what the card is.
+
+    `first_run` marks the card as a new one: /sys/firstrun, which makes
+    wm start `welcome` once (docs/welcome_app.md). It is not in the
+    manifest, so `update` never writes it -- only a card image does.
     """
     preflight()
     pl = plan(root, ark_dir=ark_dir, packs=packs, verbose=verbose, sets=sets)
@@ -1283,6 +1293,18 @@ def build(root, out_path, ark_dir=None, verbose=True, packs=None,
         with open(tmpf, "w") as f:
             f.write(text)
         copy(tmpf, dest)
+        os.unlink(tmpf)
+
+    # A new card's mark (docs/welcome_app.md): wm starts `welcome` (a core
+    # app, in flash) once when it is there, and welcome removes it before
+    # asking anything. Written here, beside the manifest and not in it,
+    # because that is the whole point: an update follows the manifest,
+    # so it can never put this on a card that is already somebody's.
+    if first_run:
+        tmpf = out_path + ".sysfile"
+        with open(tmpf, "w") as f:
+            f.write(FIRSTRUN_TEXT)
+        copy(tmpf, P["Z_PATH_SYS_FIRSTRUN"])
         os.unlink(tmpf)
 
     for d in pl.dirs:

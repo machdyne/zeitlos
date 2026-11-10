@@ -51,6 +51,7 @@ sw/apps/learn/tests/out/
 tools/learn/out/
 tools/learn/rvbench/out/
 sw/apps/info/feat_names.h
+sw/apps/welcome/kbd_names.h
 
 # ESP-IDF (esp32/zeitlos-nic): build tree and the generated sdkconfig
 esp32/zeitlos-nic/build/

@@ -89,6 +89,7 @@ With the MTU, there is no need for position independent code or complicated addr
 | [text](docs/text_editor.md) | Text editor (UTF-8 and Latin-9 files, Japanese) |
 | [files](docs/file_browser.md) | File browser: copy, move, rename, delete, new folder |
 | [cron](docs/cron.md) | Runs programs on a schedule (daily, weekly, hourly, every N, at boot), from `/data/cron/cron.cfg` on the sdcard or from the flash key/value store with no sdcard |
+| [welcome](docs/welcome_app.md) | What a new machine shows first, once: where to start, the keys and the guide; with a card, the optional first questions -- keyboard, time zone, display |
 
 ##### Core drivers
 
@@ -135,6 +136,7 @@ board boots to a desktop with no sdcard ([core apps in flash](#core-apps-in-flas
 | [view](docs/view_app.md) | Image viewer: BMP, PNM, GIF, JPEG, [PNG](docs/png.md) and [SVG](docs/svg.md) |
 | [calc](docs/calc_app.md) | Calculator |
 | [info](docs/info_app.md) | System info |
+| [checkup](docs/checkup.md) | Tests this machine -- memory, the flash store, the TRNG, the clock, the card, the RAM disk, the network, crashes -- and saves the report where you choose |
 | [clock](docs/clock_app.md) | Analog and digital clock |
 | [cal](docs/cal_app.md) | Month calendar |
 | [settings](docs/settings_app.md) | System settings -- display colour, desktop colour themes, time zone, password; editor for [`/sys/zeitlos.cfg`](docs/config.md) |
@@ -238,7 +240,7 @@ The following boards are currently partially supported or untested:
 ## Usage
 
 **An sdcard is optional.** The core drivers (`fs`, `usb`, `net`) and
-core apps (`wm`, `term`, `console`, `repl`, `text`, `files` and `cron`)
+core apps (`wm`, `term`, `console`, `repl`, `text`, `files`, `cron` and `welcome`)
 are programmed into flash alongside the kernel, so a freshly flashed
 board boots straight to the graphical desktop with nothing else
 attached -- with an editor, a file browser, Scheme, USB sticks and the
@@ -247,6 +249,15 @@ without one, `term` still reaches telnet, ssh and serial through its
 Open bar (type on its welcome panel). The function keys mean the same
 in every app ([docs/keys.md](docs/keys.md)). See
 [Core apps in flash](#core-apps-in-flash) below.
+
+**A new machine introduces itself, once.** The first time a board
+boots, [`welcome`](docs/welcome_app.md) shows what the computer is,
+where to start and the guide. From a freshly written card it then
+offers to set the keyboard layout, the time zone and the display colour
+-- each optional, and Skip leaves everything as it is. It does not open
+by itself again, and an update never brings it back. What the machine
+opens with after that is one line: `system.start: text`
+([config.md](docs/config.md)).
 
 ### Quick start: prebuilt images
 

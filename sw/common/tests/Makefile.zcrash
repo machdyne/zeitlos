@@ -1,0 +1,5 @@
+# z_crash_find() (sw/common/zcrash.h): the last crash report in a piece
+# of console log, as the kernel's `report` and checkup find it.
+all:
+	cc -std=c99 -Wall -o /tmp/test_zcrash test_zcrash.c
+	/tmp/test_zcrash

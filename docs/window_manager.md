@@ -51,6 +51,20 @@ it's no longer a hard requirement the way it used to be:
 > run wm
 ```
 
+**What starts when boot has finished.** When the pointer turns from Z
+to X, `wm` starts, once and in this order:
+
+1. the app `system.start` names, if any (`start_app()`,
+   [config.md](config.md)), with its argument bound to it as a launch
+   argument;
+2. `welcome`, a core app, if the card has `/sys/firstrun`, or if there
+   is no card and the flash store has no `apps.welcome.seen`
+   (`first_run_check()`, `sw/common/zwelcome.h`). `welcome` removes the
+   file and writes the key before it asks anything, so this happens
+   once. See [welcome_app.md](welcome_app.md).
+
+Neither in the console profile.
+
 Until a real client app exists, `wm` creates two demo windows for
 itself on startup so there's something to look at and drag
 immediately, plus the dock (see "The dock" below) with launchers for

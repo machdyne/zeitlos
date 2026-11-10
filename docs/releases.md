@@ -701,7 +701,14 @@ $ release/zrelease build v0.0.7                              # all four
 $ release/zrelease build v0.0.7 --sdcards full,serious,base  # without arkmed
 $ release/zrelease sdcard --variant serious                  # just one, no release
 $ release/zrelease sdcard --sets base,dev,embedded           # any choice of sets
+$ release/zrelease sdcard --no-first-run                     # a bench card: no welcome at first boot
 ```
+
+Every card image carries `/sys/firstrun`, a new card's mark: at its
+first boot `wm` starts [`welcome`](welcome_app.md), which removes the file
+before it asks anything. The file is beside `/sys/manifest` and not in
+it, so `update` and `zrelease tftp` never deliver it.
+`--no-first-run` leaves it off a card made for a bench or a test rig.
 
 `zrelease sdcard` with no `--variant` still makes the development card
 it always made, now with every set (`zdocs` + `arklite`, or

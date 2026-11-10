@@ -4,6 +4,14 @@ If you're reading this, Zeitlos has already booted into its
 graphical desktop -- you should see a dock at the bottom of the
 screen. This page covers the basics of getting around.
 
+On a new machine the first thing on that desktop is a window named
+**welcome** ([welcome_app.md](welcome_app.md)): what this computer is,
+where to start, and a button that opens this guide. With a memory card
+it then offers to set your keyboard, time zone and display colour;
+every question is optional, and Skip leaves everything as it is. It
+does not come back by itself; `(run "welcome")` in term's REPL brings
+it back when you want it.
+
 ## The desktop
 
 A dock sits at the bottom of the screen with icons for launching

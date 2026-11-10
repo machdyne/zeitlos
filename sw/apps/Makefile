@@ -27,6 +27,8 @@ APPS = casino poker roulette blackjack slots craps \
 	files \
 	info \
 	settings \
+	checkup \
+	welcome \
 	calc \
 	clock \
 	cal \

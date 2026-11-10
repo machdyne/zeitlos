@@ -131,6 +131,7 @@ Files that belong to the system rather than to any app:
 |---|---|---|
 | `zeitlos.cfg` | system configuration (`docs/config.md`) | release tool (template, every setting commented out); edited by the settings app and by hand |
 | `version` | which release this card was written by | release tool |
+| `firstrun` | a new card's mark: `wm` starts `welcome` once when it is there, and `welcome` removes it ([welcome_app.md](welcome_app.md)) | release tool, on card images only -- never by `update` |
 
 `/sys` is meant to be looked at. It is small, and it is where the
 settings are.
@@ -454,6 +455,9 @@ How it works:
      the examples.
    - `/sys/manifest` and `/sys/version` describe the card and are not
      in it; the updater writes them itself.
+   - `/sys/firstrun` is not in it either, and the updater does not
+     write it: only a new card image has it
+     ([welcome_app.md](welcome_app.md)).
 2. An updater compares the new manifest with the one on the card:
    - A `replace` file whose hash differs is overwritten.
    - A `keep` file is written if it is missing, and replaced only while

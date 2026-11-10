@@ -15,7 +15,8 @@
  *   Date & time  time zone (system.rtc.timezone)              clock, cal, date
  *   Security     password and screen lock                     the flash store
  *   Terminal     what new term windows connect to (apps.term.auto_connect)
- *   System       the file itself: what else is in it, Reload
+ *   System       what the machine opens with (system.start); the file
+ *                itself: what else is in it, Reload
  *
  * -- it edits the FILE, one line at a time --
  *
@@ -134,7 +135,7 @@ static const page_t pages[P_COUNT] = {
 		"#.##...........#", "#..##..........#", "#...##.........#", "#..##..........#",
 		"#.##...######..#", "#..............#", "#..............#", "################",
 		"................", "................", "................", "................" } },
-	{ "System", "system", "The settings file itself", {
+	{ "System", "system", "What it opens with, and the settings file", {
 		"................", "...##########...", "...#.......#.#..", "...#.......#..#.",
 		"...#.......####.", "...#..........#.", "...#.######...#.", "...#..........#.",
 		"...#.######...#.", "...#..........#.", "...#.######...#.", "...#..........#.",
@@ -179,13 +180,14 @@ enum {
 	// Terminal
 	W_EDIT_TERM,
 	// System
+	W_EDIT_START,
 	W_RELOAD,
 	W_COUNT
 };
 
 // Each page's first control; the next page's first ends it.
 static const int page_first[P_COUNT + 1] = {
-	0, W_SPEED_PREV, W_EDIT_KBD, W_SET_TZ, W_PW_SET, W_EDIT_TERM, W_RELOAD, W_COUNT,
+	0, W_SPEED_PREV, W_EDIT_KBD, W_SET_TZ, W_PW_SET, W_EDIT_TERM, W_EDIT_START, W_COUNT,
 };
 
 static z_widget_t widgets[W_COUNT];
@@ -223,6 +225,7 @@ static pref_t prefs[] = {
 	{ "apps.term.auto_connect", "New terminal windows connect to", W_EDIT_TERM, "", false },
 	{ "system.keyboard.layouts", "Keyboard layouts", W_EDIT_KBD, "", false },
 	{ "system.font.japanese", "Japanese text", W_TOGGLE_JA, "", false },
+	{ "system.start", "Opens at start", W_EDIT_START, "", false },
 };
 
 // The Japanese font switch -- defined with its button, further down.
@@ -455,8 +458,9 @@ static void layout(void) {
 	// Terminal
 	place(W_EDIT_TERM, right_x(EDIT_W), y_page - 3, EDIT_W, EDIT_H);
 
-	// System
-	place(W_RELOAD, PX, y_page + 3 * LINE_H + 8, 96, BTN_H);
+	// System: what it opens with, then the file
+	place(W_EDIT_START, right_x(EDIT_W), y_page - 3, EDIT_W, EDIT_H);
+	place(W_RELOAD, PX, y_page + ROW_H + 3 * LINE_H + 8, 96, BTN_H);
 
 	for (int p = 0; p < P_COUNT; p++) z_widget_invalidate(&psets[p]);
 	z_listbox_invalidate(&tz_list);
@@ -480,6 +484,8 @@ static void describe(const pref_t *p, char *out, size_t n) {
 		v = "us";
 	if (!strcmp(p->key, "system.font.japanese"))
 		v = japanese_on() ? "on -- jfont holds the font, about 190KB" : "off";
+	if (!strcmp(p->key, "system.start") && (!v[0] || !strcmp(v, "none") || !strcmp(v, "desktop")))
+		v = "the desktop";
 
 	snprintf(out, n, "%.*s%s", max - (int)strlen(suffix), v, suffix);
 
@@ -677,6 +683,9 @@ static void draw_page(void) {
 		break;
 
 	case P_SYSTEM:
+		describe(&prefs[3], line, sizeof(line));
+		draw_row(y, prefs[3].title, line);
+		y += ROW_H;
 		draw_row(y, "Settings file", Z_CFG_PATH);
 		if (other_keys)
 			snprintf(line, sizeof(line), "%d other setting%s in it, kept as %s", other_keys,
@@ -1020,12 +1029,47 @@ static void edit_layouts(const pref_t *p) {
 
 }
 
+// system.start (docs/config.md): an app's name, then optionally its
+// argument -- "text /home/book.txt". wm starts it when boot has
+// finished. 'default' (or 'desktop') removes the line. Only the name is
+// checked, for being one: whether it is on this card is a question for
+// the next boot, and the console says so then.
+static bool valid_start(const char *v) {
+	int n = 0;
+	for (; *v && *v != ' '; v++, n++)
+		if (!((*v >= 'a' && *v <= 'z') || (*v >= 'A' && *v <= 'Z') ||
+			(*v >= '0' && *v <= '9') || *v == '_' || *v == '-')) return false;
+	return n > 0;
+}
+
+static void edit_start(const pref_t *p) {
+
+	char v[Z_CFG_VAL_MAX];
+
+	if (!z_dialog_prompt(&dlg, p->title,
+		"An app, and what to open in it:\n"
+		"text, text " Z_DIR_HOME "/book.txt, learn, term\n"
+		"'default' removes the line (the desktop)", p->value, v, sizeof(v)))
+		return;
+
+	if (!strcmp(v, "default") || !strcmp(v, "desktop")) save(p->key, NULL);
+	else if (!valid_start(v)) {
+		z_dialog_confirm(&dlg, p->title, "An app's name first, as in\n"
+			"text " Z_DIR_HOME "/book.txt -- nothing saved.", Z_DIALOG_OK_CANCEL);
+		return;
+	} else save(p->key, v);
+
+	repaint();
+
+}
+
 static void edit(const pref_t *p) {
 
 	char v[Z_CFG_VAL_MAX];
 	const char *msg;
 
 	if (!strcmp(p->key, "system.keyboard.layouts")) { edit_layouts(p); return; }
+	if (!strcmp(p->key, "system.start")) { edit_start(p); return; }
 
 	msg = "port repl0, port posix0, telnet <host>,\n"
 	      "ssh <user@host>, serial [baud], or none\n"
@@ -1213,6 +1257,7 @@ static void activate(int idx) {
 	if (idx == W_TOGGLE_JA) { toggle_japanese(); return; }
 	if (idx == W_SET_TZ) { choose_zone_and_return(); return; }
 	if (idx == W_RELOAD) { reload(); return; }
+	if (idx == W_EDIT_START) { edit(&prefs[3]); return; }
 	if (idx == W_PW_SET) { set_password(); return; }
 	if (idx == W_PW_REMOVE) { remove_password(); return; }
 	if (idx == W_LOCK_EDIT) { edit_lock(); return; }
@@ -1554,6 +1599,10 @@ static void widgets_init(void) {
 	widgets[W_SET_TZ].type = Z_WIDGET_BUTTON;
 	widgets[W_SET_TZ].label = "Set time zone";
 	widgets[W_SET_TZ].enabled = false;		// see zone_selection_changed()
+
+	widgets[W_EDIT_START].type = Z_WIDGET_BUTTON;
+	widgets[W_EDIT_START].label = "Edit";
+	widgets[W_EDIT_START].enabled = true;
 
 	widgets[W_RELOAD].type = Z_WIDGET_BUTTON;
 	widgets[W_RELOAD].label = "Reload file";

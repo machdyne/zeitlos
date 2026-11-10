@@ -52,6 +52,10 @@
 /* What the card holds, file by file, and what an update may do with
  * each (docs/update.md). Written by the release tool and by `update`. */
 #define Z_PATH_SYS_MANIFEST       "/sys/manifest"
+/* A new card's mark: written by the release tool on every card image
+ * it makes, never by `update`. wm starts `welcome` once when it is
+ * there, and welcome removes it (docs/welcome_app.md). */
+#define Z_PATH_SYS_FIRSTRUN       "/sys/firstrun"
 
 /* Programs, one flat file each, and everything else each app has.
  * An app names its own files with z_data_file() (sw/common/zdata.h);
@@ -61,6 +65,11 @@
 #define Z_DIR_DATA                "/data"
 
 #define Z_DIR_DOCS                "/docs"
+/* The guide to the desktop (docs/welcome.md): the page on the card,
+ * and its plain-text copy, which is also in flash (CORE_FILES), for a
+ * machine with no card. The welcome app opens one or the other. */
+#define Z_PATH_DOCS_WELCOME       "/docs/welcome.md"
+#define Z_PATH_DOCS_WELCOME_TXT   "/docs/welcome.txt"
 /* The Scheme API reference, in flash (CORE_FILES): repl's (help) and
  * (apropos) read it (tools/gen_zapi.py, docs/scheme_api.md). */
 #define Z_PATH_DOCS_ZAPI          "/docs/zapi.txt"
@@ -77,6 +86,10 @@
 /* The kernel console's `ss` (sw/os/sh.c): something the person asked
  * for, so it goes where their things go. */
 #define Z_PATH_SCREENSHOT         "/home/ss.bin"
+/* The kernel console's `report` (sw/os/sh.c, docs/report.md): the last
+ * crash and the log around it. On the RAM disk, not the card: writing
+ * a card while something is going wrong is how a card is lost. */
+#define Z_PATH_REPORT             "/ram/report.txt"
 
 /* Mount prefixes (sw/apps/fs/fs.c, docs/ramdisk.md, docs/usb_host.md).
  * Not directories on the card: a directory of either name at the
