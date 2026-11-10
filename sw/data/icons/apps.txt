@@ -32,8 +32,8 @@ clock
 convert     "Convert"
 draw
 files
-gldemo      "GL demo"
-gpu3d       "GPU 3D"
+gldemo      "GL demo"                   hidden
+gpu3d       "GPU 3D"                    hidden
 hex         "Hex editor"
 info        "System info"
 irc         "Chat"
@@ -41,7 +41,9 @@ keyboard
 kidgames    "Kid games"
 learn       "Learn"
 mahjong     "Mahjong"
+mauskart3d  "Mauskart"
 mausrun     "Maus Run"
+mausrun3d   "Maus Run 3D"
 midi        "MIDI player"   audio
 mmod                        gpio
 pix         "Pix"

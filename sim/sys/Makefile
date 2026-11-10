@@ -29,8 +29,13 @@ WIN_SRC = win_sdl.c
 WIN_FLAGS = -DZSYS_WINDOW $(SDL_CFLAGS)
 endif
 
-zsys: main.c zsys.c zdev.c zsys.h win.h $(WIN_SRC)
-	$(CC) $(CFLAGS) $(WIN_FLAGS) -o $@ main.c zsys.c zdev.c $(WIN_SRC) $(SDL_LIBS)
+# T2: its own program and the raster's model, the two the RTL is held to
+T2_SRC = zt2.c $(ROOT)/sw/common/zgl/t2fw.c $(ROOT)/sw/common/zgl/tests/t2_model.c \
+	$(ROOT)/sw/common/zgl/tests/t2_raster.c
+DEV_SRC = zsys.c zdev.c $(T2_SRC)
+
+zsys: main.c $(DEV_SRC) zsys.h win.h $(WIN_SRC)
+	$(CC) $(CFLAGS) $(WIN_FLAGS) -o $@ main.c $(DEV_SRC) $(WIN_SRC) $(SDL_LIBS)
 
 # -- the core's test programs, as tb_zeitlos32.v runs them --
 
@@ -48,9 +53,9 @@ test: zsys test-tb test-zdev test-boot test-desktop test-input
 
 # -- the devices, register by register (test_zdev.c) --
 
-out/test_zdev: test_zdev.c zsys.c zdev.c zsys.h
+out/test_zdev: test_zdev.c $(DEV_SRC) zsys.h
 	@mkdir -p out
-	$(CC) $(CFLAGS) -o $@ test_zdev.c zsys.c zdev.c
+	$(CC) $(CFLAGS) -o $@ test_zdev.c $(DEV_SRC)
 
 test-zdev: out/test_zdev
 	@./out/test_zdev
@@ -152,7 +157,13 @@ test-input: test-desktop
 a=struct.unpack('<%dh'%(2*n),w.readframes(n))[0::2]; s=a[int(1.5*r):int(2.5*r)]; \
 z=sum(1 for i in range(1,len(s)) if s[i-1]<0<=s[i]); sys.exit(0 if 430<=z<=450 else 1)" && \
 		echo "test-input: audio: audiotest's tone is 440 Hz in what the machine played (out/audio.wav)" || \
-		{ echo "test-input: FAILED: audio (out/audio.log, out/audio.wav)"; exit 1; }
+		{ echo "test-input: FAILED: audio (out/audio.log, out/audio.wav)"; exit 1; }; \
+	./zsys --flash out/boot.img --sd "$(ZSYS_CARD)" --snapshot --fast --seconds 8 --after "firstrun removed" \
+		--type "run /apps/mausrun3d\n" --stats > out/t2.log 2>&1; \
+	if ! grep -q "mausrun3d: pid" out/t2.log; then echo "test-input: T2 skipped -- no mausrun3d on the card"; exit 0; fi; \
+	grep -q "chunky: T2" out/t2.log && grep -q "T2 frames [1-9]" out/t2.log && \
+		echo "test-input: T2: mausrun3d draws through the triangle engine (out/t2.log)" || \
+		{ echo "test-input: FAILED: T2 (out/t2.log)"; exit 1; }
 
 # -- the page: the same machine through Emscripten (docs/zsys.md, "In a browser") --
 #
@@ -167,9 +178,9 @@ WEB_EXPORTS = _main,_zw_alloc,_zw_init,_zw_run,_zw_halted,_zw_render,_zw_rgba,_z
 .PHONY: web web-test
 web: $(WEB)/zsys.js $(WEB)/index.html $(WEB)/zsys-page.js
 
-$(WEB)/zsys.js: zsys.c zdev.c zsys.h web/zsys_web.c
+$(WEB)/zsys.js: $(DEV_SRC) zsys.h web/zsys_web.c
 	@mkdir -p $(WEB)
-	$(EMCC) -O3 -std=gnu99 -o $@ zsys.c zdev.c web/zsys_web.c \
+	$(EMCC) -O3 -std=gnu99 -Wno-unknown-attributes -o $@ $(DEV_SRC) web/zsys_web.c \
 		-sMODULARIZE=1 -sEXPORT_NAME=ZsysModule -sALLOW_MEMORY_GROWTH=1 -sINITIAL_MEMORY=134217728 \
 		-sEXPORTED_FUNCTIONS=$(WEB_EXPORTS) -sEXPORTED_RUNTIME_METHODS=HEAPU8
 

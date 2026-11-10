@@ -37,6 +37,7 @@
  *   --wav FILE       what the machine played, as a WAV at its own rate (16-bit stereo)
  *   --mute           the window plays nothing
  *   --fullscreen     the window full screen (Ctrl+Alt+Enter toggles it)
+ *   --no-t2          the board without T2, the triangle engine
  *
  * The flash image is written as the machine writes the flash (the
  * key/value store), as the card image is -- unless --snapshot.
@@ -297,7 +298,7 @@ static void usage(void) {
 	fprintf(stderr, "usage: zsys [--bios FILE] --flash FILE | --tb PROG.bin  [--seconds N] [--expect TEXT]\n"
 		"            [--type TEXT] [--after TEXT] [--fast] [--cpi N] [--ram MB] [--stats]\n"
 		"            [--sd FILE] [--snapshot] [--screenshot FILE [--cursor]] [--clock] [--headless]\n"
-		"            [--window [--scale N]] [--keys TEXT] [--click X,Y] [--wheel N] [--wait MS] [--wav FILE] [--mute] [--fullscreen]\n");
+		"            [--window [--scale N]] [--keys TEXT] [--click X,Y] [--wheel N] [--wait MS] [--wav FILE] [--mute] [--fullscreen] [--no-t2]\n");
 	exit(2);
 }
 
@@ -307,7 +308,7 @@ int main(int argc, char **argv) {
 	const char *expect = NULL, *type = NULL, *after = NULL;
 	double seconds = 0;
 	bool fast = false, stats = false, snapshot = false, cursor = false, clock = false, headless = false;
-	bool window = false, mute = false, full = false;
+	bool window = false, mute = false, full = false, no_t2 = false;
 	const char *wav_path = NULL;
 	int scale = 2;
 	const char *sd_path = NULL, *shot_path = NULL;
@@ -349,6 +350,7 @@ int main(int argc, char **argv) {
 		else if (!strcmp(o, "--window")) window = true;
 		else if (!strcmp(o, "--wav") && v) { wav_path = v; i++; }
 		else if (!strcmp(o, "--mute")) mute = true;
+		else if (!strcmp(o, "--no-t2")) no_t2 = true;
 		else if (!strcmp(o, "--fullscreen")) { full = true; window = true; }
 		else if (!strcmp(o, "--scale") && v) { scale = atoi(v); if (scale < 1) scale = 1; i++; }
 		else if (!strcmp(o, "--keys") && v) { if (!script_keys(v)) return 2; i++; }
@@ -404,6 +406,7 @@ int main(int argc, char **argv) {
 		s.features |= Z_MEM_GLYPH | Z_GPU | Z_GPU_RASTER | Z_GPU_BLIT | Z_GPU_CURSOR | Z_USB_HID |
 			Z_SPI_SDCARD | Z_RTC | Z_AUDIO | Z_GAME;
 	s.audio_on = !headless;
+	s.t2_on = !headless && !no_t2;
 	s.features2 = headless ? 0 : Z2_RECONFIG | Z2_FLASHW | Z2_COLOR;
 	if (sd_path && !zsys_sd_insert(&s, sd_path, snapshot)) return 2;
 
@@ -525,7 +528,8 @@ done:
 		fprintf(stderr, "zsys: blits %llu, lines %llu; card blocks read %llu, written %llu; reboots %llu\n",
 			(unsigned long long)s.blit.blits, (unsigned long long)s.raster.lines,
 			(unsigned long long)s.sd.reads, (unsigned long long)s.sd.writes, (unsigned long long)s.reboots);
-		fprintf(stderr, "zsys: audio frames %llu at %.0f Hz\n", (unsigned long long)s.audio.frames, zsys_audio_hz(&s));
+		fprintf(stderr, "zsys: audio frames %llu at %.0f Hz; T2 frames %llu\n", (unsigned long long)s.audio.frames,
+			zsys_audio_hz(&s), (unsigned long long)s.t2_frames);
 		fprintf(stderr, "zsys: keyboard reports %llu, mouse %llu; flash sectors erased %llu, pages programmed %llu\n",
 			(unsigned long long)s.hid[0].reports, (unsigned long long)s.hid[1].reports,
 			(unsigned long long)s.flashw.erases, (unsigned long long)s.flashw.programs);

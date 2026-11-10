@@ -244,6 +244,7 @@ static uint32_t io_read(zsys_t *s, uint32_t pa) {
 		return 0xffffffffu;			// past the end of the flash: erased
 
 	case 0x7:
+		if (s->t2_on && (pa & 0xff000000u) == 0x7c000000u) return zt2_read(s, (pa & 0x3f) >> 2);	// T2
 		if ((pa & 0xf0000700u) == 0x70000000u) {	// the CSRs (rtl/csrs.v)
 			switch ((pa & 0xff) >> 2) {
 			case 0: return 0x5a454954u;		// "ZEIT"
@@ -299,6 +300,7 @@ static void io_write(zsys_t *s, uint32_t pa, uint32_t v, uint32_t sel) {
 		return;					// the window itself: acked and ignored
 
 	case 0x7:
+		if (s->t2_on && (pa & 0xff000000u) == 0x7c000000u) { zt2_write(s, (pa & 0x3f) >> 2, v); return; }
 		if (s->kind == ZSYS_SOC) zdev_write(s, pa & ~3u, v, sel);	// socctl, the RTC
 		return;					// the CSRs themselves: read-only
 

@@ -403,15 +403,15 @@ int main(int argc, char **argv) {
 
 	// -- 2. a group, opened in place --
 	printf("2. opening Games\n");
-	int casino = find_app("casino");
+	int first = find_app("mausrun3d");	// the group's first app (wm.cfg)
 	dock_launch(games);			// a group's icon: opens it, starts nothing
 	expect(dock_view == dock_apps[games].view && runs == 0, "the group is shown, nothing run");
-	expect(dock_selected == casino, "the selection on its first app");
+	expect(dock_selected == first, "the selection on its first app");
 	expect(!dock_paged, "thirteen fit, no NEXT");
 	expect((int)windows[dock_idx].w == dock_frame_len, "the frame did not move");
 	draw_all();
 	expect(slot_shows(0, bits_of(dock_back_icon, dock_back_len)), "BACK in slot 0");
-	expect(shows_item(1, casino), "casino in slot 1");
+	expect(shows_item(1, first), "mausrun3d in slot 1");
 	expect(slot_ink(14) == 0, "and nothing after the thirteenth");
 	dump("2-games");
 	dock_handle_key(0x1b, true);		// Esc
@@ -421,7 +421,7 @@ int main(int argc, char **argv) {
 	dock_handle_key(Z_KEY_LEFT, true);
 	expect(dock_selected == DOCK_SEL_BACK, "Left from the first app: BACK");
 	dock_handle_key(Z_KEY_LEFT, true);
-	expect(dock_selected == casino + 12, "Left from BACK: around to the last");
+	expect(dock_selected == first + 12, "Left from BACK: around to the last");
 	dock_handle_key(Z_KEY_RIGHT, true);
 	expect(dock_selected == DOCK_SEL_BACK, "Right from the last: BACK");
 	dock_handle_key(CH_CR, true);
@@ -503,8 +503,8 @@ int main(int argc, char **argv) {
 
 	// -- 7. a card with only some of the apps --
 	printf("7. a card without the games\n");
-	static const char *const nogames[] = { "casino", "chess", "mahjong", "kidgames", "chip8",
-		"space3d", "snake", "blocks", "bricks", "gpu3d", "gldemo", "mausrun", "planedemo" };
+	static const char *const nogames[] = { "mausrun3d", "mauskart3d", "casino", "chess", "mahjong",
+		"kidgames", "chip8", "space3d", "snake", "blocks", "bricks", "mausrun", "planedemo" };
 	nmissing = 0;
 	for (int i = 0; i < 13; i++)		// all but chess and kidgames
 		if (strcmp(nogames[i], "chess") && strcmp(nogames[i], "kidgames")) missing[nmissing++] = nogames[i];

@@ -49,6 +49,7 @@ EMSCRIPTEN_KEEPALIVE int zw_init(uint8_t *flash, uint32_t flash_len, uint8_t *ca
 		(1u << 9) | (1u << 12) | (1u << 13) | (1u << 14) | (1u << 20) | (1u << 21) | (1u << 23) | (1u << 24) |
 		(1u << 26) | (1u << 27);		// ... AUDIO, GAME
 	s.audio_on = true;
+	s.t2_on = true;					// T2, as sergei_ml2's build has it
 	s.features2 = (1u << 5) | (1u << 6) | (1u << 15);	// RECONFIG, FLASHW, COLOR
 	const uint8_t *bios;
 	uint32_t bios_len;

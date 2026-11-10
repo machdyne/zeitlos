@@ -199,6 +199,10 @@ typedef struct zsys {
 	zsys_audio_t audio;
 	bool audio_on;					// FEATURES has AUDIO: the block is there
 
+	// -- T2, the triangle engine (zt2.c), at 0x7C00_0000 --
+	bool t2_on;
+	uint64_t t2_frames;
+
 	// -- writing the flash (rtl/spiflash.v) --
 	zsys_flashw_t flashw;
 	int flash_fd;					// written through, unless a snapshot (-1)
@@ -302,6 +306,11 @@ uint32_t zsys_audio_take(zsys_t *s, float *out, uint32_t max, uint32_t out_hz);
 double zsys_audio_hz(const zsys_t *s);
 // Frames the machine has played that the host has not taken.
 static inline uint32_t zsys_audio_pending(const zsys_t *s) { return s->audio.r_n; }
+
+// internal: T2 (zt2.c)
+uint32_t zt2_read(zsys_t *s, uint32_t w);
+void zt2_write(zsys_t *s, uint32_t w, uint32_t val);
+void zt2_reset(void);
 
 // internal: the sample clock, from zsys.c's clocks()
 void zdev_audio_frames(zsys_t *s);

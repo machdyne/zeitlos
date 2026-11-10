@@ -4,8 +4,8 @@
 run in `sim/sys` ([zsys.md](zsys.md)) to a usable desktop, with a
 release's card image, a keyboard and a mouse: in a window on a PC, and
 in a page (`zrelease web`), with sound. Releases carry
-`zeitlos-sim.img`. Milestone 5 is done but for T2, which only the
-console profile has; milestone 6 is next.
+`zeitlos-sim.img`. Milestone 5 is done, T2 included; milestone 6 is
+next.
 
 `sim/` today runs **one app** against host code that stands in for the
 kernel ([sim/README.md](../sim/README.md), "The OS layer"). The goal is
@@ -163,10 +163,14 @@ Each one is a round: built, host-tested, and the docs updated.
    shows it), chunky, the colour window and desktop colour's exact path
    -- mausrun, planedemo and colwin run, and mausrun3d and mauskart3d
    in software chunky (15 frames a second), so all five are back on
-   the emulator's card. **T2 not done**: it is only in the console
-   profile (`lakritz_console`: VRAM in SDRAM, no desktop), a machine of
-   its own; the 3D games do without it. A full-screen button on the
-   page, Ctrl+Alt+Enter in the window.
+   the emulator's card. **T2 done** (`zt2.c`): its registers and, at
+   each frame's END, T2's own model -- the geometry unit's program and
+   the raster's model the RTL bench is held to -- into chunky VRAM, as
+   sergei_ml2's build has it beside the desktop: mausrun3d and
+   mauskart3d at 60 frames a second, textured (`--no-t2`: software, 15).
+   The console profile's picture in main memory (`VRAM_SDRAM`) is not
+   emulated. A full-screen button on the page, Ctrl+Alt+Enter in the
+   window.
 6. **Later, by decision:** the USB host controller model (the real
    `usb` driver path), the MPU, the TRNG and crypto blocks, network.
 

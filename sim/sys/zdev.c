@@ -1211,6 +1211,7 @@ void zdev_reset(zsys_t *s) {
 	// the flash's write path: idle, disarmed
 	memset(&s->flashw, 0, sizeof(s->flashw));
 	audio_reset(s);
+	zt2_reset();
 	// the RTC counts from 0 and knows it does not know the time --
 	// unless the front end gave it the host's clock
 	s->rtc_cycles = s->cycles;

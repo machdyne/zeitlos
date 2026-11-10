@@ -771,7 +771,7 @@ static void test_shipped(const char *cfg_path, const char *zic_path) {
 	CHECK_EQ(dk.views[0].count, 2);			// web irc
 	CHECK_EQ(dk.views[1].count, 3);			// play track midi
 	CHECK_EQ(dk.views[2].count, 7);			// backup info keyboard hex basic mmod pix
-	CHECK_EQ(dk.views[3].count, 13);			// the games, gldemo, planedemo
+	CHECK_EQ(dk.views[3].count, 13);			// the games and planedemo (gldemo, gpu3d: the launcher's)
 	CHECK_EQ(dk.views[4].count, 4);			// colwin, and @rest: convert settings view
 	{
 		uint8_t keep[DK_ITEMS_MAX];

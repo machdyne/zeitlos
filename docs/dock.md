@@ -163,6 +163,12 @@ Sound, Tools, Games and Network in `row tall`, for a dock on a side.
 a side; that is why `calc`, `clock` and `cal` went into Desk in the wide
 row too.
 
+Games opens on mausrun3d and mauskart3d, then mausrun and the rest. The
+two 3D demos, gldemo and gpu3d, are not in the dock (`hidden` in
+`apps.txt`, so `@rest` leaves them out too) but in `launcher`: with them
+the side dock came to 50 icons, past the 48 it holds
+(`DK_ITEMS_MAX`), and More apps was the group that would have been cut.
+
 ## Sides
 
 `side` in `wm.cfg` puts the dock against any edge of the screen, 8
@@ -492,7 +498,7 @@ it ([flash_apps.md](flash_apps.md)).
   with BACK first, the frame the same size. Esc: the row, Games
   selected. Enter on Tools, Right to an app, Enter: it starts and the
   dock is back on the row.
-- Speech on: "Games: Casino" when Games opens.
+- Speech on: "Games: Maus Run 3D" when Games opens.
 - A bitstream without audio: no Sound group at all.
 - No card: the same dock, from flash.
 - A `/data/wm/wm.cfg` on the card with `row wide text term @g` and

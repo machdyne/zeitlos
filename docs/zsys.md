@@ -117,8 +117,9 @@ What the CSRs say this board has ([csrs.md](csrs.md)): `MEM_SDRAM`,
 the HID-only USB of the older gateware in place of its USB host, and
 **the video of a 45F board** (Mozart ML1/ML2): eight colour planes,
 chunky, the colour window and desktop colour, where Lakritz has six
-planes and neither -- so every program that has colour shows it. Still
-to come: T2, DDMI, the caches (which change only speed). The kernel and apps check
+planes and neither -- so every program that has colour shows it -- and
+**T2**, as sergei_ml2's build has it. Still to come: DDMI, the caches
+(which change only speed). The kernel and apps check
 these bits before touching a device, so what is missing is left alone.
 
 `--headless` is milestone 1's board instead -- memory, the flash, UART0
@@ -250,11 +251,23 @@ it), and `--screenshot` writes 8-bit RGB rather than one bit a pixel.
 
 ![Colour on the emulator: mausrun, planedemo, colwin; mausrun3d and mauskart3d in chunky, gldemo on the tinted desktop](images/zsys-colour.png)
 
-**Without T2** the 3D games draw in software, in chunky -- mausrun3d
-at 15 frames a second of the machine's time, which the emulator's
-pace (24 million instructions in each of its seconds, `--cpi`) gives
-in the window and the page as well. T2 itself is only in the console
-profile (`lakritz_console`), a different machine, and not emulated.
+### T2, the triangle engine
+
+`zt2.c`: T2's registers at `0x7C00_0000` (ID "ZTR2", STATUS, CMD,
+VBASE, STRIPS, RESET, CAPS with textures, TEXADDR and TEXDATA), and a
+frame's command stream carried out at its `END` by **T2's own model**:
+the geometry unit's program (`sw/common/zgl/t2fw.c`, what the engine's
+zeitlos32g core runs) and the raster's model
+(`sw/common/zgl/tests/t2_raster.c`) -- the two `tb_gpu_t2.v` holds the
+RTL to, word for word -- into chunky VRAM. Like the blitter it does a
+frame's work between two instructions, never busy, its FIFO never full,
+so a 3D game is paced by the CPU alone: **mausrun3d and mauskart3d at
+60 frames a second, textured**, in the window and the page.
+
+T2 is in sergei_ml2's build (`-DGPU_T2`, beside the desktop) and the
+console profiles; zsys has it with its 45F video unless `--no-t2`, and
+then the 3D games draw in software, in chunky, at about 15 frames a
+second.
 
 ### Sound
 
@@ -331,6 +344,7 @@ zsys [--bios FILE] --flash FILE | --tb PROG.bin
      --wav FILE       what the machine played, as a WAV at its own rate
      --mute           the window plays no sound
      --fullscreen     the window, full screen (Ctrl+Alt+Enter toggles it)
+     --no-t2          the board without T2: the 3D games draw in software
      --wait MS        a pause between scripted inputs
 ```
 
@@ -356,7 +370,7 @@ of `0xFF`, which `fs` took for a card that never answered.
 $ ZSYS_CARD=images/zeitlos.img make -C sim/sys test RISCV_PREFIX=...
 PASS out/tb/t_alu.bin (181 instructions)
 ...
-PASS test_zdev: 95 checks, 0 failed
+PASS test_zdev: 98 checks, 0 failed
 test-boot: the sim image boots to the prompt, and ps answers
 test-boot: a release-style image (gateware region, BIOS given) boots too
 test-boot: an image with no BIOS and no --bios is refused, and says why
@@ -366,6 +380,7 @@ test-input: the flash keeps the key/value store: welcome once, not twice
 test-input: the keyboard: Tab, Enter in welcome opens the guide (out/keys.png)
 test-input: Skip closes welcome, and a click on the dock starts files
 test-input: audio: audiotest's tone is 440 Hz in what the machine played (out/audio.wav)
+test-input: T2: mausrun3d draws through the triangle engine (out/t2.log)
 ```
 
 - **`test_zdev`** drives the devices' registers directly, one
@@ -380,13 +395,14 @@ test-input: audio: audiotest's tone is 440 Hz in what the machine played (out/au
   volume, a mixer channel's arithmetic, a one-shot ending; and the
   picture: a desktop pixel, game mode doubled, the view and its clamp,
   eight planes through the palette, chunky, desktop colour's exact
-  path, and the rules between game mode, colour and the window.
+  path, and the rules between game mode, colour and the window; T2's
+  ID, STATUS and CAPS.
 - **`test-input`**: the flash keeps the key/value store (welcome on
   a machine with no card once, not twice, from a copy of the image);
   with `ZSYS_CARD`, Tab, Enter in welcome open the guide in `read`,
   Tab, Tab, Enter is Skip, and a click on the dock starts `files`;
   on a card with the audio set, `audiotest` plays, and its tone in
-  `--wav`'s recording is 440 Hz.
+  `--wav`'s recording is 440 Hz; mausrun3d's frames go through T2.
 - **`test-desktop`** boots to the desktop, writes a screenshot, and
   `check_screen.py` checks that every window wm says it placed ("wm:
   win 1 'welcome' ... at 44,40 420x300") has its frame on the screen --
@@ -403,7 +419,7 @@ is missing. `tools/run_tests.py` runs it with the other suites.
 ## In a browser
 
 `sim/sys/web/`: the same machine -- `zsys.c` and `zdev.c` unchanged --
-built with Emscripten to 39KB of WebAssembly, and a page that runs it.
+built with Emscripten to 64KB of WebAssembly (T2's model with it), and a page that runs it.
 
 ```
 $ make -C sim/sys web                         out/web: index.html, zsys-page.js, zsys.js, zsys.wasm
@@ -481,7 +497,8 @@ page open the guide, a click on the dock starts `files`, and with the
 box ticked a reload is the same machine -- welcome does not come back;
 with a card, the wheel scrolls the guide, Super+S's speech reaches
 the page's audio, and planedemo, started from the console line, fills
-the canvas in colour; the full-screen button works.
+the canvas in colour, mausrun3d draws through T2, textured; the
+full-screen button works.
 
 ## Speed
 

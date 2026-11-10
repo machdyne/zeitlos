@@ -182,7 +182,9 @@ static uint8_t cmd(uint8_t c, uint32_t arg, uint8_t *extra, int n) {
 }
 
 static void test_sd(void) {
-	char path[] = "out/test_card_XXXXXX";
+	char path[512];
+	const char *tmp = getenv("TMPDIR");
+	snprintf(path, sizeof(path), "%s/zsys_test_card_XXXXXX", tmp && *tmp ? tmp : "/tmp");
 	int fd = mkstemp(path);
 	CHECK(fd >= 0, "a temporary card image");
 	if (fd < 0) return;
@@ -439,6 +441,16 @@ static void test_picture(void) {
 	wr(SOC + 0x0c, 0);
 }
 
+static void test_t2(void) {
+	s.t2_on = true;
+	bool ok;
+	(void)ok;
+	CHECK(zt2_read(&s, 7) == 0x5a545232u, "T2: ID reads ZTR2");
+	CHECK(!(zt2_read(&s, 1) & 1) && ((zt2_read(&s, 1) >> 16) & 0x3ff) == 0x3ff, "never busy, the FIFO free");
+	CHECK(zt2_read(&s, 11) & 1, "CAPS: textures");
+	s.t2_on = false;
+}
+
 int main(void) {
 	if (!zsys_init(&s, ZSYS_SOC, 32)) { printf("FAIL: no memory\n"); return 1; }
 	zsys_reset(&s);
@@ -455,6 +467,7 @@ int main(void) {
 	test_audio();
 	zsys_reset(&s);
 	test_picture();
+	test_t2();
 	zsys_free(&s);
 	printf("%s: %d checks, %d failed\n", fails ? "FAIL test_zdev" : "PASS test_zdev", checks, fails);
 	return fails != 0;

@@ -172,6 +172,32 @@ def main(argv):
                 canvas_png("web-colour.png")
                 check(colours > 16, "colour: planedemo fills the canvas in %d colours or more" % colours)
 
+            # T2: mausrun3d's frames through the triangle engine, on a
+            # machine of its own (two full-screen games at once share game
+            # mode and draw over each other, on a board too)
+            if a.card:
+                page.reload()
+                try:
+                    page.wait_for_function("() => window.zsysSeen.includes('firstrun removed')", timeout=60000)
+                except Exception:
+                    pass
+                page.click("summary")
+                page.fill("#type", "run /apps/mausrun3d")
+                page.press("#type", "Enter")
+                try:
+                    page.wait_for_function("() => window.zsysSeen.includes('chunky: T2')", timeout=30000)
+                except Exception:
+                    pass
+                page.wait_for_timeout(4000)
+                canvas_png("web-t2.png")
+                ncol = page.evaluate("""() => {
+                    const c = document.getElementById('screen').getContext('2d').getImageData(0, 0, 640, 480).data;
+                    const seen = new Set();
+                    for (let i = 0; i < c.length; i += 4 * 13) seen.add(c[i] << 16 | c[i + 1] << 8 | c[i + 2]);
+                    return seen.size; }""")
+                check("chunky: T2" in seen() and ncol > 40,
+                      "T2: mausrun3d draws through the triangle engine in the page, textured (%d colours)" % ncol)
+
             # full screen: the button, and the mouse mapped through the letterbox
             page.click("#full")
             page.wait_for_timeout(800)
