@@ -10,9 +10,11 @@ rasterizer, and shows the result in a window.
 $ ./zeitlos-sim sw/apps/bounce/bounce.bin
 ```
 
-**The whole system, BIOS to desktop, and a browser build, are planned
-in [docs/sim_parity.md](../docs/sim_parity.md).** What follows is the
-simulator as it is: one app, with host code in place of the kernel.
+**The whole system** -- the real BIOS, kernel and apps -- runs in
+`sim/sys/` ([docs/zsys.md](../docs/zsys.md)): the desktop with a card,
+a keyboard and a mouse, in a window or a web page
+([docs/sim_parity.md](../docs/sim_parity.md)). What follows is this
+simulator: one app, with host code in place of the kernel.
 
 ## What's emulated
 

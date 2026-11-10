@@ -704,6 +704,32 @@ $ release/zrelease sdcard --sets base,dev,embedded           # any choice of set
 $ release/zrelease sdcard --no-first-run                     # a bench card: no welcome at first boot
 ```
 
+**`zeitlos-sim.img`** is in every release too: the flash image every
+target has -- the kernel and the core apps -- with the Lakritz BIOS
+where the gateware would be, for the emulator ([zsys.md](zsys.md)) and
+a page that runs Zeitlos without sending anyone a bitstream. `zrelease
+build` makes it with the shared software (`--no-sim` leaves it out);
+`zrelease sim` makes one from the tree as built, at
+`images/zeitlos-sim.img`.
+
+`--variant emu` is a card for the emulator's page rather than for a
+board -- every set it can use, less the apps it cannot run yet
+(`EMU_EXCLUDE` in `lib/mkfatimg.py`; [zsys.md](zsys.md), "In a
+browser") -- and not one `zrelease build` makes.
+
+**`zrelease web`** makes the page that runs Zeitlos in a browser
+([zsys.md](zsys.md), "In a browser"): the WebAssembly build, the sim
+image and a card image (`--card`, or `images/zeitlos.img` from
+`zrelease sdcard`; a release's `zeitlos-base.img.gz` as it is), both
+gzipped, in `images/web` -- a directory to put on a web server as it
+is. It needs Emscripten's `emcc` (`apt install emscripten`, or the
+emsdk).
+
+```
+$ release/zrelease sdcard --variant emu         images/zeitlos.img: the emulator's card
+$ release/zrelease web                          images/web, with images/zeitlos-sim.img and that card
+```
+
 Every card image carries `/sys/firstrun`, a new card's mark: at its
 first boot `wm` starts [`welcome`](welcome_app.md), which removes the file
 before it asks anything. The file is beside `/sys/manifest` and not in

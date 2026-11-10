@@ -36,6 +36,7 @@ LOGS = os.path.join(ROOT, "output", "tests")
 
 # Test Makefiles that no `make test` runs: (directory, target).
 EXTRA = [
+    ("sim/sys", "test"),
     ("sw/apps/backup/tests", "run"),
     ("sw/apps/update/tests", "run"),
     ("sw/apps/fs/tests", "run"),

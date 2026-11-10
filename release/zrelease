@@ -6,6 +6,7 @@
 #   zrelease check                 specs vs rtl/boards.vh, flash layout
 #   zrelease layout                the flash map, as this tool reads it
 #   zrelease sdcard                build only the SD card image
+#   zrelease sim                   build only the sim image (sim/sys/zsys)
 #   zrelease tftp                  publish the card for `update` over TFTP
 #   zrelease build <version>       build everything into dist/<version>/
 #   zrelease verify <version>      re-check what is in dist/<version>/
@@ -501,6 +502,12 @@ def cmd_build(args):
             ROOT, list(spec.core_apps(ROOT)[0]), dry=args.dry_run,
             jobs=args.jobs)
 
+    # The sim image (docs/sim_parity.md): the same kernel and core apps
+    # as every target, with the BIOS in place of the gateware. Built
+    # with the software, since it needs nothing else.
+    if software and not args.no_sim:
+        build_mod.build_sim_image(ROOT, out, software, dry=args.dry_run)
+
     results = []
     for name in targets:
         t = spec.load_target(ROOT, name)
@@ -784,6 +791,138 @@ def _build_sdcards(args, out, previous):
     return cards
 
 
+def find_zar():
+    """The core apps' archive the tree built last: `make BOARD=<board>
+    flash_apps` writes output/<board>/apps.zar (the Makefile's OUTDIR),
+    and the archive is the same for every board -- one kernel and one set
+    of core apps probe the bitstream's features -- so the newest is the
+    one that matches the tree. output/apps.zar, where an OUTDIR=output
+    build puts it, counts too. None if there is none."""
+    out = os.path.join(ROOT, "output")
+    cands = [os.path.join(out, "apps.zar")]
+    if os.path.isdir(out):
+        for d in sorted(os.listdir(out)):
+            if d != "releases":
+                cands.append(os.path.join(out, d, "apps.zar"))
+    found = [c for c in cands if os.path.isfile(c)]
+    return max(found, key=os.path.getmtime) if found else None
+
+
+def core_apps():
+    """CORE_APPS, from the Makefile: what every archive must have."""
+    r = subprocess.run(["make", "-s", "-C", ROOT, "BOARD=lakritz", "core-apps"],
+                       capture_output=True, text=True)
+    for line in r.stdout.splitlines():
+        if line.startswith("all:"):
+            return line[4:].split()
+    return []
+
+
+def cmd_sim(args):
+    """The sim image from the tree as built: sw/os/kernel.bin and the
+    core apps' archive (`make BOARD=<board> flash_apps`, or --zar), with the Lakritz
+    BIOS (docs/sim_parity.md, "Images")."""
+    out = args.out if os.path.isabs(args.out) else os.path.join(ROOT, args.out)
+    zar = args.zar or find_zar()
+    kernel = os.path.join(ROOT, "sw", "os", "kernel.bin")
+    if not zar:
+        die("no core apps' archive: make BOARD=<board> flash_apps writes output/<board>/apps.zar, "
+            "or give one with --zar")
+    for p, how in ((kernel, "make os"), (zar, "make BOARD=<board> flash_apps, or --zar")):
+        if not os.path.exists(p):
+            die("%s is not built (%s)" % (os.path.relpath(p, ROOT), how))
+    # An archive older than the tree is the one mistake this cannot see by
+    # its date: a stale output/<board>/apps.zar beside a newer tree. So
+    # it checks what is in it against CORE_APPS.
+    sys.path.insert(0, os.path.join(ROOT, "sim", "sys"))
+    import mksimimg
+    with open(zar, "rb") as f:
+        apps = mksimimg.zar_apps(f.read())
+    if apps is None:
+        die("%s is not a core apps' archive" % os.path.relpath(zar, ROOT))
+    missing = [a for a in core_apps() if a not in apps]
+    print("zrelease: the core apps from %s: %s" % (os.path.relpath(zar, ROOT), " ".join(apps)))
+    if missing:
+        die("%s has no %s -- it is older than the tree's CORE_APPS: "
+            "make BOARD=<board> flash_apps again (or --zar a current one)"
+            % (os.path.relpath(zar, ROOT), ", ".join(missing)))
+    os.makedirs(os.path.dirname(out), exist_ok=True)
+    path = build_mod.build_sim_image(ROOT, os.path.dirname(out),
+                                     {"kernel": kernel, "zar": zar})
+    if os.path.abspath(path) != os.path.abspath(out):
+        os.replace(path, out)
+    print("\n%s -- run it with sim/sys/zsys --flash %s" % (out, os.path.relpath(out, ROOT)))
+
+
+def cmd_web(args):
+    """The page that runs Zeitlos (docs/zsys.md, "In a browser"): sim/sys's
+    web build, a sim image and a card image, in one directory to put on
+    a web server as it is. Both images go gzipped (zeitlos-sim.img.gz,
+    zeitlos.img.gz), which the page unpacks: what a visitor downloads."""
+    out = args.out if os.path.isabs(args.out) else os.path.join(ROOT, args.out)
+    sim = args.sim if os.path.isabs(args.sim) else os.path.join(ROOT, args.sim)
+    if not os.path.exists(sim):
+        die("%s is not built (zrelease sim)" % os.path.relpath(sim, ROOT))
+    # the card: --card, or the one `zrelease sdcard` writes by default
+    card = args.card or (os.path.join("images", "zeitlos.img")
+                         if os.path.exists(os.path.join(ROOT, "images", "zeitlos.img")) else None)
+    if card:
+        card = card if os.path.isabs(card) else os.path.join(ROOT, card)
+        if not os.path.exists(card):
+            die("%s: no such card image (zrelease sdcard writes images/zeitlos.img; "
+                "--variant base for the smallest)" % os.path.relpath(card, ROOT))
+        with (gzip.open(card, "rb") if card.endswith(".gz") else open(card, "rb")) as f:
+            head = f.read(8)
+        if head == b"ZSIMBIOS" or os.path.abspath(card) == os.path.abspath(sim):
+            die("%s is a sim image -- the flash, which --sim gives -- not an SD card image "
+                "(zrelease sdcard writes one, at images/zeitlos.img)" % os.path.relpath(card, ROOT))
+    emcc = os.environ.get("EMCC", "emcc")
+    if not shutil.which(emcc):
+        die("no %s: the page is built with Emscripten. Install it (Debian/Ubuntu: apt install "
+            "emscripten; or the emsdk, https://emscripten.org/docs/getting_started/downloads.html, "
+            "then source emsdk_env.sh), or set EMCC" % emcc)
+    r = subprocess.run(["make", "-C", os.path.join(ROOT, "sim", "sys"), "web"])
+    if r.returncode:
+        die("the web build failed (it needs Emscripten's emcc)")
+    os.makedirs(out, exist_ok=True)
+    web = os.path.join(ROOT, "sim", "sys", "out", "web")
+    for f in ("index.html", "zsys-page.js", "zsys.js", "zsys.wasm"):
+        shutil.copy(os.path.join(web, f), os.path.join(out, f))
+    with open(sim, "rb") as i, gzip.open(os.path.join(out, "zeitlos-sim.img.gz"), "wb", compresslevel=9) as o:
+        shutil.copyfileobj(i, o, 1 << 20)
+    if card and card.endswith(".gz"):			# a release's zeitlos-base.img.gz: as it is
+        shutil.copy(card, os.path.join(out, "zeitlos.img.gz"))
+    elif card:
+        with open(card, "rb") as i, gzip.open(os.path.join(out, "zeitlos.img.gz"), "wb", compresslevel=9) as o:
+            shutil.copyfileobj(i, o, 1 << 20)
+    # A browser keeps what it fetched -- zsys.wasm above all -- and a page
+    # whose glue is new and whose machine is old is the one that "has no
+    # game mode". So every file the page fetches is named with the build's
+    # stamp: a deploy is fetched anew, and an unchanged one comes from the
+    # cache as before. The page writes the stamp to its console.
+    import hashlib
+    h = hashlib.sha256()
+    for f in ("zsys.js", "zsys.wasm", "zsys-page.js", "zeitlos-sim.img.gz", "zeitlos.img.gz"):
+        p = os.path.join(out, f)
+        if os.path.exists(p):
+            with open(p, "rb") as fh:
+                h.update(fh.read())
+    stamp = h.hexdigest()[:10]
+    idx = os.path.join(out, "index.html")
+    with open(idx) as fh:
+        page = fh.read()
+    page = page.replace('<script src="zsys.js"></script>',
+                        '<script>window.ZSYS_V = "%s";</script>\n<script src="zsys.js?v=%s"></script>' % (stamp, stamp))
+    page = page.replace('<script src="zsys-page.js"></script>', '<script src="zsys-page.js?v=%s"></script>' % stamp)
+    with open(idx, "w") as fh:
+        fh.write(page)
+    total = sum(os.path.getsize(os.path.join(out, f)) for f in os.listdir(out))
+    print("\nbuild %s" % stamp)
+    print("\n%s -- %d files, %.1f MB; serve the directory, open index.html%s"
+          % (os.path.relpath(out, ROOT), len(os.listdir(out)), total / 1e6,
+             "" if card else " (no card: add --card for one, or the page runs without)"))
+
+
 def cmd_sdcard(args):
     """Just the card. No version, no dist directory, no gateware.
 
@@ -801,11 +940,13 @@ def cmd_sdcard(args):
         os.makedirs(d, exist_ok=True)
 
     packs = sets = None
+    exclude = None
     if args.variant:
         try:
             _k, _stem, sets, packs = mkfatimg.variant(args.variant)
         except mkfatimg.FatError as e:
             die(str(e))
+        exclude = mkfatimg.variant_exclude(args.variant) or None
     if args.sets:
         sets = [x for x in args.sets.replace(",", " ").split() if x]
         if "base" not in sets:
@@ -816,7 +957,8 @@ def cmd_sdcard(args):
                      if mkfatimg.PACK_SET.get(pk, "base") in sets]
     try:
         shipped = mkfatimg.build(ROOT, out, ark_dir=args.ark, packs=packs,
-                                 sets=sets, first_run=not args.no_first_run)
+                                 sets=sets, first_run=not args.no_first_run,
+                                 exclude=exclude)
     except mkfatimg.FatError as e:
         die("SD image: %s" % e)
 
@@ -1204,6 +1346,8 @@ def make_parser():
     b.add_argument("--jobs", "-j", type=int)
     b.add_argument("--ark", help="ARK checkout (default sw/data/ark)")
     b.add_argument("--no-sdcard", action="store_true")
+    b.add_argument("--no-sim", action="store_true",
+                   help="leave out zeitlos-sim.img (docs/sim_parity.md)")
     b.add_argument("--sdcards",
                    default=",".join(v[0] for v in mkfatimg.VARIANTS),
                    help="card images to build (default: all of %s). "
@@ -1253,6 +1397,20 @@ def make_parser():
     # The SD card image on its own -- no gateware, no dist/<version>/,
     # no version at all. This is what tools/mkfatimg.sh calls, and what
     # anyone wanting a card without a two-hour place-and-route wants.
+    sm = sub.add_parser("sim", help="build only the sim image, for sim/sys/zsys")
+    sm.add_argument("--out", default="images/zeitlos-sim.img",
+                    help="where to write it (default images/zeitlos-sim.img)")
+    sm.add_argument("--zar", help="the core apps' archive (default: the newest output/<board>/apps.zar, "
+                    "as flash_apps writes it; checked against CORE_APPS)")
+    sm.set_defaults(func=cmd_sim)
+
+    wb = sub.add_parser("web", help="the page that runs Zeitlos in a browser (sim/sys/web)")
+    wb.add_argument("--out", default="images/web", help="the directory (default images/web)")
+    wb.add_argument("--sim", default="images/zeitlos-sim.img", help="the sim image (default images/zeitlos-sim.img)")
+    wb.add_argument("--card", help="an SD card image, served gzipped (default images/zeitlos.img, "
+                    "as zrelease sdcard writes it, if there is one; a release's .img.gz as it is)")
+    wb.set_defaults(func=cmd_web)
+
     sd = sub.add_parser("sdcard", help="build only the SD card image")
     sd.add_argument("--out", default="images/zeitlos.img",
                     help="where to write it (default images/zeitlos.img)")
@@ -1260,9 +1418,10 @@ def make_parser():
                     help="also write <out>.gz")
     sd.add_argument("--ark", help="ARK checkout (default sw/data/ark)")
     sd.add_argument("--variant",
-                    choices=[v[0] for v in mkfatimg.VARIANTS],
-                    help="one of a release's card images (default: "
-                         "every set, zdocs + arklite, or $ZEITLOS_ASK_PACKS)")
+                    choices=[v[0] for v in mkfatimg.VARIANTS + mkfatimg.EXTRA_VARIANTS],
+                    help="one of a release's card images, or emu, the emulator's -- "
+                         "every set it can use, less the apps it cannot run yet "
+                         "(default: every set, zdocs + arklite, or $ZEITLOS_ASK_PACKS)")
     sd.add_argument("--sets",
                     help="only these sets, e.g. base,work (base is "
                          "always there; docs/update.md, \"Sets\")")

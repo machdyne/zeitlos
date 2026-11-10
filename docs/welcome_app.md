@@ -107,18 +107,19 @@ none.
   (`UTC+5:30` typed into the file) shows nothing selected, and Next
   keeps it.
 - **Ready** shows the keyboard, time zone and display colour in use,
-  and three buttons. Each starts another app and leaves this window
+  and two buttons. Each starts another app and leaves this window
   open behind it:
 
   | button | starts |
   |---|---|
-  | Take the tour | `slide` with `/data/slide/tour.zsl` ([slide_app.md](slide_app.md)) |
   | Start the course | `learn`, whose first course is Getting started ([learn.md](learn.md)) |
   | Set a password | `settings security` ([security.md](security.md)) |
 
-  These are card apps. One that is not on the card (the tour is in the
-  `work` set) is reported on the status line, and its argument is taken
-  back so that it is not handed to whatever opens next.
+  These are card apps. One that is not on the card is reported on the
+  status line, and its argument is taken back so that it is not handed
+  to whatever opens next. (There was a "Take the tour" button; the tour
+  it opened, `/data/slide/tour.zsl`, is a tour of slide, not of
+  Zeitlos, so it is slide's own, from its Open dialog.)
 - **A card that refuses writes** (write-protected): the status line
   says `not saved: the card could not be written`, and the pages go
   on.
@@ -158,6 +159,17 @@ Once, in either of two cases (`first_run_check()` in `wm`, and
 - **The Machdyne case.** A computer shipped with a written card has
   both: the card's mark and an empty store. The first boot shows the
   welcome and the questions, and both marks are cleared.
+- **When it does not open, the console says why** -- one line from
+  `wm` at the end of boot:
+
+  | the line | so |
+  |---|---|
+  | `wm: welcome: not a new card (no /sys/firstrun)` | the card has been booted before, or was updated or copied rather than written from an image -- by design, it is somebody's |
+  | `wm: welcome: no card, and the flash store is read-only` | this bitstream cannot write the flash (`FLASHW`) |
+  | `wm: welcome: no card, and shown already (apps.welcome.seen)` | this machine has shown it |
+  | `wm: could not start welcome`, or no line at all | it is not in flash -- `/apps/welcome` is missing from `ls /apps` -- because the core apps' archive (and so its `wm`) predates it: `make BOARD=<board> flash_apps`, and for the emulator `zrelease sim`, which now refuses an archive without it |
+
+  `run welcome` at the console, or from a terminal, opens it any time.
 - **A card for a bench or a test rig:**
 
   ```

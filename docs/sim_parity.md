@@ -1,7 +1,11 @@
 # sim: the whole system on a host, and in a browser (plan)
 
-**Status: plan, round 0. Nothing here is built yet.** Decisions needed
-are at the end.
+**Status: milestones 1 to 4 done** -- the real BIOS, kernel and apps
+run in `sim/sys` ([zsys.md](zsys.md)) to a usable desktop, with a
+release's card image, a keyboard and a mouse: in a window on a PC, and
+in a page (`zrelease web`), with sound. Releases carry
+`zeitlos-sim.img`. Milestone 5 is done but for T2, which only the
+console profile has; milestone 6 is next.
 
 `sim/` today runs **one app** against host code that stands in for the
 kernel ([sim/README.md](../sim/README.md), "The OS layer"). The goal is
@@ -60,12 +64,12 @@ Read from `rtl/`, `sw/bios/`, `sw/os/` and `sim/` at `1fd182f`.
 | CSRs at `0x7000_0000` (magic, FEATURES 1-3, memory size, flash base word 63) | magic and FEATURES3 | the whole table for the chosen board | small |
 | UART0 at `0xf000_0000` (16550) | stdin/stdout | the same, and its interrupt | small |
 | timer (`timer` instruction, the kernel's tick) | -- | yes: the scheduler and every timeout depend on it | small |
-| socctl (video mode, brightness, colour window, reboot) | partial | the registers the kernel and wm read and write | small |
-| GPU: line rasterizer, blitter, cursor sprites | raster and fill; **blit copy is a no-op** | copy mode, the cursor sprites, game-mode planes | medium |
-| SD card: bit-banged SPI on `reg_sdcard` (`0xb000_0000`, `SPI_SDCARD`) | reads as zero | an SD card in SPI mode behind the pins: CMD0/8/55/41/58/17/24/25, CRC optional, a card image file | medium |
-| keyboard and mouse | the mouse cursor register | see "Input", below | medium |
-| RTC | -- | counting seconds from the host clock | small |
-| audio mixer | -- | its registers, mixed to SDL audio / WebAudio | medium, later |
+| socctl (video mode, brightness, colour window, reboot) | partial | the registers the kernel and wm read and write | small -- **done** (milestone 2), less colour and game mode |
+| GPU: line rasterizer, blitter, cursor sprites | raster and fill; **blit copy is a no-op** | copy mode, the cursor sprites, game-mode planes | medium -- **done** (milestones 2 and 5): game mode, eight planes, chunky, the colour window, desktop colour |
+| SD card: the SPI controller (`rtl/spim.v`, `0xb000_0000`, `SPI_SDCARD`) | reads as zero | an SD card in SPI mode behind it: CMD0/8/55/41/58/17/24/25, CRC optional, a card image file | medium -- **done** (milestone 2) |
+| keyboard and mouse | the mouse cursor register | see "Input", below | medium -- **done** (milestone 3): the HID-only ports |
+| RTC | -- | counting seconds from the host clock | small -- **done** (milestone 2): from 0 as on the board, or the host's time (`--clock`) |
+| audio mixer | -- | its registers, mixed to SDL audio / WebAudio | medium -- **done** (milestone 5): the FIFO, the mixer, FSDIV, the volume, IRQ 7; SDL audio, an AudioWorklet, `--wav` |
 | VMOUSE, `hid_inject` | -- | for automate and the remote desktop page | small, later |
 | network | -- | later, if at all in a browser (see the end) | large |
 
@@ -87,66 +91,143 @@ The second is much less work and exercises the same kernel path from
 the registers up. The first exercises the `usb` driver too, and is the
 board most people will have.
 
+## Decided (2026-11-10)
+
+| | |
+|---|---|
+| the approach | **emulate the SoC**; `simos.c` stays, for single-app runs |
+| the board | **a Lakritz without the USB host**: HID reports written straight into the `reg_usbN_*` registers. The USB host controller later |
+| the CPU | **Zeitlos32**, with zeitlos32p's IRQ timer (the kernel needs it) |
+| the images | **the release images as they ship**, and a **sim image** in every release -- the BIOS where the gateware would be -- for the web page, so visitors are not sent the gateware |
+| the network | **not yet** |
+
 ## The board it emulates
 
-One virtual board, `sim`, described the way a real one is: a feature
-set the CSRs report, the memory size, which devices answer. Proposed
-first: **a Lakritz without the USB host** -- 32MB, the GPU with raster,
-blit and cursor, `SPI_SDCARD`, UART0, the RTC, HID-only input, no
-colour planes at first. It runs the Lakritz release image's kernel and
-core apps; only the gateware is replaced by the emulator.
+One virtual board, described the way a real one is: a feature set the
+CSRs report, the memory size, which devices answer. **A Lakritz
+without the USB host** -- 32MB, the GPU with raster, blit and cursor,
+`SPI_SDCARD`, UART0, the RTC, HID-only input, no colour planes at
+first -- built up a milestone at a time; milestone 1 has the headless
+part of it ([zsys.md](zsys.md), "The board"). It runs the release's
+kernel and core apps; only the gateware is replaced by the emulator.
 
 ## Milestones
 
 Each one is a round: built, host-tested, and the docs updated.
 
-1. **The kernel's prompt on the host's terminal.** PicoRV32 interrupts,
-   the timer, the MTU, the full memory map and CSRs, UART0. The BIOS
-   (`sw/bios`, built for the board) loads the kernel from a flash image
-   (`release/lib/mkflashimg.py`'s output). Headless: `zsim
-   --flash zeitlos-lakritz.img` reaches the kernel shell, `init` runs
-   and fails cleanly at the card. Test: a script types `ps` and
-   `help` at the UART and checks the answers.
-2. **The desktop.** The SD card model with the release's card image,
-   the blitter's copy mode and cursor sprites, socctl. Boot reaches
-   `init: done`; wm draws the desktop. Test: a headless boot writes a
-   screenshot and compares it with one checked in.
-3. **Typing and pointing.** HID input from SDL; the SDL front end runs
-   the whole system interactively at host speed. `term`, `text`,
-   `files`, `welcome` usable. Test: an automate script drives it.
-4. **The browser.** The same emulator through Emscripten (`main_sdl.c`
-   is SDL2, which Emscripten provides). A page that fetches the flash
-   and card images, keyboard and mouse from the page, the card image
-   kept in the browser's storage between visits if the owner chooses.
-   Size and speed measured; the goal is a desktop that is usable at
-   the board's speed or better.
-5. **Sound and colour.** The audio mixer to SDL audio and WebAudio;
-   game-mode colour planes and the colour window; T2 (`sim/gtri.c`
-   exists for its triangles).
+1. **The kernel's prompt on the host's terminal. Done.** Zeitlos32's
+   interrupts and timer, the MTU, the memory map and CSRs, UART0, the
+   card's SPI controller with no card. The BIOS loads the kernel from
+   the flash image; `fs`, `net` and `console` start from the core apps'
+   archive; `init: done` at 1.03 seconds of the machine's time.
+   Tests: the core's own nine test programs, a boot that types `ps`
+   and reads the answer, a release-style image with `--bios`
+   ([zsys.md](zsys.md), "Testing").
+2. **The desktop. Done.** The blitter in every mode, the line
+   rasterizer, glyph memory, the cursor's slots, socctl, the RTC, and an
+   SD card in SPI mode with the release's card image, written through
+   (or a snapshot). `fs` mounts the card, wm draws the desktop and the
+   dock, `welcome` greets a new card, apps started at the console open
+   windows; `reboot` reconfigures. Tests: the devices register by
+   register (`test_zdev`, 55 checks), and a boot that writes a
+   screenshot on which every window wm placed must have its frame --
+   in place of comparing with a checked-in picture, which would fail
+   at every change to wm's look ([zsys.md](zsys.md), "Testing").
+3. **Typing and pointing. Done.** The two USB HID ports, a keyboard
+   and a mouse, reporting and interrupting as `rtl/usb_hid.v` does --
+   both through the registers, not `VMOUSE`, so the kernel's and wm's
+   real input paths run; the flash's write path (`FLASHW`), so the
+   key/value store is writable and `welcome` greets a machine with no
+   card too. `--window`: SDL2, the screen redrawn a dirty row at a
+   time. Headless, `--keys` and `--click` script the devices. Tests:
+   the registers (`test_zdev`, 74 checks in all), the store kept
+   across boots, Tab and Enter in welcome, Skip, a click on the dock.
+   (An automate script instead was the plan; the scripted devices
+   test the same path without depending on a card app.)
+4. **The browser. Done.** The same machine through Emscripten -- but
+   **not through SDL**, as planned: the page owns the canvas, input and
+   fetches anyway, so `web/zsys_web.c` is a dozen calls and
+   `web/zsys-page.js` the rest; nothing to download at build time, 39KB
+   of WebAssembly and 68KB of glue for a visitor. Gzipped images
+   (`zrelease web`: 7.8MB in all with the base card); a visitor's
+   changes kept in IndexedDB if they tick the box. **85 million
+   instructions a second, 72% of native, eight times a board.** Test:
+   the page in a headless Chromium (Playwright), a visitor's path from
+   the boot to a reload that is the same machine.
+5. **Sound and colour.** **Sound done**: the audio block and its mixer
+   with the RTL's arithmetic, to SDL's audio, an AudioWorklet in the
+   page, and `--wav` for tests (`audiotest`'s tone measured at 440 Hz;
+   tts's speech reaching the page). The audio set is back on the
+   emulator's card. **Colour done**: game mode, eight planes (a 45F
+   board's video: more than Lakritz's six, so every program with colour
+   shows it), chunky, the colour window and desktop colour's exact path
+   -- mausrun, planedemo and colwin run, and mausrun3d and mauskart3d
+   in software chunky (15 frames a second), so all five are back on
+   the emulator's card. **T2 not done**: it is only in the console
+   profile (`lakritz_console`: VRAM in SDRAM, no desktop), a machine of
+   its own; the 3D games do without it. A full-screen button on the
+   page, Ctrl+Alt+Enter in the window.
 6. **Later, by decision:** the USB host controller model (the real
    `usb` driver path), the MPU, the TRNG and crypto blocks, network.
 
 ## Speed
 
-The emulator interprets RV32IM. A simple interpreter on a current PC
-runs a few hundred million instructions a second natively and perhaps
-a third of that as WebAssembly; the board runs 48 million cycles a
-second with several cycles an instruction. So the host should be
-faster than the board, and the browser about as fast -- to be measured
-in milestone 1 with `tools/simprof.py`. The cycle model (`sim/cost.c`)
-stays available for timing questions.
+Measured at milestone 1, on the PC it was written on:
+
+| | instructions a second |
+|---|---|
+| a real board: Zeitlos32 at 48MHz, about 5 clocks an instruction ([zeitlos32.md](zeitlos32.md)) | about 10 million |
+| `zsys`, a plain interpreter, `-O2` | about 140 million |
+| `zsys` at the desktop, milestone 2: the GPU's work and the card counted in -- 8 seconds of the machine's time, five apps open, in 0.45 | about 100 million |
+| the WebAssembly build, milestone 4 (timed in Node): the boot to the desktop with a card | **85 million**, 72% of native (the estimate was 60-90) |
+
+So the CPU alone is several times a real board, even in a browser.
+`--cpi` sets how many of the board's clocks each instruction costs: at
+the default 2, the emulated board runs about 24 million instructions
+in each of its seconds, and keeps to wall-clock time; 1 makes it 48.
+
+### Graphics
+
+**The graphics hardware is not emulated gate by gate, and does not
+run on the emulated CPU.** Each GPU block is its registers in front of
+host code doing the same work: when the kernel starts a blit, the
+emulator performs the whole blit, in C, before the next instruction --
+a full-screen fill is a `memset` of 38KB, microseconds. So:
+
+| | on the board | in the emulator |
+|---|---|---|
+| the blitter: fills, patterns, copies, glyphs | bus-bound, a few hundred thousand pixels per frame | host memory speed: effectively free |
+| the line rasterizer | a pixel a clock | the same algorithm in C (`sim/gtri.c` and `machine.c` already have these): free |
+| T2, the triangle engine | its own pipeline | `sim/gtri.c`'s rasteriser, native: tens of millions of pixels a second, more than 320x240 at 60 frames needs |
+| software drawing (zcanvas, an app's own pixels) | the CPU | the emulated CPU: 6-14 times faster than the board |
+
+What costs time in a browser is **getting the picture onto the
+page**, not drawing it. VRAM is 1 bit a pixel (and up to 8 planes in
+game mode), the page wants RGBA. Three things keep that cheap:
+
+1. **Only what changed.** The emulator marks VRAM rows dirty as they
+   are written -- by the CPU or by a GPU block -- and the page converts
+   only those rows. A typed character dirties 8 to 16 rows, not 480.
+2. **The GPU does the conversion.** The page uploads VRAM as it is --
+   38KB for the 640x480 desktop -- as a WebGL texture, and a small
+   shader expands bits and planes to colours through the palette, the
+   phosphor colour and the colour window. The CPU then does almost
+   nothing per frame.
+3. **Frames at the display's rate.** The page draws once per
+   `requestAnimationFrame`, whatever the emulated machine wrote in
+   between, as a monitor scans out VRAM.
+
+If the CPU ever is the bottleneck -- software 3D, a large zcanvas page
+-- the next steps, in order of cost: an instruction cache of decoded
+instructions (often twice as fast), then translating hot code to
+WebAssembly at run time (several times more). Neither is needed for
+milestone 2 or 3; both can be measured with `--stats`.
 
 ## Decisions needed
 
-1. **The approach:** emulate the SoC (A, proposed), keeping `simos.c`
-   for single-app runs?
-2. **The board:** a Lakritz without the USB host, as proposed, or with
-   it -- the USB host model added to milestone 3?
-3. **The CPU model:** PicoRV32's interrupt scheme first (as
-   `boot_picorv32.S`); Zeitlos32 uses the same IRQ numbers -- any
-   difference that matters to you?
-4. **The images:** run release images as they are (`zeitlos-<board>.img`
-   with the gateware region ignored, and `zeitlos.img.gz`), so the
-   browser shows exactly what ships?
-5. **The browser's network:** none (the page says so), or a later
-   round to tunnel the emulated Ethernet over a WebSocket to a relay?
+- **Where the page lives**, and which card it serves: the base card
+  (7MB gzipped) is what `zrelease web --card` was tested with.
+- **Whether a visitor's machine is kept by default.** It is off: the
+  box is unticked until they tick it, and the choice is remembered.
+- After colour and T2: milestone 6 -- the USB host, the MPU, the
+  network (which would bring the net set's apps to the page).

@@ -18,6 +18,7 @@ with [welcome](welcome.md); to program it, [kernel](kernel.md) and
 | [toolchain](toolchain.md) | FPGA tools and the RISC-V compiler |
 | [build](build.md) | How apps are built: `sw/common/app.mk` |
 | [sim\_parity](sim_parity.md) | Plan: the whole system in the simulator, on a host and in a browser |
+| [zsys](zsys.md) | `sim/sys`: the SoC emulated -- the real BIOS, kernel and apps, a card image, keyboard and mouse, in a window or a web page (`zrelease web`) |
 | [boards](boards.md) | Utilisation and timing per board |
 | [ulx3s](ulx3s.md) | Radiona ULX3S notes |
 | [lebkuchen](lebkuchen.md) | Machdyne Lebkuchen (GateMate, RP2040 supervisor): port in progress |

@@ -23,7 +23,7 @@
  *   Time zone    a city or an offset                (system.rtc.timezone)
  *   Display      white, amber, green or paper       (system.video.mode),
  *                only on a bitstream that can change it
- *   Ready        what is in use; the tour, the course, a password
+ *   Ready        what is in use; the course, a password
  *
  * With no card there is nowhere to keep an answer, so it asks nothing:
  * the welcome is the whole of it.
@@ -130,8 +130,7 @@ enum {
 	W_GUIDE,			// Welcome
 	W_SKIP,
 	W_MODE0,			// Display: the four modes are W_MODE0..+3
-	W_TOUR = W_MODE0 + MODE_COUNT,	// Ready
-	W_COURSE,
+	W_COURSE = W_MODE0 + MODE_COUNT,	// Ready
 	W_PASSWORD,
 	W_BACK,				// the bottom of every page
 	W_NEXT,
@@ -140,7 +139,7 @@ enum {
 
 // Each page's first control; the next entry ends it.
 static const int step_first[S_COUNT + 1] = {
-	W_GUIDE, W_MODE0, W_MODE0, W_MODE0, W_TOUR, W_BACK,
+	W_GUIDE, W_MODE0, W_MODE0, W_MODE0, W_COURSE, W_BACK,
 };
 
 static z_widget_t widgets[W_COUNT];
@@ -370,10 +369,9 @@ static void layout(void) {
 	for (int i = 0; i < MODE_COUNT; i++)
 		place(W_MODE0 + i, MARGIN + i * (mw + GAP), y_body + LINE_H + 2, mw, BTN_H);
 
-	// Ready: three buttons, each with a line beside it
-	place(W_TOUR, MARGIN, done_row_y(0), DONE_BTN_W, BTN_H);
-	place(W_COURSE, MARGIN, done_row_y(1), DONE_BTN_W, BTN_H);
-	place(W_PASSWORD, MARGIN, done_row_y(2), DONE_BTN_W, BTN_H);
+	// Ready: two buttons, each with a line beside it
+	place(W_COURSE, MARGIN, done_row_y(0), DONE_BTN_W, BTN_H);
+	place(W_PASSWORD, MARGIN, done_row_y(1), DONE_BTN_W, BTN_H);
 
 	for (int s = 0; s < S_COUNT; s++) z_widget_invalidate(&psets[s]);
 	z_widget_invalidate(&nav);
@@ -530,10 +528,9 @@ static void draw_step(void) {
 		draw_text(MARGIN, y + LINE_H, line);
 		snprintf(line, sizeof(line), "Display     %s", z_video_mode_name(z_video_get_mode()));
 		draw_text(MARGIN, y + 2 * LINE_H, line);
-		draw_text(tx, done_row_y(0) + ty, "a short deck on what is here");
-		draw_text(tx, done_row_y(1) + ty, "Getting started, a course in learn");
-		draw_text(tx, done_row_y(2) + ty, "for the screen lock and network logins");
-		y = done_row_y(3) + 2;
+		draw_text(tx, done_row_y(0) + ty, "Getting started, a course in learn");
+		draw_text(tx, done_row_y(1) + ty, "for the screen lock and network logins");
+		y = done_row_y(2) + 2;
 		draw_text(MARGIN, y, "Finish closes this window. The manuals are in " Z_DIR_DOCS " (F1 in any");
 		draw_text(MARGIN, y + LINE_H, "app), and settings changes anything chosen here.");
 		break;
@@ -834,7 +831,6 @@ static void activate(int idx) {
 	if (idx == W_GUIDE) { open_guide(); return; }
 
 	if (idx >= W_MODE0 && idx < W_MODE0 + MODE_COUNT) apply_video(idx - W_MODE0);
-	else if (idx == W_TOUR) launch("slide", Z_PATH_SLIDE_TOUR, "the tour is open");
 	else if (idx == W_COURSE) launch("learn", NULL, "learn is open: Getting started");
 	else if (idx == W_PASSWORD) launch("settings", "security", "settings is open at Security");
 	else return;
@@ -994,7 +990,7 @@ static void on_wm_msg(z_msg_t *msg) {
 static void widgets_init(void) {
 
 	static const struct { int idx; const char *label; } buttons[] = {
-		{ W_GUIDE, "Read the guide" }, { W_SKIP, "Skip" }, { W_TOUR, "Take the tour" }, { W_COURSE, "Start the course" },
+		{ W_GUIDE, "Read the guide" }, { W_SKIP, "Skip" }, { W_COURSE, "Start the course" },
 		{ W_PASSWORD, "Set a password" }, { W_BACK, "Back" }, { W_NEXT, "Next" },
 	};
 

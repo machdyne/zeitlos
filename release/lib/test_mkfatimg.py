@@ -279,6 +279,30 @@ def main():
         for key, _stem, _sets, _packs in mkfatimg.VARIANTS:
             test_variant(root, key, tmp)
 
+        print("the emulator's card")
+        try:
+            # the mechanism, on an app with a /data/<app>/ of its own
+            pl = mkfatimg.plan(root, packs=(), verbose=False,
+                               sets=("base", "games"), exclude={"mausrun": "a test", "web": "a test"})
+            dests = [d for d, _s, _p in pl.files]
+            check("apps/mausrun" not in dests, "an app left out is not on the card")
+            check(not [d for d in dests if d.startswith("data/mausrun/")],
+                  "and nor is its /data/<app>/")
+            check("apps/snake" in dests, "the rest of its set is")
+            check("mausrun" in pl.excluded and "web" not in pl.excluded,
+                  "only what the sets would have put there is reported left out")
+            check(not [d for d in pl.set_of if d.startswith("data/mausrun/")],
+                  "and the manifest does not list it")
+            # and the emulator's own list, on its own sets
+            _k, _st, esets, _pk = mkfatimg.variant("emu")
+            pe = mkfatimg.plan(root, packs=(), verbose=False, sets=esets,
+                               exclude=mkfatimg.variant_exclude("emu"))
+            on = set(d for d, _s, _p in pe.files)
+            check(not [a for a in mkfatimg.EMU_EXCLUDE if "apps/" + a in on],
+                  "the emulator's card has none of EMU_EXCLUDE")
+        except mkfatimg.FatError as e:
+            check(False, "a plan for the emulator's card (%s)" % e)
+
         print("card names")
         # The predicate, without formatting. 255 UTF-16 units is the
         # longest create_name() accepts; zsubjects.h is the header that

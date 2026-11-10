@@ -198,13 +198,45 @@ VARIANTS = [
 ]
 SERVER_VARIANTS = ("base", "serious", "full")
 
+# -- the emulator's card (docs/zsys.md, "In a browser") --
+#
+# Not one a release ships for boards, so not in VARIANTS: the card the
+# web page serves, `zrelease sdcard --variant emu`. Every set the
+# emulated board can use, less the apps that cannot work on it yet --
+# each for what it needs that sim/sys does not have. An app left out
+# takes its /data/<app>/ with it, and the dock and the launcher, which
+# list what /apps has, leave it out too. When sim/sys gains a device,
+# the apps that wanted it come off this list.
+EMU_EXCLUDE = {
+    # pins, buses and a second UART
+    "mmod": "GPIO", "logic": "GPIO", "i2c": "an I2C bus", "sechs": "a PMOD bus",
+    "serial": "UART1", "zlink": "a serial link",
+    # the network, and the TRNG the servers seed their keys from
+    "web": "the network", "irc": "the network", "netserve": "the network",
+    "zerdesk": "the network", "mesh": "the network", "bbs": "the network and the TRNG",
+    "fed": "the network and the TRNG", "update": "the network",
+    # a USB stick
+    "backup": "USB storage",
+}
+
+EXTRA_VARIANTS = [
+    ("emu", "zeitlos-emu", ("base", "work", "audio", "dev", "embedded", "games"),
+     ("zdocs", "edu-zeitlos")),
+]
+VARIANT_EXCLUDE = {"emu": EMU_EXCLUDE}
+
 
 def variant(key):
-    for v in VARIANTS:
+    for v in VARIANTS + EXTRA_VARIANTS:
         if v[0] == key:
             return v
     raise FatError("no card variant `%s` (have: %s)"
-                   % (key, ", ".join(v[0] for v in VARIANTS)))
+                   % (key, ", ".join(v[0] for v in VARIANTS + EXTRA_VARIANTS)))
+
+
+def variant_exclude(key):
+    """The apps a variant leaves out, {app: why}; {} for most."""
+    return dict(VARIANT_EXCLUDE.get(key, {}))
 
 
 # -- sizing --
@@ -952,6 +984,7 @@ class Plan(object):
     """
 
     def __init__(self):
+        self.excluded = []      # apps a variant left out (EMU_EXCLUDE)
         self.files = []
         self.early = 0
         self.packs = []
@@ -993,7 +1026,7 @@ def data_inputs():
             + MAUSRUN_FILES)
 
 
-def plan(root, ark_dir=None, packs=None, verbose=True, sets=None):
+def plan(root, ark_dir=None, packs=None, verbose=True, sets=None, exclude=None):
     """Gather and check everything a card holds. Writes nothing.
 
     `sets`: the set names to include (SETS); None, all of them. An ask
@@ -1138,6 +1171,24 @@ def plan(root, ark_dir=None, packs=None, verbose=True, sets=None):
     pl.files = [pl.files[i] for i in keep]
     pl.set_of = {f[0]: every[f[0]] for f in pl.files}
 
+    # -- apps left out (a variant's, EMU_EXCLUDE): the program and its
+    # own /data/<app>/; nothing else of a set goes with it --
+    if exclude:
+        apps_dir, data_dir = zcard("Z_DIR_APPS"), zcard("Z_DIR_DATA")
+        gone = set()
+        for a in exclude:
+            gone.add("%s/%s" % (apps_dir, a))
+        def out(dest):
+            parts = dest.split("/")
+            return dest in gone or (len(parts) > 2 and parts[0] == data_dir
+                                    and parts[1] in exclude)
+        had = set(f[0] for f in pl.files)     # what the sets put there
+        drop = set(i for i, f in enumerate(pl.files) if out(f[0]))
+        pl.early -= sum(1 for i in drop if i < pl.early)
+        pl.files = [f for i, f in enumerate(pl.files) if i not in drop]
+        pl.set_of = {f[0]: pl.set_of[f[0]] for f in pl.files}
+        pl.excluded = sorted(a for a in exclude if "%s/%s" % (apps_dir, a) in had)
+
     # Every destination once, across every list: an update could not
     # say which of two sources a path is.
     seen = set()
@@ -1180,7 +1231,7 @@ def plan(root, ark_dir=None, packs=None, verbose=True, sets=None):
 
 
 def build(root, out_path, ark_dir=None, verbose=True, packs=None,
-          name=None, sets=None, first_run=True):
+          name=None, sets=None, first_run=True, exclude=None):
     """Build the SD card image. Returns a list of (name, size) shipped.
 
     `packs` names the ask packs to ship; None means
@@ -1196,12 +1247,18 @@ def build(root, out_path, ark_dir=None, verbose=True, packs=None,
     `name` is the release name /sys/manifest records ("v" + the tree's
     version when not given), so an update knows what the card is.
 
+    `exclude` names apps to leave out, with their /data/<app>/ (a
+    variant's, variant_exclude()).
+
     `first_run` marks the card as a new one: /sys/firstrun, which makes
     wm start `welcome` once (docs/welcome_app.md). It is not in the
     manifest, so `update` never writes it -- only a card image does.
     """
     preflight()
-    pl = plan(root, ark_dir=ark_dir, packs=packs, verbose=verbose, sets=sets)
+    pl = plan(root, ark_dir=ark_dir, packs=packs, verbose=verbose, sets=sets,
+              exclude=exclude)
+    if verbose and exclude:
+        print("    left out: %s" % ", ".join(pl.excluded))
 
     sizes = pl.sizes
     nfiles_pack = sum(len(fs) for _n, fs in pl.packs)

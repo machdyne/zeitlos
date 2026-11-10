@@ -327,6 +327,18 @@ $ sudo udevadm control --reload-rules
 $ minicom -o -D /dev/zeitlos
 ```
 
+### Without a board
+
+The emulator in `sim/sys` runs the real BIOS, kernel and apps from a
+release's `zeitlos-sim.img` and one of its card images, in a window
+with your keyboard and mouse -- or, built for WebAssembly, in a web
+page ([docs/zsys.md](docs/zsys.md)):
+
+```
+$ make -C sim/sys                    # with SDL2 (libsdl2-dev) for the window
+$ sim/sys/zsys --flash zeitlos-sim.img --sd zeitlos.img --window
+```
+
 ### Building from source
 
 1. Build and flash the system:

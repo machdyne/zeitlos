@@ -461,22 +461,19 @@ int main(int argc, char **argv) {
 	expect(!strcmp(widgets[W_NEXT].label, "Finish") && focus == STOP_NAV + 1, "Next reads Finish, and has the keyboard");
 	render(prefix, "4-ready");
 
-	// -- the Ready page's three buttons --
+	// -- the Ready page's two buttons (no tour: slide's is slide's own) --
 	handle_key('\t', 0);
 	expect(focus == STOP_PAGE + 0, "Tab from Finish wraps to the first button");
 	handle_key(' ', 0);
-	expect(ran_n == 1 && !strcmp(ran[0], "slide") && !strcmp(ran_arg[0], Z_PATH_SLIDE_TOUR),
-		"Take the tour: slide, with the tour deck");
+	expect(ran_n == 1 && !strcmp(ran[0], "learn") && !ran_arg[0][0], "Start the course: learn");
 	expect(step == S_DONE && !finished, "and the welcome stays open behind it");
-	click_widget(W_COURSE);
-	expect(ran_n == 2 && !strcmp(ran[1], "learn") && !ran_arg[1][0], "Start the course: learn");
 	click_widget(W_PASSWORD);
-	expect(ran_n == 3 && !strcmp(ran[2], "settings") && !strcmp(ran_arg[2], "security"),
+	expect(ran_n == 2 && !strcmp(ran[1], "settings") && !strcmp(ran_arg[1], "security"),
 		"Set a password: settings, at Security");
 	apps_missing = true;
 	arg_takes = 0;
-	click_widget(W_TOUR);
-	expect(ran_n == 3 && strstr(status, "slide is not on this card") != NULL, "an app that is not on the card: said so");
+	click_widget(W_PASSWORD);
+	expect(ran_n == 2 && strstr(status, "settings is not on this card") != NULL, "an app that is not on the card: said so");
 	expect(arg_takes == 1 && !have_pending, "and its argument is taken back, not left for the next app");
 	apps_missing = false;
 

@@ -343,6 +343,32 @@ def build_software(root, core_apps, dry=False, jobs=None):
             "core_apps": list(core_apps)}
 
 
+# -- the sim image (docs/sim_parity.md, "Images") --
+#
+# zeitlos-sim.img: a flash image for the emulator (sim/sys), laid out as
+# every target's is, with a BIOS where the gateware would be -- so a
+# page that runs Zeitlos sends no gateware, which the emulator has no
+# use for. The BIOS is the Lakritz one: the emulated board is a Lakritz
+# (without the USB host, for now), and nothing in the BIOS differs
+# between the SDRAM boards but the board name.
+SIM_IMAGE = "zeitlos-sim.img"
+SIM_BIOS_BOARD = ("LAKRITZ", "ECP5")
+
+
+def build_sim_image(root, outdir, software, dry=False):
+    """The sim image, from the shared kernel and core app archive."""
+    board, family = SIM_BIOS_BOARD
+    print("\n=== the sim image ===")
+    run(["make", "-C", os.path.join(root, "sw", "bios"), "bios.bin",
+         "BOARD=" + board, "FAMILY=" + family], root, dry=dry)
+    out = os.path.join(outdir, SIM_IMAGE)
+    run([sys.executable, os.path.join(root, "sim", "sys", "mksimimg.py"),
+         "--bios", os.path.join(root, "sw", "bios", "bios.bin"),
+         "--kernel", software["kernel"], "--zar", software["zar"], "-o", out],
+        root, dry=dry)
+    return out
+
+
 def zar_command(root, zar, apps):
     """tools/mkzar.py for `apps` and every file in flash (CORE_FILES,
     made by `make core-files` into output/releases/files), with the

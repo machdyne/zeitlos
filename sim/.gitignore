@@ -5,3 +5,5 @@ testapp/*.o
 testapp/*.elf
 testapp/*.bin
 testapp/*.map
+sys/zsys
+sys/out/

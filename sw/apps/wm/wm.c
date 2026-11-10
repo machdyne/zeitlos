@@ -1330,10 +1330,23 @@ static void first_run_check(void) {
 		// whether a card can be read and written.
 		da.total_kb = 0;
 		da.free_kb = 0;
+		// Each way of not starting it says why, once, in the log: a
+		// card that has been booted, or updated rather than written, has
+		// no mark, and that is the question asked first (`run welcome`
+		// starts it by hand).
 		rv = (z_obj_t *)k(Z_SYS_FS_DF, (uint32_t *)&da, 0);
-		if (!rv || rv->val.uint32 != Z_OK || da.total_kb > 0) return;
-		if (z_kv_info(&ki) != Z_KV_OK || !(ki.flags & Z_KV_INFO_WRITABLE)) return;
-		if (z_kv_get(Z_WELCOME_KV_SEEN, b, sizeof(b), &len) != Z_KV_E_NOENT) return;
+		if (!rv || rv->val.uint32 != Z_OK || da.total_kb > 0) {
+			printf("wm: welcome: not a new card (no " Z_PATH_SYS_FIRSTRUN ")\n");
+			return;
+		}
+		if (z_kv_info(&ki) != Z_KV_OK || !(ki.flags & Z_KV_INFO_WRITABLE)) {
+			printf("wm: welcome: no card, and the flash store is read-only\n");
+			return;
+		}
+		if (z_kv_get(Z_WELCOME_KV_SEEN, b, sizeof(b), &len) != Z_KV_E_NOENT) {
+			printf("wm: welcome: no card, and shown already (" Z_WELCOME_KV_SEEN ")\n");
+			return;
+		}
 		why = "no card, and this machine has not shown the welcome";
 	}
 
