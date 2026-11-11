@@ -353,6 +353,13 @@ explicit release (`buttons` bit 7), and a second of silence drops the
 register on its own, so the physical USB mouse is never left latched
 out.
 
+**A finger** ([touch.md](touch.md)): from a phone, the page sends
+`buttons` bit 6 for a finger -- the virtual mouse's TOUCH bit, which wm
+reads as tap, drag and hold -- and bits 5:3 as a signed count of wheel
+notches (-4 to 3) when two fingers are dragged, one every 30 CSS pixels.
+The same five bytes: the ESP32 refuses any other length, and an older
+Zeitlos reads only bits 2:0.
+
 Note the pointer you see is the browser's own. Zeitlos composes its
 cursor in the scanout, not in VRAM ([cursor.md](cursor.md)), so it is
 on HDMI and not in the stream.

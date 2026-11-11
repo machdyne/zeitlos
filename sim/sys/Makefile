@@ -137,6 +137,19 @@ test-input: test-desktop
 	grep -q "starting welcome" out/kv1.log && ! grep -q "starting welcome" out/kv2.log && \
 		echo "test-input: the flash keeps the key/value store: welcome once, not twice" || \
 		{ echo "test-input: FAILED (out/kv1.log, out/kv2.log)"; exit 1; }; \
+	./zsys --flash out/boot.img --snapshot --fast --seconds 25 --no-keyboard --wait 9000 \
+		--tap 421,322 --wait 1500 --tap 102,452 --wait 4000 --tap 309,375 --wait 300 --tap 379,341 \
+		--wait 1000 --touch-down 200,27 --touch-move 230,60 --touch-move 260,110 --touch-up 260,110 \
+		--wait 2500 --screenshot out/touch.png > out/touch.log 2>&1 && \
+	grep -q "no keyboard: the on-screen keyboard for untitled" out/touch.log && \
+	grep -q "win [0-9]* 'keyboard' pid [0-9]* at 16,277 608x203" out/touch.log && \
+		echo "test-input: touch, no keyboard: taps close welcome and start text, and the keyboard opens for it (out/touch.png)" || \
+		{ echo "test-input: FAILED: touch (out/touch.log)"; exit 1; }; \
+	./zsys --flash out/boot.img --snapshot --fast --seconds 20 --wait 9000 \
+		--click 421,322 --wait 1500 --click 102,452 --wait 3000 > out/touch-kbd.log 2>&1 && \
+	grep -q "launched 'text'" out/touch-kbd.log && ! grep -q "no keyboard:" out/touch-kbd.log && \
+		echo "test-input: with a keyboard plugged in, text opens and the on-screen keyboard does not" || \
+		{ echo "test-input: FAILED: a keyboard there (out/touch-kbd.log)"; exit 1; }; \
 	if [ -z "$(ZSYS_CARD)" ]; then echo "test-input: keyboard and mouse skipped -- set ZSYS_CARD to a card image"; exit 0; fi; \
 	./zsys --flash out/boot.img --sd "$(ZSYS_CARD)" --snapshot --fast --seconds 4 --after "firstrun removed" \
 		--keys '\t\n' --screenshot out/keys.png > out/keys.log 2>&1 && \
@@ -173,7 +186,7 @@ z=sum(1 for i in range(1,len(s)) if s[i-1]<0<=s[i]); sys.exit(0 if 430<=z<=450 e
 
 EMCC ?= emcc
 WEB = out/web
-WEB_EXPORTS = _main,_zw_alloc,_zw_init,_zw_run,_zw_halted,_zw_render,_zw_rgba,_zw_dirty_lo,_zw_dirty_hi,_zw_key,_zw_mouse,_zw_wheel,_zw_audio_take,_zw_uart_in,_zw_card,_zw_card_written,_zw_card_blocks,_zw_flash,_zw_flash_size,_zw_flash_writes
+WEB_EXPORTS = _main,_zw_alloc,_zw_init,_zw_run,_zw_halted,_zw_render,_zw_rgba,_zw_dirty_lo,_zw_dirty_hi,_zw_key,_zw_mouse,_zw_wheel,_zw_touch,_zw_touch_wheel,_zw_touch_off,_zw_keyboard,_zw_audio_take,_zw_uart_in,_zw_card,_zw_card_written,_zw_card_blocks,_zw_flash,_zw_flash_size,_zw_flash_writes
 
 .PHONY: web web-test
 web: $(WEB)/zsys.js $(WEB)/index.html $(WEB)/zsys-page.js

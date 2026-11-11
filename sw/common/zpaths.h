@@ -65,11 +65,10 @@
 #define Z_DIR_DATA                "/data"
 
 #define Z_DIR_DOCS                "/docs"
-/* The guide to the desktop (docs/welcome.md): the page on the card,
- * and its plain-text copy, which is also in flash (CORE_FILES), for a
- * machine with no card. The welcome app opens one or the other. */
+/* The guide to the desktop (docs/welcome.md): in flash (CORE_FILES)
+ * as it is on the card, for `read`, which is in flash too. Until
+ * November 2026 flash held a plain-text copy, /docs/welcome.txt. */
 #define Z_PATH_DOCS_WELCOME       "/docs/welcome.md"
-#define Z_PATH_DOCS_WELCOME_TXT   "/docs/welcome.txt"
 /* The Scheme API reference, in flash (CORE_FILES): repl's (help) and
  * (apropos) read it (tools/gen_zapi.py, docs/scheme_api.md). */
 #define Z_PATH_DOCS_ZAPI          "/docs/zapi.txt"

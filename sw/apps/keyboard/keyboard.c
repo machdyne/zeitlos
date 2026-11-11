@@ -54,8 +54,13 @@
 // Widths in quarters of a key; every row is 60 quarters. A key is a USB
 // usage, a modifier bit, or an action.
 
-#define Q		5			// pixels per quarter: a plain key is 20px
-#define KEY_H	18
+// Two sizes: for a pointer, 20x18-pixel keys, and for a finger -- when
+// wm opens it for a touch screen ("large", docs/touch.md) -- twice
+// that, the whole width of the screen, labelled in the 8x16 font. One
+// drawing, at either scale.
+static int Q = 5;				// pixels per quarter: a plain key is 20px
+static int KEY_H = 18;
+static const z_font_t *kfont = &z_font_5x8;
 #define MARGIN	2
 #define ROWS	5
 #define WIN_W	(60 * Q + 2 * MARGIN + 4)
@@ -212,9 +217,11 @@ static void draw_key(int r, int c) {
 	label(k, s);
 	int cols = 0;
 	for (const char *p = s, *e = s + strlen(s); p < e; ) cols += z_cp_width(z_utf8_next(&p, e));
-	int tx = x + (w - cols * z_font_5x8.w) / 2;
-	int ty = y + (h - z_font_5x8.h) / 2;
-	z_win_draw_utf8_2(&win, tx, ty, s, on ? 0 : 1, on ? 1 : 0, &z_font_5x8);
+	// the big font where the label fits the key, else the small one
+	const z_font_t *f = (cols * kfont->w <= w - 2) ? kfont : &z_font_5x8;
+	int tx = x + (w - cols * f->w) / 2;
+	int ty = y + (h - f->h) / 2;
+	z_win_draw_utf8_2(&win, tx, ty, s, on ? 0 : 1, on ? 1 : 0, f);
 
 }
 
@@ -243,7 +250,8 @@ static void set_status_layout(void) {
 
 static void send(uint8_t usage, bool pressed) {
 	uint32_t ev = ((caps ? Z_KBD_LOCK_CAPS : 0u) << 17) |
-		((uint32_t)mods << 9) | ((uint32_t)usage << 1) | (pressed ? 1u : 0u);
+		((uint32_t)mods << 9) | ((uint32_t)usage << 1) | (pressed ? 1u : 0u) |
+		Z_KBD_EV_ONSCREEN_BIT;		// so wm knows these keys are not a keyboard's
 	hid_inject((int32_t)ev);
 }
 
@@ -366,7 +374,17 @@ int main(void) {
 	if (!z_pid_register("keyboard", reg, sizeof(reg)) || strcmp(reg, "keyboard0"))
 		return 0;
 
-	if (z_win_create_flags(&win, "keyboard", WIN_W, WIN_H, -1, -1,
+	// wm's arguments when it opens the keyboard itself (docs/touch.md):
+	// "bottom" -- along the bottom of the screen, clear of what is being
+	// typed into -- and "large", for a finger.
+	char arg[Z_WM_ARG_MAX];
+	int wx = -1, wy = -1;
+	if (z_launch_arg_take(arg, sizeof(arg))) {
+		if (strstr(arg, "large")) { Q = 10; KEY_H = 34; kfont = &z_font_8x16; }
+		if (strstr(arg, "bottom")) { wx = (640 - WIN_W) / 2; wy = 480 - WIN_H; }
+	}
+
+	if (z_win_create_flags(&win, "keyboard", WIN_W, WIN_H, wx, wy,
 		Z_WIN_FLAG_CLOSE_ICON | Z_WIN_FLAG_CLOSE_KILLS_OWNER |
 		Z_WIN_FLAG_NO_FOCUS) != Z_OK) {
 		return 1;		// no wm: nothing to be a keyboard for

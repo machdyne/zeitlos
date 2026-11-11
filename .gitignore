@@ -117,6 +117,7 @@ sw/apps/fs/tests/test_fs
 sw/apps/fs/tests/test_fs_kernel
 sw/apps/fs/tests/test_fsvol
 sw/apps/usb/tests/test_usb
+sw/apps/usb/tests/test_dig
 
 # python bytecode (esp32/flash.py imports nic_selftest)
 __pycache__/
@@ -159,3 +160,6 @@ sw/bios/*.synthbak
 sw/ext/doomgeneric/
 sw/apps/doom/doom1.wad
 sw/apps/doom/wadpkg/
+
+# The flags each app was last built with (sw/common/app.mk, CFLAGS_STAMP)
+.cflags

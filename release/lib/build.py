@@ -369,12 +369,12 @@ def build_sim_image(root, outdir, software, dry=False):
     return out
 
 
-def zar_command(root, zar, apps):
+def zar_command(root, zar, apps, tier=None):
     """tools/mkzar.py for `apps` and every file in flash (CORE_FILES,
     made by `make core-files` into output/releases/files), with the
-    budgets the Makefile sets -- the same command `make flash_apps`
-    runs."""
-    b = spec.core_budgets(root)
+    budgets the Makefile sets for `tier` (default normal) -- the same
+    command `make flash_apps` runs."""
+    b = spec.core_budgets(root, tier)
     cmd = [sys.executable, os.path.join(root, "tools/mkzar.py"),
            "--budgets", b["budgets_text"], "--store", b.get("store", ""),
            "--files-max", str(b["reserve"]), zar]
@@ -383,11 +383,39 @@ def zar_command(root, zar, apps):
     return cmd
 
 
+def small_core_bins(root, software, dry=False, small=True):
+    """The core apps built small (Z_SMALL, for a board whose CORE_TIER is
+    small -- docs/flash_apps.md, "Two sizes of machine") or, with
+    small=False, built again as every other board has them. The
+    objects are made again either way: sw/common/app.mk's CFLAGS_STAMP
+    sees the flags change."""
+    mk = ["make", "-C", root, "ARCH=" + software["arch"], "core-bins"]
+    if small:
+        mk.append("CORE_TIER=small")
+    run(mk, root, dry=dry)
+
+
 def target_zar(root, target, software, dry=False):
     """The core app archive for `target`'s image: the shared one, unless
     the board sets CORE_APPS_OMIT, in which case an archive of the
-    board's own list, from the same .bin files."""
+    board's own list, from the same .bin files -- or the board is small
+    (CORE_TIER), in which case the core apps are built small for it, the
+    archive made with the small budgets, and the apps built back."""
     apps = target.core_app_list()
+    if getattr(target, "core_tier", "normal") == "small":
+        key = "zar_small:" + " ".join(apps)
+        if key not in software:
+            zar = os.path.join(root, "output", "releases",
+                               "apps-small-%s.zar" % target.name)
+            print("    core apps: built small for %s (CORE_TIER small)"
+                  % target.board)
+            small_core_bins(root, software, dry=dry)
+            try:
+                run(zar_command(root, zar, apps, "small"), root, dry=dry)
+            finally:
+                small_core_bins(root, software, dry=dry, small=False)
+            software[key] = zar
+        return software[key]
     if apps == software["core_apps"]:
         return software["zar"]
     zar = os.path.join(root, "output", "releases", "apps-%s.zar" % target.name)

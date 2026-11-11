@@ -441,6 +441,36 @@ static void test_picture(void) {
 	wr(SOC + 0x0c, 0);
 }
 
+// The virtual mouse (rtl/sysctl.v `VMOUSE) and a finger (docs/touch.md)
+static void test_touch(void) {
+	int x, y;
+	zsys_reset(&s);
+	zsys_mouse(&s, 100, 100, 0);
+	s.irq_pending = 0;
+	zsys_touch(&s, 300, 200, true);
+	uint32_t v = zsys_vmouse_read(&s);
+	CHECK((v & 0x3ff) == 300 && ((v >> 10) & 0x3ff) == 200 && ((v >> 20) & 7) == 1,
+		"a finger down: x, y and the button in the virtual mouse");
+	CHECK((v >> 24 & 1) && (v >> 25 & 1), "present, and TOUCH");
+	CHECK(s.irq_pending & (1u << 6), "and wm is woken (IRQ 6)");
+	zsys_pointer(&s, &x, &y);
+	CHECK(x == 300 && y == 200, "the cursor follows the virtual mouse while it is present");
+	zsys_touch_wheel(&s, -3);
+	CHECK(((zsys_vmouse_read(&s) >> 26) & 0x3f) == ((uint8_t)-3 & 0x3f), "two fingers: the wheel's six bits");
+	zsys_touch(&s, 300, 210, false);
+	CHECK(!((zsys_vmouse_read(&s) >> 20) & 7) && (zsys_vmouse_read(&s) >> 25 & 1), "lifted: no button, still a finger");
+	zsys_vmouse_write(&s, 0);
+	zsys_pointer(&s, &x, &y);
+	CHECK(x == 100 && y == 100, "written 0 (wm, when the mouse moves): the cursor is the mouse's again");
+	s.irq_pending = 0;
+	zsys_keyboard_plugged(&s, false);
+	CHECK(((rd(0xc0000000u) >> 24) & 3) == 0 && (s.irq_pending & (1u << 5)), "no keyboard: port 0 says none, and says so");
+	zsys_reset(&s);
+	CHECK(((rd(0xc0000000u) >> 24) & 3) == 0, "and still none after a reset");
+	zsys_keyboard_plugged(&s, true);
+	CHECK(((rd(0xc0000000u) >> 24) & 3) == 1, "plugged in again");
+}
+
 static void test_t2(void) {
 	s.t2_on = true;
 	bool ok;
@@ -468,6 +498,7 @@ int main(void) {
 	zsys_reset(&s);
 	test_picture();
 	test_t2();
+	test_touch();
 	zsys_free(&s);
 	printf("%s: %d checks, %d failed\n", fails ? "FAIL test_zdev" : "PASS test_zdev", checks, fails);
 	return fails != 0;

@@ -25,6 +25,7 @@ with [welcome](welcome.md); to program it, [kernel](kernel.md) and
 | [releases](releases.md) | Prebuilt images and `release/zrelease` |
 | [zconfig](zconfig.md) | `make config`: the system configurator, with LUT and block-RAM estimates |
 | [update](update.md) | Bringing a card up to date over the network: sets, signed releases, the ABI check |
+| [freeze](freeze.md) | 1.0: freezing the interfaces -- what is frozen, the rules after, what to fix first (a plan) |
 | [distribution](distribution.md) | Publishing releases of your own: name, URL, signing keys |
 | [dfu\_upgrade](dfu_upgrade.md) | Upgrading the DFU bootloader |
 | [config](config.md) | `/sys/zeitlos.cfg` |
@@ -209,6 +210,7 @@ with [welcome](welcome.md); to program it, [kernel](kernel.md) and
 | [settings\_app](settings_app.md) | `settings` |
 | [welcome\_app](welcome_app.md) | `welcome`: what a new machine shows first, and its first questions |
 | [keyboard\_app](keyboard_app.md) | `keyboard` |
+| [touch](touch.md) | Touch screens, pen tablets, and a machine with no keyboard |
 | [ask\_app](ask_app.md) | `ask` |
 | [learn](learn.md) | `learn`: a school on the machine (design) |
 | [learn\_ui](learn_ui.md) | learn's screens: the design, and what changed as built |

@@ -332,6 +332,36 @@ cv.addEventListener('mousemove',mouseSend);
 cv.addEventListener('mousedown',e=>{e.preventDefault();mbtn|=(1<<e.button);mouseSend(e);});
 cv.addEventListener('mouseup',e=>{e.preventDefault();mbtn&=~(1<<e.button);mouseSend(e);});
 cv.addEventListener('mouseleave',mouseLeave);
+// -- a finger (docs/touch.md): bit 6 of the buttons byte says so, and
+// Zeitlos reads it as tap, drag and hold; two fingers dragged send
+// wheel notches in bits 5:3 (signed, -4 to 3 a packet), one every 30
+// CSS pixels --
+let tWheel=null;
+function touchSend(t,down){
+ const p=toFB(t.clientX,t.clientY);
+ mx=p[0]; my=p[1]; mbtn=(down?1:0)|0x40; mdirty=1;
+ if(!down||performance.now()-mlast>=33) mouseFlush();
+}
+cv.addEventListener('touchstart',e=>{e.preventDefault();
+ if(e.touches.length===1) touchSend(e.touches[0],1);
+ else if(e.touches.length===2){
+  // the first finger was not a touch: drop the pointer (not a lift,
+  // which would be a tap), then the wheel by the fingers' middle
+  mbtn=0; if(sock&&sock.readyState===1) sock.send(new Uint8Array([0,0,0,0,0x80]));
+  tWheel={y:(e.touches[0].clientY+e.touches[1].clientY)/2,acc:0};
+ }},{passive:false});
+cv.addEventListener('touchmove',e=>{e.preventDefault();
+ if(tWheel&&e.touches.length>=2){
+  const y=(e.touches[0].clientY+e.touches[1].clientY)/2;
+  tWheel.acc+=y-tWheel.y; tWheel.y=y;
+  let n=Math.max(-4,Math.min(3,Math.trunc(tWheel.acc/30)));
+  if(n&&sock&&sock.readyState===1){ tWheel.acc-=n*30;
+   sock.send(new Uint8Array([mx&255,mx>>8,my&255,my>>8,0x40|((n&7)<<3)])); }
+ } else if(!tWheel&&e.touches.length===1) touchSend(e.touches[0],1);
+},{passive:false});
+cv.addEventListener('touchend',e=>{e.preventDefault();
+ if(!tWheel&&e.changedTouches.length) touchSend(e.changedTouches[0],0);
+ if(!e.touches.length) tWheel=null;},{passive:false});
 cv.addEventListener('contextmenu',e=>e.preventDefault());
 document.addEventListener('visibilitychange',()=>{if(document.hidden)mouseLeave();});
 addEventListener('keydown',e=>key(e,1));

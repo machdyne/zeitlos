@@ -80,6 +80,7 @@
 #define E_ECM_MAC       23  // GET_DESCRIPTOR(STRING iMACAddress)
 #define E_ECM_ALT       24  // SET_INTERFACE: the data interface's bulk alt
 #define E_ECM_FILT      25  // SET_ETHERNET_PACKET_FILTER
+#define E_DIG_RDESC     26  // a digitizer's report descriptor (usbh_dig.c)
 
 // -- a mouse's input report, as its report descriptor lays it out --
 //

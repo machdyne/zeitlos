@@ -205,13 +205,14 @@
 // Nothing in the monochrome path changes on a board that defines it --
 // colour is off at reset and is switched off by leaving game mode.
 
-// The virtual (software-written) mouse at 0xf000_0400: a 25-bit
-// register {present, buttons, y, x} that, while present is set, drives
+// The virtual (software-written) mouse at 0xf000_0400: a 32-bit
+// register {wheel, touch, present, buttons, y, x} that, while present is set, drives
 // the hardware cursor sprite and is read by wm exactly like a USB
 // mouse. It began as the ULX3S remote desktop's pointer (sw/apps/net,
 // docs/esp32link.md) and is universal now because scripted demos
 // (sw/apps/automate, docs/automate.md) need to move the pointer on
-// every board. About 25 flip-flops and a 10-bit two-way mux.
+// every board, and touch screens and pen tablets write it too
+// (docs/touch.md). About 32 flip-flops and a 10-bit two-way mux.
 //
 // Defining it narrows the UART0 decode to 0xf000_00xx (rtl/sysctl.v):
 // without that, 0xf000_0400 would alias the console UART. Software

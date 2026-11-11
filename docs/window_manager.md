@@ -187,6 +187,12 @@ across the desktop is not a reason to repaint the desktop.
 
 ## Input
 
+A finger -- the virtual mouse with its TOUCH bit -- passes through
+`touch.c` first, and is read as a mouse from there on: tap, drag, long
+press for the right button, the targets of wm's own controls a finger's
+size, and the on-screen keyboard when a window wants text and there is
+no keyboard. [touch.md](touch.md).
+
 Mouse position/buttons are read via `mouse_port()` (`wm.c`), which
 picks whichever of the two USB HID ports currently reports itself as
 a mouse -- there's no fixed port-to-device mapping anymore, and no

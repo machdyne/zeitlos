@@ -52,9 +52,10 @@ The first page, on every machine:
   telnet, ssh and serial), `text` and `files` -- and that a memory card
   adds documents, courses, games and the manuals;
 - **Read the guide:** [welcome.md](welcome.md), the guide to windows,
-  the dock, files and the keys, in `read`. With no card, where `read`
-  is not, its plain-text copy in flash (`/docs/welcome.txt`,
-  `CORE_FILES`) in `text`. The welcome stays open behind it;
+  the dock, files and the keys, in `read`. Both are in flash
+  (`CORE_APPS`, `CORE_FILES`), so a machine with no card has them; in a
+  build without `read`, `text` shows the same page as it is written.
+  The welcome stays open behind it;
 - the keys that work in every app.
 
 With no card the button at the bottom is **Close**, and there is

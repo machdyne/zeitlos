@@ -312,6 +312,14 @@ the card if there is a copy, else flash, at most three times a minute
 Keyboards that were set up keep typing meanwhile (the kernel's HID
 path). `usb` exiting -- no controller -- or being killed is left alone.
 
+## Touch screens and pen tablets
+
+`usbh_dig.c`: a HID device that reports where rather than how far gets
+a RAW poll slot, and `usb` reads its reports, scales them to the screen
+and writes the virtual mouse -- with its TOUCH bit for a finger. One at
+a time, packets up to 64 bytes. Untested on hardware.
+[touch.md](touch.md).
+
 ## Known limits
 
 - **One client per kind of device:** the drive's (`fs`), the adapter's

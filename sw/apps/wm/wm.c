@@ -1365,6 +1365,8 @@ static void first_run_check(void) {
 // Z_WM_ARG_CHILD do for any other launcher, which wm cannot send
 // itself. Nothing runs between the two (wm is one thread), so the
 // child cannot ask first.
+static void bind_child_arg(uint32_t pid, const char *arg);
+
 static void start_app(void) {
 
 	char v[Z_CFG_VAL_MAX], *arg;
@@ -1378,6 +1380,15 @@ static void start_app(void) {
 	pid = z_proc_run(v);
 	printf("wm: system.start: %s%s\n", v, pid ? "" : " -- could not start it");
 	if (!pid || !arg || !*arg) return;
+	bind_child_arg(pid, arg);
+
+}
+
+// `arg` into the launch-argument slot of `pid`, just started, as
+// Z_WM_SET_ARG and Z_WM_ARG_CHILD do for any other launcher -- which wm
+// cannot send itself. Nothing runs between the start and this (wm is
+// one thread), so the child cannot ask first.
+static void bind_child_arg(uint32_t pid, const char *arg) {
 
 	int si = pending_args[0].valid && !pending_args[1].valid;
 	strncpy(pending_args[si].arg, arg, Z_WM_ARG_MAX - 1);
@@ -2647,6 +2658,134 @@ static inline uint8_t get_mouse_btn(void) {
 	return (cursor >> 20) & 0x0F;
 }
 
+// -- touch (docs/touch.md) --
+//
+// A finger on a touch screen arrives through the virtual mouse with its
+// TOUCH bit set (reg_vmouse bit 25: usb for a USB touch screen, the
+// emulator's page, the remote desktop's page from a phone). touch.c
+// turns it into the mouse everything else here understands -- tap,
+// drag, long press for the right button -- and touch_snap() below moves
+// where it landed onto one of wm's own controls when it fell just
+// short of one. Nothing on the screen changes size: the targets do.
+//
+// Not in the small build (Z_SMALL, docs/flash_apps.md): a 1MB machine
+// gets a finger as a mouse.
+#ifndef Z_SMALL
+#include "touch.h"
+
+#define TOUCH_MARGIN    8       // how far short of a control still hits it
+#define TOUCH_BAND_IN   4       // ...below the titlebar, into the content
+#define TOUCH_GRIP      24      // the resize grip, for a finger
+
+static wm_touch_t touch_st;
+static bool touch_last;         // the last pointer input was a finger
+static uint32_t touch_due;      // the tick the filter wants to run again by
+static bool touch_due_set;
+// the on-screen keyboard (kbos_update(), below): raised again over the
+// window being typed into, not before this tick, and wm wakes for it
+static uint32_t kbos_raise_at;
+static bool kbos_raise_wait;
+
+// Squared distance from (x, y) to the rectangle [x0, x1) x [y0, y1),
+// and the nearest point in it.
+static int touch_near(int x, int y, int x0, int y0, int x1, int y1, int *nx, int *ny) {
+	*nx = x < x0 ? x0 : x >= x1 ? x1 - 1 : x;
+	*ny = y < y0 ? y0 : y >= y1 ? y1 - 1 : y;
+	return (*nx - x) * (*nx - x) + (*ny - y) * (*ny - y);
+}
+
+// Where a finger landed, moved onto the control it fell just short of:
+// a titlebar icon (close among them), the titlebar, the resize grip, a
+// dock icon. Front to back; the first window the point is inside ends
+// the search, since what is behind it there is covered. A point already
+// on a control, or in a window's content and near nothing, stays where
+// it is: the app gets exactly what was touched.
+static bool touch_snap(int x, int y, int *dx, int *dy) {
+
+	int best = TOUCH_MARGIN * TOUCH_MARGIN + 1, bx = 0, by = 0, nx, ny, d;
+
+	for (int i = zorder_count - 1; i >= 0; i--) {
+
+		int idx = zorder[i];
+		wm_window_t *w = &windows[idx];
+		if (!w->used || w->ws_off) continue;
+		int x0 = (int)w->x, y0 = (int)w->y, x1 = x0 + (int)w->w, y1 = y0 + (int)w->h;
+		bool inside = x >= x0 && x < x1 && y >= y0 && y < y1;
+
+		if (idx == dock_idx) {
+			if (dock_hidden || !inside) continue;
+			if (dock_slot_at(x, y) >= 0) return false;
+			// In the padding or between two icons: the nearest icon
+			// within a few pixels, across first, then along.
+			for (int s = 1; s <= DOCK_PADDING + TOUCH_MARGIN / 2; s++) {
+				static const int8_t dir[4][2] = { {0, -1}, {0, 1}, {-1, 0}, {1, 0} };
+				for (int k = 0; k < 4; k++)
+					if (dock_slot_at(x + dir[k][0] * s, y + dir[k][1] * s) >= 0) {
+						*dx = dir[k][0] * s; *dy = dir[k][1] * s;
+						return true;
+					}
+			}
+			return false;
+		}
+
+		if (!w->no_titlebar && !w->fulled) {
+			// the titlebar's icons, close among them
+			titlebar_icon_slot_t icons[TITLEBAR_ICON_TABLE_COUNT];
+			int lm, n = titlebar_icons(w, icons, &lm);
+			for (int k = 0; k < n; k++) {
+				d = touch_near(x, y, icons[k].x, icons[k].y,
+					icons[k].x + Z_ICON_W, icons[k].y + Z_ICON_H, &nx, &ny);
+				if (d == 0) return false;
+				if (d < best) { best = d; bx = nx; by = ny; }
+			}
+			if (best <= TOUCH_MARGIN * TOUCH_MARGIN) break;
+			// the titlebar: a margin above it, and a little into the
+			// content below (the content is the app's)
+			d = touch_near(x, y, x0, y0, x1, y0 + Z_WM_TITLEBAR_H, &nx, &ny);
+			if (d == 0) return false;
+			if (y >= y0 - TOUCH_MARGIN && y < y0 + Z_WM_TITLEBAR_H + TOUCH_BAND_IN &&
+			    x >= x0 && x < x1) {
+				best = d; bx = nx; by = ny;
+				break;
+			}
+			// the resize grip, a finger's size, from inside the corner
+			if ((w->flags & Z_WIN_FLAG_RESIZABLE) && !w->maxed && !w->shaded &&
+			    x >= x1 - TOUCH_GRIP && x < x1 && y >= y1 - TOUCH_GRIP && y < y1) {
+				if (x >= x1 - Z_WM_RESIZE_GRIP && y >= y1 - Z_WM_RESIZE_GRIP) return false;
+				best = 0; bx = x1 - Z_WM_RESIZE_GRIP / 2; by = y1 - Z_WM_RESIZE_GRIP / 2;
+				break;
+			}
+		}
+
+		if (inside) break;
+	}
+
+	if (best > TOUCH_MARGIN * TOUCH_MARGIN) return false;
+	*dx = bx - x;
+	*dy = by - y;
+	return true;
+
+}
+
+// One pointer sample through the finger filter (touch.h). A mouse, or
+// a pen (it hovers, and is precise), goes straight through.
+static void touch_filter(int *cx, int *cy, uint8_t *btn) {
+	uint32_t now = z_uptime_ticks();
+	bool touch = vmouse_present() && (reg_vmouse & Z_VMOUSE_TOUCH);
+	// in ms, in 32 bits (wm links no 64-bit division: ZFMT_NO64)
+	uint32_t now_ms = now / Z_TICK_HZ * 1000u + now % Z_TICK_HZ * 1000u / Z_TICK_HZ;
+	int ms = wm_touch_feed(&touch_st, now_ms, *cx, *cy, *btn, touch, touch_snap, cx, cy, btn);
+	touch_due_set = ms >= 0;
+	if (ms >= 0) touch_due = now + ((uint32_t)ms * Z_TICK_HZ + 999u) / 1000u;
+	// A finger leaves no pointer behind; the first mouse movement
+	// brings it back (vmouse_yield_to_usb() clears the virtual mouse).
+	if (touch != touch_last) {
+		touch_last = touch;
+		wm_busy_apply();
+	}
+}
+#endif
+
 // -- dock launching (shared by mouse click and keyboard Enter) --
 
 // how many main-loop iterations dock_launching[] is allowed to stay
@@ -2718,6 +2857,23 @@ static uint32_t wm_idle_ticks(void) {
 
 	if (wm_busy_mask & WM_BUSY_STARTUP)
 		return 1;
+
+#ifndef Z_SMALL
+	// The on-screen keyboard, raised again a moment after a drag
+	if (kbos_raise_wait) {
+		int32_t left = (int32_t)(kbos_raise_at - now);
+		kbos_raise_wait = false;
+		if (left <= 0) return 1;
+		if (!soon || (uint32_t)left < soon) soon = (uint32_t)left;
+	}
+	// A finger that may become a long press, or a sample touch.c held
+	// over (a tap's release): due without any new input.
+	if (touch_due_set) {
+		int32_t left = (int32_t)(touch_due - now);
+		if (left <= 0) return 1;
+		if (!soon || (uint32_t)left < soon) soon = (uint32_t)left;
+	}
+#endif
 
 	// Desktop colour: tints to repaint, acks to wait for, the second
 	// sheet to take back (acc_service()).
@@ -4219,6 +4375,161 @@ static void move_window_to(int idx, int32_t nx, int32_t ny) {
 	if (windows[idx].owner_pid != my_pid) send_redraw(windows[idx].owner_pid, idx);
 
 }
+
+// -- the on-screen keyboard, when it is needed (docs/touch.md) --
+//
+// A machine with no keyboard -- a touch screen, or a mouse alone -- can
+// still type: when the focused window wants text (Z_WIN_FLAG_TYPES, or
+// Z_WM_WANTS_TEXT from a text field) wm opens sw/apps/keyboard at the
+// bottom of the screen, moves the window up if the keyboard would cover
+// where the typing goes, and closes the keyboard and puts the window
+// back when the focus goes somewhere that does not want text.
+//
+// "No keyboard": neither USB port reports one, and no key from anything
+// but the on-screen keyboard (Z_KBD_EV_ONSCREEN) has come for ten
+// minutes -- the remote desktop's keys, or a demo's, mean a keyboard is
+// there. system.keyboard.onscreen: auto (that), always, never.
+//
+// Only a keyboard wm opened itself is closed by it; one opened with
+// Super+K or the dock stays until its close box. Closing the one wm
+// opened, by hand, leaves it closed for that window until the focus
+// moves.
+#ifndef Z_SMALL
+#define KBOS_QUIET_TICKS  (Z_TICK_HZ * 600u)	// ten minutes
+
+static bool wants_text[WM_MAX_WINDOWS];
+static int16_t wants_caret[WM_MAX_WINDOWS];	// below the window's top; -1 not known
+static uint32_t kbos_key_tick;			// a keyboard's last key
+static bool kbos_key_seen;
+static uint8_t kbos_mode;				// 0 auto, 1 always, 2 never
+static uint32_t kbos_gen = ~0u;
+static uint32_t kbos_pid;				// the keyboard wm opened, 0 none
+static uint32_t kbos_started;			// when (it has 3 s to show a window)
+static bool kbos_shown;					// its window has been seen
+static int kbos_for = -1;				// the window it was opened for
+static int kbos_declined = -1;			// closed by hand for this window
+static int kbos_moved = -1;				// the window moved up for it
+static int32_t kbos_moved_from, kbos_moved_to;
+
+// A keyboard's key, as wm reads it (dispatch_keys()).
+static void kbos_key(int32_t ev) {
+	if (!Z_KBD_EV_INJECTED(ev) || !Z_KBD_EV_ONSCREEN(ev)) {
+		kbos_key_tick = z_uptime_ticks();
+		kbos_key_seen = true;
+	}
+}
+
+static bool kbos_keyboard_there(void) {
+	if (((reg_usb0_info >> 24) & 3) == 1 || ((reg_usb1_info >> 24) & 3) == 1) return true;
+	return kbos_key_seen && z_uptime_ticks() - kbos_key_tick < KBOS_QUIET_TICKS;
+}
+
+static int kbos_window(void) {
+	if (!kbos_pid) return -1;
+	for (int i = 0; i < WM_MAX_WINDOWS; i++)
+		if (windows[i].used && windows[i].owner_pid == kbos_pid) return i;
+	return -1;
+}
+
+// The window moved up for the keyboard goes back, if it has not been
+// moved since.
+static void kbos_put_back(void) {
+	if (kbos_moved >= 0 && windows[kbos_moved].used && !windows[kbos_moved].ws_off &&
+	    (int32_t)windows[kbos_moved].y == kbos_moved_to)
+		move_window_to(kbos_moved, (int32_t)windows[kbos_moved].x, kbos_moved_from);
+	kbos_moved = -1;
+}
+
+static void kbos_close(void) {
+	int k = kbos_window();
+	if (k >= 0) z_msg_new_send(kbos_pid, Z_WM_CLOSE, 0, z_obj_uint32((uint32_t)k));
+	kbos_pid = 0;
+	kbos_for = -1;
+	kbos_put_back();
+}
+
+static void bind_child_arg(uint32_t pid, const char *arg);
+
+// Once a main-loop pass: open, close or make room, as the focus asks.
+static void kbos_update(void) {
+
+	if (z_cfg_generation() != kbos_gen) {
+		char v[Z_CFG_VAL_MAX];
+		kbos_gen = z_cfg_generation();
+		kbos_mode = 0;
+		if (z_cfg_get("system.keyboard.onscreen", v, sizeof(v)))
+			kbos_mode = !strcmp(v, "always") ? 1 : !strcmp(v, "never") ? 2 : 0;
+	}
+
+	int f = focused;
+	bool want = kbos_mode != 2 && f >= 0 && windows[f].used && wants_text[f] &&
+		!(windows[f].flags & Z_WIN_FLAG_NO_FOCUS) && !game_grab_pid && !wm_locked &&
+		(kbos_mode == 1 || !kbos_keyboard_there());
+	if (f != kbos_declined) kbos_declined = -1;
+	if (want && f == kbos_declined) want = false;
+
+	int k = kbos_window();
+	if (k >= 0) kbos_shown = true;
+	if (kbos_pid && k < 0 && (kbos_shown || z_uptime_ticks() - kbos_started > 3u * Z_TICK_HZ)) {
+		// It has gone (closed by hand, or it never came): not again for
+		// this window until the focus moves on.
+		if (kbos_for >= 0) kbos_declined = kbos_for;
+		kbos_pid = 0;
+		kbos_for = -1;
+		kbos_put_back();
+		return;
+	}
+
+	if (!want) {
+		if (kbos_pid) kbos_close();
+		return;
+	}
+
+	if (!kbos_pid) {
+		// Not when one is up already, by Super+K or the dock: that one
+		// is the person's.
+		for (int i = 0; i < WM_MAX_WINDOWS; i++)
+			if (windows[i].used && (windows[i].flags & Z_WIN_FLAG_NO_FOCUS) &&
+			    !strcmp(windows[i].title, "keyboard")) return;
+		kbos_pid = z_proc_run("keyboard");
+		if (!kbos_pid) { kbos_declined = f; return; }
+		kbos_started = z_uptime_ticks();
+		kbos_shown = false;
+		kbos_for = f;
+		printf("wm: no keyboard: the on-screen keyboard for %s\n", windows[f].title);
+		// at the bottom of the screen, and a finger's size after a finger
+		bind_child_arg(kbos_pid, touch_last ? "bottom large" : "bottom");
+		return;
+	}
+
+	kbos_for = f;
+	if (k < 0) return;			// still starting
+
+	// Above the window being typed into, and anything raised since --
+	// a moment after a drag or a resize, once the window that moved
+	// has drawn itself where it now is
+	if (dragging >= 0 || resizing >= 0) kbos_raise_at = z_uptime_ticks() + Z_TICK_HZ / 4;
+	else if (zorder_count && zorder[zorder_count - 1] != k) {
+		if ((int32_t)(z_uptime_ticks() - kbos_raise_at) >= 0) bring_to_front(k);
+		else kbos_raise_wait = true;
+	}
+
+	// Room for the typing: the caret (or, not known, the window's
+	// bottom) above the keyboard's top.
+	int top = (int)windows[k].y - 4;
+	int need = (int)windows[f].y + (wants_caret[f] >= 0 ? wants_caret[f] : (int)windows[f].h);
+	if (kbos_moved != f) kbos_put_back();
+	if (need > top && kbos_moved != f && !windows[f].maxed && !windows[f].fulled) {
+		int32_t ny = (int32_t)windows[f].y - (need - top);
+		if (ny < 0) ny = 0;
+		kbos_moved = f;
+		kbos_moved_from = (int32_t)windows[f].y;
+		move_window_to(f, (int32_t)windows[f].x, ny);
+		kbos_moved_to = (int32_t)windows[f].y;
+	}
+
+}
+#endif
 
 static void alt_move_focused(uint32_t keysym) {
 
@@ -5993,6 +6304,9 @@ static void dispatch_keys(void) {
 
 		uint8_t usage     = Z_KBD_EV_USAGE(ev);
 		if (!Z_KBD_EV_INJECTED(ev)) real_input("key", usage);
+#ifndef Z_SMALL
+		kbos_key(ev);
+#endif
 		lock_last_input = z_uptime_ticks();
 		uint8_t modifiers = Z_KBD_EV_MODS(ev);
 		bool    pressed   = Z_KBD_EV_PRESSED(ev) != 0;
@@ -6459,6 +6773,12 @@ static int create_window(uint32_t owner_pid, const char *title,
 		windows[i].no_titlebar = false;
 		windows[i].flags = flags;
 		cw_want[i] = !(flags & Z_WIN_FLAG_COLOUR_LATER);
+#ifndef Z_SMALL
+		wants_text[i] = (flags & Z_WIN_FLAG_TYPES) != 0;
+		wants_caret[i] = -1;
+		if (kbos_moved == i) kbos_moved = -1;
+		if (kbos_declined == i) kbos_declined = -1;
+#endif
 
 		// A slot is reused, and everything below belongs to the window
 		// that had it before: without this, a new window inherited the
@@ -7282,6 +7602,21 @@ static void handle_message(z_msg_t *msg) {
 				cw_want[msg->tag] = msg->obj.val.uint32 != 0;
 			break;
 
+		case Z_WM_WANTS_TEXT:
+			// A text field took the focus, or gave it up (docs/touch.md).
+#ifndef Z_SMALL
+			if (msg->obj.type == Z_UINT32 && msg->tag < WM_MAX_WINDOWS &&
+			    windows[msg->tag].used && windows[msg->tag].owner_pid == msg->from) {
+				uint32_t v = msg->obj.val.uint32;
+				wants_text[msg->tag] = Z_WM_WANTS_TEXT_ON(v) ||
+					(windows[msg->tag].flags & Z_WIN_FLAG_TYPES);
+				// kept from the window's top, so it moves with the window
+				wants_caret[msg->tag] = (Z_WM_WANTS_TEXT_Y(v) == 0xFFFF) ? -1 :
+					(int16_t)(Z_WM_WANTS_TEXT_Y(v) - (int)windows[msg->tag].y);
+			}
+#endif
+			break;
+
 		case Z_WM_MAXIMIZE: {
 			// An app that opens maximized (zwm.h): as a double-click on
 			// its titlebar would, if it is not maximized already.
@@ -8062,11 +8397,32 @@ static void notify_resized(int idx) {
 static uint8_t wheel_last[2];
 static bool wheel_seen[2];
 
+#ifndef Z_SMALL
+// The virtual mouse's own wheel (reg_vmouse bits 31:26, docs/touch.md):
+// a touch screen's two-finger drag, the emulator page's wheel. Six bits,
+// wrapping; a new writer starts a new baseline.
+static uint8_t vwheel_last;
+static bool vwheel_seen;
+#endif
+
 static void dispatch_wheel(int cx, int cy) {
 	int port = mouse_port();
 	uint8_t acc = (uint8_t)(((port == 0) ? reg_usb0_mouse : reg_usb1_mouse) >> 24);
 	int8_t notches;
 	int target;
+
+#ifndef Z_SMALL
+	if (vmouse_present()) {
+		uint8_t v = (uint8_t)Z_VMOUSE_WHEEL(reg_vmouse);
+		if (!vwheel_seen) { vwheel_last = v; vwheel_seen = true; return; }
+		// six bits, signed: shifted up to eight and back
+		notches = (int8_t)(uint8_t)((uint8_t)(v - vwheel_last) << 2) >> 2;
+		vwheel_last = v;
+		if (notches == 0) return;
+		goto deliver;
+	}
+	vwheel_seen = false;
+#endif
 
 	if (!wheel_seen[port]) {
 		// First look at this port: take the count as the baseline,
@@ -8078,6 +8434,9 @@ static void dispatch_wheel(int cx, int cy) {
 	notches = (int8_t)(uint8_t)(acc - wheel_last[port]);
 	wheel_last[port] = acc;
 	if (notches == 0) return;
+#ifndef Z_SMALL
+deliver:
+#endif
 	if (dragging >= 0 || resizing >= 0) return;
 
 	target = mouse_capture;
@@ -8670,6 +9029,11 @@ int main(void) {
 		vmouse_yield_to_usb();
 		int cx = get_cursor_x();
 		int cy = get_cursor_y();
+		uint8_t btn = get_mouse_btn();
+#ifndef Z_SMALL
+		// a finger is read as a mouse from here on (touch.h)
+		touch_filter(&cx, &cy, &btn);
+#endif
 
 		// -- the cursor: none while a game holds the screen, unless
 		// it asked to keep it; none over the picture of a window that
@@ -8684,6 +9048,9 @@ int main(void) {
 			bool hide = (game_grab_pid != 0 && !keep) || (over >= 0 &&
 				(windows[over].flags & Z_WIN_FLAG_NO_POINTER) &&
 				point_in_content(over, cx, cy));
+#ifndef Z_SMALL
+			if (touch_last && dragging < 0) hide = true;	// a finger leaves no pointer
+#endif
 			if (hide != wm_cursor_hidden ||
 				(game_grab_pid != 0 && keep) != wm_cursor_screen) {
 				wm_cursor_hidden = hide;
@@ -8691,7 +9058,6 @@ int main(void) {
 				wm_busy_apply();
 			}
 		}
-		uint8_t btn = get_mouse_btn();
 		if (cx != last_cx || cy != last_cy || btn != last_btn) {
 			lock_last_input = z_uptime_ticks();
 			last_cx = cx;
@@ -9179,6 +9545,9 @@ int main(void) {
 		if (!WM_HIDDEN()) {
 			dispatch_mouse(cx, cy, btn);
 			dispatch_wheel(cx, cy);
+#ifndef Z_SMALL
+			kbos_update();
+#endif
 		}
 
 		// Super held -- drag the game mode viewport along with the

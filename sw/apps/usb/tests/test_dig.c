@@ -1,0 +1,245 @@
+/*
+ * Zeitlos
+ * Copyright (c) 2026 Lone Dynamics Corporation. All rights reserved.
+ *
+ * usbh_dig.c on the host: touch screens, pen tablets and absolute
+ * mice, from report descriptors written to the HID usage tables, and
+ * the virtual mouse words their reports become (docs/touch.md).
+ * `make` in sw/apps/usb/tests.
+ */
+
+#include <stdio.h>
+#include <string.h>
+#include "../usbh_dig.h"
+
+static int checks, fails;
+#define CHECK(c, ...) do { checks++; if (!(c)) { fails++; printf("FAIL %d: ", __LINE__); printf(__VA_ARGS__); printf("\n"); } } while (0)
+
+#define VX(w)   ((int)((w) & 0x3ff))
+#define VY(w)   ((int)(((w) >> 10) & 0x3ff))
+#define VB(w)   ((int)(((w) >> 20) & 7))
+#define VP(w)   ((int)(((w) >> 24) & 1))
+#define VT(w)   ((int)(((w) >> 25) & 1))
+#define VW(w)   ((int)(((w) >> 26) & 0x3f))
+
+// QEMU's usb-tablet: a mouse with absolute X and Y, 0..32767
+static const uint8_t qemu_tablet[] = {
+	0x05,0x01, 0x09,0x02, 0xa1,0x01, 0x09,0x01, 0xa1,0x00,
+	0x05,0x09, 0x19,0x01, 0x29,0x03, 0x15,0x00, 0x25,0x01, 0x95,0x03, 0x75,0x01, 0x81,0x02,
+	0x95,0x01, 0x75,0x05, 0x81,0x01,
+	0x05,0x01, 0x09,0x30, 0x09,0x31, 0x15,0x00, 0x26,0xff,0x7f, 0x35,0x00, 0x46,0xff,0x7f,
+	0x75,0x10, 0x95,0x02, 0x81,0x02,
+	0x05,0x01, 0x09,0x38, 0x15,0x81, 0x25,0x7f, 0x35,0x00, 0x45,0x00, 0x75,0x08, 0x95,0x01, 0x81,0x06,
+	0xc0, 0xc0,
+};
+
+// A relative mouse: not a digitizer
+static const uint8_t rel_mouse[] = {
+	0x05,0x01, 0x09,0x02, 0xa1,0x01, 0x09,0x01, 0xa1,0x00,
+	0x05,0x09, 0x19,0x01, 0x29,0x03, 0x15,0x00, 0x25,0x01, 0x95,0x03, 0x75,0x01, 0x81,0x02,
+	0x95,0x01, 0x75,0x05, 0x81,0x01,
+	0x05,0x01, 0x09,0x30, 0x09,0x31, 0x15,0x81, 0x25,0x7f, 0x75,0x08, 0x95,0x02, 0x81,0x06,
+	0xc0, 0xc0,
+};
+
+// A touch screen with report ID 1: a finger (tip, in range, 6 bits of
+// padding, a contact ID byte, X and Y 0..4095 in 16 bits), then a
+// Contact Count byte -- the shape of Microsoft's sample descriptor
+static const uint8_t touchscreen[] = {
+	0x05,0x0d, 0x09,0x04, 0xa1,0x01, 0x85,0x01,
+	0x09,0x22, 0xa1,0x02,
+	0x09,0x42, 0x15,0x00, 0x25,0x01, 0x75,0x01, 0x95,0x01, 0x81,0x02,
+	0x09,0x32, 0x81,0x02,
+	0x95,0x06, 0x81,0x03,
+	0x75,0x08, 0x09,0x51, 0x95,0x01, 0x81,0x02,
+	0x05,0x01, 0x26,0xff,0x0f, 0x75,0x10, 0x09,0x30, 0x81,0x02, 0x09,0x31, 0x81,0x02,
+	0xc0,
+	0x05,0x0d, 0x09,0x54, 0x25,0x7f, 0x95,0x01, 0x75,0x08, 0x81,0x02,
+	0xc0,
+};
+
+// A pen tablet with report ID 2: tip, barrel, eraser, 2 bits of
+// padding, in range, 2 more of padding; X 0..15200 and Y 0..9500
+static const uint8_t pen[] = {
+	0x05,0x0d, 0x09,0x02, 0xa1,0x01, 0x85,0x02,
+	0x09,0x20, 0xa1,0x00,
+	0x09,0x42, 0x09,0x44, 0x09,0x45, 0x15,0x00, 0x25,0x01, 0x75,0x01, 0x95,0x03, 0x81,0x02,
+	0x95,0x02, 0x81,0x03,
+	0x09,0x32, 0x95,0x01, 0x81,0x02,
+	0x95,0x02, 0x81,0x03,
+	0x05,0x01, 0x09,0x30, 0x26,0x60,0x3b, 0x75,0x10, 0x95,0x01, 0x81,0x02,
+	0x09,0x31, 0x26,0x1c,0x25, 0x81,0x02,
+	0xc0, 0xc0,
+};
+
+
+// The user's UGTABLET "4 inch PenTablet" (XP-Pen, 28bd:0913), its two
+// HID interfaces' report descriptors as Linux read them (November 2026).
+// Interface 0, a boot mouse: the pen as an absolute mouse (report ID 9:
+// three buttons, X and Y 0..32767, pressure), a relative mouse (ID 1)
+// and the express keys as a keyboard (ID 6).
+static const uint8_t xppen_if0[] = {
+	0x05,0x01,0x09,0x02,0xa1,0x01,0x85,0x09,0x09,0x01,0xa1,0x00,0x05,0x09,0x19,0x01,
+	0x29,0x03,0x15,0x00,0x25,0x01,0x95,0x03,0x75,0x01,0x81,0x02,0x95,0x05,0x81,0x01,
+	0x05,0x01,0x09,0x30,0x09,0x31,0x26,0xff,0x7f,0x95,0x02,0x75,0x10,0x81,0x02,0x05,
+	0x0d,0x09,0x30,0x26,0xff,0x07,0x95,0x01,0x75,0x10,0x81,0x02,0xc0,0xc0,0x05,0x01,
+	0x09,0x02,0xa1,0x01,0x09,0x01,0xa1,0x00,0x85,0x01,0x05,0x09,0x19,0x01,0x29,0x05,
+	0x95,0x05,0x75,0x01,0x15,0x00,0x25,0x01,0x81,0x02,0x95,0x03,0x81,0x01,0x05,0x01,
+	0x09,0x30,0x09,0x31,0x95,0x02,0x75,0x10,0x16,0x00,0x80,0x26,0xff,0x7f,0x81,0x06,
+	0x09,0x38,0x15,0x81,0x25,0x7f,0x95,0x01,0x75,0x08,0x81,0x06,0x05,0x0c,0x0a,0x38,
+	0x02,0x95,0x01,0x75,0x08,0x81,0x06,0xc0,0xc0,0x05,0x01,0x09,0x06,0xa1,0x01,0x85,
+	0x06,0x05,0x07,0x19,0xe0,0x29,0xe7,0x15,0x00,0x25,0x01,0x75,0x01,0x95,0x08,0x81,
+	0x02,0x05,0x07,0x19,0x00,0x29,0xff,0x26,0xff,0x00,0x75,0x08,0x95,0x06,0x81,0x00,
+	0xc0,
+};
+// Interface 1: the pen as a digitizer (ID 7): tip, barrel, eraser, in
+// range, X and Y inside a Push/Pop, pressure, tilt.
+static const uint8_t xppen_if1[] = {
+	0x05,0x0d,0x09,0x02,0xa1,0x01,0x85,0x07,0x09,0x20,0xa1,0x00,0x09,0x42,0x09,0x44,
+	0x09,0x45,0x15,0x00,0x25,0x01,0x75,0x01,0x95,0x03,0x81,0x02,0x95,0x02,0x81,0x03,
+	0x09,0x32,0x95,0x01,0x81,0x02,0x95,0x02,0x81,0x03,0x75,0x10,0x95,0x01,0x35,0x00,
+	0xa4,0x05,0x01,0x09,0x30,0x65,0x13,0x55,0x0d,0x46,0xb8,0x0b,0x26,0xff,0x7f,0x81,
+	0x02,0x09,0x31,0x46,0xa0,0x0f,0x26,0xff,0x7f,0x81,0x02,0xb4,0x09,0x30,0x45,0x00,
+	0x26,0xff,0x1f,0x81,0x42,0x09,0x3d,0x15,0x81,0x25,0x7f,0x75,0x08,0x95,0x01,0x81,
+	0x02,0x09,0x3e,0x15,0x81,0x25,0x7f,0x81,0x02,0xc0,0xc0,
+};
+
+int main(void) {
+
+	z_usbh_dlay_t l;
+	z_usbh_dstate_t st;
+	uint32_t w;
+
+	// -- an absolute mouse (QEMU's tablet) --
+	CHECK(z_usbh_dig_parse(qemu_tablet, sizeof(qemu_tablet), &l), "QEMU's tablet is understood");
+	CHECK(l.kind == DIG_ABS && l.id == 0 && l.tip_bit == 0 && l.btn2_bit == 1 &&
+		l.x_bit == 8 && l.x_sz == 16 && l.y_bit == 24 && l.x_max == 32767,
+		"an absolute mouse: buttons at 0, X at 8 and Y at 24, 16 bits, to 32767 (kind %d x %d/%d max %ld)",
+		l.kind, l.x_bit, l.x_sz, (long)l.x_max);
+	memset(&st, 0, sizeof(st));
+	{
+		uint8_t r[6] = { 1, 0xff, 0x7f, 0x00, 0x40, 0 };	// left, X max, Y half
+		CHECK(z_usbh_dig_decode(&l, &st, r, 6, &w), "decoded");
+		CHECK(VX(w) == 639 && VY(w) >= 239 && VY(w) <= 240 && VB(w) == 1 && VP(w) && !VT(w),
+			"X max is 639, Y half is 240, the left button, present, not a finger (%d,%d b%d)", VX(w), VY(w), VB(w));
+	}
+
+	// -- a relative mouse is not one --
+	CHECK(!z_usbh_dig_parse(rel_mouse, sizeof(rel_mouse), &l), "a relative mouse is left to the mouse path");
+
+	// -- a touch screen --
+	CHECK(z_usbh_dig_parse(touchscreen, sizeof(touchscreen), &l), "the touch screen is understood");
+	CHECK(l.kind == DIG_TOUCH && l.id == 1 && l.tip_bit == 0 && l.x_bit == 16 && l.y_bit == 32 &&
+		l.x_max == 4095 && l.cnt_bit == 48 && l.cnt_sz == 8,
+		"a finger: tip at 0, X at 16, Y at 32, to 4095, Contact Count at 48 (tip %d x %d y %d cnt %d)",
+		l.tip_bit, l.x_bit, l.y_bit, l.cnt_bit);
+	memset(&st, 0, sizeof(st));
+	{
+		uint8_t r[8] = { 1, 0x03, 0x00, 0x00, 0x08, 0x00, 0x08, 0x01 };	// ID 1, tip+range, X 2048, Y 2048, 1 contact
+		CHECK(z_usbh_dig_decode(&l, &st, r, 8, &w), "a finger's report");
+		CHECK(VX(w) == 319 && VY(w) == 239 && VB(w) == 1 && VT(w) && VP(w),
+			"the middle of the screen, pressed, TOUCH (%d,%d)", VX(w), VY(w));
+		r[0] = 2;
+		CHECK(!z_usbh_dig_decode(&l, &st, r, 8, &w), "another report ID is not the finger's");
+		r[0] = 1; r[7] = 2;
+		CHECK(z_usbh_dig_decode(&l, &st, r, 8, &w) && VB(w) == 0 && VX(w) == 319,
+			"two fingers: no button, the pointer stays");
+		r[6] = 0x09;	// Y 2304: 256 of 4096 lower, 30 screen rows: one notch down
+		CHECK(z_usbh_dig_decode(&l, &st, r, 8, &w) && VW(w) == 0x3f,
+			"two fingers moved down the screen: one notch toward the user (%d)", VW(w));
+		r[7] = 1; r[1] = 0;
+		CHECK(z_usbh_dig_decode(&l, &st, r, 8, &w) && VB(w) == 0 && VT(w), "lifted: a finger, no button");
+	}
+
+	// -- a pen --
+	CHECK(z_usbh_dig_parse(pen, sizeof(pen), &l), "the pen is understood");
+	CHECK(l.kind == DIG_PEN && l.id == 2 && l.tip_bit == 0 && l.btn2_bit == 1 && l.range_bit == 5 &&
+		l.x_bit == 8 && l.x_max == 15200 && l.y_bit == 24 && l.y_max == 9500,
+		"a pen: tip 0, barrel 1, in range 5, X at 8 to 15200, Y at 24 to 9500 (range %d x %d y %d)",
+		l.range_bit, l.x_bit, l.y_bit);
+	memset(&st, 0, sizeof(st));
+	{
+		uint8_t r[6] = { 2, 0x20, 0x00, 0x00, 0x00, 0x00 };	// in range, hovering at 0,0
+		CHECK(z_usbh_dig_decode(&l, &st, r, 6, &w) && VP(w) && VB(w) == 0 && !VT(w) && VX(w) == 0,
+			"hovering: the pointer is there, no button, not a finger");
+		r[1] = 0x21; r[2] = 0x60; r[3] = 0x3b; r[4] = 0x1c; r[5] = 0x25;	// tip, the far corner
+		CHECK(z_usbh_dig_decode(&l, &st, r, 6, &w) && VB(w) == 1 && VX(w) == 639 && VY(w) == 479,
+			"the tip in the far corner (%d,%d)", VX(w), VY(w));
+		r[1] = 0x22;
+		CHECK(z_usbh_dig_decode(&l, &st, r, 6, &w) && VB(w) == 2, "the barrel: the right button");
+		r[1] = 0x00;
+		CHECK(z_usbh_dig_decode(&l, &st, r, 6, &w) && w == 0, "out of range: the pointer goes back to the mouse");
+	}
+
+	// -- finding the interface: a configuration with a boot keyboard
+	// and, second, a HID interface with an interrupt IN endpoint --
+	{
+		static const uint8_t cfg[] = {
+			9,2, 59,0, 2,1,0,0xa0,50,
+			9,4, 0,0,1, 3,1,1, 0,				// boot keyboard
+			9,0x21, 0x11,0x01,0,1,0x22, 63,0,
+			7,5, 0x81,3, 8,0, 10,
+			9,4, 1,0,1, 3,0,0, 0,				// HID, no subclass: the digitizer
+			9,0x21, 0x11,0x01,0,1,0x22, 0x80,0,
+			7,5, 0x82,3, 64,0, 4,
+		};
+		uint8_t ep = 0, mps = 0, ival = 0;
+		int rdlen = 0;
+		int f = z_usbh_dig_iface(cfg, sizeof(cfg), -1, &ep, &mps, &ival, &rdlen);
+		CHECK(f == 1 && ep == 2 && mps == 64 && ival == 4 && rdlen == 128,
+			"interface 1, endpoint 2, 64 bytes every 4 frames, a 128-byte report descriptor (%d %d %d %d %d)",
+			f, ep, mps, ival, rdlen);
+	}
+
+
+	// -- the user's XP-Pen tablet --
+	CHECK(z_usbh_dig_parse(xppen_if0, sizeof(xppen_if0), &l), "the XP-Pen's interface 0 is understood");
+	CHECK(l.kind == DIG_ABS && l.id == 9 && l.tip_bit == 0 && l.btn2_bit == 1 &&
+		l.x_bit == 8 && l.x_sz == 16 && l.y_bit == 24 && l.x_max == 32767 && l.y_max == 32767 && l.bytes == 8,
+		"interface 0: the absolute mouse, report 9 -- not the relative one or the keys (kind %d id %d x %d y %d bytes %d)",
+		l.kind, l.id, l.x_bit, l.y_bit, l.bytes);
+	memset(&st, 0, sizeof(st));
+	{
+		uint8_t r[8] = { 9, 0x01, 0x00, 0x40, 0xff, 0x7f, 0x00, 0x04 };	// tip, X half, Y max, some pressure
+		CHECK(z_usbh_dig_decode(&l, &st, r, 8, &w) && VB(w) == 1 && VX(w) >= 319 && VX(w) <= 320 &&
+			VY(w) == 479 && !VT(w), "the pen down at the middle of the bottom edge (%d,%d)", VX(w), VY(w));
+		uint8_t rel[5] = { 1, 0, 5, 5, 0 };
+		CHECK(!z_usbh_dig_decode(&l, &st, rel, 5, &w), "the relative mouse's report (ID 1) is not the pen's");
+	}
+	CHECK(z_usbh_dig_parse(xppen_if1, sizeof(xppen_if1), &l), "the XP-Pen's interface 1 is understood, Push/Pop and all");
+	CHECK(l.kind == DIG_PEN && l.id == 7 && l.tip_bit == 0 && l.btn2_bit == 1 && l.range_bit == 5 &&
+		l.x_bit == 8 && l.x_sz == 16 && l.y_bit == 24 && l.x_max == 32767 && l.y_max == 32767,
+		"interface 1: a pen, report 7: tip, barrel, in range at 5, X at 8, Y at 24 (kind %d range %d x %d y %d max %ld)",
+		l.kind, l.range_bit, l.x_bit, l.y_bit, (long)l.y_max);
+
+	// The XP-Pen's configuration, as lsusb showed it: interfaces 0 and 1
+	// are boot mice (the mouse mode, and the pen), 2 the vendor's. The
+	// driver reads interface 0 first; asked for another, it gets 1 -- the
+	// pen, which is the one that sends (0 answers NAK in default mode).
+	{
+		static const uint8_t cfg[] = {
+			9,2, 0x5b,0, 3,1,0,0xa0,35,
+			9,4, 0,0,1, 3,1,2, 0,  9,0x21, 0x00,0x01,0,1,0x22, 177,0,  7,5, 0x81,3, 8,0, 4,
+			9,4, 1,0,1, 3,1,2, 0,  9,0x21, 0x00,0x01,0,1,0x22, 107,0,  7,5, 0x82,3, 64,0, 3,
+			9,4, 2,0,2, 3,0,0, 0,  9,0x21, 0x00,0x01,0,1,0x22, 36,0,
+			7,5, 0x83,3, 12,0, 3,  7,5, 0x03,3, 12,0, 10,
+		};
+		uint8_t ep = 0, mps = 0, ival = 0;
+		int rdlen = 0;
+		CHECK(z_usbh_dig_iface(cfg, sizeof(cfg), -1, &ep, &mps, &ival, &rdlen) == 0 && ep == 1 && mps == 8,
+			"the XP-Pen: interface 0 first");
+		CHECK(z_usbh_dig_iface(cfg, sizeof(cfg), 0, &ep, &mps, &ival, &rdlen) == 1 && ep == 2 && mps == 64 &&
+			ival == 3 && rdlen == 107, "and, asked for another, interface 1, the pen (%d %d %d)", ep, mps, rdlen);
+		z_usbh_dlay_t a, b;
+		CHECK(z_usbh_dig_parse(xppen_if0, sizeof(xppen_if0), &a) && z_usbh_dig_parse(xppen_if1, sizeof(xppen_if1), &b) &&
+			b.kind < a.kind, "the pen is preferred to the absolute mouse");
+		memset(&st, 0, sizeof(st));
+		uint8_t r[10] = { 7, 0x21, 0x00, 0x40, 0x00, 0x40, 0x00, 0x01, 0, 0 };	// tip, in range, the middle
+		CHECK(z_usbh_dig_decode(&b, &st, r, 10, &w) && VB(w) == 1 && VX(w) >= 319 && VX(w) <= 320 &&
+			VY(w) >= 239 && VY(w) <= 240 && !VT(w), "its report: the tip down in the middle (%d,%d)", VX(w), VY(w));
+	}
+
+	printf("dig: %d checks, %d failed\n", checks, fails);
+	return fails ? 1 : 0;
+
+}

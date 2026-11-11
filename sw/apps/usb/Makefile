@@ -33,7 +33,7 @@ ifeq ($(USBH_DEBUG), 1)
 APP_CFLAGS += -DUSBH_DEBUG
 endif
 
-OBJS = zeitlos.o zobj.o usbh.o usbh_hid.o usbh_hub.o usbh_msc.o \
+OBJS = zeitlos.o zobj.o usbh.o usbh_hid.o usbh_hub.o usbh_msc.o usbh_dig.o \
 	usbh_cdc.o usbh_cp210x.o usbh_ecm.o usb.o
 
 include ../../common/app.mk

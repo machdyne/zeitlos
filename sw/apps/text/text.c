@@ -4416,7 +4416,7 @@ int main(void) {
 		Z_WIN_FLAG_MIN_IS_CREATE |
 		Z_WIN_FLAG_NEW_ICON | Z_WIN_FLAG_OPEN_ICON |
 		Z_WIN_FLAG_SAVE_ICON | Z_WIN_FLAG_PRINT_ICON | Z_WIN_FLAG_FONT_ICON |
-		Z_WIN_FLAG_READABLE) != Z_OK) {
+		Z_WIN_FLAG_READABLE | Z_WIN_FLAG_TYPES) != Z_OK) {
 		printf("text: failed to create window -- is wm running?\n");
 		return 1;
 	}

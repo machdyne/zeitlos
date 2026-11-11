@@ -4,7 +4,7 @@ A file browser. `sw/apps/files`. A core app: it is in flash and works
 with no card ([flash_apps.md](flash_apps.md)).
 
 It shows the card, `/ram` and `/usb` when they are there, and what is
-in flash: the core apps in `/apps` and the files in flash (`/docs/welcome.txt`),
+in flash: the core apps in `/apps` and the files in flash (`/docs/welcome.md`),
 read-only, merged into the same directories ([flash_apps.md](flash_apps.md),
 "Files in flash"). With no card, `/` holds `apps`, `docs` and whatever
 of `/ram` and `/usb` is mounted.

@@ -1,7 +1,8 @@
 # Core Apps in Flash
 
 The core apps -- the drivers `fs` and `usb`, then `wm`, `net`, `term`,
-`console`, `cron`, `text`, `files`, `repl` and `welcome` -- are programmed into flash alongside the kernel and are
+`console`, `cron`, `text`, `files`, `repl`, `welcome`, `read` and
+`keyboard` -- are programmed into flash alongside the kernel and are
 available with no sdcard attached. The list is `CORE_APPS` in the
 top-level `Makefile`. `console` is the kernel console as a port (`docs/console.md`):
 it is a core app because the machines that most need it, with no card
@@ -28,6 +29,16 @@ names generated rather than zkbd's key tables linked, and `ZFMT_LITE`
 -- 60,516 bytes, 40,828 in flash compressed and 72,948 in RAM
 (November 2026, xPack GCC 14.2), against a budget of 44K/76K. `wm`
 starts it after boot, so it is not in the RAM rule.
+
+`read` ([read_app.md](read_app.md)) and `keyboard`
+([keyboard_app.md](keyboard_app.md)) joined in November 2026. With
+`read` in flash, the documents in flash are the Markdown pages
+themselves, shown as pages, instead of plain-text copies for `text`
+(see "Files in flash"). With `keyboard`, a machine with no keyboard --
+a touch screen, or a mouse alone -- can type with no card
+([touch.md](touch.md)): `wm` opens it when a window wants text.
+`read` is built with the small printf for it (`ZFMT_LITE`, `ZFMT_NO64`):
+67K compressed instead of 105K.
 
 `repl` is a core app too: Scheme, and `te`, with no card at all. The
 other shell, `posix`, is **not**: it lives on the sdcard. `term` starts
@@ -131,7 +142,7 @@ there was `.bss`.
 ## Files in flash
 
 The archive also carries **files**: `CORE_FILES` in the top-level
-`Makefile`: `docs/welcome.txt`, `docs/repl.txt` (the beginner's guide
+`Makefile`: `docs/welcome.md` (the guide), `docs/repl.md` (the beginner's guide
 to Scheme, [repl.md](repl.md)), `docs/zapi.txt` (every procedure repl
 has, what its `help` and `apropos` read, [zapi.md](zapi.md)) and
 `data/repl/examples/todo.scm`, its example
@@ -141,19 +152,17 @@ under the card, with or without a card, and a file of the same name on
 the card wins over it -- the same rule as for apps:
 
 ```
-CORE_FILES = docs/welcome.txt docs/repl.txt docs/zapi.txt data/repl/examples/todo.scm \
+CORE_FILES = docs/welcome.md docs/repl.md docs/zapi.txt data/repl/examples/todo.scm \
 	data/wm/wm.cfg data/wm/dock.zic
 ```
 
 The dock's files are how a card changes the dock: a `/data/wm/wm.cfg`
 on the card wins over the one in flash, whole.
 
-A `docs/<name>.txt` is `docs/<name>.md` rendered as plain text by
-`tools/md2txt.py`, for `text` on a machine with no card (and so no
-`read`): one line per paragraph or list item, since `text` wraps them,
-headings underlined, tables as aligned columns, code blocks indented,
-and the Markdown that only a renderer needs dropped. The card keeps
-`welcome.md`; flash shows `welcome.txt` beside it.
+The pages are the Markdown as it is on the card, for `read`, which is
+in flash too. Until November 2026, when `read` was not, flash held
+plain-text copies (`welcome.txt`, `repl.txt`) that `tools/md2txt.py`
+made for `text`; the tool is still there for any page that wants one.
 
 `docs/zapi.txt` is the exception: no `.md` makes it. `tools/gen_zapi.py`
 makes it from the entries beside repl's code, so it always lists what
@@ -317,6 +326,35 @@ region was 224KB ([fs_driver.md](fs_driver.md)), 770,048 from
 it ([zboot.md](zboot.md) section 5). With `usb`, after compression
 (October 2026), built here (the board's toolchain gives sizes a few
 percent either way):
+
+November 2026, with `read` and `keyboard`, every app compressed, touch
+in `wm` and `usb` ([touch.md](touch.md)), xPack GCC 15.2, a normal
+board's build -- against `CORE_BUDGETS_NORMAL`:
+
+| app | in flash (compressed) | budget | in RAM (image) | budget |
+|---|---:|---:|---:|---:|
+| `fs` | 34,885 | 36K | 77,040 | 80K |
+| `usb` | 34,468 | 38K | 57,924 | 60K |
+| `wm` | 80,721 | 84K | 156,600 | 168K |
+| `net` | 101,017 | 104K | 293,180 | 296K |
+| `term` | 61,266 | 62K | 138,868 | 144K |
+| `console` | 8,301 | 10K | 12,488 | 13K |
+| `cron` | 17,100 | 18K | 36,656 | 48K |
+| `text` | 86,990 | 88K | 213,456 | 216K |
+| `files` | 65,631 | 66K | 139,456 | 142K |
+| `repl` | 120,249 | 124K | 315,008 | 312K |
+| `welcome` | 40,793 | 42K | 72,352 | 76K |
+| `read` | 67,609 | 70K | 206,976 | 210K |
+| `keyboard` | 35,800 | 38K | 58,332 | 64K |
+| files in flash | 58,000 | 60K | | |
+| **archive** | **813,348** of 868,352 | 840K of 848K | | |
+
+The small build's apps are the same but `wm` and `usb`, which leave
+touch out: 152,716 and 53,316 bytes in RAM, as before. (Built here,
+`repl` is 315,008 bytes, 640 over the small build's 307K; that was so
+before this change, and the budget was set on another build of it.)
+
+October 2026, before them:
 
 | app | `.bin` | in flash (compressed) | in RAM (image) | stack |
 |---|---:|---:|---:|---:|
@@ -521,18 +559,48 @@ decoder that wrote the image a word at a time (four times fewer stores,
 40% more instructions) came out even in the simulator's counts, and
 was not kept.
 
-**Next: documents in flash.** With the room, `read` is to become a core
-app, and the archive's `.txt` files (`welcome.txt`, `repl.txt`, from
-`md2txt.py`) are to be replaced by the Markdown itself -- `welcome.md`,
-`repl.md` and a few more -- for `read` to show. After compression has
-been tested on hardware.
+**Nothing stored since November 2026.** `read` (67K) and `keyboard`
+(33K) did not fit beside `wm` and `net` stored: compressed, those two
+take 41K and 49K less, which paid for both and left room to grow.
+`CORE_STORE` is empty. What it costs is time at boot, on the figures
+above: about 0.4s more before the desktop appears (`wm`), and about
+0.4s more before the network is up (`net`, while `wm` already runs).
+
+## Two sizes of machine
+
+Every board Machdyne sells has 32MB of main memory or more (Lebkuchen,
+the smallest, has 8MB). Obst has 1MB of SRAM (some 2MB), and until
+November 2026 every core app was held to what fits beside the boot set
+in 1MB -- the last kilobyte of it, so that each new feature in `wm`,
+`text`, `term` or `repl` had to be paid for from another app. A board
+now has a **tier**, `CORE_TIER` in its block of the top-level Makefile:
+
+| | `normal` (every board but Obst) | `small` (Obst) |
+|---|---|---|
+| core apps | `CORE_APPS` | the same list |
+| built | as they are | with `Z_SMALL` (`sw/common/app.mk`): what costs RAM and a 1MB machine does without is left out -- touch ([touch.md](touch.md)) |
+| RAM budgets | `CORE_BUDGETS_NORMAL` | `CORE_BUDGETS_SMALL`: what every board had before |
+| the RAM rule | 2MB | 1MB, as before |
+| flash budgets | the same 848K region | the same |
+
+`make BOARD=obst flash_apps` builds the small apps; the next build for
+another board builds them again as they are -- each app keeps the flags
+it was built with in `.cflags` beside its objects, and a change makes
+every object again. The release builds the small archive once for any
+small target (`release/lib/build.py`, `target_zar()`) and ships it as
+`zeitlos-<target>-apps.zar`; `zrelease check` holds both tiers'
+budgets to their rules.
+
+A new feature that costs RAM goes in `#ifndef Z_SMALL` when a 1MB
+machine can do without it; one that cannot be left out is paid for
+in `CORE_BUDGETS_SMALL` as before.
 
 **RAM.** The core apps do not all run at once. Boot starts `fs` first
 (the filesystem, [fs_driver.md](fs_driver.md)), then `usb` (the USB
 host, [usb_driver.md](usb_driver.md)); `init()` starts `wm`,
 `net`, `console` (and `cron` when it has a job list); the rest are
 started on demand. The rule is that **one or two more core apps must
-fit beside those**, on the 1MB boards included -- so a new core app is
+fit beside those**, in 2MB on a normal board and 1MB on a small one ("Two sizes of machine") -- so a new core app is
 judged by its RAM image as much as by its flash size. [boot.md](boot.md),
 "Memory budget", has what a 1MB board holds.
 

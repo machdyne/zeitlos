@@ -370,8 +370,21 @@
 // that added it; before that only ULX3S (`ESP32_LINK) had one, and
 // without it 0xf000_0400 may be decoded as the console UART -- so a
 // write to reg_vmouse is only safe when this bit is set. Used by
-// sw/apps/automate (docs/automate.md) and net's remote desktop.
+// sw/apps/automate (docs/automate.md), net's remote desktop, and usb
+// for touch screens and pen tablets (docs/touch.md).
 #define Z_FEATURE2_VMOUSE     (1u << 11)
+// Its fields (rtl/sysctl.v). TOUCH and WHEEL came in November 2026; an
+// older bitstream reads them as 0: a mouse, and no wheel.
+#define Z_VMOUSE_X(v)         ((v) & 0x3ffu)
+#define Z_VMOUSE_Y(v)         (((v) >> 10) & 0x3ffu)
+#define Z_VMOUSE_BTN(v)       (((v) >> 20) & 7u)
+#define Z_VMOUSE_PRESENT      (1u << 24)
+#define Z_VMOUSE_TOUCH        (1u << 25)	// a finger or a pen, not a mouse
+#define Z_VMOUSE_WHEEL(v)     (((v) >> 26) & 0x3fu)	// notches, wrapping, kept by the writer
+#define Z_VMOUSE_MAKE(x, y, btn, touch, wheel) \
+	(((uint32_t)(x) & 0x3ffu) | (((uint32_t)(y) & 0x3ffu) << 10) | \
+	 (((uint32_t)(btn) & 7u) << 20) | Z_VMOUSE_PRESENT | ((touch) ? Z_VMOUSE_TOUCH : 0) | \
+	 (((uint32_t)(wheel) & 0x3fu) << 26))
 // rtl/sha256.v -- see Z_SHA256_BASE below. rtl/csrs.vh FEATURES2 bit 12.
 #define Z_FEATURE2_SHA256     (1u << 12)
 // rtl/keccak.v -- see Z_KECCAK_BASE below. rtl/csrs.vh FEATURES2 bit 13.

@@ -194,8 +194,18 @@ APP_MAIN_RULE ?= 1
 # card (docs/layout.md). APP is the name the app has in /apps too.
 APP_NAME_CFLAGS = -DZ_APP_NAME='"$(APP)"'
 
+# Z_SMALL = 1: the small build of a core app, for a board with 1MB of
+# main memory (Obst; docs/flash_apps.md, "Two sizes of machine"). What
+# costs RAM and a 1MB board can do without -- touch, for one -- is left
+# out with #ifndef Z_SMALL. The top-level Makefile sets it for a board
+# whose CORE_TIER is small; nothing else should.
+Z_SMALL ?= 0
+ifeq ($(Z_SMALL),1)
+SMALL_CFLAGS = -DZ_SMALL
+endif
+
 override CFLAGS += --std=gnu99 -Os -MD -Wall -march=$(ARCH) -mabi=$(ABI) \
-	$(GFX_CFLAGS) $(ZFMT_CFLAGS) $(APP_CFLAGS) $(POSIX_IO_CFLAGS) $(APP_NAME_CFLAGS) $(GC_CFLAGS) \
+	$(GFX_CFLAGS) $(ZFMT_CFLAGS) $(APP_CFLAGS) $(SMALL_CFLAGS) $(POSIX_IO_CFLAGS) $(APP_NAME_CFLAGS) $(GC_CFLAGS) \
 	$(ARCH_DEFS) $(LIBC_FLAGS)
 # Page size for the linker's segment layout: 16 bytes, not 4 KB, as for
 # the kernel (sw/os/Makefile, SEG_PAGE_LDFLAGS). riscv-app.ld's
@@ -208,6 +218,20 @@ SEG_PAGE_LDFLAGS = -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16
 LDFLAGS = -march=$(ARCH) -mabi=$(ABI) $(GC_LDFLAGS) $(LIBC_FLAGS) $(SEG_PAGE_LDFLAGS)
 LDSCRIPT = $(COMMON_DIR)/riscv-app.ld
 MKEXEC = python3 $(COMMON_DIR)/../../tools/mkexec.py
+
+# The flags a build was made with, in .cflags beside the objects: when
+# they change -- Z_SMALL for Obst and back, ZFMT, a -D on the command
+# line -- every object is made again. -MD tracks headers, not flags, so
+# without this a switch would link objects made both ways (and an app's
+# Makefile used to say "clean first"). The file is rewritten only when
+# the flags differ, so an unchanged tree is still "nothing to be done".
+# $(shell) and printf rather than $(file): make 3.81, macOS's, has no
+# $(file).
+CFLAGS_STAMP = .cflags
+CFLAGS_NOW := $(CC) $(CFLAGS) $(LDFLAGS)
+ifneq ($(CFLAGS_NOW),$(shell cat $(CFLAGS_STAMP) 2>/dev/null))
+CFLAGS_WRITE := $(shell printf '%s\n' '$(subst ','\'',$(CFLAGS_NOW))' > $(CFLAGS_STAMP))
+endif
 
 # The app's own directory is searched first (make always looks in the
 # current directory before vpath), then SRC_DIRS, then sw/common.
@@ -223,6 +247,8 @@ $(APP): $(APP).elf $(APP).bin
 
 %.o: %.c
 	$(CC) $(CFLAGS) -c $< -o $@
+
+$(OBJS) $(APP).o: $(CFLAGS_STAMP)
 
 ifeq ($(APP_MAIN_RULE),1)
 $(APP).o: $(APP).c
@@ -254,7 +280,7 @@ $(APP).bin: $(APP).elf
 
 clean:
 	rm -rf $(APP).elf $(APP).bin $(APP).data $(APP).asm $(APP).dasm \
-		$(APP).map *.o *.d $(CLEAN_EXTRA)
+		$(APP).map *.o *.d $(CFLAGS_STAMP) $(CLEAN_EXTRA)
 
 .PHONY: $(APP) clean
 

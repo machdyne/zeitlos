@@ -69,6 +69,7 @@ int usb_putchar(int c);
 #define Z_USBH_CLASS_HUB    3
 #define Z_USBH_CLASS_CDC    4
 #define Z_USBH_CLASS_ECM    5   // USB ethernet, usbh_ecm.c
+#define Z_USBH_CLASS_DIG    6   // a touch screen or a pen tablet, usbh_dig.c
 
 // Set up the controller: enable ports, start the frame timer, unmask
 // interrupts. Safe to call when Z_FEATURE2_USB_HOST is clear -- it

@@ -33,7 +33,27 @@ void z_edit_set(z_edit_t *e, const char *s) {
 
 }
 
+// The field that last told wm this process wants text (docs/touch.md):
+// one per process, since every field of a window is in it. A field
+// that loses the focus says "no longer" only if it was the one that
+// said "now" -- a dialog moving the focus from one field to another
+// draws the new one first as often as the old.
+static const z_edit_t *wants_text_from;
+
+static void wants_text(const z_win_t *win, const z_edit_t *e, int y, int h) {
+	if (e->focus && wants_text_from != e) {
+		wants_text_from = e;
+		z_win_wants_text(win, true, y + h);		// below the field: what must stay visible
+	} else if (!e->focus && wants_text_from == e) {
+		wants_text_from = 0;
+		z_win_wants_text(win, false, -1);
+	}
+}
+
 void z_edit_init(z_edit_t *e, char *buf, int cap, const char *initial) {
+	// A field set up again is a new one to wm (a dialog opened again,
+	// perhaps in a new window with the same field)
+	if (wants_text_from == e) wants_text_from = 0;
 	memset(e, 0, sizeof(*e));
 	e->buf = buf;
 	e->cap = cap;
@@ -166,6 +186,7 @@ void z_edit_draw(const z_win_t *win, z_edit_t *e,
 	int x0, y0, x1, y1, cols, n;
 
 	if (w <= 2 * PAD_X || h <= 2) return;
+	wants_text(win, e, y, h);
 
 	z_win_content_rect(win, &content);
 

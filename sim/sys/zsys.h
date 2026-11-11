@@ -195,6 +195,13 @@ typedef struct zsys {
 	// -- the two USB HID ports (rtl/usb_hid.v), IRQ 5 and 6 --
 	zsys_hid_t hid[2];
 
+	// -- the virtual mouse (rtl/sysctl.v, `VMOUSE) at 0xf000_0400:
+	// {wheel[31:26], touch[25], present[24], buttons[22:20], y, x}; the
+	// cursor follows it while present. FEATURES2 bit 11 says it is there.
+	uint32_t vmouse;
+	uint8_t vwheel;					// zsys_touch_wheel()'s count
+	bool kbd_unplugged;				// zsys_keyboard_plugged(false): kept across a reset
+
 	// -- audio (rtl/audio.v), IRQ 7, a level --
 	zsys_audio_t audio;
 	bool audio_on;					// FEATURES has AUDIO: the block is there
@@ -282,8 +289,27 @@ void zsys_mouse(zsys_t *s, int x, int y, uint8_t buttons);
 // USB host's mouse slot counts a wheel the descriptor confirmed, and
 // reported on IRQ 6; wm sends the difference to the window.
 void zsys_wheel(zsys_t *s, int notches);
-// Where the hardware cursor is drawn: the mouse port's pointer.
-static inline void zsys_pointer(const zsys_t *s, int *x, int *y) { *x = s->hid[1].cx; *y = s->hid[1].cy; }
+// A finger on a touch screen (docs/touch.md): the virtual mouse with its
+// TOUCH bit, at (x, y), down or lifted -- what usb writes for a USB touch
+// screen. wm is woken as for a report (no device has an interrupt of
+// its own for it; IRQ 6 does it here). zsys_touch_wheel() counts
+// notches into its wheel bits (two fingers dragged). zsys_touch_off()
+// hands the pointer back to the mouse.
+void zsys_touch(zsys_t *s, int x, int y, bool down);
+void zsys_touch_wheel(zsys_t *s, int notches);
+void zsys_touch_off(zsys_t *s);
+// The keyboard on port 0 plugged in or not: a page on a phone has none,
+// and says so, and Zeitlos opens its own (docs/touch.md).
+void zsys_keyboard_plugged(zsys_t *s, bool plugged);
+// internal: the register, for the bus (zsys.c)
+uint32_t zsys_vmouse_read(zsys_t *s);
+void zsys_vmouse_write(zsys_t *s, uint32_t v);
+// Where the hardware cursor is drawn: the virtual mouse's pointer while
+// it is present, else the mouse port's.
+static inline void zsys_pointer(const zsys_t *s, int *x, int *y) {
+	if (s->vmouse & (1u << 24)) { *x = (int)(s->vmouse & 0x3ff); *y = (int)((s->vmouse >> 10) & 0x3ff); return; }
+	*x = s->hid[1].cx; *y = s->hid[1].cy;
+}
 
 // The flash image's file, to write the flash's erases and programs to
 // (-1, the default: they stay in memory).

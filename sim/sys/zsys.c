@@ -281,6 +281,7 @@ static uint32_t io_read(zsys_t *s, uint32_t pa) {
 
 	case 0xf:
 		if ((pa & 0xf0000700u) == 0xf0000000u) return uart_read(s, (pa & 0x1f) >> 2);
+		if ((pa & 0xf0000700u) == 0xf0000400u && (s->features2 & (1u << 11))) return zsys_vmouse_read(s);
 		break;
 
 	}
@@ -331,6 +332,7 @@ static void io_write(zsys_t *s, uint32_t pa, uint32_t v, uint32_t sel) {
 
 	case 0xf:
 		if ((pa & 0xf0000700u) == 0xf0000000u) { uart_write(s, (pa & 0x1f) >> 2, (uint8_t)(v >> 8 * (pa & 3))); return; }
+		if ((pa & 0xf0000700u) == 0xf0000400u && (s->features2 & (1u << 11))) { zsys_vmouse_write(s, v); return; }
 		break;
 
 	}

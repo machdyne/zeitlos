@@ -371,6 +371,14 @@ void z_win_draw_text2(const z_win_t *win, int x, int y, const char *s,
 // by a Z_WM_REDRAW at that size. Z_WM_RESIZE in zwm.h.
 void z_win_resize(const z_win_t *win, uint32_t w, uint32_t h);
 
+// Tells wm the window wants typing now (on) or no longer does: a text
+// field took the focus, or gave it up. On a machine with no keyboard wm
+// opens the on-screen keyboard for it, and moves the window up if the
+// keyboard would cover `caret_y` (content-relative, -1 if not known).
+// z_edit calls it for every text field; a window that is all typing
+// sets Z_WIN_FLAG_TYPES instead. Z_WM_WANTS_TEXT in zwm.h; docs/touch.md.
+void z_win_wants_text(const z_win_t *win, bool on, int caret_y);
+
 // Asks wm to maximize the window (Z_WM_MAXIMIZE in zwm.h): the dock hides
 // while it is maximized. Nothing happens if it already is, or is not
 // resizable. The new size arrives as a Z_WM_WINDOW_RESIZED, as for a

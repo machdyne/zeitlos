@@ -230,9 +230,88 @@ async function start() {
 		wheelAcc -= n * 100;
 		ev(() => M._zw_wheel(-n));
 	}, { passive: false });
+	// -- a finger (docs/touch.md) --
+	//
+	// One finger is the machine's touch screen: the virtual mouse with
+	// its TOUCH bit, which wm reads as tap, drag and hold. Two are this
+	// page's: dragged together they turn the wheel (a notch every 30
+	// pixels), and pinched they zoom the canvas, panned by their middle
+	// -- everything is small on a phone, and this costs the machine
+	// nothing. A device whose pointer is coarse has no keyboard until a
+	// key is pressed: the machine sees port 0 empty and opens its own.
+	let keyboard = !matchMedia("(pointer: coarse)").matches;
+	if (!keyboard) ev(() => M._zw_keyboard(0));
+	const fingers = new Map();
+	let two = null, zoom = 1, panX = 0, panY = 0;
+	const clamp = ([x, y]) => [Math.max(0, Math.min(639, x)), Math.max(0, Math.min(479, y))];
+	const mid = () => { const p = [...fingers.values()]; return [(p[0][0] + p[1][0]) / 2, (p[0][1] + p[1][1]) / 2, Math.hypot(p[0][0] - p[1][0], p[0][1] - p[1][1])]; };
+	const view = () => { cv.style.transform = zoom === 1 ? "" : "translate(" + panX + "px," + panY + "px) scale(" + zoom + ")"; };
+	cv.addEventListener("touchstart", (e) => {
+		e.preventDefault();
+		cv.focus();
+		for (const t of e.changedTouches) fingers.set(t.identifier, [t.clientX, t.clientY]);
+		if (fingers.size === 1) {
+			const [x, y] = clamp(pos(e.changedTouches[0]));
+			ev(() => M._zw_touch(x, y, 1));
+		} else if (fingers.size === 2 && !two) {
+			// the first finger was not a touch after all: let wm forget
+			// it rather than see it lift (which would be a tap)
+			const [x, y] = clamp(pos(e.changedTouches[0]));
+			ev(() => M._zw_touch_off());
+			ev(() => M._zw_touch(x, y, 0));
+			const [mx, my, d] = mid();
+			two = { mx, my, d, zoom, panX, panY, acc: 0, pinch: false };
+		}
+	}, { passive: false });
+	cv.addEventListener("touchmove", (e) => {
+		e.preventDefault();
+		for (const t of e.changedTouches) if (fingers.has(t.identifier)) fingers.set(t.identifier, [t.clientX, t.clientY]);
+		if (two && fingers.size >= 2) {
+			const [mx, my, d] = mid();
+			if (!two.pinch && Math.abs(d - two.d) > 30) two.pinch = true;
+			if (two.pinch) {
+				// the point under the fingers' middle stays under it
+				const fr = cv.parentNode.getBoundingClientRect();
+				zoom = Math.max(1, Math.min(4, two.zoom * d / two.d));
+				const k = zoom / two.zoom;
+				panX = (mx - fr.left) - ((two.mx - fr.left) - two.panX) * k;
+				panY = (my - fr.top) - ((two.my - fr.top) - two.panY) * k;
+				if (zoom === 1) panX = panY = 0;
+				view();
+			} else {
+				two.acc += my - two.my;
+				two.my = my;
+				const n = Math.trunc(two.acc / 30);
+				if (n) { two.acc -= n * 30; ev(() => M._zw_touch_wheel(n)); }
+			}
+			return;
+		}
+		if (fingers.size === 1 && !two) {
+			const [x, y] = clamp(pos(e.changedTouches[0]));
+			if (queue.length && queue[queue.length - 1].move) queue.pop();
+			const f = () => M._zw_touch(x, y, 1);
+			f.move = true;
+			ev(f);
+		}
+	}, { passive: false });
+	const lift = (e) => {
+		e.preventDefault();
+		for (const t of e.changedTouches) {
+			if (fingers.size === 1 && !two && fingers.has(t.identifier)) {
+				const [x, y] = clamp(pos(t));
+				ev(() => M._zw_touch(x, y, 0));
+			}
+			fingers.delete(t.identifier);
+		}
+		if (!fingers.size) two = null;
+	};
+	cv.addEventListener("touchend", lift, { passive: false });
+	cv.addEventListener("touchcancel", lift, { passive: false });
+
 	const key = (down) => (e) => {
 		const u = HID[e.code];
 		if (!u || e.repeat) { if (u) e.preventDefault(); return; }	// a USB keyboard does not repeat
+		if (!keyboard) { keyboard = true; ev(() => M._zw_keyboard(1)); }	// there is one after all
 		ev(() => M._zw_key(u, down ? 1 : 0));
 		e.preventDefault();
 	};

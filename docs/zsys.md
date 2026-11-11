@@ -221,6 +221,14 @@ board's -- nothing on the software side knows it is emulated.
   `--wheel N` turns the wheel N notches (up positive); `--wait MS`
   between them, all in order. 40ms of the machine's time from
   one input to the next.
+- **A finger** ([touch.md](touch.md)): the virtual mouse at
+  `0xf000_0400` (`VMOUSE`, FEATURES2 bit 11) with its TOUCH bit and its
+  wheel, as `usb` writes it for a USB touch screen; the cursor follows
+  it while it is present. Headless, `--tap X,Y`, or `--touch-down`,
+  `--touch-move` and `--touch-up X,Y` for a drag or (with `--wait`) a
+  long press, and `--touch-wheel N` for two fingers.
+  **`--no-keyboard`** leaves port 0 empty, as a phone's page does, so
+  Zeitlos opens its own keyboard when a window wants text.
 
 ### The picture: game mode and colour
 
@@ -499,6 +507,18 @@ with a card, the wheel scrolls the guide, Super+S's speech reaches
 the page's audio, and planedemo, started from the console line, fills
 the canvas in colour, mausrun3d draws through T2, textured; the
 full-screen button works.
+
+### Touch, in the page
+
+On a phone or a tablet, one finger is the machine's touch screen (the
+virtual mouse, with TOUCH): tap, drag, hold for the right button, read
+by wm ([touch.md](touch.md)). Two fingers are the page's: dragged
+together they turn the wheel, a notch every 30 pixels; pinched they zoom
+the canvas, and pan it by their middle -- the whole desktop is small on
+a phone. A device whose pointer is coarse (`matchMedia("(pointer:
+coarse)")`) has no keyboard until a key is pressed: the page reports
+port 0 empty (`zw_keyboard(0)`), and Zeitlos opens its own. The first
+physical key plugs one in.
 
 ## Speed
 

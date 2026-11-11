@@ -50,7 +50,7 @@ EMSCRIPTEN_KEEPALIVE int zw_init(uint8_t *flash, uint32_t flash_len, uint8_t *ca
 		(1u << 26) | (1u << 27);		// ... AUDIO, GAME
 	s.audio_on = true;
 	s.t2_on = true;					// T2, as sergei_ml2's build has it
-	s.features2 = (1u << 5) | (1u << 6) | (1u << 15);	// RECONFIG, FLASHW, COLOR
+	s.features2 = (1u << 5) | (1u << 6) | (1u << 11) | (1u << 15);	// RECONFIG, FLASHW, VMOUSE, COLOR
 	const uint8_t *bios;
 	uint32_t bios_len;
 	if (!zsys_load_flash(&s, flash, flash_len, &bios, &bios_len)) return 2;
@@ -108,6 +108,13 @@ EMSCRIPTEN_KEEPALIVE uint32_t zw_audio_take(float *out, uint32_t max, uint32_t h
 }
 
 EMSCRIPTEN_KEEPALIVE void zw_wheel(int notches) { zsys_wheel(&s, notches); }
+// A finger (docs/touch.md): the virtual mouse with its TOUCH bit;
+// two fingers' drag as wheel notches; the mouse back; and the page's
+// keyboard there or not (a phone's is not).
+EMSCRIPTEN_KEEPALIVE void zw_touch(int x, int y, int down) { zsys_touch(&s, x, y, down != 0); }
+EMSCRIPTEN_KEEPALIVE void zw_touch_wheel(int notches) { zsys_touch_wheel(&s, notches); }
+EMSCRIPTEN_KEEPALIVE void zw_touch_off(void) { zsys_touch_off(&s); }
+EMSCRIPTEN_KEEPALIVE void zw_keyboard(int plugged) { zsys_keyboard_plugged(&s, plugged != 0); }
 EMSCRIPTEN_KEEPALIVE int zw_uart_in(int c) { return zsys_uart_in(&s, (uint8_t)c); }
 
 // What the page keeps between visits, if its owner chooses: the card's

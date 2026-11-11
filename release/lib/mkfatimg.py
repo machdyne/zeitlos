@@ -121,7 +121,7 @@ SET_NAMES = [n for n, _t, _d in SETS]
 APP_SET = {
     "posix": "base", "vi": "base", "zetta": "base", "settings": "base",
     "info": "base", "calc": "base", "clock": "base", "cal": "base",
-    "keyboard": "base", "jfont": "base", "read": "base", "ask": "base",
+    "jfont": "base", "ask": "base",
     "update": "base", "backup": "base", "learn": "base", "checkup": "base",
     "sheet": "work", "slide": "work", "print": "work",
     "convert": "work", "draw": "work", "view": "work", "pix": "work",
@@ -304,7 +304,6 @@ SUPPLEMENTAL = [
     (zcard("Z_DIR_APPS", "slide"), "sw/apps/slide/slide.bin"),
     (zcard("Z_DIR_APPS", "print"), "sw/apps/print/print.bin"),
     (zcard("Z_DIR_APPS", "convert"), "sw/apps/convert/convert.bin"),
-    (zcard("Z_DIR_APPS", "read"), "sw/apps/read/read.bin"),
     (zcard("Z_DIR_APPS", "learn"), "sw/apps/learn/learn.bin"),
     (zcard("Z_DIR_APPS", "ask"), "sw/apps/ask/ask.bin"),
     (zcard("Z_DIR_APPS", "draw"), "sw/apps/draw/draw.bin"),
@@ -335,7 +334,6 @@ SUPPLEMENTAL = [
     (zcard("Z_DIR_APPS", "mesh"), "sw/apps/mesh/mesh.bin"),
     (zcard("Z_DIR_APPS", "tts"), "sw/apps/tts/tts.bin"),
     (zcard("Z_DIR_APPS", "jfont"), "sw/apps/jfont/jfont.bin"),
-    (zcard("Z_DIR_APPS", "keyboard"), "sw/apps/keyboard/keyboard.bin"),
     (zcard("Z_DIR_APPS", "automate"), "sw/apps/automate/automate.bin"),
     (zcard("Z_DIR_APPS", "cryptobench"), "sw/apps/cryptobench/cryptobench.bin"),
     # Brings the card up to date with a newer release (docs/update.md).

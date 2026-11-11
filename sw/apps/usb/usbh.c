@@ -31,6 +31,98 @@ int z_soc_has_feature2(uint32_t bit);
 #include "../../common/zsoc.h"
 #endif
 
+// Touch screens and pen tablets (usbh_dig.c, docs/touch.md): not in the
+// small build (Z_SMALL, a 1MB machine) or the co-simulation.
+#if !defined(Z_SMALL) && !defined(Z_USBH_COSIM)
+#define USBH_DIG 1
+#include "usbh_dig.h"
+#include "../../common/zeitlos.h"       // reg_vmouse, z_wm_wake()
+#endif
+
+// ---------------------------------------------------------------
+// digitizers: touch screens and pen tablets (usbh_dig.c)
+// ---------------------------------------------------------------
+#ifdef USBH_DIG
+// A digitizer's reports (usbh_dig.c): 64 bytes of the free 0x320-0x37f,
+// so one at a time, and one whose packets are no longer than that.
+#define SCR_DIG     0x320u
+#define SCR_DIG_MAX 64
+// One at a time: the landing area is one. dig_pend is the device whose
+// report descriptor is being read; dig_dev the one running.
+static int dig_pend = -1, dig_dev = -1;
+static uint8_t dig_ep, dig_mps, dig_ival;
+static int dig_rdlen;
+static z_usbh_dlay_t dig_lay;
+static z_usbh_dstate_t dig_st;
+static uint32_t dig_reports, dig_theirs, dig_raw;
+// The first interface found, kept while another is read: an XP-Pen's
+// interface 0 is an absolute mouse that sends nothing in the tablet's
+// default mode, and its interface 1 is the pen. The better of the two
+// (a touch screen, then a pen, then an absolute mouse) is used.
+static z_usbh_dlay_t dig_alt;
+static uint8_t dig_alt_ep, dig_alt_mps, dig_alt_ival;
+static int8_t dig_alt_iface = -1;	// for lsusb: reports seen, ones decoded, the last's first 4 bytes
+
+// The report descriptor, now in the packet buffer at `d`, parsed.
+static int dig_parse_at(uint32_t d, int n)
+{
+    uint8_t rd[400];
+    int k;
+    if (n > (int)sizeof(rd)) n = (int)sizeof(rd);
+    for (k = 0; k < n; k++) rd[k] = z_usbh_rb(d + (uint32_t)k);
+    return z_usbh_dig_parse(rd, n, &dig_lay);
+}
+
+// The virtual mouse, written: where the digitizer's pointer goes. On a
+// bitstream without one, nothing (it would be the console UART there).
+static void dig_write(uint32_t w)
+{
+    if (!z_soc_has_feature2(Z_FEATURE2_VMOUSE)) return;
+    reg_vmouse = w;
+    z_wm_wake();
+}
+
+// A report from the digitizer, if one came: decoded and written, only
+// when it says something new. Its reports land in a RAW slot, which
+// the hardware carries no further: poll_change (IRQSTAT bit 3) is what
+// says one came, so it is an interrupt source while a digitizer is
+// bound (usbh_irq_sources()) -- without it nothing stepped the device,
+// and the pen moved nothing (found on hardware, an XP-Pen tablet).
+static void dig_step(int i)
+{
+    z_usbh_dev_t *dv = &usbh_devs[i];
+    uint8_t r[SCR_DIG_MAX];
+    uint32_t pb, w, prev = dig_st.last;
+    int k, n;
+
+    if (dv->slot < 0) return;
+    pb = z_usbh_rd(Z_USBH_POLL_B(dv->slot));
+    if (!(pb & Z_USBH_PB_CHANGED)) return;
+    n = dig_mps;
+    for (k = 0; k < n; k++) r[k] = z_usbh_rb(Z_USBH_BUF + SCR_DIG + (uint32_t)k);
+    z_usbh_wr(Z_USBH_POLL_B(dv->slot), pb & ~Z_USBH_PB_CHANGED);
+    dig_reports++;
+    dig_raw = (uint32_t)r[0] | (uint32_t)r[1] << 8 | (uint32_t)r[2] << 16 | (uint32_t)r[3] << 24;
+    if (!z_usbh_dig_decode(&dig_lay, &dig_st, r, n, &w)) return;
+    dig_theirs++;
+    if (w != prev) dig_write(w);
+}
+#endif
+
+// The interrupt sources: transfers, the ports, a slot's error -- and a
+// slot's new data while a digitizer is bound. Not otherwise: a boot
+// mouse's every report changes its slot, and the point of the hardware
+// path is that those never wake this process.
+static uint32_t usbh_irq_sources(void)
+{
+    uint32_t s = Z_USBH_IRQ_XACT_DONE | Z_USBH_IRQ_PORT0 |
+                 Z_USBH_IRQ_PORT1 | Z_USBH_IRQ_POLL_ERROR;
+#ifdef USBH_DIG
+    if (dig_dev >= 0) s |= Z_USBH_IRQ_POLL_CHANGE;
+#endif
+    return s;
+}
+
 // -- standard requests, USB 2.0 chapter 9 --
 
 #define REQ_GET_DESCRIPTOR  0x06
@@ -783,6 +875,10 @@ void usbh_dev_fail(z_usbh_dev_t *dv)
     // fails takes everything behind it down too.
     usbh_scr_free(dv->scr);
     dv->scr = 0;
+#ifdef USBH_DIG
+    // A digitizer failing part-way is looked for afresh when it is retried
+    if (dig_pend == (int)(dv - devs)) { dig_pend = -1; dig_alt_iface = -1; }
+#endif
     // And its poll slot: a hub fails while running, with its status
     // endpoint slot still live.
     if (dv->slot >= 0) {
@@ -834,6 +930,15 @@ void usbh_teardown(int i)
     // commands.
     if (devs[i].cls == Z_USBH_CLASS_MSC) z_usbh_msc_unbind();
     if (devs[i].cls == Z_USBH_CLASS_CDC) z_usbh_cdc_unbind();
+#ifdef USBH_DIG
+    // A digitizer unplugged: the pointer goes back to the mouse, with
+    // no button left down.
+    if (dig_pend == i) { dig_pend = -1; dig_alt_iface = -1; }
+    if (dig_dev == i) {
+        dig_dev = -1;
+        if (dig_st.last) dig_write(0);
+    }
+#endif
     // Always, not by class: an adapter part-way through enumeration has
     // claimed the ECM function without being bound yet.
     z_usbh_ecm_forget(i);
@@ -904,6 +1009,7 @@ uint16_t usbh_scr_take_hub(void)
 {
     return scr_take(SCR_HUB0, 4, SCR_HUB1, 8);
 }
+
 
 // ---------------------------------------------------------------
 // keyboard LEDs
@@ -1298,6 +1404,23 @@ static void dev_step(int i, uint32_t ps)
                 }
                 break;
             }
+#ifdef USBH_DIG
+            // A HID interface that is not a boot device: a touch screen
+            // or a pen tablet, if its report descriptor says so.
+            if (dig_pend < 0 && dig_dev < 0) {
+                a = z_usbh_dig_iface(dv->cfg_raw, dv->cfg_rawn, -1, &dig_ep, &dig_mps,
+                                     &dig_ival, &dig_rdlen);
+                if (a >= 0 && dig_mps <= SCR_DIG_MAX) {
+                    dv->iface = (int8_t)a;
+                    dig_pend = i;
+                    if (dig_rdlen > 400) dig_rdlen = 400;
+                    usbh_ctrl_begin(i, DIR_IN | 0x01, REQ_GET_DESCRIPTOR, 0x2200,
+                                    (uint16_t)a, (uint16_t)dig_rdlen);
+                    dv->state = E_DIG_RDESC;
+                    break;
+                }
+            }
+#endif
             dv->state = E_BIND;
             break;
         }
@@ -1338,6 +1461,39 @@ static void dev_step(int i, uint32_t ps)
             } else {
                 int n = dv->ctrl_len > 400 ? 400 : dv->ctrl_len;
                 const z_usbh_mlay_t *l = &dv->mlay;
+#ifdef USBH_DIG
+                // A tablet or a touch monitor in its mouse mode: a boot
+                // mouse whose report protocol says where, not how far.
+                // Read as a digitizer, in report protocol.
+                if (dig_pend < 0 && dig_dev < 0 && dig_parse_at(d, n) &&
+                    z_usbh_dig_iface(dv->cfg_raw, dv->cfg_rawn, -1, &dig_ep, &dig_mps,
+                                     &dig_ival, &dig_rdlen) == dv->iface &&
+                    dig_mps <= SCR_DIG_MAX) {
+                    dig_pend = i;
+                    // Another HID interface may be the pen or the touch
+                    // screen itself: read it too, and keep the better.
+                    if (dig_lay.kind != DIG_TOUCH) {
+                        uint8_t e, m, v;
+                        int rl;
+                        a = z_usbh_dig_iface(dv->cfg_raw, dv->cfg_rawn, dv->iface, &e, &m, &v, &rl);
+                        if (a >= 0 && m <= SCR_DIG_MAX) {
+                            dig_alt = dig_lay;
+                            dig_alt_ep = dig_ep; dig_alt_mps = dig_mps; dig_alt_ival = dig_ival;
+                            dig_alt_iface = dv->iface;
+                            dig_ep = e; dig_mps = m; dig_ival = v;
+                            dv->iface = (int8_t)a;
+                            usbh_ctrl_begin(i, DIR_IN | 0x01, REQ_GET_DESCRIPTOR, 0x2200,
+                                            (uint16_t)a, (uint16_t)(rl > 400 ? 400 : rl));
+                            dv->state = E_DIG_RDESC;
+                            break;
+                        }
+                    }
+                    usbh_ctrl_begin(i, HID_OUT_IFACE, REQ_SET_PROTOCOL, 1,
+                                    (uint16_t)dv->iface, 0);
+                    dv->state = E_SET_PROTO;
+                    break;
+                }
+#endif
                 if (z_usbh_hid_rdesc_parse(d, n, &dv->mlay)) {
                     dv->mouse_rd = MRD_REPORT;
                     proto = 1;
@@ -1354,6 +1510,39 @@ static void dev_step(int i, uint32_t ps)
             dv->state = E_SET_PROTO;
         }
         break;
+
+#ifdef USBH_DIG
+    case E_DIG_RDESC:
+        // A digitizer's report descriptor: understood, then report
+        // protocol and SET_IDLE as for a mouse, and bound in E_BIND;
+        // not understood, it is a device with no driver.
+        a = usbh_ctrl_step(i);
+        if (a != CS_ERROR && !usbh_ctrl_finished(i)) break;
+        if (dig_alt_iface >= 0) {
+            // The second interface of one: kept if it is better than the
+            // first, which is otherwise used after all
+            if (a == CS_ERROR || !dig_parse_at(d, dv->ctrl_len) || dig_lay.kind >= dig_alt.kind) {
+                dig_lay = dig_alt;
+                dig_ep = dig_alt_ep; dig_mps = dig_alt_mps; dig_ival = dig_alt_ival;
+                dv->iface = dig_alt_iface;
+            }
+            dig_alt_iface = -1;
+            usbh_ctrl_begin(i, HID_OUT_IFACE, REQ_SET_PROTOCOL, 1, (uint16_t)dv->iface, 0);
+            dv->state = E_SET_PROTO;
+            break;
+        }
+        if (a == CS_ERROR || !dig_parse_at(d, dv->ctrl_len)) {
+            printf("usb: %d: a HID device that is not a keyboard, a mouse, a touch screen or a pen\n",
+                   dv->addr);
+            dig_pend = -1;
+            dv->iface = -1;
+            dv->state = E_BIND;
+            break;
+        }
+        usbh_ctrl_begin(i, HID_OUT_IFACE, REQ_SET_PROTOCOL, 1, (uint16_t)dv->iface, 0);
+        dv->state = E_SET_PROTO;
+        break;
+#endif
 
     case E_SET_PROTO:
         // A STALL here is not fatal -- plenty of mice refuse
@@ -1458,6 +1647,39 @@ static void dev_step(int i, uint32_t ps)
             break;
         }
 
+#ifdef USBH_DIG
+        // A touch screen or a pen tablet: a RAW poll slot into its own
+        // landing area, read by dig_step() below.
+        if (dig_pend == i) {
+            int s = usbh_slot_take();
+            dig_pend = -1;
+            if (s >= 0) {
+                dv->slot = (int8_t)s;
+                dv->cls = Z_USBH_CLASS_DIG;
+                dig_dev = i;
+                memset(&dig_st, 0, sizeof(dig_st));
+                z_usbh_wr(Z_USBH_POLL_B(s), Z_USBH_PB_OFF(SCR_DIG) |
+                                            Z_USBH_PB_MODE(Z_USBH_MODE_RAW));
+                z_usbh_wr(Z_USBH_POLL_A(s), Z_USBH_PA_ADDR(dv->addr) |
+                                            Z_USBH_PA_ENDP(dig_ep) |
+                                            ((uint32_t)dv->xa_flags << 11) |
+                                            Z_USBH_PA_PORT(dv->port) |
+                                            Z_USBH_PA_MPS(dig_mps) |
+                                            Z_USBH_PA_INTERVAL(dig_ival) |
+                                            Z_USBH_PA_ENABLE);
+                z_usbh_wr(Z_USBH_CTRL, z_usbh_rd(Z_USBH_CTRL) | Z_USBH_CTRL_FRAME_EN);
+                printf("usb: %d: a %s, X %ld..%ld, Y %ld..%ld\n", dv->addr,
+                       dig_lay.kind == DIG_TOUCH ? "touch screen" :
+                       dig_lay.kind == DIG_PEN ? "pen tablet" : "mouse that says where (absolute)",
+                       (long)dig_lay.x_min, (long)dig_lay.x_max,
+                       (long)dig_lay.y_min, (long)dig_lay.y_max);
+                usbh_any_ready = 1;
+                dv->state = E_RUNNING;
+                break;
+            }
+        }
+#endif
+
         // The auto-poll slot is allocated, not the device's index:
         // with hubs there are more devices than slots.
         dv->slot = (int8_t)usbh_slot_take();
@@ -1548,6 +1770,9 @@ static void dev_step(int i, uint32_t ps)
 
     case E_RUNNING:
         if (dv->cls == Z_USBH_CLASS_HUB) usbh_hub_step(i);
+#ifdef USBH_DIG
+        else if (dv->cls == Z_USBH_CLASS_DIG) dig_step(i);
+#endif
         else if (is_keyboard(dv)) kbd_led_step(i);
         break;
 
@@ -1632,8 +1857,7 @@ void z_usbh_init(void)
                            Z_USBH_CTRL_PORT_EN(1));
 
     z_usbh_wr(Z_USBH_IRQSTAT, 0x3f);
-    z_usbh_wr(Z_USBH_IRQEN, Z_USBH_IRQ_XACT_DONE | Z_USBH_IRQ_PORT0 |
-                            Z_USBH_IRQ_PORT1 | Z_USBH_IRQ_POLL_ERROR);
+    z_usbh_wr(Z_USBH_IRQEN, usbh_irq_sources());
 }
 
 // The tick's share of the stepping (kernel.c's KTIMER branch).
@@ -1678,6 +1902,12 @@ uint32_t z_usbh_wait_ticks(void)
     int i;
     if (!usbh_present) return 0;
     if (!usbh_settled()) return 1;
+#ifdef USBH_DIG
+    // A digitizer: its reports raise poll_change (usbh_irq_sources()),
+    // and every 7th tick (~10 ms) as well, should a bitstream not -- a
+    // pen at 100 reports a second still draws a line.
+    if (dig_dev >= 0) return 7;
+#endif
     for (i = 0; i < Z_USBH_MAX_DEVS; i++)
         if (devs[i].state == E_RUNNING && devs[i].cls == Z_USBH_CLASS_HUB)
             return 16;
@@ -1696,9 +1926,7 @@ int z_usbh_present(void)
 void z_usbh_irq_enable(int on)
 {
     if (!usbh_present) return;
-    z_usbh_wr(Z_USBH_IRQEN, on ? (Z_USBH_IRQ_XACT_DONE | Z_USBH_IRQ_PORT0 |
-                                  Z_USBH_IRQ_PORT1 | Z_USBH_IRQ_POLL_ERROR)
-                               : 0);
+    z_usbh_wr(Z_USBH_IRQEN, on ? usbh_irq_sources() : 0);
 }
 
 void z_usbh_poll(void)
@@ -1749,6 +1977,7 @@ static const char *state_name(int st)
     case E_HUB_RECOVER: return "hub-recover";
     case E_SER_SETUP:   return "serial-setup";
     case E_HID_RDESC:   return "hid-report-desc";
+    case E_DIG_RDESC:   return "digitizer-report-desc";
     case E_ECM_MAC:     return "ecm-mac";
     case E_ECM_ALT:     return "ecm-set-interface";
     case E_ECM_FILT:    return "ecm-filter";
@@ -1806,6 +2035,7 @@ static void dump_dev(int i, const char *pre)
     if (devs[i].cls == Z_USBH_CLASS_CDC)
         printf(" class=cdc (%s)", z_usbh_ser_name(devs[i].ser.kind));
     if (devs[i].cls == Z_USBH_CLASS_ECM) printf(" class=ecm");
+    if (devs[i].cls == Z_USBH_CLASS_DIG) printf(" class=digitizer");
     if (devs[i].retries) printf(" retries=%d", devs[i].retries);
     if (devs[i].recoveries)
         printf(" recovered=%d", devs[i].recoveries);   // port disabled by hub
@@ -1843,6 +2073,25 @@ static void dump_dev(int i, const char *pre)
                "attributes %02x\n", pre,
            devs[i].cfg_val, devs[i].cfg_nif, devs[i].cfg_attr);
     if (devs[i].cls == Z_USBH_CLASS_ECM) z_usbh_ecm_dump(pre);
+#ifdef USBH_DIG
+    if (devs[i].cls == Z_USBH_CLASS_DIG && i == dig_dev) {
+        // what it is, and what has come from it: reports, the ones that
+        // were the digitizer's (its report ID), the last's first bytes,
+        // the slot's status, and what the virtual mouse was last told
+        printf("%sdigitizer: kind %d, interface %d, report id %d, ep %d mps %d every %d; "
+               "X bit %d (%d) %ld..%ld, Y bit %d (%d) %ld..%ld, tip %d\n",
+               pre, dig_lay.kind, devs[i].iface, dig_lay.id, dig_ep, dig_mps, dig_ival,
+               dig_lay.x_bit, dig_lay.x_sz, (long)dig_lay.x_min, (long)dig_lay.x_max,
+               dig_lay.y_bit, dig_lay.y_sz, (long)dig_lay.y_min, (long)dig_lay.y_max,
+               dig_lay.tip_bit);
+        printf("%sdigitizer: %lu reports, %lu of them its own; last bytes %08lx; slot %d status %lu; "
+               "vmouse %08lx%s\n", pre, (unsigned long)dig_reports, (unsigned long)dig_theirs,
+               (unsigned long)dig_raw, devs[i].slot,
+               devs[i].slot >= 0 ? (unsigned long)Z_USBH_PB_STATUS(z_usbh_rd(Z_USBH_POLL_B(devs[i].slot))) : 0ul,
+               (unsigned long)dig_st.last,
+               z_soc_has_feature2(Z_FEATURE2_VMOUSE) ? "" : " (no VMOUSE in this bitstream)");
+    }
+#endif
 
 #ifdef USBH_DEBUG
     if (devs[i].got_cfg && devs[i].blk < 0) {

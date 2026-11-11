@@ -1169,6 +1169,25 @@ void z_win_resize(const z_win_t *win, uint32_t w, uint32_t h) {
 
 }
 
+void z_win_wants_text(const z_win_t *win, bool on, int caret_y) {
+
+	if (win->id < 0) return;
+
+	uint32_t wmpid = resolve_wm_pid();
+	if (!wmpid) return;
+
+	// wm thinks in screen rows: the content's top is where it is now
+	int y = 0xFFFF;
+	if (caret_y >= 0) {
+		z_clip_t cr;
+		z_win_content_rect(win, &cr);
+		y = cr.y0 + caret_y;
+	}
+	z_msg_new_send(wmpid, Z_WM_WANTS_TEXT, (uint32_t)win->id,
+		z_obj_uint32(Z_WM_PACK_WANTS_TEXT(on, y)));
+
+}
+
 void z_win_maximize(const z_win_t *win) {
 
 	if (win->id < 0) return;

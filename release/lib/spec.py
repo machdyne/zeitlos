@@ -220,6 +220,7 @@ class Target:
         self.defines = {}           # ordered: name -> value or None
         self.flash_cmd = None       # template, {file} {offset}
         self.core_apps = []
+        self.core_tier = "normal"   # CORE_TIER: "small" builds Z_SMALL
         self.notes = []
         self.sources = []           # spec files that contributed
 
@@ -273,11 +274,14 @@ class Target:
 
 
 @functools.lru_cache(maxsize=None)
-def _core_make(root, board=None):
-    """`make core-apps`, as {key: value text}."""
+def _core_make(root, board=None, tier=None):
+    """`make core-apps`, as {key: value text}. `tier` (normal or small)
+    asks for that size of machine's budgets without naming a board."""
     cmd = ["make", "-s", "--no-print-directory", "core-apps"]
     if board:
         cmd.append("BOARD=" + board)
+    if tier:
+        cmd.append("CORE_TIER=" + tier)
     r = subprocess.run(cmd, cwd=root, capture_output=True, text=True)
     lines = dict(l.split(":", 1) for l in r.stdout.splitlines() if ":" in l)
     if r.returncode or "all" not in lines:
@@ -296,12 +300,24 @@ def _size(text):
     return int(t, 0) * mul
 
 
-def core_budgets(root):
-    """The Makefile's CORE_BUDGETS and the rules' inputs:
-    {"budgets": {app: (flash, ram)}, "budgets_text": "...",
-     "reserve": bytes, "at_boot": (...), "ram_with": (...),
-     "ram_max": bytes}."""
-    lines = _core_make(root)
+# The two sizes of machine (CORE_TIER in the top-level Makefile,
+# docs/flash_apps.md "Two sizes of machine"): every board is normal but
+# one with 1MB of main memory, which is small -- its core apps are built
+# with Z_SMALL and held to the RAM rule at 1MB.
+TIERS = ("normal", "small")
+
+
+def core_tier(root, board):
+    """The board's CORE_TIER: "normal" or "small"."""
+    return _core_make(root, board).get("tier", "normal").strip() or "normal"
+
+
+def core_budgets(root, tier=None):
+    """The Makefile's CORE_BUDGETS and the rules' inputs, for `tier`
+    (default normal): {"budgets": {app: (flash, ram)}, "budgets_text":
+    "...", "reserve": bytes, "at_boot": (...), "ram_with": (...),
+    "ram_max": bytes}."""
+    lines = _core_make(root, None, tier)
     budgets = {}
     for item in lines.get("budgets", "").split():
         name, _, pair = item.partition("=")
@@ -318,9 +334,18 @@ def core_budgets(root):
 
 
 def check_core_budgets(root, zar_limit):
-    """Problems with the budgets themselves, as a list of strings."""
+    """Problems with the budgets themselves, for both sizes of machine,
+    as a list of strings."""
+    problems = []
+    for tier in TIERS:
+        problems += ["%s: %s" % (tier, p) if tier != "normal" else p
+                     for p in _check_tier_budgets(root, zar_limit, tier)]
+    return problems
+
+
+def _check_tier_budgets(root, zar_limit, tier):
     every = core_apps(root)[0]
-    b = core_budgets(root)
+    b = core_budgets(root, tier)
     budgets, problems = b["budgets"], []
     for a in every:
         if a not in budgets:
@@ -431,6 +456,7 @@ def load_target(root, name):
                 "board, set CORE_APPS_OMIT in that board's block "
                 "(docs/releases.md)." % where)
     t.core_apps = list(core_apps(root, t.board)[2])
+    t.core_tier = core_tier(root, t.board)
     t.description = _one(tdata, "description",
                          default=_one(bdata, "description", default=name,
                                       where=bpath),

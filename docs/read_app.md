@@ -2,7 +2,10 @@
 
 Kind: a **desktop app** ([app_kinds.md](app_kinds.md)).
 
-A Markdown document viewer. `sw/apps/read`.
+A Markdown document viewer. `sw/apps/read`. A **core app**, in flash
+since November 2026 ([flash_apps.md](flash_apps.md)), so the guide and
+the Scheme page in flash are shown as pages on a machine with no card.
+It is built with the small printf for it (`ZFMT_LITE`, `ZFMT_NO64`).
 
 ```
 > run wm

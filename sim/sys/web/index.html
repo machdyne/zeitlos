@@ -12,7 +12,9 @@
 	h1 { font-size: 16px; font-weight: 600; margin: 0 0 4px; }
 	p { margin: 0 0 12px; color: var(--dim); }
 	#screen { display: block; width: 100%; max-width: 1280px; aspect-ratio: 4 / 3; background: #000;
-		image-rendering: pixelated; cursor: none; outline: 1px solid var(--line); }
+		image-rendering: pixelated; cursor: none; outline: 1px solid var(--line);
+		touch-action: none; transform-origin: 0 0; }
+	#frame { max-width: 1280px; overflow: hidden; }
 	#screen:focus { outline-color: var(--dim); }
 	#screen:fullscreen { width: 100vw; height: 100vh; max-width: none; object-fit: contain; outline: none; background: #000; }
 	.bar { display: flex; flex-wrap: wrap; gap: 12px 20px; align-items: center; margin: 8px 0; color: var(--dim); }
@@ -28,8 +30,9 @@
 <main>
 	<h1>Zeitlos</h1>
 	<p>The real system -- BIOS, kernel and apps from a release -- on an emulated Lakritz, in this page.
-	Click the screen to give it the keyboard.</p>
-	<canvas id="screen" width="640" height="480" tabindex="0"></canvas>
+	Click the screen to give it the keyboard. On a touch screen: tap, drag, hold for the right button,
+	two fingers to scroll, pinch to zoom.</p>
+	<div id="frame"><canvas id="screen" width="640" height="480" tabindex="0"></canvas></div>
 	<div class="bar">
 		<span id="status">starting ...</span>
 		<span id="speed"></span>

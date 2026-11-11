@@ -15,8 +15,8 @@
  * It introduces the machine once; it does not nag.
  *
  * Its first job is the welcome: what this computer is, where to start,
- * the keys, and the guide (docs/welcome.md, in `read`; with no card its
- * plain-text copy in flash, in `text`). With a card it then offers the
+ * the keys, and the guide (docs/welcome.md, in `read`; both are in
+ * flash, so a machine with no card has them). With a card it then offers the
  * first questions, each optional:
  *
  *   Keyboard     the layout the machine starts in  (system.keyboard.layouts)
@@ -746,11 +746,12 @@ static bool launch(const char *app, const char *arg, const char *said) {
 
 }
 
-// The guide (docs/welcome.md): in `read`, with the card's page; with no
-// card, its plain-text copy in flash, in `text`, which is in flash too.
+// The guide (docs/welcome.md), in `read`: both are in flash, so a
+// machine with no card has them. `text` shows the same file as it is
+// written, should read ever be missing (a small build that left it out).
 static void open_guide(void) {
 	if (!launch("read", Z_PATH_DOCS_WELCOME, "the guide is open"))
-		launch("text", Z_PATH_DOCS_WELCOME_TXT, "the guide is open");
+		launch("text", Z_PATH_DOCS_WELCOME, "the guide is open");
 }
 
 static void enter_step(int s) {

@@ -6,12 +6,21 @@ APP = read
 #
 #   make clean && make EXTRA_CFLAGS=-DREAD_PROFILE=1
 #
-# (clean first: -MD tracks header dependencies, not flag changes, so a
-# rebuild without it will happily keep the old objects.) A command-line
+# (the objects are made again when the flags change: sw/common/app.mk,
+# CFLAGS_STAMP.) A command-line
 # CFLAGS+= works too; sw/common/app.mk appends with `override`, so it
 # no longer drops the flags every app needs.
 EXTRA_CFLAGS ?=
 APP_CFLAGS = $(EXTRA_CFLAGS)
+
+# A core app in the flash archive since November 2026 (docs/flash_apps.md):
+# integer-only printf, stdout without newlib's FILE layer, no 64-bit
+# printing (docs/build.md, "ZFMT", "ZFMT_LITE", "ZFMT_NO64"). read
+# prints no floating point, writes stdout with puts() only (read.c,
+# "instrumentation") and no 64-bit number: 105K compressed -> 67K.
+ZFMT = 1
+ZFMT_LITE = 1
+ZFMT_NO64 = 1
 
 # md.o is the Markdown parser, deliberately free of I/O so the test
 # suite below can build it for the host -- see md_test.c.

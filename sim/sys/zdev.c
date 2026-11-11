@@ -784,6 +784,56 @@ void zsys_wheel(zsys_t *s, int notches) {
 	s->irq_pending |= IRQ_HID1;
 }
 
+// -- the virtual mouse (rtl/sysctl.v `VMOUSE) --
+
+static void vmouse_set(zsys_t *s, uint32_t v) {
+	int ox, oy, nx, ny;
+	zsys_pointer(s, &ox, &oy);
+	s->vmouse = v;
+	zsys_pointer(s, &nx, &ny);
+	// the cursor's old and new rows change on the screen
+	for (int r = -8; r < 8; r++) {
+		int a = oy + r, b = ny + r;
+		if (a >= 0 && a < ZSYS_ROWS) s->dirty[a >> 5] |= 1u << (a & 31);
+		if (b >= 0 && b < ZSYS_ROWS) s->dirty[b >> 5] |= 1u << (b & 31);
+	}
+}
+
+uint32_t zsys_vmouse_read(zsys_t *s) { return s->vmouse; }
+void zsys_vmouse_write(zsys_t *s, uint32_t v) { vmouse_set(s, v); }
+
+void zsys_touch(zsys_t *s, int x, int y, bool down) {
+	x = x < 0 ? 0 : x > 639 ? 639 : x;
+	y = y < 0 ? 0 : y > 479 ? 479 : y;
+	vmouse_set(s, (uint32_t)x | (uint32_t)y << 10 | (down ? 1u : 0u) << 20 | 1u << 24 | 1u << 25 |
+		(uint32_t)(s->vwheel & 0x3f) << 26);
+	s->irq_pending |= IRQ_HID1;		// wakes wm, as net's z_wm_wake() would
+}
+
+void zsys_touch_wheel(zsys_t *s, int notches) {
+	if (!notches || !(s->vmouse & (1u << 24))) return;
+	s->vwheel = (uint8_t)(s->vwheel + notches);
+	vmouse_set(s, (s->vmouse & 0x03ffffffu) | (uint32_t)(s->vwheel & 0x3f) << 26);
+	s->irq_pending |= IRQ_HID1;
+}
+
+void zsys_touch_off(zsys_t *s) {
+	if (!s->vmouse) return;
+	vmouse_set(s, 0);
+	s->irq_pending |= IRQ_HID1;
+}
+
+void zsys_keyboard_plugged(zsys_t *s, bool plugged) {
+	zsys_hid_t *h = &s->hid[0];
+	uint8_t typ = plugged ? 1 : 0;
+	s->kbd_unplugged = !plugged;		// and so after a reboot too
+	if (h->typ == typ) return;
+	h->typ = typ;
+	h->mods = 0;
+	memset(h->keys, 0, sizeof(h->keys));
+	s->irq_pending |= IRQ_HID0;		// rtl/usb_hid.v raises it on a type change
+}
+
 static uint32_t hid_read(zsys_t *s, uint32_t port, uint32_t r) {
 	const zsys_hid_t *h = &s->hid[port];
 	switch (r) {
@@ -1204,7 +1254,9 @@ void zdev_reset(zsys_t *s) {
 	// pointer at (0, 0) as after the board's reset; their arrival is a
 	// report on each (rtl/usb_hid.v raises it on a type change)
 	memset(s->hid, 0, sizeof(s->hid));
-	s->hid[0].typ = 1;
+	s->hid[0].typ = s->kbd_unplugged ? 0 : 1;
+	s->vmouse = 0;
+	s->vwheel = 0;
 	s->hid[1].typ = 2;
 	s->hid[0].speed = s->hid[1].speed = 16;
 	s->irq_pending |= IRQ_HID0 | IRQ_HID1;

@@ -272,6 +272,10 @@ else ifeq ($(BOARD), obst)
 	PROG = openFPGALoader -c $(CABLE)
 	FLASH = openFPGALoader -v -c $(CABLE) -f
 	FLASH_OFFSET = -o
+	# 1MB of SRAM (some have 2MB): the small build of the core apps,
+	# and the RAM rule at 1MB (docs/flash_apps.md, "Two sizes of
+	# machine").
+	CORE_TIER = small
 else ifeq ($(BOARD), lakritz)
 	FAMILY = ecp5
 	DEVICE = 25k
@@ -890,17 +894,37 @@ flash_os: flash_sw
 # compressed (docs/executables.md, "Compressed executables"), but for
 # CORE_STORE.
 #
-# repl is NOT here. It and posix are the shells term connects to, and
-# both live on the sdcard -- term starts one when its REPL or POSIX
-# button is pressed. See docs/flash_apps.md, "Why repl is not a core app".
-#
 # THE ONE LIST OF CORE APPS. The release reads it from here (`make
 # core-apps`), so `make flash` and a release image carry the same apps.
 # A board can drop one by setting CORE_APPS_OMIT in its block above; no
 # board does, headless ones included (wm is wanted there for remote
 # desktop). A name in CORE_APPS_OMIT that is not in CORE_APPS is an
 # error in the release tools, not a silent no-op.
-CORE_APPS = fs usb wm net term console cron text files repl welcome
+#
+# November 2026: read and keyboard joined, so a machine with no card
+# reads its documents as pages (the Markdown itself is in flash now, not
+# a plain-text copy) and a machine with no keyboard can type
+# (docs/touch.md). read is built with the small printf for it (its
+# Makefile): 67K compressed, not 105K.
+CORE_APPS = fs usb wm net term console cron text files repl welcome read keyboard
+
+# TWO SIZES OF MACHINE (docs/flash_apps.md, "Two sizes of machine").
+# Every board sold has 32MB or more; Obst has 1MB of SRAM, and used to
+# hold every core app to what fits beside the boot set in 1MB. Now a
+# board's block says CORE_TIER = small for that, and gets:
+#   - the core apps built with Z_SMALL (sw/common/app.mk): what costs RAM
+#     and a 1MB machine does without -- touch, for one -- is left out;
+#   - CORE_BUDGETS_SMALL's RAM budgets, the ones every board had before,
+#     and the RAM rule at 1MB.
+# Every other board is `normal`: room to grow, and the rule at 2MB (the
+# smallest normal board, Lebkuchen, has 8MB). The flash is the same
+# 848K region for both: what goes in it is the same list.
+CORE_TIER ?= normal
+ifeq ($(CORE_TIER),small)
+CORE_SMALL_FLAG = Z_SMALL=1
+else ifneq ($(CORE_TIER),normal)
+$(error CORE_TIER is "$(CORE_TIER)": normal or small)
+endif
 ZAR_APPS = $(filter-out $(CORE_APPS_OMIT),$(CORE_APPS))
 
 # THE BUDGETS: the most each core app may take, as FLASH/RAM -- its
@@ -980,28 +1004,47 @@ ZAR_APPS = $(filter-out $(CORE_APPS_OMIT),$(CORE_APPS))
 # layouts' names generated instead of zkbd's key tables. From the slack
 # under CORE_ZAR_MAX (budgets and reserve: 775K -> 819K of 848K). Not in
 # the RAM rule: wm starts it after boot, at most once a card.
-CORE_BUDGETS = fs=36K/77056 usb=35K/53504 wm=116K/150K net=148K/287K term=62K/140K \
-	console=10K/12544 cron=18K/48K text=86K/212K files=64K/138K repl=140K/307K \
-	welcome=44K/76K
+# November 2026, two sizes of machine (above) and read and keyboard in
+# flash. wm and net are compressed now (CORE_STORE below), which paid
+# for read (70K) and keyboard (36K) and left room: the flash budgets
+# are each app's compressed size with xPack GCC 15.2 plus room to grow
+# (wm +8K and usb +5K for touch, docs/touch.md; keyboard +4K for its
+# touch size). The RAM budgets are a normal board's: the rule is 2MB.
+# The small build's RAM budgets are what every board had before,
+# CORE_BUDGETS_SMALL, and its rule is still 1MB.
+CORE_BUDGETS_NORMAL = fs=36K/80K usb=38K/60K wm=84K/168K net=104K/296K term=62K/144K \
+	console=10K/13K cron=18K/48K text=88K/216K files=66K/142K repl=124K/312K \
+	welcome=42K/76K read=70K/210K keyboard=38K/64K
+CORE_BUDGETS_SMALL = fs=36K/77056 usb=35K/53504 wm=84K/150K net=104K/287K term=62K/140K \
+	console=10K/12544 cron=18K/48K text=88K/212K files=66K/138K repl=124K/307K \
+	welcome=42K/76K read=70K/210K keyboard=38K/64K
 CORE_RESERVE = 60K
 # Core apps stored as they are, not compressed: their budget is then
-# their .bin. wm and net, the two largest started at boot: unpacked they
-# took 508ms and 933ms on hardware (docs/flash_apps.md, "Load times").
-CORE_STORE = wm net
+# their .bin. None, since read and keyboard came into flash: wm and net
+# took 41K and 49K more stored than compressed, and unpacking costs
+# about 0.4s each at boot on hardware (508ms and 933ms, against a plain
+# copy; docs/flash_apps.md, "Load times").
+CORE_STORE =
 # The archive's region (Z_FLASH_ZAR_END - Z_FLASH_ZAR_OFF): mkzar.py
 # refuses an archive bigger than this, whatever the budgets say, so it
 # can never spill into the flashtest sector after it.
 CORE_ZAR_MAX = 848K
 CORE_AT_BOOT = fs usb wm net console
 CORE_RAM_WITH = term repl
+ifeq ($(CORE_TIER),small)
+CORE_BUDGETS = $(CORE_BUDGETS_SMALL)
 CORE_RAM_MAX = 1M
+else
+CORE_BUDGETS = $(CORE_BUDGETS_NORMAL)
+CORE_RAM_MAX = 2M
+endif
 
 # FILES IN FLASH: read-only files under the card at /<path>, for a
-# machine with no card (docs/flash_apps.md, "Files in flash"). A
-# docs/<name>.txt is docs/<name>.md rendered as plain text by
-# tools/md2txt.py, for `text`. They come out of CORE_RESERVE, all
-# together, and mkzar.py refuses an archive where they do not.
-CORE_FILES = docs/welcome.txt docs/repl.txt docs/zapi.txt data/repl/examples/todo.scm \
+# machine with no card (docs/flash_apps.md, "Files in flash"): the
+# guide and the Scheme page as Markdown, for `read` (in flash too), and
+# what repl and wm read. They come out of CORE_RESERVE, all together,
+# and mkzar.py refuses an archive where they do not.
+CORE_FILES = docs/welcome.md docs/repl.md docs/zapi.txt data/repl/examples/todo.scm \
 	data/wm/wm.cfg data/wm/dock.zic
 CORE_FILES_OUT = $(OUTDIR)/files
 
@@ -1042,6 +1085,11 @@ test-rtl:
 $(CORE_FILES_OUT)/docs/%.txt: docs/%.md tools/md2txt.py
 	python3 tools/md2txt.py $< $@
 
+# A page as it is, for read (a core app since November 2026)
+$(CORE_FILES_OUT)/docs/%.md: docs/%.md
+	mkdir -p $(dir $@)
+	cp $< $@
+
 # repl's examples, as they are, in repl's data directory (docs/repl.md)
 $(CORE_FILES_OUT)/data/repl/examples/%.scm: sw/apps/repl/examples/%.scm
 	mkdir -p $(dir $@)
@@ -1065,7 +1113,7 @@ core-files: $(addprefix $(CORE_FILES_OUT)/,$(CORE_FILES))
 # changed and reflashes, without the clean of dev-flash.
 core-bins:
 	$(MAKE) -C sw/apps check-subjects
-	$(foreach a,$(ZAR_APPS),$(MAKE) -C sw/apps/$(a) PREFIX=$(PREFIX) &&) true
+	$(foreach a,$(ZAR_APPS),$(MAKE) -C sw/apps/$(a) PREFIX=$(PREFIX) $(CORE_SMALL_FLAG) &&) true
 
 $(OUTDIR)/apps.zar: core-bins core-files
 	mkdir -p $(OUTDIR)
@@ -1088,6 +1136,7 @@ core-apps:
 	@echo "ram-max: $(CORE_RAM_MAX)"
 	@echo "store: $(CORE_STORE)"
 	@echo "files: $(CORE_FILES)"
+	@echo "tier: $(CORE_TIER)"
 
 # One image with the kernel: see flash_sw above.
 flash_apps: flash_sw

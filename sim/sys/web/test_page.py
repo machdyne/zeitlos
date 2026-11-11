@@ -105,8 +105,8 @@ def main(argv):
             page.keyboard.press("Tab")
             page.wait_for_timeout(200)
             page.keyboard.press("Enter")
-            # with a card the guide opens in read; without one in text, from flash
-            guide = "'read' pid" if a.card else "text: starting"
+            # the guide opens in read, with or without a card: both are in flash
+            guide = "'read' pid"
             try:
                 page.wait_for_function("t => window.zsysSeen.includes(t)", arg=guide, timeout=20000)
             except Exception:
@@ -244,6 +244,41 @@ def main(argv):
             page.uncheck("#keep")
             page.click("#forget")
             page.wait_for_timeout(500)
+
+            # touch (docs/touch.md): a phone -- a coarse pointer, no
+            # keyboard. The page says port 0 is empty; a tap closes the
+            # welcome, another starts text from the dock, and Zeitlos
+            # opens its own keyboard for it. A fresh machine: no card,
+            # so the welcome is the no-card one and the guide is in flash.
+            phone = b.new_context(viewport={"width": 900, "height": 700}, has_touch=True, is_mobile=True)
+            tp = phone.new_page()
+            tp.add_init_script("window.zsysSeen = ''; window.zsysAudioPeak = 0")
+            tp.goto(url.replace("card=" + card, "card=none"))
+            try:
+                tp.wait_for_function("() => window.zsysSeen.includes('starting welcome')", timeout=60000)
+            except Exception:
+                pass
+            tp.wait_for_timeout(1500)
+            tb = tp.locator("#screen").bounding_box()
+            tx, ty = tb["width"] / 640, tb["height"] / 480
+            tp.touchscreen.tap(tb["x"] + 421 * tx, tb["y"] + 322 * ty)
+            tp.wait_for_timeout(1500)
+            tp.touchscreen.tap(tb["x"] + 102 * tx, tb["y"] + 452 * ty)
+            try:
+                tp.wait_for_function("() => window.zsysSeen.includes('no keyboard: the on-screen keyboard')",
+                                     timeout=20000)
+            except Exception:
+                pass
+            ts = tp.evaluate("window.zsysSeen")
+            with open(os.path.join(a.out, "web-touch.log"), "w") as f:
+                f.write(ts)
+            path = os.path.join(a.out, "web-touch.png")
+            with open(path, "wb") as f:
+                f.write(base64.b64decode(tp.evaluate(
+                    "document.getElementById('screen').toDataURL('image/png')").split(",", 1)[1]))
+            check("launched 'text'" in ts and "no keyboard: the on-screen keyboard" in ts,
+                  "touch: on a phone, taps reach Zeitlos and it opens its own keyboard for text (%s)" % path)
+            phone.close()
             b.close()
         srv.shutdown()
         return 1 if fails else 0

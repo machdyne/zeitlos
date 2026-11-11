@@ -153,8 +153,8 @@ format.
 Release-owned, like `/sys/version`: replaced on upgrade.
 
 `/docs` also has files that are in flash rather than on the card
-(`CORE_FILES`: `welcome.txt`, plain-text renderings of a few of these
-for `text`), merged in read-only and there with no card at all
+(`CORE_FILES`: `welcome.md` and `repl.md`, for `read`, which is in
+flash too), merged in read-only and there with no card at all
 ([flash_apps.md](flash_apps.md), "Files in flash").
 
 ### `/media`

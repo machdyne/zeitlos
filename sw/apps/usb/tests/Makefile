@@ -2,7 +2,7 @@
 # stack itself is tested against the gateware by the co-simulation
 # (`make test_usb_cosim` and the rest, at the top level).
 
-default: test_usb
+default: test_usb test_dig
 CC ?= cc
 COMMON = ../../../common
 CFLAGS = -std=gnu99 -Wall -O1 -g \
@@ -13,5 +13,11 @@ test_usb: test_usb.c ../usb.c ../usbh.h $(COMMON)/zusbc.c $(COMMON)/zusbproto.h 
 	$(CC) $(CFLAGS) -o $@ test_usb.c ../usb.c $(COMMON)/zusbc.c $(COMMON)/zobj.c
 	./test_usb
 
+# touch screens and pen tablets: the report descriptor parser and the
+# reports' decoding (usbh_dig.c, docs/touch.md)
+test_dig: test_dig.c ../usbh_dig.c ../usbh_dig.h
+	$(CC) $(CFLAGS) -o $@ test_dig.c ../usbh_dig.c
+	./test_dig
+
 clean:
-	rm -f test_usb
+	rm -f test_usb test_dig

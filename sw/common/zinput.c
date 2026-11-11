@@ -67,6 +67,13 @@ int zinput_take_motion(void)
 	return m;
 }
 
+/* The wheel a page counts into the virtual mouse's top six bits
+ * (docs/touch.md): bits 5:3 of the buttons byte, signed notches (-4 to
+ * 3) since the last packet -- two fingers dragged on a phone. In the
+ * five bytes every server already passes on (the ESP32 refuses any
+ * other length), and an older Zeitlos reads only bits 2:0. */
+static uint8_t wheel;
+
 int zinput_mouse(const uint8_t *p, uint32_t len)
 {
 	uint32_t x, y, b;
@@ -80,7 +87,12 @@ int zinput_mouse(const uint8_t *p, uint32_t len)
 		zinput_release();
 		return 0;
 	}
-	reg_vmouse = zinput_pointer_word(x, y, b);
+	if (b & 0x38)
+		wheel = (uint8_t)(wheel + ((int)((b >> 3) & 7) ^ 4) - 4);	/* three bits, signed */
+	/* bit 6: a finger, not a mouse -- the virtual mouse's TOUCH bit,
+	 * which wm reads as tap, drag and hold */
+	reg_vmouse = zinput_pointer_word(x, y, b) | ((b & 0x40) ? Z_VMOUSE_TOUCH : 0)
+		| ((uint32_t)(wheel & 0x3f) << 26);
 	last_tick = z_uptime_ticks();
 	held = 1;
 	motion = 1;

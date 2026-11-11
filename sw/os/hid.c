@@ -399,7 +399,10 @@ z_obj_t *k_hid_inject(z_obj_t *obj) {
 	// The injector knows the key; the kernel knows the layout. Stamp
 	// the current one over whatever bits 24:20 arrived with, exactly as
 	// HID_EVENT() does for a key from the USB ports.
-	uint32_t ev = (uint32_t)obj->val.int32 & ~(0x1Fu << 20);
+	uint32_t ev = (uint32_t)obj->val.int32 & ~(0x1Fu << 20) & ~(0x1Fu << 27);
+	// Bit 26 (Z_KBD_EV_ONSCREEN) is the injector's, the on-screen
+	// keyboard's, and kept; 31:27 are not anyone's, and cleared -- bit
+	// 31 would make the event negative, which reads as "none".
 	// Bit 25 marks the event as injected (Z_KBD_EV_INJECTED, zkbd.h),
 	// set here rather than trusted from the caller, so a person at a
 	// real keyboard can always be told apart from the on-screen

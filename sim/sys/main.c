@@ -76,11 +76,14 @@
 #define Z_GAME          (1u << 27)
 #define Z2_COLOR        (1u << 15)
 #define Z2_RECONFIG     (1u << 5)
+#define Z2_VMOUSE       (1u << 11)
 #define Z2_FLASHW       (1u << 6)
 
 // -- scripted input: keys and clicks on the USB devices, in order --
 
-typedef struct { uint8_t kind, usage, mods; int16_t x, y; } ev_t;	// kind: 0 key, 1 click, 2 wait, 3 wheel
+typedef struct { uint8_t kind, usage, mods; int16_t x, y; } ev_t;
+// kind: 0 key, 1 click, 2 wait, 3 wheel; a finger (docs/touch.md): 4
+// down at x,y, 5 moved to x,y, 6 lifted at x,y, 7 two fingers' wheel
 static ev_t script[4096];
 static int script_n, script_at;
 static uint32_t script_wait_ms = 40;
@@ -187,6 +190,10 @@ static bool script_step(zsys_t *s) {
 		zsys_mouse(s, e->x, e->y, 0);
 	} else if (e->kind == 3) {			// the wheel, at the pointer as it is
 		zsys_wheel(s, e->x);
+	} else if (e->kind >= 4 && e->kind <= 6) {	// a finger: down, moved, lifted
+		zsys_touch(s, e->x, e->y, e->kind != 6);
+	} else if (e->kind == 7) {
+		zsys_touch_wheel(s, e->x);
 	} else {					// a wait
 		if (script_phase == 0) { script_phase = 1; script_next = s->cycles + (uint64_t)e->x * (SYSCLK_HZ / 1000); return true; }
 	}
@@ -298,7 +305,8 @@ static void usage(void) {
 	fprintf(stderr, "usage: zsys [--bios FILE] --flash FILE | --tb PROG.bin  [--seconds N] [--expect TEXT]\n"
 		"            [--type TEXT] [--after TEXT] [--fast] [--cpi N] [--ram MB] [--stats]\n"
 		"            [--sd FILE] [--snapshot] [--screenshot FILE [--cursor]] [--clock] [--headless]\n"
-		"            [--window [--scale N]] [--keys TEXT] [--click X,Y] [--wheel N] [--wait MS] [--wav FILE] [--mute] [--fullscreen] [--no-t2]\n");
+		"            [--window [--scale N]] [--keys TEXT] [--click X,Y] [--wheel N] [--wait MS] [--wav FILE] [--mute] [--fullscreen] [--no-t2]\n"
+		"            [--tap X,Y] [--touch-down X,Y] [--touch-move X,Y] [--touch-up X,Y] [--touch-wheel N] [--no-keyboard]\n");
 	exit(2);
 }
 
@@ -308,7 +316,7 @@ int main(int argc, char **argv) {
 	const char *expect = NULL, *type = NULL, *after = NULL;
 	double seconds = 0;
 	bool fast = false, stats = false, snapshot = false, cursor = false, clock = false, headless = false;
-	bool window = false, mute = false, full = false, no_t2 = false;
+	bool window = false, mute = false, full = false, no_t2 = false, no_keyboard = false;
 	const char *wav_path = NULL;
 	int scale = 2;
 	const char *sd_path = NULL, *shot_path = NULL;
@@ -363,6 +371,22 @@ int main(int argc, char **argv) {
 			i++;
 		}
 		else if (!strcmp(o, "--wheel") && v) { ev_t e = { 3, 0, 0, (int16_t)atoi(v), 0 }; ev_add(e); i++; }
+		// a finger (docs/touch.md): --tap X,Y is --touch-down and
+		// --touch-up there; a drag is down, moves, up; a long press is
+		// down, --wait, up
+		else if ((!strcmp(o, "--tap") || !strcmp(o, "--touch-down") || !strcmp(o, "--touch-move") ||
+		          !strcmp(o, "--touch-up")) && v) {
+			int x, y;
+			if (sscanf(v, "%d,%d", &x, &y) != 2) usage();
+			ev_t e = { 4, 0, 0, (int16_t)x, (int16_t)y };
+			if (!strcmp(o, "--touch-move")) e.kind = 5;
+			if (!strcmp(o, "--touch-up")) e.kind = 6;
+			ev_add(e);
+			if (!strcmp(o, "--tap")) { e.kind = 6; ev_add(e); }
+			i++;
+		}
+		else if (!strcmp(o, "--touch-wheel") && v) { ev_t e = { 7, 0, 0, (int16_t)atoi(v), 0 }; ev_add(e); i++; }
+		else if (!strcmp(o, "--no-keyboard")) no_keyboard = true;
 		else if (!strcmp(o, "--wait") && v) { ev_t e = { 2, 0, 0, (int16_t)atoi(v), 0 }; ev_add(e); i++; }
 		else usage();
 	}
@@ -407,7 +431,8 @@ int main(int argc, char **argv) {
 			Z_SPI_SDCARD | Z_RTC | Z_AUDIO | Z_GAME;
 	s.audio_on = !headless;
 	s.t2_on = !headless && !no_t2;
-	s.features2 = headless ? 0 : Z2_RECONFIG | Z2_FLASHW | Z2_COLOR;
+	s.features2 = headless ? 0 : Z2_RECONFIG | Z2_FLASHW | Z2_COLOR | Z2_VMOUSE;
+	if (no_keyboard) s.kbd_unplugged = true;		// zsys_reset() leaves port 0 empty
 	if (sd_path && !zsys_sd_insert(&s, sd_path, snapshot)) return 2;
 
 	if (!(data = slurp(flash_path, &len))) return 2;

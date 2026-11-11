@@ -23,7 +23,7 @@
  *   //@ Files
  *   //: (file-size "file")
  *   //:   The file's size in bytes, or #f if it is missing or empty.
- *   //:   > (file-size "/docs/repl.txt")  =>  6015
+ *   //:   > (file-size "/docs/repl.md")  =>  5919
  *
  * The build fails on a procedure with no entry, and on an entry with
  * no procedure. docs/scheme_api.md has the rules.
@@ -135,7 +135,7 @@ static ms_val *zapi_ls(ms_val *args) {
 
 //: (file-size "file")
 //:   The file's size in bytes, or #f if it is missing or empty.
-//:   > (file-size "/docs/repl.txt")  =>  6015
+//:   > (file-size "/docs/repl.md")  =>  5919
 //
 // (file-size "name") -- size in bytes, or #f if missing (or
 // genuinely empty -- fs_size()'s own documented ambiguity, zfsapp.h).

@@ -3,7 +3,11 @@
 Kind: a **desktop app** ([app_kinds.md](app_kinds.md)).
 
 `sw/apps/keyboard`. A keyboard drawn on the screen, labelled for
-whichever layout is active, and typed with the pointer.
+whichever layout is active, and typed with the pointer or a finger. A
+**core app**, in flash since November 2026
+([flash_apps.md](flash_apps.md)), so a machine with no keyboard and no
+card can still type; `wm` opens it by itself when a window wants text
+and there is no keyboard ([touch.md](touch.md)).
 
 ```
 > run keyboard
@@ -68,6 +72,16 @@ configured cycle.
 
 The keyboard follows the active layout: switch it with Super+Space, or
 from `settings`, and the labels change within an eighth of a second.
+
+## Opened by wm
+
+When wm opens it by itself for a window that wants text on a machine
+with no keyboard ([touch.md](touch.md)), it passes a launch argument:
+`bottom` puts it along the bottom of the screen, and `large`, for a
+finger, draws every key twice the size -- 608x203 pixels, the whole
+width, keys 40x34 labelled in the 8x16 font. One drawing at either
+scale. Its keys carry `Z_KBD_EV_ONSCREEN` (bit 26), so wm can tell that
+typing done on it does not mean a keyboard is there.
 
 ## Size
 

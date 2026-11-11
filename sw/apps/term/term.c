@@ -2456,7 +2456,7 @@ int main(void) {
 	if (z_win_create_flags(&win, instance_name, term_win_w, term_win_h, -1, -1,
 		Z_WIN_FLAG_CLOSE_ICON | Z_WIN_FLAG_CLOSE_KILLS_OWNER |
 		Z_WIN_FLAG_READABLE | Z_WIN_FLAG_RESIZABLE |
-		Z_WIN_FLAG_FONT_ICON) != Z_OK) {
+		Z_WIN_FLAG_FONT_ICON | Z_WIN_FLAG_TYPES) != Z_OK) {
 		printf("term: failed to create window\n");
 		return 1;
 	}

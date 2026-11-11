@@ -3839,13 +3839,19 @@ module sysctl #()
 	// Virtual mouse register (0xf000_0400):
 	//   [9:0]   curs_x     [19:10] curs_y
 	//   [22:20] buttons    [24]    present (1 = a software mouse is here)
-	// Written by net (sw/apps/net) from browser pointer events, and by
-	// sw/apps/automate (scripted demos, docs/automate.md); read by
+	//   [25]    touch      (1 = the position is a finger or a pen on a
+	//                       touch screen or tablet, not a mouse)
+	//   [31:26] wheel      (a 6-bit count of wheel notches, wrapping, kept
+	//                       by the writer; wm takes the difference)
+	// Written by net (sw/apps/net) from browser pointer events, by
+	// sw/apps/automate (scripted demos, docs/automate.md), and by usb
+	// for a touch screen or a pen tablet (docs/touch.md); read by
 	// wm the same way it reads a USB mouse, and its x/y drive the
 	// hardware cursor sprite below when present. present is last-writer:
 	// software writes 0 to hand the sprite back to USB (silence, leave,
-	// or a USB move) -- the mux does not time out on its own.
-	reg [24:0] vmouse_r;
+	// or a USB move) -- the mux does not time out on its own. Bits 25
+	// and 31:26 are only stored and read back: wm interprets them.
+	reg [31:0] vmouse_r;
 	reg [31:0] vmouse_dat;
 	reg vmouse_ack;
 	assign wbs_vmouse_dat_o = vmouse_dat;
@@ -3854,13 +3860,13 @@ module sysctl #()
 	always @(posedge wbm_clk) begin
 		vmouse_ack <= 0;
 		if (wbm_rst) begin
-			vmouse_r <= 25'b0;
+			vmouse_r <= 32'b0;
 		end else if (wbm_cyc_vmouse && wbm_stb && !vmouse_ack) begin
 			vmouse_ack <= 1;
 			if (wbm_we)
-				vmouse_r <= wbm_dat_o[24:0];
+				vmouse_r <= wbm_dat_o;
 			else
-				vmouse_dat <= {7'b0, vmouse_r};
+				vmouse_dat <= vmouse_r;
 		end
 	end
 	wire vmouse_present = vmouse_r[24];

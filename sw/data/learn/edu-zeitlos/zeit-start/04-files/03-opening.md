@@ -67,12 +67,12 @@ left as it was.
 
 ```try
 (try (app "files")
-  (task "Press Super+2 and open files from the dock. Go into the folder docs and double-click the file welcome.txt. Read its first lines, close its window with its close box, then press Super+1 to come back here.")
-  (check (choice (ask "Which app showed welcome.txt?")
-    (right "text")
-    (wrong "read" "read is for .md documents. welcome.txt ends in .txt, so text opened it.")
+  (task "Press Super+2 and open files from the dock. Go into the folder docs and double-click the file welcome.md. Read its first lines, close its window with its close box, then press Super+1 to come back here.")
+  (check (choice (ask "Which app showed welcome.md?")
+    (right "read")
+    (wrong "text" "text is for .txt files you change. welcome.md ends in .md, a document, so read opened it.")
     (wrong "files" "files does not show what is inside a file: it starts the app the extension names.")
-    (hint "Look at the extension: .txt."))))
+    (hint "Look at the extension: .md."))))
 ```
 
 ---

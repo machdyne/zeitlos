@@ -218,6 +218,14 @@
 // sheet for as long as the focused window does not want it.
 #define Z_WIN_FLAG_COLOUR_LATER       (1u << 15)
 
+// Typing is what the window is for -- text, term, sheet: when it is
+// focused and the machine has no keyboard (a touch screen, a mouse
+// alone), wm opens the on-screen keyboard (docs/touch.md). A window
+// that wants text only sometimes -- in one field of a dialog -- says so
+// with z_win_wants_text() instead (Z_WM_WANTS_TEXT below), and z_edit
+// does that for every text field by itself.
+#define Z_WIN_FLAG_TYPES              (1u << 17)
+
 // In wm's window rect messages (the "h" of the map z_win_parse_rect()
 // reads): set while the window is full screen and has no titlebar, so
 // the content starts at the top edge. A window is never 2^31 tall.
@@ -958,6 +966,20 @@ typedef struct {
 // owner's own resizable window; a shaded or full-screen one is left as
 // it is. The person can restore it at once. z_win_maximize() in zwin.h.
 #define Z_WM_MAXIMIZE            (Z_SUBJ_WM + 39)
+
+// Z_WM_WANTS_TEXT -- app -> wm (tag: the window's index; Z_UINT32
+// Z_WM_PACK_WANTS_TEXT()): the window wants typing now, or no longer
+// does -- a text field took the focus, or gave it up. With no keyboard
+// attached wm opens the on-screen keyboard for the focused window that
+// wants text, and moves the window up if the keyboard would cover the
+// caret, whose screen y the message carries (0xFFFF: not known). No
+// reply. z_win_wants_text() in zwin.h; Z_WIN_FLAG_TYPES above says the
+// same for a window's whole life. docs/touch.md.
+#define Z_WM_WANTS_TEXT          (Z_SUBJ_WM + 40)
+#define Z_WM_PACK_WANTS_TEXT(on, caret_y) \
+	(((on) ? 0x80000000u : 0u) | ((uint32_t)(caret_y) & 0xFFFFu))
+#define Z_WM_WANTS_TEXT_ON(v)    (((v) >> 31) & 1u)
+#define Z_WM_WANTS_TEXT_Y(v)     ((int)((v) & 0xFFFFu))
 
 #define Z_WM_PACK_PLACE(x, y) \
 	((((uint32_t)(y) & 0x3FF) << 10) | ((uint32_t)(x) & 0x3FF))

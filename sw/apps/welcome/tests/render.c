@@ -411,8 +411,8 @@ int main(int argc, char **argv) {
 	expect(step == S_WELCOME && !finished, "and the welcome stays open behind it");
 	app_missing = "read";
 	click_widget(W_GUIDE);
-	expect(ran_n == 2 && !strcmp(ran[1], "text") && !strcmp(ran_arg[1], Z_PATH_DOCS_WELCOME_TXT) && !have_pending,
-		"no read on the card: text, with the plain-text guide in flash");
+	expect(ran_n == 2 && !strcmp(ran[1], "text") && !strcmp(ran_arg[1], Z_PATH_DOCS_WELCOME) && !have_pending,
+		"no read (a build without it): text, with the same guide");
 	app_missing = NULL;
 	ran_n = 0;
 	expect(focus == STOP_PAGE + 0, "the keyboard stays on the button that was clicked");
@@ -626,13 +626,11 @@ int main(int argc, char **argv) {
 	handle_key('\t', 0);
 	expect(focus == STOP_NAV + 1, "Tab: Close again");
 	render(prefix, "8-no-card");
-	app_missing = "read";
 	ran_n = 0;
 	handle_key('\t', 0);
 	handle_key(0x0d, 0);
-	expect(ran_n == 1 && !strcmp(ran[0], "text") && !strcmp(ran_arg[0], Z_PATH_DOCS_WELCOME_TXT) && !finished,
-		"no card: Enter on Read the guide opens the guide in text, and the welcome stays");
-	app_missing = NULL;
+	expect(ran_n == 1 && !strcmp(ran[0], "read") && !strcmp(ran_arg[0], Z_PATH_DOCS_WELCOME) && !finished,
+		"no card: Enter on Read the guide opens the guide in read, both in flash, and the welcome stays");
 	handle_key('\t', 0);
 	handle_key(Z_KEY_HELP, 0);
 	render(prefix, "8b-no-card-help");

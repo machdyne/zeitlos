@@ -69,6 +69,7 @@ travel with the card. `settings` edits them; see
 | `system.cursor.large` | `no` | `wm` | start with the large pair of pointer shapes: a 9x9 X and Z, or `/data/wm/cursor.zsp` when the card has it; Super+M switches until the next reload ([cursor.md](cursor.md)) |
 | `system.font.japanese` | `no` | `wm`, `settings` | start `jfont` at boot, so Japanese draws at 6x12 -- about 190KB of RAM ([text_encoding.md](text_encoding.md)); `settings` switches it on and off at once |
 | `system.keyboard.layouts` | `us` | `wm` | keyboard layouts, comma-separated; the first is used at start, Super+Space cycles |
+| `system.keyboard.onscreen` | `auto` | `wm` | the on-screen keyboard when a window wants text: `auto` (when there is no keyboard), `always`, `never` ([touch.md](touch.md)) |
 | `system.rtc.timezone` | `UTC` | `clock`, `cal`, `irc` | local time shown; the RTC itself stays UTC (file times too -- [filesystem.md](filesystem.md#timestamps)) |
 | `system.start` | none | `wm`, `settings` | what the machine opens with: an app, and optionally what to open in it -- `text`, `text /home/book.txt`, `learn`, `term`. `wm` starts it once when boot has finished (the pointer turns from Z to X), before the welcome on a new machine; the desktop is still there behind it. Absent, `none` or `desktop`: the desktop alone. Not in the console profile, which has its launcher. An app that is not there is named on the console. Set in `settings`, System ([welcome_app.md](welcome_app.md) has the boot order) |
 | `system.tts.enabled` | `no` | kernel | speech: start `tts` at boot, for a machine set up for someone who cannot see it |
@@ -173,6 +174,14 @@ stays sorted and every entry parses.
 
 A value that does not parse shows **UTC, labelled UTC**, and the app
 prints why on the serial console.
+
+### `system.keyboard.onscreen`
+
+When wm opens the on-screen keyboard by itself, for the focused window
+when it wants text ([touch.md](touch.md)): `auto`, the default, when
+there is no keyboard -- none on a USB port, and no key but the on-screen
+keyboard's for ten minutes; `always`; `never`. Super+K opens it either
+way.
 
 ### `system.keyboard.layouts`
 

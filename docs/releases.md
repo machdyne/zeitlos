@@ -51,7 +51,8 @@ release/dist/0.0.7/
   zeitlos-apps.zar                  every core app (Makefile CORE_APPS);
                                     identical for every target
   zeitlos-<target>-apps.zar         only for a board that sets
-                                    CORE_APPS_OMIT (none currently)
+                                    CORE_APPS_OMIT (none currently), or
+                                    a small one (CORE_TIER small: Obst)
   zeitlos-nic-kabellos.bin          firmware for the Kabellos PMOD's
                                     ESP32-C3, when a Kabellos target
                                     is built (see "Network module
@@ -647,10 +648,12 @@ configures and then hangs with nothing on screen.
 **Only the gateware is board-specific.** `zeitlos-kernel.bin`,
 and `zeitlos-apps.zar` are byte-identical across
 every target in a release, which is why they have no board name. (The
-exception would be a board whose Makefile block sets `CORE_APPS_OMIT`:
-it gets `zeitlos-<target>-apps.zar` instead, and README.txt names that
-file in its commands. No board does at present -- see
-`docs/flash_apps.md`, "Adding or removing a core app".) The
+exceptions are a board whose Makefile block sets `CORE_APPS_OMIT`,
+and a small board, `CORE_TIER = small` (Obst, 1MB): each gets
+`zeitlos-<target>-apps.zar` instead, and README.txt names that file in
+its commands. No board omits an app at present; Obst's archive holds
+the core apps built small, made once for every small target
+(`target_zar()`, and `docs/flash_apps.md`, "Two sizes of machine").) The
 `net` app carries every NIC driver and selects one at startup from the
 SOC feature register, so there is nothing per-board left in them.
 

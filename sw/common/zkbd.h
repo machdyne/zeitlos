@@ -99,6 +99,15 @@
 // k_hid_inject()), never by the injector. wm counts events WITHOUT it
 // as real input (docs/automate.md, "Attract mode").
 #define Z_KBD_EV_INJECTED(ev) (((uint32_t)(ev) >> 25) & 1u)
+
+// Bit 26: an injected event (bit 25) that came from the on-screen
+// keyboard (sw/apps/keyboard), which sets it when it injects. The only
+// injector's bit the kernel keeps; it clears 31:27. wm reads it to tell
+// a machine with no keyboard -- whose typing all comes from the keyboard
+// it opened -- from the remote desktop's or a demo's keys, which mean a
+// keyboard is there (docs/touch.md).
+#define Z_KBD_EV_ONSCREEN_BIT (1u << 26)
+#define Z_KBD_EV_ONSCREEN(ev) (((uint32_t)(ev) >> 26) & 1u)
 #define Z_KBD_LAYOUT_MAX    32
 
 // -- raw event fields --

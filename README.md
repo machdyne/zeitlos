@@ -60,6 +60,7 @@ Build the hardware map from RTL with `make hwmap` (see [docs/hwmap.md](docs/hwma
  - Object-based interprocess [messaging](docs/messaging.md), streaming and [ports](docs/ports.md)
  - International text: UTF-8 throughout, [22 keyboard layouts](docs/keyboard_layouts.md) (US, UK, German, French, Spanish, Italian, Portuguese, Nordic, Swiss, Belgian, Japanese and more) with dead keys and AltGr, switched with Super+Space; accented letters and the euro sign drawn by the hardware fonts ([ISO 8859-15](docs/text_encoding.md)); Japanese drawn from a public-domain 12x12 font and typed with a romaji [input method](docs/keyboard_layouts.md#japanese-input)
  - [Speech](docs/tts.md) for blind and headless use, and system-wide [captions](docs/captions.md)
+ - [Touch](docs/touch.md): USB touch screens and pen tablets; a finger read as tap, drag and hold, wm's controls a finger's size, and the on-screen keyboard opening by itself when there is no keyboard
  - Image decoding and [vector rendering](docs/svg.md) shared by every app (`sw/common`), and a [page rasterizer](docs/zcanvas.md) with [public-domain fonts](docs/fonts.md) (Hershey stroke fonts, misc-fixed) for drawing at any scale, on screen or for print
  - [Printing](docs/print.md) without drivers: to IPP Everywhere printers (as PDF or PWG raster) and PostScript lasers, or to PDF files, from any app through [one page description](docs/zpaper.md)
  - IP/ARP/ICMP/UDP/DHCP/NTP/DNS/TFTP/TCP/telnet/ssh [networking](docs/networking.md), and [servers](docs/netserve.md): SSH (password or keys), sftp and scp, telnet, and a static web server
@@ -90,6 +91,8 @@ With the MTU, there is no need for position independent code or complicated addr
 | [files](docs/file_browser.md) | File browser: copy, move, rename, delete, new folder |
 | [cron](docs/cron.md) | Runs programs on a schedule (daily, weekly, hourly, every N, at boot), from `/data/cron/cron.cfg` on the sdcard or from the flash key/value store with no sdcard |
 | [welcome](docs/welcome_app.md) | What a new machine shows first, once: where to start, the keys and the guide; with a card, the optional first questions -- keyboard, time zone, display |
+| [read](docs/read_app.md) | Markdown reader: the guide and the Scheme page are in flash as pages |
+| [keyboard](docs/keyboard_app.md) | On-screen keyboard: opens by itself when a window wants text and there is no keyboard -- a touch screen, or a mouse alone ([touch](docs/touch.md)) |
 
 ##### Core drivers
 
@@ -118,7 +121,7 @@ board boots to a desktop with no sdcard ([core apps in flash](#core-apps-in-flas
 
 #### Windowed Apps
 
-`text` and `files` are core apps (above).
+`text`, `files`, `read` and `keyboard` are core apps (above).
 
 | App | Description |
 |-----|-------------|
@@ -126,7 +129,6 @@ board boots to a desktop with no sdcard ([core apps in flash](#core-apps-in-flas
 | [slide](docs/slide_app.md) | Cards, slides and pages: shapes, text in public-domain fonts, pictures, full-screen shows, printing; buttons and fields, and [scripts](docs/slide_scripting.md) in Scheme -- decks that are apps |
 | [print](docs/print.md) | Printing: driverless IPP (PDF or PWG raster) or PostScript on port 9100, and PDF or PostScript files |
 | [web](docs/web_app.md) | Web browser: HTTP/1.1 and TLS 1.3, gzip, in-place images and SVG; [Gopher and Gemini](docs/gopher_gemini.md) |
-| [read](docs/read_app.md) | Text reader for files of unlimited size (with rendered Markdown) |
 | [learn](docs/learn.md) | Offline courses |
 | [bench](docs/bench.md) | Virtual parts -- I/O expanders, LEDs, buttons, lamps -- on I2C buses, from a netlist, shown live; with [ls99](docs/ls99.md) virtual Zwölf modules |
 | [hex](docs/hex_editor.md) | Hex editor for files of unlimited size |
@@ -140,7 +142,6 @@ board boots to a desktop with no sdcard ([core apps in flash](#core-apps-in-flas
 | [clock](docs/clock_app.md) | Analog and digital clock |
 | [cal](docs/cal_app.md) | Month calendar |
 | [settings](docs/settings_app.md) | System settings -- display colour, desktop colour themes, time zone, password; editor for [`/sys/zeitlos.cfg`](docs/config.md) |
-| [keyboard](docs/keyboard_app.md) | On-screen keyboard for any layout: for touchscreens and pointer-only use, and for trying layouts |
 | [automate](docs/automate.md) | Plays scripted, narrated, captioned [demos](docs/demo.md) -- short, long and in-store |
 | [ask](docs/ask_app.md) | Local dataset search |
 | [play](docs/play_app.md) | WAV/AU/RAW audio file player |
@@ -234,13 +235,15 @@ The following boards are currently partially supported or untested:
 #### Minimum Hardware Requirements
 
  - ECP5 LFE5U-12F (25K LUTs with open-source tools) or above
- - 1MB of main memory
+ - 1MB of main memory (a 1MB board runs the small build of the core
+   apps, without touch; 8MB or more gets the rest --
+   [flash_apps.md](docs/flash_apps.md), "Two sizes of machine")
  - 2MB of NOR flash
 
 ## Usage
 
 **An sdcard is optional.** The core drivers (`fs`, `usb`, `net`) and
-core apps (`wm`, `term`, `console`, `repl`, `text`, `files`, `cron` and `welcome`)
+core apps (`wm`, `term`, `console`, `repl`, `text`, `files`, `cron`, `welcome`, `read` and `keyboard`)
 are programmed into flash alongside the kernel, so a freshly flashed
 board boots straight to the graphical desktop with nothing else
 attached -- with an editor, a file browser, Scheme, USB sticks and the

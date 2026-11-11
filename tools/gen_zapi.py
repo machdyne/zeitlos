@@ -265,7 +265,7 @@ def make_txt(entries, ver):
 	out.append("ZAPI -- every procedure in repl, Zeitlos %s" % ver)
 	out.append("")
 	out.append("help name shows one entry; apropos text searches them all.")
-	out.append("How to use repl and Scheme: /docs/repl.txt. Made by tools/gen_zapi.py.")
+	out.append("How to use repl and Scheme: /docs/repl.md. Made by tools/gen_zapi.py.")
 	out.append("Each entry: how to call it, what it does, and an example, with")
 	out.append("what the example returns after =>.")
 	section = None
