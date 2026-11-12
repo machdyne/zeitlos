@@ -24,6 +24,7 @@
 #include "zwidget.h"
 #include "zflist.h"
 #include "zdialog.h"
+#include "zi18n.h"
 #include "zedit.h"
 #include "zfsapp.h"		// fs_stat(), for z_dialog_help()
 #include "zfsc.h"		// a big folder a page at a time
@@ -645,7 +646,8 @@ static void dlg_buttons_init(const char *const *labels, int count) {
 		dlg.widgets[i].y = (int16_t)dlg.btn_y;
 		dlg.widgets[i].w = DLG_BTN_W;
 		dlg.widgets[i].h = DLG_BTN_H;
-		dlg.widgets[i].label = labels[i];
+		// Translated here (docs/i18n.md): the tables hold the English.
+		dlg.widgets[i].label = ZS_D(labels[i]);
 		dlg.widgets[i].enabled = true;
 	}
 
@@ -712,8 +714,8 @@ static void path_draw(void) {
 	if (avail <= 0) return;
 
 	int maxch = avail / z_font_5x8.w;
-	const char *more = dlg_flist.loading ? " (reading)" :
-		z_flist_truncated(&dlg_flist) ? " (partial list)" : "";
+	const char *more = dlg_flist.loading ? ZS_(" (reading)") :
+		z_flist_truncated(&dlg_flist) ? ZS_(" (partial list)") : "";
 	char pm[Z_FLIST_PATH_MAX + 16];
 	int pl = 0;
 	for (const char *q = dlg_flist.path; *q && pl < Z_FLIST_PATH_MAX; q++) pm[pl++] = *q;
@@ -1250,11 +1252,11 @@ static const dlg_ops_t std_ops = { dlg_repaint, dlg_key, dlg_mouse, dlg_wheel };
 
 // -- entry points --
 
-static const char *const labels_ok_cancel[2]     = { "OK", "Cancel" };
-static const char *const labels_yes_no[2]        = { "Yes", "No" };
-static const char *const labels_yes_no_cancel[3] = { "Yes", "No", "Cancel" };
-static const char *const labels_open[2]          = { "Open", "Cancel" };
-static const char *const labels_save[2]          = { "Save", "Cancel" };
+static const char *const labels_ok_cancel[2]     = { N_("OK"), N_("Cancel") };
+static const char *const labels_yes_no[2]        = { N_("Yes"), N_("No") };
+static const char *const labels_yes_no_cancel[3] = { N_("Yes"), N_("No"), N_("Cancel") };
+static const char *const labels_open[2]          = { N_("Open"), N_("Cancel") };
+static const char *const labels_save[2]          = { N_("Save"), N_("Cancel") };
 
 // A folder still coming in: a page more between messages, the rows
 // that changed drawn, the path line once it is all in.
@@ -1357,12 +1359,12 @@ bool z_dialog_open(const z_dialog_ctx_t *ctx, const char *start_dir,
 
 	speak_dialog("Open", "Choose a file.");
 
-	return file_dialog(ctx, DLG_KIND_OPEN, "Open", start_dir, NULL,
+	return file_dialog(ctx, DLG_KIND_OPEN, ZS_("Open a file"), start_dir, NULL,
 		labels_open, out, outlen);
 
 }
 
-static const char *const labels_choose[2] = { "Choose", "Cancel" };
+static const char *const labels_choose[2] = { N_("Choose"), N_("Cancel") };
 
 bool z_dialog_open_any(const z_dialog_ctx_t *ctx, const char *start_dir,
 	char *out, int outlen) {
@@ -1374,7 +1376,7 @@ bool z_dialog_open_any(const z_dialog_ctx_t *ctx, const char *start_dir,
 	speak_dialog("Choose", "A file, or a folder.");
 
 	dlg_folders = true;
-	bool ok = file_dialog(ctx, DLG_KIND_OPEN, "Choose a file or folder", start_dir, NULL,
+	bool ok = file_dialog(ctx, DLG_KIND_OPEN, ZS_("Choose a file or folder"), start_dir, NULL,
 		labels_choose, out, outlen);
 	dlg_folders = false;
 	return ok;
@@ -1390,7 +1392,7 @@ bool z_dialog_save(const z_dialog_ctx_t *ctx, const char *start_dir,
 
 	speak_dialog("Save as", "Type a name.");
 
-	return file_dialog(ctx, DLG_KIND_SAVE, "Save As", start_dir, suggested,
+	return file_dialog(ctx, DLG_KIND_SAVE, ZS_("Save As"), start_dir, suggested,
 		labels_save, out, outlen);
 
 }
@@ -1567,8 +1569,8 @@ int z_dialog_confirm(const z_dialog_ctx_t *ctx, const char *title,
 #define HELP_TAB		12		// columns
 #define HELP_COLS_MAX	60		// the most a 300px line holds, and then some
 
-static const char *const labels_help_docs[2] = { "Read docs", "Close" };
-static const char *const labels_help[1]      = { "Close" };
+static const char *const labels_help_docs[2] = { N_("Read docs"), N_("Close") };
+static const char *const labels_help[1]      = { N_("Close") };
 
 static struct {
 	const char		*text;
@@ -1793,7 +1795,7 @@ void z_dialog_help(const z_dialog_ctx_t *ctx, const char *title,
 	int h = Z_WM_TITLEBAR_H + 4 + DLG_MARGIN + help.rows * DLG_LINE_H +
 		DLG_MARGIN + DLG_BTN_H + DLG_MARGIN;
 
-	if (!dlg_create(ctx, DLG_KIND_CONFIRM, title ? title : "Help", HELP_W, h))
+	if (!dlg_create(ctx, DLG_KIND_CONFIRM, title ? title : ZS_("Help"), HELP_W, h))
 		return;
 	dlg.ops = &help_ops;
 
@@ -1836,31 +1838,31 @@ void z_dialog_help(const z_dialog_ctx_t *ctx, const char *title,
 enum { PR_TO, PR_PAGES, PR_COPIES, PR_PAPER, PR_TRAY, PR_NUP, PR_QUALITY, PR_ROWS };
 
 static const char *const pr_labels[PR_ROWS] = {
-	"Print to", "Pages", "Copies", "Paper", "Tray", "Per sheet", "Quality",
+	N_("Print to"), N_("Pages"), N_("Copies"), N_("Paper"), N_("Tray"), N_("Per sheet"), N_("Quality"),
 };
 
 // zpage.c's names, and how they are shown; the first is the default
 static const char *const pr_papers[] = { "", "letter", "a4", "legal", "a5", "a6", "4x6", "5x7", "3x5" };
-static const char *const pr_paper_names[] = { "", "US Letter", "A4", "Legal", "A5", "A6",
-	"4 x 6 in", "5 x 7 in", "3 x 5 in" };
+static const char *const pr_paper_names[] = { "", N_("US Letter"), "A4", N_("Legal"), "A5", "A6",
+	N_("4 x 6 in"), N_("5 x 7 in"), N_("3 x 5 in") };
 #define PR_NPAPERS (int)(sizeof(pr_papers) / sizeof(pr_papers[0]))
 
 static const char *const pr_trays[] = { "", "main", "rear", "manual" };
-static const char *const pr_tray_names[] = { "Printer's choice", "Main", "Rear", "Manual" };
+static const char *const pr_tray_names[] = { N_("Printer's choice"), NC_("tray", "Main"), NC_("tray", "Rear"), NC_("tray", "Manual") };
 #define PR_NTRAYS 4
 
 static const int pr_nups[] = { 1, 2, 4, 6, 9, 16 };
 #define PR_NNUPS 6
 
 static const char *const pr_quals[] = { "", "draft", "high" };
-static const char *const pr_qual_names[] = { "Normal", "Draft", "High" };
+static const char *const pr_qual_names[] = { NC_("quality", "Normal"), NC_("quality", "Draft"), NC_("quality", "High") };
 #define PR_NQUALS 3
 
 #define PR_ROW_H    (DLG_FIELD_H + 2)
 #define PR_LABEL_W  (10 * 5 + 4)
 #define PR_ARROW_W  8
 
-static const char *const labels_print[2] = { "Print", "Cancel" };
+static const char *const labels_print[2] = { N_("Print"), N_("Cancel") };
 
 static struct {
 	z_print_opts_t	*o;
@@ -1945,21 +1947,21 @@ static void pr_value(int row, char *v, int n) {
 	v[0] = 0;
 	switch (row) {
 		case PR_TO:
-			if (pr.o->dest == Z_PRINT_TO_PDF) pr_cat(v, n, "A PDF file");
-			else if (pr.o->dest == Z_PRINT_TO_PS) pr_cat(v, n, "A PostScript file");
+			if (pr.o->dest == Z_PRINT_TO_PDF) pr_cat(v, n, ZS_("A PDF file"));
+			else if (pr.o->dest == Z_PRINT_TO_PS) pr_cat(v, n, ZS_("A PostScript file"));
 			else if (pr_to_found(pr.to)) pr_cat(v, n, pr_to_found(pr.to)->name);
-			else if (!pr.o->printer[0]) pr_cat(v, n, "Printer (not set up)");
+			else if (!pr.o->printer[0]) pr_cat(v, n, ZS_("Printer (not set up)"));
 			else {
 				char h[40];
 				pr_host(h, sizeof(h), pr.o->printer);
-				pr_cat(v, n, "Printer ");
+				pr_cat(v, n, ZS_("Printer "));
 				pr_cat(v, n, h);
 			}
 			break;
 		case PR_PAGES:
 			switch (pr.choices[pr.choice]) {
 				case Z_PRINT_PAGES_ALL:
-					pr_cat(v, n, "All");
+					pr_cat(v, n, ZS_("All"));
 					if (pr.o->npages > 0) {
 						pr_cat(v, n, " (");
 						pr_cat_int(v, n, pr.o->npages);
@@ -1967,12 +1969,12 @@ static void pr_value(int row, char *v, int n) {
 					}
 					break;
 				case Z_PRINT_PAGES_CURRENT:
-					pr_cat(v, n, "This page (");
+					pr_cat(v, n, ZS_("This page ("));
 					pr_cat_int(v, n, pr.o->current);
 					pr_cat(v, n, ")");
 					break;
 				case Z_PRINT_PAGES_SELECTION:
-					pr_cat(v, n, "The selection");
+					pr_cat(v, n, ZS_("The selection"));
 					break;
 				default:
 					break;		// the field
@@ -1982,26 +1984,27 @@ static void pr_value(int row, char *v, int n) {
 			pr_cat_int(v, n, pr.o->copies);
 			break;
 		case PR_PAPER:
-			if (pr.paper) pr_cat(v, n, pr_paper_names[pr.paper]);
+			if (pr.paper) pr_cat(v, n, ZS_D(pr_paper_names[pr.paper]));
 			else {
 				// the app's own default, by its name if it is not one of these
-				const char *d = pr.o->paper_default[0] ? pr.o->paper_default : "US Letter";
+				const char *d = pr.o->paper_default[0] ? pr.o->paper_default : ZS_("US Letter");
 				for (int i = 1; i < PR_NPAPERS; i++)
-					if (!strcmp(pr.o->paper_default, pr_papers[i])) d = pr_paper_names[i];
-				pr_cat(v, n, "Default (");
+					if (!strcmp(pr.o->paper_default, pr_papers[i])) d = ZS_D(pr_paper_names[i]);
+				pr_cat(v, n, ZS_("Default ("));
 				pr_cat(v, n, d);
 				pr_cat(v, n, ")");
 			}
 			break;
 		case PR_TRAY:
-			pr_cat(v, n, pr_file() ? "(the printer's)" : pr_tray_names[pr.tray]);
+			pr_cat(v, n, pr_file() ? ZS_("(the printer's)") :
+				pr.tray ? ZS_DC("tray", pr_tray_names[pr.tray]) : ZS_D(pr_tray_names[0]));
 			break;
 		case PR_NUP:
 			pr_cat_int(v, n, pr_nups[pr.nup]);
-			pr_cat(v, n, pr_nups[pr.nup] == 1 ? " page" : " pages");
+			pr_cat(v, n, pr_nups[pr.nup] == 1 ? ZS_(" page") : ZS_(" pages"));
 			break;
 		case PR_QUALITY:
-			pr_cat(v, n, pr_file() ? "(the printer's)" : pr_qual_names[pr.qual]);
+			pr_cat(v, n, pr_file() ? ZS_("(the printer's)") : ZS_DC("quality", pr_qual_names[pr.qual]));
 			break;
 	}
 }
@@ -2027,9 +2030,9 @@ static void pr_draw_row(int r) {
 	// the label; the focused row's inverted
 	bool focus = (pr.row == r);
 	if (focus)
-		z_fb_hw_fill_rect(x0 - 2, y + 1, (int)strlen(pr_labels[r]) * z_font_5x8.w + 4,
+		z_fb_hw_fill_rect(x0 - 2, y + 1, z_text_cols(ZS_D(pr_labels[r])) * z_font_5x8.w + 4,
 			DLG_FIELD_H - 2, 1);
-	z_fb_draw_text2(x0, ty, pr_labels[r], focus ? 0 : 1, focus ? 1 : 0, &z_font_5x8, &clip);
+	z_fb_draw_text2(x0, ty, ZS_D(pr_labels[r]), focus ? 0 : 1, focus ? 1 : 0, &z_font_5x8, &clip);
 
 	// the value, in a box with its arrows -- four fills, not a box:
 	// z_fb_hw_box() would bring the line rasterizer into every app
@@ -2317,7 +2320,7 @@ bool z_dialog_print(const z_dialog_ctx_t *ctx, const char *title,
 	int h = Z_WM_TITLEBAR_H + 4 + DLG_MARGIN + PR_ROWS * PR_ROW_H +
 		DLG_MARGIN + DLG_BTN_H + DLG_MARGIN;
 
-	if (!dlg_create(ctx, DLG_KIND_CONFIRM, title ? title : "Print", w, h)) return false;
+	if (!dlg_create(ctx, DLG_KIND_CONFIRM, title ? title : ZS_("Print"), w, h)) return false;
 	dlg.ops = &print_ops;
 
 	int cw = z_win_content_w(&dlg.win);
@@ -2370,7 +2373,7 @@ bool z_dialog_print(const z_dialog_ctx_t *ctx, const char *title,
 	if ((l < e || strcmp(o->file + l - e, ext)) && l + e < sizeof(o->file))
 		pr_cat(o->file, (int)sizeof(o->file), ext);
 	if (fs_size(o->file) > 0 &&
-		z_dialog_confirm(ctx, "Print to a file", "That file exists. Replace it?",
+		z_dialog_confirm(ctx, ZS_("Print to a file"), ZS_("That file exists. Replace it?"),
 			Z_DIALOG_YES_NO) != Z_DIALOG_YES)
 		return false;
 	return true;

@@ -26,6 +26,7 @@
 #include "../text2ph.h"
 #include "../pack.h"
 #include "../dsyn.h"
+#include "../lang.h"
 
 static void put16(FILE *f, uint16_t v) { fputc(v & 0xff, f); fputc(v >> 8, f); }
 static void put32(FILE *f, uint32_t v) { put16(f, v & 0xffff); put16(f, v >> 16); }
@@ -59,7 +60,7 @@ static uint32_t render(const char *in, bool text, uint32_t rate) {
 	synth_init();
 	while (more) {
 		if (text) {
-			if (!text2ph_chunk(in, len, &pos, false, ph, sizeof(ph), &more)) break;
+			if (!(lang_active() ? lang_chunk : text2ph_chunk)(in, len, &pos, false, ph, sizeof(ph), &more)) break;
 		} else {
 			snprintf(ph, sizeof(ph), "%s", in);
 			more = false;
@@ -141,6 +142,13 @@ int main(int argc, char **argv) {
 	// recording does not, and warping one onto the other moves them
 	// across.
 	const char *marks = getenv("ZTTS_MARKS");
+
+	// ZTTS_LANG=de: another language's rules (docs/tts.md, "Other
+	// languages"), from sw/data/tts/lang.
+	if (getenv("ZTTS_LANG") && !lang_load(getenv("ZTTS_LANG"))) {
+		fprintf(stderr, "tts_wav: no rules for %s\n", getenv("ZTTS_LANG"));
+		return 2;
+	}
 	uint32_t rate = argc > 3 ? (uint32_t)atoi(argv[3]) : 180;
 
 	// With a speech pack, the front end has 391,159 pronunciations and

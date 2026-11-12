@@ -1,0 +1,375 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: Zeitlos files\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+#: sw/apps/files/files.c:111
+msgctxt "button"
+msgid "Open"
+msgstr ""
+
+#: sw/apps/files/files.c:111
+msgctxt "button"
+msgid "New Dir"
+msgstr ""
+
+#: sw/apps/files/files.c:111
+msgctxt "button"
+msgid "Rename"
+msgstr ""
+
+#: sw/apps/files/files.c:111
+msgctxt "button"
+msgid "Copy"
+msgstr ""
+
+#: sw/apps/files/files.c:112
+msgctxt "button"
+msgid "Move"
+msgstr ""
+
+#: sw/apps/files/files.c:112
+msgctxt "button"
+msgid "Delete"
+msgstr ""
+
+#: sw/apps/files/files.c:112
+msgctxt "button"
+msgid "Convert"
+msgstr ""
+
+#: sw/apps/files/files.c:112
+#: sw/apps/files/files.c:1089
+msgctxt "button"
+msgid "Find"
+msgstr ""
+
+#: sw/apps/files/files.c:465
+msgid " (reading)"
+msgstr ""
+
+#: sw/apps/files/files.c:466
+msgid " (partial list)"
+msgstr ""
+
+#: sw/apps/files/files.c:591
+#: sw/apps/files/files.c:607
+msgid "Launch failed"
+msgstr ""
+
+#: sw/apps/files/files.c:592
+msgid ""
+"That application could\n"
+"not be started."
+msgstr ""
+
+#: sw/apps/files/files.c:608
+msgid ""
+"That program could not\n"
+"be started."
+msgstr ""
+
+#: sw/apps/files/files.c:610
+#: sw/apps/files/files.c:621
+msgid "Can't open"
+msgstr ""
+
+#: sw/apps/files/files.c:611
+msgid ""
+"That file is not a\n"
+"program."
+msgstr ""
+
+#: sw/apps/files/files.c:622
+msgid ""
+"No application is\n"
+"associated with this file."
+msgstr ""
+
+#: sw/apps/files/files.c:649
+msgid "New Folder"
+msgstr ""
+
+#: sw/apps/files/files.c:650
+msgid "Name for the new folder:"
+msgstr ""
+
+#: sw/apps/files/files.c:658
+#: sw/apps/files/files.c:746
+msgid "Bad name"
+msgstr ""
+
+#: sw/apps/files/files.c:659
+msgid ""
+"A folder name cannot\n"
+"contain '/'."
+msgstr ""
+
+#: sw/apps/files/files.c:676
+#: sw/apps/files/files.c:860
+msgid "Failed"
+msgstr ""
+
+#: sw/apps/files/files.c:677
+msgid ""
+"The folder could not\n"
+"be created."
+msgstr ""
+
+#: sw/apps/files/files.c:708
+#: sw/apps/files/files.c:1349
+msgid ""
+"Not possible:\n"
+msgstr ""
+
+#: sw/apps/files/files.c:739
+#: sw/apps/files/files.c:755
+msgid "Rename"
+msgstr ""
+
+#: sw/apps/files/files.c:739
+msgid "New name:"
+msgstr ""
+
+#: sw/apps/files/files.c:747
+msgid ""
+"A name cannot\n"
+"contain '/'."
+msgstr ""
+
+#: sw/apps/files/files.c:780
+#: sw/apps/files/files.c:1286
+#: sw/apps/files/files.c:1353
+msgid "Move"
+msgstr ""
+
+#: sw/apps/files/files.c:780
+#: sw/apps/files/files.c:1286
+#: sw/apps/files/files.c:1353
+msgid "Copy"
+msgstr ""
+
+#: sw/apps/files/files.c:791
+msgid "Move to:"
+msgstr ""
+
+#: sw/apps/files/files.c:791
+msgid "Copy to:"
+msgstr ""
+
+#: sw/apps/files/files.c:814
+#: sw/apps/files/files.c:956
+msgid ""
+"Replace the file that\n"
+"is already there?"
+msgstr ""
+
+#: sw/apps/files/files.c:847
+#, c-format
+msgid ""
+"Delete the folder\n"
+"%s\n"
+"and everything in it?"
+msgstr ""
+
+#: sw/apps/files/files.c:848
+#, c-format
+msgid ""
+"Delete the file\n"
+"%s?"
+msgstr ""
+
+#: sw/apps/files/files.c:850
+#: sw/apps/files/files.c:1285
+#: sw/apps/files/files.c:1353
+msgid "Delete"
+msgstr ""
+
+#: sw/apps/files/files.c:861
+msgid ""
+"The file could not be\n"
+"deleted. Is it in use?"
+msgstr ""
+
+#: sw/apps/files/files.c:913
+#: sw/apps/files/files.c:924
+#: sw/apps/files/files.c:945
+#: sw/apps/files/files.c:954
+#: sw/apps/files/files.c:955
+#: sw/apps/files/files.c:961
+msgid "Convert"
+msgstr ""
+
+#: sw/apps/files/files.c:914
+msgid ""
+"A conversion is already\n"
+"running."
+msgstr ""
+
+#: sw/apps/files/files.c:925
+msgid ""
+"convert does not read\n"
+"this kind of file."
+msgstr ""
+
+#: sw/apps/files/files.c:946
+msgid "Pack into (.zip, .tar or .tar.gz):"
+msgstr ""
+
+#: sw/apps/files/files.c:947
+msgid "To (the ending picks the format):"
+msgstr ""
+
+#: sw/apps/files/files.c:947
+msgid "Extract into the folder:"
+msgstr ""
+
+#: sw/apps/files/files.c:962
+msgid ""
+"convert is not on\n"
+"this card."
+msgstr ""
+
+#: sw/apps/files/files.c:963
+msgid ""
+"Could not start: is\n"
+"/tmp writable?"
+msgstr ""
+
+#: sw/apps/files/files.c:1031
+msgid " MB"
+msgstr ""
+
+#: sw/apps/files/files.c:1033
+msgid " KB"
+msgstr ""
+
+#: sw/apps/files/files.c:1034
+msgid " bytes"
+msgstr ""
+
+#: sw/apps/files/files.c:1089
+msgctxt "button"
+msgid "Stop"
+msgstr ""
+
+#: sw/apps/files/files.c:1140
+#, c-format
+msgid "Finding... %u found, %lu files looked at"
+msgstr ""
+
+#: sw/apps/files/files.c:1145
+#, c-format
+msgid "%u found in %s (the first %u matches)"
+msgstr ""
+
+#: sw/apps/files/files.c:1148
+#, c-format
+msgid "%u found in %s (not all)"
+msgstr ""
+
+#: sw/apps/files/files.c:1150
+#, c-format
+msgid "%u found in %s"
+msgstr ""
+
+#: sw/apps/files/files.c:1154
+msgid "Removing the source... "
+msgstr ""
+
+#: sw/apps/files/files.c:1155
+msgid "Moving... "
+msgstr ""
+
+#: sw/apps/files/files.c:1155
+msgid "Copying... "
+msgstr ""
+
+#: sw/apps/files/files.c:1163
+msgid " of "
+msgstr ""
+
+#: sw/apps/files/files.c:1169
+msgid " files, "
+msgstr ""
+
+#: sw/apps/files/files.c:1174
+#, c-format
+msgid "Deleting... %lu deleted"
+msgstr ""
+
+#: sw/apps/files/files.c:1179
+msgid "  (Esc stops)"
+msgstr ""
+
+#: sw/apps/files/files.c:1179
+msgid "  (Esc: back)"
+msgstr ""
+
+#: sw/apps/files/files.c:1272
+msgid "Stopped."
+msgstr ""
+
+#: sw/apps/files/files.c:1274
+msgid "Stopped: "
+msgstr ""
+
+#: sw/apps/files/files.c:1281
+msgid ""
+"\n"
+"The copy is complete; part of\n"
+"the original is still there."
+msgstr ""
+
+#: sw/apps/files/files.c:1282
+msgid ""
+"\n"
+"Part of it is deleted already."
+msgstr ""
+
+#: sw/apps/files/files.c:1284
+msgid ""
+"\n"
+"What was copied so far is left\n"
+"in the destination."
+msgstr ""
+
+#: sw/apps/files/files.c:1352
+#: sw/apps/files/files.c:1402
+msgid "Find"
+msgstr ""
+
+#: sw/apps/files/files.c:1403
+msgid ""
+"In this folder and below. A name\n"
+"(report, *.md), \"text\" inside files,\n"
+"or both: *.txt \"invoice\""
+msgstr ""
+
+#: sw/apps/files/files.c:1573
+#, c-format
+msgid ""
+"Browse, open and manage files.\n"
+"\n"
+"Enter\tOpen the selection\n"
+"Backspace\tUp a folder\n"
+"Letters\tJump to a name\n"
+"F2\tRename\n"
+"Delete\tDelete (asks first)\n"
+"F3, Ctrl+F\tFind by name, \"text\" inside, or both\n"
+"F5\tRead the folder again\n"
+"F12\tHome: back to the folder files started in\n"
+"Esc\tStop a find, copy or delete\n"
+"Tab\tTo the buttons; Space presses\n"
+"\n"
+"Results: Enter opens, Backspace goes to the file's folder, Esc goes back.\n"
+"\n"
+"Copy and Move ask for the destination, starting from the file's own path: an existing folder means into it. Folders copy, move and delete with everything in them. Convert saves the file in another format, picked by the ending you give it (.docx, .md, .xlsx, ...); a folder it packs into a .zip, .tar or .tar.gz.\n"
+"\n"
+"%s is yours, %s is the RAM disk (gone at power-off)."
+msgstr ""
+
+#: sw/apps/files/files.c:1594
+msgid "Files help"
+msgstr ""

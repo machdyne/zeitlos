@@ -226,3 +226,6 @@ items, decide the "should decide" ones, and call that 0.9.
 6. The Scheme API reviewed, provisional marked.
 7. File formats: versions and descriptions.
 8. The compatibility card and 0.9. (CI: **done**, [ci.md](ci.md).)
+9. Languages. **Done** in the interfaces ([i18n.md](i18n.md)); the
+   remaining apps' strings are translated as they come, with no
+   interface change.

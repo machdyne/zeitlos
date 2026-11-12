@@ -459,6 +459,13 @@ int main(int argc, char **argv) {
 	expect(focused() == W_TOGGLE_JA, "then the Japanese text switch");
 	handle_key('\t', 0);
 	expect(sidebar_focus, "Tab from the last control: back to the categories");
+	show_page(P_LANG);
+	handle_key('\t', 0);
+	expect(list_focus && page_list() == &lang_list, "Language: Tab enters its list (docs/i18n.md)");
+	expect(z_listbox_selected(&lang_list) >= 0 && lang_rows[z_listbox_selected(&lang_list)] == lang_idx,
+		"  the language in use is the one selected");
+	handle_key('\t', 0);
+	expect(sidebar_focus, "  and Tab leaves it");
 	show_page(P_TIME);
 	handle_key('\t', 0);
 	expect(list_focus && ws->focused < 0, "Date & time: Tab enters the list first");
@@ -736,36 +743,41 @@ int main(int argc, char **argv) {
 	{
 		char d[80];
 		describe_theme(d, sizeof(d));
-		expect(!can_theme && !widgets[W_THEME_NEXT].enabled && strstr(d, "eight colour planes"),
-			"a monochrome board: the row says why, the buttons are off");
+		show_page(P_DISPLAY);
+		expect(!can_theme && !page_list() && strstr(d, "eight colour planes"),
+			"a monochrome board: the row says why, and there is no list");
 		can_theme = true;
-		widgets[W_THEME_PREV].enabled = widgets[W_THEME_NEXT].enabled = true;
 		read_values();
 		describe_theme(d, sizeof(d));
 		expect(colour_on && theme_idx == 0 && strstr(d, "Phosphor") && strstr(d, "(default)"),
 			"nothing in the file: phosphor, default");
-		activate(W_THEME_NEXT);
+		expect(page_list() == &theme_list && z_listbox_selected(&theme_list) == 1,
+			"the list: Off, then the themes; phosphor selected");
+		handle_key('\t', 0);
+		while (!list_focus && !sidebar_focus) handle_key('\t', 0);
+		expect(list_focus, "Tab reaches the list after the display colours");
+		handle_key(Z_KEY_DOWN, 0);
 		expect(strstr(file, "system.video.desktop_theme: slate\n") && theme_idx == 1 && theme_in_file,
-			"> : the next theme, saved");
-		activate(W_THEME_PREV);
-		expect(!strstr(file, "desktop_theme") && theme_idx == 0, "< : back to phosphor, no line");
-		activate(W_THEME_PREV);
-		expect(strstr(file, "system.video.desktop_colour: no\n") && !colour_on, "< again: off");
+			"Down: the next theme, saved at once");
+		handle_key(Z_KEY_UP, 0);
+		expect(!strstr(file, "desktop_theme") && theme_idx == 0, "Up: back to phosphor, no line");
+		handle_key(Z_KEY_HOME, 0);
+		expect(strstr(file, "system.video.desktop_colour: no\n") && !colour_on, "Home: Off");
 		describe_theme(d, sizeof(d));
 		expect(!strcmp(d, "off"), "the row says off");
-		activate(W_THEME_PREV);
+		handle_key(Z_KEY_END, 0);
 		expect(colour_on && theme_idx == z_accent_theme_count - 1 && !strstr(file, "desktop_colour"),
-			"< from off: the last theme, on again");
+			"End: the last theme, on again");
 		render(prefix, "8-theme");
 		// custom colours in the file: shown, and cleared by a choice
 		save("system.video.desktop_accents", "112,EEF");
 		describe_theme(d, sizeof(d));
 		expect(theme_custom && strstr(d, "custom"), "custom accents shown as such");
-		activate(W_THEME_NEXT);
-		expect(!colour_on && theme_custom, "> after the last theme: off (the custom colours kept)");
-		activate(W_THEME_NEXT);
+		handle_key(Z_KEY_HOME, 0);
+		expect(!colour_on && theme_custom, "Off: the custom colours kept");
+		handle_key(Z_KEY_DOWN, 0);
 		expect(!theme_custom && !strstr(file, "desktop_accents") && colour_on && theme_idx == 0,
-			"> again: phosphor, and the custom accents dropped");
+			"then phosphor, and the custom accents dropped");
 		expect(strstr(file, "system.rtc.timezone: UTC+5:30\n") != NULL, "the rest of the file kept");
 	}
 

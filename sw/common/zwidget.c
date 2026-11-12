@@ -326,12 +326,22 @@ void z_widget_draw(z_widget_set_t *set, int idx) {
 				// moment read as a press effect; a selected radio
 				// member is lit permanently, and then it is simply
 				// broken. z_fb_draw_text2() has both colours.
-				int tw = (int)strlen(wd->label) * z_font_5x8.w;
+				int tw = z_text_cols(wd->label) * z_font_5x8.w;
 
-				z_fb_draw_text2(
-					clip.x0 + wd->x + (wd->w - tw) / 2,
+				// Inside the button, whatever the label's length: a
+				// translation can be longer than the English the
+				// button was sized for (docs/i18n.md, "Layout"). One
+				// that does not fit starts at the left edge, so its
+				// beginning shows, and is cut at the right.
+				z_clip_t bc = clip;
+				int bx0 = clip.x0 + wd->x + 1, bx1 = clip.x0 + wd->x + wd->w - 2;
+				if (bc.x0 < bx0) bc.x0 = bx0;
+				if (bc.x1 > bx1) bc.x1 = bx1;
+				int tx = tw <= wd->w - 4 ? clip.x0 + wd->x + (wd->w - tw) / 2 : bx0 + 1;
+
+				z_fb_draw_text2(tx,
 					clip.y0 + wd->y + (wd->h - z_font_5x8.h) / 2,
-					wd->label, ink, lit ? 1 : 0, &z_font_5x8, &clip);
+					wd->label, ink, lit ? 1 : 0, &z_font_5x8, &bc);
 
 			}
 
@@ -1167,6 +1177,16 @@ void z_listbox_wheel(z_listbox_t *lb, int notches) {
 
 }
 
+void z_listbox_set_checks(z_listbox_t *lb, z_list_check_fn checked) {
+	lb->checked = checked;
+	z_listbox_refresh(lb);
+}
+
+void z_listbox_refresh(z_listbox_t *lb) {
+	lb->rows_dirty = true;
+	lb->dirty = true;
+}
+
 int z_listbox_selected(const z_listbox_t *lb) {
 	return lb->sel;
 }
@@ -1243,9 +1263,21 @@ static void lb_paint_row(const z_listbox_t *lb, int y0, const z_clip_t *clip,
 	int bg = selected ? 1 : 0;
 	const char *text = real ? lb->label(lb->user, row) : NULL;
 	if (!text) text = "";
+	char boxed[100];
+	if (real && lb->checked) {
+		// "[x] label": the box first, as a check list reads
+		boxed[0] = '[';
+		boxed[1] = lb->checked(lb->user, row) ? 'x' : ' ';
+		boxed[2] = ']';
+		boxed[3] = ' ';
+		int n = 4;
+		while (text[0] && n < (int)sizeof(boxed) - 1) boxed[n++] = *text++;
+		boxed[n] = 0;
+		text = boxed;
+	}
 
 	int tx = clip->x0 + 2;
-	int tend = tx + (int)strlen(text) * z_font_5x8.w;		// one past
+	int tend = tx + z_text_cols(text) * z_font_5x8.w;		// one past
 	if (tend > clip->x1 + 1) tend = clip->x1 + 1;
 
 	lb_fill(clip, clip->x0, ry, clip->x1, ry, bg);						// above
@@ -1432,6 +1464,8 @@ int z_listbox_mouse(z_listbox_t *lb, int cx, int cy, uint8_t buttons) {
 	z_listbox_select(lb, row);
 	z_listbox_draw(lb, false);
 
+	// The check box: its three cells and the space after.
+	if (lb->checked && !dbl && cx < lb->x + 3 + 4 * z_font_5x8.w) return Z_LIST_TOGGLED;
 	return dbl ? Z_LIST_ACTIVATED : Z_LIST_SELECTED;
 
 }
@@ -1522,6 +1556,17 @@ int z_listbox_key(z_listbox_t *lb, uint32_t keysym) {
 
 	case 0x0d:
 		return lb->sel >= 0 ? Z_LIST_ACTIVATED : Z_LIST_NONE;
+
+	case ' ':
+		// Space checks the row -- unless it is part of a name being
+		// typed ("new y", type-to-find).
+		if (lb->checked && lb->sel >= 0 &&
+			!(lb->find_len > 0 && (z_uptime_ticks() - lb->find_tick) <= LB_FIND_TICKS))
+			return Z_LIST_TOGGLED;
+		if (lb->find_len == 0 || !lb->label) return Z_LIST_NONE;
+		to = lb_find(lb, ' ');
+		if (to < 0) return Z_LIST_NONE;
+		break;
 
 	default:
 		if (!lb->label) return Z_LIST_NONE;

@@ -54,6 +54,7 @@
 
 #include "../../common/zpaths.h"
 #include "../../common/zeitlos.h"
+#include "../../common/zi18n.h"
 #include "../../common/zsoc.h"	// Z_TICK_HZ, for the scroll settle time
 #include "../../common/zwm.h"
 #include "../../common/zspeak.h"
@@ -2479,7 +2480,7 @@ static void set_loading_msg(const char *p) {
 	const char *base = p + last + 1;
 
 	int n = 0;
-	const char *pre = "Loading ";
+	const char *pre = ZS_("Loading ");
 	while (*pre && n < (int)sizeof(loading_msg) - 6) loading_msg[n++] = *pre++;
 	while (*base && n < (int)sizeof(loading_msg) - 5) loading_msg[n++] = *base++;
 	loading_msg[n++] = ' ';
@@ -3456,8 +3457,8 @@ static int find_anchor_block(void) {
 		bool say = find.say_missing;
 		find_end(false);
 		if (say)
-			z_dialog_confirm(&dlg_ctx, "Not found",
-				"No heading matches\nthat link.", Z_DIALOG_OK_CANCEL);
+			z_dialog_confirm(&dlg_ctx, ZS_("Not found"),
+				ZS_("No heading matches\nthat link."), Z_DIALOG_OK_CANCEL);
 		return 0;
 	}
 
@@ -3672,14 +3673,14 @@ static void say_toggle(void) {
 	printf("read: Super+A: reading from line %lu\n", (unsigned long)top_line + 1);
 	if (!z_sayall_start(&reader, 0)) {
 		printf("read: Super+A: could not start (is speech on?)\n");
-		z_speak_static("End of document", Z_TTS_F_INTERRUPT);
+		z_speak(Z_("End of document"), Z_TTS_F_INTERRUPT);
 	}
 }
 
 static void say_selection(void) {
 	z_sayall_stop(&reader);
 	if (!sel_active()) {
-		z_speak_static("Nothing selected", Z_TTS_F_INTERRUPT);
+		z_speak(Z_("Nothing selected"), Z_TTS_F_INTERRUPT);
 		return;
 	}
 	static char out[Z_WM_CLIP_MAX];
@@ -3753,8 +3754,8 @@ static void follow(const char *target) {
 
 	// Anything with a scheme is not ours to open.
 	if (!strncmp(target, "http://", 7) || !strncmp(target, "https://", 8)) {
-		z_dialog_confirm(&dlg_ctx, "External link",
-			"This link points off\nthis machine.", Z_DIALOG_OK_CANCEL);
+		z_dialog_confirm(&dlg_ctx, ZS_("External link"),
+			ZS_("This link points off\nthis machine."), Z_DIALOG_OK_CANCEL);
 		return;
 	}
 
@@ -3796,8 +3797,8 @@ static void follow(const char *target) {
 
 	if (!open_path(p)) {
 		hist_n--;
-		z_dialog_confirm(&dlg_ctx, "Can't open",
-			"That file could not\nbe read.", Z_DIALOG_OK_CANCEL);
+		z_dialog_confirm(&dlg_ctx, ZS_("Can't open"),
+			ZS_("That file could not\nbe read."), Z_DIALOG_OK_CANCEL);
 		return;
 	}
 
@@ -3821,20 +3822,22 @@ static void update_title(void) {
 	char t[64];
 
 	if (find.kind && find_titled) {
-		static const char pre[] = "Finding... ";
+		// Translated, so bounded: the percentage is two digits, and
+		// whatever of each part fits in t.
+		const char *pre = ZS_("Finding... ");
+		const char *post = ZS_("%  (Esc stops)");
 		int n = 0;
-		for (int i = 0; pre[i]; i++) t[n++] = pre[i];
+		for (int i = 0; pre[i] && n < (int)sizeof(t) - 3; i++) t[n++] = pre[i];
 		if (find.pct >= 10) t[n++] = (char)('0' + find.pct / 10);
 		t[n++] = (char)('0' + find.pct % 10);
-		static const char post[] = "%  (Esc stops)";
-		for (int i = 0; post[i]; i++) t[n++] = post[i];
+		for (int i = 0; post[i] && n < (int)sizeof(t) - 1; i++) t[n++] = post[i];
 		t[n] = 0;
 	} else {
 		z_win_doc_title(t, (int)sizeof(t) - 14, path, false, "read");
 		if (io_err) {
 			int n = (int)strlen(t);
-			static const char e[] = "  read error";
-			for (int i = 0; e[i]; i++) t[n++] = e[i];
+			const char *e = ZS_("  read error");
+			for (int i = 0; e[i] && n < (int)sizeof(t) - 1; i++) t[n++] = e[i];
 			t[n] = 0;
 		}
 	}
@@ -4008,8 +4011,8 @@ static void do_open(void) {
 	loading_msg[0] = 0;
 
 	if (!ok)
-		z_dialog_confirm(&dlg_ctx, "Can't open",
-			"That file could not\nbe read.", Z_DIALOG_OK_CANCEL);
+		z_dialog_confirm(&dlg_ctx, ZS_("Can't open"),
+			ZS_("That file could not\nbe read."), Z_DIALOG_OK_CANCEL);
 
 	hist_n = 0;
 	repaint();
@@ -4101,7 +4104,7 @@ static void scroll_flush(void) {
 static void handle_key(uint32_t keysym, uint8_t mods) {
 
 	if (keysym == Z_KEY_HELP) {	// docs/app_help.md
-		static const char help[] =
+		const char *help = ZS_(
 			"A reader for Markdown and text: manuals, notes, books.\n\n"
 			"Space, PgDn\tNext page (Shift+Space back)\n"
 			"Arrows\tA line\n"
@@ -4110,8 +4113,8 @@ static void handle_key(uint32_t keysym, uint8_t mods) {
 			"Backspace\tBack\n"
 			"Ctrl+O\tOpen\n"
 			"Ctrl+C\tCopy the selection (drag to select)\n\n"
-			"A .docx, .odt, .rtf or .epub is converted to read.";
-		z_dialog_help(&dlg_ctx, "Read help", help, "read_app");
+			"A .docx, .odt, .rtf or .epub is converted to read.");
+		z_dialog_help(&dlg_ctx, ZS_("Read help"), help, "read_app");
 		return;
 	}
 
@@ -4478,6 +4481,7 @@ static void do_font(void) {
 
 int main(void) {
 
+	z_tr_init(Z_APP_NAME);
 	printf("read: starting\n");
 
 	/* Which glyph path this binary actually uses. ~5,300 cycles per

@@ -1,0 +1,100 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: Zeitlos term\n"
+"Language: ja\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=1; plural=0;\n"
+
+#, c-format
+msgid "%s -- not connected"
+msgstr "%s -- 未接続"
+
+msgid "ready"
+msgstr "準備完了"
+
+msgid "not running"
+msgstr "停止中"
+
+msgid "not installed"
+msgstr "未インストール"
+
+msgid "Scheme and system commands"
+msgstr "Schemeとシステムコマンド"
+
+msgid "Unix-style shell, zcc and vi"
+msgstr "Unix風シェル、zcc、vi"
+
+msgid "Boot log and kernel shell"
+msgstr "起動ログとカーネルシェル"
+
+msgid "port, serial, telnet or ssh"
+msgstr "port, serial, telnet, ssh"
+
+msgid "Tab chooses, Enter connects, or type a target"
+msgstr "Tabで選択、Enterで接続、または接続先を入力"
+
+msgid "F12 disconnects  Esc hides  Shift+PgUp scrolls"
+msgstr "F12で切断  Escで隠す  Shift+PgUpでスクロール"
+
+msgid "auto-connect cancelled"
+msgstr "自動接続を取り消しました"
+
+#, c-format
+msgid "%.40s is not running"
+msgstr "%.40s は動いていません"
+
+#, c-format
+msgid "connecting to %.45s ...  (Esc cancels)"
+msgstr "%.45s に接続中...  (Escで取消)"
+
+#, c-format
+msgid "%.30s refused: %.40s"
+msgstr "%.30s が拒否: %.40s"
+
+#, c-format
+msgid "%.55s refused the connection"
+msgstr "%.55s が接続を拒否しました"
+
+#, c-format
+msgid "cancelled connecting to %.50s"
+msgstr "%.50s への接続を取り消しました"
+
+#, c-format
+msgid "no answer from %.50s"
+msgstr "%.50s から応答がありません"
+
+#, c-format
+msgid "could not start %s -- %s"
+msgstr "%s を起動できません -- %s"
+
+#, c-format
+msgid "starting %s"
+msgstr "%s を起動中"
+
+#, c-format
+msgid "starting %s...  (Esc cancels)"
+msgstr "%s を起動中...  (Escで取消)"
+
+#, c-format
+msgid "auto-connect: %.40s  (Esc cancels)"
+msgstr "自動接続: %.40s  (Escで取消)"
+
+#, c-format
+msgid "%s: %.24s did not appear -- choose below"
+msgstr "%s: %.24s が現れません -- 下から選択"
+
+msgid "Blank screen"
+msgstr ""
+
+msgid "Nothing selected"
+msgstr ""
+
+msgid "disconnected (F12)"
+msgstr "切断しました (F12)"
+
+msgid "choose a shell, or open a connection"
+msgstr "シェルを選ぶか、接続を開いてください"
+
+msgid "connection closed by the other end"
+msgstr "相手側が接続を閉じました"

@@ -1,0 +1,359 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: Zeitlos files\n"
+"Language: it\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+
+msgctxt "button"
+msgid "Open"
+msgstr "Apri"
+
+msgctxt "button"
+msgid "New Dir"
+msgstr "Cartel."
+
+msgctxt "button"
+msgid "Rename"
+msgstr "Rinom."
+
+msgctxt "button"
+msgid "Copy"
+msgstr "Copia"
+
+msgctxt "button"
+msgid "Move"
+msgstr "Sposta"
+
+msgctxt "button"
+msgid "Delete"
+msgstr "Elimina"
+
+msgctxt "button"
+msgid "Convert"
+msgstr "Conv."
+
+msgctxt "button"
+msgid "Find"
+msgstr "Cerca"
+
+msgid " (reading)"
+msgstr " (lettura)"
+
+msgid " (partial list)"
+msgstr " (elenco parziale)"
+
+msgid "Launch failed"
+msgstr "Avvio non riuscito"
+
+msgid ""
+"That application could\n"
+"not be started."
+msgstr ""
+"Non è stato possibile\n"
+"avviare l'applicazione."
+
+msgid ""
+"That program could not\n"
+"be started."
+msgstr ""
+"Non è stato possibile\n"
+"avviare il programma."
+
+msgid "Can't open"
+msgstr "Impossibile aprire"
+
+msgid ""
+"That file is not a\n"
+"program."
+msgstr ""
+"Il file non è\n"
+"un programma."
+
+msgid ""
+"No application is\n"
+"associated with this file."
+msgstr ""
+"Nessuna applicazione è\n"
+"associata a questo file."
+
+msgid "New Folder"
+msgstr "Nuova cartella"
+
+msgid "Name for the new folder:"
+msgstr "Nome della nuova cartella:"
+
+msgid "Bad name"
+msgstr "Nome non valido"
+
+msgid ""
+"A folder name cannot\n"
+"contain '/'."
+msgstr ""
+"Il nome di una cartella\n"
+"non può contenere '/'."
+
+msgid "Failed"
+msgstr "Non riuscito"
+
+msgid ""
+"The folder could not\n"
+"be created."
+msgstr ""
+"Non è stato possibile\n"
+"creare la cartella."
+
+msgid ""
+"Not possible:\n"
+msgstr ""
+"Non possibile:\n"
+
+msgid "Rename"
+msgstr "Rinomina"
+
+msgid "New name:"
+msgstr "Nuovo nome:"
+
+msgid ""
+"A name cannot\n"
+"contain '/'."
+msgstr ""
+"Un nome non può\n"
+"contenere '/'."
+
+msgid "Move"
+msgstr "Sposta"
+
+msgid "Copy"
+msgstr "Copia"
+
+msgid "Move to:"
+msgstr "Sposta in:"
+
+msgid "Copy to:"
+msgstr "Copia in:"
+
+msgid ""
+"Replace the file that\n"
+"is already there?"
+msgstr ""
+"Sostituire il file\n"
+"già presente?"
+
+#, c-format
+msgid ""
+"Delete the folder\n"
+"%s\n"
+"and everything in it?"
+msgstr ""
+"Eliminare la cartella\n"
+"%s\n"
+"e tutto il contenuto?"
+
+#, c-format
+msgid ""
+"Delete the file\n"
+"%s?"
+msgstr ""
+"Eliminare il file\n"
+"%s?"
+
+msgid "Delete"
+msgstr "Elimina"
+
+msgid ""
+"The file could not be\n"
+"deleted. Is it in use?"
+msgstr ""
+"Non è stato possibile\n"
+"eliminare il file. È in uso?"
+
+msgid "Convert"
+msgstr "Converti"
+
+msgid ""
+"A conversion is already\n"
+"running."
+msgstr ""
+"Una conversione è già\n"
+"in corso."
+
+msgid ""
+"convert does not read\n"
+"this kind of file."
+msgstr ""
+"convert non legge questo\n"
+"tipo di file."
+
+msgid "Pack into (.zip, .tar or .tar.gz):"
+msgstr "Comprimi in (.zip, .tar o .tar.gz):"
+
+msgid "To (the ending picks the format):"
+msgstr "In (l'estensione sceglie il formato):"
+
+msgid "Extract into the folder:"
+msgstr "Estrai nella cartella:"
+
+msgid ""
+"convert is not on\n"
+"this card."
+msgstr ""
+"convert non è su\n"
+"questa scheda."
+
+msgid ""
+"Could not start: is\n"
+"/tmp writable?"
+msgstr ""
+"Avvio impossibile: /tmp\n"
+"è scrivibile?"
+
+msgid " MB"
+msgstr " MB"
+
+msgid " KB"
+msgstr " KB"
+
+msgid " bytes"
+msgstr " byte"
+
+msgctxt "button"
+msgid "Stop"
+msgstr "Ferma"
+
+#, c-format
+msgid "Finding... %u found, %lu files looked at"
+msgstr "Ricerca... %u trovati, %lu file esaminati"
+
+#, c-format
+msgid "%u found in %s (the first %u matches)"
+msgstr "%u trovati in %s (le prime %u corrispondenze)"
+
+#, c-format
+msgid "%u found in %s (not all)"
+msgstr "%u trovati in %s (non tutti)"
+
+#, c-format
+msgid "%u found in %s"
+msgstr "%u trovati in %s"
+
+msgid "Removing the source... "
+msgstr "Rimozione dell'origine... "
+
+msgid "Moving... "
+msgstr "Spostamento... "
+
+msgid "Copying... "
+msgstr "Copia... "
+
+msgid " of "
+msgstr " di "
+
+msgid " files, "
+msgstr " file, "
+
+#, c-format
+msgid "Deleting... %lu deleted"
+msgstr "Eliminazione... %lu eliminati"
+
+msgid "  (Esc stops)"
+msgstr "  (Esc ferma)"
+
+msgid "  (Esc: back)"
+msgstr "  (Esc: indietro)"
+
+msgid "Stopped."
+msgstr "Fermato."
+
+msgid "Stopped: "
+msgstr "Fermato: "
+
+msgid ""
+"\n"
+"The copy is complete; part of\n"
+"the original is still there."
+msgstr ""
+"\n"
+"La copia è completa; parte\n"
+"dell'originale è ancora lì."
+
+msgid ""
+"\n"
+"Part of it is deleted already."
+msgstr ""
+"\n"
+"Una parte è già stata eliminata."
+
+msgid ""
+"\n"
+"What was copied so far is left\n"
+"in the destination."
+msgstr ""
+"\n"
+"Ciò che è stato copiato finora\n"
+"resta nella destinazione."
+
+msgid "Find"
+msgstr "Cerca"
+
+msgid ""
+"In this folder and below. A name\n"
+"(report, *.md), \"text\" inside files,\n"
+"or both: *.txt \"invoice\""
+msgstr ""
+"In questa cartella e sotto. Un nome\n"
+"(relazione, *.md), \"testo\" nei file,\n"
+"o entrambi: *.txt \"fattura\""
+
+#, c-format
+msgid ""
+"Browse, open and manage files.\n"
+"\n"
+"Enter\tOpen the selection\n"
+"Backspace\tUp a folder\n"
+"Letters\tJump to a name\n"
+"F2\tRename\n"
+"Delete\tDelete (asks first)\n"
+"F3, Ctrl+F\tFind by name, \"text\" inside, or both\n"
+"F5\tRead the folder again\n"
+"F12\tHome: back to the folder files started in\n"
+"Esc\tStop a find, copy or delete\n"
+"Tab\tTo the buttons; Space presses\n"
+"\n"
+"Results: Enter opens, Backspace goes to the file's folder, Esc goes back.\n"
+"\n"
+"Copy and Move ask for the destination, starting from the file's own path: an existing folder means into it. Folders copy, move and delete with everything in them. Convert saves the file in another format, picked by the ending you give it (.docx, .md, .xlsx, ...); a folder it packs into a .zip, .tar or .tar.gz.\n"
+"\n"
+"%s is yours, %s is the RAM disk (gone at power-off)."
+msgstr ""
+"Sfoglia, apri e gestisci i file.\n"
+"\n"
+"Invio\tApri la selezione\n"
+"Backspace\tSali di una cartella\n"
+"Lettere\tSalta a un nome\n"
+"F2\tRinomina\n"
+"Canc\tElimina (chiede prima)\n"
+"F3, Ctrl+F\tCerca per nome, \"testo\" dentro, o entrambi\n"
+"F5\tRileggi la cartella\n"
+"F12\tHome: la cartella in cui è partito files\n"
+"Esc\tFerma una ricerca, copia o eliminazione\n"
+"Tab\tAi pulsanti; Spazio preme\n"
+"\n"
+"Risultati: Invio apre, Backspace va alla cartella del file, Esc torna indietro.\n"
+"\n"
+"Copia e Sposta chiedono la destinazione, partendo dal percorso del file: una cartella esistente vuol dire dentro. Le cartelle si copiano, spostano ed eliminano con tutto il contenuto. Converti salva il file in un altro formato, scelto dall'estensione che indichi (.docx, .md, .xlsx, ...); una cartella la comprime in .zip, .tar o .tar.gz.\n"
+"\n"
+"%s è tua, %s è il disco in RAM (si perde allo spegnimento)."
+
+msgid "Files help"
+msgstr "Guida di files"
+
+#~ msgid "Open"
+#~ msgstr "Apri"
+
+#~ msgid "New Dir"
+#~ msgstr "Nuova cart."
+
+#~ msgid "Stop"
+#~ msgstr "Ferma"

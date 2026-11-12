@@ -1,0 +1,100 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: Zeitlos term\n"
+"Language: nl\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+
+#, c-format
+msgid "%s -- not connected"
+msgstr "%s -- niet verbonden"
+
+msgid "ready"
+msgstr "klaar"
+
+msgid "not running"
+msgstr "draait niet"
+
+msgid "not installed"
+msgstr "niet geïnstalleerd"
+
+msgid "Scheme and system commands"
+msgstr "Scheme en systeemopdrachten"
+
+msgid "Unix-style shell, zcc and vi"
+msgstr "Unix-achtige shell, zcc en vi"
+
+msgid "Boot log and kernel shell"
+msgstr "Opstartlog en kernelshell"
+
+msgid "port, serial, telnet or ssh"
+msgstr "port, serial, telnet of ssh"
+
+msgid "Tab chooses, Enter connects, or type a target"
+msgstr "Tab kiest, Enter verbindt, of typ een doel"
+
+msgid "F12 disconnects  Esc hides  Shift+PgUp scrolls"
+msgstr "F12 verbreekt  Esc verbergt  Shift+PgUp scrolt"
+
+msgid "auto-connect cancelled"
+msgstr "automatisch verbinden geannuleerd"
+
+#, c-format
+msgid "%.40s is not running"
+msgstr "%.40s draait niet"
+
+#, c-format
+msgid "connecting to %.45s ...  (Esc cancels)"
+msgstr "verbinden met %.45s ...  (Esc annuleert)"
+
+#, c-format
+msgid "%.30s refused: %.40s"
+msgstr "%.30s weigerde: %.40s"
+
+#, c-format
+msgid "%.55s refused the connection"
+msgstr "%.55s weigerde de verbinding"
+
+#, c-format
+msgid "cancelled connecting to %.50s"
+msgstr "verbinden met %.50s geannuleerd"
+
+#, c-format
+msgid "no answer from %.50s"
+msgstr "geen antwoord van %.50s"
+
+#, c-format
+msgid "could not start %s -- %s"
+msgstr "kon %s niet starten -- %s"
+
+#, c-format
+msgid "starting %s"
+msgstr "%s starten"
+
+#, c-format
+msgid "starting %s...  (Esc cancels)"
+msgstr "%s starten...  (Esc annuleert)"
+
+#, c-format
+msgid "auto-connect: %.40s  (Esc cancels)"
+msgstr "automatisch: %.40s  (Esc annuleert)"
+
+#, c-format
+msgid "%s: %.24s did not appear -- choose below"
+msgstr "%s: %.24s verscheen niet -- kies hieronder"
+
+msgid "Blank screen"
+msgstr "Leeg scherm"
+
+msgid "Nothing selected"
+msgstr "Niets geselecteerd"
+
+msgid "disconnected (F12)"
+msgstr "verbroken (F12)"
+
+msgid "choose a shell, or open a connection"
+msgstr "kies een shell of open een verbinding"
+
+msgid "connection closed by the other end"
+msgstr "verbinding gesloten door de andere kant"

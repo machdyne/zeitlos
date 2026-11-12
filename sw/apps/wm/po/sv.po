@@ -1,0 +1,131 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: Zeitlos wm\n"
+"Language: sv\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+
+msgid "Next page"
+msgstr "Nästa sida"
+
+msgid "Back"
+msgstr "Tillbaka"
+
+msgid "Clipboard empty"
+msgstr "Urklipp tomt"
+
+msgid "Desktop"
+msgstr "Skrivbord"
+
+msgid "No window focused"
+msgstr "Inget fönster aktivt"
+
+msgid "Dock. Use the arrow keys to choose an app, and Enter to start it."
+msgstr "Dock. Välj en app med piltangenterna, och Enter för att starta den."
+
+msgid "restored"
+msgstr "återställt"
+
+msgid "maximized"
+msgstr "maximerat"
+
+msgid "window"
+msgstr "fönster"
+
+msgid "full screen"
+msgstr "helskärm"
+
+msgid "shaded"
+msgstr "upprullat"
+
+msgid "unshaded"
+msgstr "nedrullat"
+
+msgid "Workspace 1"
+msgstr "Arbetsyta 1"
+
+msgid "Workspace 2"
+msgstr "Arbetsyta 2"
+
+msgid "Workspace 3"
+msgstr "Arbetsyta 3"
+
+msgid "Workspace 4"
+msgstr "Arbetsyta 4"
+
+msgid "Workspace 5"
+msgstr "Arbetsyta 5"
+
+msgid "Workspace 6"
+msgstr "Arbetsyta 6"
+
+msgid "Workspace 7"
+msgstr "Arbetsyta 7"
+
+msgid "Workspace 8"
+msgstr "Arbetsyta 8"
+
+msgid "Workspace 9"
+msgstr "Arbetsyta 9"
+
+msgid "Workspace 10"
+msgstr "Arbetsyta 10"
+
+msgid "No volume control on this bitstream"
+msgstr "Ingen volymkontroll i den här bitströmmen"
+
+#, c-format
+msgid "Volume %d%%"
+msgstr "Volym %d%%"
+
+msgid "No brightness control on this display"
+msgstr "Ingen ljusstyrkekontroll på den här skärmen"
+
+#, c-format
+msgid "Brightness %d/%d"
+msgstr "Ljusstyrka %d/%d"
+
+msgid "Zeitlos is locked"
+msgstr "Zeitlos är låst"
+
+msgid "Password: "
+msgstr "Lösenord: "
+
+msgid "Type the password, then Enter"
+msgstr "Skriv lösenordet, sedan Enter"
+
+msgid "No password is set: press Enter"
+msgstr "Inget lösenord: tryck på Enter"
+
+msgid "Reboot"
+msgstr "Starta om"
+
+msgid "Cancel"
+msgstr "Avbryt"
+
+msgid "Reboot Zeitlos?"
+msgstr "Starta om Zeitlos?"
+
+msgid "Unsaved work in open apps is lost."
+msgstr "Osparat arbete i öppna appar går förlorat."
+
+msgid "Rebooting..."
+msgstr "Startar om..."
+
+msgid "Reboot failed -- see the console"
+msgstr "Omstarten misslyckades -- se konsolen"
+
+msgid "Checking..."
+msgstr "Kontrollerar..."
+
+#, c-format
+msgid "Too many attempts -- wait %lu s"
+msgstr "För många försök -- vänta %lu s"
+
+msgid "Wrong password"
+msgstr "Fel lösenord"
+
+#, c-format
+msgid "Could not check the password (%d)"
+msgstr "Kunde inte kontrollera lösenordet (%d)"

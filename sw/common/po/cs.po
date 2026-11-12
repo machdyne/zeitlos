@@ -1,0 +1,281 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: Zeitlos common\n"
+"Language: cs\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=3; plural=(n==1 ? 0 : n>=2 && n<=4 ? 1 : 2);\n"
+
+msgid " (reading)"
+msgstr " (načítání)"
+
+msgid " (partial list)"
+msgstr " (část seznamu)"
+
+msgid "OK"
+msgstr "OK"
+
+msgid "Cancel"
+msgstr "Zrušit"
+
+msgid "Yes"
+msgstr "Ano"
+
+msgid "No"
+msgstr "Ne"
+
+msgid "Open"
+msgstr "Otevřít"
+
+msgid "Save"
+msgstr "Uložit"
+
+msgid "Open a file"
+msgstr "Otevřít soubor"
+
+msgid "Choose"
+msgstr "Vybrat"
+
+msgid "Choose a file or folder"
+msgstr "Vybrat soubor nebo složku"
+
+msgid "Save As"
+msgstr "Uložit jako"
+
+msgid "Read docs"
+msgstr "Dokumentace"
+
+msgid "Close"
+msgstr "Zavřít"
+
+msgid "Help"
+msgstr "Nápověda"
+
+msgid "Print to"
+msgstr "Tisknout na"
+
+msgid "Pages"
+msgstr "Stránky"
+
+msgid "Copies"
+msgstr "Kopie"
+
+msgid "Paper"
+msgstr "Papír"
+
+msgid "Tray"
+msgstr "Zásobník"
+
+msgid "Per sheet"
+msgstr "Na list"
+
+msgid "Quality"
+msgstr "Kvalita"
+
+msgid "US Letter"
+msgstr "US Letter"
+
+msgid "Legal"
+msgstr "US Legal"
+
+msgid "4 x 6 in"
+msgstr "4 x 6 palců"
+
+msgid "5 x 7 in"
+msgstr "5 x 7 palců"
+
+msgid "3 x 5 in"
+msgstr "3 x 5 palců"
+
+msgid "Printer's choice"
+msgstr "Podle tiskárny"
+
+msgctxt "tray"
+msgid "Main"
+msgstr "Hlavní"
+
+msgctxt "tray"
+msgid "Rear"
+msgstr "Zadní"
+
+msgctxt "tray"
+msgid "Manual"
+msgstr "Ruční"
+
+msgctxt "quality"
+msgid "Normal"
+msgstr "Normální"
+
+msgctxt "quality"
+msgid "Draft"
+msgstr "Koncept"
+
+msgctxt "quality"
+msgid "High"
+msgstr "Vysoká"
+
+msgid "Print"
+msgstr "Tisk"
+
+msgid "A PDF file"
+msgstr "Soubor PDF"
+
+msgid "A PostScript file"
+msgstr "Soubor PostScript"
+
+msgid "Printer (not set up)"
+msgstr "Tiskárna (nenastavena)"
+
+msgid "Printer "
+msgstr "Tiskárna "
+
+msgid "All"
+msgstr "Vše"
+
+msgid "This page ("
+msgstr "Tato stránka ("
+
+msgid "The selection"
+msgstr "Výběr"
+
+msgid "Default ("
+msgstr "Výchozí ("
+
+msgid "(the printer's)"
+msgstr "(podle tiskárny)"
+
+msgid " page"
+msgstr " stránka"
+
+msgid " pages"
+msgstr " stránek"
+
+msgid "Print to a file"
+msgstr "Tisk do souboru"
+
+msgid "That file exists. Replace it?"
+msgstr "Soubor existuje. Nahradit?"
+
+msgctxt "short weekday"
+msgid "Sun"
+msgstr "ne"
+
+msgctxt "short weekday"
+msgid "Mon"
+msgstr "po"
+
+msgctxt "short weekday"
+msgid "Tue"
+msgstr "út"
+
+msgctxt "short weekday"
+msgid "Wed"
+msgstr "st"
+
+msgctxt "short weekday"
+msgid "Thu"
+msgstr "čt"
+
+msgctxt "short weekday"
+msgid "Fri"
+msgstr "pá"
+
+msgctxt "short weekday"
+msgid "Sat"
+msgstr "so"
+
+msgctxt "short month"
+msgid "Jan"
+msgstr "led"
+
+msgctxt "short month"
+msgid "Feb"
+msgstr "úno"
+
+msgctxt "short month"
+msgid "Mar"
+msgstr "bře"
+
+msgctxt "short month"
+msgid "Apr"
+msgstr "dub"
+
+msgctxt "short month"
+msgid "May"
+msgstr "kvě"
+
+msgctxt "short month"
+msgid "Jun"
+msgstr "čvn"
+
+msgctxt "short month"
+msgid "Jul"
+msgstr "čvc"
+
+msgctxt "short month"
+msgid "Aug"
+msgstr "srp"
+
+msgctxt "short month"
+msgid "Sep"
+msgstr "zář"
+
+msgctxt "short month"
+msgid "Oct"
+msgstr "říj"
+
+msgctxt "short month"
+msgid "Nov"
+msgstr "lis"
+
+msgctxt "short month"
+msgid "Dec"
+msgstr "pro"
+
+msgctxt "month"
+msgid "January"
+msgstr "leden"
+
+msgctxt "month"
+msgid "February"
+msgstr "únor"
+
+msgctxt "month"
+msgid "March"
+msgstr "březen"
+
+msgctxt "month"
+msgid "April"
+msgstr "duben"
+
+msgctxt "month"
+msgid "May"
+msgstr "květen"
+
+msgctxt "month"
+msgid "June"
+msgstr "červen"
+
+msgctxt "month"
+msgid "July"
+msgstr "červenec"
+
+msgctxt "month"
+msgid "August"
+msgstr "srpen"
+
+msgctxt "month"
+msgid "September"
+msgstr "září"
+
+msgctxt "month"
+msgid "October"
+msgstr "říjen"
+
+msgctxt "month"
+msgid "November"
+msgstr "listopad"
+
+msgctxt "month"
+msgid "December"
+msgstr "prosinec"

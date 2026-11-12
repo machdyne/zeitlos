@@ -1,0 +1,374 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: Zeitlos text\n"
+"Language: ja\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=1; plural=0;\n"
+
+msgid "Converting"
+msgstr "変換中:"
+
+msgid "the file"
+msgstr "ファイル"
+
+msgid "Saving"
+msgstr "保存中:"
+
+msgid "Recover"
+msgstr "復元"
+
+msgid ""
+"Unsaved changes from a\n"
+"session that did not end\n"
+"were kept. Recover them?"
+msgstr ""
+"終了しなかったセッションの\n"
+"未保存の変更が残っています。\n"
+"復元しますか?"
+
+#, c-format
+msgid ""
+"%d character cannot be saved\n"
+"as %s. Save as UTF-8\n"
+"instead?"
+msgid_plural ""
+"%d characters cannot be saved\n"
+"as %s. Save as UTF-8\n"
+"instead?"
+msgstr[0] ""
+"%d 文字を %s で\n"
+"保存できません。\n"
+"UTF-8で保存しますか?"
+
+msgid "Encoding"
+msgstr "文字コード"
+
+msgid "Save failed"
+msgstr "保存できません"
+
+msgid ""
+"The file could not be\n"
+"written completely.\n"
+"The one on the card is\n"
+"as it was."
+msgstr ""
+"ファイルを最後まで\n"
+"書き込めませんでした。\n"
+"カード上のファイルは\n"
+"元のままです。"
+
+#, c-format
+msgid ""
+"Saved, but as\n"
+"%.60s:\n"
+"it could not be renamed."
+msgstr ""
+"保存しましたが、名前は\n"
+"%.60s\n"
+"のままです (名前を変更できません)。"
+
+msgid "Save"
+msgstr "保存"
+
+msgid "Export"
+msgstr "書き出し"
+
+msgid ""
+"convert could not\n"
+"be started."
+msgstr ""
+"convertを起動\n"
+"できませんでした。"
+
+msgid ""
+"Could not write the\n"
+"copy to convert."
+msgstr ""
+"変換用のコピーを\n"
+"書き込めませんでした。"
+
+#, c-format
+msgid ""
+"%.40s already exists.\n"
+"Replace it?"
+msgstr ""
+"%.40s は既にあります。\n"
+"置き換えますか?"
+
+msgid "Save As"
+msgstr "名前を付けて保存"
+
+msgid "Getting ready to print"
+msgstr "印刷の準備中:"
+
+msgid "Untitled"
+msgstr "無題"
+
+#, c-format
+msgid "Print %.60s"
+msgstr "%.60s を印刷"
+
+#, c-format
+msgid ""
+"There was no room in %s\n"
+"for the text to print."
+msgstr ""
+"%s に印刷する文書を\n"
+"置く場所がありません。"
+
+msgid "Print"
+msgstr "印刷"
+
+#, c-format
+msgid ""
+"The print job could not\n"
+"be made in %s."
+msgstr ""
+"%s に印刷ジョブを\n"
+"作成できませんでした。"
+
+msgid "print is not on the card."
+msgstr "カードにprintがありません。"
+
+msgid ""
+"The print job could not\n"
+"be written."
+msgstr ""
+"印刷ジョブを\n"
+"書き込めませんでした。"
+
+msgid "Unsaved changes"
+msgstr "未保存の変更"
+
+msgid ""
+"Save changes before\n"
+"continuing?"
+msgstr ""
+"続ける前に変更を\n"
+"保存しますか?"
+
+msgid "Open failed"
+msgstr "開けません"
+
+msgid ""
+"That file could not\n"
+"be read."
+msgstr ""
+"ファイルを\n"
+"読めませんでした。"
+
+msgid "Too large"
+msgstr "大きすぎます"
+
+msgid ""
+"That file is larger than\n"
+"this editor can hold on\n"
+"this machine."
+msgstr ""
+"このマシンのエディタで\n"
+"扱える大きさを\n"
+"超えています。"
+
+msgid "Opening"
+msgstr "開いています:"
+
+msgid ""
+"That file is too large for\n"
+"this editor once its accented\n"
+"letters are converted."
+msgstr ""
+"アクセント付き文字を\n"
+"変換すると、エディタで\n"
+"扱えない大きさになります。"
+
+msgid "Copy"
+msgstr "コピー"
+
+msgid ""
+"Copied, but there is no\n"
+"memory to keep all of it:\n"
+"a paste gives the first\n"
+"4 KB."
+msgstr ""
+"コピーしましたが、全体を\n"
+"保持するメモリがありません。\n"
+"貼り付けは最初の4 KBです。"
+
+msgid ""
+"Too large to cut here:\n"
+"there is no memory to\n"
+"keep it for the paste.\n"
+"Cut less than 4 KB."
+msgstr ""
+"大きすぎて切り取れません:\n"
+"貼り付けまで保持する\n"
+"メモリがありません。\n"
+"4 KB未満にしてください。"
+
+msgid ""
+"Too large to cut:\n"
+"it could not be undone.\n"
+"Cut a smaller part."
+msgstr ""
+"大きすぎて切り取れません:\n"
+"元に戻せなくなります。\n"
+"小さく分けてください。"
+
+msgid "Cut"
+msgstr "切り取り"
+
+msgid "Full"
+msgstr "いっぱいです"
+
+msgid ""
+"Only part of the clipboard\n"
+"would fit."
+msgstr ""
+"クリップボードの一部しか\n"
+"入りません。"
+
+msgid "The document is full."
+msgstr "文書がいっぱいです。"
+
+msgid "blank"
+msgstr ""
+
+msgid "end"
+msgstr ""
+
+msgid "new line"
+msgstr ""
+
+msgid "Empty document"
+msgstr ""
+
+msgid "End of document"
+msgstr ""
+
+msgid "Nothing selected"
+msgstr ""
+
+msgid "Finding"
+msgstr "検索中:"
+
+#, c-format
+msgid ""
+"\"%.60s\"\n"
+"was not found."
+msgstr ""
+"\"%.60s\"\n"
+"は見つかりません。"
+
+msgid "Find"
+msgstr "検索"
+
+msgid "Find:"
+msgstr "検索:"
+
+msgid "Counting"
+msgstr "集計中:"
+
+msgid "Replacing"
+msgstr "置換中:"
+
+msgid "Replace"
+msgstr "置換"
+
+msgid ""
+"The document would not hold\n"
+"the replacements."
+msgstr ""
+"置換すると文書に\n"
+"収まりません。"
+
+msgid "Replace with:"
+msgstr "置換後:"
+
+#, c-format
+msgid ""
+"%d match for \"%.40s\".\n"
+"Replace all of them?\n"
+"(No: one at a time.)"
+msgid_plural ""
+"%d matches for \"%.40s\".\n"
+"Replace all of them?\n"
+"(No: one at a time.)"
+msgstr[0] ""
+"%d 件 (\"%.40s\")。\n"
+"すべて置換しますか?\n"
+"(いいえ: 1つずつ)"
+
+msgid ""
+"That many changes cannot\n"
+"be undone. Replace all\n"
+"anyway?"
+msgstr ""
+"この数の変更は\n"
+"元に戻せません。\n"
+"すべて置換しますか?"
+
+#, c-format
+msgid "Replaced %d."
+msgstr "%d 件置換しました。"
+
+msgid "Replace this one?"
+msgstr "これを置換しますか?"
+
+msgid "the document"
+msgstr "文書"
+
+#, c-format
+msgid "%d word"
+msgid_plural "%d words"
+msgstr[0] "%d 語"
+
+#, c-format
+msgid "%d character"
+msgid_plural "%d characters"
+msgstr[0] "%d 文字"
+
+#, c-format
+msgid "Line %d of %d."
+msgstr "%d / %d 行。"
+
+msgid "Go to line:"
+msgstr "行へ移動:"
+
+msgid "Go to line"
+msgstr "行へ移動"
+
+#, c-format
+msgid ""
+"A plain text editor for notes, lists and Markdown.\n"
+"\n"
+"Ctrl+N/O/S\tNew, open, save\n"
+"Ctrl+Shift+S\tSave as\n"
+"Ctrl+Q\tClose\n"
+"Ctrl+C/X/V\tCopy, cut, paste\n"
+"Ctrl+A\tSelect all\n"
+"Ctrl+Z/Y\tUndo, redo\n"
+"Ctrl+F, F3\tFind, find again\n"
+"Ctrl+H\tReplace\n"
+"Ctrl+L\tGo to line; counts words\n"
+"Ctrl+P\tPrint, or print to a PDF\n"
+"\n"
+"Shift with the arrows, or a drag, selects. A .docx, .odt or .rtf opens converted, as Markdown in %s (the RAM disk): Save puts it in %s."
+msgstr ""
+"メモ、リスト、Markdown用のシンプルなテキストエディタです。\n"
+"\n"
+"Ctrl+N/O/S\t新規、開く、保存\n"
+"Ctrl+Shift+S\t名前を付けて保存\n"
+"Ctrl+Q\t閉じる\n"
+"Ctrl+C/X/V\tコピー、切り取り、貼り付け\n"
+"Ctrl+A\tすべて選択\n"
+"Ctrl+Z/Y\t元に戻す、やり直し\n"
+"Ctrl+F, F3\t検索、次を検索\n"
+"Ctrl+H\t置換\n"
+"Ctrl+L\t行へ移動。語数も数える\n"
+"Ctrl+P\t印刷、またはPDFに印刷\n"
+"\n"
+"Shiftと矢印、またはドラッグで選択します。.docx, .odt, .rtf はMarkdownに変換して %s (RAMディスク) に開きます。保存すると %s に置かれます。"
+
+msgid "Text help"
+msgstr "textのヘルプ"

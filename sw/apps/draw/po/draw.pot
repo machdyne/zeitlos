@@ -1,0 +1,156 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: Zeitlos draw\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+#: sw/apps/draw/draw.c:1258
+msgid "Filling  (Esc stops)"
+msgstr ""
+
+#: sw/apps/draw/draw.c:1480
+msgid "Loading "
+msgstr ""
+
+#: sw/apps/draw/draw.c:1480
+msgid "Saving "
+msgstr ""
+
+#: sw/apps/draw/draw.c:1484
+#, c-format
+msgid "%  (Esc stops)"
+msgstr ""
+
+#: sw/apps/draw/draw.c:1495
+msgid ""
+"The old file is gone;\n"
+"the image is in\n"
+msgstr ""
+
+#: sw/apps/draw/draw.c:1526
+#: sw/apps/draw/draw.c:1716
+msgid "Save failed"
+msgstr ""
+
+#: sw/apps/draw/draw.c:1567
+#: sw/apps/draw/draw.c:1687
+msgid "Open failed"
+msgstr ""
+
+#: sw/apps/draw/draw.c:1583
+msgid "Unsaved changes"
+msgstr ""
+
+#: sw/apps/draw/draw.c:1584
+msgid ""
+"Save changes before\n"
+"continuing?"
+msgstr ""
+
+#: sw/apps/draw/draw.c:1878
+#: sw/apps/draw/draw.c:1881
+#: sw/apps/draw/draw.c:1906
+msgid "Print"
+msgstr ""
+
+#: sw/apps/draw/draw.c:1881
+msgid ""
+"The print job could not\n"
+"be made in /tmp."
+msgstr ""
+
+#: sw/apps/draw/draw.c:1907
+msgid "print is not on the card."
+msgstr ""
+
+#: sw/apps/draw/draw.c:1907
+msgid ""
+"The print job could not\n"
+"be written."
+msgstr ""
+
+#: sw/apps/draw/draw.c:1990
+msgid ""
+"Paint in black and white on a 640x480 page.\n"
+"\n"
+"Left column\tPick a tool: pencil, brush, eraser, fill, line, rectangle, filled rectangle, oval, filled oval\n"
+"Keys\tP B E F L R O pick them too; Shift+R and Shift+O the filled shapes; or 1 to 9\n"
+"Bottom row\tPick the pattern for the brush, the fill and the filled shapes ([ and ] step through them)\n"
+"Drag\tDraw with the tool\n"
+"Shift\tWhile dragging: lines straight or at 45 degrees, squares, circles\n"
+"Fill\tClick inside a shape: it fills with the pattern\n"
+"Arrows\tPan the page (or the scrollbars, or the wheel)\n"
+"Title icons\tNew, open, save, print\n"
+"Ctrl+N/O/S\tNew, open, save (Ctrl+Shift+S: save as)\n"
+"Ctrl+P\tPrint\n"
+"Ctrl+Z\tUndo the last stroke, shape or fill\n"
+"Ctrl+Y\tRedo (also Ctrl+Shift+Z)\n"
+"Esc\tStop a fill, a load or a save: the drawing and the file stay as they were (also Ctrl+C)\n"
+"\n"
+"The pencil draws white when you start on black."
+msgstr ""
+
+#: sw/apps/draw/draw.c:2011
+msgid "Draw help"
+msgstr ""
+
+#: sw/apps/draw/drawio.c:201
+msgid ""
+"That file could not\n"
+"be opened."
+msgstr ""
+
+#: sw/apps/draw/drawio.c:202
+msgid ""
+"That file is not\n"
+"a ZBM bitmap."
+msgstr ""
+
+#: sw/apps/draw/drawio.c:203
+msgid ""
+"That image is not\n"
+"640x480."
+msgstr ""
+
+#: sw/apps/draw/drawio.c:204
+msgid ""
+"That file is damaged:\n"
+"it ends early."
+msgstr ""
+
+#: sw/apps/draw/drawio.c:205
+msgid ""
+"That file could not\n"
+"be read."
+msgstr ""
+
+#: sw/apps/draw/drawio.c:206
+msgid ""
+"The image could not be\n"
+"written completely."
+msgstr ""
+
+#: sw/apps/draw/drawio.c:207
+msgid ""
+"The image was written\n"
+"but could not replace\n"
+"the old file."
+msgstr ""
+
+#: sw/apps/draw/drawio.c:208
+msgid ""
+"The old file is gone;\n"
+"the image is in the\n"
+".part file beside it."
+msgstr ""
+
+#: sw/apps/draw/drawio.c:209
+msgid ""
+"That is a colour\n"
+"picture: open it\n"
+"in pix."
+msgstr ""
+
+#: sw/apps/draw/drawio.c:210
+msgid "Something went wrong."
+msgstr ""

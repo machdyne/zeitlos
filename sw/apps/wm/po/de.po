@@ -1,0 +1,131 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: Zeitlos wm\n"
+"Language: de\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+
+msgid "Next page"
+msgstr "Nächste Seite"
+
+msgid "Back"
+msgstr "Zurück"
+
+msgid "Clipboard empty"
+msgstr "Zwischenablage leer"
+
+msgid "Desktop"
+msgstr "Schreibtisch"
+
+msgid "No window focused"
+msgstr "Kein Fenster im Fokus"
+
+msgid "Dock. Use the arrow keys to choose an app, and Enter to start it."
+msgstr "Dock. Mit den Pfeiltasten eine App wählen, mit Enter starten."
+
+msgid "restored"
+msgstr "wiederhergestellt"
+
+msgid "maximized"
+msgstr "maximiert"
+
+msgid "window"
+msgstr "Fenster"
+
+msgid "full screen"
+msgstr "Vollbild"
+
+msgid "shaded"
+msgstr "eingerollt"
+
+msgid "unshaded"
+msgstr "ausgerollt"
+
+msgid "Workspace 1"
+msgstr "Arbeitsfläche 1"
+
+msgid "Workspace 2"
+msgstr "Arbeitsfläche 2"
+
+msgid "Workspace 3"
+msgstr "Arbeitsfläche 3"
+
+msgid "Workspace 4"
+msgstr "Arbeitsfläche 4"
+
+msgid "Workspace 5"
+msgstr "Arbeitsfläche 5"
+
+msgid "Workspace 6"
+msgstr "Arbeitsfläche 6"
+
+msgid "Workspace 7"
+msgstr "Arbeitsfläche 7"
+
+msgid "Workspace 8"
+msgstr "Arbeitsfläche 8"
+
+msgid "Workspace 9"
+msgstr "Arbeitsfläche 9"
+
+msgid "Workspace 10"
+msgstr "Arbeitsfläche 10"
+
+msgid "No volume control on this bitstream"
+msgstr "Keine Lautstärkeregelung in diesem Bitstream"
+
+#, c-format
+msgid "Volume %d%%"
+msgstr "Lautstärke %d%%"
+
+msgid "No brightness control on this display"
+msgstr "Keine Helligkeitsregelung bei diesem Bildschirm"
+
+#, c-format
+msgid "Brightness %d/%d"
+msgstr "Helligkeit %d/%d"
+
+msgid "Zeitlos is locked"
+msgstr "Zeitlos ist gesperrt"
+
+msgid "Password: "
+msgstr "Passwort: "
+
+msgid "Type the password, then Enter"
+msgstr "Passwort eingeben, dann Enter"
+
+msgid "No password is set: press Enter"
+msgstr "Kein Passwort gesetzt: Enter drücken"
+
+msgid "Reboot"
+msgstr "Neu starten"
+
+msgid "Cancel"
+msgstr "Abbrechen"
+
+msgid "Reboot Zeitlos?"
+msgstr "Zeitlos neu starten?"
+
+msgid "Unsaved work in open apps is lost."
+msgstr "Ungespeicherte Arbeit in offenen Apps geht verloren."
+
+msgid "Rebooting..."
+msgstr "Neustart..."
+
+msgid "Reboot failed -- see the console"
+msgstr "Neustart fehlgeschlagen -- siehe Konsole"
+
+msgid "Checking..."
+msgstr "Prüfe..."
+
+#, c-format
+msgid "Too many attempts -- wait %lu s"
+msgstr "Zu viele Versuche -- %lu s warten"
+
+msgid "Wrong password"
+msgstr "Falsches Passwort"
+
+#, c-format
+msgid "Could not check the password (%d)"
+msgstr "Passwort konnte nicht geprüft werden (%d)"

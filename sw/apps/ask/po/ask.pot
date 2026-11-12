@@ -1,0 +1,119 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: Zeitlos ask\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+#: sw/apps/ask/ask.c:305
+msgid "No passage here answers"
+msgstr ""
+
+#: sw/apps/ask/ask.c:307
+msgid "that."
+msgstr ""
+
+#: sw/apps/ask/ask.c:363
+#: sw/apps/ask/ask.c:492
+msgid "could not start read"
+msgstr ""
+
+#: sw/apps/ask/ask.c:399
+#, c-format
+msgid "%u passage, "
+msgid_plural "%u passages, "
+msgstr[0] ""
+msgstr[1] ""
+
+#: sw/apps/ask/ask.c:401
+#, c-format
+msgid "%u pack"
+msgid_plural "%u packs"
+msgstr[0] ""
+msgstr[1] ""
+
+#: sw/apps/ask/ask.c:407
+msgid ", ranking weaker"
+msgstr ""
+
+#: sw/apps/ask/ask.c:413
+msgid "  ^U clears"
+msgstr ""
+
+#: sw/apps/ask/ask.c:422
+msgid "searching...  Esc cancels"
+msgstr ""
+
+#: sw/apps/ask/ask.c:425
+#, c-format
+msgid "searching %u%%  Esc cancels"
+msgstr ""
+
+#: sw/apps/ask/ask.c:438
+msgid "Loading..., then search"
+msgstr ""
+
+#: sw/apps/ask/ask.c:438
+#: sw/apps/ask/ask.c:893
+msgid "Loading...  Esc stops"
+msgstr ""
+
+#: sw/apps/ask/ask.c:446
+#, c-format
+msgid "Loading %s %u%%, then search"
+msgstr ""
+
+#: sw/apps/ask/ask.c:446
+#, c-format
+msgid "Loading %s %u%%  Esc stops"
+msgstr ""
+
+#: sw/apps/ask/ask.c:465
+msgid "no packs loaded -- nothing to search"
+msgstr ""
+
+#: sw/apps/ask/ask.c:483
+msgid "path too long to open"
+msgstr ""
+
+#: sw/apps/ask/ask.c:512
+msgid "loading stopped -- no packs loaded"
+msgstr ""
+
+#: sw/apps/ask/ask.c:524
+#, c-format
+msgid "loading stopped, %u pack loaded"
+msgid_plural "loading stopped, %u packs loaded"
+msgstr[0] ""
+msgstr[1] ""
+
+#: sw/apps/ask/ask.c:533
+#, c-format
+msgid " (%u pack failed)"
+msgid_plural " (%u packs failed)"
+msgstr[0] ""
+msgstr[1] ""
+
+#: sw/apps/ask/ask.c:614
+msgid ""
+"Finds passages in the datasets on the card that answer a question, and opens them in read.\n"
+"\n"
+"Enter\tSearch; again: open the selection\n"
+"Up/Down\tSelect a result\n"
+"1-9\tOpen that result\n"
+"Esc\tStop loading, cancel a search, or clear\n"
+"Ctrl+U\tClear the line\n"
+"Ctrl+W\tDelete a word\n"
+"Ctrl+Q\tQuit\n"
+"\n"
+"Type a question and press Enter. Click a result to open it, or a pack button to browse its index.\n"
+"\n"
+"Typing works while the packs load; Enter then searches once they are in."
+msgstr ""
+
+#: sw/apps/ask/ask.c:629
+msgid "Ask help"
+msgstr ""
+
+#: sw/apps/ask/ask.c:671
+msgid "cancelled"
+msgstr ""

@@ -1,0 +1,388 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: Zeitlos text\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+#: sw/apps/text/text.c:2023
+msgid "Converting"
+msgstr ""
+
+#: sw/apps/text/text.c:2023
+msgid "the file"
+msgstr ""
+
+#: sw/apps/text/text.c:2227
+msgid "Saving"
+msgstr ""
+
+#: sw/apps/text/text.c:2409
+msgid "Recover"
+msgstr ""
+
+#: sw/apps/text/text.c:2410
+msgid ""
+"Unsaved changes from a\n"
+"session that did not end\n"
+"were kept. Recover them?"
+msgstr ""
+
+#: sw/apps/text/text.c:2521
+#, c-format
+msgid ""
+"%d character cannot be saved\n"
+"as %s. Save as UTF-8\n"
+"instead?"
+msgid_plural ""
+"%d characters cannot be saved\n"
+"as %s. Save as UTF-8\n"
+"instead?"
+msgstr[0] ""
+msgstr[1] ""
+
+#: sw/apps/text/text.c:2524
+msgid "Encoding"
+msgstr ""
+
+#: sw/apps/text/text.c:2536
+msgid "Save failed"
+msgstr ""
+
+#: sw/apps/text/text.c:2537
+msgid ""
+"The file could not be\n"
+"written completely.\n"
+"The one on the card is\n"
+"as it was."
+msgstr ""
+
+#: sw/apps/text/text.c:2542
+#, c-format
+msgid ""
+"Saved, but as\n"
+"%.60s:\n"
+"it could not be renamed."
+msgstr ""
+
+#: sw/apps/text/text.c:2543
+msgid "Save"
+msgstr ""
+
+#: sw/apps/text/text.c:2605
+msgid "Export"
+msgstr ""
+
+#: sw/apps/text/text.c:2605
+msgid ""
+"convert could not\n"
+"be started."
+msgstr ""
+
+#: sw/apps/text/text.c:2606
+msgid ""
+"Could not write the\n"
+"copy to convert."
+msgstr ""
+
+#: sw/apps/text/text.c:2635
+#, c-format
+msgid ""
+"%.40s already exists.\n"
+"Replace it?"
+msgstr ""
+
+#: sw/apps/text/text.c:2636
+msgid "Save As"
+msgstr ""
+
+#: sw/apps/text/text.c:2683
+msgid "Getting ready to print"
+msgstr ""
+
+#: sw/apps/text/text.c:2710
+msgid "Untitled"
+msgstr ""
+
+#: sw/apps/text/text.c:2722
+#, c-format
+msgid "Print %.60s"
+msgstr ""
+
+#: sw/apps/text/text.c:2737
+#, c-format
+msgid ""
+"There was no room in %s\n"
+"for the text to print."
+msgstr ""
+
+#: sw/apps/text/text.c:2738
+#: sw/apps/text/text.c:2746
+#: sw/apps/text/text.c:2756
+msgid "Print"
+msgstr ""
+
+#: sw/apps/text/text.c:2745
+#, c-format
+msgid ""
+"The print job could not\n"
+"be made in %s."
+msgstr ""
+
+#: sw/apps/text/text.c:2757
+msgid "print is not on the card."
+msgstr ""
+
+#: sw/apps/text/text.c:2757
+msgid ""
+"The print job could not\n"
+"be written."
+msgstr ""
+
+#: sw/apps/text/text.c:2770
+msgid "Unsaved changes"
+msgstr ""
+
+#: sw/apps/text/text.c:2771
+msgid ""
+"Save changes before\n"
+"continuing?"
+msgstr ""
+
+#: sw/apps/text/text.c:2828
+#: sw/apps/text/text.c:2899
+msgid "Open failed"
+msgstr ""
+
+#: sw/apps/text/text.c:2829
+#: sw/apps/text/text.c:2900
+msgid ""
+"That file could not\n"
+"be read."
+msgstr ""
+
+#: sw/apps/text/text.c:2841
+#: sw/apps/text/text.c:2902
+#: sw/apps/text/text.c:2927
+msgid "Too large"
+msgstr ""
+
+#: sw/apps/text/text.c:2842
+#: sw/apps/text/text.c:2903
+msgid ""
+"That file is larger than\n"
+"this editor can hold on\n"
+"this machine."
+msgstr ""
+
+#: sw/apps/text/text.c:2857
+msgid "Opening"
+msgstr ""
+
+#: sw/apps/text/text.c:2928
+msgid ""
+"That file is too large for\n"
+"this editor once its accented\n"
+"letters are converted."
+msgstr ""
+
+#: sw/apps/text/text.c:3175
+msgid "Copy"
+msgstr ""
+
+#: sw/apps/text/text.c:3176
+msgid ""
+"Copied, but there is no\n"
+"memory to keep all of it:\n"
+"a paste gives the first\n"
+"4 KB."
+msgstr ""
+
+#: sw/apps/text/text.c:3187
+msgid ""
+"Too large to cut here:\n"
+"there is no memory to\n"
+"keep it for the paste.\n"
+"Cut less than 4 KB."
+msgstr ""
+
+#: sw/apps/text/text.c:3189
+msgid ""
+"Too large to cut:\n"
+"it could not be undone.\n"
+"Cut a smaller part."
+msgstr ""
+
+#: sw/apps/text/text.c:3191
+msgid "Cut"
+msgstr ""
+
+#: sw/apps/text/text.c:3268
+#: sw/apps/text/text.c:3308
+msgid "Full"
+msgstr ""
+
+#: sw/apps/text/text.c:3269
+msgid ""
+"Only part of the clipboard\n"
+"would fit."
+msgstr ""
+
+#: sw/apps/text/text.c:3309
+msgid "The document is full."
+msgstr ""
+
+#: sw/apps/text/text.c:3478
+msgid "blank"
+msgstr ""
+
+#: sw/apps/text/text.c:3491
+msgid "end"
+msgstr ""
+
+#: sw/apps/text/text.c:3496
+msgid "new line"
+msgstr ""
+
+#: sw/apps/text/text.c:3577
+msgid "Empty document"
+msgstr ""
+
+#: sw/apps/text/text.c:3590
+msgid "End of document"
+msgstr ""
+
+#: sw/apps/text/text.c:3600
+msgid "Nothing selected"
+msgstr ""
+
+#: sw/apps/text/text.c:3692
+msgid "Finding"
+msgstr ""
+
+#: sw/apps/text/text.c:3721
+#, c-format
+msgid ""
+"\"%.60s\"\n"
+"was not found."
+msgstr ""
+
+#: sw/apps/text/text.c:3722
+#: sw/apps/text/text.c:3729
+msgid "Find"
+msgstr ""
+
+#: sw/apps/text/text.c:3729
+#: sw/apps/text/text.c:3912
+msgid "Find:"
+msgstr ""
+
+#: sw/apps/text/text.c:3762
+#: sw/apps/text/text.c:4019
+msgid "Counting"
+msgstr ""
+
+#: sw/apps/text/text.c:3830
+msgid "Replacing"
+msgstr ""
+
+#: sw/apps/text/text.c:3893
+#: sw/apps/text/text.c:3912
+#: sw/apps/text/text.c:3916
+#: sw/apps/text/text.c:3930
+#: sw/apps/text/text.c:3936
+#: sw/apps/text/text.c:3945
+msgid "Replace"
+msgstr ""
+
+#: sw/apps/text/text.c:3894
+msgid ""
+"The document would not hold\n"
+"the replacements."
+msgstr ""
+
+#: sw/apps/text/text.c:3916
+msgid "Replace with:"
+msgstr ""
+
+#: sw/apps/text/text.c:3928
+#, c-format
+msgid ""
+"%d match for \"%.40s\".\n"
+"Replace all of them?\n"
+"(No: one at a time.)"
+msgid_plural ""
+"%d matches for \"%.40s\".\n"
+"Replace all of them?\n"
+"(No: one at a time.)"
+msgstr[0] ""
+msgstr[1] ""
+
+#: sw/apps/text/text.c:3937
+msgid ""
+"That many changes cannot\n"
+"be undone. Replace all\n"
+"anyway?"
+msgstr ""
+
+#: sw/apps/text/text.c:3944
+#, c-format
+msgid "Replaced %d."
+msgstr ""
+
+#: sw/apps/text/text.c:3956
+msgid "Replace this one?"
+msgstr ""
+
+#: sw/apps/text/text.c:4019
+msgid "the document"
+msgstr ""
+
+#: sw/apps/text/text.c:4047
+#, c-format
+msgid "%d word"
+msgid_plural "%d words"
+msgstr[0] ""
+msgstr[1] ""
+
+#: sw/apps/text/text.c:4048
+#, c-format
+msgid "%d character"
+msgid_plural "%d characters"
+msgstr[0] ""
+msgstr[1] ""
+
+#: sw/apps/text/text.c:4049
+#, c-format
+msgid "Line %d of %d."
+msgstr ""
+
+#: sw/apps/text/text.c:4051
+msgid "Go to line:"
+msgstr ""
+
+#: sw/apps/text/text.c:4055
+msgid "Go to line"
+msgstr ""
+
+#: sw/apps/text/text.c:4075
+#, c-format
+msgid ""
+"A plain text editor for notes, lists and Markdown.\n"
+"\n"
+"Ctrl+N/O/S\tNew, open, save\n"
+"Ctrl+Shift+S\tSave as\n"
+"Ctrl+Q\tClose\n"
+"Ctrl+C/X/V\tCopy, cut, paste\n"
+"Ctrl+A\tSelect all\n"
+"Ctrl+Z/Y\tUndo, redo\n"
+"Ctrl+F, F3\tFind, find again\n"
+"Ctrl+H\tReplace\n"
+"Ctrl+L\tGo to line; counts words\n"
+"Ctrl+P\tPrint, or print to a PDF\n"
+"\n"
+"Shift with the arrows, or a drag, selects. A .docx, .odt or .rtf opens converted, as Markdown in %s (the RAM disk): Save puts it in %s."
+msgstr ""
+
+#: sw/apps/text/text.c:4090
+msgid "Text help"
+msgstr ""

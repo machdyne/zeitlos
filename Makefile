@@ -1014,10 +1014,28 @@ ZAR_APPS = $(filter-out $(CORE_APPS_OMIT),$(CORE_APPS))
 # CORE_BUDGETS_SMALL, and its rule is still 1MB -- but for term, 4K of
 # slack given to repl (308K: 315,008 bytes with GCC 15.2 and today's
 # ms, 640 over 307K; found when CI first built both tiers).
-CORE_BUDGETS_NORMAL = fs=36K/80K usb=38K/60K wm=84K/168K net=104K/296K term=62K/144K \
-	console=10K/13K cron=18K/48K text=88K/216K files=66K/142K repl=124K/312K \
-	welcome=42K/76K read=70K/210K keyboard=38K/64K
-CORE_BUDGETS_SMALL = fs=36K/77056 usb=35K/53504 wm=84K/150K net=104K/287K term=62K/136K \
+# November 2026, languages (docs/i18n.md): the byte text functions draw
+# UTF-8, and jfont's glyphs for other scripts, in every app. repl +2K
+# RAM and welcome +2K flash on a normal board. The small build speaks
+# English and leaves both out, but finding jfont's directory still costs
+# wm 420 and term 196 bytes of RAM: 1K each, from the 3.3K the small
+# RAM rule had spare -- and term 1K more for its start panel's columns.
+# November 2026, languages, the apps (docs/i18n.md): the lookup and the
+# drawing of other scripts are about 1.8K in each translated app, and
+# each translated string's call site a little more: term +1.9K, text
+# +1K, files +1.5K and welcome +0.5K of flash over their budgets. The
+# region (CORE_ZAR_MAX) had no budget left to give, so it came from the
+# room the others had to grow: usb, console, fs, cron, net and repl
+# each down to about a kilobyte or two over what they are; read and
+# keyboard keep theirs, for when they are translated. Core flash is
+# now full: the next core app to grow needs something else to give.
+# November 2026, choosing a language at first run (welcome's Language
+# step, docs/i18n.md): welcome +1.3K flash and +1.4K RAM. Paid from
+# keyboard's room (36,481 bytes of 38K) and usb's (35,270 of 36K): 1K each.
+CORE_BUDGETS_NORMAL = fs=35K/80K usb=35K/60K wm=84K/168K net=103K/296K term=65K/144K \
+	console=9K/13K cron=17920/48K text=90K/220K files=70144/146K repl=123K/314K \
+	welcome=47K/82K read=70K/214K keyboard=37K/66K
+CORE_BUDGETS_SMALL = fs=36K/77056 usb=35K/53504 wm=84K/151K net=104K/287K term=62K/138K \
 	console=10K/12544 cron=18K/48K text=88K/212K files=66K/138K repl=124K/308K \
 	welcome=42K/76K read=70K/210K keyboard=38K/64K
 CORE_RESERVE = 60K

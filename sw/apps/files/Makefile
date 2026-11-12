@@ -31,7 +31,7 @@ HOSTFLAGS = -std=gnu99 -Wall -no-pie -I ../../common
 
 test:
 	$(HOSTCC) $(HOSTFLAGS) -o /tmp/files_test_walk tests/test_walk.c $(HOSTSRC)
-	/tmp/files_test_walk
+	/tmp/files_test_walk || [ $$? -eq 77 ]
 
 .PHONY: test
 

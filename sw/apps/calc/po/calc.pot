@@ -1,0 +1,23 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: Zeitlos calc\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+#: sw/apps/calc/calc.c:251
+msgid ""
+"A four-function calculator.\n"
+"\n"
+"0-9 .\tEnter a number\n"
+"+ - * /\tOperator\n"
+"Enter, =\tEquals (again repeats)\n"
+"Backspace\tDelete a digit\n"
+"Esc, Del\tClear\n"
+"Tab, Space\tFocus, press a button\n"
+"\n"
+"Click the keypad or type. The +- button changes the sign. No precedence: 2 * 3 + 4 is 10, left to right. A digit after = starts a new number."
+msgstr ""
+
+#: sw/apps/calc/calc.c:263
+msgid "Calc help"
+msgstr ""

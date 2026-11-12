@@ -73,6 +73,7 @@ none.
 | page | offers | writes ([config.md](config.md)) | when |
 |---|---|---|---|
 | Welcome | the welcome, above | -- | -- |
+| Language | English and the languages the card has, each by its own name | `system.language` | on Next; windows opened from then on |
 | Keyboard | the layout the machine starts in | `system.keyboard.layouts` | on Next; used from the next key |
 | Time zone | a city, or a whole-hour offset | `system.rtc.timezone` | on Next |
 | Display | white, amber, green or paper | `system.video.mode` | at once, and saved |

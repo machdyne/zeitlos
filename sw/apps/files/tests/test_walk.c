@@ -619,7 +619,7 @@ int main(void) {
 	expect(res_n > 0 && res_n < 200, "with what fitted");
 	{
 		char want[40];
-		snprintf(want, sizeof(want), "(first %d matches)", res_n);
+		snprintf(want, sizeof(want), "(the first %d matches)", res_n);
 		expect(line_says(want), "the line says \"(first N matches)\"");
 	}
 	expect(walk.files < 200, "and did not look at the rest");

@@ -66,6 +66,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 
 # Every card destination comes from sw/common/zpaths.h, the registry
 # the C code opens the same files by (docs/layout.md). zcard("Z_DIR_APPS",
@@ -101,6 +102,8 @@ LABEL = "ZEITLOS"
 SETS = [
     ("base",         "Base",
      "the shell, settings, the reader, documents and fonts"),
+    ("lang",         "Languages",
+     "the system in German, French, Spanish, Russian, Japanese and more"),
     ("work",         "Work",
      "sheet, slide, print, convert, draw, view, automate"),
     ("audio",        "Audio",       "music, MIDI, trackers and speech"),
@@ -121,7 +124,7 @@ SET_NAMES = [n for n, _t, _d in SETS]
 APP_SET = {
     "posix": "base", "vi": "base", "zetta": "base", "settings": "base",
     "info": "base", "calc": "base", "clock": "base", "cal": "base",
-    "jfont": "base", "ask": "base",
+    "jfont": "lang", "ask": "base",
     "update": "base", "backup": "base", "learn": "base", "checkup": "base",
     "sheet": "work", "slide": "work", "print": "work",
     "convert": "work", "draw": "work", "view": "work", "pix": "work",
@@ -173,6 +176,10 @@ def set_of(dest):
     if len(parts) >= 3 and parts[0] == data:
         if parts[1] in APP_SET:
             return APP_SET[parts[1]]
+        # A core app's translations (it is in flash, so in no set):
+        # with jfont, which is what reads them.
+        if len(parts) == 4 and parts[2] == "lang":
+            return "lang"
         if parts[1] in DATA_SET:
             return DATA_SET[parts[1]]
     d = dest.strip("/")
@@ -220,7 +227,7 @@ EMU_EXCLUDE = {
 }
 
 EXTRA_VARIANTS = [
-    ("emu", "zeitlos-emu", ("base", "work", "audio", "dev", "embedded", "games"),
+    ("emu", "zeitlos-emu", ("base", "lang", "work", "audio", "dev", "embedded", "games"),
      ("zdocs", "edu-zeitlos")),
 ]
 VARIANT_EXCLUDE = {"emu": EMU_EXCLUDE}
@@ -640,6 +647,10 @@ DESK_FILES = [
 # pack.
 FONT_FILES = [
     (zcard("Z_PATH_JFONT_FONT"), "sw/data/font/jp12.zfn"),
+    # and the glyphs other scripts need (docs/i18n.md, "Scripts";
+    # tools/gen_script_fonts.py), which jfont holds too
+    (zcard("Z_PATH_JFONT_SCRIPT5X8"), "sw/data/font/script5x8.zfn"),
+    (zcard("Z_PATH_JFONT_SCRIPT6X12"), "sw/data/font/script6x12.zfn"),
     (zcard("Z_PATH_SYS_FONTS_NOTICE"), "sw/data/font/hershey/NOTICE"),
 ]
 
@@ -704,6 +715,15 @@ for _n in sorted(os.listdir(_SLIDE_EX)) if os.path.isdir(_SLIDE_EX) else []:
 
 # mausrun's levels (docs/mausrun.md, "Levels"): every .txt in
 # sw/data/mausrun/levels, in order. Level 1 is also compiled in.
+# The voice's other languages (docs/tts.md, "Other languages"): every
+# sw/data/tts/lang/<code>.ttl, at /data/tts/lang -- tts's own folder, so
+# in its set.
+TTS_LANG_FILES = []
+_TTS_LANG = os.path.join(_FONT_ROOT, "sw", "data", "tts", "lang")
+for _n in sorted(os.listdir(_TTS_LANG)) if os.path.isdir(_TTS_LANG) else []:
+    if _n.endswith(".ttl"):
+        TTS_LANG_FILES.append((zcard("Z_DIR_DATA", "tts", "lang", _n), "sw/data/tts/lang/" + _n))
+
 MAUSRUN_FILES = []
 _MAUSRUN_LV = os.path.join(_FONT_ROOT, "sw", "data", "mausrun", "levels")
 for _n in sorted(os.listdir(_MAUSRUN_LV)) if os.path.isdir(_MAUSRUN_LV) else []:
@@ -1020,8 +1040,47 @@ def data_inputs():
     """
     return (LIBZ_FILES + LIBZ_EXTRA + CONFIG_FILES + NETWORK_FILES
             + FONT_FILES + DESK_FILES + EXAMPLES + FPGA_FILES
-            + FPGA_EXAMPLES + DEMO_FILES + CHIP8_FILES + SLIDE_FILES
+            + FPGA_EXAMPLES + DEMO_FILES + CHIP8_FILES + SLIDE_FILES + TTS_LANG_FILES
             + MAUSRUN_FILES)
+
+
+def lang_files(root, verbose=False):
+    """The translations (docs/i18n.md): a catalog per program and
+    language, built from each program's own po/ by tools/i18n.py into
+    output/lang, and put in that program's own folder --
+    /data/<app>/lang/<lang>.zlc, the shared library's in jfont's,
+    /data/jfont/lang/. Built here, every time, so a card never carries
+    catalogs older than the po/ files."""
+    # The tree's tool, or the one beside this file. A scratch tree
+    # (test_mkfatimg.py, test_store.py) may have neither: no
+    # translations to build, so none on the card.
+    for tools in (os.path.join(root, "tools"),
+                  os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "tools"))):
+        if os.path.exists(os.path.join(tools, "i18n.py")):
+            break
+    else:
+        if verbose:
+            print("mkfatimg: no tools/i18n.py -- no translations")
+        return []
+    if tools not in sys.path:
+        sys.path.insert(0, tools)
+    import i18n
+    out = os.path.join(root, "output", "lang")
+    if verbose:
+        made = i18n.cmd_build(out, root)
+    else:
+        import contextlib
+        import io
+        with contextlib.redirect_stdout(io.StringIO()):
+            made = i18n.cmd_build(out, root)
+    files = []
+    for dom, lang, path in made:
+        if dom == "common":
+            dest = zcard("Z_DIR_LANG", lang + ".zlc")
+        else:
+            dest = zcard("Z_DIR_DATA", dom, "lang", lang + ".zlc")
+        files.append((dest, path))
+    return sorted(files)
 
 
 def plan(root, ark_dir=None, packs=None, verbose=True, sets=None, exclude=None):
@@ -1140,10 +1199,12 @@ def plan(root, ark_dir=None, packs=None, verbose=True, sets=None, exclude=None):
     add_list(FPGA_EXAMPLES, KEEP)
     add_list(CONFIG_FILES + NETWORK_FILES, KEEP)
     add_list(FONT_FILES, REPLACE)
+    add_list(lang_files(root, verbose), REPLACE)
     add_list(DESK_FILES, KEEP)      # "can be edited in place" (remote_desktop.md)
     add_list(CHIP8_FILES, REPLACE)
     add_list(SLIDE_FILES, KEEP)     # the person may have edited the tour
     add_list(MAUSRUN_FILES, REPLACE)  # the game's own levels (docs/mausrun.md)
+    add_list(TTS_LANG_FILES, REPLACE)  # the voice's languages (docs/tts.md)
     # Headers by directory rather than by name: the set is "whatever
     # sw/common exports", and a list here would go stale silently --
     # the symptom being a missing include on the device, long after.

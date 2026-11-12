@@ -1,0 +1,171 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: Zeitlos wm\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+#: sw/apps/wm/wm.c:5144
+msgid "Next page"
+msgstr ""
+
+#: sw/apps/wm/wm.c:5148
+msgid "Back"
+msgstr ""
+
+#: sw/apps/wm/wm.c:5203
+msgid "Clipboard empty"
+msgstr ""
+
+#: sw/apps/wm/wm.c:5220
+msgid "Desktop"
+msgstr ""
+
+#: sw/apps/wm/wm.c:5244
+#: sw/apps/wm/wm.c:5260
+msgid "No window focused"
+msgstr ""
+
+#: sw/apps/wm/wm.c:5265
+msgid "Dock. Use the arrow keys to choose an app, and Enter to start it."
+msgstr ""
+
+#: sw/apps/wm/wm.c:5456
+msgid "restored"
+msgstr ""
+
+#: sw/apps/wm/wm.c:5469
+msgid "maximized"
+msgstr ""
+
+#: sw/apps/wm/wm.c:5494
+msgid "window"
+msgstr ""
+
+#: sw/apps/wm/wm.c:5512
+msgid "full screen"
+msgstr ""
+
+#: sw/apps/wm/wm.c:5559
+msgid "shaded"
+msgstr ""
+
+#: sw/apps/wm/wm.c:5569
+msgid "unshaded"
+msgstr ""
+
+#: sw/apps/wm/wm.c:5610
+msgid "Workspace 1"
+msgstr ""
+
+#: sw/apps/wm/wm.c:5610
+msgid "Workspace 2"
+msgstr ""
+
+#: sw/apps/wm/wm.c:5610
+msgid "Workspace 3"
+msgstr ""
+
+#: sw/apps/wm/wm.c:5610
+msgid "Workspace 4"
+msgstr ""
+
+#: sw/apps/wm/wm.c:5611
+msgid "Workspace 5"
+msgstr ""
+
+#: sw/apps/wm/wm.c:5611
+msgid "Workspace 6"
+msgstr ""
+
+#: sw/apps/wm/wm.c:5611
+msgid "Workspace 7"
+msgstr ""
+
+#: sw/apps/wm/wm.c:5611
+msgid "Workspace 8"
+msgstr ""
+
+#: sw/apps/wm/wm.c:5612
+msgid "Workspace 9"
+msgstr ""
+
+#: sw/apps/wm/wm.c:5612
+msgid "Workspace 10"
+msgstr ""
+
+#: sw/apps/wm/wm.c:5693
+msgid "No volume control on this bitstream"
+msgstr ""
+
+#: sw/apps/wm/wm.c:5712
+#, c-format
+msgid "Volume %d%%"
+msgstr ""
+
+#: sw/apps/wm/wm.c:5733
+msgid "No brightness control on this display"
+msgstr ""
+
+#: sw/apps/wm/wm.c:5744
+#, c-format
+msgid "Brightness %d/%d"
+msgstr ""
+
+#: sw/apps/wm/wm.c:6006
+msgid "Zeitlos is locked"
+msgstr ""
+
+#: sw/apps/wm/wm.c:6007
+msgid "Password: "
+msgstr ""
+
+#: sw/apps/wm/wm.c:6017
+#: sw/apps/wm/wm.c:6270
+msgid "Type the password, then Enter"
+msgstr ""
+
+#: sw/apps/wm/wm.c:6018
+msgid "No password is set: press Enter"
+msgstr ""
+
+#: sw/apps/wm/wm.c:6149
+msgid "Reboot"
+msgstr ""
+
+#: sw/apps/wm/wm.c:6149
+msgid "Cancel"
+msgstr ""
+
+#: sw/apps/wm/wm.c:6166
+msgid "Reboot Zeitlos?"
+msgstr ""
+
+#: sw/apps/wm/wm.c:6167
+msgid "Unsaved work in open apps is lost."
+msgstr ""
+
+#: sw/apps/wm/wm.c:6233
+msgid "Rebooting..."
+msgstr ""
+
+#: sw/apps/wm/wm.c:6238
+msgid "Reboot failed -- see the console"
+msgstr ""
+
+#: sw/apps/wm/wm.c:6275
+msgid "Checking..."
+msgstr ""
+
+#: sw/apps/wm/wm.c:6286
+#, c-format
+msgid "Too many attempts -- wait %lu s"
+msgstr ""
+
+#: sw/apps/wm/wm.c:6289
+msgid "Wrong password"
+msgstr ""
+
+#: sw/apps/wm/wm.c:6291
+#, c-format
+msgid "Could not check the password (%d)"
+msgstr ""

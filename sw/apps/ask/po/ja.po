@@ -1,0 +1,107 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: Zeitlos ask\n"
+"Language: ja\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=1; plural=0;\n"
+
+msgid "No passage here answers"
+msgstr "それに答える箇所は"
+
+msgid "that."
+msgstr "ここにありません。"
+
+msgid "could not start read"
+msgstr "readを起動できません"
+
+#, c-format
+msgid "%u passage, "
+msgid_plural "%u passages, "
+msgstr[0] "%u箇所、"
+
+#, c-format
+msgid "%u pack"
+msgid_plural "%u packs"
+msgstr[0] "%uパック"
+
+msgid ", ranking weaker"
+msgstr "、順位付けが弱い"
+
+msgid "  ^U clears"
+msgstr "  ^Uで消去"
+
+msgid "searching...  Esc cancels"
+msgstr "検索中...  Escで取り消し"
+
+#, c-format
+msgid "searching %u%%  Esc cancels"
+msgstr "検索中 %u%%  Escで取り消し"
+
+msgid "Loading..., then search"
+msgstr "読み込み中...、その後検索"
+
+msgid "Loading...  Esc stops"
+msgstr "読み込み中...  Escで中止"
+
+#, c-format
+msgid "Loading %s %u%%, then search"
+msgstr "読み込み中: %s %u%%、その後検索"
+
+#, c-format
+msgid "Loading %s %u%%  Esc stops"
+msgstr "読み込み中: %s %u%%  Escで中止"
+
+msgid "no packs loaded -- nothing to search"
+msgstr "パックがありません -- 検索できません"
+
+msgid "path too long to open"
+msgstr "パスが長すぎて開けません"
+
+msgid "loading stopped -- no packs loaded"
+msgstr "読み込み中止 -- パックがありません"
+
+#, c-format
+msgid "loading stopped, %u pack loaded"
+msgid_plural "loading stopped, %u packs loaded"
+msgstr[0] "読み込み中止、%uパックを読み込み済み"
+
+#, c-format
+msgid " (%u pack failed)"
+msgid_plural " (%u packs failed)"
+msgstr[0] " (%uパック失敗)"
+
+msgid ""
+"Finds passages in the datasets on the card that answer a question, and opens them in read.\n"
+"\n"
+"Enter\tSearch; again: open the selection\n"
+"Up/Down\tSelect a result\n"
+"1-9\tOpen that result\n"
+"Esc\tStop loading, cancel a search, or clear\n"
+"Ctrl+U\tClear the line\n"
+"Ctrl+W\tDelete a word\n"
+"Ctrl+Q\tQuit\n"
+"\n"
+"Type a question and press Enter. Click a result to open it, or a pack button to browse its index.\n"
+"\n"
+"Typing works while the packs load; Enter then searches once they are in."
+msgstr ""
+"カード上のデータから質問に答える箇所を探し、readで開きます。\n"
+"\n"
+"Enter\t検索; もう一度: 選んだものを開く\n"
+"上/下\t結果を選ぶ\n"
+"1-9\tその結果を開く\n"
+"Esc\t読み込みの中止、検索の取り消し、または消去\n"
+"Ctrl+U\t行を消去\n"
+"Ctrl+W\t1語を削除\n"
+"Ctrl+Q\t終了\n"
+"\n"
+"質問を入力してEnterを押します。結果をクリックすると開き、パックのボタンでその索引を見られます。\n"
+"\n"
+"パックの読み込み中も入力でき、読み込みが終わるとEnterで検索します。"
+
+msgid "Ask help"
+msgstr "askのヘルプ"
+
+msgid "cancelled"
+msgstr "取り消しました"

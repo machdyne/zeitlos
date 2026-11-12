@@ -31,6 +31,7 @@
 #include <string.h>
 
 #include "../../common/zeitlos.h"
+#include "../../common/zi18n.h"
 #include "../../common/zaudio.h"	// the system volume (VOLUME)
 #include "../../common/zsoc.h"	// Z_TICK_HZ, z_cursor_set_busy()
 #include "../../common/zwm.h"
@@ -5140,11 +5141,11 @@ static void speak_dock_selection(void) {
 	if (!z_speak_available()) return;
 
 	if (dock_selected == DOCK_SEL_NEXT) {
-		z_speak_static("Next page", Z_TTS_F_INTERRUPT);
+		z_speak(Z_("Next page"), Z_TTS_F_INTERRUPT);
 		return;
 	}
 	if (dock_selected == DOCK_SEL_BACK) {
-		z_speak_static("Back", Z_TTS_F_INTERRUPT);
+		z_speak(Z_("Back"), Z_TTS_F_INTERRUPT);
 		return;
 	}
 
@@ -5199,7 +5200,7 @@ static void speech_clipboard(void) {
 	// between this send and that read would be heard instead, which
 	// is the newer clipboard and so not wrong.
 	if (clipboard[0]) z_speak_static(clipboard, Z_TTS_F_INTERRUPT);
-	else z_speak_static("Clipboard empty", Z_TTS_F_INTERRUPT);
+	else z_speak(Z_("Clipboard empty"), Z_TTS_F_INTERRUPT);
 }
 
 static void speech_where(void) {
@@ -5216,7 +5217,7 @@ static void speech_where(void) {
 		idx = hit_test(cx, cy);
 
 		if (idx < 0) {
-			z_speak_static("Desktop", Z_TTS_F_INTERRUPT);
+			z_speak(Z_("Desktop"), Z_TTS_F_INTERRUPT);
 			return;
 		}
 
@@ -5240,7 +5241,7 @@ static void speech_where(void) {
 
 		idx = focused;
 		if (idx < 0) {
-			z_speak_static("No window focused", Z_TTS_F_INTERRUPT);
+			z_speak(Z_("No window focused"), Z_TTS_F_INTERRUPT);
 			return;
 		}
 
@@ -5256,13 +5257,13 @@ static void speech_where(void) {
 static void speech_read(uint32_t what) {
 
 	if (focused < 0) {
-		z_speak_static("No window focused", Z_TTS_F_INTERRUPT);
+		z_speak(Z_("No window focused"), Z_TTS_F_INTERRUPT);
 		return;
 	}
 
 	if (focused == dock_idx) {
-		z_speak_static("Dock. Use the arrow keys to choose an app, "
-			"and Enter to start it.", Z_TTS_F_INTERRUPT);
+		z_speak(Z_("Dock. Use the arrow keys to choose an app, "
+			"and Enter to start it."), Z_TTS_F_INTERRUPT);
 		return;
 	}
 
@@ -5452,7 +5453,7 @@ static void toggle_maximize(int idx) {
 		w->maxed = false;
 		set_rect(idx, (int)w->rx, (int)w->ry, (int)w->rw, (int)w->rh);
 		dock_update();
-		z_speak_static("restored", Z_TTS_F_INTERRUPT);
+		z_speak(Z_("restored"), Z_TTS_F_INTERRUPT);
 		return;
 	}
 
@@ -5465,7 +5466,7 @@ static void toggle_maximize(int idx) {
 	w->maxed = true;
 	set_rect(idx, (WM_SCREEN_W - nw) / 2, (WM_SCREEN_H - nh) / 2, nw, nh);
 	dock_update();
-	z_speak_static("maximized", Z_TTS_F_INTERRUPT);
+	z_speak(Z_("maximized"), Z_TTS_F_INTERRUPT);
 
 }
 
@@ -5490,7 +5491,7 @@ static bool toggle_fullscreen(int idx) {
 		w->maxed = false;
 		set_rect(idx, (int)w->rx, (int)w->ry, (int)w->rw, (int)w->rh);
 		dock_update();
-		z_speak_static("window", Z_TTS_F_INTERRUPT);
+		z_speak(Z_("window"), Z_TTS_F_INTERRUPT);
 		return true;
 	}
 
@@ -5508,7 +5509,7 @@ static bool toggle_fullscreen(int idx) {
 	w->no_titlebar = true;
 	set_rect(idx, (WM_SCREEN_W - nw) / 2, (WM_SCREEN_H - nh) / 2, nw, nh);
 	dock_update();
-	z_speak_static("full screen", Z_TTS_F_INTERRUPT);
+	z_speak(Z_("full screen"), Z_TTS_F_INTERRUPT);
 	return true;
 
 }
@@ -5555,7 +5556,7 @@ static void toggle_shade(int idx) {
 		focus_away_from(idx);
 		send_clip_all();
 		repair_region((int)w->x, (int)w->y, (int)w->w, (int)w->real_h, -1);
-		z_speak_static("shaded", Z_TTS_F_INTERRUPT);
+		z_speak(Z_("shaded"), Z_TTS_F_INTERRUPT);
 	} else {
 		w->h = w->real_h;
 		w->shaded = false;
@@ -5565,7 +5566,7 @@ static void toggle_shade(int idx) {
 		repair_focus_chrome(old, idx);
 		send_clip_all();
 		repair_region((int)w->x, (int)w->y, (int)w->w, (int)w->h, -1);
-		z_speak_static("unshaded", Z_TTS_F_INTERRUPT);
+		z_speak(Z_("unshaded"), Z_TTS_F_INTERRUPT);
 	}
 
 }
@@ -5606,16 +5607,16 @@ static void ws_show(int i) {
 }
 
 static const char *const ws_names[WS_COUNT] = {
-	"Workspace 1", "Workspace 2", "Workspace 3", "Workspace 4",
-	"Workspace 5", "Workspace 6", "Workspace 7", "Workspace 8",
-	"Workspace 9", "Workspace 10",
+	N_("Workspace 1"), N_("Workspace 2"), N_("Workspace 3"), N_("Workspace 4"),
+	N_("Workspace 5"), N_("Workspace 6"), N_("Workspace 7"), N_("Workspace 8"),
+	N_("Workspace 9"), N_("Workspace 10"),
 };
 
 // "Workspace 2", in the middle of the screen for a second, and spoken.
 // Without it, switching to an empty workspace looks like every window
 // just vanished.
 static void ws_announce(void) {
-	caption_set(ws_names[cur_ws], Z_CAPTION_CENTER | Z_CAPTION_COMPACT |
+	caption_set(ZL_D(ws_names[cur_ws]), Z_CAPTION_CENTER | Z_CAPTION_COMPACT |
 		Z_CAPTION_SCALE(2) | Z_CAPTION_TIMEOUT(1000));
 	z_speak_static(ws_names[cur_ws], Z_TTS_F_INTERRUPT);
 }
@@ -5689,7 +5690,7 @@ static void vol_step(int dir) {
 
 	if (!z_audio_has_volume()) {
 		// A bitstream without VOLUME: say so rather than do nothing.
-		caption_set("No volume control on this bitstream",
+		caption_set(ZL_("No volume control on this bitstream"),
 			Z_CAPTION_CENTER | Z_CAPTION_COMPACT | Z_CAPTION_SCALE(2) |
 			Z_CAPTION_TIMEOUT(1000));
 		return;
@@ -5708,7 +5709,7 @@ static void vol_step(int dir) {
 
 	reg_audio_volume = (uint32_t)vol_pct * Z_AUDIO_VOLUME_UNITY / 100u;
 
-	snprintf(text, sizeof(text), "Volume %d%%", vol_pct);
+	snprintf(text, sizeof(text), ZL_("Volume %d%%"), vol_pct);
 	caption_set(text, Z_CAPTION_CENTER | Z_CAPTION_COMPACT |
 		Z_CAPTION_SCALE(2) | Z_CAPTION_TIMEOUT(1000));
 	// Spoken too, at the new level -- which is itself the thing to hear.
@@ -5729,7 +5730,7 @@ static void bright_step(int dir) {
 	int l;
 
 	if (!z_video_brightness_available()) {
-		caption_set("No brightness control on this display",
+		caption_set(ZL_("No brightness control on this display"),
 			Z_CAPTION_CENTER | Z_CAPTION_COMPACT | Z_CAPTION_SCALE(2) |
 			Z_CAPTION_TIMEOUT(1000));
 		return;
@@ -5740,7 +5741,7 @@ static void bright_step(int dir) {
 	if (l > (int)Z_VIDEO_BRIGHT_LEVELS - 1) l = (int)Z_VIDEO_BRIGHT_LEVELS - 1;
 	z_video_set_brightness((uint32_t)l);
 
-	snprintf(text, sizeof(text), "Brightness %d/%d", l + 1,
+	snprintf(text, sizeof(text), ZL_("Brightness %d/%d"), l + 1,
 		(int)Z_VIDEO_BRIGHT_LEVELS);
 	caption_set(text, Z_CAPTION_CENTER | Z_CAPTION_COMPACT |
 		Z_CAPTION_SCALE(2) | Z_CAPTION_TIMEOUT(1000));
@@ -5984,7 +5985,7 @@ static void lock_reload(void) {
 }
 
 static void lock_text(int y, const char *t) {
-	int x = (WM_SCREEN_W - (int)strlen(t) * z_font_5x8.w) / 2;
+	int x = (WM_SCREEN_W - z_text_cols(t) * z_font_5x8.w) / 2;
 	z_fb_draw_text(x, y, t, 1, &z_font_5x8, NULL);
 }
 
@@ -6002,8 +6003,8 @@ static void lock_draw(void) {
 	z_fb_hw_fill_rect(bx, by, 1, LOCK_BOX_H, 1);
 	z_fb_hw_fill_rect(bx + LOCK_BOX_W - 1, by, 1, LOCK_BOX_H, 1);
 
-	lock_text(by + 8, "Zeitlos is locked");
-	n = snprintf(line, sizeof(line), "Password: ");
+	lock_text(by + 8, ZS_("Zeitlos is locked"));
+	n = snprintf(line, sizeof(line), "%s", ZS_("Password: "));
 	// At most 40 stars: the box is 300 px, and the count is all they show.
 	for (int i = 0; i < lock_pw_len && i < 40 && n < (int)sizeof(line) - 2; i++) line[n++] = '*';
 	line[n++] = '_';
@@ -6013,8 +6014,8 @@ static void lock_draw(void) {
 	z_fb_draw_text(bx + (LOCK_BOX_W - 50 * z_font_5x8.w) / 2, by + 8 + 2 * lh, line, 1,
 		&z_font_5x8, NULL);
 	lock_text(by + 8 + 3 * lh, lock_msg[0] ? lock_msg :
-		(lock_st.flags & Z_AUTH_HAS_PASSWORD) ? "Type the password, then Enter" :
-		"No password is set: press Enter");
+		(lock_st.flags & Z_AUTH_HAS_PASSWORD) ? ZS_("Type the password, then Enter") :
+		ZS_("No password is set: press Enter"));
 
 	// desktop colour: the background, and the box's frame tinted
 	if (acc_live) {
@@ -6140,12 +6141,12 @@ static void confirm_button(int i, int *x, int *y) {
 }
 
 static void confirm_text(int y, const char *t) {
-	z_fb_draw_text(confirm_x + (CONFIRM_W - (int)strlen(t) * z_font_5x8.w) / 2, y,
+	z_fb_draw_text(confirm_x + (CONFIRM_W - z_text_cols(t) * z_font_5x8.w) / 2, y,
 		t, 1, &z_font_5x8, NULL);
 }
 
 static void confirm_draw(void) {
-	static const char *const label[2] = { "Reboot", "Cancel" };
+	static const char *const label[2] = { N_("Reboot"), N_("Cancel") };
 	int vx = 0, vy = 0, vw = WM_SCREEN_W, vh = WM_SCREEN_H;
 	if (z_game_enabled() || z_video_is_composite()) {
 		vx = (int)z_game_get_view_x();
@@ -6162,8 +6163,8 @@ static void confirm_draw(void) {
 	z_gfx_clear_visible();
 	z_fb_hw_fill_rect(confirm_x, confirm_y, CONFIRM_W, CONFIRM_H, 1);
 	z_fb_hw_fill_rect(confirm_x + 2, confirm_y + 2, CONFIRM_W - 4, CONFIRM_H - 4, 0);
-	confirm_text(confirm_y + 10, confirm_msg ? confirm_msg : "Reboot Zeitlos?");
-	confirm_text(confirm_y + 24, "Unsaved work in open apps is lost.");
+	confirm_text(confirm_y + 10, confirm_msg ? confirm_msg : ZS_("Reboot Zeitlos?"));
+	confirm_text(confirm_y + 24, ZS_("Unsaved work in open apps is lost."));
 	for (int i = 0; i < 2; i++) {
 		int bx, by;
 		bool on = (i == confirm_sel);
@@ -6173,8 +6174,9 @@ static void confirm_draw(void) {
 		// text2 for both: z_fb_draw_text() always lays a 0 background,
 		// so ink 0 on the lit button would be a black block, not a
 		// label (docs/widgets.md, "Labels on a lit widget").
-		z_fb_draw_text2(bx + (CONFIRM_BW - (int)strlen(label[i]) * z_font_5x8.w) / 2,
-			by + (CONFIRM_BH - z_font_5x8.h) / 2, label[i], on ? 0 : 1, on ? 1 : 0,
+		const char *lb = ZS_D(label[i]);
+		z_fb_draw_text2(bx + (CONFIRM_BW - z_text_cols(lb) * z_font_5x8.w) / 2,
+			by + (CONFIRM_BH - z_font_5x8.h) / 2, lb, on ? 0 : 1, on ? 1 : 0,
 			&z_font_5x8, NULL);
 	}
 	// desktop colour: the frame tinted, the inside not (the box sits on
@@ -6228,12 +6230,12 @@ static void confirm_release(void) {
 
 static void confirm_choose(int i) {
 	if (i) { confirm_release(); return; }
-	confirm_msg = "Rebooting...";
+	confirm_msg = ZS_("Rebooting...");
 	confirm_draw();
 	printf("wm: rebooting (Ctrl+Alt+Del)\n");
 	z_reboot();
 	// Still here: the kernel said why on the console.
-	confirm_msg = "Reboot failed -- see the console";
+	confirm_msg = ZS_("Reboot failed -- see the console");
 	confirm_sel = 1;
 	confirm_draw();
 }
@@ -6265,12 +6267,12 @@ static void lock_try(void) {
 	int rc;
 
 	if (!lock_pw_len && (lock_st.flags & Z_AUTH_HAS_PASSWORD)) {
-		snprintf(lock_msg, sizeof(lock_msg), "Type the password, then Enter");
+		snprintf(lock_msg, sizeof(lock_msg), "%s", ZS_("Type the password, then Enter"));
 		lock_draw();
 		return;
 	}
 	// The check is half a second inside the kernel: say so first.
-	snprintf(lock_msg, sizeof(lock_msg), "Checking...");
+	snprintf(lock_msg, sizeof(lock_msg), "%s", ZS_("Checking..."));
 	lock_draw();
 	rc = z_auth_check(lock_pw, (uint32_t)lock_pw_len, &w);
 	lock_wipe();
@@ -6281,12 +6283,12 @@ static void lock_try(void) {
 		return;
 	}
 	if (rc == Z_AUTH_E_WAIT)
-		snprintf(lock_msg, sizeof(lock_msg), "Too many attempts -- wait %lu s",
+		snprintf(lock_msg, sizeof(lock_msg), ZS_("Too many attempts -- wait %lu s"),
 			(unsigned long)((w + 999) / 1000));
 	else if (rc == Z_AUTH_E_BAD)
-		snprintf(lock_msg, sizeof(lock_msg), "Wrong password");
+		snprintf(lock_msg, sizeof(lock_msg), "%s", ZS_("Wrong password"));
 	else
-		snprintf(lock_msg, sizeof(lock_msg), "Could not check the password (%d)", rc);
+		snprintf(lock_msg, sizeof(lock_msg), ZS_("Could not check the password (%d)"), rc);
 	lock_draw();
 }
 
@@ -8773,6 +8775,9 @@ static void console_launcher(void) {
 
 int main(void) {
 
+	// The language (docs/i18n.md): read once, here, before any string.
+	z_tr_init(Z_APP_NAME);
+
 	my_pid = z_getpid();
 
 	// registers as "wm0" (see sw/os/pidreg.h) -- what zwin.c's
@@ -8920,8 +8925,19 @@ int main(void) {
 	// "Japanese"). Only on request: it holds about 190KB for as long as
 	// it runs. It needs the card it loads the font from, so a failure
 	// here is only a message.
-	if (z_cfg_get_bool("system.font.japanese", false) && !z_proc_run("jfont"))
-		printf("wm: system.font.japanese: could not start jfont\n");
+	// It also holds the translations and other scripts' glyphs when
+	// the system speaks a language other than English (docs/i18n.md):
+	// then it starts too.
+	bool want_jfont = z_cfg_get_bool("system.font.japanese", false);
+#ifndef Z_SMALL
+	{
+		char lang[16];
+		if (z_cfg_get("system.language", lang, sizeof lang) && lang[0] && strcmp(lang, "en"))
+			want_jfont = true;
+	}
+#endif
+	if (want_jfont && !z_proc_run("jfont"))
+		printf("wm: could not start jfont (system.font.japanese, system.language)\n");
 
 	// Busy until init has finished -- see init_finished(). wm is up
 	// (it is this process) but init() is still loading the rest.

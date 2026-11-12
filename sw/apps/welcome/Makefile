@@ -46,7 +46,7 @@ C = ../../common
 test: kbd_names.h
 	$(HOSTCC) -std=gnu99 -w -no-pie -I $(C) -I . -o /tmp/welcome_render tests/render.c $(C)/zwin.c \
 		$(C)/zwidget.c $(C)/zfont_data.c $(C)/zobj.c $(C)/zeitlos.c $(C)/zfsapp.c $(C)/zcfg.c \
-		$(C)/zrtc.c $(C)/zspeak.c $(C)/zkbd.c
+		$(C)/zrtc.c $(C)/zspeak.c $(C)/zkbd.c $(C)/zi18n.c
 	mkdir -p /tmp/welcome-render
 	/tmp/welcome_render /tmp/welcome-render/w || [ $$? -eq 77 ]
 

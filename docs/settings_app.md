@@ -24,6 +24,7 @@ on the right, as most systems lay out their preferences:
 | [] Display   | Mouse                             |
 |##Mouse#######| Applied at once, and saved        |
 | [] Keyboard  |                                   |
+| () Language  |                                   |
 | () Date&time | Pointer speed             [<][>]  |
 | [] Security  |   +3 faster: x1.68                |
 | [] Terminal  |   slower ############..... faster |
@@ -34,10 +35,11 @@ on the right, as most systems lay out their preferences:
 | page | control | setting (`docs/config.md`) | takes effect |
 | --- | --- | --- | --- |
 | Display | White / Amber / Green / Paper | `system.video.mode` | immediately, and saved |
-| Display | Desktop colours `<` `>` | `system.video.desktop_theme`, `_colour` (and removes `_accents`, `_base`) | within a second, and saved |
+| Display | Desktop colours: a list | `system.video.desktop_theme`, `_colour` (and removes `_accents`, `_base`) | within a second, and saved |
 | Mouse | Pointer speed `<` `>`, and its scale | `system.mouse.speed` | immediately, and saved; the kernel applies it at boot |
 | Keyboard | Keyboard layouts: Edit | `system.keyboard.layouts` | the next key pressed |
 | Keyboard | Japanese text: Turn on / off | `system.font.japanese` | at once -- `jfont` is started or stopped |
+| Language | the list + Use this language | `system.language` | windows opened from then on, if the machine was in English; else the next start ([i18n.md](i18n.md)) |
 | Date & time | the list + Set time zone; the time now | `system.rtc.timezone` | clock, cal and `date`, within a second |
 | Security | Password: Set / Change, Remove | the flash key/value store, not the file | at once |
 | Security | Screen lock: Edit | the same | at once: `wm` is told to re-read it |
@@ -234,16 +236,35 @@ selection back. Changing this needs `make flash`, not `make dev-flash`
 ## Desktop colours: themes
 
 On a board with desktop colour (eight colour planes and the colour
-window: the 45F boards), `<` and `>` step through **Off** and the 21
-themes ([color.md](color.md#themes)), wrapping, and save each one at
-once -- a colour scheme is judged by looking at it. The phosphor theme
+window: the 45F boards), a list under the row holds **Off** and the 21
+themes ([color.md](color.md#themes)). The one selected is saved at
+once, as the arrows or a click move to it -- a colour scheme is judged
+by looking at it, so this list, unlike the others, acts on the
+selection. The phosphor theme
 is the default and is saved as no line at all; Off writes
 `system.video.desktop_colour: no` and keeps the theme for when it is
 turned back on. Choosing a theme also removes any custom
 `desktop_accents`/`desktop_base`, which would otherwise go on
 overriding it; while they are set the row says *custom colours, from
-the file*. Elsewhere the row says the board cannot, and the buttons are
-off.
+the file*. Elsewhere the row says the board cannot, and there is no list.
+
+## Language
+
+The Language page lists English and every language the card has (the
+Languages set, [i18n.md](i18n.md)), each by its own name and its
+English one. Moving through the list chooses nothing: a language
+changes every window, so it is taken with Enter, a double-click or
+**Use this language**, which lights up when the selection is not the
+language in use. It writes `system.language` (English as no line at
+all).
+
+Every app reads the language as it starts. If the machine was in
+English until now, choosing one starts `jfont`, and every window opened
+from then on has it; the desktop's own words (wm) follow at the next
+start. A second change waits for the next start -- `jfont` keeps the
+language it started with, and an app that finds the two differ stays
+English rather than show the wrong one. The line under the title says
+which.
 
 ## Pointer speed
 

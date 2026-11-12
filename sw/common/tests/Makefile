@@ -17,7 +17,7 @@ SKIP77 = r=$$?; [ $$r -eq 0 ] || { [ $$r -eq 77 ] && echo "  (skipped)"; }
 
 TESTS = accent args bitbang dialog flist gfx_region gz inflate png scrollbar text undo vt \
 	zcaption zcfg zexec zexec_inflate zexec_lz4 zfmt zinput zkbd zscreen \
-	zco zsha1 zslice ztype zwalk zws wmpack
+	zco zsha1 zslice ztype zwalk zws wmpack zi18n listbox
 
 .PHONY: test $(TESTS) clean
 
@@ -73,6 +73,13 @@ png: | $(OUT)
 		sw/common/tests/test_png.c sw/common/zimg.c sw/common/zinflate.c && \
 	$(OUT)/test_png $(OUT)/pngc
 
+listbox: | $(OUT)
+	$(CC_) -Wall -no-pie -I sw/common -I sw/common/tests -o $(OUT)/test_listbox \
+		sw/common/tests/test_listbox.c sw/common/zwin.c sw/common/zwidget.c \
+		sw/common/zfont_data.c sw/common/zobj.c sw/common/zeitlos.c \
+		sw/common/tests/zspeak_stub.c
+	@$(OUT)/test_listbox; $(SKIP77)
+
 scrollbar: | $(OUT)
 	$(CC_) -Wall -no-pie -I sw/common -I sw/common/tests -o $(OUT)/test_scrollbar \
 		sw/common/tests/test_scrollbar.c sw/common/zwin.c sw/common/zwidget.c \
@@ -99,6 +106,11 @@ zcaption: | $(OUT)
 zcfg: | $(OUT)
 	$(CC_) -Wall -DZCFG_KERNEL -I sw/common -o $(OUT)/test_zcfg \
 		sw/common/tests/test_zcfg.c sw/common/zcfg.c sw/common/zrtc.c && $(OUT)/test_zcfg
+
+zi18n: | $(OUT)
+	cd $(R) && python3 sw/common/tests/mk_i18n_fixture.py $(OUT)
+	$(CC_) -Wall -Wextra -DZ_HOST_TEST -DZ_I18N_TEST -I sw/common -o $(OUT)/test_zi18n \
+		sw/common/tests/test_zi18n.c sw/common/zi18n.c && $(OUT)/test_zi18n $(OUT)
 
 wmpack: | $(OUT)
 	$(CC_) -Wall -Wextra -I sw/common -o $(OUT)/test_wmpack sw/common/tests/test_wmpack.c && $(OUT)/test_wmpack

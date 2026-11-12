@@ -56,8 +56,8 @@ render:
 test:
 	$(HOSTCC) $(HOSTFLAGS) -o /tmp/hex_test_layout tests/test_layout.c $(HOSTSRC)
 	$(HOSTCC) $(HOSTFLAGS) -o /tmp/hex_test_edit tests/test_edit.c $(HOSTSRC)
-	/tmp/hex_test_layout
-	/tmp/hex_test_edit
+	/tmp/hex_test_layout || [ $$? -eq 77 ]
+	/tmp/hex_test_edit || [ $$? -eq 77 ]
 
 .PHONY: render test
 

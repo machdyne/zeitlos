@@ -1,0 +1,369 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: Zeitlos common\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+#: sw/common/zdialog.c:717
+msgid " (reading)"
+msgstr ""
+
+#: sw/common/zdialog.c:718
+msgid " (partial list)"
+msgstr ""
+
+#: sw/common/zdialog.c:1255
+msgid "OK"
+msgstr ""
+
+#: sw/common/zdialog.c:1255
+#: sw/common/zdialog.c:1257
+#: sw/common/zdialog.c:1258
+#: sw/common/zdialog.c:1259
+#: sw/common/zdialog.c:1367
+#: sw/common/zdialog.c:1865
+msgid "Cancel"
+msgstr ""
+
+#: sw/common/zdialog.c:1256
+#: sw/common/zdialog.c:1257
+msgid "Yes"
+msgstr ""
+
+#: sw/common/zdialog.c:1256
+#: sw/common/zdialog.c:1257
+msgid "No"
+msgstr ""
+
+#: sw/common/zdialog.c:1258
+msgid "Open"
+msgstr ""
+
+#: sw/common/zdialog.c:1259
+msgid "Save"
+msgstr ""
+
+#: sw/common/zdialog.c:1362
+msgid "Open a file"
+msgstr ""
+
+#: sw/common/zdialog.c:1367
+msgid "Choose"
+msgstr ""
+
+#: sw/common/zdialog.c:1379
+msgid "Choose a file or folder"
+msgstr ""
+
+#: sw/common/zdialog.c:1395
+msgid "Save As"
+msgstr ""
+
+#: sw/common/zdialog.c:1572
+msgid "Read docs"
+msgstr ""
+
+#: sw/common/zdialog.c:1572
+#: sw/common/zdialog.c:1573
+msgid "Close"
+msgstr ""
+
+#: sw/common/zdialog.c:1798
+msgid "Help"
+msgstr ""
+
+#: sw/common/zdialog.c:1841
+msgid "Print to"
+msgstr ""
+
+#: sw/common/zdialog.c:1841
+msgid "Pages"
+msgstr ""
+
+#: sw/common/zdialog.c:1841
+msgid "Copies"
+msgstr ""
+
+#: sw/common/zdialog.c:1841
+msgid "Paper"
+msgstr ""
+
+#: sw/common/zdialog.c:1841
+msgid "Tray"
+msgstr ""
+
+#: sw/common/zdialog.c:1841
+msgid "Per sheet"
+msgstr ""
+
+#: sw/common/zdialog.c:1841
+msgid "Quality"
+msgstr ""
+
+#: sw/common/zdialog.c:1846
+#: sw/common/zdialog.c:1990
+msgid "US Letter"
+msgstr ""
+
+#: sw/common/zdialog.c:1846
+msgid "Legal"
+msgstr ""
+
+#: sw/common/zdialog.c:1847
+msgid "4 x 6 in"
+msgstr ""
+
+#: sw/common/zdialog.c:1847
+msgid "5 x 7 in"
+msgstr ""
+
+#: sw/common/zdialog.c:1847
+msgid "3 x 5 in"
+msgstr ""
+
+#: sw/common/zdialog.c:1851
+msgid "Printer's choice"
+msgstr ""
+
+#: sw/common/zdialog.c:1851
+msgctxt "tray"
+msgid "Main"
+msgstr ""
+
+#: sw/common/zdialog.c:1851
+msgctxt "tray"
+msgid "Rear"
+msgstr ""
+
+#: sw/common/zdialog.c:1851
+msgctxt "tray"
+msgid "Manual"
+msgstr ""
+
+#: sw/common/zdialog.c:1858
+msgctxt "quality"
+msgid "Normal"
+msgstr ""
+
+#: sw/common/zdialog.c:1858
+msgctxt "quality"
+msgid "Draft"
+msgstr ""
+
+#: sw/common/zdialog.c:1858
+msgctxt "quality"
+msgid "High"
+msgstr ""
+
+#: sw/common/zdialog.c:1865
+#: sw/common/zdialog.c:2323
+msgid "Print"
+msgstr ""
+
+#: sw/common/zdialog.c:1950
+msgid "A PDF file"
+msgstr ""
+
+#: sw/common/zdialog.c:1951
+msgid "A PostScript file"
+msgstr ""
+
+#: sw/common/zdialog.c:1953
+msgid "Printer (not set up)"
+msgstr ""
+
+#: sw/common/zdialog.c:1957
+msgid "Printer "
+msgstr ""
+
+#: sw/common/zdialog.c:1964
+msgid "All"
+msgstr ""
+
+#: sw/common/zdialog.c:1972
+msgid "This page ("
+msgstr ""
+
+#: sw/common/zdialog.c:1977
+msgid "The selection"
+msgstr ""
+
+#: sw/common/zdialog.c:1993
+msgid "Default ("
+msgstr ""
+
+#: sw/common/zdialog.c:1999
+#: sw/common/zdialog.c:2007
+msgid "(the printer's)"
+msgstr ""
+
+#: sw/common/zdialog.c:2004
+msgid " page"
+msgstr ""
+
+#: sw/common/zdialog.c:2004
+msgid " pages"
+msgstr ""
+
+#: sw/common/zdialog.c:2376
+msgid "Print to a file"
+msgstr ""
+
+#: sw/common/zdialog.c:2376
+msgid "That file exists. Replace it?"
+msgstr ""
+
+#: sw/common/zrtc.c:178
+msgctxt "short weekday"
+msgid "Sun"
+msgstr ""
+
+#: sw/common/zrtc.c:178
+msgctxt "short weekday"
+msgid "Mon"
+msgstr ""
+
+#: sw/common/zrtc.c:178
+msgctxt "short weekday"
+msgid "Tue"
+msgstr ""
+
+#: sw/common/zrtc.c:179
+msgctxt "short weekday"
+msgid "Wed"
+msgstr ""
+
+#: sw/common/zrtc.c:179
+msgctxt "short weekday"
+msgid "Thu"
+msgstr ""
+
+#: sw/common/zrtc.c:179
+msgctxt "short weekday"
+msgid "Fri"
+msgstr ""
+
+#: sw/common/zrtc.c:180
+msgctxt "short weekday"
+msgid "Sat"
+msgstr ""
+
+#: sw/common/zrtc.c:184
+msgctxt "short month"
+msgid "Jan"
+msgstr ""
+
+#: sw/common/zrtc.c:184
+msgctxt "short month"
+msgid "Feb"
+msgstr ""
+
+#: sw/common/zrtc.c:184
+msgctxt "short month"
+msgid "Mar"
+msgstr ""
+
+#: sw/common/zrtc.c:185
+msgctxt "short month"
+msgid "Apr"
+msgstr ""
+
+#: sw/common/zrtc.c:185
+msgctxt "short month"
+msgid "May"
+msgstr ""
+
+#: sw/common/zrtc.c:185
+msgctxt "short month"
+msgid "Jun"
+msgstr ""
+
+#: sw/common/zrtc.c:186
+msgctxt "short month"
+msgid "Jul"
+msgstr ""
+
+#: sw/common/zrtc.c:186
+msgctxt "short month"
+msgid "Aug"
+msgstr ""
+
+#: sw/common/zrtc.c:186
+msgctxt "short month"
+msgid "Sep"
+msgstr ""
+
+#: sw/common/zrtc.c:187
+msgctxt "short month"
+msgid "Oct"
+msgstr ""
+
+#: sw/common/zrtc.c:187
+msgctxt "short month"
+msgid "Nov"
+msgstr ""
+
+#: sw/common/zrtc.c:187
+msgctxt "short month"
+msgid "Dec"
+msgstr ""
+
+#: sw/common/zrtc.c:205
+msgctxt "month"
+msgid "January"
+msgstr ""
+
+#: sw/common/zrtc.c:205
+msgctxt "month"
+msgid "February"
+msgstr ""
+
+#: sw/common/zrtc.c:205
+msgctxt "month"
+msgid "March"
+msgstr ""
+
+#: sw/common/zrtc.c:206
+msgctxt "month"
+msgid "April"
+msgstr ""
+
+#: sw/common/zrtc.c:206
+msgctxt "month"
+msgid "May"
+msgstr ""
+
+#: sw/common/zrtc.c:206
+msgctxt "month"
+msgid "June"
+msgstr ""
+
+#: sw/common/zrtc.c:207
+msgctxt "month"
+msgid "July"
+msgstr ""
+
+#: sw/common/zrtc.c:207
+msgctxt "month"
+msgid "August"
+msgstr ""
+
+#: sw/common/zrtc.c:207
+msgctxt "month"
+msgid "September"
+msgstr ""
+
+#: sw/common/zrtc.c:208
+msgctxt "month"
+msgid "October"
+msgstr ""
+
+#: sw/common/zrtc.c:208
+msgctxt "month"
+msgid "November"
+msgstr ""
+
+#: sw/common/zrtc.c:208
+msgctxt "month"
+msgid "December"
+msgstr ""

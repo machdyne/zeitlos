@@ -2,6 +2,7 @@
  * draw -- the canvas file, a slice at a time. See drawio.h.
  */
 
+#include "../../common/zi18n.h"
 #include "drawio.h"
 
 #include <string.h>
@@ -196,15 +197,16 @@ bool draw_io_running(const draw_io_t *io) {
 
 const char *draw_io_error(int err) {
 	switch (err) {
-	case DRAW_IO_E_OPEN:	return "That file could not\nbe opened.";
-	case DRAW_IO_E_NOTZBM:	return "That file is not\na ZBM bitmap.";
-	case DRAW_IO_E_SIZE:	return "That image is not\n640x480.";
-	case DRAW_IO_E_SHORT:	return "That file is damaged:\nit ends early.";
-	case DRAW_IO_E_READ:	return "That file could not\nbe read.";
-	case DRAW_IO_E_WRITE:	return "The image could not be\nwritten completely.";
-	case DRAW_IO_E_RENAME:	return "The image was written\nbut could not replace\nthe old file.";
-	case DRAW_IO_E_KEPT:	return "The old file is gone;\nthe image is in the\n.part file beside it.";
-	case DRAW_IO_E_COLOUR:	return "That is a colour\npicture: open it\nin pix.";
-	default:				return "Something went wrong.";
+	// N_(): translated where they are shown (draw.c, ZS_D()).
+	case DRAW_IO_E_OPEN:	return N_("That file could not\nbe opened.");
+	case DRAW_IO_E_NOTZBM:	return N_("That file is not\na ZBM bitmap.");
+	case DRAW_IO_E_SIZE:	return N_("That image is not\n640x480.");
+	case DRAW_IO_E_SHORT:	return N_("That file is damaged:\nit ends early.");
+	case DRAW_IO_E_READ:	return N_("That file could not\nbe read.");
+	case DRAW_IO_E_WRITE:	return N_("The image could not be\nwritten completely.");
+	case DRAW_IO_E_RENAME:	return N_("The image was written\nbut could not replace\nthe old file.");
+	case DRAW_IO_E_KEPT:	return N_("The old file is gone;\nthe image is in the\n.part file beside it.");
+	case DRAW_IO_E_COLOUR:	return N_("That is a colour\npicture: open it\nin pix.");
+	default:				return N_("Something went wrong.");
 	}
 }

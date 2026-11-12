@@ -1,0 +1,377 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: Zeitlos sheet\n"
+"Language: ja\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=1; plural=0;\n"
+
+msgid "No chart: select the data, then F5."
+msgstr "グラフなし: データを選んでF5。"
+
+msgid "Nothing to chart in the range."
+msgstr "範囲に描くものがありません。"
+
+msgid "No numbers in the range to chart."
+msgstr "範囲に数値がありません。"
+
+msgid "A pie needs some positive numbers."
+msgstr "円グラフには正の数が必要です。"
+
+msgid "Sum "
+msgstr "合計 "
+
+msgid "  Avg "
+msgstr "  平均 "
+
+msgid "  Count "
+msgstr "  個数 "
+
+msgctxt "chart"
+msgid "Bar"
+msgstr "棒"
+
+msgctxt "chart"
+msgid "Stacked"
+msgstr "積み上げ"
+
+msgctxt "chart"
+msgid "Line"
+msgstr "折れ線"
+
+msgctxt "chart"
+msgid "Pie"
+msgstr "円"
+
+msgid "Chart: "
+msgstr "グラフ: "
+
+msgid "  Esc: back"
+msgstr "  Esc: 戻る"
+
+msgid "Calculating..."
+msgstr "計算中..."
+
+msgid "Export"
+msgstr "書き出し"
+
+msgid ""
+"convert could not\n"
+"be started."
+msgstr ""
+"convertを起動\n"
+"できませんでした。"
+
+msgid ""
+"Could not write the\n"
+"copy to convert."
+msgstr ""
+"変換用のコピーを\n"
+"書き込めませんでした。"
+
+msgid "Save failed"
+msgstr "保存できません"
+
+msgid ""
+"Could not open the file\n"
+"for writing."
+msgstr ""
+"書き込み用にファイルを\n"
+"開けませんでした。"
+
+msgid ""
+"The file could not be\n"
+"written completely."
+msgstr ""
+"ファイルをすべて\n"
+"書き込めませんでした。"
+
+msgid "Open failed"
+msgstr "開けません"
+
+msgid ""
+"convert is not on\n"
+"this card."
+msgstr ""
+"このカードに\n"
+"convertがありません。"
+
+msgid ""
+"The file could not\n"
+"be opened."
+msgstr ""
+"ファイルを\n"
+"開けませんでした。"
+
+msgid "Unsaved changes"
+msgstr "未保存の変更"
+
+msgid ""
+"This sheet has unsaved\n"
+"changes. Save first?"
+msgstr ""
+"このシートには未保存の\n"
+"変更があります。先に保存しますか?"
+
+msgid "Sheet full"
+msgstr "シートがいっぱい"
+
+msgid ""
+"No room for another cell.\n"
+"The change was not made."
+msgstr ""
+"セルを追加する場所がありません。\n"
+"変更はしていません。"
+
+msgid ""
+"No room for more cells.\n"
+"Some were not pasted."
+msgstr ""
+"セルを追加する場所がありません。\n"
+"一部は貼り付けていません。"
+
+msgid "Fill"
+msgstr "フィル"
+
+msgid ""
+"Too much to fill\n"
+"at once."
+msgstr ""
+"一度にフィルするには\n"
+"多すぎます。"
+
+msgid ""
+"No room for more cells.\n"
+"Some were not filled."
+msgstr ""
+"セルを追加する場所がありません。\n"
+"一部はフィルしていません。"
+
+msgid "Insert"
+msgstr "挿入"
+
+msgid "Delete"
+msgstr "削除"
+
+msgid ""
+"That would push cells\n"
+"past the edge of the sheet."
+msgstr ""
+"セルがシートの端から\n"
+"はみ出してしまいます。"
+
+msgid ""
+"No room: the sheet\n"
+"is full."
+msgstr ""
+"場所がありません: シートが\n"
+"いっぱいです。"
+
+msgid "Format"
+msgstr "書式"
+
+#, c-format
+msgid ""
+"G general  F2 fixed  ,2 1,000.00\n"
+"%1 percent  $2 money  (digit: places)"
+msgstr ""
+"G 標準  F2 固定  ,2 1,000.00\n"
+"%1 パーセント  $2 通貨  (数字: 桁数)"
+
+#, c-format
+msgid ""
+"Not a format: G, F2, ,2,\n"
+"%1 or $2 (any 0-8 places)."
+msgstr ""
+"書式ではありません: G, F2, ,2,\n"
+"%1 または $2 (0-8桁)。"
+
+msgid ""
+"Too many formatted\n"
+"ranges: 64 at most."
+msgstr ""
+"書式付きの範囲が多すぎます:\n"
+"最大64です。"
+
+msgid "Width"
+msgstr "幅"
+
+msgid "Column width, in characters:"
+msgstr "列の幅 (文字数):"
+
+msgid "Chart"
+msgstr "グラフ"
+
+msgid ""
+"Select the table to chart\n"
+"(labels in the first row\n"
+"and column), then F5."
+msgstr ""
+"グラフにする表を選び\n"
+"(1行目と1列目にラベル)\n"
+"F5を押してください。"
+
+msgid "Sort"
+msgstr "並べ替え"
+
+msgid ""
+"Select the rows to sort\n"
+"(all their columns), then\n"
+"put the cursor in the key."
+msgstr ""
+"並べ替える行を (すべての列を)\n"
+"選び、カーソルをキーの\n"
+"列に置いてください。"
+
+msgid ""
+"Too large to sort here:\n"
+"sort fewer rows at a time."
+msgstr ""
+"ここで並べ替えるには大きすぎます:\n"
+"行を減らしてください。"
+
+msgid "Go to"
+msgstr "移動"
+
+msgid "Cell (like B12):"
+msgstr "セル (例: B12):"
+
+msgid "Not a cell: A1 to Z999."
+msgstr "セルではありません: A1からZ999。"
+
+msgid "Find"
+msgstr "検索"
+
+msgid "Not found."
+msgstr "見つかりません。"
+
+msgid ""
+"A spreadsheet: numbers, text and formulas in a grid.\n"
+"\n"
+"Type into the cell; =A1*2 is a formula, =SUM(B2:B9) a range. Enter moves down, Tab right, Shift+arrows select.\n"
+"\n"
+"/, F4\tCommands: insert, delete, number format, width, sort, extend, goto, find, chart\n"
+"F2\tEdit the cell\n"
+"Ctrl+Z/Y\tUndo, redo\n"
+"Ctrl+C/X/V\tCopy, cut, paste\n"
+"Ctrl+D/R\tFill down, right\n"
+"Ctrl+1\tNumber format\n"
+"Ctrl+G\tGo to a cell\n"
+"F3, Ctrl+F\tFind (again: the next match)\n"
+"F5\tChart the selection\n"
+"Alt+Left\tNarrow the column (Alt+Right widens)\n"
+"Ctrl+N/O/S\tNew, open, save\n"
+"\n"
+"Functions: SUM AVERAGE MIN MAX COUNT ABS INT ROUND MOD SQRT POWER IF AND OR NOT PMT PV FV NPV VLOOKUP INDEX.\n"
+"\n"
+"Select a range to see its sum, average and count."
+msgstr ""
+"表計算: グリッドの中の数値、テキスト、数式。\n"
+"\n"
+"セルに入力します; =A1*2 は数式、=SUM(B2:B9) は範囲。Enterで下へ、Tabで右へ、Shift+矢印で選択。\n"
+"\n"
+"/, F4\tコマンド: 挿入、削除、数値の書式、幅、並べ替え、拡張、移動、検索、グラフ\n"
+"F2\tセルを編集\n"
+"Ctrl+Z/Y\t元に戻す、やり直す\n"
+"Ctrl+C/X/V\tコピー、切り取り、貼り付け\n"
+"Ctrl+D/R\t下へ、右へフィル\n"
+"Ctrl+1\t数値の書式\n"
+"Ctrl+G\tセルへ移動\n"
+"F3, Ctrl+F\t検索 (もう一度: 次)\n"
+"F5\t選択範囲をグラフに\n"
+"Alt+左\t列を狭く (Alt+右で広く)\n"
+"Ctrl+N/O/S\t新規、開く、保存\n"
+"\n"
+"関数: SUM AVERAGE MIN MAX COUNT ABS INT ROUND MOD SQRT POWER IF AND OR NOT PMT PV FV NPV VLOOKUP INDEX。\n"
+"\n"
+"範囲を選ぶと合計、平均、個数が出ます。"
+
+msgid "Sheet help"
+msgstr "sheetのヘルプ"
+
+msgid "Find (F3 finds the next):"
+msgstr "検索 (F3で次):"
+
+msgctxt "menu"
+msgid "Insert"
+msgstr "挿入"
+
+msgctxt "menu"
+msgid "Delete"
+msgstr "削除"
+
+msgctxt "menu"
+msgid "Number"
+msgstr "数値"
+
+msgctxt "menu"
+msgid "Width"
+msgstr "幅"
+
+msgctxt "menu"
+msgid "Sort"
+msgstr "並べ替え"
+
+msgctxt "menu"
+msgid "Extend"
+msgstr "拡張"
+
+msgctxt "menu"
+msgid "Undo"
+msgstr "元に戻す"
+
+msgctxt "menu"
+msgid "Redo"
+msgstr "やり直す"
+
+msgctxt "menu"
+msgid "Goto"
+msgstr "移動"
+
+msgctxt "menu"
+msgid "Find"
+msgstr "検索"
+
+msgctxt "menu"
+msgid "Chart"
+msgstr "グラフ"
+
+msgctxt "menu"
+msgid "Help"
+msgstr "ヘルプ"
+
+msgctxt "menu"
+msgid "Rows"
+msgstr "行"
+
+msgctxt "menu"
+msgid "Columns"
+msgstr "列"
+
+msgctxt "menu"
+msgid "Ascending"
+msgstr "昇順"
+
+msgctxt "menu"
+msgid "Descending"
+msgstr "降順"
+
+msgctxt "menu"
+msgid "Down"
+msgstr "下"
+
+msgctxt "menu"
+msgid "Right"
+msgstr "右"
+
+msgid "Insert:"
+msgstr "挿入:"
+
+msgid "Delete:"
+msgstr "削除:"
+
+msgid "Sort:"
+msgstr "並べ替え:"
+
+msgid "Extend:"
+msgstr "拡張:"

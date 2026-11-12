@@ -1,0 +1,281 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: Zeitlos common\n"
+"Language: ja\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=1; plural=0;\n"
+
+msgid " (reading)"
+msgstr " (読み込み中)"
+
+msgid " (partial list)"
+msgstr " (一部のみ)"
+
+msgid "OK"
+msgstr "OK"
+
+msgid "Cancel"
+msgstr "取消"
+
+msgid "Yes"
+msgstr "はい"
+
+msgid "No"
+msgstr "いいえ"
+
+msgid "Open"
+msgstr "開く"
+
+msgid "Save"
+msgstr "保存"
+
+msgid "Open a file"
+msgstr "ファイルを開く"
+
+msgid "Choose"
+msgstr "選択"
+
+msgid "Choose a file or folder"
+msgstr "ファイルかフォルダを選択"
+
+msgid "Save As"
+msgstr "名前を付けて保存"
+
+msgid "Read docs"
+msgstr "説明書"
+
+msgid "Close"
+msgstr "閉じる"
+
+msgid "Help"
+msgstr "ヘルプ"
+
+msgid "Print to"
+msgstr "印刷先"
+
+msgid "Pages"
+msgstr "ページ"
+
+msgid "Copies"
+msgstr "部数"
+
+msgid "Paper"
+msgstr "用紙"
+
+msgid "Tray"
+msgstr "トレイ"
+
+msgid "Per sheet"
+msgstr "1枚あたり"
+
+msgid "Quality"
+msgstr "品質"
+
+msgid "US Letter"
+msgstr "USレター"
+
+msgid "Legal"
+msgstr "USリーガル"
+
+msgid "4 x 6 in"
+msgstr "4 x 6 インチ"
+
+msgid "5 x 7 in"
+msgstr "5 x 7 インチ"
+
+msgid "3 x 5 in"
+msgstr "3 x 5 インチ"
+
+msgid "Printer's choice"
+msgstr "プリンタ任せ"
+
+msgctxt "tray"
+msgid "Main"
+msgstr "メイン"
+
+msgctxt "tray"
+msgid "Rear"
+msgstr "背面"
+
+msgctxt "tray"
+msgid "Manual"
+msgstr "手差し"
+
+msgctxt "quality"
+msgid "Normal"
+msgstr "標準"
+
+msgctxt "quality"
+msgid "Draft"
+msgstr "下書き"
+
+msgctxt "quality"
+msgid "High"
+msgstr "高"
+
+msgid "Print"
+msgstr "印刷"
+
+msgid "A PDF file"
+msgstr "PDFファイル"
+
+msgid "A PostScript file"
+msgstr "PostScriptファイル"
+
+msgid "Printer (not set up)"
+msgstr "プリンタ(未設定)"
+
+msgid "Printer "
+msgstr "プリンタ "
+
+msgid "All"
+msgstr "すべて"
+
+msgid "This page ("
+msgstr "このページ ("
+
+msgid "The selection"
+msgstr "選択範囲"
+
+msgid "Default ("
+msgstr "既定 ("
+
+msgid "(the printer's)"
+msgstr "(プリンタの設定)"
+
+msgid " page"
+msgstr " ページ"
+
+msgid " pages"
+msgstr " ページ"
+
+msgid "Print to a file"
+msgstr "ファイルに印刷"
+
+msgid "That file exists. Replace it?"
+msgstr "ファイルがあります。置き換えますか?"
+
+msgctxt "short weekday"
+msgid "Sun"
+msgstr "日"
+
+msgctxt "short weekday"
+msgid "Mon"
+msgstr "月"
+
+msgctxt "short weekday"
+msgid "Tue"
+msgstr "火"
+
+msgctxt "short weekday"
+msgid "Wed"
+msgstr "水"
+
+msgctxt "short weekday"
+msgid "Thu"
+msgstr "木"
+
+msgctxt "short weekday"
+msgid "Fri"
+msgstr "金"
+
+msgctxt "short weekday"
+msgid "Sat"
+msgstr "土"
+
+msgctxt "short month"
+msgid "Jan"
+msgstr "1月"
+
+msgctxt "short month"
+msgid "Feb"
+msgstr "2月"
+
+msgctxt "short month"
+msgid "Mar"
+msgstr "3月"
+
+msgctxt "short month"
+msgid "Apr"
+msgstr "4月"
+
+msgctxt "short month"
+msgid "May"
+msgstr "5月"
+
+msgctxt "short month"
+msgid "Jun"
+msgstr "6月"
+
+msgctxt "short month"
+msgid "Jul"
+msgstr "7月"
+
+msgctxt "short month"
+msgid "Aug"
+msgstr "8月"
+
+msgctxt "short month"
+msgid "Sep"
+msgstr "9月"
+
+msgctxt "short month"
+msgid "Oct"
+msgstr "10月"
+
+msgctxt "short month"
+msgid "Nov"
+msgstr "11月"
+
+msgctxt "short month"
+msgid "Dec"
+msgstr "12月"
+
+msgctxt "month"
+msgid "January"
+msgstr "1月"
+
+msgctxt "month"
+msgid "February"
+msgstr "2月"
+
+msgctxt "month"
+msgid "March"
+msgstr "3月"
+
+msgctxt "month"
+msgid "April"
+msgstr "4月"
+
+msgctxt "month"
+msgid "May"
+msgstr "5月"
+
+msgctxt "month"
+msgid "June"
+msgstr "6月"
+
+msgctxt "month"
+msgid "July"
+msgstr "7月"
+
+msgctxt "month"
+msgid "August"
+msgstr "8月"
+
+msgctxt "month"
+msgid "September"
+msgstr "9月"
+
+msgctxt "month"
+msgid "October"
+msgstr "10月"
+
+msgctxt "month"
+msgid "November"
+msgstr "11月"
+
+msgctxt "month"
+msgid "December"
+msgstr "12月"

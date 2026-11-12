@@ -1,0 +1,131 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: Zeitlos wm\n"
+"Language: ja\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=1; plural=0;\n"
+
+msgid "Next page"
+msgstr ""
+
+msgid "Back"
+msgstr ""
+
+msgid "Clipboard empty"
+msgstr ""
+
+msgid "Desktop"
+msgstr ""
+
+msgid "No window focused"
+msgstr ""
+
+msgid "Dock. Use the arrow keys to choose an app, and Enter to start it."
+msgstr ""
+
+msgid "restored"
+msgstr ""
+
+msgid "maximized"
+msgstr ""
+
+msgid "window"
+msgstr ""
+
+msgid "full screen"
+msgstr ""
+
+msgid "shaded"
+msgstr ""
+
+msgid "unshaded"
+msgstr ""
+
+msgid "Workspace 1"
+msgstr "ワークスペース 1"
+
+msgid "Workspace 2"
+msgstr "ワークスペース 2"
+
+msgid "Workspace 3"
+msgstr "ワークスペース 3"
+
+msgid "Workspace 4"
+msgstr "ワークスペース 4"
+
+msgid "Workspace 5"
+msgstr "ワークスペース 5"
+
+msgid "Workspace 6"
+msgstr "ワークスペース 6"
+
+msgid "Workspace 7"
+msgstr "ワークスペース 7"
+
+msgid "Workspace 8"
+msgstr "ワークスペース 8"
+
+msgid "Workspace 9"
+msgstr "ワークスペース 9"
+
+msgid "Workspace 10"
+msgstr "ワークスペース 10"
+
+msgid "No volume control on this bitstream"
+msgstr "このビットストリームには音量調節がありません"
+
+#, c-format
+msgid "Volume %d%%"
+msgstr "音量 %d%%"
+
+msgid "No brightness control on this display"
+msgstr "この画面には明るさ調節がありません"
+
+#, c-format
+msgid "Brightness %d/%d"
+msgstr "明るさ %d/%d"
+
+msgid "Zeitlos is locked"
+msgstr "Zeitlosはロック中です"
+
+msgid "Password: "
+msgstr "パスワード: "
+
+msgid "Type the password, then Enter"
+msgstr "パスワードを入力してEnter"
+
+msgid "No password is set: press Enter"
+msgstr "パスワード未設定: Enterを押す"
+
+msgid "Reboot"
+msgstr "再起動"
+
+msgid "Cancel"
+msgstr "取消"
+
+msgid "Reboot Zeitlos?"
+msgstr "Zeitlosを再起動しますか?"
+
+msgid "Unsaved work in open apps is lost."
+msgstr "開いているアプリの未保存の作業は失われます。"
+
+msgid "Rebooting..."
+msgstr "再起動中..."
+
+msgid "Reboot failed -- see the console"
+msgstr "再起動できません -- コンソールを参照"
+
+msgid "Checking..."
+msgstr "確認中..."
+
+#, c-format
+msgid "Too many attempts -- wait %lu s"
+msgstr "試行が多すぎます -- %lu 秒待ってください"
+
+msgid "Wrong password"
+msgstr "パスワードが違います"
+
+#, c-format
+msgid "Could not check the password (%d)"
+msgstr "パスワードを確認できません (%d)"

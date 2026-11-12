@@ -174,6 +174,7 @@ bool z_scrollbar_set_range(z_scrollbar_t *s, int32_t t, int32_t p) { s->total = 
 bool z_scrollbar_set_value(z_scrollbar_t *s, int32_t v) { s->value = v; return true; }
 bool z_speak_n(const char *t, uint32_t l, uint32_t f) { (void)t; (void)l; (void)f; return false; }
 bool z_speak_static(const char *t, uint32_t f) { (void)t; (void)f; return false; }
+bool z_speak(const char *t, uint32_t f) { (void)t; (void)f; return false; }
 bool z_win_apply_clip(z_win_t *w, z_obj_t *o) { (void)w; (void)o; return true; }
 void z_win_apply_redraw(z_win_t *w, uint32_t p) { (void)w; (void)p; }
 bool z_win_apply_resized(z_win_t *w, z_obj_t *o) { (void)w; content_w = (int)o->val.uint32; return true; }

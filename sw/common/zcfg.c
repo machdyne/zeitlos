@@ -79,6 +79,8 @@ const z_cfg_known_t z_cfg_known[] = {
 	  "speech: words per minute, 80-450" },
 	{ "system.tts.volume", "200",
 	  "speech: volume, 0-255" },
+	{ "system.language", "en",
+	  "the language the system speaks: en, de, fr, es, it, pt, nl, pl, cs, sv, ru, uk, ja (the Languages set; docs/i18n.md)" },
 	{ "system.screen.size", "640x480",
 	  "the screen size the system reports to apps, WxH, 640x360 or more (testing: the display stays 640x480; docs/screen.md)" },
 	{ "system.video.mode", "white",

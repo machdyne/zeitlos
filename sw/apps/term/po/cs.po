@@ -1,0 +1,100 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: Zeitlos term\n"
+"Language: cs\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=3; plural=(n==1 ? 0 : n>=2 && n<=4 ? 1 : 2);\n"
+
+#, c-format
+msgid "%s -- not connected"
+msgstr "%s -- nepřipojeno"
+
+msgid "ready"
+msgstr "připraveno"
+
+msgid "not running"
+msgstr "neběží"
+
+msgid "not installed"
+msgstr "nenainstalováno"
+
+msgid "Scheme and system commands"
+msgstr "Scheme a systémové příkazy"
+
+msgid "Unix-style shell, zcc and vi"
+msgstr "Unixový shell, zcc a vi"
+
+msgid "Boot log and kernel shell"
+msgstr "Záznam startu a shell jádra"
+
+msgid "port, serial, telnet or ssh"
+msgstr "port, serial, telnet nebo ssh"
+
+msgid "Tab chooses, Enter connects, or type a target"
+msgstr "Tab vybírá, Enter připojí, nebo zadejte cíl"
+
+msgid "F12 disconnects  Esc hides  Shift+PgUp scrolls"
+msgstr "F12 odpojí  Esc skryje  Shift+PgUp posune"
+
+msgid "auto-connect cancelled"
+msgstr "automatické připojení zrušeno"
+
+#, c-format
+msgid "%.40s is not running"
+msgstr "%.40s neběží"
+
+#, c-format
+msgid "connecting to %.45s ...  (Esc cancels)"
+msgstr "připojování k %.45s ...  (Esc zruší)"
+
+#, c-format
+msgid "%.30s refused: %.40s"
+msgstr "%.30s odmítl: %.40s"
+
+#, c-format
+msgid "%.55s refused the connection"
+msgstr "%.55s odmítl spojení"
+
+#, c-format
+msgid "cancelled connecting to %.50s"
+msgstr "připojování k %.50s zrušeno"
+
+#, c-format
+msgid "no answer from %.50s"
+msgstr "žádná odpověď od %.50s"
+
+#, c-format
+msgid "could not start %s -- %s"
+msgstr "nelze spustit %s -- %s"
+
+#, c-format
+msgid "starting %s"
+msgstr "spouštění %s"
+
+#, c-format
+msgid "starting %s...  (Esc cancels)"
+msgstr "spouštění %s...  (Esc zruší)"
+
+#, c-format
+msgid "auto-connect: %.40s  (Esc cancels)"
+msgstr "automaticky: %.40s  (Esc zruší)"
+
+#, c-format
+msgid "%s: %.24s did not appear -- choose below"
+msgstr "%s: %.24s se neobjevil -- vyberte níže"
+
+msgid "Blank screen"
+msgstr "Prázdná obrazovka"
+
+msgid "Nothing selected"
+msgstr "Nic není vybráno"
+
+msgid "disconnected (F12)"
+msgstr "odpojeno (F12)"
+
+msgid "choose a shell, or open a connection"
+msgstr "vyberte shell nebo otevřete spojení"
+
+msgid "connection closed by the other end"
+msgstr "druhá strana spojení ukončila"

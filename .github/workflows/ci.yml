@@ -58,6 +58,19 @@ jobs:
       - name: The ABI fingerprint is up to date
         run: python3 tools/gen_abi.py --check
 
+      - name: Translations -- keys hash apart, formats kept (docs/i18n.md)
+        run: python3 tools/i18n.py check
+
+      - name: Translations -- how much of each language is done (a report)
+        if: always()
+        run: |
+          {
+            echo '### Translations'
+            echo '```'
+            python3 tools/i18n.py stats
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Core archives, both sizes of machine, within their budgets
         # Obst first (CORE_TIER small, built with Z_SMALL), then Lakritz,
         # so the newest archive -- the one the emulator boots -- is a
@@ -128,6 +141,11 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq dosfstools mtools python3-pil python3-numpy libsdl2-dev iverilog
+          # The tests that run an app's code against a stand-in kernel put
+          # its pointer at address 0xC, as on the machine
+          # (sw/common/tests/ztramp.h): page 0 must be mappable. Without
+          # this they report themselves skipped (exit 77).
+          sudo sysctl -w vm.mmap_min_addr=0
 
       - name: Every host test, and the RTL simulations
         run: python3 tools/run_tests.py --rtl

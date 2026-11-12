@@ -28,6 +28,7 @@
 #include <stdbool.h>
 #include <string.h>
 
+#include "../../common/zi18n.h"
 #include "../../common/zwin.h"
 #include "../../common/zfont.h"
 #include "chart.h"
@@ -209,7 +210,7 @@ void chart_draw(const z_win_t *win, sheet_t *s, const sheet_chart_t *g,
 	int cw = font->w, lh = font->h + 2;
 	rect(c, x, y, w, h, 0);
 
-	if (!g->set) { text(c, x + 4, y + 4, "No chart: select the data, then F5."); return; }
+	if (!g->set) { text(c, x + 4, y + 4, ZS_("No chart: select the data, then F5.")); return; }
 
 	int r0 = g->r0, r1 = g->r1, c0 = g->c0, c1 = g->c1;
 
@@ -226,7 +227,7 @@ void chart_draw(const z_win_t *win, sheet_t *s, const sheet_chart_t *g,
 	if (npts > CHART_MAX_PTS) npts = CHART_MAX_PTS;
 	if (nser > MAX_SER) nser = MAX_SER;
 	if (g->kind == SHEET_CHART_PIE) nser = 1;
-	if (npts < 1 || nser < 1) { text(c, x + 4, y + 4, "Nothing to chart in the range."); return; }
+	if (npts < 1 || nser < 1) { text(c, x + 4, y + 4, ZS_("Nothing to chart in the range.")); return; }
 
 	// the range of the values
 	double lo = 0, hi = 0;
@@ -242,7 +243,7 @@ void chart_draw(const z_win_t *win, sheet_t *s, const sheet_chart_t *g,
 		}
 		if (g->kind == SHEET_CHART_STACK) { if (pos > hi) hi = pos; if (neg < lo) lo = neg; }
 	}
-	if (!any) { text(c, x + 4, y + 4, "No numbers in the range to chart."); return; }
+	if (!any) { text(c, x + 4, y + 4, ZS_("No numbers in the range to chart.")); return; }
 
 	// title: the corner cell, when both headings are there
 	int top = y + 2;
@@ -287,7 +288,7 @@ void chart_draw(const z_win_t *win, sheet_t *s, const sheet_chart_t *g,
 			vals[p] = v;
 			tot += v;
 		}
-		if (tot <= 0) { text(c, x + 4, y + 4, "A pie needs some positive numbers."); return; }
+		if (tot <= 0) { text(c, x + 4, y + 4, ZS_("A pie needs some positive numbers.")); return; }
 
 		int rad = ((px1 - px0) < (py1 - py0) ? (px1 - px0) : (py1 - py0)) / 2 - 2;
 		if (rad < 8) return;

@@ -1,0 +1,377 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: Zeitlos sheet\n"
+"Language: cs\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=3; plural=(n==1 ? 0 : n>=2 && n<=4 ? 1 : 2);\n"
+
+msgid "No chart: select the data, then F5."
+msgstr "Žádný graf: vyberte data, pak F5."
+
+msgid "Nothing to chart in the range."
+msgstr "V rozsahu není co zobrazit."
+
+msgid "No numbers in the range to chart."
+msgstr "V rozsahu nejsou čísla."
+
+msgid "A pie needs some positive numbers."
+msgstr "Koláč potřebuje kladná čísla."
+
+msgid "Sum "
+msgstr "Součet "
+
+msgid "  Avg "
+msgstr "  Prům. "
+
+msgid "  Count "
+msgstr "  Počet "
+
+msgctxt "chart"
+msgid "Bar"
+msgstr "Sloupce"
+
+msgctxt "chart"
+msgid "Stacked"
+msgstr "Skládaný"
+
+msgctxt "chart"
+msgid "Line"
+msgstr "Čáry"
+
+msgctxt "chart"
+msgid "Pie"
+msgstr "Koláč"
+
+msgid "Chart: "
+msgstr "Graf: "
+
+msgid "  Esc: back"
+msgstr "  Esc: zpět"
+
+msgid "Calculating..."
+msgstr "Počítání..."
+
+msgid "Export"
+msgstr "Export"
+
+msgid ""
+"convert could not\n"
+"be started."
+msgstr ""
+"convert nešel\n"
+"spustit."
+
+msgid ""
+"Could not write the\n"
+"copy to convert."
+msgstr ""
+"Kopii k převodu se\n"
+"nepodařilo zapsat."
+
+msgid "Save failed"
+msgstr "Uložení selhalo"
+
+msgid ""
+"Could not open the file\n"
+"for writing."
+msgstr ""
+"Soubor nelze otevřít\n"
+"pro zápis."
+
+msgid ""
+"The file could not be\n"
+"written completely."
+msgstr ""
+"Soubor nebylo možné\n"
+"zapsat celý."
+
+msgid "Open failed"
+msgstr "Otevření selhalo"
+
+msgid ""
+"convert is not on\n"
+"this card."
+msgstr ""
+"convert na této kartě\n"
+"není."
+
+msgid ""
+"The file could not\n"
+"be opened."
+msgstr ""
+"Soubor nebylo možné\n"
+"otevřít."
+
+msgid "Unsaved changes"
+msgstr "Neuložené změny"
+
+msgid ""
+"This sheet has unsaved\n"
+"changes. Save first?"
+msgstr ""
+"List má neuložené\n"
+"změny. Nejdřív uložit?"
+
+msgid "Sheet full"
+msgstr "List je plný"
+
+msgid ""
+"No room for another cell.\n"
+"The change was not made."
+msgstr ""
+"Není místo pro další buňku.\n"
+"Změna nebyla provedena."
+
+msgid ""
+"No room for more cells.\n"
+"Some were not pasted."
+msgstr ""
+"Není místo pro další buňky.\n"
+"Některé nebyly vloženy."
+
+msgid "Fill"
+msgstr "Vyplnit"
+
+msgid ""
+"Too much to fill\n"
+"at once."
+msgstr ""
+"Příliš mnoho k vyplnění\n"
+"najednou."
+
+msgid ""
+"No room for more cells.\n"
+"Some were not filled."
+msgstr ""
+"Není místo pro další buňky.\n"
+"Některé nebyly vyplněny."
+
+msgid "Insert"
+msgstr "Vložit"
+
+msgid "Delete"
+msgstr "Smazat"
+
+msgid ""
+"That would push cells\n"
+"past the edge of the sheet."
+msgstr ""
+"Tím by se buňky posunuly\n"
+"za okraj listu."
+
+msgid ""
+"No room: the sheet\n"
+"is full."
+msgstr ""
+"Není místo: list\n"
+"je plný."
+
+msgid "Format"
+msgstr "Formát"
+
+#, c-format
+msgid ""
+"G general  F2 fixed  ,2 1,000.00\n"
+"%1 percent  $2 money  (digit: places)"
+msgstr ""
+"G obecný  F2 pevný  ,2 1,000.00\n"
+"%1 procenta  $2 měna  (číslice: místa)"
+
+#, c-format
+msgid ""
+"Not a format: G, F2, ,2,\n"
+"%1 or $2 (any 0-8 places)."
+msgstr ""
+"Není formát: G, F2, ,2,\n"
+"%1 nebo $2 (0-8 míst)."
+
+msgid ""
+"Too many formatted\n"
+"ranges: 64 at most."
+msgstr ""
+"Příliš mnoho formátovaných\n"
+"rozsahů: nejvýš 64."
+
+msgid "Width"
+msgstr "Šířka"
+
+msgid "Column width, in characters:"
+msgstr "Šířka sloupce, ve znacích:"
+
+msgid "Chart"
+msgstr "Graf"
+
+msgid ""
+"Select the table to chart\n"
+"(labels in the first row\n"
+"and column), then F5."
+msgstr ""
+"Vyberte tabulku pro graf\n"
+"(popisky v prvním řádku\n"
+"a sloupci), pak F5."
+
+msgid "Sort"
+msgstr "Řadit"
+
+msgid ""
+"Select the rows to sort\n"
+"(all their columns), then\n"
+"put the cursor in the key."
+msgstr ""
+"Vyberte řádky k seřazení\n"
+"(všechny jejich sloupce), pak\n"
+"dejte kurzor do klíče."
+
+msgid ""
+"Too large to sort here:\n"
+"sort fewer rows at a time."
+msgstr ""
+"Příliš velké na řazení:\n"
+"řaďte méně řádků najednou."
+
+msgid "Go to"
+msgstr "Přejít na"
+
+msgid "Cell (like B12):"
+msgstr "Buňka (např. B12):"
+
+msgid "Not a cell: A1 to Z999."
+msgstr "Není buňka: A1 až Z999."
+
+msgid "Find"
+msgstr "Hledat"
+
+msgid "Not found."
+msgstr "Nenalezeno."
+
+msgid ""
+"A spreadsheet: numbers, text and formulas in a grid.\n"
+"\n"
+"Type into the cell; =A1*2 is a formula, =SUM(B2:B9) a range. Enter moves down, Tab right, Shift+arrows select.\n"
+"\n"
+"/, F4\tCommands: insert, delete, number format, width, sort, extend, goto, find, chart\n"
+"F2\tEdit the cell\n"
+"Ctrl+Z/Y\tUndo, redo\n"
+"Ctrl+C/X/V\tCopy, cut, paste\n"
+"Ctrl+D/R\tFill down, right\n"
+"Ctrl+1\tNumber format\n"
+"Ctrl+G\tGo to a cell\n"
+"F3, Ctrl+F\tFind (again: the next match)\n"
+"F5\tChart the selection\n"
+"Alt+Left\tNarrow the column (Alt+Right widens)\n"
+"Ctrl+N/O/S\tNew, open, save\n"
+"\n"
+"Functions: SUM AVERAGE MIN MAX COUNT ABS INT ROUND MOD SQRT POWER IF AND OR NOT PMT PV FV NPV VLOOKUP INDEX.\n"
+"\n"
+"Select a range to see its sum, average and count."
+msgstr ""
+"Tabulkový procesor: čísla, text a vzorce v mřížce.\n"
+"\n"
+"Pište do buňky; =A1*2 je vzorec, =SUM(B2:B9) rozsah. Enter jde dolů, Tab doprava, Shift+šipky vybírají.\n"
+"\n"
+"/, F4\tPříkazy: vložit, smazat, formát čísel, šířka, řadit, rozšířit, přejít, hledat, graf\n"
+"F2\tUpravit buňku\n"
+"Ctrl+Z/Y\tZpět, znovu\n"
+"Ctrl+C/X/V\tKopírovat, vyjmout, vložit\n"
+"Ctrl+D/R\tVyplnit dolů, doprava\n"
+"Ctrl+1\tFormát čísel\n"
+"Ctrl+G\tPřejít na buňku\n"
+"F3, Ctrl+F\tHledat (znovu: další shoda)\n"
+"F5\tGraf z výběru\n"
+"Alt+Vlevo\tUžší sloupec (Alt+Vpravo širší)\n"
+"Ctrl+N/O/S\tNový, otevřít, uložit\n"
+"\n"
+"Funkce: SUM AVERAGE MIN MAX COUNT ABS INT ROUND MOD SQRT POWER IF AND OR NOT PMT PV FV NPV VLOOKUP INDEX.\n"
+"\n"
+"Vyberte rozsah a uvidíte jeho součet, průměr a počet."
+
+msgid "Sheet help"
+msgstr "Nápověda sheet"
+
+msgid "Find (F3 finds the next):"
+msgstr "Hledat (F3 hledá dál):"
+
+msgctxt "menu"
+msgid "Insert"
+msgstr "Vložit"
+
+msgctxt "menu"
+msgid "Delete"
+msgstr "Smazat"
+
+msgctxt "menu"
+msgid "Number"
+msgstr "Číslo"
+
+msgctxt "menu"
+msgid "Width"
+msgstr "Šířka"
+
+msgctxt "menu"
+msgid "Sort"
+msgstr "Řadit"
+
+msgctxt "menu"
+msgid "Extend"
+msgstr "Rozšířit"
+
+msgctxt "menu"
+msgid "Undo"
+msgstr "Zpět"
+
+msgctxt "menu"
+msgid "Redo"
+msgstr "Znovu"
+
+msgctxt "menu"
+msgid "Goto"
+msgstr "Přejít"
+
+msgctxt "menu"
+msgid "Find"
+msgstr "Hledat"
+
+msgctxt "menu"
+msgid "Chart"
+msgstr "Graf"
+
+msgctxt "menu"
+msgid "Help"
+msgstr "Nápověda"
+
+msgctxt "menu"
+msgid "Rows"
+msgstr "Řádky"
+
+msgctxt "menu"
+msgid "Columns"
+msgstr "Sloupce"
+
+msgctxt "menu"
+msgid "Ascending"
+msgstr "Vzestupně"
+
+msgctxt "menu"
+msgid "Descending"
+msgstr "Sestupně"
+
+msgctxt "menu"
+msgid "Down"
+msgstr "Dolů"
+
+msgctxt "menu"
+msgid "Right"
+msgstr "Doprava"
+
+msgid "Insert:"
+msgstr "Vložit:"
+
+msgid "Delete:"
+msgstr "Smazat:"
+
+msgid "Sort:"
+msgstr "Řadit:"
+
+msgid "Extend:"
+msgstr "Rozšířit:"

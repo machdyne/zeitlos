@@ -538,6 +538,21 @@ budgets themselves to two rules:
   `repl`) fit in `CORE_RAM_MAX`, the smallest board. Every other core
   app's RAM budget counts only for that app: it says when the app grew.
 
+**Languages (November 2026, [i18n.md](i18n.md)).** The lookup and
+the drawing of other scripts are about 1.8K in each translated core
+app, plus a little per string: `term`, `text`, `files` and `welcome`
+went over their flash budgets by 0.5-1.9K. With no unassigned room
+left in the region, the others gave theirs: `usb`, `console`, `fs`,
+`cron`, `net` and `repl` now sit a kilobyte or two above what they
+are, and `read` and `keyboard` keep their room for their own
+translations (`read`, translated since, is 70,343 of its 71,680).
+welcome's Language question (the first, on a new card) took it 1.3K over
+its flash budget and 1.4K over its RAM: 47K and 82K now, paid with a
+kilobyte of flash each from `keyboard` (now 37K, using 35.6K) and `usb`
+(now 35K, using 34.4K). **Core flash is full**: the next core app to grow needs
+another to shrink, or something out of the core. The catalogs and
+fonts are on the card, in the Languages set, not in flash.
+
 `make flash_apps` prints each app against its budget, and `(stored)`
 by one kept uncompressed. `zrelease check` also refuses a `CORE_STORE`
 name that is not a core app.

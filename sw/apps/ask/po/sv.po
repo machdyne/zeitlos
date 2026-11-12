@@ -1,0 +1,111 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: Zeitlos ask\n"
+"Language: sv\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+
+msgid "No passage here answers"
+msgstr "Inget stycke här besvarar"
+
+msgid "that."
+msgstr "det."
+
+msgid "could not start read"
+msgstr "kunde inte starta read"
+
+#, c-format
+msgid "%u passage, "
+msgid_plural "%u passages, "
+msgstr[0] "%u stycke, "
+msgstr[1] "%u stycken, "
+
+#, c-format
+msgid "%u pack"
+msgid_plural "%u packs"
+msgstr[0] "%u paket"
+msgstr[1] "%u paket"
+
+msgid ", ranking weaker"
+msgstr ", svagare rangordning"
+
+msgid "  ^U clears"
+msgstr "  ^U rensar"
+
+msgid "searching...  Esc cancels"
+msgstr "söker...  Esc avbryter"
+
+#, c-format
+msgid "searching %u%%  Esc cancels"
+msgstr "söker %u%%  Esc avbryter"
+
+msgid "Loading..., then search"
+msgstr "Läser in..., sedan sök"
+
+msgid "Loading...  Esc stops"
+msgstr "Läser in...  Esc stoppar"
+
+#, c-format
+msgid "Loading %s %u%%, then search"
+msgstr "Läser in: %s %u%%, sedan sök"
+
+#, c-format
+msgid "Loading %s %u%%  Esc stops"
+msgstr "Läser in: %s %u%%  Esc stoppar"
+
+msgid "no packs loaded -- nothing to search"
+msgstr "inga paket inlästa -- inget att söka i"
+
+msgid "path too long to open"
+msgstr "sökvägen för lång att öppna"
+
+msgid "loading stopped -- no packs loaded"
+msgstr "inläsning stoppad -- inga paket inlästa"
+
+#, c-format
+msgid "loading stopped, %u pack loaded"
+msgid_plural "loading stopped, %u packs loaded"
+msgstr[0] "inläsning stoppad, %u paket inläst"
+msgstr[1] "inläsning stoppad, %u paket inlästa"
+
+#, c-format
+msgid " (%u pack failed)"
+msgid_plural " (%u packs failed)"
+msgstr[0] " (%u paket misslyckades)"
+msgstr[1] " (%u paket misslyckades)"
+
+msgid ""
+"Finds passages in the datasets on the card that answer a question, and opens them in read.\n"
+"\n"
+"Enter\tSearch; again: open the selection\n"
+"Up/Down\tSelect a result\n"
+"1-9\tOpen that result\n"
+"Esc\tStop loading, cancel a search, or clear\n"
+"Ctrl+U\tClear the line\n"
+"Ctrl+W\tDelete a word\n"
+"Ctrl+Q\tQuit\n"
+"\n"
+"Type a question and press Enter. Click a result to open it, or a pack button to browse its index.\n"
+"\n"
+"Typing works while the packs load; Enter then searches once they are in."
+msgstr ""
+"Hittar stycken i kortets datamängder som besvarar en fråga, och öppnar dem i read.\n"
+"\n"
+"Enter\tSök; igen: öppna markeringen\n"
+"Upp/Ned\tVälj ett resultat\n"
+"1-9\tÖppna det resultatet\n"
+"Esc\tStoppa inläsningen, avbryt en sökning eller rensa\n"
+"Ctrl+U\tRensa raden\n"
+"Ctrl+W\tRadera ett ord\n"
+"Ctrl+Q\tAvsluta\n"
+"\n"
+"Skriv en fråga och tryck Enter. Klicka på ett resultat för att öppna det, eller på ett pakets knapp för att bläddra i dess index.\n"
+"\n"
+"Det går att skriva medan paketen läses in; Enter söker när de är klara."
+
+msgid "Ask help"
+msgstr "Hjälp för ask"
+
+msgid "cancelled"
+msgstr "avbrutet"

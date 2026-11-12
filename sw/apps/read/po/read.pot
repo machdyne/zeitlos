@@ -1,0 +1,81 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: Zeitlos read\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+#: sw/apps/read/read.c:2483
+msgid "Loading "
+msgstr ""
+
+#: sw/apps/read/read.c:3460
+msgid "Not found"
+msgstr ""
+
+#: sw/apps/read/read.c:3461
+msgid ""
+"No heading matches\n"
+"that link."
+msgstr ""
+
+#: sw/apps/read/read.c:3676
+msgid "End of document"
+msgstr ""
+
+#: sw/apps/read/read.c:3683
+msgid "Nothing selected"
+msgstr ""
+
+#: sw/apps/read/read.c:3757
+msgid "External link"
+msgstr ""
+
+#: sw/apps/read/read.c:3758
+msgid ""
+"This link points off\n"
+"this machine."
+msgstr ""
+
+#: sw/apps/read/read.c:3800
+#: sw/apps/read/read.c:4014
+msgid "Can't open"
+msgstr ""
+
+#: sw/apps/read/read.c:3801
+#: sw/apps/read/read.c:4015
+msgid ""
+"That file could not\n"
+"be read."
+msgstr ""
+
+#: sw/apps/read/read.c:3827
+msgid "Finding... "
+msgstr ""
+
+#: sw/apps/read/read.c:3828
+#, c-format
+msgid "%  (Esc stops)"
+msgstr ""
+
+#: sw/apps/read/read.c:3839
+msgid "  read error"
+msgstr ""
+
+#: sw/apps/read/read.c:4107
+msgid ""
+"A reader for Markdown and text: manuals, notes, books.\n"
+"\n"
+"Space, PgDn\tNext page (Shift+Space back)\n"
+"Arrows\tA line\n"
+"Home, End\tStart, end (Esc stops a long find)\n"
+"Tab\tNext link; Enter follows it\n"
+"Backspace\tBack\n"
+"Ctrl+O\tOpen\n"
+"Ctrl+C\tCopy the selection (drag to select)\n"
+"\n"
+"A .docx, .odt, .rtf or .epub is converted to read."
+msgstr ""
+
+#: sw/apps/read/read.c:4117
+msgid "Read help"
+msgstr ""

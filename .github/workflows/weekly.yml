@@ -71,6 +71,9 @@ jobs:
           make -C sim/sys web-test ZAR="$PWD/output/lakritz/apps.zar"
           make -C sim/sys web-test ZAR="$PWD/output/lakritz/apps.zar" ZSYS_CARD="$PWD/images/zeitlos.img"
 
+      - name: Languages, with the card's Languages set (docs/i18n.md)
+        run: make -C sim/sys test-lang ZAR="$PWD/output/lakritz/apps.zar" ZSYS_CARD="$PWD/images/zeitlos.img"
+
       - name: Screenshots, on failure
         if: failure()
         uses: actions/upload-artifact@v4

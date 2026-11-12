@@ -1,0 +1,403 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: Zeitlos sheet\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+#: sw/apps/sheet/chart.c:213
+msgid "No chart: select the data, then F5."
+msgstr ""
+
+#: sw/apps/sheet/chart.c:230
+msgid "Nothing to chart in the range."
+msgstr ""
+
+#: sw/apps/sheet/chart.c:246
+msgid "No numbers in the range to chart."
+msgstr ""
+
+#: sw/apps/sheet/chart.c:291
+msgid "A pie needs some positive numbers."
+msgstr ""
+
+#: sw/apps/sheet/sheet.c:581
+msgid "Sum "
+msgstr ""
+
+#: sw/apps/sheet/sheet.c:581
+msgid "  Avg "
+msgstr ""
+
+#: sw/apps/sheet/sheet.c:581
+msgid "  Count "
+msgstr ""
+
+#: sw/apps/sheet/sheet.c:691
+msgctxt "chart"
+msgid "Bar"
+msgstr ""
+
+#: sw/apps/sheet/sheet.c:691
+msgctxt "chart"
+msgid "Stacked"
+msgstr ""
+
+#: sw/apps/sheet/sheet.c:692
+msgctxt "chart"
+msgid "Line"
+msgstr ""
+
+#: sw/apps/sheet/sheet.c:692
+msgctxt "chart"
+msgid "Pie"
+msgstr ""
+
+#: sw/apps/sheet/sheet.c:697
+msgid "Chart: "
+msgstr ""
+
+#: sw/apps/sheet/sheet.c:705
+msgid "  Esc: back"
+msgstr ""
+
+#: sw/apps/sheet/sheet.c:789
+msgid "Calculating..."
+msgstr ""
+
+#: sw/apps/sheet/sheet.c:957
+msgid "Export"
+msgstr ""
+
+#: sw/apps/sheet/sheet.c:957
+msgid ""
+"convert could not\n"
+"be started."
+msgstr ""
+
+#: sw/apps/sheet/sheet.c:958
+msgid ""
+"Could not write the\n"
+"copy to convert."
+msgstr ""
+
+#: sw/apps/sheet/sheet.c:971
+#: sw/apps/sheet/sheet.c:986
+msgid "Save failed"
+msgstr ""
+
+#: sw/apps/sheet/sheet.c:972
+msgid ""
+"Could not open the file\n"
+"for writing."
+msgstr ""
+
+#: sw/apps/sheet/sheet.c:987
+msgid ""
+"The file could not be\n"
+"written completely."
+msgstr ""
+
+#: sw/apps/sheet/sheet.c:1056
+#: sw/apps/sheet/sheet.c:1064
+msgid "Open failed"
+msgstr ""
+
+#: sw/apps/sheet/sheet.c:1057
+msgid ""
+"convert is not on\n"
+"this card."
+msgstr ""
+
+#: sw/apps/sheet/sheet.c:1065
+msgid ""
+"The file could not\n"
+"be opened."
+msgstr ""
+
+#: sw/apps/sheet/sheet.c:1136
+msgid "Unsaved changes"
+msgstr ""
+
+#: sw/apps/sheet/sheet.c:1137
+msgid ""
+"This sheet has unsaved\n"
+"changes. Save first?"
+msgstr ""
+
+#: sw/apps/sheet/sheet.c:1488
+#: sw/apps/sheet/sheet.c:1622
+#: sw/apps/sheet/sheet.c:1743
+msgid "Sheet full"
+msgstr ""
+
+#: sw/apps/sheet/sheet.c:1489
+msgid ""
+"No room for another cell.\n"
+"The change was not made."
+msgstr ""
+
+#: sw/apps/sheet/sheet.c:1622
+msgid ""
+"No room for more cells.\n"
+"Some were not pasted."
+msgstr ""
+
+#: sw/apps/sheet/sheet.c:1730
+msgid "Fill"
+msgstr ""
+
+#: sw/apps/sheet/sheet.c:1730
+msgid ""
+"Too much to fill\n"
+"at once."
+msgstr ""
+
+#: sw/apps/sheet/sheet.c:1743
+msgid ""
+"No room for more cells.\n"
+"Some were not filled."
+msgstr ""
+
+#: sw/apps/sheet/sheet.c:1764
+msgid "Insert"
+msgstr ""
+
+#: sw/apps/sheet/sheet.c:1764
+msgid "Delete"
+msgstr ""
+
+#: sw/apps/sheet/sheet.c:1765
+msgid ""
+"That would push cells\n"
+"past the edge of the sheet."
+msgstr ""
+
+#: sw/apps/sheet/sheet.c:1765
+msgid ""
+"No room: the sheet\n"
+"is full."
+msgstr ""
+
+#: sw/apps/sheet/sheet.c:1781
+#: sw/apps/sheet/sheet.c:1787
+#: sw/apps/sheet/sheet.c:1792
+msgid "Format"
+msgstr ""
+
+#: sw/apps/sheet/sheet.c:1782
+#, c-format
+msgid ""
+"G general  F2 fixed  ,2 1,000.00\n"
+"%1 percent  $2 money  (digit: places)"
+msgstr ""
+
+#: sw/apps/sheet/sheet.c:1787
+#, c-format
+msgid ""
+"Not a format: G, F2, ,2,\n"
+"%1 or $2 (any 0-8 places)."
+msgstr ""
+
+#: sw/apps/sheet/sheet.c:1792
+msgid ""
+"Too many formatted\n"
+"ranges: 64 at most."
+msgstr ""
+
+#: sw/apps/sheet/sheet.c:1809
+msgid "Width"
+msgstr ""
+
+#: sw/apps/sheet/sheet.c:1809
+msgid "Column width, in characters:"
+msgstr ""
+
+#: sw/apps/sheet/sheet.c:1844
+msgid "Chart"
+msgstr ""
+
+#: sw/apps/sheet/sheet.c:1844
+msgid ""
+"Select the table to chart\n"
+"(labels in the first row\n"
+"and column), then F5."
+msgstr ""
+
+#: sw/apps/sheet/sheet.c:1881
+#: sw/apps/sheet/sheet.c:1888
+msgid "Sort"
+msgstr ""
+
+#: sw/apps/sheet/sheet.c:1881
+msgid ""
+"Select the rows to sort\n"
+"(all their columns), then\n"
+"put the cursor in the key."
+msgstr ""
+
+#: sw/apps/sheet/sheet.c:1888
+msgid ""
+"Too large to sort here:\n"
+"sort fewer rows at a time."
+msgstr ""
+
+#: sw/apps/sheet/sheet.c:1899
+#: sw/apps/sheet/sheet.c:1906
+msgid "Go to"
+msgstr ""
+
+#: sw/apps/sheet/sheet.c:1899
+msgid "Cell (like B12):"
+msgstr ""
+
+#: sw/apps/sheet/sheet.c:1906
+msgid "Not a cell: A1 to Z999."
+msgstr ""
+
+#: sw/apps/sheet/sheet.c:1958
+#: sw/apps/sheet/sheet.c:1989
+msgid "Find"
+msgstr ""
+
+#: sw/apps/sheet/sheet.c:1958
+msgid "Not found."
+msgstr ""
+
+#: sw/apps/sheet/sheet.c:1964
+msgid ""
+"A spreadsheet: numbers, text and formulas in a grid.\n"
+"\n"
+"Type into the cell; =A1*2 is a formula, =SUM(B2:B9) a range. Enter moves down, Tab right, Shift+arrows select.\n"
+"\n"
+"/, F4\tCommands: insert, delete, number format, width, sort, extend, goto, find, chart\n"
+"F2\tEdit the cell\n"
+"Ctrl+Z/Y\tUndo, redo\n"
+"Ctrl+C/X/V\tCopy, cut, paste\n"
+"Ctrl+D/R\tFill down, right\n"
+"Ctrl+1\tNumber format\n"
+"Ctrl+G\tGo to a cell\n"
+"F3, Ctrl+F\tFind (again: the next match)\n"
+"F5\tChart the selection\n"
+"Alt+Left\tNarrow the column (Alt+Right widens)\n"
+"Ctrl+N/O/S\tNew, open, save\n"
+"\n"
+"Functions: SUM AVERAGE MIN MAX COUNT ABS INT ROUND MOD SQRT POWER IF AND OR NOT PMT PV FV NPV VLOOKUP INDEX.\n"
+"\n"
+"Select a range to see its sum, average and count."
+msgstr ""
+
+#: sw/apps/sheet/sheet.c:1983
+msgid "Sheet help"
+msgstr ""
+
+#: sw/apps/sheet/sheet.c:1989
+msgid "Find (F3 finds the next):"
+msgstr ""
+
+#: sw/apps/sheet/sheet.c:2022
+msgctxt "menu"
+msgid "Insert"
+msgstr ""
+
+#: sw/apps/sheet/sheet.c:2022
+msgctxt "menu"
+msgid "Delete"
+msgstr ""
+
+#: sw/apps/sheet/sheet.c:2023
+msgctxt "menu"
+msgid "Number"
+msgstr ""
+
+#: sw/apps/sheet/sheet.c:2023
+msgctxt "menu"
+msgid "Width"
+msgstr ""
+
+#: sw/apps/sheet/sheet.c:2024
+msgctxt "menu"
+msgid "Sort"
+msgstr ""
+
+#: sw/apps/sheet/sheet.c:2024
+msgctxt "menu"
+msgid "Extend"
+msgstr ""
+
+#: sw/apps/sheet/sheet.c:2025
+msgctxt "menu"
+msgid "Undo"
+msgstr ""
+
+#: sw/apps/sheet/sheet.c:2025
+msgctxt "menu"
+msgid "Redo"
+msgstr ""
+
+#: sw/apps/sheet/sheet.c:2026
+msgctxt "menu"
+msgid "Goto"
+msgstr ""
+
+#: sw/apps/sheet/sheet.c:2026
+msgctxt "menu"
+msgid "Find"
+msgstr ""
+
+#: sw/apps/sheet/sheet.c:2027
+msgctxt "menu"
+msgid "Chart"
+msgstr ""
+
+#: sw/apps/sheet/sheet.c:2027
+msgctxt "menu"
+msgid "Help"
+msgstr ""
+
+#: sw/apps/sheet/sheet.c:2029
+#: sw/apps/sheet/sheet.c:2030
+msgctxt "menu"
+msgid "Rows"
+msgstr ""
+
+#: sw/apps/sheet/sheet.c:2029
+#: sw/apps/sheet/sheet.c:2030
+msgctxt "menu"
+msgid "Columns"
+msgstr ""
+
+#: sw/apps/sheet/sheet.c:2031
+msgctxt "menu"
+msgid "Ascending"
+msgstr ""
+
+#: sw/apps/sheet/sheet.c:2031
+msgctxt "menu"
+msgid "Descending"
+msgstr ""
+
+#: sw/apps/sheet/sheet.c:2032
+msgctxt "menu"
+msgid "Down"
+msgstr ""
+
+#: sw/apps/sheet/sheet.c:2032
+msgctxt "menu"
+msgid "Right"
+msgstr ""
+
+#: sw/apps/sheet/sheet.c:2048
+msgid "Insert:"
+msgstr ""
+
+#: sw/apps/sheet/sheet.c:2048
+msgid "Delete:"
+msgstr ""
+
+#: sw/apps/sheet/sheet.c:2049
+msgid "Sort:"
+msgstr ""
+
+#: sw/apps/sheet/sheet.c:2049
+msgid "Extend:"
+msgstr ""

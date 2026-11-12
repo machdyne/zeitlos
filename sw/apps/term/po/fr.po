@@ -1,0 +1,100 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: Zeitlos term\n"
+"Language: fr\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=2; plural=(n > 1);\n"
+
+#, c-format
+msgid "%s -- not connected"
+msgstr "%s -- non connecté"
+
+msgid "ready"
+msgstr "prêt"
+
+msgid "not running"
+msgstr "arrêté"
+
+msgid "not installed"
+msgstr "non installé"
+
+msgid "Scheme and system commands"
+msgstr "Scheme et commandes système"
+
+msgid "Unix-style shell, zcc and vi"
+msgstr "Shell façon Unix, zcc et vi"
+
+msgid "Boot log and kernel shell"
+msgstr "Journal de démarrage et shell noyau"
+
+msgid "port, serial, telnet or ssh"
+msgstr "port, serial, telnet ou ssh"
+
+msgid "Tab chooses, Enter connects, or type a target"
+msgstr "Tab choisit, Entrée connecte, ou tapez une cible"
+
+msgid "F12 disconnects  Esc hides  Shift+PgUp scrolls"
+msgstr "F12 déconnecte  Échap masque  Maj+PgPréc défile"
+
+msgid "auto-connect cancelled"
+msgstr "connexion automatique annulée"
+
+#, c-format
+msgid "%.40s is not running"
+msgstr "%.40s n'est pas lancé"
+
+#, c-format
+msgid "connecting to %.45s ...  (Esc cancels)"
+msgstr "connexion à %.45s ...  (Échap annule)"
+
+#, c-format
+msgid "%.30s refused: %.40s"
+msgstr "%.30s a refusé : %.40s"
+
+#, c-format
+msgid "%.55s refused the connection"
+msgstr "%.55s a refusé la connexion"
+
+#, c-format
+msgid "cancelled connecting to %.50s"
+msgstr "connexion à %.50s annulée"
+
+#, c-format
+msgid "no answer from %.50s"
+msgstr "pas de réponse de %.50s"
+
+#, c-format
+msgid "could not start %s -- %s"
+msgstr "impossible de lancer %s -- %s"
+
+#, c-format
+msgid "starting %s"
+msgstr "lancement de %s"
+
+#, c-format
+msgid "starting %s...  (Esc cancels)"
+msgstr "lancement de %s...  (Échap annule)"
+
+#, c-format
+msgid "auto-connect: %.40s  (Esc cancels)"
+msgstr "connexion auto : %.40s  (Échap annule)"
+
+#, c-format
+msgid "%s: %.24s did not appear -- choose below"
+msgstr "%s : %.24s n'est pas apparu -- choisissez ci-dessous"
+
+msgid "Blank screen"
+msgstr "Écran vide"
+
+msgid "Nothing selected"
+msgstr "Rien de sélectionné"
+
+msgid "disconnected (F12)"
+msgstr "déconnecté (F12)"
+
+msgid "choose a shell, or open a connection"
+msgstr "choisissez un shell ou ouvrez une connexion"
+
+msgid "connection closed by the other end"
+msgstr "connexion fermée par l'autre côté"

@@ -1,0 +1,281 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: Zeitlos common\n"
+"Language: nl\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+
+msgid " (reading)"
+msgstr " (lezen)"
+
+msgid " (partial list)"
+msgstr " (deel van de lijst)"
+
+msgid "OK"
+msgstr "OK"
+
+msgid "Cancel"
+msgstr "Annuleren"
+
+msgid "Yes"
+msgstr "Ja"
+
+msgid "No"
+msgstr "Nee"
+
+msgid "Open"
+msgstr "Openen"
+
+msgid "Save"
+msgstr "Opslaan"
+
+msgid "Open a file"
+msgstr "Een bestand openen"
+
+msgid "Choose"
+msgstr "Kiezen"
+
+msgid "Choose a file or folder"
+msgstr "Een bestand of map kiezen"
+
+msgid "Save As"
+msgstr "Opslaan als"
+
+msgid "Read docs"
+msgstr "Docs lezen"
+
+msgid "Close"
+msgstr "Sluiten"
+
+msgid "Help"
+msgstr "Hulp"
+
+msgid "Print to"
+msgstr "Afdrukken naar"
+
+msgid "Pages"
+msgstr "Pagina's"
+
+msgid "Copies"
+msgstr "Exemplaren"
+
+msgid "Paper"
+msgstr "Papier"
+
+msgid "Tray"
+msgstr "Lade"
+
+msgid "Per sheet"
+msgstr "Per vel"
+
+msgid "Quality"
+msgstr "Kwaliteit"
+
+msgid "US Letter"
+msgstr "US Letter"
+
+msgid "Legal"
+msgstr "US Legal"
+
+msgid "4 x 6 in"
+msgstr "4 x 6 inch"
+
+msgid "5 x 7 in"
+msgstr "5 x 7 inch"
+
+msgid "3 x 5 in"
+msgstr "3 x 5 inch"
+
+msgid "Printer's choice"
+msgstr "Keuze van de printer"
+
+msgctxt "tray"
+msgid "Main"
+msgstr "Hoofd"
+
+msgctxt "tray"
+msgid "Rear"
+msgstr "Achter"
+
+msgctxt "tray"
+msgid "Manual"
+msgstr "Handmatig"
+
+msgctxt "quality"
+msgid "Normal"
+msgstr "Normaal"
+
+msgctxt "quality"
+msgid "Draft"
+msgstr "Concept"
+
+msgctxt "quality"
+msgid "High"
+msgstr "Hoog"
+
+msgid "Print"
+msgstr "Afdrukken"
+
+msgid "A PDF file"
+msgstr "Een PDF-bestand"
+
+msgid "A PostScript file"
+msgstr "Een PostScript-bestand"
+
+msgid "Printer (not set up)"
+msgstr "Printer (niet ingesteld)"
+
+msgid "Printer "
+msgstr "Printer "
+
+msgid "All"
+msgstr "Alle"
+
+msgid "This page ("
+msgstr "Deze pagina ("
+
+msgid "The selection"
+msgstr "De selectie"
+
+msgid "Default ("
+msgstr "Standaard ("
+
+msgid "(the printer's)"
+msgstr "(van de printer)"
+
+msgid " page"
+msgstr " pagina"
+
+msgid " pages"
+msgstr " pagina's"
+
+msgid "Print to a file"
+msgstr "Afdrukken naar een bestand"
+
+msgid "That file exists. Replace it?"
+msgstr "Dat bestand bestaat al. Vervangen?"
+
+msgctxt "short weekday"
+msgid "Sun"
+msgstr "zo"
+
+msgctxt "short weekday"
+msgid "Mon"
+msgstr "ma"
+
+msgctxt "short weekday"
+msgid "Tue"
+msgstr "di"
+
+msgctxt "short weekday"
+msgid "Wed"
+msgstr "wo"
+
+msgctxt "short weekday"
+msgid "Thu"
+msgstr "do"
+
+msgctxt "short weekday"
+msgid "Fri"
+msgstr "vr"
+
+msgctxt "short weekday"
+msgid "Sat"
+msgstr "za"
+
+msgctxt "short month"
+msgid "Jan"
+msgstr "jan"
+
+msgctxt "short month"
+msgid "Feb"
+msgstr "feb"
+
+msgctxt "short month"
+msgid "Mar"
+msgstr "mrt"
+
+msgctxt "short month"
+msgid "Apr"
+msgstr "apr"
+
+msgctxt "short month"
+msgid "May"
+msgstr "mei"
+
+msgctxt "short month"
+msgid "Jun"
+msgstr "jun"
+
+msgctxt "short month"
+msgid "Jul"
+msgstr "jul"
+
+msgctxt "short month"
+msgid "Aug"
+msgstr "aug"
+
+msgctxt "short month"
+msgid "Sep"
+msgstr "sep"
+
+msgctxt "short month"
+msgid "Oct"
+msgstr "okt"
+
+msgctxt "short month"
+msgid "Nov"
+msgstr "nov"
+
+msgctxt "short month"
+msgid "Dec"
+msgstr "dec"
+
+msgctxt "month"
+msgid "January"
+msgstr "januari"
+
+msgctxt "month"
+msgid "February"
+msgstr "februari"
+
+msgctxt "month"
+msgid "March"
+msgstr "maart"
+
+msgctxt "month"
+msgid "April"
+msgstr "april"
+
+msgctxt "month"
+msgid "May"
+msgstr "mei"
+
+msgctxt "month"
+msgid "June"
+msgstr "juni"
+
+msgctxt "month"
+msgid "July"
+msgstr "juli"
+
+msgctxt "month"
+msgid "August"
+msgstr "augustus"
+
+msgctxt "month"
+msgid "September"
+msgstr "september"
+
+msgctxt "month"
+msgid "October"
+msgstr "oktober"
+
+msgctxt "month"
+msgid "November"
+msgstr "november"
+
+msgctxt "month"
+msgid "December"
+msgstr "december"

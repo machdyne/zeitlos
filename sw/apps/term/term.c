@@ -52,6 +52,7 @@
 #include <string.h>
 
 #include "../../common/zeitlos.h"
+#include "../../common/zi18n.h"
 #include "../../common/zsoc.h"		// Z_TICK_HZ
 #include "../../common/zwm.h"
 #include "../../common/zwin.h"
@@ -1295,6 +1296,17 @@ static void panel_hide(void) {
 	render_all = true;
 }
 
+// One row of the start panel: the name at its column, what it is at the
+// next, its state right-aligned at the end of the line the old
+// "%-7s %-29s %13s" made.
+static void panel_row(int x, int y, const char *name, const char *what, const char *state) {
+	z_win_draw_text2(&win, x + PANEL_TEXT_X, y, name, 1, 0, &TERM_FONT);
+	z_win_draw_text2(&win, x + PANEL_TEXT_X + 8 * cell_w, y, what, 1, 0, &TERM_FONT);
+	if (state)
+		z_win_draw_text2(&win, x + PANEL_TEXT_X + (51 - z_text_cols(state)) * cell_w, y,
+			state, 1, 0, &TERM_FONT);
+}
+
 static void panel_draw(void) {
 
 	if (!panel_visible) return;
@@ -1315,29 +1327,24 @@ static void panel_draw(void) {
 	z_win_hw_box(&win, clip.x0 + x + 1, clip.y0 + y + 1,
 		clip.x0 + x + w - 2, clip.y0 + y + h - 2, 1);
 
-	snprintf(line, sizeof(line), "%s -- not connected", instance_name);
-	z_win_draw_text2(&win, x + (w - (int)strlen(line) * cell_w) / 2,
+	snprintf(line, sizeof(line), ZS_("%s -- not connected"), instance_name);
+	z_win_draw_text2(&win, x + (w - z_text_cols(line) * cell_w) / 2,
 		y + PANEL_TITLE_Y, line, 1, 0, &TERM_FONT);
 
 	z_widget_draw_all(&panel_set, true);
 
-	snprintf(line, sizeof(line), "%-7s %-29s %13s", "REPL",
-		"Scheme and system commands",
-		repl_up ? "ready" : repl_avail ? "not running" : "not installed");
-	z_win_draw_text2(&win, x + PANEL_TEXT_X, y + PANEL_DESC_Y, line, 1, 0, &TERM_FONT);
-
-	snprintf(line, sizeof(line), "%-7s %-29s %13s", "POSIX",
-		"Unix-style shell, zcc and vi",
-		posix_up ? "ready" : posix_avail ? "not running" : "not installed");
-	z_win_draw_text2(&win, x + PANEL_TEXT_X, y + PANEL_DESC_Y + 10, line, 1, 0, &TERM_FONT);
-
-	snprintf(line, sizeof(line), "%-7s %-29s %13s", "CONSOLE",
-		"Boot log and kernel shell", console_up ? "ready" : "not running");
-	z_win_draw_text2(&win, x + PANEL_TEXT_X, y + PANEL_DESC_Y + 20, line, 1, 0, &TERM_FONT);
-
-	snprintf(line, sizeof(line), "%-7s %s", "OPEN",
-		"port, serial, telnet or ssh");
-	z_win_draw_text2(&win, x + PANEL_TEXT_X, y + PANEL_DESC_Y + 30, line, 1, 0, &TERM_FONT);
+	// Three columns -- the name, what it is, whether it is up -- each
+	// drawn at its own place, so a translation of any length or script
+	// keeps them lined up (docs/i18n.md, "Layout"). The names are
+	// commands, and stay as they are.
+	const char *ready = ZS_("ready"), *down = ZS_("not running"), *absent = ZS_("not installed");
+	panel_row(x, y + PANEL_DESC_Y, "REPL", ZS_("Scheme and system commands"),
+		repl_up ? ready : repl_avail ? down : absent);
+	panel_row(x, y + PANEL_DESC_Y + 10, "POSIX", ZS_("Unix-style shell, zcc and vi"),
+		posix_up ? ready : posix_avail ? down : absent);
+	panel_row(x, y + PANEL_DESC_Y + 20, "CONSOLE", ZS_("Boot log and kernel shell"),
+		console_up ? ready : down);
+	panel_row(x, y + PANEL_DESC_Y + 30, "OPEN", ZS_("port, serial, telnet or ssh"), NULL);
 
 	// Cut to the panel's width. A status is anything a failed connect
 	// or auto-connect has to say, and a long one ran on past the
@@ -1348,15 +1355,16 @@ static void panel_draw(void) {
 		int fit = (w - 2 * PANEL_TEXT_X) / cell_w;
 		if (fit > (int)sizeof(line) - 1) fit = (int)sizeof(line) - 1;
 		if (fit < 0) fit = 0;
-		snprintf(line, sizeof(line), "%.*s", fit, panel_status);
+		snprintf(line, sizeof(line), "%.*s",
+			(int)z_utf8_fit_cols(panel_status, strlen(panel_status), fit), panel_status);
 		z_win_draw_text2(&win, x + PANEL_TEXT_X, y + PANEL_STATUS_Y,
 			line, 1, 0, &TERM_FONT);
 	}
 
 	z_win_draw_text2(&win, x + PANEL_TEXT_X, y + PANEL_HINT_Y,
-		"Tab chooses, Enter connects, or type a target", 1, 0, &TERM_FONT);
+		ZS_("Tab chooses, Enter connects, or type a target"), 1, 0, &TERM_FONT);
 	z_win_draw_text2(&win, x + PANEL_TEXT_X, y + PANEL_HINT_Y + 10,
-		"F12 disconnects  Esc hides  Shift+PgUp scrolls", 1, 0, &TERM_FONT);
+		ZS_("F12 disconnects  Esc hides  Shift+PgUp scrolls"), 1, 0, &TERM_FONT);
 
 	panel_dirty = false;
 
@@ -1429,7 +1437,7 @@ static void panel_key(uint32_t keysym, uint8_t mods) {
 		// While auto-connect is waiting, Esc stops the wait -- the
 		// panel says it is waiting, so that is what Esc is for. The
 		// next Esc hides the panel as usual.
-		if (auto_pending) auto_cancel("auto-connect cancelled");
+		if (auto_pending) auto_cancel(ZS_("auto-connect cancelled"));
 		else panel_hide();
 		break;
 
@@ -1568,7 +1576,7 @@ static bool connect_port(const char *name, z_obj_t arg,
 
 	if (!z_pid_lookup(name, &target_pid)) {
 		printf("term: '%s' not found\n", name);
-		snprintf(status, sizeof(status), "%.40s is not running", name);
+		snprintf(status, sizeof(status), ZS_("%.40s is not running"), name);
 		bar_dismiss();
 		panel_show(status);
 		return false;
@@ -1595,7 +1603,7 @@ static bool connect_port(const char *name, z_obj_t arg,
 		if (!shown && (z_uptime_ticks() - start) >= TERM_CONNECT_QUIET_TICKS) {
 			char msg[VT_COLS + 1];
 			if (!bar_active) bar_open();
-			snprintf(msg, sizeof(msg), "connecting to %.45s ...  (Esc cancels)",
+			snprintf(msg, sizeof(msg), ZS_("connecting to %.45s ...  (Esc cancels)"),
 				label);
 			bar_set_msg(msg);
 			frame();
@@ -1617,10 +1625,10 @@ static bool connect_port(const char *name, z_obj_t arg,
 
 		if (msg.subject == Z_PORT_REFUSED && msg.tag == 0) {
 			if (msg.obj.type == Z_STR && msg.obj.val.str)
-				snprintf(status, sizeof(status), "%.30s refused: %.40s",
+				snprintf(status, sizeof(status), ZS_("%.30s refused: %.40s"),
 					label, msg.obj.val.str);
 			else
-				snprintf(status, sizeof(status), "%.55s refused the connection",
+				snprintf(status, sizeof(status), ZS_("%.55s refused the connection"),
 					label);
 			break;
 		}
@@ -1661,9 +1669,9 @@ static bool connect_port(const char *name, z_obj_t arg,
 	}
 
 	if (connect_cancel)
-		snprintf(status, sizeof(status), "cancelled connecting to %.50s", label);
+		snprintf(status, sizeof(status), ZS_("cancelled connecting to %.50s"), label);
 	else if (!status[0])
-		snprintf(status, sizeof(status), "no answer from %.50s", label);
+		snprintf(status, sizeof(status), ZS_("no answer from %.50s"), label);
 
 	printf("term: %s\n", status);
 
@@ -1771,7 +1779,7 @@ static void start_shell(const char *name) {
 		// posix not on the card (repl is in flash), or not enough
 		// memory -- posix wants about 4MB and will not fit a 1MB or 2MB
 		// board, and repl about 380KB.
-		snprintf(status, sizeof(status), "could not start %s -- %s", prog,
+		snprintf(status, sizeof(status), ZS_("could not start %s -- %s"), prog,
 			strcmp(prog, "posix") ? "not enough memory" : "no sdcard, or not enough memory");
 		printf("term: could not start %s\n", prog);
 		panel_show(status);
@@ -1780,12 +1788,12 @@ static void start_shell(const char *name) {
 
 	snprintf(auto_text, sizeof(auto_text), "port %s", name);
 	snprintf(auto_wait_for, sizeof(auto_wait_for), "%s", name);
-	snprintf(auto_label, sizeof(auto_label), "starting %s", prog);
+	snprintf(auto_label, sizeof(auto_label), ZS_("starting %s"), prog);
 	auto_pending = true;
 	auto_deadline = z_uptime_ticks() + TERM_AUTO_WAIT_TICKS;
 	auto_next_probe = z_uptime_ticks();	// due now (compared by difference)
 
-	snprintf(status, sizeof(status), "starting %s...  (Esc cancels)", prog);
+	snprintf(status, sizeof(status), ZS_("starting %s...  (Esc cancels)"), prog);
 	panel_show(status);
 
 }
@@ -1833,7 +1841,7 @@ static void auto_begin(void) {
 			printf("term: auto_connect: could not start %s\n", prog);
 	}
 
-	snprintf(status, sizeof(status), "auto-connect: %.40s  (Esc cancels)",
+	snprintf(status, sizeof(status), ZS_("auto-connect: %.40s  (Esc cancels)"),
 		auto_text);
 	panel_show(status);
 
@@ -1857,7 +1865,7 @@ static void auto_poll(void) {
 		if ((int32_t)(now - auto_deadline) >= 0) {
 			auto_pending = false;
 			snprintf(status, sizeof(status),
-				"%s: %.24s did not appear -- choose below", auto_label, auto_wait_for);
+				ZS_("%s: %.24s did not appear -- choose below"), auto_label, auto_wait_for);
 			panel_show(status);
 		}
 		return;
@@ -2022,7 +2030,7 @@ static void say_toggle(void) {
 	printf("term: Super+A: reading the screen%s\n", view_off ? " (scrollback)" : "");
 	if (!z_sayall_start(&reader, 0)) {
 		printf("term: Super+A: nothing to read, or speech is off\n");
-		z_speak_static("Blank screen", Z_TTS_F_INTERRUPT);
+		z_speak(Z_("Blank screen"), Z_TTS_F_INTERRUPT);
 	}
 }
 
@@ -2030,7 +2038,7 @@ static void say_selection(void) {
 	z_sayall_stop(&reader);
 	int n = sel_gather();
 	if (!n) {
-		z_speak_static("Nothing selected", Z_TTS_F_INTERRUPT);
+		z_speak(Z_("Nothing selected"), Z_TTS_F_INTERRUPT);
 		return;
 	}
 	printf("term: Super+C: reading the selection, %d characters\n", n);
@@ -2305,7 +2313,7 @@ static void handle_key_event(uint32_t packed) {
 	// zkbd only folds Ctrl+letter into control codes; extending that
 	// to punctuation would be a keyboard-layer change for every app.)
 	if (keysym == Z_KEY_APP_HOME) {
-		if (port.connected) term_disconnect("disconnected (F12)");
+		if (port.connected) term_disconnect(ZS_("disconnected (F12)"));
 		else panel_show(NULL);
 		return;
 	}
@@ -2438,13 +2446,16 @@ static void term_start(void) {
 	z_scrollbar_set_geom(&sbar, text_w, 0, text_h);
 
 	panel_layout();
-	panel_show("choose a shell, or open a connection");
+	panel_show(ZS_("choose a shell, or open a connection"));
 
 	auto_begin();
 
 }
 
 int main(void) {
+
+	// The language (docs/i18n.md): read once, before any string.
+	z_tr_init(Z_APP_NAME);
 
 	term_setup();
 
@@ -2543,7 +2554,7 @@ int main(void) {
 					msg.from == port.peer_pid) {
 					port.connected = false;
 					printf("term: port closed by peer\n");
-					term_disconnect("connection closed by the other end");
+					term_disconnect(ZS_("connection closed by the other end"));
 				}
 			} else if (msg.subject == Z_TERM_SET_PORT) {
 				// Fire-and-forget (zterm.h). A bare Z_STR is a provider

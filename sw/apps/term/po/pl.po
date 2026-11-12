@@ -1,0 +1,100 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: Zeitlos term\n"
+"Language: pl\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=3; plural=(n==1 ? 0 : n%10>=2 && n%10<=4 && (n%100<10 || n%100>=20) ? 1 : 2);\n"
+
+#, c-format
+msgid "%s -- not connected"
+msgstr "%s -- brak połączenia"
+
+msgid "ready"
+msgstr "gotowy"
+
+msgid "not running"
+msgstr "nie działa"
+
+msgid "not installed"
+msgstr "nie zainstalowano"
+
+msgid "Scheme and system commands"
+msgstr "Scheme i polecenia systemu"
+
+msgid "Unix-style shell, zcc and vi"
+msgstr "Powłoka uniksowa, zcc i vi"
+
+msgid "Boot log and kernel shell"
+msgstr "Dziennik startu i powłoka jądra"
+
+msgid "port, serial, telnet or ssh"
+msgstr "port, serial, telnet lub ssh"
+
+msgid "Tab chooses, Enter connects, or type a target"
+msgstr "Tab wybiera, Enter łączy, albo wpisz cel"
+
+msgid "F12 disconnects  Esc hides  Shift+PgUp scrolls"
+msgstr "F12 rozłącza  Esc ukrywa  Shift+PgUp przewija"
+
+msgid "auto-connect cancelled"
+msgstr "automatyczne łączenie anulowane"
+
+#, c-format
+msgid "%.40s is not running"
+msgstr "%.40s nie działa"
+
+#, c-format
+msgid "connecting to %.45s ...  (Esc cancels)"
+msgstr "łączenie z %.45s ...  (Esc anuluje)"
+
+#, c-format
+msgid "%.30s refused: %.40s"
+msgstr "%.30s odmówił: %.40s"
+
+#, c-format
+msgid "%.55s refused the connection"
+msgstr "%.55s odrzucił połączenie"
+
+#, c-format
+msgid "cancelled connecting to %.50s"
+msgstr "anulowano łączenie z %.50s"
+
+#, c-format
+msgid "no answer from %.50s"
+msgstr "brak odpowiedzi od %.50s"
+
+#, c-format
+msgid "could not start %s -- %s"
+msgstr "nie można uruchomić %s -- %s"
+
+#, c-format
+msgid "starting %s"
+msgstr "uruchamianie %s"
+
+#, c-format
+msgid "starting %s...  (Esc cancels)"
+msgstr "uruchamianie %s...  (Esc anuluje)"
+
+#, c-format
+msgid "auto-connect: %.40s  (Esc cancels)"
+msgstr "łączenie automatyczne: %.40s  (Esc anuluje)"
+
+#, c-format
+msgid "%s: %.24s did not appear -- choose below"
+msgstr "%s: %.24s się nie pojawił -- wybierz poniżej"
+
+msgid "Blank screen"
+msgstr "Pusty ekran"
+
+msgid "Nothing selected"
+msgstr "Nic nie zaznaczono"
+
+msgid "disconnected (F12)"
+msgstr "rozłączono (F12)"
+
+msgid "choose a shell, or open a connection"
+msgstr "wybierz powłokę lub otwórz połączenie"
+
+msgid "connection closed by the other end"
+msgstr "druga strona zamknęła połączenie"

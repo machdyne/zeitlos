@@ -1,0 +1,100 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: Zeitlos term\n"
+"Language: uk\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=3; plural=(n%10==1 && n%100!=11 ? 0 : n%10>=2 && n%10<=4 && (n%100<10 || n%100>=20) ? 1 : 2);\n"
+
+#, c-format
+msgid "%s -- not connected"
+msgstr "%s -- немає з'єднання"
+
+msgid "ready"
+msgstr "готово"
+
+msgid "not running"
+msgstr "не запущено"
+
+msgid "not installed"
+msgstr "не встановлено"
+
+msgid "Scheme and system commands"
+msgstr "Scheme і системні команди"
+
+msgid "Unix-style shell, zcc and vi"
+msgstr "Оболонка в стилі Unix, zcc і vi"
+
+msgid "Boot log and kernel shell"
+msgstr "Журнал завантаження й оболонка ядра"
+
+msgid "port, serial, telnet or ssh"
+msgstr "port, serial, telnet або ssh"
+
+msgid "Tab chooses, Enter connects, or type a target"
+msgstr "Tab вибирає, Enter під'єднує, або введіть ціль"
+
+msgid "F12 disconnects  Esc hides  Shift+PgUp scrolls"
+msgstr "F12 від'єднує  Esc ховає  Shift+PgUp гортає"
+
+msgid "auto-connect cancelled"
+msgstr "автоз'єднання скасовано"
+
+#, c-format
+msgid "%.40s is not running"
+msgstr "%.40s не запущено"
+
+#, c-format
+msgid "connecting to %.45s ...  (Esc cancels)"
+msgstr "з'єднання з %.45s ...  (Esc скасує)"
+
+#, c-format
+msgid "%.30s refused: %.40s"
+msgstr "%.30s відмовив: %.40s"
+
+#, c-format
+msgid "%.55s refused the connection"
+msgstr "%.55s відхилив з'єднання"
+
+#, c-format
+msgid "cancelled connecting to %.50s"
+msgstr "з'єднання з %.50s скасовано"
+
+#, c-format
+msgid "no answer from %.50s"
+msgstr "немає відповіді від %.50s"
+
+#, c-format
+msgid "could not start %s -- %s"
+msgstr "не вдалося запустити %s -- %s"
+
+#, c-format
+msgid "starting %s"
+msgstr "запуск %s"
+
+#, c-format
+msgid "starting %s...  (Esc cancels)"
+msgstr "запуск %s...  (Esc скасує)"
+
+#, c-format
+msgid "auto-connect: %.40s  (Esc cancels)"
+msgstr "автоз'єднання: %.40s  (Esc скасує)"
+
+#, c-format
+msgid "%s: %.24s did not appear -- choose below"
+msgstr "%s: %.24s не з'явився -- виберіть нижче"
+
+msgid "Blank screen"
+msgstr "Порожній екран"
+
+msgid "Nothing selected"
+msgstr "Нічого не виділено"
+
+msgid "disconnected (F12)"
+msgstr "від'єднано (F12)"
+
+msgid "choose a shell, or open a connection"
+msgstr "виберіть оболонку або відкрийте з'єднання"
+
+msgid "connection closed by the other end"
+msgstr "з'єднання закрила інша сторона"

@@ -1,0 +1,100 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: Zeitlos term\n"
+"Language: ru\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=3; plural=(n%10==1 && n%100!=11 ? 0 : n%10>=2 && n%10<=4 && (n%100<10 || n%100>=20) ? 1 : 2);\n"
+
+#, c-format
+msgid "%s -- not connected"
+msgstr "%s -- нет соединения"
+
+msgid "ready"
+msgstr "готов"
+
+msgid "not running"
+msgstr "не запущен"
+
+msgid "not installed"
+msgstr "не установлен"
+
+msgid "Scheme and system commands"
+msgstr "Scheme и системные команды"
+
+msgid "Unix-style shell, zcc and vi"
+msgstr "Оболочка в духе Unix, zcc и vi"
+
+msgid "Boot log and kernel shell"
+msgstr "Журнал загрузки и оболочка ядра"
+
+msgid "port, serial, telnet or ssh"
+msgstr "port, serial, telnet или ssh"
+
+msgid "Tab chooses, Enter connects, or type a target"
+msgstr "Tab выбирает, Enter подключает, или введите цель"
+
+msgid "F12 disconnects  Esc hides  Shift+PgUp scrolls"
+msgstr "F12 отключает  Esc прячет  Shift+PgUp листает"
+
+msgid "auto-connect cancelled"
+msgstr "автоподключение отменено"
+
+#, c-format
+msgid "%.40s is not running"
+msgstr "%.40s не запущен"
+
+#, c-format
+msgid "connecting to %.45s ...  (Esc cancels)"
+msgstr "подключение к %.45s ...  (Esc отменит)"
+
+#, c-format
+msgid "%.30s refused: %.40s"
+msgstr "%.30s отказал: %.40s"
+
+#, c-format
+msgid "%.55s refused the connection"
+msgstr "%.55s отклонил соединение"
+
+#, c-format
+msgid "cancelled connecting to %.50s"
+msgstr "подключение к %.50s отменено"
+
+#, c-format
+msgid "no answer from %.50s"
+msgstr "нет ответа от %.50s"
+
+#, c-format
+msgid "could not start %s -- %s"
+msgstr "не удалось запустить %s -- %s"
+
+#, c-format
+msgid "starting %s"
+msgstr "запуск %s"
+
+#, c-format
+msgid "starting %s...  (Esc cancels)"
+msgstr "запуск %s...  (Esc отменит)"
+
+#, c-format
+msgid "auto-connect: %.40s  (Esc cancels)"
+msgstr "автоподключение: %.40s  (Esc отменит)"
+
+#, c-format
+msgid "%s: %.24s did not appear -- choose below"
+msgstr "%s: %.24s не появился -- выберите ниже"
+
+msgid "Blank screen"
+msgstr "Пустой экран"
+
+msgid "Nothing selected"
+msgstr "Ничего не выделено"
+
+msgid "disconnected (F12)"
+msgstr "отключено (F12)"
+
+msgid "choose a shell, or open a connection"
+msgstr "выберите оболочку или откройте соединение"
+
+msgid "connection closed by the other end"
+msgstr "соединение закрыто другой стороной"

@@ -1,0 +1,115 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: Zeitlos ask\n"
+"Language: cs\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=3; plural=(n==1 ? 0 : n>=2 && n<=4 ? 1 : 2);\n"
+
+msgid "No passage here answers"
+msgstr "Žádná pasáž zde neodpovídá"
+
+msgid "that."
+msgstr "na to."
+
+msgid "could not start read"
+msgstr "read nelze spustit"
+
+#, c-format
+msgid "%u passage, "
+msgid_plural "%u passages, "
+msgstr[0] "%u pasáž, "
+msgstr[1] "%u pasáže, "
+msgstr[2] "%u pasáží, "
+
+#, c-format
+msgid "%u pack"
+msgid_plural "%u packs"
+msgstr[0] "%u balíček"
+msgstr[1] "%u balíčky"
+msgstr[2] "%u balíčků"
+
+msgid ", ranking weaker"
+msgstr ", slabší řazení"
+
+msgid "  ^U clears"
+msgstr "  ^U maže"
+
+msgid "searching...  Esc cancels"
+msgstr "hledání...  Esc zruší"
+
+#, c-format
+msgid "searching %u%%  Esc cancels"
+msgstr "hledání %u%%  Esc zruší"
+
+msgid "Loading..., then search"
+msgstr "Načítání..., pak hledání"
+
+msgid "Loading...  Esc stops"
+msgstr "Načítání...  Esc zastaví"
+
+#, c-format
+msgid "Loading %s %u%%, then search"
+msgstr "Načítání: %s %u%%, pak hledání"
+
+#, c-format
+msgid "Loading %s %u%%  Esc stops"
+msgstr "Načítání: %s %u%%  Esc zastaví"
+
+msgid "no packs loaded -- nothing to search"
+msgstr "žádné balíčky -- není v čem hledat"
+
+msgid "path too long to open"
+msgstr "cesta je na otevření příliš dlouhá"
+
+msgid "loading stopped -- no packs loaded"
+msgstr "načítání zastaveno -- žádné balíčky"
+
+#, c-format
+msgid "loading stopped, %u pack loaded"
+msgid_plural "loading stopped, %u packs loaded"
+msgstr[0] "načítání zastaveno, načten %u balíček"
+msgstr[1] "načítání zastaveno, načteny %u balíčky"
+msgstr[2] "načítání zastaveno, načteno %u balíčků"
+
+#, c-format
+msgid " (%u pack failed)"
+msgid_plural " (%u packs failed)"
+msgstr[0] " (%u balíček selhal)"
+msgstr[1] " (%u balíčky selhaly)"
+msgstr[2] " (%u balíčků selhalo)"
+
+msgid ""
+"Finds passages in the datasets on the card that answer a question, and opens them in read.\n"
+"\n"
+"Enter\tSearch; again: open the selection\n"
+"Up/Down\tSelect a result\n"
+"1-9\tOpen that result\n"
+"Esc\tStop loading, cancel a search, or clear\n"
+"Ctrl+U\tClear the line\n"
+"Ctrl+W\tDelete a word\n"
+"Ctrl+Q\tQuit\n"
+"\n"
+"Type a question and press Enter. Click a result to open it, or a pack button to browse its index.\n"
+"\n"
+"Typing works while the packs load; Enter then searches once they are in."
+msgstr ""
+"Najde v datech na kartě pasáže, které odpovídají na otázku, a otevře je v read.\n"
+"\n"
+"Enter\tHledat; znovu: otevřít výběr\n"
+"Nahoru/Dolů\tVybrat výsledek\n"
+"1-9\tOtevřít ten výsledek\n"
+"Esc\tZastavit načítání, zrušit hledání nebo smazat\n"
+"Ctrl+U\tSmazat řádek\n"
+"Ctrl+W\tSmazat slovo\n"
+"Ctrl+Q\tUkončit\n"
+"\n"
+"Napište otázku a stiskněte Enter. Klepnutím na výsledek jej otevřete, tlačítkem balíčku projdete jeho rejstřík.\n"
+"\n"
+"Psát lze i během načítání; Enter pak hledá, jakmile jsou balíčky načtené."
+
+msgid "Ask help"
+msgstr "Nápověda ask"
+
+msgid "cancelled"
+msgstr "zrušeno"

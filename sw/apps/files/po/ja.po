@@ -1,0 +1,358 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: Zeitlos files\n"
+"Language: ja\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=1; plural=0;\n"
+
+msgctxt "button"
+msgid "Open"
+msgstr "開く"
+
+msgctxt "button"
+msgid "New Dir"
+msgstr "新規"
+
+msgctxt "button"
+msgid "Rename"
+msgstr "名前"
+
+msgctxt "button"
+msgid "Copy"
+msgstr "コピー"
+
+msgctxt "button"
+msgid "Move"
+msgstr "移動"
+
+msgctxt "button"
+msgid "Delete"
+msgstr "削除"
+
+msgctxt "button"
+msgid "Convert"
+msgstr "変換"
+
+msgctxt "button"
+msgid "Find"
+msgstr "検索"
+
+msgid " (reading)"
+msgstr " (読み込み中)"
+
+msgid " (partial list)"
+msgstr " (一部のみ)"
+
+msgid "Launch failed"
+msgstr "起動できません"
+
+msgid ""
+"That application could\n"
+"not be started."
+msgstr ""
+"そのアプリケーションを\n"
+"起動できませんでした。"
+
+msgid ""
+"That program could not\n"
+"be started."
+msgstr ""
+"そのプログラムを\n"
+"起動できませんでした。"
+
+msgid "Can't open"
+msgstr "開けません"
+
+msgid ""
+"That file is not a\n"
+"program."
+msgstr ""
+"そのファイルは\n"
+"プログラムではありません。"
+
+msgid ""
+"No application is\n"
+"associated with this file."
+msgstr ""
+"このファイルに関連付けられた\n"
+"アプリケーションがありません。"
+
+msgid "New Folder"
+msgstr "新規フォルダ"
+
+msgid "Name for the new folder:"
+msgstr "新しいフォルダの名前:"
+
+msgid "Bad name"
+msgstr "使えない名前"
+
+msgid ""
+"A folder name cannot\n"
+"contain '/'."
+msgstr ""
+"フォルダ名に '/' は\n"
+"使えません。"
+
+msgid "Failed"
+msgstr "失敗"
+
+msgid ""
+"The folder could not\n"
+"be created."
+msgstr ""
+"フォルダを作成\n"
+"できませんでした。"
+
+msgid ""
+"Not possible:\n"
+msgstr ""
+"できません:\n"
+
+msgid "Rename"
+msgstr "名前変更"
+
+msgid "New name:"
+msgstr "新しい名前:"
+
+msgid ""
+"A name cannot\n"
+"contain '/'."
+msgstr ""
+"名前に '/' は\n"
+"使えません。"
+
+msgid "Move"
+msgstr "移動"
+
+msgid "Copy"
+msgstr "コピー"
+
+msgid "Move to:"
+msgstr "移動先:"
+
+msgid "Copy to:"
+msgstr "コピー先:"
+
+msgid ""
+"Replace the file that\n"
+"is already there?"
+msgstr ""
+"既にあるファイルを\n"
+"置き換えますか?"
+
+#, c-format
+msgid ""
+"Delete the folder\n"
+"%s\n"
+"and everything in it?"
+msgstr ""
+"フォルダ\n"
+"%s\n"
+"を中身ごと削除しますか?"
+
+#, c-format
+msgid ""
+"Delete the file\n"
+"%s?"
+msgstr ""
+"ファイル\n"
+"%s\n"
+"を削除しますか?"
+
+msgid "Delete"
+msgstr "削除"
+
+msgid ""
+"The file could not be\n"
+"deleted. Is it in use?"
+msgstr ""
+"ファイルを削除できません\n"
+"でした。使用中ですか?"
+
+msgid "Convert"
+msgstr "変換"
+
+msgid ""
+"A conversion is already\n"
+"running."
+msgstr "既に変換中です。"
+
+msgid ""
+"convert does not read\n"
+"this kind of file."
+msgstr ""
+"convertはこの種類の\n"
+"ファイルを読めません。"
+
+msgid "Pack into (.zip, .tar or .tar.gz):"
+msgstr "圧縮先 (.zip, .tar, .tar.gz):"
+
+msgid "To (the ending picks the format):"
+msgstr "変換先 (拡張子で形式を選択):"
+
+msgid "Extract into the folder:"
+msgstr "展開先フォルダ:"
+
+msgid ""
+"convert is not on\n"
+"this card."
+msgstr ""
+"このカードに\n"
+"convertがありません。"
+
+msgid ""
+"Could not start: is\n"
+"/tmp writable?"
+msgstr ""
+"起動できません:\n"
+"/tmpに書き込めますか?"
+
+msgid " MB"
+msgstr " MB"
+
+msgid " KB"
+msgstr " KB"
+
+msgid " bytes"
+msgstr " バイト"
+
+msgctxt "button"
+msgid "Stop"
+msgstr "中止"
+
+#, c-format
+msgid "Finding... %u found, %lu files looked at"
+msgstr "検索中... %u 件見つかり、%lu 個のファイルを調査"
+
+#, c-format
+msgid "%u found in %s (the first %u matches)"
+msgstr "%u 件 (%s 内、最初の %u 件)"
+
+#, c-format
+msgid "%u found in %s (not all)"
+msgstr "%u 件 (%s 内、一部のみ)"
+
+#, c-format
+msgid "%u found in %s"
+msgstr "%u 件 (%s 内)"
+
+msgid "Removing the source... "
+msgstr "元を削除中... "
+
+msgid "Moving... "
+msgstr "移動中... "
+
+msgid "Copying... "
+msgstr "コピー中... "
+
+msgid " of "
+msgstr " / "
+
+msgid " files, "
+msgstr " 個, "
+
+#, c-format
+msgid "Deleting... %lu deleted"
+msgstr "削除中... %lu 個削除"
+
+msgid "  (Esc stops)"
+msgstr "  (Escで中止)"
+
+msgid "  (Esc: back)"
+msgstr "  (Escで戻る)"
+
+msgid "Stopped."
+msgstr "中止しました。"
+
+msgid "Stopped: "
+msgstr "中止: "
+
+msgid ""
+"\n"
+"The copy is complete; part of\n"
+"the original is still there."
+msgstr ""
+"\n"
+"コピーは完了しました。\n"
+"元の一部が残っています。"
+
+msgid ""
+"\n"
+"Part of it is deleted already."
+msgstr ""
+"\n"
+"一部は既に削除されました。"
+
+msgid ""
+"\n"
+"What was copied so far is left\n"
+"in the destination."
+msgstr ""
+"\n"
+"ここまでコピーした分は\n"
+"コピー先に残ります。"
+
+msgid "Find"
+msgstr "検索"
+
+msgid ""
+"In this folder and below. A name\n"
+"(report, *.md), \"text\" inside files,\n"
+"or both: *.txt \"invoice\""
+msgstr ""
+"このフォルダとその下を検索。名前\n"
+"(report, *.md)、ファイル内の\"文字列\"、\n"
+"または両方: *.txt \"請求書\""
+
+#, c-format
+msgid ""
+"Browse, open and manage files.\n"
+"\n"
+"Enter\tOpen the selection\n"
+"Backspace\tUp a folder\n"
+"Letters\tJump to a name\n"
+"F2\tRename\n"
+"Delete\tDelete (asks first)\n"
+"F3, Ctrl+F\tFind by name, \"text\" inside, or both\n"
+"F5\tRead the folder again\n"
+"F12\tHome: back to the folder files started in\n"
+"Esc\tStop a find, copy or delete\n"
+"Tab\tTo the buttons; Space presses\n"
+"\n"
+"Results: Enter opens, Backspace goes to the file's folder, Esc goes back.\n"
+"\n"
+"Copy and Move ask for the destination, starting from the file's own path: an existing folder means into it. Folders copy, move and delete with everything in them. Convert saves the file in another format, picked by the ending you give it (.docx, .md, .xlsx, ...); a folder it packs into a .zip, .tar or .tar.gz.\n"
+"\n"
+"%s is yours, %s is the RAM disk (gone at power-off)."
+msgstr ""
+"ファイルの閲覧、オープン、管理。\n"
+"\n"
+"Enter\t選択したものを開く\n"
+"Backspace\t1つ上のフォルダへ\n"
+"文字\tその名前へ移動\n"
+"F2\t名前変更\n"
+"Delete\t削除 (確認あり)\n"
+"F3, Ctrl+F\t名前、中の\"文字列\"、または両方で検索\n"
+"F5\tフォルダを読み直す\n"
+"F12\tホーム: filesを始めたフォルダへ\n"
+"Esc\t検索、コピー、削除を中止\n"
+"Tab\tボタンへ。Spaceで押す\n"
+"\n"
+"検索結果: Enterで開く、Backspaceでファイルのフォルダへ、Escで戻る。\n"
+"\n"
+"コピーと移動はコピー先を尋ねます。初期値はファイルのパスで、既存のフォルダならその中へ入ります。フォルダは中身ごとコピー、移動、削除されます。変換は指定した拡張子 (.docx, .md, .xlsx, ...) の形式で保存し、フォルダは .zip, .tar, .tar.gz に圧縮します。\n"
+"\n"
+"%s はあなたの場所、%s はRAMディスクです (電源を切ると消えます)。"
+
+msgid "Files help"
+msgstr "filesのヘルプ"
+
+#~ msgid "Open"
+#~ msgstr "開く"
+
+#~ msgid "New Dir"
+#~ msgstr "新規フォルダ"
+
+#~ msgid "Stop"
+#~ msgstr "中止"

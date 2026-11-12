@@ -15,6 +15,7 @@
 #include "zfont.h"
 #include "zutf8.h"
 #include "zjfont.h"		// the Japanese font, docs/text_encoding.md
+#include "zlang.h"		// what jfont holds: other scripts' glyphs, docs/i18n.md
 #include "zsoc.h"		// Z_FEATURE_GPU_RASTER: lines in software without it
 
 #define VRAM ((volatile uint32_t *)0x20000000)
@@ -2301,7 +2302,7 @@ void z_fb_draw_char(int x, int y, char c, int color, const z_font_t *font, const
 
 }
 
-void z_fb_draw_text(int x, int y, const char *s, int color, const z_font_t *font, const z_clip_t *clip) {
+static void draw_text_l9(int x, int y, const char *s, int color, const z_font_t *font, const z_clip_t *clip) {
 
 	int cx = x, cy = y;
 
@@ -2501,7 +2502,7 @@ void z_fb_draw_char2(int x, int y, char c, int fg_color, int bg_color,
 
 }
 
-void z_fb_draw_text2(int x, int y, const char *s, int fg_color, int bg_color,
+static void draw_text2_l9(int x, int y, const char *s, int fg_color, int bg_color,
 	const z_font_t *font, const z_clip_t *clip) {
 
 	int cx = x, cy = y;
@@ -2641,7 +2642,7 @@ void z_fb_draw_char(int x, int y, char c, int color, const z_font_t *font, const
 
 }
 
-void z_fb_draw_text(int x, int y, const char *s, int color, const z_font_t *font, const z_clip_t *clip) {
+static void draw_text_l9(int x, int y, const char *s, int color, const z_font_t *font, const z_clip_t *clip) {
 
 	int cx = x, cy = y;
 
@@ -2690,7 +2691,7 @@ void z_fb_draw_char2(int x, int y, char c, int fg_color, int bg_color,
 
 }
 
-void z_fb_draw_text2(int x, int y, const char *s, int fg_color, int bg_color,
+static void draw_text2_l9(int x, int y, const char *s, int fg_color, int bg_color,
 	const z_font_t *font, const z_clip_t *clip) {
 
 	int cx = x, cy = y;
@@ -2769,67 +2770,85 @@ static uint8_t cp_glyph_byte(const z_font_t *font, uint32_t cp) {
 
 }
 
-// -- the Japanese font -- zjfont.h, docs/text_encoding.md, "Japanese" --
+// -- the Japanese font, and other scripts' glyphs -- zlang.h, docs/i18n.md --
 //
-// Found in sw/apps/jfont's memory with no message (z_jfont_find()): its
-// descriptor is looked for in its block once, then re-checked (two loads) before every
-// use. While jfont is not running, the search is retried every two
-// seconds rather than on every character, so an app drawing a page of
-// kanji without it costs a proc list per two seconds, not per glyph.
+// Both are held by sw/apps/jfont and found, with no message, through
+// the directory it writes (zlang.h): z_lang_data() looks it up once,
+// re-checks it (two loads) before each use, and while jfont is not
+// running looks again at most every two seconds, so an app drawing a
+// page of kanji without it costs a process list per two seconds, not
+// per glyph.
 
-#define JF_RETRY_TICKS  1464		// ~2 s at the ~732Hz tick
+// For a program, or a host test, linked without zi18n.c: only what was
+// handed over with z_lang_use(). zi18n.c's own -- which also finds
+// jfont -- replaces these wherever it is linked.
+static const uint8_t *zg_lang_data[Z_LANG_FONT_JP12 + 1];
+static uint32_t zg_lang_len[Z_LANG_FONT_JP12 + 1];
 
-static const volatile z_jfont_desc_t *jf_desc;
-static uint32_t jf_phys;
-static uint32_t jf_retry;
-static bool jf_retry_armed;
+__attribute__((weak)) void z_lang_use(uint32_t kind, const uint8_t *data, uint32_t len) {
+	if (kind > Z_LANG_FONT_JP12) return;
+	zg_lang_data[kind] = data;
+	zg_lang_len[kind] = len;
+}
+
+__attribute__((weak)) const uint8_t *z_lang_data(uint32_t kind, uint32_t *len) {
+	if (kind > Z_LANG_FONT_JP12 || !zg_lang_data[kind]) return 0;
+	if (len) *len = zg_lang_len[kind];
+	return zg_lang_data[kind];
+}
 
 // Host tests and the simulator have no jfont process; they hand the
 // font over directly.
-static const uint8_t *jf_test_font;
-static uint32_t jf_test_len;
-
 void z_jfont_use(const uint8_t *font, uint32_t len) {
-	jf_test_font = font;
-	jf_test_len = len;
+	z_lang_use(Z_LANG_FONT_JP12, font, len);
 }
 
 static const uint8_t *jfont_file(uint32_t *len) {
+	return z_lang_data(Z_LANG_FONT_JP12, len);
+}
 
-	if (jf_test_font) { *len = jf_test_len; return jf_test_font; }
+// A one-column character the hardware font has not got -- Polish,
+// Czech, Greek, Cyrillic -- from the glyphs jfont holds for this font's
+// size (5x8 or 6x12), drawn in software. Returns false, having drawn
+// nothing, if it cannot, and the caller draws the box.
+static bool draw_script(int x, int y, uint32_t cp, int fg, int bg, bool solid,
+	const z_font_t *font, const z_clip_t *clip) {
 
-	if (jf_desc) {
-		if (z_jfont_desc_ok(jf_desc, jf_phys)) {
-			*len = jf_desc->len;
-			return (const uint8_t *)(uintptr_t)(jf_phys + sizeof(z_jfont_desc_t));
-		}
-		jf_desc = NULL;			// jfont has gone
+#ifdef Z_SMALL
+	(void)x; (void)y; (void)cp; (void)fg; (void)bg; (void)solid; (void)clip;
+	(void)font;
+	return false;		// English only (zi18n.h): no other scripts' glyphs
+#else
+	uint32_t kind = font->w == 5 && font->h == 8 ? Z_LANG_FONT_5X8 :
+		font->w == 6 && font->h == 12 ? Z_LANG_FONT_6X12 : 0;
+	if (!kind) return false;
+
+	uint32_t len;
+	const uint8_t *f = z_lang_data(kind, &len);
+	if (!f) return false;
+
+	int gw, gh;
+	const uint8_t *g = z_zfn_glyph(f, len, cp, &gw, &gh);
+	if (!g || gw > font->w || gh > font->h || f[6] != 1) return false;
+
+	z_fb_hw_sync();
+	if (solid) z_fb_fill_rect(x, y, font->w, font->h, bg, clip);
+	for (int r = 0; r < gh; r++) {
+		uint8_t bits = g[r];
+		if (!bits) continue;
+		for (int c = 0; c < gw; c++)
+			if (bits & (0x80u >> c))
+				z_fb_set_pixel(x + c, y + r, fg, clip);
 	}
+	return true;
+#endif
 
-	uint32_t now = z_uptime_ticks();
-	if (jf_retry_armed && (int32_t)(now - jf_retry) < 0) return NULL;
-	jf_retry = now + JF_RETRY_TICKS;
-	jf_retry_armed = true;
+}
 
-	// Every slot the kernel has (Z_PROCS_MAX, sw/os/kernel.h): the list
-	// is in slot order, so asking for fewer could miss jfont on a busy
-	// machine. ~1.7KB of stack, for a lookup that happens once when it
-	// succeeds and at most every two seconds while it does not.
-	z_proc_info_t procs[32];
-	uint32_t truncated = 0;
-	uint32_t n = z_proc_list(procs, 32, &truncated);
-
-	uint32_t at;
-	const volatile z_jfont_desc_t *d = z_jfont_find(procs, n, &at);
-	if (d) {
-		jf_desc = d;
-		jf_phys = at;
-		*len = d->len;
-		return (const uint8_t *)(uintptr_t)(at + sizeof(z_jfont_desc_t));
-	}
-
-	return NULL;
-
+// True if cp has a glyph in the hardware font: Latin-9.
+static bool cp_in_hw(const z_font_t *font, uint32_t cp) {
+	uint8_t b = z_cp_to_l9(cp);
+	return cp < 0x20 || (b && z_font_index(font, b) >= 0);
 }
 
 // Draws a two-column character from the Japanese font, in software (the
@@ -2887,12 +2906,14 @@ static void draw_cp_wide(int x, int y, uint32_t cp, int fg, int bg,
 void z_fb_draw_cp(int x, int y, uint32_t cp, int color,
 	const z_font_t *font, const z_clip_t *clip) {
 	if (z_cp_width(cp) == 2) { draw_cp_wide(x, y, cp, color, 0, false, font, clip); return; }
+	if (!cp_in_hw(font, cp) && draw_script(x, y, cp, color, 0, false, font, clip)) return;
 	z_fb_draw_char(x, y, (char)cp_glyph_byte(font, cp), color, font, clip);
 }
 
 void z_fb_draw_cp2(int x, int y, uint32_t cp, int fg_color, int bg_color,
 	const z_font_t *font, const z_clip_t *clip) {
 	if (z_cp_width(cp) == 2) { draw_cp_wide(x, y, cp, fg_color, bg_color, true, font, clip); return; }
+	if (!cp_in_hw(font, cp) && draw_script(x, y, cp, fg_color, bg_color, true, font, clip)) return;
 	z_fb_draw_char2(x, y, (char)cp_glyph_byte(font, cp), fg_color,
 		bg_color, font, clip);
 }
@@ -2919,8 +2940,8 @@ static void draw_utf8(int x, int y, const char *s, int fg_color,
 #define FLUSH() do { \
 		if (n) { \
 			run[n] = 0; \
-			if (solid) z_fb_draw_text2(cx, cy, run, fg_color, bg_color, font, clip); \
-			else z_fb_draw_text(cx, cy, run, fg_color, font, clip); \
+			if (solid) draw_text2_l9(cx, cy, run, fg_color, bg_color, font, clip); \
+			else draw_text_l9(cx, cy, run, fg_color, font, clip); \
 			cx += n * font->w; \
 			n = 0; \
 		} \
@@ -2944,6 +2965,16 @@ static void draw_utf8(int x, int y, const char *s, int fg_color,
 			continue;
 		}
 
+		// Not in the hardware font: another script's glyph, from jfont,
+		// in software -- or, failing that, a look-alike or the box.
+		if (!cp_in_hw(font, cp)) {
+			FLUSH();
+			if (draw_script(cx, cy, cp, fg_color, bg_color, solid, font, clip)) {
+				cx += font->w;
+				continue;
+			}
+		}
+
 		run[n++] = (char)cp_glyph_byte(font, cp);
 		if (n == UTF8_RUN) FLUSH();
 
@@ -2957,6 +2988,44 @@ static void draw_utf8(int x, int y, const char *s, int fg_color,
 void z_fb_draw_utf8(int x, int y, const char *s, int color,
 	const z_font_t *font, const z_clip_t *clip) {
 	draw_utf8(x, y, s, color, 0, false, font, clip);
+}
+
+// -- the byte functions, and UTF-8 --
+//
+// z_fb_draw_text()/z_fb_draw_text2() take Latin-9 bytes -- and a string
+// that is valid UTF-8 with at least one character past ASCII is drawn
+// as UTF-8 (docs/text_encoding.md, "The byte functions"). A translation
+// (docs/i18n.md) or a long file name is UTF-8; this way every place
+// that draws a string draws it right, without each one changing call.
+// Latin-9 text is never mistaken for it in practice: a Latin-9 letter
+// is a lone byte of 0xA0 or above, which UTF-8 never has, and the
+// pairs that would be valid ("Ã©") are not words in any language. An
+// ASCII string costs one pass looking for a high bit.
+#ifndef Z_SMALL
+static bool is_utf8_text(const char *s) {
+	const char *p = s;
+	while (*p && !((unsigned char)*p & 0x80)) p++;
+	if (!*p) return false;
+	size_t n = strlen(p);
+	return z_utf8_valid(p, n);
+}
+#endif
+
+// The small build (Z_SMALL, Obst) speaks English and keeps the byte
+// functions as they were: Latin-9 only, the bytes it costs left out.
+#ifdef Z_SMALL
+#define is_utf8_text(s) false
+#endif
+
+void z_fb_draw_text(int x, int y, const char *s, int color, const z_font_t *font, const z_clip_t *clip) {
+	if (is_utf8_text(s)) { draw_utf8(x, y, s, color, 0, false, font, clip); return; }
+	draw_text_l9(x, y, s, color, font, clip);
+}
+
+void z_fb_draw_text2(int x, int y, const char *s, int fg_color, int bg_color,
+	const z_font_t *font, const z_clip_t *clip) {
+	if (is_utf8_text(s)) { draw_utf8(x, y, s, fg_color, bg_color, true, font, clip); return; }
+	draw_text2_l9(x, y, s, fg_color, bg_color, font, clip);
 }
 
 void z_fb_draw_utf8_2(int x, int y, const char *s, int fg_color,

@@ -1,0 +1,131 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: Zeitlos wm\n"
+"Language: fr\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=2; plural=(n > 1);\n"
+
+msgid "Next page"
+msgstr "Page suivante"
+
+msgid "Back"
+msgstr "Retour"
+
+msgid "Clipboard empty"
+msgstr "Presse-papiers vide"
+
+msgid "Desktop"
+msgstr "Bureau"
+
+msgid "No window focused"
+msgstr "Aucune fenêtre active"
+
+msgid "Dock. Use the arrow keys to choose an app, and Enter to start it."
+msgstr "Dock. Choisissez une application avec les flèches, et Entrée pour la lancer."
+
+msgid "restored"
+msgstr "restaurée"
+
+msgid "maximized"
+msgstr "agrandie"
+
+msgid "window"
+msgstr "fenêtre"
+
+msgid "full screen"
+msgstr "plein écran"
+
+msgid "shaded"
+msgstr "enroulée"
+
+msgid "unshaded"
+msgstr "déroulée"
+
+msgid "Workspace 1"
+msgstr "Bureau 1"
+
+msgid "Workspace 2"
+msgstr "Bureau 2"
+
+msgid "Workspace 3"
+msgstr "Bureau 3"
+
+msgid "Workspace 4"
+msgstr "Bureau 4"
+
+msgid "Workspace 5"
+msgstr "Bureau 5"
+
+msgid "Workspace 6"
+msgstr "Bureau 6"
+
+msgid "Workspace 7"
+msgstr "Bureau 7"
+
+msgid "Workspace 8"
+msgstr "Bureau 8"
+
+msgid "Workspace 9"
+msgstr "Bureau 9"
+
+msgid "Workspace 10"
+msgstr "Bureau 10"
+
+msgid "No volume control on this bitstream"
+msgstr "Pas de réglage du volume dans ce bitstream"
+
+#, c-format
+msgid "Volume %d%%"
+msgstr "Volume %d%%"
+
+msgid "No brightness control on this display"
+msgstr "Pas de réglage de la luminosité sur cet écran"
+
+#, c-format
+msgid "Brightness %d/%d"
+msgstr "Luminosité %d/%d"
+
+msgid "Zeitlos is locked"
+msgstr "Zeitlos est verrouillé"
+
+msgid "Password: "
+msgstr "Mot de passe : "
+
+msgid "Type the password, then Enter"
+msgstr "Tapez le mot de passe, puis Entrée"
+
+msgid "No password is set: press Enter"
+msgstr "Aucun mot de passe : appuyez sur Entrée"
+
+msgid "Reboot"
+msgstr "Redémarrer"
+
+msgid "Cancel"
+msgstr "Annuler"
+
+msgid "Reboot Zeitlos?"
+msgstr "Redémarrer Zeitlos ?"
+
+msgid "Unsaved work in open apps is lost."
+msgstr "Le travail non enregistré des apps ouvertes sera perdu."
+
+msgid "Rebooting..."
+msgstr "Redémarrage..."
+
+msgid "Reboot failed -- see the console"
+msgstr "Échec du redémarrage -- voir la console"
+
+msgid "Checking..."
+msgstr "Vérification..."
+
+#, c-format
+msgid "Too many attempts -- wait %lu s"
+msgstr "Trop d'essais -- attendez %lu s"
+
+msgid "Wrong password"
+msgstr "Mot de passe incorrect"
+
+#, c-format
+msgid "Could not check the password (%d)"
+msgstr "Impossible de vérifier le mot de passe (%d)"

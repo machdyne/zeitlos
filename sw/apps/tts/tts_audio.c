@@ -35,6 +35,7 @@
 #include "../../common/zsoc.h"
 #include "../../common/zaudio.h"
 #include "../../common/zcycles.h"
+#include "lang.h"
 #include "synth.h"
 #include "text2ph.h"
 #include "tts_audio.h"
@@ -203,7 +204,9 @@ void ta_use_recorded(bool on) {
 // is finished.
 static bool next_chunk(void) {
 	bool more;
-	while (text2ph_chunk(txt, txt_len, &txt_pos, txt_spell, phbuf, sizeof(phbuf), &more)) {
+	// Another language's rules when one is loaded (lang.h), else English.
+	while ((lang_active() ? lang_chunk : text2ph_chunk)(txt, txt_len, &txt_pos, txt_spell,
+			phbuf, sizeof(phbuf), &more)) {
 		phon_opts_t o = opts;
 		// Every chunk but the last runs on into the next.
 		if (more) o.continues = true;

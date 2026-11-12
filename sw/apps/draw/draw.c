@@ -102,6 +102,7 @@
 
 #include "../../common/zpaths.h"
 #include "../../common/zeitlos.h"
+#include "../../common/zi18n.h"
 #include "../../common/zsoc.h"	// Z_TICK_HZ, for the idle wait in main()
 #include "../../common/zwm.h"
 #include "../../common/zwin.h"
@@ -307,6 +308,7 @@ typedef enum {
 
 // Their names, for the help, speech and the title while one is chosen
 // by key; and the key that chooses each (also 1..9 in this order).
+// (Spoken only, so English: the voice is English.)
 static const char *const tool_names[TOOL_COUNT] = {
 	"Pencil", "Brush", "Eraser", "Fill", "Line", "Rectangle",
 	"Filled rectangle", "Oval", "Filled oval",
@@ -1253,7 +1255,7 @@ static void handle_mouse(uint32_t packed) {
 			stroke_begin(dx, dy);
 			if (draw_fill_start(&fill, PAGE(canvas), PAGE(spare), dx, dy, pattern())) {
 				filling = true;
-				z_win_set_title(&win, "Filling  (Esc stops)");
+				z_win_set_title(&win, ZS_("Filling  (Esc stops)"));
 			} else stroke_end();
 			return;
 		}
@@ -1475,11 +1477,11 @@ static void show_progress(bool force) {
 	num[k++] = (char)('0' + pct % 10);
 	num[k] = 0;
 
-	put(t, sizeof(t), &n, io.kind == DRAW_IO_LOAD ? "Loading " : "Saving ", 99);
+	put(t, sizeof(t), &n, io.kind == DRAW_IO_LOAD ? ZS_("Loading ") : ZS_("Saving "), 99);
 	put(t, sizeof(t), &n, name, 30);
 	put(t, sizeof(t), &n, " ", 99);
 	put(t, sizeof(t), &n, num, 99);
-	put(t, sizeof(t), &n, "%  (Esc stops)", 99);
+	put(t, sizeof(t), &n, ZS_("%  (Esc stops)"), 99);
 	z_win_set_title(&win, t);
 
 }
@@ -1490,13 +1492,13 @@ static void report_failure(const char *title) {
 
 	if (io.err == DRAW_IO_E_KEPT) {
 		int n = 0;
-		put(m, sizeof(m), &n, "The old file is gone;\nthe image is in\n", 99);
+		put(m, sizeof(m), &n, ZS_("The old file is gone;\nthe image is in\n"), 99);
 		put(m, sizeof(m), &n, io.part, 200);
 		z_dialog_confirm(&dlg_ctx, title, m, Z_DIALOG_OK_CANCEL);
 		return;
 	}
 
-	z_dialog_confirm(&dlg_ctx, title, draw_io_error(io.err), Z_DIALOG_OK_CANCEL);
+	z_dialog_confirm(&dlg_ctx, title, ZS_D(draw_io_error(io.err)), Z_DIALOG_OK_CANCEL);
 
 }
 
@@ -1521,7 +1523,7 @@ static void start_save_to(const char *path, int after) {
 	stroke_cut();
 
 	if (!draw_io_save_start(&io, path, canvas, CANVAS_W, CANVAS_H)) {
-		report_failure("Save failed");
+		report_failure(ZS_("Save failed"));
 		return;
 	}
 
@@ -1562,7 +1564,7 @@ static void start_load(const char *path) {
 	draw_undo_spare_lost(&undo);
 
 	if (!draw_io_load_start(&io, path, spare, CANVAS_W, CANVAS_H)) {
-		report_failure("Open failed");
+		report_failure(ZS_("Open failed"));
 		update_title();
 		return;
 	}
@@ -1578,8 +1580,8 @@ static bool confirm_discard(int after) {
 
 	if (!modified) return true;
 
-	int r = z_dialog_confirm(&dlg_ctx, "Unsaved changes",
-		"Save changes before\ncontinuing?", Z_DIALOG_YES_NO_CANCEL);
+	int r = z_dialog_confirm(&dlg_ctx, ZS_("Unsaved changes"),
+		ZS_("Save changes before\ncontinuing?"), Z_DIALOG_YES_NO_CANCEL);
 
 	if (r == Z_DIALOG_CANCEL) return false;
 	if (r == Z_DIALOG_NO) return true;
@@ -1682,7 +1684,7 @@ static void io_step(void) {
 
 		if (s != DRAW_IO_DONE) {
 			update_title();
-			report_failure("Open failed");
+			report_failure(ZS_("Open failed"));
 			return;
 		}
 
@@ -1711,7 +1713,7 @@ static void io_step(void) {
 
 	if (s != DRAW_IO_DONE) {
 		update_title();
-		report_failure("Save failed");
+		report_failure(ZS_("Save failed"));
 		return;
 	}
 
@@ -1873,10 +1875,10 @@ static void do_print(void) {
 	z_print_opts_t o;
 	z_print_opts_init(&o);
 	o.npages = 1;
-	if (!z_dialog_print(&dlg_ctx, "Print", last_dir, base, &o)) return;
+	if (!z_dialog_print(&dlg_ctx, ZS_("Print"), last_dir, base, &o)) return;
 
 	if (!z_print_begin(&printing, base)) {
-		z_dialog_confirm(&dlg_ctx, "Print", "The print job could not\nbe made in " Z_DIR_TMP ".",
+		z_dialog_confirm(&dlg_ctx, ZS_("Print"), ZS_("The print job could not\nbe made in /tmp."),
 			Z_DIALOG_OK_CANCEL);
 		return;
 	}
@@ -1901,8 +1903,8 @@ static void do_print(void) {
 
 	// print shows its own window from here: progress, Cancel, how it ended
 	if (!z_print_end(&printing))
-		z_dialog_confirm(&dlg_ctx, "Print", printing.result == Z_PRINT_E_GONE ?
-			"print is not on the card." : "The print job could not\nbe written.",
+		z_dialog_confirm(&dlg_ctx, ZS_("Print"), printing.result == Z_PRINT_E_GONE ?
+			ZS_("print is not on the card.") : ZS_("The print job could not\nbe written."),
 			Z_DIALOG_OK_CANCEL);
 
 }
@@ -1985,7 +1987,7 @@ static bool ctrl_key(uint32_t k, uint32_t mods) {
 
 // F1 (docs/app_help.md). The manual is docs/draw_app.md.
 static void show_help(void) {
-	static const char help[] =
+	const char *help = ZS_(
 		"Paint in black and white on a 640x480 page.\n\n"
 		"Left column\tPick a tool: pencil, brush, eraser, fill, line, "
 		"rectangle, filled rectangle, oval, filled oval\n"
@@ -2005,12 +2007,13 @@ static void show_help(void) {
 		"Ctrl+Y\tRedo (also Ctrl+Shift+Z)\n"
 		"Esc\tStop a fill, a load or a save: the drawing and the "
 		"file stay as they were (also Ctrl+C)\n\n"
-		"The pencil draws white when you start on black.";
-	z_dialog_help(&dlg_ctx, "Draw help", help, "draw_app");
+		"The pencil draws white when you start on black.");
+	z_dialog_help(&dlg_ctx, ZS_("Draw help"), help, "draw_app");
 }
 
 int main(void) {
 
+	z_tr_init(Z_APP_NAME);
 	printf("draw: starting\n");
 
 	use_hw_blit = z_fb_hw_blit_mem_available();

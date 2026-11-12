@@ -1,0 +1,131 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: Zeitlos wm\n"
+"Language: cs\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=3; plural=(n==1 ? 0 : n>=2 && n<=4 ? 1 : 2);\n"
+
+msgid "Next page"
+msgstr "Další stránka"
+
+msgid "Back"
+msgstr "Zpět"
+
+msgid "Clipboard empty"
+msgstr "Schránka je prázdná"
+
+msgid "Desktop"
+msgstr "Plocha"
+
+msgid "No window focused"
+msgstr "Žádné okno není aktivní"
+
+msgid "Dock. Use the arrow keys to choose an app, and Enter to start it."
+msgstr "Dock. Šipkami vyberte aplikaci a Enterem ji spusťte."
+
+msgid "restored"
+msgstr "obnoveno"
+
+msgid "maximized"
+msgstr "maximalizováno"
+
+msgid "window"
+msgstr "okno"
+
+msgid "full screen"
+msgstr "celá obrazovka"
+
+msgid "shaded"
+msgstr "sbaleno"
+
+msgid "unshaded"
+msgstr "rozbaleno"
+
+msgid "Workspace 1"
+msgstr "Plocha 1"
+
+msgid "Workspace 2"
+msgstr "Plocha 2"
+
+msgid "Workspace 3"
+msgstr "Plocha 3"
+
+msgid "Workspace 4"
+msgstr "Plocha 4"
+
+msgid "Workspace 5"
+msgstr "Plocha 5"
+
+msgid "Workspace 6"
+msgstr "Plocha 6"
+
+msgid "Workspace 7"
+msgstr "Plocha 7"
+
+msgid "Workspace 8"
+msgstr "Plocha 8"
+
+msgid "Workspace 9"
+msgstr "Plocha 9"
+
+msgid "Workspace 10"
+msgstr "Plocha 10"
+
+msgid "No volume control on this bitstream"
+msgstr "Tento bitstream neumí řídit hlasitost"
+
+#, c-format
+msgid "Volume %d%%"
+msgstr "Hlasitost %d%%"
+
+msgid "No brightness control on this display"
+msgstr "Tento displej neumí řídit jas"
+
+#, c-format
+msgid "Brightness %d/%d"
+msgstr "Jas %d/%d"
+
+msgid "Zeitlos is locked"
+msgstr "Zeitlos je zamčený"
+
+msgid "Password: "
+msgstr "Heslo: "
+
+msgid "Type the password, then Enter"
+msgstr "Zadejte heslo, pak Enter"
+
+msgid "No password is set: press Enter"
+msgstr "Heslo není nastaveno: stiskněte Enter"
+
+msgid "Reboot"
+msgstr "Restartovat"
+
+msgid "Cancel"
+msgstr "Zrušit"
+
+msgid "Reboot Zeitlos?"
+msgstr "Restartovat Zeitlos?"
+
+msgid "Unsaved work in open apps is lost."
+msgstr "Neuložená práce v otevřených aplikacích se ztratí."
+
+msgid "Rebooting..."
+msgstr "Restartuje se..."
+
+msgid "Reboot failed -- see the console"
+msgstr "Restart selhal -- viz konzole"
+
+msgid "Checking..."
+msgstr "Ověřování..."
+
+#, c-format
+msgid "Too many attempts -- wait %lu s"
+msgstr "Příliš mnoho pokusů -- počkejte %lu s"
+
+msgid "Wrong password"
+msgstr "Špatné heslo"
+
+#, c-format
+msgid "Could not check the password (%d)"
+msgstr "Heslo nelze ověřit (%d)"

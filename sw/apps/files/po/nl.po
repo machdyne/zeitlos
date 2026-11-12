@@ -1,0 +1,360 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: Zeitlos files\n"
+"Language: nl\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+
+msgctxt "button"
+msgid "Open"
+msgstr "Openen"
+
+msgctxt "button"
+msgid "New Dir"
+msgstr "Map"
+
+msgctxt "button"
+msgid "Rename"
+msgstr "Hernoem"
+
+msgctxt "button"
+msgid "Copy"
+msgstr "Kopie"
+
+msgctxt "button"
+msgid "Move"
+msgstr "Verpl."
+
+msgctxt "button"
+msgid "Delete"
+msgstr "Wissen"
+
+msgctxt "button"
+msgid "Convert"
+msgstr "Omzet."
+
+msgctxt "button"
+msgid "Find"
+msgstr "Zoeken"
+
+msgid " (reading)"
+msgstr " (lezen)"
+
+msgid " (partial list)"
+msgstr " (deel van de lijst)"
+
+msgid "Launch failed"
+msgstr "Starten mislukt"
+
+msgid ""
+"That application could\n"
+"not be started."
+msgstr ""
+"Dat programma kon\n"
+"niet starten."
+
+msgid ""
+"That program could not\n"
+"be started."
+msgstr ""
+"Dat programma kon\n"
+"niet starten."
+
+msgid "Can't open"
+msgstr "Kan niet openen"
+
+msgid ""
+"That file is not a\n"
+"program."
+msgstr ""
+"Dat bestand is geen\n"
+"programma."
+
+msgid ""
+"No application is\n"
+"associated with this file."
+msgstr ""
+"Er is geen programma aan\n"
+"dit bestand gekoppeld."
+
+msgid "New Folder"
+msgstr "Nieuwe map"
+
+msgid "Name for the new folder:"
+msgstr "Naam van de nieuwe map:"
+
+msgid "Bad name"
+msgstr "Ongeldige naam"
+
+msgid ""
+"A folder name cannot\n"
+"contain '/'."
+msgstr ""
+"Een mapnaam mag geen\n"
+"'/' bevatten."
+
+msgid "Failed"
+msgstr "Mislukt"
+
+msgid ""
+"The folder could not\n"
+"be created."
+msgstr ""
+"De map kon niet\n"
+"worden gemaakt."
+
+msgid ""
+"Not possible:\n"
+msgstr ""
+"Niet mogelijk:\n"
+
+msgid "Rename"
+msgstr "Hernoemen"
+
+msgid "New name:"
+msgstr "Nieuwe naam:"
+
+msgid ""
+"A name cannot\n"
+"contain '/'."
+msgstr ""
+"Een naam mag geen\n"
+"'/' bevatten."
+
+msgid "Move"
+msgstr "Verplaatsen"
+
+msgid "Copy"
+msgstr "Kopiëren"
+
+msgid "Move to:"
+msgstr "Verplaatsen naar:"
+
+msgid "Copy to:"
+msgstr "Kopiëren naar:"
+
+msgid ""
+"Replace the file that\n"
+"is already there?"
+msgstr ""
+"Het bestand dat er al is\n"
+"vervangen?"
+
+#, c-format
+msgid ""
+"Delete the folder\n"
+"%s\n"
+"and everything in it?"
+msgstr ""
+"De map\n"
+"%s\n"
+"met alles erin wissen?"
+
+#, c-format
+msgid ""
+"Delete the file\n"
+"%s?"
+msgstr ""
+"Het bestand\n"
+"%s\n"
+"wissen?"
+
+msgid "Delete"
+msgstr "Wissen"
+
+msgid ""
+"The file could not be\n"
+"deleted. Is it in use?"
+msgstr ""
+"Het bestand kon niet worden\n"
+"gewist. Is het in gebruik?"
+
+msgid "Convert"
+msgstr "Omzetten"
+
+msgid ""
+"A conversion is already\n"
+"running."
+msgstr ""
+"Er loopt al een\n"
+"omzetting."
+
+msgid ""
+"convert does not read\n"
+"this kind of file."
+msgstr ""
+"convert leest dit soort\n"
+"bestand niet."
+
+msgid "Pack into (.zip, .tar or .tar.gz):"
+msgstr "Inpakken in (.zip, .tar of .tar.gz):"
+
+msgid "To (the ending picks the format):"
+msgstr "Naar (de extensie kiest het formaat):"
+
+msgid "Extract into the folder:"
+msgstr "Uitpakken in de map:"
+
+msgid ""
+"convert is not on\n"
+"this card."
+msgstr ""
+"convert staat niet op\n"
+"deze kaart."
+
+msgid ""
+"Could not start: is\n"
+"/tmp writable?"
+msgstr ""
+"Starten lukt niet: is\n"
+"/tmp beschrijfbaar?"
+
+msgid " MB"
+msgstr " MB"
+
+msgid " KB"
+msgstr " KB"
+
+msgid " bytes"
+msgstr " bytes"
+
+msgctxt "button"
+msgid "Stop"
+msgstr "Stop"
+
+#, c-format
+msgid "Finding... %u found, %lu files looked at"
+msgstr "Zoeken... %u gevonden, %lu bestanden bekeken"
+
+#, c-format
+msgid "%u found in %s (the first %u matches)"
+msgstr "%u gevonden in %s (de eerste %u treffers)"
+
+#, c-format
+msgid "%u found in %s (not all)"
+msgstr "%u gevonden in %s (niet alle)"
+
+#, c-format
+msgid "%u found in %s"
+msgstr "%u gevonden in %s"
+
+msgid "Removing the source... "
+msgstr "Bron verwijderen... "
+
+msgid "Moving... "
+msgstr "Verplaatsen... "
+
+msgid "Copying... "
+msgstr "Kopiëren... "
+
+msgid " of "
+msgstr " van "
+
+msgid " files, "
+msgstr " bestanden, "
+
+#, c-format
+msgid "Deleting... %lu deleted"
+msgstr "Wissen... %lu gewist"
+
+msgid "  (Esc stops)"
+msgstr "  (Esc stopt)"
+
+msgid "  (Esc: back)"
+msgstr "  (Esc: terug)"
+
+msgid "Stopped."
+msgstr "Gestopt."
+
+msgid "Stopped: "
+msgstr "Gestopt: "
+
+msgid ""
+"\n"
+"The copy is complete; part of\n"
+"the original is still there."
+msgstr ""
+"\n"
+"De kopie is compleet; een deel\n"
+"van het origineel is er nog."
+
+msgid ""
+"\n"
+"Part of it is deleted already."
+msgstr ""
+"\n"
+"Een deel is al gewist."
+
+msgid ""
+"\n"
+"What was copied so far is left\n"
+"in the destination."
+msgstr ""
+"\n"
+"Wat tot nu toe gekopieerd is,\n"
+"blijft op de bestemming."
+
+msgid "Find"
+msgstr "Zoeken"
+
+msgid ""
+"In this folder and below. A name\n"
+"(report, *.md), \"text\" inside files,\n"
+"or both: *.txt \"invoice\""
+msgstr ""
+"In deze map en daaronder. Een naam\n"
+"(verslag, *.md), \"tekst\" in bestanden,\n"
+"of beide: *.txt \"factuur\""
+
+#, c-format
+msgid ""
+"Browse, open and manage files.\n"
+"\n"
+"Enter\tOpen the selection\n"
+"Backspace\tUp a folder\n"
+"Letters\tJump to a name\n"
+"F2\tRename\n"
+"Delete\tDelete (asks first)\n"
+"F3, Ctrl+F\tFind by name, \"text\" inside, or both\n"
+"F5\tRead the folder again\n"
+"F12\tHome: back to the folder files started in\n"
+"Esc\tStop a find, copy or delete\n"
+"Tab\tTo the buttons; Space presses\n"
+"\n"
+"Results: Enter opens, Backspace goes to the file's folder, Esc goes back.\n"
+"\n"
+"Copy and Move ask for the destination, starting from the file's own path: an existing folder means into it. Folders copy, move and delete with everything in them. Convert saves the file in another format, picked by the ending you give it (.docx, .md, .xlsx, ...); a folder it packs into a .zip, .tar or .tar.gz.\n"
+"\n"
+"%s is yours, %s is the RAM disk (gone at power-off)."
+msgstr ""
+"Bestanden bekijken, openen en beheren.\n"
+"\n"
+"Enter\tDe selectie openen\n"
+"Backspace\tEen map omhoog\n"
+"Letters\tNaar een naam springen\n"
+"F2\tHernoemen\n"
+"Del\tWissen (vraagt eerst)\n"
+"F3, Ctrl+F\tZoeken op naam, \"tekst\" erin, of beide\n"
+"F5\tDe map opnieuw lezen\n"
+"F12\tThuis: terug naar de map waar files begon\n"
+"Esc\tZoeken, kopiëren of wissen stoppen\n"
+"Tab\tNaar de knoppen; Spatie drukt\n"
+"\n"
+"Resultaten: Enter opent, Backspace gaat naar de map van het bestand, Esc gaat terug.\n"
+"\n"
+"Kopiëren en Verplaatsen vragen om de bestemming, vanaf het pad van het bestand: een bestaande map betekent erin. Mappen worden met alles erin gekopieerd, verplaatst en gewist. Omzetten slaat het bestand op in een ander formaat, gekozen door de extensie die je opgeeft (.docx, .md, .xlsx, ...); een map pakt het in als .zip, .tar of .tar.gz.\n"
+"\n"
+"%s is van jou, %s is de RAM-schijf (weg bij uitschakelen)."
+
+msgid "Files help"
+msgstr "Hulp bij files"
+
+#~ msgid "Open"
+#~ msgstr "Openen"
+
+#~ msgid "New Dir"
+#~ msgstr "Nieuwe map"
+
+#~ msgid "Stop"
+#~ msgstr "Stop"

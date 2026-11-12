@@ -1,0 +1,359 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: Zeitlos files\n"
+"Language: cs\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=3; plural=(n==1 ? 0 : n>=2 && n<=4 ? 1 : 2);\n"
+
+msgctxt "button"
+msgid "Open"
+msgstr "Otevřít"
+
+msgctxt "button"
+msgid "New Dir"
+msgstr "Složka"
+
+msgctxt "button"
+msgid "Rename"
+msgstr "Přejm."
+
+msgctxt "button"
+msgid "Copy"
+msgstr "Kopír."
+
+msgctxt "button"
+msgid "Move"
+msgstr "Přesun"
+
+msgctxt "button"
+msgid "Delete"
+msgstr "Smazat"
+
+msgctxt "button"
+msgid "Convert"
+msgstr "Převést"
+
+msgctxt "button"
+msgid "Find"
+msgstr "Hledat"
+
+msgid " (reading)"
+msgstr " (načítání)"
+
+msgid " (partial list)"
+msgstr " (část seznamu)"
+
+msgid "Launch failed"
+msgstr "Spuštění selhalo"
+
+msgid ""
+"That application could\n"
+"not be started."
+msgstr ""
+"Aplikaci se nepodařilo\n"
+"spustit."
+
+msgid ""
+"That program could not\n"
+"be started."
+msgstr ""
+"Program se nepodařilo\n"
+"spustit."
+
+msgid "Can't open"
+msgstr "Nelze otevřít"
+
+msgid ""
+"That file is not a\n"
+"program."
+msgstr ""
+"Tento soubor není\n"
+"program."
+
+msgid ""
+"No application is\n"
+"associated with this file."
+msgstr ""
+"S tímto souborem není\n"
+"spojena žádná aplikace."
+
+msgid "New Folder"
+msgstr "Nová složka"
+
+msgid "Name for the new folder:"
+msgstr "Název nové složky:"
+
+msgid "Bad name"
+msgstr "Neplatný název"
+
+msgid ""
+"A folder name cannot\n"
+"contain '/'."
+msgstr ""
+"Název složky nesmí\n"
+"obsahovat '/'."
+
+msgid "Failed"
+msgstr "Selhalo"
+
+msgid ""
+"The folder could not\n"
+"be created."
+msgstr ""
+"Složku se nepodařilo\n"
+"vytvořit."
+
+msgid ""
+"Not possible:\n"
+msgstr ""
+"Nelze:\n"
+
+msgid "Rename"
+msgstr "Přejmenovat"
+
+msgid "New name:"
+msgstr "Nový název:"
+
+msgid ""
+"A name cannot\n"
+"contain '/'."
+msgstr ""
+"Název nesmí\n"
+"obsahovat '/'."
+
+msgid "Move"
+msgstr "Přesunout"
+
+msgid "Copy"
+msgstr "Kopírovat"
+
+msgid "Move to:"
+msgstr "Přesunout do:"
+
+msgid "Copy to:"
+msgstr "Kopírovat do:"
+
+msgid ""
+"Replace the file that\n"
+"is already there?"
+msgstr ""
+"Nahradit soubor, který\n"
+"tam už je?"
+
+#, c-format
+msgid ""
+"Delete the folder\n"
+"%s\n"
+"and everything in it?"
+msgstr ""
+"Smazat složku\n"
+"%s\n"
+"i s celým obsahem?"
+
+#, c-format
+msgid ""
+"Delete the file\n"
+"%s?"
+msgstr ""
+"Smazat soubor\n"
+"%s?"
+
+msgid "Delete"
+msgstr "Smazat"
+
+msgid ""
+"The file could not be\n"
+"deleted. Is it in use?"
+msgstr ""
+"Soubor se nepodařilo\n"
+"smazat. Používá se?"
+
+msgid "Convert"
+msgstr "Převést"
+
+msgid ""
+"A conversion is already\n"
+"running."
+msgstr ""
+"Převod už\n"
+"probíhá."
+
+msgid ""
+"convert does not read\n"
+"this kind of file."
+msgstr ""
+"convert takový soubor\n"
+"neumí přečíst."
+
+msgid "Pack into (.zip, .tar or .tar.gz):"
+msgstr "Zabalit do (.zip, .tar nebo .tar.gz):"
+
+msgid "To (the ending picks the format):"
+msgstr "Do (přípona určí formát):"
+
+msgid "Extract into the folder:"
+msgstr "Rozbalit do složky:"
+
+msgid ""
+"convert is not on\n"
+"this card."
+msgstr ""
+"convert na této kartě\n"
+"není."
+
+msgid ""
+"Could not start: is\n"
+"/tmp writable?"
+msgstr ""
+"Nelze spustit: lze\n"
+"zapisovat do /tmp?"
+
+msgid " MB"
+msgstr " MB"
+
+msgid " KB"
+msgstr " KB"
+
+msgid " bytes"
+msgstr " bajtů"
+
+msgctxt "button"
+msgid "Stop"
+msgstr "Stop"
+
+#, c-format
+msgid "Finding... %u found, %lu files looked at"
+msgstr "Hledání... nalezeno %u, prohledáno %lu souborů"
+
+#, c-format
+msgid "%u found in %s (the first %u matches)"
+msgstr "Nalezeno %u v %s (prvních %u shod)"
+
+#, c-format
+msgid "%u found in %s (not all)"
+msgstr "Nalezeno %u v %s (ne všechny)"
+
+#, c-format
+msgid "%u found in %s"
+msgstr "Nalezeno %u v %s"
+
+msgid "Removing the source... "
+msgstr "Odstraňování zdroje... "
+
+msgid "Moving... "
+msgstr "Přesouvání... "
+
+msgid "Copying... "
+msgstr "Kopírování... "
+
+msgid " of "
+msgstr " z "
+
+msgid " files, "
+msgstr " souborů, "
+
+#, c-format
+msgid "Deleting... %lu deleted"
+msgstr "Mazání... smazáno %lu"
+
+msgid "  (Esc stops)"
+msgstr "  (Esc zastaví)"
+
+msgid "  (Esc: back)"
+msgstr "  (Esc: zpět)"
+
+msgid "Stopped."
+msgstr "Zastaveno."
+
+msgid "Stopped: "
+msgstr "Zastaveno: "
+
+msgid ""
+"\n"
+"The copy is complete; part of\n"
+"the original is still there."
+msgstr ""
+"\n"
+"Kopie je úplná; část\n"
+"originálu tam ještě je."
+
+msgid ""
+"\n"
+"Part of it is deleted already."
+msgstr ""
+"\n"
+"Část už je smazána."
+
+msgid ""
+"\n"
+"What was copied so far is left\n"
+"in the destination."
+msgstr ""
+"\n"
+"Co se dosud zkopírovalo,\n"
+"zůstává v cíli."
+
+msgid "Find"
+msgstr "Hledat"
+
+msgid ""
+"In this folder and below. A name\n"
+"(report, *.md), \"text\" inside files,\n"
+"or both: *.txt \"invoice\""
+msgstr ""
+"V této složce a níže. Název\n"
+"(zprava, *.md), \"text\" v souborech,\n"
+"nebo obojí: *.txt \"faktura\""
+
+#, c-format
+msgid ""
+"Browse, open and manage files.\n"
+"\n"
+"Enter\tOpen the selection\n"
+"Backspace\tUp a folder\n"
+"Letters\tJump to a name\n"
+"F2\tRename\n"
+"Delete\tDelete (asks first)\n"
+"F3, Ctrl+F\tFind by name, \"text\" inside, or both\n"
+"F5\tRead the folder again\n"
+"F12\tHome: back to the folder files started in\n"
+"Esc\tStop a find, copy or delete\n"
+"Tab\tTo the buttons; Space presses\n"
+"\n"
+"Results: Enter opens, Backspace goes to the file's folder, Esc goes back.\n"
+"\n"
+"Copy and Move ask for the destination, starting from the file's own path: an existing folder means into it. Folders copy, move and delete with everything in them. Convert saves the file in another format, picked by the ending you give it (.docx, .md, .xlsx, ...); a folder it packs into a .zip, .tar or .tar.gz.\n"
+"\n"
+"%s is yours, %s is the RAM disk (gone at power-off)."
+msgstr ""
+"Procházení, otevírání a správa souborů.\n"
+"\n"
+"Enter\tOtevřít výběr\n"
+"Backspace\tO složku výš\n"
+"Písmena\tSkočit na název\n"
+"F2\tPřejmenovat\n"
+"Del\tSmazat (napřed se zeptá)\n"
+"F3, Ctrl+F\tHledat podle názvu, \"textu\" uvnitř, nebo obojího\n"
+"F5\tZnovu načíst složku\n"
+"F12\tDomů: zpět do složky, kde files začal\n"
+"Esc\tZastavit hledání, kopírování nebo mazání\n"
+"Tab\tNa tlačítka; Mezerník stiskne\n"
+"\n"
+"Výsledky: Enter otevře, Backspace přejde do složky souboru, Esc se vrátí.\n"
+"\n"
+"Kopírovat a Přesunout se ptají na cíl, počínaje cestou souboru: existující složka znamená dovnitř. Složky se kopírují, přesouvají a mažou se vším obsahem. Převést uloží soubor v jiném formátu, určeném zadanou příponou (.docx, .md, .xlsx, ...); složku zabalí do .zip, .tar nebo .tar.gz.\n"
+"\n"
+"%s je váš, %s je disk v RAM (po vypnutí zmizí)."
+
+msgid "Files help"
+msgstr "Nápověda files"
+
+#~ msgid "Open"
+#~ msgstr "Otevřít"
+
+#~ msgid "New Dir"
+#~ msgstr "Nová složka"
+
+#~ msgid "Stop"
+#~ msgstr "Stop"

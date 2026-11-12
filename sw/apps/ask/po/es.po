@@ -1,0 +1,111 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: Zeitlos ask\n"
+"Language: es\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+
+msgid "No passage here answers"
+msgstr "Ningún pasaje de aquí responde"
+
+msgid "that."
+msgstr "a eso."
+
+msgid "could not start read"
+msgstr "no se pudo iniciar read"
+
+#, c-format
+msgid "%u passage, "
+msgid_plural "%u passages, "
+msgstr[0] "%u pasaje, "
+msgstr[1] "%u pasajes, "
+
+#, c-format
+msgid "%u pack"
+msgid_plural "%u packs"
+msgstr[0] "%u paquete"
+msgstr[1] "%u paquetes"
+
+msgid ", ranking weaker"
+msgstr ", orden más débil"
+
+msgid "  ^U clears"
+msgstr "  ^U borra"
+
+msgid "searching...  Esc cancels"
+msgstr "buscando...  Esc cancela"
+
+#, c-format
+msgid "searching %u%%  Esc cancels"
+msgstr "buscando %u%%  Esc cancela"
+
+msgid "Loading..., then search"
+msgstr "Cargando..., luego busca"
+
+msgid "Loading...  Esc stops"
+msgstr "Cargando...  Esc para"
+
+#, c-format
+msgid "Loading %s %u%%, then search"
+msgstr "Cargando: %s %u%%, luego busca"
+
+#, c-format
+msgid "Loading %s %u%%  Esc stops"
+msgstr "Cargando: %s %u%%  Esc para"
+
+msgid "no packs loaded -- nothing to search"
+msgstr "ningún paquete cargado -- nada que buscar"
+
+msgid "path too long to open"
+msgstr "ruta demasiado larga para abrir"
+
+msgid "loading stopped -- no packs loaded"
+msgstr "carga parada -- ningún paquete cargado"
+
+#, c-format
+msgid "loading stopped, %u pack loaded"
+msgid_plural "loading stopped, %u packs loaded"
+msgstr[0] "carga parada, %u paquete cargado"
+msgstr[1] "carga parada, %u paquetes cargados"
+
+#, c-format
+msgid " (%u pack failed)"
+msgid_plural " (%u packs failed)"
+msgstr[0] " (%u paquete falló)"
+msgstr[1] " (%u paquetes fallaron)"
+
+msgid ""
+"Finds passages in the datasets on the card that answer a question, and opens them in read.\n"
+"\n"
+"Enter\tSearch; again: open the selection\n"
+"Up/Down\tSelect a result\n"
+"1-9\tOpen that result\n"
+"Esc\tStop loading, cancel a search, or clear\n"
+"Ctrl+U\tClear the line\n"
+"Ctrl+W\tDelete a word\n"
+"Ctrl+Q\tQuit\n"
+"\n"
+"Type a question and press Enter. Click a result to open it, or a pack button to browse its index.\n"
+"\n"
+"Typing works while the packs load; Enter then searches once they are in."
+msgstr ""
+"Encuentra en los conjuntos de datos de la tarjeta los pasajes que responden a una pregunta, y los abre en read.\n"
+"\n"
+"Intro\tBuscar; otra vez: abrir la selección\n"
+"Arriba/Abajo\tElegir un resultado\n"
+"1-9\tAbrir ese resultado\n"
+"Esc\tParar la carga, cancelar una búsqueda o borrar\n"
+"Ctrl+U\tBorrar la línea\n"
+"Ctrl+W\tBorrar una palabra\n"
+"Ctrl+Q\tSalir\n"
+"\n"
+"Escriba una pregunta y pulse Intro. Haga clic en un resultado para abrirlo, o en el botón de un paquete para ver su índice.\n"
+"\n"
+"Se puede escribir mientras cargan los paquetes; Intro busca en cuanto estén."
+
+msgid "Ask help"
+msgstr "Ayuda de ask"
+
+msgid "cancelled"
+msgstr "cancelado"

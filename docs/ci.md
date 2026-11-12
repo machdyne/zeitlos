@@ -13,6 +13,9 @@ Two jobs, side by side, about a quarter of an hour each.
 - the kernel, the BIOS and every app, for Lakritz;
 - `tools/gen_abi.py --check`: the committed ABI fingerprint is the one
   the sources have;
+- `tools/i18n.py check`: no two translated strings hash the same, and
+  every translation keeps its English's printf formats; how much of each
+  language is done goes in the summary ([i18n.md](i18n.md));
 - the core archive for both sizes of machine, Obst (the small tier)
   and Lakritz, each held to its budgets (`CORE_BUDGETS_SMALL`,
   `CORE_BUDGETS`); the sizes go in the job's summary, so a budget
@@ -26,7 +29,13 @@ Two jobs, side by side, about a quarter of an hour each.
   prepared (docs/freeze.md).
 
 **host-tests**: `tools/run_tests.py --rtl`, every host test and the RTL
-simulations with Icarus Verilog.
+simulations with Icarus Verilog. The job sets `vm.mmap_min_addr=0`
+first: the tests that run an app against a stand-in kernel put its
+pointer at address 0xC, as on the machine (`sw/common/tests/ztramp.h`).
+Where page 0 cannot be mapped (an ordinary user, the default sysctl)
+those tests say they are skipped and exit 77, which every test target
+counts as passing (`|| [ $? -eq 77 ]`) -- files, hex and text did not,
+and failed CI on GitHub's runners while passing as root.
 
 On failure the emulator's logs and screenshots, and the tests' logs,
 are kept for a week as the run's artifacts.
@@ -38,7 +47,8 @@ Run workflow). What is too slow for every push:
 
 - **the page**: emscripten and Playwright's Chromium, the docs and
   course packs, the emulator's card (`zrelease sdcard --variant emu`),
-  then `web-test` without a card and with one;
+  then `web-test` without a card and with one, and `test-lang` (files in
+  the test language and in Russian);
 - **Lakritz's gateware**: the OSS CAD Suite's Yosys and nextpnr,
   synthesis, place and route, and a failure if a clock misses timing
   after routing (`tools/pnr_timing.sh`). The utilisation goes in the

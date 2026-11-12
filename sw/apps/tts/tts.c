@@ -38,6 +38,41 @@
 #include "tts_audio.h"
 #include "pack.h"
 #include "dsyn.h"
+#include "lang.h"
+#include "../../common/zi18n.h"
+#include "../../common/zlangs.h"
+
+// -- the language (docs/tts.md, "Other languages") --
+//
+// The voice speaks the language the windows speak: jfont's, which a
+// change in settings leaves alone until a restart -- not
+// system.language, or the voice would change language before the text
+// it reads did. Looked at before each utterance: jfont may come up
+// after this service.
+static char lang_code[8] = "en";
+static char no_voice[64];
+
+// What this service says itself, in the language when it has a voice
+// for it -- a Japanese "Speech on" in the English voice would be noise.
+#define SAY(tr, en) (lang_active() ? (tr) : (en))
+
+static void lang_update(void) {
+	const char *c = z_lang_current();
+	if (!strcmp(c, lang_code)) return;
+	strncpy(lang_code, c, sizeof(lang_code) - 1);
+	if (lang_load(c)) {
+		printf("tts: speaking %s (%s), the formant voice\n", c, lang_name());
+		return;
+	}
+	if (!strcmp(c, "en")) { printf("tts: speaking English\n"); return; }
+	// No rules for it: English, and the person is told so, once.
+	const char *n = c;
+	for (int i = 0; i < Z_LANG_NAME_COUNT; i++)
+		if (!strcmp(z_lang_names[i].code, c)) n = z_lang_names[i].english;
+	snprintf(no_voice, sizeof no_voice, "No voice for %s yet. English voice.", n);
+	printf("tts: %s\n", no_voice);
+	ttsq_say(0, no_voice, 0, 0);
+}
 
 // -- voice settings (Z_TTS_SET) --
 
@@ -141,8 +176,10 @@ static void backend_start(const char *text, uint32_t len, uint32_t flags) {
 	backend_on = true;
 	if (audio_ok) {
 		// Which voice speaks is settled here, per utterance: the pack can
-		// come and go with the card.
-		bool rec = voice_recorded && dsyn_ready();
+		// come and go with the card. Another language is the formant
+		// voice's: the recorded one is an English speaker's diphones.
+		lang_update();
+		bool rec = voice_recorded && dsyn_ready() && !lang_active();
 		bool high = rec || voice_female;	// the recorded voice is a woman's
 		uint32_t pitch = pitch_set ? pitch_hz : (high ? 200u : 110u);
 		uint32_t fmt = formants_set ? formant_pct : (voice_female ? 117u : 100u);
@@ -251,7 +288,7 @@ static void handle(z_msg_t *m) {
 
 	case Z_TTS_QUIT:
 		ttsq_cancel_all();
-		ttsq_say(0, "Speech off", 0, 0);
+		ttsq_say(0, SAY(Z_("Speech off"), "Speech off"), 0, 0);
 		quitting = true;
 		break;
 
@@ -275,7 +312,8 @@ static void handle(z_msg_t *m) {
 					v = voice_recorded && dsyn_ready() ? Z_TTS_VOICE_MALE : Z_TTS_VOICE_RECORDED;
 				voice_recorded = (v == Z_TTS_VOICE_RECORDED);
 				voice_female = (v == Z_TTS_VOICE_FEMALE);
-				if (voice_recorded && !dsyn_ready()) said = "No recorded voice. Synthesised voice";
+				if (lang_active()) said = SAY(Z_("Synthesised voice"), "Synthesised voice");	// the only one it has
+				else if (voice_recorded && !dsyn_ready()) said = "No recorded voice. Synthesised voice";
 				else if (voice_recorded) said = "Recorded voice";
 				else said = "Synthesised voice";
 				if (quiet) printf("tts: [voice: %s]\n", said);
@@ -304,6 +342,7 @@ static void handle(z_msg_t *m) {
 
 int main(void) {
 
+	z_tr_init(Z_APP_NAME);
 	uint32_t other;
 	if (z_pid_lookup(Z_TTS_SERVICE, &other)) {
 		printf("tts: already running as pid %lu, exiting\n", (unsigned long)other);
@@ -344,7 +383,8 @@ int main(void) {
 	printf("tts: build %s %s, synth %s\n", __DATE__, __TIME__, synth_build());
 
 	ttsq_init(&queue_ops);
-	ttsq_say(0, "Speech on", 0, 0);
+	lang_update();
+	ttsq_say(0, SAY(Z_("Speech on"), "Speech on"), 0, 0);
 
 	for (;;) {
 

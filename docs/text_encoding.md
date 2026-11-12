@@ -104,10 +104,16 @@ typographic characters ([fonts](fonts.md)).
 
 ## Drawing
 
-The byte functions -- `z_fb_draw_char()`, `z_fb_draw_text()`,
-`z_win_draw_text()` and their `2` forms -- take Latin-9 bytes. Before
-this change, bytes 0x80-0xFF drew nothing; now 0xA0-0xFF draw their
-Latin-9 glyph.
+`z_fb_draw_char()` takes one Latin-9 byte. The string functions --
+`z_fb_draw_text()`, `z_win_draw_text()` and their `2` forms -- take
+**UTF-8 or Latin-9**: a string that is valid UTF-8 with a byte past
+ASCII is drawn as UTF-8, anything else byte by byte as Latin-9, as
+before. ASCII is both, and takes the old path with one extra test per
+string. Valid UTF-8 almost never happens by accident in Latin-9 text
+(it needs an accented capital followed by one or two symbols), so old
+callers draw as they did, and a translated string ([i18n.md](i18n.md))
+draws right wherever a string is drawn. The small build (`Z_SMALL`)
+keeps Latin-9 only.
 
 For UTF-8 and codepoints (`zgfx.h`, `zwin.h`):
 
@@ -120,8 +126,12 @@ For UTF-8 and codepoints (`zgfx.h`, `zwin.h`):
 | `z_win_draw_utf8(win, x, y, s, ...)` | a UTF-8 string, window-relative |
 | `z_win_draw_utf8_2(win, x, y, s, fg, bg, ...)` | the same, solid cells |
 
-Every character maps to its Latin-9 glyph, so all of ASCII and Latin-9
-draws in hardware exactly as fast as ASCII always has. The UTF-8
+Every character Latin-9 has maps to its Latin-9 glyph, so all of ASCII
+and Latin-9 draws in hardware exactly as fast as ASCII always has.
+Latin Extended-A (Polish, Czech, ...), Greek, Cyrillic and typographic
+punctuation are drawn in software, at 5x8 and 6x12, from `jfont`'s
+script glyphs (`script5x8.zfn`, `script6x12.zfn`) when it is running,
+and as the missing-glyph box when it is not. The UTF-8
 functions decode a run at a time and hand the runs to the byte
 functions, so clipping, the skip past a clip's right edge and the wait
 for the last blit all behave identically. The four UTF-8 entries are

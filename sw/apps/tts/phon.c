@@ -79,6 +79,26 @@ static const ph_t phonemes[] = {
 	V("AX",  60, 500, 1400, 2400,  70, 100, 150),
 	V("IX",  60, 420, 1800, 2550,  70, 100, 150),
 
+	// -- other languages' vowels (docs/tts.md, "Other languages") --
+	// Pure (no glide), as Spanish, Italian, German, the Slavic languages
+	// say them; front rounded; the central vowel of Polish y and
+	// Russian/Ukrainian ы; and the nasal vowels of French and
+	// Portuguese, made as the nasals are (no nasal pole here): a wide,
+	// damped F1. Typical adult male values from the acoustic-phonetics
+	// literature.
+	V("I",  110, 280, 2250, 2950,  60,  90, 150),
+	V("E",  115, 400, 2050, 2600,  70, 100, 150),
+	V("A",  125, 720, 1300, 2450,  90, 100, 150),
+	V("O",  120, 450,  800, 2400,  70,  90, 150),
+	V("U",  110, 310,  780, 2250,  60,  90, 150),
+	V("UE", 110, 280, 1700, 2150,  60,  90, 150),
+	V("OE", 115, 420, 1450, 2250,  70, 100, 150),
+	V("YI", 100, 320, 1450, 2350,  70, 100, 150),
+	V("AN", 140, 650, 1000, 2500, 160, 150, 200),
+	V("EN", 140, 560, 1600, 2450, 160, 150, 200),
+	V("ON", 140, 470,  820, 2400, 160, 150, 200),
+	V("UN", 140, 520, 1450, 2300, 160, 150, 200),
+
 	// -- diphthongs: start target, then end target --
 	D("EY", 180, 480, 2000, 2600,  330, 2200, 2800),
 	D("OW", 175, 520,  950, 2400,  390,  780, 2300),
@@ -91,11 +111,18 @@ static const ph_t phonemes[] = {
 	{ "Y",  K_SEMI, 1, 70, 270, 2100, 3000, 0,0,0,  50,  90, 180, 56, 0, 0,0,0,0,0,0, 50 },
 	{ "R",  K_SEMI, 1, 70, 330, 1100, 1450, 0,0,0,  70, 100, 120, 56, 0, 0,0,0,0,0,0, 50 },
 	{ "L",  K_SEMI, 1, 70, 360, 1050, 2800, 0,0,0,  60, 100, 200, 55, 0, 0,0,0,0,0,0, 50 },
+	// other languages: palatal l (Italian gli, Spanish ll), and a
+	// uvular r (German, French) as an approximant -- vowel-like, low
+	// and back
+	{ "LY", K_SEMI, 1, 70, 300, 2000, 2900, 0,0,0,  60, 100, 200, 55, 0, 0,0,0,0,0,0, 50 },
+	{ "RU", K_SEMI, 1, 65, 550, 1250, 2350, 0,0,0, 100, 150, 200, 54, 0, 0,0,0,0,0,0, 50 },
 
 	// -- nasals: low damped F1, heavily damped upper formants --
 	{ "M",  K_NASAL, 1, 75, 280, 1000, 2200, 0,0,0, 60, 300, 500, 52, 0, 0,0,0,0,0,0, 35 },
 	{ "N",  K_NASAL, 1, 70, 280, 1600, 2600, 0,0,0, 60, 300, 500, 52, 0, 0,0,0,0,0,0, 35 },
 	{ "NG", K_NASAL, 1, 75, 280, 2000, 2700, 0,0,0, 60, 300, 500, 52, 0, 0,0,0,0,0,0, 55 },
+	// palatal n: Spanish ñ, Italian gn, Czech ň, Polish ń
+	{ "NY", K_NASAL, 1, 75, 280, 2100, 2900, 0,0,0, 60, 300, 500, 52, 0, 0,0,0,0,0,0, 50 },
 
 	// -- fricatives: spectrum from the parallel branch --
 	//                                                     av  af  a2 a3 a4 a5 a6 ab
@@ -107,6 +134,12 @@ static const ph_t phonemes[] = {
 	{ "V",  K_FRIC, 1,  80, 300, 1100, 2100, 0,0,0, 200, 150, 250, 50, 50,  0, 0, 0, 30, 35, 48, 50 },
 	{ "TH", K_FRIC, 0, 100, 300, 1400, 2700, 0,0,0, 200, 150, 250,  0, 52,  0, 0, 0, 35, 42, 48, 50 },
 	{ "DH", K_FRIC, 1,  70, 300, 1400, 2700, 0,0,0, 200, 150, 250, 50, 45,  0, 0, 0, 35, 40, 45, 50 },
+	// other languages: the velar fricative (German Bach, Spanish j,
+	// Russian x, Czech ch), its noise lower than SH's and shaped by the
+	// mouth behind the tongue; and the palatal one (German ich), between
+	// SH and S
+	{ "X",  K_FRIC, 0, 100, 250, 1500, 2400, 0,0,0, 200, 150, 250,  0, 55, 50, 52, 40, 30,  0, 0, 60 },
+	{ "XJ", K_FRIC, 0, 100, 270, 2100, 3000, 0,0,0, 200, 150, 250,  0, 58,  0, 40, 56, 52, 45, 0, 50 },
 
 	// -- /h/: aspiration shaped by the following vowel --
 	{ "HH", K_ASP,  0,  65, 500, 1500, 2500, 0,0,0, 300, 200, 250,  0,  0,  0,0,0,0,0,0, 50 },
@@ -118,6 +151,9 @@ static const ph_t phonemes[] = {
 	{ "D",  K_STOP, 1,  50, 200, 1700, 2700, 0,0,0,  80, 100, 150,  0, 58,  0, 0, 45, 52, 56,  0, 35 },
 	{ "K",  K_STOP, 0,  70, 250, 1900, 2400, 0,0,0,  80, 100, 150,  0, 60, 50, 58, 45,  0,  0,  0, 60 },
 	{ "G",  K_STOP, 1,  60, 250, 1900, 2400, 0,0,0,  80, 100, 150,  0, 58, 50, 56, 45,  0,  0,  0, 60 },
+	// the tapped r of Spanish, Italian, the Slavic languages: a D's
+	// place, a closure of a few milliseconds and almost no burst
+	{ "DX", K_STOP, 1,  18, 200, 1700, 2700, 0,0,0,  80, 100, 150,  0, 30,  0, 0, 30, 35, 38,  0, 35 },
 
 	// -- affricates: a stop's closure, then a short fricative --
 	{ "CH", K_AFFR, 0,  60, 250, 1900, 2500, 0,0,0, 200, 150, 250,  0, 60,  0, 58, 52, 45, 40, 0, 50 },
@@ -233,7 +269,7 @@ uint32_t phon_experiment(const char *name) {
 }
 
 static bool is_front(const ph_t *v) {
-	static const char *const front[] = { "IY", "IH", "EY", "EH", "AE", "Y" };
+	static const char *const front[] = { "IY", "IH", "EY", "EH", "AE", "Y", "I", "E", "UE", "OE" };
 	for (unsigned i = 0; i < sizeof(front) / sizeof(front[0]); i++)
 		if (v->nm[0] == front[i][0] && v->nm[1] == front[i][1]) return true;
 	return false;

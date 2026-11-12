@@ -1,0 +1,377 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: Zeitlos sheet\n"
+"Language: nl\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+
+msgid "No chart: select the data, then F5."
+msgstr "Geen grafiek: kies de gegevens, dan F5."
+
+msgid "Nothing to chart in the range."
+msgstr "Niets in het bereik om te tekenen."
+
+msgid "No numbers in the range to chart."
+msgstr "Geen getallen in het bereik."
+
+msgid "A pie needs some positive numbers."
+msgstr "Een taart heeft positieve getallen nodig."
+
+msgid "Sum "
+msgstr "Som "
+
+msgid "  Avg "
+msgstr "  Gem "
+
+msgid "  Count "
+msgstr "  Aantal "
+
+msgctxt "chart"
+msgid "Bar"
+msgstr "Staaf"
+
+msgctxt "chart"
+msgid "Stacked"
+msgstr "Gestapeld"
+
+msgctxt "chart"
+msgid "Line"
+msgstr "Lijn"
+
+msgctxt "chart"
+msgid "Pie"
+msgstr "Taart"
+
+msgid "Chart: "
+msgstr "Grafiek: "
+
+msgid "  Esc: back"
+msgstr "  Esc: terug"
+
+msgid "Calculating..."
+msgstr "Rekenen..."
+
+msgid "Export"
+msgstr "Exporteren"
+
+msgid ""
+"convert could not\n"
+"be started."
+msgstr ""
+"convert kon niet\n"
+"starten."
+
+msgid ""
+"Could not write the\n"
+"copy to convert."
+msgstr ""
+"De kopie om om te zetten\n"
+"kon niet worden geschreven."
+
+msgid "Save failed"
+msgstr "Opslaan mislukt"
+
+msgid ""
+"Could not open the file\n"
+"for writing."
+msgstr ""
+"Kon het bestand niet openen\n"
+"om te schrijven."
+
+msgid ""
+"The file could not be\n"
+"written completely."
+msgstr ""
+"Het bestand kon niet\n"
+"helemaal geschreven worden."
+
+msgid "Open failed"
+msgstr "Openen mislukt"
+
+msgid ""
+"convert is not on\n"
+"this card."
+msgstr ""
+"convert staat niet op\n"
+"deze kaart."
+
+msgid ""
+"The file could not\n"
+"be opened."
+msgstr ""
+"Het bestand kon niet\n"
+"geopend worden."
+
+msgid "Unsaved changes"
+msgstr "Niet-opgeslagen wijzigingen"
+
+msgid ""
+"This sheet has unsaved\n"
+"changes. Save first?"
+msgstr ""
+"Dit blad heeft niet-opgeslagen\n"
+"wijzigingen. Eerst opslaan?"
+
+msgid "Sheet full"
+msgstr "Blad vol"
+
+msgid ""
+"No room for another cell.\n"
+"The change was not made."
+msgstr ""
+"Geen ruimte voor nog een cel.\n"
+"De wijziging is niet gemaakt."
+
+msgid ""
+"No room for more cells.\n"
+"Some were not pasted."
+msgstr ""
+"Geen ruimte voor meer cellen.\n"
+"Sommige zijn niet geplakt."
+
+msgid "Fill"
+msgstr "Vullen"
+
+msgid ""
+"Too much to fill\n"
+"at once."
+msgstr ""
+"Te veel om in één\n"
+"keer te vullen."
+
+msgid ""
+"No room for more cells.\n"
+"Some were not filled."
+msgstr ""
+"Geen ruimte voor meer cellen.\n"
+"Sommige zijn niet gevuld."
+
+msgid "Insert"
+msgstr "Invoegen"
+
+msgid "Delete"
+msgstr "Wissen"
+
+msgid ""
+"That would push cells\n"
+"past the edge of the sheet."
+msgstr ""
+"Dat zou cellen over de\n"
+"rand van het blad duwen."
+
+msgid ""
+"No room: the sheet\n"
+"is full."
+msgstr ""
+"Geen ruimte: het blad\n"
+"is vol."
+
+msgid "Format"
+msgstr "Opmaak"
+
+#, c-format
+msgid ""
+"G general  F2 fixed  ,2 1,000.00\n"
+"%1 percent  $2 money  (digit: places)"
+msgstr ""
+"G algemeen  F2 vast  ,2 1,000.00\n"
+"%1 procent  $2 geld  (cijfer: decimalen)"
+
+#, c-format
+msgid ""
+"Not a format: G, F2, ,2,\n"
+"%1 or $2 (any 0-8 places)."
+msgstr ""
+"Geen opmaak: G, F2, ,2,\n"
+"%1 of $2 (0-8 decimalen)."
+
+msgid ""
+"Too many formatted\n"
+"ranges: 64 at most."
+msgstr ""
+"Te veel opgemaakte\n"
+"bereiken: hoogstens 64."
+
+msgid "Width"
+msgstr "Breedte"
+
+msgid "Column width, in characters:"
+msgstr "Kolombreedte, in tekens:"
+
+msgid "Chart"
+msgstr "Grafiek"
+
+msgid ""
+"Select the table to chart\n"
+"(labels in the first row\n"
+"and column), then F5."
+msgstr ""
+"Kies de tabel voor de grafiek\n"
+"(labels in de eerste rij\n"
+"en kolom), dan F5."
+
+msgid "Sort"
+msgstr "Sorteren"
+
+msgid ""
+"Select the rows to sort\n"
+"(all their columns), then\n"
+"put the cursor in the key."
+msgstr ""
+"Kies de rijen om te sorteren\n"
+"(al hun kolommen), en zet\n"
+"dan de cursor in de sleutel."
+
+msgid ""
+"Too large to sort here:\n"
+"sort fewer rows at a time."
+msgstr ""
+"Te groot om hier te sorteren:\n"
+"sorteer minder rijen tegelijk."
+
+msgid "Go to"
+msgstr "Ga naar"
+
+msgid "Cell (like B12):"
+msgstr "Cel (zoals B12):"
+
+msgid "Not a cell: A1 to Z999."
+msgstr "Geen cel: A1 tot Z999."
+
+msgid "Find"
+msgstr "Zoeken"
+
+msgid "Not found."
+msgstr "Niet gevonden."
+
+msgid ""
+"A spreadsheet: numbers, text and formulas in a grid.\n"
+"\n"
+"Type into the cell; =A1*2 is a formula, =SUM(B2:B9) a range. Enter moves down, Tab right, Shift+arrows select.\n"
+"\n"
+"/, F4\tCommands: insert, delete, number format, width, sort, extend, goto, find, chart\n"
+"F2\tEdit the cell\n"
+"Ctrl+Z/Y\tUndo, redo\n"
+"Ctrl+C/X/V\tCopy, cut, paste\n"
+"Ctrl+D/R\tFill down, right\n"
+"Ctrl+1\tNumber format\n"
+"Ctrl+G\tGo to a cell\n"
+"F3, Ctrl+F\tFind (again: the next match)\n"
+"F5\tChart the selection\n"
+"Alt+Left\tNarrow the column (Alt+Right widens)\n"
+"Ctrl+N/O/S\tNew, open, save\n"
+"\n"
+"Functions: SUM AVERAGE MIN MAX COUNT ABS INT ROUND MOD SQRT POWER IF AND OR NOT PMT PV FV NPV VLOOKUP INDEX.\n"
+"\n"
+"Select a range to see its sum, average and count."
+msgstr ""
+"Een rekenblad: getallen, tekst en formules in een raster.\n"
+"\n"
+"Typ in de cel; =A1*2 is een formule, =SUM(B2:B9) een bereik. Enter gaat omlaag, Tab naar rechts, Shift+pijlen selecteren.\n"
+"\n"
+"/, F4\tOpdrachten: invoegen, verwijderen, getalnotatie, breedte, sorteren, doortrekken, ga naar, zoeken, grafiek\n"
+"F2\tDe cel bewerken\n"
+"Ctrl+Z/Y\tOngedaan maken, opnieuw\n"
+"Ctrl+C/X/V\tKopiëren, knippen, plakken\n"
+"Ctrl+D/R\tOmlaag, naar rechts vullen\n"
+"Ctrl+1\tGetalnotatie\n"
+"Ctrl+G\tNaar een cel gaan\n"
+"F3, Ctrl+F\tZoeken (nogmaals: de volgende)\n"
+"F5\tGrafiek van de selectie\n"
+"Alt+Links\tDe kolom smaller (Alt+Rechts breder)\n"
+"Ctrl+N/O/S\tNieuw, openen, opslaan\n"
+"\n"
+"Functies: SUM AVERAGE MIN MAX COUNT ABS INT ROUND MOD SQRT POWER IF AND OR NOT PMT PV FV NPV VLOOKUP INDEX.\n"
+"\n"
+"Kies een bereik om de som, het gemiddelde en het aantal te zien."
+
+msgid "Sheet help"
+msgstr "Hulp bij sheet"
+
+msgid "Find (F3 finds the next):"
+msgstr "Zoeken (F3 zoekt verder):"
+
+msgctxt "menu"
+msgid "Insert"
+msgstr "Invoegen"
+
+msgctxt "menu"
+msgid "Delete"
+msgstr "Verwijderen"
+
+msgctxt "menu"
+msgid "Number"
+msgstr "Getal"
+
+msgctxt "menu"
+msgid "Width"
+msgstr "Breedte"
+
+msgctxt "menu"
+msgid "Sort"
+msgstr "Sorteren"
+
+msgctxt "menu"
+msgid "Extend"
+msgstr "Doortrekken"
+
+msgctxt "menu"
+msgid "Undo"
+msgstr "Ongedaan"
+
+msgctxt "menu"
+msgid "Redo"
+msgstr "Opnieuw"
+
+msgctxt "menu"
+msgid "Goto"
+msgstr "Ga naar"
+
+msgctxt "menu"
+msgid "Find"
+msgstr "Zoeken"
+
+msgctxt "menu"
+msgid "Chart"
+msgstr "Grafiek"
+
+msgctxt "menu"
+msgid "Help"
+msgstr "Hulp"
+
+msgctxt "menu"
+msgid "Rows"
+msgstr "Rijen"
+
+msgctxt "menu"
+msgid "Columns"
+msgstr "Kolommen"
+
+msgctxt "menu"
+msgid "Ascending"
+msgstr "Oplopend"
+
+msgctxt "menu"
+msgid "Descending"
+msgstr "Aflopend"
+
+msgctxt "menu"
+msgid "Down"
+msgstr "Omlaag"
+
+msgctxt "menu"
+msgid "Right"
+msgstr "Rechts"
+
+msgid "Insert:"
+msgstr "Invoegen:"
+
+msgid "Delete:"
+msgstr "Verwijderen:"
+
+msgid "Sort:"
+msgstr "Sorteren:"
+
+msgid "Extend:"
+msgstr "Doortrekken:"

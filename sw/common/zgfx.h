@@ -44,6 +44,8 @@
 #include <stdbool.h>
 #include "zfont.h"
 #include "zicon.h"
+#include <string.h>
+#include "zutf8.h"		// z_text_cols()
 
 // The FRAMEBUFFER's geometry: VRAM is 640x480 at 1 bit per pixel on
 // every board, and the drawing code here addresses it with these. Not
@@ -172,6 +174,22 @@ void z_fb_draw_text2(int x, int y, const char *s, int fg_color, int bg_color, co
 void z_fb_draw_cp(int x, int y, uint32_t cp, int color, const z_font_t *font, const z_clip_t *clip);
 void z_fb_draw_cp2(int x, int y, uint32_t cp, int fg_color, int bg_color, const z_font_t *font, const z_clip_t *clip);
 void z_fb_draw_utf8(int x, int y, const char *s, int color, const z_font_t *font, const z_clip_t *clip);
+
+// How many columns z_fb_draw_text() gives s: its characters if it is
+// UTF-8 (a CJK character two), its bytes if Latin-9. Measure with this,
+// never strlen(): a translation is UTF-8 (docs/i18n.md, "Layout"). In
+// the header, so a host test that stands in for zgfx.c has it too.
+static inline int z_text_cols(const char *s) {
+#ifdef Z_SMALL
+	return (int)strlen(s);
+#else
+	const char *p = s;
+	while (*p && !((unsigned char)*p & 0x80)) p++;
+	if (!*p) return (int)(p - s);
+	size_t n = strlen(s);
+	return z_utf8_valid(p, strlen(p)) ? z_utf8_cols(s, n) : (int)n;
+#endif
+}
 void z_fb_draw_utf8_2(int x, int y, const char *s, int fg_color, int bg_color, const z_font_t *font, const z_clip_t *clip);
 
 // Hands the Japanese font over directly, instead of finding sw/apps/

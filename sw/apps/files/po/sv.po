@@ -1,0 +1,359 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: Zeitlos files\n"
+"Language: sv\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+
+msgctxt "button"
+msgid "Open"
+msgstr "Öppna"
+
+msgctxt "button"
+msgid "New Dir"
+msgstr "Ny mapp"
+
+msgctxt "button"
+msgid "Rename"
+msgstr "Byt n."
+
+msgctxt "button"
+msgid "Copy"
+msgstr "Kopiera"
+
+msgctxt "button"
+msgid "Move"
+msgstr "Flytta"
+
+msgctxt "button"
+msgid "Delete"
+msgstr "Radera"
+
+msgctxt "button"
+msgid "Convert"
+msgstr "Konv."
+
+msgctxt "button"
+msgid "Find"
+msgstr "Sök"
+
+msgid " (reading)"
+msgstr " (läser)"
+
+msgid " (partial list)"
+msgstr " (del av listan)"
+
+msgid "Launch failed"
+msgstr "Start misslyckades"
+
+msgid ""
+"That application could\n"
+"not be started."
+msgstr ""
+"Programmet kunde\n"
+"inte startas."
+
+msgid ""
+"That program could not\n"
+"be started."
+msgstr ""
+"Programmet kunde\n"
+"inte startas."
+
+msgid "Can't open"
+msgstr "Kan inte öppna"
+
+msgid ""
+"That file is not a\n"
+"program."
+msgstr ""
+"Filen är inget\n"
+"program."
+
+msgid ""
+"No application is\n"
+"associated with this file."
+msgstr ""
+"Inget program är kopplat\n"
+"till den här filen."
+
+msgid "New Folder"
+msgstr "Ny mapp"
+
+msgid "Name for the new folder:"
+msgstr "Namn på den nya mappen:"
+
+msgid "Bad name"
+msgstr "Ogiltigt namn"
+
+msgid ""
+"A folder name cannot\n"
+"contain '/'."
+msgstr ""
+"Ett mappnamn får inte\n"
+"innehålla '/'."
+
+msgid "Failed"
+msgstr "Misslyckades"
+
+msgid ""
+"The folder could not\n"
+"be created."
+msgstr ""
+"Mappen kunde inte\n"
+"skapas."
+
+msgid ""
+"Not possible:\n"
+msgstr ""
+"Inte möjligt:\n"
+
+msgid "Rename"
+msgstr "Byt namn"
+
+msgid "New name:"
+msgstr "Nytt namn:"
+
+msgid ""
+"A name cannot\n"
+"contain '/'."
+msgstr ""
+"Ett namn får inte\n"
+"innehålla '/'."
+
+msgid "Move"
+msgstr "Flytta"
+
+msgid "Copy"
+msgstr "Kopiera"
+
+msgid "Move to:"
+msgstr "Flytta till:"
+
+msgid "Copy to:"
+msgstr "Kopiera till:"
+
+msgid ""
+"Replace the file that\n"
+"is already there?"
+msgstr ""
+"Ersätta filen som\n"
+"redan finns där?"
+
+#, c-format
+msgid ""
+"Delete the folder\n"
+"%s\n"
+"and everything in it?"
+msgstr ""
+"Radera mappen\n"
+"%s\n"
+"med allt innehåll?"
+
+#, c-format
+msgid ""
+"Delete the file\n"
+"%s?"
+msgstr ""
+"Radera filen\n"
+"%s?"
+
+msgid "Delete"
+msgstr "Radera"
+
+msgid ""
+"The file could not be\n"
+"deleted. Is it in use?"
+msgstr ""
+"Filen kunde inte\n"
+"raderas. Används den?"
+
+msgid "Convert"
+msgstr "Konvertera"
+
+msgid ""
+"A conversion is already\n"
+"running."
+msgstr ""
+"En konvertering pågår\n"
+"redan."
+
+msgid ""
+"convert does not read\n"
+"this kind of file."
+msgstr ""
+"convert läser inte\n"
+"den här sortens fil."
+
+msgid "Pack into (.zip, .tar or .tar.gz):"
+msgstr "Packa i (.zip, .tar eller .tar.gz):"
+
+msgid "To (the ending picks the format):"
+msgstr "Till (filändelsen väljer formatet):"
+
+msgid "Extract into the folder:"
+msgstr "Packa upp i mappen:"
+
+msgid ""
+"convert is not on\n"
+"this card."
+msgstr ""
+"convert finns inte på\n"
+"det här kortet."
+
+msgid ""
+"Could not start: is\n"
+"/tmp writable?"
+msgstr ""
+"Kunde inte starta: går\n"
+"det att skriva i /tmp?"
+
+msgid " MB"
+msgstr " MB"
+
+msgid " KB"
+msgstr " KB"
+
+msgid " bytes"
+msgstr " byte"
+
+msgctxt "button"
+msgid "Stop"
+msgstr "Stoppa"
+
+#, c-format
+msgid "Finding... %u found, %lu files looked at"
+msgstr "Söker... %u hittade, %lu filer genomsökta"
+
+#, c-format
+msgid "%u found in %s (the first %u matches)"
+msgstr "%u hittade i %s (de första %u träffarna)"
+
+#, c-format
+msgid "%u found in %s (not all)"
+msgstr "%u hittade i %s (inte alla)"
+
+#, c-format
+msgid "%u found in %s"
+msgstr "%u hittade i %s"
+
+msgid "Removing the source... "
+msgstr "Tar bort källan... "
+
+msgid "Moving... "
+msgstr "Flyttar... "
+
+msgid "Copying... "
+msgstr "Kopierar... "
+
+msgid " of "
+msgstr " av "
+
+msgid " files, "
+msgstr " filer, "
+
+#, c-format
+msgid "Deleting... %lu deleted"
+msgstr "Raderar... %lu raderade"
+
+msgid "  (Esc stops)"
+msgstr "  (Esc stoppar)"
+
+msgid "  (Esc: back)"
+msgstr "  (Esc: tillbaka)"
+
+msgid "Stopped."
+msgstr "Stoppad."
+
+msgid "Stopped: "
+msgstr "Stoppad: "
+
+msgid ""
+"\n"
+"The copy is complete; part of\n"
+"the original is still there."
+msgstr ""
+"\n"
+"Kopian är klar; en del av\n"
+"originalet finns kvar."
+
+msgid ""
+"\n"
+"Part of it is deleted already."
+msgstr ""
+"\n"
+"En del är redan raderad."
+
+msgid ""
+"\n"
+"What was copied so far is left\n"
+"in the destination."
+msgstr ""
+"\n"
+"Det som hunnit kopieras\n"
+"ligger kvar i målet."
+
+msgid "Find"
+msgstr "Sök"
+
+msgid ""
+"In this folder and below. A name\n"
+"(report, *.md), \"text\" inside files,\n"
+"or both: *.txt \"invoice\""
+msgstr ""
+"I den här mappen och under. Ett namn\n"
+"(rapport, *.md), \"text\" i filer,\n"
+"eller båda: *.txt \"faktura\""
+
+#, c-format
+msgid ""
+"Browse, open and manage files.\n"
+"\n"
+"Enter\tOpen the selection\n"
+"Backspace\tUp a folder\n"
+"Letters\tJump to a name\n"
+"F2\tRename\n"
+"Delete\tDelete (asks first)\n"
+"F3, Ctrl+F\tFind by name, \"text\" inside, or both\n"
+"F5\tRead the folder again\n"
+"F12\tHome: back to the folder files started in\n"
+"Esc\tStop a find, copy or delete\n"
+"Tab\tTo the buttons; Space presses\n"
+"\n"
+"Results: Enter opens, Backspace goes to the file's folder, Esc goes back.\n"
+"\n"
+"Copy and Move ask for the destination, starting from the file's own path: an existing folder means into it. Folders copy, move and delete with everything in them. Convert saves the file in another format, picked by the ending you give it (.docx, .md, .xlsx, ...); a folder it packs into a .zip, .tar or .tar.gz.\n"
+"\n"
+"%s is yours, %s is the RAM disk (gone at power-off)."
+msgstr ""
+"Bläddra bland, öppna och hantera filer.\n"
+"\n"
+"Enter\tÖppna markeringen\n"
+"Backspace\tUpp en mapp\n"
+"Bokstäver\tHoppa till ett namn\n"
+"F2\tByt namn\n"
+"Del\tRadera (frågar först)\n"
+"F3, Ctrl+F\tSök på namn, \"text\" i filen, eller båda\n"
+"F5\tLäs mappen igen\n"
+"F12\tHem: tillbaka till mappen där files startade\n"
+"Esc\tStoppa en sökning, kopiering eller radering\n"
+"Tab\tTill knapparna; Blanksteg trycker\n"
+"\n"
+"Resultat: Enter öppnar, Backspace går till filens mapp, Esc går tillbaka.\n"
+"\n"
+"Kopiera och Flytta frågar efter målet, med filens egen sökväg som start: en befintlig mapp betyder in i den. Mappar kopieras, flyttas och raderas med allt innehåll. Konvertera sparar filen i ett annat format, valt av filändelsen du anger (.docx, .md, .xlsx, ...); en mapp packas i .zip, .tar eller .tar.gz.\n"
+"\n"
+"%s är din, %s är RAM-disken (försvinner vid avstängning)."
+
+msgid "Files help"
+msgstr "Hjälp för files"
+
+#~ msgid "Open"
+#~ msgstr "Öppna"
+
+#~ msgid "New Dir"
+#~ msgstr "Ny mapp"
+
+#~ msgid "Stop"
+#~ msgstr "Stoppa"

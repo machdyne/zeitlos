@@ -1,0 +1,111 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: Zeitlos ask\n"
+"Language: nl\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+
+msgid "No passage here answers"
+msgstr "Geen passage hier beantwoordt"
+
+msgid "that."
+msgstr "dat."
+
+msgid "could not start read"
+msgstr "kon read niet starten"
+
+#, c-format
+msgid "%u passage, "
+msgid_plural "%u passages, "
+msgstr[0] "%u passage, "
+msgstr[1] "%u passages, "
+
+#, c-format
+msgid "%u pack"
+msgid_plural "%u packs"
+msgstr[0] "%u pakket"
+msgstr[1] "%u pakketten"
+
+msgid ", ranking weaker"
+msgstr ", zwakkere rangschikking"
+
+msgid "  ^U clears"
+msgstr "  ^U wist"
+
+msgid "searching...  Esc cancels"
+msgstr "zoeken...  Esc annuleert"
+
+#, c-format
+msgid "searching %u%%  Esc cancels"
+msgstr "zoeken %u%%  Esc annuleert"
+
+msgid "Loading..., then search"
+msgstr "Laden..., dan zoeken"
+
+msgid "Loading...  Esc stops"
+msgstr "Laden...  Esc stopt"
+
+#, c-format
+msgid "Loading %s %u%%, then search"
+msgstr "Laden: %s %u%%, dan zoeken"
+
+#, c-format
+msgid "Loading %s %u%%  Esc stops"
+msgstr "Laden: %s %u%%  Esc stopt"
+
+msgid "no packs loaded -- nothing to search"
+msgstr "geen pakketten geladen -- niets te zoeken"
+
+msgid "path too long to open"
+msgstr "pad te lang om te openen"
+
+msgid "loading stopped -- no packs loaded"
+msgstr "laden gestopt -- geen pakketten geladen"
+
+#, c-format
+msgid "loading stopped, %u pack loaded"
+msgid_plural "loading stopped, %u packs loaded"
+msgstr[0] "laden gestopt, %u pakket geladen"
+msgstr[1] "laden gestopt, %u pakketten geladen"
+
+#, c-format
+msgid " (%u pack failed)"
+msgid_plural " (%u packs failed)"
+msgstr[0] " (%u pakket mislukt)"
+msgstr[1] " (%u pakketten mislukt)"
+
+msgid ""
+"Finds passages in the datasets on the card that answer a question, and opens them in read.\n"
+"\n"
+"Enter\tSearch; again: open the selection\n"
+"Up/Down\tSelect a result\n"
+"1-9\tOpen that result\n"
+"Esc\tStop loading, cancel a search, or clear\n"
+"Ctrl+U\tClear the line\n"
+"Ctrl+W\tDelete a word\n"
+"Ctrl+Q\tQuit\n"
+"\n"
+"Type a question and press Enter. Click a result to open it, or a pack button to browse its index.\n"
+"\n"
+"Typing works while the packs load; Enter then searches once they are in."
+msgstr ""
+"Vindt in de datasets op de kaart de passages die een vraag beantwoorden, en opent ze in read.\n"
+"\n"
+"Enter\tZoeken; nogmaals: de selectie openen\n"
+"Op/Neer\tEen resultaat kiezen\n"
+"1-9\tDat resultaat openen\n"
+"Esc\tLaden stoppen, een zoektocht annuleren of wissen\n"
+"Ctrl+U\tDe regel wissen\n"
+"Ctrl+W\tEen woord wissen\n"
+"Ctrl+Q\tAfsluiten\n"
+"\n"
+"Typ een vraag en druk op Enter. Klik op een resultaat om het te openen, of op de knop van een pakket om de index te bekijken.\n"
+"\n"
+"Typen kan al terwijl de pakketten laden; Enter zoekt zodra ze er zijn."
+
+msgid "Ask help"
+msgstr "Hulp bij ask"
+
+msgid "cancelled"
+msgstr "geannuleerd"

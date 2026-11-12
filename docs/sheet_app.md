@@ -44,6 +44,9 @@ a pointer.
 ```
 
 The first letter (or the arrows and Enter) picks one; Esc backs out.
+In another language the menu is translated: the first letter of a
+translated item picks it when it is the only one starting so, and any
+other letter is the English item's ([i18n.md](i18n.md)).
 Insert and Delete ask *Rows* or *Columns*, Sort *Ascending* or
 *Descending*, Extend *Down* or *Right*. To type text that starts with
 `/`, start it with `'` (`'/2` is the text `/2`).

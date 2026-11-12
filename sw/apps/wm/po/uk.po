@@ -1,0 +1,131 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: Zeitlos wm\n"
+"Language: uk\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=3; plural=(n%10==1 && n%100!=11 ? 0 : n%10>=2 && n%10<=4 && (n%100<10 || n%100>=20) ? 1 : 2);\n"
+
+msgid "Next page"
+msgstr "Наступна сторінка"
+
+msgid "Back"
+msgstr "Назад"
+
+msgid "Clipboard empty"
+msgstr "Буфер обміну порожній"
+
+msgid "Desktop"
+msgstr "Робочий стіл"
+
+msgid "No window focused"
+msgstr "Немає активного вікна"
+
+msgid "Dock. Use the arrow keys to choose an app, and Enter to start it."
+msgstr "Док. Виберіть застосунок стрілками і натисніть Enter, щоб запустити його."
+
+msgid "restored"
+msgstr "відновлено"
+
+msgid "maximized"
+msgstr "розгорнуто"
+
+msgid "window"
+msgstr "вікно"
+
+msgid "full screen"
+msgstr "повний екран"
+
+msgid "shaded"
+msgstr "згорнуто в заголовок"
+
+msgid "unshaded"
+msgstr "розгорнуто із заголовка"
+
+msgid "Workspace 1"
+msgstr "Робочий стіл 1"
+
+msgid "Workspace 2"
+msgstr "Робочий стіл 2"
+
+msgid "Workspace 3"
+msgstr "Робочий стіл 3"
+
+msgid "Workspace 4"
+msgstr "Робочий стіл 4"
+
+msgid "Workspace 5"
+msgstr "Робочий стіл 5"
+
+msgid "Workspace 6"
+msgstr "Робочий стіл 6"
+
+msgid "Workspace 7"
+msgstr "Робочий стіл 7"
+
+msgid "Workspace 8"
+msgstr "Робочий стіл 8"
+
+msgid "Workspace 9"
+msgstr "Робочий стіл 9"
+
+msgid "Workspace 10"
+msgstr "Робочий стіл 10"
+
+msgid "No volume control on this bitstream"
+msgstr "У цьому бітстрімі немає регулювання гучності"
+
+#, c-format
+msgid "Volume %d%%"
+msgstr "Гучність %d%%"
+
+msgid "No brightness control on this display"
+msgstr "У цього екрана немає регулювання яскравості"
+
+#, c-format
+msgid "Brightness %d/%d"
+msgstr "Яскравість %d/%d"
+
+msgid "Zeitlos is locked"
+msgstr "Zeitlos заблоковано"
+
+msgid "Password: "
+msgstr "Пароль: "
+
+msgid "Type the password, then Enter"
+msgstr "Введіть пароль, потім Enter"
+
+msgid "No password is set: press Enter"
+msgstr "Пароль не задано: натисніть Enter"
+
+msgid "Reboot"
+msgstr "Перезапуск"
+
+msgid "Cancel"
+msgstr "Скасувати"
+
+msgid "Reboot Zeitlos?"
+msgstr "Перезапустити Zeitlos?"
+
+msgid "Unsaved work in open apps is lost."
+msgstr "Незбережена робота у відкритих програмах пропаде."
+
+msgid "Rebooting..."
+msgstr "Перезапуск..."
+
+msgid "Reboot failed -- see the console"
+msgstr "Перезапуск не вдався -- див. консоль"
+
+msgid "Checking..."
+msgstr "Перевірка..."
+
+#, c-format
+msgid "Too many attempts -- wait %lu s"
+msgstr "Забагато спроб -- зачекайте %lu с"
+
+msgid "Wrong password"
+msgstr "Неправильний пароль"
+
+#, c-format
+msgid "Could not check the password (%d)"
+msgstr "Не вдалося перевірити пароль (%d)"

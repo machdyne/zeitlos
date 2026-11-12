@@ -1,0 +1,377 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: Zeitlos sheet\n"
+"Language: uk\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=3; plural=(n%10==1 && n%100!=11 ? 0 : n%10>=2 && n%10<=4 && (n%100<10 || n%100>=20) ? 1 : 2);\n"
+
+msgid "No chart: select the data, then F5."
+msgstr "Немає діаграми: виділіть дані, потім F5."
+
+msgid "Nothing to chart in the range."
+msgstr "У діапазоні нічого показати."
+
+msgid "No numbers in the range to chart."
+msgstr "У діапазоні немає чисел."
+
+msgid "A pie needs some positive numbers."
+msgstr "Кругова потребує додатних чисел."
+
+msgid "Sum "
+msgstr "Сума "
+
+msgid "  Avg "
+msgstr "  Сер. "
+
+msgid "  Count "
+msgstr "  К-сть "
+
+msgctxt "chart"
+msgid "Bar"
+msgstr "Стовпці"
+
+msgctxt "chart"
+msgid "Stacked"
+msgstr "Стос"
+
+msgctxt "chart"
+msgid "Line"
+msgstr "Лінії"
+
+msgctxt "chart"
+msgid "Pie"
+msgstr "Кругова"
+
+msgid "Chart: "
+msgstr "Діаграма: "
+
+msgid "  Esc: back"
+msgstr "  Esc: назад"
+
+msgid "Calculating..."
+msgstr "Обчислення..."
+
+msgid "Export"
+msgstr "Експорт"
+
+msgid ""
+"convert could not\n"
+"be started."
+msgstr ""
+"Не вдалося запустити\n"
+"convert."
+
+msgid ""
+"Could not write the\n"
+"copy to convert."
+msgstr ""
+"Не вдалося записати\n"
+"копію для конвертації."
+
+msgid "Save failed"
+msgstr "Помилка збереження"
+
+msgid ""
+"Could not open the file\n"
+"for writing."
+msgstr ""
+"Не вдалося відкрити файл\n"
+"для запису."
+
+msgid ""
+"The file could not be\n"
+"written completely."
+msgstr ""
+"Не вдалося записати\n"
+"файл повністю."
+
+msgid "Open failed"
+msgstr "Не вдалося відкрити"
+
+msgid ""
+"convert is not on\n"
+"this card."
+msgstr ""
+"На цій картці немає\n"
+"convert."
+
+msgid ""
+"The file could not\n"
+"be opened."
+msgstr ""
+"Не вдалося відкрити\n"
+"файл."
+
+msgid "Unsaved changes"
+msgstr "Незбережені зміни"
+
+msgid ""
+"This sheet has unsaved\n"
+"changes. Save first?"
+msgstr ""
+"У таблиці є незбережені\n"
+"зміни. Спершу зберегти?"
+
+msgid "Sheet full"
+msgstr "Таблиця заповнена"
+
+msgid ""
+"No room for another cell.\n"
+"The change was not made."
+msgstr ""
+"Немає місця для ще однієї клітинки.\n"
+"Зміну не зроблено."
+
+msgid ""
+"No room for more cells.\n"
+"Some were not pasted."
+msgstr ""
+"Немає місця для нових клітинок.\n"
+"Частину не вставлено."
+
+msgid "Fill"
+msgstr "Заповнити"
+
+msgid ""
+"Too much to fill\n"
+"at once."
+msgstr ""
+"Забагато для\n"
+"заповнення за раз."
+
+msgid ""
+"No room for more cells.\n"
+"Some were not filled."
+msgstr ""
+"Немає місця для нових клітинок.\n"
+"Частину не заповнено."
+
+msgid "Insert"
+msgstr "Вставити"
+
+msgid "Delete"
+msgstr "Видалити"
+
+msgid ""
+"That would push cells\n"
+"past the edge of the sheet."
+msgstr ""
+"Це виштовхне клітинки\n"
+"за край таблиці."
+
+msgid ""
+"No room: the sheet\n"
+"is full."
+msgstr ""
+"Немає місця: таблиця\n"
+"заповнена."
+
+msgid "Format"
+msgstr "Формат"
+
+#, c-format
+msgid ""
+"G general  F2 fixed  ,2 1,000.00\n"
+"%1 percent  $2 money  (digit: places)"
+msgstr ""
+"G загальний  F2 фікс.  ,2 1,000.00\n"
+"%1 відсотки  $2 гроші  (цифра: знаки)"
+
+#, c-format
+msgid ""
+"Not a format: G, F2, ,2,\n"
+"%1 or $2 (any 0-8 places)."
+msgstr ""
+"Не формат: G, F2, ,2,\n"
+"%1 або $2 (0-8 знаків)."
+
+msgid ""
+"Too many formatted\n"
+"ranges: 64 at most."
+msgstr ""
+"Забагато форматованих\n"
+"діапазонів: не більше 64."
+
+msgid "Width"
+msgstr "Ширина"
+
+msgid "Column width, in characters:"
+msgstr "Ширина стовпця, у символах:"
+
+msgid "Chart"
+msgstr "Діаграма"
+
+msgid ""
+"Select the table to chart\n"
+"(labels in the first row\n"
+"and column), then F5."
+msgstr ""
+"Виділіть таблицю для діаграми\n"
+"(підписи в першому рядку\n"
+"і стовпці), потім F5."
+
+msgid "Sort"
+msgstr "Сортування"
+
+msgid ""
+"Select the rows to sort\n"
+"(all their columns), then\n"
+"put the cursor in the key."
+msgstr ""
+"Виділіть рядки для сортування\n"
+"(усі їхні стовпці), потім\n"
+"поставте курсор у ключ."
+
+msgid ""
+"Too large to sort here:\n"
+"sort fewer rows at a time."
+msgstr ""
+"Забагато для сортування:\n"
+"сортуйте менше рядків за раз."
+
+msgid "Go to"
+msgstr "Перейти"
+
+msgid "Cell (like B12):"
+msgstr "Клітинка (наприклад, B12):"
+
+msgid "Not a cell: A1 to Z999."
+msgstr "Не клітинка: від A1 до Z999."
+
+msgid "Find"
+msgstr "Знайти"
+
+msgid "Not found."
+msgstr "Не знайдено."
+
+msgid ""
+"A spreadsheet: numbers, text and formulas in a grid.\n"
+"\n"
+"Type into the cell; =A1*2 is a formula, =SUM(B2:B9) a range. Enter moves down, Tab right, Shift+arrows select.\n"
+"\n"
+"/, F4\tCommands: insert, delete, number format, width, sort, extend, goto, find, chart\n"
+"F2\tEdit the cell\n"
+"Ctrl+Z/Y\tUndo, redo\n"
+"Ctrl+C/X/V\tCopy, cut, paste\n"
+"Ctrl+D/R\tFill down, right\n"
+"Ctrl+1\tNumber format\n"
+"Ctrl+G\tGo to a cell\n"
+"F3, Ctrl+F\tFind (again: the next match)\n"
+"F5\tChart the selection\n"
+"Alt+Left\tNarrow the column (Alt+Right widens)\n"
+"Ctrl+N/O/S\tNew, open, save\n"
+"\n"
+"Functions: SUM AVERAGE MIN MAX COUNT ABS INT ROUND MOD SQRT POWER IF AND OR NOT PMT PV FV NPV VLOOKUP INDEX.\n"
+"\n"
+"Select a range to see its sum, average and count."
+msgstr ""
+"Електронна таблиця: числа, текст і формули в сітці.\n"
+"\n"
+"Вводьте в клітинку; =A1*2 - формула, =SUM(B2:B9) - діапазон. Enter - вниз, Tab - праворуч, Shift+стрілки виділяють.\n"
+"\n"
+"/, F4\tКоманди: вставити, видалити, формат, ширина, сортування, продовжити, перейти, знайти, діаграма\n"
+"F2\tРедагувати клітинку\n"
+"Ctrl+Z/Y\tСкасувати, повторити\n"
+"Ctrl+C/X/V\tКопіювати, вирізати, вставити\n"
+"Ctrl+D/R\tЗаповнити вниз, праворуч\n"
+"Ctrl+1\tФормат чисел\n"
+"Ctrl+G\tПерейти до клітинки\n"
+"F3, Ctrl+F\tЗнайти (ще раз: наступне)\n"
+"F5\tДіаграма з виділення\n"
+"Alt+Ліворуч\tЗвузити стовпець (Alt+Праворуч - розширити)\n"
+"Ctrl+N/O/S\tНовий, відкрити, зберегти\n"
+"\n"
+"Функції: SUM AVERAGE MIN MAX COUNT ABS INT ROUND MOD SQRT POWER IF AND OR NOT PMT PV FV NPV VLOOKUP INDEX.\n"
+"\n"
+"Виділіть діапазон, щоб побачити суму, середнє й кількість."
+
+msgid "Sheet help"
+msgstr "Довідка sheet"
+
+msgid "Find (F3 finds the next):"
+msgstr "Знайти (F3 шукає далі):"
+
+msgctxt "menu"
+msgid "Insert"
+msgstr "Вставити"
+
+msgctxt "menu"
+msgid "Delete"
+msgstr "Видалити"
+
+msgctxt "menu"
+msgid "Number"
+msgstr "Число"
+
+msgctxt "menu"
+msgid "Width"
+msgstr "Ширина"
+
+msgctxt "menu"
+msgid "Sort"
+msgstr "Сортування"
+
+msgctxt "menu"
+msgid "Extend"
+msgstr "Продовжити"
+
+msgctxt "menu"
+msgid "Undo"
+msgstr "Скасувати"
+
+msgctxt "menu"
+msgid "Redo"
+msgstr "Повторити"
+
+msgctxt "menu"
+msgid "Goto"
+msgstr "Перейти"
+
+msgctxt "menu"
+msgid "Find"
+msgstr "Знайти"
+
+msgctxt "menu"
+msgid "Chart"
+msgstr "Діаграма"
+
+msgctxt "menu"
+msgid "Help"
+msgstr "Довідка"
+
+msgctxt "menu"
+msgid "Rows"
+msgstr "Рядки"
+
+msgctxt "menu"
+msgid "Columns"
+msgstr "Стовпці"
+
+msgctxt "menu"
+msgid "Ascending"
+msgstr "За зростанням"
+
+msgctxt "menu"
+msgid "Descending"
+msgstr "За спаданням"
+
+msgctxt "menu"
+msgid "Down"
+msgstr "Вниз"
+
+msgctxt "menu"
+msgid "Right"
+msgstr "Праворуч"
+
+msgid "Insert:"
+msgstr "Вставити:"
+
+msgid "Delete:"
+msgstr "Видалити:"
+
+msgid "Sort:"
+msgstr "Сортування:"
+
+msgid "Extend:"
+msgstr "Продовжити:"

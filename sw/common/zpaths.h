@@ -153,6 +153,12 @@
 
 /* jfont (docs/text_encoding.md, "Japanese") */
 #define Z_PATH_JFONT_FONT         "/data/jfont/jp12.zfn"
+/* ... and languages (docs/i18n.md): the glyphs other scripts need, by
+   font size, and the translations, one catalog per language
+   (<lang>.zlc). All in the "lang" set. */
+#define Z_PATH_JFONT_SCRIPT5X8    "/data/jfont/script5x8.zfn"
+#define Z_PATH_JFONT_SCRIPT6X12   "/data/jfont/script6x12.zfn"
+#define Z_DIR_LANG                "/data/jfont/lang"
 
 /* kidgames (docs/kidgames_app.md) */
 #define Z_DIR_KIDGAMES_DATA       "/data/kidgames"

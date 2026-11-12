@@ -1,0 +1,17 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: Zeitlos tts\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+#: sw/apps/tts/tts.c:291
+msgid "Speech off"
+msgstr ""
+
+#: sw/apps/tts/tts.c:315
+msgid "Synthesised voice"
+msgstr ""
+
+#: sw/apps/tts/tts.c:387
+msgid "Speech on"
+msgstr ""

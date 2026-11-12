@@ -449,8 +449,14 @@ bool z_scrollbar_has_pointer(const z_scrollbar_t *sb, int cx, int cy);
 #define Z_LIST_NONE       0	// nothing happened
 #define Z_LIST_SELECTED   1	// the selection moved
 #define Z_LIST_ACTIVATED  2	// the selected row was chosen
+#define Z_LIST_TOGGLED    3	// multiple selection: the selected row's check
+							// box was pressed -- the app flips its state
 
 typedef const char *(*z_list_label_fn)(void *user, int index);
+
+// Multiple selection (z_listbox_set_checks()): whether row `index` is
+// checked. The app keeps the state, as it keeps the labels.
+typedef bool (*z_list_check_fn)(void *user, int index);
 
 typedef struct {
 
@@ -462,6 +468,7 @@ typedef struct {
 	int				count;
 	z_list_label_fn	label;
 	void			*user;
+	z_list_check_fn	checked;	// NULL: single selection
 
 	int				sel;		// selected row, or -1
 	int				top;		// first visible row
@@ -516,6 +523,19 @@ void z_listbox_select(z_listbox_t *lb, int index);
 void z_listbox_wheel(z_listbox_t *lb, int notches);
 
 int z_listbox_selected(const z_listbox_t *lb);
+
+// Multiple selection: every row gets a check box, "[x]" or "[ ]", from
+// `checked` (NULL: back to single selection). Space, or a click on the
+// box, returns Z_LIST_TOGGLED for the selected row: the app flips its
+// own state and calls z_listbox_refresh(). The selection is still the
+// cursor -- Up, Down, letters -- and Enter and a double-click still
+// activate. Single selection is the plain list: the selected row IS
+// the choice (a language, a theme), so nothing is drawn for it.
+void z_listbox_set_checks(z_listbox_t *lb, z_list_check_fn checked);
+
+// Rows' text or checks changed in place: repainted on the next draw,
+// without blanking.
+void z_listbox_refresh(z_listbox_t *lb);
 
 void z_listbox_set_focus(z_listbox_t *lb, bool focused);
 

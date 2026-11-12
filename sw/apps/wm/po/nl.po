@@ -1,0 +1,131 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: Zeitlos wm\n"
+"Language: nl\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+
+msgid "Next page"
+msgstr "Volgende pagina"
+
+msgid "Back"
+msgstr "Terug"
+
+msgid "Clipboard empty"
+msgstr "Klembord leeg"
+
+msgid "Desktop"
+msgstr "Bureaublad"
+
+msgid "No window focused"
+msgstr "Geen venster actief"
+
+msgid "Dock. Use the arrow keys to choose an app, and Enter to start it."
+msgstr "Dock. Kies een app met de pijltjestoetsen, en Enter om hem te starten."
+
+msgid "restored"
+msgstr "hersteld"
+
+msgid "maximized"
+msgstr "gemaximaliseerd"
+
+msgid "window"
+msgstr "venster"
+
+msgid "full screen"
+msgstr "volledig scherm"
+
+msgid "shaded"
+msgstr "opgerold"
+
+msgid "unshaded"
+msgstr "uitgerold"
+
+msgid "Workspace 1"
+msgstr "Werkblad 1"
+
+msgid "Workspace 2"
+msgstr "Werkblad 2"
+
+msgid "Workspace 3"
+msgstr "Werkblad 3"
+
+msgid "Workspace 4"
+msgstr "Werkblad 4"
+
+msgid "Workspace 5"
+msgstr "Werkblad 5"
+
+msgid "Workspace 6"
+msgstr "Werkblad 6"
+
+msgid "Workspace 7"
+msgstr "Werkblad 7"
+
+msgid "Workspace 8"
+msgstr "Werkblad 8"
+
+msgid "Workspace 9"
+msgstr "Werkblad 9"
+
+msgid "Workspace 10"
+msgstr "Werkblad 10"
+
+msgid "No volume control on this bitstream"
+msgstr "Geen volumeregeling in deze bitstream"
+
+#, c-format
+msgid "Volume %d%%"
+msgstr "Volume %d%%"
+
+msgid "No brightness control on this display"
+msgstr "Geen helderheidsregeling op dit scherm"
+
+#, c-format
+msgid "Brightness %d/%d"
+msgstr "Helderheid %d/%d"
+
+msgid "Zeitlos is locked"
+msgstr "Zeitlos is vergrendeld"
+
+msgid "Password: "
+msgstr "Wachtwoord: "
+
+msgid "Type the password, then Enter"
+msgstr "Typ het wachtwoord, dan Enter"
+
+msgid "No password is set: press Enter"
+msgstr "Geen wachtwoord ingesteld: druk op Enter"
+
+msgid "Reboot"
+msgstr "Herstarten"
+
+msgid "Cancel"
+msgstr "Annuleren"
+
+msgid "Reboot Zeitlos?"
+msgstr "Zeitlos herstarten?"
+
+msgid "Unsaved work in open apps is lost."
+msgstr "Niet-opgeslagen werk in open apps gaat verloren."
+
+msgid "Rebooting..."
+msgstr "Herstarten..."
+
+msgid "Reboot failed -- see the console"
+msgstr "Herstarten mislukt -- zie de console"
+
+msgid "Checking..."
+msgstr "Controleren..."
+
+#, c-format
+msgid "Too many attempts -- wait %lu s"
+msgstr "Te veel pogingen -- wacht %lu s"
+
+msgid "Wrong password"
+msgstr "Verkeerd wachtwoord"
+
+#, c-format
+msgid "Could not check the password (%d)"
+msgstr "Kon het wachtwoord niet controleren (%d)"

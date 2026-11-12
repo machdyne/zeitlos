@@ -1,0 +1,281 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: Zeitlos common\n"
+"Language: uk\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=3; plural=(n%10==1 && n%100!=11 ? 0 : n%10>=2 && n%10<=4 && (n%100<10 || n%100>=20) ? 1 : 2);\n"
+
+msgid " (reading)"
+msgstr " (читання)"
+
+msgid " (partial list)"
+msgstr " (частина списку)"
+
+msgid "OK"
+msgstr "OK"
+
+msgid "Cancel"
+msgstr "Скасувати"
+
+msgid "Yes"
+msgstr "Так"
+
+msgid "No"
+msgstr "Ні"
+
+msgid "Open"
+msgstr "Відкрити"
+
+msgid "Save"
+msgstr "Зберегти"
+
+msgid "Open a file"
+msgstr "Відкрити файл"
+
+msgid "Choose"
+msgstr "Вибрати"
+
+msgid "Choose a file or folder"
+msgstr "Вибір файлу або теки"
+
+msgid "Save As"
+msgstr "Зберегти як"
+
+msgid "Read docs"
+msgstr "Документація"
+
+msgid "Close"
+msgstr "Закрити"
+
+msgid "Help"
+msgstr "Довідка"
+
+msgid "Print to"
+msgstr "Друк на"
+
+msgid "Pages"
+msgstr "Сторінки"
+
+msgid "Copies"
+msgstr "Копії"
+
+msgid "Paper"
+msgstr "Папір"
+
+msgid "Tray"
+msgstr "Лоток"
+
+msgid "Per sheet"
+msgstr "На аркуші"
+
+msgid "Quality"
+msgstr "Якість"
+
+msgid "US Letter"
+msgstr "US Letter"
+
+msgid "Legal"
+msgstr "US Legal"
+
+msgid "4 x 6 in"
+msgstr "4 x 6 дюйм."
+
+msgid "5 x 7 in"
+msgstr "5 x 7 дюйм."
+
+msgid "3 x 5 in"
+msgstr "3 x 5 дюйм."
+
+msgid "Printer's choice"
+msgstr "На вибір принтера"
+
+msgctxt "tray"
+msgid "Main"
+msgstr "Основний"
+
+msgctxt "tray"
+msgid "Rear"
+msgstr "Задній"
+
+msgctxt "tray"
+msgid "Manual"
+msgstr "Ручний"
+
+msgctxt "quality"
+msgid "Normal"
+msgstr "Звичайна"
+
+msgctxt "quality"
+msgid "Draft"
+msgstr "Чернетка"
+
+msgctxt "quality"
+msgid "High"
+msgstr "Висока"
+
+msgid "Print"
+msgstr "Друк"
+
+msgid "A PDF file"
+msgstr "Файл PDF"
+
+msgid "A PostScript file"
+msgstr "Файл PostScript"
+
+msgid "Printer (not set up)"
+msgstr "Принтер (не налаштовано)"
+
+msgid "Printer "
+msgstr "Принтер "
+
+msgid "All"
+msgstr "Усі"
+
+msgid "This page ("
+msgstr "Ця сторінка ("
+
+msgid "The selection"
+msgstr "Виділення"
+
+msgid "Default ("
+msgstr "Типово ("
+
+msgid "(the printer's)"
+msgstr "(як у принтера)"
+
+msgid " page"
+msgstr " стор."
+
+msgid " pages"
+msgstr " стор."
+
+msgid "Print to a file"
+msgstr "Друк у файл"
+
+msgid "That file exists. Replace it?"
+msgstr "Файл уже є. Замінити?"
+
+msgctxt "short weekday"
+msgid "Sun"
+msgstr "Нд"
+
+msgctxt "short weekday"
+msgid "Mon"
+msgstr "Пн"
+
+msgctxt "short weekday"
+msgid "Tue"
+msgstr "Вт"
+
+msgctxt "short weekday"
+msgid "Wed"
+msgstr "Ср"
+
+msgctxt "short weekday"
+msgid "Thu"
+msgstr "Чт"
+
+msgctxt "short weekday"
+msgid "Fri"
+msgstr "Пт"
+
+msgctxt "short weekday"
+msgid "Sat"
+msgstr "Сб"
+
+msgctxt "short month"
+msgid "Jan"
+msgstr "січ"
+
+msgctxt "short month"
+msgid "Feb"
+msgstr "лют"
+
+msgctxt "short month"
+msgid "Mar"
+msgstr "бер"
+
+msgctxt "short month"
+msgid "Apr"
+msgstr "кві"
+
+msgctxt "short month"
+msgid "May"
+msgstr "тра"
+
+msgctxt "short month"
+msgid "Jun"
+msgstr "чер"
+
+msgctxt "short month"
+msgid "Jul"
+msgstr "лип"
+
+msgctxt "short month"
+msgid "Aug"
+msgstr "сер"
+
+msgctxt "short month"
+msgid "Sep"
+msgstr "вер"
+
+msgctxt "short month"
+msgid "Oct"
+msgstr "жов"
+
+msgctxt "short month"
+msgid "Nov"
+msgstr "лис"
+
+msgctxt "short month"
+msgid "Dec"
+msgstr "гру"
+
+msgctxt "month"
+msgid "January"
+msgstr "січень"
+
+msgctxt "month"
+msgid "February"
+msgstr "лютий"
+
+msgctxt "month"
+msgid "March"
+msgstr "березень"
+
+msgctxt "month"
+msgid "April"
+msgstr "квітень"
+
+msgctxt "month"
+msgid "May"
+msgstr "травень"
+
+msgctxt "month"
+msgid "June"
+msgstr "червень"
+
+msgctxt "month"
+msgid "July"
+msgstr "липень"
+
+msgctxt "month"
+msgid "August"
+msgstr "серпень"
+
+msgctxt "month"
+msgid "September"
+msgstr "вересень"
+
+msgctxt "month"
+msgid "October"
+msgstr "жовтень"
+
+msgctxt "month"
+msgid "November"
+msgstr "листопад"
+
+msgctxt "month"
+msgid "December"
+msgstr "грудень"

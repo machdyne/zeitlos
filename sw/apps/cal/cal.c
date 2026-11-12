@@ -75,6 +75,8 @@
 #include <string.h>
 
 #include "../../common/zeitlos.h"
+#include "../../common/zi18n.h"
+#include "../../common/zutf8.h"
 #include "../../common/zsoc.h"
 #include "../../common/zrtc.h"
 #include "../../common/zwm.h"
@@ -196,11 +198,11 @@ static void day_str(int d, char *out) {
 }
 
 static int text_w6(const char *s) {
-	return (int)strlen(s) * z_font_6x12.w;
+	return z_text_cols(s) * z_font_6x12.w;
 }
 
 static int text_w5(const char *s) {
-	return (int)strlen(s) * z_font_5x8.w;
+	return z_text_cols(s) * z_font_5x8.w;
 }
 
 // -- reading the clock --
@@ -319,7 +321,7 @@ static void draw_weekday_header(void) {
 	for (int col = 0; col < CAL_COLS; col++) {
 
 		const char *full = z_wday_name(cal_col_wday(col));
-		char lbl[3];
+		char lbl[16];
 		int tw;
 
 		// "Sun" -> "Su". The third letter is what distinguishes
@@ -327,9 +329,11 @@ static void draw_weekday_header(void) {
 		// ambiguous in a list -- but the column POSITION already
 		// disambiguates here, and two characters is what fits a
 		// 20px cell with margins at 6px per glyph.
-		lbl[0] = full[0];
-		lbl[1] = full[1];
-		lbl[2] = '\0';
+		// Two characters, not two bytes: a translated name is UTF-8.
+		size_t k = z_utf8_fit_cols(full, strlen(full), 2);
+		if (k > sizeof(lbl) - 1) k = sizeof(lbl) - 1;
+		memcpy(lbl, full, k);
+		lbl[k] = '\0';
 
 		tw = text_w6(lbl);
 
@@ -405,7 +409,7 @@ static void draw_title(void) {
 		// shows how many are still wanted. A four-digit year is
 		// required (cal_core.h) and this is where that is
 		// communicated.
-		snprintf(line, sizeof(line), "Year %s%s", entry.buf,
+		snprintf(line, sizeof(line), ZS_("Year %s%s"), entry.buf,
 			"____" + entry.len);
 	} else {
 		snprintf(line, sizeof(line), "%s %04ld",
@@ -436,9 +440,9 @@ static void draw_title(void) {
 // The no-RTC line names the command because it is a gateware problem
 // and `make dev-flash` will not fix it, which is the specific
 // confusion worth heading off (see docs/rtc.md).
-static const char *const STATUS_ENTRY   = "Enter to go, Esc to cancel";
-static const char *const STATUS_NO_RTC  = "No RTC: `RTC off, make flash";
-static const char *const STATUS_NOT_SET = "Clock not set -- type a year";
+#define STATUS_ENTRY   ZS_("Enter to go, Esc to cancel")
+#define STATUS_NO_RTC  ZS_("No RTC: `RTC off, make flash")
+#define STATUS_NOT_SET ZS_("Clock not set -- type a year")
 
 static void draw_status(void) {
 
@@ -471,7 +475,7 @@ static void draw_status(void) {
 		// west of Greenwich this rolls over hours before local
 		// midnight, and an unlabelled date that disagrees with the
 		// wall reads as broken rather than as correct-but-elsewhere.
-		snprintf(buf, sizeof(buf), "Today %s %d %s %04ld %s",
+		snprintf(buf, sizeof(buf), ZS_("Today %s %d %s %04ld %s"),
 			z_wday_name(today_wday), (int)today_day,
 			z_month_name(today_month), (long)today_year,
 			z_tz_name(&tz, tz_dst));
@@ -700,7 +704,7 @@ static void help_on_msg(z_msg_t *m, void *user) {
 static void handle_key(uint32_t keysym, uint8_t mods) {
 
 	if (keysym == Z_KEY_HELP) {	// docs/app_help.md
-		static const char help[] =
+		const char *help = ZS_(
 			"A month calendar, with today marked.\n\n"
 			"Left/Right\tPrevious / next month\n"
 			"Up/Down\tPrevious / next year\n"
@@ -713,9 +717,9 @@ static void handle_key(uint32_t keysym, uint8_t mods) {
 			"Click < or > to change month. Type four digits and "
 			"Enter to jump to a year (1970-2105). Today needs the "
 			"clock set: run net. Click the date at the bottom, or "
-			"press z, to choose the time zone.";
+			"press z, to choose the time zone.");
 		z_dialog_ctx_t ctx = { &win, help_on_msg, NULL };
-		z_dialog_help(&ctx, "Cal help", help, "cal_app");
+		z_dialog_help(&ctx, ZS_("Cal help"), help, "cal_app");
 		return;
 	}
 
@@ -864,6 +868,9 @@ static void widgets_init(void) {
 }
 
 int main(void) {
+
+	// The language (docs/i18n.md): read once, before any string.
+	z_tr_init(Z_APP_NAME);
 
 	printf("cal: starting\n");
 

@@ -1,0 +1,131 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: Zeitlos wm\n"
+"Language: pl\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=3; plural=(n==1 ? 0 : n%10>=2 && n%10<=4 && (n%100<10 || n%100>=20) ? 1 : 2);\n"
+
+msgid "Next page"
+msgstr "Następna strona"
+
+msgid "Back"
+msgstr "Wstecz"
+
+msgid "Clipboard empty"
+msgstr "Schowek pusty"
+
+msgid "Desktop"
+msgstr "Pulpit"
+
+msgid "No window focused"
+msgstr "Żadne okno nie jest aktywne"
+
+msgid "Dock. Use the arrow keys to choose an app, and Enter to start it."
+msgstr "Dock. Wybierz aplikację strzałkami, a Enterem ją uruchom."
+
+msgid "restored"
+msgstr "przywrócone"
+
+msgid "maximized"
+msgstr "zmaksymalizowane"
+
+msgid "window"
+msgstr "okno"
+
+msgid "full screen"
+msgstr "pełny ekran"
+
+msgid "shaded"
+msgstr "zwinięte"
+
+msgid "unshaded"
+msgstr "rozwinięte"
+
+msgid "Workspace 1"
+msgstr "Pulpit 1"
+
+msgid "Workspace 2"
+msgstr "Pulpit 2"
+
+msgid "Workspace 3"
+msgstr "Pulpit 3"
+
+msgid "Workspace 4"
+msgstr "Pulpit 4"
+
+msgid "Workspace 5"
+msgstr "Pulpit 5"
+
+msgid "Workspace 6"
+msgstr "Pulpit 6"
+
+msgid "Workspace 7"
+msgstr "Pulpit 7"
+
+msgid "Workspace 8"
+msgstr "Pulpit 8"
+
+msgid "Workspace 9"
+msgstr "Pulpit 9"
+
+msgid "Workspace 10"
+msgstr "Pulpit 10"
+
+msgid "No volume control on this bitstream"
+msgstr "Brak regulacji głośności w tym bitstreamie"
+
+#, c-format
+msgid "Volume %d%%"
+msgstr "Głośność %d%%"
+
+msgid "No brightness control on this display"
+msgstr "Brak regulacji jasności tego ekranu"
+
+#, c-format
+msgid "Brightness %d/%d"
+msgstr "Jasność %d/%d"
+
+msgid "Zeitlos is locked"
+msgstr "Zeitlos jest zablokowany"
+
+msgid "Password: "
+msgstr "Hasło: "
+
+msgid "Type the password, then Enter"
+msgstr "Wpisz hasło, potem Enter"
+
+msgid "No password is set: press Enter"
+msgstr "Brak hasła: naciśnij Enter"
+
+msgid "Reboot"
+msgstr "Uruchom ponownie"
+
+msgid "Cancel"
+msgstr "Anuluj"
+
+msgid "Reboot Zeitlos?"
+msgstr "Uruchomić Zeitlos ponownie?"
+
+msgid "Unsaved work in open apps is lost."
+msgstr "Niezapisana praca w otwartych aplikacjach przepadnie."
+
+msgid "Rebooting..."
+msgstr "Ponowne uruchamianie..."
+
+msgid "Reboot failed -- see the console"
+msgstr "Nie udało się -- zobacz konsolę"
+
+msgid "Checking..."
+msgstr "Sprawdzanie..."
+
+#, c-format
+msgid "Too many attempts -- wait %lu s"
+msgstr "Za dużo prób -- poczekaj %lu s"
+
+msgid "Wrong password"
+msgstr "Złe hasło"
+
+#, c-format
+msgid "Could not check the password (%d)"
+msgstr "Nie udało się sprawdzić hasła (%d)"

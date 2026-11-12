@@ -2,6 +2,6 @@
 
 APP = jfont
 
-OBJS = zeitlos.o zobj.o zfsapp.o jfont.o
+OBJS = zeitlos.o zobj.o zfsapp.o zcfg.o jfont.o
 
 include ../../common/app.mk

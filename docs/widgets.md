@@ -232,9 +232,9 @@ surface for something the keyboard already does better.
 
 ## List boxes
 
-`z_listbox_t` (`zwidget.h`) is a framed, scrolling, single-selection
-list of text rows with its own scrollbar. Its first user is the time
-zone list in `sw/apps/settings`.
+`z_listbox_t` (`zwidget.h`) is a framed, scrolling list of text rows
+with its own scrollbar, for one choice or several. Settings has three
+(the time zones, the languages, the desktop colours), welcome two more.
 
 **Items come from a callback.** The list owns no storage. You give it a
 count and a `const char *label(void *user, int index)` function, and it
@@ -288,6 +288,23 @@ focused list draws a ring one pixel outside its frame, so leave 2px.
 the next draw paints only the new rows in view, and the scrollbar only
 if its thumb moves. Append, then draw a few times a second -- not once
 per row (`sw/apps/files`, `res_show()`).
+
+**Several choices: check boxes.** `z_listbox_set_checks(&list,
+checked_fn)` gives every row a box, `[x]` or `[ ]`, from a
+`bool checked(void *user, int index)` the app supplies -- the state is
+the app's, as the labels are. Space, or a click on the box, returns
+`Z_LIST_TOGGLED` for the selected row; the app flips its state and
+calls `z_listbox_refresh()`, and the next draw repaints in place. The
+selection is still the cursor (arrows, letters; a Space while a name is
+being typed is part of the name), and Enter still activates.
+`NULL` goes back to one choice, where nothing is drawn for the
+selection but the bar: the selected row *is* the choice. Tested by
+`sw/common/tests/test_listbox.c`.
+
+**One choice, not a stepper.** For a choice among more than two or three
+things -- a language, a colour theme -- use a list, not `<` `>`
+buttons: the list shows every option at once, the one in use, and how
+far away the others are.
 
 **It behaves like the file list on purpose.** Row height, selection bar,
 double-click interval, scrollbar inset and keys all match `z_flist_t`,

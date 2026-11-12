@@ -48,8 +48,8 @@ TB_OUT = out/tb
 tb/%.bin: force
 	@true
 
-.PHONY: test test-screen test-tb test-zdev test-boot test-desktop test-input force
-test: zsys test-tb test-zdev test-boot test-desktop test-input test-screen
+.PHONY: test test-screen test-lang test-tb test-zdev test-boot test-desktop test-input force
+test: zsys test-tb test-zdev test-boot test-desktop test-input test-screen test-lang
 
 # -- the devices, register by register (test_zdev.c) --
 
@@ -154,6 +154,31 @@ test-screen: test-boot
 	python3 check_screen.py --within $(SCREEN) --named out/screen-kb.log out/screen-kb.png keyboard > out/screen-kb.check && \
 		echo "test-screen: a tap on text there, no keyboard: the on-screen keyboard fits it too (out/screen-kb.png)" || \
 		{ echo "test-screen: FAILED (out/screen-kb.log, out/screen-kb.check)"; cat out/screen-kb.check; exit 1; }
+
+# -- languages (docs/i18n.md) --
+#
+# The card (ZSYS_CARD, with the Languages set) copied with
+# system.language set: in xx, the test language, files' delete question
+# must come up translated -- its title is the window's, in the log --
+# and in ru the same in Cyrillic, from jfont's glyphs. (jfont's own line
+# is not looked for: other processes' output lands in the middle of it.)
+# Skipped without a card.
+
+test-lang: test-boot
+	@if [ ! -f out/boot.img ] || [ -z "$(ZSYS_CARD)" ] || [ ! -f "$(ZSYS_CARD)" ]; then \
+		echo "test-lang: skipped -- needs ZSYS_CARD, a card with the Languages set"; exit 0; fi; \
+	for L in xx ru; do \
+		cp "$(ZSYS_CARD)" out/lang-$$L.img && mdel -i out/lang-$$L.img ::/sys/firstrun 2>/dev/null; \
+		mcopy -n -i out/lang-$$L.img ::/sys/zeitlos.cfg out/lang-$$L.cfg 2>/dev/null || : > out/lang-$$L.cfg; \
+		printf '\nsystem.language: %s\n' $$L >> out/lang-$$L.cfg; \
+		mcopy -o -i out/lang-$$L.img out/lang-$$L.cfg ::/sys/zeitlos.cfg; \
+		./zsys --flash out/boot.img --sd out/lang-$$L.img --snapshot --fast --seconds 16 \
+			--after "init: done" --type "run files\n" --wait 7000 --keys '\{Delete}' --wait 2000 \
+			--screenshot out/lang-$$L.png > out/lang-$$L.log 2>&1; \
+	done; \
+	grep -aq "wm: win [0-9]* '\[D" out/lang-xx.log || { echo "test-lang: FAILED -- xx: the delete question is not translated (out/lang-xx.log)"; exit 1; }; \
+	grep -aq "wm: win [0-9]* 'Удалить'" out/lang-ru.log || { echo "test-lang: FAILED -- ru: the delete question is not translated (out/lang-ru.log)"; exit 1; }; \
+	echo "test-lang: xx and ru: files asks in the language (out/lang-xx.png, out/lang-ru.png)"
 
 # -- input: the USB keyboard and mouse, scripted; the flash's writes --
 #

@@ -1,0 +1,281 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: Zeitlos common\n"
+"Language: sv\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+
+msgid " (reading)"
+msgstr " (läser)"
+
+msgid " (partial list)"
+msgstr " (del av listan)"
+
+msgid "OK"
+msgstr "OK"
+
+msgid "Cancel"
+msgstr "Avbryt"
+
+msgid "Yes"
+msgstr "Ja"
+
+msgid "No"
+msgstr "Nej"
+
+msgid "Open"
+msgstr "Öppna"
+
+msgid "Save"
+msgstr "Spara"
+
+msgid "Open a file"
+msgstr "Öppna en fil"
+
+msgid "Choose"
+msgstr "Välj"
+
+msgid "Choose a file or folder"
+msgstr "Välj en fil eller mapp"
+
+msgid "Save As"
+msgstr "Spara som"
+
+msgid "Read docs"
+msgstr "Läs dokumentation"
+
+msgid "Close"
+msgstr "Stäng"
+
+msgid "Help"
+msgstr "Hjälp"
+
+msgid "Print to"
+msgstr "Skriv ut till"
+
+msgid "Pages"
+msgstr "Sidor"
+
+msgid "Copies"
+msgstr "Kopior"
+
+msgid "Paper"
+msgstr "Papper"
+
+msgid "Tray"
+msgstr "Fack"
+
+msgid "Per sheet"
+msgstr "Per ark"
+
+msgid "Quality"
+msgstr "Kvalitet"
+
+msgid "US Letter"
+msgstr "US Letter"
+
+msgid "Legal"
+msgstr "US Legal"
+
+msgid "4 x 6 in"
+msgstr "4 x 6 tum"
+
+msgid "5 x 7 in"
+msgstr "5 x 7 tum"
+
+msgid "3 x 5 in"
+msgstr "3 x 5 tum"
+
+msgid "Printer's choice"
+msgstr "Skrivarens val"
+
+msgctxt "tray"
+msgid "Main"
+msgstr "Huvud"
+
+msgctxt "tray"
+msgid "Rear"
+msgstr "Bakre"
+
+msgctxt "tray"
+msgid "Manual"
+msgstr "Manuell"
+
+msgctxt "quality"
+msgid "Normal"
+msgstr "Normal"
+
+msgctxt "quality"
+msgid "Draft"
+msgstr "Utkast"
+
+msgctxt "quality"
+msgid "High"
+msgstr "Hög"
+
+msgid "Print"
+msgstr "Skriv ut"
+
+msgid "A PDF file"
+msgstr "En PDF-fil"
+
+msgid "A PostScript file"
+msgstr "En PostScript-fil"
+
+msgid "Printer (not set up)"
+msgstr "Skrivare (inte inställd)"
+
+msgid "Printer "
+msgstr "Skrivare "
+
+msgid "All"
+msgstr "Alla"
+
+msgid "This page ("
+msgstr "Den här sidan ("
+
+msgid "The selection"
+msgstr "Markeringen"
+
+msgid "Default ("
+msgstr "Standard ("
+
+msgid "(the printer's)"
+msgstr "(skrivarens)"
+
+msgid " page"
+msgstr " sida"
+
+msgid " pages"
+msgstr " sidor"
+
+msgid "Print to a file"
+msgstr "Skriv ut till en fil"
+
+msgid "That file exists. Replace it?"
+msgstr "Filen finns redan. Ersätta den?"
+
+msgctxt "short weekday"
+msgid "Sun"
+msgstr "sön"
+
+msgctxt "short weekday"
+msgid "Mon"
+msgstr "mån"
+
+msgctxt "short weekday"
+msgid "Tue"
+msgstr "tis"
+
+msgctxt "short weekday"
+msgid "Wed"
+msgstr "ons"
+
+msgctxt "short weekday"
+msgid "Thu"
+msgstr "tor"
+
+msgctxt "short weekday"
+msgid "Fri"
+msgstr "fre"
+
+msgctxt "short weekday"
+msgid "Sat"
+msgstr "lör"
+
+msgctxt "short month"
+msgid "Jan"
+msgstr "jan"
+
+msgctxt "short month"
+msgid "Feb"
+msgstr "feb"
+
+msgctxt "short month"
+msgid "Mar"
+msgstr "mar"
+
+msgctxt "short month"
+msgid "Apr"
+msgstr "apr"
+
+msgctxt "short month"
+msgid "May"
+msgstr "maj"
+
+msgctxt "short month"
+msgid "Jun"
+msgstr "jun"
+
+msgctxt "short month"
+msgid "Jul"
+msgstr "jul"
+
+msgctxt "short month"
+msgid "Aug"
+msgstr "aug"
+
+msgctxt "short month"
+msgid "Sep"
+msgstr "sep"
+
+msgctxt "short month"
+msgid "Oct"
+msgstr "okt"
+
+msgctxt "short month"
+msgid "Nov"
+msgstr "nov"
+
+msgctxt "short month"
+msgid "Dec"
+msgstr "dec"
+
+msgctxt "month"
+msgid "January"
+msgstr "januari"
+
+msgctxt "month"
+msgid "February"
+msgstr "februari"
+
+msgctxt "month"
+msgid "March"
+msgstr "mars"
+
+msgctxt "month"
+msgid "April"
+msgstr "april"
+
+msgctxt "month"
+msgid "May"
+msgstr "maj"
+
+msgctxt "month"
+msgid "June"
+msgstr "juni"
+
+msgctxt "month"
+msgid "July"
+msgstr "juli"
+
+msgctxt "month"
+msgid "August"
+msgstr "augusti"
+
+msgctxt "month"
+msgid "September"
+msgstr "september"
+
+msgctxt "month"
+msgid "October"
+msgstr "oktober"
+
+msgctxt "month"
+msgid "November"
+msgstr "november"
+
+msgctxt "month"
+msgid "December"
+msgstr "december"

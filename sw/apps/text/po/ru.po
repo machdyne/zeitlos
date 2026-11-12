@@ -1,0 +1,393 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: Zeitlos text\n"
+"Language: ru\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=3; plural=(n%10==1 && n%100!=11 ? 0 : n%10>=2 && n%10<=4 && (n%100<10 || n%100>=20) ? 1 : 2);\n"
+
+msgid "Converting"
+msgstr "Конвертация:"
+
+msgid "the file"
+msgstr "файл"
+
+msgid "Saving"
+msgstr "Сохранение:"
+
+msgid "Recover"
+msgstr "Восстановить"
+
+msgid ""
+"Unsaved changes from a\n"
+"session that did not end\n"
+"were kept. Recover them?"
+msgstr ""
+"Несохранённые изменения\n"
+"незавершённого сеанса\n"
+"сохранены. Восстановить?"
+
+#, c-format
+msgid ""
+"%d character cannot be saved\n"
+"as %s. Save as UTF-8\n"
+"instead?"
+msgid_plural ""
+"%d characters cannot be saved\n"
+"as %s. Save as UTF-8\n"
+"instead?"
+msgstr[0] ""
+"%d символ нельзя сохранить\n"
+"в %s. Сохранить\n"
+"в UTF-8?"
+msgstr[1] ""
+"%d символа нельзя сохранить\n"
+"в %s. Сохранить\n"
+"в UTF-8?"
+msgstr[2] ""
+"%d символов нельзя сохранить\n"
+"в %s. Сохранить\n"
+"в UTF-8?"
+
+msgid "Encoding"
+msgstr "Кодировка"
+
+msgid "Save failed"
+msgstr "Ошибка сохранения"
+
+msgid ""
+"The file could not be\n"
+"written completely.\n"
+"The one on the card is\n"
+"as it was."
+msgstr ""
+"Файл не удалось записать\n"
+"полностью. Файл на карте\n"
+"не изменился."
+
+#, c-format
+msgid ""
+"Saved, but as\n"
+"%.60s:\n"
+"it could not be renamed."
+msgstr ""
+"Сохранено, но как\n"
+"%.60s:\n"
+"переименовать не удалось."
+
+msgid "Save"
+msgstr "Сохранить"
+
+msgid "Export"
+msgstr "Экспорт"
+
+msgid ""
+"convert could not\n"
+"be started."
+msgstr ""
+"Не удалось запустить\n"
+"convert."
+
+msgid ""
+"Could not write the\n"
+"copy to convert."
+msgstr ""
+"Не удалось записать\n"
+"копию для конвертации."
+
+#, c-format
+msgid ""
+"%.40s already exists.\n"
+"Replace it?"
+msgstr ""
+"%.40s уже есть.\n"
+"Заменить?"
+
+msgid "Save As"
+msgstr "Сохранить как"
+
+msgid "Getting ready to print"
+msgstr "Подготовка печати:"
+
+msgid "Untitled"
+msgstr "Без имени"
+
+#, c-format
+msgid "Print %.60s"
+msgstr "Печать %.60s"
+
+#, c-format
+msgid ""
+"There was no room in %s\n"
+"for the text to print."
+msgstr ""
+"В %s не хватило места\n"
+"для текста на печать."
+
+msgid "Print"
+msgstr "Печать"
+
+#, c-format
+msgid ""
+"The print job could not\n"
+"be made in %s."
+msgstr ""
+"Не удалось создать\n"
+"задание печати в %s."
+
+msgid "print is not on the card."
+msgstr "На карте нет print."
+
+msgid ""
+"The print job could not\n"
+"be written."
+msgstr ""
+"Не удалось записать\n"
+"задание печати."
+
+msgid "Unsaved changes"
+msgstr "Несохранённые изменения"
+
+msgid ""
+"Save changes before\n"
+"continuing?"
+msgstr ""
+"Сохранить изменения\n"
+"перед продолжением?"
+
+msgid "Open failed"
+msgstr "Не удалось открыть"
+
+msgid ""
+"That file could not\n"
+"be read."
+msgstr ""
+"Не удалось прочитать\n"
+"файл."
+
+msgid "Too large"
+msgstr "Слишком большой"
+
+msgid ""
+"That file is larger than\n"
+"this editor can hold on\n"
+"this machine."
+msgstr ""
+"Файл больше, чем\n"
+"этот редактор вмещает\n"
+"на этой машине."
+
+msgid "Opening"
+msgstr "Открытие:"
+
+msgid ""
+"That file is too large for\n"
+"this editor once its accented\n"
+"letters are converted."
+msgstr ""
+"После преобразования\n"
+"нелатинских букв файл станет\n"
+"слишком большим для редактора."
+
+msgid "Copy"
+msgstr "Копировать"
+
+msgid ""
+"Copied, but there is no\n"
+"memory to keep all of it:\n"
+"a paste gives the first\n"
+"4 KB."
+msgstr ""
+"Скопировано, но памяти\n"
+"не хватает на всё: вставка\n"
+"даст первые 4 КБ."
+
+msgid ""
+"Too large to cut here:\n"
+"there is no memory to\n"
+"keep it for the paste.\n"
+"Cut less than 4 KB."
+msgstr ""
+"Слишком много для вырезки:\n"
+"нет памяти хранить это\n"
+"до вставки.\n"
+"Вырежьте меньше 4 КБ."
+
+msgid ""
+"Too large to cut:\n"
+"it could not be undone.\n"
+"Cut a smaller part."
+msgstr ""
+"Слишком много для вырезки:\n"
+"это нельзя было бы отменить.\n"
+"Вырежьте часть поменьше."
+
+msgid "Cut"
+msgstr "Вырезать"
+
+msgid "Full"
+msgstr "Переполнено"
+
+msgid ""
+"Only part of the clipboard\n"
+"would fit."
+msgstr ""
+"Поместилась бы только\n"
+"часть буфера обмена."
+
+msgid "The document is full."
+msgstr "Документ заполнен."
+
+msgid "blank"
+msgstr "пусто"
+
+msgid "end"
+msgstr "конец"
+
+msgid "new line"
+msgstr "новая строка"
+
+msgid "Empty document"
+msgstr "Пустой документ"
+
+msgid "End of document"
+msgstr "Конец документа"
+
+msgid "Nothing selected"
+msgstr "Ничего не выделено"
+
+msgid "Finding"
+msgstr "Поиск:"
+
+#, c-format
+msgid ""
+"\"%.60s\"\n"
+"was not found."
+msgstr ""
+"\"%.60s\"\n"
+"не найдено."
+
+msgid "Find"
+msgstr "Найти"
+
+msgid "Find:"
+msgstr "Найти:"
+
+msgid "Counting"
+msgstr "Подсчёт:"
+
+msgid "Replacing"
+msgstr "Замена:"
+
+msgid "Replace"
+msgstr "Заменить"
+
+msgid ""
+"The document would not hold\n"
+"the replacements."
+msgstr ""
+"Документ не вместил бы\n"
+"замены."
+
+msgid "Replace with:"
+msgstr "Заменить на:"
+
+#, c-format
+msgid ""
+"%d match for \"%.40s\".\n"
+"Replace all of them?\n"
+"(No: one at a time.)"
+msgid_plural ""
+"%d matches for \"%.40s\".\n"
+"Replace all of them?\n"
+"(No: one at a time.)"
+msgstr[0] ""
+"%d совпадение для \"%.40s\".\n"
+"Заменить все?\n"
+"(Нет: по одному.)"
+msgstr[1] ""
+"%d совпадения для \"%.40s\".\n"
+"Заменить все?\n"
+"(Нет: по одному.)"
+msgstr[2] ""
+"%d совпадений для \"%.40s\".\n"
+"Заменить все?\n"
+"(Нет: по одному.)"
+
+msgid ""
+"That many changes cannot\n"
+"be undone. Replace all\n"
+"anyway?"
+msgstr ""
+"Столько изменений нельзя\n"
+"отменить. Всё равно\n"
+"заменить все?"
+
+#, c-format
+msgid "Replaced %d."
+msgstr "Заменено: %d."
+
+msgid "Replace this one?"
+msgstr "Заменить это?"
+
+msgid "the document"
+msgstr "документ"
+
+#, c-format
+msgid "%d word"
+msgid_plural "%d words"
+msgstr[0] "%d слово"
+msgstr[1] "%d слова"
+msgstr[2] "%d слов"
+
+#, c-format
+msgid "%d character"
+msgid_plural "%d characters"
+msgstr[0] "%d символ"
+msgstr[1] "%d символа"
+msgstr[2] "%d символов"
+
+#, c-format
+msgid "Line %d of %d."
+msgstr "Строка %d из %d."
+
+msgid "Go to line:"
+msgstr "Перейти к строке:"
+
+msgid "Go to line"
+msgstr "Перейти к строке"
+
+#, c-format
+msgid ""
+"A plain text editor for notes, lists and Markdown.\n"
+"\n"
+"Ctrl+N/O/S\tNew, open, save\n"
+"Ctrl+Shift+S\tSave as\n"
+"Ctrl+Q\tClose\n"
+"Ctrl+C/X/V\tCopy, cut, paste\n"
+"Ctrl+A\tSelect all\n"
+"Ctrl+Z/Y\tUndo, redo\n"
+"Ctrl+F, F3\tFind, find again\n"
+"Ctrl+H\tReplace\n"
+"Ctrl+L\tGo to line; counts words\n"
+"Ctrl+P\tPrint, or print to a PDF\n"
+"\n"
+"Shift with the arrows, or a drag, selects. A .docx, .odt or .rtf opens converted, as Markdown in %s (the RAM disk): Save puts it in %s."
+msgstr ""
+"Простой текстовый редактор для заметок, списков и Markdown.\n"
+"\n"
+"Ctrl+N/O/S\tНовый, открыть, сохранить\n"
+"Ctrl+Shift+S\tСохранить как\n"
+"Ctrl+Q\tЗакрыть\n"
+"Ctrl+C/X/V\tКопировать, вырезать, вставить\n"
+"Ctrl+A\tВыделить всё\n"
+"Ctrl+Z/Y\tОтменить, повторить\n"
+"Ctrl+F, F3\tНайти, найти далее\n"
+"Ctrl+H\tЗаменить\n"
+"Ctrl+L\tПерейти к строке; считает слова\n"
+"Ctrl+P\tПечать или печать в PDF\n"
+"\n"
+"Shift со стрелками или перетаскивание выделяет. Файл .docx, .odt или .rtf открывается сконвертированным, как Markdown в %s (диск в ОЗУ): Сохранить кладёт его в %s."
+
+msgid "Text help"
+msgstr "Справка text"

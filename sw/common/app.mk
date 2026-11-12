@@ -146,6 +146,16 @@ OBJS += zfsc.o
 endif
 endif
 
+# Languages (zi18n.c, docs/i18n.md): every app with the library's
+# zeitlos.o links the lookup behind Z_() and what finds jfont's glyphs
+# for other scripts. Section GC keeps none of it in an app that uses
+# neither, and the small build (Z_SMALL) compiles it to nothing.
+ifneq ($(filter zeitlos.o,$(OBJS)),)
+ifeq ($(filter zi18n.o,$(OBJS)),)
+OBJS += zi18n.o
+endif
+endif
+
 POSIX_IO ?= 0
 ifeq ($(POSIX_IO),1)
 OBJS += zposix.o

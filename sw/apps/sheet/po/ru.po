@@ -1,0 +1,377 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: Zeitlos sheet\n"
+"Language: ru\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=3; plural=(n%10==1 && n%100!=11 ? 0 : n%10>=2 && n%10<=4 && (n%100<10 || n%100>=20) ? 1 : 2);\n"
+
+msgid "No chart: select the data, then F5."
+msgstr "Нет диаграммы: выделите данные, затем F5."
+
+msgid "Nothing to chart in the range."
+msgstr "В диапазоне нечего показать."
+
+msgid "No numbers in the range to chart."
+msgstr "В диапазоне нет чисел."
+
+msgid "A pie needs some positive numbers."
+msgstr "Круговой нужны положительные числа."
+
+msgid "Sum "
+msgstr "Сумма "
+
+msgid "  Avg "
+msgstr "  Сред. "
+
+msgid "  Count "
+msgstr "  Кол-во "
+
+msgctxt "chart"
+msgid "Bar"
+msgstr "Столбцы"
+
+msgctxt "chart"
+msgid "Stacked"
+msgstr "Стопка"
+
+msgctxt "chart"
+msgid "Line"
+msgstr "Линии"
+
+msgctxt "chart"
+msgid "Pie"
+msgstr "Круговая"
+
+msgid "Chart: "
+msgstr "Диаграмма: "
+
+msgid "  Esc: back"
+msgstr "  Esc: назад"
+
+msgid "Calculating..."
+msgstr "Вычисление..."
+
+msgid "Export"
+msgstr "Экспорт"
+
+msgid ""
+"convert could not\n"
+"be started."
+msgstr ""
+"Не удалось запустить\n"
+"convert."
+
+msgid ""
+"Could not write the\n"
+"copy to convert."
+msgstr ""
+"Не удалось записать\n"
+"копию для конвертации."
+
+msgid "Save failed"
+msgstr "Ошибка сохранения"
+
+msgid ""
+"Could not open the file\n"
+"for writing."
+msgstr ""
+"Не удалось открыть файл\n"
+"для записи."
+
+msgid ""
+"The file could not be\n"
+"written completely."
+msgstr ""
+"Не удалось записать\n"
+"файл полностью."
+
+msgid "Open failed"
+msgstr "Не удалось открыть"
+
+msgid ""
+"convert is not on\n"
+"this card."
+msgstr ""
+"На этой карте нет\n"
+"convert."
+
+msgid ""
+"The file could not\n"
+"be opened."
+msgstr ""
+"Не удалось открыть\n"
+"файл."
+
+msgid "Unsaved changes"
+msgstr "Несохранённые изменения"
+
+msgid ""
+"This sheet has unsaved\n"
+"changes. Save first?"
+msgstr ""
+"В таблице есть несохранённые\n"
+"изменения. Сначала сохранить?"
+
+msgid "Sheet full"
+msgstr "Таблица заполнена"
+
+msgid ""
+"No room for another cell.\n"
+"The change was not made."
+msgstr ""
+"Нет места для ещё одной ячейки.\n"
+"Изменение не сделано."
+
+msgid ""
+"No room for more cells.\n"
+"Some were not pasted."
+msgstr ""
+"Нет места для новых ячеек.\n"
+"Часть не вставлена."
+
+msgid "Fill"
+msgstr "Заполнить"
+
+msgid ""
+"Too much to fill\n"
+"at once."
+msgstr ""
+"Слишком много для\n"
+"заполнения за раз."
+
+msgid ""
+"No room for more cells.\n"
+"Some were not filled."
+msgstr ""
+"Нет места для новых ячеек.\n"
+"Часть не заполнена."
+
+msgid "Insert"
+msgstr "Вставить"
+
+msgid "Delete"
+msgstr "Удалить"
+
+msgid ""
+"That would push cells\n"
+"past the edge of the sheet."
+msgstr ""
+"Это вытолкнет ячейки\n"
+"за край таблицы."
+
+msgid ""
+"No room: the sheet\n"
+"is full."
+msgstr ""
+"Нет места: таблица\n"
+"заполнена."
+
+msgid "Format"
+msgstr "Формат"
+
+#, c-format
+msgid ""
+"G general  F2 fixed  ,2 1,000.00\n"
+"%1 percent  $2 money  (digit: places)"
+msgstr ""
+"G общий  F2 фикс.  ,2 1,000.00\n"
+"%1 проценты  $2 деньги  (цифра: знаки)"
+
+#, c-format
+msgid ""
+"Not a format: G, F2, ,2,\n"
+"%1 or $2 (any 0-8 places)."
+msgstr ""
+"Не формат: G, F2, ,2,\n"
+"%1 или $2 (0-8 знаков)."
+
+msgid ""
+"Too many formatted\n"
+"ranges: 64 at most."
+msgstr ""
+"Слишком много форматированных\n"
+"диапазонов: не больше 64."
+
+msgid "Width"
+msgstr "Ширина"
+
+msgid "Column width, in characters:"
+msgstr "Ширина столбца, в символах:"
+
+msgid "Chart"
+msgstr "Диаграмма"
+
+msgid ""
+"Select the table to chart\n"
+"(labels in the first row\n"
+"and column), then F5."
+msgstr ""
+"Выделите таблицу для диаграммы\n"
+"(подписи в первой строке\n"
+"и столбце), затем F5."
+
+msgid "Sort"
+msgstr "Сортировка"
+
+msgid ""
+"Select the rows to sort\n"
+"(all their columns), then\n"
+"put the cursor in the key."
+msgstr ""
+"Выделите строки для сортировки\n"
+"(все их столбцы), затем\n"
+"поставьте курсор в ключ."
+
+msgid ""
+"Too large to sort here:\n"
+"sort fewer rows at a time."
+msgstr ""
+"Слишком много для сортировки:\n"
+"сортируйте меньше строк за раз."
+
+msgid "Go to"
+msgstr "Перейти"
+
+msgid "Cell (like B12):"
+msgstr "Ячейка (например, B12):"
+
+msgid "Not a cell: A1 to Z999."
+msgstr "Не ячейка: от A1 до Z999."
+
+msgid "Find"
+msgstr "Найти"
+
+msgid "Not found."
+msgstr "Не найдено."
+
+msgid ""
+"A spreadsheet: numbers, text and formulas in a grid.\n"
+"\n"
+"Type into the cell; =A1*2 is a formula, =SUM(B2:B9) a range. Enter moves down, Tab right, Shift+arrows select.\n"
+"\n"
+"/, F4\tCommands: insert, delete, number format, width, sort, extend, goto, find, chart\n"
+"F2\tEdit the cell\n"
+"Ctrl+Z/Y\tUndo, redo\n"
+"Ctrl+C/X/V\tCopy, cut, paste\n"
+"Ctrl+D/R\tFill down, right\n"
+"Ctrl+1\tNumber format\n"
+"Ctrl+G\tGo to a cell\n"
+"F3, Ctrl+F\tFind (again: the next match)\n"
+"F5\tChart the selection\n"
+"Alt+Left\tNarrow the column (Alt+Right widens)\n"
+"Ctrl+N/O/S\tNew, open, save\n"
+"\n"
+"Functions: SUM AVERAGE MIN MAX COUNT ABS INT ROUND MOD SQRT POWER IF AND OR NOT PMT PV FV NPV VLOOKUP INDEX.\n"
+"\n"
+"Select a range to see its sum, average and count."
+msgstr ""
+"Электронная таблица: числа, текст и формулы в сетке.\n"
+"\n"
+"Вводите в ячейку; =A1*2 - формула, =SUM(B2:B9) - диапазон. Enter - вниз, Tab - вправо, Shift+стрелки выделяют.\n"
+"\n"
+"/, F4\tКоманды: вставить, удалить, формат, ширина, сортировка, продлить, перейти, найти, диаграмма\n"
+"F2\tПравить ячейку\n"
+"Ctrl+Z/Y\tОтменить, повторить\n"
+"Ctrl+C/X/V\tКопировать, вырезать, вставить\n"
+"Ctrl+D/R\tЗаполнить вниз, вправо\n"
+"Ctrl+1\tФормат чисел\n"
+"Ctrl+G\tПерейти к ячейке\n"
+"F3, Ctrl+F\tНайти (ещё раз: следующее)\n"
+"F5\tДиаграмма по выделению\n"
+"Alt+Влево\tСузить столбец (Alt+Вправо - расширить)\n"
+"Ctrl+N/O/S\tНовый, открыть, сохранить\n"
+"\n"
+"Функции: SUM AVERAGE MIN MAX COUNT ABS INT ROUND MOD SQRT POWER IF AND OR NOT PMT PV FV NPV VLOOKUP INDEX.\n"
+"\n"
+"Выделите диапазон, чтобы увидеть сумму, среднее и количество."
+
+msgid "Sheet help"
+msgstr "Справка sheet"
+
+msgid "Find (F3 finds the next):"
+msgstr "Найти (F3 ищет дальше):"
+
+msgctxt "menu"
+msgid "Insert"
+msgstr "Вставить"
+
+msgctxt "menu"
+msgid "Delete"
+msgstr "Удалить"
+
+msgctxt "menu"
+msgid "Number"
+msgstr "Число"
+
+msgctxt "menu"
+msgid "Width"
+msgstr "Ширина"
+
+msgctxt "menu"
+msgid "Sort"
+msgstr "Сортировка"
+
+msgctxt "menu"
+msgid "Extend"
+msgstr "Продлить"
+
+msgctxt "menu"
+msgid "Undo"
+msgstr "Отменить"
+
+msgctxt "menu"
+msgid "Redo"
+msgstr "Повторить"
+
+msgctxt "menu"
+msgid "Goto"
+msgstr "Перейти"
+
+msgctxt "menu"
+msgid "Find"
+msgstr "Найти"
+
+msgctxt "menu"
+msgid "Chart"
+msgstr "Диаграмма"
+
+msgctxt "menu"
+msgid "Help"
+msgstr "Справка"
+
+msgctxt "menu"
+msgid "Rows"
+msgstr "Строки"
+
+msgctxt "menu"
+msgid "Columns"
+msgstr "Столбцы"
+
+msgctxt "menu"
+msgid "Ascending"
+msgstr "По возрастанию"
+
+msgctxt "menu"
+msgid "Descending"
+msgstr "По убыванию"
+
+msgctxt "menu"
+msgid "Down"
+msgstr "Вниз"
+
+msgctxt "menu"
+msgid "Right"
+msgstr "Вправо"
+
+msgid "Insert:"
+msgstr "Вставить:"
+
+msgid "Delete:"
+msgstr "Удалить:"
+
+msgid "Sort:"
+msgstr "Сортировка:"
+
+msgid "Extend:"
+msgstr "Продлить:"

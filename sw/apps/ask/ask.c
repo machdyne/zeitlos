@@ -53,6 +53,7 @@
 
 #include "../../common/zpaths.h"
 #include "../../common/zeitlos.h"
+#include "../../common/zi18n.h"
 #include "../../common/zsoc.h"
 #include "../../common/zwm.h"
 #include "../../common/zwin.h"
@@ -114,6 +115,22 @@ static char     status[96] = "loading...";
 static int scat(char *d, int cap, int at, const char *s)
 {
     while (*s && at < cap - 1) d[at++] = *s++;
+    d[at] = 0;
+    return at;
+}
+
+static int putu(char *d, int cap, int at, uint32_t v);
+
+/* A translated status line (docs/i18n.md): `f` with %s replaced by `s`
+ * and %u by `u`, %% by %. Not printf, which ask does without. */
+static int scatf(char *d, int cap, int at, const char *f, const char *s, uint32_t u)
+{
+    while (*f && at < cap - 1) {
+        if (f[0] == '%' && f[1] == 's') { at = scat(d, cap, at, s ? s : ""); f += 2; }
+        else if (f[0] == '%' && f[1] == 'u') { at = putu(d, cap, at, u); f += 2; }
+        else if (f[0] == '%' && f[1] == '%') { d[at++] = '%'; f += 2; }
+        else d[at++] = *f++;
+    }
     d[at] = 0;
     return at;
 }
@@ -285,9 +302,9 @@ static void draw_list(void)
 
     if (!Q.nhits && !running && !query_dirty) {
         z_win_draw_text(&win, MARGIN, Y_LIST,
-                        "No passage here answers", 1, FONT);
+                        ZS_("No passage here answers"), 1, FONT);
         z_win_draw_text(&win, MARGIN, Y_LIST + LINE_H,
-                        "that.", 1, FONT);
+                        ZS_("that."), 1, FONT);
     }
 }
 
@@ -343,7 +360,7 @@ static void open_pack_index(int i)
     scat(arg, sizeof(arg), n, "/index.md");
     z_launch_arg_set(arg);
     if (!z_proc_run("read")) {
-        scat(status, sizeof(status), 0, "could not start read");
+        scat(status, sizeof(status), 0, ZS_("could not start read"));
         draw_status();
     }
 }
@@ -378,37 +395,35 @@ static void status_idle(void)
     int n, i;
     uint32_t chunks = 0;
     for (i = 0; i < ai_pack_count(); i++) chunks += ai_pack(i)->nchunks;
-    n = putu(status, sizeof(status), 0, chunks);
-    n = scat(status, sizeof(status), n, " passages, ");
-    n = putu(status, sizeof(status), n, (uint32_t)ai_pack_count());
-    n = scat(status, sizeof(status), n, " pack");
-    if (ai_pack_count() != 1) n = scat(status, sizeof(status), n, "s");
+    n = scatf(status, sizeof(status), 0,
+              ZS_N("%u passage, ", "%u passages, ", chunks), NULL, chunks);
+    n = scatf(status, sizeof(status), n,
+              ZS_N("%u pack", "%u packs", ai_pack_count()), NULL,
+              (uint32_t)ai_pack_count());
     /* A pack that loaded without its chunk lengths ranks worse
      * (aidx.h, ai_warning()). That is said here for as long as it is
      * true, not once at startup where the first query overwrites it. */
     if (ai_warning()[0]) {
-        scat(status, sizeof(status), n, ", ranking weaker");
+        scat(status, sizeof(status), n, ZS_(", ranking weaker"));
         return;
     }
     /* The line-editing keys are not discoverable otherwise, and
      * backspacing through a whole question to ask the next one is
      * the first thing anybody hits. */
-    scat(status, sizeof(status), n, "  ^U clears");
+    scat(status, sizeof(status), n, ZS_("  ^U clears"));
 }
 
 static void status_progress(void)
 {
-    int n;
     if (!Q.total) {
         /* No coarse scan to measure -- a lexical-only pack does a
          * bounded amount of card I/O per query term instead. A
          * percentage of zero work is worse than no percentage. */
-        scat(status, sizeof(status), 0, "searching...  ESC cancels");
+        scat(status, sizeof(status), 0, ZS_("searching...  Esc cancels"));
         return;
     }
-    n = scat(status, sizeof(status), 0, "searching ");
-    n = putu(status, sizeof(status), n, (100u * Q.scanned) / Q.total);
-    scat(status, sizeof(status), n, "%  ESC cancels");
+    scatf(status, sizeof(status), 0, ZS_("searching %u%%  Esc cancels"),
+          NULL, (100u * Q.scanned) / Q.total);
 }
 
 /* "Loading zdocs 40%  Esc stops", per pack and from 0 for each. Only
@@ -416,23 +431,20 @@ static void status_progress(void)
 static void load_progress(bool force)
 {
     int pm = ai_load_permille(&LD);
-    int n;
     const char *name = ai_load_name(&LD);
     if (!name[0]) {                     /* listing, or between packs */
         if (force) {
             scat(status, sizeof(status), 0,
-                 pending ? "Loading..., then search" : "Loading...  Esc stops");
+                 pending ? ZS_("Loading..., then search") : ZS_("Loading...  Esc stops"));
             draw_status();
         }
         return;
     }
     if (!force && pm / 10 == shown_pm) return;
     shown_pm = pm / 10;
-    n = scat(status, sizeof(status), 0, "Loading ");
-    n = scat(status, sizeof(status), n, name);
-    n = scat(status, sizeof(status), n, " ");
-    n = putu(status, sizeof(status), n, (uint32_t)(pm / 10));
-    scat(status, sizeof(status), n, pending ? "%, then search" : "%  Esc stops");
+    scatf(status, sizeof(status), 0,
+          pending ? ZS_("Loading %s %u%%, then search") : ZS_("Loading %s %u%%  Esc stops"),
+          name, (uint32_t)(pm / 10));
     draw_status();
 }
 
@@ -450,7 +462,7 @@ static void start_query(void)
         return;
     }
     if (!loaded) {
-        scat(status, sizeof(status), 0, "no packs loaded -- nothing to search");
+        scat(status, sizeof(status), 0, ZS_("no packs loaded -- nothing to search"));
         draw_status();
         return;
     }
@@ -468,7 +480,7 @@ static void open_selected(void)
     char arg[AI_PATH_MAX];
     if (sel < 0 || sel >= Q.nhits) return;
     if (!ai_launch_arg(&Q.hits[sel], arg, sizeof(arg))) {
-        scat(status, sizeof(status), 0, "path too long to open");
+        scat(status, sizeof(status), 0, ZS_("path too long to open"));
         draw_status();
         return;
     }
@@ -477,7 +489,7 @@ static void open_selected(void)
      * argument there (zwm.h, Z_WM_SET_ARG). */
     z_launch_arg_set(arg);
     if (!z_proc_run("read")) {
-        scat(status, sizeof(status), 0, "could not start read");
+        scat(status, sizeof(status), 0, ZS_("could not start read"));
         draw_status();
     }
 }
@@ -497,7 +509,7 @@ static void load_finished(bool stopped)
          * index this build cannot read, files from two distributions
          * mixed, malloc refusing the coarse array, fs not answering --
          * are not distinguishable from "no packs" otherwise. */
-        if (stopped) scat(status, sizeof(status), 0, "loading stopped -- no packs loaded");
+        if (stopped) scat(status, sizeof(status), 0, ZS_("loading stopped -- no packs loaded"));
         else scat(status, sizeof(status), 0, ai_error());
         dbg("ask: no packs loaded: ");
         dbg(status);
@@ -508,19 +520,18 @@ static void load_finished(bool stopped)
         if (stopped) {
             /* The packs that were in stay in and answer; say that it
              * is not all of them. */
-            int n = scat(status, sizeof(status), 0, "loading stopped, ");
-            n = putu(status, sizeof(status), n, (uint32_t)ai_pack_count());
-            scat(status, sizeof(status), n,
-                 ai_pack_count() == 1 ? " pack loaded" : " packs loaded");
+            scatf(status, sizeof(status), 0,
+                  ZS_N("loading stopped, %u pack loaded",
+                       "loading stopped, %u packs loaded", ai_pack_count()),
+                  NULL, (uint32_t)ai_pack_count());
         } else if (ai_failed_count()) {
             /* Loaded something, but not everything. Say so on the
              * status line rather than showing a healthy-looking
              * passage count over a corpus that quietly shrank. */
             int n = scat(status, sizeof(status), 0, ai_error());
-            n = scat(status, sizeof(status), n, " (");
-            n = putu(status, sizeof(status), n,
-                     (uint32_t)ai_failed_count());
-            scat(status, sizeof(status), n, " pack failed)");
+            scatf(status, sizeof(status), n,
+                  ZS_N(" (%u pack failed)", " (%u packs failed)", ai_failed_count()),
+                  NULL, (uint32_t)ai_failed_count());
         } else if (ai_warning()[0]) {
             /* Loaded, but BM25 without lengths (or the like): the
              * reason, once, until the first query. */
@@ -600,7 +611,7 @@ static void handle_key(uint32_t packed)
     if (!Z_WM_UNPACK_KEY_PRESSED(packed)) return;
 
     if (k == Z_KEY_HELP) {                        /* docs/app_help.md */
-        static const char help[] =
+        const char *help = ZS_(
             "Finds passages in the datasets on the card that answer "
             "a question, and opens them in read.\n\n"
             "Enter\tSearch; again: open the selection\n"
@@ -613,9 +624,9 @@ static void handle_key(uint32_t packed)
             "Type a question and press Enter. Click a result to open "
             "it, or a pack button to browse its index.\n\n"
             "Typing works while the packs load; Enter then searches "
-            "once they are in.";
+            "once they are in.");
         z_dialog_ctx_t ctx = { &win, help_on_msg, NULL };
-        z_dialog_help(&ctx, "Ask help", help, "ask_app");
+        z_dialog_help(&ctx, ZS_("Ask help"), help, "ask_app");
         return;
     }
 
@@ -657,7 +668,7 @@ static void handle_key(uint32_t packed)
              * allocates nothing per slice, so this is one flag. */
             ai_query_cancel(&Q);
             running = false;
-            scat(status, sizeof(status), 0, "cancelled");
+            scat(status, sizeof(status), 0, ZS_("cancelled"));
             draw_status();
         } else {
             qlen = 0;
@@ -863,6 +874,7 @@ int main(void)
 {
     char regname[32];
 
+    z_tr_init(Z_APP_NAME);
     if (z_win_create_flags(&win, "ask", WIN_W, WIN_H, -1, -1,
         Z_WIN_FLAG_CLOSE_ICON | Z_WIN_FLAG_CLOSE_KILLS_OWNER) != Z_OK) {
         dbg("ask: no window\n");
@@ -878,7 +890,7 @@ int main(void)
      * window redraws, takes keys and can be closed. */
     ai_load_begin(&LD, Z_DIR_ASK_PACKS);
     loading = true;
-    scat(status, sizeof(status), 0, "Loading...  Esc stops");
+    scat(status, sizeof(status), 0, ZS_("Loading...  Esc stops"));
     draw_all();
 
     for (;;) {

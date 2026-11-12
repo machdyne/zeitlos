@@ -1,0 +1,131 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: Zeitlos wm\n"
+"Language: pt\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+
+msgid "Next page"
+msgstr "Página seguinte"
+
+msgid "Back"
+msgstr "Voltar"
+
+msgid "Clipboard empty"
+msgstr "Área de transferência vazia"
+
+msgid "Desktop"
+msgstr "Ambiente de trabalho"
+
+msgid "No window focused"
+msgstr "Nenhuma janela ativa"
+
+msgid "Dock. Use the arrow keys to choose an app, and Enter to start it."
+msgstr "Dock. Escolha uma aplicação com as setas, e Enter para a iniciar."
+
+msgid "restored"
+msgstr "restaurada"
+
+msgid "maximized"
+msgstr "maximizada"
+
+msgid "window"
+msgstr "janela"
+
+msgid "full screen"
+msgstr "ecrã inteiro"
+
+msgid "shaded"
+msgstr "enrolada"
+
+msgid "unshaded"
+msgstr "desenrolada"
+
+msgid "Workspace 1"
+msgstr "Área de trabalho 1"
+
+msgid "Workspace 2"
+msgstr "Área de trabalho 2"
+
+msgid "Workspace 3"
+msgstr "Área de trabalho 3"
+
+msgid "Workspace 4"
+msgstr "Área de trabalho 4"
+
+msgid "Workspace 5"
+msgstr "Área de trabalho 5"
+
+msgid "Workspace 6"
+msgstr "Área de trabalho 6"
+
+msgid "Workspace 7"
+msgstr "Área de trabalho 7"
+
+msgid "Workspace 8"
+msgstr "Área de trabalho 8"
+
+msgid "Workspace 9"
+msgstr "Área de trabalho 9"
+
+msgid "Workspace 10"
+msgstr "Área de trabalho 10"
+
+msgid "No volume control on this bitstream"
+msgstr "Sem controlo de volume neste bitstream"
+
+#, c-format
+msgid "Volume %d%%"
+msgstr "Volume %d%%"
+
+msgid "No brightness control on this display"
+msgstr "Sem controlo de brilho neste ecrã"
+
+#, c-format
+msgid "Brightness %d/%d"
+msgstr "Brilho %d/%d"
+
+msgid "Zeitlos is locked"
+msgstr "O Zeitlos está bloqueado"
+
+msgid "Password: "
+msgstr "Palavra-passe: "
+
+msgid "Type the password, then Enter"
+msgstr "Escreva a palavra-passe e Enter"
+
+msgid "No password is set: press Enter"
+msgstr "Sem palavra-passe: carregue em Enter"
+
+msgid "Reboot"
+msgstr "Reiniciar"
+
+msgid "Cancel"
+msgstr "Cancelar"
+
+msgid "Reboot Zeitlos?"
+msgstr "Reiniciar o Zeitlos?"
+
+msgid "Unsaved work in open apps is lost."
+msgstr "O trabalho por guardar nas apps abertas perde-se."
+
+msgid "Rebooting..."
+msgstr "A reiniciar..."
+
+msgid "Reboot failed -- see the console"
+msgstr "Falha ao reiniciar -- veja a consola"
+
+msgid "Checking..."
+msgstr "A verificar..."
+
+#, c-format
+msgid "Too many attempts -- wait %lu s"
+msgstr "Tentativas a mais -- aguarde %lu s"
+
+msgid "Wrong password"
+msgstr "Palavra-passe errada"
+
+#, c-format
+msgid "Could not check the password (%d)"
+msgstr "Impossível verificar a palavra-passe (%d)"

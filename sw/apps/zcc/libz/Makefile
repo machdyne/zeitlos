@@ -32,7 +32,7 @@ LDFLAGS = -march=$(ARCH) -mabi=$(ABI) -nostdlib -mno-relax \
 	-Wl,--build-id=none
 
 OBJS = start.o syscall.o mem.o str.o fmt.o glue.o \
-	zgfx.o zwin.o zobj.o zkbd.o zfont_data.o zport.o
+	zgfx.o zi18n.o zwin.o zobj.o zkbd.o zfont_data.o zport.o
 
 # libz.bin and libz.sym, NOT libz.blob and libz.syms.
 #
@@ -67,6 +67,12 @@ glue.o: glue.c
 	$(CC) $(OWN_CFLAGS) $(SHIMFLAGS) -c glue.c -o glue.o
 
 zgfx.o: $(COMMON)/zgfx.c
+	$(CC) $(CFLAGS) $(SHIMFLAGS) -c $< -o $@
+
+# What finds jfont's glyphs (zlang.h), which zgfx draws other scripts
+# and Japanese with -- and the lookup behind Z_(), for a program that
+# wants it (docs/i18n.md).
+zi18n.o: $(COMMON)/zi18n.c
 	$(CC) $(CFLAGS) $(SHIMFLAGS) -c $< -o $@
 
 # The port protocol. A program compiled by zcc had z_msg_send() and no

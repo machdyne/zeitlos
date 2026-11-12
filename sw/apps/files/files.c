@@ -54,6 +54,7 @@
 #include <string.h>
 
 #include "../../common/zeitlos.h"
+#include "../../common/zi18n.h"
 #include "../../common/zsoc.h"	// Z_TICK_HZ, for the idle wait in main()
 #include "../../common/zwm.h"
 #include "../../common/zwin.h"
@@ -105,7 +106,10 @@ static z_widget_t widgets[BTN_COUNT];
 static z_widget_set_t wset;
 
 static const char *const btn_labels[BTN_COUNT] = {
-	"Open", "New Dir", "Rename", "Copy", "Move", "Delete", "Convert", "Find"
+	// "button": seven characters at most in a translation -- the width
+	// the buttons have (docs/i18n.md, "Layout")
+	NC_("button", "Open"), NC_("button", "New Dir"), NC_("button", "Rename"), NC_("button", "Copy"),
+	NC_("button", "Move"), NC_("button", "Delete"), NC_("button", "Convert"), NC_("button", "Find")
 };
 
 // The conversion the Convert button started, if one is running, and
@@ -387,6 +391,8 @@ static void layout(void) {
 // after the window was cleared (line_forget()).
 
 static int cat(char *d, int n, int cap, const char *s);
+static int catf(char *d, int n, int cap, const char *fmt, const char *s,
+	uint32_t a, uint32_t b);
 
 static char line_shown[Z_FLIST_PATH_MAX + 64];
 static bool line_valid;
@@ -456,8 +462,8 @@ static void path_draw(void) {
 	// than the list's pool holds) is listed only in part. Said here,
 	// on the path line, because otherwise a file that is on the card
 	// simply is not in the list and nothing hints why.
-	const char *more = flist.loading ? " (reading)" :
-		z_flist_truncated(&flist) ? " (partial list)" : "";
+	const char *more = flist.loading ? ZS_(" (reading)") :
+		z_flist_truncated(&flist) ? ZS_(" (partial list)") : "";
 	int morelen = (int)strlen(more);
 
 	int maxch = avail / z_font_5x8.w - morelen;
@@ -582,8 +588,8 @@ static void launch(const char *path) {
 	if (app) {
 		z_launch_arg_set(path);
 		if (!z_proc_run(app))
-			z_dialog_confirm(&dlg_ctx, "Launch failed",
-				"That application could\nnot be started.", Z_DIALOG_OK_CANCEL);
+			z_dialog_confirm(&dlg_ctx, ZS_("Launch failed"),
+				ZS_("That application could\nnot be started."), Z_DIALOG_OK_CANCEL);
 		return;
 	}
 
@@ -598,11 +604,11 @@ static void launch(const char *path) {
 
 		if (z_ftype_is_executable(path)) {
 			if (!z_proc_run(path))
-				z_dialog_confirm(&dlg_ctx, "Launch failed",
-					"That program could not\nbe started.", Z_DIALOG_OK_CANCEL);
+				z_dialog_confirm(&dlg_ctx, ZS_("Launch failed"),
+					ZS_("That program could not\nbe started."), Z_DIALOG_OK_CANCEL);
 		} else {
-			z_dialog_confirm(&dlg_ctx, "Can't open",
-				"That file is not a\nprogram.", Z_DIALOG_OK_CANCEL);
+			z_dialog_confirm(&dlg_ctx, ZS_("Can't open"),
+				ZS_("That file is not a\nprogram."), Z_DIALOG_OK_CANCEL);
 		}
 
 		return;
@@ -612,8 +618,8 @@ static void launch(const char *path) {
 	// A known extension with nothing registered for it. Said out
 	// loud, because a double-click that silently does nothing reads
 	// as the app being broken.
-	z_dialog_confirm(&dlg_ctx, "Can't open",
-		"No application is\nassociated with this file.", Z_DIALOG_OK_CANCEL);
+	z_dialog_confirm(&dlg_ctx, ZS_("Can't open"),
+		ZS_("No application is\nassociated with this file."), Z_DIALOG_OK_CANCEL);
 
 }
 
@@ -640,8 +646,8 @@ static void do_mkdir(void) {
 
 	char name[Z_FS_NAME_MAX];
 
-	if (!z_dialog_prompt(&dlg_ctx, "New Folder",
-		"Name for the new folder:", "", name, sizeof(name)))
+	if (!z_dialog_prompt(&dlg_ctx, ZS_("New Folder"),
+		ZS_("Name for the new folder:"), "", name, sizeof(name)))
 		return;
 
 	// Built against the directory currently being browsed. A name
@@ -649,8 +655,8 @@ static void do_mkdir(void) {
 	// confusingly -- refuse it rather than trying to interpret it.
 	for (const char *p = name; *p; p++) {
 		if (*p == '/') {
-			z_dialog_confirm(&dlg_ctx, "Bad name",
-				"A folder name cannot\ncontain '/'.", Z_DIALOG_OK_CANCEL);
+			z_dialog_confirm(&dlg_ctx, ZS_("Bad name"),
+				ZS_("A folder name cannot\ncontain '/'."), Z_DIALOG_OK_CANCEL);
 			return;
 		}
 	}
@@ -667,8 +673,8 @@ static void do_mkdir(void) {
 	path[n] = 0;
 
 	if (!fs_mkdir(path)) {
-		z_dialog_confirm(&dlg_ctx, "Failed",
-			"The folder could not\nbe created.", Z_DIALOG_OK_CANCEL);
+		z_dialog_confirm(&dlg_ctx, ZS_("Failed"),
+			ZS_("The folder could not\nbe created."), Z_DIALOG_OK_CANCEL);
 		return;
 	}
 
@@ -699,7 +705,7 @@ static void fail_dialog(const char *title, int err) {
 	const char *why = fs_strerror(err);
 	int n = 0;
 
-	for (const char *p = "Not possible:\n"; *p; p++) msg[n++] = *p;
+	for (const char *p = ZS_("Not possible:\n"); *p && n < (int)sizeof(msg) - 2; p++) msg[n++] = *p;
 	for (const char *p = why; *p && n < (int)sizeof(msg) - 2; p++)
 		msg[n++] = *p;
 	msg[n++] = '.';
@@ -730,15 +736,15 @@ static void do_rename(void) {
 
 	if (!z_flist_selected_path(&flist, from, sizeof(from))) return;
 
-	if (!z_dialog_prompt(&dlg_ctx, "Rename", "New name:", name,
+	if (!z_dialog_prompt(&dlg_ctx, ZS_("Rename"), ZS_("New name:"), name,
 		newname, sizeof(newname)) || !newname[0])
 		return;
 	if (!strcmp(newname, name)) return;
 
 	for (const char *p = newname; *p; p++) {
 		if (*p == '/') {
-			z_dialog_confirm(&dlg_ctx, "Bad name",
-				"A name cannot\ncontain '/'.", Z_DIALOG_OK_CANCEL);
+			z_dialog_confirm(&dlg_ctx, ZS_("Bad name"),
+				ZS_("A name cannot\ncontain '/'."), Z_DIALOG_OK_CANCEL);
 			return;
 		}
 	}
@@ -746,7 +752,7 @@ static void do_rename(void) {
 	if (!join_dir(newname, to, sizeof(to))) return;
 
 	if (!fs_rename(from, to, &err)) {
-		fail_dialog("Rename", err);
+		fail_dialog(ZS_("Rename"), err);
 		return;
 	}
 
@@ -771,7 +777,7 @@ static int cat(char *d, int n, int cap, const char *s);
 // only once the copy is complete.
 static void do_copy_move(bool move) {
 
-	const char *title = move ? "Move" : "Copy";
+	const char *title = move ? ZS_("Move") : ZS_("Copy");
 	const char *name = z_flist_selected(&flist);
 	if (!name) return;
 
@@ -782,7 +788,7 @@ static void do_copy_move(bool move) {
 	if (!z_flist_selected_path(&flist, from, sizeof(from))) return;
 	bool isdir = z_flist_selected_is_dir(&flist);
 
-	if (!z_dialog_prompt(&dlg_ctx, title, move ? "Move to:" : "Copy to:",
+	if (!z_dialog_prompt(&dlg_ctx, title, move ? ZS_("Move to:") : ZS_("Copy to:"),
 		from, to, sizeof(to)) || !to[0])
 		return;
 	if (!strcmp(to, from)) return;
@@ -805,7 +811,7 @@ static void do_copy_move(bool move) {
 		// folder is never replaced.
 		if (isdir || fi.type == Z_FS_TYPE_DIR) { fail_dialog(title, Z_FS_ERR_EXIST); return; }
 		if (z_dialog_confirm(&dlg_ctx, title,
-			"Replace the file that\nis already there?", Z_DIALOG_YES_NO)
+			ZS_("Replace the file that\nis already there?"), Z_DIALOG_YES_NO)
 			!= Z_DIALOG_YES)
 			return;
 		if (!fs_unlink(to)) { fail_dialog(title, Z_FS_ERR_BUSY); return; }
@@ -836,11 +842,12 @@ static void do_delete(void) {
 	// The name goes in the question. "Delete this file?" is a
 	// question the user cannot actually check the answer to.
 	char msg[128];
-	int n = cat(msg, 0, (int)sizeof(msg), isdir ? "Delete the folder\n" : "Delete the file\n");
-	n = cat(msg, n, (int)sizeof(msg), name);
-	cat(msg, n, (int)sizeof(msg), isdir ? "\nand everything in it?" : "?");
+	// Whole sentences, so a translation can put the name where its
+	// grammar wants it (docs/i18n.md).
+	catf(msg, 0, (int)sizeof(msg), isdir ? ZS_("Delete the folder\n%s\nand everything in it?") :
+		ZS_("Delete the file\n%s?"), name, 0, 0);
 
-	if (z_dialog_confirm(&dlg_ctx, "Delete", msg, Z_DIALOG_YES_NO)
+	if (z_dialog_confirm(&dlg_ctx, ZS_("Delete"), msg, Z_DIALOG_YES_NO)
 		!= Z_DIALOG_YES)
 		return;
 
@@ -850,8 +857,8 @@ static void do_delete(void) {
 	}
 
 	if (!fs_unlink(path)) {
-		z_dialog_confirm(&dlg_ctx, "Failed",
-			"The file could not be\ndeleted. Is it in use?",
+		z_dialog_confirm(&dlg_ctx, ZS_("Failed"),
+			ZS_("The file could not be\ndeleted. Is it in use?"),
 			Z_DIALOG_OK_CANCEL);
 		return;
 	}
@@ -903,8 +910,8 @@ static void do_convert(void) {
 	bool folder = z_flist_selected_is_dir(&flist);	// packed into a zip (or tar)
 
 	if (conv.running) {
-		z_dialog_confirm(&dlg_ctx, "Convert",
-			"A conversion is already\nrunning.", Z_DIALOG_OK_CANCEL);
+		z_dialog_confirm(&dlg_ctx, ZS_("Convert"),
+			ZS_("A conversion is already\nrunning."), Z_DIALOG_OK_CANCEL);
 		return;
 	}
 
@@ -914,8 +921,8 @@ static void do_convert(void) {
 	bool strip_tar = false;
 	const char *ext = folder ? "zip" : convert_default(from, &strip_tar);
 	if (!ext) {
-		z_dialog_confirm(&dlg_ctx, "Convert",
-			"convert does not read\nthis kind of file.", Z_DIALOG_OK_CANCEL);
+		z_dialog_confirm(&dlg_ctx, ZS_("Convert"),
+			ZS_("convert does not read\nthis kind of file."), Z_DIALOG_OK_CANCEL);
 		return;
 	}
 
@@ -935,25 +942,25 @@ static void do_convert(void) {
 	}
 
 	char out[Z_FLIST_PATH_MAX];
-	if (!z_dialog_prompt(&dlg_ctx, "Convert",
-		folder ? "Pack into (.zip, .tar or .tar.gz):" :
-		*ext ? "To (the ending picks the format):" : "Extract into the folder:",
+	if (!z_dialog_prompt(&dlg_ctx, ZS_("Convert"),
+		folder ? ZS_("Pack into (.zip, .tar or .tar.gz):") :
+		*ext ? ZS_("To (the ending picks the format):") : ZS_("Extract into the folder:"),
 		to, out, sizeof(out)) || !out[0])
 		return;
 	if (!strcmp(out, from)) return;
 
 	z_fs_info_t fi;
 	if (*ext && fs_stat(out, &fi)) {
-		if (fi.type == Z_FS_TYPE_DIR) { fail_dialog("Convert", Z_FS_ERR_EXIST); return; }
-		if (z_dialog_confirm(&dlg_ctx, "Convert",
-			"Replace the file that\nis already there?", Z_DIALOG_YES_NO) != Z_DIALOG_YES)
+		if (fi.type == Z_FS_TYPE_DIR) { fail_dialog(ZS_("Convert"), Z_FS_ERR_EXIST); return; }
+		if (z_dialog_confirm(&dlg_ctx, ZS_("Convert"),
+			ZS_("Replace the file that\nis already there?"), Z_DIALOG_YES_NO) != Z_DIALOG_YES)
 			return;
 	}
 
 	if (!z_conv_start(&conv, from, out, NULL, Z_CONV_UI)) {
-		z_dialog_confirm(&dlg_ctx, "Convert",
-			conv.result == Z_CONV_E_GONE ? "convert is not on\nthis card." :
-			"Could not start: is\n/tmp writable?", Z_DIALOG_OK_CANCEL);
+		z_dialog_confirm(&dlg_ctx, ZS_("Convert"),
+			conv.result == Z_CONV_E_GONE ? ZS_("convert is not on\nthis card.") :
+			ZS_("Could not start: is\n/tmp writable?"), Z_DIALOG_OK_CANCEL);
 		return;
 	}
 
@@ -987,16 +994,44 @@ static int cat_u(char *d, int n, int cap, uint32_t v) {
 	return n;
 }
 
+// A translated sentence with its blanks filled (docs/i18n.md): %s takes
+// `s` (a second %s, `s2`), and %u, %lu and %d take the numbers in order -- not printf, which
+// would bring all of printf into files. Anything else after a % is
+// copied as it is.
+static int catf2(char *d, int n, int cap, const char *fmt, const char *s,
+	const char *s2, uint32_t a, uint32_t b) {
+	uint32_t nums[2] = { a, b };
+	int k = 0;
+	char one[2] = { 0, 0 };
+	for (const char *p = fmt; *p; p++) {
+		if (p[0] == '%' && p[1] == 's') { n = cat(d, n, cap, s ? s : ""); s = s2; s2 = 0; p++; continue; }
+		if (p[0] == '%' && (p[1] == 'u' || p[1] == 'd' || (p[1] == 'l' && p[2] == 'u'))) {
+			n = cat_u(d, n, cap, nums[k < 2 ? k : 1]);
+			k++;
+			p += p[1] == 'l' ? 2 : 1;
+			continue;
+		}
+		one[0] = *p;
+		n = cat(d, n, cap, one);
+	}
+	return n;
+}
+
+static int catf(char *d, int n, int cap, const char *fmt, const char *s,
+	uint32_t a, uint32_t b) {
+	return catf2(d, n, cap, fmt, s, 0, a, b);
+}
+
 // "1.2 MB", "340 KB", "12 bytes"
 static int cat_size(char *d, int n, int cap, uint32_t b) {
 	if (b >= 1024u * 1024u) {
 		n = cat_u(d, n, cap, b / (1024u * 1024u));
 		n = cat(d, n, cap, ".");
 		n = cat_u(d, n, cap, (b % (1024u * 1024u)) * 10u / (1024u * 1024u));
-		return cat(d, n, cap, " MB");
+		return cat(d, n, cap, ZS_(" MB"));
 	}
-	if (b >= 1024u) return cat(d, cat_u(d, n, cap, b / 1024u), cap, " KB");
-	return cat(d, cat_u(d, n, cap, b), cap, " bytes");
+	if (b >= 1024u) return cat(d, cat_u(d, n, cap, b / 1024u), cap, ZS_(" KB"));
+	return cat(d, cat_u(d, n, cap, b), cap, ZS_(" bytes"));
 }
 
 // The arena if there is one (64KB, else less), else walk_static.
@@ -1051,7 +1086,8 @@ static void walk_release(void) {
 static void buttons_update(void) {
 	for (int i = 0; i < BTN_COUNT; i++) {
 		bool en = i == BTN_FIND || (!walking && (!results || i == BTN_OPEN));
-		const char *label = i == BTN_FIND ? (walking ? "Stop" : "Find") : btn_labels[i];
+		const char *label = i == BTN_FIND ? (walking ? ZS_DC("button", "Stop") : ZS_DC("button", "Find")) :
+			ZS_DC("button", btn_labels[i]);
 		if (widgets[i].enabled != en || widgets[i].label != label) {
 			widgets[i].enabled = en;
 			widgets[i].label = label;
@@ -1098,56 +1134,49 @@ static void status_draw(void) {
 
 	switch (walk_kind) {
 	case WK_FIND:
-		n = cat(line, n, cap, walking ? "Finding... " : "");
-		n = cat_u(line, n, cap, (uint32_t)res_n);
-		n = cat(line, n, cap, " found");
-		if (walking) {
-			n = cat(line, n, cap, ", ");
-			n = cat_u(line, n, cap, walk.files);
-			n = cat(line, n, cap, " files looked at");
-		} else {
-			n = cat(line, n, cap, " in ");
-			n = cat(line, n, cap, find_root);
-			if (res_full) {
-				// said at once, and the find stopped there: going on
-				// would only look at files it had nowhere to put
-				n = cat(line, n, cap, " (first ");
-				n = cat_u(line, n, cap, (uint32_t)res_n);
-				n = cat(line, n, cap, " matches)");
-			} else if (walk.truncated) {
-				n = cat(line, n, cap, " (not all)");
-			}
-		}
+		// Whole sentences with their numbers in, so a translation can
+		// put them where its grammar wants them (docs/i18n.md).
+		if (walking)
+			n = catf(line, n, cap, ZS_("Finding... %u found, %lu files looked at"),
+				NULL, (uint32_t)res_n, walk.files);
+		else if (res_full)
+			// said at once, and the find stopped there: going on
+			// would only look at files it had nowhere to put
+			n = catf(line, n, cap, ZS_("%u found in %s (the first %u matches)"),
+				find_root, (uint32_t)res_n, (uint32_t)res_n);
+		else if (walk.truncated)
+			n = catf(line, n, cap, ZS_("%u found in %s (not all)"), find_root, (uint32_t)res_n, 0);
+		else
+			n = catf(line, n, cap, ZS_("%u found in %s"), find_root, (uint32_t)res_n, 0);
 		break;
 	case WK_COPY:
 	case WK_MOVE:
-		n = cat(line, n, cap, walk.op == ZW_DELETE ? "Removing the source... " :
-			walk_kind == WK_MOVE ? "Moving... " : "Copying... ");
+		n = cat(line, n, cap, walk.op == ZW_DELETE ? ZS_("Removing the source... ") :
+			walk_kind == WK_MOVE ? ZS_("Moving... ") : ZS_("Copying... "));
 		if (copy_total && walk.op != ZW_DELETE) {
 			uint32_t b = walk.bytes > copy_total ? copy_total : walk.bytes;
 			// in two steps: bytes * 100 overflows past 40MB
 			uint32_t pct = copy_total >= 100u ? b / (copy_total / 100u) : 100u * b / copy_total;
 			if (pct > 100) pct = 100;
 			n = cat_u(line, n, cap, pct);
-			n = cat(line, n, cap, "% of ");
+			n = cat(line, n, cap, "%");
+			n = cat(line, n, cap, ZS_(" of "));
 			n = cat_size(line, n, cap, copy_total);
 			bar = PROG_W + 2 * z_font_5x8.w;
 			progress_draw(pct);
 		} else {
 			n = cat_u(line, n, cap, walk.files);
-			n = cat(line, n, cap, " files, ");
+			n = cat(line, n, cap, ZS_(" files, "));
 			n = cat_size(line, n, cap, walk.bytes);
 		}
 		break;
 	case WK_DELETE:
-		n = cat(line, n, cap, "Deleting... ");
-		n = cat_u(line, n, cap, walk.files + walk.dirs);
-		n = cat(line, n, cap, " deleted");
+		n = catf(line, n, cap, ZS_("Deleting... %lu deleted"), NULL, walk.files + walk.dirs, 0);
 		break;
 	default:
 		break;
 	}
-	n = cat(line, n, cap, walking ? "  (Esc stops)" : "  (Esc: back)");
+	n = cat(line, n, cap, walking ? ZS_("  (Esc stops)") : ZS_("  (Esc: back)"));
 
 	// A bar that is gone (the copy finished, a move went on to delete)
 	// is not drawn over by the text, so the line forgets itself and is
@@ -1240,21 +1269,21 @@ static void walk_finish(int r, bool stopped) {
 	}
 
 	if (stopped || r == ZW_FAIL) {
-		if (stopped) n = cat(msg, n, cap, "Stopped.");
+		if (stopped) n = cat(msg, n, cap, ZS_("Stopped."));
 		else {
-			n = cat(msg, n, cap, "Stopped: ");
+			n = cat(msg, n, cap, ZS_("Stopped: "));
 			n = cat(msg, n, cap, zw_strerror(walk.err));
 			n = cat(msg, n, cap, "\n");
 			n = cat(msg, n, cap, walk.hit);
 		}
 		if (walk.op == ZW_DELETE)
 			n = cat(msg, n, cap, kind == WK_MOVE
-				? "\nThe copy is complete; part of\nthe original is still there."
-				: "\nPart of it is deleted already.");
+				? ZS_("\nThe copy is complete; part of\nthe original is still there.")
+				: ZS_("\nPart of it is deleted already."));
 		else if (walk.partial)
-			n = cat(msg, n, cap, "\nWhat was copied so far is left\nin the destination.");
-		z_dialog_confirm(&dlg_ctx, kind == WK_DELETE ? "Delete" :
-			kind == WK_MOVE ? "Move" : "Copy", msg, Z_DIALOG_OK_CANCEL);
+			n = cat(msg, n, cap, ZS_("\nWhat was copied so far is left\nin the destination."));
+		z_dialog_confirm(&dlg_ctx, kind == WK_DELETE ? ZS_("Delete") :
+			kind == WK_MOVE ? ZS_("Move") : ZS_("Copy"), msg, Z_DIALOG_OK_CANCEL);
 	}
 
 	walk_kind = WK_NONE;
@@ -1317,11 +1346,11 @@ static bool walk_begin(int kind, int op, const char *src, const char *dst) {
 		int err = walk.err;
 		walk_release();
 		char msg[96];
-		int n = cat(msg, 0, (int)sizeof(msg), "Not possible:\n");
+		int n = cat(msg, 0, (int)sizeof(msg), ZS_("Not possible:\n"));
 		n = cat(msg, n, (int)sizeof(msg), zw_strerror(err));
 		cat(msg, n, (int)sizeof(msg), ".");
-		z_dialog_confirm(&dlg_ctx, kind == WK_FIND ? "Find" : kind == WK_DELETE ?
-			"Delete" : kind == WK_MOVE ? "Move" : "Copy", msg, Z_DIALOG_OK_CANCEL);
+		z_dialog_confirm(&dlg_ctx, kind == WK_FIND ? ZS_("Find") : kind == WK_DELETE ?
+			ZS_("Delete") : kind == WK_MOVE ? ZS_("Move") : ZS_("Copy"), msg, Z_DIALOG_OK_CANCEL);
 		return false;
 	}
 	walk_kind = kind;
@@ -1370,10 +1399,10 @@ static void do_find(void) {
 	char q[96], name[ZW_NAME_MAX], text[ZW_TEXT_MAX];
 	int nn = 0, tn = 0;
 
-	if (!z_dialog_prompt(&dlg_ctx, "Find",
-		"In this folder and below. A name\n"
+	if (!z_dialog_prompt(&dlg_ctx, ZS_("Find"),
+		ZS_("In this folder and below. A name\n"
 		"(report, *.md), \"text\" inside files,\n"
-		"or both: *.txt \"invoice\"",
+		"or both: *.txt \"invoice\""),
 		NULL, q, sizeof(q)) || !q[0])
 		return;
 
@@ -1537,7 +1566,11 @@ static char start_dir[Z_FLIST_PATH_MAX] = "/";
 static void handle_key(uint32_t keysym, uint8_t mods) {
 
 	if (keysym == Z_KEY_HELP) {	// docs/app_help.md
-		static const char help[] =
+		// Filled in each time (the paths in it are blanks a translation
+		// moves), on the stack: z_dialog_help() is done with it when it
+		// returns, and the small build has no RAM to keep it in.
+		char help[1600];
+		catf2(help, 0, (int)sizeof help, ZS_(
 			"Browse, open and manage files.\n\n"
 			"Enter\tOpen the selection\n"
 			"Backspace\tUp a folder\n"
@@ -1557,8 +1590,8 @@ static void handle_key(uint32_t keysym, uint8_t mods) {
 			"Convert saves the file in another format, picked by the "
 			"ending you give it (.docx, .md, .xlsx, ...); a folder "
 			"it packs into a .zip, .tar or .tar.gz.\n\n"
-			Z_DIR_HOME " is yours, " Z_DIR_TMP " is the RAM disk (gone at power-off).";
-		z_dialog_help(&dlg_ctx, "Files help", help, "file_browser");
+			"%s is yours, %s is the RAM disk (gone at power-off)."), Z_DIR_HOME, Z_DIR_TMP, 0, 0);
+		z_dialog_help(&dlg_ctx, ZS_("Files help"), help, "file_browser");
 		return;
 	}
 
@@ -1664,7 +1697,7 @@ static void widgets_init(void) {
 		widgets[i].type = Z_WIDGET_BUTTON;
 		widgets[i].w = BTN_W;
 		widgets[i].h = BTN_H;
-		widgets[i].label = btn_labels[i];
+		widgets[i].label = ZS_DC("button", btn_labels[i]);
 		widgets[i].enabled = true;
 	}
 
@@ -1726,6 +1759,9 @@ static void forward_msg(z_msg_t *msg, void *user) {
 }
 
 int main(void) {
+
+	// The language (docs/i18n.md): read once, before any string.
+	z_tr_init(Z_APP_NAME);
 
 	printf("files: starting\n");
 

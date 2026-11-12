@@ -41,6 +41,7 @@
 #include <string.h>
 
 #include "../../common/zeitlos.h"
+#include "../../common/zi18n.h"
 #include "../../common/zwm.h"
 #include "../../common/zwin.h"
 #include "../../common/zgfx.h"
@@ -247,7 +248,7 @@ static void help_on_msg(z_msg_t *m, void *user) {
 static void handle_key(uint32_t keysym, uint8_t mods) {
 
 	if (keysym == Z_KEY_HELP) {	// docs/app_help.md
-		static const char help[] =
+		const char *help = ZS_(
 			"A four-function calculator.\n\n"
 			"0-9 .\tEnter a number\n"
 			"+ - * /\tOperator\n"
@@ -257,9 +258,9 @@ static void handle_key(uint32_t keysym, uint8_t mods) {
 			"Tab, Space\tFocus, press a button\n\n"
 			"Click the keypad or type. The +- button changes the "
 			"sign. No precedence: 2 * 3 + 4 is 10, left to right. "
-			"A digit after = starts a new number.";
+			"A digit after = starts a new number.");
 		z_dialog_ctx_t ctx = { &win, help_on_msg, NULL };
-		z_dialog_help(&ctx, "Calc help", help, "calc_app");
+		z_dialog_help(&ctx, ZS_("Calc help"), help, "calc_app");
 		return;
 	}
 
@@ -319,6 +320,9 @@ static void widgets_init(void) {
 }
 
 int main(void) {
+
+	// The language (docs/i18n.md): read once, before any string.
+	z_tr_init(Z_APP_NAME);
 
 	printf("calc: starting\n");
 

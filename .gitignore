@@ -23,6 +23,8 @@
 *.svf
 *.config
 *.json
+# the translations as written (docs/i18n.md): sources, not build output
+!tools/translations/*.json
 *.bin
 !sw/data/images/zeitlos.bin
 *.hex

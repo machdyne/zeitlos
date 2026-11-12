@@ -11,7 +11,8 @@
  *                (system.video.desktop_theme)                applied at once
  *   Mouse        pointer speed (system.mouse.speed)           applied at once
  *   Keyboard     layouts (system.keyboard.layouts), Japanese text
- *                (system.font.japanese)                       the next key / at once
+ *                (system.font.japanese), the language
+ *                (system.language)                 the next key / at once / restart
  *   Date & time  time zone (system.rtc.timezone)              clock, cal, date
  *   Security     password and screen lock                     the flash store
  *   Terminal     what new term windows connect to (apps.term.auto_connect)
@@ -55,6 +56,8 @@
 #include <string.h>
 
 #include "../../common/zeitlos.h"
+#include "../../common/zi18n.h"
+#include "../../common/zlangs.h"
 #include "../../common/zsoc.h"
 #include "../../common/zwm.h"
 #include "../../common/zwin.h"
@@ -91,7 +94,7 @@ static z_dialog_ctx_t dlg;
 
 // -- the categories --
 
-enum { P_DISPLAY, P_MOUSE, P_KEYBOARD, P_TIME, P_SECURITY, P_TERMINAL, P_SYSTEM, P_COUNT };
+enum { P_DISPLAY, P_MOUSE, P_KEYBOARD, P_LANG, P_TIME, P_SECURITY, P_TERMINAL, P_SYSTEM, P_COUNT };
 
 #define SB_W        104		// the category list
 #define SB_ROW_H    24
@@ -120,6 +123,11 @@ static const page_t pages[P_COUNT] = {
 		"#..............#", "#.##.##.##.##..#", "#..............#", "#.##.##.##.##..#",
 		"#..............#", "#.##.######.##.#", "#..............#", "################",
 		"................", "................", "................", "................" } },
+	{ "Language", "language", "Saved; used from the next start", {
+		"................", ".....######.....", "...##..##..##...", "..#...#..#...#..",
+		".#....#..#....#.", ".##############.", "#.....#..#.....#", "#.....#..#.....#",
+		"#.....#..#.....#", "#.....#..#.....#", ".##############.", ".#....#..#....#.",
+		"..#...#..#...#..", "...##..##..##...", ".....######.....", "................" } },
 	{ "Date & time", "time", "Used by clock, cal and date", {
 		".....######.....", "...##......##...", "..#....#.....#..", ".#.....#......#.",
 		".#.....#......#.", "#......#.......#", "#......#.......#", "#......#####...#",
@@ -163,14 +171,15 @@ static const char *video_labels[] = { "White", "Amber", "Green", "Paper" };
 
 enum {
 	// Display: the four modes are 0..3
-	W_THEME_PREV = MODE_COUNT,
-	W_THEME_NEXT,
+	// (the desktop colours are a list, not widgets)
 	// Mouse
-	W_SPEED_PREV,
+	W_SPEED_PREV = MODE_COUNT,
 	W_SPEED_NEXT,
 	// Keyboard
 	W_EDIT_KBD,
 	W_TOGGLE_JA,
+	// Language (and its list)
+	W_SET_LANG,
 	// Date & time (and the list, which is not a widget)
 	W_SET_TZ,
 	// Security
@@ -187,7 +196,7 @@ enum {
 
 // Each page's first control; the next page's first ends it.
 static const int page_first[P_COUNT + 1] = {
-	0, W_SPEED_PREV, W_EDIT_KBD, W_SET_TZ, W_PW_SET, W_EDIT_TERM, W_EDIT_START, W_COUNT,
+	0, W_SPEED_PREV, W_EDIT_KBD, W_SET_LANG, W_SET_TZ, W_PW_SET, W_EDIT_TERM, W_EDIT_START, W_COUNT,
 };
 
 static z_widget_t widgets[W_COUNT];
@@ -196,8 +205,8 @@ static z_widget_set_t *ws = &psets[P_DISPLAY];	// the shown page's
 
 // -- desktop colour: off, or one of zaccent.h's themes --
 //
-// One row, "< >" stepping through Off and the themes and saving each at
-// once, as the display colours do: a colour scheme is judged by looking
+// A list of Off and the themes, each saved at once as it is selected,
+// as the display colours are: a colour scheme is judged by looking
 // at it. Choosing one writes system.video.desktop_theme (the default,
 // phosphor, as no line at all), turns desktop colour on, and removes any
 // custom desktop_accents/desktop_base -- otherwise they would go on
@@ -227,6 +236,31 @@ static pref_t prefs[] = {
 	{ "system.font.japanese", "Japanese text", W_TOGGLE_JA, "", false },
 	{ "system.start", "Opens at start", W_EDIT_START, "", false },
 };
+
+// -- the language (docs/i18n.md) --
+//
+// A list of English and the languages whose catalogs the card has
+// (the "lang" set), each saved at once as it is selected; it takes effect at the next start,
+// because every app reads system.language once, as it starts. The
+// names are each language's own, in UTF-8: drawn with jfont's glyphs
+// when it is running, and the English name beside them for when not.
+#define langs z_lang_names
+#define LANG_COUNT Z_LANG_NAME_COUNT
+static bool lang_avail[LANG_COUNT];
+static int lang_idx;
+static bool lang_in_file;
+static bool lang_live;		// jfont started for it: new windows have it now
+static int lang_rows[LANG_COUNT], lang_nrows;	// the list's rows: langs[] indexes
+static z_listbox_t lang_list, theme_list;
+
+static const char *lang_label(void *user, int row) {
+	static char b[48];
+	(void)user;
+	int i = lang_rows[row];
+	if (!strcmp(langs[i].own, langs[i].english)) return langs[i].own;
+	snprintf(b, sizeof b, "%s -- %s", langs[i].own, langs[i].english);
+	return b;
+}
 
 // The Japanese font switch -- defined with its button, further down.
 static bool japanese_on(void);
@@ -270,6 +304,21 @@ static void read_auth(void);		// with read_values()
 #define TZ_ITEMS        (1 + z_tz_city_count + TZ_OFFSETS)
 
 static z_listbox_t tz_list;
+
+// The list on the page shown, or NULL: the zones, the languages, or
+// the desktop colours (where the board has them).
+static z_listbox_t *page_list(void) {
+	if (page == P_TIME) return &tz_list;
+	if (page == P_LANG) return &lang_list;
+	if (page == P_DISPLAY && can_theme) return &theme_list;
+	return NULL;
+}
+
+// Off, then the themes, by the names settings shows.
+static const char *theme_label(void *user, int row) {
+	(void)user;
+	return row == 0 ? "Off" : z_accent_theme_names[row - 1];
+}
 static bool list_focus;			// keyboard focus is on the list (Date & time)
 
 static char tz_value[Z_CFG_VAL_MAX];
@@ -348,12 +397,29 @@ static void read_values(void) {
 	if (theme_idx < 0) theme_idx = 0;
 	theme_custom = z_cfg_get("system.video.desktop_accents", v, sizeof(v)) ||
 		z_cfg_get("system.video.desktop_base", v, sizeof(v));
-	widgets[W_THEME_PREV].enabled = widgets[W_THEME_NEXT].enabled = can_theme;
 	speed_in_file = z_cfg_get("system.mouse.speed", v, sizeof(v));
 	speed_idx = z_pointer_level_of(z_cfg_get_int("system.mouse.speed", 16));
 	widgets[W_SPEED_PREV].enabled = can_speed && speed_idx > 0;
 	widgets[W_SPEED_NEXT].enabled = can_speed && speed_idx < Z_POINTER_LEVELS - 1;
 	set_japanese_label();
+	{
+		char lv[16];
+		lang_in_file = z_cfg_get("system.language", lv, sizeof lv) && lv[0];
+		if (!lang_in_file) strcpy(lv, "en");
+		lang_idx = 0;
+		for (int i = 0; i < LANG_COUNT; i++) {
+			lang_avail[i] = z_lang_on_card(i);
+			if (!strcmp(lv, langs[i].code)) lang_idx = i;
+		}
+		lang_avail[lang_idx] = true;
+		lang_nrows = 0;
+		for (int i = 0; i < LANG_COUNT; i++)
+			if (lang_avail[i]) lang_rows[lang_nrows++] = i;
+		z_listbox_set_items(&lang_list, lang_nrows, lang_label, NULL);
+		for (int r = 0; r < lang_nrows; r++)
+			if (lang_rows[r] == lang_idx) z_listbox_select(&lang_list, r);
+	}
+	z_listbox_select(&theme_list, colour_on ? 1 + theme_idx : 0);
 	read_auth();
 	z_listbox_select(&tz_list, tz_row_for(tz_value));
 	zone_selection_changed();
@@ -430,9 +496,14 @@ static void layout(void) {
 	int bw = (pw - (MODE_COUNT - 1) * GAP) / MODE_COUNT;
 	for (int i = 0; i < MODE_COUNT; i++)
 		place(i, PX + i * (bw + GAP), y_page + LINE_H + 2, bw, BTN_H);
-	int yt = y_page + LINE_H + 2 + BTN_H + 2 * LINE_H + 6;
-	place(W_THEME_PREV, right_x(2 * STEP_W + GAP), yt - 3, STEP_W, EDIT_H);
-	place(W_THEME_NEXT, right_x(STEP_W), yt - 3, STEP_W, EDIT_H);
+	{
+		// the desktop colours: their row, then the list to the bottom
+		int yt = y_page + LINE_H + 2 + BTN_H + 2 * LINE_H + 6;
+		int yl = yt + 2 * LINE_H + 2;
+		int rows = (y_status - 6 - yl - 2) / (z_font_5x8.h + 2);
+		if (rows < 3) rows = 3;
+		z_listbox_set_geom(&theme_list, PX, yl, pw, rows * (z_font_5x8.h + 2) + 2);
+	}
 
 	// Mouse
 	place(W_SPEED_PREV, right_x(2 * STEP_W + GAP), y_page - 3, STEP_W, EDIT_H);
@@ -441,6 +512,15 @@ static void layout(void) {
 	// Keyboard: layouts, then Japanese text
 	place(W_EDIT_KBD, right_x(EDIT_W), y_page - 3, EDIT_W, EDIT_H);
 	place(W_TOGGLE_JA, right_x(EDIT_W + 12), y_page + ROW_H + LINE_H + 4 - 3, EDIT_W + 12, EDIT_H);
+	{
+		// Language: its row and a note, the list, then Use
+		int yl = y_page + 3 * LINE_H + 6;
+		int ys = y_status - BTN_H - 6;
+		int rows = (ys - 6 - yl - 2) / (z_font_5x8.h + 2);
+		if (rows < 3) rows = 3;
+		z_listbox_set_geom(&lang_list, PX, yl, pw, rows * (z_font_5x8.h + 2) + 2);
+		place(W_SET_LANG, right_x(130), ys, 130, BTN_H);
+	}
 
 	// Date & time: the zone and the clock, the list, then Set
 	int yl = y_page + 2 * LINE_H + 6;
@@ -464,6 +544,8 @@ static void layout(void) {
 
 	for (int p = 0; p < P_COUNT; p++) z_widget_invalidate(&psets[p]);
 	z_listbox_invalidate(&tz_list);
+	z_listbox_invalidate(&lang_list);
+	z_listbox_invalidate(&theme_list);
 
 }
 
@@ -643,6 +725,19 @@ static void draw_page(void) {
 		draw_text(PX + 8, y + 2 * LINE_H, "drawn at 6x12; typed with romaji (Super+Space)");
 		break;
 
+	case P_LANG: {
+		char cur[16];
+		if (!z_cfg_get("system.language", cur, sizeof cur) || !cur[0]) strcpy(cur, "en");
+		snprintf(line, sizeof(line), "%s (%s)%s", langs[lang_idx].own,
+			langs[lang_idx].english, lang_in_file ? "" : "  (default)");
+		draw_row(y, "Language", line);
+		draw_text(PX + 8, y + 2 * LINE_H, !strcmp(cur, z_tr_lang()) ?
+			"more come with the card's Languages set" : lang_live ?
+			"saved -- new windows use it now, all of it after a restart" :
+			"saved -- used from the next start");
+		break;
+	}
+
 	case P_TIME: {
 		// What is in effect and the time it makes, on two lines: the
 		// list below shows the choice, but a value with no row
@@ -699,7 +794,7 @@ static void draw_page(void) {
 	}
 
 	z_widget_draw_all(ws, true);
-	if (page == P_TIME) z_listbox_draw(&tz_list, true);
+	if (page_list()) z_listbox_draw(page_list(), true);
 
 }
 
@@ -860,19 +955,18 @@ done:
 
 // One step through Off, then the themes, wrapping. wm picks the change
 // up within a second (it rereads the file's generation).
-static void step_theme(int dir) {
+static void choose_theme(int pos) {
 
 	int count = z_accent_theme_count + 1;		// Off first
-	int pos = colour_on ? 1 + theme_idx : 0;
 	static const char *const keys[4] = {
 		"system.video.desktop_colour", "system.video.desktop_theme",
 		"system.video.desktop_accents", "system.video.desktop_base",
 	};
 	const char *vals[4] = { NULL, NULL, NULL, NULL };
 
-	if (!can_theme) return;
+	if (!can_theme || pos < 0 || pos >= count) return;
+	if (pos == (colour_on ? 1 + theme_idx : 0) && !theme_custom) return;
 
-	pos = (pos + dir + count) % count;
 	if (pos == 0) {
 		// off keeps the theme for when it comes back on
 		vals[0] = "no";
@@ -884,6 +978,41 @@ static void step_theme(int dir) {
 	}
 	repaint();
 
+}
+
+// Use is on exactly when the list's selection is not the language in use.
+static void lang_selection_changed(void) {
+	int row = z_listbox_selected(&lang_list);
+	bool pending = row >= 0 && row < lang_nrows && lang_rows[row] != lang_idx;
+	if (widgets[W_SET_LANG].enabled != pending) {
+		widgets[W_SET_LANG].enabled = pending;
+		widgets[W_SET_LANG].dirty = true;
+		z_widget_draw_all(ws, false);
+	}
+}
+
+// The language at list row `row`, saved. English is saved as no line at
+// all. Every app reads it as it starts; jfont, which holds what the
+// apps read, is started if it is not running yet -- once, so windows
+// opened from now on have the language. A second choice is for the
+// next start: jfont keeps the language it started with.
+static void choose_lang(int row) {
+	static bool started_jfont;
+	if (row < 0 || row >= lang_nrows) return;
+	int i = lang_rows[row];
+	if (i == lang_idx) return;
+	lang_live = false;
+	if (!save("system.language", i == 0 ? NULL : langs[i].code)) { repaint(); return; }
+	// From English, with jfont not running: start it, and every window
+	// opened from now on speaks the language (wm, after a restart).
+	if (i != 0 && !started_jfont && !z_lang_service_up()) {
+		started_jfont = true;
+		lang_live = z_proc_run("jfont");
+	}
+	widgets[W_SET_LANG].enabled = false;
+	lang_idx = i;
+	lang_in_file = i != 0;
+	repaint();
 }
 
 // One level slower or faster, applied at once and saved; no wrap (the
@@ -1245,11 +1374,11 @@ out:
 	repaint();
 }
 
+static void focus_list(bool on);
+
 static void activate(int idx) {
 	if (idx < 0) return;
 	if (idx < MODE_COUNT) { apply_video(idx); return; }
-	if (idx == W_THEME_PREV) { step_theme(-1); return; }
-	if (idx == W_THEME_NEXT) { step_theme(1); return; }
 	if (idx == W_SPEED_PREV) { step_speed(-1); return; }
 	if (idx == W_SPEED_NEXT) { step_speed(1); return; }
 	if (idx == W_EDIT_TERM) { edit(&prefs[0]); return; }
@@ -1258,6 +1387,11 @@ static void activate(int idx) {
 	if (idx == W_SET_TZ) { choose_zone_and_return(); return; }
 	if (idx == W_RELOAD) { reload(); return; }
 	if (idx == W_EDIT_START) { edit(&prefs[3]); return; }
+	if (idx == W_SET_LANG) {
+		choose_lang(z_listbox_selected(&lang_list));
+		focus_list(true);
+		return;
+	}
 	if (idx == W_PW_SET) { set_password(); return; }
 	if (idx == W_PW_REMOVE) { remove_password(); return; }
 	if (idx == W_LOCK_EDIT) { edit_lock(); return; }
@@ -1284,12 +1418,30 @@ static void choose_zone(void) {
 
 // Moves keyboard focus onto or off the list.
 static void focus_list(bool on) {
-	list_focus = on;
-	z_listbox_set_focus(&tz_list, on);
-	if (on) z_widget_focus_set(ws, -1);
-	if (page == P_TIME) {
+	list_focus = on && page_list();
+	z_listbox_set_focus(&tz_list, list_focus && page == P_TIME);
+	z_listbox_set_focus(&lang_list, list_focus && page == P_LANG);
+	z_listbox_set_focus(&theme_list, list_focus && page == P_DISPLAY);
+	if (list_focus) z_widget_focus_set(ws, -1);
+	if (page_list()) {
 		z_widget_draw_all(ws, false);
-		z_listbox_draw(&tz_list, false);
+		z_listbox_draw(page_list(), false);
+	}
+}
+
+// What a list said (Z_LIST_*), for the page it is on.
+static void list_event(int r) {
+	if (r == Z_LIST_NONE) return;
+	if (page == P_TIME) {
+		if (r == Z_LIST_ACTIVATED) choose_zone();
+		else if (r == Z_LIST_SELECTED) zone_selection_changed();
+	} else if (page == P_LANG) {
+		// Moving through the list chooses nothing yet: a language
+		// changes every window. Enter, a double-click or Use does.
+		if (r == Z_LIST_ACTIVATED) choose_lang(z_listbox_selected(&lang_list));
+		else lang_selection_changed();
+	} else if (page == P_DISPLAY) {
+		choose_theme(z_listbox_selected(&theme_list));
 	}
 }
 
@@ -1324,9 +1476,10 @@ static void show_page(int p) {
 
 static int page_stops(int *out) {
 	int n = 0;
-	if (page == P_TIME) out[n++] = STOP_LIST;
+	if (page == P_TIME || page == P_LANG) out[n++] = STOP_LIST;
 	for (int g = page_first[page]; g < page_first[page + 1]; g++)
 		if (widgets[g].enabled) out[n++] = g;
+	if (page == P_DISPLAY && page_list()) out[n++] = STOP_LIST;	// after the colours
 	return n;
 }
 
@@ -1388,7 +1541,7 @@ static void handle_mouse(uint32_t packed) {
 	if (!inside && ws->pressed < 0 && !tz_list.sb.dragging) return;
 
 	// A category: that page, the keyboard on the list.
-	if (down && cx < SB_W && ws->pressed < 0 && !tz_list.sb.dragging) {
+	if (down && cx < SB_W && ws->pressed < 0 && !(page_list() && page_list()->sb.dragging)) {
 		int p = (cy - MARGIN) / SB_ROW_H;
 		if (cy >= MARGIN && p >= 0 && p < P_COUNT) {
 			focus_sidebar(true);
@@ -1398,18 +1551,17 @@ static void handle_mouse(uint32_t packed) {
 	}
 
 	// The list first, and for the whole of a scrollbar drag it started.
-	if (page == P_TIME) {
-		if (ws->pressed < 0 && z_listbox_has_pointer(&tz_list, cx, cy)) {
+	if (page_list()) {
+		z_listbox_t *lb = page_list();
+		if (ws->pressed < 0 && z_listbox_has_pointer(lb, cx, cy)) {
 			if ((buttons & Z_MOUSE_BTN_LEFT) && !list_focus) {
 				focus_sidebar(false);
 				focus_list(true);
 			}
-			int r = z_listbox_mouse(&tz_list, cx, cy, buttons);
-			if (r == Z_LIST_ACTIVATED) choose_zone();
-			else if (r == Z_LIST_SELECTED) zone_selection_changed();
+			list_event(z_listbox_mouse(lb, cx, cy, buttons));
 			return;
 		}
-		z_listbox_mouse(&tz_list, cx, cy, buttons);		// keep its edges fed
+		z_listbox_mouse(lb, cx, cy, buttons);		// keep its edges fed
 	}
 
 	int act = z_widget_mouse(ws, cx, cy, buttons);
@@ -1466,7 +1618,8 @@ static void handle_key(uint32_t keysym, uint8_t mods) {
 				(keysym >= 'A' && keysym <= 'Z') || (keysym >= '0' && keysym <= '9'))) {
 			focus_sidebar(false);
 			focus_list(true);
-			if (z_listbox_key(&tz_list, keysym) == Z_LIST_SELECTED) zone_selection_changed();
+			int r = z_listbox_key(&tz_list, keysym);
+			if (r == Z_LIST_SELECTED) list_event(r);
 		}
 		return;
 	}
@@ -1477,11 +1630,9 @@ static void handle_key(uint32_t keysym, uint8_t mods) {
 	//
 	// Every key it uses goes to it -- arrows move the selection there,
 	// not the focus -- and Tab leaves it.
-	if (list_focus) {
+	if (list_focus && page_list()) {
 		if (keysym == '\t') { step_focus(back); return; }
-		int r = z_listbox_key(&tz_list, keysym);
-		if (r == Z_LIST_ACTIVATED) choose_zone();
-		else if (r == Z_LIST_SELECTED) zone_selection_changed();
+		list_event(z_listbox_key(page_list(), keysym));
 		return;
 	}
 
@@ -1547,6 +1698,8 @@ static void on_dialog_msg(z_msg_t *msg, void *user) {
 			if (z_win_redraw_id(msg->obj.val.uint32) != win.id) break;
 			z_win_apply_redraw(&win, msg->obj.val.uint32);
 			z_listbox_invalidate(&tz_list);
+			z_listbox_invalidate(&lang_list);
+			z_listbox_invalidate(&theme_list);
 			repaint();
 			z_win_redraw_done(&win);
 			break;
@@ -1570,12 +1723,6 @@ static void widgets_init(void) {
 		widgets[i].enabled = true;
 	}
 
-	widgets[W_THEME_PREV].type = Z_WIDGET_BUTTON;
-	widgets[W_THEME_PREV].label = "<";
-	widgets[W_THEME_PREV].enabled = can_theme;
-	widgets[W_THEME_NEXT].type = Z_WIDGET_BUTTON;
-	widgets[W_THEME_NEXT].label = ">";
-	widgets[W_THEME_NEXT].enabled = can_theme;
 
 	widgets[W_SPEED_PREV].type = Z_WIDGET_BUTTON;
 	widgets[W_SPEED_PREV].label = "<";
@@ -1595,6 +1742,11 @@ static void widgets_init(void) {
 	widgets[W_TOGGLE_JA].type = Z_WIDGET_BUTTON;
 	widgets[W_TOGGLE_JA].label = "Turn on";	// set_japanese_label() after reading
 	widgets[W_TOGGLE_JA].enabled = true;
+
+
+	widgets[W_SET_LANG].type = Z_WIDGET_BUTTON;
+	widgets[W_SET_LANG].label = "Use this language";
+	widgets[W_SET_LANG].enabled = false;		// see lang_selection_changed()
 
 	widgets[W_SET_TZ].type = Z_WIDGET_BUTTON;
 	widgets[W_SET_TZ].label = "Set time zone";
@@ -1638,6 +1790,13 @@ static void icons_init(void) {
 // because widgets_init() zeroed what read_values() had set, and a test
 // that re-read the values later could not see it.
 static void startup(void) {
+
+	// The languages and the desktop colours (the zones' list is set up
+	// by the caller, which the host test does itself).
+	z_listbox_init(&lang_list, &win);
+	z_listbox_init(&theme_list, &win);
+	z_listbox_set_items(&theme_list, z_accent_theme_count + 1, theme_label, NULL);
+
 	icons_init();
 	read_values();
 	widgets_init();

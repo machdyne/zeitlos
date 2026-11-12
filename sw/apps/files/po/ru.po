@@ -1,0 +1,359 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: Zeitlos files\n"
+"Language: ru\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=3; plural=(n%10==1 && n%100!=11 ? 0 : n%10>=2 && n%10<=4 && (n%100<10 || n%100>=20) ? 1 : 2);\n"
+
+msgctxt "button"
+msgid "Open"
+msgstr "Открыть"
+
+msgctxt "button"
+msgid "New Dir"
+msgstr "Папка"
+
+msgctxt "button"
+msgid "Rename"
+msgstr "Переим."
+
+msgctxt "button"
+msgid "Copy"
+msgstr "Копия"
+
+msgctxt "button"
+msgid "Move"
+msgstr "Перем."
+
+msgctxt "button"
+msgid "Delete"
+msgstr "Удалить"
+
+msgctxt "button"
+msgid "Convert"
+msgstr "Конв."
+
+msgctxt "button"
+msgid "Find"
+msgstr "Найти"
+
+msgid " (reading)"
+msgstr " (чтение)"
+
+msgid " (partial list)"
+msgstr " (часть списка)"
+
+msgid "Launch failed"
+msgstr "Не удалось запустить"
+
+msgid ""
+"That application could\n"
+"not be started."
+msgstr ""
+"Не удалось запустить\n"
+"это приложение."
+
+msgid ""
+"That program could not\n"
+"be started."
+msgstr ""
+"Не удалось запустить\n"
+"эту программу."
+
+msgid "Can't open"
+msgstr "Не удаётся открыть"
+
+msgid ""
+"That file is not a\n"
+"program."
+msgstr ""
+"Этот файл не\n"
+"программа."
+
+msgid ""
+"No application is\n"
+"associated with this file."
+msgstr ""
+"С этим файлом не связано\n"
+"ни одно приложение."
+
+msgid "New Folder"
+msgstr "Новая папка"
+
+msgid "Name for the new folder:"
+msgstr "Имя новой папки:"
+
+msgid "Bad name"
+msgstr "Недопустимое имя"
+
+msgid ""
+"A folder name cannot\n"
+"contain '/'."
+msgstr ""
+"Имя папки не может\n"
+"содержать '/'."
+
+msgid "Failed"
+msgstr "Ошибка"
+
+msgid ""
+"The folder could not\n"
+"be created."
+msgstr ""
+"Не удалось создать\n"
+"папку."
+
+msgid ""
+"Not possible:\n"
+msgstr ""
+"Невозможно:\n"
+
+msgid "Rename"
+msgstr "Переименовать"
+
+msgid "New name:"
+msgstr "Новое имя:"
+
+msgid ""
+"A name cannot\n"
+"contain '/'."
+msgstr ""
+"Имя не может\n"
+"содержать '/'."
+
+msgid "Move"
+msgstr "Переместить"
+
+msgid "Copy"
+msgstr "Копировать"
+
+msgid "Move to:"
+msgstr "Переместить в:"
+
+msgid "Copy to:"
+msgstr "Копировать в:"
+
+msgid ""
+"Replace the file that\n"
+"is already there?"
+msgstr ""
+"Заменить уже\n"
+"имеющийся файл?"
+
+#, c-format
+msgid ""
+"Delete the folder\n"
+"%s\n"
+"and everything in it?"
+msgstr ""
+"Удалить папку\n"
+"%s\n"
+"со всем содержимым?"
+
+#, c-format
+msgid ""
+"Delete the file\n"
+"%s?"
+msgstr ""
+"Удалить файл\n"
+"%s?"
+
+msgid "Delete"
+msgstr "Удалить"
+
+msgid ""
+"The file could not be\n"
+"deleted. Is it in use?"
+msgstr ""
+"Не удалось удалить\n"
+"файл. Он используется?"
+
+msgid "Convert"
+msgstr "Конвертировать"
+
+msgid ""
+"A conversion is already\n"
+"running."
+msgstr ""
+"Конвертация уже\n"
+"идёт."
+
+msgid ""
+"convert does not read\n"
+"this kind of file."
+msgstr ""
+"convert не читает\n"
+"такие файлы."
+
+msgid "Pack into (.zip, .tar or .tar.gz):"
+msgstr "Упаковать в (.zip, .tar или .tar.gz):"
+
+msgid "To (the ending picks the format):"
+msgstr "В (расширение задаёт формат):"
+
+msgid "Extract into the folder:"
+msgstr "Распаковать в папку:"
+
+msgid ""
+"convert is not on\n"
+"this card."
+msgstr ""
+"На этой карте нет\n"
+"convert."
+
+msgid ""
+"Could not start: is\n"
+"/tmp writable?"
+msgstr ""
+"Не удалось запустить:\n"
+"можно ли писать в /tmp?"
+
+msgid " MB"
+msgstr " МБ"
+
+msgid " KB"
+msgstr " КБ"
+
+msgid " bytes"
+msgstr " байт"
+
+msgctxt "button"
+msgid "Stop"
+msgstr "Стоп"
+
+#, c-format
+msgid "Finding... %u found, %lu files looked at"
+msgstr "Поиск... найдено %u, просмотрено файлов: %lu"
+
+#, c-format
+msgid "%u found in %s (the first %u matches)"
+msgstr "Найдено %u в %s (первые %u совпадений)"
+
+#, c-format
+msgid "%u found in %s (not all)"
+msgstr "Найдено %u в %s (не все)"
+
+#, c-format
+msgid "%u found in %s"
+msgstr "Найдено %u в %s"
+
+msgid "Removing the source... "
+msgstr "Удаление источника... "
+
+msgid "Moving... "
+msgstr "Перемещение... "
+
+msgid "Copying... "
+msgstr "Копирование... "
+
+msgid " of "
+msgstr " из "
+
+msgid " files, "
+msgstr " файлов, "
+
+#, c-format
+msgid "Deleting... %lu deleted"
+msgstr "Удаление... удалено %lu"
+
+msgid "  (Esc stops)"
+msgstr "  (Esc остановит)"
+
+msgid "  (Esc: back)"
+msgstr "  (Esc: назад)"
+
+msgid "Stopped."
+msgstr "Остановлено."
+
+msgid "Stopped: "
+msgstr "Остановлено: "
+
+msgid ""
+"\n"
+"The copy is complete; part of\n"
+"the original is still there."
+msgstr ""
+"\n"
+"Копия полная; часть\n"
+"оригинала ещё на месте."
+
+msgid ""
+"\n"
+"Part of it is deleted already."
+msgstr ""
+"\n"
+"Часть уже удалена."
+
+msgid ""
+"\n"
+"What was copied so far is left\n"
+"in the destination."
+msgstr ""
+"\n"
+"То, что уже скопировано,\n"
+"остаётся в месте назначения."
+
+msgid "Find"
+msgstr "Найти"
+
+msgid ""
+"In this folder and below. A name\n"
+"(report, *.md), \"text\" inside files,\n"
+"or both: *.txt \"invoice\""
+msgstr ""
+"В этой папке и ниже. Имя\n"
+"(отчёт, *.md), \"текст\" в файлах,\n"
+"или и то и другое: *.txt \"счёт\""
+
+#, c-format
+msgid ""
+"Browse, open and manage files.\n"
+"\n"
+"Enter\tOpen the selection\n"
+"Backspace\tUp a folder\n"
+"Letters\tJump to a name\n"
+"F2\tRename\n"
+"Delete\tDelete (asks first)\n"
+"F3, Ctrl+F\tFind by name, \"text\" inside, or both\n"
+"F5\tRead the folder again\n"
+"F12\tHome: back to the folder files started in\n"
+"Esc\tStop a find, copy or delete\n"
+"Tab\tTo the buttons; Space presses\n"
+"\n"
+"Results: Enter opens, Backspace goes to the file's folder, Esc goes back.\n"
+"\n"
+"Copy and Move ask for the destination, starting from the file's own path: an existing folder means into it. Folders copy, move and delete with everything in them. Convert saves the file in another format, picked by the ending you give it (.docx, .md, .xlsx, ...); a folder it packs into a .zip, .tar or .tar.gz.\n"
+"\n"
+"%s is yours, %s is the RAM disk (gone at power-off)."
+msgstr ""
+"Просмотр, открытие и упорядочение файлов.\n"
+"\n"
+"Enter\tОткрыть выделенное\n"
+"Backspace\tНа папку выше\n"
+"Буквы\tПерейти к имени\n"
+"F2\tПереименовать\n"
+"Del\tУдалить (сначала спросит)\n"
+"F3, Ctrl+F\tИскать по имени, \"тексту\" внутри или по обоим\n"
+"F5\tПеречитать папку\n"
+"F12\tДомой: в папку, где начал files\n"
+"Esc\tОстановить поиск, копирование или удаление\n"
+"Tab\tК кнопкам; Пробел нажимает\n"
+"\n"
+"Результаты: Enter открывает, Backspace переходит в папку файла, Esc возвращает.\n"
+"\n"
+"Копировать и Переместить спрашивают, куда, начиная с пути файла: существующая папка значит внутрь. Папки копируются, перемещаются и удаляются со всем содержимым. Конвертировать сохраняет файл в другом формате, выбранном по расширению (.docx, .md, .xlsx, ...); папку упаковывает в .zip, .tar или .tar.gz.\n"
+"\n"
+"%s -- ваша, %s -- диск в ОЗУ (пропадает при выключении)."
+
+msgid "Files help"
+msgstr "Справка files"
+
+#~ msgid "Open"
+#~ msgstr "Открыть"
+
+#~ msgid "New Dir"
+#~ msgstr "Новая папка"
+
+#~ msgid "Stop"
+#~ msgstr "Стоп"

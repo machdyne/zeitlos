@@ -118,6 +118,7 @@ with [welcome](welcome.md); to program it, [kernel](kernel.md) and
 | [keyboard\_layouts](keyboard_layouts.md) | 22 layouts and Japanese input |
 | [line\_editing](line_editing.md) | Shared line editor |
 | [text\_encoding](text_encoding.md) | UTF-8, Latin-9 and the fonts |
+| [i18n](i18n.md) | Languages: translating programs, catalogs, `system.language` |
 | [fonts](fonts.md) | Public-domain fonts for pages: Hershey stroke fonts, misc-fixed |
 | [tts](tts.md) | Speech |
 | [tts\_data](tts_data.md) | Speech data: `tools/speech` |

@@ -1,0 +1,383 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: Zeitlos text\n"
+"Language: pt\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+
+msgid "Converting"
+msgstr "A converter:"
+
+msgid "the file"
+msgstr "o ficheiro"
+
+msgid "Saving"
+msgstr "A guardar:"
+
+msgid "Recover"
+msgstr "Recuperar"
+
+msgid ""
+"Unsaved changes from a\n"
+"session that did not end\n"
+"were kept. Recover them?"
+msgstr ""
+"Foram guardadas alterações\n"
+"de uma sessão que não\n"
+"terminou. Recuperá-las?"
+
+#, c-format
+msgid ""
+"%d character cannot be saved\n"
+"as %s. Save as UTF-8\n"
+"instead?"
+msgid_plural ""
+"%d characters cannot be saved\n"
+"as %s. Save as UTF-8\n"
+"instead?"
+msgstr[0] ""
+"%d carácter não pode ser\n"
+"guardado como %s.\n"
+"Guardar como UTF-8?"
+msgstr[1] ""
+"%d caracteres não podem ser\n"
+"guardados como %s.\n"
+"Guardar como UTF-8?"
+
+msgid "Encoding"
+msgstr "Codificação"
+
+msgid "Save failed"
+msgstr "Falha ao guardar"
+
+msgid ""
+"The file could not be\n"
+"written completely.\n"
+"The one on the card is\n"
+"as it was."
+msgstr ""
+"Não foi possível escrever o\n"
+"ficheiro todo. O do cartão\n"
+"ficou como estava."
+
+#, c-format
+msgid ""
+"Saved, but as\n"
+"%.60s:\n"
+"it could not be renamed."
+msgstr ""
+"Guardado, mas como\n"
+"%.60s:\n"
+"não foi possível mudar o nome."
+
+msgid "Save"
+msgstr "Guardar"
+
+msgid "Export"
+msgstr "Exportar"
+
+msgid ""
+"convert could not\n"
+"be started."
+msgstr ""
+"Não foi possível\n"
+"iniciar o convert."
+
+msgid ""
+"Could not write the\n"
+"copy to convert."
+msgstr ""
+"Impossível escrever a\n"
+"cópia a converter."
+
+#, c-format
+msgid ""
+"%.40s already exists.\n"
+"Replace it?"
+msgstr ""
+"%.40s já existe.\n"
+"Substituí-lo?"
+
+msgid "Save As"
+msgstr "Guardar como"
+
+msgid "Getting ready to print"
+msgstr "A preparar a impressão:"
+
+msgid "Untitled"
+msgstr "Sem título"
+
+#, c-format
+msgid "Print %.60s"
+msgstr "Imprimir %.60s"
+
+#, c-format
+msgid ""
+"There was no room in %s\n"
+"for the text to print."
+msgstr ""
+"Não havia espaço em %s\n"
+"para o texto a imprimir."
+
+msgid "Print"
+msgstr "Imprimir"
+
+#, c-format
+msgid ""
+"The print job could not\n"
+"be made in %s."
+msgstr ""
+"Impossível criar o trabalho\n"
+"de impressão em %s."
+
+msgid "print is not on the card."
+msgstr "O print não está no cartão."
+
+msgid ""
+"The print job could not\n"
+"be written."
+msgstr ""
+"Impossível escrever o\n"
+"trabalho de impressão."
+
+msgid "Unsaved changes"
+msgstr "Alterações por guardar"
+
+msgid ""
+"Save changes before\n"
+"continuing?"
+msgstr ""
+"Guardar as alterações\n"
+"antes de continuar?"
+
+msgid "Open failed"
+msgstr "Falha ao abrir"
+
+msgid ""
+"That file could not\n"
+"be read."
+msgstr ""
+"Não foi possível ler\n"
+"esse ficheiro."
+
+msgid "Too large"
+msgstr "Demasiado grande"
+
+msgid ""
+"That file is larger than\n"
+"this editor can hold on\n"
+"this machine."
+msgstr ""
+"Esse ficheiro é maior do que\n"
+"o editor comporta nesta\n"
+"máquina."
+
+msgid "Opening"
+msgstr "A abrir:"
+
+msgid ""
+"That file is too large for\n"
+"this editor once its accented\n"
+"letters are converted."
+msgstr ""
+"O ficheiro fica grande demais\n"
+"para o editor depois de\n"
+"convertidas as letras acentuadas."
+
+msgid "Copy"
+msgstr "Copiar"
+
+msgid ""
+"Copied, but there is no\n"
+"memory to keep all of it:\n"
+"a paste gives the first\n"
+"4 KB."
+msgstr ""
+"Copiado, mas falta memória\n"
+"para guardar tudo: ao colar\n"
+"vêm os primeiros 4 KB."
+
+msgid ""
+"Too large to cut here:\n"
+"there is no memory to\n"
+"keep it for the paste.\n"
+"Cut less than 4 KB."
+msgstr ""
+"Grande demais para cortar:\n"
+"falta memória para o guardar\n"
+"até colar.\n"
+"Corte menos de 4 KB."
+
+msgid ""
+"Too large to cut:\n"
+"it could not be undone.\n"
+"Cut a smaller part."
+msgstr ""
+"Grande demais para cortar:\n"
+"não poderia ser anulado.\n"
+"Corte uma parte menor."
+
+msgid "Cut"
+msgstr "Cortar"
+
+msgid "Full"
+msgstr "Cheio"
+
+msgid ""
+"Only part of the clipboard\n"
+"would fit."
+msgstr ""
+"Só caberia parte da\n"
+"área de transferência."
+
+msgid "The document is full."
+msgstr "O documento está cheio."
+
+msgid "blank"
+msgstr "vazio"
+
+msgid "end"
+msgstr "fim"
+
+msgid "new line"
+msgstr "nova linha"
+
+msgid "Empty document"
+msgstr "Documento vazio"
+
+msgid "End of document"
+msgstr "Fim do documento"
+
+msgid "Nothing selected"
+msgstr "Nada selecionado"
+
+msgid "Finding"
+msgstr "A procurar:"
+
+#, c-format
+msgid ""
+"\"%.60s\"\n"
+"was not found."
+msgstr ""
+"\"%.60s\"\n"
+"não foi encontrado."
+
+msgid "Find"
+msgstr "Procurar"
+
+msgid "Find:"
+msgstr "Procurar:"
+
+msgid "Counting"
+msgstr "A contar:"
+
+msgid "Replacing"
+msgstr "A substituir:"
+
+msgid "Replace"
+msgstr "Substituir"
+
+msgid ""
+"The document would not hold\n"
+"the replacements."
+msgstr ""
+"O documento não comportaria\n"
+"as substituições."
+
+msgid "Replace with:"
+msgstr "Substituir por:"
+
+#, c-format
+msgid ""
+"%d match for \"%.40s\".\n"
+"Replace all of them?\n"
+"(No: one at a time.)"
+msgid_plural ""
+"%d matches for \"%.40s\".\n"
+"Replace all of them?\n"
+"(No: one at a time.)"
+msgstr[0] ""
+"%d correspondência de \"%.40s\".\n"
+"Substituí-las todas?\n"
+"(Não: uma a uma.)"
+msgstr[1] ""
+"%d correspondências de \"%.40s\".\n"
+"Substituí-las todas?\n"
+"(Não: uma a uma.)"
+
+msgid ""
+"That many changes cannot\n"
+"be undone. Replace all\n"
+"anyway?"
+msgstr ""
+"Tantas alterações não se\n"
+"podem anular. Substituir\n"
+"tudo na mesma?"
+
+#, c-format
+msgid "Replaced %d."
+msgstr "%d substituídas."
+
+msgid "Replace this one?"
+msgstr "Substituir esta?"
+
+msgid "the document"
+msgstr "o documento"
+
+#, c-format
+msgid "%d word"
+msgid_plural "%d words"
+msgstr[0] "%d palavra"
+msgstr[1] "%d palavras"
+
+#, c-format
+msgid "%d character"
+msgid_plural "%d characters"
+msgstr[0] "%d carácter"
+msgstr[1] "%d caracteres"
+
+#, c-format
+msgid "Line %d of %d."
+msgstr "Linha %d de %d."
+
+msgid "Go to line:"
+msgstr "Ir para a linha:"
+
+msgid "Go to line"
+msgstr "Ir para a linha"
+
+#, c-format
+msgid ""
+"A plain text editor for notes, lists and Markdown.\n"
+"\n"
+"Ctrl+N/O/S\tNew, open, save\n"
+"Ctrl+Shift+S\tSave as\n"
+"Ctrl+Q\tClose\n"
+"Ctrl+C/X/V\tCopy, cut, paste\n"
+"Ctrl+A\tSelect all\n"
+"Ctrl+Z/Y\tUndo, redo\n"
+"Ctrl+F, F3\tFind, find again\n"
+"Ctrl+H\tReplace\n"
+"Ctrl+L\tGo to line; counts words\n"
+"Ctrl+P\tPrint, or print to a PDF\n"
+"\n"
+"Shift with the arrows, or a drag, selects. A .docx, .odt or .rtf opens converted, as Markdown in %s (the RAM disk): Save puts it in %s."
+msgstr ""
+"Um editor de texto simples para notas, listas e Markdown.\n"
+"\n"
+"Ctrl+N/O/S\tNovo, abrir, guardar\n"
+"Ctrl+Shift+S\tGuardar como\n"
+"Ctrl+Q\tFechar\n"
+"Ctrl+C/X/V\tCopiar, cortar, colar\n"
+"Ctrl+A\tSelecionar tudo\n"
+"Ctrl+Z/Y\tAnular, refazer\n"
+"Ctrl+F, F3\tProcurar, procurar de novo\n"
+"Ctrl+H\tSubstituir\n"
+"Ctrl+L\tIr para a linha; conta palavras\n"
+"Ctrl+P\tImprimir, ou imprimir para PDF\n"
+"\n"
+"Shift com as setas, ou arrastar, seleciona. Um .docx, .odt ou .rtf abre convertido, como Markdown em %s (o disco em RAM): Guardar coloca-o em %s."
+
+msgid "Text help"
+msgstr "Ajuda do text"

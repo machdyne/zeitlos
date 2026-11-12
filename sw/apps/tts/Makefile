@@ -3,7 +3,7 @@
 APP = tts
 APP_LISTING = 0
 
-OBJS = zeitlos.o zobj.o zsoc.o zcfg.o zfsapp.o tts_queue.o text2ph.o pack.o dsyn.o lts.o phon.o synth.o tts_audio.o tts.o
+OBJS = zeitlos.o zobj.o zsoc.o zcfg.o zfsapp.o tts_queue.o text2ph.o pack.o dsyn.o lts.o lang.o phon.o synth.o tts_audio.o tts.o
 
 # -O2 for the voice: synth.c's inner loop runs ~11,000 times a second
 # per utterance, and -Os leaves speed on the table there.
@@ -49,6 +49,15 @@ test:
 	/tmp/text2ph_test
 	$(HOSTCC) $(HOSTFLAGS) -DPACK_HOST -o /tmp/pack_test tests/pack_test.c pack.c lts.c phon.c synth.c dsyn.c
 	/tmp/pack_test
+	$(HOSTCC) $(HOSTFLAGS) -DPACK_HOST -o /tmp/lang_test tests/lang_test.c lang.c text2ph.c lts.c pack.c phon.c synth.c dsyn.c
+	/tmp/lang_test
+
+# Text to phonemes in another language, for writing its rules:
+#   make lang_cli && echo "Datei löschen?" | /tmp/lang_cli de
+lang_cli:
+	$(HOSTCC) $(HOSTFLAGS) -DPACK_HOST -o /tmp/lang_cli tests/lang_cli.c lang.c text2ph.c lts.c pack.c phon.c synth.c dsyn.c
+
+.PHONY: lang_cli
 
 .PHONY: test
 
@@ -69,7 +78,7 @@ OUT ?= /tmp/tts_wav
 
 wav:
 	mkdir -p $(OUT)
-	$(HOSTCC) $(HOSTFLAGS) -DSYNTH_STATS -DPACK_HOST -o /tmp/tts_wav_bin tests/tts_wav.c phon.c synth.c text2ph.c lts.c pack.c dsyn.c
+	$(HOSTCC) $(HOSTFLAGS) -DSYNTH_STATS -DPACK_HOST -o /tmp/tts_wav_bin tests/tts_wav.c phon.c synth.c text2ph.c lts.c pack.c dsyn.c lang.c
 	/tmp/tts_wav_bin tests/testset.txt $(OUT) $(WPM) $(PACK)
 
 synth_tables.h: gen_tables.py

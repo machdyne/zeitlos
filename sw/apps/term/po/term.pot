@@ -1,0 +1,125 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: Zeitlos term\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+#: sw/apps/term/term.c:1330
+#, c-format
+msgid "%s -- not connected"
+msgstr ""
+
+#: sw/apps/term/term.c:1340
+msgid "ready"
+msgstr ""
+
+#: sw/apps/term/term.c:1340
+msgid "not running"
+msgstr ""
+
+#: sw/apps/term/term.c:1340
+msgid "not installed"
+msgstr ""
+
+#: sw/apps/term/term.c:1341
+msgid "Scheme and system commands"
+msgstr ""
+
+#: sw/apps/term/term.c:1343
+msgid "Unix-style shell, zcc and vi"
+msgstr ""
+
+#: sw/apps/term/term.c:1345
+msgid "Boot log and kernel shell"
+msgstr ""
+
+#: sw/apps/term/term.c:1347
+msgid "port, serial, telnet or ssh"
+msgstr ""
+
+#: sw/apps/term/term.c:1365
+msgid "Tab chooses, Enter connects, or type a target"
+msgstr ""
+
+#: sw/apps/term/term.c:1367
+msgid "F12 disconnects  Esc hides  Shift+PgUp scrolls"
+msgstr ""
+
+#: sw/apps/term/term.c:1440
+msgid "auto-connect cancelled"
+msgstr ""
+
+#: sw/apps/term/term.c:1579
+#, c-format
+msgid "%.40s is not running"
+msgstr ""
+
+#: sw/apps/term/term.c:1606
+#, c-format
+msgid "connecting to %.45s ...  (Esc cancels)"
+msgstr ""
+
+#: sw/apps/term/term.c:1628
+#, c-format
+msgid "%.30s refused: %.40s"
+msgstr ""
+
+#: sw/apps/term/term.c:1631
+#, c-format
+msgid "%.55s refused the connection"
+msgstr ""
+
+#: sw/apps/term/term.c:1672
+#, c-format
+msgid "cancelled connecting to %.50s"
+msgstr ""
+
+#: sw/apps/term/term.c:1674
+#, c-format
+msgid "no answer from %.50s"
+msgstr ""
+
+#: sw/apps/term/term.c:1782
+#, c-format
+msgid "could not start %s -- %s"
+msgstr ""
+
+#: sw/apps/term/term.c:1791
+#, c-format
+msgid "starting %s"
+msgstr ""
+
+#: sw/apps/term/term.c:1796
+#, c-format
+msgid "starting %s...  (Esc cancels)"
+msgstr ""
+
+#: sw/apps/term/term.c:1844
+#, c-format
+msgid "auto-connect: %.40s  (Esc cancels)"
+msgstr ""
+
+#: sw/apps/term/term.c:1868
+#, c-format
+msgid "%s: %.24s did not appear -- choose below"
+msgstr ""
+
+#: sw/apps/term/term.c:2033
+msgid "Blank screen"
+msgstr ""
+
+#: sw/apps/term/term.c:2041
+msgid "Nothing selected"
+msgstr ""
+
+#: sw/apps/term/term.c:2316
+msgid "disconnected (F12)"
+msgstr ""
+
+#: sw/apps/term/term.c:2449
+msgid "choose a shell, or open a connection"
+msgstr ""
+
+#: sw/apps/term/term.c:2557
+msgid "connection closed by the other end"
+msgstr ""

@@ -1,0 +1,392 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: Zeitlos text\n"
+"Language: cs\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=3; plural=(n==1 ? 0 : n>=2 && n<=4 ? 1 : 2);\n"
+
+msgid "Converting"
+msgstr "Převod:"
+
+msgid "the file"
+msgstr "soubor"
+
+msgid "Saving"
+msgstr "Ukládání:"
+
+msgid "Recover"
+msgstr "Obnovit"
+
+msgid ""
+"Unsaved changes from a\n"
+"session that did not end\n"
+"were kept. Recover them?"
+msgstr ""
+"Neuložené změny z relace,\n"
+"která neskončila, byly\n"
+"zachovány. Obnovit je?"
+
+#, c-format
+msgid ""
+"%d character cannot be saved\n"
+"as %s. Save as UTF-8\n"
+"instead?"
+msgid_plural ""
+"%d characters cannot be saved\n"
+"as %s. Save as UTF-8\n"
+"instead?"
+msgstr[0] ""
+"%d znak nelze uložit\n"
+"jako %s. Uložit raději\n"
+"jako UTF-8?"
+msgstr[1] ""
+"%d znaky nelze uložit\n"
+"jako %s. Uložit raději\n"
+"jako UTF-8?"
+msgstr[2] ""
+"%d znaků nelze uložit\n"
+"jako %s. Uložit raději\n"
+"jako UTF-8?"
+
+msgid "Encoding"
+msgstr "Kódování"
+
+msgid "Save failed"
+msgstr "Uložení selhalo"
+
+msgid ""
+"The file could not be\n"
+"written completely.\n"
+"The one on the card is\n"
+"as it was."
+msgstr ""
+"Soubor se nepodařilo\n"
+"zapsat celý. Ten na kartě\n"
+"je beze změny."
+
+#, c-format
+msgid ""
+"Saved, but as\n"
+"%.60s:\n"
+"it could not be renamed."
+msgstr ""
+"Uloženo, ale jako\n"
+"%.60s:\n"
+"přejmenovat nešlo."
+
+msgid "Save"
+msgstr "Uložit"
+
+msgid "Export"
+msgstr "Export"
+
+msgid ""
+"convert could not\n"
+"be started."
+msgstr ""
+"convert nešel\n"
+"spustit."
+
+msgid ""
+"Could not write the\n"
+"copy to convert."
+msgstr ""
+"Kopii k převodu se\n"
+"nepodařilo zapsat."
+
+#, c-format
+msgid ""
+"%.40s already exists.\n"
+"Replace it?"
+msgstr ""
+"%.40s už existuje.\n"
+"Nahradit?"
+
+msgid "Save As"
+msgstr "Uložit jako"
+
+msgid "Getting ready to print"
+msgstr "Příprava tisku:"
+
+msgid "Untitled"
+msgstr "Bez názvu"
+
+#, c-format
+msgid "Print %.60s"
+msgstr "Tisk %.60s"
+
+#, c-format
+msgid ""
+"There was no room in %s\n"
+"for the text to print."
+msgstr ""
+"V %s nebylo místo\n"
+"pro text k tisku."
+
+msgid "Print"
+msgstr "Tisk"
+
+#, c-format
+msgid ""
+"The print job could not\n"
+"be made in %s."
+msgstr ""
+"Tiskovou úlohu se\n"
+"nepodařilo vytvořit v %s."
+
+msgid "print is not on the card."
+msgstr "print na kartě není."
+
+msgid ""
+"The print job could not\n"
+"be written."
+msgstr ""
+"Tiskovou úlohu se\n"
+"nepodařilo zapsat."
+
+msgid "Unsaved changes"
+msgstr "Neuložené změny"
+
+msgid ""
+"Save changes before\n"
+"continuing?"
+msgstr ""
+"Uložit změny\n"
+"před pokračováním?"
+
+msgid "Open failed"
+msgstr "Otevření selhalo"
+
+msgid ""
+"That file could not\n"
+"be read."
+msgstr ""
+"Soubor se nepodařilo\n"
+"přečíst."
+
+msgid "Too large"
+msgstr "Příliš velký"
+
+msgid ""
+"That file is larger than\n"
+"this editor can hold on\n"
+"this machine."
+msgstr ""
+"Soubor je větší, než\n"
+"tento editor na tomto\n"
+"počítači pojme."
+
+msgid "Opening"
+msgstr "Otevírání:"
+
+msgid ""
+"That file is too large for\n"
+"this editor once its accented\n"
+"letters are converted."
+msgstr ""
+"Po převodu písmen s diakritikou\n"
+"bude soubor pro editor\n"
+"příliš velký."
+
+msgid "Copy"
+msgstr "Kopírovat"
+
+msgid ""
+"Copied, but there is no\n"
+"memory to keep all of it:\n"
+"a paste gives the first\n"
+"4 KB."
+msgstr ""
+"Zkopírováno, ale není paměť\n"
+"na všechno: vložení dá\n"
+"první 4 KB."
+
+msgid ""
+"Too large to cut here:\n"
+"there is no memory to\n"
+"keep it for the paste.\n"
+"Cut less than 4 KB."
+msgstr ""
+"Příliš velké k vyjmutí:\n"
+"není paměť, kde to\n"
+"uchovat pro vložení.\n"
+"Vyjměte méně než 4 KB."
+
+msgid ""
+"Too large to cut:\n"
+"it could not be undone.\n"
+"Cut a smaller part."
+msgstr ""
+"Příliš velké k vyjmutí:\n"
+"nešlo by to vrátit.\n"
+"Vyjměte menší část."
+
+msgid "Cut"
+msgstr "Vyjmout"
+
+msgid "Full"
+msgstr "Plno"
+
+msgid ""
+"Only part of the clipboard\n"
+"would fit."
+msgstr ""
+"Vešla by se jen část\n"
+"schránky."
+
+msgid "The document is full."
+msgstr "Dokument je plný."
+
+msgid "blank"
+msgstr "prázdné"
+
+msgid "end"
+msgstr "konec"
+
+msgid "new line"
+msgstr "nový řádek"
+
+msgid "Empty document"
+msgstr "Prázdný dokument"
+
+msgid "End of document"
+msgstr "Konec dokumentu"
+
+msgid "Nothing selected"
+msgstr "Nic není vybráno"
+
+msgid "Finding"
+msgstr "Hledání:"
+
+#, c-format
+msgid ""
+"\"%.60s\"\n"
+"was not found."
+msgstr ""
+"\"%.60s\"\n"
+"nebylo nalezeno."
+
+msgid "Find"
+msgstr "Hledat"
+
+msgid "Find:"
+msgstr "Hledat:"
+
+msgid "Counting"
+msgstr "Počítání:"
+
+msgid "Replacing"
+msgstr "Nahrazování:"
+
+msgid "Replace"
+msgstr "Nahradit"
+
+msgid ""
+"The document would not hold\n"
+"the replacements."
+msgstr ""
+"Dokument by náhrady\n"
+"nepojal."
+
+msgid "Replace with:"
+msgstr "Nahradit čím:"
+
+#, c-format
+msgid ""
+"%d match for \"%.40s\".\n"
+"Replace all of them?\n"
+"(No: one at a time.)"
+msgid_plural ""
+"%d matches for \"%.40s\".\n"
+"Replace all of them?\n"
+"(No: one at a time.)"
+msgstr[0] ""
+"%d shoda pro \"%.40s\".\n"
+"Nahradit všechny?\n"
+"(Ne: po jedné.)"
+msgstr[1] ""
+"%d shody pro \"%.40s\".\n"
+"Nahradit všechny?\n"
+"(Ne: po jedné.)"
+msgstr[2] ""
+"%d shod pro \"%.40s\".\n"
+"Nahradit všechny?\n"
+"(Ne: po jedné.)"
+
+msgid ""
+"That many changes cannot\n"
+"be undone. Replace all\n"
+"anyway?"
+msgstr ""
+"Tolik změn nelze vrátit.\n"
+"Přesto nahradit všechny?"
+
+#, c-format
+msgid "Replaced %d."
+msgstr "Nahrazeno: %d."
+
+msgid "Replace this one?"
+msgstr "Nahradit tuto?"
+
+msgid "the document"
+msgstr "dokument"
+
+#, c-format
+msgid "%d word"
+msgid_plural "%d words"
+msgstr[0] "%d slovo"
+msgstr[1] "%d slova"
+msgstr[2] "%d slov"
+
+#, c-format
+msgid "%d character"
+msgid_plural "%d characters"
+msgstr[0] "%d znak"
+msgstr[1] "%d znaky"
+msgstr[2] "%d znaků"
+
+#, c-format
+msgid "Line %d of %d."
+msgstr "Řádek %d z %d."
+
+msgid "Go to line:"
+msgstr "Přejít na řádek:"
+
+msgid "Go to line"
+msgstr "Přejít na řádek"
+
+#, c-format
+msgid ""
+"A plain text editor for notes, lists and Markdown.\n"
+"\n"
+"Ctrl+N/O/S\tNew, open, save\n"
+"Ctrl+Shift+S\tSave as\n"
+"Ctrl+Q\tClose\n"
+"Ctrl+C/X/V\tCopy, cut, paste\n"
+"Ctrl+A\tSelect all\n"
+"Ctrl+Z/Y\tUndo, redo\n"
+"Ctrl+F, F3\tFind, find again\n"
+"Ctrl+H\tReplace\n"
+"Ctrl+L\tGo to line; counts words\n"
+"Ctrl+P\tPrint, or print to a PDF\n"
+"\n"
+"Shift with the arrows, or a drag, selects. A .docx, .odt or .rtf opens converted, as Markdown in %s (the RAM disk): Save puts it in %s."
+msgstr ""
+"Jednoduchý textový editor pro poznámky, seznamy a Markdown.\n"
+"\n"
+"Ctrl+N/O/S\tNový, otevřít, uložit\n"
+"Ctrl+Shift+S\tUložit jako\n"
+"Ctrl+Q\tZavřít\n"
+"Ctrl+C/X/V\tKopírovat, vyjmout, vložit\n"
+"Ctrl+A\tVybrat vše\n"
+"Ctrl+Z/Y\tZpět, znovu\n"
+"Ctrl+F, F3\tHledat, hledat dál\n"
+"Ctrl+H\tNahradit\n"
+"Ctrl+L\tPřejít na řádek; počítá slova\n"
+"Ctrl+P\tTisk, nebo tisk do PDF\n"
+"\n"
+"Shift se šipkami nebo tažení vybírá. Soubor .docx, .odt nebo .rtf se otevře převedený, jako Markdown v %s (disk v RAM): Uložit ho dá do %s."
+
+msgid "Text help"
+msgstr "Nápověda text"

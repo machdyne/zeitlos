@@ -1,0 +1,281 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: Zeitlos common\n"
+"Language: pt\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+
+msgid " (reading)"
+msgstr " (a ler)"
+
+msgid " (partial list)"
+msgstr " (lista parcial)"
+
+msgid "OK"
+msgstr "OK"
+
+msgid "Cancel"
+msgstr "Cancelar"
+
+msgid "Yes"
+msgstr "Sim"
+
+msgid "No"
+msgstr "Não"
+
+msgid "Open"
+msgstr "Abrir"
+
+msgid "Save"
+msgstr "Guardar"
+
+msgid "Open a file"
+msgstr "Abrir um ficheiro"
+
+msgid "Choose"
+msgstr "Escolher"
+
+msgid "Choose a file or folder"
+msgstr "Escolher um ficheiro ou pasta"
+
+msgid "Save As"
+msgstr "Guardar como"
+
+msgid "Read docs"
+msgstr "Ler a doc."
+
+msgid "Close"
+msgstr "Fechar"
+
+msgid "Help"
+msgstr "Ajuda"
+
+msgid "Print to"
+msgstr "Imprimir em"
+
+msgid "Pages"
+msgstr "Páginas"
+
+msgid "Copies"
+msgstr "Cópias"
+
+msgid "Paper"
+msgstr "Papel"
+
+msgid "Tray"
+msgstr "Tabuleiro"
+
+msgid "Per sheet"
+msgstr "Por folha"
+
+msgid "Quality"
+msgstr "Qualidade"
+
+msgid "US Letter"
+msgstr "Carta EUA"
+
+msgid "Legal"
+msgstr "Ofício EUA"
+
+msgid "4 x 6 in"
+msgstr "4 x 6 pol."
+
+msgid "5 x 7 in"
+msgstr "5 x 7 pol."
+
+msgid "3 x 5 in"
+msgstr "3 x 5 pol."
+
+msgid "Printer's choice"
+msgstr "Escolha da impressora"
+
+msgctxt "tray"
+msgid "Main"
+msgstr "Principal"
+
+msgctxt "tray"
+msgid "Rear"
+msgstr "Traseiro"
+
+msgctxt "tray"
+msgid "Manual"
+msgstr "Manual"
+
+msgctxt "quality"
+msgid "Normal"
+msgstr "Normal"
+
+msgctxt "quality"
+msgid "Draft"
+msgstr "Rascunho"
+
+msgctxt "quality"
+msgid "High"
+msgstr "Alta"
+
+msgid "Print"
+msgstr "Imprimir"
+
+msgid "A PDF file"
+msgstr "Um ficheiro PDF"
+
+msgid "A PostScript file"
+msgstr "Um ficheiro PostScript"
+
+msgid "Printer (not set up)"
+msgstr "Impressora (não configurada)"
+
+msgid "Printer "
+msgstr "Impressora "
+
+msgid "All"
+msgstr "Todas"
+
+msgid "This page ("
+msgstr "Esta página ("
+
+msgid "The selection"
+msgstr "A seleção"
+
+msgid "Default ("
+msgstr "Predefinição ("
+
+msgid "(the printer's)"
+msgstr "(o da impressora)"
+
+msgid " page"
+msgstr " página"
+
+msgid " pages"
+msgstr " páginas"
+
+msgid "Print to a file"
+msgstr "Imprimir para ficheiro"
+
+msgid "That file exists. Replace it?"
+msgstr "O ficheiro já existe. Substituí-lo?"
+
+msgctxt "short weekday"
+msgid "Sun"
+msgstr "dom"
+
+msgctxt "short weekday"
+msgid "Mon"
+msgstr "seg"
+
+msgctxt "short weekday"
+msgid "Tue"
+msgstr "ter"
+
+msgctxt "short weekday"
+msgid "Wed"
+msgstr "qua"
+
+msgctxt "short weekday"
+msgid "Thu"
+msgstr "qui"
+
+msgctxt "short weekday"
+msgid "Fri"
+msgstr "sex"
+
+msgctxt "short weekday"
+msgid "Sat"
+msgstr "sáb"
+
+msgctxt "short month"
+msgid "Jan"
+msgstr "jan"
+
+msgctxt "short month"
+msgid "Feb"
+msgstr "fev"
+
+msgctxt "short month"
+msgid "Mar"
+msgstr "mar"
+
+msgctxt "short month"
+msgid "Apr"
+msgstr "abr"
+
+msgctxt "short month"
+msgid "May"
+msgstr "mai"
+
+msgctxt "short month"
+msgid "Jun"
+msgstr "jun"
+
+msgctxt "short month"
+msgid "Jul"
+msgstr "jul"
+
+msgctxt "short month"
+msgid "Aug"
+msgstr "ago"
+
+msgctxt "short month"
+msgid "Sep"
+msgstr "set"
+
+msgctxt "short month"
+msgid "Oct"
+msgstr "out"
+
+msgctxt "short month"
+msgid "Nov"
+msgstr "nov"
+
+msgctxt "short month"
+msgid "Dec"
+msgstr "dez"
+
+msgctxt "month"
+msgid "January"
+msgstr "janeiro"
+
+msgctxt "month"
+msgid "February"
+msgstr "fevereiro"
+
+msgctxt "month"
+msgid "March"
+msgstr "março"
+
+msgctxt "month"
+msgid "April"
+msgstr "abril"
+
+msgctxt "month"
+msgid "May"
+msgstr "maio"
+
+msgctxt "month"
+msgid "June"
+msgstr "junho"
+
+msgctxt "month"
+msgid "July"
+msgstr "julho"
+
+msgctxt "month"
+msgid "August"
+msgstr "agosto"
+
+msgctxt "month"
+msgid "September"
+msgstr "setembro"
+
+msgctxt "month"
+msgid "October"
+msgstr "outubro"
+
+msgctxt "month"
+msgid "November"
+msgstr "novembro"
+
+msgctxt "month"
+msgid "December"
+msgstr "dezembro"

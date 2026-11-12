@@ -57,8 +57,8 @@ HOSTFLAGS = -std=gnu99 -Wall -Wno-comment -no-pie -g -fsanitize=address,undefine
 test:
 	$(HOSTCC) $(HOSTFLAGS) -o /tmp/text_test_utf8 tests/utf8.c $(HOSTSRC)
 	$(HOSTCC) $(HOSTFLAGS) -o /tmp/text_test_edit tests/test_edit.c $(HOSTSRC)
-	/tmp/text_test_utf8
-	/tmp/text_test_edit
+	/tmp/text_test_utf8 || [ $$? -eq 77 ]
+	/tmp/text_test_edit || [ $$? -eq 77 ]
 
 .PHONY: test
 

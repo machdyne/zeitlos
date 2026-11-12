@@ -821,6 +821,98 @@ not a verdict; the verdict is people listening to the files. **That
 is the gate:** if the WAVs are not clearly understandable, the
 approach changes here, before phase 3 builds on it.
 
+### Other languages
+
+The formant voice speaks eleven languages besides English: Spanish,
+Italian, Portuguese (European), German, Dutch, Swedish, Polish, Czech,
+Russian, Ukrainian and French. Not Japanese: kanji are read by
+dictionary, not by rules. The recorded voice is English only -- its
+diphones are an English speaker's.
+
+**Which language it speaks** is the one the windows speak: jfont's
+([i18n.md](i18n.md)), looked at before each utterance -- not
+`system.language`, which a change in settings alters before the windows
+follow at the next start. With no rules for that language (Japanese, or
+a card without them), it speaks English and says so once, in English:
+"No voice for Japanese yet. English voice."
+
+**What it says** in another language is what the apps give it, which is
+translated: window titles and dialogs as the screen shows them, and the
+phrases apps speak (`z_speak(Z_("End of document"))` -- spoken text goes
+through `z_speak()`, which copies, because a translation lives in jfont's
+memory). In Japanese those phrases stay English, for the English voice.
+
+**The rules are data**, one file a language at `/data/tts/lang/<code>.ttl`
+(in the tree, `sw/data/tts/lang/`), 4-6 KB each, loaded only for the
+language in use (`lang.c`). A language is added, or corrected, by
+editing its file -- no build:
+
+```
+name German
+stress first                    first | penult | last | antepenult
+prefixes be ge er ver zer       unstressed before a "first" stress
+last-if-ends bcd...             stress the last syllable after these letters
+unstressed 0                    0: reduced (German, Dutch); 2: full (most)
+vowels aeiouyäöü                what V and syllables are made of
+weak der die das ...            words said with no stress
+word datei = D A0 T AY1         a word the rules get wrong
+r au[ch] = X                    left [letters] right = phonemes
+r [e]CC = EH
+num 21 = einundzwanzig          0-99; hundred N, hundredx N (before more),
+hundred 2 = zweihundert         thousand N (1-9), thousands one/few/many
+minus = minus                   also point, percent, dot, join
+letter b = beh                  letter names, for spelling (USB, txt)
+sym @ = ät                      symbols said as words
+```
+
+A rule is `left [letters] right = phonemes`: in a context, `#` is the edge
+of the word, `V` a vowel letter, `C` any other letter, `.` any letter,
+`{abc}` one of those; the first rule that matches at a letter wins, so
+the specific come first. A phoneme with `'` after it is the stressed one
+("A'" for á); otherwise `stress` chooses. `-` is silence. Everything else
+in the file -- numbers, letter names, symbols -- is words in the
+language, said by the same rules.
+
+**The phonemes** are phon.c's, plus what these languages need: pure
+/a e i o u/ (`A E I O U`), front rounded ü and ö (`UE OE`), the central
+vowel of Polish y and Russian ы (`YI`), the nasal vowels of French and
+Portuguese (`AN EN ON UN`, made as the nasals are, with a wide, damped
+F1), the velar and palatal fricatives (`X`, `XJ`: Bach, ich), palatal n
+and l (`NY LY`), the tapped r (`DX`) and a uvular r (`RU`).
+
+**What it does not do yet:**
+
+- **Russian and Ukrainian stress is guessed** -- it is not written: the
+  last syllable after a consonant, else the second-last; ё always takes
+  it. Words are read as spelled, without Russian's unstressed-vowel
+  reduction, which would make a wrong guess worse. A stress dictionary
+  would fix it; none in the public domain is known to this project.
+- **No length, no liaison, no tone**: Czech long vowels are short,
+  French words are not linked, Swedish pitch accent is not made.
+- **Loanwords** come out by the language's rules unless a `word` line
+  says otherwise (German's has Datei, Prozent, Programm).
+- **A word in another script** -- Latin letters in Russian text, an app's
+  name -- is said by the English front end.
+
+**Measured: not yet by a listener.** `make -C sw/apps/tts test` checks
+that every file loads, that every phoneme its rules write is one the
+synthesiser has, that words checked by hand come out so, and that every
+translation in `tools/translations/<lang>.json` is said and none comes
+out empty (`tests/lang_test.c`). Whether it is *understood* is for the
+machine listener, as English was ("Tuning, and the gate"): render with
+`ZTTS_LANG=de make wav`, and score with a multilingual Whisper model on
+the build machine. That has not been run; the first numbers will say
+which rules to fix first.
+
+    make -C sw/apps/tts lang_cli
+    echo "Datei löschen?" | /tmp/lang_cli de        (from the tree's root)
+    ZTTS_LANG=de make -C sw/apps/tts wav
+
+**Cost**: the same voice, so the same 15-17% of one CPU while speaking,
+measured in the emulator; 24 KB more of tts's memory for the file and
+its rules. Nothing in flash: tts and its files are on the card, in its
+set.
+
 ### Clean-room provenance
 
 The references are published papers and general phonetics knowledge.
@@ -837,6 +929,13 @@ source and licence. Recorded so far:
 - **Pronunciations: Moby Pronunciator** (Grady Ward), public domain:
   the pack's lexicon and the data the letter-to-sound rules are learned
   from. Its provenance, with hashes, is in `tools/speech/dist/en.spec`.
+- **Other languages' rules** (`sw/data/tts/lang/<code>.ttl`, "Other
+  languages" below): written for this project from each language's
+  spelling conventions and its number words -- the same kind of
+  knowledge as the English rules. No other synthesiser's rules or
+  dictionaries (eSpeak's among them) were consulted. The vowel and
+  consonant targets added to `phon.c` for them are standard figures
+  from the acoustic-phonetics literature.
 - **An evaluator: Whisper** (OpenAI, MIT licence), run on the build
   machine to score intelligibility. Like pocketsphinx below, it judges
   the voice and contributes nothing to it; nothing from it is in the
@@ -869,6 +968,7 @@ not reduced; a prefix test that fired on "belts"), not word by word.
 | 8 | acoustics: vowel formants and consonant loci measured from the corpus | **done; likewise measured no gain, optional** |
 | 9 | reading: Super+A in `term` and `read`, typed-key echo, optional earcons (was phase 5) | **editor echo; Super+A and Super+C in `text`, `read` and `term` done**; earcons not started |
 | 10 | the recorded voice: diphones from LJSpeech, TD-PSOLA, measured against the formant voice, ported to the device; Super+E; the card-read fixes | **done**; next: several candidates per diphone chosen at run time by how well they join |
+| 11 | other languages: the formant voice by rules that are data, for eleven languages; the voice follows the windows' language ("Other languages") | **built; checked by tests, not yet by a listener** |
 
 Superseded numbering, kept so older notes still read:
 | 4 | automatic announcements: focus, Alt+Tab, window open, dock selection, widget/list/dialog focus; Settings section; start at boot -- now phase 6 | |

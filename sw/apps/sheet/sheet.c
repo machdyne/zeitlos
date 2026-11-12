@@ -62,6 +62,7 @@
 #include <string.h>
 
 #include "../../common/zpaths.h"
+#include "../../common/zi18n.h"
 #include "../../common/zeitlos.h"
 #include "../../common/zsoc.h"			// Z_TICK_HZ
 #include "../../common/zwm.h"
@@ -577,7 +578,7 @@ static void draw_bar(void) {
 		sel_rect(&r0, &c0, &r1, &c1);
 		int n2 = 0;
 		if (sheet_range_stats(&sh, r0, c0, r1, c1, &sum, &count) && count) {
-			const char *parts[] = { "Sum ", NULL, "  Avg ", NULL, "  Count ", NULL };
+			const char *parts[] = { ZS_("Sum "), NULL, ZS_("  Avg "), NULL, ZS_("  Count "), NULL };
 			char a[24], b[24], c[12];
 			z_fix_format(sum, SHEET_DP, Z_FIX_STRIP, a, sizeof a);
 			z_fix_t avg = sum / count;
@@ -687,19 +688,21 @@ static void chart_repaint(void) {
 
 	int cw = z_win_content_w(&win), ch = z_win_content_h(&win);
 	z_win_fill_rect(&win, 0, 0, cw, BAR_H, 0);
-	static const char *const kinds[] = { "Bar", "Stacked", "Line", "Pie" };
-	char t[80];
+	static const char *const kinds[] = { NC_("chart", "Bar"), NC_("chart", "Stacked"),
+		NC_("chart", "Line"), NC_("chart", "Pie") };
+	char t[120];
 	int n = 0;
-	const char *lead = "Chart: ";
-	for (const char *q = lead; *q; q++) t[n++] = *q;
+	// Translated, so bounded: whatever fits of each part.
+	const int cap = (int)sizeof(t) - 3;
+	for (const char *q = ZS_("Chart: "); *q && n < cap; q++) t[n++] = *q;
 	for (int k = 0; k < SHEET_CHART_KINDS; k++) {
-		const char *q = kinds[k];
-		if (k == sh.chart.kind) t[n++] = '[';
-		while (*q) t[n++] = *q++;
+		const char *q = ZS_DC("chart", kinds[k]);
+		if (k == sh.chart.kind && n < cap) t[n++] = '[';
+		while (*q && n < cap) t[n++] = *q++;
 		if (k == sh.chart.kind) t[n++] = ']';
-		t[n++] = ' ';
+		if (n < cap) t[n++] = ' ';
 	}
-	for (const char *q = "  Esc: back"; *q; q++) t[n++] = *q;
+	for (const char *q = ZS_("  Esc: back"); *q && n < cap; q++) t[n++] = *q;
 	t[n] = 0;
 	z_win_draw_text(&win, 2, 2, t, 1, cur_font);
 	z_win_fill_rect(&win, 0, BAR_H - 1, cw, 1, 1);
@@ -783,7 +786,7 @@ static void calc_visible(void) {
 	while (more) {
 		// said only when it is long enough to notice
 		if (!said && z_uptime_ticks() - start > Z_TICK_HZ / 4) {
-			z_win_set_title(&win, "Calculating...");
+			z_win_set_title(&win, ZS_("Calculating..."));
 			said = true;
 		}
 		calc_pump();
@@ -951,8 +954,8 @@ static bool do_export(const char *path) {
 		if (z_proc_run("convert")) return true;
 	}
 
-	z_dialog_confirm(&dlg_ctx, "Export", ok ? "convert could not\nbe started." :
-		"Could not write the\ncopy to convert.", Z_DIALOG_OK_CANCEL);
+	z_dialog_confirm(&dlg_ctx, ZS_("Export"), ok ? ZS_("convert could not\nbe started.") :
+		ZS_("Could not write the\ncopy to convert."), Z_DIALOG_OK_CANCEL);
 	return false;
 
 }
@@ -965,8 +968,8 @@ static bool do_save_to(const char *path) {
 	int h = fs_open_write(path);
 
 	if (h < 0) {
-		z_dialog_confirm(&dlg_ctx, "Save failed",
-			"Could not open the file\nfor writing.", Z_DIALOG_YES_NO);
+		z_dialog_confirm(&dlg_ctx, ZS_("Save failed"),
+			ZS_("Could not open the file\nfor writing."), Z_DIALOG_YES_NO);
 		return false;
 	}
 
@@ -980,8 +983,8 @@ static bool do_save_to(const char *path) {
 	fs_close_handle(h);
 
 	if (!ok) {
-		z_dialog_confirm(&dlg_ctx, "Save failed",
-			"The file could not be\nwritten completely.", Z_DIALOG_YES_NO);
+		z_dialog_confirm(&dlg_ctx, ZS_("Save failed"),
+			ZS_("The file could not be\nwritten completely."), Z_DIALOG_YES_NO);
 		return false;
 	}
 
@@ -1050,16 +1053,16 @@ static bool load_path(const char *path) {
 		// convert opens the result in a sheet of its own
 		z_launch_arg_set(path);
 		if (!z_proc_run("convert"))
-			z_dialog_confirm(&dlg_ctx, "Open failed",
-				"convert is not on\nthis card.", Z_DIALOG_OK_CANCEL);
+			z_dialog_confirm(&dlg_ctx, ZS_("Open failed"),
+				ZS_("convert is not on\nthis card."), Z_DIALOG_OK_CANCEL);
 		return false;
 	}
 
 	int h = fs_open_read(path);
 
 	if (h < 0) {
-		z_dialog_confirm(&dlg_ctx, "Open failed",
-			"The file could not\nbe opened.", Z_DIALOG_YES_NO);
+		z_dialog_confirm(&dlg_ctx, ZS_("Open failed"),
+			ZS_("The file could not\nbe opened."), Z_DIALOG_YES_NO);
 		return false;
 	}
 
@@ -1130,8 +1133,8 @@ static bool confirm_discard(void) {
 
 	if (!sh.modified) return true;
 
-	int r = z_dialog_confirm(&dlg_ctx, "Unsaved changes",
-		"This sheet has unsaved\nchanges. Save first?",
+	int r = z_dialog_confirm(&dlg_ctx, ZS_("Unsaved changes"),
+		ZS_("This sheet has unsaved\nchanges. Save first?"),
 		Z_DIALOG_YES_NO_CANCEL);
 
 	if (r == Z_DIALOG_CANCEL) return false;
@@ -1482,8 +1485,8 @@ static void commit_edit(void) {
 	sheet_err_t e = sheet_set(&sh, cur_row, cur_col, edit);
 
 	if (e == SHEET_ERR_FULL)
-		z_dialog_confirm(&dlg_ctx, "Sheet full",
-			"No room for another cell.\nThe change was not made.",
+		z_dialog_confirm(&dlg_ctx, ZS_("Sheet full"),
+			ZS_("No room for another cell.\nThe change was not made."),
 			Z_DIALOG_YES_NO);
 
 	update_title();
@@ -1616,7 +1619,7 @@ static void paste_cells(void) {
 			if (e2 != SHEET_OK) e = e2;
 		}
 	if (e == SHEET_ERR_FULL)
-		z_dialog_confirm(&dlg_ctx, "Sheet full", "No room for more cells.\nSome were not pasted.", Z_DIALOG_OK_CANCEL);
+		z_dialog_confirm(&dlg_ctx, ZS_("Sheet full"), ZS_("No room for more cells.\nSome were not pasted."), Z_DIALOG_OK_CANCEL);
 	update_title();
 	repaint();
 
@@ -1724,7 +1727,7 @@ static void do_fill(bool down) {
 
 	int len = down ? sheet_range_save(&sh, r0, c0, r0, c1, scratch, scratch_cap)
 		: sheet_range_save(&sh, r0, c0, r1, c0, scratch, scratch_cap);
-	if (len < 0) { say("Fill", "Too much to fill\nat once."); return; }
+	if (len < 0) { say(ZS_("Fill"), ZS_("Too much to fill\nat once.")); return; }
 
 	if (down) will_change(r0 + 1, c0, r1, c1);
 	else will_change(r0, c0 + 1, r1, c1);
@@ -1737,7 +1740,7 @@ static void do_fill(bool down) {
 		for (int c = c0 + 1; c <= c1 && e == SHEET_OK; c++)
 			e = sheet_range_load(&sh, r0, c, r1 - r0 + 1, 1, true, scratch, len, true, r0, c0);
 	}
-	if (e == SHEET_ERR_FULL) say("Sheet full", "No room for more cells.\nSome were not filled.");
+	if (e == SHEET_ERR_FULL) say(ZS_("Sheet full"), ZS_("No room for more cells.\nSome were not filled."));
 	after_change();
 
 }
@@ -1758,8 +1761,8 @@ static void do_structural(bool rows, bool ins) {
 		// nothing changed (inserting refuses before it starts); the
 		// record just pushed would undo nothing
 		if (ust.used) { urec_t r; if (u_top(&ust, &r)) ust.used -= UHDR + r.len + UTRL; }
-		say(ins ? "Insert" : "Delete", e == SHEET_ERR_FULL && ins ?
-			"That would push cells\npast the edge of the sheet." : "No room: the sheet\nis full.");
+		say(ins ? ZS_("Insert") : ZS_("Delete"), e == SHEET_ERR_FULL && ins ?
+			ZS_("That would push cells\npast the edge of the sheet.") : ZS_("No room: the sheet\nis full."));
 		return;
 	}
 	after_change();
@@ -1775,18 +1778,18 @@ static void do_format(void) {
 	char cur[8], in[16];
 	sheet_format_name(kind, dec, cur, sizeof cur);
 
-	if (!z_dialog_prompt(&dlg_ctx, "Format",
-		"G general  F2 fixed  ,2 1,000.00\n%1 percent  $2 money  (digit: places)",
+	if (!z_dialog_prompt(&dlg_ctx, ZS_("Format"),
+		ZS_("G general  F2 fixed  ,2 1,000.00\n%1 percent  $2 money  (digit: places)"),
 		cur, in, sizeof in)) { repaint(); return; }
 
 	int k, d;
 	if (!sheet_parse_format(in, &k, &d)) {
-		say("Format", "Not a format: G, F2, ,2,\n%1 or $2 (any 0-8 places).");
+		say(ZS_("Format"), ZS_("Not a format: G, F2, ,2,\n%1 or $2 (any 0-8 places)."));
 		return;
 	}
 	will_change_meta();
 	if (!sheet_set_format(&sh, r0, c0, r1, c1, k, d))
-		say("Format", "Too many formatted\nranges: 64 at most.");
+		say(ZS_("Format"), ZS_("Too many formatted\nranges: 64 at most."));
 	repaint();
 	update_title();
 
@@ -1803,7 +1806,7 @@ static void do_width(void) {
 	while (tn) cur[n++] = t[--tn];
 	cur[n] = 0;
 
-	if (!z_dialog_prompt(&dlg_ctx, "Width", "Column width, in characters:", cur, in, sizeof in)) {
+	if (!z_dialog_prompt(&dlg_ctx, ZS_("Width"), ZS_("Column width, in characters:"), cur, in, sizeof in)) {
 		repaint();
 		return;
 	}
@@ -1838,7 +1841,7 @@ static void do_chart(void) {
 			update_title();
 		}
 	} else if (!sh.chart.set) {
-		say("Chart", "Select the table to chart\n(labels in the first row\nand column), then F5.");
+		say(ZS_("Chart"), ZS_("Select the table to chart\n(labels in the first row\nand column), then F5."));
 		return;
 	}
 	chart_mode = true;
@@ -1875,14 +1878,14 @@ static void do_sort(bool desc) {
 	int r0, c0, r1, c1;
 	sel_rect(&r0, &c0, &r1, &c1);
 	if (r1 == r0) {
-		say("Sort", "Select the rows to sort\n(all their columns), then\nput the cursor in the key.");
+		say(ZS_("Sort"), ZS_("Select the rows to sort\n(all their columns), then\nput the cursor in the key."));
 		return;
 	}
 	will_change(r0, c0, r1, c1);
 	if (!sheet_sort(&sh, r0, c0, r1, c1, cur_col, desc, scratch, scratch_cap)) {
 		urec_t r;
 		if (u_top(&ust, &r)) ust.used -= UHDR + r.len + UTRL;
-		say("Sort", "Too large to sort here:\nsort fewer rows at a time.");
+		say(ZS_("Sort"), ZS_("Too large to sort here:\nsort fewer rows at a time."));
 		return;
 	}
 	after_change();
@@ -1893,14 +1896,14 @@ static void do_sort(bool desc) {
 static void do_goto(void) {
 
 	char in[16];
-	if (!z_dialog_prompt(&dlg_ctx, "Go to", "Cell (like B12):", "", in, sizeof in) || !in[0]) {
+	if (!z_dialog_prompt(&dlg_ctx, ZS_("Go to"), ZS_("Cell (like B12):"), "", in, sizeof in) || !in[0]) {
 		repaint();
 		return;
 	}
 	int r, c;
 	const char *p = in;
 	while (*p == ' ') p++;
-	if (!sheet_parse_ref(p, &r, &c, NULL)) { say("Go to", "Not a cell: A1 to Z999."); return; }
+	if (!sheet_parse_ref(p, &r, &c, NULL)) { say(ZS_("Go to"), ZS_("Not a cell: A1 to Z999.")); return; }
 	cur_row = sel_row = r;
 	cur_col = sel_col = c;
 	scroll_to_cursor();
@@ -1952,13 +1955,13 @@ static void find_next(void) {
 			}
 		}
 	}
-	say("Find", "Not found.");
+	say(ZS_("Find"), ZS_("Not found."));
 
 }
 
 // F1 and /Help: the short version; "Read docs" is the manual.
 static void show_help(void) {
-	static const char help[] =
+	const char *help = ZS_(
 		"A spreadsheet: numbers, text and formulas in a grid.\n\n"
 		"Type into the cell; =A1*2 is a formula, =SUM(B2:B9) a "
 		"range. Enter moves down, Tab right, Shift+arrows select.\n\n"
@@ -1976,14 +1979,14 @@ static void show_help(void) {
 		"Ctrl+N/O/S\tNew, open, save\n\n"
 		"Functions: SUM AVERAGE MIN MAX COUNT ABS INT ROUND MOD "
 		"SQRT POWER IF AND OR NOT PMT PV FV NPV VLOOKUP INDEX.\n\n"
-		"Select a range to see its sum, average and count.";
-	z_dialog_help(&dlg_ctx, "Sheet help", help, "sheet_app");
+		"Select a range to see its sum, average and count.");
+	z_dialog_help(&dlg_ctx, ZS_("Sheet help"), help, "sheet_app");
 }
 
 static void do_find(void) {
 
 	char in[SHEET_SRC_MAX];
-	if (!z_dialog_prompt(&dlg_ctx, "Find", "Find (F3 finds the next):", find_text, in, sizeof in) || !in[0]) {
+	if (!z_dialog_prompt(&dlg_ctx, ZS_("Find"), ZS_("Find (F3 finds the next):"), find_text, in, sizeof in) || !in[0]) {
 		repaint();
 		return;
 	}
@@ -2016,15 +2019,20 @@ enum {
 };
 
 static const mitem_t m_top[] = {
-	{ "Insert", M_INSERT }, { "Delete", M_DELETE }, { "Number", C_FORMAT },
-	{ "Width", C_WIDTH }, { "Sort", M_SORT }, { "Extend", M_FILL },
-	{ "Undo", C_UNDO }, { "Redo", C_REDO }, { "Goto", C_GOTO },
-	{ "Find", C_FIND }, { "Chart", C_CHART }, { "Help", C_HELP }, { NULL, 0 },
+	{ NC_("menu", "Insert"), M_INSERT }, { NC_("menu", "Delete"), M_DELETE },
+	{ NC_("menu", "Number"), C_FORMAT }, { NC_("menu", "Width"), C_WIDTH },
+	{ NC_("menu", "Sort"), M_SORT }, { NC_("menu", "Extend"), M_FILL },
+	{ NC_("menu", "Undo"), C_UNDO }, { NC_("menu", "Redo"), C_REDO },
+	{ NC_("menu", "Goto"), C_GOTO }, { NC_("menu", "Find"), C_FIND },
+	{ NC_("menu", "Chart"), C_CHART }, { NC_("menu", "Help"), C_HELP }, { NULL, 0 },
 };
-static const mitem_t m_insert[] = { { "Rows", C_INS_ROWS }, { "Columns", C_INS_COLS }, { NULL, 0 } };
-static const mitem_t m_delete[] = { { "Rows", C_DEL_ROWS }, { "Columns", C_DEL_COLS }, { NULL, 0 } };
-static const mitem_t m_sort[] = { { "Ascending", C_SORT_UP }, { "Descending", C_SORT_DOWN }, { NULL, 0 } };
-static const mitem_t m_fill[] = { { "Down", C_FILL_DOWN }, { "Right", C_FILL_RIGHT }, { NULL, 0 } };
+static const mitem_t m_insert[] = { { NC_("menu", "Rows"), C_INS_ROWS }, { NC_("menu", "Columns"), C_INS_COLS }, { NULL, 0 } };
+static const mitem_t m_delete[] = { { NC_("menu", "Rows"), C_DEL_ROWS }, { NC_("menu", "Columns"), C_DEL_COLS }, { NULL, 0 } };
+static const mitem_t m_sort[] = { { NC_("menu", "Ascending"), C_SORT_UP }, { NC_("menu", "Descending"), C_SORT_DOWN }, { NULL, 0 } };
+static const mitem_t m_fill[] = { { NC_("menu", "Down"), C_FILL_DOWN }, { NC_("menu", "Right"), C_FILL_RIGHT }, { NULL, 0 } };
+
+// A menu item as shown: translated (docs/i18n.md).
+#define MLABEL(it) ZS_DC("menu", (it).label)
 
 static int menu_hot;			// menu: M_NONE when closed (declared above draw_bar)
 
@@ -2037,17 +2045,28 @@ static void draw_menu(void) {
 
 	int cw = z_win_content_w(&win);
 	z_win_fill_rect(&win, 0, 0, cw, BAR_H, 0);
-	const char *title = menu == M_INSERT ? "Insert:" : menu == M_DELETE ? "Delete:" :
-		menu == M_SORT ? "Sort:" : menu == M_FILL ? "Extend:" : "/";
+	const char *title = menu == M_INSERT ? ZS_("Insert:") : menu == M_DELETE ? ZS_("Delete:") :
+		menu == M_SORT ? ZS_("Sort:") : menu == M_FILL ? ZS_("Extend:") : "/";
 	z_win_draw_text(&win, 2, 2, title, 1, cur_font);
-	int x = 2 + ((int)strlen(title) + 1) * CHAR_W;
+	int x = 2 + (z_text_cols(title) + 1) * CHAR_W;
 	const mitem_t *it = menu_items();
-	for (int i = 0; it[i].label; i++) {
-		int w = (int)strlen(it[i].label) * CHAR_W;
+	// A translation can be wider than the window: start late enough
+	// that the highlighted item is shown, with "<" for the ones before.
+	int first = 0;
+	for (;;) {
+		int w = first ? 2 * CHAR_W : 0;
+		for (int i = first; i <= menu_hot; i++) w += (z_text_cols(MLABEL(it[i])) + 1) * CHAR_W;
+		if (x + w <= cw - 2 || first == menu_hot) break;
+		first++;
+	}
+	if (first) { z_win_draw_text(&win, x, 2, "<", 1, cur_font); x += 2 * CHAR_W; }
+	for (int i = first; it[i].label; i++) {
+		const char *l = MLABEL(it[i]);
+		int w = z_text_cols(l) * CHAR_W;
 		if (x + w > cw - 2) break;
 		bool hot = (i == menu_hot);
 		if (hot) z_win_fill_rect(&win, x - 1, 1, w + 2, BAR_H - 2, 1);
-		z_win_draw_text2(&win, x, 2, it[i].label, hot ? 0 : 1, hot ? 1 : 0, cur_font);
+		z_win_draw_text2(&win, x, 2, l, hot ? 0 : 1, hot ? 1 : 0, cur_font);
 		x += w + CHAR_W;
 	}
 	z_win_fill_rect(&win, 0, BAR_H - 1, cw, 1, 1);
@@ -2078,8 +2097,17 @@ static void menu_key(uint32_t k) {
 	if (k == Z_KEY_RIGHT || k == ' ') { menu_hot = (menu_hot + 1) % n; draw_menu(); return; }
 	if (k == '\r' || k == '\n') { menu_choose(it[menu_hot].id); return; }
 
+	// The first letter of what is shown chooses, if only one item
+	// shows it; otherwise the English one, as in the manual.
 	char c = (char)k;
 	if (c >= 'a' && c <= 'z') c = (char)(c - 32);
+	int hit = -1, hits = 0;
+	for (int i = 0; i < n; i++) {
+		char f = MLABEL(it[i])[0];
+		if (f >= 'a' && f <= 'z') f = (char)(f - 32);
+		if (f == c) { hit = i; hits++; }
+	}
+	if (hits == 1) { menu_choose(it[hit].id); return; }
 	for (int i = 0; i < n; i++)
 		if (it[i].label[0] == c) { menu_choose(it[i].id); return; }
 
@@ -2558,6 +2586,7 @@ static void forward_msg(z_msg_t *msg, void *user) {
 int main(void) {
 	z_slice = calc_slice;		// eval_cell()'s checkpoints (calc_visible())
 
+	z_tr_init(Z_APP_NAME);
 	printf("sheet: starting\n");
 
 	sheet_init(&sh);

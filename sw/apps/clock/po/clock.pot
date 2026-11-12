@@ -1,0 +1,46 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: Zeitlos clock\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+#: sw/apps/clock/clock.c:343
+msgid "not set"
+msgstr ""
+
+#: sw/apps/clock/clock.c:411
+msgid ""
+"No RTC in\n"
+"this bitstream.\n"
+"\n"
+"Enable `RTC in\n"
+"rtl/boards.vh\n"
+"then: make flash"
+msgstr ""
+
+#: sw/apps/clock/clock.c:564
+msgid ""
+"A wall clock, analog or digital.\n"
+"\n"
+"Tab, arrows\tChoose Analog, Digital or Zone\n"
+"Enter/Space\tPress it\n"
+"z\tThe time zone: settings\n"
+"\n"
+"Or click the buttons. The time comes from the RTC, which net sets over NTP; until then it shows no time. The time zone is set in settings -- Zone opens it -- and shown under the digital time."
+msgstr ""
+
+#: sw/apps/clock/clock.c:574
+msgid "Clock help"
+msgstr ""
+
+#: sw/apps/clock/clock.c:618
+msgid "Analog"
+msgstr ""
+
+#: sw/apps/clock/clock.c:623
+msgid "Digital"
+msgstr ""
+
+#: sw/apps/clock/clock.c:627
+msgid "Zone"
+msgstr ""

@@ -1,0 +1,111 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: Zeitlos ask\n"
+"Language: fr\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=2; plural=(n > 1);\n"
+
+msgid "No passage here answers"
+msgstr "Aucun passage ici ne répond"
+
+msgid "that."
+msgstr "à cela."
+
+msgid "could not start read"
+msgstr "impossible de lancer read"
+
+#, c-format
+msgid "%u passage, "
+msgid_plural "%u passages, "
+msgstr[0] "%u passage, "
+msgstr[1] "%u passages, "
+
+#, c-format
+msgid "%u pack"
+msgid_plural "%u packs"
+msgstr[0] "%u paquet"
+msgstr[1] "%u paquets"
+
+msgid ", ranking weaker"
+msgstr ", classement affaibli"
+
+msgid "  ^U clears"
+msgstr "  ^U efface"
+
+msgid "searching...  Esc cancels"
+msgstr "recherche...  Échap annule"
+
+#, c-format
+msgid "searching %u%%  Esc cancels"
+msgstr "recherche %u%%  Échap annule"
+
+msgid "Loading..., then search"
+msgstr "Chargement..., puis recherche"
+
+msgid "Loading...  Esc stops"
+msgstr "Chargement...  Échap arrête"
+
+#, c-format
+msgid "Loading %s %u%%, then search"
+msgstr "Chargement : %s %u%%, puis recherche"
+
+#, c-format
+msgid "Loading %s %u%%  Esc stops"
+msgstr "Chargement : %s %u%%  Échap arrête"
+
+msgid "no packs loaded -- nothing to search"
+msgstr "aucun paquet chargé -- rien à chercher"
+
+msgid "path too long to open"
+msgstr "chemin trop long pour ouvrir"
+
+msgid "loading stopped -- no packs loaded"
+msgstr "chargement arrêté -- aucun paquet chargé"
+
+#, c-format
+msgid "loading stopped, %u pack loaded"
+msgid_plural "loading stopped, %u packs loaded"
+msgstr[0] "chargement arrêté, %u paquet chargé"
+msgstr[1] "chargement arrêté, %u paquets chargés"
+
+#, c-format
+msgid " (%u pack failed)"
+msgid_plural " (%u packs failed)"
+msgstr[0] " (%u paquet en échec)"
+msgstr[1] " (%u paquets en échec)"
+
+msgid ""
+"Finds passages in the datasets on the card that answer a question, and opens them in read.\n"
+"\n"
+"Enter\tSearch; again: open the selection\n"
+"Up/Down\tSelect a result\n"
+"1-9\tOpen that result\n"
+"Esc\tStop loading, cancel a search, or clear\n"
+"Ctrl+U\tClear the line\n"
+"Ctrl+W\tDelete a word\n"
+"Ctrl+Q\tQuit\n"
+"\n"
+"Type a question and press Enter. Click a result to open it, or a pack button to browse its index.\n"
+"\n"
+"Typing works while the packs load; Enter then searches once they are in."
+msgstr ""
+"Trouve dans les jeux de données de la carte les passages qui répondent à une question, et les ouvre dans read.\n"
+"\n"
+"Entrée\tChercher ; à nouveau : ouvrir la sélection\n"
+"Haut/Bas\tChoisir un résultat\n"
+"1-9\tOuvrir ce résultat\n"
+"Échap\tArrêter le chargement, annuler une recherche ou effacer\n"
+"Ctrl+U\tEffacer la ligne\n"
+"Ctrl+W\tEffacer un mot\n"
+"Ctrl+Q\tQuitter\n"
+"\n"
+"Tapez une question et appuyez sur Entrée. Cliquez sur un résultat pour l'ouvrir, ou sur le bouton d'un paquet pour parcourir son index.\n"
+"\n"
+"On peut taper pendant le chargement ; Entrée cherche dès que les paquets sont là."
+
+msgid "Ask help"
+msgstr "Aide de ask"
+
+msgid "cancelled"
+msgstr "annulé"

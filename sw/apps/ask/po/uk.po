@@ -1,0 +1,115 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: Zeitlos ask\n"
+"Language: uk\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=3; plural=(n%10==1 && n%100!=11 ? 0 : n%10>=2 && n%10<=4 && (n%100<10 || n%100>=20) ? 1 : 2);\n"
+
+msgid "No passage here answers"
+msgstr "Тут жоден уривок не відповідає"
+
+msgid "that."
+msgstr "на це."
+
+msgid "could not start read"
+msgstr "не вдалося запустити read"
+
+#, c-format
+msgid "%u passage, "
+msgid_plural "%u passages, "
+msgstr[0] "%u уривок, "
+msgstr[1] "%u уривки, "
+msgstr[2] "%u уривків, "
+
+#, c-format
+msgid "%u pack"
+msgid_plural "%u packs"
+msgstr[0] "%u пакет"
+msgstr[1] "%u пакети"
+msgstr[2] "%u пакетів"
+
+msgid ", ranking weaker"
+msgstr ", слабше ранжування"
+
+msgid "  ^U clears"
+msgstr "  ^U очищує"
+
+msgid "searching...  Esc cancels"
+msgstr "пошук...  Esc скасовує"
+
+#, c-format
+msgid "searching %u%%  Esc cancels"
+msgstr "пошук %u%%  Esc скасовує"
+
+msgid "Loading..., then search"
+msgstr "Завантаження..., потім пошук"
+
+msgid "Loading...  Esc stops"
+msgstr "Завантаження...  Esc - стоп"
+
+#, c-format
+msgid "Loading %s %u%%, then search"
+msgstr "Завантаження: %s %u%%, потім пошук"
+
+#, c-format
+msgid "Loading %s %u%%  Esc stops"
+msgstr "Завантаження: %s %u%%  Esc - стоп"
+
+msgid "no packs loaded -- nothing to search"
+msgstr "пакети не завантажено -- нема де шукати"
+
+msgid "path too long to open"
+msgstr "шлях задовгий"
+
+msgid "loading stopped -- no packs loaded"
+msgstr "завантаження зупинено -- пакети не завантажено"
+
+#, c-format
+msgid "loading stopped, %u pack loaded"
+msgid_plural "loading stopped, %u packs loaded"
+msgstr[0] "завантаження зупинено, завантажено %u пакет"
+msgstr[1] "завантаження зупинено, завантажено %u пакети"
+msgstr[2] "завантаження зупинено, завантажено %u пакетів"
+
+#, c-format
+msgid " (%u pack failed)"
+msgid_plural " (%u packs failed)"
+msgstr[0] " (%u пакет з помилкою)"
+msgstr[1] " (%u пакети з помилкою)"
+msgstr[2] " (%u пакетів з помилкою)"
+
+msgid ""
+"Finds passages in the datasets on the card that answer a question, and opens them in read.\n"
+"\n"
+"Enter\tSearch; again: open the selection\n"
+"Up/Down\tSelect a result\n"
+"1-9\tOpen that result\n"
+"Esc\tStop loading, cancel a search, or clear\n"
+"Ctrl+U\tClear the line\n"
+"Ctrl+W\tDelete a word\n"
+"Ctrl+Q\tQuit\n"
+"\n"
+"Type a question and press Enter. Click a result to open it, or a pack button to browse its index.\n"
+"\n"
+"Typing works while the packs load; Enter then searches once they are in."
+msgstr ""
+"Знаходить у наборах даних на картці уривки, що відповідають на запитання, і відкриває їх у read.\n"
+"\n"
+"Enter\tШукати; ще раз: відкрити вибране\n"
+"Вгору/Вниз\tВибрати результат\n"
+"1-9\tВідкрити цей результат\n"
+"Esc\tЗупинити завантаження, скасувати пошук чи очистити\n"
+"Ctrl+U\tОчистити рядок\n"
+"Ctrl+W\tВидалити слово\n"
+"Ctrl+Q\tВийти\n"
+"\n"
+"Введіть запитання й натисніть Enter. Клацніть результат, щоб відкрити його, або кнопку пакета, щоб переглянути його покажчик.\n"
+"\n"
+"Друкувати можна, поки пакети завантажуються; Enter шукає, щойно вони готові."
+
+msgid "Ask help"
+msgstr "Довідка ask"
+
+msgid "cancelled"
+msgstr "скасовано"

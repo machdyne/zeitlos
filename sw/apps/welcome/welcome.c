@@ -19,6 +19,8 @@
  * flash, so a machine with no card has them). With a card it then offers the
  * first questions, each optional:
  *
+ *   Language     the language of menus and messages (system.language),
+ *                only when the card has others (docs/i18n.md)
  *   Keyboard     the layout the machine starts in  (system.keyboard.layouts)
  *   Time zone    a city or an offset                (system.rtc.timezone)
  *   Display      white, amber, green or paper       (system.video.mode),
@@ -71,6 +73,7 @@
 #include "../../common/zkv.h"
 #include "../../common/zwelcome.h"
 #include "../../common/zspeak.h"
+#include "../../common/zlangs.h"
 
 // The size of settings' window: the same lists, the same rows.
 #define WIN_W   420
@@ -88,7 +91,7 @@ static z_win_t win;
 
 // -- the pages --
 
-enum { S_WELCOME, S_KEYBOARD, S_TIME, S_DISPLAY, S_DONE, S_COUNT };
+enum { S_WELCOME, S_LANG, S_KEYBOARD, S_TIME, S_DISPLAY, S_DONE, S_COUNT };
 
 typedef struct {
 	const char	*title;
@@ -97,6 +100,7 @@ typedef struct {
 
 static const step_t steps[S_COUNT] = {
 	{ "Welcome to Zeitlos", "A few optional questions follow -- Skip leaves everything as it is" },
+	{ "Language", "Of the menus and messages: windows opened from now on" },
 	{ "Keyboard", "The layout this machine starts in" },
 	{ "Time zone", "Used by clock, cal and date" },
 	{ "Display", "Applied at once, and saved" },
@@ -139,7 +143,7 @@ enum {
 
 // Each page's first control; the next entry ends it.
 static const int step_first[S_COUNT + 1] = {
-	W_GUIDE, W_MODE0, W_MODE0, W_MODE0, W_COURSE, W_BACK,
+	W_GUIDE, W_MODE0, W_MODE0, W_MODE0, W_MODE0, W_COURSE, W_BACK,
 };
 
 static z_widget_t widgets[W_COUNT];
@@ -149,7 +153,20 @@ static z_widget_set_t nav;
 
 // -- the two lists --
 
-static z_listbox_t kb_list, tz_list;
+static z_listbox_t kb_list, tz_list, lang_list;
+
+// Language rows: English, and the languages the card has (zlangs.h).
+static int lang_rows[Z_LANG_NAME_COUNT], lang_nrows;
+static int lang_cur;				// z_lang_names[], what is in use
+
+static const char *lang_label(void *user, int row) {
+	static char b[48];
+	const z_lang_name_t *l = &z_lang_names[lang_rows[row]];
+	(void)user;
+	if (row == 0) return l->own;
+	snprintf(b, sizeof b, "%s -- %s", l->own, l->english);
+	return b;
+}
 
 // Keyboard rows: every ordinary layout in zkbd's table, by name and
 // description, generated from sw/common/zkbd_layouts.c at build time
@@ -172,7 +189,8 @@ static int y_body, y_nav;
 
 static z_listbox_t *cur_list(void) {
 	if (help_on) return NULL;
-	return step == S_KEYBOARD ? &kb_list : step == S_TIME ? &tz_list : NULL;
+	return step == S_KEYBOARD ? &kb_list : step == S_TIME ? &tz_list :
+		step == S_LANG ? &lang_list : NULL;
 }
 
 // -- time zones: the rows settings shows --
@@ -293,6 +311,12 @@ static void read_values(void) {
 	if (!z_cfg_get("system.rtc.timezone", tz_value, sizeof(tz_value)))
 		snprintf(tz_value, sizeof(tz_value), "UTC");
 
+	char lv[16];
+	if (!z_cfg_get("system.language", lv, sizeof lv) || !lv[0]) snprintf(lv, sizeof lv, "en");
+	lang_cur = 0;
+	for (int i = 0; i < Z_LANG_NAME_COUNT; i++)
+		if (!strcmp(lv, z_lang_names[i].code)) lang_cur = i;
+
 }
 
 // -- which pages there are --
@@ -301,6 +325,7 @@ static bool step_shown(int s) {
 	if (s == S_WELCOME) return true;
 	if (!has_card) return false;		// nowhere to keep an answer
 	if (s == S_DISPLAY) return can_set_video;
+	if (s == S_LANG) return lang_nrows > 1;	// the card has another language
 	return true;
 }
 
@@ -363,6 +388,7 @@ static void layout(void) {
 	if (rows < 3) rows = 3;
 	z_listbox_set_geom(&kb_list, MARGIN, yl, bw, rows * ROW_PX + 2);
 	z_listbox_set_geom(&tz_list, MARGIN, yl, bw, rows * ROW_PX + 2);
+	z_listbox_set_geom(&lang_list, MARGIN, yl, bw, rows * ROW_PX + 2);
 
 	// Display: the four modes across
 	int mw = (bw - (MODE_COUNT - 1) * GAP) / MODE_COUNT;
@@ -377,6 +403,7 @@ static void layout(void) {
 	z_widget_invalidate(&nav);
 	z_listbox_invalidate(&kb_list);
 	z_listbox_invalidate(&tz_list);
+	z_listbox_invalidate(&lang_list);
 
 }
 
@@ -462,9 +489,9 @@ static const char *const welcome_card[] = {
 	"the processor to this window, and it is made to go on",
 	"working: no account, no subscription, nothing to sign in to.",
 	"",
-	"If you like, the next pages ask for your keyboard, your",
-	"time zone and the colour of the display. Each question is",
-	"optional, and any answer can be changed later in settings.",
+	"If you like, the next pages ask for your language,",
+	"keyboard, time zone and the colour of the display. Each",
+	"question is optional, and can be changed later in settings.",
 };
 
 static const char *const welcome_flash[] = {
@@ -502,6 +529,12 @@ static void draw_step(void) {
 		draw_lines(y + 2 * LINE_H, LINES(keys_text));
 		break;
 	}
+
+	case S_LANG:
+		snprintf(line, sizeof(line), "In use: %s -- %s", z_lang_names[lang_cur].own,
+			z_lang_names[lang_cur].english);
+		draw_text(MARGIN, y, line);
+		break;
 
 	case S_KEYBOARD:
 		snprintf(line, sizeof(line), "In use: %.40s (%s)", kb_desc(kb_first), kb_first);
@@ -665,6 +698,18 @@ done:
 
 // -- what each page does --
 
+// Language: saved, and jfont started if it is not running, so every
+// window opened from now on has it (wm's own words after a restart).
+static void commit_lang(void) {
+	int row = z_listbox_selected(&lang_list);
+	char said[72];
+	if (row < 0 || row >= lang_nrows || lang_rows[row] == lang_cur) return;
+	const z_lang_name_t *l = &z_lang_names[lang_rows[row]];
+	snprintf(said, sizeof said, "saved: %s", l->english);
+	if (!save("system.language", row == 0 ? NULL : l->code, said)) return;
+	if (row != 0 && !z_lang_service_up()) z_proc_run("jfont");
+}
+
 // Keyboard: the chosen layout becomes the first, and any others that
 // were listed stay behind it as they were, so Super+Space still reaches
 // them.
@@ -767,6 +812,9 @@ static void enter_step(int s) {
 	widgets[W_NEXT].label = step_after(step, 1) >= 0 ? "Next" : has_card ? "Finish" : "Close";
 
 	if (step == S_KEYBOARD) z_listbox_select(&kb_list, kb_row_for(kb_first));
+	if (step == S_LANG)
+		for (int r = 0; r < lang_nrows; r++)
+			if (lang_rows[r] == lang_cur) z_listbox_select(&lang_list, r);
 	if (step == S_TIME) z_listbox_select(&tz_list, tz_row_for(tz_value));
 	if (step == S_DISPLAY) select_current_mode();
 
@@ -792,7 +840,8 @@ static void go_next(void) {
 
 	int n;
 
-	if (step == S_KEYBOARD) commit_keyboard();
+	if (step == S_LANG) commit_lang();
+	else if (step == S_KEYBOARD) commit_keyboard();
 	else if (step == S_TIME) commit_time();
 	else if (step != S_DISPLAY) status[0] = 0;	// nothing was saved here
 
@@ -815,8 +864,10 @@ static void show_help(bool on) {
 		if (ps->count) z_widget_focus_set(ps, -1);
 		z_listbox_set_focus(&kb_list, false);
 		z_listbox_set_focus(&tz_list, false);
+		z_listbox_set_focus(&lang_list, false);
 		z_listbox_invalidate(&kb_list);
 		z_listbox_invalidate(&tz_list);
+		z_listbox_invalidate(&lang_list);
 		repaint();
 	} else
 		enter_step(step);
@@ -976,6 +1027,7 @@ static void on_wm_msg(z_msg_t *msg) {
 			z_win_apply_redraw(&win, msg->obj.val.uint32);
 			z_listbox_invalidate(&kb_list);
 			z_listbox_invalidate(&tz_list);
+			z_listbox_invalidate(&lang_list);
 			repaint();
 			z_win_redraw_done(&win);
 			break;
@@ -1027,6 +1079,13 @@ static void startup(void) {
 	widgets_init();
 	z_listbox_init(&kb_list, &win);
 	z_listbox_set_items(&kb_list, KB_COUNT, kb_label, NULL);
+	// the languages the card has, once: a card does not change under us
+	z_listbox_init(&lang_list, &win);
+	lang_nrows = 0;
+	if (has_card)
+		for (int i = 0; i < Z_LANG_NAME_COUNT; i++)
+			if (i < Z_LANG_NAME_COUNT - 1 && z_lang_on_card(i)) lang_rows[lang_nrows++] = i;
+	z_listbox_set_items(&lang_list, lang_nrows, lang_label, NULL);
 	z_listbox_init(&tz_list, &win);
 	z_listbox_set_items(&tz_list, TZ_ITEMS, tz_label, NULL);
 	layout();

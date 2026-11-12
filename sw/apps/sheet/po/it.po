@@ -1,0 +1,377 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: Zeitlos sheet\n"
+"Language: it\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+
+msgid "No chart: select the data, then F5."
+msgstr "Nessun grafico: scegli i dati, poi F5."
+
+msgid "Nothing to chart in the range."
+msgstr "Niente da rappresentare nell'intervallo."
+
+msgid "No numbers in the range to chart."
+msgstr "Nessun numero nell'intervallo."
+
+msgid "A pie needs some positive numbers."
+msgstr "Una torta vuole numeri positivi."
+
+msgid "Sum "
+msgstr "Somma "
+
+msgid "  Avg "
+msgstr "  Media "
+
+msgid "  Count "
+msgstr "  Conteggio "
+
+msgctxt "chart"
+msgid "Bar"
+msgstr "Barre"
+
+msgctxt "chart"
+msgid "Stacked"
+msgstr "Impilato"
+
+msgctxt "chart"
+msgid "Line"
+msgstr "Linee"
+
+msgctxt "chart"
+msgid "Pie"
+msgstr "Torta"
+
+msgid "Chart: "
+msgstr "Grafico: "
+
+msgid "  Esc: back"
+msgstr "  Esc: indietro"
+
+msgid "Calculating..."
+msgstr "Calcolo..."
+
+msgid "Export"
+msgstr "Esporta"
+
+msgid ""
+"convert could not\n"
+"be started."
+msgstr ""
+"Non è stato possibile\n"
+"avviare convert."
+
+msgid ""
+"Could not write the\n"
+"copy to convert."
+msgstr ""
+"Impossibile scrivere la\n"
+"copia da convertire."
+
+msgid "Save failed"
+msgstr "Salvataggio non riuscito"
+
+msgid ""
+"Could not open the file\n"
+"for writing."
+msgstr ""
+"Impossibile aprire il file\n"
+"in scrittura."
+
+msgid ""
+"The file could not be\n"
+"written completely."
+msgstr ""
+"Il file non si è potuto\n"
+"scrivere per intero."
+
+msgid "Open failed"
+msgstr "Apertura non riuscita"
+
+msgid ""
+"convert is not on\n"
+"this card."
+msgstr ""
+"convert non è su\n"
+"questa scheda."
+
+msgid ""
+"The file could not\n"
+"be opened."
+msgstr ""
+"Il file non si è\n"
+"potuto aprire."
+
+msgid "Unsaved changes"
+msgstr "Modifiche non salvate"
+
+msgid ""
+"This sheet has unsaved\n"
+"changes. Save first?"
+msgstr ""
+"Questo foglio ha modifiche\n"
+"non salvate. Salvare prima?"
+
+msgid "Sheet full"
+msgstr "Foglio pieno"
+
+msgid ""
+"No room for another cell.\n"
+"The change was not made."
+msgstr ""
+"Non c'è posto per un'altra cella.\n"
+"La modifica non è stata fatta."
+
+msgid ""
+"No room for more cells.\n"
+"Some were not pasted."
+msgstr ""
+"Non c'è posto per altre celle.\n"
+"Alcune non sono state incollate."
+
+msgid "Fill"
+msgstr "Riempi"
+
+msgid ""
+"Too much to fill\n"
+"at once."
+msgstr ""
+"Troppo da riempire\n"
+"in una volta."
+
+msgid ""
+"No room for more cells.\n"
+"Some were not filled."
+msgstr ""
+"Non c'è posto per altre celle.\n"
+"Alcune non sono state riempite."
+
+msgid "Insert"
+msgstr "Inserisci"
+
+msgid "Delete"
+msgstr "Elimina"
+
+msgid ""
+"That would push cells\n"
+"past the edge of the sheet."
+msgstr ""
+"Spingerebbe delle celle oltre\n"
+"il bordo del foglio."
+
+msgid ""
+"No room: the sheet\n"
+"is full."
+msgstr ""
+"Non c'è posto: il foglio\n"
+"è pieno."
+
+msgid "Format"
+msgstr "Formato"
+
+#, c-format
+msgid ""
+"G general  F2 fixed  ,2 1,000.00\n"
+"%1 percent  $2 money  (digit: places)"
+msgstr ""
+"G generale  F2 fisso  ,2 1,000.00\n"
+"%1 percento  $2 valuta  (cifra: decimali)"
+
+#, c-format
+msgid ""
+"Not a format: G, F2, ,2,\n"
+"%1 or $2 (any 0-8 places)."
+msgstr ""
+"Non è un formato: G, F2, ,2,\n"
+"%1 o $2 (da 0 a 8 decimali)."
+
+msgid ""
+"Too many formatted\n"
+"ranges: 64 at most."
+msgstr ""
+"Troppi intervalli\n"
+"formattati: al massimo 64."
+
+msgid "Width"
+msgstr "Larghezza"
+
+msgid "Column width, in characters:"
+msgstr "Larghezza colonna, in caratteri:"
+
+msgid "Chart"
+msgstr "Grafico"
+
+msgid ""
+"Select the table to chart\n"
+"(labels in the first row\n"
+"and column), then F5."
+msgstr ""
+"Scegli la tabella del grafico\n"
+"(etichette nella prima riga\n"
+"e colonna), poi F5."
+
+msgid "Sort"
+msgstr "Ordina"
+
+msgid ""
+"Select the rows to sort\n"
+"(all their columns), then\n"
+"put the cursor in the key."
+msgstr ""
+"Scegli le righe da ordinare\n"
+"(tutte le loro colonne), poi\n"
+"metti il cursore nella chiave."
+
+msgid ""
+"Too large to sort here:\n"
+"sort fewer rows at a time."
+msgstr ""
+"Troppo grande da ordinare:\n"
+"ordina meno righe per volta."
+
+msgid "Go to"
+msgstr "Vai a"
+
+msgid "Cell (like B12):"
+msgstr "Cella (come B12):"
+
+msgid "Not a cell: A1 to Z999."
+msgstr "Non è una cella: da A1 a Z999."
+
+msgid "Find"
+msgstr "Cerca"
+
+msgid "Not found."
+msgstr "Non trovato."
+
+msgid ""
+"A spreadsheet: numbers, text and formulas in a grid.\n"
+"\n"
+"Type into the cell; =A1*2 is a formula, =SUM(B2:B9) a range. Enter moves down, Tab right, Shift+arrows select.\n"
+"\n"
+"/, F4\tCommands: insert, delete, number format, width, sort, extend, goto, find, chart\n"
+"F2\tEdit the cell\n"
+"Ctrl+Z/Y\tUndo, redo\n"
+"Ctrl+C/X/V\tCopy, cut, paste\n"
+"Ctrl+D/R\tFill down, right\n"
+"Ctrl+1\tNumber format\n"
+"Ctrl+G\tGo to a cell\n"
+"F3, Ctrl+F\tFind (again: the next match)\n"
+"F5\tChart the selection\n"
+"Alt+Left\tNarrow the column (Alt+Right widens)\n"
+"Ctrl+N/O/S\tNew, open, save\n"
+"\n"
+"Functions: SUM AVERAGE MIN MAX COUNT ABS INT ROUND MOD SQRT POWER IF AND OR NOT PMT PV FV NPV VLOOKUP INDEX.\n"
+"\n"
+"Select a range to see its sum, average and count."
+msgstr ""
+"Un foglio di calcolo: numeri, testo e formule in una griglia.\n"
+"\n"
+"Scrivi nella cella; =A1*2 è una formula, =SUM(B2:B9) un intervallo. Invio scende, Tab va a destra, Maiusc+frecce selezionano.\n"
+"\n"
+"/, F4\tComandi: inserisci, elimina, formato, larghezza, ordina, estendi, vai a, cerca, grafico\n"
+"F2\tModifica la cella\n"
+"Ctrl+Z/Y\tAnnulla, ripeti\n"
+"Ctrl+C/X/V\tCopia, taglia, incolla\n"
+"Ctrl+D/R\tRiempi in basso, a destra\n"
+"Ctrl+1\tFormato numeri\n"
+"Ctrl+G\tVai a una cella\n"
+"F3, Ctrl+F\tCerca (di nuovo: la seguente)\n"
+"F5\tGrafico della selezione\n"
+"Alt+Sinistra\tRestringi la colonna (Alt+Destra la allarga)\n"
+"Ctrl+N/O/S\tNuovo, apri, salva\n"
+"\n"
+"Funzioni: SUM AVERAGE MIN MAX COUNT ABS INT ROUND MOD SQRT POWER IF AND OR NOT PMT PV FV NPV VLOOKUP INDEX.\n"
+"\n"
+"Scegli un intervallo per vederne somma, media e conteggio."
+
+msgid "Sheet help"
+msgstr "Aiuto di sheet"
+
+msgid "Find (F3 finds the next):"
+msgstr "Cerca (F3 cerca il seguente):"
+
+msgctxt "menu"
+msgid "Insert"
+msgstr "Inserisci"
+
+msgctxt "menu"
+msgid "Delete"
+msgstr "Elimina"
+
+msgctxt "menu"
+msgid "Number"
+msgstr "Numero"
+
+msgctxt "menu"
+msgid "Width"
+msgstr "Larghezza"
+
+msgctxt "menu"
+msgid "Sort"
+msgstr "Ordina"
+
+msgctxt "menu"
+msgid "Extend"
+msgstr "Estendi"
+
+msgctxt "menu"
+msgid "Undo"
+msgstr "Annulla"
+
+msgctxt "menu"
+msgid "Redo"
+msgstr "Ripeti"
+
+msgctxt "menu"
+msgid "Goto"
+msgstr "Vai"
+
+msgctxt "menu"
+msgid "Find"
+msgstr "Cerca"
+
+msgctxt "menu"
+msgid "Chart"
+msgstr "Grafico"
+
+msgctxt "menu"
+msgid "Help"
+msgstr "Aiuto"
+
+msgctxt "menu"
+msgid "Rows"
+msgstr "Righe"
+
+msgctxt "menu"
+msgid "Columns"
+msgstr "Colonne"
+
+msgctxt "menu"
+msgid "Ascending"
+msgstr "Crescente"
+
+msgctxt "menu"
+msgid "Descending"
+msgstr "Decrescente"
+
+msgctxt "menu"
+msgid "Down"
+msgstr "Giù"
+
+msgctxt "menu"
+msgid "Right"
+msgstr "Destra"
+
+msgid "Insert:"
+msgstr "Inserisci:"
+
+msgid "Delete:"
+msgstr "Elimina:"
+
+msgid "Sort:"
+msgstr "Ordina:"
+
+msgid "Extend:"
+msgstr "Estendi:"

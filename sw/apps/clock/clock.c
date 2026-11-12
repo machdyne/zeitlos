@@ -88,6 +88,7 @@
 #include <string.h>
 
 #include "../../common/zeitlos.h"
+#include "../../common/zi18n.h"
 #include "../../common/zsoc.h"
 #include "../../common/zrtc.h"
 #include "../../common/zwm.h"
@@ -326,7 +327,7 @@ static void draw_digital(const z_tm_t *tm, bool valid, const char *zone) {
 
 	// 8 characters at 6px. Centred by measuring rather than by a
 	// hardcoded offset, so this survives a font change.
-	text_w = (int)strlen(line) * z_font_6x12.w;
+	text_w = z_text_cols(line) * z_font_6x12.w;
 	z_win_draw_text(&win, clock_x + (clock_w - text_w) / 2, y, line, 1,
 		&z_font_6x12);
 
@@ -339,10 +340,10 @@ static void draw_digital(const z_tm_t *tm, bool valid, const char *zone) {
 			z_wday_name(tm->wday), tm->day, z_month_name(tm->month),
 			(long)tm->year);
 	} else {
-		snprintf(line, sizeof(line), "not set");
+		snprintf(line, sizeof(line), "%s", ZS_("not set"));
 	}
 
-	text_w = (int)strlen(line) * z_font_6x12.w;
+	text_w = z_text_cols(line) * z_font_6x12.w;
 	z_win_draw_text(&win, clock_x + (clock_w - text_w) / 2, y + lh, line, 1,
 		&z_font_6x12);
 
@@ -407,8 +408,8 @@ static void repaint_clock_area(void) {
 		// Wrapped by hand to the narrow window: 20 columns of
 		// z_font_6x12 is 120px, which is what clock_w allows.
 		z_win_draw_text(&win, clock_x, clock_y + 8,
-			"No RTC in\nthis bitstream.\n\nEnable `RTC in\n"
-			"rtl/boards.vh\nthen: make flash", 1, &z_font_6x12);
+			Z_("No RTC in\nthis bitstream.\n\nEnable `RTC in\n"
+			"rtl/boards.vh\nthen: make flash"), 1, &z_font_6x12);
 		return;
 	}
 
@@ -560,7 +561,7 @@ static void help_on_msg(z_msg_t *m, void *user) {
 static void handle_key(uint32_t keysym, uint8_t mods) {
 
 	if (keysym == Z_KEY_HELP) {	// docs/app_help.md
-		static const char help[] =
+		const char *help = ZS_(
 			"A wall clock, analog or digital.\n\n"
 			"Tab, arrows\tChoose Analog, Digital or Zone\n"
 			"Enter/Space\tPress it\n"
@@ -568,9 +569,9 @@ static void handle_key(uint32_t keysym, uint8_t mods) {
 			"Or click the buttons. The time comes from the RTC, "
 			"which net sets over NTP; until then it shows no time. "
 			"The time zone is set in settings -- Zone opens it -- "
-			"and shown under the digital time.";
+			"and shown under the digital time.");
 		z_dialog_ctx_t ctx = { &win, help_on_msg, NULL };
-		z_dialog_help(&ctx, "Clock help", help, "clock_app");
+		z_dialog_help(&ctx, ZS_("Clock help"), help, "clock_app");
 		return;
 	}
 
@@ -614,16 +615,16 @@ static void widgets_init(void) {
 
 	widgets[W_ANALOG].type = Z_WIDGET_TOGGLE;
 	widgets[W_ANALOG].group = GROUP_VIEW;
-	widgets[W_ANALOG].label = "Analog";
+	widgets[W_ANALOG].label = ZS_("Analog");
 	widgets[W_ANALOG].enabled = true;
 
 	widgets[W_DIGITAL].type = Z_WIDGET_TOGGLE;
 	widgets[W_DIGITAL].group = GROUP_VIEW;
-	widgets[W_DIGITAL].label = "Digital";
+	widgets[W_DIGITAL].label = ZS_("Digital");
 	widgets[W_DIGITAL].enabled = true;
 
 	widgets[W_ZONE].type = Z_WIDGET_BUTTON;
-	widgets[W_ZONE].label = "Zone";
+	widgets[W_ZONE].label = ZS_("Zone");
 	widgets[W_ZONE].enabled = true;
 
 	z_widget_set_init(&wset, widgets, W_COUNT, &win);
@@ -634,6 +635,9 @@ static void widgets_init(void) {
 }
 
 int main(void) {
+
+	// The language (docs/i18n.md): read once, before any string.
+	z_tr_init(Z_APP_NAME);
 
 	printf("clock: starting\n");
 

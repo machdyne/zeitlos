@@ -91,6 +91,7 @@
 
 #include "../../common/zpaths.h"
 #include "../../common/zeitlos.h"
+#include "../../common/zi18n.h"
 #include "../../common/zsoc.h"	// Z_TICK_HZ, for the render instrumentation
 #include "../../common/zwm.h"
 #include "../../common/zwin.h"
@@ -2019,7 +2020,7 @@ static bool sb_to_utf8_in_place(void) {
 	// Two passes over the file: the window's mail is read between
 	// pieces (io_pump(), the page blank: it is an open), not stoppable --
 	// the second pass rewrites the text in place.
-	io_begin("Converting", io_name ? io_name : "the file", true);
+	io_begin(ZS_("Converting"), io_name ? io_name : ZS_("the file"), true);
 	int out = 0;
 	for (int i = 0; i < len; i++) {
 		char u[Z_UTF8_MAX];
@@ -2223,7 +2224,7 @@ typedef enum { SAVE_OK, SAVE_FAILED, SAVE_KEPT_PART } save_rv_t;
 static save_rv_t write_safely_(const char *path, char *part, int part_size);
 
 static save_rv_t write_safely(const char *path, char *part, int part_size) {
-	io_begin("Saving", path, false);
+	io_begin(ZS_("Saving"), path, false);
 	save_rv_t r = write_safely_(path, part, part_size);
 	io_end();
 	return r;
@@ -2405,8 +2406,8 @@ static void offer_copy(const char *sav, const char *inf, const char *rest, bool 
 		fs_close_handle(h);
 	}
 
-	int r = z_dialog_confirm(&dlg_ctx, "Recover",
-		"Unsaved changes from a\nsession that did not end\nwere kept. Recover them?",
+	int r = z_dialog_confirm(&dlg_ctx, ZS_("Recover"),
+		ZS_("Unsaved changes from a\nsession that did not end\nwere kept. Recover them?"),
 		Z_DIALOG_YES_NO);
 	if (r == Z_DIALOG_YES) {
 		char keep[Z_FS_PATH_MAX];
@@ -2517,9 +2518,10 @@ static bool do_save_to(const char *path) {
 		if (lost) {
 			char msg[112];
 			snprintf(msg, sizeof(msg),
-				"%d character%s cannot be saved\nas %s. Save as UTF-8\ninstead?",
-				lost, lost == 1 ? "" : "s", enc_name());
-			int r = z_dialog_confirm(&dlg_ctx, "Encoding", msg, Z_DIALOG_YES_NO_CANCEL);
+				ZS_N("%d character cannot be saved\nas %s. Save as UTF-8\ninstead?",
+					"%d characters cannot be saved\nas %s. Save as UTF-8\ninstead?", lost),
+				lost, enc_name());
+			int r = z_dialog_confirm(&dlg_ctx, ZS_("Encoding"), msg, Z_DIALOG_YES_NO_CANCEL);
 			if (r == Z_DIALOG_CANCEL) return false;
 			if (r == Z_DIALOG_YES) file_enc = ENC_UTF8;
 		}
@@ -2531,14 +2533,14 @@ static bool do_save_to(const char *path) {
 	char part[Z_FS_PATH_MAX];
 	save_rv_t sv = write_safely(path, part, (int)sizeof(part));
 	if (sv == SAVE_FAILED) {
-		z_dialog_confirm(&dlg_ctx, "Save failed",
-			"The file could not be\nwritten completely.\nThe one on the card is\nas it was.", Z_DIALOG_OK_CANCEL);
+		z_dialog_confirm(&dlg_ctx, ZS_("Save failed"),
+			ZS_("The file could not be\nwritten completely.\nThe one on the card is\nas it was."), Z_DIALOG_OK_CANCEL);
 		return false;
 	}
 	if (sv == SAVE_KEPT_PART) {
 		char msg[Z_FS_PATH_MAX + 80];
-		snprintf(msg, sizeof(msg), "Saved, but as\n%.60s:\nit could not be renamed.", part);
-		z_dialog_confirm(&dlg_ctx, "Save", msg, Z_DIALOG_OK_CANCEL);
+		snprintf(msg, sizeof(msg), ZS_("Saved, but as\n%.60s:\nit could not be renamed."), part);
+		z_dialog_confirm(&dlg_ctx, ZS_("Save"), msg, Z_DIALOG_OK_CANCEL);
 		return false;
 	}
 
@@ -2600,8 +2602,8 @@ static bool do_export(const char *path) {
 		z_launch_arg_set("-j " Z_DIR_TMP "/text-export.job");
 		if (z_proc_run("convert")) return true;
 	}
-	z_dialog_confirm(&dlg_ctx, "Export", ok ? "convert could not\nbe started." :
-		"Could not write the\ncopy to convert.", Z_DIALOG_OK_CANCEL);
+	z_dialog_confirm(&dlg_ctx, ZS_("Export"), ok ? ZS_("convert could not\nbe started.") :
+		ZS_("Could not write the\ncopy to convert."), Z_DIALOG_OK_CANCEL);
 	return false;
 }
 
@@ -2630,8 +2632,8 @@ static bool do_save_as(void) {
 			char msg[112];
 			const char *base = path;
 			for (const char *q = path; *q; q++) if (*q == '/') base = q + 1;
-			snprintf(msg, sizeof(msg), "%.40s already exists.\nReplace it?", base);
-			if (z_dialog_confirm(&dlg_ctx, "Save As", msg, Z_DIALOG_YES_NO) != Z_DIALOG_YES)
+			snprintf(msg, sizeof(msg), ZS_("%.40s already exists.\nReplace it?"), base);
+			if (z_dialog_confirm(&dlg_ctx, ZS_("Save As"), msg, Z_DIALOG_YES_NO) != Z_DIALOG_YES)
 				return false;
 		}
 	}
@@ -2678,7 +2680,7 @@ static bool write_text(const char *path, int a, int b) {
 
 	bool ok = true;
 	doc_flat();
-	io_begin("Getting ready to print", path, false);
+	io_begin(ZS_("Getting ready to print"), path, false);
 
 	for (int i = a; ok && i < b; ) {
 		int n = b - i > 4096 ? 4096 : b - i;
@@ -2705,7 +2707,7 @@ static void do_print(void) {
 	// the document's name, without folder or ending: the job's title,
 	// and the file a PDF is offered as
 	char base[64];
-	const char *name = filename[0] ? filename : "Untitled";
+	const char *name = filename[0] ? filename : ZS_("Untitled");
 	const char *slash = strrchr(name, '/');
 	if (slash) name = slash + 1;
 	snprintf(base, sizeof(base), "%s", name);
@@ -2717,7 +2719,7 @@ static void do_print(void) {
 	o.selection = has_sel();
 
 	char title[80];
-	snprintf(title, sizeof(title), "Print %.60s", base);
+	snprintf(title, sizeof(title), ZS_("Print %.60s"), base);
 	if (!z_dialog_print(&dlg_ctx, title, last_dir, base, &o)) return;
 
 	int a = 0, b = len;
@@ -2731,15 +2733,17 @@ static void do_print(void) {
 		(unsigned long)(z_uptime_ticks() & 0xFFFFFF));
 
 	if (!write_text(tpath, a, b)) {
-		z_dialog_confirm(&dlg_ctx, "Print",
-			"There was no room in " Z_DIR_TMP "\nfor the text to print.", Z_DIALOG_OK_CANCEL);
+		char m[96];
+		snprintf(m, sizeof m, ZS_("There was no room in %s\nfor the text to print."), Z_DIR_TMP);
+		z_dialog_confirm(&dlg_ctx, ZS_("Print"), m, Z_DIALOG_OK_CANCEL);
 		return;
 	}
 
 	if (!z_print_begin(&printing, base)) {
 		fs_unlink(tpath);
-		z_dialog_confirm(&dlg_ctx, "Print",
-			"The print job could not\nbe made in " Z_DIR_TMP ".", Z_DIALOG_OK_CANCEL);
+		char m[96];
+		snprintf(m, sizeof m, ZS_("The print job could not\nbe made in %s."), Z_DIR_TMP);
+		z_dialog_confirm(&dlg_ctx, ZS_("Print"), m, Z_DIALOG_OK_CANCEL);
 		return;
 	}
 	z_print_opts_job(&o, &printing.w);
@@ -2749,8 +2753,8 @@ static void do_print(void) {
 	// and how it ended
 	if (!z_print_end(&printing)) {
 		fs_unlink(tpath);
-		z_dialog_confirm(&dlg_ctx, "Print", printing.result == Z_PRINT_E_GONE ?
-			"print is not on the card." : "The print job could not\nbe written.",
+		z_dialog_confirm(&dlg_ctx, ZS_("Print"), printing.result == Z_PRINT_E_GONE ?
+			ZS_("print is not on the card.") : ZS_("The print job could not\nbe written."),
 			Z_DIALOG_OK_CANCEL);
 	}
 
@@ -2763,8 +2767,8 @@ static bool confirm_discard(void) {
 
 	if (!modified) return true;
 
-	int r = z_dialog_confirm(&dlg_ctx, "Unsaved changes",
-		"Save changes before\ncontinuing?", Z_DIALOG_YES_NO_CANCEL);
+	int r = z_dialog_confirm(&dlg_ctx, ZS_("Unsaved changes"),
+		ZS_("Save changes before\ncontinuing?"), Z_DIALOG_YES_NO_CANCEL);
 
 	if (r == Z_DIALOG_CANCEL) return false;
 	if (r == Z_DIALOG_NO) { autosave_discard(); return true; }
@@ -2821,8 +2825,8 @@ static bool load_file(const char *path) {
 	int h = fs_open_read(path);
 
 	if (h < 0) {
-		z_dialog_confirm(&dlg_ctx, "Open failed",
-			"That file could not\nbe read.", Z_DIALOG_OK_CANCEL);
+		z_dialog_confirm(&dlg_ctx, ZS_("Open failed"),
+			ZS_("That file could not\nbe read."), Z_DIALOG_OK_CANCEL);
 		return false;
 	}
 
@@ -2834,8 +2838,8 @@ static bool load_file(const char *path) {
 	if (size > cap && !doc_room(size)) {
 		fs_close_handle(h);
 		open_failed();
-		z_dialog_confirm(&dlg_ctx, "Too large",
-			"That file is larger than\nthis editor can hold on\nthis machine.",
+		z_dialog_confirm(&dlg_ctx, ZS_("Too large"),
+			ZS_("That file is larger than\nthis editor can hold on\nthis machine."),
 			Z_DIALOG_OK_CANCEL);
 		return false;
 	}
@@ -2850,7 +2854,7 @@ static bool load_file(const char *path) {
 	// Normalize CRLF on the way in. A file written on another machine
 	// otherwise shows a stray glyph at the end of every line, and
 	// every one of them counts against the wrap width.
-	io_begin("Opening", path, true);
+	io_begin(ZS_("Opening"), path, true);
 	long read_total = 0;
 	bool cr_held = false, read_err = false, full = false;
 	enc_scan_t es = { 0, 0, 0, false };
@@ -2892,11 +2896,11 @@ static bool load_file(const char *path) {
 	if (io_stopped || read_err || full) {
 		open_failed();
 		if (read_err)
-			z_dialog_confirm(&dlg_ctx, "Open failed",
-				"That file could not\nbe read.", Z_DIALOG_OK_CANCEL);
+			z_dialog_confirm(&dlg_ctx, ZS_("Open failed"),
+				ZS_("That file could not\nbe read."), Z_DIALOG_OK_CANCEL);
 		else if (full)
-			z_dialog_confirm(&dlg_ctx, "Too large",
-				"That file is larger than\nthis editor can hold on\nthis machine.",
+			z_dialog_confirm(&dlg_ctx, ZS_("Too large"),
+				ZS_("That file is larger than\nthis editor can hold on\nthis machine."),
 				Z_DIALOG_OK_CANCEL);
 		return false;
 	}
@@ -2920,8 +2924,8 @@ static bool load_file(const char *path) {
 
 	if (file_enc != ENC_UTF8 && !sb_to_utf8_in_place()) {
 		open_failed();
-		z_dialog_confirm(&dlg_ctx, "Too large",
-			"That file is too large for\nthis editor once its accented\nletters are converted.",
+		z_dialog_confirm(&dlg_ctx, ZS_("Too large"),
+			ZS_("That file is too large for\nthis editor once its accented\nletters are converted."),
 			Z_DIALOG_OK_CANCEL);
 		return false;
 	}
@@ -3168,8 +3172,8 @@ static bool do_copy(void) {
 // here, will get only the first page of says so.
 static void copy_cmd(void) {
 	if (do_copy()) return;
-	z_dialog_confirm(&dlg_ctx, "Copy",
-		"Copied, but there is no\nmemory to keep all of it:\na paste gives the first\n4 KB.", Z_DIALOG_OK_CANCEL);
+	z_dialog_confirm(&dlg_ctx, ZS_("Copy"),
+		ZS_("Copied, but there is no\nmemory to keep all of it:\na paste gives the first\n4 KB."), Z_DIALOG_OK_CANCEL);
 	repaint();
 }
 
@@ -3180,11 +3184,11 @@ static void do_cut(void) {
 	int n = sel_end() - sel_start();
 	const char *why = NULL;
 	if (!do_copy())
-		why = "Too large to cut here:\nthere is no memory to\nkeep it for the paste.\nCut less than 4 KB.";
+		why = ZS_("Too large to cut here:\nthere is no memory to\nkeep it for the paste.\nCut less than 4 KB.");
 	else if (n > CLIP_PAGE && !undo_fits(1, n))
-		why = "Too large to cut:\nit could not be undone.\nCut a smaller part.";
+		why = ZS_("Too large to cut:\nit could not be undone.\nCut a smaller part.");
 	if (why) {
-		z_dialog_confirm(&dlg_ctx, "Cut", why, Z_DIALOG_OK_CANCEL);
+		z_dialog_confirm(&dlg_ctx, ZS_("Cut"), why, Z_DIALOG_OK_CANCEL);
 		repaint();
 		return;
 	}
@@ -3261,8 +3265,8 @@ static void do_paste(void) {
 	// Said out loud rather than silently dropping the tail: a paste
 	// that lands partially is worth knowing about.
 	if (n < avail)
-		z_dialog_confirm(&dlg_ctx, "Full",
-			"Only part of the clipboard\nwould fit.", Z_DIALOG_OK_CANCEL);
+		z_dialog_confirm(&dlg_ctx, ZS_("Full"),
+			ZS_("Only part of the clipboard\nwould fit."), Z_DIALOG_OK_CANCEL);
 
 }
 
@@ -3301,8 +3305,8 @@ static void insert_seq(const char *seq, int k, int n) {
 		// Full. Say so rather than appearing to ignore the keyboard
 		// -- the buffer is a fixed size and there is no recovery
 		// except deleting something.
-		z_dialog_confirm(&dlg_ctx, "Full",
-			"The document is full.", Z_DIALOG_OK_CANCEL);
+		z_dialog_confirm(&dlg_ctx, ZS_("Full"),
+			ZS_("The document is full."), Z_DIALOG_OK_CANCEL);
 		repaint();
 	}
 
@@ -3471,7 +3475,7 @@ static void echo_line(void) {
 	// A blank line still says so: silence there is indistinguishable
 	// from the key not having worked.
 	if (n <= 0) {
-		z_speak_static("blank", Z_TTS_F_INTERRUPT);
+		z_speak(Z_("blank"), Z_TTS_F_INTERRUPT);
 		return;
 	}
 
@@ -3484,12 +3488,12 @@ static void echo_char(int at) {
 	if (!z_speak_available()) return;
 
 	if (at < 0 || at >= len) {
-		z_speak_static("end", Z_TTS_F_INTERRUPT);
+		z_speak(Z_("end"), Z_TTS_F_INTERRUPT);
 		return;
 	}
 
 	if (B(at) == '\n') {
-		z_speak_static("new line", Z_TTS_F_INTERRUPT);
+		z_speak(Z_("new line"), Z_TTS_F_INTERRUPT);
 		return;
 	}
 
@@ -3570,7 +3574,7 @@ static void read_toggle(void) {
 	}
 
 	if (len == 0) {
-		z_speak_static("Empty document", Z_TTS_F_INTERRUPT);
+		z_speak(Z_("Empty document"), Z_TTS_F_INTERRUPT);
 		return;
 	}
 
@@ -3583,7 +3587,7 @@ static void read_toggle(void) {
 	printf("text: Super+A: reading from line %d of %d\n", from + 1, nlines);
 	if (!z_sayall_start(&reader, from)) {
 		printf("text: Super+A: could not start (is speech on?)\n");
-		z_speak_static("End of document", Z_TTS_F_INTERRUPT);
+		z_speak(Z_("End of document"), Z_TTS_F_INTERRUPT);
 	}
 
 }
@@ -3593,7 +3597,7 @@ static void read_toggle(void) {
 static void read_selection(void) {
 	z_sayall_stop(&reader);
 	if (!has_sel()) {
-		z_speak_static("Nothing selected", Z_TTS_F_INTERRUPT);
+		z_speak(Z_("Nothing selected"), Z_TTS_F_INTERRUPT);
 		return;
 	}
 	int a = sel_start(), b = sel_end();
@@ -3685,7 +3689,7 @@ static int find_from(int start) {
 	if (!n || n > len) return 0;
 	if (start < 0 || start > len) start = 0;
 
-	io_begin("Finding", find_text, false);
+	io_begin(ZS_("Finding"), find_text, false);
 	io_name = find_text;				// the text, not a path's last part
 	long done = 0;
 	for (int pass = 0; pass < 2; pass++) {
@@ -3714,15 +3718,15 @@ static int find_from(int start) {
 
 static void find_report(void) {
 	char msg[160];
-	snprintf(msg, sizeof(msg), "\"%.60s\"\nwas not found.", find_text);
-	z_dialog_confirm(&dlg_ctx, "Find", msg, Z_DIALOG_OK_CANCEL);
+	snprintf(msg, sizeof(msg), ZS_("\"%.60s\"\nwas not found."), find_text);
+	z_dialog_confirm(&dlg_ctx, ZS_("Find"), msg, Z_DIALOG_OK_CANCEL);
 	repaint();
 }
 
 static void do_find(void) {
 
 	char q[sizeof(find_text)];
-	if (!z_dialog_prompt(&dlg_ctx, "Find", "Find:", find_text, q, sizeof(q)) || !q[0]) {
+	if (!z_dialog_prompt(&dlg_ctx, ZS_("Find"), ZS_("Find:"), find_text, q, sizeof(q)) || !q[0]) {
 		repaint();
 		return;
 	}
@@ -3755,7 +3759,7 @@ static char repl_text[128];
 static int count_matches(bool stoppable) {
 	int nf = (int)strlen(find_text), n = 0;
 	if (!nf) return 0;
-	io_begin("Counting", find_text, false);
+	io_begin(ZS_("Counting"), find_text, false);
 	io_name = find_text;
 	long step = 0;
 	for (int i = 0; i + nf <= len; ) {
@@ -3823,7 +3827,7 @@ static int replace_all_core(bool record) {
 	// blank meanwhile -- the text is half rewritten), and Esc stops it:
 	// the rest is then copied as it is, so what is done is the matches
 	// before that point, one undo group still.
-	io_begin("Replacing", find_text, true);
+	io_begin(ZS_("Replacing"), find_text, true);
 	io_name = find_text;
 	long piece = 0;
 	while (src < end) {
@@ -3886,8 +3890,8 @@ static bool replace_selection(void) {
 }
 
 static void say_full(void) {
-	z_dialog_confirm(&dlg_ctx, "Replace",
-		"The document would not hold\nthe replacements.", Z_DIALOG_OK_CANCEL);
+	z_dialog_confirm(&dlg_ctx, ZS_("Replace"),
+		ZS_("The document would not hold\nthe replacements."), Z_DIALOG_OK_CANCEL);
 }
 
 static void do_replace(void) {
@@ -3905,11 +3909,11 @@ static void do_replace(void) {
 		if (n == sel_end() - sel_start()) initial = selq;
 	}
 
-	if (!z_dialog_prompt(&dlg_ctx, "Replace", "Find:", initial, q, sizeof(q)) || !q[0]) {
+	if (!z_dialog_prompt(&dlg_ctx, ZS_("Replace"), ZS_("Find:"), initial, q, sizeof(q)) || !q[0]) {
 		repaint();
 		return;
 	}
-	if (!z_dialog_prompt_empty_ok(&dlg_ctx, "Replace", "Replace with:", repl_text, r, sizeof(r))) {
+	if (!z_dialog_prompt_empty_ok(&dlg_ctx, ZS_("Replace"), ZS_("Replace with:"), repl_text, r, sizeof(r))) {
 		repaint();
 		return;
 	}
@@ -3921,24 +3925,24 @@ static void do_replace(void) {
 	if (!n) { find_report(); return; }
 
 	char msg[160];
-	snprintf(msg, sizeof(msg), "%d match%s for \"%.40s\".\nReplace all of them?\n(No: one at a time.)",
-		n, n == 1 ? "" : "es", find_text);
-	int how = z_dialog_confirm(&dlg_ctx, "Replace", msg, Z_DIALOG_YES_NO_CANCEL);
+	snprintf(msg, sizeof(msg), ZS_N("%d match for \"%.40s\".\nReplace all of them?\n(No: one at a time.)",
+		"%d matches for \"%.40s\".\nReplace all of them?\n(No: one at a time.)", n), n, find_text);
+	int how = z_dialog_confirm(&dlg_ctx, ZS_("Replace"), msg, Z_DIALOG_YES_NO_CANCEL);
 
 	if (how == Z_DIALOG_CANCEL) { repaint(); return; }
 
 	if (how == Z_DIALOG_YES) {
 		bool record = replace_all_undoable(n);
-		if (!record && z_dialog_confirm(&dlg_ctx, "Replace",
-				"That many changes cannot\nbe undone. Replace all\nanyway?",
+		if (!record && z_dialog_confirm(&dlg_ctx, ZS_("Replace"),
+				ZS_("That many changes cannot\nbe undone. Replace all\nanyway?"),
 				Z_DIALOG_YES_NO) != Z_DIALOG_YES) {
 			repaint();
 			return;
 		}
 		int done = replace_all_core(record);
 		if (done < 0) { say_full(); repaint(); return; }
-		snprintf(msg, sizeof(msg), "Replaced %d.", done);
-		z_dialog_confirm(&dlg_ctx, "Replace", msg, Z_DIALOG_OK_CANCEL);
+		snprintf(msg, sizeof(msg), ZS_("Replaced %d."), done);
+		z_dialog_confirm(&dlg_ctx, ZS_("Replace"), msg, Z_DIALOG_OK_CANCEL);
 		repaint();
 		return;
 	}
@@ -3949,7 +3953,7 @@ static void do_replace(void) {
 	int start = has_sel() ? sel_start() : cursor;
 	for (int step = 0; step < n; step++) {
 		if (find_from(start) <= 0) break;
-		int a = z_dialog_confirm(&dlg_ctx, "Replace", "Replace this one?",
+		int a = z_dialog_confirm(&dlg_ctx, ZS_("Replace"), ZS_("Replace this one?"),
 			Z_DIALOG_YES_NO_CANCEL);
 		if (a == Z_DIALOG_CANCEL) break;
 		if (a == Z_DIALOG_YES) {
@@ -4012,7 +4016,7 @@ static bool doc_census(int *here, int *total, int *words, int *chars) {
 	int n = 1, w = 0, ch = 0;
 	bool in = false;
 	*here = 1;
-	io_begin("Counting", "the document", false);
+	io_begin(ZS_("Counting"), ZS_("the document"), false);
 	for (int i = 0; i < len; i++) {
 		if ((i & 0x7FFF) == 0x7FFF && io_pump(i, len, true)) { io_end(); return false; }
 		if (i == cursor) *here = n;
@@ -4037,11 +4041,18 @@ static void do_goto(void) {
 	if (!doc_census(&here, &total, &words, &chars)) { repaint(); return; }
 
 	char msg[160], cur[16], ans[16];
-	snprintf(msg, sizeof(msg), "Line %d of %d.\n%d word%s, %d character%s.\nGo to line:",
-		here, total, words, words == 1 ? "" : "s", chars, chars == 1 ? "" : "s");
+	{
+		// three parts, each a sentence a translation can put its own way
+		char wd[48], ch[48];
+		snprintf(wd, sizeof wd, ZS_N("%d word", "%d words", words), words);
+		snprintf(ch, sizeof ch, ZS_N("%d character", "%d characters", chars), chars);
+		int k = snprintf(msg, sizeof(msg), ZS_("Line %d of %d."), here, total);
+		if (k > 0 && k < (int)sizeof(msg))
+			snprintf(msg + k, sizeof(msg) - (size_t)k, "\n%s, %s.\n%s", wd, ch, ZS_("Go to line:"));
+	}
 	snprintf(cur, sizeof(cur), "%d", here);
 
-	if (!z_dialog_prompt(&dlg_ctx, "Go to line", msg, cur, ans, sizeof(ans))) {
+	if (!z_dialog_prompt(&dlg_ctx, ZS_("Go to line"), msg, cur, ans, sizeof(ans))) {
 		repaint();
 		return;
 	}
@@ -4060,7 +4071,8 @@ static void handle_key(uint32_t keysym, uint8_t mods) {
 	mods_now = mods;
 
 	if (keysym == Z_KEY_HELP) {	// docs/app_help.md
-		static const char help[] =
+		char help[1200];		// filled each time; on the stack (files.c)
+		snprintf(help, sizeof help, ZS_(
 			"A plain text editor for notes, lists and Markdown.\n\n"
 			"Ctrl+N/O/S\tNew, open, save\n"
 			"Ctrl+Shift+S\tSave as\n"
@@ -4073,9 +4085,9 @@ static void handle_key(uint32_t keysym, uint8_t mods) {
 			"Ctrl+L\tGo to line; counts words\n"
 			"Ctrl+P\tPrint, or print to a PDF\n\n"
 			"Shift with the arrows, or a drag, selects. "
-			"A .docx, .odt or .rtf opens converted, as Markdown in " Z_DIR_TMP
-			" (the RAM disk): Save puts it in " Z_DIR_HOME ".";
-		z_dialog_help(&dlg_ctx, "Text help", help, "text_editor");
+			"A .docx, .odt or .rtf opens converted, as Markdown in %s"
+			" (the RAM disk): Save puts it in %s."), Z_DIR_TMP, Z_DIR_HOME);
+		z_dialog_help(&dlg_ctx, ZS_("Text help"), help, "text_editor");
 		return;
 	}
 	if (keysym == Z_KEY_FIND) { find_next(); return; }	// F3: find, then again
@@ -4359,6 +4371,9 @@ static void forward_msg(z_msg_t *msg, void *user) {
 }
 
 int main(void) {
+
+	// The language (docs/i18n.md): read once, before any string.
+	z_tr_init(Z_APP_NAME);
 
 	printf("text: starting\n");
 

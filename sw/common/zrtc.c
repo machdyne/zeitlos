@@ -46,6 +46,7 @@
 #include <stddef.h>
 
 #include "zrtc.h"
+#include "zi18n.h"
 
 // Days from 1970-01-01 to the given civil date. Internal -- the public
 // direction is z_tm_to_time() below.
@@ -169,23 +170,31 @@ uint32_t z_tm_to_time(const z_tm_t *tm) {
 
 }
 
+// The names are translated (docs/i18n.md) for a program that asked for
+// its language with z_tr_init() -- cal, clock, settings -- and English
+// for one that did not, such as posix's date and net's log. Only where
+// they fit the small font: Japanese dates stay English.
 static const char *const wday_names[7] = {
-	"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"
+	NC_("short weekday", "Sun"), NC_("short weekday", "Mon"), NC_("short weekday", "Tue"),
+	NC_("short weekday", "Wed"), NC_("short weekday", "Thu"), NC_("short weekday", "Fri"),
+	NC_("short weekday", "Sat")
 };
 
 static const char *const month_names[12] = {
-	"Jan", "Feb", "Mar", "Apr", "May", "Jun",
-	"Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
+	NC_("short month", "Jan"), NC_("short month", "Feb"), NC_("short month", "Mar"),
+	NC_("short month", "Apr"), NC_("short month", "May"), NC_("short month", "Jun"),
+	NC_("short month", "Jul"), NC_("short month", "Aug"), NC_("short month", "Sep"),
+	NC_("short month", "Oct"), NC_("short month", "Nov"), NC_("short month", "Dec")
 };
 
 const char *z_wday_name(uint8_t wday) {
 	if (wday > 6) return "???";
-	return wday_names[wday];
+	return ZS_DC("short weekday", wday_names[wday]);
 }
 
 const char *z_month_name(uint8_t month) {
 	if (month < 1 || month > 12) return "???";
-	return month_names[month - 1];
+	return ZS_DC("short month", month_names[month - 1]);
 }
 
 // Spelled out, for a caller with room for it -- see zrtc.h on why
@@ -193,13 +202,15 @@ const char *z_month_name(uint8_t month) {
 // rule. There isn't one: "Sep" -> "September" but "Jun" -> "June",
 // and a rule with two exceptions is longer than the table.
 static const char *const month_names_long[12] = {
-	"January", "February", "March", "April", "May", "June",
-	"July", "August", "September", "October", "November", "December"
+	NC_("month", "January"), NC_("month", "February"), NC_("month", "March"),
+	NC_("month", "April"), NC_("month", "May"), NC_("month", "June"),
+	NC_("month", "July"), NC_("month", "August"), NC_("month", "September"),
+	NC_("month", "October"), NC_("month", "November"), NC_("month", "December")
 };
 
 const char *z_month_name_long(uint8_t month) {
 	if (month < 1 || month > 12) return "???";
-	return month_names_long[month - 1];
+	return ZS_DC("month", month_names_long[month - 1]);
 }
 
 // -- time zones -- see zrtc.h --

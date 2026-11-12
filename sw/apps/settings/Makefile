@@ -24,7 +24,7 @@ C = ../../common
 test:
 	$(HOSTCC) -std=gnu99 -w -no-pie -I $(C) -o /tmp/settings_render tests/render.c $(C)/zwin.c \
 		$(C)/zwidget.c $(C)/zfont_data.c $(C)/zobj.c $(C)/zeitlos.c $(C)/zfsapp.c $(C)/zcfg.c \
-		$(C)/zrtc.c $(C)/zkbd.c $(C)/zspeak.c $(C)/zaccent.c $(C)/zaccent_names.c
+		$(C)/zrtc.c $(C)/zkbd.c $(C)/zspeak.c $(C)/zaccent.c $(C)/zaccent_names.c $(C)/zi18n.c
 	mkdir -p /tmp/settings-render
 	/tmp/settings_render /tmp/settings-render/s || [ $$? -eq 77 ]
 

@@ -1,0 +1,47 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: Zeitlos cal\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+#: sw/apps/cal/cal.c:412
+#, c-format
+msgid "Year %s%s"
+msgstr ""
+
+#: sw/apps/cal/cal.c:443
+msgid "Enter to go, Esc to cancel"
+msgstr ""
+
+#: sw/apps/cal/cal.c:444
+msgid "No RTC: `RTC off, make flash"
+msgstr ""
+
+#: sw/apps/cal/cal.c:445
+msgid "Clock not set -- type a year"
+msgstr ""
+
+#: sw/apps/cal/cal.c:478
+#, c-format
+msgid "Today %s %d %s %04ld %s"
+msgstr ""
+
+#: sw/apps/cal/cal.c:707
+msgid ""
+"A month calendar, with today marked.\n"
+"\n"
+"Left/Right\tPrevious / next month\n"
+"Up/Down\tPrevious / next year\n"
+"Home, t\tBack to today\n"
+"0-9\tType a year\n"
+"Enter\tGo to it (or press the arrow)\n"
+"Esc\tAbandon the typed year\n"
+"Backspace\tDelete a digit\n"
+"z\tThe time zone: settings\n"
+"\n"
+"Click < or > to change month. Type four digits and Enter to jump to a year (1970-2105). Today needs the clock set: run net. Click the date at the bottom, or press z, to choose the time zone."
+msgstr ""
+
+#: sw/apps/cal/cal.c:722
+msgid "Cal help"
+msgstr ""

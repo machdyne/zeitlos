@@ -1,0 +1,383 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: Zeitlos text\n"
+"Language: sv\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+
+msgid "Converting"
+msgstr "Konverterar:"
+
+msgid "the file"
+msgstr "filen"
+
+msgid "Saving"
+msgstr "Sparar:"
+
+msgid "Recover"
+msgstr "Återställ"
+
+msgid ""
+"Unsaved changes from a\n"
+"session that did not end\n"
+"were kept. Recover them?"
+msgstr ""
+"Osparade ändringar från en\n"
+"session som inte avslutades\n"
+"har sparats. Återställa dem?"
+
+#, c-format
+msgid ""
+"%d character cannot be saved\n"
+"as %s. Save as UTF-8\n"
+"instead?"
+msgid_plural ""
+"%d characters cannot be saved\n"
+"as %s. Save as UTF-8\n"
+"instead?"
+msgstr[0] ""
+"%d tecken kan inte sparas\n"
+"som %s. Spara som\n"
+"UTF-8 i stället?"
+msgstr[1] ""
+"%d tecken kan inte sparas\n"
+"som %s. Spara som\n"
+"UTF-8 i stället?"
+
+msgid "Encoding"
+msgstr "Kodning"
+
+msgid "Save failed"
+msgstr "Sparandet misslyckades"
+
+msgid ""
+"The file could not be\n"
+"written completely.\n"
+"The one on the card is\n"
+"as it was."
+msgstr ""
+"Filen kunde inte skrivas\n"
+"helt. Den på kortet är\n"
+"oförändrad."
+
+#, c-format
+msgid ""
+"Saved, but as\n"
+"%.60s:\n"
+"it could not be renamed."
+msgstr ""
+"Sparad, men som\n"
+"%.60s:\n"
+"namnbytet misslyckades."
+
+msgid "Save"
+msgstr "Spara"
+
+msgid "Export"
+msgstr "Exportera"
+
+msgid ""
+"convert could not\n"
+"be started."
+msgstr ""
+"convert kunde inte\n"
+"startas."
+
+msgid ""
+"Could not write the\n"
+"copy to convert."
+msgstr ""
+"Kopian att konvertera\n"
+"kunde inte skrivas."
+
+#, c-format
+msgid ""
+"%.40s already exists.\n"
+"Replace it?"
+msgstr ""
+"%.40s finns redan.\n"
+"Ersätta den?"
+
+msgid "Save As"
+msgstr "Spara som"
+
+msgid "Getting ready to print"
+msgstr "Förbereder utskrift:"
+
+msgid "Untitled"
+msgstr "Namnlös"
+
+#, c-format
+msgid "Print %.60s"
+msgstr "Skriv ut %.60s"
+
+#, c-format
+msgid ""
+"There was no room in %s\n"
+"for the text to print."
+msgstr ""
+"Det fanns ingen plats i %s\n"
+"för texten att skriva ut."
+
+msgid "Print"
+msgstr "Skriv ut"
+
+#, c-format
+msgid ""
+"The print job could not\n"
+"be made in %s."
+msgstr ""
+"Utskriftsjobbet kunde\n"
+"inte skapas i %s."
+
+msgid "print is not on the card."
+msgstr "print finns inte på kortet."
+
+msgid ""
+"The print job could not\n"
+"be written."
+msgstr ""
+"Utskriftsjobbet kunde\n"
+"inte skrivas."
+
+msgid "Unsaved changes"
+msgstr "Osparade ändringar"
+
+msgid ""
+"Save changes before\n"
+"continuing?"
+msgstr ""
+"Spara ändringarna\n"
+"innan du fortsätter?"
+
+msgid "Open failed"
+msgstr "Öppnandet misslyckades"
+
+msgid ""
+"That file could not\n"
+"be read."
+msgstr ""
+"Filen kunde inte\n"
+"läsas."
+
+msgid "Too large"
+msgstr "För stor"
+
+msgid ""
+"That file is larger than\n"
+"this editor can hold on\n"
+"this machine."
+msgstr ""
+"Filen är större än\n"
+"redigeraren rymmer på\n"
+"den här datorn."
+
+msgid "Opening"
+msgstr "Öppnar:"
+
+msgid ""
+"That file is too large for\n"
+"this editor once its accented\n"
+"letters are converted."
+msgstr ""
+"Filen blir för stor för\n"
+"redigeraren när dess bokstäver\n"
+"med accent har konverterats."
+
+msgid "Copy"
+msgstr "Kopiera"
+
+msgid ""
+"Copied, but there is no\n"
+"memory to keep all of it:\n"
+"a paste gives the first\n"
+"4 KB."
+msgstr ""
+"Kopierat, men minnet räcker\n"
+"inte till allt: en inklistring\n"
+"ger de första 4 KB."
+
+msgid ""
+"Too large to cut here:\n"
+"there is no memory to\n"
+"keep it for the paste.\n"
+"Cut less than 4 KB."
+msgstr ""
+"För stort att klippa ut:\n"
+"inget minne att spara det\n"
+"till inklistringen.\n"
+"Klipp ut mindre än 4 KB."
+
+msgid ""
+"Too large to cut:\n"
+"it could not be undone.\n"
+"Cut a smaller part."
+msgstr ""
+"För stort att klippa ut:\n"
+"det kan inte ångras.\n"
+"Klipp ut en mindre del."
+
+msgid "Cut"
+msgstr "Klipp ut"
+
+msgid "Full"
+msgstr "Fullt"
+
+msgid ""
+"Only part of the clipboard\n"
+"would fit."
+msgstr ""
+"Bara en del av urklippet\n"
+"skulle få plats."
+
+msgid "The document is full."
+msgstr "Dokumentet är fullt."
+
+msgid "blank"
+msgstr "tomt"
+
+msgid "end"
+msgstr "slut"
+
+msgid "new line"
+msgstr "ny rad"
+
+msgid "Empty document"
+msgstr "Tomt dokument"
+
+msgid "End of document"
+msgstr "Slut på dokumentet"
+
+msgid "Nothing selected"
+msgstr "Inget markerat"
+
+msgid "Finding"
+msgstr "Söker:"
+
+#, c-format
+msgid ""
+"\"%.60s\"\n"
+"was not found."
+msgstr ""
+"\"%.60s\"\n"
+"hittades inte."
+
+msgid "Find"
+msgstr "Sök"
+
+msgid "Find:"
+msgstr "Sök:"
+
+msgid "Counting"
+msgstr "Räknar:"
+
+msgid "Replacing"
+msgstr "Ersätter:"
+
+msgid "Replace"
+msgstr "Ersätt"
+
+msgid ""
+"The document would not hold\n"
+"the replacements."
+msgstr ""
+"Dokumentet skulle inte\n"
+"rymma ersättningarna."
+
+msgid "Replace with:"
+msgstr "Ersätt med:"
+
+#, c-format
+msgid ""
+"%d match for \"%.40s\".\n"
+"Replace all of them?\n"
+"(No: one at a time.)"
+msgid_plural ""
+"%d matches for \"%.40s\".\n"
+"Replace all of them?\n"
+"(No: one at a time.)"
+msgstr[0] ""
+"%d träff för \"%.40s\".\n"
+"Ersätta alla?\n"
+"(Nej: en i taget.)"
+msgstr[1] ""
+"%d träffar för \"%.40s\".\n"
+"Ersätta alla?\n"
+"(Nej: en i taget.)"
+
+msgid ""
+"That many changes cannot\n"
+"be undone. Replace all\n"
+"anyway?"
+msgstr ""
+"Så många ändringar kan inte\n"
+"ångras. Ersätta alla\n"
+"ändå?"
+
+#, c-format
+msgid "Replaced %d."
+msgstr "%d ersatta."
+
+msgid "Replace this one?"
+msgstr "Ersätta den här?"
+
+msgid "the document"
+msgstr "dokumentet"
+
+#, c-format
+msgid "%d word"
+msgid_plural "%d words"
+msgstr[0] "%d ord"
+msgstr[1] "%d ord"
+
+#, c-format
+msgid "%d character"
+msgid_plural "%d characters"
+msgstr[0] "%d tecken"
+msgstr[1] "%d tecken"
+
+#, c-format
+msgid "Line %d of %d."
+msgstr "Rad %d av %d."
+
+msgid "Go to line:"
+msgstr "Gå till rad:"
+
+msgid "Go to line"
+msgstr "Gå till rad"
+
+#, c-format
+msgid ""
+"A plain text editor for notes, lists and Markdown.\n"
+"\n"
+"Ctrl+N/O/S\tNew, open, save\n"
+"Ctrl+Shift+S\tSave as\n"
+"Ctrl+Q\tClose\n"
+"Ctrl+C/X/V\tCopy, cut, paste\n"
+"Ctrl+A\tSelect all\n"
+"Ctrl+Z/Y\tUndo, redo\n"
+"Ctrl+F, F3\tFind, find again\n"
+"Ctrl+H\tReplace\n"
+"Ctrl+L\tGo to line; counts words\n"
+"Ctrl+P\tPrint, or print to a PDF\n"
+"\n"
+"Shift with the arrows, or a drag, selects. A .docx, .odt or .rtf opens converted, as Markdown in %s (the RAM disk): Save puts it in %s."
+msgstr ""
+"En enkel textredigerare för anteckningar, listor och Markdown.\n"
+"\n"
+"Ctrl+N/O/S\tNy, öppna, spara\n"
+"Ctrl+Skift+S\tSpara som\n"
+"Ctrl+Q\tStäng\n"
+"Ctrl+C/X/V\tKopiera, klipp ut, klistra in\n"
+"Ctrl+A\tMarkera allt\n"
+"Ctrl+Z/Y\tÅngra, gör om\n"
+"Ctrl+F, F3\tSök, sök igen\n"
+"Ctrl+H\tErsätt\n"
+"Ctrl+L\tGå till rad; räknar ord\n"
+"Ctrl+P\tSkriv ut, eller till en PDF\n"
+"\n"
+"Skift med pilarna, eller att dra, markerar. En .docx, .odt eller .rtf öppnas konverterad, som Markdown i %s (RAM-disken): Spara lägger den i %s."
+
+msgid "Text help"
+msgstr "Hjälp för text"

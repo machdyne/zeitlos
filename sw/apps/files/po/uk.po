@@ -1,0 +1,359 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: Zeitlos files\n"
+"Language: uk\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=3; plural=(n%10==1 && n%100!=11 ? 0 : n%10>=2 && n%10<=4 && (n%100<10 || n%100>=20) ? 1 : 2);\n"
+
+msgctxt "button"
+msgid "Open"
+msgstr "Відкр."
+
+msgctxt "button"
+msgid "New Dir"
+msgstr "Тека"
+
+msgctxt "button"
+msgid "Rename"
+msgstr "Перейм."
+
+msgctxt "button"
+msgid "Copy"
+msgstr "Копія"
+
+msgctxt "button"
+msgid "Move"
+msgstr "Перем."
+
+msgctxt "button"
+msgid "Delete"
+msgstr "Видал."
+
+msgctxt "button"
+msgid "Convert"
+msgstr "Конв."
+
+msgctxt "button"
+msgid "Find"
+msgstr "Знайти"
+
+msgid " (reading)"
+msgstr " (читання)"
+
+msgid " (partial list)"
+msgstr " (частина списку)"
+
+msgid "Launch failed"
+msgstr "Не вдалося запустити"
+
+msgid ""
+"That application could\n"
+"not be started."
+msgstr ""
+"Не вдалося запустити\n"
+"цю програму."
+
+msgid ""
+"That program could not\n"
+"be started."
+msgstr ""
+"Не вдалося запустити\n"
+"цю програму."
+
+msgid "Can't open"
+msgstr "Не вдається відкрити"
+
+msgid ""
+"That file is not a\n"
+"program."
+msgstr ""
+"Цей файл не є\n"
+"програмою."
+
+msgid ""
+"No application is\n"
+"associated with this file."
+msgstr ""
+"З цим файлом не пов'язано\n"
+"жодної програми."
+
+msgid "New Folder"
+msgstr "Нова тека"
+
+msgid "Name for the new folder:"
+msgstr "Назва нової теки:"
+
+msgid "Bad name"
+msgstr "Неприпустима назва"
+
+msgid ""
+"A folder name cannot\n"
+"contain '/'."
+msgstr ""
+"Назва теки не може\n"
+"містити '/'."
+
+msgid "Failed"
+msgstr "Помилка"
+
+msgid ""
+"The folder could not\n"
+"be created."
+msgstr ""
+"Не вдалося створити\n"
+"теку."
+
+msgid ""
+"Not possible:\n"
+msgstr ""
+"Неможливо:\n"
+
+msgid "Rename"
+msgstr "Перейменувати"
+
+msgid "New name:"
+msgstr "Нова назва:"
+
+msgid ""
+"A name cannot\n"
+"contain '/'."
+msgstr ""
+"Назва не може\n"
+"містити '/'."
+
+msgid "Move"
+msgstr "Перемістити"
+
+msgid "Copy"
+msgstr "Копіювати"
+
+msgid "Move to:"
+msgstr "Перемістити до:"
+
+msgid "Copy to:"
+msgstr "Копіювати до:"
+
+msgid ""
+"Replace the file that\n"
+"is already there?"
+msgstr ""
+"Замінити файл, який\n"
+"там уже є?"
+
+#, c-format
+msgid ""
+"Delete the folder\n"
+"%s\n"
+"and everything in it?"
+msgstr ""
+"Видалити теку\n"
+"%s\n"
+"з усім умістом?"
+
+#, c-format
+msgid ""
+"Delete the file\n"
+"%s?"
+msgstr ""
+"Видалити файл\n"
+"%s?"
+
+msgid "Delete"
+msgstr "Видалити"
+
+msgid ""
+"The file could not be\n"
+"deleted. Is it in use?"
+msgstr ""
+"Не вдалося видалити\n"
+"файл. Він використовується?"
+
+msgid "Convert"
+msgstr "Конвертувати"
+
+msgid ""
+"A conversion is already\n"
+"running."
+msgstr ""
+"Конвертація вже\n"
+"триває."
+
+msgid ""
+"convert does not read\n"
+"this kind of file."
+msgstr ""
+"convert не читає\n"
+"такі файли."
+
+msgid "Pack into (.zip, .tar or .tar.gz):"
+msgstr "Запакувати в (.zip, .tar або .tar.gz):"
+
+msgid "To (the ending picks the format):"
+msgstr "У (розширення визначає формат):"
+
+msgid "Extract into the folder:"
+msgstr "Розпакувати в теку:"
+
+msgid ""
+"convert is not on\n"
+"this card."
+msgstr ""
+"На цій картці немає\n"
+"convert."
+
+msgid ""
+"Could not start: is\n"
+"/tmp writable?"
+msgstr ""
+"Не вдалося запустити:\n"
+"чи можна писати в /tmp?"
+
+msgid " MB"
+msgstr " МБ"
+
+msgid " KB"
+msgstr " КБ"
+
+msgid " bytes"
+msgstr " байт"
+
+msgctxt "button"
+msgid "Stop"
+msgstr "Стоп"
+
+#, c-format
+msgid "Finding... %u found, %lu files looked at"
+msgstr "Пошук... знайдено %u, переглянуто файлів: %lu"
+
+#, c-format
+msgid "%u found in %s (the first %u matches)"
+msgstr "Знайдено %u у %s (перші %u збігів)"
+
+#, c-format
+msgid "%u found in %s (not all)"
+msgstr "Знайдено %u у %s (не всі)"
+
+#, c-format
+msgid "%u found in %s"
+msgstr "Знайдено %u у %s"
+
+msgid "Removing the source... "
+msgstr "Видалення джерела... "
+
+msgid "Moving... "
+msgstr "Переміщення... "
+
+msgid "Copying... "
+msgstr "Копіювання... "
+
+msgid " of "
+msgstr " з "
+
+msgid " files, "
+msgstr " файлів, "
+
+#, c-format
+msgid "Deleting... %lu deleted"
+msgstr "Видалення... видалено %lu"
+
+msgid "  (Esc stops)"
+msgstr "  (Esc зупинить)"
+
+msgid "  (Esc: back)"
+msgstr "  (Esc: назад)"
+
+msgid "Stopped."
+msgstr "Зупинено."
+
+msgid "Stopped: "
+msgstr "Зупинено: "
+
+msgid ""
+"\n"
+"The copy is complete; part of\n"
+"the original is still there."
+msgstr ""
+"\n"
+"Копія повна; частина\n"
+"оригіналу ще на місці."
+
+msgid ""
+"\n"
+"Part of it is deleted already."
+msgstr ""
+"\n"
+"Частину вже видалено."
+
+msgid ""
+"\n"
+"What was copied so far is left\n"
+"in the destination."
+msgstr ""
+"\n"
+"Те, що вже скопійовано,\n"
+"лишається в місці призначення."
+
+msgid "Find"
+msgstr "Знайти"
+
+msgid ""
+"In this folder and below. A name\n"
+"(report, *.md), \"text\" inside files,\n"
+"or both: *.txt \"invoice\""
+msgstr ""
+"У цій теці й нижче. Назва\n"
+"(звіт, *.md), \"текст\" у файлах,\n"
+"або обидва: *.txt \"рахунок\""
+
+#, c-format
+msgid ""
+"Browse, open and manage files.\n"
+"\n"
+"Enter\tOpen the selection\n"
+"Backspace\tUp a folder\n"
+"Letters\tJump to a name\n"
+"F2\tRename\n"
+"Delete\tDelete (asks first)\n"
+"F3, Ctrl+F\tFind by name, \"text\" inside, or both\n"
+"F5\tRead the folder again\n"
+"F12\tHome: back to the folder files started in\n"
+"Esc\tStop a find, copy or delete\n"
+"Tab\tTo the buttons; Space presses\n"
+"\n"
+"Results: Enter opens, Backspace goes to the file's folder, Esc goes back.\n"
+"\n"
+"Copy and Move ask for the destination, starting from the file's own path: an existing folder means into it. Folders copy, move and delete with everything in them. Convert saves the file in another format, picked by the ending you give it (.docx, .md, .xlsx, ...); a folder it packs into a .zip, .tar or .tar.gz.\n"
+"\n"
+"%s is yours, %s is the RAM disk (gone at power-off)."
+msgstr ""
+"Перегляд, відкриття та впорядкування файлів.\n"
+"\n"
+"Enter\tВідкрити виділене\n"
+"Backspace\tНа теку вище\n"
+"Літери\tПерейти до назви\n"
+"F2\tПерейменувати\n"
+"Del\tВидалити (спершу запитає)\n"
+"F3, Ctrl+F\tШукати за назвою, \"текстом\" усередині або обома\n"
+"F5\tПеречитати теку\n"
+"F12\tДодому: до теки, де почав files\n"
+"Esc\tЗупинити пошук, копіювання чи видалення\n"
+"Tab\tДо кнопок; Пробіл натискає\n"
+"\n"
+"Результати: Enter відкриває, Backspace переходить до теки файлу, Esc повертає.\n"
+"\n"
+"Копіювати й Перемістити питають, куди, починаючи зі шляху файлу: наявна тека означає всередину. Теки копіюються, переміщуються й видаляються з усім умістом. Конвертувати зберігає файл в іншому форматі, вибраному за розширенням (.docx, .md, .xlsx, ...); теку пакує в .zip, .tar або .tar.gz.\n"
+"\n"
+"%s -- ваша, %s -- диск в ОЗП (зникає після вимкнення)."
+
+msgid "Files help"
+msgstr "Довідка files"
+
+#~ msgid "Open"
+#~ msgstr "Відкрити"
+
+#~ msgid "New Dir"
+#~ msgstr "Нова тека"
+
+#~ msgid "Stop"
+#~ msgstr "Стоп"

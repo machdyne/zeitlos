@@ -1,0 +1,115 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: Zeitlos ask\n"
+"Language: ru\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=3; plural=(n%10==1 && n%100!=11 ? 0 : n%10>=2 && n%10<=4 && (n%100<10 || n%100>=20) ? 1 : 2);\n"
+
+msgid "No passage here answers"
+msgstr "Здесь ни один отрывок не отвечает"
+
+msgid "that."
+msgstr "на это."
+
+msgid "could not start read"
+msgstr "не удалось запустить read"
+
+#, c-format
+msgid "%u passage, "
+msgid_plural "%u passages, "
+msgstr[0] "%u отрывок, "
+msgstr[1] "%u отрывка, "
+msgstr[2] "%u отрывков, "
+
+#, c-format
+msgid "%u pack"
+msgid_plural "%u packs"
+msgstr[0] "%u пакет"
+msgstr[1] "%u пакета"
+msgstr[2] "%u пакетов"
+
+msgid ", ranking weaker"
+msgstr ", ранжирование слабее"
+
+msgid "  ^U clears"
+msgstr "  ^U очищает"
+
+msgid "searching...  Esc cancels"
+msgstr "поиск...  Esc отменяет"
+
+#, c-format
+msgid "searching %u%%  Esc cancels"
+msgstr "поиск %u%%  Esc отменяет"
+
+msgid "Loading..., then search"
+msgstr "Загрузка..., потом поиск"
+
+msgid "Loading...  Esc stops"
+msgstr "Загрузка...  Esc - стоп"
+
+#, c-format
+msgid "Loading %s %u%%, then search"
+msgstr "Загрузка: %s %u%%, потом поиск"
+
+#, c-format
+msgid "Loading %s %u%%  Esc stops"
+msgstr "Загрузка: %s %u%%  Esc - стоп"
+
+msgid "no packs loaded -- nothing to search"
+msgstr "пакеты не загружены -- искать негде"
+
+msgid "path too long to open"
+msgstr "путь слишком длинный"
+
+msgid "loading stopped -- no packs loaded"
+msgstr "загрузка остановлена -- пакеты не загружены"
+
+#, c-format
+msgid "loading stopped, %u pack loaded"
+msgid_plural "loading stopped, %u packs loaded"
+msgstr[0] "загрузка остановлена, загружен %u пакет"
+msgstr[1] "загрузка остановлена, загружено %u пакета"
+msgstr[2] "загрузка остановлена, загружено %u пакетов"
+
+#, c-format
+msgid " (%u pack failed)"
+msgid_plural " (%u packs failed)"
+msgstr[0] " (%u пакет с ошибкой)"
+msgstr[1] " (%u пакета с ошибкой)"
+msgstr[2] " (%u пакетов с ошибкой)"
+
+msgid ""
+"Finds passages in the datasets on the card that answer a question, and opens them in read.\n"
+"\n"
+"Enter\tSearch; again: open the selection\n"
+"Up/Down\tSelect a result\n"
+"1-9\tOpen that result\n"
+"Esc\tStop loading, cancel a search, or clear\n"
+"Ctrl+U\tClear the line\n"
+"Ctrl+W\tDelete a word\n"
+"Ctrl+Q\tQuit\n"
+"\n"
+"Type a question and press Enter. Click a result to open it, or a pack button to browse its index.\n"
+"\n"
+"Typing works while the packs load; Enter then searches once they are in."
+msgstr ""
+"Находит в наборах данных на карте отрывки, отвечающие на вопрос, и открывает их в read.\n"
+"\n"
+"Enter\tИскать; ещё раз: открыть выбранное\n"
+"Вверх/Вниз\tВыбрать результат\n"
+"1-9\tОткрыть этот результат\n"
+"Esc\tОстановить загрузку, отменить поиск или очистить\n"
+"Ctrl+U\tОчистить строку\n"
+"Ctrl+W\tУдалить слово\n"
+"Ctrl+Q\tВыйти\n"
+"\n"
+"Введите вопрос и нажмите Enter. Щёлкните результат, чтобы открыть его, или кнопку пакета, чтобы просмотреть его указатель.\n"
+"\n"
+"Печатать можно, пока пакеты загружаются; Enter ищет, как только они готовы."
+
+msgid "Ask help"
+msgstr "Справка ask"
+
+msgid "cancelled"
+msgstr "отменено"

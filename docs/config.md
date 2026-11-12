@@ -80,6 +80,7 @@ travel with the card. `settings` edits them; see
 | `system.tts.rate` | `180` | `tts` | speech: words per minute, 80-450 |
 | `system.tts.volume` | `200` | `tts` | speech: volume, 0-255 |
 | `system.mouse.speed` | `16` | `wm` | USB host boards: pointer speed in sixteenths of the board's own, 1-63 -- 8 half, 32 double; set in `settings` (17 levels, 4 to 63), applied by the kernel at boot and on reload; absent is 16 ([user_input.md](user_input.md#pointer-speed)) |
+| `system.language` | `en` | every app, `jfont` | the language the system speaks, from the next start ([i18n.md](i18n.md)) |
 | `system.screen.size` | `640x480` | kernel | the screen size apps are told; for testing ([screen.md](screen.md)) |
 | `system.video.mode` | `white` | kernel | display colour, applied at boot and on reload |
 | `system.video.brightness` | `8` | kernel | HDMI/DVI monochrome brightness, 1-16, applied at boot and on reload |
@@ -198,6 +199,15 @@ nothing usable in it means `us`.
 `wm` reads it at startup and again on the first key pressed after a
 reload. A reload keeps the layout in use if it is still on the list,
 so editing the list does not switch the keyboard mid-sentence.
+
+### `system.language`
+
+The language the system speaks: `en` (the default, and what a card
+without the Languages set always speaks), `de`, `fr`, `es`, `it`, `pt`,
+`nl`, `pl`, `cs`, `sv`, `ru`, `uk` or `ja`, and `xx`, the test language
+([i18n.md](i18n.md)). wm starts `jfont` to hold the translations; every
+app reads the key once, as it starts, so a change is seen from the next
+start. `settings` (Keyboard) steps through the languages the card has.
 
 ### `system.screen.size`
 

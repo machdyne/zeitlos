@@ -1,0 +1,377 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: Zeitlos sheet\n"
+"Language: sv\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+
+msgid "No chart: select the data, then F5."
+msgstr "Inget diagram: välj data, sedan F5."
+
+msgid "Nothing to chart in the range."
+msgstr "Inget att visa i området."
+
+msgid "No numbers in the range to chart."
+msgstr "Inga tal i området."
+
+msgid "A pie needs some positive numbers."
+msgstr "Ett cirkeldiagram kräver positiva tal."
+
+msgid "Sum "
+msgstr "Summa "
+
+msgid "  Avg "
+msgstr "  Medel "
+
+msgid "  Count "
+msgstr "  Antal "
+
+msgctxt "chart"
+msgid "Bar"
+msgstr "Stapel"
+
+msgctxt "chart"
+msgid "Stacked"
+msgstr "Staplad"
+
+msgctxt "chart"
+msgid "Line"
+msgstr "Linje"
+
+msgctxt "chart"
+msgid "Pie"
+msgstr "Cirkel"
+
+msgid "Chart: "
+msgstr "Diagram: "
+
+msgid "  Esc: back"
+msgstr "  Esc: tillbaka"
+
+msgid "Calculating..."
+msgstr "Räknar..."
+
+msgid "Export"
+msgstr "Exportera"
+
+msgid ""
+"convert could not\n"
+"be started."
+msgstr ""
+"convert kunde inte\n"
+"startas."
+
+msgid ""
+"Could not write the\n"
+"copy to convert."
+msgstr ""
+"Kopian att konvertera\n"
+"kunde inte skrivas."
+
+msgid "Save failed"
+msgstr "Sparandet misslyckades"
+
+msgid ""
+"Could not open the file\n"
+"for writing."
+msgstr ""
+"Filen kunde inte öppnas\n"
+"för skrivning."
+
+msgid ""
+"The file could not be\n"
+"written completely."
+msgstr ""
+"Filen kunde inte\n"
+"skrivas helt."
+
+msgid "Open failed"
+msgstr "Öppnandet misslyckades"
+
+msgid ""
+"convert is not on\n"
+"this card."
+msgstr ""
+"convert finns inte på\n"
+"det här kortet."
+
+msgid ""
+"The file could not\n"
+"be opened."
+msgstr ""
+"Filen kunde inte\n"
+"öppnas."
+
+msgid "Unsaved changes"
+msgstr "Osparade ändringar"
+
+msgid ""
+"This sheet has unsaved\n"
+"changes. Save first?"
+msgstr ""
+"Bladet har osparade\n"
+"ändringar. Spara först?"
+
+msgid "Sheet full"
+msgstr "Bladet fullt"
+
+msgid ""
+"No room for another cell.\n"
+"The change was not made."
+msgstr ""
+"Ingen plats för fler celler.\n"
+"Ändringen gjordes inte."
+
+msgid ""
+"No room for more cells.\n"
+"Some were not pasted."
+msgstr ""
+"Ingen plats för fler celler.\n"
+"Några klistrades inte in."
+
+msgid "Fill"
+msgstr "Fyll"
+
+msgid ""
+"Too much to fill\n"
+"at once."
+msgstr ""
+"För mycket att fylla\n"
+"på en gång."
+
+msgid ""
+"No room for more cells.\n"
+"Some were not filled."
+msgstr ""
+"Ingen plats för fler celler.\n"
+"Några fylldes inte."
+
+msgid "Insert"
+msgstr "Infoga"
+
+msgid "Delete"
+msgstr "Radera"
+
+msgid ""
+"That would push cells\n"
+"past the edge of the sheet."
+msgstr ""
+"Det skulle skjuta celler\n"
+"förbi bladets kant."
+
+msgid ""
+"No room: the sheet\n"
+"is full."
+msgstr ""
+"Ingen plats: bladet\n"
+"är fullt."
+
+msgid "Format"
+msgstr "Format"
+
+#, c-format
+msgid ""
+"G general  F2 fixed  ,2 1,000.00\n"
+"%1 percent  $2 money  (digit: places)"
+msgstr ""
+"G allmänt  F2 fast  ,2 1,000.00\n"
+"%1 procent  $2 pengar  (siffra: decimaler)"
+
+#, c-format
+msgid ""
+"Not a format: G, F2, ,2,\n"
+"%1 or $2 (any 0-8 places)."
+msgstr ""
+"Inget format: G, F2, ,2,\n"
+"%1 eller $2 (0-8 decimaler)."
+
+msgid ""
+"Too many formatted\n"
+"ranges: 64 at most."
+msgstr ""
+"För många formaterade\n"
+"områden: högst 64."
+
+msgid "Width"
+msgstr "Bredd"
+
+msgid "Column width, in characters:"
+msgstr "Kolumnbredd, i tecken:"
+
+msgid "Chart"
+msgstr "Diagram"
+
+msgid ""
+"Select the table to chart\n"
+"(labels in the first row\n"
+"and column), then F5."
+msgstr ""
+"Välj tabellen för diagrammet\n"
+"(etiketter i första raden\n"
+"och kolumnen), sedan F5."
+
+msgid "Sort"
+msgstr "Sortera"
+
+msgid ""
+"Select the rows to sort\n"
+"(all their columns), then\n"
+"put the cursor in the key."
+msgstr ""
+"Välj raderna att sortera\n"
+"(alla deras kolumner), och\n"
+"ställ markören i nyckeln."
+
+msgid ""
+"Too large to sort here:\n"
+"sort fewer rows at a time."
+msgstr ""
+"För stort att sortera här:\n"
+"sortera färre rader åt gången."
+
+msgid "Go to"
+msgstr "Gå till"
+
+msgid "Cell (like B12):"
+msgstr "Cell (som B12):"
+
+msgid "Not a cell: A1 to Z999."
+msgstr "Ingen cell: A1 till Z999."
+
+msgid "Find"
+msgstr "Sök"
+
+msgid "Not found."
+msgstr "Hittades inte."
+
+msgid ""
+"A spreadsheet: numbers, text and formulas in a grid.\n"
+"\n"
+"Type into the cell; =A1*2 is a formula, =SUM(B2:B9) a range. Enter moves down, Tab right, Shift+arrows select.\n"
+"\n"
+"/, F4\tCommands: insert, delete, number format, width, sort, extend, goto, find, chart\n"
+"F2\tEdit the cell\n"
+"Ctrl+Z/Y\tUndo, redo\n"
+"Ctrl+C/X/V\tCopy, cut, paste\n"
+"Ctrl+D/R\tFill down, right\n"
+"Ctrl+1\tNumber format\n"
+"Ctrl+G\tGo to a cell\n"
+"F3, Ctrl+F\tFind (again: the next match)\n"
+"F5\tChart the selection\n"
+"Alt+Left\tNarrow the column (Alt+Right widens)\n"
+"Ctrl+N/O/S\tNew, open, save\n"
+"\n"
+"Functions: SUM AVERAGE MIN MAX COUNT ABS INT ROUND MOD SQRT POWER IF AND OR NOT PMT PV FV NPV VLOOKUP INDEX.\n"
+"\n"
+"Select a range to see its sum, average and count."
+msgstr ""
+"Ett kalkylblad: tal, text och formler i ett rutnät.\n"
+"\n"
+"Skriv i cellen; =A1*2 är en formel, =SUM(B2:B9) ett område. Enter går nedåt, Tab åt höger, Skift+pilar markerar.\n"
+"\n"
+"/, F4\tKommandon: infoga, ta bort, talformat, bredd, sortera, fyll ut, gå till, sök, diagram\n"
+"F2\tRedigera cellen\n"
+"Ctrl+Z/Y\tÅngra, gör om\n"
+"Ctrl+C/X/V\tKopiera, klipp ut, klistra in\n"
+"Ctrl+D/R\tFyll nedåt, åt höger\n"
+"Ctrl+1\tTalformat\n"
+"Ctrl+G\tGå till en cell\n"
+"F3, Ctrl+F\tSök (igen: nästa träff)\n"
+"F5\tDiagram av markeringen\n"
+"Alt+Vänster\tSmalare kolumn (Alt+Höger bredare)\n"
+"Ctrl+N/O/S\tNy, öppna, spara\n"
+"\n"
+"Funktioner: SUM AVERAGE MIN MAX COUNT ABS INT ROUND MOD SQRT POWER IF AND OR NOT PMT PV FV NPV VLOOKUP INDEX.\n"
+"\n"
+"Markera ett område för att se summa, medel och antal."
+
+msgid "Sheet help"
+msgstr "Hjälp för sheet"
+
+msgid "Find (F3 finds the next):"
+msgstr "Sök (F3 söker nästa):"
+
+msgctxt "menu"
+msgid "Insert"
+msgstr "Infoga"
+
+msgctxt "menu"
+msgid "Delete"
+msgstr "Ta bort"
+
+msgctxt "menu"
+msgid "Number"
+msgstr "Tal"
+
+msgctxt "menu"
+msgid "Width"
+msgstr "Bredd"
+
+msgctxt "menu"
+msgid "Sort"
+msgstr "Sortera"
+
+msgctxt "menu"
+msgid "Extend"
+msgstr "Fyll ut"
+
+msgctxt "menu"
+msgid "Undo"
+msgstr "Ångra"
+
+msgctxt "menu"
+msgid "Redo"
+msgstr "Gör om"
+
+msgctxt "menu"
+msgid "Goto"
+msgstr "Gå"
+
+msgctxt "menu"
+msgid "Find"
+msgstr "Sök"
+
+msgctxt "menu"
+msgid "Chart"
+msgstr "Diagram"
+
+msgctxt "menu"
+msgid "Help"
+msgstr "Hjälp"
+
+msgctxt "menu"
+msgid "Rows"
+msgstr "Rader"
+
+msgctxt "menu"
+msgid "Columns"
+msgstr "Kolumner"
+
+msgctxt "menu"
+msgid "Ascending"
+msgstr "Stigande"
+
+msgctxt "menu"
+msgid "Descending"
+msgstr "Fallande"
+
+msgctxt "menu"
+msgid "Down"
+msgstr "Ned"
+
+msgctxt "menu"
+msgid "Right"
+msgstr "Höger"
+
+msgid "Insert:"
+msgstr "Infoga:"
+
+msgid "Delete:"
+msgstr "Ta bort:"
+
+msgid "Sort:"
+msgstr "Sortera:"
+
+msgid "Extend:"
+msgstr "Fyll ut:"

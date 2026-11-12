@@ -1,0 +1,115 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: Zeitlos ask\n"
+"Language: pl\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=3; plural=(n==1 ? 0 : n%10>=2 && n%10<=4 && (n%100<10 || n%100>=20) ? 1 : 2);\n"
+
+msgid "No passage here answers"
+msgstr "Żaden fragment tu nie odpowiada"
+
+msgid "that."
+msgstr "na to."
+
+msgid "could not start read"
+msgstr "nie udało się uruchomić read"
+
+#, c-format
+msgid "%u passage, "
+msgid_plural "%u passages, "
+msgstr[0] "%u fragment, "
+msgstr[1] "%u fragmenty, "
+msgstr[2] "%u fragmentów, "
+
+#, c-format
+msgid "%u pack"
+msgid_plural "%u packs"
+msgstr[0] "%u pakiet"
+msgstr[1] "%u pakiety"
+msgstr[2] "%u pakietów"
+
+msgid ", ranking weaker"
+msgstr ", słabszy ranking"
+
+msgid "  ^U clears"
+msgstr "  ^U czyści"
+
+msgid "searching...  Esc cancels"
+msgstr "szukanie...  Esc anuluje"
+
+#, c-format
+msgid "searching %u%%  Esc cancels"
+msgstr "szukanie %u%%  Esc anuluje"
+
+msgid "Loading..., then search"
+msgstr "Wczytywanie..., potem szukanie"
+
+msgid "Loading...  Esc stops"
+msgstr "Wczytywanie...  Esc przerywa"
+
+#, c-format
+msgid "Loading %s %u%%, then search"
+msgstr "Wczytywanie: %s %u%%, potem szukanie"
+
+#, c-format
+msgid "Loading %s %u%%  Esc stops"
+msgstr "Wczytywanie: %s %u%%  Esc przerywa"
+
+msgid "no packs loaded -- nothing to search"
+msgstr "brak wczytanych pakietów -- nie ma czego szukać"
+
+msgid "path too long to open"
+msgstr "ścieżka za długa do otwarcia"
+
+msgid "loading stopped -- no packs loaded"
+msgstr "wczytywanie przerwane -- brak pakietów"
+
+#, c-format
+msgid "loading stopped, %u pack loaded"
+msgid_plural "loading stopped, %u packs loaded"
+msgstr[0] "wczytywanie przerwane, wczytano %u pakiet"
+msgstr[1] "wczytywanie przerwane, wczytano %u pakiety"
+msgstr[2] "wczytywanie przerwane, wczytano %u pakietów"
+
+#, c-format
+msgid " (%u pack failed)"
+msgid_plural " (%u packs failed)"
+msgstr[0] " (%u pakiet nieudany)"
+msgstr[1] " (%u pakiety nieudane)"
+msgstr[2] " (%u pakietów nieudanych)"
+
+msgid ""
+"Finds passages in the datasets on the card that answer a question, and opens them in read.\n"
+"\n"
+"Enter\tSearch; again: open the selection\n"
+"Up/Down\tSelect a result\n"
+"1-9\tOpen that result\n"
+"Esc\tStop loading, cancel a search, or clear\n"
+"Ctrl+U\tClear the line\n"
+"Ctrl+W\tDelete a word\n"
+"Ctrl+Q\tQuit\n"
+"\n"
+"Type a question and press Enter. Click a result to open it, or a pack button to browse its index.\n"
+"\n"
+"Typing works while the packs load; Enter then searches once they are in."
+msgstr ""
+"Znajduje w zbiorach danych na karcie fragmenty, które odpowiadają na pytanie, i otwiera je w read.\n"
+"\n"
+"Enter\tSzukaj; ponownie: otwórz zaznaczenie\n"
+"Góra/Dół\tWybierz wynik\n"
+"1-9\tOtwórz ten wynik\n"
+"Esc\tPrzerwij wczytywanie, anuluj szukanie lub wyczyść\n"
+"Ctrl+U\tWyczyść wiersz\n"
+"Ctrl+W\tUsuń słowo\n"
+"Ctrl+Q\tZakończ\n"
+"\n"
+"Wpisz pytanie i naciśnij Enter. Kliknij wynik, by go otworzyć, lub przycisk pakietu, by przejrzeć jego indeks.\n"
+"\n"
+"Można pisać, gdy pakiety się wczytują; Enter szuka, gdy będą gotowe."
+
+msgid "Ask help"
+msgstr "Pomoc ask"
+
+msgid "cancelled"
+msgstr "anulowano"
