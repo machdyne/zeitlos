@@ -185,12 +185,25 @@ static int io_rename(void *c, const char *a, const char *b) {
 	}
 }
 
+// UPD_OK when the folder is there afterwards, however it came to be;
+// UPD_EEXIST when a file has its name; UPD_ERR when the card refused.
 static int io_mkdir(void *c, const char *p) {
 	(void)c;
 	z_fs_info_t fi;
-	if (fs_stat(p, &fi))
-		return (fi.type == Z_FS_TYPE_DIR || (fi.attr & Z_FS_ATTR_DIR)) ? UPD_OK : UPD_ERR;
+	if (fs_stat(p, &fi)) {
+		if (!(fi.type == Z_FS_TYPE_DIR || (fi.attr & Z_FS_ATTR_DIR))) return UPD_EEXIST;
+		// Read-only: a folder only in flash (/data/wm, with wm's wm.cfg)
+		// -- there for reading, but not on the card, where what goes
+		// into it is written. Made there. (The fs server does this too,
+		// since; a machine with an older one needs it done here.)
+		if (fi.attr & Z_FS_ATTR_RDONLY) fs_mkdir(p);
+		return UPD_OK;
+	}
 	if (fs_mkdir(p)) return UPD_OK;
+	// refused -- but it may be there now (made meanwhile, or a stat
+	// that missed it), and that is all that was wanted
+	if (fs_stat(p, &fi) && (fi.type == Z_FS_TYPE_DIR || (fi.attr & Z_FS_ATTR_DIR))) return UPD_OK;
+	printf("update: mkdir %s refused%s\n", p, fs_stat(p, &fi) ? ", though it is there" : "");
 	return UPD_ERR;
 }
 

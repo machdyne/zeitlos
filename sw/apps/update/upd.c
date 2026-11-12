@@ -656,8 +656,14 @@ static int mkdir_parents(const char *path) {
 		if (i < n && b[i] != '/') continue;
 		char c = b[i];
 		b[i] = 0;
-		if (io->mkdir(io->ctx, b) != UPD_OK) {
-			say("update: cannot make the folder %s\n", b);
+		int r = io->mkdir(io->ctx, b);
+		if (r != UPD_OK) {
+			// why, as far as can be told
+			uint32_t kb = 0;
+			const char *why = r == UPD_EEXIST ? "a file has that name" :
+				io->free_kb(io->ctx, &kb) == UPD_OK && kb < 64 ? "the card is full" :
+				"the card refused it";
+			say("update: cannot make the folder %s: %s\n", b, why);
 			return UPD_ERR;
 		}
 		b[i] = c;

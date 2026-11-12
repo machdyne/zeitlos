@@ -329,6 +329,28 @@ static bool zar_isdir(const char *path) {
 	return z_zar(&a) == Z_OK;
 }
 
+// A folder that is only in flash -- the core apps' data, /data/wm with
+// its wm.cfg, docs/flash_apps.md -- has nothing on the card to make
+// things in. Before a folder is made at `path` (a path the underlay
+// applies to, so real == rq->path), each such folder above it is made
+// on the card. Only folders, made on purpose (update makes
+// /data/wm/lang): a file written into a folder only in flash still
+// fails, as it always has. And only those: a missing folder that flash
+// does not have either stays missing.
+// `p`: FS_PATH bytes to work in -- the caller's resolve() buffer, free
+// when the path resolved to itself.
+static void card_parents(const char *path, char *p) {
+	size_t n = strlen(path);
+	if (n >= FS_PATH) return;
+	memcpy(p, path, n + 1);
+	for (size_t i = 1; i < n; i++) {
+		if (p[i] != '/') continue;
+		p[i] = 0;
+		if (f_stat(p, &fno) != FR_OK && zar_isdir(p)) f_mkdir(p);
+		p[i] = '/';
+	}
+}
+
 static bool zar_read(uint32_t off, void *buf, uint32_t n) {
 	z_zar_args_t a;
 	if (!n) return true;
@@ -1507,6 +1529,7 @@ static int32_t serve(const z_fsreq_t *rq, uint32_t pid, uint8_t *buf,
 		if (nfs_path(rq->path)) return -Z_EROFS;
 		if (!(real = resolve(rq->path, rb, sizeof rb))) return -Z_ENAMETOOLONG;
 		need(real);
+		if (real == rq->path) card_parents(real, rb);	// a folder only in flash
 		return fs_err(f_mkdir(real));
 	case Z_FSOP_RENAME:		return op_rename(rq, pid);
 	case Z_FSOP_OPENDIR:	return op_opendir(rq, pid, c);

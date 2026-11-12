@@ -755,8 +755,8 @@ static void test_shipped(const char *cfg_path, const char *zic_path) {
 
 	// The wide row: 12 apps and the Network, Sound, Tools, Games and
 	// More apps groups -- 17, the dock's width. More apps holds colwin
-	// and @rest: here settings, which no group names, and view and
-	// convert, whose group (Work) the wide row does not show.
+	// and @rest: here view and convert, whose group (Work) the wide row
+	// does not show. settings is in Tools.
 	static const char *const row[] = {
 		"term", "files", "text", "read", "sheet", "slide", "draw", "learn",
 		"ask", "calc", "cal", "clock", "net", "sound", "tools", "games", "misc",
@@ -770,16 +770,16 @@ static void test_shipped(const char *cfg_path, const char *zic_path) {
 	CHECK_EQ(dk.nviews, 5);
 	CHECK_EQ(dk.views[0].count, 2);			// web irc
 	CHECK_EQ(dk.views[1].count, 3);			// play track midi
-	CHECK_EQ(dk.views[2].count, 7);			// backup info keyboard hex basic mmod pix
+	CHECK_EQ(dk.views[2].count, 8);			// settings backup info keyboard hex basic mmod pix
 	CHECK_EQ(dk.views[3].count, 13);			// the games and planedemo (gldemo, gpu3d: the launcher's)
-	CHECK_EQ(dk.views[4].count, 4);			// colwin, and @rest: convert settings view
+	CHECK_EQ(dk.views[4].count, 3);			// colwin, and @rest: convert view
 	{
 		uint8_t keep[DK_ITEMS_MAX];
 		memset(keep, 1, sizeof(keep));
 		n = dk_keep(it, keep, &dk);
 		CHECK_EQ(dk.nmain, 17);			// More apps has something: kept
 		CHECK_EQ(dk.nviews, 5);
-		CHECK_EQ(n, 17 + 2 + 3 + 7 + 13 + 4);
+		CHECK_EQ(n, 17 + 2 + 3 + 8 + 13 + 3);
 		int apps = 0;
 		for (int i = 0; i < n; i++) if (it[i].view < 0) apps++;
 		CHECK_EQ(apps, 41);

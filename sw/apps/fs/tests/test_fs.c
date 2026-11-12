@@ -569,6 +569,19 @@ static void test_flash(void) {
 	CHECK(fs_unlink("/apps/wm") == 1);
 	// no /docs on the card: a write there fails rather than landing in flash
 	CHECK(fs_write_file("/docs/mine.txt", "x", 1) == 0);
+	// but a folder made in it is made on the card, with /docs (flash's)
+	// made there first: update making /data/wm/lang where only wm.cfg,
+	// in flash, had /data/wm
+	CHECK(zfs_stat("/docs", &fi) == 0 && (fi.attr & Z_FS_ATTR_RDONLY));
+	CHECK(zfs_mkdir("/docs/lang") == 0);
+	CHECK(zfs_stat("/docs", &fi) == 0 && !(fi.attr & Z_FS_ATTR_RDONLY) && fi.type == Z_FS_TYPE_DIR);
+	CHECK(zfs_stat("/docs/lang", &fi) == 0 && fi.type == Z_FS_TYPE_DIR);
+	CHECK(zfs_stat("/docs/welcome.txt", &fi) == 0 && (fi.attr & Z_FS_ATTR_RDONLY));	// still flash's
+	CHECK(fs_write_file("/docs/lang/de.zlc", "x", 1) == 1);
+	n = listing("/docs", names, types, 64);
+	CHECK(find(names, n, "lang") >= 0 && find(names, n, "welcome.txt") >= 0);
+	// a folder under one flash does not have either: still no
+	CHECK(zfs_mkdir("/nowhere/lang") != 0);
 }
 
 static void test_bulk(bool grant) {

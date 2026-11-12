@@ -1029,13 +1029,17 @@ ZAR_APPS = $(filter-out $(CORE_APPS_OMIT),$(CORE_APPS))
 # each down to about a kilobyte or two over what they are; read and
 # keyboard keep theirs, for when they are translated. Core flash is
 # now full: the next core app to grow needs something else to give.
+# November 2026, a folder only in flash (/data/wm, with wm.cfg) made on
+# the card when something is created in it (fs.c, card_parents(): the
+# Languages set's /data/wm/lang could not be made): fs +224 bytes of
+# RAM on the small build, 256 from the small RAM rule's spare.
 # November 2026, choosing a language at first run (welcome's Language
 # step, docs/i18n.md): welcome +1.3K flash and +1.4K RAM. Paid from
 # keyboard's room (36,481 bytes of 38K) and usb's (35,270 of 36K): 1K each.
 CORE_BUDGETS_NORMAL = fs=35K/80K usb=35K/60K wm=84K/168K net=103K/296K term=65K/144K \
 	console=9K/13K cron=17920/48K text=90K/220K files=70144/146K repl=123K/314K \
 	welcome=47K/82K read=70K/214K keyboard=37K/66K
-CORE_BUDGETS_SMALL = fs=36K/77056 usb=35K/53504 wm=84K/151K net=104K/287K term=62K/138K \
+CORE_BUDGETS_SMALL = fs=36K/77312 usb=35K/53504 wm=84K/151K net=104K/287K term=62K/138K \
 	console=10K/12544 cron=18K/48K text=88K/212K files=66K/138K repl=124K/308K \
 	welcome=42K/76K read=70K/210K keyboard=38K/64K
 CORE_RESERVE = 60K

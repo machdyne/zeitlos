@@ -497,7 +497,7 @@ int main(int argc, char **argv) {
 	set_cfg(cfg_shipped);
 	dock_build();
 	expect(find_app("sound") < 0 && dock_nmain == 16, "Sound left with nothing: gone from the row");
-	expect(dock_views[dock_apps[find_app("tools")].view].count == 6, "Tools without mmod");
+	expect(dock_views[dock_apps[find_app("tools")].view].count == 7, "Tools without mmod (settings and six)");
 	expect(find_app("track") < 0 && find_app("mmod") < 0, "the apps gone");
 	hardware(true, true);
 
