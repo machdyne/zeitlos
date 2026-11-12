@@ -26,6 +26,7 @@ with [welcome](welcome.md); to program it, [kernel](kernel.md) and
 | [zconfig](zconfig.md) | `make config`: the system configurator, with LUT and block-RAM estimates |
 | [update](update.md) | Bringing a card up to date over the network: sets, signed releases, the ABI check |
 | [freeze](freeze.md) | 1.0: freezing the interfaces -- what is frozen, the rules after, what to fix first (a plan) |
+| [ci](ci.md) | What GitHub checks: every push, and weekly |
 | [distribution](distribution.md) | Publishing releases of your own: name, URL, signing keys |
 | [dfu\_upgrade](dfu_upgrade.md) | Upgrading the DFU bootloader |
 | [config](config.md) | `/sys/zeitlos.cfg` |
@@ -112,6 +113,7 @@ with [welcome](welcome.md); to program it, [kernel](kernel.md) and
 | [rescue\_console](rescue_console.md) | The kernel shell on the monitor and USB keyboard, when the desktop is gone |
 | [cron](cron.md) | Scheduled programs |
 | [backup](backup.md) | Dated backups of your files on a second drive, and getting any version back: a command, a window, and watch (each save backed up on its own while the window is open) |
+| [screen](screen.md) | The screen's size: ask for it, never assume 640x480 |
 | [user\_input](user_input.md) | Keyboard and mouse |
 | [keyboard\_layouts](keyboard_layouts.md) | 22 layouts and Japanese input |
 | [line\_editing](line_editing.md) | Shared line editor |

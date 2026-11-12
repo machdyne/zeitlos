@@ -19,6 +19,7 @@
 #   version 0.0.7
 #   snapshot 3f2a9c01e4b7
 #   abi 03a25f4cbf544cf0
+#   abi_level 0
 #   source v0.0.6-45-g58e067a-dirty
 #   made 2026-10-19T09:40:12Z
 #   packs arkmed
@@ -95,6 +96,12 @@
 # when the tree has a zabi.h; a manifest without one says nothing about
 # its ABI, and `update` treats it like a kernel that cannot say.
 #
+# `abi_level` beside it: the ABI level the files were built at
+# (`Z_ABI_LEVEL`, sw/common/zexec.h; docs/executables.md, "The ABI
+# level"), which every program's header also carries. `update` shows it
+# beside the kernel's, and says plainly when the release needs a newer
+# flash. A header line again: older readers skip it.
+#
 # -- format 4: sets --
 #
 # A set is a label on a file (docs/update.md, "Sets"): each `f` line
@@ -169,6 +176,12 @@ class Manifest(object):
     @property
     def abi(self):
         return self.header.get("abi", "")
+
+    @property
+    def abi_level(self):
+        """The ABI level, or None when the manifest does not say."""
+        v = self.header.get("abi_level", "")
+        return int(v) if v.isdigit() else None
 
 
 def sha256_file(path):
@@ -340,8 +353,23 @@ def read_abi(root):
     return m.group(1) if m else ""
 
 
+LEVEL_H = os.path.join("sw", "common", "zexec.h")
+LEVEL_RE = re.compile(r"^#define\s+Z_ABI_LEVEL\s+(\d+)", re.M)
+
+
+def read_abi_level(root):
+    """The ABI level sw/common/zexec.h says (mkexec.py writes the same
+    into every program), or None when the tree predates it."""
+    try:
+        with open(os.path.join(root, LEVEL_H), encoding="utf-8") as f:
+            m = LEVEL_RE.search(f.read())
+    except OSError:
+        return None
+    return int(m.group(1)) if m else None
+
+
 def make(pl, name, version, source, packs=(), made=None, abi="",
-         sets=None, installed=None):
+         sets=None, installed=None, abi_level=None):
     """A manifest for a mkfatimg.Plan. Hashes every file. `sets`: the
     [(name, title, description)] offered (a release); `installed`: the
     set names a card has (an image)."""
@@ -352,11 +380,11 @@ def make(pl, name, version, source, packs=(), made=None, abi="",
                       pl.set_of[dest]))
     dirs = [d.strip("/") for d in pl.dirs]
     return build(name, version, source, dirs, files, packs=packs, made=made,
-                 abi=abi, sets=sets, installed=installed)
+                 abi=abi, sets=sets, installed=installed, abi_level=abi_level)
 
 
 def build(name, version, source, dirs, files, packs=(), made=None, abi="",
-          sets=None, installed=None):
+          sets=None, installed=None, abi_level=None):
     """files: (path, sha256, size, policy, crc32[, set]); a file without a
     set is in `base`."""
     files = [tuple(f) if len(f) >= 6 else tuple(f) + ("base",) for f in files]
@@ -394,13 +422,14 @@ def build(name, version, source, dirs, files, packs=(), made=None, abi="",
         "version": version,
         "snapshot": snapshot_id(dirs, files),
         "abi": abi,
+        "abi_level": "" if abi_level is None else str(int(abi_level)),
         "source": source or "unknown",
         "made": made,
         "packs": " ".join(packs),
     }
     head = ["%s %d" % (MAGIC, FORMAT)]
-    for k in ("name", "version", "snapshot", "abi", "source", "made", "packs"):
-        if k == "abi" and not abi:
+    for k in ("name", "version", "snapshot", "abi", "abi_level", "source", "made", "packs"):
+        if k in ("abi", "abi_level") and not m.header[k]:
             continue
         head.append(("%s %s" % (k, m.header[k])).rstrip())
     for sname, title, desc in m.sets:

@@ -80,6 +80,7 @@ def lay_out(files, dest):
 
 
 ABI = "0123456789abcdef"     # the fixture's ABI id (test_update.c, FX_ABI)
+ABI2 = "1111222233334444"    # v2lvl's: another id, at ABI level 1
 
 
 SETS1 = [("base", "Base", "the shell and documents"),
@@ -109,7 +110,7 @@ S2 = {
 
 
 def publish(name, files, src, st, latest, abi="", sets=None,
-            made="2026-10-19T12:00:00Z", keys=(K1,)):
+            made="2026-10-19T12:00:00Z", keys=(K1,), abi_level=None):
     entries, sources = [], {}
     for path, v in files.items():
         pol, data = v[0], v[1]
@@ -118,7 +119,7 @@ def publish(name, files, src, st, latest, abi="", sets=None,
         entries.append((path, sha, len(data), pol, crc) + tuple(v[2:3]))
         sources[sha] = p
     m = mf.build(name, "0.0.7", "fixture", ["home"], entries,
-                 made=made, abi=abi, sets=sets)
+                 made=made, abi=abi, sets=sets, abi_level=abi_level)
     store.publish(st, m, sources, latest=latest)
     if keys:
         store.sign(st, name, list(keys))
@@ -149,6 +150,9 @@ def main():
             # v2 again, saying which ABI it was built for (docs/update.md,
             # "ABI"); v1 and v2 say nothing, as releases before it.
             publish("v2abi", files, src, st, latest=False, abi=ABI)
+            # and built at a later ABI level than the test's kernel's 0
+            # (docs/executables.md, "The ABI level")
+            publish("v2lvl", files, src, st, latest=False, abi=ABI2, abi_level=1)
             # The same release as round 1 published it: format 2, raw
             # objects -- a store not yet republished.
             st2 = os.path.join(out, "store2")

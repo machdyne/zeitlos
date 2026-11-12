@@ -50,8 +50,12 @@ static void test_decide(void) {
 		"14 is over the cap");
 	CHECK(z_exec_stack(15, DEF, CAP, &n) == Z_EXEC_STACK_IS_RESERVED &&
 		n == 0, "15 is reserved");
-	CHECK(z_exec_stack(0x0010, DEF, CAP, &n) == Z_EXEC_STACK_BAD_FLAGS &&
-		n == 0, "bit 4 is reserved");
+	CHECK(z_exec_stack(0x0010, DEF, CAP, &n) == Z_EXEC_STACK_OK &&
+		n == DEF, "bits 7:4 are the ABI level, not the stack");
+	CHECK(z_exec_stack(0x00f3, DEF, CAP, &n) == Z_EXEC_STACK_OK &&
+		n == 32 * KB, "a level of 15 leaves the code alone");
+	CHECK(z_exec_stack(0x0200, DEF, CAP, &n) == Z_EXEC_STACK_BAD_FLAGS &&
+		n == 0, "bit 9 is reserved");
 	CHECK(z_exec_stack(0x8003, DEF, CAP, &n) == Z_EXEC_STACK_OK &&
 		n == 32 * KB, "bit 15 is DRIVER, and the code still counts");
 	CHECK(z_exec_stack(0x4003, DEF, CAP, &n) == Z_EXEC_STACK_BAD_FLAGS,
@@ -75,8 +79,17 @@ static void test_parse(void) {
 		xi.flags == 0, "a raw binary does not ask");
 }
 
+static void test_abi(void) {
+	CHECK(z_exec_abi(0x0000) == 0, "no level is level 0");
+	CHECK(z_exec_abi(0x0013) == 1 && z_exec_abi(0x81a3) == 10,
+		"the level is bits 7:4, whatever else is set");
+	CHECK(z_exec_abi(0x00f0) == 15, "15 is the last level ZEXE version 1 holds");
+	CHECK(Z_ABI_LEVEL <= 15, "the tree's level fits");
+}
+
 int main(void) {
 	test_table();
+	test_abi();
 	test_decide();
 	test_parse();
 	printf("test_zexec: %d checks, %d failed\n", run, failed);

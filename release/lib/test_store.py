@@ -137,6 +137,14 @@ def test_manifest():
            "an abi that is not hex is refused")
     tree_abi = mf.read_abi(ROOT)
     check(len(tree_abi) == 16, "read_abi() reads the tree's sw/common/zabi.h")
+    # abi_level beside it (docs/executables.md, "The ABI level")
+    ml = mf.build("v0.0.7", "0.0.7", "abc", ["home"], files,
+                  made="2026-10-19T00:00:00Z", abi="03a25f4cbf544cf0", abi_level=2)
+    check("\nabi 03a25f4cbf544cf0\nabi_level 2\n" in ml.text and mf.parse(ml.text).abi_level == 2
+          and ml.id == m.id, "the abi_level line is written after abi, read back, and not in the id")
+    check(mf.parse(ma.text).abi_level is None and "abi_level" not in ma.text,
+          "without a level there is no line, and it reads as None")
+    check(mf.read_abi_level(ROOT) == 0, "read_abi_level() reads the tree's Z_ABI_LEVEL (0)")
     vt = mf.version_text(m)
     check(vt.startswith("zeitlos 0.0.7\nsnapshot v0.0.7 %s " % m.id),
           "/sys/version: the old first line, then the snapshot")

@@ -69,12 +69,55 @@ static int32_t days_from_civil(int32_t y, uint32_t m, uint32_t d) {
 
 }
 
+static void tm_from_days(int32_t days, uint32_t sod, z_tm_t *tm);
+
 void z_time_to_tm(uint32_t t, z_tm_t *tm) {
 
 	if (!tm) return;
+	tm_from_days((int32_t)(t / Z_SECS_PER_DAY), t % Z_SECS_PER_DAY, tm);
 
-	uint32_t days = t / Z_SECS_PER_DAY;
-	uint32_t sod = t % Z_SECS_PER_DAY;
+}
+
+// t / d for a non-negative 64-bit t and a 32-bit d, shift and subtract:
+// no __udivdi3 (libgcc's, ~1.5KB), which apps built with ZFMT_NO64 are
+// careful not to link for printf's sake.
+static uint64_t udiv64(uint64_t t, uint32_t d, uint32_t *rem) {
+	uint64_t q = 0, r = 0;
+	for (int i = 63; i >= 0; i--) {
+		r = (r << 1) | ((t >> i) & 1u);
+		if (r >= d) { r -= d; q |= (uint64_t)1 << i; }
+	}
+	if (rem) *rem = (uint32_t)r;
+	return q;
+}
+
+void z_time_to_tm64(int64_t t, z_tm_t *tm) {
+
+	if (!tm) return;
+	uint32_t sod;
+	int64_t days;
+	if (t >= 0) {
+		days = (int64_t)udiv64((uint64_t)t, Z_SECS_PER_DAY, &sod);
+	} else {
+		// floor, so a second before 1970 is 23:59:59 on the day before
+		uint64_t q = udiv64((uint64_t)(-(t + 1)), Z_SECS_PER_DAY, &sod);
+		days = -(int64_t)q - 1;
+		sod = Z_SECS_PER_DAY - 1 - sod;
+	}
+	tm_from_days((int32_t)days, sod, tm);
+
+}
+
+int64_t z_tm_to_time64(const z_tm_t *tm) {
+
+	if (!tm) return 0;
+	int64_t days = days_from_civil(tm->year, tm->month, tm->day);
+	return days * Z_SECS_PER_DAY + (int64_t)tm->hour * Z_SECS_PER_HOUR +
+		(int64_t)tm->min * Z_SECS_PER_MIN + (int64_t)tm->sec;
+
+}
+
+static void tm_from_days(int32_t days, uint32_t sod, z_tm_t *tm) {
 
 	tm->hour = (uint8_t)(sod / Z_SECS_PER_HOUR);
 	tm->min = (uint8_t)((sod % Z_SECS_PER_HOUR) / Z_SECS_PER_MIN);
@@ -82,7 +125,7 @@ void z_time_to_tm(uint32_t t, z_tm_t *tm) {
 
 	// 1970-01-01 was a Thursday, hence the +4 before reducing mod 7
 	// with Sunday as 0.
-	tm->wday = (uint8_t)((days + 4) % 7);
+	tm->wday = (uint8_t)(((days + 4) % 7 + 7) % 7);
 
 	// -- civil_from_days --
 
@@ -108,8 +151,7 @@ void z_time_to_tm(uint32_t t, z_tm_t *tm) {
 	// yday wants the ordinary January-based year, so it is easier to
 	// derive from the finished date than to carry through the shifted
 	// arithmetic above.
-	tm->yday = (uint16_t)((int32_t)days -
-		days_from_civil(tm->year, 1, 1));
+	tm->yday = (uint16_t)(days - days_from_civil(tm->year, 1, 1));
 
 }
 

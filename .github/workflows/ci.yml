@@ -1,0 +1,141 @@
+# Every push and pull request (docs/ci.md): the software built for
+# Lakritz, both sizes of core archive held to their budgets, the ABI
+# fingerprint checked, every host test, and the whole system booted
+# in the emulator (sim/sys, zsys) -- desktop, input, touch. No FPGA
+# tools: gateware is .github/workflows/weekly.yml's.
+
+name: ci
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # The RISC-V toolchain the tree's budgets are set with (docs/build.md)
+  XPACK_VERSION: "15.2.0-1"
+  PREFIX: /opt/xpack/xpack-riscv-none-elf-gcc-15.2.0-1/bin/riscv-none-elf-
+  RISCV_PREFIX: /opt/xpack/xpack-riscv-none-elf-gcc-15.2.0-1/bin/riscv-none-elf-
+
+jobs:
+
+  # -- the software, and the system running in the emulator --
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Toolchain (cached)
+        id: xpack
+        uses: actions/cache@v4
+        with:
+          path: /opt/xpack
+          key: xpack-riscv-${{ env.XPACK_VERSION }}
+
+      - name: Toolchain (download)
+        if: steps.xpack.outputs.cache-hit != 'true'
+        run: |
+          sudo mkdir -p /opt/xpack && sudo chown "$USER" /opt/xpack
+          curl -sSL -o /tmp/xpack.tgz \
+            "https://github.com/xpack-dev-tools/riscv-none-elf-gcc-xpack/releases/download/v${XPACK_VERSION}/xpack-riscv-none-elf-gcc-${XPACK_VERSION}-linux-x64.tar.gz"
+          tar -C /opt/xpack -xzf /tmp/xpack.tgz
+
+      - name: Host packages
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq dosfstools mtools python3-pil python3-numpy libsdl2-dev
+
+      - name: Kernel, BIOS and every app (Lakritz)
+        run: make BOARD=lakritz PREFIX="$PREFIX" RISCV_PREFIX="$RISCV_PREFIX" os bios apps -j"$(nproc)"
+
+      - name: The ABI fingerprint is up to date
+        run: python3 tools/gen_abi.py --check
+
+      - name: Core archives, both sizes of machine, within their budgets
+        # Obst first (CORE_TIER small, built with Z_SMALL), then Lakritz,
+        # so the newest archive -- the one the emulator boots -- is a
+        # normal board's.
+        run: |
+          set -o pipefail
+          make BOARD=obst PREFIX="$PREFIX" output/obst/apps.zar | tee /tmp/zar-obst.txt
+          make BOARD=lakritz PREFIX="$PREFIX" output/lakritz/apps.zar | tee /tmp/zar-lakritz.txt
+          python3 -c "import sys; sys.path.insert(0, 'release/lib'); import spec; \
+            p = spec.check_core_budgets('.', 868352); print('\n'.join(p) or 'budgets: both tiers within their rules'); \
+            sys.exit(1 if p else 0)"
+
+      - name: Sizes (job summary)
+        if: always()
+        run: |
+          for b in lakritz obst; do
+            echo "### Core archive ($b)"
+            echo '```'
+            sed -n '/^mkzar:/,$p' "/tmp/zar-$b.txt" 2>/dev/null || echo "(not built)"
+            echo '```'
+          done >> "$GITHUB_STEP_SUMMARY"
+
+      - name: The emulator -- devices, boot, desktop, input, touch
+        run: make -C sim/sys test ZAR="$PWD/output/lakritz/apps.zar"
+
+      - name: Interface changes since the last release (a report, not a check)
+        if: always()
+        run: |
+          if [ -f release/abi/snapshot.txt ]; then
+            python3 tools/gen_abi.py --compare release/abi/snapshot.txt >> "$GITHUB_STEP_SUMMARY" || true
+          fi
+
+      - name: Logs and screenshots, on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: emulator-out
+          path: |
+            sim/sys/out/*.log
+            sim/sys/out/*.png
+          retention-days: 7
+
+  # -- every host test (tools/run_tests.py), the RTL simulations included --
+  host-tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Toolchain (cached)
+        id: xpack
+        uses: actions/cache@v4
+        with:
+          path: /opt/xpack
+          key: xpack-riscv-${{ env.XPACK_VERSION }}
+
+      - name: Toolchain (download)
+        if: steps.xpack.outputs.cache-hit != 'true'
+        run: |
+          sudo mkdir -p /opt/xpack && sudo chown "$USER" /opt/xpack
+          curl -sSL -o /tmp/xpack.tgz \
+            "https://github.com/xpack-dev-tools/riscv-none-elf-gcc-xpack/releases/download/v${XPACK_VERSION}/xpack-riscv-none-elf-gcc-${XPACK_VERSION}-linux-x64.tar.gz"
+          tar -C /opt/xpack -xzf /tmp/xpack.tgz
+
+      - name: Host packages
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq dosfstools mtools python3-pil python3-numpy libsdl2-dev iverilog
+
+      - name: Every host test, and the RTL simulations
+        run: python3 tools/run_tests.py --rtl
+
+      - name: Logs, on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-logs
+          path: output/tests/*.log
+          retention-days: 7

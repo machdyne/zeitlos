@@ -102,6 +102,39 @@ bool k_cfg_at(uint32_t index, const char **key, const char **val) {
 // default anyway.
 static void apply(bool verbose) {
 
+	// The screen size reported to apps (Z_SYS_SCREEN, docs/screen.md).
+	// For trying apps against another screen: the display itself stays
+	// 640x480. wm reads it as it starts, so a change needs a restart.
+	{
+		const char *ss = k_cfg_find("system.screen.size");
+		uint32_t w = 0, h = 0;
+		const char *p = ss;
+		if (p) {
+			while (*p >= '0' && *p <= '9') w = w * 10 + (uint32_t)(*p++ - '0');
+			if (*p == 'x' || *p == 'X') {
+				p++;
+				while (*p >= '0' && *p <= '9') h = h * 10 + (uint32_t)(*p++ - '0');
+			}
+			// 640x360 is the least a Zeitlos screen is: 640 wide, and
+			// 16:9 in today's VRAM (game mode's 320x240 is a mode, not
+			// the desktop)
+			if (*p || w < Z_SCREEN_MIN_W || h < Z_SCREEN_MIN_H ||
+				w > Z_SCREEN_MAX || h > Z_SCREEN_MAX) {
+				printf("cfg: system.screen.size: '%s' is not WxH between "
+					"640x360 and 4095x4095 -- ignored\n", ss);
+			} else {
+				k_screen_w = w;
+				k_screen_h = h;
+				if (verbose && (w != 640 || h != 480))
+					printf("cfg: system.screen.size: apps are told %lux%lu\n",
+						(unsigned long)w, (unsigned long)h);
+			}
+		} else {
+			k_screen_w = 640;
+			k_screen_h = 480;
+		}
+	}
+
 	const char *mode = k_cfg_find("system.video.mode");
 
 	if (mode) {

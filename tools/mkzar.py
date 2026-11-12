@@ -41,7 +41,7 @@ MAX_ENTRIES = 32          # keep in sync with Z_ZAR_MAX_ENTRIES
 FLAG_FILE = 1             # Z_ZAR_FILE
 
 EXEC_COMPRESSED = 0x0100  # Z_EXEC_FLAG_COMPRESSED, sw/common/zexec.h
-EXEC_KNOWN = 0x000F | EXEC_COMPRESSED | 0x8000   # Z_EXEC_FLAGS_KNOWN
+EXEC_KNOWN = 0x000F | 0x00F0 | EXEC_COMPRESSED | 0x8000   # Z_EXEC_FLAGS_KNOWN (stack, ABI level, ...)
 
 
 def lz4_compress(src, depth=48):

@@ -9,6 +9,7 @@
 # a comment, a reformat or a new helper function must not.
 
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -115,8 +116,58 @@ def main():
 		  "prototypes are not in it")
 	check("z_proc_serial_args_t" in text and "z_abi_args_t" in text,
 		  "the syscall argument structs are")
-	check("\n%d ABI\n" % (text.split("== sw/common/riscv-app.ld")[0].count("\n") - 2) in text,
-		  "the ABI syscall is last in syscalls.def")
+	check(re.search(r"\n\d+ ABI\n", text.split("== sw/common/riscv-app.ld")[0]) is not None,
+		  "the ABI syscall is in syscalls.def")
+
+	print("snapshots and --compare")
+	snapdir = tempfile.mkdtemp(prefix="abisnap-")
+	try:
+		snap = os.path.join(snapdir, "snap.txt")
+		sid = gen_abi.write_snapshot(snap)
+		rid, rtext = gen_abi.read_snapshot(snap)
+		check(sid == base and rid == base and rtext == text,
+			  "a snapshot holds the id and the reduced text")
+		check("nothing to report" in gen_abi.compare_report(snap),
+			  "compared with itself: nothing to report")
+
+		r = scratch()
+		try:
+			append(r, "sw/common/syscalls.def", "\nZ_MKSYSCALL(NEWONE, k_newone)\n")
+			edit(r, "sw/common/zproc.h", "uint32_t\tserial;", "uint32_t\tserial;\n\tuint32_t\textra;")
+			edit(r, "sw/common/zproc.h", "#define Z_ARENA_E_NOMEM\t\t(-2)", "#define Z_ARENA_E_NOMEM\t\t(-4)")
+			edit(r, "sw/common/zproc.h", "#define Z_TIME64_SET", "#define Z_TIME64_GONE")
+			added, changed, removed = gen_abi.compare(text, gen_abi.reduced(r))
+			names = lambda rows: [(k, n) for _f, k, n, _note in rows]
+			check(("syscall", "NEWONE") in names(added), "an appended syscall is added")
+			check(("#define", "Z_TIME64_GONE") in names(added) and
+				  ("#define", "Z_TIME64_SET") in names(removed), "a renamed #define: one removed, one added")
+			check(("#define", "Z_ARENA_E_NOMEM") in names(changed), "a #define's new value is a change")
+			grew = [note for _f, k, n, note in changed if n == "z_proc_serial_args_t"]
+			check(grew == ["grew at its end"], "a struct with a field appended grew at its end")
+			check(len(added) == 2 and len(changed) == 2 and len(removed) == 1,
+				  "and nothing else (%d, %d, %d)" % (len(added), len(changed), len(removed)))
+		finally:
+			shutil.rmtree(r)
+
+		r = scratch()
+		try:
+			edit(r, "sw/common/syscalls.def", "Z_MKSYSCALL(EXIT, ", "Z_MKSYSCALL(EXIT2, ")
+			added, changed, removed = gen_abi.compare(text, gen_abi.reduced(r))
+			check([n for _f, k, n, _x in removed] == ["EXIT"], "a renamed syscall: the old name is removed")
+		finally:
+			shutil.rmtree(r)
+
+		r = scratch()
+		try:
+			edit(r, "sw/common/zproc.h", "uint32_t\tpid;\t\t// IN\n\tuint32_t\tserial;",
+				 "uint32_t\tserial;\n\tuint32_t\tpid;\t\t// IN")
+			_a, changed, _r = gen_abi.compare(text, gen_abi.reduced(r))
+			check([(n, note) for _f, k, n, note in changed] == [("z_proc_serial_args_t", "")],
+				  "fields swapped: changed, and not said to have grown")
+		finally:
+			shutil.rmtree(r)
+	finally:
+		shutil.rmtree(snapdir)
 
 	if FAILS:
 		print("\n%d FAILED" % len(FAILS))

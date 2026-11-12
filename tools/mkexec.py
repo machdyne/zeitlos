@@ -77,6 +77,22 @@ def stack_code(text):
 # flags bit 15 (sw/common/zexec.h, Z_EXEC_FLAG_DRIVER)
 FLAG_DRIVER = 0x8000
 
+# flags bits 7:4: the ABI level the program is built for -- the tree's,
+# Z_ABI_LEVEL in sw/common/zexec.h (docs/freeze.md, "The ABI level")
+ABI_SHIFT = 4
+
+
+def abi_level():
+    import os, re
+    h = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "sw", "common", "zexec.h")
+    m = re.search(r"^#define\s+Z_ABI_LEVEL\s+(\d+)", open(h).read(), re.M)
+    if not m:
+        sys.exit("mkexec: no Z_ABI_LEVEL in sw/common/zexec.h")
+    level = int(m.group(1))
+    if not 0 <= level <= 15:
+        sys.exit(f"mkexec: Z_ABI_LEVEL {level} does not fit flags 7:4 -- a new ZEXE version")
+    return level
+
 
 def main():
     args = sys.argv[1:]
@@ -92,6 +108,7 @@ def main():
         sys.exit(f"mkexec: negative bss size ({bss}) -- check _end/_edata")
 
     flags = stack_code(stack) if stack else 0
+    flags |= abi_level() << ABI_SHIFT
     if driver:
         flags |= FLAG_DRIVER
 

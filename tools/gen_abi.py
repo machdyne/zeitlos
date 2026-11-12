@@ -44,6 +44,30 @@
 #   tools/gen_abi.py --check    exit 1, saying so, if zabi.h is stale
 #   tools/gen_abi.py --print    print the id the sources have
 #   tools/gen_abi.py --dump     print the reduced text that is hashed
+#   tools/gen_abi.py --snapshot FILE
+#                               write the reduced text, with its id, to
+#                               FILE: what a release's interfaces were
+#   tools/gen_abi.py --compare FILE
+#                               what changed since that snapshot, item
+#                               by item, as Markdown (CI puts it in the
+#                               job's summary). A report, not a check:
+#                               it exits 0 whatever it finds.
+#
+# --compare names each syscall, #define, typedef, struct and data
+# declaration, and sorts the differences:
+#
+#   added       new names: a program built before them does not use
+#               them, so it still runs (a syscall appended, a message
+#               added, a constant added)
+#   changed     the same name, another meaning: a renumbered syscall, a
+#               struct whose fields moved, a constant with a new value.
+#               A struct that only grew at its end is said to, since
+#               that is often (not always) compatible.
+#   removed     a name a program built before may use
+#
+# Whether a change breaks anything is still a person's call: a changed
+# constant may be one only the kernel reads. The report is there so the
+# call is made knowingly (docs/freeze.md, "Checking a change").
 
 import hashlib
 import os
@@ -278,6 +302,139 @@ def committed_id(root=ROOT):
 	return m.group(1) if m else None
 
 
+# -- snapshots and the comparison (--snapshot, --compare) --
+
+SNAP_MAGIC = "# zeitlos abi snapshot"
+
+
+def write_snapshot(path, root=ROOT):
+	text = reduced(root)
+	with open(path, "w", encoding="utf-8") as f:
+		f.write("%s %s\n" % (SNAP_MAGIC, hashlib.sha256(text.encode()).hexdigest()[:ID_LEN]))
+		f.write(text)
+	return abi_id(root)
+
+
+def read_snapshot(path):
+	"""(id, reduced text) of a snapshot file."""
+	with open(path, encoding="utf-8") as f:
+		first = f.readline()
+		rest = f.read()
+	if not first.startswith(SNAP_MAGIC):
+		raise AbiError("%s: not a snapshot (no '%s' line)" % (path, SNAP_MAGIC))
+	return first.split()[-1], rest
+
+
+def _item_key(path, line):
+	"""(kind, name) for one reduced line, or None when it names nothing
+	(the preprocessor's #if/#endif)."""
+	if path.endswith(".def"):
+		n, name = line.split(" ", 1)
+		return ("syscall", name)
+	if path.endswith(".ld"):
+		return ("linker script", "riscv-app.ld")
+	t = line.split()
+	if t[:2] == ["#", "define"] and len(t) > 2:
+		return ("#define", t[2])
+	if t and t[0] == "#":
+		return None
+	if t and t[-1] == ";":
+		if t[0] == "typedef":
+			# a function pointer: the name after "( *"
+			for i in range(len(t) - 2):
+				if t[i] == "(" and t[i + 1] == "*":
+					return ("typedef", t[i + 2])
+			return ("typedef", t[-2])
+		if t[0] in ("struct", "union", "enum") and len(t) > 2 and t[2] == "{":
+			return (t[0], t[1])
+		if t[0] == "extern":
+			return ("data", t[-2])
+	return ("declaration", line)
+
+
+def items(text):
+	"""{(file, kind, name): value} for a reduced text."""
+	out = {}
+	path = None
+	for line in text.split("\n"):
+		if line.startswith("== "):
+			path = line[3:].strip()
+			continue
+		if not line.strip() or path is None:
+			continue
+		k = _item_key(path, line)
+		if k is None:
+			continue
+		if k[0] == "syscall":
+			value = line.split(" ", 1)[0]
+		else:
+			value = line
+		key = (path,) + k
+		n = 2
+		while key in out:		# the same name twice: #if branches
+			key = (path, k[0], "%s (%d)" % (k[1], n))
+			n += 1
+		out[key] = value
+	return out
+
+
+def _grew_at_end(old, new):
+	"""A struct whose new body is its old one with fields added at the
+	end of its outermost braces."""
+	o, n = old.split(), new.split()
+	try:
+		oc = len(o) - 1 - o[::-1].index("}")
+		nc = len(n) - 1 - n[::-1].index("}")
+	except ValueError:
+		return False
+	return n[:oc] == o[:oc] and n[nc:] == o[oc:] and nc > oc
+
+
+def compare(old_text, new_text):
+	"""(added, changed, removed): lists of (file, kind, name, note)."""
+	a, b = items(old_text), items(new_text)
+	added, changed, removed = [], [], []
+	for k in sorted(b):
+		if k not in a:
+			added.append(k + ("",))
+		elif a[k] != b[k]:
+			if k[1] == "syscall":
+				note = "number %s, was %s" % (b[k], a[k])
+			elif _grew_at_end(a[k], b[k]):
+				note = "grew at its end"
+			else:
+				note = ""
+			changed.append(k + (note,))
+	for k in sorted(a):
+		if k not in b:
+			removed.append(k + ("",))
+	return added, changed, removed
+
+
+def compare_report(path, root=ROOT):
+	old_id, old_text = read_snapshot(path)
+	new_text = reduced(root)
+	new_id = hashlib.sha256(new_text.encode()).hexdigest()[:ID_LEN]
+	added, changed, removed = compare(old_text, new_text)
+	lines = ["### Interfaces since %s" % os.path.basename(path), ""]
+	if old_id == new_id:
+		lines.append("The same as the snapshot (%s): nothing to report." % new_id)
+		return "\n".join(lines) + "\n"
+	lines.append("Snapshot %s, now %s: %d added, %d changed, %d removed. "
+		"A report, not a verdict (tools/gen_abi.py, docs/freeze.md)."
+		% (old_id, new_id, len(added), len(changed), len(removed)))
+	for title, rows in (("Removed -- a program built before may use these", removed),
+			("Changed", changed), ("Added", added)):
+		if not rows:
+			continue
+		lines += ["", "**%s**" % title, ""]
+		for f, kind, name, note in rows:
+			if kind == "declaration" and len(name) > 70:
+				name = name[:67] + "..."
+			lines.append("- `%s` %s `%s`%s" % (f, kind, name, (" -- " + note) if note else ""))
+	return "\n".join(lines) + "\n"
+
+
 HEADER = """#ifndef ZABI_H
 #define ZABI_H
 
@@ -311,6 +468,15 @@ def main(argv):
 		if mode == "--dump":
 			sys.stdout.write(reduced())
 			return 0
+		if mode in ("--snapshot", "--compare"):
+			if len(argv) < 3:
+				sys.stderr.write("gen_abi: %s FILE\n" % mode)
+				return 2
+			if mode == "--snapshot":
+				print("gen_abi: %s written (%s)" % (argv[2], write_snapshot(argv[2])))
+			else:
+				sys.stdout.write(compare_report(argv[2]))
+			return 0
 		new = abi_id()
 		if mode == "--print":
 			print(new)
@@ -343,7 +509,7 @@ def main(argv):
 	except AbiError as e:
 		sys.stderr.write("gen_abi: %s\n" % e)
 		return 1
-	sys.stderr.write(__doc__ if __doc__ else "usage: gen_abi.py [--check|--print|--dump]\n")
+	sys.stderr.write(__doc__ if __doc__ else "usage: gen_abi.py [--check|--print|--dump|--snapshot FILE|--compare FILE]\n")
 	return 2
 
 

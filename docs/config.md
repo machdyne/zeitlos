@@ -80,6 +80,7 @@ travel with the card. `settings` edits them; see
 | `system.tts.rate` | `180` | `tts` | speech: words per minute, 80-450 |
 | `system.tts.volume` | `200` | `tts` | speech: volume, 0-255 |
 | `system.mouse.speed` | `16` | `wm` | USB host boards: pointer speed in sixteenths of the board's own, 1-63 -- 8 half, 32 double; set in `settings` (17 levels, 4 to 63), applied by the kernel at boot and on reload; absent is 16 ([user_input.md](user_input.md#pointer-speed)) |
+| `system.screen.size` | `640x480` | kernel | the screen size apps are told; for testing ([screen.md](screen.md)) |
 | `system.video.mode` | `white` | kernel | display colour, applied at boot and on reload |
 | `system.video.brightness` | `8` | kernel | HDMI/DVI monochrome brightness, 1-16, applied at boot and on reload |
 | `system.video.desktop_colour` | `yes` | `wm` | eight-plane colour boards: the desktop in four colours, accents on window frames and the dock ([color.md](color.md#desktop-colour)); Super+F10 switches until the next reload |
@@ -197,6 +198,15 @@ nothing usable in it means `us`.
 `wm` reads it at startup and again on the first key pressed after a
 reload. A reload keeps the layout in use if it is still on the list,
 so editing the list does not switch the keyboard mid-sentence.
+
+### `system.screen.size`
+
+`WxH`, from `640x360` (the least a screen will be: 16:9 in today's
+VRAM) to `4095x4095`: the size `z_screen_size()` reports, which apps
+lay themselves out against ([screen.md](screen.md)). **For testing**:
+the display stays 640x480, so 640x360 shows whether an app keeps to
+what it is told, and a larger size where it would go. wm reads it as it starts; restart to see
+a change.
 
 ### `system.video.mode`
 

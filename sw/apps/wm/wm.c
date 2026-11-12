@@ -52,8 +52,16 @@
 #include "win_icons.h"
 
 #define WM_MAX_WINDOWS    16
-#define WM_SCREEN_W       640
-#define WM_SCREEN_H       480
+// The screen wm lays the desktop out on: the size the system reports
+// (z_screen_size(), docs/screen.md), read once as wm starts. 640x480 on
+// every board today. NOT the framebuffer: VRAM's geometry -- the
+// accent plane's rows below the desktop, game mode's viewport, a
+// whole-screen clear -- is WM_FB_W/H, the framebuffer's (zgfx.h).
+static int wm_screen_w = 640, wm_screen_h = 480;
+#define WM_SCREEN_W       wm_screen_w
+#define WM_SCREEN_H       wm_screen_h
+#define WM_FB_W           Z_SCREEN_W
+#define WM_FB_H           Z_SCREEN_H
 // Long enough for a real page title. 24 truncated
 // "Wikipedia, the free encyclopedia" to "Wikipedia, the free enc",
 // which is exactly where a title stops being useful.
@@ -656,7 +664,7 @@ static void send_redraw_damage(uint32_t to, int idx) {
 // coordinates it already knows are valid.
 
 static void clear_screen(void) {
-	z_fb_hw_fill_rect(0, 0, WM_SCREEN_W, WM_SCREEN_H, 0);
+	z_fb_hw_fill_rect(0, 0, WM_FB_W, WM_FB_H, 0);
 }
 
 // -- the region wm's own chrome is confined to --
@@ -3753,11 +3761,11 @@ static bool acc_want_ack[WM_MAX_WINDOWS];
 // Fills of the accent plane: the region escaped, rows past 479 let in.
 static void acc_begin(void) {
 	z_gfx_clear_visible();
-	z_fb_set_rows(2 * WM_SCREEN_H);
+	z_fb_set_rows(2 * WM_FB_H);
 }
 
 static void acc_end(void) {
-	z_fb_set_rows(WM_SCREEN_H);
+	z_fb_set_rows(WM_FB_H);
 	wm_unclip();
 }
 
@@ -3766,7 +3774,7 @@ static void acc_end(void) {
 static void acc_rect(int x, int y, int w, int h, int v, const z_clip_t *reg, int n) {
 	if (w <= 0 || h <= 0) return;
 	if (n == 0) {
-		z_fb_hw_fill_rect(x, y + WM_SCREEN_H, w, h, v);
+		z_fb_hw_fill_rect(x, y + WM_FB_H, w, h, v);
 		return;
 	}
 	for (int i = 0; i < n; i++) {
@@ -3775,7 +3783,7 @@ static void acc_rect(int x, int y, int w, int h, int v, const z_clip_t *reg, int
 		int x1 = x + w - 1 < reg[i].x1 ? x + w - 1 : reg[i].x1;
 		int y1 = y + h - 1 < reg[i].y1 ? y + h - 1 : reg[i].y1;
 		if (x1 >= x0 && y1 >= y0)
-			z_fb_hw_fill_rect(x0, y0 + WM_SCREEN_H, x1 - x0 + 1, y1 - y0 + 1, v);
+			z_fb_hw_fill_rect(x0, y0 + WM_FB_H, x1 - x0 + 1, y1 - y0 + 1, v);
 	}
 }
 
@@ -3948,7 +3956,7 @@ static void acc_off(void) {
 // Taking the second sheet: from scratch, while COLWIN is still off.
 static void acc_on(void) {
 	acc_begin();
-	z_fb_hw_fill_rect(0, WM_SCREEN_H, WM_SCREEN_W, WM_SCREEN_H, 0);
+	z_fb_hw_fill_rect(0, WM_FB_H, WM_FB_W, WM_FB_H, 0);
 	acc_end();
 	acc_paint_all();
 	acc_palette();
@@ -4557,7 +4565,7 @@ static void alt_move_focused(uint32_t keysym) {
 // it is the one process that sees every keystroke before any app does.
 //
 // NOTHING ELSE IN THIS FILE KNOWS GAME MODE EXISTS, and that is the
-// point. WM_SCREEN_W/H stay 640x480, every window keeps its position,
+// point. WM_SCREEN_W/H stay as they are, every window keeps its position,
 // every clip rect and every repair region is unchanged, and the
 // framebuffer is untouched. Switching modes is not a resolution
 // change -- it moves a camera. So it cannot destroy a window or
@@ -4574,8 +4582,8 @@ static void alt_move_focused(uint32_t keysym) {
 // is not the safety net -- it is here so the wm's own idea of the
 // origin matches what is being displayed, since reading the register
 // back returns what was written rather than what was clamped.
-#define WM_VIEW_MAX_X (WM_SCREEN_W - Z_GAME_VIEW_W)
-#define WM_VIEW_MAX_Y (WM_SCREEN_H - Z_GAME_VIEW_H)
+#define WM_VIEW_MAX_X (WM_FB_W - Z_GAME_VIEW_W)
+#define WM_VIEW_MAX_Y (WM_FB_H - Z_GAME_VIEW_H)
 
 static int32_t view_x = 0;
 static int32_t view_y = 0;
@@ -4670,8 +4678,8 @@ static void game_toggle(void) {
 		// somewhere with nothing in it about as often as not; the
 		// middle is the position from which the least scrolling is
 		// needed to reach anything.
-		view_x = (WM_SCREEN_W - Z_GAME_VIEW_W) / 2;
-		view_y = (WM_SCREEN_H - Z_GAME_VIEW_H) / 2;
+		view_x = (WM_FB_W - Z_GAME_VIEW_W) / 2;
+		view_y = (WM_FB_H - Z_GAME_VIEW_H) / 2;
 		z_game_view_set_enabled(true, false);
 		view_apply();
 	} else {
@@ -5988,7 +5996,7 @@ static void lock_draw(void) {
 	int lh = z_font_5x8.h + 6, n;
 
 	z_gfx_clear_visible();
-	z_fb_hw_fill_rect(0, 0, WM_SCREEN_W, WM_SCREEN_H, 0);
+	z_fb_hw_fill_rect(0, 0, WM_FB_W, WM_FB_H, 0);
 	z_fb_hw_fill_rect(bx, by, LOCK_BOX_W, 1, 1);
 	z_fb_hw_fill_rect(bx, by + LOCK_BOX_H - 1, LOCK_BOX_W, 1, 1);
 	z_fb_hw_fill_rect(bx, by, 1, LOCK_BOX_H, 1);
@@ -6757,6 +6765,18 @@ static int create_window(uint32_t owner_pid, const char *title,
 
 	dock_count_due = true;		// a new copy of an app, usually
 
+	// Never larger than the screen (docs/screen.md): a window asked for
+	// at 640x480 on a 640x360 screen would have its bottom out of
+	// reach. The app is told the size it got, in the reply's rect.
+	if (w > (uint32_t)WM_SCREEN_W || h > (uint32_t)WM_SCREEN_H) {
+#ifndef Z_SMALL
+		printf("wm: '%s' asked for %lux%lu, larger than the screen\n",
+			title ? title : "", (unsigned long)w, (unsigned long)h);
+#endif
+		if (w > (uint32_t)WM_SCREEN_W) w = (uint32_t)WM_SCREEN_W;
+		if (h > (uint32_t)WM_SCREEN_H) h = (uint32_t)WM_SCREEN_H;
+	}
+
 	for (int i = 0; i < WM_MAX_WINDOWS; i++) {
 
 		if (windows[i].used) continue;
@@ -6855,6 +6875,12 @@ static int create_window(uint32_t owner_pid, const char *title,
 			dock_place_origin(&ox, &oy);
 			windows[i].x = (uint32_t)(ox + 20 + (int)(n % 8) * 24);
 			windows[i].y = (uint32_t)(oy + 20 + (int)(n % 8) * 20);
+			// and on the screen: a cascade that would run a window off
+			// its right or bottom edge brings it back in
+			if ((int)(windows[i].x + w) > WM_SCREEN_W)
+				windows[i].x = (uint32_t)(WM_SCREEN_W - (int)w);
+			if ((int)(windows[i].y + h) > WM_SCREEN_H)
+				windows[i].y = (uint32_t)(WM_SCREEN_H - (int)h);
 		}
 
 		if (title) {
@@ -8763,6 +8789,19 @@ int main(void) {
 
 	for (int i = 0; i < WM_MAX_WINDOWS; i++)
 		windows[i].used = false;
+
+	// The screen the desktop is laid out on, as the system reports it
+	// (docs/screen.md): read once. Never less than 640x360; anything
+	// but the framebuffer's 640x480 is a test today (system.screen.size).
+	z_screen_size(&wm_screen_w, &wm_screen_h);
+	if (wm_screen_w < Z_SCREEN_MIN_W || wm_screen_h < Z_SCREEN_MIN_H ||
+		wm_screen_w > Z_SCREEN_MAX || wm_screen_h > Z_SCREEN_MAX) {
+		wm_screen_w = WM_FB_W;
+		wm_screen_h = WM_FB_H;
+	}
+	if (wm_screen_w != WM_FB_W || wm_screen_h != WM_FB_H)
+		printf("wm: the screen is reported as %dx%d (the framebuffer is %dx%d)\n",
+			wm_screen_w, wm_screen_h, WM_FB_W, WM_FB_H);
 
 	// one explicit clear here, in case something else left stale
 	// pixels in the framebuffer before wm started -- repair_region()

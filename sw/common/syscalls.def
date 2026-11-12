@@ -330,3 +330,18 @@ Z_MKSYSCALL(ARENA, k_arena)
 // zproc.h, z_abi_args_t; docs/update.md "ABI"): what `update` compares
 // with a release's before it replaces the card. Appended last.
 Z_MKSYSCALL(ABI, k_abi)
+
+// The time in 64 bits (zproc.h, z_time64_args_t; sw/common/zrtc.h,
+// z_time_now64(); docs/rtc.md "64-bit time"): the RTC's 32-bit seconds
+// with the high word the kernel keeps, read or set. Appended last.
+Z_MKSYSCALL(TIME64, k_time64)
+
+// The screen's size, as the system reports it (zeitlos.h,
+// z_screen_size(); docs/screen.md): what apps lay themselves out
+// against, rather than 640x480. Appended last.
+Z_MKSYSCALL(SCREEN, k_screen)
+
+// The ABI level this kernel runs programs up to (Z_ABI_LEVEL, zexec.h;
+// z_abi_level(); docs/executables.md "The ABI level"): `update` shows it
+// beside a release's. A Z_UINT32 in the obj. Appended last.
+Z_MKSYSCALL(ABI_LEVEL, k_abi_level)

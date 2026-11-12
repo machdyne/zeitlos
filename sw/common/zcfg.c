@@ -79,6 +79,8 @@ const z_cfg_known_t z_cfg_known[] = {
 	  "speech: words per minute, 80-450" },
 	{ "system.tts.volume", "200",
 	  "speech: volume, 0-255" },
+	{ "system.screen.size", "640x480",
+	  "the screen size the system reports to apps, WxH, 640x360 or more (testing: the display stays 640x480; docs/screen.md)" },
 	{ "system.video.mode", "white",
 	  "display colour at boot and on reload: white, amber, green or paper" },
 	{ "system.video.brightness", "8",

@@ -893,6 +893,32 @@ static void abi(void) {
 	CHECK(r == UPD_DONE && said("not checked"),
 		"a release that does not say: not checked (%d)", r);
 	kernel_abi = FX_ABI;
+
+	// The ABI level beside the id (docs/executables.md, "The ABI level")
+	upd_kernel_level = 0;
+	fresh_card();
+	run("v1", false, false);
+	r = run("v2lvl", false, false);
+	CHECK(r == UPD_FAILED && said("refused") && said("ABI level 1; this kernel runs programs up to level 0"),
+		"a release of a newer level: refused, and says why plainly (%d)", r);
+	force = true;
+	r = run("v2lvl", false, false);
+	force = false;
+	CHECK(r == UPD_DONE && card_is_release("v2", NULL), "-f: updated anyway (%d)", r);
+	char f2[1200];
+	full(f2, "/sys/manifest");
+	char *b2 = slurp(f2, NULL);
+	CHECK(b2 && strstr(b2, "\nabi_level 1\n"), "the card's manifest records the level");
+	free(b2);
+	outlen = 0;
+	upd_show(&IO, FX_ABI);
+	CHECK(said("abi: card 1111222233334444 (level 1), flash " FX_ABI " (level 0)") &&
+		said("would refuse them"), "update shows both levels, and what that means");
+	upd_kernel_level = -1;
+	outlen = 0;
+	upd_show(&IO, FX_ABI);
+	CHECK(said("(level 1), flash " FX_ABI "  --") && !said("would refuse them"),
+		"a kernel that cannot say its level: no level for it");
 }
 
 // -- sets (docs/update.md, "Sets") --

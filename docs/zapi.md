@@ -20,7 +20,7 @@ In each example, `=>` is what it returns.
 | [Evaluation](#evaluation) | `apply` `eval` `read` `macroexpand-1` `force` `call-with-current-continuation` `call/cc` `dynamic-wind` `gc` `dump` `exit` |
 | [Files](#files) | `ls` `file-size` `read-file` `write-file` `delete-file` `mkdir` `touch-file` `load` `file->str` `df` |
 | [Windows and apps](#windows-and-apps) | `win-create` `win-destroy` `win-clear` `button` `field` `field-text` `field-set!` `win-on` `line` `box` `text` |
-| [Display](#display) | `video-mode` `game-mode` `game-view` `game-frame` `game-wait` `color-mode` `palette` `color-fill` `composite-color` |
+| [Display](#display) | `screen-size` `video-mode` `game-mode` `game-view` `game-frame` `game-wait` `color-mode` `palette` `color-fill` `composite-color` |
 | [Gamepads](#gamepads) | `gamepad` `gamepad-count` |
 | [Processes and messages](#processes-and-messages) | `getpid` `pid-lookup` `msg-send` `msg-wait` `ps` `run` `kill` |
 | [Network](#network) | `tget` `tput` |
@@ -1398,6 +1398,16 @@ Text in window w in the 6x12 font, x y its top left. #t.
 ```
 
 ## Display
+
+```
+(screen-size)
+```
+
+The screen's size in pixels, as (width height): what to lay a window out against, rather than 640x480 (docs/screen.md).
+
+```
+> (screen-size)  =>  (640 480)
+```
 
 ```
 (video-mode)

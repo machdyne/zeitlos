@@ -294,6 +294,7 @@ static int run(int argc, char **argv) {
 	// (Z_SYS_ABI); "" from a kernel older than that syscall.
 	static char kabi[Z_ABI_ID_MAX];
 	z_abi(kabi, sizeof kabi);
+	upd_kernel_level = z_abi_level();	// -1 from an older kernel
 	o.kernel_abi = kabi;
 
 	if (!o.release) {

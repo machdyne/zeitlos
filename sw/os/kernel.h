@@ -220,6 +220,14 @@ z_obj_t *k_proc_status(z_obj_t *args);
 z_obj_t *k_proc_serial(z_obj_t *args);	// Z_SYS_PROC_SERIAL
 z_obj_t *k_arena(z_obj_t *args);		// Z_SYS_ARENA
 z_obj_t *k_abi(z_obj_t *args);			// Z_SYS_ABI
+z_obj_t *k_time64(z_obj_t *args);
+z_obj_t *k_screen(z_obj_t *args);		// Z_SYS_SCREEN
+z_obj_t *k_abi_level(z_obj_t *args);		// Z_SYS_ABI_LEVEL
+
+// The screen's size as the system reports it (Z_SYS_SCREEN,
+// docs/screen.md): 640x480, or system.screen.size from zeitlos.cfg
+// (cfg.c), which is for trying apps against another size.
+extern uint32_t k_screen_w, k_screen_h;		// Z_SYS_TIME64
 void k_arena_dump(void);				// `free`: the arenas and the reserve
 void k_proc_unblock(uint32_t pid);
 z_obj_t *k_proc_wait(z_obj_t *args);

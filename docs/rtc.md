@@ -442,3 +442,53 @@ Software built against it degrades gracefully on a bitstream without it
 with the one exception at the top of this document: a *pre-RTC*
 `ICACHE` bitstream, where anything reading the RTC's own registers
 without the feature-bit check first would hang.
+
+## 64-bit time
+
+The counter is 32 bits of seconds since 1970: it runs out on
+2106-02-07 at 06:28:15 UTC. There is no battery and software sets it at
+every boot, so the 64 bits need no gateware. The kernel keeps the high
+word (`Z_SYS_TIME64`, `k_time64()` in `sw/os/kernel.c`): it is set with
+the time, and counted up when a read of the low word is below the last
+one by more than half the range -- the wrap.
+
+| | |
+|---|---|
+| `z_time_now64(&sec, &sub)` | seconds since 1970-01-01 UTC, signed 64-bit, and the 1/1024ths; true if the clock has been set since power-on |
+| `z_time_set64(sec, sub)` | sets it, high word and all |
+| `z_time_to_tm64(t, &tm)`, `z_tm_to_time64(&tm)` | the calendar both ways, any year a `z_tm_t` holds, before 1970 too |
+
+They are the same as `z_rtc_seconds()` and `z_rtc_set()` until 2106,
+and only they are right after it, because only they go through the
+kernel: a program that reads the register itself has its own copy of
+how to, built in. New code uses the 64-bit calls; `net`'s SNTP client
+sets the time with `z_time_set64()`. The 64-bit conversions divide by
+hand rather than link libgcc's 64-bit division. Tests:
+`sw/common/tests/test_zrtc.c` (2106's last second and the next, 1969,
+9999, and the 32- and 64-bit conversions agreeing across 1970-2106).
+
+The syscall's struct (`z_time64_args_t`, zproc.h) carries the seconds
+as two 32-bit words, `sec_lo` and `sec_hi`, rather than an `int64_t`:
+`zcc`, the compiler on the machine, has no 64-bit integers, and an
+interface it cannot spell is one its programs cannot use.
+
+FAT's own timestamps stop at 2107; that is the filesystem's limit.
+
+## Ticks
+
+`z_uptime_ticks()` counts ~732 a second since boot in 32 bits and wraps
+every 68 days. That is fine, and there is no 64-bit tick, as long as
+ticks are compared **by difference**:
+
+```c
+uint32_t due = z_uptime_ticks() + Z_TICK_HZ;     /* in a second */
+...
+if ((int32_t)(z_uptime_ticks() - due) >= 0)      /* due: right across a wrap */
+if (z_uptime_ticks() - start > Z_TICK_HZ)        /* a second has passed: right too */
+if (z_uptime_ticks() >= due)                     /* wrong near a wrap */
+```
+
+and "due now" is the current tick, not 0. Anything longer than 34 days
+(half the range) is measured with the wall clock instead. An audit in
+November 2026 found one place that compared directly, `term`'s
+auto-connect, now by difference.

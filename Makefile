@@ -1011,12 +1011,14 @@ ZAR_APPS = $(filter-out $(CORE_APPS_OMIT),$(CORE_APPS))
 # (wm +8K and usb +5K for touch, docs/touch.md; keyboard +4K for its
 # touch size). The RAM budgets are a normal board's: the rule is 2MB.
 # The small build's RAM budgets are what every board had before,
-# CORE_BUDGETS_SMALL, and its rule is still 1MB.
+# CORE_BUDGETS_SMALL, and its rule is still 1MB -- but for term, 4K of
+# slack given to repl (308K: 315,008 bytes with GCC 15.2 and today's
+# ms, 640 over 307K; found when CI first built both tiers).
 CORE_BUDGETS_NORMAL = fs=36K/80K usb=38K/60K wm=84K/168K net=104K/296K term=62K/144K \
 	console=10K/13K cron=18K/48K text=88K/216K files=66K/142K repl=124K/312K \
 	welcome=42K/76K read=70K/210K keyboard=38K/64K
-CORE_BUDGETS_SMALL = fs=36K/77056 usb=35K/53504 wm=84K/150K net=104K/287K term=62K/140K \
-	console=10K/12544 cron=18K/48K text=88K/212K files=66K/138K repl=124K/307K \
+CORE_BUDGETS_SMALL = fs=36K/77056 usb=35K/53504 wm=84K/150K net=104K/287K term=62K/136K \
+	console=10K/12544 cron=18K/48K text=88K/212K files=66K/138K repl=124K/308K \
 	welcome=42K/76K read=70K/210K keyboard=38K/64K
 CORE_RESERVE = 60K
 # Core apps stored as they are, not compressed: their budget is then

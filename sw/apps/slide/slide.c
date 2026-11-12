@@ -924,8 +924,10 @@ static void remember_dir(const char *p) {
 static void wanted_size(int *w, int *h) {
 	*w = TOOL_W + 2 * MARGIN + ed.d->page.gw + Z_WIN_CHROME_W;
 	*h = 2 * MARGIN + ed.d->page.gh + BAR_H + Z_WIN_CHROME_H;
-	if (*w > Z_SCREEN_W) *w = Z_SCREEN_W;
-	if (*h > Z_SCREEN_H - 8) *h = Z_SCREEN_H - 8;
+	int sw, sh;
+	z_screen_size(&sw, &sh);		// docs/screen.md
+	if (*w > sw) *w = sw;
+	if (*h > sh - 8) *h = sh - 8;
 }
 
 static void set_deck(deck_t *d) {

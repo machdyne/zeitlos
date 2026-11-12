@@ -1,0 +1,137 @@
+# Weekly, and whenever someone starts it (Actions > weekly > Run
+# workflow) -- docs/ci.md. What is too slow, or too heavy, for every
+# push:
+#
+#   - the emulator's web page in a headless Chromium, with the
+#     emulator's card (emscripten, Playwright, the docs and course packs);
+#   - Lakritz's gateware: synthesis and place-and-route with the OSS CAD
+#     Suite, failing if a clock misses timing after routing.
+#
+# All boards' gateware is not built here: about as long as a release,
+# so that is `zrelease build`'s, on a machine of one's own.
+
+name: weekly
+
+on:
+  schedule:
+    - cron: "17 3 * * 1"       # Mondays, 03:17 UTC
+  workflow_dispatch:
+
+env:
+  XPACK_VERSION: "15.2.0-1"
+  PREFIX: /opt/xpack/xpack-riscv-none-elf-gcc-15.2.0-1/bin/riscv-none-elf-
+  RISCV_PREFIX: /opt/xpack/xpack-riscv-none-elf-gcc-15.2.0-1/bin/riscv-none-elf-
+
+jobs:
+
+  page:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Toolchain (cached)
+        id: xpack
+        uses: actions/cache@v4
+        with:
+          path: /opt/xpack
+          key: xpack-riscv-${{ env.XPACK_VERSION }}
+
+      - name: Toolchain (download)
+        if: steps.xpack.outputs.cache-hit != 'true'
+        run: |
+          sudo mkdir -p /opt/xpack && sudo chown "$USER" /opt/xpack
+          curl -sSL -o /tmp/xpack.tgz \
+            "https://github.com/xpack-dev-tools/riscv-none-elf-gcc-xpack/releases/download/v${XPACK_VERSION}/xpack-riscv-none-elf-gcc-${XPACK_VERSION}-linux-x64.tar.gz"
+          tar -C /opt/xpack -xzf /tmp/xpack.tgz
+
+      - name: Host packages, emscripten, Playwright
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq dosfstools mtools python3-pil python3-numpy emscripten
+          python3 -m pip install --break-system-packages -q playwright
+          python3 -m playwright install --with-deps chromium
+
+      - name: Software (Lakritz), the archive, the sim image
+        run: |
+          make BOARD=lakritz PREFIX="$PREFIX" RISCV_PREFIX="$RISCV_PREFIX" os bios apps -j"$(nproc)"
+          make BOARD=lakritz PREFIX="$PREFIX" output/lakritz/apps.zar
+
+      - name: The emulator's card (docs and course packs, then the emu variant)
+        run: |
+          ./tools/ask/ask build tools/ask/dist/zdocs.spec
+          ./tools/learn/pack.py build tools/learn/packs/edu-zeitlos.cfg
+          release/zrelease sdcard --variant emu
+
+      - name: The page, without a card and with one
+        run: |
+          make -C sim/sys test-boot ZAR="$PWD/output/lakritz/apps.zar"
+          make -C sim/sys web-test ZAR="$PWD/output/lakritz/apps.zar"
+          make -C sim/sys web-test ZAR="$PWD/output/lakritz/apps.zar" ZSYS_CARD="$PWD/images/zeitlos.img"
+
+      - name: Screenshots, on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: page-out
+          path: |
+            sim/sys/out/*.log
+            sim/sys/out/*.png
+          retention-days: 7
+
+  gateware-lakritz:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Toolchain (cached)
+        id: xpack
+        uses: actions/cache@v4
+        with:
+          path: /opt/xpack
+          key: xpack-riscv-${{ env.XPACK_VERSION }}
+
+      - name: Toolchain (download)
+        if: steps.xpack.outputs.cache-hit != 'true'
+        run: |
+          sudo mkdir -p /opt/xpack && sudo chown "$USER" /opt/xpack
+          curl -sSL -o /tmp/xpack.tgz \
+            "https://github.com/xpack-dev-tools/riscv-none-elf-gcc-xpack/releases/download/v${XPACK_VERSION}/xpack-riscv-none-elf-gcc-${XPACK_VERSION}-linux-x64.tar.gz"
+          tar -C /opt/xpack -xzf /tmp/xpack.tgz
+
+      - name: OSS CAD Suite (Yosys, nextpnr, ecppack)
+        uses: YosysHQ/setup-oss-cad-suite@v3
+
+      - name: Lakritz -- the BIOS, synthesis, place and route, the bitstream
+        run: make BOARD=lakritz PREFIX="$PREFIX" RISCV_PREFIX="$RISCV_PREFIX" bios soc
+
+      - name: Timing after routing, and the utilisation
+        run: |
+          tools/pnr_timing.sh output/lakritz/pnr.log lakritz | tee /tmp/timing.txt
+          {
+            echo '### Lakritz gateware'
+            echo '```'
+            cat /tmp/timing.txt
+            grep -A12 -i "device utilisation" output/lakritz/pnr.log | head -20 || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          if grep -q "FAIL at" /tmp/timing.txt; then
+            echo "a clock misses timing after routing" >&2
+            exit 1
+          fi
+
+      - name: Logs, on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lakritz-gateware-logs
+          path: |
+            output/lakritz/synth.log
+            output/lakritz/pnr.log
+            output/lakritz/report.txt
+          retention-days: 14

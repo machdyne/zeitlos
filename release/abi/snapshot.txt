@@ -1,0 +1,815 @@
+# zeitlos abi snapshot e32e6a06c33418fb
+== sw/common/syscalls.def
+0 EXIT
+1 UI_PRINT
+2 UART_GETC
+3 UART_PUTC
+4 UART_RX_EMPTY
+5 UART_TX_FULL
+6 MSG_SEND
+7 MSG_READ
+8 UPTIME
+9 HID_READ_KEY
+10 PID_REGISTER
+11 PID_LOOKUP
+12 GETPID
+13 PROC_RUN
+14 FS_SIZE
+15 FS_READ
+16 FS_WRITE
+17 FS_UNLINK
+18 FS_LIST
+19 FS_OPEN_WRITE
+20 FS_OPEN_READ
+21 FS_READ_CHUNK
+22 FS_WRITE_CHUNK
+23 FS_CLOSE
+24 PROC_KILL
+25 FS_MKDIR
+26 FS_TOUCH
+27 FS_SEEK
+28 PROC_LIST
+29 MEM_STATS
+30 FS_DF
+31 PROC_WAIT
+32 EXEC_EXISTS
+33 VIDEO_GET_MODE
+34 VIDEO_SET_MODE
+35 HID_PTR_SUBSCRIBE
+36 FS_OPEN_RW
+37 FS_SYNC
+38 FS_TRUNCATE
+39 PROC_STATUS
+40 CFG_GET
+41 CFG_ENTRY
+42 CFG_RELOAD
+43 HID_INJECT
+44 WM_WAKE
+45 USBCDC_PRESENT
+46 USBCDC_READ
+47 USBCDC_WRITE
+48 REBOOT
+49 FLASH
+50 JUMP
+51 USBNET
+52 KLOG_READ
+53 CONSOLE_INPUT
+54 KBD_LAYOUT
+55 KV
+56 AUTH
+57 FS_RENAME
+58 FS_STAT
+59 FS_LIST_EX
+60 KTRACE
+61 MSG_RECV
+62 MPU_GRANT
+63 EXEC_EXISTS_MANY
+64 IRQ
+65 CPU_STAT
+66 BLK
+67 ZAR
+68 RESCUE
+69 PROC_SERIAL
+70 ARENA
+71 ABI
+72 TIME64
+73 SCREEN
+74 ABI_LEVEL
+== sw/common/riscv-app.ld
+OUTPUT_FORMAT ( "elf32-littleriscv" , "elf32-littleriscv" , "elf32-littleriscv" ) OUTPUT_ARCH ( riscv ) ENTRY ( _start ) SECTIONS { . = 0x80000000 ; . text : { * ( . text ) * ( . text . unlikely . text . * _unlikely . text . unlikely . * ) * ( . text . exit . text . exit . * ) * ( . text . startup . text . startup . * ) * ( . text . hot . text . hot . * ) * ( . stub . text . * . gnu . linkonce . t . * ) * ( . gnu . warning ) } . init : { KEEP ( * ( SORT_NONE ( . init ) ) ) } . plt : { * ( . plt ) } . iplt : { * ( . iplt ) } . fini : { KEEP ( * ( SORT_NONE ( . fini ) ) ) } PROVIDE ( __etext = . ) ; PROVIDE ( _etext = . ) ; PROVIDE ( etext = . ) ; . rodata : { * ( . rodata . rodata . * . gnu . linkonce . r . * ) } . rodata1 : { * ( . rodata1 ) } . sdata2 : { * ( . sdata2 . sdata2 . * . gnu . linkonce . s2 . * ) } . sbss2 : { * ( . sbss2 . sbss2 . * . gnu . linkonce . sb2 . * ) } . eh_frame_hdr : { * ( . eh_frame_hdr ) * ( . eh_frame_entry . eh_frame_entry . * ) } . eh_frame : ONLY_IF_RO { KEEP ( * ( . eh_frame ) ) * ( . eh_frame . * ) } . gcc_except_table : ONLY_IF_RO { * ( . gcc_except_table . gcc_except_table . * ) } . gnu_extab : ONLY_IF_RO { * ( . gnu_extab * ) } . exception_ranges : ONLY_IF_RO { * ( . exception_ranges . exception_ranges * ) } . = DATA_SEGMENT_ALIGN ( CONSTANT ( MAXPAGESIZE ) , CONSTANT ( COMMONPAGESIZE ) ) ; . eh_frame : ONLY_IF_RW { KEEP ( * ( . eh_frame ) ) * ( . eh_frame . * ) } . gnu_extab : ONLY_IF_RW { * ( . gnu_extab ) } . gcc_except_table : ONLY_IF_RW { * ( . gcc_except_table . gcc_except_table . * ) } . exception_ranges : ONLY_IF_RW { * ( . exception_ranges . exception_ranges * ) } . tdata : { * ( . tdata . tdata . * . gnu . linkonce . td . * ) } . tbss : { * ( . tbss . tbss . * . gnu . linkonce . tb . * ) * ( . tcommon ) } . preinit_array : { PROVIDE_HIDDEN ( __preinit_array_start = . ) ; KEEP ( * ( . preinit_array ) ) PROVIDE_HIDDEN ( __preinit_array_end = . ) ; } . init_array : { PROVIDE_HIDDEN ( __init_array_start = . ) ; KEEP ( * ( SORT_BY_INIT_PRIORITY ( . init_array . * ) SORT_BY_INIT_PRIORITY ( . ctors . * ) ) ) KEEP ( * ( . init_array EXCLUDE_FILE ( * crtbegin . o * crtbegin ? . o * crtend . o * crtend ? . o ) . ctors ) ) PROVIDE_HIDDEN ( __init_array_end = . ) ; } . fini_array : { PROVIDE_HIDDEN ( __fini_array_start = . ) ; KEEP ( * ( SORT_BY_INIT_PRIORITY ( . fini_array . * ) SORT_BY_INIT_PRIORITY ( . dtors . * ) ) ) KEEP ( * ( . fini_array EXCLUDE_FILE ( * crtbegin . o * crtbegin ? . o * crtend . o * crtend ? . o ) . dtors ) ) PROVIDE_HIDDEN ( __fini_array_end = . ) ; } . ctors : { KEEP ( * crtbegin . o ( . ctors ) ) KEEP ( * crtbegin ? . o ( . ctors ) ) KEEP ( * ( EXCLUDE_FILE ( * crtend . o * crtend ? . o ) . ctors ) ) KEEP ( * ( SORT ( . ctors . * ) ) ) KEEP ( * ( . ctors ) ) } . dtors : { KEEP ( * crtbegin . o ( . dtors ) ) KEEP ( * crtbegin ? . o ( . dtors ) ) KEEP ( * ( EXCLUDE_FILE ( * crtend . o * crtend ? . o ) . dtors ) ) KEEP ( * ( SORT ( . dtors . * ) ) ) KEEP ( * ( . dtors ) ) } . jcr : { KEEP ( * ( . jcr ) ) } . data . rel . ro : { * ( . data . rel . ro . local * . gnu . linkonce . d . rel . ro . local . * ) * ( . data . rel . ro . data . rel . ro . * . gnu . linkonce . d . rel . ro . * ) } . dynamic : { * ( . dynamic ) } . = DATA_SEGMENT_RELRO_END ( 0 , . ) ; . data : { * ( . data . data . * . gnu . linkonce . d . * ) SORT ( CONSTRUCTORS ) } . data1 : { * ( . data1 ) } . got : { * ( . got . plt ) * ( . igot . plt ) * ( . got ) * ( . igot ) } . sdata : { __global_pointer $ = . + 0x800 ; * ( . srodata . cst16 ) * ( . srodata . cst8 ) * ( . srodata . cst4 ) * ( . srodata . cst2 ) * ( . srodata . srodata . * ) * ( . sdata . sdata . * . gnu . linkonce . s . * ) } _edata = . ; PROVIDE ( edata = . ) ; . = . ; __bss_start = . ; . sbss : { * ( . dynsbss ) * ( . sbss . sbss . * . gnu . linkonce . sb . * ) * ( . scommon ) } . bss : { * ( . dynbss ) * ( . bss . bss . * . gnu . linkonce . b . * ) * ( COMMON ) . = ALIGN ( . != 0 ? 32 / 8 : 1 ) ; } . = ALIGN ( 32 / 8 ) ; . = SEGMENT_START ( "ldata-segment" , . ) ; . = ALIGN ( 32 / 8 ) ; _end = . ; PROVIDE ( end = . ) ; . = DATA_SEGMENT_END ( . ) ; . stab 0 : { * ( . stab ) } . stabstr 0 : { * ( . stabstr ) } . stab . excl 0 : { * ( . stab . excl ) } . stab . exclstr 0 : { * ( . stab . exclstr ) } . stab . index 0 : { * ( . stab . index ) } . stab . indexstr 0 : { * ( . stab . indexstr ) } . comment 0 : { * ( . comment ) } . debug 0 : { * ( . debug ) } . line 0 : { * ( . line ) } . debug_srcinfo 0 : { * ( . debug_srcinfo ) } . debug_sfnames 0 : { * ( . debug_sfnames ) } . debug_aranges 0 : { * ( . debug_aranges ) } . debug_pubnames 0 : { * ( . debug_pubnames ) } . debug_info 0 : { * ( . debug_info . gnu . linkonce . wi . * ) } . debug_abbrev 0 : { * ( . debug_abbrev ) } . debug_line 0 : { * ( . debug_line . debug_line . * . debug_line_end ) } . debug_frame 0 : { * ( . debug_frame ) } . debug_str 0 : { * ( . debug_str ) } . debug_loc 0 : { * ( . debug_loc ) } . debug_macinfo 0 : { * ( . debug_macinfo ) } . debug_weaknames 0 : { * ( . debug_weaknames ) } . debug_funcnames 0 : { * ( . debug_funcnames ) } . debug_typenames 0 : { * ( . debug_typenames ) } . debug_varnames 0 : { * ( . debug_varnames ) } . debug_pubtypes 0 : { * ( . debug_pubtypes ) } . debug_ranges 0 : { * ( . debug_ranges ) } . debug_macro 0 : { * ( . debug_macro ) } . debug_addr 0 : { * ( . debug_addr ) } . gnu . attributes 0 : { KEEP ( * ( . gnu . attributes ) ) } / DISCARD / : { * ( . note . GNU - stack ) * ( . gnu_debuglink ) * ( . gnu . lto_ * ) } }
+== sw/common/zeitlos.h
+# ifndef ZEITLOS_H
+# define ZEITLOS_H
+typedef uint32_t * ( * z_kernel_ptr_t ) ( uint32_t , uint32_t * , uint32_t ) ;
+# define reg_kernel ( * ( volatile uint32_t * ) 0x0000000c )
+# define reg_uart0_data ( * ( volatile uint8_t * ) 0xf0000000 )
+# define reg_uart0_dlbl ( * ( volatile uint8_t * ) 0xf0000000 )
+# define reg_uart0_dlbh ( * ( volatile uint8_t * ) 0xf0000004 )
+# define reg_uart0_ier ( * ( volatile uint8_t * ) 0xf0000004 )
+# define reg_uart0_fcr ( * ( volatile uint8_t * ) 0xf0000008 )
+# define reg_uart0_iir ( * ( volatile uint8_t * ) 0xf0000008 )
+# define reg_uart0_lcr ( * ( volatile uint8_t * ) 0xf000000c )
+# define reg_uart0_mcr ( * ( volatile uint8_t * ) 0xf0000010 )
+# define reg_uart0_lsr ( * ( volatile uint8_t * ) 0xf0000014 )
+# define reg_uart0_msr ( * ( volatile uint8_t * ) 0xf0000018 )
+# define reg_uart1_data ( * ( volatile uint8_t * ) 0xf0000100 )
+# define reg_uart1_dlbl ( * ( volatile uint8_t * ) 0xf0000100 )
+# define reg_uart1_dlbh ( * ( volatile uint8_t * ) 0xf0000104 )
+# define reg_uart1_ier ( * ( volatile uint8_t * ) 0xf0000104 )
+# define reg_uart1_fcr ( * ( volatile uint8_t * ) 0xf0000108 )
+# define reg_uart1_iir ( * ( volatile uint8_t * ) 0xf0000108 )
+# define reg_uart1_lcr ( * ( volatile uint8_t * ) 0xf000010c )
+# define reg_uart1_mcr ( * ( volatile uint8_t * ) 0xf0000110 )
+# define reg_uart1_lsr ( * ( volatile uint8_t * ) 0xf0000114 )
+# define reg_uart1_msr ( * ( volatile uint8_t * ) 0xf0000118 )
+# define reg_esp32_ctl ( * ( volatile uint32_t * ) 0xf0000200 )
+# define reg_vmouse ( * ( volatile uint32_t * ) 0xf0000400 )
+# define reg_led ( * ( volatile uint32_t * ) 0xe0000000 )
+# define reg_leds ( * ( volatile uint32_t * ) 0xe0000004 )
+# define reg_usb0_info ( * ( volatile uint32_t * ) 0xc0000000 )
+# define reg_usb0_keys ( * ( volatile uint32_t * ) 0xc0000004 )
+# define reg_usb0_mouse ( * ( volatile uint32_t * ) 0xc0000008 )
+# define reg_usb0_cursor ( * ( volatile uint32_t * ) 0xc000000c )
+# define reg_usb1_info ( * ( volatile uint32_t * ) 0xc0000020 )
+# define reg_usb1_keys ( * ( volatile uint32_t * ) 0xc0000024 )
+# define reg_usb1_mouse ( * ( volatile uint32_t * ) 0xc0000028 )
+# define reg_usb1_cursor ( * ( volatile uint32_t * ) 0xc000002c )
+# define reg_usb0_pad ( * ( volatile uint32_t * ) 0xc0000010 )
+# define reg_usb1_pad ( * ( volatile uint32_t * ) 0xc0000030 )
+# define reg_usb_info ( * ( volatile uint32_t * ) 0xc0000000 )
+# define reg_usb_keys ( * ( volatile uint32_t * ) 0xc0000004 )
+# define reg_usb_mouse ( * ( volatile uint32_t * ) 0xc0000008 )
+# define reg_usb_cursor ( * ( volatile uint32_t * ) 0xc000000c )
+# define reg_spisd_data ( * ( volatile uint32_t * ) 0xb0000000 )
+# define reg_spisd_status ( * ( volatile uint32_t * ) 0xb0000004 )
+# define reg_spisd_ctrl ( * ( volatile uint32_t * ) 0xb0000008 )
+# define reg_spisd_magic ( * ( volatile uint32_t * ) 0xb000000c )
+# define Z_SPISD_MAGIC 0x53504930u
+# define Z_SPISD_MAGIC_V1 0x53504931u
+# define Z_SPISD_BUSY ( 1u << 0 )
+# define Z_SPISD_CTRL_CS ( 1u << 0 )
+# define Z_SPISD_CTRL_W32 ( 1u << 1 )
+# define Z_SPISD_CTRL_DIV ( d ) ( ( ( d ) & 0xffu ) << 8 )
+# define Z_SPISD_DIV_INIT 59
+# define Z_SPISD_DIV_FAST 0
+# define reg_sdcard ( * ( volatile uint32_t * ) 0xb0000000 )
+# define gpu_x0 ( * ( volatile uint32_t * ) 0xa0000000 )
+# define gpu_y0 ( * ( volatile uint32_t * ) 0xa0000004 )
+# define gpu_x1 ( * ( volatile uint32_t * ) 0xa0000008 )
+# define gpu_y1 ( * ( volatile uint32_t * ) 0xa000000c )
+# define gpu_color ( * ( volatile uint32_t * ) 0xa0000010 )
+# define gpu_start ( * ( volatile uint32_t * ) 0xa0000014 )
+# define gpu_busy ( * ( volatile uint32_t * ) 0xa0000018 )
+# define gpu_pixel_count ( * ( volatile uint32_t * ) 0xa000001c )
+# define gpu_debug_cur_x ( * ( volatile uint32_t * ) 0xa0000020 )
+# define gpu_debug_cur_y ( * ( volatile uint32_t * ) 0xa0000024 )
+# define gpu_debug_fifo_count ( * ( volatile uint32_t * ) 0xa0000028 )
+# define gpu_blit_ctrl ( * ( volatile uint32_t * ) 0xd0000000 )
+# define gpu_blit_status ( * ( volatile uint32_t * ) 0xd0000004 )
+# define gpu_blit_dst_x ( * ( volatile uint32_t * ) 0xd0000008 )
+# define gpu_blit_dst_y ( * ( volatile uint32_t * ) 0xd000000c )
+# define gpu_blit_width ( * ( volatile uint32_t * ) 0xd0000010 )
+# define gpu_blit_height ( * ( volatile uint32_t * ) 0xd0000014 )
+# define gpu_blit_pattern ( * ( volatile uint32_t * ) 0xd0000018 )
+# define gpu_blit_glyph_addr ( * ( volatile uint32_t * ) 0xd000001c )
+# define gpu_blit_glyph_w ( * ( volatile uint32_t * ) 0xd0000020 )
+# define gpu_blit_glyph_h ( * ( volatile uint32_t * ) 0xd0000024 )
+# define gpu_blit_fg_color ( * ( volatile uint32_t * ) 0xd0000028 )
+# define gpu_blit_bg_color ( * ( volatile uint32_t * ) 0xd000002c )
+# define gpu_blit_src_addr ( * ( volatile uint32_t * ) 0xd0000030 )
+# define gpu_blit_src_stride ( * ( volatile uint32_t * ) 0xd0000034 )
+# define gpu_blit_src_shift ( * ( volatile uint32_t * ) 0xd0000038 )
+# define gpu_blit_src_b_addr ( * ( volatile uint32_t * ) 0xd000003c )
+# define gpu_blit_clip_x0 ( * ( volatile uint32_t * ) 0xd0000050 )
+# define gpu_blit_clip_y0 ( * ( volatile uint32_t * ) 0xd0000054 )
+# define gpu_blit_clip_x1 ( * ( volatile uint32_t * ) 0xd0000058 )
+# define gpu_blit_clip_y1 ( * ( volatile uint32_t * ) 0xd000005c )
+# define gpu_blit_dbg_src_adr ( * ( volatile uint32_t * ) 0xd0000040 )
+# define gpu_blit_dbg_src_dat ( * ( volatile uint32_t * ) 0xd0000044 )
+# define gpu_blit_dbg_src_cnt ( * ( volatile uint32_t * ) 0xd0000048 )
+# define GPU_BLIT_CTRL_START ( 1u << 0 )
+# define GPU_BLIT_CTRL_FILL ( 1u << 1 )
+# define GPU_BLIT_CTRL_CLIP ( 1u << 2 )
+# define GPU_BLIT_CTRL_GLYPH ( 1u << 3 )
+# define GPU_BLIT_CTRL_SRCMEM ( 1u << 4 )
+# define GPU_BLIT_CTRL_ROP_LSB 5
+# define GPU_BLIT_CTRL_COOKIE ( 1u << 7 )
+# define GPU_BLIT_CTRL_DITHER ( 1u << 8 )
+# define GPU_BLIT_SRC_PRIME_ZERO ( 1u << 8 )
+# define reg_mtu_base ( * ( volatile uint32_t * ) 0x90000000 )
+# define GLYPH_MEM_BASE 0x30000000
+# define GLYPH_MEM_SIZE 4096
+# define reg_spieth_data ( * ( volatile uint32_t * ) 0x61000000 )
+# define reg_spieth_status ( * ( volatile uint32_t * ) 0x61000004 )
+# define reg_spieth_ctrl ( * ( volatile uint32_t * ) 0x61000008 )
+# define reg_spieth_magic ( * ( volatile uint32_t * ) 0x6100000c )
+# define Z_SPI_INT ( 1u << 2 )
+# define Z_SPIETH_DIV 1
+# define reg_eth ( * ( volatile uint32_t * ) 0x61000000 )
+# define reg_ethmac_status ( * ( volatile uint32_t * ) 0x60000000 )
+# define reg_ethmac_rxlen ( * ( volatile uint32_t * ) 0x60000004 )
+# define reg_ethmac_rxctrl ( * ( volatile uint32_t * ) 0x60000008 )
+# define reg_ethmac_txlen ( * ( volatile uint32_t * ) 0x6000000c )
+# define reg_ethmac_txctrl ( * ( volatile uint32_t * ) 0x60000010 )
+# define reg_ethmac_rxbuf ( ( volatile uint32_t * ) 0x60000100 )
+# define reg_ethmac_txbuf ( ( volatile uint32_t * ) 0x60000a00 )
+# define REG_ETHMAC_RXBUF_WORDS 512
+# define REG_ETHMAC_TXBUF_WORDS 512
+# define REG_ETHMAC_CRS_DV ( 1u << 0 )
+# define REG_ETHMAC_REFCLK_HB ( 1u << 1 )
+# define REG_ETHMAC_RX_READY ( 1u << 2 )
+# define REG_ETHMAC_TX_BUSY ( 1u << 3 )
+# define REG_ETHMAC_RX_DROP_SHIFT 4
+# define REG_ETHMAC_RX_DROP_MASK 0xf
+# define REG_ETHMAC_RX_ERR_SHIFT 8
+# define REG_ETHMAC_RX_ERR_MASK 0xf
+# define REG_ETHMAC_RX_SLOTS_LOG2_SHIFT 12
+# define REG_ETHMAC_RX_SLOTS_LOG2_MASK 0xf
+# define gpu_clip_x0 ( * ( volatile uint32_t * ) 0xa000002c )
+# define gpu_clip_y0 ( * ( volatile uint32_t * ) 0xa0000030 )
+# define gpu_clip_x1 ( * ( volatile uint32_t * ) 0xa0000034 )
+# define gpu_clip_y1 ( * ( volatile uint32_t * ) 0xa0000038 )
+# define gpu_clip_enable ( * ( volatile uint32_t * ) 0xa000003c )
+# define reg_mtu ( * ( volatile uint32_t * ) 0x90000000 )
+# if defined ( __zcc__ )
+# else
+# endif
+# define Z_SCREEN_MAX 4095
+# define Z_SCREEN_MIN_W 640
+# define Z_SCREEN_MIN_H 360
+typedef struct { uint32_t target ; int32_t result ; } z_jump_args_t ;
+typedef void ( * z_stdout_hook_t ) ( const char * data , uint32_t len ) ;
+extern z_stdout_hook_t z_stdout_hook ;
+typedef uint32_t ( * z_stdin_hook_t ) ( char * buf , uint32_t len ) ;
+extern z_stdin_hook_t z_stdin_hook ;
+# define VT100_CURSOR_UP "\e[A"
+# define VT100_CURSOR_DOWN "\e[B"
+# define VT100_CURSOR_RIGHT "\e[C"
+# define VT100_CURSOR_LEFT "\e[D"
+# define VT100_CURSOR_HOME "\e[;H"
+# define VT100_CURSOR_MOVE_TO "\e[%i;%iH"
+# define VT100_CURSOR_CRLF "\e[E"
+# define VT100_CLEAR_HOME "\e[;H"
+# define VT100_ERASE_SCREEN "\e[J"
+# define VT100_ERASE_LINE "\e[K"
+# define VT100_REVERSE "\e[7m"
+# define VT100_ATTR_RESET "\e[0m"
+# define CH_ESC 0x1b
+# define CH_LF 0x0a
+# define CH_CR 0x0d
+# define CH_FF 0x0c
+# define CH_BS 0x08
+# define CH_DEL 0x7f
+# define Z_MKSYSCALL ( name , fn ) Z_SYS_ ## name ,
+typedef enum { Z_SYSCALL_NONE = 0 , Z_SYSCALL_COUNT } z_syscall_id_t ;
+# undef Z_MKSYSCALL
+# endif
+== sw/common/zobj.h
+# ifndef ZOBJ_H
+# define ZOBJ_H
+typedef enum { Z_NONE , Z_RETVAL , Z_UINT32 , Z_INT32 , Z_FLOAT32 , Z_STR , Z_LIST , Z_MAP , Z_BLOB } z_type_t ;
+typedef struct { z_type_t type ; union { void * ptr ; char * str ; uint32_t uint32 ; int32_t int32 ; float float32 ; } val ; } z_obj_t ;
+typedef struct { uint32_t len ; z_obj_t * a ; z_obj_t * b ; } z_obj_table_t ;
+typedef struct { uint32_t len ; uint8_t * data ; } z_blob_t ;
+extern z_obj_t z_ok ;
+extern z_obj_t z_fail ;
+# define z_obj_int z_obj_int32
+# define z_obj_uint z_obj_uint32
+# define z_obj_float z_obj_float32
+# endif
+== sw/common/zmsg.h
+# ifndef ZMSG_H
+# define ZMSG_H
+typedef uint32_t z_rv ;
+# define Z_OK 0
+# define Z_FAIL 1
+# define Z_MAILBOX_DEPTH 32
+# define Z_MSG_MAX_TABLES 4
+# define Z_MSG_MAX_ITEMS 16
+# define Z_MSG_MAX_BLOBS 2
+typedef struct { uint32_t to ; uint32_t from ; uint32_t subject ; uint32_t tag ; z_obj_t obj ; z_obj_table_t _tables [ Z_MSG_MAX_TABLES ] ; z_obj_t _items [ Z_MSG_MAX_ITEMS ] ; z_blob_t _blobs [ Z_MSG_MAX_BLOBS ] ; } z_msg_t ;
+typedef struct { uint32_t to ; uint32_t from ; uint32_t subject ; uint32_t tag ; z_obj_t obj ; } z_msg_envelope_t ;
+typedef struct { z_msg_t * msg ; uint32_t timeout ; uint32_t flags ; uint32_t subject ; uint32_t tag ; } z_msg_recv_args_t ;
+# define Z_MSG_RECV_MATCH 1u
+# define Z_MSG_RECV_NOWAIT 2u
+# endif
+== sw/common/zproc.h
+# ifndef ZPROC_H
+# define ZPROC_H
+# define Z_PROC_FLAG_ACTIVE 0x000000001
+# define Z_PROC_FLAG_DIE 0x000000002
+# define Z_PROC_FLAG_BLOCKED 0x000000004
+# define Z_PROC_FLAG_WAKE 0x000000008
+# define Z_PROC_FLAG_DRIVER 0x000000010
+# define Z_PROC_FLAG_DRV_WRITE 0x000000020
+# define Z_PROC_FLAG_LOADING 0x000000040
+# define Z_PROC_NAME_MAX 24
+typedef struct { uint32_t pid ; uint32_t base ; uint32_t size ; uint32_t pc ; uint32_t sp ; uint32_t flags ; char name [ Z_PROC_NAME_MAX ] ; uint32_t cpu_ticks ; } z_proc_info_t ;
+# define Z_PROC_STATE_UNKNOWN 0
+# define Z_PROC_STATE_RUNNING 1
+# define Z_PROC_STATE_EXITED 2
+typedef struct { uint32_t pid ; uint32_t state ; int32_t status ; } z_proc_status_args_t ;
+typedef struct { uint32_t pid ; uint32_t serial ; } z_proc_serial_args_t ;
+# define Z_ARENA_QUERY 0xFFFFFFFFu
+# define Z_ARENA_MAX ( 512u * 1024 * 1024 )
+# define Z_ARENA_OK 0
+# define Z_ARENA_E_PERM ( - 1 )
+# define Z_ARENA_E_NOMEM ( - 2 )
+# define Z_ARENA_E_RESERVE ( - 3 )
+typedef struct { uint32_t size ; uint32_t base ; int32_t result ; } z_arena_args_t ;
+# define Z_ABI_ID_MAX 24
+typedef struct { char id [ Z_ABI_ID_MAX ] ; } z_abi_args_t ;
+# define Z_TIME64_GET 0
+# define Z_TIME64_SET 1
+typedef struct { int32_t op ; int32_t result ; uint32_t sec_lo ; int32_t sec_hi ; uint32_t sub ; uint32_t valid ; } z_time64_args_t ;
+typedef struct { z_proc_info_t * out ; uint32_t max ; uint32_t count ; uint32_t truncated ; } z_proc_list_args_t ;
+typedef struct { uint32_t total ; uint32_t used ; uint32_t free ; uint32_t largest_free ; uint32_t used_blocks ; uint32_t free_blocks ; uint32_t blocks_used ; uint32_t blocks_max ; } z_mem_stats_args_t ;
+# define Z_GRANT_DRIVERS 1
+# define Z_GRANT_OPEN 3
+# define Z_GRANT_CLOSE 4
+typedef struct { uint32_t op ; uint32_t pid ; uint32_t base ; uint32_t size ; } z_grant_args_t ;
+typedef struct { const char * const * names ; uint32_t count ; uint8_t * found ; } z_exec_many_args_t ;
+# ifndef Z_IRQ_ETH
+# define Z_IRQ_ETH 8
+# endif
+# ifndef Z_IRQ_USB
+# define Z_IRQ_USB 9
+# endif
+# define Z_IRQ_OP_BIND 1
+# define Z_IRQ_OP_UNBIND 2
+typedef struct { uint32_t op ; uint32_t irq ; uint32_t silence ; uint32_t silence_val ; } z_irq_args_t ;
+# define Z_BLK_RAM 1
+# define Z_BLK_USB 2
+# define Z_BLK_OP_INFO 0
+# define Z_BLK_OP_READ 1
+# define Z_BLK_OP_WRITE 2
+# define Z_BLK_OP_START 3
+# define Z_BLK_PRESENT 0x1
+# define Z_BLK_READY 0x2
+# define Z_BLK_SECTOR 512
+typedef struct { uint32_t op ; uint32_t dev ; uint32_t lba ; uint32_t count ; void * buf ; uint32_t sectors ; uint32_t gen ; uint32_t flags ; } z_blk_args_t ;
+# define Z_ZAR_OP_CHILD 0
+# define Z_ZAR_OP_FILE 1
+# define Z_ZAR_OP_READ 2
+# define Z_ZAR_OP_ISDIR 3
+# define Z_ZAR_ARG_NAME_MAX 128
+typedef struct { uint32_t op ; const char * path ; uint32_t iter ; uint32_t off ; uint32_t size ; uint32_t is_dir ; void * buf ; uint32_t len ; char name [ Z_ZAR_ARG_NAME_MAX ] ; } z_zar_args_t ;
+# define Z_CPU_IRQ_TICK 0
+# define Z_CPU_IRQ_USB 1
+# define Z_CPU_IRQ_YIELD 2
+# define Z_CPU_IRQ_OTHER 3
+# define Z_CPU_STAT_PROCS 32
+typedef struct { uint32_t lo , hi ; } z_cpu_count_t ;
+typedef struct { uint32_t n ; uint32_t now ; z_cpu_count_t idle ; z_cpu_count_t irq [ 4 ] ; uint32_t irq_n [ 4 ] ; z_cpu_count_t proc [ Z_CPU_STAT_PROCS ] ; } z_cpu_stat_args_t ;
+# endif
+== sw/common/zexec.h
+# ifndef ZEXEC_H
+# define ZEXEC_H
+# define Z_EXEC_MAGIC0 'Z'
+# define Z_EXEC_MAGIC1 'E'
+# define Z_EXEC_MAGIC2 'X'
+# define Z_EXEC_MAGIC3 'E'
+# define Z_EXEC_VERSION 1
+# define Z_EXEC_HEADER_SIZE 16
+# define Z_EXEC_STACK_MASK 0x000fu
+# define Z_ABI_LEVEL 0
+# define Z_EXEC_ABI_SHIFT 4
+# define Z_EXEC_ABI_MASK 0x00f0u
+# define Z_EXEC_FLAG_DRIVER 0x8000u
+# define Z_EXEC_FLAG_COMPRESSED 0x0100u
+# define Z_EXEC_FLAGS_KNOWN ( Z_EXEC_STACK_MASK | Z_EXEC_ABI_MASK | Z_EXEC_FLAG_COMPRESSED | Z_EXEC_FLAG_DRIVER )
+# define Z_EXEC_STACK_UNSPEC 0
+# define Z_EXEC_STACK_RESERVED 15
+# define Z_EXEC_STACK_MAX_CODE 14
+# define Z_EXEC_STACK_UNIT ( 8 * 1024 )
+typedef enum { Z_EXEC_STACK_OK = 0 , Z_EXEC_STACK_BAD_FLAGS , Z_EXEC_STACK_IS_RESERVED , Z_EXEC_STACK_OVER_CAP , } z_exec_stack_rv ;
+typedef struct { uint8_t magic [ 4 ] ; uint16_t version ; uint16_t flags ; uint32_t bss_size ; uint32_t entry ; } z_exec_header_t ;
+typedef struct { uint32_t data_off ; uint32_t data_size ; uint32_t stored_size ; int compressed ; uint32_t bss_size ; uint32_t total ; int is_zexe ; uint16_t flags ; } z_exec_info_t ;
+# endif
+== sw/common/zauth.h
+# ifndef Z_AUTH_H
+# define Z_AUTH_H
+# define Z_AUTH_PW_MAX 64
+# define Z_AUTH_NET_MIN 10
+# define Z_AUTH_OK 0
+# define Z_AUTH_E_BAD - 1
+# define Z_AUTH_E_WAIT - 2
+# define Z_AUTH_E_NOPASS - 3
+# define Z_AUTH_E_INVAL - 4
+# define Z_AUTH_E_STORE - 5
+# define Z_AUTH_E_NOSYS - 9
+enum { Z_AUTH_STATUS = 0 , Z_AUTH_CHECK = 1 , Z_AUTH_SET = 2 , Z_AUTH_POLICY = 3 , } ;
+# define Z_AUTH_HAS_PASSWORD 1u
+# define Z_AUTH_WRITABLE 2u
+# define Z_AUTH_NET_OK 4u
+typedef struct { uint32_t flags ; uint32_t lock_boot ; uint32_t lock_idle_min ; uint32_t lock_console ; uint32_t failures ; uint32_t wait_ms ; uint32_t iterations ; } z_auth_status_t ;
+typedef struct { uint32_t op ; const char * pw ; uint32_t pwlen ; const char * newpw ; uint32_t newlen ; z_auth_status_t * st ; int32_t result ; uint32_t wait_ms ; } z_auth_args_t ;
+# endif
+== sw/common/zcfg.h
+# ifndef ZCFG_H
+# define ZCFG_H
+# define Z_CFG_PATH Z_PATH_SYS_CONFIG
+# define Z_CFG_KEY_MAX 64
+# define Z_CFG_VAL_MAX 128
+# define Z_CFG_LINE_MAX 256
+# define Z_CFG_FILE_MAX 4096
+typedef struct { const char * key ; const char * def ; const char * help ; } z_cfg_known_t ;
+extern const z_cfg_known_t z_cfg_known [ ] ;
+extern const int z_cfg_known_count ;
+typedef struct { const char * key ; char * val ; uint32_t vallen ; uint32_t found ; uint32_t generation ; } z_cfg_get_args_t ;
+typedef struct { uint32_t index ; char * key ; uint32_t keylen ; char * val ; uint32_t vallen ; uint32_t found ; } z_cfg_entry_args_t ;
+typedef struct { int32_t count ; uint32_t ignored ; uint32_t generation ; uint32_t done ; } z_cfg_reload_args_t ;
+typedef enum { Z_CFG_LINE_BLANK = 0 , Z_CFG_LINE_ENTRY , Z_CFG_LINE_BAD } z_cfg_line_t ;
+# endif
+== sw/common/zconsole.h
+# ifndef Z_CONSOLE_H
+# define Z_CONSOLE_H
+# define Z_KLOG_SIZE 4096
+# define Z_CONSOLE_NAME "console"
+typedef struct { uint8_t * buf ; uint32_t len ; uint32_t pos ; uint32_t n ; uint32_t lost ; } z_klog_args_t ;
+# endif
+== sw/common/zflash.h
+# ifndef Z_FLASH_H
+# define Z_FLASH_H
+enum { Z_FLASH_INFO = 0 , Z_FLASH_STATUS = 1 , Z_FLASH_BEGIN = 2 , Z_FLASH_END = 3 , Z_FLASH_ERASE = 4 , Z_FLASH_PROGRAM = 5 , } ;
+# define Z_FLASH_E_RESERVED ( 1u << 16 )
+typedef struct { uint32_t op ; uint32_t addr ; const void * buf ; uint32_t len ; uint32_t result ; } z_flash_args_t ;
+# endif
+== sw/common/zfs.h
+# ifndef ZFS_H
+# define ZFS_H
+typedef struct { char * name ; uint32_t size ; } z_fs_size_args_t ;
+typedef struct { char * name ; void * buf ; uint32_t maxlen ; uint32_t len ; } z_fs_read_args_t ;
+typedef struct { char * name ; void * buf ; uint32_t len ; uint32_t written ; } z_fs_write_args_t ;
+typedef struct { char * name ; } z_fs_unlink_args_t ;
+typedef struct { char * path ; char * out ; uint32_t out_cap ; uint32_t max_entries ; uint32_t count ; uint32_t truncated ; uint8_t * types ; } z_fs_list_args_t ;
+# define Z_FS_TYPE_FILE 0
+# define Z_FS_TYPE_DIR 1
+# define Z_FS_NAME_MAX 256
+# define Z_FS_PATH_MAX 256
+# define Z_FS_MAX_OPEN 8
+typedef struct { char * name ; int32_t handle ; } z_fs_open_args_t ;
+typedef struct { int32_t handle ; void * buf ; uint32_t maxlen ; uint32_t len ; } z_fs_read_chunk_args_t ;
+typedef struct { int32_t handle ; void * buf ; uint32_t len ; uint32_t written ; } z_fs_write_chunk_args_t ;
+typedef struct { int32_t handle ; } z_fs_close_args_t ;
+typedef struct { char * name ; } z_fs_path_args_t ;
+typedef struct { int32_t handle ; uint32_t offset ; uint32_t pos ; } z_fs_seek_args_t ;
+typedef struct { int32_t handle ; uint32_t size ; uint32_t result ; } z_fs_truncate_args_t ;
+typedef struct { uint32_t total_kb ; uint32_t free_kb ; } z_fs_df_args_t ;
+typedef struct { char * from ; char * to ; int32_t err ; } z_fs_rename_args_t ;
+# define Z_FS_ERR_NONE 0
+# define Z_FS_ERR_NOENT 1
+# define Z_FS_ERR_EXIST 2
+# define Z_FS_ERR_XDEV 3
+# define Z_FS_ERR_BUSY 4
+# define Z_FS_ERR_INVAL 5
+# define Z_FS_ERR_IO 6
+# define Z_FS_ATTR_RDONLY 0x01
+# define Z_FS_ATTR_HIDDEN 0x02
+# define Z_FS_ATTR_SYSTEM 0x04
+# define Z_FS_ATTR_DIR 0x10
+# define Z_FS_ATTR_ARCHIVE 0x20
+typedef struct { uint32_t size ; uint16_t fdate ; uint16_t ftime ; uint8_t attr ; uint8_t type ; uint8_t _pad [ 2 ] ; } z_fs_info_t ;
+typedef struct { char * name ; z_fs_info_t info ; } z_fs_stat_args_t ;
+typedef struct { z_fs_list_args_t list ; z_fs_info_t * info ; } z_fs_list_ex_args_t ;
+# endif
+== sw/common/zfsapp.h
+# ifndef ZFSAPP_H
+# define ZFSAPP_H
+# endif
+== sw/common/zkv.h
+# ifndef Z_KV_H
+# define Z_KV_H
+# define Z_KV_KEY_MAX 31
+# define Z_KV_VAL_MAX 256
+# define Z_KV_OK 0
+# define Z_KV_E_NOENT - 1
+# define Z_KV_E_INVAL - 2
+# define Z_KV_E_NOSPC - 3
+# define Z_KV_E_IO - 4
+# define Z_KV_E_BUFFER - 5
+# define Z_KV_E_BUSY - 6
+# define Z_KV_E_PROTECTED - 7
+# define Z_KV_E_READONLY - 8
+# define Z_KV_E_NOSYS - 9
+# define Z_KV_SCRUB 1u
+enum { Z_KV_GET = 0 , Z_KV_SET = 1 , Z_KV_DEL = 2 , Z_KV_INFO = 3 , Z_KV_ENTRY = 4 , } ;
+typedef struct { uint32_t op ; const char * key ; void * val ; uint32_t len ; uint32_t flags ; uint32_t index ; char * name ; int32_t result ; } z_kv_args_t ;
+# define Z_KV_INFO_WRITABLE 1u
+typedef struct { uint32_t base ; uint32_t size ; uint32_t flags ; int32_t active ; uint32_t generation ; uint32_t used ; uint32_t live ; uint32_t records ; uint32_t keys ; } z_kv_info_t ;
+# endif
+== sw/common/zsubjects.h
+# ifndef ZSUBJECTS_H
+# define ZSUBJECTS_H
+# if defined ( __zcc__ ) && ! defined ( _Static_assert )
+# define _Static_assert ( cond , msg ) extern int z_static_assert_zcc_
+# endif
+# define Z_SUBJ_WM 100
+# define Z_SUBJ_WM_N 100
+# define Z_SUBJ_PORT 200
+# define Z_SUBJ_PORT_N 16
+# define Z_SUBJ_REPL 216
+# define Z_SUBJ_REPL_N 16
+# define Z_SUBJ_TERM 232
+# define Z_SUBJ_TERM_N 16
+# define Z_SUBJ_NET 300
+# define Z_SUBJ_NET_N 40
+# define Z_SUBJ_WEB 340
+# define Z_SUBJ_WEB_N 8
+# define Z_SUBJ_ASK 348
+# define Z_SUBJ_ASK_N 32
+# define Z_SUBJ_STREAM 400
+# define Z_SUBJ_STREAM_N 16
+# define Z_SUBJ_BENCH 416
+# define Z_SUBJ_BENCH_N 16
+# define Z_SUBJ_FS 432
+# define Z_SUBJ_FS_N 16
+# define Z_SUBJ_USB 448
+# define Z_SUBJ_USB_N 16
+# define Z_SUBJ_CONVERT 464
+# define Z_SUBJ_CONVERT_N 8
+# define Z_SUBJ_PRINT 472
+# define Z_SUBJ_PRINT_N 8
+# define Z_SUBJ_TTS 0x54540000u
+# define Z_SUBJ_TTS_N 0x10000
+# define Z_SUBJ_WM_GAME ( - 32768 )
+# define Z_SUBJ_WM_GAME_N 16
+# define Z_SUBJECTS_IN ( base , s ) _Static_assert ( ( unsigned long ) ( ( s ) - ( base ) ) < ( unsigned long ) ( base ## _N ) && ( s ) >= ( base ) , # s " is outside its block " # base " (zsubjects.h)" )
+# define Z_SUBJ_AFTER_ ( a , b ) _Static_assert ( ( unsigned long ) ( b ) >= ( unsigned long ) ( a ) + ( unsigned long ) ( a ## _N ) , # b " overlaps " # a " (zsubjects.h)" )
+# endif
+== sw/common/zfsproto.h
+# ifndef ZFSPROTO_H
+# define ZFSPROTO_H
+# define Z_FS_REQ ( Z_SUBJ_FS + 0 )
+# define Z_FS_REPLY ( Z_SUBJ_FS + 1 )
+# define Z_FS_CHANGED ( Z_SUBJ_FS + 2 )
+# define Z_FS_SERVICE "fs0"
+# define Z_FSOP_OPEN 1
+# define Z_FSOP_CLOSE 2
+# define Z_FSOP_READ 3
+# define Z_FSOP_WRITE 4
+# define Z_FSOP_LSEEK 5
+# define Z_FSOP_FSTAT 6
+# define Z_FSOP_STAT 7
+# define Z_FSOP_UNLINK 8
+# define Z_FSOP_MKDIR 9
+# define Z_FSOP_RENAME 10
+# define Z_FSOP_OPENDIR 11
+# define Z_FSOP_READDIR 12
+# define Z_FSOP_CLOSEDIR 13
+# define Z_FSOP_FSYNC 14
+# define Z_FSOP_FTRUNCATE 15
+# define Z_FSOP_STATVFS 16
+# define Z_FSOP_MKFS 17
+# define Z_FSOP_MOUNT 18
+# define Z_FSOP_UMOUNT 19
+# define Z_FSOP_SYNCALL 20
+# define Z_FSOP_WATCH 21
+# define Z_FSOP_WATCHREAD 22
+# define Z_FSOP_UNWATCH 23
+# define Z_O_RDONLY 0x0000
+# define Z_O_WRONLY 0x0001
+# define Z_O_RDWR 0x0002
+# define Z_O_ACCMODE 0x0003
+# define Z_O_CREAT 0x0040
+# define Z_O_EXCL 0x0080
+# define Z_O_TRUNC 0x0200
+# define Z_O_APPEND 0x0400
+# define Z_O_NOFLASH 0x1000
+# define Z_SEEK_SET 0
+# define Z_SEEK_CUR 1
+# define Z_SEEK_END 2
+# define Z_EPERM 1
+# define Z_ENOENT 2
+# define Z_EIO 5
+# define Z_EBADF 9
+# define Z_EAGAIN 11
+# define Z_EACCES 13
+# define Z_EBUSY 16
+# define Z_EEXIST 17
+# define Z_EXDEV 18
+# define Z_ENOTDIR 20
+# define Z_EISDIR 21
+# define Z_EINVAL 22
+# define Z_EMFILE 24
+# define Z_ENOSPC 28
+# define Z_EROFS 30
+# define Z_ENAMETOOLONG 91
+# define Z_ENOTEMPTY 90
+# define Z_ENODEV 19
+# define Z_ETIMEDOUT 116
+# define Z_FS_CHUNK 32768
+# define Z_FS_DIR_BYTES 2048
+typedef struct { uint32_t op ; int32_t fd ; uint32_t flags ; uint32_t len ; int32_t off ; uint32_t whence ; char path [ Z_FS_PATH_MAX ] ; char path2 [ Z_FS_PATH_MAX ] ; } z_fsreq_t ;
+typedef struct { int32_t result ; uint32_t len ; uint32_t flags ; } z_fsrep_t ;
+# define Z_FSREP_END 0x0001
+typedef struct { z_fs_info_t info ; uint16_t reclen ; uint16_t namelen ; char name [ ] ; } z_fs_dirent_t ;
+typedef struct { uint32_t total_kb ; uint32_t free_kb ; } z_fs_vfs_t ;
+# define Z_FS_WATCHES 4
+# define Z_FS_WATCH_PATHS 4
+typedef struct { uint32_t writers ; uint32_t flags ; } z_fs_watch_t ;
+# define Z_FS_WATCH_MORE 0x0001
+# endif
+== sw/common/znfsproto.h
+# ifndef Z_NFSPROTO_H
+# define Z_NFSPROTO_H
+# define Z_NET_NFS_REQ ( Z_SUBJ_NET + 18 )
+# define Z_NET_NFS_REPLY ( Z_SUBJ_NET + 19 )
+# define Z_NET_NFS_EVENT ( Z_SUBJ_NET + 20 )
+# define Z_NFS_FH_MAX 64
+# define Z_NFS_SPEC_MAX 128
+# define Z_DIR_NFS "/nfs"
+# define Z_NFSOP_LOOKUP 1
+# define Z_NFSOP_READ 2
+# define Z_NFSOP_READDIR 3
+# define Z_NFSOP_MOUNT 4
+# define Z_NFSOP_UMOUNT 5
+# define Z_NFSOP_STATUS 6
+typedef struct { uint32_t op ; uint32_t len ; uint64_t off ; uint8_t verf [ 8 ] ; uint32_t fh_len ; uint8_t fh [ Z_NFS_FH_MAX ] ; char path [ Z_FS_PATH_MAX ] ; } z_nfsreq_t ;
+typedef struct { int32_t result ; uint32_t len ; uint32_t flags ; uint32_t fh_len ; uint64_t cookie ; uint8_t verf [ 8 ] ; z_fs_info_t info ; uint8_t fh [ Z_NFS_FH_MAX ] ; } z_nfsrep_t ;
+# define Z_NFSREP_EOF 0x0001
+# define Z_NFSREP_MOUNTING 0x0002
+# define Z_NFS_RSIZE 4096
+# endif
+== sw/common/zwm.h
+# ifndef ZWM_H
+# define ZWM_H
+# define Z_PID_WM 1
+# define Z_WM_TITLEBAR_H 11
+# define Z_WM_CREATE_WINDOW ( Z_SUBJ_WM + 0 )
+# define Z_WIN_FLAG_CLOSE_ICON ( 1u << 0 )
+# define Z_WIN_FLAG_CLOSE_KILLS_OWNER ( 1u << 1 )
+# define Z_WIN_FLAG_RESIZABLE ( 1u << 2 )
+# define Z_WIN_FLAG_NEW_ICON ( 1u << 4 )
+# define Z_WIN_FLAG_SAVE_ICON ( 1u << 5 )
+# define Z_WIN_FLAG_OPEN_ICON ( 1u << 6 )
+# define Z_WIN_FLAG_FONT_ICON ( 1u << 7 )
+# define Z_WIN_FLAG_COLOUR_ICON ( 1u << 14 )
+# define Z_WIN_FLAG_PRINT_ICON ( 1u << 16 )
+# define Z_WIN_FLAG_MODAL ( 1u << 8 )
+# define Z_WIN_FLAG_READABLE ( 1u << 9 )
+# define Z_WIN_FLAG_NO_FOCUS ( 1u << 10 )
+# define Z_WIN_FLAG_GAME_MODE ( 1u << 11 )
+# define Z_WIN_FLAG_COLOR ( 1u << 12 )
+# define Z_WIN_FLAG_NO_POINTER ( 1u << 13 )
+# define Z_WIN_FLAG_COLOUR_LATER ( 1u << 15 )
+# define Z_WIN_FLAG_TYPES ( 1u << 17 )
+# define Z_WM_RECT_BARE 0x80000000u
+# define Z_WIN_FLAG_MIN_IS_CREATE ( 1u << 3 )
+# define Z_WM_WINDOW_CREATED ( Z_SUBJ_WM + 1 )
+# define Z_WM_DESTROY_WINDOW ( Z_SUBJ_WM + 2 )
+# define Z_WM_WINDOW_MOVED ( Z_SUBJ_WM + 3 )
+# define Z_WM_REDRAW ( Z_SUBJ_WM + 4 )
+# define Z_WM_REDRAW_DAMAGE ( 1u << 28 )
+# define Z_WM_REDRAW_DONE ( Z_SUBJ_WM + 5 )
+# define Z_WM_KEY ( Z_SUBJ_WM + 6 )
+# define Z_WM_CLOSE ( Z_SUBJ_WM + 7 )
+# define Z_WM_WINDOW_RESIZED ( Z_SUBJ_WM + 8 )
+# define Z_WM_MOUSE ( Z_SUBJ_WM + 9 )
+# define Z_WM_TITLEBAR_ICON ( Z_SUBJ_WM + 10 )
+# define Z_WM_WHEEL ( Z_SUBJ_WM + 21 )
+# define Z_WM_WHEEL_NOTCHES ( u ) ( ( int32_t ) ( uint32_t ) ( u ) )
+# define Z_WM_READ ( Z_SUBJ_WM + 22 )
+# define Z_WM_READ_ALL 0
+# define Z_WM_READ_SELECTION 1
+# define Z_WM_READ_PACK ( win , what ) ( ( ( uint32_t ) ( what ) << 16 ) | ( ( uint32_t ) ( win ) & 0xffffu ) )
+# define Z_WM_READ_WIN ( v ) ( ( int32_t ) ( ( v ) & 0xffffu ) )
+# define Z_WM_READ_WHAT ( v ) ( ( ( uint32_t ) ( v ) >> 16 ) & 0xffu )
+# define Z_WM_TBICON_NEW 1
+# define Z_WM_TBICON_SAVE 2
+# define Z_WM_TBICON_OPEN 3
+# define Z_WM_TBICON_FONT 4
+# define Z_WM_TBICON_COLOUR 5
+# define Z_WM_TBICON_PRINT 6
+# define Z_WM_PACK_TBICON ( id , kind ) ( ( ( ( uint32_t ) ( kind ) & 0xFF ) << 8 ) | ( ( uint32_t ) ( id ) & 0xFF ) )
+# define Z_WM_UNPACK_TBICON_ID ( v ) ( ( v ) & 0xFF )
+# define Z_WM_UNPACK_TBICON_KIND ( v ) ( ( ( v ) >> 8 ) & 0xFF )
+# define Z_WM_SET_TITLE ( Z_SUBJ_WM + 11 )
+# define Z_WM_SET_CLIP ( Z_SUBJ_WM + 19 )
+# define Z_WM_CLIP_DONE ( Z_SUBJ_WM + 20 )
+# define Z_WM_MAX_CLIP 8
+typedef struct { int16_t x0 , y0 , x1 , y1 ; } z_wm_cliprect_t ;
+# define Z_WM_GAME_GRAB ( Z_SUBJ_WM_GAME + 8 )
+# define Z_WM_GAME_GRAB_POINTER 0x1u
+# define Z_WM_GAME_GRAB_MODIFIERS 0x2u
+# define Z_WM_GAME_RELEASE ( Z_SUBJ_WM_GAME + 9 )
+# define Z_WM_GAME_REVOKED ( Z_SUBJ_WM_GAME + 10 )
+# define Z_WM_CLIP_CTL ( - 32768 )
+# define Z_WM_CLIP_FREEZE 1
+# define Z_WM_CLIP_WINDOW 2
+# define Z_WM_CLIP_ACCENT ( Z_WM_CLIP_CTL + 1 )
+# define Z_WM_CLIP_DONE_ID ( v ) ( ( v ) & 0xffffu )
+# define Z_WM_CLIP_DONE_DREW 0x10000u
+# define Z_WM_SET_ARG ( Z_SUBJ_WM + 12 )
+# define Z_WM_GET_ARG ( Z_SUBJ_WM + 13 )
+# define Z_WM_ARG ( Z_SUBJ_WM + 14 )
+# define Z_WM_ARG_MAX 96
+# define Z_WM_ARG_TIMEOUT 11000
+# define Z_WM_CLIP_SET ( Z_SUBJ_WM + 15 )
+# define Z_WM_CLIP_GET ( Z_SUBJ_WM + 16 )
+# define Z_WM_CLIP_DATA ( Z_SUBJ_WM + 17 )
+# define Z_WM_REPAINT ( Z_SUBJ_WM + 18 )
+# define Z_WM_CLIP_MAX 4096
+# define Z_WM_PACK_MOUSE ( x , y , buttons , inside ) ( ( ( ( ( uint32_t ) ( y ) >> 10 ) & 3u ) << 27 ) | ( ( ( ( uint32_t ) ( x ) >> 10 ) & 3u ) << 25 ) | ( ( ( inside ) ? 1u : 0u ) << 24 ) | ( ( ( uint32_t ) ( buttons ) & 0xF ) << 20 ) | ( ( ( uint32_t ) ( y ) & 0x3FF ) << 10 ) | ( ( uint32_t ) ( x ) & 0x3FF ) )
+# define Z_WM_UNPACK_MOUSE_X ( v ) ( ( ( v ) & 0x3FF ) | ( ( ( ( v ) >> 25 ) & 3u ) << 10 ) )
+# define Z_WM_UNPACK_MOUSE_Y ( v ) ( ( ( ( v ) >> 10 ) & 0x3FF ) | ( ( ( ( v ) >> 27 ) & 3u ) << 10 ) )
+# define Z_WM_UNPACK_MOUSE_BUTTONS ( v ) ( ( ( v ) >> 20 ) & 0xF )
+# define Z_WM_UNPACK_MOUSE_INSIDE ( v ) ( ( ( v ) >> 24 ) & 1 )
+# define Z_MOUSE_BTN_LEFT ( 1u << 0 )
+# define Z_MOUSE_BTN_RIGHT ( 1u << 1 )
+# define Z_MOUSE_BTN_MIDDLE ( 1u << 2 )
+# define Z_WM_PACK_KEY ( keysym , modifiers , pressed ) ( ( ( ( uint32_t ) ( keysym ) & 0x7FFFFFu ) << 9 ) | ( ( ( uint32_t ) ( modifiers ) & 0xFF ) << 1 ) | ( ( pressed ) ? 1u : 0u ) )
+# define Z_WM_UNPACK_KEY_KEYSYM ( v ) ( ( ( uint32_t ) ( v ) >> 9 ) & 0x7FFFFFu )
+# define Z_WM_UNPACK_KEY_MODIFIERS ( v ) ( ( ( v ) >> 1 ) & 0xFF )
+# define Z_WM_UNPACK_KEY_PRESSED ( v ) ( ( v ) & 1 )
+# define Z_WM_PACK_XY ( id , x , y ) ( ( ( ( ( uint32_t ) ( y ) >> 10 ) & 1u ) << 31 ) | ( ( ( ( uint32_t ) ( x ) >> 10 ) & 3u ) << 29 ) | ( ( ( uint32_t ) ( id ) & 0xFF ) << 20 ) | ( ( ( uint32_t ) ( x ) & 0x3FF ) << 10 ) | ( ( uint32_t ) ( y ) & 0x3FF ) )
+# define Z_WM_UNPACK_ID ( v ) ( ( ( v ) >> 20 ) & 0xFF )
+# define Z_WM_UNPACK_X ( v ) ( ( ( ( v ) >> 10 ) & 0x3FF ) | ( ( ( ( v ) >> 29 ) & 3u ) << 10 ) )
+# define Z_WM_UNPACK_Y ( v ) ( ( ( v ) & 0x3FF ) | ( ( ( ( v ) >> 31 ) & 1u ) << 10 ) )
+# define Z_WM_RESIZE ( Z_SUBJ_WM + 23 )
+# define Z_WM_PACK_RESIZE ( id , w , h ) ( ( ( ( uint32_t ) ( id ) & 0xFFu ) << 24 ) | ( ( ( uint32_t ) ( w ) & 0xFFFu ) << 12 ) | ( ( uint32_t ) ( h ) & 0xFFFu ) )
+# define Z_WM_UNPACK_RESIZE_ID ( v ) ( ( ( uint32_t ) ( v ) >> 24 ) & 0xFFu )
+# define Z_WM_UNPACK_RESIZE_W ( v ) ( ( ( uint32_t ) ( v ) >> 12 ) & 0xFFFu )
+# define Z_WM_UNPACK_RESIZE_H ( v ) ( ( uint32_t ) ( v ) & 0xFFFu )
+# define Z_WM_SET_LIMITS ( Z_SUBJ_WM + 24 )
+# define Z_DOUBLE_CLICK_TICKS 256
+# define Z_WM_DEFAULT_WIDTH 140
+# define Z_WM_DEFAULT_HEIGHT 100
+# define Z_WM_RESIZE_GRIP 12
+# define Z_WIN_GRIP_INSET ( Z_WM_RESIZE_GRIP - 2 )
+# define Z_WM_MIN_WIDTH 64
+# define Z_WM_MIN_HEIGHT ( Z_WM_TITLEBAR_H + 20 )
+# define Z_WM_CAPTION ( Z_SUBJ_WM + 25 )
+# define Z_WM_WIN_QUERY ( Z_SUBJ_WM + 26 )
+# define Z_WM_WIN_INFO ( Z_SUBJ_WM + 27 )
+# define Z_WM_WIN_PLACE ( Z_SUBJ_WM + 28 )
+# define Z_WM_WIN_FOCUS ( Z_SUBJ_WM + 29 )
+# define Z_WM_WIN_TBICON ( Z_SUBJ_WM + 30 )
+# define Z_WM_WIN_KILL ( Z_SUBJ_WM + 31 )
+# define Z_WM_WIN_NEXT_PLACE ( Z_SUBJ_WM + 32 )
+# define Z_WM_LOCK ( Z_SUBJ_WM + 33 )
+# define Z_WM_LOCK_NOW 0
+# define Z_WM_LOCK_RELOAD 1
+# define Z_WM_RESCUE ( Z_SUBJ_WM + 34 )
+# define Z_WM_ARG_CHILD ( Z_SUBJ_WM + 35 )
+# define Z_WM_COLOR ( Z_SUBJ_WM + 36 )
+# define Z_WM_ACCENT_USED ( Z_SUBJ_WM + 37 )
+# define Z_WM_COLOR_WANT ( Z_SUBJ_WM + 38 )
+# define Z_WM_MAXIMIZE ( Z_SUBJ_WM + 39 )
+# define Z_WM_WANTS_TEXT ( Z_SUBJ_WM + 40 )
+# define Z_WM_PACK_WANTS_TEXT ( on , caret_y ) ( ( ( on ) ? 0x80000000u : 0u ) | ( ( uint32_t ) ( caret_y ) & 0xFFFFu ) )
+# define Z_WM_WANTS_TEXT_ON ( v ) ( ( ( v ) >> 31 ) & 1u )
+# define Z_WM_WANTS_TEXT_Y ( v ) ( ( int ) ( ( v ) & 0xFFFFu ) )
+# define Z_WM_PACK_PLACE ( x , y ) ( ( ( ( ( uint32_t ) ( y ) >> 10 ) & 3u ) << 22 ) | ( ( ( ( uint32_t ) ( x ) >> 10 ) & 3u ) << 20 ) | ( ( ( uint32_t ) ( y ) & 0x3FF ) << 10 ) | ( ( uint32_t ) ( x ) & 0x3FF ) )
+# define Z_WM_UNPACK_PLACE_X ( v ) ( ( int ) ( ( ( v ) & 0x3FF ) | ( ( ( ( v ) >> 20 ) & 3u ) << 10 ) ) )
+# define Z_WM_UNPACK_PLACE_Y ( v ) ( ( int ) ( ( ( ( v ) >> 10 ) & 0x3FF ) | ( ( ( ( v ) >> 22 ) & 3u ) << 10 ) ) )
+# define Z_WM_INFO_ICONS 5
+# define Z_WM_INFO_TITLE 64
+typedef struct { uint32_t found ; uint32_t pid ; int16_t x , y , w , h ; int16_t cx0 , cy0 , cx1 , cy1 ; uint32_t real_input ; uint8_t focused ; uint8_t n_icons ; uint8_t icon_kind [ Z_WM_INFO_ICONS ] ; uint8_t pad ; int16_t icon_x [ Z_WM_INFO_ICONS ] ; int16_t icon_y [ Z_WM_INFO_ICONS ] ; char title [ Z_WM_INFO_TITLE ] ; } z_wm_win_info_t ;
+# endif
+== sw/common/znet.h
+# ifndef ZNET_H
+# define ZNET_H
+# define Z_PID_NET 2
+# define Z_NET_TFTP_PUT ( Z_SUBJ_NET + 2 )
+# define Z_NET_TFTP_PUT_REPLY ( Z_SUBJ_NET + 3 )
+# define Z_NET_DNS_RESOLVE ( Z_SUBJ_NET + 4 )
+# define Z_NET_DNS_RESOLVE_REPLY ( Z_SUBJ_NET + 5 )
+# define Z_NET_SSH_PREPARE ( Z_SUBJ_NET + 8 )
+# define Z_NET_SSH_PREPARE_REPLY ( Z_SUBJ_NET + 9 )
+# define Z_NET_DEBUG_DUMP ( Z_SUBJ_NET + 13 )
+# define Z_NET_LISTEN ( Z_SUBJ_NET + 14 )
+# define Z_NET_LISTEN_REPLY ( Z_SUBJ_NET + 15 )
+# define Z_NET_UNLISTEN ( Z_SUBJ_NET + 16 )
+# define Z_NET_EOF ( Z_SUBJ_NET + 17 )
+# define Z_NET_LISTEN_E_PORT 1
+# define Z_NET_LISTEN_E_FULL 2
+# define Z_NET_LISTEN_E_NOIP 3
+# define Z_NET_ACCEPT_LOCAL 1u
+typedef struct { uint32_t ip ; uint16_t port ; uint16_t lport ; uint32_t flags ; } z_net_accept_t ;
+# define Z_NET_BROWSE ( Z_SUBJ_NET + 21 )
+# define Z_NET_BROWSE_REPLY ( Z_SUBJ_NET + 22 )
+# endif
+== sw/common/zlisten.h
+# ifndef ZLISTEN_H
+# define ZLISTEN_H
+# define Z_LISTEN_POLL_TICKS ( Z_TICK_HZ / 10 )
+# endif
+== sw/common/zterm.h
+# ifndef ZTERM_H
+# define ZTERM_H
+# define Z_TERM_SET_PORT ( Z_SUBJ_TERM + 0 )
+# endif
+== sw/common/zusbproto.h
+# ifndef ZUSBPROTO_H
+# define ZUSBPROTO_H
+# define Z_USB_REQ ( Z_SUBJ_USB + 0 )
+# define Z_USB_REPLY ( Z_SUBJ_USB + 1 )
+# define Z_USB_EVENT ( Z_SUBJ_USB + 2 )
+# define Z_USB_KICK ( Z_SUBJ_USB + 3 )
+# define Z_USB_SERVICE "usb0"
+# define Z_USBEV_MSC 1
+# define Z_USBEV_NET 2
+# define Z_USBEV_CDC 4
+# define Z_USBOP_MSC_INFO 1
+# define Z_USBOP_MSC_START 2
+# define Z_USBOP_MSC_READ 3
+# define Z_USBOP_MSC_WRITE 4
+# define Z_USBOP_NET_INFO 5
+# define Z_USBOP_NET_OPEN 6
+# define Z_USBOP_NET_CLOSE 7
+# define Z_USBOP_CDC_INFO 8
+# define Z_USBOP_CDC_READ 9
+# define Z_USBOP_CDC_WRITE 10
+# define Z_USBOP_CMD 11
+# define Z_USB_MSC_MAX 4
+# define Z_USB_SECTOR 512
+# define Z_USB_CDC_MAX 256
+typedef struct { uint32_t op ; uint32_t lba ; uint32_t count ; uint32_t len ; uint8_t mac [ 6 ] ; uint8_t pad [ 2 ] ; } z_usbreq_t ;
+typedef struct { int32_t result ; uint32_t len ; } z_usbrep_t ;
+typedef struct { uint8_t present ; uint8_t ready ; uint8_t pad [ 2 ] ; uint32_t sectors ; uint32_t gen ; } z_usb_msc_info_t ;
+# endif
+== sw/common/zusbcdc.h
+# ifndef ZUSBCDC_H
+# define ZUSBCDC_H
+# endif

@@ -1,0 +1,6 @@
+# The calendar in sw/common/zrtc.c, 32 and 64 bits (docs/rtc.md,
+# "64-bit time"): z_time_to_tm64() and z_tm_to_time64() past 2106 and
+# before 1970, and agreeing with the 32-bit calls.
+all:
+	cc -std=gnu99 -Wall -Wextra -o /tmp/test_zrtc test_zrtc.c ../zrtc.c
+	/tmp/test_zrtc

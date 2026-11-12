@@ -111,6 +111,11 @@ int upd_show(const upd_io_t *io, const char *kernel_abi);
 #define UPD_ABI_NO_RELEASE  3   // the release does not say: a note
 int upd_abi_check(const char *release_abi, int release_len, const char *kernel_abi);
 
+// The kernel's ABI level (z_abi_level(), -1: it cannot say), which
+// update.c sets; and the line said when a release's level is higher.
+extern int upd_kernel_level;
+void upd_say_levels(const char *release_level);
+
 // Public keys as hex (64 digits each, separated by spaces or commas) into
 // `keys`, 32 bytes each: how many, or -1 if one is not a key.
 int upd_keys_parse(const char *hex, uint8_t *keys, int max);

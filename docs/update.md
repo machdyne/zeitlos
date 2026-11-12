@@ -125,8 +125,13 @@ $ update
 zeitlos 0.0.7
 snapshot v0.0.7 3f2a9c01e4b7 v0.0.6-45-g58e067a 2026-10-19T09:40:12Z
 /sys/manifest: 408 files, 17.4 MB
-abi: card 03a25f4cbf544cf0, flash 03a25f4cbf544cf0
+abi: card 03a25f4cbf544cf0 (level 0), flash 03a25f4cbf544cf0 (level 0)
 ```
+
+The level is the ABI level ([executables.md](executables.md), "The ABI
+level"): the manifest's `abi_level` line, and the kernel's
+(`z_abi_level()`, `Z_SYS_ABI_LEVEL`). Either is left out when it cannot
+be told -- a card written before the line, a kernel older than the call.
 
 ### ABI
 
@@ -183,6 +188,15 @@ on this flash. So:
 
   A card that is already `up to date` is not checked: nothing would be
   written.
+
+  When the release's ABI level is higher than the kernel's, the refusal
+  (or the `-f` warning) says so in as many words -- this kernel would
+  refuse every one of its programs as it starts:
+
+  ```
+          The release is ABI level 1; this kernel runs programs up to level 0
+          and would refuse them (docs/executables.md, "The ABI level").
+  ```
 
 The id says "the same interfaces", not "compatible interfaces": a
 syscall appended at the end is harmless to old programs, but it is a

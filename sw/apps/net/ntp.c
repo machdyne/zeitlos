@@ -309,7 +309,9 @@ static void apply_time(uint32_t ntp_sec, uint32_t ntp_frac, uint32_t rtt_ticks) 
 		unix_sec++;
 	}
 
-	z_rtc_set(unix_sec, sub);
+	// through the kernel, which keeps the high word (docs/rtc.md, "64-bit
+	// time"): the same as z_rtc_set() until 2106
+	z_time_set64((int64_t)unix_sec, sub);
 
 	synced_ever = true;
 	last_sync_ticks = z_uptime_ticks();

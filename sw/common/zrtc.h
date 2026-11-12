@@ -233,6 +233,20 @@ static inline void z_rtc_invalidate(void) {
 // reg_rtc_tz above is still unused: the conversion is done in software
 // per app, so there is nothing to keep in a register.
 
+// -- the time in 64 bits (docs/rtc.md, "64-bit time") --
+//
+// Seconds since 1970-01-01 UTC as a signed 64-bit count: the RTC's
+// 32 bits with the high word the kernel keeps (Z_SYS_TIME64), so the
+// answer stays right past 2106. Prefer these to z_rtc_seconds() and
+// z_rtc_set() in anything new: they are the same today, and only these
+// will be then. In sw/common/zeitlos.c.
+//
+// z_time_now64(): true if the clock has been set since power-on (as
+// z_rtc_valid()); either pointer may be NULL. z_time_set64(): false
+// with no RTC in this bitstream.
+bool z_time_now64(int64_t *sec, uint32_t *sub);
+bool z_time_set64(int64_t sec, uint32_t sub);
+
 // -- calendar (sw/common/zrtc.c) --
 
 typedef struct {
@@ -261,6 +275,11 @@ void z_time_to_tm(uint32_t t, z_tm_t *tm);
 // validated -- month 13 rolls into the next year, which is
 // occasionally useful and never checked.
 uint32_t z_tm_to_time(const z_tm_t *tm);
+
+// The same, in 64 bits: any year a z_tm_t holds (int32_t), before 1970
+// as well. No 64-bit division from libgcc: zrtc.c divides by hand.
+void z_time_to_tm64(int64_t t, z_tm_t *tm);
+int64_t z_tm_to_time64(const z_tm_t *tm);
 
 // "Sun".."Sat" and "Jan".."Dec". Always return a valid string,
 // "???" for an out-of-range input, so a caller can print the result

@@ -1783,7 +1783,7 @@ static void start_shell(const char *name) {
 	snprintf(auto_label, sizeof(auto_label), "starting %s", prog);
 	auto_pending = true;
 	auto_deadline = z_uptime_ticks() + TERM_AUTO_WAIT_TICKS;
-	auto_next_probe = 0;
+	auto_next_probe = z_uptime_ticks();	// due now (compared by difference)
 
 	snprintf(status, sizeof(status), "starting %s...  (Esc cancels)", prog);
 	panel_show(status);
@@ -1822,7 +1822,7 @@ static void auto_begin(void) {
 
 	auto_pending = true;
 	auto_deadline = z_uptime_ticks() + TERM_AUTO_WAIT_TICKS;
-	auto_next_probe = 0;
+	auto_next_probe = z_uptime_ticks();	// due now (compared by difference)
 
 	// A shell nothing has started yet: start it, as its button would.
 	// init no longer does (docs/terminal.md, "Starting the shells").
@@ -1847,12 +1847,14 @@ static void auto_poll(void) {
 
 	if (!auto_pending || connecting) return;
 
+	// by difference, signed: the tick count wraps every 68 days
+	// (docs/rtc.md, "Ticks")
 	now = z_uptime_ticks();
-	if (now < auto_next_probe) return;
+	if ((int32_t)(now - auto_next_probe) < 0) return;
 	auto_next_probe = now + Z_TICK_HZ / 4;
 
 	if (!z_pid_lookup(auto_wait_for, &pid)) {
-		if (now >= auto_deadline) {
+		if ((int32_t)(now - auto_deadline) >= 0) {
 			auto_pending = false;
 			snprintf(status, sizeof(status),
 				"%s: %.24s did not appear -- choose below", auto_label, auto_wait_for);

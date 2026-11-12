@@ -1,6 +1,7 @@
 # 1.0: freezing the interfaces (plan)
 
-Status: **a plan**, November 2026. The system is 0.1.0
+Status: **a plan, being prepared**, November 2026. Nothing here is
+frozen yet. The system is 0.1.0
 (`sw/common/zversion.h`); this is what has to be true before a version
 called 1.0 can promise that **a program written for 1.0 runs on every
 1.x release, on every board that has what it needs** -- the promise the
@@ -74,22 +75,37 @@ against where the machines are going.
   every packed message, and apps written against the call. The
   hardware can stay 640x480 for as long as it likes; the interface
   must not say so.
+  **Done in software** ([screen.md](screen.md)): `z_screen_size()` and
+  `(screen-size)`, reported by the kernel (640x480; `system.screen.size`
+  to test); wm's packs 12 bits, compatibly; wm, dialogs, the keyboard
+  and slide moved onto it. The floor is 640x360 -- 640 wide as every
+  app assumes, 16:9 within today's VRAM. The virtual mouse and the cursor stay 10 bits
+  in the gateware until a board needs more -- no LUTs spent now. Some
+  apps still clamp to 640x480 (listed in screen.md).
 - **Time.** `z_rtc_seconds()` and `z_time_to_tm()` are unsigned 32-bit
   seconds: they run out in 2106. `z_uptime_ticks()` (732 a second) wraps
   every 68 days. **Fix**: 64-bit seconds in the interface
   (`z_time_now64()`), the RTC's register pair read as one 64-bit value,
   and a monotonic 64-bit tick. For a system called Zeitlos, 2106 is not
   far enough.
+  **Done** ([rtc.md](rtc.md), "64-bit time" and "Ticks"): the 64-bit
+  calls, through a syscall whose kernel keeps the high word, so no
+  gateware (the RTC is set at every boot). No 64-bit tick: tick
+  differences in unsigned 32 bits are right across the wrap, and the
+  tree was audited for comparisons that were not.
 - **The executable has no ABI level.** ZEXE v1's header has a format
   version but nothing that says which interfaces the program was built
   for. **Fix**: an ABI level in the header (`abi = 1` for 1.0), so a
   later kernel knows a 1.0 program and keeps its promises to it, and a
   1.0 kernel can say clearly that a newer program needs a newer system
   (rather than fail somewhere later).
+  **Done** (below, "The ABI level").
 - **Compatible, not same.** `gen_abi.py`'s id changes on any change.
   **Fix**: a frozen 1.0 baseline (the reduced text it hashes, committed)
   and a check that every later change only adds to it; `update` then
   accepts any 1.x card on any 1.x flash.
+  **The tool is done** (below, "Checking a change"); the baseline and the
+  failing check wait for the freeze.
 
 ### Should decide
 
@@ -129,6 +145,34 @@ everywhere, the key/value store's interface, the MTU's address model,
 and `CORE_FILES`' places. All are already written as frozen in their
 own docs.
 
+## The ABI level
+
+Bits 7:4 of the ZEXE header's flags ([executables.md](executables.md),
+"The ABI level"): the interfaces a program was built for,
+`Z_ABI_LEVEL` in `sw/common/zexec.h`, written by `mkexec.py`. It is 0
+now and stays 0 until the freeze; 1.0 makes it 1. It changes only when
+a release changes the interfaces in a way programs would notice --
+something to avoid, a handful of times over decades if at all. Four
+bits hold 0-15; past that, a new ZEXE version.
+
+The kernel refuses a program of a higher level than its own before it
+starts ("built for a newer Zeitlos"). A program of a lower level is the
+promise: the kernel keeps what that level had.
+
+## Checking a change
+
+`tools/gen_abi.py --snapshot FILE` writes the interfaces as the
+fingerprint reads them; `--compare FILE` lists, by name, what was added,
+changed and removed since (a syscall, a `#define`, a struct, a
+typedef), and notes a struct that only grew at its end. CI puts the
+comparison with `release/abi/snapshot.txt` in every push's summary.
+
+It **reports**; it does not fail anything while the interfaces are being
+prepared. A change is not automatically a break -- a changed constant
+may be one only the kernel reads -- so the call stays a person's, made
+with the list in front of them. At the freeze, `release/abi/snapshot.txt`
+becomes 1.0's, and a change or removal against it becomes a failure.
+
 ## Keeping the promise: tests
 
 The emulator ([zsys.md](zsys.md)) makes the promise testable.
@@ -139,12 +183,13 @@ The emulator ([zsys.md](zsys.md)) makes the promise testable.
   Every later release boots it in `zsys` and runs it: the old binaries
   on the new kernel and core apps. A release that breaks one does not
   ship.
-- **The baseline check.** `gen_abi.py --compatible`: the reduced
-  interface text of 1.0, committed; a build fails if anything in it
-  changed rather than grew.
-- **CI.** Both on every push (a GitHub Actions job builds the software
-  and runs `zsys` headless; no FPGA tools needed), so a break is found
-  the day it is made.
+- **The baseline check.** `gen_abi.py --compare` against 1.0's
+  snapshot: a build fails if anything in it changed rather than grew.
+  (Today it reports.)
+- **CI.** On every push ([ci.md](ci.md)): the software built, both
+  core archives within budget, the host tests, and `zsys` headless; the
+  page and Lakritz's gateware weekly. A break is found the day it is
+  made.
 - **The registers.** `sim/sys/test_zdev.c` already checks the devices
   register by register against the RTL; its 1.0 checks become the
   hardware half of the baseline.
@@ -165,17 +210,19 @@ items, decide the "should decide" ones, and call that 0.9.
 
 ## The work, in order
 
-1. `z_screen_size()` and 12-bit coordinates in every packed message (wm,
-   the virtual mouse, the Scheme window procedures); apps off the
-   640x480 constant. The largest item: it touches most apps, mechanically.
-2. 64-bit time: `z_time_now64()`, the RTC read as one value, a 64-bit
-   tick; `z_time_to_tm()` on 64 bits.
-3. The ABI level in ZEXE (`abi = 1`), set by `mkexec.py`, read by the
-   kernel and `update`.
-4. `gen_abi.py --compatible`, and the 1.0 baseline file.
+1. `z_screen_size()` and 12-bit coordinates in every packed message;
+   apps off the 640x480 constant. **Started**: the call, the packs, wm,
+   dialogs, the keyboard, slide; the rest of the apps to go
+   ([screen.md](screen.md)). The virtual mouse stays 10 bits in the
+   gateware until a board needs more.
+2. 64-bit time. **Done**, without gateware and without a 64-bit tick.
+3. The ABI level in ZEXE. **Done**: flags 7:4, level 0 until 1.0; the
+   kernel reads it, the release manifest records it, `update` shows it.
+4. `gen_abi.py --compare`. **Done, as a report**; the 1.0 baseline at
+   the freeze.
 5. Through every interface file: reserved bits and fields documented as
    zero, sizes or versions on the structs that need them, provisional
    marked.
 6. The Scheme API reviewed, provisional marked.
 7. File formats: versions and descriptions.
-8. The compatibility card, CI, and 0.9.
+8. The compatibility card and 0.9. (CI: **done**, [ci.md](ci.md).)

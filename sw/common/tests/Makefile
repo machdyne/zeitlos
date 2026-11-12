@@ -17,7 +17,7 @@ SKIP77 = r=$$?; [ $$r -eq 0 ] || { [ $$r -eq 77 ] && echo "  (skipped)"; }
 
 TESTS = accent args bitbang dialog flist gfx_region gz inflate png scrollbar text undo vt \
 	zcaption zcfg zexec zexec_inflate zexec_lz4 zfmt zinput zkbd zscreen \
-	zco zsha1 zslice ztype zwalk zws
+	zco zsha1 zslice ztype zwalk zws wmpack
 
 .PHONY: test $(TESTS) clean
 
@@ -99,6 +99,9 @@ zcaption: | $(OUT)
 zcfg: | $(OUT)
 	$(CC_) -Wall -DZCFG_KERNEL -I sw/common -o $(OUT)/test_zcfg \
 		sw/common/tests/test_zcfg.c sw/common/zcfg.c sw/common/zrtc.c && $(OUT)/test_zcfg
+
+wmpack: | $(OUT)
+	$(CC_) -Wall -Wextra -I sw/common -o $(OUT)/test_wmpack sw/common/tests/test_wmpack.c && $(OUT)/test_wmpack
 
 zexec: | $(OUT)
 	$(CC_) -Wall -I sw/common -o $(OUT)/test_zexec sw/common/tests/test_zexec.c && $(OUT)/test_zexec

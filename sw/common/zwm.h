@@ -293,7 +293,8 @@
 // them with a narrow damage list would leave the cleared pixels black.
 //
 // It rides in the packed payload's spare high bits. Z_WM_PACK_XY uses
-// bits 0..27 (y, x, id), and Z_WM_UNPACK_* mask, so a receiver that
+// bits 0..27 (y, x, id) and 29..31 (the top bits of x and y), and
+// Z_WM_UNPACK_* mask, so a receiver that
 // predates this bit ignores it and repaints in full, exactly as
 // before.
 #define Z_WM_REDRAW_DAMAGE      (1u << 28)
@@ -737,21 +738,29 @@ typedef struct {
 // what it got back.
 #define Z_WM_CLIP_MAX            4096
 
-// x/y: absolute screen coordinates, 0-1023 each (the same 10-bit
-// fields rtl/usb_hid.v's cursor register already uses -- see
-// docs/user_input.md). buttons: the raw 4-bit button mask, bit 0 =
+// x/y: absolute screen coordinates, 0-4095 each (the low 10 bits are
+// the fields rtl/usb_hid.v's cursor register uses -- see
+// docs/user_input.md and docs/screen.md). buttons: the raw 4-bit button mask, bit 0 =
 // left. inside: 1 if the cursor is within the receiving window's own
 // content rect right now, 0 if it isn't -- which happens while a
 // capture is active and the cursor has left the window. An app that
 // draws on drag should keep drawing when this is 0 (clipping handles
 // the rest); an app doing hover highlighting should stop.
+//
+// x and y are 12 bits (0-4095, docs/screen.md): the low 10 where they
+// always were, the top two of x in bits 26:25 and of y in 28:27, so a
+// coordinate below 1024 packs to the same word as it did when the
+// fields were 10 bits, and a program built then reads it as before.
+// Bits 31:29 are reserved (0).
 #define Z_WM_PACK_MOUSE(x, y, buttons, inside) \
-	((((inside) ? 1u : 0u) << 24) | \
+	(((((uint32_t)(y) >> 10) & 3u) << 27) | \
+	 ((((uint32_t)(x) >> 10) & 3u) << 25) | \
+	 (((inside) ? 1u : 0u) << 24) | \
 	 (((uint32_t)(buttons) & 0xF) << 20) | \
 	 (((uint32_t)(y) & 0x3FF) << 10) | \
 	 ((uint32_t)(x) & 0x3FF))
-#define Z_WM_UNPACK_MOUSE_X(v)        ((v) & 0x3FF)
-#define Z_WM_UNPACK_MOUSE_Y(v)        (((v) >> 10) & 0x3FF)
+#define Z_WM_UNPACK_MOUSE_X(v)        (((v) & 0x3FF) | ((((v) >> 25) & 3u) << 10))
+#define Z_WM_UNPACK_MOUSE_Y(v)        ((((v) >> 10) & 0x3FF) | ((((v) >> 27) & 3u) << 10))
 #define Z_WM_UNPACK_MOUSE_BUTTONS(v)  (((v) >> 20) & 0xF)
 #define Z_WM_UNPACK_MOUSE_INSIDE(v)   (((v) >> 24) & 1)
 
@@ -780,13 +789,21 @@ typedef struct {
 #define Z_WM_UNPACK_KEY_MODIFIERS(v)  (((v) >> 1) & 0xFF)
 #define Z_WM_UNPACK_KEY_PRESSED(v)    ((v) & 1)
 
+// A window's id and position (Z_WM_REDRAW, Z_WM_WINDOW_MOVED): id in
+// bits 27:20, x in 19:10 with its top two bits in 30:29, y in 9:0 with
+// its 11th bit in 31 -- x to 4095, y to 2047 (bit 28 is
+// Z_WM_REDRAW_DAMAGE, so y has one bit fewer; a screen taller than 2047
+// needs another message, docs/screen.md). Below 1024 the word is what
+// it was when both were 10 bits.
 #define Z_WM_PACK_XY(id, x, y) \
-	((((uint32_t)(id) & 0xFF) << 20) | \
+	(((((uint32_t)(y) >> 10) & 1u) << 31) | \
+	 ((((uint32_t)(x) >> 10) & 3u) << 29) | \
+	 (((uint32_t)(id) & 0xFF) << 20) | \
 	 (((uint32_t)(x) & 0x3FF) << 10) | \
 	 ((uint32_t)(y) & 0x3FF))
 #define Z_WM_UNPACK_ID(v)  (((v) >> 20) & 0xFF)
-#define Z_WM_UNPACK_X(v)   (((v) >> 10) & 0x3FF)
-#define Z_WM_UNPACK_Y(v)   ((v) & 0x3FF)
+#define Z_WM_UNPACK_X(v)   ((((v) >> 10) & 0x3FF) | ((((v) >> 29) & 3u) << 10))
+#define Z_WM_UNPACK_Y(v)   (((v) & 0x3FF) | ((((v) >> 31) & 1u) << 10))
 
 // defaults used when a Z_WM_CREATE_WINDOW request omits w/h
 // app -> wm: make my window this size. obj is a packed Z_UINT32 --
@@ -981,10 +998,13 @@ typedef struct {
 #define Z_WM_WANTS_TEXT_ON(v)    (((v) >> 31) & 1u)
 #define Z_WM_WANTS_TEXT_Y(v)     ((int)((v) & 0xFFFFu))
 
+// x and y are 12 bits: the low 10 in 9:0 and 19:10 as always, the
+// top two of x in 21:20 and of y in 23:22 (docs/screen.md).
 #define Z_WM_PACK_PLACE(x, y) \
-	((((uint32_t)(y) & 0x3FF) << 10) | ((uint32_t)(x) & 0x3FF))
-#define Z_WM_UNPACK_PLACE_X(v)   ((int)((v) & 0x3FF))
-#define Z_WM_UNPACK_PLACE_Y(v)   ((int)(((v) >> 10) & 0x3FF))
+	(((((uint32_t)(y) >> 10) & 3u) << 22) | ((((uint32_t)(x) >> 10) & 3u) << 20) | \
+	 (((uint32_t)(y) & 0x3FF) << 10) | ((uint32_t)(x) & 0x3FF))
+#define Z_WM_UNPACK_PLACE_X(v)   ((int)(((v) & 0x3FF) | ((((v) >> 20) & 3u) << 10)))
+#define Z_WM_UNPACK_PLACE_Y(v)   ((int)((((v) >> 10) & 0x3FF) | ((((v) >> 22) & 3u) << 10)))
 
 #define Z_WM_INFO_ICONS          5
 #define Z_WM_INFO_TITLE          64

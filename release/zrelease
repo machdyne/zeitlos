@@ -1022,6 +1022,7 @@ def _publish_store(dest, name, ark=None, require_packs=False, latest=True,
         die("card: %s" % e)
     m = manifest_mod.make(pl, name, version, manifest_mod.describe(ROOT),
                           abi=manifest_mod.read_abi(ROOT),
+                          abi_level=manifest_mod.read_abi_level(ROOT),
                           sets=pl.offered_sets())
     total = sum(f[2] for f in m.files)
     print("  %s: %d files, %.1f MB, snapshot %s, abi %s (%s)"

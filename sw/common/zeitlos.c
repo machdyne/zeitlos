@@ -20,6 +20,7 @@
 #include "zkbd.h"
 #include "zwm.h"		// Z_WM_GAME_GRAB / _RELEASE
 #include "zsoc.h"		// z_game_view_set_enabled()
+#include "zrtc.h"		// z_time_now64(): an older kernel's fallback
 
 bool term_echo = true;
 bool term_escape = false;
@@ -692,6 +693,76 @@ uint32_t z_arena_get(void **base) {
 	uint32_t n = 0;
 	z_arena_set(Z_ARENA_QUERY, base, &n);
 	return n;
+}
+
+int z_abi_level(void) {
+	z_obj_t obj = {0};
+	z_kernel_ptr_t z_kernel_ptr = (z_kernel_ptr_t)(uintptr_t)(reg_kernel);
+	z_kernel_ptr(Z_SYS_ABI_LEVEL, (uint32_t *)&obj, 0);
+	return obj.type == Z_UINT32 ? (int)obj.val.uint32 : -1;
+}
+
+void z_screen_size(int *w, int *h) {
+
+	z_obj_t obj = {0};
+	z_kernel_ptr_t z_kernel_ptr = (z_kernel_ptr_t)(uintptr_t)(reg_kernel);
+	z_kernel_ptr(Z_SYS_SCREEN, (uint32_t *)&obj, 0);
+	uint32_t v = obj.type == Z_UINT32 ? obj.val.uint32 : 0;
+	int sw = (int)(v >> 16), sh = (int)(v & 0xffffu);
+	if (sw <= 0 || sh <= 0) { sw = 640; sh = 480; }	// a kernel from before the call
+	if (w) *w = sw;
+	if (h) *h = sh;
+
+}
+
+int z_screen_w(void) { int w; z_screen_size(&w, 0); return w; }
+int z_screen_h(void) { int h; z_screen_size(0, &h); return h; }
+
+bool z_time_now64(int64_t *sec, uint32_t *sub) {
+
+	z_time64_args_t args;
+	args.op = Z_TIME64_GET;
+	args.result = -1;			// a kernel older than the call leaves it
+	args.sec_lo = 0;
+	args.sec_hi = 0;
+	args.sub = 0;
+	args.valid = 0;
+
+	z_kernel_ptr_t z_kernel_ptr = (z_kernel_ptr_t)(uintptr_t)(reg_kernel);
+	z_kernel_ptr(Z_SYS_TIME64, (uint32_t *)&args, 0);
+
+	if (args.result != 0) {
+		// No RTC, or an older kernel: the register as it is, if there is one
+		if (!z_rtc_available()) { if (sec) *sec = 0; if (sub) *sub = 0; return false; }
+		uint32_t s, u;
+		z_rtc_get(&s, &u);
+		if (sec) *sec = (int64_t)s;
+		if (sub) *sub = u;
+		return z_rtc_valid();
+	}
+	if (sec) *sec = (int64_t)(((uint64_t)(uint32_t)args.sec_hi << 32) | args.sec_lo);
+	if (sub) *sub = args.sub;
+	return args.valid != 0;
+
+}
+
+bool z_time_set64(int64_t sec, uint32_t sub) {
+
+	z_time64_args_t args;
+	args.op = Z_TIME64_SET;
+	args.result = -1;
+	args.sec_lo = (uint32_t)sec;
+	args.sec_hi = (int32_t)((uint64_t)sec >> 32);
+	args.sub = sub;
+	args.valid = 0;
+
+	z_kernel_ptr_t z_kernel_ptr = (z_kernel_ptr_t)(uintptr_t)(reg_kernel);
+	z_kernel_ptr(Z_SYS_TIME64, (uint32_t *)&args, 0);
+	if (args.result == 0) return true;
+	if (!z_rtc_available()) return false;
+	z_rtc_set((uint32_t)sec, sub);		// an older kernel: the low word
+	return true;
+
 }
 
 char *z_abi(char *out, uint32_t size) {

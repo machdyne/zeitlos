@@ -180,17 +180,17 @@ static bool k_install(void) {
 
 // -- the screen --
 
-static uint8_t snap[WM_SCREEN_H][WM_SCREEN_W];
+static uint8_t snap[WM_FB_H][WM_FB_W];
 
 static void take(void) {
-	for (int y = 0; y < WM_SCREEN_H; y++)
-		for (int x = 0; x < WM_SCREEN_W; x++) snap[y][x] = (uint8_t)z_render_get(x, y);
+	for (int y = 0; y < WM_FB_H; y++)
+		for (int x = 0; x < WM_FB_W; x++) snap[y][x] = (uint8_t)z_render_get(x, y);
 }
 
 static int changed(void) {
 	int n = 0, x0 = 9999, y0 = 9999, x1 = -1, y1 = -1;
-	for (int y = 0; y < WM_SCREEN_H; y++)
-		for (int x = 0; x < WM_SCREEN_W; x++)
+	for (int y = 0; y < WM_FB_H; y++)
+		for (int x = 0; x < WM_FB_W; x++)
 			if (snap[y][x] != (uint8_t)z_render_get(x, y)) {
 				n++;
 				if (x < x0) x0 = x;
@@ -207,9 +207,9 @@ static void dump(const char *prefix, const char *name) {
 	snprintf(path, sizeof(path), "%s-%s.pbm", prefix, name);
 	FILE *f = fopen(path, "w");
 	if (!f) return;
-	fprintf(f, "P1\n%d %d\n", WM_SCREEN_W, WM_SCREEN_H);
-	for (int y = 0; y < WM_SCREEN_H; y++) {
-		for (int x = 0; x < WM_SCREEN_W; x++) fputc(z_render_get(x, y) ? '1' : '0', f);
+	fprintf(f, "P1\n%d %d\n", WM_FB_W, WM_FB_H);
+	for (int y = 0; y < WM_FB_H; y++) {
+		for (int x = 0; x < WM_FB_W; x++) fputc(z_render_get(x, y) ? '1' : '0', f);
 		fputc('\n', f);
 	}
 	fclose(f);
@@ -236,7 +236,7 @@ int main(int argc, char **argv) {
 	z_win_t screen;
 	int idx;
 
-	if (!z_render_open(&screen, WM_SCREEN_W, WM_SCREEN_H) || !k_install()) {
+	if (!z_render_open(&screen, WM_FB_W, WM_FB_H) || !k_install()) {
 		printf("wm lock test: skipped (cannot map fixed addresses)\n");
 		return 77;
 	}
@@ -248,7 +248,7 @@ int main(int argc, char **argv) {
 	idx = create_window(APP, "App", 200, 150, 100, 100, 0);
 	expect(idx >= 0, "an app window");
 	send_clip(idx);
-	repair_region(0, 0, WM_SCREEN_W, WM_SCREEN_H, -1);
+	repair_region(0, 0, WM_FB_W, WM_FB_H, -1);
 	expect(app.set_clips >= 1 && !app.last_empty, "the app starts with a real region");
 	dump(prefix, "1-desktop");
 
@@ -267,7 +267,7 @@ int main(int argc, char **argv) {
 	// -- nothing wm draws reaches the lock screen --
 	printf("2. wm's own drawing stays off it\n");
 	take();
-	repair_region(0, 0, WM_SCREEN_W, WM_SCREEN_H, -1);
+	repair_region(0, 0, WM_FB_W, WM_FB_H, -1);
 	expect(changed() == 0, "a full repair changes no pixel");
 	caption_set("a caption over the lock screen", 0);
 	caption_blit();
@@ -391,7 +391,7 @@ int main(int argc, char **argv) {
 	printf("9. Ctrl+Alt+Esc: the rescue console\n");
 	if (wm_locked) { type("hunter2"); lock_key(0x0d, false); }
 	expect(!wm_locked, "unlocked to begin with");
-	repair_region(0, 0, WM_SCREEN_W, WM_SCREEN_H, -1);
+	repair_region(0, 0, WM_FB_W, WM_FB_H, -1);
 	memset(&app, 0, sizeof(app));
 	key(0x29, Z_KBD_MOD_LCTRL | Z_KBD_MOD_LALT, true);
 	key(0x29, Z_KBD_MOD_LCTRL | Z_KBD_MOD_LALT, false);
@@ -401,7 +401,7 @@ int main(int argc, char **argv) {
 	expect(wm_rescued && kr.on && kr.on_calls == 1, "hidden, and the kernel asked to show it");
 	expect(app.freezes == 1 && app.last_empty, "the app frozen first, then given an empty region");
 	take();
-	repair_region(0, 0, WM_SCREEN_W, WM_SCREEN_H, -1);
+	repair_region(0, 0, WM_FB_W, WM_FB_H, -1);
 	caption_set("a caption over the rescue console", 0);
 	caption_blit();
 	expect(changed() == 0, "nothing wm draws reaches the screen");
@@ -456,7 +456,7 @@ int main(int argc, char **argv) {
 
 	printf("12. Ctrl+Alt+Del: the reboot dialog\n");
 	expect(!wm_locked && !wm_rescued, "on the desktop to begin with");
-	repair_region(0, 0, WM_SCREEN_W, WM_SCREEN_H, -1);
+	repair_region(0, 0, WM_FB_W, WM_FB_H, -1);
 	memset(&app, 0, sizeof(app));
 	take();
 	key(0x4C, Z_KBD_MOD_LCTRL | Z_KBD_MOD_LALT, true);
@@ -468,8 +468,8 @@ int main(int argc, char **argv) {
 	expect(changed() > 0, "the box is drawn");
 	{
 		bool inside = true;
-		for (int y = 0; y < WM_SCREEN_H && inside; y++)
-			for (int x = 0; x < WM_SCREEN_W; x++)
+		for (int y = 0; y < WM_FB_H && inside; y++)
+			for (int x = 0; x < WM_FB_W; x++)
 				if (snap[y][x] != (uint8_t)z_render_get(x, y) &&
 				    (x < confirm_x || x >= confirm_x + CONFIRM_W ||
 				     y < confirm_y || y >= confirm_y + CONFIRM_H)) { inside = false; break; }
@@ -494,7 +494,7 @@ int main(int argc, char **argv) {
 			   : "the other: lit text on a dark ground");
 	}
 	take();
-	repair_region(0, 0, WM_SCREEN_W, WM_SCREEN_H, -1);
+	repair_region(0, 0, WM_FB_W, WM_FB_H, -1);
 	expect(changed() == 0, "nothing wm draws reaches the screen meanwhile");
 	key(0x04, 0, true);                         /* an 'a' */
 	dispatch_keys();

@@ -25,8 +25,9 @@ file names in the kernel.
 offset  size  field
 0       4     magic    "ZEXE"
 4       2     version  currently 1
-6       2     flags    bits 3:0 stack size code; bit 8 compressed;
-                       bit 15 driver; the rest must be 0
+6       2     flags    bits 3:0 stack size code; 7:4 the ABI level;
+                       bit 8 compressed; bit 15 driver; the rest
+                       must be 0
 8       4     bss_size bytes to allocate and zero after data
 12      4     entry    0; compressed: the data's size, unpacked
 16      ...   data     the loadable image, verbatim -- or compressed,
@@ -87,7 +88,7 @@ start, and the console says what was asked for and what there is
 ```
 prog: stack size code 15 is reserved -- not started
 prog: asks for 16384KB of stack+heap (code 12), above this kernel's cap of 8192KB -- not started
-prog: unknown ZEXE flags 0x0010 -- not started
+prog: unknown ZEXE flags 0x0200 -- not started
 prog: needs 8312KB (image 117KB + 8192KB stack+heap), largest free block 6092KB of 6092KB free -- not started
 ```
 
@@ -150,10 +151,41 @@ which is what lets it open the MPU's grant window onto a process that
 allows drivers ([mpu.md](mpu.md), "The grant window"). The flag
 declares; the client still decides.
 
-From the top of the word down, so the stack code can grow up into 14:4
-if it ever has to. An app sets it with `APP_DRIVER = 1` in its Makefile
+From the top of the word down, so the stack code could grow up into
+14:9 if it ever had to (7:4 is the ABI level, below). An app sets it with `APP_DRIVER = 1` in its Makefile
 (`mkexec.py --driver`). A kernel from before it refuses the binary --
 "unknown ZEXE flags" -- rather than run a driver without its powers.
+
+## The ABI level
+
+Bits 7:4 of `flags` (`Z_EXEC_ABI_MASK`): which interfaces the program
+was built for -- the level of the tree it was compiled in,
+`Z_ABI_LEVEL` in `sw/common/zexec.h`, which `mkexec.py` reads from that
+line and writes into every binary it makes. It is **0** until the
+interfaces are frozen (docs/freeze.md), and changes only when a
+release changes the interfaces in a way old programs would notice:
+rarely, over decades, if ever. Four bits give levels 0-15; a 16th
+would be a new ZEXE version, not a wider field.
+
+The kernel runs a program whose level is its own or lower, and refuses
+one built for a newer system before it starts, with
+
+```
+prog: built for a newer Zeitlos (ABI level 2; this one is 1) -- not started
+```
+
+rather than letting it fail somewhere later on a call this kernel
+does not have. A kernel from before the field reads bits 7:4 as part
+of the reserved bits: level 0 is all zeros there, so every binary made
+today runs on it, and a binary of level 1 or more is refused as
+"unknown ZEXE flags" -- the same answer, less clearly put.
+
+A release's manifest records its level (`abi_level`), and `update`
+shows it beside the kernel's (`z_abi_level()`) and says plainly when a
+release needs a newer flash ([update.md](update.md), "ABI").
+
+`zcc` writes flags 0, so its programs are level 0. A program can read
+its own header's level with `z_exec_abi()` (zexec.h).
 
 ## Compressed executables
 

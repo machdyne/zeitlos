@@ -48,8 +48,8 @@ TB_OUT = out/tb
 tb/%.bin: force
 	@true
 
-.PHONY: test test-tb test-zdev test-boot test-desktop test-input force
-test: zsys test-tb test-zdev test-boot test-desktop test-input
+.PHONY: test test-screen test-tb test-zdev test-boot test-desktop test-input force
+test: zsys test-tb test-zdev test-boot test-desktop test-input test-screen
 
 # -- the devices, register by register (test_zdev.c) --
 
@@ -120,6 +120,40 @@ test-desktop: test-boot
 	python3 check_screen.py out/welcome.log out/welcome.png welcome > out/welcome.check && \
 		echo "test-desktop: the card mounts and welcome greets it (out/welcome.png)" || \
 		{ echo "test-desktop: FAILED with the card (out/welcome.log, out/welcome.check)"; cat out/welcome.check; exit 1; }
+
+# -- the screen size apps are told (docs/screen.md) --
+#
+# A card holding only /sys/zeitlos.cfg, with system.screen.size at the
+# least there will be, 640x360 (16:9 in today's VRAM): the kernel must
+# say it took it, and every window wm places -- the dock; then text,
+# tapped on its dock icon, and the on-screen keyboard that opens for it
+# with no keyboard plugged in -- must be inside it. The display stays
+# 640x480, so what strays below row 359 is plain to see. The taps are
+# where the dock is at 640x360; SCREEN=WxH for another size checks the
+# first part.
+
+SCREEN ?= 640x360
+
+test-screen: test-boot
+	@if [ ! -f out/boot.img ] || [ ! -f "$(ZAR)" ]; then echo "test-screen: skipped -- no out/boot.img or core apps archive"; exit 0; fi; \
+	if ! command -v mkfs.fat >/dev/null || ! command -v mcopy >/dev/null; then \
+		echo "test-screen: skipped -- needs mkfs.fat and mcopy (dosfstools, mtools)"; exit 0; fi; \
+	rm -f out/screen.img; \
+	mkfs.fat -C out/screen.img 8192 >/dev/null && \
+	printf 'system.screen.size: $(SCREEN)\n' > out/screen.cfg && \
+	mmd -i out/screen.img ::/sys && mcopy -i out/screen.img out/screen.cfg ::/sys/zeitlos.cfg && \
+	./zsys --flash out/boot.img --sd out/screen.img --snapshot --fast --seconds 4 \
+		--screenshot out/screen.png > out/screen.log 2>&1 && \
+	grep -q "cfg: system.screen.size: apps are told $(SCREEN)" out/screen.log && \
+	python3 check_screen.py --within $(SCREEN) out/screen.log out/screen.png Dock > out/screen.check && \
+		echo "test-screen: told $(SCREEN), wm keeps every window inside it (out/screen.png)" || \
+		{ echo "test-screen: FAILED (out/screen.log, out/screen.check)"; grep "screen\|cfg" out/screen.log | head; cat out/screen.check; exit 1; }; \
+	./zsys --flash out/boot.img --sd out/screen.img --snapshot --fast --seconds 14 --no-keyboard --wait 6000 \
+		--tap 100,330 --wait 4000 --screenshot out/screen-kb.png > out/screen-kb.log 2>&1 && \
+	grep -q "no keyboard: the on-screen keyboard for untitled" out/screen-kb.log && \
+	python3 check_screen.py --within $(SCREEN) --named out/screen-kb.log out/screen-kb.png keyboard > out/screen-kb.check && \
+		echo "test-screen: a tap on text there, no keyboard: the on-screen keyboard fits it too (out/screen-kb.png)" || \
+		{ echo "test-screen: FAILED (out/screen-kb.log, out/screen-kb.check)"; cat out/screen-kb.check; exit 1; }
 
 # -- input: the USB keyboard and mouse, scripted; the flash's writes --
 #

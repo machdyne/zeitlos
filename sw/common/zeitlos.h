@@ -638,6 +638,26 @@ uint32_t z_uptime_ticks(void);
 uint32_t z_video_mode_get(void);
 bool z_video_mode_set(uint32_t mode);
 
+// The screen's size, in pixels: what a window, a dialog or a full-
+// screen app lays itself out against (docs/screen.md). Ask; never
+// assume 640x480. It is 640x480 on every board today, and the call is
+// what lets a later system have a wider or larger screen -- up to
+// 4095x4095, the most wm's messages carry -- without breaking a program
+// built now. Fixed for a boot (wm reads it once, as it starts); a
+// kernel from before the call answers 640x480. Z_SCREEN_W/H (zgfx.h)
+// stay the FRAMEBUFFER's geometry, which is a different thing.
+void z_screen_size(int *w, int *h);
+int z_screen_w(void);
+int z_screen_h(void);
+
+// The largest size the interfaces carry (12 bits, zwm.h's packs), and
+// the smallest screen there will be: 640 wide, as every app's windows
+// assume, and 360 high -- 16:9 at one bit a pixel fits today's VRAM.
+// A window is never wider than 640 or taller than 360 and sure to fit.
+#define Z_SCREEN_MAX   4095
+#define Z_SCREEN_MIN_W 640
+#define Z_SCREEN_MIN_H 360
+
 // busy-waits for at least `ms` milliseconds, built on z_uptime_ticks()
 // above -- see delay_ms()'s own comment (zeitlos.c) for why this
 // exists (replacing ad-hoc, uncalibrated `for(volatile int i=0;...)`
@@ -794,6 +814,11 @@ uint32_t z_proc_serial(uint32_t pid);
 // docs/update.md, "ABI") into `out`, NUL-terminated; "" when the kernel
 // is older than the syscall. Returns `out`.
 char *z_abi(char *out, uint32_t size);
+
+// The ABI level the kernel runs programs up to (Z_ABI_LEVEL in the
+// kernel's tree; docs/executables.md, "The ABI level"), or -1 from a
+// kernel older than the call.
+int z_abi_level(void);
 
 // This app's arena (zproc.h, Z_SYS_ARENA; docs/kernel.md, "Arenas"):
 // memory beside its own block, as large as it asks for while the

@@ -35,8 +35,9 @@
  *   offset  size  field
  *   0       4     magic    "ZEXE"
  *   4       2     version  format version (currently 1)
- *   6       2     flags    bits 3:0 the stack size code; bit 8
- *                           COMPRESSED; bit 15 DRIVER; the rest 0
+ *   6       2     flags    bits 3:0 the stack size code; 7:4 the ABI
+ *                           level; bit 8 COMPRESSED; bit 15 DRIVER;
+ *                           the rest 0
  *   8       4     bss_size bytes of .bss to allocate and zero after data
  *   12      4     entry    0; COMPRESSED: the data's size, uncompressed
  *   16      ...   data     the loadable image, verbatim -- or COMPRESSED,
@@ -120,9 +121,25 @@
 #define Z_EXEC_VERSION      1
 #define Z_EXEC_HEADER_SIZE  16
 
-// Bits 3:0 of flags: the stack size code. Bit 8: compressed. Bits 14:9
-// and 7:4 are reserved.
+// Bits 3:0 of flags: the stack size code. Bits 7:4: the ABI level.
+// Bit 8: compressed. Bits 14:9 are reserved.
 #define Z_EXEC_STACK_MASK      0x000fu
+
+// Bits 7:4: the ABI level the program was built for (docs/freeze.md,
+// "The ABI level"): which interfaces it expects of the kernel and the
+// core apps. 0 until 1.0. A kernel runs a program of its own level or
+// below, and refuses a higher one by name -- "built for a newer
+// Zeitlos" -- rather than let it fail somewhere later; a kernel from
+// before these bits refuses it too, as unknown flags. Levels are meant
+// to be rare -- a handful over decades, if any; past 15 the next one is
+// a new ZEXE version. mkexec.py writes Z_ABI_LEVEL, which it reads from
+// this line.
+#define Z_ABI_LEVEL            0
+#define Z_EXEC_ABI_SHIFT       4
+#define Z_EXEC_ABI_MASK        0x00f0u
+static inline uint32_t z_exec_abi(uint16_t flags) {
+	return (flags & Z_EXEC_ABI_MASK) >> Z_EXEC_ABI_SHIFT;
+}
 
 // Bit 15: the program is a DRIVER (docs/userspace_drivers.md, "Drivers").
 // The loader starts it like any other program and marks the process
@@ -130,7 +147,7 @@
 // processes that have opted in to being written by drivers
 // (z_grant_drivers(), sw/common/zeitlos.h). It declares; the client
 // still decides. From the top of the word down, so the stack code can
-// grow upwards into 14:4 if it ever needs to. A kernel that predates
+// grow upwards into 14:9 if it ever needs to (7:4 is the ABI level). A kernel that predates
 // it refuses the binary (unknown flags) rather than run a driver
 // without its powers. `APP_DRIVER = 1` in an app's Makefile sets it.
 #define Z_EXEC_FLAG_DRIVER     0x8000u
@@ -141,8 +158,8 @@
 // compressed bytes.
 #define Z_EXEC_FLAG_COMPRESSED 0x0100u
 
-#define Z_EXEC_FLAGS_KNOWN     (Z_EXEC_STACK_MASK | Z_EXEC_FLAG_COMPRESSED | \
-	Z_EXEC_FLAG_DRIVER)
+#define Z_EXEC_FLAGS_KNOWN     (Z_EXEC_STACK_MASK | Z_EXEC_ABI_MASK | \
+	Z_EXEC_FLAG_COMPRESSED | Z_EXEC_FLAG_DRIVER)
 #define Z_EXEC_STACK_UNSPEC    0
 #define Z_EXEC_STACK_RESERVED  15
 #define Z_EXEC_STACK_MAX_CODE  14
@@ -160,7 +177,7 @@ static inline uint32_t z_exec_stack_bytes(uint32_t code) {
 // that does not ask; `cap` is the most it grants.
 typedef enum {
 	Z_EXEC_STACK_OK = 0,
-	Z_EXEC_STACK_BAD_FLAGS,	// a reserved bit (14:4) is set
+	Z_EXEC_STACK_BAD_FLAGS,	// a reserved bit (14:9) is set
 	Z_EXEC_STACK_IS_RESERVED,	// code 15
 	Z_EXEC_STACK_OVER_CAP,	// a real size, above `cap`
 } z_exec_stack_rv;

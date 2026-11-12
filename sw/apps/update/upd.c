@@ -266,7 +266,7 @@ typedef struct {
 typedef struct {
 	int format;
 	char name[NAME_MAX_LEN + 1], version[32], snapshot[ID_DIGITS + 1];
-	char source[80], made[32], packs[160], abi[24];
+	char source[80], made[32], packs[160], abi[24], abi_level[8];
 	char installed[UPD_SETS_MAX * (SET_NAME + 1) + 1];
 	bool has_installed;
 	mset_t sets[UPD_SETS_MAX];
@@ -550,6 +550,7 @@ static int mcheck(const char *path, mhead_t *h, char *err, int errlen) {
 			HDR("made", made)
 			HDR("packs", packs)
 			HDR("abi", abi)
+			HDR("abi_level", abi_level)
 #undef HDR
 		}
 	}
@@ -982,6 +983,7 @@ static int emit_head(char *out, int cap, const mhead_t *R, const mhead_t *I,
 	// The ABI the files were built for: the release's, as its files are
 	// what the card now has (docs/update.md, "ABI").
 	if (R->abi[0]) n += snprintf(out + n, cap - n, "abi %s\n", R->abi);
+	if (R->abi_level[0]) n += snprintf(out + n, cap - n, "abi_level %s\n", R->abi_level);
 	n += snprintf(out + n, cap - n, "source %s\nmade %s\n", R->source, R->made);
 	// The packs the CARD has that are not listed: an image's (arkmed).
 	const char *pk = I && I->packs[0] ? I->packs : R->packs;
@@ -1734,11 +1736,13 @@ int upd_run(const upd_io_t *io_, const upd_opts_t *o) {
 				"release's\n"
 				"        kernel and core apps (docs/update.md, \"ABI\")\n",
 				o->force ? "-f" : "warning", RH.abi, o->kernel_abi);
+			upd_say_levels(RH.abi_level);
 			if (!o->force)
 				say("        (without -n, this would be refused; -f to "
 					"update anyway)\n");
 			break;
 		}
+		upd_say_levels(RH.abi_level);
 		say("update: refused: the release is built for abi %s, and the "
 			"kernel and\n", RH.abi);
 		say("        core apps in flash are abi %s. Its programs may not run "
@@ -2101,6 +2105,27 @@ int upd_abi_check(const char *rel, int rel_len, const char *kernel) {
 	return UPD_ABI_DIFFERENT;
 }
 
+// The kernel's ABI level (z_abi_level(); -1: too old to say), set by
+// update.c. Shown beside the card's or the release's (docs/update.md,
+// "ABI").
+int upd_kernel_level = -1;
+
+static const char *level_str(const char *lv, char *buf, int n) {
+	if (!lv || !lv[0]) return "";
+	snprintf(buf, n, " (level %s)", lv);
+	return buf;
+}
+
+// A release of a higher level than the kernel's: its programs would be
+// refused one by one as they start, so say it plainly.
+void upd_say_levels(const char *release_level) {
+	if (!release_level || !release_level[0] || upd_kernel_level < 0) return;
+	if (atoi(release_level) > upd_kernel_level)
+		say("        The release is ABI level %s; this kernel runs programs up to "
+			"level %d\n        and would refuse them (docs/executables.md, "
+			"\"The ABI level\").\n", release_level, upd_kernel_level);
+}
+
 int upd_show(const upd_io_t *io_, const char *kernel_abi) {
 	io = io_;
 	char *text;
@@ -2131,11 +2156,16 @@ int upd_show(const upd_io_t *io_, const char *kernel_abi) {
 		say("sets: all (written before sets)\n");
 	// The card's files' ABI and the flash's (docs/update.md, "ABI").
 	const char *ka = kernel_abi && kernel_abi[0] ? kernel_abi : "unknown (an older kernel)";
-	if (IH.abi[0])
-		say("abi: card %s, flash %s%s\n", IH.abi, ka,
+	char cl[24], kl[24], kls[8];
+	snprintf(kls, sizeof kls, "%d", upd_kernel_level);
+	const char *klv = level_str(upd_kernel_level >= 0 && kernel_abi && kernel_abi[0] ? kls : "", kl, sizeof kl);
+	if (IH.abi[0]) {
+		say("abi: card %s%s, flash %s%s%s\n", IH.abi, level_str(IH.abi_level, cl, sizeof cl), ka, klv,
 			upd_abi_check(IH.abi, (int)strlen(IH.abi), kernel_abi) == UPD_ABI_DIFFERENT
 				? "  -- DIFFERENT: flash the matching kernel and core apps" : "");
-	else
-		say("abi: card not recorded, flash %s\n", ka);
+		if (upd_abi_check(IH.abi, (int)strlen(IH.abi), kernel_abi) == UPD_ABI_DIFFERENT)
+			upd_say_levels(IH.abi_level);
+	} else
+		say("abi: card not recorded, flash %s%s\n", ka, klv);
 	return UPD_DONE;
 }

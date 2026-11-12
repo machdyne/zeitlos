@@ -2039,6 +2039,19 @@ static ms_val *zapi_current_date(ms_val *args) {
 // -- registration --
 
 //@ Display
+//: (screen-size)
+//:   The screen's size in pixels, as (width height): what to lay a
+//:   window out against, rather than 640x480 (docs/screen.md).
+//:   > (screen-size)  =>  (640 480)
+static ms_val *zapi_screen_size(ms_val *args) {
+	(void)args;
+	char buf[32];
+	int w, h;
+	z_screen_size(&w, &h);
+	snprintf(buf, sizeof(buf), "'(%d %d)", w, h);
+	return zapi_read_form(buf);
+}
+
 //: (video-mode)
 //: (video-mode "mode")
 //: (video-mode n)
@@ -4041,6 +4054,7 @@ void zapi_register(void) {
 	ms_def_builtin("delay-ms", zapi_delay_ms);
 	ms_def_builtin("print-console", zapi_print_console);
 	ms_def_builtin("df", zapi_df);
+	ms_def_builtin("screen-size", zapi_screen_size);
 	ms_def_builtin("video-mode", zapi_video_mode);
 	ms_def_builtin("game-mode", zapi_game_mode);
 	ms_def_builtin("game-view", zapi_game_view);

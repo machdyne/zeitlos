@@ -11,6 +11,14 @@
 # screen. A check on the GPU's work that does not change whenever wm's
 # look does: it holds as long as windows have a frame.
 #
+#   check_screen.py --within WxH LOG PNG [NAME ...]
+#
+# also fails any window not wholly inside WxH: the screen size the
+# system was told to report (system.screen.size, docs/screen.md), so
+# the windows wm placed kept to it (`make test-screen`). With --named,
+# only the windows NAMEd must show their frame: for a screen where one
+# window has since covered another, or moved it.
+#
 # Reads the PNG zsys writes -- 1 bit a pixel, indexed, the index the
 # framebuffer's bit -- or an 8-bit RGB or RGBA one (the page's canvas),
 # with zlib alone.
@@ -78,6 +86,15 @@ def read_png(path):
 
 
 def main(argv):
+    within, named = None, False
+    while argv[:1] in (["--within"], ["--named"]):
+        if argv[0] == "--named":
+            named, argv = True, argv[1:]
+        elif len(argv) > 1:
+            within = tuple(int(n) for n in argv[1].lower().split("x"))
+            argv = argv[2:]
+        else:
+            break
     if len(argv) < 2:
         print("usage: check_screen.py LOG PNG [NAME ...]", file=sys.stderr)
         return 2
@@ -101,10 +118,14 @@ def main(argv):
         left = [lit[j][x] for j in range(y, y1)] if x < w else []
         ft = sum(top) / max(len(top), 1)
         fl = sum(left) / max(len(left), 1)
-        ok = ft >= 0.9 and fl >= 0.9
+        ok = ft >= 0.9 and fl >= 0.9 or (named and name not in argv[2:])
         print("check_screen: win %d '%s' at %d,%d %dx%d: frame top %d%%, left %d%% -- %s"
               % (n, name, x, y, ww, hh, ft * 100, fl * 100, "ok" if ok else "NOT DRAWN"))
         bad += not ok
+        if within and (x + ww > within[0] or y + hh > within[1]):
+            print("check_screen: win %d '%s' at %d,%d %dx%d is not inside %dx%d"
+                  % (n, name, x, y, ww, hh, within[0], within[1]))
+            bad += 1
     return 1 if bad else 0
 
 

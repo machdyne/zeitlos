@@ -381,7 +381,13 @@ int main(void) {
 	int wx = -1, wy = -1;
 	if (z_launch_arg_take(arg, sizeof(arg))) {
 		if (strstr(arg, "large")) { Q = 10; KEY_H = 34; kfont = &z_font_8x16; }
-		if (strstr(arg, "bottom")) { wx = (640 - WIN_W) / 2; wy = 480 - WIN_H; }
+		if (strstr(arg, "bottom")) {
+			int sw, sh;
+			z_screen_size(&sw, &sh);	// docs/screen.md
+			wx = (sw - WIN_W) / 2; wy = sh - WIN_H;
+			if (wx < 0) wx = 0;
+			if (wy < 0) wy = 0;
+		}
 	}
 
 	if (z_win_create_flags(&win, "keyboard", WIN_W, WIN_H, wx, wy,

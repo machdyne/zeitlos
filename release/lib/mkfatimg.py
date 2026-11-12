@@ -1341,6 +1341,7 @@ def build(root, out_path, ark_dir=None, verbose=True, packs=None,
                           packs=[n for n, _f in pl.packs
                                  if n not in pl.listed_packs],
                           abi=manifest_mod.read_abi(root),
+                          abi_level=manifest_mod.read_abi_level(root),
                           installed=pl.sets)
     for text, dest in ((m.text, P["Z_PATH_SYS_MANIFEST"]),
                        (manifest_mod.version_text(m), P["Z_PATH_SYS_VERSION"])):

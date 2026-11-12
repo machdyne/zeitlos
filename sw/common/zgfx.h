@@ -45,6 +45,12 @@
 #include "zfont.h"
 #include "zicon.h"
 
+// The FRAMEBUFFER's geometry: VRAM is 640x480 at 1 bit per pixel on
+// every board, and the drawing code here addresses it with these. Not
+// the size to lay a window out against: that is z_screen_size()
+// (zeitlos.h, docs/screen.md), which a later system may report as
+// another size -- 640x360 to 4095x4095 -- without every app being
+// rebuilt.
 #define Z_SCREEN_W 640
 #define Z_SCREEN_H 480
 

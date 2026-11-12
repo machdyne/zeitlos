@@ -521,7 +521,7 @@ static void enter_game_mode(void) {
 	 * left there. */
 	z_gfx_clear_visible();
 	z_gfx_blit_scissor_reset();
-	z_fb_hw_fill_rect(0, 0, 640, 480, 0);
+	z_fb_hw_fill_rect(0, 0, Z_SCREEN_W, Z_SCREEN_H, 0);	// the whole framebuffer
 
 	/* Colour before game mode: both are adopted at the same frame
 	 * boundary (docs/color.md), so the first game-mode frame is

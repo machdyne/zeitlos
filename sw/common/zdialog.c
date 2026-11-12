@@ -552,8 +552,11 @@ static void dlg_center(const z_dialog_ctx_t *ctx, int w, int h,
 		pw = (int)ctx->parent->w;
 		ph = (int)ctx->parent->h;
 	} else {
-		px = 0; py = 0; pw = Z_SCREEN_W; ph = Z_SCREEN_H;
+		px = 0; py = 0;
+		z_screen_size(&pw, &ph);
 	}
+	int sw, sh;
+	z_screen_size(&sw, &sh);
 
 	int x = px + (pw - w) / 2;
 	int y = py + (ph - h) / 2;
@@ -562,8 +565,8 @@ static void dlg_center(const z_dialog_ctx_t *ctx, int w, int h,
 	// otherwise put the dialog partly off it, where its buttons
 	// cannot be clicked at all. wm clamps window POSITION on drag but
 	// does not move a window that was created off-screen.
-	if (x + w > Z_SCREEN_W) x = Z_SCREEN_W - w;
-	if (y + h > Z_SCREEN_H) y = Z_SCREEN_H - h;
+	if (x + w > sw) x = sw - w;
+	if (y + h > sh) y = sh - h;
 	if (x < 0) x = 0;
 	if (y < 0) y = 0;
 
@@ -1427,7 +1430,7 @@ bool z_dialog_prompt(const z_dialog_ctx_t *ctx, const char *title,
 	for (int i = 0; i < nlines; i++) if (lens[i] > longest) longest = lens[i];
 	int text_need = longest * z_font_5x8.w + 2 * DLG_MARGIN + 4;
 	if (text_need > w) w = text_need;
-	if (w > Z_SCREEN_W - 8) w = Z_SCREEN_W - 8;
+	if (w > z_screen_w() - 8) w = z_screen_w() - 8;
 
 	int h = Z_WM_TITLEBAR_H + 4 + DLG_MARGIN + nlines * DLG_LINE_H +
 		DLG_MARGIN + DLG_FIELD_H + DLG_MARGIN + DLG_BTN_H + DLG_MARGIN;
@@ -1508,7 +1511,7 @@ int z_dialog_confirm(const z_dialog_ctx_t *ctx, const char *title,
 	for (int i = 0; i < nlines; i++) if (lens[i] > longest) longest = lens[i];
 	int text_need = longest * z_font_5x8.w + 2 * DLG_MARGIN + 4;
 	if (text_need > w) w = text_need;
-	if (w > Z_SCREEN_W - 8) w = Z_SCREEN_W - 8;
+	if (w > z_screen_w() - 8) w = z_screen_w() - 8;
 
 	int h = Z_WM_TITLEBAR_H + 4 + DLG_MARGIN + nlines * DLG_LINE_H +
 		DLG_MARGIN + DLG_BTN_H + DLG_MARGIN;

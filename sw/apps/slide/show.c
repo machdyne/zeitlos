@@ -80,21 +80,28 @@ void blit_to_screen(const uint32_t *src, int wpl, int sx, int sy, int dx, int dy
 
 static bool actual_size;
 
+// The show draws into framebuffer-sized buffers (SW x SH, VRAM's
+// geometry); the page is fitted to the screen as the system reports it
+// (docs/screen.md), which is never more than the framebuffer here.
 static void card_xf(const deck_t *d, zc_xf_t *xf, int *x, int *y, int *w, int *h) {
 	int32_t s;
+	int VW, VH;
+	z_screen_size(&VW, &VH);
+	if (VW > SW) VW = SW;
+	if (VH > SH) VH = SH;
 	if (actual_size) {
 		s = ZC_XF_ONE;
 	} else {
-		int32_t sx = (int32_t)(((int64_t)SW << 16) / d->page.gw);
-		int32_t sy = (int32_t)(((int64_t)SH << 16) / d->page.gh);
+		int32_t sx = (int32_t)(((int64_t)VW << 16) / d->page.gw);
+		int32_t sy = (int32_t)(((int64_t)VH << 16) / d->page.gh);
 		s = sx < sy ? sx : sy;
 	}
 	*w = (int)(((int64_t)d->page.gw * s) >> 16);
 	*h = (int)(((int64_t)d->page.gh * s) >> 16);
-	if (*w > SW) *w = SW;
-	if (*h > SH) *h = SH;
-	*x = (SW - *w) / 2;
-	*y = (SH - *h) / 2;
+	if (*w > VW) *w = VW;
+	if (*h > VH) *h = VH;
+	*x = (VW - *w) / 2;
+	*y = (VH - *h) / 2;
 	*xf = zc_xf_scale(s, ZC_I(*x), ZC_I(*y));
 }
 

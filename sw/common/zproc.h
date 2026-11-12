@@ -230,6 +230,34 @@ typedef struct {
 	char		id[Z_ABI_ID_MAX];	// OUT
 } z_abi_args_t;
 
+// -- Z_SYS_TIME64 -- docs/rtc.md, "64-bit time" --
+//
+// The wall clock in 64 bits. The RTC counts 32-bit seconds (rtl/rtc.v;
+// it has no battery, and is set at every boot), so the high word is the
+// kernel's: it is set with the time, and counted up when the 32-bit
+// count wraps, in 2106. Before then it is 0 and the answer is the RTC's
+// own. The 32-bit calls (z_rtc_seconds(), z_rtc_set()) go on working;
+// a time set with them has a high word of 0.
+//
+// IN `op`: Z_TIME64_GET or Z_TIME64_SET. GET: OUT the seconds since
+// 1970-01-01 UTC, signed, as two words (`sec_lo`, `sec_hi` -- as
+// z_cpu_count_t, so zcc, which has no 64-bit integers, can use the call
+// too), `sub` (1/1024 s), `valid` (the clock has been set since
+// power-on). SET: IN `sec_lo`, `sec_hi`, `sub`. `result`: 0, or -1 with no
+// RTC in this bitstream (or a kernel older than the call, which leaves
+// it as the caller set it).
+#define Z_TIME64_GET		0
+#define Z_TIME64_SET		1
+
+typedef struct {
+	int32_t		op;			// IN
+	int32_t		result;		// OUT
+	uint32_t	sec_lo;		// IN (SET) / OUT (GET): bits 31:0
+	int32_t		sec_hi;		// IN (SET) / OUT (GET): bits 63:32
+	uint32_t	sub;		// IN (SET) / OUT (GET)
+	uint32_t	valid;		// OUT (GET)
+} z_time64_args_t;
+
 typedef struct {
 	z_proc_info_t	*out;		// OUT: caller-owned array, >= max entries
 	uint32_t		max;		// capacity of `out`, in entries
