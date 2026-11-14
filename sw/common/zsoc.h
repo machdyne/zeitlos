@@ -1719,9 +1719,12 @@ static inline void z_color_set_palette(uint32_t index, uint32_t rgb444) {
 #define Z_VMODE_800X600    1
 #define Z_VMODE_1024X768   2
 #define Z_VMODE_1280X720   3
-#define Z_VMODE_COUNT      4
+#define Z_VMODE_800X480    4
+#define Z_VMODE_1280X800   5
+#define Z_VMODE_1920X1080  6	// at 30 Hz: a 960x540 desktop, twice each way
+#define Z_VMODE_COUNT      7
 #define Z_VMODE_DBL        (1u << 4)	// read: 1280x720 is 640x360 twice
-#define Z_VMODE_WIDE       (1u << 5)	// read: modes 1..3 native
+#define Z_VMODE_WIDE       (1u << 5)	// read: the other modes at their own row lengths
 
 static inline bool z_vmode_present(void) {
 	if (!z_socctl_present()) return false;
@@ -1732,12 +1735,12 @@ static inline bool z_vmode_present(void) {
 // without screen modes.
 static inline uint32_t z_vmode_avail(void) {
 	if (!z_vmode_present()) return 1u;
-	return ((reg_socctl_vmode >> 8) & 0xfu) | 1u;
+	return ((reg_socctl_vmode >> 8) & 0x7fu) | 1u;
 }
 
 static inline uint32_t z_vmode_get(void) {
 	if (!z_vmode_present()) return Z_VMODE_640X480;
-	return reg_socctl_vmode & 3u;
+	return reg_socctl_vmode & 7u;
 }
 
 static inline bool z_vmode_doubled(void) {
@@ -1756,10 +1759,10 @@ static inline bool z_vmode_set_raw(uint32_t m) {
 // The signal's size in mode m (what a display is told), and the
 // desktop's -- the framebuffer's -- on this machine.
 static inline void z_vmode_signal(uint32_t m, int *w, int *h) {
-	static const uint16_t sw[4] = { 640, 800, 1024, 1280 };
-	static const uint16_t sh[4] = { 480, 600, 768, 720 };
-	*w = sw[m & 3u];
-	*h = sh[m & 3u];
+	static const uint16_t sw[8] = { 640, 800, 1024, 1280, 800, 1280, 1920, 640 };
+	static const uint16_t sh[8] = { 480, 600, 768, 720, 480, 800, 1080, 480 };
+	*w = sw[m & 7u];
+	*h = sh[m & 7u];
 }
 
 static inline void z_vmode_geometry(uint32_t m, int *w, int *h) {
@@ -1767,14 +1770,18 @@ static inline void z_vmode_geometry(uint32_t m, int *w, int *h) {
 	if (m == Z_VMODE_1280X720 && z_vmode_doubled()) {
 		*w = 640;
 		*h = 360;
+	} else if (m == Z_VMODE_1920X1080) {
+		*w = 960;
+		*h = 540;
 	}
 }
 
 // The DDMI character clock in mode m, in kHz: what the display's audio
 // clock regeneration is measured against (zaudio.h). 640x480 is 25.2
-// MHz, 800x600 37.8, the two-pixel modes 75.6.
+// MHz, 800x600 and 800x480 37.8, the two-pixel modes 75.6.
 static inline uint32_t z_vmode_tmds_khz(uint32_t m) {
-	return (m == Z_VMODE_640X480) ? 25200u : (m == Z_VMODE_800X600) ? 37800u : 75600u;
+	return (m == Z_VMODE_640X480) ? 25200u :
+		(m == Z_VMODE_800X600 || m == Z_VMODE_800X480) ? 37800u : 75600u;
 }
 
 #define Z_COLWIN_EN    (1u << 31)

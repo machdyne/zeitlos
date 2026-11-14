@@ -236,8 +236,10 @@ selection back. Changing this needs `make flash`, not `make dev-flash`
 ## Resolution
 
 The Display page's second row: a button for each screen mode the machine
-has -- 640x480 and 1280x720, and on the 45F/85F boards 800x600 and
-1024x768 too ([screen_modes.md](screen_modes.md)). Choosing one asks wm
+has -- 640x480 and 1280x720, and on the 45F/85F boards 800x600,
+1024x768, 800x480, 1280x800 and 1920x1080 too
+([screen_modes.md](screen_modes.md)). They go four to a row, so a
+45F board has two rows of them. Choosing one asks wm
 to change to it (`z_screen_set_mode()`); wm asks whether to keep it, and
 goes back by itself after fifteen seconds without an answer, so a
 display that cannot show a mode never leaves you without a picture. wm

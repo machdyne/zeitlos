@@ -694,24 +694,46 @@ module sysctl #()
 	wire vid_bclk;
 	// the screen mode (socctl's VMODE, docs/screen_modes.md): to
 	// gpu_video, and to the blitter and the rasteriser for the row length
-	wire [1:0] socctl_vmode;
+	wire [2:0] socctl_vmode;
+	// the modes this build has (bit m: mode m), as socctl's VMODE reads
+`ifdef VIDEO_MODES
+`ifdef VIDEO_WIDE
+`ifdef VIDEO_NO_NATIVE_720
+	localparam [7:0] VMODE_MASK = 8'b0101_1111;
+`else
+	localparam [7:0] VMODE_MASK = 8'b0111_1111;
+`endif
+`else
+	localparam [7:0] VMODE_MASK = 8'b0000_1001;
+`endif
+`else
+	localparam [7:0] VMODE_MASK = 8'b0000_0001;
+`endif
 	// ... and the pointer's limits in it: the screen's last pixel, in the
 	// desktop's own pixels (rtl/usb_hid.v, rtl/usb/usb_hid_compat.v)
 `ifdef VIDEO_WIDE
 `ifdef VIDEO_NO_NATIVE_720
-	wire [10:0] curs_max_x = (socctl_vmode == 2'd1) ? 11'd799 :
-		(socctl_vmode == 2'd2) ? 11'd1023 : 11'd639;
-	wire [9:0] curs_max_y = (socctl_vmode == 2'd1) ? 10'd599 :
-		(socctl_vmode == 2'd2) ? 10'd767 : (socctl_vmode == 2'd3) ? 10'd359 : 10'd479;
+	wire [10:0] curs_max_720x = 11'd639;
+	wire [9:0] curs_max_720y = 10'd359;
 `else
-	wire [10:0] curs_max_x = (socctl_vmode == 2'd1) ? 11'd799 :
-		(socctl_vmode == 2'd2) ? 11'd1023 : (socctl_vmode == 2'd3) ? 11'd1279 : 11'd639;
-	wire [9:0] curs_max_y = (socctl_vmode == 2'd1) ? 10'd599 :
-		(socctl_vmode == 2'd2) ? 10'd767 : (socctl_vmode == 2'd3) ? 10'd719 : 10'd479;
+	wire [10:0] curs_max_720x = 11'd1279;
+	wire [9:0] curs_max_720y = 10'd719;
 `endif
+	wire [10:0] curs_max_x =
+		(socctl_vmode == 3'd1 || socctl_vmode == 3'd4) ? 11'd799 :
+		(socctl_vmode == 3'd2) ? 11'd1023 :
+		(socctl_vmode == 3'd3) ? curs_max_720x :
+		(socctl_vmode == 3'd5) ? 11'd1279 :
+		(socctl_vmode == 3'd6) ? 11'd959 : 11'd639;
+	wire [9:0] curs_max_y =
+		(socctl_vmode == 3'd1) ? 10'd599 :
+		(socctl_vmode == 3'd2) ? 10'd767 :
+		(socctl_vmode == 3'd3) ? curs_max_720y :
+		(socctl_vmode == 3'd5) ? 10'd799 :
+		(socctl_vmode == 3'd6) ? 10'd539 : 10'd479;
 `else
 	wire [10:0] curs_max_x = 11'd639;
-	wire [9:0] curs_max_y = (socctl_vmode == 2'd3) ? 10'd359 : 10'd479;
+	wire [9:0] curs_max_y = (socctl_vmode == 3'd3) ? 10'd359 : 10'd479;
 `endif
 	wire clk50mhz;
 	wire clk48mhz;
@@ -5065,6 +5087,7 @@ module sysctl #()
 		.CURSOR_AVAIL(CURSOR_AVAILABLE),
 `ifdef VIDEO_MODES
 		.VMODES(1'b1),
+		.VM_MASK(VMODE_MASK),
 `ifdef VIDEO_WIDE
 		.WIDE(1'b1),
 `ifdef VIDEO_NO_NATIVE_720

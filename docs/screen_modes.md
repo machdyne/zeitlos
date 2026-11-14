@@ -10,14 +10,27 @@ the countdown brings the old mode back.
 
 | Board | Modes |
 |---|---|
-| 45F and 85F (Mozart ML1/ML2, Sergei ML1, Noir, Schoko, ULX3S 45F/85F) | 640x480, 800x600, 1024x768, 1280x720 |
-| Sergei ML2 | 640x480, 800x600, 1024x768, and 1280x720 showing a 640x360 desktop at twice the size each way (below) |
+| 45F and 85F (Mozart ML1/ML2, Sergei ML1, Noir, Schoko, ULX3S 45F/85F) | 640x480, 800x600, 1024x768, 1280x720, 800x480, 1280x800, and 1920x1080 showing a 960x540 desktop at twice the size each way |
+| Sergei ML2 | 640x480, 800x600, 1024x768, 800x480, and two shown at twice the size each way: 1280x720 from a 640x360 desktop and 1920x1080 from 960x540 (below) |
 | 25F and 12F with a picture (Lakritz, Mozart ML0, Sergei ML0, Konfekt, Minze, ULX3S 12F/25F) | 640x480, and 1280x720 showing a 640x360 desktop at twice the size each way |
 | Obst | 640x480: it is the small build, a 1 MB machine (below) |
 | the console profile, headless boards, Artix-7, GateMate | 640x480, as before |
 
 The modes in the cycle and in Settings are the ones the machine has, in
-that order, and the cycle wraps round. Game mode's 320x240 is not one of
+that order, and the cycle wraps round. What each of the newer three is
+for:
+
+| Mode | For |
+|---|---|
+| 800x480 (5:3) | the 5 and 7 inch HDMI panels, pixel for pixel |
+| 1280x800 (16:10) | laptop-style panels and office monitors |
+| 1920x1080 at 30 Hz (16:9) | a 1080p television or monitor without its scaler: each desktop pixel is exactly four of the screen's. Thirty frames a second, so the pointer moves less smoothly |
+
+The 25F boards do not have these three. Each needs a row length other
+than 640 pixels, which is the 45F builds' logic (and Lakritz is at 92%
+of its LUTs), and VRAM in block RAM: a 25F build has 9,600 words, or
+14,400 with six game planes, where 800x480 is 12,000 and 960x540
+16,200. Game mode's 320x240 is not one of
 them. **Super+Esc** is still game mode, and the 320x240 game picture is
 always shown on a 640x480 signal:
 
@@ -68,6 +81,9 @@ DP16KD; router1 converged in 1,391 s, and every clock passes -- bclk
 | 800x600 | 998 x 628 | 37.88 kHz, 60.3 Hz | 37.8 MHz | + + | no VIC, 4:3 |
 | 1024x768 | 1328 x 806 | 56.93 kHz, 70.63 Hz | 75.6 MHz | - - | no VIC, 4:3 |
 | 1280x720 | 1680 x 750 | 45.00 kHz, 60.00 Hz | 75.6 MHz | + + | VIC 4, 16:9 |
+| 800x480 | 1200 x 525 | 31.5 kHz, 60.0 Hz | 37.8 MHz | - - | no VIC, 16:9 |
+| 1280x800 | 1440 x 875 | 52.5 kHz, 60.0 Hz | 75.6 MHz | + - | no VIC, 16:9 |
+| 1920x1080 | 2240 x 1125 | 33.75 kHz, 30.00 Hz | 75.6 MHz | + + | VIC 34, 16:9 |
 
 The line and frame rates are the standard ones: VESA's for 800x600 and
 1024x768, CEA-861's for 720p. Displays recognise a mode by its line and
@@ -87,6 +103,21 @@ pixels exactly. (The first version used VESA's 60 Hz line rate with a
 1562-pixel line, 16% longer than the monitor's 1344, and on the first
 hardware test, through an adapter, the picture came out narrow and
 auto-adjust could not fix it.)
+
+The newer three:
+
+- **800x480** has 640x480's line and frame rates, with a 1200-pixel
+  line at 37.8 MHz (the panels' own is 1056 at 33.3 MHz). The panels
+  these are for take the picture by data enable, so the longer blanking
+  does not matter to them; on a VGA monitor it will not fit.
+- **1280x800** has CVT reduced blanking's line exactly, 1440 pixels
+  (71.0 MHz there), and its syncs (+ -), so a VGA monitor that takes it
+  for that mode samples our pixels; 875 lines rather than 823 make it
+  60.0 Hz at our clock.
+- **1920x1080** is CEA's 1080p30 with 2240 pixels a line for its 2200,
+  as 720p has 1680 for 1650: 33.75 kHz and 30.00 Hz exactly. A display
+  can be told one of two picture shapes, 4:3 or 16:9; 800x480 and
+  1280x800 say 16:9, the nearer.
 
 ## The gateware
 
@@ -219,11 +250,12 @@ carries over is that the seed no longer decides.
 
 `gpu_video.v` makes a *sample* on each enabled pclk:
 
-- **One pixel** at 640x480 and 800x600.
-- **Two pixels** at 1024x768 and 1280x720. On a WIDE build these are two
-  columns; there, h counts pairs of pixels.
-- **One pixel shown twice** at 1280x720 on a 25F. Rows are also shown
-  twice, as game mode does, so the desktop is 640x360.
+- **One pixel** at 640x480, 800x600 and 800x480.
+- **Two pixels** at 1024x768, 1280x720 and 1280x800. On a WIDE build
+  these are two columns; there, h counts pairs of pixels.
+- **One pixel shown twice** at 1280x720 on a 25F (and Sergei ML2), and
+  at 1920x1080 everywhere. Rows are also shown twice, as game mode
+  does, so the desktop is 640x360 or 960x540.
 
 Each sample carries its syncs, blanking, hc and vc.
 
@@ -259,11 +291,12 @@ turns them off in any other mode (`vm_m0`), and
 
 | Item | Change |
 |---|---|
-| Row length | On a WIDE build: 20, 25, 32 or 40 words. The row's VRAM address is worked out in the pixel domain and crosses to the fetch with the row. |
+| Row length | On a WIDE build: 20, 25, 30, 32 or 40 words (640, 800, 960, 1024, 1280 pixels). The row's VRAM address is worked out in the pixel domain and crosses to the fetch with the row. |
 | Line buffer | Holds a 40-word row in its first two plane rows. Plane rows are only fetched at 640x480. |
-| Blitter | `rtl/gpu/gpu_blit.v` takes the mode for its row length: 80, 100, 128 or 160 bytes. |
+| Blitter | `rtl/gpu/gpu_blit.v` takes the mode for its row length: 80, 100, 120, 128 or 160 bytes. |
 | Rasteriser | Stays 640 wide, so `zgfx` draws lines in software in the other modes. |
-| VRAM | 32,768 words on a WIDE build: 64 DP16KD. |
+| VRAM | 32,768 words on a WIDE build: 64 DP16KD. 1280x800 is 32,000 of them. Sergei ML2's 24,576 hold everything but that and native 1280x720. |
+| Data islands | The character position is 12 bits: 1920x1080's line is 2240 characters. |
 | Cursor | 11 bits across. |
 | Pointer's x | The 11th bit is bit 28 of the USB cursor register and bit 23 of the virtual mouse register; both bits read 0 before this change. |
 | Pointer limits | Kept inside the mode's screen by `rtl/usb_hid.v` and `rtl/usb/usb_hid_compat.v`, which also pull it back on when the screen gets smaller. |
@@ -272,14 +305,19 @@ turns them off in any other mode (`vm_m0`), and
 
 | Access | Bits |
 |---|---|
-| Write | `[1:0]`: the mode. A mode this machine does not have is ignored. |
-| Read | `{ "ZM", 4'b0, avail[3:0], 2'b0, wide, dbl, 2'b0, mode }`: wide, 800x600 and 1024x768 native; dbl, 1280x720 doubled from 640x360 |
+| Write | `[2:0]`: the mode, 0 to 6 in the order of the table above. A mode this machine does not have is ignored. |
+| Read | `{ "ZM", avail[7:0], 2'b0, wide, dbl, 1'b0, mode[2:0] }`: avail bit m, mode m is there; wide, the modes are at their own row lengths; dbl, 1280x720 is doubled from 640x360 |
+
+The mode was two bits and avail four until the three newer modes; the
+bits they took read 0 before, so older software sees the first four
+modes of a newer bitstream, and newer software sees an older
+bitstream's four.
 
 The mode is adopted at the next frame boundary.
 
 On older bitstreams:
 
-- A bitstream without screen modes reads avail = 0001: 640x480 only.
+- A bitstream without screen modes reads avail = 0000_0001: 640x480 only.
 - One from before VMODE reads 0.
 - One that decodes only four address bits aliases word 3 (GAME), whose
   signature is not "ZM". Software reads the signature first
@@ -359,9 +397,9 @@ NO_VIDEO_MODES and its apps with constant geometry.
 
 | Setting | Acts as |
 |---|---|
-| `wide` (the default) | a 45F board |
-| `dbl` | a 25F board: 1280x720 is 640x360 |
-| `widedbl` | Sergei ML2: the 45F modes, with 1280x720 from 640x360 |
+| `wide` (the default) | a 45F board: all seven modes |
+| `dbl` | a 25F board: 640x480, and 1280x720 as 640x360 |
+| `widedbl` | Sergei ML2: the 45F modes without 1280x800, and 1280x720 from 640x360 |
 | `none` | a bitstream without screen modes |
 
 Screenshots and the window take the mode's size. The emulator shows the

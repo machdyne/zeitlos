@@ -23,14 +23,19 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import ddmi  # noqa: E402
 
-# mode: (h_total, v_total, width, height, hsync, vsync, positive, vic)
+# mode: (h_total, v_total, width, height, hsync, vsync, hsync positive,
+#        vsync positive, vic, AVI picture aspect: 1 is 4:3, 2 is 16:9)
 MODES = {
-    0: (800, 525, 640, 480, 96, 2, False, 1),
-    1: (998, 628, 800, 600, 96, 4, True, 0),
-    2: (1328, 806, 1024, 768, 136, 6, False, 0),
-    3: (1680, 750, 1280, 720, 40, 5, True, 4),
+    0: (800, 525, 640, 480, 96, 2, False, False, 1, 1),
+    1: (998, 628, 800, 600, 96, 4, True, True, 0, 1),
+    2: (1328, 806, 1024, 768, 136, 6, False, False, 0, 1),
+    3: (1680, 750, 1280, 720, 40, 5, True, True, 4, 2),
+    4: (1200, 525, 800, 480, 48, 3, False, False, 0, 2),
+    5: (1440, 875, 1280, 800, 32, 6, True, False, 0, 2),
+    6: (2240, 1125, 1920, 1080, 44, 5, True, True, 34, 2),
 }
-ROW_WORDS = {0: 20, 1: 25, 2: 32, 3: 40}
+# the desktop's row length in words; 1920x1080 is a 960x540 desktop
+ROW_WORDS = {0: 20, 1: 25, 2: 32, 3: 40, 4: 25, 5: 40, 6: 30}
 INK = 0x80
 
 
@@ -53,7 +58,7 @@ def main(argv):
     ap.add_argument("--islands", action="store_true")
     a = ap.parse_args(argv)
 
-    ht, vt, w, h, hsw, vsw, pos, vic = MODES[a.mode]
+    ht, vt, w, h, hsw, vsw, hpos, vpos, vic, aspect = MODES[a.mode]
     chars = ddmi.read_capture(a.capture)
     errs = []
 
@@ -77,10 +82,11 @@ def main(argv):
             last = (v & 1, (v >> 1) & 1)
         hs_l.append(last[0])
         vs_l.append(last[1])
-    act = 1 if pos else 0
+    act = 1 if hpos else 0
+    vact = 1 if vpos else 0
     # pulse starts: the edge into the active level
     hstarts = [i for i in range(1, len(hs_l)) if hs_l[i] == act and hs_l[i - 1] == 1 - act]
-    vstarts = [i for i in range(1, len(vs_l)) if vs_l[i] == act and vs_l[i - 1] == 1 - act]
+    vstarts = [i for i in range(1, len(vs_l)) if vs_l[i] == vact and vs_l[i - 1] == 1 - vact]
     if len(hstarts) < 3:
         errs.append("fewer than three hsync pulses")
     else:
@@ -102,7 +108,7 @@ def main(argv):
         if fl != {ht * vt}:
             errs.append("frame lengths %s characters, want %d (%d lines)" % (sorted(fl), ht * vt, vt))
         k = vstarts[0]
-        while k < len(vs_l) and vs_l[k] == act:
+        while k < len(vs_l) and vs_l[k] == vact:
             k += 1
         if k - vstarts[0] != ht * vsw:
             errs.append("vsync of %d characters, want %d (%d lines)" % (k - vstarts[0], ht * vsw, vsw))
@@ -114,8 +120,10 @@ def main(argv):
     full = [fr for fr in rep.frames if len(fr) == h]
     if not full:
         errs.append("no whole frame of %d rows (frames of %s)" % (h, [len(f) for f in rep.frames]))
-    dbl = (a.mode == 3 and not a.wide)
-    rw = 20 if dbl else ROW_WORDS[a.mode]
+    # 1280x720 from 640x360 (the 25F boards, and NATIVE720=0: check it
+    # without --wide), and 1920x1080 from 960x540
+    dbl = (a.mode == 3 and not a.wide) or a.mode == 6
+    rw = 20 if (a.mode == 3 and dbl) else ROW_WORDS[a.mode]
     bad = 0
     for fi, fr in enumerate(full):
         for y, row in enumerate(fr):
@@ -152,9 +160,8 @@ def main(argv):
             pb = avi[1]
             if pb[3] != vic:
                 errs.append("AVI VIC %d, want %d" % (pb[3], vic))
-            want_m = 2 if vic == 4 else 1
-            if (pb[1] >> 4) & 3 != want_m:
-                errs.append("AVI picture aspect %d, want %d" % ((pb[1] >> 4) & 3, want_m))
+            if (pb[1] >> 4) & 3 != aspect:
+                errs.append("AVI picture aspect %d, want %d" % ((pb[1] >> 4) & 3, aspect))
         for k in ("GCP", "SPD"):
             if not summ["count"].get(k) and k != "SPD":
                 errs.append("no %s" % k)

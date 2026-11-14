@@ -435,13 +435,15 @@
  *             with no tearing. Reads back as written; 0 without avail.
  *             docs/profiles.md, "Lakritz".
  *
- *  19  VMODE  the screen mode (docs/screen_modes.md). W: bits 1:0, the
- *             mode: 0 640x480, 1 800x600, 2 1024x768, 3 1280x720. One
+ *  19  VMODE  the screen mode (docs/screen_modes.md). W: bits 2:0, the
+ *             mode: 0 640x480, 1 800x600, 2 1024x768, 3 1280x720,
+ *             4 800x480, 5 1280x800, 6 1920x1080 at 30 Hz (a 960x540
+ *             desktop shown twice each way). One
  *             this bitstream does not have is ignored (the register keeps
  *             the mode it has). rtl/gpu/gpu_video.v changes at the next
  *             frame boundary; a display takes a second or two to follow.
- *             R: { 16'h5A4D ("ZM"), 4'b0, avail[3:0], 2'b0, wide, dbl,
- *             2'b0, mode[1:0] } -- avail bit m: mode m is there; dbl:
+ *             R: { 16'h5A4D ("ZM"), avail[7:0], 2'b0, wide, dbl,
+ *             1'b0, mode[2:0] } -- avail bit m: mode m is there; dbl:
  *             mode 3 is a 640x360 desktop shown twice each way (the 25F
  *             boards); wide: modes 1..3 are native, at their own row
  *             lengths (25, 32 and 40 words a row). A bitstream without
@@ -653,7 +655,7 @@ module socctl_wb #(
     output wire [31:0] ck_base,
     // VMODE (word 19) -> rtl/gpu/gpu_video.v, which adopts it at a frame
     // boundary, and to the blitter and the rasteriser, for the row length
-    output wire [1:0]  vmode,
+    output wire [2:0]  vmode,
     output wire        pal_we,
     output wire [7:0]  pal_idx,
     output wire [11:0] pal_rgb,
@@ -721,8 +723,10 @@ module socctl_wb #(
     localparam COLWIN_SIG = 16'h5A57;
     // top half of VMODE -- "ZM"
     localparam VMODE_SIG = 16'h5A4D;
-    localparam [3:0] VM_AVAIL = (VMODES_AVAIL == 0) ? 4'b0001 :
-                                (WIDE_AVAIL != 0) ? 4'b1111 : 4'b1001;
+    // 1280x800 needs native 1280x720's 32K words of VRAM
+    localparam [7:0] VM_AVAIL = (VMODES_AVAIL == 0) ? 8'b0000_0001 :
+                                (WIDE_AVAIL == 0) ? 8'b0000_1001 :
+                                (NATIVE720_AVAIL != 0) ? 8'b0111_1111 : 8'b0101_1111;
 
     reg [31:0] ctrl;
     reg [1:0] video;
@@ -738,7 +742,7 @@ module socctl_wb #(
     reg col;
     reg [2:0] np;
     reg [31:0] ckbase;
-    reg [1:0] vm;
+    reg [2:0] vm;
     reg [5:0] coff;
     reg cck;
     reg pwe;
@@ -811,7 +815,7 @@ module socctl_wb #(
     assign color_en  = col && (COLOR_AVAIL != 0);
     assign color_np  = np;
     assign ck_base   = (CKBASE_AVAIL != 0) ? ckbase : 32'h0;
-    assign vmode     = (VMODES_AVAIL != 0) ? vm : 2'd0;
+    assign vmode     = (VMODES_AVAIL != 0) ? vm : 3'd0;
     assign color_off = coff;
     // forced low without CHUNKY_AVAIL, so it reads back 0 there
     assign color_chunky = cck && (CHUNKY_AVAIL != 0) && (COLOR_AVAIL != 0);
@@ -914,7 +918,7 @@ module socctl_wb #(
             col <= 1'b0;
             np <= 3'd0;
             ckbase <= 32'h0;
-            vm <= 2'd0;
+            vm <= 3'd0;
             coff <= 6'd0;
             cck <= 1'b0;
             pwe <= 1'b0;
@@ -1046,8 +1050,8 @@ module socctl_wb #(
                         ckbase <= { wb_dat_i[31:4], 4'b0 };
 
                     // VMODE: a mode this bitstream has, or nothing
-                    if (wb_adr_i == 32'd19 && wb_sel_i[0] && VM_AVAIL[wb_dat_i[1:0]])
-                        vm <= wb_dat_i[1:0];
+                    if (wb_adr_i == 32'd19 && wb_sel_i[0] && VM_AVAIL[wb_dat_i[2:0]])
+                        vm <= wb_dat_i[2:0];
 
                     // PALETTE: whole word or nothing, like RECONFIG --
                     // a byte store would otherwise write an entry with
@@ -1178,10 +1182,10 @@ module socctl_wb #(
                         32'd17: wb_dat_o <= (WIN_AVAIL != 0) ?
                                              { 6'b0, wy1, 6'b0, wx1 } : 32'h0000_0000;
                         32'd18: wb_dat_o <= ck_base;
-                        32'd19: wb_dat_o <= { VMODE_SIG, 4'b0, VM_AVAIL, 2'b0,
+                        32'd19: wb_dat_o <= { VMODE_SIG, VM_AVAIL, 2'b0,
                                               (WIDE_AVAIL != 0) && (VMODES_AVAIL != 0),
                                               ((WIDE_AVAIL == 0) || (NATIVE720_AVAIL == 0)) && (VMODES_AVAIL != 0),
-                                              2'b0, vmode };
+                                              1'b0, vmode };
                         default: wb_dat_o <= 32'h0000_0000;
                     endcase
 

@@ -461,7 +461,11 @@ static void read_auth(void) {
 // fifteen seconds without an answer and it goes back. Ctrl+Super+Esc
 // does the same from anywhere. wm remembers the mode kept.
 static uint32_t res_avail;
-static const char *res_labels[Z_VMODE_COUNT] = { "640x480", "800x600", "1024x768", "1280x720" };
+static const char *res_labels[Z_VMODE_COUNT] = { "640x480", "800x600", "1024x768", "1280x720",
+	"800x480", "1280x800", "1920x1080" };
+// The resolutions go four to a row: one row, or two where the machine
+// has more than four (the 45F boards).
+static int res_rows = 1;
 
 static void select_current_res(void) {
 	z_widget_select(&psets[P_DISPLAY], W_RES0 + (int)z_vmode_get());
@@ -515,15 +519,19 @@ static void layout(void) {
 		place(i, PX + i * (bw + GAP), y_page + LINE_H + 2, bw, BTN_H);
 	{
 		int y_res = y_page + LINE_H + 2 + BTN_H + 6 + LINE_H + 2;
-		for (int i = 0, k = 0; i < Z_VMODE_COUNT; i++) {
+		int k = 0;
+		for (int i = 0; i < Z_VMODE_COUNT; i++) {
 			if (!(res_avail & (1u << i))) { place(W_RES0 + i, -1000, -1000, 1, 1); continue; }
-			place(W_RES0 + i, PX + k * (bw + GAP), y_res, bw, BTN_H);
+			place(W_RES0 + i, PX + (k % MODE_COUNT) * (bw + GAP),
+				y_res + (k / MODE_COUNT) * (BTN_H + GAP), bw, BTN_H);
 			k++;
 		}
+		res_rows = k > MODE_COUNT ? 2 : 1;
 	}
 	{
 		// the desktop colours: their row, then the list to the bottom
-		int yt = y_page + LINE_H + 2 + BTN_H + 6 + LINE_H + 2 + BTN_H + 2 * LINE_H + 6;
+		int yt = y_page + LINE_H + 2 + BTN_H + 6 + LINE_H + 2 + BTN_H + 2 * LINE_H + 6 +
+			(res_rows - 1) * (BTN_H + GAP);
 		int yl = yt + 2 * LINE_H + 2;
 		int rows = (y_status - 6 - yl - 2) / (z_font_5x8.h + 2);
 		if (rows < 3) rows = 3;
@@ -722,7 +730,7 @@ static void draw_page(void) {
 		y += LINE_H + 2 + BTN_H + 6;
 		draw_row(y, res_avail == 1u ? "Resolution (640x480 only on this bitstream)" :
 			"Resolution (Ctrl+Super+Esc; kept if you say so)", NULL);
-		y += LINE_H + 2 + BTN_H + 2 * LINE_H + 6;
+		y += LINE_H + 2 + BTN_H + 2 * LINE_H + 6 + (res_rows - 1) * (BTN_H + GAP);
 		describe_theme(line, sizeof(line));
 		draw_row(y, "Desktop colours (Super+F10)", line);
 		break;

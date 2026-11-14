@@ -1765,7 +1765,7 @@ test_audio:
 # mode); VMODES_SLOW=1 rebuilds them from the pins instead, the
 # serialiser and its bit repetition too (several times that), with
 # ODDRX1F, or with VMODES_X2=1 the ODDRX2F serialiser (DDMI_ODDRX2).
-VMODES_RUNS ?= 0:0:1 0:3:1 1:1:0 1:2:1 1:3:0
+VMODES_RUNS ?= 0:0:1 0:3:1 1:1:0 1:2:1 1:3:0 1:4:1 1:5:1 1:6:1
 test_vmodes:
 	@mkdir -p output
 	@sed 's/^\tinput \[31:0\] gb_dat_i,$$/\tinput [31:0] gb_dat_i/' \

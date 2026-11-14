@@ -86,7 +86,7 @@ module gpu_vchar #(
 	// -- from gpu_video, pclk domain --
 	input ptog,
 	input s_new,
-	input [1:0] s_mode,
+	input [2:0] s_mode,
 	input [23:0] s_rgb0,
 	input [23:0] s_rgb1,
 	input [8:0] s_vga0,
@@ -120,7 +120,7 @@ module gpu_vchar #(
 	// -- the crossing --
 	reg t1 = 1'b0, t2 = 1'b0;
 	reg q_new = 1'b0;
-	reg [1:0] q_mode = 2'd0;
+	reg [2:0] q_mode = 3'd0;
 	reg [23:0] q_rgb0 = 24'd0, q_rgb1 = 24'd0;
 	reg [8:0] q_vga0 = 9'd0, q_vga1 = 9'd0;
 	reg q_hs = 1'b1, q_vs = 1'b1, q_de = 1'b0;
@@ -145,7 +145,7 @@ module gpu_vchar #(
 	wire push = (t1 ^ t2) && q_new;
 
 	// -- the FIFO: two samples --
-	reg [1:0] f_mode0 = 2'd0, f_mode1 = 2'd0;
+	reg [2:0] f_mode0 = 3'd0, f_mode1 = 3'd0;
 	reg [23:0] f_rgb00 = 24'd0, f_rgb10 = 24'd0, f_rgb01 = 24'd0, f_rgb11 = 24'd0;
 	reg [8:0] f_vga00 = 9'd0, f_vga10 = 9'd0, f_vga01 = 9'd0, f_vga11 = 9'd0;
 	reg f_hs0 = 1'b1, f_hs1 = 1'b1, f_vs0 = 1'b1, f_vs1 = 1'b1, f_de0 = 1'b0, f_de1 = 1'b0;
@@ -157,24 +157,41 @@ module gpu_vchar #(
 	reg act = 1'b0;          // a sample is being sent
 	reg sub = 1'b0;          // its second character
 	reg [1:0] cc = 2'd0;     // clocks left in this character, less one
-	reg [1:0] e_mode = 2'd0; // the sample being sent
+	reg [2:0] e_mode = 3'd0; // the sample being sent
 	reg [23:0] e_rgb1 = 24'd0;
 	reg [8:0] e_vga1 = 9'd0;
 	reg e_hs = 1'b1, e_vs = 1'b1, e_de = 1'b0;
 	reg [10:0] e_hc = 11'd0, e_vc = 11'd0;
 
 	// the character in hand, for C clocks
-	reg [1:0] k_mode = 2'd0;
+	reg [2:0] k_mode = 3'd0;
 	reg [23:0] k_rgb = 24'd0;
 	reg [8:0] k_vga = 9'd0;
 	reg k_hs = 1'b1, k_vs = 1'b1, k_de = 1'b0;
-	reg [10:0] k_hc = 11'd0, k_vc = 11'd0;
+	// k_hc in characters: 12 bits, for 1920x1080's 2240 a line
+	reg [11:0] k_hc = 12'd0;
+	reg [10:0] k_vc = 11'd0;
 	reg go = 1'b0;           // the clock after a character is taken
 
-	wire pair_e = e_mode[1];
-	wire [1:0] c_of_e = (e_mode == 2'd0) ? 2'd2 : (e_mode == 2'd1) ? 2'd1 : 2'd0;
-	wire [1:0] f_mode_r = rp ? f_mode1 : f_mode0;
-	wire [1:0] c_of_f = (f_mode_r == 2'd0) ? 2'd2 : (f_mode_r == 2'd1) ? 2'd1 : 2'd0;
+	// A mode of two characters a sample (1024x768, 1280x720, 1280x800,
+	// 1920x1080), and a character's clocks less one: three at 640x480,
+	// two at 800x600 and 800x480, one in the two-character modes.
+	function is_pair;
+		input [2:0] m;
+		begin
+			is_pair = (m == 3'd2) || (m == 3'd3) || (m == 3'd5) || (m == 3'd6);
+		end
+	endfunction
+	function [1:0] c_of;
+		input [2:0] m;
+		begin
+			c_of = (m == 3'd0) ? 2'd2 : (m == 3'd1 || m == 3'd4) ? 2'd1 : 2'd0;
+		end
+	endfunction
+	wire pair_e = is_pair(e_mode);
+	wire [1:0] c_of_e = c_of(e_mode);
+	wire [2:0] f_mode_r = rp ? f_mode1 : f_mode0;
+	wire [1:0] c_of_f = c_of(f_mode_r);
 
 	wire ends = !act || (cc == 2'd0);
 	wire start_b = ends && act && pair_e && !sub;
@@ -209,7 +226,7 @@ module gpu_vchar #(
 			k_mode <= e_mode;
 			k_rgb <= (WIDE != 0) ? e_rgb1 : k_rgb;
 			k_vga <= (WIDE != 0) ? e_vga1 : k_vga;
-			k_hc <= { e_hc[9:0], 1'b1 };
+			k_hc <= { e_hc[10:0], 1'b1 };
 		end else if (pop) begin
 			act <= 1'b1;
 			sub <= 1'b0;
@@ -220,13 +237,13 @@ module gpu_vchar #(
 				e_hs <= f_hs1; e_vs <= f_vs1; e_de <= f_de1; e_hc <= f_hc1; e_vc <= f_vc1;
 				k_mode <= f_mode1; k_rgb <= f_rgb01; k_vga <= f_vga01;
 				k_hs <= f_hs1; k_vs <= f_vs1; k_de <= f_de1; k_vc <= f_vc1;
-				k_hc <= f_mode1[1] ? { f_hc1[9:0], 1'b0 } : f_hc1;
+				k_hc <= is_pair(f_mode1) ? { f_hc1[10:0], 1'b0 } : { 1'b0, f_hc1 };
 			end else begin
 				e_mode <= f_mode0; e_rgb1 <= f_rgb10; e_vga1 <= f_vga10;
 				e_hs <= f_hs0; e_vs <= f_vs0; e_de <= f_de0; e_hc <= f_hc0; e_vc <= f_vc0;
 				k_mode <= f_mode0; k_rgb <= f_rgb00; k_vga <= f_vga00;
 				k_hs <= f_hs0; k_vs <= f_vs0; k_de <= f_de0; k_vc <= f_vc0;
-				k_hc <= f_mode0[1] ? { f_hc0[9:0], 1'b0 } : f_hc0;
+				k_hc <= is_pair(f_mode0) ? { f_hc0[10:0], 1'b0 } : { 1'b0, f_hc0 };
 			end
 		end else if (ends) begin
 			// nothing to send: hold the last character (only before the
@@ -251,20 +268,27 @@ module gpu_vchar #(
 	//   mode  picture from   island at   picture lines from  vsync from  AVI
 	//   0     160            12          45                  10          VIC 1
 	//   1     198            40          28                  1           none
-	//   2     538            12          38                  3           none
+	//   2     304            12          38                  3           none
 	//   3     400            12          30                  5           VIC 4
+	//   4     400            12          45                  13          none, 16:9
+	//   5     160            12          75                  3           none, 16:9
+	//   6     320            12          45                  4           VIC 34
 	//
 	// 800x600's island sits inside its sync pulse (hc 40..135) so that,
 	// as at 640x480, hsync does not change inside it.
-	reg [10:0] i_off = 11'd0, i_vpre = 11'd150, i_vact = 11'd45, i_vgcp = 11'd10;
-	reg [1:0] i_avi = 2'd0;
+	reg [11:0] i_off = 12'd0, i_vpre = 12'd150;
+	reg [10:0] i_vact = 11'd45, i_vgcp = 11'd10;
+	reg [2:0] i_avi = 3'd0;
 
 	always @(posedge cclk) begin
 		case (k_mode)
-			2'd1: begin i_off <= 11'd28; i_vpre <= 11'd188; i_vact <= 11'd28; i_vgcp <= 11'd1; i_avi <= 2'd2; end
-			2'd2: begin i_off <= 11'd0;  i_vpre <= 11'd294; i_vact <= 11'd38; i_vgcp <= 11'd3; i_avi <= 2'd2; end
-			2'd3: begin i_off <= 11'd0;  i_vpre <= 11'd390; i_vact <= 11'd30; i_vgcp <= 11'd5; i_avi <= 2'd1; end
-			default: begin i_off <= 11'd0; i_vpre <= 11'd150; i_vact <= 11'd45; i_vgcp <= 11'd10; i_avi <= 2'd0; end
+			3'd1: begin i_off <= 12'd28; i_vpre <= 12'd188; i_vact <= 11'd28; i_vgcp <= 11'd1; i_avi <= 3'd2; end
+			3'd2: begin i_off <= 12'd0;  i_vpre <= 12'd294; i_vact <= 11'd38; i_vgcp <= 11'd3; i_avi <= 3'd2; end
+			3'd3: begin i_off <= 12'd0;  i_vpre <= 12'd390; i_vact <= 11'd30; i_vgcp <= 11'd5; i_avi <= 3'd1; end
+			3'd4: begin i_off <= 12'd0;  i_vpre <= 12'd390; i_vact <= 11'd45; i_vgcp <= 11'd13; i_avi <= 3'd3; end
+			3'd5: begin i_off <= 12'd0;  i_vpre <= 12'd150; i_vact <= 11'd75; i_vgcp <= 11'd3; i_avi <= 3'd3; end
+			3'd6: begin i_off <= 12'd0;  i_vpre <= 12'd310; i_vact <= 11'd45; i_vgcp <= 11'd4; i_avi <= 3'd4; end
+			default: begin i_off <= 12'd0; i_vpre <= 12'd150; i_vact <= 11'd45; i_vgcp <= 11'd10; i_avi <= 3'd0; end
 		endcase
 	end
 
@@ -321,7 +345,7 @@ module gpu_vchar #(
 	always @(posedge cclk) begin
 		if (go) begin
 			ph <= 2'd0;
-			rep <= (k_mode == 2'd0) ? 2'd2 : (k_mode == 2'd1) ? 2'd1 : 2'd0;
+			rep <= c_of(k_mode);
 		end else if (ph != 2'd3) begin
 			ph <= ph + 2'd1;
 		end

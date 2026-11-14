@@ -6323,8 +6323,9 @@ static void confirm_click(int cx, int cy) {
 static void dock_rect(int *x, int *y, int *w, int *h);
 
 static const char *vm_name(uint32_t m) {
-	static const char *const n[4] = { "640x480", "800x600", "1024x768", "1280x720" };
-	return n[m & 3u];
+	static const char *const n[8] = { "640x480", "800x600", "1024x768", "1280x720",
+		"800x480", "1280x800", "1920x1080", "640x480" };
+	return n[m & 7u];
 }
 
 // The next mode this machine has after m, round.

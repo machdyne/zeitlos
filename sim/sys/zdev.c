@@ -451,8 +451,8 @@ static void socctl_write(zsys_t *s, uint32_t r, uint32_t v, uint32_t sel) {
 		if (sel == 15 && v == RECONFIG_KEY) s->reboot = true;
 		return;
 	case 19:				// VMODE: a mode there is, or nothing
-		if ((sel & 1) && s->vm_avail && (s->vm_avail >> (v & 3) & 1)) {
-			s->vmode = v & 3;
+		if ((sel & 1) && s->vm_avail && (s->vm_avail >> (v & 7) & 1)) {
+			s->vmode = v & 7;
 			s->video_gen++;
 			memset(s->dirty, 0xff, sizeof(s->dirty));
 		}
@@ -1245,7 +1245,9 @@ void zdev_reset(zsys_t *s) {
 		// doubled (VIDEO_NO_NATIVE_720); none: no screen modes
 		s->vm_wide = !(vm && !strcmp(vm, "dbl"));
 		s->vm_dbl720 = vm && (!strcmp(vm, "dbl") || !strcmp(vm, "widedbl"));
-		s->vm_avail = (vm && !strcmp(vm, "none")) ? 0 : s->vm_wide ? 0xf : 0x9;
+		// 1280x800 (bit 5) needs native 1280x720's VRAM
+		s->vm_avail = (vm && !strcmp(vm, "none")) ? 0 : !s->vm_wide ? 0x09 :
+			s->vm_dbl720 ? 0x5f : 0x7f;
 	}
 	s->video_mode = 0;				// white on black, as Lakritz comes up
 	s->video_bright = 7;

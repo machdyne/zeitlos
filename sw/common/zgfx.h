@@ -68,7 +68,7 @@
 #define Z_FB_640_W 640
 #define Z_FB_640_H 480
 #define Z_FB_MAX_W 1280
-#define Z_FB_MAX_H 768
+#define Z_FB_MAX_H 800
 #ifdef Z_SMALL
 #define Z_SCREEN_W Z_FB_640_W
 #define Z_SCREEN_H Z_FB_640_H

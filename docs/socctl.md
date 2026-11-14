@@ -53,7 +53,7 @@ Word-addressed, matching every other simple slave in this codebase.
 | `0x7000_0230` | ACRCTS | ... and CTS, `[19:0]`. The display rebuilds 128 fs as the character clock × N / CTS: 25.2 MHz at 640x480, the screen mode's otherwise ([screen_modes.md](screen_modes.md)). |
 | `0x7000_0240` | COLWIN | the colour window: bits 9:0 x0, bits 25:16 y0, bit 30 DESK (desktop colour's exact path, `COLOR_DESKTOP`), bit 31 EN; adopted at the next frame boundary with GAME/VIEW/COLOR. Reads back as `{0x5A57, avail, davail, 12'b0, desk, en}`. **Entering game mode clears EN.** See [color.md](color.md#the-colour-window). |
 | `0x7000_0244` | COLWINEND | its other corner, exclusive: bits 9:0 x1, bits 25:16 y1. Written first; adopted with the next COLWIN. Reads back as written (0 without the window). |
-| `0x7000_024c` | VMODE | the screen mode: bits 1:0, 0 640x480, 1 800x600, 2 1024x768, 3 1280x720; one this bitstream does not have is ignored; adopted at the next frame boundary. Reads back as `{0x5A4D, 4'b0, avail[3:0], 2'b0, wide, dbl, 2'b0, mode}` -- avail 0001 on a bitstream without screen modes. wm's to write. See [screen_modes.md](screen_modes.md). |
+| `0x7000_024c` | VMODE | the screen mode: bits 2:0, 0 640x480, 1 800x600, 2 1024x768, 3 1280x720, 4 800x480, 5 1280x800, 6 1920x1080 at 30 Hz (a 960x540 desktop); one this bitstream does not have is ignored; adopted at the next frame boundary. Reads back as `{0x5A4D, avail[7:0], 2'b0, wide, dbl, 1'b0, mode[2:0]}` -- avail 0000_0001 on a bitstream without screen modes. wm's to write. See [screen_modes.md](screen_modes.md). |
 
 The decode is five address bits wide (thirty-two words), for the
 colour window's words 16 and 17; on a four-bit bitstream those alias

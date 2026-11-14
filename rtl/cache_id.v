@@ -746,12 +746,35 @@ module wb_cache #(
                     // BRAM -> tag compare -> ack path in front of
                     // every register this state loads. That was the
                     // SOC's critical path (53.9MHz on mozart_ml1).
-                    end else if (c_req && !ack_r) begin
-                        req_adr <= c_adr_i;
-                        req_dat <= c_dat_i;
-                        req_sel <= c_sel_i;
-                        req_we <= c_we_i;
+                    end else if (!ack_r) begin
+                      // The request's copies, and the memory port's
+                      // address, write data, select and burst type, are
+                      // loaded whether or not there is a request. Nothing
+                      // reads req_* until a request has been accepted
+                      // (which loads them on this same edge), and the
+                      // port's lines mean nothing while its strobe is
+                      // low, which it is in S_IDLE with bus_free: a
+                      // Wishbone slave looks at them only with STB.
+                      // c_req comes through the MPU's address
+                      // comparators, the longest logic in the SOC, and
+                      // as the enable of these 140 flops it was the
+                      // 48 MHz clock's limit on Sergei ML2 (20.9 ns, the
+                      // last 3.3 of it the wire to m_dat_o, which sits
+                      // by the memory; then 19.5 ns to m_sel_o). Now
+                      // c_req decides only the state, the strobes and
+                      // write enable, and the counters.
+                      req_adr <= c_adr_i;
+                      req_dat <= c_dat_i;
+                      req_sel <= c_sel_i;
+                      req_we <= c_we_i;
+                      if (bus_free) begin
+                          m_adr_o <= c_adr_i;
+                          m_dat_o <= c_dat_i;
+                          m_sel_o <= c_sel_i;
+                          m_cti_o <= 3'b000;
+                      end
 
+                      if (c_req) begin
                         if (c_main && c_we_i) begin
                             req_kind <= K_ST;
                             stat_stores <= stat_stores + 1;
@@ -768,11 +791,9 @@ module wb_cache #(
                             if (c_main && !c_instr_i)
                                 stat_loads <= stat_loads + 1;
                             if (bus_free) begin
-                                m_adr_o <= c_adr_i;
-                                m_dat_o <= c_dat_i;
-                                m_sel_o <= c_sel_i;
+                                // (address, data, select and burst
+                                // type: loaded above)
                                 m_we_o <= c_we_i;
-                                m_cti_o <= 3'b000;
                                 m_stb_o <= 1'b1;
                                 m_cyc_o <= 1'b1;
                                 state <= S_BYPASS;
@@ -780,6 +801,7 @@ module wb_cache #(
                                 state <= S_MEMREQ;
                             end
                         end
+                      end
                     end
                 end
 

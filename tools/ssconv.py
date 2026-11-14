@@ -37,7 +37,8 @@ import re
 import sys
 
 # the screen modes' desktops, by their dumps' length
-SIZES = [(640, 480), (800, 600), (1024, 768), (1280, 720), (640, 360)]
+SIZES = [(640, 480), (800, 600), (1024, 768), (1280, 720), (640, 360),
+	(800, 480), (1280, 800), (960, 540)]
 
 
 def parse_size(text):

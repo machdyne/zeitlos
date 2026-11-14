@@ -71,7 +71,7 @@ module gpu_blit_wb #(
     input wire rst,
 
     // the screen mode (socctl's VMODE), with WIDE: the row length
-    input wire [1:0] vmode,
+    input wire [2:0] vmode,
 
     // Wishbone SLAVE interface
     input  wire        wb_cyc_i,
@@ -583,25 +583,30 @@ module gpu_blit_wb #(
     // fmax at 47.2 MHz. Same 32-bit result; one DSP and its routing
     // fewer.
     //
-    // WIDE: the row length by the mode -- 100 = 64 + 32 + 4, 128, 160 =
-    // 128 + 32 -- each still shifts and adds, chosen after the adds.
+    // WIDE: the row length by the mode -- 100 = 64 + 32 + 4 (800x600,
+    // 800x480), 128 (1024x768), 160 = 128 + 32 (1280x720, 1280x800),
+    // 120 = 128 - 8 (1920x1080's 960x540 desktop) -- each still shifts
+    // and adds, chosen after the adds.
     function [AW-1:0] row_of;
         input [AW-1:0] yy;
-        input [1:0] m;
+        input [2:0] m;
         begin
-            if (WIDE == 0 || m == 2'd0 || (m == 2'd3 && NATIVE720 == 0))
+            if (WIDE == 0 || m == 3'd0 || m == 3'd7 || (m == 3'd3 && NATIVE720 == 0))
                 row_of = (yy << 6) + (yy << 4);
-            else if (m == 2'd1)
+            else if (m == 3'd1 || m == 3'd4)
                 row_of = (yy << 6) + (yy << 5) + (yy << 2);
-            else if (m == 2'd2)
+            else if (m == 3'd2)
                 row_of = (yy << 7);
+            else if (m == 3'd6)
+                row_of = (yy << 7) - (yy << 3);
             else
                 row_of = (yy << 7) + (yy << 5);
         end
     endfunction
-    wire [AW-1:0] stride_b = (WIDE == 0 || vmode == 2'd0 ||
-        (vmode == 2'd3 && NATIVE720 == 0)) ? 17'd80 :
-        (vmode == 2'd1) ? 17'd100 : (vmode == 2'd2) ? 17'd128 : 17'd160;
+    wire [AW-1:0] stride_b = (WIDE == 0 || vmode == 3'd0 || vmode == 3'd7 ||
+        (vmode == 3'd3 && NATIVE720 == 0)) ? 17'd80 :
+        (vmode == 3'd1 || vmode == 3'd4) ? 17'd100 : (vmode == 3'd2) ? 17'd128 :
+        (vmode == 3'd6) ? 17'd120 : 17'd160;
     wire [AW-1:0] final_y_row = row_of(final_y, vmode);
     wire [AW-1:0] dst_y_row = row_of(work_dst_y, vmode);
     wire [CW-1:0] right_word_boundary = ((final_x_end + 31) >> 5) << 5;

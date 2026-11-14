@@ -70,7 +70,7 @@ module tb_vmodes;
 	always #10.4167 clk = !clk;
 
 	integer mode_arg = 0, frames = 1, en_arg = 0;
-	reg [1:0] vmode = 2'd0;
+	reg [2:0] vmode = 3'd0;
 	reg ddmi_en = 1'b0;
 	reg [8*256-1:0] outname;
 	integer fd;
@@ -97,6 +97,7 @@ module tb_vmodes;
 	gpu_video #(
 		.CURSOR_AVAIL(1'b0),
 		.VMODES(1'b1),
+		.VM_MASK(8'h7f),
 		.WIDE(`WIDE),
 		.NATIVE720(`NATIVE720)
 	) dut (
@@ -196,7 +197,7 @@ module tb_vmodes;
 		// one frame of 640x480, then the mode asked for
 		@(posedge frame_ctr[0]);
 		vmode = mode_arg;
-		rep_k = (mode_arg == 0) ? 3 : (mode_arg == 1) ? 2 : 1;
+		rep_k = (mode_arg == 0) ? 3 : (mode_arg == 1 || mode_arg == 4) ? 2 : 1;
 		// the switch lands at the next boundary; the frame after that is
 		// the first whole one in the new mode. Capture from the boundary
 		// before it, so the capture starts at a frame's first character.

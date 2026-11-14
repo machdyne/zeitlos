@@ -408,6 +408,35 @@ int main(int argc, char **argv) {
 		expect(y_status + LINE_H <= ch, "status line inside the window");
 	}
 
+	// All seven resolutions (a 45F board): two rows of four, inside the
+	// window and clear of each other, and what is below still fits.
+	{
+		int cw = z_win_content_w(&win), ch = z_win_content_h(&win);
+		uint32_t was = res_avail;
+		bool ok = true;
+		res_avail = 0x7fu;
+		for (int i = 0; i < Z_VMODE_COUNT; i++) widgets[W_RES0 + i].enabled = true;
+		layout();
+		expect(res_rows == 2, "seven resolutions: two rows");
+		for (int i = W_RES0; i <= W_RES_LAST; i++) {
+			if (widgets[i].x < 0 || widgets[i].y < 0 ||
+				widgets[i].x + widgets[i].w > cw || widgets[i].y + widgets[i].h > ch)
+				ok = false;
+			for (int j = W_RES0; j < i; j++)
+				if (widgets[i].x < widgets[j].x + widgets[j].w && widgets[j].x < widgets[i].x + widgets[i].w &&
+					widgets[i].y < widgets[j].y + widgets[j].h && widgets[j].y < widgets[i].y + widgets[i].h)
+					ok = false;
+		}
+		expect(ok, "seven resolutions: every button inside, none over another");
+		expect(theme_list.y > widgets[W_RES_LAST].y + widgets[W_RES_LAST].h &&
+			theme_list.y + theme_list.h <= y_status, "seven resolutions: the theme list below them, above the status line");
+		res_avail = was;
+		for (int i = 0; i < Z_VMODE_COUNT; i++)
+			widgets[W_RES0 + i].enabled = (res_avail & (1u << i)) != 0;
+		layout();
+		expect(res_rows == 1, "one resolution: one row again");
+	}
+
 	// -- pointer speed: shown, saved, read back --
 	// (the register itself is not here: z_pointer_speed_set() finds no
 	// USB host on the build machine and writes nothing)

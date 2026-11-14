@@ -43,8 +43,8 @@ enum {
 // zsys_stride() -- 640x480, 80 bytes, until software asks for another
 // screen mode (socctl's VMODE).
 #define ZSYS_SCREEN_W 1280
-#define ZSYS_SCREEN_H 768
-#define ZSYS_ROWS 768
+#define ZSYS_SCREEN_H 800
+#define ZSYS_ROWS 800
 #define ZSYS_STRIDE_640 80			// game mode's, the rasteriser's, T2's
 
 // The SD card, in SPI mode (zdev.c): a card image file behind rtl/spim.v.
@@ -389,14 +389,15 @@ uint32_t zdev_read(zsys_t *s, uint32_t pa, bool *ok);
 bool zdev_write(zsys_t *s, uint32_t pa, uint32_t v, uint32_t sel);
 // The desktop's geometry in the screen mode (game mode is 640x480).
 static inline int zsys_fb_w(const zsys_t *s) {
-	static const int w[4] = { 640, 800, 1024, 1280 };
+	// (1920x1080 is a 960x540 desktop; the doubling is not drawn)
+	static const int w[8] = { 640, 800, 1024, 1280, 800, 1280, 960, 640 };
 	if (s->vmode == 3 && s->vm_dbl720) return 640;
-	return w[s->vmode & 3];
+	return w[s->vmode & 7];
 }
 static inline int zsys_fb_h(const zsys_t *s) {
-	static const int h[4] = { 480, 600, 768, 720 };
+	static const int h[8] = { 480, 600, 768, 720, 480, 800, 540, 480 };
 	if (s->vmode == 3 && s->vm_dbl720) return 360;
-	return h[s->vmode & 3];
+	return h[s->vmode & 7];
 }
 static inline uint32_t zsys_stride(const zsys_t *s) {
 	return (uint32_t)zsys_fb_w(s) / 8u;

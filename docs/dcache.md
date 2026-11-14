@@ -444,6 +444,45 @@ running on hardware. It is correct for the same reason as in
 `ICACHE_FAST_HIT 0` still removes the combinational hit path entirely
 if a future board needs it.
 
+#### The request as an enable (Sergei ML2, screen modes)
+
+With the screen modes in, Sergei ML2's 48 MHz clock came out at
+47.85 MHz, and the path was not a cache lookup at all. It was the
+decision to *start* one:
+
+```
+MTU translation (6.1 ns) -> MPU address comparators (7.6 ns)
+  -> wb_cache S_IDLE: "is there a request?" (c_req)
+  -> clock enable of m_dat_o, 3.3 ns of wire away by the memory
+```
+
+`c_req` is the CPU's strobe after the MPU has agreed to it, so it
+arrives last of anything in the SOC. `S_IDLE` used it as the enable of
+everything a request loads: the request's copies (`req_adr`, `req_dat`,
+`req_sel`, `req_we`) and the memory port's address, write data, select
+and burst type, about 140 flops spread between the CPU and the memory.
+
+None of them needs it. Nothing reads `req_*` until a request has been
+accepted, which loads them on the same edge; and the memory port's
+lines mean nothing while its strobe is low, which it is in `S_IDLE`
+when `bus_free`. So `S_IDLE` now loads all of them on every cycle it
+could accept a request (`!ack_r`, and `bus_free` for the port), and
+`c_req` decides only what has to be decided: the state, `m_stb_o`,
+`m_cyc_o`, `m_we_o`, and the counters.
+
+What this relies on: **a slave on the main bus looks at the address,
+data and select only with its strobe.** In `rtl/sysctl.v` a slave gets `cs_x && wbm_cyc` as its cycle and
+`wbm_stb` as its strobe, both low on an idle bus, and the read-data mux
+is only sampled with an acknowledge. The port's address now moves
+while the bus is idle (it follows the CPU's address), which costs a
+little switching in the address decoder and nothing else. A new slave
+that acted on `cs_*` alone would be wrong, and would have been wrong
+before for the cycle before each launch.
+
+The cycle counts of `tb_cache_id.v` are unchanged in all six
+configurations, and `tb_cache_soc.v` (`-DARB -DMPU`, both CPUs) gives
+the same checksum.
+
 ### Tags in LUT RAM
 
 `CACHE_TAG_LUTRAM` puts both tag arrays in LUT RAM

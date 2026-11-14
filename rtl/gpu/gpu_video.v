@@ -245,22 +245,29 @@ module gpu_video #(
 	// DDMI output in this clock (rtl/gpu/gpu_ddmi.v) and VGA straight
 	// from the pixel logic, exactly as before.
 	//
-	// 1: the mode is chosen at run time (vmode, below), from four:
+	// 1: the mode is chosen at run time (vmode, below), from seven:
 	//
-	//   0  640x480   1280x720 is 3
+	//   0  640x480
 	//   1  800x600   (WIDE only)
 	//   2  1024x768  (WIDE only)
 	//   3  1280x720  -- WIDE: native; otherwise the 640x360 desktop,
 	//                   every pixel shown twice each way
+	//   4  800x480   (WIDE only)
+	//   5  1280x800  (WIDE with NATIVE720 only: 32,000 words)
+	//   6  1920x1080 at 30 Hz (WIDE only): a 960x540 desktop, every
+	//                   pixel shown twice each way
+	//
+	// VM_MASK says which of them this build has (bit m: mode m).
 	//
 	// pclk is then 37.8 MHz, enabled two clocks in three at 640x480 (an
 	// effective 25.2 MHz, every count below exactly as before), and the
 	// wire is rtl/gpu/gpu_vchar.v's, on cclk (75.6 MHz) and a serialiser
 	// on bclk (378): ODDRX2F with 189 MHz in the fabric where the pins'
 	// bank allows (DDMI_ODDRX2), ODDRX1F otherwise.
-	// Modes 2 and 3 count h in PAIRS of pixels: one clock, two pixels
-	// (WIDE) or one pixel twice.
+	// Modes 2, 3, 5 and 6 count h in PAIRS of pixels: one clock, two
+	// pixels (WIDE) or one pixel twice.
 	parameter VMODES = 1'b0,
+	parameter [7:0] VM_MASK = 8'b0000_1001,
 	// 1: 800x600, 1024x768 and native 1280x720, monochrome, at up to
 	// 40 words a row (the 45F/85F boards, with 32K words of VRAM).
 	parameter WIDE = 1'b0,
@@ -313,7 +320,7 @@ module gpu_video #(
 	// the mode socctl's VMODE asks for, in the wishbone domain; adopted
 	// at a frame boundary like everything else here.
 	input cclk,
-	input [1:0] vmode,
+	input [2:0] vmode,
 
 	// Virtual phosphor mode, from rtl/socctl.v's VIDEO register (see
 	// that file, and docs/socctl.md). In the WISHBONE clock domain,
@@ -480,13 +487,16 @@ module gpu_video #(
 	// wires below are the parameters, and synthesis folds the registers
 	// away: the comparisons are against constants, as they always were.
 	//
-	// The table, in pclk counts -- PAIRS of pixels in modes 2 and 3:
+	// The table, in pclk counts -- PAIRS of pixels in modes 2, 3, 5, 6:
 	//
 	//   mode  picture    front sync back   line  lines  fp sync bp  frame  syncs
 	//   0     640x480    16    96   48     800   480    10  2   33  525    - -
 	//   1     800x600    40    96   62     998   600    1   4   23  628    + +
 	//   2     1024x768   12    68   72     664   768    3   6   29  806    - -
 	//   3     1280x720   70    20   110    840   720    5   5   20  750    + +
+	//   4     800x480    200   48   152    1200  480    13  3   29  525    - -
+	//   5     1280x800   24    16   40     720   800    3   6   66  875    + -
+	//   6     1920x1080  44    22   94     1120  1080   4   5   36  1125   + +
 	//
 	// 640x480 at 25.2 MHz (pclk enabled two in three) and the others at
 	// 37.8 MHz: 37.88 kHz and 60.3 Hz (VESA's 800x600 rates); 56.93 kHz
@@ -494,9 +504,16 @@ module gpu_video #(
 	// exactly (75.0 MHz there), so that a VGA monitor samples our pixels;
 	// 45.00 kHz and 60.00 Hz (CEA 720p's). The two-pixel modes' pixel
 	// clock is 75.6 MHz.
-	reg [1:0] m_act = 2'd0;
+	//
+	// 800x480 (the 5 and 7 inch panels') is 640x480's line and frame
+	// rates, 31.5 kHz and 60.0 Hz, with a 1200-pixel line at 37.8 MHz.
+	// 1280x800 is CVT reduced blanking's 1440-pixel line exactly (71.0
+	// MHz there), with more lines for 60.0 Hz: 52.5 kHz. 1920x1080 is
+	// CEA's 1080p30 with 2240 pixels a line for its 2200: 33.75 kHz and
+	// 30.00 Hz, from a 960x540 desktop.
+	reg [2:0] m_act = 3'd0;
 	reg [10:0] tm_hds, tm_hde, tm_hfp, tm_hpe, tm_vds, tm_vde, tm_vfp, tm_vpe;
-	reg tm_pos;
+	reg tm_hpos, tm_vpos;
 
 	wire [10:0] hds = VMODES ? tm_hds : h_disp_start;
 	wire [10:0] hde = VMODES ? tm_hde : h_disp_stop;
@@ -506,12 +523,16 @@ module gpu_video #(
 	wire [10:0] vde = VMODES ? tm_vde : v_disp_stop;
 	wire [10:0] vfp = VMODES ? tm_vfp : v_front_porch;
 	wire [10:0] vpe = VMODES ? tm_vpe : (v_front_porch + v_pulse_width);
-	wire sync_pos = VMODES && tm_pos;
-	wire [1:0] mode = VMODES ? m_act : 2'd0;
+	wire hsync_pos = VMODES && tm_hpos;
+	wire vsync_pos = VMODES && tm_vpos;
+	wire [2:0] mode = VMODES ? m_act : 3'd0;
 	// a mode of two pixels a clock (WIDE) or one pixel twice
-	wire pair = VMODES && m_act[1];
+	wire pair = VMODES && (m_act == 3'd2 || m_act == 3'd3 ||
+		m_act == 3'd5 || m_act == 3'd6);
 	// 1280x720 from a 640x360 desktop: rows shown twice, as game mode
-	wire dbl = VMODES && ((WIDE == 0) || (NATIVE720 == 0)) && (m_act == 2'd3);
+	// (1280x720 where it is not native), and 1920x1080 from 960x540
+	wire dbl = VMODES && ((((WIDE == 0) || (NATIVE720 == 0)) && (m_act == 3'd3)) ||
+		(m_act == 3'd6));
 	// two different pixels a clock
 	wire pair2 = pair && (WIDE != 0) && !dbl;
 
@@ -519,43 +540,50 @@ module gpu_video #(
 	// high at 800x600 and 1280x720 (sync_pos), as their standards have it.
 	wire h_pul = (hc >= hfp) && (hc < hpe);
 	wire v_pul = (vc >= vfp) && (vc < vpe);
-	wire hsync_w = sync_pos ? h_pul : !h_pul;
-	wire vsync_w = sync_pos ? v_pul : !v_pul;
+	wire hsync_w = hsync_pos ? h_pul : !h_pul;
+	wire vsync_w = vsync_pos ? v_pul : !v_pul;
 
 	// pclk's enable: two clocks in three at 640x480, every clock in the
 	// others. Every register on pclk below takes it, so at 640x480 this
 	// whole file runs at 25.2 MHz exactly as it did on a 25.2 MHz clock.
 	reg [1:0] pc3 = 2'd0;
-	wire pen = !VMODES || (m_act != 2'd0) || (pc3 != 2'd2);
+	wire pen = !VMODES || (m_act != 3'd0) || (pc3 != 2'd2);
 	always @(posedge pclk)
 		pc3 <= (pc3 == 2'd2) ? 2'd0 : (pc3 + 2'd1);
 
 	// the mode asked for, into this domain; adopted at the frame boundary
-	reg [1:0] vm_s0, vm_s1;
-	wire [1:0] vm_ok = (WIDE != 0) ? vm_s1 :
-		((vm_s1 == 2'd3) ? 2'd3 : 2'd0);
+	reg [2:0] vm_s0, vm_s1;
+	wire [2:0] vm_ok = VM_MASK[vm_s1] ? vm_s1 : 3'd0;
 
 	// { sync_pos, vpe, vfp, vde, vds, hpe, hfp, hde, hds } for a mode
-	function [88:0] tm_of;
-		input [1:0] m;
+	// { hsync_pos, vsync_pos, vpe, vfp, vde, vds, hpe, hfp, hde, hds }
+	function [89:0] tm_of;
+		input [2:0] m;
 		begin
 			case (m)
-				2'd1: tm_of = { 1'b1, 11'd5, 11'd1, 11'd628, 11'd28,
+				3'd1: tm_of = { 2'b11, 11'd5, 11'd1, 11'd628, 11'd28,
 					11'd136, 11'd40, 11'd998, 11'd198 };
 				// VESA 1024x768 at 70 Hz: its 1328-pixel line exactly, so
 				// a monitor on VGA (an HDMI-to-VGA adapter) samples our
 				// pixels; 75.6 MHz for its 75.0, 70.6 Hz
-				2'd2: tm_of = { 1'b0, 11'd9, 11'd3, 11'd806, 11'd38,
+				3'd2: tm_of = { 2'b00, 11'd9, 11'd3, 11'd806, 11'd38,
 					11'd80, 11'd12, 11'd664, 11'd152 };
-				2'd3: tm_of = { 1'b1, 11'd10, 11'd5, 11'd750, 11'd30,
+				3'd3: tm_of = { 2'b11, 11'd10, 11'd5, 11'd750, 11'd30,
 					11'd90, 11'd70, 11'd840, 11'd200 };
-				default: tm_of = { 1'b0, 11'd12, 11'd10, 11'd525, 11'd45,
+				3'd4: tm_of = { 2'b00, 11'd16, 11'd13, 11'd525, 11'd45,
+					11'd248, 11'd200, 11'd1200, 11'd400 };
+				// CVT reduced blanking's 1280x800 line, 1440 pixels
+				3'd5: tm_of = { 2'b10, 11'd9, 11'd3, 11'd875, 11'd75,
+					11'd40, 11'd24, 11'd720, 11'd80 };
+				3'd6: tm_of = { 2'b11, 11'd9, 11'd4, 11'd1125, 11'd45,
+					11'd66, 11'd44, 11'd1120, 11'd160 };
+				default: tm_of = { 2'b00, 11'd12, 11'd10, 11'd525, 11'd45,
 					11'd112, 11'd16, 11'd800, 11'd160 };
 			endcase
 		end
 	endfunction
-	wire [88:0] tm_next = tm_of(vm_ok);
-	wire vm_m0 = (vm_ok == 2'd0) || (VMODES == 0);
+	wire [89:0] tm_next = tm_of(vm_ok);
+	wire vm_m0 = (vm_ok == 3'd0) || (VMODES == 0);
 
 	// -- scanout divisors --
 	//
@@ -1072,7 +1100,7 @@ module gpu_video #(
 	// reads the sample the clock after ptog changes (see that file).
 	reg ptog = 1'b0;
 	reg s_new = 1'b0;
-	reg [1:0] s_mode;
+	reg [2:0] s_mode;
 	reg [23:0] s_rgb0, s_rgb1;
 	reg [8:0] s_vga0, s_vga1;
 	reg s_hs, s_vs, s_de;
@@ -1771,8 +1799,8 @@ module gpu_video #(
 			win_active <= 1'b0;
 			desk_cap <= 1'b0;
 			desk_active <= 1'b0;
-			m_act <= 2'd0;
-			{ tm_pos, tm_vpe, tm_vfp, tm_vde, tm_vds, tm_hpe, tm_hfp, tm_hde, tm_hds } <= tm_of(2'd0);
+			m_act <= 3'd0;
+			{ tm_hpos, tm_vpos, tm_vpe, tm_vfp, tm_vde, tm_vds, tm_hpe, tm_hfp, tm_hde, tm_hds } <= tm_of(3'd0);
 		end else begin
 			if (view_edge) begin
 				game_cap <= game_en;
@@ -1795,7 +1823,7 @@ module gpu_video #(
 				// colour are 640x480's only; in another mode they wait,
 				// off, for software to come back to it.
 				m_act <= vm_ok;
-				{ tm_pos, tm_vpe, tm_vfp, tm_vde, tm_vds, tm_hpe, tm_hfp, tm_hde, tm_hds } <= tm_next;
+				{ tm_hpos, tm_vpos, tm_vpe, tm_vfp, tm_vde, tm_vds, tm_hpe, tm_hfp, tm_hde, tm_hds } <= tm_next;
 				video_mode_active <= video_mode_sync1;
 				bright_active <= bright_sync1;
 				ddmi_en_active <= ddmi_en_sync1;
@@ -1923,10 +1951,11 @@ module gpu_video #(
 	// LUT levels against a 39.7ns period. The 48MHz side is untouched
 	// and still just does row*20 into gb_adr_o.
 	wire [10:0] vc_next = vc + 11'd1;
-	wire [9:0] scan_row =
+	// (11 bits: 1920x1080's 1080 rows, which v_half makes 540)
+	wire [10:0] scan_row =
 		(vc_next >= vds && vc_next < vde) ?
-			(vc_next - vds) : 10'd0;
-	wire [9:0] half_row = v_half ? { 1'b0, scan_row[9:1] } : scan_row;
+			(vc_next - vds) : 11'd0;
+	wire [9:0] half_row = v_half ? scan_row[10:1] : scan_row[9:0];
 	wire [10:0] row_sum = vp_on ?
 		({ 1'b0, vy_active } + { 1'b0, half_row }) : { 1'b0, half_row };
 	wire [9:0] fb_row =
@@ -1957,9 +1986,10 @@ module gpu_video #(
 	// fetch with y_refill, as alt_refill does
 	wire [14:0] fbr15 = { 5'd0, fb_row };
 	wire [14:0] rb_next =
-		(mode == 2'd1) ? ((fbr15 << 4) + (fbr15 << 3) + fbr15) :
-		(mode == 2'd2) ? (fbr15 << 5) :
-		(mode == 2'd3 && NATIVE720 != 0) ? ((fbr15 << 5) + (fbr15 << 3)) :
+		(mode == 3'd1 || mode == 3'd4) ? ((fbr15 << 4) + (fbr15 << 3) + fbr15) :
+		(mode == 3'd2) ? (fbr15 << 5) :
+		((mode == 3'd3 && NATIVE720 != 0) || mode == 3'd5) ? ((fbr15 << 5) + (fbr15 << 3)) :
+		(mode == 3'd6) ? ((fbr15 << 5) - (fbr15 << 1)) :
 		((fbr15 << 4) + (fbr15 << 2));
 	reg [14:0] rb_refill;
 
@@ -2097,11 +2127,12 @@ module gpu_video #(
 	// The mode, into this domain: it changes only at a frame boundary,
 	// in blanking, many lines before the first refill it matters to.
 	reg [14:0] rb_sync0, rb_sync1;
-	reg [1:0] m_c0, m_c1;
-	wire m0_c = (m_c1 == 2'd0);
+	reg [2:0] m_c0, m_c1;
+	wire m0_c = (m_c1 == 3'd0);
 	wire [5:0] rw_c = (WIDE == 0) ? 6'd20 :
-		(m_c1 == 2'd1) ? 6'd25 : (m_c1 == 2'd2) ? 6'd32 :
-		(m_c1 == 2'd3 && NATIVE720 != 0) ? 6'd40 : 6'd20;
+		(m_c1 == 3'd1 || m_c1 == 3'd4) ? 6'd25 : (m_c1 == 3'd2) ? 6'd32 :
+		((m_c1 == 3'd3 && NATIVE720 != 0) || m_c1 == 3'd5) ? 6'd40 :
+		(m_c1 == 3'd6) ? 6'd30 : 6'd20;
 
 	// WIDE: rows of 25, 32 or 40 words in the other modes. The row's
 	// word address is worked out in the pixel domain (rb_refill, with
@@ -2480,9 +2511,9 @@ module gpu_video #(
 	// row is just read on -- the word after the last is never shown.
 	wire [5:0] xw = x[10:5];
 	wire [5:0] xw2_sum = xw + 6'd2;
-	wire [5:0] xw2 = (mode == 2'd0 && xw2_sum >= 6'd20) ? (xw2_sum - 6'd20) : xw2_sum;
+	wire [5:0] xw2 = (mode == 3'd0 && xw2_sum >= 6'd20) ? (xw2_sum - 6'd20) : xw2_sum;
 	wire [5:0] pw1_sum = pw + 6'd1;
-	wire [5:0] pw1 = (mode == 2'd0 && pw1_sum >= 6'd20) ? (pw1_sum - 6'd20) : pw1_sum;
+	wire [5:0] pw1 = (mode == 3'd0 && pw1_sum >= 6'd20) ? (pw1_sum - 6'd20) : pw1_sum;
 	wire [4:0] pw_dx = (pw[4:0] >= 5'd10) ? (pw[4:0] - 5'd10) : (pw[4:0] + 5'd10);
 	wire [4:0] pw_k1 = off_use[0] ? pw_dx : pw[4:0];
 	wire [4:0] pw_k2 = off_use[2] ? pw_dx : pw[4:0];

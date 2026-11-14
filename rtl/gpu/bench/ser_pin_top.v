@@ -27,7 +27,7 @@ module vwrap(input pclk, input cclk, input bclk, output [3:0] dvi_p);
 	wire [8:0] vga; wire hs, vs;
 	gpu_vchar #(.WIDE(1), .ISLANDS(0), .X2(SER_X2)) gpu_vchar_i (
 		.cclk(cclk), .sclk(sclk), .bclk(bclk),
-		.ptog(ptog), .s_new(1'b1), .s_mode(2'd3),
+		.ptog(ptog), .s_new(1'b1), .s_mode(3'd3),
 		.s_rgb0(l[23:0]), .s_rgb1(l[47:24]), .s_vga0(l[56:48]), .s_vga1(l[63:55]),
 		.s_hs(l[1]), .s_vs(l[2]), .s_de(l[3]), .s_hc(l[14:4]), .s_vc(l[25:15]),
 		.islands_en(1'b0), .sound_en(1'b0), .fs_code(4'd0), .acr_n(20'd0), .acr_cts(20'd0),

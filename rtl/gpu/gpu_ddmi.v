@@ -72,9 +72,9 @@ ddmi_island island_i (
     // 640x480's places: the island at hc 12, the video preamble ten
     // characters before the picture (hc 160), the picture from line 45,
     // vsync from line 10, AVI VIC 1
-    .ioff(11'd0), .vpre0(11'd150), .vact0(11'd45), .vgcp(11'd10), .avi_sel(2'd0),
+    .ioff(12'd0), .vpre0(12'd150), .vact0(11'd45), .vgcp(11'd10), .avi_sel(3'd0),
     .en(islands_en && (ISLANDS != 0)),
-    .hc(hc), .vc(vc),
+    .hc({ 1'b0, hc }), .vc(vc),
     .hsync(in_vga_hsync), .vsync(in_vga_vsync),
     .sound_en(sound_en && (ISLANDS != 0)),
     .fs_code(fs_code), .acr_n(acr_n), .acr_cts(acr_cts),

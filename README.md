@@ -14,7 +14,7 @@ Because the hardware is an FPGA, the system can be easily customized and optimiz
 
 | Profile | What it is for | Graphics |
 |---------|----------------|----------|
-| Desktop | Everyday work, learning, programming, and games | Monochrome (white, amber, green or paper) from 640x480 up to 1024x768 or 1280x720 on some boards, [switched live](docs/screen_modes.md); [desktop colour](docs/color.md#desktop-colour) at 640x480 on the 45F boards, and the 320x240 [game mode](docs/game_mode.md) in a window or full screen |
+| Desktop | Everyday work, learning, programming, and games | Monochrome (white, amber, green or paper) from 640x480 up to 1280x800 on some boards, [switched live](docs/screen_modes.md); [desktop colour](docs/color.md#desktop-colour) at 640x480 on the 45F boards, and the 320x240 [game mode](docs/game_mode.md) in a window or full screen |
 | Console | Games, demos and 3D | Exclusively the 320x240 game mode in up to [256 colours](docs/color.md) with the [T2](docs/zgl_t2.md) geometry engine; an app [launcher](docs/launcher_app.md) instead of a windowed desktop |
 | Headless | Servers, BBSes and controllers | Optional [remote desktop](docs/remote_desktop.md) |
 
@@ -31,7 +31,7 @@ Because the hardware is an FPGA, the system can be easily customized and optimiz
 | Cache | Optional [instruction cache](docs/icache.md), or unified instruction + [data cache](docs/dcache.md) with write buffer and SDRAM burst fills |
 | Bus | 32-bit Wishbone |
 | Main Memory | SDRAM, [DDR3](docs/ddr3.md), PSRAM or SRAM (1MB minimum; 512MB maximum) |
-| Framebuffer | 1bpp, monochrome in white, amber, green or paper ([socctl](docs/socctl.md)); 640x480, and on most boards [more modes, switched live](docs/screen_modes.md) -- up to 1024x768 or 1280x720 on some boards |
+| Framebuffer | 1bpp, monochrome in white, amber, green or paper ([socctl](docs/socctl.md)); 640x480, and on most boards [more modes, switched live](docs/screen_modes.md) -- up to 1280x800, or 1920x1080 from a 960x540 desktop, on some boards |
 | Desktop Colour | On the 45F boards: the desktop in [four colours](docs/color.md#desktop-colour) (window chrome, the dock, dialogs) with 21 [themes](docs/color.md#themes) or custom colours, and the focused game's [colour window](docs/color.md#the-colour-window) in 32 colours |
 | Game Mode | Optional 320x240 pixel-doubled [viewport](docs/game_mode.md) with up to [256 colors](docs/color.md): 16 with 4 bitplanes, 64 with 6, 256 with 8 (a per-board option) |
 | Video | VGA (1-bit, or a [3-bit DAC](docs/color.md#per-output) per colour on Obst and Minze), DVI, DVI over HDMI ([HDMI audio](docs/ddmi_audio.md) on some boards, in every screen mode), [composite](docs/composite.md) NTSC and PAL |
