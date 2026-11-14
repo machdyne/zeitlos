@@ -703,6 +703,30 @@ pnr_again:
 	@echo
 	@tools/pnr_timing.sh $(PNR_LOG) $(BOARD_LC)
 
+# The screen modes' serialiser alone, at this board's HDMI pins, placed
+# and routed: about ten seconds, for what a full build takes minutes to
+# show (rtl/gpu/bench/ser_pin_top.v) -- the 378 MHz one pinned beside
+# the pins, or the ODDRX2F one and its edge clock, as rtl/boards.vh has
+# the board. SER_SEEDS="1 2 3" tries more seeds; every one should pass,
+# and by much the same margin.
+SER_DIR = $(OUTDIR)/serialiser
+SER_SEEDS ?= 1
+.PHONY: serialiser_timing
+serialiser_timing:
+	@mkdir -p $(SER_DIR)
+	@{ echo 'FREQUENCY PORT "CLK_48" 48 MHZ;'; grep -E '"DDMI_(CK|D0|D1|D2)_P"' boards/$(LPF); } > $(SER_DIR)/ser.lpf
+	@yosys -q -DBOARD_$(BOARD_UC) -DECP5 -DOSC48 -DVIDEO_MODES -l $(SER_DIR)/synth.log -p \
+		"read_verilog -I rtl rtl/gpu/bench/ser_pin_top.v rtl/gpu/gpu_vchar.v rtl/gpu/tmds_enc_p.v rtl/gpu/ddmi_island.v rtl/clk/pll1.v; synth_ecp5 -top sysctl -json $(SER_DIR)/ser.json" > /dev/null
+	@python3 tools/ddmi/pin_serialiser.py $(SER_DIR)/ser.json $(SER_DIR)/ser.lpf $(DEVICE) $(PACKAGE)
+	@for s in $(SER_SEEDS); do \
+		nextpnr-ecp5 --$(DEVICE) --package $(PACKAGE) --lpf $(SER_DIR)/ser.lpf --json $(SER_DIR)/ser.json \
+			--textcfg $(SER_DIR)/ser.config -l $(SER_DIR)/pnr.log --seed $$s \
+			--lpf-allow-unconstrained --timing-allow-fail --ignore-loops > /dev/null 2>&1; \
+		grep -E "^ERROR" $(SER_DIR)/pnr.log; \
+		grep -E "Promoted .* ECLK" $(SER_DIR)/pnr.log | sed 's/Info: //'; \
+		echo "seed $$s: $$(grep -E 'Max frequency for clock.*(bclk|sclk)' $(SER_DIR)/pnr.log | tail -1 | sed "s/.*gpu_video_i\.//; s/'//")"; \
+	done
+
 zeitlos_ecp5_pico: $(OUTDIR)/soc.config
 
 # Content-hash gate. Separate from `soc` so the packing recipe does

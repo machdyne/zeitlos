@@ -128,45 +128,92 @@ too:
 
 | Serialiser | Boards | Fabric clock |
 |---|---|---|
-| ODDRX2F | Lakritz, Konfekt, Noir | sclk, 189 MHz |
-| ODDRX1F | Mozart and Sergei (ML0, ML1, ML2), ULX3S, Schoko | bclk, 378 MHz |
+| ODDRX2F | Lakritz, Konfekt, Noir, Schoko (all four lanes in bank 6, on the left) | sclk, 189 MHz |
+| ODDRX1F | Mozart and Sergei (ML0, ML1, ML2), ULX3S (pins along the top) | bclk, 378 MHz |
 
-Schoko's pins (R5, P4) may be in a side bank; if they are, it can move
-to the first row. On a top or bottom bank nextpnr refuses ODDRX2F
-("only supported for left and right IO").
+On a top or bottom bank nextpnr refuses ODDRX2F ("only supported for
+left and right IO").
 
-With ODDRX1F the last register before each pin can be far from it,
-and at 378 MHz a clock is 2.6 ns: the first version, with one register,
-routed at 322 MHz on Mozart ML1 and 354 on ULX3S 85F. So there are three
-registers a lane between the shifter and the ODDRX1F, for the placer to
-walk the bits out in short hops. With ODDRX2F the 378 MHz clock stays
-inside the I/O cells and the fabric runs at 189 MHz.
+Both are built the same way, so that every flip-flop on the fast clock
+is at most one LUT from other flip-flops:
+
+- **The lock is one pulse, made once.** A toggle from the character
+  clock is registered in the serialiser's clock, and `det` is high for
+  one clock the first time it is seen to change. That is the only
+  decision: the clocks come from one VCO, so the phase never moves, and
+  a synchroniser that might resolve a clock early or late is asked
+  exactly once.
+- **Each lane has its own ring of five,** set by that pulse, whose bit 4
+  is the lane's load. (One ring for all four lanes drove eighty
+  flip-flops; the lock decided in front of the load was three LUTs
+  deep. So built, the ODDRX2F serialiser made 214 MHz of its 189 on an
+  empty chip; it now makes 400 to 450.)
+- **The first load is in the middle of the word's time**: 7.9 ns into
+  its 13.2 with ODDRX1F, 13 to 16 ns into the pair's 26.5 with ODDRX2F.
 
 ### The serialiser's place
 
-On a board whose HDMI pins are along the top (ODDRX1F), each lane's
-378 MHz flip-flops -- shift register, ring, lock, three output stages
--- are pinned beside its pin: `tools/ddmi/pin_serialiser.py`, run
-between synthesis and nextpnr, puts nextpnr's BEL attribute on them,
-in rows 2..4 of the pin's column and the column beside it, a tile for
-each kind of control signal (a tile's slices share them). Left to
-itself, nextpnr put them 35 to 65 columns from the pins on Sergei ML2,
-and bclk passed or failed by a few per cent with the seed (363 to 413
-MHz over builds of the same RTL). The one long hop left is the
-character clock's words into the shift register, which the design
-gives 7.9 ns or more and nextpnr does not time.
+At 378 MHz a clock is 2.6 ns, and a flip-flop and a LUT take 0.75 of
+it. The rest is wire, so with ODDRX1F *where* the flip-flops are decides
+whether the clock is met. Left to itself nextpnr decided differently
+with every seed: 363 to 413 MHz over builds of the same RTL on Sergei
+ML2, each lane's shift register 35 to 65 columns from its pin.
 
-A flip-flop fed by a LUT is placed with it, by the LUT, so the script
-pins the LUT that feeds each pinned flip-flop into the same slice
-(without that, nextpnr ignored the flip-flops' BELs, and bclk fell to
-243-258 MHz). With both pinned, Sergei ML2 routed with bclk at 453.9
-MHz of 378: the longest 378 MHz path 2.2 ns, the character clock's
-crossing 2.0 ns.
+So the 378 MHz serialiser is placed by hand.
+`tools/ddmi/pin_serialiser.py`, run between synthesis and nextpnr
+(`make soc` and `make pnr_again` both), puts nextpnr's BEL attribute on
+every flip-flop of that clock:
 
-The pins' columns are a table in the script, measured from nextpnr's
-placement: 45F in CABGA256 (Mozart and Sergei ML1/ML2) and ULX3S 85F.
-On any other board or device it pins nothing and says so, and the
-build goes on as before.
+| What | Where |
+|---|---|
+| Each lane: shift register, ring, its set (`d_x`), three output stages | the tiles beside the lane's pin: rows 2..4 of the pin's column, then the column beside it |
+| The lock: `a1`, `a2`, `lk`, `det` | one place, the column half way between the outermost lanes |
+| The hops: `h_x`, the lock's pulse on its way to lane x | half way between the lock and the lane |
+
+The pins are far apart (27 columns on Sergei ML2, 40 on ULX3S 85F), and
+the lock's pulse has to reach every lane on the same clock. So it goes
+out in two hops, flip-flop to flip-flop with no LUT: `det` to `h_x` to
+`d_x`, each hop about a quarter of the span. Every other 378 MHz path
+is inside a lane. The one long wire left is the character clock's words
+into the shift registers, which has 7.9 ns and which nextpnr does not
+time.
+
+Three things nextpnr and yosys do that this depends on:
+
+- A flip-flop fed by a LUT is placed with it, *by the LUT*: a BEL on the
+  flip-flop alone was ignored (and bclk fell to 243 MHz). The script
+  pins the LUT in front of each pinned flip-flop into the same slice.
+- A tile's slices share their clock enable and set/reset, so a tile
+  gets flip-flops of one kind of control only.
+- Four flip-flops with the same input are one flip-flop to yosys, `keep`
+  on the regs or not. The hops are in an always block of their own with
+  `(* keep *)` on the block, which does keep the cells apart. If a hop
+  or any other flip-flop is missing, the script stops the build rather
+  than pin half a serialiser.
+
+The pins' columns are a table in the script, as nextpnr reports them:
+the 45F and 25F/12F in CABGA256 (Mozart and Sergei), and ULX3S at 12F,
+25F, 45F and 85F. A board that is not in the table is left unpinned,
+and the script says so.
+
+**`make serialiser_timing BOARD=...`** builds the serialiser alone
+(`rtl/gpu/bench/ser_pin_top.v`: the real `gpu_vchar`, the output cells
+and the board's HDMI pins), pins it, and places and routes it, in about
+ten seconds. It shows what a full build takes minutes to: that nextpnr
+accepts every pinned site (or, on an ODDRX2F board, the edge clock),
+and what the paths come to. `SER_SEEDS="1 2 3 4"` tries more seeds.
+Alone on the chip, every board and every seed:
+
+| Board | Serialiser | Fast clock, of |
+|---|---|---|
+| Sergei ML2, Mozart ML2 | ODDRX1F, pinned | 487 to 510 MHz, of 378 |
+| Mozart ML1, Sergei ML1 | ODDRX1F, pinned | 487 to 510 MHz, of 378 |
+| Mozart ML0, Sergei ML0 | ODDRX1F, pinned | 493 to 510 MHz, of 378 |
+| ULX3S 12F to 85F | ODDRX1F, pinned | 487 to 510 MHz, of 378 |
+| Lakritz, Konfekt, Noir, Schoko | ODDRX2F | 397 to 455 MHz, of 189 |
+
+A full design's wires are more crowded, so its figures are lower; what
+carries over is that the seed no longer decides.
 
 ### Pixels
 
@@ -195,11 +242,10 @@ characters:
    a clock with each bit repeated. Every other clock two of these words,
    twenty bits, go to the serialiser together.
 5. The serialiser finds the phase of the words once, from a cclk
-   toggle registered in its own clock, and makes its first load well
-   inside the time a word holds still. After that a ring of five loads
-   every fifth clock and the toggle is not looked at again: the clocks
-   come from one VCO, so the phase never moves, and a synchroniser can
-   never make the load wander. (With ODDRX2F, sclk is exactly 2.5 cclk,
+   toggle registered in its own clock, and makes its first load in the
+   middle of the time a word holds still. After that each lane's ring of
+   five loads every fifth clock and the toggle is not looked at again
+   ("Two serialisers", below). (With ODDRX2F, sclk is exactly 2.5 cclk,
    so the words go in pairs: twenty bits every five sclk.)
 6. VGA takes the character's bits, registered, for as long as the
    character lasts.

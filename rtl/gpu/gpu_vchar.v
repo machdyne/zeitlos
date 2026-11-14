@@ -402,27 +402,17 @@ module gpu_vchar #(
 	reg a1 = 1'b0, a2 = 1'b0, a3 = 1'b0;
 	reg lk = 1'b0;
 	reg det = 1'b0;
-	// X1: the lock once a lane, so that each lane's ring has its own
-	// beside it (the lanes are pinned at their pins, far apart:
-	// tools/ddmi/pin_serialiser.py). Each lane's lk_x holds itself, so
-	// synthesis cannot merge the lanes' copies back into one (it merged
-	// four identical det_x, keep or not).
-	(* keep *) reg det_r = 1'b0;
-	(* keep *) reg det_g = 1'b0;
-	(* keep *) reg det_b = 1'b0;
-	(* keep *) reg det_c = 1'b0;
-	(* keep *) reg lk_r = 1'b0;
-	(* keep *) reg lk_g = 1'b0;
-	(* keep *) reg lk_b = 1'b0;
-	(* keep *) reg lk_c = 1'b0;
-	reg [4:0] ring = 5'b00001;
 	reg [19:0] sh_r = 20'd0, sh_g = 20'd0, sh_b = 20'd0, sh_c = 20'd0;
 	reg [3:0] o_r = 4'd0, o_g = 4'd0, o_b = 4'd0, o_c = 4'd0;
+	// X1: the lock's one pulse on its way to the lanes: h_x half way to
+	// lane x's pin, d_x beside it (below)
+	reg h_r = 1'b0, h_g = 1'b0, h_b = 1'b0, h_c = 1'b0;
+	reg d_r = 1'b0, d_g = 1'b0, d_b = 1'b0, d_c = 1'b0;
 
-	// X1 only: a ring per lane, kept apart (merged, one flop would drive
-	// forty), whose bit 4 is that lane's load; and two more registers a
-	// lane before the pin, so that the placer can walk the bits out to an
-	// ODDRX1F a long way from the shifter in hops it can make in 2.6 ns.
+	// A ring per lane, whose bit 4 is that lane's load: each rotates
+	// itself, so synthesis cannot make one of the four. X1 only: two
+	// more registers a lane (p_x, q_x) before the output register.
+
 	(* keep *) reg [4:0] rg_r = 5'b00001;
 	(* keep *) reg [4:0] rg_g = 5'b00001;
 	(* keep *) reg [4:0] rg_b = 5'b00001;
@@ -432,65 +422,70 @@ module gpu_vchar #(
 
 	generate
 		if (X2) begin : g_x2
-			// 189 MHz: twenty bits every five clocks. The first load is two
-			// or three sclk after the pair changed, well inside its 26.5 ns.
+			// 189 MHz: twenty bits every five clocks. The same shape as
+			// X1 below, and for the same reason: with the lock decided in
+			// front of the load, and one ring driving all eighty shift
+			// flops, a path was three LUTs and a long wire, and sclk made
+			// 214 MHz of its 189 on an empty chip -- too little on a full
+			// one. So: det is one pulse, ever, the first time the pair's
+			// toggle is seen to change; it sets each lane's own ring; a
+			// ring's bit 4 is its lane's load. Every flop is one LUT from
+			// flops. The ring is set to 00010, so the first load is five
+			// sclk after the old one would have been: 13 to 16 ns into the
+			// pair's 26.5, the middle, as before.
 			always @(posedge sclk) begin
 				a1 <= ctog;
 				a2 <= a1;
 				a3 <= a2;
-				if (!lk && (a2 ^ a3)) begin
-					lk <= 1'b1;
-					ring <= 5'b00001;
-					sh_r <= pr_r;
-					sh_g <= pr_g;
-					sh_b <= pr_b;
-					sh_c <= pr_c;
-				end else begin
-					ring <= { ring[3:0], ring[4] };
-					if (ring[4]) begin
-						sh_r <= pr_r;
-						sh_g <= pr_g;
-						sh_b <= pr_b;
-						sh_c <= pr_c;
-					end else begin
-						sh_r <= { sh_r[3:0], sh_r[19:4] };
-						sh_g <= { sh_g[3:0], sh_g[19:4] };
-						sh_b <= { sh_b[3:0], sh_b[19:4] };
-						sh_c <= { sh_c[3:0], sh_c[19:4] };
-					end
-				end
+				det <= !lk && (a2 ^ a3);
+				lk <= lk || det;
+				rg_r <= det ? 5'b00010 : { rg_r[3:0], rg_r[4] };
+				rg_g <= det ? 5'b00010 : { rg_g[3:0], rg_g[4] };
+				rg_b <= det ? 5'b00010 : { rg_b[3:0], rg_b[4] };
+				rg_c <= det ? 5'b00010 : { rg_c[3:0], rg_c[4] };
+				sh_r <= rg_r[4] ? pr_r : { sh_r[3:0], sh_r[19:4] };
+				sh_g <= rg_g[4] ? pr_g : { sh_g[3:0], sh_g[19:4] };
+				sh_b <= rg_b[4] ? pr_b : { sh_b[3:0], sh_b[19:4] };
+				sh_c <= rg_c[4] ? pr_c : { sh_c[3:0], sh_c[19:4] };
 				o_r <= sh_r[3:0];
 				o_g <= sh_g[3:0];
 				o_b <= sh_b[3:0];
 				o_c <= sh_c[3:0];
 			end
 		end else begin : g_x1
-			// 378 MHz: ten bits every five clocks. cclk's edges are bclk's
+			// 378 MHz: ten bits every five clocks, and a 2.6 ns clock, so
+			// where things are matters as much as what they are. Each lane's
+			// flip-flops sit beside its pin (tools/ddmi/pin_serialiser.py),
+			// and the pins are far apart: 27 columns on Sergei ML2, 40 on
+			// ULX3S. So nothing at 378 MHz may go from lane to lane, or
+			// from the lock to a lane through a LUT.
+			//
+			// The lock is made once, in one place: cclk's edges are bclk's
 			// (one VCO), so a1 takes cpar's change at the next bclk edge,
-			// and det, registered, says so one clock later. Each lane's
-			// ring (rg_x) is set by det and otherwise rotates: its flops
-			// take det on their set and the next bit on their data, with
-			// no LUT between. Its bit 4 is that lane's load, the one LUT
-			// in front of the shifter. So nothing at 378 MHz is more than
-			// one LUT from a flop: deciding the lock in front of the ring
-			// or the load made two levels, and those paths set bclk's
-			// limit. sh loads four bclk after the word changed, 10.6 ns
-			// into its 13.2, and every fifth clock after that.
+			// and det is one pulse, ever, the first time a1 changes. That
+			// is the only decision; a synchroniser that might take cpar a
+			// clock early or late is asked exactly once.
+			//
+			// det then goes out to every lane the same way, flop to flop
+			// with no logic: h_x half way to the lane, d_x beside its pin.
+			// Two hops of at most ten columns each, and the same two
+			// clocks to every lane, so the lanes stay in step.
+			//
+			// d_x sets its lane's ring (rg_x), which otherwise rotates;
+			// the ring's bit 4 is the lane's load. The ring is set to
+			// 00100, so the first load is three clocks after d_x: eight
+			// bclk after the word changed, which is three into the next
+			// word -- 7.9 ns into its 13.2, the middle, with 5 ns to spare
+			// either side for the word's own path from cclk.
 			always @(posedge bclk) begin
 				a1 <= cpar;
 				a2 <= a1;
-				det_r <= !lk_r && (a1 ^ a2);
-				det_g <= !lk_g && (a1 ^ a2);
-				det_b <= !lk_b && (a1 ^ a2);
-				det_c <= !lk_c && (a1 ^ a2);
-				lk_r <= lk_r || det_r;
-				lk_g <= lk_g || det_g;
-				lk_b <= lk_b || det_b;
-				lk_c <= lk_c || det_c;
-				rg_r <= det_r ? 5'b10000 : { rg_r[3:0], rg_r[4] };
-				rg_g <= det_g ? 5'b10000 : { rg_g[3:0], rg_g[4] };
-				rg_b <= det_b ? 5'b10000 : { rg_b[3:0], rg_b[4] };
-				rg_c <= det_c ? 5'b10000 : { rg_c[3:0], rg_c[4] };
+				det <= !lk && (a1 ^ a2);
+				lk <= lk || det;
+				rg_r <= d_r ? 5'b00100 : { rg_r[3:0], rg_r[4] };
+				rg_g <= d_g ? 5'b00100 : { rg_g[3:0], rg_g[4] };
+				rg_b <= d_b ? 5'b00100 : { rg_b[3:0], rg_b[4] };
+				rg_c <= d_c ? 5'b00100 : { rg_c[3:0], rg_c[4] };
 				sh_r[9:0] <= rg_r[4] ? w_r : { sh_r[1:0], sh_r[9:2] };
 				sh_g[9:0] <= rg_g[4] ? w_g : { sh_g[1:0], sh_g[9:2] };
 				sh_b[9:0] <= rg_b[4] ? w_b : { sh_b[1:0], sh_b[9:2] };
@@ -507,6 +502,22 @@ module gpu_vchar #(
 				o_g[1:0] <= q_g;
 				o_b[1:0] <= q_b;
 				o_c[1:0] <= q_c;
+			end
+
+			// The hops, in a block of their own with keep on it: four
+			// flops with the same input are one flop to synthesis, which
+			// would put the long wires back. keep on the block keeps the
+			// cells apart (keep on the regs does not), and
+			// pin_serialiser.py stops the build if they are not all there.
+			(* keep *) always @(posedge bclk) begin
+				h_r <= det;
+				h_g <= det;
+				h_b <= det;
+				h_c <= det;
+				d_r <= h_r;
+				d_g <= h_g;
+				d_b <= h_b;
+				d_c <= h_c;
 			end
 		end
 	endgenerate

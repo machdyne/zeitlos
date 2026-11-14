@@ -704,18 +704,19 @@ sets for those boards, not the ECP5 tools these numbers came from.
 
 Builds with VIDEO_MODES ([screen_modes.md](screen_modes.md)) add three
 clocks from pll1: pclk 37.8 MHz, cclk 75.6 MHz and bclk 378 MHz. Where
-the HDMI pins are in a left or right bank (DDMI_ODDRX2: Lakritz,
-Konfekt, Noir) bclk is the ODDRX2Fs' edge clock and CLKDIVF halves it
-to sclk, 189 MHz, for the serialiser; on Lakritz nextpnr puts the edge
-clock in bank 6 on dedicated routing. Everywhere else the serialiser
-runs at 378 MHz into ODDRX1Fs, with three registers a lane before the
-pin.
+the HDMI pins are all in bank 6, on the left (DDMI_ODDRX2: Lakritz,
+Konfekt, Noir, Schoko), bclk is the ODDRX2Fs' edge clock and CLKDIVF
+halves it to sclk, 189 MHz, for the serialiser. Everywhere else the
+serialiser runs at 378 MHz into ODDRX1Fs, and
+`tools/ddmi/pin_serialiser.py` places it beside the pins
+(screen_modes.md, "The serialiser's place").
 
 To measure a board:
 
 ```
+make BOARD=<board> serialiser_timing   # the serialiser alone: ten seconds
 make BOARD=<board> zeitlos_pico
-make BOARD=<board> timing    # sclk, cclk, pclk, and the 48 MHz clock
+make BOARD=<board> timing    # bclk or sclk, cclk, pclk, and the 48 MHz clock
 ```
 
 The routed figures for the current serialisers are still to be filled
@@ -743,6 +744,11 @@ Sergei ML2, ODDRX1F serialiser, routed (default seed unless noted):
 The default is the 45F modes without native 1280x720 and without
 Keccak (24,576 words of VRAM). docs/screen_modes.md, "Sergei ML2".
 
-The serialiser's limit at 378 MHz was its start-up lock (one LUT too
-many) and then plain routing; each lane now has its own ring of five
-as its load, so nothing at 378 MHz is more than one LUT from a flop.
+The serialiser's limit at 378 MHz was first its start-up lock (one LUT
+too many), then where nextpnr put it: pinned beside the pins without
+the lock, Sergei ML2 made 367.8 MHz with the default seed and 409.7
+with seed 2, the lock's bits crossing from lane to lane. With the lock
+made in one place and sent to each lane in two plain hops, the
+serialiser alone makes 487 to 510 MHz on every seed, on every ODDRX1F
+board (`make serialiser_timing`); full builds' figures are still to be
+filled in.

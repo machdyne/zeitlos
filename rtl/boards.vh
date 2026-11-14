@@ -1962,10 +1962,16 @@
 `endif
 // DDMI_ODDRX2: the screen modes' serialiser is ODDRX2F (189 MHz in the
 // fabric) rather than ODDRX1F (378 MHz). ECP5 has ODDRX2F only in its
-// left and right banks, so only the boards whose HDMI pins are there:
-// Lakritz (L1, M1), Konfekt and Noir (M1, P1). Mozart, Sergei and ULX3S
-// have theirs along the top, and Schoko's (R5, P4) are not known to be
-// in a side bank. Keyed on the board, so a release build (ZSPEC) has it.
+// left and right banks, so only the boards whose HDMI pins are there,
+// all four in one bank: Lakritz, Konfekt, Noir and Schoko (bank 6, on
+// the left; `make serialiser_timing` places each in seconds). Mozart,
+// Sergei and ULX3S have theirs along the top, and their 378 MHz
+// serialiser is pinned beside the pins instead
+// (tools/ddmi/pin_serialiser.py). Keyed on the board, so a release
+// build (ZSPEC) has it.
+`ifdef BOARD_SCHOKO
+`define DDMI_ODDRX2
+`endif
 `ifdef BOARD_LAKRITZ
 `define DDMI_ODDRX2
 `endif
