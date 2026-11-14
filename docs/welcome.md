@@ -297,11 +297,16 @@ card -- and try the example app:
 
 `ss` (typed at a kernel shell, not `term` -- see "Using the serial
 console" below) saves the entire screen to `/home/ss.bin` on the SD
-card. Convert it to a viewable PNG on your computer with:
+card, and its size, such as `1024x768`, to `/home/ss.txt` beside it:
+the screen is whatever mode it is in (docs/screen_modes.md). Copy both
+to your computer and convert them to a viewable PNG with:
 
 ```
 $ python3 tools/ssconv.py ss.bin
 ```
+
+`ssconv.py` reads the size from `ss.txt` beside the `.bin`. Without
+it, it knows the size by the file's length, or takes `--size 800x600`.
 
 ## Other apps
 

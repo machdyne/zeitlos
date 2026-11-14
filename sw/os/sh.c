@@ -2197,15 +2197,28 @@ void cls(void) {
 }
 
 // dumps the raw framebuffer, exactly as it sits in VRAM, to /home/ss.bin --
-// FB_WIDTH*FB_HEIGHT 1bpp pixels, packed 8 per byte, FB_WIDTH/8 bytes
-// per row, no header. See tools/ssconv.py to convert this into a
-// viewable PNG.
+// width*height 1bpp pixels, packed 8 per byte, width/8 bytes per row,
+// no header -- and its size, "<width>x<height>", to /home/ss.txt. The
+// size is the screen mode's desktop (docs/screen_modes.md): 640x480,
+// 800x600, 1024x768, 1280x720, or 640x360 where 1280x720 is doubled;
+// game mode's framebuffer is 640x480. See tools/ssconv.py to convert
+// the two into a viewable PNG.
 void screenshot(void) {
-	int written = fs_write_file(Z_PATH_SCREENSHOT, (char *)FB_BASE, FB_SIZE);
-	if (written == FB_SIZE)
-		printf("screenshot saved to " Z_PATH_SCREENSHOT " (%d bytes)\n", written);
-	else
-		printf("ss: write failed (wrote %d of %d bytes)\n", written, FB_SIZE);
+	int w = FB_WIDTH, h = FB_HEIGHT;
+	if (!(z_game_available() && z_game_enabled()))
+		z_vmode_geometry(z_vmode_get(), &w, &h);
+	int size = w * h / 8;
+	int written = fs_write_file(Z_PATH_SCREENSHOT, (char *)FB_BASE, size);
+	if (written != size) {
+		printf("ss: write failed (wrote %d of %d bytes)\n", written, size);
+		return;
+	}
+	char dim[16];
+	int n = snprintf(dim, sizeof(dim), "%dx%d\n", w, h);
+	if (fs_write_file(Z_PATH_SCREENSHOT_SIZE, dim, n) != n)
+		printf("ss: could not write " Z_PATH_SCREENSHOT_SIZE "\n");
+	printf("screenshot saved to " Z_PATH_SCREENSHOT " (%dx%d, %d bytes) and "
+		Z_PATH_SCREENSHOT_SIZE "\n", w, h, written);
 }
 
 // hostname/IP resolution for tget/tput above now goes through
@@ -2483,7 +2496,7 @@ void sh_help(void) {
 	printf(" ks                display a kernel snapshot\n");
 	printf(" ic                input path counters (hid ring, mailboxes, esp32link)\n");
 	printf(" cls               clear framebuffer\n");
-	printf(" ss                save a screenshot to " Z_PATH_SCREENSHOT " (see tools/ssconv.py)\n");
+	printf(" ss                save a screenshot to " Z_PATH_SCREENSHOT ", its size to " Z_PATH_SCREENSHOT_SIZE " (tools/ssconv.py)\n");
 	printf(" ls [path]         display list of files\n");
 	printf(" mkdir [path]      make a directory\n");
 	printf(" touch [path]      create empty file\n");

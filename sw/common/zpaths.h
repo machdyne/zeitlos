@@ -85,6 +85,9 @@
 /* The kernel console's `ss` (sw/os/sh.c): something the person asked
  * for, so it goes where their things go. */
 #define Z_PATH_SCREENSHOT         "/home/ss.bin"
+/* ... and its size, "<width>x<height>\n", for tools/ssconv.py: the
+ * framebuffer is the screen mode's (docs/screen_modes.md). */
+#define Z_PATH_SCREENSHOT_SIZE    "/home/ss.txt"
 /* The kernel console's `report` (sw/os/sh.c, docs/report.md): the last
  * crash and the log around it. On the RAM disk, not the card: writing
  * a card while something is going wrong is how a card is lost. */

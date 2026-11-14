@@ -283,6 +283,13 @@ over the windows). So wm (`acc_rect()`, `acc_on()`, `acc_service()`)
 and `z_win_accent_rect()` draw the accent only at 640x480, and
 `z_win_accent_ok()` says no in the other modes.
 
+### Screenshots
+
+The kernel console's `ss` dumps the framebuffer of the mode the screen
+is in (`/home/ss.bin`, width/8 bytes a row) and writes its size to
+`/home/ss.txt`; `tools/ssconv.py` reads that to make the PNG. Game
+mode's framebuffer is 640x480.
+
 ### What stays 640x480
 
 These see 640x480 whatever the mode:

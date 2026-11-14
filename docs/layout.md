@@ -315,7 +315,7 @@ The complete mapping from the pre-v0.0.6 card. Destinations under
 | (new) | `/data/slide/tour.zsl` | slide |
 | (new) | `/data/mausrun/levels/01.txt`, … | mausrun |
 | `/zcc.args`, `/vi.args`, `/zfpga.args` | `/tmp/zcc.args`, … | |
-| `ss.bin` (card root) | `/home/ss.bin` | |
+| `ss.bin` (card root) | `/home/ss.bin`, and its size in `/home/ss.txt` | |
 | `/user/`, and netlists of the person's own in `/bench/` | `/home/` | |
 
 Four of these look like exceptions but are not:
