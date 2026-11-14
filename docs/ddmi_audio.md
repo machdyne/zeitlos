@@ -326,6 +326,22 @@ The model was written from public material: CEA-861 for the InfoFrames,
 IEC 60958 for channel status, DVI 1.0 for TMDS, and the open-source
 cores it is cross-checked against.
 
+## Screen modes
+
+With screen modes ([screen_modes.md](screen_modes.md)) the islands come
+from `rtl/gpu/gpu_vchar.v`, a character at a time on the 75.6 MHz
+character clock, so a two-character mode (1024x768, 1280x720, and a
+25F's doubled 1280x720) gets two different island characters for each
+pixel clock. `ddmi_island.v` takes where things are as inputs: the
+island at hc 12 (40 at 800x600, inside its sync pulse, so hsync does not
+change in it), the video preamble ten characters before the picture,
+general control on vsync's first line and the InfoFrames on the three
+after it, and the AVI InfoFrame's VIC -- 1 at 640x480, 4 (16:9) at
+1280x720, none at 800x600 and 1024x768. CTS is measured against the
+character clock: 25.2, 37.8 or 75.6 MHz (`zaudio.h`, which wm calls
+again after a change). `make test_vmodes` checks the islands in two
+modes.
+
 ## What it costs
 
 No pins, PLLs or clocks. `gpu_ddmi` on its own (`synth_ecp5 -abc9 -top

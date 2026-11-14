@@ -99,6 +99,13 @@ module usb_hid_compat #(
     // to 63. 0 reads as 16.
     input wire [5:0] speed,
 
+    // -- the screen's last pixel (docs/screen_modes.md) --
+    // The pointer is kept inside 0..curs_max_x, 0..curs_max_y: 639x479
+    // at 640x480, 1279x719 at 1280x720 (639x359 where that is a 640x360
+    // desktop shown twice). Wishbone domain, from socctl's VMODE.
+    input wire [10:0] curs_max_x,
+    input wire [9:0] curs_max_y,
+
     // -- register images --
     output wire [31:0] reg_info,
     output wire [31:0] reg_keys,
@@ -107,7 +114,7 @@ module usb_hid_compat #(
     output wire [31:0] reg_pad,
 
     // -- into the hardware cursor (rtl/gpu/gpu_video.v) --
-    output reg [9:0] curs_x,
+    output reg [10:0] curs_x,
     output reg [9:0] curs_y,
     output wire [1:0] typ,
 
@@ -166,7 +173,8 @@ module usb_hid_compat #(
     assign reg_info = { report, 5'b00000, typ_r, 16'b0, key_modifiers };
     assign reg_keys = { key1, key2, key3, key4 };
     assign reg_mouse = { wheel_acc, mouse_btn, mouse_dy, mouse_dx };
-    assign reg_cursor = { 4'd0, mouse_btn, curs_y, curs_x };
+    // x's eleventh bit (1024 and up) in bit 28, which read 0 before
+    assign reg_cursor = { 3'd0, curs_x[10], mouse_btn, curs_y, curs_x[9:0] };
     assign reg_pad = { 20'd0, typ_r, game_state };
 
     // ---------------------------------------------------------------
@@ -234,9 +242,9 @@ module usb_hid_compat #(
     wire signed [17:0] step = acc >>> DIV;
     wire [9:0] rem = acc[9:0] & ~(10'h3ff << DIV);
 
-    wire [9:0] curs_now = (ph == 2'd1) ? curs_x : curs_y;
-    wire [9:0] curs_max = (ph == 2'd1) ? 10'd639 : 10'd479;
-    wire signed [17:0] curs_sum = $signed({8'd0, curs_now}) + step;
+    wire [10:0] curs_now = (ph == 2'd1) ? curs_x : { 1'b0, curs_y };
+    wire [10:0] curs_max = (ph == 2'd1) ? curs_max_x : { 1'b0, curs_max_y };
+    wire signed [17:0] curs_sum = $signed({7'd0, curs_now}) + step;
 
     // ---------------------------------------------------------------
 
@@ -260,7 +268,7 @@ module usb_hid_compat #(
             mouse_dy <= 8'sd0;
             wheel_acc <= 8'sd0;
             game_state <= 10'd0;
-            curs_x <= 10'd320;
+            curs_x <= 11'd320;
             curs_y <= 10'd240;
             sub_x <= 10'd0;
             sub_y <= 10'd0;
@@ -317,18 +325,22 @@ module usb_hid_compat #(
             end else if (ph != 2'd0) begin
                 if (ph == 2'd1) begin
                     sub_x <= rem;
-                    if (curs_sum < 0) curs_x <= 10'd0;
-                    else if (curs_sum > $signed({8'd0, curs_max})) curs_x <= curs_max;
-                    else curs_x <= curs_sum[9:0];
+                    if (curs_sum < 0) curs_x <= 11'd0;
+                    else if (curs_sum > $signed({7'd0, curs_max})) curs_x <= curs_max;
+                    else curs_x <= curs_sum[10:0];
                     prod <= mul_out;		// y's
                     ph <= 2'd2;
                 end else begin
                     sub_y <= rem;
                     if (curs_sum < 0) curs_y <= 10'd0;
-                    else if (curs_sum > $signed({8'd0, curs_max})) curs_y <= curs_max;
+                    else if (curs_sum > $signed({7'd0, curs_max})) curs_y <= curs_max[9:0];
                     else curs_y <= curs_sum[9:0];
                     ph <= 2'd0;
                 end
+            end else begin
+                // the screen got smaller (a mode change): onto it
+                if (curs_x > curs_max_x) curs_x <= curs_max_x;
+                if (curs_y > curs_max_y) curs_y <= curs_max_y;
             end
 
         end

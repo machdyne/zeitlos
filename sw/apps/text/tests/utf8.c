@@ -1460,7 +1460,7 @@ int main(int argc, char **argv) {
 		// keystroke), so whatever its characters do not paint, it must.
 		const z_font_t *fonts[2] = { &z_font_5x8, &z_font_6x12 };
 		z_clip_t c;
-		static uint8_t clean[Z_SCREEN_H][Z_SCREEN_W];
+		static uint8_t clean[Z_FB_640_H][Z_FB_640_W];
 		for (int fi = 0; fi < 2; fi++) {
 			big_font = NULL;
 			cur_font = fonts[fi];

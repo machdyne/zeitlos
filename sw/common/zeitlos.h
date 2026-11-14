@@ -640,15 +640,23 @@ bool z_video_mode_set(uint32_t mode);
 
 // The screen's size, in pixels: what a window, a dialog or a full-
 // screen app lays itself out against (docs/screen.md). Ask; never
-// assume 640x480. It is 640x480 on every board today, and the call is
-// what lets a later system have a wider or larger screen -- up to
-// 4095x4095, the most wm's messages carry -- without breaking a program
-// built now. Fixed for a boot (wm reads it once, as it starts); a
-// kernel from before the call answers 640x480. Z_SCREEN_W/H (zgfx.h)
-// stay the FRAMEBUFFER's geometry, which is a different thing.
+// assume 640x480: on a machine with screen modes (docs/screen_modes.md)
+// it is the mode's desktop -- 640x480, 640x360, 800x600, 1024x768 or
+// 1280x720 -- and it changes while programs run: wm sends Z_WM_SCREEN
+// (zwm.h) when it does, and a program that keeps the size asks again
+// then. Up to 4095x4095, the most wm's messages carry; a kernel from
+// before the call answers 640x480. Z_SCREEN_W/H (zgfx.h) are the
+// FRAMEBUFFER's geometry, which is a different thing (zeitlos.cfg's
+// system.screen.size can make this one differ, for testing).
 void z_screen_size(int *w, int *h);
 int z_screen_w(void);
 int z_screen_h(void);
+
+// Asks wm to change the screen mode (Z_VMODE_*, zsoc.h), as Ctrl+Super+
+// Esc does: it switches, asks whether to keep it, and goes back after
+// fifteen seconds without an answer. False if there is no wm or the
+// machine has no such mode.
+bool z_screen_set_mode(int mode);
 
 // The largest size the interfaces carry (12 bits, zwm.h's packs), and
 // the smallest screen there will be: 640 wide, as every app's windows

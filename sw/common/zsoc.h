@@ -1692,6 +1692,91 @@ static inline void z_color_set_palette(uint32_t index, uint32_t rgb444) {
 // signature before anything writes either.
 #define reg_socctl_colwin    (*(volatile uint32_t*)0x70000240)
 #define reg_socctl_colwinend (*(volatile uint32_t*)0x70000244)
+// -- screen modes (rtl/socctl.v's VMODE, word 19; docs/screen_modes.md) --
+//
+// The desktop's resolution, chosen at run time on a bitstream built with
+// VIDEO_MODES. Mode m is one of Z_VMODE_*; z_vmode_avail() says which
+// this machine has (bit m), and z_vmode_geometry() what the desktop is
+// in it: 1280x720 is a 640x360 desktop shown twice each way on the 25F
+// boards (z_vmode_doubled()), and native on the 45F/85F boards.
+//
+// The mode changes at the next frame boundary; the display takes a
+// second or two to follow. wm owns it: it switches, lays the desktop out
+// again, asks first whether to keep it, and tells every program
+// (Z_WM_SCREEN, zwm.h). A program sets it through wm (z_screen_set_mode(),
+// zeitlos.h), not here.
+//
+// Game mode and colour are 640x480's: the hardware shows neither in
+// another mode, so z_game_set_enabled() switches to 640x480 first and wm
+// switches back.
+//
+// Word 19 aliases GAME (word 3) on a bitstream that decodes four address
+// bits, whose signature is not "ZM", so nothing writes it before
+// z_vmode_present() has read it.
+#define reg_socctl_vmode   (*(volatile uint32_t*)0x7000024c)
+#define Z_VMODE_SIG        0x5A4Du	// "ZM" -- KEEP IN SYNC with socctl.v
+#define Z_VMODE_640X480    0
+#define Z_VMODE_800X600    1
+#define Z_VMODE_1024X768   2
+#define Z_VMODE_1280X720   3
+#define Z_VMODE_COUNT      4
+#define Z_VMODE_DBL        (1u << 4)	// read: 1280x720 is 640x360 twice
+#define Z_VMODE_WIDE       (1u << 5)	// read: modes 1..3 native
+
+static inline bool z_vmode_present(void) {
+	if (!z_socctl_present()) return false;
+	return ((reg_socctl_vmode >> 16) & 0xffffu) == Z_VMODE_SIG;
+}
+
+// Which modes this machine has, a bit each: 1 (640x480) on a bitstream
+// without screen modes.
+static inline uint32_t z_vmode_avail(void) {
+	if (!z_vmode_present()) return 1u;
+	return ((reg_socctl_vmode >> 8) & 0xfu) | 1u;
+}
+
+static inline uint32_t z_vmode_get(void) {
+	if (!z_vmode_present()) return Z_VMODE_640X480;
+	return reg_socctl_vmode & 3u;
+}
+
+static inline bool z_vmode_doubled(void) {
+	return z_vmode_present() && (reg_socctl_vmode & Z_VMODE_DBL) != 0;
+}
+
+// The register write, and nothing else: wm's. False for a mode this
+// machine does not have.
+static inline bool z_vmode_set_raw(uint32_t m) {
+	if (m >= Z_VMODE_COUNT || !(z_vmode_avail() & (1u << m))) return false;
+	if (!z_vmode_present()) return m == Z_VMODE_640X480;
+	reg_socctl_vmode = m;
+	return true;
+}
+
+// The signal's size in mode m (what a display is told), and the
+// desktop's -- the framebuffer's -- on this machine.
+static inline void z_vmode_signal(uint32_t m, int *w, int *h) {
+	static const uint16_t sw[4] = { 640, 800, 1024, 1280 };
+	static const uint16_t sh[4] = { 480, 600, 768, 720 };
+	*w = sw[m & 3u];
+	*h = sh[m & 3u];
+}
+
+static inline void z_vmode_geometry(uint32_t m, int *w, int *h) {
+	z_vmode_signal(m, w, h);
+	if (m == Z_VMODE_1280X720 && z_vmode_doubled()) {
+		*w = 640;
+		*h = 360;
+	}
+}
+
+// The DDMI character clock in mode m, in kHz: what the display's audio
+// clock regeneration is measured against (zaudio.h). 640x480 is 25.2
+// MHz, 800x600 37.8, the two-pixel modes 75.6.
+static inline uint32_t z_vmode_tmds_khz(uint32_t m) {
+	return (m == Z_VMODE_640X480) ? 25200u : (m == Z_VMODE_800X600) ? 37800u : 75600u;
+}
+
 #define Z_COLWIN_EN    (1u << 31)
 #define Z_COLWIN_AVAIL (1u << 15)    // read-only
 #define Z_COLWIN_DESK  (1u << 30)    // desktop colour's exact path; reads back as bit 1
@@ -1700,6 +1785,11 @@ static inline void z_color_set_palette(uint32_t index, uint32_t rgb444) {
 
 static inline bool z_color_window_available(void) {
 	if (!z_color_available()) return false;
+#ifndef Z_SMALL
+	// 640x480's only (docs/screen_modes.md); the small build has no
+	// screen modes
+	if (z_vmode_get() != Z_VMODE_640X480) return false;
+#endif
 	if (((reg_socctl_colwin >> 16) & 0xffffu) != Z_COLWIN_SIG) return false;
 	return (reg_socctl_colwin & Z_COLWIN_AVAIL) != 0;
 }

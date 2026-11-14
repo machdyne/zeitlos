@@ -236,7 +236,38 @@ module gpu_video #(
 	// eight planes (the 19,200-word VRAM a 320x240x8 picture fills);
 	// ignored otherwise, and 0 -- every testbench unchanged -- removes
 	// it.
-	parameter CHUNKY_AVAIL = 1'b0
+	parameter CHUNKY_AVAIL = 1'b0,
+
+	// -- screen modes (docs/screen_modes.md) --
+	//
+	// 0 -- the default, so every testbench and every 640x480-only build
+	// is unchanged -- is 640x480 alone, on a 25.2 MHz pclk, with the
+	// DDMI output in this clock (rtl/gpu/gpu_ddmi.v) and VGA straight
+	// from the pixel logic, exactly as before.
+	//
+	// 1: the mode is chosen at run time (vmode, below), from four:
+	//
+	//   0  640x480   1280x720 is 3
+	//   1  800x600   (WIDE only)
+	//   2  1024x768  (WIDE only)
+	//   3  1280x720  -- WIDE: native; otherwise the 640x360 desktop,
+	//                   every pixel shown twice each way
+	//
+	// pclk is then 37.8 MHz, enabled two clocks in three at 640x480 (an
+	// effective 25.2 MHz, every count below exactly as before), and the
+	// wire is rtl/gpu/gpu_vchar.v's, on cclk (75.6 MHz) and a serialiser
+	// on bclk (378): ODDRX2F with 189 MHz in the fabric where the pins'
+	// bank allows (DDMI_ODDRX2), ODDRX1F otherwise.
+	// Modes 2 and 3 count h in PAIRS of pixels: one clock, two pixels
+	// (WIDE) or one pixel twice.
+	parameter VMODES = 1'b0,
+	// 1: 800x600, 1024x768 and native 1280x720, monochrome, at up to
+	// 40 words a row (the 45F/85F boards, with 32K words of VRAM).
+	parameter WIDE = 1'b0,
+	// WIDE without native 1280x720 (VIDEO_NO_NATIVE_720, Sergei ML2):
+	// mode 3 is the 640x360 desktop shown twice each way, as on the 25F
+	// boards, and VRAM need only hold 1024x768
+	parameter NATIVE720 = 1'b1
 
 ) (
 
@@ -258,7 +289,7 @@ module gpu_video #(
 	// curs_we writes one shape row, curs_wdata, to row curs_waddr
 	// ({ slot, row }) of the cursor's own block RAM: a one-clock
 	// strobe from socctl, in this module's clk (wishbone) domain.
-	input [9:0] curs_x,
+	input [10:0] curs_x,
 	input [9:0] curs_y,
 	input curs_alt,
 	input curs_hide,
@@ -277,6 +308,12 @@ module gpu_video #(
 	input pclk,
 	input bclk,
 	input resetn,
+
+	// VMODES: the character clock (75.6 MHz, rtl/gpu/gpu_vchar.v), and
+	// the mode socctl's VMODE asks for, in the wishbone domain; adopted
+	// at a frame boundary like everything else here.
+	input cclk,
+	input [1:0] vmode,
 
 	// Virtual phosphor mode, from rtl/socctl.v's VIDEO register (see
 	// that file, and docs/socctl.md). In the WISHBONE clock domain,
@@ -411,7 +448,8 @@ module gpu_video #(
 
 	output [3:0] dac,
 
-	output reg [9:0] x,
+	// 11 bits: 1280x720's columns (WIDE); 10 everywhere else
+	output reg [10:0] x,
 	output reg [9:0] y,
 	output is_visible,
 
@@ -434,6 +472,91 @@ module gpu_video #(
 	parameter [10:0] v_disp_start = v_front_porch + v_pulse_width + v_back_porch;
 	parameter [10:0] v_disp_stop = v_disp_start + v_disp;
 
+	// -- the mode in use (VMODES) --
+	//
+	// m_act is the mode being scanned, adopted at the frame boundary with
+	// everything else; tm_* its timing, loaded on the same edge, so that
+	// every comparison below is against a register. Without VMODES the
+	// wires below are the parameters, and synthesis folds the registers
+	// away: the comparisons are against constants, as they always were.
+	//
+	// The table, in pclk counts -- PAIRS of pixels in modes 2 and 3:
+	//
+	//   mode  picture    front sync back   line  lines  fp sync bp  frame  syncs
+	//   0     640x480    16    96   48     800   480    10  2   33  525    - -
+	//   1     800x600    40    96   62     998   600    1   4   23  628    + +
+	//   2     1024x768   12    68   72     664   768    3   6   29  806    - -
+	//   3     1280x720   70    20   110    840   720    5   5   20  750    + +
+	//
+	// 640x480 at 25.2 MHz (pclk enabled two in three) and the others at
+	// 37.8 MHz: 37.88 kHz and 60.3 Hz (VESA's 800x600 rates); 56.93 kHz
+	// and 70.63 Hz, VESA's 1024x768 at 70 Hz with its 1328-pixel line
+	// exactly (75.0 MHz there), so that a VGA monitor samples our pixels;
+	// 45.00 kHz and 60.00 Hz (CEA 720p's). The two-pixel modes' pixel
+	// clock is 75.6 MHz.
+	reg [1:0] m_act = 2'd0;
+	reg [10:0] tm_hds, tm_hde, tm_hfp, tm_hpe, tm_vds, tm_vde, tm_vfp, tm_vpe;
+	reg tm_pos;
+
+	wire [10:0] hds = VMODES ? tm_hds : h_disp_start;
+	wire [10:0] hde = VMODES ? tm_hde : h_disp_stop;
+	wire [10:0] hfp = VMODES ? tm_hfp : h_front_porch;
+	wire [10:0] hpe = VMODES ? tm_hpe : (h_front_porch + h_pulse_width);
+	wire [10:0] vds = VMODES ? tm_vds : v_disp_start;
+	wire [10:0] vde = VMODES ? tm_vde : v_disp_stop;
+	wire [10:0] vfp = VMODES ? tm_vfp : v_front_porch;
+	wire [10:0] vpe = VMODES ? tm_vpe : (v_front_porch + v_pulse_width);
+	wire sync_pos = VMODES && tm_pos;
+	wire [1:0] mode = VMODES ? m_act : 2'd0;
+	// a mode of two pixels a clock (WIDE) or one pixel twice
+	wire pair = VMODES && m_act[1];
+	// 1280x720 from a 640x360 desktop: rows shown twice, as game mode
+	wire dbl = VMODES && ((WIDE == 0) || (NATIVE720 == 0)) && (m_act == 2'd3);
+	// two different pixels a clock
+	wire pair2 = pair && (WIDE != 0) && !dbl;
+
+	// The level on the wire: active low at 640x480 and 1024x768, active
+	// high at 800x600 and 1280x720 (sync_pos), as their standards have it.
+	wire h_pul = (hc >= hfp) && (hc < hpe);
+	wire v_pul = (vc >= vfp) && (vc < vpe);
+	wire hsync_w = sync_pos ? h_pul : !h_pul;
+	wire vsync_w = sync_pos ? v_pul : !v_pul;
+
+	// pclk's enable: two clocks in three at 640x480, every clock in the
+	// others. Every register on pclk below takes it, so at 640x480 this
+	// whole file runs at 25.2 MHz exactly as it did on a 25.2 MHz clock.
+	reg [1:0] pc3 = 2'd0;
+	wire pen = !VMODES || (m_act != 2'd0) || (pc3 != 2'd2);
+	always @(posedge pclk)
+		pc3 <= (pc3 == 2'd2) ? 2'd0 : (pc3 + 2'd1);
+
+	// the mode asked for, into this domain; adopted at the frame boundary
+	reg [1:0] vm_s0, vm_s1;
+	wire [1:0] vm_ok = (WIDE != 0) ? vm_s1 :
+		((vm_s1 == 2'd3) ? 2'd3 : 2'd0);
+
+	// { sync_pos, vpe, vfp, vde, vds, hpe, hfp, hde, hds } for a mode
+	function [88:0] tm_of;
+		input [1:0] m;
+		begin
+			case (m)
+				2'd1: tm_of = { 1'b1, 11'd5, 11'd1, 11'd628, 11'd28,
+					11'd136, 11'd40, 11'd998, 11'd198 };
+				// VESA 1024x768 at 70 Hz: its 1328-pixel line exactly, so
+				// a monitor on VGA (an HDMI-to-VGA adapter) samples our
+				// pixels; 75.6 MHz for its 75.0, 70.6 Hz
+				2'd2: tm_of = { 1'b0, 11'd9, 11'd3, 11'd806, 11'd38,
+					11'd80, 11'd12, 11'd664, 11'd152 };
+				2'd3: tm_of = { 1'b1, 11'd10, 11'd5, 11'd750, 11'd30,
+					11'd90, 11'd70, 11'd840, 11'd200 };
+				default: tm_of = { 1'b0, 11'd12, 11'd10, 11'd525, 11'd45,
+					11'd112, 11'd16, 11'd800, 11'd160 };
+			endcase
+		end
+	endfunction
+	wire [88:0] tm_next = tm_of(vm_ok);
+	wire vm_m0 = (vm_ok == 2'd0) || (VMODES == 0);
+
 	// -- scanout divisors --
 	//
 	// h_div: pixel clocks per source pixel. v_half: two physical lines
@@ -452,7 +575,7 @@ module gpu_video #(
 
 	wire [2:0] h_div = FIXED_VIEWPORT ? H_DIV_BASE :
 		(game_active ? 3'd2 : 3'd1);
-	wire v_half = FIXED_VIEWPORT ? 1'b0 : game_active;
+	wire v_half = FIXED_VIEWPORT ? 1'b0 : (game_active || dbl);
 	wire vp_on  = FIXED_VIEWPORT ? 1'b1 : game_active;
 
 	// Counts 0..h_div-1. Two bits, because h_div is only ever 1, 2 or
@@ -599,6 +722,14 @@ module gpu_video #(
 	wire p0 = cur0[x[4:0]];
 	wire pix = p0 ^ c_inv;
 
+	// The second pixel of a two-pixel clock (pair2: the 45F boards'
+	// 1024x768 and 1280x720, monochrome): x is even there, and this is
+	// the column after it, with the pointer's own test (c_d1, with the
+	// cursor below).
+	reg c_d1;
+	wire p1x = cur0[{ x[4:1], 1'b1 }];
+	wire pix1 = p1x ^ (pixel | c_d1);
+
 	// With x a clock ahead (x_lead), the monochrome pixel is the one
 	// worked out a clock ago. Only ever so in desktop mode with the
 	// colour window on; in game-mode colour the monochrome path is not
@@ -606,7 +737,7 @@ module gpu_video #(
 	// from x too, so both moved by the same clock.
 	reg pix_q;
 	always @(posedge pclk)
-		pix_q <= pix;
+		if (pen) pix_q <= pix;
 	wire pixm = x_lead ? pix_q : pix;
 
 	// is_visible gates the result, and it MUST: in GPU_PAPER the
@@ -768,7 +899,7 @@ module gpu_video #(
 	// is an accent pixel the pointer is not on: only those take cb_q.
 	reg win_row, win_px, desk_px;
 	wire win_col = (x >= wx0_active) && (x < wx1_active);
-	always @(posedge pclk) begin
+	always @(posedge pclk) if (pen) begin
 		win_row <= win_active && (y >= wy0_active) && (y < wy1_active);
 		win_px <= win_row && win_col;
 		desk_px <= cur4[x[4:0]] && !c_inv;
@@ -870,7 +1001,7 @@ module gpu_video #(
 
 	reg [7:0] ddmi_ink_r, ddmi_ink_g, ddmi_ink_b;
 
-	always @(posedge pclk) begin
+	always @(posedge pclk) if (pen) begin
 		ddmi_ink_r <= (video_mode_active == GPU_MODE_AMBER) ? amber_r8 :
 			(video_mode_active == GPU_MODE_GREEN) ? 8'd0 : bw;
 		ddmi_ink_g <= (video_mode_active == GPU_MODE_AMBER) ? amber_g8 : bw;
@@ -899,22 +1030,163 @@ module gpu_video #(
 	wire [2:0] vga3_g = pal_out ? c_g[3:1] : (pset ? vga_ink_g : 3'd0);
 	wire [2:0] vga3_b = pal_out ? c_b[3:1] : (pset ? vga_ink_b : 3'd0);
 
-	assign red   = (VGA_DAC3 != 0) ? vga3_r[2] : pal_out ? c_r[3] :
+	wire red_w   = (VGA_DAC3 != 0) ? vga3_r[2] : pal_out ? c_r[3] :
 		(video_mode_active == GPU_MODE_GREEN) ? 1'b0 : pset;
-	assign green = (VGA_DAC3 != 0) ? vga3_g[2] : pal_out ? c_g[3] : pset;
-	assign blue  = (VGA_DAC3 != 0) ? vga3_b[2] : pal_out ? c_b[3] :
+	wire green_w = (VGA_DAC3 != 0) ? vga3_g[2] : pal_out ? c_g[3] : pset;
+	wire blue_w  = (VGA_DAC3 != 0) ? vga3_b[2] : pal_out ? c_b[3] :
 		(video_mode_active == GPU_MODE_AMBER ||
 		 video_mode_active == GPU_MODE_GREEN) ? 1'b0 : pset;
-	assign red_lo   = (VGA_DAC3 != 0) ? vga3_r[1:0] : 2'b00;
-	assign green_lo = (VGA_DAC3 != 0) ? vga3_g[1:0] : 2'b00;
-	assign blue_lo  = (VGA_DAC3 != 0) ? vga3_b[1:0] : 2'b00;
+	wire [1:0] red_lo_w   = (VGA_DAC3 != 0) ? vga3_r[1:0] : 2'b00;
+	wire [1:0] green_lo_w = (VGA_DAC3 != 0) ? vga3_g[1:0] : 2'b00;
+	wire [1:0] blue_lo_w  = (VGA_DAC3 != 0) ? vga3_b[1:0] : 2'b00;
+
+	// -- the pixel's colour, for the wire --
+	//
+	// pix_rgb: the eight bits a channel the DDMI encoder takes; pix_vga
+	// the VGA pins' bits, { r, g, b, r_lo, g_lo, b_lo }. pix1_*: the
+	// second pixel of a pair2 clock, which is always monochrome (colour
+	// is 640x480's).
+	wire [23:0] pix_rgb = {
+		pal_out ? { c_r, c_r } : (pset ? ddmi_ink_r : 8'd0),
+		pal_out ? { c_g, c_g } : (pset ? ddmi_ink_g : 8'd0),
+		pal_out ? { c_b, c_b } : (pset ? ddmi_ink_b : 8'd0) };
+	wire [8:0] pix_vga = { red_w, green_w, blue_w, red_lo_w, green_lo_w, blue_lo_w };
+
+	wire pset1 = is_visible &&
+		((video_mode_active == GPU_MODE_PAPER) ? ~pix1 : pix1);
+	wire [23:0] pix1_rgb = {
+		pset1 ? ddmi_ink_r : 8'd0, pset1 ? ddmi_ink_g : 8'd0, pset1 ? ddmi_ink_b : 8'd0 };
+	wire [2:0] vga31_r = pset1 ? vga_ink_r : 3'd0;
+	wire [2:0] vga31_g = pset1 ? vga_ink_g : 3'd0;
+	wire [2:0] vga31_b = pset1 ? vga_ink_b : 3'd0;
+	wire [8:0] pix1_vga = (VGA_DAC3 != 0) ?
+		{ vga31_r[2], vga31_g[2], vga31_b[2], vga31_r[1:0], vga31_g[1:0], vga31_b[1:0] } :
+		{ (video_mode_active == GPU_MODE_GREEN) ? 1'b0 : pset1, pset1,
+		  (video_mode_active == GPU_MODE_AMBER ||
+		   video_mode_active == GPU_MODE_GREEN) ? 1'b0 : pset1, 6'b0 };
+
+	// -- VMODES: the sample, for rtl/gpu/gpu_vchar.v --
+	//
+	// Registered on every enabled clock, with ptog toggled every clock
+	// and s_new saying whether this one was enabled: the character side
+	// reads the sample the clock after ptog changes (see that file).
+	reg ptog = 1'b0;
+	reg s_new = 1'b0;
+	reg [1:0] s_mode;
+	reg [23:0] s_rgb0, s_rgb1;
+	reg [8:0] s_vga0, s_vga1;
+	reg s_hs, s_vs, s_de;
+	reg [10:0] s_hc, s_vc;
+
+	always @(posedge pclk) begin
+		ptog <= !ptog;
+		s_new <= pen;
+		if (pen) begin
+			s_mode <= mode;
+			s_rgb0 <= pix_rgb;
+			// a doubled 1280x720 on a WIDE build: the one pixel twice
+			s_rgb1 <= dbl ? pix_rgb : pix1_rgb;
+			s_vga0 <= pix_vga;
+			s_vga1 <= dbl ? pix_vga : pix1_vga;
+			s_hs <= hsync_w;
+			s_vs <= vsync_w;
+			s_de <= is_visible;
+			s_hc <= hc;
+			s_vc <= vc;
+		end
+	end
+
+	wire [8:0] vc_vga;
+	wire vc_hs, vc_vs;
+	wire [3:0] vc_tr, vc_tg, vc_tb, vc_tc;
+
+	// VMODES: the serialiser's clocks. bclk (378 MHz) becomes the
+	// ODDRX2Fs' edge clock, and CLKDIVF halves it for the fabric side
+	// (sclk, 189 MHz), phase-aligned with it as the ODDRX2F needs.
+	wire vc_eclk, vc_sclk;
+	// X2: ODDRX2F, which ECP5 has only in its left and right banks
+	// (rtl/boards.vh, DDMI_ODDRX2); otherwise ODDRX1F on bclk.
+`ifdef DDMI_ODDRX2
+	localparam VC_X2 = 1;
+`else
+	localparam VC_X2 = 0;
+`endif
+`ifdef ECP5
+	generate
+		if (VMODES != 0 && VC_X2 != 0) begin : g_vcclk
+			ECLKSYNCB vc_eclksync (.ECLKI(bclk), .STOP(1'b0), .ECLKO(vc_eclk));
+			CLKDIVF #(.DIV("2.0")) vc_clkdiv (.CLKI(vc_eclk), .RST(1'b0), .ALIGNWD(1'b0), .CDIVX(vc_sclk));
+		end else begin : g_vcclk0
+			assign vc_eclk = 1'b0;
+			assign vc_sclk = 1'b0;
+		end
+	endgenerate
+`else
+	assign vc_eclk = 1'b0;
+	assign vc_sclk = 1'b0;
+`endif
+
+`ifdef GPU_DDMI_AUDIO
+	localparam VC_ISLANDS = 1;
+`else
+	localparam VC_ISLANDS = 0;
+`endif
+
+	gpu_vchar #(.WIDE(WIDE), .ISLANDS(VC_ISLANDS), .X2(VC_X2)) gpu_vchar_i (
+		.cclk(cclk),
+		.sclk(vc_sclk),
+		.bclk(bclk),
+		.ptog(ptog),
+		.s_new(s_new),
+		.s_mode(s_mode),
+		.s_rgb0(s_rgb0),
+		.s_rgb1(s_rgb1),
+		.s_vga0(s_vga0),
+		.s_vga1(s_vga1),
+		.s_hs(s_hs),
+		.s_vs(s_vs),
+		.s_de(s_de),
+		.s_hc(s_hc),
+		.s_vc(s_vc),
+		.islands_en(ddmi_en_active),
+		.sound_en(ddmi_snd_active),
+		.fs_code(ddmi_fs_active),
+		.acr_n(ddmi_n_active),
+		.acr_cts(ddmi_cts_active),
+		.aud_clk(clk),
+		.aud_we(ddmi_we),
+		.aud_wdata(ddmi_wdata),
+		.vga(vc_vga),
+		.vga_hs(vc_hs),
+		.vga_vs(vc_vs),
+		.tmds_r(vc_tr),
+		.tmds_g(vc_tg),
+		.tmds_b(vc_tb),
+		.tmds_c(vc_tc)
+	);
+
+	assign red      = (VMODES != 0) ? vc_vga[8] : red_w;
+	assign green    = (VMODES != 0) ? vc_vga[7] : green_w;
+	assign blue     = (VMODES != 0) ? vc_vga[6] : blue_w;
+	assign red_lo   = (VMODES != 0) ? vc_vga[5:4] : red_lo_w;
+	assign green_lo = (VMODES != 0) ? vc_vga[3:2] : green_lo_w;
+	assign blue_lo  = (VMODES != 0) ? vc_vga[1:0] : blue_lo_w;
+	assign hsync    = (VMODES != 0) ? vc_hs : hsync_w;
+	assign vsync    = (VMODES != 0) ? vc_vs : vsync_w;
 
 `ifdef GPU_DDMI
 
-	wire [1:0] out_tmds_red;
-	wire [1:0] out_tmds_green;
-	wire [1:0] out_tmds_blue;
-	wire [1:0] out_tmds_clk;
+	wire [1:0] ddmi_tmds_red;
+	wire [1:0] ddmi_tmds_green;
+	wire [1:0] ddmi_tmds_blue;
+	wire [1:0] ddmi_tmds_clk;
+
+	// gpu_ddmi's serialiser, on 126 MHz, two bits a clock. VMODES uses
+	// gpu_vchar's instead, four bits a clock into ODDRX2Fs (below).
+	wire [1:0] out_tmds_red   = ddmi_tmds_red;
+	wire [1:0] out_tmds_green = ddmi_tmds_green;
+	wire [1:0] out_tmds_blue  = ddmi_tmds_blue;
+	wire [1:0] out_tmds_clk   = ddmi_tmds_clk;
 
 	// Same three colours the `ifdefs above used to select between,
 	// bit-for-bit -- the amber weightings in particular are the
@@ -941,7 +1213,8 @@ module gpu_video #(
 	// Ten TMDS bits per pixel leave at 2 per bclk. The 10:1 shifting is
 	// done in fabric above (see gpu_ddmi.v's DDR_ENABLED), so all this
 	// stage has to do is put two bits per clock onto a pin, and bclk is
-	// exactly 5 * pclk for that reason.
+	// exactly 5 * pclk for that reason. (VMODES is different: see
+	// ODDRX2F below.)
 	//
 	// DELIBERATELY NOT OSERDESE2 on 7-series. That primitive would do
 	// the full 10:1 itself and free the fabric shifter -- but it is
@@ -978,10 +1251,32 @@ module gpu_video #(
 	OBUFDS obufds_green (.I(ddr_q[1]), .O(dvi_p[1]), .OB(dvi_n[1]));
 	OBUFDS obufds_blue  (.I(ddr_q[0]), .O(dvi_p[0]), .OB(dvi_n[0]));
 `else
-	ODDRX1F ddr0_clock (.D0(out_tmds_clk   [0] ), .D1(out_tmds_clk   [1] ), .Q(dvi_p[3]), .SCLK(bclk), .RST(0));
-	ODDRX1F ddr0_red   (.D0(out_tmds_red   [0] ), .D1(out_tmds_red   [1] ), .Q(dvi_p[2]), .SCLK(bclk), .RST(0));
-	ODDRX1F ddr0_green (.D0(out_tmds_green [0] ), .D1(out_tmds_green [1] ), .Q(dvi_p[1]), .SCLK(bclk), .RST(0));
-	ODDRX1F ddr0_blue  (.D0(out_tmds_blue  [0] ), .D1(out_tmds_blue  [1] ), .Q(dvi_p[0]), .SCLK(bclk), .RST(0));
+	// VMODES: ODDRX2F, four bits a 189 MHz sclk, D0 first, on the
+	// 378 MHz edge clock, where the bank has one (DDMI_ODDRX2); or
+	// ODDRX1F, two bits a 378 MHz bclk (docs/screen_modes.md). Otherwise
+	// ODDRX1F on 126 MHz, as always.
+	generate
+		if (VMODES != 0 && VC_X2 == 0) begin : g_oddr1v
+			ODDRX1F ddr1_clock (.D0(vc_tc[0]), .D1(vc_tc[1]), .Q(dvi_p[3]), .SCLK(bclk), .RST(1'b0));
+			ODDRX1F ddr1_red   (.D0(vc_tr[0]), .D1(vc_tr[1]), .Q(dvi_p[2]), .SCLK(bclk), .RST(1'b0));
+			ODDRX1F ddr1_green (.D0(vc_tg[0]), .D1(vc_tg[1]), .Q(dvi_p[1]), .SCLK(bclk), .RST(1'b0));
+			ODDRX1F ddr1_blue  (.D0(vc_tb[0]), .D1(vc_tb[1]), .Q(dvi_p[0]), .SCLK(bclk), .RST(1'b0));
+		end else if (VMODES != 0) begin : g_oddr2
+			ODDRX2F ddr2_clock (.D0(vc_tc[0]), .D1(vc_tc[1]), .D2(vc_tc[2]), .D3(vc_tc[3]),
+				.ECLK(vc_eclk), .SCLK(vc_sclk), .RST(1'b0), .Q(dvi_p[3]));
+			ODDRX2F ddr2_red   (.D0(vc_tr[0]), .D1(vc_tr[1]), .D2(vc_tr[2]), .D3(vc_tr[3]),
+				.ECLK(vc_eclk), .SCLK(vc_sclk), .RST(1'b0), .Q(dvi_p[2]));
+			ODDRX2F ddr2_green (.D0(vc_tg[0]), .D1(vc_tg[1]), .D2(vc_tg[2]), .D3(vc_tg[3]),
+				.ECLK(vc_eclk), .SCLK(vc_sclk), .RST(1'b0), .Q(dvi_p[1]));
+			ODDRX2F ddr2_blue  (.D0(vc_tb[0]), .D1(vc_tb[1]), .D2(vc_tb[2]), .D3(vc_tb[3]),
+				.ECLK(vc_eclk), .SCLK(vc_sclk), .RST(1'b0), .Q(dvi_p[0]));
+		end else begin : g_oddr1
+			ODDRX1F ddr0_clock (.D0(out_tmds_clk   [0] ), .D1(out_tmds_clk   [1] ), .Q(dvi_p[3]), .SCLK(bclk), .RST(1'b0));
+			ODDRX1F ddr0_red   (.D0(out_tmds_red   [0] ), .D1(out_tmds_red   [1] ), .Q(dvi_p[2]), .SCLK(bclk), .RST(1'b0));
+			ODDRX1F ddr0_green (.D0(out_tmds_green [0] ), .D1(out_tmds_green [1] ), .Q(dvi_p[1]), .SCLK(bclk), .RST(1'b0));
+			ODDRX1F ddr0_blue  (.D0(out_tmds_blue  [0] ), .D1(out_tmds_blue  [1] ), .Q(dvi_p[0]), .SCLK(bclk), .RST(1'b0));
+		end
+	endgenerate
 `endif
 
 `ifdef GPU_DDMI_AUDIO
@@ -1006,12 +1301,12 @@ module gpu_video #(
 		.in_vga_green(ddmi_green),
 		.in_vga_blue(ddmi_blue),
 		.in_vga_blank(!is_visible),
-		.in_vga_vsync(vsync),
-		.in_vga_hsync(hsync),
-		.out_tmds_red(out_tmds_red),
-		.out_tmds_green(out_tmds_green),
-		.out_tmds_blue(out_tmds_blue),
-		.out_tmds_clk(out_tmds_clk)
+		.in_vga_vsync(vsync_w),
+		.in_vga_hsync(hsync_w),
+		.out_tmds_red(ddmi_tmds_red),
+		.out_tmds_green(ddmi_tmds_green),
+		.out_tmds_blue(ddmi_tmds_blue),
+		.out_tmds_clk(ddmi_tmds_clk)
 	);
 
 `endif
@@ -1315,8 +1610,8 @@ module gpu_video #(
 	// video timing: h_disp_start and friends are at the top of the
 	// module body, ahead of their first use.
 
-	assign is_visible = (hc >= h_disp_start && vc >= v_disp_start &&
-		hc < h_disp_stop && vc < v_disp_stop);
+	assign is_visible = (hc >= hds && vc >= vds &&
+		hc < hde && vc < vde);
 
 	// VERTICAL blanking only -- deliberately not !is_visible, which is
 	// also true during every horizontal blanking interval and would
@@ -1334,12 +1629,9 @@ module gpu_video #(
 	// at the end. Written out in full it would look correct, would
 	// synthesise to the same thing after constant propagation, and
 	// would quietly mislead the next person to read it.
-	wire vblank_p = (vc < v_disp_start);
+	wire vblank_p = (vc < vds);
 
-	assign hsync = (hc < h_front_porch) ||
-		(hc >= h_front_porch + h_pulse_width);
-	assign vsync = (vc < v_front_porch) ||
-		(vc >= v_front_porch + v_pulse_width);
+	// hsync_w, vsync_w: with the mode's timing, at the top of the file
 
 	// video_mode crosses from the wishbone clock into pclk. Two flops
 	// handle metastability, but two flops alone are NOT enough for a
@@ -1426,7 +1718,9 @@ module gpu_video #(
 	wire [9:0] vy_adopt = (!vp_cap) ? 10'd0 :
 		(!wrap_cap && vy_cap > 10'd240) ? 10'd240 : vy_cap;
 
-	always @(posedge pclk) begin
+	always @(posedge pclk) if (pen) begin
+		vm_s0 <= vmode;
+		vm_s1 <= vm_s0;
 		video_mode_sync0 <= video_mode;
 		video_mode_sync1 <= video_mode_sync0;
 		bright_sync0 <= video_bright;
@@ -1477,6 +1771,8 @@ module gpu_video #(
 			win_active <= 1'b0;
 			desk_cap <= 1'b0;
 			desk_active <= 1'b0;
+			m_act <= 2'd0;
+			{ tm_pos, tm_vpe, tm_vfp, tm_vde, tm_vds, tm_hpe, tm_hfp, tm_hde, tm_hds } <= tm_of(2'd0);
 		end else begin
 			if (view_edge) begin
 				game_cap <= game_en;
@@ -1494,7 +1790,12 @@ module gpu_video #(
 				wx1_cap <= win_x1;
 				wy1_cap <= win_y1;
 			end
-			if (hc == h_disp_stop - 1 && vc == v_disp_stop - 1) begin
+			if (hc == hde - 11'd1 && vc == vde - 11'd1) begin
+				// the mode: the next frame is scanned in it. Game mode and
+				// colour are 640x480's only; in another mode they wait,
+				// off, for software to come back to it.
+				m_act <= vm_ok;
+				{ tm_pos, tm_vpe, tm_vfp, tm_vde, tm_vds, tm_hpe, tm_hfp, tm_hde, tm_hds } <= tm_next;
 				video_mode_active <= video_mode_sync1;
 				bright_active <= bright_sync1;
 				ddmi_en_active <= ddmi_en_sync1;
@@ -1502,17 +1803,17 @@ module gpu_video #(
 				ddmi_fs_active <= ddmi_fs_sync1;
 				ddmi_n_active <= ddmi_n_sync1;
 				ddmi_cts_active <= ddmi_cts_sync1;
-				game_active <= game_cap;
+				game_active <= game_cap && vm_m0;
 				wrap_active <= wrap_cap;
-				vx_active <= vx_adopt;
-				vy_active <= vy_adopt;
-				col_active <= col_cap && (COLOR_AVAIL != 0);
-				ck_active <= CK_ON && ck_cap && col_cap;
+				vx_active <= vm_m0 ? vx_adopt : 10'd0;
+				vy_active <= vm_m0 ? vy_adopt : 10'd0;
+				col_active <= col_cap && (COLOR_AVAIL != 0) && vm_m0;
+				ck_active <= CK_ON && ck_cap && col_cap && vm_m0;
 				np_active <= np_cap;
 				off_active <= off_cap;
 				// the window only in desktop mode: game mode wins
-				win_active <= WIN_ON && win_cap && !vp_cap;
-				desk_active <= DESK_ON && win_cap && desk_cap && !vp_cap;
+				win_active <= WIN_ON && win_cap && !vp_cap && vm_m0;
+				desk_active <= DESK_ON && win_cap && desk_cap && !vp_cap && vm_m0;
 				wx0_active <= wx0_cap;
 				wy0_active <= wy0_cap;
 				wx1_active <= wx1_cap;
@@ -1623,13 +1924,13 @@ module gpu_video #(
 	// and still just does row*20 into gb_adr_o.
 	wire [10:0] vc_next = vc + 11'd1;
 	wire [9:0] scan_row =
-		(vc_next >= v_disp_start && vc_next < v_disp_stop) ?
-			(vc_next - v_disp_start) : 10'd0;
+		(vc_next >= vds && vc_next < vde) ?
+			(vc_next - vds) : 10'd0;
 	wire [9:0] half_row = v_half ? { 1'b0, scan_row[9:1] } : scan_row;
 	wire [10:0] row_sum = vp_on ?
-		({ 1'b0, vy_active } + { 1'b0, half_row }) : { 1'b0, scan_row };
+		({ 1'b0, vy_active } + { 1'b0, half_row }) : { 1'b0, half_row };
 	wire [9:0] fb_row =
-		(row_sum >= 11'd480) ? (row_sum - 11'd480) : row_sum[9:0];
+		(vp_on && row_sum >= 11'd480) ? (row_sum - 11'd480) : row_sum[9:0];
 
 	// -- colour: the "other half" row, for planes offset by 240 --
 	//
@@ -1650,6 +1951,17 @@ module gpu_video #(
 		(alt_sum >= 11'd480) ? (alt_sum - 11'd480) : alt_sum[9:0];
 	wire [14:0] alt_base_next = ({ 5'd0, fb_alt } << 4) + ({ 5'd0, fb_alt } << 2);
 	reg [14:0] alt_refill;
+
+	// WIDE: the row's VRAM word address at the mode's row length -- 20
+	// words (640), 25 (800), 32 (1024) or 40 (1280) -- crossing to the
+	// fetch with y_refill, as alt_refill does
+	wire [14:0] fbr15 = { 5'd0, fb_row };
+	wire [14:0] rb_next =
+		(mode == 2'd1) ? ((fbr15 << 4) + (fbr15 << 3) + fbr15) :
+		(mode == 2'd2) ? (fbr15 << 5) :
+		(mode == 2'd3 && NATIVE720 != 0) ? ((fbr15 << 5) + (fbr15 << 3)) :
+		((fbr15 << 4) + (fbr15 << 2));
+	reg [14:0] rb_refill;
 
 	// -- colour: the second sheet's two row bases (GAME_PLANES 6/8) --
 	//
@@ -1674,7 +1986,7 @@ module gpu_video #(
 	wire [14:0] s1a_next = (NP == 6) ? s1r_next : (alt_refill + 15'd9600);
 	reg [14:0] s1r_refill, s1a_refill;
 
-	always @(posedge pclk) begin
+	always @(posedge pclk) if (pen) begin
 		s1r_refill <= s1r_next;
 		s1a_refill <= s1a_next;
 	end
@@ -1694,8 +2006,9 @@ module gpu_video #(
 	// x_phase is the doubling phase. Cleared with the load below, so
 	// every line starts on the same phase and the two halves of a
 	// doubled pixel never straddle a line boundary.
-	wire [9:0] x_next =
-		(vp_on && wrap_active && x == 10'd639) ? 10'd0 : (x + 10'd1);
+	wire [10:0] x_next =
+		(vp_on && wrap_active && x == 11'd639) ? 11'd0 :
+		(x + (pair2 ? 11'd2 : 11'd1));
 
 	// true on the last clock of a source pixel
 	wire x_step = (x_phase == (h_div - 3'd1));
@@ -1703,10 +2016,10 @@ module gpu_video #(
 	// x runs from the first visible clock -- or, while colour is on
 	// (VGA/DDMI), from the clock before it, so the palette's registered
 	// read lands on the raster: see x_lead with the palette above.
-	wire x_run = (hc >= h_disp_start) ||
-		(x_lead && (hc == h_disp_start - 11'd1));
+	wire x_run = (hc >= hds) ||
+		(x_lead && (hc == hds - 11'd1));
 
-	always @(posedge pclk) begin
+	always @(posedge pclk) if (pen) begin
 
 		// The pixel index runs on its own, outside the hc/vc chain
 		// below, because that chain deliberately does nothing on the
@@ -1729,7 +2042,7 @@ module gpu_video #(
 				x_phase <= x_phase + 2'd1;
 			end
 		end else begin
-			x <= vx_active;
+			x <= { 1'b0, vx_active };
 			x_phase <= 2'd0;
 		end
 
@@ -1741,10 +2054,10 @@ module gpu_video #(
 			y <= 0;
 			y_refill <= 0;
 			alt_refill <= 15'd0;
-		end else if (hc == h_disp_stop - 1) begin
+		end else if (hc == hde - 11'd1) begin
 			refill_toggle <= ~refill_toggle;
 			hc <= 0;
-			if (vc == v_disp_stop - 1) begin
+			if (vc == vde - 11'd1) begin
 				vc <= 0;
 				// end of the last visible line: one frame has been
 				// scanned out. Same edge the viewport and the colour
@@ -1757,6 +2070,7 @@ module gpu_video #(
 				vc <= vc + 1;
 				y <= fb_row;
 				y_refill <= fb_row;
+				rb_refill <= rb_next;
 				alt_refill <= alt_base_next;
 			end
 		end else begin
@@ -1780,7 +2094,20 @@ module gpu_video #(
 	// The row goes into the line buffer (pbuf, below) at words 0..19,
 	// row 0 -- plane p is row p -- not into a 640-bit register: see
 	// this file's header.
-	wire [14:0] row_base = (y_refill_sync1 << 4) + (y_refill_sync1 << 2);   // y*20
+	// The mode, into this domain: it changes only at a frame boundary,
+	// in blanking, many lines before the first refill it matters to.
+	reg [14:0] rb_sync0, rb_sync1;
+	reg [1:0] m_c0, m_c1;
+	wire m0_c = (m_c1 == 2'd0);
+	wire [5:0] rw_c = (WIDE == 0) ? 6'd20 :
+		(m_c1 == 2'd1) ? 6'd25 : (m_c1 == 2'd2) ? 6'd32 :
+		(m_c1 == 2'd3 && NATIVE720 != 0) ? 6'd40 : 6'd20;
+
+	// WIDE: rows of 25, 32 or 40 words in the other modes. The row's
+	// word address is worked out in the pixel domain (rb_refill, with
+	// y_refill and on the same edge) and crosses as alt_refill does.
+	wire [14:0] row_base = (WIDE != 0) ? rb_sync1 :
+		((y_refill_sync1 << 4) + (y_refill_sync1 << 2));   // y*20
 	assign gb_row_o = y_refill_sync1;
 
 	// -- colour: the plane fetch --
@@ -1993,6 +2320,10 @@ module gpu_video #(
 	always @(posedge clk) begin
 		alt_sync0 <= alt_refill;
 		alt_sync1 <= alt_sync0;
+		rb_sync0 <= rb_refill;
+		rb_sync1 <= rb_sync0;
+		m_c0 <= mode;
+		m_c1 <= m_c0;
 		s1r_sync0 <= s1r_refill;
 		s1r_sync1 <= s1r_sync0;
 		s1a_sync0 <= s1a_refill;
@@ -2003,8 +2334,8 @@ module gpu_video #(
 
 	always @(posedge clk) begin
 		if (refill) begin
-			refill_words <= 21;
-			gb_adr_o <= row_base + 19;
+			refill_words <= rw_c + 6'd1;
+			gb_adr_o <= row_base + { 9'd0, rw_c } - 15'd1;
 			pf_run <= 1'b0;
 		end else if (refill_words > 0) begin
 			if (refill_words > 2)
@@ -2012,7 +2343,7 @@ module gpu_video #(
 			refill_words <= refill_words - 1;
 			// row done: plane 1's row base, and start (the other
 			// planes' bases are latched on the same edge, below)
-			if (refill_words == 6'd1 && COLOR_AVAIL != 0) begin
+			if (refill_words == 6'd1 && COLOR_AVAIL != 0 && m0_c) begin
 				pf_run <= 1'b1;
 				pf_k <= 3'd1;
 				pf_w <= 5'd0;
@@ -2073,14 +2404,14 @@ module gpu_video #(
 	// 19 first: the word on gb_dat_i is word refill_words - 1 (issued
 	// two edges earlier, at refill_words + 1). The plane stores start
 	// two edges after the row's last, so the two never meet.
-	wire row_we = !refill && (refill_words != 6'd0) && (refill_words != 6'd21);
-	wire [4:0] row_w = refill_words[4:0] - 5'd1;
+	wire row_we = !refill && (refill_words != 6'd0) && (refill_words != rw_c + 6'd1);
+	wire [5:0] row_w = refill_words - 6'd1;
 
 	always @(posedge clk) begin
 		if (pf_v2)
 			pbuf[pf_a2] <= gb_dat_i;
 		else if (row_we)
-			pbuf[{ 3'd0, row_w }] <= gb_dat_i;
+			pbuf[{ 2'd0, row_w }] <= gb_dat_i;
 	end
 
 	// cbuf's write port: a cursor row from socctl's CURDATA, or a
@@ -2136,7 +2467,7 @@ module gpu_video #(
 	reg [31:0] pq;
 	reg [7:0] pra;
 	reg [3:0] ps;
-	reg [4:0] pw;
+	reg [5:0] pw;
 	reg pre;
 	// chunky: the segment and word the next pass reads
 	reg [1:0] ck_s;
@@ -2145,19 +2476,22 @@ module gpu_video #(
 	// the pass's last step, on which cur takes nxt during a preload
 	localparam [3:0] PS_END = NP + 3;
 
-	wire [4:0] xw = x[9:5];
-	wire [5:0] xw2_sum = { 1'b0, xw } + 6'd2;
-	wire [4:0] xw2 = (xw2_sum >= 6'd20) ? (xw2_sum[4:0] - 5'd20) : xw2_sum[4:0];
-	wire [5:0] pw1_sum = { 1'b0, pw } + 6'd1;
-	wire [4:0] pw1 = (pw1_sum >= 6'd20) ? (pw1_sum[4:0] - 5'd20) : pw1_sum[4:0];
-	wire [4:0] pw_dx = (pw >= 5'd10) ? (pw - 5'd10) : (pw + 5'd10);
-	wire [4:0] pw_k1 = off_use[0] ? pw_dx : pw;
-	wire [4:0] pw_k2 = off_use[2] ? pw_dx : pw;
-	wire [4:0] pw_k3 = off_use[4] ? pw_dx : pw;
+	// Modulo 20 at 640x480 (the 20-word torus); in the other modes the
+	// row is just read on -- the word after the last is never shown.
+	wire [5:0] xw = x[10:5];
+	wire [5:0] xw2_sum = xw + 6'd2;
+	wire [5:0] xw2 = (mode == 2'd0 && xw2_sum >= 6'd20) ? (xw2_sum - 6'd20) : xw2_sum;
+	wire [5:0] pw1_sum = pw + 6'd1;
+	wire [5:0] pw1 = (mode == 2'd0 && pw1_sum >= 6'd20) ? (pw1_sum - 6'd20) : pw1_sum;
+	wire [4:0] pw_dx = (pw[4:0] >= 5'd10) ? (pw[4:0] - 5'd10) : (pw[4:0] + 5'd10);
+	wire [4:0] pw_k1 = off_use[0] ? pw_dx : pw[4:0];
+	wire [4:0] pw_k2 = off_use[2] ? pw_dx : pw[4:0];
+	wire [4:0] pw_k3 = off_use[4] ? pw_dx : pw[4:0];
 
 	// A word lasts 32 pixels in planes, 4 in chunky.
-	wire x_cross = x_run && x_step && (ck_on ? (x[1:0] == 2'd3) : (x[4:0] == 5'd31));
-	wire pre_go = (hc == h_disp_start - 11'd24);
+	wire x_cross = x_run && x_step && (ck_on ? (x[1:0] == 2'd3) :
+		pair2 ? (x[4:0] == 5'd30) : (x[4:0] == 5'd31));
+	wire pre_go = (hc == hds - 11'd24);
 
 	// -- the hardware cursor: read side, pixel domain (docs/cursor.md) --
 	//
@@ -2183,11 +2517,11 @@ module gpu_video #(
 	localparam [10:0] CF_HC = 11'd64;
 
 	reg [5:0] c_a;
-	reg [9:0] c_px;
+	reg [10:0] c_px;
 	// The pointer in framebuffer coordinates: curs_x/y as they are, or,
 	// with curs_scr in game mode, half of them (the view at (0, 0)).
 	wire c_half = curs_scr && game_active;
-	wire [9:0] c_fx = c_half ? { 1'b0, curs_x[9:1] } : curs_x;
+	wire [10:0] c_fx = c_half ? { 2'b0, curs_x[9:1] } : curs_x;
 	wire [9:0] c_fy = c_half ? { 1'b0, curs_y[9:1] } : curs_y;
 	reg c_rv;
 	reg c_rd, c_lat;
@@ -2195,8 +2529,11 @@ module gpu_video #(
 
 	wire c_on = (CURSOR_AVAIL != 0);
 	wire [10:0] c_dy = { 1'b0, y } - { 1'b0, c_fy };
-	wire [10:0] c_dx = { 1'b0, x } - { 1'b0, c_px };
-	wire c_cin = c_rv && ((c_dx[10:3] == 8'h00) || (c_dx[10:3] == 8'hff));
+	wire [11:0] c_dx = { 1'b0, x } - { 1'b0, c_px };
+	wire c_cin = c_rv && ((c_dx[11:3] == 9'h000) || (c_dx[11:3] == 9'h1ff));
+	// the second pixel of a pair2 clock: column x + 1
+	wire [11:0] c_dx1 = c_dx + 12'd1;
+	wire c_cin1 = c_rv && ((c_dx1[11:3] == 9'h000) || (c_dx1[11:3] == 9'h1ff));
 	wire [15:0] c_rowv = (COLOR_AVAIL != 0) ? c_row : cb_q[15:0];
 
 	// cbuf's read address: the cursor's row on its one clock, the
@@ -2213,13 +2550,14 @@ module gpu_video #(
 	wire [31:0] cb_lq = cb_ra[8] ? { {(32 - PALW){1'b0}}, pall[cb_ra[7:0] & PAL_MASK] } :
 		{ 16'd0, curl[cb_ra[5:0]] };
 
-	always @(posedge pclk) begin
+	always @(posedge pclk) if (pen) begin
 		if (CBUF_LUTRAM == 0)
 			cb_q <= cbuf[cb_ra];
 		else
 			cb_q <= cb_lq;
 		cidx_o <= cidx;
 		c_d <= c_on && c_cin && c_rowv[{ ~c_dx[3], c_dx[2:0] }];
+		c_d1 <= c_on && pair2 && c_cin1 && c_rowv[{ ~c_dx1[3], c_dx1[2:0] }];
 		c_rd <= c_on && (hc == CF_HC);
 		c_lat <= c_rd;
 		if (c_lat)
@@ -2232,7 +2570,7 @@ module gpu_video #(
 		end
 	end
 
-	always @(posedge pclk) begin
+	always @(posedge pclk) if (pen) begin
 		pq <= pbuf[pra];
 
 		if (!resetn) begin
@@ -2315,11 +2653,11 @@ module gpu_video #(
 				// wide as the planes.
 				ps <= ps + 4'd1;
 				case (ps)
-					4'd1: pra <= { 3'd0, pw };
+					4'd1: pra <= { 2'd0, pw };
 					4'd2: pra <= { 3'd1, pw_k1 };
 					4'd3: begin pra <= { 3'd2, pw_k2 }; nxt0 <= pq; end
 					4'd4: begin pra <= { 3'd3, pw_k3 }; nxt1 <= pq; end
-					4'd5: begin if (NP > 4) pra <= { 3'd4, pw };    nxt2 <= pq; end
+					4'd5: begin if (NP > 4) pra <= { 3'd4, pw[4:0] }; nxt2 <= pq; end
 					4'd6: begin if (NP > 5) pra <= { 3'd5, pw_k1 }; nxt3 <= pq; end
 					4'd7: begin if (NP > 6) pra <= { 3'd6, pw_k2 }; nxt4 <= pq; end
 					4'd8: begin if (NP > 7) pra <= { 3'd7, pw_k3 }; nxt5 <= pq; end

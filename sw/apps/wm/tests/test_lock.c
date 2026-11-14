@@ -180,7 +180,7 @@ static bool k_install(void) {
 
 // -- the screen --
 
-static uint8_t snap[WM_FB_H][WM_FB_W];
+static uint8_t snap[Z_FB_640_H][Z_FB_640_W];
 
 static void take(void) {
 	for (int y = 0; y < WM_FB_H; y++)

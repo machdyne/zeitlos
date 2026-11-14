@@ -86,11 +86,31 @@
 
 module ddmi_island (
 	input pclk,
+	// 1: this clock is a character. gpu_ddmi.v (one character a pixel
+	// clock) ties it high; gpu_vchar.v, whose character clock is faster
+	// than its characters in the slower modes, raises it on each one.
+	input ce,
 	input en,               // frame-adopted, from gpu_video.v
 	input [10:0] hc,
 	input [10:0] vc,
 	input hsync,
 	input vsync,
+
+	// -- where things are, for the mode on the wire (docs/screen_modes.md) --
+	//
+	// ioff: the island starts ioff characters later than hc 12 (so the
+	// whole schedule below moves with it); vpre0: the first character of
+	// the video preamble, ten before the picture; vact0: the first
+	// picture line; vgcp: the line general control goes on (the first
+	// line of vsync), with the InfoFrames on the three after it;
+	// avi_sel: which AVI InfoFrame -- 0 VIC 1 (640x480, 4:3), 1 VIC 4
+	// (1280x720, 16:9), 2 no VIC (a computer mode, 4:3). gpu_ddmi.v
+	// passes 640x480's constants, and synthesis folds them.
+	input [10:0] ioff,
+	input [10:0] vpre0,
+	input [10:0] vact0,
+	input [10:0] vgcp,
+	input [1:0] avi_sel,
 
 	// per channel: encoder MODE (tmds_encoder.v), TERC4 nibble, and
 	// the control bits {C1, C0} (channels 1 and 2 only; channel 0's
@@ -115,26 +135,32 @@ module ddmi_island (
 	input [31:0] aud_wdata
 );
 
-	localparam [10:0] V_ACTIVE0 = 11'd45;
-
 	// general control: clear AV mute
 	localparam [247:0] PK_GCP = 248'h00000000000010000000000000100000000000001000000000000010000003;
 	// AVI InfoFrame: VIC 1, RGB full range, 4:3, IT, underscan
 	localparam [247:0] PK_AVI = 248'h000000000000000000000000000000000000000000000001881812bc0d0282;
+	// ... VIC 4 (1280x720p60), 16:9; and no VIC (800x600, 1024x768), 4:3
+	localparam [247:0] PK_AVI_720 = 248'h000000000000000000000000000000000000000000000004882812a90d0282;
+	localparam [247:0] PK_AVI_PC  = 248'h000000000000000000000000000000000000000000000000881812bd0d0282;
+	wire [247:0] pk_avi = (avi_sel == 2'd1) ? PK_AVI_720 : (avi_sel == 2'd2) ? PK_AVI_PC : PK_AVI;
 	// SPD InfoFrame: Zeitlos, PC general
 	localparam [247:0] PK_SPD = 248'h000009000000000000000000736f6c7469655a00736f6c7469655a86190183;
 	// Audio InfoFrame: 2 channels, the rest from the stream
 	localparam [247:0] PK_AIF = 248'h000000000000000000000000000000000000000000000000000001700a0184;
 
 	// -- where are we --
-	wire in_pre   = en && hc >= 11'd12 && hc < 11'd20;
-	wire in_gb    = en && (hc == 11'd20 || hc == 11'd21 || hc == 11'd86 || hc == 11'd87);
-	wire in_pkt   = en && hc >= 11'd22 && hc < 11'd86;
-	wire vline    = en && vc >= V_ACTIVE0;
-	wire in_vpre  = vline && hc >= 11'd150 && hc < 11'd158;
-	wire in_vgb   = vline && (hc == 11'd158 || hc == 11'd159);
+	//
+	// hx is hc with the island's offset taken off: the island's
+	// characters are placed by hx, the video preamble by hc itself.
+	wire [10:0] hx = hc - ioff;
+	wire in_pre   = en && hx >= 11'd12 && hx < 11'd20;
+	wire in_gb    = en && (hx == 11'd20 || hx == 11'd21 || hx == 11'd86 || hx == 11'd87);
+	wire in_pkt   = en && hx >= 11'd22 && hx < 11'd86;
+	wire vline    = en && vc >= vact0;
+	wire in_vpre  = vline && hc >= vpre0 && hc < vpre0 + 11'd8;
+	wire in_vgb   = vline && (hc == vpre0 + 11'd8 || hc == vpre0 + 11'd9);
 
-	wire [10:0] off = hc - 11'd22;
+	wire [10:0] off = hx - 11'd22;
 	wire slot = off[5];
 	wire [4:0] c = off[4:0];
 
@@ -185,8 +211,8 @@ module ddmi_island (
 	reg [7:0] cs_idx = 8'd0;           // frame within the 192-frame block
 
 	wire [2:0] take = (avail > 5'd4) ? 3'd4 : avail[2:0];
-	wire [1:0] pop_i = hc[1:0];        // hc 12..15 -> 0..3
-	wire popping = snd && hc >= 11'd12 && hc < 11'd16 && { 1'b0, pop_i } < nsamp;
+	wire [1:0] pop_i = hx[1:0];        // hx 12..15 -> 0..3
+	wire popping = ce && snd && hx >= 11'd12 && hx < 11'd16 && { 1'b0, pop_i } < nsamp;
 	wire cs_bit = (cs_idx == 8'd2) ? 1'b1 :
 		(cs_idx >= 8'd24 && cs_idx <= 8'd27) ? fs_code[cs_idx[1:0]] : 1'b0;
 	wire [31:0] fword = fmem[rbin[3:0]];
@@ -201,7 +227,7 @@ module ddmi_island (
 			rgray <= wbin_r ^ (wbin_r >> 1);
 			nsamp <= 3'd0;
 		end else begin
-			if (hc == 11'd11)
+			if (ce && hx == 11'd11)
 				nsamp <= take;
 			if (popping) begin
 				case (pop_i)
@@ -283,16 +309,16 @@ module ddmi_island (
 
 	wire [2:0] kind =
 		!slot ? ((nsamp != 3'd0) ? 3'd1 : 3'd0) :
-		(vc == 11'd10) ? 3'd2 :
-		(vc == 11'd11) ? 3'd3 :
-		(vc == 11'd12) ? 3'd4 :
-		(snd && vc == 11'd13) ? 3'd5 :
+		(vc == vgcp) ? 3'd2 :
+		(vc == vgcp + 11'd1) ? 3'd3 :
+		(vc == vgcp + 11'd2) ? 3'd4 :
+		(snd && vc == vgcp + 11'd3) ? 3'd5 :
 		(snd && vc[2:0] == 3'd4) ? 3'd6 : 3'd0;
 
 	wire [8:0] bits =
 		(kind == 3'd1) ? pick(pk_aud, ch, c2) :
 		(kind == 3'd2) ? pick(PK_GCP, ch, c2) :
-		(kind == 3'd3) ? pick(PK_AVI, ch, c2) :
+		(kind == 3'd3) ? pick(pk_avi, ch, c2) :
 		(kind == 3'd4) ? pick(PK_SPD, ch, c2) :
 		(kind == 3'd5) ? pick(PK_AIF, ch, c2) :
 		(kind == 3'd6) ? { acr_b, acr_a, acr_b, acr_a, acr_b, acr_a, acr_b, acr_a, acr_hd } :
@@ -333,7 +359,9 @@ module ddmi_island (
 	wire b3b = sdata ? s3b : p3[1];
 
 	always @(posedge pclk) begin
-		if (!in_pkt || c == 5'd31) begin
+		if (!ce) begin
+			// not a character: hold
+		end else if (!in_pkt || c == 5'd31) begin
 			ph <= 8'd0; p0 <= 8'd0; p1 <= 8'd0; p2 <= 8'd0; p3 <= 8'd0;
 		end else begin
 			ph <= hdata ? ecc1(ph, hd) : (ph >> 1);
@@ -345,7 +373,7 @@ module ddmi_island (
 	end
 
 	// -- the characters --
-	wire first = (hc == 11'd22);
+	wire first = (hx == 11'd22);
 
 	assign mode0 = (in_gb || in_pkt) ? 2'd1 : in_vgb ? 2'd2 : 2'd0;
 	assign t0 = in_gb ? { 2'b11, vsync, hsync } :

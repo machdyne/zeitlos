@@ -998,6 +998,31 @@ typedef struct {
 #define Z_WM_WANTS_TEXT_ON(v)    (((v) >> 31) & 1u)
 #define Z_WM_WANTS_TEXT_Y(v)     ((int)((v) & 0xFFFFu))
 
+// -- the screen mode (docs/screen_modes.md) --
+//
+// Z_WM_SCREEN -- wm -> every window's owner (tag 0; Z_UINT32
+// Z_WM_PACK_SCREEN()): the screen is a new size, w x h, in mode m
+// (Z_VMODE_*, zsoc.h). zwin.c reads the framebuffer's geometry again
+// (z_fb_geometry_refresh()) before the app sees it. Windows that no
+// longer fit have already been moved or made smaller, with
+// Z_WM_WINDOW_MOVED / Z_WM_WINDOW_RESIZED as for any move or resize,
+// and a Z_WM_REDRAW follows for every window. An app that lays itself
+// out against the screen (a dialog's place, a full-screen show) reads
+// z_screen_size() again; one that does not can ignore it.
+#define Z_WM_SCREEN              (Z_SUBJ_WM + 41)
+#define Z_WM_PACK_SCREEN(m, w, h) \
+	((((uint32_t)(m) & 0xFu) << 24) | (((uint32_t)(w) & 0xFFFu) << 12) | ((uint32_t)(h) & 0xFFFu))
+#define Z_WM_UNPACK_SCREEN_MODE(v)  (((uint32_t)(v) >> 24) & 0xFu)
+#define Z_WM_UNPACK_SCREEN_W(v)     ((int)(((uint32_t)(v) >> 12) & 0xFFFu))
+#define Z_WM_UNPACK_SCREEN_H(v)     ((int)((uint32_t)(v) & 0xFFFu))
+
+// Z_WM_SCREEN_MODE -- app -> wm (Z_UINT32: the mode, Z_VMODE_*): change
+// to it, as Ctrl+Super+Esc does -- with the question whether to keep it,
+// and back to the mode before after fifteen seconds without an answer.
+// A mode this machine does not have is ignored. settings' Screen page.
+// z_screen_set_mode() in zeitlos.h.
+#define Z_WM_SCREEN_MODE         (Z_SUBJ_WM + 42)
+
 // x and y are 12 bits: the low 10 in 9:0 and 19:10 as always, the
 // top two of x in 21:20 and of y in 23:22 (docs/screen.md).
 #define Z_WM_PACK_PLACE(x, y) \

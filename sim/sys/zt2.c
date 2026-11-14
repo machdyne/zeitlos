@@ -37,7 +37,7 @@ static int t2bad;
 // pixel (x, y) of chunky VRAM: four 80-pixel segments a line
 static void put_px(zsys_t *s, int x, int y, uint8_t v) {
 	uint32_t seg = (uint32_t)x / 80, r = (uint32_t)y + ((seg & 1) ? 240u : 0u) + ((seg & 2) ? 480u : 0u);
-	uint32_t b = (r * ZSYS_STRIDE + (uint32_t)x % 80) & (s->vram_size - 1);
+	uint32_t b = (r * ZSYS_STRIDE_640 + (uint32_t)x % 80) & (s->vram_size - 1);
 	s->vram[b] = v;
 }
 

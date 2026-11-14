@@ -151,8 +151,8 @@
 // an explicit stride -- but it does mean a full-document blit needs no
 // bit shifting at all when the viewport happens to land on a word
 // boundary.
-#define CANVAS_W      Z_SCREEN_W
-#define CANVAS_H      Z_SCREEN_H
+#define CANVAS_W      Z_FB_640_W	// the page, not the screen (docs/screen_modes.md)
+#define CANVAS_H      Z_FB_640_H
 #define CANVAS_WORDS  (CANVAS_W / 32)
 
 // Bit order matches the framebuffer exactly: pixel x lives at bit

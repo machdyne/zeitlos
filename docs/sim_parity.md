@@ -111,6 +111,13 @@ first -- built up a milestone at a time; milestone 1 has the headless
 part of it ([zsys.md](zsys.md), "The board"). It runs the release's
 kernel and core apps; only the gateware is replaced by the emulator.
 
+## Screen modes
+
+socctl's VMODE is emulated ([screen_modes.md](screen_modes.md)):
+`ZSYS_VMODES=wide` (the default, a 45F board), `dbl` (a 25F: 1280x720 is
+640x360) or `none`. The picture, the screenshot and the window take the
+mode's desktop size; the hardware's doubling is not drawn.
+
 ## Milestones
 
 Each one is a round: built, host-tested, and the docs updated.

@@ -57,11 +57,21 @@
  */
 
 module gpu_blit_wb #(
-    parameter GLYPH_ADDR_WIDTH = 12   // must match glyph_mem's ADDR_WIDTH
+    parameter GLYPH_ADDR_WIDTH = 12,  // must match glyph_mem's ADDR_WIDTH
+    // 1: the screen modes' other row lengths (docs/screen_modes.md):
+    // 100, 128 or 160 bytes a row at 800x600, 1024x768, 1280x720, from
+    // vmode. 0: 80 bytes, 640 pixels, always.
+    parameter WIDE = 0,
+    // WIDE without native 1280x720: mode 3 is a 640x360 desktop, rows
+    // of 80 bytes (rtl/gpu/gpu_video.v, NATIVE720)
+    parameter NATIVE720 = 1
 )
 (
     input wire clk,
     input wire rst,
+
+    // the screen mode (socctl's VMODE), with WIDE: the row length
+    input wire [1:0] vmode,
 
     // Wishbone SLAVE interface
     input  wire        wb_cyc_i,
@@ -572,8 +582,28 @@ module gpu_blit_wb #(
     // On a 94%-full Lakritz (lakritz_katze) that path set CLK_48's
     // fmax at 47.2 MHz. Same 32-bit result; one DSP and its routing
     // fewer.
-    wire [AW-1:0] final_y_row = (final_y << 6) + (final_y << 4);
-    wire [AW-1:0] dst_y_row = (work_dst_y << 6) + (work_dst_y << 4);
+    //
+    // WIDE: the row length by the mode -- 100 = 64 + 32 + 4, 128, 160 =
+    // 128 + 32 -- each still shifts and adds, chosen after the adds.
+    function [AW-1:0] row_of;
+        input [AW-1:0] yy;
+        input [1:0] m;
+        begin
+            if (WIDE == 0 || m == 2'd0 || (m == 2'd3 && NATIVE720 == 0))
+                row_of = (yy << 6) + (yy << 4);
+            else if (m == 2'd1)
+                row_of = (yy << 6) + (yy << 5) + (yy << 2);
+            else if (m == 2'd2)
+                row_of = (yy << 7);
+            else
+                row_of = (yy << 7) + (yy << 5);
+        end
+    endfunction
+    wire [AW-1:0] stride_b = (WIDE == 0 || vmode == 2'd0 ||
+        (vmode == 2'd3 && NATIVE720 == 0)) ? 17'd80 :
+        (vmode == 2'd1) ? 17'd100 : (vmode == 2'd2) ? 17'd128 : 17'd160;
+    wire [AW-1:0] final_y_row = row_of(final_y, vmode);
+    wire [AW-1:0] dst_y_row = row_of(work_dst_y, vmode);
     wire [CW-1:0] right_word_boundary = ((final_x_end + 31) >> 5) << 5;
     wire [CW-1:0] word_span_width = right_word_boundary - left_word_boundary;
     wire [CW-1:0] word_span_words = word_span_width >> 5;
@@ -1487,8 +1517,8 @@ module gpu_blit_wb #(
                             state <= ST_IDLE;
                         end else begin
                             cur_y <= cur_y + 10'd1;
-                            line_start_addr <= line_start_addr + SCREEN_STRIDE;
-                            current_word_addr <= line_start_addr + SCREEN_STRIDE;
+                            line_start_addr <= line_start_addr + stride_b;
+                            current_word_addr <= line_start_addr + stride_b;
 
                             // next source row. Kept as a running add
                             // rather than base + line*stride so there is
@@ -1530,7 +1560,7 @@ module gpu_blit_wb #(
 
                 ST_GLYPH_SETUP: begin
                     g_bit_offset <= work_dst_x[4:0];
-                    g_line_addr <= work_dst_y * SCREEN_STRIDE + ((work_dst_x >> 5) * 4);
+                    g_line_addr <= dst_y_row + ((work_dst_x >> 5) * 4);
                     g_row <= 32'h0;
 
                     // cur_y is shared with the fill/copy path, which
@@ -1713,7 +1743,7 @@ module gpu_blit_wb #(
                         state <= ST_IDLE;
                     end else begin
                         g_row <= g_row + 1;
-                        g_line_addr <= g_line_addr + SCREEN_STRIDE;
+                        g_line_addr <= g_line_addr + stride_b;
                         cur_y <= cur_y + 10'd1;
                         state <= ST_GLYPH_FETCH;
                     end

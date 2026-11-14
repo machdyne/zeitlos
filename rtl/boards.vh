@@ -509,6 +509,9 @@
 `define GPU_VGA
 // all three bits of each channel's resistor DAC (boards/obst_v0.lpf)
 `define GPU_VGA_DAC3
+// 640x480 only (docs/screen_modes.md): a 1MB machine's core apps are
+// the small build, whose RAM is spoken for, and which has no screen modes
+`define NO_VIDEO_MODES
 `define UART0
 `define USB_HID
 `define SPI_SDCARD
@@ -1928,6 +1931,85 @@
 `ifndef GPU_DDMI_AUDIO
 `define GPU_DDMI_AUDIO
 `endif
+`endif
+`endif
+`endif
+
+// -- Screen modes (docs/screen_modes.md) --
+//
+// VIDEO_MODES: the desktop's resolution is chosen at run time (socctl's
+// VMODE), from 640x480 and 1280x720 -- the 640x360 desktop shown twice
+// each way -- on every ECP5 desktop with a picture; with VIDEO_WIDE (the
+// 45F and 85F chips: the Makefile passes ECP5_BIG for DEVICE=45k or 85k)
+// from 800x600, 1024x768 and a native 1280x720 too, with 32K words of
+// VRAM. pll1 then makes 378, 75.6 and 37.8 MHz (rtl/clk/pll1.v).
+//
+// Not the console (game mode's 320x240 on 640x480, as it always was) or
+// a headless build, not composite, and not the families without
+// rtl/clk/pll1.v's clocks yet (Artix-7, GateMate). NO_VIDEO_MODES: a
+// 640x480-only desktop, exactly as before. NO_VIDEO_WIDE: a 45F or 85F
+// with the 25F boards' modes (640x480, and 1280x720 from 640x360) and
+// VRAM as before, for a board whose routing has no room for 64 DP16KD
+// of VRAM.
+//
+// Obst is the small build (a 1MB machine, docs/flash_apps.md), whose
+// apps have no screen modes. Said here as well as in its board block,
+// because a release build (ZSPEC) replaces that block with its spec.
+`ifdef BOARD_OBST
+`ifndef NO_VIDEO_MODES
+`define NO_VIDEO_MODES
+`endif
+`endif
+// DDMI_ODDRX2: the screen modes' serialiser is ODDRX2F (189 MHz in the
+// fabric) rather than ODDRX1F (378 MHz). ECP5 has ODDRX2F only in its
+// left and right banks, so only the boards whose HDMI pins are there:
+// Lakritz (L1, M1), Konfekt and Noir (M1, P1). Mozart, Sergei and ULX3S
+// have theirs along the top, and Schoko's (R5, P4) are not known to be
+// in a side bank. Keyed on the board, so a release build (ZSPEC) has it.
+`ifdef BOARD_LAKRITZ
+`define DDMI_ODDRX2
+`endif
+`ifdef BOARD_KONFEKT
+`define DDMI_ODDRX2
+`endif
+`ifdef BOARD_NOIR
+`define DDMI_ODDRX2
+`endif
+`ifdef FPGA_ECP5
+`ifdef GPU
+`ifndef ZEITLOS_CONSOLE
+`ifndef ZEITLOS_HEADLESS
+`ifndef GPU_COMPOSITE
+`ifndef NO_VIDEO_MODES
+`define VIDEO_MODES
+`ifdef ECP5_BIG
+`ifndef NO_VIDEO_WIDE
+`define VIDEO_WIDE
+`endif
+`endif
+`endif
+`endif
+`endif
+`endif
+`endif
+`endif
+
+// Sergei ML2, the fullest board (DDR3, Keccak, SHA-256, montmul, S/PDIF,
+// chunky colour), has the 45F modes but not native 1280x720: mode 3 is
+// the 640x360 desktop doubled, as on the 25F boards, so VRAM need only
+// hold 1024x768 (24,576 words) rather than 32K (64 DP16KD, 93 of 108
+// in all), which did not route reliably on any seed. It gives up the
+// Keccak block too (6,000 LUT4, the most congested logic on the chip):
+// SHA-3 and ML-KEM take the software path, with the same answers
+// (docs/keccak_hw.md). Keyed on the board, so a release build (ZSPEC)
+// has it too, and only with the 45F modes: the console keeps Keccak,
+// and NO_VIDEO_WIDE keeps it with the 25F boards' modes.
+// docs/screen_modes.md, "Sergei ML2".
+`ifdef BOARD_SERGEI_ML2
+`ifdef VIDEO_WIDE
+`define VIDEO_NO_NATIVE_720
+`ifndef NO_KECCAK
+`define NO_KECCAK
 `endif
 `endif
 `endif

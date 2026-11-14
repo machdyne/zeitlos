@@ -139,6 +139,8 @@ z_rv z_win_create_ex(z_win_t *win, const char *title, uint32_t w, uint32_t h,
 z_rv z_win_create_flags(z_win_t *win, const char *title, uint32_t w, uint32_t h,
 	int32_t x, int32_t y, uint32_t flags) {
 
+	// the screen mode's framebuffer (docs/screen_modes.md)
+	z_fb_geometry_refresh();
 	return z_win_create_cb(win, title, w, h, x, y, flags, NULL, NULL);
 
 }
@@ -393,14 +395,22 @@ static void win_use_clip(const z_win_t *win);
 static bool zwin_accent;
 static uint32_t zwin_accent_told;	// window ids wm has heard Z_WM_ACCENT_USED for
 
+// Colour is 640x480's (docs/screen_modes.md): in any other mode the
+// accent plane is not shown, and the rows below the screen are no
+// second sheet -- at 1024x768 they are past the end of a 24K-word VRAM,
+// where a fill wraps onto the top of the screen (Sergei ML2).
+static bool zwin_accent_mode(void) {
+	return Z_SCREEN_W == Z_FB_640_W && Z_SCREEN_H == Z_FB_640_H;
+}
+
 bool z_win_accent_ok(void) {
-	return zwin_accent;
+	return zwin_accent && zwin_accent_mode();
 }
 
 void z_win_accent_rect(const z_win_t *win, int x0, int y0, int x1, int y1, bool on) {
 	int rows, cy0;
 
-	if (!zwin_accent || !win || win->frozen || win->clip_n <= 0) return;
+	if (!zwin_accent || !zwin_accent_mode() || !win || win->frozen || win->clip_n <= 0) return;
 	// Not inside a paint walk (z_win_paint_begin()): the walk owns the
 	// blitter's scissor, and escaping the region would undo it.
 	if (z_gfx_paint_active()) return;
@@ -498,6 +508,11 @@ static void win_use_clip(const z_win_t *win) {
 bool z_win_apply_clip(z_win_t *win, z_obj_t *obj) {
 
 	if (!obj || obj->type != Z_BLOB) return false;
+
+	// wm sends every window its region again after the screen mode
+	// changes, before any redraw (docs/screen_modes.md): the moment to
+	// read the framebuffer's geometry again. One register read.
+	z_fb_geometry_refresh();
 
 	uint32_t len = z_blob_len(obj);
 	const z_wm_cliprect_t *r = z_blob_data(obj);
@@ -782,6 +797,9 @@ static int zwin_region_minus(const z_clip_t *a, int na,
 }
 
 void z_win_apply_redraw(z_win_t *win, uint32_t packed) {
+	// a window whose region did not change is repainted after a screen
+	// mode change with no new region before it (docs/screen_modes.md)
+	z_fb_geometry_refresh();
 	win->x = Z_WM_UNPACK_X(packed);
 	win->y = Z_WM_UNPACK_Y(packed);
 	win->paint_n = 0;

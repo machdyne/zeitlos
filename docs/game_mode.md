@@ -186,7 +186,7 @@ the one process that sees every keystroke before any app does.
 
 | key | action |
 |---|---|
-| Super+Esc | toggle game mode |
+| Super+Esc | toggle game mode (wm's camera works at 640x480; in another screen mode, Super+Esc only takes the screen back from a game -- [screen_modes.md](screen_modes.md)) |
 | Super+Arrow | move the viewport 20px |
 | Super held + mouse | viewport follows the pointer |
 

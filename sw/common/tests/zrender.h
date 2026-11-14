@@ -92,6 +92,14 @@
 #define Z_RENDER_VRAM ((void *)0x20000000UL)
 #define Z_RENDER_VRAM_LEN 0x40000u
 
+// zgfx.c is not linked, so its framebuffer geometry is here: the
+// 640x480 desktop this VRAM holds (docs/screen_modes.md).
+#ifndef Z_SMALL
+uint16_t z_fb_w = Z_FB_640_W, z_fb_h = Z_FB_640_H;
+void z_fb_geometry_refresh(void) {
+}
+#endif
+
 // -- software pixel primitives ----------------------------------
 //
 // See this file's header on why these are here rather than linked
@@ -227,7 +235,7 @@ void z_fb_fill_rect(int x, int y, int w, int h, int color,
 // The rows zgfx lets a fill reach (z_fb_set_rows()). Recorded only:
 // this VRAM is the 480-row desktop, and z_fb_set_pixel() drops the
 // rest -- an accent fill (zwin.c), 480 rows down, draws nothing here.
-static int zr_rows = Z_SCREEN_H;
+static int zr_rows = Z_FB_640_H;
 void z_fb_set_rows(int rows) { zr_rows = rows; }
 int z_fb_rows(void) { return zr_rows; }
 

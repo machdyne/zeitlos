@@ -646,6 +646,15 @@ phosphors and levels, paper, the pointer, a smaller window, DESK off,
 game mode), and that a build without it, or with six planes, ignores
 DESK.
 
+## Colour is 640x480's
+
+On a machine with screen modes ([screen_modes.md](screen_modes.md)) game
+mode, the colour window and desktop colour are 640x480's: the other
+modes are monochrome, in the phosphor's ink, and the hardware turns all
+three off there. `z_color_window_available()` answers false in another
+mode, and a game entering game mode switches to 640x480 first
+(`z_game_set_enabled()`).
+
 ## Registers
 
 In `socctl` (`rtl/socctl.v`), alongside GAME and VIEW

@@ -38,10 +38,14 @@ enum {
 
 #define ZSYS_UART_FIFO 256
 #define ZSYS_GLYPH_SIZE 4096			// rtl/mem/glyph.v, ADDR_WIDTH 12
-#define ZSYS_SCREEN_W 640
-#define ZSYS_SCREEN_H 480
-#define ZSYS_ROWS 480
-#define ZSYS_STRIDE 80				// bytes a framebuffer row
+// The most the picture is: 1280x720, 1024x768 (docs/screen_modes.md).
+// What it is now: zsys_out_w/h(), and the framebuffer's row in bytes
+// zsys_stride() -- 640x480, 80 bytes, until software asks for another
+// screen mode (socctl's VMODE).
+#define ZSYS_SCREEN_W 1280
+#define ZSYS_SCREEN_H 768
+#define ZSYS_ROWS 768
+#define ZSYS_STRIDE_640 80			// game mode's, the rasteriser's, T2's
 
 // The SD card, in SPI mode (zdev.c): a card image file behind rtl/spim.v.
 typedef struct {
@@ -177,6 +181,13 @@ typedef struct zsys {
 	// -- socctl (rtl/socctl.v): the cursor, the phosphor, reboot --
 	uint32_t soc_ctrl;
 	uint8_t video_mode, video_bright;
+	// The screen mode (VMODE): the mode, the modes there are (a bit
+	// each; 0: a bitstream without the register), and whether the
+	// other modes are native (a 45F board) or 1280x720 is 640x360 shown
+	// twice (a 25F). ZSYS_VMODES=wide|dbl|none, wide by default.
+	uint8_t vmode, vm_avail;
+	bool vm_wide;
+	bool vm_dbl720;	// 1280x720 is the 640x360 desktop doubled
 	uint8_t game, cslots, caddr;			// game: bit 0 enable, bit 1 wrap
 	uint32_t view;					// { vy[25:16], vx[9:0] }, as written
 	// colour (docs/color.md): eight planes, the 256-entry palette, chunky,
@@ -351,7 +362,7 @@ uint64_t zdev_audio_next_frame(const zsys_t *s);	// cycles to the next frame
 // The RTC set as though the board had a clock: the host's time, valid.
 void zsys_rtc_from_host(zsys_t *s);
 
-// The picture as the video output would send it: 640x480 RGB, three
+// The picture as the video output would send it: zsys_out_w x _h RGB, three
 // bytes a pixel, the phosphor's ink, paper's inversion and the
 // hardware cursor (when `cursor`) at the mouse's pointer included.
 void zsys_screen_rgb(const zsys_t *s, uint8_t *rgb, bool cursor);
@@ -376,9 +387,28 @@ void zsys_dirty_take(zsys_t *s, uint32_t rows[ZSYS_ROWS / 32]);
 // -- internal: zsys.c <-> zdev.c --
 uint32_t zdev_read(zsys_t *s, uint32_t pa, bool *ok);
 bool zdev_write(zsys_t *s, uint32_t pa, uint32_t v, uint32_t sel);
+// The desktop's geometry in the screen mode (game mode is 640x480).
+static inline int zsys_fb_w(const zsys_t *s) {
+	static const int w[4] = { 640, 800, 1024, 1280 };
+	if (s->vmode == 3 && s->vm_dbl720) return 640;
+	return w[s->vmode & 3];
+}
+static inline int zsys_fb_h(const zsys_t *s) {
+	static const int h[4] = { 480, 600, 768, 720 };
+	if (s->vmode == 3 && s->vm_dbl720) return 360;
+	return h[s->vmode & 3];
+}
+static inline uint32_t zsys_stride(const zsys_t *s) {
+	return (uint32_t)zsys_fb_w(s) / 8u;
+}
+// What the picture shows: game mode's 640x480, or the desktop.
+static inline int zsys_out_w(const zsys_t *s) { return (s->game & 1) ? 640 : zsys_fb_w(s); }
+static inline int zsys_out_h(const zsys_t *s) { return (s->game & 1) ? 480 : zsys_fb_h(s); }
+
 static inline void zsys_vram_dirty(zsys_t *s, uint32_t off) {
-	uint32_t row = (off % (ZSYS_STRIDE * ZSYS_ROWS)) / ZSYS_STRIDE;
-	s->dirty[row >> 5] |= 1u << (row & 31);
+	uint32_t st = zsys_stride(s);
+	uint32_t row = (off % (st * ZSYS_ROWS)) / st;
+	if (row < ZSYS_ROWS) s->dirty[row >> 5] |= 1u << (row & 31);
 }
 
 // The sim image's mark, at the start of the gateware region.

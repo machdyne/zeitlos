@@ -125,6 +125,7 @@ static void apply(bool verbose) {
 			} else {
 				k_screen_w = w;
 				k_screen_h = h;
+				k_screen_forced = true;
 				if (verbose && (w != 640 || h != 480))
 					printf("cfg: system.screen.size: apps are told %lux%lu\n",
 						(unsigned long)w, (unsigned long)h);
@@ -132,6 +133,7 @@ static void apply(bool verbose) {
 		} else {
 			k_screen_w = 640;
 			k_screen_h = 480;
+			k_screen_forced = false;
 		}
 	}
 

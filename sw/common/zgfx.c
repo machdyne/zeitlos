@@ -12,6 +12,7 @@
 
 #include "zeitlos.h"
 #include "zgfx.h"
+#include "zsoc.h"		// the screen mode (z_fb_geometry_refresh)
 #include "zfont.h"
 #include "zutf8.h"
 #include "zjfont.h"		// the Japanese font, docs/text_encoding.md
@@ -266,7 +267,26 @@ void z_gfx_blit_scissor_reset(void) {
 // every scissor write. Everything else still clamps to the screen.
 // Kept to a variable and one store: wm links these two primitives and
 // has bytes, not kilobytes, to spare.
-static int gfx_fb_rows = Z_SCREEN_H;
+static int gfx_fb_rows = Z_FB_640_H;
+
+// -- the framebuffer's geometry (zgfx.h, docs/screen_modes.md) --
+#ifndef Z_SMALL
+uint16_t z_fb_w = Z_FB_640_W, z_fb_h = Z_FB_640_H;
+
+void z_fb_geometry_refresh(void) {
+	int w = Z_FB_640_W, h = Z_FB_640_H;
+	if (!(z_game_available() && z_game_enabled()))
+		z_vmode_geometry(z_vmode_get(), &w, &h);
+	if (w != (int)z_fb_w || h != (int)z_fb_h) {
+		z_fb_w = (uint16_t)w;
+		z_fb_h = (uint16_t)h;
+		gfx_fb_rows = h;
+		// the blitter's scissor is the whole screen between blits:
+		// the new one's
+		z_gfx_blit_scissor_reset();
+	}
+}
+#endif
 
 void z_fb_set_rows(int rows) {
 	if (rows < Z_SCREEN_H) rows = Z_SCREEN_H;
@@ -505,11 +525,13 @@ void z_fb_hw_line(int x0, int y0, int x1, int y1, int color,
 // of those had it. Without it sysctl acks its registers and draws
 // nothing (busy and the FIFO count read 0), so code that waits on it
 // does not hang; lines come here instead.
+// The rasterizer's rows are 640 pixels, always (rtl/gpu/gpu_raster.v):
+// in another screen mode lines are the CPU's.
 static bool raster_hw(void) {
 	static int8_t have = -1;
 	if (have < 0)
 		have = (!z_soc_csrs_present() || z_soc_has_feature(Z_FEATURE_GPU_RASTER)) ? 1 : 0;
-	return have != 0;
+	return have != 0 && Z_SCREEN_W == Z_FB_640_W;
 }
 
 // A line by the CPU, as the rasterizer draws it: Bresenham from (x0, y0)
@@ -1321,7 +1343,7 @@ void z_fb_hw_scroll(int x, int y, int w, int h, int dy) {
 			 * holds whatever it actually reached. */
 			uint32_t last_row = (uint32_t)(y + n + (h - n) - 1);
 			uint32_t last_word = (uint32_t)((x + w - 1) >> 5);
-			z_fb_hw_scroll_probe(0x20000000u + last_row * 80u
+			z_fb_hw_scroll_probe(0x20000000u + last_row * (uint32_t)(Z_SCREEN_W / 8)
 				+ last_word * 4u);
 		}
 
@@ -1444,6 +1466,12 @@ static void hw_fill_rect_one(int x, int y, int w, int h, int color,
 			return;
 		}
 	} else {
+		// all of this process's screen: another process may have left
+		// the scissor at its own idea of the screen's width (one that
+		// has not yet seen a screen mode change, docs/screen_modes.md)
+		gpu_blit_clip_x0 = 0;
+		gpu_blit_clip_y0 = 0;
+		gpu_blit_clip_x1 = (uint32_t)Z_SCREEN_W;
 		gpu_blit_clip_y1 = (uint32_t)gfx_fb_rows;
 	}
 

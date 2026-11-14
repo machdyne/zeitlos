@@ -162,6 +162,7 @@ static bool sidebar_focus = true;	// keyboard focus: the category list, or the p
 // control's index here is its name everywhere else (activate()).
 
 #define GROUP_VIDEO 1
+#define GROUP_RES   2
 
 static const uint32_t video_modes[] = {
 	Z_VIDEO_MODE_WHITE, Z_VIDEO_MODE_AMBER, Z_VIDEO_MODE_GREEN, Z_VIDEO_MODE_PAPER,
@@ -170,10 +171,12 @@ static const char *video_labels[] = { "White", "Amber", "Green", "Paper" };
 #define MODE_COUNT 4
 
 enum {
-	// Display: the four modes are 0..3
+	// Display: the four modes are 0..3, then the screen's resolutions
 	// (the desktop colours are a list, not widgets)
+	W_RES0 = MODE_COUNT,
+	W_RES_LAST = W_RES0 + Z_VMODE_COUNT - 1,
 	// Mouse
-	W_SPEED_PREV = MODE_COUNT,
+	W_SPEED_PREV,
 	W_SPEED_NEXT,
 	// Keyboard
 	W_EDIT_KBD,
@@ -451,6 +454,19 @@ static void read_auth(void) {
 	widgets[W_LOCK_EDIT].enabled = w;
 }
 
+// -- the screen's resolution (docs/screen_modes.md) --
+//
+// A button for each mode this machine has; choosing one asks wm
+// (z_screen_set_mode()), which switches and asks whether to keep it --
+// fifteen seconds without an answer and it goes back. Ctrl+Super+Esc
+// does the same from anywhere. wm remembers the mode kept.
+static uint32_t res_avail;
+static const char *res_labels[Z_VMODE_COUNT] = { "640x480", "800x600", "1024x768", "1280x720" };
+
+static void select_current_res(void) {
+	z_widget_select(&psets[P_DISPLAY], W_RES0 + (int)z_vmode_get());
+}
+
 static void select_current_mode(void) {
 
 	uint32_t now = z_video_get_mode();
@@ -492,13 +508,22 @@ static void layout(void) {
 	y_page = MARGIN + z_font_6x12.h + LINE_H + 10;		// below the title and its note
 	y_status = ch - LINE_H - 4;
 
-	// Display: the four modes across, then the desktop colours row
+	// Display: the four modes across, the resolutions across, then the
+	// desktop colours row
 	int bw = (pw - (MODE_COUNT - 1) * GAP) / MODE_COUNT;
 	for (int i = 0; i < MODE_COUNT; i++)
 		place(i, PX + i * (bw + GAP), y_page + LINE_H + 2, bw, BTN_H);
 	{
+		int y_res = y_page + LINE_H + 2 + BTN_H + 6 + LINE_H + 2;
+		for (int i = 0, k = 0; i < Z_VMODE_COUNT; i++) {
+			if (!(res_avail & (1u << i))) { place(W_RES0 + i, -1000, -1000, 1, 1); continue; }
+			place(W_RES0 + i, PX + k * (bw + GAP), y_res, bw, BTN_H);
+			k++;
+		}
+	}
+	{
 		// the desktop colours: their row, then the list to the bottom
-		int yt = y_page + LINE_H + 2 + BTN_H + 2 * LINE_H + 6;
+		int yt = y_page + LINE_H + 2 + BTN_H + 6 + LINE_H + 2 + BTN_H + 2 * LINE_H + 6;
 		int yl = yt + 2 * LINE_H + 2;
 		int rows = (y_status - 6 - yl - 2) / (z_font_5x8.h + 2);
 		if (rows < 3) rows = 3;
@@ -694,6 +719,9 @@ static void draw_page(void) {
 
 	case P_DISPLAY:
 		draw_row(y, can_set_video ? "Display colour" : "Display colour (not on this bitstream)", NULL);
+		y += LINE_H + 2 + BTN_H + 6;
+		draw_row(y, res_avail == 1u ? "Resolution (640x480 only on this bitstream)" :
+			"Resolution (Ctrl+Super+Esc; kept if you say so)", NULL);
 		y += LINE_H + 2 + BTN_H + 2 * LINE_H + 6;
 		describe_theme(line, sizeof(line));
 		draw_row(y, "Desktop colours (Super+F10)", line);
@@ -1379,6 +1407,16 @@ static void focus_list(bool on);
 static void activate(int idx) {
 	if (idx < 0) return;
 	if (idx < MODE_COUNT) { apply_video(idx); return; }
+	if (idx >= W_RES0 && idx <= W_RES_LAST) {
+		if (!z_screen_set_mode(idx - W_RES0)) {
+			set_status("wm cannot change the resolution here");
+			select_current_res();
+			z_widget_draw_all(ws, false);
+		} else {
+			set_status("Keep the new resolution? (wm asks; it goes back in 15 s)");
+		}
+		return;
+	}
 	if (idx == W_SPEED_PREV) { step_speed(-1); return; }
 	if (idx == W_SPEED_NEXT) { step_speed(1); return; }
 	if (idx == W_EDIT_TERM) { edit(&prefs[0]); return; }
@@ -1706,6 +1744,10 @@ static void on_dialog_msg(z_msg_t *msg, void *user) {
 		case Z_WM_WINDOW_MOVED:
 			z_win_parse_rect(&win, &msg->obj);
 			break;
+		case Z_WM_SCREEN:
+			// the resolution changed (or went back): show which
+			select_current_res();
+			break;
 		default:
 			break;
 	}
@@ -1721,6 +1763,13 @@ static void widgets_init(void) {
 		widgets[i].group = GROUP_VIDEO;
 		widgets[i].label = video_labels[i];
 		widgets[i].enabled = true;
+	}
+
+	for (int i = 0; i < Z_VMODE_COUNT; i++) {
+		widgets[W_RES0 + i].type = Z_WIDGET_TOGGLE;
+		widgets[W_RES0 + i].group = GROUP_RES;
+		widgets[W_RES0 + i].label = res_labels[i];
+		widgets[W_RES0 + i].enabled = (res_avail & (1u << i)) != 0;
 	}
 
 
@@ -1772,6 +1821,7 @@ static void widgets_init(void) {
 	ws = &psets[page];
 
 	select_current_mode();
+	select_current_res();
 
 }
 
@@ -1817,6 +1867,7 @@ int main(void) {
 	printf("settings: starting\n");
 
 	can_set_video = z_video_mode_present();
+	res_avail = z_vmode_avail();
 	can_theme = z_color_desktop_available();
 	can_speed = z_pointer_speed_available();
 

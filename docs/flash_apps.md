@@ -349,6 +349,25 @@ board's build -- against `CORE_BUDGETS_NORMAL`:
 | files in flash | 58,000 | 60K | | |
 | **archive** | **813,348** of 868,352 | 840K of 848K | | |
 
+Screen modes ([screen_modes.md](screen_modes.md), November 2026) took
+five budgets up, inside the same 848K archive: every app that draws now
+reads the screen's size at run time, and `wm` switches modes and asks
+the question. Measured then:
+
+| app | in flash | budget | in RAM | budget |
+|---|---:|---:|---:|---:|
+| `wm` | 88,868 | 89,600 | 170,028 | 168K |
+| `term` | 65,903 | 65K | 147,732 | 145K |
+| `text` | 92,328 | 92,928 | 223,880 | 220K |
+| `files` | 70,418 | 70,912 | 148,156 | 146K |
+| `repl` | 124,306 | 125,440 | 321,880 | 315K |
+
+`wm` and `text` have 512 bytes more than this build needs, because
+another toolchain built them at 89,232 and 92,621 bytes. `net` gave the
+1K: its budget went from 103K to 102K, against 103,267 bytes here.
+`files` then took 512 bytes from `repl` (123K to 125,440).
+The small build (Obst) has no screen modes, so none of this reaches it.
+
 The small build's apps are the same but `wm` and `usb`, which leave
 touch out: 152,716 and 53,316 bytes in RAM, as before. (Built here,
 `repl` is 315,008 bytes, 640 over the small build's 307K; that was so

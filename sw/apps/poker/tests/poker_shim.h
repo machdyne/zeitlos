@@ -50,7 +50,7 @@
 #include "../../../common/tests/zrender.h"
 #undef z_fb_hw_blit_mem
 
-static z_clip_t shim_scissor = { 0, 0, Z_SCREEN_W - 1, Z_SCREEN_H - 1 };
+static z_clip_t shim_scissor = { 0, 0, Z_FB_640_W - 1, Z_FB_640_H - 1 };
 
 /* -- what zrender.h supplies now, and what it still does not --
  *

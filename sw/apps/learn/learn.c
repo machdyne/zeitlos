@@ -53,9 +53,10 @@ static z_win_t win;
 static z_dialog_ctx_t dlg;
 static bool hw_blit;
 
-// the page: the window's content, at most the screen
-#define PAGE_WPL (Z_SCREEN_W / 32)
-static uint32_t pagebits[PAGE_WPL * Z_SCREEN_H + 2];
+// the page: the window's content, at most 640x480 (a larger screen's
+// maximized window shows the page in its top left; docs/screen_modes.md)
+#define PAGE_WPL (Z_FB_640_W / 32)
+static uint32_t pagebits[PAGE_WPL * Z_FB_640_H + 2];
 static ld_page_t page;
 static int page_w, page_h;
 
@@ -300,7 +301,7 @@ static void blit_buf(const uint32_t *src, int wpl, int sx, int sy, int dx, int d
 }
 
 static void blit_sw(int sx, int sy, int dx, int dy, int w, int h) {
-	blit_buf(pagebits, PAGE_WPL, sx, sy, dx, dy, w, h, Z_SCREEN_H);
+	blit_buf(pagebits, PAGE_WPL, sx, sy, dx, dy, w, h, Z_FB_640_H);
 }
 
 // the page's (px, py, w, h) on the screen: all of it, or a moving figure
@@ -585,8 +586,8 @@ static void colour_update(void) {
 
 static void layout(void) {
 	int w = (int)z_win_content_w(&win), h = (int)z_win_content_h(&win);
-	if (w > Z_SCREEN_W) w = Z_SCREEN_W;
-	if (h > Z_SCREEN_H) h = Z_SCREEN_H;
+	if (w > Z_FB_640_W) w = Z_FB_640_W;
+	if (h > Z_FB_640_H) h = Z_FB_640_H;
 	if (w < 1) w = 1;
 	if (h < 1) h = 1;
 	page_w = w;
@@ -684,8 +685,8 @@ static void on_wm(z_msg_t *m) {
 		// where the dock had been)
 		{
 			int cw = (int)z_win_content_w(&win), ch = (int)z_win_content_h(&win);
-			if (cw > Z_SCREEN_W) cw = Z_SCREEN_W;
-			if (ch > Z_SCREEN_H) ch = Z_SCREEN_H;
+			if (cw > Z_FB_640_W) cw = Z_FB_640_W;
+			if (ch > Z_FB_640_H) ch = Z_FB_640_H;
 			if (cw != page_w || ch != page_h) layout();
 		}
 		if (win_begin()) {

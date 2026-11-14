@@ -225,9 +225,11 @@ z_obj_t *k_screen(z_obj_t *args);		// Z_SYS_SCREEN
 z_obj_t *k_abi_level(z_obj_t *args);		// Z_SYS_ABI_LEVEL
 
 // The screen's size as the system reports it (Z_SYS_SCREEN,
-// docs/screen.md): 640x480, or system.screen.size from zeitlos.cfg
-// (cfg.c), which is for trying apps against another size.
-extern uint32_t k_screen_w, k_screen_h;		// Z_SYS_TIME64
+// docs/screen.md): the screen mode's desktop, or -- k_screen_forced --
+// system.screen.size from zeitlos.cfg (cfg.c), which is for trying apps
+// against another size.
+extern uint32_t k_screen_w, k_screen_h;
+extern bool k_screen_forced;		// Z_SYS_TIME64
 void k_arena_dump(void);				// `free`: the arenas and the reserve
 void k_proc_unblock(uint32_t pid);
 z_obj_t *k_proc_wait(z_obj_t *args);

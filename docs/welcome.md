@@ -121,6 +121,7 @@ it). New windows open on the workspace you are on.
 | Keys | What they do |
 |---|---|
 | Super+Esc | game mode on / off |
+| Ctrl+Super+Esc | the next screen resolution, kept only if you say so ([screen_modes.md](screen_modes.md)) |
 | Super+Arrow | move the viewport |
 | Super held + mouse | the viewport follows the pointer |
 

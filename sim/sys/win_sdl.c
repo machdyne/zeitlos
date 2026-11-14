@@ -20,6 +20,8 @@ static SDL_Window *win;
 static SDL_Renderer *ren;
 static SDL_Texture *tex;
 static uint32_t pix[ZSYS_SCREEN_W * ZSYS_SCREEN_H];
+static int out_w = 640, out_h = 480;	// the picture's size now (a screen mode)
+static int win_scale = 1;
 
 // -- sound: the machine's frames, resampled to the device, queued --
 static SDL_AudioDeviceID dev;
@@ -55,16 +57,17 @@ bool win_open(int scale, const char *title, bool sound) {
 		return false;
 	}
 	SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "0");	// nearest: pixels stay pixels
+	win_scale = scale;
 	win = SDL_CreateWindow(title, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-		ZSYS_SCREEN_W * scale, ZSYS_SCREEN_H * scale, SDL_WINDOW_RESIZABLE);
+		out_w * scale, out_h * scale, SDL_WINDOW_RESIZABLE);
 	if (win) ren = SDL_CreateRenderer(win, -1, SDL_RENDERER_PRESENTVSYNC);
 	if (ren) tex = SDL_CreateTexture(ren, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING,
-		ZSYS_SCREEN_W, ZSYS_SCREEN_H);
+		out_w, out_h);
 	if (!tex) {
 		fprintf(stderr, "zsys: no window: %s\n", SDL_GetError());
 		return false;
 	}
-	SDL_RenderSetLogicalSize(ren, ZSYS_SCREEN_W, ZSYS_SCREEN_H);	// mouse positions in screen pixels
+	SDL_RenderSetLogicalSize(ren, out_w, out_h);	// mouse positions in screen pixels
 	SDL_ShowCursor(SDL_DISABLE);
 	if (sound) sound_open();
 	return true;
@@ -84,7 +87,7 @@ static uint8_t buttons;
 
 void win_fullscreen(bool on) {
 	SDL_SetWindowFullscreen(win, on ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0);
-	SDL_RenderSetLogicalSize(ren, ZSYS_SCREEN_W, ZSYS_SCREEN_H);	// letterboxed, the mouse mapped through it
+	SDL_RenderSetLogicalSize(ren, out_w, out_h);	// letterboxed, the mouse mapped through it
 }
 
 static void mouse_to(zsys_t *s, int x, int y) { zsys_mouse(s, x, y, buttons); }
@@ -141,16 +144,28 @@ void win_present(zsys_t *s) {
 	uint32_t rows[ZSYS_ROWS / 32];
 	sound_feed(s);
 	zsys_frame_dirty(s, rows);
+	// a screen mode: the picture a new size, the window with it
+	if (zsys_out_w(s) != out_w || zsys_out_h(s) != out_h) {
+		out_w = zsys_out_w(s);
+		out_h = zsys_out_h(s);
+		SDL_DestroyTexture(tex);
+		tex = SDL_CreateTexture(ren, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING,
+			out_w, out_h);
+		SDL_RenderSetLogicalSize(ren, out_w, out_h);
+		if (!(SDL_GetWindowFlags(win) & SDL_WINDOW_FULLSCREEN_DESKTOP))
+			SDL_SetWindowSize(win, out_w * win_scale, out_h * win_scale);
+		memset(rows, 0xff, sizeof rows);
+	}
 	int lo = -1, hi = -1;
-	for (int y = 0; y < ZSYS_SCREEN_H; y++) {
+	for (int y = 0; y < out_h; y++) {
 		if (!(rows[y >> 5] & (1u << (y & 31)))) continue;
-		zsys_render_row(s, y, pix + y * ZSYS_SCREEN_W, true);
+		zsys_render_row(s, y, pix + y * out_w, true);
 		if (lo < 0) lo = y;
 		hi = y;
 	}
 	if (lo >= 0) {
-		SDL_Rect r = { 0, lo, ZSYS_SCREEN_W, hi - lo + 1 };
-		SDL_UpdateTexture(tex, &r, pix + lo * ZSYS_SCREEN_W, ZSYS_SCREEN_W * 4);
+		SDL_Rect r = { 0, lo, out_w, hi - lo + 1 };
+		SDL_UpdateTexture(tex, &r, pix + lo * out_w, out_w * 4);
 	}
 	SDL_RenderClear(ren);
 	SDL_RenderCopy(ren, tex, NULL, NULL);

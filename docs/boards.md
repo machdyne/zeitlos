@@ -699,3 +699,50 @@ but there is no LPF in `boards/` and no `rtl/boards.vh` block.
 Lebkuchen and Kölsch do have a `boards.vh` block (GateMate, not ECP5).
 Their flow is a separate Yosys and nextpnr under the path the Makefile
 sets for those boards, not the ECP5 tools these numbers came from.
+
+## Screen modes (November 2026)
+
+Builds with VIDEO_MODES ([screen_modes.md](screen_modes.md)) add three
+clocks from pll1: pclk 37.8 MHz, cclk 75.6 MHz and bclk 378 MHz. Where
+the HDMI pins are in a left or right bank (DDMI_ODDRX2: Lakritz,
+Konfekt, Noir) bclk is the ODDRX2Fs' edge clock and CLKDIVF halves it
+to sclk, 189 MHz, for the serialiser; on Lakritz nextpnr puts the edge
+clock in bank 6 on dedicated routing. Everywhere else the serialiser
+runs at 378 MHz into ODDRX1Fs, with three registers a lane before the
+pin.
+
+To measure a board:
+
+```
+make BOARD=<board> zeitlos_pico
+make BOARD=<board> timing    # sclk, cclk, pclk, and the 48 MHz clock
+```
+
+The routed figures for the current serialisers are still to be filled
+in. With the first ODDRX1F serialiser, one register a lane before the
+pin:
+
+| Board | bclk | cclk | pclk | TRELLIS_COMB |
+|---|---|---|---|---|
+| Lakritz | 426 MHz | 150 MHz | 52 MHz | 22,433 (92%) |
+| Konfekt | 416 MHz | 144 MHz | 75 MHz | 20,789 (85%) |
+| Mozart ML1 | 322 MHz (fail) | 162 MHz | 51 MHz | 23,783 (54%) |
+| ULX3S 85F | 354 MHz (fail) | 159 MHz | 58 MHz | 23,545 (28%) |
+
+Sergei ML2, ODDRX1F serialiser, routed (default seed unless noted):
+
+| Build | Keccak | TRELLIS_COMB | DP16KD | Router | bclk (378) | cclk | pclk | CPU (48) |
+|---|---|---|---|---|---|---|---|---|
+| 26a5b563, 640x480 only | yes | 33,288 (75%) | 69 | 665 s | -- | -- | -- | -- |
+| 45F modes, native 720p | yes | 33,263 (75%) | 93 | did not converge, any seed | | | | |
+| 45F modes, native 720p, seeds 2/3 | no | 27,476 (62%) | 93 | about 200 s | 399.2 / 363.2 | 153.1 / 159.1 | 51.7 / 49.3 | 54.5 / 50.8 |
+| the same, default seed | no | 27,476 (62%) | 93 | did not converge | | | | |
+| 25F modes (`NO_VIDEO_WIDE`) | yes | 33,059 (75%) | 69 | 1,455 s | 383.9 | 159.6 | 50.3 | 53.4 |
+| **the default**: 45F modes, 720p doubled (`VIDEO_NO_NATIVE_720`) | no | 27,567 (62%) | 77 | 1,391 s | 413.2 | 162.0 | 51.8 | 53.1 |
+
+The default is the 45F modes without native 1280x720 and without
+Keccak (24,576 words of VRAM). docs/screen_modes.md, "Sergei ML2".
+
+The serialiser's limit at 378 MHz was its start-up lock (one LUT too
+many) and then plain routing; each lane now has its own ring of five
+as its load, so nothing at 378 MHz is more than one LUT from a flop.

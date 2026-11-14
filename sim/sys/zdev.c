@@ -112,7 +112,7 @@ static uint32_t src_rd(zsys_t *s, bool srcmem, uint32_t a) {
 
 static void blit_glyph(zsys_t *s, const zsys_blit_t *w, bool clip) {
 	uint32_t off = w->dst_x & 31;
-	uint32_t line = ((uint32_t)w->dst_y * ZSYS_STRIDE + (uint32_t)(w->dst_x >> 5) * 4) & AW_MASK;
+	uint32_t line = ((uint32_t)w->dst_y * zsys_stride(s) + (uint32_t)(w->dst_x >> 5) * 4) & AW_MASK;
 	uint32_t cur_y = w->dst_y & 0x3ff;
 	uint32_t gw = w->glyph_w;
 	uint32_t cell = gw >= 32 ? 0xffffffffu : (1u << gw) - 1;
@@ -151,7 +151,7 @@ static void blit_glyph(zsys_t *s, const zsys_blit_t *w, bool clip) {
 				vram_wr(s, line + 4, (d & ~c_hi) | (fg & b_hi) | (bg & (c_hi & ~b_hi)));
 			}
 		}
-		line = (line + ZSYS_STRIDE) & AW_MASK;
+		line = (line + zsys_stride(s)) & AW_MASK;
 		cur_y = (cur_y + 1) & 0x3ff;
 		row++;
 	} while (row < w->glyph_h);
@@ -179,14 +179,14 @@ static void blit_start(zsys_t *s, uint32_t ctrl) {
 		words = ((right - left) & 0xffffu) >> 5;
 		lines = fye - fy;
 		y = fy;
-		line = (fy * ZSYS_STRIDE + (left >> 3)) & AW_MASK;
+		line = (fy * zsys_stride(s) + (left >> 3)) & AW_MASK;
 		lmask = 0xffffffffu << (fx - left);
 		rmask = (fxe & 31) == 0 ? 0xffffffffu : 0xffffffffu >> (32 - (fxe & 31));
 	} else {
 		words = ((uint32_t)(w.width + 31) & 0xffffu) >> 5;
 		lines = w.height;
 		y = w.dst_y;
-		line = ((uint32_t)w.dst_y * ZSYS_STRIDE + (uint32_t)(w.dst_x >> 5) * 4) & AW_MASK;
+		line = ((uint32_t)w.dst_y * zsys_stride(s) + (uint32_t)(w.dst_x >> 5) * 4) & AW_MASK;
 	}
 
 	uint32_t row_a = w.src_addr, row_b = w.src_b_addr;
@@ -229,7 +229,7 @@ static void blit_start(zsys_t *s, uint32_t ctrl) {
 		} while (wi < words);
 		cur_line++;
 		y = (y + 1) & 0x3ff;
-		line = (line + ZSYS_STRIDE) & AW_MASK;
+		line = (line + zsys_stride(s)) & AW_MASK;
 		row_a += w.src_stride;
 		row_b += w.src_stride;
 	} while (cur_line < lines);
@@ -397,6 +397,9 @@ static uint32_t socctl_read(zsys_t *s, uint32_t r) {
 	case 14: return 0x5a560000u;			// CVBS
 	case 16: return 0x5a57c000u | (s->win_desk ? 2 : 0) | (s->win_en ? 1 : 0);	// COLWIN: avail, davail
 	case 17: return (uint32_t)s->win_y1 << 16 | s->win_x1;
+	case 19:					// VMODE
+		if (!s->vm_avail) return 0;
+		return 0x5a4d0000u | (uint32_t)s->vm_avail << 8 | (s->vm_wide ? 0x20u : 0u) | (s->vm_dbl720 ? 0x10u : 0u) | s->vmode;
 	}
 	return 0;
 }
@@ -446,6 +449,13 @@ static void socctl_write(zsys_t *s, uint32_t r, uint32_t v, uint32_t sel) {
 		return;
 	case 6:
 		if (sel == 15 && v == RECONFIG_KEY) s->reboot = true;
+		return;
+	case 19:				// VMODE: a mode there is, or nothing
+		if ((sel & 1) && s->vm_avail && (s->vm_avail >> (v & 3) & 1)) {
+			s->vmode = v & 3;
+			s->video_gen++;
+			memset(s->dirty, 0xff, sizeof(s->dirty));
+		}
 		return;
 	case 8:
 		if (sel & 1) s->cslots = (uint8_t)((((v >> 4) & 3) << 2) | (v & 3));
@@ -1227,6 +1237,16 @@ void zdev_reset(zsys_t *s) {
 	s->blit.blits = blits;
 	s->raster.lines = lines;
 	s->soc_ctrl = 0;
+	s->vmode = 0;					// 640x480, until software asks
+	{
+		const char *vm = getenv("ZSYS_VMODES");
+		// wide (default): a 45F board; dbl: a 25F board, 1280x720 from
+		// 640x360; widedbl: Sergei ML2, the 45F modes with 1280x720
+		// doubled (VIDEO_NO_NATIVE_720); none: no screen modes
+		s->vm_wide = !(vm && !strcmp(vm, "dbl"));
+		s->vm_dbl720 = vm && (!strcmp(vm, "dbl") || !strcmp(vm, "widedbl"));
+		s->vm_avail = (vm && !strcmp(vm, "none")) ? 0 : s->vm_wide ? 0xf : 0x9;
+	}
 	s->video_mode = 0;				// white on black, as Lakritz comes up
 	s->video_bright = 7;
 	s->game = 0;
@@ -1301,7 +1321,7 @@ void zsys_frame_dirty(zsys_t *s, uint32_t rows[ZSYS_ROWS / 32]) {
 
 // The VRAM bit at framebuffer (x, y), rows past 479 being the second sheet.
 static inline int fb_bit(const zsys_t *s, uint32_t x, uint32_t y) {
-	uint32_t o = (y * ZSYS_STRIDE + (x >> 3)) & (s->vram_size - 1);
+	uint32_t o = (y * zsys_stride(s) + (x >> 3)) & (s->vram_size - 1);
 	return (s->vram[o] >> (x & 7)) & 1;
 }
 
@@ -1344,17 +1364,17 @@ void zsys_render_row(const zsys_t *s, int y, uint32_t *argb, bool cursor) {
 		uint32_t fy = (vy + (uint32_t)y / 2) % 480;
 		if (s->col_en && s->col_chunky) {	// a byte a pixel, four 80-pixel segments a line
 			uint32_t r = (uint32_t)y / 2 + vy;
-			for (int x = 0; x < ZSYS_SCREEN_W; x++) {
+			for (int x = 0; x < 640; x++) {
 				uint32_t p = (uint32_t)x / 2, seg = p / 80;
 				uint32_t row = (seg & 1 ? 240 : 0) + (seg & 2 ? 480 : 0) + r % 240;
-				uint32_t idx = s->vram[(row * ZSYS_STRIDE + p % 80) & (s->vram_size - 1)];
+				uint32_t idx = s->vram[(row * zsys_stride(s) + p % 80) & (s->vram_size - 1)];
 				if (cursor && cursor_at(s, (int)p, (int)(r % 240), true)) idx ^= 0xff;
 				argb[x] = rgb444(s->palette[idx]);
 			}
 			return;
 		}
 		uint32_t np = s->col_en ? s->col_np + 1u : 1u;
-		for (int x = 0; x < ZSYS_SCREEN_W; x++) {
+		for (int x = 0; x < 640; x++) {
 			uint32_t fx = (vx + (uint32_t)x / 2) % 640, idx = 0;
 			for (uint32_t k = 0; k < np; k++) {
 				uint32_t j = k & 3, px = fx, py = fy;
@@ -1373,9 +1393,9 @@ void zsys_render_row(const zsys_t *s, int y, uint32_t *argb, bool cursor) {
 		return;
 	}
 
-	const uint8_t *row = s->vram + y * ZSYS_STRIDE;
-	bool win = s->win_en && (uint32_t)y >= s->win_y0 && (uint32_t)y < s->win_y1;
-	for (int x = 0; x < ZSYS_SCREEN_W; x++) {
+	const uint8_t *row = s->vram + ((uint32_t)y * zsys_stride(s) & (s->vram_size - 1));
+	bool win = s->win_en && s->vmode == 0 && (uint32_t)y >= s->win_y0 && (uint32_t)y < s->win_y1;
+	for (int x = 0; x < zsys_fb_w(s); x++) {
 		int b = (row[x >> 3] >> (x & 7)) & 1;
 		int c = cursor && cursor_at(s, x, y, false);
 		if (win && (uint32_t)x >= s->win_x0 && (uint32_t)x < s->win_x1) {
@@ -1399,10 +1419,11 @@ void zsys_render_row(const zsys_t *s, int y, uint32_t *argb, bool cursor) {
 
 void zsys_screen_rgb(const zsys_t *s, uint8_t *rgb, bool cursor) {
 	uint32_t line[ZSYS_SCREEN_W];
-	for (int y = 0; y < ZSYS_SCREEN_H; y++) {
+	int W = zsys_out_w(s), H = zsys_out_h(s);
+	for (int y = 0; y < H; y++) {
 		zsys_render_row(s, y, line, cursor);
-		for (int x = 0; x < ZSYS_SCREEN_W; x++) {
-			uint8_t *o = rgb + (y * ZSYS_SCREEN_W + x) * 3;
+		for (int x = 0; x < W; x++) {
+			uint8_t *o = rgb + (y * W + x) * 3;
 			o[0] = (uint8_t)(line[x] >> 16); o[1] = (uint8_t)(line[x] >> 8); o[2] = (uint8_t)line[x];
 		}
 	}
@@ -1443,7 +1464,7 @@ static bool screenshot_rgb(const zsys_t *s, const char *path, bool cursor);
 
 bool zsys_screenshot(const zsys_t *s, const char *path, bool cursor) {
 	if ((s->game & 1) || s->win_en) return screenshot_rgb(s, path, cursor);	// colours: 8-bit RGB
-	const uint32_t W = ZSYS_SCREEN_W, H = ZSYS_SCREEN_H, line = W / 8 + 1, raw_n = line * H;
+	const uint32_t W = (uint32_t)zsys_out_w(s), H = (uint32_t)zsys_out_h(s), line = W / 8 + 1, raw_n = line * H;
 	uint8_t *rgb = malloc(W * H * 3), *raw = malloc(raw_n);
 	uint32_t blocks = (raw_n + 65534) / 65535;
 	uint8_t *z = malloc(raw_n + blocks * 5 + 6);
@@ -1490,7 +1511,7 @@ bool zsys_screenshot(const zsys_t *s, const char *path, bool cursor) {
 
 // 8-bit RGB, stored: game mode, colour, the colour window.
 static bool screenshot_rgb(const zsys_t *s, const char *path, bool cursor) {
-	const uint32_t W = ZSYS_SCREEN_W, H = ZSYS_SCREEN_H, line = W * 3 + 1, raw_n = line * H;
+	const uint32_t W = (uint32_t)zsys_out_w(s), H = (uint32_t)zsys_out_h(s), line = W * 3 + 1, raw_n = line * H;
 	uint8_t *rgb = malloc(W * H * 3), *raw = malloc(raw_n);
 	uint32_t blocks = (raw_n + 65534) / 65535;
 	uint8_t *z = malloc(raw_n + blocks * 5 + 6);

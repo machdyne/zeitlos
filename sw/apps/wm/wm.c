@@ -373,10 +373,24 @@ static uint8_t rescue_pending;      // RESCUE_IN / RESCUE_OUT, at a safe point
 // so nothing draws over the box; not from the lock screen.
 static bool wm_confirm;
 static bool reboot_pending;         // engage at the next safe point
+// The screen mode's question is up, and the rest of its state
+// ("-- screen modes --", below)
+static bool vm_asking;
+static uint32_t vm_kept;            // the mode kept (and the one on trial's way back)
+static int vm_trial = -1;           // the mode on trial, or -1
+static int vm_want = -1;            // a change asked for, made at a safe point
+static bool vm_want_quiet;          // ... without the question (going back)
+static uint32_t vm_trial_end;       // when the trial ends (tick)
+static uint32_t vm_ask_at;          // when the question goes up (tick)
+static int vm_shown_s = -1;         // the seconds the box last showed
+static int vm_sel;                  // 0 Keep, 1 Go back
+static int vm_x, vm_y;
+static bool vm_after_game;          // a game took 640x480: put vm_kept back
+static void vm_request(int m, bool quiet);
 
 // The screen is not the desktop's: locked, the rescue console's, or
 // the reboot dialog's. Nothing wm or an app draws may reach it.
-#define WM_HIDDEN() (wm_locked || wm_rescued || wm_confirm)
+#define WM_HIDDEN() (wm_locked || wm_rescued || wm_confirm || vm_asking)
 static void confirm_release(void);
 static void rescue_release(void);
 static void rescue_step(void);
@@ -2855,6 +2869,9 @@ static uint32_t wm_idle_ticks(void) {
 	int i;
 
 	if (lock_pending || rescue_pending || reboot_pending) return 1;
+	// a screen mode asked for, or on trial: its question and countdown
+	if (vm_want >= 0) return 1;
+	if (vm_trial >= 0) return Z_TICK_HZ / 4;
 
 	// Locking when idle: wake at the moment it is due.
 	if (!wm_locked && lock_st.lock_idle_min && (lock_st.flags & Z_AUTH_HAS_PASSWORD)) {
@@ -3774,6 +3791,10 @@ static void acc_end(void) {
 // given (n == 0: the whole screen).
 static void acc_rect(int x, int y, int w, int h, int v, const z_clip_t *reg, int n) {
 	if (w <= 0 || h <= 0) return;
+	// Colour is 640x480's: in another mode the rows below the screen are
+	// no second sheet, and at 1024x768 they are past a 24K-word VRAM's
+	// end, where a fill wraps onto the top of the screen (Sergei ML2).
+	if (WM_FB_W != Z_FB_640_W || WM_FB_H != Z_FB_640_H) return;
 	if (n == 0) {
 		z_fb_hw_fill_rect(x, y + WM_FB_H, w, h, v);
 		return;
@@ -3956,6 +3977,7 @@ static void acc_off(void) {
 
 // Taking the second sheet: from scratch, while COLWIN is still off.
 static void acc_on(void) {
+	if (WM_FB_W != Z_FB_640_W || WM_FB_H != Z_FB_640_H) return;
 	acc_begin();
 	z_fb_hw_fill_rect(0, WM_FB_H, WM_FB_W, WM_FB_H, 0);
 	acc_end();
@@ -4014,7 +4036,8 @@ static void acc_service(void) {
 		if (z_cfg_generation() != acc_cfg_gen) acc_config();
 	}
 
-	bool want = acc_cfg && cw_idx < 0 && !game_grab_pid && !z_game_enabled();
+	bool want = acc_cfg && cw_idx < 0 && !game_grab_pid && !z_game_enabled() &&
+		WM_FB_W == Z_FB_640_W && WM_FB_H == Z_FB_640_H;
 	if (!want) {
 		// (a colour window's own COLWIN is not wm's to clear here)
 		if (acc_live || (acc_apps && cw_idx < 0)) acc_off();
@@ -4642,6 +4665,12 @@ static void game_revoke(void) {
 
 	z_msg_new_send(owner, Z_WM_GAME_REVOKED, 0, z_obj_uint32(0));
 
+	if (vm_after_game) {
+		// back to the kept screen mode, which repaints everything
+		vm_after_game = false;
+		vm_request((int)vm_kept, true);
+		return;
+	}
 	repair_region(0, 0, WM_SCREEN_W, WM_SCREEN_H, -1);
 }
 
@@ -4669,6 +4698,9 @@ static void game_toggle(void) {
 	if (game_grab_pid) { game_revoke(); return; }
 
 	if (!z_game_available()) return;
+
+	// the camera is 640x480's (docs/screen_modes.md)
+	if (z_vmode_get() != Z_VMODE_640X480) return;
 
 	bool on = !z_game_enabled();
 
@@ -6262,6 +6294,317 @@ static void confirm_click(int cx, int cy) {
 	}
 }
 
+#ifndef Z_SMALL
+// -- screen modes (docs/screen_modes.md) --
+//
+// Ctrl+Super+Esc steps to the next resolution this machine has (socctl's
+// VMODE: 640x480, 1280x720, and on the 45F/85F boards 800x600 and
+// 1024x768); settings' Screen page asks for one (Z_WM_SCREEN_MODE).
+// Either way the change is on trial: the desktop is laid out again on
+// the new screen, and a moment later -- once the display has caught up
+// -- a box asks whether to keep it. Enter or Keep keeps it; Esc, Go
+// back, or fifteen seconds without an answer go back to the mode before.
+// Ctrl+Super+Esc while the box is up goes on to the next mode. Only a
+// kept mode is remembered (the flash key/value store, WM_VM_KV), and the
+// machine starts in it.
+//
+// Game mode is 640x480's: a game switches there itself as it takes the
+// screen (z_game_set_enabled()), and wm puts the kept mode back when it
+// lets go. wm's own camera (Super+Esc) is 640x480's too.
+
+#define WM_VM_KV        "apps.wm.screen"
+#define WM_VM_TRIAL_S   15
+#define VMQ_W           260
+#define VMQ_H           72
+#define VMQ_BW          80
+#define VMQ_BH          16
+
+
+static void dock_rect(int *x, int *y, int *w, int *h);
+
+static const char *vm_name(uint32_t m) {
+	static const char *const n[4] = { "640x480", "800x600", "1024x768", "1280x720" };
+	return n[m & 3u];
+}
+
+// The next mode this machine has after m, round.
+static uint32_t vm_next(uint32_t m) {
+	uint32_t avail = z_vmode_avail();
+	for (int i = 1; i <= Z_VMODE_COUNT; i++) {
+		uint32_t c = (m + (uint32_t)i) % Z_VMODE_COUNT;
+		if (avail & (1u << c)) return c;
+	}
+	return Z_VMODE_640X480;
+}
+
+// Every window onto the new screen, the dock to its side, the screen
+// cleared and repainted, and every program told (Z_WM_SCREEN).
+static void vm_relayout(void) {
+	int sw, sh;
+	z_fb_geometry_refresh();
+	z_screen_size(&sw, &sh);
+	if (sw < Z_SCREEN_MIN_W || sh < Z_SCREEN_MIN_H || sw > Z_SCREEN_MAX || sh > Z_SCREEN_MAX) {
+		sw = WM_FB_W;
+		sh = WM_FB_H;
+	}
+	wm_screen_w = sw;
+	wm_screen_h = sh;
+
+	for (int i = 0; i < WM_MAX_WINDOWS; i++) {
+		wm_window_t *w = &windows[i];
+		if (!w->used || i == dock_idx) continue;
+		int ox = (int)w->x, oy = (int)w->y, ow = (int)w->w, oh = (int)w->h;
+		if (w->maxed) {
+			// maximized and full screen: the new screen, as far as the
+			// window's limits allow; the place to go back to onto it
+			int nw = sw, nh = sh;
+			if (w->max_w && nw > (int)w->max_w) nw = (int)w->max_w;
+			if (w->max_h && nh > (int)w->max_h) nh = (int)w->max_h;
+			w->w = (uint32_t)nw;
+			w->h = (uint32_t)nh;
+			w->x = (uint32_t)((sw - nw) / 2);
+			w->y = (uint32_t)((sh - nh) / 2);
+			if ((int)w->rw > sw) w->rw = (uint32_t)sw;
+			if ((int)w->rh > sh) w->rh = (uint32_t)sh;
+			if ((int)(w->rx + w->rw) > sw) w->rx = (uint32_t)(sw - (int)w->rw);
+			if ((int)(w->ry + w->rh) > sh) w->ry = (uint32_t)(sh - (int)w->rh);
+		} else {
+			if ((int)w->w > sw) w->w = (uint32_t)sw;
+			if ((int)w->h > sh) w->h = (uint32_t)sh;
+			if (w->real_h && (int)w->real_h > sh) w->real_h = (uint32_t)sh;
+			if ((int)(w->x + w->w) > sw) w->x = (uint32_t)(sw - (int)w->w);
+			if (w->ws_off) {
+				if ((int)(w->home_y + w->h) > sh) w->home_y = (uint32_t)(sh - (int)w->h);
+				w->y = (uint32_t)sh;    // still off the screen
+			} else if ((int)(w->y + w->h) > sh) {
+				w->y = (uint32_t)(sh - (int)w->h);
+			}
+		}
+		if ((int)w->x != ox || (int)w->y != oy) notify_moved(i);
+		if ((int)w->w != ow || (int)w->h != oh) notify_resized(i);
+	}
+
+	if (dock_idx >= 0) {
+		int dx, dy, dw, dh;
+		wm_window_t *d = &windows[dock_idx];
+		dock_rect(&dx, &dy, &dw, &dh);
+		d->x = (uint32_t)dx;
+		if (dock_hidden) { dock_home_y = (uint32_t)dy; d->y = (uint32_t)sh; }
+		else d->y = (uint32_t)dy;
+	}
+
+	// every program, once: the screen's new size
+	{
+		uint32_t told[WM_MAX_WINDOWS];
+		int nt = 0;
+		uint32_t v = Z_WM_PACK_SCREEN(z_vmode_get(), sw, sh);
+		for (int i = 0; i < WM_MAX_WINDOWS; i++) {
+			uint32_t pid = windows[i].owner_pid;
+			bool dup = false;
+			if (!windows[i].used || pid == my_pid) continue;
+			for (int k = 0; k < nt; k++) if (told[k] == pid) dup = true;
+			if (dup) continue;
+			told[nt++] = pid;
+			z_msg_new_send(pid, Z_WM_SCREEN, 0, z_obj_uint32(v));
+		}
+	}
+
+	// sound over HDMI is clocked by the picture (zaudio.h)
+	z_audio__ddmi_sync();
+
+	wm_unclip();
+	clear_screen();
+	send_clip_all();
+	repair_region(0, 0, WM_SCREEN_W, WM_SCREEN_H, -1);
+	printf("wm: screen %s, %dx%d\n", vm_name(z_vmode_get()), sw, sh);
+}
+
+// The mode, now: the register, the frame boundary it lands on, the
+// desktop laid out again.
+static void vm_apply(uint32_t m) {
+	if (!z_vmode_set_raw(m)) return;
+	z_game_wait_frame();
+	z_game_wait_frame();
+	vm_relayout();
+}
+
+static void vm_button(int i, int *x, int *y) {
+	*x = vm_x + (i ? VMQ_W - 20 - VMQ_BW : 20);
+	*y = vm_y + VMQ_H - 10 - VMQ_BH;
+}
+
+static void vm_text(int y, const char *t) {
+	z_fb_draw_text(vm_x + (VMQ_W - z_text_cols(t) * z_font_5x8.w) / 2, y,
+		t, 1, &z_font_5x8, NULL);
+}
+
+static void vm_draw(void) {
+	static const char *const label[2] = { N_("Keep"), N_("Go back") };
+	char line[96];
+	int left = (int)((int32_t)(vm_trial_end - z_uptime_ticks()) / (int32_t)Z_TICK_HZ) + 1;
+	if (left < 0) left = 0;
+	vm_shown_s = left;
+	vm_x = (WM_SCREEN_W - VMQ_W) / 2;
+	vm_y = (WM_SCREEN_H - VMQ_H) / 2;
+	z_gfx_clear_visible();
+	z_fb_hw_fill_rect(vm_x, vm_y, VMQ_W, VMQ_H, 1);
+	z_fb_hw_fill_rect(vm_x + 2, vm_y + 2, VMQ_W - 4, VMQ_H - 4, 0);
+	snprintf(line, sizeof line, ZS_("Keep %s?"), vm_name((uint32_t)vm_trial));
+	vm_text(vm_y + 10, line);
+	snprintf(line, sizeof line, ZS_N("Back to %s in %d second", "Back to %s in %d seconds", left),
+		vm_name(vm_kept), left);
+	vm_text(vm_y + 24, line);
+	for (int i = 0; i < 2; i++) {
+		int bx, by;
+		bool on = (i == vm_sel);
+		vm_button(i, &bx, &by);
+		z_fb_hw_fill_rect(bx, by, VMQ_BW, VMQ_BH, 1);
+		if (!on) z_fb_hw_fill_rect(bx + 1, by + 1, VMQ_BW - 2, VMQ_BH - 2, 0);
+		const char *lb = ZS_D(label[i]);
+		z_fb_draw_text2(bx + (VMQ_BW - z_text_cols(lb) * z_font_5x8.w) / 2,
+			by + (VMQ_BH - z_font_5x8.h) / 2, lb, on ? 0 : 1, on ? 1 : 0,
+			&z_font_5x8, NULL);
+	}
+	wm_unclip();
+}
+
+// The question, up: every window stopped, as the reboot dialog does.
+static void vm_ask(void) {
+	if (vm_asking || WM_HIDDEN()) return;
+	freeze_all(NULL);
+	vm_asking = true;
+	vm_sel = 0;
+	vm_draw();
+	{
+		char s[64];
+		snprintf(s, sizeof s, ZS_("Keep %s?"), vm_name((uint32_t)vm_trial));
+		z_speak(s, Z_TTS_F_INTERRUPT);
+	}
+}
+
+static void vm_unask(void) {
+	if (!vm_asking) return;
+	vm_asking = false;
+	send_clip_all_except_ex(-1, false);
+	repair_region(vm_x, vm_y, VMQ_W, VMQ_H, -1);
+}
+
+static void vm_keep(void) {
+	char v[12];
+	vm_unask();
+	if (vm_trial < 0) return;
+	vm_kept = (uint32_t)vm_trial;
+	vm_trial = -1;
+	snprintf(v, sizeof v, "%s", vm_name(vm_kept));
+	if (z_kv_set(WM_VM_KV, v, (uint32_t)strlen(v)) != Z_KV_OK)
+		printf("wm: screen: could not remember %s\n", v);
+	printf("wm: screen: keeping %s\n", v);
+}
+
+// Asked for: from Ctrl+Super+Esc, settings, a game letting go. Made at
+// the next safe point (vm_step()).
+static void vm_request(int m, bool quiet) {
+	if (m < 0 || m >= Z_VMODE_COUNT || !(z_vmode_avail() & (1u << m))) return;
+	vm_want = m;
+	vm_want_quiet = quiet;
+}
+
+static void vm_step(void) {
+	uint32_t now = z_uptime_ticks();
+	if (vm_want >= 0 && !wm_locked && !wm_rescued && !wm_confirm && !game_grab_pid &&
+	    dragging < 0 && resizing < 0 && xor_band_idx < 0) {
+		int m = vm_want;
+		bool quiet = vm_want_quiet;
+		vm_want = -1;
+		vm_unask();
+		if (z_game_enabled()) z_game_view_set_enabled(false, false);
+		if ((uint32_t)m != z_vmode_get()) vm_apply((uint32_t)m);
+		if (quiet || (uint32_t)m == vm_kept) {
+			vm_trial = -1;
+		} else {
+			vm_trial = m;
+			vm_trial_end = now + WM_VM_TRIAL_S * Z_TICK_HZ;
+			vm_ask_at = now + Z_TICK_HZ;	// the display needs a moment to follow
+		}
+	}
+	if (vm_trial < 0) return;
+	if ((int32_t)(now - vm_trial_end) >= 0) {
+		printf("wm: screen: no answer, back to %s\n", vm_name(vm_kept));
+		vm_request((int)vm_kept, true);
+		vm_trial = -1;
+		return;
+	}
+	if (!vm_asking && (int32_t)(now - vm_ask_at) >= 0) vm_ask();
+	if (vm_asking) {
+		int left = (int)((int32_t)(vm_trial_end - now) / (int32_t)Z_TICK_HZ) + 1;
+		if (left != vm_shown_s) vm_draw();
+	}
+}
+
+static void vm_choose(int i) {
+	if (i == 0) vm_keep();
+	else {
+		vm_unask();
+		vm_request((int)vm_kept, true);
+		vm_trial = -1;
+	}
+}
+
+static void vm_key(uint8_t usage, uint32_t keysym) {
+	(void)keysym;
+	if (usage == 0x29) { vm_choose(1); return; }		// Esc
+	if (usage == 0x28 || usage == 0x58 || usage == 0x2C) { vm_choose(vm_sel); return; }
+	if (usage == 0x50 || usage == 0x4F || usage == 0x2B) {	// Left, Right, Tab
+		vm_sel ^= 1;
+		vm_draw();
+	}
+}
+
+static void vm_click(int cx, int cy) {
+	for (int i = 0; i < 2; i++) {
+		int bx, by;
+		vm_button(i, &bx, &by);
+		if (cx >= bx && cx < bx + VMQ_BW && cy >= by && cy < by + VMQ_BH) {
+			vm_sel = i;
+			vm_choose(i);
+			return;
+		}
+	}
+}
+
+// At start: the mode remembered, if this machine has it, with no
+// question -- it was kept once.
+static void vm_boot(void) {
+	char v[16];
+	uint32_t len = 0;
+	vm_kept = z_vmode_get();
+	if (z_vmode_avail() == 1u) return;
+	if (z_kv_get(WM_VM_KV, v, sizeof v - 1, &len) != Z_KV_OK) return;
+	v[len < sizeof v ? len : sizeof v - 1] = 0;
+	for (uint32_t m = 0; m < Z_VMODE_COUNT; m++) {
+		if (strcmp(v, vm_name(m)) == 0 && (z_vmode_avail() & (1u << m))) {
+			if (m != vm_kept) {
+				z_vmode_set_raw(m);
+				z_game_wait_frame();
+				z_game_wait_frame();
+				z_fb_geometry_refresh();
+			}
+			vm_kept = m;
+		}
+	}
+}
+#else
+// The small build (a 1MB machine, docs/flash_apps.md) has no screen
+// modes: 640x480, always.
+static void vm_request(int m, bool quiet) { (void)m; (void)quiet; }
+static void vm_step(void) {}
+static void vm_keep(void) {}
+static void vm_key(uint8_t usage, uint32_t keysym) { (void)usage; (void)keysym; }
+static void vm_click(int cx, int cy) { (void)cx; (void)cy; }
+static void vm_boot(void) {}
+static uint32_t vm_next(uint32_t m) { return m; }
+#endif
+
 static void lock_try(void) {
 	uint32_t w = 0;
 	int rc;
@@ -6378,6 +6721,23 @@ static void dispatch_keys(void) {
 
 		if (keysym == Z_KEY_NONE) continue;   // bare modifier change, or
 		                                       // an unmapped usage code
+
+		// Ctrl+Super+Esc -- the next screen mode (docs/screen_modes.md),
+		// also while its question is up. By usage: Esc on every layout.
+		if (usage == 0x29 && (modifiers & Z_KBD_MOD_GUI) &&
+		    (modifiers & Z_KBD_MOD_CTRL) && !alt && !wm_locked && !wm_confirm && !wm_rescued) {
+			if (pressed && !console_mode)
+				vm_request((int)vm_next(vm_trial >= 0 ? (uint32_t)vm_trial : z_vmode_get()), false);
+			kbd_sent[usage] = 0;
+			continue;
+		}
+
+		// The screen mode's question has every other key while it is up.
+		if (vm_asking) {
+			if (pressed) vm_key(usage, keysym);
+			kbd_sent[usage] = 0;
+			continue;
+		}
 
 		// The reboot dialog has every key while it is up.
 		if (wm_confirm) {
@@ -7645,6 +8005,13 @@ static void handle_message(z_msg_t *msg) {
 #endif
 			break;
 
+		case Z_WM_SCREEN_MODE:
+			// settings' Screen page (z_screen_set_mode()): as
+			// Ctrl+Super+Esc, to that mode
+			if (msg->obj.type == Z_UINT32 && !console_mode)
+				vm_request((int)msg->obj.val.uint32, false);
+			break;
+
 		case Z_WM_MAXIMIZE: {
 			// An app that opens maximized (zwm.h): as a double-click on
 			// its titlebar would, if it is not maximized already.
@@ -8247,6 +8614,10 @@ static void handle_message(z_msg_t *msg) {
 				(msg->obj.val.uint32 & Z_WM_GAME_GRAB_POINTER);
 			game_grab_mods = msg->obj.type == Z_UINT32 &&
 				(msg->obj.val.uint32 & Z_WM_GAME_GRAB_MODIFIERS);
+			/* A game takes 640x480 (z_game_set_enabled()): the kept
+			 * mode comes back when it lets go. A trial ends kept. */
+			if (vm_trial >= 0) vm_keep();
+			if (z_vmode_get() != vm_kept) vm_after_game = true;
 			/* A game launched from the dock that takes the screen
 			 * without opening a window has started: the icon need
 			 * not wait out DOCK_LAUNCH_TIMEOUT_TICKS. */
@@ -8282,7 +8653,12 @@ static void handle_message(z_msg_t *msg) {
 				game_grab_pid = 0;
 				/* The app drew over the desktop, so there is
 				 * nothing left of it to uncover. */
-				repair_region(0, 0, WM_SCREEN_W, WM_SCREEN_H, -1);
+				if (vm_after_game) {
+					vm_after_game = false;
+					vm_request((int)vm_kept, true);
+				} else {
+					repair_region(0, 0, WM_SCREEN_W, WM_SCREEN_H, -1);
+				}
 			}
 			break;
 
@@ -8795,9 +9171,13 @@ int main(void) {
 	for (int i = 0; i < WM_MAX_WINDOWS; i++)
 		windows[i].used = false;
 
-	// The screen the desktop is laid out on, as the system reports it
-	// (docs/screen.md): read once. Never less than 640x360; anything
-	// but the framebuffer's 640x480 is a test today (system.screen.size).
+	// The screen mode kept last time (docs/screen_modes.md), then the
+	// screen the desktop is laid out on, as the system reports it
+	// (docs/screen.md). Never less than 640x360. The console keeps
+	// 640x480 (docs/profiles.md).
+	if (z_profile() != Z_PROFILE_CONSOLE) vm_boot();
+	else vm_kept = z_vmode_get();
+	z_fb_geometry_refresh();
 	z_screen_size(&wm_screen_w, &wm_screen_h);
 	if (wm_screen_w < Z_SCREEN_MIN_W || wm_screen_h < Z_SCREEN_MIN_H ||
 		wm_screen_w > Z_SCREEN_MAX || wm_screen_h > Z_SCREEN_MAX) {
@@ -9121,6 +9501,7 @@ int main(void) {
 		bool btn_down = (btn & 1) != 0;
 		bool btn_was_down = (last_btn & 1) != 0;
 		if (wm_confirm && btn_down && !btn_was_down) confirm_click(cx, cy);
+		if (vm_asking && btn_down && !btn_was_down) vm_click(cx, cy);
 
 		/* THE CLICK THAT MANAGES WINDOWS IS THE ONE THAT PAINTS
 		 * OVER THE GAME. Focus changes, raising, dragging and the
@@ -9683,6 +10064,7 @@ int main(void) {
 		if (lock_pending) lock_engage();
 		if (rescue_pending) rescue_step();
 		if (reboot_pending) confirm_engage();
+		if (vm_want >= 0 || vm_trial >= 0) vm_step();
 
 		caption_tick();
 

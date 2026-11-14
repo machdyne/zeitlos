@@ -526,7 +526,18 @@ static inline void z_audio_ddmi_acr(uint32_t step, uint32_t mod, uint32_t k,
 	uint32_t *n_out, uint32_t *cts_out)
 {
 	uint32_t clk = z_audio__clkhz();
-	uint32_t n0 = k * step * (clk / 1200000u), c0 = mod * 21u, g, fs, std = 0, j;
+	// The display's character clock, in kHz: 25.2 MHz at 640x480, or
+	// the screen mode's (z_vmode_tmds_khz(), zsoc.h; docs/screen_modes.md).
+	// N / CTS = 128 fs / that clock; both kept small by their common
+	// factor with the system clock, 1200 kHz at 48 MHz and 25.2 MHz --
+	// the 40 / 21 this always was.
+#ifdef Z_SMALL
+	uint32_t tk = 25200u;		// no screen modes on the small build
+#else
+	uint32_t tk = z_vmode_tmds_khz(z_vmode_get());
+#endif
+	uint32_t ck = clk / 1000u, gk = z_audio__gcd(ck, tk);
+	uint32_t n0 = k * step * (ck / gk), c0 = mod * (tk / gk), g, fs, std = 0, j;
 	g = z_audio__gcd(n0, c0);
 	n0 /= g;
 	c0 /= g;
@@ -551,15 +562,15 @@ static inline void z_audio_ddmi_acr(uint32_t step, uint32_t mod, uint32_t k,
 		j = std / n0;
 	} else if (n0 > (fs * 128u) / 300u) {
 		/* An unusual rate whose exact N is past what sinks take: the
-		 * closest N/CTS with CTS at most 84000 -- 25.2 MHz / 300, so N
-		 * stays inside the 128 fs / 300 a sink allows -- by continued
-		 * fractions. Off by a few parts per million at worst
-		 * (test_zaudio.c checks under 5) -- a source that measures CTS
-		 * by counting, as most do, wobbles by 40 ppm. */
-		uint32_t num, den = z_audio__approx(n0, c0, 84000u, &num);
+		 * closest N/CTS with CTS at most the clock / 300 (84000 at
+		 * 25.2 MHz), so N stays inside the 128 fs / 300 a sink allows
+		 * -- by continued fractions. Off by a few parts per million at
+		 * worst (test_zaudio.c checks under 5) -- a source that
+		 * measures CTS by counting, as most do, wobbles by 40 ppm. */
+		uint32_t num, den = z_audio__approx(n0, c0, tk * 10u / 3u, &num);
 		n0 = num;
 		c0 = den;
-		j = c0 ? (25200u + c0 / 2) / c0 : 1;
+		j = c0 ? (tk + c0 / 2) / c0 : 1;
 		if (!j) j = 1;
 	} else {
 		j = ((fs * 128u) / 1000u + n0 / 2) / n0;

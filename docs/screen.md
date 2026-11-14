@@ -22,9 +22,13 @@ today's 37.5 KB of VRAM at 640x360 (28 KB) -- a 16:9 board need not
 wait for more memory. A window no larger than 640x360 fits every
 screen there will be. Game mode's 320x240 is a mode, not the desktop.
 
-The size is fixed for a boot: wm reads it once, as it starts, and lays
-the desktop out on it. A kernel from before the call (`Z_SYS_SCREEN`)
-answers 640x480, so a program that asks runs on every kernel.
+The size changes while programs run, on a machine with screen modes
+([screen_modes.md](screen_modes.md)): 640x480, 640x360, 800x600,
+1024x768 or 1280x720, chosen with Ctrl+Super+Esc or in Settings. wm
+lays the desktop out again and sends every program `Z_WM_SCREEN`
+(zwm.h); a program that keeps the size asks again then. A kernel from
+before the call (`Z_SYS_SCREEN`) answers 640x480, so a program that
+asks runs on every kernel.
 
 **Use it** for anything that means "the screen": centring a dialog,
 clamping a window's size, putting the keyboard at the bottom, fitting
@@ -56,11 +60,11 @@ named above; a screen taller than that needs another message.
 
 ## What stays 10 bits
 
-The hardware: the virtual mouse register (`VMOUSE`, 0xf000_0400) and
-the cursor are 10 bits per axis, which is right for a 640x480 display
-and costs no LUTs. They widen when a board with a bigger display needs
-them, and that is a gateware change with its own reason. A program
-never reads them for layout: it gets coordinates from wm.
+Nothing, now: the cursor and the pointer's x are 11 bits on the boards
+with a 1280-wide mode -- bit 28 of the USB cursor register and bit 23 of
+the virtual mouse register, which read 0 before
+([screen_modes.md](screen_modes.md)). A program still never reads them
+for layout: it gets coordinates from wm.
 
 ## Trying another size
 
@@ -114,7 +118,7 @@ On a 16:9 board their bottom 120 rows would be off the display; they
 need to draw into `z_screen_size()`, or use game mode's 320x240, which
 is a mode of its own. That is for when such a board exists.
 
-A program's buffers the size of the framebuffer are compiled into it.
-When a board's VRAM is larger, those programs need the framebuffer's
-geometry at run time as well -- a later step, with the gateware that
-needs it (docs/freeze.md, "hardware registers").
+`Z_SCREEN_W` and `Z_SCREEN_H` are the framebuffer's geometry at run
+time now (zgfx.h, [screen_modes.md](screen_modes.md)): a buffer that
+needs a size when it is compiled uses `Z_FB_640_W/H` (a 640x480 page,
+as draw's canvas and learn's page) or `Z_FB_MAX_W/H`.

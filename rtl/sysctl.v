@@ -686,6 +686,33 @@ module sysctl #()
 	wire clk200mhz;			// fast zlink's pads (rtl/zfast_pad.v)
 `endif
 	wire clk25_2mhz;
+	// The video clocks gpu_video takes: pixel, character, TMDS bit. With
+	// VIDEO_MODES (docs/screen_modes.md) pll1's 37.8, 75.6 and 378 MHz;
+	// otherwise 25.2 MHz, nothing, and 126 MHz, as always.
+	wire vid_pclk;
+	wire vid_cclk;
+	wire vid_bclk;
+	// the screen mode (socctl's VMODE, docs/screen_modes.md): to
+	// gpu_video, and to the blitter and the rasteriser for the row length
+	wire [1:0] socctl_vmode;
+	// ... and the pointer's limits in it: the screen's last pixel, in the
+	// desktop's own pixels (rtl/usb_hid.v, rtl/usb/usb_hid_compat.v)
+`ifdef VIDEO_WIDE
+`ifdef VIDEO_NO_NATIVE_720
+	wire [10:0] curs_max_x = (socctl_vmode == 2'd1) ? 11'd799 :
+		(socctl_vmode == 2'd2) ? 11'd1023 : 11'd639;
+	wire [9:0] curs_max_y = (socctl_vmode == 2'd1) ? 10'd599 :
+		(socctl_vmode == 2'd2) ? 10'd767 : (socctl_vmode == 2'd3) ? 10'd359 : 10'd479;
+`else
+	wire [10:0] curs_max_x = (socctl_vmode == 2'd1) ? 11'd799 :
+		(socctl_vmode == 2'd2) ? 11'd1023 : (socctl_vmode == 2'd3) ? 11'd1279 : 11'd639;
+	wire [9:0] curs_max_y = (socctl_vmode == 2'd1) ? 10'd599 :
+		(socctl_vmode == 2'd2) ? 10'd767 : (socctl_vmode == 2'd3) ? 10'd719 : 10'd479;
+`endif
+`else
+	wire [10:0] curs_max_x = 11'd639;
+	wire [9:0] curs_max_y = (socctl_vmode == 2'd3) ? 10'd359 : 10'd479;
+`endif
 	wire clk50mhz;
 	wire clk48mhz;
 	wire clk25mhz;
@@ -759,12 +786,24 @@ module sysctl #()
 	);
 
 `ifdef GPU
+`ifdef VIDEO_MODES
+	pll1 #() pll1_i (
+		.clkin(clk48mhz),
+		.clkout0(vid_bclk),
+		.clkout1(vid_cclk),
+		.clkout2(vid_pclk),
+		.locked(pll1_locked)
+	);
+	assign clk126mhz = 1'b0;
+	assign clk25_2mhz = 1'b0;
+`else
 	pll1 #() pll1_i (
 		.clkin(clk48mhz),
 		.clkout0(clk126mhz),
 		.clkout1(clk25_2mhz),
 		.locked(pll1_locked)
 	);
+`endif
 `else
 	// No scanout, no video clocks. pll1 makes only the pixel clock and
 	// the TMDS bit clock, and only gpu_video uses them
@@ -788,12 +827,24 @@ module sysctl #()
 		.locked(pll0_locked)
 	);
 
+`ifdef VIDEO_MODES
+	pll1_25 #() pll1_i (
+		.clkin(clk25mhz),
+		.clkout0(vid_bclk),
+		.clkout1(vid_cclk),
+		.clkout2(vid_pclk),
+		.locked(pll1_locked)
+	);
+	assign clk126mhz = 1'b0;
+	assign clk25_2mhz = 1'b0;
+`else
 	pll1_25 #() pll1_i (
 		.clkin(clk25mhz),
 		.clkout2(clk126mhz),
 		.clkout3(clk25_2mhz),
 		.locked(pll1_locked)
 	);
+`endif
 
 `endif
 
@@ -895,6 +946,12 @@ module sysctl #()
       .CLK0(clk12mhz),
    );
 
+`endif
+
+`ifndef VIDEO_MODES
+	assign vid_pclk = clk25_2mhz;
+	assign vid_cclk = 1'b0;
+	assign vid_bclk = clk126mhz;
 `endif
 
 	// RESET
@@ -2901,10 +2958,19 @@ module sysctl #()
 	// Add chip select for blitter configuration
 	wire wbm_cyc_gpu_blit = cs_gpu_blit && wbm_cyc;
 
+`ifdef VIDEO_WIDE
+`ifdef VIDEO_NO_NATIVE_720
+	gpu_blit_wb #(.WIDE(1), .NATIVE720(0)) wbm_blit0_i
+`else
+	gpu_blit_wb #(.WIDE(1)) wbm_blit0_i
+`endif
+`else
 	gpu_blit_wb #() wbm_blit0_i
+`endif
 	(
 		.clk(wbm_clk),
 		.rst(wbm_rst),
+		.vmode(socctl_vmode),
 
 		// slave interface for configuration
 		.wb_adr_i(wbm_adr_sel_word),
@@ -3297,6 +3363,20 @@ module sysctl #()
 	localparam integer VRAM_WORDS = 4800;
 	localparam integer BRAM_PLANES_N = 2;
 	localparam VRAM_GUARD = 1;
+`elsif VIDEO_WIDE
+	// the screen modes' 1280x720 (28,800 words) and 1024x768 (24,576) at
+	// one bit a pixel, and two 640x480 sheets for game mode's planes
+	// (docs/screen_modes.md): the 32K words VRAM's 15 address bits reach,
+	// 64 DP16KD of the 45F's 108
+`ifdef VIDEO_NO_NATIVE_720
+	// 1024x768 is the largest desktop: 24,576 words (and game mode's
+	// two sheets, 19,200, fit inside)
+	localparam integer VRAM_WORDS = 24576;
+`else
+	localparam integer VRAM_WORDS = 32768;
+`endif
+	localparam integer BRAM_PLANES_N = 0;
+	localparam VRAM_GUARD = 0;
 `else
 	localparam integer VRAM_WORDS = (GAME_PLANES_N == 8) ? 19200 :
 		(GAME_PLANES_N == 6) ? 14400 : 9600;
@@ -3870,7 +3950,8 @@ module sysctl #()
 		end
 	end
 	wire vmouse_present = vmouse_r[24];
-	wire [9:0] vmouse_x = vmouse_r[9:0];
+	// x's eleventh bit (1024 and up) is bit 23, which was unused
+	wire [10:0] vmouse_x = { vmouse_r[23], vmouse_r[9:0] };
 	wire [9:0] vmouse_y = vmouse_r[19:10];
 `endif
 
@@ -4289,6 +4370,15 @@ module sysctl #()
 `ifdef VRAM_SDRAM
 		.CKBASE_AVAIL(1'b1),
 `endif
+`ifdef VIDEO_MODES
+		.VMODES_AVAIL(1'b1),
+`ifdef VIDEO_WIDE
+		.WIDE_AVAIL(1'b1),
+`ifdef VIDEO_NO_NATIVE_720
+		.NATIVE720_AVAIL(1'b0),
+`endif
+`endif
+`endif
 		.WIN_AVAIL(WIN_AVAILABLE),
 		.DESK_AVAIL(DESK_AVAILABLE),
 		.CHUNKY_AVAIL(CHUNKY_AVAILABLE),
@@ -4376,6 +4466,7 @@ module sysctl #()
 		.color_off(socctl_color_off),
 		.color_chunky(socctl_color_chunky),
 		.ck_base(socctl_ck_base),
+		.vmode(socctl_vmode),
 		.pal_we(socctl_pal_we),
 		.pal_idx(socctl_pal_idx),
 		.pal_rgb(socctl_pal_rgb),
@@ -4667,7 +4758,8 @@ module sysctl #()
 	wire wbm_cyc_usb0 = cs_usb0 && wbm_cyc;
 
 	wire [1:0] wbs_usb0_typ;
-	wire [9:0] wbs_usb0_curs_x, wbs_usb0_curs_y;
+	wire [10:0] wbs_usb0_curs_x;
+	wire [9:0] wbs_usb0_curs_y;
 
 	// Port 0: Obst/Lakritz onboard USB; ULX3S maps this to US2
 	// (see boards/ulx3s.lpf). Port 1 is the second physical socket
@@ -4691,6 +4783,8 @@ module sysctl #()
 		.usb_dp(usb_host_dp[0]),
 		.curs_x(wbs_usb0_curs_x),
 		.curs_y(wbs_usb0_curs_y),
+		.curs_max_x(curs_max_x),
+		.curs_max_y(curs_max_y),
 		.typ(wbs_usb0_typ),
 	);
 
@@ -4705,7 +4799,8 @@ module sysctl #()
 	wire wbm_cyc_usb1 = cs_usb1 && wbm_cyc;
 
 	wire [1:0] wbs_usb1_typ;
-	wire [9:0] wbs_usb1_curs_x, wbs_usb1_curs_y;
+	wire [10:0] wbs_usb1_curs_x;
+	wire [9:0] wbs_usb1_curs_y;
 
 	usb_hid_wb #(.SENS_SHIFT(USB_HID_SENS)) wbs_usb1_i
 	(
@@ -4725,6 +4820,8 @@ module sysctl #()
 		.usb_dp(usb_host_dp[1]),
 		.curs_x(wbs_usb1_curs_x),
 		.curs_y(wbs_usb1_curs_y),
+		.curs_max_x(curs_max_x),
+		.curs_max_y(curs_max_y),
 		.typ(wbs_usb1_typ),
 	);
 `endif
@@ -4762,8 +4859,10 @@ module sysctl #()
 	wire wbm_cyc_usbh = cs_usbh && wbm_cyc;
 
 	wire [1:0] wbs_usb0_typ, wbs_usb1_typ;
-	wire [9:0] wbs_usb0_curs_x, wbs_usb0_curs_y;
-	wire [9:0] wbs_usb1_curs_x, wbs_usb1_curs_y;
+	wire [10:0] wbs_usb0_curs_x;
+	wire [9:0] wbs_usb0_curs_y;
+	wire [10:0] wbs_usb1_curs_x;
+	wire [9:0] wbs_usb1_curs_y;
 
 	usb_host #(
 		.PORTS(2),
@@ -4792,6 +4891,8 @@ module sysctl #()
 		.wb_cyc_i(wbm_cyc_usbh),
 		.usb_dp(usb_host_dp),
 		.usb_dm(usb_host_dm),
+		.curs_max_x(curs_max_x),
+		.curs_max_y(curs_max_y),
 		.curs_x0(wbs_usb0_curs_x),
 		.curs_y0(wbs_usb0_curs_y),
 		.curs_x1(wbs_usb1_curs_x),
@@ -4874,7 +4975,7 @@ module sysctl #()
 	// on a report while typ==2 -- see rtl/usb_hid.v), so if neither
 	// port is a mouse this just holds whatever port 0 last had
 	// (0,0 after reset), same as the single-port behavior before this.
-	wire [9:0] gpu_curs_x;
+	wire [10:0] gpu_curs_x;
 	wire [9:0] gpu_curs_y;
 `ifdef GPU_CURSOR
 `ifdef USB_HOST
@@ -4899,7 +5000,7 @@ module sysctl #()
 		(wbs_usb1_typ == 2'd2) ? wbs_usb1_curs_y : wbs_usb0_curs_y;
 `endif
 `else
-	assign gpu_curs_x = 10'd0;
+	assign gpu_curs_x = 11'd0;
 	assign gpu_curs_y = 10'd0;
 `endif
 
@@ -4960,14 +5061,25 @@ module sysctl #()
 		.CBUF_LUTRAM(CBUF_LUTRAM_ON),
 		.WIN_AVAIL(WIN_AVAILABLE),
 		.DESK_AVAIL(DESK_AVAILABLE),
-		.CHUNKY_AVAIL(CHUNKY_AVAILABLE),
 		.VGA_DAC3(VGA_DAC3_ON),
-		.CURSOR_AVAIL(CURSOR_AVAILABLE)
+		.CURSOR_AVAIL(CURSOR_AVAILABLE),
+`ifdef VIDEO_MODES
+		.VMODES(1'b1),
+`ifdef VIDEO_WIDE
+		.WIDE(1'b1),
+`ifdef VIDEO_NO_NATIVE_720
+		.NATIVE720(1'b0),
+`endif
+`endif
+`endif
+		.CHUNKY_AVAIL(CHUNKY_AVAILABLE)
 	) gpu_video_i
 	(
 		.clk(wbm_clk),
-		.pclk(clk25_2mhz),
-		.bclk(clk126mhz),
+		.pclk(vid_pclk),
+		.bclk(vid_bclk),
+		.cclk(vid_cclk),
+		.vmode(socctl_vmode),
 		.resetn(~wbm_rst),
 		.pixel(gpu_pixel),
 		.curs_x(gpu_curs_x),

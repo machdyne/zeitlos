@@ -3,9 +3,14 @@
 `rtl/keccak.v`: Keccak-f[1600] -- the permutation under SHA-3, SHAKE,
 ML-KEM, ML-DSA and SLH-DSA -- in 24 cycles. Optional, like the SHA-256
 block and montmul's register file: `` `define KECCAK`` in
-`rtl/boards.vh`. **On by default on Sergei ML2; off on Lakritz**, which
-has no room -- a Lakritz owner who wants it can make room by leaving
-something else out (audio, say) and adding the line.
+`rtl/boards.vh`. **Off by default everywhere now.** Sergei ML2 had it
+until the screen modes (docs/screen_modes.md, "Sergei ML2"): with their
+VRAM and Keccak together it did not route reliably, so Sergei ML2 gives
+up Keccak for the modes, and SHA-3 takes the software path, with the
+same answers. `EXTRA_DEFINES=-DNO_VIDEO_WIDE` builds it as before, with
+Keccak and the 25F boards' modes. Lakritz has no room -- a Lakritz
+owner who wants it can make room by leaving something else out (audio,
+say) and adding the line.
 
 `sw/common/zkeccak.c` uses it when it is there; every caller of
 `zkeccak_f1600()` gets it without changing -- ML-KEM included, through

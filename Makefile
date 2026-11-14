@@ -56,6 +56,8 @@ RTL_PICO = \
 	rtl/gpu/gpu_video.v \
 	rtl/gpu/gpu_ddmi.v \
 	rtl/gpu/tmds_encoder.v \
+	rtl/gpu/tmds_enc_p.v \
+	rtl/gpu/gpu_vchar.v \
 	rtl/gpu/ddmi_island.v \
 	rtl/uart.v \
 	rtl/usb_hid.v \
@@ -589,7 +591,7 @@ SOC_INPUTS_HASH  = $(OUTDIR)/soc.inputs.sha256
 ifeq ($(FAMILY), ecp5)
 SOC_CONSTRAINT = boards/$(LPF)
 SOC_SYNTH_INPUTS = $(RTL_PICO) rtl/boards.vh rtl/csrs.vh $(SOC_CONSTRAINT) sw/t2fw/t2fw.hex \
-	sw/t2fw/t2fw_tex.hex rtl/gpu/t2_recip.hex
+	sw/t2fw/t2fw_tex.hex rtl/gpu/t2_recip.hex tools/ddmi/pin_serialiser.py
 endif
 # xc7: the same, plus the BIOS, which is part of the netlist on this
 # family (rtl/mem/bram.v reads it at synthesis).
@@ -605,6 +607,14 @@ $(SOC_CONFIG_STAMP): FORCE
 	if [ ! -f $@ ] || [ "$$(cat $@)" != "$$cur" ]; then \
 		echo "$$cur" > $@; \
 	fi
+
+# The 45F and 85F chips: the screen modes' 800x600, 1024x768 and native
+# 1280x720 (rtl/boards.vh's VIDEO_WIDE, docs/screen_modes.md), which
+# need 32K words of VRAM. DEVICE is in the config stamp, so changing it
+# resynthesises.
+ifneq ($(filter 45k 85k,$(DEVICE)),)
+DEVICE_DEFINES = -DECP5_BIG
+endif
 
 # Default `bios` target also builds bios_seed.hex, which ecpbram/icebram
 # need. Recursing without a target is what the old `bios:` recipe did.
@@ -659,10 +669,17 @@ ECP5_PNR = nextpnr-ecp5 --$(DEVICE) --package $(PACKAGE) --lpf boards/$(LPF) \
 		$(if $(PNR_SEED),--seed $(PNR_SEED),) \
 		--timing-allow-fail --ignore-loops
 
+# The screen modes' 378 MHz serialiser, where it runs in the fabric (an
+# HDMI bank without ODDRX2F), pinned beside the HDMI pins on the boards
+# whose pin columns tools/ddmi/pin_serialiser.py knows; elsewhere, and
+# in builds without it, the netlist is left as it is.
+ECP5_PIN = python3 tools/ddmi/pin_serialiser.py $(OUTDIR)/soc.json boards/$(LPF) $(DEVICE) $(PACKAGE)
+
 $(OUTDIR)/soc.config: $(SOC_SYNTH_INPUTS) $(SOC_CONFIG_STAMP)
 	mkdir -p $(OUTDIR)
-	yosys $(EXTRA_DEFINES) $(JUMP_DEFINES) -DBOARD_$(BOARD_UC) -DECP5 -q -l $(SYNTH_LOG) -p \
+	yosys $(EXTRA_DEFINES) $(JUMP_DEFINES) $(DEVICE_DEFINES) -DBOARD_$(BOARD_UC) -DECP5 -q -l $(SYNTH_LOG) -p \
 		"$(YOSYS_PRE)synth_ecp5 $(ABC9) -top sysctl -json $(OUTDIR)/soc.json" $(RTL_PICO)
+	$(ECP5_PIN)
 	$(ECP5_PNR)
 	@echo "$(or $(PNR_SEED),default)" > $(OUTDIR)/pnr.seed
 	@{ cat $(SOC_CONFIG_STAMP); cat $(SOC_SYNTH_INPUTS); } | openssl dgst -sha256 | awk '{print $$NF}' > $(SOC_INPUTS_HASH)
@@ -680,6 +697,7 @@ $(OUTDIR)/soc.config: $(SOC_SYNTH_INPUTS) $(SOC_CONFIG_STAMP)
 # seed from pnr.seed, so it names the one that produced the bitstream.
 pnr_again:
 	@test -f $(OUTDIR)/soc.json || { echo "pnr_again: no $(OUTDIR)/soc.json -- build first"; exit 1; }
+	$(ECP5_PIN)
 	$(ECP5_PNR)
 	@echo "$(or $(PNR_SEED),default)" > $(OUTDIR)/pnr.seed
 	@echo
@@ -1036,8 +1054,18 @@ ZAR_APPS = $(filter-out $(CORE_APPS_OMIT),$(CORE_APPS))
 # November 2026, choosing a language at first run (welcome's Language
 # step, docs/i18n.md): welcome +1.3K flash and +1.4K RAM. Paid from
 # keyboard's room (36,481 bytes of 38K) and usb's (35,270 of 36K): 1K each.
-CORE_BUDGETS_NORMAL = fs=35K/80K usb=35K/60K wm=84K/168K net=103K/296K term=65K/144K \
-	console=9K/13K cron=17920/48K text=90K/220K files=70144/146K repl=123K/314K \
+# November 2026, screen modes (docs/screen_modes.md): every app that
+# draws reads the framebuffer's geometry at run time instead of 640x480
+# (about 400 bytes each), and wm switches modes, asks whether to keep
+# one and lays the desktop out again (about 6K, 2.8K compressed): wm
+# +3K, text and files +256 bytes of flash, the last of the slack under
+# CORE_ZAR_MAX (847.5K of 848K); term +1K and repl +1K of RAM. Then
+# wm and text +512 bytes each, for another toolchain's build (wm 89,232,
+# text 92,621 bytes), paid from net: 103K -> 102K (103,267 bytes here).
+# files +512 (the accent plane kept to 640x480, 70,418 bytes), paid
+# from repl: 123K -> 125,440 (124,306 bytes here).
+CORE_BUDGETS_NORMAL = fs=35K/80K usb=35K/60K wm=89600/168K net=104448/296K term=65K/145K \
+	console=9K/13K cron=17920/48K text=92928/220K files=70912/146K repl=125440/315K \
 	welcome=47K/82K read=70K/214K keyboard=37K/66K
 CORE_BUDGETS_SMALL = fs=36K/77312 usb=35K/53504 wm=84K/151K net=104K/287K term=62K/138K \
 	console=10K/12544 cron=18K/48K text=88K/212K files=66K/138K repl=124K/308K \
@@ -1616,7 +1644,7 @@ test_usb_margin:
 #   make usb_fmax BOARD=mozart_ml1
 usb_fmax:
 	@mkdir -p output
-	@yosys $(EXTRA_DEFINES) -DBOARD_$(BOARD_UC) -DECP5 -q \
+	@yosys $(EXTRA_DEFINES) $(DEVICE_DEFINES) -DBOARD_$(BOARD_UC) -DECP5 -q \
 		-p "synth_ecp5 $(ABC9) -top sysctl -json output/fmax.json" \
 		$(RTL_PICO)
 	@nextpnr-ecp5 --$(DEVICE) --package $(PACKAGE) \
@@ -1649,7 +1677,7 @@ SEEDS ?= 1 2 3 4 5
 NEXTPNR_FLAGS ?=
 usb_fmax_sweep:
 	@mkdir -p output
-	@yosys $(EXTRA_DEFINES) -DBOARD_$(BOARD_UC) -DECP5 -q \
+	@yosys $(EXTRA_DEFINES) $(DEVICE_DEFINES) -DBOARD_$(BOARD_UC) -DECP5 -q \
 		-p "synth_ecp5 $(ABC9) -top sysctl -json output/fmax.json" \
 		$(RTL_PICO)
 	@rm -f output/fmax_sweep.txt
@@ -1705,7 +1733,34 @@ test_audio:
 # the next frame, and sound: a known sample sequence through the FIFO
 # and out bit-exact, at 48 kHz and at 22.05 kHz sent twice, with N/CTS
 # and channel status checked. About half an hour. docs/ddmi_audio.md.
-DDMI_TB_RTL = rtl/gpu/gpu_ddmi.v rtl/gpu/tmds_encoder.v rtl/gpu/ddmi_island.v rtl/tb/ecp5_io_cells.v
+# The screen modes (docs/screen_modes.md): each mode off the wire, on
+# the 25F build (640x480; 1280x720 from 640x360, with data islands) and
+# the 45F one (800x600, 1024x768 with islands, 1280x720), checked by
+# tools/ddmi/test_vmodes.py -- timing, every pixel of a frame, islands.
+# -DFAST takes the characters from the encoders (about ten minutes a
+# mode); VMODES_SLOW=1 rebuilds them from the pins instead, the
+# serialiser and its bit repetition too (several times that), with
+# ODDRX1F, or with VMODES_X2=1 the ODDRX2F serialiser (DDMI_ODDRX2).
+VMODES_RUNS ?= 0:0:1 0:3:1 1:1:0 1:2:1 1:3:0
+test_vmodes:
+	@mkdir -p output
+	@sed 's/^\tinput \[31:0\] gb_dat_i,$$/\tinput [31:0] gb_dat_i/' \
+		rtl/gpu/gpu_video.v > output/gpu_video_tb.v
+	@for w in 0 1; do \
+		iverilog -g2005 -s tb_vmodes $(if $(VMODES_SLOW),,-DFAST) $(if $(VMODES_X2),-DDDMI_ODDRX2) -DECP5 -DGPU_DDMI -DGPU_DDMI_AUDIO -DWIDE=$$w \
+			-o output/tb_vmodes_w$$w rtl/gpu/bench/tb_vmodes.v output/gpu_video_tb.v $(DDMI_TB_RTL) || exit 1; \
+	done
+	@fail=0; for r in $(VMODES_RUNS); do \
+		w=$${r%%:*}; m=$${r#*:}; m=$${m%%:*}; e=$${r##*:}; \
+		f=output/vmodes_w$${w}_m$${m}.txt; \
+		vvp -n output/tb_vmodes_w$$w +mode=$$m +en=$$e +out=$$f > /dev/null; \
+		a=""; [ $$w = 1 ] && a="--wide"; [ $$e = 1 ] && a="$$a --islands"; \
+		python3 tools/ddmi/test_vmodes.py $$f --mode $$m $$a || fail=1; \
+		rm -f $$f; \
+	done; exit $$fail
+
+DDMI_TB_RTL = rtl/gpu/gpu_ddmi.v rtl/gpu/tmds_encoder.v rtl/gpu/ddmi_island.v \
+	rtl/gpu/gpu_vchar.v rtl/gpu/tmds_enc_p.v rtl/tb/ecp5_io_cells.v
 test_ddmi:
 	@mkdir -p output
 	python3 tools/ddmi/test_ddmi.py
@@ -1821,4 +1876,4 @@ config-report:
 	@python3 tools/zconfig/zconfig.py --report $(TARGET)
 
 .PHONY: config menu-config menuconfig config-report
-.PHONY: clean_bios bios apps core-bins core-apps core-files zapi abi pnr_again tftp-dist nfs-dist timing path util test_audio test_ddmi test_blit test_uart hwmap FORCE soc
+.PHONY: clean_bios bios apps core-bins core-apps core-files zapi abi pnr_again tftp-dist nfs-dist timing path util test_audio test_ddmi test_vmodes test_blit test_uart hwmap FORCE soc

@@ -2500,6 +2500,30 @@ All of it is the `acc_*` functions in `wm.c`:
 
 `tests/test_accent.c` runs the real `wm.c` on the build host.
 
+## Screen modes
+
+Ctrl+Super+Esc, or `Z_WM_SCREEN_MODE` from settings' Display page,
+changes the resolution ([screen_modes.md](screen_modes.md)). wm:
+
+1. writes socctl's VMODE and waits two frames for it to land;
+2. lays the desktop out again: every window onto the new screen (moved,
+   or made smaller, with `Z_WM_WINDOW_MOVED` / `_RESIZED`), maximized
+   and full-screen windows to its size, the dock to its side;
+3. clears the screen, sends every window's region and repaints, and
+   tells every program the new size, once, with `Z_WM_SCREEN`;
+4. sets HDMI sound's clock regeneration for the new character clock;
+5. a second later -- the display has to follow -- stops every window, as
+   the reboot dialog does, and asks **Keep 1280x720?**, counting down
+   from fifteen seconds. Enter or Keep keeps it, in the flash key/value
+   store (`apps.wm.screen`), so the machine starts in it; Esc, Go back
+   or the end of the count put the kept mode back, without a question.
+   Ctrl+Super+Esc with the box up goes on to the next mode.
+
+A game taking the screen (`Z_WM_GAME_GRAB`) has already switched to
+640x480 (`z_game_set_enabled()`); a trial ends kept, and when the game
+lets go, or loses the screen, wm puts the kept mode back. The console
+profile keeps 640x480. The small build (Obst) has none of this.
+
 ## Known limitations / future work
 
 - **A partially occluded window still cannot scroll in hardware** --

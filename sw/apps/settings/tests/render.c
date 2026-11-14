@@ -396,10 +396,14 @@ int main(int argc, char **argv) {
 	{
 		int cw = z_win_content_w(&win), ch = z_win_content_h(&win);
 		bool inside = true;
-		for (int i = 0; i < W_COUNT; i++)
+		for (int i = 0; i < W_COUNT; i++) {
+			// a resolution this machine does not have is parked off
+			// the window, disabled (layout())
+			if (i >= W_RES0 && i <= W_RES_LAST && !widgets[i].enabled) continue;
 			if (widgets[i].x < 0 || widgets[i].y < 0 ||
 				widgets[i].x + widgets[i].w > cw || widgets[i].y + widgets[i].h > ch)
 				inside = false;
+		}
 		expect(inside, "every control inside the window");
 		expect(y_status + LINE_H <= ch, "status line inside the window");
 	}

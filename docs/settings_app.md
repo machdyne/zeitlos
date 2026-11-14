@@ -233,6 +233,18 @@ If the register is absent, the title says so, and a click puts the
 selection back. Changing this needs `make flash`, not `make dev-flash`
 -- it's an RTL change.
 
+## Resolution
+
+The Display page's second row: a button for each screen mode the machine
+has -- 640x480 and 1280x720, and on the 45F/85F boards 800x600 and
+1024x768 too ([screen_modes.md](screen_modes.md)). Choosing one asks wm
+to change to it (`z_screen_set_mode()`); wm asks whether to keep it, and
+goes back by itself after fifteen seconds without an answer, so a
+display that cannot show a mode never leaves you without a picture. wm
+remembers the mode kept, not settings: Ctrl+Super+Esc does the same
+from anywhere. On a bitstream without screen modes the row says so, and
+has only 640x480.
+
 ## Desktop colours: themes
 
 On a board with desktop colour (eight colour planes and the colour

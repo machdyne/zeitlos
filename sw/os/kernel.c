@@ -445,14 +445,23 @@ static void k_hw_release_pid(uint32_t pid) {
 // "white" from "can't change it" uses the set path, which does fail.
 // -- the screen's size (Z_SYS_SCREEN, docs/screen.md) --
 //
-// Reported, not measured: every board's VRAM is 640x480, and nothing in
-// the gateware says so. A board with another screen sets these from its
-// driver; zeitlos.cfg's system.screen.size sets them to test (cfg.c).
+// The screen mode's desktop (socctl's VMODE, docs/screen_modes.md):
+// 640x480 on a bitstream without screen modes. zeitlos.cfg's
+// system.screen.size reports another size instead, to test (cfg.c sets
+// k_screen_w/h, and k_screen_forced).
 uint32_t k_screen_w = 640, k_screen_h = 480;
+bool k_screen_forced;
 
 z_obj_t *k_screen(z_obj_t *args) {
+	uint32_t w = k_screen_w, h = k_screen_h;
+	if (!k_screen_forced) {
+		int mw, mh;
+		z_vmode_geometry(z_vmode_get(), &mw, &mh);
+		w = (uint32_t)mw;
+		h = (uint32_t)mh;
+	}
 	args->type = Z_UINT32;
-	args->val.uint32 = (k_screen_w << 16) | (k_screen_h & 0xffffu);
+	args->val.uint32 = (w << 16) | (h & 0xffffu);
 	return (&z_ok);
 }
 

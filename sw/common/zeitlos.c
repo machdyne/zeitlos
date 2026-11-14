@@ -592,11 +592,31 @@ void z_game_set_modifiers(bool on) {
 	game_mods = on;
 }
 
+#ifndef Z_SMALL
+// zgfx.c's, when the program draws; a program that does not link zgfx.o
+// has no framebuffer geometry to keep up to date. (The small build has
+// no screen modes, and no geometry to read: docs/screen_modes.md.)
+__attribute__((weak)) void z_fb_geometry_refresh(void) {
+}
+#endif
+
 bool z_game_set_enabled(bool on, bool wrap) {
 
 	uint32_t wm_pid;
 
+	// Game mode is 640x480's (docs/screen_modes.md): in another screen
+	// mode, change to it first -- both land on the same frame boundary.
+	// wm puts the mode back when the game lets go (Z_WM_GAME_RELEASE).
+#ifndef Z_SMALL
+	if (on && z_game_available() && z_vmode_get() != Z_VMODE_640X480)
+		z_vmode_set_raw(Z_VMODE_640X480);
+#endif
+
 	if (!z_game_view_set_enabled(on, wrap)) return false;
+
+#ifndef Z_SMALL
+	z_fb_geometry_refresh();
+#endif
 
 	/* No wm -- a bare-metal or single-app boot. The register is set
 	 * and there is nobody to tell, which is not an error. */
@@ -716,6 +736,20 @@ void z_screen_size(int *w, int *h) {
 }
 
 int z_screen_w(void) { int w; z_screen_size(&w, 0); return w; }
+
+bool z_screen_set_mode(int mode) {
+#ifdef Z_SMALL
+	(void)mode;
+	return false;
+#else
+	uint32_t wm_pid;
+	if (mode < 0 || mode >= Z_VMODE_COUNT || !(z_vmode_avail() & (1u << mode)))
+		return false;
+	if (!z_pid_lookup("wm0", &wm_pid)) return false;
+	z_msg_new_send(wm_pid, Z_WM_SCREEN_MODE, 0, z_obj_uint32((uint32_t)mode));
+	return true;
+#endif
+}
 int z_screen_h(void) { int h; z_screen_size(0, &h); return h; }
 
 bool z_time_now64(int64_t *sec, uint32_t *sub) {

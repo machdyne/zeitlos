@@ -47,14 +47,42 @@
 #include <string.h>
 #include "zutf8.h"		// z_text_cols()
 
-// The FRAMEBUFFER's geometry: VRAM is 640x480 at 1 bit per pixel on
-// every board, and the drawing code here addresses it with these. Not
-// the size to lay a window out against: that is z_screen_size()
-// (zeitlos.h, docs/screen.md), which a later system may report as
-// another size -- 640x360 to 4095x4095 -- without every app being
-// rebuilt.
-#define Z_SCREEN_W 640
-#define Z_SCREEN_H 480
+// The FRAMEBUFFER's geometry: one bit a pixel, Z_SCREEN_W pixels a row
+// (its stride) and Z_SCREEN_H rows, and the drawing code here addresses
+// VRAM with these. 640x480 -- or, on a machine with screen modes
+// (docs/screen_modes.md), the mode's desktop: 640x360 (1280x720 shown
+// twice), 800x600, 1024x768, 1280x720. Game mode is always 640x480.
+//
+// They are VARIABLES, read from the hardware: z_fb_geometry_refresh()
+// reads them again, and zwin.c calls it as a window is made and when wm
+// says the screen changed (Z_WM_SCREEN). A buffer that must have a size
+// at compile time uses Z_FB_640_W/H and stays 640x480, or the most,
+// Z_FB_MAX_W/H.
+//
+// Not the size to lay a window out against: that is z_screen_size()
+// (zeitlos.h, docs/screen.md), which zeitlos.cfg can make another size
+// for testing.
+//
+// The small build (Z_SMALL, docs/flash_apps.md: a 1MB machine) has no
+// screen modes and keeps them constants.
+#define Z_FB_640_W 640
+#define Z_FB_640_H 480
+#define Z_FB_MAX_W 1280
+#define Z_FB_MAX_H 768
+#ifdef Z_SMALL
+#define Z_SCREEN_W Z_FB_640_W
+#define Z_SCREEN_H Z_FB_640_H
+static inline void z_fb_geometry_refresh(void) {
+}
+#else
+extern uint16_t z_fb_w, z_fb_h;
+#define Z_SCREEN_W ((int)z_fb_w)
+#define Z_SCREEN_H ((int)z_fb_h)
+
+// Reads the framebuffer's geometry from the hardware: game mode's
+// 640x480 while it is on, otherwise the screen mode's desktop.
+void z_fb_geometry_refresh(void);
+#endif
 
 // inclusive bounds
 typedef struct {

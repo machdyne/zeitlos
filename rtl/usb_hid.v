@@ -55,8 +55,11 @@ module usb_hid_wb #(
 	inout usb_dm,
 	inout usb_dp,
 	output int_o,
-	output reg [9:0] curs_x,
+	output reg [10:0] curs_x,
 	output reg [9:0] curs_y,
+	// the screen's last pixel (docs/screen_modes.md), from socctl's VMODE
+	input [10:0] curs_max_x,
+	input [9:0] curs_max_y,
 	output [1:0] typ
 );
 
@@ -286,9 +289,9 @@ module usb_hid_wb #(
 	wire signed [17:0] step = acc >>> DIV;
 	wire [9:0] rem = acc[9:0] & ~(10'h3ff << DIV);
 
-	wire [9:0] curs_now = (ph == 2'd1) ? curs_x : curs_y;
-	wire [9:0] curs_max = (ph == 2'd1) ? 10'd639 : 10'd479;
-	wire signed [17:0] curs_sum = $signed({8'd0, curs_now}) + step;
+	wire [10:0] curs_now = (ph == 2'd1) ? curs_x : { 1'b0, curs_y };
+	wire [10:0] curs_max = (ph == 2'd1) ? curs_max_x : { 1'b0, curs_max_y };
+	wire signed [17:0] curs_sum = $signed({7'd0, curs_now}) + step;
 
 	always @(posedge wb_clk_i) begin
 
@@ -336,17 +339,21 @@ module usb_hid_wb #(
 			if (ph == 2'd1) begin
 				sub_x <= rem;
 				if (curs_sum < 0) curs_x <= 0;
-				else if (curs_sum > $signed({8'd0, curs_max})) curs_x <= curs_max;
-				else curs_x <= curs_sum[9:0];
+				else if (curs_sum > $signed({7'd0, curs_max})) curs_x <= curs_max;
+				else curs_x <= curs_sum[10:0];
 				prod <= mul_out;		// y's
 				ph <= 2'd2;
 			end else begin
 				sub_y <= rem;
 				if (curs_sum < 0) curs_y <= 0;
-				else if (curs_sum > $signed({8'd0, curs_max})) curs_y <= curs_max;
+				else if (curs_sum > $signed({7'd0, curs_max})) curs_y <= curs_max[9:0];
 				else curs_y <= curs_sum[9:0];
 				ph <= 2'd0;
 			end
+		end else begin
+			// the screen got smaller (a mode change): onto it
+			if (curs_x > curs_max_x) curs_x <= curs_max_x;
+			if (curs_y > curs_max_y) curs_y <= curs_max_y;
 		end
 
 		// Writes: register 5, the pointer speed. Every write is acked
@@ -370,7 +377,8 @@ module usb_hid_wb #(
 				{ 8'h00, uhh_mouse_btn, mouse_dy, mouse_dx };
 
 			if (wb_adr_i[2:0] == 3'h03) wb_dat_o <=
-				{ 11'd0, uhh_mouse_btn, curs_y, curs_x };
+				// x's eleventh bit (1024 and up) in bit 28
+				{ 3'd0, curs_x[10], uhh_mouse_btn, curs_y, curs_x[9:0] };
 
 			// Gamepad state. Bit order is
 			// start/select/y/x/b/a/down/up/right/left, LSB first --

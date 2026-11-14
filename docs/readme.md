@@ -114,6 +114,7 @@ with [welcome](welcome.md); to program it, [kernel](kernel.md) and
 | [cron](cron.md) | Scheduled programs |
 | [backup](backup.md) | Dated backups of your files on a second drive, and getting any version back: a command, a window, and watch (each save backed up on its own while the window is open) |
 | [screen](screen.md) | The screen's size: ask for it, never assume 640x480 |
+| [screen\_modes](screen_modes.md) | Resolutions: 640x480 to 1280x720, Ctrl+Super+Esc and Settings, kept only if you say so |
 | [user\_input](user_input.md) | Keyboard and mouse |
 | [keyboard\_layouts](keyboard_layouts.md) | 22 layouts and Japanese input |
 | [line\_editing](line_editing.md) | Shared line editor |

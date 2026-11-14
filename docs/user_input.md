@@ -379,7 +379,8 @@ keys before forwarding anything: Alt+Tab, Alt+Arrow, Alt+Equal and
 Alt+Minus, Super+[ and Super+] with or without Alt or Ctrl, Super+1 ...
 Super+0, Super+Minus and Super+Equal (and Super with keypad - and +),
 Super+Esc and Super+Arrow ([window_manager.md](window_manager.md),
-[game_mode.md](game_mode.md)), and the speech keys -- Super+S, A, C, V, W, R, E
+[game_mode.md](game_mode.md)), Ctrl+Super+Esc (the next screen mode,
+[screen_modes.md](screen_modes.md)), and the speech keys -- Super+S, A, C, V, W, R, E
 and R ([tts.md](tts.md)). The speech keys only match with Super held
 and neither Ctrl nor Alt; any other Super+key still reaches the app as
 before (as the plain letter -- translation ignores the GUI bit).

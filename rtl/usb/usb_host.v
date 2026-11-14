@@ -91,10 +91,13 @@ module usb_host #(
     // wires the two usb_hid_wb instances today: one cursor pair per
     // block and one interrupt per block. Keeping the shape identical
     // is what makes this a drop-in.
-    output wire [9:0] curs_x0,
+    output wire [10:0] curs_x0,
     output wire [9:0] curs_y0,
-    output wire [9:0] curs_x1,
+    output wire [10:0] curs_x1,
     output wire [9:0] curs_y1,
+    // the screen's last pixel, for the pointer (usb_hid_compat.v)
+    input wire [10:0] curs_max_x,
+    input wire [9:0] curs_max_y,
     output wire [1:0] typ0,
     output wire [1:0] typ1,
     output wire hid0_int_o,
@@ -829,6 +832,7 @@ module usb_host #(
         .in_wheel(hid_in_wheel),
         .in_b4(cap4), .in_b5(cap5), .in_b6(cap6), .in_b7(cap7),
         .typ_we(typ0_we), .typ_i(typ_wval), .speed(hid_speed0),
+        .curs_max_x(curs_max_x), .curs_max_y(curs_max_y),
         .reg_info(hid0_info), .reg_keys(hid0_keys),
         .reg_mouse(hid0_mouse), .reg_cursor(hid0_cursor),
         .reg_pad(hid0_pad),
@@ -844,6 +848,7 @@ module usb_host #(
         .in_wheel(hid_in_wheel),
         .in_b4(cap4), .in_b5(cap5), .in_b6(cap6), .in_b7(cap7),
         .typ_we(typ1_we), .typ_i(typ_wval), .speed(hid_speed1),
+        .curs_max_x(curs_max_x), .curs_max_y(curs_max_y),
         .reg_info(hid1_info), .reg_keys(hid1_keys),
         .reg_mouse(hid1_mouse), .reg_cursor(hid1_cursor),
         .reg_pad(hid1_pad),
