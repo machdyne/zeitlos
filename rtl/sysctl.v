@@ -703,6 +703,9 @@ module sysctl #()
 `else
 	localparam [7:0] VMODE_MASK = 8'b0111_1111;
 `endif
+`elsif VIDEO_ROWS
+	// a 25F board with 800x480 and 1920x1080's 960x540 as well
+	localparam [7:0] VMODE_MASK = 8'b0101_1001;
 `else
 	localparam [7:0] VMODE_MASK = 8'b0000_1001;
 `endif
@@ -730,6 +733,11 @@ module sysctl #()
 		(socctl_vmode == 3'd2) ? 10'd767 :
 		(socctl_vmode == 3'd3) ? curs_max_720y :
 		(socctl_vmode == 3'd5) ? 10'd799 :
+		(socctl_vmode == 3'd6) ? 10'd539 : 10'd479;
+`elsif VIDEO_ROWS
+	wire [10:0] curs_max_x = (socctl_vmode == 3'd4) ? 11'd799 :
+		(socctl_vmode == 3'd6) ? 11'd959 : 11'd639;
+	wire [9:0] curs_max_y = (socctl_vmode == 3'd3) ? 10'd359 :
 		(socctl_vmode == 3'd6) ? 10'd539 : 10'd479;
 `else
 	wire [10:0] curs_max_x = 11'd639;
@@ -2986,6 +2994,8 @@ module sysctl #()
 `else
 	gpu_blit_wb #(.WIDE(1)) wbm_blit0_i
 `endif
+`elsif VIDEO_ROWS
+	gpu_blit_wb #(.VROWS(1)) wbm_blit0_i
 `else
 	gpu_blit_wb #() wbm_blit0_i
 `endif
@@ -3397,6 +3407,13 @@ module sysctl #()
 `else
 	localparam integer VRAM_WORDS = 32768;
 `endif
+	localparam integer BRAM_PLANES_N = 0;
+	localparam VRAM_GUARD = 0;
+`elsif VIDEO_ROWS
+	// 1920x1080's 960x540 desktop is the largest: 16,200 words, in the
+	// 16,384 that 14 address bits reach (800x480 is 12,000). Game
+	// mode's planes fit inside, unless there are eight of them.
+	localparam integer VRAM_WORDS = (GAME_PLANES_N == 8) ? 19200 : 16384;
 	localparam integer BRAM_PLANES_N = 0;
 	localparam VRAM_GUARD = 0;
 `else
@@ -4399,6 +4416,8 @@ module sysctl #()
 `ifdef VIDEO_NO_NATIVE_720
 		.NATIVE720_AVAIL(1'b0),
 `endif
+`elsif VIDEO_ROWS
+		.ROWS_AVAIL(1'b1),
 `endif
 `endif
 		.WIN_AVAIL(WIN_AVAILABLE),
@@ -5093,6 +5112,8 @@ module sysctl #()
 `ifdef VIDEO_NO_NATIVE_720
 		.NATIVE720(1'b0),
 `endif
+`elsif VIDEO_ROWS
+		.VROWS(1'b1),
 `endif
 `endif
 		.CHUNKY_AVAIL(CHUNKY_AVAILABLE)

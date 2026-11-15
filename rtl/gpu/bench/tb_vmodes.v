@@ -27,6 +27,9 @@
 //               25F boards (VIDEO_NO_NATIVE_720, Sergei ML2)
 //   -DWIDE=1    the 45F build (native 800x600 .. 1280x720); default 0,
 //               the 25F build (1280x720 from a 640x360 desktop)
+//   -DVROWS=0   without WIDE: no 800x480 or 960x540 rows (default 1,
+//               Lakritz's VIDEO_ROWS; modes 0 and 3 are the same
+//               either way)
 //
 // Plain Verilog-2005. Run by `make test_vmodes`.
 
@@ -35,6 +38,9 @@
 `endif
 `ifndef WIDE
 `define WIDE 0
+`endif
+`ifndef VROWS
+`define VROWS 1
 `endif
 
 module tb_vmodes;
@@ -99,7 +105,8 @@ module tb_vmodes;
 		.VMODES(1'b1),
 		.VM_MASK(8'h7f),
 		.WIDE(`WIDE),
-		.NATIVE720(`NATIVE720)
+		.NATIVE720(`NATIVE720),
+		.VROWS(`VROWS)
 	) dut (
 		.pixel(1'b0),
 		.curs_x(11'd0), .curs_y(10'd0), .curs_alt(1'b0), .curs_hide(1'b1),

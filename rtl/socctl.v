@@ -529,6 +529,9 @@ module socctl_wb #(
     parameter WIDE_AVAIL = 1'b0,
     // WIDE without native 1280x720: mode 3 is doubled, as without WIDE
     parameter NATIVE720_AVAIL = 1'b1,
+    // without WIDE: 800x480 and 1920x1080 (960x540 twice) all the same
+    // (VIDEO_ROWS)
+    parameter ROWS_AVAIL = 1'b0,
     // Chunky game mode (COLOR bit 14): `GAME_CHUNKY, with COLOR_AVAIL
     // and eight planes. Set by rtl/sysctl.v.
     parameter CHUNKY_AVAIL = 1'b0,
@@ -725,7 +728,7 @@ module socctl_wb #(
     localparam VMODE_SIG = 16'h5A4D;
     // 1280x800 needs native 1280x720's 32K words of VRAM
     localparam [7:0] VM_AVAIL = (VMODES_AVAIL == 0) ? 8'b0000_0001 :
-                                (WIDE_AVAIL == 0) ? 8'b0000_1001 :
+                                (WIDE_AVAIL == 0) ? ((ROWS_AVAIL != 0) ? 8'b0101_1001 : 8'b0000_1001) :
                                 (NATIVE720_AVAIL != 0) ? 8'b0111_1111 : 8'b0101_1111;
 
     reg [31:0] ctrl;
@@ -1183,7 +1186,7 @@ module socctl_wb #(
                                              { 6'b0, wy1, 6'b0, wx1 } : 32'h0000_0000;
                         32'd18: wb_dat_o <= ck_base;
                         32'd19: wb_dat_o <= { VMODE_SIG, VM_AVAIL, 2'b0,
-                                              (WIDE_AVAIL != 0) && (VMODES_AVAIL != 0),
+                                              ((WIDE_AVAIL != 0) || (ROWS_AVAIL != 0)) && (VMODES_AVAIL != 0),
                                               ((WIDE_AVAIL == 0) || (NATIVE720_AVAIL == 0)) && (VMODES_AVAIL != 0),
                                               1'b0, vmode };
                         default: wb_dat_o <= 32'h0000_0000;

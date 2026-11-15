@@ -12,7 +12,8 @@ the countdown brings the old mode back.
 |---|---|
 | 45F and 85F (Mozart ML1/ML2, Sergei ML1, Noir, Schoko, ULX3S 45F/85F) | 640x480, 800x600, 1024x768, 1280x720, 800x480, 1280x800, and 1920x1080 showing a 960x540 desktop at twice the size each way |
 | Sergei ML2 | 640x480, 800x600, 1024x768, 800x480, and two shown at twice the size each way: 1280x720 from a 640x360 desktop and 1920x1080 from 960x540 (below) |
-| 25F and 12F with a picture (Lakritz, Mozart ML0, Sergei ML0, Konfekt, Minze, ULX3S 12F/25F) | 640x480, and 1280x720 showing a 640x360 desktop at twice the size each way |
+| Lakritz | 640x480, 800x480, and two shown at twice the size each way: 1280x720 from a 640x360 desktop and 1920x1080 from 960x540 (below) |
+| the other 25F and 12F boards with a picture (Mozart ML0, Sergei ML0, Konfekt, Minze, ULX3S 12F/25F) | 640x480, and 1280x720 showing a 640x360 desktop at twice the size each way |
 | Obst | 640x480: it is the small build, a 1 MB machine (below) |
 | the console profile, headless boards, Artix-7, GateMate | 640x480, as before |
 
@@ -26,11 +27,13 @@ for:
 | 1280x800 (16:10) | laptop-style panels and office monitors |
 | 1920x1080 at 30 Hz (16:9) | a 1080p television or monitor without its scaler: each desktop pixel is exactly four of the screen's. Thirty frames a second, so the pointer moves less smoothly |
 
-The 25F boards do not have these three. Each needs a row length other
-than 640 pixels, which is the 45F builds' logic (and Lakritz is at 92%
-of its LUTs), and VRAM in block RAM: a 25F build has 9,600 words, or
-14,400 with six game planes, where 800x480 is 12,000 and 960x540
-16,200. Game mode's 320x240 is not one of
+Lakritz has two of these three, and the other 25F boards none yet.
+800x480 and 1920x1080's 960x540 desktop are one pixel a clock, as
+640x480 is, so they need none of the 45F builds' second pixel: only
+rows of their own length (**VIDEO_ROWS**, below) and room in VRAM,
+which stays in block RAM: 16,384 words on Lakritz, where 800x480 is
+12,000 and 960x540 16,200. 1280x800 is two pixels a clock and 32,000
+words, so it stays with the 45F boards. Game mode's 320x240 is not one of
 them. **Super+Esc** is still game mode, and the 320x240 game picture is
 always shown on a 640x480 signal:
 
@@ -128,6 +131,12 @@ ECP5_BIG for DEVICE=45k or 85k, so a ULX3S gets it from its DEVICE.
 **NO_VIDEO_WIDE** gives a 45F or 85F board the 25F boards' modes;
 **VIDEO_NO_NATIVE_720** keeps the 45F modes but doubles 1280x720 from a
 640x360 desktop, as the 25F boards do, so VRAM need only hold 1024x768.
+**VIDEO_ROWS** gives a board without VIDEO_WIDE 800x480 and 1920x1080
+as well: rows of 25 and 30 words in the scanout and the blitter, and a
+VRAM of at least 16,384 words (three more DP16KD than six game planes'
+14,400). `rtl/boards.vh` sets it for Lakritz; **NO_VIDEO_ROWS** takes
+it away again, and defining it for another 25F board is all that board
+needs, if it has the block RAM.
 The console profile builds that too, and so do headless builds,
 composite, Artix-7, GateMate and Obst.
 
@@ -399,6 +408,7 @@ NO_VIDEO_MODES and its apps with constant geometry.
 |---|---|
 | `wide` (the default) | a 45F board: all seven modes |
 | `dbl` | a 25F board: 640x480, and 1280x720 as 640x360 |
+| `rows` | Lakritz: those two, 800x480, and 1920x1080 as 960x540 |
 | `widedbl` | Sergei ML2: the 45F modes without 1280x800, and 1280x720 from 640x360 |
 | `none` | a bitstream without screen modes |
 

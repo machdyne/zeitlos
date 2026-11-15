@@ -184,7 +184,7 @@ typedef struct zsys {
 	// The screen mode (VMODE): the mode, the modes there are (a bit
 	// each; 0: a bitstream without the register), and whether the
 	// other modes are native (a 45F board) or 1280x720 is 640x360 shown
-	// twice (a 25F). ZSYS_VMODES=wide|dbl|none, wide by default.
+	// twice (a 25F). ZSYS_VMODES=wide|dbl|widedbl|rows|none, wide by default.
 	uint8_t vmode, vm_avail;
 	bool vm_wide;
 	bool vm_dbl720;	// 1280x720 is the 640x360 desktop doubled

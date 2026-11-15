@@ -274,7 +274,12 @@ module gpu_video #(
 	// WIDE without native 1280x720 (VIDEO_NO_NATIVE_720, Sergei ML2):
 	// mode 3 is the 640x360 desktop shown twice each way, as on the 25F
 	// boards, and VRAM need only hold 1024x768
-	parameter NATIVE720 = 1'b1
+	parameter NATIVE720 = 1'b1,
+	// Without WIDE (one pixel a clock, a 25F board): rows at the mode's
+	// own length all the same, for the modes of one pixel a clock or one
+	// pixel twice whose desktop is not 640 wide -- 800x480 (25 words)
+	// and 1920x1080's 960x540 (30). VIDEO_ROWS, rtl/boards.vh: Lakritz.
+	parameter VROWS = 1'b0
 
 ) (
 
@@ -1988,7 +1993,7 @@ module gpu_video #(
 	wire [14:0] rb_next =
 		(mode == 3'd1 || mode == 3'd4) ? ((fbr15 << 4) + (fbr15 << 3) + fbr15) :
 		(mode == 3'd2) ? (fbr15 << 5) :
-		((mode == 3'd3 && NATIVE720 != 0) || mode == 3'd5) ? ((fbr15 << 5) + (fbr15 << 3)) :
+		((mode == 3'd3 && WIDE != 0 && NATIVE720 != 0) || mode == 3'd5) ? ((fbr15 << 5) + (fbr15 << 3)) :
 		(mode == 3'd6) ? ((fbr15 << 5) - (fbr15 << 1)) :
 		((fbr15 << 4) + (fbr15 << 2));
 	reg [14:0] rb_refill;
@@ -2129,7 +2134,9 @@ module gpu_video #(
 	reg [14:0] rb_sync0, rb_sync1;
 	reg [2:0] m_c0, m_c1;
 	wire m0_c = (m_c1 == 3'd0);
-	wire [5:0] rw_c = (WIDE == 0) ? 6'd20 :
+	wire [5:0] rw_c = (WIDE == 0) ?
+		((VROWS != 0 && m_c1 == 3'd4) ? 6'd25 :
+		 (VROWS != 0 && m_c1 == 3'd6) ? 6'd30 : 6'd20) :
 		(m_c1 == 3'd1 || m_c1 == 3'd4) ? 6'd25 : (m_c1 == 3'd2) ? 6'd32 :
 		((m_c1 == 3'd3 && NATIVE720 != 0) || m_c1 == 3'd5) ? 6'd40 :
 		(m_c1 == 3'd6) ? 6'd30 : 6'd20;
@@ -2137,7 +2144,7 @@ module gpu_video #(
 	// WIDE: rows of 25, 32 or 40 words in the other modes. The row's
 	// word address is worked out in the pixel domain (rb_refill, with
 	// y_refill and on the same edge) and crosses as alt_refill does.
-	wire [14:0] row_base = (WIDE != 0) ? rb_sync1 :
+	wire [14:0] row_base = (WIDE != 0 || VROWS != 0) ? rb_sync1 :
 		((y_refill_sync1 << 4) + (y_refill_sync1 << 2));   // y*20
 	assign gb_row_o = y_refill_sync1;
 

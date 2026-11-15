@@ -115,7 +115,8 @@ kernel and core apps; only the gateware is replaced by the emulator.
 
 socctl's VMODE is emulated ([screen_modes.md](screen_modes.md)):
 `ZSYS_VMODES=wide` (the default, a 45F board: all seven modes), `dbl` (a
-25F: 1280x720 is 640x360), `widedbl` (Sergei ML2) or `none`. The picture, the screenshot and the window take the
+25F: 1280x720 is 640x360), `rows` (Lakritz: a 25F with 800x480 and
+1920x1080 too), `widedbl` (Sergei ML2) or `none`. The picture, the screenshot and the window take the
 mode's desktop size; the hardware's doubling is not drawn.
 
 ## Milestones

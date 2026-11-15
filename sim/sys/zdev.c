@@ -1242,11 +1242,14 @@ void zdev_reset(zsys_t *s) {
 		const char *vm = getenv("ZSYS_VMODES");
 		// wide (default): a 45F board; dbl: a 25F board, 1280x720 from
 		// 640x360; widedbl: Sergei ML2, the 45F modes with 1280x720
-		// doubled (VIDEO_NO_NATIVE_720); none: no screen modes
+		// doubled (VIDEO_NO_NATIVE_720); rows: Lakritz, a 25F board
+		// with 800x480 and 1920x1080's 960x540 too (VIDEO_ROWS);
+		// none: no screen modes
+		bool rows = vm && !strcmp(vm, "rows");
 		s->vm_wide = !(vm && !strcmp(vm, "dbl"));
-		s->vm_dbl720 = vm && (!strcmp(vm, "dbl") || !strcmp(vm, "widedbl"));
+		s->vm_dbl720 = vm && (!strcmp(vm, "dbl") || !strcmp(vm, "widedbl") || rows);
 		// 1280x800 (bit 5) needs native 1280x720's VRAM
-		s->vm_avail = (vm && !strcmp(vm, "none")) ? 0 : !s->vm_wide ? 0x09 :
+		s->vm_avail = (vm && !strcmp(vm, "none")) ? 0 : rows ? 0x59 : !s->vm_wide ? 0x09 :
 			s->vm_dbl720 ? 0x5f : 0x7f;
 	}
 	s->video_mode = 0;				// white on black, as Lakritz comes up

@@ -64,7 +64,10 @@ module gpu_blit_wb #(
     parameter WIDE = 0,
     // WIDE without native 1280x720: mode 3 is a 640x360 desktop, rows
     // of 80 bytes (rtl/gpu/gpu_video.v, NATIVE720)
-    parameter NATIVE720 = 1
+    parameter NATIVE720 = 1,
+    // without WIDE: 800x480's rows of 100 bytes and 960x540's of 120
+    // all the same (rtl/gpu/gpu_video.v, VROWS)
+    parameter VROWS = 0
 )
 (
     input wire clk,
@@ -591,7 +594,8 @@ module gpu_blit_wb #(
         input [AW-1:0] yy;
         input [2:0] m;
         begin
-            if (WIDE == 0 || m == 3'd0 || m == 3'd7 || (m == 3'd3 && NATIVE720 == 0))
+            if ((WIDE == 0 && !(VROWS != 0 && (m == 3'd4 || m == 3'd6))) ||
+                    m == 3'd0 || m == 3'd7 || (m == 3'd3 && NATIVE720 == 0))
                 row_of = (yy << 6) + (yy << 4);
             else if (m == 3'd1 || m == 3'd4)
                 row_of = (yy << 6) + (yy << 5) + (yy << 2);
@@ -603,7 +607,8 @@ module gpu_blit_wb #(
                 row_of = (yy << 7) + (yy << 5);
         end
     endfunction
-    wire [AW-1:0] stride_b = (WIDE == 0 || vmode == 3'd0 || vmode == 3'd7 ||
+    wire [AW-1:0] stride_b = ((WIDE == 0 && !(VROWS != 0 && (vmode == 3'd4 || vmode == 3'd6))) ||
+        vmode == 3'd0 || vmode == 3'd7 ||
         (vmode == 3'd3 && NATIVE720 == 0)) ? 17'd80 :
         (vmode == 3'd1 || vmode == 3'd4) ? 17'd100 : (vmode == 3'd2) ? 17'd128 :
         (vmode == 3'd6) ? 17'd120 : 17'd160;

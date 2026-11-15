@@ -2000,6 +2000,25 @@
 `endif
 `endif
 
+// Lakritz, a 25F board, has two more modes than the others of its class:
+// 800x480 and 1920x1080 at 30 Hz (a 960x540 desktop twice each way).
+// Both are one pixel a clock, so they need none of VIDEO_WIDE's second
+// pixel, only rows of their own length (25 and 30 words) and a VRAM of
+// 16,384 words rather than 14,400: three more DP16KD. VIDEO_ROWS on
+// any other board without VIDEO_WIDE does the same; NO_VIDEO_ROWS
+// leaves Lakritz with the class's two modes. docs/screen_modes.md.
+`ifdef BOARD_LAKRITZ
+`ifdef VIDEO_MODES
+`ifndef VIDEO_WIDE
+`ifndef NO_VIDEO_ROWS
+`ifndef VIDEO_ROWS
+`define VIDEO_ROWS
+`endif
+`endif
+`endif
+`endif
+`endif
+
 // Sergei ML2, the fullest board (DDR3, Keccak, SHA-256, montmul, S/PDIF,
 // chunky colour), has the 45F modes but not native 1280x720: mode 3 is
 // the 640x360 desktop doubled, as on the 25F boards, so VRAM need only
