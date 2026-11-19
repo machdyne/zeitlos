@@ -56,6 +56,10 @@
  * USERPART_START on a board with the DFU bootloader, at 0 without, and
  * must end before the boot logo (sw/bios, logo.h). */
 #define ZFPGA_GW_DFU       0x040000u
+/* ... or at machboot's system slot, on a board whose flash starts with
+ * machboot (its firmware header "MBFW" at 0x050000; docs/zboot.md) */
+#define ZFPGA_GW_MACHBOOT  0x060000u
+#define ZFPGA_MACHBOOT_FW  0x050000u
 #define ZFPGA_LOGO_OFFSET  0x0F0000u
 
 #define SECTOR 4096u
@@ -147,8 +151,10 @@ static int sector_erased(uint32_t s) {
 }
 
 /* Where Zeitlos's own gateware ends, or 0 if there is none to be found.
- * It starts at 0x040000 if a bitstream begins there (a board with the
- * DFU bootloader, whose own bitstream is at 0), else at 0. It ends at
+ * It starts at 0x060000 on a board with machboot (whose own bitstream
+ * is at 0 and its firmware at 0x050000), at 0x040000 if a bitstream
+ * begins there (a board with the DFU bootloader, whose own bitstream is
+ * at 0), else at 0. It ends at
  * the first wholly erased 4 KB sector -- a compressed bitstream never
  * has one -- or at a 64 KB boundary where another bitstream begins,
  * which is a user design flashed straight after it. The space from
@@ -157,7 +163,12 @@ static int sector_erased(uint32_t s) {
 static uint32_t gateware_end(void) {
     uint32_t start, s;
     bitinfo_t bi;
-    if (bit_info(rd_flash, (void *)(uintptr_t)ZFPGA_GW_DFU, 4096, &bi) == 0) start = ZFPGA_GW_DFU;
+    if (zio_flash_read(ZFPGA_MACHBOOT_FW) == 'M' && zio_flash_read(ZFPGA_MACHBOOT_FW + 1) == 'B' &&
+            zio_flash_read(ZFPGA_MACHBOOT_FW + 2) == 'F' && zio_flash_read(ZFPGA_MACHBOOT_FW + 3) == 'W') {
+        if (bit_info(rd_flash, (void *)(uintptr_t)ZFPGA_GW_MACHBOOT, 4096, &bi) != 0) return 0;
+        start = ZFPGA_GW_MACHBOOT;
+    }
+    else if (bit_info(rd_flash, (void *)(uintptr_t)ZFPGA_GW_DFU, 4096, &bi) == 0) start = ZFPGA_GW_DFU;
     else if (bit_info(rd_flash, (void *)(uintptr_t)0, 4096, &bi) == 0) start = 0;
     else return 0;
     for (s = start + SECTOR; s < ZFPGA_LOGO_OFFSET; s += SECTOR) {

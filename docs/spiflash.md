@@ -73,6 +73,17 @@ gateware, which then cannot be rewritten from Zeitlos either -- which
 is also why self-upgrade belongs to boards with DFU (`docs/zboot.md`
 section 5).
 
+**On a board with machboot** instead of the DFU bootloader
+(github.com/machdyne/machboot), the flash starts with machboot's boot
+slot: its bitstream at `0x000000`, its firmware at `0x050000`, its
+settings at `0x05E000`, and Zeitlos's gateware at `0x060000`. The
+controller's lock still ends at `0x040000`, so the kernel adds the rest:
+when the flash holds machboot's firmware header (`MBFW` at `0x050000`),
+`Z_SYS_FLASH` refuses erases and programs below `0x060000` with
+`Z_SPIFLASH_E_LOCKED`, and `Z_FLASH_INFO` reports `0x060000` as the lock
+end (`sw/os/flashapi.c`, `k_flash_lock_end()`). `zfpga flash` looks for
+Zeitlos's gateware at `0x060000` there (`sw/apps/zfpga/boot.c`).
+
 What this does not cover is **another bitstream**: user gateware booted
 through the jumploader has the flash pins to itself. `docs/zboot.md`
 section 7 has why the chip's own block protection is not used for that.

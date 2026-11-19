@@ -3,7 +3,8 @@
  * tests/run.sh. Named by $ZFPGA_SIMFLASH; its size is the flash size.
  * The rules are the hardware's: an erase sets a 4 KB sector to FF,
  * programming only clears bits, and nothing below 0x040000 may be
- * erased or programmed (rtl/spiflash.v). A jump is not performed: it is
+ * erased or programmed (rtl/spiflash.v) -- 0x060000 on a machboot image,
+ * as the kernel refuses (sw/os/flashapi.c). A jump is not performed: it is
  * written to $ZFPGA_SIMFLASH.jump, and returns 0.
  */
 #include <stdio.h>
@@ -11,7 +12,12 @@
 #include <string.h>
 #include "zfpga.h"
 
-#define LOCK_END 0x040000u
+#define DFU_LOCK_END 0x040000u
+/* machboot: its firmware header "MBFW" at 0x050000, the system at
+ * 0x060000; the kernel refuses writes below that (sw/os/flashapi.c) */
+#define MACHBOOT_SLOT 0x060000u
+
+static uint32_t LOCK_END = DFU_LOCK_END;
 
 static uint8_t *img;
 static uint32_t size;
@@ -35,6 +41,8 @@ int zio_flash_begin(zio_flash_info_t *info) {
     fclose(f);
     info->size = size;
     info->id = 0x00EF4000u | (uint32_t)(size == (4u << 20) ? 0x16 : size == (16u << 20) ? 0x18 : 0x15);
+    if (size > 0x050004u && !memcmp(img + 0x050000u, "MBFW", 4))
+        LOCK_END = MACHBOOT_SLOT;
     info->lock_end = LOCK_END;
     return 0;
 }

@@ -151,6 +151,12 @@ base is `0x100000`, so these addresses are the region's offsets plus
 |---|---|---|
 | `0x000000` | 256 KB | DFU bootloader (uses ~123 KB), on boards that ship one |
 | `0x040000` | 960 KB | Zeitlos gateware (1 MB from `0x000000` without DFU) |
+
+On a board with machboot instead of the DFU bootloader, the first
+384 KB are machboot's (bitstream, firmware at `0x050000`, settings) and
+Zeitlos's gateware starts at `0x060000`; the rest is the same.
+`docs/spiflash.md` has how the kernel keeps writes out of machboot's
+part.
 | `0x100000` | 160 KB | kernel |
 | `0x128000` | to `0x1FC000` | core apps (the ZAR) |
 | `0x1FC000` | 4 KB | the `flashtest` sector |

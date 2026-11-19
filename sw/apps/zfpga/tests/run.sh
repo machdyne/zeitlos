@@ -599,6 +599,24 @@ PY
     ZFPGA_SIMFLASH="$F/dfu" $SF flash "$F/blink.bit" > "$F/o16" 2>&1 &&
         grep -q "at $(printf '0x%06x' $dtail)" "$F/o16" ||
         fl_fail "DFU: the gateware found at 0x040000, its tail at $(printf '0x%06x' $dtail): $(cat "$F/o16")"
+    # machboot: its bitstream at 0, its firmware ("MBFW") at 0x050000,
+    # the gateware at 0x060000. The tail is after 0x060000 + the gateware;
+    # 0x040000-0x05FFFF (machboot's firmware and settings) is never free.
+    # (a compressed gateware: 400 KB, about what Zeitlos's is)
+    printf 'MBFW' > "$F/mbfw.bin"
+    head -c 409600 "$F/gw.bit" > "$F/gwc.bit"
+    python3 tests/mkflash.py "$F/mb" 0x400000 0x1F0000 "$F/jl.bit" "$F/jl.bit@0" "$F/mbfw.bin@0x50000" "$F/gwc.bit@0x60000"
+    cp "$F/mb" "$F/mb0"
+    gwn=409600
+    mtail=$(( (0x60000 + gwn + 0xFFFF) / 0x10000 * 0x10000 ))
+    ZFPGA_SIMFLASH="$F/mb" $SF flash "$F/blink.bit" > "$F/o17" 2>&1 &&
+        grep -q "at $(printf '0x%06x' $mtail)" "$F/o17" &&
+        [ "$(at "$F/mb" 0x60000 $gwn | md5sum)" = "$(md5sum < "$F/gwc.bit")" ] ||
+        fl_fail "machboot: the gateware found at 0x060000, its tail at $(printf '0x%06x' $mtail): $(cat "$F/o17")"
+    cp "$F/mb0" "$F/mb"
+    ZFPGA_SIMFLASH="$F/mb" $SF flash "$F/blink.bit" -a 0x040000 > "$F/o18" 2>&1 &&
+        fl_fail "machboot: 0x040000 (its firmware) accepted"
+    grep -q "is not free" "$F/o18" && same "$F/mb" "$F/mb0" || fl_fail "machboot: 0x040000: $(cat "$F/o18")"
     # refused and warned, whatever the layout
     ./zfpga build "$F/blink.v" -b lakritz -D db -o "$F/own.bit" -- -a 0x190000 > /dev/null 2>&1
     ZFPGA_SIMFLASH="$F/img" $SF flash "$F/own.bit" -a 0x1A0000 > "$F/o10" 2>&1
@@ -606,7 +624,7 @@ PY
     ./zfpga flash "$F/blink.bit" > "$F/o11" 2>&1 && fl_fail "the host zfpga wrote a flash"
     grep -q "works on the machine" "$F/o11" || fl_fail "the host zfpga: $(cat "$F/o11")"
     if [ $flash_ok = 1 ]; then
-        echo "ok   flash / run: after the core apps, in the gateware tail (JTAG and DFU), after the jumploader"
+        echo "ok   flash / run: after the core apps, in the gateware tail (JTAG, DFU, machboot), after the jumploader"
         echo "     on 4 MB; 2 MB has none, so run is refused; verified; no rewrite; a jump; the gateware"
         echo "     untouched, a design right after it"
         echo "     told apart; refused: wrong die, not free, unaligned, no room, not a bitstream, no jumploader"

@@ -10,7 +10,13 @@
  *     shell), released on end or when the owner dies;
  *   - no flash-app launches while a session is open (zar.c asks), since
  *     the archive they are copied from may be half-written;
- *   - the byte-to-word packing of the page buffer.
+ *   - the byte-to-word packing of the page buffer;
+ *   - machboot's boot slot: on a board whose flash starts with machboot
+ *     (github.com/machdyne/machboot) rather than the DFU bootloader, its
+ *     firmware and settings sit at 0x040000-0x05FFFF, above the
+ *     controller's lock, and Zeitlos's gateware starts at 0x060000. The
+ *     kernel refuses writes below 0x060000 there, and reports 0x060000
+ *     as the lock end (k_flash_lock_end()).
  *
  * Nothing here waits for an operation to finish. Erase and program
  * start one and return; callers poll the status.
@@ -48,6 +54,27 @@ uint32_t k_flash_hw_size(void) {
 	cap = REG(Z_SPIFLASH_ID) & 0xFFu;
 	// JEDEC capacity byte: 2^n bytes on Winbond and most others
 	return (cap >= 16 && cap <= 28) ? 1u << cap : 0;
+}
+
+// machboot keeps its firmware header ("MBFW") at 0x050000 and boots
+// the system at 0x060000; the DFU bootloader's user image starts with a
+// bitstream at 0x040000, so 0x050000 is never "MBFW" there.
+#define MACHBOOT_FW      0x050000u
+#define MACHBOOT_MAGIC   0x5746424Du
+#define MACHBOOT_SLOT    0x060000u
+
+uint32_t k_flash_lock_end(void) {
+	uint32_t lock = REG(Z_SPIFLASH_LOCK);
+	if (*(volatile const uint32_t *)(0x10000000u + MACHBOOT_FW) == MACHBOOT_MAGIC && lock < MACHBOOT_SLOT)
+		lock = MACHBOOT_SLOT;
+	return lock;
+}
+
+// below the lock, modulo the chip size (the chip ignores higher bits)
+static bool below_lock(uint32_t addr) {
+	uint32_t cap = REG(Z_SPIFLASH_ID) & 0xFFu;	// no wait: the ID is read at reset
+	if (cap >= 16 && cap <= 28) addr &= (1u << cap) - 1;
+	return addr < k_flash_lock_end();
 }
 
 // Arm, command, and report what the controller said. The controller
@@ -118,7 +145,7 @@ z_obj_t *k_flash(z_obj_t *args) {
 		a->result = id;
 		// JEDEC capacity byte: 2^n bytes on Winbond and most others
 		a->len = ((id & 0xFFu) >= 16 && (id & 0xFFu) <= 28) ? (1u << (id & 0xFFu)) : 0;
-		a->addr = REG(Z_SPIFLASH_LOCK);
+		a->addr = k_flash_lock_end();
 		return &z_ok;
 	}
 	case Z_FLASH_STATUS:
@@ -139,6 +166,12 @@ z_obj_t *k_flash(z_obj_t *args) {
 		if (a->op == Z_FLASH_ERASE ? k_kv_overlaps(a->addr & ~0xFFFu, 4096u)
 				: k_kv_overlaps(a->addr, a->len)) {
 			a->result = Z_FLASH_E_RESERVED;
+			return &z_fail;
+		}
+		// machboot's boot slot: the controller's lock is the DFU
+		// bootloader's 0x040000 whatever boots the board
+		if (below_lock(a->addr)) {
+			a->result = Z_SPIFLASH_E_LOCKED;
 			return &z_fail;
 		}
 		if (!session || session_owner != z_pid) {

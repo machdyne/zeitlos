@@ -10,6 +10,7 @@
 bool k_flash_present(void);
 uint32_t k_flash_hw_status(void);
 uint32_t k_flash_hw_size(void);                   // bytes, from the JEDEC ID; 0 if unknown
+uint32_t k_flash_lock_end(void);                  // the controller's lock, or 0x060000 under machboot
 uint32_t k_flash_hw_erase(uint32_t addr);         // 0 if started, else refusal bits
 uint32_t k_flash_hw_program(uint32_t addr, const uint8_t *buf, uint32_t len);
 
