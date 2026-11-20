@@ -1458,18 +1458,6 @@ void sh(void) {
 			sh_cache(arg);
 		}
 
-		// `sched [late 0|1] [drvwake on|off]`: two scheduler variants
-		// tried in round 10, to compare (kernel.c, k_sched_late).
-		// late 1 and drvwake off is the default.
-		else if (sh_is(buffer, cmdlen, "sched")) {
-			char *k = get_arg(buffer, 1), *v = get_arg(buffer, 2);
-			if (k && v && !strcmp(k, "late")) k_sched_late = (*v == '1');
-			else if (k && v && !strcmp(k, "drvwake")) k_sched_drvwake = !strcmp(v, "on");
-			else if (k) { printf("usage: sched [late 0|1] [drvwake on|off]\n"); continue; }
-			printf("sched: late %ld, drvwake %s\n", (long)k_sched_late,
-				k_sched_drvwake ? "on" : "off");
-		}
-
 		else if (sh_is(buffer, cmdlen, "mpu")) {
 			arg = get_arg(buffer, 1);
 			sh_mpu(arg);
@@ -2485,7 +2473,6 @@ void sh_help(void) {
 	printf(" ddmi [on|off]     DDMI audio now, until boot or cfg reload (docs/ddmi_audio.md)\n");
 	printf(" kill <pid>        kill a process\n");
 	printf(" kill -c <pid>     ... as a crash (a driver restarts; wm: rescue console)\n");
-	printf(" sched [late 0|1] [drvwake on|off]  scheduler switches\n");
 	printf(" ps                display a process snapshot\n");
 	printf(" df                display filesystem capacity\n");
 	printf(" report            the last crash and the log, to " Z_PATH_REPORT "\n");

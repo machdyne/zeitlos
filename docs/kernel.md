@@ -519,6 +519,13 @@ process is `Z_PROC_RUNNABLE()` -- a blocked waiter is idle and is
 billed nothing. A process looping on `z_proc_wait(1)` is still billed,
 correctly: the sweep unblocks it first.
 
+**Gone since the quiet tick (below):** the census ran on every
+interrupt for the sake of one line of `ps`, which now prints the
+kernel's counts by kind (`irq: tick= usb= yield= other=`); and round
+10's `sched late`/`sched drvwake` switches, both measured slower and
+left off, are constants. Their room is what the quiet tick is built in.
+What follows describes the census as it was.
+
 `z_irq_census[]` counts interrupt entries by source line, reported at
 the end of `k_proc_dump()`. It is measurement only, and the reason it
 is worth the nine counters is that `cpu_ticks` cannot distinguish a
@@ -896,6 +903,29 @@ much they disturb:
 
 **Dropping the padding** was on no list, because it was believed to be
 what zeroed `.bss`. It was done in Phase 3, after reading `_start`.
+
+## The quiet tick
+
+732 times a second the timer interrupt runs the tick: accounts, the
+sweep of sleepers, the switch. When no sleep ends on this tick and no
+other process could run, all of that wakes no one and keeps the process
+that is running. `z_kernel_entry()` now sees that first -- one compare
+against `k_wake_min`, the earliest tick any sleep ends on, and the count
+of runnable processes -- counts the tick and returns. Nothing about
+scheduling changes: it is taken only where the full path would have
+done nothing.
+
+Why it matters: on a board with slow main memory and an 8 KB
+instruction cache, a busy app's code puts the tick's out of the cache
+between ticks, so each tick fetched its path again, and the app its
+own after it. In zsys with the board's caches modelled (`--cache`,
+[zsys.md](zsys.md)) and cinema playing: interrupts 9% of the machine's
+time became 6%, a frame's decode 5% shorter, fetch misses 7% fewer.
+Not measured on a board.
+
+`k_wake_min` is kept by `k_proc_block()` (a sleep that ends sooner
+lowers it) and set again by each full tick's sweep, so it is never
+later than the truth.
 
 ## Scheduler trace
 

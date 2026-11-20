@@ -303,8 +303,11 @@ extern volatile uint32_t k_tick_n, k_tick_sw, k_tick_max;
 extern volatile uint64_t k_tick_cyc;
 extern volatile bool k_tick_sleepset;
 #endif
-extern volatile int32_t k_sched_late;	// `sched`, sh.c
-extern volatile bool k_sched_drvwake;
+// (Round 10's two scheduler variants, and the `sched` command that
+// switched them: both measured slower, and were left off. Constants now;
+// the room went to the quiet tick, kernel.c.)
+#define k_sched_late	1
+#define k_sched_drvwake	0
 extern volatile k_pidset_t k_run_set;
 extern volatile k_pidset_t k_die_set;
 extern volatile k_pidset_t k_drv_set;	// Z_PROC_FLAG_DRIVER

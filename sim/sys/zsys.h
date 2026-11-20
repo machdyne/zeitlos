@@ -222,6 +222,17 @@ typedef struct zsys {
 	// for as long as the wire would take, so a driver waiting on it
 	// waits as long as on the board. --
 	bool dma_on;
+	// --cache I,D,MISS: the board's caches as far as their cost goes
+	// (rtl/mem/wb_cache.v: direct mapped, 4-word lines, main memory
+	// only; a load or a fetch that misses fills its line and costs
+	// MISS clocks; stores are posted and cost nothing here)
+	bool cache_on, cache_fetch;
+	uint32_t cache_ilines, cache_dlines, cache_miss;
+	uint32_t cache_itag[8192], cache_dtag[8192];
+	uint64_t cache_imiss, cache_dmiss, cache_ihit, cache_dhit;
+	// where the misses were: the kernel's first 256 KB in 64-byte
+	// pieces (fetches, loads), and everything by megabyte
+	uint32_t cache_kprof[2][4096], cache_mprof[2][64];
 	uint32_t dma_src[2], dma_dst[2];
 	uint64_t dma_until[2];
 	uint32_t dma_jobs, dma_paces;

@@ -168,8 +168,9 @@ volatile bool k_tick_sleepset = true;
 // `usb` polling the adapter more often costs more than it gains -- and
 // with drvwake the keyboard and mouse were re-enumerated mid-transfer.
 // Kept as switches for the next measurement. See the sleep sweep.
-volatile int32_t k_sched_late = 1;
-volatile bool k_sched_drvwake = false;
+// The quiet tick (z_kernel_entry()): the earliest tick any sleep ends
+// on -- never later than the true one.
+static __attribute__((section(".bss"))) uint32_t k_wake_min;
 
 // Processes sleeping with a deadline (wake_tick != 0). A bit is set
 // whenever a deadline is set, and cleared by the sweep once the process
@@ -964,7 +965,6 @@ int main(void) {
 // `irqs`, [2] counts entries carrying any line outside 3..8. Read out
 // (cumulative) at the end of k_proc_dump(), so two `ps` runs bracketing
 // a workload give the IRQ rate by source.
-uint32_t z_irq_census[9];
 
 // Virtualise the GPU scissor per process. The registers are
 // global hardware with no privilege, so the kernel cannot intercept
@@ -1980,6 +1980,22 @@ uint32_t *z_kernel_entry(uint32_t syscall_id, uint32_t *regs, uint32_t irqs) {
 
 	// CPU accounting: this interrupt's time is its own, not the
 	// interrupted process's ("CPU accounting" above).
+	// The quiet tick: nobody's sleep ends on it and nobody else could
+	// run, so the path below would wake no one and keep the process
+	// that is running. Counted, and back at once. That path's code is
+	// put out of the instruction cache by the app's between ticks and
+	// fetched again 732 times a second, and the app's after it: on a
+	// board with slow memory, several percent of a busy app's time
+	// (docs/kernel.md, "The quiet tick").
+	if (irqs == (1u << Z_IRQ_KTIMER) && !k_idle_on && !k_resched_owed && !k_drv_woken && !k_no_preempt &&
+	    z_pid < Z_PROCS_MAX && Z_PROC_RUNNABLE(z_procs[z_pid]) &&
+	    (int32_t)(z_kernel_ticks + 1 - k_wake_min) < k_sched_late &&
+	    k_proc_runnable_count() < 2) {
+		++z_kernel_ticks;
+		++z_procs[z_pid].cpu_ticks;
+		__asm__ volatile ("mv gp, %0" :: "r"(saved_gp) : "memory");
+		return regs;
+	}
 	k_irq_t0 = rd_cycle();
 	k_irq_switched = false;
 	if (k_idle_on) {				// it was waiting: that was idle
@@ -2003,10 +2019,6 @@ uint32_t *z_kernel_entry(uint32_t syscall_id, uint32_t *regs, uint32_t irqs) {
 		k_ended = k_fault(regs, irqs);
 
 	// Census: which line(s) brought us in, nothing else.
-	z_irq_census[0]++;
-	for (int b = 3; b <= 8; b++)
-		if (irqs & (1u << b)) z_irq_census[b]++;
-	if (irqs & ~0x1F8u) z_irq_census[2]++;
 
 	// only the KTIMER IRQ should advance the tick counter -- it was
 	// previously incremented for ANY interrupt (including UART RX/TX,
@@ -2125,6 +2137,7 @@ uint32_t *z_kernel_entry(uint32_t syscall_id, uint32_t *regs, uint32_t irqs) {
 		// sleeper blocked past its deadline -- so the switch owed
 		// when the guard drops would find nobody to switch to.
 		if (K_TICK_SLEEPSET) {
+			uint32_t mn = z_kernel_ticks + 0x3fffffffu;	// the earliest sleep still to end
 			// only the processes that set a deadline (k_sleep_set)
 			for (uint32_t wi = 0; wi < K_PIDSET_WORDS; wi++) {
 				uint32_t m = k_sleep_set.w[wi];
@@ -2140,10 +2153,14 @@ uint32_t *z_kernel_entry(uint32_t syscall_id, uint32_t *regs, uint32_t irqs) {
 						k_proc_unblock(i);
 						if (k_sched_drvwake && (z_procs[i].flags & Z_PROC_FLAG_DRIVER))
 							k_drv_woken = true;
+					} else if ((int32_t)(z_procs[i].wake_tick - mn) < 0) {
+						mn = z_procs[i].wake_tick;
 					}
 				}
 			}
+			k_wake_min = mn;
 		} else {
+			k_wake_min = z_kernel_ticks;
 			for (int i = 0; i < Z_PROCS_MAX; i++) {
 				if ((z_procs[i].flags & Z_PROC_FLAG_BLOCKED) == 0) continue;
 				if (z_procs[i].wake_tick == 0) continue;
@@ -2401,6 +2418,7 @@ static bool k_proc_block(uint32_t timeout, bool any_mail) {
 	if (timeout) {
 		uint32_t w = z_kernel_ticks + timeout;
 		z_procs[z_pid].wake_tick = w ? w : 1;
+		if ((int32_t)(w - k_wake_min) < 0) k_wake_min = w;
 		k_sleep_note(z_pid);
 	} else {
 		z_procs[z_pid].wake_tick = 0;
@@ -2953,11 +2971,12 @@ z_rv k_proc_dump(void) {
 		(unsigned long)(k_cyc_irq[Z_CPU_IRQ_YIELD] >> 16),
 		(unsigned long)(k_cyc_irq[Z_CPU_IRQ_OTHER] >> 16),
 		(unsigned long)(k_cyc_idle >> 16));
-	printf(" irq: total=%lu tmr=%lu uart=%lu hid0=%lu hid1=%lu aud=%lu eth=%lu oth=%lu\n",
-		(unsigned long)z_irq_census[0], (unsigned long)z_irq_census[3],
-		(unsigned long)z_irq_census[4], (unsigned long)z_irq_census[5],
-		(unsigned long)z_irq_census[6], (unsigned long)z_irq_census[7],
-		(unsigned long)z_irq_census[8], (unsigned long)z_irq_census[2]);
+	// (interrupts taken, by kind: k_cnt_irq[]. The census by source
+	// line that was here ran on every interrupt for the sake of this
+	// line; the quiet ticks are not among them.)
+	printf(" irq: tick=%lu usb=%lu yield=%lu other=%lu\n",
+		(unsigned long)k_cnt_irq[Z_CPU_IRQ_TICK], (unsigned long)k_cnt_irq[Z_CPU_IRQ_USB],
+		(unsigned long)k_cnt_irq[Z_CPU_IRQ_YIELD], (unsigned long)k_cnt_irq[Z_CPU_IRQ_OTHER]);
 	return Z_OK;
 }
 

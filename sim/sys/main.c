@@ -322,7 +322,7 @@ int main(int argc, char **argv) {
 	const char *wav_path = NULL;
 	int scale = 2;
 	const char *sd_path = NULL, *shot_path = NULL;
-	uint32_t cpi = 2, ram_mb = 32;
+	uint32_t cpi = 2, ram_mb = 32, cache_i = 0, cache_d = 0, cache_m = 0;
 
 	for (int i = 1; i < argc; i++) {
 		const char *o = argv[i], *v = i + 1 < argc ? argv[i + 1] : NULL;
@@ -346,6 +346,14 @@ int main(int argc, char **argv) {
 		}
 		else if (!strcmp(o, "--after") && v) { after = v; i++; }
 		else if (!strcmp(o, "--cpi") && v) { cpi = (uint32_t)atoi(v); i++; }
+		else if (!strcmp(o, "--cache") && v) {
+			if (sscanf(v, "%u,%u,%u", &cache_i, &cache_d, &cache_m) != 3 || !cache_i || !cache_d ||
+			    (cache_i & (cache_i - 1)) || (cache_d & (cache_d - 1)) || cache_i > 128 || cache_d > 128) {
+				fprintf(stderr, "zsys: --cache I_KB,D_KB,MISS_CLOCKS (powers of two, 128 at most)\n");
+				return 2;
+			}
+			i++;
+		}
 		else if (!strcmp(o, "--ram") && v) { ram_mb = (uint32_t)atoi(v); i++; }
 		else if (!strcmp(o, "--fast")) fast = true;
 		else if (!strcmp(o, "--stats")) stats = true;
@@ -435,6 +443,12 @@ int main(int argc, char **argv) {
 	s.audio_on = !headless;
 	s.t2_on = !headless && !no_t2;
 	s.dma_on = dma;
+	if (cache_i) {
+		s.cache_on = true;
+		s.cache_ilines = cache_i * 1024 / 16;
+		s.cache_dlines = cache_d * 1024 / 16;
+		s.cache_miss = cache_m;
+	}
 	s.features2 = headless ? 0 : Z2_RECONFIG | Z2_FLASHW | Z2_COLOR | Z2_VMOUSE;
 	if (no_keyboard) s.kbd_unplugged = true;		// zsys_reset() leaves port 0 empty
 	if (sd_path && !zsys_sd_insert(&s, sd_path, snapshot)) return 2;
@@ -554,6 +568,27 @@ done:
 		fprintf(stderr, "zsys: interrupts delivered:");
 		for (int i = 0; i < 32; i++) if (s.irq_count[i]) fprintf(stderr, " %d:%llu", i, (unsigned long long)s.irq_count[i]);
 		fprintf(stderr, "; waitirq %llu, timer %llu\n", (unsigned long long)s.waitirqs, (unsigned long long)s.timers);
+		if (s.cache_on)
+			fprintf(stderr, "zsys: cache: fetches %llu hits, %llu misses; loads %llu hits, %llu misses\n",
+				(unsigned long long)s.cache_ihit, (unsigned long long)s.cache_imiss,
+				(unsigned long long)s.cache_dhit, (unsigned long long)s.cache_dmiss);
+		if (s.cache_on && getenv("ZSYS_CACHE_PROF")) {
+			for (int k = 0; k < 2; k++) {
+				uint32_t tot = 0;
+				for (int j = 0; j < 4096; j++) tot += s.cache_kprof[k][j];
+				fprintf(stderr, "zsys: cache: kernel %s misses %u; by 64 bytes, the most:\n", k ? "load" : "fetch", tot);
+				for (int n = 0; n < 40; n++) {
+					int best = 0;
+					for (int j = 1; j < 4096; j++) if (s.cache_kprof[k][j] > s.cache_kprof[k][best]) best = j;
+					if (!s.cache_kprof[k][best]) break;
+					fprintf(stderr, "  %08x %u\n", 0x40000000u + (unsigned)best * 64u, s.cache_kprof[k][best]);
+					s.cache_kprof[k][best] = 0;
+				}
+				fprintf(stderr, "zsys: cache: %s misses by megabyte:", k ? "load" : "fetch");
+				for (int j = 0; j < 64; j++) if (s.cache_mprof[k][j]) fprintf(stderr, " %d:%u", j, s.cache_mprof[k][j]);
+				fprintf(stderr, "\n");
+			}
+		}
 		fprintf(stderr, "zsys: blits %llu, lines %llu; card blocks read %llu, written %llu; reboots %llu\n",
 			(unsigned long long)s.blit.blits, (unsigned long long)s.raster.lines,
 			(unsigned long long)s.sd.reads, (unsigned long long)s.sd.writes, (unsigned long long)s.reboots);

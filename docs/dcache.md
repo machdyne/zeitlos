@@ -562,6 +562,18 @@ the two agree):
 | Sergei ML1 | 45F | same |
 | ULX3S | 12F / 25F / 45F / 85F | same |
 | Lakritz | 25F | same but **`DCACHE_WBUF 0`**, for headroom |
+| Sergei ML2 | 45F | **`DCACHE_KB 16`** and **`ICACHE_KB 16`**, `DCACHE_WBUF 2` |
+
+Sergei ML2's caches are 16 KB each. Its main memory is DDR3, where a
+miss costs about 100 cycles against SDRAM's dozen or so, and what a
+process switch costs there is mostly the caches refilling: a reply from
+the file system took 146,000 cycles to reach its client, with nothing
+else waiting. The emulator's cache model (`--cache`, [zsys.md](zsys.md))
+puts 16 KB + 16 KB at 28% off a film frame's decoding and 31% off a
+request's way to the file system, against 8 KB + 4 KB. In the build it
+is ten more DP16KD (87 of 108), no more LUTs, and the 48 MHz clock at
+55.4 MHz where it was 53.8. The sizes are a power of two; nothing in
+software knows them. The other 45F boards have SDRAM and keep 8 + 4.
 
 Lakritz is the tightest board, and with the write buffer it measured
 88% full and 49.9-54.6 MHz over three seeds on the plain board build:

@@ -1424,10 +1424,14 @@
 // FF -- room here, not on Lakritz. Optional like the others: take this
 // line out and sw/common/zkeccak.c uses software.
 `define KECCAK
-`define ICACHE_KB 8
+// 16 KB each, not the 8 and 4 of the other 45F boards: main memory is
+// DDR3 here and a miss costs about 100 cycles, so what a process switch
+// costs is mostly refilling the caches. Ten more DP16KD (87 of 108),
+// no LUTs, and the 48 MHz clock as before (docs/dcache.md).
+`define ICACHE_KB 16
 `define ICACHE_LINE_WORDS 4
 `define DCACHE
-`define DCACHE_KB 4
+`define DCACHE_KB 16
 `define DCACHE_LINE_WORDS 4
 `define DCACHE_WBUF 2
 // No SDRAM_BURST: that selects burst line fills for the SDRAM

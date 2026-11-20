@@ -523,6 +523,35 @@ coarse)")`) has no keyboard until a key is pressed: the page reports
 port 0 empty (`zw_keyboard(0)`), and Zeitlos opens its own. The first
 physical key plugs one in.
 
+## The board's caches (`--cache`)
+
+`--cache I,D,MISS` models what the caches cost: an instruction cache of
+I KB and a data cache of D KB, direct mapped with 4-word lines as
+`rtl/mem/wb_cache.v` is, main memory only. A fetch or a load that
+misses fills its line and costs MISS clocks; stores are posted and
+cost nothing. `--stats` prints hits and misses, and with
+`ZSYS_CACHE_PROF=1` in the environment where the misses were: the
+kernel's by 64 bytes of its image (look the addresses up with `nm
+sw/os/kernel.elf`), everything by megabyte.
+
+Without it zsys charges a flat `--cpi` an instruction, and a machine
+whose time goes on cache misses looks nothing like itself. **`--cpi 4
+--cache 8,4,100` reproduces Sergei ML2** (DDR3) playing a 320x240 film
+in cinema:
+
+| | Sergei ML2 | the model | flat `--cpi 8` |
+|---|---:|---:|---:|
+| a frame's decode | 0.80-0.90M | 0.79M | 0.68M |
+| a request reaching `fs` | 55k | 64k | 21k |
+| its answer coming back | 146k | 161k | 64-77k |
+| of a read, charged to cinema | 131k | 127k | 60k |
+
+With MISS 0 the same run decodes a frame in 0.34M cycles and a request
+reaches `fs` in 11k: on that board more than half of a busy app's
+time, and five sixths of a hop between processes, is cache misses.
+Bigger caches in the model: 16 KB each, decode 0.57M; 64 KB each,
+0.42M.
+
 ## Speed
 
 About 140 million instructions a second on the PC this was written on,

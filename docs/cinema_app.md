@@ -56,7 +56,10 @@ works for a film shown at full size, 320x240 or less (what `zvenc`
 makes by default); a 640-wide film at half size stays dithered, since
 its plane view costs twice the mono one. As with colour, cinema has the
 window only while it is focused and wholly uncovered, and F10 turns
-the greys off and on. Changing between the two costs no decoding, so a
+the greys off and on. The greys and the colours are 640x480's, as the
+colour window is ([screen_modes.md](screen_modes.md)): at another
+resolution the film is dithered, and changing resolution while it plays
+changes it over. Changing between the two costs no decoding, so a
 click on another window is answered at once ([responsive.md](responsive.md)):
 the picture in memory is turned into the other layout as it stands
 (`zv_planes_to_mono()`, `zv_mono_to_planes()`) and the film carries on.

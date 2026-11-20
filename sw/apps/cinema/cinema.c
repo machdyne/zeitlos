@@ -880,6 +880,7 @@ static void col_show(int k) {
 #define CW_WPL 16       /* a row (11 words used: from the word the left edge is in); a power of two, so no multiply */
 
 static bool cw_avail;           /* the board has 32 colours in a window */
+static bool cw_mode_ok(void) { return z_vmode_get() == Z_VMODE_640X480; }
 static bool game_entering;
 static int game_clean;          /* shown frames until the screen is wiped once more */
 static void chunky_zero(void);
@@ -1166,6 +1167,7 @@ static bool gw_fix;             /* the decoder's view is to be put right (cw_che
  * picture was. */
 static void cw_clear(void) {
 	int k, rows1 = (int)z_color_rows() - 480;
+	if (!cw_mode_ok()) return;      /* those rows are the screen's now, and wm's to paint */
 	if (rows1 <= 0) rows1 = 240;
 	z_gfx_clear_visible();
 	z_gfx_blit_scissor_reset();
@@ -1196,7 +1198,10 @@ static void cw_drop(void) {
 /* tell wm whether we want it: a colour film, in the window, small enough */
 static void cw_want_update(void) {
 	/* a film in colour: its classes; one in black and white: its greys */
-	bool fits = cw_avail && have_file && !cw_off && out_kind == OUT_WINDOW && !game_entering &&
+	/* (640x480 only, asked each time: the resolution can change under an
+	 * open window, and at another the second sheet's rows are the
+	 * bottom of the screen -- the planes showed there) */
+	bool fits = cw_avail && cw_mode_ok() && have_file && !cw_off && out_kind == OUT_WINDOW && !game_entering &&
 	            (view == ZV_VIEW_MONO_HALF || view == ZV_VIEW_MONO_FULL) && pw <= CW_W && ph <= CW_H;
 	bool want = fits && col_have;
 	uint32_t wm;
@@ -1218,6 +1223,8 @@ static void cw_check(void) {
 	z_clip_t c, v;
 	int px, py, n;
 	bool ok;
+	if ((cw_on || cw_wanted) && !cw_mode_ok()) cw_want_update();   /* the resolution changed */
+	else if (cw_avail && !cw_wanted && cw_mode_ok() && have_file) cw_want_update();    /* or changed back */
 	if (gw_fix) {
 		gw_fix = false;
 		if (have_file && dec.view != dec_view()) dec_view_apply();     /* back to black and white */

@@ -389,10 +389,33 @@ static void io_write(zsys_t *s, uint32_t pa, uint32_t v, uint32_t sel) {
 
 }
 
+static inline void clocks(zsys_t *s, uint32_t n);
+static inline void cache_touch(zsys_t *s, uint32_t pa) {
+	uint32_t line = pa >> 4, *tag;
+	if ((pa >> 28) != 0x4 && (pa >> 28) != 0x5) return;        // main memory only
+	if (s->cache_fetch) {
+		tag = &s->cache_itag[line & (s->cache_ilines - 1)];
+		if (*tag == line + 1) { s->cache_ihit++; return; }
+		s->cache_imiss++;
+	} else {
+		tag = &s->cache_dtag[line & (s->cache_dlines - 1)];
+		if (*tag == line + 1) { s->cache_dhit++; return; }
+		s->cache_dmiss++;
+	}
+	*tag = line + 1;
+	{
+		uint32_t off = pa - 0x40000000u, k = s->cache_fetch ? 0 : 1;
+		if (off < 4096u * 64u) s->cache_kprof[k][off >> 6]++;
+		if ((off >> 20) < 64) s->cache_mprof[k][off >> 20]++;
+	}
+	clocks(s, s->cache_miss);
+}
+
 static inline uint32_t load(zsys_t *s, uint32_t va, int size) {
 	uint32_t pa = phys(s, va);
 	uint8_t *p = mem(s, pa, false);
 	if (p) {
+		if (s->cache_on) cache_touch(s, pa);
 		if (size == 4) { uint32_t v; memcpy(&v, p, 4); return v; }
 		if (size == 2) { uint16_t v; memcpy(&v, p, 2); return v; }
 		return *p;
@@ -540,7 +563,9 @@ int zsys_run(zsys_t *s, uint64_t budget) {
 			continue;
 		}
 
+		s->cache_fetch = true;
 		uint32_t insn = load(s, s->pc, 4);
+		s->cache_fetch = false;
 		uint32_t next = s->pc + 4;
 		uint32_t a = s->x[RS1], b = s->x[RS2], r = 0;
 		bool wr = false;
