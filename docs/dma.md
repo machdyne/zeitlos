@@ -10,7 +10,52 @@ It is the shape [sdcard.md](sdcard.md) called C, "one shared DMA
 engine with peripheral request lines", cut down to what two SPI masters
 and one MAC need.
 
+## Off for now
+
+No release target defines `DMA` (since 2026-11-20). The RTL, the
+kernel call and the drivers stay, and cost nothing with the define off:
+the software asks `z_dma_channels()` and takes the CPU's path.
+
+**Why.** Measured on Sergei ML2, the only board it has run on:
+
+| | with | without |
+|---|---:|---:|
+| the card's time for an 8 KB read (cinema) | 334k cycles | 365k |
+| `dmatest`, a byte written | 220 | 229 |
+| `dmatest`, a byte read | 302 | 297 |
+
+- It saves 8% of the card's time and nothing else. `fs` spins until a
+  job ends, so no CPU is freed -- the point of a DMA.
+- It cannot free any as built. A job is one sector, about 17,000
+  cycles. Giving the CPU to another process and getting it back is
+  two hops, 56,000 cycles on Lakritz and 110,000 or more on Sergei ML2
+  ([userspace_drivers.md](userspace_drivers.md)). Sleeping through a
+  sector costs more than spinning.
+- It moves a byte in 33-35 cycles where the wire needs 16. The engine
+  already starts the next transfer while it stores the last word, so
+  the limit is probably the store itself on DDR3.
+- It costs 450-550 LUTs. `lakritz_langkatze` was at 99% with it.
+
+**What would make it worth turning on:**
+
+1. A job per multi-block read: the engine waits for each sector's
+   start token, moves the 512 bytes and drops the CRC itself, for as
+   many sectors as the read has. Then a job lasts several hops.
+2. An interrupt when a job ends, so `fs` sleeps on it (`z_irq_bind()`,
+   which the kernel has) and other processes run meanwhile.
+3. A read the client does not wait for, in `zfsc`, so the app that
+   asked can run too.
+4. Knowing why a byte takes twice the wire's time on DDR3. If it is
+   the stores, a longer job is still twice as long as it should be.
+
+1 and 2 are RTL, perhaps 100 more LUTs, so only for boards with room.
+The plan is in the project's `dma-async-proposal`. To build with it
+meanwhile: `EXTRA_DEFINES=-DDMA` (and `-DDMA_CHANNELS=1` for one
+channel), or the two lines in a target's spec.
+
 ## Where it is built
+
+What each target had until it was turned off, and would have again:
 
 | target | `DMA` | channels | channel 0 | channel 1 |
 |---|---|---|---|---|

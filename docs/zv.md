@@ -336,6 +336,13 @@ game mode on chunky boards show it ([cinema_app.md](cinema_app.md)).
   blitted in game mode, and on Sergei ML2 a busy colour film spent
   500-850k cycles a frame of its 2.0M showing them. In zsys the same
   clip's showing went from 428k cycles a frame to 195k.
+- **A frame in steps.** With `step_blocks` set, `zv_dec_video()` draws
+  about that many blocks and returns 2; called again with the same
+  picture it carries on, until it returns something else. An entry
+  drawn for the view counts as six blocks, and a seek point's V16
+  entries are drawn 16 a call, so no call is much longer than another.
+  `zv_test` holds every view decoded in steps to the same view decoded
+  whole.
 - **A black and white film gets no layer.** `zvenc` leaves it out when
   fewer than 1% of cells are coloured. `--no-colour` leaves it out
   anyway.

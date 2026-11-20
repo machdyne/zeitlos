@@ -233,6 +233,20 @@ spikes rather than a lack of time on average.
 | **F11** | wm's full screen: the window without its neighbours, still the desktop's one bit (or the colour window, for a small film) |
 | **F10** | colour (or greys) in the window off and on |
 
+### A frame in pieces
+
+The decoder draws 400 blocks a call while a film plays -- an ordinary
+frame is still one call, a cut or a seek point three or four --
+(`zv_dec_t.step_blocks`, [zv.md](zv.md)) and the loop comes round
+between calls: messages are read, the bar is kept, sound is fed. A
+frame that is every block -- a cut, a seek point -- took 50 ms and more
+in one call, against the 20 ms an app's loop may be away
+([responsive.md](responsive.md)). In zsys at `--cpi 8` the longest call
+for a black and white film went from 1.8-2.0M cycles to 0.5M. Two
+things are still whole: a seek's first frame, and a colour film's
+classes at a seek point (1.2M there). "worst" in the timing lines is
+now the longest single call.
+
 ### One picture, and frames shown late rather than skipped
 
 Outside chunky game mode in main memory, the screen is VRAM: it holds

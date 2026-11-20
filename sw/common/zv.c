@@ -421,15 +421,21 @@ static void draw_v16(zv_dec_t *d, int i, int ph) {
 }
 
 // the entry drawn at this place, drawing it first if it is not
+// an entry drawn for the view costs about this many blocks drawn from
+// drawn entries: counted against step_blocks, so a call just after a
+// seek point (every entry new) takes no longer than any other
+#define ZV_DRAW_COST 6
+#define ZV_STEP_V16 16      // V16 entries drawn a call, in steps
 static inline const uint8_t *use_v1(zv_dec_t *d, int i, int ph) {
 	if (!(d->ok1[i] & (1u << ph))) {
+		d->draws++;
 		draw_v1(d, i, ph);
 		d->ok1[i] |= (uint16_t)(d->view == ZV_VIEW_MONO_FULL || d->view == ZV_VIEW_PAL_FULL || d->view == ZV_VIEW_PL_FULL ? 0xffff : 1u << ph);
 	}
 	return (const uint8_t *)d->r1[i];
 }
 static inline const uint8_t *use_v4(zv_dec_t *d, int i, int v) {
-	if (!(d->ok4[i] & (1u << v))) { draw_v4(d, i, v); d->ok4[i] |= (uint16_t)(1u << v); }
+	if (!(d->ok4[i] & (1u << v))) { draw_v4(d, i, v); d->ok4[i] |= (uint16_t)(1u << v); d->draws++; }
 	return (const uint8_t *)d->r4[i];
 }
 static inline const uint8_t *use_v16(zv_dec_t *d, int i, int ph) {
@@ -498,6 +504,7 @@ void zv_dec_init(zv_dec_t *d, const zv_header_t *h, int view, int mask, int g100
 }
 
 void zv_dec_set_view(zv_dec_t *d, int view, int mask) {
+	d->rs_on = 0;               // (a frame part drawn is dropped: seek, or decode on)
 	d->view = view;
 	d->mask = mask;
 	render_all(d);
@@ -552,6 +559,7 @@ void zv_dec_set_greys(zv_dec_t *d, int kind) {
 void zv_dec_seek(zv_dec_t *d, uint32_t frame) {
 	d->frame = frame;
 	d->have_key = 0;
+	d->rs_on = 0;
 }
 
 void zv_view_size(const zv_dec_t *d, int *w, int *h, int *ms) {
@@ -773,7 +781,12 @@ static int fast_mono_full(zv_dec_t *d, const uint8_t *p, const uint8_t *end, uin
 	uint8_t *dmap = d->dirty;
 	int bw = d->bw, nb = bw * d->bh, b = 0, bi = 0, bx = 0, by = 0, rs = 8 * st;
 	uint8_t *row = out, *o = out;
+	int left = d->step_blocks > 0 ? d->step_blocks : 0x7fffffff;
+	d->draws = 0;
+	b = d->rs_b; bx = d->rs_bx; by = d->rs_by;        /* (0 at a frame's start) */
+	row = out + by * rs; o = row + (bx);
 	while (b < nb) {
+		if (left <= d->draws * ZV_DRAW_COST) { d->rs_p = p; d->rs_b = b; d->rs_bx = bx; d->rs_by = by; return 2; }
 		int c, run, k, y;
 		if (p >= end) return -4;
 		c = *p++;
@@ -781,6 +794,7 @@ static int fast_mono_full(zv_dec_t *d, const uint8_t *p, const uint8_t *end, uin
 		if (b + run > nb) return -5;
 		b += run;
 		bi = b - run;
+		if ((c & 0xc0) != ZV_CMD_SKIP) left -= run;
 		switch (c & 0xc0) {
 		case ZV_CMD_SKIP:
 			bx += run;
@@ -844,7 +858,12 @@ static int fast_mono_half(zv_dec_t *d, const uint8_t *p, const uint8_t *end, uin
 	uint8_t *dmap = d->dirty;
 	int bw = d->bw, nb = bw * d->bh, b = 0, bi = 0, bx = 0, by = 0, rs = 4 * st;
 	uint8_t *row = out, *o = out;
+	int left = d->step_blocks > 0 ? d->step_blocks : 0x7fffffff;
+	d->draws = 0;
+	b = d->rs_b; bx = d->rs_bx; by = d->rs_by;        /* (0 at a frame's start) */
+	row = out + by * rs; o = row + ((bx >> 1));
 	while (b < nb) {
+		if (left <= d->draws * ZV_DRAW_COST) { d->rs_p = p; d->rs_b = b; d->rs_bx = bx; d->rs_by = by; return 2; }
 		int c, run, k, y;
 		if (p >= end) return -4;
 		c = *p++;
@@ -852,6 +871,7 @@ static int fast_mono_half(zv_dec_t *d, const uint8_t *p, const uint8_t *end, uin
 		if (b + run > nb) return -5;
 		b += run;
 		bi = b - run;
+		if ((c & 0xc0) != ZV_CMD_SKIP) left -= run;
 		if ((c & 0xc0) == ZV_CMD_SKIP) {
 			bx += run;
 			while (bx >= bw) { bx -= bw; by++; row += rs; }
@@ -913,7 +933,12 @@ static int fast_pl_full(zv_dec_t *d, const uint8_t *p, const uint8_t *end, uint8
 	uint8_t *dmap = d->dirty;
 	int bw = d->bw, nb = bw * d->bh, b = 0, bi = 0, bx = 0, by = 0, rs = 8 * st, pl = d->plane_off;
 	uint8_t *row = out, *o = out;
+	int left = d->step_blocks > 0 ? d->step_blocks : 0x7fffffff;
+	d->draws = 0;
+	b = d->rs_b; bx = d->rs_bx; by = d->rs_by;        /* (0 at a frame's start) */
+	row = out + by * rs; o = row + (bx);
 	while (b < nb) {
+		if (left <= d->draws * ZV_DRAW_COST) { d->rs_p = p; d->rs_b = b; d->rs_bx = bx; d->rs_by = by; return 2; }
 		int c, run, k, y;
 		if (p >= end) return -4;
 		c = *p++;
@@ -921,6 +946,7 @@ static int fast_pl_full(zv_dec_t *d, const uint8_t *p, const uint8_t *end, uint8
 		if (b + run > nb) return -5;
 		b += run;
 		bi = b - run;
+		if ((c & 0xc0) != ZV_CMD_SKIP) left -= run;
 		switch (c & 0xc0) {
 		case ZV_CMD_SKIP:
 			bx += run;
@@ -983,7 +1009,12 @@ static int fast_pl_half(zv_dec_t *d, const uint8_t *p, const uint8_t *end, uint8
 	uint8_t *dmap = d->dirty;
 	int bw = d->bw, nb = bw * d->bh, b = 0, bi = 0, bx = 0, by = 0, rs = 4 * st, pl = d->plane_off;
 	uint8_t *row = out, *o = out;
+	int left = d->step_blocks > 0 ? d->step_blocks : 0x7fffffff;
+	d->draws = 0;
+	b = d->rs_b; bx = d->rs_bx; by = d->rs_by;        /* (0 at a frame's start) */
+	row = out + by * rs; o = row + ((bx >> 1));
 	while (b < nb) {
+		if (left <= d->draws * ZV_DRAW_COST) { d->rs_p = p; d->rs_b = b; d->rs_bx = bx; d->rs_by = by; return 2; }
 		int c, run, k, y, j;
 		if (p >= end) return -4;
 		c = *p++;
@@ -991,6 +1022,7 @@ static int fast_pl_half(zv_dec_t *d, const uint8_t *p, const uint8_t *end, uint8
 		if (b + run > nb) return -5;
 		b += run;
 		bi = b - run;
+		if ((c & 0xc0) != ZV_CMD_SKIP) left -= run;
 		if ((c & 0xc0) == ZV_CMD_SKIP) {
 			bx += run;
 			while (bx >= bw) { bx -= bw; by++; row += rs; }
@@ -1056,7 +1088,12 @@ static int fast_pal_half(zv_dec_t *d, const uint8_t *p, const uint8_t *end, uint
 	uint8_t *dmap = d->dirty;
 	int bw = d->bw, nb = bw * d->bh, b = 0, bi = 0, bx = 0, by = 0, rs = 4 * st;
 	uint8_t *row = out, *o = out;
+	int left = d->step_blocks > 0 ? d->step_blocks : 0x7fffffff;
+	d->draws = 0;
+	b = d->rs_b; bx = d->rs_bx; by = d->rs_by;        /* (0 at a frame's start) */
+	row = out + by * rs; o = row + (bx * 4);
 	while (b < nb) {
+		if (left <= d->draws * ZV_DRAW_COST) { d->rs_p = p; d->rs_b = b; d->rs_bx = bx; d->rs_by = by; return 2; }
 		int c, run, k, y, q;
 		if (p >= end) return -4;
 		c = *p++;
@@ -1064,6 +1101,7 @@ static int fast_pal_half(zv_dec_t *d, const uint8_t *p, const uint8_t *end, uint
 		if (b + run > nb) return -5;
 		b += run;
 		bi = b - run;
+		if ((c & 0xc0) != ZV_CMD_SKIP) left -= run;
 		switch (c & 0xc0) {
 		case ZV_CMD_SKIP:
 			bx += run;
@@ -1131,7 +1169,12 @@ static int fast_pal_full(zv_dec_t *d, const uint8_t *p, const uint8_t *end, uint
 	uint8_t *dmap = d->dirty;
 	int bw = d->bw, nb = bw * d->bh, b = 0, bi = 0, bx = 0, by = 0, rs = 8 * st, sw = st / 4;
 	uint8_t *row = out, *o = out;
+	int left = d->step_blocks > 0 ? d->step_blocks : 0x7fffffff;
+	d->draws = 0;
+	b = d->rs_b; bx = d->rs_bx; by = d->rs_by;        /* (0 at a frame's start) */
+	row = out + by * rs; o = row + (bx * 8);
 	while (b < nb) {
+		if (left <= d->draws * ZV_DRAW_COST) { d->rs_p = p; d->rs_b = b; d->rs_bx = bx; d->rs_by = by; return 2; }
 		int c, run, k, y, q;
 		if (p >= end) return -4;
 		c = *p++;
@@ -1139,6 +1182,7 @@ static int fast_pal_full(zv_dec_t *d, const uint8_t *p, const uint8_t *end, uint
 		if (b + run > nb) return -5;
 		b += run;
 		bi = b - run;
+		if ((c & 0xc0) != ZV_CMD_SKIP) left -= run;
 		switch (c & 0xc0) {
 		case ZV_CMD_SKIP:
 			bx += run;
@@ -1206,7 +1250,15 @@ int zv_dec_video(zv_dec_t *d, const uint8_t *p, size_t n, int key, uint8_t *out,
 	const uint8_t *end = p + n;
 	uint32_t n1, n4, n16, i;
 	int b = 0, nb = d->bw * d->bh;
-	int bx = 0, by = 0;
+	int bx = 0, by = 0, dn = 0;
+	if (d->rs_on) {
+		// a frame begun and not finished (step_blocks): on with it
+		p = d->rs_p;
+		end = d->rs_end;
+		if (d->rs_on == 2) { n16 = d->rs_n16; i = d->rs_i; goto books16; }
+		goto blocks;
+	}
+	d->rs_b = d->rs_bx = d->rs_by = 0;
 	if (n < 6) return -1;
 	n1 = rd16(p);
 	n4 = rd16(p + 2);
@@ -1220,15 +1272,33 @@ int zv_dec_video(zv_dec_t *d, const uint8_t *p, size_t n, int key, uint8_t *out,
 		if (copy16(d->cb1[p[0]], p + 1) || !d->drawn) d->ok1[p[0]] = 0;
 	for (i = 0; i < n4; i++, p += 1 + ZV_VEC)
 		if (copy16(d->cb4[p[0]], p + 1) || !d->drawn) d->ok4[p[0]] = 0;
-	for (i = 0; i < n16; i++, p += 1 + ZV_VEC16) {
+	i = 0;
+books16:
+	for (; i < n16; i++, p += 1 + ZV_VEC16) {
 		uint8_t *e = d->cb16[p[0]];
 		if (e[0] == p[1] && e[1] == p[2] && e[2] == p[3] && e[3] == p[4] && d->drawn) continue;
 		e[0] = p[1]; e[1] = p[2]; e[2] = p[3]; e[3] = p[4];
-		// drawn now: V16 entries are cheap to draw and used 16 to a block
+		// drawn now: V16 entries are used 16 to a block
 		draw_v16(d, p[0], 0);
 		d->ok16[p[0]] = 0xffff;
+		// (in steps: a seek point's 256 of them are a frame's work
+		// in the plane views, so a few dozen a call)
+		if (d->step_blocks > 0 && !d->generic && ++dn >= ZV_STEP_V16 && i + 1 < n16) {
+			d->rs_i = i + 1; d->rs_n16 = n16;
+			d->rs_p = p + 1 + ZV_VEC16; d->rs_end = end;
+			d->rs_on = 2;
+			return 2;
+		}
 	}
 	d->drawn = 1;
+	d->rs_end = end;
+	if (d->step_blocks > 0 && !d->generic && (dn > 0 || d->rs_on == 2)) {
+		// the books were a call's work themselves
+		d->rs_p = p;
+		d->rs_on = 1;
+		return 2;
+	}
+blocks:
 	if (!d->generic || d->view == ZV_VIEW_PL_FULL || d->view == ZV_VIEW_PL_HALF) {
 		int r = 1;
 		switch (d->view) {
@@ -1241,6 +1311,8 @@ int zv_dec_video(zv_dec_t *d, const uint8_t *p, size_t n, int key, uint8_t *out,
 			if (!(st & 3) && !((uintptr_t)out & 3)) r = fast_pal_full(d, p, end, out, st);
 			break;
 		}
+		if (r == 2) { d->rs_on = 1; return 2; }        // more to do: call again
+		d->rs_on = 0;
 		if (r <= 0) { d->frame++; return r; }
 	}
 	while (b < nb) {

@@ -619,6 +619,46 @@ static void test_planes(void) {
 	}
 }
 
+// A frame decoded a few blocks a call (step_blocks) is the frame decoded
+// in one, in every view the board uses.
+static void test_steps(void) {
+	static uint8_t g[TW * TH], pay[1 << 16];
+	static uint8_t whole[4 * TW * TH], parts[4 * TW * TH];
+	static const int views[6] = { ZV_VIEW_MONO_FULL, ZV_VIEW_MONO_HALF, ZV_VIEW_PAL_HALF, ZV_VIEW_PAL_FULL,
+	                              ZV_VIEW_PL_FULL, ZV_VIEW_PL_HALF };
+	zv_header_t h;
+	zve_opts_t o;
+	zve_t *e;
+	zv_dec_t da, db;
+	int v, n, calls;
+	memset(&h, 0, sizeof(h));
+	h.w = TW; h.h = TH; h.fps_num = 24; h.fps_den = 1; h.frames = 40; h.refresh = 1;
+	for (v = 0; v < 6; v++) {
+		int w, hh, st, bad = 0;
+		memset(&o, 0, sizeof(o));
+		o.w = TW; o.h = TH; o.lambda = 30;
+		e = zve_new(&o);
+		zv_dec_init(&da, &h, views[v], ZV_MASK_VAC8, 0);
+		zv_dec_init(&db, &h, views[v], ZV_MASK_VAC8, 0);
+		zv_view_size(&da, &w, &hh, &st);
+		da.plane_off = db.plane_off = st * hh;
+		db.step_blocks = 37;
+		memset(whole, 0, sizeof(whole)); memset(parts, 0, sizeof(parts));
+		calls = 0;
+		for (n = 0; n < 30; n++) {
+			int key = n % 10 == 0, r;
+			size_t len;
+			make_frame(g, n);
+			len = zve_frame(e, g, key, pay, sizeof(pay), NULL);
+			zv_dec_video(&da, pay, len, key, whole, st);
+			do { r = zv_dec_video(&db, pay, len, key, parts, st); calls++; } while (r == 2);
+			if (r != 0 || memcmp(whole, parts, sizeof(whole))) bad++;
+		}
+		CHECK(bad == 0 && calls > 60, "view %d in steps: %d frames differ (%d calls)", views[v], bad, calls);
+		zve_free(e);
+	}
+}
+
 int main(void) {
 	printf("zv_test\n");
 	test_maths();
@@ -630,6 +670,7 @@ int main(void) {
 	test_colour();
 	test_colour_decode();
 	test_planes();
+	test_steps();
 	(void)half_ref_of_full;
 	printf("%d checks, %d failed\n", checks, fails);
 	return fails ? 1 : 0;

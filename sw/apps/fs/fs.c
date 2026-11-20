@@ -1762,6 +1762,7 @@ int main(void) {
 	for (;;) {
 		z_msg_t m;
 		if (z_msg_recv(&m, FS_IDLE_TICKS) != Z_OK) {
+			fs_stats.idle_passes++;
 			usb_poll(false);
 			if ((++idle & 3u) == 0) sweep_dead();
 			watch_kick();

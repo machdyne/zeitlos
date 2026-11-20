@@ -7,8 +7,7 @@ description = Mozart ML1
 
 base = mozart_ml1
 
-# The DMA controller (rtl/dma.v, docs/dma.md): two channels, the SD
-# card's SPI and the RMII MAC's buffers, so a film streams off the card
-# and a frame is copied in or out without the CPU moving the bytes.
-defines =
-	DMA
+# The DMA controller (rtl/dma.v) is off for now: it saved 8% of the
+# card's time on Sergei ML2 for about 500 LUTs, and freed no CPU.
+# docs/dma.md, "Off for now", says why and what would make it worth
+# turning on (`DMA`, with `DMA_CHANNELS=1` on a board short of LUTs).

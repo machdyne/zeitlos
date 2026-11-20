@@ -163,6 +163,8 @@ ifeq ($(filter zfsc.o,$(OBJS)),)
 OBJS += zfsc.o
 endif
 POSIX_IO_CFLAGS = -I$(COMMON_DIR)/posix
+# fopen() gives a file a 4 KB buffer (zposix.c, "stdio's buffer")
+POSIX_IO_LDFLAGS = -Wl,--wrap=fopen
 endif
 
 ZFMT ?= 0
@@ -225,7 +227,7 @@ override CFLAGS += --std=gnu99 -Os -MD -Wall -march=$(ARCH) -mabi=$(ABI) \
 # was found when 1.5 KB more code in `fs` made fs.bin 4 KB longer; the
 # core apps in flash were each carrying 0-4 KB of it.
 SEG_PAGE_LDFLAGS = -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16
-LDFLAGS = -march=$(ARCH) -mabi=$(ABI) $(GC_LDFLAGS) $(LIBC_FLAGS) $(SEG_PAGE_LDFLAGS)
+LDFLAGS = -march=$(ARCH) -mabi=$(ABI) $(GC_LDFLAGS) $(LIBC_FLAGS) $(SEG_PAGE_LDFLAGS) $(POSIX_IO_LDFLAGS)
 LDSCRIPT = $(COMMON_DIR)/riscv-app.ld
 MKEXEC = python3 $(COMMON_DIR)/../../tools/mkexec.py
 

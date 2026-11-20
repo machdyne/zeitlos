@@ -335,3 +335,32 @@ int ZP(closedir)(DIR *dp) {
 	free(dp);
 	return 0;
 }
+
+// -- stdio's buffer for a file --
+//
+// newlib-nano gives a FILE 1 KB whatever _fstat() says of the block
+// size, so an app reading with fread() or fgets() made a request to fs
+// for every kilobyte -- and a request and its reply are two hops
+// between processes, tens of thousands of cycles each: on Sergei ML2
+// two thirds of a stdio read's cost a byte (docs/posix_io.md, "stdio's
+// buffer"). fopen() is wrapped (app.mk links with --wrap=fopen) to give
+// the file Z_STDIO_BUF instead. An app that sets its own with setvbuf()
+// afterwards still gets its own; one built small (Z_SMALL, the 1 MB
+// machines) keeps the kilobyte.
+#include <stdio.h>
+#ifndef Z_STDIO_BUF
+#ifdef Z_SMALL
+#define Z_STDIO_BUF 0
+#else
+#define Z_STDIO_BUF 4096
+#endif
+#endif
+FILE *__real_fopen(const char *path, const char *mode);
+FILE *__wrap_fopen(const char *path, const char *mode) {
+	FILE *f = __real_fopen(path, mode);
+#if Z_STDIO_BUF > 0
+	// (no memory for it: stdio falls back to what it would have had)
+	if (f) (void)setvbuf(f, NULL, _IOFBF, Z_STDIO_BUF);
+#endif
+	return f;
+}

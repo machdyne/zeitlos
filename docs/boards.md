@@ -211,8 +211,9 @@ cost of burst headroom, as `ulx3s_12f` does at 11.
 
 ## DMA
 
-`DMA` ([dma.md](dma.md)) on `lakritz_langkatze` (one channel) and
-`sergei_ml2` (two). Yosys 0.69 and nextpnr-ecp5 0.11.1 (YoWASP),
+`DMA` ([dma.md](dma.md)) is in no release target now ("Off for now"
+there). What it cost when it was, on `lakritz_langkatze` (one channel)
+and `sergei_ml2` (two). Yosys 0.69 and nextpnr-ecp5 0.11.1 (YoWASP),
 default seed, through the release build's generated `zspec.vh` and
 `.lpf`:
 

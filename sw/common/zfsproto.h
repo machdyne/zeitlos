@@ -209,6 +209,11 @@ typedef struct {
 	// the time its requests took to reach fs and the replies to come
 	// back -- if the reads between two samples were all its own.
 	uint32_t	read_t0_sum, read_t1_sum;
+	// times fs's wait for a request ended with none (its idle wake, or
+	// a wake left over from something else): each is a USB plug check
+	// and sometimes a sweep before fs waits again -- and before whoever
+	// it had just answered gets the CPU
+	uint32_t	idle_passes;
 } z_fs_stats_t;
 
 /*

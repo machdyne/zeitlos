@@ -187,6 +187,7 @@ static uint32_t st_read_cycles, st_read_bytes, st_show_cycles;
 static bool st_lines;           /* the five-second lines: off until `i` */
 static uint32_t st_last_fc, st_last_n, st_dec_worst;    /* worst: since the last line */
 static uint32_t st_read_calls, st_call_cyc;     /* since the last report_fs() */
+static void rd_report(void);
 static uint32_t st_t0_sum, st_t1_sum, st_rq_calls;      /* the film's reads: the counter before and after, summed */
 static z_fs_stats_t st_fs0;             /* fs's counters when the film opened */
 static bool st_fs_ok;
@@ -215,6 +216,9 @@ static void report_fs(void) {
 		dbg(" cycles to reach fs, its answer "); dbg_dec((st_t1_sum - (s.read_t1_sum - st_fs0.read_t1_sum)) / n);
 		dbg(" to come back\n");
 	}
+	rd_report();
+	dbg("cinema: fs woke with no request "); dbg_dec(s.idle_passes - st_fs0.idle_passes);
+	dbg(" times (once a second is its own timer)\n");
 	st_t0_sum = st_t1_sum = st_rq_calls = 0;
 	st_fs0 = s;
 	st_call_cyc = 0;
@@ -402,6 +406,40 @@ static void rq_flush(void) {
 	at_end = false;
 }
 
+/* Whose time a read took (the timing lines, `i`): the kernel's accounts
+ * (z_cpu_stat()) before and after each read, summed by who was charged
+ * -- this process (its own syscalls and switches in and out), fs, any
+ * other process that ran meanwhile, interrupt handlers, and nobody. */
+static z_cpu_stat_args_t rd_c0, rd_c1;
+static uint32_t rd_who[5], rd_wall, rd_n;       /* me, fs, others, interrupts, idle */
+
+static uint32_t rd_d(const z_cpu_count_t *a, const z_cpu_count_t *b) { return b->lo - a->lo; }
+
+static void rd_account(uint32_t t0) {
+	uint32_t me = z_getpid(), fs = 0xffffffffu, i;
+	uint32_t wall = z_cycles() - t0;
+	if (z_cpu_stat(&rd_c1) != Z_OK) return;
+	(void)z_pid_lookup(Z_FS_SERVICE, &fs);
+	for (i = 0; i < rd_c1.n && i < Z_CPU_STAT_PROCS; i++) {
+		uint32_t d = rd_d(&rd_c0.proc[i], &rd_c1.proc[i]);
+		rd_who[i == me ? 0 : i == fs ? 1 : 2] += d;
+	}
+	for (i = 0; i < 4; i++) rd_who[3] += rd_d(&rd_c0.irq[i], &rd_c1.irq[i]);
+	rd_who[4] += rd_d(&rd_c0.idle, &rd_c1.idle);
+	rd_wall += wall;
+	rd_n++;
+}
+
+static void rd_report(void) {
+	static const char *const nm[5] = { "cinema ", ", fs ", ", other processes ", ", interrupts ", ", idle " };
+	int i;
+	if (!rd_n) return;
+	dbg("cinema: a read's "); dbg_dec(rd_wall / rd_n); dbg(" cycles, by whose they were: ");
+	for (i = 0; i < 5; i++) { dbg(nm[i]); dbg_dec(rd_who[i] / rd_n); rd_who[i] = 0; }
+	dbg("\n");
+	rd_wall = rd_n = 0;
+}
+
 /* The file comes in pieces of RD_CHUNK, each ending on a sector's
  * boundary, straight into the queue's buffer, and the records are found
  * in place: a call to `fs` every other frame or so rather than one a
@@ -431,8 +469,10 @@ static bool rq_fill(void) {
 		sb_p = base;
 		sb_f = base + tail;
 	}
+	if (st_lines) (void)z_cpu_stat(&rd_c0);
 	t = z_cycles();
 	r = fs_read_chunk(fh, rqbuf + sb_f, (int)n);
+	if (st_lines) rd_account(t);
 	st_t0_sum += t;
 	t = z_cycles() - t;
 	st_t1_sum += z_cycles();
@@ -1256,6 +1296,13 @@ static void cw_shown(int k) {
 }
 
 static int32_t last_key = -1;   /* the last seek point decoded */
+/* Blocks a call of the decoder while playing. A third of a 320x240
+ * picture: an ordinary frame, which changes fewer, is still one call --
+ * each extra pass of the loop cost more on Sergei ML2 than it looked
+ * (frames were shown late and skipped at 128) -- and a cut or a seek
+ * point is three or four. */
+#define DEC_STEP 400
+static bool dec_part;           /* a frame is part decoded */
 /* decode the record at the head of the queue into picture `k` */
 static bool decode_head(int k) {
 	rq_t *r = rq_first_video();
@@ -1264,16 +1311,25 @@ static bool decode_head(int k) {
 	if (!r || !r->sound) return false;
 	if (zv_split_record(&hd, rqbuf + r->off, r->size, &rec)) { rq_pop(); return false; }
 	{
+		/* A piece of the frame a call (DEC_STEP blocks: about 5 ms on a
+		 * board), and back to the loop between them, so a frame that
+		 * is every block -- a cut, a seek point: 50 ms and more -- does
+		 * not keep the window from answering (docs/responsive.md). The
+		 * record stays at the queue's head until its frame is whole. */
 		uint32_t t = z_cycles();
-		col_before_decode(r->frame);        /* (a decode's cost, colour included) */
-		if (rec.flags & ZV_RF_KEY) last_key = (int32_t)r->frame;
+		if (!dec_part) {
+			col_before_decode(r->frame);    /* (a decode's cost, colour included) */
+			if (rec.flags & ZV_RF_KEY) last_key = (int32_t)r->frame;
+		}
 		rv = zv_dec_video(&dec, rec.video, rec.video_len, rec.flags & ZV_RF_KEY, pic_out(k), pstride);
-		col_after_decode(k);
+		dec_part = rv == 2;
+		if (!dec_part) col_after_decode(k);
 		t = z_cycles() - t;
 		st_dec_cycles += t;
+		if (t > st_dec_worst) st_dec_worst = t;     /* the longest the loop was away */
+		if (dec_part) return false;
 		st_dec_n++;
 		if (t > st_dec_max) st_dec_max = t;
-		if (t > st_dec_worst) st_dec_worst = t;
 	}
 	if (rv < 0) dbg("cinema: a damaged frame\n");
 	back_frame = (int32_t)r->frame;
@@ -1290,6 +1346,7 @@ static void copy_words(uint32_t *d, const uint32_t *s, uint32_t n) {
 static bool prepare_back(void) {
 	int b = front ^ 1;
 	if (back_frame >= 0) return true;
+	if (dec_part) return decode_head(b);            /* on with the frame begun */
 	if (!rq_first_video() || !rq_first_video()->sound) return false;
 	if (chunky_out()) {
 		/* the back may still be on screen until a flip is taken */
@@ -1695,6 +1752,8 @@ static void seek_to(uint32_t f) {
 	if (f >= hd.frames) f = hd.frames - 1;
 	mixer_off();
 	rq_flush();
+	dec_part = false;
+	dec.step_blocks = 0;            /* whole frames here; a piece at a time again below */
 	start = zv_start_for(&hd, f);
 	for (i = 0; i < nkeys; i++)
 		if (keys[i * 2] <= start) { kf = keys[i * 2]; koff = keys[i * 2 + 1]; }
@@ -1747,6 +1806,7 @@ static void seek_to(uint32_t f) {
 	show_front();
 	cw_shown(front);
 	update_title();
+	dec.step_blocks = DEC_STEP;
 }
 
 static void set_view(int v) {
@@ -1926,9 +1986,10 @@ static void play_step(void) {
 		       zv_frame_vsync(&hd, (uint32_t)back_frame + 1 + LAG_MAX, 60) <= vs) {
 			rq_t *r = rq_first_video();
 			if (!r || !r->sound) break;
-			decode_head(front ^ 1);
+			back_frame = -1;                        /* this one is not shown */
 			st_dropped++;
 			n++;
+			if (!decode_head(front ^ 1)) break;     /* (a piece of the next: the rest next pass) */
 		}
 	}
 	if (back_frame >= 0 && zv_frame_vsync(&hd, (uint32_t)back_frame, 60) <= vs) {
@@ -2270,8 +2331,18 @@ int main(void) {
 		}
 		seek_service();
 		play_step();
-		cw_check();
-		bar_update();
+		/* the colour window and the bar: once a refresh is as often as
+		 * either can show anything, and the loop comes round far more
+		 * often than that (every tick while it waits) */
+		{
+			static uint16_t ui_fc = 0xffff;
+			uint16_t now_fc = (uint16_t)z_game_frame();
+			if (now_fc != ui_fc || bar_drag || seek_want >= 0) {
+				ui_fc = now_fc;
+				cw_check();
+				bar_update();
+			}
+		}
 		/* a refresh is 16.7 ms; the scheduler's tick 1.4: wait a tick
 		 * when there is nothing to do before the next refresh */
 		if (!have_file || paused) z_proc_wait(Z_TICK_HZ / 30);

@@ -59,11 +59,34 @@ static void stats_end(int reading, uint32_t client, uint32_t n) {
 		per_byte("    waiting for its 0xFE", s1.token_cyc - s0.token_cyc, n);
 		per_byte("    the bytes moving", s1.payload_cyc - s0.payload_cyc, n);
 	}
+	printf("  fs woke with no request %lu times\n", (unsigned long)(s1.idle_passes - s0.idle_passes));
 	printf("  %lu calls to fs, %lu card %s (%lu sectors, %lu.%lu a call), %lu commands, %lu bytes by DMA%s\n",
 		(unsigned long)ops, (unsigned long)dn, reading ? "reads" : "writes", (unsigned long)sec,
 		(unsigned long)(dn ? sec / dn : 0), (unsigned long)(dn ? sec * 10 / dn % 10 : 0), (unsigned long)(s1.commands - s0.commands),
 		(unsigned long)(s1.dma_bytes - s0.dma_bytes),
 		reading ? (s1.grant_reads != s0.grant_reads ? ", straight into this buffer" : ", by copy") : "");
+}
+
+/* whose cycles a phase's calls were, by the kernel's accounts
+ * (z_cpu_stat()): this process, fs, others, interrupt handlers, idle */
+static z_cpu_stat_args_t w0, w1;
+static uint32_t who[5];
+
+static void who_begin(void) { (void)z_cpu_stat(&w0); }
+static void who_end(void) {
+	uint32_t me = z_getpid(), fs = 0xffffffffu, i;
+	if (z_cpu_stat(&w1) != Z_OK) return;
+	(void)z_pid_lookup("fs0", &fs);
+	for (i = 0; i < w1.n && i < Z_CPU_STAT_PROCS; i++)
+		who[i == me ? 0 : i == fs ? 1 : 2] += w1.proc[i].lo - w0.proc[i].lo;
+	for (i = 0; i < 4; i++) who[3] += w1.irq[i].lo - w0.irq[i].lo;
+	who[4] += w1.idle.lo - w0.idle.lo;
+}
+static void who_print(uint32_t n) {
+	printf("  by whose they were, a byte: dmatest %lu, fs %lu, other processes %lu, interrupts %lu, idle %lu\n",
+		(unsigned long)(who[0] / n), (unsigned long)(who[1] / n), (unsigned long)(who[2] / n),
+		(unsigned long)(who[3] / n), (unsigned long)(who[4] / n));
+	memset(who, 0, sizeof(who));
 }
 
 static uint8_t pat(uint32_t i) { return (uint8_t)((i * 2654435761u) >> 24) ^ (uint8_t)i; }
@@ -186,9 +209,11 @@ int main(void) {
 		uint8_t *p = buf + ((chunk >> 1) & 3);
 		uint32_t k, got;
 		if (len > n - i) len = n - i;
+		who_begin();
 		t0 = z_cycles();
 		got = (uint32_t)fread(p, 1, len, f);
 		tr += z_cycles() - t0;
+		who_end();
 		if (got != len) { printf("dmatest: short read at %lu\n", (unsigned long)i); return 1; }
 		for (k = 0; k < len; k++)
 			if (p[k] != pat(i + k)) {
@@ -201,6 +226,7 @@ int main(void) {
 	fclose(f);
 	printf("dmatest: reading, where the time went:\n");
 	stats_end(1, tr, n);
+	who_print(n);
 
 	printf("dmatest: write %lu cycles (%lu a byte), read %lu cycles (%lu a byte), in fwrite/fread; %s\n",
 		(unsigned long)tw, (unsigned long)(tw / n), (unsigned long)tr, (unsigned long)(tr / n),

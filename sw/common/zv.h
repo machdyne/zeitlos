@@ -171,6 +171,16 @@ typedef struct {
 	                            // classes as zv_col_words() keeps them, ORed in
 	                            // as each block is drawn
 	                            // (the caller clears them): which blocks a frame changed
+	// A frame a piece at a time: if step_blocks is set, zv_dec_video()
+	// draws about that many blocks and returns 2; call it again (with
+	// the same picture; the record is not looked at then) until it returns
+	// something else. For a caller that must answer its messages within
+	// milliseconds (docs/responsive.md): a seek point's frame is every
+	// block. 0, the default: the whole frame in one call.
+	int step_blocks;
+	int rs_on, rs_b, rs_bx, rs_by, draws;
+	uint32_t rs_i, rs_n16;
+	const uint8_t *rs_p, *rs_end;
 	int generic;                // tests: the plain per-block code, not the board's loops
 	uint32_t frame;             // the next frame expected
 	int have_key;               // a keyframe has been seen since init/seek

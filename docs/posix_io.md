@@ -92,3 +92,17 @@ client. Covered:
 
 `fopen()` and the rest of stdio are newlib's own code over these, so
 they are not tested on the host. `vi` is the check on the board.
+
+## stdio's buffer
+
+newlib-nano gives a `FILE` a 1 KB buffer whatever `_fstat()` reports,
+so `fread()` and `fgets()` asked `fs` for every kilobyte. A request and
+its reply are two hops between processes: on Sergei ML2, 134 of the 210
+cycles a byte that `dmatest` read with. `fopen()` is wrapped
+(`__wrap_fopen` in `zposix.c`; `app.mk` links `POSIX_IO` apps with
+`--wrap=fopen`) to give a file 4 KB (`Z_STDIO_BUF`). In zsys `dmatest`'s
+256 KB read went from 256 requests to 64, and the card from 2 sectors a
+command to 7. Writes were already gathered to 8 KB by the client
+(`zfsc.c`, write-behind). An app's own `setvbuf()` still wins; a small
+build (`Z_SMALL`) keeps the kilobyte. It costs 4 KB of heap a file
+open.
