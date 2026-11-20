@@ -223,6 +223,7 @@ z_obj_t *k_abi(z_obj_t *args);			// Z_SYS_ABI
 z_obj_t *k_time64(z_obj_t *args);
 z_obj_t *k_screen(z_obj_t *args);		// Z_SYS_SCREEN
 z_obj_t *k_abi_level(z_obj_t *args);		// Z_SYS_ABI_LEVEL
+z_obj_t *k_dma(z_obj_t *args);			// Z_SYS_DMA (docs/dma.md)
 
 // The screen's size as the system reports it (Z_SYS_SCREEN,
 // docs/screen.md): the screen mode's desktop, or -- k_screen_forced --

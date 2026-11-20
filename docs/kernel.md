@@ -691,6 +691,13 @@ decoder tried first was 3.3KB, with 3.3KB of `.bss`. Building the kernel with
 `ZFMT_LITE`'s stdout ([build.md](build.md)) would win back about 7KB;
 its three `fflush(stdout)` calls (the prompt) would have to go first.
 
+**November 2026: 163,812 bytes, 28 free.** The image had grown to
+163,396 (444 free) when `Z_SYS_DMA` ([dma.md](dma.md)) took 416 of
+what was left. That number is after trimming: the first version, with a
+stop call, an info call and per-channel owners, did not fit. The next
+kernel feature has to pay for itself first. The `ZFMT_LITE` stdout
+above (about 7KB) is the obvious place to start.
+
 **`.bss` is not in the image.** Until Phase 3, `sw/os/Makefile` linked
 `kernel.bin` with `objcopy --pad-to=_end`, so `.bss` was in the file as
 zeros, on the belief that the BIOS copy was what zeroed it. It was not

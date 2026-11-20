@@ -152,7 +152,16 @@ module spim_wb #(
     // Exposed rather than wired to the CPU's interrupt controller
     // because the driver polls it -- one register read is far cheaper
     // than an SPI transaction asking the chip whether it has a packet.
-    input spi_int
+    input spi_int,
+
+    // DMA sideband (rtl/dma.v), `DMA builds; tie dma_start_i low
+    // without it. A pulse on dma_start_i while idle starts a 32-bit
+    // receive -- all ones out, whatever CTRL.XFER32 says -- whose word
+    // is then read from DATA as a 32-bit DATA write's would be.
+    // dma_busy_o is STATUS.BUSY, as a wire so the DMA can wait for it
+    // without a bus access (a DATA access while busy stalls the bus).
+    input dma_start_i,
+    output dma_busy_o
 );
 
     // "SPI1", not "SPI0". Bumped because the stall and the 32-bit mode
@@ -181,6 +190,9 @@ module spim_wb #(
     reg busy;
     reg cs_assert;
     reg sck_phase;           // 0 = next edge is rising, 1 = falling
+    reg cur32;               // this transfer is 32 bits (XFER32 or DMA)
+
+    assign dma_busy_o = busy;
 
     // Tick once per SCLK half-period. Held at zero while idle so a new
     // transfer always begins with a full half-period before the first
@@ -204,6 +216,7 @@ module spim_wb #(
             busy <= 1'b0;
             cs_assert <= 1'b0;
             sck_phase <= 1'b0;
+            cur32 <= 1'b0;
             wb_ack_o <= 1'b0;
             wb_dat_o <= 32'b0;
 
@@ -259,7 +272,7 @@ module spim_wb #(
                             // transfer just bought: four shifts and
                             // three ors per word, on a machine where
                             // that is most of the cost.
-                            if (xfer32)
+                            if (cur32)
                                 data_rx <= { shift_rx[7:0], shift_rx[15:8],
                                              shift_rx[23:16], shift_rx[31:24] };
                             else
@@ -276,6 +289,25 @@ module spim_wb #(
                     end
                 end
 
+            end
+
+            // -- DMA sideband ----------------------------------------
+            //
+            // A 32-bit DATA write of all ones. Never at the same time
+            // as a real one: while a DMA channel owns this master the
+            // driver keeps off DATA (rtl/dma.v), and the channel only
+            // pulses while BUSY is clear.
+
+            if (dma_start_i && !busy) begin
+                shift_rx <= 32'h0;
+                clk_cnt <= 8'd0;
+                sck_phase <= 1'b0;
+                spi_sck <= 1'b0;
+                busy <= 1'b1;
+                cur32 <= 1'b1;
+                spi_mosi <= 1'b1;
+                shift_tx <= 32'hFFFFFFFF;
+                bit_cnt <= 6'd32;
             end
 
             // -- wishbone ------------------------------------------
@@ -310,6 +342,7 @@ module spim_wb #(
                             sck_phase <= 1'b0;
                             spi_sck <= 1'b0;
                             busy <= 1'b1;
+                            cur32 <= xfer32;
 
                             if (xfer32) begin
                                 // Lanes reversed for the same reason

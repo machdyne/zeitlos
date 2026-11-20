@@ -763,6 +763,14 @@ app, and a binary built against a different copy calls the wrong kernel
 handler for every syscall past the point they diverge -- which is not a
 crash, just quietly wrong behaviour. See that file's own warning.
 
+**Only the kernel and core apps, from clean:** `make BOARD=obst
+dev-flash-core` cleans and rebuilds the kernel and the apps that go
+into the archive, and nothing else in `sw/apps`, then flashes as
+`dev-flash` does. Use it when the change is in the kernel or a core app.
+When `sw/common/zabi.h` changed (`make abi` rewrote it: an interface
+between flash and card moved), the card's apps must be rebuilt as
+well, so use `dev-flash` and then `tftp-dist` or a new card.
+
 **Without the clean:** `make BOARD=obst flash_sw` (or `flash_os`, or
 `flash_apps` -- the same) rebuilds the kernel and the core apps
 incrementally, only what changed, then builds the archive and flashes

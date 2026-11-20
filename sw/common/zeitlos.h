@@ -124,6 +124,25 @@ typedef uint32_t *(*z_kernel_ptr_t)(uint32_t, uint32_t *, uint32_t);
 #define reg_spisd_ctrl   (*(volatile uint32_t*)0xb0000008)
 #define reg_spisd_magic  (*(volatile uint32_t*)0xb000000c)
 
+// -- the DMA controller (rtl/dma.v, `DMA; docs/dma.md) --
+//
+// Loads only from apps: stores are kernel-only (Z_SYS_DMA starts a
+// channel). Channel c's CTRL is word 4c + 3: bit 0 BUSY, bits 31:16 the
+// words left. MAGIC is "DMA1" on a bitstream with DMA, something else
+// (the CSRs answer the nibble) without.
+#define Z_DMA_BASE          0x7b000000u
+#define reg_dma_ctrl(c)     (*(volatile uint32_t*)(Z_DMA_BASE + 16u * (c) + 12u))
+#define reg_dma_info        (*(volatile uint32_t*)(Z_DMA_BASE + 0x38u))
+#define reg_dma_magic       (*(volatile uint32_t*)(Z_DMA_BASE + 0x3cu))
+#define Z_DMA_MAGIC         0x444d4131u     // "DMA1"
+#define Z_DMA_CH_SD         0               // the sdcard's SPI
+#define Z_DMA_CH_NET        1               // the ENC28J60's SPI, or the RMII MAC's buffers
+// the device end of a job (z_dma_start()'s `dev`)
+#define Z_DMA_DEV_SD        0xb0000000u     // the sdcard's SPI DATA (SPI jobs)
+#define Z_DMA_DEV_ENC       0x61000000u     // the ENC28J60's SPI DATA (SPI jobs)
+#define Z_DMA_DEV_RMII_RX   0x60000100u     // the RMII MAC's receive buffer
+#define Z_DMA_DEV_RMII_TX   0x60000a00u     // and its send buffer
+
 // "SPI0" is the original gateware; "SPI1" adds two things a driver
 // must not assume without checking (rtl/spim.v):
 //
@@ -583,6 +602,20 @@ z_rv z_msg_take_match(z_msg_t *msg, uint32_t subject, uint32_t tag);
 // fails for a process that is not a driver.
 z_rv z_grant_drivers(bool on);
 z_rv z_grant_open(uint32_t pid, uint32_t *base, uint32_t *size);
+
+// DMA (zproc.h, Z_SYS_DMA; docs/dma.md). z_dma_channels(): how many the
+// bitstream has (0: none, so use the CPU; 1: both SPI masters' jobs share
+// channel 0, so ask for Z_DMA_CH_NET all the same). z_dma_start(): a driver's
+// transfer of `words` words between its buffer `mem` (word-aligned)
+// and channel `ch`'s SPI master or the device word at `dev`; 0 started.
+// z_dma_busy() is a load, so spinning on it costs no syscalls.
+uint32_t z_dma_channels(void);
+z_rv z_dma_start(uint32_t ch, uint32_t mode, void *mem, uint32_t dev, uint32_t words);
+// A one-channel build runs both SPI masters' jobs on channel 0, so
+// these look there when `ch` is not built.
+static inline uint32_t z_dma_hw(uint32_t ch) { return ch < reg_dma_info ? ch : 0; }
+static inline int z_dma_busy(uint32_t ch) { return (int)(reg_dma_ctrl(z_dma_hw(ch)) & 1u); }
+static inline void z_dma_wait(uint32_t ch) { volatile uint32_t *c = &reg_dma_ctrl(z_dma_hw(ch)); while (*c & 1u) { } }
 z_rv z_grant_close(void);
 
 // For drivers: take interrupt line `irq` (Z_IRQ_* numbers, docs/

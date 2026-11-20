@@ -40,7 +40,8 @@ module tb_spim;
         .wb_we_i(we), .wb_sel_i(4'hF), .wb_stb_i(stb), .wb_ack_o(ack),
         .wb_cyc_i(cyc),
         .spi_cs_n(cs_n), .spi_sck(sck), .spi_mosi(mosi), .spi_miso(miso),
-        .spi_int(1'b1)
+        .spi_int(1'b1),
+        .dma_start_i(1'b0), .dma_busy_o()
     );
 
     /* -- slave model, SPI mode 0 -- */

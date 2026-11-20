@@ -400,6 +400,8 @@ int main(int argc, char **argv) {
 			// a resolution this machine does not have is parked off
 			// the window, disabled (layout())
 			if (i >= W_RES0 && i <= W_RES_LAST && !widgets[i].enabled) continue;
+			// so is sound over HDMI on a bitstream without it
+			if (i == W_TOGGLE_HDMI && !widgets[i].enabled) continue;
 			if (widgets[i].x < 0 || widgets[i].y < 0 ||
 				widgets[i].x + widgets[i].w > cw || widgets[i].y + widgets[i].h > ch)
 				inside = false;

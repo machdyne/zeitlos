@@ -265,6 +265,13 @@ itself held.
 
 ## If more is wanted later: DMA, and whether it should be shared
 
+> **Built:** shape C below, cut down to two SPI masters and the RMII
+> MAC, is `rtl/dma.v` behind `DMA` ([dma.md](dma.md)). It answers the
+> three hazards listed at the end of this section: the kernel translates
+> and checks addresses (`Z_SYS_DMA`), the DMA shares the main arbiter's
+> port 2 through a two-way round robin instead of a fourth port, and
+> its writes go through the cache snoop.
+
 The stall and the wide transfer got the SD path from 246 to 848 KB/s.
 The wire limit at DIV=1 is about 1.4 MB/s, so there is roughly another
 1.6x available before the gateware clock is the constraint -- and
@@ -413,6 +420,61 @@ two is gateware spent on symmetry.
   `ICACHE`-only build (`rtl/cache.v`) has no snoop, but it does have
   a flush: `z_icache_flush()` after the transfer, before jumping to the
   code, as `fs_load_exec()` already does.
+
+## Where a read goes
+
+`fs` keeps counters, from its start, for a benchmark to read before and
+after (`Z_FSOP_STATS`, `zfs_stats()` in `zfsc.h`, the struct
+`z_fs_stats_t` in `zfsproto.h`):
+
+| counter | what |
+|---|---|
+| `reads`, `read_bytes`, `read_cyc` | `Z_FSOP_READ` requests, and the cycles `fs` spent in them |
+| `writes`, `write_bytes`, `write_cyc` | the same for `Z_FSOP_WRITE` |
+| `disk_reads`, `disk_read_cyc`, `sectors_read` | calls to `sd_disk_read()` (one command each, CMD17 or CMD18), their cycles, their sectors |
+| `token_cyc` | of those, waiting for the card's data token (0xFE) |
+| `payload_cyc` | of those, the 512 bytes and the CRC moving |
+| `disk_writes`, `disk_write_cyc`, `sectors_written` | the same for writes |
+| `commands`, `dma_bytes` | commands sent, bytes moved by the DMA ([dma.md](dma.md)) |
+| `grant_reads` | reads that went straight into the client's buffer |
+| `read_t0_sum`, `read_t1_sum` | the cycle counter as each read began and ended in `fs`, summed. A client that sums it before and after its own reads gets the trip each way by subtraction: `cinema` prints "a request takes N cycles to reach fs, its answer M to come back" |
+
+A client's time per call minus `read_cyc` per request is the trip there
+and back: the message, the kernel, scheduling, and a copy if the
+buffer was not granted. `read_cyc` minus `disk_read_cyc` is FatFs (the
+FAT, its window, copies). `disk_read_cyc` minus token and payload is
+the commands. `dmatest` and `cinema` print this breakdown.
+
+Each counter is a `z_cycles()` read per call, never per byte. The
+`Z_FSOP_STATS` op number changes the flash/card interface hash
+(`zabi.h`): flash and card must come from the same tree.
+
+## Reading across clusters
+
+FatFs reads whole sectors straight into the caller's buffer, as one
+`disk_read()` and so one CMD18, but only up to the end of the current
+cluster. The cards `release/` makes below 1GB have 512-byte clusters
+(`release/lib/mkfatimg.py`, "cluster size"), so every sector was its
+own command. On Sergei ML2 that was about 9,000 cycles a sector in
+commands, beside 17,000 for the bytes, plus FatFs's walk to the next
+cluster each time.
+
+`fs`'s FatFs now reads on past a cluster's end while the next cluster in
+the chain is the next on the disk (`ZEITLOS_CONTIG_READ` in
+`fatfs/ffconf.h`, the change in `f_read()` in `ff.c`). A file written
+in one go is mostly contiguous, so a 6 KB record becomes one command
+instead of twelve. Where the chain jumps, the read stops at the jump
+and the next round of the loop follows the chain as before.
+
+Checked in zsys: `dmatest crc` gave the host's CRC-32 for a 500 KB file
+in 3-cluster fragments, both with and without a contiguous run before
+them, and for a 6 MB film; `cinema` read 944 sectors in 257 commands
+where it had needed 937.
+
+`dmatest`'s own read phase goes through stdio, which asks `fs` for 1 KB
+at a time (newlib-nano), so it shows at most 2 sectors a command.
+`dmatest crc PATH` reads with `read()` in mixed sizes up to 16 KB, as
+`cinema` does.
 
 ## `sdbench`
 

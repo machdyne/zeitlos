@@ -86,6 +86,14 @@
 `undef COLOR_WINDOW
 `undef COLOR_DESKTOP
 `endif
+// `DMA (rtl/dma.v) shares the main arbiter's port 2, which only exists
+// with the blitter (no blitter, no arbiter: the CPU is wired straight
+// to the bus).
+`ifdef DMA
+`ifndef GPU_BLIT
+`DMA_NEEDS_GPU_BLIT
+`endif
+`endif
 `include "csrs.vh"
 
 localparam SYSCLK = 48_000_000;
@@ -1456,6 +1464,11 @@ module sysctl #()
 `ifdef SPI_ETH
 	wire cs_spieth = ((wbm_adr & 32'hff00_0000) == 32'h6100_0000);
 `endif
+`ifdef DMA
+	// 0x7b00_0000: the DMA controller's registers (rtl/dma.v). Stores
+	// are kernel-only (rtl/mpu.v): a channel writes physical memory.
+	wire cs_dma = ((wbm_adr & 32'hff00_0000) == 32'h7b00_0000);
+`endif
 `ifdef ETH_RMII
 	// 0x6000_0000: Ethernet controllers, one per 16MB slot.
 	//
@@ -1655,6 +1668,9 @@ module sysctl #()
 `ifdef GPU_T2
 		&& !cs_gtri
 `endif
+`ifdef DMA
+		&& !cs_dma
+`endif
 		;
 	// Unconditional, like cs_uart0 below and unlike the `ifdef-guarded
 	// decodes above -- rtl/gpio.v is always instantiated. It used to
@@ -1788,6 +1804,9 @@ module sysctl #()
 `ifdef SPI_ETH
 		({32{cs_spieth}} & wbs_spieth_dat_o) |
 `endif
+`ifdef DMA
+		({32{cs_dma}} & wbs_dma_dat_o) |
+`endif
 `ifdef ETH_RMII
 		({32{cs_ethmac}} & wbs_ethmac_dat_o) |
 `endif
@@ -1885,6 +1904,17 @@ module sysctl #()
 	wire wbm_audio_cyc;
 	wire wbm_audio_ack;
 `endif
+`ifdef DMA
+	// rtl/dma.v: its registers, its bus master, and its SPI sidebands
+	// (channel 0 the sdcard's spim, channel 1 the ENC28J60's): a start
+	// pulse and BUSY each; the data goes over the bus
+	wire [31:0] wbs_dma_dat_o;
+	wire wbs_dma_ack_o;
+	wire [31:0] wbm_dma_adr, wbm_dma_dat_o, wbm_dma_dat_i;
+	wire [3:0] wbm_dma_sel;
+	wire wbm_dma_we, wbm_dma_stb, wbm_dma_cyc, wbm_dma_ack;
+	wire dma_spi0_start, dma_spi0_busy, dma_spi1_start, dma_spi1_busy;
+`endif
 `ifdef ICACHE
 `endif
 
@@ -1963,6 +1993,9 @@ module sysctl #()
 `endif
 `ifdef SPI_ETH
 		(cs_spieth & wbs_spieth_ack_o) |
+`endif
+`ifdef DMA
+		(cs_dma & wbs_dma_ack_o) |
 `endif
 `ifdef ETH_RMII
 		(cs_ethmac & wbs_ethmac_ack_o) |
@@ -2626,6 +2659,80 @@ module sysctl #()
 
 `ifdef GPU_BLIT
 
+	// -- the main arbiter's port 2 --
+	//
+	// Whatever has it: the audio mixer, or `VRAM_SDRAM's rtl/arbiter_gfx.v
+	// (scanout fetch, mixer, T2), or nothing. Tied off without `AUDIO
+	// rather than left dangling -- an unconnected cyc/stb input would be
+	// x in simulation and whatever the synthesizer felt like in
+	// hardware, and the arbiter grants on cyc && stb.
+	wire [31:0] p2s_adr, p2s_dat_o, p2s_dat_i;
+	wire [3:0]  p2s_sel;
+	wire        p2s_we, p2s_stb, p2s_cyc, p2s_ack;
+`ifdef VRAM_SDRAM
+	assign p2s_adr = wbm_gfx_adr;
+	assign p2s_dat_o = wbm_gfx_dat_o;
+	assign wbm_gfx_dat_i = p2s_dat_i;
+	assign p2s_we = wbm_gfx_we;
+	assign p2s_sel = wbm_gfx_sel;
+	assign p2s_stb = wbm_gfx_stb;
+	assign p2s_cyc = wbm_gfx_cyc;
+	assign wbm_gfx_ack = p2s_ack;
+`elsif AUDIO
+	assign p2s_adr = wbm_audio_adr;
+	assign p2s_dat_o = wbm_audio_dat_o;
+	assign wbm_audio_dat_i = p2s_dat_i;
+	assign p2s_we = wbm_audio_we;
+	assign p2s_sel = wbm_audio_sel;
+	assign p2s_stb = wbm_audio_stb;
+	assign p2s_cyc = wbm_audio_cyc;
+	assign wbm_audio_ack = p2s_ack;
+`else
+	assign p2s_adr = 32'h0;
+	assign p2s_dat_o = 32'h0;
+	assign p2s_we = 1'b0;
+	assign p2s_sel = 4'h0;
+	assign p2s_stb = 1'b0;
+	assign p2s_cyc = 1'b0;
+`endif
+
+	// what the arbiter's port 2 sees
+	wire [31:0] p2_adr, p2_dat_o, p2_dat_i;
+	wire [3:0]  p2_sel;
+	wire        p2_we, p2_stb, p2_cyc, p2_ack;
+
+`ifdef DMA
+	// rtl/dma.v shares port 2 through a two-way round robin, the same
+	// policy as the main arbiter's (rtl/arbiter_dma.v). The mixer
+	// asks for under 1% of the bus and a DMA channel a word at a time,
+	// so neither waits more than the other's single cycle.
+	wire dma_granted;
+	wb_arbiter2 darb_i (
+		.clk(wbm_clk),
+		.rst(wbm_rst),
+		.a_adr_i(p2s_adr), .a_dat_i(p2s_dat_o), .a_dat_o(p2s_dat_i),
+		.a_we_i(p2s_we), .a_sel_i(p2s_sel), .a_stb_i(p2s_stb),
+		.a_cyc_i(p2s_cyc), .a_ack_o(p2s_ack),
+		.b_adr_i(wbm_dma_adr), .b_dat_i(wbm_dma_dat_o), .b_dat_o(wbm_dma_dat_i),
+		.b_we_i(wbm_dma_we), .b_sel_i(wbm_dma_sel), .b_stb_i(wbm_dma_stb),
+		.b_cyc_i(wbm_dma_cyc), .b_ack_o(wbm_dma_ack),
+		.s_adr_o(p2_adr), .s_dat_o(p2_dat_o), .s_dat_i(p2_dat_i),
+		.s_we_o(p2_we), .s_sel_o(p2_sel), .s_stb_o(p2_stb),
+		.s_cyc_o(p2_cyc), .s_ack_i(p2_ack),
+		.grant_b(dma_granted)
+	);
+`else
+	wire dma_granted = 1'b0;
+	assign p2_adr = p2s_adr;
+	assign p2_dat_o = p2s_dat_o;
+	assign p2s_dat_i = p2_dat_i;
+	assign p2_we = p2s_we;
+	assign p2_sel = p2s_sel;
+	assign p2_stb = p2s_stb;
+	assign p2_cyc = p2s_cyc;
+	assign p2s_ack = p2_ack;
+`endif
+
 	wb_arbiter_main marb0_i (
 		.clk(wbm_clk),
 		.rst(wbm_rst),
@@ -2650,40 +2757,17 @@ module sysctl #()
 		.m1_cyc_i(wbm_blitsrc_cyc),
 		.m1_ack_o(wbm_blitsrc_ack),
 
-		// Master 2: audio mixer sample fetches. Tied off on a board
-		// without `AUDIO rather than left dangling -- an unconnected
-		// cyc/stb input would be x in simulation and whatever the
-		// synthesizer felt like in hardware, and this arbiter grants
-		// on cyc && stb.
-`ifdef VRAM_SDRAM
-		// the fetch, the mixer and T2's output (rtl/arbiter_gfx.v)
-		.m2_adr_i(wbm_gfx_adr),
-		.m2_dat_i(wbm_gfx_dat_o),
-		.m2_dat_o(wbm_gfx_dat_i),
-		.m2_we_i(wbm_gfx_we),
-		.m2_sel_i(wbm_gfx_sel),
-		.m2_stb_i(wbm_gfx_stb),
-		.m2_cyc_i(wbm_gfx_cyc),
-		.m2_ack_o(wbm_gfx_ack),
-`elsif AUDIO
-		.m2_adr_i(wbm_audio_adr),
-		.m2_dat_i(wbm_audio_dat_o),
-		.m2_dat_o(wbm_audio_dat_i),
-		.m2_we_i(wbm_audio_we),
-		.m2_sel_i(wbm_audio_sel),
-		.m2_stb_i(wbm_audio_stb),
-		.m2_cyc_i(wbm_audio_cyc),
-		.m2_ack_o(wbm_audio_ack),
-`else
-		.m2_adr_i(32'h0),
-		.m2_dat_i(32'h0),
-		.m2_dat_o(),
-		.m2_we_i(1'b0),
-		.m2_sel_i(4'h0),
-		.m2_stb_i(1'b0),
-		.m2_cyc_i(1'b0),
-		.m2_ack_o(),
-`endif
+		// Master 2: audio mixer sample fetches (and, `VRAM_SDRAM, the
+		// scanout's fetch and T2's output), and with `DMA the DMA
+		// controller beside them -- see the port-2 wires above.
+		.m2_adr_i(p2_adr),
+		.m2_dat_i(p2_dat_o),
+		.m2_dat_o(p2_dat_i),
+		.m2_we_i(p2_we),
+		.m2_sel_i(p2_sel),
+		.m2_stb_i(p2_stb),
+		.m2_cyc_i(p2_cyc),
+		.m2_ack_o(p2_ack),
 
 		.s_adr_o(wbm_adr),
 		.s_dat_o(wbm_dat_o),
@@ -2702,16 +2786,15 @@ module sysctl #()
 `ifdef VRAM_SDRAM
 	// and the scanout's fetch, which reads in four-word bursts
 	assign wbm_cti = (marb_master == 2'd0) ? wbc_cti :
-		(marb_master == 2'd2) ? wbm_gfx_cti : 3'b000;
+		(marb_master == 2'd2 && !dma_granted) ? wbm_gfx_cti : 3'b000;
 `else
 	assign wbm_cti = (marb_master == 2'd0) ? wbc_cti : 3'b000;
 `endif
 
-	// Another master's completed write to main memory. Both are read
-	// only today (gpu_blit.v s_we_o, audio_mixer.v m_we_o are tied 0),
-	// so this is constant 0 in practice -- it exists so that a future
-	// writing master (rtl/dma.v) is coherent with wb_cache without
-	// anyone having to remember.
+	// Another master's completed write to main memory: rtl/dma.v's
+	// (the blitter's source reads and the mixer only read). This is
+	// what keeps the caches coherent with DMA without software
+	// flushing anything.
 	assign cache_snoop_stb = (marb_master != 2'd0) && wbm_cyc && wbm_stb &&
 `ifdef MAIN_512MB
 		wbm_we && wbm_ack && ((wbm_adr & 32'he000_0000) == 32'h4000_0000);
@@ -4019,7 +4102,65 @@ module sysctl #()
 		.spi_miso(SD_MISO),
 		.spi_mosi(SD_MOSI),
 		.spi_sck(SD_SCK),
-		.spi_int(1'b1)		// sdcards have no interrupt line
+		.spi_int(1'b1),		// sdcards have no interrupt line
+`ifdef DMA
+		.dma_start_i(dma_spi0_start),
+		.dma_busy_o(dma_spi0_busy)
+`else
+		.dma_start_i(1'b0),
+		.dma_busy_o()
+`endif
+	);
+`endif
+
+	// WISHBONE SLAVE + MASTER: DMA CONTROLLER (rtl/dma.v, docs/dma.md)
+	//
+	// Channel 0 has the sdcard's spim; channel 1 the ENC28J60's, or,
+	// with the RMII MAC, does its MEM2MEM copies (the MAC's buffers are
+	// plain bus addresses). A board with no network builds one channel.
+`ifdef DMA
+	wire wbm_cyc_dma = cs_dma && wbm_cyc;
+`ifndef SPI_SDCARD
+	assign dma_spi0_busy = 1'b0;
+`endif
+`ifndef SPI_ETH
+	assign dma_spi1_busy = 1'b0;
+`endif
+	// `DMA_CHANNELS 1 (a full Lakritz): one channel does both SPI
+	// masters' jobs, one at a time (rtl/dma.v, CTRL.PORT).
+`ifndef DMA_CHANNELS
+`ifdef SPI_ETH
+`define DMA_CHANNELS 2
+`elsif ETH_RMII
+`define DMA_CHANNELS 2
+`else
+`define DMA_CHANNELS 1
+`endif
+`endif
+	dma_wb #(
+		.CHANNELS(`DMA_CHANNELS)
+	) wbm_dma0_i (
+		.wb_clk_i(wbm_clk),
+		.wb_rst_i(wbm_rst),
+		.wb_adr_i(wbm_adr[5:2]),
+		.wb_dat_i(wbm_dat_o),
+		.wb_dat_o(wbs_dma_dat_o),
+		.wb_we_i(wbm_we),
+		.wb_stb_i(wbm_stb),
+		.wb_cyc_i(wbm_cyc_dma),
+		.wb_ack_o(wbs_dma_ack_o),
+		.m_adr_o(wbm_dma_adr),
+		.m_dat_o(wbm_dma_dat_o),
+		.m_dat_i(wbm_dma_dat_i),
+		.m_we_o(wbm_dma_we),
+		.m_sel_o(wbm_dma_sel),
+		.m_stb_o(wbm_dma_stb),
+		.m_cyc_o(wbm_dma_cyc),
+		.m_ack_i(wbm_dma_ack),
+		.spi0_start_o(dma_spi0_start),
+		.spi0_busy_i(dma_spi0_busy),
+		.spi1_start_o(dma_spi1_start),
+		.spi1_busy_i(dma_spi1_busy)
 	);
 `endif
 
@@ -4050,7 +4191,14 @@ module sysctl #()
 		.spi_miso(ETH_MISO),
 		.spi_mosi(ETH_MOSI),
 		.spi_sck(ETH_SCLK),
-		.spi_int(ETH_INT)
+		.spi_int(ETH_INT),
+`ifdef DMA
+		.dma_start_i(dma_spi1_start),
+		.dma_busy_o(dma_spi1_busy)
+`else
+		.dma_start_i(1'b0),
+		.dma_busy_o()
+`endif
 	);
 
 	// The ENC28J60's INT pin is ACTIVE LOW, so it inverts into the

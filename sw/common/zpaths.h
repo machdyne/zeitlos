@@ -103,6 +103,8 @@
 
 #define Z_DIR_MEDIA_AUDIO         "/media/audio"
 #define Z_DIR_MEDIA_IMAGES        "/media/images"
+/* films, .zv: sw/apps/cinema, docs/zv.md */
+#define Z_DIR_MEDIA_VIDEO         "/media/video"
 
 /* -- the Ark library and ask's indexes of it (docs/ask_app.md) --
  * The documents are an optional package no single app owns, so they

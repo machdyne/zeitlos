@@ -371,6 +371,10 @@ and the other in black and white; click the other and the colour moves.
 A full-screen game takes the planes; back on the desktop the focused
 screen app has them again.
 
+`cinema` ([cinema_app.md](cinema_app.md)) asks for it only while it
+shows a colour film small enough (`Z_WIN_FLAG_COLOUR_LATER`), and draws
+its planes itself: a class a cell, a hand-tinted film in 32 colours.
+
 `colwin`, below, sets COLWIN itself, without the flag: a test of the
 hardware.
 
@@ -622,6 +626,12 @@ Taking it back, `ACC_RETAKE_MS` after the colour window loses the focus
 painted, the 256 entries written, COLWIN over the screen, and the apps
 allowed to tint again -- those that had (`Z_WM_ACCENT_USED`) are asked to
 repaint. About 1-2 ms; a frame or two without tints.
+
+A wait still pending when a game starts is dropped (the sheet is
+the game's; wm tints again as soon as it may). Left pending, it was
+"work due" on every pass of wm's loop with nothing to do it, and wm
+took 16% of the CPU beside the game: seen with cinema, which gives the
+colour window back as it enters game mode.
 
 **Cost:** no block RAM or VRAM; the exact path's few gates (above), on
 the 45F boards only. wm: about 5.6 KB of code;

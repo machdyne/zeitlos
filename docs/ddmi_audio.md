@@ -95,6 +95,10 @@ Three things have to be true:
    serial console turns it off at once, until the next boot; then set
    `no` in the file (from a PC, or `xf`/`xmf` at the console).
 
+Settings has a switch for it too: **Sound**, "Sound over HDMI"
+([settings_app.md](settings_app.md)). It acts at once and saves the
+line above.
+
 In a program: `z_ddmi_audio_available()`, `z_ddmi_audio_on()` and
 `z_ddmi_audio_set()` in `sw/common/zsoc.h` — but the setting is the
 person's, made once in the config file, and nothing else should change

@@ -217,6 +217,15 @@ typedef struct zsys {
 	zsys_audio_t audio;
 	bool audio_on;					// FEATURES has AUDIO: the block is there
 
+	// -- DMA (rtl/dma.v, `DMA), at 0x7B00_0000, --dma: channel 0 on the
+	// SD card's SPI. A job is done the moment it starts; BUSY stays up
+	// for as long as the wire would take, so a driver waiting on it
+	// waits as long as on the board. --
+	bool dma_on;
+	uint32_t dma_src[2], dma_dst[2];
+	uint64_t dma_until[2];
+	uint32_t dma_jobs, dma_paces;
+
 	// -- T2, the triangle engine (zt2.c), at 0x7C00_0000 --
 	bool t2_on;
 	uint64_t t2_frames;
@@ -387,6 +396,10 @@ void zsys_dirty_take(zsys_t *s, uint32_t rows[ZSYS_ROWS / 32]);
 // -- internal: zsys.c <-> zdev.c --
 uint32_t zdev_read(zsys_t *s, uint32_t pa, bool *ok);
 bool zdev_write(zsys_t *s, uint32_t pa, uint32_t v, uint32_t sel);
+// four bytes through the SD card's SPI, byte 0 first (rtl/spim.v's
+// 32-bit order), and the wire time of one in CPU cycles
+uint32_t zdev_sd_xchg32(zsys_t *s, uint32_t v);
+uint32_t zdev_sd_word_cycles(zsys_t *s);
 // The desktop's geometry in the screen mode (game mode is 640x480).
 static inline int zsys_fb_w(const zsys_t *s) {
 	// (1920x1080 is a 960x540 desktop; the doubling is not drawn)

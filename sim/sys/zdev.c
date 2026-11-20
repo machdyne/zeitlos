@@ -721,6 +721,16 @@ static uint32_t spisd_read(zsys_t *s, uint32_t r) {
 	return 0;
 }
 
+uint32_t zdev_sd_xchg32(zsys_t *s, uint32_t v) {
+	uint32_t rx = 0;
+	for (int i = 0; i < 4; i++) rx |= (uint32_t)sd_xchg(s, (uint8_t)(v >> 8 * i)) << 8 * i;
+	return rx;
+}
+
+uint32_t zdev_sd_word_cycles(zsys_t *s) {
+	return 32u * 2u * (((s->spisd_ctrl >> 8) & 0xffu) + 1u);
+}
+
 static void spisd_write(zsys_t *s, uint32_t r, uint32_t v) {
 	switch (r) {
 	case 0:

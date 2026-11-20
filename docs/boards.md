@@ -209,6 +209,21 @@ shrink, UART1 is a full 16550 used only to transmit (receive is
 saving, and `ESP32_RXFIFO_BITS=12` gives two block RAMs back at the
 cost of burst headroom, as `ulx3s_12f` does at 11.
 
+## DMA
+
+`DMA` ([dma.md](dma.md)) on `lakritz_langkatze` (one channel) and
+`sergei_ml2` (two). Yosys 0.69 and nextpnr-ecp5 0.11.1 (YoWASP),
+default seed, through the release build's generated `zspec.vh` and
+`.lpf`:
+
+| target | COMB | FF | `CLK_48` / main | pixel |
+|---|---|---|---:|---:|
+| `lakritz_langkatze` | 23,070 → 23,454 / 24,288 (**96%**) | 10,803 → 10,945 | 56.21 → 58.08 MHz | 50.10 → 47.36 MHz |
+| `sergei_ml2` | 27,737 → 28,191 / 43,848 (64%) | 13,558 → 13,782 | 53.81 → 51.63 MHz | 50.25 → 51.35 MHz |
+
+Lakritz was 22,395 when the Kabellos table above was measured. It has
+grown since, and 96% is as full as any Lakritz build has shipped.
+
 ## ULX3S 85k with the caches and the MPU
 
 The tables above are at 616e152. The ULX3S 85k was measured again with

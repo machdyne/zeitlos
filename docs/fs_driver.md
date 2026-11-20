@@ -145,6 +145,9 @@ fails to start, the kernel still starts the core apps from flash, and
 operations for the kernel shell (`MKFS`, `MOUNT`, `UMOUNT`,
 `SYNCALL`), and watches ("Watching", below).
 
+`STATS` (24) returns `fs`'s own timing counters, for a benchmark to
+take before and after ([sdcard.md](sdcard.md), "Where a read goes").
+
 - **Writes are never copied by the protocol.** `fs` reads the
   client's buffer where it is: the kernel resolved the blob to
   physical memory, and any process may load from anywhere. FatFs

@@ -7,3 +7,9 @@
 description = Sergei ML2
 
 base = sergei_ml2
+
+# The DMA controller (rtl/dma.v, docs/dma.md): two channels, the SD
+# card's SPI and the RMII MAC's buffers, so a film streams off the card
+# and a frame is copied in or out without the CPU moving the bytes.
+defines =
+	DMA

@@ -3896,7 +3896,26 @@ FRESULT f_read (
 			cc = btr / SS(fs);					/* When remaining bytes >= sector size, */
 			if (cc > 0) {						/* Read maximum contiguous sectors directly */
 				if (csect + cc > fs->csize) {	/* Clip at cluster boundary */
+#if ZEITLOS_CONTIG_READ
+					/* Zeitlos: unless the next clusters follow on the disk.
+					   A file written in one go mostly does, and the cards
+					   made by release/ have 512-byte clusters below 1GB, so
+					   without this every sector was its own command
+					   (docs/sdcard.md, "Reading across clusters"). */
+					UINT want = cc;
+					DWORD c = fp->clust, n;
 					cc = fs->csize - csect;
+					while (cc < want) {
+						n = get_fat(&fp->obj, c);
+						if (n != c + 1) break;	/* not next: an end, an error, or elsewhere */
+						c = n;
+						cc += fs->csize;
+					}
+					if (cc > want) cc = want;
+					fp->clust = c;				/* the cluster the read ends in */
+#else
+					cc = fs->csize - csect;
+#endif
 				}
 				if (disk_read(fs->pdrv, rbuff, sect, cc) != RES_OK) ABORT(fs, FR_DISK_ERR);
 #if !FF_FS_READONLY && FF_FS_MINIMIZE <= 2		/* Replace one of the read sectors with cached data if it contains a dirty sector */

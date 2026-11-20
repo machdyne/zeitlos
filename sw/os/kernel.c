@@ -3125,6 +3125,55 @@ z_obj_t *k_abi(z_obj_t *args) {
 	return &z_ok;
 }
 
+// -- DMA -- docs/dma.md ---------------------------------------------
+//
+// The controller's registers take kernel stores only (rtl/mpu.v): a
+// channel writes physical memory, past the MPU. So a driver asks here,
+// and the buffer is checked as any syscall's is (k_user_ok_words: its
+// own block, arena or open grant window), translated from the app's
+// window to physical, and the channel started. A busy channel is
+// refused, so nobody restarts one under someone else's transfer; a
+// transfer always ends by itself (the SPI and the bus both finish), so
+// there is no stop here.
+z_obj_t *k_dma(z_obj_t *args) {
+	z_dma_args_t *a = (z_dma_args_t *)args;
+	uint32_t n, pid = z_pid, mem, dev, mode = a->mode, ctrl, hw;
+	volatile uint32_t *r;
+	if (!k_user_ok_words(a, sizeof(*a))) return &z_fail;
+	n = reg_dma_magic == Z_DMA_MAGIC ? reg_dma_info : 0;
+	// a one-channel build serves both SPI masters on channel 0 (PORT)
+	hw = a->ch < n ? a->ch : 0;
+	r = (volatile uint32_t *)(Z_DMA_BASE + 16u * hw);
+	// (CTRL keeps 16 bits of `words`: never more than was checked.
+	// `op`, an unknown `mode` or `ch` are not checked: the image budget,
+	// and none of them can reach past the buffer and `dev` checked here.)
+	// A job that writes memory must write the caller's (k_user_ok_words);
+	// one that only reads it need only be aligned -- a driver may load
+	// from anywhere, and `fs` sends a client's buffer straight from
+	// where it lies.
+	if (!n || (r[3] & 1u) || ((mode & 1) ?
+	    !k_user_ok_words((const void *)(uintptr_t)a->mem, a->words * 4u) : (a->mem & 3u))) return &z_fail;
+	mem = a->mem;
+	if (pid < Z_PROCS_MAX && z_procs[pid].base >= (uint32_t)(uintptr_t)&_end) {
+		if (!(z_procs[pid].flags & Z_PROC_FLAG_DRIVER)) return &z_fail;
+		if ((mem & 0xf0000000u) == 0x80000000u) mem = z_procs[pid].base + (mem - 0x80000000u);
+	}
+	// the other end: the SD card's SPI DATA, or the network
+	// controllers' nibble, where a driver may store anyway. SPI jobs
+	// keep it fixed and are paced by the master (PORT: which one, for
+	// a one-channel build); the MAC's buffers step, unpaced.
+	dev = a->dev;
+	if ((dev & 0xf0000003u) != 0x60000000u && dev != 0xb0000000u) return &z_fail;
+	ctrl = 0;
+	if (mode <= Z_DMA_SPI_OUT)
+		ctrl = (mode == Z_DMA_SPI_IN ? (1u << 3) | 2u : (2u << 3) | 4u) | ((dev >> 25) & 0x20u);	// bit 30: 0x6 nibble, the ENC28J60
+	// reads from SRC, writes to DST: "in" is device to memory
+	if (mode & 1) { r[0] = dev; r[1] = mem; }
+	else { r[0] = mem; r[1] = dev; }
+	r[3] = (a->words << 16) | ctrl | 1u;
+	return &z_ok;
+}
+
 // -- the time in 64 bits -- docs/rtc.md, "64-bit time" -------------
 //
 // The RTC (rtl/rtc.v) counts 32-bit seconds since 1970: it runs out in

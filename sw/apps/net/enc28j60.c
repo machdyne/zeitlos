@@ -87,8 +87,29 @@ static void eth_delay_ms(uint32_t n) {
    carry different gateware for each, though none does. */
 static int eth_spi_v1;
 
+/* DMA (rtl/dma.v, docs/dma.md): channel 1 has this SPI master on a
+   bitstream with a two-channel DMA controller. A frame's aligned middle
+   then moves without the CPU, and without the main bus being held for
+   every word (a stalled DATA access holds it, rtl/spim.v). */
+static int eth_dma;
+#define ETH_DMA_MIN	64
+
 static void eth_spi_probe(void) {
 	eth_spi_v1 = (reg_spieth_magic == Z_SPISD_MAGIC_V1);
+	eth_dma = eth_spi_v1 && z_dma_channels() > 0;
+}
+
+/* the aligned middle of a buffer transfer by DMA: the bytes moved, or 0 */
+static uint16_t eth_dma_bulk(uint8_t *buf, uint16_t n, int in) {
+	uint16_t words = n >> 2;
+	if (!eth_dma || n < ETH_DMA_MIN) return 0;
+	if (z_dma_start(Z_DMA_CH_NET, in ? Z_DMA_SPI_IN : Z_DMA_SPI_OUT, buf, Z_DMA_DEV_ENC, words) != Z_OK)
+		return 0;   /* refused (busy, or a kernel without Z_SYS_DMA): the CPU's way */
+	z_dma_wait(Z_DMA_CH_NET);
+	/* sending, the last word is still on the wire when the channel is
+	   done: it must finish before chip select goes up */
+	while (reg_spieth_status & Z_SPISD_BUSY) ;
+	return (uint16_t)(words * 4);
 }
 
 static uint8_t spi_xfer(uint8_t out) {
@@ -377,6 +398,7 @@ static void eth_read_buffer(uint8_t *buf, uint16_t len) {
 		}
 		if (len - i >= 4) {
 			eth_spi_wide(1);
+			i += eth_dma_bulk(buf + i, (uint16_t)(len - i), 1);
 			while (len - i >= 4) {
 				reg_spieth_data = 0xFFFFFFFFu;
 				*(uint32_t *)(buf + i) = reg_spieth_data;
@@ -407,6 +429,8 @@ static void eth_write_buffer(const uint8_t *buf, uint16_t len) {
 		}
 		if (len - i >= 4) {
 			eth_spi_wide(1);
+			/* 32-bit mode first: a channel writing DATA relies on it */
+			i += eth_dma_bulk((uint8_t *)(buf + i), (uint16_t)(len - i), 0);
 			while (len - i >= 4) {
 				reg_spieth_data = *(const uint32_t *)(buf + i);
 				(void)reg_spieth_data;  /* the read stalls until the

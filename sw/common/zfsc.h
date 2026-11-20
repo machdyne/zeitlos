@@ -84,6 +84,10 @@ int32_t zfs_syncall(void);
 int32_t zfs_watch(const char *path);
 int32_t zfs_watch_read(int32_t wd, z_fs_watch_t *h, char *paths, uint32_t cap);
 int32_t zfs_unwatch(int32_t wd);
+// fs's timing counters (Z_FSOP_STATS, zfsproto.h): a benchmark's
+int32_t zfs_stats(z_fs_stats_t *out);
+// the same, turning the card's DMA off or on in fs first (until fs restarts)
+int32_t zfs_stats_dma(z_fs_stats_t *out, int on);
 
 // True for a path `fs` serves: "/fs" and anything under it.
 bool zfs_path_is_ours(const char *path);

@@ -90,6 +90,13 @@ Z_SUBJECTS_IN(Z_SUBJ_FS, Z_FS_CHANGED);
 #define Z_FSOP_WATCH		21	// path (a folder or a file)        -> a watch number
 #define Z_FSOP_WATCHREAD	22	// fd: the watch number            -> paths, a z_fs_watch_t
 #define Z_FSOP_UNWATCH		23	// fd: the watch number
+// fs's own timing counters, since it started (docs/sdcard.md, "Where a
+// read goes"): for a benchmark to take before and after
+#define Z_FSOP_STATS		24	//                            -> 0, a z_fs_stats_t
+// (with `len` one of these, the card's DMA is turned off or on first,
+// until fs next starts: for measuring one against the other on one build)
+#define Z_FS_STATS_DMA_OFF	0x444d4130u
+#define Z_FS_STATS_DMA_ON	0x444d4131u
 
 // Open flags (z_fsreq_t.flags). Zeitlos's own numbers, not any C
 // library's: the libc hooks translate.
@@ -185,6 +192,24 @@ typedef struct {
 	uint32_t	total_kb;
 	uint32_t	free_kb;
 } z_fs_vfs_t;
+
+// STATS's data: counts, bytes and cycles (z_cycles()), each since fs
+// started, wrapping at 32 bits. A client takes two and subtracts.
+typedef struct {
+	uint32_t	reads, read_bytes, read_cyc;		// Z_FSOP_READ, all of it in fs
+	uint32_t	writes, write_bytes, write_cyc;		// Z_FSOP_WRITE
+	uint32_t	disk_reads, disk_read_cyc;			// the card: sd_disk_read() calls
+	uint32_t	sectors_read, token_cyc, payload_cyc;	// in them: waiting for 0xFE, the bytes
+	uint32_t	disk_writes, disk_write_cyc, sectors_written;
+	uint32_t	commands, dma_bytes;
+	uint32_t	grant_reads;						// reads straight into the client's buffer
+	// The cycle counter's value as each READ began in fs, and as it
+	// ended, summed (wrapping). A client that sums the counter before
+	// and after each of its reads the same way gets, by subtraction,
+	// the time its requests took to reach fs and the replies to come
+	// back -- if the reads between two samples were all its own.
+	uint32_t	read_t0_sum, read_t1_sum;
+} z_fs_stats_t;
 
 /*
  * -- Watching --

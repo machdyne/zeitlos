@@ -42,6 +42,7 @@ EXTRA = [
     ("sw/apps/fs/tests", "run"),
     ("sw/apps/usb/tests", "default"),
     ("sw/apps/zlink/tests", "all"),     # about 40 s: the link runs in real time
+    ("tools/zv", "test"),               # ZV: the format, the decoder's views, the encoder
 ]
 
 # The release tool and the ABI generator: (script, directory to run in).

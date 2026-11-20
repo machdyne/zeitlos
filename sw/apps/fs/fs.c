@@ -45,7 +45,8 @@
 #include "fatfs/ff.h"
 #include "fatfs/diskio.h"
 #include "fsvol.h"
-#include "sdbench.h"		// sd_stat: why a card write failed
+#include "sdbench.h"		// sd_stat: why a card write failed, where a read goes
+#include "../../common/zcycles.h"
 
 // [dst, dst + n) inside the client's memory [base, base + size).
 #ifndef FS_IN_WINDOW
@@ -755,6 +756,10 @@ static void put_info(fs_client_t *c, const z_fs_info_t *fi) {
 
 // -- files -------------------------------------------------------------
 
+// timing of the reads and writes (Z_FSOP_STATS), beside sdmm.c's sd_stat
+static z_fs_stats_t fs_stats;
+static uint32_t fs_grant_reads;
+
 static int32_t op_open(const z_fsreq_t *rq, uint32_t pid, fs_client_t *c) {
 	char rb[FS_PATH];
 	const char *real = resolve(rq->path, rb, sizeof rb);
@@ -915,6 +920,7 @@ static int32_t op_read(const z_fsreq_t *rq, uint32_t pid, uint8_t *dst,
 		}
 		r = file_read(f, dst, want, &br);
 		z_grant_close();
+		fs_grant_reads++;
 	} else {
 		// By copy, into the bulk buffer if it is free (or its holder has
 		// surely read it), else into this client's own slot: a short
@@ -1489,6 +1495,25 @@ static int32_t op_watchread(const z_fsreq_t *rq, uint32_t pid, fs_client_t *c) {
 
 // -- dispatch ----------------------------------------------------------
 
+
+static int32_t op_stats(fs_client_t *c) {
+	z_fs_stats_t s = fs_stats;
+	s.disk_reads = sd_stat.disk_reads;
+	s.disk_read_cyc = sd_stat.disk_read_cyc;
+	s.sectors_read = sd_stat.sectors_read;
+	s.token_cyc = sd_stat.token_cyc;
+	s.payload_cyc = sd_stat.payload_cyc;
+	s.disk_writes = sd_stat.disk_writes;
+	s.disk_write_cyc = sd_stat.disk_write_cyc;
+	s.sectors_written = sd_stat.sectors_written;
+	s.commands = sd_stat.commands;
+	s.dma_bytes = sd_stat.dma_bytes;
+	s.grant_reads = fs_grant_reads;
+	memcpy(c->data, &s, sizeof(s));
+	c->rep->len = sizeof(s);
+	return 0;
+}
+
 static int32_t serve(const z_fsreq_t *rq, uint32_t pid, uint8_t *buf,
 	uint32_t buflen, fs_client_t *c) {
 	char rb[FS_PATH];
@@ -1504,8 +1529,29 @@ static int32_t serve(const z_fsreq_t *rq, uint32_t pid, uint8_t *buf,
 		if (file_watch[rq->fd]) watch_closed(rq->fd);
 		return f->zar ? 0 : fs_err(f_close(&f->f));
 	}
-	case Z_FSOP_READ:	return op_read(rq, pid, buf, buflen, c);
-	case Z_FSOP_WRITE:	return op_write(rq, pid, buf, buflen);
+	case Z_FSOP_READ: {
+		uint32_t t = z_cycles();
+		int32_t r = op_read(rq, pid, buf, buflen, c);
+		uint32_t t1 = z_cycles();
+		fs_stats.reads++;
+		fs_stats.read_cyc += t1 - t;
+		fs_stats.read_t0_sum += t;
+		fs_stats.read_t1_sum += t1;
+		if (r > 0) fs_stats.read_bytes += (uint32_t)r;
+		return r;
+	}
+	case Z_FSOP_WRITE: {
+		uint32_t t = z_cycles();
+		int32_t r = op_write(rq, pid, buf, buflen);
+		fs_stats.writes++;
+		fs_stats.write_cyc += z_cycles() - t;
+		if (r > 0) fs_stats.write_bytes += (uint32_t)r;
+		return r;
+	}
+	case Z_FSOP_STATS:
+		if (rq->len == Z_FS_STATS_DMA_OFF) sd_dma_allow(0);
+		else if (rq->len == Z_FS_STATS_DMA_ON) sd_dma_allow(1);
+		return op_stats(c);
 	case Z_FSOP_LSEEK:	return op_lseek(rq, pid);
 	case Z_FSOP_FSTAT:	return op_fstat(rq, pid, c);
 	case Z_FSOP_STAT:	return op_stat(rq, c);

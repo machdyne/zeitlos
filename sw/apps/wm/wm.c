@@ -2906,7 +2906,7 @@ static uint32_t wm_idle_ticks(void) {
 	if ((acc_live && acc_dirty && !WM_HIDDEN() && dragging < 0 && resizing < 0 &&
 	     xor_band_idx < 0) || cw_pending >= 0)
 		return 1;
-	if (acc_retake_wait) {
+	if (acc_retake_wait && !WM_HIDDEN()) {	// (hidden: acc_service() does not take it)
 		int32_t left = (int32_t)(acc_retake_at - now);
 		if (left <= 0) return 1;
 		if (!soon || (uint32_t)left < soon) soon = (uint32_t)left;
@@ -4041,6 +4041,11 @@ static void acc_service(void) {
 	if (!want) {
 		// (a colour window's own COLWIN is not wm's to clear here)
 		if (acc_live || (acc_apps && cw_idx < 0)) acc_off();
+		// Nothing to take back now, and when there is again it is taken
+		// at once. Left set, a wait that ran out under a game was "work
+		// due" on every pass (wm_idle_ticks()) with nothing here to do
+		// it: wm span, 16% of the CPU beside cinema's game mode.
+		acc_retake_wait = false;
 		return;
 	}
 	if (WM_HIDDEN()) return;		// lock_draw() and confirm_draw() tint their own

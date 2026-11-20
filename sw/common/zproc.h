@@ -316,6 +316,53 @@ typedef struct {
 	uint32_t	size;		// OPEN: out, its size in bytes
 } z_grant_args_t;
 
+// -- DMA (Z_SYS_DMA, z_dma_*() in zeitlos.h; docs/dma.md) --
+//
+// A driver asks the kernel to start a channel of the DMA controller
+// (rtl/dma.v): its registers take kernel stores only, because a channel
+// writes physical memory past every MPU check. For a job that writes
+// memory (the _IN modes) the kernel checks that `mem` is the caller's --
+// its own block (0x8xxx_xxxx or physical), its arena or its open grant
+// window; for one that only reads it (_OUT), that it is aligned, since
+// a driver may load from anywhere. Then it translates and starts the
+// channel. Waiting needs no syscall: BUSY is a plain load
+// (z_dma_busy()).
+//
+//   Z_DMA_START  `words` words on channel `ch`, in `mode`:
+//     Z_DMA_SPI_IN    the SPI master whose DATA is `dev` -> mem (sends
+//                     all ones): 0xb000_0000 the SD card, 0x6100_0000
+//                     the ENC28J60
+//     Z_DMA_SPI_OUT   mem -> that SPI master
+//     Z_DMA_DEV_IN    the device at `dev` -> mem (the RMII MAC's
+//                     receive buffer, 0x6000_0100)
+//     Z_DMA_DEV_OUT   mem -> the device at `dev` (its send buffer)
+//
+// Channel 0 is the SD card's SPI; channel 1 the ENC28J60's, or with the
+// RMII MAC the copies to and from its buffers. On a one-channel build
+// (a full Lakritz) channel 1's jobs run on channel 0, so ask for the
+// channel by what it is for; a job meeting the other's is refused. Only a driver may start
+// one, `mem` must be word-aligned, and `dev` must be the SD card's SPI
+// DATA or in the network controllers' nibble (0x6xxx_xxxx), where a
+// driver may store anyway.
+// How many channels there are is a load (reg_dma_info, zeitlos.h); a
+// kernel from before this call refuses every START. A busy channel is
+// refused; a transfer always ends by itself, so there is no stop.
+#define Z_DMA_START     1
+
+#define Z_DMA_SPI_IN    1
+#define Z_DMA_SPI_OUT   2
+#define Z_DMA_DEV_IN    3
+#define Z_DMA_DEV_OUT   4
+
+typedef struct {
+	uint32_t	op;
+	uint32_t	ch;
+	uint32_t	mode;
+	uint32_t	mem;		// the caller's buffer
+	uint32_t	dev;		// the device end (Z_DMA_DEV_* in zeitlos.h)
+	uint32_t	words;		// 1..65535
+} z_dma_args_t;
+
 // Z_SYS_EXEC_EXISTS_MANY (z_exec_exists_many(), zeitlos.h): which of
 // `count` program names would launch. found[i] is set to 1 or 0.
 typedef struct {

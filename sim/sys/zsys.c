@@ -225,6 +225,52 @@ static inline uint8_t *mem(zsys_t *s, uint32_t pa, bool write) {
 	return NULL;
 }
 
+// -- DMA (rtl/dma.v), one channel: the SD card's --
+
+static uint32_t dma_read(zsys_t *s, uint32_t r) {
+	switch (r) {
+	case 3: return s->cycles < s->dma_until[0] ? 1u : 0u;
+	case 14: return 1;
+	case 15: return 0x444d4131u;		// "DMA1"
+	}
+	return 0;
+}
+
+static void dma_write(zsys_t *s, uint32_t r, uint32_t v) {
+	uint32_t words, pace, i, src, dst;
+	switch (r) {
+	case 0: s->dma_src[0] = v & ~3u; return;
+	case 1: s->dma_dst[0] = v & ~3u; return;
+	case 3: break;
+	default: return;
+	}
+	if (!(v & 1)) return;
+	words = v >> 16;
+	pace = (v >> 3) & 3;
+	src = s->dma_src[0];
+	dst = s->dma_dst[0];
+	s->dma_jobs++;
+	if (!(s->dma_paces & (1u << pace)) && (s->dma_paces |= 1u << pace))
+		fprintf(stderr, "zsys: dma: first job of pace %lu, %lu words, %08lx -> %08lx\n",
+			(unsigned long)pace, (unsigned long)words, (unsigned long)src, (unsigned long)dst);
+	// a word read from SRC, written to DST; the SD card's DATA is the
+	// only device here (pace 1 reads it, pace 2 writes it)
+	for (i = 0; i < words; i++) {
+		uint32_t w = 0;
+		uint8_t *p;
+		if (pace == 1) w = zdev_sd_xchg32(s, 0xffffffffu);
+		else if ((p = mem(s, src, false)) != NULL)
+			w = (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
+		if (pace == 2) (void)zdev_sd_xchg32(s, w);
+		else if ((p = mem(s, dst, true)) != NULL) {
+			p[0] = (uint8_t)w; p[1] = (uint8_t)(w >> 8); p[2] = (uint8_t)(w >> 16); p[3] = (uint8_t)(w >> 24);
+		}
+		if (!(v & 2)) src += 4;
+		if (!(v & 4)) dst += 4;
+	}
+	s->dma_until[0] = s->cycles + (uint64_t)words * (pace == 0 ? 8u : zdev_sd_word_cycles(s));
+}
+
 static void unmapped(zsys_t *s, uint32_t pa, bool write) {
 	uint32_t bit = 1u << (pa >> 28);
 	if (s->unmapped_said & bit) return;
@@ -245,6 +291,7 @@ static uint32_t io_read(zsys_t *s, uint32_t pa) {
 
 	case 0x7:
 		if (s->t2_on && (pa & 0xff000000u) == 0x7c000000u) return zt2_read(s, (pa & 0x3f) >> 2);	// T2
+		if (s->dma_on && (pa & 0xff000000u) == 0x7b000000u) return dma_read(s, (pa >> 2) & 15);
 		if ((pa & 0xf0000700u) == 0x70000000u) {	// the CSRs (rtl/csrs.v)
 			switch ((pa & 0xff) >> 2) {
 			case 0: return 0x5a454954u;		// "ZEIT"
@@ -302,6 +349,7 @@ static void io_write(zsys_t *s, uint32_t pa, uint32_t v, uint32_t sel) {
 
 	case 0x7:
 		if (s->t2_on && (pa & 0xff000000u) == 0x7c000000u) { zt2_write(s, (pa & 0x3f) >> 2, v); return; }
+		if (s->dma_on && (pa & 0xff000000u) == 0x7b000000u) { dma_write(s, (pa >> 2) & 15, v); return; }
 		if (s->kind == ZSYS_SOC) zdev_write(s, pa & ~3u, v, sel);	// socctl, the RTC
 		return;					// the CSRs themselves: read-only
 

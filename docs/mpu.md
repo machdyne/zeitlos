@@ -112,7 +112,9 @@ by default.
 **Kernel-only for stores**, fixed in hardware: BIOS RAM (nibble 0),
 flash and its write/erase registers (nibble 1), main memory outside the
 app's own block, the cache control registers (`0x7000_01xx`), the FPGA
-reconfigure key (`0x7000_0218`), and the MTU/MPU registers (nibble 9).
+reconfigure key (`0x7000_0218`), the MTU/MPU registers (nibble 9), and
+the DMA controller (`0x7bxx_xxxx`, [dma.md](dma.md): a channel writes
+physical memory, so drivers start one through the kernel, `Z_SYS_DMA`).
 
 **`MASK`** is 16 bits, one per address nibble (`0x0xxx_xxxx` to
 `0xFxxx_xxxx`). The kernel sets it to `0xF7FF`: everything except the SD

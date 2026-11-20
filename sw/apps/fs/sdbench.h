@@ -64,9 +64,18 @@ typedef struct {
 									   accepted, 3 the stop token, 4 busy */
 	uint8_t		write_resp;			/* the command's or block's response */
 	uint8_t		write_count;		/* sectors in that write */
+	uint32_t	dma_bytes;			/* moved by the DMA controller (docs/dma.md) */
+	/* cycles (z_cycles(), per call, never per byte): where a read goes */
+	uint32_t	disk_reads;			/* sd_disk_read() calls */
+	uint32_t	disk_read_cyc;		/* in them, all of it */
+	uint32_t	token_cyc;			/* waiting for the card's 0xFE */
+	uint32_t	payload_cyc;		/* the 512 bytes (and CRC) moving */
+	uint32_t	disk_writes;
+	uint32_t	disk_write_cyc;
 } sd_stat_t;
 
 extern sd_stat_t sd_stat;
+int sd_dma_allow(int on);
 
 /*
  * Hooks into sdmm.c's statics. Only sdbench.c should call these --

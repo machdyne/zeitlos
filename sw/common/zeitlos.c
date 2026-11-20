@@ -331,6 +331,30 @@ z_rv z_grant_open(uint32_t pid, uint32_t *base, uint32_t *size) {
 }
 z_rv z_grant_close(void) { return z_grant_call(Z_GRANT_CLOSE, 0, 0, 0); }
 
+static z_rv z_dma_call(z_dma_args_t *a) {
+	z_kernel_ptr_t z_kernel_ptr = (z_kernel_ptr_t)(uintptr_t)(reg_kernel);
+	z_obj_t *rv = (z_obj_t *)z_kernel_ptr(Z_SYS_DMA, (uint32_t *)a, 0);
+	return rv->val.uint32;
+}
+
+uint32_t z_dma_channels(void) {
+	// a bitstream without DMA: the CSRs answer, and no magic
+	uint32_t n = reg_dma_magic == Z_DMA_MAGIC ? reg_dma_info : 0;
+	return n > 2 ? 0 : n;
+}
+
+z_rv z_dma_start(uint32_t ch, uint32_t mode, void *mem, uint32_t dev, uint32_t words) {
+	z_dma_args_t a;
+	a.op = Z_DMA_START;    // the only one, today
+	a.ch = ch;
+	a.mode = mode;
+	a.mem = (uint32_t)(uintptr_t)mem;
+	a.dev = dev;
+	a.words = words;
+	return z_dma_call(&a);
+}
+
+
 static z_rv z_irq_call(uint32_t op, uint32_t irq, uint32_t silence, uint32_t val) {
 	z_irq_args_t a;
 	a.op = op;

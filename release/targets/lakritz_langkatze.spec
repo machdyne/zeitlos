@@ -36,3 +36,13 @@ pmods = langkatze@a
 # board already defines it because boards/lakritz_v0.lpf constrains the
 # ethernet pins on PMOD A. This target says where the PMOD is plugged
 # in; the define follows from that.
+
+# The DMA controller (rtl/dma.v, docs/dma.md): one channel, shared by
+# the SD card's SPI and the ENC28J60's a job at a time, so a film
+# streams off the card and a frame comes off the wire without the CPU
+# moving the bytes or the main bus being held for every word. One, not
+# two: this board is nearly full, and the second costs ~140 LUT4 for
+# the rare moment both want it at once (that job goes the CPU's way).
+defines =
+	DMA
+	DMA_CHANNELS=1

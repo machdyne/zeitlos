@@ -9,6 +9,8 @@
 #                    clear racing a write
 #   make colwin   socctl.v's COLWIN/COLWINEND, DESK included
 #   make 8b10b    the 8b/10b of gpio_stream.v and zfast.v, every symbol (zlink)
+#   make dma     rtl/dma.v with two spim.v masters, SPI devices and a
+#                memory behind rtl/arbiter_dma.v (docs/dma.md)
 #   make spiflash_netlist  tb_spiflash against spiflash.v as yosys builds
 #                 it for ECP5 -- the page buffer is a block RAM (needs yosys)
 #
@@ -18,9 +20,9 @@
 IVERILOG ?= iverilog
 VVP      ?= vvp
 
-.PHONY: all classic rf sha256 cycles spiflash spiflash_netlist vram_dirty colwin 8b10b clean
+.PHONY: all classic rf sha256 cycles spiflash spiflash_netlist vram_dirty colwin 8b10b dma clean
 
-all: classic rf sha256 keccak vram_dirty colwin 8b10b
+all: classic rf sha256 keccak vram_dirty colwin 8b10b dma
 
 classic:
 	$(IVERILOG) -g2012 -o /tmp/tb_montmul tb_montmul.v ../montmul.v
@@ -47,6 +49,14 @@ cycles:
 spiflash:
 	$(IVERILOG) -g2012 -o /tmp/tb_spiflash tb_spiflash.v w25q16_model.v ../spiflash.v
 	$(VVP) /tmp/tb_spiflash /tmp/tb_vram_dirty /tmp/tb_8b10b
+
+# rtl/dma.v: every mode on both channels, both at once, a stop, and the
+# arbiter beside a reader standing in for the mixer. docs/dma.md.
+dma:
+	$(IVERILOG) -g2005 -o /tmp/tb_dma ../tb/tb_dma.v ../dma.v ../spim.v ../arbiter_dma.v
+	$(VVP) /tmp/tb_dma
+	$(IVERILOG) -g2005 -Ptb_dma.DUT_CH=1 -o /tmp/tb_dma1 ../tb/tb_dma.v ../dma.v ../spim.v ../arbiter_dma.v
+	$(VVP) /tmp/tb_dma1
 
 # rtl/socctl.v's DIRTY register (word 7); its header has the contract.
 vram_dirty:

@@ -38,6 +38,8 @@
  *   --mute           the window plays nothing
  *   --fullscreen     the window full screen (Ctrl+Alt+Enter toggles it)
  *   --no-t2          the board without T2, the triangle engine
+ *   --dma            the board with the DMA controller (rtl/dma.v): one
+ *                    channel, on the SD card's SPI
  *
  * The flash image is written as the machine writes the flash (the
  * key/value store), as the card image is -- unless --snapshot.
@@ -305,7 +307,7 @@ static void usage(void) {
 	fprintf(stderr, "usage: zsys [--bios FILE] --flash FILE | --tb PROG.bin  [--seconds N] [--expect TEXT]\n"
 		"            [--type TEXT] [--after TEXT] [--fast] [--cpi N] [--ram MB] [--stats]\n"
 		"            [--sd FILE] [--snapshot] [--screenshot FILE [--cursor]] [--clock] [--headless]\n"
-		"            [--window [--scale N]] [--keys TEXT] [--click X,Y] [--wheel N] [--wait MS] [--wav FILE] [--mute] [--fullscreen] [--no-t2]\n"
+		"            [--window [--scale N]] [--keys TEXT] [--click X,Y] [--wheel N] [--wait MS] [--wav FILE] [--mute] [--fullscreen] [--no-t2] [--dma]\n"
 		"            [--tap X,Y] [--touch-down X,Y] [--touch-move X,Y] [--touch-up X,Y] [--touch-wheel N] [--no-keyboard]\n");
 	exit(2);
 }
@@ -316,7 +318,7 @@ int main(int argc, char **argv) {
 	const char *expect = NULL, *type = NULL, *after = NULL;
 	double seconds = 0;
 	bool fast = false, stats = false, snapshot = false, cursor = false, clock = false, headless = false;
-	bool window = false, mute = false, full = false, no_t2 = false, no_keyboard = false;
+	bool window = false, mute = false, full = false, no_t2 = false, no_keyboard = false, dma = false;
 	const char *wav_path = NULL;
 	int scale = 2;
 	const char *sd_path = NULL, *shot_path = NULL;
@@ -359,6 +361,7 @@ int main(int argc, char **argv) {
 		else if (!strcmp(o, "--wav") && v) { wav_path = v; i++; }
 		else if (!strcmp(o, "--mute")) mute = true;
 		else if (!strcmp(o, "--no-t2")) no_t2 = true;
+		else if (!strcmp(o, "--dma")) dma = true;
 		else if (!strcmp(o, "--fullscreen")) { full = true; window = true; }
 		else if (!strcmp(o, "--scale") && v) { scale = atoi(v); if (scale < 1) scale = 1; i++; }
 		else if (!strcmp(o, "--keys") && v) { if (!script_keys(v)) return 2; i++; }
@@ -431,6 +434,7 @@ int main(int argc, char **argv) {
 			Z_SPI_SDCARD | Z_RTC | Z_AUDIO | Z_GAME;
 	s.audio_on = !headless;
 	s.t2_on = !headless && !no_t2;
+	s.dma_on = dma;
 	s.features2 = headless ? 0 : Z2_RECONFIG | Z2_FLASHW | Z2_COLOR | Z2_VMOUSE;
 	if (no_keyboard) s.kbd_unplugged = true;		// zsys_reset() leaves port 0 empty
 	if (sd_path && !zsys_sd_insert(&s, sd_path, snapshot)) return 2;

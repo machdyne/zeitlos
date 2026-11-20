@@ -94,7 +94,7 @@ static z_dialog_ctx_t dlg;
 
 // -- the categories --
 
-enum { P_DISPLAY, P_MOUSE, P_KEYBOARD, P_LANG, P_TIME, P_SECURITY, P_TERMINAL, P_SYSTEM, P_COUNT };
+enum { P_DISPLAY, P_SOUND, P_MOUSE, P_KEYBOARD, P_LANG, P_TIME, P_SECURITY, P_TERMINAL, P_SYSTEM, P_COUNT };
 
 #define SB_W        104		// the category list
 #define SB_ROW_H    24
@@ -113,6 +113,11 @@ static const page_t pages[P_COUNT] = {
 		".#.#........#.#.", ".#.#........#.#.", ".#.#........#.#.", ".#.#........#.#.",
 		".#.##########.#.", ".#............#.", ".##############.", ".......##.......",
 		".......##.......", "....########....", "................", "................" } },
+	{ "Sound", "sound", "Applied at once, and saved", {
+		"................", ".......#........", "......##........", ".....#.#....#...",
+		"....#..#.....#..", "####...#..#...#.", "#......#...#..#.", "#......#...#..#.",
+		"#......#...#..#.", "#......#...#..#.", "####...#..#...#.", "....#..#.....#..",
+		".....#.#....#...", "......##........", ".......#........", "................" } },
 	{ "Mouse", "mouse", "Applied at once, and saved", {
 		".......#........", ".......#........", ".....######.....", "....#...#..#....",
 		"...#....#...#...", "...#....#...#...", "...#....#...#...", "...##########...",
@@ -175,6 +180,8 @@ enum {
 	// (the desktop colours are a list, not widgets)
 	W_RES0 = MODE_COUNT,
 	W_RES_LAST = W_RES0 + Z_VMODE_COUNT - 1,
+	// Sound
+	W_TOGGLE_HDMI,
 	// Mouse
 	W_SPEED_PREV,
 	W_SPEED_NEXT,
@@ -199,7 +206,7 @@ enum {
 
 // Each page's first control; the next page's first ends it.
 static const int page_first[P_COUNT + 1] = {
-	0, W_SPEED_PREV, W_EDIT_KBD, W_SET_LANG, W_SET_TZ, W_PW_SET, W_EDIT_TERM, W_EDIT_START, W_COUNT,
+	0, W_TOGGLE_HDMI, W_SPEED_PREV, W_EDIT_KBD, W_SET_LANG, W_SET_TZ, W_PW_SET, W_EDIT_TERM, W_EDIT_START, W_COUNT,
 };
 
 static z_widget_t widgets[W_COUNT];
@@ -222,6 +229,17 @@ static bool theme_in_file, theme_custom;
 // True if this bitstream can change the display mode. Probed once --
 // see z_video_mode_present() in zsoc.h.
 static bool can_set_video;
+
+// -- sound over HDMI (docs/ddmi_audio.md) --
+//
+// system.video.ddmi_audio: data islands on the DDMI output -- the sound,
+// and the InfoFrames that tell a TV what the picture is. A switch that
+// acts at once (socctl's DDMI EN, from the next frame) and is saved, so
+// the kernel sets it again at boot. Only on a bitstream with
+// GPU_DDMI_AUDIO; elsewhere the row says so and the button is off.
+static bool can_hdmi;			// z_ddmi_audio_available()
+static bool hdmi_sound;			// ... and the audio block: there is sound to send
+static bool hdmi_in_file;
 
 // -- what the preference rows show --
 
@@ -268,6 +286,7 @@ static const char *lang_label(void *user, int row) {
 // The Japanese font switch -- defined with its button, further down.
 static bool japanese_on(void);
 static void set_japanese_label(void);
+static void set_hdmi_label(void);
 #define PREF_COUNT (int)(sizeof(prefs) / sizeof(prefs[0]))
 
 static int other_keys;			// settings in the file this app does not show
@@ -405,6 +424,8 @@ static void read_values(void) {
 	widgets[W_SPEED_PREV].enabled = can_speed && speed_idx > 0;
 	widgets[W_SPEED_NEXT].enabled = can_speed && speed_idx < Z_POINTER_LEVELS - 1;
 	set_japanese_label();
+	hdmi_in_file = z_cfg_get("system.video.ddmi_audio", v, sizeof(v));
+	set_hdmi_label();
 	{
 		char lv[16];
 		lang_in_file = z_cfg_get("system.language", lv, sizeof lv) && lv[0];
@@ -433,6 +454,7 @@ static void read_values(void) {
 	other_keys = 0;
 	for (uint32_t i = 0; z_cfg_entry(i, k, sizeof(k), v, sizeof(v)); i++) {
 		bool shown = !strcmp(k, "system.video.mode") ||
+			!strcmp(k, "system.video.ddmi_audio") ||
 			!strcmp(k, "system.mouse.speed") ||
 			!strcmp(k, "system.rtc.timezone") ||
 			!strncmp(k, "system.video.desktop_", 21);
@@ -570,6 +592,10 @@ static void layout(void) {
 
 	// Terminal
 	place(W_EDIT_TERM, right_x(EDIT_W), y_page - 3, EDIT_W, EDIT_H);
+
+	// Sound: over HDMI
+	if (can_hdmi) place(W_TOGGLE_HDMI, right_x(EDIT_W + 12), y_page - 3, EDIT_W + 12, EDIT_H);
+	else place(W_TOGGLE_HDMI, -1000, -1000, 1, 1);
 
 	// System: what it opens with, then the file
 	place(W_EDIT_START, right_x(EDIT_W), y_page - 3, EDIT_W, EDIT_H);
@@ -733,6 +759,27 @@ static void draw_page(void) {
 		y += LINE_H + 2 + BTN_H + 2 * LINE_H + 6 + (res_rows - 1) * (BTN_H + GAP);
 		describe_theme(line, sizeof(line));
 		draw_row(y, "Desktop colours (Super+F10)", line);
+		break;
+
+	case P_SOUND:
+		if (!can_hdmi)
+			snprintf(line, sizeof(line), "not on this bitstream (GPU_DDMI_AUDIO)");
+		else
+			snprintf(line, sizeof(line), "%s%s%s", z_ddmi_audio_on() ? "on" : "off",
+				hdmi_sound ? "" : " -- display info only, no audio block",
+				hdmi_in_file ? "" : "  (default)");
+		draw_row(y, "Sound over HDMI", line);
+		y += ROW_H + 4;
+		if (can_hdmi) {
+			draw_text(PX, y, "The sound goes to the TV with the picture,");
+			draw_text(PX, y + LINE_H, "and the TV is told the picture is 640x480, 4:3.");
+			draw_text(PX, y + 2 * LINE_H, "If the screen goes blank: ddmi off at the");
+			draw_text(PX, y + 3 * LINE_H, "serial console, or edit the file from a PC.");
+		} else {
+			draw_text(PX, y, "The sound goes to the board's own output.");
+			draw_text(PX, y + LINE_H, "A bitstream built with GPU_DDMI_AUDIO can send");
+			draw_text(PX, y + 2 * LINE_H, "it over HDMI too (docs/ddmi_audio.md).");
+		}
 		break;
 
 	case P_MOUSE:
@@ -1125,6 +1172,26 @@ static bool valid_layouts(const char *v, char *bad, size_t badlen) {
 
 }
 
+// -- sound over HDMI --
+
+static void set_hdmi_label(void) {
+	widgets[W_TOGGLE_HDMI].label = can_hdmi && z_ddmi_audio_on() ? "Turn off" : "Turn on";
+	widgets[W_TOGGLE_HDMI].enabled = can_hdmi;
+}
+
+static void toggle_hdmi(void) {
+	bool on;
+	if (!can_hdmi) return;
+	on = !z_ddmi_audio_on();
+	z_ddmi_audio_set(on);
+	if (save("system.video.ddmi_audio", on ? "yes" : "no")) {
+		hdmi_in_file = true;
+		set_status(on ? "on -- if the screen goes blank, ddmi off at the console" : "off");
+	}
+	set_hdmi_label();
+	repaint();
+}
+
 // -- the Japanese font -- docs/text_encoding.md, "Japanese" --
 //
 // Not a prompt but a switch, and it acts at once: turning it on saves
@@ -1433,6 +1500,7 @@ static void activate(int idx) {
 	if (idx == W_SET_TZ) { choose_zone_and_return(); return; }
 	if (idx == W_RELOAD) { reload(); return; }
 	if (idx == W_EDIT_START) { edit(&prefs[3]); return; }
+	if (idx == W_TOGGLE_HDMI) { toggle_hdmi(); return; }
 	if (idx == W_SET_LANG) {
 		choose_lang(z_listbox_selected(&lang_list));
 		focus_list(true);
@@ -1812,6 +1880,11 @@ static void widgets_init(void) {
 	widgets[W_EDIT_START].type = Z_WIDGET_BUTTON;
 	widgets[W_EDIT_START].label = "Edit";
 	widgets[W_EDIT_START].enabled = true;
+
+	can_hdmi = z_ddmi_audio_available();
+	hdmi_sound = z_ddmi_sound_available();
+	widgets[W_TOGGLE_HDMI].type = Z_WIDGET_BUTTON;
+	set_hdmi_label();
 
 	widgets[W_RELOAD].type = Z_WIDGET_BUTTON;
 	widgets[W_RELOAD].label = "Reload file";

@@ -137,6 +137,10 @@ const z_ftype_t z_ftypes[] = {
 	{ "MID", "midi",  "MIDI song"      },
 	{ "MIDI","midi",  "MIDI song"      },
 
+	// Films -- sw/apps/cinema (docs/cinema_app.md), ZV files made on
+	// another computer with tools/zv/zvenc (docs/zv.md).
+	{ "ZV",  "cinema", "Film"          },
+
 	// 3D models -- sw/apps/gpu3d's STL viewer (docs/gpu3d_app.md).
 	{ "STL", "gpu3d", "STL model"      },
 

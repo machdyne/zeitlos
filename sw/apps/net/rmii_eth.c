@@ -67,6 +67,30 @@ void rmii_eth_debug_dump(void) {
 		(unsigned long)((status >> REG_ETHMAC_RX_ERR_SHIFT) & REG_ETHMAC_RX_ERR_MASK));
 }
 
+/* DMA (rtl/dma.v, docs/dma.md): channel 1 copies frames between the
+   MAC's buffers and ours on a bitstream with a two-channel controller --
+   a few cycles a word instead of the byte loops below. Probed on the
+   first frame; only for a word-aligned buffer, and only whole words
+   (the tail bytes are copied by hand, so nothing past `len` is
+   written). */
+static int rmii_dma = -1;
+#define RMII_DMA_MIN 64
+
+static int rmii_dma_ok(void) {
+	if (rmii_dma < 0) rmii_dma = z_dma_channels() > 0;
+	return rmii_dma;
+}
+
+static uint16_t rmii_dma_copy(uint8_t *buf, uint16_t n, int in) {
+	uint16_t words = n >> 2;
+	if (n < RMII_DMA_MIN || ((uintptr_t)buf & 3) || !rmii_dma_ok()) return 0;
+	if (z_dma_start(Z_DMA_CH_NET, in ? Z_DMA_DEV_IN : Z_DMA_DEV_OUT, buf,
+			in ? Z_DMA_DEV_RMII_RX : Z_DMA_DEV_RMII_TX, words) != Z_OK)
+		return 0;   /* refused (busy, or a kernel without Z_SYS_DMA): the CPU's way */
+	z_dma_wait(Z_DMA_CH_NET);
+	return (uint16_t)(words * 4);
+}
+
 uint16_t rmii_eth_recv(uint8_t *buf, uint16_t maxlen) {
 
 	if (!(reg_ethmac_status & REG_ETHMAC_RX_READY))
@@ -80,8 +104,9 @@ uint16_t rmii_eth_recv(uint8_t *buf, uint16_t maxlen) {
 	// enc28j60_recv() truncating rather than dropping a frame whose
 	// length isn't a multiple of anything in particular.
 	uint16_t words = (to_read + 3) / 4;
+	uint16_t done = (uint16_t)(rmii_dma_copy(buf, to_read, 1) / 4);
 
-	for (uint16_t i = 0; i < words; i++) {
+	for (uint16_t i = done; i < words; i++) {
 		uint32_t w = reg_ethmac_rxbuf[i];
 		uint16_t base = i * 4;
 		if (base + 0 < to_read) buf[base + 0] = (uint8_t)(w & 0xff);
@@ -114,7 +139,8 @@ bool rmii_eth_send(const uint8_t *buf, uint16_t len) {
 		return false;
 
 	uint16_t words = (len + 3) / 4;
-	for (uint16_t i = 0; i < words; i++) {
+	uint16_t done = (uint16_t)(rmii_dma_copy((uint8_t *)buf, len, 0) / 4);
+	for (uint16_t i = done; i < words; i++) {
 		uint16_t base = i * 4;
 		uint32_t w = 0;
 		if (base + 0 < len) w |= (uint32_t)buf[base + 0];

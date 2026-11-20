@@ -20,6 +20,8 @@ RTL_PICO = \
 	rtl/arbiter_vram.v \
 	rtl/arbiter_main.v \
 	rtl/arbiter_gfx.v \
+	rtl/arbiter_dma.v \
+	rtl/dma.v \
 	rtl/mem/bram.v \
 	rtl/mem/sram.v \
 	rtl/mem/sdram_kianv.v \
@@ -1242,6 +1244,17 @@ dev-prog: dev soc prog
 # (the one case that says so clearly is a CPU/ISA mismatch, which
 # k_soc_report() catches at boot; everything else is on you).
 dev-flash: dev flash_sw
+
+# The same for the kernel and the core apps alone: those two are cleaned
+# and rebuilt, nothing else in sw/apps is, and the result is flashed.
+# Enough when only the kernel or core apps changed. A change to
+# sw/common/syscalls.def or another interface between flash and card
+# (`make check-abi` says which: sw/common/zabi.h) needs the card's apps
+# rebuilt too -- `dev-flash`, then `tftp-dist` or a new card.
+dev-flash-core: check clean_os clean_core os core-bins flash_sw
+
+clean_core:
+	$(foreach a,$(ZAR_APPS),$(MAKE) -C sw/apps/$(a) clean &&) true
 
 # flash_apps is part of the default `flash` deliberately: the point of
 # putting the core apps in flash is that a freshly flashed board boots

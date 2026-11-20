@@ -42,6 +42,7 @@ with [welcome](welcome.md); to program it, [kernel](kernel.md) and
 | [muldiv](muldiv.md) | Hardware multiply and divide |
 | [icache](icache.md) | Instruction cache |
 | [dcache](dcache.md) | Unified I+D cache, write buffer, SDRAM bursts |
+| [dma](dma.md) | The DMA controller: SD card and network transfers without the CPU |
 | [mpu](mpu.md) | Memory protection and crash reports |
 | [ddr3](ddr3.md) | DDR3 main memory (Mozart ML2, Sergei ML2) |
 | [ddr3-design](ddr3-design.md) | DDR3 datapath, second attempt |
@@ -137,6 +138,7 @@ with [welcome](welcome.md); to program it, [kernel](kernel.md) and
 | [libz](libz.md) | Runtime for zcc-compiled programs |
 | [png](png.md) | PNG decoding |
 | [svg](svg.md) | SVG rendering |
+| [zv](zv.md) | ZV, the Zeitlos Video Format: the codec, `zvenc`, the Linux player, `zvbench` |
 | [zcanvas](zcanvas.md) | Drawing pages: fills, strokes, patterns, images, bands; page shapes |
 | [zpaper](zpaper.md) | Pages for printing: described by an app, played back by the print service |
 | [remote\_desktop](remote_desktop.md) | Remote desktop in a browser: the ESP32 link, or `zerdesk` over Ethernet |
@@ -226,6 +228,7 @@ with [welcome](welcome.md); to program it, [kernel](kernel.md) and
 | [automate](automate.md) | `automate` |
 | [demo](demo.md) | The scripted demos |
 | [play\_app](play_app.md) | `play` |
+| [cinema\_app](cinema_app.md) | `cinema`: films (ZV) in a window and full screen |
 | [track\_app](track_app.md) | `track` |
 | [midi\_app](midi_app.md) | `midi` |
 | [mmod](mmod.md) | `mmod` |

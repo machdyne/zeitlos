@@ -310,4 +310,9 @@
 
 
 
+/* Zeitlos: f_read() reads on past a cluster's end into the clusters
+/  that follow it on the disk, as one disk_read() (ff.c; docs/sdcard.md,
+/  "Reading across clusters"). 0 is FatFs as shipped. */
+#define ZEITLOS_CONTIG_READ	1
+
 /*--- End of configuration options ---*/

@@ -18,6 +18,7 @@ APPS = casino poker roulette blackjack slots craps \
 	draw \
 	pix \
 	view \
+	cinema \
 	text \
 	sheet \
 	slide \

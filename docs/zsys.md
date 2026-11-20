@@ -353,6 +353,9 @@ zsys [--bios FILE] --flash FILE | --tb PROG.bin
      --mute           the window plays no sound
      --fullscreen     the window, full screen (Ctrl+Alt+Enter toggles it)
      --no-t2          the board without T2: the 3D games draw in software
+     --dma            the board with the DMA controller (rtl/dma.v, docs/dma.md):
+                      channel 0, on the SD card; jobs are done at once, BUSY
+                      held up for the wire time
      --wait MS        a pause between scripted inputs
 ```
 

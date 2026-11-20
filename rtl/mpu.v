@@ -42,7 +42,8 @@
  *           fixed kernel-only set: BRAM (nibble 0), flash and its
  *           write/erase registers (nibble 1), other main memory,
  *           cache control (0x7000_01xx), the FPGA reconfigure key
- *           (0x7000_0218), MTU/MPU (nibble 9)
+ *           (0x7000_0218), MTU/MPU (nibble 9), the DMA controller
+ *           (0x7b00_0000, rtl/dma.v: a channel writes physical memory)
  *
  * -- The grant window --
  *
@@ -214,7 +215,8 @@ module wb_mpu #(
         (pnib == 4'h0) || (pnib == 4'h1) || (pnib == 4'h9) ||
         (pnib_main && !own && !granted) ||
         (c_adr_i[31:8] == 24'h7000_01) ||
-        (c_adr_i[31:2] == 30'h1C00_0086);          // 0x7000_0218
+        (c_adr_i[31:2] == 30'h1C00_0086) ||        // 0x7000_0218
+        (c_adr_i[31:24] == 8'h7b);                  // DMA (rtl/dma.v): writes physical memory
 
     // Violation of the current request, and why. Depends only on the
     // request and on registers that do not change during it.

@@ -161,10 +161,9 @@ memory.
 
 `snoop_stb_i`/`snoop_adr_i` invalidate both sides' line at an address,
 by index. `rtl/sysctl.v` drives it from any master **other than the CPU**
-completing a write to main memory. None exists today (the blitter
-source port and the audio mixer are read-only, `rtl/dma.v` is a stub),
-so it is constant zero; it exists so that a future writing master is
-coherent without anyone remembering to make it so. A second snoop
+completing a write to main memory. The one there is is the DMA
+controller ([dma.md](dma.md)) on `DMA` builds; the blitter source port
+and the audio mixer only read. A second snoop
 arriving before the first is serviced turns into a full flush: slower,
 never wrong.
 

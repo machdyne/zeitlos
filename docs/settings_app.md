@@ -22,6 +22,7 @@ on the right, as most systems lay out their preferences:
 ```
 +--------------+-----------------------------------+
 | [] Display   | Mouse                             |
+| <) Sound     |                                   |
 |##Mouse#######| Applied at once, and saved        |
 | [] Keyboard  |                                   |
 | () Language  |                                   |
@@ -29,6 +30,7 @@ on the right, as most systems lay out their preferences:
 | [] Security  |   +3 faster: x1.68                |
 | [] Terminal  |   slower ############..... faster |
 | [] System    |                                   |
+|              |                                   |
 +--------------+-----------------------------------+
 ```
 
@@ -36,6 +38,7 @@ on the right, as most systems lay out their preferences:
 | --- | --- | --- | --- |
 | Display | White / Amber / Green / Paper | `system.video.mode` | immediately, and saved |
 | Display | Desktop colours: a list | `system.video.desktop_theme`, `_colour` (and removes `_accents`, `_base`) | within a second, and saved |
+| Sound | Sound over HDMI: Turn on / off | `system.video.ddmi_audio` | immediately (socctl's DDMI EN, from the next frame), and saved; the kernel sets it at boot. Only on a bitstream with `GPU_DDMI_AUDIO`; elsewhere the page says so ([ddmi_audio.md](ddmi_audio.md)) |
 | Mouse | Pointer speed `<` `>`, and its scale | `system.mouse.speed` | immediately, and saved; the kernel applies it at boot |
 | Keyboard | Keyboard layouts: Edit | `system.keyboard.layouts` | the next key pressed |
 | Keyboard | Japanese text: Turn on / off | `system.font.japanese` | at once -- `jfont` is started or stopped |

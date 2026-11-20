@@ -172,7 +172,8 @@ module wb_mpu_split #(
         (nib == 4'h0) || (nib == 4'h1) || (nib == 4'h9) ||
         (nib_main && !t_own && !t_granted) ||
         (tq_adr[31:8] == 24'h7000_01) ||
-        (tq_adr[31:2] == 30'h1C00_0086);          // 0x7000_0218
+        (tq_adr[31:2] == 30'h1C00_0086) ||        // 0x7000_0218
+        (tq_adr[31:24] == 8'h7b);                  // DMA (rtl/dma.v): writes physical memory
 
     reg [3:0] tq_why;
     always @* begin

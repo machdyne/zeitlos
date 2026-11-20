@@ -535,6 +535,26 @@ int32_t zfs_unwatch(int32_t wd) {
 	rq.fd = wd;
 	return call(&rq, NULL, 0, NULL, 0, NULL);
 }
+
+static uint32_t stats_len;
+int32_t zfs_stats_dma(z_fs_stats_t *out, int on) {
+	int32_t r;
+	stats_len = on ? Z_FS_STATS_DMA_ON : Z_FS_STATS_DMA_OFF;
+	r = zfs_stats(out);
+	stats_len = 0;
+	return r;
+}
+
+int32_t zfs_stats(z_fs_stats_t *out) {
+	z_fsreq_t rq;
+	uint32_t got = 0;
+	int32_t r;
+	req_init(&rq, Z_FSOP_STATS);
+	rq.len = stats_len;
+	r = call(&rq, NULL, 0, out, sizeof(*out), &got);
+	if (r < 0) return r;
+	return got == sizeof(*out) ? 0 : -Z_EIO;    /* an fs from before STATS */
+}
 #endif
 
 int32_t zfs_fsync(int32_t fd) {

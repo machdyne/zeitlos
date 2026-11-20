@@ -64,7 +64,7 @@ one bit a pixel, and colour is only ever a program's 320x240 screen.
 
 | Kind | Apps |
 |---|---|
-| Desktop | ask, backup, bench, cal, calc, casino (the lobby), clock, colwin (a test of the colour window), convert, draw, files, gpu3d, gpudemo, hello_win, hex, info, irc, keyboard, learn, logic, mesh, midi, mmod, play, print, read, settings, sheet, slide, term, text, track, web |
+| Desktop | ask, backup, bench, cal, calc, casino (the lobby), cinema, clock, colwin (a test of the colour window), convert, draw, files, gpu3d, gpudemo, hello_win, hex, info, irc, keyboard, learn, logic, mesh, midi, mmod, play, print, read, settings, sheet, slide, term, text, track, web |
 | Screen | basic, blocks, bricks, kidgames, pix, snake, space3d |
 | Full-screen | mausrun, planedemo |
 | Dual | blackjack, chess, craps, mahjong, poker, roulette, slots, view |

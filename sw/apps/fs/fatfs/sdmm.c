@@ -72,6 +72,43 @@
    would silently do. */
 static int sd_spi_v1;
 
+/* DMA (rtl/dma.v, docs/dma.md): set at init when the bitstream has a
+   DMA controller and this kernel starts channels for us. The bulk of a
+   sector then goes card -> buffer (or back) without the CPU: the
+   channel moves 32-bit words at the wire's speed, and -- the bigger
+   part -- the main bus is not held for each word's transfer, as a
+   stalled DATA access holds it (rtl/spim.v, "What stalling costs"), so
+   the blitter, the mixer and the other channel get on with theirs.
+   Below SD_DMA_MIN bytes the syscall is not worth it. */
+static int sd_dma;
+static int sd_dma_off;		/* turned off by hand (sd_dma_allow()), for comparing */
+
+/* DMA for the card off or on, until the next start of fs: 1 if it is in use after */
+int sd_dma_allow (int on)
+{
+	sd_dma_off = !on;
+	sd_dma = !sd_dma_off && sd_spi_v1 && z_dma_channels() > Z_DMA_CH_SD;
+	return sd_dma;
+}
+#define SD_DMA_MIN	64
+
+/* The aligned middle of a transfer by DMA: returns the bytes moved (a
+   multiple of four), or 0 to do it the CPU's way. */
+static UINT sd_dma_bulk (BYTE *buff, UINT bc, int in)
+{
+	UINT words = bc >> 2;
+	if (!sd_dma || bc < SD_DMA_MIN || ((uintptr_t)buff & 3)) return 0;
+	if (words > 65535) words = 65535;
+	if (z_dma_start(Z_DMA_CH_SD, in ? Z_DMA_SPI_IN : Z_DMA_SPI_OUT, buff, Z_DMA_DEV_SD, words) != Z_OK)
+		return 0;   /* refused (busy, or a kernel without Z_SYS_DMA): the CPU's way */
+	z_dma_wait(Z_DMA_CH_SD);
+	/* sending, the last word is still on the wire when the channel is
+	   done: let it finish before anything else touches the master */
+	while (reg_spisd_status & Z_SPISD_BUSY) ;
+	sd_stat.dma_bytes += words * 4;
+	return words * 4;
+}
+
 static BYTE spi_xchg (BYTE d)
 {
 	reg_spisd_data = d;
@@ -303,6 +340,14 @@ void xmit_mmc (
 				Z_SPISD_CTRL_W32 |
 				((reg_spisd_ctrl & Z_SPISD_CTRL_CS) ? Z_SPISD_CTRL_CS : 0);
 
+			/* the bulk by DMA, if there is one (32-bit mode is what a
+			   channel writing DATA relies on) */
+			{
+				UINT k = sd_dma_bulk((BYTE *)buff, bc, 0);
+				buff += k;
+				bc -= k;
+			}
+
 			while (bc >= 4) {
 				reg_spisd_data = *(const uint32_t *)buff;
 				(void)reg_spisd_data;   /* completes the transfer: the
@@ -358,6 +403,13 @@ void rcvr_mmc (
 			reg_spisd_ctrl = Z_SPISD_CTRL_DIV(sd_div) |
 				Z_SPISD_CTRL_W32 |
 				((reg_spisd_ctrl & Z_SPISD_CTRL_CS) ? Z_SPISD_CTRL_CS : 0);
+
+			/* the bulk by DMA, if there is one */
+			{
+				UINT k = sd_dma_bulk(buff, bc, 1);
+				buff += k;
+				bc -= k;
+			}
 
 			while (bc >= 4) {
 				reg_spisd_data = 0xFFFFFFFFu;
@@ -484,6 +536,11 @@ int rcvr_datablock (	/* 1:OK, 0:Failed */
 #endif
 	} while ((uint32_t)(sd_cycles() - t0) < limit);
 
+	{
+		uint32_t t1 = sd_cycles();
+		sd_stat.token_cyc += t1 - t0;
+		t0 = t1;
+	}
 	if (d[0] != 0xFE) {				/* If not valid data token, return with error */
 		sd_stat.token_timeouts++;
 		return 0;
@@ -492,6 +549,7 @@ int rcvr_datablock (	/* 1:OK, 0:Failed */
 	rcvr_mmc(buff, btr);			/* Receive the data block into buffer */
 	rcvr_mmc(d, 2);					/* Discard CRC */
 
+	sd_stat.payload_cyc += sd_cycles() - t0;
 	sd_stat.sectors_read++;
 
 	return 1;						/* Return with success */
@@ -631,6 +689,8 @@ DSTATUS sd_disk_initialize (
 	   getting it wrong is silent corruption rather than a failure.
 	   See Z_SPISD_MAGIC_V1 in zeitlos.h. */
 	sd_spi_v1 = (reg_spisd_magic == Z_SPISD_MAGIC_V1);
+	/* channel 0 is the sdcard's; the wide path is what it sits in */
+	sd_dma = !sd_dma_off && sd_spi_v1 && z_dma_channels() > Z_DMA_CH_SD;
 
 	sd_set_speed(Z_SPISD_DIV_INIT);
 	CS_H();
@@ -700,11 +760,13 @@ DRESULT sd_disk_read (
 {
 	BYTE cmd;
 	DWORD sect = (DWORD)sector;
+	uint32_t t0 = sd_cycles();
 
 
 	if (sd_disk_status (drv) & STA_NOINIT) return RES_NOTRDY;
 	if (!(CardType & CT_BLOCK)) sect *= 512;	/* Convert LBA to byte address if needed */
 
+	sd_stat.disk_reads++;
 	cmd = count > 1 ? CMD18 : CMD17;			/*  READ_MULTIPLE_BLOCK : READ_SINGLE_BLOCK */
 	if (send_cmd(cmd, sect) == 0) {
 		do {
@@ -714,6 +776,7 @@ DRESULT sd_disk_read (
 		if (cmd == CMD18) send_cmd(CMD12, 0);	/* STOP_TRANSMISSION */
 	}
 	deselect();
+	sd_stat.disk_read_cyc += sd_cycles() - t0;
 
 	return count ? RES_ERROR : RES_OK;
 }
@@ -724,7 +787,7 @@ DRESULT sd_disk_read (
 /* Write Sector(s)                                                       */
 /*-----------------------------------------------------------------------*/
 
-DRESULT sd_disk_write (
+static DRESULT disk_write_timed (
 	BYTE drv,			/* Physical drive nmuber (0) */
 	const BYTE *buff,	/* Pointer to the data to be written */
 	LBA_t sector,		/* Start sector number (LBA) */
@@ -763,6 +826,16 @@ DRESULT sd_disk_write (
 	deselect();
 
 	return count ? RES_ERROR : RES_OK;
+}
+
+/* the same, timed (sd_stat: docs/sdcard.md) */
+DRESULT sd_disk_write (BYTE drv, const BYTE *buff, LBA_t sector, UINT count)
+{
+	uint32_t t0 = sd_cycles();
+	DRESULT r = disk_write_timed(drv, buff, sector, count);
+	sd_stat.disk_writes++;
+	sd_stat.disk_write_cyc += sd_cycles() - t0;
+	return r;
 }
 
 

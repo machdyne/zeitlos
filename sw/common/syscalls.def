@@ -345,3 +345,8 @@ Z_MKSYSCALL(SCREEN, k_screen)
 // z_abi_level(); docs/executables.md "The ABI level"): `update` shows it
 // beside a release's. A Z_UINT32 in the obj. Appended last.
 Z_MKSYSCALL(ABI_LEVEL, k_abi_level)
+
+// The DMA controller (rtl/dma.v; zproc.h, z_dma_args_t; zeitlos.h,
+// z_dma_*(); docs/dma.md): a driver's channel started, after the kernel
+// checks the buffer is the caller's. Appended last.
+Z_MKSYSCALL(DMA, k_dma)

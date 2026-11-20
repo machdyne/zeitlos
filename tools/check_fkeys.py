@@ -17,9 +17,9 @@ when:
     instead of by meaning;
   - anything binds F9 (reserved);
   - Z_KEY_COLOUR is used outside the arcade runtime (zarcade_sys.c),
-    the dual apps (view, poker, chess, the casino tables) and wm (its
-    Super+F10, desktop colour): the colour key is theirs, the same in
-    every one;
+    the dual apps (view, poker, chess, the casino tables), learn,
+    cinema and wm (its Super+F10, desktop colour): the colour key is
+    theirs, the same in every one;
   - Z_KEY_APP_HOME is used outside the apps with a home (term, web,
     files);
   - a help text pairs a key with "full screen" other than F11, lists
@@ -46,10 +46,12 @@ EXEMPT = ('common/zkbd.c', 'apps/term/term.c', 'common/zapi/zapi.c',
 HOME_OK = ('apps/term/', 'apps/web/', 'apps/files/')
 # the runtime, and the dual apps (docs/app_kinds.md): F10 is their
 # switch to the colour screen; learn's lesson figures in the colour
-# window (docs/learn_figures.md, "Colour")
+# window (docs/learn_figures.md, "Colour"); cinema's colour films in the
+# colour window (docs/cinema_app.md)
 COLOUR_OK = ('common/games/zarcade_sys.c', 'apps/view/', 'apps/poker/',
              'apps/chess/', 'apps/blackjack/', 'apps/craps/', 'apps/roulette/',
-             'apps/slots/', 'apps/mahjong/', 'apps/wm/', 'apps/learn/')
+             'apps/slots/', 'apps/mahjong/', 'apps/wm/', 'apps/learn/',
+             'apps/cinema/')
 
 NUMBERED = re.compile(r'\bZ_KEY_F(1|2|3|4|9|10|11|12)\b')
 HOME = re.compile(r'\bZ_KEY_APP_HOME\b')
