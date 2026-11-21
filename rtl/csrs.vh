@@ -148,6 +148,8 @@ localparam CSR_FEATURES =
 	(32'h1 << 23) |
 `elsif CPU_ZEITLOS32P
 	(32'h1 << 23) |
+`elsif CPU_ZEITLOS32PS
+	(32'h1 << 23) |
 `endif
 // rtl/rtc.v -- the wall clock. Mirrors `RTC in rtl/boards.vh like
 // every bit above mirrors its own define; boards.vh defines it at the
@@ -459,7 +461,7 @@ localparam CSR_FEATURES3 =
 // Bit 3, CPU_ROT: the CPU's rotate instructions, Zbb's ror, rol and
 // rori (`CPU_ROT, docs/chacha.md). Software uses them only when this
 // is set -- without them they are illegal instructions -- and shifts
-// and ORs otherwise (sw/common/zrng.c). picorv32 only, for now.
+// and ORs otherwise (sw/common/zrng.c). picorv32 and zeitlos32ps.
 // Z_FEATURE3_CPU_ROT in sw/common/zsoc.h.
 `ifdef CPU_ROT
 `ifndef CPU_ZEITLOS32

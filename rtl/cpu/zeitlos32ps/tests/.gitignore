@@ -1,0 +1,7 @@
+*.vvp
+*.vcd
+prog/*.i
+prog/*.o
+prog/*.elf
+prog/*.bin
+prog/*.hex

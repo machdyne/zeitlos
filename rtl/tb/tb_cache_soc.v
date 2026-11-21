@@ -55,6 +55,9 @@
 
 `timescale 1ns / 1ps
 
+`ifdef CPU_Z32PS
+`define CPU_Z32P
+`endif
 `ifndef CACHE
 `define CACHE 2
 `endif
@@ -156,6 +159,47 @@ module tb_cache_soc;
     assign zd_reg_dat = 32'h0; assign z_mpu_irq = 1'b0;
 `endif
 
+`ifdef CPU_Z32PS
+    // zeitlos32ps: its one port goes to the split cache's D port, which
+    // reaches everything; the I port is idle (instructions are cached
+    // as data -- a unified cache of D_KB)
+    wire zd_instr;
+    assign zi_req = 1'b0; assign zi_adr = 32'h0;
+    assign zd_priv = 1'b1; assign zd_pc = 32'h0; assign zi_priv = 1'b1;
+    assign z_chk_pc = 32'h0; assign z_fv_ev = 1'b0; assign z_fv_adr = 32'h0;
+    assign z_fv_pc = 32'h0; assign z_fv_why = 4'h0;
+    zeitlos32ps #(
+        .PROGADDR_RESET(32'h4000_0000),
+        .PROGADDR_IRQ(32'h4000_0010),
+        .STACKADDR(32'h4001_0000),
+        .ENABLE_MUL(1), .ENABLE_DIV(1), .FAST_MUL(1)
+    ) cpu (
+        .clk(clk), .rst(cpu_rst),
+        .m_req(zd_req), .m_adr(zd_adr), .m_we(zd_we), .m_sel(zd_sel),
+        .m_wdat(zd_wdat), .m_instr(zd_instr),
+        .m_rdy(zd_rdy), .m_ack(zd_ack), .m_rdat(zd_rdat),
+        .mtu_base(32'h0), .irq(32'b0), .eoi(), .trap(cpu_trap)
+    );
+
+    wb_cache_one #(
+        .KB(`DKB), .LINE_WORDS(4),
+        .WBUF_DEPTH(`WBUF), .BURST(`BURST), .SNOOP(`SNOOP)
+`ifdef STAT_BRAM
+        , .STAT_BRAM(1)
+`endif
+    ) zcache (
+        .wb_clk_i(clk), .wb_rst_i(rst),
+        .c_req(zd_req), .c_adr(zd_adr), .c_we(zd_we), .c_sel(zd_sel),
+        .c_wdat(zd_wdat), .c_instr(zd_instr),
+        .c_rdy(zd_rdy), .c_ack(zd_ack), .c_rdat(zd_rdat),
+        .m_adr_o(b_adr), .m_dat_o(b_dat_o), .m_dat_i(b_dat_i),
+        .m_we_o(b_we), .m_sel_o(b_sel), .m_stb_o(b_stb),
+        .m_cyc_o(b_cyc), .m_cti_o(b_cti), .m_bte_o(), .m_ack_i(b_ack),
+        .m_instr_o(),
+        .snoop_stb_i(snoop_stb), .snoop_adr_i(s_adr),
+        .mpu_iveto(1'b0), .mpu_veto(1'b0), .mpu_reg(1'b0), .mpu_dat(32'h0)
+    );
+`else
     zeitlos32p #(
         .PROGADDR_RESET(32'h4000_0000),
         .PROGADDR_IRQ(32'h4000_0010),
@@ -174,6 +218,9 @@ module tb_cache_soc;
         .mtu_base(32'h0), .irq(32'b0), .eoi(), .trap(cpu_trap)
     );
 
+`endif
+
+`ifndef CPU_Z32PS
     wb_cache_split #(
         .I_KB(`IKB), .I_LINE_WORDS(4), .D_KB(`DKB), .D_LINE_WORDS(4),
         .WBUF_DEPTH(`WBUF), .BURST(`BURST), .SNOOP(`SNOOP)
@@ -191,6 +238,7 @@ module tb_cache_soc;
         .snoop_stb_i(snoop_stb), .snoop_adr_i(s_adr),
         .d_cfg_hit()
     );
+`endif
 
     assign cpu_adr = 32'h0; assign cpu_dat_o = 32'h0; assign cpu_we = 1'b0;
     assign cpu_sel = 4'h0; assign cpu_stb = 1'b0; assign cpu_cyc = 1'b0;
@@ -514,13 +562,21 @@ module tb_cache_soc;
     always @(posedge clk)
         if (cpu_trap && !trap_seen) begin
             trap_seen <= 1'b1;
+`ifdef CPU_Z32PS
+            $display("  trap: pc in X %08x, instruction %08x", cpu.x_pc, cpu.x_instr);
+`else
             $display("  trap: pc in X %08x, instruction %08x", cpu.ex_pc, cpu.ex_instr);
+`endif
         end
     // +progress: a line every 250k cycles, to tell a slow run from a stuck one
     always @(posedge clk)
         if ($test$plusargs("progress") && !cpu_rst && cycles % 250000 == 0)
             $display("  progress: cycle %0d, %0d instructions, pc in X %08x",
+`ifdef CPU_Z32PS
+                cycles, cpu.count_instr[31:0], cpu.x_pc);
+`else
                 cycles, cpu.count_instr[31:0], cpu.ex_pc);
+`endif
 `endif
 
     // -- extra masters (ARB only) ---------------------------------------
@@ -630,7 +686,9 @@ module tb_cache_soc;
 
         $display("");
         $display("config: cpu=%0s cache=%0d burst=%0d wbuf=%0d I%0dK D%0dK",
-`ifdef CPU_Z32P
+`ifdef CPU_Z32PS
+            "zeitlos32ps",
+`elsif CPU_Z32P
             "zeitlos32p",
 `elsif CPU_Z32
             "zeitlos32",

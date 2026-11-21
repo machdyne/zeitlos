@@ -802,13 +802,17 @@ static inline bool z_cpu_has_rot(void) {
 // bit 11 set; rtl/cache_id.v's has it clear. The D_INFO magic is
 // checked first: 0x7000_01xx is always decoded once CSRs exist (by
 // wb_icache, wb_cache or the CSR block itself), and only wb_cache and
-// wb_cache_split answer 0x1DCA there.
+// wb_cache_split answer 0x1DCA there. zeitlos32ps is built only with
+// rtl/cache_one.v, the unified single-port cache, which also answers
+// 0x1DCA and sets FEAT bit 12 (docs/zeitlos32ps.md).
 static inline const char *z_soc_cpu_name(void) {
 	if (!z_soc_csrs_present()) return "unknown";
 	if (!(reg_csr_features & Z_FEATURE_CPU_ZEITLOS32)) return "picorv32";
-	if (((*(volatile uint32_t *)0x7000011cu >> 16) & 0xffffu) == 0x1DCAu &&
-	    (*(volatile uint32_t *)0x7000012cu & (1u << 11)))
-		return "zeitlos32p";
+	if (((*(volatile uint32_t *)0x7000011cu >> 16) & 0xffffu) == 0x1DCAu) {
+		uint32_t feat = *(volatile uint32_t *)0x7000012cu;
+		if (feat & (1u << 11)) return "zeitlos32p";
+		if (feat & (1u << 12)) return "zeitlos32ps";
+	}
 	return "zeitlos32";
 }
 
@@ -2080,6 +2084,10 @@ static inline uint32_t z_dcache_line_words(void) {
 // FEAT bit 11: the split-port cache (rtl/cache_split.v), which is
 // built only with zeitlos32p (docs/cache_split.md)
 #define Z_CACHE_FEAT_SPLIT (1u << 11)
+
+// FEAT bit 12: the unified single-port cache (rtl/cache_one.v), which
+// is built only with zeitlos32ps (docs/zeitlos32ps.md)
+#define Z_CACHE_FEAT_ONE (1u << 12)
 
 // write-buffer depth built into the bitstream (0 = none)
 static inline uint32_t z_dcache_wbuf_depth(void) {

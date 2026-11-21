@@ -10,13 +10,18 @@ RTL_PICO = \
 	rtl/cpu/zeitlos32/zeitlos32_alu.v \
 	rtl/cpu/zeitlos32/zeitlos32_lsu.v \
 	rtl/cpu/zeitlos32/zeitlos32_muldiv.v \
+	rtl/cpu/zeitlos32/zeitlos32_muldiv_lean.v \
 	rtl/cpu/zeitlos32p/zeitlos32p.v \
+	rtl/cpu/zeitlos32ps/zeitlos32ps.v \
+	rtl/cpu/zeitlos32ps/zeitlos32ps_alu.v \
 	rtl/mtu.v \
 	rtl/cache.v \
 	rtl/cache_id.v \
 	rtl/cache_split.v \
+	rtl/cache_one.v \
 	rtl/mpu.v \
 	rtl/mpu_split.v \
+	rtl/mpu_one.v \
 	rtl/arbiter_vram.v \
 	rtl/arbiter_main.v \
 	rtl/arbiter_gfx.v \

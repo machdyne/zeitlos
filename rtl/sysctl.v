@@ -2060,7 +2060,162 @@ module sysctl #()
 	// mapping of a board that did not use this at all. Passed only
 	// when needed, every other board's source reads exactly as before.
 
+`ifdef CPU_ZEITLOS32PS
+
+	// -- zeitlos32ps: the small pipelined core, one port to wb_cache_one
+	// (rtl/cpu/zeitlos32ps, docs/zeitlos32ps.md)
+
+`ifdef CPU_ZEITLOS32
+	CPU_ZEITLOS32_and_CPU_ZEITLOS32PS_are_exclusive stop_here_cpu();
+`endif
 `ifdef CPU_ZEITLOS32P
+	CPU_ZEITLOS32P_and_CPU_ZEITLOS32PS_are_exclusive stop_here_cpu();
+`endif
+`ifndef DCACHE
+	CPU_ZEITLOS32PS_needs_DCACHE stop_here_cpu();
+`endif
+`ifndef ARBITER
+	CPU_ZEITLOS32PS_needs_ARBITER stop_here_cpu();
+`endif
+	wire        z_m_req;
+	wire [31:0] z_m_adr;
+	wire        z_m_we;
+	wire  [3:0] z_m_sel;
+	wire [31:0] z_m_wdat;
+	wire        z_m_instr;
+	wire        z_m_rdy;
+	wire        z_m_ack;
+	wire [31:0] z_m_rdat;
+
+	// the MPU's side of the core and the cache (tied off without one):
+	// rtl/mpu_one.v judges every access on the single port with one
+	// set of comparators; the core decides fetches in X
+	wire        z_mpu_en, z_mpu_enforce;
+	wire        z_chk_privreg, z_chk_gate, z_chk_own;
+	wire        z_m_priv, z_i_priv;
+	wire [31:0] z_m_pc;
+	wire        z_fv_ev;
+	wire [31:0] z_fv_adr, z_fv_pc;
+	wire  [3:0] z_fv_why;
+	wire        z_i_veto, z_d_veto, z_d_reg;
+	wire [31:0] z_d_reg_dat;
+
+`ifdef MPU
+	localparam Z_MPU = 1;
+
+	wb_mpu_one #(
+`ifdef MAIN_512MB
+		.MAIN_512(1),
+`endif
+		.CFG_BASE(32'h9000_0100)
+	) mpu_i (
+		.wb_clk_i(wbm_clk),
+		.wb_rst_i(wbm_rst),
+		.c_req(z_m_req),
+		.c_adr(z_m_adr),
+		.c_we(z_m_we),
+		.c_sel(z_m_sel),
+		.c_wdat(z_m_wdat),
+		.c_instr(z_m_instr),
+		.c_rdy(z_m_rdy),
+		.d_priv(z_m_priv),
+		.d_pc(z_m_pc),
+		.i_priv(z_i_priv),
+		.d_veto(z_d_veto),
+		.d_reg(z_d_reg),
+		.d_reg_dat(z_d_reg_dat),
+		.i_veto(z_i_veto),
+		.p_privreg(z_chk_privreg),
+		.p_gate(z_chk_gate),
+		.p_own(z_chk_own),
+		.fv_ev(z_fv_ev),
+		.fv_adr(z_fv_adr),
+		.fv_pc(z_fv_pc),
+		.fv_why(z_fv_why),
+		.en_o(z_mpu_en),
+		.enforce_o(z_mpu_enforce),
+		.mtu_base_i(mtu_base),
+		.irq_o(mpu_irq)
+	);
+`else
+	localparam Z_MPU = 0;
+	assign z_mpu_en = 1'b0;
+	assign z_mpu_enforce = 1'b0;
+	assign z_chk_privreg = 1'b0;
+	assign z_chk_gate = 1'b0;
+	assign z_chk_own = 1'b0;
+	assign z_i_veto = 1'b0;
+	assign z_d_veto = 1'b0;
+	assign z_d_reg = 1'b0;
+	assign z_d_reg_dat = 32'h0;
+	assign mpu_irq = 1'b0;
+`endif
+
+	assign wbm_cpu_adr = wbm_adr;
+	assign wbm_cpu_dat_o = 32'h0;
+	assign wbm_cpu_sel = 4'h0;
+	assign wbm_cpu_we = 1'b0;
+	assign wbm_cpu_stb = 1'b0;
+	assign wbm_cpu_cyc = 1'b0;
+	assign wbm_cpu_instr = 1'b0;
+
+	zeitlos32ps #(
+		.STACKADDR(BRAM_WORDS * 4),      // end of BRAM
+		.PROGADDR_RESET(32'h0000_0000),
+		.PROGADDR_IRQ(32'h0000_0010),
+`ifdef CPU_MUL_FAST
+		.ENABLE_MUL(1),
+		.FAST_MUL(1),
+`elsif CPU_MUL
+		.ENABLE_MUL(1),
+		.FAST_MUL(0),
+`else
+		.ENABLE_MUL(0),
+		.FAST_MUL(0),
+`endif
+`ifdef CPU_DIV
+		.ENABLE_DIV(1),
+`else
+		.ENABLE_DIV(0),
+`endif
+		.LATCHED_IRQ(32'b1111_1111_1111_1111_1111_1101_0110_1111),
+`ifdef CPU_ROT
+		.ENABLE_ROT(1),               // ror, rol, rori: docs/chacha.md
+`endif
+		.ENABLE_MPU(Z_MPU)
+	)
+	wbm_cpu0_i
+	(
+		.clk(wbm_clk),
+		.rst(wbm_rst),
+		.mpu_en(z_mpu_en),
+		.mpu_enforce(z_mpu_enforce),
+		.p_privreg(z_chk_privreg),
+		.p_gate(z_chk_gate),
+		.p_own(z_chk_own),
+		.m_priv(z_m_priv),
+		.m_pc(z_m_pc),
+		.i_priv(z_i_priv),
+		.fv_ev(z_fv_ev),
+		.fv_adr(z_fv_adr),
+		.fv_pc(z_fv_pc),
+		.fv_why(z_fv_why),
+		.m_req(z_m_req),
+		.m_adr(z_m_adr),
+		.m_we(z_m_we),
+		.m_sel(z_m_sel),
+		.m_wdat(z_m_wdat),
+		.m_instr(z_m_instr),
+		.m_rdy(z_m_rdy),
+		.m_ack(z_m_ack),
+		.m_rdat(z_m_rdat),
+		.mtu_base(mtu_base),
+		.irq(cpu_irq),
+		.eoi(),
+		.trap(cpu_trap)
+	);
+
+`elsif CPU_ZEITLOS32P
 
 	// EXPERIMENTAL: rtl/cpu/zeitlos32p, the pipelined zeitlos32,
 	// selected by `CPU_ZEITLOS32P in rtl/boards.vh. Not a Wishbone
@@ -2362,6 +2517,8 @@ module sysctl #()
 	// on the bus as it always has.
 `ifdef CPU_ZEITLOS32
 	localparam MTU_ON_BUS = 0;
+`elsif CPU_ZEITLOS32PS
+	localparam MTU_ON_BUS = 0;
 `elsif CPU_ZEITLOS32P
 	localparam MTU_ON_BUS = 0;
 `else
@@ -2399,7 +2556,12 @@ module sysctl #()
 	//
 	// zeitlos32p has its own (rtl/mpu_split.v, instantiated with the
 	// core): nothing here then, the CPU-side signals are idle.
-`ifdef CPU_ZEITLOS32P
+`ifdef CPU_ZEITLOS32PS
+	assign wbm_cpu_stb_p = wbm_cpu_stb;
+	assign wbm_cpu_cyc_p = wbm_cpu_cyc;
+	assign wbm_cpu_ack = wbm_cpu_ack_p;
+	assign wbm_cpu_dat_i = wbm_cpu_dat_i_p;
+`elsif CPU_ZEITLOS32P
 	assign wbm_cpu_stb_p = wbm_cpu_stb;
 	assign wbm_cpu_cyc_p = wbm_cpu_cyc;
 	assign wbm_cpu_ack = wbm_cpu_ack_p;
@@ -2466,7 +2628,55 @@ module sysctl #()
 	localparam CACHE_BURST = 0;
 `endif
 
-`ifdef CPU_ZEITLOS32P
+`ifdef CPU_ZEITLOS32PS
+`ifndef CACHE_ONE_WBUF
+`define CACHE_ONE_WBUF 2
+`endif
+	wb_cache_one #(
+`ifdef MAIN_512MB
+		.MAIN_512(1),
+`endif
+		.KB(`ICACHE_KB + `DCACHE_KB),
+		.LINE_WORDS(`DCACHE_LINE_WORDS),
+		.WBUF_DEPTH(`CACHE_ONE_WBUF),
+		.BURST(CACHE_BURST),
+		.SNOOP(1),
+		.CFG_BASE(32'h7000_0100),
+		.STAT_BRAM(1)                   // the counters in a block RAM
+	) icache_i (
+		.wb_clk_i(wbm_clk),
+		.wb_rst_i(wbm_rst),
+		.c_req(z_m_req),
+		.c_adr(z_m_adr),
+		.c_we(z_m_we),
+		.c_sel(z_m_sel),
+		.c_wdat(z_m_wdat),
+		.c_instr(z_m_instr),
+		.c_rdy(z_m_rdy),
+		.c_ack(z_m_ack),
+		.c_rdat(z_m_rdat),
+		.m_adr_o(wbc_adr),
+		.m_dat_o(wbc_dat_o),
+		.m_dat_i(wbc_dat_i),
+		.m_we_o(wbc_we),
+		.m_sel_o(wbc_sel),
+		.m_stb_o(wbc_stb),
+		.m_cyc_o(wbc_cyc),
+		.m_cti_o(wbc_cti),
+		.m_bte_o(),
+		.m_ack_i(wbc_ack),
+		.m_instr_o(),
+		.snoop_stb_i(cache_snoop_stb),
+		.snoop_adr_i(wbm_adr),
+		.c_cfg_hit(cache_cfg_hit),
+		.mpu_iveto(z_i_veto),
+		.mpu_veto(z_d_veto),
+		.mpu_reg(z_d_reg),
+		.mpu_dat(z_d_reg_dat)
+	);
+	assign wbm_cpu_ack_p = z_m_ack;
+	assign wbm_cpu_dat_i_p = z_m_rdat;
+`elsif CPU_ZEITLOS32P
 
 	// The split-port cache for zeitlos32p (rtl/cache_split.v,
 	// docs/cache_split.md): the same rules, registers, bus-side wiring

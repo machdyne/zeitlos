@@ -136,7 +136,10 @@ module zeitlos32p #(
 	parameter [0:0]  ENABLE_MPU     = 0,
 	// branch prediction: a branch target buffer of 2**BTB_BITS entries
 	// in F (0: none, and a taken branch or a jump always costs 3)
-	parameter        BTB_BITS       = 6
+	parameter        BTB_BITS       = 6,
+	// 1: the smaller shared units (zeitlos32_muldiv_lean), for the 25F
+	// boards; 0: zeitlos32_muldiv, as every build before LEAN
+	parameter [0:0]  LEAN           = 0
 ) (
 	input clk,
 	input rst,
@@ -583,20 +586,39 @@ module zeitlos32p #(
 	wire [31:0] md_result;
 	wire        md_start;
 
-	zeitlos32_muldiv #(
-		.ENABLE_MUL(ENABLE_MUL),
-		.ENABLE_DIV(ENABLE_DIV),
-		.FAST_MUL(FAST_MUL)
-	) muldiv_i (
-		.clk(clk),
-		.rst(rst),
-		.start(md_start),
-		.op(funct3),
-		.a(xa),
-		.b(xb),
-		.ready(md_ready),
-		.result(md_result)
-	);
+	generate
+		if (LEAN) begin : g_md_lean
+			zeitlos32_muldiv_lean #(
+				.ENABLE_MUL(ENABLE_MUL),
+				.ENABLE_DIV(ENABLE_DIV),
+				.FAST_MUL(FAST_MUL)
+			) muldiv_i (
+				.clk(clk),
+				.rst(rst),
+				.start(md_start),
+				.op(funct3),
+				.a(xa),
+				.b(xb),
+				.ready(md_ready),
+				.result(md_result)
+			);
+		end else begin : g_md
+			zeitlos32_muldiv #(
+				.ENABLE_MUL(ENABLE_MUL),
+				.ENABLE_DIV(ENABLE_DIV),
+				.FAST_MUL(FAST_MUL)
+			) muldiv_i (
+				.clk(clk),
+				.rst(rst),
+				.start(md_start),
+				.op(funct3),
+				.a(xa),
+				.b(xb),
+				.ready(md_ready),
+				.result(md_result)
+			);
+		end
+	endgenerate
 
 	// ============================================================
 	// X: what happens to the instruction there this cycle

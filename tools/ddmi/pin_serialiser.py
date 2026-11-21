@@ -195,11 +195,30 @@ def main():
             stop("no room for %s" % name)
         pins.append((name, bel))
 
+    # A lane's output stage, when synthesis has named its flip-flops
+    # after another alias of the same net (gpu_video's vc_tr, say, for
+    # o_r -- which alias wins varies from build to build): the two that
+    # drive the lane's ODDRX1F.
+    ODDR = {"r": "ddr1_red", "g": "ddr1_green", "b": "ddr1_blue", "c": "ddr1_clock"}
+
+    def oddr_flops(lane):
+        cell = cells.get("gpu_video_i.g_oddr1v." + ODDR[lane])
+        if cell is None:
+            return []
+        bits = set()
+        for port in ("D0", "D1"):
+            bits.update(b for b in cell["connections"].get(port, []) if isinstance(b, int))
+        return sorted(name for name, c in cells.items()
+                      if c.get("type") == "TRELLIS_FF" and
+                      any(b in bits for b in c["connections"].get("Q", [])))
+
     # the lanes
     for lane in "rgbc":
         x = cols[lane]
         for group, count in LANE_GROUPS:
             names = flops("%s_%s" % (group, lane))
+            if group == "o" and not names:
+                names = oddr_flops(lane)
             if len(names) != count:
                 stop("%s_%s has %d flip-flops, not %d" % (group, lane, len(names), count))
             for name in names:
