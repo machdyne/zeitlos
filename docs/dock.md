@@ -101,7 +101,7 @@ is drawn as the first letters of its name, and launches like any other.
 A row longer than the dock pages, with NEXT at the far end, as before
 ([window_manager.md](window_manager.md#paging)).
 
-Limits: 48 icons in the row and its groups together (the last are left
+Limits: 52 icons in the row and its groups together (the last are left
 out, and the console says so), names up to 15 characters, lines up to
 159 characters (use continuation lines), 768 bytes of names for both
 rows and the groups together.
@@ -135,7 +135,7 @@ its start. The frame does not move or change size: it is as wide as the
 widest view from the start, a group's counting its BACK.
 
 ```
- row:    [term] [files] ... [cal] [Sound] [Tools] [Games] 
+ row:    [term] [files] ... [cal] [Media] [Tools] [Games] 
  Games:  [BACK] [casino] [chess] [kidgames] ... [mausrun] [planedemo]
 ```
 
@@ -155,10 +155,10 @@ widest view from the start, a group's counting its BACK.
 - **Running dots** under a group's icon are its apps' copies added up
   (six at most, like any icon).
 
-The built-in file has Desk, Sound, Tools, Games and "More apps" (the
+The built-in file has Desk, Media, Tools, Games and "More apps" (the
 last, `@rest`, empty and so not shown today) in `row wide` -- 12 apps
 and 4 groups, one slot short of the 17 that fit -- and Work, Desk,
-Sound, Tools, Games and Network in `row tall`, for a dock on a side.
+Media, Tools, Games and Network in `row tall`, for a dock on a side.
 `learn` ([learn.md](learn.md)) is in the wide row itself and in Work on
 a side; that is why `calc`, `clock` and `cal` went into Desk in the wide
 row too.
@@ -166,8 +166,9 @@ row too.
 Games opens on mausrun3d and mauskart3d, then mausrun and the rest. The
 two 3D demos, gldemo and gpu3d, are not in the dock (`hidden` in
 `apps.txt`, so `@rest` leaves them out too) but in `launcher`: with them
-the side dock came to 50 icons, past the 48 it holds
-(`DK_ITEMS_MAX`), and More apps was the group that would have been cut.
+the side dock came to 50 icons, past the 48 it held then
+(`DK_ITEMS_MAX`; 52 since cinema made it 49), and More apps was the
+group that would have been cut.
 
 ## Sides
 
@@ -392,8 +393,8 @@ shares):
 
 | | bytes | |
 |---|---|---|
-| `dock_store` | 4,096 | the icons (compressed) and spoken names the dock shows, and the groups' names; the built-in files use 3,909 (with learn, convert and the Desk group; the wm test prints it), leaving room for icons drawn in pix |
-| `dock_apps` | 1,152 | the row and its groups: 48 names, with where each one's icon and name are in the store |
+| `dock_store` | 4,096 | the icons (compressed) and spoken names the dock shows, and the groups' names; the built-in files use 4,002 (with cinema and the Media group; the wm test prints it), which leaves 94 bytes: the next icon or two will need the store made larger |
+| `dock_apps` | 1,248 | the row and its groups: 52 names, with where each one's icon and name are in the store |
 | `dock_scratch` | 2,144 | the parser, then `dock.zic`'s table (64 entries), then the process table for the dots -- one at a time, sharing the space; while the icons are read, the parser's space is the read buffer |
 
 The whole of `dock.zic` is no longer in `wm`: the 8KB buffer it was
@@ -451,7 +452,7 @@ it ([flash_apps.md](flash_apps.md)).
     (magic, sizes, offsets out of order, a name with no end, cut
     short), a store too small, the icon coding both ways; and the
     shipped `wm.cfg` and `dock.zic` themselves -- no problem in the
-    file, the wide row's 12 apps and Desk, Sound, Tools and Games, the tall
+    file, the wide row's 12 apps and Desk, Media, Tools and Games, the tall
     row's 12, every app and group with its icon, the hardware each
     needs; `dots`; which process names are which app.
   - `tests/test_dock_files.c` (152 checks, section 26 the pointer's shapes): the real `wm.c` with a
@@ -494,12 +495,12 @@ it ([flash_apps.md](flash_apps.md)).
 
 - The console shows the three lines above, with their times; `dock.zic`
   in a handful of reads.
-- The row: 12 apps, then Desk, Sound, Tools and Games. Click Games: its apps
+- The row: 12 apps, then Desk, Media, Tools and Games. Click Games: its apps
   with BACK first, the frame the same size. Esc: the row, Games
   selected. Enter on Tools, Right to an app, Enter: it starts and the
   dock is back on the row.
 - Speech on: "Games: Maus Run 3D" when Games opens.
-- A bitstream without audio: no Sound group at all.
+- A bitstream without audio: Media holds cinema alone (the three players need `audio`).
 - No card: the same dock, from flash.
 - A `/data/wm/wm.cfg` on the card with `row wide text term @g` and
   `group g Mine chess snake`, then `cfg reload` and a key: three icons,

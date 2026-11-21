@@ -513,7 +513,11 @@ static void test_list(void) {
 		n = dk_list(&c, DK_ROW_WIDE, &Z, it, DK_ITEMS_MAX, &dk);
 		CHECK_EQ(n, DK_ITEMS_MAX);
 		CHECK_EQ(nreports, 1);			// said once
-		CHECK(strcmp(it[DK_ITEMS_MAX - 1].name, "a47") == 0);
+		{
+			char last[16];
+			snprintf(last, sizeof(last), "a%d", DK_ITEMS_MAX - 1);
+			CHECK(strcmp(it[DK_ITEMS_MAX - 1].name, last) == 0);
+		}
 		n = dk_list(&c, DK_ROW_WIDE, &Z, it, 5, &dk);
 		CHECK_EQ(n, 5);
 	}
@@ -753,13 +757,13 @@ static void test_shipped(const char *cfg_path, const char *zic_path) {
 	CHECK(c.has[DK_ROW_WIDE]);
 	CHECK(c.has[DK_ROW_TALL]);
 
-	// The wide row: 12 apps and the Network, Sound, Tools, Games and
+	// The wide row: 12 apps and the Network, Media, Tools, Games and
 	// More apps groups -- 17, the dock's width. More apps holds colwin
 	// and @rest: here view and convert, whose group (Work) the wide row
 	// does not show. settings is in Tools.
 	static const char *const row[] = {
 		"term", "files", "text", "read", "sheet", "slide", "draw", "learn",
-		"ask", "calc", "cal", "clock", "net", "sound", "tools", "games", "misc",
+		"ask", "calc", "cal", "clock", "net", "media", "tools", "games", "misc",
 	};
 	int n = dk_list(&c, DK_ROW_WIDE, &Z, it, DK_ITEMS_MAX, &dk);
 	CHECK_EQ(dk.nmain, 17);
@@ -769,7 +773,7 @@ static void test_shipped(const char *cfg_path, const char *zic_path) {
 	}
 	CHECK_EQ(dk.nviews, 5);
 	CHECK_EQ(dk.views[0].count, 2);			// web irc
-	CHECK_EQ(dk.views[1].count, 3);			// play track midi
+	CHECK_EQ(dk.views[1].count, 4);			// cinema play track midi
 	CHECK_EQ(dk.views[2].count, 8);			// settings backup info keyboard hex basic mmod pix
 	CHECK_EQ(dk.views[3].count, 13);			// the games and planedemo (gldemo, gpu3d: the launcher's)
 	CHECK_EQ(dk.views[4].count, 3);			// colwin, and @rest: convert view
@@ -779,13 +783,13 @@ static void test_shipped(const char *cfg_path, const char *zic_path) {
 		n = dk_keep(it, keep, &dk);
 		CHECK_EQ(dk.nmain, 17);			// More apps has something: kept
 		CHECK_EQ(dk.nviews, 5);
-		CHECK_EQ(n, 17 + 2 + 3 + 8 + 13 + 3);
+		CHECK_EQ(n, 17 + 2 + 4 + 8 + 13 + 3);
 		int apps = 0;
 		for (int i = 0; i < n; i++) if (it[i].view < 0) apps++;
-		CHECK_EQ(apps, 41);
+		CHECK_EQ(apps, 42);
 	}
 	CHECK(strcmp(c.groups[dk.views[0].group].name, "Network") == 0);
-	CHECK(strcmp(c.groups[dk.views[1].group].name, "Sound") == 0);
+	CHECK(strcmp(c.groups[dk.views[1].group].name, "Media") == 0);
 	CHECK(strcmp(c.groups[dk.views[2].group].name, "Tools") == 0);
 	CHECK(strcmp(c.groups[dk.views[4].group].name, "More apps") == 0);
 
@@ -799,7 +803,7 @@ static void test_shipped(const char *cfg_path, const char *zic_path) {
 		CHECK_EQ(dk.nmain, 12);
 		int apps = 0;
 		for (int i = 0; i < n; i++) if (it[i].view < 0) apps++;
-		CHECK_EQ(apps, 41);
+		CHECK_EQ(apps, 42);
 	}
 
 	// Every app the file names has an icon, and every group its own.

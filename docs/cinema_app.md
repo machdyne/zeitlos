@@ -10,7 +10,8 @@ anything ffmpeg reads) on another computer with `tools/zv/zvenc`.
     > run cinema /media/video/film.zv
 
 or double-click a `.zv` file in `files` (`sw/common/ztype.c` maps ZV to
-cinema), or open one with the icon in the title bar. It is built with
+cinema), or open one with the icon in the title bar. Its icon is in the
+dock's Media group, with the audio players ([dock.md](dock.md)). It is built with
 the other apps (`sw/apps/Makefile`) and is on a card with the audio
 set (`release/lib/mkfatimg.py`). Films are not: make one with `zvenc`
 ([zv.md](zv.md)) and copy it to `/media/video`.

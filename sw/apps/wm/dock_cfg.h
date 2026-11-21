@@ -27,7 +27,7 @@
 #define DK_NAME_MAX     16	// an app's name, NUL included (Z_PROC_NAME_MAX is 24)
 #define DK_SPOKEN_MAX   24	// what speech says for it, NUL included
 #define DK_ICON_BYTES   128	// 32x32, 1bpp, 4 bytes a row, MSB first
-#define DK_ITEMS_MAX    48	// icons in the main row and its groups together
+#define DK_ITEMS_MAX    52	// icons in the main row and its groups together
 #define DK_POOL         768	// bytes of names for the rows and the groups
 #define DK_GROUPS_MAX   10	// `group` lines
 #define DK_GROUP_ID_MAX 12	// a group's id ("games"), NUL included

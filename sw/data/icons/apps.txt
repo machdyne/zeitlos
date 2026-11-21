@@ -28,6 +28,7 @@ calc        "Calculator"
 casino
 chess
 chip8       "Chip 8"
+cinema      "Cinema"
 clock
 convert     "Convert"
 draw
@@ -72,8 +73,8 @@ web         "Web browser"
 @desk                           hidden
 @games                          hidden
 @group                          hidden
+@media                          hidden
 @misc                           hidden
 @net                            hidden
-@sound                          hidden
 @tools                          hidden
 @work                           hidden
