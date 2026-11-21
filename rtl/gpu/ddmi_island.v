@@ -84,7 +84,17 @@
  * No local declarations; plain Verilog-2005.
  */
 
-module ddmi_island (
+module ddmi_island #(
+	// How many characters the island's outputs are behind hc/hsync/
+	// vsync; the caller delays everything else it sends by as many to
+	// match (gpu_vchar.v, whose fastest character clock is 75.6 MHz).
+	// 0: all combinational from hc, as before (gpu_ddmi.v).
+	// 1: where-in-the-line is registered (stage A).
+	// 2: and the packet's nine bits for the character too (stage B), so
+	//    that the 24-way pick and the parity/TERC4 into the encoders are
+	//    a clock each.
+	parameter PIPE = 0
+) (
 	input pclk,
 	// 1: this clock is a character. gpu_ddmi.v (one character a pixel
 	// clock) ties it high; gpu_vchar.v, whose character clock is faster
@@ -157,17 +167,23 @@ module ddmi_island (
 	//
 	// hx is hc with the island's offset taken off: the island's
 	// characters are placed by hx, the video preamble by hc itself.
+	//
+	// With PIPE these are worked out from hc and registered on the
+	// character's clock; what uses them below sees the character PIPE
+	// before. The samples are taken from hx directly (hc 11..15,
+	// long before the packets use them), so they are not delayed.
 	wire [11:0] hx = hc - ioff;
-	wire in_pre   = en && hx >= 12'd12 && hx < 12'd20;
-	wire in_gb    = en && (hx == 12'd20 || hx == 12'd21 || hx == 12'd86 || hx == 12'd87);
-	wire in_pkt   = en && hx >= 12'd22 && hx < 12'd86;
-	wire vline    = en && vc >= vact0;
-	wire in_vpre  = vline && hc >= vpre0 && hc < vpre0 + 12'd8;
-	wire in_vgb   = vline && (hc == vpre0 + 12'd8 || hc == vpre0 + 12'd9);
+	wire in_pre_n  = en && hx >= 12'd12 && hx < 12'd20;
+	wire in_gb_n   = en && (hx == 12'd20 || hx == 12'd21 || hx == 12'd86 || hx == 12'd87);
+	wire in_pkt_n  = en && hx >= 12'd22 && hx < 12'd86;
+	wire vline     = en && vc >= vact0;
+	wire in_vpre_n = vline && hc >= vpre0 && hc < vpre0 + 12'd8;
+	wire in_vgb_n  = vline && (hc == vpre0 + 12'd8 || hc == vpre0 + 12'd9);
 
 	wire [11:0] off = hx - 12'd22;
 	wire slot = off[5];
-	wire [4:0] c = off[4:0];
+	wire [4:0] c_n = off[4:0];
+	wire first_n = (hx == 12'd22);
 
 	wire snd = en && sound_en;
 
@@ -282,6 +298,43 @@ module ddmi_island (
 	wire [55:0] acr_sb = { acr_n[7:0], acr_n[15:8], { 4'b0, acr_n[19:16] },
 		acr_cts[7:0], acr_cts[15:8], { 4'b0, acr_cts[19:16] }, 8'd0 };
 
+	// -- the character's position, as used from here on (see PIPE) --
+	reg in_pre_q = 1'b0, in_gb_q = 1'b0, in_pkt_q = 1'b0;
+	reg in_vpre_q = 1'b0, in_vgb_q = 1'b0, first_q = 1'b0;
+	reg [4:0] c_q = 5'd0;
+	reg hsync_q = 1'b1, vsync_q = 1'b1;
+	always @(posedge pclk)
+		if (ce) begin
+			in_pre_q <= in_pre_n; in_gb_q <= in_gb_n; in_pkt_q <= in_pkt_n;
+			in_vpre_q <= in_vpre_n; in_vgb_q <= in_vgb_n; first_q <= first_n;
+			c_q <= c_n;
+			hsync_q <= hsync; vsync_q <= vsync;
+		end
+	// stage B: the same, a character on, for PIPE 2
+	reg in_pre_r = 1'b0, in_gb_r = 1'b0, in_pkt_r = 1'b0;
+	reg in_vpre_r = 1'b0, in_vgb_r = 1'b0, first_r = 1'b0;
+	reg [4:0] c_r = 5'd0;
+	reg hsync_r = 1'b1, vsync_r = 1'b1;
+	always @(posedge pclk)
+		if (ce) begin
+			in_pre_r <= in_pre_q; in_gb_r <= in_gb_q; in_pkt_r <= in_pkt_q;
+			in_vpre_r <= in_vpre_q; in_vgb_r <= in_vgb_q; first_r <= first_q;
+			c_r <= c_q;
+			hsync_r <= hsync_q; vsync_r <= vsync_q;
+		end
+	// the character the packet's bits are picked for (ca), and the one
+	// whose bits go out, with parity and position (everything else)
+	wire [4:0] ca = (PIPE == 0) ? c_n : c_q;
+	wire in_pre  = (PIPE == 0) ? in_pre_n  : (PIPE == 1) ? in_pre_q  : in_pre_r;
+	wire in_gb   = (PIPE == 0) ? in_gb_n   : (PIPE == 1) ? in_gb_q   : in_gb_r;
+	wire in_pkt  = (PIPE == 0) ? in_pkt_n  : (PIPE == 1) ? in_pkt_q  : in_pkt_r;
+	wire in_vpre = (PIPE == 0) ? in_vpre_n : (PIPE == 1) ? in_vpre_q : in_vpre_r;
+	wire in_vgb  = (PIPE == 0) ? in_vgb_n  : (PIPE == 1) ? in_vgb_q  : in_vgb_r;
+	wire first   = (PIPE == 0) ? first_n   : (PIPE == 1) ? first_q   : first_r;
+	wire [4:0] c = (PIPE == 0) ? c_n       : (PIPE == 1) ? c_q       : c_r;
+	wire hs_o    = (PIPE == 0) ? hsync     : (PIPE == 1) ? hsync_q   : hsync_r;
+	wire vs_o    = (PIPE == 0) ? vsync     : (PIPE == 1) ? vsync_q   : vsync_r;
+
 	// -- which packet, and this character's bits of it --
 	//
 	// The nine data bits a character carries: header bit c, and bits 2c
@@ -291,8 +344,8 @@ module ddmi_island (
 	// but it builds a 248-bit-wide multiplexer in front of the index
 	// and costs several hundred LUTs more. Indices past the data are
 	// don't-care (parity is sent there); kept in range.
-	wire [4:0] ch = (c < 5'd24) ? c : 5'd0;
-	wire [5:0] c2 = (c < 5'd28) ? { c, 1'b0 } : 6'd0;
+	wire [4:0] ch = (ca < 5'd24) ? ca : 5'd0;
+	wire [5:0] c2 = (ca < 5'd28) ? { ca, 1'b0 } : 6'd0;
 
 	// { s3b, s3a, s2b, s2a, s1b, s1a, s0b, s0a, hd }
 	function [8:0] pick;
@@ -312,7 +365,7 @@ module ddmi_island (
 	wire acr_a = acr_sb[c2];
 	wire acr_b = acr_sb[c2 + 6'd1];
 
-	wire [2:0] kind =
+	wire [2:0] kind_n =
 		!slot ? ((nsamp != 3'd0) ? 3'd1 : 3'd0) :
 		(vc == vgcp) ? 3'd2 :
 		(vc == vgcp + 11'd1) ? 3'd3 :
@@ -320,7 +373,12 @@ module ddmi_island (
 		(snd && vc == vgcp + 11'd3) ? 3'd5 :
 		(snd && vc[2:0] == 3'd4) ? 3'd6 : 3'd0;
 
-	wire [8:0] bits =
+	reg [2:0] kind_q = 3'd0;
+	always @(posedge pclk)
+		if (ce) kind_q <= kind_n;
+	wire [2:0] kind = (PIPE == 0) ? kind_n : kind_q;
+
+	wire [8:0] bits_a =
 		(kind == 3'd1) ? pick(pk_aud, ch, c2) :
 		(kind == 3'd2) ? pick(PK_GCP, ch, c2) :
 		(kind == 3'd3) ? pick(pk_avi, ch, c2) :
@@ -328,6 +386,11 @@ module ddmi_island (
 		(kind == 3'd5) ? pick(PK_AIF, ch, c2) :
 		(kind == 3'd6) ? { acr_b, acr_a, acr_b, acr_a, acr_b, acr_a, acr_b, acr_a, acr_hd } :
 		9'd0;
+
+	reg [8:0] bits_r = 9'd0;
+	always @(posedge pclk)
+		if (ce) bits_r <= bits_a;
+	wire [8:0] bits = (PIPE == 2) ? bits_r : bits_a;
 
 	wire hd  = bits[0];
 	wire s0a = bits[1];
@@ -378,11 +441,9 @@ module ddmi_island (
 	end
 
 	// -- the characters --
-	wire first = (hx == 12'd22);
-
 	assign mode0 = (in_gb || in_pkt) ? 2'd1 : in_vgb ? 2'd2 : 2'd0;
-	assign t0 = in_gb ? { 2'b11, vsync, hsync } :
-		{ !first, hb, vsync, hsync };
+	assign t0 = in_gb ? { 2'b11, vs_o, hs_o } :
+		{ !first, hb, vs_o, hs_o };
 
 	assign mode1 = in_pkt ? 2'd1 : in_gb ? 2'd3 : in_vgb ? 2'd2 : 2'd0;
 	assign t1 = { b3a, b2a, b1a, b0a };

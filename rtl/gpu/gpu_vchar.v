@@ -308,7 +308,7 @@ module gpu_vchar #(
 	wire [3:0] i0, i1, i2;
 	wire [1:0] ctl1, ctl2;
 
-	ddmi_island island_i (
+	ddmi_island #(.PIPE((ISLANDS != 0) ? 2 : 0)) island_i (
 		.pclk(cclk),
 		.ce(go),
 		.ioff(i_off), .vpre0(i_vpre), .vact0(i_vact), .vgcp(i_vgcp), .avi_sel(i_avi),
@@ -323,23 +323,47 @@ module gpu_vchar #(
 		.mode2(m2), .t2(i2), .ctl2(ctl2)
 	);
 
+	// -- the character as the encoders take it --
+	//
+	// With islands built, the island is two characters deep
+	// (ddmi_island.v, PIPE 2): at 75.6 MHz the way from hc through the
+	// island's position, the packet's bits, parity and TERC4 into the
+	// encoders is three clocks' worth. Its outputs are then two
+	// characters behind k_*, so the character's own bits are held two
+	// characters too, at go, to meet them. Without islands nothing
+	// changes.
+	reg [23:0] d_rgb = 24'd0, d2_rgb = 24'd0;
+	reg d_hs = 1'b1, d_vs = 1'b1, d_de = 1'b0;
+	reg d2_hs = 1'b1, d2_vs = 1'b1, d2_de = 1'b0;
+	always @(posedge cclk)
+		if (go) begin
+			d_rgb <= k_rgb;
+			d_hs <= k_hs; d_vs <= k_vs; d_de <= k_de;
+			d2_rgb <= d_rgb;
+			d2_hs <= d_hs; d2_vs <= d_vs; d2_de <= d_de;
+		end
+	wire [23:0] n_rgb = (ISLANDS != 0) ? d2_rgb : k_rgb;
+	wire n_hs = (ISLANDS != 0) ? d2_hs : k_hs;
+	wire n_vs = (ISLANDS != 0) ? d2_vs : k_vs;
+	wire n_de = (ISLANDS != 0) ? d2_de : k_de;
+
 	// channel 0 blue with the syncs, 1 green, 2 red
 	wire [9:0] e_r, e_g, e_b;
-	tmds_enc_p #(.CH(2)) enc_r (.clk(cclk), .ce(go), .de(k_de), .d(k_rgb[23:16]),
+	tmds_enc_p #(.CH(2)) enc_r (.clk(cclk), .ce(go), .de(n_de), .d(n_rgb[23:16]),
 		.c1(ctl2[1]), .c0(ctl2[0]), .mode(m2), .t(i2), .q(e_r));
-	tmds_enc_p #(.CH(1)) enc_g (.clk(cclk), .ce(go), .de(k_de), .d(k_rgb[15:8]),
+	tmds_enc_p #(.CH(1)) enc_g (.clk(cclk), .ce(go), .de(n_de), .d(n_rgb[15:8]),
 		.c1(ctl1[1]), .c0(ctl1[0]), .mode(m1), .t(i1), .q(e_g));
-	tmds_enc_p #(.CH(0)) enc_b (.clk(cclk), .ce(go), .de(k_de), .d(k_rgb[7:0]),
-		.c1(k_vs), .c0(k_hs), .mode(m0), .t(i0), .q(e_b));
+	tmds_enc_p #(.CH(0)) enc_b (.clk(cclk), .ce(go), .de(n_de), .d(n_rgb[7:0]),
+		.c1(n_vs), .c0(n_hs), .mode(m0), .t(i0), .q(e_b));
 
 	// -- spreading a character over its clocks --
 	//
 	// The encoders take a character on the clock edge go is high for, and
 	// show it from then on; ph counts its clocks from that edge, and rep
 	// is its bits' repeat count less one (2 at 640x480, 1 at 800x600, 0
-	// otherwise). The encoders are three characters behind: every
-	// character lasts as long as the one three before it, except across a
-	// mode change, in blanking.
+	// otherwise). The encoders are three characters behind (five with
+	// islands built): every character lasts as long as the one that many
+	// before it, except across a mode change, in blanking.
 	reg [1:0] ph = 2'd0;
 	reg [1:0] rep = 2'd0;
 	always @(posedge cclk) begin
