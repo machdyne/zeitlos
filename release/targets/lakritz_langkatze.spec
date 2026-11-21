@@ -41,3 +41,8 @@ pmods = langkatze@a
 # card's time on Sergei ML2 for about 500 LUTs, and freed no CPU.
 # docs/dma.md, "Off for now", says why and what would make it worth
 # turning on (`DMA`, with `DMA_CHANNELS=1` on a board short of LUTs).
+
+# The CPU is zeitlos32ps (docs/zeitlos32ps.md): about 2.7x zeitlos32's
+# speed in less room than picorv32. Only release builds pick it here;
+# `make BOARD=x` still builds picorv32 until rtl/boards.vh changes.
+defines = +CPU_ZEITLOS32PS

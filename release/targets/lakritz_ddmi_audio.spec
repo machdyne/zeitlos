@@ -47,9 +47,13 @@ description = Lakritz + DDMI audio (sound over HDMI, no PMOD, no sigma-delta)
 
 base = lakritz
 
+# The CPU is zeitlos32ps (docs/zeitlos32ps.md): about 2.7x zeitlos32's
+# speed in less room than picorv32. Only release builds pick it here;
+# `make BOARD=x` still builds picorv32 until rtl/boards.vh changes.
 defines =
     GPU_DDMI_AUDIO
     -AUDIO_SD
     -SPI_ETH
+    +CPU_ZEITLOS32PS
 
 lpf_drop = AUDIO_L AUDIO_R ETH_SS ETH_MOSI ETH_MISO ETH_SCLK ETH_INT

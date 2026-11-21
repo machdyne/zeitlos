@@ -11,3 +11,5 @@ base = mozart_ml2
 # card's time on Sergei ML2 for about 500 LUTs, and freed no CPU.
 # docs/dma.md, "Off for now", says why and what would make it worth
 # turning on (`DMA`, with `DMA_CHANNELS=1` on a board short of LUTs).
+
+defines = +CPU_ZEITLOS32PS
