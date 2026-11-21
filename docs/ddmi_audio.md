@@ -343,8 +343,12 @@ general control on vsync's first line and the InfoFrames on the three
 after it, and the AVI InfoFrame's VIC -- 1 at 640x480, 4 (16:9) at
 1280x720, none at 800x600 and 1024x768. CTS is measured against the
 character clock: 25.2, 37.8 or 75.6 MHz (`zaudio.h`, which wm calls
-again after a change). `make test_vmodes` checks the islands in two
-modes.
+again after a change -- its own, and a game's: game mode is 640x480's
+and `z_game_set_enabled()` changes to it without wm, so wm sets N and
+CTS again when the game takes the screen. Without that a film or a game
+started from 1024x768 played its sound at a third of the speed, the
+display rebuilding the sample clock from 25.2 MHz with 75.6 MHz's CTS).
+`make test_vmodes` checks the islands in two modes.
 
 ## What it costs
 

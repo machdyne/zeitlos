@@ -8623,7 +8623,15 @@ static void handle_message(z_msg_t *msg) {
 			/* A game takes 640x480 (z_game_set_enabled()): the kept
 			 * mode comes back when it lets go. A trial ends kept. */
 			if (vm_trial >= 0) vm_keep();
-			if (z_vmode_get() != vm_kept) vm_after_game = true;
+			if (z_vmode_get() != vm_kept) {
+				vm_after_game = true;
+				// The game changed the screen to 640x480 itself
+				// (z_game_set_enabled()), so the character clock is
+				// another one: sound over HDMI is clocked by it, and
+				// with the desktop mode's N and CTS it played slow.
+				// (The way back is vm_request(), which does this.)
+				z_audio__ddmi_sync();
+			}
 			/* A game launched from the dock that takes the screen
 			 * without opening a window has started: the icon need
 			 * not wait out DOCK_LAUNCH_TIMEOUT_TICKS. */
