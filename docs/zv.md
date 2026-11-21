@@ -1,10 +1,13 @@
 # ZV, the Zeitlos Video Format
 
-Status: **draft 0, round 2 of the video work.** The format, the
-encoder (`zvenc`), the Linux player (`zvplay`), the player for Zeitlos
-(`cinema`, [cinema_app.md](cinema_app.md)) and a board benchmark
-(`zvbench`) exist and are tested on the host, in the one-app simulator
-and in the whole-system emulator (zsys). Not yet on a board. Everything
+Status: **draft 0.** The format, the encoder (`zvenc`), the Linux
+player (`zvplay`), the player for Zeitlos (`cinema`,
+[cinema_app.md](cinema_app.md)) and a board benchmark (`zvbench`) exist
+and are tested on the host, in the one-app simulator and in the
+whole-system emulator (zsys). On a board: Sergei ML2 plays black and
+white and colour films of 320x240 at their full frame rate, in a
+window and in game mode, with time to spare ("On the board so far"
+below). Lakritz and the consoles have not been measured. Everything
 here may still change; files are marked `ZVF0`, and a file made before
 a change to draft 0 may need making again.
 
@@ -17,8 +20,8 @@ their real frame rate, on every Zeitlos: in a window on the desktop,
 on the desktop's full screen, and in game mode. Conversion is done on a
 host computer, once; Zeitlos only plays.
 
-Why a format of its own: no existing codec fits a 48 MHz picorv32 that
-reads the card by polling. MPEG and its descendants need far more CPU
+Why a format of its own: no existing codec fits a 48 MHz soft core
+(picorv32 when this was designed) that reads the card by polling. MPEG and its descendants need far more CPU
 than there is, and they end in true-colour pixels the machine cannot
 show anyway. ZV puts all the hard work in the encoder and leaves the
 board almost nothing but copying bytes: its output **is** what the
@@ -51,10 +54,12 @@ wants:
 
 | View | Size | Pixels | Where |
 |---|---|---|---|
-| `ZV_VIEW_MONO_HALF` | w/2 x h/2 | 1 bit, dithered | **the window** (the default), game mode in mono, the console |
-| `ZV_VIEW_MONO_FULL` | w x h | 1 bit, dithered | the desktop's full screen |
-| `ZV_VIEW_PAL_HALF` | w/2 x h/2 | 8 bits: indices into the grey palette, dithered | game mode in greys (chunky) |
-| `ZV_VIEW_PAL_FULL` | w x h | the same at full size | game mode in greys, for a film of 320x240 or less |
+| `ZV_VIEW_MONO_HALF` | w/2 x h/2 | 1 bit, dithered | the window when it is smaller than the film, game mode in mono, the console |
+| `ZV_VIEW_MONO_FULL` | w x h | 1 bit, dithered | the window when the film fits it whole (a 320x240 film always does), the desktop's full screen |
+| `ZV_VIEW_PAL_HALF` | w/2 x h/2 | 8 bits: indices into the grey palette (or the colour layer's), dithered | game mode on chunky boards |
+| `ZV_VIEW_PAL_FULL` | w x h | the same at full size | game mode, for a film of 320x240 or less |
+| `ZV_VIEW_PL_FULL` | w x h | the palette view's 16 greys as four bit planes | the window in greys, on boards with the colour window ("The plane views" below) |
+| `ZV_VIEW_PL_HALF` | w/2 x h/2 | the same at half size | not used by cinema: too slow for what it shows |
 | `ZV_VIEW_GREY_FULL` / `_HALF` | | 8 bits, undithered | reference: tests, the encoder |
 
 1-bit views are in the framebuffer's order (bit 0 of a byte is its
@@ -242,6 +247,32 @@ mask (`ZV_WANT_BN64`) -- over the undithered picture. These are not on
 the board: they are there to judge whether a design that dithers in
 the encoder would be worth its larger files.
 
+## The plane views
+
+`ZV_VIEW_PL_FULL` and `ZV_VIEW_PL_HALF` give the
+palette views' 16 greys as four bit planes, each laid out as the
+mono view's picture, `plane_off` bytes apart. They are the mono
+loops with a word where those have a byte -- a byte a plane, so one
+set of shifts and masks does all four -- and a row stored a byte a
+plane. For a display made of bit planes (the colour window): no
+chunky-to-planar pass. `zv_test` holds every pixel of both to the
+palette views. In zsys the full one costs about a third more than
+mono full (620k against 463k cycles a frame at `--cpi 8`); the half
+one about twice mono half, which is why cinema shows greys in a window
+only at full size (a film of 320x240 or less).
+
+## A frame in steps
+
+With `step_blocks` set, `zv_dec_video()` draws
+about that many blocks and returns 2; called again with the same
+picture it carries on, until it returns something else. An entry
+drawn for the view counts as six blocks, and a seek point's V16
+entries are drawn 16 a call, so no call is much longer than another.
+`zv_test` holds every view decoded in steps to the same view decoded
+whole. cinema decodes 400 blocks a call
+(`DEC_STEP`), so keys and the window are seen to in the middle of a
+long frame.
+
 ## zvenc
 
     make -C tools/zv
@@ -267,6 +298,10 @@ It needs `ffmpeg` and `ffprobe` on the PATH, and nothing else.
 | `--refresh S` | the picture refreshed over S seconds after each (default 1) |
 | `--loudness L` | normalise the sound to L LUFS before it is cut to 8 bits (default -16; 0 off) |
 | `--threads N` | default: one a processor; the output is the same for any number |
+| `--budget PCT` | the share of a frame's time the board may spend decoding, on average (default 35; 0: no limit; "A frame's cost" below) |
+| `--no-colour` | no colour layer (a black and white film gets none anyway) |
+| `--colour` | keep the colour layer of a film that is one tint over black and white |
+| `--colour-cell N` | colour cells of N x N pixels, 4 or 8 (default 4 for a film of 320x240 or less, else 8) |
 | `--motion-probe` | measure what block copies from the last frame would save (nothing is coded differently) |
 | `--audio-rate R` | default 22050 |
 | `--stereo`, `--no-audio` | |
@@ -319,16 +354,6 @@ game mode on chunky boards show it ([cinema_app.md](cinema_app.md)).
   jumping. The group's first frame sets every cell. After that a frame
   sends only the cells that change, and a cell keeps its class unless
   another is clearly nearer, so colours do not flicker.
-- **The plane views.** `ZV_VIEW_PL_FULL` and `ZV_VIEW_PL_HALF` give the
-  palette views' 16 greys as four bit planes, each laid out as the
-  mono view's picture, `plane_off` bytes apart. They are the mono
-  loops with a word where those have a byte -- a byte a plane, so one
-  set of shifts and masks does all four -- and a row stored a byte a
-  plane. For a display made of bit planes (the colour window): no
-  chunky-to-planar pass. `zv_test` holds every pixel of both to the
-  palette views. In zsys the full one costs about a third more than
-  mono full (620k against 463k cycles a frame at `--cpi 8`); the half
-  one about twice mono half, and cinema does not use it yet.
 - **No more class changes a frame than the board can redraw.** A
   frame changes at most a 64th of the cells (`CHANGE_DIV`, `zvcol.c`):
   the ones that gain most; the rest keep their class and stand again
@@ -336,13 +361,6 @@ game mode on chunky boards show it ([cinema_app.md](cinema_app.md)).
   blitted in game mode, and on Sergei ML2 a busy colour film spent
   500-850k cycles a frame of its 2.0M showing them. In zsys the same
   clip's showing went from 428k cycles a frame to 195k.
-- **A frame in steps.** With `step_blocks` set, `zv_dec_video()` draws
-  about that many blocks and returns 2; called again with the same
-  picture it carries on, until it returns something else. An entry
-  drawn for the view counts as six blocks, and a seek point's V16
-  entries are drawn 16 a call, so no call is much longer than another.
-  `zv_test` holds every view decoded in steps to the same view decoded
-  whole.
 - **A black and white film gets no layer.** `zvenc` leaves it out when
   fewer than 1% of cells are coloured. `--no-colour` leaves it out
   anyway.
@@ -456,6 +474,34 @@ white film cost 650k cycles a frame and a busier colour one 1.2M --
 were not shown. A worst frame over 100% (a cut, a seek point) is shown
 late and caught up with ([cinema_app.md](cinema_app.md)).
 
+**The budget is still picorv32's.** `BOARD_CPI` has not been fitted
+again for zeitlos32ps, on which the same film decodes in about a third
+of the cycles (below): a film made with the default 35% takes about a
+seventh of a frame there. One file plays on every board this way;
+`--budget 90` or so would spend what the faster core has on detail, in
+a file a picorv32 board could not keep up with.
+
+## On the board so far
+
+Sergei ML2 (45F, DDR3, 48 MHz), cinema's timing lines (`i`); cycles a
+frame, of the 2.0M a 24 fps frame has. The two rows are not one film
+measured twice, so read them as sizes, not as a benchmark:
+
+| | decoding | reading | showing | idle | frames not shown |
+|---|---|---|---|---|---|
+| picorv32, 8 + 4 KB caches | about 790k | | | 11-28% | 0-4 in 120 |
+| zeitlos32ps, 16 + 16 KB caches | 264-294k | 141-168k | 119-149k | 39-59% | none |
+
+The second row is two changes at once (the core,
+[zeitlos32ps.md](zeitlos32ps.md), and the caches, [dcache.md](dcache.md));
+zsys's cache model puts the caches alone at about 570k for decoding.
+An ordinary frame now decodes in one call of 350-600k cycles, 7-12 ms,
+where it took 1.3-1.9M. Reading is the card's own time for the most
+part (about 230k of a 400k read of 8 KB), which no core changes.
+One call of 3.9M cycles was seen after a key press and has not been
+traced; a colour film's class load at a seek point is still a single
+call and is the likely one.
+
 ## zvbench
 
 How fast a Zeitlos decodes ZV. Not on any card:
@@ -476,7 +522,11 @@ In the simulator, with the cycle model ([sim/README.md](../sim/README.md), "Cycl
     mkdir -p /tmp/root && cp clip.zv /tmp/root/zvbench.zv
     ZSIM_COST=lakritz_dc sim/zsim-headless -q -n 0 -r /tmp/root sw/apps/zvbench/zvbench.bin
 
-### Measured so far (simulator, round 2)
+### Measured in the simulator (round 2, picorv32)
+
+These are the one-app simulator's figures from before cinema ran on a
+board, kept for the Lakritz models; "On the board so far" above is
+what a board does.
 
 The decoder has a loop of its own for each of the board's views,
 keeps its output pointer as it goes, draws V16 entries as they arrive
@@ -543,7 +593,9 @@ applied to the grey picture; a player starting mid-film waits for the
 next seek point and, after its refresh, matches; the board's loops for
 each view equal the plain per-block code, frame for frame; a decoder
 that changes view mid-film matches one that did not, after a seek;
-2,000 damaged records decoded without harm; the colour layer on a
+2,000 damaged records decoded without harm; the plane views equal to
+the palette views pixel for pixel; every view decoded in steps equal to the same
+view decoded whole; the colour layer on a
 synthetic film (classes right cell by cell, frame by frame, the index
 where it says, class 0 neutral and its palette the true greys, a black
 and white film with nothing coloured, 3,000 damaged runs). `tools/run_tests.py` runs
@@ -565,13 +617,19 @@ it with the tree's other host suites.
 
 ## Next
 
-- **On a board**: `zvbench` and `cinema` on Lakritz (desktop and
-  console) and a 45F board, with real films.
-- **Game mode in cinema**: the half view doubled, in mono everywhere and
-  in 256 greys on chunky boards (the arcade runtime's way, as view's
-  screen face).
+- **Lakritz and the consoles**: `zvbench` and `cinema` there, with real
+  films. Only Sergei ML2 has been measured.
+- **The budget for the faster core**: `BOARD_CPI` fitted to
+  zeitlos32ps, or a `--budget` per board, if films are to use what it
+  has ("A frame's cost").
+- **Greys in a window above 320x240**: the plane view at full size for
+  a 640-wide film; too slow on picorv32, not tried on zeitlos32ps.
+- **A colour film's seek point** in steps: its class load is still one
+  long call.
 - **Motion**, if real films say it pays.
-- **The colour layer on the board**: cinema's game mode reading it
-  (the host prototype is above).
-- **SD DMA**: built, `DMA` ([dma.md](dma.md)); `cinema` gets it through
-  `fs` with no change of its own.
+
+Done since this list was first written: cinema on a board; game mode
+(mono everywhere, 256 greys or the colour layer on chunky boards); the
+colour layer on the board, in game mode and in the colour window. SD
+DMA was built and measured, and is off in every target for now
+([dma.md](dma.md), "Off for now").
