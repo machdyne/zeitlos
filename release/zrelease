@@ -68,6 +68,14 @@ def distdir(version):
     return os.path.join(HERE, "dist", version)
 
 
+# Where `build --gateware-only` puts its bitstreams. Not dist/<version>/:
+# `ship` uploads whatever is in that directory, and a bitstream built
+# without the release's kernel and apps must never end up on a release
+# page by being in the wrong place.
+def gatewaredir():
+    return os.path.join(HERE, "dist", "gateware")
+
+
 def die(msg):
     print("\nzrelease: %s" % msg, file=sys.stderr)
     sys.exit(1)
@@ -315,6 +323,10 @@ def cmd_clean(args):
 # ---------------------------------------------------------------------
 
 def cmd_build(args):
+    if args.gateware_only:
+        return cmd_build_gateware(args)
+    if not args.version:
+        die("build needs a version (or --gateware-only, which does not).")
     version = build_mod.normalise_version(args.version)
     tree_version = build_mod.read_version(ROOT)
 
@@ -635,6 +647,91 @@ def cmd_build(args):
         print("  %10d  %s" % (os.path.getsize(p), f))
     print("\nbuilt into %s" % os.path.relpath(out, ROOT))
     print("Flash one and try it, then:  release/zrelease ship %s\n" % version)
+    return 0
+
+
+def cmd_build_gateware(args):
+    """`build --gateware-only`: each target's BIOS and gateware, nothing else.
+
+    The same per-target build as a release -- rtl/zspec.vh and the merged
+    .lpf from the spec, the drift check, place and route with the retry
+    seeds, the timing gate -- without the kernel, the apps, the sim
+    image, the network module firmware, the SD cards, the update store
+    or the flash images, none of which the bitstream needs: the BIOS is
+    the only software in it, and it is built per target either way.
+
+    Bitstreams go to release/dist/gateware/, never dist/<version>/, and
+    no manifest or notes are written: this is for trying gateware, not
+    for shipping it (see gatewaredir()).
+    """
+    tree_version = build_mod.read_version(ROOT)
+    version = (build_mod.normalise_version(args.version) if args.version
+               else tree_version)
+    if version != tree_version:
+        die("%s says Z_OS_VERSION is %r, but you asked for %r. "
+            "--gateware-only takes the tree's version; leave it out."
+            % (build_mod.VERSION_H, tree_version, version))
+
+    ignored = [flag for flag, on in (
+        ("--resume", args.resume), ("--rebuild-sdcard", args.rebuild_sdcard),
+        ("--bump", args.bump), ("--full-image", args.full_image),
+        ("--allow-mixed-commits", args.allow_mixed_commits))
+        if on]
+    if ignored:
+        die("%s: nothing to do with --gateware-only." % ", ".join(ignored))
+
+    targets = args.targets or spec.list_targets(ROOT)
+    for name in targets:
+        if name not in spec.list_targets(ROOT):
+            die("no such target %r. `zrelease list` shows what there is."
+                % name)
+
+    commit, dirty = build_mod.git_commit(ROOT)
+    out = gatewaredir()
+
+    print("\nzeitlos %s -- gateware only" % version)
+    print("  commit   %s%s"
+          % (commit[:12],
+             " (tree is DIRTY: %d file(s))" % len(dirty) if dirty else ""))
+    print("  targets  %s" % ", ".join(targets))
+    print("  output   %s" % os.path.relpath(out, ROOT))
+    print("  (no kernel, apps, sim image, NIC firmware, SD card or flash "
+          "image)")
+
+    if not args.dry_run:
+        os.makedirs(out, exist_ok=True)
+
+    results = []
+    for name in targets:
+        t = spec.load_target(ROOT, name)
+        drift = spec.check_drift(ROOT, t)
+        if drift and not args.allow_drift:
+            die("%s: its board spec no longer matches rtl/boards.vh:\n\n  %s"
+                "\n\n  The bitstream would then be something other than "
+                "what `make BOARD=%s` builds.\n  Reconcile them, or pass "
+                "--allow-drift if the difference is deliberate."
+                % (name, "\n  ".join(drift), t.board))
+
+        results.append(build_mod.build_target(
+            ROOT, t, version, out, None,
+            dry=args.dry_run,
+            allow_timing_fail=args.allow_timing_fail,
+            strict_io_timing=args.strict_io_timing,
+            pnr_attempts=args.pnr_attempts,
+            pnr_seeds=args.pnr_seeds,
+            keep_generated=args.keep_generated,
+            jobs=args.jobs,
+            gateware_only=True))
+
+    if args.dry_run:
+        print("\n--dry-run: nothing was built.\n")
+        return 0
+
+    print("\n=== gateware, %s ===" % commit[:12])
+    for r in results:
+        print("  %-24s %s" % (r["artifacts"].get("gateware", "?"),
+                              build_mod.timing_summary(r["timing"])))
+    print("\nbuilt into %s" % os.path.relpath(out, ROOT))
     return 0
 
 
@@ -1341,7 +1438,14 @@ def make_parser():
                    ).set_defaults(func=cmd_clean)
 
     b = sub.add_parser("build", help="build a release into dist/<version>")
-    b.add_argument("version")
+    b.add_argument("version", nargs="?",
+                   help="the release's version (with --gateware-only: "
+                        "optional, the tree's)")
+    b.add_argument("--gateware-only", action="store_true",
+                   help="each target's BIOS and bitstream only, into "
+                        "dist/gateware/: no kernel, apps, sim image, NIC "
+                        "firmware, SD card, update store or flash image, "
+                        "and nothing for `ship`")
     b.add_argument("--targets", nargs="+",
                    help="build only these (default: all)")
     b.add_argument("--jobs", "-j", type=int)

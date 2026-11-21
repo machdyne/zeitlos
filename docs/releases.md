@@ -24,6 +24,14 @@ $ release/zrelease ship v0.0.7           # create or update on GitHub
 `make -C release build VERSION=v0.0.7` does the same if that fits the
 hand better. `release/zrelease --help` lists everything.
 
+Just the gateware, built exactly as a release builds it but without
+the kernel, apps, cards or images (see
+[Gateware only](#gateware-only)):
+
+```
+$ release/zrelease build --gateware-only --targets lakritz_gpio konfekt
+```
+
 Build and ship are separate commands and neither implies the other.
 Building is slow, needs the FPGA toolchain, and produces something you
 want to program onto a real board before anyone else sees it.
@@ -448,6 +456,36 @@ Per target:
 
 Then once per release: the sdcard images, `README.txt`, `NOTES.md`,
 `MANIFEST.json`, `SHA256SUMS`.
+
+---
+
+## Gateware only
+
+`release/zrelease build --gateware-only` runs only the per-target part
+of the build: steps 2 to 5 above, with the target's `rtl/zspec.vh` and
+merged `.lpf`, the drift check, the retry seeds and the timing gate.
+The version is optional and is the tree's.
+
+It skips everything a bitstream does not need:
+- the software step (kernel, apps, core app archive), since the BIOS
+  is the only software in the bitstream and it is built per target
+  either way;
+- the sim image, the network module firmware, the SD cards and the
+  update store;
+- the flash images, and the manifest, notes and checksums.
+
+Bitstreams go to `release/dist/gateware/`, as
+`zeitlos-<target>-gateware.bit`. They never go to `dist/<version>/`:
+`ship` uploads whatever is in that directory, and a bitstream built
+without the release's kernel must not reach a release page by being
+in the wrong place. The tree may be dirty; that only refuses a real
+release.
+
+The usual build flags apply: `--targets`, `--allow-drift`,
+`--allow-timing-fail`, `--strict-io-timing`, `--pnr-attempts`,
+`--pnr-seeds`, `--keep-generated`, `-j`, `--dry-run`. The release-only
+flags (`--resume`, `--rebuild-sdcard`, `--bump`, `--full-image`,
+`--allow-mixed-commits`) are refused.
 
 ---
 

@@ -256,6 +256,25 @@ def main():
         finally:
             build_mod.board_jumps = real_jumps
 
+        # --- 2c. --gateware-only: the bitstream and nothing else -------
+        #
+        # zrelease build --gateware-only passes no software (no kernel or
+        # apps were built) and its own output directory; build_target
+        # must get its arch without them, stop after the timing gate and
+        # leave exactly the bitstream there.
+        print("\n== --gateware-only: a bitstream, no image ==")
+        gw_out = os.path.join(out, "gateware-only")
+        r = build_mod.build_target(ROOT, spec.load_target(ROOT, "lakritz_gpio"),
+                                   version, gw_out, None, gateware_only=True)
+        made = sorted(os.listdir(gw_out))
+        if made != ["zeitlos-lakritz_gpio-gateware.bit"]:
+            failures.append("--gateware-only left %s, not just the bitstream"
+                            % made)
+        elif r["artifacts"] != {"gateware": made[0]}:
+            failures.append("--gateware-only recorded %s" % r["artifacts"])
+        else:
+            print("   %s, and nothing else" % made[0])
+
         # --- 3. the images really do contain what they claim ----------
         print("\n== image contents ==")
         L = {r.key: r for r in lay["regions"]}

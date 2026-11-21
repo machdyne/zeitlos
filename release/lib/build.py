@@ -470,14 +470,19 @@ def retry_seeds(first, attempts, seeds=None):
 def build_target(root, target, version, outdir, software, dry=False,
                  allow_timing_fail=False, keep_generated=False,
                  jobs=None, full_image=False, strict_io_timing=False,
-                 pnr_attempts=PNR_ATTEMPTS, pnr_seeds=None):
+                 pnr_attempts=PNR_ATTEMPTS, pnr_seeds=None,
+                 gateware_only=False):
     """Gateware and BIOS for one target, then its flash image.
 
     `software` is what build_software() returned -- the kernel and the
     core app archive, shared by every target in the release.
+
+    gateware_only (zrelease build --gateware-only): stop after the timing
+    gate, and copy the bitstream into `outdir` as the release would name
+    it; `software` is then None, and nothing else is built.
     """
     lay = layout_mod.load(root)
-    arch = software["arch"]
+    arch = software["arch"] if software else spec.derive_arch(root)
     # The dirty list is not used here -- cmd_build has already decided
     # whether to proceed. Only the commit is wanted, for zspec.vh's
     # provenance header.
@@ -645,6 +650,16 @@ def build_target(root, target, version, outdir, software, dry=False,
                 % (target.name, names, timing_summary(timing), board_lc,
                    outsub, ", ".join(str(t["seed"] or "default")
                                      for t in tries)))
+
+        if gateware_only:
+            print("  [4/4] the bitstream (--gateware-only: no flash image)")
+            if dry:
+                return result
+            os.makedirs(outdir, exist_ok=True)
+            dst = os.path.join(outdir, "zeitlos-%s-gateware.bit" % target.name)
+            shutil.copy2(os.path.join(boutput, "soc.bit"), dst)
+            result["artifacts"]["gateware"] = os.path.basename(dst)
+            return result
 
         print("  [4/4] flash image")
 
