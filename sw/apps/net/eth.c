@@ -112,7 +112,26 @@ static void eth_frame(const uint8_t *f, uint16_t len) {
 
 }
 
+#ifdef NETX
+#include "netif.h"
+static void eth_poll_one(void);
+// every interface, each current while its frames are handled (netif.h)
 void eth_poll(void) {
+	// The caller's interface is current again afterwards: DHCP on one
+	// interface polls every one while it waits (dhcp.c), and its next
+	// request must leave by the one it works on.
+	int was = netif_index(netif_cur);
+	for (int i = 0; i < netif_n; i++) {
+		if (!netif[i].up) continue;
+		netif_set(i);
+		eth_poll_one();
+	}
+	netif_set(was);
+}
+static void eth_poll_one(void) {
+#else
+void eth_poll(void) {
+#endif
 
 	uint16_t len;
 	int drained = 0;

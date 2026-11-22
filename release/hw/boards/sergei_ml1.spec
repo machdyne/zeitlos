@@ -70,3 +70,4 @@ defines =
     AUDIO_MIXER
     AUDIO_RATE_RESET=8'd16
     AUDIO_FS_RESET=48000
+    XLINK

@@ -25,7 +25,8 @@ when:
   - a help text pairs a key with "full screen" other than F11, lists
     F9, or lists F10 as anything but colour.
 
-Exempt: the keyboard layer (zkbd.c), term (it forwards F1-F10 to the
+Exempt: the keyboard layers (zkbd.c, and learn's Linux build, which
+maps SDL's keys to Zeitlos's: apps/learn/linux/main.c), term (it forwards F1-F10 to the
 program inside, as VT sequences), the REPL's Scheme windows (they pass
 every key on to the program) and hello_win (a key tester), plus tests.
 
@@ -42,7 +43,7 @@ root = sys.argv[1] if len(sys.argv) > 1 else os.path.join(
     os.path.dirname(os.path.abspath(__file__)), '..', 'sw')
 
 EXEMPT = ('common/zkbd.c', 'apps/term/term.c', 'common/zapi/zapi.c',
-          'apps/hello_win/hello_win.c')
+          'apps/hello_win/hello_win.c', 'apps/learn/linux/main.c')
 HOME_OK = ('apps/term/', 'apps/web/', 'apps/files/')
 # the runtime, and the dual apps (docs/app_kinds.md): F10 is their
 # switch to the colour screen; learn's lesson figures in the colour

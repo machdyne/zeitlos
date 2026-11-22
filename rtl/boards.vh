@@ -701,6 +701,11 @@
 // after `USB_CDC_STALL_CYCLES so an unattended board still boots. See
 // rtl/usb_cdc_uart.v's header.
 `define USB_CDC
+// The USB device in software instead (rtl/usbd_ep.v, docs/usb_dev.md):
+// the same console from the kernel on, plus USB ethernet to the PC.
+// It wins over `USB_CDC below; a release spec with -USB_DEV gets the
+// hardware console back -- the one that reaches the BIOS.
+`define USB_DEV
 // No GPIO stream engine: Lakritz is at 97-98% of its LUTs and keeps
 // every feature it has. zlink still works on lakritz_gpio, in software
 // (docs/zlink.md). Revisit if the blitter work in docs/boards.md frees
@@ -818,6 +823,10 @@
 `define AUDIO_PT8211
 `define AUDIO_MIXER
 
+// The XA-XD link to the carrier's RP2040 (rtl/xlink.v, docs/xlink.md):
+// netx's network and share's card on the carrier's USB. The console's
+// UART is on the module's own UART balls (B4/C4), not XC/XD.
+`define XLINK
 `elsif BOARD_MOZART_ML1
 
 `define FPGA_ECP5
@@ -893,6 +902,10 @@
 //`define PROBE_WORDS 512
 //`define PROBE_AW 9
 
+// The XA-XD link to the carrier's RP2040 (rtl/xlink.v, docs/xlink.md):
+// netx's network and share's card on the carrier's USB. The console's
+// UART is on the module's own UART balls (B4/C4), not XC/XD.
+`define XLINK
 `elsif BOARD_MOZART_ML2
 
 `define FPGA_ECP5
@@ -985,6 +998,8 @@
 //`define PROBE
 //`define PROBE_WORDS 512
 //`define PROBE_AW 9
+
+`define XLINK
 
 `elsif BOARD_NOIR
 
@@ -1100,10 +1115,14 @@
 `define GPU_BLIT
 `define UART0
 `define USB_CDC
+// USB device in software: console + USB ethernet (docs/usb_dev.md).
+// Wins over `USB_CDC below; -USB_DEV in a spec gets that back.
+`define USB_DEV
 `define SPI_SDCARD
 `define ETH_RMII
 `define ETH_RMII_DRIVE_REFCLK
 `define ETH_RX_SLOTS 4
+`define ETH_RMII_B
 
 `elsif BOARD_SERGEI_ML0
 
@@ -1165,6 +1184,10 @@
 `define AUDIO_RATE_RESET 8'd16
 `define AUDIO_FS_RESET 48000
 
+// The XA-XD link to the carrier's RP2040 (rtl/xlink.v, docs/xlink.md):
+// netx's network and share's card on the carrier's USB. The console's
+// UART is on the module's own UART balls (B4/C4), not XC/XD.
+`define XLINK
 `elsif BOARD_SERGEI_ML1
 
 `define FPGA_ECP5
@@ -1250,6 +1273,10 @@
 //`define GPIO_PORT0
 //`define GPIO_PORT0_NARROW
 
+// The XA-XD link to the carrier's RP2040 (rtl/xlink.v, docs/xlink.md):
+// netx's network and share's card on the carrier's USB. The console's
+// UART is on the module's own UART balls (B4/C4), not XC/XD.
+`define XLINK
 `elsif BOARD_SERGEI_MX1
 
 // Sechzig MX1 (Artix-7 XC7A35T, 32 MB SDRAM, 4 MB flash) in a Sergei
@@ -1473,6 +1500,8 @@
 // deduced rather than measured.
 //`define GPIO_PORT0
 //`define GPIO_PORT0_NARROW
+
+`define XLINK
 
 `elsif BOARD_LEBKUCHEN
 
@@ -1805,8 +1834,26 @@
 // newly-added thing and `UART0 is on nearly every board by default --
 // so a board gains a USB console by adding one line, which is the
 // change somebody actually wants to make.
+// `USB_DEV (rtl/usbd_ep.v) is the other way to use the USB-C socket:
+// the device in software, a console and USB ethernet. It wins over
+// `USB_CDC in the same way, for the same reason -- it is the newer,
+// deliberate thing -- and a release spec takes it out with -USB_DEV
+// to get the hardware console back. With it, the console window at
+// 0xf000_00xx is rtl/uart_null.v and the console reaches the PC
+// through sw/apps/usbd.
+`ifdef USB_DEV
+`undef USB_CDC
+`undef UART0
+`endif
 `ifdef USB_CDC
 `undef UART0
+`endif
+// The USB-C socket's three pins, for whichever of the two uses them.
+`ifdef USB_CDC
+`define USB_UFP
+`endif
+`ifdef USB_DEV
+`define USB_UFP
 `endif
 
 // A board opting OUT of a universal feature, for a toolchain that

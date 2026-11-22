@@ -84,4 +84,5 @@ defines =
     AUDIO_SD
     AUDIO_MIXER
     USB_CDC
+    USB_DEV
     GPIO_STREAM_ENGINES=0

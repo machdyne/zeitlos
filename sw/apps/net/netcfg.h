@@ -26,6 +26,21 @@ typedef struct {
 	char psk[NETCFG_PSK_MAX + 1];
 } netcfg_wifi_t;
 
+#ifdef NETX
+#define NETCFG_IF_MAX      3
+#define NETCFG_ROUTES_MAX  8
+typedef struct {
+	char name[6];       /* wan, lan, lan2 */
+	int phy;            /* -1 unset, else NET_PHY_* */
+	int dhcp;           /* -1 unset */
+	uint32_t ip, mask, gw;
+	int nat, dhcpd;     /* 0/1 */
+	char allow[64];     /* services let in from outside (fw.h) */
+	uint32_t pool_lo, pool_hi, lease;
+} netcfg_if_t;
+#define NETCFG_PORTFWD_MAX 16
+#endif
+
 typedef struct {
 	int has_file;
 	int has_wifi;
@@ -47,6 +62,20 @@ typedef struct {
 	/* nfs=address:/export -- mounted at /nfs once there is an
 	 * address (nfs.c, docs/nfs.md); empty: none */
 	char nfs[NETCFG_NFS_MAX + 1];
+	/* full = 0: flash net, even with netx on the card (docs/netx.md) */
+	int full;
+#ifdef NETX
+	/* netx: wan., lan., lan2. (docs/netx.md) */
+	int n_if;
+	netcfg_if_t ifs[NETCFG_IF_MAX];
+	int forward;
+	int n_routes;
+	struct { uint32_t net, mask, via; } routes[NETCFG_ROUTES_MAX];
+	int nat_size;       /* 0: the default */
+	int dnsfwd;         /* -1 unset (on where there is a DHCP server) */
+	int n_portfwd;
+	struct { uint8_t proto; uint16_t wan_port, lan_port; uint32_t lan_ip; } portfwd[NETCFG_PORTFWD_MAX];
+#endif
 } netcfg_t;
 
 /* 0 even if the file is missing (has_file=0). -1 on a malformed file. */

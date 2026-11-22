@@ -788,6 +788,33 @@ static inline bool z_cpu_has_rot(void) {
 	return (reg_csr_features3 & Z_FEATURE3_CPU_ROT) != 0;
 }
 
+// FEATURES3 bit 4: `USB_DEV. The USB-C socket is rtl/usbd_ep.v, a USB
+// device in software at 0x6200_0000 (sw/common/zusbd.h): sw/apps/usbd
+// serves the console on it, and net's usbd_eth.c the USB ethernet.
+// docs/usb_dev.md.
+#define Z_FEATURE3_USB_DEV    (1u << 4)
+static inline bool z_usb_dev(void) {
+	if (!z_soc_features3_present()) return false;
+	return (reg_csr_features3 & Z_FEATURE3_USB_DEV) != 0;
+}
+
+// FEATURES3 bit 5: a second RMII MAC at 0x6300_0000 (`ETH_RMII_B:
+// Klinge's Ethernet B), which netx drives (docs/netx.md).
+#define Z_FEATURE3_ETH_RMII_B (1u << 5)
+static inline bool z_eth_rmii_b(void) {
+	if (!z_soc_features3_present()) return false;
+	return (reg_csr_features3 & Z_FEATURE3_ETH_RMII_B) != 0;
+}
+
+// FEATURES3 bit 6: the XA-XD link to the carrier's RP2040 at 0x6400_0000
+// (`XLINK, rtl/xlink.v: Sergei and Mozart), which netx drives for
+// Ethernet frames to the PC over the RP2040's USB (docs/xlink.md).
+#define Z_FEATURE3_XLINK      (1u << 6)
+static inline bool z_xlink(void) {
+	if (!z_soc_features3_present()) return false;
+	return (reg_csr_features3 & Z_FEATURE3_XLINK) != 0;
+}
+
 // Name of the CPU core in the running bitstream. Returns "unknown" if
 // this build predates rtl/csrs.v, because on such a bitstream the bit
 // is not merely clear, it is unreadable -- and "picorv32" would be a

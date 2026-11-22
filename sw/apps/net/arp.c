@@ -16,17 +16,31 @@
 #define NET_ARP_LOG 0
 #endif
 
+#ifdef NETX
+// netx: one cache for every interface, each entry tagged with its own
+// (netif.h); our address is the current interface's
+#include "netif.h"
+#define ARP_CACHE_SIZE  32
+#define ARP_IF          ((uint8_t)netif_index(netif_cur))
+#define our_ip          (netif_cur->ip)
+#else
 #define ARP_CACHE_SIZE  8
+#endif
 
 typedef struct {
 	bool used;
 	uint32_t ip;
 	uint8_t mac[6];
 	uint32_t last;          // arp_clock when last used or refreshed (LRU)
+#ifdef NETX
+	uint8_t ifx;            // the interface it was learned on
+#endif
 } arp_entry_t;
 
 static arp_entry_t arp_cache[ARP_CACHE_SIZE];
+#ifndef NETX
 static uint32_t our_ip;
+#endif
 static uint32_t arp_clock;
 
 static const uint8_t bcast_mac[6] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
@@ -50,7 +64,11 @@ void arp_init(uint32_t ip) {
 static void arp_cache_insert(uint32_t ip, const uint8_t mac[6], bool add) {
 	int victim = -1;
 	for (int i = 0; i < ARP_CACHE_SIZE; i++) {
-		if (arp_cache[i].used && arp_cache[i].ip == ip) {
+		if (arp_cache[i].used && arp_cache[i].ip == ip
+#ifdef NETX
+			&& arp_cache[i].ifx == ARP_IF
+#endif
+			) {
 			for (int j = 0; j < 6; j++) arp_cache[i].mac[j] = mac[j];
 			arp_cache[i].last = ++arp_clock;
 			return;
@@ -63,6 +81,9 @@ static void arp_cache_insert(uint32_t ip, const uint8_t mac[6], bool add) {
 	}
 	arp_cache[victim].used = true;
 	arp_cache[victim].ip = ip;
+#ifdef NETX
+	arp_cache[victim].ifx = ARP_IF;
+#endif
 	arp_cache[victim].last = ++arp_clock;
 	for (int j = 0; j < 6; j++) arp_cache[victim].mac[j] = mac[j];
 	printf("net: arp learned %ld.%ld.%ld.%ld = %02x:%02x:%02x:%02x:%02x:%02x\n",
@@ -74,7 +95,11 @@ static void arp_cache_insert(uint32_t ip, const uint8_t mac[6], bool add) {
 bool arp_lookup(uint32_t ip, uint8_t mac_out[6]) {
 
 	for (int i = 0; i < ARP_CACHE_SIZE; i++) {
-		if (arp_cache[i].used && arp_cache[i].ip == ip) {
+		if (arp_cache[i].used && arp_cache[i].ip == ip
+#ifdef NETX
+			&& arp_cache[i].ifx == ARP_IF
+#endif
+			) {
 			for (int j = 0; j < 6; j++) mac_out[j] = arp_cache[i].mac[j];
 			arp_cache[i].last = ++arp_clock;
 			return true;
@@ -164,10 +189,19 @@ void arp_handle(const uint8_t src_mac[6], const uint8_t *p, uint16_t len) {
 	arp_cache_insert(spa, sha, tpa == our_ip);
 
 	if (oper == 1 && tpa == our_ip) {
+#if NET_ARP_LOG
+		// A router asks every few minutes: routine, so only with the
+		// rest of ARP's log (`make NET_ARP_LOG=1`).
 		printf("net: arp who-has us from %ld.%ld.%ld.%ld, replying\n",
 			(long)(spa >> 24 & 0xFF), (long)(spa >> 16 & 0xFF),
 			(long)(spa >> 8 & 0xFF), (long)(spa & 0xFF));
+#endif
 		arp_send(2, sha, spa);	// operation 2 = reply
 	}
 
 }
+
+#ifdef NETX
+#undef our_ip
+#undef ARP_IF
+#endif

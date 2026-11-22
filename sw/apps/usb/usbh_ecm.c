@@ -105,7 +105,11 @@ static int parse(const uint8_t *c, int n, ecm_desc_t *e)
         p = c + i;
         end = i + 2 > n || p[0] < 2 || i + p[0] > n;
         if (end || p[1] == 0x04) {
-            if (cls == 0x0a && in && out && !e->ep_in &&
+            // Only after the ECM communication interface, and then the
+            // one its union names (or, without a union, the first): a
+            // composite device's OTHER data interfaces -- a CDC-ACM
+            // console's, ahead of it -- are not ours (tb_usbd_cosim.v).
+            if (cls == 0x0a && in && out && !e->ep_in && e->comm >= 0 &&
                 (e->data == 0xff || e->data == num)) {
                 e->data = (uint8_t)num;
                 e->alt = (uint8_t)alt;

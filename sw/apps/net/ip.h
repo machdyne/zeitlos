@@ -52,4 +52,14 @@ bool ip_send_built(uint32_t dst_ip, uint8_t protocol, uint16_t len);
 // waiting on. Cheap no-op when nothing's pending.
 void ip_poll(void);
 
+#ifdef NETX
+// netx: forwarding and ICMP errors (ip.c, netif.h)
+void ip_forward(const uint8_t *p, uint16_t len, uint8_t ihl,
+	uint32_t src_ip, uint32_t dst_ip);
+void ip_icmp_error(uint8_t type, uint8_t code, const uint8_t *p, uint16_t len,
+	uint32_t src_ip, uint32_t dst_ip);
+uint16_t ip_csum_adjust(uint16_t csum, uint16_t old, uint16_t new_);
+extern uint32_t ip_forwarded, ip_fwd_dropped, ip_icmp_errors_sent;
+#endif
+
 #endif

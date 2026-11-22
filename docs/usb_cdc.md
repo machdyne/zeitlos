@@ -6,6 +6,12 @@ a PMOD connector and stops needing a USB-UART adapter.
 Enabled per board with `` `USB_CDC `` in `rtl/boards.vh`. Off
 everywhere by default.
 
+On Lakritz and Klinge the socket is `` `USB_DEV `` instead
+([usb_dev.md](usb_dev.md)): the USB device in software, with the same
+console from the kernel on and USB ethernet beside it. `` `USB_DEV ``
+wins when a board has both; a release spec with `-USB_DEV` gets this
+hardware console back -- the one that reaches the BIOS.
+
 ```
 $ minicom -D /dev/ttyACM0
 ```

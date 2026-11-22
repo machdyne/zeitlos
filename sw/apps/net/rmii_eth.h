@@ -74,4 +74,13 @@ uint16_t rmii_eth_recv(uint8_t *buf, uint16_t maxlen);
 // never actually trigger in normal use.
 bool rmii_eth_send(const uint8_t *buf, uint16_t len);
 
+#ifdef NETX
+// netx: the second MAC (`ETH_RMII_B, rmii_eth_b.c), the same calls
+bool rmii_ethb_init(const uint8_t mac[6]);
+void rmii_ethb_debug_dump(void);
+unsigned rmii_ethb_rx_slots(void);
+uint16_t rmii_ethb_recv(uint8_t *buf, uint16_t maxlen);
+bool rmii_ethb_send(const uint8_t *buf, uint16_t len);
+#endif
+
 #endif

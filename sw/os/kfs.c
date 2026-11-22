@@ -316,7 +316,8 @@ static exec_src_t exec_resolve(const char *name, char *resolved, z_exec_info_t *
 
 	// Not the drivers: fs and usb are what /nfs is reached through,
 	// and net is the client itself, so none of them is taken from it.
-	if (nfs_first() && strcmp(name, "fs") && strcmp(name, "usb") && strcmp(name, "net")) {
+	if (nfs_first() && strcmp(name, "fs") && strcmp(name, "usb") && strcmp(name, "net") &&
+		strcmp(name, "usbd")) {
 		strcpy(resolved, NFS_APPS_DIR);
 		strcat(resolved, name);
 		if (fs_exec_info(resolved, info) == 0 && info->total) return SRC_CARD;

@@ -34,10 +34,12 @@ binary serves every board:
 | `rmii_eth.c` | `rtl/ethmac_rmii.v` (Mozart, Sergei, Klinge, [Katze](katze.md)) | 4 frame slots |
 | `esp32link.c` | `rtl/esp32_rxfifo.v`: the ULX3S's ESP32, or an ESP32-C3 on a [Kabellos](kabellos.md) PMOD | 2048-byte FIFO |
 | `usb_ecm.c` | a USB ethernet adapter (CDC-ECM), on any board with the USB host controller | the adapter's own, which nothing reports |
+| `usbd_eth.c` | the USB-C socket as a USB network adapter to a PC (`` `USB_DEV ``, [usb_dev.md](usb_dev.md)) | two 2KB frame slots in `rtl/usbd_ep.v`; the PC holds the rest |
 
 A MAC in the bitstream wins; the USB adapter is what a board with none
 gets -- or one whose ESP32 link never answers while an adapter is
-plugged in ([usb_ethernet.md](usb_ethernet.md#configuration)) -- and `net.cfg`'s `phy = auto | usb | builtin` overrides that
+plugged in ([usb_ethernet.md](usb_ethernet.md#configuration)). A board with neither but `` `USB_DEV `` gets the USB-C socket
+([usb_dev.md](usb_dev.md)), unless a USB adapter is attached when `net` starts -- and `net.cfg`'s `phy = auto | usb | usbdev | builtin` overrides that
 either way. The USB backend differs from the three MACs in three ways
 worth knowing before reading the rest of this document — its hardware
 can arrive and leave while `net` runs, it has a MAC address of its own

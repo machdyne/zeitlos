@@ -64,4 +64,18 @@ static inline uint32_t z_console_input(const uint8_t *buf, uint32_t len) {
 	return a.n;
 }
 
+// The same, for a DRIVER whose bytes come from a physical console --
+// sw/apps/usbd, the USB-C socket as the serial port. The kernel then
+// treats them as typed on the serial cable (k_uart_last_injected stays
+// false: `passwd reset`, docs/security.md). From anything that is not
+// a driver, plain z_console_input().
+#define Z_CONSOLE_PHYSICAL	0x50485953u	// "PHYS", in the pos field
+static inline uint32_t z_console_input_phys(const uint8_t *buf, uint32_t len) {
+	z_klog_args_t a;
+	z_kernel_ptr_t k = (z_kernel_ptr_t)(uintptr_t)(reg_kernel);
+	a.buf = (uint8_t *)buf; a.len = len; a.pos = Z_CONSOLE_PHYSICAL; a.n = 0; a.lost = 0;
+	k(Z_SYS_CONSOLE_INPUT, (uint32_t *)&a, 0);
+	return a.n;
+}
+
 #endif

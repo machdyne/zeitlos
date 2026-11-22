@@ -680,6 +680,11 @@ void sh(void) {
 	// set them up; until then, and if it fails, the UART is the console.
 	if (z_soc_has_feature2(Z_FEATURE2_USB_HOST)) init_start_optional("usb");
 
+	// The USB device (`USB_DEV, docs/usb_dev.md): the console on the
+	// USB-C socket, and USB ethernet to the PC. Its console starts
+	// here, with everything since boot replayed from the console log.
+	if (z_usb_dev()) init_start_optional("usbd");
+
 	// /sys/zeitlos.cfg, before init() and before the cancel window -- so
 	// every app init starts sees the settings from its first
 	// instruction, and a cancelled boot still has them for `run`. No

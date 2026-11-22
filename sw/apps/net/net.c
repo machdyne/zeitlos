@@ -106,6 +106,12 @@
 #include "../../common/zntp.h"
 #include "../../common/zusbproto.h"	// Z_USB_EVENT
 #include "net_phy.h"
+#ifdef NETX
+#include "netif.h"
+#include "netx.h"
+#include "xlink_eth.h"
+#include "../../common/zusbd.h"	// Z_USBD_LINK_*: share0 and the link
+#endif
 #include "usb_ecm.h"		// usb_ecm_rx_pending()
 #include "eth.h"
 #include "arp.h"
@@ -1467,6 +1473,45 @@ static void check_tftp_progress(void) {
 
 int main(void) {
 
+	// net.cfg first of all: whether netx runs instead of this is in it
+	// (full = 0), and its phy= key is part of choosing the driver -- a
+	// board with a MAC can be told to use a USB adapter instead, and one
+	// without can be told not to wait for one.
+	netcfg_t cfg;
+	if (netcfg_load(&cfg) != 0) {
+		printf("net: net.cfg parse error\n");
+		return 1;
+	}
+
+#ifndef NETX
+	// netx, the full net, on the card (docs/netx.md), runs instead of
+	// this unless net.cfg says full = 0. It registers as netx0 at once
+	// and as net0 when its interfaces are up; until then this waits.
+	// If it goes without becoming net0 (no interface, a card too old
+	// for this flash), or never appears, this carries on as ever.
+	if (cfg.full && z_exec_exists("netx") && z_proc_run("netx")) {
+		uint32_t pid;
+		bool seen = false;
+		for (int t = 0; t < 100; t++) {
+			z_proc_wait(Z_TICK_HZ / 10);
+			if (z_pid_lookup("net0", &pid)) return 0;
+			if (z_pid_lookup("netx0", &pid)) seen = true, t = 0;
+			else if (seen) break;
+		}
+	}
+#else
+	// netx: only ever one of the two
+	{
+		uint32_t pid;
+		char nx[16];
+		if (z_pid_lookup("net0", &pid)) {
+			printf("netx: net is running already\n");
+			return 1;
+		}
+		z_pid_register("netx", nx, sizeof(nx));
+	}
+#endif
+
 	// Register the name FIRST, before touching hardware.
 	//
 	// This used to happen ~116 lines further down, after the ENC28J60
@@ -1482,11 +1527,15 @@ int main(void) {
 	// Registering here means a lookup either succeeds or the process
 	// genuinely is not running.
 	char net_name[24];
+#ifndef NETX
+	// (netx registers once an interface is up -- netx.c -- so that a
+	// netx with none leaves flash net to carry on)
 	if (z_pid_register("net", net_name, sizeof(net_name)))
 		printf("net: registered as '%s'\n", net_name);
 	else
 		printf("net: name registration FAILED -- callers will not find "
 			"this process\n");
+#endif
 
 	// The Ethernet interrupt, taken as a driver (docs/userspace_drivers.md,
 	// "Phase 1"): it wakes this process and, since net is a driver, it
@@ -1513,9 +1562,10 @@ int main(void) {
 	// reappearing under a new pidreg name ("net1") with no visible
 	// process-creation message anywhere in the log.
 	static uint32_t entry_canary;
-	printf("net: main() entered, entry_canary=0x%08lx (expect 0 on a "
-		"genuine fresh load, nonzero if this is the same process's "
-		"own execution jumping back here)\n", (unsigned long)entry_canary);
+	// (the text kept short: flash net has no bytes to spare, and the
+	// handover to netx above needed some)
+	printf("net: main() entered, canary %08lx (0: a fresh load)\n",
+		(unsigned long)entry_canary);
 	entry_canary = 0xDEADBEEF;
 
 	// Pick a driver before touching any of its registers -- see
@@ -1532,15 +1582,11 @@ int main(void) {
 	// net.cfg first, because its phy= key is part of choosing the
 	// driver: a board with a MAC can be told to use a USB adapter
 	// instead, and one without can be told not to wait for one.
-	netcfg_t cfg;
-	if (netcfg_load(&cfg) != 0) {
-		printf("net: net.cfg parse error\n");
-		return 1;
-	}
 	if (cfg.has_file)
 		printf("net: loaded net.cfg%s, %d network(s), first '%s'\n",
 			cfg.has_wifi ? " (wifi)" : "", cfg.n_wifi, cfg.ssid);
 
+#ifndef NETX
 	if (!net_phy_select(cfg.phy)) {
 		printf("net: this SOC build has no ethernet hardware "
 			"(rtl/boards.vh's SPI_ETH or ETH_RMII, or a USB "
@@ -1697,6 +1743,25 @@ int main(void) {
 	arp_init(use_ip);
 	ip_init(use_ip, use_netmask, use_gateway);
 	tcp_init(use_ip);
+#else
+	// netx: every interface (netx.c, docs/netx.md)
+	uint32_t use_ip, use_netmask, use_gateway, use_dns = 0;
+	relay_init();
+	if (netx_bringup(&cfg, our_mac, &use_dns) != 0) {
+		printf("netx: no interface started -- flash net carries on\n");
+		return 1;
+	}
+	if (z_pid_register("net", net_name, sizeof(net_name)))
+		printf("netx: registered as '%s'\n", net_name);
+	if (cfg.dns) use_dns = cfg.dns;
+	else if (OUR_DNS && !use_dns) use_dns = OUR_DNS;
+	dns_set_nameserver(use_dns);
+	use_ip = netif[0].ip;
+	use_netmask = netif[0].mask;
+	use_gateway = netif[0].gw;
+	tcp_init(use_ip);
+	netx_services(&cfg);
+#endif
 
 	// Arms the SNTP client (sw/apps/net/ntp.c). Deliberately AFTER
 	// dns_set_nameserver() and the arp/ip/tcp re-init above: with the
@@ -1750,6 +1815,9 @@ int main(void) {
 	while (1) {
 
 		NP_LOOP();
+#ifdef NETX
+		netif_set(0);		// the main loop's net_phy is the first interface's
+#endif
 
 		if (net_phy->poll_wifi && cfg.has_wifi)
 			NP_PHASE(NP_WIFI, net_phy->poll_wifi(&cfg));
@@ -1844,6 +1912,28 @@ int main(void) {
 			// (sw/common/zusbnet.h): the wake was the point, and
 			// eth_poll() has already taken them.
 			else if (msg.subject == Z_USB_EVENT) { }
+#ifdef NETX
+			// share0 serving the card over the XA-XD link (ML2): netx
+			// leaves the link to it until it is done (zusbd.h)
+			else if (msg.subject == Z_USBD_LINK_PAUSE ||
+					msg.subject == Z_USBD_LINK_RESUME) {
+				uint32_t sp;
+				bool ok = z_pid_lookup(Z_USBD_SHARE_NAME, &sp) && sp == msg.from;
+				if (msg.subject == Z_USBD_LINK_RESUME) {
+					if (ok) xlink_eth_pause(false);
+				} else {
+					z_obj_t o;
+					memset(&o, 0, sizeof(o));
+					o.type = Z_UINT32;
+					o.val.uint32 = ok ? 1 : 0;
+					if (ok) {
+						xlink_eth_pause(true);
+						printf("netx: the link is share's (the PC's network on the carrier's USB pauses)\n");
+					}
+					(void)z_msg_new_send(msg.from, Z_USBD_LINK_PAUSED, 0, o);
+				}
+			}
+#endif
 			else if (!tftp_handle_stream_msg_checked(&msg)) {
 				// Everything above is an explicit subject and tftp
 				// claims the stream ones; anything left is a message
@@ -1975,8 +2065,13 @@ int main(void) {
 			continue;
 		}
 
+#ifdef NETX
+		if (netx_idle_ticks()) {
+			uint32_t w = netx_idle_ticks() - 1;
+#else
 		if (net_phy->idle_ticks) {
 			uint32_t w = net_phy->idle_ticks();
+#endif
 			uint32_t scan = screen_idle_ticks();
 			if (scan && (!w || scan < w))
 				w = scan;

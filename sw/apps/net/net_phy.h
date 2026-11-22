@@ -63,6 +63,10 @@
 #include "netcfg.h"
 #include "esp32link.h"
 #include "usb_ecm.h"
+#include "usbd_eth.h"
+#ifdef NETX
+#include "xlink_eth.h"
+#endif
 
 typedef struct {
 	const char *name;
@@ -152,6 +156,9 @@ typedef struct {
 #define NET_PHY_AUTO     0
 #define NET_PHY_USB      1      // a USB adapter even on a board with a MAC
 #define NET_PHY_BUILTIN  2      // never USB; exit if there is no MAC
+#define NET_PHY_USBDEV   3      // the USB-C socket as a USB ethernet device (usbd_eth.h)
+#define NET_PHY_BUILTIN2 4      // netx: the second built-in MAC (`ETH_RMII_B, rmii_eth_b.c)
+#define NET_PHY_XLINK    5      // netx: frames over the XA-XD link to the RP2040's USB (xlink_eth.c)
 
 // The active driver. NULL until net_phy_select() has run, which
 // net.c's main() does before anything touches the hardware.
@@ -162,6 +169,9 @@ extern const net_phy_t *net_phy;
 // cleanly on that rather than probing registers that are not there.
 const net_phy_t *net_phy_select(int mode);
 const net_phy_t *net_phy_use_usb(void);
+#ifdef NETX
+const net_phy_t *net_phy_of(int kind);
+#endif
 
 // Call-site spellings kept from the #define era, so eth.c and the rest
 // of net.c did not have to change when this became a runtime choice.

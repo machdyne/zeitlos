@@ -1062,7 +1062,7 @@ static void k_gpu_clip_restore(z_proc *p, const z_proc *cur)
 // "net0", and Z_IRQ_USB since the USB host became the `usb` process
 // (Phase 3). The audio and UART lines become bindable as their drivers
 // leave the kernel. The owner is a pid + 1 (0: none).
-#define K_IRQ_BINDABLE	((1u << Z_IRQ_ETH) | (1u << Z_IRQ_USB))
+#define K_IRQ_BINDABLE	((1u << Z_IRQ_ETH) | (1u << Z_IRQ_USB) | (1u << Z_IRQ_USBD))
 static __attribute__((section(".bss"))) uint16_t k_irq_owner[32];
 static __attribute__((section(".bss"))) uint32_t k_irq_silence[32];
 static __attribute__((section(".bss"))) uint32_t k_irq_silence_val[32];
@@ -1482,7 +1482,7 @@ typedef struct {
 	uint8_t		gave_up;	// over the limit: said once, then left alone
 } k_drv_rs_t;
 
-static k_drv_rs_t k_drv_rs[] = { { "fs" }, { "usb" }, { "net" } };
+static k_drv_rs_t k_drv_rs[] = { { "fs" }, { "usb" }, { "net" }, { "usbd" } };
 #define K_DRV_N (sizeof(k_drv_rs) / sizeof(k_drv_rs[0]))
 
 // From k_fault(), in the interrupt: note it, and wake pid 0. Also
@@ -2063,6 +2063,12 @@ uint32_t *z_kernel_entry(uint32_t syscall_id, uint32_t *regs, uint32_t irqs) {
 	// kernel clears IRQEN itself, or the level would hold the CPU here.
 	if ((irqs & (1 << Z_IRQ_USB)) != 0 && !k_irq_fire(Z_IRQ_USB))
 		k_usb_irq_off();
+
+	// USB device: the `usbd` process's line (rtl/usbd_ep.v), a level
+	// like the host's. Nobody bound: clear its IRQEN (0x6200_0018,
+	// sw/common/zusbd.h) here, as k_usb_irq_off() does for the host.
+	if ((irqs & (1 << Z_IRQ_USBD)) != 0 && !k_irq_fire(Z_IRQ_USBD))
+		*(volatile uint32_t *)0x62000018u = 0;
 
 	// Ethernet receive -- unblock whoever is waiting on packets.
 	//

@@ -63,6 +63,10 @@
 // Memory protection fault (rtl/mpu.v, docs/mpu.md): a level, held until
 // the kernel clears the MPU's FAULT_INFO.
 #define Z_IRQ_MPU				10
+// The USB device (rtl/usbd_ep.v, `USB_DEV): a level, (PEND & IRQEN) != 0,
+// non-latched as Z_IRQ_USB. The `usbd` process binds it with IRQEN as
+// its silence register (sw/apps/usbd).
+#define Z_IRQ_USBD				11
 // picorv32/zeitlos32 internal: illegal instruction (also ebreak and
 // ecall), and misaligned access. Unmasked by the BIOS at boot.
 #define Z_IRQ_ILLEGAL			1

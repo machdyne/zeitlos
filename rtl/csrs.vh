@@ -70,6 +70,11 @@ localparam CSR_FEATURES =
 	(32'h1 << 12) |
 `elsif USB_CDC
 	(32'h1 << 12) |
+`elsif USB_DEV
+	// The USB device in software (rtl/usbd_ep.v): a console from the
+	// kernel on, through sw/apps/usbd, though the window here is
+	// rtl/uart_null.v. FEATURES3 bit 4 says which.
+	(32'h1 << 12) |
 `endif
 // A USB HID port, meaning the reg_usbN_* registers exist and there is
 // somewhere for a keyboard or mouse to plug in.
@@ -449,6 +454,10 @@ localparam CSR_FEATURES2 =
 // it there. Z_FEATURE3_VRAM_SDRAM in sw/common/zsoc.h.
 //
 // Bit 3, CPU_ROT: below.
+//
+// Bit 4, USB_DEV: the USB-C socket is rtl/usbd_ep.v, a USB device in
+// software at 0x6200_0000 -- sw/apps/usbd's console and net's USB
+// ethernet (docs/usb_dev.md). Z_FEATURE3_USB_DEV in sw/common/zsoc.h.
 localparam CSR_FEATURES3 =
 `ifdef ZEITLOS_CONSOLE
 	32'h1 |
@@ -469,5 +478,18 @@ localparam CSR_FEATURES3 =
 	32'h8 |
 `endif
 `endif
+`endif
+`ifdef USB_DEV
+	32'h10 |
+`endif
+// Bit 5, ETH_RMII_B: a second RMII MAC at 0x6300_0000 (Klinge's
+// Ethernet B; netx, docs/netx.md). Z_FEATURE3_ETH_RMII_B in zsoc.h.
+`ifdef ETH_RMII_B
+	32'h20 |
+`endif
+// Bit 6, XLINK: the XA-XD link to the carrier's RP2040 at 0x6400_0000
+// (rtl/xlink.v; netx, docs/xlink.md). Z_FEATURE3_XLINK in zsoc.h.
+`ifdef XLINK
+	32'h40 |
 `endif
 	32'h0;

@@ -77,6 +77,8 @@ RTL_PICO = \
 	rtl/ext/usb_hid_host/src/usb_hid_host.v \
 	rtl/ext/usb_hid_host/src/usb_hid_host_rom.v \
 	rtl/usb_cdc_uart.v \
+	rtl/usbd_ep.v \
+	rtl/xlink.v \
 	rtl/ext/usb_cdc/usb_cdc.v \
 	rtl/ext/usb_cdc/sie.v \
 	rtl/ext/usb_cdc/phy_rx.v \
@@ -955,7 +957,7 @@ flash_os: flash_sw
 # a plain-text copy) and a machine with no keyboard can type
 # (docs/touch.md). read is built with the small printf for it (its
 # Makefile): 67K compressed, not 105K.
-CORE_APPS = fs usb wm net term console cron text files repl welcome read keyboard
+CORE_APPS = fs usb usbd wm net term console cron text files repl welcome read keyboard
 
 # TWO SIZES OF MACHINE (docs/flash_apps.md, "Two sizes of machine").
 # Every board sold has 32MB or more; Obst has 1MB of SRAM, and used to
@@ -1095,13 +1097,32 @@ ZAR_APPS = $(filter-out $(CORE_APPS_OMIT),$(CORE_APPS))
 # text 92,621 bytes), paid from net: 103K -> 102K (103,267 bytes here).
 # files +512 (the accent plane kept to 640x480, 70,418 bytes), paid
 # from repl: 123K -> 125,440 (124,306 bytes here).
-CORE_BUDGETS_NORMAL = fs=35K/80K usb=35K/60K wm=89600/168K net=104448/296K term=65K/145K \
-	console=9K/13K cron=17920/48K text=92928/220K files=70912/146K repl=125440/315K \
-	welcome=47K/82K read=70K/214K keyboard=37K/66K
-CORE_BUDGETS_SMALL = fs=36K/77312 usb=35K/53504 wm=84K/151K net=104K/287K term=62K/138K \
+# November 2026, the USB device (docs/usb_dev.md): usbd joined the core
+# apps, 5,036 bytes compressed (5,376 budget), so that a board with no
+# card still has its console and USB ethernet on the USB-C socket. The
+# region had 184 bytes to give; the rest came from what each app had
+# spare over its size here (xPack GCC 14.2) and with GCC 15.2 where the
+# notes above give it: keyboard -1K (36,370), console -512 (8,055),
+# term -512 (65,903 with 15.2), repl -512 (124,306), files -256
+# (70,418), wm -256 (89,232), cron -256 (17,347), and CORE_RESERVE 60K
+# -> 58K (58,559 bytes of files). PROVISIONAL: a maintainer's call.
+# Then the card reader's handover (Z_USBD_PAUSE): usbd 5,564 bytes,
+# 5,376 -> 5,632, paid from CORE_RESERVE 58K -> 59,136 (58,718 bytes
+# of files).
+# Then netx's handover in flash net and the USB device phases (2026-11-22,
+# GCC 15.2: usbd 5,689 / 8,296 RAM, wm 89,495, net 104,677): usbd
+# 5,632 -> 5,696 and 8K -> 8,448 RAM, wm 89,344 -> 89,536, net 104,448 ->
+# 104,704, and console 8,704 -> 8,320 (8,055 with 15.2) to pay for it:
+# `zrelease check`'s sum of the budgets and CORE_RESERVE is then 32
+# bytes inside CORE_ZAR_MAX (848K). The next raise has to come from
+# another app's budget or a bigger region.
+CORE_BUDGETS_NORMAL = fs=35K/80K usb=35K/60K usbd=5696/8448 wm=89536/168K net=104704/296K term=66048/145K \
+	console=8320/13K cron=17664/48K text=92928/220K files=70656/146K repl=124928/315K \
+	welcome=47K/82K read=70K/214K keyboard=36K/66K
+CORE_BUDGETS_SMALL = fs=36K/77312 usb=35K/53504 usbd=5632/8K wm=84K/151K net=104K/287K term=62K/138K \
 	console=10K/12544 cron=18K/48K text=88K/212K files=66K/138K repl=124K/308K \
 	welcome=42K/76K read=70K/210K keyboard=38K/64K
-CORE_RESERVE = 60K
+CORE_RESERVE = 59136
 # Core apps stored as they are, not compressed: their budget is then
 # their .bin. None, since read and keyboard came into flash: wm and net
 # took 41K and 49K more stored than compressed, and unpacking costs
@@ -1112,11 +1133,15 @@ CORE_STORE =
 # refuses an archive bigger than this, whatever the budgets say, so it
 # can never spill into the flashtest sector after it.
 CORE_ZAR_MAX = 848K
-CORE_AT_BOOT = fs usb wm net console
+CORE_AT_BOOT = fs usb usbd wm net console
 CORE_RAM_WITH = term repl
 ifeq ($(CORE_TIER),small)
 CORE_BUDGETS = $(CORE_BUDGETS_SMALL)
 CORE_RAM_MAX = 1M
+# The small tier is Obst, whose USB-C socket is not a USB device
+# (`USB_DEV): usbd starts, finds none and exits, holding no RAM while
+# the rest of the boot set runs. So the 1MB rule leaves it out.
+CORE_AT_BOOT = fs usb wm net console
 else
 CORE_BUDGETS = $(CORE_BUDGETS_NORMAL)
 CORE_RAM_MAX = 2M
@@ -1575,6 +1600,58 @@ test_usb_ecm:
 		rtl/tb/tb_usb_device.v rtl/usb/usb_host.v rtl/usb/usb_sie.v \
 		rtl/usb/usb_port.v rtl/usb/usb_xact.v rtl/usb/usb_hid_compat.v
 	@cd output && vvp -M. -musbh_cosim tb_usb_ecm_cosim
+
+# USB DEVICE co-simulation (docs/usb_dev.md): rtl/usbd_ep.v run by the
+# real sw/apps/usbd and net's usbd_eth.c (rtl/tb/cosim/usbd_vpi.c), on
+# the wire against the real rtl/usb host run by the real sw/apps/usb
+# driver. The host binds the console (CDC-ACM); then -- built with
+# Z_USBH_COSIM_NO_SER -- the network (CDC-ECM), with two receive slots
+# and with one; then, against `share`'s device (-DUSBD_MSC) and built
+# with NO_SER and NO_ECM too, the card reader (MSC). See
+# rtl/tb/tb_usbd_cosim.v; the card reader's commands one by one are
+# sw/apps/usbd/tests (test_usbd_msc, run first).
+#
+#   make test_usbd
+USBH_COSIM_SRCS = ../rtl/tb/cosim/usbh_vpi.c ../sw/apps/usb/usbh.c ../sw/apps/usb/usbh_hid.c \
+	../sw/apps/usb/usbh_msc.c ../sw/apps/usb/usbh_hub.c ../sw/apps/usb/usbh_cdc.c \
+	../sw/apps/usb/usbh_cp210x.c ../sw/apps/usb/usbh_ecm.c
+USBD_TB_RTL = rtl/tb/tb_usbd_cosim.v rtl/usbd_ep.v rtl/ext/usb_cdc/sie.v \
+	rtl/ext/usb_cdc/phy_rx.v rtl/ext/usb_cdc/phy_tx.v rtl/usb/usb_host.v \
+	rtl/usb/usb_sie.v rtl/usb/usb_port.v rtl/usb/usb_xact.v rtl/usb/usb_hid_compat.v
+test_usbd: test_usbd_msc
+	@mkdir -p output
+	cd output && iverilog-vpi --name=usbh_cosim -DZ_USBH_COSIM -I../sw/apps/usb $(USBH_COSIM_SRCS)
+	cd output && iverilog-vpi --name=usbh_cosim_noser -DZ_USBH_COSIM -DZ_USBH_COSIM_NO_SER \
+		-I../sw/apps/usb $(USBH_COSIM_SRCS)
+	cd output && iverilog-vpi --name=usbh_cosim_msc -DZ_USBH_COSIM -DZ_USBH_COSIM_NO_SER \
+		-DZ_USBH_COSIM_NO_ECM -I../sw/apps/usb $(USBH_COSIM_SRCS)
+	cd output && iverilog-vpi --name=usbd_cosim -DZU_COSIM -DUSBD_COSIM -DUSBD_NO_MAIN \
+		-I../sw/common ../rtl/tb/cosim/usbd_vpi.c ../sw/apps/usbd/usbd.c ../sw/apps/net/usbd_eth.c
+	cd output && iverilog-vpi --name=usbd_cosim_msc -DZU_COSIM -DUSBD_COSIM -DUSBD_NO_MAIN -DUSBD_MSC \
+		-I../sw/common ../rtl/tb/cosim/usbd_vpi.c ../sw/apps/usbd/usbd.c ../sw/apps/net/usbd_eth.c
+	iverilog -g2005 -o output/tb_usbd_cosim $(USBD_TB_RTL)
+	iverilog -g2005 -DCOSIM_ECM -o output/tb_usbd_cosim_ecm $(USBD_TB_RTL)
+	iverilog -g2005 -DCOSIM_ECM -DDEV_RX_SLOTS=1 -o output/tb_usbd_cosim_ecm1 $(USBD_TB_RTL)
+	iverilog -g2005 -DCOSIM_MSC -o output/tb_usbd_cosim_msc $(USBD_TB_RTL)
+	@cd output && vvp -M. -musbh_cosim -musbd_cosim tb_usbd_cosim | tee tb_usbd_cosim.log | grep -v "^usbh\|^\[" ; grep -q "^PASS" tb_usbd_cosim.log
+	@cd output && vvp -M. -musbh_cosim_noser -musbd_cosim tb_usbd_cosim_ecm | tee tb_usbd_cosim_ecm.log | grep -v "^usbh\|^\[" ; grep -q "^PASS" tb_usbd_cosim_ecm.log
+	@echo "== again, with one receive slot (USB_DEV_RX_SLOTS 1) =="
+	@cd output && vvp -M. -musbh_cosim_noser -musbd_cosim tb_usbd_cosim_ecm1 | tee tb_usbd_cosim_ecm1.log | grep -v "^usbh\|^\[" ; grep -q "^PASS" tb_usbd_cosim_ecm1.log
+	@echo "== share's device: the card reader =="
+	@cd output && vvp -M. -musbh_cosim_msc -musbd_cosim_msc tb_usbd_cosim_msc | tee tb_usbd_cosim_msc.log | grep -v "^usbh\|^\[" ; grep -q "^PASS" tb_usbd_cosim_msc.log
+
+# The card reader's commands one by one (usbd.c built with -DUSBD_MSC,
+# as `share` builds it), on the build machine against a model of the
+# device's endpoint registers: many sectors a command, a read past the
+# end, a failing card, a reset mid-command, the eject.
+# sw/apps/usbd/tests/msc_test.c.
+#
+#   make test_usbd_msc
+test_usbd_msc:
+	@mkdir -p output
+	$${HOSTCC:-cc} -std=gnu99 -Wall -Wno-int-to-pointer-cast -DZU_COSIM -DUSBD_COSIM -DUSBD_NO_MAIN \
+		-DUSBD_MSC -Isw/common -o output/usbd_msc_test sw/apps/usbd/tests/msc_test.c sw/apps/usbd/usbd.c
+	output/usbd_msc_test
 
 # USB SERIAL co-simulation: the real driver including the USB serial
 # dispatch (usbh_cdc.c) and the CP210x driver (usbh_cp210x.c), the real

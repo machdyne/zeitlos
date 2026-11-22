@@ -55,4 +55,8 @@ void dns_resolve_start(const char *hostname, uint32_t requester_pid, uint32_t ta
 // majority of calls in practice.
 void dns_poll(void);
 
+#ifdef NETX
+uint32_t dns_nameserver(void);
+#endif
+
 #endif

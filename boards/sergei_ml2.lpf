@@ -290,3 +290,16 @@ LOCATE COMP "PROGRAMN" SITE "M8";
 # a reset button pulling it low. (Zeitlos's own driver, a BB with its T
 # input, and a jumploader, which only drives 0, work as before.)
 IOBUF PORT "PROGRAMN" IO_TYPE=LVCMOS33 OPENDRAIN=ON;
+
+# The XA-XD link to the carrier's RP2040 (`XLINK, rtl/xlink.v,
+# docs/xlink.md): SPI with the RP2040 the master. The ML2 module's pad
+# nets (machboot docs/xlink.md): XA N1, XB P1, XC R1, XD R2. Pulled up
+# where the RP2040 lets go (XA, XB, XD); XC driven only while XD is low.
+LOCATE COMP "XLINK_XA" SITE "N1";
+IOBUF PORT "XLINK_XA" IO_TYPE=LVCMOS33 PULLMODE=UP;
+LOCATE COMP "XLINK_XB" SITE "P1";
+IOBUF PORT "XLINK_XB" IO_TYPE=LVCMOS33 PULLMODE=UP;
+LOCATE COMP "XLINK_XC" SITE "R1";
+IOBUF PORT "XLINK_XC" IO_TYPE=LVCMOS33;
+LOCATE COMP "XLINK_XD" SITE "R2";
+IOBUF PORT "XLINK_XD" IO_TYPE=LVCMOS33 PULLMODE=UP;

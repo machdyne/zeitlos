@@ -38,6 +38,8 @@ APPS = casino poker roulette blackjack slots craps \
 	web \
 	irc \
 	net \
+	netx \
+	netsettings \
 	net/netserve \
 	bbs \
 	fed \
@@ -56,6 +58,8 @@ APPS = casino poker roulette blackjack slots craps \
 	ipcbench \
 	fs \
 	usb \
+	usbd \
+	share \
 	console \
 	cron \
 	serial \

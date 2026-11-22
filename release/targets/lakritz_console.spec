@@ -68,6 +68,11 @@ defines =
 	GPU_T2
 	VRAM_SDRAM
 	-USB_CDC
+	# Nor the USB device (docs/usb_dev.md): this profile has no network,
+	# its console is the PMOD UART, and the build is at about 95% of
+	# the 25F -- `USB_DEV would add about 850 LUT4 and take the UART
+	# console's place.
+	-USB_DEV
 	NO_RTC
 	NO_MPU
 	-GPU_RASTER

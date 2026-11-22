@@ -191,6 +191,8 @@
  * flash; its data is on the card like any other app's. */
 #define Z_DIR_NET_DATA            "/data/net"
 #define Z_PATH_NET_CONFIG         "/data/net/net.cfg"
+/* netx's firewall rules (docs/netx.md) */
+#define Z_PATH_NET_FIREWALL       "/data/net/firewall.cfg"
 #define Z_PATH_NET_IP             "/data/net/net.ip"
 
 /* netserve (docs/netserve.md). The HTTP root is the default of the

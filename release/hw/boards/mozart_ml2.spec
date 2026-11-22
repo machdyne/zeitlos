@@ -65,3 +65,4 @@ defines =
     AUDIO_MIXER
     ZLINK_FAST_PINS
     ZLINK_FAST_TX_DS2=0
+    XLINK

@@ -599,13 +599,18 @@ void k_uart_rx_put(uint8_t c, bool injected) {
 z_obj_t *k_console_input(z_obj_t *args) {
 	z_klog_args_t *a = (z_klog_args_t *)args;
 	if (!a || !a->buf) return &z_fail;
+	// A driver may say the bytes come from a physical console:
+	// sw/apps/usbd's, which is the USB-C socket as the serial port --
+	// the same cable `USB_CDC is (zconsole.h, Z_CONSOLE_PHYSICAL).
+	bool inj = !(a->pos == Z_CONSOLE_PHYSICAL &&
+		(z_procs[z_pid].flags & Z_PROC_FLAG_DRIVER));
 	uint32_t old_mask = maskirq(0xFFFFFFFF);
 	uint32_t n = 0;
 	while (n < a->len) {
 		uint16_t next = (rx_head + 1) % UART_FIFO_SIZE;
 		if (next == rx_tail) break;		// full: take what fits
 		uart_rx_fifo[rx_head] = a->buf[n++];
-		rx_mark(rx_head, true);
+		rx_mark(rx_head, inj);
 		rx_head = next;
 	}
 	if (n && uart_rx_wait_pid != ~0u) {

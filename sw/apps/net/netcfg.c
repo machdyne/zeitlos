@@ -72,10 +72,200 @@ static int ascii_printable(const char *s)
 	return 1;
 }
 
+#ifdef NETX
+/* "a.b.c.d/len" or "a.b.c.d": the address, and the mask when a length
+ * is given (else *mask untouched) */
+static int parse_cidr(char *v, uint32_t *ip, uint32_t *mask)
+{
+	char *sl = strchr(v, '/');
+	if (sl) {
+		int n = atoi(sl + 1);
+		*sl = 0;
+		if (n < 0 || n > 32) return -1;
+		*mask = n ? (0xFFFFFFFFu << (32 - n)) : 0;
+	}
+	return netcfg_parse_ipv4(v, ip);
+}
+
+static netcfg_if_t *if_named(netcfg_t *out, const char *name)
+{
+	int i;
+	for (i = 0; i < out->n_if; i++)
+		if (!strcmp(out->ifs[i].name, name))
+			return &out->ifs[i];
+	if (out->n_if >= NETCFG_IF_MAX)
+		return 0;
+	netcfg_if_t *f = &out->ifs[out->n_if++];
+	memset(f, 0, sizeof(*f));
+	strcpy(f->name, name);
+	f->phy = -1;
+	f->dhcp = -1;
+	return f;
+}
+
+/* netx's keys (docs/netx.md): forward, route, and <role>.<key> for the
+ * roles wan, lan and lan2. 1 taken, 0 not ours, -1 an error. */
+static int netx_key(netcfg_t *out, char *key, char *val)
+{
+	if (!strcmp(key, "forward")) {
+		out->forward = (val[0] != '0');
+		return 1;
+	}
+	if (!strcmp(key, "nat_size")) {
+		out->nat_size = atoi(val);
+		if (out->nat_size < 16 || out->nat_size > 8192) {
+			printf("netcfg: nat_size is 16 to 8192\n");
+			return -1;
+		}
+		return 1;
+	}
+	if (!strcmp(key, "dnsfwd")) {
+		out->dnsfwd = (val[0] != '0');
+		return 1;
+	}
+	if (!strcmp(key, "portfwd")) {
+		/* portfwd = tcp|udp PORT a.b.c.d:PORT */
+		char *sp = strchr(val, ' '), *colon;
+		int wp, lp;
+		uint32_t ip;
+		if (out->n_portfwd >= NETCFG_PORTFWD_MAX || !sp) {
+			printf("netcfg: portfwd = tcp|udp port address:port (at most %d)\n",
+				NETCFG_PORTFWD_MAX);
+			return -1;
+		}
+		*sp = 0;
+		char *rest = ltrim(sp + 1);
+		char *sp2 = strchr(rest, ' ');
+		if (!sp2 || (strcmp(val, "tcp") && strcmp(val, "udp"))) {
+			printf("netcfg: portfwd = tcp|udp port address:port\n");
+			return -1;
+		}
+		*sp2 = 0;
+		wp = atoi(rest);
+		rest = ltrim(sp2 + 1);
+		colon = strchr(rest, ':');
+		if (!colon) {
+			printf("netcfg: portfwd: address:port\n");
+			return -1;
+		}
+		*colon = 0;
+		lp = atoi(colon + 1);
+		if (wp <= 0 || wp > 65535 || lp <= 0 || lp > 65535 || netcfg_parse_ipv4(rest, &ip)) {
+			printf("netcfg: bad portfwd\n");
+			return -1;
+		}
+		out->portfwd[out->n_portfwd].proto = !strcmp(val, "tcp") ? 6 : 17;
+		out->portfwd[out->n_portfwd].wan_port = (uint16_t)wp;
+		out->portfwd[out->n_portfwd].lan_port = (uint16_t)lp;
+		out->portfwd[out->n_portfwd].lan_ip = ip;
+		out->n_portfwd++;
+		return 1;
+	}
+	if (!strcmp(key, "route")) {
+		/* route = net/len via gw */
+		char *via = strstr(val, " via ");
+		uint32_t net = 0, mask = 0xFFFFFFFFu, gw = 0;
+		if (!via || out->n_routes >= NETCFG_ROUTES_MAX) {
+			printf("netcfg: route = net/len via gateway (at most %d)\n",
+				NETCFG_ROUTES_MAX);
+			return -1;
+		}
+		*via = 0;
+		rtrim(val);
+		if (parse_cidr(val, &net, &mask) || netcfg_parse_ipv4(ltrim(via + 5), &gw)) {
+			printf("netcfg: bad route\n");
+			return -1;
+		}
+		out->routes[out->n_routes].net = net & mask;
+		out->routes[out->n_routes].mask = mask;
+		out->routes[out->n_routes].via = gw;
+		out->n_routes++;
+		return 1;
+	}
+	char *dot = strchr(key, '.');
+	if (!dot)
+		return 0;
+	*dot = 0;
+	const char *k = dot + 1;
+	if (strcmp(key, "wan") && strcmp(key, "lan") && strcmp(key, "lan2")) {
+		printf("netcfg: '%s.' -- the interfaces are wan., lan. and lan2.\n", key);
+		return -1;
+	}
+	netcfg_if_t *f = if_named(out, key);
+	if (!f)
+		return -1;
+	if (!strcmp(k, "phy")) {
+		if (!strcmp(val, "builtin")) f->phy = 2;
+		else if (!strcmp(val, "usb")) f->phy = 1;
+		else if (!strcmp(val, "usbdev")) f->phy = 3;
+		else if (!strcmp(val, "builtin2")) f->phy = 4;
+		else if (!strcmp(val, "xlink")) f->phy = 5;
+		else {
+			printf("netcfg: %s.phy must be builtin, builtin2, usb, usbdev or xlink\n", key);
+			return -1;
+		}
+	} else if (!strcmp(k, "dhcp")) {
+		f->dhcp = (val[0] != '0');
+	} else if (!strcmp(k, "ip")) {
+		if (parse_cidr(val, &f->ip, &f->mask)) {
+			printf("netcfg: bad %s.ip\n", key);
+			return -1;
+		}
+	} else if (!strcmp(k, "mask") || !strcmp(k, "netmask")) {
+		if (netcfg_parse_ipv4(val, &f->mask)) {
+			printf("netcfg: bad %s.mask\n", key);
+			return -1;
+		}
+	} else if (!strcmp(k, "gw") || !strcmp(k, "gateway")) {
+		if (netcfg_parse_ipv4(val, &f->gw)) {
+			printf("netcfg: bad %s.gw\n", key);
+			return -1;
+		}
+	} else if (!strcmp(k, "allow")) {
+		if (strlen(val) >= sizeof(f->allow)) {
+			printf("netcfg: %s.allow too long\n", key);
+			return -1;
+		}
+		strcpy(f->allow, val);
+	} else if (!strcmp(k, "nat")) {
+		f->nat = (val[0] != '0');
+	} else if (!strcmp(k, "dhcpd")) {
+		f->dhcpd = (val[0] != '0');
+	} else if (!strcmp(k, "lease")) {
+		f->lease = (uint32_t)atoi(val);
+		if (f->lease < 60) {
+			printf("netcfg: %s.lease is at least 60 (seconds)\n", key);
+			return -1;
+		}
+	} else if (!strcmp(k, "pool")) {
+		/* a.b.c.d-a.b.c.e */
+		char *dash = strchr(val, '-');
+		if (!dash) {
+			printf("netcfg: %s.pool = first-last\n", key);
+			return -1;
+		}
+		*dash = 0;
+		rtrim(val);
+		if (netcfg_parse_ipv4(val, &f->pool_lo) ||
+				netcfg_parse_ipv4(ltrim(dash + 1), &f->pool_hi) ||
+				f->pool_hi < f->pool_lo) {
+			printf("netcfg: bad %s.pool\n", key);
+			return -1;
+		}
+	}
+	/* other keys of an interface: for later phases, ignored */
+	return 1;
+}
+#endif
+
 int netcfg_load(netcfg_t *out)
 {
 	memset(out, 0, sizeof(*out));
 	out->dhcp = -1;
+	out->full = 1;
+#ifdef NETX
+	out->dnsfwd = -1;
+#endif
 
 	char *buf = fs_mallocfile(Z_PATH_NET_CONFIG);
 	if (!buf)
@@ -156,9 +346,10 @@ int netcfg_load(netcfg_t *out)
 				if (!strcmp(val, "usb")) out->phy = 1;
 				else if (!strcmp(val, "builtin")) out->phy = 2;
 				else if (!strcmp(val, "auto")) out->phy = 0;
+				else if (!strcmp(val, "usbdev")) out->phy = 3;
 				else {
-					printf("netcfg: phy must be auto, usb "
-						"or builtin\n");
+					printf("netcfg: phy must be auto, usb, "
+						"usbdev or builtin\n");
 					free(buf);
 					return -1;
 				}
@@ -171,6 +362,8 @@ int netcfg_load(netcfg_t *out)
 				strcpy(out->nfs, val);
 			} else if (!strcmp(p, "dhcp")) {
 				out->dhcp = (val[0] != '0');
+			} else if (!strcmp(p, "full")) {
+				out->full = (val[0] != '0');
 			} else if (!strcmp(p, "ip")) {
 				if (netcfg_parse_ipv4(val, &out->ip) != 0) {
 					printf("netcfg: bad ip\n");
@@ -196,6 +389,12 @@ int netcfg_load(netcfg_t *out)
 					return -1;
 				}
 			}
+#ifdef NETX
+			else if (netx_key(out, p, val) < 0) {
+				free(buf);
+				return -1;
+			}
+#endif
 			/* unknown keys ignored */
 		}
 		line = nl ? (nl + 1) : 0;

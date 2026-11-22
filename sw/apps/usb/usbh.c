@@ -1379,8 +1379,16 @@ static void dev_step(int i, uint32_t ps)
             // E_SER_SETUP, then bind. Before ECM: a CP210x and an ECM
             // adapter cannot both match, and CDC-ACM is tried first
             // exactly as it was when this was CDC-only.
+            // Z_USBH_COSIM_NO_SER: simulation only. tb_usbd_cosim.v's
+            // device is a composite of CDC-ACM and CDC-ECM, and this
+            // host binds one function per device, serial first; this
+            // makes the same device's ECM function the one it takes.
+#if defined(Z_USBH_COSIM) && defined(Z_USBH_COSIM_NO_SER)
+            if (0) {
+#else
             if (z_usbh_ser_probe(DV_VID(dv), DV_PID(dv), dv->cfg_raw,
                                  dv->cfg_rawn, &dv->ser)) {
+#endif
                 dv->iface = (int8_t)dv->ser.iface;
                 dv->ser_step = 0;
                 if (ser_begin(i, d)) dv->state = E_SER_SETUP;
@@ -1389,7 +1397,13 @@ static void dev_step(int i, uint32_t ps)
             }
             // CDC-ECM: the MAC string, the data interface's bulk
             // alternate setting, the packet filter; then bind.
+            // Z_USBH_COSIM_NO_ECM: simulation only, as NO_SER: the
+            // composite's card reader (share's, tb_usbd_cosim.v).
+#if defined(Z_USBH_COSIM) && defined(Z_USBH_COSIM_NO_ECM)
+            a = -1;
+#else
             a = z_usbh_ecm_probe(i, dv->cfg_raw, dv->cfg_rawn);
+#endif
             if (a >= 0) {
                 uint8_t imac, di, alt;
                 z_usbh_ecm_ids(&imac, &di, &alt);

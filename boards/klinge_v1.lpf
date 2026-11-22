@@ -17,9 +17,9 @@ SYSCONFIG CONFIG_IOVOLTAGE=3.3 COMPRESS_CONFIG=ON MCCLK_FREQ=2.4 MASTER_SPI_PORT
 # verbatim from boards/mozart_ml2.lpf. The part is the ML2's 4Gb one,
 # so rtl/boards.vh's DDR3 settings are Mozart ML2's too.
 #
-# ONLY THE FIRST OF EACH PAIR IS USED for now: Ethernet A and microSD A.
-# Ethernet B and microSD B are listed at the bottom, commented, with
-# their balls, for the day a second MAC and a second SPI slot exist.
+# Both Ethernet ports are used (`ETH_RMII_B, the second MAC, for netx:
+# docs/netx.md). Only microSD A is: microSD B is listed at the bottom,
+# commented, with its balls, for the day a second SPI slot exists.
 #
 # The RMII reference clock is driven BY THE FPGA (`ETH_RMII_DRIVE_REFCLK):
 # pll0's 50 MHz output leaves on T4 (ETH_CLK50) and feeds both PHYs'
@@ -212,11 +212,24 @@ IOBUF PORT "ddr3_clk_p" IO_TYPE=SSTL135D_I SLEWRATE=FAST;
 LOCATE COMP "PROGRAMN" SITE "M8";
 IOBUF PORT "PROGRAMN" IO_TYPE=LVCMOS33 OPENDRAIN=ON;
 
+# Ethernet B: LAN8720A (`ETH_RMII_B), RMII, sharing ETH_CLK50 (T4) with A.
+# Its balls are the schematic's, as noted here before this MAC existed.
+LOCATE COMP "ETH_B_RXD[0]" SITE "T3";
+IOBUF PORT "ETH_B_RXD[0]" IO_TYPE=LVCMOS33 PULLMODE=UP;
+LOCATE COMP "ETH_B_RXD[1]" SITE "R3";
+IOBUF PORT "ETH_B_RXD[1]" IO_TYPE=LVCMOS33 PULLMODE=UP;
+LOCATE COMP "ETH_B_TXD[0]" SITE "R1";
+IOBUF PORT "ETH_B_TXD[0]" IO_TYPE=LVCMOS33;
+LOCATE COMP "ETH_B_TXD[1]" SITE "R2";
+IOBUF PORT "ETH_B_TXD[1]" IO_TYPE=LVCMOS33;
+LOCATE COMP "ETH_B_TX_EN" SITE "P1";
+IOBUF PORT "ETH_B_TX_EN" IO_TYPE=LVCMOS33;
+LOCATE COMP "ETH_B_CRS_DV" SITE "T2";
+IOBUF PORT "ETH_B_CRS_DV" IO_TYPE=LVCMOS33 PULLMODE=UP;
+LOCATE COMP "ETH_B_RST_N" SITE "N1";
+IOBUF PORT "ETH_B_RST_N" IO_TYPE=LVCMOS33;
+
 # -- Not used yet --------------------------------------------------------
-#
-# Ethernet B: LAN8720A, sharing ETH_CLK50 (T4) with A.
-#   TXD[0] R1   TXD[1] R2   TX_EN P1   CRS_DV T2
-#   RXD[0] T3   RXD[1] R3   RST_N N1
 #
 # microSD B, SPI mode:
 #   SS D10   SCK B10   MOSI C10   MISO B11   (D1 A11, D2 E10, CD B12)

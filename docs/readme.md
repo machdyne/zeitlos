@@ -72,8 +72,12 @@ with [welcome](welcome.md); to program it, [kernel](kernel.md) and
 | [uart](uart.md) | UART0 |
 | [uart1](uart1.md) | Second UART and the `serial` service |
 | [usb\_cdc](usb_cdc.md) | USB CDC-ACM console |
+| [usb\_dev](usb_dev.md) | The USB-C socket as a USB device: console, network, and the SD card on the PC (`share`) |
 | [usb\_host](usb_host.md) | USB host controller |
 | [usb\_ethernet](usb_ethernet.md) | USB CDC-ECM ethernet |
+| [netx](netx.md) | The full net, on the card: every interface at once, routing, a gateway, a firewall |
+| [netsettings](netsettings.md) | Network settings: netx's ports, gateway and firewall |
+| [xlink](xlink.md) | The network and the card on the carrier's USB (Sergei, Mozart) |
 | [gamepad](gamepad.md) | Gamepads |
 | [gpio](gpio.md) | GPIO on PMOD ports, stream engines (zlink, SPI, UART, raw on any pin), and the optional I2C slave |
 | [zlink](zlink.md) | Linking two machines over a couple of wires: tiers, wiring, speeds, and experimental fast zlink over Mozart's DS port |

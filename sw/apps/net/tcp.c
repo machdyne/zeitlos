@@ -23,6 +23,9 @@
 #include <string.h>
 
 #include "tcp.h"
+#ifdef NETX
+#include "netif.h"
+#endif
 #include "ip.h"
 #include "../../common/zeitlos.h"
 #include "../../common/zrng.h"
@@ -514,7 +517,12 @@ static bool send_raw(uint32_t rip, uint16_t lport, uint16_t rport, uint32_t seq,
 	if (len) memmove(pkt + TCP_HDR_LEN + opt_len, data, len);
 
 	uint16_t seg_len = (uint16_t)(TCP_HDR_LEN + opt_len + len);
+#ifdef NETX
+	// the address of the interface this leaves by (netif.h)
+	uint16_t csum = tcp_checksum(netif_src_for(rip), rip, pkt, seg_len);
+#else
 	uint16_t csum = tcp_checksum(our_ip, rip, pkt, seg_len);
+#endif
 	pkt[16] = (uint8_t)(csum >> 8);
 	pkt[17] = (uint8_t)csum;
 

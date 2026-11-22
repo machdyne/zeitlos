@@ -16,13 +16,27 @@
 #include "udp.h"
 #include "tcp.h"
 #include "../../common/zeitlos.h"
+#include "../../common/zsoc.h"
 
 #define IP_HDR_LEN     20
 #define IP_MAX_PAYLOAD 1480	// leaves room for the 20-byte header within ETH_MTU
 
+#ifdef NETX
+// netx: the current interface's (netif.h)
+#include "netif.h"
+#include "nat.h"
+#include "fw.h"
+#define our_ip       (netif_cur->ip)
+#define our_netmask  (netif_cur->mask)
+#define our_gateway  (netif_cur->gw)
+static int pending_if;
+static uint32_t ip_src_next;	// the next packet's source, once (0: the interface's)
+static uint32_t ip_rx_dst;	// the packet being handled was sent to this
+#else
 static uint32_t our_ip;
 static uint32_t our_netmask;
 static uint32_t our_gateway;
+#endif
 static uint16_t next_ip_id = 1;
 
 // -- one-slot pending-packet queue, for when ip_send() (below) can't
@@ -70,6 +84,9 @@ static uint16_t pending_len;
 void ip_poll(void) {
 
 	if (!pending_valid) return;
+#ifdef NETX
+	netif_set(pending_if);
+#endif
 
 	uint8_t dst_mac[6];
 	if (!arp_lookup(pending_next_hop, dst_mac)) return;	// still waiting
@@ -94,6 +111,9 @@ uint32_t ip_our_addr(void) {
 	return our_ip;
 }
 
+#ifdef NETX
+__attribute__((unused))
+#endif
 static bool ip_is_local(uint32_t ip) {
 	return (ip & our_netmask) == (our_ip & our_netmask);
 }
@@ -137,6 +157,16 @@ bool ip_send_built(uint32_t dst_ip, uint8_t protocol, uint16_t len) {
 
 	uint8_t *pkt = eth_tx_payload();
 	if (len > IP_MAX_PAYLOAD) return false;
+#ifdef NETX
+	// unicast leaves by its route, from that interface's address;
+	// broadcast and multicast by the current interface (netif.h)
+	uint32_t route_hop = 0;
+	if (dst_ip != 0xFFFFFFFFu && (dst_ip >> 28) != 0xE) {
+		int o = netif_route(dst_ip, &route_hop);
+		if (o < 0) return false;
+		netif_set(o);
+	}
+#endif
 
 	uint16_t total_len = IP_HDR_LEN + len;
 
@@ -151,10 +181,17 @@ bool ip_send_built(uint32_t dst_ip, uint8_t protocol, uint16_t len) {
 	pkt[8] = 64;					// TTL
 	pkt[9] = protocol;
 	pkt[10] = 0; pkt[11] = 0;		// checksum, filled in below
-	pkt[12] = (our_ip >> 24) & 0xFF;
-	pkt[13] = (our_ip >> 16) & 0xFF;
-	pkt[14] = (our_ip >> 8) & 0xFF;
-	pkt[15] = our_ip & 0xFF;
+#ifdef NETX
+	// an echo reply comes from the address that was pinged (icmp_handle)
+	uint32_t src = ip_src_next ? ip_src_next : our_ip;
+	ip_src_next = 0;
+#else
+	uint32_t src = our_ip;
+#endif
+	pkt[12] = (src >> 24) & 0xFF;
+	pkt[13] = (src >> 16) & 0xFF;
+	pkt[14] = (src >> 8) & 0xFF;
+	pkt[15] = src & 0xFF;
 	pkt[16] = (dst_ip >> 24) & 0xFF;
 	pkt[17] = (dst_ip >> 16) & 0xFF;
 	pkt[18] = (dst_ip >> 8) & 0xFF;
@@ -163,6 +200,9 @@ bool ip_send_built(uint32_t dst_ip, uint8_t protocol, uint16_t len) {
 	uint16_t csum = ip_checksum(pkt, IP_HDR_LEN);
 	pkt[10] = (csum >> 8) & 0xFF;
 	pkt[11] = csum & 0xFF;
+#ifdef NETX
+	fw_note(pkt);		// UDP the board sends: its answers may come in (fw.h)
+#endif
 
 	// limited broadcast (255.255.255.255) never goes through ARP --
 	// it's not a real host to resolve, and there may not even BE an
@@ -192,7 +232,11 @@ bool ip_send_built(uint32_t dst_ip, uint8_t protocol, uint16_t len) {
 		return eth_send_built(mc, ETHERTYPE_IPV4, total_len);
 	}
 
+#ifdef NETX
+	uint32_t next_hop = route_hop;
+#else
 	uint32_t next_hop = ip_is_local(dst_ip) ? dst_ip : our_gateway;
+#endif
 
 	uint8_t dst_mac[6];
 	if (!arp_lookup(next_hop, dst_mac)) {
@@ -206,6 +250,9 @@ bool ip_send_built(uint32_t dst_ip, uint8_t protocol, uint16_t len) {
 		memcpy(pending_pkt, pkt, total_len);
 		pending_len = total_len;
 		pending_valid = true;
+#ifdef NETX
+		pending_if = netif_index(netif_cur);
+#endif
 		arp_request(next_hop);
 		return false;
 	}
@@ -239,9 +286,167 @@ static void icmp_handle(uint32_t src_ip, const uint8_t *p, uint16_t len) {
 	reply[2] = (csum >> 8) & 0xFF;
 	reply[3] = csum & 0xFF;
 
+#ifdef NETX
+	ip_src_next = ip_rx_dst;	// from the address that was pinged
+#endif
 	ip_send_built(src_ip, 1, len);	// protocol 1 = ICMP
 
 }
+
+#ifdef NETX
+// -- forwarding (netx only; netif.h) --
+
+// ICMP errors, at most ICMP_ERR_PER_SEC a second (RFC 1812 4.3.2.8)
+#define ICMP_ERR_PER_SEC 10
+static uint32_t icmp_err_tick, icmp_err_n;
+uint32_t ip_icmp_errors_sent;
+
+static bool icmp_err_ok(void) {
+	uint32_t now = z_uptime_ticks();
+	if (now - icmp_err_tick >= Z_TICK_HZ) {
+		icmp_err_tick = now;
+		icmp_err_n = 0;
+	}
+	return icmp_err_n++ < ICMP_ERR_PER_SEC;
+}
+
+// An ICMP error about the packet at p (its header and the 8 bytes
+// after, RFC 792), to its sender. Never about an ICMP error, a
+// broadcast or multicast, a fragment after the first, or a packet from
+// no one (RFC 1812 4.3.2.7).
+void ip_icmp_error(uint8_t type, uint8_t code, const uint8_t *p, uint16_t len,
+		uint32_t src_ip, uint32_t dst_ip) {
+	uint8_t ihl = (p[0] & 0x0F) * 4;
+	if (src_ip == 0 || src_ip == 0xFFFFFFFFu || (src_ip >> 28) >= 0xE) return;
+	if ((dst_ip >> 28) >= 0xE || dst_ip == 0xFFFFFFFFu) return;
+	if (p[9] == 1 && len > ihl && p[ihl] != 0 && p[ihl] != 8) return;
+	if (((p[6] & 0x1F) | p[7]) != 0) return;
+	if (!icmp_err_ok()) return;
+	uint16_t n = ihl + 8;
+	if (n > len) n = len;
+	uint8_t *m = ip_tx_payload();
+	m[0] = type; m[1] = code; m[2] = 0; m[3] = 0;
+	m[4] = 0; m[5] = 0; m[6] = 0; m[7] = 0;
+	if (type == 3 && code == 4) {			// the next hop's MTU (RFC 1191)
+		m[6] = (IP_HDR_LEN + IP_MAX_PAYLOAD) >> 8;
+		m[7] = (IP_HDR_LEN + IP_MAX_PAYLOAD) & 0xFF;
+	}
+	memmove(m + 8, p, n);
+	uint16_t csum = ip_checksum(m, 8 + n);
+	m[2] = (csum >> 8) & 0xFF;
+	m[3] = csum & 0xFF;
+	ip_icmp_errors_sent++;
+	ip_send_built(src_ip, 1, 8 + n);
+}
+
+// The checksum after one 16-bit word it covers changed from `old` to
+// `new_`: RFC 1624, eqn. 3.
+uint16_t ip_csum_adjust(uint16_t csum, uint16_t old, uint16_t new_) {
+	uint32_t s = (uint16_t)~csum + (uint32_t)(uint16_t)~old + new_;
+	s = (s & 0xFFFF) + (s >> 16);
+	s = (s & 0xFFFF) + (s >> 16);
+	return (uint16_t)~s;
+}
+
+uint32_t ip_forwarded, ip_fwd_dropped;
+static void fwd_send(uint8_t *q, uint16_t len, int in, int o, uint32_t hop);
+
+// A packet for someone else, arrived on the current interface: out by
+// its route with the TTL one less, or an ICMP error back. One copy,
+// into the transmit frame. A next hop not yet in the ARP cache is asked
+// for and this packet dropped; its sender sends again.
+void ip_forward(const uint8_t *p, uint16_t len, uint8_t ihl,
+		uint32_t src_ip, uint32_t dst_ip) {
+	int in = netif_index(netif_cur);
+	uint32_t hop;
+	(void)ihl;
+	if ((dst_ip >> 28) >= 0xE || src_ip == 0 || (src_ip >> 28) >= 0xE) {
+		ip_fwd_dropped++;		// multicast, class E, or from nowhere
+		return;
+	}
+	netif_cur->fwd_in++;
+	if (p[8] <= 1) {
+		ip_icmp_error(11, 0, p, len, src_ip, dst_ip);	// time exceeded in transit
+		ip_fwd_dropped++;
+		return;
+	}
+	int o = netif_route(dst_ip, &hop);
+	if (o < 0) {
+		ip_icmp_error(3, 0, p, len, src_ip, dst_ip);	// network unreachable
+		ip_fwd_dropped++;
+		return;
+	}
+	// a directed broadcast to the out interface's subnet is not forwarded
+	if (netif[o].mask && (dst_ip | netif[o].mask) == 0xFFFFFFFFu) {
+		ip_fwd_dropped++;
+		return;
+	}
+	if (len > IP_HDR_LEN + IP_MAX_PAYLOAD) {
+		if (p[6] & 0x40)
+			ip_icmp_error(3, 4, p, len, src_ip, dst_ip);	// fragmentation needed
+		ip_fwd_dropped++;
+		return;
+	}
+	if (!fw_forward(p, len, in, o)) {
+		ip_fwd_dropped++;
+		return;
+	}
+	uint8_t *q = eth_tx_payload();
+	memcpy(q, p, len);
+	// out by a NAT interface from one that is not: from its address
+	if (netif[o].nat && !netif[in].nat && !nat_out(q, len, netif[o].ip)) {
+		ip_fwd_dropped++;
+		return;
+	}
+	fwd_send(q, len, in, o, hop);
+}
+
+// The packet in the transmit frame (q, len), checked: TTL one less, out
+// by interface o to hop, and interface `in` current again after.
+static void fwd_send(uint8_t *q, uint16_t len, int in, int o, uint32_t hop) {
+	netif_set(o);
+	uint8_t dst_mac[6];
+	if (!arp_lookup(hop, dst_mac)) {
+		arp_request(hop);
+		netif[in].drop++;
+		ip_fwd_dropped++;
+		netif_set(in);
+		return;
+	}
+	uint16_t old = (uint16_t)(q[8] << 8 | q[9]);
+	q[8]--;
+	uint16_t csum = ip_csum_adjust((uint16_t)(q[10] << 8 | q[11]), old,
+		(uint16_t)(q[8] << 8 | q[9]));
+	q[10] = (csum >> 8) & 0xFF;
+	q[11] = csum & 0xFF;
+	netif[o].fwd_out++;
+	ip_forwarded++;
+	eth_send_built(dst_mac, ETHERTYPE_IPV4, len);
+	netif_set(in);
+}
+
+// In by a NAT interface, to its own address: a connection's packet goes
+// on to the host behind (nat.h); true when it did.
+static bool nat_deliver(const uint8_t *p, uint16_t len, uint32_t src_ip) {
+	uint32_t lan, hop;
+	int in = netif_index(netif_cur);
+	uint8_t *q = eth_tx_payload();
+	if (!nat_in(p, len, q, &lan)) return false;
+	if (p[8] <= 1) {
+		ip_icmp_error(11, 0, p, len, src_ip, lan);
+		ip_fwd_dropped++;
+		return true;
+	}
+	int o = netif_route(lan, &hop);
+	if (o < 0 || o == in) {
+		ip_fwd_dropped++;
+		return true;
+	}
+	netif_cur->fwd_in++;
+	fwd_send(q, len, in, o, hop);
+	return true;
+}
+#endif
 
 void ip_handle(const uint8_t src_mac[6], const uint8_t *p, uint16_t len) {
 
@@ -296,7 +501,26 @@ void ip_handle(const uint8_t src_mac[6], const uint8_t *p, uint16_t len) {
 	// reaches udp_handle()'s dst-port dispatch during the brief
 	// bootstrap window, and dhcp.c's own xid check (dhcp.c) rejects
 	// anything that isn't actually a reply to our own request.
+#ifdef NETX
+	netif_cur->rx++;
+	if (!netif_is_ours(dst_ip) && dst_ip != 0xFFFFFFFFu && our_ip != 0) {
+		if (netif_forward) ip_forward(p, total_len, ihl, src_ip, dst_ip);
+		return;
+	}
+	// a connection through the NAT, coming back
+	if (netif_cur->nat && dst_ip == our_ip && nat_deliver(p, total_len, src_ip))
+		return;
+	// for the board: the firewall's (fw.h)
+	if (!fw_input(p, total_len))
+		return;
+	// TCP and UDP only to this interface's own address (a strong host:
+	// their replies go from it); ICMP echo to any of ours
+	if (dst_ip != our_ip && dst_ip != 0xFFFFFFFFu && our_ip != 0 && protocol != 1)
+		return;
+	ip_rx_dst = dst_ip;
+#else
 	if (dst_ip != our_ip && dst_ip != 0xFFFFFFFFu && our_ip != 0) return;
+#endif
 
 	const uint8_t *payload = p + ihl;
 	uint16_t paylen = total_len - ihl;
@@ -316,3 +540,9 @@ void ip_handle(const uint8_t src_mac[6], const uint8_t *p, uint16_t len) {
 	}
 
 }
+
+#ifdef NETX
+#undef our_ip
+#undef our_netmask
+#undef our_gateway
+#endif

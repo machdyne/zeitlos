@@ -63,6 +63,9 @@ pmods = katze@a
 # speed in less room than picorv32. Only release builds pick it here;
 # `make BOARD=x` still builds picorv32 until rtl/boards.vh changes.
 defines =
+	# one USB ethernet receive slot: this PMOD's gateware leaves the
+	# USB device one DP16KD fewer (docs/usb_dev.md)
+	USB_DEV_RX_SLOTS=1
 	-SPI_ETH
 	ETH_RX_SLOTS=4
 	GPU_CURSOR_LUTRAM

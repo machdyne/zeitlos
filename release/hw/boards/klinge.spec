@@ -50,7 +50,9 @@ defines =
     GPU_BLIT
     UART0
     USB_CDC
+    USB_DEV
     SPI_SDCARD
     ETH_RMII
     ETH_RMII_DRIVE_REFCLK
     ETH_RX_SLOTS=4
+    ETH_RMII_B

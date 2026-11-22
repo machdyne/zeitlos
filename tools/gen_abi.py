@@ -105,6 +105,7 @@ ABI_FILES = [
 	"sw/common/zterm.h",
 	"sw/common/zusbproto.h",
 	"sw/common/zusbcdc.h",
+	"sw/common/zusbd.h",		# usbd (flash) <-> share (card): the handover, the registers
 ]
 
 ID_LEN = 16

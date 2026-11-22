@@ -282,8 +282,11 @@ is what to look at if frames appear to be going missing between them.
 `net.cfg` gains one key:
 
 ```
-phy = auto | usb | builtin
+phy = auto | usb | usbdev | builtin
 ```
+
+(`usbdev` is the other direction: the board's USB-C socket as a USB
+network adapter to a PC, [usb_dev.md](usb_dev.md).)
 
 - **`auto`** (the default): a MAC built into the bitstream if there is
   one, otherwise a USB adapter if this build has the USB host

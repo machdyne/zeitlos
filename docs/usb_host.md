@@ -1711,6 +1711,18 @@ fail its CRC and leaves every packet that does not pass -- which reads
 as an intermittent fault rather than a systematic one. It presented as
 "the 18-byte descriptor works for 16 bytes and then fails".
 
+**No stuff bit before the EOP (November 2026).** After six ones a zero
+is stuffed "even if it is the last bit before the end-of-packet" (USB
+2.0 7.1.9). The transmitter stuffed only while shifting, and the EOP
+state does not shift: a packet whose CRC ended in six ones went out
+without the zero -- one data packet in 64, and every token whose CRC5
+ends so, which is a fixed property of the address and endpoint. The
+device models accept it. A device receiver that checks rejects it, and
+the retry has the same CRC: found by `make test_usbd`, whose far end is
+ulixxe's real receiver ([usb_dev.md](usb_dev.md)), as the second packet
+of a 500-byte frame that never arrived. The first tick of `TB_EOP` now
+sends the stuffed zero when one is due (`tx_stuff_eop`, rtl/usb/usb_sie.v).
+
 **The host transmitted into a driver that was still on.** A transaction
 ends when the SIE samples SE0, about a bit and a half into the other
 end's EOP; the device keeps driving for roughly 2.5 bit times beyond

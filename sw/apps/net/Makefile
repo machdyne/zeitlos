@@ -2,6 +2,18 @@
 
 APP = net
 
+# netx, the full net (docs/netx.md): these sources with -DNETX, built
+# in sw/apps/netx (its Makefile runs this one there with NETX=1).
+# Several interfaces (netif.c, netx.c), forwarding, and larger tables.
+NETX ?= 0
+ifeq ($(NETX),1)
+APP = netx
+NET_SOCK_SLOTS ?= 4
+NETX_OBJ = netif.o netx.o nat.o dhcpd.o dnsfwd.o fw.o rmii_eth_b.o xlink_eth.o
+else
+NETX_OBJ =
+endif
+
 # A core app in the flash archive: integer-only printf, about 50KB
 # smaller. It prints no floating point. docs/build.md, "Integer-only
 # printf (ZFMT)".
@@ -33,7 +45,7 @@ APP_MAIN_RULE = 0
 # once instead of per target, and net can ship on the sdcard image
 # again (a card copy shadows the flash copy, so a single card image
 # used to be unable to carry it).
-PHY_OBJ = enc28j60.o rmii_eth.o esp32link.o usb_ecm.o net_phy.o
+PHY_OBJ = enc28j60.o rmii_eth.o esp32link.o usb_ecm.o usbd_eth.o net_phy.o
 
 # DHCP (dhcp.c) on by default; set NET_DHCP=0 to disable it entirely
 # and always use the static NET_STATIC_* config below -- e.g. for a
@@ -45,6 +57,9 @@ PHY_OBJ = enc28j60.o rmii_eth.o esp32link.o usb_ecm.o net_phy.o
 # same three values, two different roles depending on NET_DHCP.
 NET_DHCP ?= 1
 override CFLAGS += -DNET_DHCP=$(NET_DHCP)
+ifeq ($(NETX),1)
+override CFLAGS += -DNETX
+endif
 
 # accepted either as a dotted quad ("192.168.1.50") or already as a
 # 0x-prefixed hex literal ("0xC0A80132") -- either way, converted here
@@ -289,7 +304,7 @@ endif
 # zrtc.o rides with ntp.o rather than being listed separately: it is
 # the calendar arithmetic ntp.c uses to print the time it just set, and
 # nothing else in this app has any use for a date.
-OBJS = zeitlos.o zobj.o zstream.o zport.o zrng.o zfsapp.o zusbc.o netcfg.o screen.o zscreen.o zinput.o $(PHY_OBJ) eth.o arp.o ip.o udp.o $(DHCP_OBJ) dns.o mdns.o $(NTP_OBJ) tcp.o relay.o telnet.o $(SOCK_OBJ) $(NFS_OBJ) $(SSH_OBJ) tftp.o $(PROF_OBJ) net.o
+OBJS = $(NETX_OBJ) zeitlos.o zobj.o zstream.o zport.o zrng.o zfsapp.o zusbc.o netcfg.o screen.o zscreen.o zinput.o $(PHY_OBJ) eth.o arp.o ip.o udp.o $(DHCP_OBJ) dns.o mdns.o $(NTP_OBJ) tcp.o relay.o telnet.o $(SOCK_OBJ) $(NFS_OBJ) $(SSH_OBJ) tftp.o $(PROF_OBJ) net.o
 
 # each rule below lists its own .c file as a prerequisite -- without
 # this, `make` has no way to know a source file changed (it was only
@@ -431,6 +446,30 @@ sock.o: sock.c sock.h tcp.h .net_config_selected
 tftp.o: tftp.c tftp.h
 	$(CC) $(CFLAGS) -c tftp.c -o tftp.o
 
+netif.o: netif.c netif.h net_phy.h eth.h
+	$(CC) $(CFLAGS) -c netif.c -o netif.o
+
+netx.o: netx.c netx.h netif.h net_phy.h netcfg.h dhcp.h nat.h dhcpd.h dnsfwd.h
+	$(CC) $(CFLAGS) -c netx.c -o netx.o
+
+nat.o: nat.c nat.h
+	$(CC) $(CFLAGS) -c nat.c -o nat.o
+
+fw.o: fw.c fw.h netif.h netcfg.h
+	$(CC) $(CFLAGS) -c fw.c -o fw.o
+
+rmii_eth_b.o: rmii_eth_b.c rmii_eth.c rmii_eth.h
+	$(CC) $(CFLAGS) -c rmii_eth_b.c -o rmii_eth_b.o
+
+xlink_eth.o: xlink_eth.c xlink_eth.h
+	$(CC) $(CFLAGS) -c xlink_eth.c -o xlink_eth.o
+
+dhcpd.o: dhcpd.c dhcpd.h netif.h udp.h
+	$(CC) $(CFLAGS) -c dhcpd.c -o dhcpd.o
+
+dnsfwd.o: dnsfwd.c dnsfwd.h netif.h udp.h
+	$(CC) $(CFLAGS) -c dnsfwd.c -o dnsfwd.o
+
 net.o: net.c net_phy.h netcfg.h ssh/ssh.h sock.h ../../common/znet.h .net_config_selected ../../common/zsoc.h ../../common/zntp.h dhcp.h dns.h ntp.h
 	$(CC) $(CFLAGS) -c net.c -S -MF /dev/null -o net.asm
 	$(CC) $(CFLAGS) -c net.c -o net.o
@@ -479,6 +518,22 @@ test:
 	/tmp/test_tcp_pool_ooo
 	$(HOSTCC) --std=gnu99 -Wall -I. -I../../common -o /tmp/test_arp tests/test_arp.c
 	/tmp/test_arp
+	$(HOSTCC) --std=gnu99 -Wall -Wno-int-to-pointer-cast -DNETX -I. -I../../common \
+		-o /tmp/test_netx_fwd tests/test_netx_fwd.c
+	/tmp/test_netx_fwd
+	$(HOSTCC) --std=gnu99 -Wall -Wno-int-to-pointer-cast -DNETX -I. -I../../common \
+		-o /tmp/test_netx_gw tests/test_netx_gw.c
+	/tmp/test_netx_gw
+	$(HOSTCC) --std=gnu99 -Wall -Wno-int-to-pointer-cast -Wno-unused-function \
+		-Wno-unused-const-variable -DNETX -I. -I../../common \
+		-o /tmp/test_netx_fw tests/test_netx_fw.c
+	/tmp/test_netx_fw
+	$(HOSTCC) --std=gnu99 -Wall -DNETX -I. -I../../common -o /tmp/test_netx_cfg \
+		tests/test_netx_cfg.c netcfg.c
+	/tmp/test_netx_cfg
+	$(HOSTCC) --std=gnu99 -Wall -DNETX -DXLINK_ETH_HOST -I. -o /tmp/test_xlink_eth \
+		tests/test_xlink_eth.c xlink_eth.c
+	/tmp/test_xlink_eth
 	$(HOSTCC) --std=gnu99 -w -no-pie -I. -I../../common -o /tmp/test_relay \
 		tests/test_relay.c ../../common/zobj.c ../../common/zport.c ../../common/zeitlos.c
 	/tmp/test_relay || [ $$? -eq 77 ]

@@ -126,6 +126,9 @@ APP_SET = {
     "info": "base", "calc": "base", "clock": "base", "cal": "base",
     "jfont": "lang", "ask": "base",
     "update": "base", "backup": "base", "learn": "base", "checkup": "base",
+    "share": "base",
+    "netx": "base",
+    "netsettings": "base",
     "sheet": "work", "slide": "work", "print": "work",
     "convert": "work", "draw": "work", "view": "work", "pix": "work",
     "automate": "work",
@@ -225,6 +228,10 @@ EMU_EXCLUDE = {
     "fed": "the network and the TRNG", "update": "the network",
     # a USB stick
     "backup": "USB storage",
+    # the USB-C socket as a device
+    "share": "the USB device (USB_DEV)",
+    # the full net: flash net does what the emulator's network needs
+    "netx": "more than the one network it has (flash net serves it)",
 }
 
 EXTRA_VARIANTS = [
@@ -322,6 +329,9 @@ SUPPLEMENTAL = [
     (zcard("Z_DIR_APPS", "cal"), "sw/apps/cal/cal.bin"),
     (zcard("Z_DIR_APPS", "settings"), "sw/apps/settings/settings.bin"),
     (zcard("Z_DIR_APPS", "checkup"), "sw/apps/checkup/checkup.bin"),
+    (zcard("Z_DIR_APPS", "share"), "sw/apps/share/share.bin"),
+    (zcard("Z_DIR_APPS", "netx"), "sw/apps/netx/netx.bin"),
+    (zcard("Z_DIR_APPS", "netsettings"), "sw/apps/netsettings/netsettings.bin"),
     (zcard("Z_DIR_APPS", "track"), "sw/apps/track/track.bin"),
     (zcard("Z_DIR_APPS", "view"), "sw/apps/view/view.bin"),
     (zcard("Z_DIR_APPS", "web"), "sw/apps/web/web.bin"),

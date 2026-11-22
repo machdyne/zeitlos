@@ -78,6 +78,8 @@ be machinery for something that already works.
 
 **Boot order.** The kernel shell starts `fs` from flash and waits until
 it has registered, then `usb` (from the card if a copy is there), then
+`usbd` on a board whose USB-C socket is a device (`` `USB_DEV ``,
+[usb_dev.md](usb_dev.md): it binds IRQ 11, and carries the console), then
 reads the config and runs `init`, which starts `wm`, `net` and the
 rest (`sh()`, `sw/os/sh.c`). Nothing depends on a fixed pid any more:
 clients find drivers by name (`fs0`, `usb0`, `net0`).
@@ -96,7 +98,7 @@ receive path, for later.
 
 A driver is a process, so a fault in one ends it and the kernel keeps
 running. But the machine is not much use without its filesystem, so
-when `fs`, `usb` or `net` **crashes**, the kernel starts it again
+when `fs`, `usb`, `usbd` or `net` **crashes**, the kernel starts it again
 (`kernel.c`, "restarting a driver"; `k_drv_start()` in `sh.c`):
 
 - **Who:** a process with the driver flag whose registered name is

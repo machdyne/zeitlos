@@ -14,7 +14,11 @@
 #include "../../common/zeitlos.h"
 #include <string.h>
 
+#ifdef NETX
+#define UDP_MAX_LISTENERS 10	// + the DHCP server and the DNS forwarder's two
+#else
 #define UDP_MAX_LISTENERS 6
+#endif
 
 typedef struct {
 	bool used;

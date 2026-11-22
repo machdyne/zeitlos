@@ -388,6 +388,9 @@ typedef struct {
 #ifndef Z_IRQ_USB
 #define Z_IRQ_USB	9	// USB host: a level, (IRQSTAT & IRQEN) != 0
 #endif
+#ifndef Z_IRQ_USBD
+#define Z_IRQ_USBD	11	// USB device: a level, (PEND & IRQEN) != 0
+#endif
 
 #define Z_IRQ_OP_BIND   1
 #define Z_IRQ_OP_UNBIND 2

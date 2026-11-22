@@ -435,3 +435,10 @@ void dns_poll(void) {
 	last_tx_ticks = z_uptime_ticks();
 
 }
+
+#ifdef NETX
+// netx: the nameserver in use, for the DNS forwarder (dnsfwd.c)
+uint32_t dns_nameserver(void) {
+	return nameserver_ip;
+}
+#endif

@@ -345,7 +345,20 @@ module usb_sie #(
     // After six consecutive ones a zero is inserted and no data bit is
     // consumed on that tick.
     wire tx_stuff = tx_shifting && (tx_ones == 3'd6);
-    wire tx_bit = tx_stuff ? 1'b0 : tx_databit;
+
+    // ... and after the LAST bit too, before the EOP: "a zero bit will
+    // be inserted even if it is the last bit before the end-of-packet"
+    // (USB 2.0 7.1.9). A packet whose CRC ended in six ones went out
+    // without it -- one in 64 data packets, and every token whose CRC5
+    // does (that is, some address/endpoint pairs always) -- and a
+    // receiver that checks (ulixxe's, rtl/ext/usb_cdc/phy_rx.v) drops
+    // it; the retry has the same CRC. Found by tb_usbd_cosim.v, the
+    // first bench with a real device receiver on the far end. The
+    // stuffed zero takes the first tick of TB_EOP, which then starts
+    // its SE0 a tick later.
+    wire tx_stuff_eop = (tbs == TB_EOP) && (tx_eopc == 2'd0) && (tx_ones == 3'd6);
+    wire tx_stuffing = tx_stuff || tx_stuff_eop;
+    wire tx_bit = tx_stuffing ? 1'b0 : tx_databit;
 
     // The CRC sees the DATA field only, and only real data bits --
     // never stuff bits, never the CRC's own bits on the way out.
@@ -403,7 +416,7 @@ module usb_sie #(
         end else if (tx_tick) begin
 
             // -- the bit emitter, common to every shifting state --
-            if (tx_shifting) begin
+            if (tx_shifting || tx_stuff_eop) begin
                 if (!tx_bit) tx_j <= ~tx_j;
                 if (tx_bit) tx_ones <= tx_ones + 3'd1;
                 else tx_ones <= 3'd0;
@@ -417,7 +430,7 @@ module usb_sie #(
                 end
             end
 
-            if (!tx_stuff) begin
+            if (!tx_stuffing) begin
 
                 case (tbs)
 

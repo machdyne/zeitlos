@@ -1,6 +1,7 @@
 # Core Apps in Flash
 
-The core apps -- the drivers `fs` and `usb`, then `wm`, `net`, `term`,
+The core apps -- the drivers `fs`, `usb` and `usbd` ([usb_dev.md](usb_dev.md):
+the USB-C socket's console and network), then `wm`, `net`, `term`,
 `console`, `cron`, `text`, `files`, `repl`, `welcome`, `read` and
 `keyboard` -- are programmed into flash alongside the kernel and are
 available with no sdcard attached. The list is `CORE_APPS` in the

@@ -199,6 +199,16 @@ localparam SYSCLK = 48_000_000;
 `endif
 `endif
 
+// The USB device's receive slots for USB ethernet (rtl/usbd_ep.v): 2,
+// or 1 to save a DP16KD on a build that has none to spare (a Lakritz
+// with a PMOD whose gateware takes block RAM: lakritz_katze,
+// lakritz_kabellos). Nothing is lost with one; the host waits.
+`ifdef USB_DEV
+`ifndef USB_DEV_RX_SLOTS
+`define USB_DEV_RX_SLOTS 2
+`endif
+`endif
+
 // Audio geometry defaults, if a board enabled `AUDIO without pinning
 // them (rtl/boards.vh).
 //
@@ -395,6 +405,13 @@ module sysctl #()
 	inout usb_ufp_dm,
 	inout usb_ufp_pull,
 `endif
+	// The same three pins for `USB_DEV (rtl/usbd_ep.v): the device in
+	// software. rtl/boards.vh never leaves both defined.
+`ifdef USB_DEV
+	inout usb_ufp_dp,
+	inout usb_ufp_dm,
+	inout usb_ufp_pull,
+`endif
 
 `ifdef UART1
 	output UART1_TX,
@@ -558,6 +575,23 @@ module sysctl #()
    output ETH_TX_EN,
    input ETH_CRS_DV,
    output ETH_RST_N,
+`endif
+`ifdef XLINK
+   // the XA-XD link to the carrier's RP2040 (rtl/xlink.v): SPI, the
+   // RP2040 the master
+   input XLINK_XA,		// MOSI
+   input XLINK_XB,		// SCK
+   inout XLINK_XC,		// MISO, driven only while XD is low
+   input XLINK_XD,		// CS
+`endif
+`ifdef ETH_RMII_B
+   // the second RMII MAC's PHY (Klinge's Ethernet B), on the same
+   // reference clock as the first
+   input [1:0] ETH_B_RXD,
+   output [1:0] ETH_B_TXD,
+   output ETH_B_TX_EN,
+   input ETH_B_CRS_DV,
+   output ETH_B_RST_N,
 `endif
 
 `ifdef AUDIO
@@ -1080,7 +1114,44 @@ module sysctl #()
 	wire eth_rx_ready;
 	reg eth_rx_ready_d;
 	always @(posedge wbm_clk) eth_rx_ready_d <= eth_rx_ready;
-	wire eth_rx_int = eth_rx_ready && !eth_rx_ready_d;
+	// The USB device's frame endpoint (rtl/usbd_ep.v) is a second
+	// source of frames, beside the MAC on a board that has both
+	// (Klinge). Its own edge, ORed in as a pulse: one level could hold
+	// the other's edge off for good -- frames waiting in the MAC that
+	// `net` is not using would leave the USB side with no interrupt at
+	// all. `net` serves one of the two, and a pulse from the other only
+	// wakes it to find nothing.
+	wire usbd_rx_ready;
+	reg usbd_rx_ready_d;
+	always @(posedge wbm_clk) usbd_rx_ready_d <= usbd_rx_ready;
+	// The second RMII MAC (`ETH_RMII_B), a third source, its own edge
+	// for the same reason.
+	wire ethb_rx_ready;
+	reg ethb_rx_ready_d;
+	always @(posedge wbm_clk) ethb_rx_ready_d <= ethb_rx_ready;
+	// The XA-XD link (`XLINK): a message from the RP2040 waiting, which
+	// netx serves (sw/apps/net/xlink_eth.c) -- a fourth edge.
+	wire xlink_msg;
+	reg xlink_msg_d;
+	always @(posedge wbm_clk) xlink_msg_d <= xlink_msg;
+	wire eth_rx_int = (eth_rx_ready && !eth_rx_ready_d) ||
+		(usbd_rx_ready && !usbd_rx_ready_d) ||
+		(ethb_rx_ready && !ethb_rx_ready_d) ||
+		(xlink_msg && !xlink_msg_d);
+`ifndef ETH_RMII_B
+	assign ethb_rx_ready = 1'b0;
+`endif
+`ifndef XLINK
+	assign xlink_msg = 1'b0;
+`endif
+	// The USB device's own line for `usbd`, cpu_irq[11] below: a level,
+	// (PEND & IRQEN) != 0, which the kernel's silence write (IRQEN = 0)
+	// lowers until `usbd` has served it.
+	wire usbd_irq;
+`ifndef USB_DEV
+	assign usbd_rx_ready = 1'b0;
+	assign usbd_irq = 1'b0;
+`endif
 	// The macro is SPI_ETH (see rtl/boards.vh). This tie-off tested
 	// ETH_SPI, which is not defined anywhere, so on an ENC28J60 board
 	// it stayed active alongside the real driver further down and
@@ -1172,6 +1243,11 @@ module sysctl #()
 		// ethernet today also has audio, so this was latent rather
 		// than active.
 		cpu_irq[8] = eth_rx_int;
+
+		// The USB device (rtl/usbd_ep.v), Z_IRQ_USBD in sw/os/kernel.h:
+		// a LEVEL, and so cleared in LATCHED_IRQ below as bits 4, 7 and
+		// 9 are. Bound by `usbd` with IRQEN as its silence register.
+		cpu_irq[11] = usbd_irq;
 	end
 
 	always @(posedge sys_clk) begin
@@ -1308,6 +1384,9 @@ module sysctl #()
 	wire [31:0] wbs_glyph_dat_o;
 	wire [31:0] wbs_spieth_dat_o;
 	wire [31:0] wbs_ethmac_dat_o;
+	wire [31:0] wbs_ethmac_b_dat_o;
+	wire [31:0] wbs_xlink_dat_o;
+	wire [31:0] wbs_usbd_dat_o;
 	wire [31:0] wbs_csrs_dat_o;
 	wire [31:0] wbs_socctl_dat_o;
 `ifdef RTC
@@ -1464,6 +1543,12 @@ module sysctl #()
 `ifdef SPI_ETH
 	wire cs_spieth = ((wbm_adr & 32'hff00_0000) == 32'h6100_0000);
 `endif
+`ifdef USB_DEV
+	// 0x6200_0000: the USB device (rtl/usbd_ep.v). In nibble 6, the
+	// MPU's app region, like the MACs: its drivers are apps -- usbd
+	// (endpoints 0-3) and net (the frame endpoint).
+	wire cs_usbd = ((wbm_adr & 32'hff00_0000) == 32'h6200_0000);
+`endif
 `ifdef DMA
 	// 0x7b00_0000: the DMA controller's registers (rtl/dma.v). Stores
 	// are kernel-only (rtl/mpu.v): a channel writes physical memory.
@@ -1488,6 +1573,16 @@ module sysctl #()
 	// first. For ethmac, in slot 0, the two are identical across its
 	// whole window (registers, and RX/TX buffers ending below 0x1200).
 	wire cs_ethmac = ((wbm_adr & 32'hff00_0000) == 32'h6000_0000);
+`endif
+`ifdef XLINK
+	//   0x6400_0000  xlink    the XA-XD link to the RP2040 (rtl/xlink.v)
+	wire cs_xlink = ((wbm_adr & 32'hff00_0000) == 32'h6400_0000);
+`endif
+`ifdef ETH_RMII_B
+	//   0x6300_0000  ethmac1  the second RMII MAC (`ETH_RMII_B): the
+	//                         same block, its own slot (0x6200_0000 is
+	//                         the USB device, rtl/usbd_ep.v)
+	wire cs_ethmac_b = ((wbm_adr & 32'hff00_0000) == 32'h6300_0000);
 `endif
 	// CSRs (rtl/csrs.v) -- always decoded, no `ifdef guard, unlike
 	// every peripheral above/below this line -- see csrs.v's own
@@ -1804,11 +1899,20 @@ module sysctl #()
 `ifdef SPI_ETH
 		({32{cs_spieth}} & wbs_spieth_dat_o) |
 `endif
+`ifdef USB_DEV
+		({32{cs_usbd}} & wbs_usbd_dat_o) |
+`endif
 `ifdef DMA
 		({32{cs_dma}} & wbs_dma_dat_o) |
 `endif
 `ifdef ETH_RMII
 		({32{cs_ethmac}} & wbs_ethmac_dat_o) |
+`endif
+`ifdef ETH_RMII_B
+		({32{cs_ethmac_b}} & wbs_ethmac_b_dat_o) |
+`endif
+`ifdef XLINK
+		({32{cs_xlink}} & wbs_xlink_dat_o) |
 `endif
 		({32{cs_socctl}} & wbs_socctl_dat_o) |
 `ifdef RTC
@@ -1863,7 +1967,10 @@ module sysctl #()
 	wire wbs_gpu_blit_ack_o;
 	wire wbs_glyph_ack_o;
 	wire wbs_spieth_ack_o;
+	wire wbs_usbd_ack_o;
 	wire wbs_ethmac_ack_o;
+	wire wbs_ethmac_b_ack_o;
+	wire wbs_xlink_ack_o;
 	wire wbs_csrs_ack_o;
 	wire wbs_socctl_ack_o;
 `ifdef RTC
@@ -1994,11 +2101,20 @@ module sysctl #()
 `ifdef SPI_ETH
 		(cs_spieth & wbs_spieth_ack_o) |
 `endif
+`ifdef USB_DEV
+		(cs_usbd & wbs_usbd_ack_o) |
+`endif
 `ifdef DMA
 		(cs_dma & wbs_dma_ack_o) |
 `endif
 `ifdef ETH_RMII
 		(cs_ethmac & wbs_ethmac_ack_o) |
+`endif
+`ifdef ETH_RMII_B
+		(cs_ethmac_b & wbs_ethmac_b_ack_o) |
+`endif
+`ifdef XLINK
+		(cs_xlink & wbs_xlink_ack_o) |
 `endif
 		(cs_socctl & wbs_socctl_ack_o) |
 `ifdef RTC
@@ -2178,7 +2294,7 @@ module sysctl #()
 `else
 		.ENABLE_DIV(0),
 `endif
-		.LATCHED_IRQ(32'b1111_1111_1111_1111_1111_1101_0110_1111),
+		.LATCHED_IRQ(32'b1111_1111_1111_1111_1111_0101_0110_1111),
 `ifdef CPU_ROT
 		.ENABLE_ROT(1),               // ror, rol, rori: docs/chacha.md
 `endif
@@ -2349,7 +2465,7 @@ module sysctl #()
 `else
 		.ENABLE_DIV(0),
 `endif
-		.LATCHED_IRQ(32'b1111_1111_1111_1111_1111_1101_0110_1111),
+		.LATCHED_IRQ(32'b1111_1111_1111_1111_1111_0101_0110_1111),
 		.ENABLE_MPU(Z_MPU)
 	)
 	wbm_cpu0_i
@@ -2424,7 +2540,7 @@ module sysctl #()
 `else
 		.ENABLE_DIV(0),
 `endif
-		.LATCHED_IRQ(32'b1111_1111_1111_1111_1111_1101_0110_1111)
+		.LATCHED_IRQ(32'b1111_1111_1111_1111_1111_0101_0110_1111)
 	)
 	wbm_cpu0_i
 	(
@@ -2483,7 +2599,7 @@ module sysctl #()
       // already has THRE, and waitirq would freeze the core).
       .ENABLE_IRQ_TIMER(1),
       .ENABLE_IRQ_QREGS(1),
-		.LATCHED_IRQ(32'b1111_1111_1111_1111_1111_1101_0110_1111)
+		.LATCHED_IRQ(32'b1111_1111_1111_1111_1111_0101_0110_1111)
 	)
 	wbm_cpu0_i
 	(
@@ -4374,6 +4490,34 @@ module sysctl #()
 	);
 `endif
 
+	// WISHBONE SLAVE: USB DEVICE (rtl/usbd_ep.v)
+	//
+	// The USB-C socket as a device in software: sw/apps/usbd serves
+	// endpoints 0-3 (the console, control) and sw/apps/net the frame
+	// endpoint (USB ethernet). docs/usb_dev.md. Byte offsets within its
+	// 16MB slot; the module decodes 0x0000-0x17FF. Three DP16KD, two
+	// with `USB_DEV_RX_SLOTS 1.
+`ifdef USB_DEV
+	usbd_ep #(.RX_SLOTS(`USB_DEV_RX_SLOTS)) wbs_usbd_i
+	(
+		.clk(wbm_clk),
+		.rst(wbm_rst),
+		.wb_adr_i(wbm_adr[12:0]),
+		.wb_dat_i(wbm_dat_o),
+		.wb_dat_o(wbs_usbd_dat_o),
+		.wb_sel_i(wbm_sel),
+		.wb_we_i(wbm_we),
+		.wb_stb_i(wbm_stb),
+		.wb_cyc_i(cs_usbd && wbm_cyc),
+		.wb_ack_o(wbs_usbd_ack_o),
+		.irq_o(usbd_irq),
+		.net_rx_o(usbd_rx_ready),
+		.usb_dp(usb_ufp_dp),
+		.usb_dn(usb_ufp_dm),
+		.usb_pu(usb_ufp_pull)
+	);
+`endif
+
 	// WISHBONE SLAVE: HARDWARE SPI MASTER FOR ETH (ENC28J60)
 	//
 	// Was bit-banged (rtl/spibb_eth.v) and is not any more -- see
@@ -4492,6 +4636,58 @@ module sysctl #()
 		.eth_rst_n(ETH_RST_N),
 		.eth_int_o(eth_rx_ready)
 	);
+
+`ifdef ETH_RMII_B
+	// The second MAC (Klinge's Ethernet B): the same block at
+	// 0x6300_0000, on the first's reference clock. netx's second
+	// rmii_eth instance (sw/apps/net/rmii_eth_b.c) drives it.
+	wire wbm_cyc_ethmac_b = cs_ethmac_b && wbm_cyc;
+	ethmac_rmii_wb wbs_ethmac1_i
+	(
+		.wb_clk_i(wbm_clk),
+		.wb_rst_i(wbm_rst),
+		.wb_adr_i({10'd0, wbm_adr_dev_word}),   // relative to its slot
+		.wb_dat_i(wbm_dat_o),
+		.wb_dat_o(wbs_ethmac_b_dat_o),
+		.wb_we_i(wbm_we),
+		.wb_sel_i(wbm_sel),
+		.wb_stb_i(wbm_stb),
+		.wb_ack_o(wbs_ethmac_b_ack_o),
+		.wb_cyc_i(wbm_cyc_ethmac_b),
+		.eth_refclk(eth_refclk),
+		.eth_rxd(ETH_B_RXD),
+		.eth_txd(ETH_B_TXD),
+		.eth_tx_en(ETH_B_TX_EN),
+		.eth_crs_dv(ETH_B_CRS_DV),
+		.eth_rst_n(ETH_B_RST_N),
+		.eth_int_o(ethb_rx_ready)
+	);
+`endif
+`endif
+
+`ifdef XLINK
+	// WISHBONE SLAVE: THE XA-XD LINK (rtl/xlink.v, docs/xlink.md). Its
+	// registers and buffers decode the byte address within the slot.
+	wire xlink_miso, xlink_miso_oe;
+	xlink wbs_xlink_i (
+		.clk(wbm_clk),
+		.rst(wbm_rst),
+		.wb_adr_i({8'd0, wbm_adr[23:0]}),
+		.wb_dat_i(wbm_dat_o),
+		.wb_dat_o(wbs_xlink_dat_o),
+		.wb_sel_i(wbm_sel),
+		.wb_we_i(wbm_we),
+		.wb_stb_i(wbm_stb),
+		.wb_cyc_i(cs_xlink && wbm_cyc),
+		.wb_ack_o(wbs_xlink_ack_o),
+		.x_sck(XLINK_XB),
+		.x_mosi(XLINK_XA),
+		.x_cs_n(XLINK_XD),
+		.x_miso(xlink_miso),
+		.x_miso_oe(xlink_miso_oe),
+		.msg_o(xlink_msg)
+	);
+	assign XLINK_XC = xlink_miso_oe ? xlink_miso : 1'bz;
 `endif
 
 	// WISHBONE SLAVE: CSRs (rtl/csrs.v) -- always instantiated, no

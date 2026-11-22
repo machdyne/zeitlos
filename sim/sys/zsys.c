@@ -32,7 +32,7 @@
 #define SOC_VRAM_SIZE  (128u * 1024)		// the VRAM port's address bits [16:2]
 #define TICK_CLOCKS    65536u			// rtl/sysctl.v: rtc_ctr, 16 bits
 
-#define LATCHED_SOC    0xfffffd6fu		// rtl/sysctl.v: LATCHED_IRQ
+#define LATCHED_SOC    0xfffff56fu		// rtl/sysctl.v: LATCHED_IRQ (bit 11: usbd, a level)
 #define LATCHED_TB     0xffffffefu		// tb_zeitlos32.v
 
 #define IRQ_TIMER  (1u << 0)			// the CPU's IRQ timer
