@@ -18,6 +18,7 @@
  * alignment check: x86 forgives a misaligned load, the board does not.
  */
 
+#include "../sdbench.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -217,6 +218,10 @@ z_obj_t z_obj_none(void) { z_obj_t o; memset(&o, 0, sizeof o); o.type = Z_NONE; 
 static uint8_t *card, *ram;
 
 DSTATUS sd_disk_status(BYTE d) { (void)d; return 0; }
+/* the card driver's counters and DMA switch (sdbench.h): fs.c reports
+   them, a host card has none */
+sd_stat_t sd_stat;
+int sd_dma_allow(int on) { (void)on; return 0; }
 DSTATUS sd_disk_initialize(BYTE d) { return sd_disk_status(d); }
 DRESULT sd_disk_read(BYTE d, BYTE *b, LBA_t s, UINT n) {
 	(void)d;

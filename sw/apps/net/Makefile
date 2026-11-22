@@ -46,6 +46,11 @@ APP_MAIN_RULE = 0
 # again (a card copy shadows the flash copy, so a single card image
 # used to be unable to carry it).
 PHY_OBJ = enc28j60.o rmii_eth.o esp32link.o usb_ecm.o usbd_eth.o net_phy.o
+# The small build (Z_SMALL, Obst) has no USB device: its driver stays out
+# (usbd_eth.h), which a 1MB machine's RAM rule needs.
+ifeq ($(Z_SMALL),1)
+PHY_OBJ := $(filter-out usbd_eth.o,$(PHY_OBJ))
+endif
 
 # DHCP (dhcp.c) on by default; set NET_DHCP=0 to disable it entirely
 # and always use the static NET_STATIC_* config below -- e.g. for a
@@ -304,7 +309,12 @@ endif
 # zrtc.o rides with ntp.o rather than being listed separately: it is
 # the calendar arithmetic ntp.c uses to print the time it just set, and
 # nothing else in this app has any use for a date.
-OBJS = $(NETX_OBJ) zeitlos.o zobj.o zstream.o zport.o zrng.o zfsapp.o zusbc.o netcfg.o screen.o zscreen.o zinput.o $(PHY_OBJ) eth.o arp.o ip.o udp.o $(DHCP_OBJ) dns.o mdns.o $(NTP_OBJ) tcp.o relay.o telnet.o $(SOCK_OBJ) $(NFS_OBJ) $(SSH_OBJ) tftp.o $(PROF_OBJ) net.o
+SCREEN_OBJ = screen.o zscreen.o
+# (the small build: no screen streaming, screen.h)
+ifeq ($(Z_SMALL),1)
+SCREEN_OBJ =
+endif
+OBJS = $(NETX_OBJ) zeitlos.o zobj.o zstream.o zport.o zrng.o zfsapp.o zusbc.o netcfg.o $(SCREEN_OBJ) zinput.o $(PHY_OBJ) eth.o arp.o ip.o udp.o $(DHCP_OBJ) dns.o mdns.o $(NTP_OBJ) tcp.o relay.o telnet.o $(SOCK_OBJ) $(NFS_OBJ) $(SSH_OBJ) tftp.o $(PROF_OBJ) net.o
 
 # each rule below lists its own .c file as a prerequisite -- without
 # this, `make` has no way to know a source file changed (it was only

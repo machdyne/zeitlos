@@ -1483,9 +1483,10 @@ int main(void) {
 		return 1;
 	}
 
-#ifndef NETX
+#if !defined(NETX) && !defined(Z_SMALL)
 	// netx, the full net, on the card (docs/netx.md), runs instead of
-	// this unless net.cfg says full = 0. It registers as netx0 at once
+	// this unless net.cfg says full = 0. (Not in the small build: a 1MB
+	// machine has no room for netx beside the boot set.) It registers as netx0 at once
 	// and as net0 when its interfaces are up; until then this waits.
 	// If it goes without becoming net0 (no interface, a card too old
 	// for this flash), or never appears, this carries on as ever.
@@ -1510,7 +1511,7 @@ int main(void) {
 		}
 		z_pid_register("netx", nx, sizeof(nx));
 	}
-#endif
+#endif	// NETX (the small build: neither)
 
 	// Register the name FIRST, before touching hardware.
 	//

@@ -110,6 +110,7 @@ static const net_phy_t phy_usb_ecm = {
 // The USB-C socket's CDC-ECM function (usbd_eth.c). Frames wait in
 // the PC while both receive slots are full, so the window is the PC's
 // buffering rather than ours: full-size segments, as for the adapter.
+#ifndef Z_SMALL
 static const net_phy_t phy_usbd = {
 	"usbd",
 	usbd_eth_init,
@@ -126,6 +127,11 @@ static const net_phy_t phy_usbd = {
 	1460,
 	usbd_eth_tx_room,
 };
+#define PHY_USBD (&phy_usbd)
+#else
+// the small build has no USB device's driver (usbd_eth.h)
+#define PHY_USBD ((const net_phy_t *)0)
+#endif
 
 const net_phy_t *net_phy = 0;
 
@@ -140,7 +146,7 @@ const net_phy_t *net_phy_select(int mode)
 	// ... or the USB-C socket as a USB ethernet device, on a board
 	// with a MAC it should not use.
 	if (mode == NET_PHY_USBDEV) {
-		net_phy = usbd_eth_supported() ? &phy_usbd : 0;
+		net_phy = usbd_eth_supported() ? PHY_USBD : 0;
 		return net_phy;
 	}
 
@@ -176,7 +182,7 @@ const net_phy_t *net_phy_select(int mode)
 		// somebody meant. phy=usb or phy=usbdev in net.cfg says which
 		// when both are there.
 		net_phy = (mode != NET_PHY_BUILTIN && usbd_eth_supported() &&
-				!(usb_ecm_supported() && usb_ecm_present())) ? &phy_usbd :
+				!(usb_ecm_supported() && usb_ecm_present())) ? PHY_USBD :
 			(mode != NET_PHY_BUILTIN && usb_ecm_supported()) ?
 			&phy_usb_ecm : 0;
 
@@ -222,7 +228,7 @@ const net_phy_t *net_phy_of(int kind)
 	if (kind == NET_PHY_USB)
 		return usb_ecm_supported() ? &phy_usb_ecm : 0;
 	if (kind == NET_PHY_USBDEV)
-		return usbd_eth_supported() ? &phy_usbd : 0;
+		return usbd_eth_supported() ? PHY_USBD : 0;
 	if (kind == NET_PHY_XLINK)
 		return xlink_eth_supported() ? &phy_xlink : 0;
 	if (kind == NET_PHY_BUILTIN2) {

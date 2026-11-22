@@ -1119,7 +1119,15 @@ ZAR_APPS = $(filter-out $(CORE_APPS_OMIT),$(CORE_APPS))
 CORE_BUDGETS_NORMAL = fs=35K/80K usb=35K/60K usbd=5696/8448 wm=89536/168K net=104704/296K term=66048/145K \
 	console=8320/13K cron=17664/48K text=92928/220K files=70656/146K repl=124928/315K \
 	welcome=47K/82K read=70K/214K keyboard=36K/66K
-CORE_BUDGETS_SMALL = fs=36K/77312 usb=35K/53504 usbd=5632/8K wm=84K/151K net=104K/287K term=62K/138K \
+# The small tier, 2026-11-22 (GCC 15.2, CI's compiler). Upstream's own
+# Obst archive had grown past these budgets in RAM -- fs 78,392, wm
+# 155,712, net 294,156 -- and the boot set past the 1MB rule. net's small
+# build now leaves out what Obst has no hardware for: screen streaming
+# (the ESP32 link's; its shadow alone is 38K), the USB device's
+# ethernet, and the netx handover. net is then 251,421 bytes, and net
+# 287K -> 264K pays for fs 77,312 -> 79,360 and wm 151K -> 156,672.
+# usbd 5,632 -> 5,696 in flash (5,659, the USB device phases).
+CORE_BUDGETS_SMALL = fs=36K/79360 usb=35K/53504 usbd=5696/8K wm=84K/156672 net=104K/264K term=62K/138K \
 	console=10K/12544 cron=18K/48K text=88K/212K files=66K/138K repl=124K/308K \
 	welcome=42K/76K read=70K/210K keyboard=38K/64K
 CORE_RESERVE = 59136

@@ -355,6 +355,7 @@ int ZP(closedir)(DIR *dp) {
 #define Z_STDIO_BUF 4096
 #endif
 #endif
+#ifndef ZPOSIX_HOST_TEST		/* host tests link without --wrap=fopen */
 FILE *__real_fopen(const char *path, const char *mode);
 FILE *__wrap_fopen(const char *path, const char *mode) {
 	FILE *f = __real_fopen(path, mode);
@@ -364,3 +365,4 @@ FILE *__wrap_fopen(const char *path, const char *mode) {
 #endif
 	return f;
 }
+#endif

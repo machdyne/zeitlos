@@ -613,7 +613,7 @@ now has a **tier**, `CORE_TIER` in its block of the top-level Makefile:
 | | `normal` (every board but Obst) | `small` (Obst) |
 |---|---|---|
 | core apps | `CORE_APPS` | the same list |
-| built | as they are | with `Z_SMALL` (`sw/common/app.mk`): what costs RAM and a 1MB machine does without is left out -- touch ([touch.md](touch.md)) |
+| built | as they are | with `Z_SMALL` (`sw/common/app.mk`): what costs RAM and a 1MB machine does without is left out -- touch ([touch.md](touch.md)); in net, screen streaming (the ESP32 link's), the USB device's ethernet and the netx handover, none of which Obst has the hardware or the room for |
 | RAM budgets | `CORE_BUDGETS_NORMAL` | `CORE_BUDGETS_SMALL`: what every board had before |
 | the RAM rule | 2MB | 1MB, as before |
 | flash budgets | the same 848K region | the same |
