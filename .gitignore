@@ -49,6 +49,8 @@ sw/apps/repl/ms_stdlib.h
 sw/apps/slide/ms_stdlib.h
 sw/apps/learn/ms_stdlib.h
 sw/apps/learn/figlib.h
+sw/apps/learn/learn-linux
+sw/apps/learn/linux/obj/
 sw/apps/learn/tests/out/
 tools/learn/out/
 tools/learn/rvbench/out/

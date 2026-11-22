@@ -41,7 +41,7 @@ enum {	// actions
 	A_NONE = 0, A_LEARNER, A_NEW_LEARNER, A_CONTINUE, A_EXPLORE, A_COURSE_ROW,
 	A_AREA, A_CAT_ROW, A_START, A_UNIT, A_LESSON, A_NEXT, A_BACK, A_CHOICE,
 	A_CHECK, A_HINT, A_SAY, A_TRY, A_EXAMPLE, A_AGAIN, A_TO_COURSE, A_LINK,
-	A_FIELD, A_HOME, A_REPORT, A_OPEN, A_REVIEW,
+	A_FIELD, A_HOME, A_REPORT, A_OPEN, A_REVIEW, A_MISTAKES,
 };
 
 // the state of one check in the lesson being learned
@@ -55,6 +55,7 @@ typedef struct {
 	bool		answered;		// finished with (right, or shown the answer)
 	bool		skipped;		// passed over with F8: not answered, not reviewed
 	bool		right_first;	// right at the first attempt
+	bool		mistakes_shown;	// browsing: its common mistakes and hints opened (W)
 	lq_result_t	last;			// the last judgement
 	bool		judged;
 	int			focus;			// the choice the keyboard is on
@@ -117,6 +118,10 @@ typedef struct {
 	int			nchecks;			// in this step
 	int			example_shown;		// steps of an example revealed
 	int			right, total;		// for the lesson
+	// browse mode (docs/learn.md, "Browsing"): for this session only
+	bool		browsing;			// questions shown answered; nothing scored or reviewed
+	bool		skip_practice;		// and steps that are only questions passed over
+	bool		lesson_browsed;		// the lesson open was (partly) browsed: recorded so, not done
 	uint32_t	started_ms;
 	int			typing;				// the check whose field has the keyboard, -1 none
 	char		lesson_id[160];
@@ -181,5 +186,7 @@ void lv_course_lib(void);		// the open course's lib/*.scm, read for its figures
 // Review the due questions (of `course`, or all if NULL), at most max;
 // then open `then_lesson` of the open course (-1: home). False if none due.
 bool lv_review_start(const char *course, int max, int then_lesson);
+// browse mode on or off (for the session; a lesson open starts its step again)
+void lv_set_browsing(bool on);
 
 #endif

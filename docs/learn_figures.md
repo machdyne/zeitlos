@@ -268,9 +268,11 @@ The interpreter has a static heap of 20,000 cells (about 5,300 live once the lib
 more than 1,200 shapes, or writes more than 6 KB of words, is a
 mistake: the pane says so, and so does learncheck.
 
-**Changes to Machdyne Scheme came with this**, in
-`tools/learn/ms-learn.patch` and still to be committed to machdyne/ms.
-ms's own tests pass with them. The latest: a second `ms_init()` frees
+**Changes to Machdyne Scheme came with this**, first as a
+patch kept here; they are in machdyne/ms now (the `sw/ext/ms`
+submodule: optional lookup tables, and `release_cells()` in
+`ms_init()`), so the patch is gone. ms's own tests pass
+with them. The latest: a second `ms_init()` frees
 the strings of the cells in use, so learn can start Scheme afresh. It
 does, for the next figure, after one ran the heap or the protect stack
 out (before, every figure after it failed the same way) and after every

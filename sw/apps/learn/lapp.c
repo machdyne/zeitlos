@@ -42,6 +42,9 @@ static const char *const help_text =
 	"C\ta figure's next control\n"
 	"P\tpause a moving figure\n"
 	"R\treview (on the home screen)\n"
+	"B\tbrowse: answers shown, nothing asked\n"
+	"\t(on a course or in a lesson)\n"
+	"W\tbrowsing: a question's mistakes, hints\n"
 	"Esc\tgo back up; skip a warm-up\n"
 	"F3\tfind a course\n"
 	"L\tchange learner (on the home screen)\n"
@@ -122,7 +125,15 @@ void la_close(void) {
 	if (A.screen == SC_LESSON && A.step > 0) ls_at(A.lesson_id, A.step);
 	A.quit = true;
 }
-const char *la_help(void) { return help_text; }
+// with browse mode on, F1's box says so first
+const char *la_help(void) {
+	static char t[1400];
+	if (!A.browsing) return help_text;
+	snprintf(t, sizeof t, "Browse mode is on (B turns it off):\n"
+		"questions are shown with their answers,\n"
+		"Space goes on, and nothing is scored.\n\n%s", help_text);
+	return t;
+}
 
 const char *la_title(void) {
 	if ((A.screen == SC_LESSON || A.screen == SC_COURSE || A.screen == SC_DONE) && A.course_open)
@@ -164,6 +175,12 @@ void la_frame(ld_page_t *p, const char *crumb, int step, int steps) {
 	ld_textz(p, &s6, 12, 15, crumb, LD_INK);
 	if (steps > 0) {
 		int x = A.w - 12 - steps * 12;
+		if (A.browsing && !A.review && A.screen != SC_DONE) {	// browse mode: said on every step
+			ld_style_t f5 = ld_st(&LDF.f5, 0);
+			int tw = ld_widthz(&f5, "BROWSING") + 10;
+			ld_rrect(p, x - tw - 12, 4, tw, 14, 3, LD_INK);
+			ld_text_c(p, &f5, x - 12 - tw / 2, 14, "BROWSING", LD_DARK);
+		}
 		for (int i = 0; i < steps; i++) {
 			double cx = x + i * 12 + 4, cy = 11;
 			if (i < step) ld_disc(p, cx, cy, 3.5, LD_INK);
@@ -719,7 +736,7 @@ static void draw_course(ld_page_t *p) {
 		s = ld_st(&LDF.small, 0), s6 = ld_st(&LDF.f6, 0), f5 = ld_st(&LDF.f5, 0);
 	ld_fitz(p, &big, 24, HDR + 32, A.w - 48, m->title, LD_INK);
 	int c1 = A.w > 560 ? A.w / 2 : A.w;
-	int bottom = A.h - FOOT - 46;
+	int bottom = A.h - FOOT - 46 - (A.browsing ? 24 : 0);		// (browsing: its line above the record)
 
 	// units (with part headings), scrolled to keep the chosen one in view
 	int rows_y = HDR + 50, rh = 30;
@@ -768,6 +785,10 @@ static void draw_course(ld_page_t *p) {
 			if (i == A.lesson_sel) ld_frame(p, c1 + 10, ly, A.w - c1 - 20, 26, A.course_col == 1 ? 2 : 1, LD_INK);
 			if (A.focus == idx) ld_rframe(p, c1 + 8, ly - 2, A.w - c1 - 16, 30, 4, 1, LD_INK);
 			if (r && r->done) ld_tick(p, c1 + 18, ly + 8, LD_INK);
+			else if (r && r->browsed && !r->step) {	// browsed, not done: an open book
+				ld_frame(p, c1 + 17, ly + 8, 6, 10, 1, LD_INK);
+				ld_frame(p, c1 + 23, ly + 8, 6, 10, 1, LD_INK);
+			}
 			else if (r && r->step) {
 				double tri[] = { c1 + 18, ly + 8, c1 + 28, ly + 13, c1 + 18, ly + 18 };
 				ld_poly(p, tri, 3, LD_INK);
@@ -795,7 +816,14 @@ foot:
 			ld_textz(p, &s6, 24, A.h - FOOT - 10, t, LD_INK);
 		}
 	}
-	la_footer(p, "Up/Down|choose;Left/Right|units, lessons;Enter|lesson;Esc|back", "Open lesson", A_OPEN);
+	if (A.browsing) {
+		// what browse mode does, above the course's record
+		ld_fill(p, 16, A.h - FOOT - 66, A.w - 32, 18, LD_INK);
+		ld_fitz(p, &s6, 24, A.h - FOOT - 53, A.w - 48, A.skip_practice ?
+			"BROWSING: answers shown, nothing scored.  Practice steps: skipped (P shows them)" :
+			"BROWSING: answers shown, nothing scored.  Practice steps: shown (P skips them)", LD_DARK);
+		la_footer(p, "Up/Down|choose;Enter|browse lesson;B|stop browsing;P|practice;Esc|back", "Browse lesson", A_OPEN);
+	} else la_footer(p, "Up/Down|choose;Left/Right|units, lessons;Enter|lesson;B|browse;Esc|back", "Open lesson", A_OPEN);
 }
 
 static bool key_course(uint32_t k) {
@@ -818,6 +846,8 @@ static bool key_course(uint32_t k) {
 		la_open_lesson(un->first_lesson + A.lesson_sel);
 		return true;
 	}
+	if (k == 'b' || k == 'B') { lv_set_browsing(!A.browsing); return true; }
+	if ((k == 'p' || k == 'P') && A.browsing) { A.skip_practice = !A.skip_practice; return true; }
 	if (k == K_ESC) { la_go(A.back_to == SC_CATALOGUE ? SC_CATALOGUE : SC_HOME); return true; }
 	return false;
 }

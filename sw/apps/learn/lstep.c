@@ -41,6 +41,7 @@ static bool rv_done_key(uint32_t key);
 static void rv_record(la_check_t *k);
 static bool warmed;			// the warm-up before this lesson is done (or skipped)
 static const char *fig_course;		// the course whose lesson is shown (its lib/)
+static int practice_from(int st, int dir);
 
 // -- opening a lesson --
 
@@ -54,7 +55,7 @@ void la_open_lesson(int lesson) {
 	lf_course_t *c = A.course;
 	if (lesson < 0 || lesson >= c->nlessons) return;
 	// questions of this course that are due come first: a warm-up of three
-	if (!warmed && !A.review && lr_count_due(c->m.id) > 0 && lv_review_start(c->m.id, 3, lesson)) return;
+	if (!warmed && !A.review && !A.browsing && lr_count_due(c->m.id) > 0 && lv_review_start(c->m.id, 3, lesson)) return;
 	warmed = false;
 	A.review = false;
 	fig_course = c->m.path;
@@ -76,6 +77,8 @@ void la_open_lesson(int lesson) {
 	const ls_rec_t *r = ls_get(A.lesson_id);
 	A.step = r && !r->done && r->step < A.les->nsteps ? r->step : 0;
 	A.right = A.total = 0;
+	A.lesson_browsed = A.browsing;
+	if (A.browsing && A.skip_practice) { int ps = practice_from(A.step, 1); if (ps < A.les->nsteps) A.step = ps; }
 	A.started_ms = LP->ms();
 	const lf_unit_t *u = &c->units[c->lessons[lesson].unit];
 	snprintf(A.crumb, sizeof A.crumb, "%s  >  %s  >  lesson %d of %d", c->m.title, u->title,
@@ -85,6 +88,29 @@ void la_open_lesson(int lesson) {
 }
 
 static const lf_step_t *cur(void) { return &A.les->steps[A.step]; }
+
+// A practice step: nothing but questions (a heading, a figure or a
+// source beside them are not teaching). Browse mode can pass them over.
+static bool practice_step(int st) {
+	const lf_step_t *s = &A.les->steps[st];
+	bool any = false;
+	for (int i = s->first; i < s->first + s->count; i++) {
+		const lf_block_t *b = &A.les->blocks[i];
+		if (b->kind == LB_HEAD || b->kind == LB_FIGURE) continue;
+		if (b->kind != LB_DATA) return false;
+		if (!strcmp(b->name, "check")) { any = true; continue; }
+		if (strcmp(b->name, "sources") && strcmp(b->name, "lesson")) return false;
+	}
+	return any;
+}
+
+// from step st in direction dir (1, -1), the first that is not practice;
+// st itself if there is none that way (the lesson's last steps: its end)
+static int practice_from(int st, int dir) {
+	for (int i = st; i >= 0 && i < A.les->nsteps; i += dir)
+		if (!practice_step(i)) return i;
+	return dir > 0 ? A.les->nsteps : st;
+}
 
 static void add_check(const lx_node_t *form) {
 	if (A.nchecks >= LA_MAX_CHECKS) return;
@@ -614,6 +640,7 @@ static void lc_forget(void);
 // then not be answered by keys at all.
 static void give_keyboard(void) {
 	A.typing = -1;
+	if (A.browsing && !A.review) return;		// nothing to type
 	for (int i = 0; i < A.nchecks; i++)
 		if (!A.checks[i].answered) {
 			if (A.checks[i].q.kind == LQ_NUMBER || A.checks[i].q.kind == LQ_FRACTION || A.checks[i].q.kind == LQ_TEXT)
@@ -696,6 +723,7 @@ static uint32_t lc_key(void) {
 	h = mix(h, (uint32_t)A.w);
 	h = mix(h, (uint32_t)A.h);
 	h = mix(h, (uint32_t)A.example_shown);
+	h = mix(h, A.browsing ? 0x5eadu : 0u);
 	h = mix(h, A.review ? 1u + (uint32_t)A.rv_pos * 7u + (uint32_t)(A.rv_then + 1) * 131u : 0u);
 	h = mix(h, (uint32_t)A.nchecks);
 	for (int i = 0; i < A.nchecks; i++) {
@@ -703,6 +731,7 @@ static uint32_t lc_key(void) {
 		h = mix(h, (uint32_t)k->answered | (uint32_t)k->judged << 1 | (uint32_t)k->hints_shown << 2 |
 			(uint32_t)k->last.verdict << 8);
 		h = mix(h, (uint32_t)(uintptr_t)k->last.feedback);
+		h = mix(h, (uint32_t)k->mistakes_shown);
 	}
 	h = mix(h, A.fig ? (uint32_t)LG.nctl * 3u + (LG.err[0] ? 1u : 0u) : 0u);
 	for (int i = 0; A.fig && i < LG.nctl; i++) h = mix(h, LG.ctl[i].used ? (uint32_t)LG.ctl[i].kind : 0u);
@@ -853,8 +882,11 @@ static int boxed(ctx_t *c, int y, const char *title, const char *text, int lw) {
 
 // -- a question --
 
+static int browse_question(ctx_t *c, int y, int ci);
+
 static int question(ctx_t *c, int y, int ci) {
 	if (ci >= A.nchecks) return y;
+	if (A.browsing && !A.review) return browse_question(c, y, ci);
 	la_check_t *k = &A.checks[ci];
 	const lq_q_t *q = &k->q;
 	ld_style_t f5 = ld_st(&LDF.f5, 0), s6 = ld_st(&LDF.f6, 0), bb = ld_st(&LDF.body_b, 0);
@@ -984,6 +1016,131 @@ static int question(ctx_t *c, int y, int ci) {
 		y += 16;
 	}
 	return y;
+}
+
+// -- a question in browse mode: shown answered --
+//
+// What it asks, its right answer marked, and why: the explanation, and
+// for a computed number how it is worked out. Its wrong answers (each
+// with the feedback written for the mistake behind it) and its hints are
+// teaching too, folded under one line that W (or a click) opens.
+
+static int mistakes_count(const lq_q_t *q) {
+	int n = q->nhints + q->nwrong_if;
+	if (q->kind == LQ_CHOICE) for (int i = 0; i < q->nopt; i++) if (!q->opt[i].right) n++;
+	return n;
+}
+
+static int browse_question(ctx_t *c, int y, int ci) {
+	la_check_t *k = &A.checks[ci];
+	const lq_q_t *q = &k->q;
+	ld_style_t f5 = ld_st(&LDF.f5, 0), s6 = ld_st(&LDF.f6, 0);
+	if (c->p && visible(c, y, 10)) ld_textz(c->p, &f5, c->x, y + 8, "QUESTION, ANSWERED", LD_INK);
+	y += 14;
+	char ask[600];
+	int o = 0;
+	for (int i = 0; i < q->nask && o < (int)sizeof ask - 4; i++) {
+		const char *t = q->ask[i].text;
+		bool punct = !q->ask[i].math && t[0] && strchr(".,;:?!)", t[0]);
+		o += snprintf(ask + o, sizeof ask - (size_t)o, q->ask[i].math ? "%s$%s$" : "%s%s", o && !punct ? " " : "", t);
+	}
+	ask[o] = 0;
+	y = words(c, y, ask, &LDF.body_b, &LDF.body_b, 17, 3, 0) + 8;
+	say_add(ask);
+
+	if (q->kind == LQ_CHOICE) {
+		// the right answers only, as a right answer is shown after a check
+		for (int i = 0; i < q->nopt; i++) {
+			const lq_opt_t *op = &q->opt[q->order[i]];
+			if (!op->right) continue;
+			LT.font = &LDF.body; LT.bold_font = &LDF.body_b; LT.size = 16; LT.lead = 2;
+			lt_layout(&LT, &A.scratch, op->text, c->w - 28 - 30);
+			int h = LT.height + 12 < 26 ? 26 : LT.height + 12;
+			if (c->p && visible(c, y, h)) {
+				ld_rrect(c->p, c->x, y, c->w, h, 4, LD_INK);
+				lt_draw(&LT, c->p, &A.scratch, c->x + 12, y + (h - LT.height) / 2, LD_DARK);
+				ld_tick(c->p, c->x + c->w - 20, y + h / 2 - 5, LD_DARK);
+			}
+			say_add(op->text);
+			y += h + 6;
+		}
+	} else if (q->kind == LQ_NUMBER || q->kind == LQ_FRACTION || q->kind == LQ_TEXT) {
+		char ans[200];
+		lq_answer_text(q, ans, sizeof ans);
+		ld_style_t fs = ld_st(&LDF.big, 0);
+		int fw = ld_widthz(&fs, ans) + 16, fh = 30;
+		if (fw < 80) fw = 80;
+		if (fw > c->w - 24) fw = c->w - 24;
+		if (c->p && visible(c, y, fh)) {
+			ld_rrect(c->p, c->x, y, fw, fh, 4, LD_INK);
+			ld_fitz(c->p, &fs, c->x + 8, y + 21, fw - 12, ans, LD_DARK);
+			ld_tick(c->p, c->x + fw + 8, y + 10, LD_INK);
+		}
+		say_add(ans);
+		y += fh + 6;
+	} else {
+		return small(c, y, "This kind of question needs a newer learn.", 0) + 6;
+	}
+
+	// why: the explanation, and the working of a computed answer
+	const char *from = lx_str_of(q->form, "from");
+	if (q->explain || from) {
+		char t[700];
+		int n = 0;
+		if (q->explain) n += snprintf(t + n, sizeof t - (size_t)n, "%s", q->explain);
+		if (from && n < (int)sizeof t - 40)
+			snprintf(t + n, sizeof t - (size_t)n, "%s**Worked out:** $%s$", n ? " " : "", from);
+		y = boxed(c, y + 2, NULL, t, 1) + 4;
+		if (q->explain) say_add(q->explain);
+	}
+
+	// the mistakes and hints, folded
+	int nm = mistakes_count(q);
+	if (!nm) return y;
+	int nw = nm - q->nhints;
+	char line[96];
+	if (!k->mistakes_shown) {
+		if (!q->nhints) snprintf(line, sizeof line, "%d common mistake%s", nw, nw == 1 ? "" : "s");
+		else if (!nw) snprintf(line, sizeof line, "%d hint%s", q->nhints, q->nhints == 1 ? "" : "s");
+		else snprintf(line, sizeof line, "%d common mistake%s, %d hint%s", nw, nw == 1 ? "" : "s",
+			q->nhints, q->nhints == 1 ? "" : "s");
+		if (c->p && visible(c, y, 16)) {
+			int kx = ld_keycap(c->p, c->x, y + 12, "W", LD_INK) + 6;
+			int tw = ld_textz(c->p, &s6, kx, y + 12, line, LD_INK) - c->x;
+			hot(c, c->x, y, tw + 4, 16, A_MISTAKES, ci);
+		}
+		return y + 18;
+	}
+	if (c->p && visible(c, y, 10)) {
+		const char *head = nw ? "COMMON MISTAKES" : "HINTS";
+		int x = ld_keycap(c->p, c->x, y + 9, "W", LD_INK) + 6;
+		int tw = ld_textz(c->p, &f5, x, y + 8, head, LD_INK) - c->x;
+		hot(c, c->x, y - 2, tw + 4, 14, A_MISTAKES, ci);		// (a click folds them again)
+	}
+	y += 16;
+	char t[700];
+	if (q->kind == LQ_CHOICE)
+		for (int i = 0; i < q->nopt; i++) {
+			const lq_opt_t *op = &q->opt[q->order[i]];
+			if (op->right) continue;
+			snprintf(t, sizeof t, "**%s** -- %s", op->text, op->feedback ? op->feedback : "");
+			if (c->p && visible(c, y, 14)) ld_cross(c->p, c->x + 1, y + 3, LD_INK);
+			y = small(c, y, t, 18) + 6;
+		}
+	for (int i = 0; i < q->nwrong_if; i++) {
+		snprintf(t, sizeof t, "**%s** -- %s", q->wrong_if[i], q->wrong_fb[i] ? q->wrong_fb[i] : "");
+		if (c->p && visible(c, y, 14)) ld_cross(c->p, c->x + 1, y + 3, LD_INK);
+		y = small(c, y, t, 18) + 6;
+	}
+	if (q->nhints && nw) {
+		if (c->p && visible(c, y, 10)) ld_textz(c->p, &f5, c->x, y + 8, "HINTS", LD_INK);
+		y += 14;
+	}
+	for (int i = 0; i < q->nhints; i++) {
+		snprintf(t, sizeof t, "**%d.** %s", i + 1, q->hints[i]);
+		y = small(c, y, t, 18) + 4;
+	}
+	return y + 4;
 }
 
 // a worked example: the problem, the steps shown so far, then the answer
@@ -1286,7 +1443,14 @@ void lv_draw(ld_page_t *p) {
 		A.nchecks && A.typing >= 0 && !A.checks[A.typing].answered ? "Enter|check;F5|hint;F8|skip;F6|say;F7|mistake;Esc|leave" :
 		A.nchecks ? "1-6|choose;Enter|check;F5|hint;F8|skip;F6|say;F7|mistake;Esc|leave" :
 		"Space|next;Bksp|back;F6|say;F7|mistake;Esc|leave";
-	if (fig_has_controls() && A.nchecks && A.typing >= 0)
+	bool folds = false;		// browsing: a question with mistakes or hints to open
+	for (int i = 0; i < A.nchecks; i++) if (mistakes_count(&A.checks[i].q)) folds = true;
+	if (A.browsing && !A.review)
+		keys = fig_has_controls() ? (folds ? "Space|next;Bksp|back;Left/Right|change;W|mistakes;B|stop browsing;Esc|leave" :
+				"Space|next;Bksp|back;Left/Right|change;F6|say;B|stop browsing;Esc|leave") :
+			folds ? "Space|next;Bksp|back;W|mistakes;F6|say;B|stop browsing;Esc|leave" :
+			"Space|next;Bksp|back;F6|say;F7|mistake;B|stop browsing;Esc|leave";
+	else if (fig_has_controls() && A.nchecks && A.typing >= 0)
 		keys = "Left/Right|change;Enter|check;F5|hint;F8|skip;F6|say;Esc|leave";
 	else if (fig_has_controls() && !A.nchecks)
 		keys = fig_rows() > 1 ? "Left/Right|change;C|next control;Space|next;F6|say;Esc|leave" :
@@ -1299,6 +1463,7 @@ void lv_draw(ld_page_t *p) {
 // -- going on --
 
 bool lv_ready(void) {
+	if (A.browsing && !A.review) return true;		// nothing to answer
 	for (int i = 0; i < A.nchecks; i++)
 		if (!A.checks[i].answered && A.checks[i].q.kind <= LQ_TEXT) return false;
 	return true;
@@ -1306,7 +1471,8 @@ bool lv_ready(void) {
 
 static void finish_lesson(void) {
 	uint32_t secs = (LP->ms() - A.started_ms) / 1000;
-	if (!ls_done(A.lesson_id, A.right, A.total, secs))
+	// browsed (or partly): recorded as browsed, never as done with a score
+	if (A.lesson_browsed ? !ls_browsed(A.lesson_id, secs) : !ls_done(A.lesson_id, A.right, A.total, secs))
 		snprintf(A.status, sizeof A.status, "Your progress could not be saved: is the card or stick full?");
 	la_go(SC_DONE);
 }
@@ -1324,8 +1490,20 @@ static void next_step(void) {
 		return;
 	}
 	if (A.review) { rv_next(); return; }
-	if (A.step + 1 >= A.les->nsteps) { finish_lesson(); return; }
-	A.step++;
+	int to = A.step + 1;
+	if (A.browsing && A.skip_practice) to = practice_from(to, 1);
+	if (to >= A.les->nsteps) { finish_lesson(); return; }
+	A.step = to;
+	lv_enter();
+}
+
+// Browse mode on or off (B, on the course screen and in a lesson): for
+// this session. In a lesson the step starts again in the new way; a
+// lesson browsed in part is recorded as browsed.
+void lv_set_browsing(bool on) {
+	A.browsing = on;
+	if (A.screen != SC_LESSON || A.review) return;
+	if (on) A.lesson_browsed = true;
 	lv_enter();
 }
 
@@ -1462,9 +1640,24 @@ bool lv_key(uint32_t key, uint8_t mods) {
 	if (A.review && A.rv_done) return rv_done_key(key);
 	// F5-F7 work everywhere in a lesson, a typed answer's box too, where
 	// H, S and M are letters of the answer
+	if (key == Z_KEY_F5 && A.browsing && !A.review) { lv_hot(A_MISTAKES, -1); return true; }
 	if (key == Z_KEY_F5) {
 		int hc = A.typing >= 0 && A.typing < A.nchecks && !A.checks[A.typing].answered ? A.typing : open_check();
 		if (hc >= 0 && A.checks[hc].hints_shown < A.checks[hc].q.nhints) A.checks[hc].hints_shown++;
+		return true;
+	}
+	if (A.browsing && !A.review) {
+		// nothing is answered: F8 is simply the next step, F5 and W open
+		// the mistakes and hints, B stops browsing
+		if (key == Z_KEY_F8) { A.status[0] = 0; next_step(); return true; }
+		if (key == Z_KEY_F5 || key == 'w' || key == 'W') { lv_hot(A_MISTAKES, -1); return true; }
+		if (key == 'b' || key == 'B') { lv_set_browsing(false); return true; }
+		if ((key >= '1' && key <= '9') || key == Z_KEY_UP || key == Z_KEY_DOWN) {
+			if (key == Z_KEY_UP || key == Z_KEY_DOWN) return lv_wheel(key == Z_KEY_UP ? 1 : -1);
+			return false;
+		}
+	} else if (!A.review && (key == 'b' || key == 'B') && (A.typing < 0 || A.checks[A.typing].answered)) {
+		lv_set_browsing(true);
 		return true;
 	}
 	if (key == Z_KEY_F8) { skip(); return true; }
@@ -1528,7 +1721,9 @@ bool lv_key(uint32_t key, uint8_t mods) {
 		return true;
 	}
 	if (key == K_BS) {
-		if (A.step > 0 && !A.review) { A.step--; lv_enter(); }
+		int to = A.step - 1;
+		if (A.browsing && A.skip_practice && to >= 0) to = practice_from(to, -1);
+		if (to >= 0 && !A.review && !(A.browsing && A.skip_practice && practice_step(to))) { A.step = to; lv_enter(); }
 		return true;
 	}
 	if (key == 'h' || key == 'H') {
@@ -1657,6 +1852,14 @@ bool lv_hot(int action, int arg) {
 		next_step();
 		return true;
 	case A_CHOICE: choose(arg / 16, arg % 16); return true;
+	case A_MISTAKES: {
+		// one question's (a click), or the step's (W): all open, or all closed again
+		bool open = false;
+		for (int i = 0; i < A.nchecks; i++) if (!A.checks[i].mistakes_shown && mistakes_count(&A.checks[i].q)) open = true;
+		for (int i = 0; i < A.nchecks; i++)
+			if (arg < 0 || arg == i) A.checks[i].mistakes_shown = arg < 0 ? open : !A.checks[i].mistakes_shown;
+		return true;
+	}
 	case A_CHECK: check_typed(arg); return true;
 	case A_FIELD: A.typing = arg; return true;
 	case A_HINT: if (A.checks[arg].hints_shown < A.checks[arg].q.nhints) A.checks[arg].hints_shown++; return true;
@@ -1688,11 +1891,15 @@ bool lv_hot(int action, int arg) {
 void lv_done_draw(ld_page_t *p) {
 	la_frame(p, A.crumb, A.les->nsteps, A.les->nsteps);
 	ld_style_t h = ld_st(&LDF.serif, 28), b = ld_st(&LDF.body, 0), bb = ld_st(&LDF.body_b, 0);
-	ld_textz(p, &h, 24, 72, "Lesson done", LD_INK);
+	ld_textz(p, &h, 24, 72, A.lesson_browsed ? "Lesson browsed" : "Lesson done", LD_INK);
 	ld_textz(p, &bb, 24, 100, A.les->title ? A.les->title : "", LD_INK);
 	char t[200];
 	int y = 130;
-	if (A.total) {
+	if (A.lesson_browsed) {
+		y = ld_wrap(p, &b, 24, y, A.w - 48, 18,
+			"It is marked as browsed. Nothing was scored, and no question goes into review. "
+			"To practise it, do it again with its questions: B to stop browsing, then A.", LD_INK) + 10;
+	} else if (A.total) {
 		snprintf(t, sizeof t, "You answered %d of %d question%s right the first time.", A.right, A.total, A.total == 1 ? "" : "s");
 		y = ld_wrap(p, &b, 24, y, A.w - 48, 18, t, LD_INK) + 6;
 		ld_bar(p, 24, y, 240, 12, A.right * 100 / A.total);
@@ -1716,7 +1923,8 @@ void lv_done_draw(ld_page_t *p) {
 	idx = A.nhot;
 	la_hot(156, y + 40, 120, 24, A_TO_COURSE, 0);
 	ld_button(p, 156, y + 40, 120, 24, "The course", false, A.focus == idx);
-	la_footer(p, "Enter|next lesson;A|again;Esc|the course", has_next ? "Next lesson" : "The course", A_NEXT);
+	la_footer(p, A.browsing ? "Enter|next lesson;A|again;B|stop browsing;Esc|the course" :
+		"Enter|next lesson;A|again;B|browse;Esc|the course", has_next ? "Next lesson" : "The course", A_NEXT);
 }
 
 bool lv_done_key(uint32_t key) {
@@ -1726,6 +1934,7 @@ bool lv_done_key(uint32_t key) {
 		return true;
 	}
 	if (key == 'a' || key == 'A') { la_open_lesson(A.lesson); return true; }
+	if (key == 'b' || key == 'B') { A.browsing = !A.browsing; A.dirty = true; return true; }
 	if (key == K_ESC) { la_go(SC_COURSE); return true; }
 	return false;
 }

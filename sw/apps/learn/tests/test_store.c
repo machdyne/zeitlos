@@ -69,6 +69,31 @@ int main(void) {
 		CHECK(ls_open(&mia, mem, sizeof mem), "reopen big");
 		CHECK(ls_get("c/u/l1999") && ls_get("c/u/l0"), "2000 records read back");
 	}
+	// browse mode: a lesson browsed is kept as browsed, not done, and
+	// lines learn does not know (a newer learn's) are passed over
+	{
+		CHECK(ls_browsed("math-4/a/browsed-only", 240), "browsed");
+		CHECK(ls_at("math-4/a/browsed-later-done", 2) && ls_browsed("math-4/a/browsed-later-done", 100), "browsed after a place");
+		CHECK(ls_done("math-4/a/browsed-later-done", 2, 3, 300), "then done");
+		char p[700];
+		snprintf(p, sizeof p, "%s/data/learn/learners/Mia/progress.txt", hp_root);
+		FILE *f = fopen(p, "ab");
+		fputs("2026-11-21T10:00 someday math-4/a/browsed-only 1 2\n", f);
+		fclose(f);
+		CHECK(ls_open(&mia, mem, sizeof mem), "reopen with browsing");
+		const ls_rec_t *b = ls_get("math-4/a/browsed-only");
+		CHECK(b && b->browsed && !b->done && !b->step && !b->total, "browsed, not done");
+		b = ls_get("math-4/a/browsed-later-done");
+		CHECK(b && b->browsed && b->done && b->right == 2 && b->step == 0, "browsed, then done: done");
+		CHECK(ls_count_done("math-4") == 1, "a browsed lesson is not counted done (%d)", ls_count_done("math-4"));
+		CHECK(!strcmp(ls_last_in("math-4"), "math-4/a/browsed-later-done"), "browsing counts as where they were");
+		static char buf[1 << 20];
+		f = fopen(p, "rb");
+		size_t k = fread(buf, 1, sizeof buf - 1, f);
+		fclose(f);
+		buf[k] = 0;
+		CHECK(strstr(buf, " browsed math-4/a/browsed-only 240\n") != NULL, "the line as written");
+	}
 	char st[24];
 	ls_stamp(1793000000u, st, sizeof st);
 	CHECK(!strcmp(st, "2026-10-26T07:33"), "stamp %s", st);

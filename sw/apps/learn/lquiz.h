@@ -69,6 +69,7 @@ typedef struct {
 	const char	*wrong_if[LQ_MAX_WRONGIF];
 	const char	*wrong_fb[LQ_MAX_WRONGIF];
 	int			nwrong_if;
+	char		wrong_held[LQ_MAX_WRONGIF][32];	// a fraction's (wrong-if (4 3)), written out
 } lq_q_t;
 
 // Reads a check form. `seed` shuffles the choices (the same seed, the same order).

@@ -92,6 +92,19 @@ int main(void) {
 		lq_answer_text(&q, t, sizeof t);
 		CHECK(!strcmp(t, "1.42 s"), "answer text %s", t);
 	}
+	{	// two fractions with a wrong-if each: each keeps its own (they shared one place)
+		static lq_q_t q1, q2;
+		static uint8_t m2[1 << 14];
+		lx_arena_t a; char err[96];
+		lx_arena_init(&a, m2, sizeof m2);
+		const char *s1 = "(fraction (ask \"a\") (answer 1 2) (wrong-if (2 1) \"Upside down.\"))";
+		const char *s2 = "(fraction (ask \"b\") (answer 3 4) (wrong-if (4 3) \"Also upside down.\"))";
+		lx_node_t *f1 = lx_read(&a, s1, strlen(s1), 1, err, sizeof err), *f2 = lx_read(&a, s2, strlen(s2), 1, err, sizeof err);
+		CHECK(f1 && f2 && lq_load(&q1, lx_nth(f1, 0), 1) && lq_load(&q2, lx_nth(f2, 0), 1), "two fractions");
+		CHECK(!strcmp(q1.wrong_if[0], "2/1") && !strcmp(q2.wrong_if[0], "4/3"), "their wrong-ifs: %s, %s", q1.wrong_if[0], q2.wrong_if[0]);
+		lq_result_t w = lq_judge_typed(&q1, "2/1");
+		CHECK(w.verdict == LQ_WRONG && w.feedback && !strcmp(w.feedback, "Upside down."), "the first judged by its own");
+	}
 	printf("%s: %d failed\n", fails ? "test_quiz FAILED" : "test_quiz ok", fails);
 	return fails != 0;
 }

@@ -433,6 +433,9 @@ Work on a side). What it does today:
   for it (`(colour)`).
 - **Review** (L3, [below](#review)): questions come back, spaced out;
   R on the home screen, and a warm-up before a lesson.
+- **Browsing** ([below](#browsing)): B on a course or in a lesson
+  shows every question with its answer, so a lesson can be taken in
+  with Space alone; nothing is scored or reviewed.
 - **Progress**: one line a lesson in `progress.txt`, written as it
   happens, so a lesson resumes at its step; the done screen gives the
   score and names the next lesson.
@@ -454,6 +457,10 @@ Not yet (L4): order, match and point questions ("needs a newer
 learn"), pictures, `try` steps that see what was done in the app (today
 they open it, and a question checks it), the screen face, the
 parent and teacher view.
+
+**On Linux** learn is a program of its own, the same app in an SDL2
+window: `make -C sw/apps/learn linux`, then `learn-linux ~/ark/edu`
+([learn_linux.md](learn_linux.md)).
 
 The whole app runs on the build machine too: `make -C sw/apps/learn
 test` runs the format, check, quiz and store tests, `learncheck` over
@@ -498,6 +505,57 @@ a day (a `D` line).
 - A question whose lesson changed so that it cannot be found any more
   (its words changed) is skipped; it starts again the next time it is
   answered in a lesson.
+
+### Browsing
+
+Doing a lesson means answering its questions; that is how it teaches
+(retrieval, above). But sometimes a learner wants to take a lesson in
+less actively -- to see what a course covers, to look something up
+again, to follow along with someone else -- and the questions then
+stand in the way. **Browse mode** is for that. It is for the session
+only: learn always opens in the ordinary way.
+
+- **B** on the course screen, or in a lesson, turns it on and off.
+  (In a lesson whose answer box has the keyboard, B is a letter of
+  the answer, as H, S and M are.) A tag in the header says
+  `BROWSING` on every step, F1's box says so first, and the footer has
+  `B stop browsing`.
+- **Each question is shown answered**: what it asks, the right answer
+  filled in or marked, then why -- its `(explain ...)` and, for a
+  computed answer, its `(from ...)` working. Nothing is chosen or
+  typed, so **Space goes on** from every step, and F8 is simply the
+  next step.
+- **A question's teaching is all there, folded.** Much of a lesson's
+  teaching is in its questions: each wrong answer's feedback is written
+  for the misconception behind it, and the hints are a ladder. Under
+  each question one line counts them (`W 2 common mistakes, 1 hint`);
+  **W** (or F5, or a click) opens every question's on the step, each
+  wrong answer with its feedback and then the hints, and closes them
+  again.
+- **Worked examples** are revealed with Space, as they are otherwise.
+- **Practice steps** -- steps of nothing but questions (a heading, a
+  figure or a source beside them aside) -- are shown, answered, like
+  any other. **P** on the course screen, while browsing, passes them
+  over instead (Space and Backspace step past them).
+- **Figures** work as always: a slider still moves.
+- **Nothing is scored**: no warm-up opens a lesson, nothing goes into
+  review, and the end of the lesson says **Lesson browsed** -- marked
+  so, with how to do it with its questions (B, then A). A lesson
+  browsed even in part counts as browsed, not done.
+- **Its record** is a line of its own in `progress.txt`:
+
+  ```
+  2026-11-21T10:12 browsed math-3/fractions/comparing/same-denominator 310
+  ```
+
+  (the day and time, the lesson, the seconds it took). The course shows
+  a browsed lesson with an open book where a done one has a tick; it
+  does not count towards a unit's mastery. A learn from before browse
+  mode passes the line over, so a learner's folder still opens in it.
+
+`tools/learn/preview` draws a course in browse mode too, and checks
+that every lesson can be gone through with Space alone to its end
+([learn_authoring.md](learn_authoring.md)).
 
 ## Open questions
 

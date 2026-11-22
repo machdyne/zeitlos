@@ -87,6 +87,14 @@ A model doing this works in the same order, one step per request.
    through the keys, as a learner would; a question learn does not take
    its own answer for is a mistake. Look at every picture: words that
    run long, a figure that does not show what the step says.
+   `make -C tools/learn/preview browse COURSE=id` draws it again in
+   browse mode ([learn.md](learn.md#browsing)), into
+   `tools/learn/out/browse/id/`: each question answered, with its
+   explanation, its wrong answers' feedback and its hints, which is a
+   quick way to read all of a course's feedback at once. It checks that
+   every lesson goes to its end with Space alone. A course outside this
+   tree (an Ark checkout) is named by its folder:
+   `make -C tools/learn/preview browse COURSE=math-3 DIR=$HOME/ark/edu/math-3`.
 4. **The fact-check**: every claim in every lesson checked against a
    source, by someone (or a separate model run) that did not write it.
    Disagreements go to a person.

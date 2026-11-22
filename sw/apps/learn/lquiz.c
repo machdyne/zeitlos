@@ -121,10 +121,12 @@ bool lq_load(lq_q_t *q, const lx_node_t *form, uint32_t seed) {
 		if (!w) break;
 		lx_node_t *v = lx_nth(w, 1), *fb = lx_nth(w, 2);
 		if (!v) continue;
-		static char held[LQ_MAX_WRONGIF][32];	// a (wrong-if (4 3)) fraction, written out
+		// (in the question itself: a static one was shared by every
+		// question, so two fractions on a step judged by the last one's)
 		if (v->kind == LX_LIST && lx_len(v) == 2) {
-			snprintf(held[i], sizeof held[i], "%s/%s", lx_nth(v, 0)->text, lx_nth(v, 1)->text);
-			q->wrong_if[q->nwrong_if] = held[i];
+			char *held = q->wrong_held[q->nwrong_if];
+			snprintf(held, sizeof q->wrong_held[0], "%s/%s", lx_nth(v, 0)->text, lx_nth(v, 1)->text);
+			q->wrong_if[q->nwrong_if] = held;
 		} else q->wrong_if[q->nwrong_if] = v->text;
 		q->wrong_fb[q->nwrong_if] = fb && fb->kind == LX_STR ? fb->text : NULL;
 		q->nwrong_if++;

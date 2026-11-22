@@ -4,6 +4,8 @@
 #   make -C sw/apps/learn test       host tests: the format, the checker,
 #                                    answers, records, and every screen
 #   make -C sw/apps/learn render     just the screens (tests/out)
+#   make -C sw/apps/learn linux      learn on Linux, ./learn-linux (SDL2;
+#                                    docs/learn_linux.md)
 #
 # learncheck, the course checker, is tools/learn/learncheck.
 
@@ -113,6 +115,32 @@ bench: figlib.h $(HOSTMS)
 	$(HOSTCC) -std=gnu99 -O2 -g -I $(COMMON) -o /tmp/learn_bench tests/bench.c tests/hostplat.c $(APPSRC) $(HOSTLIB) $(HOSTMS) -lm
 	for m in "40 fig type" "40 fig slide" "40 fig scroll" "40 plain type"; do \
 		valgrind --tool=callgrind --callgrind-out-file=/tmp/learn_bench.cg /tmp/learn_bench $$m 2>&1 | grep Collected | sed "s/^/$$m: /"; done
+
+# learn on Linux: the same app in an SDL2 window (linux/main.c), its
+# fonts and Machdyne Scheme built in. docs/learn_linux.md.
+SDL_CFLAGS = $(shell pkg-config --cflags sdl2)
+SDL_LIBS = $(shell pkg-config --libs sdl2)
+LINUX_CFLAGS = -std=gnu99 -O2 -Wall -Wextra -Wno-unused-parameter -I $(COMMON) -I . $(SDL_CFLAGS)
+LINUX_SRC = linux/main.c linux/lplat_linux.c $(APPSRC) $(HOSTLIB)
+
+linux: learn-linux
+
+learn-linux: $(LINUX_SRC) linux/lplat_linux.h $(wildcard *.h) linux/obj/fonts.c linux/obj/ms.o
+	@pkg-config --exists sdl2 || { echo "learn-linux needs SDL2: apt install libsdl2-dev (or your system's SDL2 package)"; exit 1; }
+	$(HOSTCC) $(LINUX_CFLAGS) -o $@ $(LINUX_SRC) linux/obj/fonts.c linux/obj/ms.o $(SDL_LIBS) -lm
+
+linux/obj/fonts.c: linux/mkfonts.py $(wildcard ../../data/font/zfn/*.zfn ../../data/font/zhf/*.zhf) ../../data/font/jp12.zfn
+	mkdir -p linux/obj
+	python3 linux/mkfonts.py ../../data/font $@
+
+linux/obj/ms.o: figlib.h ms_stdlib.h $(MS_DIR)/ms.c
+	mkdir -p linux/obj
+	$(HOSTCC) -std=gnu99 -O2 -w $(MS_DEFS) -I$(COMMON)/ms_platform -I. -c $(MS_DIR)/ms.c -o $@
+
+clean-linux:
+	rm -rf learn-linux linux/obj
+
+.PHONY: linux clean-linux
 
 clean-host:
 	rm -f /tmp/learn_test_fig $(HOSTMS) /tmp/learn_test_math /tmp/learn_test_format /tmp/learn_test_check /tmp/learn_test_quiz /tmp/learn_test_store /tmp/learn_render

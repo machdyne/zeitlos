@@ -19,6 +19,10 @@
  * Then every question is answered, rightly, through the keys as a
  * learner would (typed answers typed, choices by their number): a
  * question learn will not take its own right answer for is a mistake.
+ *
+ * With --browse the course is drawn in browse mode instead (docs/learn.md,
+ * "Browsing"): each question shown answered, its mistakes and hints
+ * opened, and the lesson gone through with Space alone, to its end.
  */
 
 #include <stdio.h>
@@ -88,7 +92,14 @@ static bool answer_all(const char *n) {
 			else if (q->kind == LQ_FRACTION) snprintf(t, sizeof t, "%ld/%ld", q->fnum, q->fden);
 			else snprintf(t, sizeof t, "%s", q->naccept ? q->accept[0] : "");
 			A.typing = i;
-			for (const char *c = t; *c; c++) key((uint8_t)*c);
+			// as a keyboard sends it: a key a code point (ä, €), not a byte
+			for (const unsigned char *c = (const unsigned char *)t; *c; ) {
+				uint32_t cp = *c++;
+				int more = cp >= 0xF0 ? 3 : cp >= 0xE0 ? 2 : cp >= 0xC0 ? 1 : 0;
+				if (more) cp &= 0x3Fu >> more;
+				while (more-- && (*c & 0xC0) == 0x80) cp = cp << 6 | (*c++ & 0x3Fu);
+				key(cp);
+			}
 			key(0x0d);
 		} else continue;
 		if (k->answered && k->last.verdict == LQ_RIGHT) answered++;
@@ -101,6 +112,28 @@ static bool answer_all(const char *n) {
 	return ok;
 }
 
+static void key(uint32_t k);
+
+// browse mode: the lesson from its first step to its end, Space alone
+static int browsed_lessons;
+static bool browse_through(int l) {
+	la_open_lesson(l);
+	A.step = 0;
+	lv_enter();
+	for (int presses = 0; presses < 4000; presses++) {
+		if (A.screen == SC_DONE) {
+			const ls_rec_t *r = ls_get(A.lesson_id);
+			if (!r || !r->browsed || r->done) { fprintf(stderr, "preview: lesson %d: not recorded as browsed\n", l + 1); return false; }
+			browsed_lessons++;
+			return true;
+		}
+		if (A.screen != SC_LESSON) break;
+		key(' ');
+	}
+	fprintf(stderr, "preview: lesson %d: Space alone does not reach its end in browse mode\n", l + 1);
+	return false;
+}
+
 static void key(uint32_t k) {
 	la_ev_t e;
 	memset(&e, 0, sizeof e);
@@ -111,7 +144,9 @@ static void key(uint32_t k) {
 }
 
 int main(int argc, char **argv) {
-	if (argc < 3) { fprintf(stderr, "usage: preview COURSE-FOLDER OUT-FOLDER [FONT-FOLDER]\n"); return 2; }
+	bool browsing_all = argc > 1 && !strcmp(argv[1], "--browse");
+	if (browsing_all) { argv++; argc--; }
+	if (argc < 3) { fprintf(stderr, "usage: preview [--browse] COURSE-FOLDER OUT-FOLDER [FONT-FOLDER]\n"); return 2; }
 	if (argc > 3) fontdir = argv[3];
 	char course[4096], pack[4096], cmd[9000];
 	if (!realpath(argv[1], course)) { fprintf(stderr, "preview: no %s\n", argv[1]); return 1; }
@@ -138,6 +173,7 @@ int main(int argc, char **argv) {
 	snprintf(path, sizeof path, "/opt/ark/%s/%s", packname, name);
 	if (!la_open_course(path)) { fprintf(stderr, "preview: learn cannot open %s\n", path); return 1; }
 	int shots = 0, mistakes = 0;
+	if (browsing_all) A.browsing = true;
 	for (int l = 0; l < A.course->nlessons; l++) {
 		la_open_lesson(l);
 		if (A.review) key(0x1b);
@@ -150,16 +186,32 @@ int main(int argc, char **argv) {
 			if (LG.animated) { hp_ms_now = t0 + 2500; A.fig_need = true; }
 			char n[32];
 			snprintf(n, sizeof n, "%02d-%02d", l + 1, s + 1);
+			if (browsing_all) {
+				// everything the step teaches shows: its examples whole, its mistakes and hints
+				A.example_shown = 1000;
+				for (int i = 0; i < A.nchecks; i++) A.checks[i].mistakes_shown = true;
+				A.dirty = true;
+				la_draw(&page);
+				if (A.screen != SC_LESSON || !lv_ready()) {
+					fprintf(stderr, "preview: %s: browse mode does not go on from here\n", n);
+					mistakes++;
+				}
+			}
 			shot(argv[2], n);
-			if (!answer_all(n)) mistakes++;
+			if (!browsing_all && !answer_all(n)) mistakes++;
 			if (A.fig && (LG.err[0] || LG.frame_err[0])) {
 				fprintf(stderr, "preview: %s: the figure: %s%s\n", n, LG.err, LG.frame_err);
 				mistakes++;
 			}
 			shots++;
 		}
+		if (browsing_all && !browse_through(l)) mistakes++;
 	}
-	printf("preview: %s: %d steps drawn in %s, %d questions answered rightly by keys%s\n", name, shots, argv[2],
-		answered, mistakes ? ", with mistakes (above)" : "");
+	if (browsing_all)
+		printf("preview: %s: %d steps drawn in browse mode in %s, %d of %d lessons browsed to the end with Space%s\n", name, shots, argv[2],
+			browsed_lessons, A.course->nlessons, mistakes ? ", with mistakes (above)" : "");
+	else
+		printf("preview: %s: %d steps drawn in %s, %d questions answered rightly by keys%s\n", name, shots, argv[2],
+			answered, mistakes ? ", with mistakes (above)" : "");
 	return mistakes != 0;
 }

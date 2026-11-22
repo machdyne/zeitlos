@@ -12,6 +12,7 @@
  *   progress.txt   one line per thing done, added to the end:
  *                  2026-10-26T09:12 done math-3/fractions/comparing/same-denominator 4/5 840
  *                  2026-10-26T09:30 at math-3/fractions/comparing/on-a-number-line 2
+ *                  2026-10-26T09:41 browsed math-3/fractions/comparing/on-a-number-line 300
  *   reports.txt    mistakes the learner reported, one per line
  */
 
@@ -45,6 +46,7 @@ bool ls_name_ok(const char *name);
 
 typedef struct {
 	uint8_t		done;		// finished at least once
+	uint8_t		browsed;	// gone through in browse mode (not scored)
 	uint8_t		right, total;	// the best finish
 	uint8_t		step;		// where they left off (an `at` line), 0 none
 	uint32_t	when;		// the last time (seconds), 0 unknown
@@ -69,6 +71,9 @@ int ls_count_done(const char *prefix);
 // A lesson finished: right of total checks answered right the first
 // time, in `seconds`. Written to progress.txt at once.
 bool ls_done(const char *lesson_id, int right, int total, uint32_t seconds);
+// A lesson gone through in browse mode, in `seconds`: no score, and
+// not done (a learn before browse mode passes the line over).
+bool ls_browsed(const char *lesson_id, uint32_t seconds);
 // Left a lesson at a step (0-based): written so the learner can go on.
 bool ls_at(const char *lesson_id, int step);
 // A mistake reported in a lesson, in the learner's words.

@@ -202,6 +202,9 @@ static void apply(char *line) {
 		}
 		s->r.done = 1;
 		s->r.step = 0;
+	} else if (!strcmp(what, "browsed")) {
+		s->r.browsed = 1;
+		s->r.step = 0;
 	} else if (!strcmp(what, "at")) {
 		s->r.step = (uint8_t)atoi(a);
 	} else return;
@@ -281,6 +284,19 @@ bool ls_done(const char *lesson_id, int right, int total, uint32_t seconds) {
 	uint32_t now = LP->now();
 	ls_stamp(now, stamp, sizeof stamp);
 	snprintf(line, sizeof line, "%s done %s %d/%d %lu\n", stamp, lesson_id, right, total, (unsigned long)seconds);
+	char copy[200];
+	strcpy(copy, line);
+	copy[strlen(copy) - 1] = 0;
+	apply(copy);
+	if (now) { slot_t *s = find(lesson_id, false); if (s) s->r.when = now; }
+	return add_line("progress.txt", line);
+}
+
+bool ls_browsed(const char *lesson_id, uint32_t seconds) {
+	char line[200], stamp[24];
+	uint32_t now = LP->now();
+	ls_stamp(now, stamp, sizeof stamp);
+	snprintf(line, sizeof line, "%s browsed %s %lu\n", stamp, lesson_id, (unsigned long)seconds);
 	char copy[200];
 	strcpy(copy, line);
 	copy[strlen(copy) - 1] = 0;

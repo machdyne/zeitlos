@@ -148,6 +148,18 @@ static void setup_card(void) {
 	if (system(cmd)) { printf("render: cannot make the card\n"); exit(1); }
 }
 
+static long file_lines(const char *path) {
+	char p[700];
+	snprintf(p, sizeof p, "%s%s", hp_root, path);
+	FILE *f = fopen(p, "rb");
+	if (!f) return 0;
+	long n = 0;
+	int c;
+	while ((c = fgetc(f)) != EOF) n += c == '\n';
+	fclose(f);
+	return n;
+}
+
 static long file_has(const char *path, const char *needle) {
 	char p[700], buf[8192];
 	snprintf(p, sizeof p, "%s%s", hp_root, path);
@@ -770,6 +782,112 @@ int main(int argc, char **argv) {
 		buttons = 0;
 		for (int i = 0; i < A.nhot; i++) if (A.hot[i].action == A_EXAMPLE) buttons++;
 		CHECK(buttons == 0, "both shown: no button left (%d)", buttons);
+	}
+
+	// -- browse mode: the questions shown answered, nothing asked or scored --
+	{
+		CHECK(la_open_course("/opt/ark/edu-zeitlos/zeit-learn"), "zeit-learn for browsing");
+		la_go(SC_COURSE);
+		A.unit_sel = 0; A.lesson_sel = 1; A.course_col = 1;
+		key('b');
+		CHECK(A.browsing && A.screen == SC_COURSE, "B on the course: browsing");
+		CHECK(strstr(la_help(), "Browse mode is on"), "F1 says browsing is on");
+		shot("35-course-browsing");
+		long reviewed = file_lines("/data/learn/learners/Mia/review.txt");
+		key(0x0d);
+		CHECK(A.screen == SC_LESSON && A.lesson == 1 && !A.review, "a lesson browsed: no warm-up (%d %d)", A.screen, A.review);
+		CHECK(A.nchecks == 1 && A.typing < 0 && lv_ready(), "nothing to answer: ready to go on");
+		int choices = 0, folds = 0;
+		for (int i = 0; i < A.nhot; i++) { choices += A.hot[i].action == A_CHOICE || A.hot[i].action == A_FIELD; folds += A.hot[i].action == A_MISTAKES; }
+		CHECK(!choices && folds == 1, "no answers to choose, one fold of mistakes (%d %d)", choices, folds);
+		key('1');
+		CHECK(!A.checks[0].judged && !A.checks[0].chosen, "a digit chooses nothing");
+		shot("36-browse-choice");
+		key('w');
+		CHECK(A.checks[0].mistakes_shown, "W opens the mistakes");
+		shot("37-browse-mistakes");
+		click_action(A_MISTAKES);
+		CHECK(!A.checks[0].mistakes_shown, "a click folds them again");
+		key(' ');
+		CHECK(A.step == 1 && A.typing < 0, "Space alone goes on past a question");
+		shot("38-browse-typed");
+		key(Z_KEY_F8);
+		CHECK(A.step == 2 && A.total == 0, "F8: the next step, nothing counted");
+		for (int i = 0; i < 10 && A.screen == SC_LESSON; i++) key(' ');
+		CHECK(A.screen == SC_DONE && A.lesson_browsed, "the end, with Space alone");
+		CHECK(file_has("/data/learn/learners/Mia/progress.txt", " browsed zeit-learn/start/questions "), "recorded as browsed");
+		CHECK(file_lines("/data/learn/learners/Mia/review.txt") == reviewed, "nothing put into review");
+		shot("39-browse-done");
+		key('b');
+		CHECK(!A.browsing, "B on the done screen: browsing off");
+
+		// a figure with a slider, browsed: the slider still moves, drawn alone
+		key('b');
+		la_open_lesson(3);
+		if (A.review) key(0x1b);
+		A.step = 1;
+		lv_enter();
+		draw();
+		CHECK(A.fig && LG.nctl == 1 && A.typing < 0, "the slider step, browsed");
+		double v0 = LG.ctl[0].value;
+		CHECK(key_part(Z_KEY_RIGHT) && LG.ctl[0].value == v0 + 1, "Right moves the slider, the figure alone drawn");
+		shot("40-browse-figure");
+
+		// B in a lesson: the step again, asked; and back. In an answer box
+		// B is a letter of the answer (as H, S and M are)
+		key('b');
+		CHECK(!A.browsing && A.typing == 0, "B: the question asks again");
+		key('b');
+		CHECK(!A.browsing && !strcmp(A.checks[0].typed, "b"), "B in the answer box: a letter");
+		key(0x7f);
+		A.step = 0;
+		lv_enter();
+		draw();
+		CHECK(A.typing < 0 && A.nchecks == 1, "a choice step");
+		key('b');
+		CHECK(A.browsing && A.typing < 0 && A.lesson_browsed, "B: shown answered; the lesson counts as browsed");
+		key(0x1b);
+
+		// practice steps (nothing but questions) shown, or passed over with P
+		char d[600], fl[700], cmd[800];
+		snprintf(d, sizeof d, "%s/opt/ark/edu/t-pr/01-u", hp_root);
+		snprintf(cmd, sizeof cmd, "mkdir -p %s", d);
+		CHECK(!system(cmd), "a course with practice");
+		snprintf(fl, sizeof fl, "%s/opt/ark/edu/t-pr/course.cfg", hp_root);
+		FILE *o = fopen(fl, "w");
+		fputs("id = t-pr\ntitle = Practice\nlevel = 3\narea = school\nclass = A\nversion = 1\nauthor = test\n", o);
+		fclose(o);
+		snprintf(fl, sizeof fl, "%s/01-l.md", d);
+		o = fopen(fl, "w");
+		fputs("# Practice\n\nOne idea.\n\n---\n\n## Try it\n\n```check\n(number (ask \"1+1?\") (answer 2) (from \"1+1\"))\n```\n\n"
+			"---\n\nAnother idea.\n\n---\n\n```check\n(number (ask \"2+2?\") (answer 4))\n```\n", o);
+		fclose(o);
+		CHECK(la_open_course("/opt/ark/edu/t-pr"), "the practice course");
+		la_go(SC_COURSE);
+		if (!A.browsing) key('b');
+		key('p');
+		CHECK(A.browsing && A.skip_practice, "P: practice passed over");
+		shot("41-course-skip-practice");
+		la_open_lesson(0);
+		CHECK(A.step == 0, "the first step");
+		key(' ');
+		CHECK(A.step == 2, "the practice step passed over (%d)", A.step);
+		key(0x7f);
+		CHECK(A.step == 0, "and back over it (%d)", A.step);
+		key(' ');
+		key(' ');
+		CHECK(A.screen == SC_DONE, "a lesson ending in practice ends there");
+		la_go(SC_COURSE);
+		key('p');
+		la_open_lesson(0);
+		key(' ');
+		CHECK(A.step == 1 && A.nchecks == 1, "P again: practice shown");
+		key('w');
+		shot("42-browse-practice");
+		key('b');
+		la_go(SC_COURSE);
+		draw();
+		CHECK(!A.browsing, "browsing off at the end");
 	}
 
 	printf("%s: %d pictures, %d failed\n", fails ? "render FAILED" : "render ok", shots, fails);

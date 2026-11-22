@@ -182,3 +182,30 @@ What changed from the design:
   point.
 - **Lines on one bit are dashed by role.** Two plotted lines told apart
   only by colour would look the same on one bit.
+
+## As built: browse mode
+
+A lesson taken in without its questions ([learn.md](learn.md#browsing)),
+from the same scripted test (`tests/out/35-*` to `42-*`):
+
+- **The course screen says it**: a line above the course's record,
+  `BROWSING: answers shown, nothing scored. Practice steps: shown (P
+  skips them)`, the button reads **Browse lesson**, and the footer
+  `B stop browsing`, `P practice`.
+- **Every step says it**: a `BROWSING` tag beside the step dots.
+- **A question browsed** is labelled `QUESTION, ANSWERED`: what it asks
+  in the question's bold, then the right answer as a right answer looks
+  after a check (filled, with the tick), then the explanation and the
+  working in the feedback's box. A typed answer's box is filled the
+  same way. The wrong choices are not drawn as choices -- a list of
+  crossed-out boxes would read as something to do.
+- **The mistakes are folded under one line** with its key, `W 2 common
+  mistakes, 1 hint`: open, each wrong answer comes as a crossed line,
+  in bold, with its feedback after it, then the hints numbered. The
+  heading (`W COMMON MISTAKES`) is the place a click folds them again.
+- **The footer** is `Space next`, `Bksp back`, `W mistakes` (only when
+  the step has some), `F6 say`, `B stop browsing`, `Esc leave`, and
+  **Next** is always there.
+- **The end** is **Lesson browsed**, with what that means and how to
+  do the lesson with its questions; on the course, a browsed lesson has
+  an open book where a done one has a tick.
