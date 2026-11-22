@@ -117,6 +117,7 @@ flash.
 | l | loop on / off |
 | i | timing lines on the serial console, on / off |
 | o | open a film |
+| u | open a film on a web server, by its address ("From a web server") |
 | g | game mode, and back (Esc too) |
 | F1 | help |
 | F11 | full screen (wm's) |
@@ -157,6 +158,16 @@ the clock jump; frame *n* is due at the 60 Hz
 refresh `zv_frame_vsync(n)` gives it. Without sound -- a file with
 none, or a bitstream without the mixer -- the refresh counter (socctl's
 FRAME) is the clock instead.
+
+**The end.** The mixer does not stop at the write position: it goes
+round, and would play the ring's last three seconds again. So when the
+last record's sound is in the ring, an eighth of a second of silence
+goes in after it, and the film is over once the mixer is inside that
+silence (or has stopped getting nearer for half a second). Then loop
+starts again and otherwise the film pauses. It used to wait for the ring
+to be exactly empty, which one pass had to catch on one byte; missed --
+on the board, usually -- the last seconds of sound went round for good,
+with loop off too, and in game mode the last frame was never shown.
 
 **Records** are read from the card one at a time into a 256 KB queue,
 as far ahead as the sound needs: their sound into the ring at once,
@@ -287,6 +298,89 @@ passes whole sectors straight to the card, and the card gets a few
 long reads. In zsys at `--cpi 8`: 213k cycles a frame became 136k,
 125 calls in 5 s became 42, and 677 sectors took 47 commands.
 
+## From a web server
+
+**u** asks for an address, `http://host[:port]/path/film.zv`, and plays
+the film from there; `run cinema http://...` does the same. The film
+is not downloaded first and nothing is written to the card: cinema asks
+the server for the file a piece at a time, as it would read it from
+the card, so it starts at once, and seeking, the timeline, loop, the
+colour layer and game mode all work as they do for a file.
+
+    tools/zv/zvserve.py ~/films            # on the computer with the films
+    > run cinema http://192.168.1.20:8000/general.zv
+
+**The server** has to answer byte ranges (`Range: bytes=a-b` with 206)
+and should keep the connection open between requests. nginx, Apache
+and Caddy do both as they come. Python's `http.server` does neither --
+it sends the whole file to every request -- so `tools/zv/zvserve.py` is
+that with ranges and keep-alive: it serves a directory, read-only, and
+lists the films at `/` with the address to type for each. Plain http
+only (no TLS: this is for a home network), and a name is looked up by
+`net`'s DNS.
+
+**How.** `netsrc.c` holds one TCP connection through `net`
+([networking.md](networking.md#raw-tcp-sockets)) and has one request on
+it at a time, built and parsed by `httpc.c`:
+
+- **The film's records** are asked for 16 KB at a time, as a 32 KB ring
+  has room for a whole answer -- so nothing that arrives waits for
+  room, and the acks that let `net` send more go back at once. The
+  player takes them from the ring where it would call `fs`. That is
+  about half a second of a 320x240 film ahead of the picture, besides
+  the second of sound already in the mixer's ring.
+- **The header, the index and the colour layer** are other ranges of
+  the file, between two of the film's: the first two waited for when
+  the film opens, a colour group asked for a group ahead and left to
+  arrive.
+- **A seek** drops what is buffered and asks from the seek point. A
+  request with little left to come (6 KB) is read to its end and
+  thrown away; with more, the connection is closed and made again.
+  The frames from the seek point to the one wanted are waited for --
+  this is the one place cinema waits for the network -- so a seek
+  takes as long as about two seconds of film take to arrive.
+- **When the network is behind**, the sound is stopped before the
+  mixer runs past what it has (it would play its ring again), and the
+  clock with it; the title says "(buffering)", and it starts again
+  with half a second queued. No frame is skipped for it.
+- **A connection that drops** is made again and the request repeated
+  from the byte it got to, three times; a server that closes after
+  every answer (HTTP/1.0) works, a connection a request. After that,
+  or when the server answers something final -- not found, no ranges
+  -- the film stops and the title says why.
+
+It uses one of `net`'s two sockets; with `web` and `irc` holding both,
+the connection is refused and the box says so.
+
+**What is not known yet:** how fast TCP arrives on a board. A 320x240
+film is about 62 KB a second and TFTP measured 148
+([net_throughput.md](net_throughput.md)), but TCP's own rate on a
+local network has not been measured, nor what receiving costs
+zeitlos32ps while it decodes. The timing lines (`i`) have a line for
+it:
+
+    cinema: net: 393216 bytes in 24 requests (0 connections, 0 tried again); 34108 bytes and 24 frames ahead; waited 0 ms
+
+"ahead" near zero and "(buffering)" in the title mean the network is
+the limit; "waited" is time spent in seeks.
+
+**Tested** on the host and in the emulator, not on a board:
+`make -C sw/apps/cinema test` runs `httpc.c` against made-up answers
+at every piece size (401 checks), and
+`/tmp/test_httpc --server HOST PORT /film.zv film.zv` fetches a file in
+ranges from a real server and compares it. The emulator has no
+network, so `sw/apps/netfake` stands in for `net` there: it takes the
+name `net0` and serves the card's `/media/video` over HTTP, at a rate
+(`rate=KB`), closing after each answer (`close`), dropping connections
+(`drop=N`), stalling (`stall=N`) or without ranges (`noranges`):
+
+    zsys ... --type "run netfake rate=120\nrun cinema http://x/g30.zv\n"
+
+With it a black and white and a colour film play through from a
+"server" to the last frame, in the window and in game mode, with
+seeks, at 40 KB/s (buffering, nothing skipped), with every fifth
+connection dropped, and with a connection a request.
+
 ## Checked
 
 In the whole-system emulator (zsys, [zsys.md](zsys.md)), which has a
@@ -316,4 +410,5 @@ run on any other board.
 
 About 600 KB of .bss: the record queue (256 KB), two pictures (320x240
 at a byte, 154 KB), the decoder (about 60 KB), the seek index (64 KB),
-the sound ring (16 KB).
+the sound ring (16 KB),
+the network's ring (32 KB, "From a web server").

@@ -610,6 +610,7 @@ it with the tree's other host suites.
 | `tools/zv/zvenc.c`, `zvenc_core.c/.h` | the encoder: ffmpeg front end, and the codec |
 | `tools/zv/zvcol.c/.h` | the encoder's colour layer |
 | `tools/zv/zvplay.c` | the Linux player |
+| `tools/zv/zvserve.py` | serves a directory of films to cinema over HTTP ([cinema_app.md](cinema_app.md), "From a web server") |
 | `tools/zv/zv_test.c` | the tests |
 | `tools/zv/gen_masks.py` | makes `zv_masks.h` (needs numpy) |
 | `sw/apps/zvbench` | the board benchmark |

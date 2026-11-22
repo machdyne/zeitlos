@@ -56,6 +56,8 @@
 #include "../../common/zv.h"
 #include "../../common/zcycles.h"
 #include "../../common/zaccent.h"
+#include "../../common/zport.h"
+#include "netsrc.h"
 
 #define VRAM        ((volatile uint32_t *)0x20000000)
 #define VRAM_WPL    (Z_SCREEN_W / 32)
@@ -85,10 +87,17 @@ static z_dialog_ctx_t dlg_ctx;
 /* -- the file -- */
 
 static int fh = -1;
+/* the film is on a web server (netsrc.c), not on the card */
+static uint32_t sb_p, sb_f;
+static bool net_src;
+static bool net_wait;           /* a read may wait for the network (a seek; not while playing) */
+static bool net_stall;          /* the sound was stopped for want of film: buffering */
+static bool net_failed;         /* said so */
+static uint32_t file_pos;
 static zv_header_t hd;
 static uint32_t keys[SEEK_POINTS * 2];          /* frame, offset */
 static uint32_t nkeys;
-static char filename[80];
+static char filename[200];
 static char last_dir[80] = Z_DIR_MEDIA_VIDEO;
 static char title_buf[100];
 static bool have_file;
@@ -198,6 +207,20 @@ static bool st_fs_ok;
 static void report_fs(void) {
 	z_fs_stats_t s;
 	uint32_t n, c;
+	if (net_src) {
+		/* a film on a server: what came, in how many requests, and how
+		 * far ahead of the player the network is */
+		ns_stats_t ns;
+		ns_stats(&ns, true);
+		dbg("cinema: net: "); dbg_dec(ns.bytes); dbg(" bytes in "); dbg_dec(ns.requests);
+		dbg(" requests ("); dbg_dec(ns.connects); dbg(" connections, "); dbg_dec(ns.retries);
+		dbg(" tried again); "); dbg_dec(ns_stream_buffered() + (sb_f - sb_p)); dbg(" bytes and ");
+		dbg_dec((uint32_t)rq_n); dbg(" frames ahead; waited "); dbg_dec(ns.wait_ticks * 1000u / Z_TICK_HZ);
+		dbg(" ms");
+		if (ns_error()[0]) { dbg("; "); dbg(ns_error()); }
+		dbg("\n");
+		return;
+	}
 	if (!st_fs_ok || zfs_stats(&s)) return;
 	n = s.reads - st_fs0.reads;
 	if (!n) return;
@@ -297,6 +320,12 @@ static uint32_t rd32(const uint8_t *p) {
 static int read_full(void *buf, uint32_t n) {
 	uint8_t *b = buf;
 	uint32_t got = 0;
+	if (net_src) {
+		int r = ns_read_at(file_pos, buf, n);
+		if (r != (int)n) return -1;
+		file_pos += n;
+		return 0;
+	}
 	while (got < n) {
 		uint32_t t = z_cycles();
 		int r = fs_read_chunk(fh, b + got, (int)(n - got > 16384 ? 16384 : n - got));
@@ -309,7 +338,8 @@ static int read_full(void *buf, uint32_t n) {
 }
 
 static void file_seek(uint32_t off) {
-	fs_seek(fh, off);
+	if (net_src) file_pos = off;
+	else fs_seek(fh, off);
 }
 
 /* -- the sound ----------------------------------------------------- */
@@ -399,11 +429,14 @@ static uint32_t now_vsync(void) {
 
 /* -- records ---------------------------------------------------------- */
 
-static uint32_t sb_p, sb_f;
+static bool end_pad;                /* the film's sound is all in the ring, and a silence after it */
+static uint32_t end_used;
+static uint16_t end_stall;      /* refreshes played with the mixer no nearer the end */
 static void rq_flush(void) {
 	rq_head = rq_n = 0;
 	sb_p = sb_f = 0;
 	at_end = false;
+	end_pad = false;
 }
 
 /* Whose time a read took (the timing lines, `i`): the kernel's accounts
@@ -453,7 +486,7 @@ static void rd_report(void) {
 static uint32_t rd_pos;                         /* the file's position */
 
 static bool rq_fill(void) {
-	uint32_t n = RD_CHUNK - (rd_pos & 511), t;
+	uint32_t n = net_src ? RD_CHUNK : RD_CHUNK - (rd_pos & 511), t;
 	int r;
 	if (rq_n == 0 && sb_p == sb_f) sb_p = sb_f = 0;
 	if (rq_n && rq[rq_head].off > sb_p) {
@@ -471,6 +504,20 @@ static bool rq_fill(void) {
 	}
 	if (st_lines) (void)z_cpu_stat(&rd_c0);
 	t = z_cycles();
+	if (net_src) {
+		/* what has arrived of it (netsrc.c asks ahead); none yet is not
+		 * the end -- that is the server's last byte, or its silence */
+		r = (int)ns_stream_read(rqbuf + sb_f, n, net_wait);
+		if (r == 0) {
+			if (ns_stream_ended()) at_end = true;
+			return false;
+		}
+		sb_f += (uint32_t)r;
+		rd_pos += (uint32_t)r;
+		st_read_bytes += (uint32_t)r;
+		st_read_calls++;
+		return true;
+	}
 	r = fs_read_chunk(fh, rqbuf + sb_f, (int)n);
 	if (st_lines) rd_account(t);
 	st_t0_sum += t;
@@ -683,8 +730,14 @@ static int32_t pal_shown = -2;                  /* the group in the hardware pal
 static int32_t pic_group[2] = { -1, -1 };       /* each picture's */
 static int32_t col_frame_g = -1;                /* the group of the frame being decoded */
 
+/* a group on its way from the server (ns_read_later()), into col_buf[col_nb] */
+static int col_nb = -1;
+static uint32_t col_ngot;
+static bool col_ndone;
+
 static void col_close(void) {
 	if (fhc >= 0) { fs_close_handle(fhc); fhc = -1; }
+	if (col_nb >= 0) { (void)ns_read_pending(true); col_nb = -1; }
 	col_have = false;
 	col_bg[0] = col_bg[1] = -1;
 	col_pal_g[0] = col_pal_g[1] = -1;
@@ -697,10 +750,13 @@ static void col_open(const char *path) {
 	uint32_t i, n;
 	col_close();
 	if (!(hd.flags & ZV_F_COLOUR) || !hd.colour_off) return;
-	fhc = fs_open_read(path);
-	if (fhc < 0) return;
-	fs_seek(fhc, hd.colour_off);
-	if (fs_read_chunk(fhc, h16, ZV_COL_HDR) != ZV_COL_HDR || zv_col_parse_header(h16, ZV_COL_HDR, &colh) ||
+	if (!net_src) {
+		fhc = fs_open_read(path);
+		if (fhc < 0) return;
+		fs_seek(fhc, hd.colour_off);
+	}
+	if ((net_src ? ns_read_at(hd.colour_off, h16, ZV_COL_HDR) : fs_read_chunk(fhc, h16, ZV_COL_HDR)) != ZV_COL_HDR ||
+	    zv_col_parse_header(h16, ZV_COL_HDR, &colh) ||
 	    colh.cw != hd.w / colh.cell || colh.ch != hd.h / colh.cell || !colh.groups || colh.groups > COL_GROUPS) {
 		dbg("cinema: the colour layer is not one this player can show\n");
 		col_close();
@@ -710,6 +766,10 @@ static void col_open(const char *path) {
 	{
 		uint8_t *b = (uint8_t *)col_gidx;
 		uint32_t got = 0;
+		if (net_src) {
+			if (ns_read_at(hd.colour_off + ZV_COL_HDR, b, n * 8) != (int)(n * 8)) { col_close(); return; }
+			got = n * 8;
+		}
 		while (got < n * 8) {
 			int r = fs_read_chunk(fhc, b + got, (int)(n * 8 - got > 16384 ? 16384 : n * 8 - got));
 			if (r <= 0) { col_close(); return; }
@@ -734,9 +794,46 @@ static uint32_t col_group_of(uint32_t f) {
 	return lo;
 }
 
+/* col_load() for a film on a server: one request for the whole group,
+ * asked for ahead and left to arrive between the film's own (the
+ * prefetch, budget under COL_BUF), waited for only when the group is
+ * wanted now (after a seek). A short answer is the file's end: the
+ * last group, whose size the index does not give. */
+static bool col_load_net(int b, uint32_t g, uint32_t budget) {
+	uint32_t off = col_gidx[g * 2 + 1];
+	bool now = budget >= COL_BUF;
+	if (col_nb == b && col_bg[b] != (int32_t)g) {
+		(void)ns_read_pending(true);        /* another group is arriving in this buffer: let it, unused */
+		col_nb = -1;
+	}
+	if (col_nb >= 0 && now) (void)ns_read_pending(true);
+	if (col_nb >= 0 && !ns_read_pending(false)) {
+		col_len[col_nb] = col_ngot;
+		if (col_ngot < col_want[col_nb]) col_want[col_nb] = col_ngot;
+		col_nb = -1;
+	}
+	if (col_bg[b] != (int32_t)g) {
+		uint32_t size = g + 1 < col_ng ? col_gidx[g * 2 + 3] - off : COL_BUF;
+		col_bg[b] = (int32_t)g;
+		col_len[b] = 0;
+		col_want[b] = size <= COL_BUF ? size : 0;
+	}
+	if (!col_want[b] || col_len[b] >= col_want[b]) return true;
+	if (col_nb == b) return false;              /* on its way */
+	if (now) {
+		int r = ns_read_at(off, col_buf[b], col_want[b]);
+		col_len[b] = r > 0 ? (uint32_t)r : 0;
+		col_want[b] = col_len[b];
+		return true;
+	}
+	if (col_nb < 0 && ns_read_later(off, col_buf[b], col_want[b], &col_ngot, &col_ndone)) col_nb = b;
+	return false;
+}
+
 /* up to `budget` more bytes of group g into buffer b; true when it is all there */
 static bool col_load(int b, uint32_t g, uint32_t budget) {
 	uint32_t off = col_gidx[g * 2 + 1];
+	if (net_src) return col_load_net(b, g, budget);
 	if (col_bg[b] != (int32_t)g) {
 		uint32_t size = g + 1 < col_ng ? col_gidx[g * 2 + 3] - off : COL_BUF;
 		col_bg[b] = (int32_t)g;
@@ -1702,7 +1799,7 @@ static void repaint(void) {
 	if (out_kind != OUT_WINDOW) return;         /* the screen is ours: wm's desktop is not shown */
 	if (!have_file) {
 		z_win_fill_rect(&win, 0, 0, cw, ch, 0);
-		z_win_draw_text(&win, 8, 8, "No film.\n\nOpen one with the icon\nin the title bar (or o).", 1, &z_font_5x8);
+		z_win_draw_text(&win, 8, 8, "No film.\n\nOpen one with the icon\nin the title bar (or o),\nor from a web server (u).", 1, &z_font_5x8);
 		bar_show(true);
 		return;
 	}
@@ -1734,7 +1831,15 @@ static void update_title(void) {
 	}
 	/* (No running time: wm redraws a title bar it is given by clearing
 	 * it first, and once a second that showed as a black flash.) */
-	if (paused && have_file) {
+	if (have_file && net_src && (net_failed || net_stall)) {
+		const char *pz = net_failed ? " (stopped: " : " (buffering)";
+		while (*pz && i < (int)sizeof(title_buf) - 1) title_buf[i++] = *pz++;
+		if (net_failed) {
+			pz = ns_error();
+			while (*pz && i < (int)sizeof(title_buf) - 2) title_buf[i++] = *pz++;
+			title_buf[i++] = ')';
+		}
+	} else if (paused && have_file) {
 		const char *pz = " (paused)";
 		while (*pz && i < (int)sizeof(title_buf) - 1) title_buf[i++] = *pz++;
 	}
@@ -1764,7 +1869,12 @@ static void seek_to(uint32_t f) {
 	start = zv_start_for(&hd, f);
 	for (i = 0; i < nkeys; i++)
 		if (keys[i * 2] <= start) { kf = keys[i * 2]; koff = keys[i * 2 + 1]; }
-	file_seek(koff);
+	if (net_src) {
+		/* (the records end where the index starts: no asking past them) */
+		ns_stream_seek(koff, hd.index_off > koff ? hd.index_off : 0);
+		net_wait = true;            /* the frames up to f are waited for */
+		if (net_stall) { net_stall = false; }
+	} else file_seek(koff);
 	rd_pos = koff;
 	next_read = kf;
 	zv_dec_seek(&dec, kf);
@@ -1805,6 +1915,7 @@ static void seek_to(uint32_t f) {
 	memset(dmap_acc, 0, sizeof(dmap_acc));
 	sync_due = false;
 	flip_wait = false;
+	net_wait = false;
 	feed();
 	vs_start = zv_frame_vsync(&hd, clock_frame, 60);
 	fc_start = (uint16_t)z_game_frame();
@@ -1861,22 +1972,54 @@ static void close_file(void) {
 	mixer_off();
 	if (fh >= 0) { fs_close_handle(fh); fh = -1; }
 	col_close();
+	ns_close();
+	net_src = net_stall = net_failed = net_wait = false;
 	have_file = false;
 	sound = false;
 	cw_want_update();
+}
+
+static const char *open_err = "";
+static bool is_url(const char *p) {
+	return (p[0] == 'h' || p[0] == 'H') && (p[1] == 't' || p[1] == 'T') && (p[2] == 't' || p[2] == 'T') &&
+	       (p[3] == 'p' || p[3] == 'P') && p[4] == ':';
 }
 
 static bool open_file(const char *path) {
 	uint8_t hb[ZV_HDR_SIZE];
 	uint32_t i;
 	close_file();
-	fh = fs_open_read(path);
-	if (fh < 0) { dbg("cinema: cannot open the file\n"); return false; }
-	st_fs_ok = zfs_stats(&st_fs0) == 0;
+	open_err = "";
+	if (is_url(path)) {
+		if (!ns_open(path)) {
+			open_err = ns_error();
+			dbg("cinema: "); dbg(open_err); dbg("\n");
+			return false;
+		}
+		net_src = true;
+		file_pos = 0;
+		st_fs_ok = false;
+	} else {
+		fh = fs_open_read(path);
+		if (fh < 0) { open_err = "cannot open the file"; dbg("cinema: cannot open the file\n"); return false; }
+		st_fs_ok = zfs_stats(&st_fs0) == 0;
+	}
 	if (read_full(hb, ZV_HDR_SIZE) || zv_parse_header(hb, ZV_HDR_SIZE, &hd) || hd.max_rec > RQ_BYTES / 2) {
-		dbg("cinema: not a ZV file this player can show\n");
-		fs_close_handle(fh);
-		fh = -1;
+		/* (the server's own reason first: not found, no ranges, no answer) */
+		open_err = net_src && ns_error()[0] ? ns_error() : "not a ZV file this player can show";
+		dbg("cinema: "); dbg(open_err); dbg("\n");
+		if (net_src) {
+			static char keep[64];
+			uint32_t k = 0;
+			while (open_err[k] && k < sizeof(keep) - 1) { keep[k] = open_err[k]; k++; }
+			keep[k] = 0;
+			open_err = keep;
+			ns_close();
+			net_src = false;
+		} else {
+			fs_close_handle(fh);
+			fh = -1;
+		}
 		return false;
 	}
 	nkeys = 0;
@@ -1973,6 +2116,35 @@ static void play_step(void) {
 	uint32_t vs;
 	if (!have_file || paused) return;
 	feed();
+	if (net_src) {
+		/* The network is behind: stop the sound -- the clock with it --
+		 * before the mixer runs past what is in its ring and plays the
+		 * old sound there again, and start it when half a second is
+		 * queued. (A silent film's clock is the refresh: it shows the
+		 * frames late instead.) And a connection that is gone for good:
+		 * say so, and stop. */
+		if (ns_error()[0] && !net_failed && at_end && !rq_n) {
+			net_failed = true;
+			net_stall = false;
+			dbg("cinema: the film stopped: "); dbg(ns_error()); dbg("\n");
+			paused = true;
+			mixer_off();
+			update_title();
+			return;
+		}
+		if (sound) {
+			uint32_t u = mixer_used(), sec = hd.arate * hd.achan;
+			if (!net_stall && !at_end && u < sec / 8 && !rq_n) {
+				net_stall = true;
+				z_audio_mixer_enable(false);
+				update_title();
+			} else if (net_stall && (at_end || u >= sec / 2 || u >= MIXRING / 2)) {
+				net_stall = false;
+				z_audio_mixer_enable(true);
+				update_title();
+			}
+		}
+	}
 	prepare_back();
 	fc = (uint16_t)z_game_frame();
 	if (fc == last_fc) return;
@@ -2039,12 +2211,49 @@ static void play_step(void) {
 		report_cpu();
 		st_read_calls = 0;
 	}
-	/* the end */
-	if (at_end && !rq_n && back_frame < 0 && front_frame + 1 >= (int32_t)hd.frames &&
-	    (!sound || mixer_used() == 0)) {
-		report();
-		if (looping) seek_to(0);
-		else { paused = true; mixer_off(); update_title(); }
+	/* The end. With sound, the ring is the clock, and the mixer does
+	 * not stop at the write head: it goes round, playing the ring's
+	 * last three seconds again, and the clock stops just short of the
+	 * head (mixer_consumed()). Waiting for the ring to be exactly empty
+	 * was waiting for one pass to land on one byte: missed, the film's
+	 * last seconds of sound went round for good, loop or no loop, and
+	 * the last frame was never due. So: once every record's sound is in
+	 * the ring, an eighth of a second of silence goes in after it, and
+	 * the film is over when the mixer is inside that -- or has stopped
+	 * getting nearer, should a pass ever be long enough to miss it. */
+	if (sound && at_end && !end_pad) {
+		int i;
+		bool all = true;
+		for (i = 0; i < rq_n; i++) if (!rq[(rq_head + i) % RQ_N].sound) all = false;
+		if (all) {
+			uint32_t n = hd.arate * hd.achan / 8, k;
+			if (mix_head + n - mixer_consumed() > MIXRING - 64) n = 0;
+			for (k = 0; k < n; k++) mixring[(mix_head + k) & MIXMASK] = 0;
+			mix_head += n;
+			end_pad = true;
+			end_used = mixer_used();
+			end_stall = 0;
+		}
+	}
+	if (at_end && !rq_n) {
+		bool over = !sound;
+		if (sound && end_pad) {
+			uint32_t u = mixer_used();
+			if (u < end_used) { end_used = u; end_stall = 0; }
+			else end_stall++;
+			over = u <= hd.arate * hd.achan / 16 || end_stall >= 30;
+		}
+		if (over && back_frame >= 0 && sound) {      /* the last frame, if the clock stopped short of it */
+			st_shown++;
+			swap_pictures();
+			front_frame = back_frame;
+			back_frame = -1;
+		}
+		if (over && back_frame < 0 && front_frame + 1 >= (int32_t)hd.frames) {
+			report();
+			if (looping) seek_to(0);
+			else { paused = true; mixer_off(); update_title(); }
+		}
 	}
 }
 
@@ -2089,6 +2298,38 @@ static void do_open(void) {
 		last_dir[slash > 0 ? slash : 1] = 0;
 	}
 	open_file(path);
+	repaint();
+}
+
+/* A film on a web server (u): its address, asked for until it opens or
+ * the box is cancelled -- what went wrong is the box's next message,
+ * over the address as it was typed. */
+static char last_url[sizeof(filename)] = "http://";
+
+static void do_open_url(void) {
+	char url[sizeof(filename)], msg[96];
+	bool was = paused;
+	const char *why = "";
+	if (have_file && !paused) toggle_pause();
+	for (;;) {
+		int i = 0;
+		const char *a = why[0] ? "Could not open it: " : "The address of a .zv film on a web server:";
+		while (*a && i < (int)sizeof(msg) - 1) msg[i++] = *a++;
+		while (*why && i < (int)sizeof(msg) - 1) msg[i++] = *why++;
+		msg[i] = 0;
+		if (!z_dialog_prompt(&dlg_ctx, "Open address", msg, last_url, url, sizeof(url))) {
+			if (have_file && !was && paused) toggle_pause();
+			repaint();
+			return;
+		}
+		for (i = 0; url[i] && i < (int)sizeof(last_url) - 1; i++) last_url[i] = url[i];
+		last_url[i] = 0;
+		if (!is_url(url)) { why = "it must start with http://"; continue; }
+		repaint();
+		if (open_file(url)) break;
+		why = open_err[0] ? open_err : "no film there";
+		was = true;             /* the film that was playing is closed now */
+	}
 	repaint();
 }
 
@@ -2186,7 +2427,7 @@ static void handle_key(uint32_t k) {
 	if (out_kind != OUT_WINDOW) {
 		/* game mode: Esc or g leave it; no boxes there */
 		if (k == 27 || k == 'g') { leave_game(false); return; }
-		if (k == Z_KEY_HELP || k == 'o') return;
+		if (k == Z_KEY_HELP || k == 'o' || k == 'u') return;
 	}
 	if (k == Z_KEY_HELP) {
 		static const char help[] =
@@ -2200,6 +2441,7 @@ static void handle_key(uint32_t k) {
 			"c\tControls under the picture, on / off\n"
 			"i\tTiming lines on the serial console, on / off\n"
 			"o\tOpen a film\n"
+			"u\tOpen a film on a web server, by its address\n"
 			"F11\tFull screen (the film at full size)\n"
 			"g\tGame mode: the whole screen, in greys (or a colour film's\n"
 			"\tcolours) where the board has them (Esc or g leaves it)\n"
@@ -2228,6 +2470,7 @@ static void handle_key(uint32_t k) {
 		dbg(st_lines ? "cinema: timing lines on (UART0, every five seconds)\n" : "cinema: timing lines off\n");
 		break;
 	case 'o': do_open(); break;
+	case 'u': do_open_url(); break;
 	case 'g': enter_game(); break;
 	case Z_KEY_COLOUR:
 		/* F10: the colour window off, or on again */
@@ -2286,6 +2529,7 @@ int main(void) {
 	for (;;) {
 		z_msg_t msg;
 		while (z_msg_read(&msg) == Z_OK) {
+			if (ns_msg(&msg)) continue;         /* the network's (netsrc.c) */
 			switch (msg.subject) {
 			case Z_WM_KEY:
 				if (msg.obj.type != Z_UINT32) break;
@@ -2336,6 +2580,7 @@ int main(void) {
 			z_win_destroy(&win);
 			return 0;
 		}
+		if (net_src) ns_poll();
 		seek_service();
 		play_step();
 		/* the colour window and the bar: once a refresh is as often as
