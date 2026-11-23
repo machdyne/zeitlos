@@ -779,8 +779,8 @@ int main(int argc, char **argv) {
 		char d[80];
 		describe_theme(d, sizeof(d));
 		show_page(P_DISPLAY);
-		expect(!can_theme && !page_list() && strstr(d, "eight colour planes"),
-			"a monochrome board: the row says why, and there is no list");
+		expect(!can_theme && !page_list() && strstr(d, "not on this bitstream"),
+			"no desktop colour: the row says so, and there is no list");
 		can_theme = true;
 		read_values();
 		describe_theme(d, sizeof(d));

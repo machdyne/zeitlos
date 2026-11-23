@@ -644,7 +644,7 @@ static void draw_row(int y, const char *title, const char *value) {
 
 static void describe_theme(char *out, size_t n) {
 	if (!can_theme)
-		snprintf(out, n, "needs eight colour planes (the 45F boards)");
+		snprintf(out, n, "not on this bitstream (eight colour planes)");
 	else if (!colour_on)
 		snprintf(out, n, "off");
 	else if (theme_custom)
