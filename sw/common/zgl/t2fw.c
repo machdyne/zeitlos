@@ -249,7 +249,12 @@ static int facing(vtx_t *a, vtx_t *b, vtx_t *c) {
 	return d > 0 ? 1 : (d < 0 ? -1 : 0);
 }
 
-static int32_t div_s64(int64_t num, int64_t den) {
+/* Without jump threading: at -O2 GCC threads the slow path's branches
+ * (the shifts, both msb64()s) into copies of each other, 1,244 bytes
+ * where 664 do, and t2fw.hex no longer fitted its 12 KB. The same
+ * code otherwise, and no slower: tests/t2g_iss.c counts the same
+ * cycles a frame, to within 0.3%. */
+static __attribute__((optimize("no-thread-jumps"))) int32_t div_s64(int64_t num, int64_t den) {
 	uint64_t un, ud;
 	uint32_t inv;
 	int s = 0, neg;
