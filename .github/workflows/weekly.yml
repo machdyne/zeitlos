@@ -109,7 +109,19 @@ jobs:
           tar -C /opt/xpack -xzf /tmp/xpack.tgz
 
       - name: OSS CAD Suite (Yosys, nextpnr, ecppack)
-        uses: YosysHQ/setup-oss-cad-suite@v3
+        # The latest build, as YosysHQ/setup-oss-cad-suite@v3 fetched it,
+        # but found with the job's token. That action asks GitHub's API
+        # anonymously (its token header, "Bearer: ...", is not one the
+        # API accepts), and a runner's shared address can be over the
+        # anonymous limit: on 2026-11-16 the job stopped right there.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download -R YosysHQ/oss-cad-suite-build \
+            --pattern 'oss-cad-suite-linux-x64-*.tgz' -O "$RUNNER_TEMP/oss-cad-suite.tgz"
+          mkdir -p "$RUNNER_TEMP/oss-cad-suite"
+          tar -C "$RUNNER_TEMP/oss-cad-suite" --strip-components=1 -xzf "$RUNNER_TEMP/oss-cad-suite.tgz"
+          echo "$RUNNER_TEMP/oss-cad-suite/bin" >> "$GITHUB_PATH"
 
       - name: Lakritz -- the BIOS, synthesis, place and route, the bitstream
         run: make BOARD=lakritz PREFIX="$PREFIX" RISCV_PREFIX="$RISCV_PREFIX" bios soc
