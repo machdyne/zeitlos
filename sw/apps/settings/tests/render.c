@@ -816,6 +816,27 @@ int main(int argc, char **argv) {
 		expect(strstr(file, "system.rtc.timezone: UTC+5:30\n") != NULL, "the rest of the file kept");
 	}
 
+	// The resolution's question: when wm goes back (Esc, Go back, or
+	// fifteen seconds), its Z_WM_SCREEN replaces the "Keep...?" line.
+	{
+		z_msg_t m;
+		memset(&m, 0, sizeof(m));
+		set_status("Keep the new resolution? (wm asks; it goes back in 15 s)");
+		res_trial = Z_VMODE_1280X720;
+		res_asked = false;
+		res_back_by = 0;
+		m.subject = Z_WM_SCREEN;
+		m.obj = z_obj_uint32(Z_WM_PACK_SCREEN(Z_VMODE_1280X720, 1280, 720));
+		on_dialog_msg(&m, NULL);
+		expect(res_trial == Z_VMODE_1280X720 && strstr(status, "Keep"),
+			"the switch itself: the question stays");
+		m.obj = z_obj_uint32(Z_WM_PACK_SCREEN(Z_VMODE_640X480, 640, 480));
+		on_dialog_msg(&m, NULL);
+		expect(res_trial < 0 && strstr(status, "back to 640x480") && !strstr(status, "Keep"),
+			"gone back: the status line says so");
+		set_status("");
+	}
+
 	render_pages(prefix, "9");
 
 	printf("--- final /zeitlos.cfg ---\n%.*s--- end ---\n", file_len, file);
