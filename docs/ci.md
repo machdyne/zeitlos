@@ -11,6 +11,9 @@ Two jobs, side by side, about a quarter of an hour each.
 **build**
 - the xPack RISC-V GCC 15.2 the tree's budgets are set with, cached;
 - the kernel, the BIOS and every app, for Lakritz;
+- T2's geometry firmware (`sw/t2fw`), which every ECP5 board's
+  synthesis reads: the linker fails if it outgrows its code memory
+  ([zgl_t2.md](zgl_t2.md));
 - `tools/gen_abi.py --check`: the committed ABI fingerprint is the one
   the sources have;
 - `tools/i18n.py check`: no two translated strings hash the same, and
@@ -68,6 +71,7 @@ time per job is, which is why the gateware is weekly and one board.
 
 ```
 make BOARD=lakritz os bios apps
+make BOARD=lakritz sw/t2fw/t2fw.hex
 python3 tools/gen_abi.py --check
 make BOARD=obst output/obst/apps.zar && make BOARD=lakritz output/lakritz/apps.zar
 make -C sim/sys test ZAR=$PWD/output/lakritz/apps.zar
