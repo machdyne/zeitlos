@@ -50,7 +50,8 @@ jobs:
       - name: Host packages, emscripten, Playwright
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq dosfstools mtools python3-pil python3-numpy emscripten
+          # numpy and scikit-learn: `ask build`'s vectors (tools/ask/requirements.txt)
+          sudo apt-get install -y -qq dosfstools mtools python3-pil python3-numpy python3-sklearn emscripten
           python3 -m pip install --break-system-packages -q playwright
           python3 -m playwright install --with-deps chromium
 
