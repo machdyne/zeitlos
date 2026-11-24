@@ -59,22 +59,83 @@
  * hardware: it reads every stripe, and any stripe that changed without
  * its bit set is counted. That count should be zero, always. Without
  * the register, every scan reads everything.
+ *
+ * THE OTHER SCREEN MODES
+ *
+ * Every mode's framebuffer starts at VRAM word 0 and is rows of its own
+ * width, one after another (docs/screen_modes.md), so 1280 bytes of it
+ * in VRAM order are as good a stripe as sixteen 640-pixel rows: the
+ * copy, the hash and PackBits do not need to know where a row ends. The
+ * page does, and the trailer's spare flag bits tell it, in any mode
+ * but 640x480 (zscreen_trailer()). At 640x480 nothing on the wire
+ * changes.
+ *
+ * Up to 100 stripes, though, is more than the thirty the copy, the
+ * masks and the ESP32's shadow hold. So the framebuffer is taken a
+ * window of thirty stripes at a time, and the snapshot is of one
+ * window: one instant per window, not for the whole screen. A drag
+ * that crosses windows can show its band in two of them for a frame.
+ * The copy stays 38400 bytes, which is what net's RAM budget has room
+ * for.
+ *
+ * DIRTY's 30 bits cover VRAM words 0..9599, so only window 0 has them.
+ * A later window is read whole every ZSCREEN_UNTRACKED_TICKS, and a
+ * stripe that changed is read again on every scan until it has been
+ * still for ZSCREEN_HOT_TICKS: a change down there shows within half a
+ * second, and while something moves or is typed into there it is
+ * followed scan by scan, reading only what moves.
  */
 
 #include <stdint.h>
 #include <string.h>
 #include <stdio.h>
+#include <stddef.h>
 
 #include "zscreen.h"
 #include "zsoc.h"
 #include "../apps/net/packbits.h"
 
-#define FB_BASE 0x20000000
+/* The hardware, by name, so that a host test can stand in for it
+ * (sw/common/tests/test_zscreen.c). */
+#ifndef ZSCREEN_VRAM
+#define ZSCREEN_VRAM          ((const volatile uint32_t *)0x20000000)
+#define ZSCREEN_DIRTY_PROBE() (z_soc_has_feature2(Z_FEATURE2_VRAM_DIRTY) && \
+				z_socctl_present())
+#define ZSCREEN_DIRTY_GET()   (reg_socctl_dirty & ZSCREEN_ALL)
+#define ZSCREEN_DIRTY_CLEAR(m) (reg_socctl_dirty = (m))
+#define ZSCREEN_MODE()        screen_mode()
+#endif
+
+/* The screen mode, as the trailer's flags carry it: Z_VMODE_*, or 7
+ * for 1280x720 shown from a 640x360 desktop (z_vmode_geometry()).
+ * socctl and VMODE are read once. The small build has no screen modes
+ * (docs/screen_modes.md). */
+static inline int screen_mode(void)
+{
+#ifndef Z_SMALL
+	uint32_t v = reg_socctl_vmode, m = v & 7;
+
+	if (!z_socctl_present() || (v >> 16) != Z_VMODE_SIG)
+		return Z_VMODE_640X480;
+	if (m == Z_VMODE_1280X720 && (v & Z_VMODE_DBL))
+		return 7;
+	return (int)m;
+#else
+	return 0;
+#endif
+}
+
+/* Each mode's stripes: its desktop's width/8 * height / 1280, rounded
+ * up -- 640x480, 800x600, 1024x768, 1280x720, 800x480, 1280x800,
+ * 960x540, 640x360. KEEP IN SYNC with ZSCREEN_TRAILER_MODE's table in
+ * zscreen.h and the page's (esp32/zeitlos-nic/web/index.html). */
+static const uint8_t mode_stripes[8] = { 30, 47, 77, 90, 38, 100, 51, 23 };
 
 _Static_assert(ZSCREEN_ALL == Z_SOCCTL_DIRTY_ALL, "stripe mask");
 _Static_assert(ZSCREEN_PACK_WORST == 1709, "packbits worst case");
 _Static_assert(ZSCREEN_LITERAL_LEN == 1290, "literal-run length");
 _Static_assert(ZSCREEN_LITERAL_LEN <= ZSCREEN_PACK_WORST, "fallback fits");
+_Static_assert(ZSCREEN_WINDOWS * ZSCREEN_STRIPES >= 100, "1280x800 fits");
 
 #ifdef SCREEN_PROFILE
 static uint32_t rdcycle(void)
@@ -118,11 +179,14 @@ static uint32_t rdcycle(void)
  * would cost as much as the reads it saves, and the point of the
  * exercise is that the snapshot is not paid for twice.
  *
- * Reads only the stripes in `want` (bit n = stripe n), and returns
+ * Reads only the slots in `want` (bit i = stripe 30*w + i), and returns
  * the ones among them whose contents differ from their last copy. */
-static uint32_t snapshot(zscreen_t *s, uint32_t want)
+static uint32_t snapshot(zscreen_t *s, int w, uint32_t want, uint32_t *fresh)
 {
-	uint32_t changed = 0;
+	uint32_t changed = 0, unknown = 0;
+	const volatile uint32_t *v = ZSCREEN_VRAM + w * ZSCREEN_STRIPES * ZSCREEN_STRIPE_WORDS;
+	uint32_t *d = s->snap;
+	uint32_t *hp = s->hash + w * ZSCREEN_STRIPES;
 #ifdef SCREEN_PROFILE
 	/* rdcycle is wall clock and this loop is longer than a timeslice,
 	 * so a single reading can be mostly somebody else's work; the
@@ -131,28 +195,30 @@ static uint32_t snapshot(zscreen_t *s, uint32_t want)
 	uint32_t t0 = rdcycle();
 #endif
 
-	for (int idx = 0; idx < ZSCREEN_STRIPES; idx++) {
+	for (int idx = 0; idx < ZSCREEN_STRIPES; idx++,
+			v += ZSCREEN_STRIPE_WORDS, d += ZSCREEN_STRIPE_WORDS) {
 		if (!(want & (1u << idx)))
 			continue;
-		const volatile uint32_t *v =
-			(const volatile uint32_t *)FB_BASE + idx * ZSCREEN_STRIPE_WORDS;
-		uint32_t *d = s->snap + idx * ZSCREEN_STRIPE_WORDS;
-		uint32_t h = 0x9e3779b9u ^ (uint32_t)idx;
+		const volatile uint32_t *p = v;
+		uint32_t *q = d;
+		uint32_t h = 0x9e3779b9u ^ (uint32_t)(w * ZSCREEN_STRIPES + idx);
 		/* by fours: the loop arithmetic was a fifth of the work
 		 * in a body this small */
 		for (int i = 0; i < ZSCREEN_STRIPE_WORDS; i += 4) {
-			uint32_t a = v[0], b = v[1], c = v[2], e = v[3];
-			d[0] = a; d[1] = b; d[2] = c; d[3] = e;
+			uint32_t a = p[0], b = p[1], c = p[2], e = p[3];
+			q[0] = a; q[1] = b; q[2] = c; q[3] = e;
 			h ^= a; h = ((h << 5) | (h >> 27)) + a;
 			h ^= b; h = ((h << 5) | (h >> 27)) + b;
 			h ^= c; h = ((h << 5) | (h >> 27)) + c;
 			h ^= e; h = ((h << 5) | (h >> 27)) + e;
-			v += 4; d += 4;
+			p += 4; q += 4;
 		}
 		if (!h)
 			h = 1;		/* 0 means "never sent" */
-		if (h != s->hash[idx]) {
-			s->hash[idx] = h;
+		if (h != hp[idx]) {
+			if (!hp[idx])
+				unknown |= 1u << idx;
+			hp[idx] = h;
 			changed |= 1u << idx;
 		}
 	}
@@ -169,6 +235,7 @@ static uint32_t snapshot(zscreen_t *s, uint32_t want)
 		prof_n = 0;
 	}
 #endif
+	*fresh = unknown;
 	return changed;
 }
 
@@ -218,36 +285,105 @@ static int popcount30(uint32_t m)
 	return n;
 }
 
-uint32_t zscreen_scan(zscreen_t *s, int full, uint32_t *missed)
+uint32_t zscreen_scan(zscreen_t *s, uint32_t now, uint32_t *missed)
 {
 	if (s->dirty_hw == 0)
-		s->dirty_hw = z_soc_has_feature2(Z_FEATURE2_VRAM_DIRTY) &&
-			z_socctl_present() ? 1 : 2;
+		s->dirty_hw = ZSCREEN_DIRTY_PROBE() ? 1 : 2;
 
-	/* Read what was written, clear exactly that, and only then read
-	 * the pixels -- see "WHAT CHANGED, WITHOUT LOOKING" above. */
-	int has = s->dirty_hw == 1;
-	uint32_t marked = 0;
-	if (has) {
-		marked = reg_socctl_dirty & ZSCREEN_ALL;
-		if (marked)
-			reg_socctl_dirty = marked;
+	/* A new screen mode: nothing in the copy, the hashes or the masks
+	 * means anything any more, and every window is read whole. */
+	int m = ZSCREEN_MODE();
+	if (m + 1 != s->mode) {
+		memset(s->owed, 0, sizeof(*s) - offsetof(zscreen_t, owed) -
+			sizeof(s->snap));
+		s->mode = (uint8_t)(m + 1);
+		s->stripes = mode_stripes[m];
+		s->full = (1u << ZSCREEN_WINDOWS) - 1;
 	}
-	int verify = has && full == ZSCREEN_FULL_VERIFY;
-	uint32_t want = zscreen_want(has, marked, full);
-	uint32_t changed = want ? snapshot(s, want) : 0;
-	uint32_t miss = 0;
+	s->owed_out = 0;
+	if (missed)
+		*missed = 0;
 
+	/* The next window with something to send, after the last one
+	 * scanned. Window 0 has DIRTY, when the bitstream does; without
+	 * it window 0 is read whole every scan, as it always was. A later
+	 * window is read whole when it is due, and else only what changed
+	 * the last time. An owed stripe in a later window is read again:
+	 * its slot has held other stripes since. */
+	int has = s->dirty_hw == 1;
+	int last = (s->stripes - 1) / ZSCREEN_STRIPES;
+	uint32_t marked = has ? ZSCREEN_DIRTY_GET() : 0;
+	uint32_t want, bit, owed;
+	int w = s->win, k = last;
+	for (;;) {
+		if (k-- < 0)
+			return 0;
+		if (++w > last)
+			w = 0;
+		bit = 1u << w;
+		owed = s->owed[w];
+		if (w == 0 && has)
+			want = (s->full & bit) ? ZSCREEN_ALL : marked;
+		else if ((s->full & bit) || w == 0 ||
+				now - s->seen[w] >= ZSCREEN_UNTRACKED_TICKS)
+			want = ZSCREEN_ALL;
+		else if (now - s->hot_tick[w] < ZSCREEN_HOT_TICKS)
+			want = s->hot[w];
+		else
+			want = s->hot[w] = 0;
+		if (last)
+			want |= owed;
+		if (want | owed)
+			break;
+	}
+	/* the last window's stripes */
+	int n = s->stripes - w * ZSCREEN_STRIPES;
+	uint32_t all = n < ZSCREEN_STRIPES ? (1u << n) - 1 : ZSCREEN_ALL;
+	int verify = 0;
+	if (w == 0 && has) {
+		/* Read what was written, clear exactly that, and only then
+		 * read the pixels -- see "WHAT CHANGED, WITHOUT LOOKING"
+		 * above. Bits past a small mode's framebuffer are cleared
+		 * too, or they would ask for a scan forever. */
+		if (marked)
+			ZSCREEN_DIRTY_CLEAR(marked);
+		marked &= all;
+		verify = s->verify;
+		s->verify = 0;
+	} else if (want == ZSCREEN_ALL) {
+		s->seen[w] = now;
+	}
+	int whole = s->full & bit;
+	s->full &= (uint8_t)~bit;
+	want &= all;
+	owed &= all;
+	s->owed[w] = 0;
+
+	uint32_t fresh = 0;
+	uint32_t changed = want ? snapshot(s, w, want, &fresh) : 0;
+	/* what changed is read every scan until it has been still for
+	 * ZSCREEN_HOT_TICKS -- but not what a reset or a new mode made
+	 * look new */
+	if (changed && !whole) {
+		s->hot[w] |= changed;
+		s->hot_tick[w] = now;
+	}
 	if (verify) {
 		/* written while the pass ran: its bit is set again, and it
 		 * is next scan's business, not a miss */
-		miss = zscreen_miss(changed, marked, reg_socctl_dirty);
+		/* and a stripe whose last hash was forgotten (a reset, a new
+		 * mode) is new, not missed */
+		uint32_t miss = zscreen_miss(changed & ~fresh, marked,
+			ZSCREEN_DIRTY_GET());
 		s->verify_passes++;
 		if (miss)
 			s->verify_missed += (uint32_t)popcount30(miss);
+		if (missed)
+			*missed = miss;
 	}
-	if (missed)
-		*missed = miss;
+	s->win = (uint8_t)w;
+	s->flags = m ? (uint8_t)(ZSCREEN_TRAILER_GEOM | w << 2 | m << 4) : 0;
+	s->owed_out = owed;
 	return changed;
 }
 
@@ -271,13 +407,23 @@ uint32_t zscreen_scan(zscreen_t *s, int full, uint32_t *missed)
  * A reader tells trailer from payload by arithmetic, not by the magic
  * alone: the trailer is there only if there are exactly four bytes
  * left over after the decode consumed what it needed.
+ *
+ * The flags' bits 7:1 were 0 until the other screen modes, and still
+ * are at 640x480. In any other mode bit 1 says that bits 3:2 are the
+ * window -- the stripe is 30 * window + the [idx] the relay forwards,
+ * which on the ESP32 path is a slot of its thirty-stripe shadow -- and
+ * bits 6:4 the mode (zscreen.h). That is all a page needs for the
+ * geometry, and no stripe grows by a byte. A page from before this
+ * reads the trailer and draws stripe idx at rows 16*idx, which is
+ * what it would have done with any mode but 640x480.
  */
-void zscreen_trailer(uint8_t dst[ZSCREEN_TRAILER], uint16_t frame, int last)
+void zscreen_trailer(const zscreen_t *s, uint8_t dst[ZSCREEN_TRAILER],
+	uint16_t frame, int last)
 {
 	dst[0] = ZSCREEN_TRAILER_MAGIC;
 	dst[1] = (uint8_t)(frame & 0xff);
 	dst[2] = (uint8_t)(frame >> 8);
-	dst[3] = last ? ZSCREEN_TRAILER_LAST : 0;
+	dst[3] = (uint8_t)(s->flags | (last ? ZSCREEN_TRAILER_LAST : 0));
 }
 
 /* HOW BIG A STRIPE CAN GET
@@ -316,9 +462,9 @@ int zscreen_pack(const uint8_t *raw, uint8_t *dst)
 	return clen;
 }
 
-int zscreen_encode(const uint8_t *raw, uint8_t *dst, uint16_t frame, int last)
+int zscreen_encode(const zscreen_t *s, int i, uint8_t *dst, uint16_t frame, int last)
 {
-	int clen = zscreen_pack(raw, dst);
-	zscreen_trailer(dst + clen, frame, last);
+	int clen = zscreen_pack(zscreen_slot(s, i), dst);
+	zscreen_trailer(s, dst + clen, frame, last);
 	return clen + ZSCREEN_TRAILER;
 }

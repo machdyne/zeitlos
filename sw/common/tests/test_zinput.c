@@ -33,8 +33,14 @@ static void test_words(void)
 	w = zinput_pointer_word(0x7d0, 0x7d0, 0xff);
 	CHECK((w & (1u << 24)) != 0, "present is set");
 	CHECK(((w >> 20) & 7) == 7, "only the three button bits are stored");
-	CHECK((w & 0x3ff) == 0x3d0, "x is ten bits");
+	CHECK((w & 0x3ff) == 0x3d0, "x's low ten bits");
+	CHECK(((w >> 23) & 1) == 1, "x's eleventh bit: 0x7d0 has it");
 	CHECK(((w >> 10) & 0x3ff) == 0x3d0, "y is ten bits");
+	w = zinput_pointer_word(1279, 799, 0);
+	CHECK((w & 0x3ff) == (1279 & 0x3ff) && ((w >> 23) & 1) == 1,
+		"x to 2047: its eleventh bit in 23 (rtl/sysctl.v)");
+	CHECK(((w >> 10) & 0x3ff) == 799, "y to 1023");
+	CHECK(((w >> 20) & 7) == 0, "x's eleventh bit is not a button");
 	/* Bit 7 is the leave. It is not a button, and the word still has
 	 * present set: dropping present is zinput_mouse's decision. */
 	w = zinput_pointer_word(1, 2, 0x80);

@@ -1,7 +1,8 @@
 /*
  * Host tests for sw/common/zscreen.h: the stripe hash (a vertical line
  * must not hash like a blank stripe), PackBits against its literal-run
- * fallback, the frame trailer, and the DIRTY want/miss masks.
+ * fallback, the frame trailer, and the DIRTY want/miss masks. The scan
+ * itself, in every screen mode, is test_zscreen_modes.c.
  *
  *   cc -std=gnu99 -Wall -Wextra -I sw/common -I sw/apps/net \
  *      -o /tmp/test_zscreen sw/common/tests/test_zscreen.c \
@@ -98,14 +99,23 @@ static void test_pack(void)
 	}
 	CHECK(ok, "literal runs are the stripe, 128 bytes at a time");
 
-	memset(raw, 0xa5, sizeof raw);
-	n = zscreen_encode(raw, dst, 0x1234, 1);
+	static zscreen_t s;
+	zscreen_init(&s);
+	memset(s.snap + 2 * ZSCREEN_STRIPE_WORDS, 0xa5, ZSCREEN_STRIPE_BYTES);
+	n = zscreen_encode(&s, 2, dst, 0x1234, 1);
 	CHECK(n == 24, "solid stripe plus trailer");
 	CHECK(dst[20] == ZSCREEN_TRAILER_MAGIC && dst[21] == 0x34 &&
 		dst[22] == 0x12 && dst[23] == ZSCREEN_TRAILER_LAST, "trailer, last of frame");
-	zscreen_trailer(dst, 0x0001, 0);
+	zscreen_trailer(&s, dst, 0x0001, 0);
 	CHECK(dst[0] == ZSCREEN_TRAILER_MAGIC && dst[1] == 1 && dst[2] == 0 &&
 		dst[3] == 0, "trailer, not last");
+	/* another mode: the flags say so, and the stripe is no longer */
+	s.flags = ZSCREEN_TRAILER_GEOM | 2 << 2 | 5 << 4;
+	n = zscreen_encode(&s, 2, dst, 0x1234, 1);
+	CHECK(n == 24 && dst[23] == (ZSCREEN_TRAILER_LAST | ZSCREEN_TRAILER_GEOM | 2 << 2 | 5 << 4),
+		"trailer flags: last, geometry, window 2, mode 5");
+	CHECK(ZSCREEN_TRAILER_WIN(dst[23]) == 2 && ZSCREEN_TRAILER_MODE(dst[23]) == 5,
+		"the flags read back");
 }
 
 static void test_masks(void)
@@ -129,7 +139,8 @@ static void test_masks(void)
 	CHECK(zscreen_miss(0x7, 0x1, 0x6) == 0, "a stripe written during the copy is not a miss");
 
 	zscreen_init(&s);
-	CHECK(s.dirty_hw == 0 && s.hash[3] == 0 && s.verify_passes == 0, "init probes later");
+	CHECK(s.dirty_hw == 0 && s.hash[3] == 0 && s.verify_passes == 0 &&
+		s.mode == 0, "init probes later");
 	s.hash[3] = 9;
 	s.snap[0] = 4;
 	s.dirty_hw = 1;

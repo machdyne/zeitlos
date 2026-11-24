@@ -22,8 +22,9 @@
  * returns 1 when a key was injected. The caller counts.
  */
 
-/* {present[24], buttons[22:20], y[19:10], x[9:0]}. buttons bit 7 is
- * not stored: it is the leave, and it never reaches this word. */
+/* {present[24], x[10] in 23, buttons[22:20], y[19:10], x[9:0]}.
+ * buttons bit 7 is not stored: it is the leave, and it never reaches
+ * this word. */
 uint32_t zinput_pointer_word(uint32_t x, uint32_t y, uint32_t buttons);
 
 /* mods in 9..16, usage in 1..8, pressed in bit 0. */

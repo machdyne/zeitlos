@@ -12,8 +12,11 @@
  *              file again. Without it there is no remote desktop, and
  *              the browser is told why in plain text.
  *   GET /ws    WebSocket. One stripe is [idx][len16 LE][PackBits +
- *              trailer], the bytes the ESP32 forwards today. 3-byte
- *              keys and 5-byte mouse packets come back.
+ *              trailer], the bytes the ESP32 forwards today: in a
+ *              screen mode other than 640x480, idx is the slot in the
+ *              window and the trailer says which window and which mode
+ *              (zscreen.h). 3-byte keys and 5-byte mouse packets come
+ *              back.
  *
  * At most apps.zerdesk.viewers viewers at once (6 unless the file says
  * otherwise, and never more than 6: that is how many inbound relays
@@ -101,7 +104,7 @@ enum { C_FREE = 0, C_HTTP, C_BODY, C_WS, C_DRAIN };
 typedef struct {
 	uint8_t state;
 	bool viewer;
-	bool need_all;
+	uint8_t need;			/* bit w: window w goes whole */
 	bool skip;			/* WS: ignore until the message ends */
 	z_port_t port;
 	z_net_accept_t info;
@@ -133,14 +136,17 @@ static int allow_any;
 static uint32_t refuse_log_tick;
 static uint32_t next_conn_id;
 
+/* The copy is one window of thirty stripes (zscreen.h): all of
+ * 640x480, a part of the larger screen modes. enc[] is per slot, and
+ * todo is the slots of the window scanned last. */
 static zscreen_t scr;
-static int full_next = ZSCREEN_FULL_RESET;
 static uint32_t last_scan_tick, last_verify_tick;
 static uint32_t scan_gap = SCAN_TICKS;
 static uint16_t frame_seq;
 static uint8_t enc[ZSCREEN_STRIPES][ZSCREEN_LITERAL_LEN];
 static uint16_t enc_len[ZSCREEN_STRIPES];
 static uint32_t enc_valid;
+static uint8_t enc_win;
 static uint8_t pack[ZSCREEN_PACK_WORST];
 
 static struct {
@@ -350,19 +356,21 @@ static bool frame_drained(void)
 static bool want_all(void)
 {
 	for (int i = 0; i < MAX_CONN; i++)
-		if (conns[i].state == C_WS && conns[i].viewer && conns[i].need_all)
+		if (conns[i].state == C_WS && conns[i].viewer && conns[i].need)
 			return true;
 	return false;
 }
 
 /* One frame is one instant: do not copy again until every viewer has
  * been handed the stripes of the current one. DIRTY bits accumulate
- * across that wait. A new viewer is marked need_all and gets the
- * whole frame from the copy. */
+ * across that wait. A new viewer is owed every window (zscreen_owe_all())
+ * and gets each one whole as it is scanned; at 640x480 that is one
+ * window, and it comes from the copy without reading VRAM again. In
+ * the larger modes a frame is one window. */
 static void scan(uint32_t now)
 {
-	int full, sends, saw, buttons;
-	uint32_t missed = 0, changed, t0;
+	int sends, saw, buttons;
+	uint32_t missed = 0, changed, owed, t0;
 	bool all;
 
 	if (!viewers() || !frame_drained())
@@ -373,31 +381,38 @@ static void scan(uint32_t now)
 	last_scan_tick = now;
 	st.scans++;
 
-	full = full_next;
-	full_next = ZSCREEN_FULL_NONE;
 	t0 = rdcycle();
-	changed = zscreen_scan(&scr, full, &missed);
+	changed = zscreen_scan(&scr, now, &missed);
+	owed = scr.owed_out;
 	st.cyc_snap += rdcycle() - t0;
 	if (missed)
 		printf("screen: stripes %08lx changed with no DIRTY bit\n",
 			(unsigned long)missed);
+	/* enc[] is per slot: a scan of another window puts other stripes
+	 * in the slots */
+	if (scr.win != enc_win) {
+		enc_valid = 0;
+		enc_win = scr.win;
+	}
+	enc_valid &= ~changed;
 
-	if (changed || all) {
+	if (changed || owed) {
+		uint8_t bit = (uint8_t)(1u << scr.win);
 		frame_seq++;
-		enc_valid &= ~changed;
 		if (changed)
 			st.frames++;
 		for (int i = 0; i < MAX_CONN; i++) {
 			conn_t *c = &conns[i];
 			if (c->state != C_WS || !c->viewer)
 				continue;
-			if (c->need_all) {
-				c->need_all = false;
-				c->todo = ZSCREEN_ALL;
-				c->first_seq = frame_seq;
-			} else {
-				c->todo |= changed;
+			c->todo |= changed;
+			if (c->need & bit) {
+				c->todo |= owed;
+				if (c->need == 0xf)
+					c->first_seq = frame_seq;
+				c->need &= (uint8_t)~bit;
 			}
+			c->need &= (uint8_t)((1u << zscreen_windows(&scr)) - 1);
 		}
 	}
 
@@ -412,7 +427,7 @@ static void scan(uint32_t now)
 	if (now - last_verify_tick >= VERIFY_TICKS && !buttons &&
 			sends <= BUSY_STRIPES) {
 		last_verify_tick = now;
-		full_next = ZSCREEN_FULL_VERIFY;
+		zscreen_full(&scr, ZSCREEN_FULL_VERIFY);
 	}
 }
 
@@ -437,7 +452,7 @@ static void frame_stripes(conn_t *c)
 		o[h++] = (uint8_t)(dlen >> 8);
 		memcpy(o + h, enc[idx], enc_len[idx]);
 		h += enc_len[idx];
-		zscreen_trailer(o + h, frame_seq, c->todo ? 0 : 1);
+		zscreen_trailer(&scr, o + h, frame_seq, c->todo ? 0 : 1);
 		h += ZSCREEN_TRAILER;
 		c->out_len = (uint16_t)(c->out_len + h);
 		c->stripes++;
@@ -716,15 +731,15 @@ static void http_request(conn_t *c)
 		c->skip = false;
 		c->state = C_WS;
 		c->viewer = true;
-		c->need_all = true;
+		c->need = 0xf;
+		zscreen_owe_all(&scr);
 		c->opened = z_uptime_ticks();
 		c->last_progress = c->opened;
 		printf("zerdesk: viewer %d connected from ", (int)(c - conns) + 1);
 		print_ip(c->info.ip);
 		printf(" (n=%d)\n", viewers());
 		if (viewers() == 1) {
-			full_next = ZSCREEN_FULL_RESET;
-			zscreen_forget(&scr);
+			zscreen_full(&scr, ZSCREEN_FULL_RESET);
 			enc_valid = 0;
 		}
 		return;

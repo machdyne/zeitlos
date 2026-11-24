@@ -23,9 +23,11 @@ static uint32_t last_tick;
 static int held;
 static int motion;
 
+/* x's eleventh bit, for the screen modes 1280 wide, is bit 23
+ * (rtl/sysctl.v); a bitstream from before them reads it as 0. */
 uint32_t zinput_pointer_word(uint32_t x, uint32_t y, uint32_t buttons)
 {
-	return (1u << 24) | ((buttons & 7) << 20)
+	return (1u << 24) | ((x & 0x400) << 13) | ((buttons & 7) << 20)
 		| ((y & 0x3ff) << 10) | (x & 0x3ff);
 }
 
