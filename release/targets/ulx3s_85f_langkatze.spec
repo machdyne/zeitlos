@@ -59,3 +59,4 @@ make_vars = DEVICE=85k
 pmods = langkatze@j1
 
 defines = -ESP32_LINK
+	+CPU_ZEITLOS32PS

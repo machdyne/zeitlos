@@ -8,8 +8,10 @@ interrupt instructions and IRQ timer with the same semantics, and (with
 `CPU_ROT`) Zbb's ror, rol and rori. The BIOS, the kernel and every
 binary run on it unchanged.
 
-It is **experimental** and not yet the default anywhere. A build asks
-for it:
+It is the release default on most ECP5 targets (`+CPU_ZEITLOS32PS` in
+`release/targets/*.spec`, including Lakritz, Konfekt, Klinge, Minze,
+Mozart, Sergei, and ULX3S 12F / 45F / 85F Langkatze). Standalone
+`make BOARD=x` still builds picorv32 unless asked:
 
 ```
 make BOARD=lakritz EXTRA_DEFINES=-DCPU_ZEITLOS32PS
@@ -78,6 +80,10 @@ Full default builds (MPU, `CPU_ROT` where the board has it), nextpnr
 | Sergei ML0 | 21,766 / 56 / 55.9 MHz | 21,502 / 54 / 50.1 MHz |
 | Klinge (DDR3) | 20,146 / 42 / 59.6 MHz | 19,892 / 40 / 56.1 MHz |
 | ULX3S (25F) | 24,360: does not fit | 22,927 / 44 / 48.1 MHz |
+| ULX3S 12F (release) | 24,243 / 42 / 62.9 MHz | 22,987 / 41 / 48.7–50.6 MHz (4/4 seeds) |
+| ULX3S 45F (release) | 23,989 / 89 / 57.2 MHz | 23,568 / 88 / 48.1–50.6 MHz (4/4 seeds) |
+| ULX3S 85F (release) | 23,989 / 89 / 54.3 MHz | 23,568 / 88 / 48.6 MHz (1/4 seeds; stays on picorv32) |
+| ULX3S 85F Langkatze | 24,160 / 85 / 58.5 MHz | 23,841 / 84 / 48.7–51.1 MHz (5/6 seeds) |
 | Minze | 21,430 / 42 / 58.2 MHz | 21,406 / 40 / 57.4 MHz |
 
 (The ML0 rows were placed without `tools/ddmi/pin_serialiser.py`; see

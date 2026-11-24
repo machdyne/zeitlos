@@ -57,3 +57,4 @@ make_vars = DEVICE=12k
 # LUT4) comes back before any of that -- the data cache is the newest
 # and least load-bearing of the three. docs/dcache.md.
 defines = ESP32_RXFIFO_BITS=11
+	+CPU_ZEITLOS32PS
