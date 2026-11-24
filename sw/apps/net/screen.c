@@ -3,7 +3,8 @@
  *
  * Screen streaming over the ESP32 link. The 640x480 1bpp framebuffer
  * is treated as 30 stripes of 16 rows (1280 bytes each -- one UDP
- * datagram, one link frame). A scan hashes all thirty against what was
+ * datagram, one link frame), and the other screen modes as windows of
+ * thirty such stripes (below). A scan hashes all thirty against what was
  * last sent and ships the ones that changed; a full pass is forced
  * every so often so a stripe lost in flight (this is UDP on purpose)
  * heals itself. The consumer keeps the shadow.
@@ -13,9 +14,15 @@
  *
  * The copy, the hash, the DIRTY register and the frame trailer live
  * in zscreen (sw/common/zscreen.c), which does not know this is UDP.
- * What stays here is the ZS header, the shadow of stripes a viewer is
- * still owed, the pacing, and pumping the visor's pointer between
- * stripes. Nothing on the wire changes.
+ * What stays here is the ZS header, the pacing, and pumping the
+ * visor's pointer between stripes. Nothing on the wire changes.
+ *
+ * In the other screen modes (docs/screen_modes.md) zscreen hands over
+ * a window of thirty stripes at a time, and a stripe goes out under
+ * its slot in that window: the ZS header's index, which the ESP32
+ * keeps one shadow per, stays below thirty, and the trailer's flags
+ * say which window and which mode (zscreen.h). The firmware passes
+ * bytes and knows nothing of the geometry.
  */
 
 #include <stdint.h>
@@ -28,7 +35,6 @@
 #include "esp32link.h"
 
 #define STRIPES        ZSCREEN_STRIPES
-#define ALL_STRIPES    ZSCREEN_ALL
 #define SCREEN_PORT    7777
 #define SRC_PORT       7778
 #define FORCE_TICKS    (5 * TICKS_PER_SEC)	/* full resend interval (heals a
@@ -65,20 +71,18 @@
  *     out by hand in uart1_putc().
  */
 #define BUSY_STRIPES   10
+#define ALL_STRIPES    ZSCREEN_ALL
 #define SCAN_TICKS     (TICKS_PER_SEC / 20)	/* 20 fps ceiling */
 #define BUSY_SCAN_TICKS (TICKS_PER_SEC / 15)	/* 15 fps under churn */
 
-/* Stripes the viewer must be sent whatever their hash says: all of
+/* Stripes the viewer must be sent whatever their hash says -- all of
  * them for a new viewer or the periodic resend, and any a drag cut
- * out of a full resend. */
-static uint32_t owed = ALL_STRIPES;
-/* The next scan reads every stripe: FULL_RESET after screen_reset(),
- * when the hashes mean nothing; FULL_VERIFY for the periodic resend,
- * when they do and a changed stripe with no DIRTY bit is a miss. */
-#define FULL_NONE      ZSCREEN_FULL_NONE
-#define FULL_RESET     ZSCREEN_FULL_RESET
-#define FULL_VERIFY    ZSCREEN_FULL_VERIFY
-static int      full_next = FULL_RESET;
+ * out of a full resend -- are owed in zscreen (zscreen_owe()), and so
+ * is what the next scan reads: every stripe after screen_reset(), when
+ * the hashes mean nothing (ZSCREEN_FULL_RESET), and for the periodic
+ * resend, when they do and a changed stripe with no DIRTY bit is a
+ * miss (ZSCREEN_FULL_VERIFY). The first scan reads every stripe, as
+ * after any change of screen mode. */
 static uint32_t last_force_tick;
 static uint16_t seq;
 static uint16_t frame_seq;
@@ -95,11 +99,10 @@ static void stripe_send(uint32_t gw_ip, int idx, int last)
 {
 	/* 6-byte header + PackBits payload + the 4-byte frame trailer.
 	 * The payload buffer has to hold the PackBits worst case; the
-	 * literal-run fallback, when it is used, overwrites that. */
+	 * literal-run fallback, when it is used, overwrites that. idx is
+	 * the slot. */
 	static uint8_t pkt[6 + ZSCREEN_PACK_WORST + ZSCREEN_TRAILER];
-	const uint8_t *raw =
-		(const uint8_t *)(scr.snap + idx * ZSCREEN_STRIPE_WORDS);
-	int n = zscreen_encode(raw, pkt + 6, frame_seq, last);
+	int n = zscreen_encode(&scr, idx, pkt + 6, frame_seq, last);
 	pkt[0] = 'Z';
 	pkt[1] = 'S';
 	pkt[2] = (uint8_t)idx;
@@ -112,9 +115,8 @@ static void stripe_send(uint32_t gw_ip, int idx, int last)
 
 void screen_reset(void)
 {
-	zscreen_forget(&scr);
-	owed = ALL_STRIPES;
-	full_next = FULL_RESET;
+	zscreen_full(&scr, ZSCREEN_FULL_RESET);
+	zscreen_owe_all(&scr);
 }
 
 /* Told by esp32link.c, which is the only place that can know: the
@@ -149,24 +151,22 @@ void screen_poll(uint32_t gw_ip)
 	last_scan_tick = now;
 
 	/* Read DIRTY, clear it, then copy. zscreen owns that order. */
-	int full = full_next;
-	full_next = FULL_NONE;
 	uint32_t missed = 0;
-	uint32_t changed = zscreen_scan(&scr, full, &missed);
+	uint32_t changed = zscreen_scan(&scr, now, &missed);
 	if (missed)
 		printf("screen: stripes %08lx changed with no DIRTY bit\n",
 			(unsigned long)missed);
 
-	uint32_t out = changed | owed;
-	owed = 0;
-	int dirty[STRIPES];
+	uint32_t out = changed | scr.owed_out;
+	/* a full-frame force-resend: see the drag below */
+	int whole = out == ALL_STRIPES;
 	int sends = 0;
-	for (int idx = 0; idx < STRIPES; idx++)
-		if (out & (1u << idx))
-			dirty[sends++] = idx;
 	frame_seq++;
 	int saw_input = 0;
-	for (int k = 0; k < sends; k++) {
+	for (int idx = 0; out; idx++) {
+		if (!(out & (1u << idx)))
+			continue;
+		out &= ~(1u << idx);
 		/* Mouse/keyboard land in the BRAM FIFO unsolicited. Drain
 		 * them BETWEEN stripes so a 20-stripe scan (300-700 ms of
 		 * uart1_putc) does not leave the pointer sitting on a
@@ -175,22 +175,19 @@ void screen_poll(uint32_t gw_ip)
 		 * idle timeout and the stripe CRC-fails. */
 		if (esp32link_pump_input())
 			saw_input = 1;
+		sends++;
 		/* A drag with pending motion: finish THIS snapshot
 		 * (cutting it paints the band in two places)
 		 * but skip the rest of a full-frame force-resend. Those
 		 * stripes were only owed because of the resend, and
 		 * holding the UART for 30 of them is the stall the visor
 		 * feels as "seconds". What is cut stays owed. */
-		if (saw_input && esp32link_vmouse_buttons() &&
-				sends >= STRIPES && k > 0 &&
-				k < sends - 1) {
-			stripe_send(gw_ip, dirty[k], 1);
-			for (int j = k + 1; j < sends; j++)
-				owed |= 1u << dirty[j];
-			sends = k + 1;
-			break;
+		if (saw_input && esp32link_vmouse_buttons() && whole &&
+				sends > 1 && out) {
+			zscreen_owe(&scr, scr.win, out);
+			out = 0;
 		}
-		stripe_send(gw_ip, dirty[k], k == sends - 1);
+		stripe_send(gw_ip, idx, !out);
 	}
 	/* Next snapshot as soon as wm has painted the new position. */
 	if (saw_input && esp32link_vmouse_buttons())
@@ -204,8 +201,8 @@ void screen_poll(uint32_t gw_ip)
 			 * pointer is up and the scan is small again */
 		} else {
 			last_force_tick = now;
-			owed = ALL_STRIPES;
-			full_next = FULL_VERIFY;
+			zscreen_owe_all(&scr);
+			zscreen_full(&scr, ZSCREEN_FULL_VERIFY);
 		}
 	}
 }

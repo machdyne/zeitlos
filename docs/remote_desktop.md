@@ -1,8 +1,9 @@
 # Remote desktop
 
-The 640x480 1bpp framebuffer, in a browser. Point one at the board
-and you get the desktop as it is on HDMI, with the keyboard and mouse
-going back the other way. There is nothing to install.
+The 1bpp framebuffer, in a browser, in whatever screen mode the
+desktop is in ([screen_modes.md](screen_modes.md)). Point one at the
+board and you get the desktop as it is on HDMI, with the keyboard and
+mouse going back the other way. There is nothing to install.
 
 Two ways, and only one of them at a time.
 
@@ -55,7 +56,8 @@ is the wired one and the port is 8080; see "Served by Zeitlos".
 
 The framebuffer is 30 stripes of 16 rows. A stripe is 1280 bytes
 (640/8 x 16), which is one UDP datagram and one link frame, and 30 of
-them is the whole screen.
+them is the whole screen. That is 640x480; the other screen modes are
+"Screen modes", below, and nothing in this section changes for them.
 
 Each pass reads the stripes that were written since the last one (see
 "Only what was written" below), hashes them, and sends the ones that
@@ -211,6 +213,13 @@ whole:
 0x5A | fseq_lo | fseq_hi | flags        (bit 0 = last stripe of frame)
 ```
 
+At 640x480 only bit 0 of the flags is ever set. In any other mode bit 1
+is, bits 3:2 are the window (the stripe is 30 x window + idx) and bits
+6:4 the mode: VMODE's number, or 7 for 1280x720 shown from a 640x360
+desktop. That is all the page needs to place a stripe, and no stripe
+grows by a byte. A page from before this draws stripe idx at row 16 x
+idx, which is what it could do with any mode but 640x480.
+
 Behind the payload rather than in the 6-byte header because the header
 does not survive the trip: the ESP32 relays `[idx, len, data]` to the
 browser and drops everything else, so anything the page must see has
@@ -223,6 +232,55 @@ byte for byte, with only the frame assembly missing.
 A reader tells trailer from payload by arithmetic, not by the magic
 byte alone: it is there only if exactly four bytes are left over after
 the decode consumed what it needed.
+
+### Screen modes
+
+Every mode's framebuffer starts at VRAM word 0 and is rows of its own
+width one after another, so a stripe stays 1280 bytes of it in VRAM
+order: stripe n is words 320n to 320n+319, the same words as DIRTY's
+bit n. At 1280 wide that is 8 rows, at 1024 10, at 800 12.8: a stripe
+need not start or end on a row, and only the page has to know where
+rows are. A mode has up to 100 stripes (1280x800); its last one can
+run past the framebuffer, and the page draws only the framebuffer.
+
+| Mode | Desktop | Bytes | Stripes | Windows |
+|---|---|---:|---:|---:|
+| 0 | 640x480 | 38,400 | 30 | 1 |
+| 1 | 800x600 | 60,000 | 47 | 2 |
+| 2 | 1024x768 | 98,304 | 77 | 3 |
+| 3 | 1280x720 | 115,200 | 90 | 3 |
+| 4 | 800x480 | 48,000 | 38 | 2 |
+| 5 | 1280x800 | 128,000 | 100 | 4 |
+| 6 | 960x540 (1920x1080 shown twice) | 64,800 | 51 | 2 |
+| 3, doubled | 640x360 (1280x720 shown twice) | 28,800 | 23 | 1 |
+
+The copy, every mask and the ESP32's shadow hold thirty stripes, and
+`net` has no room for more: its copy is 38,400 bytes of a RAM budget
+with a few kilobytes to spare. So the stripes are taken thirty at a
+time, a **window**: window w is stripes 30w to 30w+29, and slot i of
+the copy is stripe 30w+i. A pass reads one window, the next one that
+has something to send, and is a frame of its own. At 640x480 there is
+one window and everything is as it was. In the other modes a frame is
+one instant for its window, not for the screen: a drag across two
+windows can show its band in both for a frame.
+
+A stripe goes out as slot i, so the index the ESP32 keeps a shadow per
+stays below thirty, and its trailer's spare flag bits say the rest
+("The frame trailer"). The firmware passes bytes and knows nothing of
+modes; the one built before them works unchanged.
+
+DIRTY has 30 bits, words 0 to 9599: window 0. A later window has no
+bits. It is read whole every half second, and a stripe of it that
+changed is read on every pass until it has been still for two seconds.
+So a change below window 0 shows within half a second, and something
+moving or being typed into there is followed pass by pass, reading
+what moves and not the window. A pass reads at most one window.
+
+The mode is read on every pass (VMODE, one register). A new one, a
+change of mind at the "Keep" box, or the box running out and going
+back, is a new geometry: the hashes are forgotten and every window is
+read and sent whole, which is how the page learns it. A machine that
+starts in a kept mode is the same case.
 
 ### Who is watching, and how often
 
@@ -308,10 +366,16 @@ image carries the same file as `/data/zerdesk/index.html` and `zerdesk`
 reads it from there ("Served by Zeitlos", below), so that copy can be
 edited on the machine.
 
-**The canvas.** 640x480, `image-rendering: pixelated`, sized to the
-window at 4:3. `fit()` prefers a whole number of framebuffer pixels
-per screen pixel when that costs less than one CSS pixel of slack over
-the 480 rows, and otherwise takes every remaining pixel. There is no
+**The canvas.** The desktop's size (640x480 until a stripe's trailer
+says another mode), `image-rendering: pixelated`, sized to the window
+at the screen's own shape. `fit()` prefers a whole number of
+framebuffer pixels per screen pixel when that costs less than one CSS
+pixel of slack over the rows, and otherwise takes every remaining
+pixel. A stripe of another mode clears the canvas to the new size; the
+board sends every window whole after a change, so the picture is back
+within a frame per window. A stripe of the mode before, which an
+ESP32 slot can still hold for a frame or two after the change, has an
+older frame number and does not switch the page back. There is no
 CSS border on it: `getBoundingClientRect()` is the mouse hit box, and
 a border would put the pointer one pixel off.
 
@@ -341,7 +405,9 @@ other key and `wm` cannot tell the difference. See
 
 **Mouse.** The canvas box is scaled to framebuffer coordinates
 (floor, not round: a CSS point sits in the pixel whose box contains
-it) and sent as `[x_lo, x_hi, y_lo, y_hi, buttons]`, coalesced to
+it; in the mode's desktop pixels, which is what the pointer is in on
+HDMI too, doubled modes included) and sent as `[x_lo, x_hi, y_lo,
+y_hi, buttons]`, coalesced to
 about 30 Hz for motion, immediately for a press or a release so a
 click cannot hide behind the timer. The firmware relays it as
 `ZNIC_MOUSE` and `net` writes `reg_vmouse` -- a software pointer

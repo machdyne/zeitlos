@@ -387,7 +387,9 @@ mode's framebuffer is 640x480.
 
 These see 640x480 whatever the mode:
 
-- the remote desktop's picture and its DIRTY stripes (`zscreen.h`);
+- DIRTY, which covers VRAM words 0 to 9599. The remote desktop shows
+  every mode ([remote_desktop.md](remote_desktop.md), "Screen
+  modes"), but below those words it reads VRAM to find what changed;
 - T2;
 - the rasteriser;
 - game mode.

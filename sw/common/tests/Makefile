@@ -16,7 +16,7 @@ CC_ = cd $(R) && $(HOSTCC) -std=gnu99
 SKIP77 = r=$$?; [ $$r -eq 0 ] || { [ $$r -eq 77 ] && echo "  (skipped)"; }
 
 TESTS = accent args bitbang dialog flist gfx_region gz inflate png scrollbar text undo vt \
-	zcaption zcfg zexec zexec_inflate zexec_lz4 zfmt zinput zkbd zscreen \
+	zcaption zcfg zexec zexec_inflate zexec_lz4 zfmt zinput zkbd zscreen zscreen_modes \
 	zco zsha1 zslice ztype zwalk zws wmpack zi18n listbox
 
 .PHONY: test $(TESTS) clean
@@ -145,6 +145,10 @@ zkbd: | $(OUT)
 zscreen: | $(OUT)
 	$(CC_) -Wall -Wextra -I sw/common -I sw/apps/net -o $(OUT)/test_zscreen \
 		sw/common/tests/test_zscreen.c sw/common/zscreen.c && $(OUT)/test_zscreen
+
+zscreen_modes: | $(OUT)
+	$(CC_) -Wall -Wextra -I sw/common -I sw/apps/net -o $(OUT)/test_zscreen_modes \
+		sw/common/tests/test_zscreen_modes.c && $(OUT)/test_zscreen_modes
 
 zsha1: | $(OUT)
 	$(CC_) -Wall -I sw/common -o $(OUT)/test_zsha1 sw/common/tests/test_zsha1.c \
