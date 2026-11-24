@@ -893,6 +893,14 @@ static inline bool z_soc_feature_confirmed_absent(uint32_t feature) {
 // other's bits. rtl/socctl.v has the whole contract.
 #define reg_socctl_dirty (*(volatile uint32_t*)0x7000021c)
 #define Z_SOCCTL_DIRTY_ALL 0x3fffffffu
+// DIRTY's bit 31: DIRTY1..3 exist, and with them every stripe of every
+// screen mode this bitstream has: bit n of DIRTYk is stripe 30k + n
+// (VRAM words 320(30k + n)..+319), same contract. They are words
+// 21..23, and DIRTY is word 20 as well, so Z_SOCCTL_DIRTYW[k] is
+// DIRTYk. Touch them only when the bit is set; on older bitstreams
+// those words alias other registers.
+#define Z_SOCCTL_DIRTY_MORE (1u << 31)
+#define Z_SOCCTL_DIRTYW ((volatile uint32_t*)0x70000250)
 
 #define Z_SOCCTL_MAGIC 0x5A435452u	// "ZCTR" -- see rtl/socctl.v
 

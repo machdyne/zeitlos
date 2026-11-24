@@ -28,10 +28,11 @@
  * is as it was, on the wire too. In any other mode the trailer's flags
  * say which window and which mode (ZSCREEN_TRAILER_GEOM).
  *
- * DIRTY covers VRAM words 0..9599, window 0. A later window has no
- * register: it is read whole every ZSCREEN_UNTRACKED_TICKS, and what
- * changed is read again on every scan until it has been still for
- * ZSCREEN_HOT_TICKS.
+ * DIRTY covers VRAM words 0..9599, window 0, and on a bitstream with
+ * DIRTY1..3 (DIRTY's bit 31) windows 1..3 have a register each too,
+ * and are read the same way. A window with no register is read whole
+ * every ZSCREEN_UNTRACKED_TICKS, and what changed is read again on
+ * every scan until it has been still for ZSCREEN_HOT_TICKS.
  *
  * One consumer of the DIRTY register at a time. A second reader would
  * clear bits the first still needed.
@@ -39,7 +40,8 @@
  * A zeroed zscreen_t is not probed yet, which is what a static one
  * is, so the snapshot stays in .bss. dirty_hw is then 1 when this
  * bitstream has the DIRTY register and 2 when it was probed and has
- * not. zscreen_init() returns it to "not probed".
+ * not, and tracked how many windows have one: 0, 1 or all four.
+ * zscreen_init() returns it to "not probed".
  */
 
 #define ZSCREEN_STRIPES       30			/* a window; all of 640x480 */
@@ -63,17 +65,17 @@
 #define ZSCREEN_TRAILER_GEOM  0x02			/* window and mode follow */
 #define ZSCREEN_TRAILER_WIN(f)  (((f) >> 2) & 3)
 #define ZSCREEN_TRAILER_MODE(f) (((f) >> 4) & 7)
-/* A window DIRTY does not cover is read whole this often, and a stripe
+/* A window no DIRTY register covers is read whole this often, and a stripe
  * of it that changed is read on every scan until it has been still this
  * long (Z_TICK_HZ is 732 a second). */
 #define ZSCREEN_UNTRACKED_TICKS 366
 #define ZSCREEN_HOT_TICKS       1464
 
 /* What the next scan of each window reads (zscreen_full()). NONE:
- * only stripes DIRTY names (or every stripe, when the bitstream has
- * no DIRTY register). RESET: every stripe, and a change is not a miss
- * -- the hashes were just forgotten. VERIFY: every stripe, and a
- * stripe that changed with no DIRTY bit is a miss. */
+ * only stripes its DIRTY register names (or as it has no register).
+ * RESET: every stripe, and a change is not a miss -- the hashes were
+ * just forgotten. VERIFY: every stripe, and a stripe of a window with
+ * a register that changed with no DIRTY bit is a miss. */
 #define ZSCREEN_FULL_NONE     0
 #define ZSCREEN_FULL_RESET    1
 #define ZSCREEN_FULL_VERIFY   2
@@ -93,7 +95,10 @@ typedef struct {
 	uint8_t  mode;
 	uint8_t  stripes;
 	uint8_t  full;			/* bit w: read window w whole next time */
-	uint8_t  verify;		/* window 0's next whole read is a verify */
+	uint8_t  tracked;		/* windows 0..tracked-1 have DIRTY bits */
+	/* the next whole read of each tracked window is a verify; a new
+	 * mode clears it, and everything after it */
+	uint8_t  verify;
 	uint32_t owed[ZSCREEN_WINDOWS];
 	uint32_t hot[ZSCREEN_WINDOWS];	/* untracked: what changed lately */
 	uint32_t hot_tick[ZSCREEN_WINDOWS];	/* untracked: tick of the last change */

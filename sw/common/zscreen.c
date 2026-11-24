@@ -78,12 +78,15 @@
  * The copy stays 38400 bytes, which is what net's RAM budget has room
  * for.
  *
- * DIRTY's 30 bits cover VRAM words 0..9599, so only window 0 has them.
- * A later window is read whole every ZSCREEN_UNTRACKED_TICKS, and a
- * stripe that changed is read again on every scan until it has been
- * still for ZSCREEN_HOT_TICKS: a change down there shows within half a
- * second, and while something moves or is typed into there it is
- * followed scan by scan, reading only what moves.
+ * DIRTY's 30 bits cover VRAM words 0..9599, window 0. A bitstream with
+ * the larger modes can have DIRTY1..3 as well (DIRTY's bit 31 says so),
+ * one for each later window, with the same contract, and then every
+ * window is read the way window 0 is. Without them a later window is
+ * read whole every ZSCREEN_UNTRACKED_TICKS, and a stripe that changed
+ * is read again on every scan until it has been still for
+ * ZSCREEN_HOT_TICKS: a change down there shows within half a second,
+ * and while something moves or is typed into there it is followed scan
+ * by scan, reading only what moves.
  */
 
 #include <stdint.h>
@@ -101,8 +104,12 @@
 #define ZSCREEN_VRAM          ((const volatile uint32_t *)0x20000000)
 #define ZSCREEN_DIRTY_PROBE() (z_soc_has_feature2(Z_FEATURE2_VRAM_DIRTY) && \
 				z_socctl_present())
-#define ZSCREEN_DIRTY_GET()   (reg_socctl_dirty & ZSCREEN_ALL)
-#define ZSCREEN_DIRTY_CLEAR(m) (reg_socctl_dirty = (m))
+#define ZSCREEN_DIRTY_MORE()  (reg_socctl_dirty & Z_SOCCTL_DIRTY_MORE)
+/* Window w's register is regs[w]: DIRTY, DIRTY1..3 at words 20..23
+ * where they are (DIRTY is word 20 too), or DIRTY alone at word 7. */
+#define ZSCREEN_DIRTY_REGS(t) ((t) > 1 ? Z_SOCCTL_DIRTYW : &reg_socctl_dirty)
+#define ZSCREEN_DIRTY_GET(w)  (regs[w] & ZSCREEN_ALL)
+#define ZSCREEN_DIRTY_CLEAR(w, m) (regs[w] = (m))
 #define ZSCREEN_MODE()        screen_mode()
 #endif
 
@@ -287,14 +294,19 @@ static int popcount30(uint32_t m)
 
 uint32_t zscreen_scan(zscreen_t *s, uint32_t now, uint32_t *missed)
 {
-	if (s->dirty_hw == 0)
-		s->dirty_hw = ZSCREEN_DIRTY_PROBE() ? 1 : 2;
+	if (s->dirty_hw == 0) {
+		s->dirty_hw = 2;
+		if (ZSCREEN_DIRTY_PROBE()) {
+			s->dirty_hw = 1;
+			s->tracked = ZSCREEN_DIRTY_MORE() ? ZSCREEN_WINDOWS : 1;
+		}
+	}
 
 	/* A new screen mode: nothing in the copy, the hashes or the masks
 	 * means anything any more, and every window is read whole. */
 	int m = ZSCREEN_MODE();
 	if (m + 1 != s->mode) {
-		memset(s->owed, 0, sizeof(*s) - offsetof(zscreen_t, owed) -
+		memset(&s->verify, 0, sizeof(*s) - offsetof(zscreen_t, verify) -
 			sizeof(s->snap));
 		s->mode = (uint8_t)(m + 1);
 		s->stripes = mode_stripes[m];
@@ -305,15 +317,14 @@ uint32_t zscreen_scan(zscreen_t *s, uint32_t now, uint32_t *missed)
 		*missed = 0;
 
 	/* The next window with something to send, after the last one
-	 * scanned. Window 0 has DIRTY, when the bitstream does; without
-	 * it window 0 is read whole every scan, as it always was. A later
-	 * window is read whole when it is due, and else only what changed
-	 * the last time. An owed stripe in a later window is read again:
-	 * its slot has held other stripes since. */
-	int has = s->dirty_hw == 1;
+	 * scanned. A window with a DIRTY register reads what it names.
+	 * Without one, window 0 is read whole every scan, as it always
+	 * was, and a later window is read whole when it is due, and else
+	 * only what changed the last time. An owed stripe in a later
+	 * window is read again: its slot has held other stripes since. */
 	int last = (s->stripes - 1) / ZSCREEN_STRIPES;
-	uint32_t marked = has ? ZSCREEN_DIRTY_GET() : 0;
-	uint32_t want, bit, owed;
+	volatile uint32_t *regs = ZSCREEN_DIRTY_REGS(s->tracked);
+	uint32_t marked = 0, want, bit, owed;
 	int w = s->win, k = last;
 	for (;;) {
 		if (k-- < 0)
@@ -322,9 +333,10 @@ uint32_t zscreen_scan(zscreen_t *s, uint32_t now, uint32_t *missed)
 			w = 0;
 		bit = 1u << w;
 		owed = s->owed[w];
-		if (w == 0 && has)
+		if (w < s->tracked) {
+			marked = ZSCREEN_DIRTY_GET(w);
 			want = (s->full & bit) ? ZSCREEN_ALL : marked;
-		else if ((s->full & bit) || w == 0 ||
+		} else if ((s->full & bit) || w == 0 ||
 				now - s->seen[w] >= ZSCREEN_UNTRACKED_TICKS)
 			want = ZSCREEN_ALL;
 		else if (now - s->hot_tick[w] < ZSCREEN_HOT_TICKS)
@@ -340,20 +352,19 @@ uint32_t zscreen_scan(zscreen_t *s, uint32_t now, uint32_t *missed)
 	int n = s->stripes - w * ZSCREEN_STRIPES;
 	uint32_t all = n < ZSCREEN_STRIPES ? (1u << n) - 1 : ZSCREEN_ALL;
 	int verify = 0;
-	if (w == 0 && has) {
+	int whole = s->full & bit;
+	if (w < s->tracked) {
 		/* Read what was written, clear exactly that, and only then
 		 * read the pixels -- see "WHAT CHANGED, WITHOUT LOOKING"
 		 * above. Bits past a small mode's framebuffer are cleared
 		 * too, or they would ask for a scan forever. */
 		if (marked)
-			ZSCREEN_DIRTY_CLEAR(marked);
+			ZSCREEN_DIRTY_CLEAR(w, marked);
 		marked &= all;
-		verify = s->verify;
-		s->verify = 0;
+		verify = s->verify ? whole : 0;
 	} else if (want == ZSCREEN_ALL) {
 		s->seen[w] = now;
 	}
-	int whole = s->full & bit;
 	s->full &= (uint8_t)~bit;
 	want &= all;
 	owed &= all;
@@ -374,7 +385,7 @@ uint32_t zscreen_scan(zscreen_t *s, uint32_t now, uint32_t *missed)
 		/* and a stripe whose last hash was forgotten (a reset, a new
 		 * mode) is new, not missed */
 		uint32_t miss = zscreen_miss(changed & ~fresh, marked,
-			ZSCREEN_DIRTY_GET());
+			ZSCREEN_DIRTY_GET(w));
 		s->verify_passes++;
 		if (miss)
 			s->verify_missed += (uint32_t)popcount30(miss);
