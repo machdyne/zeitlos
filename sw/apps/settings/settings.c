@@ -489,6 +489,15 @@ static const char *res_labels[Z_VMODE_COUNT] = { "640x480", "800x600", "1024x768
 // has more than four (the 45F boards).
 static int res_rows = 1;
 
+// A resolution asked for, while wm's question about it is open:
+// res_trial is the mode (-1: none), res_asked set once the question has
+// frozen this window. The question gone (the window thawed), the
+// status line's "Keep...?" is stale and goes; a Z_WM_SCREEN to another
+// mode right after (res_back_by) is wm going back, and says so.
+static int res_trial = -1;
+static bool res_asked;
+static uint32_t res_back_by;
+
 static void select_current_res(void) {
 	z_widget_select(&psets[P_DISPLAY], W_RES0 + (int)z_vmode_get());
 }
@@ -644,7 +653,7 @@ static void draw_row(int y, const char *title, const char *value) {
 
 static void describe_theme(char *out, size_t n) {
 	if (!can_theme)
-		snprintf(out, n, "needs eight colour planes (the 45F boards)");
+		snprintf(out, n, "not on this bitstream (eight colour planes)");
 	else if (!colour_on)
 		snprintf(out, n, "off");
 	else if (theme_custom)
@@ -1487,8 +1496,11 @@ static void activate(int idx) {
 			set_status("wm cannot change the resolution here");
 			select_current_res();
 			z_widget_draw_all(ws, false);
-		} else {
+		} else if (idx - W_RES0 != (int)z_vmode_get()) {
 			set_status("Keep the new resolution? (wm asks; it goes back in 15 s)");
+			res_trial = idx - W_RES0;
+			res_asked = false;
+			res_back_by = 0;
 		}
 		return;
 	}
@@ -1806,6 +1818,16 @@ static void on_dialog_msg(z_msg_t *msg, void *user) {
 	switch (msg->subject) {
 		case Z_WM_SET_CLIP:
 			z_win_apply_clip(&win, &msg->obj);
+			if (res_trial < 0 || res_back_by) break;
+			if (z_win_frozen(&win)) {
+				res_asked = true;
+			} else if (res_asked) {
+				// answered, or out of time: going back is a Z_WM_SCREEN
+				// that follows at once; keeping sends nothing more
+				res_back_by = z_uptime_ticks() + Z_TICK_HZ;
+				set_status("");
+				draw_status();
+			}
 			break;
 		case Z_WM_REDRAW:
 			if (msg->obj.type != Z_UINT32) break;
@@ -1823,6 +1845,17 @@ static void on_dialog_msg(z_msg_t *msg, void *user) {
 		case Z_WM_SCREEN:
 			// the resolution changed (or went back): show which
 			select_current_res();
+			if (res_trial >= 0 && msg->obj.type == Z_UINT32 &&
+			    (int)Z_WM_UNPACK_SCREEN_MODE(msg->obj.val.uint32) != res_trial) {
+				if (!res_back_by || (int32_t)(z_uptime_ticks() - res_back_by) < 0) {
+					char s[48];
+					snprintf(s, sizeof(s), "not kept -- back to %s",
+						res_labels[Z_WM_UNPACK_SCREEN_MODE(msg->obj.val.uint32) % Z_VMODE_COUNT]);
+					set_status(s);
+					draw_status();
+				}
+				res_trial = -1;
+			}
 			break;
 		default:
 			break;
