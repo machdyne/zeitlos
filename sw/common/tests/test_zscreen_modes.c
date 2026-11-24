@@ -3,7 +3,9 @@
  *
  * zscreen.c is included here with its hardware replaced: VRAM is an
  * array, DIRTY a variable that every write below 9600 words marks the
- * way rtl/socctl.v does, and VMODE a number. A model of the viewer
+ * way rtl/socctl.v does -- and DIRTY1..3 three more, for the words
+ * past it, when the bitstream is to have them (dirty_more) -- and
+ * VMODE a number. Every test runs twice, without DIRTY1..3 and with. A model of the viewer
  * page's decoder (esp32/zeitlos-nic/web/index.html: unpack, trailer,
  * SIZES, the stripe at byte 1280*n) takes what net would send and
  * keeps its own framebuffer, and every test ends with that
@@ -21,21 +23,27 @@
 
 #define VRAM_WORDS 32768
 static uint32_t vram[VRAM_WORDS + 512];	/* a last stripe can run past */
-static uint32_t dirty_reg;
+static uint32_t dirty_regs[4];		/* DIRTY, DIRTY1..3 */
+static int dirty_reads[4], dirty_clears[4];
 static int dirty_present = 1;
+static int dirty_more;			/* DIRTY's bit 31 */
 static int fake_mode;
+#define dirty_reg dirty_regs[0]
 
 #define ZSCREEN_VRAM           ((const volatile uint32_t *)vram)
 #define ZSCREEN_DIRTY_PROBE()  (dirty_present)
-#define ZSCREEN_DIRTY_GET()    (dirty_reg & ZSCREEN_ALL)
-#define ZSCREEN_DIRTY_CLEAR(m) (dirty_reg &= ~(m))
+#define ZSCREEN_DIRTY_MORE()   (dirty_more)
+#define ZSCREEN_DIRTY_REGS(t)  ((void)(t), dirty_regs)
+#define ZSCREEN_DIRTY_GET(w)   (dirty_reads[w]++, regs[w] & ZSCREEN_ALL)
+#define ZSCREEN_DIRTY_CLEAR(w, m) (dirty_clears[w]++, regs[w] &= ~(m))
 #define ZSCREEN_MODE()         (fake_mode)
 #include "../zscreen.c"
 
 static int run, failed;
 
 #define CHECK(cond, what) do { run++; if (!(cond)) { failed++; \
-	printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, what); } } while (0)
+	printf("FAIL %s:%d: %s%s\n", __FILE__, __LINE__, what, \
+		dirty_more ? " (with DIRTY1..3)" : ""); } } while (0)
 
 /* the desktop of each mode, ZSCREEN_TRAILER_MODE's order */
 static const int SIZES[8][2] = {
@@ -52,9 +60,10 @@ static int fb_bytes(int m)
 
 static void vwrite(int word, uint32_t v)
 {
+	int st = word / 320;
 	vram[word] = v;
-	if (dirty_present && word < 9600)
-		dirty_reg |= 1u << (word / 320);
+	if (dirty_present && (st < 30 || (dirty_more && st < 100)))
+		dirty_regs[st / 30] |= 1u << (st % 30);
 }
 
 static uint32_t rng = 12345;
@@ -220,7 +229,8 @@ static void reset_all(int m)
 {
 	memset(&S, 0, sizeof S);
 	memset(vram, 0, sizeof vram);
-	dirty_reg = ZSCREEN_ALL;	/* as after a reset */
+	for (int k = 0; k < 4; k++)	/* as after a reset */
+		dirty_regs[k] = k < 3 ? ZSCREEN_ALL : 0x3ffu;
 	fake_mode = m;
 	page_w = 640;
 	page_h = 480;
@@ -273,9 +283,15 @@ static void test_each_mode(void)
 		}
 		snprintf(what, sizeof what, "mode %d: every change arrives", m);
 		CHECK(ok, what);
-		snprintf(what, sizeof what,
-			"mode %d: within the untracked period and a scan a window (worst %d ticks)", m, worst);
-		CHECK(worst <= ZSCREEN_UNTRACKED_TICKS + 37 * zscreen_windows(&S), what);
+		if (dirty_more) {
+			snprintf(what, sizeof what,
+				"mode %d: on the next scan of its windows (worst %d ticks)", m, worst);
+			CHECK(worst <= 37 * (zscreen_windows(&S) - 1), what);
+		} else {
+			snprintf(what, sizeof what,
+				"mode %d: within the untracked period and a scan a window (worst %d ticks)", m, worst);
+			CHECK(worst <= ZSCREEN_UNTRACKED_TICKS + 37 * zscreen_windows(&S), what);
+		}
 	}
 }
 
@@ -304,8 +320,12 @@ static void test_hot(void)
 				break;
 		}
 	}
-	CHECK(first >= 0 && first <= 1, "the first change of it waits for the window's turn");
-	CHECK(late == 1, "after that it is followed scan by scan");
+	if (dirty_more) {
+		CHECK(late == 0, "with DIRTY3 it is followed scan by scan from the first change");
+	} else {
+		CHECK(first >= 0 && first <= 1, "the first change of it waits for the window's turn");
+		CHECK(late == 1, "after that it is followed scan by scan");
+	}
 
 	/* still for longer than ZSCREEN_HOT_TICKS: it waits again */
 	for (int k = 0; k < 50; k++, now += 37)
@@ -313,7 +333,8 @@ static void test_hot(void)
 	box(5, 10, 790, 11, 798, 0x12345678u);
 	now += 37;
 	poll_once();
-	CHECK(S.hot[3] == 0, "two seconds still, and it is no longer read every scan");
+	if (!dirty_more)	/* (with DIRTY3, hot[] is not looked at) */
+		CHECK(S.hot[3] == 0, "two seconds still, and it is no longer read every scan");
 	CHECK(converge(5, 732) >= 0, "and still arrives");
 }
 
@@ -478,15 +499,123 @@ static void test_owed(void)
 	CHECK(page_matches(5), "an owed stripe of a later window is read again, not sent stale");
 }
 
+/* With DIRTY1..3, a window past 0 is read as window 0 is: what its
+ * register names, and nothing else. */
+static void test_more(void)
+{
+	uint32_t missed = 0;
+
+	dirty_more = 1;
+	reset_all(5);			/* 1280x800: four windows */
+	fill_screen(5, 1);
+	CHECK(converge(5, 732) >= 0, "1280x800 arrives");
+	CHECK(S.tracked == 4, "DIRTY's bit 31: four windows have a register");
+	for (int k = 0; k < 10; k++, now += 37)
+		poll_once();
+
+	/* nothing is read whole any more: a change behind DIRTY2's back is
+	 * not seen in four untracked periods... */
+	vram[67 * 320 + 3] ^= 0x100;	/* stripe 67: window 2, slot 7 */
+	int sends = 0;
+	for (int k = 0; k < 4 * ZSCREEN_UNTRACKED_TICKS / 37; k++, now += 37)
+		sends += poll_once();
+	CHECK(sends == 0 && !page_matches(5),
+		"a still screen reads nothing whole: an unmarked change stays unseen");
+	/* ...until a verify, which counts it as a miss of window 2 */
+	zscreen_owe_all(&S);
+	zscreen_full(&S, ZSCREEN_FULL_VERIFY);
+	uint32_t passes = S.verify_passes, misses = S.verify_missed;
+	int saw = 0;
+	for (int k = 0; k < 4; k++, now += 37) {
+		zscreen_scan(&S, now, &missed);
+		if (S.win == 2)
+			saw = missed == 1u << 7;
+	}
+	CHECK(saw && S.verify_missed == misses + 1,
+		"a verify counts the miss, in window 2's slot 7");
+	CHECK(S.verify_passes == passes + 4, "one verify pass for each window");
+	box(5, 0, 300, 40, 700, 0x3c3c3c3cu);	/* windows 1..3, marked */
+	for (int k = 0; k < 8; k++, now += 37)
+		poll_once();
+	CHECK(S.verify_passes == passes + 4 && page_matches(5),
+		"and the scans after it are not verifies");
+
+	/* a key after a pause, in window 2: the next scan */
+	reset_all(5);
+	fill_screen(5, 1);
+	converge(5, 732);
+	for (int k = 0; k < 80; k++, now += 37)	/* three seconds still */
+		poll_once();
+	box(5, 20, 500, 21, 508, 0x0f0f0f0fu);	/* rows 500..507: window 2 */
+	now += 37;
+	poll_once();
+	CHECK(page_matches(5), "a key in window 2 after a pause shows on the next scan");
+
+	/* 800x600: window 1 is 17 stripes; a bit past them sends nothing
+	 * and is cleared, and DIRTY2 and DIRTY3 are never read */
+	reset_all(1);
+	fill_screen(1, 1);
+	converge(1, 732);
+	for (int k = 0; k < 10; k++, now += 37)
+		poll_once();
+	dirty_regs[1] |= 1u << 20;
+	int r2 = dirty_reads[2], r3 = dirty_reads[3];
+	now += 37;
+	CHECK(poll_once() == 0 && dirty_regs[1] == 0,
+		"a DIRTY1 bit past 800x600's stripes sends nothing and is cleared");
+	for (int k = 0; k < 20; k++, now += 37)
+		poll_once();
+	CHECK(dirty_reads[2] == r2 && dirty_reads[3] == r3 && dirty_regs[2] != 0,
+		"a window the mode does not have: its register is left alone");
+	dirty_more = 0;
+}
+
+/* Without DIRTY's bit 31 (any older bitstream, where words 21..23
+ * alias other registers), DIRTY1..3 are never touched. */
+static void test_more_absent(void)
+{
+	dirty_more = 0;
+	memset(dirty_reads, 0, sizeof dirty_reads);
+	memset(dirty_clears, 0, sizeof dirty_clears);
+	reset_all(5);
+	fill_screen(5, 1);
+	CHECK(converge(5, 732) >= 0, "no bit 31: 1280x800 arrives");
+	CHECK(S.tracked == 1, "no bit 31: only window 0 has a register");
+	for (int k = 0; k < 40; k++, now += 37)
+		poll_once();
+	box(5, 0, 790, 40, 800, 0x55555555u);
+	now += 37;
+	CHECK(converge(5, 732) >= 0, "no bit 31: a change in window 3 arrives, as before");
+	zscreen_full(&S, ZSCREEN_FULL_VERIFY);
+	for (int k = 0; k < 8; k++, now += 37)
+		poll_once();
+	CHECK(dirty_reads[0] > 0 && dirty_clears[0] > 0, "(DIRTY is used)");
+	CHECK(!dirty_reads[1] && !dirty_reads[2] && !dirty_reads[3] &&
+		!dirty_clears[1] && !dirty_clears[2] && !dirty_clears[3],
+		"no bit 31: words 21..23 are never read or written");
+	reset_all(0);
+	dirty_present = 0;
+	dirty_more = 1;			/* nonsense without DIRTY: ignored */
+	fill_screen(0, 0);
+	converge(0, 732);
+	CHECK(S.tracked == 0, "no DIRTY at all: no window has a register");
+	dirty_present = 1;
+	dirty_more = 0;
+}
+
 int main(void)
 {
-	test_each_mode();
-	test_hot();
-	test_switch();
-	test_640_unchanged();
-	test_no_dirty();
-	test_dirty_edges();
-	test_owed();
+	for (dirty_more = 0; dirty_more < 2; dirty_more++) {
+		test_each_mode();
+		test_hot();
+		test_switch();
+		test_640_unchanged();
+		test_no_dirty();
+		test_dirty_edges();
+		test_owed();
+	}
+	test_more();
+	test_more_absent();
 	printf("%d checks, %d failed\n", run, failed);
 	return failed ? 1 : 0;
 }

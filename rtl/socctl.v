@@ -180,8 +180,9 @@
  *             the VRAM accepts in that stripe, whoever made it: the CPU,
  *             the line rasterizer, the blitter. Software CLEARS bits by
  *             writing 1s to them (write-one-to-clear); 0s leave bits
- *             alone. Bits 31:30 read 0. Resets to all ones: after a
- *             reset nothing about the screen is known.
+ *             alone. Bit 30 reads 0, and bit 31 is below. Resets to
+ *             all ones: after a reset nothing about the screen is
+ *             known.
  *
  *             It exists so a screen streamer (sw/apps/net/screen.c)
  *             can learn what changed without reading the framebuffer.
@@ -219,6 +220,37 @@
  *             One consumer: two independent readers clearing each
  *             other's bits would each miss changes. rtl/csrs.vh
  *             FEATURES2 bit 14 says the register exists.
+ *
+ *             Bit 31 reads 1 when DIRTY1..3 below exist: every stripe
+ *             of every screen mode this bitstream has is then covered.
+ *
+ *  21  DIRTY1 \  the same, for the stripes past word 9600, which only
+ *  22  DIRTY2  > the larger screen modes have (docs/screen_modes.md):
+ *  23  DIRTY3 /   bit n of DIRTYk is stripe 30k + n, words
+ *             320(30k + n) .. +319, so 1280x800's 100 stripes are
+ *             DIRTY bits 0..29, DIRTY1, DIRTY2 and DIRTY3 bits 0..9.
+ *  20  DIRTY again, read and cleared the same as word 7, so that
+ *             words 20..23 are the four as an array: window k of a
+ *             streamer's (sw/common/zscreen.c) is word 20 + k, with
+ *             no case for the first.
+ *             Same contract, word by word: set by every write the
+ *             VRAM accepts in the stripe, cleared by writing 1s,
+ *             reading has no side effect, all ones after a reset.
+ *             Only with VIDEO_WIDE or VIDEO_ROWS (DIRTY_STRIPES, from
+ *             the VMODE parameters): stripes past the largest mode's
+ *             framebuffer, and all four words on any other build,
+ *             read 0 and set nothing.
+ *
+ *             Without them a streamer reads those stripes whole to
+ *             learn that nothing changed: at 1280x800 that is seventy
+ *             of the hundred, every half second (sw/common/zscreen.c).
+ *
+ *             Software touches them only after DIRTY's bit 31 says so.
+ *             On an older bitstream that decodes four address bits
+ *             they alias VIEW, FRAME (read-only), RECONFIG (which acts
+ *             only on its key, and a 30-bit mask is never the key) and
+ *             DIRTY itself; on a five-bit one without them they read
+ *             0 and ignore writes.
  *
  *   2  VIDEO, continued -- MONOCHROME BRIGHTNESS (DDMI boards):
  *               bits 11:8   level 0..15; reset 7, the 0x80 ink DDMI has
@@ -307,8 +339,8 @@
  *             bits under the screen streamer.
  *
  *             The decode is five bits wide now (rtl/sysctl.v); 8 and 15
- *             are the cursor's (below), 10..12 DDMI audio and 16..17
- *             the colour window.
+ *             are the cursor's (below), 10..12 DDMI audio, 16..17
+ *             the colour window and 20..23 DIRTY and DIRTY1..3.
  *
  *  10  DDMI   DDMI audio (docs/ddmi_audio.md): data islands, the video
  *             preamble and guard band, and the InfoFrames on the DDMI
@@ -695,6 +727,16 @@ module socctl_wb #(
 
     localparam MAGIC = 32'h5A43_5452;   // "ZCTR"
 
+    // How many 1280-byte stripes DIRTY tracks: the largest desktop's
+    // framebuffer, from the modes VMODE reports -- 1280x800 with
+    // VIDEO_WIDE (100), 1024x768 without native 1280x720 (77), 960x540
+    // with VIDEO_ROWS (51) -- and otherwise 30, words 0..9599, which
+    // every other mode fits in. DIRTY1..3 track the stripes past 30.
+    // A macro rather than a localparam: see "DIRTY1..3" below.
+`define SOCCTL_DIRTY_STRIPES ((VMODES_AVAIL == 0) ? 30 : \
+        (WIDE_AVAIL != 0) ? ((NATIVE720_AVAIL != 0) ? 100 : 77) : \
+        (ROWS_AVAIL != 0) ? 51 : 30)
+
     // top half of the VIDEO register -- "VC", video colour. See this
     // file's header comment for why a second signature is needed when
     // MAGIC already exists.
@@ -889,8 +931,66 @@ module socctl_wb #(
             vd_stripe2 <= vd_prod[14:10];
             // set wins over a clear in the same cycle
             dirty <= (dirty & ~dirty_clr) | dirty_set;
+            // and word 20 clears it too, where DIRTY1..3 are (below)
+            if (`SOCCTL_DIRTY_STRIPES > 30) begin
+                if (wb_cyc_i && wb_stb_i && !wb_ack_o && wb_we_i &&
+                        wb_adr_i == 32'd20)
+                    dirty <= (dirty & ~(wb_dat_i[29:0] & {
+                        {6{wb_sel_i[3]}}, {8{wb_sel_i[2]}},
+                        {8{wb_sel_i[1]}}, {8{wb_sel_i[0]}} })) | dirty_set;
+            end
         end
     end
+
+    // -- DIRTY1..3 (words 21..23) --
+    //
+    // The stripes from 30 to DIRTY_STRIPES - 1 (the macro
+    // SOCCTL_DIRTY_STRIPES), the same way: the same
+    // stage 1, the stripe from the same product (its top two bits too:
+    // the shifted adds are exact up to word 65535), and a set that
+    // compares it with each stripe's number, so nothing is subtracted
+    // and no range is checked: a word below 9600 or past the last
+    // stripe equals none of them. Bit n of `all` is stripe 30 + n.
+    //
+    // A build without them (DIRTY_STRIPES 30: the 12F, every 25F but
+    // Lakritz) elaborates none of this, and its bitstream is the same
+    // to the byte. That takes some care: yosys numbers every name it
+    // meets, and one new name in this module -- a localparam, a wire,
+    // used or not -- renumbers everything it reads after this file and
+    // the placement moves. So the stripe count is a macro, this block's
+    // names are read through it (g_dirty_hi.all), and the readback and
+    // word 20's clear sit in constant ifs.
+
+    generate if (`SOCCTL_DIRTY_STRIPES > 30) begin : g_dirty_hi
+        localparam integer N = `SOCCTL_DIRTY_STRIPES - 30;
+        wire [29:0] lanes = wb_dat_i[29:0] & {
+            {6{wb_sel_i[3]}}, {8{wb_sel_i[2]}},
+            {8{wb_sel_i[1]}}, {8{wb_sel_i[0]}} };
+        wire wr = wb_cyc_i && wb_stb_i && !wb_ack_o && wb_we_i;
+        wire [89:0] clr = {
+            (wr && wb_adr_i == 32'd23) ? lanes : 30'd0,
+            (wr && wb_adr_i == 32'd22) ? lanes : 30'd0,
+            (wr && wb_adr_i == 32'd21) ? lanes : 30'd0 };
+        reg         we2;
+        reg [6:0]   stripe2;
+        reg [N-1:0] bits;
+        wire [89:0] all = bits;		// stripe 30 + n, read below
+        integer i;
+        always @(posedge wb_clk_i) begin
+            if (wb_rst_i) begin
+                we2 <= 1'b0;
+                stripe2 <= 7'd0;
+                bits <= {N{1'b1}};
+            end else begin
+                we2 <= vd_we1;
+                stripe2 <= vd_prod[16:10];
+                // set wins over a clear in the same cycle
+                for (i = 0; i < N; i = i + 1)
+                    bits[i] <= (bits[i] & ~clr[i]) |
+                        (we2 && stripe2 == 30 + i);
+            end
+        end
+    end endgenerate
 
     always @(posedge wb_clk_i) begin
 
@@ -1191,6 +1291,20 @@ module socctl_wb #(
                                               1'b0, vmode };
                         default: wb_dat_o <= 32'h0000_0000;
                     endcase
+
+                    // DIRTY's bit 31, and DIRTY0..3 at words 20..23,
+                    // where they exist. Out of the case so that a build
+                    // without them elaborates exactly as before.
+                    if (`SOCCTL_DIRTY_STRIPES > 30) begin
+                        if (wb_adr_i == 32'd7 || wb_adr_i == 32'd20)
+                            wb_dat_o <= { 1'b1, 1'b0, dirty };
+                        if (wb_adr_i == 32'd21)
+                            wb_dat_o <= { 2'b0, g_dirty_hi.all[29:0] };
+                        if (wb_adr_i == 32'd22)
+                            wb_dat_o <= { 2'b0, g_dirty_hi.all[59:30] };
+                        if (wb_adr_i == 32'd23)
+                            wb_dat_o <= { 2'b0, g_dirty_hi.all[89:60] };
+                    end
 
                 end
 

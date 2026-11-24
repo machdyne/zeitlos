@@ -387,9 +387,11 @@ mode's framebuffer is 640x480.
 
 These see 640x480 whatever the mode:
 
-- DIRTY, which covers VRAM words 0 to 9599. The remote desktop shows
-  every mode ([remote_desktop.md](remote_desktop.md), "Screen
-  modes"), but below those words it reads VRAM to find what changed;
+- DIRTY, which covers VRAM words 0 to 9599 -- unless the bitstream
+  has DIRTY1..3 for the rest (rtl/socctl.v: with VIDEO_WIDE or
+  VIDEO_ROWS, DIRTY's bit 31 set). The remote desktop shows every mode
+  ([remote_desktop.md](remote_desktop.md), "Screen modes"); without
+  them, below those words it reads VRAM to find what changed;
 - T2;
 - the rasteriser;
 - game mode.

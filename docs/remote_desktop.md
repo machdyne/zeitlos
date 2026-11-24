@@ -269,12 +269,16 @@ stays below thirty, and its trailer's spare flag bits say the rest
 ("The frame trailer"). The firmware passes bytes and knows nothing of
 modes; the one built before them works unchanged.
 
-DIRTY has 30 bits, words 0 to 9599: window 0. A later window has no
-bits. It is read whole every half second, and a stripe of it that
-changed is read on every pass until it has been still for two seconds.
-So a change below window 0 shows within half a second, and something
-moving or being typed into there is followed pass by pass, reading
-what moves and not the window. A pass reads at most one window.
+DIRTY has 30 bits, words 0 to 9599: window 0. A bitstream with the
+larger modes has DIRTY1..3 as well (rtl/socctl.v, words 21..23; DIRTY's
+bit 31 says so), one for each later window, and then every window is
+read as window 0 is: only what its register names. Without them a
+later window has no bits. It is read whole every half second, and a
+stripe of it that changed is read on every pass until it has been
+still for two seconds. So a change below window 0 shows within half a
+second, and something moving or being typed into there is followed
+pass by pass, reading what moves and not the window. A pass reads at
+most one window.
 
 The mode is read on every pass (VMODE, one register). A new one, a
 change of mind at the "Keep" box, or the box running out and going
@@ -597,9 +601,9 @@ copy. The first viewer, and the first one after the last one left,
 also forgets the hashes, so that frame is read from VRAM. There is
 no shadow on a second machine: the snapshot in the app is the copy,
 38400 bytes of its own memory. Every five seconds the pass reads
-every stripe again and counts one that changed with no DIRTY bit,
-and prints the total when the last viewer leaves, the same sentence
-`net` prints.
+every stripe again and counts one that changed with no DIRTY bit
+(each window with a register is a check of its own), and prints the
+total when the last viewer leaves, the same sentence `net` prints.
 
 **The connection id only grows.** `net` finds a relay by listener and
 id among every relay that is still around, including one that is
