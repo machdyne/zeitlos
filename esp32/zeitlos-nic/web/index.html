@@ -140,27 +140,40 @@ const PAL={
  amber:[[0xff,0xb0,0x00],[0x0a,0x08,0x06]]
 };
 let palInk=PAL.paper[0], palPaper=PAL.paper[1];
-const stripes=new Array(30);
-let maxFrame=-1,dirtyTop=480,dirtyBot=0,lastPaint=0;
+// -- SCREEN MODES --
+//
+// The framebuffer is whatever size the desktop is in (docs/screen_modes.md),
+// and a stripe is 1280 bytes of it in VRAM order: stripe n starts at byte
+// 1280*n, which at 640x480 is row 16*n and in the other modes is wherever
+// that falls -- 8, 10 or 12 rows of a wider screen, or a row and a part.
+// fb holds the bytes; draw() turns rows of it into pixels. At 640x480 the
+// stream is what it always was. In any other mode each stripe's trailer
+// says so: flags bit 1, the window in bits 3:2 (the stripe is 30*window
+// + idx; idx stays below 30 because the ESP32 keeps thirty slots) and
+// the mode in bits 6:4, an index into SIZES (sw/common/zscreen.h).
+const SIZES=[[640,480],[800,600],[1024,768],[1280,720],[800,480],[1280,800],[960,540],[640,360]];
+let W=640,H=480,RB=80,fb=new Uint8Array(RB*H),geomSeq=-1;
+let maxFrame=-1,dirtyTop=H,dirtyBot=0,lastPaint=0;
 // Stripes land on an off-screen canvas and only whole frames reach the
 // visible one -- see "FRAMES, NOT STRIPES" below.
-const off=document.createElement('canvas');off.width=640;off.height=480;
+const off=document.createElement('canvas');off.width=W;off.height=H;
 const ox=off.getContext('2d');
-const img=cx.createImageData(640,16);
+let img=cx.createImageData(W,16);
 let frames=0,bytes=0,used=0;
 let link='connecting...',rateS=0,rateK=0,lastF=0,lastB=0;
 
 function fit(){
   const aw=stage.clientWidth, ah=stage.clientHeight;
   if(aw<2||ah<2) return;
-  let s=Math.min(aw/640, ah/480);
+  let s=Math.min(aw/W, ah/H);
   const i=Math.round(s);
   // Prefer a whole number of framebuffer pixels when it costs less than
-  // one CSS pixel of slack; otherwise take every remaining pixel at 4:3.
-  if(i>=1 && Math.abs(i-s)*480<1.5) s=i;
-  let w=Math.max(1,Math.floor(640*s));
-  let h=Math.max(1,Math.round(w*480/640));
-  if(h>ah){ h=Math.max(1,Math.floor(480*s)); w=Math.max(1,Math.round(h*640/480)); }
+  // one CSS pixel of slack; otherwise take every remaining pixel at the
+  // screen's own shape.
+  if(i>=1 && Math.abs(i-s)*H<1.5) s=i;
+  let w=Math.max(1,Math.floor(W*s));
+  let h=Math.max(1,Math.round(w*H/W));
+  if(h>ah){ h=Math.max(1,Math.floor(H*s)); w=Math.max(1,Math.round(h*W/H)); }
   cv.style.width=w+'px';
   cv.style.height=h+'px';
 }
@@ -169,6 +182,19 @@ if(window.visualViewport) visualViewport.addEventListener('resize',fit);
 if(window.ResizeObserver) new ResizeObserver(fit).observe(stage);
 fit();
 
+// A new geometry: the picture so far is of another screen. Clear it to
+// the paper and wait for the stripes, which the board sends whole after
+// a change of mode.
+function setGeom(w,h){
+  if(w===W&&h===H) return;
+  W=w;H=h;RB=w>>3;fb=new Uint8Array(RB*H);
+  cv.width=off.width=W; cv.height=off.height=H;
+  img=cx.createImageData(W,16);
+  ox.fillStyle=cx.fillStyle='rgb('+palPaper[0]+','+palPaper[1]+','+palPaper[2]+')';
+  ox.fillRect(0,0,W,H); cx.fillRect(0,0,W,H);
+  dirtyTop=H; dirtyBot=0;
+  fit(); showStatus();
+}
 function unpack(src){
   const out=new Uint8Array(1280); let o=0,i=0;
   while(i<src.length && o<1280){
@@ -179,31 +205,46 @@ function unpack(src){
   used=i;
   return out;
 }
-function paint(idx,buf){
-  stripes[idx]=buf;
-  const d=img.data;let p=0;
+// Rows y0..y1-1 of fb onto the off-screen canvas, sixteen at a time.
+function draw(y0,y1){
+  const d=img.data;
   const ir=palInk[0],ig=palInk[1],ib=palInk[2];
   const pr=palPaper[0],pg=palPaper[1],pb=palPaper[2];
-  for(let i=0;i<1280;i++){
-    const b=buf[i];
-    // LSB-first within each byte: bit 0 is the leftmost pixel
-    // (z_fb_set_pixel uses mask 1<<(x%32), little-endian VRAM words).
-    // A set bit is the phosphor (ink); a clear bit is the paper.
-    // HDMI's video_mode does the same mapping in the scanout.
-    for(let bit=0;bit<8;bit++){
-      if((b>>bit)&1){ d[p]=ir;d[p+1]=ig;d[p+2]=ib; }
-      else { d[p]=pr;d[p+1]=pg;d[p+2]=pb; }
-      d[p+3]=255;p+=4;
+  for(let y=y0;y<y1;y+=16){
+    const r=Math.min(16,y1-y), e=(y+r)*RB;
+    let p=0;
+    for(let i=y*RB;i<e;i++){
+      const b=fb[i];
+      // LSB-first within each byte: bit 0 is the leftmost pixel
+      // (z_fb_set_pixel uses mask 1<<(x%32), little-endian VRAM words).
+      // A set bit is the phosphor (ink); a clear bit is the paper.
+      // HDMI's video_mode does the same mapping in the scanout.
+      for(let bit=0;bit<8;bit++){
+        if((b>>bit)&1){ d[p]=ir;d[p+1]=ig;d[p+2]=ib; }
+        else { d[p]=pr;d[p+1]=pg;d[p+2]=pb; }
+        d[p+3]=255;p+=4;
+      }
     }
+    ox.putImageData(img,0,y,0,0,W,r);
   }
-  ox.putImageData(img,0,idx*16);
+}
+// Stripe n into fb, and the rows it touches onto the off-screen canvas.
+// A mode's last stripe can run past the framebuffer: that part is not
+// the screen.
+function paint(n,buf){
+  const o=n*1280, len=Math.min(1280,fb.length-o);
+  if(len<=0) return;
+  fb.set(len<1280?buf.subarray(0,len):buf,o);
+  const y0=Math.floor(o/RB), y1=Math.ceil((o+len)/RB);
+  draw(y0,y1);
+  if(y0<dirtyTop) dirtyTop=y0;
+  if(y1>dirtyBot) dirtyBot=y1;
+  lastPaint=performance.now();
 }
 function recolor(){
-  ox.fillStyle='rgb('+palPaper[0]+','+palPaper[1]+','+palPaper[2]+')';
-  ox.fillRect(0,0,640,480);
-  for(let i=0;i<30;i++) if(stripes[i]) paint(i,stripes[i]);
+  draw(0,H);
   cx.drawImage(off,0,0);
-  dirtyTop=480; dirtyBot=0;
+  dirtyTop=H; dirtyBot=0;
 }
 function setPhosphor(mode){
   if(!PAL[mode]) mode='paper';
@@ -253,25 +294,32 @@ function setPhosphor(mode){
 // stripe at once, which is exactly what this page used to do.
 function blit(){
   if(dirtyBot<=dirtyTop) return;
-  cx.drawImage(off,0,dirtyTop,640,dirtyBot-dirtyTop,0,dirtyTop,640,dirtyBot-dirtyTop);
-  dirtyTop=480;dirtyBot=0;
-}
-function markDirty(idx){
-  if(idx*16<dirtyTop) dirtyTop=idx*16;
-  if(idx*16+16>dirtyBot) dirtyBot=idx*16+16;
-  lastPaint=performance.now();
+  cx.drawImage(off,0,dirtyTop,W,dirtyBot-dirtyTop,0,dirtyTop,W,dirtyBot-dirtyTop);
+  dirtyTop=H;dirtyBot=0;
 }
 function trailer(src){
   if(src.length-used!==4 || src[used]!==0x5A) return null;
-  return {seq:src[used+1]|(src[used+2]<<8), last:(src[used+3]&1)!==0};
+  const f=src[used+3];
+  return {seq:src[used+1]|(src[used+2]<<8), last:(f&1)!==0,
+    geom:(f&2)!==0, win:(f>>2)&3, mode:(f>>4)&7};
 }
 // 16-bit sequence numbers wrap; compare as a signed difference.
 function newer(a,b){ return ((((a-b)&0xffff)^0x8000)-0x8000)>0; }
+// A change of geometry is taken from a stripe of a frame no older than
+// the one the present geometry came from. The ESP32 forwards its slots
+// in index order, so in the frames right after a change of mode one
+// message can carry a slot of the new mode before one still holding the
+// old: that one is older, and must not switch back. Much older is a
+// board that started counting again, and is taken.
+function geomOk(seq){
+  const d=(geomSeq-seq)&0xffff;
+  return geomSeq<0 || d===0 || d>256;
+}
 setInterval(()=>{ if(dirtyBot>dirtyTop && performance.now()-lastPaint>250) blit(); },50);
 
 function showStatus(){
   if(link!=='connected'){ st.textContent=link; return; }
-  st.textContent=link+' · '+rateS+' stripes/s · '+rateK.toFixed(1)+' KiB/s';
+  st.textContent=link+' · '+W+'x'+H+' · '+rateS+' stripes/s · '+rateK.toFixed(1)+' KiB/s';
 }
 setInterval(()=>{
   rateS=frames-lastF; rateK=(bytes-lastB)/1024;
@@ -299,16 +347,16 @@ function key(e,pressed){
  e.preventDefault();
  if(sock&&sock.readyState===1) sock.send(new Uint8Array([u,mods(e),pressed?1:0]));
 }
-// -- mouse: canvas CSS box scaled to 640x480, buttons 1/2/4 --
+// -- mouse: canvas CSS box scaled to the framebuffer, buttons 1/2/4 --
 let mbtn=0,mx=0,my=0,mdirty=0,mlast=0;
 function toFB(clientX,clientY){
   const r=cv.getBoundingClientRect();
   if(r.width<1||r.height<1) return [0,0];
   // floor, not round: a CSS point sits in the framebuffer pixel whose
   // box contains it. round() sent the centre of pixel 0 to 1.
-  let x=Math.floor((clientX-r.left)*640/r.width);
-  let y=Math.floor((clientY-r.top)*480/r.height);
-  return [Math.max(0,Math.min(639,x)), Math.max(0,Math.min(479,y))];
+  let x=Math.floor((clientX-r.left)*W/r.width);
+  let y=Math.floor((clientY-r.top)*H/r.height);
+  return [Math.max(0,Math.min(W-1,x)), Math.max(0,Math.min(H-1,y))];
 }
 function mouseFlush(){
  if(!mdirty||!sock||sock.readyState!==1) return;
@@ -400,7 +448,18 @@ function go(){
       const raw=unpack(src); i+=len;
       if(!raw||raw.length!==1280||idx>=30) continue;
       const tr=trailer(src);
-      paint(idx,raw); markDirty(idx); frames++;
+      let n=idx;
+      if(tr){
+        // 640x480 says nothing; any other mode says which (SCREEN MODES)
+        const g=SIZES[tr.geom?tr.mode:0];
+        if(g[0]!==W||g[1]!==H){
+          if(!geomOk(tr.seq)) continue;
+          setGeom(g[0],g[1]);
+          geomSeq=tr.seq;
+        } else if(geomSeq<0||newer(tr.seq,geomSeq)) geomSeq=tr.seq;
+        if(tr.geom) n+=30*tr.win;
+      } else setGeom(640,480);
+      paint(n,raw); frames++;
       if(!tr){ blit(); continue; }
       if(maxFrame<0||newer(tr.seq,maxFrame)) maxFrame=tr.seq;
       if(tr.last&&tr.seq===maxFrame) blit();
