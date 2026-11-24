@@ -2663,10 +2663,14 @@ static void vmouse_yield_to_usb(void) {
 		reg_vmouse = 0;
 }
 
+// x's eleventh bit, for the screen modes 1280 wide (docs/screen_modes.md,
+// "Pointer's x"): bit 23 of the virtual mouse, bit 28 of a USB cursor.
+// Both read 0 on a bitstream from before them.
 static inline int get_cursor_x(void) {
-	uint32_t cursor = vmouse_present() ? reg_vmouse :
+	bool v = vmouse_present();
+	uint32_t cursor = v ? reg_vmouse :
 		(mouse_port() == 0) ? reg_usb0_cursor : reg_usb1_cursor;
-	return cursor & 0x3FF;
+	return (cursor & 0x3FF) | ((cursor >> (v ? 13 : 18)) & 0x400);
 }
 
 static inline int get_cursor_y(void) {
