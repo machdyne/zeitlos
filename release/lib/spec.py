@@ -630,6 +630,12 @@ def board_block_defines(root, board):
     building something other than what `make BOARD=x flash` builds,
     which is the worst kind of difference to discover from a bug
     report. Returns None if boards.vh has no block for this board.
+
+    Only the block in the per-board chain (the first one): the file also
+    keys a few defines on the board after the chain, outside the ZSPEC
+    guard (`DDMI_ODDRX2, Obst's `NO_VIDEO_MODES), and those apply to a
+    release build too, so the spec must not repeat them. The block ends
+    at the chain's next `elsif, `else or `endif.
     """
     path = os.path.join(root, "rtl/boards.vh")
     with open(path) as f:
@@ -640,12 +646,12 @@ def board_block_defines(root, board):
     out = {}
     for line in lines:
         s = line.strip()
+        if inside and re.match(r"`(ifdef|ifndef|elsif|else|endif)\b", s):
+            break
         m = re.match(r"`(ifdef|elsif)\s+(\w+)", s)
         if m:
             inside = (m.group(2) == want)
             continue
-        if s == "`endif" and inside:
-            break
         if not inside or not s.startswith("`define"):
             continue
         parts = s.split(None, 2)

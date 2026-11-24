@@ -55,6 +55,12 @@ jobs:
       - name: Kernel, BIOS and every app (Lakritz)
         run: make BOARD=lakritz PREFIX="$PREFIX" RISCV_PREFIX="$RISCV_PREFIX" os bios apps -j"$(nproc)"
 
+      - name: T2's geometry firmware, within its code memory (sw/t2fw)
+        # Every ECP5 board's `make soc` builds it (rtl/gpu/gpu_t2.v reads
+        # it at synthesis), and the linker fails if it outgrows
+        # zeitlos32g's 12 KB: seconds here, rather than Monday's gateware.
+        run: make BOARD=lakritz PREFIX="$PREFIX" sw/t2fw/t2fw.hex
+
       - name: The ABI fingerprint is up to date
         run: python3 tools/gen_abi.py --check
 
