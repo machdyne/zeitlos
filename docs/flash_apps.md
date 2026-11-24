@@ -138,7 +138,9 @@ know to have 4KB sectors. Written separately, the archive's erase took
 the end of the kernel, and the kernel's took the start of the archive
 -- whichever went second won: a kernel that would not boot, or "no fs in
 flash". With a padded kernel that was harmless, because what it lost
-there was `.bss`.
+there was `.bss`. On `openFPGALoader` boards, `flash_sw` also reads
+the key/value store at `+0x0FE000` and includes it in a 1 MiB write so
+the last 64KB block erase does not wipe it ([kvstore.md](kvstore.md#images)).
 
 ## Files in flash
 

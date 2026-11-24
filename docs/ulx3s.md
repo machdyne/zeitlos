@@ -30,7 +30,7 @@ pieces, for when you want one at a time:
 |--------|--------|-------|
 | `prog` | the bitstream | the FPGA's configuration **SRAM** |
 | `flash_soc` | the bitstream | flash, offset 0 |
-| `flash_sw` | `sw/os/kernel.bin`, padded to 160KB, then `output/ulx3s/apps.zar` -- one image, since the two share a 64KB erase block ([flash_apps.md](flash_apps.md)); `flash_os` and `flash_apps` are names for it | flash, **1MB** (the apps at 1MB + 160KB) |
+| `flash_sw` | `sw/os/kernel.bin`, padded to 160KB, then `output/ulx3s/apps.zar` -- one image, since the two share a 64KB erase block ([flash_apps.md](flash_apps.md)); preserves the key/value store at `+0x0FE000` ([kvstore.md](kvstore.md#images)); `flash_os` and `flash_apps` are names for it | flash, **1MB** (the apps at 1MB + 160KB) |
 
 `dev-flash` rebuilds and rewrites only the kernel and the core apps,
 which is the loop for working on the OS. See

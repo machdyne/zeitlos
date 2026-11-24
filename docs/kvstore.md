@@ -330,14 +330,30 @@ two sectors alternate, so the wear is even.
 ## Images
 
 The store is never part of an image, and the running system is its
-only writer. Two kinds of image cover it anyway:
+only writer. Flashing a release image still erases it:
 
 - a **full** JTAG image (`mkflashimg.build(full=True)`), padded to the
   end of the flash;
 - a **DFU** image, which runs from the user partition to the end of the
-  flash.
+  flash;
+- a **trimmed** (default) JTAG image, whose ZAR ends inside the last
+  64 KB block of the Zeitlos region (`+0x0F0000`-`+0x0FFFFF`). Chips
+  without 4 KB subsector erase wipe the whole 64 KB block, and
+  `openFPGALoader`'s `SPIFlash::sectors_erase()` (`src/spiFlash.cpp`,
+  v1.2.0 and `master`; trabucayre/openFPGALoader#765, fix proposed in
+  trabucayre/openFPGALoader#766) also falls back to 64 KB block erase (`0xD8`) on
+  the second 4 KB step of a partial tail block, erasing the store even
+  on chips that support 4 KB erase (measured on Winbond W25Q128,
+  `0xef4018`).
 
-Flashing either erases the store. That is accepted: most configuration
-is on the card, and what is lost is the password and the other keys
-listed here. The default JTAG image stops at its last piece and leaves
-the store alone.
+Flashing a release image therefore erases the store. That is accepted:
+most configuration is on the card, and what is lost is the password
+and the other keys listed here.
+
+**`make flash_sw` keeps the store.** On boards flashed with
+`openFPGALoader`, `flash_sw` (and `flash_os`, `flash_apps`,
+`dev-flash`) runs `tools/flash_sw.py`: it reads the store twice,
+refuses to write if the two reads differ, composes a 1 MiB region
+image with the store preserved at `Z_FLASH_KV_OFF`, writes it with
+`--verify`, and reads the store back to confirm it is unchanged. An
+all-`0xFF` store (a fresh machine) is handled as normal.

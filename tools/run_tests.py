@@ -52,6 +52,7 @@ PYTHON = [
     ("release/lib/selftest.py", "."),
     ("release/lib/test_incremental.py", "."),
     ("tools/test_gen_abi.py", "."),
+    ("tools/test_flash_sw.py", "."),
 ]
 
 # RTL simulations, with --rtl only: (directory, target).
