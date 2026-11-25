@@ -19,3 +19,9 @@ description = ULX3S ECP5-85F
 base = ulx3s
 
 make_vars = DEVICE=85k
+
+# Stays on picorv32 for now: with +CPU_ZEITLOS32PS only 1 of 4 tested
+# seeds closed 48 MHz on the 85F die (seed 1: 48.64 MHz PASS; seeds
+# 10/2/3: 34.84 / 32.57 / 36.68 MHz FAIL, critical path from
+# resetn_counter routing 8.87 ns across the chip). +CPU_ZEITLOS32P
+# closes 4/4 seeds on 85F (48.50-49.28 MHz) as a future option.

@@ -17,3 +17,5 @@ description = ULX3S ECP5-45F
 base = ulx3s
 
 make_vars = DEVICE=45k
+
+defines = +CPU_ZEITLOS32PS
