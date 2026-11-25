@@ -929,6 +929,9 @@ $(OUTDIR)/zeitlos_sw.bin: os $(OUTDIR)/apps.zar
 ifeq ($(FAMILY), ice40)
 flash_sw: check $(OUTDIR)/zeitlos_sw.bin
 	$(FLASH) $(FLASH_OFFSET) $(OUTDIR)/zeitlos_sw.bin $(FLASH_KERNEL_HEX)
+else ifeq ($(firstword $(FLASH)), openFPGALoader)
+flash_sw: check $(OUTDIR)/zeitlos_sw.bin
+	python3 tools/flash_sw.py --base $(FLASH_BASE) --flash-cmd "$(FLASH)" $(OUTDIR)/zeitlos_sw.bin
 else
 flash_sw: check $(OUTDIR)/zeitlos_sw.bin
 	$(FLASH) $(FLASH_OFFSET) $(FLASH_KERNEL_DEC) $(OUTDIR)/zeitlos_sw.bin
